@@ -1,0 +1,20 @@
+{
+  "name": "@signet/daemon",
+  "version": "0.1.0",
+  "description": "Background sync daemon for Signet",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "signet-daemon": "./dist/daemon.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "bun build ./src/daemon.ts --outfile ./dist/daemon.js --target node",
+    "dev": "bun --watch src/daemon.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@signet/core": "workspace:*",
+    "chokidar": "^4.0.0"
+  }
+}
