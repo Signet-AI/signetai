@@ -1,0 +1,27 @@
+{
+  "name": "signet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable AI agent identity",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Signet-AI/signetai.git"
+  },
+  "author": "Signet AI",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run --filter '*' build",
+    "dev": "bun run --filter '*' dev",
+    "test": "bun run --filter '*' test",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "bun run --filter '*' typecheck"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "typescript": "^5.7.0"
+  }
+}
