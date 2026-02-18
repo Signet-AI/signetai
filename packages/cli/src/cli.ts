@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.4';
+const VERSION = '0.1.5';
 
 // ============================================================================
 // Helpers
@@ -926,6 +926,24 @@ async function setupWizard(options: { path?: string }) {
     const scriptsSource = join(templatesDir, 'memory', 'scripts');
     if (existsSync(scriptsSource)) {
       copyDirRecursive(scriptsSource, join(basePath, 'memory', 'scripts'));
+    }
+    
+    // Copy requirements.txt and install Python dependencies
+    const requirementsSource = join(templatesDir, 'memory', 'requirements.txt');
+    if (existsSync(requirementsSource)) {
+      copyFileSync(requirementsSource, join(basePath, 'memory', 'requirements.txt'));
+      spinner.text = 'Installing Python dependencies...';
+      try {
+        const pipProc = spawn('pip', ['install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')], {
+          stdio: 'pipe',
+        });
+        await new Promise<void>((resolve) => {
+          pipProc.on('close', () => resolve());
+          pipProc.on('error', () => resolve());
+        });
+      } catch {
+        // pip install failed, user will need to install manually
+      }
     }
     
     const utilScriptsSource = join(templatesDir, 'scripts');
