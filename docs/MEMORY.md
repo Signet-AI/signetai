@@ -293,6 +293,15 @@ Embedding generation is failing. Check:
 - For OpenAI: is the API key set correctly?
 - Check daemon logs: `signet logs`
 
+**Database schema mismatch after copying from another machine**
+
+If you copied `~/.agents/` from another machine and Signet fails to read the database, you may have an older schema. Run:
+```bash
+signet migrate-schema
+```
+
+This detects and migrates older schemas (Python memory system, early CLI versions) to the unified schema. All memories are preserved during migration.
+
 **Database locked errors**
 
 Multiple processes accessing the database simultaneously. The daemon uses read-only connections for queries to reduce locking. If you see persistent lock errors, check that you don't have multiple daemon instances:
