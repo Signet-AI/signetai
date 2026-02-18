@@ -27,6 +27,23 @@
         "@types/better-sqlite3": "^7.6.0",
       },
     },
+    "packages/connector-claude-code": {
+      "name": "@signet/connector-claude-code",
+      "version": "0.1.0",
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/connector-opencode": {
+      "name": "@signet/connector-opencode",
+      "version": "0.1.0",
+      "dependencies": {
+        "@signet/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
     "packages/core": {
       "name": "@signet/core",
       "version": "0.1.26",
@@ -75,7 +92,7 @@
     },
     "packages/signetai": {
       "name": "signetai",
-      "version": "0.1.27",
+      "version": "0.1.28",
       "bin": {
         "signet": "bin/signet.js",
       },
@@ -151,6 +168,10 @@
     "@inquirer/type": ["@inquirer/type@3.0.10", "", { "peerDependencies": { "@types/node": ">=18" }, "optionalPeers": ["@types/node"] }, "sha512-BvziSRxfz5Ov8ch0z/n3oijRSEcEsHnhggm4xFZe93DHcUCTlutlq9Ox4SVENAfcRD22UQq7T/atg9Wr3k09eA=="],
 
     "@signet/cli": ["@signet/cli@workspace:packages/cli"],
+
+    "@signet/connector-claude-code": ["@signet/connector-claude-code@workspace:packages/connector-claude-code"],
+
+    "@signet/connector-opencode": ["@signet/connector-opencode@workspace:packages/connector-opencode"],
 
     "@signet/core": ["@signet/core@workspace:packages/core"],
 

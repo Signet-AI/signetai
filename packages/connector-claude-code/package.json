@@ -1,0 +1,33 @@
+{
+  "name": "@signet/connector-claude-code",
+  "version": "0.1.0",
+  "description": "Signet connector for Claude Code (Anthropic CLI)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "dev": "bun --watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "signet",
+    "claude-code",
+    "claude",
+    "anthropic",
+    "connector",
+    "ai-memory"
+  ],
+  "license": "MIT"
+}
