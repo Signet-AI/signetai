@@ -12,6 +12,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
+    "3d-force-graph": "^1.79.1",
     "better-sqlite3": "^12.6.2",
     "d3-force": "^3.0.0",
     "umap-js": "^1.4.0"
