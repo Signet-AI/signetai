@@ -16,6 +16,7 @@ dist/
 *.swp
 *.swo
 .vscode/
+.playwright-mcp/
 
 # OS
 .DS_Store

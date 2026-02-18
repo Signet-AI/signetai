@@ -1,0 +1,59 @@
+# Signet Agent Configuration
+# Reference implementation for portable AI agent memory
+
+version: "1.0"
+
+# Embedding provider configuration
+embeddings:
+  # Provider: "ollama" or "openai" (openai-compatible APIs)
+  provider: ollama
+  
+  # Model name
+  # Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
+  # OpenAI: text-embedding-3-small, text-embedding-3-large
+  model: nomic-embed-text
+  
+  # Vector dimensions (must match model output)
+  # nomic-embed-text: 768
+  # all-minilm: 384
+  # text-embedding-3-small: 1536
+  # text-embedding-3-large: 3072
+  dimensions: 768
+  
+  # API endpoint
+  # Ollama default: http://localhost:11434
+  # OpenAI default: https://api.openai.com/v1
+  base_url: http://localhost:11434
+  
+  # API key (optional for Ollama, required for OpenAI)
+  # Can also be set via OPENAI_API_KEY env var
+  # api_key: null
+
+# Hybrid search configuration  
+search:
+  # Alpha: weight for vector similarity (1-alpha = BM25 weight)
+  # Default 0.7 = 70% vector, 30% keyword
+  alpha: 0.7
+  
+  # Number of candidates to fetch from each source before blending
+  top_k: 20
+  
+  # Minimum score threshold for results
+  min_score: 0.3
+
+# Memory settings
+memory:
+  # Character budget for session start context
+  session_budget: 2000
+  
+  # Character budget for MEMORY.md injection
+  current_md_budget: 10000
+  
+  # Decay rate for memory importance (per day)
+  decay_rate: 0.95
+
+# Paths (relative to ~/.agents/)
+paths:
+  database: memory/memories.db
+  vectors: memory/vectors.zvec
+  current_md: memory/MEMORY.md
