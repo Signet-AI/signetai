@@ -35,7 +35,14 @@ jobs:
       - name: Bump version
         run: |
           cd packages/signetai
-          npm version patch -m "chore: release %s"
+          CURRENT_VERSION=$(jq -r '.version' package.json)
+          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="0.1.$NEW_PATCH"
+          jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
+          git add package.json
+          git commit -m "chore: release $NEW_VERSION"
+          git tag "v$NEW_VERSION"
           cd ../..
 
       - name: Publish to npm
