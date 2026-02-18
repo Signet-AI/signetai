@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.14';
+const VERSION = '0.1.15';
 
 // ============================================================================
 // Helpers
@@ -607,8 +607,11 @@ async function interactiveMenu() {
     
     switch (action) {
       case 'dashboard':
-        console.log(chalk.dim(`  Opening http://localhost:${DEFAULT_PORT}...`));
+        console.log();
+        console.log(chalk.dim('  Opening dashboard in browser...'));
+        console.log(chalk.dim(`  http://localhost:${DEFAULT_PORT}`));
         await open(`http://localhost:${DEFAULT_PORT}`);
+        await new Promise(r => setTimeout(r, 1500));
         break;
         
       case 'status':
@@ -617,8 +620,11 @@ async function interactiveMenu() {
         break;
         
       case 'config':
-        console.log(chalk.dim('  Opening config editor in dashboard...'));
+        console.log();
+        console.log(chalk.dim('  Opening config in browser...'));
+        console.log(chalk.dim(`  http://localhost:${DEFAULT_PORT}#config`));
         await open(`http://localhost:${DEFAULT_PORT}#config`);
+        await new Promise(r => setTimeout(r, 1500)); // let user see message
         break;
         
       case 'harnesses':
