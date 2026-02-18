@@ -11,7 +11,7 @@ import { cors } from 'hono/cors';
 import { logger as honoLogger } from 'hono/logger';
 import { watch } from 'chokidar';
 import { logger, LogEntry } from './logger';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { homedir } from 'os';
 import { 
   writeFileSync, 
@@ -2053,7 +2053,7 @@ function loadGitConfig(): GitConfig {
   const defaults: GitConfig = {
     enabled: true,
     autoCommit: true,
-    autoSync: false, // disabled by default until user sets GITHUB_TOKEN
+    autoSync: true, // enabled by default - credentials auto-detected from gh, ssh, or credential helper
     syncInterval: 300, // 5 minutes
     remote: 'origin',
     branch: 'main',
@@ -2095,45 +2095,167 @@ function isGitRepo(dir: string): boolean {
   return existsSync(join(dir, '.git'));
 }
 
-// Get remote URL with token embedded for authenticated operations
-async function getAuthenticatedRemoteUrl(dir: string, remote: string): Promise<string | null> {
-  const token = await getSecret('GITHUB_TOKEN');
-  if (!token) {
-    logger.warn('git', 'GITHUB_TOKEN not found in secrets - remote sync disabled');
-    return null;
+// Git credential resolution result
+interface GitCredentials {
+  method: 'token' | 'gh' | 'credential-helper' | 'ssh' | 'none';
+  authUrl?: string;  // For HTTPS with embedded auth
+  usePlainGit?: boolean;  // For SSH - just run git without URL modification
+}
+
+// Run a command and return stdout/stderr
+async function runCommand(cmd: string, args: string[], options?: { input?: string }): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    const proc = spawn(cmd, args, { stdio: 'pipe' });
+    let stdout = '';
+    let stderr = '';
+
+    if (options?.input) {
+      proc.stdin?.write(options.input);
+      proc.stdin?.end();
+    }
+
+    proc.stdout?.on('data', (d) => { stdout += d.toString(); });
+    proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+    proc.on('close', (code) => {
+      resolve({ stdout, stderr, code: code ?? 1 });
+    });
+    proc.on('error', () => {
+      resolve({ stdout: '', stderr: '', code: 1 });
+    });
+  });
+}
+
+// Get remote URL for a given remote
+async function getRemoteUrl(dir: string, remote: string): Promise<string | null> {
+  const result = await runCommand('git', ['remote', 'get-url', remote]);
+  return result.code === 0 ? result.stdout.trim() : null;
+}
+
+// Build authenticated URL from token
+function buildAuthUrlFromToken(baseUrl: string, token: string): string {
+  // Convert SSH to HTTPS if needed
+  let url = baseUrl;
+  if (url.startsWith('git@github.com:')) {
+    url = url.replace('git@github.com:', 'https://github.com/');
   }
 
-  return new Promise((resolve) => {
-    const proc = spawn('git', ['remote', 'get-url', remote], { cwd: dir, stdio: 'pipe' });
-    let url = '';
-    proc.stdout?.on('data', (d) => { url += d.toString(); });
-    proc.on('close', (code) => {
-      if (code !== 0) {
-        resolve(null);
-        return;
+  // Embed token in HTTPS URL
+  if (url.startsWith('https://github.com/')) {
+    return url.replace('https://github.com/', `https://${token}@github.com/`);
+  } else if (url.startsWith('https://') && url.includes('github.com')) {
+    return url.replace(/https:\/\/([^@]+@)?github\.com/, `https://${token}@github.com`);
+  }
+  return url;
+}
+
+// Build authenticated URL from username/password
+function buildAuthUrlFromCreds(baseUrl: string, creds: { username: string; password: string }): string {
+  let url = baseUrl;
+  if (url.startsWith('git@github.com:')) {
+    url = url.replace('git@github.com:', 'https://github.com/');
+  }
+  // Remove existing auth if any
+  url = url.replace(/https:\/\/[^@]+@/, 'https://');
+  return url.replace('https://', `https://${encodeURIComponent(creds.username)}:${encodeURIComponent(creds.password)}@`);
+}
+
+// Get credentials from git credential helper
+async function getCredentialHelperToken(url: string): Promise<{ username: string; password: string } | null> {
+  try {
+    // Parse URL to get host
+    const urlObj = new URL(url);
+    const input = `protocol=${urlObj.protocol.replace(':', '')}\nhost=${urlObj.host}\n\n`;
+    const result = await runCommand('git', ['credential', 'fill'], { input });
+
+    if (result.code !== 0) return null;
+
+    // Parse output: "protocol=https\nhost=github.com\nusername=...\npassword=..."
+    const lines = result.stdout.split('\n');
+    const username = lines.find(l => l.startsWith('username='))?.slice(9);
+    const password = lines.find(l => l.startsWith('password='))?.slice(9);
+
+    return username && password ? { username, password } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Get token from gh CLI
+async function getGhCliToken(): Promise<string | null> {
+  try {
+    const result = await runCommand('gh', ['auth', 'token']);
+    return result.code === 0 ? result.stdout.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Check if any git credentials are available (for status checks)
+async function hasAnyGitCredentials(): Promise<boolean> {
+  // Check stored token
+  if (await hasSecret('GITHUB_TOKEN')) return true;
+
+  // Check gh CLI
+  if (await getGhCliToken()) return true;
+
+  // Check if remote uses SSH
+  if (isGitRepo(AGENTS_DIR)) {
+    const remoteUrl = await getRemoteUrl(AGENTS_DIR, gitConfig.remote);
+    if (remoteUrl?.startsWith('git@')) return true;
+
+    // Check credential helper for HTTPS
+    if (remoteUrl?.startsWith('https://')) {
+      const creds = await getCredentialHelperToken(remoteUrl);
+      if (creds) return true;
+    }
+  }
+
+  return false;
+}
+
+// Resolve git credentials using multiple methods
+async function resolveGitCredentials(dir: string, remote: string): Promise<GitCredentials> {
+  const remoteUrl = await getRemoteUrl(dir, remote);
+  if (!remoteUrl) {
+    return { method: 'none' };
+  }
+
+  // 1. Try stored GITHUB_TOKEN first (highest priority)
+  try {
+    const token = await getSecret('GITHUB_TOKEN');
+    if (token) {
+      logger.debug('git', 'Using stored GITHUB_TOKEN for authentication');
+      return { method: 'token', authUrl: buildAuthUrlFromToken(remoteUrl, token) };
+    }
+  } catch { /* ignore */ }
+
+  // 2. Try gh CLI auth token
+  try {
+    const ghToken = await getGhCliToken();
+    if (ghToken) {
+      logger.debug('git', 'Using gh CLI token for authentication');
+      return { method: 'gh', authUrl: buildAuthUrlFromToken(remoteUrl, ghToken) };
+    }
+  } catch { /* ignore */ }
+
+  // 3. Check for SSH remote (works without modification)
+  if (remoteUrl.startsWith('git@')) {
+    logger.debug('git', 'Using SSH for authentication');
+    return { method: 'ssh', usePlainGit: true };
+  }
+
+  // 4. Try credential helper for HTTPS
+  if (remoteUrl.startsWith('https://')) {
+    try {
+      const creds = await getCredentialHelperToken(remoteUrl);
+      if (creds) {
+        logger.debug('git', 'Using git credential helper for authentication');
+        return { method: 'credential-helper', authUrl: buildAuthUrlFromCreds(remoteUrl, creds) };
       }
-      url = url.trim();
-      
-      // Convert SSH to HTTPS if needed
-      if (url.startsWith('git@github.com:')) {
-        url = url.replace('git@github.com:', 'https://github.com/');
-      }
-      
-      // Embed token in HTTPS URL
-      if (url.startsWith('https://github.com/')) {
-        url = url.replace('https://github.com/', `https://${token}@github.com/`);
-        resolve(url);
-      } else if (url.startsWith('https://') && url.includes('github.com')) {
-        // Already has auth or different format - try to inject token
-        url = url.replace(/https:\/\/([^@]+@)?github\.com/, `https://${token}@github.com`);
-        resolve(url);
-      } else {
-        logger.warn('git', `Unsupported remote URL format: ${url}`);
-        resolve(null);
-      }
-    });
-    proc.on('error', () => resolve(null));
-  });
+    } catch { /* ignore */ }
+  }
+
+  return { method: 'none' };
 }
 
 // Run a git command with optional authenticated remote
@@ -2158,17 +2280,23 @@ async function gitPull(): Promise<{ success: boolean; message: string; changes?:
   if (!isGitRepo(AGENTS_DIR)) {
     return { success: false, message: 'Not a git repository' };
   }
-  
-  const authUrl = await getAuthenticatedRemoteUrl(AGENTS_DIR, gitConfig.remote);
-  if (!authUrl) {
-    return { success: false, message: 'No GITHUB_TOKEN configured' };
-  }
 
-  // Fetch with authenticated URL
-  const fetchResult = await runGitCommand(
-    ['fetch', authUrl, gitConfig.branch],
-    AGENTS_DIR
-  );
+  const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
+
+  let fetchResult: { code: number; stdout: string; stderr: string };
+
+  if (creds.usePlainGit) {
+    // SSH: use plain git pull
+    fetchResult = await runGitCommand(['fetch', gitConfig.remote, gitConfig.branch], AGENTS_DIR);
+  } else if (creds.authUrl) {
+    // HTTPS with auth: use authenticated URL
+    fetchResult = await runGitCommand(['fetch', creds.authUrl, gitConfig.branch], AGENTS_DIR);
+  } else {
+    return {
+      success: false,
+      message: 'No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.',
+    };
+  }
   
   if (fetchResult.code !== 0) {
     logger.warn('git', `Fetch failed: ${fetchResult.stderr}`);
@@ -2221,28 +2349,34 @@ async function gitPush(): Promise<{ success: boolean; message: string; changes?:
     return { success: false, message: 'Not a git repository' };
   }
 
-  const authUrl = await getAuthenticatedRemoteUrl(AGENTS_DIR, gitConfig.remote);
-  if (!authUrl) {
-    return { success: false, message: 'No GITHUB_TOKEN configured' };
-  }
+  const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
 
   // Check for outgoing changes
   const diffResult = await runGitCommand(
     ['rev-list', '--count', `${gitConfig.remote}/${gitConfig.branch}..HEAD`],
     AGENTS_DIR
   );
-  
+
   const outgoingChanges = parseInt(diffResult.stdout.trim(), 10) || 0;
-  
+
   if (outgoingChanges === 0) {
     return { success: true, message: 'Nothing to push', changes: 0 };
   }
 
-  // Push with authenticated URL
-  const pushResult = await runGitCommand(
-    ['push', authUrl, `HEAD:${gitConfig.branch}`],
-    AGENTS_DIR
-  );
+  let pushResult: { code: number; stdout: string; stderr: string };
+
+  if (creds.usePlainGit) {
+    // SSH: use plain git push
+    pushResult = await runGitCommand(['push', gitConfig.remote, `HEAD:${gitConfig.branch}`], AGENTS_DIR);
+  } else if (creds.authUrl) {
+    // HTTPS with auth: use authenticated URL
+    pushResult = await runGitCommand(['push', creds.authUrl, `HEAD:${gitConfig.branch}`], AGENTS_DIR);
+  } else {
+    return {
+      success: false,
+      message: 'No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.',
+    };
+  }
 
   if (pushResult.code !== 0) {
     logger.warn('git', `Push failed: ${pushResult.stderr}`);
@@ -2301,12 +2435,13 @@ function startGitSyncTimer() {
   logger.info('git', `Auto-sync enabled: every ${gitConfig.syncInterval}s`);
 
   gitSyncTimer = setInterval(async () => {
-    const token = await getSecret('GITHUB_TOKEN');
-    if (!token) {
-      // Silently skip if no token configured
+    // Check if any credentials are available (gh, ssh, credential helper, or stored token)
+    const hasCreds = await hasAnyGitCredentials();
+    if (!hasCreds) {
+      // Silently skip if no credentials configured
       return;
     }
-    
+
     logger.debug('git', 'Running periodic sync...');
     const result = await gitSync();
     if (!result.success) {
@@ -2327,7 +2462,8 @@ async function getGitStatus(): Promise<{
   isRepo: boolean;
   branch?: string;
   remote?: string;
-  hasToken: boolean;
+  hasCredentials: boolean;
+  authMethod?: string;
   autoSync: boolean;
   lastSync?: string;
   uncommittedChanges?: number;
@@ -2336,11 +2472,16 @@ async function getGitStatus(): Promise<{
 }> {
   const status: any = {
     isRepo: isGitRepo(AGENTS_DIR),
-    hasToken: await hasSecret('GITHUB_TOKEN'),
+    hasCredentials: false,
     autoSync: gitConfig.autoSync,
   };
 
   if (!status.isRepo) return status;
+
+  // Check credentials and auth method
+  const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
+  status.hasCredentials = creds.method !== 'none';
+  status.authMethod = creds.method;
 
   // Get current branch
   const branchResult = await runGitCommand(['rev-parse', '--abbrev-ref', 'HEAD'], AGENTS_DIR);
@@ -2362,8 +2503,8 @@ async function getGitStatus(): Promise<{
     status.uncommittedChanges = statusResult.stdout.trim().split('\n').filter(l => l.trim()).length;
   }
 
-  // Unpushed commits (only if we can reach remote)
-  if (status.hasToken) {
+  // Unpushed commits (only if we have credentials)
+  if (status.hasCredentials) {
     const unpushedResult = await runGitCommand(
       ['rev-list', '--count', `${gitConfig.remote}/${gitConfig.branch}..HEAD`],
       AGENTS_DIR
@@ -2410,7 +2551,7 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
         const commit = spawn('git', ['commit', '-m', message], { cwd: dir, stdio: 'pipe' });
         commit.on('close', (commitCode) => {
           if (commitCode === 0) {
-            logger.git.commit(message, changes.length);
+            logger.git.commit(message, changedFiles.length);
           }
           resolve();
         });
@@ -2587,7 +2728,7 @@ function startFileWatcher() {
     join(AGENTS_DIR, 'MEMORY.md'),
     join(AGENTS_DIR, 'IDENTITY.md'),
     join(AGENTS_DIR, 'USER.md'),
-    join(AGENTS_DIR, 'memory', '*.md'),
+    join(AGENTS_DIR, 'memory'),  // Watch entire memory directory for new/changed .md files
   ], {
     persistent: true,
     ignoreInitial: true,
@@ -2596,16 +2737,30 @@ function startFileWatcher() {
   watcher.on('change', (path) => {
     logger.info('watcher', 'File changed', { path });
     scheduleAutoCommit(path);
-    
+
     // If AGENTS.md changed, sync to harness configs
     if (path.endsWith('AGENTS.md')) {
       scheduleSyncHarnessConfigs();
+    }
+
+    // Ingest memory markdown files (excluding MEMORY.md index)
+    if (path.includes('/memory/') && path.endsWith('.md') && !path.endsWith('MEMORY.md')) {
+      ingestMemoryMarkdown(path).catch(e =>
+        logger.error('watcher', 'Ingestion failed', { path, error: String(e) })
+      );
     }
   });
 
   watcher.on('add', (path) => {
     logger.info('watcher', 'File added', { path });
     scheduleAutoCommit(path);
+
+    // Ingest new memory markdown files
+    if (path.includes('/memory/') && path.endsWith('.md') && !path.endsWith('MEMORY.md')) {
+      ingestMemoryMarkdown(path).catch(e =>
+        logger.error('watcher', 'Ingestion failed', { path, error: String(e) })
+      );
+    }
   });
   
   // Watch Claude Code project memories
@@ -2662,61 +2817,367 @@ async function syncExistingClaudeMemories(claudeProjectsDir: string) {
 async function syncClaudeMemoryFile(filePath: string): Promise<number> {
   try {
     const content = readFileSync(filePath, 'utf-8');
-    const lines = content.split('\n');
-    
+    if (!content.trim()) return 0;
+
     // Extract project path from file path
     // e.g., ~/.claude/projects/-home-user-myproject/memory/MEMORY.md
     const match = filePath.match(/projects\/([^/]+)\/memory/);
     const projectId = match ? match[1] : 'unknown';
-    
-    // Parse the MEMORY.md format (simple bullet points under headings)
-    let currentSection = '';
-    const memories: { content: string; tags: string[] }[] = [];
-    
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('# ')) {
-        currentSection = trimmed.slice(2).toLowerCase();
-      } else if (trimmed.startsWith('## ')) {
-        currentSection = trimmed.slice(3).toLowerCase();
-      } else if (trimmed.startsWith('- ')) {
-        const memContent = trimmed.slice(2);
-        // Create a unique key to avoid duplicates
-        const memKey = `claude:${projectId}:${memContent}`;
-        
-        if (!syncedClaudeMemories.has(memKey)) {
-          syncedClaudeMemories.add(memKey);
-          memories.push({
-            content: memContent,
-            tags: ['claude-code', currentSection, `project:${projectId}`].filter(Boolean),
-          });
-        }
-      }
+
+    // Compute hash for deduplication
+    const contentHash = createHash('sha256').update(content).digest('hex').slice(0, 16);
+    const existingHash = ingestedMemoryFiles.get(filePath);
+    if (existingHash === contentHash) {
+      logger.debug('watcher', 'Claude memory file unchanged, skipping', { path: filePath });
+      return 0;
     }
-    
-    // Save new memories to Signet
-    for (const mem of memories) {
+    ingestedMemoryFiles.set(filePath, contentHash);
+
+    // Use hierarchical chunking to preserve section structure
+    const chunks = chunkMarkdownHierarchically(content, 512);
+    let inserted = 0;
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+
+      // Extract section name from header for tagging
+      const sectionMatch = chunk.header.match(/^#+\s+(.+)$/);
+      const sectionName = sectionMatch ? sectionMatch[1].toLowerCase() : '';
+
+      // Dedupe by content hash within this project
+      const chunkKey = `claude:${projectId}:${createHash('sha256').update(chunk.text).digest('hex').slice(0, 16)}`;
+      if (syncedClaudeMemories.has(chunkKey)) continue;
+      syncedClaudeMemories.add(chunkKey);
+
       try {
-        await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+        const response = await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            content: mem.content,
+            content: chunk.text,
             who: 'claude-code',
-            importance: 0.6,
-            tags: mem.tags.join(','),
+            importance: chunk.level === 'section' ? 0.65 : 0.55,
+            tags: [
+              'claude-code',
+              'claude-project-memory',
+              sectionName,
+              `project:${projectId}`,
+              chunk.level === 'section' ? 'hierarchical-section' : 'hierarchical-paragraph'
+            ].filter(Boolean).join(','),
           }),
         });
-        logger.info('watcher', 'Synced Claude memory', { content: mem.content.slice(0, 50) });
+
+        if (response.ok) {
+          inserted++;
+          logger.info('watcher', 'Synced Claude memory chunk', {
+            content: chunk.text.slice(0, 50),
+            section: sectionName || '(no section)',
+            level: chunk.level
+          });
+        }
       } catch (e) {
-        logger.error('watcher', 'Failed to sync memory', { error: String(e) });
+        const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
+        logger.error('watcher', 'Failed to sync Claude memory chunk', {
+          path: filePath,
+          chunkIndex: i,
+          ...errDetails
+        });
       }
     }
-    return memories.length;
+
+    if (inserted > 0) {
+      logger.info('watcher', 'Synced Claude memory file', {
+        path: filePath,
+        projectId,
+        chunks: inserted,
+        sections: chunks.filter(c => c.level === 'section').length
+      });
+    }
+    return inserted;
   } catch (e) {
-    logger.error('watcher', 'Failed to read Claude memory file', { error: String(e) });
+    const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
+    logger.error('watcher', 'Failed to read Claude memory file', { path: filePath, ...errDetails });
     return 0;
   }
+}
+
+// ============================================================================
+// OpenClaw Memory Markdown Ingestion
+// ============================================================================
+
+// Track ingested files to avoid re-processing (path -> content hash)
+const ingestedMemoryFiles = new Map<string, string>();
+
+/**
+ * Estimate token count for a given text.
+ * Uses a simple heuristic: ~4 characters per token on average.
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * Split markdown content into hierarchical chunks that preserve section structure.
+ * Each chunk includes its section header for context.
+ */
+function chunkMarkdownHierarchically(
+  content: string,
+  maxTokens: number = 512,
+): { text: string; tokenCount: number; header: string; level: 'section' | 'paragraph' }[] {
+  const results: { text: string; tokenCount: number; header: string; level: 'section' | 'paragraph' }[] = [];
+  const lines = content.split('\n');
+
+  let currentHeader = '';
+  let currentContent: string[] = [];
+
+  // Regex for markdown headers (h1-h3)
+  const headerPattern = /^(#{1,3})\s+(.+)$/;
+
+  const flushSection = () => {
+    if (currentContent.length === 0) return;
+
+    const sectionText = currentContent.join('\n').trim();
+    if (!sectionText) return;
+
+    const sectionTokens = estimateTokens(sectionText);
+
+    if (sectionTokens <= maxTokens) {
+      // Section fits in one chunk - include header for context
+      const textWithHeader = currentHeader
+        ? `${currentHeader}\n\n${sectionText}`
+        : sectionText;
+      results.push({
+        text: textWithHeader,
+        tokenCount: estimateTokens(textWithHeader),
+        header: currentHeader,
+        level: 'section',
+      });
+    } else {
+      // Split section into paragraph chunks with header context
+      const paragraphs = sectionText.split(/\n\n+/);
+      let chunkParas: string[] = [];
+      let chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
+
+      for (const para of paragraphs) {
+        const paraTokens = estimateTokens(para);
+
+        // If single paragraph exceeds max, it needs to stand alone
+        if (paraTokens > maxTokens) {
+          // Flush current chunk first
+          if (chunkParas.length > 0) {
+            const text = currentHeader
+              ? `${currentHeader}\n\n${chunkParas.join('\n\n')}`
+              : chunkParas.join('\n\n');
+            results.push({
+              text,
+              tokenCount: chunkTokens,
+              header: currentHeader,
+              level: 'paragraph',
+            });
+            chunkParas = [];
+            chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
+          }
+
+          // Add large paragraph as its own chunk (with header context)
+          const text = currentHeader
+            ? `${currentHeader}\n\n${para}`
+            : para;
+          results.push({
+            text,
+            tokenCount: estimateTokens(text),
+            header: currentHeader,
+            level: 'paragraph',
+          });
+          continue;
+        }
+
+        if (chunkTokens + paraTokens + 2 > maxTokens && chunkParas.length > 0) {
+          // Flush current chunk
+          const text = currentHeader
+            ? `${currentHeader}\n\n${chunkParas.join('\n\n')}`
+            : chunkParas.join('\n\n');
+          results.push({
+            text,
+            tokenCount: chunkTokens,
+            header: currentHeader,
+            level: 'paragraph',
+          });
+          chunkParas = [];
+          chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
+        }
+
+        chunkParas.push(para);
+        chunkTokens += paraTokens + 2; // +2 for paragraph break
+      }
+
+      // Final chunk for this section
+      if (chunkParas.length > 0) {
+        const text = currentHeader
+          ? `${currentHeader}\n\n${chunkParas.join('\n\n')}`
+          : chunkParas.join('\n\n');
+        results.push({
+          text,
+          tokenCount: chunkTokens,
+          header: currentHeader,
+          level: 'paragraph',
+        });
+      }
+    }
+
+    currentContent = [];
+  };
+
+  for (const line of lines) {
+    const match = line.match(headerPattern);
+    if (match) {
+      flushSection();
+      currentHeader = line; // Keep full header with # marks
+    } else {
+      currentContent.push(line);
+    }
+  }
+
+  flushSection(); // Final section
+
+  // Handle content with no headers at all
+  if (results.length === 0 && content.trim()) {
+    const text = content.trim();
+    results.push({
+      text,
+      tokenCount: estimateTokens(text),
+      header: '',
+      level: 'section',
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Ingest a single OpenClaw memory markdown file into the database.
+ * Uses hierarchical chunking to preserve section structure.
+ *
+ * @param filePath - Path to the memory markdown file
+ * @returns Number of chunks inserted
+ */
+async function ingestMemoryMarkdown(filePath: string): Promise<number> {
+  // Skip MEMORY.md (index file, not content)
+  if (filePath.endsWith('MEMORY.md')) return 0;
+
+  // Read file content
+  let content: string;
+  try {
+    content = readFileSync(filePath, 'utf-8');
+  } catch (e) {
+    logger.error('watcher', 'Failed to read memory file', { path: filePath, error: String(e) });
+    return 0;
+  }
+
+  if (!content.trim()) return 0;
+
+  // Compute hash for deduplication
+  const hash = createHash('sha256').update(content).digest('hex').slice(0, 16);
+  if (ingestedMemoryFiles.get(filePath) === hash) {
+    logger.debug('watcher', 'Memory file unchanged, skipping', { path: filePath });
+    return 0;
+  }
+  ingestedMemoryFiles.set(filePath, hash);
+
+  // Extract metadata from filename
+  const filename = basename(filePath, '.md');
+  const dateMatch = filename.match(/^(\d{4}-\d{2}-\d{2})/);
+  const date = dateMatch ? dateMatch[1] : null;
+
+  // Use hierarchical chunking
+  const chunks = chunkMarkdownHierarchically(content, 512);
+  let inserted = 0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    try {
+      const response = await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: chunk.text,
+          who: 'openclaw-memory',
+          importance: chunk.level === 'section' ? 0.65 : 0.55, // Slightly higher for sections
+          tags: [
+            'openclaw',
+            'memory-log',
+            date || 'named',
+            filename,
+            chunk.level === 'section' ? 'hierarchical-section' : 'hierarchical-paragraph'
+          ].filter(Boolean).join(','),
+        }),
+      });
+
+      if (response.ok) {
+        inserted++;
+      } else {
+        logger.warn('watcher', 'Failed to ingest memory chunk', {
+          path: filePath,
+          chunkIndex: i,
+          status: response.status,
+        });
+      }
+    } catch (e) {
+      const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
+      logger.error('watcher', 'Failed to ingest memory chunk', {
+        path: filePath,
+        chunkIndex: i,
+        ...errDetails
+      });
+    }
+  }
+
+  if (inserted > 0) {
+    logger.info('watcher', 'Ingested memory file', {
+      path: filePath,
+      chunks: inserted,
+      sections: chunks.filter(c => c.level === 'section').length,
+      filename,
+    });
+  }
+  return inserted;
+}
+
+/**
+ * Import all existing memory markdown files on daemon startup.
+ * Scans ~/.agents/memory/ for .md files and ingests them.
+ *
+ * @returns Total number of chunks inserted
+ */
+async function importExistingMemoryFiles(): Promise<number> {
+  const memoryDir = join(AGENTS_DIR, 'memory');
+  if (!existsSync(memoryDir)) {
+    logger.debug('daemon', 'Memory directory does not exist, skipping initial import');
+    return 0;
+  }
+
+  let files: string[];
+  try {
+    files = readdirSync(memoryDir)
+      .filter(f => f.endsWith('.md') && f !== 'MEMORY.md');
+  } catch (e) {
+    const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
+    logger.error('daemon', 'Failed to read memory directory', errDetails);
+    return 0;
+  }
+
+  let totalChunks = 0;
+  for (const file of files) {
+    const count = await ingestMemoryMarkdown(join(memoryDir, file));
+    totalChunks += count;
+  }
+
+  if (totalChunks > 0) {
+    logger.info('daemon', 'Imported existing memory files', {
+      files: files.length,
+      chunks: totalChunks,
+    });
+  }
+  return totalChunks;
 }
 
 // ============================================================================
@@ -2881,18 +3342,18 @@ async function main() {
   
   // Initialize memory database schema
   initMemorySchema();
-  
+
   // Write PID file
   writeFileSync(PID_FILE, process.pid.toString());
   logger.info('daemon', 'Process ID', { pid: process.pid });
-  
+
   // Start file watcher
   startFileWatcher();
   logger.info('watcher', 'File watcher started');
-  
+
   // Start git sync timer (if enabled and has token)
   startGitSyncTimer();
-  
+
   // Start HTTP server
   serve({
     fetch: app.fetch,
@@ -2901,6 +3362,13 @@ async function main() {
   }, (info) => {
     logger.info('daemon', 'Server listening', { address: info.address, port: info.port });
     logger.info('daemon', 'Daemon ready');
+
+    // Import existing memory markdown files (OpenClaw memory logs)
+    // Do this after server starts so the HTTP API is available for ingestion
+    importExistingMemoryFiles().catch(e => {
+      const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+      logger.error('daemon', 'Failed to import existing memory files', errDetails);
+    });
   });
 }
 
