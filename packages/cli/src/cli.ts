@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.8';
+const VERSION = '0.1.9';
 
 // ============================================================================
 // Helpers
@@ -954,36 +954,49 @@ async function setupWizard(options: { path?: string }) {
     // Copy requirements.txt and install Python dependencies
     const requirementsSource = join(templatesDir, 'memory', 'requirements.txt');
     let pipInstallFailed = false;
+    const venvPath = join(basePath, '.venv');
+    
     if (existsSync(requirementsSource)) {
       copyFileSync(requirementsSource, join(basePath, 'memory', 'requirements.txt'));
-      spinner.text = 'Installing Python dependencies...';
+      spinner.text = 'Creating Python virtual environment...';
       
-      // Try different pip commands
-      const pipCommands = [
-        ['pip3', ['install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')]],
-        ['pip', ['install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')]],
-        ['python3', ['-m', 'pip', 'install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')]],
-        ['python', ['-m', 'pip', 'install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')]],
-      ] as const;
-      
-      let installed = false;
-      for (const [cmd, args] of pipCommands) {
-        try {
-          const exitCode = await new Promise<number>((resolve) => {
-            const proc = spawn(cmd, args as string[], { stdio: 'pipe' });
-            proc.on('close', (code) => resolve(code ?? 1));
+      // Find python3 or python
+      const pythonCmd = await (async () => {
+        for (const cmd of ['python3', 'python']) {
+          const code = await new Promise<number>((resolve) => {
+            const proc = spawn(cmd, ['--version'], { stdio: 'pipe' });
+            proc.on('close', (c) => resolve(c ?? 1));
             proc.on('error', () => resolve(1));
           });
-          if (exitCode === 0) {
-            installed = true;
-            break;
-          }
-        } catch {
-          // Try next command
+          if (code === 0) return cmd;
         }
-      }
+        return null;
+      })();
       
-      if (!installed) {
+      if (pythonCmd) {
+        // Create venv
+        const venvCode = await new Promise<number>((resolve) => {
+          const proc = spawn(pythonCmd, ['-m', 'venv', venvPath], { stdio: 'pipe' });
+          proc.on('close', (c) => resolve(c ?? 1));
+          proc.on('error', () => resolve(1));
+        });
+        
+        if (venvCode === 0) {
+          spinner.text = 'Installing Python dependencies...';
+          const venvPip = join(venvPath, 'bin', 'pip');
+          const pipCode = await new Promise<number>((resolve) => {
+            const proc = spawn(venvPip, ['install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')], { stdio: 'pipe' });
+            proc.on('close', (c) => resolve(c ?? 1));
+            proc.on('error', () => resolve(1));
+          });
+          
+          if (pipCode !== 0) {
+            pipInstallFailed = true;
+          }
+        } else {
+          pipInstallFailed = true;
+        }
+      } else {
         pipInstallFailed = true;
       }
     }
