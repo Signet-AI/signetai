@@ -36,6 +36,7 @@ import {
   deleteSecret,
   execWithSecrets,
 } from './secrets.js';
+import { parseSimpleYaml, buildSignetBlock, stripSignetBlock, vectorSearch, keywordSearch } from '@signet/core';
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), '.agents');
@@ -91,59 +92,6 @@ interface MemorySearchConfig {
 interface ResolvedMemoryConfig {
   embedding: EmbeddingConfig;
   search: MemorySearchConfig;
-}
-
-// Minimal line-by-line YAML parser (handles 2-level nesting, no arrays)
-function parseSimpleYaml(text: string): Record<string, any> {
-  const result: Record<string, any> = {};
-  let section: string | null = null;
-  let subsection: string | null = null;
-
-  for (const rawLine of text.split('\n')) {
-    const line = rawLine.replace(/\s*#.*$/, ''); // strip inline comments
-    if (!line.trim()) continue;
-
-    const indent = line.length - line.trimStart().length;
-    const trimmed = line.trimStart();
-
-    // Skip YAML document markers
-    if (trimmed === '---' || trimmed === '...') continue;
-
-    if (indent === 0) {
-      subsection = null;
-      const m = trimmed.match(/^([a-zA-Z_]\w*):\s*(.*)$/);
-      if (m) {
-        section = m[1];
-        const val = m[2].replace(/^["']|["']$/g, '').trim();
-        result[section] = val || {};
-      }
-    } else if (indent === 2 && section) {
-      const m = trimmed.match(/^([a-zA-Z_]\w*):\s*(.*)$/);
-      if (m) {
-        const val = m[2].replace(/^["']|["']$/g, '').trim();
-        if (val) {
-          if (typeof result[section] !== 'object') result[section] = {};
-          (result[section] as Record<string, any>)[m[1]] = val;
-          subsection = null;
-        } else {
-          // Nested section
-          if (typeof result[section] !== 'object') result[section] = {};
-          subsection = m[1];
-          (result[section] as Record<string, any>)[subsection] = {};
-        }
-      }
-    } else if (indent === 4 && section && subsection) {
-      const m = trimmed.match(/^([a-zA-Z_]\w*):\s*(.*)$/);
-      if (m) {
-        const val = m[2].replace(/^["']|["']$/g, '').trim();
-        const sec = result[section] as Record<string, any>;
-        if (typeof sec[subsection] !== 'object') sec[subsection] = {};
-        (sec[subsection] as Record<string, any>)[m[1]] = val;
-      }
-    }
-  }
-
-  return result;
 }
 
 function loadMemoryConfig(): ResolvedMemoryConfig {
@@ -240,10 +188,6 @@ function vectorToBlob(vec: number[]): Buffer {
   return Buffer.from(f32.buffer);
 }
 
-function blobToVector(blob: Buffer): Float32Array {
-  return new Float32Array(blob.buffer, blob.byteOffset, blob.byteLength / 4);
-}
-
 // Status cache for embedding provider
 let cachedEmbeddingStatus: EmbeddingStatus | null = null;
 let statusCacheTime = 0;
@@ -304,18 +248,6 @@ async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingSt
   cachedEmbeddingStatus = status;
   statusCacheTime = now;
   return status;
-}
-
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  let dot = 0, normA = 0, normB = 0;
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 // Mirror the type inference from memory.py
@@ -741,7 +673,7 @@ app.get('/memory/search', (c) => {
       // FTS path
       const { clause, args } = buildWhere(filterParams);
       try {
-        results = db.prepare(`
+        results = (db.prepare(`
           SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
                  m.type, m.pinned, bm25(memories_fts) as score
           FROM memories_fts
@@ -749,22 +681,22 @@ app.get('/memory/search', (c) => {
           WHERE memories_fts MATCH ?${clause}
           ORDER BY score
           LIMIT ${limit ?? 20}
-        `).all(query, ...args);
+        `) as any).all(query, ...args);
       } catch {
         // FTS not available — fall back to LIKE
         const { clause: rc, args: rargs } = buildWhereRaw(filterParams);
-        results = db.prepare(`
+        results = (db.prepare(`
           SELECT id, content, created_at, who, importance, tags, type, pinned
           FROM memories
           WHERE (content LIKE ? OR tags LIKE ?)${rc}
           ORDER BY created_at DESC
           LIMIT ${limit ?? 20}
-        `).all(`%${query}%`, `%${query}%`, ...rargs);
+        `) as any).all(`%${query}%`, `%${query}%`, ...rargs);
       }
     } else if (hasFilters) {
       // Pure filter path
       const { clause, args } = buildWhereRaw(filterParams);
-      results = db.prepare(`
+      results = (db.prepare(`
         SELECT id, content, created_at, who, importance, tags, type, pinned,
                CASE WHEN pinned = 1 THEN 1.0
                     ELSE importance * MAX(0.1, POWER(0.95,
@@ -774,7 +706,7 @@ app.get('/memory/search', (c) => {
         WHERE 1=1${clause}
         ORDER BY score DESC
         LIMIT ${limit ?? 50}
-      `).all(...args);
+      `) as any).all(...args);
     }
 
     db.close();
@@ -973,14 +905,14 @@ app.post('/api/memory/recall', async (c) => {
     const db = new Database(MEMORY_DB, { readonly: true });
     // bm25() in FTS5 returns negative values (lower = better match),
     // so we negate and normalise to [0,1] via a simple 1/(1+|score|) approach
-    const ftsRows = db.prepare(`
+    const ftsRows = (db.prepare(`
       SELECT m.id, bm25(memories_fts) AS raw_score
       FROM memories_fts
       JOIN memories m ON memories_fts.rowid = m.rowid
       WHERE memories_fts MATCH ?${filterClause}
       ORDER BY raw_score
       LIMIT ?
-    `).all(query, ...filterArgs, cfg.search.top_k) as Array<{ id: string; raw_score: number }>;
+    `) as any).all(query, ...filterArgs, cfg.search.top_k) as Array<{ id: string; raw_score: number }>;
 
     for (const row of ftsRows) {
       // Normalise: bm25 is negative; convert to 0-1
@@ -992,29 +924,22 @@ app.post('/api/memory/recall', async (c) => {
     // FTS unavailable (e.g. no matches) — continue with vector only
   }
 
-  // --- Vector search via embeddings table ---
+  // --- Vector search via sqlite-vec ---
   const vectorMap = new Map<string, number>();
   try {
     const queryVec = await fetchEmbedding(query, cfg.embedding);
     if (queryVec) {
       const qf32 = new Float32Array(queryVec);
       const db = new Database(MEMORY_DB, { readonly: true });
-      const embRows = db.prepare(`
-        SELECT source_id, vector
-        FROM embeddings
-        WHERE source_type = 'memory'
-      `).all() as Array<{ source_id: string; vector: Buffer }>;
+      // Use core's vectorSearch which queries vec_embeddings virtual table
+      const vecResults = vectorSearch(db as any, qf32, {
+        limit: cfg.search.top_k,
+        type: body.type as "fact" | "preference" | "decision" | undefined,
+      });
       db.close();
 
-      const candidates: Array<{ id: string; score: number }> = [];
-      for (const row of embRows) {
-        const vec = blobToVector(row.vector);
-        const score = cosineSimilarity(qf32, vec);
-        if (score > 0) candidates.push({ id: row.source_id, score });
-      }
-      candidates.sort((a, b) => b.score - a.score);
-      for (const c of candidates.slice(0, cfg.search.top_k)) {
-        vectorMap.set(c.id, c.score);
+      for (const r of vecResults) {
+        vectorMap.set(r.id, r.score);
       }
     }
   } catch (e) {
@@ -1138,47 +1063,86 @@ app.get('/memory/similar', async (c) => {
     return c.json({ error: 'id is required', results: [] }, 400);
   }
 
-  const k = c.req.query('k') ?? '10';
+  const k = parseInt(c.req.query('k') ?? '10', 10);
   const type = c.req.query('type');
 
-  const args = ['similar', id, '--json', '--k', k];
-  if (type) args.push('--type', type);
+  try {
+    const db = new Database(MEMORY_DB, { readonly: true });
 
-  return new Promise<Response>((resolve) => {
-    const timeout = setTimeout(() => {
-      proc.kill();
-      resolve(c.json({ error: 'Timed out', results: [] }, 504));
-    }, 15000);
+    // Get the embedding for the given memory ID
+    const embeddingRow = db.prepare(`
+      SELECT vector
+      FROM embeddings
+      WHERE source_type = 'memory' AND source_id = ?
+      LIMIT 1
+    `).get(id) as { vector: Buffer } | undefined;
 
-    const proc = spawn(getPythonCmd(), [MEMORY_SCRIPT, ...args]);
-    let stdout = '';
-    let stderr = '';
+    if (!embeddingRow) {
+      db.close();
+      return c.json({ error: 'No embedding found for this memory', results: [] }, 404);
+    }
 
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    // Convert BLOB to Float32Array for vector search
+    const queryVector = new Float32Array(
+      embeddingRow.vector.buffer.slice(
+        embeddingRow.vector.byteOffset,
+        embeddingRow.vector.byteOffset + embeddingRow.vector.byteLength,
+      ),
+    );
 
-    proc.on('close', (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) {
-        logger.error('memory', 'memory.py similar error', undefined, { stderr });
-        resolve(c.json({ error: 'Similarity search failed', results: [] }, 500));
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout);
-        const results = Array.isArray(parsed) ? parsed : (parsed.results ?? []);
-        resolve(c.json({ results }));
-      } catch {
-        resolve(c.json({ error: 'Invalid response from memory.py', results: [] }, 500));
-      }
+    // Use core's vectorSearch to find similar memories
+    const searchResults = vectorSearch(db as any, queryVector, {
+      limit: k + 1, // +1 because the query memory itself will be in results
+      type: type as 'fact' | 'preference' | 'decision' | undefined,
     });
+    db.close();
 
-    proc.on('error', (err) => {
-      clearTimeout(timeout);
-      logger.error('memory', 'Failed to spawn memory.py', err as Error);
-      resolve(c.json({ error: 'Could not run similarity search', results: [] }, 500));
-    });
-  });
+    // Filter out the query memory itself and fetch full memory details
+    const filteredResults = searchResults.filter(r => r.id !== id).slice(0, k);
+
+    if (filteredResults.length === 0) {
+      return c.json({ results: [] });
+    }
+
+    // Fetch full memory details for the results
+    const db2 = new Database(MEMORY_DB, { readonly: true });
+    const ids = filteredResults.map(r => r.id);
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = db2.prepare(`
+      SELECT id, content, type, tags, confidence, created_at
+      FROM memories
+      WHERE id IN (${placeholders})
+    `).all(...ids) as Array<{
+      id: string;
+      content: string;
+      type: string;
+      tags: string | null;
+      confidence: number;
+      created_at: string;
+    }>;
+    db2.close();
+
+    const rowMap = new Map(rows.map(r => [r.id, r]));
+    const results = filteredResults
+      .filter(r => rowMap.has(r.id))
+      .map(r => {
+        const row = rowMap.get(r.id)!;
+        return {
+          id: r.id,
+          content: row.content,
+          type: row.type,
+          tags: row.tags ? JSON.parse(row.tags) : [],
+          score: Math.round(r.score * 100) / 100,
+          confidence: row.confidence,
+          created_at: row.created_at,
+        };
+      });
+
+    return c.json({ results });
+  } catch (e) {
+    logger.error('memory', 'Similarity search failed', e as Error);
+    return c.json({ error: 'Similarity search failed', results: [] }, 500);
+  }
 });
 
 // ============================================================================
@@ -1232,7 +1196,6 @@ app.get('/api/embeddings/status', async (c) => {
 // ============================================================================
 
 interface SkillMeta {
-  name: string;
   description: string;
   version?: string;
   author?: string;
@@ -1243,7 +1206,7 @@ interface SkillMeta {
 
 function parseSkillFrontmatter(content: string): SkillMeta {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return { name: '', description: '' };
+  if (!match) return { description: '' };
 
   const fm = match[1];
   const get = (key: string) => {
@@ -1252,7 +1215,6 @@ function parseSkillFrontmatter(content: string): SkillMeta {
   };
 
   return {
-    name: get('name'),
     description: get('description'),
     version: get('version') || undefined,
     author: get('author') || undefined,
@@ -2584,59 +2546,6 @@ function scheduleAutoCommit(changedPath: string) {
   }, COMMIT_DEBOUNCE_MS);
 }
 
-// Build the Signet system block injected into all generated harness files.
-// Always current — regenerated on every sync cycle.
-function buildSignetBlock(): string {
-  return `<!-- SIGNET:START -->
-Signet Agent System
-===
-
-Your identity and memory are managed by Signet, a portable agent identity
-system. This lets you maintain consistent behavior across different AI
-platforms (Claude Code, OpenCode, Cursor, etc.).
-
-Key files in \`~/.agents/\`:
-- \`agent.yaml\` — Configuration
-- \`AGENTS.md\` — Instructions (source of truth)
-- \`SOUL.md\` — Personality and tone
-- \`IDENTITY.md\` — Agent identity
-- \`USER.md\` — User profile
-- \`MEMORY.md\` — Working memory summary
-
-Dashboard: http://localhost:3850
-
-Memory
----
-
-You have access to persistent memory via Signet:
-
-\`\`\`bash
-signet remember "User prefers dark mode and vim keybindings"
-signet recall "user preferences"
-\`\`\`
-
-Memory is automatically loaded at session start. Important context is
-summarized in \`~/.agents/MEMORY.md\`.
-
-Secrets
----
-
-API keys and tokens are stored securely in Signet:
-
-\`\`\`bash
-signet secret get OPENAI_API_KEY
-signet secret list
-\`\`\`
-<!-- SIGNET:END -->
-
-`;
-}
-
-// Strip any existing Signet block so it is never duplicated on re-sync.
-function stripSignetBlock(content: string): string {
-  return content.replace(/<!-- SIGNET:START -->[\s\S]*?<!-- SIGNET:END -->\n?/g, '');
-}
-
 // Auto-sync AGENTS.md to harness configs
 async function syncHarnessConfigs() {
   const agentsMdPath = join(AGENTS_DIR, 'AGENTS.md');
@@ -2746,7 +2655,7 @@ function startFileWatcher() {
     // Ingest memory markdown files (excluding MEMORY.md index)
     if (path.includes('/memory/') && path.endsWith('.md') && !path.endsWith('MEMORY.md')) {
       ingestMemoryMarkdown(path).catch(e =>
-        logger.error('watcher', 'Ingestion failed', { path, error: String(e) })
+        logger.error('watcher', 'Ingestion failed', undefined, { path, error: String(e) })
       );
     }
   });
@@ -2758,7 +2667,7 @@ function startFileWatcher() {
     // Ingest new memory markdown files
     if (path.includes('/memory/') && path.endsWith('.md') && !path.endsWith('MEMORY.md')) {
       ingestMemoryMarkdown(path).catch(e =>
-        logger.error('watcher', 'Ingestion failed', { path, error: String(e) })
+        logger.error('watcher', 'Ingestion failed', undefined, { path, error: String(e) })
       );
     }
   });
@@ -2810,7 +2719,7 @@ async function syncExistingClaudeMemories(claudeProjectsDir: string) {
       logger.info('watcher', 'Synced existing Claude memories', { count: totalSynced });
     }
   } catch (e) {
-    logger.error('watcher', 'Failed to sync existing Claude memories', { error: String(e) });
+    logger.error('watcher', 'Failed to sync existing Claude memories', undefined, { error: String(e) });
   }
 }
 
@@ -2877,7 +2786,7 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
         }
       } catch (e) {
         const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
-        logger.error('watcher', 'Failed to sync Claude memory chunk', {
+        logger.error('watcher', 'Failed to sync Claude memory chunk', undefined, {
           path: filePath,
           chunkIndex: i,
           ...errDetails
@@ -2896,7 +2805,7 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
     return inserted;
   } catch (e) {
     const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
-    logger.error('watcher', 'Failed to read Claude memory file', { path: filePath, ...errDetails });
+    logger.error('watcher', 'Failed to read Claude memory file', undefined, { path: filePath, ...errDetails });
     return 0;
   }
 }
@@ -3069,7 +2978,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
   try {
     content = readFileSync(filePath, 'utf-8');
   } catch (e) {
-    logger.error('watcher', 'Failed to read memory file', { path: filePath, error: String(e) });
+    logger.error('watcher', 'Failed to read memory file', undefined, { path: filePath, error: String(e) });
     return 0;
   }
 
@@ -3123,7 +3032,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
       }
     } catch (e) {
       const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
-      logger.error('watcher', 'Failed to ingest memory chunk', {
+      logger.error('watcher', 'Failed to ingest memory chunk', undefined, {
         path: filePath,
         chunkIndex: i,
         ...errDetails
@@ -3161,7 +3070,7 @@ async function importExistingMemoryFiles(): Promise<number> {
       .filter(f => f.endsWith('.md') && f !== 'MEMORY.md');
   } catch (e) {
     const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
-    logger.error('daemon', 'Failed to read memory directory', errDetails);
+    logger.error('daemon', 'Failed to read memory directory', undefined, errDetails);
     return 0;
   }
 
@@ -3367,7 +3276,7 @@ async function main() {
     // Do this after server starts so the HTTP API is available for ingestion
     importExistingMemoryFiles().catch(e => {
       const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
-      logger.error('daemon', 'Failed to import existing memory files', errDetails);
+      logger.error('daemon', 'Failed to import existing memory files', undefined, errDetails);
     });
   });
 }

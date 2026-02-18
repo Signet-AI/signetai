@@ -14,13 +14,16 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target node",
+    "build": "bun build ./src/index.ts --outdir ./dist --target node && bun run build:types",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "bun --watch src/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",
+    "sqlite-vec": "^0.1.7-alpha.2",
+    "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
     "yaml": "^2.6.0"
   },
   "devDependencies": {

@@ -9,7 +9,17 @@ export { Agent, AgentManifest, AgentConfig } from "./types";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory } from "./memory";
-export { search, SearchOptions, SearchResult } from "./search";
+export {
+	search,
+	vectorSearch,
+	keywordSearch,
+	hybridSearch,
+	cosineSimilarity,
+	type SearchOptions,
+	type SearchResult,
+	type VectorSearchOptions,
+	type HybridSearchOptions,
+} from "./search";
 export { migrate, MigrationSource } from "./migrate";
 export {
 	detectSchema,
@@ -69,3 +79,24 @@ export type {
 	ChunkOptions,
 	HierarchicalChunk,
 } from "./import";
+
+// Markdown utilities
+export {
+	buildSignetBlock,
+	stripSignetBlock,
+	hasSignetBlock,
+	extractSignetBlock,
+	SIGNET_BLOCK_START,
+	SIGNET_BLOCK_END,
+} from "./markdown";
+
+// YAML utilities
+export { parseSimpleYaml, formatYaml } from "./yaml";
+
+// Symlink utilities
+export {
+	symlinkSkills,
+	symlinkDir,
+	type SymlinkOptions,
+	type SymlinkResult,
+} from "./symlinks";
