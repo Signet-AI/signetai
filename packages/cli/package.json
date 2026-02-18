@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "build": "bun run build:cli && bun run build:dashboard",
-    "build:cli": "bun build ./src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
+    "build:cli": "bun build ./src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3 --external @signet/core",
     "build:dashboard": "cd dashboard && bun install && bun run build",
     "dev": "bun --watch src/cli.ts",
     "dev:dashboard": "cd dashboard && bun run dev",
