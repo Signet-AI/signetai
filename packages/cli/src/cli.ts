@@ -51,9 +51,13 @@ import {
 	unifySkills,
 	importMemoryLogs,
 	IDENTITY_FILES,
+	detectSchema,
+	ensureUnifiedSchema,
 	type SetupDetection,
 	type SkillsResult,
 	type ImportResult,
+	type SchemaInfo,
+	type MigrationResult,
 } from "../../core/src/index.js";
 
 // Template directory location (relative to built CLI)
@@ -1092,48 +1096,27 @@ async function existingSetupWizard(
 			writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
 		}
 
-		// 3. Initialize SQLite database
+		// 3. Initialize SQLite database with unified schema
 		spinner.text = "Initializing database...";
 		const dbPath = join(basePath, "memory", "memories.db");
 		const db = Database(dbPath);
 
+		// Use ensureUnifiedSchema to create or migrate to the unified schema
+		const migrationResult = ensureUnifiedSchema(db);
+		if (migrationResult.migrated) {
+			spinner.text = `Migrated ${migrationResult.memoriesMigrated} memories from ${migrationResult.fromSchema} schema...`;
+		}
+
+		// Record setup in schema_migrations
 		db.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        applied_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        type TEXT DEFAULT 'explicit',
-        source TEXT DEFAULT 'manual',
-        importance REAL DEFAULT 0.5,
-        tags TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        accessed_at TEXT,
-        access_count INTEGER DEFAULT 0
-      );
-
-      CREATE TABLE IF NOT EXISTS conversations (
-        id TEXT PRIMARY KEY,
-        title TEXT,
-        started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        ended_at TEXT,
-        message_count INTEGER DEFAULT 0,
-        summary TEXT
-      );
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-        content,
-        tags,
-        content='memories',
-        content_rowid='rowid'
-      );
-
-      INSERT OR IGNORE INTO schema_migrations (version) VALUES (5);
-    `);
+			CREATE TABLE IF NOT EXISTS schema_migrations (
+				version INTEGER PRIMARY KEY,
+				applied_at TEXT NOT NULL,
+				checksum TEXT NOT NULL
+			);
+			INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
+			VALUES (2, '${new Date().toISOString()}', 'setup');
+		`);
 
 		// 4. Import memory logs to SQLite if available
 		let importResult: ImportResult | null = null;
@@ -2064,43 +2047,17 @@ ${agentName} is a helpful assistant.
 		const dbPath = join(basePath, "memory", "memories.db");
 		const db = Database(dbPath);
 
+		// Use ensureUnifiedSchema for consistent schema management
+		ensureUnifiedSchema(db);
 		db.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        applied_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        type TEXT DEFAULT 'explicit',
-        source TEXT DEFAULT 'manual',
-        importance REAL DEFAULT 0.5,
-        tags TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        accessed_at TEXT,
-        access_count INTEGER DEFAULT 0
-      );
-      
-      CREATE TABLE IF NOT EXISTS conversations (
-        id TEXT PRIMARY KEY,
-        title TEXT,
-        started_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        ended_at TEXT,
-        message_count INTEGER DEFAULT 0,
-        summary TEXT
-      );
-      
-      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-        content,
-        tags,
-        content='memories',
-        content_rowid='rowid'
-      );
-      
-      INSERT OR IGNORE INTO schema_migrations (version) VALUES (5);
-    `);
+			CREATE TABLE IF NOT EXISTS schema_migrations (
+				version INTEGER PRIMARY KEY,
+				applied_at TEXT NOT NULL,
+				checksum TEXT NOT NULL
+			);
+			INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
+			VALUES (2, '${new Date().toISOString()}', 'quick-setup');
+		`);
 
 		db.close();
 
@@ -2469,6 +2426,97 @@ async function launchDashboard(options: { path?: string }) {
 }
 
 // ============================================================================
+// signet migrate-schema - Database Schema Migration
+// ============================================================================
+
+async function migrateSchema(options: { path?: string }) {
+	const basePath = options.path || AGENTS_DIR;
+	const dbPath = join(basePath, "memory", "memories.db");
+
+	console.log(signetLogo());
+
+	if (!existsSync(dbPath)) {
+		console.log(chalk.yellow("  No database found."));
+		console.log(`  Run ${chalk.bold("signet setup")} to create one.`);
+		return;
+	}
+
+	const spinner = ora("Checking database schema...").start();
+
+	try {
+		// First detect schema in readonly mode
+		const db = Database(dbPath, { readonly: true });
+		const schemaInfo = detectSchema(db);
+		db.close();
+
+		if (schemaInfo.type === 'core') {
+			spinner.succeed("Database already on unified schema");
+			return;
+		}
+
+		if (schemaInfo.type === 'unknown' && !schemaInfo.hasMemories) {
+			spinner.succeed("Database is empty or has no memories");
+			return;
+		}
+
+		spinner.text = `Migrating from ${schemaInfo.type} schema...`;
+		spinner.info();
+
+		// Stop daemon if running (it may have the DB open)
+		const running = await isDaemonRunning();
+		if (running) {
+			console.log(chalk.dim("  Stopping daemon for migration..."));
+			await stopDaemon();
+			await new Promise(r => setTimeout(r, 1000));
+		}
+
+		// Open with write access and migrate
+		const writeDb = Database(dbPath);
+		const result = ensureUnifiedSchema(writeDb);
+
+		if (result.errors.length > 0) {
+			for (const err of result.errors) {
+				console.log(chalk.red(`  Error: ${err}`));
+			}
+		}
+
+		if (result.migrated) {
+			console.log(chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`));
+		} else {
+			console.log(chalk.dim("  No migration needed"));
+		}
+
+		// Record migration in schema_migrations table
+		const now = new Date().toISOString();
+		writeDb.exec(`
+			CREATE TABLE IF NOT EXISTS schema_migrations (
+				version INTEGER PRIMARY KEY,
+				applied_at TEXT NOT NULL,
+				checksum TEXT NOT NULL
+			);
+
+			INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
+			VALUES (2, '${now}', 'schema-migration');
+		`);
+
+		writeDb.close();
+
+		// Restart daemon if it was running
+		if (running) {
+			console.log(chalk.dim("  Restarting daemon..."));
+			await startDaemon();
+		}
+
+		console.log();
+		console.log(chalk.green("  Migration complete!"));
+
+	} catch (err: any) {
+		spinner.fail("Migration failed");
+		console.log(chalk.red(`  ${err.message}`));
+	}
+}
+
+// ============================================================================
 // signet status - Show Agent Status
 // ============================================================================
 
@@ -2517,12 +2565,26 @@ async function showStatus(options: { path?: string }) {
 				readonly: true,
 			});
 
+			// Detect schema type
+			const schemaInfo = detectSchema(db);
+
+			if (schemaInfo.type !== 'core' && schemaInfo.type !== 'unknown') {
+				console.log();
+				console.log(chalk.yellow(`  ⚠ Database schema: ${schemaInfo.type}`));
+				console.log(chalk.dim(`    Run ${chalk.bold('signet migrate-schema')} to upgrade`));
+			}
+
 			const memoryCount = db
 				.prepare("SELECT COUNT(*) as count FROM memories")
 				.get() as { count: number };
-			const conversationCount = db
-				.prepare("SELECT COUNT(*) as count FROM conversations")
-				.get() as { count: number } | undefined;
+
+			// Conversations table may not exist in older schemas
+			let conversationCount: { count: number } | undefined;
+			if (schemaInfo.hasConversations) {
+				conversationCount = db
+					.prepare("SELECT COUNT(*) as count FROM conversations")
+					.get() as { count: number } | undefined;
+			}
 
 			console.log();
 			console.log(chalk.dim(`  Memories: ${memoryCount.count}`));
@@ -2783,6 +2845,12 @@ program
 	.description("Show agent and daemon status")
 	.option("-p, --path <path>", "Base path for agent files")
 	.action(showStatus);
+
+program
+	.command("migrate-schema")
+	.description("Migrate database to unified schema")
+	.option("-p, --path <path>", "Base path for agent files")
+	.action(migrateSchema);
 
 // Daemon action handlers (shared between top-level and subcommand)
 async function doStart() {

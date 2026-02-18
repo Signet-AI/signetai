@@ -11,6 +11,16 @@ export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory } from "./memory";
 export { search, SearchOptions, SearchResult } from "./search";
 export { migrate, MigrationSource } from "./migrate";
+export {
+	detectSchema,
+	ensureUnifiedSchema,
+	UNIFIED_SCHEMA,
+} from "./migration";
+export type {
+	SchemaType,
+	SchemaInfo,
+	MigrationResult,
+} from "./migration";
 export * from "./constants";
 
 // Identity file management
