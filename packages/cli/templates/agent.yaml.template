@@ -112,7 +112,7 @@ hooks:
     includeRecentContext: true
     # Weight recent memories higher (0-1, higher = more recency bias)
     recencyBias: 0.7
-  
+
   # Called before session compaction/summarization
   preCompaction:
     # Guidelines for the agent when generating session summary
@@ -123,12 +123,29 @@ hooks:
       - User preferences discovered
       - Open threads or todos
       - Any errors or issues encountered
-      
+
       Keep the summary concise but complete.
     # Include recent memories for context when summarizing
     includeRecentMemories: true
     # How many recent memories to include
     memoryLimit: 5
+
+# ============================================================================
+# Python Configuration (auto-detected during setup)
+# ============================================================================
+
+# python:
+#   # Where Python was sourced from
+#   source: system | pyenv | conda
+#
+#   # Python version in use
+#   version: "3.12.1"
+#
+#   # Whether zvec (vector search) is installed
+#   zvec_enabled: true
+#
+#   # Virtual environment path (relative to ~/.agents/)
+#   venv: .venv
 
 # ============================================================================
 # Trust & Verification (optional)

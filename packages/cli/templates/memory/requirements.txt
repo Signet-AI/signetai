@@ -1,5 +1,11 @@
 # Signet memory system dependencies
+#
+# Base dependencies (Python 3.10+):
 PyYAML>=6.0
 numpy>=1.20.0
-# zvec requires Python 3.10-3.12
-# Install manually if needed: pip install zvec
+
+# Vector search (requires Python 3.10-3.12):
+# zvec is optional and only works on Python 3.10-3.12
+# The setup command will auto-detect and install if compatible
+# Manual install: pip install zvec
+# If Python 3.13+, hybrid search will use BM25 only
