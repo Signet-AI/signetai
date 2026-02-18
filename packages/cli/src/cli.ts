@@ -560,7 +560,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.18';
+const VERSION = '0.1.19';
 
 // ============================================================================
 // Helpers
@@ -903,14 +903,12 @@ async function setupWizard(options: { path?: string }) {
     
     // Sync missing template files on reconfigure
     const templatesDir = getTemplatesDir();
-    const filesToSync = ['.gitignore'];
-    for (const file of filesToSync) {
-      const src = join(templatesDir, file);
-      const dest = join(basePath, file);
-      if (existsSync(src) && !existsSync(dest)) {
-        copyFileSync(src, dest);
-        console.log(chalk.dim(`  Synced missing: ${file}`));
-      }
+    // Sync gitignore (stored as gitignore.template because npm excludes .gitignore)
+    const gitignoreSrc = join(templatesDir, 'gitignore.template');
+    const gitignoreDest = join(basePath, '.gitignore');
+    if (existsSync(gitignoreSrc) && !existsSync(gitignoreDest)) {
+      copyFileSync(gitignoreSrc, gitignoreDest);
+      console.log(chalk.dim(`  Synced missing: .gitignore`));
     }
   }
   
@@ -1125,7 +1123,8 @@ async function setupWizard(options: { path?: string }) {
     mkdirSync(basePath, { recursive: true });
     
     // Copy .gitignore first (before git init)
-    const gitignoreSource = join(templatesDir, '.gitignore');
+    // Note: stored as gitignore.template because npm excludes .gitignore files
+    const gitignoreSource = join(templatesDir, 'gitignore.template');
     if (existsSync(gitignoreSource)) {
       copyFileSync(gitignoreSource, join(basePath, '.gitignore'));
     }
@@ -2115,16 +2114,15 @@ program
     console.log(chalk.bold('  Syncing template files...\n'));
     
     // Sync missing template files
-    const filesToSync = ['.gitignore'];
+    // Note: gitignore stored as gitignore.template because npm excludes .gitignore
     let synced = 0;
-    for (const file of filesToSync) {
-      const src = join(templatesDir, file);
-      const dest = join(basePath, file);
-      if (existsSync(src) && !existsSync(dest)) {
-        copyFileSync(src, dest);
-        console.log(chalk.green(`  ✓ ${file}`));
-        synced++;
-      }
+    
+    const gitignoreSrc = join(templatesDir, 'gitignore.template');
+    const gitignoreDest = join(basePath, '.gitignore');
+    if (existsSync(gitignoreSrc) && !existsSync(gitignoreDest)) {
+      copyFileSync(gitignoreSrc, gitignoreDest);
+      console.log(chalk.green(`  ✓ .gitignore`));
+      synced++;
     }
     
     if (synced === 0) {
