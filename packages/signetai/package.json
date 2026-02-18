@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "build": "bun run build:cli && bun run build:daemon && bun run build:dashboard",
-    "build:cli": "bun build ../cli/src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
+    "build:cli": "bun build ../cli/src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3 --external @signet/core",
     "build:daemon": "bun build ../daemon/src/daemon.ts --outfile ./dist/daemon.js --target bun",
     "build:dashboard": "cp -r ../cli/dashboard/build ./dashboard 2>/dev/null || echo 'Dashboard not built yet'",
     "prepublishOnly": "bun run build",
