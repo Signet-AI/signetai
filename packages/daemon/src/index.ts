@@ -4,14 +4,14 @@
  */
 
 export {
-  installService,
-  uninstallService,
-  startDaemon,
-  stopDaemon,
-  restartDaemon,
-  isDaemonRunning,
-  isServiceInstalled,
-  getDaemonStatus,
-  getDaemonLogs,
-  type ServiceStatus,
-} from './service';
+	installService,
+	uninstallService,
+	startDaemon,
+	stopDaemon,
+	restartDaemon,
+	isDaemonRunning,
+	isServiceInstalled,
+	getDaemonStatus,
+	getDaemonLogs,
+	type ServiceStatus,
+} from "./service";

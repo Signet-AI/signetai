@@ -231,15 +231,11 @@ export function chunkMarkdownHierarchically(
 							chunkIndex: chunkIndex++,
 						});
 						chunkParas = [];
-						chunkTokens = currentHeader
-							? estimateTokens(currentHeader)
-							: 0;
+						chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
 					}
 
 					// Add large paragraph as its own chunk (with header context)
-					const text = currentHeader
-						? `${currentHeader}\n\n${para}`
-						: para;
+					const text = currentHeader ? `${currentHeader}\n\n${para}` : para;
 					results.push({
 						text,
 						tokenCount: estimateTokens(text),
@@ -266,9 +262,7 @@ export function chunkMarkdownHierarchically(
 						chunkIndex: chunkIndex++,
 					});
 					chunkParas = [];
-					chunkTokens = currentHeader
-						? estimateTokens(currentHeader)
-						: 0;
+					chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
 				}
 
 				chunkParas.push(para);

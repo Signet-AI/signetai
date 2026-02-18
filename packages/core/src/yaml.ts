@@ -45,10 +45,7 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 		const indent = line.search(/\S/);
 
 		// Pop stack to correct level for this indent
-		while (
-			stack.length > 1 &&
-			stack[stack.length - 1].indent >= indent
-		) {
+		while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
 			stack.pop();
 		}
 
@@ -86,10 +83,7 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
  * - Arrays (block style)
  * - Primitive values (string, number, boolean, null)
  */
-export function formatYaml(
-	obj: Record<string, unknown>,
-	indent = 0,
-): string {
+export function formatYaml(obj: Record<string, unknown>, indent = 0): string {
 	const pad = "  ".repeat(indent);
 	let result = "";
 
