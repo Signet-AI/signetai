@@ -62,15 +62,21 @@ Signet ships with two built-in skills that integrate directly with the memory sy
 
 Save information to persistent memory. Content is embedded automatically for semantic search.
 
-```
+```bash
+# CLI
+signet remember "nicholai prefers bun over npm"
+signet remember "critical memory" --critical
+signet remember "tagged memory" -t tag1,tag2
+
+# In harness
 /remember nicholai prefers bun over npm
 /remember critical: never push directly to main
 /remember [tag1,tag2]: tagged content here
 ```
 
 Prefixes:
-- `critical:` — pins the memory (never decays, always included in session context)
-- `[tag1,tag2]:` — adds searchable tags
+- `critical:` or `--critical` — pins the memory (never decays, always included in session context)
+- `[tag1,tag2]:` or `-t tag1,tag2` — adds searchable tags
 
 See [MEMORY.md](./MEMORY.md) for full details.
 
@@ -78,7 +84,12 @@ See [MEMORY.md](./MEMORY.md) for full details.
 
 Search memories with hybrid semantic + keyword search.
 
-```
+```bash
+# CLI
+signet recall "coding preferences"
+signet recall "signet architecture" --type decision -l 5
+
+# In harness
 /recall coding preferences
 /recall signet architecture
 /recall what did we decide about auth

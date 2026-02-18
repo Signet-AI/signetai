@@ -11,8 +11,8 @@ from your memory database.
 > - Configuration: `~/.agents/agent.yaml`
 >
 > **Memory Commands**
-> - Save: `/remember <content>` or `/remember critical: <content>`
-> - Search: `/recall <query>`
+> - Save: `signet remember <content>` or `/remember critical: <content>`
+> - Search: `signet recall <query>`
 > - Dashboard: http://localhost:3850
 
 ## Current Context
