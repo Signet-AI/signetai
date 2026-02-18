@@ -41,6 +41,7 @@ signetai/
 │   │       ├── search.ts        # Hybrid search
 │   │       ├── manifest.ts      # YAML parsing
 │   │       ├── memory.ts        # Memory helpers
+│   │       ├── import.ts        # Memory import & hierarchical chunking
 │   │       ├── soul.ts          # Soul template
 │   │       └── constants.ts     # Shared constants
 │   └── sdk/
@@ -465,6 +466,50 @@ importance(t) = base_importance × decay_rate^(days_since_access)
 ```
 
 Accessing a memory resets its decay timer.
+
+---
+
+## Memory Import System
+
+### Hierarchical Chunking
+
+The `import.ts` module provides `chunkMarkdownHierarchically()` for preserving document structure when ingesting markdown files:
+
+```typescript
+interface HierarchicalChunk {
+  text: string;              // Chunk content (includes header)
+  tokenCount: number;        // Estimated tokens (~4 chars/token)
+  header: string;            // Section heading (e.g., "## API Notes")
+  level: 'section' | 'paragraph';
+  chunkIndex: number;        // Position in document
+}
+
+function chunkMarkdownHierarchically(
+  content: string,
+  options?: { maxTokens: number }
+): HierarchicalChunk[];
+```
+
+**Chunking algorithm:**
+
+1. Parse document by markdown headers (h1-h3)
+2. For each section:
+   - If section fits within `maxTokens`: create a **section chunk**
+   - If section exceeds limit: split into **paragraph chunks** with header preserved
+3. Each chunk includes its section header for context
+
+### Auto-Ingestion
+
+The daemon automatically ingests memory files on startup and when files change:
+
+| Source | Location | Who | Trigger |
+|--------|----------|-----|---------|
+| OpenClaw memory logs | `~/.agents/memory/*.md` | `openclaw-memory` | Startup + file watcher |
+| Claude Code project memories | `~/.claude/projects/*/memory/MEMORY.md` | `claude-code` | Startup + file watcher |
+
+**Deduplication:**
+- File-level SHA-256 hash prevents re-processing unchanged files
+- Content-level deduplication via hash in tags
 
 ---
 
