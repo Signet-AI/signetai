@@ -6,7 +6,11 @@ import sqlite3
 import sys
 from pathlib import Path
 
-import zvec
+try:
+    import zvec
+    ZVEC_AVAILABLE = True
+except ImportError:
+    ZVEC_AVAILABLE = False
 
 AGENTS_DIR = Path.home() / ".agents"
 DB_PATH = AGENTS_DIR / "memory" / "memories.db"
@@ -15,6 +19,9 @@ ZVEC_PATH = AGENTS_DIR / "memory" / "vectors.zvec"
 
 def export_embeddings():
     """Export all embeddings with their memory data."""
+    if not ZVEC_AVAILABLE:
+        return {"error": "zvec not installed (requires Python 3.10-3.12)", "embeddings": []}
+    
     if not DB_PATH.exists():
         return {"error": "No database found", "embeddings": []}
     
