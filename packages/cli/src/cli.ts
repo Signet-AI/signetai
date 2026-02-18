@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.5';
+const VERSION = '0.1.6';
 
 // ============================================================================
 // Helpers
@@ -950,6 +950,14 @@ async function setupWizard(options: { path?: string }) {
     if (existsSync(utilScriptsSource)) {
       mkdirSync(join(basePath, 'scripts'), { recursive: true });
       copyDirRecursive(utilScriptsSource, join(basePath, 'scripts'));
+    }
+    
+    // Install built-in skills (remember, recall)
+    spinner.text = 'Installing built-in skills...';
+    const skillsSource = join(templatesDir, 'skills');
+    if (existsSync(skillsSource)) {
+      mkdirSync(join(basePath, 'skills'), { recursive: true });
+      copyDirRecursive(skillsSource, join(basePath, 'skills'));
     }
     
     spinner.text = 'Creating agent identity...';
