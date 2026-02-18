@@ -152,10 +152,11 @@ async function startDaemon(): Promise<boolean> {
   mkdirSync(DAEMON_DIR, { recursive: true });
   mkdirSync(LOG_DIR, { recursive: true });
   
-  // Find daemon script (prefer source for native module support with bun)
+  // Find daemon script (check multiple locations for dev vs published package)
   const daemonLocations = [
-    join(__dirname, '..', '..', 'daemon', 'src', 'daemon.ts'),
-    join(__dirname, '..', '..', 'daemon', 'dist', 'daemon.js'),
+    join(__dirname, 'daemon.js'),                              // published: dist/daemon.js (same dir as cli.js)
+    join(__dirname, '..', '..', 'daemon', 'src', 'daemon.ts'), // dev: packages/daemon/src/daemon.ts
+    join(__dirname, '..', '..', 'daemon', 'dist', 'daemon.js'), // dev built: packages/daemon/dist/daemon.js
   ];
   
   let daemonPath: string | null = null;
@@ -515,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 
 // ============================================================================
 // Helpers
