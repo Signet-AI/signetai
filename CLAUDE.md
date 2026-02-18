@@ -58,7 +58,9 @@ bun run build    # Static build to build/
 | `@signet/sdk` | Integration SDK for third-party apps | node |
 | `@signet/connector-claude-code` | Claude Code connector: hooks, CLAUDE.md generation | node |
 | `@signet/connector-opencode` | OpenCode connector: plugin, AGENTS.md sync | node |
-| `signet` | Meta-package bundling CLI + daemon | - |
+| `@signet/connector-openclaw` | OpenClaw connector: config patching, hook handlers | node |
+| `@signet/adapter-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
+| `signetai` | Meta-package bundling CLI + daemon | - |
 
 ### Package Responsibilities
 
@@ -69,12 +71,16 @@ bun run build    # Static build to build/
 - YAML manifest parsing
 - Constants and utilities
 
-**@signet/cli** - User interface (~1600 LOC in cli.ts)
+**@signet/cli** - User interface (~4200 LOC in cli.ts)
 - Setup wizard with harness selection
 - Config editor (interactive TUI)
 - Daemon start/stop/status
 - Dashboard launcher
 - Secrets management
+- Skills management
+- Git sync management
+- Hook lifecycle commands
+- Update checker
 
 **@signet/daemon** - Background service
 - Hono HTTP server on port 3850
@@ -143,10 +149,11 @@ All user data lives at `~/.agents/`:
 - `packages/core/src/database.ts` - SQLite wrapper
 - `packages/core/src/search.ts` - Hybrid search
 - `packages/core/src/skills.ts` - Skills unification from multiple harnesses
-- `packages/cli/src/cli.ts` - Main CLI (~1600 LOC)
+- `packages/cli/src/cli.ts` - Main CLI (~4200 LOC)
 - `packages/daemon/src/daemon.ts` - HTTP server + watcher
 - `packages/connector-claude-code/src/index.ts` - Claude Code connector
 - `packages/connector-opencode/src/index.ts` - OpenCode connector
+- `packages/connector-openclaw/src/index.ts` - OpenClaw connector
 - `docs/ARCHITECTURE.md` - Full technical documentation
 
 ## Conventions

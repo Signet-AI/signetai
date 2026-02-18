@@ -249,6 +249,35 @@ During setup, Signet creates `~/.agents/hooks/agent-memory/` with:
 - `handler.js` — event handler (for older hook-based integration)
 - `package.json` — package metadata
 
+### Package Distinction: adapter vs connector
+
+Signet provides two separate packages for OpenClaw integration:
+
+#### @signet/connector-openclaw
+
+**Purpose:** Setup and installation
+
+This is a setup-time package that:
+
+- Patches OpenClaw config files (openclaw.json, clawdbot.json, moltbot.json)
+- Sets `agents.defaults.workspace` to ~/.agents
+- Enables the `signet-memory` internal hook entry
+- Installs hook handler files under `~/.agents/hooks/agent-memory/`
+
+Installed during `signet setup` when OpenClaw is selected.
+
+#### @signet/adapter-openclaw
+
+**Purpose:** Runtime plugin
+
+This is a runtime plugin that OpenClaw loads to:
+
+- Call the Signet daemon API for /remember, /recall operations
+- Handle lifecycle hooks (session start, compaction, etc.)
+- Inject memories into the system prompt
+
+Has a peer dependency on `openclaw` — only usable within the OpenClaw process.
+
 ---
 
 ## Cursor (Planned)

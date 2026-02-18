@@ -308,4 +308,3 @@ Try broader terms or check /memory in dashboard
 - [Architecture](./ARCHITECTURE.md) - Technical deep dive
 - [Configuration](./CONFIGURATION.md) - All config options
 - [Skills](./SKILLS.md) - Full skills system design
-- [Roadmap](./ROADMAP.md) - Development timeline
