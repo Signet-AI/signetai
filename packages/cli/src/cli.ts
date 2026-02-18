@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.6';
+const VERSION = '0.1.7';
 
 // ============================================================================
 // Helpers
@@ -689,6 +689,26 @@ async function setupWizard(options: { path?: string }) {
   const basePath = options.path || AGENTS_DIR;
   const existing = detectExistingSetup(basePath);
   
+  // Load existing config for defaults
+  let existingConfig: Record<string, any> = {};
+  if (existing.agentYaml) {
+    try {
+      const yaml = readFileSync(join(basePath, 'agent.yaml'), 'utf-8');
+      existingConfig = parseSimpleYaml(yaml);
+    } catch {
+      // Failed to parse, use empty defaults
+    }
+  }
+  
+  // Extract existing values for defaults
+  const existingName = existingConfig.name || existingConfig.agent?.name || 'My Agent';
+  const existingDesc = existingConfig.description || existingConfig.agent?.description || 'Personal AI assistant';
+  const existingHarnesses: string[] = existingConfig.harnesses 
+    ? (typeof existingConfig.harnesses === 'string' ? existingConfig.harnesses.split(',').map((s: string) => s.trim()) : [])
+    : [];
+  const existingEmbedding = existingConfig.embedding || {};
+  const existingSearch = existingConfig.search || {};
+  
   if (existing.agentsDir && existing.memoryDb) {
     console.log(chalk.green('  ✓ Existing Signet installation detected'));
     console.log(chalk.dim(`    ${basePath}`));
@@ -723,21 +743,24 @@ async function setupWizard(options: { path?: string }) {
   
   const agentName = await input({
     message: 'What should your agent be called?',
-    default: 'My Agent',
+    default: existingName,
   });
+  
+  // Build harness choices with existing selections pre-checked
+  const harnessChoices = [
+    { value: 'claude-code', name: 'Claude Code (Anthropic CLI)', checked: existingHarnesses.includes('claude-code') },
+    { value: 'opencode', name: 'OpenCode', checked: existingHarnesses.includes('opencode') },
+    { value: 'openclaw', name: 'OpenClaw', checked: existingHarnesses.includes('openclaw') },
+    { value: 'cursor', name: 'Cursor', checked: existingHarnesses.includes('cursor') },
+    { value: 'windsurf', name: 'Windsurf', checked: existingHarnesses.includes('windsurf') },
+    { value: 'chatgpt', name: 'ChatGPT', checked: existingHarnesses.includes('chatgpt') },
+    { value: 'gemini', name: 'Gemini', checked: existingHarnesses.includes('gemini') },
+  ];
   
   console.log();
   const harnesses = await checkbox({
     message: 'Which AI platforms do you use?',
-    choices: [
-      { value: 'claude-code', name: 'Claude Code (Anthropic CLI)' },
-      { value: 'opencode', name: 'OpenCode' },
-      { value: 'openclaw', name: 'OpenClaw' },
-      { value: 'cursor', name: 'Cursor' },
-      { value: 'windsurf', name: 'Windsurf' },
-      { value: 'chatgpt', name: 'ChatGPT' },
-      { value: 'gemini', name: 'Gemini' },
-    ],
+    choices: harnessChoices,
   });
   
   // OpenClaw workspace configuration (handles openclaw/clawdbot/moltbot)
@@ -762,7 +785,7 @@ async function setupWizard(options: { path?: string }) {
   console.log();
   const agentDescription = await input({
     message: 'Short description of your agent:',
-    default: 'Personal AI assistant',
+    default: existingDesc,
   });
   
   console.log();
