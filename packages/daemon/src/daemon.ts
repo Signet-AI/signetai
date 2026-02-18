@@ -2355,12 +2355,67 @@ function scheduleAutoCommit(changedPath: string) {
   }, COMMIT_DEBOUNCE_MS);
 }
 
+// Build the Signet system block injected into all generated harness files.
+// Always current — regenerated on every sync cycle.
+function buildSignetBlock(): string {
+  return `<!-- SIGNET:START -->
+Signet Agent System
+===
+
+Your identity and memory are managed by Signet, a portable agent identity
+system. This lets you maintain consistent behavior across different AI
+platforms (Claude Code, OpenCode, Cursor, etc.).
+
+Key files in \`~/.agents/\`:
+- \`agent.yaml\` — Configuration
+- \`AGENTS.md\` — Instructions (source of truth)
+- \`SOUL.md\` — Personality and tone
+- \`IDENTITY.md\` — Agent identity
+- \`USER.md\` — User profile
+- \`MEMORY.md\` — Working memory summary
+
+Dashboard: http://localhost:3850
+
+Memory
+---
+
+You have access to persistent memory via Signet:
+
+\`\`\`bash
+signet remember "User prefers dark mode and vim keybindings"
+signet recall "user preferences"
+\`\`\`
+
+Memory is automatically loaded at session start. Important context is
+summarized in \`~/.agents/MEMORY.md\`.
+
+Secrets
+---
+
+API keys and tokens are stored securely in Signet:
+
+\`\`\`bash
+signet secret get OPENAI_API_KEY
+signet secret list
+\`\`\`
+<!-- SIGNET:END -->
+
+`;
+}
+
+// Strip any existing Signet block so it is never duplicated on re-sync.
+function stripSignetBlock(content: string): string {
+  return content.replace(/<!-- SIGNET:START -->[\s\S]*?<!-- SIGNET:END -->\n?/g, '');
+}
+
 // Auto-sync AGENTS.md to harness configs
 async function syncHarnessConfigs() {
   const agentsMdPath = join(AGENTS_DIR, 'AGENTS.md');
   if (!existsSync(agentsMdPath)) return;
-  
-  const content = readFileSync(agentsMdPath, 'utf-8');
+
+  const rawContent = readFileSync(agentsMdPath, 'utf-8');
+  const content = stripSignetBlock(rawContent);
+  const withBlock = buildSignetBlock() + content;
   
   // Build header with cross-references to other documents
   const buildHeader = (targetName: string) => {
@@ -2400,7 +2455,7 @@ ${fileList}
   const claudeDir = join(homedir(), '.claude');
   if (existsSync(claudeDir)) {
     try {
-      writeFileSync(join(claudeDir, 'CLAUDE.md'), buildHeader('CLAUDE.md') + content);
+      writeFileSync(join(claudeDir, 'CLAUDE.md'), buildHeader('CLAUDE.md') + withBlock);
       logger.sync.harness('claude-code', '~/.claude/CLAUDE.md');
     } catch (e) {
       logger.sync.failed('claude-code', e as Error);
@@ -2411,7 +2466,7 @@ ${fileList}
   const opencodeDir = join(homedir(), '.config', 'opencode');
   if (existsSync(opencodeDir)) {
     try {
-      writeFileSync(join(opencodeDir, 'AGENTS.md'), buildHeader('AGENTS.md') + content);
+      writeFileSync(join(opencodeDir, 'AGENTS.md'), buildHeader('AGENTS.md') + withBlock);
       logger.sync.harness('opencode', '~/.config/opencode/AGENTS.md');
     } catch (e) {
       logger.sync.failed('opencode', e as Error);
