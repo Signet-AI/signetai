@@ -335,7 +335,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = "0.1.26";
+const VERSION = "0.1.43";
 
 // ============================================================================
 // Helpers
@@ -3763,7 +3763,9 @@ interface MigrationSource {
 	count: number;
 }
 
-async function detectVectorSources(basePath: string): Promise<MigrationSource[]> {
+async function detectVectorSources(
+	basePath: string,
+): Promise<MigrationSource[]> {
 	const sources: MigrationSource[] = [];
 	const memoryDir = join(basePath, "memory");
 
@@ -3789,14 +3791,18 @@ async function detectVectorSources(basePath: string): Promise<MigrationSource[]>
 			const db = Database(dbPath, { readonly: true });
 
 			// Check if embeddings table exists with BLOB vectors
-			const tableCheck = db.prepare(`
+			const tableCheck = db
+				.prepare(`
 				SELECT name FROM sqlite_master
 				WHERE type='table' AND name='embeddings'
-			`).get();
+			`)
+				.get();
 
 			if (tableCheck) {
 				// Check if vector column is BLOB (old format)
-				const schemaCheck = db.prepare(`PRAGMA table_info(embeddings)`).all() as Array<{
+				const schemaCheck = db
+					.prepare(`PRAGMA table_info(embeddings)`)
+					.all() as Array<{
 					name: string;
 					type: string;
 				}>;
@@ -3816,10 +3822,12 @@ async function detectVectorSources(basePath: string): Promise<MigrationSource[]>
 				}
 
 				// Check if vec_embeddings virtual table already exists
-				const vecTableCheck = db.prepare(`
+				const vecTableCheck = db
+					.prepare(`
 					SELECT name FROM sqlite_master
 					WHERE type='table' AND name='vec_embeddings'
-				`).get();
+				`)
+					.get();
 
 				if (vecTableCheck) {
 					const vecCountResult = db
@@ -3847,8 +3855,14 @@ async function detectVectorSources(basePath: string): Promise<MigrationSource[]>
 program
 	.command("migrate-vectors")
 	.description("Migrate existing BLOB vectors to sqlite-vec format")
-	.option("--keep-blobs", "Keep old BLOB column after migration (safer for rollback)")
-	.option("--remove-zvec", "Delete vectors.zvec file after successful migration")
+	.option(
+		"--keep-blobs",
+		"Keep old BLOB column after migration (safer for rollback)",
+	)
+	.option(
+		"--remove-zvec",
+		"Delete vectors.zvec file after successful migration",
+	)
 	.option("--dry-run", "Show what would be migrated without making changes")
 	.option("--rollback", "Rollback to BLOB format (not implemented in Phase 1)")
 	.action(async (options) => {
@@ -3861,9 +3875,7 @@ program
 
 		// Handle rollback option
 		if (options.rollback) {
-			console.log(
-				chalk.yellow("  Rollback is not implemented in Phase 1."),
-			);
+			console.log(chalk.yellow("  Rollback is not implemented in Phase 1."));
 			console.log(
 				chalk.dim(
 					"  If you used --keep-blobs during migration, you can manually",
@@ -3896,9 +3908,7 @@ program
 					`  vec_embeddings table already populated with ${vecTableSource.count} vectors`,
 				),
 			);
-			console.log(
-				chalk.dim("  Migration appears to have already been run."),
-			);
+			console.log(chalk.dim("  Migration appears to have already been run."));
 
 			// Still check for zvec to clean up
 			const zvecSource = sources.find((s) => s.type === "zvec");
@@ -3918,9 +3928,7 @@ program
 		// Find BLOB source
 		const blobSource = sources.find((s) => s.type === "blob");
 		if (!blobSource) {
-			console.log(
-				chalk.yellow("  No existing embeddings found to migrate."),
-			);
+			console.log(chalk.yellow("  No existing embeddings found to migrate."));
 			console.log(
 				chalk.dim("  The embeddings table is empty or already migrated."),
 			);
@@ -3947,9 +3955,7 @@ program
 		if (options.dryRun) {
 			console.log();
 			console.log(chalk.yellow("  Dry run complete. No changes made."));
-			console.log(
-				chalk.dim("  Run without --dry-run to perform migration."),
-			);
+			console.log(chalk.dim("  Run without --dry-run to perform migration."));
 			return;
 		}
 
@@ -3982,9 +3988,11 @@ program
 
 			// Read all embeddings from BLOB column
 			spinner.text = "Reading existing embeddings...";
-			const embeddings = db.prepare(`
+			const embeddings = db
+				.prepare(`
 				SELECT id, vector, dimensions FROM embeddings
-			`).all() as Array<{ id: string; vector: Buffer; dimensions: number }>;
+			`)
+				.all() as Array<{ id: string; vector: Buffer; dimensions: number }>;
 
 			const total = embeddings.length;
 			let migrated = 0;
@@ -4054,7 +4062,9 @@ program
 					spinner.warn("Could not remove BLOB column");
 					console.log(chalk.dim(`  ${(err as Error).message}`));
 					console.log(
-						chalk.dim("  Vectors were migrated successfully. BLOB column retained."),
+						chalk.dim(
+							"  Vectors were migrated successfully. BLOB column retained.",
+						),
 					);
 				}
 			}

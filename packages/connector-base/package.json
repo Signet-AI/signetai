@@ -1,6 +1,6 @@
 {
 	"name": "@signet/connector-base",
-	"version": "0.1.0",
+	"version": "0.1.43",
 	"description": "Base class for Signet harness connectors",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -25,11 +25,6 @@
 	"peerDependencies": {
 		"typescript": ">=5.0.0"
 	},
-	"keywords": [
-		"signet",
-		"connector",
-		"ai",
-		"agent"
-	],
+	"keywords": ["signet", "connector", "ai", "agent"],
 	"license": "MIT"
 }

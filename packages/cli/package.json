@@ -1,55 +1,51 @@
 {
-  "name": "@signet/cli",
-  "version": "0.1.27",
-  "description": "CLI for Signet - portable AI agent identity",
-  "type": "module",
-  "bin": "./dist/cli.js",
-  "files": [
-    "dist",
-    "templates",
-    "dashboard/build"
-  ],
-  "scripts": {
-    "build": "bun run build:cli && bun run build:dashboard",
-    "build:cli": "bun build ./src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
-    "build:dashboard": "cd dashboard && bun install && bun run build",
-    "dev": "bun --watch src/cli.ts",
-    "dev:dashboard": "cd dashboard && bun run dev",
-    "prepublishOnly": "bun run build",
-    "test": "bun test"
-  },
-  "keywords": [
-    "signet",
-    "ai",
-    "agent",
-    "identity",
-    "memory",
-    "cli",
-    "portable"
-  ],
-  "author": "Nicholai",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/signetai/signetai.git"
-  },
-  "homepage": "https://signetai.sh",
-  "dependencies": {
-    "@signet/core": "workspace:*",
-    "@signet/connector-claude-code": "workspace:*",
-    "@signet/connector-opencode": "workspace:*",
-    "@signet/connector-openclaw": "workspace:*",
-    "@inquirer/prompts": "^7.0.0",
-    "better-sqlite3": "^12.0.0",
-    "commander": "^12.0.0",
-    "chalk": "^5.3.0",
-    "ora": "^8.0.0",
-    "open": "^10.0.0"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0"
-  },
-  "engines": {
-    "node": ">=18"
-  }
+	"name": "@signet/cli",
+	"version": "0.1.43",
+	"description": "CLI for Signet - portable AI agent identity",
+	"type": "module",
+	"bin": "./dist/cli.js",
+	"files": ["dist", "templates", "dashboard/build"],
+	"scripts": {
+		"build": "bun run build:cli && bun run build:dashboard",
+		"build:cli": "bun build ./src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
+		"build:dashboard": "cd dashboard && bun install && bun run build",
+		"dev": "bun --watch src/cli.ts",
+		"dev:dashboard": "cd dashboard && bun run dev",
+		"prepublishOnly": "bun run build",
+		"test": "bun test"
+	},
+	"keywords": [
+		"signet",
+		"ai",
+		"agent",
+		"identity",
+		"memory",
+		"cli",
+		"portable"
+	],
+	"author": "Nicholai",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/signetai/signetai.git"
+	},
+	"homepage": "https://signetai.sh",
+	"dependencies": {
+		"@signet/core": "workspace:*",
+		"@signet/connector-claude-code": "workspace:*",
+		"@signet/connector-opencode": "workspace:*",
+		"@signet/connector-openclaw": "workspace:*",
+		"@inquirer/prompts": "^7.0.0",
+		"better-sqlite3": "^12.0.0",
+		"commander": "^12.0.0",
+		"chalk": "^5.3.0",
+		"ora": "^8.0.0",
+		"open": "^10.0.0"
+	},
+	"devDependencies": {
+		"@types/better-sqlite3": "^7.6.0"
+	},
+	"engines": {
+		"node": ">=18"
+	}
 }

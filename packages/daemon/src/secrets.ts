@@ -10,39 +10,39 @@
  * subprocess environment that the agent cannot inspect.
  */
 
-import sodium from 'libsodium-wrappers';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { homedir, hostname } from 'os';
-import { join } from 'path';
-import { execSync, spawn } from 'child_process';
+import sodium from "libsodium-wrappers";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { homedir, hostname } from "os";
+import { join } from "path";
+import { execSync, spawn } from "child_process";
 
 // ---------------------------------------------------------------------------
 // Storage layout
 // ---------------------------------------------------------------------------
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), '.agents');
-const SECRETS_DIR = join(AGENTS_DIR, '.secrets');
-const SECRETS_FILE = join(SECRETS_DIR, 'secrets.enc');
+const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+const SECRETS_DIR = join(AGENTS_DIR, ".secrets");
+const SECRETS_FILE = join(SECRETS_DIR, "secrets.enc");
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 interface SecretEntry {
-  ciphertext: string; // base64-encoded nonce+ciphertext
-  created: string;
-  updated: string;
+	ciphertext: string; // base64-encoded nonce+ciphertext
+	created: string;
+	updated: string;
 }
 
 interface SecretsStore {
-  version: 1;
-  secrets: Record<string, SecretEntry>;
+	version: 1;
+	secrets: Record<string, SecretEntry>;
 }
 
 export interface ExecResult {
-  stdout: string;
-  stderr: string;
-  code: number;
+	stdout: string;
+	stderr: string;
+	code: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,50 +54,50 @@ export interface ExecResult {
  * Falls back to hostname + username if no machine-id is available.
  */
 function getMachineId(): string {
-  const candidates = ['/etc/machine-id', '/var/lib/dbus/machine-id'];
-  for (const p of candidates) {
-    try {
-      const id = readFileSync(p, 'utf-8').trim();
-      if (id) return id;
-    } catch {
-      // try next
-    }
-  }
+	const candidates = ["/etc/machine-id", "/var/lib/dbus/machine-id"];
+	for (const p of candidates) {
+		try {
+			const id = readFileSync(p, "utf-8").trim();
+			if (id) return id;
+		} catch {
+			// try next
+		}
+	}
 
-  // macOS fallback
-  try {
-    const out = execSync(
-      "ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk '{print $3}'",
-      { timeout: 2000 }
-    )
-      .toString()
-      .trim()
-      .replace(/"/g, '');
-    if (out) return out;
-  } catch {
-    // ignore
-  }
+	// macOS fallback
+	try {
+		const out = execSync(
+			"ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk '{print $3}'",
+			{ timeout: 2000 },
+		)
+			.toString()
+			.trim()
+			.replace(/"/g, "");
+		if (out) return out;
+	} catch {
+		// ignore
+	}
 
-  // Last resort: hostname + username
-  return `${hostname()}-${process.env.USER || process.env.USERNAME || 'user'}`;
+	// Last resort: hostname + username
+	return `${hostname()}-${process.env.USER || process.env.USERNAME || "user"}`;
 }
 
 let _masterKey: Uint8Array | null = null;
 
 async function getMasterKey(): Promise<Uint8Array> {
-  if (_masterKey) return _masterKey;
+	if (_masterKey) return _masterKey;
 
-  await sodium.ready;
+	await sodium.ready;
 
-  const machineId = getMachineId();
-  const input = `signet:secrets:${machineId}`;
-  const inputBytes = new TextEncoder().encode(input);
+	const machineId = getMachineId();
+	const input = `signet:secrets:${machineId}`;
+	const inputBytes = new TextEncoder().encode(input);
 
-  // Stretch the machine-id into a 32-byte key via BLAKE2b.
-  // In a future version this can be replaced with Argon2 + passphrase.
-  const key = sodium.crypto_generichash(32, inputBytes, null);
-  _masterKey = key;
-  return key;
+	// Stretch the machine-id into a 32-byte key via BLAKE2b.
+	// In a future version this can be replaced with Argon2 + passphrase.
+	const key = sodium.crypto_generichash(32, inputBytes, null);
+	_masterKey = key;
+	return key;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,32 +105,36 @@ async function getMasterKey(): Promise<Uint8Array> {
 // ---------------------------------------------------------------------------
 
 async function encrypt(plaintext: string): Promise<string> {
-  await sodium.ready;
-  const key = await getMasterKey();
-  const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
-  const message = new TextEncoder().encode(plaintext);
-  const box = sodium.crypto_secretbox_easy(message, nonce, key);
+	await sodium.ready;
+	const key = await getMasterKey();
+	const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
+	const message = new TextEncoder().encode(plaintext);
+	const box = sodium.crypto_secretbox_easy(message, nonce, key);
 
-  // Prepend nonce so we can recover it during decryption
-  const combined = new Uint8Array(nonce.length + box.length);
-  combined.set(nonce);
-  combined.set(box, nonce.length);
+	// Prepend nonce so we can recover it during decryption
+	const combined = new Uint8Array(nonce.length + box.length);
+	combined.set(nonce);
+	combined.set(box, nonce.length);
 
-  return sodium.to_base64(combined, sodium.base64_variants.ORIGINAL);
+	return sodium.to_base64(combined, sodium.base64_variants.ORIGINAL);
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
-  await sodium.ready;
-  const key = await getMasterKey();
+	await sodium.ready;
+	const key = await getMasterKey();
 
-  const combined = sodium.from_base64(ciphertext, sodium.base64_variants.ORIGINAL);
-  const nonce = combined.slice(0, sodium.crypto_secretbox_NONCEBYTES);
-  const box = combined.slice(sodium.crypto_secretbox_NONCEBYTES);
+	const combined = sodium.from_base64(
+		ciphertext,
+		sodium.base64_variants.ORIGINAL,
+	);
+	const nonce = combined.slice(0, sodium.crypto_secretbox_NONCEBYTES);
+	const box = combined.slice(sodium.crypto_secretbox_NONCEBYTES);
 
-  const message = sodium.crypto_secretbox_open_easy(box, nonce, key);
-  if (!message) throw new Error('Decryption failed - key mismatch or corrupted data');
+	const message = sodium.crypto_secretbox_open_easy(box, nonce, key);
+	if (!message)
+		throw new Error("Decryption failed - key mismatch or corrupted data");
 
-  return new TextDecoder().decode(message);
+	return new TextDecoder().decode(message);
 }
 
 // ---------------------------------------------------------------------------
@@ -138,19 +142,19 @@ async function decrypt(ciphertext: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 function loadStore(): SecretsStore {
-  if (!existsSync(SECRETS_FILE)) {
-    return { version: 1, secrets: {} };
-  }
-  try {
-    return JSON.parse(readFileSync(SECRETS_FILE, 'utf-8')) as SecretsStore;
-  } catch {
-    return { version: 1, secrets: {} };
-  }
+	if (!existsSync(SECRETS_FILE)) {
+		return { version: 1, secrets: {} };
+	}
+	try {
+		return JSON.parse(readFileSync(SECRETS_FILE, "utf-8")) as SecretsStore;
+	} catch {
+		return { version: 1, secrets: {} };
+	}
 }
 
 function saveStore(store: SecretsStore): void {
-  mkdirSync(SECRETS_DIR, { recursive: true, });
-  writeFileSync(SECRETS_FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
+	mkdirSync(SECRETS_DIR, { recursive: true });
+	writeFileSync(SECRETS_FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
 }
 
 // ---------------------------------------------------------------------------
@@ -158,42 +162,42 @@ function saveStore(store: SecretsStore): void {
 // ---------------------------------------------------------------------------
 
 export async function putSecret(name: string, value: string): Promise<void> {
-  validateName(name);
-  const store = loadStore();
-  const now = new Date().toISOString();
-  const existing = store.secrets[name];
+	validateName(name);
+	const store = loadStore();
+	const now = new Date().toISOString();
+	const existing = store.secrets[name];
 
-  store.secrets[name] = {
-    ciphertext: await encrypt(value),
-    created: existing?.created ?? now,
-    updated: now,
-  };
+	store.secrets[name] = {
+		ciphertext: await encrypt(value),
+		created: existing?.created ?? now,
+		updated: now,
+	};
 
-  saveStore(store);
+	saveStore(store);
 }
 
 export async function getSecret(name: string): Promise<string> {
-  const store = loadStore();
-  const entry = store.secrets[name];
-  if (!entry) throw new Error(`Secret '${name}' not found`);
-  return decrypt(entry.ciphertext);
+	const store = loadStore();
+	const entry = store.secrets[name];
+	if (!entry) throw new Error(`Secret '${name}' not found`);
+	return decrypt(entry.ciphertext);
 }
 
 export function hasSecret(name: string): boolean {
-  const store = loadStore();
-  return name in store.secrets;
+	const store = loadStore();
+	return name in store.secrets;
 }
 
 export function listSecrets(): string[] {
-  return Object.keys(loadStore().secrets);
+	return Object.keys(loadStore().secrets);
 }
 
 export function deleteSecret(name: string): boolean {
-  const store = loadStore();
-  if (!(name in store.secrets)) return false;
-  delete store.secrets[name];
-  saveStore(store);
-  return true;
+	const store = loadStore();
+	if (!(name in store.secrets)) return false;
+	delete store.secrets[name];
+	saveStore(store);
+	return true;
 }
 
 /**
@@ -205,56 +209,60 @@ export function deleteSecret(name: string): boolean {
  * @param secretRefs  Map of env var name → secret name, e.g. { OPENAI_API_KEY: "OPENAI_API_KEY" }
  */
 export async function execWithSecrets(
-  command: string,
-  secretRefs: Record<string, string>
+	command: string,
+	secretRefs: Record<string, string>,
 ): Promise<ExecResult> {
-  // Resolve all secret values up front so we can redact them from output
-  const resolved: Record<string, string> = {};
-  for (const [envVar, secretName] of Object.entries(secretRefs)) {
-    resolved[envVar] = await getSecret(secretName);
-  }
+	// Resolve all secret values up front so we can redact them from output
+	const resolved: Record<string, string> = {};
+	for (const [envVar, secretName] of Object.entries(secretRefs)) {
+		resolved[envVar] = await getSecret(secretName);
+	}
 
-  const secretValues = Object.values(resolved);
+	const secretValues = Object.values(resolved);
 
-  function redact(text: string): string {
-    let out = text;
-    for (const val of secretValues) {
-      if (val.length > 3) {
-        out = out.replaceAll(val, '[REDACTED]');
-      }
-    }
-    return out;
-  }
+	function redact(text: string): string {
+		let out = text;
+		for (const val of secretValues) {
+			if (val.length > 3) {
+				out = out.replaceAll(val, "[REDACTED]");
+			}
+		}
+		return out;
+	}
 
-  return new Promise((resolve, reject) => {
-    const proc = spawn('sh', ['-c', command], {
-      env: { ...process.env, ...resolved },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+	return new Promise((resolve, reject) => {
+		const proc = spawn("sh", ["-c", command], {
+			env: { ...process.env, ...resolved },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
 
-    let stdout = '';
-    let stderr = '';
+		let stdout = "";
+		let stderr = "";
 
-    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+		proc.stdout.on("data", (d: Buffer) => {
+			stdout += d.toString();
+		});
+		proc.stderr.on("data", (d: Buffer) => {
+			stderr += d.toString();
+		});
 
-    proc.on('close', (code) => {
-      // Zero out resolved values from memory (best-effort in JS)
-      for (const key of Object.keys(resolved)) {
-        resolved[key] = '';
-      }
+		proc.on("close", (code) => {
+			// Zero out resolved values from memory (best-effort in JS)
+			for (const key of Object.keys(resolved)) {
+				resolved[key] = "";
+			}
 
-      resolve({
-        stdout: redact(stdout),
-        stderr: redact(stderr),
-        code: code ?? 1,
-      });
-    });
+			resolve({
+				stdout: redact(stdout),
+				stderr: redact(stderr),
+				code: code ?? 1,
+			});
+		});
 
-    proc.on('error', (err) => {
-      reject(err);
-    });
-  });
+		proc.on("error", (err) => {
+			reject(err);
+		});
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -264,9 +272,9 @@ export async function execWithSecrets(
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function validateName(name: string): void {
-  if (!NAME_RE.test(name)) {
-    throw new Error(
-      `Invalid secret name '${name}'. Use letters, digits, and underscores only.`
-    );
-  }
+	if (!NAME_RE.test(name)) {
+		throw new Error(
+			`Invalid secret name '${name}'. Use letters, digits, and underscores only.`,
+		);
+	}
 }

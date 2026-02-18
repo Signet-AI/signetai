@@ -1,31 +1,31 @@
 export function parseSoul(markdown: string): Record<string, string> {
-  // Parse markdown sections
-  const sections: Record<string, string> = {};
-  const lines = markdown.split('\n');
-  let currentSection = 'intro';
-  let content: string[] = [];
+	// Parse markdown sections
+	const sections: Record<string, string> = {};
+	const lines = markdown.split("\n");
+	let currentSection = "intro";
+	let content: string[] = [];
 
-  for (const line of lines) {
-    if (line.startsWith('## ')) {
-      if (content.length > 0) {
-        sections[currentSection] = content.join('\n').trim();
-      }
-      currentSection = line.slice(3).toLowerCase().replace(/\s+/g, '_');
-      content = [];
-    } else {
-      content.push(line);
-    }
-  }
+	for (const line of lines) {
+		if (line.startsWith("## ")) {
+			if (content.length > 0) {
+				sections[currentSection] = content.join("\n").trim();
+			}
+			currentSection = line.slice(3).toLowerCase().replace(/\s+/g, "_");
+			content = [];
+		} else {
+			content.push(line);
+		}
+	}
 
-  if (content.length > 0) {
-    sections[currentSection] = content.join('\n').trim();
-  }
+	if (content.length > 0) {
+		sections[currentSection] = content.join("\n").trim();
+	}
 
-  return sections;
+	return sections;
 }
 
 export function generateSoul(name: string): string {
-  return `# Soul
+	return `# Soul
 
 ## Persona
 

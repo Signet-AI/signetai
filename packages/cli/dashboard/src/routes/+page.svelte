@@ -1,1014 +1,1078 @@
 <script lang="ts">
-  import { tick } from 'svelte';
-  import { browser } from '$app/environment';
-  import { UMAP } from 'umap-js';
-  import {
-    forceSimulation,
-    forceLink,
-    forceManyBody,
-    forceCenter,
-    forceCollide
-  } from 'd3-force';
-  import {
-    saveConfigFile,
-    getEmbeddings,
-    searchMemories,
-    getSimilarMemories,
-    getDistinctWho,
-    regenerateHarnesses as apiRegenerateHarnesses,
-    getSecrets,
-    putSecret,
-    deleteSecret,
-    getSkills,
-    searchSkills,
-    installSkill,
-    uninstallSkill,
-    type Skill
-  } from '$lib/api';
-
-  let { data } = $props();
-
-  // --- Theme ---
-  let theme = $state<'dark' | 'light'>('dark');
-
-  if (browser) {
-    const stored = document.documentElement.dataset.theme;
-    theme = (stored === 'light' || stored === 'dark') ? stored : 'dark';
-  }
-
-  function toggleTheme() {
-    theme = theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem('signet-theme', theme);
-  }
-
-  // --- Tabs ---
-  let activeTab = $state<'config' | 'embeddings' | 'logs' | 'secrets' | 'skills'>('config');
-
-  // --- Secrets ---
-  let secrets = $state<string[]>([]);
-  let secretsLoading = $state(false);
-  let newSecretName = $state('');
-  let newSecretValue = $state('');
-  let secretAdding = $state(false);
-  let secretDeleting = $state<string | null>(null);
-
-  async function fetchSecrets() {
-    secretsLoading = true;
-    secrets = await getSecrets();
-    secretsLoading = false;
-  }
-
-  async function addSecret() {
-    if (!newSecretName.trim() || !newSecretValue.trim()) return;
-    secretAdding = true;
-    const ok = await putSecret(newSecretName.trim(), newSecretValue);
-    if (ok) {
-      newSecretName = '';
-      newSecretValue = '';
-      await fetchSecrets();
-    }
-    secretAdding = false;
-  }
-
-  async function removeSecret(name: string) {
-    secretDeleting = name;
-    const ok = await deleteSecret(name);
-    if (ok) {
-      await fetchSecrets();
-    }
-    secretDeleting = null;
-  }
-
-  // --- Skills ---
-  let skills = $state<Skill[]>([]);
-  let skillsLoading = $state(false);
-  let skillSearchQuery = $state('');
-  let skillSearchResults = $state<Array<{ name: string; description: string; installed: boolean }>>([]);
-  let skillSearching = $state(false);
-  let skillInstalling = $state<string | null>(null);
-  let skillUninstalling = $state<string | null>(null);
-  let selectedSkill = $state<Skill | null>(null);
-
-  async function fetchSkills() {
-    skillsLoading = true;
-    skills = await getSkills();
-    skillsLoading = false;
-  }
-
-  async function doSkillSearch() {
-    if (!skillSearchQuery.trim()) {
-      skillSearchResults = [];
-      return;
-    }
-    skillSearching = true;
-    skillSearchResults = await searchSkills(skillSearchQuery.trim());
-    skillSearching = false;
-  }
-
-  async function doInstallSkill(name: string) {
-    skillInstalling = name;
-    const result = await installSkill(name);
-    if (result.success) {
-      await fetchSkills();
-      skillSearchResults = skillSearchResults.map(s => 
-        s.name === name ? { ...s, installed: true } : s
-      );
-    }
-    skillInstalling = null;
-  }
-
-  async function doUninstallSkill(name: string) {
-    skillUninstalling = name;
-    const result = await uninstallSkill(name);
-    if (result.success) {
-      await fetchSkills();
-      skillSearchResults = skillSearchResults.map(s => 
-        s.name === name ? { ...s, installed: false } : s
-      );
-      if (selectedSkill?.name === name) {
-        selectedSkill = null;
-      }
-    }
-    skillUninstalling = null;
-  }
-
-  // --- Logs viewer ---
-  interface LogEntry {
-    timestamp: string;
-    level: 'debug' | 'info' | 'warn' | 'error';
-    category: string;
-    message: string;
-    data?: Record<string, unknown>;
-    duration?: number;
-    error?: { name: string; message: string };
-  }
-
-  let logs = $state<LogEntry[]>([]);
-  let logsLoading = $state(false);
-  let logsError = $state('');
-  let logsStreaming = $state(false);
-  let logEventSource: EventSource | null = null;
-  let logLevelFilter = $state<string>('');
-  let logCategoryFilter = $state<string>('');
-  let logAutoScroll = $state(true);
-  let logContainer: HTMLDivElement | null = null;
-
-  const logCategories = ['daemon', 'api', 'memory', 'sync', 'git', 'watcher', 'embedding', 'harness', 'system'];
-  const logLevels = ['debug', 'info', 'warn', 'error'];
-
-  async function fetchLogs() {
-    logsLoading = true;
-    logsError = '';
-    try {
-      const params = new URLSearchParams({ limit: '200' });
-      if (logLevelFilter) params.set('level', logLevelFilter);
-      if (logCategoryFilter) params.set('category', logCategoryFilter);
-      
-      const res = await fetch(`/api/logs?${params}`);
-      const data = await res.json();
-      logs = data.logs || [];
-    } catch (e) {
-      logsError = 'Failed to fetch logs';
-    } finally {
-      logsLoading = false;
-    }
-  }
-
-  function startLogStream() {
-    if (logEventSource) {
-      logEventSource.close();
-    }
-    
-    logsStreaming = true;
-    logEventSource = new EventSource('/api/logs/stream');
-    
-    logEventSource.onmessage = (event) => {
-      try {
-        const entry = JSON.parse(event.data);
-        if (entry.type === 'connected') return;
-        
-        // Apply filters
-        if (logLevelFilter && entry.level !== logLevelFilter) return;
-        if (logCategoryFilter && entry.category !== logCategoryFilter) return;
-        
-        logs = [...logs.slice(-499), entry]; // Keep last 500
-        
-        // Auto-scroll
-        if (logAutoScroll && logContainer) {
-          setTimeout(() => {
-            logContainer?.scrollTo({ top: logContainer.scrollHeight, behavior: 'smooth' });
-          }, 50);
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    };
-    
-    logEventSource.onerror = () => {
-      logsStreaming = false;
-      logEventSource?.close();
-      logEventSource = null;
-    };
-  }
-
-  function stopLogStream() {
-    logsStreaming = false;
-    logEventSource?.close();
-    logEventSource = null;
-  }
-
-  function toggleLogStream() {
-    if (logsStreaming) {
-      stopLogStream();
-    } else {
-      startLogStream();
-    }
-  }
-
-  function clearLogs() {
-    logs = [];
-  }
-
-  function formatLogTime(timestamp: string): string {
-    return timestamp.split('T')[1]?.slice(0, 8) || '';
-  }
-
-  // Fetch logs when tab becomes active
-  $effect(() => {
-    if (activeTab === 'logs' && logs.length === 0) {
-      fetchLogs();
-    }
-  });
-
-  // Fetch secrets when tab becomes active
-  $effect(() => {
-    if (activeTab === 'secrets' && secrets.length === 0) {
-      fetchSecrets();
-    }
-  });
-
-  // Fetch skills when tab becomes active
-  $effect(() => {
-    if (activeTab === 'skills' && skills.length === 0) {
-      fetchSkills();
-    }
-  });
-
-  // Cleanup on unmount
-  $effect(() => {
-    return () => {
-      if (logEventSource) {
-        logEventSource.close();
-      }
-      cancelAnimationFrame(animFrame);
-      if (graph3d) {
-        graph3d._destructor?.();
-        graph3d = null;
-      }
-    };
-  });
-
-  // --- Config editor ---
-  let selectedFile = $state('');
-  let editorContent = $state('');
-  let saving = $state(false);
-  let saved = $state(false);
-
-  $effect(() => {
-    if (!selectedFile && data.configFiles?.length) {
-      selectedFile = data.configFiles[0].name;
-    }
-  });
-
-  $effect(() => {
-    const file = data.configFiles?.find(
-      (f: any) => f.name === selectedFile
-    );
-    editorContent = file?.content ?? '';
-    saved = false;
-  });
-
-  function selectFile(name: string) {
-    selectedFile = name;
-    activeTab = 'config';
-  }
-
-  function ext(name: string): string {
-    return name.split('.').pop() ?? '';
-  }
-
-  function fmtSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes}B`;
-    return `${(bytes / 1024).toFixed(1)}KB`;
-  }
-
-  async function saveFile() {
-    saving = true;
-    saved = false;
-    try {
-      const success = await saveConfigFile(selectedFile, editorContent);
-      if (success) {
-        saved = true;
-        setTimeout(() => (saved = false), 2000);
-      }
-    } finally {
-      saving = false;
-    }
-  }
-
-  function handleKeydown(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-      e.preventDefault();
-      saveFile();
-    }
-  }
-
-  // --- Embeddings graph ---
-  let canvas = $state<HTMLCanvasElement | null>(null);
-  let graphSelected = $state<any>(null);
-  let graphHovered = $state<any>(null);
-  let graphStatus = $state('');
-  let graphError = $state('');
-  let embeddings = $state<any[]>([]);
-  let graphInitialized = $state(false);
-
-  const sourceColors: Record<string, string> = {
-    'claude-code': '#5eada4',
-    'clawdbot': '#a78bfa',
-    'openclaw': '#4ade80',
-    'opencode': '#60a5fa',
-    'manual': '#f472b6',
-    'unknown': '#737373',
-  };
-
-  interface GraphNode {
-    index?: number;
-    x: number;
-    y: number;
-    vx?: number;
-    vy?: number;
-    fx?: number | null;
-    fy?: number | null;
-    radius: number;
-    color: string;
-    data: any;
-  }
-
-  interface GraphEdge {
-    source: GraphNode | number;
-    target: GraphNode | number;
-  }
-
-  let camX = 0, camY = 0, camZoom = 1;
-  let isPanning = false, isDragging = false;
-  let dragNode: GraphNode | null = null;
-  let panStartX = 0, panStartY = 0;
-  let panCamStartX = 0, panCamStartY = 0;
-
-  let nodes = $state<GraphNode[]>([]);
-  let edges = $state<GraphEdge[]>([]);
-  let simulation: any = null;
-  let animFrame = 0;
-
-  // 3D graph state
-  let graphMode: '2d' | '3d' = $state('2d');
-  let graph3d: any = null;
-  let graph3dContainer = $state<HTMLDivElement | null>(null);
-
-  function hexToRgb(hex: string): [number, number, number] {
-    const v = parseInt(hex.slice(1), 16);
-    return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-  }
-
-  function buildKnnEdges(
-    projected: number[][], k: number
-  ): [number, number][] {
-    const edgeSet = new Set<string>();
-    const result: [number, number][] = [];
-    for (let i = 0; i < projected.length; i++) {
-      const dists: { j: number; d: number }[] = [];
-      for (let j = 0; j < projected.length; j++) {
-        if (i === j) continue;
-        let d = 0;
-        for (let c = 0; c < projected[i].length; c++) {
-          const diff = projected[i][c] - projected[j][c];
-          d += diff * diff;
-        }
-        dists.push({ j, d });
-      }
-      dists.sort((a, b) => a.d - b.d);
-      for (let n = 0; n < Math.min(k, dists.length); n++) {
-        const a = Math.min(i, dists[n].j);
-        const b = Math.max(i, dists[n].j);
-        const key = `${a}-${b}`;
-        if (!edgeSet.has(key)) {
-          edgeSet.add(key);
-          result.push([a, b]);
-        }
-      }
-    }
-    return result;
-  }
-
-  function screenToWorld(sx: number, sy: number): [number, number] {
-    const rect = canvas!.getBoundingClientRect();
-    const cx = rect.width / 2;
-    const cy = rect.height / 2;
-    return [
-      (sx - rect.left - cx) / camZoom + camX,
-      (sy - rect.top - cy) / camZoom + camY,
-    ];
-  }
-
-  function findNodeAt(wx: number, wy: number): GraphNode | null {
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i];
-      const dx = n.x - wx, dy = n.y - wy;
-      const hitR = n.radius + 4;
-      if (dx * dx + dy * dy <= hitR * hitR) return n;
-    }
-    return null;
-  }
-
-  function draw(ctx: CanvasRenderingContext2D) {
-    const w = canvas!.width, h = canvas!.height;
-    ctx.fillStyle = '#050505';
-    ctx.fillRect(0, 0, w, h);
-    ctx.save();
-    ctx.translate(w / 2, h / 2);
-    ctx.scale(camZoom, camZoom);
-    ctx.translate(-camX, -camY);
-
-    for (const edge of edges) {
-      const s = edge.source as GraphNode;
-      const t = edge.target as GraphNode;
-      ctx.beginPath();
-      ctx.moveTo(s.x, s.y);
-      ctx.lineTo(t.x, t.y);
-      ctx.strokeStyle = 'rgba(180, 180, 180, 0.45)';
-      ctx.lineWidth = 0.8 / camZoom;
-      ctx.stroke();
-    }
-
-    for (const node of nodes) {
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(210, 210, 210, 0.85)';
-      ctx.fill();
-
-      if (graphSelected && node.data === graphSelected) {
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-        ctx.lineWidth = 1.5 / camZoom;
-        ctx.stroke();
-      }
-    }
-
-    if (graphHovered) {
-      const node = nodes.find(n => n.data === graphHovered);
-      if (node) {
-        const raw = graphHovered.text || graphHovered.content || '';
-        const text = raw.slice(0, 48) + (raw.length > 48 ? '...' : '');
-        const fs = 9 / camZoom;
-        ctx.font = `${fs}px var(--font-mono)`;
-        ctx.fillStyle = 'rgba(220, 220, 220, 0.9)';
-        ctx.textAlign = 'left';
-        ctx.fillText(text, node.x + node.radius + 5 / camZoom, node.y + fs * 0.35);
-        ctx.textAlign = 'start';
-      }
-    }
-
-    if (graphSelected) {
-      const selNode = nodes.find(n => n.data === graphSelected);
-      if (selNode && selNode.data !== graphHovered) {
-        const raw = (selNode.data.text || selNode.data.content || '').trim().toUpperCase();
-        if (raw) {
-          const fs = 10 / camZoom;
-          ctx.font = `${fs}px var(--font-mono)`;
-
-          // Word-wrap into lines
-          const maxW = 200 / camZoom;
-          const words = raw.split(' ');
-          const lines: string[] = [];
-          let cur = '';
-          for (const w of words) {
-            const test = cur ? cur + ' ' + w : w;
-            if (cur && ctx.measureText(test).width > maxW) {
-              lines.push(cur);
-              cur = w;
-            } else {
-              cur = test;
-            }
-          }
-          if (cur) lines.push(cur);
-          const dl = lines.slice(0, 8);
-
-          const lineH = fs * 1.8;
-          const padX = 10 / camZoom;
-          const padY = 8 / camZoom;
-          const boxW = Math.max(...dl.map(l => ctx.measureText(l).width)) + padX * 2;
-          const boxH = dl.length * lineH + padY * 2;
-
-          // Callout bracket positioned to the left of the node
-          const barLen = 16 / camZoom;
-          const edgeGap = 50 / camZoom;
-          const bracketRX = selNode.x - edgeGap;
-          const bracketLX = bracketRX - barLen;
-          const bx = bracketLX - 4 / camZoom - boxW;
-          const by = selNode.y - boxH * 0.35;
-
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-          ctx.lineWidth = 1.5 / camZoom;
-          ctx.lineCap = 'square';
-
-          // Diagonal connector: node → top-right corner of bracket
-          ctx.beginPath();
-          ctx.moveTo(selNode.x, selNode.y);
-          ctx.lineTo(bracketRX, by);
-          ctx.stroke();
-
-          // ] bracket shape
-          ctx.beginPath();
-          ctx.moveTo(bracketLX, by);
-          ctx.lineTo(bracketRX, by);
-          ctx.lineTo(bracketRX, by + boxH);
-          ctx.lineTo(bracketLX, by + boxH);
-          ctx.stroke();
-
-          ctx.lineCap = 'butt';
-
-          // Black background for text block
-          ctx.fillStyle = '#050505';
-          ctx.fillRect(bx, by, boxW, boxH);
-
-          // First line: inverted (white bg, dark text)
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-          ctx.fillRect(bx, by + padY, boxW, lineH);
-          ctx.fillStyle = '#050505';
-          ctx.textAlign = 'center';
-          ctx.fillText(dl[0], bx + boxW / 2, by + padY + lineH * 0.75);
-
-          // Remaining lines: white text on black
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-          for (let i = 1; i < dl.length; i++) {
-            ctx.fillText(dl[i], bx + boxW / 2, by + padY + lineH * (i + 0.75));
-          }
-          ctx.textAlign = 'start';
-        }
-      }
-    }
-
-    ctx.restore();
-
-    // Minimal legend — monochrome
-    const legendSources = ['claude-code', 'clawdbot', 'openclaw', 'opencode', 'manual'];
-    const lx = 12;
-    let ly = h - 12 - legendSources.length * 16;
-    ctx.font = '10px var(--font-mono)';
-    for (const name of legendSources) {
-      ctx.beginPath();
-      ctx.arc(lx + 3, ly, 3, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(200, 200, 200, 0.5)';
-      ctx.fill();
-      ctx.fillStyle = 'rgba(200, 200, 200, 0.35)';
-      ctx.fillText(name, lx + 12, ly + 3);
-      ly += 16;
-    }
-
-    animFrame = requestAnimationFrame(() => draw(ctx));
-  }
-
-  function setupInteractions() {
-    if (!canvas) return;
-
-    canvas.addEventListener('pointerdown', (e) => {
-      const [wx, wy] = screenToWorld(e.clientX, e.clientY);
-      const node = findNodeAt(wx, wy);
-      if (node) {
-        isDragging = true;
-        dragNode = node;
-        node.fx = node.x;
-        node.fy = node.y;
-        simulation?.alphaTarget(0.3).restart();
-      } else {
-        isPanning = true;
-        panStartX = e.clientX;
-        panStartY = e.clientY;
-        panCamStartX = camX;
-        panCamStartY = camY;
-      }
-    });
-
-    canvas.addEventListener('pointermove', (e) => {
-      if (isDragging && dragNode) {
-        const [wx, wy] = screenToWorld(e.clientX, e.clientY);
-        dragNode.fx = wx;
-        dragNode.fy = wy;
-        return;
-      }
-      if (isPanning) {
-        camX = panCamStartX - (e.clientX - panStartX) / camZoom;
-        camY = panCamStartY - (e.clientY - panStartY) / camZoom;
-        return;
-      }
-      const [wx, wy] = screenToWorld(e.clientX, e.clientY);
-      const node = findNodeAt(wx, wy);
-      graphHovered = node?.data || null;
-      canvas!.style.cursor = node ? 'pointer' : 'grab';
-    });
-
-    const pointerUp = () => {
-      if (isDragging && dragNode) {
-        dragNode.fx = null;
-        dragNode.fy = null;
-        simulation?.alphaTarget(0);
-        dragNode = null;
-        isDragging = false;
-        return;
-      }
-      isPanning = false;
-    };
-
-    canvas.addEventListener('pointerup', pointerUp);
-    canvas.addEventListener('pointerleave', pointerUp);
-
-    canvas.addEventListener('click', (e) => {
-      if (isDragging) return;
-      const [wx, wy] = screenToWorld(e.clientX, e.clientY);
-      const node = findNodeAt(wx, wy);
-      graphSelected = node?.data || null;
-    });
-
-    canvas.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoom = Math.max(0.1, Math.min(5, camZoom * factor));
-      const rect = canvas!.getBoundingClientRect();
-      const cx = rect.width / 2, cy = rect.height / 2;
-      const mx = e.clientX - rect.left - cx;
-      const my = e.clientY - rect.top - cy;
-      const wx = mx / camZoom + camX;
-      const wy = my / camZoom + camY;
-      camZoom = newZoom;
-      camX = wx - mx / camZoom;
-      camY = wy - my / camZoom;
-    }, { passive: false });
-  }
-
-  function resizeCanvas() {
-    if (!canvas) return;
-    const rect = canvas.parentElement!.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
-  }
-
-  async function initGraph() {
-    if (graphInitialized) return;
-    graphInitialized = true;
-    graphStatus = 'Loading embeddings...';
-
-    try {
-      const result = await getEmbeddings(true);
-
-      if (result.error) {
-        graphError = result.error;
-        graphStatus = '';
-        return;
-      }
-
-      embeddings = result.embeddings || [];
-      if (embeddings.length === 0 || !embeddings[0].vector) {
-        graphStatus = '';
-        if (embeddings.length > 0) graphError = 'No vector data available';
-        return;
-      }
-
-      graphStatus = `Computing UMAP (${embeddings.length})...`;
-      await new Promise(r => setTimeout(r, 50));
-
-      const vectors = embeddings.map((e: any) => e.vector);
-      const umap = new UMAP({
-        nComponents: 2,
-        nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
-        minDist: 0.1,
-        spread: 1.0,
-      });
-
-      let projected: number[][];
-      try {
-        projected = umap.fit(vectors);
-      } catch (umapErr: any) {
-        graphError = `UMAP failed: ${umapErr.message}`;
-        graphStatus = '';
-        return;
-      }
-
-      graphStatus = 'Building graph...';
-      await new Promise(r => setTimeout(r, 50));
-
-      let minX = Infinity, maxX = -Infinity;
-      let minY = Infinity, maxY = -Infinity;
-      for (const p of projected) {
-        if (p[0] < minX) minX = p[0];
-        if (p[0] > maxX) maxX = p[0];
-        if (p[1] < minY) minY = p[1];
-        if (p[1] > maxY) maxY = p[1];
-      }
-      const rangeX = maxX - minX || 1;
-      const rangeY = maxY - minY || 1;
-      const scale = 400;
-
-      nodes = embeddings.map((emb: any, i: number) => ({
-        x: ((projected[i][0] - minX) / rangeX - 0.5) * scale,
-        y: ((projected[i][1] - minY) / rangeY - 0.5) * scale,
-        radius: 2.5 + (emb.importance || 0.5) * 2.5,
-        color: 'rgba(210, 210, 210, 0.85)',
-        data: emb,
-      }));
-
-      edges = buildKnnEdges(projected, 4).map(([a, b]) => ({
-        source: a,
-        target: b,
-      }));
-
-      simulation = forceSimulation(nodes as any)
-        .force('link', forceLink(edges).distance(60).strength(0.3))
-        .force('charge', forceManyBody().strength(-80))
-        .force('center', forceCenter(0, 0))
-        .force(
-          'collide',
-          forceCollide().radius((d: any) => d.radius + 2)
-        )
-        .alphaDecay(0.02)
-        .on('tick', () => {});
-
-      graphStatus = '';
-      await tick();
-
-      resizeCanvas();
-      window.addEventListener('resize', resizeCanvas);
-      setupInteractions();
-
-      const ctx = canvas!.getContext('2d')!;
-      draw(ctx);
-    } catch (e: any) {
-      graphError = e.message || 'Failed to load embeddings';
-      graphStatus = '';
-    }
-  }
-
-  async function init3DGraph(projected3d: number[][]) {
-    if (!graph3dContainer) return;
-
-    if (graph3d) {
-      graph3d._destructor?.();
-      graph3d = null;
-    }
-
-    const { default: ForceGraph3D } = await import('3d-force-graph');
-
-    const nodeData = embeddings.map((e: any, i: number) => ({
-      id: e.id,
-      content: e.content,
-      who: e.who,
-      importance: e.importance ?? 0.5,
-      x: projected3d[i][0] * 50,
-      y: projected3d[i][1] * 50,
-      z: projected3d[i][2] * 50,
-      color: sourceColors[e.who] ?? sourceColors['unknown'],
-      val: 1 + (e.importance ?? 0.5) * 3,
-    }));
-
-    const edgePairs = buildKnnEdges(projected3d, 4);
-    const linkData = edgePairs.map(([a, b]) => ({
-      source: nodeData[a].id,
-      target: nodeData[b].id,
-    }));
-
-    const rect = graph3dContainer.getBoundingClientRect();
-    graph3d = new ForceGraph3D(graph3dContainer)
-      .width(rect.width || graph3dContainer.offsetWidth)
-      .height(rect.height || graph3dContainer.offsetHeight)
-      .graphData({ nodes: nodeData, links: linkData })
-      .nodeLabel((n: any) => n.content?.slice(0, 80) ?? '')
-      .nodeColor(() => '#d4d4d4')
-      .nodeVal((n: any) => 0.6 + (n.importance ?? 0.5) * 1.5)
-      .linkColor(() => 'rgba(160,160,160,0.5)')
-      .linkWidth(0.5)
-      .backgroundColor('#050505')
-      .onNodeClick((n: any) => { graphSelected = n; });
-  }
-
-  async function switchGraphMode(mode: '2d' | '3d') {
-    if (graphMode === mode) return;
-    graphMode = mode;
-
-    if (mode === '3d') {
-      cancelAnimationFrame(animFrame);
-
-      if (!graphInitialized || embeddings.length === 0) return;
-
-      graphStatus = 'Computing 3D layout...';
-      await new Promise(r => setTimeout(r, 50));
-
-      const vectors = embeddings.map((e: any) => e.vector);
-      const umap3d = new UMAP({
-        nComponents: 3,
-        nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
-        minDist: 0.1,
-        spread: 1.0,
-      });
-
-      let projected3d: number[][];
-      try {
-        projected3d = umap3d.fit(vectors);
-      } catch (e: any) {
-        graphError = `3D UMAP failed: ${e.message}`;
-        graphStatus = '';
-        graphMode = '2d';
-        const ctx = canvas?.getContext('2d');
-        if (ctx) draw(ctx);
-        return;
-      }
-
-      graphStatus = '';
-      await tick();
-      await init3DGraph(projected3d);
-    } else {
-      if (graph3d) {
-        graph3d._destructor?.();
-        graph3d = null;
-      }
-      await tick();
-      const ctx = canvas?.getContext('2d');
-      if (ctx) {
-        cancelAnimationFrame(animFrame);
-        draw(ctx);
-      }
-    }
-  }
-
-  $effect(() => {
-    if (activeTab === 'embeddings' && canvas && !graphInitialized) {
-      initGraph();
-    }
-  });
-
-  $effect(() => {
-    // Restart 2D loop when canvas is (re)mounted and data is ready
-    if (activeTab === 'embeddings' && canvas && graphInitialized && graphMode === '2d' && nodes.length > 0) {
-      tick().then(() => {
-        resizeCanvas();
-        cancelAnimationFrame(animFrame);
-        const ctx = canvas?.getContext('2d');
-        if (ctx) draw(ctx);
-      });
-    }
-  });
-
-  // Clean up when leaving the embeddings tab
-  $effect(() => {
-    if (activeTab !== 'embeddings') {
-      cancelAnimationFrame(animFrame);
-      if (graph3d) {
-        graph3d._destructor?.();
-        graph3d = null;
-      }
-      graphMode = '2d';
-    }
-  });
-
-  // --- Memory sidebar ---
-  let memoryQuery = $state('');
-  let memoryResults = $state<any[]>([]);
-  let memorySearched = $state(false);
-  let searchingMemory = $state(false);
-
-  // Filter panel state
-  let filtersOpen = $state(false);
-  let filterType = $state('');
-  let filterTags = $state('');
-  let filterWho = $state('');
-  let filterPinned = $state(false);
-  let filterImportanceMin = $state('');
-  let filterSince = $state('');
-  let whoOptions = $state<string[]>([]);
-
-  // Similar-results state
-  let similarSourceId = $state<string | null>(null);
-  let similarSource = $state<any>(null);
-  let similarResults = $state<any[]>([]);
-  let loadingSimilar = $state(false);
-
-  let hasActiveFilters = $derived(
-    !!(filterType || filterTags || filterWho || filterPinned
-       || filterImportanceMin || filterSince)
-  );
-
-  let displayMemories = $derived(
-    similarSourceId ? similarResults
-    : memorySearched || hasActiveFilters ? memoryResults
-    : (data.memories ?? [])
-  );
-
-  function filterSearchParams(): string {
-    const p = new URLSearchParams();
-    if (memoryQuery.trim()) p.set('q', memoryQuery.trim());
-    if (filterType) p.set('type', filterType);
-    if (filterTags) p.set('tags', filterTags);
-    if (filterWho) p.set('who', filterWho);
-    if (filterPinned) p.set('pinned', '1');
-    if (filterImportanceMin) p.set('importance_min', filterImportanceMin);
-    if (filterSince) p.set('since', filterSince);
-    return p.toString();
-  }
-
-  async function doSearch() {
-    const hasQuery = memoryQuery.trim();
-    if (!hasQuery && !hasActiveFilters) {
-      memoryResults = [];
-      memorySearched = false;
-      similarSourceId = null;
-      return;
-    }
-    similarSourceId = null;
-    searchingMemory = true;
-    try {
-      const results = await searchMemories(memoryQuery.trim(), {
-        type: filterType || undefined,
-        tags: filterTags || undefined,
-        who: filterWho || undefined,
-        pinned: filterPinned || undefined,
-        importance_min: filterImportanceMin ? parseFloat(filterImportanceMin) : undefined,
-        since: filterSince || undefined,
-      });
-      memoryResults = results;
-      memorySearched = true;
-    } finally {
-      searchingMemory = false;
-    }
-  }
-
-  async function findSimilar(id: string, sourceMemory: any) {
-    similarSourceId = id;
-    similarSource = sourceMemory;
-    loadingSimilar = true;
-    similarResults = [];
-    try {
-      const results = await getSimilarMemories(id, 10, filterType || undefined);
-      similarResults = results;
-    } finally {
-      loadingSimilar = false;
-    }
-  }
-
-  function clearAll() {
-    memoryQuery = '';
-    memoryResults = [];
-    memorySearched = false;
-    filterType = '';
-    filterTags = '';
-    filterWho = '';
-    filterPinned = false;
-    filterImportanceMin = '';
-    filterSince = '';
-    similarSourceId = null;
-    similarSource = null;
-    similarResults = [];
-  }
-
-  // Trigger search whenever filters change (without needing Enter)
-  $effect(() => {
-    // Track all filter values to react to changes
-    const _ = filterType, __ = filterTags, ___ = filterWho,
-      ____ = filterPinned, _____ = filterImportanceMin, ______ = filterSince;
-    if (hasActiveFilters || memorySearched) {
-      doSearch();
-    }
-  });
-
-  $effect(() => {
-    // Load who options once on mount
-    getDistinctWho()
-      .then(values => { whoOptions = values; })
-      .catch(() => {});
-  });
-
-  function formatDate(dateStr: string): string {
-    try {
-      const date = new Date(dateStr);
-      return date.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      });
-    } catch {
-      return dateStr;
-    }
-  }
+import { tick } from "svelte";
+import { browser } from "$app/environment";
+import { UMAP } from "umap-js";
+import {
+	forceSimulation,
+	forceLink,
+	forceManyBody,
+	forceCenter,
+	forceCollide,
+} from "d3-force";
+import {
+	saveConfigFile,
+	getEmbeddings,
+	searchMemories,
+	getSimilarMemories,
+	getDistinctWho,
+	regenerateHarnesses as apiRegenerateHarnesses,
+	getSecrets,
+	putSecret,
+	deleteSecret,
+	getSkills,
+	searchSkills,
+	installSkill,
+	uninstallSkill,
+	type Skill,
+} from "$lib/api";
+
+let { data } = $props();
+
+// --- Theme ---
+let theme = $state<"dark" | "light">("dark");
+
+if (browser) {
+	const stored = document.documentElement.dataset.theme;
+	theme = stored === "light" || stored === "dark" ? stored : "dark";
+}
+
+function toggleTheme() {
+	theme = theme === "dark" ? "light" : "dark";
+	document.documentElement.dataset.theme = theme;
+	localStorage.setItem("signet-theme", theme);
+}
+
+// --- Tabs ---
+let activeTab = $state<"config" | "embeddings" | "logs" | "secrets" | "skills">(
+	"config",
+);
+
+// --- Secrets ---
+let secrets = $state<string[]>([]);
+let secretsLoading = $state(false);
+let newSecretName = $state("");
+let newSecretValue = $state("");
+let secretAdding = $state(false);
+let secretDeleting = $state<string | null>(null);
+
+async function fetchSecrets() {
+	secretsLoading = true;
+	secrets = await getSecrets();
+	secretsLoading = false;
+}
+
+async function addSecret() {
+	if (!newSecretName.trim() || !newSecretValue.trim()) return;
+	secretAdding = true;
+	const ok = await putSecret(newSecretName.trim(), newSecretValue);
+	if (ok) {
+		newSecretName = "";
+		newSecretValue = "";
+		await fetchSecrets();
+	}
+	secretAdding = false;
+}
+
+async function removeSecret(name: string) {
+	secretDeleting = name;
+	const ok = await deleteSecret(name);
+	if (ok) {
+		await fetchSecrets();
+	}
+	secretDeleting = null;
+}
+
+// --- Skills ---
+let skills = $state<Skill[]>([]);
+let skillsLoading = $state(false);
+let skillSearchQuery = $state("");
+let skillSearchResults = $state<
+	Array<{ name: string; description: string; installed: boolean }>
+>([]);
+let skillSearching = $state(false);
+let skillInstalling = $state<string | null>(null);
+let skillUninstalling = $state<string | null>(null);
+let selectedSkill = $state<Skill | null>(null);
+
+async function fetchSkills() {
+	skillsLoading = true;
+	skills = await getSkills();
+	skillsLoading = false;
+}
+
+async function doSkillSearch() {
+	if (!skillSearchQuery.trim()) {
+		skillSearchResults = [];
+		return;
+	}
+	skillSearching = true;
+	skillSearchResults = await searchSkills(skillSearchQuery.trim());
+	skillSearching = false;
+}
+
+async function doInstallSkill(name: string) {
+	skillInstalling = name;
+	const result = await installSkill(name);
+	if (result.success) {
+		await fetchSkills();
+		skillSearchResults = skillSearchResults.map((s) =>
+			s.name === name ? { ...s, installed: true } : s,
+		);
+	}
+	skillInstalling = null;
+}
+
+async function doUninstallSkill(name: string) {
+	skillUninstalling = name;
+	const result = await uninstallSkill(name);
+	if (result.success) {
+		await fetchSkills();
+		skillSearchResults = skillSearchResults.map((s) =>
+			s.name === name ? { ...s, installed: false } : s,
+		);
+		if (selectedSkill?.name === name) {
+			selectedSkill = null;
+		}
+	}
+	skillUninstalling = null;
+}
+
+// --- Logs viewer ---
+interface LogEntry {
+	timestamp: string;
+	level: "debug" | "info" | "warn" | "error";
+	category: string;
+	message: string;
+	data?: Record<string, unknown>;
+	duration?: number;
+	error?: { name: string; message: string };
+}
+
+let logs = $state<LogEntry[]>([]);
+let logsLoading = $state(false);
+let logsError = $state("");
+let logsStreaming = $state(false);
+let logEventSource: EventSource | null = null;
+let logLevelFilter = $state<string>("");
+let logCategoryFilter = $state<string>("");
+let logAutoScroll = $state(true);
+let logContainer: HTMLDivElement | null = null;
+
+const logCategories = [
+	"daemon",
+	"api",
+	"memory",
+	"sync",
+	"git",
+	"watcher",
+	"embedding",
+	"harness",
+	"system",
+];
+const logLevels = ["debug", "info", "warn", "error"];
+
+async function fetchLogs() {
+	logsLoading = true;
+	logsError = "";
+	try {
+		const params = new URLSearchParams({ limit: "200" });
+		if (logLevelFilter) params.set("level", logLevelFilter);
+		if (logCategoryFilter) params.set("category", logCategoryFilter);
+
+		const res = await fetch(`/api/logs?${params}`);
+		const data = await res.json();
+		logs = data.logs || [];
+	} catch (e) {
+		logsError = "Failed to fetch logs";
+	} finally {
+		logsLoading = false;
+	}
+}
+
+function startLogStream() {
+	if (logEventSource) {
+		logEventSource.close();
+	}
+
+	logsStreaming = true;
+	logEventSource = new EventSource("/api/logs/stream");
+
+	logEventSource.onmessage = (event) => {
+		try {
+			const entry = JSON.parse(event.data);
+			if (entry.type === "connected") return;
+
+			// Apply filters
+			if (logLevelFilter && entry.level !== logLevelFilter) return;
+			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
+
+			logs = [...logs.slice(-499), entry]; // Keep last 500
+
+			// Auto-scroll
+			if (logAutoScroll && logContainer) {
+				setTimeout(() => {
+					logContainer?.scrollTo({
+						top: logContainer.scrollHeight,
+						behavior: "smooth",
+					});
+				}, 50);
+			}
+		} catch {
+			// Ignore parse errors
+		}
+	};
+
+	logEventSource.onerror = () => {
+		logsStreaming = false;
+		logEventSource?.close();
+		logEventSource = null;
+	};
+}
+
+function stopLogStream() {
+	logsStreaming = false;
+	logEventSource?.close();
+	logEventSource = null;
+}
+
+function toggleLogStream() {
+	if (logsStreaming) {
+		stopLogStream();
+	} else {
+		startLogStream();
+	}
+}
+
+function clearLogs() {
+	logs = [];
+}
+
+function formatLogTime(timestamp: string): string {
+	return timestamp.split("T")[1]?.slice(0, 8) || "";
+}
+
+// Fetch logs when tab becomes active
+$effect(() => {
+	if (activeTab === "logs" && logs.length === 0) {
+		fetchLogs();
+	}
+});
+
+// Fetch secrets when tab becomes active
+$effect(() => {
+	if (activeTab === "secrets" && secrets.length === 0) {
+		fetchSecrets();
+	}
+});
+
+// Fetch skills when tab becomes active
+$effect(() => {
+	if (activeTab === "skills" && skills.length === 0) {
+		fetchSkills();
+	}
+});
+
+// Cleanup on unmount
+$effect(() => {
+	return () => {
+		if (logEventSource) {
+			logEventSource.close();
+		}
+		cancelAnimationFrame(animFrame);
+		if (graph3d) {
+			graph3d._destructor?.();
+			graph3d = null;
+		}
+	};
+});
+
+// --- Config editor ---
+let selectedFile = $state("");
+let editorContent = $state("");
+let saving = $state(false);
+let saved = $state(false);
+
+$effect(() => {
+	if (!selectedFile && data.configFiles?.length) {
+		selectedFile = data.configFiles[0].name;
+	}
+});
+
+$effect(() => {
+	const file = data.configFiles?.find((f: any) => f.name === selectedFile);
+	editorContent = file?.content ?? "";
+	saved = false;
+});
+
+function selectFile(name: string) {
+	selectedFile = name;
+	activeTab = "config";
+}
+
+function ext(name: string): string {
+	return name.split(".").pop() ?? "";
+}
+
+function fmtSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes}B`;
+	return `${(bytes / 1024).toFixed(1)}KB`;
+}
+
+async function saveFile() {
+	saving = true;
+	saved = false;
+	try {
+		const success = await saveConfigFile(selectedFile, editorContent);
+		if (success) {
+			saved = true;
+			setTimeout(() => (saved = false), 2000);
+		}
+	} finally {
+		saving = false;
+	}
+}
+
+function handleKeydown(e: KeyboardEvent) {
+	if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+		e.preventDefault();
+		saveFile();
+	}
+}
+
+// --- Embeddings graph ---
+let canvas = $state<HTMLCanvasElement | null>(null);
+let graphSelected = $state<any>(null);
+let graphHovered = $state<any>(null);
+let graphStatus = $state("");
+let graphError = $state("");
+let embeddings = $state<any[]>([]);
+let graphInitialized = $state(false);
+
+const sourceColors: Record<string, string> = {
+	"claude-code": "#5eada4",
+	clawdbot: "#a78bfa",
+	openclaw: "#4ade80",
+	opencode: "#60a5fa",
+	manual: "#f472b6",
+	unknown: "#737373",
+};
+
+interface GraphNode {
+	index?: number;
+	x: number;
+	y: number;
+	vx?: number;
+	vy?: number;
+	fx?: number | null;
+	fy?: number | null;
+	radius: number;
+	color: string;
+	data: any;
+}
+
+interface GraphEdge {
+	source: GraphNode | number;
+	target: GraphNode | number;
+}
+
+let camX = 0,
+	camY = 0,
+	camZoom = 1;
+let isPanning = false,
+	isDragging = false;
+let dragNode: GraphNode | null = null;
+let panStartX = 0,
+	panStartY = 0;
+let panCamStartX = 0,
+	panCamStartY = 0;
+
+let nodes = $state<GraphNode[]>([]);
+let edges = $state<GraphEdge[]>([]);
+let simulation: any = null;
+let animFrame = 0;
+
+// 3D graph state
+let graphMode: "2d" | "3d" = $state("2d");
+let graph3d: any = null;
+let graph3dContainer = $state<HTMLDivElement | null>(null);
+
+function hexToRgb(hex: string): [number, number, number] {
+	const v = parseInt(hex.slice(1), 16);
+	return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+function buildKnnEdges(projected: number[][], k: number): [number, number][] {
+	const edgeSet = new Set<string>();
+	const result: [number, number][] = [];
+	for (let i = 0; i < projected.length; i++) {
+		const dists: { j: number; d: number }[] = [];
+		for (let j = 0; j < projected.length; j++) {
+			if (i === j) continue;
+			let d = 0;
+			for (let c = 0; c < projected[i].length; c++) {
+				const diff = projected[i][c] - projected[j][c];
+				d += diff * diff;
+			}
+			dists.push({ j, d });
+		}
+		dists.sort((a, b) => a.d - b.d);
+		for (let n = 0; n < Math.min(k, dists.length); n++) {
+			const a = Math.min(i, dists[n].j);
+			const b = Math.max(i, dists[n].j);
+			const key = `${a}-${b}`;
+			if (!edgeSet.has(key)) {
+				edgeSet.add(key);
+				result.push([a, b]);
+			}
+		}
+	}
+	return result;
+}
+
+function screenToWorld(sx: number, sy: number): [number, number] {
+	const rect = canvas!.getBoundingClientRect();
+	const cx = rect.width / 2;
+	const cy = rect.height / 2;
+	return [
+		(sx - rect.left - cx) / camZoom + camX,
+		(sy - rect.top - cy) / camZoom + camY,
+	];
+}
+
+function findNodeAt(wx: number, wy: number): GraphNode | null {
+	for (let i = nodes.length - 1; i >= 0; i--) {
+		const n = nodes[i];
+		const dx = n.x - wx,
+			dy = n.y - wy;
+		const hitR = n.radius + 4;
+		if (dx * dx + dy * dy <= hitR * hitR) return n;
+	}
+	return null;
+}
+
+function draw(ctx: CanvasRenderingContext2D) {
+	const w = canvas!.width,
+		h = canvas!.height;
+	ctx.fillStyle = "#050505";
+	ctx.fillRect(0, 0, w, h);
+	ctx.save();
+	ctx.translate(w / 2, h / 2);
+	ctx.scale(camZoom, camZoom);
+	ctx.translate(-camX, -camY);
+
+	for (const edge of edges) {
+		const s = edge.source as GraphNode;
+		const t = edge.target as GraphNode;
+		ctx.beginPath();
+		ctx.moveTo(s.x, s.y);
+		ctx.lineTo(t.x, t.y);
+		ctx.strokeStyle = "rgba(180, 180, 180, 0.45)";
+		ctx.lineWidth = 0.8 / camZoom;
+		ctx.stroke();
+	}
+
+	for (const node of nodes) {
+		ctx.beginPath();
+		ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+		ctx.fillStyle = "rgba(210, 210, 210, 0.85)";
+		ctx.fill();
+
+		if (graphSelected && node.data === graphSelected) {
+			ctx.beginPath();
+			ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
+			ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+			ctx.lineWidth = 1.5 / camZoom;
+			ctx.stroke();
+		}
+	}
+
+	if (graphHovered) {
+		const node = nodes.find((n) => n.data === graphHovered);
+		if (node) {
+			const raw = graphHovered.text || graphHovered.content || "";
+			const text = raw.slice(0, 48) + (raw.length > 48 ? "..." : "");
+			const fs = 9 / camZoom;
+			ctx.font = `${fs}px var(--font-mono)`;
+			ctx.fillStyle = "rgba(220, 220, 220, 0.9)";
+			ctx.textAlign = "left";
+			ctx.fillText(
+				text,
+				node.x + node.radius + 5 / camZoom,
+				node.y + fs * 0.35,
+			);
+			ctx.textAlign = "start";
+		}
+	}
+
+	if (graphSelected) {
+		const selNode = nodes.find((n) => n.data === graphSelected);
+		if (selNode && selNode.data !== graphHovered) {
+			const raw = (selNode.data.text || selNode.data.content || "")
+				.trim()
+				.toUpperCase();
+			if (raw) {
+				const fs = 10 / camZoom;
+				ctx.font = `${fs}px var(--font-mono)`;
+
+				// Word-wrap into lines
+				const maxW = 200 / camZoom;
+				const words = raw.split(" ");
+				const lines: string[] = [];
+				let cur = "";
+				for (const w of words) {
+					const test = cur ? cur + " " + w : w;
+					if (cur && ctx.measureText(test).width > maxW) {
+						lines.push(cur);
+						cur = w;
+					} else {
+						cur = test;
+					}
+				}
+				if (cur) lines.push(cur);
+				const dl = lines.slice(0, 8);
+
+				const lineH = fs * 1.8;
+				const padX = 10 / camZoom;
+				const padY = 8 / camZoom;
+				const boxW =
+					Math.max(...dl.map((l) => ctx.measureText(l).width)) + padX * 2;
+				const boxH = dl.length * lineH + padY * 2;
+
+				// Callout bracket positioned to the left of the node
+				const barLen = 16 / camZoom;
+				const edgeGap = 50 / camZoom;
+				const bracketRX = selNode.x - edgeGap;
+				const bracketLX = bracketRX - barLen;
+				const bx = bracketLX - 4 / camZoom - boxW;
+				const by = selNode.y - boxH * 0.35;
+
+				ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+				ctx.lineWidth = 1.5 / camZoom;
+				ctx.lineCap = "square";
+
+				// Diagonal connector: node → top-right corner of bracket
+				ctx.beginPath();
+				ctx.moveTo(selNode.x, selNode.y);
+				ctx.lineTo(bracketRX, by);
+				ctx.stroke();
+
+				// ] bracket shape
+				ctx.beginPath();
+				ctx.moveTo(bracketLX, by);
+				ctx.lineTo(bracketRX, by);
+				ctx.lineTo(bracketRX, by + boxH);
+				ctx.lineTo(bracketLX, by + boxH);
+				ctx.stroke();
+
+				ctx.lineCap = "butt";
+
+				// Black background for text block
+				ctx.fillStyle = "#050505";
+				ctx.fillRect(bx, by, boxW, boxH);
+
+				// First line: inverted (white bg, dark text)
+				ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+				ctx.fillRect(bx, by + padY, boxW, lineH);
+				ctx.fillStyle = "#050505";
+				ctx.textAlign = "center";
+				ctx.fillText(dl[0], bx + boxW / 2, by + padY + lineH * 0.75);
+
+				// Remaining lines: white text on black
+				ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+				for (let i = 1; i < dl.length; i++) {
+					ctx.fillText(dl[i], bx + boxW / 2, by + padY + lineH * (i + 0.75));
+				}
+				ctx.textAlign = "start";
+			}
+		}
+	}
+
+	ctx.restore();
+
+	// Minimal legend — monochrome
+	const legendSources = [
+		"claude-code",
+		"clawdbot",
+		"openclaw",
+		"opencode",
+		"manual",
+	];
+	const lx = 12;
+	let ly = h - 12 - legendSources.length * 16;
+	ctx.font = "10px var(--font-mono)";
+	for (const name of legendSources) {
+		ctx.beginPath();
+		ctx.arc(lx + 3, ly, 3, 0, Math.PI * 2);
+		ctx.fillStyle = "rgba(200, 200, 200, 0.5)";
+		ctx.fill();
+		ctx.fillStyle = "rgba(200, 200, 200, 0.35)";
+		ctx.fillText(name, lx + 12, ly + 3);
+		ly += 16;
+	}
+
+	animFrame = requestAnimationFrame(() => draw(ctx));
+}
+
+function setupInteractions() {
+	if (!canvas) return;
+
+	canvas.addEventListener("pointerdown", (e) => {
+		const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+		const node = findNodeAt(wx, wy);
+		if (node) {
+			isDragging = true;
+			dragNode = node;
+			node.fx = node.x;
+			node.fy = node.y;
+			simulation?.alphaTarget(0.3).restart();
+		} else {
+			isPanning = true;
+			panStartX = e.clientX;
+			panStartY = e.clientY;
+			panCamStartX = camX;
+			panCamStartY = camY;
+		}
+	});
+
+	canvas.addEventListener("pointermove", (e) => {
+		if (isDragging && dragNode) {
+			const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+			dragNode.fx = wx;
+			dragNode.fy = wy;
+			return;
+		}
+		if (isPanning) {
+			camX = panCamStartX - (e.clientX - panStartX) / camZoom;
+			camY = panCamStartY - (e.clientY - panStartY) / camZoom;
+			return;
+		}
+		const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+		const node = findNodeAt(wx, wy);
+		graphHovered = node?.data || null;
+		canvas!.style.cursor = node ? "pointer" : "grab";
+	});
+
+	const pointerUp = () => {
+		if (isDragging && dragNode) {
+			dragNode.fx = null;
+			dragNode.fy = null;
+			simulation?.alphaTarget(0);
+			dragNode = null;
+			isDragging = false;
+			return;
+		}
+		isPanning = false;
+	};
+
+	canvas.addEventListener("pointerup", pointerUp);
+	canvas.addEventListener("pointerleave", pointerUp);
+
+	canvas.addEventListener("click", (e) => {
+		if (isDragging) return;
+		const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+		const node = findNodeAt(wx, wy);
+		graphSelected = node?.data || null;
+	});
+
+	canvas.addEventListener(
+		"wheel",
+		(e) => {
+			e.preventDefault();
+			const factor = e.deltaY > 0 ? 0.9 : 1.1;
+			const newZoom = Math.max(0.1, Math.min(5, camZoom * factor));
+			const rect = canvas!.getBoundingClientRect();
+			const cx = rect.width / 2,
+				cy = rect.height / 2;
+			const mx = e.clientX - rect.left - cx;
+			const my = e.clientY - rect.top - cy;
+			const wx = mx / camZoom + camX;
+			const wy = my / camZoom + camY;
+			camZoom = newZoom;
+			camX = wx - mx / camZoom;
+			camY = wy - my / camZoom;
+		},
+		{ passive: false },
+	);
+}
+
+function resizeCanvas() {
+	if (!canvas) return;
+	const rect = canvas.parentElement!.getBoundingClientRect();
+	canvas.width = rect.width;
+	canvas.height = rect.height;
+}
+
+async function initGraph() {
+	if (graphInitialized) return;
+	graphInitialized = true;
+	graphStatus = "Loading embeddings...";
+
+	try {
+		const result = await getEmbeddings(true);
+
+		if (result.error) {
+			graphError = result.error;
+			graphStatus = "";
+			return;
+		}
+
+		embeddings = result.embeddings || [];
+		if (embeddings.length === 0 || !embeddings[0].vector) {
+			graphStatus = "";
+			if (embeddings.length > 0) graphError = "No vector data available";
+			return;
+		}
+
+		graphStatus = `Computing UMAP (${embeddings.length})...`;
+		await new Promise((r) => setTimeout(r, 50));
+
+		const vectors = embeddings.map((e: any) => e.vector);
+		const umap = new UMAP({
+			nComponents: 2,
+			nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
+			minDist: 0.1,
+			spread: 1.0,
+		});
+
+		let projected: number[][];
+		try {
+			projected = umap.fit(vectors);
+		} catch (umapErr: any) {
+			graphError = `UMAP failed: ${umapErr.message}`;
+			graphStatus = "";
+			return;
+		}
+
+		graphStatus = "Building graph...";
+		await new Promise((r) => setTimeout(r, 50));
+
+		let minX = Infinity,
+			maxX = -Infinity;
+		let minY = Infinity,
+			maxY = -Infinity;
+		for (const p of projected) {
+			if (p[0] < minX) minX = p[0];
+			if (p[0] > maxX) maxX = p[0];
+			if (p[1] < minY) minY = p[1];
+			if (p[1] > maxY) maxY = p[1];
+		}
+		const rangeX = maxX - minX || 1;
+		const rangeY = maxY - minY || 1;
+		const scale = 400;
+
+		nodes = embeddings.map((emb: any, i: number) => ({
+			x: ((projected[i][0] - minX) / rangeX - 0.5) * scale,
+			y: ((projected[i][1] - minY) / rangeY - 0.5) * scale,
+			radius: 2.5 + (emb.importance || 0.5) * 2.5,
+			color: "rgba(210, 210, 210, 0.85)",
+			data: emb,
+		}));
+
+		edges = buildKnnEdges(projected, 4).map(([a, b]) => ({
+			source: a,
+			target: b,
+		}));
+
+		simulation = forceSimulation(nodes as any)
+			.force("link", forceLink(edges).distance(60).strength(0.3))
+			.force("charge", forceManyBody().strength(-80))
+			.force("center", forceCenter(0, 0))
+			.force(
+				"collide",
+				forceCollide().radius((d: any) => d.radius + 2),
+			)
+			.alphaDecay(0.02)
+			.on("tick", () => {});
+
+		graphStatus = "";
+		await tick();
+
+		resizeCanvas();
+		window.addEventListener("resize", resizeCanvas);
+		setupInteractions();
+
+		const ctx = canvas!.getContext("2d")!;
+		draw(ctx);
+	} catch (e: any) {
+		graphError = e.message || "Failed to load embeddings";
+		graphStatus = "";
+	}
+}
+
+async function init3DGraph(projected3d: number[][]) {
+	if (!graph3dContainer) return;
+
+	if (graph3d) {
+		graph3d._destructor?.();
+		graph3d = null;
+	}
+
+	const { default: ForceGraph3D } = await import("3d-force-graph");
+
+	const nodeData = embeddings.map((e: any, i: number) => ({
+		id: e.id,
+		content: e.content,
+		who: e.who,
+		importance: e.importance ?? 0.5,
+		x: projected3d[i][0] * 50,
+		y: projected3d[i][1] * 50,
+		z: projected3d[i][2] * 50,
+		color: sourceColors[e.who] ?? sourceColors["unknown"],
+		val: 1 + (e.importance ?? 0.5) * 3,
+	}));
+
+	const edgePairs = buildKnnEdges(projected3d, 4);
+	const linkData = edgePairs.map(([a, b]) => ({
+		source: nodeData[a].id,
+		target: nodeData[b].id,
+	}));
+
+	const rect = graph3dContainer.getBoundingClientRect();
+	graph3d = new ForceGraph3D(graph3dContainer)
+		.width(rect.width || graph3dContainer.offsetWidth)
+		.height(rect.height || graph3dContainer.offsetHeight)
+		.graphData({ nodes: nodeData, links: linkData })
+		.nodeLabel((n: any) => n.content?.slice(0, 80) ?? "")
+		.nodeColor(() => "#d4d4d4")
+		.nodeVal((n: any) => 0.6 + (n.importance ?? 0.5) * 1.5)
+		.linkColor(() => "rgba(160,160,160,0.5)")
+		.linkWidth(0.5)
+		.backgroundColor("#050505")
+		.onNodeClick((n: any) => {
+			graphSelected = n;
+		});
+}
+
+async function switchGraphMode(mode: "2d" | "3d") {
+	if (graphMode === mode) return;
+	graphMode = mode;
+
+	if (mode === "3d") {
+		cancelAnimationFrame(animFrame);
+
+		if (!graphInitialized || embeddings.length === 0) return;
+
+		graphStatus = "Computing 3D layout...";
+		await new Promise((r) => setTimeout(r, 50));
+
+		const vectors = embeddings.map((e: any) => e.vector);
+		const umap3d = new UMAP({
+			nComponents: 3,
+			nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
+			minDist: 0.1,
+			spread: 1.0,
+		});
+
+		let projected3d: number[][];
+		try {
+			projected3d = umap3d.fit(vectors);
+		} catch (e: any) {
+			graphError = `3D UMAP failed: ${e.message}`;
+			graphStatus = "";
+			graphMode = "2d";
+			const ctx = canvas?.getContext("2d");
+			if (ctx) draw(ctx);
+			return;
+		}
+
+		graphStatus = "";
+		await tick();
+		await init3DGraph(projected3d);
+	} else {
+		if (graph3d) {
+			graph3d._destructor?.();
+			graph3d = null;
+		}
+		await tick();
+		const ctx = canvas?.getContext("2d");
+		if (ctx) {
+			cancelAnimationFrame(animFrame);
+			draw(ctx);
+		}
+	}
+}
+
+$effect(() => {
+	if (activeTab === "embeddings" && canvas && !graphInitialized) {
+		initGraph();
+	}
+});
+
+$effect(() => {
+	// Restart 2D loop when canvas is (re)mounted and data is ready
+	if (
+		activeTab === "embeddings" &&
+		canvas &&
+		graphInitialized &&
+		graphMode === "2d" &&
+		nodes.length > 0
+	) {
+		tick().then(() => {
+			resizeCanvas();
+			cancelAnimationFrame(animFrame);
+			const ctx = canvas?.getContext("2d");
+			if (ctx) draw(ctx);
+		});
+	}
+});
+
+// Clean up when leaving the embeddings tab
+$effect(() => {
+	if (activeTab !== "embeddings") {
+		cancelAnimationFrame(animFrame);
+		if (graph3d) {
+			graph3d._destructor?.();
+			graph3d = null;
+		}
+		graphMode = "2d";
+	}
+});
+
+// --- Memory sidebar ---
+let memoryQuery = $state("");
+let memoryResults = $state<any[]>([]);
+let memorySearched = $state(false);
+let searchingMemory = $state(false);
+
+// Filter panel state
+let filtersOpen = $state(false);
+let filterType = $state("");
+let filterTags = $state("");
+let filterWho = $state("");
+let filterPinned = $state(false);
+let filterImportanceMin = $state("");
+let filterSince = $state("");
+let whoOptions = $state<string[]>([]);
+
+// Similar-results state
+let similarSourceId = $state<string | null>(null);
+let similarSource = $state<any>(null);
+let similarResults = $state<any[]>([]);
+let loadingSimilar = $state(false);
+
+let hasActiveFilters = $derived(
+	!!(
+		filterType ||
+		filterTags ||
+		filterWho ||
+		filterPinned ||
+		filterImportanceMin ||
+		filterSince
+	),
+);
+
+let displayMemories = $derived(
+	similarSourceId
+		? similarResults
+		: memorySearched || hasActiveFilters
+			? memoryResults
+			: (data.memories ?? []),
+);
+
+function filterSearchParams(): string {
+	const p = new URLSearchParams();
+	if (memoryQuery.trim()) p.set("q", memoryQuery.trim());
+	if (filterType) p.set("type", filterType);
+	if (filterTags) p.set("tags", filterTags);
+	if (filterWho) p.set("who", filterWho);
+	if (filterPinned) p.set("pinned", "1");
+	if (filterImportanceMin) p.set("importance_min", filterImportanceMin);
+	if (filterSince) p.set("since", filterSince);
+	return p.toString();
+}
+
+async function doSearch() {
+	const hasQuery = memoryQuery.trim();
+	if (!hasQuery && !hasActiveFilters) {
+		memoryResults = [];
+		memorySearched = false;
+		similarSourceId = null;
+		return;
+	}
+	similarSourceId = null;
+	searchingMemory = true;
+	try {
+		const results = await searchMemories(memoryQuery.trim(), {
+			type: filterType || undefined,
+			tags: filterTags || undefined,
+			who: filterWho || undefined,
+			pinned: filterPinned || undefined,
+			importance_min: filterImportanceMin
+				? parseFloat(filterImportanceMin)
+				: undefined,
+			since: filterSince || undefined,
+		});
+		memoryResults = results;
+		memorySearched = true;
+	} finally {
+		searchingMemory = false;
+	}
+}
+
+async function findSimilar(id: string, sourceMemory: any) {
+	similarSourceId = id;
+	similarSource = sourceMemory;
+	loadingSimilar = true;
+	similarResults = [];
+	try {
+		const results = await getSimilarMemories(id, 10, filterType || undefined);
+		similarResults = results;
+	} finally {
+		loadingSimilar = false;
+	}
+}
+
+function clearAll() {
+	memoryQuery = "";
+	memoryResults = [];
+	memorySearched = false;
+	filterType = "";
+	filterTags = "";
+	filterWho = "";
+	filterPinned = false;
+	filterImportanceMin = "";
+	filterSince = "";
+	similarSourceId = null;
+	similarSource = null;
+	similarResults = [];
+}
+
+// Trigger search whenever filters change (without needing Enter)
+$effect(() => {
+	// Track all filter values to react to changes
+	const _ = filterType,
+		__ = filterTags,
+		___ = filterWho,
+		____ = filterPinned,
+		_____ = filterImportanceMin,
+		______ = filterSince;
+	if (hasActiveFilters || memorySearched) {
+		doSearch();
+	}
+});
+
+$effect(() => {
+	// Load who options once on mount
+	getDistinctWho()
+		.then((values) => {
+			whoOptions = values;
+		})
+		.catch(() => {});
+});
+
+function formatDate(dateStr: string): string {
+	try {
+		const date = new Date(dateStr);
+		return date.toLocaleString("en-US", {
+			month: "short",
+			day: "numeric",
+			hour: "numeric",
+			minute: "2-digit",
+		});
+	} catch {
+		return dateStr;
+	}
+}
 </script>
 
 <svelte:head>

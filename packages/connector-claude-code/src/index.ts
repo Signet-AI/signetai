@@ -17,18 +17,10 @@ import {
 	type InstallResult,
 	type UninstallResult,
 } from "@signet/connector-base";
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-	type IdentityMap,
-	loadIdentityFilesSync,
-} from "@signet/core";
+import { type IdentityMap, loadIdentityFilesSync } from "@signet/core";
 
 // ============================================================================
 // Types
@@ -380,10 +372,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 		if (identity) {
 			const content = this.generateFromIdentity(identity, basePath);
 			const header = this.generateHeader(join(basePath, "agent.yaml"));
-			writeFileSync(
-				claudeMdPath,
-				header + this.buildSignetBlock() + content,
-			);
+			writeFileSync(claudeMdPath, header + this.buildSignetBlock() + content);
 			return claudeMdPath;
 		}
 

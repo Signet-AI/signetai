@@ -10,152 +10,153 @@
  */
 
 :root {
-  /* Primitives - reduced palette, clearer intent */
-  --bg-canvas: #0a0a0b;
-  --bg-surface: #0f0f10;
-  --bg-elevated: #131314;
-  
-  --text-primary: #e8e8e6;
-  --text-secondary: #8a8a88;
-  --text-tertiary: #5a5a58;
-  --text-muted: #40403e;
-  
-  --accent-seal: #5eada4;
-  --accent-seal-dim: rgba(94, 173, 164, 0.08);
-  --accent-seal-ring: rgba(94, 173, 164, 0.15);
-  
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --error: #f87171;
-  
-  /* Borders - hairline system */
-  --border-subtle: rgba(255, 255, 255, 0.04);
-  --border-standard: rgba(255, 255, 255, 0.08);
-  --border-emphasis: rgba(255, 255, 255, 0.12);
-  --border-accent: rgba(94, 173, 164, 0.25);
-  
-  /* Spacing - 4px base */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-  
-  /* Radii - restrained */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  
-  /* Typography */
-  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
-  
-  color-scheme: dark;
+	/* Primitives - reduced palette, clearer intent */
+	--bg-canvas: #0a0a0b;
+	--bg-surface: #0f0f10;
+	--bg-elevated: #131314;
+
+	--text-primary: #e8e8e6;
+	--text-secondary: #8a8a88;
+	--text-tertiary: #5a5a58;
+	--text-muted: #40403e;
+
+	--accent-seal: #5eada4;
+	--accent-seal-dim: rgba(94, 173, 164, 0.08);
+	--accent-seal-ring: rgba(94, 173, 164, 0.15);
+
+	--success: #4ade80;
+	--warning: #fbbf24;
+	--error: #f87171;
+
+	/* Borders - hairline system */
+	--border-subtle: rgba(255, 255, 255, 0.04);
+	--border-standard: rgba(255, 255, 255, 0.08);
+	--border-emphasis: rgba(255, 255, 255, 0.12);
+	--border-accent: rgba(94, 173, 164, 0.25);
+
+	/* Spacing - 4px base */
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-5: 20px;
+	--space-6: 24px;
+	--space-8: 32px;
+
+	/* Radii - restrained */
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 8px;
+
+	/* Typography */
+	--font-sans: "Inter", system-ui, -apple-system, sans-serif;
+	--font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+
+	color-scheme: dark;
 }
 
 [data-theme="light"] {
-  --bg-canvas: #fafaf9;
-  --bg-surface: #ffffff;
-  --bg-elevated: #f5f5f4;
-  
-  --text-primary: #1c1917;
-  --text-secondary: #78716c;
-  --text-tertiary: #a8a29e;
-  --text-muted: #d6d3d1;
-  
-  --accent-seal: #3d8a82;
-  --accent-seal-dim: rgba(61, 138, 130, 0.06);
-  --accent-seal-ring: rgba(61, 138, 130, 0.12);
-  
-  --success: #16a34a;
-  --warning: #d97706;
-  --error: #dc2626;
-  
-  --border-subtle: rgba(0, 0, 0, 0.04);
-  --border-standard: rgba(0, 0, 0, 0.08);
-  --border-emphasis: rgba(0, 0, 0, 0.12);
-  --border-accent: rgba(61, 138, 130, 0.2);
-  
-  color-scheme: light;
+	--bg-canvas: #fafaf9;
+	--bg-surface: #ffffff;
+	--bg-elevated: #f5f5f4;
+
+	--text-primary: #1c1917;
+	--text-secondary: #78716c;
+	--text-tertiary: #a8a29e;
+	--text-muted: #d6d3d1;
+
+	--accent-seal: #3d8a82;
+	--accent-seal-dim: rgba(61, 138, 130, 0.06);
+	--accent-seal-ring: rgba(61, 138, 130, 0.12);
+
+	--success: #16a34a;
+	--warning: #d97706;
+	--error: #dc2626;
+
+	--border-subtle: rgba(0, 0, 0, 0.04);
+	--border-standard: rgba(0, 0, 0, 0.08);
+	--border-emphasis: rgba(0, 0, 0, 0.12);
+	--border-accent: rgba(61, 138, 130, 0.2);
+
+	color-scheme: light;
 }
 
 @theme {
-  --color-canvas: var(--bg-canvas);
-  --color-surface: var(--bg-surface);
-  --color-elevated: var(--bg-elevated);
-  --color-text: var(--text-primary);
-  --color-text-secondary: var(--text-secondary);
-  --color-text-tertiary: var(--text-tertiary);
-  --color-seal: var(--accent-seal);
-  --color-success: var(--success);
-  --color-warning: var(--warning);
-  --color-error: var(--error);
+	--color-canvas: var(--bg-canvas);
+	--color-surface: var(--bg-surface);
+	--color-elevated: var(--bg-elevated);
+	--color-text: var(--text-primary);
+	--color-text-secondary: var(--text-secondary);
+	--color-text-tertiary: var(--text-tertiary);
+	--color-seal: var(--accent-seal);
+	--color-success: var(--success);
+	--color-warning: var(--warning);
+	--color-error: var(--error);
 }
 
 /* === Base === */
 
 * {
-  box-sizing: border-box;
+	box-sizing: border-box;
 }
 
 html {
-  background: var(--bg-canvas);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 13px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+	background: var(--bg-canvas);
+	color: var(--text-primary);
+	font-family: var(--font-sans);
+	font-size: 13px;
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
 }
 
 body {
-  margin: 0;
-  min-height: 100vh;
+	margin: 0;
+	min-height: 100vh;
 }
 
 ::selection {
-  background: var(--accent-seal-dim);
-  color: var(--text-primary);
+	background: var(--accent-seal-dim);
+	color: var(--text-primary);
 }
 
 /* Subtle scrollbars */
-::-webkit-scrollbar { 
-  width: 3px; 
-  height: 3px;
+::-webkit-scrollbar {
+	width: 3px;
+	height: 3px;
 }
-::-webkit-scrollbar-track { 
-  background: transparent; 
+::-webkit-scrollbar-track {
+	background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-standard);
-  border-radius: 3px;
+	background: var(--border-standard);
+	border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
+	background: var(--text-tertiary);
 }
 
 /* Focus - minimal ring */
 :focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 1.5px var(--accent-seal-ring);
+	outline: none;
+	box-shadow: 0 0 0 1.5px var(--accent-seal-ring);
 }
 
 /* Transitions - restrained */
-button, a, input {
-  transition: 
-    background-color 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease,
-    box-shadow 120ms ease;
+button,
+a,
+input {
+	transition: background-color 120ms ease, border-color 120ms ease, color 120ms
+		ease, box-shadow 120ms ease;
 }
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
 }

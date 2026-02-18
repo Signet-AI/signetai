@@ -1,10 +1,10 @@
 export function parseMemory(markdown: string): Record<string, any> {
-  // TODO: Parse memory markdown into structured data
-  return { raw: markdown };
+	// TODO: Parse memory markdown into structured data
+	return { raw: markdown };
 }
 
 export function generateMemory(): string {
-  return `# Memory
+	return `# Memory
 
 ## User Profile
 
