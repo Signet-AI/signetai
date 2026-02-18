@@ -261,6 +261,11 @@
       if (logEventSource) {
         logEventSource.close();
       }
+      cancelAnimationFrame(animFrame);
+      if (graph3d) {
+        graph3d._destructor?.();
+        graph3d = null;
+      }
     };
   });
 
@@ -365,7 +370,11 @@
   let edges = $state<GraphEdge[]>([]);
   let simulation: any = null;
   let animFrame = 0;
-  let glowPhase = 0;
+
+  // 3D graph state
+  let graphMode: '2d' | '3d' = $state('2d');
+  let graph3d: any = null;
+  let graph3dContainer = $state<HTMLDivElement | null>(null);
 
   function hexToRgb(hex: string): [number, number, number] {
     const v = parseInt(hex.slice(1), 16);
@@ -381,9 +390,12 @@
       const dists: { j: number; d: number }[] = [];
       for (let j = 0; j < projected.length; j++) {
         if (i === j) continue;
-        const dx = projected[i][0] - projected[j][0];
-        const dy = projected[i][1] - projected[j][1];
-        dists.push({ j, d: dx * dx + dy * dy });
+        let d = 0;
+        for (let c = 0; c < projected[i].length; c++) {
+          const diff = projected[i][c] - projected[j][c];
+          d += diff * diff;
+        }
+        dists.push({ j, d });
       }
       dists.sort((a, b) => a.d - b.d);
       for (let n = 0; n < Math.min(k, dists.length); n++) {
@@ -421,7 +433,8 @@
 
   function draw(ctx: CanvasRenderingContext2D) {
     const w = canvas!.width, h = canvas!.height;
-    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#050505';
+    ctx.fillRect(0, 0, w, h);
     ctx.save();
     ctx.translate(w / 2, h / 2);
     ctx.scale(camZoom, camZoom);
@@ -430,43 +443,25 @@
     for (const edge of edges) {
       const s = edge.source as GraphNode;
       const t = edge.target as GraphNode;
-      const [sr, sg, sb] = hexToRgb(s.color);
-      const [tr, tg, tb] = hexToRgb(t.color);
       ctx.beginPath();
       ctx.moveTo(s.x, s.y);
       ctx.lineTo(t.x, t.y);
-      ctx.strokeStyle = `rgba(${(sr+tr)>>1},${(sg+tg)>>1},${(sb+tb)>>1},0.08)`;
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(180, 180, 180, 0.45)';
+      ctx.lineWidth = 0.8 / camZoom;
       ctx.stroke();
     }
 
-    glowPhase += 0.015;
-    const pulse = 0.6 + 0.4 * Math.sin(glowPhase);
-
     for (const node of nodes) {
-      const [r, g, b] = hexToRgb(node.color);
-      const glowR = node.radius * (2.5 + 0.5 * pulse);
-      const grad = ctx.createRadialGradient(
-        node.x, node.y, node.radius * 0.5,
-        node.x, node.y, glowR
-      );
-      grad.addColorStop(0, `rgba(${r},${g},${b},${0.2 * pulse})`);
-      grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, glowR, 0, Math.PI * 2);
-      ctx.fillStyle = grad;
-      ctx.fill();
-
       ctx.beginPath();
       ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-      ctx.fillStyle = node.color;
+      ctx.fillStyle = 'rgba(210, 210, 210, 0.85)';
       ctx.fill();
 
       if (graphSelected && node.data === graphSelected) {
         ctx.beginPath();
         ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
-        ctx.strokeStyle = '#5eada4';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.lineWidth = 1.5 / camZoom;
         ctx.stroke();
       }
     }
@@ -474,43 +469,110 @@
     if (graphHovered) {
       const node = nodes.find(n => n.data === graphHovered);
       if (node) {
-        const text = (graphHovered.text || '').slice(0, 60)
-          + (graphHovered.text?.length > 60 ? '...' : '');
-        ctx.font = `${10 / camZoom}px var(--font-mono)`;
-        const metrics = ctx.measureText(text);
-        const pad = 4 / camZoom;
-        const bx = node.x - metrics.width / 2 - pad;
-        const by = node.y - node.radius - 18 / camZoom;
-        ctx.fillStyle = 'rgba(15, 15, 15, 0.9)';
-        ctx.beginPath();
-        ctx.roundRect(
-          bx, by - 10 / camZoom,
-          metrics.width + pad * 2, 14 / camZoom,
-          3 / camZoom
-        );
-        ctx.fill();
-        ctx.fillStyle = '#d4d4d4';
-        ctx.textAlign = 'center';
-        ctx.fillText(text, node.x, by);
+        const raw = graphHovered.text || graphHovered.content || '';
+        const text = raw.slice(0, 48) + (raw.length > 48 ? '...' : '');
+        const fs = 9 / camZoom;
+        ctx.font = `${fs}px var(--font-mono)`;
+        ctx.fillStyle = 'rgba(220, 220, 220, 0.9)';
+        ctx.textAlign = 'left';
+        ctx.fillText(text, node.x + node.radius + 5 / camZoom, node.y + fs * 0.35);
         ctx.textAlign = 'start';
+      }
+    }
+
+    if (graphSelected) {
+      const selNode = nodes.find(n => n.data === graphSelected);
+      if (selNode && selNode.data !== graphHovered) {
+        const raw = (selNode.data.text || selNode.data.content || '').trim().toUpperCase();
+        if (raw) {
+          const fs = 10 / camZoom;
+          ctx.font = `${fs}px var(--font-mono)`;
+
+          // Word-wrap into lines
+          const maxW = 200 / camZoom;
+          const words = raw.split(' ');
+          const lines: string[] = [];
+          let cur = '';
+          for (const w of words) {
+            const test = cur ? cur + ' ' + w : w;
+            if (cur && ctx.measureText(test).width > maxW) {
+              lines.push(cur);
+              cur = w;
+            } else {
+              cur = test;
+            }
+          }
+          if (cur) lines.push(cur);
+          const dl = lines.slice(0, 8);
+
+          const lineH = fs * 1.8;
+          const padX = 10 / camZoom;
+          const padY = 8 / camZoom;
+          const boxW = Math.max(...dl.map(l => ctx.measureText(l).width)) + padX * 2;
+          const boxH = dl.length * lineH + padY * 2;
+
+          // Callout bracket positioned to the left of the node
+          const barLen = 16 / camZoom;
+          const edgeGap = 50 / camZoom;
+          const bracketRX = selNode.x - edgeGap;
+          const bracketLX = bracketRX - barLen;
+          const bx = bracketLX - 4 / camZoom - boxW;
+          const by = selNode.y - boxH * 0.35;
+
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+          ctx.lineWidth = 1.5 / camZoom;
+          ctx.lineCap = 'square';
+
+          // Diagonal connector: node → top-right corner of bracket
+          ctx.beginPath();
+          ctx.moveTo(selNode.x, selNode.y);
+          ctx.lineTo(bracketRX, by);
+          ctx.stroke();
+
+          // ] bracket shape
+          ctx.beginPath();
+          ctx.moveTo(bracketLX, by);
+          ctx.lineTo(bracketRX, by);
+          ctx.lineTo(bracketRX, by + boxH);
+          ctx.lineTo(bracketLX, by + boxH);
+          ctx.stroke();
+
+          ctx.lineCap = 'butt';
+
+          // Black background for text block
+          ctx.fillStyle = '#050505';
+          ctx.fillRect(bx, by, boxW, boxH);
+
+          // First line: inverted (white bg, dark text)
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+          ctx.fillRect(bx, by + padY, boxW, lineH);
+          ctx.fillStyle = '#050505';
+          ctx.textAlign = 'center';
+          ctx.fillText(dl[0], bx + boxW / 2, by + padY + lineH * 0.75);
+
+          // Remaining lines: white text on black
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          for (let i = 1; i < dl.length; i++) {
+            ctx.fillText(dl[i], bx + boxW / 2, by + padY + lineH * (i + 0.75));
+          }
+          ctx.textAlign = 'start';
+        }
       }
     }
 
     ctx.restore();
 
-    // Minimal legend
-    const legendSources = Object.entries(sourceColors).filter(
-      ([k]) => k !== 'unknown'
-    );
+    // Minimal legend — monochrome
+    const legendSources = ['claude-code', 'clawdbot', 'openclaw', 'opencode', 'manual'];
     const lx = 12;
     let ly = h - 12 - legendSources.length * 16;
     ctx.font = '10px var(--font-mono)';
-    for (const [name, color] of legendSources) {
+    for (const name of legendSources) {
       ctx.beginPath();
       ctx.arc(lx + 3, ly, 3, 0, Math.PI * 2);
-      ctx.fillStyle = color;
+      ctx.fillStyle = 'rgba(200, 200, 200, 0.5)';
       ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillStyle = 'rgba(200, 200, 200, 0.35)';
       ctx.fillText(name, lx + 12, ly + 3);
       ly += 16;
     }
@@ -661,8 +723,8 @@
       nodes = embeddings.map((emb: any, i: number) => ({
         x: ((projected[i][0] - minX) / rangeX - 0.5) * scale,
         y: ((projected[i][1] - minY) / rangeY - 0.5) * scale,
-        radius: 3 + (emb.importance || 0.5) * 5,
-        color: sourceColors[emb.who] || sourceColors.unknown,
+        radius: 2.5 + (emb.importance || 0.5) * 2.5,
+        color: 'rgba(210, 210, 210, 0.85)',
         data: emb,
       }));
 
@@ -697,6 +759,97 @@
     }
   }
 
+  async function init3DGraph(projected3d: number[][]) {
+    if (!graph3dContainer) return;
+
+    if (graph3d) {
+      graph3d._destructor?.();
+      graph3d = null;
+    }
+
+    const { default: ForceGraph3D } = await import('3d-force-graph');
+
+    const nodeData = embeddings.map((e: any, i: number) => ({
+      id: e.id,
+      content: e.content,
+      who: e.who,
+      importance: e.importance ?? 0.5,
+      x: projected3d[i][0] * 50,
+      y: projected3d[i][1] * 50,
+      z: projected3d[i][2] * 50,
+      color: sourceColors[e.who] ?? sourceColors['unknown'],
+      val: 1 + (e.importance ?? 0.5) * 3,
+    }));
+
+    const edgePairs = buildKnnEdges(projected3d, 4);
+    const linkData = edgePairs.map(([a, b]) => ({
+      source: nodeData[a].id,
+      target: nodeData[b].id,
+    }));
+
+    const rect = graph3dContainer.getBoundingClientRect();
+    graph3d = new ForceGraph3D(graph3dContainer)
+      .width(rect.width || graph3dContainer.offsetWidth)
+      .height(rect.height || graph3dContainer.offsetHeight)
+      .graphData({ nodes: nodeData, links: linkData })
+      .nodeLabel((n: any) => n.content?.slice(0, 80) ?? '')
+      .nodeColor(() => '#d4d4d4')
+      .nodeVal((n: any) => 0.6 + (n.importance ?? 0.5) * 1.5)
+      .linkColor(() => 'rgba(160,160,160,0.5)')
+      .linkWidth(0.5)
+      .backgroundColor('#050505')
+      .onNodeClick((n: any) => { graphSelected = n; });
+  }
+
+  async function switchGraphMode(mode: '2d' | '3d') {
+    if (graphMode === mode) return;
+    graphMode = mode;
+
+    if (mode === '3d') {
+      cancelAnimationFrame(animFrame);
+
+      if (!graphInitialized || embeddings.length === 0) return;
+
+      graphStatus = 'Computing 3D layout...';
+      await new Promise(r => setTimeout(r, 50));
+
+      const vectors = embeddings.map((e: any) => e.vector);
+      const umap3d = new UMAP({
+        nComponents: 3,
+        nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
+        minDist: 0.1,
+        spread: 1.0,
+      });
+
+      let projected3d: number[][];
+      try {
+        projected3d = umap3d.fit(vectors);
+      } catch (e: any) {
+        graphError = `3D UMAP failed: ${e.message}`;
+        graphStatus = '';
+        graphMode = '2d';
+        const ctx = canvas?.getContext('2d');
+        if (ctx) draw(ctx);
+        return;
+      }
+
+      graphStatus = '';
+      await tick();
+      await init3DGraph(projected3d);
+    } else {
+      if (graph3d) {
+        graph3d._destructor?.();
+        graph3d = null;
+      }
+      await tick();
+      const ctx = canvas?.getContext('2d');
+      if (ctx) {
+        cancelAnimationFrame(animFrame);
+        draw(ctx);
+      }
+    }
+  }
+
   $effect(() => {
     if (activeTab === 'embeddings' && canvas && !graphInitialized) {
       initGraph();
@@ -704,8 +857,26 @@
   });
 
   $effect(() => {
-    if (activeTab === 'embeddings' && canvas && graphInitialized) {
-      tick().then(() => resizeCanvas());
+    // Restart 2D loop when canvas is (re)mounted and data is ready
+    if (activeTab === 'embeddings' && canvas && graphInitialized && graphMode === '2d' && nodes.length > 0) {
+      tick().then(() => {
+        resizeCanvas();
+        cancelAnimationFrame(animFrame);
+        const ctx = canvas?.getContext('2d');
+        if (ctx) draw(ctx);
+      });
+    }
+  });
+
+  // Clean up when leaving the embeddings tab
+  $effect(() => {
+    if (activeTab !== 'embeddings') {
+      cancelAnimationFrame(animFrame);
+      if (graph3d) {
+        graph3d._destructor?.();
+        graph3d = null;
+      }
+      graphMode = '2d';
     }
   });
 
@@ -987,6 +1158,20 @@
             </button>
           {:else if activeTab === 'embeddings'}
             <span class="status-text">{embeddings.length} embeddings</span>
+            {#if graphInitialized && embeddings.length > 0}
+              <div class="mode-toggle">
+                <button
+                  class="mode-btn"
+                  class:mode-btn-active={graphMode === '2d'}
+                  onclick={() => switchGraphMode('2d')}
+                >2D</button>
+                <button
+                  class="mode-btn"
+                  class:mode-btn-active={graphMode === '3d'}
+                  onclick={() => switchGraphMode('3d')}
+                >3D</button>
+              </div>
+            {/if}
           {:else if activeTab === 'logs'}
             <span class="status-text">{logs.length} entries</span>
             <button 
@@ -1064,7 +1249,22 @@
                 <p>Loading...</p>
               </div>
             {/if}
-            <canvas bind:this={canvas} class="canvas"></canvas>
+            <div class="graph-corners" aria-hidden="true">
+              <span class="corner corner-tl"></span>
+              <span class="corner corner-tr"></span>
+              <span class="corner corner-bl"></span>
+              <span class="corner corner-br"></span>
+            </div>
+            <canvas
+              bind:this={canvas}
+              class="canvas"
+              style:display={graphMode === '2d' ? 'block' : 'none'}
+            ></canvas>
+            <div
+              bind:this={graph3dContainer}
+              class="graph3d-container"
+              style:display={graphMode === '3d' ? 'block' : 'none'}
+            ></div>
           </div>
         {:else if activeTab === 'logs'}
           <div class="logs-container">
@@ -1277,7 +1477,7 @@
           </span>
         {:else if activeTab === 'embeddings'}
           <span>{nodes.length} nodes · {edges.length} edges</span>
-          <span class="statusbar-right">UMAP</span>
+          <span class="statusbar-right">UMAP · {graphMode.toUpperCase()}</span>
         {:else if activeTab === 'logs'}
           <span>{logs.length} entries</span>
           <span class="statusbar-right">
@@ -1770,17 +1970,74 @@
   }
 
   /* === Canvas === */
-  
+
   .canvas-container {
     flex: 1;
     position: relative;
     overflow: hidden;
+    background: #050505;
   }
+
+  .graph-corners {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  .corner {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-color: rgba(255, 255, 255, 0.22);
+    border-style: solid;
+  }
+
+  .corner-tl { top: 10px;    left: 10px;  border-width: 1px 0 0 1px; }
+  .corner-tr { top: 10px;    right: 10px; border-width: 1px 1px 0 0; }
+  .corner-bl { bottom: 10px; left: 10px;  border-width: 0 0 1px 1px; }
+  .corner-br { bottom: 10px; right: 10px; border-width: 0 1px 1px 0; }
 
   .canvas {
     width: 100%;
     height: 100%;
     cursor: grab;
+  }
+
+  .graph3d-container {
+    position: absolute;
+    inset: 0;
+  }
+
+  /* === 2D/3D Mode Toggle === */
+
+  .mode-toggle {
+    display: flex;
+    border: 1px solid var(--border-standard);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .mode-btn {
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 500;
+    font-family: var(--font-mono);
+    color: var(--text-tertiary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+  }
+
+  .mode-btn:hover {
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+  }
+
+  .mode-btn-active {
+    color: var(--accent-seal);
+    background: var(--accent-seal-dim);
   }
 
   .overlay {
