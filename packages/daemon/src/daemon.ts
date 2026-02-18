@@ -2476,6 +2476,9 @@ function startClaudeMemoryWatcher() {
   const claudeProjectsDir = join(homedir(), '.claude', 'projects');
   if (!existsSync(claudeProjectsDir)) return;
   
+  // Sync existing files first
+  syncExistingClaudeMemories(claudeProjectsDir);
+  
   const claudeWatcher = watch(
     join(claudeProjectsDir, '**', 'memory', 'MEMORY.md'),
     { persistent: true, ignoreInitial: true }
@@ -2492,7 +2495,28 @@ function startClaudeMemoryWatcher() {
   });
 }
 
-async function syncClaudeMemoryFile(filePath: string) {
+async function syncExistingClaudeMemories(claudeProjectsDir: string) {
+  try {
+    const projects = readdirSync(claudeProjectsDir);
+    let totalSynced = 0;
+    
+    for (const project of projects) {
+      const memoryFile = join(claudeProjectsDir, project, 'memory', 'MEMORY.md');
+      if (existsSync(memoryFile)) {
+        const count = await syncClaudeMemoryFile(memoryFile);
+        totalSynced += count;
+      }
+    }
+    
+    if (totalSynced > 0) {
+      logger.info('watcher', 'Synced existing Claude memories', { count: totalSynced });
+    }
+  } catch (e) {
+    logger.error('watcher', 'Failed to sync existing Claude memories', { error: String(e) });
+  }
+}
+
+async function syncClaudeMemoryFile(filePath: string): Promise<number> {
   try {
     const content = readFileSync(filePath, 'utf-8');
     const lines = content.split('\n');
@@ -2545,8 +2569,10 @@ async function syncClaudeMemoryFile(filePath: string) {
         logger.error('watcher', 'Failed to sync memory', { error: String(e) });
       }
     }
+    return memories.length;
   } catch (e) {
     logger.error('watcher', 'Failed to read Claude memory file', { error: String(e) });
+    return 0;
   }
 }
 

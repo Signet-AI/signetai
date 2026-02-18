@@ -1,6 +1,6 @@
 {
   "name": "@signet/sdk",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "description": "SDK for integrating Signet into applications",
   "type": "module",
   "main": "./dist/index.js",

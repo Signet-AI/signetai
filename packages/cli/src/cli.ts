@@ -560,7 +560,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.24';
+const VERSION = '0.1.25';
 
 // ============================================================================
 // Helpers
