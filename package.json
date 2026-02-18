@@ -13,7 +13,8 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run --filter '*' build",
+    "build": "bun run build:core && bun run --filter '!@signet/core' build",
+    "build:core": "cd packages/core && bun run build",
     "build:publish": "bun run build:dashboard && bun run build:signetai",
     "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
     "build:signetai": "cd packages/signetai && bun run build",
