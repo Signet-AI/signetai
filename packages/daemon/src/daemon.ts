@@ -72,6 +72,16 @@ interface EmbeddingConfig {
   api_key?: string;
 }
 
+interface EmbeddingStatus {
+  provider: 'ollama' | 'openai';
+  model: string;
+  available: boolean;
+  dimensions?: number;
+  base_url: string;
+  error?: string;
+  checkedAt: string;
+}
+
 interface MemorySearchConfig {
   alpha: number;
   top_k: number;
@@ -232,6 +242,68 @@ function vectorToBlob(vec: number[]): Buffer {
 
 function blobToVector(blob: Buffer): Float32Array {
   return new Float32Array(blob.buffer, blob.byteOffset, blob.byteLength / 4);
+}
+
+// Status cache for embedding provider
+let cachedEmbeddingStatus: EmbeddingStatus | null = null;
+let statusCacheTime = 0;
+const STATUS_CACHE_TTL = 30000; // 30 seconds
+
+async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingStatus> {
+  const now = Date.now();
+
+  // Return cached status if fresh
+  if (cachedEmbeddingStatus && (now - statusCacheTime) < STATUS_CACHE_TTL) {
+    return cachedEmbeddingStatus;
+  }
+
+  const status: EmbeddingStatus = {
+    provider: cfg.provider,
+    model: cfg.model,
+    base_url: cfg.base_url,
+    available: false,
+    checkedAt: new Date().toISOString(),
+  };
+
+  try {
+    if (cfg.provider === 'ollama') {
+      // Check Ollama API availability
+      const res = await fetch(`${cfg.base_url.replace(/\/$/, '')}/api/tags`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!res.ok) {
+        status.error = `Ollama returned ${res.status}`;
+      } else {
+        const data = await res.json() as { models?: { name: string }[] };
+        const models = data.models ?? [];
+        const modelExists = models.some(m => m.name.startsWith(cfg.model));
+
+        if (!modelExists) {
+          status.error = `Model '${cfg.model}' not found. Available: ${models.map(m => m.name).join(', ') || 'none'}`;
+        } else {
+          status.available = true;
+          status.dimensions = cfg.dimensions;
+        }
+      }
+    } else {
+      // OpenAI: test with a minimal embedding request
+      const testResult = await fetchEmbedding('test', cfg);
+      if (testResult) {
+        status.available = true;
+        status.dimensions = testResult.length;
+      } else {
+        status.error = 'Failed to generate test embedding';
+      }
+    }
+  } catch (err) {
+    status.error = err instanceof Error ? err.message : 'Unknown error';
+  }
+
+  cachedEmbeddingStatus = status;
+  statusCacheTime = now;
+  return status;
 }
 
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
@@ -1149,6 +1221,12 @@ app.get('/api/embeddings', async (c) => {
   });
 });
 
+app.get('/api/embeddings/status', async (c) => {
+  const config = loadMemoryConfig();
+  const status = await checkEmbeddingProvider(config.embedding);
+  return c.json(status);
+});
+
 // ============================================================================
 // Skills API
 // ============================================================================
@@ -1874,6 +1952,8 @@ app.post('/api/update/run', async (c) => {
 // ============================================================================
 
 app.get('/api/status', (c) => {
+  const config = loadMemoryConfig();
+
   return c.json({
     status: 'running',
     version: CURRENT_VERSION,
@@ -1884,6 +1964,14 @@ app.get('/api/status', (c) => {
     host: HOST,
     agentsDir: AGENTS_DIR,
     memoryDb: existsSync(MEMORY_DB),
+    embedding: {
+      provider: config.embedding.provider,
+      model: config.embedding.model,
+      // Don't block on status check for /api/status - use cached if available
+      ...(cachedEmbeddingStatus && (Date.now() - statusCacheTime) < STATUS_CACHE_TTL
+        ? { available: cachedEmbeddingStatus.available }
+        : {}),
+    },
   });
 });
 
