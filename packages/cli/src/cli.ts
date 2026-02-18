@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.12';
+const VERSION = '0.1.13';
 
 // ============================================================================
 // Helpers
@@ -972,48 +972,66 @@ async function setupWizard(options: { path?: string }) {
     let pipInstallFailed = false;
     const venvPath = join(basePath, '.venv');
     
+    let pipError = '';
     if (existsSync(requirementsSource)) {
       copyFileSync(requirementsSource, join(basePath, 'memory', 'requirements.txt'));
       spinner.text = 'Creating Python virtual environment...';
       
-      // Find python3 or python
-      const pythonCmd = await (async () => {
-        for (const cmd of ['python3', 'python']) {
-          const code = await new Promise<number>((resolve) => {
-            const proc = spawn(cmd, ['--version'], { stdio: 'pipe' });
-            proc.on('close', (c) => resolve(c ?? 1));
-            proc.on('error', () => resolve(1));
+      // Try python3 first, then python
+      let pythonCmd: string | null = null;
+      let pythonVersion = '';
+      for (const cmd of ['python3', 'python']) {
+        try {
+          const result = await new Promise<{ code: number; stdout: string }>((resolve) => {
+            let stdout = '';
+            const proc = spawn(cmd, ['--version'], { stdio: ['pipe', 'pipe', 'pipe'] });
+            proc.stdout?.on('data', (d) => { stdout += d.toString(); });
+            proc.on('close', (c) => resolve({ code: c ?? 1, stdout }));
+            proc.on('error', () => resolve({ code: 1, stdout: '' }));
           });
-          if (code === 0) return cmd;
-        }
-        return null;
-      })();
+          if (result.code === 0) {
+            pythonCmd = cmd;
+            pythonVersion = result.stdout.trim();
+            break;
+          }
+        } catch {}
+      }
       
-      if (pythonCmd) {
+      if (!pythonCmd) {
+        pipInstallFailed = true;
+        pipError = 'Python not found. Install python3 and try again.';
+      } else {
         // Create venv
-        const venvCode = await new Promise<number>((resolve) => {
-          const proc = spawn(pythonCmd, ['-m', 'venv', venvPath], { stdio: 'pipe' });
-          proc.on('close', (c) => resolve(c ?? 1));
-          proc.on('error', () => resolve(1));
+        const venvResult = await new Promise<{ code: number; stderr: string }>((resolve) => {
+          let stderr = '';
+          const proc = spawn(pythonCmd!, ['-m', 'venv', venvPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+          proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+          proc.on('close', (c) => resolve({ code: c ?? 1, stderr }));
+          proc.on('error', (e) => resolve({ code: 1, stderr: e.message }));
         });
         
         const venvPip = join(venvPath, 'bin', 'pip');
-        if (venvCode === 0 && existsSync(venvPip)) {
+        if (venvResult.code !== 0) {
+          pipInstallFailed = true;
+          pipError = `venv creation failed (${pythonCmd} ${pythonVersion}): ${venvResult.stderr.slice(0, 200)}`;
+        } else if (!existsSync(venvPip)) {
+          pipInstallFailed = true;
+          pipError = `venv created but pip not found at ${venvPip}`;
+        } else {
           spinner.text = 'Installing Python dependencies...';
-          const pipCode = await new Promise<number>((resolve) => {
-            const proc = spawn(venvPip, ['install', '-r', join(basePath, 'memory', 'requirements.txt')], { stdio: 'pipe' });
-            proc.on('close', (c) => resolve(c ?? 1));
-            proc.on('error', () => resolve(1));
+          const pipResult = await new Promise<{ code: number; stderr: string }>((resolve) => {
+            let stderr = '';
+            const proc = spawn(venvPip, ['install', '-r', join(basePath, 'memory', 'requirements.txt')], { stdio: ['pipe', 'pipe', 'pipe'] });
+            proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+            proc.on('close', (c) => resolve({ code: c ?? 1, stderr }));
+            proc.on('error', (e) => resolve({ code: 1, stderr: e.message }));
           });
           
-          if (pipCode !== 0) {
+          if (pipResult.code !== 0) {
             pipInstallFailed = true;
+            pipError = `pip install failed: ${pipResult.stderr.slice(0, 200)}`;
           }
-        } else {
-          pipInstallFailed = true;
         }
-      } else {
-        pipInstallFailed = true;
       }
     }
     
@@ -1202,10 +1220,12 @@ ${agentName} is a helpful assistant.
     if (pipInstallFailed) {
       console.log();
       console.log(chalk.yellow('  ⚠ Python dependencies not installed.'));
-      console.log(chalk.dim('    You may need to install python3-venv first:'));
-      console.log(chalk.dim('      sudo pacman -S python      # Arch'));
-      console.log(chalk.dim('      sudo apt install python3-venv  # Debian/Ubuntu'));
-      console.log(chalk.dim('    Then re-run: signet setup'));
+      if (pipError) {
+        console.log(chalk.dim(`    Error: ${pipError}`));
+      }
+      console.log(chalk.dim('    Manual fix:'));
+      console.log(chalk.dim('      python3 -m venv ~/.agents/.venv'));
+      console.log(chalk.dim('      ~/.agents/.venv/bin/pip install PyYAML zvec'));
     }
     
     if (configuredHarnesses.length > 0) {
