@@ -1,4 +1,5 @@
 # Signet memory system dependencies
 PyYAML>=6.0
 numpy>=1.20.0
-zvec>=0.1.0
+# zvec requires Python 3.10-3.12
+# Install manually if needed: pip install zvec

@@ -20,7 +20,13 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-import zvec
+
+try:
+    import zvec
+    ZVEC_AVAILABLE = True
+except ImportError:
+    ZVEC_AVAILABLE = False
+    zvec = None
 
 CONFIG_PATH = Path.home() / ".agents/config.yaml"
 DEFAULT_VECTOR_PATH = Path.home() / ".agents/memory/vectors.zvec"
@@ -203,6 +209,11 @@ def reindex_all(config: Optional[dict] = None):
 
 
 def main():
+    if not ZVEC_AVAILABLE:
+        print("Error: zvec not installed (requires Python 3.10-3.12)", file=sys.stderr)
+        print("Install with: pip install zvec", file=sys.stderr)
+        sys.exit(1)
+    
     parser = argparse.ArgumentParser(description="Signet vector store")
     subparsers = parser.add_subparsers(dest="command", required=True)
     
