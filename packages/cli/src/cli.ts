@@ -54,7 +54,7 @@ import {
 	type SetupDetection,
 	type SkillsResult,
 	type ImportResult,
-} from "@signet/core";
+} from "../../core/src/index.js";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
