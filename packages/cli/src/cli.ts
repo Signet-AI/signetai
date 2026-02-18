@@ -11,7 +11,7 @@ import { input, select, confirm, checkbox, password } from '@inquirer/prompts';
 import { spawn, spawnSync } from 'child_process';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync, rmSync, statSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync, rmSync, statSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import open from 'open';
@@ -249,18 +249,62 @@ function formatUptime(seconds: number): string {
 // Harness Hook Configuration
 // ============================================================================
 
+// Symlink skills from ~/.agents/skills to harness-specific directories
+function symlinkSkills(basePath: string, targetSkillsDir: string) {
+  const sourceSkillsDir = join(basePath, 'skills');
+  if (!existsSync(sourceSkillsDir)) return;
+  
+  mkdirSync(targetSkillsDir, { recursive: true });
+  
+  const skills = readdirSync(sourceSkillsDir);
+  for (const skill of skills) {
+    const src = join(sourceSkillsDir, skill);
+    const dest = join(targetSkillsDir, skill);
+    
+    // Skip if not a directory
+    try {
+      if (!statSync(src).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    
+    // Check if dest exists
+    try {
+      const destStat = lstatSync(dest);
+      if (destStat.isSymbolicLink()) {
+        // Remove existing symlink to recreate
+        unlinkSync(dest);
+      } else {
+        // It's a real directory - skip to avoid data loss
+        continue;
+      }
+    } catch {
+      // dest doesn't exist, that's fine
+    }
+    
+    try {
+      symlinkSync(src, dest);
+    } catch {
+      // Symlinks might fail on some systems
+    }
+  }
+}
+
 async function configureHarnessHooks(harness: string, basePath: string) {
   const memoryScript = join(basePath, 'memory', 'scripts', 'memory.py');
   
   switch (harness) {
     case 'claude-code':
       await configureClaudeCodeHooks(basePath, memoryScript);
+      symlinkSkills(basePath, join(homedir(), '.claude', 'skills'));
       break;
     case 'opencode':
       await configureOpenCodeHooks(basePath, memoryScript);
+      symlinkSkills(basePath, join(homedir(), '.config', 'opencode', 'skills'));
       break;
     case 'openclaw':
       await configureOpenClawHooks(basePath, memoryScript);
+      symlinkSkills(basePath, join(homedir(), '.config', 'openclaw', 'skills'));
       break;
   }
 }
@@ -516,7 +560,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.16';
+const VERSION = '0.1.17';
 
 // ============================================================================
 // Helpers
@@ -1046,7 +1090,7 @@ async function setupWizard(options: { path?: string }) {
         // Create venv
         const venvResult = await new Promise<{ code: number; stderr: string }>((resolve) => {
           let stderr = '';
-          const proc = spawn(pythonCmd!, ['-m', 'venv', venvPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+          const proc = spawn(pythonCmd!, ['-m', 'venv', '--system-site-packages', venvPath], { stdio: ['pipe', 'pipe', 'pipe'] });
           proc.stderr?.on('data', (d) => { stderr += d.toString(); });
           proc.on('close', (c) => resolve({ code: c ?? 1, stderr }));
           proc.on('error', (e) => resolve({ code: 1, stderr: e.message }));
@@ -1975,7 +2019,7 @@ program
         // Create venv
         const venvResult = await new Promise<{ code: number; stderr: string }>((resolve) => {
           let stderr = '';
-          const proc = spawn(pythonCmd!, ['-m', 'venv', venvPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+          const proc = spawn(pythonCmd!, ['-m', 'venv', '--system-site-packages', venvPath], { stdio: ['pipe', 'pipe', 'pipe'] });
           proc.stderr?.on('data', (d) => { stderr += d.toString(); });
           proc.on('close', (c) => resolve({ code: c ?? 1, stderr }));
           proc.on('error', (e) => resolve({ code: 1, stderr: e.message }));
