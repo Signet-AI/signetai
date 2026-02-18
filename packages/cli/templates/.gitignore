@@ -1,0 +1,14 @@
+# Python virtual environment
+.venv/
+
+# Daemon runtime
+.daemon/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# SQLite journals
+*.db-journal
+*.db-wal
+*.db-shm
