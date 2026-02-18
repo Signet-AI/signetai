@@ -41,3 +41,5 @@ coverage/
 
 # Local database for testing
 *.db
+
+# Local references
