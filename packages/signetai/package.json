@@ -1,10 +1,10 @@
 {
   "name": "signetai",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Portable AI agent identity - own your agent, bring it anywhere",
   "type": "module",
   "bin": {
-    "signet": "./bin/signet.js"
+    "signet": "bin/signet.js"
   },
   "files": [
     "bin",
@@ -25,7 +25,7 @@
   "keywords": [
     "ai",
     "agent",
-    "identity", 
+    "identity",
     "memory",
     "llm",
     "claude",
@@ -37,17 +37,21 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/signetai/signetai.git"
+    "url": "git+https://github.com/Signet-AI/signetai.git"
   },
   "homepage": "https://signetai.sh",
   "bugs": {
-    "url": "https://github.com/signetai/signetai/issues"
+    "url": "https://github.com/Signet-AI/signetai/issues"
   },
   "engines": {
     "node": ">=18",
     "bun": ">=1.0.0"
   },
-  "os": ["darwin", "linux", "win32"],
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
   "dependencies": {
     "@hono/node-server": "^1.14.0",
     "@inquirer/prompts": "^7.0.0",
