@@ -2490,6 +2490,114 @@ process.on('uncaughtException', (err) => {
 // Main
 // ============================================================================
 
+// Initialize memory database schema
+function initMemorySchema() {
+  const memoryDir = dirname(MEMORY_DB);
+  if (!existsSync(memoryDir)) {
+    mkdirSync(memoryDir, { recursive: true });
+  }
+  
+  const db = new Database(MEMORY_DB);
+  
+  // Create memories table with all expected columns
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT,
+      who TEXT DEFAULT 'user',
+      why TEXT,
+      project TEXT,
+      importance REAL DEFAULT 0.5,
+      type TEXT DEFAULT 'explicit',
+      tags TEXT,
+      pinned INTEGER DEFAULT 0,
+      source_type TEXT DEFAULT 'manual',
+      source_id TEXT,
+      category TEXT,
+      updated_by TEXT DEFAULT 'user',
+      vector_clock TEXT DEFAULT '{}',
+      version INTEGER DEFAULT 1,
+      manual_override INTEGER DEFAULT 0,
+      confidence REAL DEFAULT 1.0,
+      access_count INTEGER DEFAULT 0,
+      last_accessed TEXT
+    )
+  `);
+  
+  // Create other required tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      harness TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      summary TEXT,
+      topics TEXT,
+      decisions TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by TEXT NOT NULL DEFAULT 'daemon',
+      vector_clock TEXT NOT NULL DEFAULT '{}',
+      version INTEGER DEFAULT 1,
+      manual_override INTEGER DEFAULT 0
+    )
+  `);
+  
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS embeddings (
+      id TEXT PRIMARY KEY,
+      content_hash TEXT NOT NULL,
+      vector BLOB NOT NULL,
+      dimensions INTEGER NOT NULL,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      chunk_text TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  
+  // Add missing columns to existing memories table (for upgrades)
+  const columns = db.prepare("PRAGMA table_info(memories)").all() as { name: string }[];
+  const columnNames = new Set(columns.map(c => c.name));
+  
+  const requiredColumns: [string, string][] = [
+    ['who', 'TEXT DEFAULT "user"'],
+    ['why', 'TEXT'],
+    ['project', 'TEXT'],
+    ['importance', 'REAL DEFAULT 0.5'],
+    ['type', 'TEXT DEFAULT "explicit"'],
+    ['tags', 'TEXT'],
+    ['pinned', 'INTEGER DEFAULT 0'],
+    ['source_type', 'TEXT DEFAULT "manual"'],
+    ['source_id', 'TEXT'],
+    ['category', 'TEXT'],
+    ['updated_at', 'TEXT'],
+    ['updated_by', 'TEXT DEFAULT "user"'],
+    ['vector_clock', 'TEXT DEFAULT "{}"'],
+    ['version', 'INTEGER DEFAULT 1'],
+    ['manual_override', 'INTEGER DEFAULT 0'],
+    ['confidence', 'REAL DEFAULT 1.0'],
+    ['access_count', 'INTEGER DEFAULT 0'],
+    ['last_accessed', 'TEXT'],
+  ];
+  
+  for (const [col, def] of requiredColumns) {
+    if (!columnNames.has(col)) {
+      try {
+        db.exec(`ALTER TABLE memories ADD COLUMN ${col} ${def}`);
+      } catch {
+        // Column might already exist
+      }
+    }
+  }
+  
+  db.close();
+  logger.info('daemon', 'Memory schema initialized');
+}
+
 async function main() {
   logger.info('daemon', 'Signet Daemon starting');
   logger.info('daemon', 'Agents directory', { path: AGENTS_DIR });
@@ -2498,6 +2606,9 @@ async function main() {
   // Ensure daemon directory exists
   mkdirSync(DAEMON_DIR, { recursive: true });
   mkdirSync(LOG_DIR, { recursive: true });
+  
+  // Initialize memory database schema
+  initMemorySchema();
   
   // Write PID file
   writeFileSync(PID_FILE, process.pid.toString());
