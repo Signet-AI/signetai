@@ -59,6 +59,7 @@ import {
 	type SchemaInfo,
 	type MigrationResult,
 } from "../../core/src/index.js";
+import { OpenClawConnector } from "@signet/connector-openclaw";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
@@ -362,7 +363,7 @@ async function configureHarnessHooks(harness: string, basePath: string) {
 			symlinkSkills(basePath, join(homedir(), ".config", "opencode", "skills"));
 			break;
 		case "openclaw":
-			await configureOpenClawHooks(basePath, memoryScript);
+			new OpenClawConnector().installHookFiles(basePath);
 			symlinkSkills(basePath, join(homedir(), ".config", "openclaw", "skills"));
 			break;
 	}
@@ -506,148 +507,6 @@ export async function MemoryPlugin({ directory }) {
 `;
 		writeFileSync(join(opencodePath, "AGENTS.md"), header + content);
 	}
-}
-
-async function configureOpenClawHooks(basePath: string, memoryScript: string) {
-	const hookDir = join(basePath, "hooks", "agent-memory");
-	mkdirSync(hookDir, { recursive: true });
-
-	const hookMd = `---
-name: agent-memory
-description: "Signet memory integration"
----
-
-# Agent Memory Hook (Signet)
-
-- \`/context\` - Load memory context
-- \`/remember <content>\` - Save a memory
-- \`/recall <query>\` - Search memories
-`;
-	writeFileSync(join(hookDir, "HOOK.md"), hookMd);
-
-	const handlerJs = `import { spawn } from "node:child_process";
-import os from "node:os";
-
-const MEMORY_SCRIPT = "${memoryScript}";
-
-async function runMemoryScript(args) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("python3", [MEMORY_SCRIPT, ...args], { timeout: 5000 });
-    let stdout = "", stderr = "";
-    proc.stdout.on("data", (d) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
-    proc.on("close", (code) => {
-      if (code === 0) resolve(stdout.trim());
-      else reject(new Error(stderr || \`exit code \${code}\`));
-    });
-    proc.on("error", reject);
-  });
-}
-
-const handler = async (event) => {
-  if (event.type !== "command") return;
-  const args = event.context?.args || "";
-
-  switch (event.action) {
-    case "remember":
-      if (!args.trim()) { event.messages.push("🧠 Usage: /remember <content>"); return; }
-      try {
-        const result = await runMemoryScript(["save", "--mode", "explicit", "--who", "openclaw", "--content", args.trim()]);
-        event.messages.push(\`🧠 \${result}\`);
-      } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
-      break;
-    case "recall":
-      if (!args.trim()) { event.messages.push("🧠 Usage: /recall <query>"); return; }
-      try {
-        const result = await runMemoryScript(["query", args.trim(), "--limit", "10"]);
-        event.messages.push(result ? \`🧠 Results:\\n\\n\${result}\` : "🧠 No memories found.");
-      } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
-      break;
-    case "context":
-      try {
-        const result = await runMemoryScript(["load", "--mode", "session-start"]);
-        event.messages.push(result ? \`🧠 **Context**\\n\\n\${result}\` : "🧠 No context.");
-      } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
-      break;
-  }
-};
-
-export default handler;
-`;
-	writeFileSync(join(hookDir, "handler.js"), handlerJs);
-	writeFileSync(
-		join(hookDir, "package.json"),
-		JSON.stringify(
-			{ name: "agent-memory", version: "1.0.0", type: "module" },
-			null,
-			2,
-		),
-	);
-}
-
-async function configureOpenClawWorkspace(
-	basePath: string,
-): Promise<{ configured: boolean; backups: string[] }> {
-	// OpenClaw has had multiple names: openclaw, clawdbot, moltbot
-	const possibleConfigs = [
-		join(homedir(), ".openclaw", "openclaw.json"),
-		join(homedir(), ".clawdbot", "clawdbot.json"),
-		join(homedir(), ".moltbot", "moltbot.json"),
-	];
-
-	let configuredAny = false;
-	const backups: string[] = [];
-
-	for (const configPath of possibleConfigs) {
-		if (!existsSync(configPath)) continue;
-
-		try {
-			const configContent = readFileSync(configPath, "utf-8");
-			const config = JSON.parse(configContent);
-
-			// Check if workspace is already set to basePath
-			const currentWorkspace = config?.agents?.defaults?.workspace;
-			if (currentWorkspace === basePath) {
-				configuredAny = true;
-				continue;
-			}
-
-			// Create backup before modifying
-			const timestamp = new Date()
-				.toISOString()
-				.replace(/[:.]/g, "-")
-				.slice(0, 19);
-			const backupPath = configPath.replace(
-				".json",
-				`.backup-${timestamp}.json`,
-			);
-			writeFileSync(backupPath, configContent);
-			backups.push(backupPath);
-
-			// Carefully set only the workspace, preserving everything else
-			// Use deep merge to avoid clobbering other settings
-			if (!config.agents) config.agents = {};
-			if (!config.agents.defaults) config.agents.defaults = {};
-			config.agents.defaults.workspace = basePath;
-
-			// Preserve formatting by using same indent as original if detectable
-			const indent = configContent.includes('  "')
-				? 2
-				: configContent.includes('    "')
-					? 4
-					: 2;
-
-			writeFileSync(configPath, JSON.stringify(config, null, indent));
-			configuredAny = true;
-		} catch (e) {
-			// Skip this config file if it fails
-			console.warn(
-				`  ⚠ Could not configure ${configPath}: ${(e as Error).message}`,
-			);
-		}
-	}
-
-	return { configured: configuredAny, backups };
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2078,15 +1937,9 @@ ${agentName} is a helpful assistant.
 		// Configure OpenClaw workspace if requested
 		if (configureOpenClawWs) {
 			spinner.text = "Configuring OpenClaw workspace...";
-			const result = await configureOpenClawWorkspace(basePath);
-			if (result.configured) {
+			const patched = await new OpenClawConnector().configureAllConfigs(basePath);
+			if (patched.length > 0) {
 				console.log(chalk.dim("\n  ✓ OpenClaw workspace set to ~/.agents"));
-				if (result.backups.length > 0) {
-					console.log(chalk.dim("    Backups created:"));
-					for (const backup of result.backups) {
-						console.log(chalk.dim(`      ${backup}`));
-					}
-				}
 			}
 		}
 
