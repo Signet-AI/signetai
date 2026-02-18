@@ -297,6 +297,74 @@ curl "http://localhost:3850/api/embeddings?vectors=true"
 
 ---
 
+## Hierarchical Chunking
+
+Signet uses **hierarchical chunking** to preserve document structure when ingesting markdown files. Instead of flat paragraph chunks, each chunk includes its section header for context.
+
+### How it works
+
+When ingesting markdown documents (like Claude Code project memories or OpenClaw memory logs), Signet:
+
+1. Parses the document by markdown headers (h1-h3)
+2. Creates **section chunks** for content that fits within token limits
+3. Splits long sections into **paragraph chunks**, preserving the section header in each
+4. Tags each chunk with `hierarchical-section` or `hierarchical-paragraph`
+
+### Benefits
+
+- **Context preservation**: Retrieved chunks include their section header
+- **Better relevance**: Search matches fine-grained paragraphs with section context
+- **Deduplication**: File-level hashing prevents re-processing unchanged files
+
+### Example
+
+A Claude Code project memory file:
+
+```markdown
+## API Configuration
+
+- Base URL: https://api.example.com
+- Auth: Bearer token in header
+
+## Database Notes
+
+- PostgreSQL on port 5432
+- Use connection pooling
+```
+
+Gets chunked as:
+
+```
+Chunk 1:
+  Content: "## API Configuration\n\n- Base URL: https://api.example.com\n- Auth: Bearer token in header"
+  Tags: ..., hierarchical-section
+
+Chunk 2:
+  Content: "## Database Notes\n\n- PostgreSQL on port 5432\n- Use connection pooling"
+  Tags: ..., hierarchical-section
+```
+
+When you `/recall "database"`, you get the chunk with its header intact, making the context clear.
+
+### Auto-ingested sources
+
+The daemon automatically ingests:
+
+| Source | Location | Tags |
+|--------|----------|------|
+| **OpenClaw memory logs** | `~/.agents/memory/*.md` | `openclaw`, `memory-log`, date |
+| **Claude Code project memories** | `~/.claude/projects/*/memory/MEMORY.md` | `claude-code`, `claude-project-memory`, project ID |
+
+### Storage format
+
+| Field | Value |
+|-------|-------|
+| `who` | `openclaw-memory` or `claude-code` |
+| `importance` | `0.65` for sections, `0.55` for paragraphs |
+| `tags` | source, date/filename, `hierarchical-section` or `hierarchical-paragraph` |
+
+---
+
 ## Troubleshooting
 
 **Memories save but search returns no results**

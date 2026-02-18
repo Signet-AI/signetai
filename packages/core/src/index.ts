@@ -61,9 +61,11 @@ export type {
 export {
 	importMemoryLogs,
 	chunkContent,
+	chunkMarkdownHierarchically,
 } from "./import";
 export type {
 	ImportResult,
 	ChunkResult,
 	ChunkOptions,
+	HierarchicalChunk,
 } from "./import";

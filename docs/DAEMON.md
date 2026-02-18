@@ -415,7 +415,24 @@ The daemon watches these files for changes:
 - `~/.agents/MEMORY.md`
 - `~/.agents/IDENTITY.md`
 - `~/.agents/USER.md`
-- `~/.agents/memory/*.md`
+- `~/.agents/memory/` (entire directory)
+- `~/.claude/projects/*/memory/MEMORY.md` (Claude Code project memories)
+
+### Auto-Ingestion
+
+When memory markdown files are created or modified, the daemon automatically ingests them using **hierarchical chunking**:
+
+| File Pattern | Who | Tags |
+|--------------|-----|------|
+| `~/.agents/memory/*.md` (not MEMORY.md) | `openclaw-memory` | `openclaw`, `memory-log`, date |
+| `~/.claude/projects/*/memory/MEMORY.md` | `claude-code` | `claude-code`, `claude-project-memory`, project ID |
+
+**Ingestion details:**
+
+- Uses hierarchical chunking to preserve section structure
+- Each chunk includes its section header for context
+- SHA-256 hash prevents re-processing unchanged files
+- Runs on daemon startup and when files change
 
 ### Auto Git Commit
 

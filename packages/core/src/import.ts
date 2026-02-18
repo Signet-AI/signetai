@@ -20,6 +20,24 @@ export interface ChunkResult {
 }
 
 /**
+ * Hierarchical chunk that preserves markdown section structure.
+ * Each chunk knows its section header and whether it's a full section
+ * or a paragraph within a section.
+ */
+export interface HierarchicalChunk {
+	/** The chunked text content (includes header for context) */
+	text: string;
+	/** Estimated token count for this chunk */
+	tokenCount: number;
+	/** The section heading (e.g., "## Signet npm Package Publishing") */
+	header: string;
+	/** Whether this is a full section or a paragraph within a section */
+	level: "section" | "paragraph";
+	/** Index of this chunk within the document */
+	chunkIndex: number;
+}
+
+/**
  * Result of an import operation
  */
 export interface ImportResult {
@@ -134,6 +152,169 @@ export function chunkContent(
 		if (text) {
 			results.push({ text, tokenCount: currentTokens });
 		}
+	}
+
+	return results;
+}
+
+/**
+ * Split markdown content into hierarchical chunks that preserve section structure.
+ *
+ * This uses a two-level approach:
+ * 1. Section chunks: Embed each section's heading + full content when it fits
+ * 2. Paragraph chunks: Split long sections into smaller pieces with header context
+ *
+ * Benefits:
+ * - Context preservation: Retrieved chunks include their section header
+ * - Better retrieval: Search matches fine-grained paragraphs with section context
+ * - Deduplication: Track by document + section + chunk index
+ *
+ * @param content - The markdown content to chunk
+ * @param options - Chunking options (maxTokens defaults to 512)
+ * @returns Array of hierarchical chunks with header and level information
+ */
+export function chunkMarkdownHierarchically(
+	content: string,
+	options: ChunkOptions = { maxTokens: 512 },
+): HierarchicalChunk[] {
+	const results: HierarchicalChunk[] = [];
+	const lines = content.split("\n");
+
+	let currentHeader = "";
+	let currentContent: string[] = [];
+	let chunkIndex = 0;
+
+	// Regex for markdown headers (h1-h3)
+	const headerPattern = /^(#{1,3})\s+(.+)$/;
+
+	const flushSection = () => {
+		if (currentContent.length === 0) return;
+
+		const sectionText = currentContent.join("\n").trim();
+		if (!sectionText) return;
+
+		const sectionTokens = estimateTokens(sectionText);
+
+		if (sectionTokens <= options.maxTokens) {
+			// Section fits in one chunk - include header for context
+			const textWithHeader = currentHeader
+				? `${currentHeader}\n\n${sectionText}`
+				: sectionText;
+			results.push({
+				text: textWithHeader,
+				tokenCount: estimateTokens(textWithHeader),
+				header: currentHeader,
+				level: "section",
+				chunkIndex: chunkIndex++,
+			});
+		} else {
+			// Split section into paragraph chunks with header context
+			const paragraphs = sectionText.split(/\n\n+/);
+			let chunkParas: string[] = [];
+			let chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
+
+			for (const para of paragraphs) {
+				const paraTokens = estimateTokens(para);
+
+				// If single paragraph exceeds max, it needs to stand alone
+				if (paraTokens > options.maxTokens) {
+					// Flush current chunk first
+					if (chunkParas.length > 0) {
+						const text = currentHeader
+							? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
+							: chunkParas.join("\n\n");
+						results.push({
+							text,
+							tokenCount: chunkTokens,
+							header: currentHeader,
+							level: "paragraph",
+							chunkIndex: chunkIndex++,
+						});
+						chunkParas = [];
+						chunkTokens = currentHeader
+							? estimateTokens(currentHeader)
+							: 0;
+					}
+
+					// Add large paragraph as its own chunk (with header context)
+					const text = currentHeader
+						? `${currentHeader}\n\n${para}`
+						: para;
+					results.push({
+						text,
+						tokenCount: estimateTokens(text),
+						header: currentHeader,
+						level: "paragraph",
+						chunkIndex: chunkIndex++,
+					});
+					continue;
+				}
+
+				if (
+					chunkTokens + paraTokens + 2 > options.maxTokens &&
+					chunkParas.length > 0
+				) {
+					// Flush current chunk
+					const text = currentHeader
+						? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
+						: chunkParas.join("\n\n");
+					results.push({
+						text,
+						tokenCount: chunkTokens,
+						header: currentHeader,
+						level: "paragraph",
+						chunkIndex: chunkIndex++,
+					});
+					chunkParas = [];
+					chunkTokens = currentHeader
+						? estimateTokens(currentHeader)
+						: 0;
+				}
+
+				chunkParas.push(para);
+				chunkTokens += paraTokens + 2; // +2 for paragraph break
+			}
+
+			// Final chunk for this section
+			if (chunkParas.length > 0) {
+				const text = currentHeader
+					? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
+					: chunkParas.join("\n\n");
+				results.push({
+					text,
+					tokenCount: chunkTokens,
+					header: currentHeader,
+					level: "paragraph",
+					chunkIndex: chunkIndex++,
+				});
+			}
+		}
+
+		currentContent = [];
+	};
+
+	for (const line of lines) {
+		const match = line.match(headerPattern);
+		if (match) {
+			flushSection();
+			currentHeader = line; // Keep full header with # marks
+		} else {
+			currentContent.push(line);
+		}
+	}
+
+	flushSection(); // Final section
+
+	// Handle content with no headers at all
+	if (results.length === 0 && content.trim()) {
+		const text = content.trim();
+		results.push({
+			text,
+			tokenCount: estimateTokens(text),
+			header: "",
+			level: "section",
+			chunkIndex: 0,
+		});
 	}
 
 	return results;
