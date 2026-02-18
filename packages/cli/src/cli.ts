@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.3';
+const VERSION = '0.1.4';
 
 // ============================================================================
 // Helpers
@@ -575,19 +575,26 @@ async function interactiveMenu() {
   }
   
   while (true) {
-    const action = await select({
-      message: 'What would you like to do?',
-      choices: [
-        { value: 'dashboard', name: '🌐 Open dashboard' },
-        { value: 'status', name: '📊 View status' },
-        { value: 'config', name: '⚙️  Configure settings' },
-        { value: 'harnesses', name: '🔗 Manage harnesses' },
-        { value: 'logs', name: '📜 View logs' },
-        { value: 'restart', name: '🔄 Restart daemon' },
-        { value: 'stop', name: '⏹  Stop daemon' },
-        { value: 'exit', name: '👋 Exit' },
-      ],
-    });
+    let action: string;
+    try {
+      action = await select({
+        message: 'What would you like to do?',
+        choices: [
+          { value: 'dashboard', name: '[web] Open dashboard' },
+          { value: 'status', name: '[info] View status' },
+          { value: 'config', name: '[config] Configure settings' },
+          { value: 'harnesses', name: '[link] Manage harnesses' },
+          { value: 'logs', name: '[logs] View logs' },
+          { value: 'restart', name: '[restart] Restart daemon' },
+          { value: 'stop', name: '[stop] Stop daemon' },
+          { value: 'exit', name: '[exit] Exit' },
+        ],
+      });
+    } catch {
+      // Handle Ctrl+C gracefully
+      console.log();
+      return;
+    }
     
     console.log();
     
@@ -1608,7 +1615,7 @@ program
         message: 'What would you like to configure?',
         choices: [
           { value: 'agent', name: '👤 Agent identity (name, description)' },
-          { value: 'harnesses', name: '🔗 Harnesses (AI platforms)' },
+          { value: 'harnesses', name: '[link] Harnesses (AI platforms)' },
           { value: 'embedding', name: '🧠 Embedding provider' },
           { value: 'search', name: '🔍 Search settings' },
           { value: 'memory', name: '💾 Memory settings' },
