@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.11';
+const VERSION = '0.1.12';
 
 // ============================================================================
 // Helpers
@@ -575,6 +575,13 @@ async function interactiveMenu() {
   }
   
   while (true) {
+    // Clear and re-show header for clean menu
+    console.clear();
+    console.log(signetLogo());
+    console.log(chalk.green(`  ● Daemon running`));
+    console.log(chalk.dim(`    http://localhost:${DEFAULT_PORT}`));
+    console.log();
+    
     let action: string;
     try {
       action = await select({
@@ -606,6 +613,7 @@ async function interactiveMenu() {
         
       case 'status':
         await showStatus({ path: AGENTS_DIR });
+        await input({ message: 'Press Enter to continue...' });
         break;
         
       case 'config':
@@ -619,6 +627,7 @@ async function interactiveMenu() {
         
       case 'logs':
         await showLogs({ lines: '30' });
+        await input({ message: 'Press Enter to continue...' });
         break;
         
       case 'restart':
@@ -630,6 +639,7 @@ async function interactiveMenu() {
         } else {
           spinner.fail('Failed to restart daemon');
         }
+        await input({ message: 'Press Enter to continue...' });
         break;
         
       case 'stop':
