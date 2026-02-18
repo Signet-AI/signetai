@@ -33,6 +33,7 @@ curl -sL https://signetai.sh/install | bash
 | `signet dashboard` | Open web UI in browser |
 | `signet logs` | View daemon logs |
 | `signet migrate` | Import from other platforms |
+| `signet migrate-schema` | Migrate database to unified schema |
 
 ---
 
@@ -336,6 +337,67 @@ signet migrate chatgpt
 2. Provide path to export file
 3. Import process runs
 4. Confirmation of imported data
+
+---
+
+## `signet migrate-schema`
+
+Migrate an existing memory database to Signet's unified schema. This is useful when:
+- Copying `~/.agents/` from another machine with a different schema
+- Upgrading from an older Signet version
+- Using a database created by the Python memory system
+
+```bash
+signet migrate-schema
+signet migrate-schema --path /custom/path
+```
+
+### Supported Schemas
+
+Signet can detect and migrate from:
+
+| Schema | Source | Notes |
+|--------|--------|-------|
+| **python** | `~/.agents/memory/scripts/memory.py` | Original Python memory system |
+| **cli-v1** | Early Signet CLI | Created by `signet setup` in v0.1.x |
+| **core** | Current unified schema | No migration needed |
+
+### Field Mappings
+
+During migration, fields are mapped to preserve data:
+
+| Source Field | Unified Field |
+|--------------|---------------|
+| `who` | `updated_by` |
+| `project` | `category` |
+| `why` | Stored in `tags` as `why:...` |
+| `session_id` | `source_id` |
+| INTEGER `id` | TEXT `migrated_<id>` |
+
+### Output
+
+```
+  ◈ signet v0.1.26
+  own your agent. bring it anywhere.
+
+- Checking database schema...
+ℹ Migrating from python schema...
+  ✓ Migrated 261 memories from python to core
+
+  Migration complete!
+```
+
+If the database is already on the unified schema:
+```
+- Checking database schema...
+✔ Database already on unified schema
+```
+
+### Safety
+
+- Migration is **idempotent** - running multiple times is safe
+- All existing memories are preserved
+- The daemon is automatically stopped and restarted during migration
 
 ---
 

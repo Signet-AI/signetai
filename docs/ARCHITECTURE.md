@@ -138,24 +138,57 @@ interface Memory {
 
 ### Database Schema
 
-SQLite with FTS5 for full-text search:
+SQLite with FTS5 for full-text search. Signet uses a unified schema that consolidates fields from multiple sources (Python memory system, early CLI versions, and the core library).
 
 ```sql
-CREATE TABLE memories (
-  id TEXT PRIMARY KEY,
-  content TEXT NOT NULL,
-  type TEXT DEFAULT 'explicit',
-  source TEXT DEFAULT 'manual',
-  importance REAL DEFAULT 0.5,
-  tags TEXT,                        -- JSON array
-  who TEXT,                         -- Source harness
-  pinned INTEGER DEFAULT 0,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  accessed_at TEXT,
-  access_count INTEGER DEFAULT 0
+-- Schema migrations tracking
+CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL,
+  checksum TEXT NOT NULL
 );
 
+-- Conversations table
+CREATE TABLE conversations (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  harness TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  summary TEXT,
+  topics TEXT,
+  decisions TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  vector_clock TEXT NOT NULL DEFAULT '{}',
+  version INTEGER DEFAULT 1,
+  manual_override INTEGER DEFAULT 0
+);
+
+-- Unified memories table
+CREATE TABLE memories (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL DEFAULT 'fact',
+  category TEXT,
+  content TEXT NOT NULL,
+  confidence REAL DEFAULT 1.0,
+  importance REAL DEFAULT 0.5,
+  source_id TEXT,
+  source_type TEXT,
+  tags TEXT,                        -- JSON array
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL,
+  last_accessed TEXT,
+  access_count INTEGER DEFAULT 0,
+  vector_clock TEXT NOT NULL DEFAULT '{}',
+  version INTEGER DEFAULT 1,
+  manual_override INTEGER DEFAULT 0,
+  pinned INTEGER DEFAULT 0
+);
+
+-- Embeddings table
 CREATE TABLE embeddings (
   id TEXT PRIMARY KEY,
   content_hash TEXT NOT NULL UNIQUE,
@@ -170,11 +203,38 @@ CREATE TABLE embeddings (
 -- Full-text search index
 CREATE VIRTUAL TABLE memories_fts USING fts5(
   content,
-  tags,
   content='memories',
-  content_rowid='rowid'
+  content_rowid=rowid
 );
+
+-- FTS sync triggers
+CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, content)
+    VALUES('delete', old.rowid, old.content);
+END;
+
+CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
+  INSERT INTO memories_fts(memories_fts, rowid, content)
+    VALUES('delete', old.rowid, old.content);
+  INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
 ```
+
+### Schema Migration
+
+Signet automatically detects and migrates older database schemas:
+
+| Schema Type | Detection | Migration |
+|-------------|-----------|-----------|
+| **python** | Has `who`, `why`, `project` columns | Maps fields to unified schema |
+| **cli-v1** | Has `source`, `accessed_at` columns | Maps fields to unified schema |
+| **core** | Has `category`, `confidence`, `vector_clock` | Already unified |
+
+Use `signet migrate-schema` to explicitly migrate a database. See [CLI.md](./CLI.md#signet-migrate-schema) for details.
 
 ### Constants
 
