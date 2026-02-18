@@ -25,6 +25,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@hono/node-server": "^1.14.0",
     "@signet/core": "workspace:*",
     "chokidar": "^4.0.0",
     "hono": "^4.8.0",
