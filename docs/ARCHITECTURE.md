@@ -6,12 +6,23 @@ Technical deep dive into Signet's design and implementation.
 
 ## Overview
 
-Signet consists of four main components:
+Signet consists of several packages organized by responsibility:
 
-1. **CLI** (`@signet/cli`) - User interface: setup wizard, config editor, daemon management
-2. **Daemon** (`@signet/daemon`) - Background service: HTTP API, file watching, harness sync
-3. **Core** (`@signet/core`) - Shared library: types, database, search, manifest parsing
-4. **SDK** (`@signet/sdk`) - Integration library for third-party apps
+**Core Libraries:**
+- **Core** (`@signet/core`) - Shared utilities: types, database, search, markdown/YAML handling
+- **Connector Base** (`@signet/connector-base`) - Abstract base class for harness connectors
+
+**Applications:**
+- **CLI** (`@signet/cli`) - User interface: setup wizard, config editor, daemon management
+- **Daemon** (`@signet/daemon`) - Background service: HTTP API, file watching, harness sync
+
+**Connectors (harness integrations):**
+- **connector-claude-code** - Claude Code integration
+- **connector-opencode** - OpenCode integration
+- **connector-openclaw** - OpenClaw integration
+
+**Integration:**
+- **SDK** (`@signet/sdk`) - Integration library for third-party apps
 
 ---
 
@@ -22,17 +33,6 @@ Signet consists of four main components:
 ```
 signetai/
 ├── packages/
-│   ├── cli/
-│   │   ├── src/
-│   │   │   └── cli.ts           # Main CLI entry point (~1600 LOC)
-│   │   ├── dashboard/           # SvelteKit web UI
-│   │   │   └── src/routes/      # Dashboard pages
-│   │   └── templates/           # Setup wizard templates
-│   ├── daemon/
-│   │   └── src/
-│   │       ├── daemon.ts        # HTTP server + file watcher
-│   │       ├── service.ts       # System service installation
-│   │       └── index.ts         # Package exports
 │   ├── core/
 │   │   └── src/
 │   │       ├── types.ts         # TypeScript interfaces
@@ -43,7 +43,35 @@ signetai/
 │   │       ├── memory.ts        # Memory helpers
 │   │       ├── import.ts        # Memory import & hierarchical chunking
 │   │       ├── soul.ts          # Soul template
+│   │       ├── markdown.ts      # Signet block utilities
+│   │       ├── yaml.ts          # Simple YAML parser/formatter
+│   │       ├── symlinks.ts      # Skills symlink utilities
+│   │       ├── skills.ts        # Skills unification
 │   │       └── constants.ts     # Shared constants
+│   ├── connector-base/
+│   │   └── src/
+│   │       └── index.ts         # BaseConnector abstract class
+│   ├── connector-claude-code/
+│   │   └── src/
+│   │       └── index.ts         # Claude Code connector
+│   ├── connector-opencode/
+│   │   └── src/
+│   │       └── index.ts         # OpenCode connector
+│   ├── connector-openclaw/
+│   │   └── src/
+│   │       └── index.ts         # OpenClaw connector
+│   ├── cli/
+│   │   ├── src/
+│   │   │   └── cli.ts           # Main CLI entry point (~1600 LOC)
+│   │   ├── dashboard/           # SvelteKit web UI
+│   │   │   └── src/routes/      # Dashboard pages
+│   │   └── templates/           # Setup wizard templates
+│   ├── daemon/
+│   │   └── src/
+│   │       ├── daemon.ts        # HTTP server + file watcher
+│   │       ├── logger.ts        # Categorized logging system
+│   │       ├── service.ts       # System service installation
+│   │       └── index.ts         # Package exports
 │   └── sdk/
 │       └── src/
 │           └── index.ts         # SignetSDK class
@@ -83,6 +111,60 @@ signetai/
 ---
 
 ## Core Library (`@signet/core`)
+
+Shared foundation used by all Signet packages. Provides types, database,
+search, and utility functions.
+
+### Utility Modules
+
+**markdown.ts** - Signet block management for harness config files:
+
+```typescript
+// Build the Signet system block (dashboard URL, memory commands, etc.)
+function buildSignetBlock(): string;
+
+// Remove existing Signet blocks (prevents duplication on re-sync)
+function stripSignetBlock(content: string): string;
+
+// Check if content contains a Signet block
+function hasSignetBlock(content: string): boolean;
+
+// Extract Signet block content without delimiters
+function extractSignetBlock(content: string): string | null;
+```
+
+**yaml.ts** - Simple YAML parser for flat config files:
+
+```typescript
+// Parse YAML to object (supports 3 levels of nesting)
+function parseSimpleYaml(text: string): Record<string, unknown>;
+
+// Format object as YAML
+function formatYaml(obj: Record<string, unknown>, indent?: number): string;
+```
+
+**symlinks.ts** - Skills directory symlink management:
+
+```typescript
+interface SymlinkOptions {
+  dryRun?: boolean;  // Report without making changes
+  force?: boolean;   // Replace real directories (dangerous)
+}
+
+interface SymlinkResult {
+  created: string[];
+  skipped: string[];
+  errors: Array<{ path: string; error: string }>;
+}
+
+// Symlink all subdirectories from source to target
+function symlinkSkills(sourceDir: string, targetDir: string, options?: SymlinkOptions): SymlinkResult;
+
+// Create a single directory symlink
+function symlinkDir(src: string, dest: string, options?: SymlinkOptions): boolean;
+```
+
+These utilities are re-exported by `@signet/connector-base` for use by connectors.
 
 ### Key Types
 
@@ -248,7 +330,101 @@ const DEFAULT_EMBEDDING_DIMENSIONS = 768;
 
 ---
 
+## Connector Base (`@signet/connector-base`)
+
+Abstract base class for harness connectors. Provides shared functionality
+that all connectors need, allowing concrete connectors to focus on
+harness-specific logic.
+
+### BaseConnector Class
+
+```typescript
+import { BaseConnector, InstallResult, UninstallResult } from '@signet/connector-base';
+
+class MyConnector extends BaseConnector {
+  readonly name = "my-harness";      // Human-readable name
+  readonly harnessId = "myharness";  // Machine identifier
+
+  // Must implement:
+  async install(basePath: string): Promise<InstallResult>;
+  async uninstall(): Promise<UninstallResult>;
+  isInstalled(): boolean;
+  getConfigPath(): string;
+}
+```
+
+### Shared Methods (provided by base class)
+
+| Method | Description |
+|--------|-------------|
+| `buildSignetBlock()` | Generate Signet system block for config injection |
+| `stripSignetBlock(content)` | Remove existing Signet blocks (prevents duplication) |
+| `symlinkSkills(src, dest, opts)` | Symlink skills directories to harness location |
+| `generateHeader(sourcePath, name)` | Create auto-generated file header |
+
+### Abstract Contract
+
+Subclasses must implement:
+
+| Method | Description |
+|--------|-------------|
+| `install(basePath)` | Configure hooks, generate files, set up symlinks |
+| `uninstall()` | Remove hooks, generated files |
+| `isInstalled()` | Check if integration exists |
+| `getConfigPath()` | Return path to harness config file |
+
+### Result Types
+
+```typescript
+interface InstallResult {
+  success: boolean;
+  message: string;
+  filesWritten: string[];
+  configsPatched?: string[];
+  warnings?: string[];
+}
+
+interface UninstallResult {
+  filesRemoved: string[];
+  configsPatched?: string[];
+}
+```
+
+---
+
+## Connectors
+
+Concrete implementations for each supported harness. All extend
+`BaseConnector` and delegate common operations to the shared base.
+
+### connector-claude-code
+
+Patches `~/.claude/settings.json` with hooks and generates
+`~/.claude/CLAUDE.md` from `~/.agents/AGENTS.md`.
+
+### connector-opencode
+
+Creates `~/.config/opencode/memory.mjs` plugin with remember/recall tools.
+Generates `~/.config/opencode/AGENTS.md` from source.
+
+### connector-openclaw
+
+Unlike other connectors, OpenClaw reads `~/.agents/AGENTS.md` directly.
+Patches OpenClaw JSON config to:
+1. Point `agents.defaults.workspace` at `~/.agents`
+2. Enable the `signet-memory` internal hook entry
+
+Also installs hook handler files under `~/.agents/hooks/agent-memory/`
+for `/remember`, `/recall`, and `/context` commands.
+
+---
+
 ## CLI (`@signet/cli`)
+
+User interface that imports connectors directly from their packages
+(`@signet/connector-*`) rather than implementing harness logic inline.
+This removes ~300 lines of duplicated code and ensures consistent
+behavior across setup, daemon sync, and manual configuration.
 
 ### Commands
 
@@ -322,6 +498,27 @@ For each selected harness, Signet generates integration files:
 ---
 
 ## Daemon (`@signet/daemon`)
+
+Background service with HTTP API and file watching. Imports utilities
+from `@signet/core` (`buildSignetBlock`, `stripSignetBlock`, `parseSimpleYaml`).
+
+### Logging Categories
+
+```typescript
+type LogCategory =
+  | 'daemon'      // Daemon lifecycle
+  | 'api'         // API requests
+  | 'memory'      // Memory operations (save, recall, search)
+  | 'sync'        // Harness sync operations
+  | 'git'         // Git auto-commits
+  | 'watcher'     // File watcher events
+  | 'embedding'   // Embedding operations
+  | 'harness'     // Harness configuration
+  | 'skills'      // Skills management
+  | 'secrets'     // Secrets management
+  | 'hooks'       // Hook handlers
+  | 'system';     // System events
+```
 
 ### HTTP Server
 

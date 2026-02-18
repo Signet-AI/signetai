@@ -22,6 +22,11 @@
  */
 
 import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+} from "@signet/connector-base";
+import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -30,22 +35,6 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface InstallResult {
-	success: boolean;
-	message: string;
-	filesWritten: string[];
-	configsPatched: string[];
-}
-
-export interface UninstallResult {
-	filesRemoved: string[];
-	configsPatched: string[];
-}
 
 // ============================================================================
 // Deep merge helper
@@ -87,9 +76,9 @@ function deepMerge(target: JsonObject, source: JsonObject): JsonObject {
  *
  * Idempotent — safe to run multiple times.
  */
-export class OpenClawConnector {
-	readonly name = "openclaw";
-	readonly displayName = "OpenClaw";
+export class OpenClawConnector extends BaseConnector {
+	readonly name = "OpenClaw";
+	readonly harnessId = "openclaw";
 
 	/** All known config file locations, checked in order. */
 	private readonly configPaths = [
@@ -124,32 +113,12 @@ export class OpenClawConnector {
 	}
 
 	/**
-	 * Check whether any OpenClaw config has signet-memory enabled.
-	 */
-	isInstalled(): boolean {
-		for (const configPath of this.configPaths) {
-			if (!existsSync(configPath)) continue;
-			try {
-				const config = JSON.parse(readFileSync(configPath, "utf-8"));
-				if (
-					config?.hooks?.internal?.entries?.["signet-memory"]?.enabled === true
-				) {
-					return true;
-				}
-			} catch {
-				// malformed JSON — skip
-			}
-		}
-		return false;
-	}
-
-	/**
 	 * Uninstall the connector.
 	 *
 	 * Sets `signet-memory.enabled = false` in all found configs and removes
 	 * the hook handler files.
 	 */
-	async uninstall(basePath?: string): Promise<UninstallResult> {
+	async uninstall(): Promise<UninstallResult> {
 		const filesRemoved: string[] = [];
 		const configsPatched: string[] = [];
 
@@ -177,19 +146,51 @@ export class OpenClawConnector {
 			}
 		}
 
-		if (basePath) {
-			const expandedBasePath = this.expandPath(basePath);
-			const hookDir = join(expandedBasePath, "hooks", "agent-memory");
-			for (const file of ["HOOK.md", "handler.js", "package.json"]) {
-				const filePath = join(hookDir, file);
-				if (existsSync(filePath)) {
-					rmSync(filePath);
-					filesRemoved.push(filePath);
-				}
+		// Remove hook handler files from the first valid base path
+		const basePath = join(homedir(), ".agents");
+		const hookDir = join(basePath, "hooks", "agent-memory");
+		for (const file of ["HOOK.md", "handler.js", "package.json"]) {
+			const filePath = join(hookDir, file);
+			if (existsSync(filePath)) {
+				rmSync(filePath);
+				filesRemoved.push(filePath);
 			}
 		}
 
 		return { filesRemoved, configsPatched };
+	}
+
+	/**
+	 * Check whether any OpenClaw config has signet-memory enabled.
+	 */
+	isInstalled(): boolean {
+		for (const configPath of this.configPaths) {
+			if (!existsSync(configPath)) continue;
+			try {
+				const config = JSON.parse(readFileSync(configPath, "utf-8"));
+				if (
+					config?.hooks?.internal?.entries?.["signet-memory"]?.enabled === true
+				) {
+					return true;
+				}
+			} catch {
+				// malformed JSON — skip
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Get the primary config path (first existing config, or default).
+	 */
+	getConfigPath(): string {
+		for (const configPath of this.configPaths) {
+			if (existsSync(configPath)) {
+				return configPath;
+			}
+		}
+		// Default to openclaw.json if none exist
+		return this.configPaths[0];
 	}
 
 	// ==========================================================================
@@ -200,7 +201,7 @@ export class OpenClawConnector {
 	 * Find all present config files and patch each one.
 	 * Returns the list of configs that were successfully patched.
 	 */
-	async configureAllConfigs(basePath: string): Promise<string[]> {
+	private async configureAllConfigs(basePath: string): Promise<string[]> {
 		const patched: string[] = [];
 		for (const configPath of this.configPaths) {
 			if (!existsSync(configPath)) continue;

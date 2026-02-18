@@ -17,7 +17,7 @@ import { EventEmitter } from 'events';
 // Types
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-export type LogCategory = 
+export type LogCategory =
   | 'daemon'      // Daemon lifecycle
   | 'api'         // API requests
   | 'memory'      // Memory operations (save, recall, search)
@@ -26,6 +26,9 @@ export type LogCategory =
   | 'watcher'     // File watcher events
   | 'embedding'   // Embedding operations
   | 'harness'     // Harness configuration
+  | 'skills'      // Skills management
+  | 'secrets'     // Secrets management
+  | 'hooks'       // Hook handlers
   | 'system';     // System events
 
 export interface LogEntry {
@@ -246,8 +249,23 @@ class Logger extends EventEmitter {
     this.log('info', category, message, data);
   }
 
-  warn(category: LogCategory, message: string, data?: Record<string, unknown>) {
-    this.log('warn', category, message, data);
+  warn(category: LogCategory, message: string, errorOrData?: Error | Record<string, unknown>) {
+    if (errorOrData instanceof Error) {
+      const entry: LogEntry = {
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        category,
+        message,
+        error: {
+          name: errorOrData.name,
+          message: errorOrData.message,
+          stack: errorOrData.stack,
+        }
+      };
+      this.write(entry);
+    } else {
+      this.log('warn', category, message, errorOrData);
+    }
   }
 
   error(category: LogCategory, message: string, error?: Error, data?: Record<string, unknown>) {

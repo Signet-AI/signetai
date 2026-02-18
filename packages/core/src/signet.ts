@@ -35,7 +35,7 @@ export class Signet {
     }
 
     const manifest: AgentManifest = {
-      version: '1.0',
+      version: 1,
       schema: 'signet/v1',
       agent: {
         name,

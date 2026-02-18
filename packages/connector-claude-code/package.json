@@ -13,11 +13,15 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node",
+    "build": "bun build src/index.ts --outdir dist --target node && bun run build:types",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@signet/connector-base": "workspace:*",
+    "@signet/core": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "^5.7.0"
   },

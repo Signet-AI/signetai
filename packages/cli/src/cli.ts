@@ -20,9 +20,6 @@ import {
 	readdirSync,
 	rmSync,
 	statSync,
-	symlinkSync,
-	lstatSync,
-	unlinkSync,
 } from "fs";
 import { fileURLToPath } from "url";
 import Database from "./sqlite.js";
@@ -53,13 +50,18 @@ import {
 	IDENTITY_FILES,
 	detectSchema,
 	ensureUnifiedSchema,
+	parseSimpleYaml,
+	formatYaml,
+	symlinkSkills,
 	type SetupDetection,
 	type SkillsResult,
 	type ImportResult,
 	type SchemaInfo,
 	type MigrationResult,
-} from "../../core/src/index.js";
+} from "@signet/core";
 import { OpenClawConnector } from "@signet/connector-openclaw";
+import { ClaudeCodeConnector } from "@signet/connector-claude-code";
+import { OpenCodeConnector } from "@signet/connector-opencode";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
@@ -309,203 +311,23 @@ function formatUptime(seconds: number): string {
 // Harness Hook Configuration
 // ============================================================================
 
-// Symlink skills from ~/.agents/skills to harness-specific directories
-function symlinkSkills(basePath: string, targetSkillsDir: string) {
-	const sourceSkillsDir = join(basePath, "skills");
-	if (!existsSync(sourceSkillsDir)) return;
-
-	mkdirSync(targetSkillsDir, { recursive: true });
-
-	const skills = readdirSync(sourceSkillsDir);
-	for (const skill of skills) {
-		const src = join(sourceSkillsDir, skill);
-		const dest = join(targetSkillsDir, skill);
-
-		// Skip if not a directory
-		try {
-			if (!statSync(src).isDirectory()) continue;
-		} catch {
-			continue;
-		}
-
-		// Check if dest exists
-		try {
-			const destStat = lstatSync(dest);
-			if (destStat.isSymbolicLink()) {
-				// Remove existing symlink to recreate
-				unlinkSync(dest);
-			} else {
-				// It's a real directory - skip to avoid data loss
-				continue;
-			}
-		} catch {
-			// dest doesn't exist, that's fine
-		}
-
-		try {
-			symlinkSync(src, dest);
-		} catch {
-			// Symlinks might fail on some systems
-		}
-	}
-}
-
 async function configureHarnessHooks(harness: string, basePath: string) {
-	const memoryScript = join(basePath, "memory", "scripts", "memory.py");
-
 	switch (harness) {
-		case "claude-code":
-			await configureClaudeCodeHooks(basePath, memoryScript);
-			symlinkSkills(basePath, join(homedir(), ".claude", "skills"));
+		case "claude-code": {
+			const connector = new ClaudeCodeConnector();
+			await connector.install(basePath);
 			break;
-		case "opencode":
-			await configureOpenCodeHooks(basePath, memoryScript);
-			symlinkSkills(basePath, join(homedir(), ".config", "opencode", "skills"));
-			break;
-		case "openclaw":
-			new OpenClawConnector().installHookFiles(basePath);
-			symlinkSkills(basePath, join(homedir(), ".config", "openclaw", "skills"));
-			break;
-	}
-}
-
-async function configureClaudeCodeHooks(
-	basePath: string,
-	memoryScript: string,
-) {
-	const settingsPath = join(homedir(), ".claude", "settings.json");
-	mkdirSync(join(homedir(), ".claude"), { recursive: true });
-
-	let settings: Record<string, unknown> = {};
-	if (existsSync(settingsPath)) {
-		try {
-			settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-		} catch {
-			settings = {};
 		}
-	}
-
-	settings.hooks = {
-		SessionStart: [
-			{
-				hooks: [
-					{
-						type: "command",
-						command: `${memoryScript} load --mode session-start --project "$(pwd)"`,
-						timeout: 3000,
-					},
-				],
-			},
-		],
-		UserPromptSubmit: [
-			{
-				hooks: [
-					{
-						type: "command",
-						command: `${memoryScript} load --mode prompt --project "$(pwd)"`,
-						timeout: 2000,
-					},
-				],
-			},
-		],
-		SessionEnd: [
-			{
-				hooks: [
-					{
-						type: "command",
-						command: `${memoryScript} save --mode auto`,
-						timeout: 10000,
-					},
-				],
-			},
-		],
-	};
-
-	writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-
-	const claudeMd = join(homedir(), ".claude", "CLAUDE.md");
-	const agentsMd = join(basePath, "AGENTS.md");
-	if (existsSync(agentsMd)) {
-		const content = readFileSync(agentsMd, "utf-8");
-		const header = `# Auto-generated from ~/.agents/AGENTS.md
-# Source: ${agentsMd}
-# Generated: ${new Date().toISOString()}
-# DO NOT EDIT - changes will be overwritten
-# Edit ~/.agents/AGENTS.md instead
-
-`;
-		writeFileSync(claudeMd, header + content);
-	}
-}
-
-async function configureOpenCodeHooks(basePath: string, memoryScript: string) {
-	const opencodePath = join(homedir(), ".config", "opencode");
-	mkdirSync(opencodePath, { recursive: true });
-
-	const pluginContent = `/**
- * Signet memory plugin for OpenCode
- */
-import { tool } from '@opencode-ai/plugin'
-import { spawn } from 'child_process'
-
-const MEMORY_SCRIPT = '${memoryScript}'
-
-async function runMemoryScript(args) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('python3', [MEMORY_SCRIPT, ...args], { timeout: 3000 })
-    let stdout = '', stderr = ''
-    proc.stdout.on('data', (d) => { stdout += d.toString() })
-    proc.stderr.on('data', (d) => { stderr += d.toString() })
-    proc.on('close', (code) => {
-      if (code === 0) resolve(stdout.trim())
-      else reject(new Error(stderr || \`exit code \${code}\`))
-    })
-    proc.on('error', reject)
-  })
-}
-
-export async function MemoryPlugin({ directory }) {
-  let memoryContext = ''
-  try {
-    memoryContext = await runMemoryScript(['load', '--mode', 'session-start', '--project', directory])
-  } catch { memoryContext = '[memory active | /remember | /recall]' }
-
-  return {
-    "experimental.chat.system.transform": async (input, output) => {
-      if (memoryContext) output.system.unshift(memoryContext)
-    },
-    tool: {
-      remember: tool({
-        description: "Save to persistent memory",
-        args: { content: tool.schema.string().describe("Content to remember") },
-        async execute(args, context) {
-          try {
-            return await runMemoryScript(['save', '--mode', 'explicit', '--who', 'opencode', '--project', context.directory, '--content', args.content])
-          } catch (e) { return \`error: \${e.message}\` }
-        }
-      }),
-      recall: tool({
-        description: "Query persistent memory",
-        args: { query: tool.schema.string().describe("Search query") },
-        async execute(args) {
-          try { return await runMemoryScript(['query', args.query]) || 'no memories found' }
-          catch (e) { return \`error: \${e.message}\` }
-        }
-      })
-    }
-  }
-}
-`;
-	writeFileSync(join(opencodePath, "memory.mjs"), pluginContent);
-
-	const agentsMd = join(basePath, "AGENTS.md");
-	if (existsSync(agentsMd)) {
-		const content = readFileSync(agentsMd, "utf-8");
-		const header = `# Auto-generated from ~/.agents/AGENTS.md
-# Generated: ${new Date().toISOString()}
-
-`;
-		writeFileSync(join(opencodePath, "AGENTS.md"), header + content);
+		case "opencode": {
+			const connector = new OpenCodeConnector();
+			await connector.install(basePath);
+			break;
+		}
+		case "openclaw": {
+			const connector = new OpenClawConnector();
+			await connector.install(basePath);
+			break;
+		}
 	}
 }
 
@@ -2612,75 +2434,6 @@ async function showLogs(options: {
 }
 
 // ============================================================================
-// Utilities
-// ============================================================================
-
-// Simple YAML parser for flat/shallow configs
-function parseSimpleYaml(yaml: string): Record<string, any> {
-	const result: Record<string, any> = {};
-	const lines = yaml.split("\n");
-	let currentKey = "";
-	let currentIndent = 0;
-
-	for (const line of lines) {
-		// Skip comments and empty lines
-		if (line.trim().startsWith("#") || !line.trim()) continue;
-
-		const indent = line.search(/\S/);
-		const trimmed = line.trim();
-
-		// Handle key: value pairs
-		const colonIdx = trimmed.indexOf(":");
-		if (colonIdx > 0) {
-			const key = trimmed.slice(0, colonIdx).trim();
-			const value = trimmed.slice(colonIdx + 1).trim();
-
-			if (indent === 0) {
-				currentKey = key;
-				currentIndent = 0;
-				if (value) {
-					// Simple value
-					result[key] = value;
-				} else {
-					// Nested object starts
-					result[key] = {};
-				}
-			} else if (
-				indent > 0 &&
-				currentKey &&
-				typeof result[currentKey] === "object"
-			) {
-				// Nested key
-				result[currentKey][key] = value;
-			}
-		}
-	}
-
-	return result;
-}
-
-function formatYaml(obj: Record<string, unknown>, indent = 0): string {
-	const pad = "  ".repeat(indent);
-	let result = "";
-
-	for (const [key, value] of Object.entries(obj)) {
-		if (Array.isArray(value)) {
-			result += `${pad}${key}:\n`;
-			for (const item of value) {
-				result += `${pad}  - ${item}\n`;
-			}
-		} else if (typeof value === "object" && value !== null) {
-			result += `${pad}${key}:\n`;
-			result += formatYaml(value as Record<string, unknown>, indent + 1);
-		} else {
-			result += `${pad}${key}: ${value}\n`;
-		}
-	}
-
-	return result;
-}
-
-// ============================================================================
 // CLI Definition
 // ============================================================================
 
@@ -4393,6 +4146,350 @@ gitCmd
 		}
 
 		console.log(chalk.green("✓ Auto-sync disabled"));
+	});
+
+// ============================================================================
+// signet migrate-vectors - Migrate BLOB vectors to sqlite-vec
+// ============================================================================
+
+interface MigrationSource {
+	type: "zvec" | "blob" | "vec_table";
+	path: string;
+	count: number;
+}
+
+async function detectVectorSources(basePath: string): Promise<MigrationSource[]> {
+	const sources: MigrationSource[] = [];
+	const memoryDir = join(basePath, "memory");
+
+	// Check for old Python zvec store
+	const zvecPath = join(memoryDir, "vectors.zvec");
+	if (existsSync(zvecPath)) {
+		try {
+			statSync(zvecPath);
+			sources.push({
+				type: "zvec",
+				path: zvecPath,
+				count: 0, // Would need to parse zvec to count
+			});
+		} catch {
+			// Ignore
+		}
+	}
+
+	// Check for BLOB vectors in memories.db
+	const dbPath = join(memoryDir, "memories.db");
+	if (existsSync(dbPath)) {
+		try {
+			const db = Database(dbPath, { readonly: true });
+
+			// Check if embeddings table exists with BLOB vectors
+			const tableCheck = db.prepare(`
+				SELECT name FROM sqlite_master
+				WHERE type='table' AND name='embeddings'
+			`).get();
+
+			if (tableCheck) {
+				// Check if vector column is BLOB (old format)
+				const schemaCheck = db.prepare(`PRAGMA table_info(embeddings)`).all() as Array<{
+					name: string;
+					type: string;
+				}>;
+				const vectorCol = schemaCheck.find((c) => c.name === "vector");
+
+				if (vectorCol && vectorCol.type === "BLOB") {
+					const countResult = db
+						.prepare(`SELECT COUNT(*) as count FROM embeddings`)
+						.get() as { count: number };
+					if (countResult.count > 0) {
+						sources.push({
+							type: "blob",
+							path: dbPath,
+							count: countResult.count,
+						});
+					}
+				}
+
+				// Check if vec_embeddings virtual table already exists
+				const vecTableCheck = db.prepare(`
+					SELECT name FROM sqlite_master
+					WHERE type='table' AND name='vec_embeddings'
+				`).get();
+
+				if (vecTableCheck) {
+					const vecCountResult = db
+						.prepare(`SELECT COUNT(*) as count FROM vec_embeddings`)
+						.get() as { count: number };
+					if (vecCountResult.count > 0) {
+						sources.push({
+							type: "vec_table",
+							path: dbPath,
+							count: vecCountResult.count,
+						});
+					}
+				}
+			}
+
+			db.close();
+		} catch {
+			// Ignore errors
+		}
+	}
+
+	return sources;
+}
+
+program
+	.command("migrate-vectors")
+	.description("Migrate existing BLOB vectors to sqlite-vec format")
+	.option("--keep-blobs", "Keep old BLOB column after migration (safer for rollback)")
+	.option("--remove-zvec", "Delete vectors.zvec file after successful migration")
+	.option("--dry-run", "Show what would be migrated without making changes")
+	.option("--rollback", "Rollback to BLOB format (not implemented in Phase 1)")
+	.action(async (options) => {
+		const basePath = AGENTS_DIR;
+		const memoryDir = join(basePath, "memory");
+		const dbPath = join(memoryDir, "memories.db");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Vector Migration\n"));
+
+		// Handle rollback option
+		if (options.rollback) {
+			console.log(
+				chalk.yellow("  Rollback is not implemented in Phase 1."),
+			);
+			console.log(
+				chalk.dim(
+					"  If you used --keep-blobs during migration, you can manually",
+				),
+			);
+			console.log(
+				chalk.dim(
+					"  restore by dropping vec_embeddings table and using the BLOB column.",
+				),
+			);
+			return;
+		}
+
+		// Check for existing setup
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			console.log(chalk.dim(`  Expected: ${dbPath}`));
+			return;
+		}
+
+		// Detect vector sources
+		console.log(chalk.dim("  Detecting vector sources..."));
+		const sources = await detectVectorSources(basePath);
+
+		// Check if vec_embeddings already populated
+		const vecTableSource = sources.find((s) => s.type === "vec_table");
+		if (vecTableSource) {
+			console.log(
+				chalk.green(
+					`  vec_embeddings table already populated with ${vecTableSource.count} vectors`,
+				),
+			);
+			console.log(
+				chalk.dim("  Migration appears to have already been run."),
+			);
+
+			// Still check for zvec to clean up
+			const zvecSource = sources.find((s) => s.type === "zvec");
+			if (zvecSource && options.removeZvec) {
+				const confirmed = await confirm({
+					message: `Delete ${zvecSource.path}?`,
+					default: false,
+				});
+				if (confirmed) {
+					rmSync(zvecSource.path);
+					console.log(chalk.dim(`  Removed ${zvecSource.path}`));
+				}
+			}
+			return;
+		}
+
+		// Find BLOB source
+		const blobSource = sources.find((s) => s.type === "blob");
+		if (!blobSource) {
+			console.log(
+				chalk.yellow("  No existing embeddings found to migrate."),
+			);
+			console.log(
+				chalk.dim("  The embeddings table is empty or already migrated."),
+			);
+			return;
+		}
+
+		// Show migration plan
+		console.log();
+		console.log(chalk.cyan("  Migration Plan:"));
+		console.log(chalk.dim(`    Source: ${blobSource.path}`));
+		console.log(chalk.dim(`    Embeddings to migrate: ${blobSource.count}`));
+		console.log(
+			chalk.dim(`    Keep BLOB column: ${options.keepBlobs ? "yes" : "no"}`),
+		);
+
+		const zvecSource = sources.find((s) => s.type === "zvec");
+		if (zvecSource) {
+			console.log(chalk.dim(`    zvec file found: ${zvecSource.path}`));
+			if (options.removeZvec) {
+				console.log(chalk.dim("    Will be deleted after migration"));
+			}
+		}
+
+		if (options.dryRun) {
+			console.log();
+			console.log(chalk.yellow("  Dry run complete. No changes made."));
+			console.log(
+				chalk.dim("  Run without --dry-run to perform migration."),
+			);
+			return;
+		}
+
+		// Confirm migration
+		console.log();
+		const confirmed = await confirm({
+			message: `Migrate ${blobSource.count} embeddings to sqlite-vec?`,
+			default: true,
+		});
+
+		if (!confirmed) {
+			console.log(chalk.dim("  Migration cancelled."));
+			return;
+		}
+
+		// Perform migration
+		const spinner = ora("Migrating vectors...").start();
+
+		try {
+			const db = Database(dbPath);
+
+			// Create vec_embeddings virtual table if not exists
+			spinner.text = "Creating vec_embeddings table...";
+			db.exec(`
+				CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
+					id TEXT PRIMARY KEY,
+					embedding FLOAT[1024] distance_metric=cosine
+				);
+			`);
+
+			// Read all embeddings from BLOB column
+			spinner.text = "Reading existing embeddings...";
+			const embeddings = db.prepare(`
+				SELECT id, vector, dimensions FROM embeddings
+			`).all() as Array<{ id: string; vector: Buffer; dimensions: number }>;
+
+			const total = embeddings.length;
+			let migrated = 0;
+			let failed = 0;
+
+			// Insert into vec_embeddings
+			const insertStmt = db.prepare(`
+				INSERT OR REPLACE INTO vec_embeddings (id, embedding)
+				VALUES (?, ?)
+			`);
+
+			for (const row of embeddings) {
+				try {
+					// Convert BLOB to Float32Array
+					const float32Array = new Float32Array(
+						row.vector.buffer.slice(
+							row.vector.byteOffset,
+							row.vector.byteOffset + row.vector.byteLength,
+						),
+					);
+
+					// Insert with rowid matching the embeddings.id
+					insertStmt.run(row.id, float32Array);
+					migrated++;
+
+					if (migrated % 50 === 0 || migrated === total) {
+						spinner.text = `Migrating ${migrated}/${total} embeddings...`;
+					}
+				} catch (err) {
+					failed++;
+					console.error(
+						`\n  Failed to migrate embedding ${row.id}: ${(err as Error).message}`,
+					);
+				}
+			}
+
+			// Optionally remove BLOB column (by recreating table)
+			if (!options.keepBlobs && migrated > 0) {
+				spinner.text = "Removing old BLOB column...";
+				try {
+					db.exec(`
+						-- Create new embeddings table without vector column
+						CREATE TABLE embeddings_new (
+							id TEXT PRIMARY KEY,
+							content_hash TEXT NOT NULL UNIQUE,
+							dimensions INTEGER NOT NULL,
+							source_type TEXT NOT NULL,
+							source_id TEXT NOT NULL,
+							chunk_text TEXT NOT NULL,
+							created_at TEXT NOT NULL
+						);
+
+						-- Copy data
+						INSERT INTO embeddings_new (id, content_hash, dimensions, source_type, source_id, chunk_text, created_at)
+						SELECT id, content_hash, dimensions, source_type, source_id, chunk_text, created_at
+						FROM embeddings;
+
+						-- Drop old table and rename
+						DROP TABLE embeddings;
+						ALTER TABLE embeddings_new RENAME TO embeddings;
+
+						-- Recreate indexes
+						CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type, source_id);
+						CREATE INDEX IF NOT EXISTS idx_embeddings_hash ON embeddings(content_hash);
+					`);
+				} catch (err) {
+					spinner.warn("Could not remove BLOB column");
+					console.log(chalk.dim(`  ${(err as Error).message}`));
+					console.log(
+						chalk.dim("  Vectors were migrated successfully. BLOB column retained."),
+					);
+				}
+			}
+
+			db.close();
+
+			spinner.succeed(
+				chalk.green(`Migrated ${migrated} embeddings to sqlite-vec format`),
+			);
+
+			if (failed > 0) {
+				console.log(chalk.yellow(`  ${failed} embeddings failed to migrate`));
+			}
+
+			// Remove zvec file if requested
+			if (options.removeZvec && zvecSource) {
+				try {
+					rmSync(zvecSource.path);
+					console.log(chalk.dim(`  Removed ${zvecSource.path}`));
+				} catch (err) {
+					console.log(
+						chalk.yellow(
+							`  Could not remove zvec file: ${(err as Error).message}`,
+						),
+					);
+				}
+			}
+
+			console.log();
+			console.log(
+				chalk.dim(
+					"  You may need to restart the daemon for changes to take effect:",
+				),
+			);
+			console.log(chalk.cyan("    signet daemon restart"));
+		} catch (err) {
+			spinner.fail("Migration failed");
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		}
 	});
 
 // ============================================================================

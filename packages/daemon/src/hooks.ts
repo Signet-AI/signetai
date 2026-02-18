@@ -11,6 +11,7 @@ import { homedir } from 'os';
 import { readFileSync, existsSync } from 'fs';
 import { Database } from 'bun:sqlite';
 import { logger } from './logger';
+import { parseSimpleYaml } from '@signet/core';
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), '.agents');
 const MEMORY_DB = join(AGENTS_DIR, 'memory', 'memories.db');
@@ -136,51 +137,30 @@ Keep the summary concise but complete. Use first person from the agent's perspec
   };
 }
 
-// Simple YAML parser for config
-function parseSimpleYaml(content: string): Record<string, any> {
-  const result: Record<string, any> = {};
-  const lines = content.split('\n');
-  const stack: Array<{ indent: number; obj: Record<string, any>; key?: string }> = [
-    { indent: -1, obj: result }
-  ];
-  
-  for (const line of lines) {
-    if (!line.trim() || line.trim().startsWith('#')) continue;
-    
-    const indent = line.search(/\S/);
-    const trimmed = line.trim();
-    
-    // Pop stack to correct level
-    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-      stack.pop();
-    }
-    
-    const colonIdx = trimmed.indexOf(':');
-    if (colonIdx === -1) continue;
-    
-    const key = trimmed.slice(0, colonIdx).trim();
-    const value = trimmed.slice(colonIdx + 1).trim();
-    
-    const parent = stack[stack.length - 1].obj;
-    
-    if (value === '' || value === '|') {
-      // Nested object or multiline
-      parent[key] = {};
-      stack.push({ indent, obj: parent[key], key });
-    } else if (value.startsWith('|')) {
-      // Multiline string - collect following indented lines
-      parent[key] = '';
-    } else {
-      // Simple value
-      if (value === 'true') parent[key] = true;
-      else if (value === 'false') parent[key] = false;
-      else if (/^\d+$/.test(value)) parent[key] = parseInt(value, 10);
-      else if (/^\d+\.\d+$/.test(value)) parent[key] = parseFloat(value);
-      else parent[key] = value.replace(/^["']|["']$/g, '');
-    }
-  }
-  
-  return result;
+// ============================================================================
+// Type Guards for Parsed YAML
+// ============================================================================
+
+interface AgentConfig {
+  name?: string;
+  description?: string;
+}
+
+interface MemoryConfig {
+  synthesis?: {
+    harness?: string;
+    model?: string;
+    schedule?: 'daily' | 'weekly' | 'on-demand';
+    max_tokens?: number;
+  };
+}
+
+function isAgentConfig(value: unknown): value is AgentConfig {
+  return typeof value === 'object' && value !== null;
+}
+
+function isMemoryConfig(value: unknown): value is MemoryConfig {
+  return typeof value === 'object' && value !== null;
 }
 
 // ============================================================================
@@ -194,10 +174,11 @@ function loadIdentity(): { name: string; description?: string } {
     try {
       const content = readFileSync(agentYaml, 'utf-8');
       const config = parseSimpleYaml(content);
-      if (config.agent?.name) {
+      const agent = config.agent;
+      if (isAgentConfig(agent) && agent.name) {
         return {
-          name: config.agent.name,
-          description: config.agent.description,
+          name: agent.name,
+          description: agent.description,
         };
       }
     } catch {}
@@ -377,13 +358,14 @@ function loadSynthesisConfig(): MemorySynthesisConfig {
   try {
     const content = readFileSync(configPath, 'utf-8');
     const config = parseSimpleYaml(content);
-    const synthesis = config.memory?.synthesis || {};
-    
+    const memory = config.memory;
+    const synthesis = isMemoryConfig(memory) ? memory.synthesis : undefined;
+
     return {
-      harness: synthesis.harness || defaults.harness,
-      model: synthesis.model || defaults.model,
-      schedule: synthesis.schedule || defaults.schedule,
-      max_tokens: synthesis.max_tokens || defaults.max_tokens,
+      harness: synthesis?.harness || defaults.harness,
+      model: synthesis?.model || defaults.model,
+      schedule: synthesis?.schedule || defaults.schedule,
+      max_tokens: synthesis?.max_tokens || defaults.max_tokens,
     };
   } catch {
     return defaults;
