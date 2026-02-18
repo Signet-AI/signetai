@@ -120,6 +120,12 @@ export interface SetupDetection {
 	agentsDir: boolean;
 	/** Whether agent.yaml exists */
 	agentYaml: boolean;
+	/** Whether AGENTS.md exists */
+	agentsMd: boolean;
+	/** Whether config.yaml exists */
+	configYaml: boolean;
+	/** Whether memories.db exists */
+	memoryDb: boolean;
 	/** Found identity files */
 	identityFiles: string[];
 	/** Whether memory directory exists with logs */
@@ -176,6 +182,9 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		basePath,
 		agentsDir: existsSync(basePath),
 		agentYaml: existsSync(join(basePath, "agent.yaml")),
+		agentsMd: existsSync(join(basePath, "AGENTS.md")),
+		configYaml: existsSync(join(basePath, "config.yaml")),
+		memoryDb: existsSync(join(basePath, "memory", "memories.db")),
 		identityFiles: foundFiles,
 		hasMemoryDir: existsSync(memoryDir),
 		memoryLogCount,
