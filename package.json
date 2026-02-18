@@ -13,11 +13,13 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run build:core && bun run --filter '!@signet/core' build",
+    "build": "bun run build:core && bun run build:connector-base && bun run build:deps && bun run build:signetai",
     "build:core": "cd packages/core && bun run build",
+    "build:connector-base": "cd packages/connector-base && bun run build",
+    "build:deps": "bun run --filter '@signet/connector-*' --filter '@signet/daemon' --filter '@signet/sdk' --filter '@signet/cli' build",
+    "build:signetai": "cd packages/signetai && bun run build",
     "build:publish": "bun run build:dashboard && bun run build:signetai",
     "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
-    "build:signetai": "cd packages/signetai && bun run build",
     "dev": "bun run --filter '*' dev",
     "test": "bun run --filter '*' test",
     "lint": "biome check .",
