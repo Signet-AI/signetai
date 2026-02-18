@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.2';
+const VERSION = '0.1.3';
 
 // ============================================================================
 // Helpers

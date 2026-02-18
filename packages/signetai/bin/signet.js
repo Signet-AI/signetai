@@ -7,7 +7,7 @@
  * - Daemon start: Bun (daemon.js) - required for bun:sqlite
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
@@ -29,7 +29,7 @@ const isDaemonCommand = needsBun;
 // Check if Bun is available
 function hasBun() {
   try {
-    const result = spawn.sync('bun', ['--version'], { stdio: 'pipe' });
+    const result = spawnSync('bun', ['--version'], { stdio: 'pipe' });
     return result.status === 0;
   } catch {
     return false;
