@@ -1,8 +1,16 @@
 # Signet
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Spec Version](https://img.shields.io/badge/spec-v0.2.1--draft-blue.svg)](./spec/SPEC.md)
+[![GitHub Stars](https://img.shields.io/github/stars/Signet-AI/signet.svg)](https://github.com/Signet-AI/signet/stargazers)
+
 **Own your agent. Bring it anywhere.**
 
-Signet is an open standard for portable AI agent identity. Your agent's personality, memory, skills, and secrets—stored in plain files you own, working across Claude Code, OpenClaw, OpenCode, and beyond.
+Every AI platform has memory now. ChatGPT remembers you. Claude learns your preferences. Gemini knows your style.
+
+**But you can't take it with you.**
+
+Signet is an open standard for portable AI agent identity. Your agent's personality, memory, and preferences live in plain text files on YOUR machine—working across Claude Code, OpenClaw, OpenCode, and beyond.
 
 ```
 ~/.agents/
@@ -21,11 +29,14 @@ One agent. Every platform. Zero lock-in.
 
 ## The Problem
 
-Every AI platform has memory now. ChatGPT remembers you. Claude.ai learns your preferences. Gemini knows your style.
-
-**But you can't take it with you.**
-
 They're not storing memories *for* you—they're locking you *in*.
+
+- OpenAI won't let you export your memories
+- Anthropic won't let you move your project context
+- Google won't let you download what Gemini learned about you
+- The best you get is a chat history export—raw transcripts, not structured knowledge
+
+Switch tools? Start from zero. All those hours of context building, gone.
 
 ## The Solution
 
@@ -268,10 +279,30 @@ bun run build
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+We welcome contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
+**Good first issues:**
+- Documentation improvements
+- New harness adapters
+- Test coverage
+
+**Ways to help:**
+- Star the repo
+- Share your experience on Twitter/HN
+- Report bugs or request features via issues
+- Contribute code or documentation
 
 ---
 
 ## License
 
-MIT
+Apache-2.0 — use it, fork it, ship it.
+
+---
+
+## Links
+
+- **Website:** [signetai.sh](https://signetai.sh)
+- **Documentation:** [signetai.sh/docs](https://signetai.sh/docs)
+- **Specification:** [spec/SPEC.md](./spec/SPEC.md)
+- **Twitter:** [@signet_ai](https://twitter.com/signet_ai)
