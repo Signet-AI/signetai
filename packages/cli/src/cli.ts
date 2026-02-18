@@ -8,10 +8,10 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import { input, select, confirm, checkbox, password } from '@inquirer/prompts';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync, rmSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import open from 'open';
@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.15';
+const VERSION = '0.1.16';
 
 // ============================================================================
 // Helpers
@@ -735,6 +735,7 @@ async function setupWizard(options: { path?: string }) {
       choices: [
         { value: 'dashboard', name: 'Launch dashboard' },
         { value: 'migrate', name: 'Import memories from another platform' },
+        { value: 'github-import', name: 'Import agent config from GitHub' },
         { value: 'reconfigure', name: 'Reconfigure settings' },
         { value: 'status', name: 'View status' },
         { value: 'exit', name: 'Exit' },
@@ -746,6 +747,9 @@ async function setupWizard(options: { path?: string }) {
       return;
     } else if (action === 'migrate') {
       await migrateWizard(basePath);
+      return;
+    } else if (action === 'github-import') {
+      await importFromGitHub(basePath);
       return;
     } else if (action === 'status') {
       await showStatus({ path: basePath });
@@ -768,6 +772,26 @@ async function setupWizard(options: { path?: string }) {
   }
   
   console.log(chalk.bold('  Let\'s set up your agent identity.\n'));
+  
+  // For fresh installs, offer to import from GitHub
+  if (!existing.agentsDir) {
+    const setupMethod = await select({
+      message: 'How would you like to set up?',
+      choices: [
+        { value: 'new', name: 'Create new agent identity' },
+        { value: 'github', name: 'Import from GitHub repository' },
+      ],
+    });
+    
+    if (setupMethod === 'github') {
+      // Create minimal structure first
+      mkdirSync(basePath, { recursive: true });
+      mkdirSync(join(basePath, 'memory'), { recursive: true });
+      await importFromGitHub(basePath);
+      return;
+    }
+    console.log();
+  }
   
   const agentName = await input({
     message: 'What should your agent be called?',
@@ -1291,6 +1315,166 @@ ${agentName} is a helpful assistant.
 }
 
 // ============================================================================
+// Import from GitHub
+// ============================================================================
+
+async function importFromGitHub(basePath: string) {
+  console.log();
+  console.log(chalk.bold('  Import agent configuration from GitHub\n'));
+  
+  const repoUrl = await input({
+    message: 'GitHub repo URL (e.g., username/repo or full URL):',
+    validate: (val) => {
+      if (!val.trim()) return 'URL is required';
+      return true;
+    },
+  });
+  
+  // Normalize URL
+  let gitUrl = repoUrl.trim();
+  if (!gitUrl.includes('://') && !gitUrl.startsWith('git@')) {
+    // Assume it's username/repo format
+    gitUrl = `https://github.com/${gitUrl}.git`;
+  } else if (gitUrl.startsWith('https://github.com/') && !gitUrl.endsWith('.git')) {
+    gitUrl = gitUrl + '.git';
+  }
+  
+  console.log();
+  console.log(chalk.dim(`  Cloning from ${gitUrl}...`));
+  
+  // Check if basePath has uncommitted changes
+  if (isGitRepo(basePath)) {
+    const statusResult = spawnSync('git', ['status', '--porcelain'], { cwd: basePath, encoding: 'utf-8' });
+    if (statusResult.stdout && statusResult.stdout.trim()) {
+      const proceed = await confirm({
+        message: 'You have uncommitted changes. Create backup commit first?',
+        default: true,
+      });
+      if (proceed) {
+        const date = new Date().toISOString().replace(/[:.]/g, '-');
+        await gitAddAndCommit(basePath, `backup-before-import-${date}`);
+        console.log(chalk.green('  ✓ Backup commit created'));
+      }
+    }
+  }
+  
+  // Clone to temp dir first
+  const tmpDir = join(basePath, '.import-tmp');
+  if (existsSync(tmpDir)) {
+    rmSync(tmpDir, { recursive: true });
+  }
+  
+  const spinner = ora('Cloning repository...').start();
+  
+  try {
+    const cloneResult = spawnSync('git', ['clone', '--depth', '1', gitUrl, tmpDir], { 
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    
+    if (cloneResult.status !== 0) {
+      spinner.fail('Clone failed');
+      console.log(chalk.red(`  ${cloneResult.stderr || 'Unknown error'}`));
+      if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true });
+      return;
+    }
+    
+    spinner.succeed('Repository cloned');
+    
+    // List files that will be imported
+    const configFiles = ['agent.yaml', 'AGENTS.md', 'SOUL.md', 'IDENTITY.md', 'USER.md', 'MEMORY.md'];
+    const foundFiles: string[] = [];
+    
+    for (const file of configFiles) {
+      if (existsSync(join(tmpDir, file))) {
+        foundFiles.push(file);
+      }
+    }
+    
+    if (foundFiles.length === 0) {
+      console.log(chalk.yellow('  No agent config files found in repository'));
+      rmSync(tmpDir, { recursive: true });
+      return;
+    }
+    
+    console.log();
+    console.log(chalk.dim('  Found config files:'));
+    for (const file of foundFiles) {
+      console.log(chalk.dim(`    • ${file}`));
+    }
+    console.log();
+    
+    const doImport = await confirm({
+      message: `Import ${foundFiles.length} file(s)? (will overwrite existing)`,
+      default: true,
+    });
+    
+    if (!doImport) {
+      rmSync(tmpDir, { recursive: true });
+      return;
+    }
+    
+    // Copy files
+    for (const file of foundFiles) {
+      copyFileSync(join(tmpDir, file), join(basePath, file));
+      console.log(chalk.green(`  ✓ ${file}`));
+    }
+    
+    // Also copy skills if present
+    const skillsDir = join(tmpDir, 'skills');
+    if (existsSync(skillsDir)) {
+      const skills = readdirSync(skillsDir);
+      if (skills.length > 0) {
+        mkdirSync(join(basePath, 'skills'), { recursive: true });
+        for (const skill of skills) {
+          const src = join(skillsDir, skill);
+          const dest = join(basePath, 'skills', skill);
+          if (statSync(src).isDirectory()) {
+            copyDirRecursive(src, dest);
+            console.log(chalk.green(`  ✓ skills/${skill}/`));
+          }
+        }
+      }
+    }
+    
+    // Also copy memory scripts if present
+    const scriptsDir = join(tmpDir, 'memory', 'scripts');
+    if (existsSync(scriptsDir)) {
+      mkdirSync(join(basePath, 'memory', 'scripts'), { recursive: true });
+      copyDirRecursive(scriptsDir, join(basePath, 'memory', 'scripts'));
+      console.log(chalk.green('  ✓ memory/scripts/'));
+    }
+    
+    // Clean up
+    rmSync(tmpDir, { recursive: true });
+    
+    // Set up git remote if not already configured
+    if (isGitRepo(basePath)) {
+      const remoteResult = spawnSync('git', ['remote', 'get-url', 'origin'], { cwd: basePath, encoding: 'utf-8' });
+      if (remoteResult.status !== 0) {
+        // No origin remote, add it
+        spawnSync('git', ['remote', 'add', 'origin', gitUrl], { cwd: basePath });
+        console.log(chalk.dim(`  Set origin remote to ${gitUrl}`));
+      }
+    }
+    
+    // Commit the import
+    if (isGitRepo(basePath)) {
+      await gitAddAndCommit(basePath, `import from ${repoUrl.trim()}`);
+      console.log(chalk.green('  ✓ Changes committed'));
+    }
+    
+    console.log();
+    console.log(chalk.green('  Import complete!'));
+    console.log(chalk.dim('  Run `signet restart` to apply changes'));
+    
+  } catch (err: any) {
+    spinner.fail('Import failed');
+    console.log(chalk.red(`  ${err.message}`));
+    if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true });
+  }
+}
+
 // signet migrate - Import Wizard
 // ============================================================================
 
