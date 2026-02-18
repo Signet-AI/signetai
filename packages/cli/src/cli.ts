@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.9';
+const VERSION = '0.1.10';
 
 // ============================================================================
 // Helpers
@@ -981,11 +981,11 @@ async function setupWizard(options: { path?: string }) {
           proc.on('error', () => resolve(1));
         });
         
-        if (venvCode === 0) {
+        const venvPip = join(venvPath, 'bin', 'pip');
+        if (venvCode === 0 && existsSync(venvPip)) {
           spinner.text = 'Installing Python dependencies...';
-          const venvPip = join(venvPath, 'bin', 'pip');
           const pipCode = await new Promise<number>((resolve) => {
-            const proc = spawn(venvPip, ['install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')], { stdio: 'pipe' });
+            const proc = spawn(venvPip, ['install', '-r', join(basePath, 'memory', 'requirements.txt')], { stdio: 'pipe' });
             proc.on('close', (c) => resolve(c ?? 1));
             proc.on('error', () => resolve(1));
           });
@@ -1185,8 +1185,11 @@ ${agentName} is a helpful assistant.
     
     if (pipInstallFailed) {
       console.log();
-      console.log(chalk.yellow('  ⚠ Python dependencies not installed. Run manually:'));
-      console.log(chalk.dim('    pip install PyYAML zvec'));
+      console.log(chalk.yellow('  ⚠ Python dependencies not installed.'));
+      console.log(chalk.dim('    You may need to install python3-venv first:'));
+      console.log(chalk.dim('      sudo pacman -S python      # Arch'));
+      console.log(chalk.dim('      sudo apt install python3-venv  # Debian/Ubuntu'));
+      console.log(chalk.dim('    Then re-run: signet setup'));
     }
     
     if (configuredHarnesses.length > 0) {
