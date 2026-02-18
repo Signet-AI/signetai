@@ -560,7 +560,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.17';
+const VERSION = '0.1.18';
 
 // ============================================================================
 // Helpers
@@ -634,6 +634,7 @@ async function interactiveMenu() {
           { value: 'dashboard', name: '[web] Open dashboard' },
           { value: 'status', name: '[info] View status' },
           { value: 'config', name: '[config] Configure settings' },
+          { value: 'secrets', name: '[key] Manage secrets' },
           { value: 'harnesses', name: '[link] Manage harnesses' },
           { value: 'logs', name: '[logs] View logs' },
           { value: 'restart', name: '[restart] Restart daemon' },
@@ -669,6 +670,11 @@ async function interactiveMenu() {
         console.log(chalk.dim(`  http://localhost:${DEFAULT_PORT}#config`));
         await open(`http://localhost:${DEFAULT_PORT}#config`);
         await new Promise(r => setTimeout(r, 1500)); // let user see message
+        break;
+      
+      case 'secrets':
+        await manageSecrets();
+        await input({ message: 'Press Enter to continue...' });
         break;
         
       case 'harnesses':
@@ -707,6 +713,99 @@ async function interactiveMenu() {
     }
     
     console.log();
+  }
+}
+
+async function manageSecrets() {
+  console.log();
+  console.log(chalk.bold('  Manage Secrets\n'));
+  
+  // List current secrets
+  let secrets: string[] = [];
+  try {
+    const { ok, data } = await secretApiCall('GET', '/api/secrets');
+    if (ok) {
+      secrets = (data as { secrets: string[] }).secrets;
+    }
+  } catch {}
+  
+  if (secrets.length > 0) {
+    console.log(chalk.dim('  Current secrets:'));
+    for (const name of secrets) {
+      console.log(`    ${chalk.cyan('◈')} ${name}`);
+    }
+    console.log();
+  }
+  
+  const action = await select({
+    message: 'What would you like to do?',
+    choices: [
+      { value: 'add', name: 'Add a secret' },
+      { value: 'delete', name: 'Delete a secret' },
+      { value: 'back', name: 'Back to menu' },
+    ],
+  });
+  
+  if (action === 'back') return;
+  
+  if (action === 'add') {
+    const name = await input({
+      message: 'Secret name (e.g., OPENAI_API_KEY):',
+      validate: (val) => val.trim() ? true : 'Name is required',
+    });
+    
+    const value = await password({
+      message: `Enter value for ${chalk.bold(name)}:`,
+      mask: '•',
+    });
+    
+    if (!value) {
+      console.log(chalk.red('  Value cannot be empty'));
+      return;
+    }
+    
+    const spinner = ora('Saving secret...').start();
+    try {
+      const { ok, data } = await secretApiCall('POST', `/api/secrets/${name}`, { value });
+      if (ok) {
+        spinner.succeed(chalk.green(`Secret ${chalk.bold(name)} saved`));
+      } else {
+        spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
+      }
+    } catch (e) {
+      spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
+    }
+  }
+  
+  if (action === 'delete') {
+    if (secrets.length === 0) {
+      console.log(chalk.dim('  No secrets to delete'));
+      return;
+    }
+    
+    const name = await select({
+      message: 'Select secret to delete:',
+      choices: secrets.map(s => ({ value: s, name: s })),
+    });
+    
+    const confirmed = await confirm({
+      message: `Delete secret ${chalk.bold(name)}?`,
+      default: false,
+    });
+    
+    if (!confirmed) return;
+    
+    const spinner = ora('Deleting...').start();
+    try {
+      const { ok, data } = await secretApiCall('DELETE', `/api/secrets/${name}`);
+      if (ok) {
+        spinner.succeed(chalk.green(`Secret ${chalk.bold(name)} deleted`));
+      } else {
+        spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
+      }
+    } catch (e) {
+      spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
+    }
   }
 }
 
@@ -1786,6 +1885,46 @@ async function showLogs(options: {
 // ============================================================================
 // Utilities
 // ============================================================================
+
+// Simple YAML parser for flat/shallow configs
+function parseSimpleYaml(yaml: string): Record<string, any> {
+  const result: Record<string, any> = {};
+  const lines = yaml.split('\n');
+  let currentKey = '';
+  let currentIndent = 0;
+  
+  for (const line of lines) {
+    // Skip comments and empty lines
+    if (line.trim().startsWith('#') || !line.trim()) continue;
+    
+    const indent = line.search(/\S/);
+    const trimmed = line.trim();
+    
+    // Handle key: value pairs
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx > 0) {
+      const key = trimmed.slice(0, colonIdx).trim();
+      const value = trimmed.slice(colonIdx + 1).trim();
+      
+      if (indent === 0) {
+        currentKey = key;
+        currentIndent = 0;
+        if (value) {
+          // Simple value
+          result[key] = value;
+        } else {
+          // Nested object starts
+          result[key] = {};
+        }
+      } else if (indent > 0 && currentKey && typeof result[currentKey] === 'object') {
+        // Nested key
+        result[currentKey][key] = value;
+      }
+    }
+  }
+  
+  return result;
+}
 
 function formatYaml(obj: Record<string, unknown>, indent = 0): string {
   const pad = '  '.repeat(indent);
