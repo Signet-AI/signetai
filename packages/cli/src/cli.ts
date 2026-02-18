@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.13';
+const VERSION = '0.1.14';
 
 // ============================================================================
 // Helpers
@@ -746,6 +746,18 @@ async function setupWizard(options: { path?: string }) {
       return;
     } else if (action === 'exit') {
       return;
+    }
+    
+    // Sync missing template files on reconfigure
+    const templatesDir = getTemplatesDir();
+    const filesToSync = ['.gitignore'];
+    for (const file of filesToSync) {
+      const src = join(templatesDir, file);
+      const dest = join(basePath, file);
+      if (existsSync(src) && !existsSync(dest)) {
+        copyFileSync(src, dest);
+        console.log(chalk.dim(`  Synced missing: ${file}`));
+      }
     }
   }
   
@@ -1712,6 +1724,102 @@ program
   .action(async (source) => {
     const basePath = AGENTS_DIR;
     await migrateWizard(basePath);
+  });
+
+program
+  .command('sync')
+  .description('Sync missing template files and fix Python venv')
+  .action(async () => {
+    console.log(signetLogo());
+    const basePath = AGENTS_DIR;
+    const templatesDir = getTemplatesDir();
+    
+    if (!existsSync(basePath)) {
+      console.log(chalk.red('  No Signet installation found. Run: signet setup'));
+      return;
+    }
+    
+    console.log(chalk.bold('  Syncing template files...\n'));
+    
+    // Sync missing template files
+    const filesToSync = ['.gitignore'];
+    let synced = 0;
+    for (const file of filesToSync) {
+      const src = join(templatesDir, file);
+      const dest = join(basePath, file);
+      if (existsSync(src) && !existsSync(dest)) {
+        copyFileSync(src, dest);
+        console.log(chalk.green(`  ✓ ${file}`));
+        synced++;
+      }
+    }
+    
+    if (synced === 0) {
+      console.log(chalk.dim('  All template files present'));
+    }
+    
+    // Check/fix venv
+    const venvPath = join(basePath, '.venv');
+    const venvPip = join(venvPath, 'bin', 'pip');
+    const requirementsPath = join(basePath, 'memory', 'requirements.txt');
+    
+    if (!existsSync(venvPip) && existsSync(requirementsPath)) {
+      console.log();
+      console.log(chalk.bold('  Setting up Python venv...\n'));
+      
+      // Find python
+      let pythonCmd: string | null = null;
+      for (const cmd of ['python3', 'python']) {
+        const code = await new Promise<number>((resolve) => {
+          const proc = spawn(cmd, ['--version'], { stdio: 'pipe' });
+          proc.on('close', (c) => resolve(c ?? 1));
+          proc.on('error', () => resolve(1));
+        });
+        if (code === 0) {
+          pythonCmd = cmd;
+          break;
+        }
+      }
+      
+      if (pythonCmd) {
+        // Create venv
+        const venvResult = await new Promise<{ code: number; stderr: string }>((resolve) => {
+          let stderr = '';
+          const proc = spawn(pythonCmd!, ['-m', 'venv', venvPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+          proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+          proc.on('close', (c) => resolve({ code: c ?? 1, stderr }));
+          proc.on('error', (e) => resolve({ code: 1, stderr: e.message }));
+        });
+        
+        if (venvResult.code === 0 && existsSync(venvPip)) {
+          console.log(chalk.green('  ✓ venv created'));
+          
+          // Install deps
+          const pipResult = await new Promise<{ code: number; stderr: string }>((resolve) => {
+            let stderr = '';
+            const proc = spawn(venvPip, ['install', '-r', requirementsPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+            proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+            proc.on('close', (c) => resolve({ code: c ?? 1, stderr }));
+            proc.on('error', (e) => resolve({ code: 1, stderr: e.message }));
+          });
+          
+          if (pipResult.code === 0) {
+            console.log(chalk.green('  ✓ Python dependencies installed'));
+          } else {
+            console.log(chalk.red(`  ✗ pip install failed: ${pipResult.stderr.slice(0, 100)}`));
+          }
+        } else {
+          console.log(chalk.red(`  ✗ venv creation failed: ${venvResult.stderr.slice(0, 100)}`));
+        }
+      } else {
+        console.log(chalk.red('  ✗ Python not found'));
+      }
+    } else if (existsSync(venvPip)) {
+      console.log(chalk.dim('  Python venv present'));
+    }
+    
+    console.log();
+    console.log(chalk.green('  Done!'));
   });
 
 program
