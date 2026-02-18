@@ -197,7 +197,11 @@ signet skill search github
 | [`@signet/core`](./packages/core) | Core library, types, database |
 | [`@signet/daemon`](./packages/daemon) | Background daemon service |
 | [`@signet/sdk`](./packages/sdk) | Integration SDK for apps |
-| [`@signet/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw adapter |
+| [`@signet/connector-claude-code`](./packages/connector-claude-code) | Claude Code connector |
+| [`@signet/connector-opencode`](./packages/connector-opencode) | OpenCode connector |
+| [`@signet/connector-openclaw`](./packages/connector-openclaw) | OpenClaw connector |
+| [`@signet/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime adapter |
+| [`signetai`](./packages/signetai) | Meta-package (CLI + daemon) |
 
 ---
 
@@ -249,7 +253,6 @@ See [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) for full reference.
 - [API Reference](./docs/API.md) — Daemon HTTP API
 - [Harnesses](./docs/HARNESSES.md) — Platform integrations
 - [Architecture](./docs/ARCHITECTURE.md) — Technical deep dive
-- [Roadmap](./docs/ROADMAP.md) — What's coming
 
 ---
 

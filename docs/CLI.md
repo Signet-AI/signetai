@@ -34,6 +34,11 @@ curl -sL https://signetai.sh/install | bash
 | `signet logs` | View daemon logs |
 | `signet migrate` | Import from other platforms |
 | `signet migrate-schema` | Migrate database to unified schema |
+| `signet secret` | Manage encrypted secrets |
+| `signet skill` | Manage agent skills from registry |
+| `signet git` | Git sync management for ~/.agents |
+| `signet hook` | Lifecycle hook commands |
+| `signet update` | Check and install updates |
 
 ---
 
@@ -401,6 +406,190 @@ If the database is already on the unified schema:
 
 ---
 
+## `signet secret`
+
+Manage encrypted secrets stored in `~/.agents/secrets.yaml`.
+
+```bash
+signet secret put OPENAI_API_KEY
+signet secret list
+signet secret delete GITHUB_TOKEN
+signet secret has OPENAI_API_KEY
+```
+
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `signet secret put <name>` | Store a secret (prompts for value) |
+| `signet secret list` | List all secret names (not values) |
+| `signet secret delete <name>` | Delete a secret |
+| `signet secret has <name>` | Check if a secret exists |
+
+### Output
+
+```
+  ◈ signet v0.1.0
+  own your agent. bring it anywhere.
+
+? Enter value for OPENAI_API_KEY: ********
+
+✔ Secret OPENAI_API_KEY stored
+```
+
+---
+
+## `signet skill`
+
+Manage agent skills from the skills.sh registry. Skills are installed to `~/.agents/skills/`.
+
+```bash
+signet skill list
+signet skill install browser-use
+signet skill uninstall weather
+signet skill search github
+signet skill show <name>
+```
+
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `signet skill list` | List installed skills |
+| `signet skill install <name>` | Install a skill from registry |
+| `signet skill uninstall <name>` | Remove an installed skill |
+| `signet skill search <query>` | Search the skills registry |
+| `signet skill show <name>` | Show skill details |
+
+### Output
+
+```
+  ◈ signet v0.1.0
+  own your agent. bring it anywhere.
+
+  Installed Skills
+
+  browser-use    Automate browser interactions
+  weather        Get weather information
+
+  2 skills installed
+```
+
+---
+
+## `signet git`
+
+Git sync management for the `~/.agents` directory.
+
+```bash
+signet git status    # Show git status
+signet git sync      # Pull + push
+signet git pull      # Pull changes
+signet git push      # Push changes
+signet git enable    # Enable auto-sync
+signet git disable   # Disable auto-sync
+```
+
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `signet git status` | Show working tree status |
+| `signet git sync` | Pull remote changes then push |
+| `signet git pull` | Pull changes from remote |
+| `signet git push` | Push changes to remote |
+| `signet git enable` | Enable daemon auto-sync |
+| `signet git disable` | Disable daemon auto-sync |
+
+### Output
+
+```
+  ◈ signet v0.1.0
+  own your agent. bring it anywhere.
+
+  Git Status
+
+  Branch: main
+  Remote: origin
+
+  Changes:
+    M AGENTS.md
+    ?? memory/new-conversation.json
+
+  Auto-sync: enabled
+```
+
+---
+
+## `signet hook`
+
+Lifecycle hook commands for harness integration. These are typically called by harness connectors, not directly by users.
+
+```bash
+signet hook session-start      # Run session start hook
+signet hook pre-compaction     # Run pre-compaction hook
+signet hook compaction-complete # Run compaction complete hook
+signet hook synthesis          # Get synthesis prompt
+signet hook synthesis-complete # Complete synthesis
+```
+
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `signet hook session-start` | Initialize session, load context |
+| `signet hook pre-compaction` | Prepare for memory compaction |
+| `signet hook compaction-complete` | Finalize compaction |
+| `signet hook synthesis` | Get synthesis prompt for memory generation |
+| `signet hook synthesis-complete` | Mark synthesis as finished |
+
+### Output
+
+```
+  ◈ signet v0.1.0
+  own your agent. bring it anywhere.
+
+  Session Start
+
+  ✓ Loaded 42 memories
+  ✓ Loaded context from MEMORY.md
+  ✓ Session initialized
+```
+
+---
+
+## `signet update`
+
+Check for and install Signet updates.
+
+```bash
+signet update check    # Check for updates
+signet update install  # Install updates
+```
+
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `signet update check` | Check if a newer version is available |
+| `signet update install` | Install the latest version |
+
+### Output
+
+```
+  ◈ signet v0.1.0
+  own your agent. bring it anywhere.
+
+  Update Check
+
+  Current: v0.1.0
+  Latest:  v0.1.5
+
+  ? Update available. Install now? (y/N)
+```
+
+---
+
 ## Environment Variables
 
 | Variable | Description | Default |
@@ -418,30 +607,3 @@ If the database is already on the unified schema:
 | 0 | Success |
 | 1 | General error |
 
----
-
-## Future Commands (Planned)
-
-### `signet secret`
-
-Manage encrypted secrets:
-
-```bash
-signet secret put OPENAI_API_KEY
-signet secret list
-signet secret delete GITHUB_TOKEN
-signet secret has OPENAI_API_KEY
-```
-
-### `signet skill`
-
-Manage agent skills:
-
-```bash
-signet skill list
-signet skill install browser-use
-signet skill search github
-signet skill remove weather
-signet skill update
-signet skill create my-skill
-```
