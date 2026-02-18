@@ -1937,7 +1937,9 @@ ${agentName} is a helpful assistant.
 		// Configure OpenClaw workspace if requested
 		if (configureOpenClawWs) {
 			spinner.text = "Configuring OpenClaw workspace...";
-			const patched = await new OpenClawConnector().configureAllConfigs(basePath);
+			const patched = await new OpenClawConnector().configureAllConfigs(
+				basePath,
+			);
 			if (patched.length > 0) {
 				console.log(chalk.dim("\n  ✓ OpenClaw workspace set to ~/.agents"));
 			}
@@ -2302,12 +2304,12 @@ async function migrateSchema(options: { path?: string }) {
 		const schemaInfo = detectSchema(db);
 		db.close();
 
-		if (schemaInfo.type === 'core') {
+		if (schemaInfo.type === "core") {
 			spinner.succeed("Database already on unified schema");
 			return;
 		}
 
-		if (schemaInfo.type === 'unknown' && !schemaInfo.hasMemories) {
+		if (schemaInfo.type === "unknown" && !schemaInfo.hasMemories) {
 			spinner.succeed("Database is empty or has no memories");
 			return;
 		}
@@ -2320,7 +2322,7 @@ async function migrateSchema(options: { path?: string }) {
 		if (running) {
 			console.log(chalk.dim("  Stopping daemon for migration..."));
 			await stopDaemon();
-			await new Promise(r => setTimeout(r, 1000));
+			await new Promise((r) => setTimeout(r, 1000));
 		}
 
 		// Open with write access and migrate
@@ -2334,7 +2336,11 @@ async function migrateSchema(options: { path?: string }) {
 		}
 
 		if (result.migrated) {
-			console.log(chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`));
+			console.log(
+				chalk.green(
+					`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`,
+				),
+			);
 		} else {
 			console.log(chalk.dim("  No migration needed"));
 		}
@@ -2362,7 +2368,6 @@ async function migrateSchema(options: { path?: string }) {
 
 		console.log();
 		console.log(chalk.green("  Migration complete!"));
-
 	} catch (err: any) {
 		spinner.fail("Migration failed");
 		console.log(chalk.red(`  ${err.message}`));
@@ -2421,10 +2426,14 @@ async function showStatus(options: { path?: string }) {
 			// Detect schema type
 			const schemaInfo = detectSchema(db);
 
-			if (schemaInfo.type !== 'core' && schemaInfo.type !== 'unknown') {
+			if (schemaInfo.type !== "core" && schemaInfo.type !== "unknown") {
 				console.log();
 				console.log(chalk.yellow(`  ⚠ Database schema: ${schemaInfo.type}`));
-				console.log(chalk.dim(`    Run ${chalk.bold('signet migrate-schema')} to upgrade`));
+				console.log(
+					chalk.dim(
+						`    Run ${chalk.bold("signet migrate-schema")} to upgrade`,
+					),
+				);
 			}
 
 			const memoryCount = db
@@ -3764,6 +3773,139 @@ skillCmd
 		}
 
 		console.log(data.content);
+	});
+
+// ============================================================================
+// signet remember / recall - Quick memory operations
+// ============================================================================
+
+// signet remember <content>
+program
+	.command("remember <content>")
+	.description("Save a memory (auto-embedded for vector search)")
+	.option("-w, --who <who>", "Who is remembering", "user")
+	.option("-t, --tags <tags>", "Comma-separated tags")
+	.option("-i, --importance <n>", "Importance (0-1)", parseFloat, 0.7)
+	.option("--critical", "Mark as critical (pinned)", false)
+	.action(async (content: string, options) => {
+		if (!(await ensureDaemonForSecrets())) return;
+
+		const spinner = ora("Saving memory...").start();
+
+		const { ok, data } = await secretApiCall("POST", "/api/memory/remember", {
+			content,
+			who: options.who,
+			tags: options.tags,
+			importance: options.importance,
+			pinned: options.critical,
+		});
+
+		if (!ok || (data as { error?: string }).error) {
+			spinner.fail(
+				(data as { error?: string }).error || "Failed to save memory",
+			);
+			process.exit(1);
+		}
+
+		const result = data as {
+			id: string;
+			type: string;
+			tags?: string;
+			pinned: boolean;
+			embedded: boolean;
+		};
+
+		const embedStatus = result.embedded
+			? chalk.dim(" (embedded)")
+			: chalk.yellow(" (no embedding)");
+		spinner.succeed(`Saved memory: ${chalk.cyan(result.id)}${embedStatus}`);
+
+		if (result.pinned) {
+			console.log(chalk.dim("  Marked as critical"));
+		}
+		if (result.tags) {
+			console.log(chalk.dim(`  Tags: ${result.tags}`));
+		}
+	});
+
+// signet recall <query>
+program
+	.command("recall <query>")
+	.description("Search memories using hybrid (vector + keyword) search")
+	.option("-l, --limit <n>", "Max results", parseInt, 10)
+	.option("-t, --type <type>", "Filter by type")
+	.option("--tags <tags>", "Filter by tags (comma-separated)")
+	.option("--who <who>", "Filter by who")
+	.option("--json", "Output as JSON")
+	.action(async (query: string, options) => {
+		if (!(await ensureDaemonForSecrets())) return;
+
+		const spinner = ora("Searching memories...").start();
+
+		const { ok, data } = await secretApiCall("POST", "/api/memory/recall", {
+			query,
+			limit: options.limit,
+			type: options.type,
+			tags: options.tags,
+			who: options.who,
+		});
+
+		if (!ok || (data as { error?: string }).error) {
+			spinner.fail((data as { error?: string }).error || "Search failed");
+			process.exit(1);
+		}
+
+		spinner.stop();
+
+		const result = data as {
+			results: Array<{
+				content: string;
+				score: number;
+				source: string;
+				type: string;
+				tags?: string;
+				pinned: boolean;
+				who: string;
+				created_at: string;
+			}>;
+			query: string;
+			method: string;
+		};
+
+		if (options.json) {
+			console.log(JSON.stringify(result.results, null, 2));
+			return;
+		}
+
+		if (result.results.length === 0) {
+			console.log(chalk.dim("  No memories found"));
+			console.log(
+				chalk.dim(
+					"  Try a different query or add memories with `signet remember`",
+				),
+			);
+			return;
+		}
+
+		console.log(chalk.bold(`\n  Found ${result.results.length} memories:\n`));
+
+		for (const r of result.results) {
+			const date = r.created_at.slice(0, 10);
+			const score = chalk.dim(`[${(r.score * 100).toFixed(0)}%]`);
+			const source = chalk.dim(`(${r.source})`);
+			const critical = r.pinned ? chalk.red("★") : "";
+			const tags = r.tags ? chalk.dim(` [${r.tags}]`) : "";
+
+			// Truncate long content for display
+			const displayContent =
+				r.content.length > 120 ? r.content.slice(0, 117) + "..." : r.content;
+
+			console.log(
+				`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tags}`,
+			);
+			console.log(chalk.dim(`      by ${r.who} · ${r.type} · ${source}`));
+		}
+		console.log();
 	});
 
 // ============================================================================
