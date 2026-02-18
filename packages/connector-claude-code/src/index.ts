@@ -380,9 +380,10 @@ export class ClaudeCodeConnector {
 
 		// Try to read AGENTS.md first
 		if (existsSync(agentsMdPath)) {
-			const content = readFileSync(agentsMdPath, "utf-8");
+			const raw = readFileSync(agentsMdPath, "utf-8");
+			const userContent = this.stripSignetBlock(raw);
 			const header = this.generateHeader(agentsMdPath);
-			writeFileSync(claudeMdPath, header + content);
+			writeFileSync(claudeMdPath, header + this.buildSignetBlock() + userContent);
 			return;
 		}
 
@@ -391,8 +392,71 @@ export class ClaudeCodeConnector {
 		if (identity) {
 			const content = this.generateFromIdentity(identity, basePath);
 			const header = this.generateHeader(join(basePath, "agent.yaml"));
-			writeFileSync(claudeMdPath, header + content);
+			writeFileSync(claudeMdPath, header + this.buildSignetBlock() + content);
 		}
+	}
+
+	/**
+	 * Build the Signet system block injected into all generated harness files.
+	 * This ensures agents always know how to use Signet regardless of whether
+	 * the user's source AGENTS.md was created from template or pre-existed.
+	 */
+	private buildSignetBlock(): string {
+		return `<!-- SIGNET:START -->
+Signet Agent System
+===
+
+Your identity and memory are managed by Signet, a portable agent identity
+system. This lets you maintain consistent behavior across different AI
+platforms (Claude Code, OpenCode, Cursor, etc.).
+
+Key files in \`~/.agents/\`:
+- \`agent.yaml\` — Configuration
+- \`AGENTS.md\` — Instructions (source of truth)
+- \`SOUL.md\` — Personality and tone
+- \`IDENTITY.md\` — Agent identity
+- \`USER.md\` — User profile
+- \`MEMORY.md\` — Working memory summary
+
+Dashboard: http://localhost:3850
+
+Memory
+---
+
+You have access to persistent memory via Signet:
+
+\`\`\`bash
+signet remember "User prefers dark mode and vim keybindings"
+signet recall "user preferences"
+\`\`\`
+
+Memory is automatically loaded at session start. Important context is
+summarized in \`~/.agents/MEMORY.md\`.
+
+Secrets
+---
+
+API keys and tokens are stored securely in Signet:
+
+\`\`\`bash
+signet secret get OPENAI_API_KEY
+signet secret list
+\`\`\`
+<!-- SIGNET:END -->
+
+`;
+	}
+
+	/**
+	 * Strip any existing Signet block from content to prevent duplication
+	 * when re-generating. Handles fresh-install users whose AGENTS.md was
+	 * copied from the template (which already contains the block).
+	 */
+	private stripSignetBlock(content: string): string {
+		return content.replace(
+			/<!-- SIGNET:START -->[\s\S]*?<!-- SIGNET:END -->\n?/g,
+			"",
+		);
 	}
 
 	/**

@@ -153,7 +153,8 @@ export class OpenCodeConnector {
 	 * Generate AGENTS.md for OpenCode
 	 *
 	 * Copies the identity AGENTS.md to OpenCode config with a header
-	 * indicating it's auto-generated.
+	 * and injected Signet system block, ensuring the agent always knows
+	 * how to use Signet even when the source file pre-dated installation.
 	 */
 	async generateAgentsMd(basePath: string): Promise<string | null> {
 		const sourcePath = join(basePath, "AGENTS.md");
@@ -162,7 +163,8 @@ export class OpenCodeConnector {
 			return null;
 		}
 
-		const content = readFileSync(sourcePath, "utf-8");
+		const raw = readFileSync(sourcePath, "utf-8");
+		const userContent = this.stripSignetBlock(raw);
 		const header = `# Auto-generated from ~/.agents/AGENTS.md
 # Source: ${sourcePath}
 # Generated: ${new Date().toISOString()}
@@ -173,9 +175,72 @@ export class OpenCodeConnector {
 
 		const opencodePath = this.getOpenCodePath();
 		const destPath = join(opencodePath, "AGENTS.md");
-		writeFileSync(destPath, header + content);
+		writeFileSync(destPath, header + this.buildSignetBlock() + userContent);
 
 		return destPath;
+	}
+
+	/**
+	 * Build the Signet system block injected into all generated harness files.
+	 * This ensures agents always know how to use Signet regardless of whether
+	 * the user's source AGENTS.md was created from template or pre-existed.
+	 */
+	private buildSignetBlock(): string {
+		return `<!-- SIGNET:START -->
+Signet Agent System
+===
+
+Your identity and memory are managed by Signet, a portable agent identity
+system. This lets you maintain consistent behavior across different AI
+platforms (Claude Code, OpenCode, Cursor, etc.).
+
+Key files in \`~/.agents/\`:
+- \`agent.yaml\` — Configuration
+- \`AGENTS.md\` — Instructions (source of truth)
+- \`SOUL.md\` — Personality and tone
+- \`IDENTITY.md\` — Agent identity
+- \`USER.md\` — User profile
+- \`MEMORY.md\` — Working memory summary
+
+Dashboard: http://localhost:3850
+
+Memory
+---
+
+You have access to persistent memory via Signet:
+
+\`\`\`bash
+signet remember "User prefers dark mode and vim keybindings"
+signet recall "user preferences"
+\`\`\`
+
+Memory is automatically loaded at session start. Important context is
+summarized in \`~/.agents/MEMORY.md\`.
+
+Secrets
+---
+
+API keys and tokens are stored securely in Signet:
+
+\`\`\`bash
+signet secret get OPENAI_API_KEY
+signet secret list
+\`\`\`
+<!-- SIGNET:END -->
+
+`;
+	}
+
+	/**
+	 * Strip any existing Signet block from content to prevent duplication
+	 * when re-generating. Handles fresh-install users whose AGENTS.md was
+	 * copied from the template (which already contains the block).
+	 */
+	private stripSignetBlock(content: string): string {
+		return content.replace(
+			/<!-- SIGNET:START -->[\s\S]*?<!-- SIGNET:END -->\n?/g,
+			"",
+		);
 	}
 
 	/**
