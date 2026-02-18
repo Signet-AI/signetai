@@ -95,7 +95,7 @@ async function getMasterKey(): Promise<Uint8Array> {
 
   // Stretch the machine-id into a 32-byte key via BLAKE2b.
   // In a future version this can be replaced with Argon2 + passphrase.
-  const key = sodium.crypto_generichash(32, inputBytes);
+  const key = sodium.crypto_generichash(32, inputBytes, null);
   _masterKey = key;
   return key;
 }

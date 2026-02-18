@@ -23,26 +23,33 @@
  * ```
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+} from "@signet/connector-base";
 import {
 	type IdentityMap,
 	hasValidIdentity,
 	loadIdentityFilesSync,
 } from "@signet/core";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { generateMemoryPlugin } from "./templates/memory.mjs.js";
 
-export interface InstallResult {
-	success: boolean;
-	message: string;
-	filesWritten: string[];
-}
+// ============================================================================
+// Types
+// ============================================================================
 
 export interface SessionStartContext {
 	directory: string;
 	identity?: IdentityMap;
 }
+
+// ============================================================================
+// OpenCode Connector
+// ============================================================================
 
 /**
  * OpenCode connector for Signet
@@ -50,15 +57,22 @@ export interface SessionStartContext {
  * Implements the connector pattern for setting up OpenCode integration.
  * Run during 'signet install' to generate OpenCode-specific config files.
  */
-export class OpenCodeConnector {
-	readonly name = "opencode";
-	readonly description = "OpenCode AI assistant";
+export class OpenCodeConnector extends BaseConnector {
+	readonly name = "OpenCode";
+	readonly harnessId = "opencode";
 
 	/**
-	 * Get the OpenCode config directory path
+	 * Get the path to OpenCode's config directory
 	 */
 	private getOpenCodePath(): string {
 		return join(homedir(), ".config", "opencode");
+	}
+
+	/**
+	 * Get the path to OpenCode's config file
+	 */
+	getConfigPath(): string {
+		return join(this.getOpenCodePath(), "config.json");
 	}
 
 	/**
@@ -69,12 +83,8 @@ export class OpenCodeConnector {
 	 *   - ~/.config/opencode/AGENTS.md - Agent instructions from identity
 	 *
 	 * @param basePath - Path to Signet identity files (usually ~/.agents)
-	 * @param memoryScript - Path to memory.py script
 	 */
-	async install(
-		basePath: string,
-		memoryScript?: string,
-	): Promise<InstallResult> {
+	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 
 		// Validate basePath has valid identity
@@ -87,8 +97,7 @@ export class OpenCodeConnector {
 		}
 
 		// Determine memory script path
-		const scriptPath =
-			memoryScript || join(basePath, "memory", "scripts", "memory.py");
+		const scriptPath = join(basePath, "memory", "scripts", "memory.py");
 
 		// Ensure OpenCode config directory exists
 		const opencodePath = this.getOpenCodePath();
@@ -114,6 +123,42 @@ export class OpenCodeConnector {
 			filesWritten,
 		};
 	}
+
+	/**
+	 * Remove Signet integration from OpenCode
+	 *
+	 * Deletes the generated files. Does not remove the entire OpenCode config.
+	 */
+	async uninstall(): Promise<UninstallResult> {
+		const opencodePath = this.getOpenCodePath();
+		const filesRemoved: string[] = [];
+
+		const pluginPath = join(opencodePath, "memory.mjs");
+		if (existsSync(pluginPath)) {
+			rmSync(pluginPath);
+			filesRemoved.push(pluginPath);
+		}
+
+		const agentsMdPath = join(opencodePath, "AGENTS.md");
+		if (existsSync(agentsMdPath)) {
+			rmSync(agentsMdPath);
+			filesRemoved.push(agentsMdPath);
+		}
+
+		return { filesRemoved };
+	}
+
+	/**
+	 * Check if Signet integration is already set up for OpenCode
+	 */
+	isInstalled(): boolean {
+		const pluginPath = join(this.getOpenCodePath(), "memory.mjs");
+		return existsSync(pluginPath);
+	}
+
+	// ============================================================================
+	// OpenCode-Specific Methods
+	// ============================================================================
 
 	/**
 	 * Called when an OpenCode session starts
@@ -156,7 +201,7 @@ export class OpenCodeConnector {
 	 * and injected Signet system block, ensuring the agent always knows
 	 * how to use Signet even when the source file pre-dated installation.
 	 */
-	async generateAgentsMd(basePath: string): Promise<string | null> {
+	private async generateAgentsMd(basePath: string): Promise<string | null> {
 		const sourcePath = join(basePath, "AGENTS.md");
 
 		if (!existsSync(sourcePath)) {
@@ -164,83 +209,17 @@ export class OpenCodeConnector {
 		}
 
 		const raw = readFileSync(sourcePath, "utf-8");
+		// Use base class method to strip existing block
 		const userContent = this.stripSignetBlock(raw);
-		const header = `# Auto-generated from ~/.agents/AGENTS.md
-# Source: ${sourcePath}
-# Generated: ${new Date().toISOString()}
-# DO NOT EDIT - changes will be overwritten
-# Edit ~/.agents/AGENTS.md instead
-
-`;
+		// Use base class method to generate header
+		const header = this.generateHeader(sourcePath);
 
 		const opencodePath = this.getOpenCodePath();
 		const destPath = join(opencodePath, "AGENTS.md");
+		// Use base class method to build Signet block
 		writeFileSync(destPath, header + this.buildSignetBlock() + userContent);
 
 		return destPath;
-	}
-
-	/**
-	 * Build the Signet system block injected into all generated harness files.
-	 * This ensures agents always know how to use Signet regardless of whether
-	 * the user's source AGENTS.md was created from template or pre-existed.
-	 */
-	private buildSignetBlock(): string {
-		return `<!-- SIGNET:START -->
-Signet Agent System
-===
-
-Your identity and memory are managed by Signet, a portable agent identity
-system. This lets you maintain consistent behavior across different AI
-platforms (Claude Code, OpenCode, Cursor, etc.).
-
-Key files in \`~/.agents/\`:
-- \`agent.yaml\` — Configuration
-- \`AGENTS.md\` — Instructions (source of truth)
-- \`SOUL.md\` — Personality and tone
-- \`IDENTITY.md\` — Agent identity
-- \`USER.md\` — User profile
-- \`MEMORY.md\` — Working memory summary
-
-Dashboard: http://localhost:3850
-
-Memory
----
-
-You have access to persistent memory via Signet:
-
-\`\`\`bash
-signet remember "User prefers dark mode and vim keybindings"
-signet recall "user preferences"
-\`\`\`
-
-Memory is automatically loaded at session start. Important context is
-summarized in \`~/.agents/MEMORY.md\`.
-
-Secrets
----
-
-API keys and tokens are stored securely in Signet:
-
-\`\`\`bash
-signet secret get OPENAI_API_KEY
-signet secret list
-\`\`\`
-<!-- SIGNET:END -->
-
-`;
-	}
-
-	/**
-	 * Strip any existing Signet block from content to prevent duplication
-	 * when re-generating. Handles fresh-install users whose AGENTS.md was
-	 * copied from the template (which already contains the block).
-	 */
-	private stripSignetBlock(content: string): string {
-		return content.replace(
-			/<!-- SIGNET:START -->[\s\S]*?<!-- SIGNET:END -->\n?/g,
-			"",
-		);
 	}
 
 	/**
@@ -270,45 +249,15 @@ signet secret list
 	/**
 	 * Check if OpenCode is installed on the system
 	 */
-	static isInstalled(): boolean {
+	static isHarnessInstalled(): boolean {
 		const configPath = join(homedir(), ".config", "opencode", "config.json");
 		return existsSync(configPath);
 	}
-
-	/**
-	 * Check if Signet integration is already set up for OpenCode
-	 */
-	isSetUp(): boolean {
-		const pluginPath = join(this.getOpenCodePath(), "memory.mjs");
-		return existsSync(pluginPath);
-	}
-
-	/**
-	 * Remove Signet integration from OpenCode
-	 *
-	 * Deletes the generated files. Does not remove the entire OpenCode config.
-	 */
-	async uninstall(): Promise<string[]> {
-		const opencodePath = this.getOpenCodePath();
-		const removed: string[] = [];
-
-		const pluginPath = join(opencodePath, "memory.mjs");
-		if (existsSync(pluginPath)) {
-			const { rmSync } = await import("node:fs");
-			rmSync(pluginPath);
-			removed.push(pluginPath);
-		}
-
-		const agentsMdPath = join(opencodePath, "AGENTS.md");
-		if (existsSync(agentsMdPath)) {
-			const { rmSync } = await import("node:fs");
-			rmSync(agentsMdPath);
-			removed.push(agentsMdPath);
-		}
-
-		return removed;
-	}
 }
+
+// ============================================================================
+// Exports
+// ============================================================================
 
 // Export singleton instance for convenience
 export const opencodeConnector = new OpenCodeConnector();

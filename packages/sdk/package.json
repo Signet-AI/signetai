@@ -17,7 +17,7 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "bun build ./src/index.ts ./src/react.tsx --outdir ./dist --target browser --external better-sqlite3 --external bun:sqlite",
+    "build": "bun build ./src/index.ts ./src/react.tsx --outdir ./dist --target node --external better-sqlite3 --external bun:sqlite",
     "dev": "bun --watch src/index.ts",
     "test": "bun test"
   },

@@ -13,62 +13,22 @@
  */
 
 import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+} from "@signet/connector-base";
+import {
 	existsSync,
-	lstatSync,
 	mkdirSync,
 	readFileSync,
-	readdirSync,
-	statSync,
-	symlinkSync,
-	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-// Re-export types needed from @signet/core
-// Note: These are inline until @signet/core exports proper .d.ts files
-export interface IdentityFile {
-	path: string;
-	content: string;
-}
-
-export interface IdentityMap {
-	manifest?: IdentityFile;
-	soul?: IdentityFile;
-	memory?: IdentityFile;
-	config?: IdentityFile;
-}
-
-/**
- * Synchronously load identity files from a base path
- * Simplified inline implementation
- */
-function loadIdentityFilesSync(basePath: string): IdentityMap | null {
-	const { existsSync, readFileSync } = require("node:fs");
-	const { join } = require("node:path");
-
-	const identity: IdentityMap = {};
-	const files = [
-		{ key: "manifest", file: "agent.yaml" },
-		{ key: "soul", file: "soul.md" },
-		{ key: "memory", file: "memory.md" },
-		{ key: "config", file: "config.yaml" },
-	];
-
-	let hasAny = false;
-	for (const { key, file } of files) {
-		const filePath = join(basePath, file);
-		if (existsSync(filePath)) {
-			identity[key as keyof IdentityMap] = {
-				path: filePath,
-				content: readFileSync(filePath, "utf-8"),
-			};
-			hasAny = true;
-		}
-	}
-
-	return hasAny ? identity : null;
-}
+import {
+	type IdentityMap,
+	loadIdentityFilesSync,
+} from "@signet/core";
 
 // ============================================================================
 // Types
@@ -124,53 +84,63 @@ export interface SessionEndResult {
  * - Skills directory symlink management
  * - Lifecycle callbacks for session management
  */
-export class ClaudeCodeConnector {
-	readonly name = "claude-code";
-	readonly displayName = "Claude Code";
+export class ClaudeCodeConnector extends BaseConnector {
+	readonly name = "Claude Code";
+	readonly harnessId = "claude-code";
 
 	private config: ConnectorConfig;
 	private daemonUrl: string;
 
 	constructor(config: ConnectorConfig = {}) {
+		super();
 		this.config = config;
 		this.daemonUrl = config.daemonUrl || "http://localhost:3850";
 	}
 
 	/**
 	 * Install the connector into Claude Code
-	 *
-	 * This method:
-	 * - Configures hooks in ~/.claude/settings.json
-	 * - Generates ~/.claude/CLAUDE.md from identity files
-	 * - Symlinks skills directory to ~/.claude/skills/
-	 *
-	 * Safe to run multiple times (idempotent).
 	 */
-	async install(basePath: string): Promise<void> {
+	async install(basePath: string): Promise<InstallResult> {
 		const expandedBasePath = this.expandPath(basePath);
 		const memoryScript =
 			this.config.memoryScript ||
 			join(expandedBasePath, "memory", "scripts", "memory.py");
 
+		const filesWritten: string[] = [];
+
 		// Configure hooks in settings.json
 		await this.configureHooks(expandedBasePath, memoryScript);
+		const settingsPath = this.getConfigPath();
+		filesWritten.push(settingsPath);
 
 		// Generate CLAUDE.md from identity files
-		await this.generateClaudeMd(expandedBasePath);
+		const claudeMdPath = await this.generateClaudeMd(expandedBasePath);
+		if (claudeMdPath) {
+			filesWritten.push(claudeMdPath);
+		}
 
-		// Symlink skills directory
-		this.symlinkSkills(expandedBasePath);
+		// Symlink skills directory using base class method
+		const sourceSkillsDir = join(expandedBasePath, "skills");
+		const targetSkillsDir = join(homedir(), ".claude", "skills");
+		this.symlinkSkills(sourceSkillsDir, targetSkillsDir);
+
+		return {
+			success: true,
+			message: "Claude Code integration installed successfully",
+			filesWritten,
+		};
 	}
 
 	/**
 	 * Uninstall the connector from Claude Code
-	 *
-	 * Removes hooks from settings.json but preserves other settings.
 	 */
-	async uninstall(): Promise<void> {
-		const settingsPath = join(homedir(), ".claude", "settings.json");
+	async uninstall(): Promise<UninstallResult> {
+		const settingsPath = this.getConfigPath();
+		const filesRemoved: string[] = [];
 
-		if (!existsSync(settingsPath)) return;
+		if (!existsSync(settingsPath)) {
+			return { filesRemoved };
+		}
 
 		try {
 			const content = readFileSync(settingsPath, "utf-8");
@@ -189,15 +159,50 @@ export class ClaudeCodeConnector {
 			}
 
 			writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+			filesRemoved.push(settingsPath);
 		} catch {
 			// If parsing fails, leave settings as-is
+		}
+
+		return { filesRemoved };
+	}
+
+	/**
+	 * Check if the connector is installed
+	 */
+	isInstalled(): boolean {
+		const settingsPath = this.getConfigPath();
+
+		if (!existsSync(settingsPath)) return false;
+
+		try {
+			const content = readFileSync(settingsPath, "utf-8");
+			const settings = JSON.parse(content);
+
+			// Check if Signet hooks are present
+			return (
+				settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command?.includes(
+					"memory.py",
+				) || false
+			);
+		} catch {
+			return false;
 		}
 	}
 
 	/**
+	 * Get the path to Claude Code's settings.json
+	 */
+	getConfigPath(): string {
+		return join(homedir(), ".claude", "settings.json");
+	}
+
+	// ============================================================================
+	// Session Lifecycle Methods
+	// ============================================================================
+
+	/**
 	 * Called when a session starts
-	 *
-	 * Loads context from the daemon including identity and relevant memories.
 	 */
 	async onSessionStart(
 		ctx: SessionContext,
@@ -228,8 +233,6 @@ export class ClaudeCodeConnector {
 
 	/**
 	 * Called when a session ends
-	 *
-	 * Extracts memories from the conversation and saves them.
 	 */
 	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
 		try {
@@ -259,29 +262,6 @@ export class ClaudeCodeConnector {
 		}
 	}
 
-	/**
-	 * Check if the connector is installed
-	 */
-	isInstalled(): boolean {
-		const settingsPath = join(homedir(), ".claude", "settings.json");
-
-		if (!existsSync(settingsPath)) return false;
-
-		try {
-			const content = readFileSync(settingsPath, "utf-8");
-			const settings = JSON.parse(content);
-
-			// Check if Signet hooks are present
-			return (
-				settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command?.includes(
-					"memory.py",
-				) || false
-			);
-		} catch {
-			return false;
-		}
-	}
-
 	// ============================================================================
 	// Private Methods
 	// ============================================================================
@@ -293,7 +273,7 @@ export class ClaudeCodeConnector {
 		basePath: string,
 		memoryScript: string,
 	): Promise<void> {
-		const settingsPath = join(homedir(), ".claude", "settings.json");
+		const settingsPath = this.getConfigPath();
 		const claudeDir = join(homedir(), ".claude");
 
 		// Ensure ~/.claude directory exists
@@ -374,17 +354,25 @@ export class ClaudeCodeConnector {
 	/**
 	 * Generate ~/.claude/CLAUDE.md from identity files
 	 */
-	private async generateClaudeMd(basePath: string): Promise<void> {
+	private async generateClaudeMd(basePath: string): Promise<string | null> {
 		const claudeMdPath = join(homedir(), ".claude", "CLAUDE.md");
 		const agentsMdPath = join(basePath, "AGENTS.md");
+
+		// Ensure ~/.claude directory exists
+		mkdirSync(join(homedir(), ".claude"), { recursive: true });
 
 		// Try to read AGENTS.md first
 		if (existsSync(agentsMdPath)) {
 			const raw = readFileSync(agentsMdPath, "utf-8");
+			// Use base class method to strip existing block
 			const userContent = this.stripSignetBlock(raw);
 			const header = this.generateHeader(agentsMdPath);
-			writeFileSync(claudeMdPath, header + this.buildSignetBlock() + userContent);
-			return;
+			// Use base class method to build block
+			writeFileSync(
+				claudeMdPath,
+				header + this.buildSignetBlock() + userContent,
+			);
+			return claudeMdPath;
 		}
 
 		// Fall back to generating from identity files
@@ -392,84 +380,14 @@ export class ClaudeCodeConnector {
 		if (identity) {
 			const content = this.generateFromIdentity(identity, basePath);
 			const header = this.generateHeader(join(basePath, "agent.yaml"));
-			writeFileSync(claudeMdPath, header + this.buildSignetBlock() + content);
+			writeFileSync(
+				claudeMdPath,
+				header + this.buildSignetBlock() + content,
+			);
+			return claudeMdPath;
 		}
-	}
 
-	/**
-	 * Build the Signet system block injected into all generated harness files.
-	 * This ensures agents always know how to use Signet regardless of whether
-	 * the user's source AGENTS.md was created from template or pre-existed.
-	 */
-	private buildSignetBlock(): string {
-		return `<!-- SIGNET:START -->
-Signet Agent System
-===
-
-Your identity and memory are managed by Signet, a portable agent identity
-system. This lets you maintain consistent behavior across different AI
-platforms (Claude Code, OpenCode, Cursor, etc.).
-
-Key files in \`~/.agents/\`:
-- \`agent.yaml\` — Configuration
-- \`AGENTS.md\` — Instructions (source of truth)
-- \`SOUL.md\` — Personality and tone
-- \`IDENTITY.md\` — Agent identity
-- \`USER.md\` — User profile
-- \`MEMORY.md\` — Working memory summary
-
-Dashboard: http://localhost:3850
-
-Memory
----
-
-You have access to persistent memory via Signet:
-
-\`\`\`bash
-signet remember "User prefers dark mode and vim keybindings"
-signet recall "user preferences"
-\`\`\`
-
-Memory is automatically loaded at session start. Important context is
-summarized in \`~/.agents/MEMORY.md\`.
-
-Secrets
----
-
-API keys and tokens are stored securely in Signet:
-
-\`\`\`bash
-signet secret get OPENAI_API_KEY
-signet secret list
-\`\`\`
-<!-- SIGNET:END -->
-
-`;
-	}
-
-	/**
-	 * Strip any existing Signet block from content to prevent duplication
-	 * when re-generating. Handles fresh-install users whose AGENTS.md was
-	 * copied from the template (which already contains the block).
-	 */
-	private stripSignetBlock(content: string): string {
-		return content.replace(
-			/<!-- SIGNET:START -->[\s\S]*?<!-- SIGNET:END -->\n?/g,
-			"",
-		);
-	}
-
-	/**
-	 * Generate the auto-generated header
-	 */
-	private generateHeader(sourcePath: string): string {
-		return `# Auto-generated from ${sourcePath}
-# Source: ${sourcePath}
-# Generated: ${new Date().toISOString()}
-# DO NOT EDIT - changes will be overwritten
-# Edit the source files in ~/.agents/ instead
-
-`;
+		return null;
 	}
 
 	/**
@@ -477,7 +395,7 @@ signet secret list
 	 */
 	private generateFromIdentity(
 		identity: IdentityMap,
-		basePath: string,
+		_basePath: string,
 	): string {
 		const parts: string[] = [];
 
@@ -492,64 +410,13 @@ signet secret list
 			parts.push(identity.memory.content);
 		}
 
-		// Add config summary if available
-		if (identity.config?.content) {
-			parts.push("\n# Configuration\n\n");
-			parts.push("```yaml");
-			parts.push(identity.config.content);
-			parts.push("```\n");
+		// Add identity content if available
+		if (identity.identity?.content) {
+			parts.push("\n# Identity\n\n");
+			parts.push(identity.identity.content);
 		}
 
 		return parts.join("");
-	}
-
-	/**
-	 * Symlink skills directory
-	 */
-	private symlinkSkills(basePath: string): void {
-		const sourceSkillsDir = join(basePath, "skills");
-		const targetSkillsDir = join(homedir(), ".claude", "skills");
-
-		if (!existsSync(sourceSkillsDir)) return;
-
-		// Ensure target parent exists
-		mkdirSync(join(homedir(), ".claude"), { recursive: true });
-
-		// Create target directory
-		mkdirSync(targetSkillsDir, { recursive: true });
-
-		const skills = readdirSync(sourceSkillsDir);
-		for (const skill of skills) {
-			const src = join(sourceSkillsDir, skill);
-			const dest = join(targetSkillsDir, skill);
-
-			// Skip if not a directory
-			try {
-				if (!statSync(src).isDirectory()) continue;
-			} catch {
-				continue;
-			}
-
-			// Handle existing destination
-			try {
-				const destStat = lstatSync(dest);
-				if (destStat.isSymbolicLink()) {
-					// Remove existing symlink to recreate
-					unlinkSync(dest);
-				} else {
-					// It's a real directory - skip to avoid data loss
-					continue;
-				}
-			} catch {
-				// dest doesn't exist, that's fine
-			}
-
-			try {
-				symlinkSync(src, dest);
-			} catch {
-				// Symlinks might fail on some systems
-			}
-		}
 	}
 
 	/**
@@ -574,8 +441,5 @@ export function createConnector(config?: ConnectorConfig): ClaudeCodeConnector {
 	return new ClaudeCodeConnector(config);
 }
 
-// ============================================================================
-// Default Export
-// ============================================================================
-
+// Default export
 export default ClaudeCodeConnector;

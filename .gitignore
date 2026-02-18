@@ -11,6 +11,12 @@ packages/signetai/dist/
 packages/signetai/dashboard/
 *.tgz
 
+# TypeScript declaration files (generated in wrong locations)
+**/src/*.d.ts
+**/src/*.d.ts.map
+**/src/**/*.d.ts
+**/src/**/*.d.ts.map
+
 # Environment
 .env
 .env.local
