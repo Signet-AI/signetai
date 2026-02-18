@@ -6,6 +6,7 @@
       "name": "signet",
       "devDependencies": {
         "@biomejs/biome": "^1.9.0",
+        "bun-types": "^1.3.9",
         "typescript": "^5.7.0",
       },
     },
@@ -15,7 +16,10 @@
       "bin": "./dist/cli.js",
       "dependencies": {
         "@inquirer/prompts": "^7.0.0",
+        "@signet/connector-claude-code": "workspace:*",
         "@signet/connector-openclaw": "workspace:*",
+        "@signet/connector-opencode": "workspace:*",
+        "@signet/core": "workspace:*",
         "better-sqlite3": "^12.0.0",
         "chalk": "^5.3.0",
         "commander": "^12.0.0",
@@ -26,9 +30,26 @@
         "@types/better-sqlite3": "^7.6.0",
       },
     },
+    "packages/connector-base": {
+      "name": "@signet/connector-base",
+      "version": "0.1.0",
+      "dependencies": {
+        "@signet/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+      "peerDependencies": {
+        "typescript": ">=5.0.0",
+      },
+    },
     "packages/connector-claude-code": {
       "name": "@signet/connector-claude-code",
       "version": "0.1.0",
+      "dependencies": {
+        "@signet/connector-base": "workspace:*",
+        "@signet/core": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "^5.7.0",
       },
@@ -36,6 +57,9 @@
     "packages/connector-openclaw": {
       "name": "@signet/connector-openclaw",
       "version": "0.1.0",
+      "dependencies": {
+        "@signet/connector-base": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "^5.7.0",
       },
@@ -44,6 +68,7 @@
       "name": "@signet/connector-opencode",
       "version": "0.1.0",
       "dependencies": {
+        "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
       },
       "devDependencies": {
@@ -55,6 +80,8 @@
       "version": "0.1.26",
       "dependencies": {
         "better-sqlite3": "^11.0.0",
+        "sqlite-vec": "^0.1.7-alpha.2",
+        "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
         "yaml": "^2.6.0",
       },
       "devDependencies": {
@@ -98,7 +125,7 @@
     },
     "packages/signetai": {
       "name": "signetai",
-      "version": "0.1.35",
+      "version": "0.1.40",
       "bin": {
         "signet": "bin/signet.js",
       },
@@ -175,6 +202,8 @@
 
     "@signet/cli": ["@signet/cli@workspace:packages/cli"],
 
+    "@signet/connector-base": ["@signet/connector-base@workspace:packages/connector-base"],
+
     "@signet/connector-claude-code": ["@signet/connector-claude-code@workspace:packages/connector-claude-code"],
 
     "@signet/connector-openclaw": ["@signet/connector-openclaw@workspace:packages/connector-openclaw"],
@@ -208,6 +237,8 @@
     "bl": ["bl@4.1.0", "", { "dependencies": { "buffer": "^5.5.0", "inherits": "^2.0.4", "readable-stream": "^3.4.0" } }, "sha512-1W07cM9gS6DcLperZfFSj+bWLtaPGSOHWhPiGzXmvVJbRLdG82sH/Kn8EtW1VqWVA54AKf2h5k5BbnIbwF3h6w=="],
 
     "buffer": ["buffer@5.7.1", "", { "dependencies": { "base64-js": "^1.3.1", "ieee754": "^1.1.13" } }, "sha512-EHcyIPBQ4BSGlvjB16k5KgAJ27CIsHY/2JBmCRReo48y9rQ3MaUzWX3KVlBa4U7MyX02HdVj0K7C3WaB3ju7FQ=="],
+
+    "bun-types": ["bun-types@1.3.9", "", { "dependencies": { "@types/node": "*" } }, "sha512-+UBWWOakIP4Tswh0Bt0QD0alpTY8cb5hvgiYeWCMet9YukHbzuruIEeXC2D7nMJPB12kbh8C7XJykSexEqGKJg=="],
 
     "bundle-name": ["bundle-name@4.1.0", "", { "dependencies": { "run-applescript": "^7.0.0" } }, "sha512-tjwM5exMg6BGRI+kNmTntNsvdZS1X8BFYS6tnJ2hdH0kVxM6/eVZ2xy+FqStSWvYmtfFMDLIxurorHwDKfDz5Q=="],
 
@@ -338,6 +369,18 @@
     "simple-concat": ["simple-concat@1.0.1", "", {}, "sha512-cSFtAPtRhljv69IK0hTVZQ+OfE9nePi/rtJmw5UjHeVyVroEqJXP1sFztKUy1qU+xvz3u/sfYJLa947b7nAN2Q=="],
 
     "simple-get": ["simple-get@4.0.1", "", { "dependencies": { "decompress-response": "^6.0.0", "once": "^1.3.1", "simple-concat": "^1.0.0" } }, "sha512-brv7p5WgH0jmQJr1ZDDfKDOSeWWg+OVypG99A/5vYGPqJ6pxiaHLy8nxtFjBA7oMa01ebA9gfh1uMCFqOuXxvA=="],
+
+    "sqlite-vec": ["sqlite-vec@0.1.7-alpha.2", "", { "optionalDependencies": { "sqlite-vec-darwin-arm64": "0.1.7-alpha.2", "sqlite-vec-darwin-x64": "0.1.7-alpha.2", "sqlite-vec-linux-arm64": "0.1.7-alpha.2", "sqlite-vec-linux-x64": "0.1.7-alpha.2", "sqlite-vec-windows-x64": "0.1.7-alpha.2" } }, "sha512-rNgRCv+4V4Ed3yc33Qr+nNmjhtrMnnHzXfLVPeGb28Dx5mmDL3Ngw/Wk8vhCGjj76+oC6gnkmMG8y73BZWGBwQ=="],
+
+    "sqlite-vec-darwin-arm64": ["sqlite-vec-darwin-arm64@0.1.7-alpha.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-raIATOqFYkeCHhb/t3r7W7Cf2lVYdf4J3ogJ6GFc8PQEgHCPEsi+bYnm2JT84MzLfTlSTIdxr4/NKv+zF7oLPw=="],
+
+    "sqlite-vec-darwin-x64": ["sqlite-vec-darwin-x64@0.1.7-alpha.2", "", { "os": "darwin", "cpu": "x64" }, "sha512-jeZEELsQjjRsVojsvU5iKxOvkaVuE+JYC8Y4Ma8U45aAERrDYmqZoHvgSG7cg1PXL3bMlumFTAmHynf1y4pOzA=="],
+
+    "sqlite-vec-linux-arm64": ["sqlite-vec-linux-arm64@0.1.7-alpha.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-6Spj4Nfi7tG13jsUG+W7jnT0bCTWbyPImu2M8nWp20fNrd1SZ4g3CSlDAK8GBdavX7wRlbBHCZ+BDa++rbDewA=="],
+
+    "sqlite-vec-linux-x64": ["sqlite-vec-linux-x64@0.1.7-alpha.2", "", { "os": "linux", "cpu": "x64" }, "sha512-IcgrbHaDccTVhXDf8Orwdc2+hgDLAFORl6OBUhcvlmwswwBP1hqBTSEhovClG4NItwTOBNgpwOoQ7Qp3VDPWLg=="],
+
+    "sqlite-vec-windows-x64": ["sqlite-vec-windows-x64@0.1.7-alpha.2", "", { "os": "win32", "cpu": "x64" }, "sha512-TRP6hTjAcwvQ6xpCZvjP00pdlda8J38ArFy1lMYhtQWXiIBmWnhMaMbq4kaeCYwvTTddfidatRS+TJrwIKB/oQ=="],
 
     "stdin-discarder": ["stdin-discarder@0.2.2", "", {}, "sha512-UhDfHmA92YAlNnCfhmq0VeNL5bDbiZGg7sZ2IvPsXubGkiNa9EC+tUTsjBRsYUAz87btI6/1wf4XoVvQ3uRnmQ=="],
 

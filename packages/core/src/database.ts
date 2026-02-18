@@ -3,8 +3,85 @@
  * Runtime-detecting: uses bun:sqlite under Bun, better-sqlite3 under Node.js
  */
 
+import { existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { arch, platform } from 'process';
 import { SCHEMA_VERSION } from './constants';
 import type { Memory, Conversation, Embedding } from './types';
+
+// Platform-specific extension suffix
+function getExtensionSuffix(): string {
+  if (platform === 'win32') return 'dll';
+  if (platform === 'darwin') return 'dylib';
+  return 'so';
+}
+
+// Get the platform-specific package name
+function getPlatformPackageName(): string {
+  const os = platform === 'win32' ? 'windows' : platform;
+  return `sqlite-vec-${os}-${arch === 'x64' ? 'x64' : arch}`;
+}
+
+// Find the sqlite-vec extension path
+// Handles bun's hoisted node_modules structure where platform packages
+// are in separate .bun directories
+function findSqliteVecExtension(): string | null {
+  const platformPkg = getPlatformPackageName();
+  const extFile = `vec0.${getExtensionSuffix()}`;
+
+  // Try common locations in order
+  const searchPaths = [
+    // Standard npm/yarn layout
+    join(__dirname, '..', '..', platformPkg, extFile),
+    // Bun's hoisted structure (multiple possible locations)
+    join(__dirname, '..', '..', '..', '.bun', `${platformPkg}@*`, 'node_modules', platformPkg, extFile),
+    // When running from dist/
+    join(__dirname, 'node_modules', platformPkg, extFile),
+    // Monorepo root node_modules
+    join(__dirname, '..', '..', '..', 'node_modules', platformPkg, extFile),
+    // Monorepo root with bun structure
+    join(__dirname, '..', '..', '..', 'node_modules', '.bun', `${platformPkg}@*`, 'node_modules', platformPkg, extFile),
+  ];
+
+  for (const searchPath of searchPaths) {
+    // Handle glob-like patterns for bun's versioned directories
+    if (searchPath.includes('*')) {
+      const baseDir = dirname(searchPath.replace(/\*.*$/, ''));
+      const pattern = searchPath.split('*')[1];
+      try {
+        const entries = existsSync(baseDir) ? require('fs').readdirSync(baseDir) : [];
+        for (const entry of entries) {
+          const candidate = join(baseDir, entry, pattern?.replace(/^\//, '') || '');
+          if (existsSync(candidate)) {
+            return candidate;
+          }
+        }
+      } catch {}
+    } else if (existsSync(searchPath)) {
+      return searchPath;
+    }
+  }
+
+  return null;
+}
+
+// Load sqlite-vec extension with fallback handling
+function loadSqliteVec(db: any): boolean {
+  const extPath = findSqliteVecExtension();
+  if (!extPath) {
+    console.warn('sqlite-vec extension not found - vector search will be disabled');
+    return false;
+  }
+
+  try {
+    db.loadExtension(extPath);
+    return true;
+  } catch (e) {
+    console.warn('Failed to load sqlite-vec extension:', e);
+    return false;
+  }
+}
 
 // Common SQLite interface shared by both implementations
 interface SQLiteDatabase {
@@ -22,6 +99,7 @@ export class Database {
   private dbPath: string;
   private db: SQLiteDatabase | null = null;
   private options?: { readonly?: boolean };
+  private vecEnabled: boolean = false;
 
   constructor(dbPath: string, options?: { readonly?: boolean }) {
     this.dbPath = dbPath;
@@ -34,17 +112,29 @@ export class Database {
 
     if (isBun) {
       // Bun runtime - use built-in bun:sqlite
+      // Bun's sqlite uses different options: { create: true, readwrite: true } instead of { readonly: false }
       const { Database: BunDatabase } = await import('bun:sqlite');
-      this.db = new BunDatabase(this.dbPath, { readonly: this.options?.readonly });
+      const bunOpts = this.options?.readonly
+        ? { readonly: true }
+        : { readwrite: true, create: true };
+      this.db = new BunDatabase(this.dbPath, bunOpts) as unknown as SQLiteDatabase;
     } else {
       // Node.js runtime - use better-sqlite3
       const BetterSqlite3 = (await import('better-sqlite3')).default;
       this.db = new BetterSqlite3(this.dbPath, { readonly: this.options?.readonly }) as SQLiteDatabase;
     }
 
+    // Load sqlite-vec extension for vector search capabilities
+    this.vecEnabled = loadSqliteVec(this.db);
+
     // Enable WAL mode (skip for readonly)
+    // Note: bun:sqlite uses exec() for pragmas, better-sqlite3 uses pragma()
     if (!this.options?.readonly) {
-      this.db!.pragma('journal_mode = WAL');
+      if (isBun) {
+        this.db!.exec('PRAGMA journal_mode = WAL');
+      } else {
+        (this.db as any).pragma('journal_mode = WAL');
+      }
     }
 
     // Run migrations
@@ -116,6 +206,14 @@ export class Database {
         CREATE INDEX IF NOT EXISTS idx_embeddings_hash ON embeddings(content_hash);
       `);
 
+      // Create vec0 virtual table for vector similarity search
+      // rowid corresponds to the source embedding id for efficient joins
+      this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
+          embedding FLOAT[768]
+        )
+      `);
+
       // Record migration
       this.db.prepare(`
         INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
@@ -129,7 +227,7 @@ export class Database {
       const row = this.db.prepare(
         'SELECT MAX(version) as version FROM schema_migrations'
       ).get();
-      return row?.version || 0;
+      return (row?.version as number) || 0;
     } catch {
       return 0;
     }
