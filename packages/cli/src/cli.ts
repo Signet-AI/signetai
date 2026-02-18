@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.10';
+const VERSION = '0.1.11';
 
 // ============================================================================
 // Helpers
@@ -928,6 +928,12 @@ async function setupWizard(options: { path?: string }) {
     
     // Create base directory first (needed for git init on fresh install)
     mkdirSync(basePath, { recursive: true });
+    
+    // Copy .gitignore first (before git init)
+    const gitignoreSource = join(templatesDir, '.gitignore');
+    if (existsSync(gitignoreSource)) {
+      copyFileSync(gitignoreSource, join(basePath, '.gitignore'));
+    }
     
     // Initialize git if requested and fresh install
     if (gitEnabled && !isGitRepo(basePath)) {
