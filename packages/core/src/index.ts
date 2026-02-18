@@ -24,6 +24,7 @@ export { migrate, MigrationSource } from "./migrate";
 export {
 	detectSchema,
 	ensureUnifiedSchema,
+	ensureMigrationsTableSchema,
 	UNIFIED_SCHEMA,
 } from "./migration";
 export type {

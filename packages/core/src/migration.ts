@@ -139,6 +139,43 @@ export function detectSchema(db: {
 }
 
 /**
+ * Ensure schema_migrations table has all required columns
+ * Handles migration from old schema that was missing checksum column
+ */
+export function ensureMigrationsTableSchema(db: {
+	exec(sql: string): void;
+	prepare(sql: string): {
+		all(...args: unknown[]): Record<string, unknown>[];
+	};
+}): void {
+	// Create table if it doesn't exist
+	db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL,
+      checksum TEXT NOT NULL
+    )
+  `);
+
+	// Check if checksum column exists (migrate old schema)
+	try {
+		const columns = db
+			.prepare("PRAGMA table_info(schema_migrations)")
+			.all() as Array<{ name: string }>;
+		const hasChecksum = columns.some((col) => col.name === "checksum");
+
+		if (!hasChecksum) {
+			// Old schema without checksum - add the column with a default
+			db.exec(
+				"ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT 'migrated'",
+			);
+		}
+	} catch {
+		// Table doesn't exist or other error - the CREATE above should handle it
+	}
+}
+
+/**
  * The unified schema that all migrations target
  */
 export const UNIFIED_SCHEMA = `
@@ -504,12 +541,15 @@ export function ensureUnifiedSchema(db: {
 		if (schemaInfo.type === "core") {
 			// Just ensure all tables exist (idempotent)
 			db.exec(UNIFIED_SCHEMA);
+			// Ensure schema_migrations has checksum column (migrate old schema)
+			ensureMigrationsTableSchema(db);
 			return result;
 		}
 
 		// No memories table yet - just create schema
 		if (!schemaInfo.hasMemories) {
 			db.exec(UNIFIED_SCHEMA);
+			ensureMigrationsTableSchema(db);
 			return result;
 		}
 

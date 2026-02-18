@@ -23,7 +23,8 @@ def get_checksum(sql: str) -> str:
 
 
 def ensure_migrations_table(conn: sqlite3.Connection):
-    """Create schema_migrations table if it doesn't exist."""
+    """Create schema_migrations table if it doesn't exist, migrate old schema."""
+    # Create table if it doesn't exist (new installations)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,
@@ -31,6 +32,15 @@ def ensure_migrations_table(conn: sqlite3.Connection):
             checksum    TEXT NOT NULL
         )
     """)
+
+    # Check if checksum column exists (migrate old schema)
+    cursor = conn.execute("PRAGMA table_info(schema_migrations)")
+    columns = [row[1] for row in cursor.fetchall()]
+
+    if "checksum" not in columns:
+        # Old schema without checksum - add the column
+        conn.execute("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT 'migrated'")
+
     conn.commit()
 
 
