@@ -845,6 +845,16 @@ app.post('/api/memory/save', async (c) => {
   });
 });
 
+// Alias for Claude Code skill compatibility
+app.post('/api/hook/remember', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  return fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+});
+
 app.post('/api/memory/recall', async (c) => {
   let body: {
     query?: string;
