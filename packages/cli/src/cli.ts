@@ -516,7 +516,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.7';
+const VERSION = '0.1.8';
 
 // ============================================================================
 // Helpers
@@ -953,19 +953,38 @@ async function setupWizard(options: { path?: string }) {
     
     // Copy requirements.txt and install Python dependencies
     const requirementsSource = join(templatesDir, 'memory', 'requirements.txt');
+    let pipInstallFailed = false;
     if (existsSync(requirementsSource)) {
       copyFileSync(requirementsSource, join(basePath, 'memory', 'requirements.txt'));
       spinner.text = 'Installing Python dependencies...';
-      try {
-        const pipProc = spawn('pip', ['install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')], {
-          stdio: 'pipe',
-        });
-        await new Promise<void>((resolve) => {
-          pipProc.on('close', () => resolve());
-          pipProc.on('error', () => resolve());
-        });
-      } catch {
-        // pip install failed, user will need to install manually
+      
+      // Try different pip commands
+      const pipCommands = [
+        ['pip3', ['install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')]],
+        ['pip', ['install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')]],
+        ['python3', ['-m', 'pip', 'install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')]],
+        ['python', ['-m', 'pip', 'install', '-q', '-r', join(basePath, 'memory', 'requirements.txt')]],
+      ] as const;
+      
+      let installed = false;
+      for (const [cmd, args] of pipCommands) {
+        try {
+          const exitCode = await new Promise<number>((resolve) => {
+            const proc = spawn(cmd, args as string[], { stdio: 'pipe' });
+            proc.on('close', (code) => resolve(code ?? 1));
+            proc.on('error', () => resolve(1));
+          });
+          if (exitCode === 0) {
+            installed = true;
+            break;
+          }
+        } catch {
+          // Try next command
+        }
+      }
+      
+      if (!installed) {
+        pipInstallFailed = true;
       }
     }
     
@@ -1150,6 +1169,12 @@ ${agentName} is a helpful assistant.
     console.log(chalk.dim('    ├── USER.md       your profile'));
     console.log(chalk.dim('    ├── MEMORY.md     working memory'));
     console.log(chalk.dim('    └── memory/       database & vectors'));
+    
+    if (pipInstallFailed) {
+      console.log();
+      console.log(chalk.yellow('  ⚠ Python dependencies not installed. Run manually:'));
+      console.log(chalk.dim('    pip install PyYAML zvec'));
+    }
     
     if (configuredHarnesses.length > 0) {
       console.log();
