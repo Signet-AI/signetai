@@ -1,0 +1,312 @@
+# Memory System
+
+How Signet stores, searches, and surfaces memories across all your AI tools.
+
+---
+
+## Overview
+
+Memories are stored in a SQLite database at `~/.agents/memory/memories.db`. Each memory gets:
+
+- A full-text search index (FTS5/BM25) for keyword matching
+- A vector embedding for semantic similarity search
+- Metadata: type, tags, importance, who saved it, when
+
+At recall time, Signet blends both search methods (hybrid search) and returns the most relevant results.
+
+---
+
+## Saving Memories — `/remember`
+
+In any connected harness, use `/remember`:
+
+```
+/remember nicholai prefers bun over npm
+/remember critical: never push directly to main branch
+/remember [signet,architecture]: daemon runs on port 3850
+/remember [voice,tts]: qwen model needs 12GB VRAM minimum
+```
+
+### Prefix syntax
+
+**`critical:`** — pins the memory. Pinned memories have importance=1.0, never decay, and are always included in session context.
+
+```
+/remember critical: never expose API keys in logs
+```
+
+**`[tag1,tag2]:`** — adds tags to the memory for filtering.
+
+```
+/remember [project,auth]: decided to use JWT with 7-day expiry
+```
+
+Both prefixes can be combined:
+
+```
+/remember critical: [project,security]: rotate API keys every 90 days
+```
+
+### What happens when you /remember
+
+1. Content is parsed for prefixes (critical:, [tags]:)
+2. Memory type is inferred from the content (see Type Inference below)
+3. The memory is saved to SQLite immediately
+4. The FTS index is updated
+5. An embedding is generated asynchronously — if embedding fails, the memory is still saved and searchable via keyword
+
+### Confirmation
+
+After saving, you'll see:
+```
+✓ Saved: "nicholai prefers bun over npm"
+  type: preference | embedded ✓
+```
+
+For critical memories:
+```
+✓ Saved (pinned): "never push directly to main"
+  type: rule | importance: 1.0 | embedded ✓
+```
+
+If embedding failed:
+```
+✓ Saved: "nicholai prefers bun"
+  type: preference | keyword-only (embedding provider unavailable)
+```
+
+---
+
+## Searching Memories — `/recall`
+
+```
+/recall coding preferences
+/recall signet architecture
+/recall what did we decide about authentication
+/recall bun vs npm
+```
+
+### How hybrid search works
+
+1. **BM25 keyword search** — FTS5 finds memories matching the query terms, scored by term frequency and document frequency
+2. **Vector search** — the query is embedded, then compared against all stored embeddings using cosine similarity
+3. **Score blending** — scores are normalized and combined: `score = alpha × vector + (1-alpha) × bm25`
+4. **Filtering** — results below `min_score` are dropped
+5. **Return** — top results sorted by combined score
+
+The default `alpha` of 0.7 means 70% semantic, 30% keyword. Adjust in `agent.yaml` under `search.alpha`.
+
+### Result format
+
+```
+[0.92] nicholai prefers tabs over spaces [coding,preference]
+       type: preference | who: claude-code | Feb 15
+
+[0.78] decided to use bun for all new projects [project]
+       type: decision | who: opencode | Feb 14
+
+[0.65] bun is faster than npm for installs
+       type: fact | who: claude-code | Feb 12
+```
+
+The score in brackets is the combined relevance score (0–1). Results marked `[pinned]` are critical memories.
+
+---
+
+## Type Inference
+
+The system infers memory type from content:
+
+| Type | Triggers | Example |
+|------|----------|---------|
+| `preference` | prefers, likes, wants, like | "nicholai prefers dark mode" |
+| `decision` | decided, agreed, will use | "decided to use bun" |
+| `rule` | never, always, must | "never commit secrets" |
+| `learning` | learned, discovered, til | "learned that X causes Y" |
+| `issue` | bug, issue, broken, problem | "auth is broken on Safari" |
+| `fact` | (default) | "signet stores data in SQLite" |
+
+---
+
+## Importance and Decay
+
+Every memory has an `importance` score between 0 and 1. Over time, non-pinned memories decay:
+
+```
+importance(t) = base_importance × decay_rate^days_since_access
+```
+
+Where `decay_rate` comes from `agent.yaml` (default: 0.95, or 5% per day).
+
+Accessing a memory (via `/recall`) resets its decay timer by updating `last_accessed`.
+
+Pinned memories (`critical:`) have `importance = 1.0` and never decay.
+
+To tune decay:
+```yaml
+memory:
+  decay_rate: 0.99   # very slow decay
+  decay_rate: 0.95   # moderate (default)
+  decay_rate: 0.90   # faster
+```
+
+---
+
+## Session Context Injection
+
+At session start, Signet injects recent and important memories into the agent's context. This happens via harness hooks (see [HOOKS.md](./HOOKS.md)).
+
+The injection includes:
+- Agent identity (name, description)
+- Top N memories, scored by a blend of importance and recency
+- MEMORY.md content (if `includeRecentContext` is enabled)
+
+The `session_budget` setting in `agent.yaml` limits total characters injected (default: 2000).
+
+---
+
+## MEMORY.md Synthesis
+
+`MEMORY.md` is a human-readable summary of the memory database, regenerated by an AI model on a schedule. It's not a raw dump — it's a coherent synthesis of what the agent knows and what's been happening.
+
+### How it works
+
+1. The synthesis system reads all memories from the database
+2. It asks a configured AI model to write a structured summary
+3. The result is saved to `~/.agents/MEMORY.md`
+4. A timestamped backup of the previous version is kept in `memory/`
+
+### Configuration
+
+```yaml
+memory:
+  synthesis:
+    harness: openclaw   # which harness runs the synthesis
+    model: sonnet       # model to use
+    schedule: daily     # daily | weekly | on-demand
+    max_tokens: 4000
+```
+
+### Triggering synthesis manually
+
+Via API:
+```bash
+curl -X POST http://localhost:3850/api/hooks/synthesis \
+  -H 'Content-Type: application/json' \
+  -d '{"trigger": "manual"}'
+```
+
+The response contains the synthesis prompt and the memories list. The harness runs the model and POSTs the result back to `/api/hooks/synthesis/complete`.
+
+---
+
+## API Access
+
+The memory system is fully accessible via the daemon HTTP API.
+
+### Save a memory
+
+```bash
+curl -X POST http://localhost:3850/api/memory/remember \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "content": "nicholai prefers bun over npm",
+    "who": "my-tool",
+    "importance": 0.8
+  }'
+```
+
+### Search memories
+
+```bash
+curl -X POST http://localhost:3850/api/memory/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "coding preferences", "limit": 10}'
+```
+
+Or via GET:
+```bash
+curl "http://localhost:3850/api/memory/search?q=coding+preferences&limit=10"
+```
+
+### List memories
+
+```bash
+curl "http://localhost:3850/api/memories?limit=50&offset=0"
+```
+
+See [API.md](./API.md) for full endpoint documentation.
+
+---
+
+## Python Scripts
+
+For advanced operations, the memory scripts at `~/.agents/memory/scripts/memory.py` provide a CLI:
+
+```bash
+# Save a memory
+python3 ~/.agents/memory/scripts/memory.py save \
+  --mode explicit \
+  --who claude-code \
+  --content "nicholai prefers tabs"
+
+# Query memories
+python3 ~/.agents/memory/scripts/memory.py query "coding preferences" --limit 10
+
+# Find similar memories (by ID)
+python3 ~/.agents/memory/scripts/memory.py similar <memory-id> --k 5
+
+# Load context for session start
+python3 ~/.agents/memory/scripts/memory.py load --mode session-start
+```
+
+The daemon's native memory API (via HTTP) is faster and doesn't require Python. The scripts remain useful for batch operations, re-indexing, and external tooling.
+
+---
+
+## Embeddings Visualization
+
+The dashboard's **Embeddings** tab shows a UMAP projection of your memory space — all memories plotted in 2D by semantic similarity. Memories that are conceptually related cluster together.
+
+Each point is color-coded by source harness. Clicking a point shows the memory content and lets you find similar memories.
+
+To export embeddings for external use:
+```bash
+curl "http://localhost:3850/api/embeddings?vectors=true"
+```
+
+---
+
+## Troubleshooting
+
+**Memories save but search returns no results**
+
+The FTS index may be out of sync. This can happen if the database was modified directly. Re-index by running:
+```bash
+sqlite3 ~/.agents/memory/memories.db "INSERT INTO memories_fts(memories_fts) VALUES('rebuild');"
+```
+
+**Semantic search not working (only keyword results)**
+
+Embedding generation is failing. Check:
+- For Ollama: is `ollama serve` running? Is the model pulled?
+- For OpenAI: is the API key set correctly?
+- Check daemon logs: `signet logs`
+
+**Database locked errors**
+
+Multiple processes accessing the database simultaneously. The daemon uses read-only connections for queries to reduce locking. If you see persistent lock errors, check that you don't have multiple daemon instances:
+```bash
+signet status
+ps aux | grep signet
+```
+
+**Memory decay too aggressive**
+
+Increase `decay_rate` in `agent.yaml` (closer to 1.0 = slower decay):
+```yaml
+memory:
+  decay_rate: 0.99
+```
+
+Or use `critical:` prefix for memories that should never decay.

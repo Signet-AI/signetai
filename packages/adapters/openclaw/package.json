@@ -1,0 +1,28 @@
+{
+  "name": "@signet/adapter-openclaw",
+  "version": "0.1.1",
+  "description": "Signet adapter for OpenClaw",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "dev": "bun --watch src/index.ts"
+  },
+  "peerDependencies": {
+    "openclaw": ">=0.1.0"
+  },
+  "keywords": [
+    "signet",
+    "openclaw",
+    "adapter",
+    "ai-memory"
+  ],
+  "license": "MIT"
+}

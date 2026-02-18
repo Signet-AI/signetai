@@ -1,7 +1,7 @@
 import { homedir } from 'os';
 import { join } from 'path';
 
-export const DEFAULT_BASE_PATH = join(homedir(), '.signet');
+export const DEFAULT_BASE_PATH = join(homedir(), '.agents');
 export const SCHEMA_VERSION = 1;
 export const SPEC_VERSION = '1.0';
 export const SCHEMA_ID = 'signet/v1';

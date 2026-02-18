@@ -5,6 +5,11 @@ node_modules/
 # Build outputs
 dist/
 *.tsbuildinfo
+.svelte-kit/
+packages/cli/dashboard/build/
+packages/signetai/dist/
+packages/signetai/dashboard/
+*.tgz
 
 # Environment
 .env

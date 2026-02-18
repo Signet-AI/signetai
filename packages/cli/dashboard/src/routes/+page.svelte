@@ -9,6 +9,22 @@
     forceCenter,
     forceCollide
   } from 'd3-force';
+  import {
+    saveConfigFile,
+    getEmbeddings,
+    searchMemories,
+    getSimilarMemories,
+    getDistinctWho,
+    regenerateHarnesses as apiRegenerateHarnesses,
+    getSecrets,
+    putSecret,
+    deleteSecret,
+    getSkills,
+    searchSkills,
+    installSkill,
+    uninstallSkill,
+    type Skill
+  } from '$lib/api';
 
   let { data } = $props();
 
@@ -27,7 +43,226 @@
   }
 
   // --- Tabs ---
-  let activeTab = $state<'config' | 'embeddings'>('config');
+  let activeTab = $state<'config' | 'embeddings' | 'logs' | 'secrets' | 'skills'>('config');
+
+  // --- Secrets ---
+  let secrets = $state<string[]>([]);
+  let secretsLoading = $state(false);
+  let newSecretName = $state('');
+  let newSecretValue = $state('');
+  let secretAdding = $state(false);
+  let secretDeleting = $state<string | null>(null);
+
+  async function fetchSecrets() {
+    secretsLoading = true;
+    secrets = await getSecrets();
+    secretsLoading = false;
+  }
+
+  async function addSecret() {
+    if (!newSecretName.trim() || !newSecretValue.trim()) return;
+    secretAdding = true;
+    const ok = await putSecret(newSecretName.trim(), newSecretValue);
+    if (ok) {
+      newSecretName = '';
+      newSecretValue = '';
+      await fetchSecrets();
+    }
+    secretAdding = false;
+  }
+
+  async function removeSecret(name: string) {
+    secretDeleting = name;
+    const ok = await deleteSecret(name);
+    if (ok) {
+      await fetchSecrets();
+    }
+    secretDeleting = null;
+  }
+
+  // --- Skills ---
+  let skills = $state<Skill[]>([]);
+  let skillsLoading = $state(false);
+  let skillSearchQuery = $state('');
+  let skillSearchResults = $state<Array<{ name: string; description: string; installed: boolean }>>([]);
+  let skillSearching = $state(false);
+  let skillInstalling = $state<string | null>(null);
+  let skillUninstalling = $state<string | null>(null);
+  let selectedSkill = $state<Skill | null>(null);
+
+  async function fetchSkills() {
+    skillsLoading = true;
+    skills = await getSkills();
+    skillsLoading = false;
+  }
+
+  async function doSkillSearch() {
+    if (!skillSearchQuery.trim()) {
+      skillSearchResults = [];
+      return;
+    }
+    skillSearching = true;
+    skillSearchResults = await searchSkills(skillSearchQuery.trim());
+    skillSearching = false;
+  }
+
+  async function doInstallSkill(name: string) {
+    skillInstalling = name;
+    const result = await installSkill(name);
+    if (result.success) {
+      await fetchSkills();
+      skillSearchResults = skillSearchResults.map(s => 
+        s.name === name ? { ...s, installed: true } : s
+      );
+    }
+    skillInstalling = null;
+  }
+
+  async function doUninstallSkill(name: string) {
+    skillUninstalling = name;
+    const result = await uninstallSkill(name);
+    if (result.success) {
+      await fetchSkills();
+      skillSearchResults = skillSearchResults.map(s => 
+        s.name === name ? { ...s, installed: false } : s
+      );
+      if (selectedSkill?.name === name) {
+        selectedSkill = null;
+      }
+    }
+    skillUninstalling = null;
+  }
+
+  // --- Logs viewer ---
+  interface LogEntry {
+    timestamp: string;
+    level: 'debug' | 'info' | 'warn' | 'error';
+    category: string;
+    message: string;
+    data?: Record<string, unknown>;
+    duration?: number;
+    error?: { name: string; message: string };
+  }
+
+  let logs = $state<LogEntry[]>([]);
+  let logsLoading = $state(false);
+  let logsError = $state('');
+  let logsStreaming = $state(false);
+  let logEventSource: EventSource | null = null;
+  let logLevelFilter = $state<string>('');
+  let logCategoryFilter = $state<string>('');
+  let logAutoScroll = $state(true);
+  let logContainer: HTMLDivElement | null = null;
+
+  const logCategories = ['daemon', 'api', 'memory', 'sync', 'git', 'watcher', 'embedding', 'harness', 'system'];
+  const logLevels = ['debug', 'info', 'warn', 'error'];
+
+  async function fetchLogs() {
+    logsLoading = true;
+    logsError = '';
+    try {
+      const params = new URLSearchParams({ limit: '200' });
+      if (logLevelFilter) params.set('level', logLevelFilter);
+      if (logCategoryFilter) params.set('category', logCategoryFilter);
+      
+      const res = await fetch(`/api/logs?${params}`);
+      const data = await res.json();
+      logs = data.logs || [];
+    } catch (e) {
+      logsError = 'Failed to fetch logs';
+    } finally {
+      logsLoading = false;
+    }
+  }
+
+  function startLogStream() {
+    if (logEventSource) {
+      logEventSource.close();
+    }
+    
+    logsStreaming = true;
+    logEventSource = new EventSource('/api/logs/stream');
+    
+    logEventSource.onmessage = (event) => {
+      try {
+        const entry = JSON.parse(event.data);
+        if (entry.type === 'connected') return;
+        
+        // Apply filters
+        if (logLevelFilter && entry.level !== logLevelFilter) return;
+        if (logCategoryFilter && entry.category !== logCategoryFilter) return;
+        
+        logs = [...logs.slice(-499), entry]; // Keep last 500
+        
+        // Auto-scroll
+        if (logAutoScroll && logContainer) {
+          setTimeout(() => {
+            logContainer?.scrollTo({ top: logContainer.scrollHeight, behavior: 'smooth' });
+          }, 50);
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    };
+    
+    logEventSource.onerror = () => {
+      logsStreaming = false;
+      logEventSource?.close();
+      logEventSource = null;
+    };
+  }
+
+  function stopLogStream() {
+    logsStreaming = false;
+    logEventSource?.close();
+    logEventSource = null;
+  }
+
+  function toggleLogStream() {
+    if (logsStreaming) {
+      stopLogStream();
+    } else {
+      startLogStream();
+    }
+  }
+
+  function clearLogs() {
+    logs = [];
+  }
+
+  function formatLogTime(timestamp: string): string {
+    return timestamp.split('T')[1]?.slice(0, 8) || '';
+  }
+
+  // Fetch logs when tab becomes active
+  $effect(() => {
+    if (activeTab === 'logs' && logs.length === 0) {
+      fetchLogs();
+    }
+  });
+
+  // Fetch secrets when tab becomes active
+  $effect(() => {
+    if (activeTab === 'secrets' && secrets.length === 0) {
+      fetchSecrets();
+    }
+  });
+
+  // Fetch skills when tab becomes active
+  $effect(() => {
+    if (activeTab === 'skills' && skills.length === 0) {
+      fetchSkills();
+    }
+  });
+
+  // Cleanup on unmount
+  $effect(() => {
+    return () => {
+      if (logEventSource) {
+        logEventSource.close();
+      }
+    };
+  });
 
   // --- Config editor ---
   let selectedFile = $state('');
@@ -67,15 +302,8 @@
     saving = true;
     saved = false;
     try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          file: selectedFile,
-          content: editorContent,
-        }),
-      });
-      if (res.ok) {
+      const success = await saveConfigFile(selectedFile, editorContent);
+      if (success) {
         saved = true;
         setTimeout(() => (saved = false), 2000);
       }
@@ -380,8 +608,7 @@
     graphStatus = 'Loading embeddings...';
 
     try {
-      const res = await fetch('/api/embeddings?vectors=true');
-      const result = await res.json();
+      const result = await getEmbeddings(true);
 
       if (result.error) {
         graphError = result.error;
@@ -527,7 +754,7 @@
     return p.toString();
   }
 
-  async function searchMemories() {
+  async function doSearch() {
     const hasQuery = memoryQuery.trim();
     if (!hasQuery && !hasActiveFilters) {
       memoryResults = [];
@@ -538,9 +765,15 @@
     similarSourceId = null;
     searchingMemory = true;
     try {
-      const res = await fetch(`/memory/search?${filterSearchParams()}`);
-      const data = await res.json();
-      memoryResults = data.results ?? [];
+      const results = await searchMemories(memoryQuery.trim(), {
+        type: filterType || undefined,
+        tags: filterTags || undefined,
+        who: filterWho || undefined,
+        pinned: filterPinned || undefined,
+        importance_min: filterImportanceMin ? parseFloat(filterImportanceMin) : undefined,
+        since: filterSince || undefined,
+      });
+      memoryResults = results;
       memorySearched = true;
     } finally {
       searchingMemory = false;
@@ -553,11 +786,8 @@
     loadingSimilar = true;
     similarResults = [];
     try {
-      const p = new URLSearchParams({ id, k: '10' });
-      if (filterType) p.set('type', filterType);
-      const res = await fetch(`/memory/similar?${p.toString()}`);
-      const data = await res.json();
-      similarResults = data.results ?? [];
+      const results = await getSimilarMemories(id, 10, filterType || undefined);
+      similarResults = results;
     } finally {
       loadingSimilar = false;
     }
@@ -584,15 +814,14 @@
     const _ = filterType, __ = filterTags, ___ = filterWho,
       ____ = filterPinned, _____ = filterImportanceMin, ______ = filterSince;
     if (hasActiveFilters || memorySearched) {
-      searchMemories();
+      doSearch();
     }
   });
 
   $effect(() => {
     // Load who options once on mount
-    fetch('/memory/search?distinct=who')
-      .then(r => r.json())
-      .then(d => { whoOptions = d.values ?? []; })
+    getDistinctWho()
+      .then(values => { whoOptions = values; })
       .catch(() => {});
   });
 
@@ -724,6 +953,27 @@
           >
             Embeddings
           </button>
+          <button
+            class="tab"
+            class:tab-active={activeTab === 'logs'}
+            onclick={() => activeTab = 'logs'}
+          >
+            Logs
+          </button>
+          <button
+            class="tab"
+            class:tab-active={activeTab === 'secrets'}
+            onclick={() => activeTab = 'secrets'}
+          >
+            Secrets
+          </button>
+          <button
+            class="tab"
+            class:tab-active={activeTab === 'skills'}
+            onclick={() => activeTab = 'skills'}
+          >
+            Skills
+          </button>
         </div>
         
         <div class="tab-info">
@@ -735,8 +985,53 @@
             <button class="btn-primary" onclick={saveFile} disabled={saving}>
               {saving ? 'Saving...' : 'Save'}
             </button>
-          {:else}
+          {:else if activeTab === 'embeddings'}
             <span class="status-text">{embeddings.length} embeddings</span>
+          {:else if activeTab === 'logs'}
+            <span class="status-text">{logs.length} entries</span>
+            <button 
+              class="btn-icon" 
+              class:streaming={logsStreaming}
+              onclick={toggleLogStream}
+              title={logsStreaming ? 'Stop streaming' : 'Start streaming'}
+            >
+              {#if logsStreaming}
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                  <rect x="3" y="3" width="8" height="8" rx="1"/>
+                </svg>
+              {:else}
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+                  <path d="M4 3l7 4-7 4V3z"/>
+                </svg>
+              {/if}
+            </button>
+            <button class="btn-icon" onclick={fetchLogs} title="Refresh">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M2 7a5 5 0 019-3M12 7a5 5 0 01-9 3"/>
+                <path d="M2 4v3h3M12 10v-3h-3"/>
+              </svg>
+            </button>
+            <button class="btn-icon" onclick={clearLogs} title="Clear">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M3 3l8 8M11 3l-8 8"/>
+              </svg>
+            </button>
+          {:else if activeTab === 'secrets'}
+            <span class="status-text">{secrets.length} secrets</span>
+            <button class="btn-icon" onclick={fetchSecrets} title="Refresh">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M2 7a5 5 0 019-3M12 7a5 5 0 01-9 3"/>
+                <path d="M2 4v3h3M12 10v-3h-3"/>
+              </svg>
+            </button>
+          {:else if activeTab === 'skills'}
+            <span class="status-text">{skills.length} installed</span>
+            <button class="btn-icon" onclick={fetchSkills} title="Refresh">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M2 7a5 5 0 019-3M12 7a5 5 0 01-9 3"/>
+                <path d="M2 4v3h3M12 10v-3h-3"/>
+              </svg>
+            </button>
           {/if}
         </div>
       </div>
@@ -750,7 +1045,7 @@
             spellcheck="false"
             placeholder="Empty file..."
           ></textarea>
-        {:else}
+        {:else if activeTab === 'embeddings'}
           <div class="canvas-container">
             {#if graphStatus}
               <div class="overlay">
@@ -771,6 +1066,205 @@
             {/if}
             <canvas bind:this={canvas} class="canvas"></canvas>
           </div>
+        {:else if activeTab === 'logs'}
+          <div class="logs-container">
+            <!-- Log filters -->
+            <div class="logs-filters">
+              <select class="filter-select" bind:value={logLevelFilter} onchange={fetchLogs}>
+                <option value="">All levels</option>
+                {#each logLevels as level}
+                  <option value={level}>{level}</option>
+                {/each}
+              </select>
+              <select class="filter-select" bind:value={logCategoryFilter} onchange={fetchLogs}>
+                <option value="">All categories</option>
+                {#each logCategories as cat}
+                  <option value={cat}>{cat}</option>
+                {/each}
+              </select>
+              <label class="checkbox-label">
+                <input type="checkbox" bind:checked={logAutoScroll} />
+                Auto-scroll
+              </label>
+              {#if logsStreaming}
+                <span class="streaming-indicator">● Live</span>
+              {/if}
+            </div>
+            
+            <!-- Log entries -->
+            <div class="logs-scroll" bind:this={logContainer}>
+              {#if logsLoading}
+                <div class="logs-empty">Loading logs...</div>
+              {:else if logsError}
+                <div class="logs-empty text-error">{logsError}</div>
+              {:else if logs.length === 0}
+                <div class="logs-empty">No logs found</div>
+              {:else}
+                {#each logs as log}
+                  <div class="log-entry log-{log.level}">
+                    <span class="log-time">{formatLogTime(log.timestamp)}</span>
+                    <span class="log-level">{log.level.toUpperCase()}</span>
+                    <span class="log-category">[{log.category}]</span>
+                    <span class="log-message">{log.message}</span>
+                    {#if log.duration !== undefined}
+                      <span class="log-duration">({log.duration}ms)</span>
+                    {/if}
+                    {#if log.data && Object.keys(log.data).length > 0}
+                      <span class="log-data">{JSON.stringify(log.data)}</span>
+                    {/if}
+                    {#if log.error}
+                      <div class="log-error">{log.error.name}: {log.error.message}</div>
+                    {/if}
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </div>
+        {:else if activeTab === 'secrets'}
+          <div class="secrets-container">
+            <!-- Add new secret -->
+            <div class="secrets-add">
+              <input
+                type="text"
+                class="secrets-input"
+                bind:value={newSecretName}
+                placeholder="Secret name (e.g. OPENAI_API_KEY)"
+              />
+              <input
+                type="password"
+                class="secrets-input"
+                bind:value={newSecretValue}
+                placeholder="Secret value"
+              />
+              <button
+                class="btn-primary"
+                onclick={addSecret}
+                disabled={secretAdding || !newSecretName.trim() || !newSecretValue.trim()}
+              >
+                {secretAdding ? 'Adding...' : 'Add'}
+              </button>
+            </div>
+            
+            <!-- Secrets list -->
+            <div class="secrets-list">
+              {#if secretsLoading}
+                <div class="secrets-empty">Loading secrets...</div>
+              {:else if secrets.length === 0}
+                <div class="secrets-empty">No secrets stored. Add one above.</div>
+              {:else}
+                {#each secrets as name}
+                  <div class="secret-item">
+                    <span class="secret-name">{name}</span>
+                    <span class="secret-value">••••••••</span>
+                    <button
+                      class="btn-danger-small"
+                      onclick={() => removeSecret(name)}
+                      disabled={secretDeleting === name}
+                    >
+                      {secretDeleting === name ? '...' : 'Delete'}
+                    </button>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          </div>
+        {:else if activeTab === 'skills'}
+          <div class="skills-container">
+            <!-- Search skills.sh -->
+            <div class="skills-search">
+              <input
+                type="text"
+                class="skills-search-input"
+                bind:value={skillSearchQuery}
+                onkeydown={(e) => e.key === 'Enter' && doSkillSearch()}
+                placeholder="Search skills.sh..."
+              />
+              <button
+                class="btn-primary"
+                onclick={doSkillSearch}
+                disabled={skillSearching || !skillSearchQuery.trim()}
+              >
+                {skillSearching ? 'Searching...' : 'Search'}
+              </button>
+            </div>
+            
+            <!-- Search results -->
+            {#if skillSearchResults.length > 0}
+              <div class="skills-section">
+                <div class="skills-section-title">Search Results</div>
+                <div class="skills-list">
+                  {#each skillSearchResults as result}
+                    <div class="skill-item">
+                      <div class="skill-info">
+                        <span class="skill-name">{result.name}</span>
+                        {#if result.installed}
+                          <span class="skill-badge installed">Installed</span>
+                        {/if}
+                      </div>
+                      <div class="skill-description">{result.description}</div>
+                      <div class="skill-actions">
+                        {#if result.installed}
+                          <button
+                            class="btn-danger-small"
+                            onclick={() => doUninstallSkill(result.name)}
+                            disabled={skillUninstalling === result.name}
+                          >
+                            {skillUninstalling === result.name ? '...' : 'Uninstall'}
+                          </button>
+                        {:else}
+                          <button
+                            class="btn-primary-small"
+                            onclick={() => doInstallSkill(result.name)}
+                            disabled={skillInstalling === result.name}
+                          >
+                            {skillInstalling === result.name ? '...' : 'Install'}
+                          </button>
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            
+            <!-- Installed skills -->
+            <div class="skills-section">
+              <div class="skills-section-title">Installed ({skills.length})</div>
+              <div class="skills-list">
+                {#if skillsLoading}
+                  <div class="skills-empty">Loading skills...</div>
+                {:else if skills.length === 0}
+                  <div class="skills-empty">No skills installed. Search above to find skills.</div>
+                {:else}
+                  {#each skills as skill}
+                    <div class="skill-item" class:skill-selected={selectedSkill?.name === skill.name}>
+                      <div class="skill-info">
+                        <span class="skill-name">{skill.name}</span>
+                        {#if skill.builtin}
+                          <span class="skill-badge builtin">Built-in</span>
+                        {/if}
+                        {#if skill.user_invocable}
+                          <span class="skill-badge invocable">/{skill.name}</span>
+                        {/if}
+                      </div>
+                      <div class="skill-description">{skill.description}</div>
+                      <div class="skill-actions">
+                        {#if !skill.builtin}
+                          <button
+                            class="btn-danger-small"
+                            onclick={() => doUninstallSkill(skill.name)}
+                            disabled={skillUninstalling === skill.name}
+                          >
+                            {skillUninstalling === skill.name ? '...' : 'Uninstall'}
+                          </button>
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                {/if}
+              </div>
+            </div>
+          </div>
         {/if}
       </div>
 
@@ -781,9 +1275,24 @@
           <span class="statusbar-right">
             <kbd>Cmd+S</kbd> to save
           </span>
-        {:else}
+        {:else if activeTab === 'embeddings'}
           <span>{nodes.length} nodes · {edges.length} edges</span>
           <span class="statusbar-right">UMAP</span>
+        {:else if activeTab === 'logs'}
+          <span>{logs.length} entries</span>
+          <span class="statusbar-right">
+            {#if logsStreaming}
+              <span class="streaming-badge">LIVE</span>
+            {:else}
+              Press play to stream
+            {/if}
+          </span>
+        {:else if activeTab === 'secrets'}
+          <span>{secrets.length} secrets</span>
+          <span class="statusbar-right">Encrypted with libsodium</span>
+        {:else if activeTab === 'skills'}
+          <span>{skills.length} installed</span>
+          <span class="statusbar-right">skills.sh</span>
         {/if}
       </div>
     </main>
@@ -802,7 +1311,7 @@
             type="text"
             class="search-input"
             bind:value={memoryQuery}
-            onkeydown={(e) => e.key === 'Enter' && searchMemories()}
+            onkeydown={(e) => e.key === 'Enter' && doSearch()}
             placeholder="Search..."
           />
           <button
@@ -1557,6 +2066,382 @@
 
   .text-error {
     color: var(--error);
+  }
+
+  /* === Logs === */
+  
+  .logs-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .logs-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+
+  .logs-filters .filter-select {
+    font-size: 11px;
+    padding: 4px 8px;
+    min-width: 100px;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .checkbox-label input {
+    margin: 0;
+  }
+
+  .streaming-indicator {
+    color: var(--success);
+    font-size: 11px;
+    font-weight: 500;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .streaming-badge {
+    background: var(--success);
+    color: var(--bg-canvas);
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 3px;
+    animation: pulse 2s infinite;
+  }
+
+  .logs-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-2);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.6;
+  }
+
+  .logs-empty {
+    padding: var(--space-8);
+    text-align: center;
+    color: var(--text-tertiary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+  }
+
+  .log-entry {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1);
+    padding: 2px 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .log-entry:last-child {
+    border-bottom: none;
+  }
+
+  .log-time {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+
+  .log-level {
+    font-weight: 600;
+    flex-shrink: 0;
+    min-width: 40px;
+  }
+
+  .log-debug .log-level { color: var(--text-tertiary); }
+  .log-info .log-level { color: var(--accent-seal); }
+  .log-warn .log-level { color: var(--warning); }
+  .log-error .log-level { color: var(--error); }
+
+  .log-category {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+
+  .log-message {
+    color: var(--text-primary);
+  }
+
+  .log-duration {
+    color: var(--text-tertiary);
+  }
+
+  .log-data {
+    color: var(--text-tertiary);
+    font-size: 10px;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .log-error {
+    width: 100%;
+    color: var(--error);
+    padding-left: 60px;
+    font-size: 10px;
+  }
+
+  .btn-icon.streaming {
+    color: var(--success);
+  }
+
+  /* === Secrets === */
+
+  .secrets-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 16px;
+    overflow: hidden;
+  }
+
+  .secrets-add {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .secrets-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .secrets-input:focus {
+    outline: none;
+    border-color: var(--accent-seal);
+  }
+
+  .secrets-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .secrets-empty {
+    padding: 32px;
+    text-align: center;
+    color: var(--text-tertiary);
+  }
+
+  .secret-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .secret-name {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
+  .secret-value {
+    color: var(--text-tertiary);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .btn-danger-small {
+    padding: 4px 10px;
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid var(--error);
+    color: var(--error);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .btn-danger-small:hover:not(:disabled) {
+    background: var(--error);
+    color: white;
+  }
+
+  .btn-danger-small:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* === Skills === */
+
+  .skills-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 16px;
+    overflow: hidden;
+  }
+
+  .skills-search {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .skills-search-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .skills-search-input:focus {
+    outline: none;
+    border-color: var(--accent-seal);
+  }
+
+  .skills-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .skills-section-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+
+  .skills-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .skills-empty {
+    padding: 32px;
+    text-align: center;
+    color: var(--text-tertiary);
+  }
+
+  .skill-item {
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .skill-item.skill-selected {
+    border-color: var(--accent-seal);
+  }
+
+  .skill-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .skill-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .skill-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+
+  .skill-badge.installed {
+    background: var(--success);
+    color: white;
+  }
+
+  .skill-badge.builtin {
+    background: var(--accent-seal);
+    color: white;
+  }
+
+  .skill-badge.invocable {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    text-transform: none;
+  }
+
+  .skill-description {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .skill-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .btn-primary-small {
+    padding: 4px 10px;
+    font-size: 11px;
+    background: var(--accent-seal);
+    border: none;
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .btn-primary-small:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .btn-primary-small:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   /* === Responsive === */

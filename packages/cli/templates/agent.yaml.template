@@ -1,0 +1,139 @@
+# Signet Agent Configuration
+# Portable AI agent identity - https://signetai.sh
+
+version: 1
+schema: signet/v1
+
+# ============================================================================
+# Agent Identity
+# ============================================================================
+
+agent:
+  name: "{{AGENT_NAME}}"
+  description: "Personal AI assistant"
+  created: "{{CREATED_AT}}"
+  updated: "{{CREATED_AT}}"
+
+# Optional: Owner information
+# owner:
+#   name: "Your Name"
+#   address: "0x..."  # Ethereum address
+#   ens: "yourname.eth"
+
+# ============================================================================
+# Harness Configuration
+# ============================================================================
+
+# AI tools this agent works with
+harnesses:
+  - claude-code
+  - opencode
+  - openclaw
+
+# ============================================================================
+# Embedding Configuration
+# ============================================================================
+
+embedding:
+  # Provider: "ollama" (local) or "openai"
+  provider: ollama
+  
+  # Model name
+  # Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
+  # OpenAI: text-embedding-3-small, text-embedding-3-large
+  model: nomic-embed-text
+  
+  # Vector dimensions (must match model output)
+  dimensions: 768
+  
+  # API endpoint (optional, defaults to standard URLs)
+  # base_url: http://localhost:11434
+
+# ============================================================================
+# Search Configuration
+# ============================================================================
+
+search:
+  # Alpha: weight for vector similarity (1-alpha = BM25 keyword weight)
+  # 0.7 = 70% semantic, 30% keyword
+  alpha: 0.7
+  
+  # Candidates to fetch from each source before blending
+  top_k: 20
+  
+  # Minimum score threshold for results
+  min_score: 0.3
+
+# ============================================================================
+# Memory Configuration
+# ============================================================================
+
+memory:
+  # Database location (relative to ~/.agents/)
+  database: memory/memories.db
+  
+  # Vector storage
+  vectors: memory/vectors.zvec
+  
+  # Character budget for session context injection
+  session_budget: 2000
+  
+  # Importance decay rate per day (0.95 = 5% decay/day)
+  decay_rate: 0.95
+  
+  # MEMORY.md synthesis configuration
+  synthesis:
+    # Which harness performs the synthesis (openclaw, claude-code, opencode)
+    harness: openclaw
+    
+    # Model to use for synthesis (harness-specific format)
+    # Examples: "sonnet", "claude-sonnet-4", "gpt-4o", "gemini-pro"
+    model: sonnet
+    
+    # How often to regenerate MEMORY.md (daily, weekly, on-demand)
+    schedule: daily
+    
+    # Maximum tokens for synthesis output
+    max_tokens: 4000
+
+# ============================================================================
+# Hooks Configuration
+# ============================================================================
+
+# Lifecycle hooks - called by harness adapters at key moments
+hooks:
+  # Called when a new session starts
+  sessionStart:
+    # Number of memories to retrieve
+    recallLimit: 10
+    # Include agent identity in context
+    includeIdentity: true
+    # Include recent context from MEMORY.md
+    includeRecentContext: true
+    # Weight recent memories higher (0-1, higher = more recency bias)
+    recencyBias: 0.7
+  
+  # Called before session compaction/summarization
+  preCompaction:
+    # Guidelines for the agent when generating session summary
+    summaryGuidelines: |
+      Summarize this session focusing on:
+      - Key decisions made
+      - Important information learned
+      - User preferences discovered
+      - Open threads or todos
+      - Any errors or issues encountered
+      
+      Keep the summary concise but complete.
+    # Include recent memories for context when summarizing
+    includeRecentMemories: true
+    # How many recent memories to include
+    memoryLimit: 5
+
+# ============================================================================
+# Trust & Verification (optional)
+# ============================================================================
+
+# trust:
+#   verification: none  # none | erc8128 | gpg | did | registry
+#   registry: "https://registry.signetai.sh"

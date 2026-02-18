@@ -1,20 +1,36 @@
 {
   "name": "@signet/daemon",
-  "version": "0.1.0",
-  "description": "Background sync daemon for Signet",
+  "version": "0.1.1",
+  "description": "Background daemon for Signet - serves dashboard, API, and memory system",
   "type": "module",
   "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "signet-daemon": "./dist/daemon.js"
   },
-  "files": ["dist"],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist", "dashboard"],
   "scripts": {
-    "build": "bun build ./src/daemon.ts --outfile ./dist/daemon.js --target node",
+    "build": "bun build ./src/daemon.ts --outfile ./dist/daemon.js --target bun && bun build ./src/index.ts --outfile ./dist/index.js --target bun",
+    "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "dev": "bun --watch src/daemon.ts",
+    "start": "bun src/daemon.ts",
+    "install:service": "bun src/daemon.ts --install",
+    "uninstall:service": "bun src/daemon.ts --uninstall",
     "test": "bun test"
   },
   "dependencies": {
     "@signet/core": "workspace:*",
-    "chokidar": "^4.0.0"
+    "chokidar": "^4.0.0",
+    "hono": "^4.8.0",
+    "libsodium-wrappers": "^0.8.2"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers": "^0.8.2"
   }
 }

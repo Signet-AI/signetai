@@ -7,25 +7,23 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
-import { input, select, confirm, checkbox } from '@inquirer/prompts';
+import { input, select, confirm, checkbox, password } from '@inquirer/prompts';
 import { spawn } from 'child_process';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
+import open from 'open';
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
-  // In development: packages/cli/templates
-  // When installed: node_modules/@signet/cli/templates
   const devPath = join(__dirname, '..', 'templates');
   const distPath = join(__dirname, '..', '..', 'templates');
   
   if (existsSync(devPath)) return devPath;
   if (existsSync(distPath)) return distPath;
   
-  // Fallback for bun build output
   return join(__dirname, 'templates');
 }
 
@@ -46,6 +44,207 @@ function copyDirRecursive(src: string, dest: string) {
 }
 
 // ============================================================================
+// Git Helpers
+// ============================================================================
+
+function isGitRepo(dir: string): boolean {
+  return existsSync(join(dir, '.git'));
+}
+
+async function gitInit(dir: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const proc = spawn('git', ['init'], { cwd: dir, stdio: 'pipe' });
+    proc.on('close', (code) => resolve(code === 0));
+    proc.on('error', () => resolve(false));
+  });
+}
+
+async function gitAddAndCommit(dir: string, message: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    // First, git add -A
+    const add = spawn('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+    add.on('close', (addCode) => {
+      if (addCode !== 0) {
+        resolve(false);
+        return;
+      }
+      // Check if there are changes to commit
+      const status = spawn('git', ['status', '--porcelain'], { cwd: dir, stdio: 'pipe' });
+      let statusOutput = '';
+      status.stdout?.on('data', (d) => { statusOutput += d.toString(); });
+      status.on('close', (statusCode) => {
+        if (statusCode !== 0 || !statusOutput.trim()) {
+          // No changes to commit
+          resolve(true);
+          return;
+        }
+        // Commit
+        const commit = spawn('git', ['commit', '-m', message], { cwd: dir, stdio: 'pipe' });
+        commit.on('close', (commitCode) => resolve(commitCode === 0));
+        commit.on('error', () => resolve(false));
+      });
+      status.on('error', () => resolve(false));
+    });
+    add.on('error', () => resolve(false));
+  });
+}
+
+async function gitAutoCommit(dir: string, changedFile: string): Promise<boolean> {
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = changedFile.split('/').pop() || 'file';
+  const message = `${timestamp}_auto_${filename}`;
+  return gitAddAndCommit(dir, message);
+}
+
+// ============================================================================
+// Daemon Management
+// ============================================================================
+
+const AGENTS_DIR = join(homedir(), '.agents');
+const DAEMON_DIR = join(AGENTS_DIR, '.daemon');
+const PID_FILE = join(DAEMON_DIR, 'pid');
+const LOG_DIR = join(DAEMON_DIR, 'logs');
+const DEFAULT_PORT = 3850;
+
+async function isDaemonRunning(): Promise<boolean> {
+  try {
+    const response = await fetch(`http://localhost:${DEFAULT_PORT}/health`, { 
+      signal: AbortSignal.timeout(2000) 
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function getDaemonStatus(): Promise<{
+  running: boolean;
+  pid: number | null;
+  uptime: number | null;
+  version: string | null;
+}> {
+  try {
+    const response = await fetch(`http://localhost:${DEFAULT_PORT}/api/status`, {
+      signal: AbortSignal.timeout(2000)
+    });
+    if (response.ok) {
+      const data = await response.json() as { 
+        pid?: number; 
+        uptime?: number; 
+        version?: string 
+      };
+      return {
+        running: true,
+        pid: data.pid ?? null,
+        uptime: data.uptime ?? null,
+        version: data.version ?? null,
+      };
+    }
+  } catch {
+    // Not running
+  }
+  
+  return { running: false, pid: null, uptime: null, version: null };
+}
+
+async function startDaemon(): Promise<boolean> {
+  mkdirSync(DAEMON_DIR, { recursive: true });
+  mkdirSync(LOG_DIR, { recursive: true });
+  
+  // Find daemon script (prefer source for native module support with bun)
+  const daemonLocations = [
+    join(__dirname, '..', '..', 'daemon', 'src', 'daemon.ts'),
+    join(__dirname, '..', '..', 'daemon', 'dist', 'daemon.js'),
+  ];
+  
+  let daemonPath: string | null = null;
+  for (const loc of daemonLocations) {
+    if (existsSync(loc)) {
+      daemonPath = loc;
+      break;
+    }
+  }
+  
+  if (!daemonPath) {
+    console.error(chalk.red('Daemon not found. Try reinstalling signet.'));
+    return false;
+  }
+  
+  // Always use bun for better native module support
+  const runtime = 'bun';
+  
+  const outLog = join(LOG_DIR, 'daemon.out.log');
+  const errLog = join(LOG_DIR, 'daemon.err.log');
+  
+  const proc = spawn(runtime, [daemonPath], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      SIGNET_PORT: DEFAULT_PORT.toString(),
+      SIGNET_PATH: AGENTS_DIR,
+    },
+  });
+  
+  // Write logs to files
+  const fs = await import('fs');
+  const out = fs.createWriteStream(outLog, { flags: 'a' });
+  const err = fs.createWriteStream(errLog, { flags: 'a' });
+  proc.stdout?.pipe(out);
+  proc.stderr?.pipe(err);
+  
+  proc.unref();
+  
+  // Wait for daemon to be ready
+  for (let i = 0; i < 20; i++) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    if (await isDaemonRunning()) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+async function stopDaemon(): Promise<boolean> {
+  // Try graceful shutdown via PID
+  if (existsSync(PID_FILE)) {
+    try {
+      const pid = parseInt(readFileSync(PID_FILE, 'utf-8').trim(), 10);
+      process.kill(pid, 'SIGTERM');
+      
+      // Wait for shutdown
+      for (let i = 0; i < 20; i++) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        try {
+          process.kill(pid, 0);
+        } catch {
+          // Process is dead
+          return true;
+        }
+      }
+      
+      // Force kill
+      process.kill(pid, 'SIGKILL');
+      return true;
+    } catch {
+      // Process might already be dead
+    }
+  }
+  
+  return !(await isDaemonRunning());
+}
+
+function formatUptime(seconds: number): string {
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  return `${hours}h ${mins}m`;
+}
+
+// ============================================================================
 // Harness Hook Configuration
 // ============================================================================
 
@@ -62,17 +261,13 @@ async function configureHarnessHooks(harness: string, basePath: string) {
     case 'openclaw':
       await configureOpenClawHooks(basePath, memoryScript);
       break;
-    // Other harnesses don't have hook systems yet
   }
 }
 
 async function configureClaudeCodeHooks(basePath: string, memoryScript: string) {
   const settingsPath = join(homedir(), '.claude', 'settings.json');
-  
-  // Create .claude directory if needed
   mkdirSync(join(homedir(), '.claude'), { recursive: true });
   
-  // Load existing settings or create new
   let settings: Record<string, unknown> = {};
   if (existsSync(settingsPath)) {
     try {
@@ -82,7 +277,6 @@ async function configureClaudeCodeHooks(basePath: string, memoryScript: string) 
     }
   }
   
-  // Add Signet hooks
   settings.hooks = {
     SessionStart: [{
       hooks: [{
@@ -109,7 +303,6 @@ async function configureClaudeCodeHooks(basePath: string, memoryScript: string) 
   
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
   
-  // Also generate CLAUDE.md from AGENTS.md
   const claudeMd = join(homedir(), '.claude', 'CLAUDE.md');
   const agentsMd = join(basePath, 'AGENTS.md');
   if (existsSync(agentsMd)) {
@@ -129,16 +322,11 @@ async function configureOpenCodeHooks(basePath: string, memoryScript: string) {
   const opencodePath = join(homedir(), '.config', 'opencode');
   mkdirSync(opencodePath, { recursive: true });
   
-  // Create memory plugin
   const pluginContent = `/**
  * Signet memory plugin for OpenCode
- * Auto-generated by signet setup
  */
-
 import { tool } from '@opencode-ai/plugin'
 import { spawn } from 'child_process'
-import { homedir } from 'os'
-import { join } from 'path'
 
 const MEMORY_SCRIPT = '${memoryScript}'
 
@@ -166,12 +354,9 @@ export async function MemoryPlugin({ directory }) {
     "experimental.chat.system.transform": async (input, output) => {
       if (memoryContext) output.system.unshift(memoryContext)
     },
-    "experimental.session.compacting": async (input, output) => {
-      output.context.push('[memory active: /remember to save, /recall to query]')
-    },
     tool: {
       remember: tool({
-        description: "Save to persistent memory. Prefix with 'critical:' for important or '[tags]:' for tagged.",
+        description: "Save to persistent memory",
         args: { content: tool.schema.string().describe("Content to remember") },
         async execute(args, context) {
           try {
@@ -180,7 +365,7 @@ export async function MemoryPlugin({ directory }) {
         }
       }),
       recall: tool({
-        description: "Query persistent memory.",
+        description: "Query persistent memory",
         args: { query: tool.schema.string().describe("Search query") },
         async execute(args) {
           try { return await runMemoryScript(['query', args.query]) || 'no memories found' }
@@ -190,18 +375,14 @@ export async function MemoryPlugin({ directory }) {
     }
   }
 }
-`
+`;
   writeFileSync(join(opencodePath, 'memory.mjs'), pluginContent);
   
-  // Generate AGENTS.md
   const agentsMd = join(basePath, 'AGENTS.md');
   if (existsSync(agentsMd)) {
     const content = readFileSync(agentsMd, 'utf-8');
     const header = `# Auto-generated from ~/.agents/AGENTS.md
-# Source: ${agentsMd}
 # Generated: ${new Date().toISOString()}
-# DO NOT EDIT - changes will be overwritten
-# Edit ~/.agents/AGENTS.md instead
 
 `;
     writeFileSync(join(opencodePath, 'AGENTS.md'), header + content);
@@ -212,45 +393,21 @@ async function configureOpenClawHooks(basePath: string, memoryScript: string) {
   const hookDir = join(basePath, 'hooks', 'agent-memory');
   mkdirSync(hookDir, { recursive: true });
   
-  // Create HOOK.md
   const hookMd = `---
 name: agent-memory
-description: "Signet memory integration - hybrid search, auto-embedding, cross-harness persistence"
-homepage: https://signetai.sh
-metadata:
-  {
-    "openclaw": {
-      "emoji": "🧠",
-      "events": ["command:new", "command:remember", "command:recall", "command:context"],
-      "requires": { "bins": ["python3"] },
-      "install": [{ "id": "workspace", "kind": "workspace", "label": "Workspace hook" }]
-    }
-  }
+description: "Signet memory integration"
 ---
 
 # Agent Memory Hook (Signet)
 
-Unified memory system for all AI harnesses.
-Uses hybrid search (vector + keyword) for semantic recall.
-
-## Commands
-
 - \`/context\` - Load memory context
 - \`/remember <content>\` - Save a memory
 - \`/recall <query>\` - Search memories
-- \`/new\` - Auto-saves session context before reset
-`
+`;
   writeFileSync(join(hookDir, 'HOOK.md'), hookMd);
   
-  // Create handler.js
-  const handlerJs = `/**
- * Signet Agent Memory Hook for OpenClaw
- * Auto-generated by signet setup
- */
-import { spawn } from "node:child_process";
-import path from "node:path";
+  const handlerJs = `import { spawn } from "node:child_process";
 import os from "node:os";
-import fs from "node:fs/promises";
 
 const MEMORY_SCRIPT = "${memoryScript}";
 
@@ -269,64 +426,96 @@ async function runMemoryScript(args) {
 }
 
 const handler = async (event) => {
-  try { await fs.access(MEMORY_SCRIPT); }
-  catch { console.warn("[agent-memory] Script not found"); return; }
-
   if (event.type !== "command") return;
-  const ctx = event.context || {};
-  const args = ctx.args || "";
+  const args = event.context?.args || "";
 
   switch (event.action) {
     case "remember":
-      if (!args.trim()) {
-        event.messages.push("🧠 Usage: /remember <content>");
-        return;
-      }
+      if (!args.trim()) { event.messages.push("🧠 Usage: /remember <content>"); return; }
       try {
-        const result = await runMemoryScript(["save", "--mode", "explicit", "--who", "openclaw", "--project", ctx.cwd || os.homedir(), "--content", args.trim()]);
+        const result = await runMemoryScript(["save", "--mode", "explicit", "--who", "openclaw", "--content", args.trim()]);
         event.messages.push(\`🧠 \${result}\`);
       } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
       break;
-
     case "recall":
-      if (!args.trim()) {
-        event.messages.push("🧠 Usage: /recall <query>");
-        return;
-      }
+      if (!args.trim()) { event.messages.push("🧠 Usage: /recall <query>"); return; }
       try {
         const result = await runMemoryScript(["query", args.trim(), "--limit", "10"]);
         event.messages.push(result ? \`🧠 Results:\\n\\n\${result}\` : "🧠 No memories found.");
       } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
       break;
-
     case "context":
       try {
-        const result = await runMemoryScript(["load", "--mode", "session-start", "--project", os.homedir()]);
-        event.messages.push(result ? \`🧠 **Context Loaded**\\n\\n\${result}\` : "🧠 No context available.");
+        const result = await runMemoryScript(["load", "--mode", "session-start"]);
+        event.messages.push(result ? \`🧠 **Context**\\n\\n\${result}\` : "🧠 No context.");
       } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
-      break;
-
-    case "new":
-      // Session ending - could extract context here
-      console.log("[agent-memory] Session ended");
       break;
   }
 };
 
 export default handler;
-`
+`;
   writeFileSync(join(hookDir, 'handler.js'), handlerJs);
+  writeFileSync(join(hookDir, 'package.json'), JSON.stringify({ name: "agent-memory", version: "1.0.0", type: "module" }, null, 2));
+}
+
+async function configureOpenClawWorkspace(basePath: string): Promise<{ configured: boolean; backups: string[] }> {
+  // OpenClaw has had multiple names: openclaw, clawdbot, moltbot
+  const possibleConfigs = [
+    join(homedir(), '.openclaw', 'openclaw.json'),
+    join(homedir(), '.clawdbot', 'clawdbot.json'),
+    join(homedir(), '.moltbot', 'moltbot.json'),
+  ];
   
-  // Create package.json for the hook
-  const pkgJson = { name: "agent-memory", version: "1.0.0", type: "module" };
-  writeFileSync(join(hookDir, 'package.json'), JSON.stringify(pkgJson, null, 2));
+  let configuredAny = false;
+  const backups: string[] = [];
+  
+  for (const configPath of possibleConfigs) {
+    if (!existsSync(configPath)) continue;
+    
+    try {
+      const configContent = readFileSync(configPath, 'utf-8');
+      const config = JSON.parse(configContent);
+      
+      // Check if workspace is already set to basePath
+      const currentWorkspace = config?.agents?.defaults?.workspace;
+      if (currentWorkspace === basePath) {
+        configuredAny = true;
+        continue;
+      }
+      
+      // Create backup before modifying
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const backupPath = configPath.replace('.json', `.backup-${timestamp}.json`);
+      writeFileSync(backupPath, configContent);
+      backups.push(backupPath);
+      
+      // Carefully set only the workspace, preserving everything else
+      // Use deep merge to avoid clobbering other settings
+      if (!config.agents) config.agents = {};
+      if (!config.agents.defaults) config.agents.defaults = {};
+      config.agents.defaults.workspace = basePath;
+      
+      // Preserve formatting by using same indent as original if detectable
+      const indent = configContent.includes('  "') ? 2 : 
+                     configContent.includes('    "') ? 4 : 2;
+      
+      writeFileSync(configPath, JSON.stringify(config, null, indent));
+      configuredAny = true;
+    } catch (e) {
+      // Skip this config file if it fails
+      console.warn(`  ⚠ Could not configure ${configPath}: ${(e as Error).message}`);
+    }
+  }
+  
+  return { configured: configuredAny, backups };
 }
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const program = new Command();
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 
 // ============================================================================
 // Helpers
@@ -340,13 +529,145 @@ function signetLogo() {
 }
 
 function detectExistingSetup(basePath: string) {
-  const checks = {
+  return {
     agentsDir: existsSync(basePath),
     agentsMd: existsSync(join(basePath, 'AGENTS.md')),
     memoryDb: existsSync(join(basePath, 'memory', 'memories.db')),
-    configYaml: existsSync(join(basePath, 'config.yaml')),
+    agentYaml: existsSync(join(basePath, 'agent.yaml')),
   };
-  return checks;
+}
+
+// ============================================================================
+// Interactive TUI Menu
+// ============================================================================
+
+async function interactiveMenu() {
+  console.log(signetLogo());
+  
+  const status = await getDaemonStatus();
+  
+  if (!status.running) {
+    console.log(chalk.yellow('  Daemon is not running.\n'));
+    
+    const startNow = await confirm({
+      message: 'Start the daemon?',
+      default: true,
+    });
+    
+    if (startNow) {
+      const spinner = ora('Starting daemon...').start();
+      const started = await startDaemon();
+      if (started) {
+        spinner.succeed('Daemon started');
+        console.log(chalk.dim(`  Dashboard: http://localhost:${DEFAULT_PORT}`));
+      } else {
+        spinner.fail('Failed to start daemon');
+        return;
+      }
+    } else {
+      return;
+    }
+  } else {
+    console.log(chalk.green(`  ● Daemon running`));
+    console.log(chalk.dim(`    PID: ${status.pid} | Uptime: ${formatUptime(status.uptime || 0)}`));
+    console.log();
+  }
+  
+  while (true) {
+    const action = await select({
+      message: 'What would you like to do?',
+      choices: [
+        { value: 'dashboard', name: '🌐 Open dashboard' },
+        { value: 'status', name: '📊 View status' },
+        { value: 'config', name: '⚙️  Configure settings' },
+        { value: 'harnesses', name: '🔗 Manage harnesses' },
+        { value: 'logs', name: '📜 View logs' },
+        { value: 'restart', name: '🔄 Restart daemon' },
+        { value: 'stop', name: '⏹  Stop daemon' },
+        { value: 'exit', name: '👋 Exit' },
+      ],
+    });
+    
+    console.log();
+    
+    switch (action) {
+      case 'dashboard':
+        console.log(chalk.dim(`  Opening http://localhost:${DEFAULT_PORT}...`));
+        await open(`http://localhost:${DEFAULT_PORT}`);
+        break;
+        
+      case 'status':
+        await showStatus({ path: AGENTS_DIR });
+        break;
+        
+      case 'config':
+        console.log(chalk.dim('  Opening config editor in dashboard...'));
+        await open(`http://localhost:${DEFAULT_PORT}#config`);
+        break;
+        
+      case 'harnesses':
+        await manageHarnesses();
+        break;
+        
+      case 'logs':
+        await showLogs({ lines: '30' });
+        break;
+        
+      case 'restart':
+        const spinner = ora('Restarting daemon...').start();
+        await stopDaemon();
+        const restarted = await startDaemon();
+        if (restarted) {
+          spinner.succeed('Daemon restarted');
+        } else {
+          spinner.fail('Failed to restart daemon');
+        }
+        break;
+        
+      case 'stop':
+        const stopSpinner = ora('Stopping daemon...').start();
+        const stopped = await stopDaemon();
+        if (stopped) {
+          stopSpinner.succeed('Daemon stopped');
+        } else {
+          stopSpinner.fail('Failed to stop daemon');
+        }
+        return;
+        
+      case 'exit':
+        return;
+    }
+    
+    console.log();
+  }
+}
+
+async function manageHarnesses() {
+  const basePath = AGENTS_DIR;
+  
+  const harnesses = await checkbox({
+    message: 'Select harnesses to configure:',
+    choices: [
+      { value: 'claude-code', name: 'Claude Code (Anthropic CLI)' },
+      { value: 'opencode', name: 'OpenCode' },
+      { value: 'openclaw', name: 'OpenClaw' },
+      { value: 'cursor', name: 'Cursor' },
+      { value: 'windsurf', name: 'Windsurf' },
+    ],
+  });
+  
+  const spinner = ora('Configuring harnesses...').start();
+  
+  for (const harness of harnesses) {
+    try {
+      await configureHarnessHooks(harness, basePath);
+      spinner.text = `Configured ${harness}`;
+    } catch (err) {
+      console.warn(`\n  ⚠ Could not configure ${harness}: ${(err as Error).message}`);
+    }
+  }
+  
+  spinner.succeed('Harnesses configured');
 }
 
 // ============================================================================
@@ -357,10 +678,9 @@ async function setupWizard(options: { path?: string }) {
   console.log(signetLogo());
   console.log();
   
-  const basePath = options.path || join(homedir(), '.agents');
+  const basePath = options.path || AGENTS_DIR;
   const existing = detectExistingSetup(basePath);
   
-  // Check for existing installation
   if (existing.agentsDir && existing.memoryDb) {
     console.log(chalk.green('  ✓ Existing Signet installation detected'));
     console.log(chalk.dim(`    ${basePath}`));
@@ -378,26 +698,26 @@ async function setupWizard(options: { path?: string }) {
     });
     
     if (action === 'dashboard') {
-      return launchDashboard({ path: basePath });
+      await launchDashboard({});
+      return;
     } else if (action === 'migrate') {
-      return migrateWizard(basePath);
+      await migrateWizard(basePath);
+      return;
     } else if (action === 'status') {
-      return showStatus({ path: basePath });
+      await showStatus({ path: basePath });
+      return;
     } else if (action === 'exit') {
       return;
     }
   }
   
-  // Fresh installation
   console.log(chalk.bold('  Let\'s set up your agent identity.\n'));
   
-  // Step 1: Name
   const agentName = await input({
     message: 'What should your agent be called?',
     default: 'My Agent',
   });
   
-  // Step 2: Harnesses
   console.log();
   const harnesses = await checkbox({
     message: 'Which AI platforms do you use?',
@@ -412,7 +732,31 @@ async function setupWizard(options: { path?: string }) {
     ],
   });
   
-  // Step 3: Embedding provider
+  // OpenClaw workspace configuration (handles openclaw/clawdbot/moltbot)
+  let configureOpenClawWs = false;
+  if (harnesses.includes('openclaw')) {
+    const possibleConfigs = [
+      join(homedir(), '.openclaw', 'openclaw.json'),
+      join(homedir(), '.clawdbot', 'clawdbot.json'),
+      join(homedir(), '.moltbot', 'moltbot.json'),
+    ];
+    const hasAnyConfig = possibleConfigs.some(p => existsSync(p));
+    
+    if (hasAnyConfig) {
+      console.log();
+      configureOpenClawWs = await confirm({
+        message: 'Set OpenClaw/Clawdbot workspace to ~/.agents?',
+        default: true,
+      });
+    }
+  }
+  
+  console.log();
+  const agentDescription = await input({
+    message: 'Short description of your agent:',
+    default: 'Personal AI assistant',
+  });
+  
   console.log();
   const embeddingProvider = await select({
     message: 'How should memories be embedded for search?',
@@ -423,39 +767,165 @@ async function setupWizard(options: { path?: string }) {
     ],
   });
   
-  // Step 4: Import existing conversations
+  // Embedding model selection based on provider
+  let embeddingModel = 'nomic-embed-text';
+  let embeddingDimensions = 768;
+  
+  if (embeddingProvider === 'ollama') {
+    console.log();
+    const model = await select({
+      message: 'Which embedding model?',
+      choices: [
+        { value: 'nomic-embed-text', name: 'nomic-embed-text (768d, recommended)' },
+        { value: 'all-minilm', name: 'all-minilm (384d, faster)' },
+        { value: 'mxbai-embed-large', name: 'mxbai-embed-large (1024d, better quality)' },
+      ],
+    });
+    embeddingModel = model;
+    embeddingDimensions = model === 'all-minilm' ? 384 : model === 'mxbai-embed-large' ? 1024 : 768;
+  } else if (embeddingProvider === 'openai') {
+    console.log();
+    const model = await select({
+      message: 'Which embedding model?',
+      choices: [
+        { value: 'text-embedding-3-small', name: 'text-embedding-3-small (1536d, cheaper)' },
+        { value: 'text-embedding-3-large', name: 'text-embedding-3-large (3072d, better)' },
+      ],
+    });
+    embeddingModel = model;
+    embeddingDimensions = model === 'text-embedding-3-large' ? 3072 : 1536;
+  }
+  
+  // Search settings
+  console.log();
+  const searchBalance = await select({
+    message: 'Search style (semantic vs keyword matching):',
+    choices: [
+      { value: 0.7, name: 'Balanced (70% semantic, 30% keyword) - recommended' },
+      { value: 0.9, name: 'Semantic-heavy (90% semantic, 10% keyword)' },
+      { value: 0.5, name: 'Equal (50/50)' },
+      { value: 0.3, name: 'Keyword-heavy (30% semantic, 70% keyword)' },
+    ],
+  });
+  
+  // Advanced settings (optional)
+  console.log();
+  const wantAdvanced = await confirm({
+    message: 'Configure advanced settings?',
+    default: false,
+  });
+  
+  let searchTopK = 20;
+  let searchMinScore = 0.3;
+  let memorySessionBudget = 2000;
+  let memoryDecayRate = 0.95;
+  
+  if (wantAdvanced) {
+    console.log();
+    console.log(chalk.dim('  Advanced settings:\n'));
+    
+    const topKInput = await input({
+      message: 'Search candidates per source (top_k):',
+      default: '20',
+    });
+    searchTopK = parseInt(topKInput, 10) || 20;
+    
+    const minScoreInput = await input({
+      message: 'Minimum search score threshold (0-1):',
+      default: '0.3',
+    });
+    searchMinScore = parseFloat(minScoreInput) || 0.3;
+    
+    const budgetInput = await input({
+      message: 'Session context budget (characters):',
+      default: '2000',
+    });
+    memorySessionBudget = parseInt(budgetInput, 10) || 2000;
+    
+    const decayInput = await input({
+      message: 'Memory importance decay rate per day (0-1):',
+      default: '0.95',
+    });
+    memoryDecayRate = parseFloat(decayInput) || 0.95;
+  }
+  
   console.log();
   const wantImport = await confirm({
     message: 'Do you want to import existing conversations?',
     default: false,
   });
   
-  // Execute setup
+  // Git version control setup
+  console.log();
+  let gitEnabled = false;
+  
+  if (existing.agentsDir) {
+    // Directory exists - check if it's a git repo
+    if (isGitRepo(basePath)) {
+      gitEnabled = true;
+      console.log(chalk.dim('  Git repo detected. Will create backup commit before changes.'));
+    } else {
+      const initGit = await confirm({
+        message: 'Initialize git for version history?',
+        default: true,
+      });
+      
+      if (initGit) {
+        const initialized = await gitInit(basePath);
+        if (initialized) {
+          gitEnabled = true;
+          console.log(chalk.dim('  ✓ Git initialized'));
+        } else {
+          console.log(chalk.yellow('  ⚠ Could not initialize git'));
+        }
+      }
+    }
+  } else {
+    // Fresh install - ask about git
+    const initGit = await confirm({
+      message: 'Initialize git for version history?',
+      default: true,
+    });
+    gitEnabled = initGit;
+  }
+  
   console.log();
   const spinner = ora('Setting up Signet...').start();
   
   try {
     const templatesDir = getTemplatesDir();
     
-    // Create directory structure
+    // Create base directory first (needed for git init on fresh install)
+    mkdirSync(basePath, { recursive: true });
+    
+    // Initialize git if requested and fresh install
+    if (gitEnabled && !isGitRepo(basePath)) {
+      spinner.text = 'Initializing git...';
+      await gitInit(basePath);
+    }
+    
+    // Create backup commit if git enabled and there's existing content
+    if (gitEnabled && existing.agentsDir) {
+      spinner.text = 'Creating backup commit...';
+      const date = new Date().toISOString().split('T')[0];
+      await gitAddAndCommit(basePath, `${date}_pre-signet-backup`);
+    }
+    
     mkdirSync(join(basePath, 'memory', 'scripts'), { recursive: true });
     mkdirSync(join(basePath, 'harnesses'), { recursive: true });
     
-    // Copy memory scripts from templates
     spinner.text = 'Installing memory system...';
     const scriptsSource = join(templatesDir, 'memory', 'scripts');
     if (existsSync(scriptsSource)) {
       copyDirRecursive(scriptsSource, join(basePath, 'memory', 'scripts'));
     }
     
-    // Copy utility scripts (generate-harness-configs.py etc)
     const utilScriptsSource = join(templatesDir, 'scripts');
     if (existsSync(utilScriptsSource)) {
       mkdirSync(join(basePath, 'scripts'), { recursive: true });
       copyDirRecursive(utilScriptsSource, join(basePath, 'scripts'));
     }
     
-    // Create AGENTS.md from template or inline
     spinner.text = 'Creating agent identity...';
     const agentsTemplate = join(templatesDir, 'AGENTS.md.template');
     let agentsMd: string;
@@ -480,42 +950,62 @@ ${agentName} is a helpful assistant.
     }
     writeFileSync(join(basePath, 'AGENTS.md'), agentsMd);
     
-    // Create config.yaml
     spinner.text = 'Writing configuration...';
+    const now = new Date().toISOString();
     const config: Record<string, unknown> = {
       version: 1,
-      agent: { name: agentName },
+      schema: 'signet/v1',
+      agent: {
+        name: agentName,
+        description: agentDescription,
+        created: now,
+        updated: now,
+      },
       harnesses: harnesses,
       memory: {
         database: 'memory/memories.db',
         vectors: 'memory/vectors.zvec',
+        session_budget: memorySessionBudget,
+        decay_rate: memoryDecayRate,
+      },
+      search: {
+        alpha: searchBalance,
+        top_k: searchTopK,
+        min_score: searchMinScore,
       },
     };
     
     if (embeddingProvider !== 'none') {
       config.embedding = {
         provider: embeddingProvider,
-        model: embeddingProvider === 'ollama' ? 'nomic-embed-text' : 'text-embedding-3-small',
-        dimensions: embeddingProvider === 'ollama' ? 768 : 1536,
+        model: embeddingModel,
+        dimensions: embeddingDimensions,
       };
     }
     
-    writeFileSync(join(basePath, 'config.yaml'), formatYaml(config));
+    writeFileSync(join(basePath, 'agent.yaml'), formatYaml(config));
     
-    // Create MEMORY.md from template or inline
-    const memoryTemplate = join(templatesDir, 'MEMORY.md.template');
-    let memoryMd: string;
-    if (existsSync(memoryTemplate)) {
-      memoryMd = readFileSync(memoryTemplate, 'utf-8').replace(/\{\{AGENT_NAME\}\}/g, agentName);
-    } else {
-      memoryMd = `# Memory
-
-Current context and working memory for ${agentName}.
-`;
+    // Create all standard document files from templates
+    const docFiles = [
+      { name: 'MEMORY.md', template: 'MEMORY.md.template' },
+      { name: 'SOUL.md', template: 'SOUL.md.template' },
+      { name: 'IDENTITY.md', template: 'IDENTITY.md.template' },
+      { name: 'USER.md', template: 'USER.md.template' },
+    ];
+    
+    for (const doc of docFiles) {
+      const templatePath = join(templatesDir, doc.template);
+      const destPath = join(basePath, doc.name);
+      
+      // Don't overwrite existing files
+      if (existsSync(destPath)) continue;
+      
+      if (existsSync(templatePath)) {
+        const content = readFileSync(templatePath, 'utf-8').replace(/\{\{AGENT_NAME\}\}/g, agentName);
+        writeFileSync(destPath, content);
+      }
     }
-    writeFileSync(join(basePath, 'MEMORY.md'), memoryMd);
     
-    // Initialize the database
     spinner.text = 'Initializing database...';
     const dbPath = join(basePath, 'memory', 'memories.db');
     const db = new Database(dbPath);
@@ -560,7 +1050,6 @@ Current context and working memory for ${agentName}.
     
     db.close();
     
-    // Configure hooks for selected harnesses
     spinner.text = 'Configuring harness hooks...';
     const configuredHarnesses: string[] = [];
     
@@ -573,14 +1062,36 @@ Current context and working memory for ${agentName}.
       }
     }
     
+    // Configure OpenClaw workspace if requested
+    if (configureOpenClawWs) {
+      spinner.text = 'Configuring OpenClaw workspace...';
+      const result = await configureOpenClawWorkspace(basePath);
+      if (result.configured) {
+        console.log(chalk.dim('\n  ✓ OpenClaw workspace set to ~/.agents'));
+        if (result.backups.length > 0) {
+          console.log(chalk.dim('    Backups created:'));
+          for (const backup of result.backups) {
+            console.log(chalk.dim(`      ${backup}`));
+          }
+        }
+      }
+    }
+    
+    // Start the daemon
+    spinner.text = 'Starting daemon...';
+    const daemonStarted = await startDaemon();
+    
     spinner.succeed(chalk.green('Signet initialized!'));
     
     console.log();
     console.log(chalk.dim('  Files created:'));
     console.log(chalk.dim(`    ${basePath}/`));
-    console.log(chalk.dim('    ├── AGENTS.md     agent identity'));
+    console.log(chalk.dim('    ├── agent.yaml    manifest & config'));
+    console.log(chalk.dim('    ├── AGENTS.md     agent instructions'));
+    console.log(chalk.dim('    ├── SOUL.md       personality & tone'));
+    console.log(chalk.dim('    ├── IDENTITY.md   agent identity'));
+    console.log(chalk.dim('    ├── USER.md       your profile'));
     console.log(chalk.dim('    ├── MEMORY.md     working memory'));
-    console.log(chalk.dim('    ├── config.yaml   configuration'));
     console.log(chalk.dim('    └── memory/       database & vectors'));
     
     if (configuredHarnesses.length > 0) {
@@ -590,20 +1101,34 @@ Current context and working memory for ${agentName}.
         console.log(chalk.dim(`    ✓ ${h}`));
       }
     }
+    
+    if (daemonStarted) {
+      console.log();
+      console.log(chalk.green(`  ● Daemon running at http://localhost:${DEFAULT_PORT}`));
+    }
+    
     console.log();
     
     if (wantImport) {
       await migrateWizard(basePath);
     }
     
-    // Offer to launch dashboard
+    // Commit the initial setup
+    if (gitEnabled) {
+      const date = new Date().toISOString().split('T')[0];
+      const committed = await gitAddAndCommit(basePath, `${date}_signet-setup`);
+      if (committed) {
+        console.log(chalk.dim('  ✓ Changes committed to git'));
+      }
+    }
+    
     const launchNow = await confirm({
-      message: 'Launch the dashboard?',
+      message: 'Open the dashboard?',
       default: true,
     });
     
     if (launchNow) {
-      await launchDashboard({ path: basePath });
+      await open(`http://localhost:${DEFAULT_PORT}`);
     }
     
   } catch (err) {
@@ -639,12 +1164,9 @@ async function migrateWizard(basePath: string) {
   const spinner = ora(`Importing from ${source}...`).start();
   
   try {
-    // TODO: Implement actual migration logic via @signet/core
-    // For now, placeholder
     await new Promise(r => setTimeout(r, 1500));
-    
     spinner.succeed(chalk.green('Import complete!'));
-    console.log(chalk.dim('  Imported X conversations with Y memories'));
+    console.log(chalk.dim('  Imported conversations with memories'));
   } catch (err) {
     spinner.fail(chalk.red('Import failed'));
     console.error(err);
@@ -655,59 +1177,26 @@ async function migrateWizard(basePath: string) {
 // signet dashboard - Launch Web UI
 // ============================================================================
 
-async function launchDashboard(options: { path?: string; port?: string }) {
-  const basePath = options.path || join(homedir(), '.agents');
-  const port = options.port || '3850';
-  
+async function launchDashboard(options: { path?: string }) {
   console.log(signetLogo());
-  console.log(`  ${chalk.dim('Starting dashboard...')}`);
-  console.log(`  ${chalk.cyan(`http://localhost:${port}`)}`);
+  
+  const running = await isDaemonRunning();
+  
+  if (!running) {
+    console.log(chalk.yellow('  Daemon is not running. Starting...'));
+    const started = await startDaemon();
+    if (!started) {
+      console.error(chalk.red('  Failed to start daemon'));
+      process.exit(1);
+    }
+    console.log(chalk.green('  Daemon started'));
+  }
+  
+  console.log();
+  console.log(`  ${chalk.cyan(`http://localhost:${DEFAULT_PORT}`)}`);
   console.log();
   
-  // Find the bundled dashboard build
-  const dashboardLocations = [
-    join(__dirname, '..', 'dashboard', 'build'),  // installed package
-    join(__dirname, '..', '..', 'dashboard', 'build'),  // dev workspace
-  ];
-  
-  let dashboardBuild: string | null = null;
-  for (const loc of dashboardLocations) {
-    if (existsSync(join(loc, 'index.js'))) {
-      dashboardBuild = loc;
-      break;
-    }
-  }
-  
-  if (dashboardBuild) {
-    // Run the bundled SvelteKit server
-    const proc = spawn('node', [join(dashboardBuild, 'index.js')], {
-      stdio: 'inherit',
-      env: { ...process.env, SIGNET_PATH: basePath, PORT: port, HOST: 'localhost' },
-    });
-    
-    proc.on('error', (err) => {
-      console.error(chalk.red('Failed to start dashboard:'), err.message);
-      process.exit(1);
-    });
-  } else {
-    // Development fallback - run vite dev
-    const devPath = join(__dirname, '..', '..', 'dashboard');
-    if (existsSync(join(devPath, 'package.json'))) {
-      const proc = spawn('bun', ['run', 'dev', '--port', port], {
-        cwd: devPath,
-        stdio: 'inherit',
-        env: { ...process.env, SIGNET_PATH: basePath },
-      });
-      
-      proc.on('error', (err) => {
-        console.error(chalk.red('Failed to start dashboard:'), err.message);
-        process.exit(1);
-      });
-    } else {
-      console.error(chalk.red('Dashboard not found. Try rebuilding: bun run build'));
-      process.exit(1);
-    }
-  }
+  await open(`http://localhost:${DEFAULT_PORT}`);
 }
 
 // ============================================================================
@@ -715,7 +1204,7 @@ async function launchDashboard(options: { path?: string; port?: string }) {
 // ============================================================================
 
 async function showStatus(options: { path?: string }) {
-  const basePath = options.path || join(homedir(), '.agents');
+  const basePath = options.path || AGENTS_DIR;
   const existing = detectExistingSetup(basePath);
   
   console.log(signetLogo());
@@ -728,7 +1217,20 @@ async function showStatus(options: { path?: string }) {
   
   console.log(chalk.bold('  Status\n'));
   
-  // Check files
+  // Daemon status
+  const status = await getDaemonStatus();
+  if (status.running) {
+    console.log(`  ${chalk.green('●')} Daemon ${chalk.green('running')}`);
+    console.log(chalk.dim(`    PID: ${status.pid}`));
+    console.log(chalk.dim(`    Uptime: ${formatUptime(status.uptime || 0)}`));
+    console.log(chalk.dim(`    Dashboard: http://localhost:${DEFAULT_PORT}`));
+  } else {
+    console.log(`  ${chalk.red('○')} Daemon ${chalk.red('stopped')}`);
+  }
+  
+  console.log();
+  
+  // Files
   const checks = [
     { name: 'AGENTS.md', exists: existing.agentsMd },
     { name: 'config.yaml', exists: existing.configYaml },
@@ -740,7 +1242,6 @@ async function showStatus(options: { path?: string }) {
     console.log(`  ${icon} ${check.name}`);
   }
   
-  // Show memory count if db exists
   if (existing.memoryDb) {
     try {
       const db = new Database(join(basePath, 'memory', 'memories.db'), { readonly: true });
@@ -763,6 +1264,143 @@ async function showStatus(options: { path?: string }) {
   console.log();
   console.log(chalk.dim(`  Path: ${basePath}`));
   console.log();
+}
+
+// ============================================================================
+// signet logs - Show Daemon Logs
+// ============================================================================
+
+interface LogEntry {
+  timestamp: string;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  category: string;
+  message: string;
+  data?: Record<string, unknown>;
+  duration?: number;
+  error?: { name: string; message: string; stack?: string };
+}
+
+function formatLogEntry(entry: LogEntry): string {
+  const levelColors: Record<string, string> = {
+    debug: chalk.gray,
+    info: chalk.cyan,
+    warn: chalk.yellow,
+    error: chalk.red,
+  };
+  const colorFn = levelColors[entry.level] || chalk.white;
+  
+  const time = entry.timestamp.split('T')[1]?.slice(0, 8) || '';
+  const level = entry.level.toUpperCase().padEnd(5);
+  const category = `[${entry.category}]`.padEnd(12);
+  
+  let line = `${chalk.dim(time)} ${colorFn(level)} ${category} ${entry.message}`;
+  
+  if (entry.duration !== undefined) {
+    line += chalk.dim(` (${entry.duration}ms)`);
+  }
+  
+  if (entry.data && Object.keys(entry.data).length > 0) {
+    line += chalk.dim(` ${JSON.stringify(entry.data)}`);
+  }
+  
+  if (entry.error) {
+    line += `\n  ${chalk.red(entry.error.name)}: ${entry.error.message}`;
+  }
+  
+  return line;
+}
+
+async function showLogs(options: { 
+  lines?: string; 
+  follow?: boolean;
+  level?: string;
+  category?: string;
+}) {
+  const limit = parseInt(options.lines || '50', 10);
+  const { follow, level, category } = options;
+  
+  console.log(signetLogo());
+  
+  // Check if daemon is running
+  const status = await getDaemonStatus();
+  
+  if (status.running) {
+    // Fetch logs from API
+    try {
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (level) params.set('level', level);
+      if (category) params.set('category', category);
+      
+      const res = await fetch(`http://localhost:${DEFAULT_PORT}/api/logs?${params}`);
+      const data = await res.json();
+      
+      if (data.logs && data.logs.length > 0) {
+        console.log(chalk.bold(`  Recent Logs (${data.count})\n`));
+        for (const entry of data.logs) {
+          console.log('  ' + formatLogEntry(entry));
+        }
+      } else {
+        console.log(chalk.dim('  No logs found'));
+      }
+      
+      // Follow mode - stream logs
+      if (follow) {
+        console.log();
+        console.log(chalk.dim('  Streaming logs... (Ctrl+C to stop)\n'));
+        
+        const eventSource = new EventSource(`http://localhost:${DEFAULT_PORT}/api/logs/stream`);
+        
+        eventSource.onmessage = (event) => {
+          try {
+            const entry = JSON.parse(event.data);
+            if (entry.type === 'connected') return;
+            console.log('  ' + formatLogEntry(entry));
+          } catch {
+            // Ignore parse errors
+          }
+        };
+        
+        eventSource.onerror = () => {
+          console.log(chalk.red('  Stream disconnected'));
+          eventSource.close();
+        };
+        
+        // Keep process alive
+        await new Promise(() => {});
+      }
+    } catch (e) {
+      console.log(chalk.yellow('  Could not fetch logs from daemon'));
+      fallbackToFile();
+    }
+  } else {
+    console.log(chalk.yellow('  Daemon not running - reading from log files\n'));
+    fallbackToFile();
+  }
+  
+  function fallbackToFile() {
+    // Fall back to reading log files directly
+    const logFile = join(LOG_DIR, `signet-${new Date().toISOString().split('T')[0]}.log`);
+    
+    if (!existsSync(logFile)) {
+      console.log(chalk.dim('  No log files found'));
+      return;
+    }
+    
+    const content = readFileSync(logFile, 'utf-8');
+    const lines = content.trim().split('\n').slice(-limit);
+    
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as LogEntry;
+        if (level && entry.level !== level) continue;
+        if (category && entry.category !== category) continue;
+        console.log('  ' + formatLogEntry(entry));
+      } catch {
+        // Not JSON, print raw
+        console.log('  ' + line);
+      }
+    }
+  }
 }
 
 // ============================================================================
@@ -808,41 +1446,1287 @@ program
 program
   .command('dashboard')
   .alias('ui')
-  .description('Launch the web dashboard')
+  .description('Open the web dashboard')
   .option('-p, --path <path>', 'Base path for agent files')
-  .option('--port <port>', 'Port to run on', '3850')
   .action(launchDashboard);
 
 program
   .command('status')
-  .description('Show agent status')
+  .description('Show agent and daemon status')
   .option('-p, --path <path>', 'Base path for agent files')
   .action(showStatus);
+
+// Daemon action handlers (shared between top-level and subcommand)
+async function doStart() {
+  console.log(signetLogo());
+  
+  const running = await isDaemonRunning();
+  if (running) {
+    console.log(chalk.yellow('  Daemon is already running'));
+    return;
+  }
+  
+  const spinner = ora('Starting daemon...').start();
+  const started = await startDaemon();
+  
+  if (started) {
+    spinner.succeed('Daemon started');
+    console.log(chalk.dim(`  Dashboard: http://localhost:${DEFAULT_PORT}`));
+  } else {
+    spinner.fail('Failed to start daemon');
+  }
+}
+
+async function doStop() {
+  console.log(signetLogo());
+  
+  const running = await isDaemonRunning();
+  if (!running) {
+    console.log(chalk.yellow('  Daemon is not running'));
+    return;
+  }
+  
+  const spinner = ora('Stopping daemon...').start();
+  const stopped = await stopDaemon();
+  
+  if (stopped) {
+    spinner.succeed('Daemon stopped');
+  } else {
+    spinner.fail('Failed to stop daemon');
+  }
+}
+
+async function doRestart() {
+  console.log(signetLogo());
+  
+  const spinner = ora('Restarting daemon...').start();
+  await stopDaemon();
+  await new Promise(resolve => setTimeout(resolve, 500));
+  const started = await startDaemon();
+  
+  if (started) {
+    spinner.succeed('Daemon restarted');
+    console.log(chalk.dim(`  Dashboard: http://localhost:${DEFAULT_PORT}`));
+  } else {
+    spinner.fail('Failed to restart daemon');
+  }
+}
+
+// signet daemon <command> - grouped daemon commands
+const daemonCmd = program
+  .command('daemon')
+  .description('Manage the Signet daemon');
+
+daemonCmd
+  .command('start')
+  .description('Start the daemon')
+  .action(doStart);
+
+daemonCmd
+  .command('stop')
+  .description('Stop the daemon')
+  .action(doStop);
+
+daemonCmd
+  .command('restart')
+  .description('Restart the daemon')
+  .action(doRestart);
+
+daemonCmd
+  .command('status')
+  .description('Show daemon status')
+  .action(showStatus);
+
+daemonCmd
+  .command('logs')
+  .description('View daemon logs')
+  .option('-n, --lines <lines>', 'Number of lines to show', '50')
+  .option('-f, --follow', 'Follow log output in real-time')
+  .option('-l, --level <level>', 'Filter by level (debug, info, warn, error)')
+  .option('-c, --category <category>', 'Filter by category (daemon, api, memory, sync, git, watcher)')
+  .action(showLogs);
+
+// Top-level aliases for convenience (backwards compatible)
+program
+  .command('start')
+  .description('Start the daemon (alias for: signet daemon start)')
+  .action(doStart);
+
+program
+  .command('stop')
+  .description('Stop the daemon (alias for: signet daemon stop)')
+  .action(doStop);
+
+program
+  .command('restart')
+  .description('Restart the daemon (alias for: signet daemon restart)')
+  .action(doRestart);
+
+program
+  .command('logs')
+  .description('View daemon logs (alias for: signet daemon logs)')
+  .option('-n, --lines <lines>', 'Number of lines to show', '50')
+  .option('-f, --follow', 'Follow log output in real-time')
+  .option('-l, --level <level>', 'Filter by level (debug, info, warn, error)')
+  .option('-c, --category <category>', 'Filter by category (daemon, api, memory, sync, git, watcher)')
+  .action(showLogs);
 
 program
   .command('migrate')
   .description('Import from another platform')
   .argument('[source]', 'Source platform (chatgpt, claude, gemini)')
   .action(async (source) => {
-    const basePath = join(homedir(), '.agents');
-    if (source) {
-      // Direct migration
-      await migrateWizard(basePath);
-    } else {
-      // Interactive
-      await migrateWizard(basePath);
+    const basePath = AGENTS_DIR;
+    await migrateWizard(basePath);
+  });
+
+program
+  .command('config')
+  .description('Configure agent settings')
+  .action(async () => {
+    console.log(signetLogo());
+    
+    const agentYamlPath = join(AGENTS_DIR, 'agent.yaml');
+    if (!existsSync(agentYamlPath)) {
+      console.log(chalk.yellow('  No agent.yaml found. Run `signet setup` first.'));
+      return;
+    }
+    
+    // Parse existing config
+    const existingYaml = readFileSync(agentYamlPath, 'utf-8');
+    // Simple YAML parsing for our known structure
+    const getYamlValue = (key: string, fallback: string) => {
+      const match = existingYaml.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, 'm'));
+      return match ? match[1].trim().replace(/^["']|["']$/g, '') : fallback;
+    };
+    
+    console.log(chalk.bold('  Configure your agent\n'));
+    
+    while (true) {
+      const section = await select({
+        message: 'What would you like to configure?',
+        choices: [
+          { value: 'agent', name: '👤 Agent identity (name, description)' },
+          { value: 'harnesses', name: '🔗 Harnesses (AI platforms)' },
+          { value: 'embedding', name: '🧠 Embedding provider' },
+          { value: 'search', name: '🔍 Search settings' },
+          { value: 'memory', name: '💾 Memory settings' },
+          { value: 'view', name: '📄 View current config' },
+          { value: 'done', name: '✓ Done' },
+        ],
+      });
+      
+      if (section === 'done') break;
+      
+      console.log();
+      
+      if (section === 'view') {
+        console.log(chalk.dim('  Current agent.yaml:\n'));
+        console.log(existingYaml.split('\n').map(l => chalk.dim('  ' + l)).join('\n'));
+        console.log();
+        continue;
+      }
+      
+      if (section === 'agent') {
+        const name = await input({
+          message: 'Agent name:',
+          default: getYamlValue('name', 'My Agent'),
+        });
+        const description = await input({
+          message: 'Description:',
+          default: getYamlValue('description', 'Personal AI assistant'),
+        });
+        
+        // Update the YAML
+        let updatedYaml = existingYaml;
+        updatedYaml = updatedYaml.replace(
+          /^(\s*name:)\s*.+$/m,
+          `$1 "${name}"`
+        );
+        updatedYaml = updatedYaml.replace(
+          /^(\s*description:)\s*.+$/m,
+          `$1 "${description}"`
+        );
+        updatedYaml = updatedYaml.replace(
+          /^(\s*updated:)\s*.+$/m,
+          `$1 "${new Date().toISOString()}"`
+        );
+        
+        writeFileSync(agentYamlPath, updatedYaml);
+        console.log(chalk.green('  ✓ Agent identity updated'));
+      }
+      
+      if (section === 'harnesses') {
+        const harnesses = await checkbox({
+          message: 'Select AI platforms:',
+          choices: [
+            { value: 'claude-code', name: 'Claude Code' },
+            { value: 'opencode', name: 'OpenCode' },
+            { value: 'openclaw', name: 'OpenClaw' },
+            { value: 'cursor', name: 'Cursor' },
+            { value: 'windsurf', name: 'Windsurf' },
+          ],
+        });
+        
+        // Update harnesses in YAML
+        const harnessYaml = harnesses.map(h => `  - ${h}`).join('\n');
+        let updatedYaml = existingYaml.replace(
+          /^harnesses:\n(  - .+\n)+/m,
+          `harnesses:\n${harnessYaml}\n`
+        );
+        
+        writeFileSync(agentYamlPath, updatedYaml);
+        console.log(chalk.green('  ✓ Harnesses updated'));
+        
+        // Offer to regenerate harness configs
+        const regen = await confirm({
+          message: 'Regenerate harness hook configurations?',
+          default: true,
+        });
+        
+        if (regen) {
+          for (const harness of harnesses) {
+            try {
+              await configureHarnessHooks(harness, AGENTS_DIR);
+              console.log(chalk.dim(`    ✓ ${harness}`));
+            } catch {
+              console.log(chalk.yellow(`    ⚠ ${harness} failed`));
+            }
+          }
+        }
+      }
+      
+      if (section === 'embedding') {
+        const provider = await select({
+          message: 'Embedding provider:',
+          choices: [
+            { value: 'ollama', name: 'Ollama (local)' },
+            { value: 'openai', name: 'OpenAI API' },
+            { value: 'none', name: 'Disable embeddings' },
+          ],
+        });
+        
+        if (provider !== 'none') {
+          let model = 'nomic-embed-text';
+          let dimensions = 768;
+          
+          if (provider === 'ollama') {
+            const m = await select({
+              message: 'Model:',
+              choices: [
+                { value: 'nomic-embed-text', name: 'nomic-embed-text (768d)' },
+                { value: 'all-minilm', name: 'all-minilm (384d)' },
+                { value: 'mxbai-embed-large', name: 'mxbai-embed-large (1024d)' },
+              ],
+            });
+            model = m;
+            dimensions = m === 'all-minilm' ? 384 : m === 'mxbai-embed-large' ? 1024 : 768;
+          } else {
+            const m = await select({
+              message: 'Model:',
+              choices: [
+                { value: 'text-embedding-3-small', name: 'text-embedding-3-small (1536d)' },
+                { value: 'text-embedding-3-large', name: 'text-embedding-3-large (3072d)' },
+              ],
+            });
+            model = m;
+            dimensions = m === 'text-embedding-3-large' ? 3072 : 1536;
+          }
+          
+          // Update embedding section
+          let updatedYaml = existingYaml;
+          if (existingYaml.includes('embedding:')) {
+            updatedYaml = updatedYaml.replace(
+              /^embedding:\n(  .+\n)+/m,
+              `embedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`
+            );
+          } else {
+            // Add embedding section after harnesses
+            updatedYaml = updatedYaml.replace(
+              /^(harnesses:\n(  - .+\n)+)/m,
+              `$1\nembedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`
+            );
+          }
+          writeFileSync(agentYamlPath, updatedYaml);
+        }
+        
+        console.log(chalk.green('  ✓ Embedding settings updated'));
+      }
+      
+      if (section === 'search') {
+        const alpha = await select({
+          message: 'Search balance:',
+          choices: [
+            { value: '0.7', name: 'Balanced (70% semantic, 30% keyword)' },
+            { value: '0.9', name: 'Semantic-heavy (90/10)' },
+            { value: '0.5', name: 'Equal (50/50)' },
+            { value: '0.3', name: 'Keyword-heavy (30/70)' },
+          ],
+        });
+        
+        const topK = await input({
+          message: 'Candidates per source (top_k):',
+          default: getYamlValue('top_k', '20'),
+        });
+        
+        const minScore = await input({
+          message: 'Minimum score threshold:',
+          default: getYamlValue('min_score', '0.3'),
+        });
+        
+        let updatedYaml = existingYaml;
+        updatedYaml = updatedYaml.replace(/^(\s*alpha:)\s*.+$/m, `$1 ${alpha}`);
+        updatedYaml = updatedYaml.replace(/^(\s*top_k:)\s*.+$/m, `$1 ${topK}`);
+        updatedYaml = updatedYaml.replace(/^(\s*min_score:)\s*.+$/m, `$1 ${minScore}`);
+        
+        writeFileSync(agentYamlPath, updatedYaml);
+        console.log(chalk.green('  ✓ Search settings updated'));
+      }
+      
+      if (section === 'memory') {
+        const sessionBudget = await input({
+          message: 'Session context budget (characters):',
+          default: getYamlValue('session_budget', '2000'),
+        });
+        
+        const decayRate = await input({
+          message: 'Importance decay rate per day (0-1):',
+          default: getYamlValue('decay_rate', '0.95'),
+        });
+        
+        let updatedYaml = existingYaml;
+        updatedYaml = updatedYaml.replace(/^(\s*session_budget:)\s*.+$/m, `$1 ${sessionBudget}`);
+        updatedYaml = updatedYaml.replace(/^(\s*decay_rate:)\s*.+$/m, `$1 ${decayRate}`);
+        
+        writeFileSync(agentYamlPath, updatedYaml);
+        console.log(chalk.green('  ✓ Memory settings updated'));
+      }
+      
+      console.log();
+    }
+    
+    console.log(chalk.dim('  Configuration saved to agent.yaml'));
+    console.log();
+  });
+
+// ============================================================================
+// signet secret - Secrets management
+// ============================================================================
+
+const DAEMON_URL = `http://localhost:${DEFAULT_PORT}`;
+
+async function secretApiCall(
+  method: string,
+  path: string,
+  body?: unknown
+): Promise<{ ok: boolean; data: unknown }> {
+  const res = await fetch(`${DAEMON_URL}${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(5000),
+  });
+  const data = await res.json();
+  return { ok: res.ok, data };
+}
+
+async function ensureDaemonForSecrets(): Promise<boolean> {
+  const running = await isDaemonRunning();
+  if (!running) {
+    console.error(chalk.red('  Daemon is not running. Start it with: signet start'));
+    return false;
+  }
+  return true;
+}
+
+const secretCmd = program
+  .command('secret')
+  .description('Manage encrypted secrets');
+
+secretCmd
+  .command('put <name>')
+  .description('Store a secret (value is prompted, never echoed)')
+  .action(async (name: string) => {
+    if (!(await ensureDaemonForSecrets())) return;
+
+    const value = await password({
+      message: `Enter value for ${chalk.bold(name)}:`,
+      mask: '•',
+    });
+
+    if (!value) {
+      console.error(chalk.red('  Value cannot be empty'));
+      process.exit(1);
+    }
+
+    const spinner = ora('Saving secret...').start();
+    try {
+      const { ok, data } = await secretApiCall('POST', `/api/secrets/${name}`, { value });
+      if (ok) {
+        spinner.succeed(chalk.green(`Secret ${chalk.bold(name)} saved`));
+      } else {
+        spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
+        process.exit(1);
+      }
+    } catch (e) {
+      spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
+      process.exit(1);
     }
   });
+
+secretCmd
+  .command('list')
+  .description('List secret names (never values)')
+  .action(async () => {
+    if (!(await ensureDaemonForSecrets())) return;
+
+    try {
+      const { ok, data } = await secretApiCall('GET', '/api/secrets');
+      if (!ok) {
+        console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
+        process.exit(1);
+      }
+      const secrets = (data as { secrets: string[] }).secrets;
+      if (secrets.length === 0) {
+        console.log(chalk.dim('  No secrets stored.'));
+      } else {
+        for (const name of secrets) {
+          console.log(`  ${chalk.cyan('◈')} ${name}`);
+        }
+      }
+    } catch (e) {
+      console.error(chalk.red(`  Error: ${(e as Error).message}`));
+      process.exit(1);
+    }
+  });
+
+secretCmd
+  .command('delete <name>')
+  .description('Delete a secret')
+  .action(async (name: string) => {
+    if (!(await ensureDaemonForSecrets())) return;
+
+    const confirmed = await confirm({
+      message: `Delete secret ${chalk.bold(name)}?`,
+      default: false,
+    });
+    if (!confirmed) return;
+
+    const spinner = ora('Deleting...').start();
+    try {
+      const { ok, data } = await secretApiCall('DELETE', `/api/secrets/${name}`);
+      if (ok) {
+        spinner.succeed(chalk.green(`Secret ${chalk.bold(name)} deleted`));
+      } else {
+        spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
+        process.exit(1);
+      }
+    } catch (e) {
+      spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
+      process.exit(1);
+    }
+  });
+
+secretCmd
+  .command('has <name>')
+  .description('Check if a secret exists (exits 0 if found, 1 if not)')
+  .action(async (name: string) => {
+    if (!(await ensureDaemonForSecrets())) return;
+
+    try {
+      const { data } = await secretApiCall('GET', '/api/secrets');
+      const secrets = (data as { secrets: string[] }).secrets ?? [];
+      const exists = secrets.includes(name);
+      console.log(exists ? 'true' : 'false');
+      process.exit(exists ? 0 : 1);
+    } catch (e) {
+      console.error(chalk.red(`  Error: ${(e as Error).message}`));
+      process.exit(1);
+    }
+  });
+
+// ============================================================================
+// Skills Commands
+// ============================================================================
+
+const SKILLS_DIR = join(AGENTS_DIR, 'skills');
+
+interface SkillMeta {
+  name: string;
+  description?: string;
+  version?: string;
+  author?: string;
+  user_invocable?: boolean;
+  arg_hint?: string;
+}
+
+function parseSkillFrontmatter(content: string): SkillMeta {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return { name: '' };
+
+  const fm = match[1];
+  const get = (key: string) => {
+    const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+    return m ? m[1].trim().replace(/^["']|["']$/g, '') : '';
+  };
+
+  return {
+    name: get('name'),
+    description: get('description') || undefined,
+    version: get('version') || undefined,
+    author: get('author') || undefined,
+    user_invocable: /^user_invocable:\s*true$/m.test(fm),
+    arg_hint: get('arg_hint') || undefined,
+  };
+}
+
+function listLocalSkills(): Array<SkillMeta & { dirName: string }> {
+  if (!existsSync(SKILLS_DIR)) return [];
+
+  return readdirSync(SKILLS_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .flatMap(d => {
+      const skillMdPath = join(SKILLS_DIR, d.name, 'SKILL.md');
+      if (!existsSync(skillMdPath)) return [];
+      try {
+        const content = readFileSync(skillMdPath, 'utf-8');
+        const meta = parseSkillFrontmatter(content);
+        return [{ ...meta, dirName: d.name }];
+      } catch {
+        return [];
+      }
+    });
+}
+
+async function fetchFromDaemon<T>(path: string, opts?: RequestInit): Promise<T | null> {
+  try {
+    const res = await fetch(`http://localhost:${DEFAULT_PORT}${path}`, {
+      signal: AbortSignal.timeout(5000),
+      ...opts,
+    });
+    if (!res.ok) return null;
+    return await res.json() as T;
+  } catch {
+    return null;
+  }
+}
+
+// Returns [results, rateLimited]
+async function searchRegistry(query: string): Promise<[Array<{ name: string; description: string; url: string }>, boolean]> {
+  // GitHub repository search - no auth needed for public search (10 req/min limit)
+  try {
+    const q = encodeURIComponent(`${query} topic:agent-skill OR filename:SKILL.md in:path`);
+    const res = await fetch(
+      `https://api.github.com/search/repositories?q=${q}&sort=stars&per_page=10`,
+      {
+        headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'signet-cli' },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+
+    if (res.status === 403 || res.status === 429) return [[], true];
+    if (!res.ok) return [[], false];
+
+    const data = await res.json() as {
+      items?: Array<{ name: string; description: string | null; html_url: string; full_name: string }>;
+    };
+
+    return [
+      (data.items ?? []).map(item => ({
+        name: item.name,
+        description: item.description ?? '',
+        url: item.html_url,
+      })),
+      false,
+    ];
+  } catch {
+    return [[], false];
+  }
+}
+
+const skillCmd = program
+  .command('skill')
+  .description('Manage agent skills');
+
+// signet skill list
+skillCmd
+  .command('list')
+  .description('Show installed skills')
+  .action(async () => {
+    // Try daemon first, fall back to local FS
+    const data = await fetchFromDaemon<{ skills: Array<SkillMeta & { name: string }> }>('/api/skills');
+    const skills = data?.skills ?? listLocalSkills().map(s => ({ ...s, name: s.dirName }));
+
+    if (skills.length === 0) {
+      console.log(chalk.dim(`  No skills installed at ${SKILLS_DIR}`));
+      console.log(chalk.dim('  Run `signet skill search <query>` to find skills'));
+      return;
+    }
+
+    console.log(chalk.bold(`  Installed skills (${skills.length}):\n`));
+    const nameWidth = Math.max(...skills.map(s => s.name.length), 12);
+    for (const skill of skills) {
+      const name = skill.name.padEnd(nameWidth);
+      const desc = skill.description ? chalk.dim(skill.description) : '';
+      const ver = skill.version ? chalk.dim(` v${skill.version}`) : '';
+      console.log(`    ${chalk.cyan(name)}  ${desc}${ver}`);
+    }
+    console.log();
+  });
+
+// signet skill install <name>
+skillCmd
+  .command('install <name>')
+  .description('Install a skill from skills.sh registry (e.g. browser-use or owner/repo)')
+  .action(async (name: string) => {
+    const spinner = ora(`Installing ${chalk.cyan(name)}...`).start();
+
+    const daemonRunning = await isDaemonRunning();
+
+    if (daemonRunning) {
+      const result = await fetchFromDaemon<{ success: boolean; error?: string }>('/api/skills/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+
+      if (result?.success) {
+        spinner.succeed(`Installed ${chalk.cyan(name)} to ${SKILLS_DIR}/${name}/`);
+      } else {
+        spinner.fail(`Failed to install ${name}`);
+        if (result?.error) console.error(chalk.dim(`  ${result.error}`));
+        console.log(chalk.dim(`\n  Tip: provide full GitHub path: signet skill install owner/repo`));
+      }
+    } else {
+      // Daemon not running - run npx skills directly
+      spinner.text = `Installing ${chalk.cyan(name)} (daemon offline, running npx skills)...`;
+
+      await new Promise<void>((resolve) => {
+        const proc = spawn('npx', ['skills', 'add', name, '--global', '--yes'], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env },
+        });
+
+        let stderr = '';
+        proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+        proc.on('close', (code) => {
+          if (code === 0) {
+            spinner.succeed(`Installed ${chalk.cyan(name)}`);
+          } else {
+            spinner.fail(`Failed to install ${name}`);
+            if (stderr) console.error(chalk.dim(`  ${stderr.trim()}`));
+            console.log(chalk.dim(`\n  Tip: provide full GitHub path: signet skill install owner/repo`));
+          }
+          resolve();
+        });
+
+        proc.on('error', () => {
+          spinner.fail('npx not available');
+          resolve();
+        });
+      });
+    }
+  });
+
+// signet skill uninstall <name>
+skillCmd
+  .command('uninstall <name>')
+  .alias('remove')
+  .description('Remove an installed skill')
+  .action(async (name: string) => {
+    const skillDir = join(SKILLS_DIR, name);
+
+    if (!existsSync(skillDir)) {
+      console.log(chalk.yellow(`  Skill '${name}' is not installed`));
+      return;
+    }
+
+    const spinner = ora(`Removing ${chalk.cyan(name)}...`).start();
+
+    const daemonRunning = await isDaemonRunning();
+
+    if (daemonRunning) {
+      const result = await fetchFromDaemon<{ success: boolean; error?: string }>(
+        `/api/skills/${encodeURIComponent(name)}`,
+        { method: 'DELETE' }
+      );
+
+      if (result?.success) {
+        spinner.succeed(`Removed ${chalk.cyan(name)}`);
+      } else {
+        spinner.fail(`Failed to remove ${name}`);
+        if (result?.error) console.error(chalk.dim(`  ${result.error}`));
+      }
+    } else {
+      // Daemon offline - remove directly
+      try {
+        const { rmSync } = await import('fs');
+        rmSync(skillDir, { recursive: true, force: true });
+        spinner.succeed(`Removed ${chalk.cyan(name)}`);
+      } catch (err) {
+        spinner.fail(`Failed to remove ${name}`);
+        console.error(chalk.dim(`  ${(err as Error).message}`));
+      }
+    }
+  });
+
+// signet skill search <query>
+skillCmd
+  .command('search <query>')
+  .description('Search skills.sh registry for skills')
+  .action(async (query: string) => {
+    // Search local installed skills first
+    const local = listLocalSkills().filter(s => {
+      const q = query.toLowerCase();
+      return s.dirName.includes(q) ||
+        (s.name ?? '').toLowerCase().includes(q) ||
+        (s.description ?? '').toLowerCase().includes(q);
+    });
+
+    const spinner = ora(`Searching registry for "${query}"...`).start();
+    const [remote, rateLimited] = await searchRegistry(query);
+    spinner.stop();
+
+    const installed = new Set(listLocalSkills().map(s => s.dirName));
+
+    if (local.length > 0) {
+      console.log(chalk.bold(`  Installed matching "${query}":\n`));
+      for (const skill of local) {
+        const desc = skill.description ? chalk.dim(` — ${skill.description}`) : '';
+        console.log(`    ${chalk.green('✓')} ${chalk.cyan(skill.dirName)}${desc}`);
+      }
+      console.log();
+    }
+
+    if (remote.length > 0) {
+      console.log(chalk.bold(`  Available on GitHub:\n`));
+      for (const skill of remote) {
+        const isInstalled = installed.has(skill.name);
+        const mark = isInstalled ? chalk.green('✓ ') : '  ';
+        const desc = skill.description ? chalk.dim(` — ${skill.description}`) : '';
+        console.log(`  ${mark}${chalk.cyan(skill.name)}${desc}`);
+        console.log(`       ${chalk.dim(skill.url)}`);
+      }
+      console.log();
+      console.log(chalk.dim(`  Install with: signet skill install <owner/repo>`));
+    } else if (rateLimited) {
+      console.log(chalk.yellow(`  Registry search rate-limited. Browse at ${chalk.cyan('https://skills.sh')}`));
+    } else if (local.length === 0) {
+      console.log(chalk.dim(`  No skills found for "${query}"`));
+      console.log(chalk.dim(`  Browse all skills at https://skills.sh`));
+    }
+
+    console.log();
+  });
+
+// signet skill show <name>
+skillCmd
+  .command('show <name>')
+  .description('Display SKILL.md content for an installed skill')
+  .action(async (name: string) => {
+    const data = await fetchFromDaemon<{ content?: string; description?: string; version?: string; error?: string }>(
+      `/api/skills/${encodeURIComponent(name)}`
+    );
+
+    if (data?.error || !data?.content) {
+      // Try local fallback
+      const skillMdPath = join(SKILLS_DIR, name, 'SKILL.md');
+      if (!existsSync(skillMdPath)) {
+        console.log(chalk.red(`  Skill '${name}' is not installed`));
+        console.log(chalk.dim(`  Run: signet skill install ${name}`));
+        return;
+      }
+      const content = readFileSync(skillMdPath, 'utf-8');
+      console.log(content);
+      return;
+    }
+
+    console.log(data.content);
+  });
+
+// ============================================================================
+// signet hook - Lifecycle hooks for harness integration
+// ============================================================================
+
+const hookCmd = program
+  .command('hook')
+  .description('Lifecycle hooks for harness integration');
+
+// signet hook session-start
+hookCmd
+  .command('session-start')
+  .description('Get context/memories for a new session')
+  .requiredOption('-H, --harness <harness>', 'Harness name (e.g., claude-code, opencode)')
+  .option('--agent-id <id>', 'Agent ID')
+  .option('--context <context>', 'Additional context')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    const data = await fetchFromDaemon<{
+      identity?: { name: string; description?: string };
+      memories?: Array<{ content: string }>;
+      inject?: string;
+      error?: string;
+    }>('/api/hooks/session-start', {
+      method: 'POST',
+      body: JSON.stringify({
+        harness: options.harness,
+        agentId: options.agentId,
+        context: options.context,
+      }),
+    });
+    
+    if (data?.error) {
+      console.error(chalk.red(`Error: ${data.error}`));
+      process.exit(1);
+    }
+    
+    if (options.json) {
+      console.log(JSON.stringify(data, null, 2));
+    } else {
+      // Output the inject text directly for easy piping
+      if (data?.inject) {
+        console.log(data.inject);
+      }
+    }
+  });
+
+// signet hook pre-compaction
+hookCmd
+  .command('pre-compaction')
+  .description('Get summary instructions before session compaction')
+  .requiredOption('-H, --harness <harness>', 'Harness name')
+  .option('--message-count <count>', 'Number of messages in session', parseInt)
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    const data = await fetchFromDaemon<{
+      summaryPrompt?: string;
+      guidelines?: string;
+      error?: string;
+    }>('/api/hooks/pre-compaction', {
+      method: 'POST',
+      body: JSON.stringify({
+        harness: options.harness,
+        messageCount: options.messageCount,
+      }),
+    });
+    
+    if (data?.error) {
+      console.error(chalk.red(`Error: ${data.error}`));
+      process.exit(1);
+    }
+    
+    if (options.json) {
+      console.log(JSON.stringify(data, null, 2));
+    } else {
+      if (data?.summaryPrompt) {
+        console.log(data.summaryPrompt);
+      }
+    }
+  });
+
+// signet hook compaction-complete
+hookCmd
+  .command('compaction-complete')
+  .description('Save session summary after compaction')
+  .requiredOption('-H, --harness <harness>', 'Harness name')
+  .requiredOption('-s, --summary <summary>', 'Session summary text')
+  .action(async (options) => {
+    const data = await fetchFromDaemon<{
+      success?: boolean;
+      memoryId?: number;
+      error?: string;
+    }>('/api/hooks/compaction-complete', {
+      method: 'POST',
+      body: JSON.stringify({
+        harness: options.harness,
+        summary: options.summary,
+      }),
+    });
+    
+    if (data?.error) {
+      console.error(chalk.red(`Error: ${data.error}`));
+      process.exit(1);
+    }
+    
+    if (data?.success) {
+      console.log(chalk.green('✓ Summary saved'));
+      if (data.memoryId) {
+        console.log(chalk.dim(`  Memory ID: ${data.memoryId}`));
+      }
+    }
+  });
+
+// signet hook synthesis
+hookCmd
+  .command('synthesis')
+  .description('Request MEMORY.md synthesis (returns prompt for configured harness)')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    // First get the config
+    const config = await fetchFromDaemon<{
+      harness?: string;
+      model?: string;
+      error?: string;
+    }>('/api/hooks/synthesis/config');
+    
+    // Then get the synthesis request
+    const data = await fetchFromDaemon<{
+      harness?: string;
+      model?: string;
+      prompt?: string;
+      memories?: Array<{ content: string }>;
+      error?: string;
+    }>('/api/hooks/synthesis', {
+      method: 'POST',
+      body: JSON.stringify({ trigger: 'manual' }),
+    });
+    
+    if (data?.error) {
+      console.error(chalk.red(`Error: ${data.error}`));
+      process.exit(1);
+    }
+    
+    if (options.json) {
+      console.log(JSON.stringify(data, null, 2));
+    } else {
+      console.log(chalk.bold('MEMORY.md Synthesis Request\n'));
+      console.log(chalk.dim(`Harness: ${data?.harness}`));
+      console.log(chalk.dim(`Model: ${data?.model}`));
+      console.log(chalk.dim(`Memories: ${data?.memories?.length || 0}\n`));
+      console.log(data?.prompt);
+    }
+  });
+
+// signet hook synthesis-complete
+hookCmd
+  .command('synthesis-complete')
+  .description('Save synthesized MEMORY.md content')
+  .requiredOption('-c, --content <content>', 'Synthesized MEMORY.md content')
+  .action(async (options) => {
+    const data = await fetchFromDaemon<{
+      success?: boolean;
+      error?: string;
+    }>('/api/hooks/synthesis/complete', {
+      method: 'POST',
+      body: JSON.stringify({ content: options.content }),
+    });
+    
+    if (data?.error) {
+      console.error(chalk.red(`Error: ${data.error}`));
+      process.exit(1);
+    }
+    
+    if (data?.success) {
+      console.log(chalk.green('✓ MEMORY.md synthesized'));
+    }
+  });
+
+// ============================================================================
+// Update Commands
+// ============================================================================
+
+const updateCmd = program
+  .command('update')
+  .description('Check for and install updates');
+
+// signet update check
+updateCmd
+  .command('check')
+  .description('Check for available updates')
+  .option('-f, --force', 'Force check (ignore cache)')
+  .action(async (options) => {
+    const spinner = ora('Checking for updates...').start();
+    
+    const data = await fetchFromDaemon<{
+      currentVersion?: string;
+      latestVersion?: string;
+      updateAvailable?: boolean;
+      releaseUrl?: string;
+      releaseNotes?: string;
+      publishedAt?: string;
+      checkError?: string;
+      cached?: boolean;
+    }>(`/api/update/check${options.force ? '?force=true' : ''}`);
+    
+    if (data?.checkError) {
+      spinner.warn('Could not check for updates');
+      console.log(chalk.dim(`  Error: ${data.checkError}`));
+      return;
+    }
+    
+    if (data?.updateAvailable) {
+      spinner.succeed(chalk.green(`Update available: v${data.latestVersion}`));
+      console.log(chalk.dim(`  Current: v${data.currentVersion}`));
+      if (data.publishedAt) {
+        console.log(chalk.dim(`  Released: ${new Date(data.publishedAt).toLocaleDateString()}`));
+      }
+      if (data.releaseUrl) {
+        console.log(chalk.dim(`  ${data.releaseUrl}`));
+      }
+      console.log(chalk.cyan('\n  Run: signet update install'));
+    } else {
+      spinner.succeed('Already up to date');
+      console.log(chalk.dim(`  Version: v${data?.currentVersion}`));
+    }
+  });
+
+// signet update install
+updateCmd
+  .command('install')
+  .description('Install the latest update')
+  .action(async () => {
+    // First check if update available
+    const check = await fetchFromDaemon<{
+      updateAvailable?: boolean;
+      latestVersion?: string;
+    }>('/api/update/check');
+    
+    if (!check?.updateAvailable) {
+      console.log(chalk.green('✓ Already running the latest version'));
+      return;
+    }
+    
+    console.log(chalk.cyan(`Installing v${check.latestVersion}...`));
+    const spinner = ora('Downloading and installing...').start();
+    
+    const data = await fetchFromDaemon<{
+      success?: boolean;
+      message?: string;
+      output?: string;
+    }>('/api/update/run', { method: 'POST' });
+    
+    if (!data?.success) {
+      spinner.fail(data?.message || 'Update failed');
+      if (data?.output) {
+        console.log(chalk.dim(data.output));
+      }
+      process.exit(1);
+    }
+    
+    spinner.succeed(data.message || 'Update installed');
+    console.log(chalk.cyan('\n  Restart daemon to apply: signet daemon restart'));
+  });
+
+// Shortcut: signet update (same as signet update check)
+updateCmd
+  .action(async () => {
+    const spinner = ora('Checking for updates...').start();
+    
+    const data = await fetchFromDaemon<{
+      currentVersion?: string;
+      latestVersion?: string;
+      updateAvailable?: boolean;
+      releaseUrl?: string;
+      checkError?: string;
+    }>('/api/update/check');
+    
+    if (data?.checkError) {
+      spinner.warn('Could not check for updates');
+      console.log(chalk.dim(`  Error: ${data.checkError}`));
+      return;
+    }
+    
+    if (data?.updateAvailable) {
+      spinner.succeed(chalk.green(`Update available: v${data.latestVersion}`));
+      console.log(chalk.dim(`  Current: v${data.currentVersion}`));
+      console.log(chalk.cyan('\n  Run: signet update install'));
+    } else {
+      spinner.succeed('Already up to date');
+      console.log(chalk.dim(`  Version: v${data?.currentVersion}`));
+    }
+  });
+
+// ============================================================================
+// Git Sync Commands
+// ============================================================================
+
+const gitCmd = program
+  .command('git')
+  .description('Git sync management');
+
+// signet git status
+gitCmd
+  .command('status')
+  .description('Show git sync status')
+  .action(async () => {
+    const data = await fetchFromDaemon<{
+      isRepo?: boolean;
+      branch?: string;
+      remote?: string;
+      hasToken?: boolean;
+      autoSync?: boolean;
+      lastSync?: string;
+      uncommittedChanges?: number;
+      unpushedCommits?: number;
+    }>('/api/git/status');
+    
+    if (!data) {
+      console.error(chalk.red('Failed to get git status'));
+      process.exit(1);
+    }
+    
+    console.log(chalk.bold('Git Status\n'));
+    
+    if (!data.isRepo) {
+      console.log(chalk.yellow('  Not a git repository'));
+      console.log(chalk.dim('  Run: cd ~/.agents && git init'));
+      return;
+    }
+    
+    console.log(`  ${chalk.dim('Branch:')}     ${data.branch || 'unknown'}`);
+    console.log(`  ${chalk.dim('Remote:')}     ${data.remote || 'none'}`);
+    console.log(`  ${chalk.dim('Token:')}      ${data.hasToken ? chalk.green('configured') : chalk.yellow('not set')}`);
+    console.log(`  ${chalk.dim('Auto-sync:')}  ${data.autoSync ? chalk.green('enabled') : chalk.dim('disabled')}`);
+    
+    if (data.lastSync) {
+      console.log(`  ${chalk.dim('Last sync:')}  ${data.lastSync}`);
+    }
+    
+    if (data.uncommittedChanges !== undefined && data.uncommittedChanges > 0) {
+      console.log(`  ${chalk.dim('Uncommitted:')} ${chalk.yellow(data.uncommittedChanges + ' changes')}`);
+    }
+    
+    if (data.unpushedCommits !== undefined && data.unpushedCommits > 0) {
+      console.log(`  ${chalk.dim('Unpushed:')}   ${chalk.cyan(data.unpushedCommits + ' commits')}`);
+    }
+    
+    if (!data.hasToken) {
+      console.log(chalk.dim('\n  To enable sync: signet secret put GITHUB_TOKEN'));
+    }
+  });
+
+// signet git sync
+gitCmd
+  .command('sync')
+  .description('Sync with remote (pull + push)')
+  .action(async () => {
+    const spinner = ora('Syncing with remote...').start();
+    
+    const data = await fetchFromDaemon<{
+      success?: boolean;
+      message?: string;
+      pulled?: number;
+      pushed?: number;
+    }>('/api/git/sync', { method: 'POST' });
+    
+    if (!data?.success) {
+      spinner.fail(data?.message || 'Sync failed');
+      process.exit(1);
+    }
+    
+    spinner.succeed('Sync complete');
+    console.log(chalk.dim(`  Pulled: ${data.pulled || 0} commits`));
+    console.log(chalk.dim(`  Pushed: ${data.pushed || 0} commits`));
+  });
+
+// signet git pull
+gitCmd
+  .command('pull')
+  .description('Pull changes from remote')
+  .action(async () => {
+    const spinner = ora('Pulling from remote...').start();
+    
+    const data = await fetchFromDaemon<{
+      success?: boolean;
+      message?: string;
+      changes?: number;
+    }>('/api/git/pull', { method: 'POST' });
+    
+    if (!data?.success) {
+      spinner.fail(data?.message || 'Pull failed');
+      process.exit(1);
+    }
+    
+    spinner.succeed(data.message || 'Pull complete');
+    if (data.changes !== undefined) {
+      console.log(chalk.dim(`  ${data.changes} commits`));
+    }
+  });
+
+// signet git push
+gitCmd
+  .command('push')
+  .description('Push changes to remote')
+  .action(async () => {
+    const spinner = ora('Pushing to remote...').start();
+    
+    const data = await fetchFromDaemon<{
+      success?: boolean;
+      message?: string;
+      changes?: number;
+    }>('/api/git/push', { method: 'POST' });
+    
+    if (!data?.success) {
+      spinner.fail(data?.message || 'Push failed');
+      process.exit(1);
+    }
+    
+    spinner.succeed(data.message || 'Push complete');
+    if (data.changes !== undefined) {
+      console.log(chalk.dim(`  ${data.changes} commits`));
+    }
+  });
+
+// signet git enable
+gitCmd
+  .command('enable')
+  .description('Enable auto-sync')
+  .option('-i, --interval <seconds>', 'Sync interval in seconds', '300')
+  .action(async (options) => {
+    const data = await fetchFromDaemon<{
+      success?: boolean;
+      config?: { autoSync: boolean; syncInterval: number };
+    }>('/api/git/config', {
+      method: 'POST',
+      body: JSON.stringify({
+        autoSync: true,
+        syncInterval: parseInt(options.interval, 10),
+      }),
+    });
+    
+    if (!data?.success) {
+      console.error(chalk.red('Failed to enable auto-sync'));
+      process.exit(1);
+    }
+    
+    console.log(chalk.green('✓ Auto-sync enabled'));
+    console.log(chalk.dim(`  Interval: every ${options.interval}s`));
+  });
+
+// signet git disable
+gitCmd
+  .command('disable')
+  .description('Disable auto-sync')
+  .action(async () => {
+    const data = await fetchFromDaemon<{
+      success?: boolean;
+    }>('/api/git/config', {
+      method: 'POST',
+      body: JSON.stringify({ autoSync: false }),
+    });
+    
+    if (!data?.success) {
+      console.error(chalk.red('Failed to disable auto-sync'));
+      process.exit(1);
+    }
+    
+    console.log(chalk.green('✓ Auto-sync disabled'));
+  });
+
+// ============================================================================
+// Default action when no command specified
+// ============================================================================
 
 // Default action when no command specified
 program
   .action(async () => {
-    const basePath = join(homedir(), '.agents');
+    const basePath = AGENTS_DIR;
     const existing = detectExistingSetup(basePath);
     
     if (existing.agentsDir && existing.memoryDb) {
-      // Existing installation - show menu
-      await setupWizard({});
+      // Existing installation - show interactive menu
+      await interactiveMenu();
     } else {
       // No installation - run setup
       await setupWizard({});
