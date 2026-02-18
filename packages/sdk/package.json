@@ -1,6 +1,6 @@
 {
   "name": "@signet/sdk",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "Apache-2.0",
   "description": "SDK for integrating Signet into applications",
   "type": "module",
