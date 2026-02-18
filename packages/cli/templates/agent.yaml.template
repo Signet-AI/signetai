@@ -71,10 +71,7 @@ search:
 memory:
   # Database location (relative to ~/.agents/)
   database: memory/memories.db
-  
-  # Vector storage
-  vectors: memory/vectors.zvec
-  
+
   # Character budget for session context injection
   session_budget: 2000
   
@@ -129,23 +126,6 @@ hooks:
     includeRecentMemories: true
     # How many recent memories to include
     memoryLimit: 5
-
-# ============================================================================
-# Python Configuration (auto-detected during setup)
-# ============================================================================
-
-# python:
-#   # Where Python was sourced from
-#   source: system | pyenv | conda
-#
-#   # Python version in use
-#   version: "3.12.1"
-#
-#   # Whether zvec (vector search) is installed
-#   zvec_enabled: true
-#
-#   # Virtual environment path (relative to ~/.agents/)
-#   venv: .venv
 
 # ============================================================================
 # Trust & Verification (optional)

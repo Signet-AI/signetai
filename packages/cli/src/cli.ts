@@ -751,7 +751,6 @@ async function existingSetupWizard(
 			harnesses: detectedHarnesses,
 			memory: {
 				database: "memory/memories.db",
-				vectors: "memory/vectors.zvec",
 				session_budget: 2000,
 				decay_rate: 0.95,
 			},
@@ -1396,224 +1395,13 @@ async function setupWizard(options: { path?: string }) {
 			copyDirRecursive(scriptsSource, join(basePath, "memory", "scripts"));
 		}
 
-		// Copy requirements.txt and install Python dependencies
+		// Copy requirements.txt (optional, for users who want Python scripts)
 		const requirementsSource = join(templatesDir, "memory", "requirements.txt");
-		const requirementsBaseSource = join(
-			templatesDir,
-			"memory",
-			"requirements-base.txt",
-		);
-		let pipInstallFailed = false;
-		let zvecEnabled = false;
-		let pythonSource: "system" | "pyenv" | "conda" = "system";
-		let pythonVersionStr = "";
-		const venvPath = join(basePath, ".venv");
-
-		let pipError = "";
 		if (existsSync(requirementsSource)) {
 			copyFileSync(
 				requirementsSource,
 				join(basePath, "memory", "requirements.txt"),
 			);
-			spinner.stop();
-
-			// Detect Python environments
-			console.log(chalk.bold("\n  Python Setup\n"));
-			const [systemPython, pyenvInfo, condaInfo] = await Promise.all([
-				detectSystemPython(),
-				detectPyenv(),
-				detectConda(),
-			]);
-
-			// Build options based on what's available
-			interface PythonOption {
-				value: string;
-				name: string;
-				pythonPath?: string;
-				version: string;
-				source: "system" | "pyenv" | "conda";
-				zvecCompatible: boolean;
-			}
-			const options: PythonOption[] = [];
-
-			// System Python option
-			if (systemPython) {
-				options.push({
-					value: "system",
-					name: `System Python ${systemPython.version.full}${isZvecCompatible(systemPython.version) ? " (zvec compatible)" : " (zvec not available)"}`,
-					pythonPath: systemPython.path,
-					version: systemPython.version.full,
-					source: "system",
-					zvecCompatible: isZvecCompatible(systemPython.version),
-				});
-			}
-
-			// Pyenv options
-			if (pyenvInfo.available) {
-				for (const ver of pyenvInfo.compatibleVersions.slice(0, 3)) {
-					const pyPath = await getPyenvPython(ver);
-					if (pyPath) {
-						options.push({
-							value: `pyenv:${ver}`,
-							name: `pyenv Python ${ver} (zvec compatible)`,
-							pythonPath: pyPath,
-							version: ver,
-							source: "pyenv",
-							zvecCompatible: true,
-						});
-					}
-				}
-			}
-
-			// Conda options
-			if (condaInfo.available) {
-				options.push({
-					value: "conda:new",
-					name: "Create conda env with Python 3.12 (zvec compatible)",
-					version: "3.12",
-					source: "conda",
-					zvecCompatible: true,
-				});
-			}
-
-			// Install pyenv option (if pyenv available but no compatible version)
-			if (pyenvInfo.available && pyenvInfo.compatibleVersions.length === 0) {
-				options.push({
-					value: "pyenv:install",
-					name: "Install Python 3.12 via pyenv (recommended)",
-					version: "3.12",
-					source: "pyenv",
-					zvecCompatible: true,
-				});
-			}
-
-			// Skip zvec option
-			options.push({
-				value: "skip-zvec",
-				name: "Skip zvec (keyword search only)",
-				version: systemPython?.version.full || "unknown",
-				source: "system",
-				zvecCompatible: false,
-			});
-
-			// If no Python at all
-			if (!systemPython && !pyenvInfo.available && !condaInfo.available) {
-				console.log(
-					chalk.red(
-						"  Python not found. Install Python 3.10-3.12 for best results.",
-					),
-				);
-				console.log(
-					chalk.dim("  Run `signet setup` again after installing Python."),
-				);
-				pipInstallFailed = true;
-				pipError = "Python not found";
-			} else {
-				// Auto-select if system Python is compatible
-				let selectedOption: PythonOption | null = null;
-
-				if (
-					systemPython &&
-					isZvecCompatible(systemPython.version) &&
-					options.length === 1
-				) {
-					// System Python is compatible, no other options needed
-					selectedOption = options[0];
-					console.log(chalk.dim(`  Using ${selectedOption.name}`));
-				} else {
-					// Show options
-					const choice = await select({
-						message: "Select Python environment:",
-						choices: options.map((o) => ({
-							value: o.value,
-							name: o.name,
-						})),
-					});
-					selectedOption = options.find((o) => o.value === choice) || null;
-				}
-
-				if (selectedOption) {
-					spinner.start("Setting up Python environment...");
-					pythonSource = selectedOption.source;
-					pythonVersionStr = selectedOption.version;
-
-					let pythonPath = selectedOption.pythonPath;
-
-					// Handle special cases
-					if (selectedOption.value === "pyenv:install") {
-						spinner.text =
-							"Installing Python 3.12 via pyenv (this may take a few minutes)...";
-						const result = await installPyenvPython("3.12");
-						if (result.success) {
-							pythonPath = await getPyenvPython("3.12");
-							pythonVersionStr = "3.12";
-						} else {
-							pipInstallFailed = true;
-							pipError = result.error || "Failed to install Python via pyenv";
-						}
-					} else if (selectedOption.value === "conda:new") {
-						spinner.text = "Creating conda environment...";
-						const envName = "signet";
-						const result = await createCondaEnv(envName, "3.12");
-						if (result.success) {
-							pythonPath = await getCondaPython(envName);
-							pythonVersionStr = "3.12";
-						} else {
-							pipInstallFailed = true;
-							pipError = result.error || "Failed to create conda environment";
-						}
-					}
-
-					if (!pipInstallFailed && pythonPath) {
-						// Create venv
-						spinner.text = "Creating virtual environment...";
-						const venvResult = await createVenv(venvPath, pythonPath);
-
-						if (!venvResult.success) {
-							pipInstallFailed = true;
-							pipError = venvResult.error || "Failed to create venv";
-						} else {
-							// Install dependencies
-							const requirementsToUse = existsSync(requirementsBaseSource)
-								? join(basePath, "memory", "requirements-base.txt")
-								: join(basePath, "memory", "requirements.txt");
-
-							spinner.text = selectedOption.zvecCompatible
-								? "Installing Python dependencies (including zvec)..."
-								: "Installing Python dependencies...";
-
-							const depsResult = await installDeps(
-								venvResult.pipPath,
-								requirementsToUse,
-								selectedOption.zvecCompatible,
-							);
-
-							if (!depsResult.success) {
-								pipInstallFailed = true;
-								pipError = depsResult.error || "Failed to install dependencies";
-							} else {
-								zvecEnabled = depsResult.zvecInstalled;
-								if (
-									!depsResult.zvecInstalled &&
-									selectedOption.zvecCompatible
-								) {
-									spinner.warn("Base dependencies installed, but zvec failed");
-									console.log(
-										chalk.yellow(
-											"  zvec installation failed. Falling back to keyword search.",
-										),
-									);
-								}
-							}
-						}
-					} else if (!pythonPath) {
-						pipInstallFailed = true;
-						pipError = "Could not determine Python path";
-					}
-				}
-			}
-
-			spinner.start();
 		}
 
 		const utilScriptsSource = join(templatesDir, "scripts");
@@ -1671,7 +1459,6 @@ ${agentName} is a helpful assistant.
 			harnesses: harnesses,
 			memory: {
 				database: "memory/memories.db",
-				vectors: "memory/vectors.zvec",
 				session_budget: memorySessionBudget,
 				decay_rate: memoryDecayRate,
 			},
@@ -1689,14 +1476,6 @@ ${agentName} is a helpful assistant.
 				dimensions: embeddingDimensions,
 			};
 		}
-
-		// Add Python configuration
-		config.python = {
-			source: pythonSource,
-			version: pythonVersionStr,
-			zvec_enabled: zvecEnabled,
-			venv: ".venv",
-		};
 
 		writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
 
@@ -1783,37 +1562,6 @@ ${agentName} is a helpful assistant.
 		console.log(chalk.dim("    ├── USER.md       your profile"));
 		console.log(chalk.dim("    ├── MEMORY.md     working memory"));
 		console.log(chalk.dim("    └── memory/       database & vectors"));
-
-		if (pipInstallFailed) {
-			console.log();
-			console.log(chalk.yellow("  Python setup incomplete."));
-			if (pipError) {
-				console.log(chalk.dim(`    Error: ${pipError}`));
-			}
-			console.log(chalk.dim("    Manual fix:"));
-			console.log(chalk.dim("      python3 -m venv ~/.agents/.venv"));
-			console.log(
-				chalk.dim(
-					"      ~/.agents/.venv/bin/pip install -r ~/.agents/memory/requirements.txt",
-				),
-			);
-		} else if (zvecEnabled) {
-			console.log();
-			console.log(chalk.green("  Python environment ready (zvec enabled)"));
-			console.log(
-				chalk.dim(`    Python ${pythonVersionStr} via ${pythonSource}`),
-			);
-		} else {
-			console.log();
-			console.log(
-				chalk.yellow("  Python environment ready (keyword search only)"),
-			);
-			console.log(
-				chalk.dim(
-					"    Install Python 3.10-3.12 and run `signet sync` to enable vector search",
-				),
-			);
-		}
 
 		if (configuredHarnesses.length > 0) {
 			console.log();
@@ -2622,149 +2370,6 @@ program
 
 		if (synced === 0) {
 			console.log(chalk.dim("  All template files present"));
-		}
-
-		// Check/fix venv and zvec
-		const venvPath = join(basePath, ".venv");
-		const isWindows = platform() === "win32";
-		const venvPip = isWindows
-			? join(venvPath, "Scripts", "pip.exe")
-			: join(venvPath, "bin", "pip");
-		const requirementsPath = join(basePath, "memory", "requirements.txt");
-		const agentYamlPath = join(basePath, "agent.yaml");
-
-		// Read current Python config from agent.yaml if exists
-		let currentPythonSource: "system" | "pyenv" | "conda" = "system";
-		let currentZvecEnabled = false;
-		if (existsSync(agentYamlPath)) {
-			try {
-				const yaml = readFileSync(agentYamlPath, "utf-8");
-				const sourceMatch = yaml.match(/^\s*source:\s*(.+)$/m);
-				const zvecMatch = yaml.match(/^\s*zvec_enabled:\s*(.+)$/m);
-				if (sourceMatch)
-					currentPythonSource = sourceMatch[1].trim() as
-						| "system"
-						| "pyenv"
-						| "conda";
-				if (zvecMatch) currentZvecEnabled = zvecMatch[1].trim() === "true";
-			} catch {}
-		}
-
-		if (!existsSync(venvPip) && existsSync(requirementsPath)) {
-			console.log();
-			console.log(chalk.bold("  Setting up Python environment...\n"));
-
-			// Detect best Python
-			const bestPython = await detectBestPython();
-			const systemPython = await detectSystemPython();
-
-			if (!bestPython && !systemPython) {
-				console.log(
-					chalk.red(
-						"  Python not found. Install Python 3.10+ and run `signet sync` again.",
-					),
-				);
-			} else {
-				const pythonToUse = bestPython || systemPython;
-				if (pythonToUse) {
-					console.log(
-						chalk.dim(
-							`  Using Python ${pythonToUse.version.full} (${pythonToUse.source})`,
-						),
-					);
-
-					const venvResult = await createVenv(venvPath, pythonToUse.path);
-
-					if (venvResult.success) {
-						console.log(chalk.green("  venv created"));
-
-						const depsResult = await installDeps(
-							venvResult.pipPath,
-							requirementsPath,
-							isZvecCompatible(pythonToUse.version),
-						);
-
-						if (depsResult.success) {
-							if (depsResult.zvecInstalled) {
-								console.log(
-									chalk.green("  Python dependencies installed (zvec enabled)"),
-								);
-								currentZvecEnabled = true;
-							} else {
-								console.log(
-									chalk.green(
-										"  Python dependencies installed (keyword search only)",
-									),
-								);
-								currentZvecEnabled = false;
-							}
-							currentPythonSource = pythonToUse.source;
-
-							// Update agent.yaml with Python config
-							if (existsSync(agentYamlPath)) {
-								try {
-									let yaml = readFileSync(agentYamlPath, "utf-8");
-									// Add or update python section
-									const pythonSection = `python:
-  source: ${currentPythonSource}
-  version: "${pythonToUse.version.full}"
-  zvec_enabled: ${currentZvecEnabled}
-  venv: .venv`;
-
-									if (/^python:/m.test(yaml)) {
-										// Replace existing section
-										yaml = yaml.replace(
-											/^python:[\s\S]*?(?=\n\w|\n*$)/,
-											pythonSection,
-										);
-									} else {
-										// Append section
-										yaml = yaml.trimEnd() + "\n\n" + pythonSection + "\n";
-									}
-									writeFileSync(agentYamlPath, yaml);
-								} catch {}
-							}
-						} else {
-							console.log(
-								chalk.red(
-									`  pip install failed: ${depsResult.error?.slice(0, 100)}`,
-								),
-							);
-						}
-					} else {
-						console.log(
-							chalk.red(
-								`  venv creation failed: ${venvResult.error?.slice(0, 100)}`,
-							),
-						);
-					}
-				}
-			}
-		} else if (existsSync(venvPip)) {
-			// Venv exists - check zvec status
-			console.log(chalk.dim("  Python venv present"));
-
-			const zvecInstalled = await checkZvecInstalled(venvPip);
-
-			if (!zvecInstalled && currentZvecEnabled) {
-				console.log(chalk.yellow("  zvec was enabled but is now missing"));
-
-				// Try to reinstall zvec
-				const depsResult = await installDeps(venvPip, requirementsPath, true);
-				if (depsResult.zvecInstalled) {
-					console.log(chalk.green("  zvec reinstalled"));
-				} else {
-					console.log(
-						chalk.yellow(
-							"  Could not reinstall zvec. Run `signet setup` to reconfigure.",
-						),
-					);
-				}
-			} else if (zvecInstalled) {
-				console.log(chalk.green("  zvec enabled"));
-			} else {
-				console.log(chalk.dim("  keyword search only"));
-			}
 		}
 
 		console.log();
