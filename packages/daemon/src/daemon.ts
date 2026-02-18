@@ -2464,6 +2464,90 @@ function startFileWatcher() {
     logger.info('watcher', 'File added', { path });
     scheduleAutoCommit(path);
   });
+  
+  // Watch Claude Code project memories
+  startClaudeMemoryWatcher();
+}
+
+// Track synced memories to avoid duplicates
+const syncedClaudeMemories = new Set<string>();
+
+function startClaudeMemoryWatcher() {
+  const claudeProjectsDir = join(homedir(), '.claude', 'projects');
+  if (!existsSync(claudeProjectsDir)) return;
+  
+  const claudeWatcher = watch(
+    join(claudeProjectsDir, '**', 'memory', 'MEMORY.md'),
+    { persistent: true, ignoreInitial: true }
+  );
+  
+  claudeWatcher.on('change', async (filePath) => {
+    logger.info('watcher', 'Claude memory changed', { path: filePath });
+    await syncClaudeMemoryFile(filePath);
+  });
+  
+  claudeWatcher.on('add', async (filePath) => {
+    logger.info('watcher', 'Claude memory added', { path: filePath });
+    await syncClaudeMemoryFile(filePath);
+  });
+}
+
+async function syncClaudeMemoryFile(filePath: string) {
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+    
+    // Extract project path from file path
+    // e.g., ~/.claude/projects/-home-user-myproject/memory/MEMORY.md
+    const match = filePath.match(/projects\/([^/]+)\/memory/);
+    const projectId = match ? match[1] : 'unknown';
+    
+    // Parse the MEMORY.md format (simple bullet points under headings)
+    let currentSection = '';
+    const memories: { content: string; tags: string[] }[] = [];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('# ')) {
+        currentSection = trimmed.slice(2).toLowerCase();
+      } else if (trimmed.startsWith('## ')) {
+        currentSection = trimmed.slice(3).toLowerCase();
+      } else if (trimmed.startsWith('- ')) {
+        const memContent = trimmed.slice(2);
+        // Create a unique key to avoid duplicates
+        const memKey = `claude:${projectId}:${memContent}`;
+        
+        if (!syncedClaudeMemories.has(memKey)) {
+          syncedClaudeMemories.add(memKey);
+          memories.push({
+            content: memContent,
+            tags: ['claude-code', currentSection, `project:${projectId}`].filter(Boolean),
+          });
+        }
+      }
+    }
+    
+    // Save new memories to Signet
+    for (const mem of memories) {
+      try {
+        await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: mem.content,
+            who: 'claude-code',
+            importance: 0.6,
+            tags: mem.tags.join(','),
+          }),
+        });
+        logger.info('watcher', 'Synced Claude memory', { content: mem.content.slice(0, 50) });
+      } catch (e) {
+        logger.error('watcher', 'Failed to sync memory', { error: String(e) });
+      }
+    }
+  } catch (e) {
+    logger.error('watcher', 'Failed to read Claude memory file', { error: String(e) });
+  }
 }
 
 // ============================================================================
