@@ -1,20 +1,20 @@
 # Built-in Memory Skills
 
-> **Status:** Partially implemented
-> 
-> The `remember` and `recall` commands work via Python scripts today.
-> Native daemon integration is planned for v1.0.
+> **Status:** Implemented
+>
+> The `remember` and `recall` commands work via the Signet CLI (`signet remember`,
+> `signet recall`) which calls the daemon HTTP API.
 
 ---
 
-Signet ships with two core skills for memory management: `remember` and `recall`. These integrate directly with the Signet daemon rather than calling external scripts.
+Signet ships with two core skills for memory management: `remember` and `recall`. These integrate directly with the Signet daemon.
 
 ## Overview
 
-| Skill | Command | Purpose |
-|-------|---------|---------|
-| remember | `/remember <content>` | Save to persistent memory |
-| recall | `/recall <query>` | Search persistent memory |
+| Skill | CLI Command | Harness Command | Purpose |
+|-------|-------------|-----------------|---------|
+| remember | `signet remember <content>` | `/remember <content>` | Save to persistent memory |
+| recall | `signet recall <query>` | `/recall <query>` | Search persistent memory |
 
 These are the primary interface between agents and the memory system.
 
@@ -22,7 +22,13 @@ These are the primary interface between agents and the memory system.
 
 ### Syntax
 
-```
+```bash
+# CLI
+signet remember <content>
+signet remember <content> --critical
+signet remember <content> -t tag1,tag2
+
+# In harness
 /remember <content>
 /remember critical: <content>
 /remember [tag1,tag2]: <content>
@@ -32,43 +38,30 @@ These are the primary interface between agents and the memory system.
 
 - **Auto-embedding**: Content is vectorized for semantic search
 - **Type inference**: Detects preferences, decisions, facts, etc.
-- **Critical marking**: `critical:` prefix pins memories (never decay)
-- **Tagging**: `[tag1,tag2]:` prefix adds explicit tags
+- **Critical marking**: `--critical` flag or `critical:` prefix pins memories (never decay)
+- **Tagging**: `-t` flag or `[tag1,tag2]:` prefix adds explicit tags
 - **Cross-harness**: Memories shared across all AI tools
 
 ### Examples
 
-```
-/remember nicholai prefers tabs over spaces
-/remember critical: never push directly to main branch
-/remember [signet,architecture]: agent profile lives at ~/.agents/
-/remember [voice,tts]: qwen model needs 12GB VRAM minimum
+```bash
+signet remember "nicholai prefers tabs over spaces"
+signet remember "never push directly to main branch" --critical
+signet remember "agent profile lives at ~/.agents/" -t signet,architecture
 ```
 
 ### Implementation
 
-#### Current (Script-based)
+The CLI calls the daemon HTTP API:
 
 ```bash
-~/.agents/memory/scripts/memory.py save \
-  --mode explicit \
-  --who <harness> \
-  --project "$(pwd)" \
-  --content "<content>"
-```
+# CLI (preferred)
+signet remember "content to save" -w claude-code
 
-#### Future (Daemon API)
-
-```typescript
-// Agent calls the remember tool
-await signet.memory.save({
-  content: "nicholai prefers tabs",
-  who: "claude-code",
-  project: "/current/project",
-  importance: 0.8,  // or 1.0 for critical
-  tags: ["preference"],
-  pinned: false
-});
+# Direct API call
+curl -X POST http://localhost:3850/api/memory/remember \
+  -H "Content-Type: application/json" \
+  -d '{"content": "content to save", "who": "claude-code"}'
 ```
 
 The daemon handles:
@@ -97,7 +90,13 @@ For critical:
 
 ### Syntax
 
-```
+```bash
+# CLI
+signet recall <query>
+signet recall <query> -l 5
+signet recall <query> --type decision --tags project
+
+# In harness
 /recall <query>
 ```
 
@@ -106,37 +105,29 @@ For critical:
 - **Hybrid search**: Combines vector similarity (70%) + keyword matching (30%)
 - **Score display**: Shows relevance scores for transparency
 - **Rich results**: Content, tags, source, type, timestamps
-- **Filters**: Can filter by type, tags, date (in advanced usage)
+- **Filters**: Filter by type (`--type`), tags (`--tags`), who (`--who`)
 
 ### Examples
 
-```
-/recall signet architecture
-/recall preferences
-/recall what did we decide about the API
-/recall bun vs npm
+```bash
+signet recall "signet architecture"
+signet recall "preferences" -l 5
+signet recall "API" --type decision --tags project
+signet recall "bun vs npm" --json
 ```
 
 ### Implementation
 
-#### Current (Script-based)
+The CLI calls the daemon HTTP API:
 
 ```bash
-~/.agents/memory/scripts/memory.py query "<search>" --limit 10
-```
+# CLI (preferred)
+signet recall "search query" -l 10
 
-#### Future (Daemon API)
-
-```typescript
-const results = await signet.memory.search({
-  query: "signet architecture",
-  limit: 10,
-  filters: {
-    type: "fact",      // optional
-    tags: ["signet"],  // optional
-    since: "2025-01-01" // optional
-  }
-});
+# Direct API call
+curl -X POST http://localhost:3850/api/memory/recall \
+  -H "Content-Type: application/json" \
+  -d '{"query": "search query", "limit": 10}'
 ```
 
 ### Response Format

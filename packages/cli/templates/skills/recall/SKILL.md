@@ -8,23 +8,27 @@ Use when user says "/recall X" or asks to recall/find something from memory.
 
 ## How it works
 
-Call the Signet daemon API to search memories:
+Use the Signet CLI (requires running daemon):
 
 ```bash
-curl "http://localhost:3850/api/hook/recall?q=your+search+query"
+signet recall "your search query"
 ```
 
-Or via the CLI:
+Or call the daemon API directly:
 
 ```bash
-signet hook recall "your search query"
+curl -X POST http://localhost:3850/api/memory/recall \
+  -H "Content-Type: application/json" \
+  -d '{"query": "your search query", "limit": 10}'
 ```
 
-## Parameters
+## CLI Options
 
-- `q` (required): The search query
-- `limit` (optional): Max results to return (default: 10)
-- `min_score` (optional): Minimum relevance score 0.0-1.0 (default: 0.3)
+- `-l, --limit <n>` — max results (default: 10)
+- `-t, --type <type>` — filter by type (preference, decision, rule, etc.)
+- `--tags <tags>` — filter by tags (comma-separated)
+- `--who <who>` — filter by who saved it
+- `--json` — output as JSON for parsing
 
 ## Response
 
@@ -32,14 +36,15 @@ Returns matching memories with relevance scores:
 
 ```json
 {
-  "memories": [
+  "results": [
     {
-      "id": "mem_123",
       "content": "The remembered content",
       "score": 0.85,
-      "created_at": "2025-01-15T10:30:00Z",
+      "source": "hybrid",
+      "type": "fact",
       "who": "claude-code",
-      "tags": "project,important"
+      "tags": "project,important",
+      "created_at": "2025-01-15T10:30:00Z"
     }
   ]
 }

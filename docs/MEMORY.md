@@ -202,9 +202,29 @@ The response contains the synthesis prompt and the memories list. The harness ru
 
 ## API Access
 
-The memory system is fully accessible via the daemon HTTP API.
+The memory system is accessible via the Signet CLI or the daemon HTTP API.
 
-### Save a memory
+### CLI Commands
+
+**Save a memory:**
+
+```bash
+signet remember "nicholai prefers bun over npm" -w claude-code
+signet remember "critical memory" --critical
+signet remember "tagged memory" -t project,important
+```
+
+**Search memories:**
+
+```bash
+signet recall "coding preferences"
+signet recall "project" --type decision -l 5
+signet recall "signet" --json
+```
+
+### HTTP API
+
+**Save a memory:**
 
 ```bash
 curl -X POST http://localhost:3850/api/memory/remember \
@@ -216,7 +236,7 @@ curl -X POST http://localhost:3850/api/memory/remember \
   }'
 ```
 
-### Search memories
+**Search memories:**
 
 ```bash
 curl -X POST http://localhost:3850/api/memory/recall \
@@ -229,7 +249,7 @@ Or via GET:
 curl "http://localhost:3850/api/memory/search?q=coding+preferences&limit=10"
 ```
 
-### List memories
+**List memories:**
 
 ```bash
 curl "http://localhost:3850/api/memories?limit=50&offset=0"
@@ -241,10 +261,10 @@ See [API.md](./API.md) for full endpoint documentation.
 
 ## Python Scripts
 
-For advanced operations, the memory scripts at `~/.agents/memory/scripts/memory.py` provide a CLI:
+For advanced operations or when the daemon is unavailable, the memory scripts at `~/.agents/memory/scripts/memory.py` provide a fallback CLI:
 
 ```bash
-# Save a memory
+# Save a memory (fallback when daemon not running)
 python3 ~/.agents/memory/scripts/memory.py save \
   --mode explicit \
   --who claude-code \
@@ -260,7 +280,7 @@ python3 ~/.agents/memory/scripts/memory.py similar <memory-id> --k 5
 python3 ~/.agents/memory/scripts/memory.py load --mode session-start
 ```
 
-The daemon's native memory API (via HTTP) is faster and doesn't require Python. The scripts remain useful for batch operations, re-indexing, and external tooling.
+The Signet CLI (`signet remember` / `signet recall`) is the preferred interface. The Python scripts remain useful for batch operations, re-indexing, and environments where the daemon isn't running.
 
 ---
 

@@ -123,19 +123,30 @@ Opens `http://localhost:3850` in your browser. From here you can edit your agent
 
 ### Save a memory
 
-In any connected harness, use the `/remember` command:
+Use the CLI or `/remember` command in any connected harness:
 
-```
+```bash
+# CLI
+signet remember "nicholai prefers bun over npm"
+signet remember "critical memory" --critical
+signet remember "tagged memory" -t project,signet
+
+# In harness
 /remember nicholai prefers bun over npm
 /remember critical: never commit secrets to git
 /remember [project,signet]: daemon runs on port 3850
 ```
 
-The `critical:` prefix pins a memory so it never decays. The `[tag1,tag2]:` prefix adds searchable tags.
+The `critical:` prefix or `--critical` flag pins a memory so it never decays. The `[tag1,tag2]:` prefix or `-t` flag adds searchable tags.
 
 ### Search memories
 
-```
+```bash
+# CLI
+signet recall "coding preferences"
+signet recall "signet" --type decision -l 5
+
+# In harness
 /recall coding preferences
 /recall signet architecture
 /recall what did we decide about authentication
