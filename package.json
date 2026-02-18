@@ -1,11 +1,11 @@
 {
   "name": "signet",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Portable AI agent identity",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Signet-AI/signetai.git"
+    "url": "https://github.com/signetai/signetai.git"
   },
   "author": "Signet AI",
   "license": "Apache-2.0",
@@ -14,11 +14,15 @@
   ],
   "scripts": {
     "build": "bun run --filter '*' build",
+    "build:publish": "bun run build:dashboard && bun run build:signetai",
+    "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
+    "build:signetai": "cd packages/signetai && bun run build",
     "dev": "bun run --filter '*' dev",
     "test": "bun run --filter '*' test",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "typecheck": "bun run --filter '*' typecheck"
+    "typecheck": "bun run --filter '*' typecheck",
+    "publish:signetai": "cd packages/signetai && npm publish --access public"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

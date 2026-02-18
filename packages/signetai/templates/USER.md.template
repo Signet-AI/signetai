@@ -1,0 +1,37 @@
+# User Profile
+
+Information about you, the human. Your agent uses this to personalize responses.
+
+> **Related Documents**
+> - Agent Instructions: `~/.agents/AGENTS.md`
+> - Personality: `~/.agents/SOUL.md`
+> - Identity: `~/.agents/IDENTITY.md`
+> - Configuration: `~/.agents/agent.yaml`
+
+## About You
+
+- **Name**: 
+- **Preferred Name**: 
+- **Timezone**: 
+- **Location**: 
+
+## Preferences
+
+- **Communication Style**: 
+- **Technical Level**: 
+- **Language**: English
+
+## Work
+
+- **Role**: 
+- **Industry**: 
+- **Tools**: 
+
+## Context
+
+Add anything else your agent should know about you:
+
+-
+
+---
+*Part of your Signet agent identity · Edit to help your agent know you better*

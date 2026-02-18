@@ -3,30 +3,65 @@
  */
 
 export interface AgentManifest {
-  version: string;
+  version: number;
   schema: string;
+  
+  // Identity
   agent: {
     name: string;
     description?: string;
     created: string;
     updated: string;
   };
+  
+  // Owner (optional)
   owner?: {
     address?: string;
     localId?: string;
     ens?: string;
     name?: string;
   };
+  
+  // Harnesses this agent works with
+  harnesses?: string[];
+  
+  // Embedding configuration
+  embedding?: {
+    provider: 'ollama' | 'openai';
+    model: string;
+    dimensions: number;
+    base_url?: string;
+    api_key?: string;
+  };
+  
+  // Search configuration
+  search?: {
+    alpha: number;      // Vector weight (0-1)
+    top_k: number;      // Candidates per source
+    min_score: number;  // Minimum threshold
+  };
+  
+  // Memory configuration
+  memory?: {
+    database: string;
+    vectors?: string;
+    session_budget?: number;
+    decay_rate?: number;
+  };
+  
+  // Trust & verification (optional)
+  trust?: {
+    verification: 'none' | 'erc8128' | 'gpg' | 'did' | 'registry';
+    registry?: string;
+  };
+  
+  // Legacy fields
   auth?: {
     method: 'none' | 'erc8128' | 'gpg' | 'did';
     chainId?: number;
   };
   capabilities?: string[];
   harnessCompatibility?: string[];
-  trust?: {
-    verification: 'none' | 'erc8128' | 'gpg' | 'did' | 'registry';
-    registry?: string;
-  };
 }
 
 export interface Agent {
