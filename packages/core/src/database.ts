@@ -1,26 +1,52 @@
 /**
  * SQLite database wrapper for Signet
+ * Runtime-detecting: uses bun:sqlite under Bun, better-sqlite3 under Node.js
  */
 
 import { SCHEMA_VERSION } from './constants';
 import type { Memory, Conversation, Embedding } from './types';
 
+// Common SQLite interface shared by both implementations
+interface SQLiteDatabase {
+  pragma(pragma: string): void;
+  exec(sql: string): void;
+  prepare(sql: string): {
+    run(...args: unknown[]): void;
+    get(...args: unknown[]): Record<string, unknown> | undefined;
+    all(...args: unknown[]): Record<string, unknown>[];
+  };
+  close(): void;
+}
+
 export class Database {
   private dbPath: string;
-  private db: any = null;
+  private db: SQLiteDatabase | null = null;
+  private options?: { readonly?: boolean };
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options?: { readonly?: boolean }) {
     this.dbPath = dbPath;
+    this.options = options;
   }
 
   async init(): Promise<void> {
-    // Dynamic import for better-sqlite3
-    const BetterSqlite3 = (await import('better-sqlite3')).default;
-    this.db = new BetterSqlite3(this.dbPath);
-    
-    // Enable WAL mode
-    this.db.pragma('journal_mode = WAL');
-    
+    // Detect runtime and load appropriate SQLite implementation
+    const isBun = typeof (globalThis as any).Bun !== 'undefined';
+
+    if (isBun) {
+      // Bun runtime - use built-in bun:sqlite
+      const { Database: BunDatabase } = await import('bun:sqlite');
+      this.db = new BunDatabase(this.dbPath, { readonly: this.options?.readonly });
+    } else {
+      // Node.js runtime - use better-sqlite3
+      const BetterSqlite3 = (await import('better-sqlite3')).default;
+      this.db = new BetterSqlite3(this.dbPath, { readonly: this.options?.readonly }) as SQLiteDatabase;
+    }
+
+    // Enable WAL mode (skip for readonly)
+    if (!this.options?.readonly) {
+      this.db!.pragma('journal_mode = WAL');
+    }
+
     // Run migrations
     await this.migrate();
   }

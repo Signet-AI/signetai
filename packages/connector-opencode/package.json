@@ -1,0 +1,33 @@
+{
+  "name": "@signet/connector-opencode",
+  "version": "0.1.0",
+  "description": "Signet connector for OpenCode - installs hooks and generates config",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "dev": "bun --watch src/index.ts"
+  },
+  "dependencies": {
+    "@signet/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "signet",
+    "opencode",
+    "connector",
+    "ai-memory",
+    "agent-identity"
+  ],
+  "license": "Apache-2.0"
+}

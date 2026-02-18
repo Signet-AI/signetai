@@ -77,7 +77,7 @@ signet logs       # View daemon logs
 
 ## Features
 
-### 🧠 Hybrid Memory Search
+### Hybrid Memory Search
 
 Memories are embedded for semantic search and indexed for keyword matching. A configurable blend (default 70% semantic, 30% keyword) finds the right context every time.
 
@@ -90,7 +90,7 @@ Memories are embedded for semantic search and indexed for keyword matching. A co
 /recall coding preferences
 ```
 
-### 🔗 Multi-Harness Support
+### Multi-Harness Support
 
 Signet syncs your agent identity across:
 
@@ -102,7 +102,7 @@ Signet syncs your agent identity across:
 
 Changes to `~/.agents/AGENTS.md` auto-sync to all configured harnesses within 2 seconds.
 
-### 📊 Web Dashboard
+### Web Dashboard
 
 Interactive dashboard at `http://localhost:3850`:
 
@@ -112,7 +112,7 @@ Interactive dashboard at `http://localhost:3850`:
 - **Skills manager** — Install, browse, and manage skills
 - **Harness status** — See what's connected
 
-### 🔐 Secrets Management
+### Secrets Management
 
 Encrypted storage for API keys using libsodium (XSalsa20-Poly1305). Agents can *use* secrets without being able to read or expose them.
 
@@ -122,7 +122,7 @@ signet secret list
 signet secret delete GITHUB_TOKEN
 ```
 
-### ⚡ Skills System
+### Skills System
 
 Install and manage agent skills from the skills.sh registry:
 
