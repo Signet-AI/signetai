@@ -1,27 +1,39 @@
 {
   "name": "@signet/cli",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "description": "CLI for Signet - portable AI agent identity",
   "type": "module",
   "bin": {
     "signet": "./dist/cli.js"
   },
-  "files": ["dist", "templates", "dashboard/build"],
+  "files": [
+    "dist",
+    "templates",
+    "dashboard/build"
+  ],
   "scripts": {
     "build": "bun run build:cli && bun run build:dashboard",
-    "build:cli": "bun build ./src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
+    "build:cli": "bun build ./src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3 && sed -i '1i#!/usr/bin/env node' dist/cli.js",
     "build:dashboard": "cd dashboard && bun install && bun run build",
     "dev": "bun --watch src/cli.ts",
     "dev:dashboard": "cd dashboard && bun run dev",
     "prepublishOnly": "bun run build",
     "test": "bun test"
   },
-  "keywords": ["signet", "ai", "agent", "identity", "memory", "cli", "portable"],
+  "keywords": [
+    "signet",
+    "ai",
+    "agent",
+    "identity",
+    "memory",
+    "cli",
+    "portable"
+  ],
   "author": "Nicholai",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/signetai/signetai"
+    "url": "git+https://github.com/signetai/signetai.git"
   },
   "homepage": "https://signetai.sh",
   "dependencies": {
