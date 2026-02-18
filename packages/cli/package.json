@@ -35,6 +35,7 @@
   },
   "homepage": "https://signetai.sh",
   "dependencies": {
+    "@signet/connector-openclaw": "workspace:*",
     "@inquirer/prompts": "^7.0.0",
     "better-sqlite3": "^12.0.0",
     "commander": "^12.0.0",
