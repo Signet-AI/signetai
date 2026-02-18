@@ -46,6 +46,15 @@ const LOG_DIR = join(DAEMON_DIR, 'logs');
 const MEMORY_DB = join(AGENTS_DIR, 'memory', 'memories.db');
 const MEMORY_SCRIPT = join(AGENTS_DIR, 'memory', 'scripts', 'memory.py');
 const SCRIPTS_DIR = join(AGENTS_DIR, 'scripts');
+const VENV_PYTHON = join(AGENTS_DIR, '.venv', 'bin', 'python');
+
+// Get Python command - prefer venv, fallback to system
+function getPythonCmd(): string {
+  if (existsSync(VENV_PYTHON)) {
+    return VENV_PYTHON;
+  }
+  return 'python3';
+}
 
 // Config
 const PORT = parseInt(process.env.SIGNET_PORT || '3850', 10);
@@ -1059,7 +1068,7 @@ app.get('/memory/similar', async (c) => {
       resolve(c.json({ error: 'Timed out', results: [] }, 504));
     }, 15000);
 
-    const proc = spawn('python3', [MEMORY_SCRIPT, ...args]);
+    const proc = spawn(getPythonCmd(), [MEMORY_SCRIPT, ...args]);
     let stdout = '';
     let stderr = '';
 
@@ -1100,7 +1109,7 @@ app.get('/api/embeddings', async (c) => {
   
   return new Promise<Response>((resolve) => {
     const args = withVectors ? ['--with-vectors'] : [];
-    const proc = spawn('python3', [scriptPath, ...args], { timeout: 60000 });
+    const proc = spawn(getPythonCmd(), [scriptPath, ...args], { timeout: 60000 });
     
     let stdout = '';
     let stderr = '';
@@ -1380,7 +1389,7 @@ app.post('/api/harnesses/regenerate', async (c) => {
       return;
     }
     
-    const proc = spawn('python3', [script], {
+    const proc = spawn(getPythonCmd(), [script], {
       timeout: 10000,
       cwd: AGENTS_DIR
     });
