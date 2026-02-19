@@ -44,8 +44,7 @@
     "url": "https://github.com/Signet-AI/signetai/issues"
   },
   "engines": {
-    "node": ">=18",
-    "bun": ">=1.0.0"
+    "node": ">=18"
   },
   "os": [
     "darwin",

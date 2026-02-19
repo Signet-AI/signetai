@@ -53,6 +53,8 @@ import {
 	parseSimpleYaml,
 	formatYaml,
 	symlinkSkills,
+	resolvePrimaryPackageManager,
+	getSkillsRunnerCommand,
 	type SetupDetection,
 	type SkillsResult,
 	type ImportResult,
@@ -311,7 +313,13 @@ function formatUptime(seconds: number): string {
 // Harness Hook Configuration
 // ============================================================================
 
-async function configureHarnessHooks(harness: string, basePath: string) {
+async function configureHarnessHooks(
+	harness: string,
+	basePath: string,
+	options?: {
+		configureOpenClawWorkspace?: boolean;
+	},
+) {
 	switch (harness) {
 		case "claude-code": {
 			const connector = new ClaudeCodeConnector();
@@ -325,7 +333,9 @@ async function configureHarnessHooks(harness: string, basePath: string) {
 		}
 		case "openclaw": {
 			const connector = new OpenClawConnector();
-			await connector.install(basePath);
+			await connector.install(basePath, {
+				configureWorkspace: options?.configureOpenClawWorkspace ?? false,
+			});
 			break;
 		}
 	}
@@ -334,8 +344,39 @@ async function configureHarnessHooks(harness: string, basePath: string) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+function getVersionFromPackageJson(packageJsonPath: string): string | null {
+	if (!existsSync(packageJsonPath)) {
+		return null;
+	}
+
+	try {
+		const raw = readFileSync(packageJsonPath, "utf8");
+		const parsed = JSON.parse(raw) as { version?: unknown };
+		return typeof parsed.version === "string" ? parsed.version : null;
+	} catch {
+		return null;
+	}
+}
+
+function getCliVersion(): string {
+	const candidates = [
+		join(__dirname, "..", "package.json"),
+		join(__dirname, "..", "..", "signetai", "package.json"),
+		join(__dirname, "..", "..", "package.json"),
+	];
+
+	for (const candidate of candidates) {
+		const version = getVersionFromPackageJson(candidate);
+		if (version) {
+			return version;
+		}
+	}
+
+	return "0.0.0";
+}
+
 const program = new Command();
-const VERSION = "0.1.44";
+const VERSION = getCliVersion();
 
 // ============================================================================
 // Helpers
@@ -402,6 +443,308 @@ function formatDetectionSummary(detection: SetupDetection): string {
 	}
 
 	return lines.join("\n");
+}
+
+function getEmbeddingDimensions(model: string): number {
+	switch (model) {
+		case "all-minilm":
+			return 384;
+		case "mxbai-embed-large":
+			return 1024;
+		case "text-embedding-3-large":
+			return 3072;
+		case "text-embedding-3-small":
+			return 1536;
+		default:
+			return 768;
+	}
+}
+
+async function promptOpenAIEmbeddingModel() {
+	console.log();
+	const model = await select({
+		message: "Which embedding model?",
+		choices: [
+			{
+				value: "text-embedding-3-small",
+				name: "text-embedding-3-small (1536d, cheaper)",
+			},
+			{
+				value: "text-embedding-3-large",
+				name: "text-embedding-3-large (3072d, better)",
+			},
+		],
+	});
+
+	return {
+		provider: "openai" as const,
+		model,
+		dimensions: getEmbeddingDimensions(model),
+	};
+}
+
+async function runCommandWithOutput(
+	command: string,
+	args: string[],
+	options?: {
+		cwd?: string;
+		env?: NodeJS.ProcessEnv;
+		timeout?: number;
+	},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+	return new Promise((resolve) => {
+		const proc = spawn(command, args, {
+			cwd: options?.cwd,
+			env: options?.env,
+			timeout: options?.timeout,
+		});
+
+		let stdout = "";
+		let stderr = "";
+
+		proc.stdout?.on("data", (d: Buffer) => {
+			stdout += d.toString();
+		});
+		proc.stderr?.on("data", (d: Buffer) => {
+			stderr += d.toString();
+		});
+
+		proc.on("close", (code) => {
+			resolve({ code: code ?? 1, stdout, stderr });
+		});
+		proc.on("error", (error) => {
+			resolve({ code: 1, stdout, stderr: error.message });
+		});
+	});
+}
+
+function hasCommand(command: string): boolean {
+	try {
+		const result = spawnSync(command, ["--version"], { stdio: "ignore" });
+		return result.status === 0;
+	} catch {
+		return false;
+	}
+}
+
+function printOllamaInstallInstructions() {
+	console.log(chalk.dim("  Install Ollama:"));
+
+	if (platform() === "darwin") {
+		console.log(chalk.dim("    brew install ollama"));
+		console.log(chalk.dim("    open -a Ollama"));
+		return;
+	}
+
+	if (platform() === "linux") {
+		console.log(chalk.dim("    curl -fsSL https://ollama.com/install.sh | sh"));
+		console.log(chalk.dim("    ollama serve"));
+		return;
+	}
+
+	console.log(chalk.dim("    https://ollama.com/download"));
+}
+
+async function offerOllamaInstallFlow(): Promise<boolean> {
+	const installNow = await confirm({
+		message: "Ollama is not installed. Try to install it now?",
+		default: true,
+	});
+
+	if (!installNow) {
+		printOllamaInstallInstructions();
+		return false;
+	}
+
+	if (platform() === "darwin") {
+		if (!hasCommand("brew")) {
+			console.log(chalk.yellow("  Homebrew not found, cannot auto-install."));
+			printOllamaInstallInstructions();
+			return false;
+		}
+
+		const spinner = ora("Installing Ollama with Homebrew...").start();
+		const result = await runCommandWithOutput("brew", ["install", "ollama"], {
+			env: { ...process.env },
+			timeout: 300000,
+		});
+
+		if (result.code !== 0) {
+			spinner.fail("Ollama install failed");
+			if (result.stderr.trim()) {
+				console.log(chalk.dim(`  ${result.stderr.trim()}`));
+			}
+			printOllamaInstallInstructions();
+			return false;
+		}
+
+		spinner.succeed("Ollama installed");
+		return hasCommand("ollama");
+	}
+
+	if (platform() === "linux") {
+		const spinner = ora("Installing Ollama...").start();
+		const result = await runCommandWithOutput(
+			"sh",
+			["-c", "curl -fsSL https://ollama.com/install.sh | sh"],
+			{
+				env: { ...process.env },
+				timeout: 300000,
+			},
+		);
+
+		if (result.code !== 0) {
+			spinner.fail("Ollama install failed");
+			if (result.stderr.trim()) {
+				console.log(chalk.dim(`  ${result.stderr.trim()}`));
+			}
+			printOllamaInstallInstructions();
+			return false;
+		}
+
+		spinner.succeed("Ollama installed");
+		return hasCommand("ollama");
+	}
+
+	console.log(chalk.yellow("  Automated install is not available on this platform."));
+	printOllamaInstallInstructions();
+	return false;
+}
+
+async function queryOllamaModels(baseUrl = "http://localhost:11434"): Promise<{
+	available: boolean;
+	models: string[];
+	error?: string;
+}> {
+	try {
+		const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/tags`, {
+			signal: AbortSignal.timeout(5000),
+		});
+
+		if (!response.ok) {
+			return {
+				available: false,
+				models: [],
+				error: `Ollama returned ${response.status}`,
+			};
+		}
+
+		const data = (await response.json()) as {
+			models?: Array<{ name?: string }>;
+		};
+
+		const models = (data.models ?? [])
+			.map((m) => m.name?.trim())
+			.filter((m): m is string => Boolean(m));
+
+		return { available: true, models };
+	} catch (error) {
+		return {
+			available: false,
+			models: [],
+			error: (error as Error).message,
+		};
+	}
+}
+
+function hasOllamaModel(models: string[], model: string): boolean {
+	return models.some((entry) => entry === model || entry.startsWith(`${model}:`));
+}
+
+async function pullOllamaModel(model: string): Promise<boolean> {
+	const spinner = ora(`Pulling ${model}...`).start();
+	const result = await runCommandWithOutput("ollama", ["pull", model], {
+		env: { ...process.env },
+		timeout: 600000,
+	});
+
+	if (result.code !== 0) {
+		spinner.fail(`Failed to pull ${model}`);
+		if (result.stderr.trim()) {
+			console.log(chalk.dim(`  ${result.stderr.trim()}`));
+		}
+		return false;
+	}
+
+	spinner.succeed(`Model ${model} is ready`);
+	return true;
+}
+
+async function promptOllamaFailureFallback(): Promise<
+	"retry" | "openai" | "none"
+> {
+	console.log();
+	return select({
+		message: "How do you want to continue?",
+		choices: [
+			{ value: "retry", name: "Retry Ollama checks" },
+			{ value: "openai", name: "Switch to OpenAI" },
+			{ value: "none", name: "Continue without embeddings" },
+		],
+	});
+}
+
+async function preflightOllamaEmbedding(model: string): Promise<{
+	provider: "ollama" | "openai" | "none";
+	model?: string;
+	dimensions?: number;
+}> {
+	while (true) {
+		if (!hasCommand("ollama")) {
+			console.log(chalk.yellow("  Ollama is not installed."));
+			const installed = await offerOllamaInstallFlow();
+			if (!installed) {
+				const fallback = await promptOllamaFailureFallback();
+				if (fallback === "retry") continue;
+				if (fallback === "openai") {
+					return promptOpenAIEmbeddingModel();
+				}
+				return { provider: "none" };
+			}
+		}
+
+		const service = await queryOllamaModels();
+		if (!service.available) {
+			console.log(chalk.yellow("  Ollama is installed but not reachable."));
+			if (service.error) console.log(chalk.dim(`  ${service.error}`));
+			console.log(chalk.dim("  Start Ollama with: ollama serve"));
+
+			const fallback = await promptOllamaFailureFallback();
+			if (fallback === "retry") continue;
+			if (fallback === "openai") {
+				return promptOpenAIEmbeddingModel();
+			}
+			return { provider: "none" };
+		}
+
+		if (!hasOllamaModel(service.models, model)) {
+			console.log(chalk.yellow(`  Model '${model}' is not installed.`));
+			const pullNow = await confirm({
+				message: `Pull '${model}' now with ollama pull ${model}?`,
+				default: true,
+			});
+
+			if (pullNow) {
+				const pulled = await pullOllamaModel(model);
+				if (pulled) {
+					continue;
+				}
+			}
+
+			const fallback = await promptOllamaFailureFallback();
+			if (fallback === "retry") continue;
+			if (fallback === "openai") {
+				return promptOpenAIEmbeddingModel();
+			}
+			return { provider: "none" };
+		}
+
+		return {
+			provider: "ollama",
+			model,
+			dimensions: getEmbeddingDimensions(model),
+		};
+	}
 }
 
 // ============================================================================
@@ -735,6 +1078,10 @@ async function existingSetupWizard(
 		if (detection.harnesses.claudeCode) detectedHarnesses.push("claude-code");
 		if (detection.harnesses.openclaw) detectedHarnesses.push("openclaw");
 		if (detection.harnesses.opencode) detectedHarnesses.push("opencode");
+		const packageManager = resolvePrimaryPackageManager({
+			agentsDir: basePath,
+			env: process.env,
+		});
 
 		const config: Record<string, unknown> = {
 			version: 1,
@@ -749,6 +1096,10 @@ async function existingSetupWizard(
 				updated: now,
 			},
 			harnesses: detectedHarnesses,
+			install: {
+				primary_package_manager: packageManager.family,
+				source: packageManager.source,
+			},
 			memory: {
 				database: "memory/memories.db",
 				session_budget: 2000,
@@ -1183,17 +1534,13 @@ async function setupWizard(options: { path?: string }) {
 	// OpenClaw workspace configuration (handles openclaw/clawdbot/moltbot)
 	let configureOpenClawWs = false;
 	if (harnesses.includes("openclaw")) {
-		const possibleConfigs = [
-			join(homedir(), ".openclaw", "openclaw.json"),
-			join(homedir(), ".clawdbot", "clawdbot.json"),
-			join(homedir(), ".moltbot", "moltbot.json"),
-		];
-		const hasAnyConfig = possibleConfigs.some((p) => existsSync(p));
+		const connector = new OpenClawConnector();
+		const existingConfigs = connector.getDiscoveredConfigPaths();
 
-		if (hasAnyConfig) {
+		if (existingConfigs.length > 0) {
 			console.log();
 			configureOpenClawWs = await confirm({
-				message: "Set OpenClaw/Clawdbot workspace to ~/.agents?",
+				message: `Set OpenClaw workspace to ~/.agents in ${existingConfigs.length} config file(s)?`,
 				default: true,
 			});
 		}
@@ -1206,14 +1553,14 @@ async function setupWizard(options: { path?: string }) {
 	});
 
 	console.log();
-	const embeddingProvider = await select({
+	let embeddingProvider = (await select({
 		message: "How should memories be embedded for search?",
 		choices: [
 			{ value: "ollama", name: "Ollama (local, recommended)" },
 			{ value: "openai", name: "OpenAI API" },
 			{ value: "none", name: "Skip embeddings for now" },
 		],
-	});
+	})) as "ollama" | "openai" | "none";
 
 	// Embedding model selection based on provider
 	let embeddingModel = "nomic-embed-text";
@@ -1235,26 +1582,15 @@ async function setupWizard(options: { path?: string }) {
 				},
 			],
 		});
-		embeddingModel = model;
-		embeddingDimensions =
-			model === "all-minilm" ? 384 : model === "mxbai-embed-large" ? 1024 : 768;
+
+		const preflight = await preflightOllamaEmbedding(model);
+		embeddingProvider = preflight.provider;
+		embeddingModel = preflight.model ?? embeddingModel;
+		embeddingDimensions = preflight.dimensions ?? embeddingDimensions;
 	} else if (embeddingProvider === "openai") {
-		console.log();
-		const model = await select({
-			message: "Which embedding model?",
-			choices: [
-				{
-					value: "text-embedding-3-small",
-					name: "text-embedding-3-small (1536d, cheaper)",
-				},
-				{
-					value: "text-embedding-3-large",
-					name: "text-embedding-3-large (3072d, better)",
-				},
-			],
-		});
-		embeddingModel = model;
-		embeddingDimensions = model === "text-embedding-3-large" ? 3072 : 1536;
+		const openai = await promptOpenAIEmbeddingModel();
+		embeddingModel = openai.model;
+		embeddingDimensions = openai.dimensions;
 	}
 
 	// Search settings
@@ -1447,6 +1783,10 @@ ${agentName} is a helpful assistant.
 
 		spinner.text = "Writing configuration...";
 		const now = new Date().toISOString();
+		const packageManager = resolvePrimaryPackageManager({
+			agentsDir: basePath,
+			env: process.env,
+		});
 		const config: Record<string, unknown> = {
 			version: 1,
 			schema: "signet/v1",
@@ -1457,6 +1797,10 @@ ${agentName} is a helpful assistant.
 				updated: now,
 			},
 			harnesses: harnesses,
+			install: {
+				primary_package_manager: packageManager.family,
+				source: packageManager.source,
+			},
 			memory: {
 				database: "memory/memories.db",
 				session_budget: memorySessionBudget,
@@ -1538,9 +1882,7 @@ ${agentName} is a helpful assistant.
 		// Configure OpenClaw workspace if requested
 		if (configureOpenClawWs) {
 			spinner.text = "Configuring OpenClaw workspace...";
-			const patched = await new OpenClawConnector().configureAllConfigs(
-				basePath,
-			);
+			const patched = await new OpenClawConnector().configureWorkspace(basePath);
 			if (patched.length > 0) {
 				console.log(chalk.dim("\n  ✓ OpenClaw workspace set to ~/.agents"));
 			}
@@ -2959,18 +3301,27 @@ skillCmd
 				);
 			}
 		} else {
-			// Daemon not running - run npx skills directly
-			spinner.text = `Installing ${chalk.cyan(name)} (daemon offline, running npx skills)...`;
+			const packageManager = resolvePrimaryPackageManager({
+				agentsDir: AGENTS_DIR,
+				env: process.env,
+			});
+			const skillsCommand = getSkillsRunnerCommand(packageManager.family, [
+				"add",
+				name,
+				"--global",
+				"--yes",
+			]);
+
+			spinner.text = `Installing ${chalk.cyan(name)} (daemon offline, running ${skillsCommand.command} skills)...`;
+			if (packageManager.source === "fallback") {
+				console.log(chalk.dim(`  ${packageManager.reason}`));
+			}
 
 			await new Promise<void>((resolve) => {
-				const proc = spawn(
-					"npx",
-					["skills", "add", name, "--global", "--yes"],
-					{
-						stdio: ["ignore", "pipe", "pipe"],
-						env: { ...process.env },
-					},
-				);
+				const proc = spawn(skillsCommand.command, skillsCommand.args, {
+					stdio: ["ignore", "pipe", "pipe"],
+					env: { ...process.env },
+				});
 
 				let stderr = "";
 				proc.stderr.on("data", (d: Buffer) => {
@@ -2993,7 +3344,7 @@ skillCmd
 				});
 
 				proc.on("error", () => {
-					spinner.fail("npx not available");
+					spinner.fail(`${skillsCommand.command} is not available`);
 					resolve();
 				});
 			});
