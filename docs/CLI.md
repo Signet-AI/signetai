@@ -17,6 +17,8 @@ bunx signet setup
 curl -sL https://signetai.sh/install | bash
 ```
 
+Runtime operations that need package execution (skills/update install) follow the primary package manager captured during setup, with deterministic fallback when unavailable.
+
 ---
 
 ## Commands Overview
@@ -94,15 +96,17 @@ signet setup --path /custom/path
    - Windsurf
    - ChatGPT
    - Gemini
-3. **OpenClaw Workspace** - If OpenClaw selected and config exists, optionally set workspace
+3. **OpenClaw Workspace** - Prompt appears only when an existing OpenClaw config is detected; workspace is patched only if you opt in
 4. **Description** - Short agent description
 5. **Embedding Provider**:
-   - Ollama (local, recommended)
-   - OpenAI API
-   - Skip embeddings
+    - Ollama (local, recommended)
+    - OpenAI API
+    - Skip embeddings
 6. **Embedding Model** - Based on provider:
-   - Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
-   - OpenAI: text-embedding-3-small, text-embedding-3-large
+    - Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
+    - OpenAI: text-embedding-3-small, text-embedding-3-large
+   - Ollama selections run preflight checks for binary availability, service health, and model presence
+   - If checks fail, setup offers retry, switch-to-OpenAI, or continue-without-embeddings
 7. **Search Balance** - Semantic vs keyword weighting
 8. **Advanced Settings** (optional):
    - top_k: Search candidates per source
@@ -606,4 +610,3 @@ signet update install  # Install updates
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-

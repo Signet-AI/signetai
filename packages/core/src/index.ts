@@ -101,3 +101,15 @@ export {
 	type SymlinkOptions,
 	type SymlinkResult,
 } from "./symlinks";
+
+// Package manager resolution utilities
+export {
+	parsePackageManagerUserAgent,
+	detectAvailablePackageManagers,
+	resolvePrimaryPackageManager,
+	getSkillsRunnerCommand,
+	getGlobalInstallCommand,
+	type PackageManagerFamily,
+	type PackageManagerResolution,
+	type PackageManagerCommand,
+} from "./package-manager";

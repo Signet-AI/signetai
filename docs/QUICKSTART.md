@@ -26,6 +26,7 @@ curl -sL https://signetai.sh/install | bash
 ```
 
 Running `signet setup` launches an interactive wizard that walks you through the full setup. You don't need to read anything else first.
+Signet records your primary package manager during setup and reuses that manager family for skill installs and update commands.
 
 ---
 
@@ -51,13 +52,13 @@ Select which AI platforms you use. Signet will configure integrations for each:
 
 Embeddings power semantic (meaning-based) memory search. Choose:
 
-- **Ollama** (recommended) — runs locally, free, no API key needed. Make sure Ollama is installed and running (`ollama serve`).
+- **Ollama** (recommended) — runs locally, free, no API key needed. Setup now checks binary + service + model and guides install/pull when needed.
 - **OpenAI** — uses the OpenAI embeddings API. Requires `OPENAI_API_KEY`.
 - **Skip** — memory still works via keyword search, just no semantic search.
 
 **4. Embedding model**
 
-For Ollama, `nomic-embed-text` is a good default. Pull it first if you haven't:
+For Ollama, `nomic-embed-text` is a good default. Setup can pull it for you (with confirmation), or you can do it manually:
 
 ```bash
 ollama pull nomic-embed-text

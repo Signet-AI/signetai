@@ -11,6 +11,7 @@ import { cors } from "hono/cors";
 import { logger as honoLogger } from "hono/logger";
 import { watch } from "chokidar";
 import { logger, LogEntry } from "./logger";
+import { loadMemoryConfig, type EmbeddingConfig } from "./memory-config";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
 import {
@@ -42,6 +43,9 @@ import {
 	stripSignetBlock,
 	vectorSearch,
 	keywordSearch,
+	resolvePrimaryPackageManager,
+	getSkillsRunnerCommand,
+	getGlobalInstallCommand,
 } from "@signet/core";
 
 // Paths
@@ -67,17 +71,45 @@ function getPythonCmd(): string {
 const PORT = parseInt(process.env.SIGNET_PORT || "3850", 10);
 const HOST = process.env.SIGNET_HOST || "localhost";
 
+function getVersionFromPackageJson(packageJsonPath: string): string | null {
+	if (!existsSync(packageJsonPath)) {
+		return null;
+	}
+
+	try {
+		const raw = readFileSync(packageJsonPath, "utf8");
+		const parsed = JSON.parse(raw) as { version?: unknown };
+		return typeof parsed.version === "string" ? parsed.version : null;
+	} catch {
+		return null;
+	}
+}
+
+function getDaemonVersion(): string {
+	const __filename = fileURLToPath(import.meta.url);
+	const __dirname = dirname(__filename);
+
+	const candidates = [
+		join(__dirname, "..", "package.json"),
+		join(__dirname, "..", "..", "signetai", "package.json"),
+		join(__dirname, "..", "..", "package.json"),
+	];
+
+	for (const candidate of candidates) {
+		const version = getVersionFromPackageJson(candidate);
+		if (version) {
+			return version;
+		}
+	}
+
+	return "0.0.0";
+}
+
+const CURRENT_VERSION = getDaemonVersion();
+
 // ============================================================================
 // Memory helpers - config, embedding, type inference
 // ============================================================================
-
-interface EmbeddingConfig {
-	provider: "ollama" | "openai";
-	model: string;
-	dimensions: number;
-	base_url: string;
-	api_key?: string;
-}
 
 interface EmbeddingStatus {
 	provider: "ollama" | "openai";
@@ -87,67 +119,6 @@ interface EmbeddingStatus {
 	base_url: string;
 	error?: string;
 	checkedAt: string;
-}
-
-interface MemorySearchConfig {
-	alpha: number;
-	top_k: number;
-	min_score: number;
-}
-
-interface ResolvedMemoryConfig {
-	embedding: EmbeddingConfig;
-	search: MemorySearchConfig;
-}
-
-function loadMemoryConfig(): ResolvedMemoryConfig {
-	const defaults: ResolvedMemoryConfig = {
-		embedding: {
-			provider: "ollama",
-			model: "nomic-embed-text",
-			dimensions: 768,
-			base_url: "http://localhost:11434",
-		},
-		search: { alpha: 0.7, top_k: 20, min_score: 0.3 },
-	};
-
-	// Prefer AGENT.yaml (newer format), fall back to config.yaml
-	const paths = [
-		join(AGENTS_DIR, "AGENT.yaml"),
-		join(AGENTS_DIR, "config.yaml"),
-	];
-
-	for (const p of paths) {
-		if (!existsSync(p)) continue;
-		try {
-			const yaml = parseSimpleYaml(readFileSync(p, "utf-8"));
-
-			// AGENT.yaml: memory.embeddings.*
-			// config.yaml: embeddings.*
-			const emb: Record<string, any> =
-				(yaml.memory as any)?.embeddings ?? (yaml.embeddings as any) ?? {};
-			const srch: Record<string, any> = (yaml.search as any) ?? {};
-
-			if (emb.provider) {
-				defaults.embedding.provider = emb.provider as "ollama" | "openai";
-				defaults.embedding.model = emb.model ?? defaults.embedding.model;
-				defaults.embedding.dimensions = parseInt(emb.dimensions ?? "768", 10);
-				defaults.embedding.base_url =
-					emb.base_url ?? defaults.embedding.base_url;
-				defaults.embedding.api_key = emb.api_key;
-			}
-			if (srch.alpha !== undefined) {
-				defaults.search.alpha = parseFloat(srch.alpha);
-				defaults.search.top_k = parseInt(srch.top_k ?? "20", 10);
-				defaults.search.min_score = parseFloat(srch.min_score ?? "0.3");
-			}
-			break; // first valid config wins
-		} catch {
-			// ignore parse errors, try next file
-		}
-	}
-
-	return defaults;
 }
 
 async function fetchEmbedding(
@@ -364,7 +335,7 @@ app.get("/health", (c) => {
 		status: "healthy",
 		uptime: process.uptime(),
 		pid: process.pid,
-		version: "0.1.0",
+		version: CURRENT_VERSION,
 		port: PORT,
 		agentsDir: AGENTS_DIR,
 	});
@@ -883,7 +854,7 @@ app.post("/api/memory/remember", async (c) => {
 	// non-fatal (memory is still usable via keyword search)
 	let embedded = false;
 	try {
-		const cfg = loadMemoryConfig();
+		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const vec = await fetchEmbedding(parsed.content, cfg.embedding);
 		if (vec) {
 			const hash = createHash("sha256").update(parsed.content).digest("hex");
@@ -968,7 +939,7 @@ app.post("/api/memory/recall", async (c) => {
 	const query = body.query?.trim() ?? "";
 	if (!query) return c.json({ error: "query is required" }, 400);
 
-	const cfg = loadMemoryConfig();
+	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const limit = body.limit ?? 10;
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
@@ -1325,7 +1296,7 @@ app.get("/api/embeddings", async (c) => {
 });
 
 app.get("/api/embeddings/status", async (c) => {
-	const config = loadMemoryConfig();
+	const config = loadMemoryConfig(AGENTS_DIR);
 	const status = await checkEmbeddingProvider(config.embedding);
 	return c.json(status);
 });
@@ -1400,12 +1371,27 @@ app.get("/api/skills/search", async (c) => {
 	}
 
 	logger.info("skills", "Searching skills", { query });
+	const packageManager = resolvePrimaryPackageManager({
+		agentsDir: AGENTS_DIR,
+		env: process.env,
+	});
+	const skillsCommand = getSkillsRunnerCommand(packageManager.family, [
+		"search",
+		query,
+	]);
+
+	logger.info("skills", "Using package manager", {
+		command: `${skillsCommand.command} ${skillsCommand.args.join(" ")}`,
+		family: packageManager.family,
+		source: packageManager.source,
+		reason: packageManager.reason,
+	});
 
 	// Strip ANSI escape codes
 	const stripAnsi = (str: string) => str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
 
 	return new Promise<Response>((resolve) => {
-		const proc = spawn("npx", ["skills", "search", query], {
+		const proc = spawn(skillsCommand.command, skillsCommand.args, {
 			env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
 			timeout: 30000,
 		});
@@ -1513,9 +1499,26 @@ app.post("/api/skills/install", async (c) => {
 
 	const pkg = source || name;
 	logger.info("skills", "Installing skill", { name, pkg });
+	const packageManager = resolvePrimaryPackageManager({
+		agentsDir: AGENTS_DIR,
+		env: process.env,
+	});
+	const skillsCommand = getSkillsRunnerCommand(packageManager.family, [
+		"add",
+		pkg,
+		"--global",
+		"--yes",
+	]);
+
+	logger.info("skills", "Using package manager", {
+		command: `${skillsCommand.command} ${skillsCommand.args.join(" ")}`,
+		family: packageManager.family,
+		source: packageManager.source,
+		reason: packageManager.reason,
+	});
 
 	return new Promise<Response>((resolve) => {
-		const proc = spawn("npx", ["skills", "add", pkg, "--global", "--yes"], {
+		const proc = spawn(skillsCommand.command, skillsCommand.args, {
 			env: { ...process.env },
 			timeout: 60000,
 		});
@@ -1942,7 +1945,6 @@ app.post("/api/git/config", async (c) => {
 // Update System
 // ============================================================================
 
-const CURRENT_VERSION = "0.1.0";
 const GITHUB_REPO = "Signet-AI/signetai";
 const NPM_PACKAGE = "signetai";
 
@@ -2032,14 +2034,25 @@ async function runUpdate(): Promise<{
 	output?: string;
 }> {
 	return new Promise((resolve) => {
-		// Try bun first, fall back to npm
-		const packageManager = existsSync("/usr/bin/bun") ? "bun" : "npm";
-		const args =
-			packageManager === "bun"
-				? ["add", "-g", NPM_PACKAGE]
-				: ["install", "-g", NPM_PACKAGE];
+		const packageManager = resolvePrimaryPackageManager({
+			agentsDir: AGENTS_DIR,
+			env: process.env,
+		});
+		const installCommand = getGlobalInstallCommand(
+			packageManager.family,
+			NPM_PACKAGE,
+		);
 
-		const proc = spawn(packageManager, args, { stdio: "pipe" });
+		logger.info("system", "Running update command", {
+			command: `${installCommand.command} ${installCommand.args.join(" ")}`,
+			family: packageManager.family,
+			source: packageManager.source,
+			reason: packageManager.reason,
+		});
+
+		const proc = spawn(installCommand.command, installCommand.args, {
+			stdio: "pipe",
+		});
 		let stdout = "";
 		let stderr = "";
 
@@ -2113,7 +2126,7 @@ app.post("/api/update/run", async (c) => {
 // ============================================================================
 
 app.get("/api/status", (c) => {
-	const config = loadMemoryConfig();
+	const config = loadMemoryConfig(AGENTS_DIR);
 
 	return c.json({
 		status: "running",
