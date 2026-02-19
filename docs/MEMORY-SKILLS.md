@@ -7,7 +7,7 @@
 
 ---
 
-Signet ships with two core skills for memory management: `remember` and `recall`. These integrate directly with the Signet daemon.
+Signet ships with three core skills for memory management: `remember`, `recall`, and `memory-debug`. These integrate directly with the Signet daemon.
 
 ## Overview
 
@@ -15,6 +15,7 @@ Signet ships with two core skills for memory management: `remember` and `recall`
 |-------|-------------|-----------------|---------|
 | remember | `signet remember <content>` | `/remember <content>` | Save to persistent memory |
 | recall | `signet recall <query>` | `/recall <query>` | Search persistent memory |
+| memory-debug | diagnostic checks | `/memory-debug [symptom]` | Diagnose memory failures and quality issues |
 
 These are the primary interface between agents and the memory system.
 
