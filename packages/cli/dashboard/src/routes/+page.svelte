@@ -13,6 +13,7 @@ import {
 	saveConfigFile,
 	getEmbeddings,
 	searchMemories,
+	recallMemories,
 	getSimilarMemories,
 	getDistinctWho,
 	regenerateHarnesses as apiRegenerateHarnesses,
@@ -23,6 +24,8 @@ import {
 	searchSkills,
 	installSkill,
 	uninstallSkill,
+	type Memory,
+	type EmbeddingPoint,
 	type Skill,
 } from "$lib/api";
 
@@ -43,9 +46,9 @@ function toggleTheme() {
 }
 
 // --- Tabs ---
-let activeTab = $state<"config" | "embeddings" | "logs" | "secrets" | "skills">(
-	"config",
-);
+let activeTab = $state<
+	"config" | "memory" | "embeddings" | "logs" | "secrets" | "skills"
+>("config");
 
 // --- Secrets ---
 let secrets = $state<string[]>([]);
@@ -156,7 +159,7 @@ let logEventSource: EventSource | null = null;
 let logLevelFilter = $state<string>("");
 let logCategoryFilter = $state<string>("");
 let logAutoScroll = $state(true);
-let logContainer: HTMLDivElement | null = null;
+let logContainer = $state<HTMLDivElement | null>(null);
 
 const logCategories = [
 	"daemon",
@@ -278,6 +281,20 @@ $effect(() => {
 		if (logEventSource) {
 			logEventSource.close();
 		}
+		if (memorySearchTimer) {
+			clearTimeout(memorySearchTimer);
+			memorySearchTimer = null;
+		}
+		simulation?.stop();
+		simulation = null;
+		if (interactionCleanup) {
+			interactionCleanup();
+			interactionCleanup = null;
+		}
+		if (resizeListenerAttached) {
+			window.removeEventListener("resize", resizeCanvas);
+			resizeListenerAttached = false;
+		}
 		cancelAnimationFrame(animFrame);
 		if (graph3d) {
 			graph3d._destructor?.();
@@ -340,13 +357,42 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 // --- Embeddings graph ---
+const DEFAULT_EMBEDDING_LIMIT = 600;
+const MIN_EMBEDDING_LIMIT = 50;
+const MAX_EMBEDDING_LIMIT = 5000;
+const EMBEDDING_LIMIT_STORAGE_KEY = "signet-embedding-limit";
+const GRAPH_K = 4;
+const RELATION_LIMIT = 10;
+
 let canvas = $state<HTMLCanvasElement | null>(null);
-let graphSelected = $state<any>(null);
-let graphHovered = $state<any>(null);
+let graphSelected = $state<EmbeddingPoint | null>(null);
+let graphHovered = $state<EmbeddingPoint | null>(null);
 let graphStatus = $state("");
 let graphError = $state("");
-let embeddings = $state<any[]>([]);
+let embeddings = $state<EmbeddingPoint[]>([]);
+let embeddingsTotal = $state(0);
+let embeddingsHasMore = $state(false);
 let graphInitialized = $state(false);
+let embeddingLimit = $state(DEFAULT_EMBEDDING_LIMIT);
+let embeddingLimitInput = $state(String(DEFAULT_EMBEDDING_LIMIT));
+let embeddingSearch = $state("");
+let embeddingSearchMatches = $state<EmbeddingPoint[]>([]);
+let embeddingFilterIds = $state<Set<string> | null>(null);
+
+type RelationKind = "similar" | "dissimilar";
+
+interface EmbeddingRelation {
+	id: string;
+	score: number;
+	kind: RelationKind;
+}
+
+let relationMode = $state<RelationKind>("similar");
+let similarNeighbors = $state<EmbeddingRelation[]>([]);
+let dissimilarNeighbors = $state<EmbeddingRelation[]>([]);
+let activeNeighbors = $state<EmbeddingRelation[]>([]);
+let loadingGlobalSimilar = $state(false);
+let globalSimilar = $state<Memory[]>([]);
 
 const sourceColors: Record<string, string> = {
 	"claude-code": "#5eada4",
@@ -367,7 +413,7 @@ interface GraphNode {
 	fy?: number | null;
 	radius: number;
 	color: string;
-	data: any;
+	data: EmbeddingPoint;
 }
 
 interface GraphEdge {
@@ -396,12 +442,259 @@ let graphMode: "2d" | "3d" = $state("2d");
 let graph3d: any = null;
 let graph3dContainer = $state<HTMLDivElement | null>(null);
 
+let projected3dCache: number[][] | null = null;
+let graphLoadId = 0;
+let interactionCleanup: (() => void) | null = null;
+let resizeListenerAttached = false;
+let embeddingById = new Map<string, EmbeddingPoint>();
+let embeddingNormById = new Map<string, number>();
+let relationLookup = new Map<string, RelationKind>();
+
+if (browser) {
+	let nextLimit = DEFAULT_EMBEDDING_LIMIT;
+	const storedLimit = Number.parseInt(
+		localStorage.getItem(EMBEDDING_LIMIT_STORAGE_KEY) ?? "",
+		10,
+	);
+	if (Number.isFinite(storedLimit)) {
+		nextLimit = Math.min(
+			MAX_EMBEDDING_LIMIT,
+			Math.max(MIN_EMBEDDING_LIMIT, storedLimit),
+		);
+	}
+	embeddingLimit = nextLimit;
+	embeddingLimitInput = String(nextLimit);
+}
+
+function hasEmbeddingVector(
+	entry: EmbeddingPoint,
+): entry is EmbeddingPoint & { vector: number[] } {
+	return Array.isArray(entry.vector) && entry.vector.length > 0;
+}
+
 function hexToRgb(hex: string): [number, number, number] {
 	const v = parseInt(hex.slice(1), 16);
 	return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
-function buildKnnEdges(projected: number[][], k: number): [number, number][] {
+function sourceColorRgba(who: string | undefined, alpha: number): string {
+	const [r, g, b] = hexToRgb(sourceColors[who ?? "unknown"] ?? sourceColors["unknown"]);
+	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function clampEmbeddingLimit(value: number): number {
+	return Math.min(MAX_EMBEDDING_LIMIT, Math.max(MIN_EMBEDDING_LIMIT, value));
+}
+
+function applyEmbeddingLimit() {
+	const parsed = Number.parseInt(embeddingLimitInput, 10);
+	const next = clampEmbeddingLimit(Number.isFinite(parsed) ? parsed : embeddingLimit);
+	embeddingLimit = next;
+	embeddingLimitInput = String(next);
+	if (browser) {
+		localStorage.setItem(EMBEDDING_LIMIT_STORAGE_KEY, String(next));
+	}
+	reloadEmbeddingsGraph();
+}
+
+function clearEmbeddingSelection() {
+	graphSelected = null;
+	graphHovered = null;
+	globalSimilar = [];
+}
+
+function embeddingLabel(embedding: EmbeddingPoint): string {
+	const text = embedding.content ?? embedding.text ?? "";
+	return text.length > 160 ? `${text.slice(0, 160)}...` : text;
+}
+
+function embeddingSourceLabel(embedding: EmbeddingPoint): string {
+	const sourceType = embedding.sourceType ?? "memory";
+	const sourceId = embedding.sourceId ?? embedding.id;
+	return `${sourceType}:${sourceId}`;
+}
+
+function getEmbeddingById(id: string): EmbeddingPoint | null {
+	return embeddingById.get(id) ?? null;
+}
+
+function selectEmbeddingById(id: string, center = true) {
+	const next = getEmbeddingById(id);
+	if (!next) return;
+	graphSelected = next;
+	if (center) focusEmbedding(id);
+}
+
+function focusEmbedding(id: string) {
+	if (graphMode === "2d") {
+		const node = nodes.find((entry) => entry.data.id === id);
+		if (!node) return;
+		camX = node.x;
+		camY = node.y;
+		camZoom = Math.max(camZoom, 1.6);
+		return;
+	}
+	focusEmbedding3D(id);
+}
+
+function focusEmbedding3D(id: string) {
+	if (!graph3d) return;
+	const graphData = graph3d.graphData?.();
+	if (!graphData?.nodes) return;
+	const node = graphData.nodes.find((entry: any) => String(entry.id) === id);
+	if (!node) return;
+	const distance = 120;
+	const len = Math.hypot(node.x ?? 0, node.y ?? 0, node.z ?? 0) || 1;
+	const ratio = 1 + distance / len;
+	graph3d.cameraPosition(
+		{
+			x: (node.x ?? 0) * ratio,
+			y: (node.y ?? 0) * ratio,
+			z: (node.z ?? 0) * ratio,
+		},
+		node,
+		900,
+	);
+}
+
+function vectorNorm(vector: readonly number[]): number {
+	let sum = 0;
+	for (const value of vector) {
+		sum += value * value;
+	}
+	return Math.sqrt(sum);
+}
+
+function embeddingNorm(embedding: EmbeddingPoint): number {
+	const cached = embeddingNormById.get(embedding.id);
+	if (typeof cached === "number") return cached;
+	if (!hasEmbeddingVector(embedding)) return 0;
+	const norm = vectorNorm(embedding.vector);
+	embeddingNormById.set(embedding.id, norm);
+	return norm;
+}
+
+function cosineSimilarity(
+	left: readonly number[],
+	right: readonly number[],
+	leftNorm: number,
+	rightNorm: number,
+): number {
+	if (leftNorm === 0 || rightNorm === 0 || left.length !== right.length) {
+		return 0;
+	}
+	let dot = 0;
+	for (let i = 0; i < left.length; i++) {
+		dot += left[i] * right[i];
+	}
+	return dot / (leftNorm * rightNorm);
+}
+
+function computeRelationsForSelection(selected: EmbeddingPoint | null) {
+	if (!selected || !hasEmbeddingVector(selected)) {
+		similarNeighbors = [];
+		dissimilarNeighbors = [];
+		activeNeighbors = [];
+		relationLookup = new Map();
+		return;
+	}
+
+	const selectedNorm = embeddingNorm(selected);
+	const scored: EmbeddingRelation[] = [];
+
+	for (const candidate of embeddings) {
+		if (candidate.id === selected.id || !hasEmbeddingVector(candidate)) {
+			continue;
+		}
+		const score = cosineSimilarity(
+			selected.vector,
+			candidate.vector,
+			selectedNorm,
+			embeddingNorm(candidate),
+		);
+		if (Number.isFinite(score)) {
+			scored.push({ id: candidate.id, score, kind: "similar" });
+		}
+	}
+
+	if (scored.length === 0) {
+		similarNeighbors = [];
+		dissimilarNeighbors = [];
+		activeNeighbors = [];
+		relationLookup = new Map();
+		return;
+	}
+
+	const bySimilarity = [...scored].sort((a, b) => b.score - a.score);
+	similarNeighbors = bySimilarity
+		.slice(0, RELATION_LIMIT)
+		.map((item) => ({ ...item, kind: "similar" }));
+	dissimilarNeighbors = [...bySimilarity]
+		.reverse()
+		.slice(0, RELATION_LIMIT)
+		.map((item) => ({ ...item, kind: "dissimilar" }));
+
+	activeNeighbors = relationMode === "similar" ? similarNeighbors : dissimilarNeighbors;
+	relationLookup = new Map(activeNeighbors.map((item) => [item.id, item.kind]));
+}
+
+function isFilteredOut(id: string): boolean {
+	if (!embeddingFilterIds) return false;
+	return !embeddingFilterIds.has(id);
+}
+
+function relationFor(id: string): RelationKind | null {
+	return relationLookup.get(id) ?? null;
+}
+
+function nodeFillStyle(node: GraphNode): string {
+	const id = node.data.id;
+	const relation = relationFor(id);
+	const dimmed = isFilteredOut(id);
+
+	if (graphSelected?.id === id) return "rgba(255, 255, 255, 0.95)";
+	if (relation === "similar") {
+		return dimmed ? "rgba(129, 180, 255, 0.35)" : "rgba(129, 180, 255, 0.9)";
+	}
+	if (relation === "dissimilar") {
+		return dimmed ? "rgba(255, 146, 146, 0.35)" : "rgba(255, 146, 146, 0.9)";
+	}
+	if (dimmed) {
+		return "rgba(120, 120, 120, 0.2)";
+	}
+	return sourceColorRgba(node.data.who, 0.85);
+}
+
+function edgeStrokeStyle(sourceId: string, targetId: string): string {
+	const sourceDimmed = isFilteredOut(sourceId);
+	const targetDimmed = isFilteredOut(targetId);
+	if (sourceDimmed || targetDimmed) {
+		return "rgba(120, 120, 120, 0.12)";
+	}
+	if (relationFor(sourceId) || relationFor(targetId)) {
+		return "rgba(200, 200, 200, 0.6)";
+	}
+	return "rgba(180, 180, 180, 0.4)";
+}
+
+function nodeColor3D(id: string, who: string): string {
+	if (graphSelected?.id === id) return "#ffffff";
+	const relation = relationFor(id);
+	if (relation === "similar") return "#81b4ff";
+	if (relation === "dissimilar") return "#ff9292";
+	if (isFilteredOut(id)) return "#5b5b5b";
+	return sourceColors[who] ?? sourceColors["unknown"];
+}
+
+function refresh3DAppearance() {
+	if (!graph3d) return;
+	graph3d.nodeColor((node: any) =>
+		nodeColor3D(String(node.id), String(node.who ?? "unknown")),
+	);
+	graph3d.refresh?.();
+}
+
+function buildExactKnnEdges(projected: number[][], k: number): [number, number][] {
 	const edgeSet = new Set<string>();
 	const result: [number, number][] = [];
 	for (let i = 0; i < projected.length; i++) {
@@ -429,8 +722,52 @@ function buildKnnEdges(projected: number[][], k: number): [number, number][] {
 	return result;
 }
 
+function buildApproximateKnnEdges(projected: number[][], k: number): [number, number][] {
+	const edgeSet = new Set<string>();
+	const result: [number, number][] = [];
+	const ids = projected.map((_, index) => index);
+	const byX = [...ids].sort((a, b) => projected[a][0] - projected[b][0]);
+	const byY = [...ids].sort((a, b) => projected[a][1] - projected[b][1]);
+	const windowSize = Math.max(2, k * 3);
+
+	const addEdge = (a: number, b: number) => {
+		if (a === b) return;
+		const left = Math.min(a, b);
+		const right = Math.max(a, b);
+		const key = `${left}-${right}`;
+		if (edgeSet.has(key)) return;
+		edgeSet.add(key);
+		result.push([left, right]);
+	};
+
+	const addFromOrdering = (ordering: number[]) => {
+		for (let idx = 0; idx < ordering.length; idx++) {
+			const source = ordering[idx];
+			for (let offset = 1; offset <= windowSize; offset++) {
+				const left = idx - offset;
+				const right = idx + offset;
+				if (left >= 0) addEdge(source, ordering[left]);
+				if (right < ordering.length) addEdge(source, ordering[right]);
+			}
+		}
+	};
+
+	addFromOrdering(byX);
+	addFromOrdering(byY);
+
+	return result;
+}
+
+function buildKnnEdges(projected: number[][], k: number): [number, number][] {
+	if (projected.length <= 450) {
+		return buildExactKnnEdges(projected, k);
+	}
+	return buildApproximateKnnEdges(projected, k);
+}
+
 function screenToWorld(sx: number, sy: number): [number, number] {
-	const rect = canvas!.getBoundingClientRect();
+	if (!canvas) return [0, 0];
+	const rect = canvas.getBoundingClientRect();
 	const cx = rect.width / 2;
 	const cy = rect.height / 2;
 	return [
@@ -442,8 +779,8 @@ function screenToWorld(sx: number, sy: number): [number, number] {
 function findNodeAt(wx: number, wy: number): GraphNode | null {
 	for (let i = nodes.length - 1; i >= 0; i--) {
 		const n = nodes[i];
-		const dx = n.x - wx,
-			dy = n.y - wy;
+		const dx = n.x - wx;
+		const dy = n.y - wy;
 		const hitR = n.radius + 4;
 		if (dx * dx + dy * dy <= hitR * hitR) return n;
 	}
@@ -451,8 +788,9 @@ function findNodeAt(wx: number, wy: number): GraphNode | null {
 }
 
 function draw(ctx: CanvasRenderingContext2D) {
-	const w = canvas!.width,
-		h = canvas!.height;
+	if (!canvas) return;
+	const w = canvas.width;
+	const h = canvas.height;
 	ctx.fillStyle = "#050505";
 	ctx.fillRect(0, 0, w, h);
 	ctx.save();
@@ -466,7 +804,7 @@ function draw(ctx: CanvasRenderingContext2D) {
 		ctx.beginPath();
 		ctx.moveTo(s.x, s.y);
 		ctx.lineTo(t.x, t.y);
-		ctx.strokeStyle = "rgba(180, 180, 180, 0.45)";
+		ctx.strokeStyle = edgeStrokeStyle(s.data.id, t.data.id);
 		ctx.lineWidth = 0.8 / camZoom;
 		ctx.stroke();
 	}
@@ -474,138 +812,44 @@ function draw(ctx: CanvasRenderingContext2D) {
 	for (const node of nodes) {
 		ctx.beginPath();
 		ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-		ctx.fillStyle = "rgba(210, 210, 210, 0.85)";
+		ctx.fillStyle = nodeFillStyle(node);
 		ctx.fill();
 
-		if (graphSelected && node.data === graphSelected) {
+		if (graphSelected && node.data.id === graphSelected.id) {
 			ctx.beginPath();
 			ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
-			ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+			ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
 			ctx.lineWidth = 1.5 / camZoom;
 			ctx.stroke();
 		}
 	}
 
 	if (graphHovered) {
-		const node = nodes.find((n) => n.data === graphHovered);
+		const node = nodes.find((entry) => entry.data.id === graphHovered?.id);
 		if (node) {
-			const raw = graphHovered.text || graphHovered.content || "";
-			const text = raw.slice(0, 48) + (raw.length > 48 ? "..." : "");
+			const text = embeddingLabel(graphHovered);
 			const fs = 9 / camZoom;
 			ctx.font = `${fs}px var(--font-mono)`;
 			ctx.fillStyle = "rgba(220, 220, 220, 0.9)";
 			ctx.textAlign = "left";
-			ctx.fillText(
-				text,
-				node.x + node.radius + 5 / camZoom,
-				node.y + fs * 0.35,
-			);
+			ctx.fillText(text, node.x + node.radius + 5 / camZoom, node.y + fs * 0.35);
 			ctx.textAlign = "start";
-		}
-	}
-
-	if (graphSelected) {
-		const selNode = nodes.find((n) => n.data === graphSelected);
-		if (selNode && selNode.data !== graphHovered) {
-			const raw = (selNode.data.text || selNode.data.content || "")
-				.trim()
-				.toUpperCase();
-			if (raw) {
-				const fs = 10 / camZoom;
-				ctx.font = `${fs}px var(--font-mono)`;
-
-				// Word-wrap into lines
-				const maxW = 200 / camZoom;
-				const words = raw.split(" ");
-				const lines: string[] = [];
-				let cur = "";
-				for (const w of words) {
-					const test = cur ? cur + " " + w : w;
-					if (cur && ctx.measureText(test).width > maxW) {
-						lines.push(cur);
-						cur = w;
-					} else {
-						cur = test;
-					}
-				}
-				if (cur) lines.push(cur);
-				const dl = lines.slice(0, 8);
-
-				const lineH = fs * 1.8;
-				const padX = 10 / camZoom;
-				const padY = 8 / camZoom;
-				const boxW =
-					Math.max(...dl.map((l) => ctx.measureText(l).width)) + padX * 2;
-				const boxH = dl.length * lineH + padY * 2;
-
-				// Callout bracket positioned to the left of the node
-				const barLen = 16 / camZoom;
-				const edgeGap = 50 / camZoom;
-				const bracketRX = selNode.x - edgeGap;
-				const bracketLX = bracketRX - barLen;
-				const bx = bracketLX - 4 / camZoom - boxW;
-				const by = selNode.y - boxH * 0.35;
-
-				ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
-				ctx.lineWidth = 1.5 / camZoom;
-				ctx.lineCap = "square";
-
-				// Diagonal connector: node → top-right corner of bracket
-				ctx.beginPath();
-				ctx.moveTo(selNode.x, selNode.y);
-				ctx.lineTo(bracketRX, by);
-				ctx.stroke();
-
-				// ] bracket shape
-				ctx.beginPath();
-				ctx.moveTo(bracketLX, by);
-				ctx.lineTo(bracketRX, by);
-				ctx.lineTo(bracketRX, by + boxH);
-				ctx.lineTo(bracketLX, by + boxH);
-				ctx.stroke();
-
-				ctx.lineCap = "butt";
-
-				// Black background for text block
-				ctx.fillStyle = "#050505";
-				ctx.fillRect(bx, by, boxW, boxH);
-
-				// First line: inverted (white bg, dark text)
-				ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
-				ctx.fillRect(bx, by + padY, boxW, lineH);
-				ctx.fillStyle = "#050505";
-				ctx.textAlign = "center";
-				ctx.fillText(dl[0], bx + boxW / 2, by + padY + lineH * 0.75);
-
-				// Remaining lines: white text on black
-				ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-				for (let i = 1; i < dl.length; i++) {
-					ctx.fillText(dl[i], bx + boxW / 2, by + padY + lineH * (i + 0.75));
-				}
-				ctx.textAlign = "start";
-			}
 		}
 	}
 
 	ctx.restore();
 
-	// Minimal legend — monochrome
-	const legendSources = [
-		"claude-code",
-		"clawdbot",
-		"openclaw",
-		"opencode",
-		"manual",
-	];
+	const legendSources = ["claude-code", "clawdbot", "openclaw", "opencode", "manual"];
 	const lx = 12;
 	let ly = h - 12 - legendSources.length * 16;
 	ctx.font = "10px var(--font-mono)";
 	for (const name of legendSources) {
+		const [r, g, b] = hexToRgb(sourceColors[name] ?? sourceColors["unknown"]);
 		ctx.beginPath();
 		ctx.arc(lx + 3, ly, 3, 0, Math.PI * 2);
-		ctx.fillStyle = "rgba(200, 200, 200, 0.5)";
+		ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.8)`;
 		ctx.fill();
-		ctx.fillStyle = "rgba(200, 200, 200, 0.35)";
+		ctx.fillStyle = "rgba(200, 200, 200, 0.4)";
 		ctx.fillText(name, lx + 12, ly + 3);
 		ly += 16;
 	}
@@ -615,9 +859,15 @@ function draw(ctx: CanvasRenderingContext2D) {
 
 function setupInteractions() {
 	if (!canvas) return;
+	if (interactionCleanup) {
+		interactionCleanup();
+		interactionCleanup = null;
+	}
 
-	canvas.addEventListener("pointerdown", (e) => {
-		const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+	const target = canvas;
+
+	const onPointerDown = (event: PointerEvent) => {
+		const [wx, wy] = screenToWorld(event.clientX, event.clientY);
 		const node = findNodeAt(wx, wy);
 		if (node) {
 			isDragging = true;
@@ -627,32 +877,32 @@ function setupInteractions() {
 			simulation?.alphaTarget(0.3).restart();
 		} else {
 			isPanning = true;
-			panStartX = e.clientX;
-			panStartY = e.clientY;
+			panStartX = event.clientX;
+			panStartY = event.clientY;
 			panCamStartX = camX;
 			panCamStartY = camY;
 		}
-	});
+	};
 
-	canvas.addEventListener("pointermove", (e) => {
+	const onPointerMove = (event: PointerEvent) => {
 		if (isDragging && dragNode) {
-			const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+			const [wx, wy] = screenToWorld(event.clientX, event.clientY);
 			dragNode.fx = wx;
 			dragNode.fy = wy;
 			return;
 		}
 		if (isPanning) {
-			camX = panCamStartX - (e.clientX - panStartX) / camZoom;
-			camY = panCamStartY - (e.clientY - panStartY) / camZoom;
+			camX = panCamStartX - (event.clientX - panStartX) / camZoom;
+			camY = panCamStartY - (event.clientY - panStartY) / camZoom;
 			return;
 		}
-		const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+		const [wx, wy] = screenToWorld(event.clientX, event.clientY);
 		const node = findNodeAt(wx, wy);
-		graphHovered = node?.data || null;
-		canvas!.style.cursor = node ? "pointer" : "grab";
-	});
+		graphHovered = node?.data ?? null;
+		target.style.cursor = node ? "pointer" : "grab";
+	};
 
-	const pointerUp = () => {
+	const onPointerUp = () => {
 		if (isDragging && dragNode) {
 			dragNode.fx = null;
 			dragNode.fy = null;
@@ -664,51 +914,102 @@ function setupInteractions() {
 		isPanning = false;
 	};
 
-	canvas.addEventListener("pointerup", pointerUp);
-	canvas.addEventListener("pointerleave", pointerUp);
-
-	canvas.addEventListener("click", (e) => {
+	const onClick = (event: MouseEvent) => {
 		if (isDragging) return;
-		const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+		const [wx, wy] = screenToWorld(event.clientX, event.clientY);
 		const node = findNodeAt(wx, wy);
-		graphSelected = node?.data || null;
-	});
+		graphSelected = node?.data ?? null;
+	};
 
-	canvas.addEventListener(
-		"wheel",
-		(e) => {
-			e.preventDefault();
-			const factor = e.deltaY > 0 ? 0.9 : 1.1;
-			const newZoom = Math.max(0.1, Math.min(5, camZoom * factor));
-			const rect = canvas!.getBoundingClientRect();
-			const cx = rect.width / 2,
-				cy = rect.height / 2;
-			const mx = e.clientX - rect.left - cx;
-			const my = e.clientY - rect.top - cy;
-			const wx = mx / camZoom + camX;
-			const wy = my / camZoom + camY;
-			camZoom = newZoom;
-			camX = wx - mx / camZoom;
-			camY = wy - my / camZoom;
-		},
-		{ passive: false },
-	);
+	const onWheel = (event: WheelEvent) => {
+		event.preventDefault();
+		const factor = event.deltaY > 0 ? 0.9 : 1.1;
+		const newZoom = Math.max(0.1, Math.min(5, camZoom * factor));
+		const rect = target.getBoundingClientRect();
+		const cx = rect.width / 2;
+		const cy = rect.height / 2;
+		const mx = event.clientX - rect.left - cx;
+		const my = event.clientY - rect.top - cy;
+		const wx = mx / camZoom + camX;
+		const wy = my / camZoom + camY;
+		camZoom = newZoom;
+		camX = wx - mx / camZoom;
+		camY = wy - my / camZoom;
+	};
+
+	target.addEventListener("pointerdown", onPointerDown);
+	target.addEventListener("pointermove", onPointerMove);
+	target.addEventListener("pointerup", onPointerUp);
+	target.addEventListener("pointerleave", onPointerUp);
+	target.addEventListener("click", onClick);
+	target.addEventListener("wheel", onWheel, { passive: false });
+
+	interactionCleanup = () => {
+		target.removeEventListener("pointerdown", onPointerDown);
+		target.removeEventListener("pointermove", onPointerMove);
+		target.removeEventListener("pointerup", onPointerUp);
+		target.removeEventListener("pointerleave", onPointerUp);
+		target.removeEventListener("click", onClick);
+		target.removeEventListener("wheel", onWheel);
+	};
 }
 
 function resizeCanvas() {
 	if (!canvas) return;
-	const rect = canvas.parentElement!.getBoundingClientRect();
+	const rect = canvas.parentElement?.getBoundingClientRect();
+	if (!rect) return;
 	canvas.width = rect.width;
 	canvas.height = rect.height;
+}
+
+async function reloadEmbeddingsGraph() {
+	graphInitialized = false;
+	graphStatus = "";
+	graphError = "";
+	projected3dCache = null;
+	graphSelected = null;
+	graphHovered = null;
+	globalSimilar = [];
+	loadingGlobalSimilar = false;
+	embeddingById = new Map();
+	embeddingNormById = new Map();
+	relationLookup = new Map();
+	similarNeighbors = [];
+	dissimilarNeighbors = [];
+	activeNeighbors = [];
+	embeddings = [];
+	embeddingsTotal = 0;
+	embeddingsHasMore = false;
+	nodes = [];
+	edges = [];
+	camX = 0;
+	camY = 0;
+	camZoom = 1;
+	simulation?.stop();
+	simulation = null;
+	cancelAnimationFrame(animFrame);
+	if (graph3d) {
+		graph3d._destructor?.();
+		graph3d = null;
+	}
+	graphMode = "2d";
+
+	await tick();
+	if (activeTab === "embeddings" && canvas) {
+		initGraph();
+	}
 }
 
 async function initGraph() {
 	if (graphInitialized) return;
 	graphInitialized = true;
+	graphError = "";
 	graphStatus = "Loading embeddings...";
+	const loadId = ++graphLoadId;
 
 	try {
-		const result = await getEmbeddings(true);
+		const result = await getEmbeddings(true, { limit: embeddingLimit });
+		if (loadId !== graphLoadId) return;
 
 		if (result.error) {
 			graphError = result.error;
@@ -716,17 +1017,24 @@ async function initGraph() {
 			return;
 		}
 
-		embeddings = result.embeddings || [];
-		if (embeddings.length === 0 || !embeddings[0].vector) {
+		embeddings = (result.embeddings ?? []).filter(hasEmbeddingVector);
+		embeddingsTotal = result.total || embeddings.length;
+		embeddingsHasMore = Boolean(result.hasMore);
+		embeddingById = new Map(embeddings.map((item) => [item.id, item]));
+		embeddingNormById = new Map();
+		projected3dCache = null;
+
+		if (embeddings.length === 0) {
 			graphStatus = "";
-			if (embeddings.length > 0) graphError = "No vector data available";
 			return;
 		}
 
 		graphStatus = `Computing UMAP (${embeddings.length})...`;
-		await new Promise((r) => setTimeout(r, 50));
+		await new Promise((resolve) => setTimeout(resolve, 30));
 
-		const vectors = embeddings.map((e: any) => e.vector);
+		const vectors = embeddings
+			.map((item) => item.vector)
+			.filter((vector): vector is number[] => Array.isArray(vector));
 		const umap = new UMAP({
 			nComponents: 2,
 			nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
@@ -737,66 +1045,82 @@ async function initGraph() {
 		let projected: number[][];
 		try {
 			projected = umap.fit(vectors);
-		} catch (umapErr: any) {
-			graphError = `UMAP failed: ${umapErr.message}`;
+		} catch (error) {
+			graphError = `UMAP failed: ${(error as Error).message}`;
 			graphStatus = "";
 			return;
 		}
 
 		graphStatus = "Building graph...";
-		await new Promise((r) => setTimeout(r, 50));
+		await new Promise((resolve) => setTimeout(resolve, 30));
 
-		let minX = Infinity,
-			maxX = -Infinity;
-		let minY = Infinity,
-			maxY = -Infinity;
-		for (const p of projected) {
-			if (p[0] < minX) minX = p[0];
-			if (p[0] > maxX) maxX = p[0];
-			if (p[1] < minY) minY = p[1];
-			if (p[1] > maxY) maxY = p[1];
+		let minX = Infinity;
+		let maxX = -Infinity;
+		let minY = Infinity;
+		let maxY = -Infinity;
+		for (const point of projected) {
+			if (point[0] < minX) minX = point[0];
+			if (point[0] > maxX) maxX = point[0];
+			if (point[1] < minY) minY = point[1];
+			if (point[1] > maxY) maxY = point[1];
 		}
+
 		const rangeX = maxX - minX || 1;
 		const rangeY = maxY - minY || 1;
-		const scale = 400;
+		const scale = 420;
 
-		nodes = embeddings.map((emb: any, i: number) => ({
-			x: ((projected[i][0] - minX) / rangeX - 0.5) * scale,
-			y: ((projected[i][1] - minY) / rangeY - 0.5) * scale,
-			radius: 2.5 + (emb.importance || 0.5) * 2.5,
-			color: "rgba(210, 210, 210, 0.85)",
-			data: emb,
+		nodes = embeddings.map((embedding, index) => ({
+			x: ((projected[index][0] - minX) / rangeX - 0.5) * scale,
+			y: ((projected[index][1] - minY) / rangeY - 0.5) * scale,
+			radius: 2.3 + (embedding.importance ?? 0.5) * 2.8,
+			color: sourceColorRgba(embedding.who, 0.85),
+			data: embedding,
 		}));
 
-		edges = buildKnnEdges(projected, 4).map(([a, b]) => ({
-			source: a,
-			target: b,
+		edges = buildKnnEdges(projected, GRAPH_K).map(([source, target]) => ({
+			source,
+			target,
 		}));
 
+		simulation?.stop();
 		simulation = forceSimulation(nodes as any)
-			.force("link", forceLink(edges).distance(60).strength(0.3))
-			.force("charge", forceManyBody().strength(-80))
+			.force("link", forceLink(edges).distance(58).strength(0.28))
+			.force("charge", forceManyBody().strength(-72))
 			.force("center", forceCenter(0, 0))
 			.force(
 				"collide",
-				forceCollide().radius((d: any) => d.radius + 2),
+				forceCollide().radius((entry: any) => entry.radius + 2),
 			)
-			.alphaDecay(0.02)
+			.alphaDecay(0.03)
 			.on("tick", () => {});
 
 		graphStatus = "";
 		await tick();
+		if (loadId !== graphLoadId) return;
 
 		resizeCanvas();
-		window.addEventListener("resize", resizeCanvas);
+		if (!resizeListenerAttached) {
+			window.addEventListener("resize", resizeCanvas);
+			resizeListenerAttached = true;
+		}
 		setupInteractions();
 
-		const ctx = canvas!.getContext("2d")!;
-		draw(ctx);
-	} catch (e: any) {
-		graphError = e.message || "Failed to load embeddings";
+		const context = canvas?.getContext("2d");
+		if (context) {
+			cancelAnimationFrame(animFrame);
+			draw(context);
+		}
+	} catch (error) {
+		graphError = (error as Error).message || "Failed to load embeddings";
 		graphStatus = "";
 	}
+}
+
+function nodeTooltip(id: string): string {
+	const item = getEmbeddingById(id);
+	if (!item) return "";
+	const preview = embeddingLabel(item);
+	return `${item.who ?? "unknown"} - ${preview}`;
 }
 
 async function init3DGraph(projected3d: number[][]) {
@@ -809,22 +1133,21 @@ async function init3DGraph(projected3d: number[][]) {
 
 	const { default: ForceGraph3D } = await import("3d-force-graph");
 
-	const nodeData = embeddings.map((e: any, i: number) => ({
-		id: e.id,
-		content: e.content,
-		who: e.who,
-		importance: e.importance ?? 0.5,
-		x: projected3d[i][0] * 50,
-		y: projected3d[i][1] * 50,
-		z: projected3d[i][2] * 50,
-		color: sourceColors[e.who] ?? sourceColors["unknown"],
-		val: 1 + (e.importance ?? 0.5) * 3,
+	const nodeData = embeddings.map((embedding, index) => ({
+		id: embedding.id,
+		content: embedding.content,
+		who: embedding.who,
+		importance: embedding.importance ?? 0.5,
+		x: projected3d[index][0] * 52,
+		y: projected3d[index][1] * 52,
+		z: projected3d[index][2] * 52,
+		val: 1 + (embedding.importance ?? 0.5) * 2.6,
 	}));
 
-	const edgePairs = buildKnnEdges(projected3d, 4);
-	const linkData = edgePairs.map(([a, b]) => ({
-		source: nodeData[a].id,
-		target: nodeData[b].id,
+	const edgePairs = buildKnnEdges(projected3d, GRAPH_K);
+	const linkData = edgePairs.map(([source, target]) => ({
+		source: nodeData[source].id,
+		target: nodeData[target].id,
 	}));
 
 	const rect = graph3dContainer.getBoundingClientRect();
@@ -832,14 +1155,17 @@ async function init3DGraph(projected3d: number[][]) {
 		.width(rect.width || graph3dContainer.offsetWidth)
 		.height(rect.height || graph3dContainer.offsetHeight)
 		.graphData({ nodes: nodeData, links: linkData })
-		.nodeLabel((n: any) => n.content?.slice(0, 80) ?? "")
-		.nodeColor(() => "#d4d4d4")
-		.nodeVal((n: any) => 0.6 + (n.importance ?? 0.5) * 1.5)
+		.nodeLabel((node: any) => nodeTooltip(String(node.id)))
+		.nodeColor((node: any) => nodeColor3D(String(node.id), String(node.who ?? "unknown")))
+		.nodeVal((node: any) => 0.6 + (node.importance ?? 0.5) * 1.4)
 		.linkColor(() => "rgba(160,160,160,0.5)")
-		.linkWidth(0.5)
+		.linkWidth(0.45)
 		.backgroundColor("#050505")
-		.onNodeClick((n: any) => {
-			graphSelected = n;
+		.onNodeClick((node: any) => {
+			selectEmbeddingById(String(node.id), true);
+		})
+		.onNodeHover((node: any) => {
+			graphHovered = node ? getEmbeddingById(String(node.id)) : null;
 		});
 }
 
@@ -852,45 +1178,122 @@ async function switchGraphMode(mode: "2d" | "3d") {
 
 		if (!graphInitialized || embeddings.length === 0) return;
 
-		graphStatus = "Computing 3D layout...";
-		await new Promise((r) => setTimeout(r, 50));
+		if (!projected3dCache) {
+			graphStatus = "Computing 3D layout...";
+			await new Promise((resolve) => setTimeout(resolve, 30));
 
-		const vectors = embeddings.map((e: any) => e.vector);
-		const umap3d = new UMAP({
-			nComponents: 3,
-			nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
-			minDist: 0.1,
-			spread: 1.0,
-		});
+			const vectors = embeddings
+				.map((entry) => entry.vector)
+				.filter((vector): vector is number[] => Array.isArray(vector));
+			const umap3d = new UMAP({
+				nComponents: 3,
+				nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
+				minDist: 0.1,
+				spread: 1.0,
+			});
 
-		let projected3d: number[][];
-		try {
-			projected3d = umap3d.fit(vectors);
-		} catch (e: any) {
-			graphError = `3D UMAP failed: ${e.message}`;
-			graphStatus = "";
-			graphMode = "2d";
-			const ctx = canvas?.getContext("2d");
-			if (ctx) draw(ctx);
-			return;
+			try {
+				projected3dCache = umap3d.fit(vectors);
+			} catch (error) {
+				graphError = `3D UMAP failed: ${(error as Error).message}`;
+				graphStatus = "";
+				graphMode = "2d";
+				const context = canvas?.getContext("2d");
+				if (context) draw(context);
+				return;
+			}
 		}
 
 		graphStatus = "";
 		await tick();
-		await init3DGraph(projected3d);
+		await init3DGraph(projected3dCache);
+		refresh3DAppearance();
+		if (graphSelected) {
+			focusEmbedding3D(graphSelected.id);
+		}
 	} else {
 		if (graph3d) {
 			graph3d._destructor?.();
 			graph3d = null;
 		}
 		await tick();
-		const ctx = canvas?.getContext("2d");
-		if (ctx) {
+		const context = canvas?.getContext("2d");
+		if (context) {
 			cancelAnimationFrame(animFrame);
-			draw(ctx);
+			draw(context);
 		}
 	}
 }
+
+async function loadGlobalSimilarForSelected() {
+	if (!graphSelected) return;
+	loadingGlobalSimilar = true;
+	try {
+		globalSimilar = await getSimilarMemories(graphSelected.id, 10, filterType || undefined);
+	} finally {
+		loadingGlobalSimilar = false;
+	}
+}
+
+function openGlobalSimilar(memory: Memory) {
+	const local = getEmbeddingById(memory.id);
+	if (local) {
+		selectEmbeddingById(local.id, true);
+		return;
+	}
+	memoryQuery = memory.content;
+	queueMemorySearch();
+}
+
+$effect(() => {
+	const query = embeddingSearch.trim().toLowerCase();
+	const rows = embeddings;
+	if (!query) {
+		embeddingFilterIds = null;
+		embeddingSearchMatches = [];
+		if (graphMode === "3d") refresh3DAppearance();
+		return;
+	}
+
+	const ids = new Set<string>();
+	const matches: EmbeddingPoint[] = [];
+	for (const row of rows) {
+		const haystack = [
+			row.content,
+			row.text ?? "",
+			row.who ?? "",
+			row.type ?? "",
+			row.sourceType ?? "",
+			row.sourceId ?? "",
+			...(row.tags ?? []),
+		]
+			.join(" ")
+			.toLowerCase();
+		if (haystack.includes(query)) {
+			ids.add(row.id);
+			matches.push(row);
+		}
+	}
+
+	embeddingFilterIds = ids;
+	embeddingSearchMatches = matches.slice(0, 50);
+	if (graphMode === "3d") refresh3DAppearance();
+});
+
+$effect(() => {
+	computeRelationsForSelection(graphSelected);
+});
+
+$effect(() => {
+	const mode = relationMode;
+	const similar = similarNeighbors;
+	const dissimilar = dissimilarNeighbors;
+	activeNeighbors = mode === "similar" ? similar : dissimilar;
+	relationLookup = new Map(activeNeighbors.map((item) => [item.id, item.kind]));
+	if (graphMode === "3d") {
+		refresh3DAppearance();
+	}
+});
 
 $effect(() => {
 	if (activeTab === "embeddings" && canvas && !graphInitialized) {
@@ -899,7 +1302,6 @@ $effect(() => {
 });
 
 $effect(() => {
-	// Restart 2D loop when canvas is (re)mounted and data is ready
 	if (
 		activeTab === "embeddings" &&
 		canvas &&
@@ -910,8 +1312,8 @@ $effect(() => {
 		tick().then(() => {
 			resizeCanvas();
 			cancelAnimationFrame(animFrame);
-			const ctx = canvas?.getContext("2d");
-			if (ctx) draw(ctx);
+			const context = canvas?.getContext("2d");
+			if (context) draw(context);
 		});
 	}
 });
@@ -928,11 +1330,12 @@ $effect(() => {
 	}
 });
 
-// --- Memory sidebar ---
+// --- Memory workspace ---
 let memoryQuery = $state("");
-let memoryResults = $state<any[]>([]);
+let memoryResults = $state<Memory[]>([]);
 let memorySearched = $state(false);
 let searchingMemory = $state(false);
+let memorySearchTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Filter panel state
 let filtersOpen = $state(false);
@@ -946,8 +1349,8 @@ let whoOptions = $state<string[]>([]);
 
 // Similar-results state
 let similarSourceId = $state<string | null>(null);
-let similarSource = $state<any>(null);
-let similarResults = $state<any[]>([]);
+let similarSource = $state<Memory | null>(null);
+let similarResults = $state<Memory[]>([]);
 let loadingSimilar = $state(false);
 
 let hasActiveFilters = $derived(
@@ -961,55 +1364,81 @@ let hasActiveFilters = $derived(
 	),
 );
 
+let memoryDocs = $derived((data.memories ?? []) as Memory[]);
+
 let displayMemories = $derived(
 	similarSourceId
 		? similarResults
 		: memorySearched || hasActiveFilters
 			? memoryResults
-			: (data.memories ?? []),
+			: memoryDocs,
 );
 
-function filterSearchParams(): string {
-	const p = new URLSearchParams();
-	if (memoryQuery.trim()) p.set("q", memoryQuery.trim());
-	if (filterType) p.set("type", filterType);
-	if (filterTags) p.set("tags", filterTags);
-	if (filterWho) p.set("who", filterWho);
-	if (filterPinned) p.set("pinned", "1");
-	if (filterImportanceMin) p.set("importance_min", filterImportanceMin);
-	if (filterSince) p.set("since", filterSince);
-	return p.toString();
+function queueMemorySearch() {
+	if (memorySearchTimer) {
+		clearTimeout(memorySearchTimer);
+	}
+
+	memorySearchTimer = setTimeout(() => {
+		doSearch();
+	}, 150);
 }
 
 async function doSearch() {
-	const hasQuery = memoryQuery.trim();
-	if (!hasQuery && !hasActiveFilters) {
+	if (memorySearchTimer) {
+		clearTimeout(memorySearchTimer);
+		memorySearchTimer = null;
+	}
+
+	const query = memoryQuery.trim();
+	if (!query && !hasActiveFilters) {
 		memoryResults = [];
 		memorySearched = false;
 		similarSourceId = null;
+		similarSource = null;
+		similarResults = [];
 		return;
 	}
+
 	similarSourceId = null;
+	similarSource = null;
+	similarResults = [];
 	searchingMemory = true;
+
+	const parsedImportance = filterImportanceMin
+		? parseFloat(filterImportanceMin)
+		: undefined;
+
 	try {
-		const results = await searchMemories(memoryQuery.trim(), {
-			type: filterType || undefined,
-			tags: filterTags || undefined,
-			who: filterWho || undefined,
-			pinned: filterPinned || undefined,
-			importance_min: filterImportanceMin
-				? parseFloat(filterImportanceMin)
-				: undefined,
-			since: filterSince || undefined,
-		});
-		memoryResults = results;
+		if (query) {
+			memoryResults = await recallMemories(query, {
+				type: filterType || undefined,
+				tags: filterTags || undefined,
+				who: filterWho || undefined,
+				pinned: filterPinned || undefined,
+				importance_min: parsedImportance,
+				since: filterSince || undefined,
+				limit: 120,
+			});
+		} else {
+			memoryResults = await searchMemories("", {
+				type: filterType || undefined,
+				tags: filterTags || undefined,
+				who: filterWho || undefined,
+				pinned: filterPinned || undefined,
+				importance_min: parsedImportance,
+				since: filterSince || undefined,
+				limit: 250,
+			});
+		}
+
 		memorySearched = true;
 	} finally {
 		searchingMemory = false;
 	}
 }
 
-async function findSimilar(id: string, sourceMemory: any) {
+async function findSimilar(id: string, sourceMemory: Memory) {
 	similarSourceId = id;
 	similarSource = sourceMemory;
 	loadingSimilar = true;
@@ -1035,6 +1464,10 @@ function clearAll() {
 	similarSourceId = null;
 	similarSource = null;
 	similarResults = [];
+	if (memorySearchTimer) {
+		clearTimeout(memorySearchTimer);
+		memorySearchTimer = null;
+	}
 }
 
 // Trigger search whenever filters change (without needing Enter)
@@ -1047,7 +1480,7 @@ $effect(() => {
 		_____ = filterImportanceMin,
 		______ = filterSince;
 	if (hasActiveFilters || memorySearched) {
-		doSearch();
+		queueMemorySearch();
 	}
 });
 
@@ -1059,6 +1492,50 @@ $effect(() => {
 		})
 		.catch(() => {});
 });
+
+function parseMemoryTags(raw: Memory["tags"]): string[] {
+	if (!raw) {
+		return [];
+	}
+
+	if (Array.isArray(raw)) {
+		return raw.filter((tag) => typeof tag === "string" && tag.trim().length > 0);
+	}
+
+	const trimmed = raw.trim();
+	if (!trimmed) {
+		return [];
+	}
+
+	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+		try {
+			const parsed = JSON.parse(trimmed) as unknown;
+			if (Array.isArray(parsed)) {
+				return parsed.filter(
+					(tag): tag is string =>
+						typeof tag === "string" && tag.trim().length > 0,
+				);
+			}
+		} catch {
+			// Fallback to comma split below
+		}
+	}
+
+	return trimmed
+		.split(",")
+		.map((tag) => tag.trim())
+		.filter(Boolean);
+}
+
+function memoryScoreLabel(memory: Memory): string | null {
+	if (typeof memory.score !== "number") {
+		return null;
+	}
+
+	const score = Math.round(memory.score * 100);
+	const source = memory.source ?? "semantic";
+	return `${source} ${score}%`;
+}
 
 function formatDate(dateStr: string): string {
 	try {
@@ -1188,6 +1665,13 @@ function formatDate(dateStr: string): string {
           </button>
           <button
             class="tab"
+            class:tab-active={activeTab === 'memory'}
+            onclick={() => activeTab = 'memory'}
+          >
+            Memory
+          </button>
+          <button
+            class="tab"
             class:tab-active={activeTab === 'embeddings'}
             onclick={() => activeTab = 'embeddings'}
           >
@@ -1225,8 +1709,37 @@ function formatDate(dateStr: string): string {
             <button class="btn-primary" onclick={saveFile} disabled={saving}>
               {saving ? 'Saving...' : 'Save'}
             </button>
+          {:else if activeTab === 'memory'}
+            <span class="status-text">{displayMemories.length} documents</span>
+            {#if searchingMemory}
+              <span class="status-text">searching embeddings...</span>
+            {/if}
+            {#if memorySearched || hasActiveFilters || similarSourceId}
+              <button class="btn-text" onclick={clearAll}>Reset</button>
+            {/if}
           {:else if activeTab === 'embeddings'}
-            <span class="status-text">{embeddings.length} embeddings</span>
+            <span class="status-text">
+              {embeddings.length} embeddings{#if embeddingsHasMore} / {embeddingsTotal}{/if}
+            </span>
+            <label class="embedding-limit-shell">
+              <span>limit</span>
+              <input
+                type="number"
+                class="embedding-limit-input"
+                min={MIN_EMBEDDING_LIMIT}
+                max={MAX_EMBEDDING_LIMIT}
+                step="50"
+                bind:value={embeddingLimitInput}
+                onkeydown={(e) => e.key === 'Enter' && applyEmbeddingLimit()}
+                onchange={applyEmbeddingLimit}
+              />
+            </label>
+            <button class="btn-icon" onclick={reloadEmbeddingsGraph} title="Reload embeddings">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M2 7a5 5 0 019-3M12 7a5 5 0 01-9 3"/>
+                <path d="M2 4v3h3M12 10v-3h-3"/>
+              </svg>
+            </button>
             {#if graphInitialized && embeddings.length > 0}
               <div class="mode-toggle">
                 <button
@@ -1299,42 +1812,324 @@ function formatDate(dateStr: string): string {
             spellcheck="false"
             placeholder="Empty file..."
           ></textarea>
-        {:else if activeTab === 'embeddings'}
-          <div class="canvas-container">
-            {#if graphStatus}
-              <div class="overlay">
-                <p>{graphStatus}</p>
-              </div>
-            {:else if graphError}
-              <div class="overlay">
-                <p class="text-error">{graphError}</p>
-              </div>
-            {:else if graphInitialized && embeddings.length === 0}
-              <div class="overlay">
-                <p>No embeddings found</p>
-              </div>
-            {:else if !graphInitialized}
-              <div class="overlay">
-                <p>Loading...</p>
+        {:else if activeTab === 'memory'}
+          <section class="memory-library">
+            <div class="memory-library-toolbar">
+              <label class="memory-search-shell">
+                <span class="memory-search-glyph">◇</span>
+                <input
+                  type="text"
+                  class="memory-library-search"
+                  bind:value={memoryQuery}
+                  oninput={queueMemorySearch}
+                  onkeydown={(e) => e.key === 'Enter' && doSearch()}
+                  placeholder="Search across embeddings..."
+                />
+              </label>
+
+              {#if memorySearched || hasActiveFilters || similarSourceId}
+                <button class="btn-text memory-toolbar-clear" onclick={clearAll}>Clear</button>
+              {/if}
+            </div>
+
+            <div class="memory-library-filters">
+              <select class="memory-filter-select" bind:value={filterWho}>
+                <option value="">Any source</option>
+                {#each whoOptions as w}
+                  <option>{w}</option>
+                {/each}
+              </select>
+              <input
+                class="memory-filter-input"
+                placeholder="Tags (comma separated)"
+                bind:value={filterTags}
+              />
+              <input
+                type="number"
+                class="memory-filter-number"
+                min="0"
+                max="1"
+                step="0.1"
+                bind:value={filterImportanceMin}
+                placeholder="imp"
+              />
+              <input type="date" class="memory-filter-date" bind:value={filterSince} />
+              <button
+                class="memory-filter-pill"
+                class:memory-filter-pill-active={filterPinned}
+                onclick={() => filterPinned = !filterPinned}
+              >
+                pinned only
+              </button>
+            </div>
+
+            <div class="memory-library-types">
+              {#each ['fact', 'decision', 'preference', 'issue', 'learning'] as t}
+                <button
+                  class="memory-type-chip"
+                  class:memory-type-chip-active={filterType === t}
+                  onclick={() => filterType = filterType === t ? '' : t}
+                >
+                  {t}
+                </button>
+              {/each}
+            </div>
+
+            {#if similarSourceId && similarSource}
+              <div class="memory-similar-banner">
+                <span>
+                  Similar to: {(similarSource.content ?? '').slice(0, 100)}
+                  {(similarSource.content ?? '').length > 100 ? '...' : ''}
+                </span>
+                <button
+                  class="btn-text"
+                  onclick={() => {
+                    similarSourceId = null;
+                    similarSource = null;
+                    similarResults = [];
+                  }}
+                >
+                  Back to list
+                </button>
               </div>
             {/if}
-            <div class="graph-ascii" aria-hidden="true">:: ○ ○ 01 10 11 // latent topology</div>
-            <div class="graph-corners" aria-hidden="true">
-              <span class="corner corner-tl"></span>
-              <span class="corner corner-tr"></span>
-              <span class="corner corner-bl"></span>
-              <span class="corner corner-br"></span>
+
+            <div class="memory-doc-grid">
+              {#if loadingSimilar}
+                <div class="empty memory-library-empty">Finding similar memories...</div>
+              {:else}
+                {#each displayMemories as memory}
+                  {@const tags = parseMemoryTags(memory.tags)}
+                  {@const scoreLabel = memoryScoreLabel(memory)}
+
+                  <article class="memory-doc">
+                    <header class="memory-doc-head">
+                      <div class="memory-doc-stamp">
+                        <span class="memory-doc-source">{memory.who || 'unknown'}</span>
+                        {#if memory.type}
+                          <span class="memory-doc-type">{memory.type}</span>
+                        {/if}
+                        {#if memory.pinned}
+                          <span class="memory-doc-pin">pinned</span>
+                        {/if}
+                      </div>
+                      <span class="memory-doc-date">{formatDate(memory.created_at)}</span>
+                    </header>
+
+                    <p class="memory-doc-content">{memory.content}</p>
+
+                    {#if tags.length > 0}
+                      <div class="memory-doc-tags">
+                        {#each tags.slice(0, 6) as tag}
+                          <span class="memory-doc-tag">#{tag}</span>
+                        {/each}
+                      </div>
+                    {/if}
+
+                    <footer class="memory-doc-foot">
+                      <span class="memory-doc-importance">
+                        importance {Math.round((memory.importance ?? 0) * 100)}%
+                      </span>
+
+                      {#if scoreLabel}
+                        <span class="memory-doc-match">{scoreLabel}</span>
+                      {/if}
+
+                      {#if memory.id}
+                        <button
+                          class="btn-similar btn-similar-visible"
+                          onclick={() => findSimilar(memory.id, memory)}
+                          title="Find similar"
+                        >
+                          similar
+                        </button>
+                      {/if}
+                    </footer>
+                  </article>
+                {:else}
+                  <div class="empty memory-library-empty">
+                    {similarSourceId
+                      ? 'No similar memories found.'
+                      : memorySearched || hasActiveFilters
+                        ? 'No memories matched your search.'
+                        : 'No memories available yet.'}
+                  </div>
+                {/each}
+              {/if}
             </div>
-            <canvas
-              bind:this={canvas}
-              class="canvas"
-              style:display={graphMode === '2d' ? 'block' : 'none'}
-            ></canvas>
-            <div
-              bind:this={graph3dContainer}
-              class="graph3d-container"
-              style:display={graphMode === '3d' ? 'block' : 'none'}
-            ></div>
+          </section>
+        {:else if activeTab === 'embeddings'}
+          <div class="embeddings-layout">
+            <div class="canvas-container">
+              <div class="graph-toolbar">
+                <input
+                  type="text"
+                  class="graph-toolbar-input"
+                  bind:value={embeddingSearch}
+                  placeholder="Filter embeddings (content, source, tags)..."
+                />
+                {#if embeddingSearch}
+                  <span class="graph-toolbar-meta">
+                    {embeddingSearchMatches.length} match{embeddingSearchMatches.length === 1 ? '' : 'es'}
+                  </span>
+                {/if}
+                {#if embeddingsHasMore}
+                  <span class="graph-toolbar-meta">showing latest {embeddings.length} of {embeddingsTotal}</span>
+                {/if}
+              </div>
+
+              {#if graphStatus}
+                <div class="overlay">
+                  <p>{graphStatus}</p>
+                </div>
+              {:else if graphError}
+                <div class="overlay">
+                  <p class="text-error">{graphError}</p>
+                </div>
+              {:else if graphInitialized && embeddings.length === 0}
+                <div class="overlay">
+                  <p>No embeddings found</p>
+                </div>
+              {:else if !graphInitialized}
+                <div class="overlay">
+                  <p>Loading...</p>
+                </div>
+              {/if}
+
+              <div class="graph-ascii" aria-hidden="true">:: ○ ○ 01 10 11 // latent topology</div>
+              <div class="graph-corners" aria-hidden="true">
+                <span class="corner corner-tl"></span>
+                <span class="corner corner-tr"></span>
+                <span class="corner corner-bl"></span>
+                <span class="corner corner-br"></span>
+              </div>
+              <canvas
+                bind:this={canvas}
+                class="canvas"
+                style:display={graphMode === '2d' ? 'block' : 'none'}
+              ></canvas>
+              <div
+                bind:this={graph3dContainer}
+                class="graph3d-container"
+                style:display={graphMode === '3d' ? 'block' : 'none'}
+              ></div>
+            </div>
+
+            <aside class="embedding-inspector">
+              <div class="embedding-inspector-header">
+                <span class="embedding-inspector-title">Inspector</span>
+                {#if graphSelected}
+                  <button class="btn-text" onclick={clearEmbeddingSelection}>Clear</button>
+                {/if}
+              </div>
+
+              {#if graphSelected}
+                <div class="embedding-inspector-meta">
+                  <span>{graphSelected.who ?? 'unknown'}</span>
+                  {#if graphSelected.type}
+                    <span>{graphSelected.type}</span>
+                  {/if}
+                  <span>importance {Math.round((graphSelected.importance ?? 0) * 100)}%</span>
+                </div>
+                <div class="embedding-inspector-source">{embeddingSourceLabel(graphSelected)}</div>
+                <p class="embedding-inspector-content">{graphSelected.content}</p>
+
+                {#if graphSelected.tags?.length}
+                  <div class="embedding-inspector-tags">
+                    {#each graphSelected.tags.slice(0, 8) as tag}
+                      <span>#{tag}</span>
+                    {/each}
+                  </div>
+                {/if}
+
+                <div class="embedding-inspector-actions">
+                  <button
+                    class="btn-primary-small"
+                    onclick={() => graphSelected && focusEmbedding(graphSelected.id)}
+                  >
+                    Center
+                  </button>
+                  <button
+                    class="btn-primary-small"
+                    onclick={loadGlobalSimilarForSelected}
+                    disabled={loadingGlobalSimilar}
+                  >
+                    {loadingGlobalSimilar ? 'Loading...' : 'Global similar'}
+                  </button>
+                </div>
+
+                <div class="mode-toggle embedding-mode-toggle">
+                  <button
+                    class="mode-btn"
+                    class:mode-btn-active={relationMode === 'similar'}
+                    onclick={() => relationMode = 'similar'}
+                  >
+                    Similar
+                  </button>
+                  <button
+                    class="mode-btn"
+                    class:mode-btn-active={relationMode === 'dissimilar'}
+                    onclick={() => relationMode = 'dissimilar'}
+                  >
+                    Dissimilar
+                  </button>
+                </div>
+
+                <div class="embedding-relation-list">
+                  {#if activeNeighbors.length === 0}
+                    <div class="embedding-inspector-empty">No related embeddings in this view.</div>
+                  {:else}
+                    {#each activeNeighbors as relation}
+                      {@const item = getEmbeddingById(relation.id)}
+                      {#if item}
+                        <button
+                          class="embedding-relation-item"
+                          onclick={() => selectEmbeddingById(item.id, true)}
+                        >
+                          <span class="embedding-relation-score">
+                            {Math.round(relation.score * 1000) / 1000}
+                          </span>
+                          <span class="embedding-relation-text">{embeddingLabel(item)}</span>
+                        </button>
+                      {/if}
+                    {/each}
+                  {/if}
+                </div>
+
+                {#if loadingGlobalSimilar}
+                  <div class="embedding-inspector-empty">Finding globally similar embeddings...</div>
+                {:else if globalSimilar.length > 0}
+                  <div class="embedding-inspector-subtitle">Global similar</div>
+                  <div class="embedding-relation-list">
+                    {#each globalSimilar as item}
+                      <button class="embedding-relation-item" onclick={() => openGlobalSimilar(item)}>
+                        <span class="embedding-relation-score">global</span>
+                        <span class="embedding-relation-text">{item.content}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              {:else}
+                <div class="embedding-inspector-empty">
+                  Select a node to inspect content, source metadata, and similar or dissimilar neighbors.
+                </div>
+
+                {#if embeddingSearch && embeddingSearchMatches.length > 0}
+                  <div class="embedding-inspector-subtitle">Search matches</div>
+                  <div class="embedding-relation-list">
+                    {#each embeddingSearchMatches as item}
+                      <button
+                        class="embedding-relation-item"
+                        onclick={() => selectEmbeddingById(item.id, true)}
+                      >
+                        <span class="embedding-relation-score">{item.who}</span>
+                        <span class="embedding-relation-text">{embeddingLabel(item)}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              {/if}
+            </aside>
           </div>
         {:else if activeTab === 'logs'}
           <div class="logs-container">
@@ -1545,9 +2340,22 @@ function formatDate(dateStr: string): string {
           <span class="statusbar-right">
             <kbd>Cmd+S</kbd> to save
           </span>
+        {:else if activeTab === 'memory'}
+          <span>{displayMemories.length} memory documents</span>
+          <span class="statusbar-right">
+            {#if searchingMemory}
+              semantic search in progress
+            {:else if similarSourceId}
+              similarity mode
+            {:else}
+              hybrid embedding index
+            {/if}
+          </span>
         {:else if activeTab === 'embeddings'}
-          <span>{nodes.length} nodes · {edges.length} edges</span>
-          <span class="statusbar-right">UMAP · {graphMode.toUpperCase()} · SIGNAL</span>
+          <span>{nodes.length} nodes · {edges.length} edges · limit {embeddingLimit}</span>
+          <span class="statusbar-right">
+            UMAP · {graphMode.toUpperCase()} · {#if embeddingsHasMore}{embeddingsTotal} total{:else}full set{/if}
+          </span>
         {:else if activeTab === 'logs'}
           <span>{logs.length} entries</span>
           <span class="statusbar-right">
@@ -1568,7 +2376,7 @@ function formatDate(dateStr: string): string {
     </main>
 
     <!-- Right Sidebar -->
-    <aside class="sidebar sidebar-right">
+    <aside class="sidebar sidebar-right" class:sidebar-right-hidden={activeTab === 'memory'}>
       <section class="section">
         <div class="section-header">
           <span class="section-title">Memories</span>
@@ -1581,8 +2389,9 @@ function formatDate(dateStr: string): string {
             type="text"
             class="search-input"
             bind:value={memoryQuery}
+            oninput={queueMemorySearch}
             onkeydown={(e) => e.key === 'Enter' && doSearch()}
-            placeholder="Search..."
+            placeholder="Search embeddings..."
           />
           <button
             class="btn-icon"
@@ -1647,7 +2456,7 @@ function formatDate(dateStr: string): string {
         {#if similarSourceId && similarSource}
           <div class="similar-header">
             <span>∿ similar to: {(similarSource.content ?? '').slice(0, 40)}{(similarSource.content ?? '').length > 40 ? '…' : ''}</span>
-            <button class="btn-text" onclick={() => { similarSourceId = null; similarResults = []; }}>✕</button>
+            <button class="btn-text" onclick={() => { similarSourceId = null; similarSource = null; similarResults = []; }}>✕</button>
           </div>
         {:else if memorySearched || hasActiveFilters}
           <div class="search-results">
@@ -1803,6 +2612,10 @@ function formatDate(dateStr: string): string {
   .sidebar-right {
     width: 300px;
     border-left: 1px solid var(--border-standard);
+  }
+
+  .sidebar-right-hidden {
+    display: none;
   }
 
   .section {
@@ -2002,6 +2815,27 @@ function formatDate(dateStr: string): string {
     color: var(--text-tertiary);
   }
 
+  .embedding-limit-shell {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-tertiary);
+  }
+
+  .embedding-limit-input {
+    width: 72px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-standard);
+    border-radius: var(--radius-sm);
+    padding: 4px 6px;
+    outline: none;
+  }
+
   /* === Buttons === */
   
   .btn-primary {
@@ -2069,7 +2903,265 @@ function formatDate(dateStr: string): string {
     font-style: italic;
   }
 
+  /* === Memory Library === */
+
+  .memory-library {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background:
+      linear-gradient(180deg, rgba(138, 168, 255, 0.08), transparent 25%),
+      radial-gradient(circle at 85% 0, rgba(212, 255, 0, 0.08), transparent 40%);
+  }
+
+  .memory-library-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .memory-search-shell {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-accent);
+    background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  }
+
+  .memory-search-glyph {
+    color: var(--accent-seal);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .memory-library-search {
+    flex: 1;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    background: transparent;
+    border: none;
+    outline: none;
+  }
+
+  .memory-library-search::placeholder {
+    color: var(--text-tertiary);
+  }
+
+  .memory-toolbar-clear {
+    white-space: nowrap;
+  }
+
+  .memory-library-filters {
+    display: grid;
+    grid-template-columns: minmax(140px, 200px) minmax(180px, 1fr) 90px 140px auto;
+    gap: var(--space-2);
+    align-items: center;
+  }
+
+  .memory-filter-select,
+  .memory-filter-input,
+  .memory-filter-number,
+  .memory-filter-date {
+    width: 100%;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-standard);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    outline: none;
+  }
+
+  .memory-filter-pill {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--border-standard);
+    border-radius: 999px;
+    padding: 6px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .memory-filter-pill-active {
+    color: var(--accent-seal);
+    border-color: var(--accent-seal);
+    background: var(--accent-seal-dim);
+  }
+
+  .memory-library-types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .memory-type-chip {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    background: rgba(138, 168, 255, 0.06);
+    border: 1px solid var(--border-standard);
+    border-radius: 999px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+
+  .memory-type-chip-active {
+    color: var(--accent-seal);
+    border-color: var(--accent-seal);
+    background: var(--accent-seal-dim);
+  }
+
+  .memory-similar-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    border: 1px dashed var(--border-accent);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: rgba(138, 168, 255, 0.04);
+  }
+
+  .memory-doc-grid {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    gap: var(--space-3);
+    padding-right: var(--space-1);
+  }
+
+  .memory-doc {
+    display: flex;
+    flex-direction: column;
+    min-height: 220px;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-standard);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 45%),
+      var(--bg-surface);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.04) inset,
+      0 12px 32px rgba(2, 4, 9, 0.25);
+  }
+
+  .memory-doc-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  .memory-doc-stamp {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .memory-doc-date {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+  }
+
+  .memory-doc-content {
+    margin: 0;
+    color: var(--text-primary);
+    line-height: 1.62;
+    font-size: 13px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .memory-doc-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .memory-doc-tag,
+  .memory-doc-type,
+  .memory-doc-pin,
+  .memory-doc-importance,
+  .memory-doc-match,
+  .memory-doc-source {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    border-radius: 999px;
+    padding: 2px 7px;
+    border: 1px solid var(--border-standard);
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .memory-doc-source {
+    color: var(--accent-seal);
+    border-color: var(--border-accent);
+    background: rgba(138, 168, 255, 0.12);
+  }
+
+  .memory-doc-pin {
+    color: var(--accent-lime);
+    border-color: color-mix(in srgb, var(--accent-lime) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-lime) 12%, transparent);
+  }
+
+  .memory-doc-match {
+    color: var(--accent-seal);
+  }
+
+  .memory-doc-foot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: auto;
+  }
+
+  .btn-similar-visible {
+    opacity: 1;
+    margin-left: auto;
+    border: 1px solid var(--border-standard);
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .memory-library-empty {
+    border: 1px dashed var(--border-standard);
+    border-radius: var(--radius-md);
+    background: rgba(138, 168, 255, 0.04);
+  }
+
   /* === Canvas === */
+
+  .embeddings-layout {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    background: #050505;
+  }
 
   .canvas-container {
     flex: 1;
@@ -2078,10 +3170,47 @@ function formatDate(dateStr: string): string {
     background: #050505;
   }
 
+  .graph-toolbar {
+    position: absolute;
+    top: 8px;
+    left: 12px;
+    right: 12px;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    pointer-events: none;
+  }
+
+  .graph-toolbar-input {
+    flex: 1;
+    max-width: 420px;
+    pointer-events: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    background: rgba(5, 5, 5, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: var(--radius-sm);
+    padding: 6px 9px;
+    outline: none;
+    backdrop-filter: blur(2px);
+  }
+
+  .graph-toolbar-meta {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: rgba(220, 220, 220, 0.75);
+    background: rgba(5, 5, 5, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 999px;
+    padding: 4px 8px;
+  }
+
   .graph-ascii {
     position: absolute;
     left: 14px;
-    top: 10px;
+    top: 44px;
     z-index: 6;
     font-family: var(--font-mono);
     font-size: 10px;
@@ -2120,6 +3249,145 @@ function formatDate(dateStr: string): string {
   .graph3d-container {
     position: absolute;
     inset: 0;
+  }
+
+  .embedding-inspector {
+    width: 340px;
+    min-width: 300px;
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 140px), #060607;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    overflow-y: auto;
+  }
+
+  .embedding-inspector-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .embedding-inspector-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  .embedding-inspector-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .embedding-inspector-meta span,
+  .embedding-inspector-tags span {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-standard);
+    border-radius: 999px;
+    padding: 2px 7px;
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .embedding-inspector-source {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--accent-seal);
+    border: 1px solid var(--border-accent);
+    border-radius: var(--radius-sm);
+    padding: 5px 7px;
+    background: rgba(138, 168, 255, 0.08);
+    word-break: break-all;
+  }
+
+  .embedding-inspector-content {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .embedding-inspector-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .embedding-inspector-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .embedding-inspector-subtitle {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-tertiary);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .embedding-inspector-empty {
+    border: 1px dashed var(--border-standard);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    font-size: 12px;
+    color: var(--text-tertiary);
+    line-height: 1.5;
+  }
+
+  .embedding-mode-toggle {
+    align-self: flex-start;
+  }
+
+  .embedding-relation-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .embedding-relation-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-2);
+    align-items: start;
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--border-standard);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-secondary);
+    padding: 7px 8px;
+    cursor: pointer;
+  }
+
+  .embedding-relation-item:hover {
+    border-color: var(--border-accent);
+    background: rgba(138, 168, 255, 0.08);
+  }
+
+  .embedding-relation-score {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--accent-seal);
+    white-space: nowrap;
+  }
+
+  .embedding-relation-text {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-primary);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   /* === 2D/3D Mode Toggle === */
@@ -2819,9 +4087,58 @@ function formatDate(dateStr: string): string {
   
   @media (max-width: 1024px) {
     .sidebar-right { display: none; }
+
+    .embeddings-layout {
+      flex-direction: column;
+    }
+
+    .embedding-inspector {
+      width: 100%;
+      min-width: 0;
+      max-height: 42%;
+      border-left: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .memory-library {
+      padding: var(--space-3);
+    }
+
+    .memory-library-filters {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 
   @media (max-width: 768px) {
     .sidebar-left { display: none; }
+
+    .tabs {
+      overflow-x: auto;
+      justify-content: flex-start;
+      gap: var(--space-2);
+    }
+
+    .tab-info {
+      margin-left: auto;
+      flex-shrink: 0;
+      gap: var(--space-2);
+    }
+
+    .embedding-limit-shell {
+      display: none;
+    }
+
+    .memory-library-toolbar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .memory-library-filters {
+      grid-template-columns: 1fr;
+    }
+
+    .memory-doc-grid {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

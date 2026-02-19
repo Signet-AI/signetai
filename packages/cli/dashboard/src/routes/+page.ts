@@ -27,11 +27,42 @@ export interface PageData {
 	harnesses: Harness[];
 }
 
+async function getAllMemories(): Promise<{
+	memories: Memory[];
+	stats: MemoryStats;
+}> {
+	const pageSize = 250;
+	const firstPage = await getMemories(pageSize, 0);
+	const total = firstPage.stats.total;
+
+	if (total <= firstPage.memories.length) {
+		return firstPage;
+	}
+
+	const memories = [...firstPage.memories];
+	let offset = firstPage.memories.length;
+
+	while (offset < total) {
+		const page = await getMemories(pageSize, offset);
+		if (page.memories.length === 0) {
+			break;
+		}
+
+		memories.push(...page.memories);
+		offset += page.memories.length;
+	}
+
+	return {
+		memories,
+		stats: firstPage.stats,
+	};
+}
+
 export const load: PageLoad = async (): Promise<PageData> => {
 	const [identity, configFiles, memoryData, harnesses] = await Promise.all([
 		getIdentity(),
 		getConfigFiles(),
-		getMemories(),
+		getAllMemories(),
 		getHarnesses(),
 	]);
 

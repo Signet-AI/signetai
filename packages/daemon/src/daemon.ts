@@ -167,6 +167,51 @@ function vectorToBlob(vec: number[]): Buffer {
 	return Buffer.from(f32.buffer);
 }
 
+function blobToVector(blob: Buffer, dimensions: number | null): number[] {
+	const raw = blob.buffer.slice(
+		blob.byteOffset,
+		blob.byteOffset + blob.byteLength,
+	);
+	const vector = new Float32Array(raw);
+	const size =
+		typeof dimensions === "number" &&
+		dimensions > 0 &&
+		dimensions <= vector.length
+			? dimensions
+			: vector.length;
+	return Array.from(vector.slice(0, size));
+}
+
+function parseTagsField(raw: string | null): string[] {
+	if (!raw) return [];
+
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (Array.isArray(parsed)) {
+			return parsed.filter((value): value is string => typeof value === "string");
+		}
+	} catch {
+		// Fallback to comma-separated tags.
+	}
+
+	return raw
+		.split(",")
+		.map((tag) => tag.trim())
+		.filter((tag) => tag.length > 0);
+}
+
+function parseBoundedInt(
+	raw: string | undefined,
+	fallback: number,
+	min: number,
+	max: number,
+): number {
+	if (!raw) return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.min(max, Math.max(min, parsed));
+}
+
 // Status cache for embedding provider
 let cachedEmbeddingStatus: EmbeddingStatus | null = null;
 let statusCacheTime = 0;
@@ -927,6 +972,8 @@ app.post("/api/memory/recall", async (c) => {
 		type?: string;
 		tags?: string;
 		who?: string;
+		pinned?: boolean;
+		importance_min?: number;
 		since?: string;
 	};
 
@@ -963,6 +1010,13 @@ app.post("/api/memory/recall", async (c) => {
 	if (body.who) {
 		filterParts.push("m.who = ?");
 		filterArgs.push(body.who);
+	}
+	if (body.pinned) {
+		filterParts.push("m.pinned = 1");
+	}
+	if (typeof body.importance_min === "number") {
+		filterParts.push("m.importance >= ?");
+		filterArgs.push(body.importance_min);
 	}
 	if (body.since) {
 		filterParts.push("m.created_at >= ?");
@@ -1100,6 +1154,7 @@ app.post("/api/memory/recall", async (c) => {
 			.map((s) => {
 				const r = rowMap.get(s.id)!;
 				return {
+					id: r.id,
 					content: r.content,
 					score: Math.round(s.score * 100) / 100,
 					source: s.source,
@@ -1131,11 +1186,23 @@ app.get("/api/memory/search", async (c) => {
 	const type = c.req.query("type");
 	const tags = c.req.query("tags");
 	const who = c.req.query("who");
+	const pinned = c.req.query("pinned");
+	const importanceMin = c.req.query("importance_min");
+	const since = c.req.query("since");
 
 	return fetch(`http://${HOST}:${PORT}/api/memory/recall`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ query: q, limit, type, tags, who }),
+		body: JSON.stringify({
+			query: q,
+			limit,
+			type,
+			tags,
+			who,
+			pinned: pinned === "1" || pinned === "true",
+			importance_min: importanceMin ? parseFloat(importanceMin) : undefined,
+			since,
+		}),
 	});
 });
 
@@ -1246,53 +1313,119 @@ app.get("/memory/similar", async (c) => {
 
 app.get("/api/embeddings", async (c) => {
 	const withVectors = c.req.query("vectors") === "true";
-	const scriptPath = join(
-		AGENTS_DIR,
-		"memory",
-		"scripts",
-		"export_embeddings.py",
-	);
+	const limit = parseBoundedInt(c.req.query("limit"), 600, 50, 5000);
+	const offset = parseBoundedInt(c.req.query("offset"), 0, 0, 100000);
 
-	return new Promise<Response>((resolve) => {
-		const args = withVectors ? ["--with-vectors"] : [];
-		const proc = spawn(getPythonCmd(), [scriptPath, ...args], {
-			timeout: 60000,
-		});
+	let db: Database | null = null;
 
-		let stdout = "";
-		let stderr = "";
+	try {
+		db = new Database(MEMORY_DB, { readonly: true });
 
-		proc.stdout.on("data", (data) => {
-			stdout += data.toString();
-		});
-		proc.stderr.on("data", (data) => {
-			stderr += data.toString();
-		});
+		const totalRow = db
+			.prepare(`
+	      SELECT COUNT(*) AS count
+	      FROM embeddings e
+	      INNER JOIN memories m ON m.id = e.source_id
+	      WHERE e.source_type = 'memory'
+	    `)
+			.get() as { count: number } | undefined;
 
-		proc.on("close", (code) => {
-			if (code === 0) {
-				try {
-					const result = JSON.parse(stdout);
-					resolve(c.json(result));
-				} catch {
-					resolve(
-						c.json({ error: "Failed to parse response", embeddings: [] }),
-					);
-				}
-			} else {
-				resolve(
-					c.json({
-						error: stderr || `Script exited with code ${code}`,
-						embeddings: [],
-					}),
-				);
-			}
-		});
+		const total = totalRow?.count ?? 0;
 
-		proc.on("error", (err) => {
-			resolve(c.json({ error: err.message, embeddings: [] }));
+		type EmbeddingRow = {
+			id: string;
+			content: string;
+			who: string | null;
+			importance: number | null;
+			type: string | null;
+			tags: string | null;
+			source_type: string | null;
+			source_id: string | null;
+			created_at: string;
+			vector?: Buffer;
+			dimensions?: number | null;
+		};
+
+		const rows = withVectors
+			? (db
+					.prepare(`
+	        SELECT
+	          m.id,
+	          m.content,
+	          m.who,
+	          m.importance,
+	          m.type,
+	          m.tags,
+	          m.source_type,
+	          m.source_id,
+	          m.created_at,
+	          e.vector,
+	          e.dimensions
+	        FROM embeddings e
+	        INNER JOIN memories m ON m.id = e.source_id
+	        WHERE e.source_type = 'memory'
+	        ORDER BY m.created_at DESC
+	        LIMIT ? OFFSET ?
+	      `)
+					.all(limit, offset) as EmbeddingRow[])
+			: (db
+					.prepare(`
+	        SELECT
+	          m.id,
+	          m.content,
+	          m.who,
+	          m.importance,
+	          m.type,
+	          m.tags,
+	          m.source_type,
+	          m.source_id,
+	          m.created_at
+	        FROM embeddings e
+	        INNER JOIN memories m ON m.id = e.source_id
+	        WHERE e.source_type = 'memory'
+	        ORDER BY m.created_at DESC
+	        LIMIT ? OFFSET ?
+	      `)
+					.all(limit, offset) as EmbeddingRow[]);
+
+		const embeddings = rows.map((row) => ({
+			id: row.id,
+			content: row.content,
+			text: row.content,
+			who: row.who ?? "unknown",
+			importance: typeof row.importance === "number" ? row.importance : 0.5,
+			type: row.type,
+			tags: parseTagsField(row.tags),
+			sourceType: row.source_type ?? "memory",
+			sourceId: row.source_id ?? row.id,
+			createdAt: row.created_at,
+			vector:
+				withVectors && row.vector
+					? blobToVector(row.vector, row.dimensions ?? null)
+					: undefined,
+		}));
+
+		return c.json({
+			embeddings,
+			count: embeddings.length,
+			total,
+			limit,
+			offset,
+			hasMore: offset + embeddings.length < total,
 		});
-	});
+	} catch (e) {
+		return c.json({
+			error: (e as Error).message,
+			embeddings: [],
+			count: 0,
+			total: 0,
+			limit,
+			offset,
+			hasMore: false,
+		});
+	} finally {
+		db?.close();
+	}
 });
 
 app.get("/api/embeddings/status", async (c) => {

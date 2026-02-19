@@ -14,10 +14,12 @@ export interface Memory {
 	created_at: string;
 	who: string;
 	importance: number;
-	tags: string;
+	tags?: string | string[] | null;
 	source_type?: string;
 	type?: string;
 	pinned?: boolean;
+	score?: number;
+	source?: "hybrid" | "vector" | "keyword";
 }
 
 export interface MemoryStats {
@@ -59,9 +61,25 @@ export interface DaemonStatus {
 export interface EmbeddingPoint {
 	id: string;
 	content: string;
-	x?: number;
-	y?: number;
-	tags?: string;
+	text?: string;
+	who: string;
+	importance: number;
+	type?: string | null;
+	tags: string[];
+	sourceType?: string;
+	sourceId?: string;
+	createdAt?: string;
+	vector?: number[];
+}
+
+export interface EmbeddingsResponse {
+	embeddings: EmbeddingPoint[];
+	count: number;
+	total: number;
+	limit: number;
+	offset: number;
+	hasMore: boolean;
+	error?: string;
 }
 
 // ============================================================================
@@ -175,6 +193,42 @@ export async function searchMemories(
 	}
 }
 
+export async function recallMemories(
+	query: string,
+	filters: {
+		type?: string;
+		tags?: string;
+		who?: string;
+		pinned?: boolean;
+		importance_min?: number;
+		since?: string;
+		limit?: number;
+	} = {},
+): Promise<Memory[]> {
+	try {
+		const response = await fetch(`${API_BASE}/api/memory/recall`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				query,
+				limit: filters.limit,
+				type: filters.type,
+				tags: filters.tags,
+				who: filters.who,
+				pinned: filters.pinned,
+				importance_min: filters.importance_min,
+				since: filters.since,
+			}),
+		});
+
+		if (!response.ok) throw new Error("Recall failed");
+		const data = await response.json();
+		return data.results || [];
+	} catch {
+		return [];
+	}
+}
+
 export async function getDistinctWho(): Promise<string[]> {
 	try {
 		const response = await fetch(`${API_BASE}/memory/search?distinct=who`);
@@ -206,15 +260,43 @@ export async function getSimilarMemories(
 
 export async function getEmbeddings(
 	withVectors = false,
-): Promise<{ embeddings: EmbeddingPoint[]; error?: string }> {
+	options: { limit?: number; offset?: number } = {},
+): Promise<EmbeddingsResponse> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/embeddings?vectors=${withVectors}`,
-		);
+		const params = new URLSearchParams({ vectors: withVectors ? "true" : "false" });
+		if (typeof options.limit === "number") {
+			params.set("limit", options.limit.toString());
+		}
+		if (typeof options.offset === "number") {
+			params.set("offset", options.offset.toString());
+		}
+
+		const response = await fetch(`${API_BASE}/api/embeddings?${params}`);
 		if (!response.ok) throw new Error("Failed to fetch embeddings");
-		return await response.json();
+
+		const data = (await response.json()) as Partial<EmbeddingsResponse>;
+		const embeddings = Array.isArray(data.embeddings) ? data.embeddings : [];
+
+		return {
+			embeddings,
+			count: typeof data.count === "number" ? data.count : embeddings.length,
+			total: typeof data.total === "number" ? data.total : embeddings.length,
+			limit:
+				typeof data.limit === "number" ? data.limit : (options.limit ?? embeddings.length),
+			offset: typeof data.offset === "number" ? data.offset : (options.offset ?? 0),
+			hasMore: Boolean(data.hasMore),
+			error: typeof data.error === "string" ? data.error : undefined,
+		};
 	} catch (e) {
-		return { embeddings: [], error: String(e) };
+		return {
+			embeddings: [],
+			count: 0,
+			total: 0,
+			limit: options.limit ?? 0,
+			offset: options.offset ?? 0,
+			hasMore: false,
+			error: String(e),
+		};
 	}
 }
 
