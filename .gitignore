@@ -10,6 +10,7 @@ packages/cli/dashboard/build/
 packages/signetai/dist/
 packages/signetai/dashboard/
 *.tgz
+*.png
 
 # TypeScript declaration files (generated in wrong locations)
 **/src/*.d.ts
