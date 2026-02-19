@@ -1,8 +1,8 @@
 # Signet
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Spec Version](https://img.shields.io/badge/spec-v0.2.1--draft-blue.svg)](./spec/SPEC.md)
-[![GitHub Stars](https://img.shields.io/github/stars/Signet-AI/signet.svg)](https://github.com/Signet-AI/signet/stargazers)
+[![Spec Version](https://img.shields.io/badge/spec-v0.2.1--draft-blue.svg)](https://signetai.sh/spec)
+[![GitHub Stars](https://img.shields.io/github/stars/signetai/signetai.svg)](https://github.com/signetai/signetai/stargazers)
 
 **Own your agent. Bring it anywhere.**
 
@@ -260,7 +260,7 @@ See [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) for full reference.
 
 ```bash
 # Clone
-git clone https://github.com/signetai/signet.git
+git clone https://github.com/signetai/signetai.git
 cd signet
 
 # Install dependencies
@@ -307,5 +307,5 @@ Apache-2.0 — use it, fork it, ship it.
 
 - **Website:** [signetai.sh](https://signetai.sh)
 - **Documentation:** [signetai.sh/docs](https://signetai.sh/docs)
-- **Specification:** [spec/SPEC.md](./spec/SPEC.md)
+- **Specification:** [signetai.sh/spec](https://signetai.sh/spec)
 - **Twitter:** [@signet_ai](https://twitter.com/signet_ai)
