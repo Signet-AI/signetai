@@ -1,6 +1,6 @@
 {
 	"name": "signet",
-	"version": "0.1.26",
+	"version": "0.1.49",
 	"private": true,
 	"description": "Portable AI agent identity",
 	"repository": {
@@ -23,6 +23,7 @@
 		"lint": "biome check .",
 		"format": "biome format --write .",
 		"typecheck": "bun run --filter '*' typecheck",
+		"version:sync": "bun scripts/version-sync.ts",
 		"publish:signetai": "cd packages/signetai && npm publish --access public"
 	},
 	"devDependencies": {

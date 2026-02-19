@@ -34,16 +34,30 @@ jobs:
 
       - name: Bump version
         run: |
-          cd packages/signetai
-          CURRENT_VERSION=$(jq -r '.version' package.json)
-          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+          set -euo pipefail
+
+          LOCAL_VERSION=$(jq -r '.version' packages/signetai/package.json)
+          REMOTE_VERSION_JSON=$(git show 'origin/main:packages/signetai/package.json' 2>/dev/null || true)
+
+          if [ -n "$REMOTE_VERSION_JSON" ]; then
+            REMOTE_VERSION=$(printf '%s' "$REMOTE_VERSION_JSON" | jq -r '.version')
+          else
+            REMOTE_VERSION="$LOCAL_VERSION"
+          fi
+
+          BASE_VERSION=$(printf '%s\n%s\n' "$LOCAL_VERSION" "$REMOTE_VERSION" | sort -V | tail -n1)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
           NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="0.1.$NEW_PATCH"
-          jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
-          git add package.json
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+
+          PACKAGE_FILES=$(git ls-files package.json 'packages/**/package.json' | grep -v '^packages/cli/dashboard/package.json$')
+          for file in $PACKAGE_FILES; do
+            jq --arg v "$NEW_VERSION" '.version = $v' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+          done
+
+          git add $PACKAGE_FILES
           git commit -m "chore: release $NEW_VERSION"
           git tag "v$NEW_VERSION"
-          cd ../..
 
       - name: Publish to npm
         run: |

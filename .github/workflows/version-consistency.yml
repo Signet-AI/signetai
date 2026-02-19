@@ -1,0 +1,66 @@
+name: Version Consistency
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify package versions are aligned
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REFERENCE_FILE="packages/signetai/package.json"
+          REFERENCE_VERSION=$(jq -r '.version' "$REFERENCE_FILE")
+
+          REMOTE_REFERENCE_JSON=$(git show "origin/main:$REFERENCE_FILE" 2>/dev/null || true)
+          if [ -n "$REMOTE_REFERENCE_JSON" ]; then
+            REMOTE_REFERENCE_VERSION=$(printf '%s' "$REMOTE_REFERENCE_JSON" | jq -r '.version')
+            HIGHEST_VERSION=$(printf '%s\n%s\n' "$REFERENCE_VERSION" "$REMOTE_REFERENCE_VERSION" | sort -V | tail -n1)
+
+            if [ "$HIGHEST_VERSION" != "$REFERENCE_VERSION" ]; then
+              echo "Local version is behind origin/main."
+              echo "Local:  $REFERENCE_VERSION"
+              echo "Remote: $REMOTE_REFERENCE_VERSION"
+              echo ""
+              echo "Pull/rebase main and re-run the version sync before merging."
+              exit 1
+            fi
+          fi
+
+          PACKAGE_FILES=$(git ls-files package.json 'packages/**/package.json' | grep -v '^packages/cli/dashboard/package.json$')
+          if [ -z "$PACKAGE_FILES" ]; then
+            echo "No package.json files found under packages/."
+            exit 1
+          fi
+
+          MISMATCHES=""
+          for file in $PACKAGE_FILES; do
+            VERSION=$(jq -r '.version' "$file")
+            if [ "$VERSION" != "$REFERENCE_VERSION" ]; then
+              MISMATCHES+="\n- $file ($VERSION)"
+            fi
+          done
+
+          if [ -n "$MISMATCHES" ]; then
+            echo "Version mismatch detected."
+            echo "Reference: $REFERENCE_FILE ($REFERENCE_VERSION)"
+            echo -e "Mismatches:$MISMATCHES"
+            echo ""
+            echo "Update all package versions together before merging."
+            exit 1
+          fi
+
+          echo "All package versions are aligned at $REFERENCE_VERSION."
