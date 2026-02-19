@@ -3805,7 +3805,10 @@ hookCmd
 
 const updateCmd = program
 	.command("update")
-	.description("Check for and install updates");
+	.description("Check, install, and manage auto-updates");
+
+const MIN_AUTO_UPDATE_INTERVAL = 300;
+const MAX_AUTO_UPDATE_INTERVAL = 604800;
 
 // signet update check
 updateCmd
@@ -3824,17 +3827,33 @@ updateCmd
 			publishedAt?: string;
 			checkError?: string;
 			cached?: boolean;
+			restartRequired?: boolean;
+			pendingVersion?: string;
 		}>(`/api/update/check${options.force ? "?force=true" : ""}`);
 
-		if (data?.checkError) {
-			spinner.warn("Could not check for updates");
-			console.log(chalk.dim(`  Error: ${data.checkError}`));
+		if (!data) {
+			spinner.fail("Could not connect to daemon");
 			return;
+		}
+
+		if (data?.checkError) {
+			spinner.warn("Could not fully check for updates");
+			console.log(chalk.dim(`  Error: ${data.checkError}`));
+			if (!data.restartRequired) {
+				return;
+			}
 		}
 
 		if (data?.updateAvailable) {
 			spinner.succeed(chalk.green(`Update available: v${data.latestVersion}`));
 			console.log(chalk.dim(`  Current: v${data.currentVersion}`));
+			if (data.restartRequired && data.pendingVersion) {
+				console.log(
+					chalk.dim(
+						`  Pending restart: v${data.pendingVersion} already installed`,
+					),
+				);
+			}
 			if (data.publishedAt) {
 				console.log(
 					chalk.dim(
@@ -3846,6 +3865,15 @@ updateCmd
 				console.log(chalk.dim(`  ${data.releaseUrl}`));
 			}
 			console.log(chalk.cyan("\n  Run: signet update install"));
+		} else if (data.restartRequired) {
+			spinner.succeed(
+				chalk.yellow(
+					`Update installed: v${data.pendingVersion || data.latestVersion}. Restart required.`,
+				),
+			);
+			console.log(
+				chalk.cyan("\n  Restart daemon to apply: signet daemon restart"),
+			);
 		} else {
 			spinner.succeed("Already up to date");
 			console.log(chalk.dim(`  Version: v${data?.currentVersion}`));
@@ -3861,7 +3889,26 @@ updateCmd
 		const check = await fetchFromDaemon<{
 			updateAvailable?: boolean;
 			latestVersion?: string;
+			restartRequired?: boolean;
+			pendingVersion?: string;
 		}>("/api/update/check");
+
+		if (!check) {
+			console.error(chalk.red("Could not connect to daemon"));
+			process.exit(1);
+		}
+
+		if (check.restartRequired && !check.updateAvailable) {
+			console.log(
+				chalk.yellow(
+					`✓ Update already installed (v${check.pendingVersion || check.latestVersion})`,
+				),
+			);
+			console.log(
+				chalk.cyan("  Restart daemon to apply: signet daemon restart"),
+			);
+			return;
+		}
 
 		if (!check?.updateAvailable) {
 			console.log(chalk.green("✓ Already running the latest version"));
@@ -3875,6 +3922,8 @@ updateCmd
 			success?: boolean;
 			message?: string;
 			output?: string;
+			restartRequired?: boolean;
+			installedVersion?: string;
 		}>("/api/update/run", { method: "POST" });
 
 		if (!data?.success) {
@@ -3886,9 +3935,137 @@ updateCmd
 		}
 
 		spinner.succeed(data.message || "Update installed");
+		if (data.restartRequired) {
+			console.log(
+				chalk.cyan("\n  Restart daemon to apply: signet daemon restart"),
+			);
+		}
+	});
+
+// signet update status
+updateCmd
+	.command("status")
+	.description("Show auto-update settings and status")
+	.action(async () => {
+		const data = await fetchFromDaemon<{
+			autoInstall?: boolean;
+			checkInterval?: number;
+			pendingRestartVersion?: string;
+			lastAutoUpdateAt?: string;
+			lastAutoUpdateError?: string;
+			updateInProgress?: boolean;
+		}>("/api/update/config");
+
+		if (!data) {
+			console.error(chalk.red("Failed to get update status"));
+			process.exit(1);
+		}
+
+		console.log(chalk.bold("Update Status\n"));
 		console.log(
-			chalk.cyan("\n  Restart daemon to apply: signet daemon restart"),
+			`  ${chalk.dim("Auto-install:")} ${data.autoInstall ? chalk.green("enabled") : chalk.dim("disabled")}`,
 		);
+		console.log(
+			`  ${chalk.dim("Interval:")}     every ${data.checkInterval || "?"}s`,
+		);
+		console.log(
+			`  ${chalk.dim("In progress:")}  ${data.updateInProgress ? chalk.yellow("yes") : chalk.dim("no")}`,
+		);
+
+		if (data.pendingRestartVersion) {
+			console.log(
+				`  ${chalk.dim("Pending:")}      v${data.pendingRestartVersion} (restart required)`,
+			);
+		}
+
+		if (data.lastAutoUpdateAt) {
+			console.log(
+				`  ${chalk.dim("Last success:")} ${new Date(data.lastAutoUpdateAt).toLocaleString()}`,
+			);
+		}
+
+		if (data.lastAutoUpdateError) {
+			console.log(
+				`  ${chalk.dim("Last error:")}   ${chalk.yellow(data.lastAutoUpdateError)}`,
+			);
+		}
+	});
+
+// signet update enable
+updateCmd
+	.command("enable")
+	.description("Enable unattended auto-update installs")
+	.option(
+		"-i, --interval <seconds>",
+		`Check interval in seconds (${MIN_AUTO_UPDATE_INTERVAL}-${MAX_AUTO_UPDATE_INTERVAL})`,
+		"21600",
+	)
+	.action(async (options) => {
+		const interval = Number.parseInt(options.interval, 10);
+		if (
+			!Number.isFinite(interval) ||
+			interval < MIN_AUTO_UPDATE_INTERVAL ||
+			interval > MAX_AUTO_UPDATE_INTERVAL
+		) {
+			console.error(
+				chalk.red(
+					`Interval must be between ${MIN_AUTO_UPDATE_INTERVAL} and ${MAX_AUTO_UPDATE_INTERVAL} seconds`,
+				),
+			);
+			process.exit(1);
+		}
+
+		const data = await fetchFromDaemon<{
+			success?: boolean;
+			config?: { autoInstall: boolean; checkInterval: number };
+			persisted?: boolean;
+		}>("/api/update/config", {
+			method: "POST",
+			body: JSON.stringify({
+				autoInstall: true,
+				checkInterval: interval,
+			}),
+		});
+
+		if (!data?.success) {
+			console.error(chalk.red("Failed to enable auto-update"));
+			process.exit(1);
+		}
+
+		console.log(chalk.green("✓ Auto-update enabled"));
+		console.log(chalk.dim(`  Interval: every ${interval}s`));
+		console.log(chalk.dim("  Updates install in the background"));
+		if (data.persisted === false) {
+			console.log(
+				chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"),
+			);
+		}
+	});
+
+// signet update disable
+updateCmd
+	.command("disable")
+	.description("Disable unattended auto-update installs")
+	.action(async () => {
+		const data = await fetchFromDaemon<{
+			success?: boolean;
+			persisted?: boolean;
+		}>("/api/update/config", {
+			method: "POST",
+			body: JSON.stringify({ autoInstall: false }),
+		});
+
+		if (!data?.success) {
+			console.error(chalk.red("Failed to disable auto-update"));
+			process.exit(1);
+		}
+
+		console.log(chalk.green("✓ Auto-update disabled"));
+		if (data.persisted === false) {
+			console.log(
+				chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"),
+			);
+		}
 	});
 
 // Shortcut: signet update (same as signet update check)
@@ -3901,18 +4078,34 @@ updateCmd.action(async () => {
 		updateAvailable?: boolean;
 		releaseUrl?: string;
 		checkError?: string;
+		restartRequired?: boolean;
+		pendingVersion?: string;
 	}>("/api/update/check");
 
-	if (data?.checkError) {
-		spinner.warn("Could not check for updates");
-		console.log(chalk.dim(`  Error: ${data.checkError}`));
+	if (!data) {
+		spinner.fail("Could not connect to daemon");
 		return;
+	}
+
+	if (data?.checkError) {
+		spinner.warn("Could not fully check for updates");
+		console.log(chalk.dim(`  Error: ${data.checkError}`));
+		if (!data.restartRequired) {
+			return;
+		}
 	}
 
 	if (data?.updateAvailable) {
 		spinner.succeed(chalk.green(`Update available: v${data.latestVersion}`));
 		console.log(chalk.dim(`  Current: v${data.currentVersion}`));
 		console.log(chalk.cyan("\n  Run: signet update install"));
+	} else if (data.restartRequired) {
+		spinner.succeed(
+			chalk.yellow(
+				`Update installed: v${data.pendingVersion || data.latestVersion}. Restart required.`,
+			),
+		);
+		console.log(chalk.cyan("\n  Run: signet daemon restart"));
 	} else {
 		spinner.succeed("Already up to date");
 		console.log(chalk.dim(`  Version: v${data?.currentVersion}`));

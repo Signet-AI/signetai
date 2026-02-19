@@ -40,7 +40,7 @@ Runtime operations that need package execution (skills/update install) follow th
 | `signet skill` | Manage agent skills from registry |
 | `signet git` | Git sync management for ~/.agents |
 | `signet hook` | Lifecycle hook commands |
-| `signet update` | Check and install updates |
+| `signet update` | Check, install, and manage auto-updates |
 
 ---
 
@@ -564,11 +564,14 @@ signet hook synthesis-complete # Complete synthesis
 
 ## `signet update`
 
-Check for and install Signet updates.
+Check for updates, install them manually, or enable unattended auto-installs.
 
 ```bash
 signet update check    # Check for updates
 signet update install  # Install updates
+signet update status   # Show auto-update status
+signet update enable   # Enable unattended installs
+signet update disable  # Disable unattended installs
 ```
 
 ### Subcommands
@@ -577,19 +580,19 @@ signet update install  # Install updates
 |---------|-------------|
 | `signet update check` | Check if a newer version is available |
 | `signet update install` | Install the latest version |
+| `signet update status` | Show background auto-update settings and state |
+| `signet update enable` | Enable unattended auto-update installs |
+| `signet update disable` | Disable unattended auto-update installs |
 
 ### Output
 
 ```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-  Update Check
-
+✔ Update available: v0.1.5
   Current: v0.1.0
-  Latest:  v0.1.5
+  Released: 2/18/2026
+  https://github.com/Signet-AI/signetai/releases/tag/v0.1.5
 
-  ? Update available. Install now? (y/N)
+  Run: signet update install
 ```
 
 ---

@@ -64,6 +64,7 @@ signet git enable       # Enable auto-sync
 # Updates
 signet update           # Check for updates
 signet update install   # Install latest
+signet update enable    # Enable unattended installs
 ```
 
 ## How It Works
