@@ -2805,6 +2805,31 @@ program
 		}
 		synced += skillSyncResult.installed.length + skillSyncResult.updated.length;
 
+		// Re-register hooks for detected harnesses
+		const detectedHarnesses: string[] = [];
+		if (existsSync(join(homedir(), ".claude", "settings.json"))) {
+			detectedHarnesses.push("claude-code");
+		}
+		if (existsSync(join(homedir(), ".config", "opencode"))) {
+			detectedHarnesses.push("opencode");
+		}
+		const ocConnector = new OpenClawConnector();
+		if (ocConnector.isInstalled()) {
+			detectedHarnesses.push("openclaw");
+		}
+
+		for (const harness of detectedHarnesses) {
+			try {
+				await configureHarnessHooks(harness, basePath);
+				console.log(chalk.green(`  ✓ hooks re-registered for ${harness}`));
+				synced++;
+			} catch {
+				console.log(
+					chalk.yellow(`  ⚠ hooks re-registration failed for ${harness}`),
+				);
+			}
+		}
+
 		if (synced === 0) {
 			console.log(chalk.dim("  All built-in templates are up to date"));
 		}
@@ -3267,12 +3292,13 @@ function listLocalSkills(): Array<SkillMeta & { dirName: string }> {
 
 async function fetchFromDaemon<T>(
 	path: string,
-	opts?: RequestInit,
+	opts?: RequestInit & { timeout?: number },
 ): Promise<T | null> {
+	const { timeout: timeoutMs, ...fetchOpts } = opts || {};
 	try {
 		const res = await fetch(`http://localhost:${DEFAULT_PORT}${path}`, {
-			signal: AbortSignal.timeout(5000),
-			...opts,
+			signal: AbortSignal.timeout(timeoutMs || 5000),
+			...fetchOpts,
 		});
 		if (!res.ok) return null;
 		return (await res.json()) as T;
@@ -3724,10 +3750,8 @@ const hookCmd = program
 hookCmd
 	.command("session-start")
 	.description("Get context/memories for a new session")
-	.requiredOption(
-		"-H, --harness <harness>",
-		"Harness name (e.g., claude-code, opencode)",
-	)
+	.requiredOption("-H, --harness <harness>", "Harness name")
+	.option("--project <project>", "Project path")
 	.option("--agent-id <id>", "Agent ID")
 	.option("--context <context>", "Additional context")
 	.option("--json", "Output as JSON")
@@ -3739,14 +3763,21 @@ hookCmd
 			error?: string;
 		}>("/api/hooks/session-start", {
 			method: "POST",
+			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				harness: options.harness,
+				project: options.project,
 				agentId: options.agentId,
 				context: options.context,
 			}),
 		});
 
-		if (data?.error) {
+		if (!data) {
+			process.stderr.write("[signet] daemon not running, hook skipped\n");
+			process.exit(0);
+		}
+
+		if (data.error) {
 			console.error(chalk.red(`Error: ${data.error}`));
 			process.exit(1);
 		}
@@ -3754,10 +3785,101 @@ hookCmd
 		if (options.json) {
 			console.log(JSON.stringify(data, null, 2));
 		} else {
-			// Output the inject text directly for easy piping
-			if (data?.inject) {
+			if (data.inject) {
 				console.log(data.inject);
 			}
+		}
+	});
+
+// signet hook user-prompt-submit
+hookCmd
+	.command("user-prompt-submit")
+	.description("Get relevant memories for a user prompt")
+	.requiredOption("-H, --harness <harness>", "Harness name")
+	.option("--project <project>", "Project path")
+	.action(async (options) => {
+		let userPrompt = "";
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of process.stdin) {
+				chunks.push(chunk);
+			}
+			const input = Buffer.concat(chunks).toString("utf-8").trim();
+			if (input) {
+				const parsed = JSON.parse(input);
+				userPrompt = parsed.user_prompt || parsed.userPrompt || "";
+			}
+		} catch {
+			// No stdin or invalid JSON
+		}
+
+		const data = await fetchFromDaemon<{
+			inject?: string;
+			memoryCount?: number;
+			error?: string;
+		}>("/api/hooks/user-prompt-submit", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: options.harness,
+				project: options.project,
+				userPrompt,
+			}),
+		});
+
+		if (!data) {
+			process.stderr.write("[signet] daemon not running, hook skipped\n");
+			process.exit(0);
+		}
+
+		if (data.inject) {
+			console.log(data.inject);
+		}
+	});
+
+// signet hook session-end
+hookCmd
+	.command("session-end")
+	.description("Extract and save memories from session transcript")
+	.requiredOption("-H, --harness <harness>", "Harness name")
+	.action(async (options) => {
+		let body: Record<string, string> = {};
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of process.stdin) {
+				chunks.push(chunk);
+			}
+			const input = Buffer.concat(chunks).toString("utf-8").trim();
+			if (input) {
+				body = JSON.parse(input);
+			}
+		} catch {
+			// No stdin or invalid JSON
+		}
+
+		const data = await fetchFromDaemon<{
+			memoriesSaved?: number;
+			error?: string;
+		}>("/api/hooks/session-end", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: options.harness,
+				transcriptPath: body.transcript_path || body.transcriptPath,
+				sessionId: body.session_id || body.sessionId,
+				cwd: body.cwd,
+				reason: body.reason,
+			}),
+			timeout: 60000,
+		});
+
+		if (!data) {
+			process.stderr.write("[signet] daemon not running, hook skipped\n");
+			process.exit(0);
+		}
+
+		if (data.memoriesSaved !== undefined && data.memoriesSaved > 0) {
+			process.stderr.write(`[signet] ${data.memoriesSaved} memories saved\n`);
 		}
 	});
 
@@ -4030,6 +4152,41 @@ updateCmd
 		}
 
 		spinner.succeed(data.message || "Update installed");
+
+		// Auto-sync skills and re-register hooks after update
+		try {
+			const templatesDir = getTemplatesDir();
+			const skillResult = syncBuiltinSkills(templatesDir, AGENTS_DIR);
+			const totalSynced =
+				skillResult.installed.length + skillResult.updated.length;
+			if (totalSynced > 0) {
+				console.log(chalk.green(`  ✓ ${totalSynced} skills synced`));
+			}
+
+			const harnesses: string[] = [];
+			if (existsSync(join(homedir(), ".claude", "settings.json"))) {
+				harnesses.push("claude-code");
+			}
+			if (existsSync(join(homedir(), ".config", "opencode"))) {
+				harnesses.push("opencode");
+			}
+			const oc = new OpenClawConnector();
+			if (oc.isInstalled()) {
+				harnesses.push("openclaw");
+			}
+
+			for (const h of harnesses) {
+				try {
+					await configureHarnessHooks(h, AGENTS_DIR);
+					console.log(chalk.green(`  ✓ hooks re-registered for ${h}`));
+				} catch {
+					// Non-fatal
+				}
+			}
+		} catch {
+			// Non-fatal: skill sync after update is best-effort
+		}
+
 		if (data.restartRequired) {
 			console.log(
 				chalk.cyan("\n  Restart daemon to apply: signet daemon restart"),

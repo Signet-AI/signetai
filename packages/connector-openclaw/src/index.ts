@@ -492,7 +492,6 @@ export class OpenClawConnector extends BaseConnector {
 	 * This is the canonical implementation; cli.ts delegates here.
 	 */
 	installHookFiles(basePath: string): string[] {
-		const memoryScript = join(basePath, "memory", "scripts", "memory.py");
 		const hookDir = join(basePath, "hooks", "agent-memory");
 		mkdirSync(hookDir, { recursive: true });
 
@@ -508,22 +507,17 @@ description: "Signet memory integration"
 - \`/recall <query>\` - Search memories
 `;
 
-		const handlerJs = `import { spawn } from "node:child_process";
+		const handlerJs = `const DAEMON_URL = process.env.SIGNET_DAEMON_URL || "http://localhost:3850";
 
-const MEMORY_SCRIPT = ${JSON.stringify(memoryScript)};
-
-async function runMemoryScript(args) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("python3", [MEMORY_SCRIPT, ...args], { timeout: 5000 });
-    let stdout = "", stderr = "";
-    proc.stdout.on("data", (d) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
-    proc.on("close", (code) => {
-      if (code === 0) resolve(stdout.trim());
-      else reject(new Error(stderr || \`exit code \${code}\`));
-    });
-    proc.on("error", reject);
+async function fetchDaemon(path, body) {
+  const res = await fetch(\`\${DAEMON_URL}\${path}\`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(5000),
   });
+  if (!res.ok) throw new Error(\`daemon \${res.status}\`);
+  return res.json();
 }
 
 const handler = async (event) => {
@@ -532,28 +526,34 @@ const handler = async (event) => {
 
   switch (event.action) {
     case "remember":
-      if (!args.trim()) { event.messages.push("🧠 Usage: /remember <content>"); return; }
+      if (!args.trim()) { event.messages.push("Usage: /remember <content>"); return; }
       try {
-        const result = await runMemoryScript([
-          "save", "--mode", "explicit",
-          "--who", "openclaw",
-          "--content", args.trim(),
-        ]);
-        event.messages.push(\`🧠 \${result}\`);
-      } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
+        await fetchDaemon("/api/hooks/remember", {
+          harness: "openclaw", who: "openclaw", content: args.trim(),
+        });
+        event.messages.push(\`saved: \${args.trim().slice(0, 50)}...\`);
+      } catch (e) { event.messages.push(\`Error: \${e.message}\`); }
       break;
     case "recall":
-      if (!args.trim()) { event.messages.push("🧠 Usage: /recall <query>"); return; }
+      if (!args.trim()) { event.messages.push("Usage: /recall <query>"); return; }
       try {
-        const result = await runMemoryScript(["query", args.trim(), "--limit", "10"]);
-        event.messages.push(result ? \`🧠 Results:\\n\\n\${result}\` : "🧠 No memories found.");
-      } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
+        const data = await fetchDaemon("/api/hooks/recall", {
+          harness: "openclaw", query: args.trim(),
+        });
+        if (data.results?.length) {
+          event.messages.push(data.results.map(r => \`- \${r.content}\`).join("\\n"));
+        } else {
+          event.messages.push("No memories found.");
+        }
+      } catch (e) { event.messages.push(\`Error: \${e.message}\`); }
       break;
     case "context":
       try {
-        const result = await runMemoryScript(["load", "--mode", "session-start"]);
-        event.messages.push(result ? \`🧠 **Context**\\n\\n\${result}\` : "🧠 No context.");
-      } catch (e) { event.messages.push(\`🧠 Error: \${e.message}\`); }
+        const data = await fetchDaemon("/api/hooks/session-start", {
+          harness: "openclaw",
+        });
+        event.messages.push(data.inject || "no context");
+      } catch (e) { event.messages.push(\`Error: \${e.message}\`); }
       break;
   }
 };

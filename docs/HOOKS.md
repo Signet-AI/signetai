@@ -264,7 +264,7 @@ const results = await signet.recall('coding preferences');
 
 ## Claude Code Integration
 
-Claude Code uses file-based hooks in `~/.claude/settings.json`. The hooks call `memory.py` scripts:
+Claude Code uses file-based hooks in `~/.claude/settings.json`. The hooks call the Signet CLI, which routes requests through the daemon HTTP API:
 
 ```json
 {
@@ -272,29 +272,65 @@ Claude Code uses file-based hooks in `~/.claude/settings.json`. The hooks call `
     "SessionStart": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py load --mode session-start",
+        "command": "signet hook session-start -H claude-code --project \"$(pwd)\"",
         "timeout": 3000
       }]
     }],
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py load --mode prompt",
+        "command": "signet hook user-prompt-submit -H claude-code --project \"$(pwd)\"",
         "timeout": 2000
       }]
     }],
     "SessionEnd": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py save --mode auto",
-        "timeout": 10000
+        "command": "signet hook session-end -H claude-code",
+        "timeout": 15000
       }]
     }]
   }
 }
 ```
 
-The script outputs context that Claude Code injects into the session.
+The CLI calls the daemon's hook endpoints and outputs context that Claude Code injects into the session.
+
+---
+
+## OpenCode Integration
+
+OpenCode uses a fetch-based plugin (`memory.mjs`) that calls the daemon API directly at session lifecycle events:
+
+```javascript
+// ~/.config/opencode/memory.mjs
+async function onSessionStart(sessionKey) {
+  const res = await fetch('http://localhost:3850/api/hooks/session-start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ harness: 'opencode', sessionKey })
+  });
+  return res.json();
+}
+
+async function onUserPromptSubmit(context) {
+  const res = await fetch('http://localhost:3850/api/hooks/user-prompt-submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ harness: 'opencode', context })
+  });
+  return res.json();
+}
+
+async function onSessionEnd(sessionKey) {
+  const res = await fetch('http://localhost:3850/api/hooks/session-end', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ harness: 'opencode', sessionKey })
+  });
+  return res.json();
+}
+```
 
 ---
 

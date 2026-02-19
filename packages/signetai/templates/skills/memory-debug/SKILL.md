@@ -45,7 +45,6 @@ signet restart
 Then verify key files exist:
 - `~/.agents/agent.yaml`
 - `~/.agents/memory/memories.db`
-- `~/.agents/memory/scripts/`
 
 ### 2) verify write path (`remember`)
 
@@ -90,18 +89,18 @@ Common fixes:
 
 ### 5) advanced diagnostics
 
+Check daemon logs for hook and memory errors:
+
+```bash
+signet logs -c hooks
+signet logs -c memory
+```
+
 Use direct API checks for deeper issues:
 
 ```bash
 curl -s "http://localhost:3850/api/memory/search?q=debug&limit=5"
 curl -s http://localhost:3850/api/status
-```
-
-If needed, inspect/migrate scripts:
-
-```bash
-python ~/.agents/memory/scripts/migrate.py
-python ~/.agents/memory/scripts/regenerate_memory.py
 ```
 
 ## response format

@@ -49,15 +49,16 @@ Example with filters:
 signet recall "signet" --type preference --tags architecture -l 5
 ```
 
-### fallback (daemon not running)
+### daemon required
 
-If the daemon is unavailable, fall back to the Python script:
+The daemon must be running for recall to work. Check status:
 
 ```bash
-python ~/.agents/memory/scripts/memory.py query "<search>"
+signet status
+curl -s http://localhost:3850/health
 ```
 
-Check daemon status: `signet status` or `curl -s http://localhost:3850/health`
+If the daemon is down, start it with `signet start`.
 
 ## response format
 

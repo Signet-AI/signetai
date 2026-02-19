@@ -56,17 +56,7 @@ const SKILLS_DIR = join(AGENTS_DIR, "skills");
 const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
-const MEMORY_SCRIPT = join(AGENTS_DIR, "memory", "scripts", "memory.py");
 const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
-const VENV_PYTHON = join(AGENTS_DIR, ".venv", "bin", "python");
-
-// Get Python command - prefer venv, fallback to system
-function getPythonCmd(): string {
-	if (existsSync(VENV_PYTHON)) {
-		return VENV_PYTHON;
-	}
-	return "python3";
-}
 
 // Config
 const PORT = parseInt(process.env.SIGNET_PORT || "3850", 10);
@@ -426,7 +416,7 @@ async function runLegacyEmbeddingsExport(
 	}
 
 	return await new Promise<LegacyEmbeddingsResponse>((resolve) => {
-		const proc = spawn(getPythonCmd(), args, {
+		const proc = spawn("python3", args, {
 			cwd: AGENTS_DIR,
 			stdio: "pipe",
 			timeout: withVectors ? 120000 : 30000,
@@ -558,7 +548,7 @@ async function checkEmbeddingProvider(
 	return status;
 }
 
-// Mirror the type inference from memory.py
+// Type inference from content keywords
 const TYPE_HINTS: Array<[string, string]> = [
 	["prefer", "preference"],
 	["likes", "preference"],
@@ -1106,6 +1096,7 @@ app.post("/api/memory/remember", async (c) => {
 
 	try {
 		const db = new Database(MEMORY_DB);
+		db.exec("PRAGMA busy_timeout = 5000");
 
 		if (sourceId) {
 			const existing = db
@@ -1189,6 +1180,7 @@ app.post("/api/memory/remember", async (c) => {
 			const embId = crypto.randomUUID();
 
 			const db = new Database(MEMORY_DB);
+			db.exec("PRAGMA busy_timeout = 5000");
 			// Remove stale embedding for this memory (upsert behaviour)
 			db.prepare(
 				`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
@@ -1396,6 +1388,7 @@ app.post("/api/memory/recall", async (c) => {
 	// --- Fetch full memory rows ---
 	try {
 		const db = new Database(MEMORY_DB); // Writable for access tracking
+		db.exec("PRAGMA busy_timeout = 5000");
 		const placeholders = topIds.map(() => "?").join(", ");
 		const rows = db
 			.prepare(`
@@ -2036,7 +2029,7 @@ app.post("/api/harnesses/regenerate", async (c) => {
 			return;
 		}
 
-		const proc = spawn(getPythonCmd(), [script], {
+		const proc = spawn("python3", [script], {
 			timeout: 10000,
 			cwd: AGENTS_DIR,
 		});
@@ -2168,9 +2161,17 @@ import {
 	handlePreCompaction,
 	handleSynthesisRequest,
 	getSynthesisConfig,
-	SessionStartRequest,
-	PreCompactionRequest,
-	SynthesisRequest,
+	handleUserPromptSubmit,
+	handleSessionEnd,
+	handleRemember,
+	handleRecall,
+	type SessionStartRequest,
+	type PreCompactionRequest,
+	type SynthesisRequest,
+	type UserPromptSubmitRequest,
+	type SessionEndRequest,
+	type RememberRequest,
+	type RecallRequest,
 } from "./hooks.js";
 
 // Session start hook - provides context/memories for injection
@@ -2186,6 +2187,74 @@ app.post("/api/hooks/session-start", async (c) => {
 		return c.json(result);
 	} catch (e) {
 		logger.error("hooks", "Session start hook failed", e as Error);
+		return c.json({ error: "Hook execution failed" }, 500);
+	}
+});
+
+// User prompt submit hook - inject relevant memories per prompt
+app.post("/api/hooks/user-prompt-submit", async (c) => {
+	try {
+		const body = (await c.req.json()) as UserPromptSubmitRequest;
+
+		if (!body.harness || !body.userPrompt) {
+			return c.json({ error: "harness and userPrompt are required" }, 400);
+		}
+
+		const result = handleUserPromptSubmit(body);
+		return c.json(result);
+	} catch (e) {
+		logger.error("hooks", "User prompt submit hook failed", e as Error);
+		return c.json({ error: "Hook execution failed" }, 500);
+	}
+});
+
+// Session end hook - extract memories from transcript
+app.post("/api/hooks/session-end", async (c) => {
+	try {
+		const body = (await c.req.json()) as SessionEndRequest;
+
+		if (!body.harness) {
+			return c.json({ error: "harness is required" }, 400);
+		}
+
+		const result = await handleSessionEnd(body);
+		return c.json(result);
+	} catch (e) {
+		logger.error("hooks", "Session end hook failed", e as Error);
+		return c.json({ error: "Hook execution failed" }, 500);
+	}
+});
+
+// Remember hook - explicit memory save
+app.post("/api/hooks/remember", async (c) => {
+	try {
+		const body = (await c.req.json()) as RememberRequest;
+
+		if (!body.harness || !body.content) {
+			return c.json({ error: "harness and content are required" }, 400);
+		}
+
+		const result = handleRemember(body);
+		return c.json(result);
+	} catch (e) {
+		logger.error("hooks", "Remember hook failed", e as Error);
+		return c.json({ error: "Hook execution failed" }, 500);
+	}
+});
+
+// Recall hook - explicit memory query
+app.post("/api/hooks/recall", async (c) => {
+	try {
+		const body = (await c.req.json()) as RecallRequest;
+
+		if (!body.harness || !body.query) {
+			return c.json({ error: "harness and query are required" }, 400);
+		}
+
+		const result = handleRecall(body);
+		return c.json(result);
+	} catch (e) {
+		logger.error("hooks", "Recall hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);
 	}
 });
@@ -2226,10 +2295,11 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		}
 
 		const db = new Database(MEMORY_DB);
+		db.exec("PRAGMA busy_timeout = 5000");
 		const now = new Date().toISOString();
 
 		const stmt = db.prepare(`
-      INSERT INTO memories (content, type, importance, source, who, tags, created_at, updated_at)
+      INSERT INTO memories (content, type, importance, source_type, who, tags, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
@@ -4368,6 +4438,7 @@ function initMemorySchema() {
 	}
 
 	const db = new Database(MEMORY_DB);
+	db.exec("PRAGMA busy_timeout = 5000");
 
 	// Create memories table with all expected columns
 	db.exec(`
@@ -4454,6 +4525,7 @@ function initMemorySchema() {
 		["confidence", "REAL DEFAULT 1.0"],
 		["access_count", "INTEGER DEFAULT 0"],
 		["last_accessed", "TEXT"],
+		["session_id", "TEXT"],
 	];
 
 	for (const [col, def] of requiredColumns) {
@@ -4464,6 +4536,51 @@ function initMemorySchema() {
 				// Column might already exist
 			}
 		}
+	}
+
+	// Create FTS5 virtual table for full-text search
+	try {
+		db.exec(`
+			CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+			USING fts5(content, tags, content=memories, content_rowid=rowid)
+		`);
+	} catch {
+		// FTS5 table may already exist or content sync not supported;
+		// fall back to standalone FTS table
+		try {
+			db.exec(`
+				CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+				USING fts5(content, tags)
+			`);
+		} catch {
+			// Already exists
+		}
+	}
+
+	// Triggers to keep FTS in sync with memories table
+	try {
+		db.exec(`
+			CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+				INSERT INTO memories_fts(rowid, content, tags)
+				VALUES (new.rowid, new.content, new.tags);
+			END
+		`);
+		db.exec(`
+			CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+				INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+				VALUES('delete', old.rowid, old.content, old.tags);
+			END
+		`);
+		db.exec(`
+			CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+				INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+				VALUES('delete', old.rowid, old.content, old.tags);
+				INSERT INTO memories_fts(rowid, content, tags)
+				VALUES (new.rowid, new.content, new.tags);
+			END
+		`);
+	} catch {
+		// Triggers may already exist
 	}
 
 	db.close();

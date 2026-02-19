@@ -28,7 +28,6 @@ import { type IdentityMap, loadIdentityFilesSync } from "@signet/core";
 
 export interface ConnectorConfig {
 	daemonUrl?: string;
-	memoryScript?: string;
 	hooks?: {
 		sessionStart?: boolean;
 		userPromptSubmit?: boolean;
@@ -94,14 +93,10 @@ export class ClaudeCodeConnector extends BaseConnector {
 	 */
 	async install(basePath: string): Promise<InstallResult> {
 		const expandedBasePath = this.expandPath(basePath);
-		const memoryScript =
-			this.config.memoryScript ||
-			join(expandedBasePath, "memory", "scripts", "memory.py");
-
 		const filesWritten: string[] = [];
 
 		// Configure hooks in settings.json
-		await this.configureHooks(expandedBasePath, memoryScript);
+		await this.configureHooks(expandedBasePath);
 		const settingsPath = this.getConfigPath();
 		filesWritten.push(settingsPath);
 
@@ -174,7 +169,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			// Check if Signet hooks are present
 			return (
 				settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command?.includes(
-					"memory.py",
+					"signet hook",
 				) || false
 			);
 		} catch {
@@ -261,35 +256,27 @@ export class ClaudeCodeConnector extends BaseConnector {
 	/**
 	 * Configure hooks in ~/.claude/settings.json
 	 */
-	private async configureHooks(
-		basePath: string,
-		memoryScript: string,
-	): Promise<void> {
+	private async configureHooks(_basePath: string): Promise<void> {
 		const settingsPath = this.getConfigPath();
 		const claudeDir = join(homedir(), ".claude");
 
-		// Ensure ~/.claude directory exists
 		mkdirSync(claudeDir, { recursive: true });
 
-		// Load existing settings or create new
 		let settings: Record<string, unknown> = {};
 		if (existsSync(settingsPath)) {
 			try {
 				settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
 			} catch {
-				// If parsing fails, start fresh
 				settings = {};
 			}
 		}
 
-		// Determine which hooks to enable
 		const hooksConfig = this.config.hooks || {
 			sessionStart: true,
 			userPromptSubmit: true,
 			sessionEnd: true,
 		};
 
-		// Build hooks configuration
 		const hooks: Record<string, unknown[]> = {};
 
 		if (hooksConfig.sessionStart !== false) {
@@ -298,7 +285,8 @@ export class ClaudeCodeConnector extends BaseConnector {
 					hooks: [
 						{
 							type: "command",
-							command: `${memoryScript} load --mode session-start --project "$(pwd)"`,
+							command:
+								'signet hook session-start -H claude-code --project "$(pwd)"',
 							timeout: 3000,
 						},
 					],
@@ -312,7 +300,8 @@ export class ClaudeCodeConnector extends BaseConnector {
 					hooks: [
 						{
 							type: "command",
-							command: `${memoryScript} load --mode prompt --project "$(pwd)"`,
+							command:
+								'signet hook user-prompt-submit -H claude-code --project "$(pwd)"',
 							timeout: 2000,
 						},
 					],
@@ -326,15 +315,14 @@ export class ClaudeCodeConnector extends BaseConnector {
 					hooks: [
 						{
 							type: "command",
-							command: `${memoryScript} save --mode auto`,
-							timeout: 10000,
+							command: "signet hook session-end -H claude-code",
+							timeout: 15000,
 						},
 					],
 				},
 			];
 		}
 
-		// Merge with existing hooks (Signet hooks take precedence for our events)
 		settings.hooks = {
 			...(settings.hooks as Record<string, unknown>),
 			...hooks,

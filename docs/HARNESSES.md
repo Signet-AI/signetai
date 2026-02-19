@@ -53,7 +53,7 @@ Claude Code is Anthropic's official CLI for Claude. It reads configuration from 
 
 ### Memory hooks
 
-Signet writes hooks to `~/.claude/settings.json` that fire at session lifecycle events:
+Signet writes hooks to `~/.claude/settings.json` that fire at session lifecycle events. The hooks call the Signet CLI, which routes requests through the daemon HTTP API:
 
 ```json
 {
@@ -61,22 +61,22 @@ Signet writes hooks to `~/.claude/settings.json` that fire at session lifecycle 
     "SessionStart": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py load --mode session-start",
+        "command": "signet hook session-start -H claude-code --project \"$(pwd)\"",
         "timeout": 3000
       }]
     }],
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py load --mode prompt",
+        "command": "signet hook user-prompt-submit -H claude-code --project \"$(pwd)\"",
         "timeout": 2000
       }]
     }],
     "SessionEnd": [{
       "hooks": [{
         "type": "command",
-        "command": "python3 ~/.agents/memory/scripts/memory.py save --mode auto",
-        "timeout": 10000
+        "command": "signet hook session-end -H claude-code",
+        "timeout": 15000
       }]
     }]
   }

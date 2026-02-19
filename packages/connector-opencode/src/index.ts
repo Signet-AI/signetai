@@ -102,9 +102,6 @@ export class OpenCodeConnector extends BaseConnector {
 			};
 		}
 
-		// Determine memory script path
-		const scriptPath = join(basePath, "memory", "scripts", "memory.py");
-
 		// Ensure OpenCode config directory exists
 		const opencodePath = this.getOpenCodePath();
 		if (!existsSync(opencodePath)) {
@@ -112,7 +109,7 @@ export class OpenCodeConnector extends BaseConnector {
 		}
 
 		// Generate memory.mjs plugin
-		const pluginContent = generateMemoryPlugin({ memoryScript: scriptPath });
+		const pluginContent = generateMemoryPlugin({});
 		const pluginPath = join(opencodePath, "memory.mjs");
 		writeFileSync(pluginPath, pluginContent);
 		filesWritten.push(pluginPath);
@@ -234,12 +231,9 @@ export class OpenCodeConnector extends BaseConnector {
 	 * Creates the OpenCode plugin that provides /remember and /recall tools.
 	 */
 	async generateMemoryPlugin(
-		basePath: string,
-		memoryScript?: string,
+		_basePath: string,
 	): Promise<string> {
-		const scriptPath =
-			memoryScript || join(basePath, "memory", "scripts", "memory.py");
-		const pluginContent = generateMemoryPlugin({ memoryScript: scriptPath });
+		const pluginContent = generateMemoryPlugin({});
 
 		const opencodePath = this.getOpenCodePath();
 		if (!existsSync(opencodePath)) {

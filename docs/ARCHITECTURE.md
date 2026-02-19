@@ -470,8 +470,22 @@ For each selected harness, Signet generates integration files:
     SessionStart: [{
       hooks: [{
         type: 'command',
-        command: 'memory.py load --mode session-start',
+        command: 'signet hook session-start -H claude-code --project "$(pwd)"',
         timeout: 3000
+      }]
+    }],
+    UserPromptSubmit: [{
+      hooks: [{
+        type: 'command',
+        command: 'signet hook user-prompt-submit -H claude-code --project "$(pwd)"',
+        timeout: 2000
+      }]
+    }],
+    SessionEnd: [{
+      hooks: [{
+        type: 'command',
+        command: 'signet hook session-end -H claude-code',
+        timeout: 15000
       }]
     }]
   }
@@ -712,13 +726,11 @@ The daemon automatically ingests memory files on startup and when files change:
 
 ## Embedding Pipeline
 
-### Current Implementation (Python)
+### Current Implementation (Daemon API)
 
-```bash
-~/.agents/memory/scripts/memory.py save --mode explicit --content "..."
-~/.agents/memory/scripts/memory.py query "search query"
-~/.agents/memory/scripts/memory.py similar <id>
-```
+All embedding operations are handled by the daemon. The Signet CLI and harness hooks call the daemon HTTP API, which manages embedding generation internally via the configured provider.
+
+The Python scripts at `~/.agents/memory/scripts/` remain as optional batch tools.
 
 ### Providers
 
@@ -751,19 +763,24 @@ embedding:
 
 ## Future Architecture
 
-### Planned: Daemon-Native Memory
+### Implemented: Daemon-Native Memory
 
-Move memory operations from Python scripts to TypeScript daemon:
+All memory hooks now route through the daemon HTTP API instead of spawning Python subprocesses. Connectors call daemon endpoints directly:
 
-```typescript
-// Current
-spawn('python3', [MEMORY_SCRIPT, 'save', ...])
+- **Claude Code**: `signet hook session-start -H claude-code` (CLI wraps daemon API)
+- **OpenCode**: `fetch("http://localhost:3850/api/hooks/session-start", ...)` (direct)
+- **OpenClaw**: `@signet/adapter-openclaw` plugin methods (direct)
 
-// Future
-await this.memoryService.save(content, options);
-```
+Hook endpoints:
+- `POST /api/hooks/session-start` — inject memories into context
+- `POST /api/hooks/user-prompt-submit` — per-prompt context loading
+- `POST /api/hooks/session-end` — extract and save session memories (uses Ollama)
+- `POST /api/hooks/remember` — save a memory
+- `POST /api/hooks/recall` — search memories
 
-### Planned: Skills System
+The Python scripts at `~/.agents/memory/scripts/` remain as optional batch tools for bulk operations, re-indexing, and manual migrations.
+
+### Skills System
 
 ```
 ~/.agents/skills/

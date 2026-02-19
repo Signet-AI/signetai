@@ -53,17 +53,16 @@ The daemon automatically:
 - generates embedding via configured provider (Ollama/OpenAI)
 - stores in SQLite + embeddings table
 
-### fallback (daemon not running)
+### daemon required
 
-If the daemon is unavailable, fall back to the Python script:
+The daemon must be running for remember to work. Check status:
 
 ```bash
-python ~/.agents/memory/scripts/memory.py save \
-  --mode explicit --who <agent-name> --project "$(pwd)" \
-  --content "<content>"
+signet status
+curl -s http://localhost:3850/health
 ```
 
-Check daemon status: `signet status` or `curl -s http://localhost:3850/health`
+If the daemon is down, start it with `signet start`.
 
 ## type inference
 

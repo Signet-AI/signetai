@@ -259,28 +259,29 @@ See [API.md](./API.md) for full endpoint documentation.
 
 ---
 
-## Python Scripts
+## Python Scripts (Legacy)
 
-For advanced operations or when the daemon is unavailable, the memory scripts at `~/.agents/memory/scripts/memory.py` provide a fallback CLI:
+The Python scripts at `~/.agents/memory/scripts/memory.py` are optional batch tools for advanced operations. The primary path for all memory operations is now through the daemon HTTP API (via `signet remember` / `signet recall` or direct API calls).
+
+The scripts remain useful for:
+- Bulk import/export operations
+- Re-indexing embeddings
+- Manual database migrations
+- Environments where the daemon can't run
 
 ```bash
-# Save a memory (fallback when daemon not running)
+# Bulk save
 python3 ~/.agents/memory/scripts/memory.py save \
   --mode explicit \
   --who claude-code \
   --content "nicholai prefers tabs"
 
-# Query memories
+# Query (offline)
 python3 ~/.agents/memory/scripts/memory.py query "coding preferences" --limit 10
 
 # Find similar memories (by ID)
 python3 ~/.agents/memory/scripts/memory.py similar <memory-id> --k 5
-
-# Load context for session start
-python3 ~/.agents/memory/scripts/memory.py load --mode session-start
 ```
-
-The Signet CLI (`signet remember` / `signet recall`) is the preferred interface. The Python scripts remain useful for batch operations, re-indexing, and environments where the daemon isn't running.
 
 ---
 

@@ -1,20 +1,19 @@
 /**
  * Template for OpenCode memory.mjs plugin
  *
- * This plugin integrates Signet's memory system with OpenCode,
- * providing /remember and /recall tools and automatic context loading.
+ * This plugin integrates Signet's memory system with OpenCode via
+ * the Signet daemon API, providing /remember and /recall tools
+ * and automatic context loading.
  */
 
 export interface MemoryPluginOptions {
-	/** Path to the memory.py script */
-	memoryScript: string;
+	daemonUrl?: string;
 }
 
-/**
- * Generate the memory.mjs plugin content for OpenCode
- */
-export function generateMemoryPlugin(options: MemoryPluginOptions): string {
-	const { memoryScript } = options;
+export function generateMemoryPlugin(
+	options: MemoryPluginOptions = {},
+): string {
+	const daemonUrl = options.daemonUrl || "http://localhost:3850";
 
 	return `/**
  * Signet memory plugin for OpenCode
@@ -25,34 +24,38 @@ export function generateMemoryPlugin(options: MemoryPluginOptions): string {
  *   - /recall: Query persistent memory
  *   - Automatic context loading on session start
  *
- * Note: OpenCode does not yet support SessionEnd hooks.
- * Memories are saved explicitly via /remember or auto-saved
- * by the Signet daemon if running.
+ * Requires Signet daemon running on ${daemonUrl}
  */
 import { tool } from '@opencode-ai/plugin'
-import { spawn } from 'child_process'
 
-const MEMORY_SCRIPT = '${memoryScript}'
+const DAEMON_URL = process.env.SIGNET_DAEMON_URL || '${daemonUrl}'
 
-async function runMemoryScript(args) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('python3', [MEMORY_SCRIPT, ...args], { timeout: 3000 })
-    let stdout = '', stderr = ''
-    proc.stdout.on('data', (d) => { stdout += d.toString() })
-    proc.stderr.on('data', (d) => { stderr += d.toString() })
-    proc.on('close', (code) => {
-      if (code === 0) resolve(stdout.trim())
-      else reject(new Error(stderr || \`exit code \${code}\`))
+async function fetchDaemon(path, body) {
+  try {
+    const res = await fetch(\`\${DAEMON_URL}\${path}\`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5000),
     })
-    proc.on('error', reject)
-  })
+    if (!res.ok) throw new Error(\`daemon \${res.status}\`)
+    return await res.json()
+  } catch (e) {
+    return null
+  }
 }
 
 export async function MemoryPlugin({ directory }) {
   let memoryContext = ''
   try {
-    memoryContext = await runMemoryScript(['load', '--mode', 'session-start', '--project', directory])
-  } catch { memoryContext = '[memory active | /remember | /recall]' }
+    const data = await fetchDaemon('/api/hooks/session-start', {
+      harness: 'opencode',
+      project: directory,
+    })
+    memoryContext = data?.inject || '[memory active | /remember | /recall]'
+  } catch {
+    memoryContext = '[memory active | /remember | /recall]'
+  }
 
   return {
     "experimental.chat.system.transform": async (input, output) => {
@@ -63,17 +66,27 @@ export async function MemoryPlugin({ directory }) {
         description: "Save to persistent memory",
         args: { content: tool.schema.string().describe("Content to remember") },
         async execute(args, context) {
-          try {
-            return await runMemoryScript(['save', '--mode', 'explicit', '--who', 'opencode', '--project', context.directory, '--content', args.content])
-          } catch (e) { return \`error: \${e.message}\` }
+          const data = await fetchDaemon('/api/hooks/remember', {
+            harness: 'opencode',
+            who: 'opencode',
+            project: context.directory,
+            content: args.content,
+          })
+          if (data?.saved) return \`saved: \${args.content.slice(0, 50)}...\`
+          return 'error: could not save memory'
         }
       }),
       recall: tool({
         description: "Query persistent memory",
         args: { query: tool.schema.string().describe("Search query") },
-        async execute(args) {
-          try { return await runMemoryScript(['query', args.query]) || 'no memories found' }
-          catch (e) { return \`error: \${e.message}\` }
+        async execute(args, context) {
+          const data = await fetchDaemon('/api/hooks/recall', {
+            harness: 'opencode',
+            query: args.query,
+            project: context.directory,
+          })
+          if (!data?.results?.length) return 'no memories found'
+          return data.results.map(r => \`- \${r.content}\`).join('\\n')
         }
       })
     }

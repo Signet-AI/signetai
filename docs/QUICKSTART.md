@@ -86,7 +86,7 @@ After the wizard completes, the daemon starts automatically and the dashboard op
 ├── MEMORY.md            # Generated working memory (starts empty)
 ├── memory/
 │   ├── memories.db      # SQLite memory database
-│   └── scripts/         # memory.py CLI tool
+│   └── scripts/         # Optional batch tools (memory.py)
 ├── skills/
 │   ├── remember/        # Built-in: /remember command
 │   └── recall/          # Built-in: /recall command

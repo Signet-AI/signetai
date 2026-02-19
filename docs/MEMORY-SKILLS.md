@@ -254,18 +254,14 @@ The `builtin: true` frontmatter indicates these ship with Signet and integrate w
 
 ## Migration Path
 
-### Current State (v0.1)
+### Completed: Daemon-Native Hooks
 
-- Scripts in `~/.agents/memory/scripts/`
-- Skills call Python scripts via subprocess
-- Works but slow, requires Python
+All memory hooks now route through the daemon HTTP API. The migration from Python subprocess calls to daemon-native operations is complete:
 
-### Target State (v1.0)
-
-- Memory operations in daemon (TypeScript)
-- Skills call daemon HTTP API
+- Memory operations handled by daemon (TypeScript)
+- Skills call daemon HTTP API via `signet remember` / `signet recall`
 - No Python dependency for core functionality
-- Scripts remain for advanced operations (reindexing, export)
+- Python scripts remain as optional batch tools (reindexing, export, migration)
 
 ## Error Handling
 
