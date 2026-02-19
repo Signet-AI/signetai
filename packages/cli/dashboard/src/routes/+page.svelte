@@ -26,6 +26,7 @@ import {
 	uninstallSkill,
 	type Memory,
 	type EmbeddingPoint,
+	type EmbeddingsResponse,
 	type Skill,
 } from "$lib/api";
 
@@ -363,6 +364,7 @@ const MAX_EMBEDDING_LIMIT = 5000;
 const EMBEDDING_LIMIT_STORAGE_KEY = "signet-embedding-limit";
 const GRAPH_K = 4;
 const RELATION_LIMIT = 10;
+const EMBEDDING_PAGE_PROBE_LIMIT = 24;
 
 let canvas = $state<HTMLCanvasElement | null>(null);
 let graphSelected = $state<EmbeddingPoint | null>(null);
@@ -385,6 +387,16 @@ interface EmbeddingRelation {
 	id: string;
 	score: number;
 	kind: RelationKind;
+}
+
+interface RelationScore {
+	id: string;
+	score: number;
+}
+
+interface RelationCacheEntry {
+	similar: EmbeddingRelation[];
+	dissimilar: EmbeddingRelation[];
 }
 
 let relationMode = $state<RelationKind>("similar");
@@ -449,6 +461,7 @@ let resizeListenerAttached = false;
 let embeddingById = new Map<string, EmbeddingPoint>();
 let embeddingNormById = new Map<string, number>();
 let relationLookup = new Map<string, RelationKind>();
+let relationCache = new Map<string, RelationCacheEntry>();
 
 if (browser) {
 	let nextLimit = DEFAULT_EMBEDDING_LIMIT;
@@ -501,6 +514,111 @@ function clearEmbeddingSelection() {
 	graphSelected = null;
 	graphHovered = null;
 	globalSimilar = [];
+}
+
+function mergeUniqueEmbeddings(
+	target: EmbeddingPoint[],
+	seen: Set<string>,
+	incoming: readonly EmbeddingPoint[],
+): number {
+	let added = 0;
+	for (const item of incoming) {
+		if (seen.has(item.id)) continue;
+		seen.add(item.id);
+		target.push(item);
+		added += 1;
+	}
+	return added;
+}
+
+function buildEmbeddingsResponse(
+	requestedLimit: number,
+	embeddings: EmbeddingPoint[],
+	total: number,
+	hasMore: boolean,
+	error?: string,
+): EmbeddingsResponse {
+	const normalizedTotal = total > 0 ? total : embeddings.length;
+	return {
+		embeddings,
+		count: embeddings.length,
+		total: normalizedTotal,
+		limit: requestedLimit,
+		offset: 0,
+		hasMore: hasMore || normalizedTotal > embeddings.length,
+		error,
+	};
+}
+
+async function loadEmbeddingsForGraph(limit: number): Promise<EmbeddingsResponse> {
+	const requestedLimit = clampEmbeddingLimit(limit);
+	const firstPage = await getEmbeddings(true, { limit: requestedLimit, offset: 0 });
+
+	if (firstPage.error) {
+		return firstPage;
+	}
+
+	const merged: EmbeddingPoint[] = [];
+	const seen = new Set<string>();
+	mergeUniqueEmbeddings(merged, seen, firstPage.embeddings ?? []);
+
+	let total = firstPage.total > 0 ? firstPage.total : merged.length;
+	let hasMore = firstPage.hasMore || total > merged.length;
+
+	if (merged.length >= requestedLimit) {
+		return buildEmbeddingsResponse(
+			requestedLimit,
+			merged.slice(0, requestedLimit),
+			total,
+			hasMore,
+		);
+	}
+
+	let offset = merged.length;
+	let probeCount = 0;
+	let shouldProbeForMore = requestedLimit > merged.length && merged.length > 0;
+
+	while (
+		merged.length < requestedLimit &&
+		probeCount < EMBEDDING_PAGE_PROBE_LIMIT &&
+		(hasMore || shouldProbeForMore)
+	) {
+		const remaining = requestedLimit - merged.length;
+		const page = await getEmbeddings(true, { limit: remaining, offset });
+
+		if (page.error) {
+			return buildEmbeddingsResponse(
+				requestedLimit,
+				merged,
+				total,
+				hasMore,
+				page.error,
+			);
+		}
+
+		const rows = page.embeddings ?? [];
+		const added = mergeUniqueEmbeddings(merged, seen, rows);
+
+		if (page.total > total) {
+			total = page.total;
+		}
+		hasMore = page.hasMore || total > merged.length;
+
+		if (rows.length === 0 || added === 0) {
+			break;
+		}
+
+		offset += rows.length;
+		shouldProbeForMore = !hasMore && merged.length < requestedLimit;
+		probeCount += 1;
+	}
+
+	return buildEmbeddingsResponse(
+		requestedLimit,
+		merged.slice(0, requestedLimit),
+		total,
+		hasMore,
+	);
 }
 
 function embeddingLabel(embedding: EmbeddingPoint): string {
@@ -590,6 +708,30 @@ function cosineSimilarity(
 	return dot / (leftNorm * rightNorm);
 }
 
+function insertTopScore(scores: RelationScore[], next: RelationScore) {
+	let index = 0;
+	while (index < scores.length && scores[index].score >= next.score) {
+		index += 1;
+	}
+	if (index >= RELATION_LIMIT) return;
+	scores.splice(index, 0, next);
+	if (scores.length > RELATION_LIMIT) {
+		scores.pop();
+	}
+}
+
+function insertBottomScore(scores: RelationScore[], next: RelationScore) {
+	let index = 0;
+	while (index < scores.length && scores[index].score <= next.score) {
+		index += 1;
+	}
+	if (index >= RELATION_LIMIT) return;
+	scores.splice(index, 0, next);
+	if (scores.length > RELATION_LIMIT) {
+		scores.pop();
+	}
+}
+
 function computeRelationsForSelection(selected: EmbeddingPoint | null) {
 	if (!selected || !hasEmbeddingVector(selected)) {
 		similarNeighbors = [];
@@ -599,8 +741,18 @@ function computeRelationsForSelection(selected: EmbeddingPoint | null) {
 		return;
 	}
 
+	const cached = relationCache.get(selected.id);
+	if (cached) {
+		similarNeighbors = cached.similar;
+		dissimilarNeighbors = cached.dissimilar;
+		activeNeighbors = relationMode === "similar" ? cached.similar : cached.dissimilar;
+		relationLookup = new Map(activeNeighbors.map((item) => [item.id, item.kind]));
+		return;
+	}
+
 	const selectedNorm = embeddingNorm(selected);
-	const scored: EmbeddingRelation[] = [];
+	const similarScores: RelationScore[] = [];
+	const dissimilarScores: RelationScore[] = [];
 
 	for (const candidate of embeddings) {
 		if (candidate.id === selected.id || !hasEmbeddingVector(candidate)) {
@@ -613,11 +765,13 @@ function computeRelationsForSelection(selected: EmbeddingPoint | null) {
 			embeddingNorm(candidate),
 		);
 		if (Number.isFinite(score)) {
-			scored.push({ id: candidate.id, score, kind: "similar" });
+			const relation = { id: candidate.id, score };
+			insertTopScore(similarScores, relation);
+			insertBottomScore(dissimilarScores, relation);
 		}
 	}
 
-	if (scored.length === 0) {
+	if (similarScores.length === 0) {
 		similarNeighbors = [];
 		dissimilarNeighbors = [];
 		activeNeighbors = [];
@@ -625,14 +779,14 @@ function computeRelationsForSelection(selected: EmbeddingPoint | null) {
 		return;
 	}
 
-	const bySimilarity = [...scored].sort((a, b) => b.score - a.score);
-	similarNeighbors = bySimilarity
-		.slice(0, RELATION_LIMIT)
+	similarNeighbors = similarScores
 		.map((item) => ({ ...item, kind: "similar" }));
-	dissimilarNeighbors = [...bySimilarity]
-		.reverse()
-		.slice(0, RELATION_LIMIT)
+	dissimilarNeighbors = dissimilarScores
 		.map((item) => ({ ...item, kind: "dissimilar" }));
+	relationCache.set(selected.id, {
+		similar: similarNeighbors,
+		dissimilar: dissimilarNeighbors,
+	});
 
 	activeNeighbors = relationMode === "similar" ? similarNeighbors : dissimilarNeighbors;
 	relationLookup = new Map(activeNeighbors.map((item) => [item.id, item.kind]));
@@ -974,6 +1128,7 @@ async function reloadEmbeddingsGraph() {
 	embeddingById = new Map();
 	embeddingNormById = new Map();
 	relationLookup = new Map();
+	relationCache = new Map();
 	similarNeighbors = [];
 	dissimilarNeighbors = [];
 	activeNeighbors = [];
@@ -1008,7 +1163,7 @@ async function initGraph() {
 	const loadId = ++graphLoadId;
 
 	try {
-		const result = await getEmbeddings(true, { limit: embeddingLimit });
+		const result = await loadEmbeddingsForGraph(embeddingLimit);
 		if (loadId !== graphLoadId) return;
 
 		if (result.error) {

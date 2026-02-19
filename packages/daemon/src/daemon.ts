@@ -213,6 +213,287 @@ function parseBoundedInt(
 	return Math.min(max, Math.max(min, parsed));
 }
 
+interface LegacyEmbeddingsResponse {
+	embeddings: Array<Record<string, unknown>>;
+	count: number;
+	total: number;
+	limit: number;
+	offset: number;
+	hasMore: boolean;
+	error?: string;
+}
+
+function defaultLegacyEmbeddingsResponse(
+	limit: number,
+	offset: number,
+	error?: string,
+): LegacyEmbeddingsResponse {
+	return {
+		embeddings: [],
+		count: 0,
+		total: 0,
+		limit,
+		offset,
+		hasMore: false,
+		error,
+	};
+}
+
+function parseLegacyTagsField(raw: unknown): string[] {
+	if (Array.isArray(raw)) {
+		return raw.filter(
+			(value): value is string =>
+				typeof value === "string" && value.trim().length > 0,
+		);
+	}
+
+	if (typeof raw === "string") {
+		return parseTagsField(raw);
+	}
+
+	return [];
+}
+
+function parseLegacyVector(raw: unknown): number[] | undefined {
+	if (Array.isArray(raw)) {
+		const values = raw.filter(
+			(value): value is number =>
+				typeof value === "number" && Number.isFinite(value),
+		);
+		return values.length > 0 ? values : undefined;
+	}
+
+	if (typeof raw === "string") {
+		try {
+			const parsed: unknown = JSON.parse(raw);
+			if (Array.isArray(parsed)) {
+				const values = parsed.filter(
+					(value): value is number =>
+						typeof value === "number" && Number.isFinite(value),
+				);
+				return values.length > 0 ? values : undefined;
+			}
+		} catch {
+			// Ignore malformed JSON vectors from legacy scripts.
+		}
+	}
+
+	return undefined;
+}
+
+function normalizeLegacyEmbeddingRow(
+	raw: unknown,
+	withVectors: boolean,
+): Record<string, unknown> | null {
+	if (typeof raw !== "object" || raw === null) {
+		return null;
+	}
+
+	const row = raw as Record<string, unknown>;
+	const rawId = row.id ?? row.source_id;
+	if (typeof rawId !== "string" && typeof rawId !== "number") {
+		return null;
+	}
+
+	const id = String(rawId);
+	const rawContent = row.content ?? row.text ?? "";
+	const content =
+		typeof rawContent === "string" ? rawContent : String(rawContent);
+	const who =
+		typeof row.who === "string" && row.who.length > 0
+			? row.who
+			: "unknown";
+
+	const sourceType =
+		typeof row.sourceType === "string"
+			? row.sourceType
+			: typeof row.source_type === "string"
+				? row.source_type
+				: "memory";
+
+	const sourceIdRaw = row.sourceId ?? row.source_id ?? id;
+	const sourceId =
+		typeof sourceIdRaw === "string" || typeof sourceIdRaw === "number"
+			? String(sourceIdRaw)
+			: id;
+
+	const createdAtRaw = row.createdAt ?? row.created_at;
+	const createdAt =
+		typeof createdAtRaw === "string" ? createdAtRaw : undefined;
+
+	const typeValue = typeof row.type === "string" ? row.type : null;
+	const importance =
+		typeof row.importance === "number" && Number.isFinite(row.importance)
+			? row.importance
+			: 0.5;
+
+	const normalized: Record<string, unknown> = {
+		id,
+		content,
+		text: content,
+		who,
+		importance,
+		type: typeValue,
+		tags: parseLegacyTagsField(row.tags),
+		sourceType,
+		sourceId,
+		createdAt,
+	};
+
+	if (withVectors) {
+		const vector = parseLegacyVector(row.vector);
+		if (vector) {
+			normalized.vector = vector;
+		}
+	}
+
+	return normalized;
+}
+
+function normalizeLegacyEmbeddingsPayload(
+	payload: unknown,
+	withVectors: boolean,
+	limit: number,
+	offset: number,
+): LegacyEmbeddingsResponse {
+	if (typeof payload !== "object" || payload === null) {
+		return defaultLegacyEmbeddingsResponse(
+			limit,
+			offset,
+			"Legacy export returned invalid payload",
+		);
+	}
+
+	const data = payload as Record<string, unknown>;
+	const rawEmbeddings = Array.isArray(data.embeddings) ? data.embeddings : [];
+	const embeddings = rawEmbeddings
+		.map((entry) => normalizeLegacyEmbeddingRow(entry, withVectors))
+		.filter((entry): entry is Record<string, unknown> => entry !== null);
+
+	const total =
+		typeof data.total === "number" && Number.isFinite(data.total)
+			? data.total
+			: typeof data.count === "number" && Number.isFinite(data.count)
+				? data.count
+				: embeddings.length;
+
+	const resolvedLimit =
+		typeof data.limit === "number" && Number.isFinite(data.limit)
+			? data.limit
+			: limit;
+
+	const resolvedOffset =
+		typeof data.offset === "number" && Number.isFinite(data.offset)
+			? data.offset
+			: offset;
+
+	const hasMore =
+		typeof data.hasMore === "boolean"
+			? data.hasMore
+			: resolvedOffset + resolvedLimit < total;
+
+	const error = typeof data.error === "string" ? data.error : undefined;
+
+	return {
+		embeddings,
+		count: embeddings.length,
+		total,
+		limit: resolvedLimit,
+		offset: resolvedOffset,
+		hasMore,
+		error,
+	};
+}
+
+function isMissingEmbeddingsTableError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.includes("no such table: embeddings");
+}
+
+async function runLegacyEmbeddingsExport(
+	withVectors: boolean,
+	limit: number,
+	offset: number,
+): Promise<LegacyEmbeddingsResponse | null> {
+	const scriptPath = join(AGENTS_DIR, "memory", "scripts", "export_embeddings.py");
+	if (!existsSync(scriptPath)) {
+		return null;
+	}
+
+	const args = [scriptPath, "--limit", String(limit), "--offset", String(offset)];
+	if (withVectors) {
+		args.push("--with-vectors");
+	}
+
+	return await new Promise<LegacyEmbeddingsResponse>((resolve) => {
+		const proc = spawn(getPythonCmd(), args, {
+			cwd: AGENTS_DIR,
+			stdio: "pipe",
+			timeout: withVectors ? 120000 : 30000,
+		});
+
+		let stdout = "";
+		let stderr = "";
+
+		proc.stdout.on("data", (chunk) => {
+			stdout += chunk.toString();
+		});
+
+		proc.stderr.on("data", (chunk) => {
+			stderr += chunk.toString();
+		});
+
+		proc.on("close", (code) => {
+			if (code !== 0) {
+				resolve(
+					defaultLegacyEmbeddingsResponse(
+						limit,
+						offset,
+						stderr.trim() ||
+							`Legacy embeddings export failed (exit ${code})`,
+					),
+				);
+				return;
+			}
+
+			if (!stdout.trim()) {
+				resolve(
+					defaultLegacyEmbeddingsResponse(
+						limit,
+						offset,
+						"Legacy embeddings export returned empty output",
+					),
+				);
+				return;
+			}
+
+			try {
+				const parsed: unknown = JSON.parse(stdout);
+				resolve(
+					normalizeLegacyEmbeddingsPayload(
+						parsed,
+						withVectors,
+						limit,
+						offset,
+					),
+				);
+			} catch (error) {
+				resolve(
+					defaultLegacyEmbeddingsResponse(
+						limit,
+						offset,
+						`Legacy embeddings export returned invalid JSON: ${(error as Error).message}`,
+					),
+				);
+			}
+		});
+
+		proc.on("error", (error) => {
+			resolve(defaultLegacyEmbeddingsResponse(limit, offset, error.message));
+		});
+	});
+}
+
 // Status cache for embedding provider
 let cachedEmbeddingStatus: EmbeddingStatus | null = null;
 let statusCacheTime = 0;
@@ -1415,6 +1696,22 @@ app.get("/api/embeddings", async (c) => {
 			hasMore: offset + embeddings.length < total,
 		});
 	} catch (e) {
+		if (isMissingEmbeddingsTableError(e)) {
+			db?.close();
+			db = null;
+
+			const legacy = await runLegacyEmbeddingsExport(withVectors, limit, offset);
+			if (legacy) {
+				if (legacy.error) {
+					logger.warn("memory", "Legacy embeddings export failed", {
+						error: legacy.error,
+					});
+					return c.json(legacy, 500);
+				}
+				return c.json(legacy);
+			}
+		}
+
 		return c.json({
 			error: (e as Error).message,
 			embeddings: [],
