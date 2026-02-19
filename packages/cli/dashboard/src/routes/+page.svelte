@@ -395,6 +395,8 @@ let animFrame = 0;
 let graphMode: "2d" | "3d" = $state("2d");
 let graph3d: any = null;
 let graph3dContainer = $state<HTMLDivElement | null>(null);
+const EMBEDDINGS_VIEW_LIMIT = 1000;
+let cachedProjected3d: number[][] | null = null;
 
 function hexToRgb(hex: string): [number, number, number] {
 	const v = parseInt(hex.slice(1), 16);
@@ -405,7 +407,7 @@ function buildKnnEdges(projected: number[][], k: number): [number, number][] {
 	const edgeSet = new Set<string>();
 	const result: [number, number][] = [];
 	for (let i = 0; i < projected.length; i++) {
-		const dists: { j: number; d: number }[] = [];
+		const nearest: { j: number; d: number }[] = [];
 		for (let j = 0; j < projected.length; j++) {
 			if (i === j) continue;
 			let d = 0;
@@ -413,12 +415,18 @@ function buildKnnEdges(projected: number[][], k: number): [number, number][] {
 				const diff = projected[i][c] - projected[j][c];
 				d += diff * diff;
 			}
-			dists.push({ j, d });
+
+			let insertAt = nearest.findIndex((entry) => d < entry.d);
+			if (insertAt === -1) insertAt = nearest.length;
+			if (insertAt < k) {
+				nearest.splice(insertAt, 0, { j, d });
+				if (nearest.length > k) nearest.pop();
+			}
 		}
-		dists.sort((a, b) => a.d - b.d);
-		for (let n = 0; n < Math.min(k, dists.length); n++) {
-			const a = Math.min(i, dists[n].j);
-			const b = Math.max(i, dists[n].j);
+
+		for (const entry of nearest) {
+			const a = Math.min(i, entry.j);
+			const b = Math.max(i, entry.j);
 			const key = `${a}-${b}`;
 			if (!edgeSet.has(key)) {
 				edgeSet.add(key);
@@ -708,7 +716,7 @@ async function initGraph() {
 	graphStatus = "Loading embeddings...";
 
 	try {
-		const result = await getEmbeddings(true);
+		const result = await getEmbeddings(true, EMBEDDINGS_VIEW_LIMIT);
 
 		if (result.error) {
 			graphError = result.error;
@@ -717,13 +725,14 @@ async function initGraph() {
 		}
 
 		embeddings = result.embeddings || [];
+		cachedProjected3d = null;
 		if (embeddings.length === 0 || !embeddings[0].vector) {
 			graphStatus = "";
 			if (embeddings.length > 0) graphError = "No vector data available";
 			return;
 		}
 
-		graphStatus = `Computing UMAP (${embeddings.length})...`;
+		graphStatus = `Computing UMAP (${embeddings.length} / max ${EMBEDDINGS_VIEW_LIMIT})...`;
 		await new Promise((r) => setTimeout(r, 50));
 
 		const vectors = embeddings.map((e: any) => e.vector);
@@ -768,7 +777,9 @@ async function initGraph() {
 			data: emb,
 		}));
 
-		edges = buildKnnEdges(projected, 4).map(([a, b]) => ({
+		const edgeK = embeddings.length > 600 ? 2 : embeddings.length > 300 ? 3 : 4;
+
+		edges = buildKnnEdges(projected, edgeK).map(([a, b]) => ({
 			source: a,
 			target: b,
 		}));
@@ -821,7 +832,8 @@ async function init3DGraph(projected3d: number[][]) {
 		val: 1 + (e.importance ?? 0.5) * 3,
 	}));
 
-	const edgePairs = buildKnnEdges(projected3d, 4);
+	const edgeK = embeddings.length > 600 ? 2 : embeddings.length > 300 ? 3 : 4;
+	const edgePairs = buildKnnEdges(projected3d, edgeK);
 	const linkData = edgePairs.map(([a, b]) => ({
 		source: nodeData[a].id,
 		target: nodeData[b].id,
@@ -852,27 +864,30 @@ async function switchGraphMode(mode: "2d" | "3d") {
 
 		if (!graphInitialized || embeddings.length === 0) return;
 
-		graphStatus = "Computing 3D layout...";
-		await new Promise((r) => setTimeout(r, 50));
+		let projected3d = cachedProjected3d;
+		if (!projected3d) {
+			graphStatus = "Computing 3D layout...";
+			await new Promise((r) => setTimeout(r, 50));
 
-		const vectors = embeddings.map((e: any) => e.vector);
-		const umap3d = new UMAP({
-			nComponents: 3,
-			nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
-			minDist: 0.1,
-			spread: 1.0,
-		});
+			const vectors = embeddings.map((e: any) => e.vector);
+			const umap3d = new UMAP({
+				nComponents: 3,
+				nNeighbors: Math.min(15, Math.max(2, vectors.length - 1)),
+				minDist: 0.1,
+				spread: 1.0,
+			});
 
-		let projected3d: number[][];
-		try {
-			projected3d = umap3d.fit(vectors);
-		} catch (e: any) {
-			graphError = `3D UMAP failed: ${e.message}`;
-			graphStatus = "";
-			graphMode = "2d";
-			const ctx = canvas?.getContext("2d");
-			if (ctx) draw(ctx);
-			return;
+			try {
+				projected3d = umap3d.fit(vectors);
+				cachedProjected3d = projected3d;
+			} catch (e: any) {
+				graphError = `3D UMAP failed: ${e.message}`;
+				graphStatus = "";
+				graphMode = "2d";
+				const ctx = canvas?.getContext("2d");
+				if (ctx) draw(ctx);
+				return;
+			}
 		}
 
 		graphStatus = "";
