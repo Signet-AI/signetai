@@ -1089,7 +1089,12 @@ function formatDate(dateStr: string): string {
         <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.2"/>
         <circle cx="7" cy="7" r="2" fill="currentColor"/>
       </svg>
-      <span class="brand-name">signet</span>
+      <span class="brand-name">signet // codex lab</span>
+    </div>
+
+    <div class="header-signals" aria-hidden="true">
+      <span class="signal-chip">NODEMAP</span>
+      <span class="signal-chip signal-chip-pop">ASCII FLOW</span>
     </div>
     
     <button class="btn-icon" onclick={toggleTheme} aria-label="Toggle theme">
@@ -1313,6 +1318,7 @@ function formatDate(dateStr: string): string {
                 <p>Loading...</p>
               </div>
             {/if}
+            <div class="graph-ascii" aria-hidden="true">:: ○ ○ 01 10 11 // latent topology</div>
             <div class="graph-corners" aria-hidden="true">
               <span class="corner corner-tl"></span>
               <span class="corner corner-tr"></span>
@@ -1541,7 +1547,7 @@ function formatDate(dateStr: string): string {
           </span>
         {:else if activeTab === 'embeddings'}
           <span>{nodes.length} nodes · {edges.length} edges</span>
-          <span class="statusbar-right">UMAP · {graphMode.toUpperCase()}</span>
+          <span class="statusbar-right">UMAP · {graphMode.toUpperCase()} · SIGNAL</span>
         {:else if activeTab === 'logs'}
           <span>{logs.length} entries</span>
           <span class="statusbar-right">
@@ -1694,7 +1700,7 @@ function formatDate(dateStr: string): string {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background: var(--bg-canvas);
+    background: linear-gradient(180deg, rgba(61, 77, 255, 0.08), transparent 120px), var(--bg-canvas);
     color: var(--text-primary);
     overflow: hidden;
   }
@@ -1712,9 +1718,10 @@ function formatDate(dateStr: string): string {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 44px;
+    height: 48px;
     padding: 0 var(--space-4);
-    border-bottom: 1px solid var(--border-standard);
+    border-bottom: 1px solid var(--border-emphasis);
+    backdrop-filter: blur(6px);
     flex-shrink: 0;
   }
 
@@ -1729,9 +1736,36 @@ function formatDate(dateStr: string): string {
   }
 
   .brand-name {
-    font-size: 13px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+  }
+
+  .header-signals {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    margin-right: 8px;
+  }
+
+  .signal-chip {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    border: 1px solid var(--border-standard);
+    color: var(--text-secondary);
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(138, 168, 255, 0.08);
+  }
+
+  .signal-chip-pop {
+    color: var(--bg-canvas);
+    background: var(--accent-lime);
+    border-color: transparent;
   }
 
   .btn-icon {
@@ -1762,12 +1796,12 @@ function formatDate(dateStr: string): string {
   }
 
   .sidebar-left {
-    width: 200px;
+    width: 220px;
     border-right: 1px solid var(--border-standard);
   }
 
   .sidebar-right {
-    width: 280px;
+    width: 300px;
     border-left: 1px solid var(--border-standard);
   }
 
@@ -1917,9 +1951,10 @@ function formatDate(dateStr: string): string {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 40px;
+    height: 44px;
     padding: 0 var(--space-3);
-    border-bottom: 1px solid var(--border-standard);
+    border-bottom: 1px solid var(--border-emphasis);
+    backdrop-filter: blur(6px);
     flex-shrink: 0;
   }
 
@@ -1946,7 +1981,8 @@ function formatDate(dateStr: string): string {
 
   .tab-active {
     color: var(--text-primary);
-    background: var(--bg-elevated);
+    background: linear-gradient(135deg, rgba(138, 168, 255, 0.15), rgba(61, 77, 255, 0.12));
+    border: 1px solid var(--border-accent);
   }
 
   .tab-info {
@@ -2042,6 +2078,19 @@ function formatDate(dateStr: string): string {
     background: #050505;
   }
 
+  .graph-ascii {
+    position: absolute;
+    left: 14px;
+    top: 10px;
+    z-index: 6;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: rgba(212, 255, 0, 0.78);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+
   .graph-corners {
     position: absolute;
     inset: 0;
@@ -2123,6 +2172,7 @@ function formatDate(dateStr: string): string {
   
   .statusbar {
     display: flex;
+    background: rgba(8, 11, 18, 0.7);
     align-items: center;
     justify-content: space-between;
     height: 26px;
@@ -2171,8 +2221,8 @@ function formatDate(dateStr: string): string {
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--text-primary);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-subtle);
+    background: linear-gradient(135deg, rgba(138, 168, 255, 0.15), rgba(61, 77, 255, 0.12));
+    border: 1px solid var(--border-accent);
     border-radius: var(--radius-md);
     outline: none;
   }
@@ -2547,9 +2597,9 @@ function formatDate(dateStr: string): string {
   .secrets-input {
     flex: 1;
     padding: 8px 12px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-standard);
     border-radius: 6px;
-    background: var(--bg-secondary);
+    background: var(--bg-elevated);
     color: var(--text-primary);
     font-size: 13px;
   }
@@ -2578,21 +2628,21 @@ function formatDate(dateStr: string): string {
     align-items: center;
     gap: 12px;
     padding: 12px 16px;
-    background: var(--bg-secondary);
+    background: var(--bg-elevated);
     border-radius: 8px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-standard);
   }
 
   .secret-name {
     flex: 1;
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 13px;
     color: var(--text-primary);
   }
 
   .secret-value {
     color: var(--text-tertiary);
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 12px;
   }
 
@@ -2636,9 +2686,9 @@ function formatDate(dateStr: string): string {
   .skills-search-input {
     flex: 1;
     padding: 8px 12px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-standard);
     border-radius: 6px;
-    background: var(--bg-secondary);
+    background: var(--bg-elevated);
     color: var(--text-primary);
     font-size: 13px;
   }
@@ -2681,9 +2731,9 @@ function formatDate(dateStr: string): string {
 
   .skill-item {
     padding: 12px 16px;
-    background: var(--bg-secondary);
+    background: var(--bg-elevated);
     border-radius: 8px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-standard);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -2700,7 +2750,7 @@ function formatDate(dateStr: string): string {
   }
 
   .skill-name {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 13px;
     font-weight: 500;
     color: var(--text-primary);
@@ -2724,9 +2774,9 @@ function formatDate(dateStr: string): string {
   }
 
   .skill-badge.invocable {
-    background: var(--bg-tertiary);
+    background: color-mix(in srgb, var(--bg-elevated) 80%, white 20%);
     color: var(--text-secondary);
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     text-transform: none;
   }
 
