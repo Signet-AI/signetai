@@ -1410,7 +1410,7 @@ async function setupWizard(options: { path?: string }) {
 			copyDirRecursive(utilScriptsSource, join(basePath, "scripts"));
 		}
 
-		// Install built-in skills (remember, recall)
+		// Install built-in skills (remember, recall, memory-debug)
 		spinner.text = "Installing built-in skills...";
 		const skillsSource = join(templatesDir, "skills");
 		if (existsSync(skillsSource)) {
