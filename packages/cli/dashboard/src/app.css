@@ -1,38 +1,36 @@
 @import "tailwindcss";
 
-/* === Minimalist Theme: Seal & Ink ===
- * 
- * Intent: Developer tool for managing AI agent memory.
- * Feel: Precision instrument. Content-first. Every pixel earns its place.
- * Depth: Borders-only. Hairline separation, no shadows.
- * Surfaces: Unified canvas. Elevation through border hierarchy only.
- * Signature: The seal - circular indicators, ring accents, authentication marks.
+/* === Codex x Data-Lab Theme ===
+ * High-contrast editorial UI with deep data-viz accents.
+ * Dark command-center baseline + electric signal highlights.
  */
 
 :root {
-	/* Primitives - reduced palette, clearer intent */
-	--bg-canvas: #0a0a0b;
-	--bg-surface: #0f0f10;
-	--bg-elevated: #131314;
+	/* Primitives */
+	--bg-canvas: #060709;
+	--bg-surface: #0c0f14;
+	--bg-elevated: #11151d;
 
-	--text-primary: #e8e8e6;
-	--text-secondary: #8a8a88;
-	--text-tertiary: #5a5a58;
-	--text-muted: #40403e;
+	--text-primary: #ebeff7;
+	--text-secondary: #a9b3c7;
+	--text-tertiary: #6d7790;
+	--text-muted: #495167;
 
-	--accent-seal: #5eada4;
-	--accent-seal-dim: rgba(94, 173, 164, 0.08);
-	--accent-seal-ring: rgba(94, 173, 164, 0.15);
+	--accent-seal: #8aa8ff;
+	--accent-seal-dim: rgba(138, 168, 255, 0.1);
+	--accent-seal-ring: rgba(138, 168, 255, 0.2);
+	--accent-pop: #3d4dff;
+	--accent-lime: #d4ff00;
 
 	--success: #4ade80;
 	--warning: #fbbf24;
 	--error: #f87171;
 
-	/* Borders - hairline system */
-	--border-subtle: rgba(255, 255, 255, 0.04);
-	--border-standard: rgba(255, 255, 255, 0.08);
-	--border-emphasis: rgba(255, 255, 255, 0.12);
-	--border-accent: rgba(94, 173, 164, 0.25);
+	/* Borders */
+	--border-subtle: rgba(187, 206, 255, 0.07);
+	--border-standard: rgba(187, 206, 255, 0.14);
+	--border-emphasis: rgba(187, 206, 255, 0.22);
+	--border-accent: rgba(138, 168, 255, 0.36);
 
 	/* Spacing - 4px base */
 	--space-1: 4px;
@@ -52,31 +50,39 @@
 	--font-sans: "Inter", system-ui, -apple-system, sans-serif;
 	--font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
 
+	/* Legacy aliases used in component styles */
+	--border: var(--border-standard);
+	--bg-secondary: var(--bg-elevated);
+	--bg-tertiary: color-mix(in srgb, var(--bg-elevated) 75%, white 25%);
+	--mono: var(--font-mono);
+
 	color-scheme: dark;
 }
 
 [data-theme="light"] {
-	--bg-canvas: #fafaf9;
+	--bg-canvas: #f4f6fb;
 	--bg-surface: #ffffff;
-	--bg-elevated: #f5f5f4;
+	--bg-elevated: #eaf0ff;
 
-	--text-primary: #1c1917;
-	--text-secondary: #78716c;
-	--text-tertiary: #a8a29e;
-	--text-muted: #d6d3d1;
+	--text-primary: #111827;
+	--text-secondary: #4b5563;
+	--text-tertiary: #6b7280;
+	--text-muted: #c5ccda;
 
-	--accent-seal: #3d8a82;
-	--accent-seal-dim: rgba(61, 138, 130, 0.06);
-	--accent-seal-ring: rgba(61, 138, 130, 0.12);
+	--accent-seal: #3b5bfd;
+	--accent-seal-dim: rgba(59, 91, 253, 0.08);
+	--accent-seal-ring: rgba(59, 91, 253, 0.16);
+	--accent-pop: #253fff;
+	--accent-lime: #98a400;
 
 	--success: #16a34a;
 	--warning: #d97706;
 	--error: #dc2626;
 
-	--border-subtle: rgba(0, 0, 0, 0.04);
-	--border-standard: rgba(0, 0, 0, 0.08);
-	--border-emphasis: rgba(0, 0, 0, 0.12);
-	--border-accent: rgba(61, 138, 130, 0.2);
+	--border-subtle: rgba(37, 62, 130, 0.08);
+	--border-standard: rgba(37, 62, 130, 0.16);
+	--border-emphasis: rgba(37, 62, 130, 0.24);
+	--border-accent: rgba(59, 91, 253, 0.26);
 
 	color-scheme: light;
 }
@@ -101,7 +107,10 @@
 }
 
 html {
-	background: var(--bg-canvas);
+	background:
+		radial-gradient(circle at 15% -10%, rgba(61, 77, 255, 0.25), transparent 45%),
+		radial-gradient(circle at 85% 120%, rgba(212, 255, 0, 0.15), transparent 40%),
+		var(--bg-canvas);
 	color: var(--text-primary);
 	font-family: var(--font-sans);
 	font-size: 13px;
@@ -113,6 +122,10 @@ html {
 body {
 	margin: 0;
 	min-height: 100vh;
+	background-image:
+		linear-gradient(rgba(137, 167, 255, 0.06) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(137, 167, 255, 0.04) 1px, transparent 1px);
+	background-size: 40px 40px, 40px 40px;
 }
 
 ::selection {
