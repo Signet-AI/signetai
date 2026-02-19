@@ -79,6 +79,6 @@ signet secret get NAME  # Retrieve a secret
 signet secret list      # List secret names
 signet remember "..."   # Save a memory
 signet recall "..."     # Search memories
-signet sync             # Fix missing files/venv
+signet sync             # Sync built-in templates/skills
 signet restart          # Restart daemon
 ```

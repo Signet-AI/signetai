@@ -20,6 +20,7 @@ import {
 	readdirSync,
 	rmSync,
 	statSync,
+	lstatSync,
 } from "fs";
 import { fileURLToPath } from "url";
 import Database from "./sqlite.js";
@@ -90,6 +91,84 @@ function copyDirRecursive(src: string, dest: string) {
 			copyFileSync(srcPath, destPath);
 		}
 	}
+}
+
+function isBuiltinSkillDir(skillDir: string): boolean {
+	const skillMdPath = join(skillDir, "SKILL.md");
+	if (!existsSync(skillMdPath)) {
+		return false;
+	}
+
+	try {
+		const content = readFileSync(skillMdPath, "utf-8");
+		const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+		if (!frontmatter) {
+			return false;
+		}
+
+		return /^builtin:\s*true$/m.test(frontmatter[1]);
+	} catch {
+		return false;
+	}
+}
+
+function syncBuiltinSkills(
+	templatesDir: string,
+	basePath: string,
+): {
+	installed: string[];
+	updated: string[];
+	skipped: string[];
+} {
+	const skillsSource = join(templatesDir, "skills");
+	const skillsDest = join(basePath, "skills");
+	const result = {
+		installed: [] as string[],
+		updated: [] as string[],
+		skipped: [] as string[],
+	};
+
+	if (!existsSync(skillsSource)) {
+		return result;
+	}
+
+	mkdirSync(skillsDest, { recursive: true });
+
+	const entries = readdirSync(skillsSource, { withFileTypes: true }).filter((d) =>
+		d.isDirectory(),
+	);
+
+	for (const entry of entries) {
+		const src = join(skillsSource, entry.name);
+		const dest = join(skillsDest, entry.name);
+
+		if (!existsSync(dest)) {
+			copyDirRecursive(src, dest);
+			result.installed.push(entry.name);
+			continue;
+		}
+
+		try {
+			const destStat = lstatSync(dest);
+			if (destStat.isSymbolicLink() || !destStat.isDirectory()) {
+				result.skipped.push(entry.name);
+				continue;
+			}
+		} catch {
+			result.skipped.push(entry.name);
+			continue;
+		}
+
+		if (!isBuiltinSkillDir(dest)) {
+			result.skipped.push(entry.name);
+			continue;
+		}
+
+		copyDirRecursive(src, dest);
+		result.updated.push(entry.name);
+	}
+
+	return result;
 }
 
 // ============================================================================
@@ -1054,6 +1133,10 @@ async function existingSetupWizard(
 			);
 		}
 
+		// Install/update built-in skills
+		spinner.text = "Syncing built-in skills...";
+		syncBuiltinSkills(templatesDir, basePath);
+
 		// 2. Create agent.yaml manifest pointing to existing files
 		spinner.text = "Creating agent manifest...";
 		const now = new Date().toISOString();
@@ -1394,7 +1477,7 @@ async function setupWizard(options: { path?: string }) {
 			return;
 		}
 
-		// Sync missing template files on reconfigure
+		// Sync template files on reconfigure
 		const templatesDir = getTemplatesDir();
 		// Sync gitignore (stored as gitignore.template because npm excludes .gitignore)
 		const gitignoreSrc = join(templatesDir, "gitignore.template");
@@ -1402,6 +1485,13 @@ async function setupWizard(options: { path?: string }) {
 		if (existsSync(gitignoreSrc) && !existsSync(gitignoreDest)) {
 			copyFileSync(gitignoreSrc, gitignoreDest);
 			console.log(chalk.dim(`  Synced missing: .gitignore`));
+		}
+
+		const skillSyncResult = syncBuiltinSkills(templatesDir, basePath);
+		const syncedBuiltins =
+			skillSyncResult.installed.length + skillSyncResult.updated.length;
+		if (syncedBuiltins > 0) {
+			console.log(chalk.dim(`  Synced built-in skills: ${syncedBuiltins}`));
 		}
 	}
 	// Check for existing identity files (OpenClaw/Clawdbot migration scenario)
@@ -1421,7 +1511,7 @@ async function setupWizard(options: { path?: string }) {
 		);
 		console.log(chalk.dim("    2. Import memory logs to SQLite for search"));
 		console.log(
-			chalk.dim("    3. Unify skills from all sources into ~/.agents/skills/"),
+			chalk.dim("    3. Sync built-in skills + unify external skill sources"),
 		);
 		console.log(chalk.dim("    4. Install connectors for detected harnesses"));
 		console.log(chalk.dim("    5. Keep all existing files unchanged"));
@@ -1746,13 +1836,9 @@ async function setupWizard(options: { path?: string }) {
 			copyDirRecursive(utilScriptsSource, join(basePath, "scripts"));
 		}
 
-		// Install built-in skills (remember, recall, memory-debug)
+		// Install built-in skills (remember, recall, signet, memory-debug)
 		spinner.text = "Installing built-in skills...";
-		const skillsSource = join(templatesDir, "skills");
-		if (existsSync(skillsSource)) {
-			mkdirSync(join(basePath, "skills"), { recursive: true });
-			copyDirRecursive(skillsSource, join(basePath, "skills"));
-		}
+		syncBuiltinSkills(templatesDir, basePath);
 
 		spinner.text = "Creating agent identity...";
 		const agentsTemplate = join(templatesDir, "AGENTS.md.template");
@@ -2683,7 +2769,7 @@ program
 
 program
 	.command("sync")
-	.description("Sync missing template files and fix Python venv")
+	.description("Sync built-in templates and skills")
 	.action(async () => {
 		console.log(signetLogo());
 		const basePath = AGENTS_DIR;
@@ -2698,7 +2784,7 @@ program
 
 		console.log(chalk.bold("  Syncing template files...\n"));
 
-		// Sync missing template files
+		// Sync template files
 		// Note: gitignore stored as gitignore.template because npm excludes .gitignore
 		let synced = 0;
 
@@ -2710,8 +2796,17 @@ program
 			synced++;
 		}
 
+		const skillSyncResult = syncBuiltinSkills(templatesDir, basePath);
+		for (const skill of skillSyncResult.installed) {
+			console.log(chalk.green(`  ✓ skills/${skill} (installed)`));
+		}
+		for (const skill of skillSyncResult.updated) {
+			console.log(chalk.green(`  ✓ skills/${skill} (updated)`));
+		}
+		synced += skillSyncResult.installed.length + skillSyncResult.updated.length;
+
 		if (synced === 0) {
-			console.log(chalk.dim("  All template files present"));
+			console.log(chalk.dim("  All built-in templates are up to date"));
 		}
 
 		console.log();
