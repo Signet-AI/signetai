@@ -1,6 +1,6 @@
 {
   "name": "@signet/adapter-openclaw",
-  "version": "0.1.55",
+  "version": "0.1.56",
   "description": "Signet adapter for OpenClaw",
   "type": "module",
   "main": "dist/index.js",
