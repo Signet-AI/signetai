@@ -56,7 +56,7 @@ signet skill create my-tool
 
 ## Built-in Skills
 
-Signet ships with two built-in skills that integrate directly with the memory system:
+Signet ships with three built-in skills that integrate directly with the memory system:
 
 ### `/remember`
 
@@ -96,6 +96,23 @@ signet recall "signet architecture" --type decision -l 5
 ```
 
 See [MEMORY.md](./MEMORY.md) for full details.
+
+### `/memory-debug`
+
+Diagnose memory issues end-to-end (daemon health, remember/write path, recall/read path, embedding health, and API checks).
+
+```bash
+# In harness
+/memory-debug
+/memory-debug recall is empty
+
+# Core checks it should run
+signet status
+signet remember "memory-debug smoke test" -t debug,smoke
+signet recall "memory-debug smoke test" --json
+```
+
+Use this when memory results are missing, low quality, or inconsistent across sessions.
 
 ---
 
