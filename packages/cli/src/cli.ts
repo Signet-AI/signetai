@@ -1978,7 +1978,7 @@ async function showStatus(options: { path?: string }) {
 	// Files
 	const checks = [
 		{ name: "AGENTS.md", exists: existing.agentsMd },
-		{ name: "config.yaml", exists: existing.configYaml },
+		{ name: "agent.yaml", exists: existing.agentYaml },
 		{ name: "memories.db", exists: existing.memoryDb },
 	];
 
