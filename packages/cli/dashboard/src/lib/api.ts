@@ -206,10 +206,15 @@ export async function getSimilarMemories(
 
 export async function getEmbeddings(
 	withVectors = false,
+	limit = 1000,
 ): Promise<{ embeddings: EmbeddingPoint[]; error?: string }> {
 	try {
+		const params = new URLSearchParams({
+			vectors: String(withVectors),
+			limit: String(limit),
+		});
 		const response = await fetch(
-			`${API_BASE}/api/embeddings?vectors=${withVectors}`,
+			`${API_BASE}/api/embeddings?${params}`,
 		);
 		if (!response.ok) throw new Error("Failed to fetch embeddings");
 		return await response.json();

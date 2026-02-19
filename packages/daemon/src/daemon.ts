@@ -1246,6 +1246,10 @@ app.get("/memory/similar", async (c) => {
 
 app.get("/api/embeddings", async (c) => {
 	const withVectors = c.req.query("vectors") === "true";
+	const rawLimit = Number.parseInt(c.req.query("limit") ?? "1000", 10);
+	const limit = Number.isFinite(rawLimit)
+		? Math.max(1, Math.min(rawLimit, 5000))
+		: 1000;
 	const scriptPath = join(
 		AGENTS_DIR,
 		"memory",
@@ -1254,9 +1258,11 @@ app.get("/api/embeddings", async (c) => {
 	);
 
 	return new Promise<Response>((resolve) => {
-		const args = withVectors ? ["--with-vectors"] : [];
+		const args = withVectors
+			? ["--with-vectors", "--limit", String(limit)]
+			: ["--limit", String(limit)];
 		const proc = spawn(getPythonCmd(), [scriptPath, ...args], {
-			timeout: 60000,
+			timeout: 120000,
 		});
 
 		let stdout = "";
