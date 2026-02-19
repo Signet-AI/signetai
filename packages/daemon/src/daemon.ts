@@ -776,6 +776,8 @@ app.post("/api/memory/remember", async (c) => {
 		importance?: number;
 		tags?: string;
 		pinned?: boolean;
+		sourceType?: string;
+		sourceId?: string;
 	};
 
 	try {
@@ -789,6 +791,8 @@ app.post("/api/memory/remember", async (c) => {
 
 	const who = body.who ?? "daemon";
 	const project = body.project ?? null;
+	const sourceType = body.sourceType?.trim() || "manual";
+	const sourceId = body.sourceId?.trim() || null;
 
 	// Parse prefixes (critical:, [tags]:) then infer type
 	const parsed = parsePrefixes(raw);
@@ -804,11 +808,44 @@ app.post("/api/memory/remember", async (c) => {
 
 	try {
 		const db = new Database(MEMORY_DB);
+
+		if (sourceId) {
+			const existing = db
+				.prepare(
+					`SELECT id, type, tags, pinned, importance, content
+					 FROM memories WHERE source_type = ? AND source_id = ? LIMIT 1`,
+				)
+				.get(sourceType, sourceId) as
+				| {
+						id: string;
+						type: string;
+						tags: string | null;
+						pinned: number;
+						importance: number;
+						content: string;
+				  }
+				| undefined;
+
+			if (existing) {
+				db.close();
+				return c.json({
+					id: existing.id,
+					type: existing.type,
+					tags: existing.tags || "",
+					pinned: !!existing.pinned,
+					importance: existing.importance,
+					content: existing.content,
+					embedded: true,
+					deduped: true,
+				});
+			}
+		}
+
 		db.prepare(`
       INSERT INTO memories
         (id, content, who, why, project, importance, type, tags, pinned,
-         created_at, updated_at, updated_by, source_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         created_at, updated_at, updated_by, source_type, source_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
 			id,
 			parsed.content,
@@ -822,7 +859,8 @@ app.post("/api/memory/remember", async (c) => {
 			now,
 			now,
 			who,
-			"manual",
+			sourceType,
+			sourceId,
 		);
 
 		// Keep FTS in sync (content= tables need manual population on INSERT)
@@ -3087,11 +3125,13 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							content: chunk.text,
-							who: "claude-code",
-							importance: chunk.level === "section" ? 0.65 : 0.55,
-							tags: [
+					body: JSON.stringify({
+						content: chunk.text,
+						who: "claude-code",
+						importance: chunk.level === "section" ? 0.65 : 0.55,
+						sourceType: "claude-project-memory",
+						sourceId: chunkKey,
+						tags: [
 								"claude-code",
 								"claude-project-memory",
 								sectionName,
@@ -3356,6 +3396,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 
 	for (let i = 0; i < chunks.length; i++) {
 		const chunk = chunks[i];
+		const chunkKey = `openclaw:${filename}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;
 		try {
 			const response = await fetch(
 				`http://${HOST}:${PORT}/api/memory/remember`,
@@ -3366,6 +3407,8 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 						content: chunk.text,
 						who: "openclaw-memory",
 						importance: chunk.level === "section" ? 0.65 : 0.55, // Slightly higher for sections
+						sourceType: "openclaw-memory-log",
+						sourceId: chunkKey,
 						tags: [
 							"openclaw",
 							"memory-log",
