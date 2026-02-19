@@ -1,6 +1,6 @@
 {
 	"name": "@signet/connector-openclaw",
-	"version": "0.1.44",
+	"version": "0.1.49",
 	"description": "Signet connector for OpenClaw - configures workspace and memory hooks",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -16,7 +16,8 @@
 		"build": "bun build src/index.ts --outdir dist --target node && bun run build:types",
 		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
 		"dev": "bun --watch src/index.ts",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
 	},
 	"dependencies": {
 		"@signet/connector-base": "workspace:*"
