@@ -1,38 +1,40 @@
 {
-	"name": "@signet/connector-claude-code",
-	"version": "0.1.49",
-	"description": "Signet connector for Claude Code (Anthropic CLI)",
-	"type": "module",
-	"main": "./dist/index.js",
-	"types": "./dist/index.d.ts",
-	"exports": {
-		".": {
-			"import": "./dist/index.js",
-			"types": "./dist/index.d.ts"
-		}
-	},
-	"files": ["dist"],
-	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --target node && bun run build:types",
-		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
-		"dev": "bun --watch src/index.ts",
-		"typecheck": "tsc --noEmit"
-	},
-	"dependencies": {
-		"@signet/connector-base": "workspace:*",
-		"@signet/core": "workspace:*"
-	},
-	"devDependencies": {
-		"@types/node": "^22.0.0",
-		"typescript": "^5.7.0"
-	},
-	"keywords": [
-		"signet",
-		"claude-code",
-		"claude",
-		"anthropic",
-		"connector",
-		"ai-memory"
-	],
-	"license": "Apache-2.0"
+  "name": "@signet/connector-claude-code",
+  "version": "0.1.52",
+  "description": "Signet connector for Claude Code (Anthropic CLI)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node && bun run build:types",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+    "dev": "bun --watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@signet/connector-base": "workspace:*",
+    "@signet/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "signet",
+    "claude-code",
+    "claude",
+    "anthropic",
+    "connector",
+    "ai-memory"
+  ],
+  "license": "Apache-2.0"
 }

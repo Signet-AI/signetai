@@ -1,38 +1,40 @@
 {
-	"name": "@signet/core",
-	"version": "0.1.49",
+  "name": "@signet/core",
+  "version": "0.1.52",
   "license": "Apache-2.0",
-	"description": "Core library for Signet - portable AI agent identity",
-	"type": "module",
-	"main": "./dist/index.js",
-	"types": "./dist/index.d.ts",
-	"exports": {
-		".": {
-			"import": "./dist/index.js",
-			"types": "./dist/index.d.ts"
-		}
-	},
-	"files": ["dist"],
-	"scripts": {
-		"build": "bun build ./src/index.ts --outdir ./dist --target node && bun run build:types",
-		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
-		"dev": "bun --watch src/index.ts",
-		"test": "bun test",
-		"typecheck": "tsc --noEmit"
-	},
-	"dependencies": {
-		"better-sqlite3": "^11.0.0",
-		"sqlite-vec": "^0.1.7-alpha.2",
-		"sqlite-vec-linux-x64": "^0.1.7-alpha.2",
-		"yaml": "^2.6.0"
-	},
-	"devDependencies": {
-		"@types/better-sqlite3": "^7.6.0",
-		"typescript": "^5.7.0"
-	},
-	"peerDependenciesMeta": {
-		"better-sqlite3": {
-			"optional": true
-		}
-	}
+  "description": "Core library for Signet - portable AI agent identity",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node && bun run build:types",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+    "dev": "bun --watch src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "sqlite-vec": "^0.1.7-alpha.2",
+    "sqlite-vec-linux-x64": "^0.1.7-alpha.2",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    }
+  }
 }

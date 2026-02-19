@@ -1,40 +1,42 @@
 {
-	"name": "@signet/sdk",
-	"version": "0.1.49",
+  "name": "@signet/sdk",
+  "version": "0.1.52",
   "license": "Apache-2.0",
-	"description": "SDK for integrating Signet into applications",
-	"type": "module",
-	"main": "./dist/index.js",
-	"types": "./dist/index.d.ts",
-	"exports": {
-		".": {
-			"import": "./dist/index.js",
-			"types": "./dist/index.d.ts"
-		},
-		"./react": {
-			"import": "./dist/react.js",
-			"types": "./dist/react.d.ts"
-		}
-	},
-	"files": ["dist"],
-	"scripts": {
-		"build": "bun build ./src/index.ts ./src/react.tsx --outdir ./dist --target node --external better-sqlite3 --external bun:sqlite",
-		"dev": "bun --watch src/index.ts",
-		"test": "bun test"
-	},
-	"dependencies": {
-		"@signet/core": "workspace:*"
-	},
-	"devDependencies": {
-		"@types/react": "^19.0.0",
-		"react": "^19.0.0"
-	},
-	"peerDependencies": {
-		"react": ">=18.0.0"
-	},
-	"peerDependenciesMeta": {
-		"react": {
-			"optional": true
-		}
-	}
+  "description": "SDK for integrating Signet into applications",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react.js",
+      "types": "./dist/react.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts ./src/react.tsx --outdir ./dist --target node --external better-sqlite3 --external bun:sqlite",
+    "dev": "bun --watch src/index.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@signet/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
 }
