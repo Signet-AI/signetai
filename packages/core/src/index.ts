@@ -32,6 +32,11 @@ export type {
 	DecisionAction,
 	PipelineFlag,
 	PipelineV2Config,
+	ExtractedFact,
+	ExtractedEntity,
+	ExtractionResult,
+	DecisionProposal,
+	DecisionResult,
 } from "./types";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";

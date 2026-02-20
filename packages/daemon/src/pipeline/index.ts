@@ -1,0 +1,58 @@
+/**
+ * Pipeline barrel — startPipeline/stopPipeline orchestration.
+ */
+
+import type { DbAccessor } from "../db-accessor";
+import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
+import { createOllamaProvider } from "./provider";
+import { startWorker, type WorkerHandle } from "./worker";
+import type { DecisionConfig } from "./decision";
+import { logger } from "../logger";
+
+export { enqueueExtractionJob } from "./worker";
+export type { WorkerHandle } from "./worker";
+export type { LlmProvider } from "./provider";
+
+// ---------------------------------------------------------------------------
+// Singleton state
+// ---------------------------------------------------------------------------
+
+let workerHandle: WorkerHandle | null = null;
+
+// ---------------------------------------------------------------------------
+// Start / Stop
+// ---------------------------------------------------------------------------
+
+export function startPipeline(
+	accessor: DbAccessor,
+	pipelineCfg: PipelineV2Config,
+	embeddingCfg: EmbeddingConfig,
+	fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
+	searchCfg: { alpha: number; top_k: number; min_score: number },
+): void {
+	if (workerHandle) {
+		logger.warn("pipeline", "Pipeline already running, skipping start");
+		return;
+	}
+
+	const provider = createOllamaProvider({
+		model: pipelineCfg.extractionModel,
+		defaultTimeoutMs: pipelineCfg.extractionTimeout,
+	});
+
+	const decisionCfg: DecisionConfig = {
+		embedding: embeddingCfg,
+		search: searchCfg,
+		fetchEmbedding,
+	};
+
+	workerHandle = startWorker(accessor, provider, pipelineCfg, decisionCfg);
+	logger.info("pipeline", "Pipeline started (shadow mode)");
+}
+
+export async function stopPipeline(): Promise<void> {
+	if (!workerHandle) return;
+	await workerHandle.stop();
+	workerHandle = null;
+	logger.info("pipeline", "Pipeline stopped");
+}

@@ -37,6 +37,7 @@ export type LogCategory =
 	| "skills" // Skills management
 	| "secrets" // Secrets management
 	| "hooks" // Hook handlers
+	| "pipeline" // Extraction/decision pipeline
 	| "system"; // System events
 
 export interface LogEntry {

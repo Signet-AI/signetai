@@ -187,4 +187,62 @@ describe("loadPipelineConfig", () => {
 		expect(result.shadowMode).toBe(false);
 		expect(result.graphEnabled).toBe(false);
 	});
+
+	it("clamps numeric fields to valid ranges", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					workerPollMs: 0,
+					workerMaxRetries: -5,
+					extractionTimeout: 999999,
+					leaseTimeoutMs: 1,
+				},
+			},
+		});
+
+		// workerPollMs: min 100
+		expect(result.workerPollMs).toBe(100);
+		// workerMaxRetries: min 1
+		expect(result.workerMaxRetries).toBe(1);
+		// extractionTimeout: max 300000
+		expect(result.extractionTimeout).toBe(300000);
+		// leaseTimeoutMs: min 10000
+		expect(result.leaseTimeoutMs).toBe(10000);
+	});
+
+	it("uses defaults for non-number numeric fields", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					workerPollMs: "fast",
+					workerMaxRetries: null,
+					extractionTimeout: undefined,
+					leaseTimeoutMs: true,
+				},
+			},
+		});
+
+		expect(result.workerPollMs).toBe(DEFAULT_PIPELINE_V2.workerPollMs);
+		expect(result.workerMaxRetries).toBe(DEFAULT_PIPELINE_V2.workerMaxRetries);
+		expect(result.extractionTimeout).toBe(DEFAULT_PIPELINE_V2.extractionTimeout);
+		expect(result.leaseTimeoutMs).toBe(DEFAULT_PIPELINE_V2.leaseTimeoutMs);
+	});
+
+	it("accepts valid numeric values within range", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					workerPollMs: 5000,
+					workerMaxRetries: 5,
+					extractionTimeout: 60000,
+					leaseTimeoutMs: 120000,
+				},
+			},
+		});
+
+		expect(result.workerPollMs).toBe(5000);
+		expect(result.workerMaxRetries).toBe(5);
+		expect(result.extractionTimeout).toBe(60000);
+		expect(result.leaseTimeoutMs).toBe(120000);
+	});
 });

@@ -53,6 +53,11 @@ import {
 } from "@signet/core";
 import { compareVersions, isVersionNewer } from "./version";
 import { txIngestEnvelope, txFinalizeAccessAndHistory } from "./transactions";
+import {
+	startPipeline,
+	stopPipeline,
+	enqueueExtractionJob,
+} from "./pipeline";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -1235,6 +1240,18 @@ app.post("/api/memory/remember", async (c) => {
 			id,
 			error: String(e),
 		});
+	}
+
+	// Enqueue pipeline extraction if enabled
+	if (pipelineCfg.enabled || pipelineCfg.shadowMode) {
+		try {
+			enqueueExtractionJob(getDbAccessor(), id);
+		} catch (e) {
+			logger.warn("pipeline", "Failed to enqueue extraction job", {
+				memoryId: id,
+				error: String(e),
+			});
+		}
 	}
 
 	logger.info("memory", "Memory saved", {
@@ -4403,8 +4420,15 @@ async function importExistingMemoryFiles(): Promise<number> {
 // Shutdown Handling
 // ============================================================================
 
-function cleanup() {
+async function cleanup() {
 	logger.info("daemon", "Shutting down");
+
+	// Drain pipeline before closing DB so in-flight jobs finish writes
+	try {
+		await stopPipeline();
+	} catch {
+		// best-effort
+	}
 
 	// Stop git sync timer
 	stopGitSyncTimer();
@@ -4426,19 +4450,16 @@ function cleanup() {
 }
 
 process.on("SIGINT", () => {
-	cleanup();
-	process.exit(0);
+	cleanup().finally(() => process.exit(0));
 });
 
 process.on("SIGTERM", () => {
-	cleanup();
-	process.exit(0);
+	cleanup().finally(() => process.exit(0));
 });
 
 process.on("uncaughtException", (err) => {
 	logger.error("daemon", "Uncaught exception", err);
-	cleanup();
-	process.exit(1);
+	cleanup().finally(() => process.exit(1));
 });
 
 // ============================================================================
@@ -4468,6 +4489,18 @@ async function main() {
 	// Start file watcher
 	startFileWatcher();
 	logger.info("watcher", "File watcher started");
+
+	// Start extraction pipeline if enabled
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	if (memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode) {
+		startPipeline(
+			getDbAccessor(),
+			memoryCfg.pipelineV2,
+			memoryCfg.embedding,
+			fetchEmbedding,
+			memoryCfg.search,
+		);
+	}
 
 	// Start git sync timer (if enabled and has token)
 	startGitSyncTimer();

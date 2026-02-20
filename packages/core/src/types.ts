@@ -105,6 +105,11 @@ export interface PipelineV2Config {
 	readonly autonomousEnabled: boolean;
 	readonly mutationsFrozen: boolean;
 	readonly autonomousFrozen: boolean;
+	readonly extractionModel: string;
+	readonly extractionTimeout: number;
+	readonly workerPollMs: number;
+	readonly workerMaxRetries: number;
+	readonly leaseTimeoutMs: number;
 }
 
 // -- Status/union constants --
@@ -268,4 +273,37 @@ export interface Relation {
 export interface MemoryEntityMention {
 	memoryId: string;
 	entityId: string;
+}
+
+// -- Extraction pipeline contracts --
+
+export interface ExtractedFact {
+	readonly content: string;
+	readonly type: MemoryType;
+	readonly confidence: number;
+}
+
+export interface ExtractedEntity {
+	readonly source: string;
+	readonly relationship: string;
+	readonly target: string;
+	readonly confidence: number;
+}
+
+export interface ExtractionResult {
+	readonly facts: readonly ExtractedFact[];
+	readonly entities: readonly ExtractedEntity[];
+	readonly warnings: readonly string[];
+}
+
+export interface DecisionProposal {
+	readonly action: DecisionAction;
+	readonly targetMemoryId?: string;
+	readonly confidence: number;
+	readonly reason: string;
+}
+
+export interface DecisionResult {
+	readonly proposals: readonly DecisionProposal[];
+	readonly warnings: readonly string[];
 }

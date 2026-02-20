@@ -36,6 +36,11 @@ export interface PipelineV2Config {
 	readonly autonomousEnabled: boolean;
 	readonly mutationsFrozen: boolean;
 	readonly autonomousFrozen: boolean;
+	readonly extractionModel: string;
+	readonly extractionTimeout: number;
+	readonly workerPollMs: number;
+	readonly workerMaxRetries: number;
+	readonly leaseTimeoutMs: number;
 }
 
 export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
@@ -46,12 +51,27 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	autonomousEnabled: false,
 	mutationsFrozen: false,
 	autonomousFrozen: false,
+	extractionModel: "qwen3:4b",
+	extractionTimeout: 45000,
+	workerPollMs: 2000,
+	workerMaxRetries: 3,
+	leaseTimeoutMs: 300000,
 };
 
 export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
 	search: MemorySearchConfig;
 	pipelineV2: PipelineV2Config;
+}
+
+function clampPositive(
+	raw: unknown,
+	min: number,
+	max: number,
+	fallback: number,
+): number {
+	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+	return Math.max(min, Math.min(max, raw));
 }
 
 export function loadPipelineConfig(
@@ -69,6 +89,34 @@ export function loadPipelineConfig(
 		autonomousEnabled: raw.autonomousEnabled === true,
 		mutationsFrozen: raw.mutationsFrozen === true,
 		autonomousFrozen: raw.autonomousFrozen === true,
+		extractionModel:
+			typeof raw.extractionModel === "string"
+				? raw.extractionModel
+				: DEFAULT_PIPELINE_V2.extractionModel,
+		extractionTimeout: clampPositive(
+			raw.extractionTimeout,
+			5000,
+			300000,
+			DEFAULT_PIPELINE_V2.extractionTimeout,
+		),
+		workerPollMs: clampPositive(
+			raw.workerPollMs,
+			100,
+			60000,
+			DEFAULT_PIPELINE_V2.workerPollMs,
+		),
+		workerMaxRetries: clampPositive(
+			raw.workerMaxRetries,
+			1,
+			10,
+			DEFAULT_PIPELINE_V2.workerMaxRetries,
+		),
+		leaseTimeoutMs: clampPositive(
+			raw.leaseTimeoutMs,
+			10000,
+			600000,
+			DEFAULT_PIPELINE_V2.leaseTimeoutMs,
+		),
 	};
 }
 
