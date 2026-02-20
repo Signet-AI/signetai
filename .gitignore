@@ -11,6 +11,7 @@ packages/signetai/dist/
 packages/signetai/dashboard/
 *.tgz
 *.png
+.ruff_cache
 
 # TypeScript declaration files (generated in wrong locations)
 **/src/*.d.ts
@@ -51,3 +52,7 @@ coverage/
 
 # Local references
 references/
+
+# Web (Cloudflare Worker)
+web/.wrangler/
+web/.dev.vars*

@@ -68,6 +68,15 @@ bun run dev      # Dev server at localhost:5173
 bun run build    # Static build to build/
 ```
 
+### Website Development
+
+```bash
+cd web
+bun run dev      # Local dev (wrangler dev) at localhost:8787
+bun run deploy   # Deploy to Cloudflare
+bun run test     # Tests (vitest + workers pool)
+```
+
 ## Packages
 
 | Package | Description | Target |
@@ -82,6 +91,7 @@ bun run build    # Static build to build/
 | `@signet/connector-openclaw` | OpenClaw connector: config patching, hook handlers | node |
 | `@signet/adapter-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
 | `signetai` | Meta-package bundling CLI + daemon | - |
+| `@signet/web` | Marketing website (Cloudflare Worker) | cloudflare |
 
 ### Package Responsibilities
 
@@ -117,6 +127,15 @@ bun run build    # Static build to build/
 - Generate harness-specific CLAUDE.md/AGENTS.md
 - Symlink skills directories
 - Call daemon API for session lifecycle
+
+**@signet/web** - Marketing website
+- Cloudflare Worker serving static landing page
+- `web/src/index.ts` — Worker fetch handler (routes `/message`, `/random`)
+- `web/public/index.html` — Single-file landing page (~2000 LOC, no build step)
+- Design: Chakra Petch (display), IBM Plex Mono (body)
+- Dark: `#08080a` bg, `#d4d4d8` text | Light: `#e4dfd8` bg, `#2a2a2e` text
+- CSS vars: `--color-*`, `--space-*`, `--font-*`
+- Use the `signet-design` skill for visual changes
 
 ## Architecture
 
@@ -179,6 +198,8 @@ All user data lives at `~/.agents/`:
 - `packages/connector-opencode/src/index.ts` - OpenCode connector
 - `packages/connector-openclaw/src/index.ts` - OpenClaw connector
 - `packages/adapters/openclaw/src/index.ts` - OpenClaw runtime adapter
+- `web/src/index.ts` - Website Worker fetch handler
+- `web/public/index.html` - Landing page (single-file, no build step)
 - `docs/ARCHITECTURE.md` - Full technical documentation
 
 Style & Conventions

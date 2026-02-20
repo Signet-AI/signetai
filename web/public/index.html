@@ -1,0 +1,2007 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SignetAI — Your Agent's Memory Belongs to You</title>
+  <meta name="description" content="Signet is an open standard for portable AI agent identity. Memory, personality, and config in plain text on your machine — not locked inside someone else's API.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ==========================================================================
+       SYS_TOKENS & BASE
+       ========================================================================== */
+    :root {
+      --color-bg: #08080a;
+      --color-surface: #0e0e12;
+      --color-surface-raised: #151519;
+      --color-border: rgba(255,255,255,0.06);
+      --color-border-strong: rgba(255,255,255,0.12);
+      --color-text: #d4d4d8;
+      --color-text-bright: #f0f0f2;
+      --color-text-muted: #8b8b94;
+      --color-accent: #8a8a96;
+      --color-success: #4a7a5e;
+      --color-glow: rgba(240,240,242,0.04);
+      --radius-sm: 4px;
+      --radius-md: 8px;
+
+      --font-display: 'Chakra Petch', sans-serif;
+      --font-mono: 'IBM Plex Mono', monospace;
+
+      --space-xs: 4px;
+      --space-sm: 8px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --space-xl: 48px;
+      --space-2xl: 80px;
+      --space-3xl: 120px;
+
+      --dur: 0.2s;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    [data-theme="light"] {
+      --color-bg: #e4dfd8;
+      --color-surface: #dbd5cd;
+      --color-surface-raised: #d1cbc2;
+      --color-border: rgba(0,0,0,0.06);
+      --color-border-strong: rgba(0,0,0,0.12);
+      --color-text: #2a2a2e;
+      --color-text-bright: #0a0a0c;
+      --color-text-muted: #807b75;
+      --color-accent: #6a6660;
+      --color-glow: rgba(10,10,12,0.035);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--color-bg);
+      background-image:
+        radial-gradient(circle at 18% 10%, var(--color-glow), transparent 44%),
+        radial-gradient(circle at 78% 52%, rgba(240,240,242,0.03), transparent 42%);
+      color: var(--color-text);
+      font-family: var(--font-mono);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(to right, var(--color-border) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--color-border) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: radial-gradient(circle at 50% 30%, black 28%, transparent 86%);
+      -webkit-mask-image: radial-gradient(circle at 50% 30%, black 28%, transparent 86%);
+      opacity: 0.38;
+    }
+
+    /* ==========================================================================
+       TYPOGRAPHY & PRIMITIVES
+       ========================================================================== */
+    h1, h2, h3, h4 {
+      font-family: var(--font-display);
+      color: var(--color-text-bright);
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+
+    .text-muted { color: var(--color-text-muted); }
+    .text-accent { color: var(--color-accent); }
+    .text-bright { color: var(--color-text-bright); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: transparent;
+      border: 1px solid var(--color-border-strong);
+      color: var(--color-text-bright);
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 12px 22px;
+      cursor: pointer;
+      position: relative;
+      transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease),
+                  border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
+      text-decoration: none;
+      border-radius: var(--radius-sm);
+    }
+    .btn::before, .btn::after {
+      content: '';
+      position: absolute;
+      width: 5px; height: 5px;
+      border-color: var(--color-text-muted);
+      border-style: solid;
+      transition: border-color var(--dur) var(--ease);
+    }
+    .btn::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+    .btn::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+    .btn:hover {
+      background: var(--color-text-bright);
+      color: var(--color-bg);
+      border-color: var(--color-text-bright);
+      transform: translateY(-2px);
+    }
+    .btn:focus-visible {
+      outline: 2px solid var(--color-text-bright);
+      outline-offset: 2px;
+    }
+    .btn:hover::before, .btn:hover::after { border-color: var(--color-bg); }
+
+    .btn-ghost { border-color: transparent; color: var(--color-text); }
+    .btn-ghost::before, .btn-ghost::after { display: none; }
+    .btn-ghost:hover { background: var(--color-surface-raised); color: var(--color-text-bright); }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 6px;
+      border: 1px solid var(--color-border-strong);
+      font-size: 0.5625rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-text);
+    }
+    .badge-accent {
+      border-color: var(--color-text-muted);
+      color: var(--color-text-bright);
+    }
+
+    /* ==========================================================================
+       LAYOUT
+       ========================================================================== */
+    .container {
+      position: relative;
+      z-index: 1;
+      max-width: 1280px;
+      margin: 0 auto;
+      width: min(1280px, 100%);
+      padding-left: clamp(20px, 4vw, var(--space-xl));
+      padding-right: clamp(20px, 4vw, var(--space-xl));
+    }
+
+    section {
+      padding: clamp(80px, 10vw, 140px) 0;
+      position: relative;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+      margin-bottom: var(--space-2xl);
+      border-bottom: 1px solid var(--color-border);
+      padding-bottom: var(--space-md);
+    }
+    .section-label {
+      font-size: 0.6875rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--color-text-bright);
+    }
+    .section-index {
+      margin-left: auto;
+      font-size: 0.5625rem;
+      letter-spacing: 0.1em;
+      color: var(--color-text-muted);
+    }
+
+    /* ==========================================================================
+       HERO
+       ========================================================================== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      position: relative;
+      padding-top: 56px;
+      overflow: hidden;
+      border-bottom: 1px solid var(--color-border);
+    }
+
+    .hero-container { width: 100%; }
+
+    #ascii-dither,
+    #latent-topology {
+      position: absolute;
+      top: -20vh; left: 0;
+      width: 100%; height: 140vh;
+      z-index: 0;
+      will-change: transform;
+    }
+    #ascii-dither {
+      opacity: 0.25;
+      transform: translate3d(0, calc(var(--scroll-y, 0) * 0.15px), 0);
+    }
+    #latent-topology {
+      opacity: 0.64;
+      transform: translate3d(0, calc(var(--scroll-y, 0) * 0.4px), 0);
+    }
+
+    .hero-grid {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: clamp(32px, 5vw, 80px);
+      align-items: center;
+      isolation: isolate;
+      padding: var(--space-2xl) 0;
+    }
+    .hero-grid::before {
+      content: '';
+      position: absolute;
+      inset: -24px -24px -28px -44px;
+      background: linear-gradient(90deg, rgba(8,8,10,0.62) 0%, rgba(8,8,10,0.34) 50%, rgba(8,8,10,0) 85%);
+      filter: blur(10px);
+      pointer-events: none;
+      z-index: -1;
+    }
+    [data-theme="light"] .hero-grid::before {
+      background: linear-gradient(90deg, rgba(228,223,216,0.62) 0%, rgba(228,223,216,0.34) 50%, rgba(228,223,216,0) 85%);
+    }
+
+    .hero-left { }
+    .hero-right {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-lg);
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.625rem;
+      letter-spacing: 0.2em;
+      color: var(--color-accent);
+      margin-bottom: var(--space-lg);
+    }
+    .hero-eyebrow::before {
+      content: '';
+      display: block;
+      width: 24px; height: 1px;
+      background: var(--color-accent);
+    }
+
+    .hero-title {
+      font-size: clamp(2.8rem, 6vw, 4.5rem);
+      line-height: 1.1;
+      letter-spacing: 0.02em;
+      margin-bottom: var(--space-lg);
+      text-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+
+    .hero-desc {
+      font-size: 0.9375rem;
+      line-height: 1.65;
+      color: var(--color-text);
+      max-width: 540px;
+    }
+
+    .hero-features {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: var(--space-lg);
+    }
+    .hero-feat {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--color-text-bright);
+      padding: 6px 12px;
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+      white-space: nowrap;
+    }
+    .hero-feat a {
+      color: inherit;
+      text-decoration: none;
+    }
+    .hero-feat--highlight {
+      background: var(--color-text-bright);
+      color: var(--color-bg);
+      border-color: var(--color-text-bright);
+    }
+    .hero-feat--highlight a {
+      color: var(--color-bg);
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    /* Terminal Install Box */
+    .install-box {
+      display: flex;
+      align-items: center;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      padding: 16px 24px;
+      position: relative;
+      gap: 16px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+      width: max-content;
+      max-width: 100%;
+      border-radius: var(--radius-sm);
+      backdrop-filter: blur(6px);
+    }
+    .install-box::before, .install-box::after {
+      content: '';
+      position: absolute;
+      width: 6px; height: 6px;
+      border-color: var(--color-text-muted);
+      border-style: solid;
+      pointer-events: none;
+    }
+    .install-box::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+    .install-box::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+    .install-prompt { color: var(--color-accent); font-size: 0.875rem; flex-shrink: 0; }
+    .install-cmd {
+      font-size: 0.875rem;
+      color: var(--color-text-bright);
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .copy-btn {
+      background: none; border: none; color: var(--color-text-muted);
+      cursor: pointer; transition: color var(--dur) var(--ease);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .copy-btn:hover { color: var(--color-text-bright); }
+    .copy-btn.push-right { margin-left: auto; }
+    .copy-btn.is-copied { color: var(--color-success); }
+
+    .hero-meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-md) var(--space-xl);
+      padding-top: var(--space-lg);
+      border-top: 1px solid var(--color-border);
+    }
+    .hm-item { display: flex; flex-direction: column; gap: 4px; }
+    .hm-label { font-size: 0.5625rem; letter-spacing: 0.14em; color: var(--color-text-muted); text-transform: uppercase; }
+    .hm-val { font-size: 0.8125rem; color: var(--color-text); }
+
+    /* ==========================================================================
+       ARCHITECTURE (LIST LAYOUT)
+       ========================================================================== */
+    .arch-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      border-top: 1px solid var(--color-border);
+      border-bottom: 1px solid var(--color-border);
+    }
+
+    .arch-item {
+      display: grid;
+      grid-template-columns: 64px minmax(240px, 1fr) 2fr;
+      gap: var(--space-xl);
+      padding: var(--space-xl) 0;
+      border-bottom: 1px solid var(--color-border);
+      position: relative;
+      transition: background-color var(--dur) var(--ease);
+    }
+    .arch-item:last-child { border-bottom: none; }
+    .arch-item:hover { background-color: var(--color-surface); }
+
+    .arch-item::before {
+      content: '';
+      position: absolute;
+      left: -24px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 12px;
+      height: 12px;
+      background:
+        linear-gradient(to right, transparent 5px, var(--color-text-bright) 5px, var(--color-text-bright) 7px, transparent 7px),
+        linear-gradient(to bottom, transparent 5px, var(--color-text-bright) 5px, var(--color-text-bright) 7px, transparent 7px);
+      opacity: 0;
+      transition: opacity var(--dur) var(--ease);
+    }
+    .arch-item:hover::before { opacity: 1; }
+
+    .arch-icon {
+      width: 48px;
+      height: 48px;
+      color: var(--color-text-muted);
+      transition: color var(--dur) var(--ease);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .arch-item:hover .arch-icon { color: var(--color-text-bright); }
+
+    .arch-title-col {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .arch-title {
+      font-size: 1.5rem;
+      letter-spacing: 0.04em;
+      margin-bottom: 8px;
+    }
+    .arch-link {
+      font-size: 0.6875rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-accent);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: color var(--dur) var(--ease);
+    }
+    .arch-link:hover { color: var(--color-text-bright); }
+
+    .arch-desc-col {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .arch-desc {
+      font-size: 1rem;
+      color: var(--color-text);
+      line-height: 1.8;
+      max-width: 600px;
+    }
+    .arch-scenario {
+      font-size: 0.8125rem;
+      color: var(--color-text-muted);
+      font-style: italic;
+      line-height: 1.7;
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid var(--color-border);
+      max-width: 600px;
+    }
+
+    /* ==========================================================================
+       MANIFESTO / PHILOSOPHY
+       ========================================================================== */
+    .manifesto {
+      text-align: center;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+    .manifesto-title {
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      line-height: 1;
+      letter-spacing: 0.02em;
+      margin-bottom: var(--space-xl);
+    }
+    .manifesto-body {
+      font-size: 1rem;
+      line-height: 1.8;
+      color: var(--color-text);
+      margin-bottom: var(--space-xl);
+    }
+    .manifesto-badges {
+      display: flex;
+      justify-content: center;
+      gap: var(--space-md);
+      flex-wrap: wrap;
+    }
+    .manifesto-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 14px;
+      border: 1px solid var(--color-border-strong);
+      font-size: 0.625rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--color-text-bright);
+    }
+
+    /* ==========================================================================
+       COMPARISON TABLE
+       ========================================================================== */
+    .comparison-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 0 -20px;
+      padding: 0 20px;
+    }
+    .comparison-table {
+      width: 100%;
+      min-width: 700px;
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+      line-height: 1.6;
+    }
+    .comparison-table th,
+    .comparison-table td {
+      padding: 14px 18px;
+      text-align: left;
+      border-bottom: 1px solid var(--color-border);
+      vertical-align: top;
+    }
+    .comparison-table thead th {
+      font-family: var(--font-display);
+      font-size: 0.6875rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+      border-bottom: 1px solid var(--color-border-strong);
+      padding-bottom: 16px;
+      font-weight: 600;
+    }
+    .comparison-table td:first-child {
+      color: var(--color-text-muted);
+      font-size: 0.75rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .comparison-table .col-signet {
+      color: var(--color-text-bright);
+      font-weight: 500;
+    }
+    .comparison-table thead .col-signet {
+      color: var(--color-text-bright);
+    }
+    .comparison-table .row-unique td {
+      background: var(--color-surface);
+    }
+    .comparison-table .cell-na {
+      color: var(--color-text-muted);
+      opacity: 0.5;
+    }
+    .comparison-table .cell-check {
+      color: var(--color-success);
+    }
+
+    /* ==========================================================================
+       PIPELINE (HOW IT WORKS)
+       ========================================================================== */
+    .pipeline {
+      display: flex;
+      align-items: flex-start;
+      gap: 0;
+    }
+    .pipeline-step {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      position: relative;
+      padding: 0 var(--space-md);
+    }
+    .pipeline-step:not(:last-child)::after {
+      content: '>';
+      position: absolute;
+      right: -4px;
+      top: 20px;
+      font-family: var(--font-mono);
+      font-size: 1.25rem;
+      color: var(--color-text-muted);
+    }
+    .pipeline-num {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--color-border-strong);
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--color-text-bright);
+      margin-bottom: var(--space-md);
+    }
+    .pipeline-label {
+      font-family: var(--font-display);
+      font-size: 0.8125rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-text-bright);
+      margin-bottom: 8px;
+    }
+    .pipeline-desc {
+      font-size: 0.75rem;
+      color: var(--color-text-muted);
+      line-height: 1.6;
+    }
+
+    /* ==========================================================================
+       CODE TABS
+       ========================================================================== */
+    .code-tabs {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.4);
+    }
+    .code-tabs::before, .code-tabs::after {
+      content: '';
+      position: absolute;
+      width: 8px; height: 8px;
+      border-color: var(--color-text-muted);
+      border-style: solid;
+      pointer-events: none;
+    }
+    .code-tabs::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+    .code-tabs::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+    .code-tab-nav {
+      display: flex;
+      border-bottom: 1px solid var(--color-border);
+      background: rgba(255,255,255,0.02);
+    }
+    .code-tab {
+      padding: 12px 24px;
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+    }
+    .code-tab:hover { color: var(--color-text); }
+    .code-tab.active {
+      color: var(--color-text-bright);
+      border-bottom-color: var(--color-text-bright);
+    }
+    .code-panel {
+      display: none;
+      padding: 32px;
+      font-size: 0.875rem;
+      line-height: 1.9;
+      overflow-x: auto;
+    }
+    .code-panel.active { display: block; }
+    .code-panel .term-line { display: flex; gap: 16px; }
+    .code-panel .comment { color: var(--color-text-muted); margin-bottom: 8px; }
+    .code-panel .cmd { color: var(--color-text-bright); }
+    .code-panel .output { color: var(--color-accent); margin-top: 8px; }
+    .code-panel .term-prompt { color: var(--color-accent); user-select: none; }
+
+    /* ==========================================================================
+       TRUST GRID
+       ========================================================================== */
+    .trust-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--space-lg);
+    }
+    .trust-card {
+      padding: var(--space-xl) var(--space-lg);
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+      position: relative;
+      transition: background-color var(--dur) var(--ease);
+    }
+    .trust-card::before, .trust-card::after {
+      content: '';
+      position: absolute;
+      width: 5px; height: 5px;
+      border-color: var(--color-text-muted);
+      border-style: solid;
+    }
+    .trust-card::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+    .trust-card::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+    .trust-card:hover { background-color: var(--color-surface); }
+    .trust-card-title {
+      font-family: var(--font-display);
+      font-size: 0.875rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-text-bright);
+      margin-bottom: 12px;
+    }
+    .trust-card-desc {
+      font-size: 0.8125rem;
+      color: var(--color-text-muted);
+      line-height: 1.6;
+    }
+    .trust-card-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.6875rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-accent);
+      text-decoration: none;
+      margin-top: 16px;
+      transition: color var(--dur) var(--ease);
+    }
+    .trust-card-link:hover { color: var(--color-text-bright); }
+    .trust-note {
+      text-align: center;
+      font-size: 0.8125rem;
+      color: var(--color-text-muted);
+      margin-top: var(--space-xl);
+    }
+
+    /* ==========================================================================
+       TERMINAL WINDOW (reused)
+       ========================================================================== */
+    .terminal-window {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.4);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .terminal-window::before, .terminal-window::after {
+      content: '';
+      position: absolute;
+      width: 8px; height: 8px;
+      border-color: var(--color-text-muted);
+      border-style: solid;
+      pointer-events: none;
+    }
+    .terminal-window::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+    .terminal-window::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+    .term-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--color-border);
+      font-size: 0.5625rem;
+      letter-spacing: 0.16em;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      background: rgba(255,255,255,0.02);
+    }
+    .term-body {
+      padding: 40px 32px;
+      font-size: 0.875rem;
+      line-height: 1.9;
+      overflow-x: auto;
+    }
+    .term-block { margin-bottom: 32px; }
+    .term-block:last-child { margin-bottom: 0; }
+    .term-line { display: flex; gap: 16px; }
+    .term-line.comment { color: var(--color-text-muted); margin-bottom: 8px; }
+    .term-line.cmd { color: var(--color-text-bright); }
+    .term-line.output { color: var(--color-accent); margin-top: 8px; }
+    .term-prompt { color: var(--color-accent); user-select: none; }
+
+    /* ==========================================================================
+       CTA
+       ========================================================================== */
+    .cta-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, 420px);
+      align-items: center;
+      gap: 64px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-strong);
+      padding: clamp(28px, 7vw, 80px);
+      position: relative;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.2);
+      border-radius: var(--radius-md);
+    }
+    .cta-panel::before, .cta-panel::after {
+      content: '';
+      position: absolute;
+      width: 8px; height: 8px;
+      border-color: var(--color-text-muted);
+      border-style: solid;
+      pointer-events: none;
+    }
+    .cta-panel::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+    .cta-panel::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+    .cta-title {
+      font-size: clamp(2.5rem, 5vw, 3.5rem);
+      line-height: 1;
+      margin-bottom: 24px;
+      letter-spacing: 0.02em;
+    }
+    .cta-desc {
+      font-size: 1rem;
+      color: var(--color-text);
+      line-height: 1.7;
+      max-width: 480px;
+    }
+    .cta-actions { width: 100%; }
+    .cta-actions .install-box {
+      width: 100%;
+      max-width: none;
+      margin-bottom: var(--space-md);
+      justify-content: space-between;
+    }
+    .cta-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .cta-buttons .btn { width: 100%; }
+
+    .landing-cta {
+      margin-top: clamp(64px, 8vw, 120px);
+      margin-bottom: clamp(120px, 14vw, 240px);
+    }
+
+    /* ==========================================================================
+       FOOTER
+       ========================================================================== */
+    .site-footer {
+      padding: var(--space-3xl) 0 var(--space-xl);
+      border-top: 1px solid var(--color-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: var(--space-lg);
+      flex-wrap: wrap;
+    }
+    .footer-brand { margin-bottom: 8px; }
+    .footer-tagline {
+      font-size: 0.6875rem;
+      color: var(--color-text-muted);
+      margin-bottom: 8px;
+      letter-spacing: 0.04em;
+    }
+    .footer-meta {
+      font-size: 0.625rem;
+      color: var(--color-text-muted);
+      letter-spacing: 0.1em;
+    }
+    .footer-links {
+      display: flex;
+      gap: 24px;
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .footer-links a {
+      color: var(--color-text-muted);
+      text-decoration: none;
+      transition: color var(--dur) var(--ease);
+    }
+    .footer-links a:hover { color: var(--color-text-bright); }
+
+    /* ==========================================================================
+       UTILS
+       ========================================================================== */
+    .reveal {
+      opacity: 1;
+      transform: none;
+      transition: opacity 0.6s var(--ease), transform 0.6s var(--ease);
+    }
+    .reveal.visible { opacity: 1; transform: translateY(0); }
+
+    .crosshair {
+      width: 12px; height: 12px; position: relative;
+    }
+    .crosshair::before, .crosshair::after {
+      content: ''; position: absolute; background: var(--color-text-muted);
+    }
+    .crosshair::before { width: 1px; height: 100%; left: 50%; }
+    .crosshair::after { width: 100%; height: 1px; top: 50%; }
+
+    /* ==========================================================================
+       GLOBAL NAV
+       ========================================================================== */
+    .site-nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 clamp(20px, 4vw, 48px);
+      height: 56px;
+      background: color-mix(in srgb, var(--color-bg) 80%, transparent);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--color-border);
+    }
+    .nav-brand {
+      font-family: var(--font-display);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--color-text-bright);
+      text-decoration: none;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+    .nav-links a {
+      font-size: 0.6875rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+      text-decoration: none;
+      transition: color var(--dur) var(--ease);
+    }
+    .nav-links a:hover { color: var(--color-text-bright); }
+
+    .theme-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      background: none;
+      border: 1px solid var(--color-border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+      padding: 0;
+    }
+    .theme-toggle:hover {
+      color: var(--color-text-bright);
+      border-color: var(--color-text-muted);
+    }
+    .theme-toggle svg { width: 14px; height: 14px; }
+    .theme-icon-moon,
+    .theme-icon-sun { display: none; }
+    [data-theme="dark"] .theme-icon-moon { display: block; }
+    [data-theme="light"] .theme-icon-sun { display: block; }
+
+    /* ==========================================================================
+       RESPONSIVE
+       ========================================================================== */
+    @media (max-width: 1080px) {
+      .arch-item {
+        grid-template-columns: 56px 1fr;
+        gap: var(--space-lg);
+      }
+      .arch-desc-col { grid-column: 2; }
+
+      .trust-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 900px) {
+      .hero-grid {
+        grid-template-columns: 1fr;
+        gap: var(--space-xl);
+      }
+
+      .cta-panel {
+        grid-template-columns: 1fr;
+        gap: 28px;
+      }
+      .nav-links a.nav-hide-mobile { display: none; }
+
+      .pipeline {
+        flex-direction: column;
+        gap: var(--space-xl);
+      }
+      .pipeline-step { align-items: flex-start; text-align: left; }
+      .pipeline-step:not(:last-child)::after { display: none; }
+    }
+
+    @media (max-width: 720px) {
+      .hero {
+        min-height: auto;
+        padding-top: 56px;
+      }
+      .hero-title { font-size: clamp(2rem, 10vw, 2.8rem); }
+
+      .install-box {
+        width: 100%;
+        padding: 14px 14px;
+      }
+      .install-cmd {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+
+      .cta-buttons { grid-template-columns: 1fr; }
+
+      .footer-links {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .trust-grid { grid-template-columns: 1fr; }
+
+      .manifesto-title { font-size: clamp(1.6rem, 8vw, 2.5rem); }
+    }
+  
+    /* CRT Noise Grain */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.04;
+      filter: url(#noiseFilter);
+    }
+
+    /* Hex Dump Stream */
+    .hex-stream {
+      position: absolute;
+      top: -30vh; right: 24px;
+      width: 280px;
+      height: 160vh;
+      transform: translateY(calc(var(--scroll-y, 0) * 0.25px));
+      will-change: transform;
+      overflow: hidden;
+      opacity: 0.15;
+      font-family: var(--font-mono);
+      font-size: 0.6rem;
+      color: var(--color-text-muted);
+      z-index: 0;
+      mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
+      -webkit-mask-image: linear-gradient(to bottom, transparent, black 15%, black 85%, transparent);
+    }
+    .hex-content {
+      animation: hex-scroll 40s linear infinite;
+    }
+    @keyframes hex-scroll {
+      from { transform: translateY(0); }
+      to { transform: translateY(-50%); }
+    }
+
+  </style>
+</head>
+<body>
+
+  <svg style="display:none;">
+    <filter id="noiseFilter">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/>
+    </filter>
+  </svg>
+
+
+  <nav class="site-nav">
+    <a href="/" class="nav-brand">Signet</a>
+    <div class="nav-links">
+      <a href="https://github.com/Signet-AI/signetai/blob/main/docs/QUICKSTART.md">Docs</a>
+      <a href="https://github.com/Signet-AI/signetai/tree/main/spec" class="nav-hide-mobile">Spec</a>
+      <a href="https://github.com/Signet-AI/signetai">GitHub</a>
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <div class="bg-grid"></div>
+
+  <!-- ====================================================================
+       1. HERO
+       ==================================================================== -->
+  <section class="hero">
+    <canvas id="ascii-dither"></canvas>
+    <canvas id="latent-topology"></canvas>
+
+    
+    <div class="hex-stream">
+      <div class="hex-content">
+        <!-- JS will populate this -->
+      </div>
+    </div>
+
+    <div class="container hero-container">
+      <div class="hero-grid reveal">
+        <div class="hero-left">
+          <div class="hero-eyebrow">Open standard for portable AI identity</div>
+          <h1 class="hero-title">Your Agent's Memory Belongs to You.</h1>
+          <p class="hero-desc">
+            Agent identity that lives on your machine. One <span class="text-bright">~/.agents/</span> directory. Every platform.
+          </p>
+
+          <div class="hero-features">
+            <span class="hero-feat">Curated Memory</span>
+            <span class="hero-feat">Secrets Management</span>
+            <span class="hero-feat">Skills Registry</span>
+            <span class="hero-feat hero-feat--highlight"><a href="https://github.com/openclaw">OpenClaw</a> Native</span>
+          </div>
+        </div>
+
+        <div class="hero-right">
+          <div class="install-box">
+            <span class="install-prompt">></span>
+            <code class="install-cmd">npm install -g signetai</code>
+            <button class="copy-btn push-right" aria-label="Copy install command">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            </button>
+          </div>
+
+          <div class="hero-actions">
+            <a href="https://github.com/Signet-AI/signetai/blob/main/docs/QUICKSTART.md" class="btn btn-primary">Read Documentation</a>
+            <a href="https://github.com/Signet-AI/signetai" class="btn btn-ghost">View on GitHub</a>
+          </div>
+
+          <div class="hero-meta-grid">
+            <div class="hm-item">
+              <span class="hm-label">Works With</span>
+              <span class="hm-val text-bright">OpenClaw, Claude Code, Cursor</span>
+            </div>
+            <div class="hm-item">
+              <span class="hm-label">License</span>
+              <span class="hm-val">Apache 2.0</span>
+            </div>
+            <div class="hm-item">
+              <span class="hm-label">Storage</span>
+              <span class="hm-val">Local-first</span>
+            </div>
+            <div class="hm-item">
+              <span class="hm-label">Spec</span>
+              <span class="hm-val">v0.2.1</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       2. THE PROBLEM
+       ==================================================================== -->
+  <section class="container">
+    <div class="section-header reveal">
+      <div class="crosshair"></div>
+      <span class="section-label">The Problem</span>
+      <span class="section-index">01 / 08</span>
+    </div>
+
+    <div class="arch-list reveal">
+
+      <div class="arch-item">
+        <div class="arch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        </div>
+        <div class="arch-title-col">
+          <h3 class="arch-title">Platforms Remember You. For Themselves.</h3>
+        </div>
+        <div class="arch-desc-col">
+          <p class="arch-desc">ChatGPT, Claude.ai, Gemini all have memory now. Try exporting it. Best you get: raw transcripts. Your context is their moat.</p>
+        </div>
+      </div>
+
+      <div class="arch-item">
+        <div class="arch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/></svg>
+        </div>
+        <div class="arch-title-col">
+          <h3 class="arch-title">Memory-as-a-Service Is Still Lock-in.</h3>
+        </div>
+        <div class="arch-desc-col">
+          <p class="arch-desc">mem0 and supermemory add memory to your app. But data lives on their servers. They go down or raise prices -- your users lose everything.</p>
+        </div>
+      </div>
+
+      <div class="arch-item">
+        <div class="arch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <div class="arch-title-col">
+          <h3 class="arch-title">Remembering Everything Isn't Memory. It's Hoarding.</h3>
+        </div>
+        <div class="arch-desc-col">
+          <p class="arch-desc">RAG dumps everything into a vector store and hopes retrieval sorts it out. Real memory is knowing <em>what</em> matters, <em>when</em> to surface it, and <em>what to forget</em>. Filtering who, for what, and when -- that's the actual hard problem.</p>
+        </div>
+      </div>
+
+      <div class="arch-item">
+        <div class="arch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </div>
+        <div class="arch-title-col">
+          <h3 class="arch-title">Switch Tools. Keep Everything.</h3>
+        </div>
+        <div class="arch-desc-col">
+          <p class="arch-desc">Moved from Cursor to Claude Code? Your agent comes with you. New laptop? One import. Because with Signet, the knowledge was always yours.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       3. PHILOSOPHY / MANIFESTO
+       ==================================================================== -->
+  <section class="container" style="border-top: 1px solid var(--color-border)">
+    <div class="manifesto reveal">
+      <h2 class="manifesto-title">Signet Is Not a Memory Service. It's a Standard.</h2>
+      <p class="manifesto-body">
+        We don't host your data. We don't run your queries. Signet defines how agent identity, memory, and config should be stored, searched, and carried between platforms. Hybrid retrieval that knows what matters now -- not just what's similar. Importance decay that lets your agent forget what doesn't serve it. YAML + Markdown in a directory you own. SQLite on your disk. An open spec anyone can implement.
+      </p>
+      <div class="manifesto-badges">
+        <span class="manifesto-badge">Not an API</span>
+        <span class="manifesto-badge">Not a Platform</span>
+        <span class="manifesto-badge">Not a Service</span>
+        <span class="manifesto-badge">Injection-Safe</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       4. COMPARISON TABLE
+       ==================================================================== -->
+  <section class="container" style="border-top: 1px solid var(--color-border)">
+    <div class="section-header reveal">
+      <div class="crosshair"></div>
+      <span class="section-label">How Signet Compares</span>
+      <span class="section-index">02 / 08</span>
+    </div>
+
+    <div class="comparison-wrap reveal">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th class="col-signet">Signet</th>
+            <th>mem0</th>
+            <th>supermemory</th>
+            <th>Platform Memory</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Data Ownership</td>
+            <td class="col-signet">User</td>
+            <td>Vendor</td>
+            <td>Vendor</td>
+            <td>Platform</td>
+          </tr>
+          <tr>
+            <td>Where Data Lives</td>
+            <td class="col-signet">Your machine</td>
+            <td>Their cloud</td>
+            <td>Their cloud</td>
+            <td>Cloud</td>
+          </tr>
+          <tr>
+            <td>Open Standard</td>
+            <td class="col-signet cell-check">Yes (spec v0.2.1)</td>
+            <td>No</td>
+            <td>No</td>
+            <td>No</td>
+          </tr>
+          <tr>
+            <td>Cross-Platform</td>
+            <td class="col-signet">Any harness</td>
+            <td>Your app only</td>
+            <td>Your app only</td>
+            <td>Single platform</td>
+          </tr>
+          <tr>
+            <td>Export</td>
+            <td class="col-signet">Already files</td>
+            <td>API-dependent</td>
+            <td>API-dependent</td>
+            <td>Raw transcripts</td>
+          </tr>
+          <tr class="row-unique">
+            <td>Secrets Mgmt</td>
+            <td class="col-signet cell-check">Encrypted, injection-safe</td>
+            <td class="cell-na">--</td>
+            <td class="cell-na">--</td>
+            <td class="cell-na">--</td>
+          </tr>
+          <tr class="row-unique">
+            <td>Skills Mgmt</td>
+            <td class="col-signet cell-check">Install, vet, sandbox</td>
+            <td class="cell-na">--</td>
+            <td class="cell-na">--</td>
+            <td class="cell-na">--</td>
+          </tr>
+          <tr>
+            <td>Cost</td>
+            <td class="col-signet">Free (Apache 2.0)</td>
+            <td>$0 - $249/mo</td>
+            <td>$0 - $399/mo</td>
+            <td>Included</td>
+          </tr>
+          <tr>
+            <td>Works Offline</td>
+            <td class="col-signet cell-check">Yes</td>
+            <td>No</td>
+            <td>No</td>
+            <td>No</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       5. CORE FEATURES (EXPANDED)
+       ==================================================================== -->
+  <section class="container" style="border-top: 1px solid var(--color-border)">
+    <div class="section-header reveal">
+      <div class="crosshair"></div>
+      <span class="section-label">Core Features</span>
+      <span class="section-index">03 / 08</span>
+    </div>
+
+    <div class="arch-list reveal">
+
+      <div class="arch-item">
+        <div class="arch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="3" r="1.5"/><circle cx="21" cy="12" r="1.5"/><circle cx="12" cy="21" r="1.5"/><circle cx="3" cy="12" r="1.5"/><line x1="12" y1="8" x2="12" y2="4.5"/><line x1="16" y1="12" x2="19.5" y2="12"/><line x1="12" y1="16" x2="12" y2="19.5"/><line x1="8" y1="12" x2="4.5" y2="12"/></svg>
+        </div>
+        <div class="arch-title-col">
+          <h3 class="arch-title">Curated Memory</h3>
+          <a href="#" class="arch-link">View Spec &#8594;</a>
+        </div>
+        <div class="arch-desc-col">
+          <p class="arch-desc">Not a vector dump. Signet's memory system uses hybrid retrieval (semantic + keyword), importance decay, and a four-tier taxonomy (session, episodic, semantic, procedural) to surface what matters <em>right now</em> -- not everything that was ever stored. Your agent learns what to forget.</p>
+          <p class="arch-scenario">Switch from Cursor to Claude Code mid-project? Your agent remembers your architectural decisions, patterns, deploy setup -- and doesn't waste context on last month's debugging notes.</p>
+        </div>
+      </div>
+
+      <div class="arch-item">
+        <div class="arch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="10"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <div class="arch-title-col">
+          <h3 class="arch-title">Secrets &amp; Injection Safety</h3>
+          <a href="#" class="arch-link">Learn More &#8594;</a>
+        </div>
+        <div class="arch-desc-col">
+          <p class="arch-desc">API keys encrypted at rest with libsodium. Secret values are never returned in model output -- even if a prompt injection attack tries to extract them. Agents use credentials through a secure proxy that redacts values from all output streams. The only agent framework with built-in prompt injection protection for secrets.</p>
+          <p class="arch-scenario">Your agent needs OPENAI_API_KEY to run evals and CLOUDFLARE_TOKEN to deploy. A malicious prompt tries to extract them. Signet's output redaction catches it before it leaves the sandbox.</p>
+        </div>
+      </div>
+
+      <div class="arch-item">
+        <div class="arch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>
+        </div>
+        <div class="arch-title-col">
+          <h3 class="arch-title">Skills Registry</h3>
+          <a href="#" class="arch-link">Browse Skills &#8594;</a>
+        </div>
+        <div class="arch-desc-col">
+          <p class="arch-desc">Install, vet, and manage agent skills from a curated registry. Skills are sandboxed -- they can access the capabilities they declare but nothing else. Review skill permissions before installation. No supply-chain surprises.</p>
+          <p class="arch-scenario">Your agent needs browser automation. <code>signet skill install browser-use</code> -- review its declared permissions, approve, done. The skill can browse but can't read your secrets or memory unless you grant it.</p>
+        </div>
+      </div>
+
+      <div class="arch-item">
+        <div class="arch-icon">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        </div>
+        <div class="arch-title-col">
+          <h3 class="arch-title">Multitenant Config</h3>
+          <a href="#" class="arch-link">Architecture &#8594;</a>
+        </div>
+        <div class="arch-desc-col">
+          <p class="arch-desc">Manage one agent or hundreds from a single config. Each agent gets its own memory, identity, and secrets while sharing a common daemon and storage layer.</p>
+          <p class="arch-scenario">Personal coding agent + work research agent on same machine. Separate memory, secrets, personality. One CLI.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       6. HOW IT WORKS (PIPELINE)
+       ==================================================================== -->
+  <section class="container" style="border-top: 1px solid var(--color-border)">
+    <div class="section-header reveal">
+      <div class="crosshair"></div>
+      <span class="section-label">How It Works</span>
+      <span class="section-index">04 / 08</span>
+    </div>
+
+    <div class="pipeline reveal">
+      <div class="pipeline-step">
+        <div class="pipeline-num">1</div>
+        <div class="pipeline-label">Configure</div>
+        <div class="pipeline-desc">~/.agents/agent.yaml<br>Plain YAML you can read</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="pipeline-num">2</div>
+        <div class="pipeline-label">Remember</div>
+        <div class="pipeline-desc">signet remember<br>Auto-embedding, local SQLite</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="pipeline-num">3</div>
+        <div class="pipeline-label">Recall</div>
+        <div class="pipeline-desc">Semantic + keyword search<br>Ranked by importance</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="pipeline-num">4</div>
+        <div class="pipeline-label">Sync</div>
+        <div class="pipeline-desc">Daemon regenerates configs<br>CLAUDE.md, .cursorrules, etc.</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="pipeline-num">5</div>
+        <div class="pipeline-label">Carry</div>
+        <div class="pipeline-desc">New machine? signet init --import<br>Fully restored</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       7. CODE QUICKSTART
+       ==================================================================== -->
+  <section class="container" style="border-top: 1px solid var(--color-border)">
+    <div class="section-header reveal">
+      <div class="crosshair"></div>
+      <span class="section-label">Quickstart</span>
+      <span class="section-index">05 / 08</span>
+    </div>
+
+    <div class="code-tabs reveal">
+      <div class="code-tab-nav">
+        <button class="code-tab active" data-panel="tab-cli">CLI</button>
+        <button class="code-tab" data-panel="tab-sdk">Node.js</button>
+        <button class="code-tab" data-panel="tab-config">Config</button>
+      </div>
+
+      <div class="code-panel active" id="tab-cli">
+        <div class="term-block">
+          <div class="term-line comment"># Initialize signet in your home directory</div>
+          <div class="term-line cmd"><span class="term-prompt">></span> <span>npm install -g signetai</span></div>
+          <div class="term-line output">Created ~/.agents/agent.yaml</div>
+          <div class="term-line output">Created ~/.agents/memory.db</div>
+        </div>
+        <div class="term-block">
+          <div class="term-line comment"># Store a memory (auto-embedded)</div>
+          <div class="term-line cmd"><span class="term-prompt">></span> <span>signet remember "prefer bun over npm" -t preference</span></div>
+          <div class="term-line output">[ok] Memory stored (importance: 0.72)</div>
+        </div>
+        <div class="term-block">
+          <div class="term-line comment"># Query memories</div>
+          <div class="term-line cmd"><span class="term-prompt">></span> <span>signet recall "package manager preferences"</span></div>
+          <div class="term-line output">[1] prefer bun over npm (0.72)</div>
+        </div>
+        <div class="term-block">
+          <div class="term-line comment"># Manage secrets</div>
+          <div class="term-line cmd"><span class="term-prompt">></span> <span>signet secret set OPENAI_API_KEY</span></div>
+          <div class="term-line output">[ok] Secret encrypted and stored</div>
+        </div>
+        <div class="term-block">
+          <div class="term-line comment"># Check status</div>
+          <div class="term-line cmd"><span class="term-prompt">></span> <span>signet status</span></div>
+          <div class="term-line output">Agent: mr-claude | Memories: 847 | Secrets: 12 | Daemon: running</div>
+        </div>
+      </div>
+
+      <div class="code-panel" id="tab-sdk">
+        <div class="term-block">
+          <div class="term-line comment">// @signet/sdk — use from any Node.js app</div>
+          <div class="term-line cmd"><span>import { Signet } from '@signet/sdk';</span></div>
+          <div class="term-line cmd"><span></span></div>
+          <div class="term-line cmd"><span>const agent = new Signet();</span></div>
+        </div>
+        <div class="term-block">
+          <div class="term-line comment">// Store a memory</div>
+          <div class="term-line cmd"><span>await agent.remember('migrated to bun', {</span></div>
+          <div class="term-line cmd"><span>  tags: ['build', 'decision'],</span></div>
+          <div class="term-line cmd"><span>  importance: 0.8</span></div>
+          <div class="term-line cmd"><span>});</span></div>
+        </div>
+        <div class="term-block">
+          <div class="term-line comment">// Recall with hybrid search</div>
+          <div class="term-line cmd"><span>const results = await agent.recall('build tools');</span></div>
+        </div>
+        <div class="term-block">
+          <div class="term-line comment">// Access secrets (value never in model output)</div>
+          <div class="term-line cmd"><span>const key = await agent.secret('OPENAI_API_KEY');</span></div>
+        </div>
+      </div>
+
+      <div class="code-panel" id="tab-config">
+        <div class="term-block">
+          <div class="term-line comment"># ~/.agents/agent.yaml</div>
+          <div class="term-line cmd"><span>name: mr-claude</span></div>
+          <div class="term-line cmd"><span>version: "0.2.1"</span></div>
+          <div class="term-line cmd"><span></span></div>
+          <div class="term-line cmd"><span>personality: ./soul.md</span></div>
+          <div class="term-line cmd"><span>memory: ./memory.db</span></div>
+          <div class="term-line cmd"><span></span></div>
+          <div class="term-line cmd"><span>harnesses:</span></div>
+          <div class="term-line cmd"><span>  claude-code:</span></div>
+          <div class="term-line cmd"><span>    output: ~/.claude/CLAUDE.md</span></div>
+          <div class="term-line cmd"><span>  cursor:</span></div>
+          <div class="term-line cmd"><span>    output: ./.cursorrules</span></div>
+          <div class="term-line cmd"><span>  opencode:</span></div>
+          <div class="term-line cmd"><span>    output: ./AGENTS.md</span></div>
+          <div class="term-line cmd"><span></span></div>
+          <div class="term-line cmd"><span>memory_backend:</span></div>
+          <div class="term-line cmd"><span>  embedding: nomic-embed-text</span></div>
+          <div class="term-line cmd"><span>  search: hybrid</span></div>
+          <div class="term-line cmd"><span>  decay: true</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       8. TRUST SIGNALS
+       ==================================================================== -->
+  <section class="container" style="border-top: 1px solid var(--color-border)">
+    <div class="section-header reveal">
+      <div class="crosshair"></div>
+      <span class="section-label">Trust</span>
+      <span class="section-index">06 / 08</span>
+    </div>
+
+    <div class="trust-grid reveal">
+      <div class="trust-card">
+        <div class="trust-card-title">Open Standard</div>
+        <p class="trust-card-desc">Spec v0.2.1. The format is documented, versioned, and stable. Build your own implementation or use ours.</p>
+        <a href="https://github.com/Signet-AI/signetai/tree/main/spec" class="trust-card-link">Read the spec &#8594;</a>
+      </div>
+      <div class="trust-card">
+        <div class="trust-card-title">Apache 2.0 License</div>
+        <p class="trust-card-desc">Free forever. Fork it, vendor it, embed it. Patent protection included. No dual-licensing traps.</p>
+      </div>
+      <div class="trust-card">
+        <div class="trust-card-title">Local-First</div>
+        <p class="trust-card-desc">Zero cloud dependency. Everything runs on your machine. No accounts, no telemetry, no phone-home.</p>
+      </div>
+      <div class="trust-card">
+        <div class="trust-card-title">Open Source</div>
+        <p class="trust-card-desc">All code on GitHub. PRs welcome. Building in the open since day one.</p>
+        <a href="https://github.com/Signet-AI/signetai" class="trust-card-link">View on GitHub &#8594;</a>
+      </div>
+    </div>
+    <p class="trust-note reveal">Signet is pre-launch. Building in the open.</p>
+  </section>
+
+  <!-- ====================================================================
+       9. CTA
+       ==================================================================== -->
+  <section class="container landing-cta">
+    <div class="cta-panel reveal">
+      <div class="cta-content">
+        <h2 class="cta-title">Your Agent Should Outlive the Platform.</h2>
+        <p class="cta-desc">Platforms will pivot. APIs will break. But the agent you've built -- the memory, the personality -- that's yours.</p>
+      </div>
+
+      <div class="cta-actions">
+        <div class="install-box">
+          <span class="install-prompt">></span>
+          <code class="install-cmd">npm install -g signetai</code>
+          <button class="copy-btn push-right" aria-label="Copy install command">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </button>
+        </div>
+        <div class="cta-buttons">
+          <a href="https://github.com/Signet-AI/signetai/blob/main/docs/QUICKSTART.md" class="btn btn-primary">Read Docs</a>
+          <a href="https://github.com/Signet-AI/signetai" class="btn btn-ghost">GitHub</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       10. FOOTER
+       ==================================================================== -->
+  <footer class="container site-footer">
+    <div>
+      <div class="hero-eyebrow footer-brand">SIGNET_AI</div>
+      <div class="footer-tagline">An open standard for portable AI agent identity.</div>
+      <div class="footer-meta">&copy; 2026 SIGNET. ALL RIGHTS RESERVED.</div>
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/Signet-AI/signetai/blob/main/docs/QUICKSTART.md">Docs</a>
+      <a href="https://github.com/Signet-AI/signetai">GitHub</a>
+      <a href="https://github.com/Signet-AI/signetai/tree/main/spec">Spec</a>
+      <a href="https://discord.gg/signetai">Discord</a>
+      <a href="https://x.com/signetai">X</a>
+    </div>
+  </footer>
+
+  <script>
+    // --- Theme Toggle ---
+    const toggle = document.getElementById('theme-toggle');
+    const html = document.documentElement;
+    const THEME_KEY = 'signet-theme';
+
+    let topologyCleanup = null;
+
+    function setTheme(nextTheme, persist = true) {
+      html.setAttribute('data-theme', nextTheme);
+      if (persist) {
+        localStorage.setItem(THEME_KEY, nextTheme);
+      }
+      initLatentTopology();
+    }
+
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    if (savedTheme === 'dark' || savedTheme === 'light') {
+      setTheme(savedTheme, false);
+    }
+
+    toggle.addEventListener('click', () => {
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      setTheme(next);
+    });
+
+    // --- Copy Install Command ---
+    document.querySelectorAll('.copy-btn').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const installCmd = button.closest('.install-box')?.querySelector('.install-cmd')?.textContent?.trim();
+        if (!installCmd) return;
+
+        try {
+          await navigator.clipboard.writeText(installCmd);
+          button.classList.add('is-copied');
+          setTimeout(() => button.classList.remove('is-copied'), 1200);
+        } catch {
+          button.classList.remove('is-copied');
+        }
+      });
+    });
+
+    
+    // --- Parallax Scroll ---
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          document.documentElement.style.setProperty('--scroll-y', window.scrollY);
+          ticking = false;
+        });
+        ticking = true;
+      }
+    }, { passive: true });
+
+    // --- Reveal ---
+    document.querySelectorAll('.reveal').forEach((el) => {
+      el.classList.add('visible');
+    });
+
+    // --- Code Tab Switching ---
+    document.querySelectorAll('.code-tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const panelId = tab.dataset.panel;
+        const parent = tab.closest('.code-tabs');
+        parent.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+        parent.querySelectorAll('.code-panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(panelId).classList.add('active');
+      });
+    });
+
+    // --- Latent Topology Graph (Canvas) ---
+    
+    
+    function initLatentTopology() {
+      if (typeof topologyCleanup === 'function') {
+        topologyCleanup();
+      }
+
+      const canvas = document.getElementById('latent-topology');
+      const asciiCanvas = document.getElementById('ascii-dither');
+      if (!canvas || !asciiCanvas) return;
+      
+      const ctx = canvas.getContext('2d');
+      const asciiCtx = asciiCanvas.getContext('2d');
+      if (!ctx || !asciiCtx) return;
+
+      let width = canvas.parentElement.clientWidth;
+      let height = canvas.parentElement.clientHeight * 1.4; // Account for parallax bleed
+
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const nodeColor = isDark ? 'rgba(138, 138, 150, 0.8)' : 'rgba(106, 102, 96, 0.8)';
+      const edgeColor = isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.15)';
+      const highlightColor = isDark ? 'rgba(240, 240, 242, 1)' : 'rgba(10, 10, 12, 1)';
+      const ditherColor = isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.04)';
+      const surfaceColor = isDark ? '#0e0e12' : '#dbd5cd';
+
+      const numNodes = window.matchMedia('(max-width: 720px)').matches ? 60 : 120;
+      const clusters = [
+        { x: width * 0.62, y: height * 0.24, r: 160 },
+        { x: width * 0.78, y: height * 0.52, r: 210 },
+        { x: width * 0.56, y: height * 0.76, r: 140 },
+        { x: width * 0.88, y: height * 0.36, r: 120 },
+        { x: width * 0.9, y: height * 0.74, r: 150 },
+        { x: width * 0.2, y: height * 0.3, r: 180 },
+        { x: width * 0.3, y: height * 0.8, r: 150 }
+      ];
+
+      const nodes = [];
+      for (let i = 0; i < numNodes; i++) {
+        const cluster = clusters[Math.floor(Math.random() * clusters.length)];
+        const u = 1 - Math.random();
+        const v = Math.random();
+        const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+
+        nodes.push({
+          id: '0x' + Math.floor(Math.random()*65535).toString(16).toUpperCase().padStart(4, '0'),
+          x: cluster.x + z * (cluster.r / 2),
+          y: cluster.y + (Math.random() - 0.5) * cluster.r,
+          vx: (Math.random() - 0.5) * 0.2,
+          vy: (Math.random() - 0.5) * 0.2,
+          baseX: 0, baseY: 0,
+          isHub: Math.random() > 0.95
+        });
+        nodes[i].baseX = nodes[i].x;
+        nodes[i].baseY = nodes[i].y;
+      }
+
+      function resize() {
+        const nextWidth = canvas.parentElement.clientWidth;
+        const nextHeight = canvas.parentElement.clientHeight * 1.4;
+
+        const oldWidth = width || nextWidth;
+        const oldHeight = height || nextHeight;
+
+        width = nextWidth;
+        height = nextHeight;
+
+        const scaleX = oldWidth ? width / oldWidth : 1;
+        const scaleY = oldHeight ? height / oldHeight : 1;
+
+        nodes.forEach((node) => {
+          node.x *= scaleX;
+          node.y *= scaleY;
+          node.baseX *= scaleX;
+          node.baseY *= scaleY;
+        });
+
+        const dpr = window.devicePixelRatio || 1;
+        
+        canvas.width = Math.max(1, Math.floor(width * dpr));
+        canvas.height = Math.max(1, Math.floor(height * dpr));
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        asciiCanvas.width = Math.max(1, Math.floor(width * dpr));
+        asciiCanvas.height = Math.max(1, Math.floor(height * dpr));
+        asciiCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      const onResize = () => resize();
+      window.addEventListener('resize', onResize);
+      resize();
+
+      let mouse = { x: -1000, y: -1000 };
+      const onMouseMove = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = e.clientX - rect.left;
+        mouse.y = e.clientY - rect.top;
+      };
+      const onMouseLeave = () => {
+        mouse.x = -1000; mouse.y = -1000;
+      };
+
+      canvas.addEventListener('mousemove', onMouseMove);
+      canvas.addEventListener('mouseleave', onMouseLeave);
+
+      const chars = "01_.*+=".split('');
+      let time = 0;
+      let rafId = null;
+      let asciiRafId = null;
+      let lastAsciiDraw = 0;
+
+      // 1. ASCII Dithering Background (Throttled to ~15fps for performance)
+      function drawAscii() {
+        const now = Date.now();
+        if (now - lastAsciiDraw > 60) {
+          lastAsciiDraw = now;
+          asciiCtx.clearRect(0, 0, width, height);
+          asciiCtx.fillStyle = ditherColor;
+          asciiCtx.font = '500 10px "IBM Plex Mono", monospace';
+          
+          for(let y = 0; y < height; y += 32) {
+            for(let x = 0; x < width; x += 32) {
+              const noise = Math.sin(x * 0.003 + time) * Math.cos(y * 0.003 + time);
+              if (Math.abs(noise) > 0.4) {
+                const char = chars[Math.floor(Math.abs(noise) * chars.length) % chars.length];
+                asciiCtx.fillText(char, x, y);
+              }
+            }
+          }
+        }
+        asciiRafId = requestAnimationFrame(drawAscii);
+      }
+
+      // 2. Nodes and Connections (Smooth 60fps)
+      function drawNodes() {
+        ctx.clearRect(0, 0, width, height);
+        time += 0.01;
+
+        let hoveredNode = null;
+        let minDist = Infinity;
+
+        for (let i = 0; i < numNodes; i++) {
+          let n = nodes[i];
+          n.x += n.vx;
+          n.y += n.vy;
+          n.x += (n.baseX - n.x) * 0.005;
+          n.y += (n.baseY - n.y) * 0.005;
+
+          const dx = mouse.x - n.x;
+          const dy = mouse.y - n.y;
+          const dist = Math.sqrt(dx*dx + dy*dy);
+          
+          if (dist < 120 && dist > 0.001) {
+            n.x -= (dx / dist) * 1.5;
+            n.y -= (dy / dist) * 1.5;
+          }
+
+          if (dist < 40 && dist < minDist) {
+            minDist = dist;
+            hoveredNode = n;
+          }
+        }
+
+        ctx.lineWidth = 1;
+        for (let i = 0; i < numNodes; i++) {
+          let connections = 0;
+          for (let j = i + 1; j < numNodes; j++) {
+            const dx = nodes[i].x - nodes[j].x;
+            const dy = nodes[i].y - nodes[j].y;
+            const dist = dx*dx + dy*dy;
+
+            if (dist < 12000 && connections < 4) {
+              const a = nodes[i];
+              const b = nodes[j];
+              
+              // Quadratic bezier with 12% offset
+              const mx = (a.x + b.x) / 2 + dy * 0.12;
+              const my = (a.y + b.y) / 2 - dx * 0.12;
+
+              ctx.beginPath();
+              ctx.moveTo(a.x, a.y);
+              ctx.quadraticCurveTo(mx, my, b.x, b.y);
+
+              const isHoveredEdge = (hoveredNode === a || hoveredNode === b);
+              
+              if (isHoveredEdge) {
+                ctx.strokeStyle = highlightColor;
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([]);
+              } else {
+                ctx.strokeStyle = edgeColor;
+                ctx.lineWidth = 1;
+                // Fix flicker: use deterministic dash based on node indices
+                ctx.setLineDash(((i + j) % 3 === 0) ? [4, 6] : []);
+              }
+
+              ctx.stroke();
+              
+              // Fix flicker: use deterministic packet spawning
+              if (isHoveredEdge || ((i * j) % 7 === 0)) {
+                // Stable speed and offset so packets don't jump around
+                const speed = 2000 + ((i + j) % 3) * 1000;
+                const offset = (i * j * 333) % speed;
+                const t = ((Date.now() + offset) % speed) / speed;
+                
+                const px = (1-t)*(1-t)*a.x + 2*(1-t)*t*mx + t*t*b.x;
+                const py = (1-t)*(1-t)*a.y + 2*(1-t)*t*my + t*t*b.y;
+                
+                ctx.beginPath();
+                ctx.arc(px, py, isHoveredEdge ? 2 : 1.5, 0, Math.PI * 2);
+                ctx.fillStyle = isHoveredEdge ? highlightColor : nodeColor;
+                ctx.fill();
+              }
+
+              connections++;
+            }
+            if (connections >= 4) break;
+          }
+        }
+        ctx.setLineDash([]);
+
+        for (let i = 0; i < numNodes; i++) {
+          const n = nodes[i];
+          const isHovered = (n === hoveredNode);
+          
+          ctx.strokeStyle = isHovered ? highlightColor : nodeColor;
+          ctx.lineWidth = isHovered ? 1.5 : 1;
+          
+          const size = isHovered ? 8 : (n.isHub ? 6 : 4);
+
+          // Draw Crosshair
+          ctx.beginPath();
+          ctx.moveTo(n.x - size, n.y);
+          ctx.lineTo(n.x + size, n.y);
+          ctx.moveTo(n.x, n.y - size);
+          ctx.lineTo(n.x, n.y + size);
+          ctx.stroke();
+
+          // Draw Hub Circle
+          if (n.isHub || isHovered) {
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, size + 4, 0, Math.PI * 2);
+            ctx.strokeStyle = isHovered ? highlightColor : edgeColor;
+            ctx.stroke();
+          }
+
+          // Draw Hover HUD
+          if (isHovered) {
+            ctx.save();
+            ctx.translate(n.x, n.y);
+            ctx.rotate(time * 2);
+            ctx.beginPath();
+            ctx.arc(0, 0, 18, 0, Math.PI * 2);
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = highlightColor;
+            ctx.stroke();
+            ctx.restore();
+
+            ctx.fillStyle = surfaceColor;
+            ctx.strokeStyle = highlightColor;
+            ctx.setLineDash([]);
+            ctx.fillRect(n.x - 40, n.y - 45, 80, 26);
+            ctx.strokeRect(n.x - 40, n.y - 45, 80, 26);
+            
+            ctx.beginPath();
+            ctx.moveTo(n.x, n.y - 19);
+            ctx.lineTo(n.x, n.y - 12);
+            ctx.stroke();
+
+            ctx.fillStyle = highlightColor;
+            ctx.font = '8px "IBM Plex Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`MEM: ${n.id}`, n.x, n.y - 34);
+            ctx.fillText('STS: ACTIVE', n.x, n.y - 24);
+          }
+        }
+
+        rafId = requestAnimationFrame(drawNodes);
+      }
+
+      drawAscii();
+      drawNodes();
+
+      // Populate Hex Stream
+      const hexContent = document.querySelector('.hex-content');
+      if (hexContent) {
+        let content = '';
+        for(let i=0; i<80; i++) {
+          const addr = '0x' + Math.floor(Math.random()*65535).toString(16).padStart(4, '0').toUpperCase();
+          const data1 = Math.random().toString(16).substring(2, 10).toUpperCase();
+          const data2 = Math.random().toString(16).substring(2, 10).toUpperCase();
+          const ascii = Math.random().toString(36).substring(2, 10).replace(/[^a-z]/g, '.');
+          content += `${addr}  ${data1} ${data2}  [${ascii}]<br>`;
+        }
+        hexContent.innerHTML = content + content; // Duplicate for seamless scroll
+      }
+
+      topologyCleanup = () => {
+        if (rafId) cancelAnimationFrame(rafId);
+        if (asciiRafId) cancelAnimationFrame(asciiRafId);
+        window.removeEventListener('resize', onResize);
+        canvas.removeEventListener('mousemove', onMouseMove);
+        canvas.removeEventListener('mouseleave', onMouseLeave);
+      };
+    }
+
+    initLatentTopology();
+
+
+  </script>
+</body>
+</html>
