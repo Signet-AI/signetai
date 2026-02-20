@@ -1273,6 +1273,12 @@ Default retention windows:
 
 These values are configurable and may be tightened by policy.
 
+Privacy-sensitive install policy:
+
+1. History retention must be explicitly chosen during setup (no implicit
+   default).
+2. Recommended choices are 90 or 180 days based on operator risk posture.
+
 ### 27.5 Autonomous maintenance bounds (GA)
 
 Allowed unattended actions:
@@ -1294,3 +1300,607 @@ Plugin-first migration passes only when all are true:
 1. Plugin path is non-inferior to legacy path on recall/capture quality.
 2. Plugin path is equal or better on reliability and latency SLOs.
 3. Duplicate actions remain zero in mixed-mode and canary windows.
+
+---
+
+## 28) Competitive Gap Mapping (Supermemory Comparison)
+
+This section maps current observed product gaps (vs `references/supermemory/`)
+to this implementation plan so prioritization stays explicit.
+
+### 28.1 Current gap categories (as of this draft)
+
+1. Memory lifecycle completeness:
+   - missing shipped explicit `modify/forget/history/recover` endpoints
+   - limited mutation safety tooling in GA path today
+2. Ingestion breadth:
+   - limited native ingest surface compared to URL/file/media/connectors
+3. Ecosystem integrations:
+   - thinner framework middleware and SDK ergonomics
+4. MCP distribution posture:
+   - less standardized hosted OAuth/API-key style MCP path
+5. Product analytics:
+   - less complete usage/error analytics for operator workflows
+
+### 28.2 What v2 phases close directly
+
+1. Phases A-D close most memory lifecycle and safety gaps:
+   - durable queue + retries
+   - explicit modify/forget + history + recover
+   - pinned safety invariants and mutation policy controls
+2. Phase E closes graph-aware retrieval quality gaps.
+3. Phase F closes self-healing and operational rigor gaps.
+4. Phase G closes OpenClaw runtime parity and duplicate-path safety gaps.
+
+### 28.3 What remains after v2 (out of scope for A-G)
+
+1. Broad connector catalog and sync orchestration.
+2. Framework-native middleware/tooling parity across major app stacks.
+3. Hosted multi-tenant analytics and scoped auth experience.
+
+---
+
+## 29) Post-v2 Expansion Phases (H-K)
+
+These phases begin only after section 24 acceptance criteria pass.
+
+### Phase H: Ingestion and Connector Foundation (local-first first)
+
+- Add first-class document ingest contracts for text/URL/file with
+  asynchronous processing status (`queued/extracting/chunking/embedding/indexing/done/failed`).
+- Introduce connector runtime interface and provider contract:
+  auth, incremental sync, replay, idempotency, provenance.
+- Ship initial connector set focused on highest leverage:
+  GitHub docs, local filesystem/project docs, and Google Drive.
+- Gate: connector imports are idempotent, auditable, and do not violate
+  local-first defaults.
+
+### Phase I: SDK and Agent Integration Surface
+
+- Expand `@signet/sdk` to typed memory lifecycle APIs aligned with v2
+  (`remember/recall/modify/forget/history/recover/jobs`).
+- Add framework adapters:
+  - Vercel AI SDK middleware/tool package
+  - OpenAI SDK helper package (TypeScript first, Python optional)
+- Standardize examples and reference templates for memory injection
+  prompts and safe tool calling.
+- Gate: integration examples pass conformance tests and benchmark parity
+  with direct daemon API usage.
+
+### Phase J: Auth Scope and Deployment Modes
+
+- Keep localhost/no-auth as default path.
+- Add optional authenticated mode for remote/team deployments:
+  scoped API tokens, role policy, and operation-level authorization.
+- Add project/agent/user scoping guarantees for read/write/mutate
+  operations.
+- Gate: tenant/scope isolation tests pass with zero cross-scope leakage.
+
+### Phase K: Analytics and Operator UX
+
+- Add memory pipeline analytics endpoints and dashboard cards:
+  throughput, error taxonomy, queue health, latency, mutation safety.
+- Include exportable audit and incident timelines.
+- Add benchmark report publishing workflow for canary/GA decisions.
+- Gate: operators can diagnose top memory failures without ad-hoc log
+  spelunking.
+
+---
+
+## 30) Prioritization Guardrails for H-K
+
+1. Do not expand connector breadth before v2 mutation safety gates are
+   green.
+2. Favor depth over breadth: one production-grade connector beats five
+   partial connectors.
+3. Preserve local-first defaults in every new surface.
+4. Any destructive operation must remain previewable, reversible, and
+   fully audited.
+5. New integration layers must reuse daemon contracts rather than invent
+   parallel semantics.
+
+---
+
+## 31) Immediate Planning Actions (next cycle)
+
+1. Convert Phases A-G into owner-assigned milestones with explicit
+   acceptance tests per gate.
+2. Freeze and capture baseline benchmark snapshot before A starts.
+3. Draft Phase H RFC in parallel (contracts only, no implementation)
+   so post-v2 execution can start without discovery lag.
+4. Scope `@signet/sdk` v2 API surface in parallel with D/E so Phase I is
+   not blocked on SDK design.
+5. Define deployment mode policy matrix now (localhost default,
+   authenticated optional) to de-risk Phase J.
+
+---
+
+## 32) Deep Implementation Plan (A-G)
+
+This section converts phases into concrete implementation tracks,
+component ownership, and sequencing constraints.
+
+### 32.1 Package ownership map
+
+1. `@signet/core` owns:
+   - schema and migrations API surface
+   - memory domain types and validators
+   - extraction/decision contracts
+   - retrieval scoring and graph boost logic
+2. `@signet/daemon` owns:
+   - queue worker runtime and job leasing
+   - API handlers and authorization policy checks
+   - observability endpoints and health diagnostics
+3. `@signet/sdk` owns:
+   - typed client surface for all memory lifecycle APIs
+   - integration-safe wrappers and transport defaults
+4. `@signet/adapter-openclaw` owns runtime plugin behavior.
+5. `@signet/connector-openclaw` owns install/bootstrap and fallback hooks.
+
+### 32.2 Phase A implementation tracks (infrastructure hardening)
+
+Track A1: Schema and migration runtime
+
+1. Add migrations for:
+   - `memories` new columns (`content_hash`, `normalized_content`,
+     `is_deleted`, `deleted_at`, `pinned`, `importance`,
+     `extraction_status`, provenance fields)
+   - `memory_history`
+   - `memory_jobs`
+   - graph tables (`entities`, `relations`, `memory_entity_mentions`)
+2. Add migration audit table:
+   - `schema_migrations_audit(id, started_at, ended_at, outcome, details)`
+3. Add preflight command/API:
+   - detect schema state
+   - produce additive migration plan report
+   - verify backup existence + checksum
+
+Track A2: DB access and transaction boundaries
+
+1. Introduce single daemon DB accessor factory with:
+   - one write handle
+   - pooled read handles when beneficial
+2. Implement explicit transaction wrappers:
+   - `txIngestEnvelope()`
+   - `txApplyDecision()`
+   - `txFinalizeAccessAndHistory()`
+3. Enforce no provider call inside write transaction via lintable guard:
+   - central helper requiring pure DB closures
+
+Track A3: Feature flags and kill switches
+
+1. Add config keys:
+   - `memory.pipelineV2.enabled`
+   - `memory.pipelineV2.shadowMode`
+   - `memory.pipelineV2.allowUpdateDelete`
+   - `memory.pipelineV2.graph.enabled`
+   - `memory.pipelineV2.autonomous.enabled`
+2. Add emergency freeze controls:
+   - `memory.pipelineV2.mutationsFrozen`
+   - `memory.pipelineV2.autonomousFrozen`
+
+Track A4: Baseline compatibility
+
+1. Keep legacy remember/recall behavior default-on until gates pass.
+2. Add dual-read diagnostics mode:
+   - compare baseline vs v2 candidate retrieval silently
+   - log divergence metrics only
+
+Exit criteria for Phase A (must all pass)
+
+1. Additive migration succeeds on representative legacy DB snapshots.
+2. Daemon restarts safely during migration/backfill.
+3. No regression in existing `/remember` + `/recall` user path.
+
+### 32.3 Phase B implementation tracks (shadow extraction)
+
+Track B1: Contract-first extractors
+
+1. Implement extractor interface:
+   - `extractFactsAndEntities(input): ExtractionResult`
+2. Add validator with hard caps:
+   - max facts
+   - max entities/relations
+   - max fact length
+   - reject trivial or malformed outputs
+3. Persist warnings even when extraction fails.
+
+Track B2: Shadow decision engine
+
+1. Implement candidate retrieval for each fact (top-K hybrid).
+2. Implement decision contract parser for `ADD/UPDATE/DELETE/NONE`.
+3. Persist proposed decisions to history with `event=NONE` +
+   `decision_reason`, without mutating memories.
+
+Track B3: Job worker + retry behavior
+
+1. Worker loop with leasing:
+   - lease timeout
+   - stale lease reaper
+   - exponential backoff with jitter
+2. Job dedup keys:
+   - one active extract job per memory/version
+3. Dead-letter path with machine-readable error codes.
+
+Exit criteria for Phase B
+
+1. Parse reliability reaches threshold on real traffic sample.
+2. Shadow decisions produce explainable audit records.
+3. Queue remains stable under provider timeouts/outages.
+
+### 32.4 Phase C implementation tracks (controlled writes: ADD/NONE)
+
+Track C1: ADD write path
+
+1. Enable ADD application with idempotency checks:
+   - exact hash duplicate collapse at DB layer
+2. Write mandatory history event in same commit as memory mutation.
+3. Update embedding linkage for newly added memory.
+
+Track C2: Contradiction and duplicate suppression
+
+1. Run contradiction detector before destructive recommendations.
+2. When contradiction risk present:
+   - block destructive write
+   - emit review-needed marker
+
+Track C3: Read-path confidence controls
+
+1. Exclude low-confidence extracted facts from write path by threshold.
+2. Keep raw envelope available regardless of quality outcome.
+
+Exit criteria for Phase C
+
+1. Duplicate growth is materially reduced from baseline.
+2. No data-loss incidents under repeated retries/restarts.
+
+### 32.5 Phase D implementation tracks (full semantic decisions)
+
+Track D1: Explicit mutation APIs
+
+1. Implement endpoints from section 14.5-14.8.
+2. Require `reason` for all mutate operations.
+3. Add `if_version` optimistic concurrency guards.
+
+Track D2: Soft-delete and recoverability
+
+1. Implement soft-delete semantics in all forget flows.
+2. Implement recover endpoint with retention-window checks.
+3. Retention worker enforces purge order:
+   links -> tombstones -> history.
+
+Track D3: Pinned and policy guardrails
+
+1. Reject pinned delete unless force + policy-authorized actor.
+2. Deny autonomous force delete by default (locked decision 27.2).
+3. Record actor identity + request/session correlation for all mutations.
+
+Exit criteria for Phase D
+
+1. Wrong-target edit/delete metrics meet section 22 release gates.
+2. Recover path passes SLA and audit-chain checks.
+
+### 32.6 Phase E implementation tracks (graph + optional rerank)
+
+Track E1: Graph extraction persistence
+
+1. Persist entities/relations with merge policies.
+2. Maintain `memory_entity_mentions` as mandatory link table.
+3. On modify/delete, update mention counts and orphan cleanup safely.
+
+Track E2: Query-time graph boost
+
+1. Query entity extraction and nearest-entity resolution.
+2. One-hop expansion and score boost integration:
+   `final = a*vector + b*bm25 + c*access + d*graph`.
+3. Graceful fallback to baseline hybrid if entity resolution fails.
+
+Track E3: Optional reranker
+
+1. Add reranker hook for top-N only.
+2. Enforce strict timeout with fallback to pre-rerank ordering.
+3. Instrument latency overhead separately.
+
+Exit criteria for Phase E
+
+1. Recall@10 and nDCG targets met without latency SLO breach.
+2. Graph consistency checks show no orphan-link drift.
+
+### 32.7 Phase F implementation tracks (autonomous maintenance)
+
+Track F1: Diagnostics plane
+
+1. Add read-only health endpoints for:
+   queue, storage, index, provider, mutation safety.
+2. Compute health score with sub-scores per domain.
+
+Track F2: Repair action plane
+
+1. Implement policy-gated actions:
+   requeue, lease release, reindex checks, bounded reembed.
+2. Require reason + actor + correlation id on every action.
+3. Enforce per-action cooldown and hourly/day action budgets.
+
+Track F3: Safety automation loop
+
+1. Observe-only mode first (recommendations, no mutation).
+2. Promote to execute mode only after canary gates.
+3. Auto-halt on repeated non-improving remediations.
+
+Exit criteria for Phase F
+
+1. MTTR improves while maintaining zero autonomous safety incidents.
+2. Kill switch proven effective immediately.
+
+### 32.8 Phase G implementation tracks (OpenClaw plugin-first)
+
+Track G1: Runtime path arbitration
+
+1. Session-level arbitration key chooses plugin vs legacy path.
+2. Emit audit field `runtime_path` for every memory operation.
+3. Enforce one active path per session.
+
+Track G2: Tool and lifecycle parity
+
+1. Ensure plugin supports full lifecycle callbacks.
+2. Ensure plugin exposes memory tool parity:
+   search/store/get/list/modify/forget.
+3. Route plugin mutations through same daemon policy engine as all callers.
+
+Track G3: Compatibility de-risking
+
+1. Keep legacy hooks gated and measurable.
+2. Add duplicate-action guard keys across both paths.
+3. Publish migration + deprecation runbook.
+
+Exit criteria for Phase G
+
+1. Plugin path non-inferior quality, equal/better reliability/latency.
+2. Duplicate actions remain zero in mixed-mode canary.
+
+### 32.9 Dependency-critical sequencing
+
+1. A must complete before any B-F mutating behavior.
+2. B shadow data should run long enough to calibrate thresholds before C.
+3. D cannot ship before mutation policy and retention worker are complete.
+4. E graph boost should be enabled only after D mutation correctness gates.
+5. F execute mode cannot ship before D+E safety baselines are stable.
+6. G deprecation timeline starts only after F operational maturity.
+
+---
+
+## 33) Deep Implementation Plan (H-K)
+
+These phases focus on product surface parity while preserving local-first
+and mutation safety guarantees from v2.
+
+### 33.1 Phase H: Ingestion and connector foundation
+
+H1: Document ingest API and lifecycle
+
+1. Introduce document-level model:
+   - `documents` table with status machine and provenance
+   - mapping from document -> derived memories
+2. Proposed ingest endpoints:
+   - `POST /api/documents` (text/url payload)
+   - `POST /api/documents/file` (file upload)
+   - `GET /api/documents/:id` (status + diagnostics)
+   - `GET /api/documents/:id/chunks` (debug/inspection)
+3. Status machine:
+   `queued -> extracting -> chunking -> embedding -> indexing -> done|failed`.
+
+H2: Connector runtime contract
+
+1. Define connector interface:
+   - `authorize()`
+   - `listResources()`
+   - `syncIncremental(cursor)`
+   - `syncFull()`
+   - `replay(resourceId, fromVersion)`
+2. Required connector metadata:
+   - provider, tenant scope, cursor, last sync, rate-limit state,
+     error state, provenance tags.
+3. Shared connector safeguards:
+   - idempotency keys by source document hash + provider version
+   - per-connector backoff and dead-letter queue
+   - replay-safe mutation behavior
+
+H3: Initial connector set (depth-first)
+
+1. GitHub docs connector (text docs only first pass).
+2. Local filesystem docs connector (watch + snapshot modes).
+3. Google Drive connector as first OAuth source.
+
+H4: Connector operations
+
+1. Connector-specific health diagnostics and forced resync API.
+2. Manual sync + preview impact report before destructive sync actions.
+3. Connector runbook for quota/permission/replay failures.
+
+Exit criteria for H
+
+1. At least one connector is production-grade with replay + idempotency.
+2. Document ingest lifecycle is visible and debuggable end-to-end.
+
+### 33.2 Phase I: SDK and framework integrations
+
+I1: `@signet/sdk` v2 client
+
+1. Add typed methods for:
+   remember, recall, modify, forget, history, recover, jobs, documents.
+2. Add strong request/response schemas and error classes.
+3. Add transport policies:
+   retries only for idempotent operations by default.
+
+I2: Framework adapters
+
+1. Vercel AI SDK adapter:
+   - context injection middleware
+   - memory tool bindings
+   - safety defaults for mutation operations
+2. OpenAI SDK adapter (TS first):
+   - helper for tool definitions + execution wrappers
+   - conversation-scoped memory context helpers
+3. Optional Python adapter follows after TS parity and adoption signal.
+
+I3: Conformance + examples
+
+1. Golden integration tests verify adapters match daemon API semantics.
+2. Reference examples for chat agents and coding agents.
+3. Include "safe defaults" templates:
+   preview-first forget, version-guarded modify.
+
+Exit criteria for I
+
+1. Adapter flows show non-inferior recall quality vs direct API calls.
+2. Mutation safety invariants preserved through all adapter layers.
+
+### 33.3 Phase J: Auth scope and deployment modes
+
+J1: Deployment mode matrix
+
+1. `local-default` mode:
+   - localhost only
+   - no mandatory auth
+2. `team-auth` mode (optional):
+   - token auth required
+   - scoped policy enforcement
+3. `hybrid` mode:
+   - local commands remain frictionless
+   - remote endpoints require auth and scope
+
+J2: Token and policy model
+
+1. Token classes:
+   - personal full-scope token
+   - scoped token (project/agent-restricted)
+   - short-lived session token (optional)
+2. v1 scope granularity includes project + agent + user dimensions.
+3. Permission matrix by operation:
+   remember/recall/modify/forget/recover/admin.
+4. Mandatory scope filters in all query and mutation paths.
+
+J3: Security and abuse controls
+
+1. Rate limits for destructive operations.
+2. Threshold confirmation for bulk forget and force delete.
+3. Full audit provenance for caller identity and role.
+
+Exit criteria for J
+
+1. Isolation tests prove no cross-scope leakage.
+2. Unauthorized mutation tests pass under all deployment modes.
+
+### 33.4 Phase K: Analytics and operator UX
+
+K1: Analytics data model
+
+1. Usage counters by endpoint, actor, provider, connector.
+2. Error taxonomy with stage-level codes.
+3. Latency histograms for remember/recall/mutate/jobs.
+
+K2: API endpoints and dashboard
+
+1. Proposed endpoints:
+   - `GET /api/analytics/usage`
+   - `GET /api/analytics/errors`
+   - `GET /api/analytics/logs`
+   - `GET /api/analytics/memory-safety`
+2. Dashboard cards:
+   queue health, dead-letter trend, mutation safety,
+   provider status, connector sync health.
+
+K3: Operator incident workflow
+
+1. One-click export of timeline for a request/session/memory id.
+2. Include policy decisions and automated actions in timeline.
+3. Add benchmark report publication to release decision checklist.
+
+Exit criteria for K
+
+1. Top incident classes diagnosable from dashboard + APIs alone.
+2. Canary/GA decisions use standard published benchmark artifacts.
+
+---
+
+## 34) Detailed Milestone Graph and Suggested Sprinting
+
+Assumes 2-week iterations and parallel work where safe.
+
+### 34.1 Milestone groups
+
+1. M1 (A1-A3): Schema + DB access + flags
+2. M2 (B1-B3): Shadow extraction + queue stabilization
+3. M3 (C1-C3): Controlled ADD writes + contradiction controls
+4. M4 (D1-D3): Explicit mutation APIs + recovery + policy hardening
+5. M5 (E1-E3): Graph persistence + graph boost + optional rerank
+6. M6 (F1-F3): Diagnostics + repair actions + autonomous observe mode
+7. M7 (G1-G3): OpenClaw plugin-first arbitration and parity
+8. M8 (H1-H4): Document ingest + first production-grade connector
+9. M9 (I1-I3): SDK v2 + framework adapters + conformance
+10. M10 (J1-J3 + K1-K3): deployment auth modes + analytics UX
+
+### 34.2 Parallelism guidance
+
+1. M1 and benchmark harness prep can run together.
+2. M2 shadow mode and API contract stubs for D can run together.
+3. M5 graph extraction implementation can start during late M4,
+   but feature-flagged off until D gates pass.
+4. M8 RFC and interface contracts can start during M6/M7.
+5. M9 SDK surface design should start before M8 completes.
+
+### 34.3 Suggested de-risking order
+
+1. Prioritize mutation correctness before connector breadth.
+2. Prioritize policy correctness before authenticated deployment.
+3. Prioritize observability before autonomous execute mode.
+
+---
+
+## 35) Engineering Findings and Recommendations
+
+1. The strongest competitive leverage is not connector count first; it is
+   trusted memory correctness under mutation and recovery.
+2. Shipping explicit modify/forget/history/recover (D) is the highest
+   product-perception unlock for parity.
+3. Graph quality work (E) should stay conservative until mutation safety
+   error rates are well-characterized.
+4. OpenClaw plugin-first migration (G) is strategic for ecosystem
+   coherence; treat duplicate-action prevention as a hard invariant.
+5. Post-v2 connector work (H) should be depth-first with one excellent
+   connector before expansion.
+6. SDK/integration surfaces (I) need conformance tests so wrappers never
+   drift from daemon policy semantics.
+7. Optional auth modes (J) should not compromise local-default UX.
+8. Analytics (K) should be considered a reliability feature, not just UX.
+
+---
+
+## 36) Operator Interview Outcomes (resolved)
+
+The following implementation decisions were confirmed by operator input
+and now act as planning defaults.
+
+1. Phase H OAuth connector priority:
+   - Google Drive first.
+2. Phase J auth scope model for v1:
+   - include project + agent + user scoping in first authenticated mode.
+3. Phase I adapter scope:
+   - defer Python adapter from wave 1; prioritize TypeScript adapter
+     quality and adoption signal.
+4. Privacy-focused retention policy:
+   - history retention must be config-required at setup.
+5. Analytics redaction default:
+   - configurable at setup with safe presets (not one hard global mode).
+6. Release-blocking metric priority:
+   - wrong-target mutation precision takes precedence over latency p95.
+
+### 36.1 Plan implications from interview
+
+1. Phase J complexity increases; allocate extra validation budget for
+   scope-composition and isolation tests.
+2. Setup UX must include retention + analytics redaction decisions.
+3. Phase I timeline should assume TS adapter is productionized before
+   Python starts.
+4. Canary gates should halt rollout on mutation precision regressions
+   even when latency remains within SLO.
