@@ -27,8 +27,12 @@ import {
 } from "fs";
 import { spawn } from "child_process";
 import { createHash } from "crypto";
-import { Database } from "bun:sqlite";
 import { fileURLToPath } from "url";
+import {
+	initDbAccessor,
+	getDbAccessor,
+	closeDbAccessor,
+} from "./db-accessor";
 import {
 	putSecret,
 	getSecret,
@@ -48,6 +52,7 @@ import {
 	getGlobalInstallCommand,
 } from "@signet/core";
 import { compareVersions, isVersionNewer } from "./version";
+import { txIngestEnvelope, txFinalizeAccessAndHistory } from "./transactions";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -817,47 +822,46 @@ app.get("/api/identity", (c) => {
 
 app.get("/api/memories", (c) => {
 	try {
-		const db = new Database(MEMORY_DB, { readonly: true });
-
 		const limit = parseInt(c.req.query("limit") || "100", 10);
 		const offset = parseInt(c.req.query("offset") || "0", 10);
 
-		const memories = db
-			.prepare(`
+		const result = getDbAccessor().withReadDb((db) => {
+			const memories = db
+				.prepare(`
       SELECT id, content, created_at, who, importance, tags, source_type, pinned, type
-      FROM memories 
-      ORDER BY created_at DESC 
+      FROM memories
+      ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `)
-			.all(limit, offset);
+				.all(limit, offset);
 
-		// Stats
-		const totalResult = db
-			.prepare("SELECT COUNT(*) as count FROM memories")
-			.get() as { count: number };
-		let embeddingsCount = 0;
-		try {
-			const embResult = db
-				.prepare("SELECT COUNT(*) as count FROM embeddings")
+			const totalResult = db
+				.prepare("SELECT COUNT(*) as count FROM memories")
 				.get() as { count: number };
-			embeddingsCount = embResult?.count ?? 0;
-		} catch {
-			// embeddings table might not exist
-		}
-		const critResult = db
-			.prepare("SELECT COUNT(*) as count FROM memories WHERE importance >= 0.9")
-			.get() as { count: number };
+			let embeddingsCount = 0;
+			try {
+				const embResult = db
+					.prepare("SELECT COUNT(*) as count FROM embeddings")
+					.get() as { count: number };
+				embeddingsCount = embResult?.count ?? 0;
+			} catch {
+				// embeddings table might not exist
+			}
+			const critResult = db
+				.prepare("SELECT COUNT(*) as count FROM memories WHERE importance >= 0.9")
+				.get() as { count: number };
 
-		db.close();
-
-		return c.json({
-			memories,
-			stats: {
-				total: totalResult?.count ?? 0,
-				withEmbeddings: embeddingsCount,
-				critical: critResult?.count ?? 0,
-			},
+			return {
+				memories,
+				stats: {
+					total: totalResult?.count ?? 0,
+					withEmbeddings: embeddingsCount,
+					critical: critResult?.count ?? 0,
+				},
+			};
 		});
+
+		return c.json(result);
 	} catch (e) {
 		logger.error("memory", "Error loading memories", e as Error);
 		return c.json({
@@ -966,14 +970,15 @@ app.get("/memory/search", (c) => {
 	// Shortcut: return distinct values for a column
 	if (distinct === "who") {
 		try {
-			const db = new Database(MEMORY_DB, { readonly: true });
-			const rows = db
-				.prepare(
-					"SELECT DISTINCT who FROM memories WHERE who IS NOT NULL ORDER BY who",
-				)
-				.all() as { who: string }[];
-			db.close();
-			return c.json({ values: rows.map((r) => r.who) });
+			const values = getDbAccessor().withReadDb((db) => {
+				const rows = db
+					.prepare(
+						"SELECT DISTINCT who FROM memories WHERE who IS NOT NULL ORDER BY who",
+					)
+					.all() as { who: string }[];
+				return rows.map((r) => r.who);
+			});
+			return c.json({ values });
 		} catch {
 			return c.json({ values: [] });
 		}
@@ -995,56 +1000,58 @@ app.get("/memory/search", (c) => {
 	);
 
 	try {
-		const db = new Database(MEMORY_DB, { readonly: true });
-		let results: unknown[] = [];
+		const results = getDbAccessor().withReadDb((db) => {
+			let rows: unknown[] = [];
 
-		if (query.trim()) {
-			// FTS path
-			const { clause, args } = buildWhere(filterParams);
-			try {
-				results = (
+			if (query.trim()) {
+				// FTS path
+				const { clause, args } = buildWhere(filterParams);
+				try {
+					rows = (
+						db.prepare(`
+            SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
+                   m.type, m.pinned, bm25(memories_fts) as score
+            FROM memories_fts
+            JOIN memories m ON memories_fts.rowid = m.rowid
+            WHERE memories_fts MATCH ?${clause}
+            ORDER BY score
+            LIMIT ${limit ?? 20}
+          `) as any
+					).all(query, ...args);
+				} catch {
+					// FTS not available — fall back to LIKE
+					const { clause: rc, args: rargs } = buildWhereRaw(filterParams);
+					rows = (
+						db.prepare(`
+            SELECT id, content, created_at, who, importance, tags, type, pinned
+            FROM memories
+            WHERE (content LIKE ? OR tags LIKE ?)${rc}
+            ORDER BY created_at DESC
+            LIMIT ${limit ?? 20}
+          `) as any
+					).all(`%${query}%`, `%${query}%`, ...rargs);
+				}
+			} else if (hasFilters) {
+				// Pure filter path
+				const { clause, args } = buildWhereRaw(filterParams);
+				rows = (
 					db.prepare(`
-          SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
-                 m.type, m.pinned, bm25(memories_fts) as score
-          FROM memories_fts
-          JOIN memories m ON memories_fts.rowid = m.rowid
-          WHERE memories_fts MATCH ?${clause}
-          ORDER BY score
-          LIMIT ${limit ?? 20}
-        `) as any
-				).all(query, ...args);
-			} catch {
-				// FTS not available — fall back to LIKE
-				const { clause: rc, args: rargs } = buildWhereRaw(filterParams);
-				results = (
-					db.prepare(`
-          SELECT id, content, created_at, who, importance, tags, type, pinned
+          SELECT id, content, created_at, who, importance, tags, type, pinned,
+                 CASE WHEN pinned = 1 THEN 1.0
+                      ELSE importance * MAX(0.1, POWER(0.95,
+                        CAST(JulianDay('now') - JulianDay(created_at) AS INTEGER)))
+                 END AS score
           FROM memories
-          WHERE (content LIKE ? OR tags LIKE ?)${rc}
-          ORDER BY created_at DESC
-          LIMIT ${limit ?? 20}
+          WHERE 1=1${clause}
+          ORDER BY score DESC
+          LIMIT ${limit ?? 50}
         `) as any
-				).all(`%${query}%`, `%${query}%`, ...rargs);
+				).all(...args);
 			}
-		} else if (hasFilters) {
-			// Pure filter path
-			const { clause, args } = buildWhereRaw(filterParams);
-			results = (
-				db.prepare(`
-        SELECT id, content, created_at, who, importance, tags, type, pinned,
-               CASE WHEN pinned = 1 THEN 1.0
-                    ELSE importance * MAX(0.1, POWER(0.95,
-                      CAST(JulianDay('now') - JulianDay(created_at) AS INTEGER)))
-               END AS score
-        FROM memories
-        WHERE 1=1${clause}
-        ORDER BY score DESC
-        LIMIT ${limit ?? 50}
-      `) as any
-			).all(...args);
-		}
 
-		db.close();
+			return rows;
+		});
+
 		return c.json({ results });
 	} catch (e) {
 		logger.error("memory", "Error searching memories", e as Error);
@@ -1077,6 +1084,12 @@ app.post("/api/memory/remember", async (c) => {
 	const raw = body.content?.trim();
 	if (!raw) return c.json({ error: "content is required" }, 400);
 
+	// Pipeline v2 kill switch: refuse writes when mutations are frozen
+	const pipelineCfg = loadMemoryConfig(AGENTS_DIR).pipelineV2;
+	if (pipelineCfg.mutationsFrozen) {
+		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+	}
+
 	const who = body.who ?? "daemon";
 	const project = body.project ?? null;
 	const sourceType = body.sourceType?.trim() || "manual";
@@ -1093,30 +1106,91 @@ app.post("/api/memory/remember", async (c) => {
 
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
+	const contentHash = createHash("sha256")
+		.update(parsed.content)
+		.digest("hex");
+
+	type DedupeRow = {
+		id: string;
+		type: string;
+		tags: string | null;
+		pinned: number;
+		importance: number;
+		content: string;
+	};
 
 	try {
-		const db = new Database(MEMORY_DB);
-		db.exec("PRAGMA busy_timeout = 5000");
+		// Single atomic write tx: check dedupe then insert.
+		// On UNIQUE constraint race (two concurrent inserts with same
+		// content_hash), catch the error and re-read the winner.
+		const result = getDbAccessor().withWriteTx((db) => {
+			// Check sourceId-based dedupe first
+			if (sourceId) {
+				const bySource = db
+					.prepare(
+						`SELECT id, type, tags, pinned, importance, content
+						 FROM memories WHERE source_type = ? AND source_id = ? AND is_deleted = 0 LIMIT 1`,
+					)
+					.get(sourceType, sourceId) as DedupeRow | undefined;
+				if (bySource) return { deduped: true as const, row: bySource };
+			}
 
-		if (sourceId) {
-			const existing = db
+			// Check content_hash dedupe
+			const byHash = db
 				.prepare(
 					`SELECT id, type, tags, pinned, importance, content
-					 FROM memories WHERE source_type = ? AND source_id = ? LIMIT 1`,
+					 FROM memories
+					 WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
 				)
-				.get(sourceType, sourceId) as
-				| {
-						id: string;
-						type: string;
-						tags: string | null;
-						pinned: number;
-						importance: number;
-						content: string;
-				  }
-				| undefined;
+				.get(contentHash) as DedupeRow | undefined;
+			if (byHash) return { deduped: true as const, row: byHash };
 
+			// No duplicate — insert
+			txIngestEnvelope(db, {
+				id,
+				content: parsed.content,
+				contentHash,
+				who,
+				why: pinned ? "explicit-critical" : "explicit",
+				project,
+				importance,
+				type: memType,
+				tags,
+				pinned,
+				sourceType,
+				sourceId,
+				createdAt: now,
+			});
+			return { deduped: false as const };
+		});
+
+		if (result.deduped) {
+			return c.json({
+				id: result.row.id,
+				type: result.row.type,
+				tags: result.row.tags || "",
+				pinned: !!result.row.pinned,
+				importance: result.row.importance,
+				content: result.row.content,
+				embedded: true,
+				deduped: true,
+			});
+		}
+	} catch (e) {
+		// UNIQUE constraint violation = concurrent insert race. Re-read
+		// the winner and return it as a deduped result.
+		const msg = e instanceof Error ? e.message : "";
+		if (msg.includes("UNIQUE constraint")) {
+			const existing = getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						`SELECT id, type, tags, pinned, importance, content
+						 FROM memories
+						 WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
+					)
+					.get(contentHash) as DedupeRow | undefined,
+			);
 			if (existing) {
-				db.close();
 				return c.json({
 					id: existing.id,
 					type: existing.type,
@@ -1129,41 +1203,6 @@ app.post("/api/memory/remember", async (c) => {
 				});
 			}
 		}
-
-		db.prepare(`
-      INSERT INTO memories
-        (id, content, who, why, project, importance, type, tags, pinned,
-         created_at, updated_at, updated_by, source_type, source_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-			id,
-			parsed.content,
-			who,
-			pinned ? "explicit-critical" : "explicit",
-			project,
-			importance,
-			memType,
-			tags,
-			pinned,
-			now,
-			now,
-			who,
-			sourceType,
-			sourceId,
-		);
-
-		// Keep FTS in sync (content= tables need manual population on INSERT)
-		try {
-			db.prepare(
-				`INSERT INTO memories_fts(rowid, content)
-         SELECT rowid, content FROM memories WHERE id = ?`,
-			).run(id);
-		} catch {
-			// FTS trigger may already exist; ignore
-		}
-
-		db.close();
-	} catch (e) {
 		logger.error("memory", "Failed to save memory", e as Error);
 		return c.json({ error: "Failed to save memory" }, 500);
 	}
@@ -1179,18 +1218,16 @@ app.post("/api/memory/remember", async (c) => {
 			const blob = vectorToBlob(vec);
 			const embId = crypto.randomUUID();
 
-			const db = new Database(MEMORY_DB);
-			db.exec("PRAGMA busy_timeout = 5000");
-			// Remove stale embedding for this memory (upsert behaviour)
-			db.prepare(
-				`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
-			).run(id);
-			db.prepare(`
-        INSERT INTO embeddings
-          (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-        VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-      `).run(embId, hash, blob, vec.length, id, parsed.content, now);
-			db.close();
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
+				).run(id);
+				db.prepare(`
+          INSERT INTO embeddings
+            (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+          VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+        `).run(embId, hash, blob, vec.length, id, parsed.content, now);
+			});
 			embedded = true;
 		}
 	} catch (e) {
@@ -1303,29 +1340,28 @@ app.post("/api/memory/recall", async (c) => {
 	// --- BM25 keyword search via FTS5 ---
 	const bm25Map = new Map<string, number>();
 	try {
-		const db = new Database(MEMORY_DB, { readonly: true });
-		// bm25() in FTS5 returns negative values (lower = better match),
-		// so we negate and normalise to [0,1] via a simple 1/(1+|score|) approach
-		const ftsRows = (
-			db.prepare(`
-      SELECT m.id, bm25(memories_fts) AS raw_score
-      FROM memories_fts
-      JOIN memories m ON memories_fts.rowid = m.rowid
-      WHERE memories_fts MATCH ?${filterClause}
-      ORDER BY raw_score
-      LIMIT ?
-    `) as any
-		).all(query, ...filterArgs, cfg.search.top_k) as Array<{
-			id: string;
-			raw_score: number;
-		}>;
+		getDbAccessor().withReadDb((db) => {
+			// bm25() in FTS5 returns negative values (lower = better match),
+			// so we negate and normalise to [0,1] via a simple 1/(1+|score|) approach
+			const ftsRows = (
+				db.prepare(`
+        SELECT m.id, bm25(memories_fts) AS raw_score
+        FROM memories_fts
+        JOIN memories m ON memories_fts.rowid = m.rowid
+        WHERE memories_fts MATCH ?${filterClause}
+        ORDER BY raw_score
+        LIMIT ?
+      `) as any
+			).all(query, ...filterArgs, cfg.search.top_k) as Array<{
+				id: string;
+				raw_score: number;
+			}>;
 
-		for (const row of ftsRows) {
-			// Normalise: bm25 is negative; convert to 0-1
-			const normalised = 1 / (1 + Math.abs(row.raw_score));
-			bm25Map.set(row.id, normalised);
-		}
-		db.close();
+			for (const row of ftsRows) {
+				const normalised = 1 / (1 + Math.abs(row.raw_score));
+				bm25Map.set(row.id, normalised);
+			}
+		});
 	} catch {
 		// FTS unavailable (e.g. no matches) — continue with vector only
 	}
@@ -1336,17 +1372,15 @@ app.post("/api/memory/recall", async (c) => {
 		const queryVec = await fetchEmbedding(query, cfg.embedding);
 		if (queryVec) {
 			const qf32 = new Float32Array(queryVec);
-			const db = new Database(MEMORY_DB, { readonly: true });
-			// Use core's vectorSearch which queries vec_embeddings virtual table
-			const vecResults = vectorSearch(db as any, qf32, {
-				limit: cfg.search.top_k,
-				type: body.type as "fact" | "preference" | "decision" | undefined,
+			getDbAccessor().withReadDb((db) => {
+				const vecResults = vectorSearch(db as any, qf32, {
+					limit: cfg.search.top_k,
+					type: body.type as "fact" | "preference" | "decision" | undefined,
+				});
+				for (const r of vecResults) {
+					vectorMap.set(r.id, r.score);
+				}
 			});
-			db.close();
-
-			for (const r of vecResults) {
-				vectorMap.set(r.id, r.score);
-			}
 		}
 	} catch (e) {
 		logger.warn("memory", "Vector search failed, using keyword only", {
@@ -1387,40 +1421,40 @@ app.post("/api/memory/recall", async (c) => {
 
 	// --- Fetch full memory rows ---
 	try {
-		const db = new Database(MEMORY_DB); // Writable for access tracking
-		db.exec("PRAGMA busy_timeout = 5000");
 		const placeholders = topIds.map(() => "?").join(", ");
-		const rows = db
-			.prepare(`
-      SELECT id, content, type, tags, pinned, importance, who, project, created_at
-      FROM memories
-      WHERE id IN (${placeholders})
-    `)
-			.all(...topIds) as Array<{
-			id: string;
-			content: string;
-			type: string;
-			tags: string | null;
-			pinned: number;
-			importance: number;
-			who: string;
-			project: string | null;
-			created_at: string;
-		}>;
+
+		const rows = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(`
+        SELECT id, content, type, tags, pinned, importance, who, project, created_at
+        FROM memories
+        WHERE id IN (${placeholders})
+      `)
+				.all(...topIds) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				tags: string | null;
+				pinned: number;
+				importance: number;
+				who: string;
+				project: string | null;
+				created_at: string;
+			}>,
+		);
 
 		// Update access tracking (don't fail if this fails)
 		try {
-			db.prepare(`
-        UPDATE memories
-        SET last_accessed = datetime('now'), access_count = access_count + 1
-        WHERE id IN (${placeholders})
-      `).run(...topIds);
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(`
+          UPDATE memories
+          SET last_accessed = datetime('now'), access_count = access_count + 1
+          WHERE id IN (${placeholders})
+        `).run(...topIds);
+			});
 		} catch (e) {
-			// Log but don't fail
 			logger.warn("memory", "Failed to update access tracking", e as Error);
 		}
-
-		db.close();
 
 		const rowMap = new Map(rows.map((r) => [r.id, r]));
 		const results = scored
@@ -1495,43 +1529,42 @@ app.get("/memory/similar", async (c) => {
 	const type = c.req.query("type");
 
 	try {
-		const db = new Database(MEMORY_DB, { readonly: true });
+		// Get embedding + run vector search in one read
+		const searchData = getDbAccessor().withReadDb((db) => {
+			const embeddingRow = db
+				.prepare(`
+        SELECT vector
+        FROM embeddings
+        WHERE source_type = 'memory' AND source_id = ?
+        LIMIT 1
+      `)
+				.get(id) as { vector: Buffer } | undefined;
 
-		// Get the embedding for the given memory ID
-		const embeddingRow = db
-			.prepare(`
-      SELECT vector
-      FROM embeddings
-      WHERE source_type = 'memory' AND source_id = ?
-      LIMIT 1
-    `)
-			.get(id) as { vector: Buffer } | undefined;
+			if (!embeddingRow) return null;
 
-		if (!embeddingRow) {
-			db.close();
+			const queryVector = new Float32Array(
+				embeddingRow.vector.buffer.slice(
+					embeddingRow.vector.byteOffset,
+					embeddingRow.vector.byteOffset + embeddingRow.vector.byteLength,
+				),
+			);
+
+			const searchResults = vectorSearch(db as any, queryVector, {
+				limit: k + 1,
+				type: type as "fact" | "preference" | "decision" | undefined,
+			});
+
+			return searchResults;
+		});
+
+		if (!searchData) {
 			return c.json(
 				{ error: "No embedding found for this memory", results: [] },
 				404,
 			);
 		}
 
-		// Convert BLOB to Float32Array for vector search
-		const queryVector = new Float32Array(
-			embeddingRow.vector.buffer.slice(
-				embeddingRow.vector.byteOffset,
-				embeddingRow.vector.byteOffset + embeddingRow.vector.byteLength,
-			),
-		);
-
-		// Use core's vectorSearch to find similar memories
-		const searchResults = vectorSearch(db as any, queryVector, {
-			limit: k + 1, // +1 because the query memory itself will be in results
-			type: type as "fact" | "preference" | "decision" | undefined,
-		});
-		db.close();
-
-		// Filter out the query memory itself and fetch full memory details
-		const filteredResults = searchResults
+		const filteredResults = searchData
 			.filter((r) => r.id !== id)
 			.slice(0, k);
 
@@ -1539,31 +1572,32 @@ app.get("/memory/similar", async (c) => {
 			return c.json({ results: [] });
 		}
 
-		// Fetch full memory details for the results
-		const db2 = new Database(MEMORY_DB, { readonly: true });
 		const ids = filteredResults.map((r) => r.id);
 		const placeholders = ids.map(() => "?").join(", ");
-		const rows = db2
-			.prepare(`
-      SELECT id, content, type, tags, confidence, created_at
-      FROM memories
-      WHERE id IN (${placeholders})
-    `)
-			.all(...ids) as Array<{
-			id: string;
-			content: string;
-			type: string;
-			tags: string | null;
-			confidence: number;
-			created_at: string;
-		}>;
-		db2.close();
+
+		const rows = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(`
+        SELECT id, content, type, tags, confidence, created_at
+        FROM memories
+        WHERE id IN (${placeholders})
+      `)
+				.all(...ids) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				tags: string | null;
+				confidence: number;
+				created_at: string;
+			}>,
+		);
 
 		const rowMap = new Map(rows.map((r) => [r.id, r]));
 		const results = filteredResults
 			.filter((r) => rowMap.has(r.id))
 			.map((r) => {
-				const row = rowMap.get(r.id)!;
+				const row = rowMap.get(r.id);
+				if (!row) return null;
 				return {
 					id: r.id,
 					content: row.content,
@@ -1573,7 +1607,8 @@ app.get("/memory/similar", async (c) => {
 					confidence: row.confidence,
 					created_at: row.created_at,
 				};
-			});
+			})
+			.filter((r): r is NonNullable<typeof r> => r !== null);
 
 		return c.json({ results });
 	} catch (e) {
@@ -1591,77 +1626,60 @@ app.get("/api/embeddings", async (c) => {
 	const limit = parseBoundedInt(c.req.query("limit"), 600, 50, 5000);
 	const offset = parseBoundedInt(c.req.query("offset"), 0, 0, 100000);
 
-	let db: Database | null = null;
+	type EmbeddingRow = {
+		id: string;
+		content: string;
+		who: string | null;
+		importance: number | null;
+		type: string | null;
+		tags: string | null;
+		source_type: string | null;
+		source_id: string | null;
+		created_at: string;
+		vector?: Buffer;
+		dimensions?: number | null;
+	};
 
 	try {
-		db = new Database(MEMORY_DB, { readonly: true });
+		const { total, rows } = getDbAccessor().withReadDb((db) => {
+			const totalRow = db
+				.prepare(`
+				SELECT COUNT(*) AS count
+				FROM embeddings e
+				INNER JOIN memories m ON m.id = e.source_id
+				WHERE e.source_type = 'memory'
+			`)
+				.get() as { count: number } | undefined;
 
-		const totalRow = db
-			.prepare(`
-	      SELECT COUNT(*) AS count
-	      FROM embeddings e
-	      INNER JOIN memories m ON m.id = e.source_id
-	      WHERE e.source_type = 'memory'
-	    `)
-			.get() as { count: number } | undefined;
+			const rowData = withVectors
+				? (db
+						.prepare(`
+					SELECT
+						m.id, m.content, m.who, m.importance, m.type, m.tags,
+						m.source_type, m.source_id, m.created_at,
+						e.vector, e.dimensions
+					FROM embeddings e
+					INNER JOIN memories m ON m.id = e.source_id
+					WHERE e.source_type = 'memory'
+					ORDER BY m.created_at DESC
+					LIMIT ? OFFSET ?
+				`)
+						.all(limit, offset) as EmbeddingRow[])
+				: (db
+						.prepare(`
+					SELECT
+						m.id, m.content, m.who, m.importance, m.type, m.tags,
+						m.source_type, m.source_id, m.created_at
+					FROM embeddings e
+					INNER JOIN memories m ON m.id = e.source_id
+					WHERE e.source_type = 'memory'
+					ORDER BY m.created_at DESC
+					LIMIT ? OFFSET ?
+				`)
+						.all(limit, offset) as EmbeddingRow[]);
 
-		const total = totalRow?.count ?? 0;
-
-		type EmbeddingRow = {
-			id: string;
-			content: string;
-			who: string | null;
-			importance: number | null;
-			type: string | null;
-			tags: string | null;
-			source_type: string | null;
-			source_id: string | null;
-			created_at: string;
-			vector?: Buffer;
-			dimensions?: number | null;
-		};
-
-		const rows = withVectors
-			? (db
-					.prepare(`
-	        SELECT
-	          m.id,
-	          m.content,
-	          m.who,
-	          m.importance,
-	          m.type,
-	          m.tags,
-	          m.source_type,
-	          m.source_id,
-	          m.created_at,
-	          e.vector,
-	          e.dimensions
-	        FROM embeddings e
-	        INNER JOIN memories m ON m.id = e.source_id
-	        WHERE e.source_type = 'memory'
-	        ORDER BY m.created_at DESC
-	        LIMIT ? OFFSET ?
-	      `)
-					.all(limit, offset) as EmbeddingRow[])
-			: (db
-					.prepare(`
-	        SELECT
-	          m.id,
-	          m.content,
-	          m.who,
-	          m.importance,
-	          m.type,
-	          m.tags,
-	          m.source_type,
-	          m.source_id,
-	          m.created_at
-	        FROM embeddings e
-	        INNER JOIN memories m ON m.id = e.source_id
-	        WHERE e.source_type = 'memory'
-	        ORDER BY m.created_at DESC
-	        LIMIT ? OFFSET ?
-	      `)
-					.all(limit, offset) as EmbeddingRow[]);
+			return { total: totalRow?.count ?? 0, rows: rowData };
+		});
 
 		const embeddings = rows.map((row) => ({
 			id: row.id,
@@ -1690,9 +1708,6 @@ app.get("/api/embeddings", async (c) => {
 		});
 	} catch (e) {
 		if (isMissingEmbeddingsTableError(e)) {
-			db?.close();
-			db = null;
-
 			const legacy = await runLegacyEmbeddingsExport(withVectors, limit, offset);
 			if (legacy) {
 				if (legacy.error) {
@@ -1714,8 +1729,6 @@ app.get("/api/embeddings", async (c) => {
 			offset,
 			hasMore: false,
 		});
-	} finally {
-		db?.close();
 	}
 });
 
@@ -2294,36 +2307,35 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			return c.json({ error: "Memory database not found" }, 500);
 		}
 
-		const db = new Database(MEMORY_DB);
-		db.exec("PRAGMA busy_timeout = 5000");
 		const now = new Date().toISOString();
 
-		const stmt = db.prepare(`
-      INSERT INTO memories (content, type, importance, source_type, who, tags, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-		const result = stmt.run(
-			body.summary,
-			"session_summary",
-			0.8, // Session summaries are important
-			body.harness,
-			"system",
-			JSON.stringify(["session", "summary", body.harness]),
-			now,
-			now,
-		);
-
-		db.close();
+		const summaryId = crypto.randomUUID();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(`
+        INSERT INTO memories (id, content, type, importance, source_type, who, tags, created_at, updated_at, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+				summaryId,
+				body.summary,
+				"session_summary",
+				0.8,
+				body.harness,
+				"system",
+				JSON.stringify(["session", "summary", body.harness]),
+				now,
+				now,
+				"system",
+			);
+		});
 
 		logger.info("hooks", "Compaction summary saved", {
 			harness: body.harness,
-			memoryId: result.lastInsertRowid,
+			memoryId: summaryId,
 		});
 
 		return c.json({
 			success: true,
-			memoryId: result.lastInsertRowid,
+			memoryId: summaryId,
 		});
 	} catch (e) {
 		logger.error("hooks", "Compaction complete failed", e as Error);
@@ -3008,6 +3020,7 @@ app.get("/api/status", (c) => {
 		host: HOST,
 		agentsDir: AGENTS_DIR,
 		memoryDb: existsSync(MEMORY_DB),
+		pipelineV2: config.pipelineV2,
 		embedding: {
 			provider: config.embedding.provider,
 			model: config.embedding.model,
@@ -4397,6 +4410,8 @@ function cleanup() {
 	stopGitSyncTimer();
 	stopUpdateTimer();
 
+	closeDbAccessor();
+
 	if (watcher) {
 		watcher.close();
 	}
@@ -4430,162 +4445,8 @@ process.on("uncaughtException", (err) => {
 // Main
 // ============================================================================
 
-// Initialize memory database schema
-function initMemorySchema() {
-	const memoryDir = dirname(MEMORY_DB);
-	if (!existsSync(memoryDir)) {
-		mkdirSync(memoryDir, { recursive: true });
-	}
-
-	const db = new Database(MEMORY_DB);
-	db.exec("PRAGMA busy_timeout = 5000");
-
-	// Create memories table with all expected columns
-	db.exec(`
-    CREATE TABLE IF NOT EXISTS memories (
-      id TEXT PRIMARY KEY,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT,
-      who TEXT DEFAULT 'user',
-      why TEXT,
-      project TEXT,
-      importance REAL DEFAULT 0.5,
-      type TEXT DEFAULT 'explicit',
-      tags TEXT,
-      pinned INTEGER DEFAULT 0,
-      source_type TEXT DEFAULT 'manual',
-      source_id TEXT,
-      category TEXT,
-      updated_by TEXT DEFAULT 'user',
-      vector_clock TEXT DEFAULT '{}',
-      version INTEGER DEFAULT 1,
-      manual_override INTEGER DEFAULT 0,
-      confidence REAL DEFAULT 1.0,
-      access_count INTEGER DEFAULT 0,
-      last_accessed TEXT
-    )
-  `);
-
-	// Create other required tables
-	db.exec(`
-    CREATE TABLE IF NOT EXISTS conversations (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      harness TEXT NOT NULL,
-      started_at TEXT NOT NULL,
-      ended_at TEXT,
-      summary TEXT,
-      topics TEXT,
-      decisions TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_by TEXT NOT NULL DEFAULT 'daemon',
-      vector_clock TEXT NOT NULL DEFAULT '{}',
-      version INTEGER DEFAULT 1,
-      manual_override INTEGER DEFAULT 0
-    )
-  `);
-
-	db.exec(`
-    CREATE TABLE IF NOT EXISTS embeddings (
-      id TEXT PRIMARY KEY,
-      content_hash TEXT NOT NULL,
-      vector BLOB NOT NULL,
-      dimensions INTEGER NOT NULL,
-      source_type TEXT NOT NULL,
-      source_id TEXT NOT NULL,
-      chunk_text TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-
-	// Add missing columns to existing memories table (for upgrades)
-	const columns = db.prepare("PRAGMA table_info(memories)").all() as {
-		name: string;
-	}[];
-	const columnNames = new Set(columns.map((c) => c.name));
-
-	const requiredColumns: [string, string][] = [
-		["who", 'TEXT DEFAULT "user"'],
-		["why", "TEXT"],
-		["project", "TEXT"],
-		["importance", "REAL DEFAULT 0.5"],
-		["type", 'TEXT DEFAULT "explicit"'],
-		["tags", "TEXT"],
-		["pinned", "INTEGER DEFAULT 0"],
-		["source_type", 'TEXT DEFAULT "manual"'],
-		["source_id", "TEXT"],
-		["category", "TEXT"],
-		["updated_at", "TEXT"],
-		["updated_by", 'TEXT DEFAULT "user"'],
-		["vector_clock", 'TEXT DEFAULT "{}"'],
-		["version", "INTEGER DEFAULT 1"],
-		["manual_override", "INTEGER DEFAULT 0"],
-		["confidence", "REAL DEFAULT 1.0"],
-		["access_count", "INTEGER DEFAULT 0"],
-		["last_accessed", "TEXT"],
-		["session_id", "TEXT"],
-	];
-
-	for (const [col, def] of requiredColumns) {
-		if (!columnNames.has(col)) {
-			try {
-				db.exec(`ALTER TABLE memories ADD COLUMN ${col} ${def}`);
-			} catch {
-				// Column might already exist
-			}
-		}
-	}
-
-	// Create FTS5 virtual table for full-text search
-	try {
-		db.exec(`
-			CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
-			USING fts5(content, tags, content=memories, content_rowid=rowid)
-		`);
-	} catch {
-		// FTS5 table may already exist or content sync not supported;
-		// fall back to standalone FTS table
-		try {
-			db.exec(`
-				CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
-				USING fts5(content, tags)
-			`);
-		} catch {
-			// Already exists
-		}
-	}
-
-	// Triggers to keep FTS in sync with memories table
-	try {
-		db.exec(`
-			CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-				INSERT INTO memories_fts(rowid, content, tags)
-				VALUES (new.rowid, new.content, new.tags);
-			END
-		`);
-		db.exec(`
-			CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-				INSERT INTO memories_fts(memories_fts, rowid, content, tags)
-				VALUES('delete', old.rowid, old.content, old.tags);
-			END
-		`);
-		db.exec(`
-			CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-				INSERT INTO memories_fts(memories_fts, rowid, content, tags)
-				VALUES('delete', old.rowid, old.content, old.tags);
-				INSERT INTO memories_fts(rowid, content, tags)
-				VALUES (new.rowid, new.content, new.tags);
-			END
-		`);
-	} catch {
-		// Triggers may already exist
-	}
-
-	db.close();
-	logger.info("daemon", "Memory schema initialized");
-}
+// initMemorySchema is no longer needed — the migration runner in
+// db-accessor.ts is the sole schema authority. See migrations/ in @signet/core.
 
 async function main() {
 	logger.info("daemon", "Signet Daemon starting");
@@ -4596,8 +4457,9 @@ async function main() {
 	mkdirSync(DAEMON_DIR, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
 
-	// Initialize memory database schema
-	initMemorySchema();
+	// Initialise singleton DB accessor (opens write connection, sets pragmas,
+	// runs migrations). This is the sole schema authority.
+	initDbAccessor(MEMORY_DB);
 
 	// Write PID file
 	writeFileSync(PID_FILE, process.pid.toString());

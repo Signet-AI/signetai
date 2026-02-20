@@ -47,6 +47,7 @@ export interface AgentManifest {
 		vectors?: string;
 		session_budget?: number;
 		decay_rate?: number;
+		pipelineV2?: Partial<PipelineV2Config>;
 	};
 
 	// Trust & verification (optional)
@@ -82,9 +83,84 @@ export interface AgentConfig {
 	};
 }
 
+// -- Pipeline v2 feature flags --
+
+export const PIPELINE_FLAGS = [
+	"enabled",
+	"shadowMode",
+	"allowUpdateDelete",
+	"graphEnabled",
+	"autonomousEnabled",
+	"mutationsFrozen",
+	"autonomousFrozen",
+] as const;
+
+export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
+
+export interface PipelineV2Config {
+	readonly enabled: boolean;
+	readonly shadowMode: boolean;
+	readonly allowUpdateDelete: boolean;
+	readonly graphEnabled: boolean;
+	readonly autonomousEnabled: boolean;
+	readonly mutationsFrozen: boolean;
+	readonly autonomousFrozen: boolean;
+}
+
+// -- Status/union constants --
+
+export const MEMORY_TYPES = [
+	"fact",
+	"preference",
+	"decision",
+	"daily-log",
+	"episodic",
+	"procedural",
+	"semantic",
+	"system",
+] as const;
+export type MemoryType = (typeof MEMORY_TYPES)[number];
+
+export const EXTRACTION_STATUSES = [
+	"none",
+	"pending",
+	"completed",
+	"failed",
+] as const;
+export type ExtractionStatus = (typeof EXTRACTION_STATUSES)[number];
+
+export const JOB_STATUSES = [
+	"pending",
+	"leased",
+	"completed",
+	"failed",
+	"dead",
+] as const;
+export type JobStatus = (typeof JOB_STATUSES)[number];
+
+export const HISTORY_EVENTS = [
+	"created",
+	"updated",
+	"deleted",
+	"recovered",
+	"merged",
+	"split",
+] as const;
+export type HistoryEvent = (typeof HISTORY_EVENTS)[number];
+
+export const DECISION_ACTIONS = [
+	"add",
+	"update",
+	"delete",
+	"none",
+] as const;
+export type DecisionAction = (typeof DECISION_ACTIONS)[number];
+
+// -- Core interfaces --
+
 export interface Memory {
 	id: string;
-	type: "fact" | "preference" | "decision" | "daily-log";
+	type: MemoryType;
 	category?: string;
 	content: string;
 	confidence: number;
@@ -97,6 +173,20 @@ export interface Memory {
 	vectorClock: Record<string, number>;
 	version: number;
 	manualOverride: boolean;
+	// v2 fields (optional for backward compatibility)
+	contentHash?: string;
+	normalizedContent?: string;
+	isDeleted?: boolean;
+	deletedAt?: string;
+	pinned?: boolean;
+	importance?: number;
+	extractionStatus?: ExtractionStatus;
+	embeddingModel?: string;
+	extractionModel?: string;
+	updateCount?: number;
+	accessCount?: number;
+	lastAccessed?: string;
+	who?: string;
 }
 
 export interface Conversation {
@@ -125,4 +215,57 @@ export interface Embedding {
 	sourceId: string;
 	chunkText: string;
 	createdAt: string;
+}
+
+export interface MemoryHistory {
+	id: string;
+	memoryId: string;
+	event: HistoryEvent;
+	oldContent?: string;
+	newContent?: string;
+	changedBy: string;
+	reason?: string;
+	metadata?: string; // JSON
+	createdAt: string;
+}
+
+export interface MemoryJob {
+	id: string;
+	memoryId: string;
+	jobType: string;
+	status: JobStatus;
+	payload?: string; // JSON
+	result?: string; // JSON
+	attempts: number;
+	maxAttempts: number;
+	leasedAt?: string;
+	completedAt?: string;
+	failedAt?: string;
+	error?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface Entity {
+	id: string;
+	name: string;
+	entityType: string;
+	description?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface Relation {
+	id: string;
+	sourceEntityId: string;
+	targetEntityId: string;
+	relationType: string;
+	strength: number;
+	metadata?: string; // JSON
+	createdAt: string;
+}
+
+export interface MemoryEntityMention {
+	memoryId: string;
+	entityId: string;
 }

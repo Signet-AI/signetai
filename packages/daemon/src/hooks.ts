@@ -10,12 +10,13 @@
  * - onRecall: explicit memory query
  */
 
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
 import { logger } from "./logger";
+import { getDbAccessor } from "./db-accessor";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
@@ -55,7 +56,7 @@ export interface SynthesisResponse {
 	model: string;
 	prompt: string;
 	memories: Array<{
-		id: number;
+		id: string;
 		content: string;
 		type: string;
 		importance: number;
@@ -293,25 +294,23 @@ function getProjectMemories(
 	if (!existsSync(MEMORY_DB)) return [];
 
 	try {
-		const db = new Database(MEMORY_DB, { readonly: true });
-		db.exec("PRAGMA busy_timeout = 5000");
-
-		const rows = db
-			.prepare(
-				`SELECT id, content, type, importance, tags, pinned, project, created_at
-				 FROM memories ORDER BY created_at DESC LIMIT ?`,
-			)
-			.all(limit * 3) as Array<{
-			id: string;
-			content: string;
-			type: string;
-			importance: number;
-			tags: string | null;
-			pinned: number;
-			project: string | null;
-			created_at: string;
-		}>;
-		db.close();
+		const rows = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(
+					`SELECT id, content, type, importance, tags, pinned, project, created_at
+					 FROM memories ORDER BY created_at DESC LIMIT ?`,
+				)
+				.all(limit * 3) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				importance: number;
+				tags: string | null;
+				pinned: number;
+				project: string | null;
+				created_at: string;
+			}>,
+		);
 
 		const scored: ScoredMemory[] = rows
 			.map((r) => ({
@@ -350,32 +349,20 @@ function updateAccessTracking(ids: string[]): void {
 	if (ids.length === 0 || !existsSync(MEMORY_DB)) return;
 
 	try {
-		const db = new Database(MEMORY_DB);
-		db.exec("PRAGMA busy_timeout = 5000");
+		getDbAccessor().withWriteTx((db) => {
+			const now = new Date().toISOString();
+			const stmt = db.prepare(
+				`UPDATE memories SET access_count = access_count + 1,
+				 last_accessed = ? WHERE id = ?`,
+			);
 
-		const now = new Date().toISOString();
-		const stmt = db.prepare(
-			`UPDATE memories SET access_count = access_count + 1,
-			 last_accessed = ? WHERE id = ?`,
-		);
-
-		for (const id of ids) {
-			stmt.run(now, id);
-		}
-		db.close();
+			for (const id of ids) {
+				stmt.run(now, id);
+			}
+		});
 	} catch (e) {
 		logger.error("hooks", "Failed to update access tracking", e as Error);
 	}
-}
-
-function openDb(readonly = false): Database {
-	// Bun 1.3.x throws SQLITE_MISUSE on { readonly: false },
-	// only pass options when opening read-only.
-	const db = readonly
-		? new Database(MEMORY_DB, { readonly: true })
-		: new Database(MEMORY_DB);
-	db.exec("PRAGMA busy_timeout = 5000");
-	return db;
 }
 
 // ============================================================================
@@ -492,7 +479,7 @@ function getRecentMemories(
 	limit: number,
 	recencyBias = 0.7,
 ): Array<{
-	id: number;
+	id: string;
 	content: string;
 	type: string;
 	importance: number;
@@ -501,29 +488,27 @@ function getRecentMemories(
 	if (!existsSync(MEMORY_DB)) return [];
 
 	try {
-		const db = new Database(MEMORY_DB, { readonly: true });
-		db.exec("PRAGMA busy_timeout = 5000");
+		const rows = getDbAccessor().withReadDb((db) => {
+			const query = `
+        SELECT
+          id, content, type, importance, created_at,
+          (julianday('now') - julianday(created_at)) as age_days
+        FROM memories
+        ORDER BY
+          (importance * ${1 - recencyBias}) +
+          (1.0 / (1.0 + (julianday('now') - julianday(created_at)))) * ${recencyBias}
+          DESC
+        LIMIT ?
+      `;
 
-		const query = `
-      SELECT
-        id, content, type, importance, created_at,
-        (julianday('now') - julianday(created_at)) as age_days
-      FROM memories
-      ORDER BY
-        (importance * ${1 - recencyBias}) +
-        (1.0 / (1.0 + (julianday('now') - julianday(created_at)))) * ${recencyBias}
-        DESC
-      LIMIT ?
-    `;
-
-		const rows = db.prepare(query).all(limit) as Array<{
-			id: string;
-			content: string;
-			type: string;
-			importance: number;
-			created_at: string;
-		}>;
-		db.close();
+			return db.prepare(query).all(limit) as Array<{
+				id: string;
+				content: string;
+				type: string;
+				importance: number;
+				created_at: string;
+			}>;
+		});
 
 		return rows.map((r) => ({
 			id: r.id,
@@ -673,44 +658,44 @@ export function handleUserPromptSubmit(
 	}
 
 	try {
-		const db = openDb(true);
 		const ftsQuery = words.join(" OR ");
 
-		let rows: Array<{
-			id: string;
-			content: string;
-			type: string;
-			importance: number;
-			tags: string | null;
-			pinned: number;
-			project: string | null;
-			created_at: string;
-		}> = [];
+		const rows = getDbAccessor().withReadDb((db) => {
+			type MemRow = {
+				id: string;
+				content: string;
+				type: string;
+				importance: number;
+				tags: string | null;
+				pinned: number;
+				project: string | null;
+				created_at: string;
+			};
 
-		try {
-			const baseQuery = req.project
-				? `SELECT m.id, m.content, m.type, m.importance, m.tags,
-				   m.pinned, m.project, m.created_at
-				   FROM memories m
-				   JOIN memories_fts f ON m.rowid = f.rowid
-				   WHERE memories_fts MATCH ?
-				   AND m.project = ?
-				   LIMIT 30`
-				: `SELECT m.id, m.content, m.type, m.importance, m.tags,
-				   m.pinned, m.project, m.created_at
-				   FROM memories m
-				   JOIN memories_fts f ON m.rowid = f.rowid
-				   WHERE memories_fts MATCH ?
-				   LIMIT 30`;
+			try {
+				const baseQuery = req.project
+					? `SELECT m.id, m.content, m.type, m.importance, m.tags,
+					   m.pinned, m.project, m.created_at
+					   FROM memories m
+					   JOIN memories_fts f ON m.rowid = f.rowid
+					   WHERE memories_fts MATCH ?
+					   AND m.project = ?
+					   LIMIT 30`
+					: `SELECT m.id, m.content, m.type, m.importance, m.tags,
+					   m.pinned, m.project, m.created_at
+					   FROM memories m
+					   JOIN memories_fts f ON m.rowid = f.rowid
+					   WHERE memories_fts MATCH ?
+					   LIMIT 30`;
 
-			rows = req.project
-				? (db.prepare(baseQuery).all(ftsQuery, req.project) as typeof rows)
-				: (db.prepare(baseQuery).all(ftsQuery) as typeof rows);
-		} catch {
-			// FTS table might not exist
-		}
-
-		db.close();
+				return req.project
+					? (db.prepare(baseQuery).all(ftsQuery, req.project) as MemRow[])
+					: (db.prepare(baseQuery).all(ftsQuery) as MemRow[]);
+			} catch {
+				// FTS table might not exist
+				return [] as MemRow[];
+			}
+		});
 
 		// Score and filter
 		const scored = rows
@@ -840,45 +825,44 @@ ${truncated}`;
 			return { memoriesSaved: 0 };
 		}
 
-		const db = openDb();
 		const now = new Date().toISOString();
-		let saved = 0;
 
-		const stmt = db.prepare(
-			`INSERT INTO memories
-			 (id, content, type, importance, source_type, who, tags,
-			  project, session_id, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		);
-
-		for (const item of extracted) {
-			if (!item.content || typeof item.content !== "string") continue;
-
-			// Cap importance at 0.5 for auto-extracted memories
-			const importance = Math.min(item.importance || 0.3, 0.5);
-
-			if (isDuplicate(db, item.content)) continue;
-
-			const id = crypto.randomUUID();
-			const type = item.type || inferType(item.content);
-
-			stmt.run(
-				id,
-				item.content,
-				type,
-				importance,
-				"session_end",
-				req.harness,
-				item.tags || null,
-				req.cwd || null,
-				req.sessionId || null,
-				now,
-				now,
+		const saved = getDbAccessor().withWriteTx((db) => {
+			let count = 0;
+			const stmt = db.prepare(
+				`INSERT INTO memories
+				 (id, content, type, importance, source_type, who, tags,
+				  project, session_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			);
-			saved++;
-		}
 
-		db.close();
+			for (const item of extracted) {
+				if (!item.content || typeof item.content !== "string") continue;
+
+				const importance = Math.min(item.importance || 0.3, 0.5);
+
+				if (isDuplicate(db as unknown as Database, item.content)) continue;
+
+				const id = crypto.randomUUID();
+				const type = item.type || inferType(item.content);
+
+				stmt.run(
+					id,
+					item.content,
+					type,
+					importance,
+					"session_end",
+					req.harness,
+					item.tags || null,
+					req.cwd || null,
+					req.sessionId || null,
+					now,
+					now,
+				);
+				count++;
+			}
+			return count;
+		});
 
 		logger.info("hooks", "Session end memories extracted", {
 			extracted: extracted.length,
@@ -931,28 +915,26 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 	const now = new Date().toISOString();
 
 	try {
-		const db = openDb();
-
-		db.prepare(
-			`INSERT INTO memories
-			 (id, content, type, importance, source_type, who, tags,
-			  pinned, project, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			id,
-			content,
-			type,
-			importance,
-			"explicit",
-			req.who || req.harness,
-			tags,
-			pinned,
-			req.project || null,
-			now,
-			now,
-		);
-
-		db.close();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories
+				 (id, content, type, importance, source_type, who, tags,
+				  pinned, project, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				id,
+				content,
+				type,
+				importance,
+				"explicit",
+				req.who || req.harness,
+				tags,
+				pinned,
+				req.project || null,
+				now,
+				now,
+			);
+		});
 
 		logger.info("hooks", "Memory saved", {
 			id,
@@ -978,74 +960,72 @@ export function handleRecall(req: RecallRequest): RecallResponse {
 		return { results: [], count: 0 };
 	}
 
+	type RecallRow = {
+		id: string;
+		content: string;
+		type: string;
+		importance: number;
+		tags: string | null;
+		created_at: string;
+	};
+
 	try {
-		const db = openDb(true);
+		const rows = getDbAccessor().withReadDb((db) => {
+			let found: RecallRow[] = [];
 
-		let rows: Array<{
-			id: string;
-			content: string;
-			type: string;
-			importance: number;
-			tags: string | null;
-			created_at: string;
-		}> = [];
+			// Try FTS search first
+			try {
+				const words = req.query
+					.toLowerCase()
+					.split(/\W+/)
+					.filter((w) => w.length >= 3)
+					.slice(0, 10);
 
-		// Try FTS search first
-		try {
-			const words = req.query
-				.toLowerCase()
-				.split(/\W+/)
-				.filter((w) => w.length >= 3)
-				.slice(0, 10);
+				if (words.length > 0) {
+					const ftsQuery = words.join(" OR ");
+					const baseQuery = req.project
+						? `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
+						   FROM memories m
+						   JOIN memories_fts f ON m.rowid = f.rowid
+						   WHERE memories_fts MATCH ?
+						   AND m.project = ?
+						   LIMIT ?`
+						: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
+						   FROM memories m
+						   JOIN memories_fts f ON m.rowid = f.rowid
+						   WHERE memories_fts MATCH ?
+						   LIMIT ?`;
 
-			if (words.length > 0) {
-				const ftsQuery = words.join(" OR ");
+					found = req.project
+						? (db.prepare(baseQuery).all(ftsQuery, req.project, limit) as RecallRow[])
+						: (db.prepare(baseQuery).all(ftsQuery, limit) as RecallRow[]);
+				}
+			} catch {
+				// FTS not available, fall through to LIKE
+			}
+
+			// Fallback to LIKE search
+			if (found.length === 0) {
+				const likePattern = `%${req.query}%`;
 				const baseQuery = req.project
-					? `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
-					   FROM memories m
-					   JOIN memories_fts f ON m.rowid = f.rowid
-					   WHERE memories_fts MATCH ?
-					   AND m.project = ?
+					? `SELECT id, content, type, importance, tags, created_at
+					   FROM memories
+					   WHERE content LIKE ? AND project = ?
+					   ORDER BY importance DESC
 					   LIMIT ?`
-					: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
-					   FROM memories m
-					   JOIN memories_fts f ON m.rowid = f.rowid
-					   WHERE memories_fts MATCH ?
+					: `SELECT id, content, type, importance, tags, created_at
+					   FROM memories
+					   WHERE content LIKE ?
+					   ORDER BY importance DESC
 					   LIMIT ?`;
 
-				rows = req.project
-					? (db
-							.prepare(baseQuery)
-							.all(ftsQuery, req.project, limit) as typeof rows)
-					: (db.prepare(baseQuery).all(ftsQuery, limit) as typeof rows);
+				found = req.project
+					? (db.prepare(baseQuery).all(likePattern, req.project, limit) as RecallRow[])
+					: (db.prepare(baseQuery).all(likePattern, limit) as RecallRow[]);
 			}
-		} catch {
-			// FTS not available, fall through to LIKE
-		}
 
-		// Fallback to LIKE search
-		if (rows.length === 0) {
-			const likePattern = `%${req.query}%`;
-			const baseQuery = req.project
-				? `SELECT id, content, type, importance, tags, created_at
-				   FROM memories
-				   WHERE content LIKE ? AND project = ?
-				   ORDER BY importance DESC
-				   LIMIT ?`
-				: `SELECT id, content, type, importance, tags, created_at
-				   FROM memories
-				   WHERE content LIKE ?
-				   ORDER BY importance DESC
-				   LIMIT ?`;
-
-			rows = req.project
-				? (db
-						.prepare(baseQuery)
-						.all(likePattern, req.project, limit) as typeof rows)
-				: (db.prepare(baseQuery).all(likePattern, limit) as typeof rows);
-		}
-
-		db.close();
+			return found;
+		});
 
 		// Update access tracking
 		const ids = rows.map((r) => r.id);

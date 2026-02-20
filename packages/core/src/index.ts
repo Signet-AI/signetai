@@ -5,7 +5,34 @@
 
 export { Signet } from "./signet";
 export { Database } from "./database";
-export { Agent, AgentManifest, AgentConfig } from "./types";
+export {
+	Agent,
+	AgentManifest,
+	AgentConfig,
+	MEMORY_TYPES,
+	EXTRACTION_STATUSES,
+	JOB_STATUSES,
+	HISTORY_EVENTS,
+	DECISION_ACTIONS,
+	PIPELINE_FLAGS,
+} from "./types";
+export type {
+	Memory,
+	MemoryType,
+	Conversation,
+	Embedding,
+	MemoryHistory,
+	MemoryJob,
+	Entity,
+	Relation,
+	MemoryEntityMention,
+	ExtractionStatus,
+	JobStatus,
+	HistoryEvent,
+	DecisionAction,
+	PipelineFlag,
+	PipelineV2Config,
+} from "./types";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory } from "./memory";
@@ -33,6 +60,10 @@ export type {
 	MigrationResult,
 } from "./migration";
 export * from "./constants";
+
+// Migration runner
+export { runMigrations, MIGRATIONS } from "./migrations/index";
+export type { MigrationDb, Migration } from "./migrations/index";
 
 // Identity file management
 export {

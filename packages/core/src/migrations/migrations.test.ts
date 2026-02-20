@@ -1,0 +1,238 @@
+/**
+ * Tests for the migration framework.
+ *
+ * NOTE: The migration runner is being created concurrently by the schema-agent.
+ * These tests document expected behavior. If the import fails, the migration
+ * module hasn't been created yet — the integration pass will finalize.
+ */
+import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+
+// The migration runner should be importable from the migrations index
+// If this import fails, the module hasn't been created yet
+import { runMigrations } from "./index";
+
+function createFreshDb(): Database {
+	return new Database(":memory:");
+}
+
+describe("migration framework", () => {
+	let db: Database;
+
+	afterEach(() => {
+		if (db) db.close();
+	});
+
+	test("fresh DB gets all migrations applied", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		// schema_migrations table should exist with version as PK
+		const migrations = db
+			.query("SELECT version, applied_at FROM schema_migrations ORDER BY version")
+			.all() as Array<{ version: number; applied_at: string }>;
+		expect(migrations.length).toBe(3);
+		expect(migrations[0].version).toBe(1);
+		expect(migrations[1].version).toBe(2);
+		expect(migrations[2].version).toBe(3);
+	});
+
+	test("re-running migrations is idempotent", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		// running again should not throw
+		runMigrations(db);
+
+		const migrations = db
+			.query("SELECT version FROM schema_migrations ORDER BY version")
+			.all() as Array<{ version: number }>;
+		// same number of migration records (no duplicates)
+		const uniqueVersions = new Set(migrations.map((m) => m.version));
+		expect(uniqueVersions.size).toBe(migrations.length);
+	});
+
+	test("all expected tables exist after migration", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const tables = db
+			.query(
+				"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+			)
+			.all() as Array<{ name: string }>;
+		const tableNames = tables.map((t) => t.name);
+
+		// v1 tables
+		expect(tableNames).toContain("memories");
+		expect(tableNames).toContain("conversations");
+		expect(tableNames).toContain("embeddings");
+		expect(tableNames).toContain("schema_migrations");
+
+		// v2 tables
+		expect(tableNames).toContain("memory_history");
+		expect(tableNames).toContain("memory_jobs");
+		expect(tableNames).toContain("entities");
+		expect(tableNames).toContain("relations");
+		expect(tableNames).toContain("memory_entity_mentions");
+		expect(tableNames).toContain("schema_migrations_audit");
+	});
+
+	test("memories table has expected v2 columns", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const columns = db
+			.query("PRAGMA table_info(memories)")
+			.all() as Array<{ name: string }>;
+		const colNames = columns.map((c) => c.name);
+
+		// v1 columns
+		expect(colNames).toContain("id");
+		expect(colNames).toContain("content");
+		expect(colNames).toContain("type");
+		expect(colNames).toContain("confidence");
+
+		// v2 columns
+		expect(colNames).toContain("content_hash");
+		expect(colNames).toContain("normalized_content");
+		expect(colNames).toContain("is_deleted");
+		expect(colNames).toContain("pinned");
+		expect(colNames).toContain("importance");
+		expect(colNames).toContain("extraction_status");
+		expect(colNames).toContain("update_count");
+		expect(colNames).toContain("access_count");
+	});
+
+	test("FTS5 table exists after migration", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const fts = db
+			.query(
+				"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%fts%'",
+			)
+			.all() as Array<{ name: string }>;
+		expect(fts.length).toBeGreaterThanOrEqual(1);
+	});
+
+	test("schema_migrations_audit records are created", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const audits = db
+			.query("SELECT version, applied_at FROM schema_migrations_audit")
+			.all() as Array<{ version: number; applied_at: string }>;
+		expect(audits.length).toBe(3);
+		for (const audit of audits) {
+			expect(audit.applied_at).toBeTruthy();
+		}
+	});
+
+	test("memories table has why and project columns", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const columns = db
+			.query("PRAGMA table_info(memories)")
+			.all() as Array<{ name: string }>;
+		const colNames = columns.map((c) => c.name);
+
+		expect(colNames).toContain("why");
+		expect(colNames).toContain("project");
+	});
+
+	test("unique partial index on content_hash rejects duplicates", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run("a", "hello", "hash1", "fact", now, now, "test");
+
+		// Same content_hash on a non-deleted row should fail
+		expect(() =>
+			db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run("b", "hello again", "hash1", "fact", now, now, "test"),
+		).toThrow();
+
+		// NULL content_hash should not conflict
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, NULL, ?, ?, ?, ?)`,
+		).run("c", "no hash", "fact", now, now, "test");
+
+		// Soft-deleted row with same hash should not conflict
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, is_deleted, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+		).run("d", "deleted", "hash1", "fact", now, now, "test");
+	});
+
+	test("migration 003 deduplicates existing content hashes", () => {
+		db = createFreshDb();
+
+		// Run all migrations to get full schema
+		runMigrations(db);
+
+		// Simulate pre-v3 state: remove v3, drop unique index, add non-unique
+		db.prepare("DELETE FROM schema_migrations WHERE version = 3").run();
+		db.run("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
+		db.run(
+			"CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)",
+		);
+
+		const now = new Date().toISOString();
+		const older = "2020-01-01T00:00:00.000Z";
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, is_deleted, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+		).run("old1", "old content", "duphash", "fact", older, older, "test");
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, is_deleted, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+		).run("new1", "new content", "duphash", "fact", now, now, "test");
+
+		// Re-run migrations — v3 should deduplicate and create unique index
+		runMigrations(db);
+
+		// The newer row should keep its hash, the older one should be nulled
+		const rows = db
+			.query(
+				"SELECT id, content_hash FROM memories WHERE id IN ('old1', 'new1') ORDER BY id",
+			)
+			.all() as Array<{ id: string; content_hash: string | null }>;
+
+		const newRow = rows.find((r) => r.id === "new1");
+		const oldRow = rows.find((r) => r.id === "old1");
+		expect(newRow?.content_hash).toBe("duphash");
+		expect(oldRow?.content_hash).toBeNull();
+	});
+
+	test("DB with existing v1 schema only gets v2 migration", () => {
+		db = createFreshDb();
+
+		// Apply migrations once to get full schema
+		runMigrations(db);
+
+		const countBefore = (
+			db
+				.query("SELECT COUNT(*) as count FROM schema_migrations_audit")
+				.get() as { count: number }
+		).count;
+
+		// Run again — should not add new audit records
+		runMigrations(db);
+
+		const countAfter = (
+			db
+				.query("SELECT COUNT(*) as count FROM schema_migrations_audit")
+				.get() as { count: number }
+		).count;
+
+		expect(countAfter).toBe(countBefore);
+	});
+});

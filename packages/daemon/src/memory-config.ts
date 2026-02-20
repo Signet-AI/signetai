@@ -16,9 +16,60 @@ export interface MemorySearchConfig {
 	min_score: number;
 }
 
+export const PIPELINE_FLAGS = [
+	"enabled",
+	"shadowMode",
+	"allowUpdateDelete",
+	"graphEnabled",
+	"autonomousEnabled",
+	"mutationsFrozen",
+	"autonomousFrozen",
+] as const;
+
+export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
+
+export interface PipelineV2Config {
+	readonly enabled: boolean;
+	readonly shadowMode: boolean;
+	readonly allowUpdateDelete: boolean;
+	readonly graphEnabled: boolean;
+	readonly autonomousEnabled: boolean;
+	readonly mutationsFrozen: boolean;
+	readonly autonomousFrozen: boolean;
+}
+
+export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
+	enabled: false,
+	shadowMode: false,
+	allowUpdateDelete: false,
+	graphEnabled: false,
+	autonomousEnabled: false,
+	mutationsFrozen: false,
+	autonomousFrozen: false,
+};
+
 export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
 	search: MemorySearchConfig;
+	pipelineV2: PipelineV2Config;
+}
+
+export function loadPipelineConfig(
+	yaml: Record<string, unknown>,
+): PipelineV2Config {
+	const mem = yaml.memory as Record<string, unknown> | undefined;
+	const raw = mem?.pipelineV2 as Record<string, unknown> | undefined;
+	if (!raw) return { ...DEFAULT_PIPELINE_V2 };
+
+	return {
+		enabled: raw.enabled === true,
+		shadowMode: raw.shadowMode === true,
+		allowUpdateDelete: raw.allowUpdateDelete === true,
+		graphEnabled: raw.graphEnabled === true,
+		autonomousEnabled: raw.autonomousEnabled === true,
+		mutationsFrozen: raw.mutationsFrozen === true,
+		autonomousFrozen: raw.autonomousFrozen === true,
+	};
 }
 
 export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
@@ -30,6 +81,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			base_url: "http://localhost:11434",
 		},
 		search: { alpha: 0.7, top_k: 20, min_score: 0.3 },
+		pipelineV2: { ...DEFAULT_PIPELINE_V2 },
 	};
 
 	const paths = [
@@ -73,6 +125,8 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 					String(srch.min_score ?? "0.3"),
 				);
 			}
+
+			defaults.pipelineV2 = loadPipelineConfig(yaml);
 
 			break;
 		} catch {

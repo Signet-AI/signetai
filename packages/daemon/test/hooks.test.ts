@@ -14,6 +14,7 @@ import { join } from "node:path";
 const TEST_DIR = join(tmpdir(), `signet-hooks-test-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
 
+const { initDbAccessor, closeDbAccessor } = await import("../src/db-accessor");
 const hooks = await import("../src/hooks");
 const {
 	handleSessionStart,
@@ -142,6 +143,10 @@ function createMemoryDb(
 	}
 
 	db.close();
+
+	// Re-init the singleton accessor so hooks can find the DB
+	closeDbAccessor();
+	initDbAccessor(dbPath);
 }
 
 /** Return a writable DB handle for isDuplicate testing */
@@ -182,6 +187,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	closeDbAccessor();
 	if (existsSync(TEST_DIR)) {
 		rmSync(TEST_DIR, { recursive: true, force: true });
 	}
@@ -500,7 +506,7 @@ hooks:
 			{
 				content: "General memory",
 				importance: 0.9,
-				project: null,
+				project: undefined,
 			},
 			{
 				content: "Project-specific memory",

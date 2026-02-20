@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadMemoryConfig } from "./memory-config";
+import {
+	DEFAULT_PIPELINE_V2,
+	loadMemoryConfig,
+	loadPipelineConfig,
+} from "./memory-config";
 
 const tmpDirs: string[] = [];
 
@@ -80,5 +84,107 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.provider).toBe("openai");
 		expect(cfg.embedding.model).toBe("text-embedding-3-large");
 		expect(cfg.embedding.dimensions).toBe(3072);
+	});
+
+	it("includes pipelineV2 defaults when no config exists", () => {
+		const agentsDir = makeTempAgentsDir();
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2).toEqual(DEFAULT_PIPELINE_V2);
+	});
+
+	it("loads pipelineV2 flags from agent.yaml", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    enabled: true
+    shadowMode: true
+    graphEnabled: true
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2.enabled).toBe(true);
+		expect(cfg.pipelineV2.shadowMode).toBe(true);
+		expect(cfg.pipelineV2.graphEnabled).toBe(true);
+		// unset flags remain false
+		expect(cfg.pipelineV2.allowUpdateDelete).toBe(false);
+		expect(cfg.pipelineV2.autonomousEnabled).toBe(false);
+		expect(cfg.pipelineV2.mutationsFrozen).toBe(false);
+		expect(cfg.pipelineV2.autonomousFrozen).toBe(false);
+	});
+});
+
+describe("loadPipelineConfig", () => {
+	it("returns all-false defaults when memory.pipelineV2 is absent", () => {
+		const result = loadPipelineConfig({});
+		expect(result).toEqual(DEFAULT_PIPELINE_V2);
+	});
+
+	it("returns all-false defaults when memory key exists but pipelineV2 is absent", () => {
+		const result = loadPipelineConfig({ memory: { database: "test.db" } });
+		expect(result).toEqual(DEFAULT_PIPELINE_V2);
+	});
+
+	it("loads all flags correctly when all set to true", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					shadowMode: true,
+					allowUpdateDelete: true,
+					graphEnabled: true,
+					autonomousEnabled: true,
+					mutationsFrozen: true,
+					autonomousFrozen: true,
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(true);
+		expect(result.shadowMode).toBe(true);
+		expect(result.allowUpdateDelete).toBe(true);
+		expect(result.graphEnabled).toBe(true);
+		expect(result.autonomousEnabled).toBe(true);
+		expect(result.mutationsFrozen).toBe(true);
+		expect(result.autonomousFrozen).toBe(true);
+	});
+
+	it("merges partial config with false defaults", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					mutationsFrozen: true,
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(true);
+		expect(result.mutationsFrozen).toBe(true);
+		// everything else false
+		expect(result.shadowMode).toBe(false);
+		expect(result.allowUpdateDelete).toBe(false);
+		expect(result.graphEnabled).toBe(false);
+		expect(result.autonomousEnabled).toBe(false);
+		expect(result.autonomousFrozen).toBe(false);
+	});
+
+	it("treats non-boolean truthy values as false", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: "yes",
+					shadowMode: 1,
+					graphEnabled: "true",
+				},
+			},
+		});
+
+		// strict === true check means these are all false
+		expect(result.enabled).toBe(false);
+		expect(result.shadowMode).toBe(false);
+		expect(result.graphEnabled).toBe(false);
 	});
 });
