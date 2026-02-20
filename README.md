@@ -4,6 +4,10 @@
 [![Spec Version](https://img.shields.io/badge/spec-v0.2.1--draft-blue.svg)](https://signetai.sh/spec)
 [![GitHub Stars](https://img.shields.io/github/stars/signetai/signetai.svg)](https://github.com/signetai/signetai/stargazers)
 
+<p align="center">
+  <img src="public/signetposter-02.jpg" alt="Your AI has a memory. You don't own it." width="720" />
+</p>
+
 **Own your agent. Bring it anywhere.**
 
 Signet is a local-first identity and memory layer for AI agents.
@@ -26,6 +30,10 @@ additional harness support in progress.
 ├── .secrets/         # Encrypted secret store
 └── .daemon/          # PID + logs
 ```
+
+<p align="center">
+  <img src="public/signetposter-01.jpg" alt="Signet — your AI has a memory, you don't own it" width="360" />
+</p>
 
 ## Why Signet
 
