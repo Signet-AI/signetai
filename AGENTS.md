@@ -3,21 +3,21 @@ Repo: github.com/signetai/signetai
 GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 Branching: `<username>/<feature>` off main
 Conventional commits: `type(scope): subject`
-Last Updated: 2026/02/18
+Last Updated: 2026/02/19
 This file: AGENTS.md -> Symlinked to CLAUDE.md
 ---
 
 # Repository Guidelines 
 
 
-This file provides guidance to AI assistants when working on code 
-in this repository. This file is version controlled, and written
-by both human developers and AI assistants. All changes to this 
-document--and the codebase, for that matter, are expected to be 
-thoughtful, intentional and helpful. This document and/or it's 
-symbolic links should never be overwritten or destroyed without care.
-and running `/init` is **strongly** discouraged when working with 
-less.. *corrigible* agents.
+This file provides guidance to AI assistants working on this repository.
+It is version controlled and co-maintained by human developers and AI
+assistants. Changes to this document (and the codebase) should be
+thoughtful, intentional, and useful.
+
+Do not overwrite or destroy this document or its symbolic links without
+care. Running `/init` is **strongly** discouraged when working with less
+*corrigible* agents.
 
 What is Signetai?
 ---
@@ -31,7 +31,7 @@ Commands
 
 ```bash
 bun install              # Install dependencies
-bun run build            # Build all packages (parallel)
+bun run build            # Build workspace packages
 bun run dev              # Dev mode all packages
 bun test                 # Run tests
 bun run lint             # Biome check
@@ -73,6 +73,7 @@ bun run build    # Static build to build/
 | Package | Description | Target |
 |---------|-------------|--------|
 | `@signet/core` | Core library: types, database, search, manifest, identity | node |
+| `@signet/connector-base` | Shared connector primitives/utilities | node |
 | `@signet/cli` | CLI tool: setup wizard, daemon management | node |
 | `@signet/daemon` | Background service: HTTP API, file watching | bun |
 | `@signet/sdk` | Integration SDK for third-party apps | node |
@@ -91,7 +92,7 @@ bun run build    # Static build to build/
 - YAML manifest parsing
 - Constants and utilities
 
-**@signet/cli** - User interface (~4200 LOC in cli.ts)
+**@signet/cli** - User interface (~4600 LOC in cli.ts)
 - Setup wizard with harness selection
 - Config editor (interactive TUI)
 - Daemon start/stop/status
@@ -125,8 +126,8 @@ bun run build    # Static build to build/
 ├─────────────────────────────────────────────────────────┤
 │  HTTP Server (port 3850)                                │
 │    /              Dashboard (SvelteKit static)          │
-│    /api/*         Configuration, memories, secrets      │
-│    /memory/*      Search and similarity                 │
+│    /api/*         Config, memory, skills, hooks, update │
+│    /memory/*      Search and similarity aliases          │
 │    /health        Health check                          │
 ├─────────────────────────────────────────────────────────┤
 │  File Watcher (chokidar)                                │
@@ -153,11 +154,14 @@ All user data lives at `~/.agents/`:
 ├── agent.yaml       # Configuration manifest
 ├── AGENTS.md        # Agent identity/instructions
 ├── SOUL.md          # Personality & tone
+├── IDENTITY.md      # Structured identity metadata
+├── USER.md          # User profile/preferences
 ├── MEMORY.md        # Generated working memory
 ├── memory/
 │   ├── memories.db  # SQLite database
 │   └── scripts/     # Python memory tools
 ├── skills/          # Installed skills
+├── .secrets/        # Encrypted secret store
 └── .daemon/
     └── logs/        # Daemon logs
 ```
@@ -165,15 +169,16 @@ All user data lives at `~/.agents/`:
 ## Key Files
 
 - `packages/core/src/types.ts` - TypeScript interfaces
-- `packages/core/src/identity.ts` - Identity file detection and loading (IDENTITY_FILES spec)
+- `packages/core/src/identity.ts` - Identity file detection/loading
 - `packages/core/src/database.ts` - SQLite wrapper
 - `packages/core/src/search.ts` - Hybrid search
-- `packages/core/src/skills.ts` - Skills unification from multiple harnesses
-- `packages/cli/src/cli.ts` - Main CLI (~4200 LOC)
+- `packages/core/src/skills.ts` - Skills unification across harnesses
+- `packages/cli/src/cli.ts` - Main CLI entrypoint (~4600 LOC)
 - `packages/daemon/src/daemon.ts` - HTTP server + watcher
 - `packages/connector-claude-code/src/index.ts` - Claude Code connector
 - `packages/connector-opencode/src/index.ts` - OpenCode connector
 - `packages/connector-openclaw/src/index.ts` - OpenClaw connector
+- `packages/adapters/openclaw/src/index.ts` - OpenClaw runtime adapter
 - `docs/ARCHITECTURE.md` - Full technical documentation
 
 Style & Conventions
@@ -186,12 +191,12 @@ Style & Conventions
 - Line width: 80-100 soft, 120 hard
 - Add brief code comments for tricky or non-obvious logic.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail).
-Split/refactor when it improves clarity or testability.
+- Split/refactor when it improves clarity or testability.
 
-typescript discipline
+TypeScript Discipline
 ---
 
-these rules are enforced by convention, not tooling. 
+These rules are enforced by convention, not tooling.
 
 - no `any` -- use `unknown` with narrowing
 - no `as` -- fix the types instead of asserting
@@ -207,8 +212,9 @@ these rules are enforced by convention, not tooling.
 
 1. Make changes to source files
 2. Run `bun run build` to rebuild affected packages
-3. Run `bun test` to verify
-4. Run `bun run lint` before committing
+3. Run `bun test` to verify behavior
+4. Run `bun run typecheck` for TS changes
+5. Run `bun run lint` before committing
 
 ### Testing Daemon Changes
 
@@ -234,8 +240,13 @@ bun src/cli.ts status    # Check status
 | `/api/status` | GET | Full daemon status |
 | `/api/config` | GET/POST | Config files CRUD |
 | `/api/memories` | GET | List memories |
-| `/memory/search` | GET | Hybrid search |
+| `/api/memory/remember` | POST | Save a memory |
+| `/api/memory/recall` | POST | Hybrid search |
+| `/memory/search` | GET | Legacy keyword search |
 | `/api/embeddings` | GET | Export embeddings |
+| `/api/skills` | GET | List installed skills |
+| `/api/secrets` | GET | List secret names |
+| `/api/hooks/*` | POST/GET | Session + synthesis hooks |
 | `/api/harnesses` | GET | List harnesses |
 
 
@@ -262,5 +273,5 @@ The `detectExistingSetup()` function in `packages/core/src/identity.ts` detects 
 - CLI targets **node** for broader compatibility, but also works with **bun**
 - Dashboard is built to static files, served by daemon
 - SQLite uses runtime detection: `bun:sqlite` under Bun, `better-sqlite3` under Node.js
-- Memory embeddings currently use Python scripts
+- Daemon is the primary memory pipeline; Python scripts are optional batch tools
 - Connectors are idempotent - safe to run install multiple times

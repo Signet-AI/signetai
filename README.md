@@ -6,306 +6,217 @@
 
 **Own your agent. Bring it anywhere.**
 
-Every AI platform has memory now. ChatGPT remembers you. Claude learns your preferences. Gemini knows your style.
+Signet is a local-first identity and memory layer for AI agents.
+It keeps your agent instructions, personality, and long-term memory in plain
+files under `~/.agents/`, then syncs that identity across your tools.
 
-**But you can't take it with you.**
+Today, Signet integrates deeply with Claude Code, OpenCode, and OpenClaw, with
+additional harness support in progress.
 
-Signet is an open standard for portable AI agent identity. Your agent's personality, memory, and preferences live in plain text files on YOUR machine—working across Claude Code, OpenClaw, OpenCode, and beyond.
-
-```
+```text
 ~/.agents/
-├── agent.yaml       # Configuration & manifest
-├── AGENTS.md        # Agent identity & instructions
-├── SOUL.md          # Personality & tone
-├── MEMORY.md        # Working memory (generated)
-├── memory/          # SQLite + vector embeddings
-├── skills/          # Installed skills
-└── .secrets/        # Encrypted API keys
+├── agent.yaml        # Manifest + runtime config
+├── AGENTS.md         # Source-of-truth operating instructions
+├── SOUL.md           # Voice/personality guidance
+├── IDENTITY.md       # Structured identity metadata
+├── USER.md           # User preferences/profile
+├── MEMORY.md         # Synthesized working memory
+├── memory/           # SQLite DB + embedding artifacts
+├── skills/           # Installed skills (SKILL.md)
+├── .secrets/         # Encrypted secret store
+└── .daemon/          # PID + logs
 ```
 
-One agent. Every platform. Zero lock-in.
+## Why Signet
 
----
+Most AI tools build memory silos. If you switch harnesses, you often lose your
+agent context or have to rebuild it manually.
 
-## The Problem
+Signet gives you one portable memory and identity substrate that you control:
 
-They're not storing memories *for* you—they're locking you *in*.
+- plain-text identity files you can inspect, version, and move
+- a daemon API for memory/search/skills/secrets/hooks
+- connector packages that keep harness configs in sync
+- hybrid search (semantic + keyword) for consistent recall
 
-- OpenAI won't let you export your memories
-- Anthropic won't let you move your project context
-- Google won't let you download what Gemini learned about you
-- The best you get is a chat history export—raw transcripts, not structured knowledge
+## What ships now
 
-Switch tools? Start from zero. All those hours of context building, gone.
+- **Portable identity**: sync `~/.agents/AGENTS.md` to harness-specific files
+- **Persistent memory**: `signet remember` and `signet recall` backed by SQLite
+- **Hybrid retrieval**: vector similarity + FTS5 keyword blending
+- **Dashboard** (`http://localhost:3850`): config editor, memory browser,
+  embeddings view, skills/secrets/logs
+- **Hooks API**: session-start, user-prompt-submit, session-end, compaction,
+  synthesis
+- **Secrets**: libsodium-encrypted storage and redacted command execution
+- **Skills**: install and manage skills from skills.sh
+- **Git-aware workflow**: optional auto-commit and sync controls for `~/.agents`
 
-## The Solution
+## Requirements
 
-Signet stores your agent's identity in plain text files at `~/.agents/`. A background daemon syncs your identity to every AI tool you use, and hybrid search (vector + keyword) makes memories instantly accessible across all of them.
+- Node.js 18+ for CLI/package workflows
+- Bun for daemon runtime (`signet start`, `signet daemon start`)
+- macOS or Linux recommended for the smoothest setup experience
 
----
+## Quickstart
 
-## Quick Start
+### 1) Install
 
 ```bash
-# Install
+# one-line installer
 curl -sL https://signetai.sh/install | bash
 
-# Or with npm/bun
-npx signet setup
+# or global package install
+npm install -g signetai
+# bun add -g signetai
+
+# or run without global install
+npx signetai setup
+# bunx signetai setup
 ```
 
-The setup wizard will:
-- Create your agent identity files
-- Configure harness integrations (Claude Code, OpenCode, OpenClaw, etc.)
-- Set up memory embedding (local Ollama or OpenAI API)
-- Initialize the SQLite database
-- Start the background daemon
+### 2) Run setup
 
 ```bash
-# Open the dashboard
+signet setup
+```
+
+The setup wizard initializes `~/.agents/`, configures selected harnesses,
+prompts for embeddings (Ollama/OpenAI/skip), creates the memory DB, and starts
+the daemon.
+
+### 3) Use it
+
+```bash
+signet status
 signet dashboard
 
-# Or interact via CLI
-signet            # Interactive TUI menu
-signet status     # Check daemon & file status
-signet start      # Start daemon
-signet stop       # Stop daemon
-signet logs       # View daemon logs
+signet remember "nicholai prefers bun over npm" -w claude-code
+signet recall "coding preferences"
 ```
 
----
+In connected harnesses, use built-in skills directly:
 
-## Features
-
-### Hybrid Memory Search
-
-Memories are embedded for semantic search and indexed for keyword matching. A configurable blend (default 70% semantic, 30% keyword) finds the right context every time.
-
-```bash
-# Save a memory (from any harness)
-/remember nicholai prefers tabs over spaces
-/remember critical: never push directly to main
-
-# Search memories
-/recall coding preferences
+```text
+/remember critical: never commit secrets to git
+/recall release process
 ```
 
-### Multi-Harness Support
+## Harness support
 
-Signet syncs your agent identity across:
+| Harness | Status | Integration |
+|---|---|---|
+| Claude Code | Supported | Connector writes `~/.claude/CLAUDE.md` + hook config |
+| OpenCode | Supported | Connector writes `~/.config/opencode/AGENTS.md` + plugin |
+| OpenClaw | Supported | Connector bootstrap + `@signet/adapter-openclaw` runtime plugin |
+| Cursor | Planned | File-based identity sync |
+| Windsurf | Planned | File/plugin integration |
 
-- **Claude Code** — Writes `~/.claude/CLAUDE.md` from your AGENTS.md
-- **OpenCode** — Plugin + AGENTS.md auto-sync
-- **OpenClaw** — Full hook system integration via `@signet/adapter-openclaw`
-- **Cursor** — `.cursorrules` generation (planned)
-- **Windsurf** — Integration (planned)
+## Architecture at a glance
 
-Changes to `~/.agents/AGENTS.md` auto-sync to all configured harnesses within 2 seconds.
+```text
+CLI (signet)
+  -> setup, status, memory, secrets, skills, hooks, updates, git sync
 
-### Web Dashboard
+Daemon (@signet/daemon, localhost:3850)
+  -> /api/config, /api/memory/*, /api/hooks/*, /api/skills/*,
+     /api/secrets/*, /api/harnesses, /api/logs, /api/update/*
+  -> file watcher (identity sync + optional git auto-commit)
+  -> static dashboard hosting
 
-Interactive dashboard at `http://localhost:3850`:
+Core (@signet/core)
+  -> manifest/types, SQLite, hybrid search, identity + skills utilities
 
-- **Config editor** — Edit AGENTS.md, SOUL.md, agent.yaml with live save
-- **Embeddings visualization** — UMAP projection of your memory space
-- **Memory browser** — Search, filter, and explore memories
-- **Skills manager** — Install, browse, and manage skills
-- **Harness status** — See what's connected
-
-### Secrets Management
-
-Encrypted storage for API keys using libsodium (XSalsa20-Poly1305). Agents can *use* secrets without being able to read or expose them.
-
-```bash
-signet secret put OPENAI_API_KEY
-signet secret list
-signet secret delete GITHUB_TOKEN
+Connectors/adapters
+  -> claude-code, opencode, openclaw connector packages
+  -> openclaw runtime adapter package
 ```
 
-### Skills System
+## Security and privacy model
 
-Install and manage agent skills from the skills.sh registry:
+- Local-first by default: daemon binds to `localhost`
+- No telemetry required for core functionality
+- Secrets encrypted at rest (`XSalsa20-Poly1305` via libsodium)
+- Secret values are never returned by API; subprocess output is redacted
 
-```bash
-signet skill list
-signet skill install browser-use
-signet skill search github
-```
+## Roadmap (active plans)
 
----
+The docs in `docs/wip/` capture current implementation tracks:
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                     Signet Daemon                       │
-├─────────────────────────────────────────────────────────┤
-│  HTTP Server (port 3850)                                │
-│    /              Dashboard (SvelteKit static)          │
-│    /api/config    Configuration CRUD                    │
-│    /api/memories  Memory list & stats                   │
-│    /api/memory/remember  Save a memory                  │
-│    /api/memory/recall    Hybrid search                  │
-│    /api/secrets   Secrets management                    │
-│    /api/skills    Skills management                     │
-│    /api/hooks     Lifecycle hooks (session/compaction)  │
-│    /health        Health check                          │
-├─────────────────────────────────────────────────────────┤
-│  File Watcher                                           │
-│    Auto-commit on changes (git, 5s debounce)            │
-│    Auto-sync AGENTS.md to harnesses (2s debounce)       │
-├─────────────────────────────────────────────────────────┤
-│  System Service                                         │
-│    macOS: launchd plist                                 │
-│    Linux: systemd user unit                             │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│                    Signet CLI                           │
-├─────────────────────────────────────────────────────────┤
-│  signet           Interactive TUI menu                  │
-│  signet setup     First-time setup wizard               │
-│  signet config    Interactive config editor             │
-│  signet start     Start daemon                          │
-│  signet stop      Stop daemon                           │
-│  signet status    Show status                           │
-│  signet dashboard Open dashboard in browser             │
-│  signet logs      View daemon logs                      │
-│  signet secret    Manage encrypted secrets              │
-│  signet skill     Manage agent skills                   │
-│  signet migrate   Import from other platforms           │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│                    Harnesses                            │
-├─────────────────────────────────────────────────────────┤
-│  Claude Code      CLAUDE.md generated from AGENTS.md    │
-│  OpenCode         Plugin + AGENTS.md                    │
-│  OpenClaw         @signet/adapter-openclaw + hooks      │
-│  Cursor           .cursorrules (planned)                │
-│  Windsurf         Integration (planned)                 │
-└─────────────────────────────────────────────────────────┘
-```
-
----
+- **Memory Pipeline v2** (`docs/wip/memory-pipeline-plan.md`): durable async
+  jobs, explicit modify/forget APIs, audit history, stronger safety invariants,
+  and improved retrieval quality targets
+- **Multi-agent support** (`docs/wip/multi-agent-support.md`): shared daemon,
+  scoped memory per agent, OpenClaw roster integration, and agent-focused UI
 
 ## Packages
 
-| Package | Description |
-|---------|-------------|
-| [`@signet/cli`](./packages/cli) | CLI and dashboard |
-| [`@signet/core`](./packages/core) | Core library, types, database |
-| [`@signet/daemon`](./packages/daemon) | Background daemon service |
-| [`@signet/sdk`](./packages/sdk) | Integration SDK for apps |
-| [`@signet/connector-claude-code`](./packages/connector-claude-code) | Claude Code connector |
-| [`@signet/connector-opencode`](./packages/connector-opencode) | OpenCode connector |
-| [`@signet/connector-openclaw`](./packages/connector-openclaw) | OpenClaw connector |
-| [`@signet/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime adapter |
-| [`signetai`](./packages/signetai) | Meta-package (CLI + daemon) |
-
----
-
-## Configuration
-
-All configuration lives in `~/.agents/agent.yaml`:
-
-```yaml
-version: 1
-schema: signet/v1
-
-agent:
-  name: "My Agent"
-  description: "Personal AI assistant"
-
-harnesses:
-  - claude-code
-  - openclaw
-  - opencode
-
-embedding:
-  provider: ollama          # or 'openai'
-  model: nomic-embed-text
-  dimensions: 768
-
-search:
-  alpha: 0.7        # Vector weight (0-1)
-  top_k: 20
-  min_score: 0.3
-
-memory:
-  session_budget: 2000
-  decay_rate: 0.95
-```
-
-See [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) for full reference.
-
----
+| Package | Role |
+|---|---|
+| [`@signet/core`](./packages/core) | Types, identity, SQLite, search, shared utilities |
+| [`@signet/cli`](./packages/cli) | CLI entrypoint + setup/config workflows |
+| [`@signet/daemon`](./packages/daemon) | API server, watcher, sync, dashboard host |
+| [`@signet/sdk`](./packages/sdk) | App integration SDK |
+| [`@signet/connector-base`](./packages/connector-base) | Shared connector primitives |
+| [`@signet/connector-claude-code`](./packages/connector-claude-code) | Claude Code integration |
+| [`@signet/connector-opencode`](./packages/connector-opencode) | OpenCode integration |
+| [`@signet/connector-openclaw`](./packages/connector-openclaw) | OpenClaw bootstrap integration |
+| [`@signet/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
+| [`signetai`](./packages/signetai) | Publishable meta-package (`signet` binary) |
 
 ## Documentation
 
-- [Quickstart](./docs/QUICKSTART.md) — Install and get running in minutes
-- [Configuration](./docs/CONFIGURATION.md) — Full agent.yaml reference
-- [Memory](./docs/MEMORY.md) — How the memory system works
-- [Skills](./docs/SKILLS.md) — Installing and using skills
-- [Secrets](./docs/SECRETS.md) — Secrets management
-- [Hooks](./docs/HOOKS.md) — Harness lifecycle hooks
-- [Dashboard](./docs/DASHBOARD.md) — Dashboard features and usage
-- [API Reference](./docs/API.md) — Daemon HTTP API
-- [Harnesses](./docs/HARNESSES.md) — Platform integrations
-- [Architecture](./docs/ARCHITECTURE.md) — Technical deep dive
-
----
+- [Quickstart](./docs/QUICKSTART.md)
+- [CLI Reference](./docs/CLI.md)
+- [Configuration](./docs/CONFIGURATION.md)
+- [Memory](./docs/MEMORY.md)
+- [Hooks](./docs/HOOKS.md)
+- [Harnesses](./docs/HARNESSES.md)
+- [Secrets](./docs/SECRETS.md)
+- [Skills](./docs/SKILLS.md)
+- [Dashboard](./docs/DASHBOARD.md)
+- [API Reference](./docs/API.md)
+- [Architecture](./docs/ARCHITECTURE.md)
 
 ## Development
 
 ```bash
-# Clone
 git clone https://github.com/signetai/signetai.git
-cd signet
+cd signetai
 
-# Install dependencies
 bun install
-
-# Build all packages
 bun run build
-
-# Run CLI in dev mode
-cd packages/cli
-bun run dev
-
-# Build dashboard
-cd packages/cli/dashboard
-bun run build
+bun test
+bun run lint
 ```
 
----
+Useful package-level flows:
+
+```bash
+# CLI dev
+cd packages/cli && bun run dev
+
+# Dashboard dev
+cd packages/cli/dashboard && bun run dev
+
+# Daemon dev
+cd packages/daemon && bun run dev
+```
 
 ## Contributing
 
-We welcome contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+Contributions are welcome. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
-**Good first issues:**
-- Documentation improvements
-- New harness adapters
-- Test coverage
-
-**Ways to help:**
-- Star the repo
-- Share your experience on Twitter/HN
-- Report bugs or request features via issues
-- Contribute code or documentation
-
----
+If you are adding a harness integration, prefer the existing connector pattern
+(`@signet/connector-base`) and keep runtime memory semantics in the daemon API.
 
 ## License
 
-Apache-2.0 — use it, fork it, ship it.
-
----
+Apache-2.0.
 
 ## Links
 
-- **Website:** [signetai.sh](https://signetai.sh)
-- **Documentation:** [signetai.sh/docs](https://signetai.sh/docs)
-- **Specification:** [signetai.sh/spec](https://signetai.sh/spec)
-- **Twitter:** [@signet_ai](https://twitter.com/signet_ai)
+- Website: [signetai.sh](https://signetai.sh)
+- Docs: [signetai.sh/docs](https://signetai.sh/docs)
+- Spec: [signetai.sh/spec](https://signetai.sh/spec)
+- Issues: [github.com/signetai/signetai/issues](https://github.com/signetai/signetai/issues)
