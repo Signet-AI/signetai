@@ -1,6 +1,6 @@
 {
   "name": "signetai",
-  "version": "0.1.61",
+  "version": "0.1.62",
   "description": "Portable AI agent identity - own your agent, bring it anywhere",
   "type": "module",
   "bin": {

@@ -1,6 +1,6 @@
 {
   "name": "signet",
-  "version": "0.1.61",
+  "version": "0.1.62",
   "private": true,
   "description": "Portable AI agent identity",
   "repository": {
