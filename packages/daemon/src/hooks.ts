@@ -259,6 +259,20 @@ function readMemoryMd(charBudget: number): string | undefined {
 	}
 }
 
+function readAgentsMd(charBudget: number): string | undefined {
+	const agentsMd = join(AGENTS_DIR, "AGENTS.md");
+	if (!existsSync(agentsMd)) return undefined;
+
+	try {
+		const content = readFileSync(agentsMd, "utf-8").trim();
+		if (!content) return undefined;
+		if (content.length <= charBudget) return content;
+		return `${content.slice(0, charBudget)}\n[truncated]`;
+	} catch {
+		return undefined;
+	}
+}
+
 interface ScoredMemory {
 	id: string;
 	content: string;
@@ -533,14 +547,17 @@ export function handleSessionStart(
 ): SessionStartResponse {
 	const start = Date.now();
 	const config = loadHooksConfig().sessionStart || {};
+	const includeIdentity = config.includeIdentity !== false;
 
 	logger.info("hooks", "Session start hook", {
 		harness: req.harness,
 		project: req.project,
 	});
 
-	const identity =
-		config.includeIdentity !== false ? loadIdentity() : { name: "Agent" };
+	const identity = includeIdentity ? loadIdentity() : { name: "Agent" };
+
+	// Read AGENTS.md first so harness instructions precede synthesized memory
+	const agentsMdContent = includeIdentity ? readAgentsMd(12000) : undefined;
 
 	// Read MEMORY.md with 10k char budget
 	const memoryMdContent = readMemoryMd(10000);
@@ -557,7 +574,10 @@ export function handleSessionStart(
 
 	injectParts.push("[memory active | /remember | /recall]");
 
-	if (identity.name !== "Agent" || identity.description) {
+	if (agentsMdContent) {
+		injectParts.push("\n## Agent Instructions\n");
+		injectParts.push(agentsMdContent);
+	} else if (identity.name !== "Agent" || identity.description) {
 		injectParts.push(
 			`You are ${identity.name}${identity.description ? `, ${identity.description}` : ""}.`,
 		);

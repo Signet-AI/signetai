@@ -160,6 +160,11 @@ function writeIdentityMd(content: string): void {
 	writeFileSync(join(TEST_DIR, "IDENTITY.md"), content);
 }
 
+function writeAgentsMd(content: string): void {
+	ensureDir(TEST_DIR);
+	writeFileSync(join(TEST_DIR, "AGENTS.md"), content);
+}
+
 function writeMemoryMd(content: string): void {
 	ensureDir(TEST_DIR);
 	writeFileSync(join(TEST_DIR, "MEMORY.md"), content);
@@ -402,6 +407,34 @@ creature: digital assistant
 
 		expect(result.recentContext).toContain("Working Memory");
 		expect(result.inject).toContain("## Working Memory");
+	});
+
+	test("loads AGENTS.md before MEMORY.md in inject context", () => {
+		writeAgentsMd("# AGENTS\n\nFollow AGENTS instructions first.");
+		writeMemoryMd("# Working Memory\n\nThis is working memory context.");
+
+		const result = handleSessionStart({ harness: "claude-code" });
+
+		const agentsIndex = result.inject.indexOf("Follow AGENTS instructions first.");
+		const workingMemoryIndex = result.inject.indexOf("## Working Memory");
+
+		expect(result.inject).toContain("## Agent Instructions");
+		expect(agentsIndex).toBeGreaterThan(-1);
+		expect(workingMemoryIndex).toBeGreaterThan(agentsIndex);
+	});
+
+	test("uses AGENTS.md instead of fallback identity sentence", () => {
+		writeAgentYaml(`
+agent:
+  name: TestBot
+  description: A test agent
+`);
+		writeAgentsMd("# AGENTS\n\nOperator policy from AGENTS.");
+
+		const result = handleSessionStart({ harness: "claude-code" });
+
+		expect(result.inject).toContain("Operator policy from AGENTS.");
+		expect(result.inject).not.toContain("You are TestBot");
 	});
 
 	test("excludes identity when includeIdentity is false", () => {
