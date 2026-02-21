@@ -78,6 +78,12 @@ import { getGraphBoostIds } from "./pipeline/graph-search";
 import { rerank, noopReranker, type RerankCandidate } from "./pipeline/reranker";
 import { createProviderTracker, getDiagnostics } from "./diagnostics";
 import {
+	createAnalyticsCollector,
+	type AnalyticsCollector,
+	type ErrorStage,
+} from "./analytics";
+import { buildTimeline, type TimelineSources } from "./timeline";
+import {
 	createRateLimiter,
 	requeueDeadJobs,
 	releaseStaleLeases,
@@ -115,6 +121,7 @@ const HOST = process.env.SIGNET_HOST || "localhost";
 
 // Autonomous maintenance singletons
 const providerTracker = createProviderTracker();
+const analyticsCollector = createAnalyticsCollector();
 const repairLimiter = createRateLimiter();
 
 // Auth state — initialized lazily in main(), but middleware reads from here
@@ -712,12 +719,29 @@ app.use("*", async (c, next) => {
 	return mw(c, next);
 });
 
-// Request logging middleware
+// Request logging + analytics middleware
 app.use("*", async (c, next) => {
 	const start = Date.now();
 	await next();
 	const duration = Date.now() - start;
 	logger.api.request(c.req.method, c.req.path, c.res.status, duration);
+	const actor = c.req.header("x-signet-actor");
+	analyticsCollector.recordRequest(
+		c.req.method,
+		c.req.path,
+		c.res.status,
+		duration,
+		actor ?? undefined,
+	);
+	// Record latency histograms for key operations
+	const p = c.req.path;
+	if (p.includes("/remember") || p.includes("/save")) {
+		analyticsCollector.recordLatency("remember", duration);
+	} else if (p.includes("/recall") || p.includes("/search") || p.includes("/similar")) {
+		analyticsCollector.recordLatency("recall", duration);
+	} else if (p.includes("/modify") || p.includes("/forget") || p.includes("/recover")) {
+		analyticsCollector.recordLatency("mutate", duration);
+	}
 });
 
 // Health check
@@ -870,6 +894,19 @@ app.use("/api/diagnostics", async (c, next) => {
 });
 app.use("/api/diagnostics/*", async (c, next) => {
 	return requirePermission("diagnostics", authConfig)(c, next);
+});
+
+// Analytics — read-only
+app.use("/api/analytics", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
+app.use("/api/analytics/*", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
+
+// Timeline — read-only (uses analytics permission)
+app.use("/api/timeline/*", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
 });
 
 // Repair — admin only
@@ -5342,6 +5379,94 @@ app.post("/api/repair/retention-sweep", (c) => {
 });
 
 // ============================================================================
+// Analytics & Timeline (Phase K)
+// ============================================================================
+
+app.get("/api/analytics/usage", (c) => {
+	return c.json(analyticsCollector.getUsage());
+});
+
+app.get("/api/analytics/errors", (c) => {
+	const stage = c.req.query("stage") as ErrorStage | undefined;
+	const since = c.req.query("since") ?? undefined;
+	const limit = c.req.query("limit")
+		? parseInt(c.req.query("limit")!, 10)
+		: undefined;
+	return c.json({
+		errors: analyticsCollector.getErrors({ stage, since, limit }),
+		summary: analyticsCollector.getErrorSummary(),
+	});
+});
+
+app.get("/api/analytics/latency", (c) => {
+	return c.json(analyticsCollector.getLatency());
+});
+
+app.get("/api/analytics/logs", (c) => {
+	const limit = parseInt(c.req.query("limit") || "100", 10);
+	const level = c.req.query("level") as
+		| "debug" | "info" | "warn" | "error" | undefined;
+	const category = c.req.query("category") as any;
+	const since = c.req.query("since")
+		? new Date(c.req.query("since")!)
+		: undefined;
+	const logs = logger.getRecent({ limit, level, category, since });
+	return c.json({ logs, count: logs.length });
+});
+
+app.get("/api/analytics/memory-safety", (c) => {
+	const mutationHealth = getDbAccessor().withReadDb((db) =>
+		getDiagnostics(db, providerTracker),
+	);
+	const recentMutationErrors = analyticsCollector.getErrors({
+		stage: "mutation",
+		limit: 50,
+	});
+	return c.json({
+		mutation: mutationHealth.mutation,
+		recentErrors: recentMutationErrors,
+		errorSummary: analyticsCollector.getErrorSummary(),
+	});
+});
+
+app.get("/api/timeline/:id", (c) => {
+	const entityId = c.req.param("id");
+	const timeline = getDbAccessor().withReadDb((db) =>
+		buildTimeline(
+			{
+				db,
+				getRecentLogs: (opts) => logger.getRecent({ limit: opts.limit }),
+				getRecentErrors: (opts) =>
+					analyticsCollector.getErrors({ limit: opts?.limit }),
+			},
+			entityId,
+		),
+	);
+	return c.json(timeline);
+});
+
+app.get("/api/timeline/:id/export", (c) => {
+	const entityId = c.req.param("id");
+	const timeline = getDbAccessor().withReadDb((db) => {
+		const sources: TimelineSources = {
+			db,
+			getRecentLogs: (opts) => logger.getRecent({ limit: opts.limit }),
+			getRecentErrors: (opts) =>
+				analyticsCollector.getErrors({ limit: opts?.limit }),
+		};
+		return buildTimeline(sources, entityId);
+	});
+	return c.json({
+		meta: {
+			version: CURRENT_VERSION,
+			exportedAt: new Date().toISOString(),
+			entityId,
+		},
+		timeline,
+	});
+});
+
+// ============================================================================
 // Static Dashboard
 // ============================================================================
 
@@ -6807,6 +6932,7 @@ async function main() {
 			fetchEmbedding,
 			memoryCfg.search,
 			providerTracker,
+			analyticsCollector,
 		);
 	} else {
 		// Retention worker runs unconditionally — cleans up tombstones,

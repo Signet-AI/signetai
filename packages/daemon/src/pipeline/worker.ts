@@ -18,6 +18,7 @@ import { txIngestEnvelope } from "../transactions";
 import { normalizeAndHashContent } from "../content-normalization";
 import { vectorToBlob, countChanges } from "../db-helpers";
 import { txPersistEntities } from "./graph-transactions";
+import type { AnalyticsCollector } from "../analytics";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -609,6 +610,7 @@ export function startWorker(
 	provider: LlmProvider,
 	pipelineCfg: PipelineV2Config,
 	decisionCfg: DecisionConfig,
+	analytics?: AnalyticsCollector,
 ): WorkerHandle {
 	let running = true;
 	let inflight: Promise<void> | null = null;
@@ -684,11 +686,15 @@ export function startWorker(
 						embeddingByHash.set(contentHash, vector);
 					}
 				} catch (e) {
-					prefetchWarnings.push(
-						`Embedding prefetch failed: ${
-							e instanceof Error ? e.message : String(e)
-						}`,
-					);
+					const emsg = e instanceof Error ? e.message : String(e);
+					prefetchWarnings.push(`Embedding prefetch failed: ${emsg}`);
+					analytics?.recordError({
+						timestamp: new Date().toISOString(),
+						stage: "embedding",
+						code: emsg.includes("timeout") ? "EMBEDDING_TIMEOUT" : "EMBEDDING_PROVIDER_DOWN",
+						message: emsg,
+						memoryId: job.memory_id,
+					});
 				}
 			}
 		}
@@ -795,15 +801,25 @@ export function startWorker(
 
 			if (!job) return; // Nothing to do
 
+			const jobStart = Date.now();
 			try {
 				await processExtractJob(job);
 				consecutiveFailures = 0;
+				analytics?.recordLatency("jobs", Date.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
 				logger.warn("pipeline", "Job failed", {
 					jobId: job.id,
 					error: msg,
 					attempt: job.attempts,
+				});
+				analytics?.recordLatency("jobs", Date.now() - jobStart);
+				analytics?.recordError({
+					timestamp: new Date().toISOString(),
+					stage: "extraction",
+					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
+					message: msg,
+					memoryId: job.memory_id,
 				});
 				accessor.withWriteTx((db) => {
 					failJob(db, job.id, msg, job.attempts, job.max_attempts);

@@ -21,6 +21,7 @@ import {
 } from "./document-worker";
 import type { DecisionConfig } from "./decision";
 import type { ProviderTracker } from "../diagnostics";
+import type { AnalyticsCollector } from "../analytics";
 import { logger } from "../logger";
 
 export { enqueueExtractionJob } from "./worker";
@@ -58,6 +59,7 @@ export function startPipeline(
 	) => Promise<number[] | null>,
 	searchCfg: { alpha: number; top_k: number; min_score: number },
 	providerTracker?: ProviderTracker,
+	analytics?: AnalyticsCollector,
 ): void {
 	if (workerHandle) {
 		logger.warn("pipeline", "Pipeline already running, skipping start");
@@ -75,7 +77,7 @@ export function startPipeline(
 		fetchEmbedding,
 	};
 
-	workerHandle = startWorker(accessor, provider, pipelineCfg, decisionCfg);
+	workerHandle = startWorker(accessor, provider, pipelineCfg, decisionCfg, analytics);
 
 	// Retention worker also managed here when pipeline is active;
 	// standalone retention is started separately in main() for non-pipeline users.
