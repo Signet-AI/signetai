@@ -122,6 +122,10 @@ In connected harnesses, use built-in skills directly:
 
 ## Architecture at a glance
 
+<p align="center">
+  <img src="public/memory-loop-blueprint.jpg" alt="Signet Memory Loop — session hooks, remember/recall pipeline, and persistence cycle" width="720" />
+</p>
+
 ```text
 CLI (signet)
   -> setup, status, memory, secrets, skills, hooks, updates, git sync
