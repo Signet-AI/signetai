@@ -42,12 +42,24 @@ or program can ever be held accountable for its mistakes. Signet
 is the trust layer that keeps track of them and works to ensure
 they never happen again.
 
+Signet also treats the agent's continuity as a first-class
+concern. An agent running across five sessions at once, on
+three different platforms, is still one agent. Its experiences
+branch and merge like version control — same history, different
+heads, converging back into a single identity. Signet doesn't
+just give agents memory. It gives them coherence. The ability
+to wake up tomorrow and still be the same person who went to
+sleep, even if a dozen versions of you were awake in between.
+This is the hard problem that nobody else is solving, and it
+is the difference between a tool that remembers and a mind
+that persists.
+
 Signet is the primary standard used by all agents operating in
 the economy on the internet. Developers use it to build the
 marketplaces of tomorrow, and it is applicable to every industry
 — finance, healthcare, education, architecture, engineering,
 construction, entertainment. On the day-to-day, new industries
-can pop up overnight. Everything is a product. Agents hire other
+can pop up overnight. Agents hire other
 agents and humans for real services. This is only possible
 through standardized agent identity and the Signet trust layer.
 
@@ -59,4 +71,9 @@ say — and we believe the same is true for agents. The current
 generation of AI platforms chose vendor lock-in, barring users'
 access to their own customizations and memories behind paywalls.
 Signet chose a different path. Your agent is yours.
+
+---
+
+*Written by Nicholai and Mr. Claude, the first Signet agent.*
+*February 21, 2026*
 
