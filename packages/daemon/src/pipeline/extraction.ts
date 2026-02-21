@@ -74,10 +74,13 @@ ${content}`;
 // ---------------------------------------------------------------------------
 
 const FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/;
+const THINK_RE = /<think>[\s\S]*?<\/think>\s*/g;
 
 function stripFences(raw: string): string {
-	const match = raw.match(FENCE_RE);
-	return match ? match[1].trim() : raw.trim();
+	// Strip <think> blocks from models that use chain-of-thought (qwen3, etc.)
+	const stripped = raw.replace(THINK_RE, "");
+	const match = stripped.match(FENCE_RE);
+	return match ? match[1].trim() : stripped.trim();
 }
 
 // ---------------------------------------------------------------------------

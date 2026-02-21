@@ -218,7 +218,9 @@ function parseDecision(
 	candidateIds: ReadonlySet<string>,
 	warnings: string[],
 ): Omit<FactDecisionProposal, "fact" | "targetContent"> | null {
-	const jsonStr = raw
+	// Strip <think> blocks from models that use chain-of-thought (qwen3, etc.)
+	const stripped = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+	const jsonStr = stripped
 		.trim()
 		.replace(/```(?:json)?\s*([\s\S]*?)```/, "$1")
 		.trim();

@@ -21,16 +21,18 @@ export interface LlmProvider {
 }
 
 // ---------------------------------------------------------------------------
-// Ollama via Bun.spawn (matches hooks.ts:783 pattern)
+// Ollama via HTTP API
 // ---------------------------------------------------------------------------
 
 export interface OllamaProviderConfig {
 	readonly model: string;
+	readonly baseUrl: string;
 	readonly defaultTimeoutMs: number;
 }
 
 const DEFAULT_OLLAMA_CONFIG: OllamaProviderConfig = {
 	model: "qwen3:4b",
+	baseUrl: "http://localhost:11434",
 	defaultTimeoutMs: 45000,
 };
 
@@ -45,53 +47,51 @@ export function createOllamaProvider(
 		async generate(prompt, opts): Promise<string> {
 			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 
-			const proc = Bun.spawn(["ollama", "run", cfg.model, prompt], {
-				stdout: "pipe",
-				stderr: "pipe",
-			});
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-			let timedOut = false;
 			try {
-				const output = await Promise.race([
-					new Response(proc.stdout).text(),
-					new Promise<string>((_, reject) =>
-						setTimeout(() => {
-							timedOut = true;
-							reject(new Error(`Ollama timeout after ${timeoutMs}ms`));
-						}, timeoutMs),
-					),
-				]);
+				const res = await fetch(`${cfg.baseUrl}/api/generate`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						model: cfg.model,
+						prompt,
+						stream: false,
+						...(opts?.maxTokens ? { options: { num_predict: opts.maxTokens } } : {}),
+					}),
+					signal: controller.signal,
+				});
 
-				await proc.exited;
-
-				if (proc.exitCode !== 0) {
-					const stderr = await new Response(proc.stderr).text();
+				if (!res.ok) {
+					const body = await res.text().catch(() => "");
 					throw new Error(
-						`Ollama exited with code ${proc.exitCode}: ${stderr.slice(0, 200)}`,
+						`Ollama HTTP ${res.status}: ${body.slice(0, 200)}`,
 					);
 				}
 
-				return output.trim();
+				const data = (await res.json()) as { response?: string };
+				if (typeof data.response !== "string") {
+					throw new Error("Ollama returned no response field");
+				}
+
+				return data.response.trim();
 			} catch (e) {
-				if (timedOut) {
-					try {
-						proc.kill();
-					} catch {
-						// already dead
-					}
+				if (e instanceof DOMException && e.name === "AbortError") {
+					throw new Error(`Ollama timeout after ${timeoutMs}ms`);
 				}
 				throw e;
+			} finally {
+				clearTimeout(timer);
 			}
 		},
 
 		async available(): Promise<boolean> {
 			try {
-				const proc = Bun.spawn(["ollama", "list"], {
-					stdout: "pipe",
-					stderr: "pipe",
+				const res = await fetch(`${cfg.baseUrl}/api/tags`, {
+					signal: AbortSignal.timeout(3000),
 				});
-				await proc.exited;
-				return proc.exitCode === 0;
+				return res.ok;
 			} catch {
 				logger.debug("pipeline", "Ollama not available");
 				return false;
