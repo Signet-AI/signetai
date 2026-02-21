@@ -245,6 +245,140 @@ describe("migration framework", () => {
 		expect(memColNames).toContain("created_at");
 	});
 
+	test("repairs version 2 stamped by CLI without running migrations", () => {
+		db = createFreshDb();
+
+		// Simulate v0.1.64-era schema: run only baseline migration
+		// then stamp version 2 the way the buggy CLI did
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS schema_migrations (
+				version INTEGER PRIMARY KEY,
+				applied_at TEXT NOT NULL,
+				checksum TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS conversations (
+				id TEXT PRIMARY KEY,
+				session_id TEXT NOT NULL,
+				harness TEXT NOT NULL,
+				started_at TEXT NOT NULL,
+				ended_at TEXT,
+				summary TEXT,
+				topics TEXT,
+				decisions TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				updated_by TEXT NOT NULL,
+				vector_clock TEXT NOT NULL DEFAULT '{}',
+				version INTEGER DEFAULT 1,
+				manual_override INTEGER DEFAULT 0
+			);
+			CREATE TABLE IF NOT EXISTS memories (
+				id TEXT PRIMARY KEY,
+				type TEXT NOT NULL DEFAULT 'fact',
+				category TEXT,
+				content TEXT NOT NULL,
+				confidence REAL DEFAULT 1.0,
+				importance REAL DEFAULT 0.5,
+				source_id TEXT,
+				source_type TEXT,
+				tags TEXT,
+				who TEXT,
+				why TEXT,
+				project TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				updated_by TEXT NOT NULL DEFAULT 'system',
+				last_accessed TEXT,
+				access_count INTEGER DEFAULT 0,
+				vector_clock TEXT NOT NULL DEFAULT '{}',
+				version INTEGER DEFAULT 1,
+				manual_override INTEGER DEFAULT 0,
+				pinned INTEGER DEFAULT 0
+			);
+			CREATE TABLE IF NOT EXISTS embeddings (
+				id TEXT PRIMARY KEY,
+				content_hash TEXT NOT NULL UNIQUE,
+				vector BLOB NOT NULL,
+				dimensions INTEGER NOT NULL,
+				source_type TEXT NOT NULL,
+				source_id TEXT NOT NULL,
+				chunk_text TEXT NOT NULL,
+				created_at TEXT NOT NULL
+			);
+			INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
+			VALUES (2, '2025-01-01T00:00:00.000Z', 'quick-setup');
+		`);
+
+		// This is the crash scenario from issue #22
+		runMigrations(db);
+
+		// Verify v2 columns exist on memories
+		const cols = db
+			.query("PRAGMA table_info(memories)")
+			.all() as Array<{ name: string }>;
+		const colNames = cols.map((c) => c.name);
+		expect(colNames).toContain("content_hash");
+		expect(colNames).toContain("is_deleted");
+
+		// Verify v2 tables exist
+		const tables = db
+			.query("SELECT name FROM sqlite_master WHERE type='table'")
+			.all() as Array<{ name: string }>;
+		const tableNames = tables.map((t) => t.name);
+		expect(tableNames).toContain("memory_history");
+		expect(tableNames).toContain("memory_jobs");
+		expect(tableNames).toContain("entities");
+
+		// All 7 migrations should now be recorded
+		const migrations = db
+			.query("SELECT version FROM schema_migrations ORDER BY version")
+			.all() as Array<{ version: number }>;
+		expect(migrations.length).toBe(7);
+	});
+
+	test("version 1 stamped by old inline migrate upgrades cleanly", () => {
+		db = createFreshDb();
+
+		// Simulate v0.1.64 DB: baseline schema + version 1 stamped
+		db.exec(`
+			CREATE TABLE IF NOT EXISTS schema_migrations (
+				version INTEGER PRIMARY KEY,
+				applied_at TEXT NOT NULL,
+				checksum TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS memories (
+				id TEXT PRIMARY KEY,
+				type TEXT NOT NULL DEFAULT 'fact',
+				content TEXT NOT NULL,
+				confidence REAL DEFAULT 1.0,
+				importance REAL DEFAULT 0.5,
+				tags TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				updated_by TEXT NOT NULL DEFAULT 'system',
+				access_count INTEGER DEFAULT 0,
+				pinned INTEGER DEFAULT 0
+			);
+			INSERT INTO schema_migrations (version, applied_at, checksum)
+			VALUES (1, '2025-01-01T00:00:00.000Z', 'inline-migrate');
+		`);
+
+		// Should not crash — v1 is legitimate, runs 002+
+		runMigrations(db);
+
+		const cols = db
+			.query("PRAGMA table_info(memories)")
+			.all() as Array<{ name: string }>;
+		const colNames = cols.map((c) => c.name);
+		expect(colNames).toContain("content_hash");
+		expect(colNames).toContain("is_deleted");
+
+		const migrations = db
+			.query("SELECT version FROM schema_migrations ORDER BY version")
+			.all() as Array<{ version: number }>;
+		expect(migrations.length).toBe(7);
+	});
+
 	test("DB with existing v1 schema only gets v2 migration", () => {
 		db = createFreshDb();
 

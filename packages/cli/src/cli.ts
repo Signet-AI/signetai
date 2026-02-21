@@ -51,6 +51,7 @@ import {
 	IDENTITY_FILES,
 	detectSchema,
 	ensureUnifiedSchema,
+	runMigrations,
 	parseSimpleYaml,
 	formatYaml,
 	symlinkSkills,
@@ -1221,22 +1222,12 @@ async function existingSetupWizard(
 		const dbPath = join(basePath, "memory", "memories.db");
 		const db = Database(dbPath);
 
-		// Use ensureUnifiedSchema to create or migrate to the unified schema
+		// Migrate legacy schema if needed, then run versioned migrations
 		const migrationResult = ensureUnifiedSchema(db);
 		if (migrationResult.migrated) {
 			spinner.text = `Migrated ${migrationResult.memoriesMigrated} memories from ${migrationResult.fromSchema} schema...`;
 		}
-
-		// Record setup in schema_migrations
-		db.exec(`
-			CREATE TABLE IF NOT EXISTS schema_migrations (
-				version INTEGER PRIMARY KEY,
-				applied_at TEXT NOT NULL,
-				checksum TEXT NOT NULL
-			);
-			INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
-			VALUES (2, '${new Date().toISOString()}', 'setup');
-		`);
+		runMigrations(db);
 
 		// 4. Import memory logs to SQLite if available
 		let importResult: ImportResult | null = null;
@@ -1964,17 +1955,8 @@ ${agentName} is a helpful assistant.
 		const dbPath = join(basePath, "memory", "memories.db");
 		const db = Database(dbPath);
 
-		// Use ensureUnifiedSchema for consistent schema management
 		ensureUnifiedSchema(db);
-		db.exec(`
-			CREATE TABLE IF NOT EXISTS schema_migrations (
-				version INTEGER PRIMARY KEY,
-				applied_at TEXT NOT NULL,
-				checksum TEXT NOT NULL
-			);
-			INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
-			VALUES (2, '${new Date().toISOString()}', 'quick-setup');
-		`);
+		runMigrations(db);
 
 		db.close();
 
@@ -2374,18 +2356,7 @@ async function migrateSchema(options: { path?: string }) {
 			console.log(chalk.dim("  No migration needed"));
 		}
 
-		// Record migration in schema_migrations table
-		const now = new Date().toISOString();
-		writeDb.exec(`
-			CREATE TABLE IF NOT EXISTS schema_migrations (
-				version INTEGER PRIMARY KEY,
-				applied_at TEXT NOT NULL,
-				checksum TEXT NOT NULL
-			);
-
-			INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
-			VALUES (2, '${now}', 'schema-migration');
-		`);
+		runMigrations(writeDb);
 
 		writeDb.close();
 

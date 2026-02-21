@@ -93,6 +93,27 @@ function currentVersion(db: MigrationDb): number {
 }
 
 /**
+ * Detect and repair the v0.1.65 CLI bug where schema_migrations was
+ * stamped at version 2 without actually running migration 002.
+ *
+ * If version >= 2 but the memories table lacks the `content_hash`
+ * column (added by 002), the version rows are bogus. Delete them
+ * and return 0 so all migrations re-run. This is safe because every
+ * migration uses CREATE IF NOT EXISTS / addColumnIfMissing.
+ */
+function repairBogusVersion(db: MigrationDb, current: number): number {
+	if (current < 2) return current;
+	const cols = db.prepare("PRAGMA table_info(memories)").all() as ReadonlyArray<
+		Record<string, unknown>
+	>;
+	const hasContentHash = cols.some((r) => r.name === "content_hash");
+	if (hasContentHash) return current;
+	// Version was stamped by old CLI without running actual migrations
+	db.exec("DELETE FROM schema_migrations WHERE version > 0");
+	return 0;
+}
+
+/**
  * Run all pending migrations against `db`.
  *
  * Idempotent — safe to call on every startup. Migrations that have
@@ -103,7 +124,7 @@ function currentVersion(db: MigrationDb): number {
 export function runMigrations(db: MigrationDb): void {
 	ensureMetaTables(db);
 
-	const current = currentVersion(db);
+	const current = repairBogusVersion(db, currentVersion(db));
 
 	for (const migration of MIGRATIONS) {
 		if (migration.version <= current) continue;
