@@ -92,4 +92,4 @@ Full docs at [signetai.sh/docs](https://signetai.sh/docs)
 
 ## License
 
-MIT
+Apache-2.0
