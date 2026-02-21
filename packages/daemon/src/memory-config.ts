@@ -44,6 +44,12 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	rerankerModel: "",
 	rerankerTopN: 20,
 	rerankerTimeoutMs: 2000,
+	maintenanceIntervalMs: 30 * 60 * 1000, // 30 min
+	maintenanceMode: "observe",
+	repairReembedCooldownMs: 300000, // 5 min
+	repairReembedHourlyBudget: 10,
+	repairRequeueCooldownMs: 60000, // 1 min
+	repairRequeueHourlyBudget: 50,
 };
 
 export interface ResolvedMemoryConfig {
@@ -140,6 +146,40 @@ export function loadPipelineConfig(
 			100,
 			30000,
 			DEFAULT_PIPELINE_V2.rerankerTimeoutMs,
+		),
+		maintenanceIntervalMs: clampPositive(
+			raw.maintenanceIntervalMs,
+			60000,
+			86400000,
+			DEFAULT_PIPELINE_V2.maintenanceIntervalMs,
+		),
+		maintenanceMode:
+			raw.maintenanceMode === "execute"
+				? "execute"
+				: DEFAULT_PIPELINE_V2.maintenanceMode,
+		repairReembedCooldownMs: clampPositive(
+			raw.repairReembedCooldownMs,
+			10000,
+			3600000,
+			DEFAULT_PIPELINE_V2.repairReembedCooldownMs,
+		),
+		repairReembedHourlyBudget: clampPositive(
+			raw.repairReembedHourlyBudget,
+			1,
+			1000,
+			DEFAULT_PIPELINE_V2.repairReembedHourlyBudget,
+		),
+		repairRequeueCooldownMs: clampPositive(
+			raw.repairRequeueCooldownMs,
+			5000,
+			3600000,
+			DEFAULT_PIPELINE_V2.repairRequeueCooldownMs,
+		),
+		repairRequeueHourlyBudget: clampPositive(
+			raw.repairRequeueHourlyBudget,
+			1,
+			1000,
+			DEFAULT_PIPELINE_V2.repairRequeueHourlyBudget,
 		),
 	};
 }

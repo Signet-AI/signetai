@@ -188,6 +188,12 @@ const PIPELINE_CFG: PipelineV2Config = {
 	rerankerModel: "",
 	rerankerTopN: 20,
 	rerankerTimeoutMs: 2000,
+	maintenanceIntervalMs: 1800000,
+	maintenanceMode: "observe" as const,
+	repairReembedCooldownMs: 300000,
+	repairReembedHourlyBudget: 10,
+	repairRequeueCooldownMs: 60000,
+	repairRequeueHourlyBudget: 50,
 };
 
 const PHASE_C_CFG: PipelineV2Config = {

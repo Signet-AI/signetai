@@ -117,6 +117,12 @@ export interface PipelineV2Config {
 	readonly rerankerModel: string;
 	readonly rerankerTopN: number;
 	readonly rerankerTimeoutMs: number;
+	readonly maintenanceIntervalMs: number;
+	readonly maintenanceMode: "observe" | "execute";
+	readonly repairReembedCooldownMs: number;
+	readonly repairReembedHourlyBudget: number;
+	readonly repairRequeueCooldownMs: number;
+	readonly repairRequeueHourlyBudget: number;
 }
 
 // -- Status/union constants --

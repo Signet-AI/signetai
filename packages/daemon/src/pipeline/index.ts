@@ -11,13 +11,19 @@ import {
 	DEFAULT_RETENTION,
 	type RetentionHandle,
 } from "./retention-worker";
+import {
+	startMaintenanceWorker,
+	type MaintenanceHandle,
+} from "./maintenance-worker";
 import type { DecisionConfig } from "./decision";
+import type { ProviderTracker } from "../diagnostics";
 import { logger } from "../logger";
 
 export { enqueueExtractionJob } from "./worker";
 export type { WorkerHandle } from "./worker";
 export type { LlmProvider } from "./provider";
 export type { RetentionHandle, RetentionConfig } from "./retention-worker";
+export type { MaintenanceHandle } from "./maintenance-worker";
 
 // ---------------------------------------------------------------------------
 // Singleton state
@@ -25,6 +31,7 @@ export type { RetentionHandle, RetentionConfig } from "./retention-worker";
 
 let workerHandle: WorkerHandle | null = null;
 let retentionHandle: RetentionHandle | null = null;
+let maintenanceHandle: MaintenanceHandle | null = null;
 
 // ---------------------------------------------------------------------------
 // Start / Stop
@@ -39,6 +46,7 @@ export function startPipeline(
 		cfg: EmbeddingConfig,
 	) => Promise<number[] | null>,
 	searchCfg: { alpha: number; top_k: number; min_score: number },
+	providerTracker?: ProviderTracker,
 ): void {
 	if (workerHandle) {
 		logger.warn("pipeline", "Pipeline already running, skipping start");
@@ -63,6 +71,16 @@ export function startPipeline(
 		retentionHandle = startRetentionWorker(accessor, DEFAULT_RETENTION);
 	}
 
+	// Maintenance worker (F3) — runs alongside retention
+	if (!maintenanceHandle && providerTracker) {
+		maintenanceHandle = startMaintenanceWorker(
+			accessor,
+			pipelineCfg,
+			providerTracker,
+			retentionHandle,
+		);
+	}
+
 	logger.info("pipeline", "Pipeline started", {
 		mode:
 			pipelineCfg.enabled &&
@@ -74,6 +92,10 @@ export function startPipeline(
 }
 
 export async function stopPipeline(): Promise<void> {
+	if (maintenanceHandle) {
+		maintenanceHandle.stop();
+		maintenanceHandle = null;
+	}
 	if (retentionHandle) {
 		retentionHandle.stop();
 		retentionHandle = null;

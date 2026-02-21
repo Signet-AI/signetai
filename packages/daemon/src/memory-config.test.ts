@@ -293,4 +293,51 @@ describe("loadPipelineConfig", () => {
 		expect(result.rerankerTopN).toBe(20);
 		expect(result.rerankerTimeoutMs).toBe(2000);
 	});
+
+	it("loads maintenance and repair config fields", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					maintenanceIntervalMs: 120000,
+					maintenanceMode: "execute",
+					repairReembedCooldownMs: 60000,
+					repairReembedHourlyBudget: 5,
+					repairRequeueCooldownMs: 30000,
+					repairRequeueHourlyBudget: 100,
+				},
+			},
+		});
+
+		expect(result.maintenanceIntervalMs).toBe(120000);
+		expect(result.maintenanceMode).toBe("execute");
+		expect(result.repairReembedCooldownMs).toBe(60000);
+		expect(result.repairReembedHourlyBudget).toBe(5);
+		expect(result.repairRequeueCooldownMs).toBe(30000);
+		expect(result.repairRequeueHourlyBudget).toBe(100);
+	});
+
+	it("uses defaults for maintenance config when absent", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { enabled: true } },
+		});
+
+		expect(result.maintenanceIntervalMs).toBe(1800000);
+		expect(result.maintenanceMode).toBe("observe");
+		expect(result.repairReembedCooldownMs).toBe(300000);
+		expect(result.repairReembedHourlyBudget).toBe(10);
+		expect(result.repairRequeueCooldownMs).toBe(60000);
+		expect(result.repairRequeueHourlyBudget).toBe(50);
+	});
+
+	it("rejects invalid maintenanceMode values", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					maintenanceMode: "turbo",
+				},
+			},
+		});
+
+		expect(result.maintenanceMode).toBe("observe");
+	});
 });

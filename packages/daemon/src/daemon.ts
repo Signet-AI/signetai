@@ -60,6 +60,15 @@ import { startPipeline, stopPipeline, enqueueExtractionJob } from "./pipeline";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import { rerank, noopReranker, type RerankCandidate } from "./pipeline/reranker";
+import { createProviderTracker, getDiagnostics } from "./diagnostics";
+import {
+	createRateLimiter,
+	requeueDeadJobs,
+	releaseStaleLeases,
+	checkFtsConsistency,
+	triggerRetentionSweep,
+	type RepairContext,
+} from "./repair-actions";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -73,6 +82,10 @@ const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
 // Config
 const PORT = parseInt(process.env.SIGNET_PORT || "3850", 10);
 const HOST = process.env.SIGNET_HOST || "localhost";
+
+// Autonomous maintenance singletons
+const providerTracker = createProviderTracker();
+const repairLimiter = createRateLimiter();
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
 	if (!existsSync(packageJsonPath)) {
@@ -4286,6 +4299,16 @@ app.post("/api/update/run", async (c) => {
 app.get("/api/status", (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
 
+	let health: { score: number; status: string } | undefined;
+	try {
+		const report = getDbAccessor().withReadDb((db) =>
+			getDiagnostics(db, providerTracker),
+		);
+		health = report.composite;
+	} catch {
+		// DB not ready yet — omit health
+	}
+
 	return c.json({
 		status: "running",
 		version: CURRENT_VERSION,
@@ -4297,6 +4320,7 @@ app.get("/api/status", (c) => {
 		agentsDir: AGENTS_DIR,
 		memoryDb: existsSync(MEMORY_DB),
 		pipelineV2: config.pipelineV2,
+		...(health ? { health } : {}),
 		embedding: {
 			provider: config.embedding.provider,
 			model: config.embedding.model,
@@ -4307,6 +4331,100 @@ app.get("/api/status", (c) => {
 				: {}),
 		},
 	});
+});
+
+// ============================================================================
+// Diagnostics & Repair (Phase F)
+// ============================================================================
+
+app.get("/api/diagnostics", (c) => {
+	const report = getDbAccessor().withReadDb((db) =>
+		getDiagnostics(db, providerTracker),
+	);
+	return c.json(report);
+});
+
+app.get("/api/diagnostics/:domain", (c) => {
+	const domain = c.req.param("domain");
+	const report = getDbAccessor().withReadDb((db) =>
+		getDiagnostics(db, providerTracker),
+	);
+
+	const domainData = report[domain as keyof typeof report];
+	if (!domainData || typeof domainData === "string") {
+		return c.json({ error: `Unknown domain: ${domain}` }, 400);
+	}
+	return c.json(domainData);
+});
+
+function resolveRepairContext(c: Context): RepairContext {
+	const reason = c.req.header("x-signet-reason") ?? "manual repair";
+	const actor = c.req.header("x-signet-actor") ?? "operator";
+	const actorType = (c.req.header("x-signet-actor-type") ?? "operator") as
+		| "operator"
+		| "agent"
+		| "daemon";
+	const requestId = c.req.header("x-signet-request-id") ?? crypto.randomUUID();
+	return { reason, actor, actorType, requestId };
+}
+
+app.post("/api/repair/requeue-dead", (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	const result = requeueDeadJobs(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+	);
+	return c.json(result, result.success ? 200 : 429);
+});
+
+app.post("/api/repair/release-leases", (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	const result = releaseStaleLeases(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+	);
+	return c.json(result, result.success ? 200 : 429);
+});
+
+app.post("/api/repair/check-fts", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	let repair = false;
+	try {
+		const body = await c.req.json();
+		repair = body?.repair === true;
+	} catch {
+		// no body or invalid JSON — default repair=false
+	}
+	const result = checkFtsConsistency(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+		repair,
+	);
+	return c.json(result, result.success ? 200 : 429);
+});
+
+app.post("/api/repair/retention-sweep", (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	// The retention handle is internal to pipeline — import not needed,
+	// we can call the repair action with a minimal sweep handle via
+	// the retention worker's public API. For now, return 501 if the
+	// retention worker isn't running (pipeline not started).
+	return c.json({
+		action: "triggerRetentionSweep",
+		success: false,
+		affected: 0,
+		message: "Use the maintenance worker for automated sweeps; manual sweep via this endpoint is not yet wired",
+	}, 501);
 });
 
 // ============================================================================
@@ -5758,6 +5876,7 @@ async function main() {
 			memoryCfg.embedding,
 			fetchEmbedding,
 			memoryCfg.search,
+			providerTracker,
 		);
 	}
 

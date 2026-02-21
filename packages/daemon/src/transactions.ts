@@ -162,7 +162,7 @@ interface MutableMemoryRow {
 	is_deleted: number;
 }
 
-function insertHistoryEvent(
+export function insertHistoryEvent(
 	db: WriteDb,
 	args: {
 		readonly memoryId: string;
