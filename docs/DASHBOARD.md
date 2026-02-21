@@ -1,150 +1,129 @@
-# Dashboard
+Dashboard
+=========
 
-Signet's web dashboard at `http://localhost:3850` gives you a visual interface for your agent's memory, config, skills, and more.
+The Signet dashboard is a SvelteKit static app served by the daemon at
+`http://localhost:3850`. It is a supplementary visual interface — useful
+for browsing memory, editing config files, and inspecting daemon state,
+but not the primary way to interact with Signet. The CLI and harness
+integrations are the primary interfaces.
 
----
 
-## Opening the Dashboard
+Accessing the Dashboard
+-----------------------
+
+The daemon must be running first:
+
+```bash
+signet start
+```
+
+Then visit `http://localhost:3850` in your browser, or run:
 
 ```bash
 signet dashboard
 ```
 
-This opens your default browser. If the daemon isn't running, it starts it first.
+The `signet dashboard` command opens your default browser. If the daemon
+is not already running, it starts it first.
 
-You can also navigate directly to `http://localhost:3850` — the dashboard is served statically by the daemon on that port.
 
----
+Layout
+------
 
-## Config Editor
+The dashboard is a single-page app with three regions:
 
-The config editor loads all `.md` and `.yaml` files from `~/.agents/`. It shows them as editable tabs.
+- **Left sidebar** — agent identity summary, connector status, and a
+  file list for config editing.
+- **Center panel** — the main tabbed workspace.
+- **Right sidebar** — a compact memory panel with quick search. Hidden
+  when the Memory tab is active.
 
-**Files shown (in priority order):**
-- `agent.yaml`
-- `AGENTS.md`
-- `SOUL.md`
-- `IDENTITY.md`
-- `USER.md`
-- Any other `.md` or `.yaml` files in `~/.agents/`
+The header shows daemon version, total memory count, and connected
+harness count.
 
-**How to save:**
 
-Use `Cmd+S` (or `Ctrl+S`) to save the current file. Changes are written to disk immediately and the daemon's file watcher picks them up automatically. If `AGENTS.md` is saved, harness syncing happens within 2 seconds.
+Left Sidebar
+------------
 
-The editor is syntax-aware for markdown and YAML but doesn't enforce schema validation — you're working with plain text files.
+The left sidebar has three sections.
 
----
+**Identity** shows the agent name and creature type from `IDENTITY.md`,
+plus a quick count of total memories and active connectors.
 
-## Embeddings Visualization
+**Connectors** lists each configured harness (Claude Code, OpenCode,
+OpenClaw, etc.) and whether the harness config file exists on disk. A
+green indicator means the file is present and the harness is synced. If
+a connector shows `OFF`, run `signet sync` or save `AGENTS.md` to
+trigger a re-sync.
 
-The **Embeddings** tab renders a 2D projection of your memory space. Each memory that has a vector embedding appears as a dot.
+**Config Files** lists all `.md` and `.yaml` files found in `~/.agents/`.
+Clicking a file opens it in the Config editor.
 
-- **Layout:** UMAP dimensionality reduction brings similar memories close together. Clusters represent related topics.
-- **Color coding:** dots are colored by source harness (who saved the memory).
-- **Edges:** KNN edges connect each memory to its nearest neighbors — denser areas indicate tightly related content.
-- **Interaction:** click a dot to see the memory content and find similar memories.
 
-If you have no embeddings yet (either because you haven't saved memories or because the embedding provider isn't configured), this view shows an empty graph.
+Tabs
+----
 
-**To populate embeddings:** save memories via `/remember` in any harness, or use the API. Embedding generation is asynchronous — memories appear in the keyword search immediately but may take a moment to show in the visualization.
+**Config** — A plain-text editor for your agent's identity files. Files
+are loaded from `~/.agents/`. Use `Cmd+S` / `Ctrl+S` to save. Saving
+`AGENTS.md` triggers harness sync within 2 seconds.
 
----
+**Memory** — Browse and search your memory database. Search runs hybrid
+(semantic + keyword) lookup. You can filter by type, tags, source
+harness, pinned status, importance score, and date. Each memory card has
+a "Find Similar" button that runs a vector similarity search. The count
+shown reflects your current filter state.
 
-## Memory Browser
+**Embeddings** — A 2D graph of your memory space. Memories with vector
+embeddings appear as dots; UMAP dimensionality reduction clusters
+related memories together. Dots are colored by source harness. Click a
+dot to inspect the memory content and view its nearest neighbors. If no
+embeddings exist, the graph is empty.
 
-The memory browser lets you search, filter, and explore your memories.
+**Logs** — Real-time daemon log stream via Server-Sent Events. Entries
+are color-coded by level (info, warn, error). You can filter by level
+and toggle auto-scroll.
 
-### Search
+**Secrets** — Shows stored secret names. Values are always masked. You
+can add new secrets (via a password input) or delete existing ones. For
+CLI use, prefer `signet secret put <NAME>`.
 
-Type in the search box to run a hybrid search (semantic + keyword). Results appear in order of relevance score. The score and search method (hybrid, vector, or keyword) are shown for each result.
+**Skills** — Lists installed skills and lets you browse the skills.sh
+registry. Click a skill name to read its full `SKILL.md` before
+installing. Already-installed skills are marked.
 
-### Filters
 
-The filter panel on the side lets you narrow results by:
+API-Only Fallback
+-----------------
 
-| Filter | Values |
-|--------|--------|
-| Type | fact, preference, decision, rule, learning, issue, session_summary |
-| Tags | comma-separated tag names |
-| Source | which harness saved it (claude-code, openclaw, etc.) |
-| Pinned | show only pinned/critical memories |
-| Importance | minimum score (0–1) |
-| Date | memories saved since a date |
+If the dashboard build is missing (e.g., running the daemon from source
+without building the frontend), visiting `http://localhost:3850` shows
+a minimal HTML page listing available API endpoints instead.
 
-Filters can be combined. An empty search with filters returns memories matching only the filter criteria.
+Build the dashboard to restore the full UI:
 
-### Memory card actions
-
-Each memory card has a **Find Similar** button that runs a vector similarity search against that memory's embedding, returning the most conceptually related memories.
-
----
-
-## Skills Panel
-
-The skills panel shows installed skills and lets you browse and install from skills.sh.
-
-**Installed tab:** lists skills with name, description, and version. Each skill has a remove button.
-
-**Browse tab:** search the skills.sh registry. Results show name, description, and install count. Skills already installed are marked. Click Install to add a skill.
-
-**Detail view:** clicking a skill name shows the full SKILL.md content, so you can read what the skill does before installing.
-
----
-
-## Harness Status
-
-The **Harnesses** section shows which harness config files exist on disk:
-
-| Harness | File checked |
-|---------|-------------|
-| Claude Code | `~/.claude/CLAUDE.md` |
-| OpenCode | `~/.config/opencode/AGENTS.md` |
-| OpenClaw (Source) | `~/.agents/AGENTS.md` |
-
-A green check means the file exists. Missing files mean that harness isn't configured or the auto-sync hasn't run yet.
-
-Click **Regenerate** to manually trigger a re-sync of all harness configs from AGENTS.md.
-
----
-
-## Secrets Panel
-
-The secrets panel (in Settings) shows all stored secret names. Values are always masked — there is no way to view a stored secret value through the dashboard.
-
-You can:
-- Add a new secret (enters via a password input field)
-- Delete a secret
-
-For adding secrets from the command line, use `signet secret put <NAME>`.
-
----
-
-## Logs Viewer
-
-The logs section shows recent daemon logs in real-time via Server-Sent Events. Log entries are color-coded by level:
-
-- `INFO` — normal operations (gray)
-- `WARN` — non-fatal issues (yellow)
-- `ERROR` — errors worth investigating (red)
-
-You can filter by log level and category (memory, harness, git, skills, etc.).
-
----
-
-## API-Only Mode
-
-If the dashboard build is not present (e.g., you're running the daemon from source without building the frontend), the daemon falls back to an API-only mode. Visiting `http://localhost:3850` shows a minimal HTML page listing available API endpoints.
-
-To build the dashboard:
 ```bash
 cd packages/cli/dashboard
 bun run build
 ```
 
----
 
-## Port Configuration
+Development
+-----------
+
+To run the dashboard in dev mode with hot reload:
+
+```bash
+cd packages/cli/dashboard
+bun install
+bun run dev
+```
+
+This starts a Vite dev server at `http://localhost:5173`. The daemon
+must still be running at port 3850 for API calls to work.
+
+
+Port Configuration
+------------------
 
 The default port is 3850. To change it:
 
@@ -152,4 +131,4 @@ The default port is 3850. To change it:
 SIGNET_PORT=4000 signet start
 ```
 
-Or set it in your environment permanently. The dashboard URL will change accordingly.
+The dashboard URL changes accordingly.

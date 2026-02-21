@@ -1,10 +1,12 @@
-# Signet CLI Reference
+Signet CLI Reference
+====================
 
 Complete reference for all Signet CLI commands.
 
 ---
 
-## Installation
+Installation
+---
 
 ```bash
 # Via npm/npx
@@ -17,25 +19,33 @@ bunx signet setup
 curl -sL https://signetai.sh/install | bash
 ```
 
-Runtime operations that need package execution (skills/update install) follow the primary package manager captured during setup, with deterministic fallback when unavailable.
+Runtime operations that need package execution (skills, updates) follow
+the primary package manager captured during setup, with deterministic
+fallback when unavailable.
 
 ---
 
-## Commands Overview
+Commands Overview
+---
 
 | Command | Description |
 |---------|-------------|
 | `signet` | Interactive TUI menu |
 | `signet setup` | First-time setup wizard |
 | `signet config` | Interactive config editor |
+| `signet status` | Show daemon and agent status |
+| `signet dashboard` | Open web UI in browser |
 | `signet start` | Start the daemon |
 | `signet stop` | Stop the daemon |
 | `signet restart` | Restart the daemon |
-| `signet status` | Show daemon and agent status |
-| `signet dashboard` | Open web UI in browser |
 | `signet logs` | View daemon logs |
+| `signet daemon` | Grouped daemon subcommands |
+| `signet remember` | Save a memory |
+| `signet recall` | Search memories |
 | `signet migrate` | Import from other platforms |
 | `signet migrate-schema` | Migrate database to unified schema |
+| `signet migrate-vectors` | Migrate BLOB vectors to sqlite-vec format |
+| `signet sync` | Sync built-in templates and skills |
 | `signet secret` | Manage encrypted secrets |
 | `signet skill` | Manage agent skills from registry |
 | `signet git` | Git sync management for ~/.agents |
@@ -44,7 +54,8 @@ Runtime operations that need package execution (skills/update install) follow th
 
 ---
 
-## `signet` (No Arguments)
+`signet` (No Arguments)
+---
 
 Opens an interactive TUI menu for common operations.
 
@@ -56,36 +67,38 @@ Opens an interactive TUI menu for common operations.
     PID: 12345 | Uptime: 2h 15m
 
 ? What would you like to do?
-  🌐 Open dashboard
-  📊 View status
-  ⚙️  Configure settings
-  🔗 Manage harnesses
-  📜 View logs
-  🔄 Restart daemon
-  ⏹  Stop daemon
-  👋 Exit
+  Open dashboard
+  View status
+  Configure settings
+  Manage harnesses
+  View logs
+  Restart daemon
+  Stop daemon
+  Exit
 ```
 
 If the daemon is not running, you'll be prompted to start it.
 
 ---
 
-## `signet setup`
+`signet setup`
+---
 
-Interactive first-time setup wizard. Creates the `~/.agents/` directory and all necessary files.
+Interactive first-time setup wizard. Creates the `~/.agents/` directory
+and all necessary files.
 
 ```bash
 signet setup
 signet setup --path /custom/path
 ```
 
-### Options
+Options:
 
 | Option | Description |
 |--------|-------------|
 | `-p, --path <path>` | Custom base path (default: `~/.agents`) |
 
-### Wizard Steps
+Wizard steps:
 
 1. **Agent Name** - What to call your agent
 2. **Harnesses** - Which AI platforms you use:
@@ -96,28 +109,30 @@ signet setup --path /custom/path
    - Windsurf
    - ChatGPT
    - Gemini
-3. **OpenClaw Workspace** - Prompt appears only when an existing OpenClaw config is detected; workspace is patched only if you opt in
+3. **OpenClaw Workspace** - Appears only when an existing OpenClaw config
+   is detected; workspace is patched only if you opt in
 4. **Description** - Short agent description
 5. **Embedding Provider**:
-    - Ollama (local, recommended)
-    - OpenAI API
-    - Skip embeddings
+   - Ollama (local, recommended)
+   - OpenAI API
+   - Skip embeddings
 6. **Embedding Model** - Based on provider:
-    - Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
-    - OpenAI: text-embedding-3-small, text-embedding-3-large
-   - Ollama selections run preflight checks for binary availability, service health, and model presence
-   - If checks fail, setup offers retry, switch-to-OpenAI, or continue-without-embeddings
+   - Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
+   - OpenAI: text-embedding-3-small, text-embedding-3-large
+   - Ollama selections run preflight checks for binary availability,
+     service health, and model presence; if checks fail, setup offers
+     retry, switch-to-OpenAI, or continue-without-embeddings
 7. **Search Balance** - Semantic vs keyword weighting
 8. **Advanced Settings** (optional):
-   - top_k: Search candidates per source
-   - min_score: Minimum search score threshold
-   - session_budget: Context character limit
-   - decay_rate: Memory importance decay
+   - `top_k` - Search candidates per source
+   - `min_score` - Minimum search score threshold
+   - `session_budget` - Context character limit
+   - `decay_rate` - Memory importance decay
 9. **Import** - Optionally import from another platform
 10. **Git** - Initialize version control
 11. **Launch Dashboard** - Open web UI
 
-### What Gets Created
+What gets created:
 
 ```
 ~/.agents/
@@ -134,8 +149,6 @@ signet setup --path /custom/path
     └── logs/
 ```
 
-### Harness Configurations
-
 If harnesses are selected, their configs are also created:
 
 - **Claude Code**: `~/.claude/settings.json` with hooks, `~/.claude/CLAUDE.md`
@@ -144,7 +157,8 @@ If harnesses are selected, their configs are also created:
 
 ---
 
-## `signet config`
+`signet config`
+---
 
 Interactive configuration editor for modifying `~/.agents/agent.yaml`.
 
@@ -152,7 +166,7 @@ Interactive configuration editor for modifying `~/.agents/agent.yaml`.
 signet config
 ```
 
-### Sections
+Sections:
 
 1. **Agent identity** - Name and description
 2. **Harnesses** - AI platform selection
@@ -165,86 +179,23 @@ Changes are saved to `agent.yaml` immediately.
 
 ---
 
-## `signet start`
-
-Start the Signet daemon if not already running.
-
-```bash
-signet start
-```
-
-### Output
-
-```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-✔ Daemon started
-  Dashboard: http://localhost:3850
-```
-
-If already running:
-```
-  Daemon is already running
-```
-
+`signet status`
 ---
 
-## `signet stop`
-
-Stop the running Signet daemon.
-
-```bash
-signet stop
-```
-
-### Output
-
-```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-✔ Daemon stopped
-```
-
----
-
-## `signet restart`
-
-Restart the Signet daemon.
-
-```bash
-signet restart
-```
-
-### Output
-
-```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-✔ Daemon restarted
-  Dashboard: http://localhost:3850
-```
-
----
-
-## `signet status`
-
-Show comprehensive status of Signet installation.
+Show comprehensive status of the Signet installation.
 
 ```bash
 signet status
 signet status --path /custom/path
 ```
 
-### Options
+Options:
 
 | Option | Description |
 |--------|-------------|
 | `-p, --path <path>` | Custom base path |
 
-### Output
+Output:
 
 ```
   ◈ signet v0.1.0
@@ -269,7 +220,8 @@ signet status --path /custom/path
 
 ---
 
-## `signet dashboard`
+`signet dashboard`
+---
 
 Open the Signet web dashboard in your default browser.
 
@@ -278,7 +230,7 @@ signet dashboard
 signet ui          # Alias
 ```
 
-### Options
+Options:
 
 | Option | Description |
 |--------|-------------|
@@ -288,43 +240,126 @@ If the daemon is not running, it will be started automatically.
 
 ---
 
-## `signet logs`
+Daemon Commands
+---
+
+Daemon operations are available both as top-level shortcuts and under the
+`signet daemon` subcommand group. Both forms are equivalent.
+
+```bash
+# Top-level shortcuts (backwards compatible)
+signet start
+signet stop
+signet restart
+signet logs
+
+# Grouped form
+signet daemon start
+signet daemon stop
+signet daemon restart
+signet daemon status
+signet daemon logs
+```
+
+### `signet start` / `signet daemon start`
+
+Start the Signet daemon if not already running.
+
+```
+  ◈ signet v0.1.0
+  own your agent. bring it anywhere.
+
+✔ Daemon started
+  Dashboard: http://localhost:3850
+```
+
+### `signet stop` / `signet daemon stop`
+
+Stop the running Signet daemon.
+
+### `signet restart` / `signet daemon restart`
+
+Stop and start the daemon. Useful after installing an update.
+
+### `signet logs` / `signet daemon logs`
 
 View daemon logs.
 
 ```bash
 signet logs
 signet logs -n 100
-signet logs --follow    # Not yet implemented
+signet logs --follow
+signet logs --level warn
+signet logs --category memory
 ```
 
-### Options
+Options:
 
 | Option | Description |
 |--------|-------------|
 | `-n, --lines <n>` | Number of lines to show (default: 50) |
-| `-f, --follow` | Follow log output (planned) |
+| `-f, --follow` | Follow log output in real-time |
+| `-l, --level <level>` | Filter by level: `debug`, `info`, `warn`, `error` |
+| `-c, --category <category>` | Filter by category: `daemon`, `api`, `memory`, `sync`, `git`, `watcher` |
 
-### Output
+---
+
+`signet remember`
+---
+
+Save a memory to the database. The daemon embeds it for vector search if
+an embedding provider is configured.
+
+```bash
+signet remember "User prefers dark mode"
+signet remember "critical: never push to main" --critical
+signet remember "deploy runs on Friday" --tags devops,deploy --who user
+```
+
+Options:
+
+| Option | Description |
+|--------|-------------|
+| `-w, --who <who>` | Who is remembering (default: `user`) |
+| `-t, --tags <tags>` | Comma-separated tags |
+| `-i, --importance <n>` | Importance score, 0-1 (default: 0.7) |
+| `--critical` | Mark as critical/pinned |
+
+Output:
 
 ```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-  Recent Logs
-
-[2025-02-17T18:00:00.000Z] [INFO] Signet Daemon starting...
-[2025-02-17T18:00:00.001Z] [INFO]   Agents dir: /home/user/.agents
-[2025-02-17T18:00:00.002Z] [INFO]   Port: 3850
-[2025-02-17T18:00:00.003Z] [INFO]   PID: 12345
-[2025-02-17T18:00:00.004Z] [INFO]   File watcher started
-[2025-02-17T18:00:00.100Z] [INFO]   Server listening on http://localhost:3850
-[2025-02-17T18:00:00.101Z] [INFO] Daemon ready
+✔ Saved memory: mem_abc123 (embedded)
+  Tags: devops,deploy
 ```
 
 ---
 
-## `signet migrate`
+`signet recall`
+---
+
+Search memories using hybrid vector + keyword search.
+
+```bash
+signet recall "user preferences"
+signet recall "deploy process" --limit 5
+signet recall "auth" --tags backend --who claude-code
+signet recall "secrets" --json
+```
+
+Options:
+
+| Option | Description |
+|--------|-------------|
+| `-l, --limit <n>` | Max results (default: 10) |
+| `-t, --type <type>` | Filter by memory type |
+| `--tags <tags>` | Filter by tags (comma-separated) |
+| `--who <who>` | Filter by author |
+| `--json` | Output raw JSON |
+
+---
+
+`signet migrate`
+---
 
 Import conversations and memories from other platforms.
 
@@ -333,119 +368,121 @@ signet migrate
 signet migrate chatgpt
 ```
 
-### Supported Sources
+Supported sources:
 
 - **ChatGPT** - Import from conversations.json export
 - **Claude** - Import from Claude export
 - **Gemini** - Import from Google AI Studio export
 - **Custom** - Custom JSON format
 
-### Interactive Flow
-
-1. Select source platform
-2. Provide path to export file
-3. Import process runs
-4. Confirmation of imported data
+The interactive flow prompts for the source platform and the path to the
+export file, then confirms how many items were imported.
 
 ---
 
-## `signet migrate-schema`
+`signet migrate-schema`
+---
 
-Migrate an existing memory database to Signet's unified schema. This is useful when:
-- Copying `~/.agents/` from another machine with a different schema
-- Upgrading from an older Signet version
-- Using a database created by the Python memory system
+Migrate an existing memory database to Signet's unified schema. Useful
+when upgrading from an older version or copying `~/.agents/` between
+machines.
 
 ```bash
 signet migrate-schema
 signet migrate-schema --path /custom/path
 ```
 
-### Supported Schemas
+Supported source schemas:
 
-Signet can detect and migrate from:
+| Schema | Source |
+|--------|--------|
+| `python` | Original Python memory system |
+| `cli-v1` | Early Signet CLI (v0.1.x) |
+| `core` | Current unified schema (no migration needed) |
 
-| Schema | Source | Notes |
-|--------|--------|-------|
-| **python** | `~/.agents/memory/scripts/memory.py` | Original Python memory system |
-| **cli-v1** | Early Signet CLI | Created by `signet setup` in v0.1.x |
-| **core** | Current unified schema | No migration needed |
+Migration is idempotent - safe to run multiple times. All existing
+memories are preserved. The daemon is stopped and restarted automatically
+during the process.
 
-### Field Mappings
-
-During migration, fields are mapped to preserve data:
-
-| Source Field | Unified Field |
-|--------------|---------------|
-| `who` | `updated_by` |
-| `project` | `category` |
-| `why` | Stored in `tags` as `why:...` |
-| `session_id` | `source_id` |
-| INTEGER `id` | TEXT `migrated_<id>` |
-
-### Output
+Output:
 
 ```
-  ◈ signet v0.1.26
-  own your agent. bring it anywhere.
-
 - Checking database schema...
-ℹ Migrating from python schema...
+  Migrating from python schema...
   ✓ Migrated 261 memories from python to core
 
   Migration complete!
 ```
 
-If the database is already on the unified schema:
-```
-- Checking database schema...
-✔ Database already on unified schema
+---
+
+`signet migrate-vectors`
+---
+
+Migrate existing BLOB-format embeddings to the sqlite-vec format. Run
+this once after upgrading from a version that stored vectors as raw BLOBs.
+
+```bash
+signet migrate-vectors
+signet migrate-vectors --keep-blobs
+signet migrate-vectors --dry-run
 ```
 
-### Safety
+Options:
 
-- Migration is **idempotent** - running multiple times is safe
-- All existing memories are preserved
-- The daemon is automatically stopped and restarted during migration
+| Option | Description |
+|--------|-------------|
+| `--keep-blobs` | Keep the old BLOB column after migration (safer rollback) |
+| `--remove-zvec` | Delete `vectors.zvec` file after successful migration |
+| `--dry-run` | Show what would be migrated without making changes |
 
 ---
 
-## `signet secret`
+`signet sync`
+---
 
-Manage encrypted secrets stored in `~/.agents/secrets.yaml`.
+Sync built-in template files and skills to your `~/.agents/` directory,
+and re-register hooks for any detected harnesses. Run this after an
+upgrade if built-in skills appear stale.
+
+```bash
+signet sync
+```
+
+---
+
+`signet secret`
+---
+
+Manage encrypted secrets stored via the daemon.
 
 ```bash
 signet secret put OPENAI_API_KEY
+signet secret put GITHUB_TOKEN ghp_...   # value inline
 signet secret list
 signet secret delete GITHUB_TOKEN
 signet secret has OPENAI_API_KEY
 ```
 
-### Subcommands
+Subcommands:
 
 | Command | Description |
 |---------|-------------|
-| `signet secret put <name>` | Store a secret (prompts for value) |
-| `signet secret list` | List all secret names (not values) |
-| `signet secret delete <name>` | Delete a secret |
-| `signet secret has <name>` | Check if a secret exists |
+| `signet secret put <name> [value]` | Store a secret; prompts if value omitted |
+| `signet secret list` | List all secret names (never values) |
+| `signet secret delete <name>` | Delete a secret (prompts for confirmation) |
+| `signet secret has <name>` | Check existence; exits 0 if found, 1 if not |
 
-### Output
-
-```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-? Enter value for OPENAI_API_KEY: ********
-
-✔ Secret OPENAI_API_KEY stored
-```
+A `GITHUB_TOKEN` secret is used by `signet git` to authenticate pushes to
+a remote repository.
 
 ---
 
-## `signet skill`
+`signet skill`
+---
 
-Manage agent skills from the skills.sh registry. Skills are installed to `~/.agents/skills/`.
+Manage agent skills from the GitHub-based registry. Skills are installed
+to `~/.agents/skills/` and symlinked into harness config directories.
 
 ```bash
 signet skill list
@@ -455,149 +492,138 @@ signet skill search github
 signet skill show <name>
 ```
 
-### Subcommands
+Subcommands:
 
 | Command | Description |
 |---------|-------------|
 | `signet skill list` | List installed skills |
-| `signet skill install <name>` | Install a skill from registry |
+| `signet skill install <name>` | Install a skill from the registry |
 | `signet skill uninstall <name>` | Remove an installed skill |
-| `signet skill search <query>` | Search the skills registry |
+| `signet skill search <query>` | Search the GitHub skills registry |
 | `signet skill show <name>` | Show skill details |
 
-### Output
-
-```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-  Installed Skills
-
-  browser-use    Automate browser interactions
-  weather        Get weather information
-
-  2 skills installed
-```
+Registry search queries GitHub for repositories tagged `agent-skill` or
+containing a `SKILL.md` file. Unauthenticated searches are limited to
+10 requests per minute.
 
 ---
 
-## `signet git`
+`signet git`
+---
 
-Git sync management for the `~/.agents` directory.
+Git sync management for the `~/.agents` directory. A `GITHUB_TOKEN`
+secret must be set for push operations.
 
 ```bash
-signet git status    # Show git status
-signet git sync      # Pull + push
-signet git pull      # Pull changes
-signet git push      # Push changes
-signet git enable    # Enable auto-sync
-signet git disable   # Disable auto-sync
+signet git status
+signet git sync
+signet git pull
+signet git push
+signet git enable
+signet git enable --interval 600
+signet git disable
 ```
 
-### Subcommands
+Subcommands:
 
 | Command | Description |
 |---------|-------------|
-| `signet git status` | Show working tree status |
+| `signet git status` | Show git status, sync state, and token presence |
 | `signet git sync` | Pull remote changes then push |
 | `signet git pull` | Pull changes from remote |
-| `signet git push` | Push changes to remote |
+| `signet git push` | Push commits to remote |
 | `signet git enable` | Enable daemon auto-sync |
 | `signet git disable` | Disable daemon auto-sync |
 
-### Output
+`signet git enable` options:
 
-```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-  Git Status
-
-  Branch: main
-  Remote: origin
-
-  Changes:
-    M AGENTS.md
-    ?? memory/new-conversation.json
-
-  Auto-sync: enabled
-```
+| Option | Description |
+|--------|-------------|
+| `-i, --interval <seconds>` | Sync interval in seconds (default: 300) |
 
 ---
 
-## `signet hook`
+`signet hook`
+---
 
-Lifecycle hook commands for harness integration. These are typically called by harness connectors, not directly by users.
+Lifecycle hook commands for harness integration. These are called by
+connector packages automatically; you rarely need to invoke them directly.
 
 ```bash
-signet hook session-start      # Run session start hook
-signet hook pre-compaction     # Run pre-compaction hook
-signet hook compaction-complete # Run compaction complete hook
-signet hook synthesis          # Get synthesis prompt
-signet hook synthesis-complete # Complete synthesis
+signet hook session-start --harness claude-code
+signet hook user-prompt-submit --harness claude-code
+signet hook session-end --harness claude-code
+signet hook pre-compaction --harness claude-code
+signet hook compaction-complete --harness claude-code --summary "..."
+signet hook synthesis
+signet hook synthesis-complete --content "..."
 ```
 
-### Subcommands
+Subcommands:
 
 | Command | Description |
 |---------|-------------|
-| `signet hook session-start` | Initialize session, load context |
-| `signet hook pre-compaction` | Prepare for memory compaction |
-| `signet hook compaction-complete` | Finalize compaction |
-| `signet hook synthesis` | Get synthesis prompt for memory generation |
-| `signet hook synthesis-complete` | Mark synthesis as finished |
+| `signet hook session-start` | Initialize session, inject context |
+| `signet hook user-prompt-submit` | Inject relevant memories for a prompt |
+| `signet hook session-end` | Extract and save memories from transcript |
+| `signet hook pre-compaction` | Get summary instructions before compaction |
+| `signet hook compaction-complete` | Save session summary after compaction |
+| `signet hook synthesis` | Get the MEMORY.md synthesis prompt |
+| `signet hook synthesis-complete` | Save synthesized MEMORY.md content |
 
-### Output
-
-```
-  ◈ signet v0.1.0
-  own your agent. bring it anywhere.
-
-  Session Start
-
-  ✓ Loaded 42 memories
-  ✓ Loaded context from MEMORY.md
-  ✓ Session initialized
-```
+Most subcommands require `-H, --harness <harness>` identifying the calling
+platform (e.g. `claude-code`, `opencode`, `openclaw`). If the daemon is
+not running, hooks exit cleanly with code 0 so the harness is not blocked.
 
 ---
 
-## `signet update`
+`signet update`
+---
 
-Check for updates, install them manually, or enable unattended auto-installs.
+Check for updates, install them manually, or configure unattended
+auto-installs. Running `signet update` with no subcommand is equivalent
+to `signet update check`.
 
 ```bash
-signet update check    # Check for updates
-signet update install  # Install updates
-signet update status   # Show auto-update status
-signet update enable   # Enable unattended installs
-signet update disable  # Disable unattended installs
+signet update               # same as check
+signet update check
+signet update check --force
+signet update install
+signet update status
+signet update enable
+signet update enable --interval 3600
+signet update disable
 ```
 
-### Subcommands
+Subcommands:
 
 | Command | Description |
 |---------|-------------|
 | `signet update check` | Check if a newer version is available |
-| `signet update install` | Install the latest version |
-| `signet update status` | Show background auto-update settings and state |
-| `signet update enable` | Enable unattended auto-update installs |
-| `signet update disable` | Disable unattended auto-update installs |
+| `signet update install` | Download and install the latest version |
+| `signet update status` | Show auto-update settings and last result |
+| `signet update enable` | Enable unattended background installs |
+| `signet update disable` | Disable unattended background installs |
 
-### Output
+`signet update check` options:
 
-```
-✔ Update available: v0.1.5
-  Current: v0.1.0
-  Released: 2/18/2026
-  https://github.com/Signet-AI/signetai/releases/tag/v0.1.5
+| Option | Description |
+|--------|-------------|
+| `-f, --force` | Force a fresh check, ignoring cached result |
 
-  Run: signet update install
-```
+`signet update enable` options:
+
+| Option | Description |
+|--------|-------------|
+| `-i, --interval <seconds>` | Check interval in seconds (default: 21600; range: 300-604800) |
+
+After `signet update install` completes, a daemon restart is required to
+run the new version: `signet daemon restart`.
 
 ---
 
-## Environment Variables
+Environment Variables
+---
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -607,7 +633,8 @@ signet update disable  # Disable unattended installs
 
 ---
 
-## Exit Codes
+Exit Codes
+---
 
 | Code | Meaning |
 |------|---------|

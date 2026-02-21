@@ -1,10 +1,12 @@
-# Quickstart
+Quickstart
+===
 
 Get Signet running in about five minutes.
 
 ---
 
-## Prerequisites
+Prerequisites
+---
 
 - Node.js 18+ (or Bun 1.0+)
 - One of: Ollama (for local embeddings) or an OpenAI API key
@@ -12,7 +14,8 @@ Get Signet running in about five minutes.
 
 ---
 
-## Install
+Install
+---
 
 ```bash
 # Via npm/npx
@@ -21,26 +24,31 @@ npx signet setup
 # Via bun
 bunx signet setup
 
-# Via one-line installer (when available)
+# Via one-line installer
 curl -sL https://signetai.sh/install | bash
 ```
 
-Running `signet setup` launches an interactive wizard that walks you through the full setup. You don't need to read anything else first.
-Signet records your primary package manager during setup and reuses that manager family for skill installs and update commands.
+Running `signet setup` launches an interactive wizard that walks you through
+the full setup. You don't need to read anything else first. Signet records
+your primary package manager during setup and reuses it for skill installs
+and update commands.
 
 ---
 
-## Setup Wizard
+Setup Wizard
+---
 
 The wizard asks a series of questions:
 
 **1. Agent name**
 
-Pick a name for your agent — this appears in harness prompts and the dashboard.
+Pick a name for your agent — this appears in harness prompts and the
+dashboard.
 
 **2. Harnesses**
 
-Select which AI platforms you use. Signet will configure integrations for each:
+Select which AI platforms you use. Signet will configure integrations
+for each:
 
 - Claude Code — hooks + CLAUDE.md sync
 - OpenCode — plugin + AGENTS.md sync
@@ -52,13 +60,16 @@ Select which AI platforms you use. Signet will configure integrations for each:
 
 Embeddings power semantic (meaning-based) memory search. Choose:
 
-- **Ollama** (recommended) — runs locally, free, no API key needed. Setup now checks binary + service + model and guides install/pull when needed.
+- **Ollama** (recommended) — runs locally, free, no API key needed.
+  Setup checks your binary, service, and model, and guides install/pull
+  when needed.
 - **OpenAI** — uses the OpenAI embeddings API. Requires `OPENAI_API_KEY`.
 - **Skip** — memory still works via keyword search, just no semantic search.
 
 **4. Embedding model**
 
-For Ollama, `nomic-embed-text` is a good default. Setup can pull it for you (with confirmation), or you can do it manually:
+For Ollama, `nomic-embed-text` is a good default. Setup can pull it for
+you (with confirmation), or you can do it manually:
 
 ```bash
 ollama pull nomic-embed-text
@@ -66,17 +77,21 @@ ollama pull nomic-embed-text
 
 **5. Search balance**
 
-The `alpha` setting controls how much weight goes to semantic vs. keyword search. 0.7 (70% semantic, 30% keyword) works well for most people.
+The `alpha` setting controls how much weight goes to semantic vs. keyword
+search. 0.7 (70% semantic, 30% keyword) works well for most people.
 
 **6. Git & auto-commit**
 
-The wizard can initialize a git repo in `~/.agents/` so every change to your agent files is automatically versioned.
+The wizard can initialize a git repo in `~/.agents/` so every change to
+your agent files is automatically versioned.
 
-After the wizard completes, the daemon starts automatically and the dashboard opens.
+After the wizard completes, the daemon starts automatically and the
+dashboard opens at `http://localhost:3850`.
 
 ---
 
-## What Gets Created
+What Gets Created
+---
 
 ```
 ~/.agents/
@@ -104,7 +119,37 @@ If you selected OpenCode:
 
 ---
 
-## Basic Usage
+What Signet Does
+---
+
+Once running, Signet gives you a persistent agent identity that works
+across all your AI tools. The core features:
+
+- **Memory pipeline** — conversations are processed automatically by
+  Pipeline V2, which extracts meaningful facts and decisions using a
+  local LLM (default: `qwen3:4b` via Ollama). Memories accumulate over
+  time and are recalled in future sessions.
+- **Hybrid search** — recall combines semantic and keyword search so
+  you find relevant memories even when phrasing varies.
+- **Connectors** — platform adapters for Claude Code, OpenCode, and
+  OpenClaw keep your agent config in sync across tools.
+- **Analytics** — the dashboard tracks memory growth, session activity,
+  and pipeline health over time.
+- **Document ingest** — feed local files or URLs into the memory pipeline
+  to give your agent persistent knowledge about a codebase, spec, or doc.
+- **Diagnostics** — built-in health checks and pipeline status endpoints
+  help you spot issues fast.
+- **SDK** — embed Signet into your own apps via `@signet/sdk`.
+- **Secrets** — API keys stored encrypted at rest, never exposed to agents
+  directly.
+- **Skills** — installable instruction packages that extend agent behavior.
+- **Auth** — wallet-based identity (ERC-8128) for team deployments and
+  sync. See [Auth](./AUTH.md) for details.
+
+---
+
+Basic Usage
+---
 
 ### Check status
 
@@ -120,7 +165,10 @@ Shows daemon state, file health, and memory count.
 signet dashboard
 ```
 
-Opens `http://localhost:3850` in your browser. From here you can edit your agent config, browse memories, and manage skills.
+Opens `http://localhost:3850` in your browser. From here you can edit
+your agent config, browse memories, view analytics, and manage skills.
+You can also reach it directly in your browser any time the daemon is
+running.
 
 ### Save a memory
 
@@ -138,7 +186,12 @@ signet remember "tagged memory" -t project,signet
 /remember [project,signet]: daemon runs on port 3850
 ```
 
-The `critical:` prefix or `--critical` flag pins a memory so it never decays. The `[tag1,tag2]:` prefix or `-t` flag adds searchable tags.
+The `critical:` prefix or `--critical` flag pins a memory so it never
+decays. The `[tag1,tag2]:` prefix or `-t` flag adds searchable tags.
+
+You can also let the pipeline do this automatically — at the end of a
+session, Pipeline V2 reads the conversation and extracts memories on its
+own. Manual `/remember` is for things you want to ensure are captured.
 
 ### Search memories
 
@@ -170,7 +223,8 @@ signet restart
 
 ---
 
-## Managing Secrets
+Managing Secrets
+---
 
 Store API keys and other sensitive values encrypted at rest:
 
@@ -185,13 +239,16 @@ signet secret list
 signet secret delete GITHUB_TOKEN
 ```
 
-Secrets are encrypted with libsodium using a machine-bound key. Agents never see secret values directly.
+Secrets are encrypted with libsodium using a machine-bound key. Agents
+never see secret values directly.
 
 ---
 
-## Managing Skills
+Managing Skills
+---
 
-Skills are packaged instructions in `~/.agents/skills/`. They extend what your agent can do.
+Skills are packaged instructions in `~/.agents/skills/`. They extend
+what your agent can do.
 
 ```bash
 # See what's installed
@@ -209,7 +266,8 @@ signet skill remove weather
 
 ---
 
-## Install as a System Service
+Install as a System Service
+---
 
 To have Signet start automatically on boot:
 
@@ -230,19 +288,36 @@ systemctl --user start signet.service
 
 ---
 
-## Editing Your Agent
+Editing Your Agent
+---
 
 Your agent identity lives in two key files:
 
-**`~/.agents/AGENTS.md`** — What the agent knows and how it should behave. This is the file that syncs to all your harnesses.
+**`~/.agents/AGENTS.md`** — What the agent knows and how it should
+behave. This is the file that syncs to all your harnesses.
 
-**`~/.agents/SOUL.md`** — Personality, voice, values. Mostly for your own reference or for harnesses that load it separately.
+**`~/.agents/SOUL.md`** — Personality, voice, values. Mostly for your
+own reference or for harnesses that load it separately.
 
-Edit them directly in your editor or via the dashboard's config editor. Changes sync to harnesses automatically within 2 seconds.
+Edit them directly in your editor or via the dashboard's config editor.
+Changes sync to harnesses automatically within 2 seconds.
 
 ---
 
-## Troubleshooting
+Auth and Team Deployments
+---
+
+Signet uses ERC-8128 wallet-based signatures for identity verification.
+For personal use you don't need to think about this — it's handled
+automatically. For team deployments or self-hosted sync servers, auth
+modes let you scope memory access and control who can write to a shared
+agent. See [Auth](./AUTH.md) and [Self-Hosting](./SELF-HOSTING.md) for
+setup details.
+
+---
+
+Troubleshooting
+---
 
 **Daemon won't start**
 
@@ -265,7 +340,8 @@ ollama serve &
 ollama pull nomic-embed-text
 ```
 
-Or check that `OPENAI_API_KEY` is set in your environment (or stored as a secret and referenced in `agent.yaml`).
+Or check that `OPENAI_API_KEY` is set in your environment (or stored
+as a secret and referenced in `agent.yaml`).
 
 **Changes not syncing to Claude Code**
 
@@ -284,10 +360,18 @@ signet logs
 
 ---
 
-## Next Steps
+Next Steps
+---
 
 - [Configuration Reference](./CONFIGURATION.md) — all agent.yaml options
 - [Memory System](./MEMORY.md) — how remember/recall works
+- [Pipeline](./PIPELINE.md) — how Pipeline V2 extracts and processes memories
+- [Connectors](./CONNECTORS.md) — platform connector details
 - [Hooks](./HOOKS.md) — lifecycle hooks for harness integration
+- [Analytics](./ANALYTICS.md) — session and memory analytics
+- [Diagnostics](./DIAGNOSTICS.md) — health checks and pipeline status
+- [Documents](./DOCUMENTS.md) — ingest files and URLs into memory
+- [SDK](./SDK.md) — embed Signet in your own apps
+- [Auth](./AUTH.md) — wallet-based identity and team auth modes
 - [Harnesses](./HARNESSES.md) — detailed integration docs
 - [API Reference](./API.md) — HTTP API for scripting and tooling

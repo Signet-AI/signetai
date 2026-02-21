@@ -1,10 +1,11 @@
-# Configuration Reference
+Configuration Reference
+=======================
 
 Complete reference for all Signet configuration options.
 
----
 
-## Configuration Files
+Configuration Files
+-------------------
 
 All files live in `~/.agents/` (or your custom `SIGNET_PATH`).
 
@@ -17,100 +18,98 @@ All files live in `~/.agents/` (or your custom `SIGNET_PATH`).
 | `IDENTITY.md` | Optional identity metadata (name, creature, vibe) |
 | `USER.md` | Optional user preferences and profile |
 
----
+The loader checks `agent.yaml`, `AGENT.yaml`, and `config.yaml` in that
+order, using the first file it finds. All sections are optional; omitting
+a section falls back to the documented defaults.
 
-## agent.yaml
 
-The primary configuration file. Created by `signet setup` and editable via `signet config` or the dashboard's config editor.
+agent.yaml
+----------
 
-### Full Schema
+The primary configuration file. Created by `signet setup` and editable
+via `signet config` or the dashboard's config editor.
 
 ```yaml
-# Version and schema identifier
 version: 1
 schema: signet/v1
 
-# Agent identity
 agent:
   name: "My Agent"
   description: "Personal AI assistant"
   created: "2025-02-17T00:00:00Z"
   updated: "2025-02-17T00:00:00Z"
 
-# Optional owner information
 owner:
-  address: "0x..."           # Ethereum address
-  localId: "user123"         # Local identifier
-  ens: "user.eth"            # ENS name
-  name: "User Name"          # Display name
+  address: "0x..."
+  localId: "user123"
+  ens: "user.eth"
+  name: "User Name"
 
-# Configured harnesses
 harnesses:
   - claude-code
   - openclaw
   - opencode
 
-# Embedding configuration
 embedding:
-  provider: ollama           # 'ollama' | 'openai'
-  model: nomic-embed-text    # Model name
-  dimensions: 768            # Vector dimensions
-  base_url: http://localhost:11434  # Ollama URL
-  api_key: $secret:OPENAI_API_KEY   # OpenAI key (use secret reference)
+  provider: ollama
+  model: nomic-embed-text
+  dimensions: 768
+  base_url: http://localhost:11434
 
-# Search configuration
 search:
-  alpha: 0.7                 # Vector weight (0-1)
-  top_k: 20                  # Candidates per search source
-  min_score: 0.3             # Minimum relevance threshold
+  alpha: 0.7
+  top_k: 20
+  min_score: 0.3
 
-# Memory configuration
 memory:
   database: memory/memories.db
-  session_budget: 2000       # Max chars for session context
-  decay_rate: 0.95           # Importance decay per day
-
-  # MEMORY.md synthesis (optional)
+  session_budget: 2000
+  decay_rate: 0.95
   synthesis:
-    harness: openclaw        # Which harness runs synthesis
-    model: sonnet            # Model to use
-    schedule: daily          # 'daily' | 'weekly' | 'on-demand'
+    harness: openclaw
+    model: sonnet
+    schedule: daily
     max_tokens: 4000
+  pipelineV2:
+    enabled: false
+    shadowMode: false
+    extractionModel: qwen3:4b
 
-# Hooks configuration (optional)
 hooks:
   sessionStart:
-    recallLimit: 10          # Memories to inject at session start
+    recallLimit: 10
     includeIdentity: true
     includeRecentContext: true
-    recencyBias: 0.7         # Weight toward recent vs. important
+    recencyBias: 0.7
   preCompaction:
     includeRecentMemories: true
     memoryLimit: 5
 
-# Optional: trust/verification settings
+auth:
+  mode: local
+  defaultTokenTtlSeconds: 604800
+  sessionTokenTtlSeconds: 86400
+
 trust:
-  verification: none         # 'none' | 'erc8128' | 'gpg' | 'did'
+  verification: none
 ```
 
----
 
-### Section Details
-
-#### `agent`
+### agent
 
 Core agent identity metadata.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | ✓ | Agent display name |
-| `description` | string | | Short description |
-| `created` | string | ✓ | ISO 8601 creation timestamp |
-| `updated` | string | ✓ | ISO 8601 last update timestamp |
+| `name` | string | yes | Agent display name |
+| `description` | string | no | Short description |
+| `created` | string | yes | ISO 8601 creation timestamp |
+| `updated` | string | yes | ISO 8601 last update timestamp |
 
-#### `owner`
 
-Optional owner identification. Reserved for future verification features.
+### owner
+
+Optional owner identification. Reserved for future ERC-8128 verification.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -119,140 +118,388 @@ Optional owner identification. Reserved for future verification features.
 | `ens` | string | ENS domain name |
 | `name` | string | Human-readable name |
 
-#### `harnesses`
 
-List of AI platforms to integrate with. Valid values:
+### harnesses
 
-- `claude-code` — Anthropic's Claude Code CLI
-- `opencode` — OpenCode
-- `openclaw` — OpenClaw
-- `cursor` — Cursor IDE (planned)
-- `windsurf` — Windsurf (planned)
-- `chatgpt` — ChatGPT (planned)
-- `gemini` — Google Gemini (planned)
+List of AI platforms to integrate with. Valid values: `claude-code`,
+`opencode`, `openclaw`. Support for `cursor`, `windsurf`, `chatgpt`, and
+`gemini` is planned.
 
-#### `embedding`
 
-Vector embedding configuration for semantic search.
+### embedding
+
+Vector embedding configuration for semantic memory search.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | string | — | `ollama` or `openai` |
-| `model` | string | — | Embedding model name |
-| `dimensions` | number | — | Output vector dimensions |
-| `base_url` | string | `http://localhost:11434` | Ollama API URL |
-| `api_key` | string | — | OpenAI API key or `$secret:NAME` reference |
+| `provider` | string | `"ollama"` | `"ollama"` or `"openai"` |
+| `model` | string | `"nomic-embed-text"` | Embedding model name |
+| `dimensions` | number | `768` | Output vector dimensions |
+| `base_url` | string | `"http://localhost:11434"` | Ollama API base URL |
+| `api_key` | string | — | API key or `$secret:NAME` reference |
 
-**Ollama Models:**
+Recommended Ollama models:
 
 | Model | Dimensions | Notes |
 |-------|------------|-------|
-| `nomic-embed-text` | 768 | Recommended; good quality/speed balance |
+| `nomic-embed-text` | 768 | Default; good quality/speed balance |
 | `all-minilm` | 384 | Faster, smaller vectors |
 | `mxbai-embed-large` | 1024 | Better quality, more resource usage |
 
-**OpenAI Models:**
+Recommended OpenAI models:
 
 | Model | Dimensions | Notes |
 |-------|------------|-------|
-| `text-embedding-3-small` | 1536 | Cost-effective, solid quality |
-| `text-embedding-3-large` | 3072 | Best quality, higher cost |
+| `text-embedding-3-small` | 1536 | Cost-effective |
+| `text-embedding-3-large` | 3072 | Highest quality |
 
-**Secret references** — Instead of putting your API key in plain text, store it with `signet secret put OPENAI_API_KEY` and reference it as:
+Rather than putting an API key in plain text, store it with
+`signet secret put OPENAI_API_KEY` and reference it as:
+
 ```yaml
 api_key: $secret:OPENAI_API_KEY
 ```
 
-#### `search`
 
-Hybrid search tuning. Controls the blend between semantic (vector) and keyword (BM25) search.
+### search
+
+Hybrid search tuning. Controls the blend between semantic (vector) and
+keyword (BM25) retrieval.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `alpha` | number | 0.7 | Vector weight 0–1. Higher = more semantic. |
-| `top_k` | number | 20 | Candidates fetched from each search method |
-| `min_score` | number | 0.3 | Minimum combined score to include a result |
+| `alpha` | number | `0.7` | Vector weight 0-1. Higher = more semantic. |
+| `top_k` | number | `20` | Candidate count fetched from each source |
+| `min_score` | number | `0.3` | Minimum combined score to return a result |
 
-**Alpha guide:**
+At `alpha: 0.9` results are heavily semantic, suitable for conceptual
+queries. At `alpha: 0.3` results skew toward keyword matching, better for
+exact-phrase lookups. The default of `0.7` works well generally.
 
-| Value | Behavior |
-|-------|----------|
-| 0.9 | Heavily semantic — good for conceptual queries |
-| 0.7 | Balanced — default, works well generally |
-| 0.5 | Equal weighting |
-| 0.3 | Heavily keyword — good for exact-phrase lookups |
 
-#### `memory`
+### memory
 
 Memory system settings.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `database` | string | `memory/memories.db` | SQLite database path (relative to `~/.agents/`) |
-| `session_budget` | number | 2000 | Character limit for session context injection |
-| `decay_rate` | number | 0.95 | Daily importance decay factor for non-pinned memories |
+| `database` | string | `"memory/memories.db"` | SQLite path (relative to `~/.agents/`) |
+| `session_budget` | number | `2000` | Character limit for session context injection |
+| `decay_rate` | number | `0.95` | Daily importance decay factor for non-pinned memories |
 
-**Decay rate:**
+Non-pinned memories lose importance over time using the formula:
 
-Non-pinned memories lose importance over time:
 ```
 importance(t) = base_importance × decay_rate^days_since_access
 ```
 
 Accessing a memory resets the decay timer.
 
-| Rate | Effect |
-|------|--------|
-| 0.99 | Slow decay (1% per day) |
-| 0.95 | Moderate (5% per day) — default |
-| 0.90 | Fast (10% per day) |
 
-#### `memory.synthesis`
+### memory.synthesis
 
-Configuration for periodic MEMORY.md regeneration via an AI harness. The synthesis process reads all memories and asks a model to write a coherent summary into `MEMORY.md`.
+Configuration for periodic `MEMORY.md` regeneration. The synthesis
+process reads all memories and asks a model to write a coherent summary.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `harness` | string | `openclaw` | Which harness runs the synthesis |
-| `model` | string | `sonnet` | Model identifier |
-| `schedule` | string | `daily` | `daily`, `weekly`, or `on-demand` |
-| `max_tokens` | number | 4000 | Max output tokens for synthesis |
+| `harness` | string | `"openclaw"` | Which harness runs synthesis |
+| `model` | string | `"sonnet"` | Model identifier |
+| `schedule` | string | `"daily"` | `"daily"`, `"weekly"`, or `"on-demand"` |
+| `max_tokens` | number | `4000` | Max output tokens |
 
-#### `hooks`
 
-Controls what Signet injects during harness lifecycle events. See [HOOKS.md](./HOOKS.md) for full details.
+Pipeline V2 Config
+------------------
 
-**`hooks.sessionStart`:**
+The V2 memory pipeline lives at `packages/daemon/src/pipeline/`. It runs
+LLM-based fact extraction against incoming conversation text, then decides
+whether to write new memories, update existing ones, or skip. Config lives
+under `memory.pipelineV2` in `agent.yaml`.
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `recallLimit` | number | 10 | Number of memories to inject |
-| `includeIdentity` | boolean | true | Include agent name/description |
-| `includeRecentContext` | boolean | true | Include MEMORY.md content |
-| `recencyBias` | number | 0.7 | Weight toward recent vs. important memories |
+Pipeline V2 is disabled by default. Enable it explicitly:
 
-**`hooks.preCompaction`:**
+```yaml
+memory:
+  pipelineV2:
+    enabled: true
+    shadowMode: true        # extract without writing — safe first step
+    extractionModel: qwen3:4b
+```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `includeRecentMemories` | boolean | true | Include recent memories in the prompt |
-| `memoryLimit` | number | 5 | How many recent memories to include |
-| `summaryGuidelines` | string | built-in | Custom instructions for session summary |
 
----
+### Control flags
 
-## AGENTS.md
+These boolean fields gate major pipeline behaviors. All default to
+`false` unless noted.
 
-The main agent identity file. This is the "personality" that gets synced to all harnesses. Write it in plain markdown — there's no required format, but a typical structure looks like this:
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `false` | Master switch. Pipeline does nothing when false. |
+| `shadowMode` | `false` | Extract facts but skip writes. Useful for evaluation. |
+| `mutationsFrozen` | `false` | Allow reads; block all writes. Overrides `shadowMode`. |
+| `allowUpdateDelete` | `false` | Permit the pipeline to update or delete existing memories. |
+| `graphEnabled` | `false` | Build and query the knowledge graph during extraction. |
+| `autonomousEnabled` | `false` | Allow autonomous pipeline operations (maintenance, repair). |
+| `autonomousFrozen` | `false` | Block autonomous writes; autonomous reads still allowed. |
+
+The relationship between `shadowMode` and `mutationsFrozen` matters:
+`shadowMode` suppresses writes from the normal extraction path only;
+`mutationsFrozen` is a harder freeze that blocks all write paths
+including repairs and graph updates.
+
+
+### Extraction
+
+These fields control the Ollama-based extraction stage.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `extractionModel` | `"qwen3:4b"` | — | Ollama model for fact extraction |
+| `extractionTimeout` | `45000` | 5000-300000 ms | Extraction call timeout |
+| `minFactConfidenceForWrite` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
+
+The extraction model must be available locally via Ollama. Lower
+`minFactConfidenceForWrite` to capture more facts at the cost of noise;
+raise it to write only high-confidence facts.
+
+
+### Worker
+
+The pipeline processes jobs through a queue with lease-based concurrency
+control.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `workerPollMs` | `2000` | 100-60000 ms | How often the worker polls for pending jobs |
+| `workerMaxRetries` | `3` | 1-10 | Max retry attempts before a job goes to dead-letter |
+| `leaseTimeoutMs` | `300000` | 10000-600000 ms | Time before an uncompleted job lease expires |
+
+A job that exceeds `workerMaxRetries` moves to dead-letter status and is
+eventually purged by the retention worker.
+
+
+### Knowledge Graph
+
+When `graphEnabled: true`, the pipeline builds entity-relationship links
+from extracted facts and uses them to boost search relevance.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `graphBoostWeight` | `0.15` | 0.0-1.0 | Weight applied to graph-neighbor score boost |
+| `graphBoostTimeoutMs` | `500` | 50-5000 ms | Timeout for graph lookup during search |
+
+
+### Reranker
+
+An optional cross-encoder reranking pass that runs after initial
+retrieval. Disabled by default.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `rerankerEnabled` | `false` | Enable the reranking pass |
+| `rerankerModel` | `""` | Model name for the reranker |
+| `rerankerTopN` | `20` | Number of candidates to pass to the reranker |
+| `rerankerTimeoutMs` | `2000` | Timeout for the reranking call (100-30000 ms) |
+
+
+### Maintenance
+
+The maintenance worker periodically inspects the database for anomalies
+and can trigger corrective actions.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `maintenanceIntervalMs` | `1800000` | How often maintenance runs (30 min). Range: 60s-24h. |
+| `maintenanceMode` | `"observe"` | `"observe"` logs issues; `"execute"` attempts repairs. |
+
+In `"observe"` mode the worker emits structured log events but makes no
+changes. Switch to `"execute"` only when `autonomousEnabled: true`.
+
+
+### Repair budgets
+
+Repair sub-workers limit how aggressively they re-embed or re-queue items
+to avoid overloading Ollama.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `repairReembedCooldownMs` | `300000` | Min time between re-embed batches (10s-1h) |
+| `repairReembedHourlyBudget` | `10` | Max re-embed operations per hour (1-1000) |
+| `repairRequeueCooldownMs` | `60000` | Min time between re-queue batches (5s-1h) |
+| `repairRequeueHourlyBudget` | `50` | Max re-queue operations per hour (1-1000) |
+
+
+### Document ingest worker
+
+Controls chunking for ingesting large documents into the memory store.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `documentWorkerIntervalMs` | `10000` | Poll interval for pending document jobs (1s-300s) |
+| `documentChunkSize` | `2000` | Target chunk size in characters (200-50000) |
+| `documentChunkOverlap` | `200` | Overlap between adjacent chunks (0-10000 chars) |
+| `documentMaxContentBytes` | `10485760` | Max document size accepted (1 KB - 100 MB) |
+
+Chunk overlap ensures context is not lost at chunk boundaries. A value of
+10-15% of `documentChunkSize` is a reasonable starting point.
+
+
+Auth Config
+-----------
+
+Auth configuration lives under the `auth` key in `agent.yaml`. Signet
+uses short-lived signed tokens for dashboard and API access.
+
+```yaml
+auth:
+  mode: local
+  defaultTokenTtlSeconds: 604800    # 7 days
+  sessionTokenTtlSeconds: 86400     # 24 hours
+  rateLimits:
+    forget:
+      windowMs: 60000
+      max: 30
+    modify:
+      windowMs: 60000
+      max: 60
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `mode` | `"local"` | Auth mode: `"local"`, `"team"`, or `"hybrid"` |
+| `defaultTokenTtlSeconds` | `604800` | API token lifetime (7 days) |
+| `sessionTokenTtlSeconds` | `86400` | Session token lifetime (24 hours) |
+
+In `"local"` mode the token secret is generated automatically and stored
+at `~/.agents/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
+wallet-based ERC-8128 signatures are used alongside or instead of local
+tokens.
+
+
+### Rate limits
+
+Rate limits are sliding-window counters that reset on daemon restart.
+Each key controls a category of potentially destructive operations.
+
+| Operation | Default window | Default max | Description |
+|-----------|---------------|-------------|-------------|
+| `forget` | 60 s | 30 | Soft-delete a memory |
+| `modify` | 60 s | 60 | Update memory content |
+| `batchForget` | 60 s | 5 | Bulk soft-delete |
+| `forceDelete` | 60 s | 3 | Hard-delete (bypasses tombstone) |
+| `admin` | 60 s | 10 | Admin API operations |
+
+Override any limit under `auth.rateLimits.<operation>`:
+
+```yaml
+auth:
+  rateLimits:
+    forceDelete:
+      windowMs: 60000
+      max: 1
+```
+
+
+Retention Config
+----------------
+
+The retention worker runs on a fixed interval and purges data that has
+exceeded its retention window. It is not directly configurable in
+`agent.yaml`; the defaults below are compiled in and apply unconditionally
+when the pipeline is running.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `intervalMs` | `21600000` | Sweep frequency (6 hours) |
+| `tombstoneRetentionMs` | `2592000000` | Soft-deleted memories kept for 30 days before hard purge |
+| `historyRetentionMs` | `15552000000` | Memory history events kept for 180 days |
+| `completedJobRetentionMs` | `1209600000` | Completed pipeline jobs kept for 14 days |
+| `deadJobRetentionMs` | `2592000000` | Dead-letter jobs kept for 30 days |
+| `batchLimit` | `500` | Max rows purged per step per sweep (backpressure) |
+
+The retention worker also cleans up graph links and embeddings that
+belong to purged tombstones, and orphans entity nodes with no remaining
+mentions. The `batchLimit` prevents a single sweep from locking the
+database for too long under high load.
+
+Soft-deleted memories remain recoverable via `POST /api/memory/:id/recover`
+until their tombstone window expires.
+
+
+Hooks Config
+------------
+
+Controls what Signet injects during harness lifecycle events. See
+[HOOKS.md](./HOOKS.md) for full details.
+
+```yaml
+hooks:
+  sessionStart:
+    recallLimit: 10
+    includeIdentity: true
+    includeRecentContext: true
+    recencyBias: 0.7
+  preCompaction:
+    includeRecentMemories: true
+    memoryLimit: 5
+    summaryGuidelines: "Focus on technical decisions."
+```
+
+`hooks.sessionStart` controls what is injected at the start of a new
+harness session:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `recallLimit` | `10` | Number of memories to inject |
+| `includeIdentity` | `true` | Include agent name and description |
+| `includeRecentContext` | `true` | Include `MEMORY.md` content |
+| `recencyBias` | `0.7` | Weight toward recent vs. important memories (0-1) |
+
+`hooks.preCompaction` controls what is included when the harness triggers
+a pre-compaction summary:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `includeRecentMemories` | `true` | Include recent memories in the prompt |
+| `memoryLimit` | `5` | How many recent memories to include |
+| `summaryGuidelines` | built-in | Custom instructions for session summary |
+
+
+Environment Variables
+---------------------
+
+Environment variables take precedence over `agent.yaml` for runtime
+overrides. They are useful in containerized or CI environments where
+editing the config file is impractical.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SIGNET_PATH` | `~/.agents` | Base agents directory |
+| `SIGNET_PORT` | `3850` | Daemon HTTP port |
+| `SIGNET_HOST` | `localhost` | Daemon bind address |
+| `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
+
+`SIGNET_PATH` changes where Signet reads and writes all agent data,
+including the config file itself. This is useful for testing with an
+isolated environment or for running multiple agent identities.
+
+
+AGENTS.md
+---------
+
+The main agent identity file. Synced to all configured harnesses on
+change (2-second debounce). Write it in plain markdown — there is no
+required structure, but a typical layout looks like this:
 
 ```markdown
 # Agent Name
 
-Short introduction paragraph. What is this agent? Who does it serve?
+Short introduction paragraph.
 
 ## Personality
 
-Describe communication style, tone, and approach.
+Communication style, tone, and approach.
 
 ## Instructions
 
@@ -260,80 +507,55 @@ Specific behaviors, preferences, and task guidance.
 
 ## Rules
 
-Hard rules the agent should follow (never do X, always do Y).
+Hard rules the agent must follow.
 
 ## Context
 
-Background information — who the user is, what they work on, etc.
+Background about the user and their work.
 ```
 
-### Auto-sync behavior
-
-When `AGENTS.md` changes, the daemon detects it within 2 seconds and writes updated copies to:
+When `AGENTS.md` changes, the daemon writes updated copies to:
 
 - `~/.claude/CLAUDE.md` (if `~/.claude/` exists)
 - `~/.config/opencode/AGENTS.md` (if `~/.config/opencode/` exists)
 
-Each copy is prefixed with a header identifying the source:
+Each copy is prefixed with a generated header identifying the source file
+and timestamp, and includes a warning not to edit the copy directly.
 
-```
-# CLAUDE.md
-# ============================================================================
-# AUTO-GENERATED from ~/.agents/AGENTS.md by Signet
-# Generated: 2025-02-17T18:00:00.000Z
-# 
-# DO NOT EDIT THIS FILE - changes will be overwritten
-# Edit the source file instead: ~/.agents/AGENTS.md
-# ...
-```
 
----
+SOUL.md
+-------
 
-## SOUL.md
-
-Optional personality file for deeper character definition. Loaded by some harnesses that support separate personality/instruction files. Not required.
+Optional personality file for deeper character definition. Loaded by
+harnesses that support separate personality and instruction files.
 
 ```markdown
 # Soul
 
-Core personality traits and values.
-
 ## Voice
-
 How the agent speaks and writes.
 
 ## Values
-
-What the agent prioritizes and cares about.
+What the agent prioritizes.
 
 ## Quirks
-
 Unique personality characteristics.
 ```
 
----
 
-## MEMORY.md
+MEMORY.md
+---------
 
-Auto-generated working memory summary. Updated by the synthesis system. Do not edit by hand — changes will be overwritten. This file is loaded at session start (if `hooks.sessionStart.includeRecentContext` is true) to give the agent a sense of recent context.
+Auto-generated working memory summary. Updated by the synthesis system.
+Do not edit by hand — changes will be overwritten on the next synthesis
+run. Loaded at session start when `hooks.sessionStart.includeRecentContext`
+is `true`.
 
----
 
-## IDENTITY.md
+Database Schema
+---------------
 
-Optional file for structured identity metadata. Currently used by the dashboard to display the agent's name, creature type, and vibe.
-
-```markdown
-- name: My Agent
-- creature: AI assistant
-- vibe: helpful and direct
-```
-
----
-
-## Database Schema
-
-The SQLite database at `memory/memories.db` contains three main tables:
+The SQLite database at `memory/memories.db` contains three main tables.
 
 ### memories
 
@@ -341,16 +563,21 @@ The SQLite database at `memory/memories.db` contains three main tables:
 |--------|------|-------------|
 | `id` | TEXT | Primary key (UUID) |
 | `content` | TEXT | Memory content |
-| `type` | TEXT | `fact`, `preference`, `decision`, `rule`, `learning`, `issue`, `session_summary` |
-| `source` | TEXT | Source system/harness |
-| `importance` | REAL | 0–1 score, decays over time |
+| `type` | TEXT | `fact`, `preference`, `decision`, `daily-log`, `episodic`, `procedural`, `semantic`, `system` |
+| `source` | TEXT | Source system or harness |
+| `importance` | REAL | 0-1 score, decays over time |
 | `tags` | TEXT | Comma-separated tags |
 | `who` | TEXT | Source harness name |
 | `pinned` | INTEGER | 1 if critical/pinned (never decays) |
+| `is_deleted` | INTEGER | 1 if soft-deleted (tombstone) |
+| `deleted_at` | TEXT | ISO timestamp of soft-delete |
 | `created_at` | TEXT | ISO timestamp |
 | `updated_at` | TEXT | ISO timestamp |
 | `last_accessed` | TEXT | Last access timestamp |
 | `access_count` | INTEGER | Number of times recalled |
+| `confidence` | REAL | Extraction confidence (0-1) |
+| `version` | INTEGER | Optimistic concurrency version |
+| `manual_override` | INTEGER | 1 if user has manually edited |
 
 ### embeddings
 
@@ -367,22 +594,19 @@ The SQLite database at `memory/memories.db` contains three main tables:
 
 ### memories_fts
 
-FTS5 virtual table for keyword search:
+FTS5 virtual table for keyword search. Indexes `content` and `tags`
+from the `memories` table. An after-delete trigger keeps the FTS index
+in sync when tombstones are hard-purged.
 
-| Column | Description |
-|--------|-------------|
-| `content` | Full-text indexed memory content |
-| `tags` | Full-text indexed tags |
 
----
-
-## Harness-Specific Configuration
+Harness-Specific Configuration
+-------------------------------
 
 ### Claude Code
 
-**Location:** `~/.claude/`
+Location: `~/.claude/`
 
-`settings.json` configures memory hooks that run at session lifecycle events:
+`settings.json` installs hooks that fire at session lifecycle events:
 
 ```json
 {
@@ -414,13 +638,14 @@ FTS5 virtual table for keyword search:
 
 ### OpenCode
 
-**Location:** `~/.config/opencode/`
+Location: `~/.config/opencode/`
 
-`memory.mjs` is an OpenCode plugin that provides `/remember` and `/recall` as native tools.
+`memory.mjs` is an OpenCode plugin that exposes `/remember` and `/recall`
+as native tools within the harness.
 
 ### OpenClaw
 
-**Location:** `~/.agents/hooks/agent-memory/` (hook directory)
+Location: `~/.agents/hooks/agent-memory/` (hook directory)
 
 Also configures the OpenClaw workspace in `~/.openclaw/openclaw.json`:
 
@@ -434,42 +659,24 @@ Also configures the OpenClaw workspace in `~/.openclaw/openclaw.json`:
 }
 ```
 
-For the full OpenClaw adapter, see [HARNESSES.md](./HARNESSES.md).
+See [HARNESSES.md](./HARNESSES.md) for the full OpenClaw adapter docs.
 
----
 
-## Environment Variables
+Git Integration
+---------------
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SIGNET_PATH` | `~/.agents` | Base agents directory |
-| `SIGNET_PORT` | `3850` | Daemon HTTP port |
-| `SIGNET_HOST` | `localhost` | Daemon bind address |
-
----
-
-## Git Integration
-
-If `~/.agents/` is a git repository:
-
-1. The setup wizard offers to initialize git
-2. The daemon auto-commits on file changes (5s debounce after last change)
-3. Commit messages: `YYYY-MM-DDTHH-MM-SS_auto_<filename>`
-4. Setup creates a backup commit before making changes
+If `~/.agents/` is a git repository, the daemon auto-commits file changes
+with a 5-second debounce after the last detected change. Commit messages
+use the format `YYYY-MM-DDTHH-MM-SS_auto_<filename>`. The setup wizard
+offers to initialize git on first run and creates a backup commit before
+making any changes.
 
 Recommended `.gitignore` for `~/.agents/`:
 
 ```gitignore
-# Daemon runtime files
 .daemon/
-
-# Encrypted secrets (keep out of git)
 .secrets/
-
-# Python caches
 __pycache__/
 *.pyc
-
-# Logs
 *.log
 ```

@@ -187,8 +187,16 @@ session tracker enforces one active path per session (409 on conflict).
 
 Pipeline stages: extraction (Ollama, default model `qwen3:4b`) →
 decision (write/update/skip) → optional knowledge graph → retention
-decay. Config modes: `shadowMode` (extract without writing),
-`mutationsFrozen` (reads only), `graphEnabled`, `autonomousEnabled`.
+decay → document ingest → maintenance. Config modes: `shadowMode`
+(extract without writing), `mutationsFrozen` (reads only),
+`graphEnabled`, `autonomousEnabled`.
+
+### Auth Middleware
+
+The daemon includes an auth module at `packages/daemon/src/auth/`.
+Routes under `/api/*` can be protected via token-based middleware
+(`middleware.ts`), with policy rules (`policy.ts`) and rate limiting
+(`rate-limiter.ts`). Tokens are managed in `tokens.ts`.
 
 ### User Data Location
 
@@ -222,6 +230,16 @@ All user data lives at `~/.agents/`:
 - `packages/daemon/src/daemon.ts` - HTTP server + watcher
 - `packages/daemon/src/session-tracker.ts` - Plugin/legacy session mutex
 - `packages/daemon/src/pipeline/` - V2 memory extraction pipeline
+- `packages/daemon/src/pipeline/document-worker.ts` - Document ingest worker
+- `packages/daemon/src/pipeline/maintenance-worker.ts` - Maintenance worker
+- `packages/daemon/src/auth/` - Auth module (tokens, middleware, policy, rate limiting)
+- `packages/daemon/src/analytics.ts` - Analytics accumulator
+- `packages/daemon/src/timeline.ts` - Timeline builder
+- `packages/daemon/src/diagnostics.ts` - Health scoring
+- `packages/daemon/src/repair-actions.ts` - Repair actions for broken state
+- `packages/daemon/src/connectors/` - Connector framework
+- `packages/daemon/src/content-normalization.ts` - Content normalization
+- `packages/sdk/src/index.ts` - SDK client
 - `packages/connector-claude-code/src/index.ts` - Claude Code connector
 - `packages/connector-opencode/src/index.ts` - OpenCode connector
 - `packages/connector-openclaw/src/index.ts` - OpenClaw connector
@@ -308,6 +326,17 @@ bun src/cli.ts status    # Check status
 | `/api/secrets` | GET | List secret names |
 | `/api/hooks/*` | POST/GET | Session + synthesis hooks |
 | `/api/harnesses` | GET | List harnesses |
+| `/api/auth/*` | POST/GET | Auth token management |
+| `/api/documents/*` | GET/POST/DELETE | Document ingest and retrieval |
+| `/api/connectors/*` | GET/POST | Connector status and management |
+| `/api/diagnostics/*` | GET | Health scoring and system diagnostics |
+| `/api/repair/*` | POST | Repair actions for broken state |
+| `/api/analytics/*` | GET | Usage analytics and metrics |
+| `/api/timeline/*` | GET | Event timeline |
+| `/api/git/*` | GET/POST | Git sync status and operations |
+| `/api/update/*` | GET/POST | Update check and apply |
+| `/api/logs/*` | GET | Daemon log access |
+| `/api/identity` | GET/POST | Identity file read/write |
 
 
 ## Identity Files
