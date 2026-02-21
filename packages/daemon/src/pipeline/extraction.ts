@@ -135,12 +135,10 @@ function validateEntity(
 
 	const obj = raw as Record<string, unknown>;
 
-	const source =
-		typeof obj.source === "string" ? obj.source.trim() : "";
+	const source = typeof obj.source === "string" ? obj.source.trim() : "";
 	const relationship =
 		typeof obj.relationship === "string" ? obj.relationship.trim() : "";
-	const target =
-		typeof obj.target === "string" ? obj.target.trim() : "";
+	const target = typeof obj.target === "string" ? obj.target.trim() : "";
 
 	if (!source || !target) {
 		warnings.push("Entity missing source or target");
@@ -169,7 +167,11 @@ export async function extractFactsAndEntities(
 
 	const trimmed = input.trim().replace(/\s+/g, " ");
 	if (trimmed.length < 20) {
-		return { facts: [], entities: [], warnings: ["Input too short (< 20 chars)"] };
+		return {
+			facts: [],
+			entities: [],
+			warnings: ["Input too short (< 20 chars)"],
+		};
 	}
 
 	const truncated =

@@ -1,70 +1,59 @@
 {
-  "name": "signetai",
-  "version": "0.1.65",
-  "description": "Portable AI agent identity - own your agent, bring it anywhere",
-  "type": "module",
-  "bin": {
-    "signet": "bin/signet.js"
-  },
-  "files": [
-    "bin",
-    "dist",
-    "dashboard",
-    "templates",
-    "README.md",
-    "LICENSE"
-  ],
-  "scripts": {
-    "build": "bun run build:cli && bun run build:daemon && bun run build:dashboard",
-    "build:cli": "bun build ../cli/src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
-    "build:daemon": "bun build ../daemon/src/daemon.ts --outfile ./dist/daemon.js --target bun",
-    "build:dashboard": "cp -r ../cli/dashboard/build ./dashboard 2>/dev/null || echo 'Dashboard not built yet'",
-    "prepublishOnly": "bun run build",
-    "postinstall": "node ./bin/postinstall.js || true"
-  },
-  "keywords": [
-    "ai",
-    "agent",
-    "identity",
-    "memory",
-    "llm",
-    "claude",
-    "openai",
-    "portable",
-    "signet"
-  ],
-  "author": "Signet AI <hello@signetai.sh>",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Signet-AI/signetai.git"
-  },
-  "homepage": "https://signetai.sh",
-  "bugs": {
-    "url": "https://github.com/Signet-AI/signetai/issues"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "os": [
-    "darwin",
-    "linux",
-    "win32"
-  ],
-  "dependencies": {
-    "@hono/node-server": "^1.14.0",
-    "@inquirer/prompts": "^7.0.0",
-    "better-sqlite3": "^12.0.0",
-    "chalk": "^5.3.0",
-    "chokidar": "^4.0.0",
-    "commander": "^12.0.0",
-    "hono": "^4.8.0",
-    "libsodium-wrappers": "^0.8.2",
-    "open": "^10.0.0",
-    "ora": "^8.0.0"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
-    "@types/libsodium-wrappers": "^0.8.2"
-  }
+	"name": "signetai",
+	"version": "0.1.65",
+	"description": "Portable AI agent identity - own your agent, bring it anywhere",
+	"type": "module",
+	"bin": {
+		"signet": "bin/signet.js"
+	},
+	"files": ["bin", "dist", "dashboard", "templates", "README.md", "LICENSE"],
+	"scripts": {
+		"build": "bun run build:cli && bun run build:daemon && bun run build:dashboard",
+		"build:cli": "bun build ../cli/src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
+		"build:daemon": "bun build ../daemon/src/daemon.ts --outfile ./dist/daemon.js --target bun",
+		"build:dashboard": "cp -r ../cli/dashboard/build ./dashboard 2>/dev/null || echo 'Dashboard not built yet'",
+		"prepublishOnly": "bun run build",
+		"postinstall": "node ./bin/postinstall.js || true"
+	},
+	"keywords": [
+		"ai",
+		"agent",
+		"identity",
+		"memory",
+		"llm",
+		"claude",
+		"openai",
+		"portable",
+		"signet"
+	],
+	"author": "Signet AI <hello@signetai.sh>",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Signet-AI/signetai.git"
+	},
+	"homepage": "https://signetai.sh",
+	"bugs": {
+		"url": "https://github.com/Signet-AI/signetai/issues"
+	},
+	"engines": {
+		"node": ">=18"
+	},
+	"os": ["darwin", "linux", "win32"],
+	"dependencies": {
+		"@hono/node-server": "^1.14.0",
+		"@inquirer/prompts": "^7.0.0",
+		"better-sqlite3": "^12.0.0",
+		"chalk": "^5.3.0",
+		"chokidar": "^4.0.0",
+		"commander": "^12.0.0",
+		"hono": "^4.8.0",
+		"libsodium-wrappers": "^0.8.2",
+		"open": "^10.0.0",
+		"ora": "^8.0.0"
+	},
+	"devDependencies": {
+		"@types/better-sqlite3": "^7.6.0",
+		"@types/libsodium-wrappers": "^0.8.2"
+	}
 }

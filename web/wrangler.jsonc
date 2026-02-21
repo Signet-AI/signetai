@@ -7,10 +7,7 @@
 	"name": "signetweb",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-02-19",
-	"compatibility_flags": [
-		"nodejs_compat",
-		"global_fetch_strictly_public"
-	],
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
 	"assets": {
 		// The path to the directory containing the `index.html` file to be served at `/`
 		"directory": "./public"

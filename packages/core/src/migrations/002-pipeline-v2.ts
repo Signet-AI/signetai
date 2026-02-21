@@ -9,14 +9,10 @@
 import type { MigrationDb } from "./index";
 
 /** Check whether a column already exists on a table. */
-function hasColumn(
-	db: MigrationDb,
-	table: string,
-	column: string,
-): boolean {
-	const rows = db
-		.prepare(`PRAGMA table_info(${table})`)
-		.all() as ReadonlyArray<Record<string, unknown>>;
+function hasColumn(db: MigrationDb, table: string, column: string): boolean {
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<
+		Record<string, unknown>
+	>;
 	return rows.some((r) => r.name === column);
 }
 
@@ -28,9 +24,7 @@ function addColumnIfMissing(
 	definition: string,
 ): void {
 	if (!hasColumn(db, table, column)) {
-		db.exec(
-			`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`,
-		);
+		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 	}
 }
 
@@ -38,12 +32,7 @@ export function up(db: MigrationDb): void {
 	// -- New columns on memories --
 	addColumnIfMissing(db, "memories", "content_hash", "TEXT");
 	addColumnIfMissing(db, "memories", "normalized_content", "TEXT");
-	addColumnIfMissing(
-		db,
-		"memories",
-		"is_deleted",
-		"INTEGER DEFAULT 0",
-	);
+	addColumnIfMissing(db, "memories", "is_deleted", "INTEGER DEFAULT 0");
 	addColumnIfMissing(db, "memories", "deleted_at", "TEXT");
 	addColumnIfMissing(
 		db,
@@ -53,35 +42,15 @@ export function up(db: MigrationDb): void {
 	);
 	addColumnIfMissing(db, "memories", "embedding_model", "TEXT");
 	addColumnIfMissing(db, "memories", "extraction_model", "TEXT");
-	addColumnIfMissing(
-		db,
-		"memories",
-		"update_count",
-		"INTEGER DEFAULT 0",
-	);
+	addColumnIfMissing(db, "memories", "update_count", "INTEGER DEFAULT 0");
 	addColumnIfMissing(db, "memories", "who", "TEXT");
 	addColumnIfMissing(db, "memories", "why", "TEXT");
 	addColumnIfMissing(db, "memories", "project", "TEXT");
 	// These may already exist from 001-baseline
-	addColumnIfMissing(
-		db,
-		"memories",
-		"pinned",
-		"INTEGER DEFAULT 0",
-	);
-	addColumnIfMissing(
-		db,
-		"memories",
-		"importance",
-		"REAL DEFAULT 0.5",
-	);
+	addColumnIfMissing(db, "memories", "pinned", "INTEGER DEFAULT 0");
+	addColumnIfMissing(db, "memories", "importance", "REAL DEFAULT 0.5");
 	addColumnIfMissing(db, "memories", "last_accessed", "TEXT");
-	addColumnIfMissing(
-		db,
-		"memories",
-		"access_count",
-		"INTEGER DEFAULT 0",
-	);
+	addColumnIfMissing(db, "memories", "access_count", "INTEGER DEFAULT 0");
 
 	// -- memory_history (immutable audit trail) --
 	db.exec(`

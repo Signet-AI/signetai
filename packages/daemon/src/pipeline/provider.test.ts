@@ -26,9 +26,10 @@ function makeProc(
 	const encoder = new TextEncoder();
 
 	// Simulated exited promise
-	const exitedPromise = exitDelay > 0
-		? new Promise<number>((res) => setTimeout(() => res(exitCode), exitDelay))
-		: Promise.resolve(exitCode);
+	const exitedPromise =
+		exitDelay > 0
+			? new Promise<number>((res) => setTimeout(() => res(exitCode), exitDelay))
+			: Promise.resolve(exitCode);
 
 	return {
 		stdout: new ReadableStream({

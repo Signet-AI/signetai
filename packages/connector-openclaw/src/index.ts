@@ -214,7 +214,11 @@ function parseJsonOrJson5(raw: string): JsonObject {
 		// Fall through to the isolated expression parser.
 	}
 
-	const evaluated = runInNewContext(`(${withoutComments})`, {}, { timeout: 250 });
+	const evaluated = runInNewContext(
+		`(${withoutComments})`,
+		{},
+		{ timeout: 250 },
+	);
 	if (!evaluated || typeof evaluated !== "object" || Array.isArray(evaluated)) {
 		throw new Error("Top-level config must be an object");
 	}
@@ -356,7 +360,9 @@ export class OpenClawConnector extends BaseConnector {
 				const config = parseJsonOrJson5(
 					readFileSync(configPath, "utf-8"),
 				) as OpenClawConfigShape;
-				if (config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true) {
+				if (
+					config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true
+				) {
 					return true;
 				}
 			} catch {
@@ -428,7 +434,10 @@ export class OpenClawConnector extends BaseConnector {
 		);
 		push(
 			process.env.OPENCLAW_STATE_HOME
-				? join(this.expandPath(process.env.OPENCLAW_STATE_HOME), "openclaw.json")
+				? join(
+						this.expandPath(process.env.OPENCLAW_STATE_HOME),
+						"openclaw.json",
+					)
 				: undefined,
 		);
 

@@ -1,21 +1,28 @@
 <script lang="ts">
-	import type { ConfigFile, Harness, Identity } from "$lib/api";
+import type { ConfigFile, Harness, Identity } from "$lib/api";
 
-	interface Props {
-		identity: Identity;
-		harnesses: Harness[];
-		configFiles: ConfigFile[];
-		selectedFile: string;
-		memCount: number;
-		onselectfile: (name: string) => void;
-	}
+interface Props {
+	identity: Identity;
+	harnesses: Harness[];
+	configFiles: ConfigFile[];
+	selectedFile: string;
+	memCount: number;
+	onselectfile: (name: string) => void;
+}
 
-	let { identity, harnesses, configFiles, selectedFile, memCount, onselectfile }: Props = $props();
+let {
+	identity,
+	harnesses,
+	configFiles,
+	selectedFile,
+	memCount,
+	onselectfile,
+}: Props = $props();
 
-	function fmtSize(bytes: number): string {
-		if (bytes < 1024) return `${bytes}B`;
-		return `${(bytes / 1024).toFixed(1)}KB`;
-	}
+function fmtSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes}B`;
+	return `${(bytes / 1024).toFixed(1)}KB`;
+}
 </script>
 
 <aside class="sidebar sidebar-left">

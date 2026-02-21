@@ -1,42 +1,42 @@
 <script lang="ts">
-	import type { Memory } from "$lib/api";
-	import {
-		mem,
-		hasActiveFilters,
-		queueMemorySearch,
-		doSearch,
-		findSimilar,
-		clearAll,
-	} from "$lib/stores/memory.svelte";
+import type { Memory } from "$lib/api";
+import {
+	mem,
+	hasActiveFilters,
+	queueMemorySearch,
+	doSearch,
+	findSimilar,
+	clearAll,
+} from "$lib/stores/memory.svelte";
 
-	interface Props {
-		totalCount: number;
-		memories: Memory[];
+interface Props {
+	totalCount: number;
+	memories: Memory[];
+}
+
+let { totalCount, memories }: Props = $props();
+
+let displayMemories = $derived(
+	mem.similarSourceId
+		? mem.similarResults
+		: mem.searched || hasActiveFilters()
+			? mem.results
+			: memories,
+);
+
+function formatDate(dateStr: string): string {
+	try {
+		const date = new Date(dateStr);
+		return date.toLocaleString("en-US", {
+			month: "short",
+			day: "numeric",
+			hour: "numeric",
+			minute: "2-digit",
+		});
+	} catch {
+		return dateStr;
 	}
-
-	let { totalCount, memories }: Props = $props();
-
-	let displayMemories = $derived(
-		mem.similarSourceId
-			? mem.similarResults
-			: mem.searched || hasActiveFilters()
-				? mem.results
-				: memories,
-	);
-
-	function formatDate(dateStr: string): string {
-		try {
-			const date = new Date(dateStr);
-			return date.toLocaleString("en-US", {
-				month: "short",
-				day: "numeric",
-				hour: "numeric",
-				minute: "2-digit",
-			});
-		} catch {
-			return dateStr;
-		}
-	}
+}
 </script>
 
 <aside class="sidebar sidebar-right">

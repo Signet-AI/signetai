@@ -136,7 +136,11 @@ describe("extractFactsAndEntities", () => {
 	it("defaults invalid types to 'fact' with a warning", async () => {
 		const response = JSON.stringify({
 			facts: [
-				{ content: "Some fact that is definitely long enough", type: "bogustype", confidence: 0.7 },
+				{
+					content: "Some fact that is definitely long enough",
+					type: "bogustype",
+					confidence: 0.7,
+				},
 			],
 			entities: [],
 		});
@@ -165,9 +169,7 @@ describe("extractFactsAndEntities", () => {
 		expect(result.facts).toHaveLength(0);
 		expect(result.entities).toHaveLength(0);
 		expect(
-			result.warnings.some((w) =>
-				w.toLowerCase().includes("failed to parse"),
-			),
+			result.warnings.some((w) => w.toLowerCase().includes("failed to parse")),
 		).toBe(true);
 	});
 
@@ -212,9 +214,7 @@ describe("extractFactsAndEntities", () => {
 
 		expect(result.facts).toHaveLength(0);
 		expect(result.entities).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.includes("too short")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("too short"))).toBe(true);
 	});
 
 	it("returns early with warning when input is empty", async () => {
@@ -262,7 +262,9 @@ describe("extractFactsAndEntities", () => {
 		expect(result.entities).toHaveLength(1);
 		expect(result.entities[0].target).toBe("coffee");
 		expect(
-			result.warnings.filter((w) => w.includes("Entity missing source or target")),
+			result.warnings.filter((w) =>
+				w.includes("Entity missing source or target"),
+			),
 		).toHaveLength(2);
 	});
 
@@ -283,9 +285,7 @@ describe("extractFactsAndEntities", () => {
 
 		expect(result.facts).toHaveLength(0);
 		expect(result.entities).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.includes("LLM error")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("LLM error"))).toBe(true);
 	});
 
 	it("accepts all valid memory types", async () => {
@@ -313,7 +313,9 @@ describe("extractFactsAndEntities", () => {
 			expect(result.facts[i].type).toBe(validTypes[i]);
 		}
 		// No type-related warnings
-		expect(result.warnings.filter((w) => w.includes("Invalid type"))).toHaveLength(0);
+		expect(
+			result.warnings.filter((w) => w.includes("Invalid type")),
+		).toHaveLength(0);
 	});
 
 	it("handles non-array facts/entities gracefully", async () => {

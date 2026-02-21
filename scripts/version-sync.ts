@@ -48,9 +48,12 @@ function getRemoteVersion(filePath: string): string | null {
 }
 
 function listTargetPackageFiles(): string[] {
-	const output = execSync("git ls-files package.json 'packages/**/package.json'", {
-		encoding: "utf8",
-	});
+	const output = execSync(
+		"git ls-files package.json 'packages/**/package.json'",
+		{
+			encoding: "utf8",
+		},
+	);
 
 	return output
 		.split("\n")
@@ -141,7 +144,9 @@ function main() {
 		return;
 	}
 
-	console.log(`Aligned ${updated.length} package.json files to ${targetVersion}:`);
+	console.log(
+		`Aligned ${updated.length} package.json files to ${targetVersion}:`,
+	);
 	for (const file of updated) {
 		console.log(`- ${file}`);
 	}

@@ -421,7 +421,9 @@ creature: digital assistant
 
 		const result = handleSessionStart({ harness: "claude-code" });
 
-		const agentsIndex = result.inject.indexOf("Follow AGENTS instructions first.");
+		const agentsIndex = result.inject.indexOf(
+			"Follow AGENTS instructions first.",
+		);
 		const workingMemoryIndex = result.inject.indexOf("## Working Memory");
 
 		expect(result.inject).toContain("## Agent Instructions");

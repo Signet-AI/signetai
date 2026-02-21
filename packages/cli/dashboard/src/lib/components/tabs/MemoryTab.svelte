@@ -1,71 +1,76 @@
 <script lang="ts">
-	import type { Memory } from "$lib/api";
-	import {
-		mem,
-		hasActiveFilters,
-		queueMemorySearch,
-		doSearch,
-		findSimilar,
-		clearAll,
-	} from "$lib/stores/memory.svelte";
+import type { Memory } from "$lib/api";
+import {
+	mem,
+	hasActiveFilters,
+	queueMemorySearch,
+	doSearch,
+	findSimilar,
+	clearAll,
+} from "$lib/stores/memory.svelte";
 
-	interface Props {
-		memories: Memory[];
+interface Props {
+	memories: Memory[];
+}
+
+let { memories }: Props = $props();
+
+let display = $derived(
+	mem.similarSourceId
+		? mem.similarResults
+		: mem.searched || hasActiveFilters()
+			? mem.results
+			: memories,
+);
+
+function parseMemoryTags(raw: Memory["tags"]): string[] {
+	if (!raw) return [];
+	if (Array.isArray(raw)) {
+		return raw.filter(
+			(tag) => typeof tag === "string" && tag.trim().length > 0,
+		);
 	}
-
-	let { memories }: Props = $props();
-
-	let display = $derived(
-		mem.similarSourceId
-			? mem.similarResults
-			: mem.searched || hasActiveFilters()
-				? mem.results
-				: memories,
-	);
-
-	function parseMemoryTags(raw: Memory["tags"]): string[] {
-		if (!raw) return [];
-		if (Array.isArray(raw)) {
-			return raw.filter((tag) => typeof tag === "string" && tag.trim().length > 0);
-		}
-		const trimmed = raw.trim();
-		if (!trimmed) return [];
-		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-			try {
-				const parsed = JSON.parse(trimmed) as unknown;
-				if (Array.isArray(parsed)) {
-					return parsed.filter(
-						(tag): tag is string => typeof tag === "string" && tag.trim().length > 0,
-					);
-				}
-			} catch {
-				// fallthrough
-			}
-		}
-		return trimmed.split(",").map((tag) => tag.trim()).filter(Boolean);
-	}
-
-	function memoryScoreLabel(memory: Memory): string | null {
-		if (typeof memory.score !== "number") return null;
-		const score = Math.round(memory.score * 100);
-		const source = memory.source ?? "semantic";
-		return `${source} ${score}%`;
-	}
-
-	function formatDate(dateStr: string): string {
+	const trimmed = raw.trim();
+	if (!trimmed) return [];
+	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
 		try {
-			const date = new Date(dateStr);
-			return date.toLocaleString("en-US", {
-				month: "short",
-				day: "numeric",
-				hour: "numeric",
-				minute: "2-digit",
-			});
+			const parsed = JSON.parse(trimmed) as unknown;
+			if (Array.isArray(parsed)) {
+				return parsed.filter(
+					(tag): tag is string =>
+						typeof tag === "string" && tag.trim().length > 0,
+				);
+			}
 		} catch {
-			return dateStr;
+			// fallthrough
 		}
 	}
+	return trimmed
+		.split(",")
+		.map((tag) => tag.trim())
+		.filter(Boolean);
+}
 
+function memoryScoreLabel(memory: Memory): string | null {
+	if (typeof memory.score !== "number") return null;
+	const score = Math.round(memory.score * 100);
+	const source = memory.source ?? "semantic";
+	return `${source} ${score}%`;
+}
+
+function formatDate(dateStr: string): string {
+	try {
+		const date = new Date(dateStr);
+		return date.toLocaleString("en-US", {
+			month: "short",
+			day: "numeric",
+			hour: "numeric",
+			minute: "2-digit",
+		});
+	} catch {
+		return dateStr;
+	}
+}
 </script>
 
 <section class="memory-library">

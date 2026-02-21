@@ -75,8 +75,12 @@ let displayMemories = $derived(
 
 // --- Filter reactivity ---
 $effect(() => {
-	const _ = mem.filterType, __ = mem.filterTags, ___ = mem.filterWho,
-		____ = mem.filterPinned, _____ = mem.filterImportanceMin, ______ = mem.filterSince;
+	const _ = mem.filterType,
+		__ = mem.filterTags,
+		___ = mem.filterWho,
+		____ = mem.filterPinned,
+		_____ = mem.filterImportanceMin,
+		______ = mem.filterSince;
 	if (hasActiveFilters() || mem.searched) {
 		queueMemorySearch();
 	}
@@ -98,7 +102,9 @@ $effect(() => {
 
 // --- Init ---
 onMount(() => {
-	getStatus().then((s) => { daemonStatus = s; });
+	getStatus().then((s) => {
+		daemonStatus = s;
+	});
 	loadWhoOptions();
 });
 </script>

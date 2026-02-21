@@ -18,9 +18,9 @@ function addColumnIfMissing(
 	column: string,
 	definition: string,
 ): boolean {
-	const rows = db
-		.prepare(`PRAGMA table_info(${table})`)
-		.all() as ReadonlyArray<Record<string, unknown>>;
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<
+		Record<string, unknown>
+	>;
 	if (rows.some((r) => r.name === column)) return false;
 	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 	return true;

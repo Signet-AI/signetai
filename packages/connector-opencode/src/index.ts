@@ -414,9 +414,7 @@ export class OpenCodeConnector extends BaseConnector {
 	 *
 	 * Creates the OpenCode plugin that provides /remember and /recall tools.
 	 */
-	async generateMemoryPlugin(
-		_basePath: string,
-	): Promise<string> {
+	async generateMemoryPlugin(_basePath: string): Promise<string> {
 		const pluginContent = generateMemoryPlugin({});
 
 		const opencodePath = this.getOpenCodePath();
@@ -497,10 +495,7 @@ export class OpenCodeConnector extends BaseConnector {
 		return [];
 	}
 
-	private upsertMemoryPlugin(
-		config: JsonObject,
-		pluginPath: string,
-	): boolean {
+	private upsertMemoryPlugin(config: JsonObject, pluginPath: string): boolean {
 		const pluginSpec = pathToFileURL(pluginPath).toString();
 		const pluginEntries = this.readPluginEntries(config);
 

@@ -30,15 +30,15 @@ describe("parsePackageManagerUserAgent", () => {
 		expect(parsePackageManagerUserAgent("npm/10.9.0 node/v20.10.0")).toBe(
 			"npm",
 		);
-		expect(parsePackageManagerUserAgent("pnpm/9.12.0 npm/? node/v20.10.0")).toBe(
-			"pnpm",
-		);
+		expect(
+			parsePackageManagerUserAgent("pnpm/9.12.0 npm/? node/v20.10.0"),
+		).toBe("pnpm");
 		expect(parsePackageManagerUserAgent("bun/1.2.3 npm/? node/v20.10.0")).toBe(
 			"bun",
 		);
-		expect(parsePackageManagerUserAgent("yarn/1.22.22 npm/? node/v20.10.0")).toBe(
-			"yarn",
-		);
+		expect(
+			parsePackageManagerUserAgent("yarn/1.22.22 npm/? node/v20.10.0"),
+		).toBe("yarn");
 	});
 });
 
@@ -73,7 +73,9 @@ describe("resolvePrimaryPackageManager", () => {
 
 		expect(result.family).toBe("npm");
 		expect(result.source).toBe("fallback");
-		expect(result.reason).toContain("Configured package manager 'bun' is unavailable");
+		expect(result.reason).toContain(
+			"Configured package manager 'bun' is unavailable",
+		);
 	});
 
 	it("uses npm_config_user_agent when config metadata is missing", () => {

@@ -1,118 +1,125 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+import { onMount } from "svelte";
 
-	interface LogEntry {
-		timestamp: string;
-		level: "debug" | "info" | "warn" | "error";
-		category: string;
-		message: string;
-		data?: Record<string, unknown>;
-		duration?: number;
-		error?: { name: string; message: string };
+interface LogEntry {
+	timestamp: string;
+	level: "debug" | "info" | "warn" | "error";
+	category: string;
+	message: string;
+	data?: Record<string, unknown>;
+	duration?: number;
+	error?: { name: string; message: string };
+}
+
+let logs = $state<LogEntry[]>([]);
+let logsLoading = $state(false);
+let logsError = $state("");
+let logsStreaming = $state(false);
+let logEventSource: EventSource | null = null;
+let logLevelFilter = $state<string>("");
+let logCategoryFilter = $state<string>("");
+let logAutoScroll = $state(true);
+let logContainer = $state<HTMLDivElement | null>(null);
+
+const logCategories = [
+	"daemon",
+	"api",
+	"memory",
+	"sync",
+	"git",
+	"watcher",
+	"embedding",
+	"harness",
+	"system",
+];
+const logLevels = ["debug", "info", "warn", "error"];
+
+async function fetchLogs() {
+	logsLoading = true;
+	logsError = "";
+	try {
+		const params = new URLSearchParams({ limit: "200" });
+		if (logLevelFilter) params.set("level", logLevelFilter);
+		if (logCategoryFilter) params.set("category", logCategoryFilter);
+
+		const res = await fetch(`/api/logs?${params}`);
+		const data = await res.json();
+		logs = data.logs || [];
+	} catch {
+		logsError = "Failed to fetch logs";
+	} finally {
+		logsLoading = false;
+	}
+}
+
+function startLogStream() {
+	if (logEventSource) {
+		logEventSource.close();
 	}
 
-	let logs = $state<LogEntry[]>([]);
-	let logsLoading = $state(false);
-	let logsError = $state("");
-	let logsStreaming = $state(false);
-	let logEventSource: EventSource | null = null;
-	let logLevelFilter = $state<string>("");
-	let logCategoryFilter = $state<string>("");
-	let logAutoScroll = $state(true);
-	let logContainer = $state<HTMLDivElement | null>(null);
+	logsStreaming = true;
+	logEventSource = new EventSource("/api/logs/stream");
 
-	const logCategories = [
-		"daemon", "api", "memory", "sync", "git",
-		"watcher", "embedding", "harness", "system",
-	];
-	const logLevels = ["debug", "info", "warn", "error"];
-
-	async function fetchLogs() {
-		logsLoading = true;
-		logsError = "";
+	logEventSource.onmessage = (event) => {
 		try {
-			const params = new URLSearchParams({ limit: "200" });
-			if (logLevelFilter) params.set("level", logLevelFilter);
-			if (logCategoryFilter) params.set("category", logCategoryFilter);
+			const entry = JSON.parse(event.data);
+			if (entry.type === "connected") return;
 
-			const res = await fetch(`/api/logs?${params}`);
-			const data = await res.json();
-			logs = data.logs || [];
-		} catch {
-			logsError = "Failed to fetch logs";
-		} finally {
-			logsLoading = false;
-		}
-	}
+			if (logLevelFilter && entry.level !== logLevelFilter) return;
+			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
 
-	function startLogStream() {
-		if (logEventSource) {
-			logEventSource.close();
-		}
+			logs = [...logs.slice(-499), entry];
 
-		logsStreaming = true;
-		logEventSource = new EventSource("/api/logs/stream");
-
-		logEventSource.onmessage = (event) => {
-			try {
-				const entry = JSON.parse(event.data);
-				if (entry.type === "connected") return;
-
-				if (logLevelFilter && entry.level !== logLevelFilter) return;
-				if (logCategoryFilter && entry.category !== logCategoryFilter) return;
-
-				logs = [...logs.slice(-499), entry];
-
-				if (logAutoScroll && logContainer) {
-					setTimeout(() => {
-						logContainer?.scrollTo({
-							top: logContainer.scrollHeight,
-							behavior: "smooth",
-						});
-					}, 50);
-				}
-			} catch {
-				// Ignore parse errors
+			if (logAutoScroll && logContainer) {
+				setTimeout(() => {
+					logContainer?.scrollTo({
+						top: logContainer.scrollHeight,
+						behavior: "smooth",
+					});
+				}, 50);
 			}
-		};
+		} catch {
+			// Ignore parse errors
+		}
+	};
 
-		logEventSource.onerror = () => {
-			logsStreaming = false;
-			logEventSource?.close();
-			logEventSource = null;
-		};
-	}
-
-	function stopLogStream() {
+	logEventSource.onerror = () => {
 		logsStreaming = false;
 		logEventSource?.close();
 		logEventSource = null;
-	}
+	};
+}
 
-	function toggleLogStream() {
-		if (logsStreaming) {
-			stopLogStream();
-		} else {
-			startLogStream();
+function stopLogStream() {
+	logsStreaming = false;
+	logEventSource?.close();
+	logEventSource = null;
+}
+
+function toggleLogStream() {
+	if (logsStreaming) {
+		stopLogStream();
+	} else {
+		startLogStream();
+	}
+}
+
+function clearLogs() {
+	logs = [];
+}
+
+function formatLogTime(timestamp: string): string {
+	return timestamp.split("T")[1]?.slice(0, 8) || "";
+}
+
+onMount(() => {
+	fetchLogs();
+	return () => {
+		if (logEventSource) {
+			logEventSource.close();
 		}
-	}
-
-	function clearLogs() {
-		logs = [];
-	}
-
-	function formatLogTime(timestamp: string): string {
-		return timestamp.split("T")[1]?.slice(0, 8) || "";
-	}
-
-	onMount(() => {
-		fetchLogs();
-		return () => {
-			if (logEventSource) {
-				logEventSource.close();
-			}
-		};
-	});
+	};
+});
 </script>
 
 <div class="logs-container">

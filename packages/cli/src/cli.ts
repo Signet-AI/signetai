@@ -134,8 +134,8 @@ function syncBuiltinSkills(
 
 	mkdirSync(skillsDest, { recursive: true });
 
-	const entries = readdirSync(skillsSource, { withFileTypes: true }).filter((d) =>
-		d.isDirectory(),
+	const entries = readdirSync(skillsSource, { withFileTypes: true }).filter(
+		(d) => d.isDirectory(),
 	);
 
 	for (const entry of entries) {
@@ -685,7 +685,9 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 		return hasCommand("ollama");
 	}
 
-	console.log(chalk.yellow("  Automated install is not available on this platform."));
+	console.log(
+		chalk.yellow("  Automated install is not available on this platform."),
+	);
 	printOllamaInstallInstructions();
 	return false;
 }
@@ -727,7 +729,9 @@ async function queryOllamaModels(baseUrl = "http://localhost:11434"): Promise<{
 }
 
 function hasOllamaModel(models: string[], model: string): boolean {
-	return models.some((entry) => entry === model || entry.startsWith(`${model}:`));
+	return models.some(
+		(entry) => entry === model || entry.startsWith(`${model}:`),
+	);
 }
 
 async function pullOllamaModel(model: string): Promise<boolean> {
@@ -1968,7 +1972,9 @@ ${agentName} is a helpful assistant.
 		// Configure OpenClaw workspace if requested
 		if (configureOpenClawWs) {
 			spinner.text = "Configuring OpenClaw workspace...";
-			const patched = await new OpenClawConnector().configureWorkspace(basePath);
+			const patched = await new OpenClawConnector().configureWorkspace(
+				basePath,
+			);
 			if (patched.length > 0) {
 				console.log(chalk.dim("\n  ✓ OpenClaw workspace set to ~/.agents"));
 			}

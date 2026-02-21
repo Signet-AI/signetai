@@ -1,44 +1,44 @@
 <script lang="ts">
-	import { onMount } from "svelte";
-	import { getSecrets, putSecret, deleteSecret } from "$lib/api";
+import { onMount } from "svelte";
+import { getSecrets, putSecret, deleteSecret } from "$lib/api";
 
-	let secrets = $state<string[]>([]);
-	let secretsLoading = $state(false);
-	let newSecretName = $state("");
-	let newSecretValue = $state("");
-	let secretAdding = $state(false);
-	let secretDeleting = $state<string | null>(null);
+let secrets = $state<string[]>([]);
+let secretsLoading = $state(false);
+let newSecretName = $state("");
+let newSecretValue = $state("");
+let secretAdding = $state(false);
+let secretDeleting = $state<string | null>(null);
 
-	async function fetchSecrets() {
-		secretsLoading = true;
-		secrets = await getSecrets();
-		secretsLoading = false;
+async function fetchSecrets() {
+	secretsLoading = true;
+	secrets = await getSecrets();
+	secretsLoading = false;
+}
+
+async function addSecret() {
+	if (!newSecretName.trim() || !newSecretValue.trim()) return;
+	secretAdding = true;
+	const ok = await putSecret(newSecretName.trim(), newSecretValue);
+	if (ok) {
+		newSecretName = "";
+		newSecretValue = "";
+		await fetchSecrets();
 	}
+	secretAdding = false;
+}
 
-	async function addSecret() {
-		if (!newSecretName.trim() || !newSecretValue.trim()) return;
-		secretAdding = true;
-		const ok = await putSecret(newSecretName.trim(), newSecretValue);
-		if (ok) {
-			newSecretName = "";
-			newSecretValue = "";
-			await fetchSecrets();
-		}
-		secretAdding = false;
+async function removeSecret(name: string) {
+	secretDeleting = name;
+	const ok = await deleteSecret(name);
+	if (ok) {
+		await fetchSecrets();
 	}
+	secretDeleting = null;
+}
 
-	async function removeSecret(name: string) {
-		secretDeleting = name;
-		const ok = await deleteSecret(name);
-		if (ok) {
-			await fetchSecrets();
-		}
-		secretDeleting = null;
-	}
-
-	onMount(() => {
-		fetchSecrets();
-	});
+onMount(() => {
+	fetchSecrets();
+});
 </script>
 
 <div class="secrets-container">

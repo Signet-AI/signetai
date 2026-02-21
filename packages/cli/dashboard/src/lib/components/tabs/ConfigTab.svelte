@@ -1,54 +1,54 @@
 <script lang="ts">
-	import { saveConfigFile, type ConfigFile } from "$lib/api";
+import { saveConfigFile, type ConfigFile } from "$lib/api";
 
-	interface Props {
-		configFiles: ConfigFile[];
-		selectedFile: string;
-		onselectfile: (name: string) => void;
+interface Props {
+	configFiles: ConfigFile[];
+	selectedFile: string;
+	onselectfile: (name: string) => void;
+}
+
+let { configFiles, selectedFile, onselectfile }: Props = $props();
+
+let editorContent = $state("");
+let saving = $state(false);
+let saved = $state(false);
+
+$effect(() => {
+	if (!selectedFile && configFiles?.length) {
+		onselectfile(configFiles[0].name);
 	}
+});
 
-	let { configFiles, selectedFile, onselectfile }: Props = $props();
+$effect(() => {
+	const file = configFiles?.find((f) => f.name === selectedFile);
+	editorContent = file?.content ?? "";
+	saved = false;
+});
 
-	let editorContent = $state("");
-	let saving = $state(false);
-	let saved = $state(false);
+function ext(name: string): string {
+	return name.split(".").pop() ?? "";
+}
 
-	$effect(() => {
-		if (!selectedFile && configFiles?.length) {
-			onselectfile(configFiles[0].name);
+async function saveFile() {
+	saving = true;
+	saved = false;
+	try {
+		const success = await saveConfigFile(selectedFile, editorContent);
+		if (success) {
+			saved = true;
+			setTimeout(() => (saved = false), 2000);
 		}
-	});
-
-	$effect(() => {
-		const file = configFiles?.find((f) => f.name === selectedFile);
-		editorContent = file?.content ?? "";
-		saved = false;
-	});
-
-	function ext(name: string): string {
-		return name.split(".").pop() ?? "";
+	} finally {
+		saving = false;
 	}
+}
 
-	async function saveFile() {
-		saving = true;
-		saved = false;
-		try {
-			const success = await saveConfigFile(selectedFile, editorContent);
-			if (success) {
-				saved = true;
-				setTimeout(() => (saved = false), 2000);
-			}
-		} finally {
-			saving = false;
-		}
+function handleKeydown(e: KeyboardEvent) {
+	if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+		e.preventDefault();
+		saveFile();
 	}
-
-	function handleKeydown(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-			e.preventDefault();
-			saveFile();
-		}
-	}
+}
 </script>
 
 <svelte:window onkeydown={handleKeydown} />

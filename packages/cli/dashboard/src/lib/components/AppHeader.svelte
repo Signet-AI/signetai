@@ -1,15 +1,16 @@
 <script lang="ts">
-	import type { DaemonStatus } from "$lib/api";
+import type { DaemonStatus } from "$lib/api";
 
-	interface Props {
-		memCount: number;
-		harnessCount: number;
-		daemonStatus: DaemonStatus | null;
-		theme: "dark" | "light";
-		onthemetoggle: () => void;
-	}
+interface Props {
+	memCount: number;
+	harnessCount: number;
+	daemonStatus: DaemonStatus | null;
+	theme: "dark" | "light";
+	onthemetoggle: () => void;
+}
 
-	let { memCount, harnessCount, daemonStatus, theme, onthemetoggle }: Props = $props();
+let { memCount, harnessCount, daemonStatus, theme, onthemetoggle }: Props =
+	$props();
 </script>
 
 <header class="header">

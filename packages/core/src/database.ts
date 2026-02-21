@@ -283,17 +283,11 @@ export class Database {
 		values.push(id);
 
 		this.getDb()
-			.prepare(
-				`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`,
-			)
+			.prepare(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`)
 			.run(...values);
 	}
 
-	softDeleteMemory(
-		id: string,
-		deletedBy: string,
-		reason?: string,
-	): void {
+	softDeleteMemory(id: string, deletedBy: string, reason?: string): void {
 		const now = new Date().toISOString();
 
 		// Grab old content for history
@@ -337,9 +331,7 @@ export class Database {
 
 	// -- History --
 
-	addHistoryEvent(
-		event: Omit<MemoryHistory, "id" | "createdAt">,
-	): string {
+	addHistoryEvent(event: Omit<MemoryHistory, "id" | "createdAt">): string {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
 
@@ -380,10 +372,7 @@ export class Database {
 	// -- Job queue --
 
 	enqueueJob(
-		job: Omit<
-			MemoryJob,
-			"id" | "createdAt" | "updatedAt" | "attempts"
-		>,
+		job: Omit<MemoryJob, "id" | "createdAt" | "updatedAt" | "attempts">,
 	): string {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
@@ -465,17 +454,12 @@ export class Database {
 
 		// Check if we've exceeded max_attempts
 		const row = this.getDb()
-			.prepare(
-				"SELECT attempts, max_attempts FROM memory_jobs WHERE id = ?",
-			)
+			.prepare("SELECT attempts, max_attempts FROM memory_jobs WHERE id = ?")
 			.get(id);
 
-		const attempts =
-			row !== undefined ? (row.attempts as number) : 0;
-		const maxAttempts =
-			row !== undefined ? (row.max_attempts as number) : 3;
-		const nextStatus =
-			attempts >= maxAttempts ? "dead" : "failed";
+		const attempts = row !== undefined ? (row.attempts as number) : 0;
+		const maxAttempts = row !== undefined ? (row.max_attempts as number) : 3;
+		const nextStatus = attempts >= maxAttempts ? "dead" : "failed";
 
 		this.getDb()
 			.prepare(
@@ -503,9 +487,7 @@ export class Database {
 			)
 			.run(now);
 
-		const count = this.getDb()
-			.prepare("SELECT changes() as n")
-			.get();
+		const count = this.getDb().prepare("SELECT changes() as n").get();
 		return count !== undefined ? (count.n as number) : 0;
 	}
 
@@ -531,9 +513,7 @@ function rowToMemory(row: Record<string, unknown>): Memory {
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,
 		updatedBy: row.updated_by as string,
-		vectorClock: JSON.parse(
-			(row.vector_clock as string) || "{}",
-		),
+		vectorClock: JSON.parse((row.vector_clock as string) || "{}"),
 		version: row.version as number,
 		manualOverride: Boolean(row.manual_override),
 		// v2 optional fields
@@ -555,9 +535,7 @@ function rowToMemory(row: Record<string, unknown>): Memory {
 	};
 }
 
-function rowToHistory(
-	row: Record<string, unknown>,
-): MemoryHistory {
+function rowToHistory(row: Record<string, unknown>): MemoryHistory {
 	return {
 		id: row.id as string,
 		memoryId: row.memory_id as string,

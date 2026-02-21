@@ -36,10 +36,7 @@ function parseVersion(value: string): ParsedVersion | null {
 	return { core, prerelease };
 }
 
-function comparePrerelease(
-	a: readonly string[],
-	b: readonly string[],
-): number {
+function comparePrerelease(a: readonly string[], b: readonly string[]): number {
 	if (a.length === 0 && b.length === 0) return 0;
 	if (a.length === 0) return 1;
 	if (b.length === 0) return -1;

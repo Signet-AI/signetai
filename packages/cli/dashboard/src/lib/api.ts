@@ -263,7 +263,9 @@ export async function getEmbeddings(
 	options: { limit?: number; offset?: number } = {},
 ): Promise<EmbeddingsResponse> {
 	try {
-		const params = new URLSearchParams({ vectors: withVectors ? "true" : "false" });
+		const params = new URLSearchParams({
+			vectors: withVectors ? "true" : "false",
+		});
 		if (typeof options.limit === "number") {
 			params.set("limit", options.limit.toString());
 		}
@@ -282,8 +284,11 @@ export async function getEmbeddings(
 			count: typeof data.count === "number" ? data.count : embeddings.length,
 			total: typeof data.total === "number" ? data.total : embeddings.length,
 			limit:
-				typeof data.limit === "number" ? data.limit : (options.limit ?? embeddings.length),
-			offset: typeof data.offset === "number" ? data.offset : (options.offset ?? 0),
+				typeof data.limit === "number"
+					? data.limit
+					: (options.limit ?? embeddings.length),
+			offset:
+				typeof data.offset === "number" ? data.offset : (options.offset ?? 0),
 			hasMore: Boolean(data.hasMore),
 			error: typeof data.error === "string" ? data.error : undefined,
 		};

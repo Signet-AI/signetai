@@ -5,11 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-	initDbAccessor,
-	getDbAccessor,
-	closeDbAccessor,
-} from "./db-accessor";
+import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
 
 function tmpDbPath(): string {
 	const dir = join(
@@ -47,9 +43,7 @@ describe("DbAccessor", () => {
 		const acc = getDbAccessor();
 
 		acc.withWriteTx((db) => {
-			db.exec(
-				"CREATE TABLE test_table (id INTEGER PRIMARY KEY, val TEXT)",
-			);
+			db.exec("CREATE TABLE test_table (id INTEGER PRIMARY KEY, val TEXT)");
 			db.prepare("INSERT INTO test_table (id, val) VALUES (?, ?)").run(
 				1,
 				"hello",
@@ -57,9 +51,9 @@ describe("DbAccessor", () => {
 		});
 
 		const result = acc.withReadDb((db) => {
-			return db
-				.prepare("SELECT val FROM test_table WHERE id = ?")
-				.get(1) as Record<string, unknown> | undefined;
+			return db.prepare("SELECT val FROM test_table WHERE id = ?").get(1) as
+				| Record<string, unknown>
+				| undefined;
 		});
 		expect(result).toBeTruthy();
 		expect(result?.val).toBe("hello");
@@ -72,15 +66,15 @@ describe("DbAccessor", () => {
 		const acc = getDbAccessor();
 
 		acc.withWriteTx((db) => {
-			db.exec(
-				"CREATE TABLE read_test (id INTEGER PRIMARY KEY, name TEXT)",
+			db.exec("CREATE TABLE read_test (id INTEGER PRIMARY KEY, name TEXT)");
+			db.prepare("INSERT INTO read_test (id, name) VALUES (?, ?)").run(
+				1,
+				"alice",
 			);
-			db.prepare(
-				"INSERT INTO read_test (id, name) VALUES (?, ?)",
-			).run(1, "alice");
-			db.prepare(
-				"INSERT INTO read_test (id, name) VALUES (?, ?)",
-			).run(2, "bob");
+			db.prepare("INSERT INTO read_test (id, name) VALUES (?, ?)").run(
+				2,
+				"bob",
+			);
 		});
 
 		const rows = acc.withReadDb((db) => {
@@ -100,19 +94,19 @@ describe("DbAccessor", () => {
 		const acc = getDbAccessor();
 
 		acc.withWriteTx((db) => {
-			db.exec(
-				"CREATE TABLE rollback_test (id INTEGER PRIMARY KEY, val TEXT)",
+			db.exec("CREATE TABLE rollback_test (id INTEGER PRIMARY KEY, val TEXT)");
+			db.prepare("INSERT INTO rollback_test (id, val) VALUES (?, ?)").run(
+				1,
+				"original",
 			);
-			db.prepare(
-				"INSERT INTO rollback_test (id, val) VALUES (?, ?)",
-			).run(1, "original");
 		});
 
 		try {
 			acc.withWriteTx((db) => {
-				db.prepare(
-					"INSERT INTO rollback_test (id, val) VALUES (?, ?)",
-				).run(2, "should-rollback");
+				db.prepare("INSERT INTO rollback_test (id, val) VALUES (?, ?)").run(
+					2,
+					"should-rollback",
+				);
 				throw new Error("intentional failure");
 			});
 		} catch {

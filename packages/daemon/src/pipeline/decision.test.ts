@@ -235,9 +235,7 @@ describe("runShadowDecisions", () => {
 		);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.includes("non-candidate")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("non-candidate"))).toBe(true);
 	});
 
 	it("rejects a decision missing a reason", async () => {
@@ -258,9 +256,9 @@ describe("runShadowDecisions", () => {
 		);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.includes("missing reason")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("missing reason"))).toBe(
+			true,
+		);
 	});
 
 	it("clamps confidence on decisions to [0, 1]", async () => {
@@ -326,9 +324,9 @@ describe("runShadowDecisions", () => {
 		);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.includes("Decision LLM error")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Decision LLM error"))).toBe(
+			true,
+		);
 	});
 
 	it("returns one ADD proposal per fact when no candidates match", async () => {
@@ -435,9 +433,9 @@ describe("runShadowDecisions", () => {
 		);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.includes("missing targetId")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("missing targetId"))).toBe(
+			true,
+		);
 	});
 
 	it("rejects 'delete' without targetId", async () => {
@@ -458,9 +456,9 @@ describe("runShadowDecisions", () => {
 		);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.includes("missing targetId")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("missing targetId"))).toBe(
+			true,
+		);
 	});
 
 	it("processes multiple facts independently", async () => {

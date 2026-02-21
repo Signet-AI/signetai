@@ -294,22 +294,23 @@ function getProjectMemories(
 	if (!existsSync(MEMORY_DB)) return [];
 
 	try {
-		const rows = getDbAccessor().withReadDb((db) =>
-			db
-				.prepare(
-					`SELECT id, content, type, importance, tags, pinned, project, created_at
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT id, content, type, importance, tags, pinned, project, created_at
 					 FROM memories ORDER BY created_at DESC LIMIT ?`,
-				)
-				.all(limit * 3) as Array<{
-				id: string;
-				content: string;
-				type: string;
-				importance: number;
-				tags: string | null;
-				pinned: number;
-				project: string | null;
-				created_at: string;
-			}>,
+					)
+					.all(limit * 3) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					importance: number;
+					tags: string | null;
+					pinned: number;
+					project: string | null;
+					created_at: string;
+				}>,
 		);
 
 		const scored: ScoredMemory[] = rows
@@ -997,7 +998,9 @@ export function handleRecall(req: RecallRequest): RecallResponse {
 						   LIMIT ?`;
 
 					found = req.project
-						? (db.prepare(baseQuery).all(ftsQuery, req.project, limit) as RecallRow[])
+						? (db
+								.prepare(baseQuery)
+								.all(ftsQuery, req.project, limit) as RecallRow[])
 						: (db.prepare(baseQuery).all(ftsQuery, limit) as RecallRow[]);
 				}
 			} catch {
@@ -1020,7 +1023,9 @@ export function handleRecall(req: RecallRequest): RecallResponse {
 					   LIMIT ?`;
 
 				found = req.project
-					? (db.prepare(baseQuery).all(likePattern, req.project, limit) as RecallRow[])
+					? (db
+							.prepare(baseQuery)
+							.all(likePattern, req.project, limit) as RecallRow[])
 					: (db.prepare(baseQuery).all(likePattern, limit) as RecallRow[]);
 			}
 

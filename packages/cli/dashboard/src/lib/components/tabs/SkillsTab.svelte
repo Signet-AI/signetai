@@ -1,70 +1,70 @@
 <script lang="ts">
-	import { onMount } from "svelte";
-	import {
-		getSkills,
-		searchSkills,
-		installSkill,
-		uninstallSkill,
-		type Skill,
-	} from "$lib/api";
+import { onMount } from "svelte";
+import {
+	getSkills,
+	searchSkills,
+	installSkill,
+	uninstallSkill,
+	type Skill,
+} from "$lib/api";
 
-	let skills = $state<Skill[]>([]);
-	let skillsLoading = $state(false);
-	let skillSearchQuery = $state("");
-	let skillSearchResults = $state<
-		Array<{ name: string; description: string; installed: boolean }>
-	>([]);
-	let skillSearching = $state(false);
-	let skillInstalling = $state<string | null>(null);
-	let skillUninstalling = $state<string | null>(null);
-	let selectedSkill = $state<Skill | null>(null);
+let skills = $state<Skill[]>([]);
+let skillsLoading = $state(false);
+let skillSearchQuery = $state("");
+let skillSearchResults = $state<
+	Array<{ name: string; description: string; installed: boolean }>
+>([]);
+let skillSearching = $state(false);
+let skillInstalling = $state<string | null>(null);
+let skillUninstalling = $state<string | null>(null);
+let selectedSkill = $state<Skill | null>(null);
 
-	async function fetchSkills() {
-		skillsLoading = true;
-		skills = await getSkills();
-		skillsLoading = false;
+async function fetchSkills() {
+	skillsLoading = true;
+	skills = await getSkills();
+	skillsLoading = false;
+}
+
+async function doSkillSearch() {
+	if (!skillSearchQuery.trim()) {
+		skillSearchResults = [];
+		return;
 	}
+	skillSearching = true;
+	skillSearchResults = await searchSkills(skillSearchQuery.trim());
+	skillSearching = false;
+}
 
-	async function doSkillSearch() {
-		if (!skillSearchQuery.trim()) {
-			skillSearchResults = [];
-			return;
+async function doInstallSkill(name: string) {
+	skillInstalling = name;
+	const result = await installSkill(name);
+	if (result.success) {
+		await fetchSkills();
+		skillSearchResults = skillSearchResults.map((s) =>
+			s.name === name ? { ...s, installed: true } : s,
+		);
+	}
+	skillInstalling = null;
+}
+
+async function doUninstallSkill(name: string) {
+	skillUninstalling = name;
+	const result = await uninstallSkill(name);
+	if (result.success) {
+		await fetchSkills();
+		skillSearchResults = skillSearchResults.map((s) =>
+			s.name === name ? { ...s, installed: false } : s,
+		);
+		if (selectedSkill?.name === name) {
+			selectedSkill = null;
 		}
-		skillSearching = true;
-		skillSearchResults = await searchSkills(skillSearchQuery.trim());
-		skillSearching = false;
 	}
+	skillUninstalling = null;
+}
 
-	async function doInstallSkill(name: string) {
-		skillInstalling = name;
-		const result = await installSkill(name);
-		if (result.success) {
-			await fetchSkills();
-			skillSearchResults = skillSearchResults.map((s) =>
-				s.name === name ? { ...s, installed: true } : s,
-			);
-		}
-		skillInstalling = null;
-	}
-
-	async function doUninstallSkill(name: string) {
-		skillUninstalling = name;
-		const result = await uninstallSkill(name);
-		if (result.success) {
-			await fetchSkills();
-			skillSearchResults = skillSearchResults.map((s) =>
-				s.name === name ? { ...s, installed: false } : s,
-			);
-			if (selectedSkill?.name === name) {
-				selectedSkill = null;
-			}
-		}
-		skillUninstalling = null;
-	}
-
-	onMount(() => {
-		fetchSkills();
-	});
+onMount(() => {
+	fetchSkills();
+});
 </script>
 
 <div class="skills-container">

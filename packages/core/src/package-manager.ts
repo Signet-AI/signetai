@@ -38,18 +38,10 @@ function normalizePackageManager(value: unknown): PackageManagerFamily | null {
 	if (typeof value !== "string") return null;
 	const lowered = value.trim().toLowerCase();
 
-	if (
-		lowered === "bun" ||
-		lowered === "bunx" ||
-		lowered.startsWith("bun/")
-	) {
+	if (lowered === "bun" || lowered === "bunx" || lowered.startsWith("bun/")) {
 		return "bun";
 	}
-	if (
-		lowered === "npm" ||
-		lowered === "npx" ||
-		lowered.startsWith("npm/")
-	) {
+	if (lowered === "npm" || lowered === "npx" || lowered.startsWith("npm/")) {
 		return "npm";
 	}
 	if (lowered === "pnpm" || lowered.startsWith("pnpm/")) {
