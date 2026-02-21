@@ -397,6 +397,7 @@ async function configureHarnessHooks(
 	basePath: string,
 	options?: {
 		configureOpenClawWorkspace?: boolean;
+		openclawRuntimePath?: "plugin" | "legacy";
 	},
 ) {
 	switch (harness) {
@@ -414,6 +415,7 @@ async function configureHarnessHooks(
 			const connector = new OpenClawConnector();
 			await connector.install(basePath, {
 				configureWorkspace: options?.configureOpenClawWorkspace ?? false,
+				runtimePath: options?.openclawRuntimePath ?? "legacy",
 			});
 			break;
 		}
@@ -1625,8 +1627,9 @@ async function setupWizard(options: { path?: string }) {
 		choices: harnessChoices,
 	});
 
-	// OpenClaw workspace configuration (handles openclaw/clawdbot/moltbot)
+	// OpenClaw configuration (handles openclaw/clawdbot/moltbot)
 	let configureOpenClawWs = false;
+	let openclawRuntimePath: "plugin" | "legacy" = "plugin";
 	if (harnesses.includes("openclaw")) {
 		const connector = new OpenClawConnector();
 		const existingConfigs = connector.getDiscoveredConfigPaths();
@@ -1638,6 +1641,26 @@ async function setupWizard(options: { path?: string }) {
 				default: true,
 			});
 		}
+
+		console.log();
+		openclawRuntimePath = (await select({
+			message: "OpenClaw integration mode:",
+			choices: [
+				{
+					value: "plugin" as const,
+					name: "Plugin adapter (recommended)",
+					description:
+						"@signet/adapter-openclaw — full lifecycle + memory tools",
+				},
+				{
+					value: "legacy" as const,
+					name: "Legacy hooks",
+					description:
+						"handler.js for /remember, /recall, /context commands",
+				},
+			],
+			default: "plugin",
+		})) as "plugin" | "legacy";
 	}
 
 	console.log();
@@ -1960,7 +1983,9 @@ ${agentName} is a helpful assistant.
 
 		for (const harness of harnesses) {
 			try {
-				await configureHarnessHooks(harness, basePath);
+				await configureHarnessHooks(harness, basePath, {
+					openclawRuntimePath,
+				});
 				configuredHarnesses.push(harness);
 			} catch (err) {
 				console.warn(

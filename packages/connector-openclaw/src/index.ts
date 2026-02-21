@@ -54,6 +54,7 @@ interface OpenClawConfigShape {
 export interface OpenClawInstallOptions {
 	configureWorkspace?: boolean;
 	configureHooks?: boolean;
+	runtimePath?: "plugin" | "legacy";
 }
 
 /**
@@ -257,6 +258,7 @@ export class OpenClawConnector extends BaseConnector {
 
 		const configureHooks = options.configureHooks ?? true;
 		const configureWorkspace = options.configureWorkspace ?? true;
+		const runtimePath = options.runtimePath ?? "legacy";
 
 		const patch: JsonObject = {};
 		if (configureWorkspace) {
@@ -278,10 +280,25 @@ export class OpenClawConnector extends BaseConnector {
 			});
 		}
 
+		if (runtimePath === "plugin") {
+			deepMerge(patch, {
+				signet: {
+					enabled: true,
+					daemonUrl: "http://localhost:3850",
+				},
+			});
+		}
+
 		if (Object.keys(patch).length > 0) {
-			const patchResult = this.patchAllConfigs(patch);
-			configsPatched.push(...patchResult.patched);
-			warnings.push(...patchResult.warnings);
+			if (runtimePath === "plugin") {
+				const pluginResult = this.patchAllConfigsWithPlugin(patch);
+				configsPatched.push(...pluginResult.patched);
+				warnings.push(...pluginResult.warnings);
+			} else {
+				const patchResult = this.patchAllConfigs(patch);
+				configsPatched.push(...patchResult.patched);
+				warnings.push(...patchResult.warnings);
+			}
 		}
 
 		const hookFiles = this.installHookFiles(expandedBasePath);
@@ -289,7 +306,7 @@ export class OpenClawConnector extends BaseConnector {
 
 		return {
 			success: true,
-			message: "OpenClaw integration installed successfully",
+			message: `OpenClaw integration installed (${runtimePath} path)`,
 			filesWritten,
 			configsPatched,
 			...(warnings.length > 0 ? { warnings } : {}),
@@ -454,6 +471,51 @@ export class OpenClawConnector extends BaseConnector {
 		push(join(xdgStateHome, "moltbot", "moltbot.json"));
 
 		return candidates;
+	}
+
+	/**
+	 * Patch configs with plugin entry, appending to plugins array
+	 * rather than replacing it.
+	 */
+	private patchAllConfigsWithPlugin(patch: JsonObject): {
+		patched: string[];
+		warnings: string[];
+	} {
+		const patched: string[] = [];
+		const warnings: string[] = [];
+		const pluginName = "@signet/adapter-openclaw";
+
+		for (const configPath of this.getDiscoveredConfigPaths()) {
+			try {
+				const raw = readFileSync(configPath, "utf-8");
+				const config = parseJsonOrJson5(raw);
+				const indent = this.detectIndent(raw);
+
+				const existing = Array.isArray(config.plugins)
+					? (config.plugins as string[])
+					: [];
+				if (!existing.includes(pluginName)) {
+					existing.push(pluginName);
+				}
+				config.plugins = existing;
+
+				deepMerge(config, patch);
+				writeFileSync(
+					configPath,
+					JSON.stringify(config, null, indent),
+				);
+				patched.push(configPath);
+			} catch (e) {
+				const message =
+					(e as Error).message || "unknown parse/write error";
+				const warning =
+					`[signet/openclaw] Skipped patch for ${configPath}: ${message}`;
+				warnings.push(warning);
+				console.warn(warning);
+			}
+		}
+
+		return { patched, warnings };
 	}
 
 	private patchAllConfigs(patch: JsonObject): {
