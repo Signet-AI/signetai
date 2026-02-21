@@ -73,6 +73,40 @@ Signet gives you one portable memory and identity substrate that you control:
 └── .daemon/          # PID + logs
 ```
 
+## How memory works
+
+When you save a memory, Signet stores it immediately — the raw content
+hits the database before anything else happens. No matter what goes
+wrong after that, your data is safe.
+
+In the background, a local LLM reads the new memory and does two things:
+it breaks the content into structured facts and entities, then checks
+what's already stored. For each fact, it decides whether to file it as
+new, update an existing memory, replace something outdated, or skip it
+entirely.
+
+This means your agent won't keep duplicating "prefers dark mode" every
+session. It sees the existing memory, recognizes it already knows this,
+and moves on.
+
+The same pipeline runs at the end of every conversation. The daemon
+reviews the transcript, extracts anything worth remembering, and feeds
+it through the same process. So even if you never use `/remember`
+manually, your agent builds context over time — without accumulating
+duplicates or contradictions.
+
+Existing memories aren't left behind either. When the pipeline
+encounters older data through normal usage, it gradually upgrades
+those records with richer metadata and deduplication. No big bang
+migration, just graceful improvement over time.
+
+Three safety guarantees hold throughout:
+
+- **Raw-first**: content is persisted before any LLM processing begins
+- **Pinned memories are sacred**: the model cannot delete them, period
+- **Everything is recoverable**: deletions are soft, with a 30-day
+  recovery window and a full audit trail
+
 ## What ships now
 
 - **Portable identity**: sync `~/.agents/AGENTS.md` to harness-specific files
