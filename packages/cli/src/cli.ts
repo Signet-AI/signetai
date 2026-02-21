@@ -3129,15 +3129,17 @@ const secretCmd = program
 	.description("Manage encrypted secrets");
 
 secretCmd
-	.command("put <name>")
-	.description("Store a secret (value is prompted, never echoed)")
-	.action(async (name: string) => {
+	.command("put <name> [value]")
+	.description("Store a secret (prompted if value omitted)")
+	.action(async (name: string, rawValue?: string) => {
 		if (!(await ensureDaemonForSecrets())) return;
 
-		const value = await password({
-			message: `Enter value for ${chalk.bold(name)}:`,
-			mask: "•",
-		});
+		const value =
+			rawValue ??
+			(await password({
+				message: `Enter value for ${chalk.bold(name)}:`,
+				mask: "•",
+			}));
 
 		if (!value) {
 			console.error(chalk.red("  Value cannot be empty"));
