@@ -33,13 +33,14 @@ describe("migration framework", () => {
 				"SELECT version, applied_at FROM schema_migrations ORDER BY version",
 			)
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(migrations.length).toBe(6);
+		expect(migrations.length).toBe(7);
 		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
 		expect(migrations[3].version).toBe(4);
 		expect(migrations[4].version).toBe(5);
 		expect(migrations[5].version).toBe(6);
+		expect(migrations[6].version).toBe(7);
 	});
 
 	test("re-running migrations is idempotent", () => {
@@ -78,6 +79,11 @@ describe("migration framework", () => {
 		expect(tableNames).toContain("relations");
 		expect(tableNames).toContain("memory_entity_mentions");
 		expect(tableNames).toContain("schema_migrations_audit");
+
+		// v7 tables
+		expect(tableNames).toContain("documents");
+		expect(tableNames).toContain("document_memories");
+		expect(tableNames).toContain("connectors");
 	});
 
 	test("memories table has expected v2 columns", () => {
@@ -125,7 +131,7 @@ describe("migration framework", () => {
 		const audits = db
 			.query("SELECT version, applied_at FROM schema_migrations_audit")
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(audits.length).toBe(6);
+		expect(audits.length).toBe(7);
 		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}

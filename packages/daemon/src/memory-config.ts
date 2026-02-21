@@ -50,6 +50,10 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	repairReembedHourlyBudget: 10,
 	repairRequeueCooldownMs: 60000, // 1 min
 	repairRequeueHourlyBudget: 50,
+	documentWorkerIntervalMs: 10000,
+	documentChunkSize: 2000,
+	documentChunkOverlap: 200,
+	documentMaxContentBytes: 10 * 1024 * 1024, // 10 MB
 };
 
 export interface ResolvedMemoryConfig {
@@ -180,6 +184,30 @@ export function loadPipelineConfig(
 			1,
 			1000,
 			DEFAULT_PIPELINE_V2.repairRequeueHourlyBudget,
+		),
+		documentWorkerIntervalMs: clampPositive(
+			raw.documentWorkerIntervalMs,
+			1000,
+			300000,
+			DEFAULT_PIPELINE_V2.documentWorkerIntervalMs,
+		),
+		documentChunkSize: clampPositive(
+			raw.documentChunkSize,
+			200,
+			50000,
+			DEFAULT_PIPELINE_V2.documentChunkSize,
+		),
+		documentChunkOverlap: clampPositive(
+			raw.documentChunkOverlap,
+			0,
+			10000,
+			DEFAULT_PIPELINE_V2.documentChunkOverlap,
+		),
+		documentMaxContentBytes: clampPositive(
+			raw.documentMaxContentBytes,
+			1024,
+			100 * 1024 * 1024,
+			DEFAULT_PIPELINE_V2.documentMaxContentBytes,
 		),
 	};
 }

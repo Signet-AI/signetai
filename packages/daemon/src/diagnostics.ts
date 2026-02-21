@@ -49,6 +49,13 @@ export interface MutationHealth extends HealthScore {
 	readonly recentDeletes: number;
 }
 
+export interface ConnectorHealth extends HealthScore {
+	readonly connectorCount: number;
+	readonly syncingCount: number;
+	readonly errorCount: number;
+	readonly oldestErrorAge: number;
+}
+
 export interface DiagnosticsReport {
 	readonly timestamp: string;
 	readonly composite: HealthScore;
@@ -57,6 +64,7 @@ export interface DiagnosticsReport {
 	readonly index: IndexHealth;
 	readonly provider: ProviderHealth;
 	readonly mutation: MutationHealth;
+	readonly connector: ConnectorHealth;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,16 +326,79 @@ export function getMutationHealth(db: ReadDb): MutationHealth {
 	};
 }
 
+export function getConnectorHealth(db: ReadDb): ConnectorHealth {
+	const perfect: ConnectorHealth = {
+		score: 1.0,
+		status: "healthy",
+		connectorCount: 0,
+		syncingCount: 0,
+		errorCount: 0,
+		oldestErrorAge: 0,
+	};
+
+	try {
+		const totalRow = db
+			.prepare(
+				`SELECT
+					COUNT(*) AS total,
+					SUM(CASE WHEN status = 'syncing' THEN 1 ELSE 0 END) AS syncing,
+					SUM(CASE WHEN last_error IS NOT NULL THEN 1 ELSE 0 END) AS errors
+				 FROM connectors`,
+			)
+			.get() as {
+			total: number;
+			syncing: number;
+			errors: number;
+		} | undefined;
+
+		const connectorCount = totalRow?.total ?? 0;
+		const syncingCount = totalRow?.syncing ?? 0;
+		const errorCount = totalRow?.errors ?? 0;
+
+		// Find the oldest unresolved error to gauge how long things have been broken
+		const oldestErrorRow = db
+			.prepare(
+				`SELECT MIN(updated_at) AS oldest
+				 FROM connectors
+				 WHERE last_error IS NOT NULL`,
+			)
+			.get() as { oldest: string | null } | undefined;
+
+		const oldestAt = oldestErrorRow?.oldest;
+		const oldestErrorAge = oldestAt
+			? Math.max(0, Date.now() - new Date(oldestAt).getTime())
+			: 0;
+
+		let score = 1.0;
+		if (errorCount > 0) score -= 0.3;
+		if (oldestErrorAge > 86400000) score -= 0.2;
+
+		score = clamp(score);
+		return {
+			score,
+			status: scoreStatus(score),
+			connectorCount,
+			syncingCount,
+			errorCount,
+			oldestErrorAge,
+		};
+	} catch {
+		// connectors table doesn't exist yet on older databases
+		return perfect;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Composite report
 // ---------------------------------------------------------------------------
 
 const WEIGHTS = {
-	queue: 0.3,
-	storage: 0.15,
-	index: 0.2,
-	provider: 0.25,
-	mutation: 0.1,
+	queue: 0.28,
+	storage: 0.14,
+	index: 0.19,
+	provider: 0.24,
+	mutation: 0.10,
+	connector: 0.05,
 } as const;
 
 export function getDiagnostics(
@@ -339,13 +410,15 @@ export function getDiagnostics(
 	const index = getIndexHealth(db);
 	const provider = getProviderHealth(tracker);
 	const mutation = getMutationHealth(db);
+	const connector = getConnectorHealth(db);
 
 	const compositeScore = clamp(
 		queue.score * WEIGHTS.queue +
 			storage.score * WEIGHTS.storage +
 			index.score * WEIGHTS.index +
 			provider.score * WEIGHTS.provider +
-			mutation.score * WEIGHTS.mutation,
+			mutation.score * WEIGHTS.mutation +
+			connector.score * WEIGHTS.connector,
 	);
 
 	const composite: HealthScore = {
@@ -361,5 +434,6 @@ export function getDiagnostics(
 		index,
 		provider,
 		mutation,
+		connector,
 	};
 }

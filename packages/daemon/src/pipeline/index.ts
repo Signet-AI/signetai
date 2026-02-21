@@ -15,12 +15,18 @@ import {
 	startMaintenanceWorker,
 	type MaintenanceHandle,
 } from "./maintenance-worker";
+import {
+	startDocumentWorker,
+	type DocumentWorkerHandle,
+} from "./document-worker";
 import type { DecisionConfig } from "./decision";
 import type { ProviderTracker } from "../diagnostics";
 import { logger } from "../logger";
 
 export { enqueueExtractionJob } from "./worker";
+export { enqueueDocumentIngestJob } from "./document-worker";
 export type { WorkerHandle } from "./worker";
+export type { DocumentWorkerHandle } from "./document-worker";
 export type { LlmProvider } from "./provider";
 export type { RetentionHandle, RetentionConfig } from "./retention-worker";
 export type { MaintenanceHandle } from "./maintenance-worker";
@@ -32,6 +38,7 @@ export type { MaintenanceHandle } from "./maintenance-worker";
 let workerHandle: WorkerHandle | null = null;
 let retentionHandle: RetentionHandle | null = null;
 let maintenanceHandle: MaintenanceHandle | null = null;
+let documentWorkerHandle: DocumentWorkerHandle | null = null;
 
 // ---------------------------------------------------------------------------
 // Start / Stop
@@ -81,6 +88,16 @@ export function startPipeline(
 		);
 	}
 
+	// Document ingest worker runs alongside the extraction pipeline
+	if (!documentWorkerHandle) {
+		documentWorkerHandle = startDocumentWorker({
+			accessor,
+			embeddingCfg,
+			fetchEmbedding,
+			pipelineCfg,
+		});
+	}
+
 	logger.info("pipeline", "Pipeline started", {
 		mode:
 			pipelineCfg.enabled &&
@@ -92,6 +109,10 @@ export function startPipeline(
 }
 
 export async function stopPipeline(): Promise<void> {
+	if (documentWorkerHandle) {
+		await documentWorkerHandle.stop();
+		documentWorkerHandle = null;
+	}
 	if (maintenanceHandle) {
 		maintenanceHandle.stop();
 		maintenanceHandle = null;

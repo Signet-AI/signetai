@@ -123,6 +123,11 @@ export interface PipelineV2Config {
 	readonly repairReembedHourlyBudget: number;
 	readonly repairRequeueCooldownMs: number;
 	readonly repairRequeueHourlyBudget: number;
+	// Document ingest worker
+	readonly documentWorkerIntervalMs: number;
+	readonly documentChunkSize: number;
+	readonly documentChunkOverlap: number;
+	readonly documentMaxContentBytes: number;
 }
 
 // -- Status/union constants --

@@ -149,3 +149,25 @@ export {
 	type PackageManagerResolution,
 	type PackageManagerCommand,
 } from "./package-manager";
+
+// Connector runtime types
+export {
+	CONNECTOR_PROVIDERS,
+	CONNECTOR_STATUSES,
+	DOCUMENT_STATUSES,
+	DOCUMENT_SOURCE_TYPES,
+} from "./connector-types";
+export type {
+	ConnectorProvider,
+	ConnectorStatus,
+	DocumentStatus,
+	DocumentSourceType,
+	ConnectorConfig,
+	SyncCursor,
+	SyncResult,
+	SyncError,
+	ConnectorResource,
+	ConnectorRuntime,
+	DocumentRow,
+	ConnectorRow,
+} from "./connector-types";

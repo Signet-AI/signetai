@@ -56,7 +56,21 @@ import {
 	txRecoverMemory,
 	type MutationContext,
 } from "./transactions";
-import { startPipeline, stopPipeline, enqueueExtractionJob } from "./pipeline";
+import {
+	startPipeline,
+	stopPipeline,
+	enqueueExtractionJob,
+	enqueueDocumentIngestJob,
+} from "./pipeline";
+import {
+	registerConnector,
+	getConnector,
+	listConnectors,
+	updateConnectorStatus,
+	updateCursor,
+	removeConnector,
+} from "./connectors/registry";
+import { createFilesystemConnector } from "./connectors/filesystem";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import { rerank, noopReranker, type RerankCandidate } from "./pipeline/reranker";
@@ -3042,6 +3056,551 @@ app.get("/api/embeddings/status", async (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
 	const status = await checkEmbeddingProvider(config.embedding);
 	return c.json(status);
+});
+
+// ============================================================================
+// Documents API
+// ============================================================================
+
+// POST /api/documents — create a document for ingestion
+app.post("/api/documents", async (c) => {
+	let body: Record<string, unknown>;
+	try {
+		body = (await c.req.json()) as Record<string, unknown>;
+	} catch {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+
+	const sourceType = body.source_type as string | undefined;
+	if (!sourceType || !["text", "url", "file"].includes(sourceType)) {
+		return c.json({ error: "source_type must be text, url, or file" }, 400);
+	}
+
+	if (sourceType === "text" && typeof body.content !== "string") {
+		return c.json({ error: "content is required for text source_type" }, 400);
+	}
+	if (sourceType === "url" && typeof body.url !== "string") {
+		return c.json({ error: "url is required for url source_type" }, 400);
+	}
+
+	const sourceUrl =
+		sourceType === "url"
+			? (body.url as string)
+			: sourceType === "file"
+				? (body.url as string | undefined) ?? null
+				: null;
+
+	const accessor = getDbAccessor();
+
+	try {
+		const id = crypto.randomUUID();
+		const now = new Date().toISOString();
+
+		// Dedup check + insert in same write transaction to prevent races
+		const result = accessor.withWriteTx((db) => {
+			if (sourceUrl) {
+				const existing = db
+					.prepare(
+						`SELECT id, status FROM documents
+						 WHERE source_url = ?
+						   AND status NOT IN ('failed', 'deleted')
+						 LIMIT 1`,
+					)
+					.get(sourceUrl) as
+					| { id: string; status: string }
+					| undefined;
+				if (existing) {
+					return { deduplicated: true as const, existing };
+				}
+			}
+
+			db.prepare(
+				`INSERT INTO documents
+				 (id, source_url, source_type, content_type, title,
+				  raw_content, status, connector_id, chunk_count,
+				  memory_count, metadata_json, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?)`,
+			).run(
+				id,
+				sourceUrl,
+				sourceType,
+				(body.content_type as string | undefined) ?? null,
+				(body.title as string | undefined) ?? null,
+				sourceType === "text"
+					? (body.content as string)
+					: null,
+				(body.connector_id as string | undefined) ?? null,
+				body.metadata ? JSON.stringify(body.metadata) : null,
+				now,
+				now,
+			);
+
+			return { deduplicated: false as const };
+		});
+
+		if (result.deduplicated) {
+			return c.json({
+				id: result.existing.id,
+				status: result.existing.status,
+				deduplicated: true,
+			});
+		}
+
+		enqueueDocumentIngestJob(accessor, id);
+
+		return c.json({ id, status: "queued" }, 201);
+	} catch (e) {
+		logger.error("documents", "Failed to create document", e as Error);
+		return c.json({ error: "Failed to create document" }, 500);
+	}
+});
+
+// GET /api/documents — list documents
+app.get("/api/documents", (c) => {
+	const status = c.req.query("status");
+	const limit = Math.min(
+		Math.max(1, Number.parseInt(c.req.query("limit") ?? "50", 10) || 50),
+		500,
+	);
+	const offset = Math.max(
+		0,
+		Number.parseInt(c.req.query("offset") ?? "0", 10) || 0,
+	);
+
+	try {
+		const accessor = getDbAccessor();
+		const result = accessor.withReadDb((db) => {
+			const countSql = status
+				? "SELECT COUNT(*) AS cnt FROM documents WHERE status = ?"
+				: "SELECT COUNT(*) AS cnt FROM documents";
+			const countRow = (
+				status
+					? db.prepare(countSql).get(status)
+					: db.prepare(countSql).get()
+			) as { cnt: number } | undefined;
+			const total = countRow?.cnt ?? 0;
+
+			const listSql = status
+				? `SELECT * FROM documents WHERE status = ?
+				   ORDER BY created_at DESC LIMIT ? OFFSET ?`
+				: `SELECT * FROM documents
+				   ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+			const documents = status
+				? db.prepare(listSql).all(status, limit, offset)
+				: db.prepare(listSql).all(limit, offset);
+
+			return { documents, total };
+		});
+
+		return c.json({ ...result, limit, offset });
+	} catch (e) {
+		logger.error("documents", "Failed to list documents", e as Error);
+		return c.json({ error: "Failed to list documents" }, 500);
+	}
+});
+
+// GET /api/documents/:id — single document details
+app.get("/api/documents/:id", (c) => {
+	const id = c.req.param("id");
+	try {
+		const accessor = getDbAccessor();
+		const doc = accessor.withReadDb((db) => {
+			return db
+				.prepare("SELECT * FROM documents WHERE id = ?")
+				.get(id);
+		});
+		if (!doc) return c.json({ error: "Document not found" }, 404);
+		return c.json(doc);
+	} catch (e) {
+		logger.error("documents", "Failed to get document", e as Error);
+		return c.json({ error: "Failed to get document" }, 500);
+	}
+});
+
+// GET /api/documents/:id/chunks — list memories linked to document
+app.get("/api/documents/:id/chunks", (c) => {
+	const id = c.req.param("id");
+	try {
+		const accessor = getDbAccessor();
+		const chunks = accessor.withReadDb((db) => {
+			return db
+				.prepare(
+					`SELECT m.id, m.content, m.type, m.created_at,
+					        dm.chunk_index
+					 FROM document_memories dm
+					 JOIN memories m ON m.id = dm.memory_id
+					 WHERE dm.document_id = ? AND m.is_deleted = 0
+					 ORDER BY dm.chunk_index ASC`,
+				)
+				.all(id);
+		});
+		return c.json({ chunks, count: chunks.length });
+	} catch (e) {
+		logger.error("documents", "Failed to list chunks", e as Error);
+		return c.json({ error: "Failed to list chunks" }, 500);
+	}
+});
+
+// DELETE /api/documents/:id — soft-delete document and derived memories
+app.delete("/api/documents/:id", async (c) => {
+	const id = c.req.param("id");
+	const reason = c.req.query("reason");
+	if (!reason) {
+		return c.json({ error: "reason query parameter is required" }, 400);
+	}
+
+	const accessor = getDbAccessor();
+	const doc = accessor.withReadDb((db) => {
+		return db
+			.prepare("SELECT id FROM documents WHERE id = ?")
+			.get(id) as { id: string } | undefined;
+	});
+	if (!doc) return c.json({ error: "Document not found" }, 404);
+
+	try {
+		const now = new Date().toISOString();
+		const actor = resolveMutationActor(c, "document-api");
+
+		// Get linked memory IDs
+		const linkedMemories = accessor.withReadDb((db) => {
+			return db
+				.prepare(
+					`SELECT memory_id FROM document_memories
+					 WHERE document_id = ?`,
+				)
+				.all(id) as ReadonlyArray<{ memory_id: string }>;
+		});
+
+		// Soft-delete each linked memory
+		let memoriesRemoved = 0;
+		for (const link of linkedMemories) {
+			accessor.withWriteTx((db) => {
+				const mem = db
+					.prepare(
+						"SELECT is_deleted FROM memories WHERE id = ?",
+					)
+					.get(link.memory_id) as
+					| { is_deleted: number }
+					| undefined;
+				if (!mem || mem.is_deleted === 1) return;
+
+				db.prepare(
+					`UPDATE memories
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?,
+					     updated_by = ?, version = version + 1
+					 WHERE id = ?`,
+				).run(now, now, actor.changedBy, link.memory_id);
+
+				const histId = crypto.randomUUID();
+				db.prepare(
+					`INSERT INTO memory_history
+					 (id, memory_id, event, old_content, new_content,
+					  changed_by, reason, metadata, created_at)
+					 VALUES (?, ?, 'deleted', NULL, NULL, ?, ?, NULL, ?)`,
+				).run(
+					histId,
+					link.memory_id,
+					actor.changedBy,
+					`Document deleted: ${reason}`,
+					now,
+				);
+
+				memoriesRemoved++;
+			});
+		}
+
+		// Mark document as failed/removed
+		accessor.withWriteTx((db) => {
+			db.prepare(
+				`UPDATE documents
+				 SET status = 'deleted', error = ?, updated_at = ?
+				 WHERE id = ?`,
+			).run(reason, now, id);
+		});
+
+		return c.json({ deleted: true, memoriesRemoved });
+	} catch (e) {
+		logger.error("documents", "Failed to delete document", e as Error);
+		return c.json({ error: "Failed to delete document" }, 500);
+	}
+});
+
+// ============================================================================
+// Connectors API
+// ============================================================================
+
+// GET /api/connectors — list all connectors
+app.get("/api/connectors", (c) => {
+	try {
+		const accessor = getDbAccessor();
+		const connectors = listConnectors(accessor);
+		return c.json({ connectors, count: connectors.length });
+	} catch (e) {
+		logger.error("connectors", "Failed to list", e as Error);
+		return c.json({ error: "Failed to list connectors" }, 500);
+	}
+});
+
+// POST /api/connectors — register a new connector
+app.post("/api/connectors", async (c) => {
+	let body: Record<string, unknown>;
+	try {
+		body = (await c.req.json()) as Record<string, unknown>;
+	} catch {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+
+	const provider = body.provider as string | undefined;
+	if (!provider || !["filesystem", "github-docs", "gdrive"].includes(provider)) {
+		return c.json(
+			{ error: "provider must be filesystem, github-docs, or gdrive" },
+			400,
+		);
+	}
+
+	const displayName =
+		typeof body.displayName === "string" ? body.displayName : provider;
+	const settings =
+		typeof body.settings === "object" && body.settings !== null
+			? (body.settings as Record<string, unknown>)
+			: {};
+
+	try {
+		const accessor = getDbAccessor();
+		const config = {
+			id: crypto.randomUUID(),
+			provider: provider as "filesystem" | "github-docs" | "gdrive",
+			displayName,
+			settings,
+			enabled: true,
+		};
+
+		const id = registerConnector(accessor, config);
+		return c.json({ id }, 201);
+	} catch (e) {
+		logger.error("connectors", "Failed to register", e as Error);
+		return c.json({ error: "Failed to register connector" }, 500);
+	}
+});
+
+// GET /api/connectors/:id — connector details
+app.get("/api/connectors/:id", (c) => {
+	const id = c.req.param("id");
+	try {
+		const accessor = getDbAccessor();
+		const connector = getConnector(accessor, id);
+		if (!connector) return c.json({ error: "Connector not found" }, 404);
+		return c.json(connector);
+	} catch (e) {
+		logger.error("connectors", "Failed to get connector", e as Error);
+		return c.json({ error: "Failed to get connector" }, 500);
+	}
+});
+
+// POST /api/connectors/:id/sync — trigger incremental sync
+app.post("/api/connectors/:id/sync", async (c) => {
+	const id = c.req.param("id");
+	const accessor = getDbAccessor();
+
+	const connectorRow = getConnector(accessor, id);
+	if (!connectorRow) return c.json({ error: "Connector not found" }, 404);
+
+	if (connectorRow.status === "syncing") {
+		return c.json({ status: "syncing", message: "Already syncing" });
+	}
+
+	const config = JSON.parse(connectorRow.config_json) as {
+		id: string;
+		provider: "filesystem" | "github-docs" | "gdrive";
+		displayName: string;
+		settings: Record<string, unknown>;
+		enabled: boolean;
+	};
+
+	// Only filesystem is supported for now
+	if (config.provider !== "filesystem") {
+		return c.json(
+			{ error: `Provider ${config.provider} not yet supported` },
+			501,
+		);
+	}
+
+	updateConnectorStatus(accessor, id, "syncing");
+
+	// Fire and forget — caller polls GET /api/connectors/:id for status
+	const connector = createFilesystemConnector(config, accessor);
+	const cursor = connectorRow.cursor_json
+		? (JSON.parse(connectorRow.cursor_json) as {
+				lastSyncAt: string;
+				checkpoint?: string;
+				version?: number;
+			})
+		: { lastSyncAt: new Date(0).toISOString() };
+
+	connector
+		.syncIncremental(cursor)
+		.then((result) => {
+			updateCursor(accessor, id, result.cursor);
+			updateConnectorStatus(accessor, id, "idle");
+			logger.info("connectors", "Sync completed", {
+				connectorId: id,
+				added: result.documentsAdded,
+				updated: result.documentsUpdated,
+			});
+		})
+		.catch((err) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			updateConnectorStatus(accessor, id, "error", msg);
+			logger.error("connectors", "Sync failed", new Error(msg));
+		});
+
+	return c.json({ status: "syncing" });
+});
+
+// POST /api/connectors/:id/sync/full — trigger full resync
+app.post("/api/connectors/:id/sync/full", async (c) => {
+	const id = c.req.param("id");
+	const confirm = c.req.query("confirm");
+	if (confirm !== "true") {
+		return c.json(
+			{ error: "Full resync requires ?confirm=true" },
+			400,
+		);
+	}
+
+	const accessor = getDbAccessor();
+	const connectorRow = getConnector(accessor, id);
+	if (!connectorRow) return c.json({ error: "Connector not found" }, 404);
+
+	const config = JSON.parse(connectorRow.config_json) as {
+		id: string;
+		provider: "filesystem" | "github-docs" | "gdrive";
+		displayName: string;
+		settings: Record<string, unknown>;
+		enabled: boolean;
+	};
+
+	if (config.provider !== "filesystem") {
+		return c.json(
+			{ error: `Provider ${config.provider} not yet supported` },
+			501,
+		);
+	}
+
+	updateConnectorStatus(accessor, id, "syncing");
+
+	const connector = createFilesystemConnector(config, accessor);
+
+	connector
+		.syncFull()
+		.then((result) => {
+			updateCursor(accessor, id, result.cursor);
+			updateConnectorStatus(accessor, id, "idle");
+			logger.info("connectors", "Full sync completed", {
+				connectorId: id,
+				added: result.documentsAdded,
+			});
+		})
+		.catch((err) => {
+			const msg = err instanceof Error ? err.message : String(err);
+			updateConnectorStatus(accessor, id, "error", msg);
+			logger.error("connectors", "Full sync failed", new Error(msg));
+		});
+
+	return c.json({ status: "syncing" });
+});
+
+/** Escape LIKE special characters for safe prefix matching. */
+function escapeLikePrefix(value: string): string {
+	return `${value.replace(/[%_\\]/g, "\\$&")}%`;
+}
+
+// DELETE /api/connectors/:id — remove connector
+app.delete("/api/connectors/:id", (c) => {
+	const id = c.req.param("id");
+	const cascade = c.req.query("cascade") === "true";
+
+	try {
+		const accessor = getDbAccessor();
+		const connectorRow = getConnector(accessor, id);
+		if (!connectorRow) {
+			return c.json({ error: "Connector not found" }, 404);
+		}
+
+		if (cascade) {
+			// Find documents created by this connector via source_url pattern
+			const config = JSON.parse(connectorRow.config_json) as {
+				settings?: { rootPath?: string };
+			};
+			const rootPath = config.settings?.rootPath;
+			if (rootPath) {
+				const docs = accessor.withReadDb((db) => {
+					return db
+						.prepare(
+							`SELECT id FROM documents
+							 WHERE source_url LIKE ? ESCAPE '\\'`,
+						)
+						.all(escapeLikePrefix(rootPath)) as ReadonlyArray<{ id: string }>;
+				});
+				const now = new Date().toISOString();
+				for (const doc of docs) {
+					accessor.withWriteTx((db) => {
+						db.prepare(
+							`UPDATE documents
+							 SET status = 'deleted',
+							     error = 'Connector removed',
+							     updated_at = ?
+							 WHERE id = ?`,
+						).run(now, doc.id);
+					});
+				}
+			}
+		}
+
+		const removed = removeConnector(accessor, id);
+		return c.json({ deleted: removed });
+	} catch (e) {
+		logger.error("connectors", "Failed to remove", e as Error);
+		return c.json({ error: "Failed to remove connector" }, 500);
+	}
+});
+
+// GET /api/connectors/:id/health — connector health
+app.get("/api/connectors/:id/health", (c) => {
+	const id = c.req.param("id");
+	try {
+		const accessor = getDbAccessor();
+		const connectorRow = getConnector(accessor, id);
+		if (!connectorRow) {
+			return c.json({ error: "Connector not found" }, 404);
+		}
+
+		const docCount = accessor.withReadDb((db) => {
+			const config = JSON.parse(connectorRow.config_json) as {
+				settings?: { rootPath?: string };
+			};
+			const rootPath = config.settings?.rootPath;
+			if (!rootPath) return 0;
+			const row = db
+				.prepare(
+					`SELECT COUNT(*) AS cnt FROM documents
+					 WHERE source_url LIKE ? ESCAPE '\\'`,
+				)
+				.get(escapeLikePrefix(rootPath)) as { cnt: number } | undefined;
+			return row?.cnt ?? 0;
+		});
+
+		return c.json({
+			id: connectorRow.id,
+			status: connectorRow.status,
+			lastSyncAt: connectorRow.last_sync_at,
+			lastError: connectorRow.last_error,
+			documentCount: docCount,
+		});
+	} catch (e) {
+		logger.error("connectors", "Failed to get health", e as Error);
+		return c.json({ error: "Failed to get connector health" }, 500);
+	}
 });
 
 // ============================================================================
