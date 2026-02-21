@@ -1,21 +1,63 @@
 # Signet
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Spec Version](https://img.shields.io/badge/spec-v0.2.1--draft-blue.svg)](https://signetai.sh/spec)
-[![GitHub Stars](https://img.shields.io/github/stars/signetai/signetai.svg)](https://github.com/signetai/signetai/stargazers)
-
 <p align="center">
-  <img src="public/signetposter-02.jpg" alt="Your AI has a memory. You don't own it." width="720" />
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache-2.0" /></a>
+  <a href="https://signetai.sh/spec"><img src="https://img.shields.io/badge/spec-v0.2.1--draft-blue.svg" alt="Spec Version" /></a>
+  <a href="https://github.com/signetai/signetai/stargazers"><img src="https://img.shields.io/github/stars/signetai/signetai.svg" alt="GitHub Stars" /></a>
 </p>
+
+> For OpenClaw, Claude Code, and OpenCode
+
+<table>
+<tr>
+<td width="240" valign="top">
+  <img src="public/signetposter-01.jpg" alt="Signet — your AI has a memory, you don't own it" width="220" />
+</td>
+<td valign="top">
 
 **Own your agent. Bring it anywhere.**
 
-Signet is a local-first identity and memory layer for AI agents.
+Signet is a local-first identity and memory layer as well as
+*the first agent-native secret store* that allows your agent to **use** your
+secrets without ever needing to **read them.**
+
 It keeps your agent instructions, personality, and long-term memory in plain
-files under `~/.agents/`, then syncs that identity across your tools.
+files under `~/.agents/`, parodied to a SQLite database, then syncs that
+identity across your tools.
 
 Today, Signet integrates deeply with Claude Code, OpenCode, and OpenClaw, with
 additional harness support in progress.
+
+</td>
+</tr>
+</table>
+
+---
+
+<table>
+<tr>
+<td valign="top">
+
+## Why Signet
+
+Most AI tools build memory silos. If you switch harnesses, you often lose your
+agent context or have to rebuild it manually.
+
+Signet gives you one portable memory and identity substrate that you control:
+
+- plain-text identity files you can inspect, version, and move
+- a daemon API for memory/search/skills/secrets/hooks
+- connector packages that keep harness configs in sync
+- hybrid search (semantic + keyword) for consistent recall
+
+</td>
+<td width="520" valign="top">
+  <img src="public/memory-loop-blueprint.jpg" alt="Signet Memory Loop — session hooks, remember/recall pipeline, and persistence cycle" width="500" />
+</td>
+</tr>
+</table>
+
+---
 
 ```text
 ~/.agents/
@@ -30,22 +72,6 @@ additional harness support in progress.
 ├── .secrets/         # Encrypted secret store
 └── .daemon/          # PID + logs
 ```
-
-<p align="center">
-  <img src="public/signetposter-01.jpg" alt="Signet — your AI has a memory, you don't own it" width="360" />
-</p>
-
-## Why Signet
-
-Most AI tools build memory silos. If you switch harnesses, you often lose your
-agent context or have to rebuild it manually.
-
-Signet gives you one portable memory and identity substrate that you control:
-
-- plain-text identity files you can inspect, version, and move
-- a daemon API for memory/search/skills/secrets/hooks
-- connector packages that keep harness configs in sync
-- hybrid search (semantic + keyword) for consistent recall
 
 ## What ships now
 
@@ -121,10 +147,6 @@ In connected harnesses, use built-in skills directly:
 | Windsurf | Planned | File/plugin integration |
 
 ## Architecture at a glance
-
-<p align="center">
-  <img src="public/memory-loop-blueprint.jpg" alt="Signet Memory Loop — session hooks, remember/recall pipeline, and persistence cycle" width="720" />
-</p>
 
 ```text
 CLI (signet)
