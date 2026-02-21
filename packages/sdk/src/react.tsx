@@ -1,100 +1,161 @@
 /**
- * React components for Signet SDK
+ * React bindings for @signet/sdk.
+ * Uses the HTTP client (SignetClient), not direct DB access.
  */
 
 import React, {
-	createContext,
-	useContext,
-	useEffect,
-	useState,
-	ReactNode,
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
 } from "react";
-import { SignetSDK } from "./index";
+import { SignetClient, type SignetClientConfig } from "./index.js";
+import type { MemoryRecord, RecallResult } from "./types.js";
 
-// Context
+// --- Context ---
+
 interface SignetContextValue {
-	signet: SignetSDK | null;
-	connected: boolean;
-	connecting: boolean;
-	error: Error | null;
-	connect: () => Promise<void>;
+  client: SignetClient;
+  connected: boolean;
+  error: Error | null;
 }
 
 const SignetContext = createContext<SignetContextValue | null>(null);
 
-// Provider
-export function SignetProvider({ children }: { children: ReactNode }) {
-	const [signet, setSignet] = useState<SignetSDK | null>(null);
-	const [connected, setConnected] = useState(false);
-	const [connecting, setConnecting] = useState(false);
-	const [error, setError] = useState<Error | null>(null);
+// --- Provider ---
 
-	const connect = async () => {
-		setConnecting(true);
-		setError(null);
-
-		try {
-			const sdk = await SignetSDK.detect();
-			if (sdk) {
-				setSignet(sdk);
-				setConnected(true);
-			}
-		} catch (err) {
-			setError(err as Error);
-		} finally {
-			setConnecting(false);
-		}
-	};
-
-	return (
-		<SignetContext.Provider
-			value={{ signet, connected, connecting, error, connect }}
-		>
-			{children}
-		</SignetContext.Provider>
-	);
+interface SignetProviderProps {
+  client?: SignetClient;
+  config?: SignetClientConfig;
+  children: ReactNode;
 }
 
-// Hook
-export function useSignet() {
-	const context = useContext(SignetContext);
-	if (!context) {
-		throw new Error("useSignet must be used within a SignetProvider");
-	}
-	return context;
+export function SignetProvider({
+  client: externalClient,
+  config,
+  children,
+}: SignetProviderProps) {
+  const client = useMemo(
+    () => externalClient ?? new SignetClient(config),
+    [externalClient, config],
+  );
+
+  const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    client
+      .health()
+      .then(() => {
+        if (!controller.signal.aborted) setConnected(true);
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) setError(err as Error);
+      });
+
+    return () => controller.abort();
+  }, [client]);
+
+  return (
+    <SignetContext.Provider value={{ client, connected, error }}>
+      {children}
+    </SignetContext.Provider>
+  );
 }
 
-// Connect Button Component
-interface SignetButtonProps {
-	onConnect?: (signet: SignetSDK) => void;
-	className?: string;
-	children?: ReactNode;
+// --- Hooks ---
+
+export function useSignet(): SignetContextValue {
+  const context = useContext(SignetContext);
+  if (!context) {
+    throw new Error("useSignet must be used within a SignetProvider");
+  }
+  return context;
 }
 
-export function SignetButton({
-	onConnect,
-	className,
-	children,
-}: SignetButtonProps) {
-	const { signet, connected, connecting, connect } = useSignet();
+interface AsyncState<T> {
+  data: T | null;
+  loading: boolean;
+  error: Error | null;
+}
 
-	const handleClick = async () => {
-		if (!connected) {
-			await connect();
-		}
-		if (signet && onConnect) {
-			onConnect(signet);
-		}
-	};
+export function useMemorySearch(
+  query: string | null,
+  opts?: { readonly limit?: number; readonly type?: string },
+): AsyncState<readonly RecallResult[]> {
+  const { client } = useSignet();
+  const [state, setState] = useState<AsyncState<readonly RecallResult[]>>({
+    data: null,
+    loading: false,
+    error: null,
+  });
 
-	return (
-		<button onClick={handleClick} disabled={connecting} className={className}>
-			{children ||
-				(connecting
-					? "Connecting..."
-					: connected
-						? "Connected to Signet"
-						: "Connect Your Agent")}
-		</button>
-	);
+  useEffect(() => {
+    if (!query) {
+      setState({ data: null, loading: false, error: null });
+      return;
+    }
+
+    const controller = new AbortController();
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+
+    client
+      .recall(query, opts)
+      .then((response) => {
+        if (!controller.signal.aborted) {
+          setState({ data: response.results, loading: false, error: null });
+        }
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          setState({ data: null, loading: false, error: err as Error });
+        }
+      });
+
+    return () => controller.abort();
+  }, [client, query, opts?.limit, opts?.type]);
+
+  return state;
+}
+
+export function useMemory(
+  id: string | null,
+): AsyncState<MemoryRecord> {
+  const { client } = useSignet();
+  const [state, setState] = useState<AsyncState<MemoryRecord>>({
+    data: null,
+    loading: false,
+    error: null,
+  });
+
+  useEffect(() => {
+    if (!id) {
+      setState({ data: null, loading: false, error: null });
+      return;
+    }
+
+    const controller = new AbortController();
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+
+    client
+      .getMemory(id)
+      .then((memory) => {
+        if (!controller.signal.aborted) {
+          setState({ data: memory, loading: false, error: null });
+        }
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          setState({ data: null, loading: false, error: err as Error });
+        }
+      });
+
+    return () => controller.abort();
+  }, [client, id]);
+
+  return state;
 }
