@@ -46,6 +46,7 @@ const BASE_CFG: PipelineV2Config = {
 	autonomousEnabled: true,
 	mutationsFrozen: false,
 	autonomousFrozen: false,
+	extractionProvider: "ollama",
 	extractionModel: "test",
 	extractionTimeout: 45000,
 	workerPollMs: 2000,

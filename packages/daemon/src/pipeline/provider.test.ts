@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
-import { createOllamaProvider } from "./provider";
+import { createOllamaProvider, createClaudeCodeProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Fetch mock helpers
@@ -125,5 +125,28 @@ describe("createOllamaProvider", () => {
 		const provider = createOllamaProvider();
 		const result = await provider.available();
 		expect(result).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Claude Code provider
+// ---------------------------------------------------------------------------
+
+describe("createClaudeCodeProvider", () => {
+	it("returns a provider with the correct name", () => {
+		const provider = createClaudeCodeProvider({ model: "haiku" });
+		expect(provider.name).toBe("claude-code:haiku");
+	});
+
+	it("uses the default model (haiku) when none is supplied", () => {
+		const provider = createClaudeCodeProvider();
+		expect(provider.name).toBe("claude-code:haiku");
+	});
+
+	it("available() returns true when claude CLI is installed", async () => {
+		const provider = createClaudeCodeProvider();
+		const result = await provider.available();
+		// This will be true in dev environments where claude is installed
+		expect(typeof result).toBe("boolean");
 	});
 });

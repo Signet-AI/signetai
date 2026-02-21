@@ -108,6 +108,7 @@ export interface PipelineV2Config {
 	readonly autonomousEnabled: boolean;
 	readonly mutationsFrozen: boolean;
 	readonly autonomousFrozen: boolean;
+	readonly extractionProvider: "ollama" | "claude-code";
 	readonly extractionModel: string;
 	readonly extractionTimeout: number;
 	readonly workerPollMs: number;

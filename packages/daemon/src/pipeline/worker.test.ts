@@ -176,6 +176,7 @@ const PIPELINE_CFG: PipelineV2Config = {
 	autonomousEnabled: false,
 	mutationsFrozen: false,
 	autonomousFrozen: false,
+	extractionProvider: "ollama",
 	extractionModel: "qwen3:4b",
 	extractionTimeout: 5000,
 	workerPollMs: 10, // fast polling for tests

@@ -33,7 +33,8 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	autonomousEnabled: false,
 	mutationsFrozen: false,
 	autonomousFrozen: false,
-	extractionModel: "qwen3:4b",
+	extractionProvider: "claude-code",
+	extractionModel: "haiku",
 	extractionTimeout: 45000,
 	workerPollMs: 2000,
 	workerMaxRetries: 3,
@@ -94,6 +95,17 @@ export function loadPipelineConfig(
 		autonomousEnabled: raw.autonomousEnabled === true,
 		mutationsFrozen: raw.mutationsFrozen === true,
 		autonomousFrozen: raw.autonomousFrozen === true,
+		// If extractionModel is set but extractionProvider isn't, the user
+		// has an older config that assumed ollama — preserve that behavior.
+		extractionProvider:
+			raw.extractionProvider === "claude-code"
+				? "claude-code"
+				: raw.extractionProvider === "ollama"
+					? "ollama"
+					: typeof raw.extractionModel === "string" &&
+						  raw.extractionProvider === undefined
+						? "ollama"
+						: DEFAULT_PIPELINE_V2.extractionProvider,
 		extractionModel:
 			typeof raw.extractionModel === "string"
 				? raw.extractionModel

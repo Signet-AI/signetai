@@ -1716,6 +1716,48 @@ async function setupWizard(options: { path?: string }) {
 		],
 	});
 
+	// Memory pipeline provider
+	console.log();
+	const extractionProvider = (await select({
+		message: "Memory extraction provider (analyzes conversations):",
+		choices: [
+			{
+				value: "claude-code",
+				name: "Claude Code (uses your Claude subscription via CLI)",
+			},
+			{
+				value: "ollama",
+				name: "Ollama (local, requires running Ollama server)",
+			},
+			{ value: "none", name: "Skip extraction pipeline" },
+		],
+	})) as "claude-code" | "ollama" | "none";
+
+	let extractionModel = "haiku";
+	if (extractionProvider === "claude-code") {
+		console.log();
+		extractionModel = (await select({
+			message: "Which Claude model for extraction?",
+			choices: [
+				{ value: "haiku", name: "Haiku (fast, cheap, recommended)" },
+				{ value: "sonnet", name: "Sonnet (better quality, slower)" },
+			],
+		})) as string;
+	} else if (extractionProvider === "ollama") {
+		console.log();
+		extractionModel = (await select({
+			message: "Which Ollama model for extraction?",
+			choices: [
+				{
+					value: "glm-4.7-flash",
+					name: "glm-4.7-flash (good quality, recommended)",
+				},
+				{ value: "qwen3:4b", name: "qwen3:4b (lighter, faster)" },
+				{ value: "llama3", name: "llama3 (general purpose)" },
+			],
+		})) as string;
+	}
+
 	// Advanced settings (optional)
 	console.log();
 	const wantAdvanced = await confirm({
@@ -1922,6 +1964,14 @@ ${agentName} is a helpful assistant.
 				provider: embeddingProvider,
 				model: embeddingModel,
 				dimensions: embeddingDimensions,
+			};
+		}
+
+		if (extractionProvider !== "none") {
+			(config.memory as Record<string, unknown>).pipelineV2 = {
+				enabled: true,
+				extractionProvider,
+				extractionModel,
 			};
 		}
 

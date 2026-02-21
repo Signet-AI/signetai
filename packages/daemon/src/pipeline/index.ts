@@ -4,7 +4,7 @@
 
 import type { DbAccessor } from "../db-accessor";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
-import { createOllamaProvider } from "./provider";
+import { createOllamaProvider, createClaudeCodeProvider } from "./provider";
 import { startWorker, type WorkerHandle } from "./worker";
 import {
 	startRetentionWorker,
@@ -66,10 +66,16 @@ export function startPipeline(
 		return;
 	}
 
-	const provider = createOllamaProvider({
-		model: pipelineCfg.extractionModel,
-		defaultTimeoutMs: pipelineCfg.extractionTimeout,
-	});
+	const provider =
+		pipelineCfg.extractionProvider === "claude-code"
+			? createClaudeCodeProvider({
+					model: pipelineCfg.extractionModel,
+					defaultTimeoutMs: pipelineCfg.extractionTimeout,
+				})
+			: createOllamaProvider({
+					model: pipelineCfg.extractionModel,
+					defaultTimeoutMs: pipelineCfg.extractionTimeout,
+				});
 
 	const decisionCfg: DecisionConfig = {
 		embedding: embeddingCfg,
