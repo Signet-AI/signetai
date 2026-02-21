@@ -3,7 +3,7 @@ Repo: github.com/signetai/signetai
 GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 Branching: `<username>/<feature>` off main
 Conventional commits: `type(scope): subject`
-Last Updated: 2026/02/19
+Last Updated: 2026/02/21
 This file: AGENTS.md -> Symlinked to CLAUDE.md
 ---
 
@@ -38,6 +38,18 @@ bun run lint             # Biome check
 bun run format           # Biome format --write
 bun run typecheck        # TypeScript check all packages
 bun run build:publish    # Build for npm publish
+bun run version:sync     # Sync version across all packages
+bun run dev:web          # Shortcut for web wrangler dev
+bun run deploy:web       # Shortcut for web wrangler deploy
+```
+
+### Testing
+
+Test discovery is scoped to `packages/` via `bunfig.toml` (excludes
+`references/` directory). Run a single test file directly:
+
+```bash
+bun test packages/daemon/src/pipeline/worker.test.ts
 ```
 
 Individual Package Builds
@@ -118,6 +130,8 @@ bun run test     # Tests (vitest + workers pool)
 - File watching with debounced sync
 - Auto-commit on config changes
 - System service (launchd/systemd)
+- Pipeline V2 (`src/pipeline/`) — LLM-based memory extraction
+- Session tracker — plugin vs legacy runtime path mutex
 
 **@signet/sdk** - Third-party integration
 - SignetSDK class for embedding Signet in apps
@@ -164,6 +178,18 @@ User edits ~/.agents/AGENTS.md
     → Harness sync to ~/.claude/CLAUDE.md, etc. (2s)
 ```
 
+### Memory Pipeline (Phase G)
+
+The daemon runs a plugin-first memory pipeline at
+`packages/daemon/src/pipeline/`. Connectors send hook requests with
+an `x-signet-runtime-path` header (`"plugin"` or `"legacy"`). The
+session tracker enforces one active path per session (409 on conflict).
+
+Pipeline stages: extraction (Ollama, default model `qwen3:4b`) →
+decision (write/update/skip) → optional knowledge graph → retention
+decay. Config modes: `shadowMode` (extract without writing),
+`mutationsFrozen` (reads only), `graphEnabled`, `autonomousEnabled`.
+
 ### User Data Location
 
 All user data lives at `~/.agents/`:
@@ -194,6 +220,8 @@ All user data lives at `~/.agents/`:
 - `packages/core/src/skills.ts` - Skills unification across harnesses
 - `packages/cli/src/cli.ts` - Main CLI entrypoint (~4600 LOC)
 - `packages/daemon/src/daemon.ts` - HTTP server + watcher
+- `packages/daemon/src/session-tracker.ts` - Plugin/legacy session mutex
+- `packages/daemon/src/pipeline/` - V2 memory extraction pipeline
 - `packages/connector-claude-code/src/index.ts` - Claude Code connector
 - `packages/connector-opencode/src/index.ts` - OpenCode connector
 - `packages/connector-openclaw/src/index.ts` - OpenClaw connector
@@ -241,8 +269,19 @@ These rules are enforced by convention, not tooling.
 
 ```bash
 cd packages/daemon
-bun run start    # Run directly
-bun run dev      # Watch mode
+bun run start             # Run directly
+bun run dev               # Watch mode
+bun run install:service   # Install as system service (systemd/launchd)
+bun run uninstall:service # Uninstall system service
+```
+
+### Environment Variables
+
+```
+SIGNET_PATH    # Override ~/.agents/ data directory
+SIGNET_PORT    # Override daemon port (default: 3850)
+SIGNET_HOST    # Override daemon host (default: localhost)
+OPENAI_API_KEY # Used when embedding provider is openai
 ```
 
 ### Testing CLI Changes
