@@ -1,49 +1,51 @@
 {
-	"name": "@signet/sdk",
-	"version": "0.1.65",
-	"license": "Apache-2.0",
-	"description": "HTTP client SDK for the Signet daemon API",
-	"type": "module",
-	"main": "./dist/index.js",
-	"types": "./dist/index.d.ts",
-	"exports": {
-		".": {
-			"import": "./dist/index.js",
-			"types": "./dist/index.d.ts"
-		},
-		"./react": {
-			"import": "./dist/react.js",
-			"types": "./dist/react.d.ts"
-		},
-		"./ai-sdk": {
-			"import": "./dist/ai-sdk.js",
-			"types": "./dist/ai-sdk.d.ts"
-		},
-		"./openai": {
-			"import": "./dist/openai.js",
-			"types": "./dist/openai.d.ts"
-		}
-	},
-	"files": ["dist"],
-	"scripts": {
-		"build": "bun build ./src/index.ts ./src/react.tsx ./src/ai-sdk.ts ./src/openai.ts --outdir ./dist --target node --external react --external zod",
-		"dev": "bun --watch src/index.ts",
-		"test": "bun test"
-	},
-	"devDependencies": {
-		"@types/react": "^19.0.0",
-		"react": "^19.0.0"
-	},
-	"peerDependencies": {
-		"react": ">=18.0.0",
-		"zod": ">=3.0.0"
-	},
-	"peerDependenciesMeta": {
-		"react": {
-			"optional": true
-		},
-		"zod": {
-			"optional": true
-		}
-	}
+  "name": "@signet/sdk",
+  "version": "0.1.66",
+  "license": "Apache-2.0",
+  "description": "HTTP client SDK for the Signet daemon API",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react.js",
+      "types": "./dist/react.d.ts"
+    },
+    "./ai-sdk": {
+      "import": "./dist/ai-sdk.js",
+      "types": "./dist/ai-sdk.d.ts"
+    },
+    "./openai": {
+      "import": "./dist/openai.js",
+      "types": "./dist/openai.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts ./src/react.tsx ./src/ai-sdk.ts ./src/openai.ts --outdir ./dist --target node --external react --external zod",
+    "dev": "bun --watch src/index.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "zod": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  }
 }
