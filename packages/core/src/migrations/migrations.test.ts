@@ -33,12 +33,13 @@ describe("migration framework", () => {
 				"SELECT version, applied_at FROM schema_migrations ORDER BY version",
 			)
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(migrations.length).toBe(5);
+		expect(migrations.length).toBe(6);
 		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
 		expect(migrations[3].version).toBe(4);
 		expect(migrations[4].version).toBe(5);
+		expect(migrations[5].version).toBe(6);
 	});
 
 	test("re-running migrations is idempotent", () => {
@@ -124,7 +125,7 @@ describe("migration framework", () => {
 		const audits = db
 			.query("SELECT version, applied_at FROM schema_migrations_audit")
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(audits.length).toBe(5);
+		expect(audits.length).toBe(6);
 		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}

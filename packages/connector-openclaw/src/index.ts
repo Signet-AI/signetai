@@ -521,8 +521,11 @@ description: "Signet memory integration"
 async function fetchDaemon(path, body) {
   const res = await fetch(\`\${DAEMON_URL}\${path}\`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+      "x-signet-runtime-path": "legacy",
+    },
+    body: JSON.stringify({ ...body, runtimePath: "legacy" }),
     signal: AbortSignal.timeout(5000),
   });
   if (!res.ok) throw new Error(\`daemon \${res.status}\`);
@@ -530,6 +533,11 @@ async function fetchDaemon(path, body) {
 }
 
 const handler = async (event) => {
+  // When the plugin runtime path is active, legacy hooks are disabled
+  // to prevent duplicate capture/recall. Set SIGNET_RUNTIME_PATH=plugin
+  // in your environment to use the plugin path exclusively.
+  if (process.env.SIGNET_RUNTIME_PATH === "plugin") return;
+
   if (event.type !== "command") return;
   const args = event.context?.args || "";
 
@@ -574,6 +582,42 @@ export default handler;
 		const handlerJsPath = join(hookDir, "handler.js");
 		const packageJsonPath = join(hookDir, "package.json");
 
+		const migrationMd = `# Signet OpenClaw Runtime Path Migration
+
+## Plugin vs Legacy Hooks
+
+Signet supports two runtime paths for OpenClaw integration:
+
+1. **Plugin path** (preferred): \`@signet/adapter-openclaw\` runtime
+   plugin handles all memory operations directly.
+2. **Legacy hook path** (compatibility): These handler.js files process
+   /remember, /recall, and /context commands via daemon hook endpoints.
+
+## Switching to Plugin Path
+
+Set the environment variable before starting OpenClaw:
+
+    SIGNET_RUNTIME_PATH=plugin
+
+This disables legacy hooks so only the plugin handles memory operations.
+Both paths cannot be active simultaneously per session — the daemon
+enforces this via session claiming.
+
+## When to Use Legacy Path
+
+Keep legacy hooks active (the default) if:
+
+- \`@signet/adapter-openclaw\` is not configured as an OpenClaw plugin
+- You need command-based /remember and /recall without plugin support
+
+## Safety
+
+The daemon prevents duplicate capture/recall when both paths are
+configured by rejecting session claims from the second path (HTTP 409).
+`;
+
+		const migrationMdPath = join(hookDir, "MIGRATION.md");
+
 		writeFileSync(hookMdPath, hookMd);
 		writeFileSync(handlerJsPath, handlerJs);
 		writeFileSync(
@@ -584,8 +628,9 @@ export default handler;
 				2,
 			),
 		);
+		writeFileSync(migrationMdPath, migrationMd);
 
-		return [hookMdPath, handlerJsPath, packageJsonPath];
+		return [hookMdPath, handlerJsPath, packageJsonPath, migrationMdPath];
 	}
 
 	/** Detect the indentation style used in a JSON string. */

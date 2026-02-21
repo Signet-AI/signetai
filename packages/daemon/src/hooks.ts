@@ -70,6 +70,7 @@ export interface SessionStartRequest {
 	agentId?: string;
 	context?: string;
 	sessionKey?: string;
+	runtimePath?: "plugin" | "legacy";
 }
 
 export interface SessionStartResponse {
@@ -93,6 +94,7 @@ export interface PreCompactionRequest {
 	sessionContext?: string;
 	messageCount?: number;
 	sessionKey?: string;
+	runtimePath?: "plugin" | "legacy";
 }
 
 export interface PreCompactionResponse {
@@ -104,6 +106,8 @@ export interface UserPromptSubmitRequest {
 	harness: string;
 	project?: string;
 	userPrompt: string;
+	sessionKey?: string;
+	runtimePath?: "plugin" | "legacy";
 }
 
 export interface UserPromptSubmitResponse {
@@ -115,8 +119,10 @@ export interface SessionEndRequest {
 	harness: string;
 	transcriptPath?: string;
 	sessionId?: string;
+	sessionKey?: string;
 	cwd?: string;
 	reason?: string;
+	runtimePath?: "plugin" | "legacy";
 }
 
 export interface SessionEndResponse {
@@ -128,6 +134,9 @@ export interface RememberRequest {
 	who?: string;
 	project?: string;
 	content: string;
+	sessionKey?: string;
+	idempotencyKey?: string;
+	runtimePath?: "plugin" | "legacy";
 }
 
 export interface RememberResponse {
@@ -140,6 +149,8 @@ export interface RecallRequest {
 	query: string;
 	project?: string;
 	limit?: number;
+	sessionKey?: string;
+	runtimePath?: "plugin" | "legacy";
 }
 
 export interface RecallResponse {
@@ -833,8 +844,8 @@ ${truncated}`;
 			const stmt = db.prepare(
 				`INSERT INTO memories
 				 (id, content, type, importance, source_type, who, tags,
-				  project, session_id, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				  project, session_id, runtime_path, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			);
 
 			for (const item of extracted) {
@@ -856,7 +867,8 @@ ${truncated}`;
 					req.harness,
 					item.tags || null,
 					req.cwd || null,
-					req.sessionId || null,
+					req.sessionId || req.sessionKey || null,
+					req.runtimePath || null,
 					now,
 					now,
 				);
@@ -916,12 +928,34 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 	const now = new Date().toISOString();
 
 	try {
-		getDbAccessor().withWriteTx((db) => {
+		const resultId = getDbAccessor().withWriteTx((db) => {
+			// Idempotency check inside write tx to eliminate races
+			if (req.idempotencyKey) {
+				try {
+					const existing = db
+						.prepare(
+							"SELECT id FROM memories WHERE idempotency_key = ?",
+						)
+						.get(req.idempotencyKey) as { id: string } | undefined;
+
+					if (existing) {
+						logger.info("hooks", "Idempotency hit, returning existing", {
+							id: existing.id,
+							key: req.idempotencyKey,
+						});
+						return existing.id;
+					}
+				} catch {
+					// Column might not exist yet (pre-migration 006)
+				}
+			}
+
 			db.prepare(
 				`INSERT INTO memories
 				 (id, content, type, importance, source_type, who, tags,
-				  pinned, project, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				  pinned, project, idempotency_key, runtime_path,
+				  created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				id,
 				content,
@@ -932,18 +966,23 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 				tags,
 				pinned,
 				req.project || null,
+				req.idempotencyKey || null,
+				req.runtimePath || null,
 				now,
 				now,
 			);
+
+			return id;
 		});
 
 		logger.info("hooks", "Memory saved", {
-			id,
+			id: resultId,
 			type,
 			pinned: pinned === 1,
+			runtimePath: req.runtimePath,
 		});
 
-		return { saved: true, id };
+		return { saved: true, id: resultId };
 	} catch (e) {
 		logger.error("hooks", "Remember failed", e as Error);
 		return { saved: false, id: "" };

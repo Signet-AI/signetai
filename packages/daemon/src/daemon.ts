@@ -1751,6 +1751,36 @@ app.post("/api/hook/remember", async (c) => {
 	});
 });
 
+// Get a single memory by ID
+// Note: Hono's router prioritizes static segments over :id params,
+// so /api/memory/search, /api/memory/recall etc. match their own
+// routes even though they're registered later in this file.
+app.get("/api/memory/:id", (c) => {
+	const memoryId = c.req.param("id")?.trim();
+	if (!memoryId) {
+		return c.json({ error: "memory id is required" }, 400);
+	}
+
+	const row = getDbAccessor().withReadDb((db) => {
+		return db
+			.prepare(
+				`SELECT id, content, type, importance, tags, pinned, who,
+				        source_type, project, session_id, confidence,
+				        access_count, last_accessed, is_deleted, deleted_at,
+				        extraction_status, embedding_model, version,
+				        created_at, updated_at, updated_by
+				 FROM memories WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)`,
+			)
+			.get(memoryId) as Record<string, unknown> | undefined;
+	});
+
+	if (!row) {
+		return c.json({ error: "not found" }, 404);
+	}
+
+	return c.json(row);
+});
+
 app.get("/api/memory/:id/history", (c) => {
 	const memoryId = c.req.param("id")?.trim();
 	if (!memoryId) {
@@ -3463,6 +3493,46 @@ import {
 	type RecallRequest,
 } from "./hooks.js";
 
+import {
+	claimSession,
+	getSessionPath,
+	releaseSession,
+	startSessionCleanup,
+	type RuntimePath,
+} from "./session-tracker.js";
+
+/** Read the runtime path from header or body, preferring header. */
+function resolveRuntimePath(c: Context, body?: { runtimePath?: string }): RuntimePath | undefined {
+	const header = c.req.header("x-signet-runtime-path");
+	const val = header || body?.runtimePath;
+	if (val === "plugin" || val === "legacy") return val;
+	return undefined;
+}
+
+/**
+ * Check that a mid-session hook call is from the path that claimed the
+ * session. Returns a 409 Response if there's a conflict, or null if ok.
+ */
+function checkSessionClaim(
+	c: Context,
+	sessionKey: string | undefined,
+	runtimePath: RuntimePath | undefined,
+): Response | null {
+	if (!sessionKey || !runtimePath) return null;
+
+	const owner = getSessionPath(sessionKey);
+	if (owner && owner !== runtimePath) {
+		return c.json(
+			{ error: `session claimed by ${owner} path` },
+			409,
+		) as unknown as Response;
+	}
+	return null;
+}
+
+// Start session cleanup timer
+startSessionCleanup();
+
 // Session start hook - provides context/memories for injection
 app.post("/api/hooks/session-start", async (c) => {
 	try {
@@ -3470,6 +3540,19 @@ app.post("/api/hooks/session-start", async (c) => {
 
 		if (!body.harness) {
 			return c.json({ error: "harness is required" }, 400);
+		}
+
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
+		// Enforce single runtime path per session
+		if (body.sessionKey && runtimePath) {
+			const claim = claimSession(body.sessionKey, runtimePath);
+			if (!claim.ok) {
+				return c.json({
+					error: `session claimed by ${claim.claimedBy} path`,
+				}, 409);
+			}
 		}
 
 		const result = handleSessionStart(body);
@@ -3489,6 +3572,12 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 			return c.json({ error: "harness and userPrompt are required" }, 400);
 		}
 
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
+		const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
+		if (conflict) return conflict;
+
 		const result = handleUserPromptSubmit(body);
 		return c.json(result);
 	} catch (e) {
@@ -3506,7 +3595,17 @@ app.post("/api/hooks/session-end", async (c) => {
 			return c.json({ error: "harness is required" }, 400);
 		}
 
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
 		const result = await handleSessionEnd(body);
+
+		// Release session claim on end
+		const sessionKey = body.sessionKey || body.sessionId;
+		if (sessionKey) {
+			releaseSession(sessionKey);
+		}
+
 		return c.json(result);
 	} catch (e) {
 		logger.error("hooks", "Session end hook failed", e as Error);
@@ -3522,6 +3621,12 @@ app.post("/api/hooks/remember", async (c) => {
 		if (!body.harness || !body.content) {
 			return c.json({ error: "harness and content are required" }, 400);
 		}
+
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
+		const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
+		if (conflict) return conflict;
 
 		const result = handleRemember(body);
 		return c.json(result);
@@ -3540,6 +3645,12 @@ app.post("/api/hooks/recall", async (c) => {
 			return c.json({ error: "harness and query are required" }, 400);
 		}
 
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
+		const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
+		if (conflict) return conflict;
+
 		const result = handleRecall(body);
 		return c.json(result);
 	} catch (e) {
@@ -3557,6 +3668,12 @@ app.post("/api/hooks/pre-compaction", async (c) => {
 			return c.json({ error: "harness is required" }, 400);
 		}
 
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
+		const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
+		if (conflict) return conflict;
+
 		const result = handlePreCompaction(body);
 		return c.json(result);
 	} catch (e) {
@@ -3572,11 +3689,16 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			harness: string;
 			summary: string;
 			sessionKey?: string;
+			runtimePath?: string;
 		};
 
 		if (!body.harness || !body.summary) {
 			return c.json({ error: "harness and summary are required" }, 400);
 		}
+
+		const runtimePath = resolveRuntimePath(c, body);
+		const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
+		if (conflict) return conflict;
 
 		// Save the summary as a memory
 		if (!existsSync(MEMORY_DB)) {
