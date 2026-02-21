@@ -64,7 +64,9 @@ import {
 	DEFAULT_RETENTION,
 	enqueueExtractionJob,
 	enqueueDocumentIngestJob,
+	startSummaryWorker,
 } from "./pipeline";
+import { createOllamaProvider } from "./pipeline/provider";
 import {
 	registerConnector,
 	getConnector,
@@ -6941,6 +6943,14 @@ async function main() {
 		// Retention worker runs unconditionally — cleans up tombstones,
 		// expired history, and dead jobs even without the full pipeline.
 		startRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
+
+		// Summary worker runs regardless of pipeline state — session
+		// summaries are a core feature, not gated on extraction pipeline.
+		const summaryProvider = createOllamaProvider({
+			model: memoryCfg.pipelineV2.extractionModel || "qwen3:4b",
+			defaultTimeoutMs: memoryCfg.pipelineV2.extractionTimeout || 90000,
+		});
+		startSummaryWorker(getDbAccessor(), summaryProvider);
 	}
 
 	// Start git sync timer (if enabled and has token)

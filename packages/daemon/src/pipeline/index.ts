@@ -19,6 +19,10 @@ import {
 	startDocumentWorker,
 	type DocumentWorkerHandle,
 } from "./document-worker";
+import {
+	startSummaryWorker,
+	type SummaryWorkerHandle,
+} from "./summary-worker";
 import type { DecisionConfig } from "./decision";
 import type { ProviderTracker } from "../diagnostics";
 import type { AnalyticsCollector } from "../analytics";
@@ -35,6 +39,8 @@ export type { DocumentWorkerHandle } from "./document-worker";
 export type { LlmProvider } from "./provider";
 export type { RetentionHandle, RetentionConfig } from "./retention-worker";
 export type { MaintenanceHandle } from "./maintenance-worker";
+export { startSummaryWorker, enqueueSummaryJob } from "./summary-worker";
+export type { SummaryWorkerHandle } from "./summary-worker";
 
 // ---------------------------------------------------------------------------
 // Singleton state
@@ -44,6 +50,7 @@ let workerHandle: WorkerHandle | null = null;
 let retentionHandle: RetentionHandle | null = null;
 let maintenanceHandle: MaintenanceHandle | null = null;
 let documentWorkerHandle: DocumentWorkerHandle | null = null;
+let summaryWorkerHandle: SummaryWorkerHandle | null = null;
 
 // ---------------------------------------------------------------------------
 // Start / Stop
@@ -111,6 +118,11 @@ export function startPipeline(
 		});
 	}
 
+	// Summary worker — async session-end processing
+	if (!summaryWorkerHandle) {
+		summaryWorkerHandle = startSummaryWorker(accessor, provider);
+	}
+
 	logger.info("pipeline", "Pipeline started", {
 		mode:
 			pipelineCfg.enabled &&
@@ -122,6 +134,10 @@ export function startPipeline(
 }
 
 export async function stopPipeline(): Promise<void> {
+	if (summaryWorkerHandle) {
+		summaryWorkerHandle.stop();
+		summaryWorkerHandle = null;
+	}
 	if (documentWorkerHandle) {
 		await documentWorkerHandle.stop();
 		documentWorkerHandle = null;

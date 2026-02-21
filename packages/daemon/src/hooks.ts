@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
 import { logger } from "./logger";
 import { getDbAccessor } from "./db-accessor";
+import { enqueueSummaryJob } from "./pipeline/summary-worker";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
@@ -127,6 +128,8 @@ export interface SessionEndRequest {
 
 export interface SessionEndResponse {
 	memoriesSaved: number;
+	queued?: boolean;
+	jobId?: string;
 }
 
 export interface RememberRequest {
@@ -751,9 +754,9 @@ export function handleUserPromptSubmit(
 // Session End
 // ============================================================================
 
-export async function handleSessionEnd(
+export function handleSessionEnd(
 	req: SessionEndRequest,
-): Promise<SessionEndResponse> {
+): SessionEndResponse {
 	if (req.reason === "clear") {
 		return { memoriesSaved: 0 };
 	}
@@ -781,122 +784,19 @@ export async function handleSessionEnd(
 			? `${transcript.slice(0, maxChars)}\n[truncated]`
 			: transcript;
 
-	const prompt = `Extract key facts, decisions, preferences, and learnings from this conversation as a JSON array.
+	// Queue for async processing by the summary worker instead of
+	// blocking on LLM inference. The worker produces both a dated
+	// markdown summary and atomic fact rows.
+	const jobId = enqueueSummaryJob(getDbAccessor(), {
+		harness: req.harness,
+		transcript: truncated,
+		sessionKey: req.sessionKey || req.sessionId,
+		project: req.cwd,
+	});
 
-Each item: {"content": "...", "importance": 0.3-0.5, "tags": "tag1,tag2", "type": "fact|preference|decision|learning|rule|issue"}
+	logger.info("hooks", "Session end queued for summary", { jobId });
 
-Only extract durable, reusable knowledge. Skip ephemeral details.
-Return ONLY the JSON array, no other text.
-
-Conversation:
-${truncated}`;
-
-	try {
-		const proc = Bun.spawn(["ollama", "run", "qwen3:4b", prompt], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-
-		const timeoutMs = 45000;
-		const output = await Promise.race([
-			new Response(proc.stdout).text(),
-			new Promise<string>((_, reject) =>
-				setTimeout(() => reject(new Error("Ollama timeout")), timeoutMs),
-			),
-		]);
-
-		await proc.exited;
-
-		if (proc.exitCode !== 0) {
-			logger.warn("hooks", "Ollama returned non-zero exit code");
-			return { memoriesSaved: 0 };
-		}
-
-		// Parse JSON from output (handle markdown fences)
-		let jsonStr = output.trim();
-		const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-		if (fenceMatch) {
-			jsonStr = fenceMatch[1].trim();
-		}
-
-		let extracted: Array<{
-			content: string;
-			importance?: number;
-			tags?: string;
-			type?: string;
-		}>;
-
-		try {
-			extracted = JSON.parse(jsonStr);
-		} catch {
-			logger.warn("hooks", "Failed to parse LLM output as JSON");
-			return { memoriesSaved: 0 };
-		}
-
-		if (!Array.isArray(extracted) || extracted.length === 0) {
-			return { memoriesSaved: 0 };
-		}
-
-		const now = new Date().toISOString();
-
-		const saved = getDbAccessor().withWriteTx((db) => {
-			let count = 0;
-			const stmt = db.prepare(
-				`INSERT INTO memories
-				 (id, content, type, importance, source_type, who, tags,
-				  project, session_id, runtime_path, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			);
-
-			for (const item of extracted) {
-				if (!item.content || typeof item.content !== "string") continue;
-
-				const importance = Math.min(item.importance || 0.3, 0.5);
-
-				if (isDuplicate(db as unknown as Database, item.content)) continue;
-
-				const id = crypto.randomUUID();
-				const type = item.type || inferType(item.content);
-
-				stmt.run(
-					id,
-					item.content,
-					type,
-					importance,
-					"session_end",
-					req.harness,
-					item.tags || null,
-					req.cwd || null,
-					req.sessionId || req.sessionKey || null,
-					req.runtimePath || null,
-					now,
-					now,
-				);
-				count++;
-			}
-			return count;
-		});
-
-		logger.info("hooks", "Session end memories extracted", {
-			extracted: extracted.length,
-			saved,
-		});
-
-		return { memoriesSaved: saved };
-	} catch (e) {
-		const err = e as Error;
-		// Graceful on no ollama
-		if (
-			err.message?.includes("ENOENT") ||
-			err.message?.includes("not found") ||
-			err.message?.includes("spawn")
-		) {
-			logger.warn("hooks", "Ollama not available, skipping memory extraction");
-			return { memoriesSaved: 0 };
-		}
-		logger.error("hooks", "Session end failed", err);
-		return { memoriesSaved: 0 };
-	}
+	return { memoriesSaved: 0, queued: true, jobId };
 }
 
 // ============================================================================

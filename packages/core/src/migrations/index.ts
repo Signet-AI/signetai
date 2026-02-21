@@ -14,6 +14,7 @@ import { up as graphExtended } from "./005-graph-extended";
 import { up as idempotencyKey } from "./006-idempotency-key";
 import { up as documentsAndConnectors } from "./007-documents-and-connectors";
 import { up as embeddingsUniqueHash } from "./008-embeddings-unique-hash";
+import { up as summaryJobs } from "./009-summary-jobs";
 
 // -- Public interface consumed by Database.init() --
 
@@ -53,6 +54,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 8,
 		name: "embeddings-unique-hash",
 		up: embeddingsUniqueHash,
+	},
+	{
+		version: 9,
+		name: "summary-jobs",
+		up: summaryJobs,
 	},
 ];
 
