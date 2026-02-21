@@ -198,7 +198,7 @@ describe("retention worker", () => {
 		).toBeTruthy();
 	});
 
-	it("purges graph links before tombstones", () => {
+	it("purges graph links before tombstones and cleans orphaned entities", () => {
 		const now = new Date().toISOString();
 		// Tombstoned memory
 		db.prepare(
@@ -206,11 +206,11 @@ describe("retention worker", () => {
 			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
 		).run("mem-graph", "graph test", "fact", daysAgo(35), now, now, "test");
 
-		// Entity and mention link
+		// Entity with mentions=1 (will become orphan after purge)
 		db.prepare(
-			`INSERT INTO entities (id, name, entity_type, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?)`,
-		).run("ent-1", "TestEntity", "concept", now, now);
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		).run("ent-1", "TestEntity", "testentity", "concept", now, now);
 		db.prepare(
 			`INSERT INTO memory_entity_mentions (memory_id, entity_id)
 			 VALUES (?, ?)`,
@@ -221,6 +221,7 @@ describe("retention worker", () => {
 		handle.stop();
 
 		expect(result.graphLinksPurged).toBe(1);
+		expect(result.entitiesOrphaned).toBe(1);
 		expect(result.tombstonesPurged).toBe(1);
 
 		// Graph link removed
@@ -229,14 +230,62 @@ describe("retention worker", () => {
 				.prepare("SELECT * FROM memory_entity_mentions WHERE memory_id = ?")
 				.get("mem-graph"),
 		).toBeNull();
-		// Entity itself remains (not orphan-cleaned in this phase)
+		// Entity orphaned and cleaned up
 		expect(
 			db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-1"),
-		).toBeTruthy();
+		).toBeNull();
 		// Memory row hard-purged
 		expect(
 			db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-graph"),
 		).toBeNull();
+	});
+
+	it("decrements entity mentions and orphans during graph link purge", () => {
+		const now = new Date().toISOString();
+		// Tombstoned memory past retention
+		db.prepare(
+			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+		).run("mem-orphan", "orphan test", "fact", daysAgo(35), now, now, "test");
+
+		// Entity with mentions = 1 (will become orphan)
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		).run("ent-orphan", "Orphan", "orphan", "extracted", now, now);
+
+		// Entity with mentions = 3 (will survive)
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 3, ?, ?)`,
+		).run("ent-survive", "Survivor", "survivor", "extracted", now, now);
+
+		// Mention links for both
+		db.prepare(
+			`INSERT INTO memory_entity_mentions (memory_id, entity_id)
+			 VALUES (?, ?)`,
+		).run("mem-orphan", "ent-orphan");
+		db.prepare(
+			`INSERT INTO memory_entity_mentions (memory_id, entity_id)
+			 VALUES (?, ?)`,
+		).run("mem-orphan", "ent-survive");
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = handle.sweep();
+		handle.stop();
+
+		expect(result.graphLinksPurged).toBe(2);
+		expect(result.entitiesOrphaned).toBe(1);
+
+		// Orphan entity deleted
+		expect(
+			db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-orphan"),
+		).toBeNull();
+		// Survivor still exists with decremented mentions
+		const survivor = db
+			.prepare("SELECT mentions FROM entities WHERE id = ?")
+			.get("ent-survive") as { mentions: number };
+		expect(survivor.mentions).toBe(2);
 	});
 
 	it("returns zero counts when nothing to purge", () => {

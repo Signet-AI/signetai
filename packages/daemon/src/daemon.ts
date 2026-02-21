@@ -58,6 +58,8 @@ import {
 } from "./transactions";
 import { startPipeline, stopPipeline, enqueueExtractionJob } from "./pipeline";
 import { normalizeAndHashContent } from "./content-normalization";
+import { getGraphBoostIds } from "./pipeline/graph-search";
+import { rerank, noopReranker, type RerankCandidate } from "./pipeline/reranker";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -2601,6 +2603,75 @@ app.post("/api/memory/recall", async (c) => {
 	}
 
 	scored.sort((a, b) => b.score - a.score);
+
+	// --- Graph boost: pull up memories linked via knowledge graph ---
+	if (cfg.pipelineV2.graphEnabled && cfg.pipelineV2.graphBoostWeight > 0) {
+		try {
+			const graphResult = getDbAccessor().withReadDb((db) =>
+				getGraphBoostIds(query, db, cfg.pipelineV2.graphBoostTimeoutMs),
+			);
+			if (graphResult.graphLinkedIds.size > 0) {
+				const gw = cfg.pipelineV2.graphBoostWeight;
+				for (const s of scored) {
+					if (graphResult.graphLinkedIds.has(s.id)) {
+						s.score = (1 - gw) * s.score + gw;
+					}
+				}
+				scored.sort((a, b) => b.score - a.score);
+			}
+		} catch (e) {
+			logger.warn("memory", "Graph boost failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
+	// --- Optional reranker hook ---
+	if (cfg.pipelineV2.rerankerEnabled && cfg.pipelineV2.rerankerModel) {
+		try {
+			const topForRerank = scored.slice(0, cfg.pipelineV2.rerankerTopN);
+			const rerankIds = topForRerank.map((s) => s.id);
+			const rerankPlaceholders = rerankIds.map(() => "?").join(", ");
+
+			// Fetch content for reranker — cross-encoders need document text
+			const contentRows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT id, content FROM memories
+							 WHERE id IN (${rerankPlaceholders})`,
+						)
+						.all(...rerankIds) as Array<{ id: string; content: string }>,
+			);
+			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
+
+			const candidates: RerankCandidate[] = topForRerank.map((s) => ({
+				id: s.id,
+				content: contentMap.get(s.id) ?? "",
+				score: s.score,
+			}));
+			const reranked = await rerank(query, candidates, noopReranker, {
+				topN: cfg.pipelineV2.rerankerTopN,
+				timeoutMs: cfg.pipelineV2.rerankerTimeoutMs,
+				model: cfg.pipelineV2.rerankerModel,
+			});
+			// Update scores from reranked results
+			const rerankedMap = new Map(reranked.map((r, i) => [r.id, i]));
+			for (const s of scored) {
+				const idx = rerankedMap.get(s.id);
+				if (idx !== undefined) {
+					// Preserve relative order from reranker
+					s.score = 1 - idx / reranked.length;
+				}
+			}
+			scored.sort((a, b) => b.score - a.score);
+		} catch (e) {
+			logger.warn("memory", "Reranker failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
 	const topIds = scored.slice(0, limit).map((s) => s.id);
 
 	if (topIds.length === 0) {

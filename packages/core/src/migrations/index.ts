@@ -10,6 +10,7 @@ import { up as baseline } from "./001-baseline";
 import { up as pipelineV2 } from "./002-pipeline-v2";
 import { up as uniqueContentHash } from "./003-unique-content-hash";
 import { up as historyActorAndRetention } from "./004-history-actor-and-retention";
+import { up as graphExtended } from "./005-graph-extended";
 
 // -- Public interface consumed by Database.init() --
 
@@ -38,6 +39,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "history-actor-and-retention",
 		up: historyActorAndRetention,
 	},
+	{ version: 5, name: "graph-extended", up: graphExtended },
 ];
 
 /** Simple checksum for audit trail (hash of migration name + version). */

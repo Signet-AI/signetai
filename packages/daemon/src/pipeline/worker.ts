@@ -17,6 +17,7 @@ import { logger } from "../logger";
 import { txIngestEnvelope } from "../transactions";
 import { normalizeAndHashContent } from "../content-normalization";
 import { vectorToBlob, countChanges } from "../db-helpers";
+import { txPersistEntities } from "./graph-transactions";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -744,6 +745,26 @@ export function startWorker(
 			);
 		});
 
+		// Persist graph entities in a separate transaction so failure
+		// never reverts fact extraction. Non-fatal on error.
+		let graphStats = { entitiesInserted: 0, entitiesUpdated: 0, relationsInserted: 0, relationsUpdated: 0, mentionsLinked: 0 };
+		if (pipelineCfg.graphEnabled && extraction.entities.length > 0) {
+			try {
+				graphStats = accessor.withWriteTx((db) =>
+					txPersistEntities(db, {
+						entities: extraction.entities,
+						sourceMemoryId: job.memory_id,
+						extractedAt: new Date().toISOString(),
+					}),
+				);
+			} catch (e) {
+				logger.warn("pipeline", "Graph entity persistence failed (non-fatal)", {
+					jobId: job.id,
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
+
 		logger.info("pipeline", "Extraction job completed", {
 			jobId: job.id,
 			memoryId: job.memory_id,
@@ -755,6 +776,11 @@ export function startWorker(
 			deduped: writeStats.deduped,
 			skippedLowConfidence: writeStats.skippedLowConfidence,
 			blockedDestructive: writeStats.blockedDestructive,
+			entitiesInserted: graphStats.entitiesInserted,
+			entitiesUpdated: graphStats.entitiesUpdated,
+			relationsInserted: graphStats.relationsInserted,
+			relationsUpdated: graphStats.relationsUpdated,
+			mentionsLinked: graphStats.mentionsLinked,
 		});
 	}
 

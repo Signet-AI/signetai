@@ -16,6 +16,7 @@
 
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
+import { txDecrementEntityMentions } from "./graph-transactions";
 import { logger } from "../logger";
 
 export interface RetentionConfig {
@@ -51,6 +52,7 @@ export interface RetentionHandle {
 
 export interface RetentionSweepResult {
 	graphLinksPurged: number;
+	entitiesOrphaned: number;
 	embeddingsPurged: number;
 	tombstonesPurged: number;
 	historyPurged: number;
@@ -58,7 +60,11 @@ export interface RetentionSweepResult {
 	deadJobsPurged: number;
 }
 
-function purgeGraphLinks(db: WriteDb, cutoff: string, limit: number): number {
+function purgeGraphLinks(
+	db: WriteDb,
+	cutoff: string,
+	limit: number,
+): { mentionsPurged: number; entitiesOrphaned: number } {
 	// Find tombstoned memory IDs past retention
 	const expiredIds = db
 		.prepare(
@@ -68,17 +74,32 @@ function purgeGraphLinks(db: WriteDb, cutoff: string, limit: number): number {
 		)
 		.all(cutoff, limit) as Array<{ id: string }>;
 
-	if (expiredIds.length === 0) return 0;
+	if (expiredIds.length === 0) return { mentionsPurged: 0, entitiesOrphaned: 0 };
 
 	const placeholders = expiredIds.map(() => "?").join(", ");
 	const ids = expiredIds.map((r) => r.id);
+
+	// Capture affected entity IDs before deleting mention links
+	const affectedEntities = db
+		.prepare(
+			`SELECT DISTINCT entity_id FROM memory_entity_mentions
+			 WHERE memory_id IN (${placeholders})`,
+		)
+		.all(...ids) as Array<{ entity_id: string }>;
+
 	const result = db
 		.prepare(
 			`DELETE FROM memory_entity_mentions
 			 WHERE memory_id IN (${placeholders})`,
 		)
 		.run(...ids);
-	return countChanges(result);
+	const mentionsPurged = countChanges(result);
+
+	// Decrement entity mention counts and clean orphans
+	const entityIds = affectedEntities.map((r) => r.entity_id);
+	const { entitiesOrphaned } = txDecrementEntityMentions(db, { entityIds });
+
+	return { mentionsPurged, entitiesOrphaned };
 }
 
 function purgeEmbeddings(db: WriteDb, cutoff: string, limit: number): number {
@@ -174,10 +195,12 @@ function runSweep(
 	).toISOString();
 	const deadJobCutoff = new Date(now - cfg.deadJobRetentionMs).toISOString();
 
-	// Step 1: graph links for expired tombstones
-	const graphLinksPurged = accessor.withWriteTx((db) =>
+	// Step 1: graph links for expired tombstones + entity decrement
+	const graphResult = accessor.withWriteTx((db) =>
 		purgeGraphLinks(db, tombstoneCutoff, cfg.batchLimit),
 	);
+	const graphLinksPurged = graphResult.mentionsPurged;
+	const entitiesOrphaned = graphResult.entitiesOrphaned;
 
 	// Step 2: embeddings for expired tombstones
 	const embeddingsPurged = accessor.withWriteTx((db) =>
@@ -206,6 +229,7 @@ function runSweep(
 
 	return {
 		graphLinksPurged,
+		entitiesOrphaned,
 		embeddingsPurged,
 		tombstonesPurged,
 		historyPurged,
@@ -225,6 +249,7 @@ export function startRetentionWorker(
 		const result = runSweep(accessor, cfg);
 		const total =
 			result.graphLinksPurged +
+			result.entitiesOrphaned +
 			result.embeddingsPurged +
 			result.tombstonesPurged +
 			result.historyPurged +

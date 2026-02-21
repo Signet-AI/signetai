@@ -38,6 +38,12 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	workerMaxRetries: 3,
 	leaseTimeoutMs: 300000,
 	minFactConfidenceForWrite: 0.7,
+	graphBoostWeight: 0.15,
+	graphBoostTimeoutMs: 500,
+	rerankerEnabled: false,
+	rerankerModel: "",
+	rerankerTopN: 20,
+	rerankerTimeoutMs: 2000,
 };
 
 export interface ResolvedMemoryConfig {
@@ -107,6 +113,33 @@ export function loadPipelineConfig(
 		minFactConfidenceForWrite: clampFraction(
 			raw.minFactConfidenceForWrite,
 			DEFAULT_PIPELINE_V2.minFactConfidenceForWrite,
+		),
+		graphBoostWeight: clampFraction(
+			raw.graphBoostWeight,
+			DEFAULT_PIPELINE_V2.graphBoostWeight,
+		),
+		graphBoostTimeoutMs: clampPositive(
+			raw.graphBoostTimeoutMs,
+			50,
+			5000,
+			DEFAULT_PIPELINE_V2.graphBoostTimeoutMs,
+		),
+		rerankerEnabled: raw.rerankerEnabled === true,
+		rerankerModel:
+			typeof raw.rerankerModel === "string"
+				? raw.rerankerModel
+				: DEFAULT_PIPELINE_V2.rerankerModel,
+		rerankerTopN: clampPositive(
+			raw.rerankerTopN,
+			1,
+			100,
+			DEFAULT_PIPELINE_V2.rerankerTopN,
+		),
+		rerankerTimeoutMs: clampPositive(
+			raw.rerankerTimeoutMs,
+			100,
+			30000,
+			DEFAULT_PIPELINE_V2.rerankerTimeoutMs,
 		),
 	};
 }

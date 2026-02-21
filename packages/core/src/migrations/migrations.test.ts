@@ -33,11 +33,12 @@ describe("migration framework", () => {
 				"SELECT version, applied_at FROM schema_migrations ORDER BY version",
 			)
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(migrations.length).toBe(4);
+		expect(migrations.length).toBe(5);
 		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
 		expect(migrations[3].version).toBe(4);
+		expect(migrations[4].version).toBe(5);
 	});
 
 	test("re-running migrations is idempotent", () => {
@@ -123,7 +124,7 @@ describe("migration framework", () => {
 		const audits = db
 			.query("SELECT version, applied_at FROM schema_migrations_audit")
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(audits.length).toBe(4);
+		expect(audits.length).toBe(5);
 		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}
@@ -213,6 +214,28 @@ describe("migration framework", () => {
 		const oldRow = rows.find((r) => r.id === "old1");
 		expect(newRow?.content_hash).toBe("duphash");
 		expect(oldRow?.content_hash).toBeNull();
+	});
+
+	test("entities table has graph-extended columns after migration", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const entityCols = db.query("PRAGMA table_info(entities)").all() as Array<{ name: string }>;
+		const entityColNames = entityCols.map((c) => c.name);
+		expect(entityColNames).toContain("canonical_name");
+		expect(entityColNames).toContain("mentions");
+		expect(entityColNames).toContain("embedding");
+
+		const relationCols = db.query("PRAGMA table_info(relations)").all() as Array<{ name: string }>;
+		const relationColNames = relationCols.map((c) => c.name);
+		expect(relationColNames).toContain("mentions");
+		expect(relationColNames).toContain("confidence");
+
+		const memCols = db.query("PRAGMA table_info(memory_entity_mentions)").all() as Array<{ name: string }>;
+		const memColNames = memCols.map((c) => c.name);
+		expect(memColNames).toContain("mention_text");
+		expect(memColNames).toContain("confidence");
+		expect(memColNames).toContain("created_at");
 	});
 
 	test("DB with existing v1 schema only gets v2 migration", () => {

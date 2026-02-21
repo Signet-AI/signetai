@@ -182,6 +182,12 @@ const PIPELINE_CFG: PipelineV2Config = {
 	workerMaxRetries: 3,
 	leaseTimeoutMs: 300000,
 	minFactConfidenceForWrite: 0.7,
+	graphBoostWeight: 0.15,
+	graphBoostTimeoutMs: 500,
+	rerankerEnabled: false,
+	rerankerModel: "",
+	rerankerTopN: 20,
+	rerankerTimeoutMs: 2000,
 };
 
 const PHASE_C_CFG: PipelineV2Config = {

@@ -258,4 +258,39 @@ describe("loadPipelineConfig", () => {
 		expect(result.leaseTimeoutMs).toBe(120000);
 		expect(result.minFactConfidenceForWrite).toBe(0.55);
 	});
+
+	it("loads graph boost and reranker fields", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					graphBoostWeight: 0.25,
+					graphBoostTimeoutMs: 300,
+					rerankerEnabled: true,
+					rerankerModel: "cross-encoder/ms-marco",
+					rerankerTopN: 15,
+					rerankerTimeoutMs: 1500,
+				},
+			},
+		});
+
+		expect(result.graphBoostWeight).toBe(0.25);
+		expect(result.graphBoostTimeoutMs).toBe(300);
+		expect(result.rerankerEnabled).toBe(true);
+		expect(result.rerankerModel).toBe("cross-encoder/ms-marco");
+		expect(result.rerankerTopN).toBe(15);
+		expect(result.rerankerTimeoutMs).toBe(1500);
+	});
+
+	it("uses defaults for graph boost and reranker when absent", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { enabled: true } },
+		});
+
+		expect(result.graphBoostWeight).toBe(0.15);
+		expect(result.graphBoostTimeoutMs).toBe(500);
+		expect(result.rerankerEnabled).toBe(false);
+		expect(result.rerankerModel).toBe("");
+		expect(result.rerankerTopN).toBe(20);
+		expect(result.rerankerTimeoutMs).toBe(2000);
+	});
 });

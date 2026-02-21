@@ -111,6 +111,12 @@ export interface PipelineV2Config {
 	readonly workerMaxRetries: number;
 	readonly leaseTimeoutMs: number;
 	readonly minFactConfidenceForWrite: number;
+	readonly graphBoostWeight: number;
+	readonly graphBoostTimeoutMs: number;
+	readonly rerankerEnabled: boolean;
+	readonly rerankerModel: string;
+	readonly rerankerTopN: number;
+	readonly rerankerTimeoutMs: number;
 }
 
 // -- Status/union constants --
@@ -254,8 +260,10 @@ export interface MemoryJob {
 export interface Entity {
 	id: string;
 	name: string;
+	canonicalName?: string;
 	entityType: string;
 	description?: string;
+	mentions?: number;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -266,13 +274,19 @@ export interface Relation {
 	targetEntityId: string;
 	relationType: string;
 	strength: number;
-	metadata?: string; // JSON
+	mentions?: number;
+	confidence?: number;
+	metadata?: string;
 	createdAt: string;
+	updatedAt?: string;
 }
 
 export interface MemoryEntityMention {
 	memoryId: string;
 	entityId: string;
+	mentionText?: string;
+	confidence?: number;
+	createdAt?: string;
 }
 
 // -- Extraction pipeline contracts --
