@@ -54,7 +54,8 @@ export function SignetProvider({
         if (!controller.signal.aborted) setConnected(true);
       })
       .catch((err: unknown) => {
-        if (!controller.signal.aborted) setError(err as Error);
+        if (!controller.signal.aborted)
+          setError(err instanceof Error ? err : new Error(String(err)));
       });
 
     return () => controller.abort();
@@ -112,7 +113,11 @@ export function useMemorySearch(
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
-          setState({ data: null, loading: false, error: err as Error });
+          setState({
+            data: null,
+            loading: false,
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
         }
       });
 
@@ -150,7 +155,11 @@ export function useMemory(
       })
       .catch((err: unknown) => {
         if (!controller.signal.aborted) {
-          setState({ data: null, loading: false, error: err as Error });
+          setState({
+            data: null,
+            loading: false,
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
         }
       });
 

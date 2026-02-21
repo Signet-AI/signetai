@@ -25,6 +25,10 @@ import { logger } from "../logger";
 
 export { enqueueExtractionJob } from "./worker";
 export { enqueueDocumentIngestJob } from "./document-worker";
+export {
+	startRetentionWorker,
+	DEFAULT_RETENTION,
+} from "./retention-worker";
 export type { WorkerHandle } from "./worker";
 export type { DocumentWorkerHandle } from "./document-worker";
 export type { LlmProvider } from "./provider";
@@ -73,7 +77,8 @@ export function startPipeline(
 
 	workerHandle = startWorker(accessor, provider, pipelineCfg, decisionCfg);
 
-	// Retention worker runs independently of pipeline mode
+	// Retention worker also managed here when pipeline is active;
+	// standalone retention is started separately in main() for non-pipeline users.
 	if (!retentionHandle) {
 		retentionHandle = startRetentionWorker(accessor, DEFAULT_RETENTION);
 	}

@@ -59,6 +59,8 @@ import {
 import {
 	startPipeline,
 	stopPipeline,
+	startRetentionWorker,
+	DEFAULT_RETENTION,
 	enqueueExtractionJob,
 	enqueueDocumentIngestJob,
 } from "./pipeline";
@@ -5998,8 +6000,8 @@ function startClaudeMemoryWatcher() {
 	const claudeProjectsDir = join(homedir(), ".claude", "projects");
 	if (!existsSync(claudeProjectsDir)) return;
 
-	// Sync existing files first
-	syncExistingClaudeMemories(claudeProjectsDir);
+	// NOTE: initial sync of existing files is deferred to the server listen
+	// callback so the HTTP API is available. Only the watcher starts here.
 
 	const claudeWatcher = watch(
 		join(claudeProjectsDir, "**", "memory", "MEMORY.md"),
@@ -6559,6 +6561,10 @@ async function main() {
 			memoryCfg.search,
 			providerTracker,
 		);
+	} else {
+		// Retention worker runs unconditionally — cleans up tombstones,
+		// expired history, and dead jobs even without the full pipeline.
+		startRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
 	}
 
 	// Start git sync timer (if enabled and has token)
@@ -6593,6 +6599,12 @@ async function main() {
 					errDetails,
 				);
 			});
+
+			// Sync existing Claude Code project memories (also needs HTTP API)
+			const claudeProjectsDir = join(homedir(), ".claude", "projects");
+			if (existsSync(claudeProjectsDir)) {
+				syncExistingClaudeMemories(claudeProjectsDir);
+			}
 		},
 	);
 }

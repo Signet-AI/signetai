@@ -108,6 +108,7 @@ export class SignetClient {
     return this.transport.get<MemoryListResponse>("/api/memories", {
       limit: opts?.limit,
       offset: opts?.offset,
+      type: opts?.type,
     });
   }
 
