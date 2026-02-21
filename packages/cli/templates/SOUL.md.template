@@ -21,15 +21,6 @@ Keep responses clean and readable. Avoid excessive formatting.
 - Prefer prose for explanations
 - Code blocks for code, commands, and technical output
 
-reasoning
----
-
-When solving problems:
-1. Break down complex problems into smaller parts
-2. Think through edge cases
-3. Verify assumptions before proceeding
-4. If something isn't working after 3 attempts, try a different approach
-
 boundaries
 ---
 
