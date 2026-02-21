@@ -11,8 +11,6 @@ import {
 	DECISION_ACTIONS,
 	vectorSearch,
 	type DecisionAction,
-	type DecisionProposal,
-	type DecisionResult,
 	type ExtractedFact,
 } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
@@ -40,11 +38,29 @@ export interface DecisionConfig {
 	) => Promise<number[] | null>;
 }
 
+export interface FactDecisionProposal {
+	readonly action: DecisionAction;
+	readonly targetMemoryId?: string;
+	readonly confidence: number;
+	readonly reason: string;
+	readonly fact: ExtractedFact;
+	readonly targetContent?: string;
+}
+
+export interface FactDecisionResult {
+	readonly proposals: readonly FactDecisionProposal[];
+	readonly warnings: readonly string[];
+}
+
 // ---------------------------------------------------------------------------
 // Candidate retrieval (focused hybrid search, top-5)
 // ---------------------------------------------------------------------------
 
 const CANDIDATE_LIMIT = 5;
+
+interface AllQuery<T> {
+	all(...args: readonly unknown[]): T;
+}
 
 function findCandidatesBm25(
 	accessor: DbAccessor,
@@ -54,16 +70,15 @@ function findCandidatesBm25(
 	const bm25Map = new Map<string, number>();
 	try {
 		accessor.withReadDb((db) => {
-			const rows = (
-				db.prepare(`
+			const stmt = db.prepare(`
 					SELECT m.id, bm25(memories_fts) AS raw_score
 					FROM memories_fts
 					JOIN memories m ON memories_fts.rowid = m.rowid
 					WHERE memories_fts MATCH ?
 					ORDER BY raw_score
 					LIMIT ?
-				`) as any
-			).all(query, limit) as Array<{ id: string; raw_score: number }>;
+				`) as unknown as AllQuery<Array<{ id: string; raw_score: number }>>;
+			const rows = stmt.all(query, limit);
 
 			for (const row of rows) {
 				bm25Map.set(row.id, 1 / (1 + Math.abs(row.raw_score)));
@@ -87,7 +102,8 @@ async function findCandidatesVector(
 		if (queryVec) {
 			const qf32 = new Float32Array(queryVec);
 			accessor.withReadDb((db) => {
-				const results = vectorSearch(db as any, qf32, { limit });
+				const vectorDb = db as unknown as Parameters<typeof vectorSearch>[0];
+				const results = vectorSearch(vectorDb, qf32, { limit });
 				for (const r of results) {
 					vectorMap.set(r.id, r.score);
 				}
@@ -105,14 +121,15 @@ function fetchMemoryRows(
 ): CandidateMemory[] {
 	if (ids.length === 0) return [];
 	const placeholders = ids.map(() => "?").join(", ");
-	return accessor.withReadDb((db) =>
-		db
-			.prepare(
-				`SELECT id, content, type, importance
+	return accessor.withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT id, content, type, importance
 				 FROM memories
 				 WHERE id IN (${placeholders}) AND is_deleted = 0`,
-			)
-			.all(...ids) as CandidateMemory[],
+				)
+				.all(...ids) as CandidateMemory[],
 	);
 }
 
@@ -200,8 +217,11 @@ function parseDecision(
 	raw: string,
 	candidateIds: ReadonlySet<string>,
 	warnings: string[],
-): DecisionProposal | null {
-	const jsonStr = raw.trim().replace(/```(?:json)?\s*([\s\S]*?)```/, "$1").trim();
+): Omit<FactDecisionProposal, "fact" | "targetContent"> | null {
+	const jsonStr = raw
+		.trim()
+		.replace(/```(?:json)?\s*([\s\S]*?)```/, "$1")
+		.trim();
 
 	let parsed: unknown;
 	try {
@@ -224,8 +244,7 @@ function parseDecision(
 		return null;
 	}
 
-	const targetId =
-		typeof obj.targetId === "string" ? obj.targetId : undefined;
+	const targetId = typeof obj.targetId === "string" ? obj.targetId : undefined;
 
 	// update/delete MUST reference a valid candidate
 	if (action === "update" || action === "delete") {
@@ -234,9 +253,7 @@ function parseDecision(
 			return null;
 		}
 		if (!candidateIds.has(targetId)) {
-			warnings.push(
-				`Decision references non-candidate ID: "${targetId}"`,
-			);
+			warnings.push(`Decision references non-candidate ID: "${targetId}"`);
 			return null;
 		}
 	}
@@ -267,8 +284,8 @@ export async function runShadowDecisions(
 	accessor: DbAccessor,
 	provider: LlmProvider,
 	cfg: DecisionConfig,
-): Promise<DecisionResult> {
-	const proposals: DecisionProposal[] = [];
+): Promise<FactDecisionResult> {
+	const proposals: FactDecisionProposal[] = [];
 	const warnings: string[] = [];
 
 	for (const fact of facts) {
@@ -280,6 +297,7 @@ export async function runShadowDecisions(
 				action: "add",
 				confidence: fact.confidence,
 				reason: "No existing memories match this fact",
+				fact,
 			});
 			continue;
 		}
@@ -291,7 +309,17 @@ export async function runShadowDecisions(
 			const output = await provider.generate(prompt);
 			const proposal = parseDecision(output, candidateIds, warnings);
 			if (proposal) {
-				proposals.push(proposal);
+				const targetContent =
+					proposal.targetMemoryId === undefined
+						? undefined
+						: candidates.find(
+								(candidate) => candidate.id === proposal.targetMemoryId,
+							)?.content;
+				proposals.push({
+					...proposal,
+					fact,
+					targetContent,
+				});
 			}
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);

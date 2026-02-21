@@ -29,12 +29,15 @@ describe("migration framework", () => {
 
 		// schema_migrations table should exist with version as PK
 		const migrations = db
-			.query("SELECT version, applied_at FROM schema_migrations ORDER BY version")
+			.query(
+				"SELECT version, applied_at FROM schema_migrations ORDER BY version",
+			)
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(migrations.length).toBe(3);
+		expect(migrations.length).toBe(4);
 		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
+		expect(migrations[3].version).toBe(4);
 	});
 
 	test("re-running migrations is idempotent", () => {
@@ -56,9 +59,7 @@ describe("migration framework", () => {
 		runMigrations(db);
 
 		const tables = db
-			.query(
-				"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-			)
+			.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
 			.all() as Array<{ name: string }>;
 		const tableNames = tables.map((t) => t.name);
 
@@ -81,9 +82,9 @@ describe("migration framework", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
-		const columns = db
-			.query("PRAGMA table_info(memories)")
-			.all() as Array<{ name: string }>;
+		const columns = db.query("PRAGMA table_info(memories)").all() as Array<{
+			name: string;
+		}>;
 		const colNames = columns.map((c) => c.name);
 
 		// v1 columns
@@ -122,7 +123,7 @@ describe("migration framework", () => {
 		const audits = db
 			.query("SELECT version, applied_at FROM schema_migrations_audit")
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(audits.length).toBe(3);
+		expect(audits.length).toBe(4);
 		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}
@@ -132,9 +133,9 @@ describe("migration framework", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
-		const columns = db
-			.query("PRAGMA table_info(memories)")
-			.all() as Array<{ name: string }>;
+		const columns = db.query("PRAGMA table_info(memories)").all() as Array<{
+			name: string;
+		}>;
 		const colNames = columns.map((c) => c.name);
 
 		expect(colNames).toContain("why");
@@ -153,10 +154,12 @@ describe("migration framework", () => {
 
 		// Same content_hash on a non-deleted row should fail
 		expect(() =>
-			db.prepare(
-				`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			db
+				.prepare(
+					`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			).run("b", "hello again", "hash1", "fact", now, now, "test"),
+				)
+				.run("b", "hello again", "hash1", "fact", now, now, "test"),
 		).toThrow();
 
 		// NULL content_hash should not conflict
@@ -178,8 +181,8 @@ describe("migration framework", () => {
 		// Run all migrations to get full schema
 		runMigrations(db);
 
-		// Simulate pre-v3 state: remove v3, drop unique index, add non-unique
-		db.prepare("DELETE FROM schema_migrations WHERE version = 3").run();
+		// Simulate pre-v3 state: remove v3+, drop unique index, add non-unique
+		db.prepare("DELETE FROM schema_migrations WHERE version >= 3").run();
 		db.run("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
 		db.run(
 			"CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)",

@@ -110,6 +110,7 @@ export interface PipelineV2Config {
 	readonly workerPollMs: number;
 	readonly workerMaxRetries: number;
 	readonly leaseTimeoutMs: number;
+	readonly minFactConfidenceForWrite: number;
 }
 
 // -- Status/union constants --
@@ -149,16 +150,12 @@ export const HISTORY_EVENTS = [
 	"deleted",
 	"recovered",
 	"merged",
+	"none",
 	"split",
 ] as const;
 export type HistoryEvent = (typeof HISTORY_EVENTS)[number];
 
-export const DECISION_ACTIONS = [
-	"add",
-	"update",
-	"delete",
-	"none",
-] as const;
+export const DECISION_ACTIONS = ["add", "update", "delete", "none"] as const;
 export type DecisionAction = (typeof DECISION_ACTIONS)[number];
 
 // -- Core interfaces --
@@ -232,6 +229,9 @@ export interface MemoryHistory {
 	reason?: string;
 	metadata?: string; // JSON
 	createdAt: string;
+	actorType?: string;
+	sessionId?: string;
+	requestId?: string;
 }
 
 export interface MemoryJob {

@@ -9,6 +9,7 @@
 import { up as baseline } from "./001-baseline";
 import { up as pipelineV2 } from "./002-pipeline-v2";
 import { up as uniqueContentHash } from "./003-unique-content-hash";
+import { up as historyActorAndRetention } from "./004-history-actor-and-retention";
 
 // -- Public interface consumed by Database.init() --
 
@@ -32,6 +33,11 @@ export const MIGRATIONS: readonly Migration[] = [
 	{ version: 1, name: "baseline", up: baseline },
 	{ version: 2, name: "pipeline-v2", up: pipelineV2 },
 	{ version: 3, name: "unique-content-hash", up: uniqueContentHash },
+	{
+		version: 4,
+		name: "history-actor-and-retention",
+		up: historyActorAndRetention,
+	},
 ];
 
 /** Simple checksum for audit trail (hash of migration name + version). */
@@ -69,9 +75,7 @@ function ensureMetaTables(db: MigrationDb): void {
 /** Read the highest applied version, or 0 if none. */
 function currentVersion(db: MigrationDb): number {
 	const row = db
-		.prepare(
-			"SELECT MAX(version) as version FROM schema_migrations",
-		)
+		.prepare("SELECT MAX(version) as version FROM schema_migrations")
 		.get();
 	if (row === undefined) return 0;
 	const v = row.version;
@@ -121,9 +125,7 @@ export function runMigrations(db: MigrationDb): void {
 
 			db.exec(`RELEASE migration_${migration.version}`);
 		} catch (err) {
-			db.exec(
-				`ROLLBACK TO SAVEPOINT migration_${migration.version}`,
-			);
+			db.exec(`ROLLBACK TO SAVEPOINT migration_${migration.version}`);
 			db.exec(`RELEASE migration_${migration.version}`);
 			throw new Error(
 				`Migration ${migration.version} (${migration.name}) failed: ${

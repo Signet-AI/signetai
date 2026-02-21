@@ -101,6 +101,7 @@ describe("loadMemoryConfig", () => {
     enabled: true
     shadowMode: true
     graphEnabled: true
+    minFactConfidenceForWrite: 0.82
 `,
 		);
 
@@ -113,6 +114,7 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2.autonomousEnabled).toBe(false);
 		expect(cfg.pipelineV2.mutationsFrozen).toBe(false);
 		expect(cfg.pipelineV2.autonomousFrozen).toBe(false);
+		expect(cfg.pipelineV2.minFactConfidenceForWrite).toBe(0.82);
 	});
 });
 
@@ -196,6 +198,7 @@ describe("loadPipelineConfig", () => {
 					workerMaxRetries: -5,
 					extractionTimeout: 999999,
 					leaseTimeoutMs: 1,
+					minFactConfidenceForWrite: 3,
 				},
 			},
 		});
@@ -208,6 +211,8 @@ describe("loadPipelineConfig", () => {
 		expect(result.extractionTimeout).toBe(300000);
 		// leaseTimeoutMs: min 10000
 		expect(result.leaseTimeoutMs).toBe(10000);
+		// minFactConfidenceForWrite: max 1
+		expect(result.minFactConfidenceForWrite).toBe(1);
 	});
 
 	it("uses defaults for non-number numeric fields", () => {
@@ -218,14 +223,20 @@ describe("loadPipelineConfig", () => {
 					workerMaxRetries: null,
 					extractionTimeout: undefined,
 					leaseTimeoutMs: true,
+					minFactConfidenceForWrite: "high",
 				},
 			},
 		});
 
 		expect(result.workerPollMs).toBe(DEFAULT_PIPELINE_V2.workerPollMs);
 		expect(result.workerMaxRetries).toBe(DEFAULT_PIPELINE_V2.workerMaxRetries);
-		expect(result.extractionTimeout).toBe(DEFAULT_PIPELINE_V2.extractionTimeout);
+		expect(result.extractionTimeout).toBe(
+			DEFAULT_PIPELINE_V2.extractionTimeout,
+		);
 		expect(result.leaseTimeoutMs).toBe(DEFAULT_PIPELINE_V2.leaseTimeoutMs);
+		expect(result.minFactConfidenceForWrite).toBe(
+			DEFAULT_PIPELINE_V2.minFactConfidenceForWrite,
+		);
 	});
 
 	it("accepts valid numeric values within range", () => {
@@ -236,6 +247,7 @@ describe("loadPipelineConfig", () => {
 					workerMaxRetries: 5,
 					extractionTimeout: 60000,
 					leaseTimeoutMs: 120000,
+					minFactConfidenceForWrite: 0.55,
 				},
 			},
 		});
@@ -244,5 +256,6 @@ describe("loadPipelineConfig", () => {
 		expect(result.workerMaxRetries).toBe(5);
 		expect(result.extractionTimeout).toBe(60000);
 		expect(result.leaseTimeoutMs).toBe(120000);
+		expect(result.minFactConfidenceForWrite).toBe(0.55);
 	});
 });

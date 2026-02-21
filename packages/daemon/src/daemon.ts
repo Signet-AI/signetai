@@ -6,7 +6,7 @@
 
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { logger as honoLogger } from "hono/logger";
 import { watch } from "chokidar";
@@ -28,11 +28,7 @@ import {
 import { spawn } from "child_process";
 import { createHash } from "crypto";
 import { fileURLToPath } from "url";
-import {
-	initDbAccessor,
-	getDbAccessor,
-	closeDbAccessor,
-} from "./db-accessor";
+import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
 import {
 	putSecret,
 	getSecret,
@@ -52,12 +48,16 @@ import {
 	getGlobalInstallCommand,
 } from "@signet/core";
 import { compareVersions, isVersionNewer } from "./version";
-import { txIngestEnvelope, txFinalizeAccessAndHistory } from "./transactions";
 import {
-	startPipeline,
-	stopPipeline,
-	enqueueExtractionJob,
-} from "./pipeline";
+	txIngestEnvelope,
+	txFinalizeAccessAndHistory,
+	txForgetMemory,
+	txModifyMemory,
+	txRecoverMemory,
+	type MutationContext,
+} from "./transactions";
+import { startPipeline, stopPipeline, enqueueExtractionJob } from "./pipeline";
+import { normalizeAndHashContent } from "./content-normalization";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -189,7 +189,9 @@ function parseTagsField(raw: string | null): string[] {
 	try {
 		const parsed: unknown = JSON.parse(raw);
 		if (Array.isArray(parsed)) {
-			return parsed.filter((value): value is string => typeof value === "string");
+			return parsed.filter(
+				(value): value is string => typeof value === "string",
+			);
 		}
 	} catch {
 		// Fallback to comma-separated tags.
@@ -300,9 +302,7 @@ function normalizeLegacyEmbeddingRow(
 	const content =
 		typeof rawContent === "string" ? rawContent : String(rawContent);
 	const who =
-		typeof row.who === "string" && row.who.length > 0
-			? row.who
-			: "unknown";
+		typeof row.who === "string" && row.who.length > 0 ? row.who : "unknown";
 
 	const sourceType =
 		typeof row.sourceType === "string"
@@ -318,8 +318,7 @@ function normalizeLegacyEmbeddingRow(
 			: id;
 
 	const createdAtRaw = row.createdAt ?? row.created_at;
-	const createdAt =
-		typeof createdAtRaw === "string" ? createdAtRaw : undefined;
+	const createdAt = typeof createdAtRaw === "string" ? createdAtRaw : undefined;
 
 	const typeValue = typeof row.type === "string" ? row.type : null;
 	const importance =
@@ -415,12 +414,23 @@ async function runLegacyEmbeddingsExport(
 	limit: number,
 	offset: number,
 ): Promise<LegacyEmbeddingsResponse | null> {
-	const scriptPath = join(AGENTS_DIR, "memory", "scripts", "export_embeddings.py");
+	const scriptPath = join(
+		AGENTS_DIR,
+		"memory",
+		"scripts",
+		"export_embeddings.py",
+	);
 	if (!existsSync(scriptPath)) {
 		return null;
 	}
 
-	const args = [scriptPath, "--limit", String(limit), "--offset", String(offset)];
+	const args = [
+		scriptPath,
+		"--limit",
+		String(limit),
+		"--offset",
+		String(offset),
+	];
 	if (withVectors) {
 		args.push("--with-vectors");
 	}
@@ -449,8 +459,7 @@ async function runLegacyEmbeddingsExport(
 					defaultLegacyEmbeddingsResponse(
 						limit,
 						offset,
-						stderr.trim() ||
-							`Legacy embeddings export failed (exit ${code})`,
+						stderr.trim() || `Legacy embeddings export failed (exit ${code})`,
 					),
 				);
 				return;
@@ -470,12 +479,7 @@ async function runLegacyEmbeddingsExport(
 			try {
 				const parsed: unknown = JSON.parse(stdout);
 				resolve(
-					normalizeLegacyEmbeddingsPayload(
-						parsed,
-						withVectors,
-						limit,
-						offset,
-					),
+					normalizeLegacyEmbeddingsPayload(parsed, withVectors, limit, offset),
 				);
 			} catch (error) {
 				resolve(
@@ -643,7 +647,7 @@ function getDashboardPath(): string | null {
 }
 
 // Create the Hono app
-const app = new Hono();
+export const app = new Hono();
 
 // Middleware
 app.use("*", cors());
@@ -853,7 +857,9 @@ app.get("/api/memories", (c) => {
 				// embeddings table might not exist
 			}
 			const critResult = db
-				.prepare("SELECT COUNT(*) as count FROM memories WHERE importance >= 0.9")
+				.prepare(
+					"SELECT COUNT(*) as count FROM memories WHERE importance >= 0.9",
+				)
 				.get() as { count: number };
 
 			return {
@@ -1068,6 +1074,405 @@ app.get("/memory/search", (c) => {
 // Native Memory API - /api/memory/remember & /api/memory/recall
 // ============================================================================
 
+const MAX_MUTATION_BATCH = 200;
+const FORGET_CONFIRM_THRESHOLD = 25;
+const SOFT_DELETE_RETENTION_DAYS = 30;
+const SOFT_DELETE_RETENTION_MS =
+	SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+interface ForgetCandidatesRequest {
+	query: string;
+	type: string;
+	tags: string;
+	who: string;
+	sourceType: string;
+	since: string;
+	until: string;
+	limit: number;
+}
+
+interface ForgetCandidate {
+	id: string;
+	pinned: number;
+	version: number;
+	score: number;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return null;
+	}
+	return value;
+}
+
+async function readOptionalJsonObject(
+	c: Context,
+): Promise<Record<string, unknown> | null> {
+	const raw = await c.req.raw.text();
+	if (!raw.trim()) return {};
+	try {
+		return toRecord(JSON.parse(raw));
+	} catch {
+		return null;
+	}
+}
+
+function parseOptionalString(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseOptionalNumber(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string" && value.trim().length > 0) {
+		const parsed = Number.parseFloat(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return undefined;
+}
+
+function parseOptionalInt(value: unknown): number | undefined {
+	const parsed = parseOptionalNumber(value);
+	if (parsed === undefined) return undefined;
+	if (!Number.isInteger(parsed)) return undefined;
+	if (parsed <= 0) return undefined;
+	return parsed;
+}
+
+function parseOptionalBoolean(value: unknown): boolean | undefined {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "number") {
+		if (value === 1) return true;
+		if (value === 0) return false;
+		return undefined;
+	}
+	if (typeof value === "string") {
+		const lower = value.trim().toLowerCase();
+		if (lower === "1" || lower === "true") return true;
+		if (lower === "0" || lower === "false") return false;
+	}
+	return undefined;
+}
+
+function parseTagsMutation(value: unknown): string | null | undefined {
+	if (value === null) return null;
+	if (typeof value === "string") {
+		const trimmed = value
+			.split(",")
+			.map((tag) => tag.trim())
+			.filter((tag) => tag.length > 0)
+			.join(",");
+		return trimmed.length > 0 ? trimmed : null;
+	}
+	if (Array.isArray(value)) {
+		const tags = value
+			.filter((entry): entry is string => typeof entry === "string")
+			.map((tag) => tag.trim())
+			.filter((tag) => tag.length > 0)
+			.join(",");
+		return tags.length > 0 ? tags : null;
+	}
+	return undefined;
+}
+
+interface MutationActor {
+	changedBy: string;
+	actorType: string;
+	sessionId: string | undefined;
+	requestId: string | undefined;
+}
+
+const ACTOR_TYPES = new Set([
+	"operator",
+	"pipeline",
+	"harness",
+	"sdk",
+	"daemon",
+]);
+
+function resolveMutationActor(c: Context, fallback?: string): MutationActor {
+	const headerActor = parseOptionalString(c.req.header("x-signet-actor"));
+	const changedBy =
+		headerActor ??
+		(fallback && fallback.trim().length > 0 ? fallback.trim() : "daemon");
+
+	const rawType = parseOptionalString(c.req.header("x-signet-actor-type"));
+	const actorType = rawType && ACTOR_TYPES.has(rawType) ? rawType : "operator";
+
+	return {
+		changedBy,
+		actorType,
+		sessionId: parseOptionalString(c.req.header("x-signet-session-id")),
+		requestId: parseOptionalString(c.req.header("x-signet-request-id")),
+	};
+}
+
+function buildForgetCandidatesWhere(
+	req: ForgetCandidatesRequest,
+	alias: string,
+): { clause: string; args: unknown[] } {
+	const parts: string[] = [];
+	const args: unknown[] = [];
+	const prefix = alias.length > 0 ? `${alias}.` : "";
+
+	if (req.type) {
+		parts.push(`${prefix}type = ?`);
+		args.push(req.type);
+	}
+	if (req.tags) {
+		const tags = req.tags
+			.split(",")
+			.map((tag) => tag.trim())
+			.filter((tag) => tag.length > 0);
+		for (const tag of tags) {
+			parts.push(`${prefix}tags LIKE ?`);
+			args.push(`%${tag}%`);
+		}
+	}
+	if (req.who) {
+		parts.push(`${prefix}who = ?`);
+		args.push(req.who);
+	}
+	if (req.sourceType) {
+		parts.push(`${prefix}source_type = ?`);
+		args.push(req.sourceType);
+	}
+	if (req.since) {
+		parts.push(`${prefix}created_at >= ?`);
+		args.push(req.since);
+	}
+	if (req.until) {
+		parts.push(`${prefix}created_at <= ?`);
+		args.push(req.until);
+	}
+
+	const clause = parts.length > 0 ? ` AND ${parts.join(" AND ")}` : "";
+	return { clause, args };
+}
+
+function loadForgetCandidates(req: ForgetCandidatesRequest): ForgetCandidate[] {
+	return getDbAccessor().withReadDb((db) => {
+		const limit = Math.max(1, Math.min(req.limit, MAX_MUTATION_BATCH));
+		const withQuery = req.query.trim().length > 0;
+		const { clause, args } = buildForgetCandidatesWhere(
+			req,
+			withQuery ? "m" : "",
+		);
+
+		if (withQuery) {
+			try {
+				const rows = (
+					db.prepare(
+						`SELECT m.id, m.pinned, m.version, bm25(memories_fts) AS raw_score
+						 FROM memories_fts
+						 JOIN memories m ON memories_fts.rowid = m.rowid
+						 WHERE memories_fts MATCH ? AND m.is_deleted = 0${clause}
+						 ORDER BY raw_score
+						 LIMIT ?`,
+					) as any
+				).all(req.query, ...args, limit) as Array<{
+					id: string;
+					pinned: number;
+					version: number;
+					raw_score: number;
+				}>;
+				return rows.map((row) => ({
+					id: row.id,
+					pinned: row.pinned,
+					version: row.version,
+					score: 1 / (1 + Math.abs(row.raw_score ?? 0)),
+				}));
+			} catch {
+				// Fall through to LIKE fallback.
+			}
+
+			const fallbackRows = (
+				db.prepare(
+					`SELECT m.id, m.pinned, m.version
+					 FROM memories m
+					 WHERE m.is_deleted = 0
+					   AND (m.content LIKE ? OR m.tags LIKE ?)${clause}
+					 ORDER BY m.updated_at DESC
+					 LIMIT ?`,
+				) as any
+			).all(`%${req.query}%`, `%${req.query}%`, ...args, limit) as Array<{
+				id: string;
+				pinned: number;
+				version: number;
+			}>;
+			return fallbackRows.map((row) => ({
+				id: row.id,
+				pinned: row.pinned,
+				version: row.version,
+				score: 0,
+			}));
+		}
+
+		const rows = (
+			db.prepare(
+				`SELECT id, pinned, version
+				 FROM memories
+				 WHERE is_deleted = 0${clause}
+				 ORDER BY pinned DESC, importance DESC, updated_at DESC
+				 LIMIT ?`,
+			) as any
+		).all(...args, limit) as Array<{
+			id: string;
+			pinned: number;
+			version: number;
+		}>;
+		return rows.map((row) => ({
+			id: row.id,
+			pinned: row.pinned,
+			version: row.version,
+			score: 0,
+		}));
+	});
+}
+
+function loadForgetCandidatesByIds(
+	requestedIds: readonly string[],
+	limit: number,
+): ForgetCandidate[] {
+	const dedupedIds = [...new Set(requestedIds)]
+		.map((id) => id.trim())
+		.filter((id) => id.length > 0)
+		.slice(0, Math.max(1, Math.min(limit, MAX_MUTATION_BATCH)));
+	if (dedupedIds.length === 0) return [];
+
+	return getDbAccessor().withReadDb((db) => {
+		const placeholders = dedupedIds.map(() => "?").join(", ");
+		const rows = db
+			.prepare(
+				`SELECT id, pinned, version
+				 FROM memories
+				 WHERE is_deleted = 0 AND id IN (${placeholders})`,
+			)
+			.all(...dedupedIds) as Array<{
+			id: string;
+			pinned: number;
+			version: number;
+		}>;
+		const rowById = new Map(rows.map((row) => [row.id, row]));
+		return dedupedIds
+			.map((id) => rowById.get(id))
+			.filter((row): row is { id: string; pinned: number; version: number } =>
+				Boolean(row),
+			)
+			.map((row) => ({
+				id: row.id,
+				pinned: row.pinned,
+				version: row.version,
+				score: 0,
+			}));
+	});
+}
+
+function buildForgetConfirmToken(memoryIds: readonly string[]): string {
+	const canonical = [...new Set(memoryIds)].sort().join("|");
+	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+}
+
+interface ParsedModifyPatch {
+	patch: {
+		content?: string;
+		normalizedContent?: string;
+		contentHash?: string;
+		type?: string;
+		tags?: string | null;
+		importance?: number;
+		pinned?: number;
+	};
+	contentForEmbedding: string | null;
+}
+
+function parseModifyPatch(
+	payload: Record<string, unknown>,
+): { ok: true; value: ParsedModifyPatch } | { ok: false; error: string } {
+	const patch: ParsedModifyPatch["patch"] = {};
+	let changed = false;
+	let contentForEmbedding: string | null = null;
+
+	const hasField = (field: string): boolean =>
+		Object.prototype.hasOwnProperty.call(payload, field);
+
+	if (hasField("content")) {
+		if (typeof payload.content !== "string") {
+			return { ok: false, error: "content must be a string" };
+		}
+		const normalized = normalizeAndHashContent(payload.content);
+		if (!normalized.storageContent) {
+			return { ok: false, error: "content must not be empty" };
+		}
+		patch.content = normalized.storageContent;
+		patch.normalizedContent =
+			normalized.normalizedContent.length > 0
+				? normalized.normalizedContent
+				: normalized.hashBasis;
+		patch.contentHash = normalized.contentHash;
+		contentForEmbedding = normalized.storageContent;
+		changed = true;
+	}
+
+	if (hasField("type")) {
+		const type = parseOptionalString(payload.type);
+		if (!type) {
+			return { ok: false, error: "type must be a non-empty string" };
+		}
+		patch.type = type;
+		changed = true;
+	}
+
+	if (hasField("tags")) {
+		const tags = parseTagsMutation(payload.tags);
+		if (tags === undefined) {
+			return {
+				ok: false,
+				error: "tags must be a string, string array, or null",
+			};
+		}
+		patch.tags = tags;
+		changed = true;
+	}
+
+	if (hasField("importance")) {
+		const importance = parseOptionalNumber(payload.importance);
+		if (
+			importance === undefined ||
+			importance < 0 ||
+			importance > 1 ||
+			!Number.isFinite(importance)
+		) {
+			return {
+				ok: false,
+				error: "importance must be a finite number between 0 and 1",
+			};
+		}
+		patch.importance = importance;
+		changed = true;
+	}
+
+	if (hasField("pinned")) {
+		const pinned = parseOptionalBoolean(payload.pinned);
+		if (pinned === undefined) {
+			return { ok: false, error: "pinned must be a boolean" };
+		}
+		patch.pinned = pinned ? 1 : 0;
+		changed = true;
+	}
+
+	if (!changed) {
+		return {
+			ok: false,
+			error:
+				"at least one of content, type, tags, importance, pinned is required",
+		};
+	}
+
+	return { ok: true, value: { patch, contentForEmbedding } };
+}
+
 app.post("/api/memory/remember", async (c) => {
 	let body: {
 		content?: string;
@@ -1111,9 +1516,16 @@ app.post("/api/memory/remember", async (c) => {
 
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
-	const contentHash = createHash("sha256")
-		.update(parsed.content)
-		.digest("hex");
+	const normalizedContent = normalizeAndHashContent(parsed.content);
+	if (!normalizedContent.storageContent) {
+		return c.json({ error: "content is required" }, 400);
+	}
+	const normalizedContentForInsert =
+		normalizedContent.normalizedContent.length > 0
+			? normalizedContent.normalizedContent
+			: normalizedContent.hashBasis;
+	const contentHash = normalizedContent.contentHash;
+	const pipelineEnqueueEnabled = pipelineCfg.enabled || pipelineCfg.shadowMode;
 
 	type DedupeRow = {
 		id: string;
@@ -1153,7 +1565,8 @@ app.post("/api/memory/remember", async (c) => {
 			// No duplicate — insert
 			txIngestEnvelope(db, {
 				id,
-				content: parsed.content,
+				content: normalizedContent.storageContent,
+				normalizedContent: normalizedContentForInsert,
 				contentHash,
 				who,
 				why: pinned ? "explicit-critical" : "explicit",
@@ -1162,6 +1575,13 @@ app.post("/api/memory/remember", async (c) => {
 				type: memType,
 				tags,
 				pinned,
+				isDeleted: 0,
+				extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
+				embeddingModel: null,
+				extractionModel: pipelineEnqueueEnabled
+					? pipelineCfg.extractionModel
+					: null,
+				updatedBy: who,
 				sourceType,
 				sourceId,
 				createdAt: now,
@@ -1186,14 +1606,15 @@ app.post("/api/memory/remember", async (c) => {
 		// the winner and return it as a deduped result.
 		const msg = e instanceof Error ? e.message : "";
 		if (msg.includes("UNIQUE constraint")) {
-			const existing = getDbAccessor().withReadDb((db) =>
-				db
-					.prepare(
-						`SELECT id, type, tags, pinned, importance, content
+			const existing = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT id, type, tags, pinned, importance, content
 						 FROM memories
 						 WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
-					)
-					.get(contentHash) as DedupeRow | undefined,
+						)
+						.get(contentHash) as DedupeRow | undefined,
 			);
 			if (existing) {
 				return c.json({
@@ -1217,9 +1638,12 @@ app.post("/api/memory/remember", async (c) => {
 	let embedded = false;
 	try {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const vec = await fetchEmbedding(parsed.content, cfg.embedding);
+		const vec = await fetchEmbedding(
+			normalizedContent.storageContent,
+			cfg.embedding,
+		);
 		if (vec) {
-			const hash = createHash("sha256").update(parsed.content).digest("hex");
+			const hash = contentHash;
 			const blob = vectorToBlob(vec);
 			const embId = crypto.randomUUID();
 
@@ -1228,10 +1652,22 @@ app.post("/api/memory/remember", async (c) => {
 					`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
 				).run(id);
 				db.prepare(`
-          INSERT INTO embeddings
-            (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-          VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-        `).run(embId, hash, blob, vec.length, id, parsed.content, now);
+	          INSERT INTO embeddings
+	            (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+	          VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+	        `).run(
+					embId,
+					hash,
+					blob,
+					vec.length,
+					id,
+					normalizedContent.storageContent,
+					now,
+				);
+				db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
+					cfg.embedding.model,
+					id,
+				);
 			});
 			embedded = true;
 		}
@@ -1243,10 +1679,17 @@ app.post("/api/memory/remember", async (c) => {
 	}
 
 	// Enqueue pipeline extraction if enabled
-	if (pipelineCfg.enabled || pipelineCfg.shadowMode) {
+	if (pipelineEnqueueEnabled) {
 		try {
 			enqueueExtractionJob(getDbAccessor(), id);
 		} catch (e) {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`UPDATE memories
+						 SET extraction_status = 'failed', extraction_model = ?
+						 WHERE id = ?`,
+				).run(pipelineCfg.extractionModel, id);
+			});
 			logger.warn("pipeline", "Failed to enqueue extraction job", {
 				memoryId: id,
 				error: String(e),
@@ -1267,7 +1710,7 @@ app.post("/api/memory/remember", async (c) => {
 		tags,
 		pinned: !!pinned,
 		importance,
-		content: parsed.content,
+		content: normalizedContent.storageContent,
 		embedded,
 	});
 });
@@ -1290,6 +1733,734 @@ app.post("/api/hook/remember", async (c) => {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
+	});
+});
+
+app.get("/api/memory/:id/history", (c) => {
+	const memoryId = c.req.param("id")?.trim();
+	if (!memoryId) {
+		return c.json({ error: "memory id is required" }, 400);
+	}
+
+	const limit = Math.min(parseOptionalInt(c.req.query("limit")) ?? 200, 1000);
+
+	const exists = getDbAccessor().withReadDb((db) => {
+		return db.prepare(`SELECT id FROM memories WHERE id = ?`).get(memoryId) as
+			| { id: string }
+			| undefined;
+	});
+	if (!exists) {
+		return c.json({ error: "Not found", memoryId }, 404);
+	}
+
+	const history = getDbAccessor().withReadDb((db) => {
+		return db
+			.prepare(
+				`SELECT id, event, old_content, new_content, changed_by, reason,
+				        metadata, created_at, actor_type, session_id, request_id
+				 FROM memory_history
+				 WHERE memory_id = ?
+				 ORDER BY created_at ASC
+				 LIMIT ?`,
+			)
+			.all(memoryId, limit) as Array<{
+			id: string;
+			event: string;
+			old_content: string | null;
+			new_content: string | null;
+			changed_by: string;
+			reason: string | null;
+			metadata: string | null;
+			created_at: string;
+			actor_type: string | null;
+			session_id: string | null;
+			request_id: string | null;
+		}>;
+	});
+
+	return c.json({
+		memoryId,
+		count: history.length,
+		history: history.map((row) => {
+			let metadata: unknown = row.metadata;
+			if (row.metadata) {
+				try {
+					metadata = JSON.parse(row.metadata);
+				} catch {
+					metadata = row.metadata;
+				}
+			}
+			return {
+				id: row.id,
+				event: row.event,
+				oldContent: row.old_content,
+				newContent: row.new_content,
+				changedBy: row.changed_by,
+				actorType: row.actor_type ?? undefined,
+				reason: row.reason,
+				metadata,
+				createdAt: row.created_at,
+				sessionId: row.session_id ?? undefined,
+				requestId: row.request_id ?? undefined,
+			};
+		}),
+	});
+});
+
+app.post("/api/memory/:id/recover", async (c) => {
+	const payload = await readOptionalJsonObject(c);
+	if (payload === null) {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+
+	const memoryId = c.req.param("id")?.trim();
+	if (!memoryId) {
+		return c.json({ error: "memory id is required" }, 400);
+	}
+
+	const reason =
+		parseOptionalString(payload.reason) ??
+		parseOptionalString(c.req.query("reason"));
+	if (!reason) {
+		return c.json({ error: "reason is required" }, 400);
+	}
+
+	const hasIfVersionInBody = Object.prototype.hasOwnProperty.call(
+		payload,
+		"if_version",
+	);
+	const ifVersionBody = parseOptionalInt(payload.if_version);
+	if (hasIfVersionInBody && ifVersionBody === undefined) {
+		return c.json({ error: "if_version must be a positive integer" }, 400);
+	}
+
+	const queryIfVersionRaw = c.req.query("if_version");
+	const ifVersionQuery = parseOptionalInt(queryIfVersionRaw);
+	if (queryIfVersionRaw !== undefined && ifVersionQuery === undefined) {
+		return c.json({ error: "if_version must be a positive integer" }, 400);
+	}
+	const ifVersion = ifVersionBody ?? ifVersionQuery;
+
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	if (cfg.pipelineV2.mutationsFrozen) {
+		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+	}
+
+	const now = new Date().toISOString();
+	const actor = resolveMutationActor(
+		c,
+		parseOptionalString(payload.changed_by),
+	);
+	const txResult = getDbAccessor().withWriteTx((db) =>
+		txRecoverMemory(db, {
+			memoryId,
+			reason,
+			changedBy: actor.changedBy,
+			changedAt: now,
+			retentionWindowMs: SOFT_DELETE_RETENTION_MS,
+			ifVersion,
+			ctx: actor,
+		}),
+	);
+
+	switch (txResult.status) {
+		case "recovered":
+			return c.json({
+				id: txResult.memoryId,
+				status: txResult.status,
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+				retentionDays: SOFT_DELETE_RETENTION_DAYS,
+			});
+		case "not_found":
+			return c.json(
+				{ id: txResult.memoryId, status: txResult.status, error: "Not found" },
+				404,
+			);
+		case "not_deleted":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					error: "Memory is not deleted",
+				},
+				409,
+			);
+		case "retention_expired":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					error: `Recover window expired (${SOFT_DELETE_RETENTION_DAYS} days)`,
+				},
+				409,
+			);
+		case "version_conflict":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					error: "Version conflict",
+				},
+				409,
+			);
+	}
+
+	return c.json({ error: "Unknown mutation result" }, 500);
+});
+
+app.patch("/api/memory/:id", async (c) => {
+	const payload = toRecord(await c.req.json().catch(() => null));
+	if (!payload) {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+
+	const memoryId = c.req.param("id")?.trim();
+	if (!memoryId) {
+		return c.json({ error: "memory id is required" }, 400);
+	}
+
+	const reason = parseOptionalString(payload.reason);
+	if (!reason) {
+		return c.json({ error: "reason is required" }, 400);
+	}
+
+	const hasIfVersion = Object.prototype.hasOwnProperty.call(
+		payload,
+		"if_version",
+	);
+	const ifVersion = parseOptionalInt(payload.if_version);
+	if (hasIfVersion && ifVersion === undefined) {
+		return c.json({ error: "if_version must be a positive integer" }, 400);
+	}
+
+	const parsedPatch = parseModifyPatch(payload);
+	if (!parsedPatch.ok) {
+		return c.json({ error: parsedPatch.error }, 400);
+	}
+
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	if (cfg.pipelineV2.mutationsFrozen) {
+		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+	}
+
+	let embeddingVector: number[] | null = null;
+	if (parsedPatch.value.contentForEmbedding !== null) {
+		embeddingVector = await fetchEmbedding(
+			parsedPatch.value.contentForEmbedding,
+			cfg.embedding,
+		);
+	}
+
+	const now = new Date().toISOString();
+	const actor = resolveMutationActor(
+		c,
+		parseOptionalString(payload.changed_by),
+	);
+	const txResult = getDbAccessor().withWriteTx((db) =>
+		txModifyMemory(db, {
+			memoryId,
+			patch: parsedPatch.value.patch,
+			reason,
+			changedBy: actor.changedBy,
+			changedAt: now,
+			ifVersion,
+			extractionStatusOnContentChange: "none",
+			extractionModelOnContentChange: null,
+			embeddingModelOnContentChange: cfg.embedding.model,
+			embeddingVector,
+			ctx: actor,
+		}),
+	);
+
+	switch (txResult.status) {
+		case "updated":
+			return c.json({
+				id: txResult.memoryId,
+				status: txResult.status,
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+				contentChanged: txResult.contentChanged ?? false,
+				embedded:
+					txResult.contentChanged === true && embeddingVector !== null
+						? true
+						: undefined,
+			});
+		case "no_changes":
+			return c.json({
+				id: txResult.memoryId,
+				status: txResult.status,
+				currentVersion: txResult.currentVersion,
+			});
+		case "not_found":
+			return c.json(
+				{ id: txResult.memoryId, status: txResult.status, error: "Not found" },
+				404,
+			);
+		case "deleted":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					error: "Cannot modify deleted memory",
+				},
+				409,
+			);
+		case "version_conflict":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					error: "Version conflict",
+				},
+				409,
+			);
+		case "duplicate_content_hash":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					duplicateMemoryId: txResult.duplicateMemoryId,
+					error: "Duplicate content hash",
+				},
+				409,
+			);
+	}
+
+	return c.json({ error: "Unknown mutation result" }, 500);
+});
+
+app.delete("/api/memory/:id", async (c) => {
+	const payload = await readOptionalJsonObject(c);
+	if (payload === null) {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+
+	const memoryId = c.req.param("id")?.trim();
+	if (!memoryId) {
+		return c.json({ error: "memory id is required" }, 400);
+	}
+
+	const reason =
+		parseOptionalString(payload.reason) ??
+		parseOptionalString(c.req.query("reason"));
+	if (!reason) {
+		return c.json({ error: "reason is required" }, 400);
+	}
+
+	const hasForceInBody = Object.prototype.hasOwnProperty.call(payload, "force");
+	const forceFromBody = parseOptionalBoolean(payload.force);
+	if (hasForceInBody && forceFromBody === undefined) {
+		return c.json({ error: "force must be a boolean" }, 400);
+	}
+	const forceFromQuery = parseOptionalBoolean(c.req.query("force"));
+	const force = forceFromBody ?? forceFromQuery ?? false;
+
+	const hasIfVersionInBody = Object.prototype.hasOwnProperty.call(
+		payload,
+		"if_version",
+	);
+	const ifVersionBody = parseOptionalInt(payload.if_version);
+	if (hasIfVersionInBody && ifVersionBody === undefined) {
+		return c.json({ error: "if_version must be a positive integer" }, 400);
+	}
+
+	const queryIfVersionRaw = c.req.query("if_version");
+	const ifVersionQuery = parseOptionalInt(queryIfVersionRaw);
+	if (queryIfVersionRaw !== undefined && ifVersionQuery === undefined) {
+		return c.json({ error: "if_version must be a positive integer" }, 400);
+	}
+	const ifVersion = ifVersionBody ?? ifVersionQuery;
+
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	if (cfg.pipelineV2.mutationsFrozen) {
+		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+	}
+
+	const now = new Date().toISOString();
+	const actor = resolveMutationActor(
+		c,
+		parseOptionalString(payload.changed_by),
+	);
+	const txResult = getDbAccessor().withWriteTx((db) =>
+		txForgetMemory(db, {
+			memoryId,
+			reason,
+			changedBy: actor.changedBy,
+			changedAt: now,
+			force,
+			ifVersion,
+			ctx: actor,
+		}),
+	);
+
+	switch (txResult.status) {
+		case "deleted":
+			return c.json({
+				id: txResult.memoryId,
+				status: txResult.status,
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+			});
+		case "not_found":
+			return c.json(
+				{ id: txResult.memoryId, status: txResult.status, error: "Not found" },
+				404,
+			);
+		case "already_deleted":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+				},
+				409,
+			);
+		case "version_conflict":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					error: "Version conflict",
+				},
+				409,
+			);
+		case "pinned_requires_force":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					error: "Pinned memories require force=true",
+				},
+				409,
+			);
+		case "autonomous_force_denied":
+			return c.json(
+				{
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					error: "Autonomous agents cannot force-delete pinned memories",
+				},
+				403,
+			);
+	}
+
+	return c.json({ error: "Unknown mutation result" }, 500);
+});
+
+app.post("/api/memory/forget", async (c) => {
+	const payload = toRecord(await c.req.json().catch(() => null));
+	if (!payload) {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+
+	const mode = parseOptionalString(payload.mode) ?? "preview";
+	if (mode !== "preview" && mode !== "execute") {
+		return c.json({ error: "mode must be preview or execute" }, 400);
+	}
+
+	const hasLimit = Object.prototype.hasOwnProperty.call(payload, "limit");
+	const parsedLimit = parseOptionalInt(payload.limit);
+	if (hasLimit && parsedLimit === undefined) {
+		return c.json({ error: "limit must be a positive integer" }, 400);
+	}
+	const limit = Math.max(1, Math.min(parsedLimit ?? 20, MAX_MUTATION_BATCH));
+
+	let ids: string[] = [];
+	if (Object.prototype.hasOwnProperty.call(payload, "ids")) {
+		if (!Array.isArray(payload.ids)) {
+			return c.json({ error: "ids must be an array of strings" }, 400);
+		}
+		const parsedIds: string[] = [];
+		for (const value of payload.ids) {
+			if (typeof value !== "string" || value.trim().length === 0) {
+				return c.json({ error: "ids must contain non-empty strings" }, 400);
+			}
+			parsedIds.push(value.trim());
+		}
+		ids = parsedIds;
+	}
+
+	const request: ForgetCandidatesRequest = {
+		query: parseOptionalString(payload.query) ?? "",
+		type: parseOptionalString(payload.type) ?? "",
+		tags: parseOptionalString(payload.tags) ?? "",
+		who: parseOptionalString(payload.who) ?? "",
+		sourceType: parseOptionalString(payload.source_type) ?? "",
+		since: parseOptionalString(payload.since) ?? "",
+		until: parseOptionalString(payload.until) ?? "",
+		limit,
+	};
+
+	const hasQueryScope =
+		request.query.length > 0 ||
+		request.type.length > 0 ||
+		request.tags.length > 0 ||
+		request.who.length > 0 ||
+		request.sourceType.length > 0 ||
+		request.since.length > 0 ||
+		request.until.length > 0;
+	if (ids.length === 0 && !hasQueryScope) {
+		return c.json(
+			{
+				error:
+					"query, ids, or at least one filter (type/tags/who/source_type/since/until) is required",
+			},
+			400,
+		);
+	}
+
+	const candidates =
+		ids.length > 0
+			? loadForgetCandidatesByIds(ids, limit)
+			: loadForgetCandidates(request);
+	const candidateIds = candidates.map((candidate) => candidate.id);
+	const confirmToken = buildForgetConfirmToken(candidateIds);
+	const requiresConfirm = candidateIds.length > FORGET_CONFIRM_THRESHOLD;
+
+	if (mode === "preview") {
+		return c.json({
+			mode: "preview",
+			count: candidates.length,
+			requiresConfirm,
+			confirmToken,
+			candidates: candidates.map((candidate) => ({
+				id: candidate.id,
+				score: Math.round(candidate.score * 1000) / 1000,
+				pinned: candidate.pinned === 1,
+				version: candidate.version,
+			})),
+		});
+	}
+
+	const reason = parseOptionalString(payload.reason);
+	if (!reason) {
+		return c.json({ error: "reason is required for execute mode" }, 400);
+	}
+
+	const hasForce = Object.prototype.hasOwnProperty.call(payload, "force");
+	const force = parseOptionalBoolean(payload.force);
+	if (hasForce && force === undefined) {
+		return c.json({ error: "force must be a boolean" }, 400);
+	}
+
+	if (Object.prototype.hasOwnProperty.call(payload, "if_version")) {
+		return c.json(
+			{
+				error:
+					"if_version is not supported for batch forget; use DELETE /api/memory/:id for version-guarded deletes",
+			},
+			400,
+		);
+	}
+
+	if (requiresConfirm) {
+		const providedToken = parseOptionalString(payload.confirm_token);
+		if (!providedToken || providedToken !== confirmToken) {
+			return c.json(
+				{
+					error:
+						"confirm_token is required for large forget operations; run preview first",
+					requiresConfirm: true,
+					confirmToken,
+					count: candidates.length,
+				},
+				400,
+			);
+		}
+	}
+
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	if (cfg.pipelineV2.mutationsFrozen) {
+		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+	}
+
+	const actor = resolveMutationActor(
+		c,
+		parseOptionalString(payload.changed_by),
+	);
+	const changedAt = new Date().toISOString();
+
+	const results: Array<{
+		id: string;
+		status: string;
+		currentVersion?: number;
+		newVersion?: number;
+	}> = [];
+
+	for (const memoryId of candidateIds) {
+		const txResult = getDbAccessor().withWriteTx((db) =>
+			txForgetMemory(db, {
+				memoryId,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt,
+				force: force ?? false,
+				ctx: actor,
+			}),
+		);
+		results.push({
+			id: txResult.memoryId,
+			status: txResult.status,
+			currentVersion: txResult.currentVersion,
+			newVersion: txResult.newVersion,
+		});
+	}
+
+	return c.json({
+		mode: "execute",
+		requested: candidateIds.length,
+		deleted: results.filter((result) => result.status === "deleted").length,
+		results,
+	});
+});
+
+app.post("/api/memory/modify", async (c) => {
+	const payload = toRecord(await c.req.json().catch(() => null));
+	if (!payload) {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+	if (!Array.isArray(payload.patches) || payload.patches.length === 0) {
+		return c.json({ error: "patches[] is required" }, 400);
+	}
+	if (payload.patches.length > MAX_MUTATION_BATCH) {
+		return c.json(
+			{
+				error: `patches[] exceeds maximum batch size (${MAX_MUTATION_BATCH})`,
+			},
+			400,
+		);
+	}
+
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	if (cfg.pipelineV2.mutationsFrozen) {
+		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+	}
+
+	const defaultReason = parseOptionalString(payload.reason);
+	const actor = resolveMutationActor(
+		c,
+		parseOptionalString(payload.changed_by),
+	);
+	const changedAt = new Date().toISOString();
+
+	const results: Array<{
+		id: string | null;
+		status: string;
+		error?: string;
+		currentVersion?: number;
+		newVersion?: number;
+		duplicateMemoryId?: string;
+		contentChanged?: boolean;
+		embedded?: boolean;
+	}> = [];
+
+	for (const rawPatch of payload.patches) {
+		const patchPayload = toRecord(rawPatch);
+		if (!patchPayload) {
+			results.push({
+				id: null,
+				status: "invalid_request",
+				error: "Each patch must be an object",
+			});
+			continue;
+		}
+
+		const memoryId = parseOptionalString(patchPayload.id);
+		if (!memoryId) {
+			results.push({
+				id: null,
+				status: "invalid_request",
+				error: "Patch id is required",
+			});
+			continue;
+		}
+
+		const reason = parseOptionalString(patchPayload.reason) ?? defaultReason;
+		if (!reason) {
+			results.push({
+				id: memoryId,
+				status: "invalid_request",
+				error: "reason is required",
+			});
+			continue;
+		}
+
+		const hasIfVersion = Object.prototype.hasOwnProperty.call(
+			patchPayload,
+			"if_version",
+		);
+		const ifVersion = parseOptionalInt(patchPayload.if_version);
+		if (hasIfVersion && ifVersion === undefined) {
+			results.push({
+				id: memoryId,
+				status: "invalid_request",
+				error: "if_version must be a positive integer",
+			});
+			continue;
+		}
+
+		const parsedPatch = parseModifyPatch(patchPayload);
+		if (!parsedPatch.ok) {
+			results.push({
+				id: memoryId,
+				status: "invalid_request",
+				error: parsedPatch.error,
+			});
+			continue;
+		}
+
+		let embeddingVector: number[] | null = null;
+		if (parsedPatch.value.contentForEmbedding !== null) {
+			embeddingVector = await fetchEmbedding(
+				parsedPatch.value.contentForEmbedding,
+				cfg.embedding,
+			);
+		}
+
+		const txResult = getDbAccessor().withWriteTx((db) =>
+			txModifyMemory(db, {
+				memoryId,
+				patch: parsedPatch.value.patch,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt,
+				ifVersion,
+				extractionStatusOnContentChange: "none",
+				extractionModelOnContentChange: null,
+				embeddingModelOnContentChange: cfg.embedding.model,
+				embeddingVector,
+				ctx: actor,
+			}),
+		);
+
+		results.push({
+			id: txResult.memoryId,
+			status: txResult.status,
+			currentVersion: txResult.currentVersion,
+			newVersion: txResult.newVersion,
+			duplicateMemoryId: txResult.duplicateMemoryId,
+			contentChanged: txResult.contentChanged,
+			embedded:
+				txResult.contentChanged === true && embeddingVector !== null
+					? true
+					: undefined,
+		});
+	}
+
+	return c.json({
+		total: results.length,
+		updated: results.filter((result) => result.status === "updated").length,
+		results,
 	});
 });
 
@@ -1440,24 +2611,25 @@ app.post("/api/memory/recall", async (c) => {
 	try {
 		const placeholders = topIds.map(() => "?").join(", ");
 
-		const rows = getDbAccessor().withReadDb((db) =>
-			db
-				.prepare(`
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(`
         SELECT id, content, type, tags, pinned, importance, who, project, created_at
         FROM memories
         WHERE id IN (${placeholders})
       `)
-				.all(...topIds) as Array<{
-				id: string;
-				content: string;
-				type: string;
-				tags: string | null;
-				pinned: number;
-				importance: number;
-				who: string;
-				project: string | null;
-				created_at: string;
-			}>,
+					.all(...topIds) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					tags: string | null;
+					pinned: number;
+					importance: number;
+					who: string;
+					project: string | null;
+					created_at: string;
+				}>,
 		);
 
 		// Update access tracking (don't fail if this fails)
@@ -1581,9 +2753,7 @@ app.get("/memory/similar", async (c) => {
 			);
 		}
 
-		const filteredResults = searchData
-			.filter((r) => r.id !== id)
-			.slice(0, k);
+		const filteredResults = searchData.filter((r) => r.id !== id).slice(0, k);
 
 		if (filteredResults.length === 0) {
 			return c.json({ results: [] });
@@ -1592,21 +2762,22 @@ app.get("/memory/similar", async (c) => {
 		const ids = filteredResults.map((r) => r.id);
 		const placeholders = ids.map(() => "?").join(", ");
 
-		const rows = getDbAccessor().withReadDb((db) =>
-			db
-				.prepare(`
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(`
         SELECT id, content, type, tags, confidence, created_at
         FROM memories
         WHERE id IN (${placeholders})
       `)
-				.all(...ids) as Array<{
-				id: string;
-				content: string;
-				type: string;
-				tags: string | null;
-				confidence: number;
-				created_at: string;
-			}>,
+					.all(...ids) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					tags: string | null;
+					confidence: number;
+					created_at: string;
+				}>,
 		);
 
 		const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -1725,7 +2896,11 @@ app.get("/api/embeddings", async (c) => {
 		});
 	} catch (e) {
 		if (isMissingEmbeddingsTableError(e)) {
-			const legacy = await runLegacyEmbeddingsExport(withVectors, limit, offset);
+			const legacy = await runLegacyEmbeddingsExport(
+				withVectors,
+				limit,
+				offset,
+			);
 			if (legacy) {
 				if (legacy.error) {
 					logger.warn("memory", "Legacy embeddings export failed", {
@@ -2543,7 +3718,10 @@ function loadUpdateConfig(): UpdateConfig {
 		checkInterval: DEFAULT_UPDATE_INTERVAL_SECONDS,
 	};
 
-	const paths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
+	const paths = [
+		join(AGENTS_DIR, "agent.yaml"),
+		join(AGENTS_DIR, "AGENT.yaml"),
+	];
 
 	for (const p of paths) {
 		if (!existsSync(p)) continue;
@@ -2588,7 +3766,10 @@ function formatUpdatesSection(config: UpdateConfig): string {
 }
 
 function persistUpdateConfig(config: UpdateConfig): boolean {
-	const paths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
+	const paths = [
+		join(AGENTS_DIR, "agent.yaml"),
+		join(AGENTS_DIR, "AGENT.yaml"),
+	];
 
 	for (const p of paths) {
 		if (!existsSync(p)) continue;
@@ -2662,9 +3843,12 @@ async function fetchLatestFromGitHub(): Promise<{
 }
 
 async function fetchLatestFromNpm(): Promise<string> {
-	const npmRes = await fetch(`https://registry.npmjs.org/${NPM_PACKAGE}/latest`, {
-		signal: AbortSignal.timeout(10000),
-	});
+	const npmRes = await fetch(
+		`https://registry.npmjs.org/${NPM_PACKAGE}/latest`,
+		{
+			signal: AbortSignal.timeout(10000),
+		},
+	);
 
 	if (!npmRes.ok) {
 		throw new Error(`npm registry lookup failed (${npmRes.status})`);
@@ -2842,7 +4026,10 @@ async function runAutoUpdateCycle(): Promise<void> {
 			return;
 		}
 
-		logger.info("system", `Auto-installing update v${checkResult.latestVersion}`);
+		logger.info(
+			"system",
+			`Auto-installing update v${checkResult.latestVersion}`,
+		);
 		const installResult = await runUpdate(checkResult.latestVersion);
 
 		if (installResult.success) {
@@ -2973,7 +4160,8 @@ app.post("/api/update/config", async (c) => {
 		updateConfig.checkInterval = parsed;
 	}
 
-	const changed = autoInstallRaw !== undefined || checkIntervalRaw !== undefined;
+	const changed =
+		autoInstallRaw !== undefined || checkIntervalRaw !== undefined;
 	let persisted = true;
 
 	if (changed) {
@@ -4038,13 +5226,13 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 					{
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						content: chunk.text,
-						who: "claude-code",
-						importance: chunk.level === "section" ? 0.65 : 0.55,
-						sourceType: "claude-project-memory",
-						sourceId: chunkKey,
-						tags: [
+						body: JSON.stringify({
+							content: chunk.text,
+							who: "claude-code",
+							importance: chunk.level === "section" ? 0.65 : 0.55,
+							sourceType: "claude-project-memory",
+							sourceId: chunkKey,
+							tags: [
 								"claude-code",
 								"claude-project-memory",
 								sectionName,
@@ -4538,7 +5726,9 @@ async function main() {
 	);
 }
 
-main().catch((err) => {
-	logger.error("daemon", "Fatal error", err);
-	process.exit(1);
-});
+if (import.meta.main) {
+	main().catch((err) => {
+		logger.error("daemon", "Fatal error", err);
+		process.exit(1);
+	});
+}

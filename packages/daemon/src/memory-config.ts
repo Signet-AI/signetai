@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import {
+	parseSimpleYaml,
+	PIPELINE_FLAGS,
+	type PipelineFlag,
+	type PipelineV2Config,
+} from "@signet/core";
 
 export interface EmbeddingConfig {
 	provider: "ollama" | "openai";
@@ -16,32 +21,8 @@ export interface MemorySearchConfig {
 	min_score: number;
 }
 
-export const PIPELINE_FLAGS = [
-	"enabled",
-	"shadowMode",
-	"allowUpdateDelete",
-	"graphEnabled",
-	"autonomousEnabled",
-	"mutationsFrozen",
-	"autonomousFrozen",
-] as const;
-
-export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
-
-export interface PipelineV2Config {
-	readonly enabled: boolean;
-	readonly shadowMode: boolean;
-	readonly allowUpdateDelete: boolean;
-	readonly graphEnabled: boolean;
-	readonly autonomousEnabled: boolean;
-	readonly mutationsFrozen: boolean;
-	readonly autonomousFrozen: boolean;
-	readonly extractionModel: string;
-	readonly extractionTimeout: number;
-	readonly workerPollMs: number;
-	readonly workerMaxRetries: number;
-	readonly leaseTimeoutMs: number;
-}
+export { PIPELINE_FLAGS };
+export type { PipelineFlag, PipelineV2Config };
 
 export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	enabled: false,
@@ -56,6 +37,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	workerPollMs: 2000,
 	workerMaxRetries: 3,
 	leaseTimeoutMs: 300000,
+	minFactConfidenceForWrite: 0.7,
 };
 
 export interface ResolvedMemoryConfig {
@@ -72,6 +54,11 @@ function clampPositive(
 ): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
 	return Math.max(min, Math.min(max, raw));
+}
+
+function clampFraction(raw: unknown, fallback: number): number {
+	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+	return Math.max(0, Math.min(1, raw));
 }
 
 export function loadPipelineConfig(
@@ -117,6 +104,10 @@ export function loadPipelineConfig(
 			600000,
 			DEFAULT_PIPELINE_V2.leaseTimeoutMs,
 		),
+		minFactConfidenceForWrite: clampFraction(
+			raw.minFactConfidenceForWrite,
+			DEFAULT_PIPELINE_V2.minFactConfidenceForWrite,
+		),
 	};
 }
 
@@ -144,8 +135,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
 			const emb =
 				(yaml.embedding as Record<string, unknown> | undefined) ??
-				((yaml.memory as Record<string, unknown> | undefined)
-					?.embeddings as Record<string, unknown> | undefined) ??
+				((yaml.memory as Record<string, unknown> | undefined)?.embeddings as
+					| Record<string, unknown>
+					| undefined) ??
 				(yaml.embeddings as Record<string, unknown> | undefined) ??
 				{};
 			const srch = (yaml.search as Record<string, unknown> | undefined) ?? {};
@@ -165,10 +157,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 
 			if (srch.alpha !== undefined) {
 				defaults.search.alpha = Number.parseFloat(String(srch.alpha));
-				defaults.search.top_k = Number.parseInt(
-					String(srch.top_k ?? "20"),
-					10,
-				);
+				defaults.search.top_k = Number.parseInt(String(srch.top_k ?? "20"), 10);
 				defaults.search.min_score = Number.parseFloat(
 					String(srch.min_score ?? "0.3"),
 				);

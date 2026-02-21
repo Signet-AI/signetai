@@ -5,13 +5,7 @@
  * so the queue schema is exactly as production uses it.
  */
 
-import {
-	describe,
-	it,
-	expect,
-	beforeEach,
-	afterEach,
-} from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "@signet/core";
 import { enqueueExtractionJob, startWorker } from "./worker";
@@ -59,21 +53,31 @@ function insertMemory(db: Database, id: string, content: string): void {
 function getJob(
 	db: Database,
 	memoryId: string,
-): { status: string; attempts: number; error: string | null; result: string | null } | undefined {
+):
+	| {
+			status: string;
+			attempts: number;
+			error: string | null;
+			result: string | null;
+	  }
+	| undefined {
 	return db
 		.prepare(
 			`SELECT status, attempts, error, result FROM memory_jobs WHERE memory_id = ?`,
 		)
 		.get(memoryId) as
-		| { status: string; attempts: number; error: string | null; result: string | null }
+		| {
+				status: string;
+				attempts: number;
+				error: string | null;
+				result: string | null;
+		  }
 		| undefined;
 }
 
 function getHistoryCount(db: Database, memoryId: string): number {
 	const row = db
-		.prepare(
-			`SELECT COUNT(*) as cnt FROM memory_history WHERE memory_id = ?`,
-		)
+		.prepare(`SELECT COUNT(*) as cnt FROM memory_history WHERE memory_id = ?`)
 		.get(memoryId) as { cnt: number };
 	return row.cnt;
 }
@@ -142,6 +146,22 @@ function throwingProvider(): LlmProvider {
 	};
 }
 
+function scriptedProvider(outputs: readonly string[]): LlmProvider {
+	let cursor = 0;
+	return {
+		name: "mock-scripted",
+		async generate() {
+			// Clamp to the final scripted output once the sequence is exhausted.
+			const output = outputs[Math.min(cursor, outputs.length - 1)] ?? "";
+			cursor += 1;
+			return output;
+		},
+		async available() {
+			return true;
+		},
+	};
+}
+
 /**
  * Build a provider that throws from generate() on the N-th call,
  * where N = the SECOND call. Used to simulate extraction succeeding
@@ -161,6 +181,12 @@ const PIPELINE_CFG: PipelineV2Config = {
 	workerPollMs: 10, // fast polling for tests
 	workerMaxRetries: 3,
 	leaseTimeoutMs: 300000,
+	minFactConfidenceForWrite: 0.7,
+};
+
+const PHASE_C_CFG: PipelineV2Config = {
+	...PIPELINE_CFG,
+	shadowMode: false,
 };
 
 const DECISION_CFG: DecisionConfig = {
@@ -175,6 +201,17 @@ const DECISION_CFG: DecisionConfig = {
 		return null;
 	},
 };
+
+function decisionCfgWithEmbedding(
+	vector: readonly number[] | null,
+): DecisionConfig {
+	return {
+		...DECISION_CFG,
+		async fetchEmbedding() {
+			return vector ? Array.from(vector) : null;
+		},
+	};
+}
 
 // ---------------------------------------------------------------------------
 // enqueueExtractionJob tests
@@ -333,20 +370,25 @@ describe("Worker processing", () => {
 		// Verify the history record has shadow metadata
 		const histRow = db
 			.prepare(
-				`SELECT metadata, changed_by FROM memory_history WHERE memory_id = ?`,
+				`SELECT metadata, changed_by, event FROM memory_history WHERE memory_id = ?`,
 			)
 			.get("mem-hist") as
-			| { metadata: string; changed_by: string }
+			| { metadata: string; changed_by: string; event: string }
 			| undefined;
 
 		expect(histRow?.changed_by).toBe("pipeline-shadow");
+		expect(histRow?.event).toBe("none");
 		const meta = JSON.parse(histRow?.metadata ?? "{}");
 		expect(meta.shadow).toBe(true);
 		expect(meta.proposedAction).toBe("add");
 	});
 
 	it("job result payload includes fact and entity counts", async () => {
-		insertMemory(db, "mem-payload", "User prefers dark mode in their IDE setup");
+		insertMemory(
+			db,
+			"mem-payload",
+			"User prefers dark mode in their IDE setup",
+		);
 		enqueueExtractionJob(accessor, "mem-payload");
 
 		const worker = startWorker(
@@ -421,7 +463,9 @@ describe("Worker processing", () => {
 
 		const result = JSON.parse(job?.result ?? "{}");
 		expect(Array.isArray(result.warnings)).toBe(true);
-		expect(result.warnings.some((w: string) => w.includes("LLM error"))).toBe(true);
+		expect(result.warnings.some((w: string) => w.includes("LLM error"))).toBe(
+			true,
+		);
 	});
 
 	it("worker stop() waits for in-flight job", async () => {
@@ -444,7 +488,12 @@ describe("Worker processing", () => {
 		insertMemory(db, "mem-slow", "User prefers slow dark mode setup");
 		enqueueExtractionJob(accessor, "mem-slow");
 
-		const worker = startWorker(accessor, slowProvider, PIPELINE_CFG, DECISION_CFG);
+		const worker = startWorker(
+			accessor,
+			slowProvider,
+			PIPELINE_CFG,
+			DECISION_CFG,
+		);
 
 		// Give the worker a moment to pick up the job
 		await Bun.sleep(50);
@@ -476,6 +525,469 @@ describe("Worker processing", () => {
 		expect(worker.running).toBe(true);
 		await worker.stop();
 		expect(worker.running).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Phase C controlled-write tests
+// ---------------------------------------------------------------------------
+
+describe("Worker phase C controlled writes", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("applies ADD proposals into new memory rows and writes embedding linkage", async () => {
+		insertMemory(
+			db,
+			"mem-src-add",
+			"User prefers dark mode in their IDE setup",
+		);
+		enqueueExtractionJob(accessor, "mem-src-add");
+
+		const worker = startWorker(
+			accessor,
+			goodProvider(),
+			PHASE_C_CFG,
+			decisionCfgWithEmbedding([0.1, 0.2, 0.3]),
+		);
+
+		await Bun.sleep(250);
+		await worker.stop();
+
+		const created = db
+			.prepare(
+				`SELECT id, content, normalized_content, extraction_status,
+				        extraction_model, embedding_model, type, source_type, source_id
+					 FROM memories
+					 WHERE source_type = 'pipeline-v2' AND source_id = ?`,
+			)
+			.all("mem-src-add") as Array<{
+			id: string;
+			content: string;
+			normalized_content: string | null;
+			extraction_status: string | null;
+			extraction_model: string | null;
+			embedding_model: string | null;
+			type: string;
+			source_type: string;
+			source_id: string;
+		}>;
+
+		expect(created).toHaveLength(1);
+		expect(created[0].type).toBe("preference");
+		expect(created[0].content).toContain("dark mode");
+		expect(created[0].normalized_content).toBe(
+			"user prefers dark mode in their editor settings",
+		);
+		expect(created[0].extraction_status).toBe("completed");
+		expect(created[0].extraction_model).toBe("qwen3:4b");
+		expect(created[0].embedding_model).toBe("nomic-embed-text");
+
+		const history = db
+			.prepare(
+				`SELECT event, changed_by FROM memory_history WHERE memory_id = ?`,
+			)
+			.get(created[0].id) as { event: string; changed_by: string } | undefined;
+		expect(history?.event).toBe("created");
+		expect(history?.changed_by).toBe("pipeline-v2");
+
+		const embedding = db
+			.prepare(
+				`SELECT source_id, dimensions FROM embeddings
+				 WHERE source_type = 'memory' AND source_id = ?`,
+			)
+			.get(created[0].id) as
+			| { source_id: string; dimensions: number }
+			| undefined;
+		expect(embedding?.source_id).toBe(created[0].id);
+		expect(embedding?.dimensions).toBe(3);
+
+		const job = getJob(db, "mem-src-add");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeMode).toBe("phase-c");
+		expect(payload.writeStats.added).toBe(1);
+		expect(payload.writeStats.embeddingsAdded).toBe(1);
+	});
+
+	it("records ADD writes without embedding when fetchEmbedding returns null", async () => {
+		insertMemory(
+			db,
+			"mem-src-add-no-emb",
+			"User prefers dark mode in their IDE",
+		);
+		enqueueExtractionJob(accessor, "mem-src-add-no-emb");
+
+		const worker = startWorker(
+			accessor,
+			goodProvider(),
+			PHASE_C_CFG,
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(250);
+		await worker.stop();
+
+		const created = db
+			.prepare(
+				`SELECT id FROM memories
+				 WHERE source_type = 'pipeline-v2' AND source_id = ?`,
+			)
+			.all("mem-src-add-no-emb") as Array<{ id: string }>;
+		expect(created).toHaveLength(1);
+
+		const embeddingCount = db
+			.prepare(
+				`SELECT COUNT(*) as cnt FROM embeddings
+				 WHERE source_type = 'memory' AND source_id = ?`,
+			)
+			.get(created[0].id) as { cnt: number };
+		expect(embeddingCount.cnt).toBe(0);
+
+		const payload = JSON.parse(
+			getJob(db, "mem-src-add-no-emb")?.result ?? "{}",
+		);
+		expect(payload.writeStats.added).toBe(1);
+		expect(payload.writeStats.embeddingsAdded).toBe(0);
+	});
+
+	it("deduplicates extracted ADD writes by content_hash", async () => {
+		insertMemory(
+			db,
+			"mem-src-dedupe-1",
+			"Session note one with enough detail to trigger extraction",
+		);
+		insertMemory(
+			db,
+			"mem-src-dedupe-2",
+			"Session note two with enough detail to trigger extraction",
+		);
+		enqueueExtractionJob(accessor, "mem-src-dedupe-1");
+		enqueueExtractionJob(accessor, "mem-src-dedupe-2");
+
+		const extractionPayload = JSON.stringify({
+			facts: [
+				{
+					content: "User prefers dark mode in their editor settings",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const addDecision = JSON.stringify({
+			action: "add",
+			confidence: 0.83,
+			reason: "Store as standalone preference memory",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extractionPayload, extractionPayload, addDecision]),
+			PHASE_C_CFG,
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(350);
+		await worker.stop();
+
+		const extractedMemories = db
+			.prepare(
+				`SELECT id FROM memories
+				 WHERE source_type = 'pipeline-v2'
+				   AND content = 'User prefers dark mode in their editor settings'`,
+			)
+			.all() as Array<{ id: string }>;
+		expect(extractedMemories).toHaveLength(1);
+
+		const historyRows = db
+			.prepare(
+				`SELECT metadata FROM memory_history
+				 WHERE memory_id IN ('mem-src-dedupe-1', 'mem-src-dedupe-2')`,
+			)
+			.all() as Array<{ metadata: string | null }>;
+		const parsed = historyRows.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => typeof row.dedupedExistingId === "string"),
+		).toBe(true);
+	});
+
+	it("skips low-confidence extracted facts from write path", async () => {
+		insertMemory(db, "mem-src-lowconf", "Initial source content");
+		enqueueExtractionJob(accessor, "mem-src-lowconf");
+
+		const lowConfidenceProvider = scriptedProvider([
+			JSON.stringify({
+				facts: [
+					{
+						content: "User prefers muted editor contrast for readability",
+						type: "preference",
+						confidence: 0.2,
+					},
+				],
+				entities: [],
+			}),
+		]);
+
+		const worker = startWorker(
+			accessor,
+			lowConfidenceProvider,
+			{ ...PHASE_C_CFG, minFactConfidenceForWrite: 0.9 },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(250);
+		await worker.stop();
+
+		const extractedCount = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2'`,
+			)
+			.get() as { cnt: number };
+		expect(extractedCount.cnt).toBe(0);
+
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-lowconf") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => row.skippedReason === "low_fact_confidence"),
+		).toBe(true);
+
+		const job = getJob(db, "mem-src-lowconf");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeStats.skippedLowConfidence).toBe(1);
+	});
+
+	it("skips ADD write when normalized fact content is empty", async () => {
+		insertMemory(
+			db,
+			"mem-src-empty-normalized",
+			"Source envelope for punctuation-only extraction output",
+		);
+		enqueueExtractionJob(accessor, "mem-src-empty-normalized");
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([
+				JSON.stringify({
+					facts: [
+						{
+							content: "..........",
+							type: "preference",
+							confidence: 0.92,
+						},
+					],
+					entities: [],
+				}),
+			]),
+			PHASE_C_CFG,
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(250);
+		await worker.stop();
+
+		const extractedCount = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2'
+				   AND source_id = 'mem-src-empty-normalized'`,
+			)
+			.get() as { cnt: number };
+		expect(extractedCount.cnt).toBe(0);
+
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-empty-normalized") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => row.skippedReason === "empty_fact_content"),
+		).toBe(true);
+
+		const payload = JSON.parse(
+			getJob(db, "mem-src-empty-normalized")?.result ?? "{}",
+		);
+		expect(payload.writeStats.skippedLowConfidence).toBe(1);
+	});
+
+	it("blocks destructive proposals and emits review marker on contradiction risk", async () => {
+		insertMemory(
+			db,
+			"mem-target-delete",
+			"User does not prefer dark mode editor",
+		);
+		insertMemory(
+			db,
+			"mem-src-delete",
+			"Source envelope for delete recommendation",
+		);
+		enqueueExtractionJob(accessor, "mem-src-delete");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User prefer dark mode editor",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const destructiveDecision = JSON.stringify({
+			action: "delete",
+			targetId: "mem-target-delete",
+			confidence: 0.84,
+			reason: "Conflicts with latest preference",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, destructiveDecision]),
+			PHASE_C_CFG,
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		const target = db
+			.prepare(`SELECT id, is_deleted FROM memories WHERE id = ?`)
+			.get("mem-target-delete") as
+			| { id: string; is_deleted: number }
+			| undefined;
+		expect(target?.id).toBe("mem-target-delete");
+		expect(target?.is_deleted).toBe(0);
+
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-delete") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some(
+				(row) =>
+					row.blockedReason === "destructive_mutations_disabled" &&
+					row.reviewNeeded === true,
+			),
+		).toBe(true);
+
+		const job = getJob(db, "mem-src-delete");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeStats.blockedDestructive).toBe(1);
+		expect(payload.writeStats.reviewNeeded).toBe(1);
+	});
+
+	it("records explicit NONE decisions without creating a derived memory", async () => {
+		insertMemory(db, "mem-target-none", "User prefers dark mode in editor");
+		insertMemory(
+			db,
+			"mem-src-none",
+			"Source envelope for decision NONE verification",
+		);
+		enqueueExtractionJob(accessor, "mem-src-none");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User prefers dark mode in editor",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const noneDecision = JSON.stringify({
+			action: "none",
+			confidence: 0.91,
+			reason: "Already covered by existing memory",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, noneDecision]),
+			PHASE_C_CFG,
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		const extractedCount = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2' AND source_id = 'mem-src-none'`,
+			)
+			.get() as { cnt: number };
+		expect(extractedCount.cnt).toBe(0);
+
+		const historyRows = db
+			.prepare(`SELECT event, metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-none") as Array<{
+			event: string;
+			metadata: string | null;
+		}>;
+		expect(historyRows.some((row) => row.event === "none")).toBe(true);
+		const parsed = historyRows.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(parsed.some((row) => row.proposedAction === "none")).toBe(true);
+
+		const payload = JSON.parse(getJob(db, "mem-src-none")?.result ?? "{}");
+		expect(payload.writeStats.added).toBe(0);
+		expect(payload.writeStats.deduped).toBe(0);
+	});
+
+	it("falls back to shadow-mode audits when mutations are frozen", async () => {
+		insertMemory(db, "mem-src-frozen", "User prefers dark mode in editor");
+		enqueueExtractionJob(accessor, "mem-src-frozen");
+
+		const worker = startWorker(
+			accessor,
+			goodProvider(),
+			{ ...PHASE_C_CFG, mutationsFrozen: true },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(250);
+		await worker.stop();
+
+		const extractedCount = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2'`,
+			)
+			.get() as { cnt: number };
+		expect(extractedCount.cnt).toBe(0);
+
+		const history = db
+			.prepare(
+				`SELECT event, changed_by, metadata
+				 FROM memory_history
+				 WHERE memory_id = ?
+				 LIMIT 1`,
+			)
+			.get("mem-src-frozen") as
+			| { event: string; changed_by: string; metadata: string | null }
+			| undefined;
+		expect(history?.event).toBe("none");
+		expect(history?.changed_by).toBe("pipeline-shadow");
+		const meta = JSON.parse(history?.metadata ?? "{}");
+		expect(meta.shadow).toBe(true);
+
+		const payload = JSON.parse(getJob(db, "mem-src-frozen")?.result ?? "{}");
+		expect(payload.writeMode).toBe("shadow");
 	});
 });
 
@@ -543,7 +1055,12 @@ describe("Worker dead-job path", () => {
 		};
 
 		const cfg = { ...PIPELINE_CFG, workerMaxRetries: 1, workerPollMs: 10 };
-		const worker = startWorker(faultyAccessor, goodProvider(), cfg, DECISION_CFG);
+		const worker = startWorker(
+			faultyAccessor,
+			goodProvider(),
+			cfg,
+			DECISION_CFG,
+		);
 		await Bun.sleep(300);
 		await worker.stop();
 
@@ -582,7 +1099,12 @@ describe("Worker dead-job path", () => {
 		};
 
 		const cfg = { ...PIPELINE_CFG, workerMaxRetries: 3, workerPollMs: 10 };
-		const worker = startWorker(faultyAccessor, goodProvider(), cfg, DECISION_CFG);
+		const worker = startWorker(
+			faultyAccessor,
+			goodProvider(),
+			cfg,
+			DECISION_CFG,
+		);
 		// Wait for tick 1 to complete (lease + fail + failJob)
 		await Bun.sleep(150);
 		await worker.stop();
