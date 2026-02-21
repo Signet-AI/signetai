@@ -85,6 +85,20 @@ import {
 	triggerRetentionSweep,
 	type RepairContext,
 } from "./repair-actions";
+import {
+	createAuthMiddleware,
+	requirePermission,
+	requireScope,
+	requireRateLimit,
+	checkScope,
+	loadOrCreateSecret,
+	createToken,
+	parseAuthConfig,
+	AuthRateLimiter,
+	type AuthConfig,
+	type TokenRole,
+	type TokenScope,
+} from "./auth";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -102,6 +116,14 @@ const HOST = process.env.SIGNET_HOST || "localhost";
 // Autonomous maintenance singletons
 const providerTracker = createProviderTracker();
 const repairLimiter = createRateLimiter();
+
+// Auth state — initialized lazily in main(), but middleware reads from here
+let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
+let authSecret: Buffer | null = null;
+let authForgetLimiter = new AuthRateLimiter(60_000, 30);
+let authModifyLimiter = new AuthRateLimiter(60_000, 60);
+let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
+let authAdminLimiter = new AuthRateLimiter(60_000, 10);
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
 	if (!existsSync(packageJsonPath)) {
@@ -683,6 +705,13 @@ export const app = new Hono();
 // Middleware
 app.use("*", cors());
 
+// Auth middleware — reads from module-level authConfig/authSecret
+// which are initialized properly in main(). In local mode this is a no-op.
+app.use("*", async (c, next) => {
+	const mw = createAuthMiddleware(authConfig, authSecret);
+	return mw(c, next);
+});
+
 // Request logging middleware
 app.use("*", async (c, next) => {
 	const start = Date.now();
@@ -701,6 +730,197 @@ app.get("/health", (c) => {
 		port: PORT,
 		agentsDir: AGENTS_DIR,
 	});
+});
+
+// ============================================================================
+// Auth API
+// ============================================================================
+
+app.get("/api/auth/whoami", (c) => {
+	const auth = c.get("auth");
+	return c.json({
+		authenticated: auth?.authenticated ?? false,
+		claims: auth?.claims ?? null,
+		mode: authConfig.mode,
+	});
+});
+
+// Token creation uses the same permission + rate limit pattern as other admin routes
+app.use("/api/auth/token", async (c, next) => {
+	const perm = requirePermission("admin", authConfig);
+	const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
+	await perm(c, async () => { await rate(c, next); });
+});
+
+app.post("/api/auth/token", async (c) => {
+	if (!authSecret) {
+		return c.json(
+			{ error: "auth secret not available (local mode?)" },
+			400,
+		);
+	}
+
+	const payload = (await c.req.json().catch(() => null)) as Record<
+		string,
+		unknown
+	> | null;
+	if (!payload) {
+		return c.json({ error: "invalid request body" }, 400);
+	}
+
+	const role = payload.role as string | undefined;
+	const validRoles = ["admin", "operator", "agent", "readonly"];
+	if (!role || !validRoles.includes(role)) {
+		return c.json(
+			{ error: `role must be one of: ${validRoles.join(", ")}` },
+			400,
+		);
+	}
+
+	const scope = (payload.scope ?? {}) as TokenScope;
+	const ttl =
+		typeof payload.ttlSeconds === "number" && payload.ttlSeconds > 0
+			? payload.ttlSeconds
+			: authConfig.defaultTokenTtlSeconds;
+
+	const token = createToken(
+		authSecret,
+		{ sub: `token:${role}`, scope, role: role as TokenRole },
+		ttl,
+	);
+
+	const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
+	return c.json({ token, expiresAt });
+});
+
+// ============================================================================
+// Route-level permission guards
+// ============================================================================
+
+// Remember
+app.use("/api/memory/remember", async (c, next) => {
+	return requirePermission("remember", authConfig)(c, next);
+});
+app.use("/api/memory/save", async (c, next) => {
+	return requirePermission("remember", authConfig)(c, next);
+});
+app.use("/api/hook/remember", async (c, next) => {
+	return requirePermission("remember", authConfig)(c, next);
+});
+
+// Recall / search
+// TODO(Phase J follow-up): Scoped tokens should have their project/agent
+// scope injected as a mandatory filter into the search query itself, so
+// recall results are restricted to the token's scope. Currently, scope
+// enforcement only applies to mutations, not reads. This is acceptable
+// for v1 single-tenant local, but must be addressed before team mode GA.
+app.use("/api/memory/recall", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
+app.use("/api/memory/search", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
+app.use("/memory/search", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
+app.use("/memory/similar", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
+
+// Modify — with rate limiting
+app.use("/api/memory/modify", async (c, next) => {
+	const perm = requirePermission("modify", authConfig);
+	const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
+	await perm(c, async () => { await rate(c, next); });
+});
+
+// Forget — with rate limiting
+app.use("/api/memory/forget", async (c, next) => {
+	const perm = requirePermission("forget", authConfig);
+	const rate = requireRateLimit("batchForget", authBatchForgetLimiter, authConfig);
+	await perm(c, async () => { await rate(c, next); });
+});
+
+// Recover
+app.use("/api/memory/:id/recover", async (c, next) => {
+	return requirePermission("recover", authConfig)(c, next);
+});
+
+// Documents
+app.use("/api/documents", async (c, next) => {
+	return requirePermission("documents", authConfig)(c, next);
+});
+app.use("/api/documents/*", async (c, next) => {
+	return requirePermission("documents", authConfig)(c, next);
+});
+
+// Connectors — admin only
+app.use("/api/connectors", async (c, next) => {
+	if (c.req.method === "GET") return next();
+	return requirePermission("admin", authConfig)(c, next);
+});
+app.use("/api/connectors/*", async (c, next) => {
+	if (c.req.method === "GET") return next();
+	return requirePermission("admin", authConfig)(c, next);
+});
+
+// Diagnostics — read-only
+app.use("/api/diagnostics", async (c, next) => {
+	return requirePermission("diagnostics", authConfig)(c, next);
+});
+app.use("/api/diagnostics/*", async (c, next) => {
+	return requirePermission("diagnostics", authConfig)(c, next);
+});
+
+// Repair — admin only
+app.use("/api/repair/*", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
+
+// Per-memory PATCH and DELETE need method-specific guards + scope check
+app.use("/api/memory/:id", async (c, next) => {
+	// Scope enforcement on mutations: if token has project scope, verify
+	// the target memory belongs to that project.
+	if (
+		authConfig.mode !== "local" &&
+		(c.req.method === "PATCH" || c.req.method === "DELETE")
+	) {
+		const auth = c.get("auth");
+		if (auth?.claims?.scope?.project) {
+			const memoryId = c.req.param("id");
+			const row = getDbAccessor().withReadDb((db) =>
+				db
+					.prepare("SELECT project FROM memories WHERE id = ?")
+					.get(memoryId) as { project: string | null } | undefined,
+			);
+			if (row) {
+				const decision = checkScope(
+					auth.claims,
+					{ project: row.project ?? undefined },
+					authConfig.mode,
+				);
+				if (!decision.allowed) {
+					return c.json({ error: decision.reason ?? "scope violation" }, 403);
+				}
+			}
+		}
+	}
+
+	if (c.req.method === "PATCH") {
+		const perm = requirePermission("modify", authConfig);
+		const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
+		return perm(c, async () => { await rate(c, next); });
+	}
+	if (c.req.method === "DELETE") {
+		const perm = requirePermission("forget", authConfig);
+		const rate = requireRateLimit("forget", authForgetLimiter, authConfig);
+		return perm(c, async () => { await rate(c, next); });
+	}
+	// GET for memory detail + history — recall permission
+	if (c.req.method === "GET") {
+		return requirePermission("recall", authConfig)(c, next);
+	}
+	return next();
 });
 
 // ============================================================================
@@ -1223,6 +1443,17 @@ const ACTOR_TYPES = new Set([
 ]);
 
 function resolveMutationActor(c: Context, fallback?: string): MutationActor {
+	// Prefer token claims for identity when available
+	const auth = c.get("auth");
+	if (auth?.claims) {
+		return {
+			changedBy: auth.claims.sub,
+			actorType: auth.claims.role,
+			sessionId: parseOptionalString(c.req.header("x-signet-session-id")),
+			requestId: parseOptionalString(c.req.header("x-signet-request-id")),
+		};
+	}
+
 	const headerActor = parseOptionalString(c.req.header("x-signet-actor"));
 	const changedBy =
 		headerActor ??
@@ -6550,8 +6781,24 @@ async function main() {
 	startFileWatcher();
 	logger.info("watcher", "File watcher started");
 
-	// Start extraction pipeline if enabled
+	// Initialize auth
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	authConfig = memoryCfg.auth;
+	if (authConfig.mode !== "local") {
+		authSecret = loadOrCreateSecret(authConfig.secretPath);
+		logger.info("auth", "Auth initialized", { mode: authConfig.mode });
+	} else {
+		logger.info("auth", "Running in local mode (no auth)");
+	}
+
+	// Rebuild rate limiters from config
+	const rl = authConfig.rateLimits;
+	if (rl.forget) authForgetLimiter = new AuthRateLimiter(rl.forget.windowMs, rl.forget.max);
+	if (rl.modify) authModifyLimiter = new AuthRateLimiter(rl.modify.windowMs, rl.modify.max);
+	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
+	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
+
+	// Start extraction pipeline if enabled
 	if (memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode) {
 		startPipeline(
 			getDbAccessor(),

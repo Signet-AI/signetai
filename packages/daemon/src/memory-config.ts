@@ -6,6 +6,7 @@ import {
 	type PipelineFlag,
 	type PipelineV2Config,
 } from "@signet/core";
+import { parseAuthConfig, type AuthConfig } from "./auth/config";
 
 export interface EmbeddingConfig {
 	provider: "ollama" | "openai";
@@ -60,6 +61,7 @@ export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
 	search: MemorySearchConfig;
 	pipelineV2: PipelineV2Config;
+	auth: AuthConfig;
 }
 
 function clampPositive(
@@ -222,6 +224,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 		},
 		search: { alpha: 0.7, top_k: 20, min_score: 0.3 },
 		pipelineV2: { ...DEFAULT_PIPELINE_V2 },
+		auth: parseAuthConfig(undefined, agentsDir),
 	};
 
 	const paths = [
@@ -265,6 +268,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			}
 
 			defaults.pipelineV2 = loadPipelineConfig(yaml);
+			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
 
 			break;
 		} catch {

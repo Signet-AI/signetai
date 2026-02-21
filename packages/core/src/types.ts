@@ -60,6 +60,9 @@ export interface AgentManifest {
 	auth?: {
 		method: "none" | "erc8128" | "gpg" | "did";
 		chainId?: number;
+		// Phase J: deployment mode auth
+		mode?: "local" | "team" | "hybrid";
+		rateLimits?: Record<string, { windowMs?: number; max?: number }>;
 	};
 	capabilities?: string[];
 	harnessCompatibility?: string[];

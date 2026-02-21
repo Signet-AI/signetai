@@ -32,6 +32,7 @@ export interface SignetClientConfig {
   readonly retries?: number;
   readonly actor?: string;
   readonly actorType?: string;
+  readonly token?: string;
 }
 
 export class SignetClient {
@@ -39,6 +40,9 @@ export class SignetClient {
 
   constructor(config?: SignetClientConfig) {
     const headers: Record<string, string> = {};
+    if (config?.token) {
+      headers["Authorization"] = `Bearer ${config.token}`;
+    }
     if (config?.actor) {
       headers["x-signet-actor"] = config.actor;
     }
@@ -282,6 +286,29 @@ export class SignetClient {
       ? `/api/diagnostics/${domain}`
       : "/api/diagnostics";
     return this.transport.get<unknown>(path);
+  }
+
+  // --- Auth ---
+
+  async createToken(opts: {
+    readonly role: string;
+    readonly scope?: {
+      readonly project?: string;
+      readonly agent?: string;
+      readonly user?: string;
+    };
+    readonly ttlSeconds?: number;
+  }): Promise<{ token: string; expiresAt: string }> {
+    return this.transport.post<{ token: string; expiresAt: string }>(
+      "/api/auth/token",
+      opts,
+    );
+  }
+
+  async whoami(): Promise<{ authenticated: boolean; claims: unknown }> {
+    return this.transport.get<{ authenticated: boolean; claims: unknown }>(
+      "/api/auth/whoami",
+    );
   }
 }
 
