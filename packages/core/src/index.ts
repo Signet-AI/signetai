@@ -4,7 +4,7 @@
  */
 
 export { Signet } from "./signet";
-export { Database } from "./database";
+export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
 	Agent,
 	AgentManifest,

@@ -9,7 +9,7 @@
 import { Database, type Statement } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { runMigrations } from "@signet/core";
+import { runMigrations, findSqliteVecExtension } from "@signet/core";
 
 // ---------------------------------------------------------------------------
 // Public interfaces — thin wrappers over the bun:sqlite Database surface
@@ -53,6 +53,22 @@ function configurePragmas(db: Database): void {
 	db.exec("PRAGMA temp_store = MEMORY");
 }
 
+// Cached extension path — resolved once at startup
+let vecExtPath: string | null | undefined;
+
+function loadVecExtension(db: Database): void {
+	if (vecExtPath === undefined) {
+		vecExtPath = findSqliteVecExtension();
+	}
+	if (vecExtPath) {
+		try {
+			db.loadExtension(vecExtPath);
+		} catch {
+			// Extension may already be loaded or unavailable
+		}
+	}
+}
+
 /**
  * Initialise the singleton accessor. Must be called once at daemon startup
  * before any route handler runs. Ensures the memory directory exists, opens
@@ -72,12 +88,100 @@ export function initDbAccessor(path: string): void {
 
 	const writeConn = new Database(path);
 	configurePragmas(writeConn);
+	loadVecExtension(writeConn);
 
 	// Run schema migrations — this is the sole schema authority.
 	// Failures here are fatal: the daemon must not start on bad schema.
 	runMigrations(writeConn);
 
+	// Ensure vec_embeddings virtual table exists with correct schema.
+	// Older tables may lack the TEXT id column needed to join with embeddings.
+	if (vecExtPath) {
+		try {
+			ensureVecTable(writeConn);
+			backfillVecEmbeddings(writeConn);
+		} catch {
+			// vec0 not usable — vector search will be disabled
+		}
+	}
+
 	accessor = createAccessor(writeConn);
+}
+
+// ---------------------------------------------------------------------------
+// Vec table creation + backfill
+// ---------------------------------------------------------------------------
+
+function ensureVecTable(db: Database): void {
+	// Check if vec_embeddings exists and has the correct schema (TEXT id).
+	// If it exists without an id column, drop and recreate.
+	const existing = db
+		.prepare(
+			"SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'",
+		)
+		.get() as { sql: string } | undefined;
+
+	if (existing) {
+		if (existing.sql.includes("id TEXT")) return;
+		// Old schema without id — drop it
+		db.exec("DROP TABLE vec_embeddings");
+	}
+
+	db.exec(`
+		CREATE VIRTUAL TABLE vec_embeddings USING vec0(
+			id TEXT PRIMARY KEY,
+			embedding FLOAT[768] distance_metric=cosine
+		);
+	`);
+}
+
+function backfillVecEmbeddings(db: Database): void {
+	const vecCount = (
+		db.prepare("SELECT count(*) as n FROM vec_embeddings").get() as {
+			n: number;
+		}
+	).n;
+	if (vecCount > 0) return;
+
+	const embCount = (
+		db.prepare("SELECT count(*) as n FROM embeddings").get() as {
+			n: number;
+		}
+	).n;
+	if (embCount === 0) return;
+
+	const rows = db
+		.prepare("SELECT id, vector FROM embeddings")
+		.all() as Array<{ id: string; vector: Buffer }>;
+
+	const insert = db.prepare(
+		"INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)",
+	);
+
+	db.exec("BEGIN");
+	let migrated = 0;
+	for (const row of rows) {
+		try {
+			const vec = new Float32Array(
+				row.vector.buffer.slice(
+					row.vector.byteOffset,
+					row.vector.byteOffset + row.vector.byteLength,
+				),
+			);
+			insert.run(row.id, vec);
+			migrated++;
+		} catch {
+			// Skip malformed rows
+		}
+	}
+	db.exec("COMMIT");
+
+	if (migrated > 0) {
+		// eslint-disable-next-line no-console
+		console.log(
+			`[db-accessor] Backfilled ${migrated}/${embCount} embeddings into vec_embeddings`,
+		);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +207,7 @@ function createAccessor(writeConn: Database): DbAccessor {
 		}
 		const conn = new Database(dbPath, { readonly: true });
 		conn.exec("PRAGMA busy_timeout = 5000");
+		loadVecExtension(conn);
 		readInUse.add(conn);
 		return conn;
 	}

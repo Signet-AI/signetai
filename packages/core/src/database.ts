@@ -3,8 +3,9 @@
  * Runtime-detecting: uses bun:sqlite under Bun, better-sqlite3 under Node.js
  */
 
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
+import { homedir } from "os";
 import { arch, platform } from "process";
 import { runMigrations } from "./migrations/index";
 import type { Memory, Conversation, Embedding } from "./types";
@@ -63,6 +64,15 @@ function findSqliteVecExtension(): string | null {
 			platformPkg,
 			extFile,
 		),
+		// Bun global install cache (~/.bun/install/cache/)
+		join(
+			homedir(),
+			".bun",
+			"install",
+			"cache",
+			`${platformPkg}@*`,
+			extFile,
+		),
 	];
 
 	for (const searchPath of searchPaths) {
@@ -72,7 +82,7 @@ function findSqliteVecExtension(): string | null {
 			const pattern = searchPath.split("*")[1];
 			try {
 				const entries = existsSync(baseDir)
-					? require("fs").readdirSync(baseDir)
+					? readdirSync(baseDir)
 					: [];
 				for (const entry of entries) {
 					const candidate = join(
@@ -93,8 +103,14 @@ function findSqliteVecExtension(): string | null {
 	return null;
 }
 
-// Load sqlite-vec extension with fallback handling
-function loadSqliteVec(db: unknown): boolean {
+/** Find the sqlite-vec native extension path, or null if unavailable. */
+export { findSqliteVecExtension };
+
+/**
+ * Load sqlite-vec extension onto a database connection.
+ * Returns true if the extension was loaded successfully.
+ */
+export function loadSqliteVec(db: unknown): boolean {
 	const extPath = findSqliteVecExtension();
 	if (!extPath) {
 		console.warn(

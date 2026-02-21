@@ -101,18 +101,17 @@ export function vectorSearch(
 		// The query vector must be serialized as a blob
 		const queryBlob = Buffer.from(queryVector.buffer);
 
+		// vec0 KNN queries require `k = ?` in the WHERE clause
+		const params: unknown[] = [queryBlob, limit];
+
 		// Build type filter if specified
 		let typeFilter = "";
-		const params: unknown[] = [queryBlob];
-
 		if (options?.type) {
 			typeFilter = " AND m.type = ?";
 			params.push(options.type);
 		}
-		params.push(limit);
 
 		// Query vec_embeddings virtual table, join with embeddings to get source_id
-		// vec_embeddings.id matches embeddings.id
 		const rows = db
 			.prepare(`
       SELECT
@@ -121,9 +120,8 @@ export function vectorSearch(
       FROM vec_embeddings v
       JOIN embeddings e ON v.id = e.id
       JOIN memories m ON e.source_id = m.id
-      WHERE v.embedding MATCH ?${typeFilter}
+      WHERE v.embedding MATCH ? AND k = ?${typeFilter}
       ORDER BY v.distance
-      LIMIT ?
     `)
 			.all(...params) as Array<{ source_id: string; distance: number }>;
 
