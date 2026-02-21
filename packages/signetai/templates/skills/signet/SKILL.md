@@ -1,3 +1,11 @@
+---
+name: signet  
+description: the one skill that will teach you all you need to know about signet
+user_invocable: true
+arg_hint: ""
+builtin: true
+---
+
 # Signet Skill
 
 Signet is the layer that takes an LLM from a stateless autocomplete
