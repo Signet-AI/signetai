@@ -1,0 +1,601 @@
+# Procedural Memory: Skills as Knowledge Graph Nodes
+
+Status: Draft
+
+Audience: Core + Daemon maintainers
+
+Dependency: Memory Pipeline v2 (phases A-E minimum)
+
+Reference: arscontexta kernel (references/arscontexta/)
+
+---
+
+## 1) Purpose
+
+Skills in Signet are currently filesystem artifacts — a directory with
+a SKILL.md file, discovered at runtime, with no database presence.
+They exist outside the memory system entirely.
+
+This plan promotes skills to first-class nodes in the knowledge graph,
+treating them as **procedural memory** alongside the existing semantic
+and episodic tiers. The result is a unified knowledge substrate where
+facts, experiences, and capabilities all live in the same graph and
+reinforce each other through usage.
+
+The key insight: a skill is just procedural knowledge. "I know how to
+deploy to Cloudflare" belongs in the same graph as "Nicholai prefers
+bun over npm." One is a capability, the other is a fact, but they're
+both things the agent *knows*.
+
+This aligns with the arscontexta finding that "every note is basically
+a skill — highly curated knowledge that gets injected when relevant."
+The same progressive disclosure pattern governs both memory retrieval
+and skill loading, driven by the same context window constraint. We're
+making the structural claim in the other direction: every skill is
+also a memory.
+
+---
+
+## 2) Product Objectives
+
+### Primary goals
+
+1. Skills become nodes in the entity graph with their own embeddings.
+2. Skill nodes link to memories (and entities) through the same
+   relation system used for semantic memory.
+3. The graph accumulates contextual knowledge around skills through
+   natural usage — when to use them, what they pair with, user
+   preferences about them.
+4. Contextual skill discovery emerges from graph proximity: if the
+   agent is working in a domain, relevant skills surface without
+   explicit invocation.
+5. Skill-to-skill relationships form organically through shared memory
+   neighborhoods, enabling emergent clustering (e.g. "devops" skills
+   naturally group together).
+6. Procedural memories decay at a significantly lower rate than
+   semantic or episodic memories, reflecting how humans retain
+   procedural knowledge.
+
+### Non-goals (for this release)
+
+- Skill auto-installation based on graph suggestions.
+- Skill composition or chaining based on graph paths.
+- Cross-agent skill sharing or skill marketplace ranking.
+- Replacing the filesystem as the skill runtime — SKILL.md files
+  remain the executable artifact; the graph is the knowledge layer.
+
+---
+
+## 3) Design Principles
+
+### Skills are knowledge, not just tools
+
+The filesystem artifact (SKILL.md, permissions, executable code) is
+the *infrastructure*. The graph node is the *knowledge* — the agent's
+understanding of what the skill does, when it's useful, and how it
+relates to everything else the agent knows.
+
+### Same graph, different decay
+
+Procedural memory uses the same graph tables, same relation types,
+same embedding space. The only structural difference is the decay
+coefficient: procedural memories are stickier.
+
+### Installation creates the node, usage enriches it
+
+When a skill is installed, a graph node is created with the skill's
+metadata embedded. This is a cold start — the node exists but has
+minimal connections. As the agent uses the skill, episodic memories
+from those sessions link to the skill node. Over time, the graph
+accumulates rich context around each skill.
+
+### The graph learns what you don't tell it
+
+If `browser-use` and `web-perf` keep appearing near the same
+memories, the graph discovers they're related even though nobody
+explicitly linked them. Emergent skill clustering is a natural
+consequence of shared memory neighborhoods.
+
+### Discovery-first
+
+Everything created must be optimized for future agent discovery. If
+the agent can't find a skill node, it doesn't exist. This means
+embedding quality is the critical investment — the embedding input
+should capture mechanism and use-case context, not just restate the
+skill name. (See section 5.1 for embedding strategy.)
+
+### Skills have a lifecycle
+
+Knowledge hardens over time. The natural trajectory is:
+documentation → skill → hook. Instructions start as documented
+patterns, get promoted to skills as they prove useful, and eventually
+become hooks when they're fully deterministic. The graph should
+reflect where a skill sits in this lifecycle through its `role` field.
+
+---
+
+## 4) Memory Taxonomy Update
+
+The existing taxonomy defines four tiers but only treats three:
+
+| Tier | Decay rate | Current status |
+|------|-----------|----------------|
+| Session | N/A (ephemeral) | Implemented |
+| Episodic | `0.95^days` | Pipeline v2 |
+| Semantic | `0.95^days` | Pipeline v2 |
+| Procedural | `0.99^days` | **This plan** |
+
+Procedural memories decay at roughly 1/5 the rate of semantic
+memories. A semantic fact loses ~40% relevance after 10 days idle.
+A procedural skill loses ~10% in the same period.
+
+The decay coefficient should be configurable per-skill or globally:
+
+```yaml
+# pipeline config extension
+procedural:
+  decayRate: 0.99          # default for procedural memories
+  minImportance: 0.3       # floor — skills never fully decay
+  importanceOnInstall: 0.7  # initial importance for new skills
+```
+
+The `minImportance` floor is critical: unlike semantic memories which
+can decay to irrelevance, installed skills should always remain
+discoverable. They can become *less prominent* but never invisible.
+
+---
+
+## 5) Data Model
+
+### 5.1 Skill nodes in the entity graph
+
+Skills are stored as entities with `entityType = 'skill'`:
+
+```sql
+-- No new table needed. Skills use the existing entities table.
+-- entityType: 'skill'
+-- name: skill name (e.g. 'browser-use')
+-- canonicalName: normalized skill name
+-- description: from SKILL.md frontmatter
+-- embedding: vector from skill description + metadata
+
+INSERT INTO entities (
+  id, name, canonical_name, entity_type, description,
+  mentions, embedding, created_at, updated_at
+) VALUES (
+  'skill:browser-use', 'browser-use', 'browser-use', 'skill',
+  'Automates browser interactions for web testing...',
+  0, <embedding>, datetime('now'), datetime('now')
+);
+```
+
+### 5.2 Skill metadata table (new)
+
+The entity row captures the graph-facing data. Skill-specific
+metadata lives in a dedicated table that links back:
+
+```sql
+CREATE TABLE skill_meta (
+  entity_id     TEXT PRIMARY KEY REFERENCES entities(id),
+  version       TEXT,
+  author        TEXT,
+  license       TEXT,
+  source        TEXT NOT NULL,  -- 'openclaw' | 'claude-code' | 'manual' | 'skills.sh'
+  role          TEXT NOT NULL DEFAULT 'utility',
+                -- 'orchestrator' | 'processor' | 'utility' | 'hook-candidate'
+  tags          TEXT,           -- JSON array (e.g. ["devops", "testing"])
+  permissions   TEXT,           -- JSON array of declared permissions
+  installed_at  TEXT NOT NULL,
+  last_used_at  TEXT,
+  use_count     INTEGER DEFAULT 0,
+  decay_rate    REAL DEFAULT 0.99,
+  fs_path       TEXT NOT NULL,  -- path to SKILL.md on disk
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+The `role` field classifies where the skill sits in the knowledge
+hardening lifecycle. Orchestrator skills coordinate others (like a
+pipeline runner). Processors do domain-specific work. Utilities are
+general-purpose tools. Hook-candidates are skills whose behavior has
+hardened enough that they could become deterministic hooks.
+
+The `tags` field provides a flat categorization vocabulary for
+domain grouping (e.g. "devops", "testing", "knowledge-management").
+Tags from SKILL.md frontmatter (if present) are imported directly;
+the affinity computation in Phase P3 can also suggest tags based on
+cluster membership.
+
+### 5.3 Skill-memory links
+
+When the agent uses a skill during a session, the episodic memories
+from that session link to the skill entity through the existing
+`memory_entity_mentions` table:
+
+```sql
+-- Existing table, no changes needed:
+-- memory_entity_mentions(memory_id, entity_id, mention_text, confidence)
+
+INSERT INTO memory_entity_mentions (
+  memory_id, entity_id, mention_text, confidence
+) VALUES (
+  '<episodic-memory-id>', 'skill:browser-use',
+  'used browser-use to scrape pricing data', 0.9
+);
+```
+
+### 5.4 Skill-to-skill relations
+
+Skill relations use a typed vocabulary that distinguishes how and
+why two skills are connected. This is informed by arscontexta's
+propositional link semantics, adapted for procedural knowledge.
+
+#### Relation type vocabulary
+
+| Type | Source | Meaning |
+|------|--------|---------|
+| `requires` | explicit | Skill A cannot function without skill B |
+| `complements` | explicit | Skill A works better alongside skill B |
+| `extends` | explicit | Skill A adds capabilities to skill B |
+| `often_used_with` | implicit | Skills frequently co-occur in usage |
+| `enables` | explicit | Skill A's output feeds skill B's input |
+| `supersedes` | explicit | Skill A replaces skill B for most cases |
+
+**Explicit relations** are extracted during skill installation from
+SKILL.md content (e.g. "works well with web-perf" → `complements`).
+These are tagged `source = 'extracted'` in metadata.
+
+**Implicit relations** are computed by analyzing shared memory
+neighborhoods via open triangle detection: if skill A and skill B
+are both mentioned in memories M1, M2, M3 but have no direct edge,
+that's an open triangle — a candidate `often_used_with` relation.
+These are tagged `source = 'computed'`.
+
+The distinction matters for query power: "find all skills that
+extend X" and "find all skills used alongside X" are fundamentally
+different queries with different use cases.
+
+Both use the existing `relations` table:
+
+```sql
+INSERT INTO relations (
+  source_entity_id, target_entity_id, relationship,
+  strength, mentions, confidence, metadata
+) VALUES (
+  'skill:browser-use', 'skill:web-perf', 'often_used_with',
+  0.7, 3, 0.8, '{"source": "computed"}'
+);
+```
+
+---
+
+## 6) Lifecycle
+
+### 6.1 Skill installation
+
+When a skill is installed (via `signet skill install`, manual copy,
+or harness unification):
+
+1. Parse SKILL.md frontmatter and body.
+2. Generate embedding from description + use-case context. The
+   embedding input should be: frontmatter description + first 500
+   characters of the SKILL.md body. The description should add
+   mechanism or implication, not restate the skill name — this is
+   critical for discovery quality.
+3. Create entity row with `entityType = 'skill'`.
+4. Create `skill_meta` row with installation metadata, including
+   `role` (from frontmatter or default 'utility') and `tags`.
+5. Run extraction on SKILL.md body to find entity references
+   (e.g. if the skill mentions "Cloudflare", link to the
+   Cloudflare entity if it exists) and explicit skill relations
+   (e.g. "works with web-perf" → `complements` edge).
+6. Set initial importance to `importanceOnInstall` (default 0.7).
+
+### 6.2 Skill usage
+
+When the agent invokes a skill during a session:
+
+1. Increment `use_count` and update `last_used_at` in `skill_meta`.
+2. Boost the skill entity's importance (usage resets decay).
+3. Session-end extraction naturally creates episodic memories that
+   mention the skill — the extraction pipeline links these to the
+   skill entity via `memory_entity_mentions`.
+
+No special handling needed: the existing extraction pipeline handles
+this if skill entities exist in the graph.
+
+### 6.3 Skill uninstallation
+
+When a skill is removed:
+
+1. Soft-delete the entity row (same `is_deleted` pattern as memories).
+2. Soft-delete the `skill_meta` row.
+3. Relations and mentions remain for the retention window.
+4. The filesystem artifact is removed as before.
+5. After retention window, hard-delete cascades through graph tables.
+
+### 6.4 Relation discovery (open triangle detection)
+
+Implicit skill-to-skill relations are discovered through open
+triangle detection in the graph, inspired by arscontexta's graph
+analysis primitives.
+
+An **open triangle** exists when skill A and skill B both have edges
+to shared memories (or shared entities) but no direct edge between
+them. When the co-occurrence count crosses `affinityThreshold`
+(default: 3 shared memories), the system creates a candidate
+`often_used_with` relation.
+
+This runs as an **event-driven job**, not a fixed interval timer.
+The trigger fires when any skill's new co-occurrence count with
+another skill crosses the threshold since the last computation.
+This avoids wasted cycles when skill usage is sparse, and responds
+quickly during active periods.
+
+Steps:
+
+1. For each skill entity, find all memories linked to it.
+2. For each pair of skills sharing N+ linked memories, compute
+   affinity score based on co-occurrence frequency and recency.
+3. Distinguish the structural finding (triangle exists) from the
+   semantic judgment (should these be connected?). For v1, create
+   the relation automatically. Future: surface candidates for
+   human review before committing.
+4. Create or update `often_used_with` relations with
+   `source = 'computed'`.
+5. Decay existing implicit relations that haven't been reinforced.
+6. Optionally suggest `tags` for skills based on cluster membership
+   (skills in the same dense neighborhood likely share a domain).
+
+---
+
+## 7) Retrieval Integration
+
+### 7.1 Skill-aware recall
+
+When `signet recall` runs, the existing graph-augmented retrieval
+(section 13 of pipeline v2) already expands one-hop from matched
+entities. If skill entities are in the graph, they participate in
+expansion automatically.
+
+Example: user recalls "deploy process" → matches entity "Cloudflare"
+→ one-hop expansion finds skill:wrangler → wrangler skill surfaces
+in results alongside relevant memories.
+
+### 7.2 Contextual skill suggestions
+
+New endpoint for proactive skill discovery:
+
+```
+GET /api/skills/suggest?context=<text>
+```
+
+1. Embed the context text.
+2. Find nearest entities in the graph.
+3. Filter to `entityType = 'skill'`.
+4. Rank by: embedding similarity × importance × recency boost.
+5. Return top-K skill suggestions with reasoning.
+
+This powers session-start hooks that can suggest relevant skills
+based on the current working context.
+
+### 7.3 Skill search enhancement
+
+The existing `/api/skills` list endpoint gains an optional
+`?ranked=true` parameter that sorts installed skills by graph
+importance rather than alphabetically. Skills with richer graph
+neighborhoods (more linked memories, more relations) rank higher.
+
+---
+
+## 8) Dashboard Integration
+
+### 8.1 Graph visualization
+
+The existing embeddings/graph view in the dashboard gains
+skill-specific rendering:
+
+- Skill nodes rendered with a distinct icon/color.
+- Skill-to-skill edges shown as a separate layer.
+- Skill-to-memory edges shown on hover/select.
+- Cluster detection highlights skill neighborhoods.
+
+### 8.2 Skill detail view
+
+Each skill's detail page in the dashboard gains a "Knowledge" tab
+showing:
+
+- Linked memories (most recent, most relevant).
+- Related skills (with affinity scores).
+- Usage timeline (from `use_count` and linked episodic memories).
+- Importance trend over time.
+
+---
+
+## 9) Implementation Phases
+
+### Phase P1: Schema and node creation
+
+- Add `skill_meta` table via migration.
+- On skill install, create entity + skill_meta rows.
+- On skill uninstall, soft-delete entity.
+- Backfill: scan existing installed skills and create nodes for them.
+- Embed skill descriptions using configured embedding provider.
+
+**Depends on**: Pipeline v2 Phase A (migration infrastructure),
+Phase E (graph tables exist).
+
+### Phase P2: Usage tracking and linking
+
+- Hook into skill invocation to increment use_count and boost
+  importance.
+- Ensure session-end extraction recognizes skill names as entities
+  and links episodic memories to skill nodes.
+- Add skill name list to extraction prompt context so the LLM knows
+  which skills exist.
+
+**Depends on**: Phase P1, Pipeline v2 Phase B (extraction pipeline).
+
+### Phase P3: Implicit relation computation
+
+- Background job for skill-to-skill affinity computation.
+- Co-occurrence analysis across shared memory neighborhoods.
+- Relation creation/update/decay for implicit `often_used_with` edges.
+
+**Depends on**: Phase P2 (needs usage data to compute relations).
+
+### Phase P4: Retrieval and suggestion
+
+- Skill-aware recall (mostly free from existing graph expansion).
+- `/api/skills/suggest` endpoint.
+- `?ranked=true` parameter for skill listing.
+- Session-start hook integration for proactive suggestions.
+
+**Depends on**: Phase P3, Pipeline v2 Phase E (graph retrieval).
+
+### Phase P5: Dashboard and visualization
+
+- Skill nodes in graph view.
+- Skill detail knowledge tab.
+- Cluster visualization.
+
+**Depends on**: Phase P4.
+
+---
+
+## 10) Configuration
+
+Extension to the pipeline config block:
+
+```yaml
+pipeline:
+  # ... existing config ...
+  procedural:
+    enabled: true
+    decayRate: 0.99
+    minImportance: 0.3
+    importanceOnInstall: 0.7
+    affinityThreshold: 3       # min shared memories for implicit relation
+    affinityMode: event        # 'event' (threshold-triggered) or 'interval'
+    affinityInterval: 6h       # fallback interval if mode is 'interval'
+    suggestionLimit: 5
+    embeddingInput: description+body  # 'description' | 'description+body'
+    embeddingBodyLimit: 500    # max chars from SKILL.md body for embedding
+```
+
+---
+
+## 11) Safety and Invariants
+
+1. **Skill nodes are not deletable by LLM decisions.** Only explicit
+   user action (uninstall) removes a skill node. The extraction
+   pipeline can link memories to skills but cannot delete or modify
+   skill entities.
+
+2. **Filesystem remains authoritative for skill runtime.** If a
+   SKILL.md exists on disk but has no graph node, the system creates
+   one (self-healing). If a graph node exists but the filesystem
+   artifact is gone, the node is soft-deleted on next scan.
+
+3. **Skill importance has a floor.** Unlike semantic memories,
+   installed skills never decay below `minImportance`. They can
+   become less prominent but remain discoverable.
+
+4. **Implicit relations are always labeled.** Relations computed by
+   affinity analysis are tagged `source = 'computed'` to distinguish
+   them from explicit relations extracted from SKILL.md content.
+
+5. **Backfill is idempotent.** Running skill node creation on an
+   already-indexed skill is a no-op (matched by canonical name).
+
+---
+
+## 12) Success Criteria
+
+1. All installed skills have corresponding entity nodes in the graph.
+2. Skill usage during sessions creates linked episodic memories.
+3. Skills with shared usage patterns develop implicit relations.
+4. `signet recall` surfaces relevant skills alongside memories.
+5. Skill importance decays at the configured procedural rate.
+6. Skill nodes survive extraction pipeline decisions (LLM cannot
+   delete them).
+7. Dashboard graph view renders skill nodes distinctly.
+
+---
+
+## 13) Open Questions
+
+1. **Skill versioning in the graph**: when a skill updates, should the
+   node be replaced or versioned? Current lean: replace in place,
+   re-embed, preserve relations. Version history in `skill_meta`.
+
+2. **Cross-agent skill sharing**: if multi-agent support lands (see
+   `multi-agent-support.md`), should skill nodes be shared across
+   agents or scoped per-agent? Current lean: shared by default since
+   skills are global filesystem artifacts.
+
+3. **Skill quality signal**: should the graph track skill success/
+   failure rates? e.g. if memories linked to a skill are frequently
+   negative ("wrangler deploy failed again"), should that affect the
+   skill's importance? Arscontexta captures this explicitly via
+   "agent notes" during execution rather than inferring it from
+   sentiment later. Consider: a dedicated `skill_observations` field
+   or linked observation memories. Not in v1, but the data model
+   supports it.
+
+4. **Human review for implicit relations**: should computed
+   `often_used_with` relations be auto-committed, or surfaced as
+   "synthesis opportunities" for human review first? v1 auto-commits
+   for simplicity, but the structural/semantic distinction from
+   arscontexta's triangle detection suggests a review step may
+   produce higher quality edges.
+
+5. **Module ceiling**: arscontexta documents a ~15-20 active module
+   ceiling before context budget strains (at 16k chars). If skills
+   are surfaced via descriptions during session-start, the same
+   budget applies. Should `suggestionLimit` be configurable per
+   session type, or is a single global limit sufficient?
+
+---
+
+## 14) Resolved Decisions
+
+1. **Embedding strategy** (was open question #4): description +
+   first 500 chars of SKILL.md body. The description should add
+   mechanism or implication, not restate the skill name. Configurable
+   via `embeddingInput` and `embeddingBodyLimit`.
+
+2. **Affinity computation trigger**: event-driven (threshold-based)
+   rather than fixed interval. Fires when co-occurrence count crosses
+   `affinityThreshold`. Falls back to interval mode if configured.
+
+3. **Relation type vocabulary**: typed relations (`requires`,
+   `complements`, `extends`, `often_used_with`, `enables`,
+   `supersedes`) with source tagging (`extracted` vs `computed`).
+
+4. **Skill role classification**: `orchestrator / processor /
+   utility / hook-candidate` reflecting the knowledge hardening
+   lifecycle (documentation → skill → hook).
+
+---
+
+## 15) References
+
+- arscontexta kernel: `references/arscontexta/reference/kernel.yaml`
+  — 15 primitives with dependency DAG. Informed phase ordering.
+- "notes are skills": `references/arscontexta/methodology/notes are
+  skills — curated knowledge injected when relevant.md` — theoretical
+  grounding for the "skills are memory" claim.
+- propositional link semantics: `references/arscontexta/methodology/
+  propositional link semantics transform wiki links from associative
+  to reasoned.md` — typed relation vocabulary.
+- skill context budgets: `references/arscontexta/methodology/skill
+  context budgets constrain knowledge system complexity on agent
+  platforms.md` — module ceiling math and lifecycle thresholds.
+- graph operations: `references/arscontexta/skill-sources/graph/
+  SKILL.md` — triangle detection, bridge identification, cluster
+  analysis.
+- three-spaces architecture: `references/arscontexta/reference/
+  three-spaces.md` — memory routing decision tree, content promotion
+  rules.
