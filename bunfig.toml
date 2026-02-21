@@ -1,0 +1,5 @@
+[test]
+
+# Scope test discovery to packages/ and web/ only.
+# Prevents bun from picking up test files in references/.
+root = "packages"
