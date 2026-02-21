@@ -13,6 +13,7 @@ import { up as historyActorAndRetention } from "./004-history-actor-and-retentio
 import { up as graphExtended } from "./005-graph-extended";
 import { up as idempotencyKey } from "./006-idempotency-key";
 import { up as documentsAndConnectors } from "./007-documents-and-connectors";
+import { up as embeddingsUniqueHash } from "./008-embeddings-unique-hash";
 
 // -- Public interface consumed by Database.init() --
 
@@ -47,6 +48,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 7,
 		name: "documents-and-connectors",
 		up: documentsAndConnectors,
+	},
+	{
+		version: 8,
+		name: "embeddings-unique-hash",
+		up: embeddingsUniqueHash,
 	},
 ];
 
