@@ -29,6 +29,7 @@ import { spawn } from "child_process";
 import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
+import { syncVecInsert, syncVecDeleteBySourceId } from "./db-helpers";
 import {
 	putSecret,
 	getSecret,
@@ -1947,6 +1948,7 @@ app.post("/api/memory/remember", async (c) => {
 			const embId = crypto.randomUUID();
 
 			getDbAccessor().withWriteTx((db) => {
+				syncVecDeleteBySourceId(db, "memory", id);
 				db.prepare(
 					`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
 				).run(id);
@@ -1963,6 +1965,7 @@ app.post("/api/memory/remember", async (c) => {
 					normalizedContent.storageContent,
 					now,
 				);
+				syncVecInsert(db, embId, vec);
 				db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
 					cfg.embedding.model,
 					id,

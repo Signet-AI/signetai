@@ -16,7 +16,7 @@ import { runShadowDecisions } from "./decision";
 import { logger } from "../logger";
 import { txIngestEnvelope } from "../transactions";
 import { normalizeAndHashContent } from "../content-normalization";
-import { vectorToBlob, countChanges } from "../db-helpers";
+import { vectorToBlob, countChanges, syncVecInsert, syncVecDeleteBySourceExceptHash } from "../db-helpers";
 import { txPersistEntities } from "./graph-transactions";
 import type { AnalyticsCollector } from "../analytics";
 
@@ -362,6 +362,7 @@ function insertMemoryEmbedding(
 ): boolean {
 	const embId = crypto.randomUUID();
 	const blob = vectorToBlob(vector);
+	syncVecDeleteBySourceExceptHash(db, "memory", memoryId, contentHash);
 	db.prepare(
 		`DELETE FROM embeddings
 		 WHERE source_type = 'memory' AND source_id = ? AND content_hash <> ?`,
@@ -387,7 +388,11 @@ function insertMemoryEmbedding(
 		content,
 		now,
 	);
-	return countChanges(result) > 0;
+	if (countChanges(result) > 0) {
+		syncVecInsert(db, embId, vector);
+		return true;
+	}
+	return false;
 }
 
 function applyPhaseCWrites(

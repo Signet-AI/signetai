@@ -7,7 +7,7 @@
  */
 
 import type { WriteDb } from "./db-accessor";
-import { vectorToBlob } from "./db-helpers";
+import { vectorToBlob, syncVecInsert, syncVecDeleteBySourceId, syncVecDeleteBySourceExceptHash } from "./db-helpers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -395,11 +395,13 @@ export function txModifyMemory(
 	if (contentChanged) {
 		const newHash = input.patch.contentHash ?? null;
 		if (newHash) {
+			syncVecDeleteBySourceExceptHash(db, "memory", input.memoryId, newHash);
 			db.prepare(
 				`DELETE FROM embeddings
 				 WHERE source_type = 'memory' AND source_id = ? AND content_hash <> ?`,
 			).run(input.memoryId, newHash);
 		} else {
+			syncVecDeleteBySourceId(db, "memory", input.memoryId);
 			db.prepare(
 				`DELETE FROM embeddings
 				 WHERE source_type = 'memory' AND source_id = ?`,
@@ -429,6 +431,7 @@ export function txModifyMemory(
 				input.patch.content,
 				input.changedAt,
 			);
+			syncVecInsert(db, embId, input.embeddingVector);
 		}
 
 		// FTS sync handled by memories_au AFTER UPDATE trigger (migration 004)

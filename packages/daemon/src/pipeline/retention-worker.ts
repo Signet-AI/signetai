@@ -15,7 +15,7 @@
  */
 
 import type { DbAccessor, WriteDb } from "../db-accessor";
-import { countChanges } from "../db-helpers";
+import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
 import { txDecrementEntityMentions } from "./graph-transactions";
 import { logger } from "../logger";
 
@@ -115,6 +115,19 @@ function purgeEmbeddings(db: WriteDb, cutoff: string, limit: number): number {
 
 	const placeholders = expiredIds.map(() => "?").join(", ");
 	const ids = expiredIds.map((r) => r.id);
+
+	// Sync vec_embeddings before deleting from embeddings
+	const embRows = db
+		.prepare(
+			`SELECT id FROM embeddings
+			 WHERE source_type = 'memory' AND source_id IN (${placeholders})`,
+		)
+		.all(...ids) as Array<{ id: string }>;
+	syncVecDeleteByEmbeddingIds(
+		db,
+		embRows.map((r) => r.id),
+	);
+
 	const result = db
 		.prepare(
 			`DELETE FROM embeddings

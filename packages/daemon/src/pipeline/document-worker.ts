@@ -12,7 +12,7 @@
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
 import { normalizeAndHashContent } from "../content-normalization";
-import { vectorToBlob } from "../db-helpers";
+import { vectorToBlob, syncVecInsert } from "../db-helpers";
 import { txIngestEnvelope } from "../transactions";
 import { fetchUrlContent } from "./url-fetcher";
 import { logger } from "../logger";
@@ -378,6 +378,7 @@ async function processDocument(
 					chunkText,
 					now,
 				);
+				syncVecInsert(db, embId, vector);
 			}
 
 			memoriesCreated++;
