@@ -24,6 +24,20 @@ export function countChanges(result: unknown): number {
 }
 
 // ---------------------------------------------------------------------------
+// umap_cache invalidation — clear cached projections on any embedding change.
+// Recomputation is lazy (on next dashboard request). Graceful: non-fatal if
+// the umap_cache table doesn't exist yet (e.g. migration hasn't run).
+// ---------------------------------------------------------------------------
+
+function invalidateUmapCache(db: WriteDb): void {
+	try {
+		db.prepare("DELETE FROM umap_cache").run();
+	} catch {
+		// Table may not exist yet — non-fatal
+	}
+}
+
+// ---------------------------------------------------------------------------
 // vec_embeddings sync — keep the sqlite-vec virtual table in lockstep
 // with the regular embeddings table so vector search sees new rows.
 // Graceful: silently skips if vec_embeddings doesn't exist (no sqlite-vec).
@@ -51,6 +65,7 @@ export function syncVecInsert(
 	embeddingId: string,
 	vector: readonly number[],
 ): void {
+	invalidateUmapCache(db);
 	if (!vecTableExists(db)) return;
 	try {
 		const f32 = new Float32Array(vector);
@@ -70,7 +85,9 @@ export function syncVecDeleteByEmbeddingIds(
 	db: WriteDb,
 	embeddingIds: readonly string[],
 ): void {
-	if (embeddingIds.length === 0 || !vecTableExists(db)) return;
+	if (embeddingIds.length === 0) return;
+	invalidateUmapCache(db);
+	if (!vecTableExists(db)) return;
 	try {
 		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
 		for (const id of embeddingIds) {
@@ -90,6 +107,7 @@ export function syncVecDeleteBySourceId(
 	sourceType: string,
 	sourceId: string,
 ): void {
+	invalidateUmapCache(db);
 	if (!vecTableExists(db)) return;
 	try {
 		const rows = db
@@ -117,6 +135,7 @@ export function syncVecDeleteBySourceExceptHash(
 	sourceId: string,
 	keepContentHash: string,
 ): void {
+	invalidateUmapCache(db);
 	if (!vecTableExists(db)) return;
 	try {
 		const rows = db

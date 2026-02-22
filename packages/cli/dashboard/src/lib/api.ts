@@ -305,6 +305,44 @@ export async function getEmbeddings(
 	}
 }
 
+export interface ProjectionNode {
+	id: string;
+	x: number;
+	y: number;
+	z?: number;
+	content: string;
+	who: string;
+	importance: number;
+	type: string | null;
+	tags: string[];
+	createdAt: string;
+}
+
+export interface ProjectionResponse {
+	status: "ready" | "computing";
+	dimensions?: number;
+	count?: number;
+	total?: number;
+	nodes?: ProjectionNode[];
+	edges?: [number, number][];
+	cachedAt?: string;
+}
+
+export async function getProjection(
+	dimensions: 2 | 3 = 2,
+): Promise<ProjectionResponse> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/embeddings/projection?dimensions=${dimensions}`,
+		);
+		if (response.status === 202) return { status: "computing" };
+		if (!response.ok) throw new Error("Failed to fetch projection");
+		return await response.json();
+	} catch {
+		return { status: "computing" };
+	}
+}
+
 export async function getHarnesses(): Promise<Harness[]> {
 	try {
 		const response = await fetch(`${API_BASE}/api/harnesses`);

@@ -15,6 +15,7 @@ import { up as idempotencyKey } from "./006-idempotency-key";
 import { up as documentsAndConnectors } from "./007-documents-and-connectors";
 import { up as embeddingsUniqueHash } from "./008-embeddings-unique-hash";
 import { up as summaryJobs } from "./009-summary-jobs";
+import { up as umapCache } from "./010-umap-cache";
 
 // -- Public interface consumed by Database.init() --
 
@@ -59,6 +60,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 9,
 		name: "summary-jobs",
 		up: summaryJobs,
+	},
+	{
+		version: 10,
+		name: "umap-cache",
+		up: umapCache,
 	},
 ];
 

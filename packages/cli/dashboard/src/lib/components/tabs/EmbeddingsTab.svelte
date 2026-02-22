@@ -1,12 +1,11 @@
 <script lang="ts">
 import { tick } from "svelte";
-import { browser } from "$app/environment";
-import { UMAP } from "umap-js";
 import {
-	getEmbeddings,
+	getProjection,
 	getSimilarMemories,
 	type Memory,
 	type EmbeddingPoint,
+	type ProjectionNode,
 } from "$lib/api";
 import { mem } from "$lib/stores/memory.svelte";
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
@@ -15,27 +14,9 @@ import EmbeddingInspector from "../embeddings/EmbeddingInspector.svelte";
 import {
 	type RelationKind,
 	type EmbeddingRelation,
-	type RelationCacheEntry,
-	type RelationScore,
 	type GraphNode,
 	type GraphEdge,
-	DEFAULT_EMBEDDING_LIMIT,
-	MIN_EMBEDDING_LIMIT,
-	MAX_EMBEDDING_LIMIT,
-	EMBEDDING_LIMIT_STORAGE_KEY,
-	GRAPH_K,
-	hasEmbeddingVector,
 	sourceColorRgba,
-	clampEmbeddingLimit,
-	mergeUniqueEmbeddings,
-	buildEmbeddingsResponse,
-	buildKnnEdges,
-	cosineSimilarity,
-	embeddingNorm,
-	insertTopScore,
-	insertBottomScore,
-	RELATION_LIMIT,
-	EMBEDDING_PAGE_PROBE_LIMIT,
 } from "../embeddings/embedding-graph";
 
 interface Props {
@@ -56,8 +37,6 @@ let embeddings = $state<EmbeddingPoint[]>([]);
 let embeddingsTotal = $state(0);
 let embeddingsHasMore = $state(false);
 let graphInitialized = $state(false);
-let embeddingLimit = $state(DEFAULT_EMBEDDING_LIMIT);
-let embeddingLimitInput = $state(String(DEFAULT_EMBEDDING_LIMIT));
 let embeddingSearch = $state("");
 let embeddingSearchMatches = $state<EmbeddingPoint[]>([]);
 let embeddingFilterIds = $state<Set<string> | null>(null);
@@ -73,113 +52,33 @@ let nodes = $state<GraphNode[]>([]);
 let edges = $state<GraphEdge[]>([]);
 
 let graphMode: "2d" | "3d" = $state("2d");
-let projected3dCache: number[][] | null = null;
+// 3D projection coords in same order as `embeddings`, passed to Canvas3D
+let projected3dCoords = $state<number[][]>([]);
 let graphLoadId = 0;
 
-let embeddingById = new Map<string, EmbeddingPoint>();
-let embeddingNormById = new Map<string, number>();
+let embeddingById = $state(new Map<string, EmbeddingPoint>());
 let relationLookup = $state(new Map<string, RelationKind>());
-let relationCache = new Map<string, RelationCacheEntry>();
 
 // Sub-component references
 let canvas2d = $state<EmbeddingCanvas2D | null>(null);
 let canvas3d = $state<EmbeddingCanvas3D | null>(null);
 
 // -----------------------------------------------------------------------
-// Init stored limit
+// Helpers
 // -----------------------------------------------------------------------
 
-if (browser) {
-	let nextLimit = DEFAULT_EMBEDDING_LIMIT;
-	const storedLimit = Number.parseInt(
-		localStorage.getItem(EMBEDDING_LIMIT_STORAGE_KEY) ?? "",
-		10,
-	);
-	if (Number.isFinite(storedLimit)) {
-		nextLimit = Math.min(
-			MAX_EMBEDDING_LIMIT,
-			Math.max(MIN_EMBEDDING_LIMIT, storedLimit),
-		);
-	}
-	embeddingLimit = nextLimit;
-	embeddingLimitInput = String(nextLimit);
-}
-
-// -----------------------------------------------------------------------
-// Data loading
-// -----------------------------------------------------------------------
-
-async function loadEmbeddingsForGraph(limit: number) {
-	const requestedLimit = clampEmbeddingLimit(limit);
-	const firstPage = await getEmbeddings(true, {
-		limit: requestedLimit,
-		offset: 0,
-	});
-
-	if (firstPage.error) return firstPage;
-
-	const merged: EmbeddingPoint[] = [];
-	const seen = new Set<string>();
-	mergeUniqueEmbeddings(merged, seen, firstPage.embeddings ?? []);
-
-	let total = firstPage.total > 0 ? firstPage.total : merged.length;
-	let hasMore = firstPage.hasMore || total > merged.length;
-
-	if (merged.length >= requestedLimit) {
-		return buildEmbeddingsResponse(
-			requestedLimit,
-			merged.slice(0, requestedLimit),
-			total,
-			hasMore,
-		);
-	}
-
-	let offset = merged.length;
-	let probeCount = 0;
-	let shouldProbeForMore =
-		requestedLimit > merged.length && merged.length > 0;
-
-	while (
-		merged.length < requestedLimit &&
-		probeCount < EMBEDDING_PAGE_PROBE_LIMIT &&
-		(hasMore || shouldProbeForMore)
-	) {
-		const remaining = requestedLimit - merged.length;
-		const page = await getEmbeddings(true, {
-			limit: remaining,
-			offset,
-		});
-
-		if (page.error) {
-			return buildEmbeddingsResponse(
-				requestedLimit,
-				merged,
-				total,
-				hasMore,
-				page.error,
-			);
-		}
-
-		const rows = page.embeddings ?? [];
-		const added = mergeUniqueEmbeddings(merged, seen, rows);
-
-		if (page.total > total) total = page.total;
-		hasMore = page.hasMore || total > merged.length;
-
-		if (rows.length === 0 || added === 0) break;
-
-		offset += rows.length;
-		shouldProbeForMore =
-			!hasMore && merged.length < requestedLimit;
-		probeCount += 1;
-	}
-
-	return buildEmbeddingsResponse(
-		requestedLimit,
-		merged.slice(0, requestedLimit),
-		total,
-		hasMore,
-	);
+function projectionNodeToEmbeddingPoint(
+	node: ProjectionNode,
+): EmbeddingPoint {
+	return {
+		id: node.id,
+		content: node.content,
+		who: node.who,
+		importance: node.importance,
+		type: node.type,
+		tags: node.tags,
+		createdAt: node.createdAt,
+	};
 }
 
 // -----------------------------------------------------------------------
@@ -190,95 +89,62 @@ async function initGraph(): Promise<void> {
 	if (graphInitialized) return;
 	graphInitialized = true;
 	graphError = "";
-	graphStatus = "Loading embeddings...";
+	graphStatus = "Loading projection...";
 	const loadId = ++graphLoadId;
 
 	try {
-		const result = await loadEmbeddingsForGraph(embeddingLimit);
+		let projection = await getProjection(2);
+
+		while (projection.status === "computing") {
+			if (loadId !== graphLoadId) return;
+			graphStatus = "Computing layout...";
+			await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+			projection = await getProjection(2);
+		}
+
 		if (loadId !== graphLoadId) return;
 
-		if (result.error) {
-			graphError = result.error;
+		const projNodes = projection.nodes ?? [];
+
+		embeddings = projNodes.map(projectionNodeToEmbeddingPoint);
+		embeddingsTotal = projection.total ?? projNodes.length;
+		embeddingsHasMore =
+			(projection.count ?? projNodes.length) <
+			(projection.total ?? projNodes.length);
+		embeddingById = new Map(embeddings.map((item) => [item.id, item]));
+
+		if (projNodes.length === 0) {
 			graphStatus = "";
 			return;
 		}
 
-		embeddings = (result.embeddings ?? []).filter(
-			hasEmbeddingVector,
-		);
-		embeddingsTotal = result.total || embeddings.length;
-		embeddingsHasMore = Boolean(result.hasMore);
-		embeddingById = new Map(
-			embeddings.map((item) => [item.id, item]),
-		);
-		embeddingNormById = new Map();
-		projected3dCache = null;
-
-		if (embeddings.length === 0) {
-			graphStatus = "";
-			return;
-		}
-
-		graphStatus = `Computing UMAP (${embeddings.length})...`;
-		await new Promise((resolve) => setTimeout(resolve, 30));
-
-		const vectors = embeddings
-			.map((item) => item.vector)
-			.filter(
-				(vector): vector is number[] => Array.isArray(vector),
-			);
-		const umap = new UMAP({
-			nComponents: 2,
-			nNeighbors: Math.min(
-				15,
-				Math.max(2, vectors.length - 1),
-			),
-			minDist: 0.1,
-			spread: 1.0,
-		});
-
-		let projected: number[][];
-		try {
-			projected = umap.fit(vectors);
-		} catch (error) {
-			graphError = `UMAP failed: ${(error as Error).message}`;
-			graphStatus = "";
-			return;
-		}
-
-		graphStatus = "Building graph...";
-		await new Promise((resolve) => setTimeout(resolve, 30));
-
+		// Normalize coords to canvas space
 		let minX = Infinity,
 			maxX = -Infinity,
 			minY = Infinity,
 			maxY = -Infinity;
-		for (const point of projected) {
-			if (point[0] < minX) minX = point[0];
-			if (point[0] > maxX) maxX = point[0];
-			if (point[1] < minY) minY = point[1];
-			if (point[1] > maxY) maxY = point[1];
+		for (const n of projNodes) {
+			if (n.x < minX) minX = n.x;
+			if (n.x > maxX) maxX = n.x;
+			if (n.y < minY) minY = n.y;
+			if (n.y > maxY) maxY = n.y;
 		}
-
 		const rangeX = maxX - minX || 1;
 		const rangeY = maxY - minY || 1;
 		const scale = 420;
 
-		nodes = embeddings.map((embedding, index) => ({
-			x:
-				((projected[index][0] - minX) / rangeX - 0.5) *
-				scale,
-			y:
-				((projected[index][1] - minY) / rangeY - 0.5) *
-				scale,
-			radius: 2.3 + (embedding.importance ?? 0.5) * 2.8,
-			color: sourceColorRgba(embedding.who, 0.85),
-			data: embedding,
+		nodes = projNodes.map((node, index) => ({
+			x: ((node.x - minX) / rangeX - 0.5) * scale,
+			y: ((node.y - minY) / rangeY - 0.5) * scale,
+			radius: 2.3 + (node.importance ?? 0.5) * 2.8,
+			color: sourceColorRgba(node.who, 0.85),
+			data: embeddings[index],
 		}));
 
-		edges = buildKnnEdges(projected, GRAPH_K).map(
-			([source, target]) => ({ source, target }),
-		);
+		edges = (projection.edges ?? []).map(([source, target]) => ({
+			source,
+			target,
+		}));
 
 		graphStatus = "";
 		await tick();
@@ -288,19 +154,19 @@ async function initGraph(): Promise<void> {
 		canvas2d?.startRendering();
 	} catch (error) {
 		graphError =
-			(error as Error).message || "Failed to load embeddings";
+			(error as Error).message || "Failed to load projection";
 		graphStatus = "";
 	}
 }
 
 // -----------------------------------------------------------------------
-// Relation computation
+// Relation computation (server-side via getSimilarMemories)
 // -----------------------------------------------------------------------
 
-function computeRelationsForSelection(
+async function computeRelationsForSelection(
 	selected: EmbeddingPoint | null,
-): void {
-	if (!selected || !hasEmbeddingVector(selected)) {
+): Promise<void> {
+	if (!selected) {
 		similarNeighbors = [];
 		dissimilarNeighbors = [];
 		activeNeighbors = [];
@@ -308,70 +174,16 @@ function computeRelationsForSelection(
 		return;
 	}
 
-	const cached = relationCache.get(selected.id);
-	if (cached) {
-		similarNeighbors = cached.similar;
-		dissimilarNeighbors = cached.dissimilar;
-		activeNeighbors =
-			relationMode === "similar"
-				? cached.similar
-				: cached.dissimilar;
-		relationLookup = new Map(
-			activeNeighbors.map((item) => [item.id, item.kind]),
-		);
-		return;
-	}
-
-	const selectedNorm = embeddingNorm(selected, embeddingNormById);
-	const similarScores: RelationScore[] = [];
-	const dissimilarScores: RelationScore[] = [];
-
-	for (const candidate of embeddings) {
-		if (
-			candidate.id === selected.id ||
-			!hasEmbeddingVector(candidate)
-		)
-			continue;
-		const score = cosineSimilarity(
-			selected.vector,
-			candidate.vector,
-			selectedNorm,
-			embeddingNorm(candidate, embeddingNormById),
-		);
-		if (Number.isFinite(score)) {
-			const relation = { id: candidate.id, score };
-			insertTopScore(similarScores, relation);
-			insertBottomScore(dissimilarScores, relation);
-		}
-	}
-
-	if (similarScores.length === 0) {
-		similarNeighbors = [];
-		dissimilarNeighbors = [];
-		activeNeighbors = [];
-		relationLookup = new Map();
-		return;
-	}
-
-	similarNeighbors = similarScores.map((item) => ({
-		...item,
+	const results = await getSimilarMemories(selected.id, 10);
+	similarNeighbors = results.map((m) => ({
+		id: m.id,
+		score: m.score ?? 0,
 		kind: "similar" as const,
 	}));
-	dissimilarNeighbors = dissimilarScores.map((item) => ({
-		...item,
-		kind: "dissimilar" as const,
-	}));
-	relationCache.set(selected.id, {
-		similar: similarNeighbors,
-		dissimilar: dissimilarNeighbors,
-	});
-
-	activeNeighbors =
-		relationMode === "similar"
-			? similarNeighbors
-			: dissimilarNeighbors;
+	dissimilarNeighbors = [];
+	activeNeighbors = similarNeighbors;
 	relationLookup = new Map(
-		activeNeighbors.map((item) => [item.id, item.kind]),
+		similarNeighbors.map((item) => [item.id, item.kind]),
 	);
 }
 
@@ -418,15 +230,13 @@ async function reloadEmbeddingsGraph(): Promise<void> {
 	graphInitialized = false;
 	graphStatus = "";
 	graphError = "";
-	projected3dCache = null;
+	projected3dCoords = [];
 	graphSelected = null;
 	graphHovered = null;
 	globalSimilar = [];
 	loadingGlobalSimilar = false;
 	embeddingById = new Map();
-	embeddingNormById = new Map();
 	relationLookup = new Map();
-	relationCache = new Map();
 	similarNeighbors = [];
 	dissimilarNeighbors = [];
 	activeNeighbors = [];
@@ -446,22 +256,6 @@ async function reloadEmbeddingsGraph(): Promise<void> {
 	initGraph();
 }
 
-function applyEmbeddingLimit(): void {
-	const parsed = Number.parseInt(embeddingLimitInput, 10);
-	const next = clampEmbeddingLimit(
-		Number.isFinite(parsed) ? parsed : embeddingLimit,
-	);
-	embeddingLimit = next;
-	embeddingLimitInput = String(next);
-	if (browser) {
-		localStorage.setItem(
-			EMBEDDING_LIMIT_STORAGE_KEY,
-			String(next),
-		);
-	}
-	reloadEmbeddingsGraph();
-}
-
 async function switchGraphMode(mode: "2d" | "3d"): Promise<void> {
 	if (graphMode === mode) return;
 	graphMode = mode;
@@ -470,36 +264,26 @@ async function switchGraphMode(mode: "2d" | "3d"): Promise<void> {
 		canvas2d?.stopRendering();
 		if (!graphInitialized || embeddings.length === 0) return;
 
-		if (!projected3dCache) {
-			graphStatus = "Computing 3D layout...";
-			await new Promise((resolve) => setTimeout(resolve, 30));
+		graphStatus = "Loading 3D projection...";
+		const loadId = ++graphLoadId;
+		let projection = await getProjection(3);
 
-			const vectors = embeddings
-				.map((entry) => entry.vector)
-				.filter(
-					(vector): vector is number[] =>
-						Array.isArray(vector),
-				);
-			const umap3d = new UMAP({
-				nComponents: 3,
-				nNeighbors: Math.min(
-					15,
-					Math.max(2, vectors.length - 1),
-				),
-				minDist: 0.1,
-				spread: 1.0,
-			});
-
-			try {
-				projected3dCache = umap3d.fit(vectors);
-			} catch (error) {
-				graphError = `3D UMAP failed: ${(error as Error).message}`;
-				graphStatus = "";
-				graphMode = "2d";
-				canvas2d?.resumeRendering();
-				return;
-			}
+		while (projection.status === "computing") {
+			if (loadId !== graphLoadId) return;
+			await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+			projection = await getProjection(3);
 		}
+
+		if (loadId !== graphLoadId) return;
+
+		const projNodes = projection.nodes ?? [];
+		const nodeMap = new Map(projNodes.map((n) => [n.id, n]));
+
+		// Build 3D coords in same order as `embeddings` for Canvas3D sync
+		projected3dCoords = embeddings.map((emb) => {
+			const n = nodeMap.get(emb.id);
+			return n ? [n.x, n.y, n.z ?? 0] : [0, 0, 0];
+		});
 
 		graphStatus = "";
 		await tick();
@@ -643,7 +427,7 @@ $effect(() => {
 			<EmbeddingCanvas3D
 				bind:this={canvas3d}
 				{embeddings}
-				projected3d={projected3dCache ?? []}
+				projected3d={projected3dCoords}
 				{graphSelected}
 				{embeddingFilterIds}
 				{relationLookup}

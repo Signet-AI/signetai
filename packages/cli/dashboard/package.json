@@ -28,7 +28,6 @@
 		"marked": "^17.0.3",
 		"tailwind-merge": "^3.5.0",
 		"tailwind-variants": "^3.2.2",
-		"umap-js": "^1.4.0",
 		"yaml": "^2.8.2"
 	},
 	"devDependencies": {

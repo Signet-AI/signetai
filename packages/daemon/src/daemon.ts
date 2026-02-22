@@ -110,6 +110,11 @@ import {
 	type TokenRole,
 	type TokenScope,
 } from "./auth";
+import {
+	getCachedProjection,
+	computeProjection,
+	cacheProjection,
+} from "./umap-projection";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -128,6 +133,9 @@ const HOST = process.env.SIGNET_HOST || "localhost";
 const providerTracker = createProviderTracker();
 const analyticsCollector = createAnalyticsCollector();
 const repairLimiter = createRateLimiter();
+
+// Prevents concurrent UMAP computations for the same dimension count
+const projectionInFlight = new Map<number, Promise<void>>();
 
 // Auth state — initialized lazily in main(), but middleware reads from here
 let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
@@ -3333,6 +3341,73 @@ app.get("/api/embeddings/status", async (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
 	const status = await checkEmbeddingProvider(config.embedding);
 	return c.json(status);
+});
+
+app.get("/api/embeddings/projection", async (c) => {
+	const dimParam = c.req.query("dimensions");
+	const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
+
+	const { cached, total } = getDbAccessor().withReadDb((db) => {
+		const cachedResult = getCachedProjection(db, nComponents);
+		const countRow = db
+			.prepare(
+				"SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'",
+			)
+			.get();
+		const count =
+			countRow !== undefined && typeof countRow.count === "number"
+				? countRow.count
+				: 0;
+		return { cached: cachedResult, total: count };
+	});
+
+	// Return cached result if embedding count hasn't changed
+	if (cached !== null && cached.embeddingCount === total) {
+		return c.json({
+			status: "ready",
+			dimensions: nComponents,
+			count: total,
+			total,
+			nodes: cached.result.nodes,
+			edges: cached.result.edges,
+			cachedAt: cached.cachedAt,
+		});
+	}
+
+	// Kick off background computation if not already running
+	if (!projectionInFlight.has(nComponents)) {
+		const computation = (async () => {
+			try {
+				const result = getDbAccessor().withReadDb((db) =>
+					computeProjection(db, nComponents),
+				);
+				const count = getDbAccessor().withReadDb((db) => {
+					const row = db
+						.prepare(
+							"SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'",
+						)
+						.get();
+					return row !== undefined && typeof row.count === "number"
+						? row.count
+						: 0;
+				});
+				getDbAccessor().withWriteTx((db) =>
+					cacheProjection(db, nComponents, result, count),
+				);
+			} catch (err) {
+				logger.error(
+					"projection",
+					"UMAP computation failed",
+					err instanceof Error ? err : new Error(String(err)),
+				);
+			} finally {
+				projectionInFlight.delete(nComponents);
+			}
+		})();
+		projectionInFlight.set(nComponents, computation);
+	}
+
+	return c.json({ status: "computing", dimensions: nComponents }, 202);
 });
 
 // ============================================================================
