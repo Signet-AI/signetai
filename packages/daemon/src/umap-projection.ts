@@ -47,7 +47,7 @@ const KNN_EXACT_THRESHOLD = 450;
 // Vector helpers
 // ---------------------------------------------------------------------------
 
-function blobToVector(buf: Buffer, dimensions: number | null): number[] {
+function blobToVector(buf: Uint8Array, dimensions: number | null): number[] {
 	const raw = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 	const f32 = new Float32Array(raw);
 	const size =
@@ -170,8 +170,12 @@ interface EmbeddingRow {
 	type: string | null;
 	tags: string | null;
 	created_at: string;
-	vector: Buffer;
+	vector: Uint8Array;
 	dimensions: number | null;
+}
+
+function isBlob(v: unknown): v is Uint8Array {
+	return v instanceof Uint8Array || Buffer.isBuffer(v);
 }
 
 function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
@@ -180,7 +184,7 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 		typeof id !== "string" ||
 		typeof content !== "string" ||
 		typeof created_at !== "string" ||
-		!Buffer.isBuffer(vector)
+		!isBlob(vector)
 	) {
 		return null;
 	}
