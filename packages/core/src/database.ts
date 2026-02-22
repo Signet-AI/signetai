@@ -5,11 +5,16 @@
 
 import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { homedir } from "os";
 import { arch, platform } from "process";
 import { runMigrations } from "./migrations/index";
 import type { Memory, Conversation, Embedding } from "./types";
 import type { MemoryHistory, MemoryJob } from "./types";
+
+// Compute __dirname at runtime so bun's bundler doesn't bake in a static path
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Platform-specific extension suffix
 function getExtensionSuffix(): string {
