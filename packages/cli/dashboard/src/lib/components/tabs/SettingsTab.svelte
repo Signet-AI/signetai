@@ -303,11 +303,6 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 								<input type="text" class="inp" value={cStr(["paths", "database"])} oninput={cOnStr(["paths", "database"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Vectors" description="Vector store file for embedding data.">
-							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["paths", "vectors"])} oninput={cOnStr(["paths", "vectors"])} />
-							{/snippet}
-						</FormField>
 						<FormField label="MEMORY.md" description="Output path for the auto-generated working memory summary.">
 							{#snippet children()}
 								<input type="text" class="inp" value={cStr(["paths", "current_md"])} oninput={cOnStr(["paths", "current_md"])} />
