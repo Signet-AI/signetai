@@ -397,8 +397,15 @@ export interface Skill {
 
 export interface SkillSearchResult {
 	name: string;
+	fullName: string;
+	installs: string;
+	installsRaw?: number;
 	description: string;
 	installed: boolean;
+}
+
+export interface SkillDetail extends Skill {
+	content: string;
 }
 
 export async function getSkills(): Promise<Skill[]> {
@@ -412,10 +419,14 @@ export async function getSkills(): Promise<Skill[]> {
 	}
 }
 
-export async function getSkill(name: string): Promise<Skill | null> {
+export async function getSkill(
+	name: string,
+	source?: string,
+): Promise<Skill | null> {
 	try {
+		const params = source ? `?source=${encodeURIComponent(source)}` : "";
 		const response = await fetch(
-			`${API_BASE}/api/skills/${encodeURIComponent(name)}`,
+			`${API_BASE}/api/skills/${encodeURIComponent(name)}${params}`,
 		);
 		if (!response.ok) return null;
 		return await response.json();
@@ -439,14 +450,28 @@ export async function searchSkills(
 	}
 }
 
+export async function browseSkills(): Promise<{
+	results: SkillSearchResult[];
+	total: number;
+}> {
+	try {
+		const response = await fetch(`${API_BASE}/api/skills/browse`);
+		if (!response.ok) throw new Error("Browse failed");
+		return await response.json();
+	} catch {
+		return { results: [], total: 0 };
+	}
+}
+
 export async function installSkill(
 	name: string,
+	source?: string,
 ): Promise<{ success: boolean; error?: string }> {
 	try {
 		const response = await fetch(`${API_BASE}/api/skills/install`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name }),
+			body: JSON.stringify({ name, source }),
 		});
 		return await response.json();
 	} catch (e) {

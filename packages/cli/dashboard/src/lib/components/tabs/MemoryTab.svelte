@@ -71,143 +71,206 @@ function formatDate(dateStr: string): string {
 		return dateStr;
 	}
 }
+
+const pillBase = "text-[10px] font-[family-name:var(--font-mono)] uppercase tracking-[0.08em] px-2 py-0.5 border cursor-pointer transition-colors duration-150";
+const pillActive = `${pillBase} text-[var(--sig-accent)] border-[var(--sig-accent)] bg-[rgba(138,138,150,0.1)]`;
+const pillInactive = `${pillBase} text-[var(--sig-text-muted)] border-[var(--sig-border-strong)] bg-transparent hover:text-[var(--sig-text)]`;
+
+const inputClass = "text-[11px] font-[family-name:var(--font-mono)] text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)] border border-[var(--sig-border-strong)] rounded-none px-2 py-1 outline-none placeholder:text-[var(--sig-text-muted)]";
 </script>
 
-<section class="memory-library">
-	<div class="memory-library-toolbar">
-		<label class="memory-search-shell">
-			<span class="memory-search-glyph">◇</span>
-			<input
-				type="text"
-				class="memory-library-search"
-				bind:value={mem.query}
-				oninput={queueMemorySearch}
-				onkeydown={(e) => e.key === 'Enter' && doSearch()}
-				placeholder="Search across embeddings..."
-			/>
-		</label>
-
+<section class="flex flex-col flex-1 min-h-0 gap-2.5 p-3 bg-[var(--sig-bg)]">
+	<!-- Search bar -->
+	<label class="flex items-center gap-2 px-3 py-1.5
+		border border-[var(--sig-border-strong)]
+		bg-[var(--sig-surface-raised)]">
+		<span class="text-[var(--sig-accent)] text-[11px]">&#9671;</span>
+		<input
+			type="text"
+			class="flex-1 text-[12px] font-[family-name:var(--font-mono)]
+				text-[var(--sig-text-bright)] bg-transparent
+				border-none outline-none
+				placeholder:text-[var(--sig-text-muted)]"
+			bind:value={mem.query}
+			oninput={queueMemorySearch}
+			onkeydown={(e) => e.key === 'Enter' && doSearch()}
+			placeholder="Search across embeddings..."
+		/>
 		{#if mem.searched || hasActiveFilters() || mem.similarSourceId}
-			<button class="btn-text memory-toolbar-clear" onclick={clearAll}>Clear</button>
+			<button
+				class="text-[10px] text-[var(--sig-accent)]
+					bg-transparent border-none cursor-pointer
+					hover:underline whitespace-nowrap"
+				onclick={clearAll}
+			>clear</button>
 		{/if}
-	</div>
+	</label>
 
-	<div class="memory-library-filters">
-		<select class="memory-filter-select" bind:value={mem.filterWho}>
+	<!-- Filter row -->
+	<div class="flex flex-wrap items-center gap-2">
+		<select
+			class="{inputClass} min-w-[120px] max-w-[180px]"
+			bind:value={mem.filterWho}
+		>
 			<option value="">Any source</option>
 			{#each mem.whoOptions as w}
 				<option>{w}</option>
 			{/each}
 		</select>
+
 		<input
-			class="memory-filter-input"
-			placeholder="Tags (comma separated)"
+			class="{inputClass} min-w-[120px] flex-1 max-w-[200px]"
+			placeholder="Tags"
 			bind:value={mem.filterTags}
 		/>
+
 		<input
 			type="number"
-			class="memory-filter-number"
-			min="0"
-			max="1"
-			step="0.1"
+			class="{inputClass} w-[70px]"
+			min="0" max="1" step="0.1"
 			bind:value={mem.filterImportanceMin}
 			placeholder="imp"
 		/>
-		<input type="date" class="memory-filter-date" bind:value={mem.filterSince} />
-		<button
-			class="memory-filter-pill"
-			class:memory-filter-pill-active={mem.filterPinned}
-			onclick={() => mem.filterPinned = !mem.filterPinned}
-		>
-			pinned only
-		</button>
-	</div>
 
-	<div class="memory-library-types">
+		<input
+			type="date"
+			class="{inputClass} w-[130px]"
+			bind:value={mem.filterSince}
+		/>
+
+		<button
+			class={mem.filterPinned ? pillActive : pillInactive}
+			onclick={() => mem.filterPinned = !mem.filterPinned}
+		>pinned</button>
+
+		<!-- Type filters -->
 		{#each ['fact', 'decision', 'preference', 'issue', 'learning'] as t}
 			<button
-				class="memory-type-chip"
-				class:memory-type-chip-active={mem.filterType === t}
+				class={mem.filterType === t ? pillActive : pillInactive}
 				onclick={() => mem.filterType = mem.filterType === t ? '' : t}
-			>
-				{t}
-			</button>
+			>{t}</button>
 		{/each}
 	</div>
 
+	<!-- Similarity mode banner -->
 	{#if mem.similarSourceId && mem.similarSource}
-		<div class="memory-similar-banner">
-			<span>
+		<div class="flex items-center justify-between gap-3
+			px-3 py-1.5 border border-dashed
+			border-[var(--sig-border-strong)]
+			text-[11px] font-[family-name:var(--font-mono)]
+			text-[var(--sig-text)] bg-[var(--sig-surface)]">
+			<span class="truncate">
 				Similar to: {(mem.similarSource.content ?? '').slice(0, 100)}
 				{(mem.similarSource.content ?? '').length > 100 ? '...' : ''}
 			</span>
 			<button
-				class="btn-text"
+				class="text-[11px] text-[var(--sig-accent)]
+					bg-transparent border-none cursor-pointer
+					hover:underline shrink-0"
 				onclick={() => {
 					mem.similarSourceId = null;
 					mem.similarSource = null;
 					mem.similarResults = [];
 				}}
-			>
-				Back to list
-			</button>
+			>Back</button>
 		</div>
 	{/if}
 
-	<div class="memory-doc-grid">
+	<!-- Memory cards grid -->
+	<div class="flex-1 min-h-0 overflow-y-auto
+		grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))]
+		auto-rows-min gap-2.5 content-start">
 		{#if mem.loadingSimilar}
-			<div class="empty memory-library-empty">Finding similar memories...</div>
+			<div class="col-span-full py-8 text-center text-[12px]
+				text-[var(--sig-text-muted)]
+				border border-dashed border-[var(--sig-border-strong)]">
+				Finding similar memories...
+			</div>
 		{:else}
 			{#each display as memory}
 				{@const tags = parseMemoryTags(memory.tags)}
 				{@const scoreLabel = memoryScoreLabel(memory)}
 
-				<article class="memory-doc">
-					<header class="memory-doc-head">
-						<div class="memory-doc-stamp">
-							<span class="memory-doc-source">{memory.who || 'unknown'}</span>
+				<article class="doc-card relative flex flex-col
+					gap-1.5 p-3 border border-[var(--sig-border-strong)]
+					border-t-2 border-t-[var(--sig-text-muted)]
+					bg-[var(--sig-surface)] overflow-hidden
+					transition-colors duration-150
+					hover:border-[var(--sig-text-muted)]">
+
+					<header class="flex justify-between items-start gap-1.5">
+						<div class="flex items-center flex-wrap gap-1">
+							<span class="tag-badge border-[var(--sig-accent)]
+								text-[var(--sig-accent)]">
+								{memory.who || 'unknown'}
+							</span>
 							{#if memory.type}
-								<span class="memory-doc-type">{memory.type}</span>
+								<span class="tag-badge border-[var(--sig-border-strong)]
+									text-[var(--sig-text)]">
+									{memory.type}
+								</span>
 							{/if}
 							{#if memory.pinned}
-								<span class="memory-doc-pin">pinned</span>
+								<span class="tag-badge border-[var(--sig-border-strong)]
+									text-[var(--sig-text-bright)]
+									bg-[rgba(255,255,255,0.06)]">
+									pinned
+								</span>
 							{/if}
 						</div>
-						<span class="memory-doc-date">{formatDate(memory.created_at)}</span>
+						<span class="font-[family-name:var(--font-mono)]
+							text-[9px] text-[var(--sig-text-muted)]
+							whitespace-nowrap shrink-0">
+							{formatDate(memory.created_at)}
+						</span>
 					</header>
 
-					<p class="memory-doc-content">{memory.content}</p>
+					<p class="m-0 text-[var(--sig-text-bright)]
+						leading-[1.5] text-[11px] whitespace-pre-wrap
+						break-words overflow-hidden line-clamp-4">
+						{memory.content}
+					</p>
 
 					{#if tags.length > 0}
-						<div class="memory-doc-tags">
-							{#each tags.slice(0, 6) as tag}
-								<span class="memory-doc-tag">#{tag}</span>
+						<div class="flex flex-wrap gap-1">
+							{#each tags.slice(0, 5) as tag}
+								<span class="tag-badge border-[var(--sig-border-strong)]
+									text-[var(--sig-text)]">
+									#{tag}
+								</span>
 							{/each}
 						</div>
 					{/if}
 
-					<footer class="memory-doc-foot">
-						<span class="memory-doc-importance">
-							importance {Math.round((memory.importance ?? 0) * 100)}%
+					<footer class="flex items-center gap-1.5 mt-auto pt-1">
+						<span class="tag-badge border-[var(--sig-border-strong)]
+							text-[var(--sig-text)]">
+							imp {Math.round((memory.importance ?? 0) * 100)}%
 						</span>
 
 						{#if scoreLabel}
-							<span class="memory-doc-match">{scoreLabel}</span>
+							<span class="tag-badge border-[var(--sig-border-strong)]
+								text-[var(--sig-accent)]">
+								{scoreLabel}
+							</span>
 						{/if}
 
 						{#if memory.id}
 							<button
-								class="btn-similar btn-similar-visible"
+								class="ml-auto tag-badge border-[var(--sig-border-strong)]
+									text-[var(--sig-text-muted)] cursor-pointer
+									hover:text-[var(--sig-accent)]
+									transition-colors duration-100"
 								onclick={() => findSimilar(memory.id, memory)}
 								title="Find similar"
-							>
-								similar
-							</button>
+							>similar</button>
 						{/if}
 					</footer>
 				</article>
 			{:else}
-				<div class="empty memory-library-empty">
+				<div class="col-span-full py-8 text-center text-[12px]
+					text-[var(--sig-text-muted)]
+					border border-dashed border-[var(--sig-border-strong)]">
 					{mem.similarSourceId
 						? 'No similar memories found.'
 						: mem.searched || hasActiveFilters()
@@ -218,3 +281,43 @@ function formatDate(dateStr: string): string {
 		{/if}
 	</div>
 </section>
+
+<style>
+	.tag-badge {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		padding: 1px 5px;
+		border-width: 1px;
+		border-style: solid;
+		background: transparent;
+	}
+
+	.doc-card::before,
+	.doc-card::after {
+		content: '';
+		position: absolute;
+		width: 5px;
+		height: 5px;
+		border-color: var(--sig-border-strong);
+		border-style: solid;
+		pointer-events: none;
+		transition: border-color 150ms;
+	}
+
+	.doc-card::before {
+		top: -1px;
+		left: -1px;
+		border-width: 1px 0 0 1px;
+	}
+
+	.doc-card::after {
+		bottom: -1px;
+		right: -1px;
+		border-width: 0 1px 1px 0;
+	}
+
+	.doc-card:hover::before,
+	.doc-card:hover::after {
+		border-color: var(--sig-text-muted);
+	}
+</style>

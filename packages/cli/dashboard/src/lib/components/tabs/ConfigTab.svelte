@@ -1,5 +1,7 @@
 <script lang="ts">
 import { saveConfigFile, type ConfigFile } from "$lib/api";
+import { toast } from "$lib/stores/toast.svelte";
+import MarkdownViewer from "$lib/components/config/MarkdownViewer.svelte";
 
 interface Props {
 	configFiles: ConfigFile[];
@@ -9,64 +11,117 @@ interface Props {
 
 let { configFiles, selectedFile, onselectfile }: Props = $props();
 
-let editorContent = $state("");
-let saving = $state(false);
-let saved = $state(false);
+let mdFiles = $derived(
+	configFiles?.filter((f) => f.name.endsWith(".md")) ?? [],
+);
 
+// Auto-select first md file if current selection isn't an md file
 $effect(() => {
-	if (!selectedFile && configFiles?.length) {
-		onselectfile(configFiles[0].name);
+	if (mdFiles.length && !mdFiles.some((f) => f.name === selectedFile)) {
+		onselectfile(mdFiles[0].name);
 	}
 });
 
-$effect(() => {
-	const file = configFiles?.find((f) => f.name === selectedFile);
-	editorContent = file?.content ?? "";
-	saved = false;
-});
+let activeFile = $derived(mdFiles.find((f) => f.name === selectedFile));
 
-function ext(name: string): string {
-	return name.split(".").pop() ?? "";
-}
+let editorContent = $state("");
+let saving = $state(false);
+
+$effect(() => {
+	editorContent = activeFile?.content ?? "";
+});
 
 async function saveFile() {
 	saving = true;
-	saved = false;
 	try {
 		const success = await saveConfigFile(selectedFile, editorContent);
 		if (success) {
-			saved = true;
-			setTimeout(() => (saved = false), 2000);
+			toast(`${selectedFile} saved`, "success");
+		} else {
+			toast("Failed to save file", "error");
 		}
 	} finally {
 		saving = false;
 	}
 }
-
-function handleKeydown(e: KeyboardEvent) {
-	if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-		e.preventDefault();
-		saveFile();
-	}
-}
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<div class="config-tab">
+	<nav class="config-file-list">
+		{#each mdFiles as file (file.name)}
+			<button
+				class="config-file-item"
+				class:active={file.name === selectedFile}
+				onclick={() => onselectfile(file.name)}
+			>
+				{file.name}
+			</button>
+		{/each}
+	</nav>
 
-<div class="editor-chrome">
-	<div class="editor-breadcrumb">
-		<span class="editor-path">~/.agents/</span><span class="editor-filename">{selectedFile}</span>
-	</div>
-	<div class="editor-actions">
-		{#if saved}<span class="editor-saved">SAVED</span>{/if}
-		<button class="btn-editor-save" onclick={saveFile} disabled={saving}>
-			{saving ? 'SAVING…' : 'SAVE'}
-		</button>
-	</div>
+	{#if activeFile}
+		<MarkdownViewer
+			content={editorContent}
+			filename={selectedFile}
+			onchange={(v) => { editorContent = v; }}
+			onsave={saveFile}
+		/>
+	{:else}
+		<div class="config-empty">
+			<span>No markdown files found</span>
+		</div>
+	{/if}
 </div>
-<textarea
-	class="editor"
-	bind:value={editorContent}
-	spellcheck="false"
-	placeholder="Empty file..."
-></textarea>
+
+<style>
+	.config-tab {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-height: 0;
+	}
+
+	.config-file-list {
+		display: flex;
+		gap: 0;
+		padding: 0 var(--space-md);
+		border-bottom: 1px solid var(--sig-border);
+		flex-shrink: 0;
+		overflow-x: auto;
+	}
+
+	.config-file-item {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		letter-spacing: 0.04em;
+		color: var(--sig-text-muted);
+		background: none;
+		border: none;
+		border-bottom: 1px solid transparent;
+		padding: 8px 12px;
+		cursor: pointer;
+		white-space: nowrap;
+		transition:
+			color var(--dur) var(--ease),
+			border-color var(--dur) var(--ease);
+	}
+
+	.config-file-item:hover {
+		color: var(--sig-text);
+	}
+
+	.config-file-item.active {
+		color: var(--sig-text-bright);
+		border-bottom-color: var(--sig-text-bright);
+	}
+
+	.config-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		flex: 1;
+		font-family: var(--font-mono);
+		font-size: var(--font-size-sm);
+		color: var(--sig-text-muted);
+	}
+</style>

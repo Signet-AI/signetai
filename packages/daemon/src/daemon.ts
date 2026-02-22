@@ -3940,119 +3940,179 @@ app.get("/api/skills", (c) => {
 	}
 });
 
-// GET /api/skills/search?q=query - search skills.sh registry (MUST be before :name route)
+// --- skills.sh catalog cache for browse tabs ---
+type CatalogEntry = {
+	source: string;
+	skillId: string;
+	name: string;
+	installs: number;
+};
+let catalogCache: CatalogEntry[] = [];
+let catalogFetchedAt = 0;
+const CATALOG_TTL = 10 * 60 * 1000;
+
+function formatInstalls(n: number): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+	return String(n);
+}
+
+async function fetchCatalog(): Promise<CatalogEntry[]> {
+	const now = Date.now();
+	if (catalogCache.length > 0 && now - catalogFetchedAt < CATALOG_TTL) {
+		return catalogCache;
+	}
+	logger.info("skills", "Fetching skills.sh catalog");
+	try {
+		const res = await fetch("https://skills.sh", {
+			headers: { "User-Agent": "signet-daemon" },
+		});
+		const html = await res.text();
+		const entries: CatalogEntry[] = [];
+		const re =
+			/\{\\"source\\":\\"([^\\]+)\\",\\"skillId\\":\\"([^\\]+)\\",\\"name\\":\\"([^\\]+)\\",\\"installs\\":(\d+)\}/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(html)) !== null) {
+			entries.push({
+				source: m[1],
+				skillId: m[2],
+				name: m[3],
+				installs: Number(m[4]),
+			});
+		}
+		if (entries.length > 0) {
+			catalogCache = entries;
+			catalogFetchedAt = now;
+			logger.info("skills", `Cached ${entries.length} skills`);
+		}
+		return entries.length > 0 ? entries : catalogCache;
+	} catch (err) {
+		logger.error("skills", "Catalog fetch failed", err as Error);
+		return catalogCache;
+	}
+}
+
+// GET /api/skills/browse - browse all skills from skills.sh
+app.get("/api/skills/browse", async (c) => {
+	const catalog = await fetchCatalog();
+	const installed = listInstalledSkills().map((s) => s.name);
+	const results = catalog.map((s) => ({
+		name: s.name,
+		fullName: `${s.source}@${s.skillId}`,
+		installs: formatInstalls(s.installs),
+		installsRaw: s.installs,
+		description: "",
+		installed: installed.includes(s.name),
+	}));
+	return c.json({ results, total: results.length });
+});
+
+// GET /api/skills/search?q=query - proxy to skills.sh API
 app.get("/api/skills/search", async (c) => {
 	const query = c.req.query("q");
 	if (!query) {
-		return c.json({ results: [], error: "Query parameter q is required" }, 400);
+		return c.json(
+			{ results: [], error: "Query parameter q is required" },
+			400,
+		);
 	}
 
-	logger.info("skills", "Searching skills", { query });
-	const packageManager = resolvePrimaryPackageManager({
-		agentsDir: AGENTS_DIR,
-		env: process.env,
-	});
-	const skillsCommand = getSkillsRunnerCommand(packageManager.family, [
-		"search",
-		query,
-	]);
+	logger.info("skills", "Searching skills.sh", { query });
+	try {
+		const res = await fetch(
+			`https://skills.sh/api/search?q=${encodeURIComponent(query)}`,
+			{ headers: { "User-Agent": "signet-daemon" } },
+		);
+		if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
+		const data = (await res.json()) as {
+			skills: Array<{
+				id: string;
+				skillId: string;
+				name: string;
+				installs: number;
+				source: string;
+			}>;
+		};
 
-	logger.info("skills", "Using package manager", {
-		command: `${skillsCommand.command} ${skillsCommand.args.join(" ")}`,
-		family: packageManager.family,
-		source: packageManager.source,
-		reason: packageManager.reason,
-	});
+		const installed = listInstalledSkills().map((s) => s.name);
+		const results = (data.skills ?? []).map((s) => ({
+			name: s.name,
+			fullName: `${s.source}@${s.skillId}`,
+			installs: formatInstalls(s.installs),
+			description: "",
+			installed: installed.includes(s.name),
+		}));
 
-	// Strip ANSI escape codes
-	const stripAnsi = (str: string) => str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
-
-	return new Promise<Response>((resolve) => {
-		const proc = spawn(skillsCommand.command, skillsCommand.args, {
-			env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
-			timeout: 30000,
-		});
-
-		let stdout = "";
-		let stderr = "";
-		proc.stdout.on("data", (d: Buffer) => {
-			stdout += d.toString();
-		});
-		proc.stderr.on("data", (d: Buffer) => {
-			stderr += d.toString();
-		});
-
-		proc.on("close", (code) => {
-			if (code === 0) {
-				// Parse text output - format:
-				// owner/repo@skill  N installs
-				// └ https://skills.sh/...
-				const clean = stripAnsi(stdout);
-				const lines = clean.split("\n");
-				const installed = listInstalledSkills().map((s) => s.name);
-				const results: Array<{
-					name: string;
-					description: string;
-					installed: boolean;
-				}> = [];
-
-				for (const line of lines) {
-					// Match: "owner/repo@skill  N installs" or "owner/repo@skill N installs"
-					const match = line.match(
-						/^([\w\-./]+@[\w\-]+)\s+(\d+(?:\.\d+)?[KMB]?\s*installs?)/i,
-					);
-					if (match) {
-						const fullName = match[1]; // e.g. "browser-use/browser-use@browser-use"
-						const installs = match[2]; // e.g. "32.6K installs"
-						// Extract skill name (after @)
-						const parts = fullName.split("@");
-						const skillName = parts[parts.length - 1];
-						// Use the full package as description since we don't have a real description
-						results.push({
-							name: skillName,
-							description: `${fullName} (${installs})`,
-							installed: installed.includes(skillName),
-						});
-					}
-				}
-				resolve(c.json({ results }));
-			} else {
-				logger.error("skills", "Search failed", undefined, { stderr });
-				resolve(
-					c.json(
-						{ results: [], error: stripAnsi(stderr) || "Search failed" },
-						500,
-					),
-				);
-			}
-		});
-
-		proc.on("error", (err: Error) => {
-			resolve(c.json({ results: [], error: err.message }, 500));
-		});
-	});
+		return c.json({ results });
+	} catch (err) {
+		logger.error("skills", "skills.sh search failed", err as Error);
+		return c.json({ results: [], error: "Search failed" });
+	}
 });
 
 // GET /api/skills/:name - get skill details and SKILL.md content
-app.get("/api/skills/:name", (c) => {
+app.get("/api/skills/:name", async (c) => {
 	const name = c.req.param("name");
 	if (!name || name.includes("/") || name.includes("..")) {
 		return c.json({ error: "Invalid skill name" }, 400);
 	}
 
+	// Try local install first
 	const skillMdPath = join(SKILLS_DIR, name, "SKILL.md");
-	if (!existsSync(skillMdPath)) {
-		return c.json({ error: `Skill '${name}' not found` }, 404);
+	if (existsSync(skillMdPath)) {
+		try {
+			const content = readFileSync(skillMdPath, "utf-8");
+			const meta = parseSkillFrontmatter(content);
+			return c.json({
+				name,
+				...meta,
+				path: join(SKILLS_DIR, name),
+				content,
+			});
+		} catch (e) {
+			logger.error("skills", "Error reading skill", e as Error);
+			return c.json({ error: "Failed to read skill" }, 500);
+		}
 	}
 
-	try {
-		const content = readFileSync(skillMdPath, "utf-8");
-		const meta = parseSkillFrontmatter(content);
-		return c.json({ name, ...meta, path: join(SKILLS_DIR, name), content });
-	} catch (e) {
-		logger.error("skills", "Error reading skill", e as Error);
-		return c.json({ error: "Failed to read skill" }, 500);
+	// Fallback: fetch SKILL.md from GitHub via repo tree search
+	const source = c.req.query("source");
+	const repo = source
+		? source.split("@")[0]
+		: catalogCache.find((s) => s.name === name)?.source;
+
+	if (repo) {
+		try {
+			// Search repo tree for the SKILL.md path
+			const treeRes = await fetch(
+				`https://api.github.com/repos/${repo}/git/trees/main?recursive=1`,
+				{ headers: { Accept: "application/vnd.github.v3+json" } },
+			);
+			if (treeRes.ok) {
+				const tree = (await treeRes.json()) as {
+					tree: { path: string }[];
+				};
+				const needle = `${name}/SKILL.md`;
+				const match = tree.tree.find((t) => t.path.endsWith(needle));
+				if (match) {
+					const rawUrl = `https://raw.githubusercontent.com/${repo}/main/${match.path}`;
+					const mdRes = await fetch(rawUrl);
+					if (mdRes.ok) {
+						const content = await mdRes.text();
+						const meta = parseSkillFrontmatter(content);
+						return c.json({ name, ...meta, content });
+					}
+				}
+			}
+		} catch (e) {
+			logger.warn("skills", "GitHub SKILL.md fetch failed", {
+				name,
+				error: (e as Error).message,
+			});
+		}
 	}
+
+	return c.json({ error: `Skill '${name}' not found` }, 404);
 });
 
 // POST /api/skills/install - install a skill
