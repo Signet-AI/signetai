@@ -92,6 +92,8 @@ import {
 	releaseStaleLeases,
 	checkFtsConsistency,
 	triggerRetentionSweep,
+	reembedMissingMemories,
+	getEmbeddingGapStats,
 	type RepairContext,
 } from "./repair-actions";
 import {
@@ -5441,6 +5443,39 @@ app.post("/api/repair/retention-sweep", (c) => {
 		affected: 0,
 		message: "Use the maintenance worker for automated sweeps; manual sweep via this endpoint is not yet wired",
 	}, 501);
+});
+
+app.get("/api/repair/embedding-gaps", (c) => {
+	const stats = getEmbeddingGapStats(getDbAccessor());
+	return c.json(stats);
+});
+
+app.post("/api/repair/re-embed", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	let batchSize = 50;
+	let dryRun = false;
+
+	try {
+		const body = await c.req.json();
+		if (typeof body.batchSize === "number") batchSize = body.batchSize;
+		if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
+	} catch {
+		// no body or invalid JSON — use defaults
+	}
+
+	const result = await reembedMissingMemories(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+		fetchEmbedding,
+		cfg.embedding,
+		batchSize,
+		dryRun,
+	);
+
+	return c.json(result, result.success ? 200 : 429);
 });
 
 // ============================================================================
