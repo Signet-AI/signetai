@@ -13,7 +13,6 @@ let { configFiles }: Props = $props();
 
 const KNOWN_HARNESSES = ["claude-code", "openclaw", "opencode"];
 
-// Paths are relative to the "pipeline" key
 const PIPELINE_BOOLS = [
 	"enabled", "shadowMode", "allowUpdateDelete", "graphEnabled",
 	"autonomousEnabled", "mutationsFrozen", "autonomousFrozen", "rerankerEnabled",
@@ -31,39 +30,37 @@ const PIPELINE_NUMS = [
 	{ key: "rerankerTimeoutMs", label: "Reranker timeout (ms)" },
 ] as const;
 
-let yamlFiles = $derived(
-	configFiles?.filter((f) => f.name.endsWith(".yaml") || f.name.endsWith(".yml")) ?? [],
-);
-
-let selectedYaml = $state("");
-
-$effect(() => {
-	if (yamlFiles.length && !yamlFiles.some((f) => f.name === selectedYaml)) {
-		const preferred = yamlFiles.find((f) => f.name === "agent.yaml");
-		selectedYaml = preferred ? preferred.name : (yamlFiles[0]?.name ?? "");
-	}
-});
-
-let activeFile = $derived(yamlFiles.find((f) => f.name === selectedYaml));
-
 type YamlValue = string | number | boolean | null | YamlObject | YamlValue[];
 type YamlObject = { [key: string]: YamlValue };
 
-let form = $state<YamlObject>({});
+// Parse both files into separate form states
+let agent = $state<YamlObject>({});
+let config = $state<YamlObject>({});
+
+let agentFile = $derived(
+	configFiles?.find((f) => f.name === "agent.yaml")
+);
+let configFile = $derived(
+	configFiles?.find((f) => f.name === "config.yaml")
+);
 
 $effect(() => {
-	if (activeFile?.content) {
+	if (agentFile?.content) {
 		try {
-			const parsed = parse(activeFile.content) as YamlObject;
-			form = JSON.parse(JSON.stringify(parsed ?? {})) as YamlObject;
-		} catch {
-			form = {};
-		}
-	} else {
-		form = {};
-	}
+			agent = JSON.parse(JSON.stringify(parse(agentFile.content) ?? {}));
+		} catch { agent = {}; }
+	} else { agent = {}; }
 });
 
+$effect(() => {
+	if (configFile?.content) {
+		try {
+			config = JSON.parse(JSON.stringify(parse(configFile.content) ?? {}));
+		} catch { config = {}; }
+	} else { config = {}; }
+});
+
+// Helpers scoped to a specific form object
 function get(obj: YamlObject, ...path: string[]): YamlValue {
 	let cur: YamlValue = obj;
 	for (const key of path) {
@@ -73,8 +70,8 @@ function get(obj: YamlObject, ...path: string[]): YamlValue {
 	return cur;
 }
 
-function set(path: string[], value: YamlValue): void {
-	let cur: YamlObject = form;
+function set(obj: YamlObject, path: string[], value: YamlValue): void {
+	let cur = obj;
 	for (let i = 0; i < path.length - 1; i++) {
 		const key = path[i];
 		if (cur[key] == null || typeof cur[key] !== "object" || Array.isArray(cur[key])) {
@@ -85,22 +82,28 @@ function set(path: string[], value: YamlValue): void {
 	cur[path[path.length - 1]] = value;
 }
 
-const str = (path: string[]) => String(get(form, ...path) ?? "");
-const num = (path: string[]) => { const v = get(form, ...path); return typeof v === "number" ? v : (v ? Number(v) : ""); };
-const bool = (path: string[]) => Boolean(get(form, ...path));
+// Accessors for agent.yaml
+const aStr = (path: string[]) => String(get(agent, ...path) ?? "");
+const aNum = (path: string[]) => { const v = get(agent, ...path); return typeof v === "number" ? v : (v ? Number(v) : ""); };
+const aBool = (path: string[]) => Boolean(get(agent, ...path));
+const aOnStr = (path: string[]) => (e: Event) => set(agent, path, (e.target as HTMLInputElement).value);
+const aOnNum = (path: string[]) => (e: Event) => { const v = (e.target as HTMLInputElement).value; set(agent, path, v === "" ? null : Number(v)); };
+const aOnBool = (path: string[]) => (e: Event) => set(agent, path, (e.target as HTMLInputElement).checked);
 
-const onStr = (path: string[]) => (e: Event) => set(path, (e.target as HTMLInputElement).value);
-const onNum = (path: string[]) => (e: Event) => { const v = (e.target as HTMLInputElement).value; set(path, v === "" ? null : Number(v)); };
-const onBool = (path: string[]) => (e: Event) => set(path, (e.target as HTMLInputElement).checked);
+// Accessors for config.yaml
+const cStr = (path: string[]) => String(get(config, ...path) ?? "");
+const cNum = (path: string[]) => { const v = get(config, ...path); return typeof v === "number" ? v : (v ? Number(v) : ""); };
+const cOnStr = (path: string[]) => (e: Event) => set(config, path, (e.target as HTMLInputElement).value);
+const cOnNum = (path: string[]) => (e: Event) => { const v = (e.target as HTMLInputElement).value; set(config, path, v === "" ? null : Number(v)); };
 
 function harnessArray(): string[] {
-	const v = get(form, "harnesses");
+	const v = get(agent, "harnesses");
 	return Array.isArray(v) ? v.map(String) : [];
 }
 
 function toggleHarness(name: string, checked: boolean): void {
 	const arr = harnessArray();
-	set(["harnesses"], checked ? [...arr, name] : arr.filter((h) => h !== name));
+	set(agent, ["harnesses"], checked ? [...arr, name] : arr.filter((h) => h !== name));
 }
 
 let customHarnessInput = $state("");
@@ -109,7 +112,7 @@ function addCustomHarness(): void {
 	const name = customHarnessInput.trim();
 	if (!name) return;
 	const arr = harnessArray();
-	if (!arr.includes(name)) set(["harnesses"], [...arr, name]);
+	if (!arr.includes(name)) set(agent, ["harnesses"], [...arr, name]);
 	customHarnessInput = "";
 }
 
@@ -118,288 +121,312 @@ function formatDate(raw: YamlValue): string {
 	try { return new Date(String(raw)).toLocaleString(); } catch { return String(raw); }
 }
 
-let showRegistry = $derived(str(["trust", "verification"]) === "registry");
+let showRegistry = $derived(aStr(["trust", "verification"]) === "registry");
 let saving = $state(false);
 
 async function saveSettings(): Promise<void> {
 	saving = true;
+	const results: boolean[] = [];
 	try {
-		const ok = await saveConfigFile(selectedYaml, stringify(form));
-		toast(ok ? `${selectedYaml} saved` : "Failed to save settings", ok ? "success" : "error");
+		if (agentFile) {
+			results.push(await saveConfigFile("agent.yaml", stringify(agent)));
+		}
+		if (configFile) {
+			results.push(await saveConfigFile("config.yaml", stringify(config)));
+		}
+		const allOk = results.length > 0 && results.every(Boolean);
+		toast(allOk ? "Settings saved" : "Failed to save settings", allOk ? "success" : "error");
 	} catch (err) {
 		toast(`Error: ${String(err)}`, "error");
 	} finally {
 		saving = false;
 	}
 }
+
+let hasFiles = $derived(!!agentFile || !!configFile);
 </script>
 
 <div class="settings-tab">
-	{#if yamlFiles.length === 0}
+	{#if !hasFiles}
 		<div class="empty-state">No YAML config files found</div>
 	{:else}
-		{#if yamlFiles.length > 1}
-			<nav class="file-nav">
-				{#each yamlFiles as file (file.name)}
-					<button
-						class="file-btn"
-						class:active={file.name === selectedYaml}
-						onclick={() => { selectedYaml = file.name; }}
-					>
-						{file.name}
-					</button>
-				{/each}
-			</nav>
-		{/if}
-
 		<div class="form-body">
 
-			<FormSection title="Agent">
-				{#snippet children()}
-					<FormField label="Name">
-						{#snippet children()}
-							<input type="text" class="inp" value={str(["agent", "name"])} oninput={onStr(["agent", "name"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Description">
-						{#snippet children()}
-							<textarea class="inp ta" rows={3} value={str(["agent", "description"])} oninput={onStr(["agent", "description"])}></textarea>
-						{/snippet}
-					</FormField>
-					<FormField label="Created" description="Read-only">
-						{#snippet children()}
-							<input type="text" class="inp ro" readonly value={formatDate(get(form, "agent", "created"))} />
-						{/snippet}
-					</FormField>
-					<FormField label="Updated" description="Read-only">
-						{#snippet children()}
-							<input type="text" class="inp ro" readonly value={formatDate(get(form, "agent", "updated"))} />
-						{/snippet}
-					</FormField>
-				{/snippet}
-			</FormSection>
+			<!-- === AGENT (agent.yaml) === -->
+			{#if agentFile}
+				<FormSection title="Agent">
+					{#snippet children()}
+						<FormField label="Name">
+							{#snippet children()}
+								<input type="text" class="inp" value={aStr(["agent", "name"])} oninput={aOnStr(["agent", "name"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="Description">
+							{#snippet children()}
+								<textarea class="inp ta" rows={3} value={aStr(["agent", "description"])} oninput={aOnStr(["agent", "description"])}></textarea>
+							{/snippet}
+						</FormField>
+						<FormField label="Created" description="Read-only">
+							{#snippet children()}
+								<input type="text" class="inp ro" readonly value={formatDate(get(agent, "agent", "created"))} />
+							{/snippet}
+						</FormField>
+						<FormField label="Updated" description="Read-only">
+							{#snippet children()}
+								<input type="text" class="inp ro" readonly value={formatDate(get(agent, "agent", "updated"))} />
+							{/snippet}
+						</FormField>
+					{/snippet}
+				</FormSection>
 
-			<FormSection title="Harnesses" defaultOpen={false}>
-				{#snippet children()}
-					<FormField label="Active harnesses">
-						{#snippet children()}
-							<div class="checkbox-group">
-								{#each KNOWN_HARNESSES as h (h)}
-									<label class="cb-row">
-										<input type="checkbox" checked={harnessArray().includes(h)} onchange={(e) => toggleHarness(h, (e.target as HTMLInputElement).checked)} />
-										<span>{h}</span>
+				<FormSection title="Harnesses" defaultOpen={false}>
+					{#snippet children()}
+						<FormField label="Active harnesses">
+							{#snippet children()}
+								<div class="checkbox-group">
+									{#each KNOWN_HARNESSES as h (h)}
+										<label class="cb-row">
+											<input type="checkbox" checked={harnessArray().includes(h)} onchange={(e) => toggleHarness(h, (e.target as HTMLInputElement).checked)} />
+											<span>{h}</span>
+										</label>
+									{/each}
+									{#each harnessArray().filter((h) => !KNOWN_HARNESSES.includes(h)) as h (h)}
+										<label class="cb-row">
+											<input type="checkbox" checked={true} onchange={() => set(agent, ["harnesses"], harnessArray().filter((x) => x !== h))} />
+											<span>{h} <em class="custom-tag">custom</em></span>
+										</label>
+									{/each}
+								</div>
+							{/snippet}
+						</FormField>
+						<FormField label="Add custom harness">
+							{#snippet children()}
+								<div class="inline-add">
+									<input type="text" class="inp" placeholder="harness-name" bind:value={customHarnessInput} onkeydown={(e) => { if (e.key === "Enter") addCustomHarness(); }} />
+									<button class="btn-add" onclick={addCustomHarness}>Add</button>
+								</div>
+							{/snippet}
+						</FormField>
+					{/snippet}
+				</FormSection>
+			{/if}
+
+			<!-- === EMBEDDINGS (config.yaml) === -->
+			{#if configFile}
+				<FormSection title="Embeddings" defaultOpen={false}>
+					{#snippet children()}
+						<FormField label="Provider">
+							{#snippet children()}
+								<select class="inp sel" value={cStr(["embeddings", "provider"])} onchange={cOnStr(["embeddings", "provider"])}>
+									<option value="">— select —</option>
+									<option value="ollama">ollama</option>
+									<option value="openai">openai</option>
+								</select>
+							{/snippet}
+						</FormField>
+						<FormField label="Model" description="e.g. nomic-embed-text, text-embedding-3-small">
+							{#snippet children()}
+								<input type="text" class="inp" value={cStr(["embeddings", "model"])} oninput={cOnStr(["embeddings", "model"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="Dimensions" description="Must match model output">
+							{#snippet children()}
+								<input type="number" class="inp" value={cNum(["embeddings", "dimensions"])} oninput={cOnNum(["embeddings", "dimensions"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="Base URL">
+							{#snippet children()}
+								<input type="text" class="inp" value={cStr(["embeddings", "base_url"])} oninput={cOnStr(["embeddings", "base_url"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="API Key" description="Optional for Ollama, required for OpenAI">
+							{#snippet children()}
+								<input type="password" class="inp" value={cStr(["embeddings", "api_key"])} oninput={cOnStr(["embeddings", "api_key"])} />
+							{/snippet}
+						</FormField>
+					{/snippet}
+				</FormSection>
+
+				<!-- === SEARCH (config.yaml) === -->
+				<FormSection title="Search" defaultOpen={false}>
+					{#snippet children()}
+						<FormField label="Alpha" description="0 = keyword only, 1 = vector only">
+							{#snippet children()}
+								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "alpha"])} oninput={cOnNum(["search", "alpha"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="Top K" description="Candidates per source before blending">
+							{#snippet children()}
+								<input type="number" class="inp" value={cNum(["search", "top_k"])} oninput={cOnNum(["search", "top_k"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="Min Score" description="Minimum threshold for results">
+							{#snippet children()}
+								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "min_score"])} oninput={cOnNum(["search", "min_score"])} />
+							{/snippet}
+						</FormField>
+					{/snippet}
+				</FormSection>
+
+				<!-- === MEMORY (config.yaml) === -->
+				<FormSection title="Memory" defaultOpen={false}>
+					{#snippet children()}
+						<FormField label="Session budget" description="Character budget for session start context">
+							{#snippet children()}
+								<input type="number" class="inp" value={cNum(["memory", "session_budget"])} oninput={cOnNum(["memory", "session_budget"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="MEMORY.md budget" description="Character budget for MEMORY.md injection">
+							{#snippet children()}
+								<input type="number" class="inp" value={cNum(["memory", "current_md_budget"])} oninput={cOnNum(["memory", "current_md_budget"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="Decay rate" description="Importance decay per day (0–1)">
+							{#snippet children()}
+								<input type="number" class="inp" min="0" max="1" step="0.01" value={cNum(["memory", "decay_rate"])} oninput={cOnNum(["memory", "decay_rate"])} />
+							{/snippet}
+						</FormField>
+					{/snippet}
+				</FormSection>
+
+				<!-- === PATHS (config.yaml) === -->
+				<FormSection title="Paths" defaultOpen={false}>
+					{#snippet children()}
+						<FormField label="Database" description="Relative to ~/.agents/">
+							{#snippet children()}
+								<input type="text" class="inp" value={cStr(["paths", "database"])} oninput={cOnStr(["paths", "database"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="Vectors" description="Relative to ~/.agents/">
+							{#snippet children()}
+								<input type="text" class="inp" value={cStr(["paths", "vectors"])} oninput={cOnStr(["paths", "vectors"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="MEMORY.md" description="Relative to ~/.agents/">
+							{#snippet children()}
+								<input type="text" class="inp" value={cStr(["paths", "current_md"])} oninput={cOnStr(["paths", "current_md"])} />
+							{/snippet}
+						</FormField>
+					{/snippet}
+				</FormSection>
+			{/if}
+
+			<!-- === PIPELINE (agent.yaml: memory.pipelineV2) === -->
+			{#if agentFile}
+				<FormSection title="Pipeline" defaultOpen={false}>
+					{#snippet children()}
+						{#each PIPELINE_BOOLS as flag (flag)}
+							<FormField label={flag}>
+								{#snippet children()}
+									<label class="toggle">
+										<input type="checkbox" checked={aBool(["memory", "pipelineV2", flag])} onchange={aOnBool(["memory", "pipelineV2", flag])} />
+										<span class="toggle-track"><span class="toggle-thumb"></span></span>
 									</label>
-								{/each}
-								{#each harnessArray().filter((h) => !KNOWN_HARNESSES.includes(h)) as h (h)}
-									<label class="cb-row">
-										<input type="checkbox" checked={true} onchange={() => set(["harnesses"], harnessArray().filter((x) => x !== h))} />
-										<span>{h} <em class="custom-tag">custom</em></span>
-									</label>
-								{/each}
-							</div>
-						{/snippet}
-					</FormField>
-					<FormField label="Add custom harness">
-						{#snippet children()}
-							<div class="inline-add">
-								<input type="text" class="inp" placeholder="harness-name" bind:value={customHarnessInput} onkeydown={(e) => { if (e.key === "Enter") addCustomHarness(); }} />
-								<button class="btn-add" onclick={addCustomHarness}>Add</button>
-							</div>
-						{/snippet}
-					</FormField>
-				{/snippet}
-			</FormSection>
+								{/snippet}
+							</FormField>
+						{/each}
 
-			<FormSection title="Embedding" defaultOpen={false}>
-				{#snippet children()}
-					<FormField label="Provider">
-						{#snippet children()}
-							<select class="inp sel" value={str(["embedding", "provider"])} onchange={onStr(["embedding", "provider"])}>
-								<option value="">— select —</option>
-								<option value="ollama">ollama</option>
-								<option value="openai">openai</option>
-							</select>
-						{/snippet}
-					</FormField>
-					<FormField label="Model">
-						{#snippet children()}
-							<input type="text" class="inp" value={str(["embedding", "model"])} oninput={onStr(["embedding", "model"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Dimensions">
-						{#snippet children()}
-							<input type="number" class="inp" value={num(["embedding", "dimensions"])} oninput={onNum(["embedding", "dimensions"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Base URL">
-						{#snippet children()}
-							<input type="text" class="inp" value={str(["embedding", "base_url"])} oninput={onStr(["embedding", "base_url"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="API Key">
-						{#snippet children()}
-							<input type="password" class="inp" value={str(["embedding", "api_key"])} oninput={onStr(["embedding", "api_key"])} />
-						{/snippet}
-					</FormField>
-				{/snippet}
-			</FormSection>
-
-			<FormSection title="Search" defaultOpen={false}>
-				{#snippet children()}
-					<FormField label="Alpha" description="0 = keyword, 1 = vector">
-						{#snippet children()}
-							<input type="number" class="inp" min="0" max="1" step="0.1" value={num(["search", "alpha"])} oninput={onNum(["search", "alpha"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Top K">
-						{#snippet children()}
-							<input type="number" class="inp" value={num(["search", "top_k"])} oninput={onNum(["search", "top_k"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Min Score" description="Relevance threshold (0–1)">
-						{#snippet children()}
-							<input type="number" class="inp" min="0" max="1" step="0.1" value={num(["search", "min_score"])} oninput={onNum(["search", "min_score"])} />
-						{/snippet}
-					</FormField>
-				{/snippet}
-			</FormSection>
-
-			<FormSection title="Memory" defaultOpen={false}>
-				{#snippet children()}
-					<FormField label="Database path">
-						{#snippet children()}
-							<input type="text" class="inp" value={str(["memory", "database"])} oninput={onStr(["memory", "database"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Vectors path">
-						{#snippet children()}
-							<input type="text" class="inp" value={str(["memory", "vectors"])} oninput={onStr(["memory", "vectors"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Session budget">
-						{#snippet children()}
-							<input type="number" class="inp" value={num(["memory", "session_budget"])} oninput={onNum(["memory", "session_budget"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Decay rate" description="(0–1)">
-						{#snippet children()}
-							<input type="number" class="inp" min="0" max="1" step="0.01" value={num(["memory", "decay_rate"])} oninput={onNum(["memory", "decay_rate"])} />
-						{/snippet}
-					</FormField>
-				{/snippet}
-			</FormSection>
-
-			<FormSection title="Pipeline" defaultOpen={false}>
-				{#snippet children()}
-					{#each PIPELINE_BOOLS as flag (flag)}
-						<FormField label={flag}>
+						<FormField label="Extraction provider">
 							{#snippet children()}
-								<label class="toggle">
-									<input type="checkbox" checked={bool(["pipeline", flag])} onchange={onBool(["pipeline", flag])} />
-									<span class="toggle-track"><span class="toggle-thumb"></span></span>
-								</label>
+								<select class="inp sel" value={aStr(["memory", "pipelineV2", "extractionProvider"])} onchange={aOnStr(["memory", "pipelineV2", "extractionProvider"])}>
+									<option value="">— select —</option>
+									<option value="ollama">ollama</option>
+									<option value="claude-code">claude-code</option>
+								</select>
 							{/snippet}
 						</FormField>
-					{/each}
-
-					<FormField label="Extraction provider">
-						{#snippet children()}
-							<select class="inp sel" value={str(["pipeline", "extractionProvider"])} onchange={onStr(["pipeline", "extractionProvider"])}>
-								<option value="">— select —</option>
-								<option value="ollama">ollama</option>
-								<option value="claude-code">claude-code</option>
-							</select>
-						{/snippet}
-					</FormField>
-					<FormField label="Extraction model">
-						{#snippet children()}
-							<input type="text" class="inp" value={str(["pipeline", "extractionModel"])} oninput={onStr(["pipeline", "extractionModel"])} />
-						{/snippet}
-					</FormField>
-					<FormField label="Maintenance mode">
-						{#snippet children()}
-							<select class="inp sel" value={str(["pipeline", "maintenanceMode"])} onchange={onStr(["pipeline", "maintenanceMode"])}>
-								<option value="">— select —</option>
-								<option value="observe">observe</option>
-								<option value="execute">execute</option>
-							</select>
-						{/snippet}
-					</FormField>
-					<FormField label="Reranker model">
-						{#snippet children()}
-							<input type="text" class="inp" value={str(["pipeline", "rerankerModel"])} oninput={onStr(["pipeline", "rerankerModel"])} />
-						{/snippet}
-					</FormField>
-
-					{#each PIPELINE_NUMS as { key, label, min, max, step } (key)}
-						<FormField {label}>
+						<FormField label="Extraction model">
 							{#snippet children()}
-								<input
-									type="number"
-									class="inp"
-									{min}
-									{max}
-									{step}
-									value={num(["pipeline", key])}
-									oninput={onNum(["pipeline", key])}
-								/>
+								<input type="text" class="inp" value={aStr(["memory", "pipelineV2", "extractionModel"])} oninput={aOnStr(["memory", "pipelineV2", "extractionModel"])} />
 							{/snippet}
 						</FormField>
-					{/each}
-				{/snippet}
-			</FormSection>
-
-			<FormSection title="Trust" defaultOpen={false}>
-				{#snippet children()}
-					<FormField label="Verification">
-						{#snippet children()}
-							<select class="inp sel" value={str(["trust", "verification"])} onchange={onStr(["trust", "verification"])}>
-								<option value="">— select —</option>
-								{#each ["none", "erc8128", "gpg", "did", "registry"] as v (v)}
-									<option value={v}>{v}</option>
-								{/each}
-							</select>
-						{/snippet}
-					</FormField>
-					{#if showRegistry}
-						<FormField label="Registry URL">
+						<FormField label="Maintenance mode">
 							{#snippet children()}
-								<input type="text" class="inp" value={str(["trust", "registry"])} oninput={onStr(["trust", "registry"])} />
+								<select class="inp sel" value={aStr(["memory", "pipelineV2", "maintenanceMode"])} onchange={aOnStr(["memory", "pipelineV2", "maintenanceMode"])}>
+									<option value="">— select —</option>
+									<option value="observe">observe</option>
+									<option value="execute">execute</option>
+								</select>
 							{/snippet}
 						</FormField>
-					{/if}
-				{/snippet}
-			</FormSection>
+						<FormField label="Reranker model">
+							{#snippet children()}
+								<input type="text" class="inp" value={aStr(["memory", "pipelineV2", "rerankerModel"])} oninput={aOnStr(["memory", "pipelineV2", "rerankerModel"])} />
+							{/snippet}
+						</FormField>
 
-			<FormSection title="Auth" defaultOpen={false}>
-				{#snippet children()}
-					<FormField label="Method">
-						{#snippet children()}
-							<select class="inp sel" value={str(["auth", "method"])} onchange={onStr(["auth", "method"])}>
-								<option value="">— select —</option>
-								{#each ["none", "erc8128", "gpg", "did"] as v (v)}
-									<option value={v}>{v}</option>
-								{/each}
-							</select>
-						{/snippet}
-					</FormField>
-					<FormField label="Mode">
-						{#snippet children()}
-							<select class="inp sel" value={str(["auth", "mode"])} onchange={onStr(["auth", "mode"])}>
-								<option value="">— select —</option>
-								{#each ["local", "team", "hybrid"] as v (v)}
-									<option value={v}>{v}</option>
-								{/each}
-							</select>
-						{/snippet}
-					</FormField>
-					<FormField label="Chain ID">
-						{#snippet children()}
-							<input type="number" class="inp" value={num(["auth", "chainId"])} oninput={onNum(["auth", "chainId"])} />
-						{/snippet}
-					</FormField>
-				{/snippet}
-			</FormSection>
+						{#each PIPELINE_NUMS as { key, label, min, max, step } (key)}
+							<FormField {label}>
+								{#snippet children()}
+									<input
+										type="number"
+										class="inp"
+										{min}
+										{max}
+										{step}
+										value={aNum(["memory", "pipelineV2", key])}
+										oninput={aOnNum(["memory", "pipelineV2", key])}
+									/>
+								{/snippet}
+							</FormField>
+						{/each}
+					{/snippet}
+				</FormSection>
+
+				<!-- === TRUST (agent.yaml) === -->
+				<FormSection title="Trust" defaultOpen={false}>
+					{#snippet children()}
+						<FormField label="Verification">
+							{#snippet children()}
+								<select class="inp sel" value={aStr(["trust", "verification"])} onchange={aOnStr(["trust", "verification"])}>
+									<option value="">— select —</option>
+									{#each ["none", "erc8128", "gpg", "did", "registry"] as v (v)}
+										<option value={v}>{v}</option>
+									{/each}
+								</select>
+							{/snippet}
+						</FormField>
+						{#if showRegistry}
+							<FormField label="Registry URL">
+								{#snippet children()}
+									<input type="text" class="inp" value={aStr(["trust", "registry"])} oninput={aOnStr(["trust", "registry"])} />
+								{/snippet}
+							</FormField>
+						{/if}
+					{/snippet}
+				</FormSection>
+
+				<!-- === AUTH (agent.yaml) === -->
+				<FormSection title="Auth" defaultOpen={false}>
+					{#snippet children()}
+						<FormField label="Method">
+							{#snippet children()}
+								<select class="inp sel" value={aStr(["auth", "method"])} onchange={aOnStr(["auth", "method"])}>
+									<option value="">— select —</option>
+									{#each ["none", "erc8128", "gpg", "did"] as v (v)}
+										<option value={v}>{v}</option>
+									{/each}
+								</select>
+							{/snippet}
+						</FormField>
+						<FormField label="Mode">
+							{#snippet children()}
+								<select class="inp sel" value={aStr(["auth", "mode"])} onchange={aOnStr(["auth", "mode"])}>
+									<option value="">— select —</option>
+									{#each ["local", "team", "hybrid"] as v (v)}
+										<option value={v}>{v}</option>
+									{/each}
+								</select>
+							{/snippet}
+						</FormField>
+						<FormField label="Chain ID">
+							{#snippet children()}
+								<input type="number" class="inp" value={aNum(["auth", "chainId"])} oninput={aOnNum(["auth", "chainId"])} />
+							{/snippet}
+						</FormField>
+					{/snippet}
+				</FormSection>
+			{/if}
 
 		</div>
 
@@ -428,31 +455,6 @@ async function saveSettings(): Promise<void> {
 		font-size: var(--font-size-sm);
 		color: var(--sig-text-muted);
 	}
-
-	.file-nav {
-		display: flex;
-		padding: 0 var(--space-md);
-		border-bottom: 1px solid var(--sig-border);
-		flex-shrink: 0;
-		overflow-x: auto;
-	}
-
-	.file-btn {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		letter-spacing: 0.04em;
-		color: var(--sig-text-muted);
-		background: none;
-		border: none;
-		border-bottom: 1px solid transparent;
-		padding: 8px 12px;
-		cursor: pointer;
-		white-space: nowrap;
-		transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
-	}
-
-	.file-btn:hover { color: var(--sig-text); }
-	.file-btn.active { color: var(--sig-text-bright); border-bottom-color: var(--sig-text-bright); }
 
 	.form-body {
 		flex: 1;
