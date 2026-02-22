@@ -1,75 +1,40 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
+import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import ChevronDown from "@lucide/svelte/icons/chevron-down";
 
 interface Props {
 	title: string;
+	description?: string;
 	children: Snippet;
 	defaultOpen?: boolean;
 }
 
-let { title, children, defaultOpen = true }: Props = $props();
+let { title, description, children, defaultOpen = true }: Props = $props();
 let open = $state(defaultOpen);
 </script>
 
-<section class="form-section">
-	<button
-		class="form-section-header"
-		onclick={() => (open = !open)}
-		aria-expanded={open}
+<Collapsible.Root bind:open class="border-b border-[var(--sig-border)]">
+	<Collapsible.Trigger
+		class="flex w-full items-center justify-between px-[var(--space-md)] py-3
+			bg-transparent border-none cursor-pointer
+			text-[var(--sig-text-bright)] font-[family-name:var(--font-display)]
+			text-[11px] font-semibold uppercase tracking-[0.1em]
+			hover:bg-[var(--sig-surface-raised)]"
 	>
-		<span class="form-section-title">{title}</span>
+		<span>{title}</span>
 		<ChevronDown
-			class="form-section-chevron {open ? 'open' : ''}"
+			class="text-[var(--sig-text-muted)] transition-transform duration-200
+				{open ? 'rotate-180' : ''}"
 			size={14}
 		/>
-	</button>
-	{#if open}
-		<div class="form-section-body">
+	</Collapsible.Trigger>
+	<Collapsible.Content>
+		<div class="flex flex-col gap-3.5 px-[var(--space-md)] pt-1 pb-[var(--space-md)]">
+			{#if description}
+				<p class="font-[family-name:var(--font-mono)] text-[11px] leading-relaxed text-[var(--sig-text-muted)] m-0">{description}</p>
+			{/if}
 			{@render children()}
 		</div>
-	{/if}
-</section>
-
-<style>
-	.form-section {
-		border-bottom: 1px solid var(--sig-border);
-	}
-
-	.form-section-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		width: 100%;
-		padding: 12px var(--space-md);
-		background: none;
-		border: none;
-		cursor: pointer;
-		color: var(--sig-text-bright);
-		font-family: var(--font-display);
-		font-size: 11px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.1em;
-	}
-
-	.form-section-header:hover {
-		background: var(--sig-surface-raised);
-	}
-
-	:global(.form-section-chevron) {
-		color: var(--sig-text-muted);
-		transition: transform var(--dur) var(--ease);
-	}
-
-	:global(.form-section-chevron.open) {
-		transform: rotate(180deg);
-	}
-
-	.form-section-body {
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-		padding: 4px var(--space-md) var(--space-md);
-	}
-</style>
+	</Collapsible.Content>
+</Collapsible.Root>

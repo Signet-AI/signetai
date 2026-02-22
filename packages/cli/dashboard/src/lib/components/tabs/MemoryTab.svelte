@@ -8,6 +8,8 @@ import {
 	findSimilar,
 	clearAll,
 } from "$lib/stores/memory.svelte";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import * as Select from "$lib/components/ui/select/index.js";
 
 interface Props {
 	memories: Memory[];
@@ -108,15 +110,17 @@ const inputClass = "text-[11px] font-[family-name:var(--font-mono)] text-[var(--
 
 	<!-- Filter row -->
 	<div class="flex flex-wrap items-center gap-2">
-		<select
-			class="{inputClass} min-w-[120px] max-w-[180px]"
-			bind:value={mem.filterWho}
-		>
-			<option value="">Any source</option>
-			{#each mem.whoOptions as w}
-				<option>{w}</option>
-			{/each}
-		</select>
+		<Select.Root type="single" value={mem.filterWho} onValueChange={(v) => { mem.filterWho = v ?? ""; }}>
+			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-none h-auto py-1 px-2 min-w-[120px] max-w-[180px]">
+				{mem.filterWho || "Any source"}
+			</Select.Trigger>
+			<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-none">
+				<Select.Item value="" label="Any source" />
+				{#each mem.whoOptions as w}
+					<Select.Item value={w} label={w} />
+				{/each}
+			</Select.Content>
+		</Select.Root>
 
 		<input
 			class="{inputClass} min-w-[120px] flex-1 max-w-[200px]"
@@ -200,22 +204,12 @@ const inputClass = "text-[11px] font-[family-name:var(--font-mono)] text-[var(--
 
 					<header class="flex justify-between items-start gap-1.5">
 						<div class="flex items-center flex-wrap gap-1">
-							<span class="tag-badge border-[var(--sig-accent)]
-								text-[var(--sig-accent)]">
-								{memory.who || 'unknown'}
-							</span>
+							<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-accent)] text-[var(--sig-accent)]">{memory.who || 'unknown'}</Badge>
 							{#if memory.type}
-								<span class="tag-badge border-[var(--sig-border-strong)]
-									text-[var(--sig-text)]">
-									{memory.type}
-								</span>
+								<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-text)]">{memory.type}</Badge>
 							{/if}
 							{#if memory.pinned}
-								<span class="tag-badge border-[var(--sig-border-strong)]
-									text-[var(--sig-text-bright)]
-									bg-[rgba(255,255,255,0.06)]">
-									pinned
-								</span>
+								<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.06)]">pinned</Badge>
 							{/if}
 						</div>
 						<span class="font-[family-name:var(--font-mono)]
@@ -234,33 +228,21 @@ const inputClass = "text-[11px] font-[family-name:var(--font-mono)] text-[var(--
 					{#if tags.length > 0}
 						<div class="flex flex-wrap gap-1">
 							{#each tags.slice(0, 5) as tag}
-								<span class="tag-badge border-[var(--sig-border-strong)]
-									text-[var(--sig-text)]">
-									#{tag}
-								</span>
+								<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-text)]">#{tag}</Badge>
 							{/each}
 						</div>
 					{/if}
 
 					<footer class="flex items-center gap-1.5 mt-auto pt-1">
-						<span class="tag-badge border-[var(--sig-border-strong)]
-							text-[var(--sig-text)]">
-							imp {Math.round((memory.importance ?? 0) * 100)}%
-						</span>
+						<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-text)]">imp {Math.round((memory.importance ?? 0) * 100)}%</Badge>
 
 						{#if scoreLabel}
-							<span class="tag-badge border-[var(--sig-border-strong)]
-								text-[var(--sig-accent)]">
-								{scoreLabel}
-							</span>
+							<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-accent)]">{scoreLabel}</Badge>
 						{/if}
 
 						{#if memory.id}
 							<button
-								class="ml-auto tag-badge border-[var(--sig-border-strong)]
-									text-[var(--sig-text-muted)] cursor-pointer
-									hover:text-[var(--sig-accent)]
-									transition-colors duration-100"
+								class="ml-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-accent)] transition-colors duration-100 bg-transparent"
 								onclick={() => findSimilar(memory.id, memory)}
 								title="Find similar"
 							>similar</button>
@@ -283,15 +265,6 @@ const inputClass = "text-[11px] font-[family-name:var(--font-mono)] text-[var(--
 </section>
 
 <style>
-	.tag-badge {
-		font-family: var(--font-mono);
-		font-size: 9px;
-		padding: 1px 5px;
-		border-width: 1px;
-		border-style: solid;
-		background: transparent;
-	}
-
 	.doc-card::before,
 	.doc-card::after {
 		content: '';

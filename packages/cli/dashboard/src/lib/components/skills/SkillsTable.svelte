@@ -1,5 +1,7 @@
 <script lang="ts">
 import type { Skill, SkillSearchResult } from "$lib/api";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
 
 type Props = {
 	items: Skill[] | SkillSearchResult[];
@@ -70,33 +72,35 @@ function isSkill(item: Skill | SkillSearchResult): item is Skill {
 				{#if mode === "search" && isSearchResult(item)}
 					<span class="skill-count">{item.installs}</span>
 					{#if item.installed}
-						<span class="badge badge-installed">Installed</span>
+						<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-success)] text-[var(--sig-success)]">Installed</Badge>
 					{:else}
-						<button
-							type="button"
-							class="btn-install"
-							onclick={(e) => { e.stopPropagation(); oninstall?.(item.name); }}
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-0.5 border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+							onclick={(e: MouseEvent) => { e.stopPropagation(); oninstall?.(item.name); }}
 							disabled={installing === item.name}
 						>
 							{installing === item.name ? "..." : "Install"}
-						</button>
+						</Button>
 					{/if}
 				{:else if mode === "installed" && isSkill(item)}
 					{#if item.builtin}
-						<span class="badge badge-builtin">Built-in</span>
+						<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
 					{/if}
 					{#if item.user_invocable}
-						<span class="badge badge-slash">/{item.name}</span>
+						<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">/{item.name}</Badge>
 					{/if}
 					{#if !item.builtin}
-						<button
-							type="button"
-							class="btn-uninstall"
-							onclick={(e) => { e.stopPropagation(); onuninstall?.(item.name); }}
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-0.5 border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+							onclick={(e: MouseEvent) => { e.stopPropagation(); onuninstall?.(item.name); }}
 							disabled={uninstalling === item.name}
 						>
 							{uninstalling === item.name ? "..." : "Uninstall"}
-						</button>
+						</Button>
 					{/if}
 				{/if}
 			</div>
@@ -174,68 +178,4 @@ function isSkill(item: Skill | SkillSearchResult): item is Skill {
 		font-variant-numeric: tabular-nums;
 	}
 
-	.badge {
-		font-family: var(--font-mono);
-		font-size: 9px;
-		padding: 1px 5px;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		border: 1px solid;
-		white-space: nowrap;
-	}
-	.badge-installed {
-		border-color: var(--sig-success);
-		color: var(--sig-success);
-	}
-	.badge-builtin {
-		border-color: var(--sig-accent);
-		color: var(--sig-accent);
-	}
-	.badge-slash {
-		border-color: var(--sig-border-strong);
-		color: var(--sig-text-muted);
-	}
-
-	.btn-install {
-		padding: 2px 8px;
-		font-family: var(--font-mono);
-		font-size: 9px;
-		font-weight: 500;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		background: transparent;
-		border: 1px solid var(--sig-text-bright);
-		color: var(--sig-text-bright);
-		cursor: pointer;
-		transition: background 0.1s, color 0.1s;
-	}
-	.btn-install:hover:not(:disabled) {
-		background: var(--sig-text-bright);
-		color: var(--sig-bg);
-	}
-	.btn-install:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-
-	.btn-uninstall {
-		padding: 2px 8px;
-		font-family: var(--font-mono);
-		font-size: 9px;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		background: transparent;
-		border: 1px solid var(--sig-danger);
-		color: var(--sig-danger);
-		cursor: pointer;
-		transition: background 0.1s, color 0.1s;
-	}
-	.btn-uninstall:hover:not(:disabled) {
-		background: var(--sig-danger);
-		color: var(--sig-text-bright);
-	}
-	.btn-uninstall:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
 </style>

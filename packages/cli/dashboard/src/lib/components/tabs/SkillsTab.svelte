@@ -13,6 +13,7 @@ import {
 } from "$lib/stores/skills.svelte";
 import SkillsTable from "$lib/components/skills/SkillsTable.svelte";
 import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
+import * as Tabs from "$lib/components/ui/tabs/index.js";
 
 let searchInput = $state<HTMLInputElement | null>(null);
 
@@ -149,58 +150,57 @@ onMount(() => {
 	</div>
 
 	<!-- Tabs bar -->
-	<div class="flex items-center shrink-0 border-b border-[var(--sig-border)]">
-		<div class="flex items-center">
-			<button
-				type="button"
-				class="tab-btn {sk.view === 'installed' ? 'active' : ''}"
-				onclick={() => switchView("installed")}
-			>
-				Installed ({sk.installed.length})
-			</button>
-			<button
-				type="button"
-				class="tab-btn {sk.view === 'all-time' ? 'active' : ''}"
-				onclick={() => switchView("all-time")}
-			>
-				All Time{sk.catalogTotal ? ` (${sk.catalogTotal.toLocaleString()})` : ""}
-			</button>
-			<button
-				type="button"
-				class="tab-btn {sk.view === 'search' ? 'active' : ''}"
-				onclick={() => switchView("search")}
-			>
-				Search
-			</button>
-		</div>
+	<Tabs.Root value={sk.view} onValueChange={(v) => switchView(v as SkillsView)}>
+		<div class="flex items-center shrink-0 border-b border-[var(--sig-border)]">
+			<Tabs.List class="bg-transparent h-auto gap-0 rounded-none border-none">
+				<Tabs.Trigger
+					value="installed"
+					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+				>
+					Installed ({sk.installed.length})
+				</Tabs.Trigger>
+				<Tabs.Trigger
+					value="all-time"
+					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+				>
+					All Time{sk.catalogTotal ? ` (${sk.catalogTotal.toLocaleString()})` : ""}
+				</Tabs.Trigger>
+				<Tabs.Trigger
+					value="search"
+					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+				>
+					Search
+				</Tabs.Trigger>
+			</Tabs.List>
 
-		{#if sk.view === "search"}
-			<div class="flex-1 relative mx-[var(--space-sm)]">
-				<input
-					bind:this={searchInput}
-					type="text"
-					class="w-full px-3 py-[5px]
-						border border-[var(--sig-border-strong)]
-						bg-[var(--sig-surface-raised)]
-						text-[var(--sig-text-bright)] text-[11px]
-						font-[family-name:var(--font-mono)]
-						outline-none focus:border-[var(--sig-accent)]
-						pr-8"
-					value={sk.query}
-					oninput={(e) => setQuery(e.currentTarget.value)}
-					placeholder="Search skills.sh..."
-				/>
-				<kbd
-					class="absolute right-2 top-1/2 -translate-y-1/2
-						px-[5px] py-px text-[9px]
-						text-[var(--sig-text-muted)]
-						bg-[var(--sig-bg)]
-						border border-[var(--sig-border)]
-						pointer-events-none"
-				>/</kbd>
-			</div>
-		{/if}
-	</div>
+			{#if sk.view === "search"}
+				<div class="flex-1 relative mx-[var(--space-sm)]">
+					<input
+						bind:this={searchInput}
+						type="text"
+						class="w-full px-3 py-[5px]
+							border border-[var(--sig-border-strong)]
+							bg-[var(--sig-surface-raised)]
+							text-[var(--sig-text-bright)] text-[11px]
+							font-[family-name:var(--font-mono)]
+							outline-none focus:border-[var(--sig-accent)]
+							pr-8"
+						value={sk.query}
+						oninput={(e) => setQuery(e.currentTarget.value)}
+						placeholder="Search skills.sh..."
+					/>
+					<kbd
+						class="absolute right-2 top-1/2 -translate-y-1/2
+							px-[5px] py-px text-[9px]
+							text-[var(--sig-text-muted)]
+							bg-[var(--sig-bg)]
+							border border-[var(--sig-border)]
+							pointer-events-none"
+					>/</kbd>
+				</div>
+			{/if}
+		</div>
+	</Tabs.Root>
 
 	<!-- Content -->
 	{#if sk.view === "installed"}
@@ -287,25 +287,5 @@ onMount(() => {
 		font-size: 10px;
 		letter-spacing: -1px;
 		line-height: 125%;
-	}
-
-	.tab-btn {
-		padding: var(--space-xs) var(--space-md);
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--sig-text-muted);
-		background: transparent;
-		border: none;
-		border-bottom: 2px solid transparent;
-		cursor: pointer;
-		transition: color 0.1s, border-color 0.1s;
-		white-space: nowrap;
-	}
-	.tab-btn:hover {
-		color: var(--sig-text);
-	}
-	.tab-btn.active {
-		color: var(--sig-text-bright);
-		border-bottom-color: var(--sig-text-bright);
 	}
 </style>

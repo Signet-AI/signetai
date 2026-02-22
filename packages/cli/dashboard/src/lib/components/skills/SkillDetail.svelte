@@ -1,6 +1,8 @@
 <script lang="ts">
 import { marked } from "marked";
 import * as Sheet from "$lib/components/ui/sheet/index.js";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
 import { sk, doInstall, doUninstall, closeDetail } from "$lib/stores/skills.svelte";
 import { toast } from "$lib/stores/toast.svelte";
 
@@ -57,17 +59,17 @@ async function copyInstallCommand() {
 						{#if sk.detailMeta}
 							<div class="flex items-center gap-2 flex-wrap">
 								{#if sk.detailMeta.user_invocable}
-									<span class="detail-badge accent">
+									<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">
 										/{sk.detailMeta.name}
-									</span>
+									</Badge>
 								{/if}
 								{#if sk.detailMeta.builtin}
-									<span class="detail-badge accent">Built-in</span>
+									<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
 								{/if}
 								{#if sk.detailMeta.arg_hint}
-									<span class="detail-badge muted">
+									<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">
 										{sk.detailMeta.arg_hint}
-									</span>
+									</Badge>
 								{/if}
 							</div>
 						{/if}
@@ -76,31 +78,27 @@ async function copyInstallCommand() {
 					<!-- Action button -->
 					<div class="shrink-0">
 						{#if sk.detailMeta?.builtin}
-							<span class="detail-badge muted">System</span>
+							<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">System</Badge>
 						{:else if isInstalled}
-							<button
-								type="button"
-								class="detail-action uninstall"
-								onclick={() =>
-									sk.detailMeta && doUninstall(sk.detailMeta.name)}
+							<Button
+								variant="outline"
+								size="sm"
+								class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+								onclick={() => sk.detailMeta && doUninstall(sk.detailMeta.name)}
 								disabled={sk.uninstalling === sk.detailMeta?.name}
 							>
-								{sk.uninstalling === sk.detailMeta?.name
-									? "..."
-									: "Uninstall"}
-							</button>
+								{sk.uninstalling === sk.detailMeta?.name ? "..." : "Uninstall"}
+							</Button>
 						{:else}
-							<button
-								type="button"
-								class="detail-action install"
-								onclick={() =>
-									sk.selectedName && doInstall(sk.selectedName)}
+							<Button
+								variant="outline"
+								size="sm"
+								class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+								onclick={() => sk.selectedName && doInstall(sk.selectedName)}
 								disabled={sk.installing === sk.selectedName}
 							>
-								{sk.installing === sk.selectedName
-									? "..."
-									: "Install"}
-							</button>
+								{sk.installing === sk.selectedName ? "..." : "Install"}
+							</Button>
 						{/if}
 					</div>
 				</div>
@@ -152,57 +150,6 @@ async function copyInstallCommand() {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-
-	.detail-badge {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		padding: 1px 6px;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		border: 1px solid;
-		white-space: nowrap;
-	}
-	.detail-badge.accent {
-		border-color: var(--sig-accent);
-		color: var(--sig-accent);
-	}
-	.detail-badge.muted {
-		border-color: var(--sig-border-strong);
-		color: var(--sig-text-muted);
-	}
-
-	.detail-action {
-		padding: 4px 12px;
-		font-family: var(--font-mono);
-		font-size: 10px;
-		font-weight: 500;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		cursor: pointer;
-		border: 1px solid;
-		background: transparent;
-		transition: background 0.1s, color 0.1s;
-	}
-	.detail-action.install {
-		border-color: var(--sig-text-bright);
-		color: var(--sig-text-bright);
-	}
-	.detail-action.install:hover:not(:disabled) {
-		background: var(--sig-text-bright);
-		color: var(--sig-bg);
-	}
-	.detail-action.uninstall {
-		border-color: var(--sig-danger);
-		color: var(--sig-danger);
-	}
-	.detail-action.uninstall:hover:not(:disabled) {
-		background: var(--sig-danger);
-		color: var(--sig-text-bright);
-	}
-	.detail-action:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
 	}
 
 	.detail-cmd {

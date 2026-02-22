@@ -14,20 +14,26 @@ let { configFiles }: Props = $props();
 const KNOWN_HARNESSES = ["claude-code", "openclaw", "opencode"];
 
 const PIPELINE_BOOLS = [
-	"enabled", "shadowMode", "allowUpdateDelete", "graphEnabled",
-	"autonomousEnabled", "mutationsFrozen", "autonomousFrozen", "rerankerEnabled",
+	{ key: "enabled", desc: "Master switch. Pipeline does nothing when disabled." },
+	{ key: "shadowMode", desc: "Run extraction and decisions without writing. Safe for evaluation." },
+	{ key: "allowUpdateDelete", desc: "Permit UPDATE/DELETE decisions on existing memories. Infrastructure-only for now." },
+	{ key: "graphEnabled", desc: "Build and query a knowledge graph from extracted entity relationships." },
+	{ key: "autonomousEnabled", desc: "Allow autonomous pipeline operations like maintenance and repair." },
+	{ key: "mutationsFrozen", desc: "Emergency brake. Block all writes even if shadowMode is off." },
+	{ key: "autonomousFrozen", desc: "Block autonomous writes while still allowing autonomous reads." },
+	{ key: "rerankerEnabled", desc: "Enable cross-encoder reranking pass after initial retrieval." },
 ] as const;
 
 const PIPELINE_NUMS = [
-	{ key: "extractionTimeout", label: "Extraction timeout (ms)" },
-	{ key: "workerPollMs", label: "Worker poll (ms)" },
-	{ key: "workerMaxRetries", label: "Worker max retries" },
-	{ key: "leaseTimeoutMs", label: "Lease timeout (ms)" },
-	{ key: "minFactConfidenceForWrite", label: "Min fact confidence", min: 0, max: 1, step: 0.05 },
-	{ key: "graphBoostWeight", label: "Graph boost weight", min: 0, max: 1, step: 0.05 },
-	{ key: "maintenanceIntervalMs", label: "Maintenance interval (ms)" },
-	{ key: "rerankerTopN", label: "Reranker top N" },
-	{ key: "rerankerTimeoutMs", label: "Reranker timeout (ms)" },
+	{ key: "extractionTimeout", label: "Extraction timeout (ms)", desc: "Timeout for the Ollama extraction call. Range: 5,000–300,000 ms.", min: 5000, max: 300000, step: 1000 },
+	{ key: "workerPollMs", label: "Worker poll (ms)", desc: "How often the worker polls for pending jobs. Range: 100–60,000 ms.", min: 100, max: 60000, step: 100 },
+	{ key: "workerMaxRetries", label: "Worker max retries", desc: "Max retry attempts before a job goes to dead-letter. Range: 1–10.", min: 1, max: 10, step: 1 },
+	{ key: "leaseTimeoutMs", label: "Lease timeout (ms)", desc: "Time before an uncompleted job lease expires and is retried. Range: 10,000–600,000 ms.", min: 10000, max: 600000, step: 1000 },
+	{ key: "minFactConfidenceForWrite", label: "Min fact confidence", desc: "Facts below this threshold are dropped. Lower captures more at the cost of noise. Range: 0.0–1.0.", min: 0, max: 1, step: 0.05 },
+	{ key: "graphBoostWeight", label: "Graph boost weight", desc: "Score boost applied to graph-linked memories during search. Range: 0.0–1.0.", min: 0, max: 1, step: 0.05 },
+	{ key: "maintenanceIntervalMs", label: "Maintenance interval (ms)", desc: "How often the maintenance worker runs diagnostics. Range: 60s–24h.", min: 60000, max: 86400000, step: 60000 },
+	{ key: "rerankerTopN", label: "Reranker top N", desc: "Number of candidates passed to the cross-encoder reranker. Range: 1–100.", min: 1, max: 100, step: 1 },
+	{ key: "rerankerTimeoutMs", label: "Reranker timeout (ms)", desc: "Timeout for the reranking call. Original order returned on timeout. Range: 100–30,000 ms.", min: 100, max: 30000, step: 100 },
 ] as const;
 
 type YamlValue = string | number | boolean | null | YamlObject | YamlValue[];
@@ -154,24 +160,24 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 
 			<!-- === AGENT (agent.yaml) === -->
 			{#if agentFile}
-				<FormSection title="Agent">
+				<FormSection title="Agent" description="Core identity metadata. Created by signet setup, synced to all harnesses on change.">
 					{#snippet children()}
-						<FormField label="Name">
+						<FormField label="Name" description="Display name shown in harness configs and session context.">
 							{#snippet children()}
 								<input type="text" class="inp" value={aStr(["agent", "name"])} oninput={aOnStr(["agent", "name"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Description">
+						<FormField label="Description" description="Short description of the agent's role and purpose.">
 							{#snippet children()}
 								<textarea class="inp ta" rows={3} value={aStr(["agent", "description"])} oninput={aOnStr(["agent", "description"])}></textarea>
 							{/snippet}
 						</FormField>
-						<FormField label="Created" description="Read-only">
+						<FormField label="Created" description="ISO 8601 creation timestamp. Read-only.">
 							{#snippet children()}
 								<input type="text" class="inp ro" readonly value={formatDate(get(agent, "agent", "created"))} />
 							{/snippet}
 						</FormField>
-						<FormField label="Updated" description="Read-only">
+						<FormField label="Updated" description="ISO 8601 last update timestamp. Read-only.">
 							{#snippet children()}
 								<input type="text" class="inp ro" readonly value={formatDate(get(agent, "agent", "updated"))} />
 							{/snippet}
@@ -179,9 +185,9 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 					{/snippet}
 				</FormSection>
 
-				<FormSection title="Harnesses" defaultOpen={false}>
+				<FormSection title="Harnesses" defaultOpen={false} description="AI platforms to integrate with. The daemon syncs identity files and installs hooks for each active harness.">
 					{#snippet children()}
-						<FormField label="Active harnesses">
+						<FormField label="Active harnesses" description="Supported: claude-code, openclaw, opencode. Cursor, windsurf, chatgpt, and gemini are planned.">
 							{#snippet children()}
 								<div class="checkbox-group">
 									{#each KNOWN_HARNESSES as h (h)}
@@ -199,7 +205,7 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 								</div>
 							{/snippet}
 						</FormField>
-						<FormField label="Add custom harness">
+						<FormField label="Add custom harness" description="Add a custom harness name for third-party integrations.">
 							{#snippet children()}
 								<div class="inline-add">
 									<input type="text" class="inp" placeholder="harness-name" bind:value={customHarnessInput} onkeydown={(e) => { if (e.key === "Enter") addCustomHarness(); }} />
@@ -213,9 +219,9 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 
 			<!-- === EMBEDDINGS (config.yaml) === -->
 			{#if configFile}
-				<FormSection title="Embeddings" defaultOpen={false}>
+				<FormSection title="Embeddings" defaultOpen={false} description="Vector embedding configuration for semantic memory search. Embeddings power the vector half of hybrid recall.">
 					{#snippet children()}
-						<FormField label="Provider">
+						<FormField label="Provider" description="Embedding backend. Ollama runs locally, OpenAI requires an API key.">
 							{#snippet children()}
 								<select class="inp sel" value={cStr(["embeddings", "provider"])} onchange={cOnStr(["embeddings", "provider"])}>
 									<option value="">— select —</option>
@@ -224,22 +230,22 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 								</select>
 							{/snippet}
 						</FormField>
-						<FormField label="Model" description="e.g. nomic-embed-text, text-embedding-3-small">
+						<FormField label="Model" description="Ollama: nomic-embed-text (768d), all-minilm (384d), mxbai-embed-large (1024d). OpenAI: text-embedding-3-small (1536d), text-embedding-3-large (3072d).">
 							{#snippet children()}
 								<input type="text" class="inp" value={cStr(["embeddings", "model"])} oninput={cOnStr(["embeddings", "model"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Dimensions" description="Must match model output">
+						<FormField label="Dimensions" description="Must match the model's output dimension. Mismatched dimensions will produce broken search results.">
 							{#snippet children()}
 								<input type="number" class="inp" value={cNum(["embeddings", "dimensions"])} oninput={cOnNum(["embeddings", "dimensions"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Base URL">
+						<FormField label="Base URL" description="Ollama default: http://localhost:11434. OpenAI default: https://api.openai.com/v1.">
 							{#snippet children()}
 								<input type="text" class="inp" value={cStr(["embeddings", "base_url"])} oninput={cOnStr(["embeddings", "base_url"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="API Key" description="Optional for Ollama, required for OpenAI">
+						<FormField label="API Key" description="Optional for Ollama, required for OpenAI. Use $secret:NAME to reference a stored secret instead of plaintext.">
 							{#snippet children()}
 								<input type="password" class="inp" value={cStr(["embeddings", "api_key"])} oninput={cOnStr(["embeddings", "api_key"])} />
 							{/snippet}
@@ -248,19 +254,19 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 				</FormSection>
 
 				<!-- === SEARCH (config.yaml) === -->
-				<FormSection title="Search" defaultOpen={false}>
+				<FormSection title="Search" defaultOpen={false} description="Hybrid search tuning. Controls the blend between semantic (vector) and keyword (BM25) retrieval.">
 					{#snippet children()}
-						<FormField label="Alpha" description="0 = keyword only, 1 = vector only">
+						<FormField label="Alpha" description="Vector weight (0–1). At 0.9 results are heavily semantic; at 0.3 they skew toward keyword matching. Default 0.7 works well generally.">
 							{#snippet children()}
 								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "alpha"])} oninput={cOnNum(["search", "alpha"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Top K" description="Candidates per source before blending">
+						<FormField label="Top K" description="Candidate count fetched from each source (BM25 and vector) before alpha-blending. Default: 20.">
 							{#snippet children()}
 								<input type="number" class="inp" value={cNum(["search", "top_k"])} oninput={cOnNum(["search", "top_k"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Min Score" description="Minimum threshold for results">
+						<FormField label="Min Score" description="Minimum combined score to include in results. Results below this threshold are dropped. Default: 0.3.">
 							{#snippet children()}
 								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "min_score"])} oninput={cOnNum(["search", "min_score"])} />
 							{/snippet}
@@ -269,19 +275,19 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 				</FormSection>
 
 				<!-- === MEMORY (config.yaml) === -->
-				<FormSection title="Memory" defaultOpen={false}>
+				<FormSection title="Memory" defaultOpen={false} description="Memory system settings. Controls how much context is injected into sessions and how memories age over time.">
 					{#snippet children()}
-						<FormField label="Session budget" description="Character budget for session start context">
+						<FormField label="Session budget" description="Character limit for context injected at session start via hooks. Default: 2000.">
 							{#snippet children()}
 								<input type="number" class="inp" value={cNum(["memory", "session_budget"])} oninput={cOnNum(["memory", "session_budget"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="MEMORY.md budget" description="Character budget for MEMORY.md injection">
+						<FormField label="MEMORY.md budget" description="Character limit for the auto-generated MEMORY.md summary. Default: 10000.">
 							{#snippet children()}
 								<input type="number" class="inp" value={cNum(["memory", "current_md_budget"])} oninput={cOnNum(["memory", "current_md_budget"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Decay rate" description="Importance decay per day (0–1)">
+						<FormField label="Decay rate" description="Daily importance decay factor for non-pinned memories. Formula: importance(t) = base × decay_rate^days. 0.99 = slow, 0.95 = default, 0.90 = fast.">
 							{#snippet children()}
 								<input type="number" class="inp" min="0" max="1" step="0.01" value={cNum(["memory", "decay_rate"])} oninput={cOnNum(["memory", "decay_rate"])} />
 							{/snippet}
@@ -290,19 +296,19 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 				</FormSection>
 
 				<!-- === PATHS (config.yaml) === -->
-				<FormSection title="Paths" defaultOpen={false}>
+				<FormSection title="Paths" defaultOpen={false} description="File paths for memory storage. All paths are relative to ~/.agents/ (or $SIGNET_PATH).">
 					{#snippet children()}
-						<FormField label="Database" description="Relative to ~/.agents/">
+						<FormField label="Database" description="SQLite database file for structured memory storage.">
 							{#snippet children()}
 								<input type="text" class="inp" value={cStr(["paths", "database"])} oninput={cOnStr(["paths", "database"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Vectors" description="Relative to ~/.agents/">
+						<FormField label="Vectors" description="Vector store file for embedding data.">
 							{#snippet children()}
 								<input type="text" class="inp" value={cStr(["paths", "vectors"])} oninput={cOnStr(["paths", "vectors"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="MEMORY.md" description="Relative to ~/.agents/">
+						<FormField label="MEMORY.md" description="Output path for the auto-generated working memory summary.">
 							{#snippet children()}
 								<input type="text" class="inp" value={cStr(["paths", "current_md"])} oninput={cOnStr(["paths", "current_md"])} />
 							{/snippet}
@@ -313,20 +319,20 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 
 			<!-- === PIPELINE (agent.yaml: memory.pipelineV2) === -->
 			{#if agentFile}
-				<FormSection title="Pipeline" defaultOpen={false}>
+				<FormSection title="Pipeline" defaultOpen={false} description="V2 memory pipeline. Runs LLM-based fact extraction on incoming memories, then decides whether to write, update, or skip. Lives under memory.pipelineV2 in agent.yaml.">
 					{#snippet children()}
-						{#each PIPELINE_BOOLS as flag (flag)}
-							<FormField label={flag}>
+						{#each PIPELINE_BOOLS as { key, desc } (key)}
+							<FormField label={key} description={desc}>
 								{#snippet children()}
 									<label class="toggle">
-										<input type="checkbox" checked={aBool(["memory", "pipelineV2", flag])} onchange={aOnBool(["memory", "pipelineV2", flag])} />
+										<input type="checkbox" checked={aBool(["memory", "pipelineV2", key])} onchange={aOnBool(["memory", "pipelineV2", key])} />
 										<span class="toggle-track"><span class="toggle-thumb"></span></span>
 									</label>
 								{/snippet}
 							</FormField>
 						{/each}
 
-						<FormField label="Extraction provider">
+						<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses the Claude Code headless provider.">
 							{#snippet children()}
 								<select class="inp sel" value={aStr(["memory", "pipelineV2", "extractionProvider"])} onchange={aOnStr(["memory", "pipelineV2", "extractionProvider"])}>
 									<option value="">— select —</option>
@@ -335,12 +341,12 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 								</select>
 							{/snippet}
 						</FormField>
-						<FormField label="Extraction model">
+						<FormField label="Extraction model" description="Model name for fact extraction. Must be available locally via Ollama. Default: qwen3:4b.">
 							{#snippet children()}
 								<input type="text" class="inp" value={aStr(["memory", "pipelineV2", "extractionModel"])} oninput={aOnStr(["memory", "pipelineV2", "extractionModel"])} />
 							{/snippet}
 						</FormField>
-						<FormField label="Maintenance mode">
+						<FormField label="Maintenance mode" description="'observe' logs diagnostics without changes. 'execute' attempts repairs. Only works when autonomousEnabled is true.">
 							{#snippet children()}
 								<select class="inp sel" value={aStr(["memory", "pipelineV2", "maintenanceMode"])} onchange={aOnStr(["memory", "pipelineV2", "maintenanceMode"])}>
 									<option value="">— select —</option>
@@ -349,14 +355,14 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 								</select>
 							{/snippet}
 						</FormField>
-						<FormField label="Reranker model">
+						<FormField label="Reranker model" description="Cross-encoder model for optional reranking pass. Leave empty to disable.">
 							{#snippet children()}
 								<input type="text" class="inp" value={aStr(["memory", "pipelineV2", "rerankerModel"])} oninput={aOnStr(["memory", "pipelineV2", "rerankerModel"])} />
 							{/snippet}
 						</FormField>
 
-						{#each PIPELINE_NUMS as { key, label, min, max, step } (key)}
-							<FormField {label}>
+						{#each PIPELINE_NUMS as { key, label, desc, min, max, step } (key)}
+							<FormField {label} description={desc}>
 								{#snippet children()}
 									<input
 										type="number"
@@ -374,9 +380,9 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 				</FormSection>
 
 				<!-- === TRUST (agent.yaml) === -->
-				<FormSection title="Trust" defaultOpen={false}>
+				<FormSection title="Trust" defaultOpen={false} description="Identity verification method. Controls how the agent proves its identity to peers and registries.">
 					{#snippet children()}
-						<FormField label="Verification">
+						<FormField label="Verification" description="none = local only. erc8128 = wallet-based (recommended). gpg/did = alternative signing. registry = contract-based lookup.">
 							{#snippet children()}
 								<select class="inp sel" value={aStr(["trust", "verification"])} onchange={aOnStr(["trust", "verification"])}>
 									<option value="">— select —</option>
@@ -387,7 +393,7 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 							{/snippet}
 						</FormField>
 						{#if showRegistry}
-							<FormField label="Registry URL">
+							<FormField label="Registry URL" description="Registry contract address or ENS name for identity lookups.">
 								{#snippet children()}
 									<input type="text" class="inp" value={aStr(["trust", "registry"])} oninput={aOnStr(["trust", "registry"])} />
 								{/snippet}
@@ -397,9 +403,9 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 				</FormSection>
 
 				<!-- === AUTH (agent.yaml) === -->
-				<FormSection title="Auth" defaultOpen={false}>
+				<FormSection title="Auth" defaultOpen={false} description="Authentication for the daemon API. Optional — disabled in local mode. Uses HMAC-SHA256 signed tokens.">
 					{#snippet children()}
-						<FormField label="Method">
+						<FormField label="Method" description="Signing method for auth tokens. erc8128 uses wallet signatures, gpg/did use alternative signing.">
 							{#snippet children()}
 								<select class="inp sel" value={aStr(["auth", "method"])} onchange={aOnStr(["auth", "method"])}>
 									<option value="">— select —</option>
@@ -409,7 +415,7 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 								</select>
 							{/snippet}
 						</FormField>
-						<FormField label="Mode">
+						<FormField label="Mode" description="local = no auth required (localhost only). team = tokens required for all requests. hybrid = localhost skips auth, remote requires tokens.">
 							{#snippet children()}
 								<select class="inp sel" value={aStr(["auth", "mode"])} onchange={aOnStr(["auth", "mode"])}>
 									<option value="">— select —</option>
@@ -419,7 +425,7 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 								</select>
 							{/snippet}
 						</FormField>
-						<FormField label="Chain ID">
+						<FormField label="Chain ID" description="Ethereum chain ID for ERC-8128 signature verification. Default: 1 (mainnet).">
 							{#snippet children()}
 								<input type="number" class="inp" value={aNum(["auth", "chainId"])} oninput={aOnNum(["auth", "chainId"])} />
 							{/snippet}

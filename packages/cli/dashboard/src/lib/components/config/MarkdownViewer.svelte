@@ -1,6 +1,7 @@
 <script lang="ts">
 import { marked } from "marked";
 import CodeEditor from "$lib/components/CodeEditor.svelte";
+import { Button } from "$lib/components/ui/button/index.js";
 import Pencil from "@lucide/svelte/icons/pencil";
 import Eye from "@lucide/svelte/icons/eye";
 
@@ -27,12 +28,26 @@ let rendered = $derived.by(() => {
 		</span>
 		<div class="md-viewer-actions">
 			{#if editing && onsave}
-				<button class="md-viewer-btn save" onclick={onsave}>
+				<Button
+					variant="outline"
+					size="sm"
+					class="h-auto rounded-none gap-1 font-[family-name:var(--font-mono)] text-[10px]
+						font-medium uppercase tracking-[0.1em] px-2 py-[3px]
+						border-[var(--sig-accent)] text-[var(--sig-text-bright)]
+						hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]
+						hover:border-[var(--sig-text-bright)]"
+					onclick={onsave}
+				>
 					SAVE
-				</button>
+				</Button>
 			{/if}
-			<button
-				class="md-viewer-btn"
+			<Button
+				variant="outline"
+				size="sm"
+				class="h-auto rounded-none gap-1 font-[family-name:var(--font-mono)] text-[10px]
+					font-medium uppercase tracking-[0.1em] px-2 py-[3px]
+					text-[var(--sig-text)] border-[var(--sig-border-strong)]
+					hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-text-muted)]"
 				onclick={() => (editing = !editing)}
 				title={editing ? "Preview" : "Edit"}
 			>
@@ -43,7 +58,7 @@ let rendered = $derived.by(() => {
 					<Pencil size={13} />
 					<span>Edit</span>
 				{/if}
-			</button>
+			</Button>
 		</div>
 	</div>
 
@@ -93,38 +108,6 @@ let rendered = $derived.by(() => {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-	}
-
-	.md-viewer-btn {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		font-family: var(--font-mono);
-		font-size: 10px;
-		font-weight: 500;
-		text-transform: uppercase;
-		letter-spacing: 0.1em;
-		color: var(--sig-text);
-		background: none;
-		border: 1px solid var(--sig-border-strong);
-		padding: 3px 8px;
-		cursor: pointer;
-	}
-
-	.md-viewer-btn:hover {
-		color: var(--sig-text-bright);
-		border-color: var(--sig-text-muted);
-	}
-
-	.md-viewer-btn.save {
-		color: var(--sig-text-bright);
-		border-color: var(--sig-accent);
-	}
-
-	.md-viewer-btn.save:hover {
-		background: var(--sig-text-bright);
-		color: var(--sig-bg);
-		border-color: var(--sig-text-bright);
 	}
 
 	.md-viewer-prose {

@@ -2,6 +2,7 @@
 import { saveConfigFile, type ConfigFile } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import MarkdownViewer from "$lib/components/config/MarkdownViewer.svelte";
+import * as Tabs from "$lib/components/ui/tabs/index.js";
 
 interface Props {
 	configFiles: ConfigFile[];
@@ -47,17 +48,24 @@ async function saveFile() {
 </script>
 
 <div class="config-tab">
-	<nav class="config-file-list">
-		{#each mdFiles as file (file.name)}
-			<button
-				class="config-file-item"
-				class:active={file.name === selectedFile}
-				onclick={() => onselectfile(file.name)}
-			>
-				{file.name}
-			</button>
-		{/each}
-	</nav>
+	<Tabs.Root value={selectedFile} onValueChange={(v) => onselectfile(v)}>
+		<Tabs.List class="bg-transparent h-auto gap-0 rounded-none border-b border-[var(--sig-border)] px-[var(--space-md)] w-full justify-start">
+			{#each mdFiles as file (file.name)}
+				<Tabs.Trigger
+					value={file.name}
+					class="font-[family-name:var(--font-mono)] text-[10px] tracking-[0.04em]
+						text-[var(--sig-text-muted)] rounded-none bg-transparent
+						border-b border-b-transparent px-3 py-2
+						data-[state=active]:text-[var(--sig-text-bright)]
+						data-[state=active]:border-b-[var(--sig-text-bright)]
+						data-[state=active]:shadow-none
+						hover:text-[var(--sig-text)]"
+				>
+					{file.name}
+				</Tabs.Trigger>
+			{/each}
+		</Tabs.List>
+	</Tabs.Root>
 
 	{#if activeFile}
 		<MarkdownViewer
@@ -79,40 +87,6 @@ async function saveFile() {
 		flex-direction: column;
 		flex: 1;
 		min-height: 0;
-	}
-
-	.config-file-list {
-		display: flex;
-		gap: 0;
-		padding: 0 var(--space-md);
-		border-bottom: 1px solid var(--sig-border);
-		flex-shrink: 0;
-		overflow-x: auto;
-	}
-
-	.config-file-item {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		letter-spacing: 0.04em;
-		color: var(--sig-text-muted);
-		background: none;
-		border: none;
-		border-bottom: 1px solid transparent;
-		padding: 8px 12px;
-		cursor: pointer;
-		white-space: nowrap;
-		transition:
-			color var(--dur) var(--ease),
-			border-color var(--dur) var(--ease);
-	}
-
-	.config-file-item:hover {
-		color: var(--sig-text);
-	}
-
-	.config-file-item.active {
-		color: var(--sig-text-bright);
-		border-bottom-color: var(--sig-text-bright);
 	}
 
 	.config-empty {

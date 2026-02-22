@@ -14,7 +14,7 @@
 	import { sk } from "$lib/stores/skills.svelte";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
-	import ToastContainer from "$lib/components/ToastContainer.svelte";
+	import { Toaster } from "$lib/components/ui/sonner/index.js";
 
 	let activeTab = $derived(nav.activeTab);
 	import ConfigTab from "$lib/components/tabs/ConfigTab.svelte";
@@ -228,4 +228,9 @@
 	</main>
 </Sidebar.Provider>
 
-<ToastContainer />
+<Toaster
+	position="bottom-right"
+	toastOptions={{
+		class: "!font-[family-name:var(--font-mono)] !text-[12px] !border-[var(--sig-border-strong)] !bg-[var(--sig-surface-raised)] !text-[var(--sig-text-bright)]",
+	}}
+/>
