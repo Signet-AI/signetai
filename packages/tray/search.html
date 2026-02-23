@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Search Memories</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 16px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .search-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    input[type="text"] {
+      flex: 1;
+      background: #2a2a3e;
+      border: 1px solid #3a3a5e;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 14px;
+      padding: 8px 12px;
+      outline: none;
+      font-family: inherit;
+    }
+    input[type="text"]:focus {
+      border-color: #6366f1;
+    }
+    button {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      background: #6366f1;
+      color: white;
+    }
+    button:hover { background: #5558e6; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .results {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .result-card {
+      background: #2a2a3e;
+      border: 1px solid #3a3a5e;
+      border-radius: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      flex-shrink: 0;
+    }
+    .result-card:hover {
+      border-color: #6366f1;
+    }
+    .result-content {
+      font-size: 13px;
+      line-height: 1.4;
+      color: #d0d0e0;
+      margin-bottom: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 60px;
+      overflow: hidden;
+    }
+    .result-meta {
+      display: flex;
+      gap: 12px;
+      font-size: 11px;
+      color: #808090;
+    }
+    .result-meta .who { color: #6366f1; }
+    .result-meta .importance { color: #f0b040; }
+    .result-meta .time { color: #808090; }
+    .status-bar {
+      font-size: 12px;
+      color: #808090;
+      margin-bottom: 8px;
+      min-height: 16px;
+    }
+    .empty-state {
+      text-align: center;
+      color: #606080;
+      padding: 40px 0;
+      font-size: 14px;
+    }
+    .copied-toast {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #6366f1;
+      color: white;
+      padding: 6px 16px;
+      border-radius: 6px;
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+    }
+    .copied-toast.visible { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="search-bar">
+    <input type="text" id="query" placeholder="Search memories..." autofocus />
+    <button id="searchBtn">Search</button>
+  </div>
+  <div class="status-bar" id="statusBar"></div>
+  <div class="results" id="results">
+    <div class="empty-state">Type a query to search your memories</div>
+  </div>
+  <div class="copied-toast" id="toast">Copied to clipboard!</div>
+
+  <script>
+    function invoke(cmd, args) {
+      return window.__TAURI_INTERNALS__.invoke(cmd, args);
+    }
+
+    const queryInput = document.getElementById("query");
+    const searchBtn = document.getElementById("searchBtn");
+    const resultsEl = document.getElementById("results");
+    const statusBar = document.getElementById("statusBar");
+    const toast = document.getElementById("toast");
+
+    searchBtn.addEventListener("click", doSearch);
+    queryInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doSearch();
+      }
+    });
+
+    function timeAgo(iso) {
+      const ts = new Date(iso).getTime();
+      const now = Date.now();
+      const secs = Math.floor((now - ts) / 1000);
+      if (secs < 60) return "just now";
+      if (secs < 3600) return Math.floor(secs / 60) + "m ago";
+      if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
+      return Math.floor(secs / 86400) + "d ago";
+    }
+
+    function showToast() {
+      toast.classList.add("visible");
+      setTimeout(() => toast.classList.remove("visible"), 1500);
+    }
+
+    function escapeHtml(s) {
+      return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    async function doSearch() {
+      const query = queryInput.value.trim();
+      if (!query) return;
+
+      searchBtn.disabled = true;
+      statusBar.textContent = "Searching...";
+      resultsEl.innerHTML = "";
+
+      try {
+        const raw = await invoke("search_memories", { query: query, limit: 10 });
+        const data = JSON.parse(raw);
+        const results = data.results || [];
+
+        if (results.length === 0) {
+          statusBar.textContent = "No results found";
+          resultsEl.innerHTML = '<div class="empty-state">No memories match your query</div>';
+        } else {
+          statusBar.textContent = results.length + " result" + (results.length !== 1 ? "s" : "") + " (" + (data.method || "search") + ")";
+
+          for (const r of results) {
+            const card = document.createElement("div");
+            card.className = "result-card";
+
+            const content = r.content || (r.memory && r.memory.content) || "";
+            const who = r.who || (r.memory && r.memory.who) || "unknown";
+            const importance = r.importance != null ? r.importance : (r.memory && r.memory.importance != null ? r.memory.importance : 0);
+            const createdAt = r.created_at || (r.memory && r.memory.created_at) || "";
+            const score = r.score != null ? " · score: " + (r.score * 100).toFixed(0) : "";
+
+            card.innerHTML =
+              '<div class="result-content">' + escapeHtml(content) + '</div>' +
+              '<div class="result-meta">' +
+                '<span class="who">@' + escapeHtml(who) + '</span>' +
+                '<span class="importance">★ ' + (importance * 10).toFixed(1) + '</span>' +
+                '<span class="time">' + timeAgo(createdAt) + score + '</span>' +
+              '</div>';
+
+            card.addEventListener("click", function() {
+              try {
+                navigator.clipboard.writeText(content).then(showToast);
+              } catch(e) {
+                // Fallback
+                const ta = document.createElement("textarea");
+                ta.value = content;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+                showToast();
+              }
+            });
+
+            resultsEl.appendChild(card);
+          }
+        }
+      } catch (err) {
+        statusBar.textContent = "Error: " + (err || "unknown");
+      } finally {
+        searchBtn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>

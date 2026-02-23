@@ -1,35 +1,90 @@
 import { invoke } from "@tauri-apps/api/core";
-import { deriveState, type DaemonState } from "./state";
-import { buildTrayUpdate } from "./menu";
+import {
+  fetchHealth,
+  fetchMemories,
+  fetchDiagnostics,
+  fetchEmbeddings,
+  buildCurrentState,
+  resetState,
+  type DaemonState,
+} from "./state";
+import { buildTrayUpdate, type TrayUpdate } from "./menu";
 
 const DAEMON_URL = "http://localhost:3850";
-const POLL_RUNNING_MS = 5000;
-const POLL_STOPPED_MS = 2000;
 
-let lastKind: DaemonState["kind"] = "unknown";
+// Poll intervals (ms)
+const HEALTH_RUNNING_MS = 5_000;
+const HEALTH_STOPPED_MS = 2_000;
+const MEMORIES_MS = 15_000;
+const DIAGNOSTICS_MS = 30_000;
+const EMBEDDINGS_MS = 60_000;
+
+let lastUpdateJson = "";
+let isRunning = false;
 
 async function updateTray(state: DaemonState): Promise<void> {
   const update = buildTrayUpdate(state);
+  const json = JSON.stringify(update);
+
+  // Only invoke Rust when something actually changed
+  if (json === lastUpdateJson) return;
+  lastUpdateJson = json;
+
   await invoke("update_tray", { state: update });
 }
 
-async function poll(): Promise<void> {
-  const state = await deriveState(DAEMON_URL);
+// --- Health polling (primary; determines running vs stopped) ---
+async function pollHealth(): Promise<void> {
+  const alive = await fetchHealth(DAEMON_URL);
 
-  // Only update tray when state actually changes
-  if (state.kind !== lastKind) {
-    await updateTray(state);
-    lastKind = state.kind;
-  } else if (state.kind === "running") {
-    // Always update running state (health score can change)
-    await updateTray(state);
+  if (alive && !isRunning) {
+    // Just came online – kick off all secondary polls immediately
+    isRunning = true;
+    fetchMemories(DAEMON_URL);
+    fetchDiagnostics(DAEMON_URL);
+    fetchEmbeddings(DAEMON_URL);
+  } else if (!alive && isRunning) {
+    isRunning = false;
+    resetState();
   }
 
-  const interval =
-    state.kind === "running" ? POLL_RUNNING_MS : POLL_STOPPED_MS;
+  const state = buildCurrentState();
+  await updateTray(state);
 
-  setTimeout(poll, interval);
+  const interval = isRunning ? HEALTH_RUNNING_MS : HEALTH_STOPPED_MS;
+  setTimeout(pollHealth, interval);
 }
 
-// Start polling immediately
-poll();
+// --- Secondary pollers (only run while daemon is alive) ---
+async function pollMemories(): Promise<void> {
+  if (isRunning) {
+    await fetchMemories(DAEMON_URL);
+    const state = buildCurrentState();
+    await updateTray(state);
+  }
+  setTimeout(pollMemories, MEMORIES_MS);
+}
+
+async function pollDiagnostics(): Promise<void> {
+  if (isRunning) {
+    await fetchDiagnostics(DAEMON_URL);
+    const state = buildCurrentState();
+    await updateTray(state);
+  }
+  setTimeout(pollDiagnostics, DIAGNOSTICS_MS);
+}
+
+async function pollEmbeddings(): Promise<void> {
+  if (isRunning) {
+    await fetchEmbeddings(DAEMON_URL);
+    const state = buildCurrentState();
+    await updateTray(state);
+  }
+  setTimeout(pollEmbeddings, EMBEDDINGS_MS);
+}
+
+// Start all pollers
+pollHealth();
+setTimeout(pollMemories, 3_000); // stagger initial fetches
+setTimeout(pollDiagnostics, 4_000);
+setTimeout(pollEmbeddings, 5_000);

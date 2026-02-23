@@ -4,7 +4,7 @@
   "private": true,
   "description": "Signet system tray application",
   "scripts": {
-    "build:ts": "bun build src-ts/index.ts --outdir dist --target browser --minify && cp index.html dist/index.html",
+    "build:ts": "bun build src-ts/index.ts --outdir dist --target browser --minify && cp index.html dist/index.html && cp capture.html dist/capture.html && cp search.html dist/search.html",
     "dev": "cargo tauri dev",
     "build": "cargo tauri build",
     "tauri": "cargo tauri"
