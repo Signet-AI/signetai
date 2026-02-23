@@ -247,6 +247,23 @@ const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 const DEFAULT_PORT = 3850;
+const LOCAL_TOKEN_FILE = join(DAEMON_DIR, "local.token");
+
+/** Read the local auth token for daemon API calls. */
+function getLocalToken(): string | null {
+	try {
+		return readFileSync(LOCAL_TOKEN_FILE, "utf-8").trim();
+	} catch {
+		return null;
+	}
+}
+
+/** Build auth headers for daemon API requests. */
+function daemonAuthHeaders(): Record<string, string> {
+	const token = getLocalToken();
+	if (token) return { "X-Local-Token": token };
+	return {};
+}
 
 async function isDaemonRunning(): Promise<boolean> {
 	try {
@@ -3156,9 +3173,13 @@ async function secretApiCall(
 	path: string,
 	body?: unknown,
 ): Promise<{ ok: boolean; data: unknown }> {
+	const authHeaders = daemonAuthHeaders();
 	const res = await fetch(`${DAEMON_URL}${path}`, {
 		method,
-		headers: body ? { "Content-Type": "application/json" } : {},
+		headers: {
+			...authHeaders,
+			...(body ? { "Content-Type": "application/json" } : {}),
+		},
 		body: body ? JSON.stringify(body) : undefined,
 		signal: AbortSignal.timeout(5000),
 	});
@@ -3351,9 +3372,16 @@ async function fetchFromDaemon<T>(
 ): Promise<T | null> {
 	const { timeout: timeoutMs, ...fetchOpts } = opts || {};
 	try {
+		// Inject local auth token into all daemon requests
+		const authHeaders = daemonAuthHeaders();
+		const headers = {
+			...authHeaders,
+			...(fetchOpts.headers || {}),
+		};
 		const res = await fetch(`http://localhost:${DEFAULT_PORT}${path}`, {
 			signal: AbortSignal.timeout(timeoutMs || 5000),
 			...fetchOpts,
+			headers,
 		});
 		if (!res.ok) return null;
 		return (await res.json()) as T;
@@ -3796,6 +3824,251 @@ program
 		}
 		console.log();
 	});
+
+// ============================================================================
+// signet ingest - Document ingestion engine ("pour your brain in")
+// ============================================================================
+
+program
+	.command("ingest <path>")
+	.description(
+		"Ingest documents into memory (Markdown, PDF, TXT, code files or directories)",
+	)
+	.option("--type <type>", "Force file type (markdown|pdf|txt|code)")
+	.option("--dry-run", "Show what would be extracted without saving", false)
+	.option("--verbose", "Show each extracted fact", false)
+	.option("--model <model>", "LLM model for extraction")
+	.option("--ollama-url <url>", "Ollama base URL", "http://localhost:11434")
+	.option(
+		"--skip-extraction",
+		"Store raw chunks without LLM extraction",
+		false,
+	)
+	.option(
+		"--max-chunks <n>",
+		"Max chunks to process (for testing)",
+		parseInt,
+	)
+	.option("-w, --workspace <name>", "Workspace name", "user")
+	.action(
+		async (
+			inputPath: string,
+			options: {
+				type?: string;
+				dryRun: boolean;
+				verbose: boolean;
+				model?: string;
+				ollamaUrl: string;
+				skipExtraction: boolean;
+				maxChunks?: number;
+				workspace: string;
+			},
+		) => {
+			const { resolve: resolvePath } = await import("path");
+			const absPath = resolvePath(inputPath);
+
+			if (!existsSync(absPath)) {
+				console.error(chalk.red(`  Path does not exist: ${absPath}`));
+				process.exit(1);
+			}
+
+			// Load model from agent.yaml if not specified
+			let model = options.model;
+			if (!model) {
+				try {
+					const agentsDir = join(homedir(), ".agents");
+					const yamlPath = join(agentsDir, "agent.yaml");
+					if (existsSync(yamlPath)) {
+						const yaml = readFileSync(yamlPath, "utf-8");
+						const config = parseSimpleYaml(yaml);
+						const extractionModel =
+							config?.memory?.pipelineV2?.extraction?.model;
+						const embeddingModel = config?.embedding?.model;
+						model = extractionModel || embeddingModel || undefined;
+					}
+				} catch {
+					// Ignore — will use default
+				}
+			}
+
+			// Open database (unless dry-run)
+			let db: ReturnType<typeof Database> | null = null;
+			if (!options.dryRun) {
+				const agentsDir = join(homedir(), ".agents");
+				const dbPath = join(agentsDir, "memory", "memories.db");
+				if (!existsSync(dbPath)) {
+					console.error(
+						chalk.red(
+							"  No memory database found. Run `signet setup` first.",
+						),
+					);
+					process.exit(1);
+				}
+				db = Database(dbPath);
+				try {
+					loadSqliteVec(db as unknown as Parameters<typeof loadSqliteVec>[0]);
+				} catch {
+					// Non-fatal
+				}
+				runMigrations(
+					db as unknown as Parameters<typeof runMigrations>[0],
+				);
+			}
+
+			const spinner = ora("Scanning files...").start();
+
+			try {
+				const { ingestPath } = await import("@signet/core");
+
+				const result = await ingestPath(
+					absPath,
+					{
+						type: options.type as
+							| "markdown"
+							| "pdf"
+							| "txt"
+							| "code"
+							| undefined,
+						dryRun: options.dryRun,
+						verbose: options.verbose,
+						model,
+						ollamaUrl: options.ollamaUrl,
+						skipExtraction: options.skipExtraction,
+						maxChunks: options.maxChunks,
+						db,
+						workspace: options.workspace,
+					},
+					(event) => {
+						switch (event.type) {
+							case "file-start":
+								spinner.text = `[${event.fileIndex + 1}/${event.totalFiles}] ${event.filePath.replace(homedir(), "~")}`;
+								break;
+							case "file-done":
+								if (options.verbose) {
+									spinner.info(
+										`  ${chalk.dim(event.filePath.replace(homedir(), "~"))} → ${event.memories} memories from ${event.chunks} chunks`,
+									);
+									spinner.start();
+								}
+								break;
+							case "file-error":
+								spinner.warn(
+									`  ${chalk.yellow("⚠")} ${event.filePath.replace(homedir(), "~")}: ${event.error}`,
+								);
+								spinner.start();
+								break;
+							case "chunk-done":
+								if (options.verbose && event.items > 0) {
+									spinner.text = `  Chunk ${event.chunkIndex + 1}: extracted ${event.items} items`;
+								}
+								break;
+						}
+					},
+				);
+
+				// Close database
+				if (db) {
+					(db as { close(): void }).close();
+				}
+
+				spinner.stop();
+
+				// Summary
+				const dryRunLabel = options.dryRun
+					? chalk.yellow(" (dry run)")
+					: "";
+				console.log();
+
+				if (
+					result.filesProcessed === 0 &&
+					result.filesErrored === 0
+				) {
+					console.log(
+						chalk.dim(
+							"  No supported files found at the specified path.",
+						),
+					);
+					console.log(
+						chalk.dim(
+							"  Supported: .md, .txt, .pdf, .py, .ts, .js, and more",
+						),
+					);
+					return;
+				}
+
+				// Type breakdown
+				const typeBreakdown = Object.entries(result.byType)
+					.map(([type, count]) => `${count} ${type}s`)
+					.join(", ");
+
+				const filesLabel =
+					result.filesProcessed === 1
+						? "1 file"
+						: `${result.filesProcessed} files`;
+
+				console.log(
+					chalk.bold(
+						`  Ingested ${filesLabel} → ${chalk.green(String(result.memoriesCreated))} memories created${dryRunLabel}`,
+					),
+				);
+
+				if (typeBreakdown) {
+					console.log(chalk.dim(`  (${typeBreakdown})`));
+				}
+
+				if (result.filesErrored > 0) {
+					console.log(
+						chalk.yellow(
+							`  ${result.filesErrored} file(s) had errors`,
+						),
+					);
+				}
+
+				console.log(
+					chalk.dim(
+						`  ${result.totalChunks} chunks processed across ${result.filesProcessed + result.filesErrored} files`,
+					),
+				);
+				console.log();
+
+				if (options.dryRun) {
+					console.log(
+						chalk.dim(
+							"  Run without --dry-run to save to memory database.",
+						),
+					);
+					console.log();
+				}
+
+				// Show per-file results in verbose mode
+				if (options.verbose) {
+					for (const file of result.files) {
+						const status =
+							file.status === "success"
+								? chalk.green("✓")
+								: file.status === "error"
+									? chalk.red("✗")
+									: chalk.dim("○");
+						const path = file.filePath.replace(homedir(), "~");
+						const info =
+							file.status === "error"
+								? chalk.red(file.error || "unknown error")
+								: `${file.memoriesCreated} memories`;
+						console.log(`  ${status} ${chalk.dim(path)} ${info}`);
+					}
+					console.log();
+				}
+			} catch (err) {
+				if (db) {
+					(db as { close(): void }).close();
+				}
+				spinner.fail(
+					`Ingestion failed: ${(err as Error).message}`,
+				);
+				process.exit(1);
+			}
+		},
+	);
 
 // ============================================================================
 // signet embed - Embedding audit and backfill
