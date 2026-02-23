@@ -290,8 +290,9 @@ export async function loadSigningKeypair(): Promise<DecryptedKeypair> {
  * Check whether a signing keypair file exists on disk.
  *
  * Does **not** attempt decryption — only checks file presence.
+ * Synchronous because it only uses `existsSync`.
  */
-export async function hasSigningKeypair(): Promise<boolean> {
+export function hasSigningKeypair(): boolean {
 	return existsSync(SIGNING_KEY_FILE);
 }
 

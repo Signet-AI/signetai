@@ -7,6 +7,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 import { parse, stringify } from "yaml";
 import {
 	generateSigningKeypair,
@@ -15,7 +16,7 @@ import {
 } from "./crypto";
 import { publicKeyToDid, generateDidDocument, formatDidShort } from "./did";
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(require("os").homedir(), ".agents");
+const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 
 // ---------------------------------------------------------------------------
 // Types
