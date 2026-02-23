@@ -92,7 +92,7 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2).toEqual(DEFAULT_PIPELINE_V2);
 	});
 
-	it("loads pipelineV2 flags from agent.yaml", () => {
+	it("loads pipelineV2 flags from agent.yaml (flat keys, backward compat)", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),
@@ -108,13 +108,13 @@ describe("loadMemoryConfig", () => {
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.pipelineV2.enabled).toBe(true);
 		expect(cfg.pipelineV2.shadowMode).toBe(true);
-		expect(cfg.pipelineV2.graphEnabled).toBe(true);
+		expect(cfg.pipelineV2.graph.enabled).toBe(true);
 		// unset flags remain false
-		expect(cfg.pipelineV2.allowUpdateDelete).toBe(false);
-		expect(cfg.pipelineV2.autonomousEnabled).toBe(false);
+		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(false);
+		expect(cfg.pipelineV2.autonomous.enabled).toBe(false);
 		expect(cfg.pipelineV2.mutationsFrozen).toBe(false);
-		expect(cfg.pipelineV2.autonomousFrozen).toBe(false);
-		expect(cfg.pipelineV2.minFactConfidenceForWrite).toBe(0.82);
+		expect(cfg.pipelineV2.autonomous.frozen).toBe(false);
+		expect(cfg.pipelineV2.extraction.minConfidence).toBe(0.82);
 	});
 });
 
@@ -129,7 +129,7 @@ describe("loadPipelineConfig", () => {
 		expect(result).toEqual(DEFAULT_PIPELINE_V2);
 	});
 
-	it("loads all flags correctly when all set to true", () => {
+	it("loads all flags correctly when all set to true (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
@@ -146,11 +146,11 @@ describe("loadPipelineConfig", () => {
 
 		expect(result.enabled).toBe(true);
 		expect(result.shadowMode).toBe(true);
-		expect(result.allowUpdateDelete).toBe(true);
-		expect(result.graphEnabled).toBe(true);
-		expect(result.autonomousEnabled).toBe(true);
+		expect(result.autonomous.allowUpdateDelete).toBe(true);
+		expect(result.graph.enabled).toBe(true);
+		expect(result.autonomous.enabled).toBe(true);
 		expect(result.mutationsFrozen).toBe(true);
-		expect(result.autonomousFrozen).toBe(true);
+		expect(result.autonomous.frozen).toBe(true);
 	});
 
 	it("merges partial config with false defaults", () => {
@@ -167,10 +167,10 @@ describe("loadPipelineConfig", () => {
 		expect(result.mutationsFrozen).toBe(true);
 		// everything else false
 		expect(result.shadowMode).toBe(false);
-		expect(result.allowUpdateDelete).toBe(false);
-		expect(result.graphEnabled).toBe(false);
-		expect(result.autonomousEnabled).toBe(false);
-		expect(result.autonomousFrozen).toBe(false);
+		expect(result.autonomous.allowUpdateDelete).toBe(false);
+		expect(result.graph.enabled).toBe(false);
+		expect(result.autonomous.enabled).toBe(false);
+		expect(result.autonomous.frozen).toBe(false);
 	});
 
 	it("treats non-boolean truthy values as false", () => {
@@ -187,10 +187,10 @@ describe("loadPipelineConfig", () => {
 		// strict === true check means these are all false
 		expect(result.enabled).toBe(false);
 		expect(result.shadowMode).toBe(false);
-		expect(result.graphEnabled).toBe(false);
+		expect(result.graph.enabled).toBe(false);
 	});
 
-	it("clamps numeric fields to valid ranges", () => {
+	it("clamps numeric fields to valid ranges (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
@@ -204,15 +204,15 @@ describe("loadPipelineConfig", () => {
 		});
 
 		// workerPollMs: min 100
-		expect(result.workerPollMs).toBe(100);
+		expect(result.worker.pollMs).toBe(100);
 		// workerMaxRetries: min 1
-		expect(result.workerMaxRetries).toBe(1);
+		expect(result.worker.maxRetries).toBe(1);
 		// extractionTimeout: max 300000
-		expect(result.extractionTimeout).toBe(300000);
+		expect(result.extraction.timeout).toBe(300000);
 		// leaseTimeoutMs: min 10000
-		expect(result.leaseTimeoutMs).toBe(10000);
+		expect(result.worker.leaseTimeoutMs).toBe(10000);
 		// minFactConfidenceForWrite: max 1
-		expect(result.minFactConfidenceForWrite).toBe(1);
+		expect(result.extraction.minConfidence).toBe(1);
 	});
 
 	it("uses defaults for non-number numeric fields", () => {
@@ -228,18 +228,18 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		expect(result.workerPollMs).toBe(DEFAULT_PIPELINE_V2.workerPollMs);
-		expect(result.workerMaxRetries).toBe(DEFAULT_PIPELINE_V2.workerMaxRetries);
-		expect(result.extractionTimeout).toBe(
-			DEFAULT_PIPELINE_V2.extractionTimeout,
+		expect(result.worker.pollMs).toBe(DEFAULT_PIPELINE_V2.worker.pollMs);
+		expect(result.worker.maxRetries).toBe(DEFAULT_PIPELINE_V2.worker.maxRetries);
+		expect(result.extraction.timeout).toBe(
+			DEFAULT_PIPELINE_V2.extraction.timeout,
 		);
-		expect(result.leaseTimeoutMs).toBe(DEFAULT_PIPELINE_V2.leaseTimeoutMs);
-		expect(result.minFactConfidenceForWrite).toBe(
-			DEFAULT_PIPELINE_V2.minFactConfidenceForWrite,
+		expect(result.worker.leaseTimeoutMs).toBe(DEFAULT_PIPELINE_V2.worker.leaseTimeoutMs);
+		expect(result.extraction.minConfidence).toBe(
+			DEFAULT_PIPELINE_V2.extraction.minConfidence,
 		);
 	});
 
-	it("accepts valid numeric values within range", () => {
+	it("accepts valid numeric values within range (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
@@ -252,14 +252,14 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		expect(result.workerPollMs).toBe(5000);
-		expect(result.workerMaxRetries).toBe(5);
-		expect(result.extractionTimeout).toBe(60000);
-		expect(result.leaseTimeoutMs).toBe(120000);
-		expect(result.minFactConfidenceForWrite).toBe(0.55);
+		expect(result.worker.pollMs).toBe(5000);
+		expect(result.worker.maxRetries).toBe(5);
+		expect(result.extraction.timeout).toBe(60000);
+		expect(result.worker.leaseTimeoutMs).toBe(120000);
+		expect(result.extraction.minConfidence).toBe(0.55);
 	});
 
-	it("loads graph boost and reranker fields", () => {
+	it("loads graph boost and reranker fields (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
@@ -273,12 +273,12 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		expect(result.graphBoostWeight).toBe(0.25);
-		expect(result.graphBoostTimeoutMs).toBe(300);
-		expect(result.rerankerEnabled).toBe(true);
-		expect(result.rerankerModel).toBe("cross-encoder/ms-marco");
-		expect(result.rerankerTopN).toBe(15);
-		expect(result.rerankerTimeoutMs).toBe(1500);
+		expect(result.graph.boostWeight).toBe(0.25);
+		expect(result.graph.boostTimeoutMs).toBe(300);
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.reranker.model).toBe("cross-encoder/ms-marco");
+		expect(result.reranker.topN).toBe(15);
+		expect(result.reranker.timeoutMs).toBe(1500);
 	});
 
 	it("uses defaults for graph boost and reranker when absent", () => {
@@ -286,15 +286,15 @@ describe("loadPipelineConfig", () => {
 			memory: { pipelineV2: { enabled: true } },
 		});
 
-		expect(result.graphBoostWeight).toBe(0.15);
-		expect(result.graphBoostTimeoutMs).toBe(500);
-		expect(result.rerankerEnabled).toBe(false);
-		expect(result.rerankerModel).toBe("");
-		expect(result.rerankerTopN).toBe(20);
-		expect(result.rerankerTimeoutMs).toBe(2000);
+		expect(result.graph.boostWeight).toBe(0.15);
+		expect(result.graph.boostTimeoutMs).toBe(500);
+		expect(result.reranker.enabled).toBe(false);
+		expect(result.reranker.model).toBe("");
+		expect(result.reranker.topN).toBe(20);
+		expect(result.reranker.timeoutMs).toBe(2000);
 	});
 
-	it("loads maintenance and repair config fields", () => {
+	it("loads maintenance and repair config fields (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
@@ -308,12 +308,12 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		expect(result.maintenanceIntervalMs).toBe(120000);
-		expect(result.maintenanceMode).toBe("execute");
-		expect(result.repairReembedCooldownMs).toBe(60000);
-		expect(result.repairReembedHourlyBudget).toBe(5);
-		expect(result.repairRequeueCooldownMs).toBe(30000);
-		expect(result.repairRequeueHourlyBudget).toBe(100);
+		expect(result.autonomous.maintenanceIntervalMs).toBe(120000);
+		expect(result.autonomous.maintenanceMode).toBe("execute");
+		expect(result.repair.reembedCooldownMs).toBe(60000);
+		expect(result.repair.reembedHourlyBudget).toBe(5);
+		expect(result.repair.requeueCooldownMs).toBe(30000);
+		expect(result.repair.requeueHourlyBudget).toBe(100);
 	});
 
 	it("uses defaults for maintenance config when absent", () => {
@@ -321,12 +321,12 @@ describe("loadPipelineConfig", () => {
 			memory: { pipelineV2: { enabled: true } },
 		});
 
-		expect(result.maintenanceIntervalMs).toBe(1800000);
-		expect(result.maintenanceMode).toBe("observe");
-		expect(result.repairReembedCooldownMs).toBe(300000);
-		expect(result.repairReembedHourlyBudget).toBe(10);
-		expect(result.repairRequeueCooldownMs).toBe(60000);
-		expect(result.repairRequeueHourlyBudget).toBe(50);
+		expect(result.autonomous.maintenanceIntervalMs).toBe(1800000);
+		expect(result.autonomous.maintenanceMode).toBe("observe");
+		expect(result.repair.reembedCooldownMs).toBe(300000);
+		expect(result.repair.reembedHourlyBudget).toBe(10);
+		expect(result.repair.requeueCooldownMs).toBe(60000);
+		expect(result.repair.requeueHourlyBudget).toBe(50);
 	});
 
 	it("rejects invalid maintenanceMode values", () => {
@@ -338,6 +338,66 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		expect(result.maintenanceMode).toBe("observe");
+		expect(result.autonomous.maintenanceMode).toBe("observe");
+	});
+
+	it("supports nested config format", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					extraction: {
+						provider: "ollama",
+						model: "qwen3:8b",
+						timeout: 30000,
+						minConfidence: 0.8,
+					},
+					graph: { enabled: true, boostWeight: 0.3 },
+					reranker: { enabled: true, model: "my-reranker", topN: 10 },
+					autonomous: {
+						enabled: true,
+						frozen: false,
+						allowUpdateDelete: true,
+						maintenanceIntervalMs: 60000,
+						maintenanceMode: "execute",
+					},
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(true);
+		expect(result.extraction.provider).toBe("ollama");
+		expect(result.extraction.model).toBe("qwen3:8b");
+		expect(result.extraction.timeout).toBe(30000);
+		expect(result.extraction.minConfidence).toBe(0.8);
+		expect(result.graph.enabled).toBe(true);
+		expect(result.graph.boostWeight).toBe(0.3);
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.reranker.model).toBe("my-reranker");
+		expect(result.reranker.topN).toBe(10);
+		expect(result.autonomous.enabled).toBe(true);
+		expect(result.autonomous.allowUpdateDelete).toBe(true);
+		expect(result.autonomous.maintenanceIntervalMs).toBe(60000);
+		expect(result.autonomous.maintenanceMode).toBe("execute");
+	});
+
+	it("nested keys take precedence over flat keys", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					// Flat key
+					rerankerEnabled: false,
+					rerankerModel: "flat-model",
+					// Nested key (wins)
+					reranker: {
+						enabled: true,
+						model: "nested-model",
+					},
+				},
+			},
+		});
+
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.reranker.model).toBe("nested-model");
 	});
 });

@@ -91,47 +91,80 @@ export interface AgentConfig {
 export const PIPELINE_FLAGS = [
 	"enabled",
 	"shadowMode",
-	"allowUpdateDelete",
-	"graphEnabled",
-	"autonomousEnabled",
 	"mutationsFrozen",
-	"autonomousFrozen",
+	"graph.enabled",
+	"reranker.enabled",
+	"autonomous.enabled",
+	"autonomous.frozen",
+	"autonomous.allowUpdateDelete",
 ] as const;
 
 export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
 
-export interface PipelineV2Config {
-	readonly enabled: boolean;
-	readonly shadowMode: boolean;
-	readonly allowUpdateDelete: boolean;
-	readonly graphEnabled: boolean;
-	readonly autonomousEnabled: boolean;
-	readonly mutationsFrozen: boolean;
-	readonly autonomousFrozen: boolean;
-	readonly extractionProvider: "ollama" | "claude-code";
-	readonly extractionModel: string;
-	readonly extractionTimeout: number;
-	readonly workerPollMs: number;
-	readonly workerMaxRetries: number;
+// -- Pipeline v2 sub-config interfaces --
+
+export interface PipelineExtractionConfig {
+	readonly provider: "ollama" | "claude-code";
+	readonly model: string;
+	readonly timeout: number;
+	readonly minConfidence: number;
+}
+
+export interface PipelineWorkerConfig {
+	readonly pollMs: number;
+	readonly maxRetries: number;
 	readonly leaseTimeoutMs: number;
-	readonly minFactConfidenceForWrite: number;
-	readonly graphBoostWeight: number;
-	readonly graphBoostTimeoutMs: number;
-	readonly rerankerEnabled: boolean;
-	readonly rerankerModel: string;
-	readonly rerankerTopN: number;
-	readonly rerankerTimeoutMs: number;
+}
+
+export interface PipelineGraphConfig {
+	readonly enabled: boolean;
+	readonly boostWeight: number;
+	readonly boostTimeoutMs: number;
+}
+
+export interface PipelineRerankerConfig {
+	readonly enabled: boolean;
+	readonly model: string;
+	readonly topN: number;
+	readonly timeoutMs: number;
+}
+
+export interface PipelineAutonomousConfig {
+	readonly enabled: boolean;
+	readonly frozen: boolean;
+	readonly allowUpdateDelete: boolean;
 	readonly maintenanceIntervalMs: number;
 	readonly maintenanceMode: "observe" | "execute";
-	readonly repairReembedCooldownMs: number;
-	readonly repairReembedHourlyBudget: number;
-	readonly repairRequeueCooldownMs: number;
-	readonly repairRequeueHourlyBudget: number;
-	// Document ingest worker
-	readonly documentWorkerIntervalMs: number;
-	readonly documentChunkSize: number;
-	readonly documentChunkOverlap: number;
-	readonly documentMaxContentBytes: number;
+}
+
+export interface PipelineRepairConfig {
+	readonly reembedCooldownMs: number;
+	readonly reembedHourlyBudget: number;
+	readonly requeueCooldownMs: number;
+	readonly requeueHourlyBudget: number;
+}
+
+export interface PipelineDocumentsConfig {
+	readonly workerIntervalMs: number;
+	readonly chunkSize: number;
+	readonly chunkOverlap: number;
+	readonly maxContentBytes: number;
+}
+
+export interface PipelineV2Config {
+	// Master switches (flat)
+	readonly enabled: boolean;
+	readonly shadowMode: boolean;
+	readonly mutationsFrozen: boolean;
+
+	// Grouped sub-objects
+	readonly extraction: PipelineExtractionConfig;
+	readonly worker: PipelineWorkerConfig;
+	readonly graph: PipelineGraphConfig;
+	readonly reranker: PipelineRerankerConfig;
+	readonly autonomous: PipelineAutonomousConfig;
+	readonly repair: PipelineRepairConfig;
+	readonly documents: PipelineDocumentsConfig;
 }
 
 // -- Status/union constants --

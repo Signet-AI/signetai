@@ -796,13 +796,16 @@ export function startWorker(
 			!pipelineCfg.shadowMode &&
 			!pipelineCfg.mutationsFrozen;
 
+		// Convenience aliases for nested config
+		const { extraction: extractionCfg, autonomous: autonomousCfg } = pipelineCfg;
+
 		const embeddingByHash = new Map<string, readonly number[]>();
 		const prefetchWarnings: string[] = [];
 		if (controlledWritesEnabled) {
 			for (const proposal of decisions.proposals) {
 				if (proposal.action !== "add" && proposal.action !== "update") continue;
-			if (proposal.action === "update" && !pipelineCfg.allowUpdateDelete) continue;
-				if (proposal.fact.confidence < pipelineCfg.minFactConfidenceForWrite) {
+			if (proposal.action === "update" && !autonomousCfg.allowUpdateDelete) continue;
+				if (proposal.fact.confidence < extractionCfg.minConfidence) {
 					continue;
 				}
 
@@ -844,12 +847,12 @@ export function startWorker(
 					job.memory_id,
 					decisions.proposals,
 					{
-						extractionModel: pipelineCfg.extractionModel,
+						extractionModel: extractionCfg.model,
 						embeddingModel: decisionCfg.embedding.model,
 						factCount: extraction.facts.length,
 						entityCount: extraction.entities.length,
-						minFactConfidenceForWrite: pipelineCfg.minFactConfidenceForWrite,
-						allowUpdateDelete: pipelineCfg.allowUpdateDelete,
+						minFactConfidenceForWrite: extractionCfg.minConfidence,
+						allowUpdateDelete: autonomousCfg.allowUpdateDelete,
 					},
 					embeddingByHash,
 				);
@@ -857,7 +860,7 @@ export function startWorker(
 				for (const proposal of decisions.proposals) {
 					recordDecisionHistory(db, job.memory_id, proposal, {
 						shadow: true,
-						extractionModel: pipelineCfg.extractionModel,
+						extractionModel: extractionCfg.model,
 						factCount: extraction.facts.length,
 						entityCount: extraction.entities.length,
 					});
@@ -882,14 +885,14 @@ export function startWorker(
 				db,
 				job.memory_id,
 				"completed",
-				pipelineCfg.extractionModel,
+				extractionCfg.model,
 			);
 		});
 
 		// Persist graph entities in a separate transaction so failure
 		// never reverts fact extraction. Non-fatal on error.
 		let graphStats = { entitiesInserted: 0, entitiesUpdated: 0, relationsInserted: 0, relationsUpdated: 0, mentionsLinked: 0 };
-		if (pipelineCfg.graphEnabled && extraction.entities.length > 0) {
+		if (pipelineCfg.graph.enabled && extraction.entities.length > 0) {
 			try {
 				graphStats = accessor.withWriteTx((db) =>
 					txPersistEntities(db, {
@@ -933,7 +936,7 @@ export function startWorker(
 		try {
 			// Lease a job inside write tx
 			const job = accessor.withWriteTx((db) =>
-				leaseJob(db, "extract", pipelineCfg.workerMaxRetries),
+				leaseJob(db, "extract", pipelineCfg.worker.maxRetries),
 			);
 
 			if (!job) return; // Nothing to do
@@ -965,7 +968,7 @@ export function startWorker(
 							db,
 							job.memory_id,
 							"failed",
-							pipelineCfg.extractionModel,
+							pipelineCfg.extraction.model,
 						);
 					}
 				});
@@ -982,7 +985,7 @@ export function startWorker(
 	}
 
 	function getBackoffDelay(): number {
-		if (consecutiveFailures === 0) return pipelineCfg.workerPollMs;
+		if (consecutiveFailures === 0) return pipelineCfg.worker.pollMs;
 		const exp = Math.min(BASE_DELAY * 2 ** consecutiveFailures, MAX_DELAY);
 		return exp + Math.random() * JITTER;
 	}
@@ -1003,7 +1006,7 @@ export function startWorker(
 	reapTimer = setInterval(() => {
 		if (!running) return;
 		try {
-			const reaped = reapStaleLeases(accessor, pipelineCfg.leaseTimeoutMs);
+			const reaped = reapStaleLeases(accessor, pipelineCfg.worker.leaseTimeoutMs);
 			if (reaped > 0) {
 				logger.info("pipeline", "Reaped stale leases", { count: reaped });
 			}
@@ -1017,9 +1020,9 @@ export function startWorker(
 	// Start the tick loop
 	scheduleTick();
 	logger.info("pipeline", "Worker started", {
-		pollMs: pipelineCfg.workerPollMs,
-		maxRetries: pipelineCfg.workerMaxRetries,
-		model: pipelineCfg.extractionModel,
+		pollMs: pipelineCfg.worker.pollMs,
+		maxRetries: pipelineCfg.worker.maxRetries,
+		model: pipelineCfg.extraction.model,
 		mode:
 			pipelineCfg.enabled &&
 			!pipelineCfg.shadowMode &&

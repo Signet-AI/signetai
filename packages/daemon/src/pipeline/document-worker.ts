@@ -253,7 +253,7 @@ async function processDocument(
 
 	if (doc.source_type === "url" && doc.source_url) {
 		const result = await fetchUrlContent(doc.source_url, {
-			maxBytes: pipelineCfg.documentMaxContentBytes,
+			maxBytes: pipelineCfg.documents.maxContentBytes,
 		});
 		content = result.content;
 		if (result.title && !title) title = result.title;
@@ -285,8 +285,8 @@ async function processDocument(
 
 	const chunks = chunkText(
 		content,
-		pipelineCfg.documentChunkSize,
-		pipelineCfg.documentChunkOverlap,
+		pipelineCfg.documents.chunkSize,
+		pipelineCfg.documents.chunkOverlap,
 	);
 
 	accessor.withWriteTx((db) => {
@@ -417,7 +417,7 @@ export function startDocumentWorker(
 		if (!running) return;
 
 		const job = deps.accessor.withWriteTx((db) =>
-			leaseDocumentJob(db, deps.pipelineCfg.workerMaxRetries),
+			leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries),
 		);
 
 		if (!job) return;
@@ -448,11 +448,11 @@ export function startDocumentWorker(
 				error: String(e),
 			});
 		});
-	}, deps.pipelineCfg.documentWorkerIntervalMs);
+	}, deps.pipelineCfg.documents.workerIntervalMs);
 
 	logger.info("document-worker", "Worker started", {
-		intervalMs: deps.pipelineCfg.documentWorkerIntervalMs,
-		chunkSize: deps.pipelineCfg.documentChunkSize,
+		intervalMs: deps.pipelineCfg.documents.workerIntervalMs,
+		chunkSize: deps.pipelineCfg.documents.chunkSize,
 	});
 
 	return {

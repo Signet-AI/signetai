@@ -28,34 +28,48 @@ export type { PipelineFlag, PipelineV2Config };
 export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	enabled: false,
 	shadowMode: false,
-	allowUpdateDelete: false,
-	graphEnabled: false,
-	autonomousEnabled: false,
 	mutationsFrozen: false,
-	autonomousFrozen: false,
-	extractionProvider: "claude-code",
-	extractionModel: "haiku",
-	extractionTimeout: 45000,
-	workerPollMs: 2000,
-	workerMaxRetries: 3,
-	leaseTimeoutMs: 300000,
-	minFactConfidenceForWrite: 0.7,
-	graphBoostWeight: 0.15,
-	graphBoostTimeoutMs: 500,
-	rerankerEnabled: false,
-	rerankerModel: "",
-	rerankerTopN: 20,
-	rerankerTimeoutMs: 2000,
-	maintenanceIntervalMs: 30 * 60 * 1000, // 30 min
-	maintenanceMode: "observe",
-	repairReembedCooldownMs: 300000, // 5 min
-	repairReembedHourlyBudget: 10,
-	repairRequeueCooldownMs: 60000, // 1 min
-	repairRequeueHourlyBudget: 50,
-	documentWorkerIntervalMs: 10000,
-	documentChunkSize: 2000,
-	documentChunkOverlap: 200,
-	documentMaxContentBytes: 10 * 1024 * 1024, // 10 MB
+	extraction: {
+		provider: "claude-code",
+		model: "haiku",
+		timeout: 45000,
+		minConfidence: 0.7,
+	},
+	worker: {
+		pollMs: 2000,
+		maxRetries: 3,
+		leaseTimeoutMs: 300000,
+	},
+	graph: {
+		enabled: false,
+		boostWeight: 0.15,
+		boostTimeoutMs: 500,
+	},
+	reranker: {
+		enabled: false,
+		model: "",
+		topN: 20,
+		timeoutMs: 2000,
+	},
+	autonomous: {
+		enabled: false,
+		frozen: false,
+		allowUpdateDelete: false,
+		maintenanceIntervalMs: 30 * 60 * 1000, // 30 min
+		maintenanceMode: "observe",
+	},
+	repair: {
+		reembedCooldownMs: 300000, // 5 min
+		reembedHourlyBudget: 10,
+		requeueCooldownMs: 60000, // 1 min
+		requeueHourlyBudget: 50,
+	},
+	documents: {
+		workerIntervalMs: 10000,
+		chunkSize: 2000,
+		chunkOverlap: 200,
+		maxContentBytes: 10 * 1024 * 1024, // 10 MB
+	},
 };
 
 export interface ResolvedMemoryConfig {
@@ -80,6 +94,10 @@ function clampFraction(raw: unknown, fallback: number): number {
 	return Math.max(0, Math.min(1, raw));
 }
 
+/**
+ * Load pipeline config from YAML, supporting both nested and flat key formats.
+ * Nested keys take precedence when both are present.
+ */
 export function loadPipelineConfig(
 	yaml: Record<string, unknown>,
 ): PipelineV2Config {
@@ -87,142 +105,200 @@ export function loadPipelineConfig(
 	const raw = mem?.pipelineV2 as Record<string, unknown> | undefined;
 	if (!raw) return { ...DEFAULT_PIPELINE_V2 };
 
+	// Read nested sub-objects (may be undefined for old flat configs)
+	const extractionRaw = raw.extraction as Record<string, unknown> | undefined;
+	const workerRaw = raw.worker as Record<string, unknown> | undefined;
+	const graphRaw = raw.graph as Record<string, unknown> | undefined;
+	const rerankerRaw = raw.reranker as Record<string, unknown> | undefined;
+	const autonomousRaw = raw.autonomous as Record<string, unknown> | undefined;
+	const repairRaw = raw.repair as Record<string, unknown> | undefined;
+	const documentsRaw = raw.documents as Record<string, unknown> | undefined;
+
+	// Helper: resolve nested-first, flat-fallback
+	const d = DEFAULT_PIPELINE_V2;
+
+	// -- Extraction provider resolution --
+	// Nested wins; flat fallback preserves legacy ollama inference
+	const nestedProvider = extractionRaw?.provider;
+	const flatProvider = raw.extractionProvider;
+	const flatModel = raw.extractionModel;
+	const resolvedProvider: "ollama" | "claude-code" =
+		nestedProvider === "claude-code" || flatProvider === "claude-code"
+			? "claude-code"
+			: nestedProvider === "ollama" || flatProvider === "ollama"
+				? "ollama"
+				: typeof (extractionRaw?.model ?? flatModel) === "string" &&
+					  nestedProvider === undefined &&
+					  flatProvider === undefined
+					? "ollama"
+					: d.extraction.provider;
+
 	return {
 		enabled: raw.enabled === true,
 		shadowMode: raw.shadowMode === true,
-		allowUpdateDelete: raw.allowUpdateDelete === true,
-		graphEnabled: raw.graphEnabled === true,
-		autonomousEnabled: raw.autonomousEnabled === true,
-		mutationsFrozen: raw.mutationsFrozen === true,
-		autonomousFrozen: raw.autonomousFrozen === true,
-		// If extractionModel is set but extractionProvider isn't, the user
-		// has an older config that assumed ollama — preserve that behavior.
-		extractionProvider:
-			raw.extractionProvider === "claude-code"
-				? "claude-code"
-				: raw.extractionProvider === "ollama"
-					? "ollama"
-					: typeof raw.extractionModel === "string" &&
-						  raw.extractionProvider === undefined
-						? "ollama"
-						: DEFAULT_PIPELINE_V2.extractionProvider,
-		extractionModel:
-			typeof raw.extractionModel === "string"
-				? raw.extractionModel
-				: DEFAULT_PIPELINE_V2.extractionModel,
-		extractionTimeout: clampPositive(
-			raw.extractionTimeout,
-			5000,
-			300000,
-			DEFAULT_PIPELINE_V2.extractionTimeout,
-		),
-		workerPollMs: clampPositive(
-			raw.workerPollMs,
-			100,
-			60000,
-			DEFAULT_PIPELINE_V2.workerPollMs,
-		),
-		workerMaxRetries: clampPositive(
-			raw.workerMaxRetries,
-			1,
-			10,
-			DEFAULT_PIPELINE_V2.workerMaxRetries,
-		),
-		leaseTimeoutMs: clampPositive(
-			raw.leaseTimeoutMs,
-			10000,
-			600000,
-			DEFAULT_PIPELINE_V2.leaseTimeoutMs,
-		),
-		minFactConfidenceForWrite: clampFraction(
-			raw.minFactConfidenceForWrite,
-			DEFAULT_PIPELINE_V2.minFactConfidenceForWrite,
-		),
-		graphBoostWeight: clampFraction(
-			raw.graphBoostWeight,
-			DEFAULT_PIPELINE_V2.graphBoostWeight,
-		),
-		graphBoostTimeoutMs: clampPositive(
-			raw.graphBoostTimeoutMs,
-			50,
-			5000,
-			DEFAULT_PIPELINE_V2.graphBoostTimeoutMs,
-		),
-		rerankerEnabled: raw.rerankerEnabled === true,
-		rerankerModel:
-			typeof raw.rerankerModel === "string"
-				? raw.rerankerModel
-				: DEFAULT_PIPELINE_V2.rerankerModel,
-		rerankerTopN: clampPositive(
-			raw.rerankerTopN,
-			1,
-			100,
-			DEFAULT_PIPELINE_V2.rerankerTopN,
-		),
-		rerankerTimeoutMs: clampPositive(
-			raw.rerankerTimeoutMs,
-			100,
-			30000,
-			DEFAULT_PIPELINE_V2.rerankerTimeoutMs,
-		),
-		maintenanceIntervalMs: clampPositive(
-			raw.maintenanceIntervalMs,
-			60000,
-			86400000,
-			DEFAULT_PIPELINE_V2.maintenanceIntervalMs,
-		),
-		maintenanceMode:
-			raw.maintenanceMode === "execute"
-				? "execute"
-				: DEFAULT_PIPELINE_V2.maintenanceMode,
-		repairReembedCooldownMs: clampPositive(
-			raw.repairReembedCooldownMs,
-			10000,
-			3600000,
-			DEFAULT_PIPELINE_V2.repairReembedCooldownMs,
-		),
-		repairReembedHourlyBudget: clampPositive(
-			raw.repairReembedHourlyBudget,
-			1,
-			1000,
-			DEFAULT_PIPELINE_V2.repairReembedHourlyBudget,
-		),
-		repairRequeueCooldownMs: clampPositive(
-			raw.repairRequeueCooldownMs,
-			5000,
-			3600000,
-			DEFAULT_PIPELINE_V2.repairRequeueCooldownMs,
-		),
-		repairRequeueHourlyBudget: clampPositive(
-			raw.repairRequeueHourlyBudget,
-			1,
-			1000,
-			DEFAULT_PIPELINE_V2.repairRequeueHourlyBudget,
-		),
-		documentWorkerIntervalMs: clampPositive(
-			raw.documentWorkerIntervalMs,
-			1000,
-			300000,
-			DEFAULT_PIPELINE_V2.documentWorkerIntervalMs,
-		),
-		documentChunkSize: clampPositive(
-			raw.documentChunkSize,
-			200,
-			50000,
-			DEFAULT_PIPELINE_V2.documentChunkSize,
-		),
-		documentChunkOverlap: clampPositive(
-			raw.documentChunkOverlap,
-			0,
-			10000,
-			DEFAULT_PIPELINE_V2.documentChunkOverlap,
-		),
-		documentMaxContentBytes: clampPositive(
-			raw.documentMaxContentBytes,
-			1024,
-			100 * 1024 * 1024,
-			DEFAULT_PIPELINE_V2.documentMaxContentBytes,
-		),
+		mutationsFrozen:
+			raw.mutationsFrozen === true,
+
+		extraction: {
+			provider: resolvedProvider,
+			model:
+				typeof extractionRaw?.model === "string"
+					? extractionRaw.model
+					: typeof flatModel === "string"
+						? (flatModel as string)
+						: d.extraction.model,
+			timeout: clampPositive(
+				extractionRaw?.timeout ?? raw.extractionTimeout,
+				5000,
+				300000,
+				d.extraction.timeout,
+			),
+			minConfidence: clampFraction(
+				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
+				d.extraction.minConfidence,
+			),
+		},
+
+		worker: {
+			pollMs: clampPositive(
+				workerRaw?.pollMs ?? raw.workerPollMs,
+				100,
+				60000,
+				d.worker.pollMs,
+			),
+			maxRetries: clampPositive(
+				workerRaw?.maxRetries ?? raw.workerMaxRetries,
+				1,
+				10,
+				d.worker.maxRetries,
+			),
+			leaseTimeoutMs: clampPositive(
+				workerRaw?.leaseTimeoutMs ?? raw.leaseTimeoutMs,
+				10000,
+				600000,
+				d.worker.leaseTimeoutMs,
+			),
+		},
+
+		graph: {
+			enabled:
+				graphRaw?.enabled === true || raw.graphEnabled === true,
+			boostWeight: clampFraction(
+				graphRaw?.boostWeight ?? raw.graphBoostWeight,
+				d.graph.boostWeight,
+			),
+			boostTimeoutMs: clampPositive(
+				graphRaw?.boostTimeoutMs ?? raw.graphBoostTimeoutMs,
+				50,
+				5000,
+				d.graph.boostTimeoutMs,
+			),
+		},
+
+		reranker: {
+			enabled:
+				rerankerRaw?.enabled === true || raw.rerankerEnabled === true,
+			model:
+				typeof rerankerRaw?.model === "string"
+					? rerankerRaw.model
+					: typeof raw.rerankerModel === "string"
+						? (raw.rerankerModel as string)
+						: d.reranker.model,
+			topN: clampPositive(
+				rerankerRaw?.topN ?? raw.rerankerTopN,
+				1,
+				100,
+				d.reranker.topN,
+			),
+			timeoutMs: clampPositive(
+				rerankerRaw?.timeoutMs ?? raw.rerankerTimeoutMs,
+				100,
+				30000,
+				d.reranker.timeoutMs,
+			),
+		},
+
+		autonomous: {
+			enabled:
+				autonomousRaw?.enabled === true ||
+				raw.autonomousEnabled === true,
+			frozen:
+				autonomousRaw?.frozen === true ||
+				raw.autonomousFrozen === true,
+			allowUpdateDelete:
+				autonomousRaw?.allowUpdateDelete === true ||
+				raw.allowUpdateDelete === true,
+			maintenanceIntervalMs: clampPositive(
+				autonomousRaw?.maintenanceIntervalMs ??
+					raw.maintenanceIntervalMs,
+				60000,
+				86400000,
+				d.autonomous.maintenanceIntervalMs,
+			),
+			maintenanceMode:
+				(autonomousRaw?.maintenanceMode ?? raw.maintenanceMode) ===
+				"execute"
+					? "execute"
+					: d.autonomous.maintenanceMode,
+		},
+
+		repair: {
+			reembedCooldownMs: clampPositive(
+				repairRaw?.reembedCooldownMs ?? raw.repairReembedCooldownMs,
+				10000,
+				3600000,
+				d.repair.reembedCooldownMs,
+			),
+			reembedHourlyBudget: clampPositive(
+				repairRaw?.reembedHourlyBudget ??
+					raw.repairReembedHourlyBudget,
+				1,
+				1000,
+				d.repair.reembedHourlyBudget,
+			),
+			requeueCooldownMs: clampPositive(
+				repairRaw?.requeueCooldownMs ?? raw.repairRequeueCooldownMs,
+				5000,
+				3600000,
+				d.repair.requeueCooldownMs,
+			),
+			requeueHourlyBudget: clampPositive(
+				repairRaw?.requeueHourlyBudget ??
+					raw.repairRequeueHourlyBudget,
+				1,
+				1000,
+				d.repair.requeueHourlyBudget,
+			),
+		},
+
+		documents: {
+			workerIntervalMs: clampPositive(
+				documentsRaw?.workerIntervalMs ??
+					raw.documentWorkerIntervalMs,
+				1000,
+				300000,
+				d.documents.workerIntervalMs,
+			),
+			chunkSize: clampPositive(
+				documentsRaw?.chunkSize ?? raw.documentChunkSize,
+				200,
+				50000,
+				d.documents.chunkSize,
+			),
+			chunkOverlap: clampPositive(
+				documentsRaw?.chunkOverlap ?? raw.documentChunkOverlap,
+				0,
+				10000,
+				d.documents.chunkOverlap,
+			),
+			maxContentBytes: clampPositive(
+				documentsRaw?.maxContentBytes ??
+					raw.documentMaxContentBytes,
+				1024,
+				100 * 1024 * 1024,
+				d.documents.maxContentBytes,
+			),
+		},
 	};
 }
 

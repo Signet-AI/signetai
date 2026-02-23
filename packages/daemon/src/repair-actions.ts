@@ -127,15 +127,15 @@ export function checkRepairGate(
 	cooldownMs: number,
 	hourlyBudget: number,
 ): RepairGateCheck {
-	if (cfg.autonomousFrozen) {
-		return { allowed: false, reason: "autonomousFrozen is set" };
+	if (cfg.autonomous.frozen) {
+		return { allowed: false, reason: "autonomous.frozen is set" };
 	}
 
-	// Agents require autonomousEnabled; operators and daemon bypass this check
-	if (ctx.actorType === "agent" && !cfg.autonomousEnabled) {
+	// Agents require autonomous.enabled; operators and daemon bypass this check
+	if (ctx.actorType === "agent" && !cfg.autonomous.enabled) {
 		return {
 			allowed: false,
-			reason: "autonomousEnabled is false; agents cannot trigger repairs",
+			reason: "autonomous.enabled is false; agents cannot trigger repairs",
 		};
 	}
 
@@ -191,8 +191,8 @@ export function requeueDeadJobs(
 		ctx,
 		limiter,
 		action,
-		cfg.repairRequeueCooldownMs,
-		cfg.repairRequeueHourlyBudget,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
 	);
 
 	if (!gate.allowed) {
@@ -258,8 +258,8 @@ export function releaseStaleLeases(
 		ctx,
 		limiter,
 		action,
-		cfg.repairRequeueCooldownMs,
-		cfg.repairRequeueHourlyBudget,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
 	);
 
 	if (!gate.allowed) {
@@ -271,7 +271,7 @@ export function releaseStaleLeases(
 		};
 	}
 
-	const cutoff = new Date(Date.now() - cfg.leaseTimeoutMs).toISOString();
+	const cutoff = new Date(Date.now() - cfg.worker.leaseTimeoutMs).toISOString();
 
 	const affected = accessor.withWriteTx((db) => {
 		const now = new Date().toISOString();
@@ -322,7 +322,7 @@ export function checkFtsConsistency(
 		ctx,
 		limiter,
 		action,
-		cfg.repairReembedCooldownMs,
+		cfg.repair.reembedCooldownMs,
 		FTS_HOURLY_BUDGET,
 	);
 
@@ -401,8 +401,8 @@ export function triggerRetentionSweep(
 		ctx,
 		limiter,
 		action,
-		cfg.repairRequeueCooldownMs,
-		cfg.repairRequeueHourlyBudget,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
 	);
 
 	if (!gate.allowed) {
@@ -505,8 +505,8 @@ export async function reembedMissingMemories(
 		ctx,
 		limiter,
 		action,
-		cfg.repairReembedCooldownMs,
-		cfg.repairReembedHourlyBudget,
+		cfg.repair.reembedCooldownMs,
+		cfg.repair.reembedHourlyBudget,
 	);
 
 	if (!gate.allowed) {

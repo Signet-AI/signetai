@@ -2974,13 +2974,13 @@ app.post("/api/memory/recall", async (c) => {
 	scored.sort((a, b) => b.score - a.score);
 
 	// --- Graph boost: pull up memories linked via knowledge graph ---
-	if (cfg.pipelineV2.graphEnabled && cfg.pipelineV2.graphBoostWeight > 0) {
+	if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.graph.boostWeight > 0) {
 		try {
 			const graphResult = getDbAccessor().withReadDb((db) =>
-				getGraphBoostIds(query, db, cfg.pipelineV2.graphBoostTimeoutMs),
+				getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs),
 			);
 			if (graphResult.graphLinkedIds.size > 0) {
-				const gw = cfg.pipelineV2.graphBoostWeight;
+				const gw = cfg.pipelineV2.graph.boostWeight;
 				for (const s of scored) {
 					if (graphResult.graphLinkedIds.has(s.id)) {
 						s.score = (1 - gw) * s.score + gw;
@@ -2996,9 +2996,9 @@ app.post("/api/memory/recall", async (c) => {
 	}
 
 	// --- Optional reranker hook ---
-	if (cfg.pipelineV2.rerankerEnabled && cfg.pipelineV2.rerankerModel) {
+	if (cfg.pipelineV2.reranker.enabled && cfg.pipelineV2.reranker.model) {
 		try {
-			const topForRerank = scored.slice(0, cfg.pipelineV2.rerankerTopN);
+			const topForRerank = scored.slice(0, cfg.pipelineV2.reranker.topN);
 			const rerankIds = topForRerank.map((s) => s.id);
 			const rerankPlaceholders = rerankIds.map(() => "?").join(", ");
 
@@ -3020,9 +3020,9 @@ app.post("/api/memory/recall", async (c) => {
 				score: s.score,
 			}));
 			const reranked = await rerank(query, candidates, noopReranker, {
-				topN: cfg.pipelineV2.rerankerTopN,
-				timeoutMs: cfg.pipelineV2.rerankerTimeoutMs,
-				model: cfg.pipelineV2.rerankerModel,
+				topN: cfg.pipelineV2.reranker.topN,
+				timeoutMs: cfg.pipelineV2.reranker.timeoutMs,
+				model: cfg.pipelineV2.reranker.model,
 			});
 			// Update scores from reranked results
 			const rerankedMap = new Map(reranked.map((r, i) => [r.id, i]));
@@ -6726,16 +6726,16 @@ async function main() {
 
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider =
-		memoryCfg.pipelineV2.extractionProvider === "claude-code"
+		memoryCfg.pipelineV2.extraction.provider === "claude-code"
 			? createClaudeCodeProvider({
-					model: memoryCfg.pipelineV2.extractionModel || "haiku",
+					model: memoryCfg.pipelineV2.extraction.model || "haiku",
 					defaultTimeoutMs:
-						memoryCfg.pipelineV2.extractionTimeout || 60000,
+						memoryCfg.pipelineV2.extraction.timeout || 60000,
 				})
 			: createOllamaProvider({
-					model: memoryCfg.pipelineV2.extractionModel || "qwen3:4b",
+					model: memoryCfg.pipelineV2.extraction.model || "qwen3:4b",
 					defaultTimeoutMs:
-						memoryCfg.pipelineV2.extractionTimeout || 90000,
+						memoryCfg.pipelineV2.extraction.timeout || 90000,
 				});
 	initLlmProvider(llmProvider);
 

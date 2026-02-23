@@ -45,30 +45,48 @@ function asAccessor(db: Database): DbAccessor {
 const TEST_CFG: PipelineV2Config = {
 	enabled: true,
 	shadowMode: false,
-	allowUpdateDelete: true,
-	graphEnabled: true,
-	autonomousEnabled: true,
 	mutationsFrozen: false,
-	autonomousFrozen: false,
-	extractionProvider: "ollama",
-	extractionModel: "test",
-	extractionTimeout: 45000,
-	workerPollMs: 2000,
-	workerMaxRetries: 3,
-	leaseTimeoutMs: 300000,
-	minFactConfidenceForWrite: 0.7,
-	graphBoostWeight: 0.15,
-	graphBoostTimeoutMs: 500,
-	rerankerEnabled: false,
-	rerankerModel: "",
-	rerankerTopN: 20,
-	rerankerTimeoutMs: 2000,
-	maintenanceIntervalMs: 1800000,
-	maintenanceMode: "observe" as const,
-	repairReembedCooldownMs: 300000,
-	repairReembedHourlyBudget: 10,
-	repairRequeueCooldownMs: 60000,
-	repairRequeueHourlyBudget: 50,
+	extraction: {
+		provider: "ollama",
+		model: "test",
+		timeout: 45000,
+		minConfidence: 0.7,
+	},
+	worker: {
+		pollMs: 2000,
+		maxRetries: 3,
+		leaseTimeoutMs: 300000,
+	},
+	graph: {
+		enabled: true,
+		boostWeight: 0.15,
+		boostTimeoutMs: 500,
+	},
+	reranker: {
+		enabled: false,
+		model: "",
+		topN: 20,
+		timeoutMs: 2000,
+	},
+	autonomous: {
+		enabled: true,
+		frozen: false,
+		allowUpdateDelete: true,
+		maintenanceIntervalMs: 1800000,
+		maintenanceMode: "observe",
+	},
+	repair: {
+		reembedCooldownMs: 300000,
+		reembedHourlyBudget: 10,
+		requeueCooldownMs: 60000,
+		requeueHourlyBudget: 50,
+	},
+	documents: {
+		workerIntervalMs: 10000,
+		chunkSize: 2000,
+		chunkOverlap: 200,
+		maxContentBytes: 10 * 1024 * 1024,
+	},
 };
 
 const CTX_OPERATOR = {
@@ -187,23 +205,23 @@ describe("createRateLimiter", () => {
 describe("checkRepairGate", () => {
 	it("denies when autonomousFrozen is true", () => {
 		const limiter = createRateLimiter();
-		const cfg = { ...TEST_CFG, autonomousFrozen: true };
+		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, frozen: true } };
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(false);
-		expect(result.reason).toMatch(/autonomousFrozen/);
+		expect(result.reason).toMatch(/autonomous\.frozen/);
 	});
 
-	it("denies agent when autonomousEnabled is false", () => {
+	it("denies agent when autonomous.enabled is false", () => {
 		const limiter = createRateLimiter();
-		const cfg = { ...TEST_CFG, autonomousEnabled: false };
+		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
 		const result = checkRepairGate(cfg, CTX_AGENT, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(false);
-		expect(result.reason).toMatch(/autonomousEnabled is false/);
+		expect(result.reason).toMatch(/autonomous\.enabled is false/);
 	});
 
-	it("allows operator even when autonomousEnabled is false", () => {
+	it("allows operator even when autonomous.enabled is false", () => {
 		const limiter = createRateLimiter();
-		const cfg = { ...TEST_CFG, autonomousEnabled: false };
+		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(true);
 	});
@@ -298,7 +316,7 @@ describe("releaseStaleLeases", () => {
 		const freshAt = new Date(Date.now() - 1000).toISOString();
 		insertJob(db, "job-fresh", "mem-3", "leased", freshAt);
 
-		const cfg = { ...TEST_CFG, leaseTimeoutMs: 5 * 60 * 1000 };
+		const cfg = { ...TEST_CFG, worker: { ...TEST_CFG.worker, leaseTimeoutMs: 5 * 60 * 1000 } };
 		const limiter = createRateLimiter();
 		const result = releaseStaleLeases(accessor, cfg, CTX_OPERATOR, limiter);
 

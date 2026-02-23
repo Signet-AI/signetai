@@ -171,30 +171,48 @@ function scriptedProvider(outputs: readonly string[]): LlmProvider {
 const PIPELINE_CFG: PipelineV2Config = {
 	enabled: true,
 	shadowMode: true,
-	allowUpdateDelete: false,
-	graphEnabled: false,
-	autonomousEnabled: false,
 	mutationsFrozen: false,
-	autonomousFrozen: false,
-	extractionProvider: "ollama",
-	extractionModel: "qwen3:4b",
-	extractionTimeout: 5000,
-	workerPollMs: 10, // fast polling for tests
-	workerMaxRetries: 3,
-	leaseTimeoutMs: 300000,
-	minFactConfidenceForWrite: 0.7,
-	graphBoostWeight: 0.15,
-	graphBoostTimeoutMs: 500,
-	rerankerEnabled: false,
-	rerankerModel: "",
-	rerankerTopN: 20,
-	rerankerTimeoutMs: 2000,
-	maintenanceIntervalMs: 1800000,
-	maintenanceMode: "observe" as const,
-	repairReembedCooldownMs: 300000,
-	repairReembedHourlyBudget: 10,
-	repairRequeueCooldownMs: 60000,
-	repairRequeueHourlyBudget: 50,
+	extraction: {
+		provider: "ollama",
+		model: "qwen3:4b",
+		timeout: 5000,
+		minConfidence: 0.7,
+	},
+	worker: {
+		pollMs: 10, // fast polling for tests
+		maxRetries: 3,
+		leaseTimeoutMs: 300000,
+	},
+	graph: {
+		enabled: false,
+		boostWeight: 0.15,
+		boostTimeoutMs: 500,
+	},
+	reranker: {
+		enabled: false,
+		model: "",
+		topN: 20,
+		timeoutMs: 2000,
+	},
+	autonomous: {
+		enabled: false,
+		frozen: false,
+		allowUpdateDelete: false,
+		maintenanceIntervalMs: 1800000,
+		maintenanceMode: "observe",
+	},
+	repair: {
+		reembedCooldownMs: 300000,
+		reembedHourlyBudget: 10,
+		requeueCooldownMs: 60000,
+		requeueHourlyBudget: 50,
+	},
+	documents: {
+		workerIntervalMs: 10000,
+		chunkSize: 2000,
+		chunkOverlap: 200,
+		maxContentBytes: 10 * 1024 * 1024,
+	},
 };
 
 const PHASE_C_CFG: PipelineV2Config = {
@@ -754,7 +772,7 @@ describe("Worker phase C controlled writes", () => {
 		const worker = startWorker(
 			accessor,
 			lowConfidenceProvider,
-			{ ...PHASE_C_CFG, minFactConfidenceForWrite: 0.9 },
+			{ ...PHASE_C_CFG, extraction: { ...PHASE_C_CFG.extraction, minConfidence: 0.9 } },
 			DECISION_CFG,
 		);
 
@@ -1036,7 +1054,7 @@ describe("Worker phase C controlled writes", () => {
 		const worker = startWorker(
 			accessor,
 			scriptedProvider([extraction, updateDecision]),
-			{ ...PHASE_C_CFG, allowUpdateDelete: true },
+			{ ...PHASE_C_CFG, autonomous: { ...PHASE_C_CFG.autonomous, allowUpdateDelete: true } },
 			DECISION_CFG,
 		);
 
@@ -1101,7 +1119,7 @@ describe("Worker phase C controlled writes", () => {
 		const worker = startWorker(
 			accessor,
 			scriptedProvider([extraction, deleteDecision]),
-			{ ...PHASE_C_CFG, allowUpdateDelete: true },
+			{ ...PHASE_C_CFG, autonomous: { ...PHASE_C_CFG.autonomous, allowUpdateDelete: true } },
 			DECISION_CFG,
 		);
 
@@ -1168,7 +1186,7 @@ describe("Worker phase C controlled writes", () => {
 		const worker = startWorker(
 			accessor,
 			scriptedProvider([extraction, deleteDecision]),
-			{ ...PHASE_C_CFG, allowUpdateDelete: true },
+			{ ...PHASE_C_CFG, autonomous: { ...PHASE_C_CFG.autonomous, allowUpdateDelete: true } },
 			DECISION_CFG,
 		);
 
@@ -1263,7 +1281,7 @@ describe("Worker dead-job path", () => {
 			close() {},
 		};
 
-		const cfg = { ...PIPELINE_CFG, workerMaxRetries: 1, workerPollMs: 10 };
+		const cfg = { ...PIPELINE_CFG, worker: { ...PIPELINE_CFG.worker, maxRetries: 1, pollMs: 10 } };
 		const worker = startWorker(
 			faultyAccessor,
 			goodProvider(),
@@ -1307,7 +1325,7 @@ describe("Worker dead-job path", () => {
 			close() {},
 		};
 
-		const cfg = { ...PIPELINE_CFG, workerMaxRetries: 3, workerPollMs: 10 };
+		const cfg = { ...PIPELINE_CFG, worker: { ...PIPELINE_CFG.worker, maxRetries: 3, pollMs: 10 } };
 		const worker = startWorker(
 			faultyAccessor,
 			goodProvider(),
