@@ -101,6 +101,19 @@ function findSqliteVecExtension(): string | null {
 			platformPkg,
 			extFile,
 		),
+		// Well-known npm global prefixes (when process.execPath is bun, not node)
+		join("/opt/homebrew/lib/node_modules", platformPkg, extFile),
+		join("/opt/homebrew/lib/node_modules", "signetai", "node_modules", platformPkg, extFile),
+		join("/usr/local/lib/node_modules", platformPkg, extFile),
+		join("/usr/local/lib/node_modules", "signetai", "node_modules", platformPkg, extFile),
+		join("/usr/lib/node_modules", platformPkg, extFile),
+		join("/usr/lib/node_modules", "signetai", "node_modules", platformPkg, extFile),
+		// nvm global paths
+		join(homedir(), ".nvm", "versions", "node", "*", "lib", "node_modules", platformPkg, extFile),
+		join(homedir(), ".nvm", "versions", "node", "*", "lib", "node_modules", "signetai", "node_modules", platformPkg, extFile),
+		// Bun global install (bun add -g signetai)
+		join(homedir(), ".bun", "install", "global", "node_modules", platformPkg, extFile),
+		join(homedir(), ".bun", "install", "global", "node_modules", "signetai", "node_modules", platformPkg, extFile),
 	];
 
 	for (const searchPath of searchPaths) {
