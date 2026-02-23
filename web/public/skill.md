@@ -360,7 +360,10 @@ If `signet status` shows the daemon is not running, start it with
 >
 > From this point forward, I will begin to remember things across sessions.
 > It can take a while for the memory pipeline and database to reach full 
-> efficiency, but we will both experience this change happen over time. 
+> efficiency, but we will both experience this change happen over time.
+>
+> **Next step:** Say `/onboarding` to personalize me! We'll go through
+> your preferences, my personality, communication style, and more." 
 
 ---
 

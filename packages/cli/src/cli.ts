@@ -1397,6 +1397,24 @@ async function existingSetupWizard(
 		if (launchNow) {
 			await open(`http://localhost:${DEFAULT_PORT}`);
 		}
+
+		// Suggest onboarding
+		console.log();
+		console.log(
+			chalk.cyan(
+				"  → Next step: Say '/onboarding' to personalize your agent",
+			),
+		);
+		console.log(
+			chalk.dim(
+				"    This will walk you through setting up your agent's personality,",
+			),
+		);
+		console.log(
+			chalk.dim(
+				"    communication style, and your preferences.",
+			),
+		);
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);
@@ -2093,6 +2111,24 @@ ${agentName} is a helpful assistant.
 		if (launchNow) {
 			await open(`http://localhost:${DEFAULT_PORT}`);
 		}
+
+		// Suggest onboarding
+		console.log();
+		console.log(
+			chalk.cyan(
+				"  → Next step: Say '/onboarding' to personalize your agent",
+			),
+		);
+		console.log(
+			chalk.dim(
+				"    This will walk you through setting up your agent's personality,",
+			),
+		);
+		console.log(
+			chalk.dim(
+				"    communication style, and your preferences.",
+			),
+		);
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);
