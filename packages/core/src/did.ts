@@ -29,6 +29,12 @@ const ED25519_PUBLIC_KEY_LENGTH = 32;
 /** Base58btc alphabet (Bitcoin variant). */
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
+/** Precomputed reverse lookup for base58btc decoding (avoids per-call Map allocation). */
+const BASE58_REVERSE = new Map<string, number>();
+for (let i = 0; i < BASE58_ALPHABET.length; i++) {
+	BASE58_REVERSE.set(BASE58_ALPHABET[i], i);
+}
+
 /** Multibase prefix for base58btc. */
 const MULTIBASE_BASE58BTC_PREFIX = 'z';
 
@@ -125,12 +131,6 @@ function base58btcEncode(bytes: Uint8Array): string {
 function base58btcDecode(str: string): Uint8Array {
   if (str.length === 0) return new Uint8Array(0);
 
-  // Build reverse lookup on first use.
-  const alphabetMap = new Map<string, number>();
-  for (let i = 0; i < BASE58_ALPHABET.length; i++) {
-    alphabetMap.set(BASE58_ALPHABET[i], i);
-  }
-
   // Count leading '1's — each maps to a leading 0x00 byte.
   let leadingOnes = 0;
   for (let i = 0; i < str.length && str[i] === '1'; i++) {
@@ -143,7 +143,7 @@ function base58btcDecode(str: string): Uint8Array {
   const output = new Uint8Array(size);
 
   for (let i = leadingOnes; i < str.length; i++) {
-    const charValue = alphabetMap.get(str[i]);
+    const charValue = BASE58_REVERSE.get(str[i]);
     if (charValue === undefined) {
       throw new Error(`Invalid base58 character '${str[i]}' at position ${i}`);
     }

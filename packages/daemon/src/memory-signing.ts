@@ -14,8 +14,9 @@ import {
 	signContent,
 	getPublicKeyBytes,
 	verifySignature,
+	publicKeyToDid,
+	didToPublicKey,
 } from "@signet/core";
-import { publicKeyToDid } from "@signet/core";
 import type { IngestEnvelope } from "./transactions";
 
 // ---------------------------------------------------------------------------
@@ -35,8 +36,9 @@ let _signingAvailable: boolean | null = null;
 /**
  * Check if memory signing is available (keypair exists).
  * Result is cached after first check.
+ * Synchronous because hasSigningKeypair() only uses existsSync.
  */
-export async function isSigningAvailable(): Promise<boolean> {
+export function isSigningAvailable(): boolean {
 	if (_signingAvailable !== null) return _signingAvailable;
 	_signingAvailable = hasSigningKeypair();
 	return _signingAvailable;
@@ -47,7 +49,7 @@ export async function isSigningAvailable(): Promise<boolean> {
  */
 export async function getAgentDid(): Promise<string | null> {
 	if (_cachedDid !== null) return _cachedDid;
-	if (!(await isSigningAvailable())) return null;
+	if (!isSigningAvailable()) return null;
 
 	try {
 		const pubKey = await getPublicKeyBytes();
@@ -64,12 +66,23 @@ export async function getAgentDid(): Promise<string | null> {
  *
  * The signed content is: `contentHash|createdAt|signerDid`
  * This binds the signature to the content, timestamp, and signer identity.
+ *
+ * All fields are validated to prevent delimiter injection attacks where a
+ * crafted field containing `|` could forge a different payload.
  */
 export function buildSignablePayload(
 	contentHash: string,
 	createdAt: string,
 	signerDid: string,
 ): string {
+	// Validate contentHash is lowercase hex only (SHA-256 output)
+	if (!/^[0-9a-f]+$/.test(contentHash)) {
+		throw new Error("contentHash must be lowercase hex");
+	}
+	// Validate no delimiters in any field (defense in depth)
+	if (createdAt.includes("|") || signerDid.includes("|")) {
+		throw new Error("Signing payload fields must not contain pipe characters");
+	}
 	return `${contentHash}|${createdAt}|${signerDid}`;
 }
 
@@ -84,7 +97,7 @@ export function buildSignablePayload(
 export async function signEnvelope(
 	envelope: IngestEnvelope,
 ): Promise<IngestEnvelope> {
-	if (!(await isSigningAvailable())) return envelope;
+	if (!isSigningAvailable()) return envelope;
 
 	const did = await getAgentDid();
 	if (!did) return envelope;
@@ -97,8 +110,9 @@ export async function signEnvelope(
 		);
 		const signature = await signContent(payload);
 
-		envelope.signerDid = did;
-		envelope.signature = signature;
+		// Return a new object — don't mutate the input (avoids race conditions
+		// if the caller retries or passes the same envelope elsewhere).
+		return { ...envelope, signerDid: did, signature };
 	} catch (err) {
 		// Signing failed — log but don't block memory creation
 		console.warn(
@@ -126,8 +140,7 @@ export async function verifyMemorySignature(
 	signature: string,
 ): Promise<boolean> {
 	try {
-		// Extract public key from DID
-		const { didToPublicKey } = await import("@signet/core");
+		// Extract public key from DID (statically imported, not dynamic import)
 		const publicKey = didToPublicKey(signerDid);
 
 		const payload = buildSignablePayload(contentHash, createdAt, signerDid);

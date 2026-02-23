@@ -180,6 +180,7 @@ export {
 	generateSigningKeypair,
 	loadSigningKeypair,
 	hasSigningKeypair,
+	clearCachedKeypair,
 	getPublicKeyBytes,
 	getPublicKeyBase64,
 	signContent,

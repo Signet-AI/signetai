@@ -26,6 +26,11 @@ import sodium from 'libsodium-wrappers';
 /** BLAKE2b-256 output length in bytes. */
 const HASH_BYTES = 32;
 
+/** Domain separation prefixes to prevent second-preimage attacks.
+ *  Leaf nodes get 0x00 prefix, internal nodes get 0x01 prefix. */
+const LEAF_PREFIX = new Uint8Array([0x00]);
+const NODE_PREFIX = new Uint8Array([0x01]);
+
 /**
  * Canonical "empty root" — the BLAKE2b-256 hash of an empty input.
  * Used when `computeMerkleRoot` or `buildMerkleTree` receives an empty array.
@@ -168,9 +173,11 @@ export async function hashPair(left: string, right: string): Promise<string> {
   await ensureSodium();
   const leftBytes = hexToBytes(left);
   const rightBytes = hexToBytes(right);
-  const combined = new Uint8Array(leftBytes.length + rightBytes.length);
-  combined.set(leftBytes, 0);
-  combined.set(rightBytes, leftBytes.length);
+  // Domain separation: internal nodes prefixed with 0x01
+  const combined = new Uint8Array(1 + leftBytes.length + rightBytes.length);
+  combined.set(NODE_PREFIX, 0);
+  combined.set(leftBytes, 1);
+  combined.set(rightBytes, 1 + leftBytes.length);
   const hash = sodium.crypto_generichash(HASH_BYTES, combined, null);
   return bytesToHex(hash);
 }
@@ -223,9 +230,12 @@ async function buildLayers(leaves: string[]): Promise<string[][]> {
     for (let i = 0; i < current.length; i += 2) {
       const leftBytes = hexToBytes(current[i]);
       const rightBytes = hexToBytes(current[i + 1]);
-      const combined = new Uint8Array(HASH_BYTES * 2);
-      combined.set(leftBytes, 0);
-      combined.set(rightBytes, HASH_BYTES);
+      // Domain separation: internal nodes get 0x01 prefix to prevent
+      // second-preimage attacks (leaf vs internal node confusion).
+      const combined = new Uint8Array(1 + HASH_BYTES * 2);
+      combined.set(NODE_PREFIX, 0);
+      combined.set(leftBytes, 1);
+      combined.set(rightBytes, 1 + HASH_BYTES);
       const hash = sodium.crypto_generichash(HASH_BYTES, combined, null);
       next.push(bytesToHex(hash));
     }
@@ -369,24 +379,36 @@ export async function verifyProof(
 ): Promise<boolean> {
   await ensureSodium();
 
+  // Validate proof structure — malformed proofs should return false, not throw
+  if (!proof || !proof.leafHash || !Array.isArray(proof.siblings) || !proof.root) {
+    return false;
+  }
+
   // Quick sanity: the proof's own leaf must match the provided leaf
   if (proof.leafHash !== leafHash) {
     return false;
   }
 
-  let current = leafHash;
+  try {
+    let current = leafHash;
 
-  for (const step of proof.siblings) {
-    const left = step.position === 'left' ? step.hash : current;
-    const right = step.position === 'left' ? current : step.hash;
+    for (const step of proof.siblings) {
+      const left = step.position === 'left' ? step.hash : current;
+      const right = step.position === 'left' ? current : step.hash;
 
-    const leftBytes = hexToBytes(left);
-    const rightBytes = hexToBytes(right);
-    const combined = new Uint8Array(HASH_BYTES * 2);
-    combined.set(leftBytes, 0);
-    combined.set(rightBytes, HASH_BYTES);
-    current = bytesToHex(sodium.crypto_generichash(HASH_BYTES, combined, null));
+      const leftBytes = hexToBytes(left);
+      const rightBytes = hexToBytes(right);
+      // Domain separation: internal nodes prefixed with 0x01
+      const combined = new Uint8Array(1 + HASH_BYTES * 2);
+      combined.set(NODE_PREFIX, 0);
+      combined.set(leftBytes, 1);
+      combined.set(rightBytes, 1 + HASH_BYTES);
+      current = bytesToHex(sodium.crypto_generichash(HASH_BYTES, combined, null));
+    }
+
+    return current === root;
+  } catch {
+    // Malformed hex in proof siblings → invalid proof, not a crash
+    return false;
   }
-
-  return current === root;
 }

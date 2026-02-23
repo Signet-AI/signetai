@@ -12,7 +12,7 @@
  */
 
 import sodium from "libsodium-wrappers";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, writeSync, closeSync, chmodSync } from "fs";
 import { homedir, hostname } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
@@ -182,9 +182,22 @@ function readKeypairFile(): StoredKeypair {
 	}
 }
 
-function writeKeypairFile(data: StoredKeypair): void {
+/**
+ * Write keypair to disk with exclusive creation (O_CREAT | O_EXCL).
+ *
+ * Uses `openSync(path, 'wx')` to atomically fail if the file already exists,
+ * preventing TOCTOU races where concurrent processes could overwrite each other's keys.
+ */
+function writeKeypairFileExclusive(data: StoredKeypair): void {
 	mkdirSync(KEYS_DIR, { recursive: true, mode: 0o700 });
-	writeFileSync(SIGNING_KEY_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
+	const fd = openSync(SIGNING_KEY_FILE, "wx", 0o600); // atomic create-or-fail
+	try {
+		writeSync(fd, JSON.stringify(data, null, 2));
+	} finally {
+		closeSync(fd);
+	}
+	// Belt-and-suspenders: ensure permissions even if umask interfered
+	chmodSync(SIGNING_KEY_FILE, 0o600);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,13 +207,31 @@ function writeKeypairFile(data: StoredKeypair): void {
 let _cachedKeypair: DecryptedKeypair | null = null;
 
 /**
+ * Promise-based concurrency guard for keypair loading.
+ * Prevents duplicate loads when multiple async callers hit ensureKeypair() simultaneously.
+ */
+let _loadPromise: Promise<DecryptedKeypair> | null = null;
+
+/**
  * Ensure libsodium is initialised and the cached keypair is loaded.
  * All public functions that need the keypair call this first.
+ *
+ * Uses a promise lock to prevent duplicate concurrent loads (which would
+ * leave orphaned private key copies in memory).
  */
 async function ensureKeypair(): Promise<DecryptedKeypair> {
 	if (_cachedKeypair) return _cachedKeypair;
-	_cachedKeypair = await loadSigningKeypair();
-	return _cachedKeypair;
+	if (!_loadPromise) {
+		_loadPromise = loadSigningKeypair().then((kp) => {
+			_cachedKeypair = kp;
+			_loadPromise = null;
+			return kp;
+		}).catch((err) => {
+			_loadPromise = null;
+			throw err;
+		});
+	}
+	return _loadPromise;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,9 +249,11 @@ async function ensureKeypair(): Promise<DecryptedKeypair> {
 export async function generateSigningKeypair(): Promise<string> {
 	await sodium.ready;
 
+	// Fast-path check — avoids generating a keypair we'd throw away.
+	// The real atomicity guarantee comes from writeKeypairFileExclusive (O_EXCL).
 	if (existsSync(SIGNING_KEY_FILE)) {
 		throw new Error(
-			`Signing keypair already exists at ${SIGNING_KEY_FILE}. ` +
+			"Signing keypair already exists. " +
 			"Delete it manually or use a key rotation workflow to replace it.",
 		);
 	}
@@ -236,7 +269,7 @@ export async function generateSigningKeypair(): Promise<string> {
 		created: new Date().toISOString(),
 	};
 
-	writeKeypairFile(stored);
+	writeKeypairFileExclusive(stored);
 
 	// Cache for immediate use — MUST copy the Uint8Arrays because we zero
 	// the originals below (Uint8Array assignment is by reference, not copy).
@@ -285,6 +318,17 @@ export async function loadSigningKeypair(): Promise<DecryptedKeypair> {
 		);
 	}
 
+	// Verify public/private key consistency — detect tampered keypair files.
+	// Derive the public key from the private key and compare.
+	const derivedPublicKey = sodium.crypto_sign_ed25519_sk_to_pk(privateKey);
+	if (!sodium.memcmp(derivedPublicKey, publicKey)) {
+		// Zero the private key before throwing — don't leave it in memory
+		privateKey.fill(0);
+		throw new Error(
+			"Public/private key mismatch — keypair file may be corrupted or tampered",
+		);
+	}
+
 	_cachedKeypair = { publicKey, privateKey };
 	return _cachedKeypair;
 }
@@ -307,7 +351,7 @@ export function hasSigningKeypair(): boolean {
  */
 export async function getPublicKeyBytes(): Promise<Uint8Array> {
 	const kp = await ensureKeypair();
-	return kp.publicKey;
+	return new Uint8Array(kp.publicKey); // Defensive copy — callers can't corrupt the cache
 }
 
 /**
@@ -411,3 +455,30 @@ export async function verifyBytes(
 		return false;
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Cleanup
+// ---------------------------------------------------------------------------
+
+/**
+ * Zero and release the cached keypair from memory.
+ *
+ * Best-effort in JavaScript (GC may retain copies), but significantly
+ * shrinks the attack window for memory-scraping attacks.
+ */
+export function clearCachedKeypair(): void {
+	if (_cachedKeypair) {
+		_cachedKeypair.privateKey.fill(0);
+		_cachedKeypair.publicKey.fill(0);
+		_cachedKeypair = null;
+	}
+	if (_masterKey) {
+		_masterKey.fill(0);
+		_masterKey = null;
+	}
+}
+
+// Register best-effort cleanup on process exit
+process.on("exit", clearCachedKeypair);
+process.on("SIGINT", () => { clearCachedKeypair(); process.exit(130); });
+process.on("SIGTERM", () => { clearCachedKeypair(); process.exit(143); });

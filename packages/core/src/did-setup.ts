@@ -72,7 +72,17 @@ export async function initializeAgentDid(): Promise<DidSetupResult> {
 			const raw = readFileSync(yamlPath, "utf-8");
 			const config = parse(raw) as Record<string, unknown>;
 
-			if (config.did !== did) {
+			if (config.did && config.did !== did) {
+				// DID mismatch — existing DID doesn't match derived key.
+				// This could mean the keypair was rotated without updating config,
+				// or the file was tampered with.
+				throw new Error(
+					`DID mismatch: agent.yaml has ${config.did} but current keypair ` +
+					`derives ${did}. Delete the old DID or rotate keys explicitly.`,
+				);
+			}
+
+			if (!config.did) {
 				config.did = did;
 
 				// Ensure signing config exists
