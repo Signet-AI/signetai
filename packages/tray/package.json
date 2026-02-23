@@ -1,6 +1,6 @@
 {
   "name": "@signet/tray",
-  "version": "0.1.112",
+  "version": "0.1.113",
   "private": true,
   "description": "Signet system tray application",
   "scripts": {
