@@ -18,6 +18,7 @@ import { parseSimpleYaml } from "@signet/core";
 import { logger } from "./logger";
 import { getDbAccessor } from "./db-accessor";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
+import { getUpdateSummary } from "./update-system";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
@@ -223,6 +224,13 @@ export function selectWithBudget(
 		used += row.content.length;
 	}
 	return selected;
+}
+
+function truncateForLog(text: string, maxChars: number): string {
+	const value = text.trim();
+	if (value.length <= maxChars) return value;
+	const overflow = value.length - maxChars;
+	return `${value.slice(0, maxChars)}\n...[truncated ${overflow} chars]`;
 }
 
 /** Check if content overlaps 70%+ with existing memories via FTS */
@@ -596,9 +604,22 @@ export function handleSessionStart(
 		}
 	}
 
+	const updateStatus = getUpdateSummary();
+	if (updateStatus) {
+		injectParts.push("\n## Signet Status\n");
+		injectParts.push(updateStatus);
+	}
+
 	const duration = Date.now() - start;
+	const inject = injectParts.join("\n");
 	logger.info("hooks", "Session start completed", {
+		harness: req.harness,
+		project: req.project,
+		sessionKey: req.sessionKey,
+		runtimePath: req.runtimePath,
 		memoryCount: memories.length,
+		injectChars: inject.length,
+		injectPreview: truncateForLog(inject, 2500),
 		durationMs: duration,
 	});
 
@@ -612,7 +633,7 @@ export function handleSessionStart(
 			created_at: m.created_at,
 		})),
 		recentContext: memoryMdContent,
-		inject: injectParts.join("\n"),
+		inject,
 	};
 }
 
@@ -645,6 +666,14 @@ ${guidelines}
 			}
 		}
 	}
+
+	logger.info("hooks", "Pre-compaction prompt generated", {
+		harness: req.harness,
+		sessionKey: req.sessionKey,
+		messageCount: req.messageCount,
+		summaryPromptChars: summaryPrompt.length,
+		summaryPromptPreview: truncateForLog(summaryPrompt, 2500),
+	});
 
 	return {
 		summaryPrompt,
@@ -739,7 +768,13 @@ export function handleUserPromptSubmit(
 
 		const duration = Date.now() - start;
 		logger.info("hooks", "User prompt submit", {
+			harness: req.harness,
+			project: req.project,
+			sessionKey: req.sessionKey,
 			memoryCount: selected.length,
+			promptPreview: truncateForLog(req.userPrompt, 600),
+			injectChars: inject.length,
+			injectPreview: truncateForLog(inject, 1800),
 			durationMs: duration,
 		});
 
@@ -795,6 +830,15 @@ export function handleSessionEnd(
 	});
 
 	logger.info("hooks", "Session end queued for summary", { jobId });
+	logger.info("hooks", "Session end transcript queued", {
+		harness: req.harness,
+		project: req.cwd,
+		sessionKey: req.sessionKey || req.sessionId,
+		transcriptPath: req.transcriptPath,
+		transcriptChars: transcript.length,
+		queuedChars: truncated.length,
+		transcriptPreview: truncateForLog(truncated, 1500),
+	});
 
 	return { memoriesSaved: 0, queued: true, jobId };
 }

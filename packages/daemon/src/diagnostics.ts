@@ -6,6 +6,7 @@
  */
 
 import type { ReadDb } from "./db-accessor";
+import type { UpdateState } from "./update-system";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,6 +57,14 @@ export interface ConnectorHealth extends HealthScore {
 	readonly oldestErrorAge: number;
 }
 
+export interface UpdateHealth extends HealthScore {
+	readonly autoInstallEnabled: boolean;
+	readonly lastCheckSucceeded: boolean;
+	readonly lastCheckAgeHours: number;
+	readonly pendingRestart: boolean;
+	readonly lastError: string | null;
+}
+
 export interface DiagnosticsReport {
 	readonly timestamp: string;
 	readonly composite: HealthScore;
@@ -65,6 +74,7 @@ export interface DiagnosticsReport {
 	readonly provider: ProviderHealth;
 	readonly mutation: MutationHealth;
 	readonly connector: ConnectorHealth;
+	readonly update: UpdateHealth;
 }
 
 // ---------------------------------------------------------------------------
@@ -388,22 +398,80 @@ export function getConnectorHealth(db: ReadDb): ConnectorHealth {
 	}
 }
 
+export function getUpdateHealth(state?: UpdateState): UpdateHealth {
+	if (!state) {
+		return {
+			score: 1.0,
+			status: "healthy",
+			autoInstallEnabled: false,
+			lastCheckSucceeded: true,
+			lastCheckAgeHours: 0,
+			pendingRestart: false,
+			lastError: null,
+		};
+	}
+
+	const lastCheckAgeHours = state.lastCheckTime
+		? (Date.now() - state.lastCheckTime.getTime()) / 3_600_000
+		: 0;
+
+	const lastCheckSucceeded = state.lastCheck
+		? !state.lastCheck.checkError
+		: true;
+
+	let score = 1.0;
+
+	if (state.currentVersion === "0.0.0") score -= 0.5;
+
+	if (state.pendingRestartVersion && lastCheckAgeHours > 1) {
+		score -= 0.3;
+	}
+
+	if (state.lastAutoUpdateError && state.config.autoInstall) {
+		score -= 0.4;
+	}
+
+	if (state.config.autoInstall && lastCheckAgeHours > 24) {
+		score -= 0.2;
+	}
+
+	if (
+		!state.config.autoInstall &&
+		state.lastCheck?.updateAvailable
+	) {
+		score -= 0.1;
+	}
+
+	score = clamp(score);
+	return {
+		score,
+		status: scoreStatus(score),
+		autoInstallEnabled: state.config.autoInstall,
+		lastCheckSucceeded,
+		lastCheckAgeHours: Math.round(lastCheckAgeHours * 10) / 10,
+		pendingRestart: state.pendingRestartVersion !== null,
+		lastError: state.lastAutoUpdateError,
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Composite report
 // ---------------------------------------------------------------------------
 
 const WEIGHTS = {
-	queue: 0.28,
-	storage: 0.14,
-	index: 0.19,
-	provider: 0.24,
-	mutation: 0.10,
+	queue: 0.25,
+	storage: 0.12,
+	index: 0.17,
+	provider: 0.22,
+	mutation: 0.08,
 	connector: 0.05,
+	update: 0.11,
 } as const;
 
 export function getDiagnostics(
 	db: ReadDb,
 	tracker: ProviderTracker,
+	updateState?: UpdateState,
 ): DiagnosticsReport {
 	const queue = getQueueHealth(db);
 	const storage = getStorageHealth(db);
@@ -411,6 +479,7 @@ export function getDiagnostics(
 	const provider = getProviderHealth(tracker);
 	const mutation = getMutationHealth(db);
 	const connector = getConnectorHealth(db);
+	const update = getUpdateHealth(updateState);
 
 	const compositeScore = clamp(
 		queue.score * WEIGHTS.queue +
@@ -418,7 +487,8 @@ export function getDiagnostics(
 			index.score * WEIGHTS.index +
 			provider.score * WEIGHTS.provider +
 			mutation.score * WEIGHTS.mutation +
-			connector.score * WEIGHTS.connector,
+			connector.score * WEIGHTS.connector +
+			update.score * WEIGHTS.update,
 	);
 
 	const composite: HealthScore = {
@@ -435,5 +505,6 @@ export function getDiagnostics(
 		provider,
 		mutation,
 		connector,
+		update,
 	};
 }

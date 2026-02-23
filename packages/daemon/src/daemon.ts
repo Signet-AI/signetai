@@ -47,9 +47,21 @@ import {
 	keywordSearch,
 	resolvePrimaryPackageManager,
 	getSkillsRunnerCommand,
-	getGlobalInstallCommand,
 } from "@signet/core";
-import { compareVersions, isVersionNewer } from "./version";
+import {
+	initUpdateSystem,
+	getUpdateState,
+	checkForUpdates as checkForUpdatesImpl,
+	runUpdate as runUpdateImpl,
+	parseBooleanFlag,
+	parseUpdateInterval,
+	setUpdateConfig,
+	startUpdateTimer,
+	stopUpdateTimer,
+	MIN_UPDATE_INTERVAL_SECONDS,
+	MAX_UPDATE_INTERVAL_SECONDS,
+	type UpdateConfig,
+} from "./update-system";
 import {
 	txIngestEnvelope,
 	txFinalizeAccessAndHistory,
@@ -765,6 +777,7 @@ app.use("*", async (c, next) => {
 
 // Health check
 app.get("/health", (c) => {
+	const us = getUpdateState();
 	return c.json({
 		status: "healthy",
 		uptime: process.uptime(),
@@ -772,6 +785,8 @@ app.get("/health", (c) => {
 		version: CURRENT_VERSION,
 		port: PORT,
 		agentsDir: AGENTS_DIR,
+		updateAvailable: us.lastCheck?.updateAvailable ?? false,
+		pendingRestart: us.pendingRestartVersion !== null,
 	});
 });
 
@@ -4849,479 +4864,45 @@ app.post("/api/git/config", async (c) => {
 });
 
 // ============================================================================
-// Update System
+// Update System (extracted to ./update-system.ts)
 // ============================================================================
-
-const GITHUB_REPO = "Signet-AI/signetai";
-const NPM_PACKAGE = "signetai";
-
-interface UpdateInfo {
-	currentVersion: string;
-	latestVersion: string | null;
-	updateAvailable: boolean;
-	releaseUrl?: string;
-	releaseNotes?: string;
-	publishedAt?: string;
-	checkError?: string;
-	restartRequired?: boolean;
-	pendingVersion?: string;
-}
-
-interface UpdateRunResult {
-	success: boolean;
-	message: string;
-	output?: string;
-	installedVersion?: string;
-	restartRequired?: boolean;
-}
-
-interface UpdateConfig {
-	autoInstall: boolean;
-	checkInterval: number; // seconds
-}
-
-const MIN_UPDATE_INTERVAL_SECONDS = 300;
-const MAX_UPDATE_INTERVAL_SECONDS = 604800;
-const DEFAULT_UPDATE_INTERVAL_SECONDS = 21600;
-
-let lastUpdateCheck: UpdateInfo | null = null;
-let lastUpdateCheckTime: Date | null = null;
-let updateTimer: ReturnType<typeof setInterval> | null = null;
-let updateCheckInProgress = false;
-let updateInstallInProgress = false;
-let pendingRestartVersion: string | null = null;
-let lastAutoUpdateAt: Date | null = null;
-let lastAutoUpdateError: string | null = null;
-
-function parseBooleanFlag(value: unknown): boolean | null {
-	if (typeof value === "boolean") return value;
-	if (typeof value === "string") {
-		if (value === "true") return true;
-		if (value === "false") return false;
-	}
-	return null;
-}
-
-function parseUpdateInterval(value: unknown): number | null {
-	const parsed = Number.parseInt(String(value), 10);
-	if (!Number.isFinite(parsed)) return null;
-	if (
-		parsed < MIN_UPDATE_INTERVAL_SECONDS ||
-		parsed > MAX_UPDATE_INTERVAL_SECONDS
-	) {
-		return null;
-	}
-	return parsed;
-}
-
-function loadUpdateConfig(): UpdateConfig {
-	const defaults: UpdateConfig = {
-		autoInstall: false,
-		checkInterval: DEFAULT_UPDATE_INTERVAL_SECONDS,
-	};
-
-	const paths = [
-		join(AGENTS_DIR, "agent.yaml"),
-		join(AGENTS_DIR, "AGENT.yaml"),
-	];
-
-	for (const p of paths) {
-		if (!existsSync(p)) continue;
-		try {
-			const yaml = parseSimpleYaml(readFileSync(p, "utf-8"));
-			const updates =
-				(yaml.updates as Record<string, unknown> | undefined) ||
-				(yaml.update as Record<string, unknown> | undefined);
-
-			if (updates) {
-				const autoInstallRaw = updates.autoInstall ?? updates.auto_install;
-				if (autoInstallRaw !== undefined) {
-					const parsed = parseBooleanFlag(autoInstallRaw);
-					if (parsed !== null) {
-						defaults.autoInstall = parsed;
-					}
-				}
-
-				const checkIntervalRaw =
-					updates.checkInterval ?? updates.check_interval;
-				if (checkIntervalRaw !== undefined) {
-					const parsed = parseUpdateInterval(checkIntervalRaw);
-					if (parsed !== null) {
-						defaults.checkInterval = parsed;
-					}
-				}
-			}
-
-			break;
-		} catch {
-			// ignore parse errors
-		}
-	}
-
-	return defaults;
-}
-
-let updateConfig = loadUpdateConfig();
-
-function formatUpdatesSection(config: UpdateConfig): string {
-	return `updates:\n  auto_install: ${config.autoInstall}\n  check_interval: ${config.checkInterval}\n`;
-}
-
-function persistUpdateConfig(config: UpdateConfig): boolean {
-	const paths = [
-		join(AGENTS_DIR, "agent.yaml"),
-		join(AGENTS_DIR, "AGENT.yaml"),
-	];
-
-	for (const p of paths) {
-		if (!existsSync(p)) continue;
-
-		try {
-			const current = readFileSync(p, "utf-8");
-			const updatesSection = formatUpdatesSection(config);
-			const updatesPattern = /^updates:\n(?:[ \t].*(?:\n|$))*/m;
-			const trimmedCurrent = current.trimEnd();
-
-			const updated = updatesPattern.test(current)
-				? current.replace(updatesPattern, updatesSection)
-				: trimmedCurrent
-					? `${trimmedCurrent}\n\n${updatesSection}`
-					: updatesSection;
-
-			if (updated !== current) {
-				writeFileSync(p, updated);
-			}
-
-			return true;
-		} catch (e) {
-			logger.warn("system", "Failed to persist update config", {
-				path: p,
-				error: (e as Error).message,
-			});
-			return false;
-		}
-	}
-
-	return false;
-}
-
-interface GitHubReleaseResponse {
-	tag_name: string;
-	html_url: string;
-	body?: string;
-	published_at?: string;
-}
-
-async function fetchLatestFromGitHub(): Promise<{
-	version: string;
-	releaseUrl?: string;
-	releaseNotes?: string;
-	publishedAt?: string;
-}> {
-	const res = await fetch(
-		`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-		{
-			headers: {
-				Accept: "application/vnd.github.v3+json",
-				"User-Agent": "signet-daemon",
-			},
-			signal: AbortSignal.timeout(10000),
-		},
-	);
-
-	if (!res.ok) {
-		throw new Error(`GitHub releases lookup failed (${res.status})`);
-	}
-
-	const data = (await res.json()) as GitHubReleaseResponse;
-	const version = data.tag_name.replace(/^v/, "");
-
-	return {
-		version,
-		releaseUrl: data.html_url,
-		releaseNotes: data.body?.slice(0, 500),
-		publishedAt: data.published_at,
-	};
-}
-
-async function fetchLatestFromNpm(): Promise<string> {
-	const npmRes = await fetch(
-		`https://registry.npmjs.org/${NPM_PACKAGE}/latest`,
-		{
-			signal: AbortSignal.timeout(10000),
-		},
-	);
-
-	if (!npmRes.ok) {
-		throw new Error(`npm registry lookup failed (${npmRes.status})`);
-	}
-
-	const npmData = (await npmRes.json()) as { version?: string };
-	if (!npmData.version) {
-		throw new Error("npm registry response missing version");
-	}
-
-	return npmData.version;
-}
-
-// Check for updates via GitHub releases
-async function checkForUpdates(): Promise<UpdateInfo> {
-	const result: UpdateInfo = {
-		currentVersion: CURRENT_VERSION,
-		latestVersion: null,
-		updateAvailable: false,
-	};
-
-	const errors: string[] = [];
-
-	try {
-		const github = await fetchLatestFromGitHub();
-		result.latestVersion = github.version;
-		result.releaseUrl = github.releaseUrl;
-		result.releaseNotes = github.releaseNotes;
-		result.publishedAt = github.publishedAt;
-	} catch (e) {
-		errors.push((e as Error).message);
-	}
-
-	if (!result.latestVersion) {
-		try {
-			result.latestVersion = await fetchLatestFromNpm();
-		} catch (e) {
-			errors.push((e as Error).message);
-		}
-	}
-
-	if (result.latestVersion) {
-		result.updateAvailable = isVersionNewer(
-			result.latestVersion,
-			CURRENT_VERSION,
-		);
-	}
-
-	if (pendingRestartVersion) {
-		result.restartRequired = true;
-		result.pendingVersion = pendingRestartVersion;
-
-		if (
-			result.latestVersion &&
-			compareVersions(result.latestVersion, pendingRestartVersion) === 0
-		) {
-			result.updateAvailable = false;
-		}
-	}
-
-	if (!result.latestVersion && errors.length > 0) {
-		result.checkError = errors.join(" | ");
-		logger.warn("system", "Update check failed", { error: result.checkError });
-	}
-
-	lastUpdateCheck = result;
-	lastUpdateCheckTime = new Date();
-
-	if (result.updateAvailable) {
-		logger.info("system", `Update available: v${result.latestVersion}`);
-	}
-
-	return result;
-}
-
-// Run update (via npm/bun)
-async function runUpdate(targetVersion?: string): Promise<UpdateRunResult> {
-	if (updateInstallInProgress) {
-		return {
-			success: false,
-			message: "Update already in progress",
-		};
-	}
-
-	updateInstallInProgress = true;
-
-	try {
-		return await new Promise((resolve) => {
-			const packageManager = resolvePrimaryPackageManager({
-				agentsDir: AGENTS_DIR,
-				env: process.env,
-			});
-			const installCommand = getGlobalInstallCommand(
-				packageManager.family,
-				NPM_PACKAGE,
-			);
-
-			logger.info("system", "Running update command", {
-				command: `${installCommand.command} ${installCommand.args.join(" ")}`,
-				family: packageManager.family,
-				source: packageManager.source,
-				reason: packageManager.reason,
-			});
-
-			const proc = spawn(installCommand.command, installCommand.args, {
-				stdio: "pipe",
-			});
-			let stdout = "";
-			let stderr = "";
-
-			proc.stdout?.on("data", (d) => {
-				stdout += d.toString();
-			});
-			proc.stderr?.on("data", (d) => {
-				stderr += d.toString();
-			});
-
-			proc.on("close", (code) => {
-				if (code === 0) {
-					if (targetVersion) {
-						pendingRestartVersion = targetVersion;
-					}
-					lastUpdateCheck = null;
-					lastUpdateCheckTime = null;
-
-					logger.info("system", "Update installed successfully");
-					resolve({
-						success: true,
-						message: "Update installed. Restart daemon to apply.",
-						output: stdout,
-						installedVersion: targetVersion,
-						restartRequired: true,
-					});
-				} else {
-					logger.warn("system", "Update failed", { stderr });
-					resolve({
-						success: false,
-						message: `Update failed: ${stderr || "Unknown error"}`,
-						output: stdout + stderr,
-					});
-				}
-			});
-
-			proc.on("error", (e) => {
-				resolve({
-					success: false,
-					message: `Update failed: ${e.message}`,
-				});
-			});
-		});
-	} finally {
-		updateInstallInProgress = false;
-	}
-}
-
-async function runAutoUpdateCycle(): Promise<void> {
-	if (!updateConfig.autoInstall) {
-		return;
-	}
-
-	if (updateCheckInProgress || updateInstallInProgress) {
-		return;
-	}
-
-	updateCheckInProgress = true;
-
-	try {
-		const checkResult = await checkForUpdates();
-		if (checkResult.checkError) {
-			lastAutoUpdateError = checkResult.checkError;
-			return;
-		}
-
-		if (!checkResult.updateAvailable || !checkResult.latestVersion) {
-			return;
-		}
-
-		logger.info(
-			"system",
-			`Auto-installing update v${checkResult.latestVersion}`,
-		);
-		const installResult = await runUpdate(checkResult.latestVersion);
-
-		if (installResult.success) {
-			lastAutoUpdateAt = new Date();
-			lastAutoUpdateError = null;
-			logger.info(
-				"system",
-				`Auto-update installed v${checkResult.latestVersion}. Restart required.`,
-			);
-			return;
-		}
-
-		lastAutoUpdateError = installResult.message;
-		logger.warn("system", "Auto-update failed", {
-			error: installResult.message,
-		});
-	} catch (e) {
-		lastAutoUpdateError = (e as Error).message;
-		logger.warn("system", "Auto-update cycle failed", {
-			error: lastAutoUpdateError,
-		});
-	} finally {
-		updateCheckInProgress = false;
-	}
-}
-
-function startUpdateTimer() {
-	if (updateTimer) {
-		clearInterval(updateTimer);
-	}
-
-	if (!updateConfig.autoInstall || updateConfig.checkInterval <= 0) {
-		logger.debug("system", "Auto-update disabled");
-		return;
-	}
-
-	logger.info(
-		"system",
-		`Auto-update enabled: every ${updateConfig.checkInterval}s`,
-	);
-
-	void runAutoUpdateCycle();
-
-	updateTimer = setInterval(() => {
-		void runAutoUpdateCycle();
-	}, updateConfig.checkInterval * 1000);
-}
-
-function stopUpdateTimer() {
-	if (updateTimer) {
-		clearInterval(updateTimer);
-		updateTimer = null;
-	}
-}
 
 // API: Check for updates
 app.get("/api/update/check", async (c) => {
 	const force = c.req.query("force") === "true";
+	const us = getUpdateState();
 
-	// Return cached result if recent (< 1 hour) and not forced
-	if (!force && lastUpdateCheck && lastUpdateCheckTime) {
-		const age = Date.now() - lastUpdateCheckTime.getTime();
+	if (!force && us.lastCheck && us.lastCheckTime) {
+		const age = Date.now() - us.lastCheckTime.getTime();
 		if (age < 3600000) {
-			// 1 hour
 			return c.json({
-				...lastUpdateCheck,
+				...us.lastCheck,
 				cached: true,
-				checkedAt: lastUpdateCheckTime.toISOString(),
+				checkedAt: us.lastCheckTime.toISOString(),
 			});
 		}
 	}
 
-	const result = await checkForUpdates();
+	const result = await checkForUpdatesImpl();
+	const after = getUpdateState();
 	return c.json({
 		...result,
 		cached: false,
-		checkedAt: lastUpdateCheckTime?.toISOString(),
+		checkedAt: after.lastCheckTime?.toISOString(),
 	});
 });
 
 // API: Get/set update config
 app.get("/api/update/config", (c) => {
+	const us = getUpdateState();
 	return c.json({
-		...updateConfig,
+		...us.config,
 		minInterval: MIN_UPDATE_INTERVAL_SECONDS,
 		maxInterval: MAX_UPDATE_INTERVAL_SECONDS,
-		pendingRestartVersion,
-		lastAutoUpdateAt: lastAutoUpdateAt?.toISOString(),
-		lastAutoUpdateError,
-		updateInProgress: updateInstallInProgress,
+		pendingRestartVersion: us.pendingRestartVersion,
+		lastAutoUpdateAt: us.lastAutoUpdateAt?.toISOString(),
+		lastAutoUpdateError: us.lastAutoUpdateError,
+		updateInProgress: us.installInProgress,
 	});
 });
 
@@ -5337,6 +4918,9 @@ app.post("/api/update/config", async (c) => {
 	const autoInstallRaw = body.autoInstall ?? body.auto_install;
 	const checkIntervalRaw = body.checkInterval ?? body.check_interval;
 
+	let autoInstall: boolean | undefined;
+	let checkInterval: number | undefined;
+
 	if (autoInstallRaw !== undefined) {
 		const parsed = parseBooleanFlag(autoInstallRaw);
 		if (parsed === null) {
@@ -5345,7 +4929,7 @@ app.post("/api/update/config", async (c) => {
 				400,
 			);
 		}
-		updateConfig.autoInstall = parsed;
+		autoInstall = parsed;
 	}
 
 	if (checkIntervalRaw !== undefined) {
@@ -5359,34 +4943,31 @@ app.post("/api/update/config", async (c) => {
 				400,
 			);
 		}
-		updateConfig.checkInterval = parsed;
+		checkInterval = parsed;
 	}
 
-	const changed =
-		autoInstallRaw !== undefined || checkIntervalRaw !== undefined;
+	const changed = autoInstall !== undefined || checkInterval !== undefined;
 	let persisted = true;
 
 	if (changed) {
-		stopUpdateTimer();
-		if (updateConfig.autoInstall) {
-			startUpdateTimer();
-		}
-		persisted = persistUpdateConfig(updateConfig);
+		const result = setUpdateConfig({ autoInstall, checkInterval });
+		persisted = result.persisted;
 	}
 
+	const us = getUpdateState();
 	return c.json({
 		success: true,
-		config: updateConfig,
+		config: us.config,
 		persisted,
-		pendingRestartVersion,
-		lastAutoUpdateAt: lastAutoUpdateAt?.toISOString(),
-		lastAutoUpdateError,
+		pendingRestartVersion: us.pendingRestartVersion,
+		lastAutoUpdateAt: us.lastAutoUpdateAt?.toISOString(),
+		lastAutoUpdateError: us.lastAutoUpdateError,
 	});
 });
 
 // API: Run update
 app.post("/api/update/run", async (c) => {
-	const check = await checkForUpdates();
+	const check = await checkForUpdatesImpl();
 
 	if (check.restartRequired && !check.updateAvailable) {
 		return c.json({
@@ -5406,7 +4987,7 @@ app.post("/api/update/run", async (c) => {
 		});
 	}
 
-	const result = await runUpdate(check.latestVersion ?? undefined);
+	const result = await runUpdateImpl(check.latestVersion ?? undefined);
 	return c.json(result);
 });
 
@@ -5420,13 +5001,14 @@ app.get("/api/status", (c) => {
 	let health: { score: number; status: string } | undefined;
 	try {
 		const report = getDbAccessor().withReadDb((db) =>
-			getDiagnostics(db, providerTracker),
+			getDiagnostics(db, providerTracker, getUpdateState()),
 		);
 		health = report.composite;
 	} catch {
 		// DB not ready yet — omit health
 	}
 
+	const us = getUpdateState();
 	return c.json({
 		status: "running",
 		version: CURRENT_VERSION,
@@ -5439,6 +5021,17 @@ app.get("/api/status", (c) => {
 		memoryDb: existsSync(MEMORY_DB),
 		pipelineV2: config.pipelineV2,
 		...(health ? { health } : {}),
+		update: {
+			currentVersion: us.currentVersion,
+			latestVersion: us.lastCheck?.latestVersion ?? null,
+			updateAvailable: us.lastCheck?.updateAvailable ?? false,
+			pendingRestart: us.pendingRestartVersion,
+			autoInstall: us.config.autoInstall,
+			checkInterval: us.config.checkInterval,
+			lastCheckAt: us.lastCheckTime?.toISOString() ?? null,
+			lastError: us.lastAutoUpdateError,
+			timerActive: us.timerActive,
+		},
 		embedding: {
 			provider: config.embedding.provider,
 			model: config.embedding.model,
@@ -5457,7 +5050,7 @@ app.get("/api/status", (c) => {
 
 app.get("/api/diagnostics", (c) => {
 	const report = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker),
+		getDiagnostics(db, providerTracker, getUpdateState()),
 	);
 	return c.json(report);
 });
@@ -5465,7 +5058,7 @@ app.get("/api/diagnostics", (c) => {
 app.get("/api/diagnostics/:domain", (c) => {
 	const domain = c.req.param("domain");
 	const report = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker),
+		getDiagnostics(db, providerTracker, getUpdateState()),
 	);
 
 	const domainData = report[domain as keyof typeof report];
@@ -5616,7 +5209,7 @@ app.get("/api/analytics/logs", (c) => {
 
 app.get("/api/analytics/memory-safety", (c) => {
 	const mutationHealth = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker),
+		getDiagnostics(db, providerTracker, getUpdateState()),
 	);
 	const recentMutationErrors = analyticsCollector.getErrors({
 		stage: "mutation",
@@ -7163,6 +6756,7 @@ async function main() {
 
 	// Start git sync timer (if enabled and has token)
 	startGitSyncTimer();
+	initUpdateSystem(CURRENT_VERSION, AGENTS_DIR);
 	startUpdateTimer();
 
 	// Start HTTP server
