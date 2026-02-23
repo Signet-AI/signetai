@@ -19,6 +19,30 @@ document.querySelectorAll('.copy-btn').forEach((button) => {
   });
 });
 
+// --- Install Method Tabs ---
+document.querySelectorAll('.install-panels').forEach((wrap) => {
+  // Lock width to the terminal box so agent tab truncates to match
+  const terminalBox = wrap.querySelector('.install-box:not(.install-box--agent)');
+  if (terminalBox) {
+    (wrap as HTMLElement).style.width = terminalBox.getBoundingClientRect().width + 'px';
+  }
+  const tabGroup = wrap.previousElementSibling;
+  if (!tabGroup?.classList.contains('install-tabs')) return;
+  const panels = wrap.querySelectorAll('.install-panel');
+  tabGroup.querySelectorAll('.install-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const method = (tab as HTMLElement).dataset.install;
+      if (!method) return;
+      tabGroup.querySelectorAll('.install-tab').forEach(t => t.classList.remove('active'));
+      panels.forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      panels.forEach(p => {
+        if (p.id.endsWith(`install-${method}`)) p.classList.add('active');
+      });
+    });
+  });
+});
+
 // --- Parallax Scroll ---
 let ticking = false;
 window.addEventListener('scroll', () => {
