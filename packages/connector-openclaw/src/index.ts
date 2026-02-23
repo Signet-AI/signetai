@@ -282,9 +282,15 @@ export class OpenClawConnector extends BaseConnector {
 
 		if (runtimePath === "plugin") {
 			deepMerge(patch, {
-				signet: {
-					enabled: true,
-					daemonUrl: "http://localhost:3850",
+				plugins: {
+					entries: {
+						"@signet/adapter-openclaw": {
+							enabled: true,
+							config: {
+								daemonUrl: "http://localhost:3850",
+							},
+						},
+					},
 				},
 			});
 		}
@@ -474,8 +480,10 @@ export class OpenClawConnector extends BaseConnector {
 	}
 
 	/**
-	 * Patch configs with plugin entry, appending to plugins array
-	 * rather than replacing it.
+	 * Patch configs with plugin entry using the object format:
+	 * plugins.entries["@signet/adapter-openclaw"] = { enabled, config }
+	 *
+	 * Migrates legacy array-style plugins and top-level `signet` key.
 	 */
 	private patchAllConfigsWithPlugin(patch: JsonObject): {
 		patched: string[];
@@ -491,13 +499,34 @@ export class OpenClawConnector extends BaseConnector {
 				const config = parseJsonOrJson5(raw);
 				const indent = this.detectIndent(raw);
 
-				const existing = Array.isArray(config.plugins)
-					? (config.plugins as string[])
-					: [];
-				if (!existing.includes(pluginName)) {
-					existing.push(pluginName);
+				// Migrate legacy array-style plugins to object format
+				if (Array.isArray(config.plugins)) {
+					const oldArray = config.plugins as string[];
+					const entries: JsonObject = {};
+					for (const name of oldArray) {
+						entries[name] = { enabled: true };
+					}
+					config.plugins = { entries };
 				}
-				config.plugins = existing;
+
+				// Migrate top-level `signet` key into plugin config
+				if (config.signet && typeof config.signet === "object") {
+					const legacySignet = config.signet as JsonObject;
+					const pluginsObj = (config.plugins ?? { entries: {} }) as JsonObject;
+					const entriesObj = (pluginsObj.entries ?? {}) as JsonObject;
+					const pluginEntry = (entriesObj[pluginName] ?? { enabled: true }) as JsonObject;
+					const pluginConfig = (pluginEntry.config ?? {}) as JsonObject;
+
+					if (legacySignet.daemonUrl) {
+						pluginConfig.daemonUrl = legacySignet.daemonUrl;
+					}
+					pluginEntry.config = pluginConfig;
+					pluginEntry.enabled = true;
+					entriesObj[pluginName] = pluginEntry;
+					pluginsObj.entries = entriesObj;
+					config.plugins = pluginsObj;
+					delete config.signet;
+				}
 
 				deepMerge(config, patch);
 				writeFileSync(
