@@ -163,3 +163,34 @@ export {
 	WorkflowRefiner,
 	ContextRefiner,
 } from "./refiners/index";
+
+// Distillation layer
+export {
+	runDistillation,
+	getDistillationState,
+	shouldRunDistillation,
+	buildCognitiveProfile,
+	updateCognitiveProfile,
+	loadCognitiveProfile,
+	analyzeWorkingStyle,
+	buildExpertiseGraph,
+	getExpertiseGraph,
+	getRelatedSkills,
+	getExpertiseDepth,
+	generateAgentCard,
+	exportAgentCard,
+	generateTrainingContext,
+	loadMemoriesForCard,
+} from "./distillation/index";
+
+export type {
+	CognitiveProfile,
+	WorkingStyle,
+	ExpertiseGraph,
+	ExpertiseNode,
+	ExpertiseEdge,
+	ExpertiseDepth,
+	AgentCard,
+	AgentCardSkill,
+	DistillationState,
+} from "./distillation/index";
