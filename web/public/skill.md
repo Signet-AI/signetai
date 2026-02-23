@@ -428,7 +428,7 @@ These are the SAME platform. The connector:
 - **Patches config** in `~/.openclaw/`, `~/.clawdbot/`, or
   `~/.moltbot/` (whichever exists) to set workspace to `~/.agents/`
 - **Installs hooks** for memory integration
-- **Native adapter plugin** (`@signet/adapter-openclaw`) available
+- **Native adapter plugin** (`@signetai/adapter-openclaw`) available
   for direct plugin integration — this is plug and play
 - Supports both legacy hook path and native plugin path
 

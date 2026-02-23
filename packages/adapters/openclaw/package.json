@@ -1,5 +1,5 @@
 {
-  "name": "@signet/adapter-openclaw",
+  "name": "@signetai/adapter-openclaw",
   "version": "0.1.110",
   "description": "Signet adapter for OpenClaw — runtime plugin for AI agent memory",
   "type": "module",

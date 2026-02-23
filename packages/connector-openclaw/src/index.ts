@@ -284,7 +284,7 @@ export class OpenClawConnector extends BaseConnector {
 			deepMerge(patch, {
 				plugins: {
 					entries: {
-						"@signet/adapter-openclaw": {
+						"@signetai/adapter-openclaw": {
 							enabled: true,
 							config: {
 								daemonUrl: "http://localhost:3850",
@@ -481,7 +481,7 @@ export class OpenClawConnector extends BaseConnector {
 
 	/**
 	 * Patch configs with plugin entry using the object format:
-	 * plugins.entries["@signet/adapter-openclaw"] = { enabled, config }
+	 * plugins.entries["@signetai/adapter-openclaw"] = { enabled, config }
 	 *
 	 * Migrates legacy array-style plugins and top-level `signet` key.
 	 */
@@ -491,7 +491,7 @@ export class OpenClawConnector extends BaseConnector {
 	} {
 		const patched: string[] = [];
 		const warnings: string[] = [];
-		const pluginName = "@signet/adapter-openclaw";
+		const pluginName = "@signetai/adapter-openclaw";
 
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
@@ -679,7 +679,7 @@ export default handler;
 
 Signet supports two runtime paths for OpenClaw integration:
 
-1. **Plugin path** (preferred): \`@signet/adapter-openclaw\` runtime
+1. **Plugin path** (preferred): \`@signetai/adapter-openclaw\` runtime
    plugin handles all memory operations directly.
 2. **Legacy hook path** (compatibility): These handler.js files process
    /remember, /recall, and /context commands via daemon hook endpoints.
@@ -698,7 +698,7 @@ enforces this via session claiming.
 
 Keep legacy hooks active (the default) if:
 
-- \`@signet/adapter-openclaw\` is not configured as an OpenClaw plugin
+- \`@signetai/adapter-openclaw\` is not configured as an OpenClaw plugin
 - You need command-based /remember and /recall without plugin support
 
 ## Safety

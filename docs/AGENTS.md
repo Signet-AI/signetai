@@ -121,7 +121,7 @@ bun run test     # Tests (vitest + workers pool)
 | `@signet/connector-claude-code` | Claude Code connector: hooks, CLAUDE.md generation | node |
 | `@signet/connector-opencode` | OpenCode connector: plugin, AGENTS.md sync | node |
 | `@signet/connector-openclaw` | OpenClaw connector: config patching, hook handlers | node |
-| `@signet/adapter-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
+| `@signetai/adapter-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
 | `signetai` | Meta-package bundling CLI + daemon | - |
 | `@signet/web` | Marketing website (Cloudflare Worker) | cloudflare |
 

@@ -11,7 +11,7 @@
  * {
  *   "plugins": {
  *     "entries": {
- *       "@signet/adapter-openclaw": {
+ *       "@signetai/adapter-openclaw": {
  *         "enabled": true,
  *         "config": {
  *           "daemonUrl": "http://localhost:3850"
@@ -491,7 +491,7 @@ export function createPlugin(config: SignetConfig = {}) {
 	const opts = { daemonUrl };
 
 	return {
-		name: "@signet/adapter-openclaw",
+		name: "@signetai/adapter-openclaw",
 
 		// -- Lifecycle callbacks --
 

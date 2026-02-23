@@ -1642,7 +1642,7 @@ async function setupWizard(options: { path?: string }) {
 					value: "plugin" as const,
 					name: "Plugin adapter (recommended)",
 					description:
-						"@signet/adapter-openclaw — full lifecycle + memory tools",
+						"@signetai/adapter-openclaw — full lifecycle + memory tools",
 				},
 				{
 					value: "legacy" as const,

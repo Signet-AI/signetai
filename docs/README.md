@@ -262,7 +262,7 @@ Harness support
 |---|---|---|
 | Claude Code | Supported | Connector writes `~/.claude/CLAUDE.md` + hook config |
 | OpenCode | Supported | Connector writes `~/.config/opencode/AGENTS.md` + plugin |
-| OpenClaw | Supported | Connector bootstrap + `@signet/adapter-openclaw` runtime |
+| OpenClaw | Supported | Connector bootstrap + `@signetai/adapter-openclaw` runtime |
 | Cursor | Planned | File-based identity sync |
 | Windsurf | Planned | File/plugin integration |
 
@@ -358,7 +358,7 @@ Packages
 | [`@signet/connector-claude-code`](./packages/connector-claude-code) | Claude Code integration |
 | [`@signet/connector-opencode`](./packages/connector-opencode) | OpenCode integration |
 | [`@signet/connector-openclaw`](./packages/connector-openclaw) | OpenClaw bootstrap integration |
-| [`@signet/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
+| [`@signetai/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
 | [`@signet/web`](./web) | Marketing website (Cloudflare Worker) |
 | [`signetai`](./packages/signetai) | Meta-package bundling CLI + daemon (`signet` binary) |
 
