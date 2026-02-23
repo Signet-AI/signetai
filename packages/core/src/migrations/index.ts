@@ -20,6 +20,8 @@ import { up as sessionScores } from "./011-session-scores";
 import { up as memorySigning } from "./012-memory-signing";
 import { up as temporalMemory } from "./013-temporal-memory";
 import { up as ingestionTracking } from "./014-ingestion-tracking";
+import { up as decisionsAndContradictions } from "./015-decisions-and-contradictions";
+import { up as sessionMetrics } from "./016-session-metrics";
 
 // -- Public interface consumed by Database.init() --
 
@@ -89,6 +91,16 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 14,
 		name: "ingestion-tracking",
 		up: ingestionTracking,
+	},
+	{
+		version: 15,
+		name: "decisions-and-contradictions",
+		up: decisionsAndContradictions,
+	},
+	{
+		version: 16,
+		name: "session-metrics",
+		up: sessionMetrics,
 	},
 ];
 

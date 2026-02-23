@@ -103,6 +103,22 @@ Output:
   {"content": "API rate limit is 100 requests per minute per API key", "type": "fact", "confidence": 0.95}
 ], "relations": []}
 
+DECISION DETECTION — Special attention:
+When you identify a decision, ALWAYS extract BOTH:
+1. A "decision" item with the conclusion (WHAT was decided, in what context, by whom if known)
+2. A "rationale" item with the full reasoning (WHY it was decided, what alternatives were rejected)
+
+Decision signals to look for:
+- "We decided / chose / selected / went with / picked / opted for..."
+- "After considering X and Y, we..."
+- "The tradeoff between A and B led us to..."
+- "Instead of X, we'll use Y because..."
+- Comparisons with a clear winner
+- Architecture/design choices with justification
+
+For decisions, content MUST include what was chosen AND what was rejected (if mentioned).
+For rationale, content MUST include each reason and any tradeoffs acknowledged.
+
 Return ONLY valid JSON. No markdown fences, no explanation, no preamble.
 If there is nothing worth extracting, return: {"items": [], "relations": []}
 

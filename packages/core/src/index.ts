@@ -249,6 +249,39 @@ export type {
 	ConnectorRow,
 } from "./connector-types";
 
+// Decision Memory (Phase 2 — Task 2.4)
+export {
+	storeDecision,
+	queryDecisions,
+	recordOutcome,
+	getPendingReviews,
+	getDecisionById,
+	getDecisionsByMemoryId,
+} from "./decisions";
+export type {
+	Decision,
+	DecisionRow,
+	DecisionQueryOptions,
+	DecisionWithContent,
+} from "./decisions";
+
+// Contradiction Detection (Phase 2 — Task 2.6)
+export {
+	detectContradiction,
+	resolveContradiction,
+	getPendingContradictions,
+	getAllContradictions,
+	storeContradiction,
+	checkAndStoreContradictions,
+} from "./contradictions";
+export type {
+	ContradictionResolution,
+	ContradictionRecord,
+	ContradictionCandidate,
+	DetectionResult,
+	LlmConfig,
+} from "./contradictions";
+
 // Temporal Memory (Phase 2)
 export {
 	calculateStrength,
