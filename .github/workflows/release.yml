@@ -70,22 +70,3 @@ jobs:
 
       - name: Push version bump
         run: git push --follow-tags
-
-  deploy-web:
-    runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, 'chore: release')"
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install and build website
-        run: cd web && bun install && bun run build
-
-      - name: Deploy to Cloudflare
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: web
-          command: deploy
