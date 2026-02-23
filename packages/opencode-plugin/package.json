@@ -1,6 +1,6 @@
 {
   "name": "@signet/opencode-plugin",
-  "version": "0.1.97",
+  "version": "0.1.98",
   "description": "Signet runtime plugin for OpenCode — memory tools and session lifecycle hooks",
   "type": "module",
   "main": "dist/signet.mjs",
