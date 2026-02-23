@@ -3,6 +3,7 @@ import { tick } from "svelte";
 import {
 	getProjection,
 	getSimilarMemories,
+	setMemoryPinned,
 	type Memory,
 	type EmbeddingPoint,
 	type ProjectionNode,
@@ -17,10 +18,21 @@ import {
 	type GraphNode,
 	type GraphEdge,
 	sourceColorRgba,
+	embeddingLabel,
 } from "../embeddings/embedding-graph";
 
 interface Props {
 	onopenglobalsimilar: (memory: Memory) => void;
+}
+
+interface FilterPreset {
+	id: string;
+	name: string;
+	search: string;
+	sources: string[];
+	pinnedOnly: boolean;
+	neighborhoodOnly: boolean;
+	clusterLensMode: boolean;
 }
 
 let { onopenglobalsimilar }: Props = $props();
@@ -40,6 +52,20 @@ let graphInitialized = $state(false);
 let embeddingSearch = $state("");
 let embeddingSearchMatches = $state<EmbeddingPoint[]>([]);
 let embeddingFilterIds = $state<Set<string> | null>(null);
+let searchFilterIds = $state<Set<string> | null>(null);
+let sourceFilterIds = $state<Set<string> | null>(null);
+let selectedSources = $state<Set<string>>(new Set());
+let sourceCounts = $state<Array<{ who: string; count: number }>>([]);
+let showPinnedOnly = $state(false);
+let showNeighborhoodOnly = $state(false);
+let pinnedIds = $state<Set<string>>(new Set());
+let pinBusy = $state(false);
+let pinError = $state("");
+let clusterLensMode = $state(false);
+let lensIds = $state<Set<string>>(new Set());
+let activePresetId = $state("all");
+let customPresets = $state<FilterPreset[]>([]);
+let presetsHydrated = $state(false);
 
 let relationMode = $state<RelationKind>("similar");
 let similarNeighbors = $state<EmbeddingRelation[]>([]);
@@ -52,14 +78,16 @@ let nodes = $state<GraphNode[]>([]);
 let edges = $state<GraphEdge[]>([]);
 
 let graphMode: "2d" | "3d" = $state("2d");
-// 3D projection coords in same order as `embeddings`, passed to Canvas3D
 let projected3dCoords = $state<number[][]>([]);
 let graphLoadId = 0;
 
 let embeddingById = $state(new Map<string, EmbeddingPoint>());
 let relationLookup = $state(new Map<string, RelationKind>());
 
-// Sub-component references
+let graphRegion = $state<HTMLDivElement | null>(null);
+let hoverX = $state(0);
+let hoverY = $state(0);
+
 let canvas2d = $state<EmbeddingCanvas2D | null>(null);
 let canvas3d = $state<EmbeddingCanvas3D | null>(null);
 
@@ -67,9 +95,7 @@ let canvas3d = $state<EmbeddingCanvas3D | null>(null);
 // Helpers
 // -----------------------------------------------------------------------
 
-function projectionNodeToEmbeddingPoint(
-	node: ProjectionNode,
-): EmbeddingPoint {
+function projectionNodeToEmbeddingPoint(node: ProjectionNode): EmbeddingPoint {
 	return {
 		id: node.id,
 		content: node.content,
@@ -77,8 +103,159 @@ function projectionNodeToEmbeddingPoint(
 		importance: node.importance,
 		type: node.type,
 		tags: node.tags,
+		pinned: node.pinned ?? false,
+		sourceType: node.sourceType,
+		sourceId: node.sourceId,
 		createdAt: node.createdAt,
 	};
+}
+
+function formatShortDate(dateLike: string | undefined): string {
+	if (!dateLike) return "-";
+	const date = new Date(dateLike);
+	if (Number.isNaN(date.getTime())) return "-";
+	return date.toLocaleString(undefined, {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+}
+
+function intersectFilterSets(
+	filters: Array<Set<string> | null>,
+): Set<string> | null {
+	let out: Set<string> | null = null;
+	for (const filter of filters) {
+		if (filter === null) continue;
+		if (out === null) {
+			out = new Set(filter);
+			continue;
+		}
+		out = new Set([...out].filter((id) => filter.has(id)));
+	}
+	return out;
+}
+
+function updateEmbeddingInState(
+	id: string,
+	patch: (entry: EmbeddingPoint) => EmbeddingPoint,
+): void {
+	embeddings = embeddings.map((entry) =>
+		entry.id === id ? patch(entry) : entry,
+	);
+	embeddingById = new Map(embeddings.map((entry) => [entry.id, entry]));
+	nodes = nodes.map((node) =>
+		node.data.id === id ? { ...node, data: patch(node.data) } : node,
+	);
+	if (graphSelected?.id === id) {
+		const next = embeddingById.get(id) ?? null;
+		graphSelected = next;
+	}
+	if (graphHovered?.id === id) {
+		const next = embeddingById.get(id) ?? null;
+		graphHovered = next;
+	}
+}
+
+function toggleSource(who: string): void {
+	const next = new Set(selectedSources);
+	if (next.has(who)) {
+		next.delete(who);
+	} else {
+		next.add(who);
+	}
+	selectedSources = next;
+}
+
+function hoverCardStyle(): string {
+	if (!graphRegion) return "left: 12px; top: 12px;";
+	const maxX = Math.max(12, graphRegion.clientWidth - 300);
+	const maxY = Math.max(12, graphRegion.clientHeight - 170);
+	const left = Math.min(Math.max(12, hoverX + 14), maxX);
+	const top = Math.min(Math.max(12, hoverY + 14), maxY);
+	return `left: ${left}px; top: ${top}px;`;
+}
+
+function handleGraphMouseMove(event: MouseEvent): void {
+	if (!graphRegion) return;
+	const rect = graphRegion.getBoundingClientRect();
+	hoverX = event.clientX - rect.left;
+	hoverY = event.clientY - rect.top;
+}
+
+const FILTER_PRESET_STORAGE_KEY = "signet-embeddings-filter-presets";
+
+const builtinPresets: FilterPreset[] = [
+	{
+		id: "all",
+		name: "All",
+		search: "",
+		sources: [],
+		pinnedOnly: false,
+		neighborhoodOnly: false,
+		clusterLensMode: false,
+	},
+	{
+		id: "pinned",
+		name: "Pinned",
+		search: "",
+		sources: [],
+		pinnedOnly: true,
+		neighborhoodOnly: false,
+		clusterLensMode: false,
+	},
+	{
+		id: "focus",
+		name: "Focus",
+		search: "",
+		sources: [],
+		pinnedOnly: false,
+		neighborhoodOnly: true,
+		clusterLensMode: true,
+	},
+];
+
+function currentPresetSnapshot(name: string, id: string): FilterPreset {
+	return {
+		id,
+		name,
+		search: embeddingSearch,
+		sources: [...selectedSources],
+		pinnedOnly: showPinnedOnly,
+		neighborhoodOnly: showNeighborhoodOnly,
+		clusterLensMode,
+	};
+}
+
+function applyPreset(preset: FilterPreset): void {
+	embeddingSearch = preset.search;
+	selectedSources = new Set(preset.sources);
+	showPinnedOnly = preset.pinnedOnly;
+	showNeighborhoodOnly = preset.neighborhoodOnly;
+	clusterLensMode = preset.clusterLensMode;
+	activePresetId = preset.id;
+}
+
+function saveCurrentPreset(): void {
+	if (typeof window === "undefined") return;
+	const suggested = graphSelected
+		? `Cluster: ${graphSelected.who ?? "source"}`
+		: "Custom preset";
+	const raw = window.prompt("Preset name", suggested);
+	const name = raw?.trim();
+	if (!name) return;
+	const id = `custom-${Date.now()}`;
+	const preset = currentPresetSnapshot(name, id);
+	customPresets = [preset, ...customPresets].slice(0, 8);
+	activePresetId = id;
+}
+
+function removeCustomPreset(id: string): void {
+	customPresets = customPresets.filter((preset) => preset.id !== id);
+	if (activePresetId === id) {
+		activePresetId = "all";
+	}
 }
 
 // -----------------------------------------------------------------------
@@ -95,12 +272,12 @@ async function initGraph(): Promise<void> {
 	try {
 		let projection = await getProjection(2);
 		let pollAttempts = 0;
-		const MAX_POLL_ATTEMPTS = 30;
+		const maxPollAttempts = 30;
 
 		while (projection.status === "computing") {
 			if (loadId !== graphLoadId) return;
 			pollAttempts++;
-			if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+			if (pollAttempts >= maxPollAttempts) {
 				graphError = "Projection timed out after 60s. Try refreshing.";
 				return;
 			}
@@ -130,11 +307,10 @@ async function initGraph(): Promise<void> {
 			return;
 		}
 
-		// Normalize coords to canvas space
-		let minX = Infinity,
-			maxX = -Infinity,
-			minY = Infinity,
-			maxY = -Infinity;
+		let minX = Infinity;
+		let maxX = -Infinity;
+		let minY = Infinity;
+		let maxY = -Infinity;
 		for (const n of projNodes) {
 			if (n.x < minX) minX = n.x;
 			if (n.x > maxX) maxX = n.x;
@@ -165,8 +341,7 @@ async function initGraph(): Promise<void> {
 		canvas2d?.startSimulation(nodes, edges);
 		canvas2d?.startRendering();
 	} catch (error) {
-		graphError =
-			(error as Error).message || "Failed to load projection";
+		graphError = (error as Error).message || "Failed to load projection";
 		graphStatus = "";
 	}
 }
@@ -194,9 +369,7 @@ async function computeRelationsForSelection(
 	}));
 	dissimilarNeighbors = [];
 	activeNeighbors = similarNeighbors;
-	relationLookup = new Map(
-		similarNeighbors.map((item) => [item.id, item.kind]),
-	);
+	relationLookup = new Map(similarNeighbors.map((item) => [item.id, item.kind]));
 }
 
 // -----------------------------------------------------------------------
@@ -207,6 +380,7 @@ function clearEmbeddingSelection(): void {
 	graphSelected = null;
 	graphHovered = null;
 	globalSimilar = [];
+	pinError = "";
 }
 
 function selectEmbeddingById(id: string): void {
@@ -222,6 +396,25 @@ function focusEmbedding(id: string): void {
 		return;
 	}
 	canvas3d?.focusNode(id);
+}
+
+async function togglePinForSelected(): Promise<void> {
+	if (!graphSelected || pinBusy) return;
+	pinBusy = true;
+	pinError = "";
+	const id = graphSelected.id;
+	const nextPinned = !(graphSelected.pinned ?? false);
+	const result = await setMemoryPinned(id, nextPinned);
+	if (!result.success) {
+		pinError = result.error ?? "Failed to update pin state";
+		pinBusy = false;
+		return;
+	}
+	updateEmbeddingInState(id, (entry) => ({ ...entry, pinned: nextPinned }));
+	if (graphMode === "3d") {
+		canvas3d?.refreshAppearance();
+	}
+	pinBusy = false;
 }
 
 async function loadGlobalSimilarForSelected(): Promise<void> {
@@ -257,6 +450,7 @@ async function reloadEmbeddingsGraph(): Promise<void> {
 	embeddingsHasMore = false;
 	nodes = [];
 	edges = [];
+	pinError = "";
 
 	canvas2d?.stopSimulation();
 	canvas2d?.stopRendering();
@@ -291,7 +485,6 @@ async function switchGraphMode(mode: "2d" | "3d"): Promise<void> {
 		const projNodes = projection.nodes ?? [];
 		const nodeMap = new Map(projNodes.map((n) => [n.id, n]));
 
-		// Build 3D coords in same order as `embeddings` for Canvas3D sync
 		projected3dCoords = embeddings.map((emb) => {
 			const n = nodeMap.get(emb.id);
 			return n ? [n.x, n.y, n.z ?? 0] : [0, 0, 0];
@@ -314,12 +507,34 @@ async function switchGraphMode(mode: "2d" | "3d"): Promise<void> {
 // -----------------------------------------------------------------------
 
 $effect(() => {
+	const rows = embeddings;
+	pinnedIds = new Set(rows.filter((row) => row.pinned).map((row) => row.id));
+
+	const counts = new Map<string, number>();
+	for (const row of rows) {
+		const key = row.who ?? "unknown";
+		counts.set(key, (counts.get(key) ?? 0) + 1);
+	}
+	sourceCounts = [...counts.entries()]
+		.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+		.map(([who, count]) => ({ who, count }));
+
+	if (selectedSources.size > 0) {
+		const next = new Set(
+			[...selectedSources].filter((who) => counts.has(who)),
+		);
+		if (next.size !== selectedSources.size) {
+			selectedSources = next;
+		}
+	}
+});
+
+$effect(() => {
 	const query = embeddingSearch.trim().toLowerCase();
 	const rows = embeddings;
 	if (!query) {
-		embeddingFilterIds = null;
+		searchFilterIds = null;
 		embeddingSearchMatches = [];
-		if (graphMode === "3d") canvas3d?.refreshAppearance();
 		return;
 	}
 
@@ -343,9 +558,99 @@ $effect(() => {
 		}
 	}
 
-	embeddingFilterIds = ids;
+	searchFilterIds = ids;
 	embeddingSearchMatches = matches.slice(0, 50);
-	if (graphMode === "3d") canvas3d?.refreshAppearance();
+});
+
+$effect(() => {
+	const selected = selectedSources;
+	if (selected.size === 0) {
+		sourceFilterIds = null;
+		return;
+	}
+	sourceFilterIds = new Set(
+		embeddings
+			.filter((row) => selected.has(row.who ?? "unknown"))
+			.map((row) => row.id),
+	);
+});
+
+$effect(() => {
+	if (typeof window === "undefined" || presetsHydrated) return;
+	try {
+		const raw = window.localStorage.getItem(FILTER_PRESET_STORAGE_KEY);
+		if (raw) {
+			const parsed = JSON.parse(raw) as unknown;
+			if (Array.isArray(parsed)) {
+				const loaded = parsed.filter((entry): entry is FilterPreset => {
+					if (typeof entry !== "object" || entry === null) return false;
+					const candidate = entry as Record<string, unknown>;
+					return (
+						typeof candidate.id === "string" &&
+						typeof candidate.name === "string" &&
+						typeof candidate.search === "string" &&
+						Array.isArray(candidate.sources) &&
+						typeof candidate.pinnedOnly === "boolean" &&
+						typeof candidate.neighborhoodOnly === "boolean" &&
+						typeof candidate.clusterLensMode === "boolean"
+					);
+				});
+				customPresets = loaded.slice(0, 8);
+			}
+		}
+	} catch {
+		customPresets = [];
+	}
+	presetsHydrated = true;
+});
+
+$effect(() => {
+	if (typeof window === "undefined" || !presetsHydrated) return;
+	window.localStorage.setItem(
+		FILTER_PRESET_STORAGE_KEY,
+		JSON.stringify(customPresets),
+	);
+});
+
+$effect(() => {
+	const ids = new Set<string>();
+	if (clusterLensMode) {
+		const seed = graphSelected ?? graphHovered;
+		if (seed) {
+			ids.add(seed.id);
+			for (const neighbor of activeNeighbors) {
+				ids.add(neighbor.id);
+			}
+		}
+	}
+	lensIds = ids;
+});
+
+$effect(() => {
+	clusterLensMode;
+	lensIds;
+	if (graphMode === "3d") {
+		canvas3d?.refreshAppearance();
+	}
+});
+
+$effect(() => {
+	const pinnedFilterIds =
+		showPinnedOnly === true ? new Set(pinnedIds) : null;
+	const neighborhoodFilterIds =
+		showNeighborhoodOnly === true && graphSelected
+			? new Set([graphSelected.id, ...activeNeighbors.map((n) => n.id)])
+			: null;
+
+	embeddingFilterIds = intersectFilterSets([
+		searchFilterIds,
+		sourceFilterIds,
+		pinnedFilterIds,
+		neighborhoodFilterIds,
+	]);
+	if (graphMode === "3d") {
+		canvas3d?.refreshAppearance();
+	}
 });
 
 $effect(() => {
@@ -357,13 +662,12 @@ $effect(() => {
 	const similar = similarNeighbors;
 	const dissimilar = dissimilarNeighbors;
 	activeNeighbors = mode === "similar" ? similar : dissimilar;
-	relationLookup = new Map(
-		activeNeighbors.map((item) => [item.id, item.kind]),
-	);
-	if (graphMode === "3d") canvas3d?.refreshAppearance();
+	relationLookup = new Map(activeNeighbors.map((item) => [item.id, item.kind]));
+	if (graphMode === "3d") {
+		canvas3d?.refreshAppearance();
+	}
 });
 
-// Kick off graph when component mounts (canvas becomes available)
 $effect(() => {
 	if (!graphInitialized) {
 		initGraph();
@@ -372,17 +676,24 @@ $effect(() => {
 </script>
 
 <div class="flex flex-1 min-h-0 bg-[#050505] max-lg:flex-col">
-	<div class="flex-1 relative overflow-hidden bg-[#050505]">
+	<div
+		bind:this={graphRegion}
+		class="flex-1 relative overflow-hidden bg-[#050505]"
+		role="presentation"
+		onmousemove={handleGraphMouseMove}
+		onmouseleave={() => (graphHovered = null)}
+	>
 		<div class="absolute top-2 left-3 right-3 z-[8] flex items-center gap-2 pointer-events-none">
 			<input
 				type="text"
 				class="flex-1 max-w-[420px] pointer-events-auto font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-bright)] bg-[var(--sig-surface)] border border-[rgba(255,255,255,0.22)] px-[9px] py-[6px] outline-none"
 				bind:value={embeddingSearch}
+				oninput={() => (activePresetId = "custom-live")}
 				placeholder="Filter embeddings (content, source, tags)..."
 			/>
 			{#if embeddingSearch}
 				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[rgba(220,220,220,0.75)] bg-[rgba(5,5,5,0.55)] border border-[rgba(255,255,255,0.16)] px-2 py-1">
-					{embeddingSearchMatches.length} match{embeddingSearchMatches.length === 1 ? '' : 'es'}
+					{embeddingSearchMatches.length} match{embeddingSearchMatches.length === 1 ? "" : "es"}
 				</span>
 			{/if}
 			{#if embeddingsHasMore}
@@ -390,6 +701,93 @@ $effect(() => {
 					showing latest {embeddings.length} of {embeddingsTotal}
 				</span>
 			{/if}
+		</div>
+
+		<div class="absolute top-[38px] left-3 right-3 z-[8] flex items-center gap-2 flex-wrap pointer-events-none">
+			<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.6)] px-1.5 py-1">
+				{#each builtinPresets as preset}
+					<button
+						class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {activePresetId === preset.id ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+						onclick={() => applyPreset(preset)}
+					>
+						{preset.name}
+					</button>
+				{/each}
+				{#each customPresets as preset}
+					<div class="inline-flex items-center border border-[rgba(255,255,255,0.18)] bg-transparent">
+						<button
+							class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] {activePresetId === preset.id ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+							onclick={() => applyPreset(preset)}
+						>
+							{preset.name}
+						</button>
+						<button
+							class="px-1.5 py-[2px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
+							onclick={() => removeCustomPreset(preset.id)}
+							aria-label={`Delete ${preset.name} preset`}
+						>
+							×
+						</button>
+					</div>
+				{/each}
+				<button
+					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
+					onclick={saveCurrentPreset}
+				>
+					Save preset
+				</button>
+			</div>
+		</div>
+
+		<div class="absolute top-[66px] left-3 right-3 z-[8] flex items-center gap-2 flex-wrap pointer-events-none">
+			<div class="pointer-events-auto flex items-center gap-1 border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.6)] px-1.5 py-1">
+				<button
+					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {showPinnedOnly ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+					onclick={() => {
+						showPinnedOnly = !showPinnedOnly;
+						activePresetId = "custom-live";
+					}}
+				>
+					Pinned only ({pinnedIds.size})
+				</button>
+				<button
+					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {showNeighborhoodOnly ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+					onclick={() => {
+						showNeighborhoodOnly = !showNeighborhoodOnly;
+						activePresetId = "custom-live";
+					}}
+					disabled={!graphSelected}
+				>
+					Neighborhood
+				</button>
+				<button
+					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {clusterLensMode ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+					onclick={() => {
+						clusterLensMode = !clusterLensMode;
+						activePresetId = "custom-live";
+					}}
+					disabled={!graphSelected && !graphHovered}
+				>
+					Cluster lens
+				</button>
+			</div>
+			<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.6)] px-1.5 py-1 max-w-[calc(100%-300px)]">
+				{#if sourceCounts.length === 0}
+					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase">No sources</span>
+				{:else}
+					{#each sourceCounts as source}
+						<button
+							class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.18)] {selectedSources.has(source.who) ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+							onclick={() => {
+								toggleSource(source.who);
+								activePresetId = "custom-live";
+							}}
+						>
+							{source.who} {source.count}
+						</button>
+					{/each}
+				{/if}
+			</div>
 		</div>
 
 		{#if graphStatus}
@@ -411,7 +809,7 @@ $effect(() => {
 		{/if}
 
 		<div
-			class="absolute left-[14px] top-[44px] z-[6] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.08em] uppercase pointer-events-none"
+			class="absolute left-[14px] top-[100px] z-[6] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.08em] uppercase pointer-events-none"
 			aria-hidden="true"
 		>:: &#9675; &#9675; 01 10 11 // latent topology</div>
 
@@ -422,7 +820,30 @@ $effect(() => {
 			<span class="absolute bottom-[10px] right-[10px] w-[14px] h-[14px] border-[rgba(255,255,255,0.22)]" style="border-style:solid;border-width:0 1px 1px 0"></span>
 		</div>
 
-		<div style:display={graphMode === '2d' ? 'contents' : 'none'}>
+		{#if graphHovered}
+			<div
+				class="absolute z-[9] w-[286px] pointer-events-none border border-[rgba(255,255,255,0.26)] bg-[rgba(5,5,5,0.92)] px-2 py-2"
+				style={hoverCardStyle()}
+			>
+				<div class="flex items-center gap-1.5 flex-wrap mb-1.5">
+					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{graphHovered.who ?? "unknown"}</span>
+					{#if graphHovered.type}
+						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{graphHovered.type}</span>
+					{/if}
+					{#if graphHovered.pinned}
+						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.08)]">pinned</span>
+					{/if}
+				</div>
+				<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] mb-1.5">
+					importance {Math.round((graphHovered.importance ?? 0) * 100)}% · {formatShortDate(graphHovered.createdAt)}
+				</div>
+				<p class="m-0 text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-3">
+					{embeddingLabel(graphHovered)}
+				</p>
+			</div>
+		{/if}
+
+		<div style:display={graphMode === "2d" ? "contents" : "none"}>
 			<EmbeddingCanvas2D
 				bind:this={canvas2d}
 				{nodes}
@@ -431,11 +852,14 @@ $effect(() => {
 				{graphHovered}
 				{embeddingFilterIds}
 				{relationLookup}
-				onselectnode={(e) => graphSelected = e}
-				onhovernode={(e) => graphHovered = e}
+				{pinnedIds}
+				{lensIds}
+				clusterLensMode={clusterLensMode && lensIds.size > 0}
+				onselectnode={(e) => (graphSelected = e)}
+				onhovernode={(e) => (graphHovered = e)}
 			/>
 		</div>
-		<div style:display={graphMode === '3d' ? 'contents' : 'none'}>
+		<div style:display={graphMode === "3d" ? "contents" : "none"}>
 			<EmbeddingCanvas3D
 				bind:this={canvas3d}
 				{embeddings}
@@ -443,9 +867,15 @@ $effect(() => {
 				{graphSelected}
 				{embeddingFilterIds}
 				{relationLookup}
+				{pinnedIds}
+				{lensIds}
+				clusterLensMode={clusterLensMode && lensIds.size > 0}
 				{embeddingById}
-				onselectnode={(e) => { if (e) selectEmbeddingById(e.id); else graphSelected = null; }}
-				onhovernode={(e) => graphHovered = e}
+				onselectnode={(e) => {
+					if (e) selectEmbeddingById(e.id);
+					else graphSelected = null;
+				}}
+				onhovernode={(e) => (graphHovered = e)}
 			/>
 		</div>
 	</div>
@@ -460,11 +890,14 @@ $effect(() => {
 		{globalSimilar}
 		{embeddingSearchMatches}
 		{embeddingSearch}
+		{pinBusy}
+		{pinError}
 		onselectembedding={selectEmbeddingById}
 		onclearselection={clearEmbeddingSelection}
 		onloadglobalsimilar={loadGlobalSimilarForSelected}
 		{onopenglobalsimilar}
-		onsetrelationmode={(mode) => relationMode = mode}
+		onsetrelationmode={(mode) => (relationMode = mode)}
 		onfocusembedding={() => graphSelected && focusEmbedding(graphSelected.id)}
+		onpintoggle={togglePinForSelected}
 	/>
 </div>

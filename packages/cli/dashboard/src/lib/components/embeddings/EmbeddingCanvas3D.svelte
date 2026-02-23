@@ -4,6 +4,7 @@ import {
 	type RelationKind,
 	buildKnnEdges,
 	nodeColor3D,
+	edgeColor3D,
 	embeddingLabel,
 	GRAPH_K,
 } from "./embedding-graph";
@@ -14,6 +15,9 @@ interface Props {
 	graphSelected: EmbeddingPoint | null;
 	embeddingFilterIds: Set<string> | null;
 	relationLookup: Map<string, RelationKind>;
+	pinnedIds: Set<string>;
+	lensIds: Set<string>;
+	clusterLensMode: boolean;
 	onselectnode: (embedding: EmbeddingPoint | null) => void;
 	onhovernode: (embedding: EmbeddingPoint | null) => void;
 	embeddingById: Map<string, EmbeddingPoint>;
@@ -25,6 +29,9 @@ let {
 	graphSelected,
 	embeddingFilterIds,
 	relationLookup,
+	pinnedIds,
+	lensIds,
+	clusterLensMode,
 	onselectnode,
 	onhovernode,
 	embeddingById,
@@ -69,8 +76,28 @@ export function refreshAppearance(): void {
 			graphSelected?.id ?? null,
 			embeddingFilterIds,
 			relationLookup,
+			pinnedIds,
+			lensIds,
+			clusterLensMode,
 		),
 	);
+	graph3d.linkColor((link: any) => {
+		const sourceId =
+			typeof link.source === "object"
+				? String(link.source.id)
+				: String(link.source);
+		const targetId =
+			typeof link.target === "object"
+				? String(link.target.id)
+				: String(link.target);
+		return edgeColor3D(
+			sourceId,
+			targetId,
+			embeddingFilterIds,
+			lensIds,
+			clusterLensMode,
+		);
+	});
 	graph3d.refresh?.();
 }
 
@@ -114,12 +141,31 @@ export async function init(): Promise<void> {
 				graphSelected?.id ?? null,
 				embeddingFilterIds,
 				relationLookup,
+				pinnedIds,
+				lensIds,
+				clusterLensMode,
 			),
 		)
 		.nodeVal(
 			(node: any) => 0.6 + (node.importance ?? 0.5) * 1.4,
 		)
-		.linkColor(() => "rgba(160,160,160,0.5)")
+		.linkColor((link: any) => {
+			const sourceId =
+				typeof link.source === "object"
+					? String(link.source.id)
+					: String(link.source);
+			const targetId =
+				typeof link.target === "object"
+					? String(link.target.id)
+					: String(link.target);
+			return edgeColor3D(
+				sourceId,
+				targetId,
+				embeddingFilterIds,
+				lensIds,
+				clusterLensMode,
+			);
+		})
 		.linkWidth(0.45)
 		.backgroundColor("#050505")
 		.onNodeClick((node: any) => {

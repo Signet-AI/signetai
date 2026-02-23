@@ -23,6 +23,9 @@ interface Props {
 	onopenglobalsimilar: (memory: Memory) => void;
 	onsetrelationmode: (mode: RelationKind) => void;
 	onfocusembedding: () => void;
+	onpintoggle: () => void;
+	pinBusy: boolean;
+	pinError: string;
 }
 
 let {
@@ -41,6 +44,9 @@ let {
 	onopenglobalsimilar,
 	onsetrelationmode,
 	onfocusembedding,
+	onpintoggle,
+	pinBusy,
+	pinError,
 }: Props = $props();
 
 function getEmbeddingById(id: string): EmbeddingPoint | null {
@@ -66,6 +72,9 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">{graphSelected.type}</span>
 			{/if}
 			<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">importance {Math.round((graphSelected.importance ?? 0) * 100)}%</span>
+			{#if graphSelected.pinned}
+				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.08)]">pinned</span>
+			{/if}
 		</div>
 
 		<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] border border-[var(--sig-border-strong)] px-[7px] py-[5px] bg-transparent break-all">
@@ -93,12 +102,25 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 			</button>
 			<button
 				class="px-3 py-1 font-[family-name:var(--font-mono)] text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+				onclick={onpintoggle}
+				disabled={pinBusy}
+			>
+				{pinBusy ? 'Saving...' : graphSelected.pinned ? 'Unpin' : 'Pin'}
+			</button>
+			<button
+				class="px-3 py-1 font-[family-name:var(--font-mono)] text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)] disabled:opacity-40 disabled:cursor-not-allowed"
 				onclick={onloadglobalsimilar}
 				disabled={loadingGlobalSimilar}
 			>
 				{loadingGlobalSimilar ? 'Loading...' : 'Global similar'}
 			</button>
 		</div>
+
+		{#if pinError}
+			<div class="border border-dashed border-[var(--sig-danger)] p-2 text-[11px] text-[var(--sig-danger)] leading-[1.5]">
+				{pinError}
+			</div>
+		{/if}
 
 		<div class="self-start flex border border-[var(--sig-border-strong)] overflow-hidden">
 			<button

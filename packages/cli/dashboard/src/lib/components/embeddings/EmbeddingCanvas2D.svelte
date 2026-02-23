@@ -26,6 +26,9 @@ interface Props {
 	graphHovered: EmbeddingPoint | null;
 	embeddingFilterIds: Set<string> | null;
 	relationLookup: Map<string, RelationKind>;
+	pinnedIds: Set<string>;
+	lensIds: Set<string>;
+	clusterLensMode: boolean;
 	onselectnode: (embedding: EmbeddingPoint | null) => void;
 	onhovernode: (embedding: EmbeddingPoint | null) => void;
 }
@@ -37,6 +40,9 @@ let {
 	graphHovered,
 	embeddingFilterIds,
 	relationLookup,
+	pinnedIds,
+	lensIds,
+	clusterLensMode,
 	onselectnode,
 	onhovernode,
 }: Props = $props();
@@ -195,6 +201,8 @@ function draw(ctx: CanvasRenderingContext2D): void {
 			t.data.id,
 			embeddingFilterIds,
 			relationLookup,
+			lensIds,
+			clusterLensMode,
 		);
 		ctx.lineWidth = 0.8 / camZoom;
 		ctx.stroke();
@@ -208,8 +216,23 @@ function draw(ctx: CanvasRenderingContext2D): void {
 			selectedId,
 			embeddingFilterIds,
 			relationLookup,
+			pinnedIds,
+			lensIds,
+			clusterLensMode,
 		);
 		ctx.fill();
+
+		if (pinnedIds.has(node.data.id)) {
+			const side = (node.radius + 2.5) * 2;
+			ctx.strokeStyle = "rgba(240, 240, 240, 0.8)";
+			ctx.lineWidth = 1.2 / camZoom;
+			ctx.strokeRect(
+				node.x - side / 2,
+				node.y - side / 2,
+				side,
+				side,
+			);
+		}
 
 		if (graphSelected && node.data.id === graphSelected.id) {
 			ctx.beginPath();

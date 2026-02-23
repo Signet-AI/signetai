@@ -66,6 +66,7 @@ export interface EmbeddingPoint {
 	importance: number;
 	type?: string | null;
 	tags: string[];
+	pinned?: boolean;
 	sourceType?: string;
 	sourceId?: string;
 	createdAt?: string;
@@ -258,6 +259,40 @@ export async function getSimilarMemories(
 	}
 }
 
+export async function setMemoryPinned(
+	id: string,
+	pinned: boolean,
+): Promise<{ success: boolean; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/memory/${encodeURIComponent(id)}`,
+			{
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					pinned,
+					reason: "dashboard: embeddings pin toggle",
+					changed_by: "dashboard",
+				}),
+			},
+		);
+		if (!response.ok) {
+			const body = (await response.json().catch(() => ({}))) as Record<
+				string,
+				unknown
+			>;
+			const error =
+				typeof body.error === "string"
+					? body.error
+					: `Request failed (${response.status})`;
+			return { success: false, error };
+		}
+		return { success: true };
+	} catch (error) {
+		return { success: false, error: String(error) };
+	}
+}
+
 export async function getEmbeddings(
 	withVectors = false,
 	options: { limit?: number; offset?: number } = {},
@@ -315,6 +350,9 @@ export interface ProjectionNode {
 	importance: number;
 	type: string | null;
 	tags: string[];
+	pinned?: boolean;
+	sourceType?: string;
+	sourceId?: string;
 	createdAt: string;
 }
 

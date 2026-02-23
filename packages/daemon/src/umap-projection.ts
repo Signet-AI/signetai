@@ -21,6 +21,9 @@ export interface ProjectionNode {
 	readonly importance: number;
 	readonly type: string;
 	readonly tags: readonly string[];
+	readonly pinned: boolean;
+	readonly sourceType: string;
+	readonly sourceId: string;
 	readonly createdAt: string;
 }
 
@@ -169,6 +172,9 @@ interface EmbeddingRow {
 	importance: number | null;
 	type: string | null;
 	tags: string | null;
+	pinned: number | null;
+	source_type: string | null;
+	source_id: string | null;
 	created_at: string;
 	vector: Uint8Array;
 	dimensions: number | null;
@@ -195,6 +201,10 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 		importance: typeof raw.importance === "number" ? raw.importance : null,
 		type: typeof raw.type === "string" ? raw.type : null,
 		tags: typeof raw.tags === "string" ? raw.tags : null,
+		pinned: typeof raw.pinned === "number" ? raw.pinned : null,
+		source_type:
+			typeof raw.source_type === "string" ? raw.source_type : null,
+		source_id: typeof raw.source_id === "string" ? raw.source_id : null,
 		created_at,
 		vector,
 		dimensions: typeof raw.dimensions === "number" ? raw.dimensions : null,
@@ -206,7 +216,7 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 // ---------------------------------------------------------------------------
 
 const EMBEDDINGS_SQL = `
-	SELECT m.id, m.content, m.who, m.importance, m.type, m.tags,
+	SELECT m.id, m.content, m.who, m.importance, m.type, m.tags, m.pinned,
 	       m.source_type, m.source_id, m.created_at,
 	       e.vector, e.dimensions
 	FROM embeddings e
@@ -249,6 +259,9 @@ export function computeProjection(
 			importance: row.importance ?? 0.5,
 			type: row.type ?? "memory",
 			tags: parseTags(row.tags),
+			pinned: row.pinned === 1,
+			sourceType: row.source_type ?? "memory",
+			sourceId: row.source_id ?? row.id,
 			createdAt: row.created_at,
 		};
 		return zs !== null ? { ...base, z: zs[i] } : base;

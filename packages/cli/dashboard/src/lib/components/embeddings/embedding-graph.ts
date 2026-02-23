@@ -311,12 +311,18 @@ export function nodeFillStyle(
 	selectedId: string | null,
 	filterIds: Set<string> | null,
 	relations: Map<string, RelationKind>,
+	pinnedIds: Set<string>,
+	lensIds: Set<string>,
+	lensActive: boolean,
 ): string {
 	const id = node.data.id;
 	const relation = relations.get(id) ?? null;
 	const dimmed = filterIds !== null && !filterIds.has(id);
+	const isPinned = pinnedIds.has(id);
+	const outsideLens = lensActive && !lensIds.has(id);
 
 	if (selectedId === id) return "rgba(255, 255, 255, 0.95)";
+	if (outsideLens) return dimmed ? "rgba(80, 80, 80, 0.08)" : "rgba(95, 95, 95, 0.15)";
 	if (relation === "similar")
 		return dimmed
 			? "rgba(129, 180, 255, 0.35)"
@@ -325,6 +331,7 @@ export function nodeFillStyle(
 		return dimmed
 			? "rgba(255, 146, 146, 0.35)"
 			: "rgba(255, 146, 146, 0.9)";
+	if (isPinned) return dimmed ? "rgba(220, 220, 220, 0.42)" : "rgba(235, 235, 235, 0.95)";
 	if (dimmed) return "rgba(120, 120, 120, 0.2)";
 	return sourceColorRgba(node.data.who, 0.85);
 }
@@ -335,11 +342,19 @@ export function edgeStrokeStyle(
 	targetId: string,
 	filterIds: Set<string> | null,
 	relations: Map<string, RelationKind>,
+	lensIds: Set<string>,
+	lensActive: boolean,
 ): string {
 	const sourceDimmed = filterIds !== null && !filterIds.has(sourceId);
 	const targetDimmed = filterIds !== null && !filterIds.has(targetId);
 	if (sourceDimmed || targetDimmed)
 		return "rgba(120, 120, 120, 0.12)";
+	if (lensActive) {
+		const sourceInLens = lensIds.has(sourceId);
+		const targetInLens = lensIds.has(targetId);
+		if (sourceInLens && targetInLens) return "rgba(220, 220, 220, 0.72)";
+		return "rgba(90, 90, 90, 0.08)";
+	}
 	if (relations.get(sourceId) || relations.get(targetId))
 		return "rgba(200, 200, 200, 0.6)";
 	return "rgba(180, 180, 180, 0.4)";
@@ -352,12 +367,36 @@ export function nodeColor3D(
 	selectedId: string | null,
 	filterIds: Set<string> | null,
 	relations: Map<string, RelationKind>,
+	pinnedIds: Set<string>,
+	lensIds: Set<string>,
+	lensActive: boolean,
 ): string {
 	if (selectedId === id) return "#ffffff";
+	if (lensActive && !lensIds.has(id)) return "#3b3b3b";
 	const relation = relations.get(id) ?? null;
 	if (relation === "similar") return "#81b4ff";
 	if (relation === "dissimilar") return "#ff9292";
+	if (pinnedIds.has(id)) return "#e5e7eb";
 	const dimmed = filterIds !== null && !filterIds.has(id);
 	if (dimmed) return "#5b5b5b";
 	return sourceColors[who] ?? sourceColors["unknown"];
+}
+
+export function edgeColor3D(
+	sourceId: string,
+	targetId: string,
+	filterIds: Set<string> | null,
+	lensIds: Set<string>,
+	lensActive: boolean,
+): string {
+	const sourceDimmed = filterIds !== null && !filterIds.has(sourceId);
+	const targetDimmed = filterIds !== null && !filterIds.has(targetId);
+	if (sourceDimmed || targetDimmed) return "rgba(95,95,95,0.18)";
+	if (lensActive) {
+		const sourceInLens = lensIds.has(sourceId);
+		const targetInLens = lensIds.has(targetId);
+		if (sourceInLens && targetInLens) return "rgba(210,210,210,0.72)";
+		return "rgba(85,85,85,0.08)";
+	}
+	return "rgba(160,160,160,0.5)";
 }
