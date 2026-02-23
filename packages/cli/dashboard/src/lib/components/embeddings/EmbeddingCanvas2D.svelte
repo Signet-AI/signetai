@@ -67,6 +67,11 @@ let simulation: ReturnType<typeof forceSimulation> | null = null;
 let animFrame = 0;
 let interactionCleanup: (() => void) | null = null;
 let resizeListenerAttached = false;
+let lastFrameTime = 0;
+
+const MAX_EDGES_NEAR = 12000;
+const MAX_EDGES_MID = 8000;
+const MAX_EDGES_FAR = 5000;
 
 // ---------------------------------------------------------------------------
 // Public API exposed to parent
@@ -118,7 +123,7 @@ export function startRendering(): void {
 	const ctx = canvas?.getContext("2d");
 	if (ctx) {
 		cancelAnimationFrame(animFrame);
-		draw(ctx);
+		draw(ctx, 0);
 	}
 }
 
@@ -126,7 +131,7 @@ export function resumeRendering(): void {
 	const ctx = canvas?.getContext("2d");
 	if (ctx) {
 		cancelAnimationFrame(animFrame);
-		draw(ctx);
+		draw(ctx, 0);
 	}
 }
 
@@ -177,8 +182,16 @@ function findNodeAt(wx: number, wy: number): GraphNode | null {
 // Rendering
 // ---------------------------------------------------------------------------
 
-function draw(ctx: CanvasRenderingContext2D): void {
+function draw(ctx: CanvasRenderingContext2D, now: number): void {
 	if (!canvas) return;
+	const heavyGraph = edges.length > 14000 || nodes.length > 2200;
+	const minFrameMs = heavyGraph ? 33 : 16;
+	if (now > 0 && now - lastFrameTime < minFrameMs) {
+		animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
+		return;
+	}
+	lastFrameTime = now;
+
 	const w = canvas.width;
 	const h = canvas.height;
 	ctx.fillStyle = "#050505";
@@ -190,7 +203,15 @@ function draw(ctx: CanvasRenderingContext2D): void {
 
 	const selectedId = graphSelected?.id ?? null;
 
-	for (const edge of edges) {
+	const edgeBudget =
+		camZoom >= 1.4
+			? MAX_EDGES_NEAR
+			: camZoom >= 0.8
+				? MAX_EDGES_MID
+				: MAX_EDGES_FAR;
+	const edgeStep = Math.max(1, Math.ceil(edges.length / edgeBudget));
+	for (let i = 0; i < edges.length; i += edgeStep) {
+		const edge = edges[i];
 		const s = edge.source as GraphNode;
 		const t = edge.target as GraphNode;
 		ctx.beginPath();
@@ -288,7 +309,7 @@ function draw(ctx: CanvasRenderingContext2D): void {
 		ly += 16;
 	}
 
-	animFrame = requestAnimationFrame(() => draw(ctx));
+	animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
 }
 
 // ---------------------------------------------------------------------------

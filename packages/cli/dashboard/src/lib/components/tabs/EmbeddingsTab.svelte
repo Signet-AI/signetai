@@ -87,6 +87,7 @@ let relationLookup = $state(new Map<string, RelationKind>());
 let hoverNeighbors = $state<EmbeddingRelation[]>([]);
 let hoverRelationLookup = $state(new Map<string, RelationKind>());
 let hoverLockedId = $state<string | null>(null);
+let hoverAdjacency = $state(new Map<string, Map<string, number>>());
 
 let graphRegion = $state<HTMLDivElement | null>(null);
 let hoverX = $state(0);
@@ -190,6 +191,8 @@ function handleGraphMouseMove(event: MouseEvent): void {
 
 function updateGraphHover(next: EmbeddingPoint | null): void {
 	if (hoverLockedId) return;
+	if (!next && !graphHovered) return;
+	if (next && graphHovered && next.id === graphHovered.id) return;
 	graphHovered = next;
 }
 
@@ -217,19 +220,11 @@ function computeHoverNeighbors(hovered: EmbeddingPoint | null): void {
 		return;
 	}
 
-	const ranked = new Map<string, number>();
-	for (const edge of edges) {
-		const leftId = getEdgeEndpointId(edge.source);
-		const rightId = getEdgeEndpointId(edge.target);
-		if (!leftId || !rightId) continue;
-
-		const isMatchLeft = leftId === hovered.id;
-		const isMatchRight = rightId === hovered.id;
-		if (!isMatchLeft && !isMatchRight) continue;
-
-		const neighborId = isMatchLeft ? rightId : leftId;
-		if (neighborId === hovered.id) continue;
-		ranked.set(neighborId, (ranked.get(neighborId) ?? 0) + 1);
+	const ranked = hoverAdjacency.get(hovered.id);
+	if (!ranked || ranked.size === 0) {
+		hoverNeighbors = [];
+		hoverRelationLookup = new Map();
+		return;
 	}
 
 	const topNeighbors = [...ranked.entries()]
@@ -246,6 +241,24 @@ function computeHoverNeighbors(hovered: EmbeddingPoint | null): void {
 	hoverRelationLookup = new Map(
 		hoverNeighbors.map((neighbor) => [neighbor.id, "similar" as const]),
 	);
+}
+
+function buildHoverAdjacency(): void {
+	const adjacency = new Map<string, Map<string, number>>();
+	for (const edge of edges) {
+		const leftId = getEdgeEndpointId(edge.source);
+		const rightId = getEdgeEndpointId(edge.target);
+		if (!leftId || !rightId || leftId === rightId) continue;
+
+		const leftNeighbors = adjacency.get(leftId) ?? new Map<string, number>();
+		leftNeighbors.set(rightId, (leftNeighbors.get(rightId) ?? 0) + 1);
+		adjacency.set(leftId, leftNeighbors);
+
+		const rightNeighbors = adjacency.get(rightId) ?? new Map<string, number>();
+		rightNeighbors.set(leftId, (rightNeighbors.get(leftId) ?? 0) + 1);
+		adjacency.set(rightId, rightNeighbors);
+	}
+	hoverAdjacency = adjacency;
 }
 
 const FILTER_PRESET_STORAGE_KEY = "signet-embeddings-filter-presets";
@@ -706,8 +719,12 @@ $effect(() => {
 });
 
 $effect(() => {
-	edges;
 	nodeIdsByIndex;
+	edges;
+	buildHoverAdjacency();
+});
+
+$effect(() => {
 	previewHovered;
 	computeHoverNeighbors(previewHovered);
 });
