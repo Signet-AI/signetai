@@ -69,9 +69,39 @@ let interactionCleanup: (() => void) | null = null;
 let resizeListenerAttached = false;
 let lastFrameTime = 0;
 
+// Fix 2: idle rAF loop
+let needsRedraw = true;
+
+// Fix 3: dedup hover calls
+let lastHoveredId: string | null = null;
+
+// Fix 7: spatial index
+const GRID_CELL = 30;
+let gridCells = new Map<string, number[]>();
+let gridDirty = true;
+
 const MAX_EDGES_NEAR = 12000;
 const MAX_EDGES_MID = 8000;
 const MAX_EDGES_FAR = 5000;
+
+// ---------------------------------------------------------------------------
+// Fix 7: spatial index helpers
+// ---------------------------------------------------------------------------
+
+function rebuildGrid(): void {
+	gridCells.clear();
+	for (let i = 0; i < nodes.length; i++) {
+		const n = nodes[i];
+		const key = `${Math.floor(n.x / GRID_CELL)},${Math.floor(n.y / GRID_CELL)}`;
+		const cell = gridCells.get(key);
+		if (cell) {
+			cell.push(i);
+		} else {
+			gridCells.set(key, [i]);
+		}
+	}
+	gridDirty = false;
+}
 
 // ---------------------------------------------------------------------------
 // Public API exposed to parent
@@ -91,11 +121,23 @@ export function focusNode(id: string): void {
 	camZoom = Math.max(camZoom, 1.6);
 }
 
+// Fix 2: requestRedraw exported so parent can trigger redraws if needed
+export function requestRedraw(): void {
+	needsRedraw = true;
+	if (animFrame === 0) {
+		const ctx = canvas?.getContext("2d");
+		if (ctx) {
+			animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
+		}
+	}
+}
+
 export function startSimulation(
 	graphNodes: GraphNode[],
 	graphEdges: GraphEdge[],
 ): void {
 	simulation?.stop();
+	gridDirty = true;
 	simulation = forceSimulation(graphNodes as any)
 		.force("link", forceLink(graphEdges).distance(58).strength(0.28))
 		.force("charge", forceManyBody().strength(-72))
@@ -105,7 +147,11 @@ export function startSimulation(
 			forceCollide().radius((entry: any) => entry.radius + 2),
 		)
 		.alphaDecay(0.03)
-		.on("tick", () => {});
+		.on("tick", () => {
+			// Fix 7: rebuild spatial index on tick so findNodeAt stays accurate
+			gridDirty = true;
+			requestRedraw();
+		});
 }
 
 export function stopSimulation(): void {
@@ -123,7 +169,9 @@ export function startRendering(): void {
 	const ctx = canvas?.getContext("2d");
 	if (ctx) {
 		cancelAnimationFrame(animFrame);
-		draw(ctx, 0);
+		animFrame = 0;
+		needsRedraw = true;
+		requestRedraw();
 	}
 }
 
@@ -131,12 +179,15 @@ export function resumeRendering(): void {
 	const ctx = canvas?.getContext("2d");
 	if (ctx) {
 		cancelAnimationFrame(animFrame);
-		draw(ctx, 0);
+		animFrame = 0;
+		needsRedraw = true;
+		requestRedraw();
 	}
 }
 
 export function stopRendering(): void {
 	cancelAnimationFrame(animFrame);
+	animFrame = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,15 +218,36 @@ function screenToWorld(sx: number, sy: number): [number, number] {
 	];
 }
 
+// Fix 7: grid-based spatial lookup for O(1) average hit testing
 function findNodeAt(wx: number, wy: number): GraphNode | null {
-	for (let i = nodes.length - 1; i >= 0; i--) {
-		const n = nodes[i];
-		const dx = n.x - wx;
-		const dy = n.y - wy;
-		const hitR = n.radius + 4;
-		if (dx * dx + dy * dy <= hitR * hitR) return n;
+	if (gridDirty) rebuildGrid();
+
+	const cx = Math.floor(wx / GRID_CELL);
+	const cy = Math.floor(wy / GRID_CELL);
+	let best: GraphNode | null = null;
+	let bestI = -1;
+
+	for (let dx = -1; dx <= 1; dx++) {
+		for (let dy = -1; dy <= 1; dy++) {
+			const key = `${cx + dx},${cy + dy}`;
+			const cell = gridCells.get(key);
+			if (!cell) continue;
+			for (const i of cell) {
+				const n = nodes[i];
+				const ddx = n.x - wx;
+				const ddy = n.y - wy;
+				const hitR = n.radius + 4;
+				if (ddx * ddx + ddy * ddy <= hitR * hitR) {
+					// Prefer the node with the highest index (drawn on top)
+					if (i > bestI) {
+						bestI = i;
+						best = n;
+					}
+				}
+			}
+		}
 	}
-	return null;
+	return best;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +255,9 @@ function findNodeAt(wx: number, wy: number): GraphNode | null {
 // ---------------------------------------------------------------------------
 
 function draw(ctx: CanvasRenderingContext2D, now: number): void {
+	animFrame = 0;
 	if (!canvas) return;
+
 	const heavyGraph = edges.length > 14000 || nodes.length > 2200;
 	const minFrameMs = heavyGraph ? 33 : 16;
 	if (now > 0 && now - lastFrameTime < minFrameMs) {
@@ -210,14 +284,15 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 				? MAX_EDGES_MID
 				: MAX_EDGES_FAR;
 	const edgeStep = Math.max(1, Math.ceil(edges.length / edgeBudget));
+
+	// Fix 2: batch edges by stroke style to reduce canvas state switches
+	const edgeBuckets = new Map<string, Array<[GraphNode, GraphNode]>>();
+	const lineW = 0.8 / camZoom;
 	for (let i = 0; i < edges.length; i += edgeStep) {
 		const edge = edges[i];
 		const s = edge.source as GraphNode;
 		const t = edge.target as GraphNode;
-		ctx.beginPath();
-		ctx.moveTo(s.x, s.y);
-		ctx.lineTo(t.x, t.y);
-		ctx.strokeStyle = edgeStrokeStyle(
+		const style = edgeStrokeStyle(
 			s.data.id,
 			t.data.id,
 			embeddingFilterIds,
@@ -225,7 +300,21 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 			lensIds,
 			clusterLensMode,
 		);
-		ctx.lineWidth = 0.8 / camZoom;
+		const bucket = edgeBuckets.get(style);
+		if (bucket) {
+			bucket.push([s, t]);
+		} else {
+			edgeBuckets.set(style, [[s, t]]);
+		}
+	}
+	ctx.lineWidth = lineW;
+	for (const [style, pairs] of edgeBuckets) {
+		ctx.beginPath();
+		ctx.strokeStyle = style;
+		for (const [s, t] of pairs) {
+			ctx.moveTo(s.x, s.y);
+			ctx.lineTo(t.x, t.y);
+		}
 		ctx.stroke();
 	}
 
@@ -309,7 +398,12 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		ly += 16;
 	}
 
-	animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
+	// Fix 2: only schedule next frame if simulation is still warm or a redraw is pending
+	needsRedraw = false;
+	const simAlpha = (simulation as any)?.alpha?.() ?? 0;
+	if (simAlpha > 0.001 || needsRedraw) {
+		animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +442,7 @@ function setupInteractions(): void {
 			const [wx, wy] = screenToWorld(event.clientX, event.clientY);
 			dragNode.fx = wx;
 			dragNode.fy = wy;
+			requestRedraw();
 			return;
 		}
 		if (isPanning) {
@@ -355,11 +450,19 @@ function setupInteractions(): void {
 				panCamStartX - (event.clientX - panStartX) / camZoom;
 			camY =
 				panCamStartY - (event.clientY - panStartY) / camZoom;
+			requestRedraw();
 			return;
 		}
 		const [wx, wy] = screenToWorld(event.clientX, event.clientY);
 		const node = findNodeAt(wx, wy);
-		onhovernode(node?.data ?? null);
+
+		// Fix 3: only fire onhovernode when the hovered node actually changes
+		const nextId = node?.data.id ?? null;
+		if (nextId !== lastHoveredId) {
+			lastHoveredId = nextId;
+			onhovernode(node?.data ?? null);
+		}
+
 		target.style.cursor = node ? "pointer" : "grab";
 	};
 
@@ -396,6 +499,7 @@ function setupInteractions(): void {
 		camZoom = newZoom;
 		camX = wx - mx / camZoom;
 		camY = wy - my / camZoom;
+		requestRedraw();
 	};
 
 	target.addEventListener("pointerdown", onPointerDown);
@@ -429,6 +533,7 @@ $effect(() => {
 			resizeListenerAttached = false;
 		}
 		cancelAnimationFrame(animFrame);
+		animFrame = 0;
 	};
 });
 </script>

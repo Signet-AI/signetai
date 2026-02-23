@@ -90,11 +90,24 @@ let hoverLockedId = $state<string | null>(null);
 let hoverAdjacency = $state(new Map<string, Map<string, number>>());
 
 let graphRegion = $state<HTMLDivElement | null>(null);
-let hoverX = $state(0);
-let hoverY = $state(0);
+
+// Fix 1: hoverX/hoverY are plain vars; position set imperatively via DOM.
+// hoverCardEl uses $state so bind:this populates it, but style mutations
+// bypass reactivity entirely — no Svelte re-render on mouse move.
+let hoverX = 0;
+let hoverY = 0;
+let hoverCardEl = $state<HTMLDivElement | null>(null);
+let graphRegionRect = { left: 0, top: 0, width: 0, height: 0 };
 
 let canvas2d = $state<EmbeddingCanvas2D | null>(null);
 let canvas3d = $state<EmbeddingCanvas3D | null>(null);
+
+// Fix 4: coalesce refreshAppearance() calls
+let refresh3dQueued = false;
+
+// Fix 5: debounced search
+let debouncedSearch = $state("");
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -142,25 +155,32 @@ function intersectFilterSets(
 	return out;
 }
 
+// Fix 6: targeted O(1) patch instead of three O(n) map copies
 function updateEmbeddingInState(
 	id: string,
 	patch: (entry: EmbeddingPoint) => EmbeddingPoint,
 ): void {
-	embeddings = embeddings.map((entry) =>
-		entry.id === id ? patch(entry) : entry,
-	);
-	embeddingById = new Map(embeddings.map((entry) => [entry.id, entry]));
-	nodes = nodes.map((node) =>
-		node.data.id === id ? { ...node, data: patch(node.data) } : node,
-	);
-	if (graphSelected?.id === id) {
-		const next = embeddingById.get(id) ?? null;
-		graphSelected = next;
+	const idx = embeddings.findIndex((e) => e.id === id);
+	if (idx === -1) return;
+	const patched = patch(embeddings[idx]);
+
+	const nextEmbeddings = embeddings.slice();
+	nextEmbeddings[idx] = patched;
+	embeddings = nextEmbeddings;
+
+	const nextMap = new Map(embeddingById);
+	nextMap.set(id, patched);
+	embeddingById = nextMap;
+
+	const nodeIdx = nodes.findIndex((n) => n.data.id === id);
+	if (nodeIdx !== -1) {
+		const nextNodes = nodes.slice();
+		nextNodes[nodeIdx] = { ...nextNodes[nodeIdx], data: patched };
+		nodes = nextNodes;
 	}
-	if (graphHovered?.id === id) {
-		const next = embeddingById.get(id) ?? null;
-		graphHovered = next;
-	}
+
+	if (graphSelected?.id === id) graphSelected = patched;
+	if (graphHovered?.id === id) graphHovered = patched;
 }
 
 function toggleSource(who: string): void {
@@ -173,20 +193,16 @@ function toggleSource(who: string): void {
 	selectedSources = next;
 }
 
-function hoverCardStyle(): string {
-	if (!graphRegion) return "left: 12px; top: 12px;";
-	const maxX = Math.max(12, graphRegion.clientWidth - 334);
-	const maxY = Math.max(12, graphRegion.clientHeight - 170);
+// Fix 1: position hover card directly via transform, no reactive state
+function handleGraphMouseMove(event: MouseEvent): void {
+	if (!graphRegion || !hoverCardEl) return;
+	hoverX = event.clientX - graphRegionRect.left;
+	hoverY = event.clientY - graphRegionRect.top;
+	const maxX = Math.max(12, graphRegionRect.width - 334);
+	const maxY = Math.max(12, graphRegionRect.height - 170);
 	const left = Math.min(Math.max(12, hoverX + 14), maxX);
 	const top = Math.min(Math.max(12, hoverY + 14), maxY);
-	return `left: ${left}px; top: ${top}px;`;
-}
-
-function handleGraphMouseMove(event: MouseEvent): void {
-	if (!graphRegion) return;
-	const rect = graphRegion.getBoundingClientRect();
-	hoverX = event.clientX - rect.left;
-	hoverY = event.clientY - rect.top;
+	hoverCardEl.style.transform = `translate3d(${left}px, ${top}px, 0)`;
 }
 
 function updateGraphHover(next: EmbeddingPoint | null): void {
@@ -333,6 +349,16 @@ function removeCustomPreset(id: string): void {
 	if (activePresetId === id) {
 		activePresetId = "all";
 	}
+}
+
+// Fix 4: coalesced refreshAppearance — batches rapid reactive updates
+function scheduleRefresh3d(): void {
+	if (graphMode !== "3d" || refresh3dQueued) return;
+	refresh3dQueued = true;
+	queueMicrotask(() => {
+		refresh3dQueued = false;
+		canvas3d?.refreshAppearance();
+	});
 }
 
 // -----------------------------------------------------------------------
@@ -611,8 +637,22 @@ $effect(() => {
 	}
 });
 
+// Fix 5: debounce embeddingSearch into debouncedSearch
 $effect(() => {
-	const query = embeddingSearch.trim().toLowerCase();
+	const q = embeddingSearch;
+	if (searchTimer !== null) clearTimeout(searchTimer);
+	if (!q) {
+		debouncedSearch = "";
+		return;
+	}
+	searchTimer = setTimeout(() => {
+		debouncedSearch = q;
+	}, 180);
+});
+
+// Fix 5: use debouncedSearch for actual filtering
+$effect(() => {
+	const query = debouncedSearch.trim().toLowerCase();
 	const rows = embeddings;
 	if (!query) {
 		searchFilterIds = null;
@@ -710,12 +750,11 @@ $effect(() => {
 	lensIds = ids;
 });
 
+// Fix 4: coalesced — these three effects fire often together
 $effect(() => {
 	clusterLensMode;
 	lensIds;
-	if (graphMode === "3d") {
-		canvas3d?.refreshAppearance();
-	}
+	scheduleRefresh3d();
 });
 
 $effect(() => {
@@ -743,9 +782,8 @@ $effect(() => {
 		pinnedFilterIds,
 		neighborhoodFilterIds,
 	]);
-	if (graphMode === "3d") {
-		canvas3d?.refreshAppearance();
-	}
+	// Fix 4: coalesced
+	scheduleRefresh3d();
 });
 
 $effect(() => {
@@ -758,9 +796,8 @@ $effect(() => {
 	const dissimilar = dissimilarNeighbors;
 	activeNeighbors = mode === "similar" ? similar : dissimilar;
 	relationLookup = new Map(activeNeighbors.map((item) => [item.id, item.kind]));
-	if (graphMode === "3d") {
-		canvas3d?.refreshAppearance();
-	}
+	// Fix 4: coalesced
+	scheduleRefresh3d();
 });
 
 const effectiveRelationLookup = $derived(
@@ -811,6 +848,24 @@ $effect(() => {
 	if (!graphInitialized) {
 		initGraph();
 	}
+});
+
+// Fix 1: cache graphRegion dimensions via ResizeObserver
+$effect(() => {
+	const el = graphRegion;
+	if (!el) return;
+	const updateRect = () => {
+		const r = el.getBoundingClientRect();
+		graphRegionRect = { left: r.left, top: r.top, width: r.width, height: r.height };
+	};
+	updateRect();
+	const ro = new ResizeObserver(updateRect);
+	ro.observe(el);
+	window.addEventListener("scroll", updateRect, { passive: true });
+	return () => {
+		ro.disconnect();
+		window.removeEventListener("scroll", updateRect);
+	};
 });
 </script>
 
@@ -973,9 +1028,11 @@ $effect(() => {
 		</div>
 
 		{#if previewHovered}
+			<!-- Fix 1: position via imperative DOM transform; bind:this for direct style mutation -->
 			<div
+				bind:this={hoverCardEl}
 				class="absolute z-[9] w-[320px] pointer-events-none border border-[rgba(255,255,255,0.26)] bg-[rgba(5,5,5,0.92)] px-2 py-2"
-				style={hoverCardStyle()}
+				style="position:absolute;top:0;left:0;will-change:transform;"
 			>
 				<div class="flex items-center gap-1.5 flex-wrap mb-1.5">
 					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{previewHovered.who ?? "unknown"}</span>
