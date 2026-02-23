@@ -69,7 +69,9 @@ import {
 	txModifyMemory,
 	txRecoverMemory,
 	type MutationContext,
+	type IngestEnvelope,
 } from "./transactions";
+import { signEnvelope } from "./memory-signing";
 import {
 	startPipeline,
 	stopPipeline,
@@ -1878,6 +1880,33 @@ app.post("/api/memory/remember", async (c) => {
 	};
 
 	try {
+		// Build and sign the envelope BEFORE the sync transaction.
+		// signEnvelope is async (libsodium); withWriteTx is sync.
+		const envelope: IngestEnvelope = {
+			id,
+			content: normalizedContent.storageContent,
+			normalizedContent: normalizedContentForInsert,
+			contentHash,
+			who,
+			why: pinned ? "explicit-critical" : "explicit",
+			project,
+			importance,
+			type: memType,
+			tags,
+			pinned,
+			isDeleted: 0,
+			extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
+			embeddingModel: null,
+			extractionModel: pipelineEnqueueEnabled
+				? pipelineCfg.extractionModel
+				: null,
+			updatedBy: who,
+			sourceType,
+			sourceId,
+			createdAt: now,
+		};
+		const signedEnvelope = await signEnvelope(envelope);
+
 		// Single atomic write tx: check dedupe then insert.
 		// On UNIQUE constraint race (two concurrent inserts with same
 		// content_hash), catch the error and re-read the winner.
@@ -1903,30 +1932,8 @@ app.post("/api/memory/remember", async (c) => {
 				.get(contentHash) as DedupeRow | undefined;
 			if (byHash) return { deduped: true as const, row: byHash };
 
-			// No duplicate — insert
-			txIngestEnvelope(db, {
-				id,
-				content: normalizedContent.storageContent,
-				normalizedContent: normalizedContentForInsert,
-				contentHash,
-				who,
-				why: pinned ? "explicit-critical" : "explicit",
-				project,
-				importance,
-				type: memType,
-				tags,
-				pinned,
-				isDeleted: 0,
-				extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
-				embeddingModel: null,
-				extractionModel: pipelineEnqueueEnabled
-					? pipelineCfg.extractionModel
-					: null,
-				updatedBy: who,
-				sourceType,
-				sourceId,
-				createdAt: now,
-			});
+			// No duplicate — insert (envelope pre-signed outside tx)
+			txIngestEnvelope(db, signedEnvelope);
 			return { deduped: false as const };
 		});
 

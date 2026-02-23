@@ -238,14 +238,17 @@ export async function generateSigningKeypair(): Promise<string> {
 
 	writeKeypairFile(stored);
 
-	// Cache for immediate use
+	// Cache for immediate use — MUST copy the Uint8Arrays because we zero
+	// the originals below (Uint8Array assignment is by reference, not copy).
 	_cachedKeypair = {
-		publicKey: kp.publicKey,
-		privateKey: kp.privateKey,
+		publicKey: new Uint8Array(kp.publicKey),
+		privateKey: new Uint8Array(kp.privateKey),
 	};
 
-	// Zero the libsodium keypair object's private key (best-effort in JS)
+	// Zero the libsodium keypair object's original buffers (best-effort in JS).
+	// Safe because _cachedKeypair now holds independent copies.
 	kp.privateKey.fill(0);
+	kp.publicKey.fill(0);
 
 	return publicKeyB64;
 }
