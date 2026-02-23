@@ -50,6 +50,17 @@ export interface AgentManifest {
 		pipelineV2?: Partial<PipelineV2Config>;
 	};
 
+	// Decentralized Identity (optional, auto-generated)
+	did?: string;
+
+	// Signing configuration
+	signing?: {
+		/** Whether to auto-sign new memories */
+		autoSign: boolean;
+		/** Key storage path (default: ~/.agents/.keys/signing.enc) */
+		keyPath?: string;
+	};
+
 	// Trust & verification (optional)
 	trust?: {
 		verification: "none" | "erc8128" | "gpg" | "did" | "registry";
@@ -245,6 +256,9 @@ export interface Memory {
 	accessCount?: number;
 	lastAccessed?: string;
 	who?: string;
+	// Web3 identity fields (optional, added in migration 012)
+	signature?: string;
+	signerDid?: string;
 }
 
 export interface Conversation {
@@ -337,6 +351,23 @@ export interface MemoryEntityMention {
 	mentionText?: string;
 	confidence?: number;
 	createdAt?: string;
+}
+
+// -- Merkle / Provenance types --
+
+export interface MerkleRootRecord {
+	id: number;
+	rootHash: string;
+	memoryCount: number;
+	leafHashes?: string;
+	computedAt: string;
+	signerDid?: string;
+	signature?: string;
+	anchorChain?: string;
+	anchorTx?: string;
+	anchorBlock?: number;
+	anchorTimestamp?: string;
+	createdAt: string;
 }
 
 // -- Extraction pipeline contracts --

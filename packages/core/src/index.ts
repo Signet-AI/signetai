@@ -44,6 +44,7 @@ export type {
 	ExtractionResult,
 	DecisionProposal,
 	DecisionResult,
+	MerkleRootRecord,
 } from "./types";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
@@ -173,6 +174,50 @@ export {
 	type PackageManagerResolution,
 	type PackageManagerCommand,
 } from "./package-manager";
+
+// Web3 Identity — Crypto, DID, Merkle
+export {
+	generateSigningKeypair,
+	loadSigningKeypair,
+	hasSigningKeypair,
+	getPublicKeyBytes,
+	getPublicKeyBase64,
+	signContent,
+	verifySignature,
+	signBytes,
+	verifyBytes,
+	getMasterKey,
+} from "./crypto";
+
+export {
+	publicKeyToDid,
+	didToPublicKey,
+	generateDidDocument,
+	isValidDid,
+	formatDidShort,
+	DID_KEY_PREFIX,
+} from "./did";
+export type { DidDocument, VerificationMethod } from "./did";
+
+export {
+	computeMerkleRoot,
+	buildMerkleTree,
+	generateProof,
+	verifyProof,
+	hashContent,
+	hashPair,
+	hexToBytes,
+	bytesToHex,
+} from "./merkle";
+export type { MerkleTree, MerkleProof, MerkleProofStep } from "./merkle";
+
+export {
+	initializeAgentDid,
+	getConfiguredDid,
+	hasConfiguredDid,
+	isAutoSignEnabled,
+} from "./did-setup";
+export type { DidSetupResult } from "./did-setup";
 
 // Connector runtime types
 export {

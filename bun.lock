@@ -12,7 +12,7 @@
     },
     "packages/cli": {
       "name": "@signet/cli",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "bin": "./dist/cli.js",
       "dependencies": {
         "@inquirer/prompts": "^7.0.0",
@@ -32,7 +32,7 @@
     },
     "packages/connector-base": {
       "name": "@signet/connector-base",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -46,7 +46,7 @@
     },
     "packages/connector-claude-code": {
       "name": "@signet/connector-claude-code",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -58,7 +58,7 @@
     },
     "packages/connector-openclaw": {
       "name": "@signet/connector-openclaw",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
       },
@@ -69,7 +69,7 @@
     },
     "packages/connector-opencode": {
       "name": "@signet/connector-opencode",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -81,14 +81,16 @@
     },
     "packages/core": {
       "name": "@signet/core",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "dependencies": {
         "better-sqlite3": "^11.0.0",
+        "libsodium-wrappers": "^0.8.2",
         "sqlite-vec": "^0.1.7-alpha.2",
         "yaml": "^2.6.0",
       },
       "devDependencies": {
         "@types/better-sqlite3": "^7.6.0",
+        "@types/libsodium-wrappers": "^0.8.2",
         "typescript": "^5.7.0",
       },
       "optionalDependencies": {
@@ -101,7 +103,7 @@
     },
     "packages/daemon": {
       "name": "@signet/daemon",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "bin": {
         "signet-daemon": "./dist/daemon.js",
       },
@@ -121,14 +123,14 @@
     },
     "packages/opencode-plugin": {
       "name": "@signet/opencode-plugin",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "peerDependencies": {
         "@opencode-ai/plugin": ">=0.1.0",
       },
     },
     "packages/sdk": {
       "name": "@signet/sdk",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "devDependencies": {
         "@types/react": "^19.0.0",
         "react": "^19.0.0",
@@ -144,7 +146,7 @@
     },
     "packages/signetai": {
       "name": "signetai",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "bin": {
         "signet": "bin/signet.js",
         "signet-mcp": "dist/mcp-stdio.js",
@@ -169,7 +171,7 @@
     },
     "packages/tray": {
       "name": "@signet/tray",
-      "version": "0.1.102",
+      "version": "0.1.107",
       "dependencies": {
         "@signet/sdk": "workspace:*",
         "@tauri-apps/api": "^2.5.0",

@@ -1,0 +1,146 @@
+/**
+ * Memory signing middleware.
+ *
+ * Signs memory content before insertion into the database.
+ * This module provides async functions that should be called BEFORE
+ * entering the synchronous database transaction.
+ *
+ * Signing is optional — if no keypair exists, memories are stored unsigned.
+ * The `autoSign` flag in agent.yaml controls whether signing is attempted.
+ */
+
+import {
+	hasSigningKeypair,
+	signContent,
+	getPublicKeyBytes,
+	verifySignature,
+} from "@signet/core";
+import { publicKeyToDid } from "@signet/core";
+import type { IngestEnvelope } from "./transactions";
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+/** Cached DID — resolved once at first signing attempt. */
+let _cachedDid: string | null = null;
+
+/** Whether signing is available (keypair exists). Cached after first check. */
+let _signingAvailable: boolean | null = null;
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if memory signing is available (keypair exists).
+ * Result is cached after first check.
+ */
+export async function isSigningAvailable(): Promise<boolean> {
+	if (_signingAvailable !== null) return _signingAvailable;
+	_signingAvailable = hasSigningKeypair();
+	return _signingAvailable;
+}
+
+/**
+ * Get the agent's DID. Returns null if no keypair exists.
+ */
+export async function getAgentDid(): Promise<string | null> {
+	if (_cachedDid !== null) return _cachedDid;
+	if (!(await isSigningAvailable())) return null;
+
+	try {
+		const pubKey = await getPublicKeyBytes();
+		_cachedDid = publicKeyToDid(pubKey);
+		return _cachedDid;
+	} catch {
+		_signingAvailable = false;
+		return null;
+	}
+}
+
+/**
+ * Build the signable payload for a memory entry.
+ *
+ * The signed content is: `contentHash|createdAt|signerDid`
+ * This binds the signature to the content, timestamp, and signer identity.
+ */
+export function buildSignablePayload(
+	contentHash: string,
+	createdAt: string,
+	signerDid: string,
+): string {
+	return `${contentHash}|${createdAt}|${signerDid}`;
+}
+
+/**
+ * Sign an ingest envelope before database insertion.
+ *
+ * Modifies the envelope in-place by adding `signature` and `signerDid`.
+ * If signing is not available (no keypair), the envelope is returned unchanged.
+ *
+ * This MUST be called outside the database transaction (signing is async).
+ */
+export async function signEnvelope(
+	envelope: IngestEnvelope,
+): Promise<IngestEnvelope> {
+	if (!(await isSigningAvailable())) return envelope;
+
+	const did = await getAgentDid();
+	if (!did) return envelope;
+
+	try {
+		const payload = buildSignablePayload(
+			envelope.contentHash,
+			envelope.createdAt,
+			did,
+		);
+		const signature = await signContent(payload);
+
+		envelope.signerDid = did;
+		envelope.signature = signature;
+	} catch (err) {
+		// Signing failed — log but don't block memory creation
+		console.warn(
+			"[memory-signing] Failed to sign memory:",
+			err instanceof Error ? err.message : String(err),
+		);
+	}
+
+	return envelope;
+}
+
+/**
+ * Verify a memory's signature.
+ *
+ * @param contentHash - The memory's content hash
+ * @param createdAt - The memory's creation timestamp
+ * @param signerDid - The DID that signed the memory
+ * @param signature - The base64-encoded signature
+ * @returns true if valid, false if invalid or verification fails
+ */
+export async function verifyMemorySignature(
+	contentHash: string,
+	createdAt: string,
+	signerDid: string,
+	signature: string,
+): Promise<boolean> {
+	try {
+		// Extract public key from DID
+		const { didToPublicKey } = await import("@signet/core");
+		const publicKey = didToPublicKey(signerDid);
+
+		const payload = buildSignablePayload(contentHash, createdAt, signerDid);
+		return await verifySignature(payload, signature, publicKey);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Reset cached state. Useful after keypair generation.
+ */
+export function resetSigningCache(): void {
+	_cachedDid = null;
+	_signingAvailable = null;
+}
