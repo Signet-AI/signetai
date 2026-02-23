@@ -197,7 +197,7 @@ ${candidateBlock}
 
 Actions:
 - "add": New fact has no good match, should be stored as new memory
-- "update": New fact supersedes or refines an existing candidate (specify targetId)
+- "update": New fact supersedes or refines an existing candidate (specify targetId). Ensure the merged result is self-contained
 - "delete": New fact contradicts/invalidates a candidate (specify targetId)
 - "none": Fact is already covered by existing memories, skip
 

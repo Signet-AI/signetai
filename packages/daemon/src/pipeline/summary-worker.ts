@@ -87,6 +87,9 @@ Summary guidelines:
 - Write in past tense, third person
 
 Fact extraction guidelines:
+- Each fact must be self-contained and understandable without this conversation
+- Include the specific subject (package name, file path, tool, component) in every fact
+- BAD: "switched to a reactive pattern" → GOOD: "The EmbeddingCanvas2D component switched from polling to a reactive requestRedraw pattern for GPU efficiency"
 - Only durable, reusable knowledge (skip ephemeral details)
 - Types: fact, preference, decision, learning, rule, issue
 - Importance: 0.3 (routine) to 0.5 (significant)

@@ -797,7 +797,7 @@ describe("Worker phase C controlled writes", () => {
 				JSON.stringify({
 					facts: [
 						{
-							content: "..........",
+							content: "..........!!!!!!!!!!..........",
 							type: "preference",
 							confidence: 0.92,
 						},
