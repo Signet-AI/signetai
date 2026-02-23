@@ -173,11 +173,17 @@ export async function hashPair(left: string, right: string): Promise<string> {
   await ensureSodium();
   const leftBytes = hexToBytes(left);
   const rightBytes = hexToBytes(right);
+  if (leftBytes.length !== HASH_BYTES || rightBytes.length !== HASH_BYTES) {
+    throw new Error(
+      `hashPair expects ${HASH_BYTES}-byte (${HASH_BYTES * 2}-char hex) inputs, ` +
+      `got ${leftBytes.length} and ${rightBytes.length} bytes`,
+    );
+  }
   // Domain separation: internal nodes prefixed with 0x01
-  const combined = new Uint8Array(1 + leftBytes.length + rightBytes.length);
+  const combined = new Uint8Array(1 + HASH_BYTES * 2);
   combined.set(NODE_PREFIX, 0);
   combined.set(leftBytes, 1);
-  combined.set(rightBytes, 1 + leftBytes.length);
+  combined.set(rightBytes, 1 + HASH_BYTES);
   const hash = sodium.crypto_generichash(HASH_BYTES, combined, null);
   return bytesToHex(hash);
 }
@@ -215,7 +221,18 @@ async function getEmptyRoot(): Promise<string> {
 async function buildLayers(leaves: string[]): Promise<string[][]> {
   await ensureSodium();
 
-  const layers: string[][] = [leaves.slice()]; // layer 0 = leaves (copy)
+  // Apply LEAF_PREFIX (0x00) domain separation to each leaf (RFC 6962 §2.1).
+  // This prevents second-preimage attacks where a leaf could be confused with
+  // an internal node. Internal nodes get NODE_PREFIX (0x01).
+  const taggedLeaves = leaves.map((leaf) => {
+    const leafBytes = hexToBytes(leaf);
+    const combined = new Uint8Array(1 + leafBytes.length);
+    combined.set(LEAF_PREFIX, 0);
+    combined.set(leafBytes, 1);
+    return bytesToHex(sodium.crypto_generichash(HASH_BYTES, combined, null));
+  });
+
+  const layers: string[][] = [taggedLeaves]; // layer 0 = tagged leaves
   let current = layers[0];
 
   while (current.length > 1) {
@@ -266,7 +283,14 @@ export async function computeMerkleRoot(hashes: string[]): Promise<string> {
     return getEmptyRoot();
   }
   if (hashes.length === 1) {
-    return hashes[0];
+    // Single leaf still gets domain-separated (LEAF_PREFIX) for consistency.
+    // Without this, a 1-leaf root would differ structurally from all other roots.
+    await ensureSodium();
+    const leafBytes = hexToBytes(hashes[0]);
+    const combined = new Uint8Array(1 + leafBytes.length);
+    combined.set(LEAF_PREFIX, 0);
+    combined.set(leafBytes, 1);
+    return bytesToHex(sodium.crypto_generichash(HASH_BYTES, combined, null));
   }
 
   const layers = await buildLayers(hashes);
@@ -294,10 +318,17 @@ export async function buildMerkleTree(hashes: string[]): Promise<MerkleTree> {
   }
 
   if (hashes.length === 1) {
+    // Single leaf: domain-separate it for root consistency
+    await ensureSodium();
+    const leafBytes = hexToBytes(hashes[0]);
+    const combined = new Uint8Array(1 + leafBytes.length);
+    combined.set(LEAF_PREFIX, 0);
+    combined.set(leafBytes, 1);
+    const taggedLeaf = bytesToHex(sodium.crypto_generichash(HASH_BYTES, combined, null));
     return {
       leaves: [hashes[0]],
-      layers: [[hashes[0]]],
-      root: hashes[0],
+      layers: [[taggedLeaf]],
+      root: taggedLeaf,
     };
   }
 
@@ -390,7 +421,13 @@ export async function verifyProof(
   }
 
   try {
-    let current = leafHash;
+    // Apply LEAF_PREFIX domain separation to the starting leaf hash,
+    // matching how buildLayers tags leaves before pairing.
+    const leafBytes = hexToBytes(leafHash);
+    const leafTagged = new Uint8Array(1 + leafBytes.length);
+    leafTagged.set(LEAF_PREFIX, 0);
+    leafTagged.set(leafBytes, 1);
+    let current = bytesToHex(sodium.crypto_generichash(HASH_BYTES, leafTagged, null));
 
     for (const step of proof.siblings) {
       const left = step.position === 'left' ? step.hash : current;

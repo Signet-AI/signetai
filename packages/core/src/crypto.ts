@@ -104,8 +104,8 @@ export async function getMasterKey(): Promise<Uint8Array> {
 	const inputBytes = new TextEncoder().encode(input);
 
 	const key = sodium.crypto_generichash(32, inputBytes, null);
-	_masterKey = key;
-	return new Uint8Array(key); // Defensive copy
+	_masterKey = new Uint8Array(key); // Copy off potential WASM heap before caching
+	return new Uint8Array(_masterKey); // Defensive copy for caller
 }
 
 // ---------------------------------------------------------------------------

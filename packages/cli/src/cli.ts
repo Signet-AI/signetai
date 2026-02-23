@@ -242,7 +242,7 @@ async function gitAutoCommit(
 // Daemon Management
 // ============================================================================
 
-const AGENTS_DIR = join(homedir(), ".agents");
+const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
@@ -5211,82 +5211,84 @@ memoryCmd
 			return;
 		}
 
-		const db = new Database(dbPath);
+		// Resolve crypto BEFORE opening DB — if these throw, no DB handle to leak
 		const pubKey = await getPublicKeyBytes();
 		const did = publicKeyToDid(pubKey);
 
-		// Count unsigned memories
-		const countRow = db.prepare(
-			"SELECT COUNT(*) as count FROM memories WHERE signature IS NULL AND is_deleted = 0 AND content_hash IS NOT NULL"
-		).get() as { count: number } | undefined;
-		const unsignedCount = countRow?.count ?? 0;
+		const db = new Database(dbPath);
+		try {
+			// Count unsigned memories
+			const countRow = db.prepare(
+				"SELECT COUNT(*) as count FROM memories WHERE signature IS NULL AND is_deleted = 0 AND content_hash IS NOT NULL"
+			).get() as { count: number } | undefined;
+			const unsignedCount = countRow?.count ?? 0;
 
-		if (unsignedCount === 0) {
-			console.log(chalk.green("  All memories are already signed ✓"));
-			db.close();
-			return;
-		}
-
-		console.log(chalk.dim(`  Found ${unsignedCount} unsigned memories`));
-
-		if (options.dryRun) {
-			console.log(chalk.yellow(`  Dry run: would sign ${unsignedCount} memories`));
-			db.close();
-			return;
-		}
-
-		const spinner = ora(`  Signing ${unsignedCount} memories...`).start();
-
-		// Fetch unsigned memories
-		const rows = db.prepare(
-			"SELECT id, content_hash, created_at FROM memories WHERE signature IS NULL AND is_deleted = 0 AND content_hash IS NOT NULL"
-		).all() as Array<{ id: string; content_hash: string; created_at: string }>;
-
-		let signed = 0;
-		let failed = 0;
-
-		const updateStmt = db.prepare(
-			"UPDATE memories SET signature = ?, signer_did = ? WHERE id = ?"
-		);
-
-		// Sign in batches with transactions for performance
-		// (individual UPDATEs without explicit tx = ~1000x slower)
-		const BATCH_SIZE = 500;
-		for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-			const batch = rows.slice(i, i + BATCH_SIZE);
-
-			// Sign all in batch (async, outside transaction)
-			const signedBatch: Array<{ signature: string; id: string }> = [];
-			for (const row of batch) {
-				try {
-					// Validate contentHash is hex-only (prevents delimiter injection)
-					if (!/^[0-9a-f]+$/.test(row.content_hash)) {
-						failed++;
-						continue;
-					}
-					const payload = `${row.content_hash}|${row.created_at}|${did}`;
-					const signature = await signContent(payload);
-					signedBatch.push({ signature, id: row.id });
-					signed++;
-				} catch {
-					failed++;
-				}
+			if (unsignedCount === 0) {
+				console.log(chalk.green("  All memories are already signed ✓"));
+				return;
 			}
 
-			// Write batch in single transaction
-			db.transaction(() => {
-				for (const s of signedBatch) {
-					updateStmt.run(s.signature, did, s.id);
+			console.log(chalk.dim(`  Found ${unsignedCount} unsigned memories`));
+
+			if (options.dryRun) {
+				console.log(chalk.yellow(`  Dry run: would sign ${unsignedCount} memories`));
+				return;
+			}
+
+			const spinner = ora(`  Signing ${unsignedCount} memories...`).start();
+
+			// Fetch unsigned memories
+			const rows = db.prepare(
+				"SELECT id, content_hash, created_at FROM memories WHERE signature IS NULL AND is_deleted = 0 AND content_hash IS NOT NULL"
+			).all() as Array<{ id: string; content_hash: string; created_at: string }>;
+
+			let signed = 0;
+			let failed = 0;
+
+			const updateStmt = db.prepare(
+				"UPDATE memories SET signature = ?, signer_did = ? WHERE id = ?"
+			);
+
+			// Sign in batches with transactions for performance
+			// (individual UPDATEs without explicit tx = ~1000x slower)
+			const BATCH_SIZE = 500;
+			for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+				const batch = rows.slice(i, i + BATCH_SIZE);
+
+				// Sign all in batch (async, outside transaction)
+				const signedBatch: Array<{ signature: string; id: string }> = [];
+				for (const row of batch) {
+					try {
+						// Validate contentHash is hex-only (prevents delimiter injection)
+						if (!/^[0-9a-f]+$/.test(row.content_hash)) {
+							failed++;
+							continue;
+						}
+						const payload = `${row.content_hash}|${row.created_at}|${did}`;
+						const signature = await signContent(payload);
+						signedBatch.push({ signature, id: row.id });
+						signed++;
+					} catch {
+						failed++;
+					}
 				}
-			})();
 
-			spinner.text = `  Signing memories... ${signed}/${unsignedCount}`;
-		}
+				// Write batch in single transaction
+				db.transaction(() => {
+					for (const s of signedBatch) {
+						updateStmt.run(s.signature, did, s.id);
+					}
+				})();
 
-		db.close();
-		spinner.succeed(`Signed ${signed} memories`);
-		if (failed > 0) {
-			console.log(chalk.yellow(`  ⚠ ${failed} memories failed to sign`));
+				spinner.text = `  Signing memories... ${signed}/${unsignedCount}`;
+			}
+
+			spinner.succeed(`Signed ${signed} memories`);
+			if (failed > 0) {
+				console.log(chalk.yellow(`  ⚠ ${failed} memories failed to sign`));
+			}
+		} finally {
+			db.close();
 		}
 	});
 
@@ -5309,52 +5311,54 @@ memoryCmd
 		}
 
 		const db = new Database(dbPath);
-		const limit = parseInt(options.limit, 10) || 100;
+		try {
+			const limit = parseInt(options.limit, 10) || 100;
 
-		const rows = db.prepare(
-			`SELECT id, content_hash, created_at, signature, signer_did
-			 FROM memories
-			 WHERE signature IS NOT NULL
-			 ORDER BY created_at DESC
-			 LIMIT ?`
-		).all(limit) as Array<{
-			id: string;
-			content_hash: string;
-			created_at: string;
-			signature: string;
-			signer_did: string;
-		}>;
+			const rows = db.prepare(
+				`SELECT id, content_hash, created_at, signature, signer_did
+				 FROM memories
+				 WHERE signature IS NOT NULL
+				 ORDER BY created_at DESC
+				 LIMIT ?`
+			).all(limit) as Array<{
+				id: string;
+				content_hash: string;
+				created_at: string;
+				signature: string;
+				signer_did: string;
+			}>;
 
-		if (rows.length === 0) {
-			console.log(chalk.yellow("  No signed memories found."));
-			db.close();
-			return;
-		}
+			if (rows.length === 0) {
+				console.log(chalk.yellow("  No signed memories found."));
+				return;
+			}
 
-		let valid = 0;
-		let invalid = 0;
-		const spinner = ora(`  Verifying ${rows.length} signatures...`).start();
+			let valid = 0;
+			let invalid = 0;
+			const spinner = ora(`  Verifying ${rows.length} signatures...`).start();
 
-		for (const row of rows) {
-			try {
-				const pubKey = didToPublicKey(row.signer_did);
-				const payload = `${row.content_hash}|${row.created_at}|${row.signer_did}`;
-				const isValid = await verifySignature(payload, row.signature, pubKey);
-				if (isValid) {
-					valid++;
-				} else {
+			for (const row of rows) {
+				try {
+					const pubKey = didToPublicKey(row.signer_did);
+					const payload = `${row.content_hash}|${row.created_at}|${row.signer_did}`;
+					const isValid = await verifySignature(payload, row.signature, pubKey);
+					if (isValid) {
+						valid++;
+					} else {
+						invalid++;
+					}
+				} catch {
 					invalid++;
 				}
-			} catch {
-				invalid++;
 			}
-		}
 
-		db.close();
-		spinner.succeed(`Verified ${rows.length} signatures`);
-		console.log(chalk.green(`  ✓ Valid: ${valid}`));
-		if (invalid > 0) {
-			console.log(chalk.red(`  ✗ Invalid: ${invalid}`));
+			spinner.succeed(`Verified ${rows.length} signatures`);
+			console.log(chalk.green(`  ✓ Valid: ${valid}`));
+			if (invalid > 0) {
+				console.log(chalk.red(`  ✗ Invalid: ${invalid}`));
+			}
+		} finally {
+			db.close();
 		}
 	});
 
@@ -5407,11 +5411,14 @@ memoryCmd
 				const did = getConfiguredDid();
 				let sig: string | null = null;
 
-				if (did) {
-					sig = await signContent(root);
-				}
-
 				const now = new Date().toISOString();
+
+				if (did) {
+					// Bind identity, count, and timestamp into the signed payload
+					// (prevents replay: same root at different times can't reuse sig)
+					const payload = `merkle|${root}|${rows.length}|${now}|${did}`;
+					sig = await signContent(payload);
+				}
 				db.prepare(
 					`INSERT INTO merkle_roots
 					 (root_hash, memory_count, leaf_hashes, computed_at, signer_did, signature, created_at)
@@ -5444,26 +5451,35 @@ memoryCmd
 		}
 
 		const db = new Database(dbPath);
-
-		// Basic counts
-		const total = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE is_deleted = 0").get() as any)?.c ?? 0;
-		const signed = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE signature IS NOT NULL AND is_deleted = 0").get() as any)?.c ?? 0;
-		const unsigned = total - signed;
-
-		// Type breakdown
-		const types = db.prepare(
-			"SELECT type, COUNT(*) as c FROM memories WHERE is_deleted = 0 GROUP BY type ORDER BY c DESC"
-		).all() as Array<{ type: string; c: number }>;
-
-		// Merkle roots
+		let total = 0;
+		let signed = 0;
+		let unsigned = 0;
+		let types: Array<{ type: string; c: number }> = [];
 		let merkleCount = 0;
 		try {
-			merkleCount = (db.prepare("SELECT COUNT(*) as c FROM merkle_roots").get() as any)?.c ?? 0;
-		} catch {
-			// Table may not exist yet
-		}
+			// Basic counts
+			total = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE is_deleted = 0").get() as any)?.c ?? 0;
+			try {
+				signed = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE signature IS NOT NULL AND is_deleted = 0").get() as any)?.c ?? 0;
+			} catch {
+				// signature column may not exist yet (pre-migration 012)
+			}
+			unsigned = total - signed;
 
-		db.close();
+			// Type breakdown
+			types = db.prepare(
+				"SELECT type, COUNT(*) as c FROM memories WHERE is_deleted = 0 GROUP BY type ORDER BY c DESC"
+			).all() as Array<{ type: string; c: number }>;
+
+			// Merkle roots
+			try {
+				merkleCount = (db.prepare("SELECT COUNT(*) as c FROM merkle_roots").get() as any)?.c ?? 0;
+			} catch {
+				// Table may not exist yet
+			}
+		} finally {
+			db.close();
+		}
 
 		// Identity info
 		const did = getConfiguredDid();
