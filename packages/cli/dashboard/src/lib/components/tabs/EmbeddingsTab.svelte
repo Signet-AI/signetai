@@ -76,6 +76,7 @@ let globalSimilar = $state<Memory[]>([]);
 
 let nodes = $state<GraphNode[]>([]);
 let edges = $state<GraphEdge[]>([]);
+let nodeIdsByIndex = $state<string[]>([]);
 
 let graphMode: "2d" | "3d" = $state("2d");
 let projected3dCoords = $state<number[][]>([]);
@@ -204,21 +205,13 @@ function unlockHoverPreview(): void {
 
 function getEdgeEndpointId(endpoint: GraphEdge["source"]): string | null {
 	if (typeof endpoint === "number") {
-		const entry = nodes[endpoint];
-		return entry?.data.id ?? null;
+		return nodeIdsByIndex[endpoint] ?? null;
 	}
 	return endpoint?.data.id ?? null;
 }
 
 function computeHoverNeighbors(hovered: EmbeddingPoint | null): void {
 	if (!hovered) {
-		hoverNeighbors = [];
-		hoverRelationLookup = new Map();
-		return;
-	}
-
-	const hoveredNode = nodes.find((node) => node.data.id === hovered.id);
-	if (!hoveredNode) {
 		hoverNeighbors = [];
 		hoverRelationLookup = new Map();
 		return;
@@ -236,25 +229,17 @@ function computeHoverNeighbors(hovered: EmbeddingPoint | null): void {
 
 		const neighborId = isMatchLeft ? rightId : leftId;
 		if (neighborId === hovered.id) continue;
-		const neighborNode = nodes.find((node) => node.data.id === neighborId);
-		if (!neighborNode) continue;
-
-		const dx = hoveredNode.x - neighborNode.x;
-		const dy = hoveredNode.y - neighborNode.y;
-		const distance = Math.sqrt(dx * dx + dy * dy);
-		const score = 1 / (1 + distance);
-		const existing = ranked.get(neighborId);
-		if (typeof existing !== "number" || score > existing) {
-			ranked.set(neighborId, score);
-		}
+		ranked.set(neighborId, (ranked.get(neighborId) ?? 0) + 1);
 	}
 
-	hoverNeighbors = [...ranked.entries()]
+	const topNeighbors = [...ranked.entries()]
 		.sort((left, right) => right[1] - left[1])
-		.slice(0, 6)
+		.slice(0, 6);
+	const topScore = topNeighbors[0]?.[1] ?? 1;
+	hoverNeighbors = topNeighbors
 		.map(([id, score]) => ({
 			id,
-			score,
+			score: score / topScore,
 			kind: "similar" as const,
 		}));
 
@@ -407,6 +392,7 @@ async function initGraph(): Promise<void> {
 			color: sourceColorRgba(node.who, 0.85),
 			data: embeddings[index],
 		}));
+		nodeIdsByIndex = embeddings.map((embedding) => embedding.id);
 
 		edges = (projection.edges ?? []).map(([source, target]) => ({
 			source,
@@ -532,6 +518,7 @@ async function reloadEmbeddingsGraph(): Promise<void> {
 	embeddingsHasMore = false;
 	nodes = [];
 	edges = [];
+	nodeIdsByIndex = [];
 	pinError = "";
 
 	canvas2d?.stopSimulation();
@@ -719,8 +706,8 @@ $effect(() => {
 });
 
 $effect(() => {
-	nodes;
 	edges;
+	nodeIdsByIndex;
 	previewHovered;
 	computeHoverNeighbors(previewHovered);
 });
@@ -926,6 +913,17 @@ $effect(() => {
 				{/if}
 			</div>
 		</div>
+		{#if hoverLockedId}
+			<div class="absolute top-[96px] right-3 z-[9] pointer-events-none">
+				<button
+					type="button"
+					class="pointer-events-auto px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.74)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+					onclick={unlockHoverPreview}
+				>
+					Unlock preview
+				</button>
+			</div>
+		{/if}
 
 		{#if graphStatus}
 			<div class="absolute inset-0 flex items-center justify-center bg-[var(--sig-bg)] z-10">
@@ -981,7 +979,7 @@ $effect(() => {
 					{embeddingLabel(previewHovered)}
 				</p>
 				<div class="mt-1 text-[10px] text-[var(--sig-text-muted)]">
-					{hoverLockedId ? "ESC to unlock preview" : "Hold Shift to lock preview"}
+					{hoverLockedId ? "ESC or Unlock Preview button" : "Hold Shift to lock preview"}
 				</div>
 				{#if effectiveHoverNeighbors.length > 0}
 					<div class="mt-2 pt-2 border-t border-[rgba(255,255,255,0.14)]">
@@ -1014,7 +1012,10 @@ $effect(() => {
 				{pinnedIds}
 				{lensIds}
 				clusterLensMode={clusterLensMode && lensIds.size > 0}
-				onselectnode={(e) => (graphSelected = e)}
+				onselectnode={(e) => {
+					if (e) selectEmbeddingById(e.id);
+					else graphSelected = null;
+				}}
 				onhovernode={updateGraphHover}
 			/>
 		</div>

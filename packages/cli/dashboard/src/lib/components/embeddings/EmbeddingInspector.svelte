@@ -82,7 +82,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		</div>
 
 		<p class="m-0 text-[13px] leading-[1.55] text-[var(--sig-text-bright)] whitespace-pre-wrap break-words">
-			{graphSelected.content}
+			{graphSelected.content ?? graphSelected.text ?? "(No content preview available)"}
 		</p>
 
 		{#if graphSelected.tags?.length}
