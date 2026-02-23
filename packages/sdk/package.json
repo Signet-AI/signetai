@@ -1,6 +1,6 @@
 {
   "name": "@signet/sdk",
-  "version": "0.1.85",
+  "version": "0.1.86",
   "license": "Apache-2.0",
   "description": "HTTP client SDK for the Signet daemon API",
   "type": "module",
