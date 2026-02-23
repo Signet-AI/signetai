@@ -80,6 +80,27 @@ function findSqliteVecExtension(): string | null {
 			`${platformPkg}@*`,
 			extFile,
 		),
+		// Global npm install: derive from process.execPath
+		// e.g. /opt/homebrew/bin/node → /opt/homebrew/lib/node_modules/<pkg>/vec0.dylib
+		// e.g. /usr/bin/node → /usr/lib/node_modules/<pkg>/vec0.so
+		// Also covers nvm: ~/.nvm/versions/node/vXX/bin/node → .../lib/node_modules/
+		join(
+			dirname(dirname(process.execPath)),
+			"lib",
+			"node_modules",
+			platformPkg,
+			extFile,
+		),
+		// Global npm install via signetai meta-package
+		join(
+			dirname(dirname(process.execPath)),
+			"lib",
+			"node_modules",
+			"signetai",
+			"node_modules",
+			platformPkg,
+			extFile,
+		),
 	];
 
 	for (const searchPath of searchPaths) {

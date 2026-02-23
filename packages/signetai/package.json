@@ -61,7 +61,8 @@
     "hono": "^4.8.0",
     "libsodium-wrappers": "^0.8.2",
     "open": "^10.0.0",
-    "ora": "^8.0.0"
+    "ora": "^8.0.0",
+    "sqlite-vec": "^0.1.7-alpha.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
