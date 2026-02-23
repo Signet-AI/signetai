@@ -19,6 +19,7 @@ import { ScreenCaptureAdapter } from "./screen";
 import { FileWatcherAdapter } from "./files";
 import { TerminalWatcherAdapter } from "./terminal";
 import { CommsWatcherAdapter } from "./comms";
+import { VoiceCaptureAdapter } from "./voice";
 
 export class CaptureManager {
 	private adapters: CaptureAdapter[] = [];
@@ -41,7 +42,9 @@ export class CaptureManager {
 		if (config.comms.enabled) {
 			this.adapters.push(new CommsWatcherAdapter(config.comms));
 		}
-		// Voice adapter not implemented yet — Sprint E
+		if (config.voice.enabled) {
+			this.adapters.push(new VoiceCaptureAdapter(config.voice));
+		}
 	}
 
 	async start(): Promise<void> {
@@ -184,3 +187,4 @@ export { ScreenCaptureAdapter } from "./screen";
 export { FileWatcherAdapter } from "./files";
 export { TerminalWatcherAdapter } from "./terminal";
 export { CommsWatcherAdapter } from "./comms";
+export { VoiceCaptureAdapter } from "./voice";

@@ -162,6 +162,7 @@ export {
 	DecisionRefiner,
 	WorkflowRefiner,
 	ContextRefiner,
+	PatternRefiner,
 } from "./refiners/index";
 
 // Distillation layer

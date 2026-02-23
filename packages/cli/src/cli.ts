@@ -7322,6 +7322,19 @@ perceiveCmd
 			}
 		}
 
+		// Voice capture warning
+		const voiceEnabled =
+			options.voice === true ||
+			(!options.voice && (yamlConfig as any)?.voice?.enabled === true);
+		if (voiceEnabled) {
+			console.log(
+				chalk.yellow(
+					"  ⚠ Voice capture requires microphone access. All processing is local.",
+				),
+			);
+			console.log();
+		}
+
 		const spinner = ora("Starting perception layer...").start();
 
 		try {
@@ -7331,6 +7344,9 @@ perceiveCmd
 
 			spinner.succeed("Perception layer started");
 			console.log(chalk.dim("  Capturing ambient activity..."));
+			if (voiceEnabled) {
+				console.log(chalk.dim("  🎤 Voice capture: ACTIVE (local Whisper transcription)"));
+			}
 			console.log(chalk.dim("  Run `signet perceive status` for details"));
 			console.log(chalk.dim("  Run `signet perceive stop` to stop"));
 			console.log();

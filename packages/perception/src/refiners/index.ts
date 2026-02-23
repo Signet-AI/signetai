@@ -12,6 +12,7 @@ import { ProjectRefiner } from "./project-refiner";
 import { DecisionRefiner } from "./decision-refiner";
 import { WorkflowRefiner } from "./workflow-refiner";
 import { ContextRefiner } from "./context-refiner";
+import { PatternRefiner } from "./pattern-refiner";
 
 const DEFAULT_DAEMON_URL = "http://localhost:3850";
 
@@ -46,6 +47,7 @@ export class RefinerScheduler {
 			new DecisionRefiner(llmConfig),
 			new WorkflowRefiner(llmConfig),
 			new ContextRefiner(llmConfig),
+			new PatternRefiner(llmConfig),
 		];
 	}
 
@@ -211,3 +213,4 @@ export { ProjectRefiner } from "./project-refiner";
 export { DecisionRefiner } from "./decision-refiner";
 export { WorkflowRefiner } from "./workflow-refiner";
 export { ContextRefiner } from "./context-refiner";
+export { PatternRefiner } from "./pattern-refiner";

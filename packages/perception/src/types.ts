@@ -100,6 +100,7 @@ export interface VoiceConfig {
 	vadThreshold: number;
 	model: string;
 	retentionDays: number;
+	excludeKeywords: string[];
 }
 
 export interface FilesConfig {
@@ -198,6 +199,7 @@ export const DEFAULT_PERCEPTION_CONFIG: PerceptionConfig = {
 		vadThreshold: 0.3,
 		model: "tiny.en",
 		retentionDays: 3,
+		excludeKeywords: [],
 	},
 	files: {
 		enabled: true,
