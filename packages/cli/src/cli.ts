@@ -4071,6 +4071,378 @@ program
 	);
 
 // ============================================================================
+// signet knowledge - Knowledge health dashboard
+// ============================================================================
+
+const knowledgeCmd = program
+	.command("knowledge")
+	.description("Knowledge base health and analytics");
+
+knowledgeCmd
+	.command("status")
+	.description("Show knowledge health report with scoring")
+	.option("--json", "Output as JSON")
+	.action(async (options) => {
+		const { getKnowledgeHealth, runMigrations, loadSqliteVec } = await import(
+			"@signet/core"
+		);
+
+		const agentsDir = join(homedir(), ".agents");
+		const dbPath = join(agentsDir, "memory", "memories.db");
+
+		if (!existsSync(dbPath)) {
+			console.error(
+				chalk.red("  No memory database found. Run `signet setup` first."),
+			);
+			process.exit(1);
+		}
+
+		const spinner = ora("Analyzing knowledge health...").start();
+
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			loadSqliteVec(db);
+		} catch {
+			// Non-fatal
+		}
+
+		try {
+			// Run migrations to ensure schema is up to date (read-only is fine for queries)
+			// We'll open a writable connection for migrations then reopen readonly
+		} catch {
+			// ignore
+		}
+
+		try {
+			const report = getKnowledgeHealth(db);
+			db.close();
+			spinner.stop();
+
+			if (options.json) {
+				console.log(JSON.stringify(report, null, 2));
+				return;
+			}
+
+			// -- Header --
+			console.log();
+			const scoreColor =
+				report.overallScore > 80
+					? chalk.green
+					: report.overallScore > 60
+						? chalk.yellow
+						: chalk.red;
+			const scoreBar = renderScoreBar(report.overallScore);
+			console.log(
+				chalk.bold("  📊 Knowledge Health Report"),
+			);
+			console.log();
+			console.log(
+				`  Overall Score: ${scoreColor(chalk.bold(report.overallScore.toString()))} / 100  ${scoreBar}`,
+			);
+			console.log();
+
+			// -- Score breakdown --
+			console.log(chalk.bold("  Score Breakdown:"));
+			const bd = report.scoreBreakdown;
+			printScoreLine("Type Diversity", bd.typeDiversity, 10);
+			printScoreLine("Signing", bd.signingCompleteness, 15);
+			printScoreLine("Provenance", bd.provenanceCoverage, 15);
+			printScoreLine("Graph Connectivity", bd.graphConnectivity, 15);
+			printScoreLine("Freshness", bd.freshness, 15);
+			printScoreLine("Contradictions", bd.contradictionResolution, 15);
+			printScoreLine("Session Continuity", bd.sessionContinuity, 15);
+			console.log();
+
+			// -- Memory overview --
+			console.log(chalk.bold("  Memory Overview:"));
+			console.log(
+				`    Total: ${chalk.cyan(report.totalMemories.toString())}  Active: ${chalk.cyan(report.activeMemories.toString())}  Stale: ${report.staleMemoryCount > 0 ? chalk.yellow(report.staleMemoryCount.toString()) : chalk.dim("0")}`,
+			);
+			console.log(
+				`    Signed: ${chalk.green(report.signedCount.toString())}  Unsigned: ${report.unsignedCount > 0 ? chalk.yellow(report.unsignedCount.toString()) : chalk.dim("0")}`,
+			);
+			console.log(
+				`    With provenance: ${chalk.green(report.withProvenanceCount.toString())}  Without: ${report.withoutProvenanceCount > 0 ? chalk.yellow(report.withoutProvenanceCount.toString()) : chalk.dim("0")}`,
+			);
+			console.log();
+
+			// -- Type breakdown --
+			if (report.typeBreakdown.length > 0) {
+				console.log(chalk.bold("  Types:"));
+				for (const t of report.typeBreakdown) {
+					const bar = "█".repeat(
+						Math.max(
+							1,
+							Math.round(
+								(t.count / Math.max(1, report.activeMemories)) * 30,
+							),
+						),
+					);
+					console.log(
+						`    ${chalk.dim(t.type.padEnd(14))} ${chalk.cyan(bar)} ${t.count}`,
+					);
+				}
+				console.log();
+			}
+
+			// -- Graph --
+			console.log(chalk.bold("  Knowledge Graph:"));
+			console.log(
+				`    Entities: ${chalk.cyan(report.totalEntities.toString())}  Relations: ${chalk.cyan(report.totalRelations.toString())}  Connected: ${chalk.cyan(report.connectedEntities.toString())}`,
+			);
+			if (report.totalEntities > 0) {
+				const orphans = report.totalEntities - report.connectedEntities;
+				if (orphans > 0) {
+					console.log(
+						`    Orphan entities: ${chalk.yellow(orphans.toString())}`,
+					);
+				}
+			}
+			console.log();
+
+			// -- Contradictions --
+			if (
+				report.contradictionsPending > 0 ||
+				report.contradictionsResolved > 0
+			) {
+				console.log(chalk.bold("  Contradictions:"));
+				console.log(
+					`    Resolved: ${chalk.green(report.contradictionsResolved.toString())}  Pending: ${report.contradictionsPending > 0 ? chalk.red(report.contradictionsPending.toString()) : chalk.dim("0")}`,
+				);
+				console.log();
+			}
+
+			// -- Sources --
+			if (report.sourceBreakdown.length > 0) {
+				console.log(chalk.bold("  Sources:"));
+				for (const s of report.sourceBreakdown.slice(0, 8)) {
+					console.log(
+						`    ${chalk.dim(s.source.padEnd(18))} ${s.count}`,
+					);
+				}
+				console.log();
+			}
+
+			// -- Top topics --
+			if (report.topTopics.length > 0) {
+				console.log(chalk.bold("  Top Topics:"));
+				for (const t of report.topTopics.slice(0, 8)) {
+					console.log(
+						`    ${chalk.cyan(t.name.padEnd(24))} ${chalk.dim(t.count + " mentions")}`,
+					);
+				}
+				console.log();
+			}
+
+			// -- Weakest areas --
+			if (report.weakestAreas.length > 0) {
+				console.log(chalk.bold("  Weakest Areas:"));
+				for (const t of report.weakestAreas.slice(0, 5)) {
+					console.log(
+						`    ${chalk.yellow(t.name.padEnd(24))} ${chalk.dim(t.count + " mention" + (t.count === 1 ? "" : "s"))}`,
+					);
+				}
+				console.log();
+			}
+
+			// -- Suggestions --
+			if (report.suggestions.length > 0) {
+				console.log(chalk.bold("  💡 Suggestions:"));
+				for (const s of report.suggestions) {
+					console.log(`    ${chalk.yellow("→")} ${s}`);
+				}
+				console.log();
+			}
+		} catch (err) {
+			db.close();
+			spinner.fail("Failed to compute knowledge health");
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		}
+	});
+
+// Helper: render a text-based score bar
+function renderScoreBar(score: number): string {
+	const width = 20;
+	const filled = Math.round((score / 100) * width);
+	const empty = width - filled;
+	const color =
+		score > 80 ? chalk.green : score > 60 ? chalk.yellow : chalk.red;
+	return color("█".repeat(filled)) + chalk.dim("░".repeat(empty));
+}
+
+// Helper: print a single score line with visual bar
+function printScoreLine(label: string, value: number, max: number): void {
+	const pct = max > 0 ? value / max : 0;
+	const barWidth = 12;
+	const filled = Math.round(pct * barWidth);
+	const empty = barWidth - filled;
+	const color = pct > 0.8 ? chalk.green : pct > 0.5 ? chalk.yellow : chalk.red;
+	console.log(
+		`    ${chalk.dim(label.padEnd(22))} ${color("█".repeat(filled))}${chalk.dim("░".repeat(empty))} ${value}/${max}`,
+	);
+}
+
+// ============================================================================
+// signet session-stats - Session continuity trend
+// ============================================================================
+
+program
+	.command("session-stats")
+	.description("Show session continuity score trend")
+	.option("-l, --limit <n>", "Number of sessions to show", parseInt, 20)
+	.option("--json", "Output as JSON")
+	.action(async (options) => {
+		const { getSessionTrend, runMigrations, loadSqliteVec } = await import(
+			"@signet/core"
+		);
+
+		const agentsDir = join(homedir(), ".agents");
+		const dbPath = join(agentsDir, "memory", "memories.db");
+
+		if (!existsSync(dbPath)) {
+			console.error(
+				chalk.red("  No memory database found. Run `signet setup` first."),
+			);
+			process.exit(1);
+		}
+
+		const spinner = ora("Loading session stats...").start();
+
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			loadSqliteVec(db);
+		} catch {
+			// Non-fatal
+		}
+
+		try {
+			const trend = getSessionTrend(db, options.limit);
+			db.close();
+			spinner.stop();
+
+			if (options.json) {
+				console.log(JSON.stringify(trend, null, 2));
+				return;
+			}
+
+			console.log();
+			console.log(chalk.bold("  📈 Session Continuity Trend"));
+			console.log();
+
+			if (trend.sessions.length === 0) {
+				console.log(
+					chalk.dim(
+						"  No session metrics recorded yet.",
+					),
+				);
+				console.log(
+					chalk.dim(
+						"  Metrics are recorded at the end of each AI session.",
+					),
+				);
+				console.log();
+				return;
+			}
+
+			// -- Summary --
+			const avgColor =
+				trend.averageScore > 0.7
+					? chalk.green
+					: trend.averageScore > 0.4
+						? chalk.yellow
+						: chalk.red;
+
+			const directionIcon =
+				trend.direction === "improving"
+					? chalk.green("↑ Improving")
+					: trend.direction === "declining"
+						? chalk.red("↓ Declining")
+						: trend.direction === "stable"
+							? chalk.blue("→ Stable")
+							: chalk.dim("- Insufficient data");
+
+			console.log(
+				`  Average Score: ${avgColor(chalk.bold((trend.averageScore * 100).toFixed(1) + "%"))}  Trend: ${directionIcon}`,
+			);
+			console.log(
+				`  Sessions analyzed: ${chalk.cyan(trend.sessions.length.toString())}`,
+			);
+			console.log();
+
+			// -- Table --
+			console.log(
+				chalk.bold(
+					"  " +
+						"Session".padEnd(14) +
+						"Score".padEnd(10) +
+						"Injected".padEnd(10) +
+						"Used".padEnd(8) +
+						"Reconstructed".padEnd(15) +
+						"New",
+				),
+			);
+			console.log(chalk.dim("  " + "─".repeat(65)));
+
+			for (const s of trend.sessions) {
+				const scorePct = (s.continuityScore * 100).toFixed(0) + "%";
+				const scoreColor =
+					s.continuityScore > 0.7
+						? chalk.green
+						: s.continuityScore > 0.4
+							? chalk.yellow
+							: chalk.red;
+
+				const sessionLabel = s.harness
+					? s.harness.slice(0, 12)
+					: s.sessionId.slice(0, 12);
+
+				const dateStr = new Date(s.createdAt).toLocaleDateString("en-US", {
+					month: "short",
+					day: "numeric",
+				});
+
+				console.log(
+					"  " +
+						chalk.dim(dateStr.padEnd(14)) +
+						scoreColor(scorePct.padEnd(10)) +
+						s.memoriesInjected.toString().padEnd(10) +
+						s.memoriesUsed.toString().padEnd(8) +
+						s.factsReconstructed.toString().padEnd(15) +
+						s.newMemories.toString(),
+				);
+			}
+
+			console.log();
+
+			// -- Mini chart (sparkline-style) --
+			if (trend.sessions.length >= 3) {
+				const reversed = [...trend.sessions].reverse(); // chronological order
+				const sparkChars = " ▁▂▃▄▅▆▇█";
+				const spark = reversed
+					.map((s) => {
+						const idx = Math.min(
+							sparkChars.length - 1,
+							Math.round(s.continuityScore * (sparkChars.length - 1)),
+						);
+						return sparkChars[idx];
+					})
+					.join("");
+				console.log(`  Trend: ${chalk.cyan(spark)}`);
+				console.log(
+					chalk.dim("         oldest → newest"),
+				);
+				console.log();
+			}
+		} catch (err) {
+			db.close();
+			spinner.fail("Failed to load session stats");
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		}
+	});
+
+// ============================================================================
 // signet embed - Embedding audit and backfill
 // ============================================================================
 

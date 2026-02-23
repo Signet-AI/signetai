@@ -292,3 +292,25 @@ export type {
 	MemoryStrengthInput,
 	TemporalDb,
 } from "./temporal";
+
+// Session Continuity Scoring (Phase 2 Task 2.3)
+export {
+	computeContinuityScore,
+	recordSessionMetrics,
+	getSessionTrend,
+} from "./session-metrics";
+export type {
+	SessionMetricsInput,
+	SessionMetricsRecord,
+	SessionTrend,
+} from "./session-metrics";
+
+// Knowledge Health Dashboard (Phase 3 Task 3.6)
+export { getKnowledgeHealth } from "./knowledge-health";
+export type {
+	KnowledgeHealthReport,
+	HealthScoreBreakdown,
+	TypeBreakdown,
+	SourceBreakdown,
+	TopicSummary,
+} from "./knowledge-health";
