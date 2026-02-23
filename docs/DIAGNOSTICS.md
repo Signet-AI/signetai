@@ -22,7 +22,7 @@ Source files:
 Health Domains
 ---
 
-Every diagnostic report scores six independent domains. Each domain returns
+Every diagnostic report scores seven independent domains. Each domain returns
 a score between 0 and 1, and a status derived from that score:
 
 - `healthy` — score >= 0.8
@@ -112,20 +112,39 @@ Reflects the sync state of installed harness connectors from the
 If the `connectors` table does not exist (older databases), this domain
 returns a perfect score of 1.0 rather than failing.
 
+### update
+
+Reflects the state of the auto-update system.
+
+- `autoInstallEnabled` — whether unattended installs are configured.
+- `lastCheckSucceeded` — whether the most recent update check completed
+  without error.
+- `lastCheckAgeHours` — hours since the last successful check. Zero if
+  no check has run yet.
+- `pendingRestart` — whether a version has been installed but the daemon
+  has not yet been restarted to activate it.
+- `lastError` — the error string from the most recent failed check, or
+  `null`.
+
+Scoring: starts at 1.0. Deducts 0.1 if `autoInstallEnabled` is false
+and an update is available. Deducts 0.2 if `pendingRestart` is true.
+Additional deductions apply if the last check failed or is stale.
+
 
 Composite Scoring
 ---
 
-The six domain scores are combined into a single weighted average:
+The seven domain scores are combined into a single weighted average:
 
 | Domain    | Weight |
 |-----------|--------|
-| queue     | 0.28   |
-| provider  | 0.24   |
-| index     | 0.19   |
-| storage   | 0.14   |
-| mutation  | 0.10   |
+| queue     | 0.25   |
+| provider  | 0.22   |
+| index     | 0.17   |
+| storage   | 0.12   |
+| mutation  | 0.08   |
 | connector | 0.05   |
+| update    | 0.11   |
 
 The result is clamped to [0, 1] and assigned the same status thresholds as
 individual domains. Queue and provider carry the most weight because
@@ -142,7 +161,7 @@ this is always granted. With token auth, the token must include the
 
 ### GET /api/diagnostics
 
-Returns a full `DiagnosticsReport` with all six domains and the composite.
+Returns a full `DiagnosticsReport` with all seven domains and the composite.
 
 ```json
 {
@@ -167,7 +186,7 @@ Returns a full `DiagnosticsReport` with all six domains and the composite.
 ### GET /api/diagnostics/:domain
 
 Returns the health object for a single domain. Valid values for `:domain`
-are: `queue`, `storage`, `index`, `provider`, `mutation`, `connector`.
+are: `queue`, `storage`, `index`, `provider`, `mutation`, `connector`, `update`.
 Returns 400 if the domain name is unrecognized.
 
 ```bash

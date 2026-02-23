@@ -534,6 +534,20 @@ External data source registrations. Fields: `provider`, `display_name`,
 state), `status` (`idle`, `syncing`, `error`), `last_sync_at`,
 `last_error`. Indexed on `provider`.
 
+**summary_jobs**
+
+Session summary queue. Fields: `session_id`, `harness`, `status`
+(`pending`, `processing`, `done`, `failed`), `result_path`, `error`,
+`created_at`. The summary worker polls this table and writes dated
+Markdown files to `~/.agents/`.
+
+**umap_cache**
+
+UMAP projection cache. Fields: `id`, `dimensions`, `embedding_count`,
+`result_json` (full projection as JSON), `cached_at`. One row per
+dimension value. Invalidated and replaced whenever the embedding count
+changes.
+
 **tokens**
 
 (Planned) Persistent token store for team mode token management.
@@ -572,6 +586,28 @@ asymmetry (one side has a negation word, the other doesn't) and
 antonym pair conflicts across a predefined set of boolean pairs
 (`enabled`/`disabled`, `allow`/`deny`, etc.). At least two tokens must
 overlap before either check is applied.
+
+---
+
+UMAP Projection
+---------------
+
+`packages/daemon/src/umap-projection.ts` computes server-side 2D or 3D
+projections from stored embeddings using the UMAP algorithm.
+
+Key implementation details:
+
+- `nNeighbors = min(15, max(2, n-1))` — adapts to dataset size to prevent
+  UMAP from requesting more neighbors than data points.
+- **Exact KNN** for ≤ 450 embeddings (`O(n²)` distance matrix).
+  **Approximate KNN** for larger sets — uses sliding windows over the
+  X- and Y-sorted projected points, trading a small accuracy loss for
+  much faster edge construction.
+- Output coordinates are min-max normalized to the range `[-210, 210]`
+  on each axis.
+- Results are cached in `umap_cache`. Cache is invalidated when the
+  embedding count changes between requests. `GET /api/embeddings/projection`
+  returns `202 Accepted` while computing, then the full result once cached.
 
 ---
 
@@ -664,6 +700,7 @@ All endpoints are served by the Hono server on port 3850.
 | `/memory/search` | GET | recall | Legacy keyword search |
 | `/memory/similar` | GET | recall | Vector similarity search |
 | `/api/embeddings` | GET | recall | Export embeddings |
+| `/api/embeddings/projection` | GET | recall | UMAP 2D/3D projection |
 | `/api/hooks/session-start` | POST | remember | Inject context into session |
 | `/api/hooks/user-prompt-submit` | POST | recall | Per-prompt context load |
 | `/api/hooks/session-end` | POST | remember | Extract session memories |

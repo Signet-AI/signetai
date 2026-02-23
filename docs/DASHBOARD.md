@@ -74,21 +74,37 @@ Tabs
 are loaded from `~/.agents/`. Use `Cmd+S` / `Ctrl+S` to save. Saving
 `AGENTS.md` triggers harness sync within 2 seconds.
 
+**Settings** — A YAML editor for `agent.yaml`. Modify embedding
+provider, pipeline V2 flags, search settings, memory retention
+windows, and auth configuration without leaving the browser.
+Changes are saved directly to `~/.agents/agent.yaml`.
+
 **Memory** — Browse and search your memory database. Search runs hybrid
 (semantic + keyword) lookup. You can filter by type, tags, source
 harness, pinned status, importance score, and date. Each memory card has
 a "Find Similar" button that runs a vector similarity search. The count
 shown reflects your current filter state.
 
-**Embeddings** — A 2D graph of your memory space. Memories with vector
-embeddings appear as dots; UMAP dimensionality reduction clusters
-related memories together. Dots are colored by source harness. Click a
-dot to inspect the memory content and view its nearest neighbors. If no
-embeddings exist, the graph is empty.
+**Embeddings** — A 2D force-directed graph of your memory space. Memories
+with vector embeddings appear as nodes; edges connect nearest neighbors.
+Coordinates are computed server-side via UMAP (`GET
+/api/embeddings/projection`) and cached until the embedding count changes.
+Nodes are colored by source. Click a node to inspect the memory and view
+its nearest neighbors in a side panel.
 
-**Logs** — Real-time daemon log stream via Server-Sent Events. Entries
-are color-coded by level (info, warn, error). You can filter by level
-and toggle auto-scroll.
+Filter presets let you slice the graph by source, memory type, or importance
+range. Preset selections are persisted to `localStorage`. Cluster lens mode
+highlights a selected node's neighborhood.
+
+**Logs** — Real-time daemon log stream via Server-Sent Events
+(`/api/logs/stream`). A Live/Stop toggle controls the stream.
+Entries are color-coded by level (`debug`, `info`, `warn`, `error`)
+and labeled by category: `daemon`, `api`, `memory`, `sync`, `git`,
+`watcher`, `embedding`, `harness`, `system`, `hooks`, `pipeline`,
+`skills`, `secrets`, `auth`, `session-tracker`, `summary-worker`,
+`document-worker`, `maintenance`, `retention`, `llm`. Click an
+entry to open a split detail panel with the full JSON payload,
+duration display, and a copy-to-clipboard button.
 
 **Secrets** — Shows stored secret names. Values are always masked. You
 can add new secrets (via a password input) or delete existing ones. For

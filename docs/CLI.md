@@ -58,6 +58,7 @@ Commands Overview
 | `signet git` | Git sync management for ~/.agents |
 | `signet hook` | Lifecycle hook commands |
 | `signet update` | Check, install, and manage auto-updates |
+| `signet embed` | Manage memory embeddings |
 
 ---
 
@@ -308,6 +309,20 @@ Options:
 | `-f, --follow` | Follow log output in real-time |
 | `-l, --level <level>` | Filter by level: `debug`, `info`, `warn`, `error` |
 | `-c, --category <category>` | Filter by category: `daemon`, `api`, `memory`, `sync`, `git`, `watcher` |
+
+### Service Installation
+
+The daemon can be installed as a system service (systemd on Linux,
+launchd on macOS) using the daemon package's bun scripts:
+
+```bash
+cd packages/daemon
+bun run install:service    # Install as systemd/launchd service
+bun run uninstall:service  # Remove the service
+```
+
+These are package-level scripts, not top-level `signet` CLI commands.
+They register a unit that starts the daemon automatically at login.
 
 ---
 
@@ -626,6 +641,40 @@ Subcommands:
 
 After `signet update install` completes, a daemon restart is required to
 run the new version: `signet daemon restart`.
+
+---
+
+`signet embed`
+---
+
+Manage memory embeddings. Requires the daemon to be running.
+
+```bash
+signet embed backfill
+signet embed backfill --batch-size 100
+signet embed backfill --dry-run
+signet embed gaps
+```
+
+Subcommands:
+
+| Command | Description |
+|---------|-------------|
+| `signet embed backfill` | Re-embed memories missing vector embeddings |
+| `signet embed gaps` | Show count of memories missing embeddings |
+
+`signet embed backfill` options:
+
+| Option | Description |
+|--------|-------------|
+| `--batch-size <n>` | Memories per batch (default: 50) |
+| `--dry-run` | Preview without calling the embedding provider |
+
+After `backfill` completes, coverage is printed:
+
+```
+  Coverage: 100.0% (1200/1200 embedded)
+```
 
 ---
 

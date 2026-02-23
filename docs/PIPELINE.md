@@ -311,8 +311,13 @@ A document ingest job carries a `document_id` rather than a `memory_id`.
 The referenced row in the `documents` table carries the source content and
 type. Two source types are supported: `url` (content fetched via HTTP) and
 anything else (content read from `raw_content`). URL fetch is bounded by
-`documentMaxContentBytes` (default 10 MB). If the HTTP response provides a
-page title and the document row has none, it is backfilled.
+`documentMaxContentBytes` (default 10 MB). The URL fetcher accepts responses
+with content types `text/html`, `text/*`, `application/json`, and
+`application/xml`. For HTML, it extracts the page title and strips `<script>`
+and `<style>` tags before passing text to the chunker. Non-matching content
+types are rejected. The HTTP request timeout is 30 seconds, independent of
+the byte limit. If the HTTP response provides a page title and the document
+row has none, it is backfilled.
 
 Processing advances through explicit status transitions recorded in the
 `documents` table: `extracting` → `chunking` → `embedding` → `indexing`
@@ -425,17 +430,24 @@ All LLM calls go through an `LlmProvider` interface with two methods:
 `generate(prompt, opts?)` returning a `Promise<string>`, and `available()`
 returning a `Promise<boolean>`.
 
-The only shipped implementation is `OllamaProvider`, which calls the Ollama
-HTTP API at `POST /api/generate` with `stream: false`. The default base URL
-is `http://localhost:11434` and the default model is `qwen3:4b`. Each
-`generate` call sets an `AbortController` timeout (default 45,000 ms) and
-throws a descriptive error on abort. HTTP errors surface the status code and
-the first 200 characters of the response body. The `available` check uses a
-3-second timeout against `GET /api/tags`.
+Two implementations are shipped:
+
+**OllamaProvider** calls the Ollama HTTP API at `POST /api/generate` with
+`stream: false`. The default base URL is `http://localhost:11434` and the
+default model is `qwen3:4b`. Each `generate` call sets an `AbortController`
+timeout (default 45,000 ms) and throws a descriptive error on abort. HTTP
+errors surface the status code and the first 200 characters of the response
+body. The `available` check uses a 3-second timeout against `GET /api/tags`.
+
+**ClaudeCodeProvider** invokes the Claude Code CLI as a subprocess:
+`claude -p <prompt> --model <model> --no-session-persistence --output-format text`.
+The default model is `haiku`. Timeout is 60,000 ms. This provider is
+available as a fallback when Ollama is not running locally but the
+Claude Code CLI is present on PATH.
 
 The interface is intentionally minimal — no streaming, no chat history, no
-tool use. Future providers (cloud APIs, other local runtimes) can be added
-by implementing `LlmProvider` and passing the instance to `startWorker`.
+tool use. Future providers can be added by implementing `LlmProvider` and
+passing the instance to `startWorker`.
 
 
 Optional Reranking

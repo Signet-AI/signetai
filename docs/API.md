@@ -883,6 +883,56 @@ Check the configured embedding provider's availability. Results are cached for
 
 On failure, `available` is `false` and `error` contains a description.
 
+### GET /api/embeddings/projection
+
+Returns a server-computed UMAP projection of all stored embeddings.
+Results are cached in the `umap_cache` table; cache is invalidated when
+the embedding count changes. Requires `recall` permission.
+
+**Query parameters**
+
+| Parameter    | Type    | Default | Description                    |
+|--------------|---------|---------|--------------------------------|
+| `dimensions` | integer | 2       | Output dimensions: `2` or `3`  |
+
+If the projection is still computing, the endpoint returns `202 Accepted`
+with `status: "computing"`. Poll again when ready.
+
+**Response (computed)**
+
+```json
+{
+  "status": "cached",
+  "dimensions": 2,
+  "count": 847,
+  "total": 847,
+  "nodes": [
+    {
+      "id": "uuid",
+      "x": 42.1,
+      "y": -18.7,
+      "content": "User prefers vim keybindings",
+      "who": "claude-code",
+      "importance": 0.8,
+      "type": "preference",
+      "tags": ["preference"],
+      "pinned": false,
+      "sourceType": "memory",
+      "sourceId": "uuid",
+      "createdAt": "2026-02-21T10:00:00.000Z"
+    }
+  ],
+  "edges": [[0, 3], [0, 7]],
+  "cachedAt": "2026-02-21T10:05:00.000Z"
+}
+```
+
+**Response (computing)**
+
+```json
+{ "status": "computing", "dimensions": 2, "count": 0, "total": 847 }
+```
+
 
 Documents
 ---------
@@ -1773,6 +1823,50 @@ to the pipeline worker and returns `501`.
   "success": false,
   "affected": 0,
   "message": "Use the maintenance worker for automated sweeps..."
+}
+```
+
+### GET /api/repair/embedding-gaps
+
+Returns the count of memories that are missing vector embeddings.
+Requires `admin` permission.
+
+**Response**
+
+```json
+{
+  "unembedded": 42,
+  "total": 1200,
+  "coverage": "96.5%"
+}
+```
+
+### POST /api/repair/re-embed
+
+Batch re-embeds memories that are missing vector embeddings. Processes
+up to `batchSize` memories per call. Requires `admin` permission.
+Rate-limited — returns `429` when the limit is exceeded.
+
+**Request body**
+
+```json
+{
+  "batchSize": 50,
+  "dryRun": false
+}
+```
+
+`batchSize` defaults to `50`. `dryRun: true` reports what would be
+embedded without calling the embedding provider.
+
+**Response**
+
+```json
+{
+  "action": "reEmbedMissingVectors",
+  "success": true,
+  "affected": 42,
+  "message": "re-embedded 42 memories"
 }
 ```
 
