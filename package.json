@@ -29,7 +29,8 @@
     "version:sync": "bun scripts/version-sync.ts",
     "publish:signetai": "cd packages/signetai && npm publish --access public",
     "dev:web": "cd web && bun run dev",
-    "deploy:web": "cd web && bun run deploy"
+    "deploy:web": "cd web && bun run deploy",
+    "changelog": "bun scripts/changelog.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
