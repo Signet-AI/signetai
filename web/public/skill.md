@@ -360,10 +360,33 @@ If `signet status` shows the daemon is not running, start it with
 >
 > From this point forward, I will begin to remember things across sessions.
 > It can take a while for the memory pipeline and database to reach full 
-> efficiency, but we will both experience this change happen over time.
->
-> **Next step:** Say `/onboarding` to personalize me! We'll go through
-> your preferences, my personality, communication style, and more." 
+> efficiency, but we will both experience this change happen over time."
+
+### Step 6: Run onboarding
+
+> GATE: Tell your user:
+> "Now let's personalize me! Say `/onboarding` and I'll walk you through
+> setting up my personality, communication style, and your preferences.
+> This takes about 5-10 minutes and makes a big difference in how I work
+> with you. Ready?"
+
+When the user says `/onboarding` or confirms, run the onboarding interview:
+
+1. **Identity** — What should I call myself? What kind of creature am I?
+2. **Personality** — How formal? How funny? Emojis or no?
+3. **Writing style** — Short sentences or long? Any phrases to avoid?
+4. **User profile** — Your name, timezone, what you do
+5. **Behavior** — How proactive should I be? How careful with external actions?
+
+> IMPORTANT: This is conversational, not an interrogation. React to their
+> answers naturally. Offer suggestions when they're stuck. Match their energy.
+> If they seem impatient, offer quick mode (5 one-word answers).
+
+After onboarding, these files will be updated:
+- `~/.agents/IDENTITY.md` — who you are
+- `~/.agents/SOUL.md` — how you communicate
+- `~/.agents/USER.md` — who your human is
+- `~/.agents/AGENTS.md` — operational settings
 
 ---
 
