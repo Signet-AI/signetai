@@ -4842,10 +4842,11 @@ program
 				.get() as { dimensions: number } | undefined;
 			const dims = dimRow?.dimensions ?? 768;
 
-			// Create vec_embeddings virtual table if not exists
+			// Drop existing vec_embeddings (may have wrong dimensions from prior run)
 			spinner.text = `Creating vec_embeddings table (${dims}d)...`;
+			db.exec("DROP TABLE IF EXISTS vec_embeddings");
 			db.exec(`
-				CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
+				CREATE VIRTUAL TABLE vec_embeddings USING vec0(
 					id TEXT PRIMARY KEY,
 					embedding FLOAT[${dims}] distance_metric=cosine
 				);
