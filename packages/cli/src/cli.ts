@@ -5217,7 +5217,7 @@ memoryCmd
 
 		// Count unsigned memories
 		const countRow = db.prepare(
-			"SELECT COUNT(*) as count FROM memories WHERE signature IS NULL AND is_deleted = 0"
+			"SELECT COUNT(*) as count FROM memories WHERE signature IS NULL AND is_deleted = 0 AND content_hash IS NOT NULL"
 		).get() as { count: number } | undefined;
 		const unsignedCount = countRow?.count ?? 0;
 
@@ -5239,7 +5239,7 @@ memoryCmd
 
 		// Fetch unsigned memories
 		const rows = db.prepare(
-			"SELECT id, content_hash, created_at FROM memories WHERE signature IS NULL AND is_deleted = 0"
+			"SELECT id, content_hash, created_at FROM memories WHERE signature IS NULL AND is_deleted = 0 AND content_hash IS NOT NULL"
 		).all() as Array<{ id: string; content_hash: string; created_at: string }>;
 
 		let signed = 0;
@@ -5249,19 +5249,33 @@ memoryCmd
 			"UPDATE memories SET signature = ?, signer_did = ? WHERE id = ?"
 		);
 
-		for (const row of rows) {
-			try {
-				const payload = `${row.content_hash}|${row.created_at}|${did}`;
-				const signature = await signContent(payload);
-				updateStmt.run(signature, did, row.id);
-				signed++;
+		// Sign in batches with transactions for performance
+		// (individual UPDATEs without explicit tx = ~1000x slower)
+		const BATCH_SIZE = 500;
+		for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+			const batch = rows.slice(i, i + BATCH_SIZE);
 
-				if (signed % 100 === 0) {
-					spinner.text = `  Signing memories... ${signed}/${unsignedCount}`;
+			// Sign all in batch (async, outside transaction)
+			const signedBatch: Array<{ signature: string; id: string }> = [];
+			for (const row of batch) {
+				try {
+					const payload = `${row.content_hash}|${row.created_at}|${did}`;
+					const signature = await signContent(payload);
+					signedBatch.push({ signature, id: row.id });
+					signed++;
+				} catch {
+					failed++;
 				}
-			} catch {
-				failed++;
 			}
+
+			// Write batch in single transaction
+			db.transaction(() => {
+				for (const s of signedBatch) {
+					updateStmt.run(s.signature, did, s.id);
+				}
+			})();
+
+			spinner.text = `  Signing memories... ${signed}/${unsignedCount}`;
 		}
 
 		db.close();
@@ -5392,11 +5406,12 @@ memoryCmd
 					sig = await signContent(root);
 				}
 
+				const now = new Date().toISOString();
 				db.prepare(
 					`INSERT INTO merkle_roots
-					 (root_hash, memory_count, computed_at, signer_did, signature, created_at)
-					 VALUES (?, ?, ?, ?, ?, ?)`
-				).run(root, rows.length, new Date().toISOString(), did, sig, new Date().toISOString());
+					 (root_hash, memory_count, leaf_hashes, computed_at, signer_did, signature, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?)`
+				).run(root, rows.length, JSON.stringify(leafHashes), now, did, sig, now);
 
 				console.log(chalk.green("  ✓ Saved to merkle_roots table"));
 			} catch (err) {

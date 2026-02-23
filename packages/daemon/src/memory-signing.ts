@@ -16,6 +16,7 @@ import {
 	verifySignature,
 	publicKeyToDid,
 	didToPublicKey,
+	isAutoSignEnabled,
 } from "@signet/core";
 import type { IngestEnvelope } from "./transactions";
 
@@ -89,8 +90,9 @@ export function buildSignablePayload(
 /**
  * Sign an ingest envelope before database insertion.
  *
- * Modifies the envelope in-place by adding `signature` and `signerDid`.
- * If signing is not available (no keypair), the envelope is returned unchanged.
+ * Returns a new envelope with `signature` and `signerDid` added.
+ * If signing is not available (no keypair) or autoSign is disabled
+ * in agent.yaml, the envelope is returned unchanged.
  *
  * This MUST be called outside the database transaction (signing is async).
  */
@@ -98,6 +100,9 @@ export async function signEnvelope(
 	envelope: IngestEnvelope,
 ): Promise<IngestEnvelope> {
 	if (!isSigningAvailable()) return envelope;
+
+	// Respect the autoSign config flag in agent.yaml
+	if (!isAutoSignEnabled()) return envelope;
 
 	const did = await getAgentDid();
 	if (!did) return envelope;
