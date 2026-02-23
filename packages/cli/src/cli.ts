@@ -4162,7 +4162,7 @@ updateCmd
 			latestVersion?: string;
 			restartRequired?: boolean;
 			pendingVersion?: string;
-		}>("/api/update/check");
+		}>("/api/update/check?force=true");
 
 		if (!check) {
 			console.error(chalk.red("Could not connect to daemon"));
@@ -4386,7 +4386,7 @@ updateCmd.action(async () => {
 		checkError?: string;
 		restartRequired?: boolean;
 		pendingVersion?: string;
-	}>("/api/update/check");
+	}>("/api/update/check?force=true");
 
 	if (!data) {
 		spinner.fail("Could not connect to daemon");
