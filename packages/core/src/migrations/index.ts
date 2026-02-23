@@ -22,6 +22,8 @@ import { up as temporalMemory } from "./013-temporal-memory";
 import { up as ingestionTracking } from "./014-ingestion-tracking";
 import { up as decisionsAndContradictions } from "./015-decisions-and-contradictions";
 import { up as sessionMetrics } from "./016-session-metrics";
+import { up as perceptionTables } from "./017-perception-tables";
+import { up as onchainIdentity } from "./018-onchain-identity";
 
 // -- Public interface consumed by Database.init() --
 
@@ -101,6 +103,16 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 16,
 		name: "session-metrics",
 		up: sessionMetrics,
+	},
+	{
+		version: 17,
+		name: "perception-tables",
+		up: perceptionTables,
+	},
+	{
+		version: 18,
+		name: "onchain-identity",
+		up: onchainIdentity,
 	},
 ];
 

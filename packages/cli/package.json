@@ -39,6 +39,7 @@
     "@signet/connector-claude-code": "workspace:*",
     "@signet/connector-opencode": "workspace:*",
     "@signet/connector-openclaw": "workspace:*",
+    "@signet/perception": "workspace:*",
     "@inquirer/prompts": "^7.0.0",
     "better-sqlite3": "^12.0.0",
     "commander": "^12.0.0",

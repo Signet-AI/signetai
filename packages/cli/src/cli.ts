@@ -6465,6 +6465,594 @@ program
 	});
 
 // ============================================================================
+// On-Chain Identity Commands (Phase 4A)
+// ============================================================================
+
+const chainCmd = program.command("chain").description("On-chain identity and memory anchoring");
+
+chainCmd
+	.command("register")
+	.description("Register agent identity on-chain (ERC-8004)")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.option("--contract <address>", "SignetIdentity contract address")
+	.option("--metadata-uri <uri>", "Metadata URI (IPFS or HTTP)")
+	.action(async (options) => {
+		const {
+			getConfiguredDid,
+			getPublicKeyBytes,
+			CHAIN_CONFIGS,
+			createWallet,
+			loadWallet,
+			getWalletAddress,
+			checkWalletFunds,
+			registerIdentity,
+			getLocalIdentity,
+			keccak256Hash,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  On-Chain Identity Registration\n"));
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			console.error(chalk.dim(`  Supported: ${Object.keys(CHAIN_CONFIGS).join(", ")}`));
+			process.exit(1);
+		}
+
+		// Check DID exists
+		const did = getConfiguredDid();
+		if (!did) {
+			console.error(chalk.red("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+		console.log(chalk.dim(`  DID: ${did.slice(0, 40)}...`));
+
+		// Check contract address
+		const contractAddress = options.contract || chainConfig.contractAddress;
+		if (!contractAddress) {
+			console.error(chalk.red("  No contract address configured for this chain."));
+			console.error(chalk.dim("  Use --contract <address> to specify the deployed SignetIdentity contract."));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			// Check if already registered on this chain
+			const existing = getLocalIdentity(db, chain);
+			if (existing) {
+				console.log(chalk.yellow(`  Already registered on ${chain}!`));
+				console.log(chalk.dim(`  Token ID: ${existing.tokenId}`));
+				console.log(chalk.dim(`  TX: ${existing.txHash}`));
+				return;
+			}
+
+			// Ensure wallet exists
+			let walletAddress = getWalletAddress(db, chain);
+			if (!walletAddress) {
+				const spinner = ora("  Creating wallet...").start();
+				const walletConfig = await createWallet(db, chain);
+				walletAddress = walletConfig.address;
+				spinner.succeed(`  Wallet created: ${chalk.cyan(walletAddress)}`);
+			} else {
+				console.log(chalk.dim(`  Wallet: ${walletAddress}`));
+			}
+
+			// Check funds
+			const funds = await checkWalletFunds(walletAddress, chainConfig.rpcUrl);
+			console.log(chalk.dim(`  Balance: ${funds.balance} ETH`));
+
+			if (!funds.sufficient) {
+				console.log();
+				console.error(chalk.yellow("  ⚠ Insufficient ETH for registration transaction."));
+				console.error(chalk.dim(`  Send testnet ETH to: ${walletAddress}`));
+				if (chain === "base-sepolia") {
+					console.error(chalk.dim("  Faucet: https://www.coinbase.com/faucets/base-ethereum-goerli-faucet"));
+				}
+				process.exit(1);
+			}
+
+			// Compute public key hash
+			const pubKeyBytes = await getPublicKeyBytes();
+			const pubKeyHash = keccak256Hash(pubKeyBytes);
+
+			// Metadata URI (default: empty, can be IPFS later)
+			const metadataURI = options.metadataUri || "";
+
+			// Register on-chain
+			const spinner = ora("  Submitting registration transaction...").start();
+			const wallet = await loadWallet(db, chain, chainConfig.rpcUrl);
+			const result = await registerIdentity(
+				db, wallet, contractAddress, did, metadataURI, pubKeyHash, chain,
+			);
+			spinner.succeed("  Identity registered on-chain!");
+
+			console.log();
+			console.log(chalk.green.bold("  ✓ Registration complete"));
+			console.log(chalk.dim(`  Chain:    ${chain}`));
+			console.log(chalk.dim(`  Token ID: ${result.tokenId}`));
+			console.log(chalk.dim(`  TX:       ${result.txHash}`));
+			if (chainConfig.explorerUrl && result.txHash) {
+				console.log(chalk.dim(`  Explorer: ${chainConfig.explorerUrl}/tx/${result.txHash}`));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+chainCmd
+	.command("anchor")
+	.description("Anchor memory Merkle root on-chain")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.option("--contract <address>", "SignetIdentity contract address")
+	.action(async (options) => {
+		const {
+			CHAIN_CONFIGS,
+			loadWallet,
+			getLocalIdentity,
+			getMemoryRoot,
+			anchorMemoryOnChain,
+			checkWalletFunds,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Memory Anchoring\n"));
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			// Check on-chain identity exists
+			const identity = getLocalIdentity(db, chain);
+			if (!identity || !identity.tokenId) {
+				console.error(chalk.red("  No on-chain identity found. Run: signet chain register"));
+				process.exit(1);
+			}
+
+			const contractAddress = options.contract || identity.contractAddress || chainConfig.contractAddress;
+			if (!contractAddress) {
+				console.error(chalk.red("  No contract address found."));
+				process.exit(1);
+			}
+
+			// Check funds
+			const funds = await checkWalletFunds(identity.walletAddress, chainConfig.rpcUrl);
+			if (!funds.sufficient) {
+				console.error(chalk.yellow("  ⚠ Insufficient ETH for anchor transaction."));
+				console.error(chalk.dim(`  Balance: ${funds.balance} ETH`));
+				console.error(chalk.dim(`  Send ETH to: ${identity.walletAddress}`));
+				process.exit(1);
+			}
+
+			// Compute Merkle root
+			const spinner = ora("  Computing memory Merkle root...").start();
+			const merkleTree = getMemoryRoot(db);
+
+			if (merkleTree.count === 0) {
+				spinner.fail("  No memories to anchor");
+				return;
+			}
+
+			spinner.text = `  Anchoring ${merkleTree.count} memories...`;
+
+			// Submit anchor transaction
+			const wallet = await loadWallet(db, chain, chainConfig.rpcUrl);
+			const result = await anchorMemoryOnChain(
+				db, wallet, contractAddress,
+				identity.tokenId, merkleTree.root, merkleTree.count, identity.id,
+			);
+
+			spinner.succeed("  Memories anchored on-chain!");
+			console.log();
+			console.log(chalk.green.bold(`  ✓ Anchored ${merkleTree.count} memories`));
+			console.log(chalk.dim(`  Root: ${merkleTree.root}`));
+			console.log(chalk.dim(`  TX:   ${result.txHash}`));
+			if (chainConfig.explorerUrl) {
+				console.log(chalk.dim(`  Explorer: ${chainConfig.explorerUrl}/tx/${result.txHash}`));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+chainCmd
+	.command("status")
+	.description("Show on-chain identity status")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.action(async (options) => {
+		const {
+			CHAIN_CONFIGS,
+			getWalletAddress,
+			getWalletBalance,
+			getLocalIdentity,
+			getLatestAnchor,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  On-Chain Identity Status\n"));
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			console.log(chalk.dim(`  Chain: ${chain} (${chainConfig.chainId})`));
+			console.log(chalk.dim(`  RPC:   ${chainConfig.rpcUrl}`));
+			console.log();
+
+			// Wallet info
+			const walletAddress = getWalletAddress(db, chain);
+			if (walletAddress) {
+				console.log(chalk.bold("  Wallet"));
+				console.log(`    Address: ${chalk.cyan(walletAddress)}`);
+				try {
+					const balance = await getWalletBalance(walletAddress, chainConfig.rpcUrl);
+					console.log(`    Balance: ${balance} ETH`);
+				} catch {
+					console.log(chalk.dim("    Balance: (unable to fetch)"));
+				}
+			} else {
+				console.log(chalk.yellow("  No wallet configured"));
+				console.log(chalk.dim("  Run: signet chain wallet create"));
+			}
+			console.log();
+
+			// Identity info
+			const identity = getLocalIdentity(db, chain);
+			if (identity) {
+				console.log(chalk.bold("  On-Chain Identity"));
+				console.log(`    Token ID: ${chalk.cyan(identity.tokenId || "pending")}`);
+				console.log(`    DID:      ${identity.did.slice(0, 40)}...`);
+				console.log(`    TX:       ${identity.txHash || "none"}`);
+				console.log(`    Registered: ${identity.registeredAt || "pending"}`);
+
+				// Latest anchor
+				const anchor = getLatestAnchor(db, identity.id);
+				console.log();
+				if (anchor) {
+					console.log(chalk.bold("  Latest Memory Anchor"));
+					console.log(`    Root:   ${anchor.memoryRoot.slice(0, 20)}...`);
+					console.log(`    Count:  ${anchor.memoryCount} memories`);
+					console.log(`    TX:     ${anchor.txHash || "none"}`);
+					console.log(`    At:     ${anchor.anchoredAt || "unknown"}`);
+				} else {
+					console.log(chalk.dim("  No memory anchors yet"));
+					console.log(chalk.dim("  Run: signet chain anchor"));
+				}
+			} else {
+				console.log(chalk.yellow("  No on-chain identity"));
+				console.log(chalk.dim("  Run: signet chain register"));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+// Wallet subcommand
+const walletCmd = chainCmd.command("wallet").description("Manage Ethereum wallet");
+
+walletCmd
+	.command("create")
+	.description("Create a new Ethereum wallet")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.action(async (options) => {
+		const { CHAIN_CONFIGS, createWallet, getWalletAddress } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Wallet Creation\n"));
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			// Check for existing wallet
+			const existing = getWalletAddress(db, chain);
+			if (existing) {
+				console.log(chalk.yellow(`  Wallet already exists for ${chain}: ${existing}`));
+				return;
+			}
+
+			const spinner = ora("  Generating wallet...").start();
+			const wallet = await createWallet(db, chain);
+			spinner.succeed("  Wallet created!");
+
+			console.log();
+			console.log(chalk.green.bold("  ✓ New wallet ready"));
+			console.log(`    Chain:   ${chain}`);
+			console.log(`    Address: ${chalk.cyan(wallet.address)}`);
+			console.log();
+			console.log(chalk.dim("  Private key encrypted with master key."));
+			if (chain === "base-sepolia") {
+				console.log(chalk.dim("  Fund with testnet ETH:"));
+				console.log(chalk.dim("    https://www.coinbase.com/faucets/base-ethereum-goerli-faucet"));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+walletCmd
+	.command("show")
+	.description("Show wallet address and balance")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.action(async (options) => {
+		const { CHAIN_CONFIGS, getWalletAddress, getWalletBalance } = await import("@signet/core");
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const address = getWalletAddress(db, chain);
+			if (!address) {
+				console.log(chalk.yellow("  No wallet found. Run: signet chain wallet create"));
+				process.exit(1);
+			}
+
+			console.log(`  Address: ${chalk.cyan(address)}`);
+			try {
+				const balance = await getWalletBalance(address, chainConfig.rpcUrl);
+				console.log(`  Balance: ${balance} ETH`);
+			} catch {
+				console.log(chalk.dim("  Balance: (unable to fetch)"));
+			}
+			console.log(`  Chain:   ${chain} (${chainConfig.chainId})`);
+		} finally {
+			db.close();
+		}
+	});
+
+walletCmd
+	.command("export")
+	.description("Export wallet private key (DANGEROUS)")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.action(async (options) => {
+		const { CHAIN_CONFIGS, exportWalletKey, getWalletAddress } = await import("@signet/core");
+
+		const chain = options.chain;
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const address = getWalletAddress(db, chain);
+			if (!address) {
+				console.error(chalk.red("  No wallet found."));
+				process.exit(1);
+			}
+
+			console.log(chalk.red.bold("\n  ⚠ WARNING: This will display your private key!"));
+			console.log(chalk.red("  Anyone with this key can spend your funds.\n"));
+
+			const confirmed = await confirm({
+				message: "Are you sure you want to export the private key?",
+				default: false,
+			});
+
+			if (!confirmed) {
+				console.log(chalk.dim("  Cancelled."));
+				return;
+			}
+
+			const key = await exportWalletKey(db, chain);
+			console.log();
+			console.log(chalk.dim(`  Address: ${address}`));
+			console.log(`  Private Key: ${chalk.red(key)}`);
+			console.log();
+			console.log(chalk.yellow("  Store this securely and never share it."));
+		} finally {
+			db.close();
+		}
+	});
+
+// ============================================================================
+// Perception Layer Commands
+// ============================================================================
+
+const perceiveCmd = program
+	.command("perceive")
+	.description("Ambient perception layer — learn from your work activity");
+
+perceiveCmd
+	.command("start")
+	.description("Start perception capture")
+	.option("--screen", "Enable screen capture")
+	.option("--voice", "Enable voice capture")
+	.option("--files", "Enable file watching")
+	.option("--terminal", "Enable terminal watching")
+	.option("--comms", "Enable communications watching")
+	.option("--no-screen", "Disable screen capture")
+	.option("--no-files", "Disable file watching")
+	.option("--no-terminal", "Disable terminal watching")
+	.option("--no-comms", "Disable communications watching")
+	.action(async (options: Record<string, boolean | undefined>) => {
+		console.log(signetLogo());
+
+		// Build config overrides from CLI flags
+		const configOverrides: Record<string, unknown> = {};
+		if (options.screen !== undefined) configOverrides.screen = { enabled: options.screen };
+		if (options.voice !== undefined) configOverrides.voice = { enabled: options.voice };
+		if (options.files !== undefined) configOverrides.files = { enabled: options.files };
+		if (options.terminal !== undefined) configOverrides.terminal = { enabled: options.terminal };
+		if (options.comms !== undefined) configOverrides.comms = { enabled: options.comms };
+
+		// Also load from agent.yaml if available
+		const agentYamlPath = join(AGENTS_DIR, "agent.yaml");
+		let yamlConfig: Record<string, unknown> = {};
+		if (existsSync(agentYamlPath)) {
+			try {
+				const raw = readFileSync(agentYamlPath, "utf-8");
+				const parsed = parseSimpleYaml(raw);
+				if (parsed.perception && typeof parsed.perception === "object") {
+					yamlConfig = parsed.perception as Record<string, unknown>;
+				}
+			} catch {
+				// Use defaults
+			}
+		}
+
+		const spinner = ora("Starting perception layer...").start();
+
+		try {
+			const { startPerception } = await import("@signet/perception");
+			const mergedConfig = { ...yamlConfig, ...configOverrides };
+			await startPerception(mergedConfig as any);
+
+			spinner.succeed("Perception layer started");
+			console.log(chalk.dim("  Capturing ambient activity..."));
+			console.log(chalk.dim("  Run `signet perceive status` for details"));
+			console.log(chalk.dim("  Run `signet perceive stop` to stop"));
+			console.log();
+
+			// Keep the process running
+			process.on("SIGINT", async () => {
+				console.log();
+				const stopSpinner = ora("Stopping perception...").start();
+				const { stopPerception } = await import("@signet/perception");
+				await stopPerception();
+				stopSpinner.succeed("Perception stopped");
+				process.exit(0);
+			});
+
+			// Block — run until interrupted
+			await new Promise(() => {});
+		} catch (err) {
+			spinner.fail(`Failed to start perception: ${(err as Error).message}`);
+		}
+	});
+
+perceiveCmd
+	.command("stop")
+	.description("Stop perception capture")
+	.action(async () => {
+		console.log(signetLogo());
+		try {
+			const { stopPerception } = await import("@signet/perception");
+			await stopPerception();
+			console.log(chalk.green("  Perception stopped."));
+		} catch (err) {
+			console.log(chalk.yellow("  Perception is not running or already stopped."));
+		}
+	});
+
+perceiveCmd
+	.command("status")
+	.description("Show perception status")
+	.action(async () => {
+		console.log(signetLogo());
+
+		try {
+			const { getPerceptionStatus } = await import("@signet/perception");
+			const status = await getPerceptionStatus();
+
+			if (!status.running) {
+				console.log(chalk.yellow("  Perception: INACTIVE"));
+				console.log(chalk.dim("  Run `signet perceive start` to begin."));
+				return;
+			}
+
+			const uptime = status.startedAt
+				? formatUptime((Date.now() - new Date(status.startedAt).getTime()) / 1000)
+				: "unknown";
+
+			console.log(chalk.green(`  Perception: ACTIVE (${uptime})`));
+
+			const adapters = status.adapters;
+			const adapterLine = (name: string, a: { enabled: boolean; captureCount: number }) =>
+				a.enabled
+					? chalk.green(`  ├── ${name}: ON (${a.captureCount} captures)`)
+					: chalk.dim(`  ├── ${name}: OFF`);
+
+			console.log(adapterLine("Screen", adapters.screen));
+			console.log(adapterLine("Voice", adapters.voice));
+			console.log(adapterLine("Files", adapters.files));
+			console.log(adapterLine("Terminal", adapters.terminal));
+			// Last one uses └
+			const commsLine = adapters.comms.enabled
+				? chalk.green(`  └── Comms: ON (${adapters.comms.captureCount} captures)`)
+				: chalk.dim(`  └── Comms: OFF`);
+			console.log(commsLine);
+
+			console.log();
+			if (status.lastRefinerRun) {
+				const ago = Math.round(
+					(Date.now() - new Date(status.lastRefinerRun).getTime()) / 60000,
+				);
+				console.log(chalk.dim(`  Last refiner run: ${ago} minutes ago`));
+			}
+			console.log(chalk.dim(`  Memories extracted today: ${status.memoriesExtractedToday}`));
+		} catch (err) {
+			console.log(chalk.yellow("  Could not get perception status."));
+			console.log(chalk.dim(`  ${(err as Error).message}`));
+		}
+	});
+
+// ============================================================================
 // Default action when no command specified
 // ============================================================================
 
