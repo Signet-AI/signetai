@@ -1,0 +1,16 @@
+{
+  "id": "signet-memory",
+  "name": "Signet Memory Adapter",
+  "description": "Signet agent memory integration for OpenClaw",
+  "version": "0.1.111",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "daemonUrl": {
+        "type": "string",
+        "description": "URL of the Signet daemon",
+        "default": "http://localhost:3850"
+      }
+    }
+  }
+}
