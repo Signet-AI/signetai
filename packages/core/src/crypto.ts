@@ -1,12 +1,15 @@
 /**
  * Cryptographic signing — Ed25519 keypair generation, storage, and operations.
  *
- * Signing keys are stored encrypted at rest using the same scheme as the
- * daemon's secrets.ts: a machine-derived BLAKE2b master key protects the
- * private key via XSalsa20-Poly1305 (libsodium secretbox).
+ * Signing keys are stored encrypted at rest using XSalsa20-Poly1305 (libsodium
+ * secretbox) under a master key derived from the machine identity.
+ *
+ * KDF versions:
+ *   v1 (legacy): BLAKE2b hash of machine ID — zero stretching, trivially reversible
+ *   v2 (current): Argon2id (MODERATE cost) with a random 16-byte salt per keypair
  *
  * The keypair file lives at `~/.agents/.keys/signing.enc` and contains:
- *   { publicKey: base64, encryptedPrivateKey: base64(nonce‖ciphertext), created: ISO }
+ *   { publicKey, encryptedPrivateKey: base64(nonce‖ciphertext), salt, created, kdfVersion }
  *
  * All exported functions are async because libsodium initialisation is async.
  */
@@ -72,9 +75,11 @@ const SIGNING_KEY_FILE = join(KEYS_DIR, "signing.enc");
 // ---------------------------------------------------------------------------
 
 interface StoredKeypair {
-	publicKey: string; // base64
-	encryptedPrivateKey: string; // base64(nonce + ciphertext)
-	created: string; // ISO-8601
+	publicKey: string;            // base64
+	encryptedPrivateKey: string;  // base64(nonce + ciphertext)
+	salt: string;                 // base64, 16 bytes — Argon2id salt (empty string for v1)
+	created: string;              // ISO-8601
+	kdfVersion?: number;          // 1 = legacy BLAKE2b, 2 = Argon2id (default 2 for new keys)
 }
 
 interface DecryptedKeypair {
@@ -124,20 +129,25 @@ function getMachineId(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Master key derivation (matches daemon/secrets.ts exactly)
+// Master key derivation
 // ---------------------------------------------------------------------------
 
-let _masterKey: Uint8Array | null = null;
+/**
+ * Cache keyed by KDF version + salt to avoid re-deriving on every operation.
+ * v1 keys have no salt so we use the string "v1" as the cache key.
+ */
+const _masterKeyCache = new Map<string, Uint8Array>();
 
 /**
- * Derive the 32-byte master encryption key from machine-specific identifiers.
+ * Derive the legacy v1 master key (BLAKE2b, zero stretching).
  *
- * Uses the same `signet:secrets:<machineId>` → BLAKE2b derivation as the
- * daemon secrets store so encrypted artefacts are machine-bound and
- * interoperable with the daemon's encryption layer.
+ * Kept for backward compatibility with existing keypair files that were
+ * encrypted before the Argon2id upgrade. New keys MUST use v2.
  */
-export async function getMasterKey(): Promise<Uint8Array> {
-	if (_masterKey) return new Uint8Array(_masterKey); // Defensive copy
+async function getMasterKeyV1(): Promise<Uint8Array> {
+	const cacheKey = "v1";
+	const cached = _masterKeyCache.get(cacheKey);
+	if (cached) return new Uint8Array(cached);
 
 	await sodium.ready;
 
@@ -146,8 +156,61 @@ export async function getMasterKey(): Promise<Uint8Array> {
 	const inputBytes = new TextEncoder().encode(input);
 
 	const key = sodium.crypto_generichash(32, inputBytes, null);
-	_masterKey = new Uint8Array(key); // Copy off potential WASM heap before caching
-	return new Uint8Array(_masterKey); // Defensive copy for caller
+	const copy = new Uint8Array(key);
+	_masterKeyCache.set(cacheKey, copy);
+	return new Uint8Array(copy);
+}
+
+/**
+ * Derive a v2 master key via Argon2id with the given salt.
+ *
+ * Cost: OPSLIMIT_MODERATE / MEMLIMIT_MODERATE — a reasonable balance between
+ * resistance to brute-force and startup latency on modern hardware.
+ */
+async function getMasterKeyV2(salt: Uint8Array): Promise<Uint8Array> {
+	const cacheKey = `v2:${sodium.to_base64(salt, sodium.base64_variants.ORIGINAL)}`;
+	const cached = _masterKeyCache.get(cacheKey);
+	if (cached) return new Uint8Array(cached);
+
+	await sodium.ready;
+
+	const machineId = getMachineId();
+	const password = `signet:secrets:${machineId}`;
+
+	const key = sodium.crypto_pwhash(
+		32,                                       // output key length
+		password,                                  // password (machine ID)
+		salt,                                      // random per-keypair salt
+		sodium.crypto_pwhash_OPSLIMIT_MODERATE,
+		sodium.crypto_pwhash_MEMLIMIT_MODERATE,
+		sodium.crypto_pwhash_ALG_ARGON2ID13,
+	);
+
+	const copy = new Uint8Array(key);
+	_masterKeyCache.set(cacheKey, copy);
+	return new Uint8Array(copy);
+}
+
+/**
+ * Derive the 32-byte master encryption key, dispatching on KDF version.
+ *
+ * @param kdfVersion - 1 (or undefined) for legacy BLAKE2b, 2 for Argon2id
+ * @param salt       - Required for v2; ignored for v1
+ */
+export async function getMasterKey(kdfVersion?: number, salt?: Uint8Array): Promise<Uint8Array> {
+	if (!kdfVersion || kdfVersion === 1) {
+		return getMasterKeyV1();
+	}
+	if (kdfVersion === 2) {
+		if (!salt || salt.length !== sodium.crypto_pwhash_SALTBYTES) {
+			throw new Error(
+				`Argon2id requires a ${sodium.crypto_pwhash_SALTBYTES}-byte salt, ` +
+				`got ${salt ? salt.length : 0} bytes`,
+			);
+		}
+		return getMasterKeyV2(salt);
+	}
+	throw new Error(`Unknown KDF version: ${kdfVersion}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,12 +218,11 @@ export async function getMasterKey(): Promise<Uint8Array> {
 // ---------------------------------------------------------------------------
 
 /**
- * Encrypt raw bytes with the machine-bound master key.
+ * Encrypt raw bytes with the given key.
  * Returns base64(nonce ‖ ciphertext).
  */
-async function encryptBytes(plaintext: Uint8Array): Promise<string> {
+async function encryptBytes(plaintext: Uint8Array, key: Uint8Array): Promise<string> {
 	await sodium.ready;
-	const key = await getMasterKey();
 	const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
 	const box = sodium.crypto_secretbox_easy(plaintext, nonce, key);
 
@@ -172,12 +234,11 @@ async function encryptBytes(plaintext: Uint8Array): Promise<string> {
 }
 
 /**
- * Decrypt a base64(nonce ‖ ciphertext) blob with the machine-bound master key.
+ * Decrypt a base64(nonce ‖ ciphertext) blob with the given key.
  * Returns the raw plaintext bytes.
  */
-async function decryptBytes(encoded: string): Promise<Uint8Array> {
+async function decryptBytes(encoded: string, key: Uint8Array): Promise<Uint8Array> {
 	await sodium.ready;
-	const key = await getMasterKey();
 
 	const combined = sodium.from_base64(encoded, sodium.base64_variants.ORIGINAL);
 	if (combined.length < sodium.crypto_secretbox_NONCEBYTES + sodium.crypto_secretbox_MACBYTES) {
@@ -211,13 +272,20 @@ function readKeypairFile(): StoredKeypair {
 
 	try {
 		const raw = readFileSync(SIGNING_KEY_FILE, "utf-8");
-		const data = JSON.parse(raw) as StoredKeypair;
+		const data = JSON.parse(raw) as Partial<StoredKeypair>;
 
 		if (!data.publicKey || !data.encryptedPrivateKey || !data.created) {
 			throw new Error("Keypair file is missing required fields");
 		}
 
-		return data;
+		// Normalise legacy files that pre-date the Argon2id upgrade
+		return {
+			publicKey: data.publicKey,
+			encryptedPrivateKey: data.encryptedPrivateKey,
+			salt: data.salt ?? "",
+			created: data.created,
+			kdfVersion: data.kdfVersion,   // undefined → treated as v1
+		};
 	} catch (err) {
 		if (err instanceof SyntaxError) {
 			throw new Error("Signing keypair file is corrupt (invalid JSON)");
@@ -251,6 +319,32 @@ function writeKeypairFileExclusive(data: StoredKeypair): void {
 let _cachedKeypair: DecryptedKeypair | null = null;
 
 /**
+ * TTL for cached keypair — private key is zeroed and evicted after this
+ * period of inactivity. Limits the exposure window for memory-scraping
+ * attacks (heap snapshots, core dumps, debugger attach).
+ *
+ * Each signing operation resets the timer.
+ */
+const KEYPAIR_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let _keypairCacheTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resetKeypairCacheTimer(): void {
+	if (_keypairCacheTimer) clearTimeout(_keypairCacheTimer);
+	_keypairCacheTimer = setTimeout(() => {
+		if (_cachedKeypair) {
+			_cachedKeypair.privateKey.fill(0);
+			_cachedKeypair.publicKey.fill(0);
+			_cachedKeypair = null;
+		}
+		_keypairCacheTimer = null;
+	}, KEYPAIR_CACHE_TTL_MS);
+	// Don't let the timer keep the process alive
+	if (_keypairCacheTimer && typeof _keypairCacheTimer.unref === "function") {
+		_keypairCacheTimer.unref();
+	}
+}
+
+/**
  * Promise-based concurrency guard for keypair loading.
  * Prevents duplicate loads when multiple async callers hit ensureKeypair() simultaneously.
  */
@@ -262,13 +356,20 @@ let _loadPromise: Promise<DecryptedKeypair> | null = null;
  *
  * Uses a promise lock to prevent duplicate concurrent loads (which would
  * leave orphaned private key copies in memory).
+ *
+ * Resets the cache TTL on each access — keypair is evicted after 5 minutes
+ * of inactivity to limit memory exposure window.
  */
 async function ensureKeypair(): Promise<DecryptedKeypair> {
-	if (_cachedKeypair) return _cachedKeypair;
+	if (_cachedKeypair) {
+		resetKeypairCacheTimer();
+		return _cachedKeypair;
+	}
 	if (!_loadPromise) {
 		_loadPromise = loadSigningKeypair().then((kp) => {
 			_cachedKeypair = kp;
 			_loadPromise = null;
+			resetKeypairCacheTimer();
 			return kp;
 		}).catch((err) => {
 			_loadPromise = null;
@@ -304,13 +405,19 @@ export async function generateSigningKeypair(): Promise<string> {
 
 	const kp = sodium.crypto_sign_keypair();
 
+	// Generate a random salt for Argon2id key derivation
+	const salt = sodium.randombytes_buf(sodium.crypto_pwhash_SALTBYTES);
+	const masterKey = await getMasterKey(2, salt);
+
 	const publicKeyB64 = sodium.to_base64(kp.publicKey, sodium.base64_variants.ORIGINAL);
-	const encryptedPrivateKey = await encryptBytes(kp.privateKey);
+	const encryptedPrivateKey = await encryptBytes(kp.privateKey, masterKey);
 
 	const stored: StoredKeypair = {
 		publicKey: publicKeyB64,
 		encryptedPrivateKey,
+		salt: sodium.to_base64(salt, sodium.base64_variants.ORIGINAL),
 		created: new Date().toISOString(),
+		kdfVersion: 2,
 	};
 
 	writeKeypairFileExclusive(stored);
@@ -326,6 +433,9 @@ export async function generateSigningKeypair(): Promise<string> {
 	// Safe because _cachedKeypair now holds independent copies.
 	kp.privateKey.fill(0);
 	kp.publicKey.fill(0);
+
+	// Zero the master key — it's cached inside _masterKeyCache already
+	masterKey.fill(0);
 
 	return publicKeyB64;
 }
@@ -345,8 +455,18 @@ export async function loadSigningKeypair(): Promise<DecryptedKeypair> {
 
 	const stored = readKeypairFile();
 
+	// Derive the correct master key based on KDF version
+	const kdfVersion = stored.kdfVersion ?? 1;
+	const salt = stored.salt
+		? sodium.from_base64(stored.salt, sodium.base64_variants.ORIGINAL)
+		: undefined;
+	const masterKey = await getMasterKey(kdfVersion, salt);
+
 	const publicKey = sodium.from_base64(stored.publicKey, sodium.base64_variants.ORIGINAL);
-	const privateKey = await decryptBytes(stored.encryptedPrivateKey);
+	const privateKey = await decryptBytes(stored.encryptedPrivateKey, masterKey);
+
+	// Zero the master key copy — the cache holds its own
+	masterKey.fill(0);
 
 	// Sanity check key lengths
 	if (publicKey.length !== sodium.crypto_sign_PUBLICKEYBYTES) {
@@ -519,6 +639,10 @@ export async function verifyBytes(
  * Exported from core so both daemon and CLI can use the same function,
  * preventing format drift between signing and verification paths.
  */
+/**
+ * Build the v1 signable payload: `contentHash|createdAt|signerDid`
+ * Used for backward compatibility with existing signatures.
+ */
 export function buildSignablePayload(
 	contentHash: string,
 	createdAt: string,
@@ -533,6 +657,97 @@ export function buildSignablePayload(
 	return `${contentHash}|${createdAt}|${signerDid}`;
 }
 
+/**
+ * Build the v2 signable payload: `v2|memoryId|contentHash|createdAt|signerDid`
+ * Includes memory ID to prevent cross-memory signature reuse.
+ * The `v2` prefix acts as a version tag for payload format detection.
+ */
+export function buildSignablePayloadV2(
+	memoryId: string,
+	contentHash: string,
+	createdAt: string,
+	signerDid: string,
+): string {
+	if (!/^[0-9a-f]+$/.test(contentHash)) {
+		throw new Error("contentHash must be lowercase hex");
+	}
+	if ([memoryId, createdAt, signerDid].some((f) => f.includes("|"))) {
+		throw new Error("Signing payload fields must not contain pipe characters");
+	}
+	return `v2|${memoryId}|${contentHash}|${createdAt}|${signerDid}`;
+}
+
+// ---------------------------------------------------------------------------
+// KDF Migration
+// ---------------------------------------------------------------------------
+
+/**
+ * Upgrade a v1 (BLAKE2b) keypair file to v2 (Argon2id) in-place.
+ *
+ * 1. Reads and decrypts the private key with the legacy v1 master key.
+ * 2. Generates a fresh random Argon2id salt.
+ * 3. Derives a v2 master key from the machine ID + new salt.
+ * 4. Re-encrypts the private key under the v2 key.
+ * 5. Atomically overwrites the keypair file with the upgraded payload.
+ *
+ * Safe to call on an already-v2 keypair — it will return `false` without
+ * making any changes.
+ *
+ * @returns `true` if the keypair was upgraded, `false` if already v2.
+ * @throws If the keypair file doesn't exist or decryption fails.
+ */
+export async function reEncryptKeypair(): Promise<boolean> {
+	await sodium.ready;
+
+	const stored = readKeypairFile();
+
+	// Already on v2 — nothing to do
+	if (stored.kdfVersion === 2) return false;
+
+	// Decrypt with legacy v1 key
+	const v1Key = await getMasterKey(1);
+	const privateKey = await decryptBytes(stored.encryptedPrivateKey, v1Key);
+	v1Key.fill(0);
+
+	// Verify integrity before re-encrypting
+	const publicKey = sodium.from_base64(stored.publicKey, sodium.base64_variants.ORIGINAL);
+	const derivedPublicKey = sodium.crypto_sign_ed25519_sk_to_pk(privateKey);
+	if (!sodium.memcmp(derivedPublicKey, publicKey)) {
+		privateKey.fill(0);
+		throw new Error(
+			"Public/private key mismatch during migration — keypair file may be corrupted",
+		);
+	}
+
+	// Re-encrypt with v2 (Argon2id)
+	const salt = sodium.randombytes_buf(sodium.crypto_pwhash_SALTBYTES);
+	const v2Key = await getMasterKey(2, salt);
+	const encryptedPrivateKey = await encryptBytes(privateKey, v2Key);
+	v2Key.fill(0);
+	privateKey.fill(0);
+
+	const upgraded: StoredKeypair = {
+		publicKey: stored.publicKey,
+		encryptedPrivateKey,
+		salt: sodium.to_base64(salt, sodium.base64_variants.ORIGINAL),
+		created: stored.created,
+		kdfVersion: 2,
+	};
+
+	// Overwrite the file (not exclusive — file must already exist)
+	writeFileSync(SIGNING_KEY_FILE, JSON.stringify(upgraded, null, 2), { mode: 0o600 });
+	chmodSync(SIGNING_KEY_FILE, 0o600);
+
+	// Invalidate any cached keypair so next load uses v2 derivation
+	if (_cachedKeypair) {
+		_cachedKeypair.privateKey.fill(0);
+		_cachedKeypair.publicKey.fill(0);
+		_cachedKeypair = null;
+	}
+
+	return true;
+}
+
 // ---------------------------------------------------------------------------
 // Cleanup
 // ---------------------------------------------------------------------------
@@ -544,15 +759,20 @@ export function buildSignablePayload(
  * shrinks the attack window for memory-scraping attacks.
  */
 export function clearCachedKeypair(): void {
+	if (_keypairCacheTimer) {
+		clearTimeout(_keypairCacheTimer);
+		_keypairCacheTimer = null;
+	}
 	if (_cachedKeypair) {
 		_cachedKeypair.privateKey.fill(0);
 		_cachedKeypair.publicKey.fill(0);
 		_cachedKeypair = null;
 	}
-	if (_masterKey) {
-		_masterKey.fill(0);
-		_masterKey = null;
+	// Zero and clear all cached master keys
+	for (const key of _masterKeyCache.values()) {
+		key.fill(0);
 	}
+	_masterKeyCache.clear();
 }
 
 // Register best-effort cleanup on process exit

@@ -18,6 +18,7 @@ import {
 	didToPublicKey,
 	isAutoSignEnabled,
 	buildSignablePayload,
+	buildSignablePayloadV2,
 } from "@signet/core";
 import type { IngestEnvelope } from "./transactions";
 
@@ -93,7 +94,11 @@ export async function signEnvelope(
 	if (!did) return envelope;
 
 	try {
-		const payload = buildSignablePayload(
+		// Use v2 payload format — includes memory ID to prevent cross-memory
+		// signature reuse (v1 signatures could be copied between memories
+		// with identical content).
+		const payload = buildSignablePayloadV2(
+			envelope.id,
 			envelope.contentHash,
 			envelope.createdAt,
 			did,
@@ -124,17 +129,23 @@ export async function signEnvelope(
  * @returns true if valid, false if invalid or verification fails
  */
 export async function verifyMemorySignature(
+	memoryId: string,
 	contentHash: string,
 	createdAt: string,
 	signerDid: string,
 	signature: string,
 ): Promise<boolean> {
 	try {
-		// Extract public key from DID (statically imported, not dynamic import)
 		const publicKey = didToPublicKey(signerDid);
 
-		const payload = buildSignablePayload(contentHash, createdAt, signerDid);
-		return await verifySignature(payload, signature, publicKey);
+		// Try v2 format first (includes memory ID), fall back to v1 for
+		// backward compatibility with signatures created before v2.
+		const v2Payload = buildSignablePayloadV2(memoryId, contentHash, createdAt, signerDid);
+		if (await verifySignature(v2Payload, signature, publicKey)) return true;
+
+		// Fall back to v1 format for legacy signatures
+		const v1Payload = buildSignablePayload(contentHash, createdAt, signerDid);
+		return await verifySignature(v1Payload, signature, publicKey);
 	} catch {
 		return false;
 	}

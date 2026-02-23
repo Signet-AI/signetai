@@ -182,6 +182,7 @@ export {
 	hasSigningKeypair,
 	clearCachedKeypair,
 	buildSignablePayload,
+	buildSignablePayloadV2,
 	getPublicKeyBytes,
 	getPublicKeyBase64,
 	signContent,
@@ -189,6 +190,7 @@ export {
 	signBytes,
 	verifyBytes,
 	getMasterKey,
+	reEncryptKeypair,
 } from "./crypto";
 
 export {

@@ -144,6 +144,38 @@ const LOG_DIR = join(DAEMON_DIR, "logs");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
 
+// ---------------------------------------------------------------------------
+// Security: Harden directory permissions on startup
+// ---------------------------------------------------------------------------
+function hardenPermissions(): void {
+	if (process.platform === "win32") return; // Windows doesn't use Unix perms
+	const { chmodSync, statSync } = require("fs") as typeof import("fs");
+	const sensitiveDirs = [AGENTS_DIR, DAEMON_DIR, join(AGENTS_DIR, ".keys"), join(AGENTS_DIR, ".secrets")];
+	for (const dir of sensitiveDirs) {
+		try {
+			const stat = statSync(dir);
+			if (stat.isDirectory() && (stat.mode & 0o077) !== 0) {
+				chmodSync(dir, 0o700);
+				logger.info("security", `Fixed permissions on ${dir} → 0700`);
+			}
+		} catch {
+			// Dir may not exist yet — that's fine
+		}
+	}
+	// PID file and agent.yaml should be owner-only too
+	const sensitiveFiles = [PID_FILE, join(AGENTS_DIR, "agent.yaml")];
+	for (const file of sensitiveFiles) {
+		try {
+			const stat = statSync(file);
+			if (stat.isFile() && (stat.mode & 0o077) !== 0) {
+				chmodSync(file, 0o600);
+			}
+		} catch {
+			// File may not exist yet
+		}
+	}
+}
+
 // Config
 const PORT = parseInt(process.env.SIGNET_PORT || "3850", 10);
 const HOST = process.env.SIGNET_HOST || "localhost";
@@ -6937,8 +6969,11 @@ async function main() {
 	logger.info("daemon", "Port configured", { port: PORT });
 
 	// Ensure daemon directory exists
-	mkdirSync(DAEMON_DIR, { recursive: true });
-	mkdirSync(LOG_DIR, { recursive: true });
+	mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
+	mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
+
+	// Harden permissions on sensitive directories/files
+	hardenPermissions();
 
 	// Initialise singleton DB accessor (opens write connection, sets pragmas,
 	// runs migrations). This is the sole schema authority.

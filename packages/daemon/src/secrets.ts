@@ -11,10 +11,10 @@
  */
 
 import sodium from "libsodium-wrappers";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from "fs";
 import { homedir, hostname } from "os";
 import { join } from "path";
-import { execSync, spawn } from "child_process";
+import { execSync, execFileSync, spawn } from "child_process";
 
 // ---------------------------------------------------------------------------
 // Storage layout
@@ -64,16 +64,18 @@ function getMachineId(): string {
 		}
 	}
 
-	// macOS fallback
+	// macOS fallback — use execFileSync with absolute path to prevent $PATH manipulation
 	try {
-		const out = execSync(
-			"ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk '{print $3}'",
+		const ioregOut = execFileSync(
+			"/usr/sbin/ioreg",
+			["-rd1", "-c", "IOPlatformExpertDevice"],
 			{ timeout: 2000 },
-		)
-			.toString()
-			.trim()
-			.replace(/"/g, "");
-		if (out) return out;
+		).toString();
+		const uuidMatch = ioregOut
+			.split("\n")
+			.find((l) => l.includes("IOPlatformUUID"))
+			?.match(/"([^"]+)"$/);
+		if (uuidMatch?.[1]) return uuidMatch[1];
 	} catch {
 		// ignore
 	}
@@ -153,8 +155,9 @@ function loadStore(): SecretsStore {
 }
 
 function saveStore(store: SecretsStore): void {
-	mkdirSync(SECRETS_DIR, { recursive: true });
+	mkdirSync(SECRETS_DIR, { recursive: true, mode: 0o700 });
 	writeFileSync(SECRETS_FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
+	chmodSync(SECRETS_FILE, 0o600); // Belt-and-suspenders: mode flag only applies on create
 }
 
 // ---------------------------------------------------------------------------

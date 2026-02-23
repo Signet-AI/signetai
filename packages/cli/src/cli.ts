@@ -5293,7 +5293,7 @@ memoryCmd
 	.description("Verify signatures of signed memories")
 	.option("--limit <n>", "Maximum number to verify", "100")
 	.action(async (options) => {
-		const { verifySignature, buildSignablePayload } = await import("@signet/core");
+		const { verifySignature, buildSignablePayload, buildSignablePayloadV2 } = await import("@signet/core");
 		const { didToPublicKey } = await import("@signet/core");
 
 		console.log(signetLogo());
@@ -5336,8 +5336,14 @@ memoryCmd
 			for (const row of rows) {
 				try {
 					const pubKey = didToPublicKey(row.signer_did);
-					const payload = buildSignablePayload(row.content_hash, row.created_at, row.signer_did);
-					const isValid = await verifySignature(payload, row.signature, pubKey);
+					// Try v2 format first (includes memory ID), fall back to v1
+					const v2Payload = buildSignablePayloadV2(row.id, row.content_hash, row.created_at, row.signer_did);
+					let isValid = await verifySignature(v2Payload, row.signature, pubKey);
+					if (!isValid) {
+						// Fall back to v1 for legacy signatures
+						const v1Payload = buildSignablePayload(row.content_hash, row.created_at, row.signer_did);
+						isValid = await verifySignature(v1Payload, row.signature, pubKey);
+					}
 					if (isValid) {
 						valid++;
 					} else {
