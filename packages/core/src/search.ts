@@ -99,7 +99,7 @@ export function vectorSearch(
 	try {
 		// sqlite-vec uses MATCH syntax for vector search
 		// The query vector must be serialized as a blob
-		const queryBlob = Buffer.from(queryVector.buffer);
+		const queryBlob = new Float32Array(queryVector);
 
 		// vec0 KNN queries require `k = ?` in the WHERE clause
 		const params: unknown[] = [queryBlob, limit];
