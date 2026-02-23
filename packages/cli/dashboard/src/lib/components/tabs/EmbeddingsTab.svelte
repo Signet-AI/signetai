@@ -50,6 +50,8 @@ let embeddingsTotal = $state(0);
 let embeddingsHasMore = $state(false);
 let graphInitialized = $state(false);
 let embeddingSearch = $state("");
+let debouncedSearch = $state("");
+let searchDebounceTimer = 0;
 let embeddingSearchMatches = $state<EmbeddingPoint[]>([]);
 let embeddingFilterIds = $state<Set<string> | null>(null);
 let searchFilterIds = $state<Set<string> | null>(null);
@@ -57,13 +59,13 @@ let sourceFilterIds = $state<Set<string> | null>(null);
 let selectedSources = $state<Set<string>>(new Set());
 let sourceCounts = $state<Array<{ who: string; count: number }>>([]);
 let showPinnedOnly = $state(false);
-let showNeighborhoodOnly = $state(false);
+let showNeighborhoodOnly = $state(true);
 let pinnedIds = $state<Set<string>>(new Set());
 let pinBusy = $state(false);
 let pinError = $state("");
-let clusterLensMode = $state(false);
+let clusterLensMode = $state(true);
 let lensIds = $state<Set<string>>(new Set());
-let activePresetId = $state("all");
+let activePresetId = $state("focus");
 let customPresets = $state<FilterPreset[]>([]);
 let presetsHydrated = $state(false);
 
@@ -84,30 +86,26 @@ let graphLoadId = 0;
 
 let embeddingById = $state(new Map<string, EmbeddingPoint>());
 let relationLookup = $state(new Map<string, RelationKind>());
-let hoverNeighbors = $state<EmbeddingRelation[]>([]);
-let hoverRelationLookup = $state(new Map<string, RelationKind>());
 let hoverLockedId = $state<string | null>(null);
-let hoverAdjacency = $state(new Map<string, Map<string, number>>());
 
 let graphRegion = $state<HTMLDivElement | null>(null);
-
-// Fix 1: hoverX/hoverY are plain vars; position set imperatively via DOM.
-// hoverCardEl uses $state so bind:this populates it, but style mutations
-// bypass reactivity entirely — no Svelte re-render on mouse move.
+let hoverCardEl: HTMLDivElement | null = null;
 let hoverX = 0;
 let hoverY = 0;
-let hoverCardEl = $state<HTMLDivElement | null>(null);
-let graphRegionRect = { left: 0, top: 0, width: 0, height: 0 };
+let cachedRegionRect: DOMRect | null = null;
 
 let canvas2d = $state<EmbeddingCanvas2D | null>(null);
 let canvas3d = $state<EmbeddingCanvas3D | null>(null);
 
-// Fix 4: coalesce refreshAppearance() calls
 let refresh3dQueued = false;
-
-// Fix 5: debounced search
-let debouncedSearch = $state("");
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleRefresh3d(): void {
+	if (refresh3dQueued) return;
+	refresh3dQueued = true;
+	queueMicrotask(() => {
+		refresh3dQueued = false;
+		if (graphMode === "3d") canvas3d?.refreshAppearance();
+	});
+}
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -155,32 +153,25 @@ function intersectFilterSets(
 	return out;
 }
 
-// Fix 6: targeted O(1) patch instead of three O(n) map copies
 function updateEmbeddingInState(
 	id: string,
 	patch: (entry: EmbeddingPoint) => EmbeddingPoint,
 ): void {
-	const idx = embeddings.findIndex((e) => e.id === id);
-	if (idx === -1) return;
-	const patched = patch(embeddings[idx]);
-
-	const nextEmbeddings = embeddings.slice();
-	nextEmbeddings[idx] = patched;
-	embeddings = nextEmbeddings;
-
-	const nextMap = new Map(embeddingById);
-	nextMap.set(id, patched);
-	embeddingById = nextMap;
-
-	const nodeIdx = nodes.findIndex((n) => n.data.id === id);
-	if (nodeIdx !== -1) {
-		const nextNodes = nodes.slice();
-		nextNodes[nodeIdx] = { ...nextNodes[nodeIdx], data: patched };
-		nodes = nextNodes;
+	embeddings = embeddings.map((entry) =>
+		entry.id === id ? patch(entry) : entry,
+	);
+	embeddingById = new Map(embeddings.map((entry) => [entry.id, entry]));
+	nodes = nodes.map((node) =>
+		node.data.id === id ? { ...node, data: patch(node.data) } : node,
+	);
+	if (graphSelected?.id === id) {
+		const next = embeddingById.get(id) ?? null;
+		graphSelected = next;
 	}
-
-	if (graphSelected?.id === id) graphSelected = patched;
-	if (graphHovered?.id === id) graphHovered = patched;
+	if (graphHovered?.id === id) {
+		const next = embeddingById.get(id) ?? null;
+		graphHovered = next;
+	}
 }
 
 function toggleSource(who: string): void {
@@ -193,21 +184,20 @@ function toggleSource(who: string): void {
 	selectedSources = next;
 }
 
-// Fix 1: position hover card directly via transform, no reactive state
-function handleGraphMouseMove(event: MouseEvent): void {
-	if (!graphRegion) return;
-	hoverX = event.clientX - graphRegionRect.left;
-	hoverY = event.clientY - graphRegionRect.top;
-	positionHoverCard();
-}
-
 function positionHoverCard(): void {
-	if (!hoverCardEl) return;
-	const maxX = Math.max(12, graphRegionRect.width - 334);
-	const maxY = Math.max(12, graphRegionRect.height - 170);
+	if (!hoverCardEl || !cachedRegionRect) return;
+	const maxX = Math.max(12, cachedRegionRect.width - 334);
+	const maxY = Math.max(12, cachedRegionRect.height - 170);
 	const left = Math.min(Math.max(12, hoverX + 14), maxX);
 	const top = Math.min(Math.max(12, hoverY + 14), maxY);
 	hoverCardEl.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+}
+
+function handleGraphMouseMove(event: MouseEvent): void {
+	if (!cachedRegionRect) return;
+	hoverX = event.clientX - cachedRegionRect.left;
+	hoverY = event.clientY - cachedRegionRect.top;
+	positionHoverCard();
 }
 
 function updateGraphHover(next: EmbeddingPoint | null): void {
@@ -234,53 +224,6 @@ function getEdgeEndpointId(endpoint: GraphEdge["source"]): string | null {
 	return endpoint?.data.id ?? null;
 }
 
-function computeHoverNeighbors(hovered: EmbeddingPoint | null): void {
-	if (!hovered) {
-		hoverNeighbors = [];
-		hoverRelationLookup = new Map();
-		return;
-	}
-
-	const ranked = hoverAdjacency.get(hovered.id);
-	if (!ranked || ranked.size === 0) {
-		hoverNeighbors = [];
-		hoverRelationLookup = new Map();
-		return;
-	}
-
-	const topNeighbors = [...ranked.entries()]
-		.sort((left, right) => right[1] - left[1])
-		.slice(0, 6);
-	const topScore = topNeighbors[0]?.[1] ?? 1;
-	hoverNeighbors = topNeighbors
-		.map(([id, score]) => ({
-			id,
-			score: score / topScore,
-			kind: "similar" as const,
-		}));
-
-	hoverRelationLookup = new Map(
-		hoverNeighbors.map((neighbor) => [neighbor.id, "similar" as const]),
-	);
-}
-
-function buildHoverAdjacency(): void {
-	const adjacency = new Map<string, Map<string, number>>();
-	for (const edge of edges) {
-		const leftId = getEdgeEndpointId(edge.source);
-		const rightId = getEdgeEndpointId(edge.target);
-		if (!leftId || !rightId || leftId === rightId) continue;
-
-		const leftNeighbors = adjacency.get(leftId) ?? new Map<string, number>();
-		leftNeighbors.set(rightId, (leftNeighbors.get(rightId) ?? 0) + 1);
-		adjacency.set(leftId, leftNeighbors);
-
-		const rightNeighbors = adjacency.get(rightId) ?? new Map<string, number>();
-		rightNeighbors.set(leftId, (rightNeighbors.get(leftId) ?? 0) + 1);
-		adjacency.set(rightId, rightNeighbors);
-	}
-	hoverAdjacency = adjacency;
-}
 
 const FILTER_PRESET_STORAGE_KEY = "signet-embeddings-filter-presets";
 
@@ -354,16 +297,6 @@ function removeCustomPreset(id: string): void {
 	if (activePresetId === id) {
 		activePresetId = "all";
 	}
-}
-
-// Fix 4: coalesced refreshAppearance — batches rapid reactive updates
-function scheduleRefresh3d(): void {
-	if (graphMode !== "3d" || refresh3dQueued) return;
-	refresh3dQueued = true;
-	queueMicrotask(() => {
-		refresh3dQueued = false;
-		canvas3d?.refreshAppearance();
-	});
 }
 
 // -----------------------------------------------------------------------
@@ -478,7 +411,9 @@ async function computeRelationsForSelection(
 	}));
 	dissimilarNeighbors = [];
 	activeNeighbors = similarNeighbors;
-	relationLookup = new Map(similarNeighbors.map((item) => [item.id, item.kind]));
+	relationLookup = new Map(
+		similarNeighbors.map((item) => [item.id, item.kind]),
+	);
 }
 
 // -----------------------------------------------------------------------
@@ -498,7 +433,6 @@ function selectEmbeddingById(id: string): void {
 	if (!next) return;
 	hoverLockedId = null;
 	graphSelected = next;
-	focusEmbedding(id);
 }
 
 function focusEmbedding(id: string): void {
@@ -629,33 +563,35 @@ $effect(() => {
 		counts.set(key, (counts.get(key) ?? 0) + 1);
 	}
 	sourceCounts = [...counts.entries()]
-		.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+		.sort(
+			(left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+		)
 		.map(([who, count]) => ({ who, count }));
 
 	if (selectedSources.size > 0) {
-		const next = new Set(
-			[...selectedSources].filter((who) => counts.has(who)),
-		);
+		const next = new Set([...selectedSources].filter((who) => counts.has(who)));
 		if (next.size !== selectedSources.size) {
 			selectedSources = next;
 		}
 	}
 });
 
-// Fix 5: debounce embeddingSearch into debouncedSearch
 $effect(() => {
-	const q = embeddingSearch;
-	if (searchTimer !== null) clearTimeout(searchTimer);
-	if (!q) {
+	const raw = embeddingSearch;
+	if (!raw.trim()) {
+		clearTimeout(searchDebounceTimer);
 		debouncedSearch = "";
+		searchFilterIds = null;
+		embeddingSearchMatches = [];
 		return;
 	}
-	searchTimer = setTimeout(() => {
-		debouncedSearch = q;
+	const timer = window.setTimeout(() => {
+		debouncedSearch = raw;
 	}, 180);
+	searchDebounceTimer = timer;
+	return () => clearTimeout(timer);
 });
 
-// Fix 5: use debouncedSearch for actual filtering
 $effect(() => {
 	const query = debouncedSearch.trim().toLowerCase();
 	const rows = embeddings;
@@ -755,27 +691,15 @@ $effect(() => {
 	lensIds = ids;
 });
 
-// Fix 4: coalesced — these three effects fire often together
 $effect(() => {
 	clusterLensMode;
 	lensIds;
 	scheduleRefresh3d();
 });
 
-$effect(() => {
-	nodeIdsByIndex;
-	edges;
-	buildHoverAdjacency();
-});
 
 $effect(() => {
-	previewHovered;
-	computeHoverNeighbors(previewHovered);
-});
-
-$effect(() => {
-	const pinnedFilterIds =
-		showPinnedOnly === true ? new Set(pinnedIds) : null;
+	const pinnedFilterIds = showPinnedOnly === true ? new Set(pinnedIds) : null;
 	const neighborhoodFilterIds =
 		showNeighborhoodOnly === true && graphSelected
 			? new Set([graphSelected.id, ...activeNeighbors.map((n) => n.id)])
@@ -787,7 +711,6 @@ $effect(() => {
 		pinnedFilterIds,
 		neighborhoodFilterIds,
 	]);
-	// Fix 4: coalesced
 	scheduleRefresh3d();
 });
 
@@ -801,21 +724,56 @@ $effect(() => {
 	const dissimilar = dissimilarNeighbors;
 	activeNeighbors = mode === "similar" ? similar : dissimilar;
 	relationLookup = new Map(activeNeighbors.map((item) => [item.id, item.kind]));
-	// Fix 4: coalesced
 	scheduleRefresh3d();
 });
+
+const previewHovered = $derived(
+	hoverLockedId ? (embeddingById.get(hoverLockedId) ?? null) : graphHovered,
+);
+
+const hoverAdjacency = $derived.by(() => {
+	const ids = nodeIdsByIndex;
+	const edgeList = edges;
+	const adjacency = new Map<string, Map<string, number>>();
+	for (const edge of edgeList) {
+		const leftId = getEdgeEndpointId(edge.source);
+		const rightId = getEdgeEndpointId(edge.target);
+		if (!leftId || !rightId || leftId === rightId) continue;
+		const leftNeighbors = adjacency.get(leftId) ?? new Map<string, number>();
+		leftNeighbors.set(rightId, (leftNeighbors.get(rightId) ?? 0) + 1);
+		adjacency.set(leftId, leftNeighbors);
+		const rightNeighbors = adjacency.get(rightId) ?? new Map<string, number>();
+		rightNeighbors.set(leftId, (rightNeighbors.get(leftId) ?? 0) + 1);
+		adjacency.set(rightId, rightNeighbors);
+	}
+	return adjacency;
+});
+
+const hoverNeighbors: EmbeddingRelation[] = $derived.by(() => {
+	const hovered = previewHovered;
+	if (!hovered) return [];
+	const ranked = hoverAdjacency.get(hovered.id);
+	if (!ranked || ranked.size === 0) return [];
+	const topNeighbors = [...ranked.entries()]
+		.sort((l, r) => r[1] - l[1])
+		.slice(0, 6);
+	const topScore = topNeighbors[0]?.[1] ?? 1;
+	return topNeighbors.map(([id, score]) => ({
+		id,
+		score: score / topScore,
+		kind: "similar" as const,
+	}));
+});
+
+const hoverRelationLookup = $derived(
+	new Map(hoverNeighbors.map((n) => [n.id, "similar" as const])),
+);
 
 const effectiveRelationLookup = $derived(
 	graphSelected ? relationLookup : hoverRelationLookup,
 );
 
-const effectiveHoverNeighbors = $derived(
-	graphSelected ? [] : hoverNeighbors,
-);
-
-const previewHovered = $derived(
-	hoverLockedId ? (embeddingById.get(hoverLockedId) ?? null) : graphHovered,
-);
+const effectiveHoverNeighbors = $derived(graphSelected ? [] : hoverNeighbors);
 
 $effect(() => {
 	if (graphSelected && hoverLockedId) {
@@ -829,6 +787,22 @@ $effect(() => {
 	if (!embeddingById.has(lockedId)) {
 		hoverLockedId = null;
 	}
+});
+
+$effect(() => {
+	const el = graphRegion;
+	if (!el) return;
+	cachedRegionRect = el.getBoundingClientRect();
+	const ro = new ResizeObserver(() => {
+		cachedRegionRect = el.getBoundingClientRect();
+	});
+	ro.observe(el);
+	return () => ro.disconnect();
+});
+
+$effect(() => {
+	const el = hoverCardEl;
+	if (el) positionHoverCard();
 });
 
 $effect(() => {
@@ -853,29 +827,6 @@ $effect(() => {
 	if (!graphInitialized) {
 		initGraph();
 	}
-});
-
-// Fix 1: cache graphRegion dimensions via ResizeObserver
-$effect(() => {
-	const el = graphRegion;
-	if (!el) return;
-	const updateRect = () => {
-		const r = el.getBoundingClientRect();
-		graphRegionRect = { left: r.left, top: r.top, width: r.width, height: r.height };
-	};
-	updateRect();
-	const ro = new ResizeObserver(updateRect);
-	ro.observe(el);
-	window.addEventListener("scroll", updateRect, { passive: true });
-	return () => {
-		ro.disconnect();
-		window.removeEventListener("scroll", updateRect);
-	};
-});
-
-// Position the hover card as soon as it mounts (bind:this fires)
-$effect(() => {
-	if (hoverCardEl) positionHoverCard();
 });
 </script>
 
@@ -1038,11 +989,10 @@ $effect(() => {
 		</div>
 
 		{#if previewHovered}
-			<!-- Fix 1: position via imperative DOM transform; bind:this for direct style mutation -->
 			<div
 				bind:this={hoverCardEl}
-				class="absolute z-[9] w-[320px] pointer-events-none border border-[rgba(255,255,255,0.26)] bg-[rgba(5,5,5,0.92)] px-2 py-2"
-				style="position:absolute;top:0;left:0;will-change:transform;"
+				class="z-[9] w-[320px] pointer-events-none border border-[rgba(255,255,255,0.26)] bg-[rgba(5,5,5,0.92)] px-2 py-2"
+				style="position:absolute;top:0;left:0;will-change:transform"
 			>
 				<div class="flex items-center gap-1.5 flex-wrap mb-1.5">
 					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{previewHovered.who ?? "unknown"}</span>
