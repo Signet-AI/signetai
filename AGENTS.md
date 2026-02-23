@@ -26,21 +26,31 @@ Signetai is the reference implementation of Signet, an open standard
 for portable AI agent identity. It includes a CLI tool, background
 daemon with HTTP API, and web dashboard.
 
+**Always read `VISION.md` at the start of every session.** It describes
+what Signet is building toward and should anchor development decisions.
+
 Commands
 ---
 
 ```bash
 bun install              # Install dependencies
-bun run build            # Build workspace packages
+bun run build            # Build workspace packages (ordered, see below)
 bun run dev              # Dev mode all packages
 bun test                 # Run tests
-bun run lint             # Biome check
+bun run lint             # Biome check (no biome.json — uses defaults)
 bun run format           # Biome format --write
 bun run typecheck        # TypeScript check all packages
 bun run build:publish    # Build for npm publish
 bun run version:sync     # Sync version across all packages
 bun run dev:web          # Shortcut for web wrangler dev
 bun run deploy:web       # Shortcut for web wrangler deploy
+```
+
+`bun run build` runs an ordered sequence — building packages out of
+order will cause dependency errors:
+
+```
+build:core → build:connector-base → build:deps (parallel) → build:signetai
 ```
 
 ### Testing
@@ -72,6 +82,9 @@ cd packages/sdk && bun run build
 ```
 
 ### Dashboard Development
+
+Svelte 5 + Tailwind v4 + bits-ui + CodeMirror 6 + 3d-force-graph.
+Built to static files, served by daemon at `/`.
 
 ```bash
 cd packages/cli/dashboard
@@ -136,11 +149,13 @@ bun run test     # Tests (vitest + workers pool)
 **@signet/sdk** - Third-party integration
 - SignetSDK class for embedding Signet in apps
 
-**@signet/connector-* packages** - Platform-specific connectors
+**@signet/connector-* packages** - Platform-specific connectors (install-time)
 - Install hooks into harness config files
 - Generate harness-specific CLAUDE.md/AGENTS.md
 - Symlink skills directories
 - Call daemon API for session lifecycle
+- Distinct from `packages/daemon/src/connectors/` which is the
+  daemon-side runtime connector framework (filesystem watch, registry)
 
 **@signet/web** - Marketing website
 - Cloudflare Worker serving static landing page
@@ -187,9 +202,22 @@ session tracker enforces one active path per session (409 on conflict).
 
 Pipeline stages: extraction (Ollama, default model `qwen3:4b`) →
 decision (write/update/skip) → optional knowledge graph → retention
-decay → document ingest → maintenance. Config modes: `shadowMode`
-(extract without writing), `mutationsFrozen` (reads only),
-`graphEnabled`, `autonomousEnabled`.
+decay → document ingest → maintenance → session summary. Config
+modes: `shadowMode` (extract without writing), `mutationsFrozen`
+(reads only), `graphEnabled`, `autonomousEnabled`.
+
+Notable pipeline files beyond the main worker:
+- `summary-worker.ts` — async session-end summarizer (writes dated .md)
+- `reranker.ts` — search result re-ranking
+- `url-fetcher.ts` — URL content fetching for document ingest
+- `provider.ts` — LLM provider abstraction
+
+### Database Migrations
+
+`packages/core/src/migrations/` contains numbered migrations
+(001-baseline through 010-umap-cache). These run automatically on
+daemon startup. Add new migrations as sequential `.ts` files and
+register them in the migrations index.
 
 ### Auth Middleware
 
@@ -225,13 +253,18 @@ All user data lives at `~/.agents/`:
 - `packages/core/src/identity.ts` - Identity file detection/loading
 - `packages/core/src/database.ts` - SQLite wrapper
 - `packages/core/src/search.ts` - Hybrid search
+- `packages/core/src/migrations/` - Database migrations (001 through 010)
 - `packages/core/src/skills.ts` - Skills unification across harnesses
 - `packages/cli/src/cli.ts` - Main CLI entrypoint (~4600 LOC)
 - `packages/daemon/src/daemon.ts` - HTTP server + watcher
+- `packages/daemon/src/db-accessor.ts` - ReadDb/WriteDb typed accessor (used everywhere)
+- `packages/daemon/src/db-helpers.ts` - Vector blob helpers, FTS sync utilities
+- `packages/daemon/src/umap-projection.ts` - Server-side UMAP dimensionality reduction
 - `packages/daemon/src/session-tracker.ts` - Plugin/legacy session mutex
 - `packages/daemon/src/pipeline/` - V2 memory extraction pipeline
 - `packages/daemon/src/pipeline/document-worker.ts` - Document ingest worker
 - `packages/daemon/src/pipeline/maintenance-worker.ts` - Maintenance worker
+- `packages/daemon/src/pipeline/summary-worker.ts` - Session summary writer
 - `packages/daemon/src/auth/` - Auth module (tokens, middleware, policy, rate limiting)
 - `packages/daemon/src/analytics.ts` - Analytics accumulator
 - `packages/daemon/src/timeline.ts` - Timeline builder
@@ -322,7 +355,15 @@ bun src/cli.ts status    # Check status
 | `/api/memory/recall` | POST | Hybrid search |
 | `/memory/search` | GET | Legacy keyword search |
 | `/api/embeddings` | GET | Export embeddings |
+| `/api/embeddings/status` | GET | Embedding processing status |
+| `/api/embeddings/projection` | GET | UMAP 2D/3D projection (server-side) |
+| `/api/memory/:id/history` | GET | Memory version history |
+| `/api/memory/:id` | PATCH | Update a memory |
 | `/api/skills` | GET | List installed skills |
+| `/api/skills/browse` | GET | Browse available skills |
+| `/api/skills/search` | GET | Search skills |
+| `/api/skills/:name` | GET/DELETE | Get or uninstall a skill |
+| `/api/skills/install` | POST | Install a skill |
 | `/api/secrets` | GET | List secret names |
 | `/api/hooks/*` | POST/GET | Session + synthesis hooks |
 | `/api/harnesses` | GET | List harnesses |
@@ -336,6 +377,7 @@ bun src/cli.ts status    # Check status
 | `/api/git/*` | GET/POST | Git sync status and operations |
 | `/api/update/*` | GET/POST | Update check and apply |
 | `/api/logs/*` | GET | Daemon log access |
+| `/api/logs/stream` | GET | SSE log streaming |
 | `/api/identity` | GET/POST | Identity file read/write |
 
 
