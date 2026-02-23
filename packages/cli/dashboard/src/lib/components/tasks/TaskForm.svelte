@@ -248,13 +248,11 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 					</span>
 				</div>
 			{/if}
-		</form>
 
-		<Sheet.Footer class="px-4 pb-4 pt-0">
 			<Button
+				type="submit"
 				disabled={submitting || !name.trim() || !prompt.trim()}
-				class="h-8 text-[11px] w-full"
-				onclick={handleSubmit}
+				class="h-8 text-[11px] w-full mt-1"
 			>
 				{#if submitting}
 					{editingId ? "Saving..." : "Creating..."}
@@ -262,6 +260,6 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 					{editingId ? "Save Changes" : "Create Task"}
 				{/if}
 			</Button>
-		</Sheet.Footer>
+		</form>
 	</Sheet.Content>
 </Sheet.Root>
