@@ -83,6 +83,9 @@ let graphLoadId = 0;
 
 let embeddingById = $state(new Map<string, EmbeddingPoint>());
 let relationLookup = $state(new Map<string, RelationKind>());
+let hoverNeighbors = $state<EmbeddingRelation[]>([]);
+let hoverRelationLookup = $state(new Map<string, RelationKind>());
+let hoverLockedId = $state<string | null>(null);
 
 let graphRegion = $state<HTMLDivElement | null>(null);
 let hoverX = $state(0);
@@ -170,7 +173,7 @@ function toggleSource(who: string): void {
 
 function hoverCardStyle(): string {
 	if (!graphRegion) return "left: 12px; top: 12px;";
-	const maxX = Math.max(12, graphRegion.clientWidth - 300);
+	const maxX = Math.max(12, graphRegion.clientWidth - 334);
 	const maxY = Math.max(12, graphRegion.clientHeight - 170);
 	const left = Math.min(Math.max(12, hoverX + 14), maxX);
 	const top = Math.min(Math.max(12, hoverY + 14), maxY);
@@ -182,6 +185,82 @@ function handleGraphMouseMove(event: MouseEvent): void {
 	const rect = graphRegion.getBoundingClientRect();
 	hoverX = event.clientX - rect.left;
 	hoverY = event.clientY - rect.top;
+}
+
+function updateGraphHover(next: EmbeddingPoint | null): void {
+	if (hoverLockedId) return;
+	graphHovered = next;
+}
+
+function lockHoverPreview(): void {
+	if (graphSelected) return;
+	if (!graphHovered) return;
+	hoverLockedId = graphHovered.id;
+}
+
+function unlockHoverPreview(): void {
+	hoverLockedId = null;
+}
+
+function getEdgeEndpointId(endpoint: GraphEdge["source"]): string | null {
+	if (typeof endpoint === "number") {
+		const entry = nodes[endpoint];
+		return entry?.data.id ?? null;
+	}
+	return endpoint?.data.id ?? null;
+}
+
+function computeHoverNeighbors(hovered: EmbeddingPoint | null): void {
+	if (!hovered) {
+		hoverNeighbors = [];
+		hoverRelationLookup = new Map();
+		return;
+	}
+
+	const hoveredNode = nodes.find((node) => node.data.id === hovered.id);
+	if (!hoveredNode) {
+		hoverNeighbors = [];
+		hoverRelationLookup = new Map();
+		return;
+	}
+
+	const ranked = new Map<string, number>();
+	for (const edge of edges) {
+		const leftId = getEdgeEndpointId(edge.source);
+		const rightId = getEdgeEndpointId(edge.target);
+		if (!leftId || !rightId) continue;
+
+		const isMatchLeft = leftId === hovered.id;
+		const isMatchRight = rightId === hovered.id;
+		if (!isMatchLeft && !isMatchRight) continue;
+
+		const neighborId = isMatchLeft ? rightId : leftId;
+		if (neighborId === hovered.id) continue;
+		const neighborNode = nodes.find((node) => node.data.id === neighborId);
+		if (!neighborNode) continue;
+
+		const dx = hoveredNode.x - neighborNode.x;
+		const dy = hoveredNode.y - neighborNode.y;
+		const distance = Math.sqrt(dx * dx + dy * dy);
+		const score = 1 / (1 + distance);
+		const existing = ranked.get(neighborId);
+		if (typeof existing !== "number" || score > existing) {
+			ranked.set(neighborId, score);
+		}
+	}
+
+	hoverNeighbors = [...ranked.entries()]
+		.sort((left, right) => right[1] - left[1])
+		.slice(0, 6)
+		.map(([id, score]) => ({
+			id,
+			score,
+			kind: "similar" as const,
+		}));
+
+	hoverRelationLookup = new Map(
+		hoverNeighbors.map((neighbor) => [neighbor.id, "similar" as const]),
+	);
 }
 
 const FILTER_PRESET_STORAGE_KEY = "signet-embeddings-filter-presets";
@@ -379,6 +458,7 @@ async function computeRelationsForSelection(
 function clearEmbeddingSelection(): void {
 	graphSelected = null;
 	graphHovered = null;
+	hoverLockedId = null;
 	globalSimilar = [];
 	pinError = "";
 }
@@ -386,6 +466,7 @@ function clearEmbeddingSelection(): void {
 function selectEmbeddingById(id: string): void {
 	const next = embeddingById.get(id) ?? null;
 	if (!next) return;
+	hoverLockedId = null;
 	graphSelected = next;
 	focusEmbedding(id);
 }
@@ -438,6 +519,7 @@ async function reloadEmbeddingsGraph(): Promise<void> {
 	projected3dCoords = [];
 	graphSelected = null;
 	graphHovered = null;
+	hoverLockedId = null;
 	globalSimilar = [];
 	loadingGlobalSimilar = false;
 	embeddingById = new Map();
@@ -615,10 +697,12 @@ $effect(() => {
 $effect(() => {
 	const ids = new Set<string>();
 	if (clusterLensMode) {
-		const seed = graphSelected ?? graphHovered;
+		const seed = graphSelected ?? previewHovered;
 		if (seed) {
 			ids.add(seed.id);
-			for (const neighbor of activeNeighbors) {
+			const neighborhood =
+				graphSelected !== null ? activeNeighbors : hoverNeighbors;
+			for (const neighbor of neighborhood) {
 				ids.add(neighbor.id);
 			}
 		}
@@ -632,6 +716,13 @@ $effect(() => {
 	if (graphMode === "3d") {
 		canvas3d?.refreshAppearance();
 	}
+});
+
+$effect(() => {
+	nodes;
+	edges;
+	previewHovered;
+	computeHoverNeighbors(previewHovered);
 });
 
 $effect(() => {
@@ -668,6 +759,50 @@ $effect(() => {
 	}
 });
 
+const effectiveRelationLookup = $derived(
+	graphSelected ? relationLookup : hoverRelationLookup,
+);
+
+const effectiveHoverNeighbors = $derived(
+	graphSelected ? [] : hoverNeighbors,
+);
+
+const previewHovered = $derived(
+	hoverLockedId ? (embeddingById.get(hoverLockedId) ?? null) : graphHovered,
+);
+
+$effect(() => {
+	if (graphSelected && hoverLockedId) {
+		hoverLockedId = null;
+	}
+});
+
+$effect(() => {
+	const lockedId = hoverLockedId;
+	if (!lockedId) return;
+	if (!embeddingById.has(lockedId)) {
+		hoverLockedId = null;
+	}
+});
+
+$effect(() => {
+	if (typeof window === "undefined") return;
+	const onKeyDown = (event: KeyboardEvent): void => {
+		if (event.key === "Shift") {
+			lockHoverPreview();
+			return;
+		}
+		if (event.key === "Escape") {
+			unlockHoverPreview();
+		}
+	};
+
+	window.addEventListener("keydown", onKeyDown);
+	return () => {
+		window.removeEventListener("keydown", onKeyDown);
+	};
+});
+
 $effect(() => {
 	if (!graphInitialized) {
 		initGraph();
@@ -681,7 +816,9 @@ $effect(() => {
 		class="flex-1 relative overflow-hidden bg-[#050505]"
 		role="presentation"
 		onmousemove={handleGraphMouseMove}
-		onmouseleave={() => (graphHovered = null)}
+		onmouseleave={() => {
+			if (!hoverLockedId) graphHovered = null;
+		}}
 	>
 		<div class="absolute top-2 left-3 right-3 z-[8] flex items-center gap-2 pointer-events-none">
 			<input
@@ -766,7 +903,7 @@ $effect(() => {
 						clusterLensMode = !clusterLensMode;
 						activePresetId = "custom-live";
 					}}
-					disabled={!graphSelected && !graphHovered}
+					disabled={!graphSelected && !previewHovered}
 				>
 					Cluster lens
 				</button>
@@ -820,26 +957,48 @@ $effect(() => {
 			<span class="absolute bottom-[10px] right-[10px] w-[14px] h-[14px] border-[rgba(255,255,255,0.22)]" style="border-style:solid;border-width:0 1px 1px 0"></span>
 		</div>
 
-		{#if graphHovered}
+		{#if previewHovered}
 			<div
-				class="absolute z-[9] w-[286px] pointer-events-none border border-[rgba(255,255,255,0.26)] bg-[rgba(5,5,5,0.92)] px-2 py-2"
+				class="absolute z-[9] w-[320px] pointer-events-none border border-[rgba(255,255,255,0.26)] bg-[rgba(5,5,5,0.92)] px-2 py-2"
 				style={hoverCardStyle()}
 			>
 				<div class="flex items-center gap-1.5 flex-wrap mb-1.5">
-					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{graphHovered.who ?? "unknown"}</span>
-					{#if graphHovered.type}
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{graphHovered.type}</span>
+					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{previewHovered.who ?? "unknown"}</span>
+					{#if previewHovered.type}
+						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{previewHovered.type}</span>
 					{/if}
-					{#if graphHovered.pinned}
+					{#if previewHovered.pinned}
 						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.08)]">pinned</span>
+					{/if}
+					{#if hoverLockedId}
+						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.08)]">locked</span>
 					{/if}
 				</div>
 				<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] mb-1.5">
-					importance {Math.round((graphHovered.importance ?? 0) * 100)}% · {formatShortDate(graphHovered.createdAt)}
+					importance {Math.round((previewHovered.importance ?? 0) * 100)}% · {formatShortDate(previewHovered.createdAt)} · linked {effectiveHoverNeighbors.length}
 				</div>
 				<p class="m-0 text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-3">
-					{embeddingLabel(graphHovered)}
+					{embeddingLabel(previewHovered)}
 				</p>
+				<div class="mt-1 text-[10px] text-[var(--sig-text-muted)]">
+					{hoverLockedId ? "ESC to unlock preview" : "Hold Shift to lock preview"}
+				</div>
+				{#if effectiveHoverNeighbors.length > 0}
+					<div class="mt-2 pt-2 border-t border-[rgba(255,255,255,0.14)]">
+						<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em] mb-1">Local neighbors</div>
+						<div class="space-y-1">
+							{#each effectiveHoverNeighbors as relation}
+								{@const item = embeddingById.get(relation.id)}
+								{#if item}
+									<div class="grid grid-cols-[1fr_auto] items-start gap-2 border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.02)] px-1.5 py-1">
+										<span class="text-[10px] leading-[1.35] text-[var(--sig-text)] line-clamp-1">{embeddingLabel(item)}</span>
+										<span class="text-[10px] text-[var(--sig-text-muted)]">{Math.round(relation.score * 100)}%</span>
+									</div>
+								{/if}
+							{/each}
+						</div>
+					</div>
+				{/if}
 			</div>
 		{/if}
 
@@ -849,14 +1008,14 @@ $effect(() => {
 				{nodes}
 				{edges}
 				{graphSelected}
-				{graphHovered}
+				graphHovered={previewHovered}
 				{embeddingFilterIds}
-				{relationLookup}
+				relationLookup={effectiveRelationLookup}
 				{pinnedIds}
 				{lensIds}
 				clusterLensMode={clusterLensMode && lensIds.size > 0}
 				onselectnode={(e) => (graphSelected = e)}
-				onhovernode={(e) => (graphHovered = e)}
+				onhovernode={updateGraphHover}
 			/>
 		</div>
 		<div style:display={graphMode === "3d" ? "contents" : "none"}>
@@ -866,7 +1025,7 @@ $effect(() => {
 				projected3d={projected3dCoords}
 				{graphSelected}
 				{embeddingFilterIds}
-				{relationLookup}
+				relationLookup={effectiveRelationLookup}
 				{pinnedIds}
 				{lensIds}
 				clusterLensMode={clusterLensMode && lensIds.size > 0}
@@ -875,7 +1034,7 @@ $effect(() => {
 					if (e) selectEmbeddingById(e.id);
 					else graphSelected = null;
 				}}
-				onhovernode={(e) => (graphHovered = e)}
+				onhovernode={updateGraphHover}
 			/>
 		</div>
 	</div>
