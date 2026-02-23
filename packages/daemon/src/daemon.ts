@@ -29,6 +29,7 @@ import { spawn } from "child_process";
 import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
+import { initLlmProvider, closeLlmProvider } from "./llm";
 import { syncVecInsert, syncVecDeleteBySourceId } from "./db-helpers";
 import {
 	putSecret,
@@ -66,7 +67,10 @@ import {
 	enqueueDocumentIngestJob,
 	startSummaryWorker,
 } from "./pipeline";
-import { createOllamaProvider } from "./pipeline/provider";
+import {
+	createOllamaProvider,
+	createClaudeCodeProvider,
+} from "./pipeline/provider";
 import {
 	registerConnector,
 	getConnector,
@@ -7042,6 +7046,8 @@ async function cleanup() {
 		// best-effort
 	}
 
+	closeLlmProvider();
+
 	// Stop git sync timer
 	stopGitSyncTimer();
 	stopUpdateTimer();
@@ -7119,6 +7125,21 @@ async function main() {
 	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
+	// Create LLM provider once, register as daemon-wide singleton
+	const llmProvider =
+		memoryCfg.pipelineV2.extractionProvider === "claude-code"
+			? createClaudeCodeProvider({
+					model: memoryCfg.pipelineV2.extractionModel || "haiku",
+					defaultTimeoutMs:
+						memoryCfg.pipelineV2.extractionTimeout || 60000,
+				})
+			: createOllamaProvider({
+					model: memoryCfg.pipelineV2.extractionModel || "qwen3:4b",
+					defaultTimeoutMs:
+						memoryCfg.pipelineV2.extractionTimeout || 90000,
+				});
+	initLlmProvider(llmProvider);
+
 	// Start extraction pipeline if enabled
 	if (memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode) {
 		startPipeline(
@@ -7137,11 +7158,7 @@ async function main() {
 
 		// Summary worker runs regardless of pipeline state — session
 		// summaries are a core feature, not gated on extraction pipeline.
-		const summaryProvider = createOllamaProvider({
-			model: memoryCfg.pipelineV2.extractionModel || "qwen3:4b",
-			defaultTimeoutMs: memoryCfg.pipelineV2.extractionTimeout || 90000,
-		});
-		startSummaryWorker(getDbAccessor(), summaryProvider);
+		startSummaryWorker(getDbAccessor());
 	}
 
 	// Start git sync timer (if enabled and has token)

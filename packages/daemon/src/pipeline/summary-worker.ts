@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { DbAccessor } from "../db-accessor";
 import type { LlmProvider } from "./provider";
+import { getLlmProvider } from "../llm";
 import { isDuplicate, inferType } from "../hooks";
 import { logger } from "../logger";
 
@@ -246,8 +247,8 @@ async function processJob(
 
 export function startSummaryWorker(
 	accessor: DbAccessor,
-	provider: LlmProvider,
 ): SummaryWorkerHandle {
+	const provider = getLlmProvider();
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 

@@ -4,7 +4,7 @@
 
 import type { DbAccessor } from "../db-accessor";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
-import { createOllamaProvider, createClaudeCodeProvider } from "./provider";
+import { getLlmProvider } from "../llm";
 import { startWorker, type WorkerHandle } from "./worker";
 import {
 	startRetentionWorker,
@@ -37,6 +37,7 @@ export {
 export type { WorkerHandle } from "./worker";
 export type { DocumentWorkerHandle } from "./document-worker";
 export type { LlmProvider } from "./provider";
+export { getLlmProvider } from "../llm";
 export type { RetentionHandle, RetentionConfig } from "./retention-worker";
 export type { MaintenanceHandle } from "./maintenance-worker";
 export { startSummaryWorker, enqueueSummaryJob } from "./summary-worker";
@@ -73,16 +74,7 @@ export function startPipeline(
 		return;
 	}
 
-	const provider =
-		pipelineCfg.extractionProvider === "claude-code"
-			? createClaudeCodeProvider({
-					model: pipelineCfg.extractionModel,
-					defaultTimeoutMs: pipelineCfg.extractionTimeout,
-				})
-			: createOllamaProvider({
-					model: pipelineCfg.extractionModel,
-					defaultTimeoutMs: pipelineCfg.extractionTimeout,
-				});
+	const provider = getLlmProvider();
 
 	const decisionCfg: DecisionConfig = {
 		embedding: embeddingCfg,
@@ -120,7 +112,7 @@ export function startPipeline(
 
 	// Summary worker — async session-end processing
 	if (!summaryWorkerHandle) {
-		summaryWorkerHandle = startSummaryWorker(accessor, provider);
+		summaryWorkerHandle = startSummaryWorker(accessor);
 	}
 
 	logger.info("pipeline", "Pipeline started", {
