@@ -590,6 +590,15 @@ export function handleSessionStart(
 
 	injectParts.push("[memory active | /remember | /recall]");
 
+	// Inject local date/time and timezone
+	const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+	const now = new Date().toLocaleString("en-US", {
+		timeZone: tz,
+		dateStyle: "full",
+		timeStyle: "short",
+	});
+	injectParts.push(`\n# Current Date & Time\n${now} (${tz})\n`);
+
 	if (agentsMdContent) {
 		injectParts.push("\n## Agent Instructions\n");
 		injectParts.push(agentsMdContent);
