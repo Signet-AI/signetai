@@ -10,6 +10,10 @@ import {
 } from "$lib/stores/memory.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
+import * as Popover from "$lib/components/ui/popover/index.js";
+import { Calendar } from "$lib/components/ui/calendar/index.js";
+import CalendarIcon from "@lucide/svelte/icons/calendar";
+import { getLocalTimeZone, CalendarDate, type DateValue } from "@internationalized/date";
 
 interface Props {
 	memories: Memory[];
@@ -79,6 +83,41 @@ const pillActive = `${pillBase} text-[var(--sig-accent)] border-[var(--sig-accen
 const pillInactive = `${pillBase} text-[var(--sig-text-muted)] border-[var(--sig-border-strong)] bg-transparent hover:text-[var(--sig-text)]`;
 
 const inputClass = "text-[11px] font-[family-name:var(--font-mono)] text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)] border border-[var(--sig-border-strong)] rounded-none px-2 py-1 outline-none placeholder:text-[var(--sig-text-muted)]";
+const dateTriggerClass = `${inputClass} w-[130px] inline-flex items-center justify-between gap-2 cursor-pointer`;
+const dateClearClass = "text-[9px] px-1.5 py-1 border border-[var(--sig-border-strong)] rounded-none text-[var(--sig-text-muted)] bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]";
+
+let sincePickerOpen = $state(false);
+
+function toCalendarDate(value: string): DateValue | undefined {
+	if (!value) return undefined;
+	const parts = value.split("-");
+	if (parts.length !== 3) return undefined;
+	const year = Number(parts[0]);
+	const month = Number(parts[1]);
+	const day = Number(parts[2]);
+	if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+		return undefined;
+	}
+	return new CalendarDate(year, month, day);
+}
+
+function toIsoDate(value: DateValue | undefined): string {
+	if (!value) return "";
+	const year = String(value.year).padStart(4, "0");
+	const month = String(value.month).padStart(2, "0");
+	const day = String(value.day).padStart(2, "0");
+	return `${year}-${month}-${day}`;
+}
+
+function formatIsoDate(value: string): string {
+	const parsed = toCalendarDate(value);
+	if (!parsed) return "Since date";
+	return parsed.toDate(getLocalTimeZone()).toLocaleDateString("en-US", {
+		year: "numeric",
+		month: "short",
+		day: "numeric",
+	});
+}
 </script>
 
 <section class="flex flex-col flex-1 min-h-0 gap-2.5 p-3 bg-[var(--sig-bg)]">
@@ -136,11 +175,36 @@ const inputClass = "text-[11px] font-[family-name:var(--font-mono)] text-[var(--
 			placeholder="imp"
 		/>
 
-		<input
-			type="date"
-			class="{inputClass} w-[130px]"
-			bind:value={mem.filterSince}
-		/>
+		<Popover.Root bind:open={sincePickerOpen}>
+			<Popover.Trigger>
+				{#snippet child({ props })}
+					<button {...props} class={dateTriggerClass}>
+						<span class="truncate">{formatIsoDate(mem.filterSince)}</span>
+						<CalendarIcon class="size-3 shrink-0 opacity-70" />
+					</button>
+				{/snippet}
+			</Popover.Trigger>
+			<Popover.Content
+				class="w-auto overflow-hidden p-0 bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-none"
+				align="start"
+			>
+				<Calendar
+					type="single"
+					captionLayout="dropdown"
+					value={toCalendarDate(mem.filterSince)}
+					onValueChange={(v) => {
+						mem.filterSince = toIsoDate(v);
+						sincePickerOpen = false;
+					}}
+					class="bg-[var(--sig-surface-raised)] text-[var(--sig-text)] rounded-none border-0 p-2"
+				/>
+			</Popover.Content>
+		</Popover.Root>
+		{#if mem.filterSince}
+			<button class={dateClearClass} onclick={() => { mem.filterSince = ""; }}>
+				clear
+			</button>
+		{/if}
 
 		<button
 			class={mem.filterPinned ? pillActive : pillInactive}

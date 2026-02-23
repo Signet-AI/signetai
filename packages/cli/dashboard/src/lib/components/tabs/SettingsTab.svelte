@@ -4,6 +4,7 @@ import { saveConfigFile, type ConfigFile } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
+import * as Select from "$lib/components/ui/select/index.js";
 
 interface Props {
 	configFiles: ConfigFile[];
@@ -129,6 +130,9 @@ function formatDate(raw: YamlValue): string {
 
 let showRegistry = $derived(aStr(["trust", "verification"]) === "registry");
 let saving = $state(false);
+const selectTriggerClass = "font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-none w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
+const selectContentClass = "font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-none";
+const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-none";
 
 async function saveSettings(): Promise<void> {
 	saving = true;
@@ -223,11 +227,22 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 					{#snippet children()}
 						<FormField label="Provider" description="Embedding backend. Ollama runs locally, OpenAI requires an API key.">
 							{#snippet children()}
-								<select class="inp sel" value={cStr(["embeddings", "provider"])} onchange={cOnStr(["embeddings", "provider"])}>
-									<option value="">— select —</option>
-									<option value="ollama">ollama</option>
-									<option value="openai">openai</option>
-								</select>
+								<Select.Root
+									type="single"
+									value={cStr(["embeddings", "provider"])}
+									onValueChange={(v) =>
+										set(config, ["embeddings", "provider"], v ?? "")
+									}
+								>
+									<Select.Trigger class={selectTriggerClass}>
+										{cStr(["embeddings", "provider"]) || "— select —"}
+									</Select.Trigger>
+									<Select.Content class={selectContentClass}>
+										<Select.Item class={selectItemClass} value="" label="— select —" />
+										<Select.Item class={selectItemClass} value="ollama" label="ollama" />
+										<Select.Item class={selectItemClass} value="openai" label="openai" />
+									</Select.Content>
+								</Select.Root>
 							{/snippet}
 						</FormField>
 						<FormField label="Model" description="Ollama: nomic-embed-text (768d), all-minilm (384d), mxbai-embed-large (1024d). OpenAI: text-embedding-3-small (1536d), text-embedding-3-large (3072d).">
@@ -329,11 +344,22 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 
 						<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses the Claude Code headless provider.">
 							{#snippet children()}
-								<select class="inp sel" value={aStr(["memory", "pipelineV2", "extractionProvider"])} onchange={aOnStr(["memory", "pipelineV2", "extractionProvider"])}>
-									<option value="">— select —</option>
-									<option value="ollama">ollama</option>
-									<option value="claude-code">claude-code</option>
-								</select>
+								<Select.Root
+									type="single"
+									value={aStr(["memory", "pipelineV2", "extractionProvider"])}
+									onValueChange={(v) =>
+										set(agent, ["memory", "pipelineV2", "extractionProvider"], v ?? "")
+									}
+								>
+									<Select.Trigger class={selectTriggerClass}>
+										{aStr(["memory", "pipelineV2", "extractionProvider"]) || "— select —"}
+									</Select.Trigger>
+									<Select.Content class={selectContentClass}>
+										<Select.Item class={selectItemClass} value="" label="— select —" />
+										<Select.Item class={selectItemClass} value="ollama" label="ollama" />
+										<Select.Item class={selectItemClass} value="claude-code" label="claude-code" />
+									</Select.Content>
+								</Select.Root>
 							{/snippet}
 						</FormField>
 						<FormField label="Extraction model" description="Model name for fact extraction. Must be available locally via Ollama. Default: qwen3:4b.">
@@ -343,11 +369,22 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 						</FormField>
 						<FormField label="Maintenance mode" description="'observe' logs diagnostics without changes. 'execute' attempts repairs. Only works when autonomousEnabled is true.">
 							{#snippet children()}
-								<select class="inp sel" value={aStr(["memory", "pipelineV2", "maintenanceMode"])} onchange={aOnStr(["memory", "pipelineV2", "maintenanceMode"])}>
-									<option value="">— select —</option>
-									<option value="observe">observe</option>
-									<option value="execute">execute</option>
-								</select>
+								<Select.Root
+									type="single"
+									value={aStr(["memory", "pipelineV2", "maintenanceMode"])}
+									onValueChange={(v) =>
+										set(agent, ["memory", "pipelineV2", "maintenanceMode"], v ?? "")
+									}
+								>
+									<Select.Trigger class={selectTriggerClass}>
+										{aStr(["memory", "pipelineV2", "maintenanceMode"]) || "— select —"}
+									</Select.Trigger>
+									<Select.Content class={selectContentClass}>
+										<Select.Item class={selectItemClass} value="" label="— select —" />
+										<Select.Item class={selectItemClass} value="observe" label="observe" />
+										<Select.Item class={selectItemClass} value="execute" label="execute" />
+									</Select.Content>
+								</Select.Root>
 							{/snippet}
 						</FormField>
 						<FormField label="Reranker model" description="Cross-encoder model for optional reranking pass. Leave empty to disable.">
@@ -379,12 +416,21 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 					{#snippet children()}
 						<FormField label="Verification" description="none = local only. erc8128 = wallet-based (recommended). gpg/did = alternative signing. registry = contract-based lookup.">
 							{#snippet children()}
-								<select class="inp sel" value={aStr(["trust", "verification"])} onchange={aOnStr(["trust", "verification"])}>
-									<option value="">— select —</option>
-									{#each ["none", "erc8128", "gpg", "did", "registry"] as v (v)}
-										<option value={v}>{v}</option>
-									{/each}
-								</select>
+								<Select.Root
+									type="single"
+									value={aStr(["trust", "verification"])}
+									onValueChange={(v) => set(agent, ["trust", "verification"], v ?? "")}
+								>
+									<Select.Trigger class={selectTriggerClass}>
+										{aStr(["trust", "verification"]) || "— select —"}
+									</Select.Trigger>
+									<Select.Content class={selectContentClass}>
+										<Select.Item class={selectItemClass} value="" label="— select —" />
+										{#each ["none", "erc8128", "gpg", "did", "registry"] as v (v)}
+											<Select.Item class={selectItemClass} value={v} label={v} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
 							{/snippet}
 						</FormField>
 						{#if showRegistry}
@@ -402,22 +448,40 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 					{#snippet children()}
 						<FormField label="Method" description="Signing method for auth tokens. erc8128 uses wallet signatures, gpg/did use alternative signing.">
 							{#snippet children()}
-								<select class="inp sel" value={aStr(["auth", "method"])} onchange={aOnStr(["auth", "method"])}>
-									<option value="">— select —</option>
-									{#each ["none", "erc8128", "gpg", "did"] as v (v)}
-										<option value={v}>{v}</option>
-									{/each}
-								</select>
+								<Select.Root
+									type="single"
+									value={aStr(["auth", "method"])}
+									onValueChange={(v) => set(agent, ["auth", "method"], v ?? "")}
+								>
+									<Select.Trigger class={selectTriggerClass}>
+										{aStr(["auth", "method"]) || "— select —"}
+									</Select.Trigger>
+									<Select.Content class={selectContentClass}>
+										<Select.Item class={selectItemClass} value="" label="— select —" />
+										{#each ["none", "erc8128", "gpg", "did"] as v (v)}
+											<Select.Item class={selectItemClass} value={v} label={v} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
 							{/snippet}
 						</FormField>
 						<FormField label="Mode" description="local = no auth required (localhost only). team = tokens required for all requests. hybrid = localhost skips auth, remote requires tokens.">
 							{#snippet children()}
-								<select class="inp sel" value={aStr(["auth", "mode"])} onchange={aOnStr(["auth", "mode"])}>
-									<option value="">— select —</option>
-									{#each ["local", "team", "hybrid"] as v (v)}
-										<option value={v}>{v}</option>
-									{/each}
-								</select>
+								<Select.Root
+									type="single"
+									value={aStr(["auth", "mode"])}
+									onValueChange={(v) => set(agent, ["auth", "mode"], v ?? "")}
+								>
+									<Select.Trigger class={selectTriggerClass}>
+										{aStr(["auth", "mode"]) || "— select —"}
+									</Select.Trigger>
+									<Select.Content class={selectContentClass}>
+										<Select.Item class={selectItemClass} value="" label="— select —" />
+										{#each ["local", "team", "hybrid"] as v (v)}
+											<Select.Item class={selectItemClass} value={v} label={v} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
 							{/snippet}
 						</FormField>
 						<FormField label="Chain ID" description="Ethereum chain ID for ERC-8128 signature verification. Default: 1 (mainnet).">
@@ -481,7 +545,6 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 	.inp:focus { border-color: var(--sig-accent); }
 	.inp.ro { color: var(--sig-text-muted); cursor: default; }
 	.inp.ta { resize: vertical; min-height: 60px; }
-	.inp.sel { appearance: none; cursor: pointer; }
 
 	/* Harness checkboxes */
 	.checkbox-group { display: flex; flex-direction: column; gap: 6px; }
