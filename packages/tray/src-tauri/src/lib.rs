@@ -13,6 +13,10 @@ pub fn run() {
             commands::get_daemon_pid,
             commands::open_dashboard,
             commands::update_tray,
+            commands::quick_capture,
+            commands::search_memories,
+            commands::quit_capture_window,
+            commands::quit_search_window,
             commands::quit_app,
         ])
         .setup(|app| {

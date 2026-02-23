@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Quick Capture</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 16px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    h3 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #a0a0c0;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    textarea {
+      flex: 1;
+      width: 100%;
+      background: #2a2a3e;
+      border: 1px solid #3a3a5e;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 14px;
+      padding: 10px;
+      resize: none;
+      outline: none;
+      font-family: inherit;
+    }
+    textarea:focus {
+      border-color: #6366f1;
+    }
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    button {
+      padding: 6px 16px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .btn-submit {
+      background: #6366f1;
+      color: white;
+    }
+    .btn-submit:hover { background: #5558e6; }
+    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-cancel {
+      background: #3a3a5e;
+      color: #c0c0d0;
+    }
+    .btn-cancel:hover { background: #4a4a6e; }
+    .status {
+      font-size: 12px;
+      color: #6366f1;
+      margin-top: 6px;
+      min-height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <h3>✏️ Quick Capture</h3>
+  <textarea id="content" placeholder="Type a memory to capture... (⌘+Enter to save)" autofocus></textarea>
+  <div class="status" id="status"></div>
+  <div class="actions">
+    <button class="btn-cancel" id="cancelBtn">Cancel</button>
+    <button class="btn-submit" id="submitBtn">Save Memory</button>
+  </div>
+
+  <script>
+    // Use Tauri's internal invoke directly (no import needed, injected by Tauri)
+    function invoke(cmd, args) {
+      return window.__TAURI_INTERNALS__.invoke(cmd, args);
+    }
+
+    const textarea = document.getElementById("content");
+    const submitBtn = document.getElementById("submitBtn");
+    const cancelBtn = document.getElementById("cancelBtn");
+    const statusEl = document.getElementById("status");
+
+    cancelBtn.addEventListener("click", () => {
+      invoke("quit_capture_window");
+    });
+
+    submitBtn.addEventListener("click", submit);
+
+    textarea.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.metaKey) {
+        e.preventDefault();
+        submit();
+      }
+      if (e.key === "Escape") {
+        invoke("quit_capture_window");
+      }
+    });
+
+    async function submit() {
+      const content = textarea.value.trim();
+      if (!content) return;
+
+      submitBtn.disabled = true;
+      statusEl.textContent = "Saving...";
+
+      try {
+        await invoke("quick_capture", { content });
+        statusEl.textContent = "✓ Saved!";
+        setTimeout(() => {
+          invoke("quit_capture_window");
+        }, 400);
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err || "unknown");
+        submitBtn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>

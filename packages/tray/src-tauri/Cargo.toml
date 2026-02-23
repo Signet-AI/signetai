@@ -1,6 +1,6 @@
 [package]
 name = "signet-tray"
-version = "0.1.81"
+version = "0.1.84"
 edition = "2021"
 description = "Signet system tray application"
 
@@ -20,3 +20,5 @@ dirs = "6"
 open = "5"
 libc = "0.2"
 png = "0.17"
+reqwest = { version = "0.12", features = ["json"] }
+chrono = "0.4"

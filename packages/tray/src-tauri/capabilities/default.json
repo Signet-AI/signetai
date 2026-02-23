@@ -1,9 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "windows": ["main"],
+  "windows": ["main", "capture", "search"],
   "permissions": [
     "core:default",
-    "shell:allow-open"
+    "shell:allow-open",
+    "core:window:allow-close",
+    "core:window:allow-set-focus"
   ]
 }
