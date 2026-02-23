@@ -2020,6 +2020,25 @@ data: {"level":"info","category":"memory","message":"Memory saved","at":"..."}
 The stream stays open until the client disconnects.
 
 
+MCP Server
+----------
+
+### ALL /mcp
+
+Model Context Protocol endpoint using Streamable HTTP transport (stateless).
+Supports POST (send messages), GET (SSE stream), and DELETE (session teardown).
+
+Exposes memory tools: `memory_search`, `memory_store`, `memory_get`,
+`memory_list`, `memory_modify`, `memory_forget`. See `docs/MCP.md` for full
+tool documentation.
+
+**POST /mcp** — Send MCP JSON-RPC messages. Returns JSON or SSE stream.
+
+**GET /mcp** — Open an SSE stream for server-initiated notifications.
+
+**DELETE /mcp** — Terminate MCP session (no-op in stateless mode).
+
+
 Dashboard
 ---------
 

@@ -9,10 +9,10 @@ Signet Daemon
 =============
 
 The Signet daemon is a background service that provides the HTTP API,
-serves the dashboard, watches config files for changes, and manages
-harness synchronization. It also runs the memory pipeline and a suite
-of subsystem workers for ingestion, retention, maintenance, analytics,
-and diagnostics.
+serves the dashboard, watches config files for changes, manages harness
+synchronization, and exposes an MCP server for native tool access. It also
+runs the memory pipeline and a suite of subsystem workers for ingestion,
+retention, maintenance, analytics, and diagnostics.
 
 The daemon runs on `http://localhost:3850` by default.
 
@@ -219,6 +219,7 @@ reference including request/response schemas.
 | Analytics | `/api/analytics` | Usage counters, error buffer, histograms |
 | Timeline | `/api/timeline/:id` | Incident reconstruction by entity ID |
 | Logs | `/api/logs` | Recent in-process log entries |
+| MCP | `/mcp` | Model Context Protocol server (Streamable HTTP) |
 
 ### Health Check
 

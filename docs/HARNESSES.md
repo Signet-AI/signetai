@@ -107,6 +107,26 @@ In Claude Code sessions, use these commands directly:
 
 These work via the built-in skills in `~/.agents/skills/`. The skill instructions tell Claude how to call the Signet daemon API.
 
+### MCP Tools
+
+Claude Code also gets native MCP tool access to Signet memory via the
+`signet-mcp` stdio server, registered in `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "signet": {
+      "type": "stdio",
+      "command": "signet-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+This gives Claude Code direct access to `memory_search`, `memory_store`,
+`memory_get`, `memory_list`, `memory_modify`, and `memory_forget` tools.
+
 ### Prerequisites
 
 - Claude Code installed and in `PATH`
@@ -152,6 +172,25 @@ async function recall(query, options = {}) {
   return res.json();
 }
 ```
+
+### MCP Tools
+
+OpenCode also gets MCP tool access via a local server entry in
+`opencode.json`:
+
+```json
+{
+  "mcp": {
+    "signet": {
+      "type": "local",
+      "command": ["signet-mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+The plugin handles lifecycle hooks; MCP provides on-demand memory tools.
 
 ### Prerequisites
 

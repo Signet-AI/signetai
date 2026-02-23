@@ -145,6 +145,14 @@ export class ClaudeCodeConnector extends BaseConnector {
 				}
 			}
 
+			// Remove signet MCP server
+			if (settings.mcpServers) {
+				delete (settings.mcpServers as Record<string, unknown>).signet;
+				if (Object.keys(settings.mcpServers as Record<string, unknown>).length === 0) {
+					settings.mcpServers = undefined;
+				}
+			}
+
 			writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 			filesRemoved.push(settingsPath);
 		} catch {
@@ -326,6 +334,18 @@ export class ClaudeCodeConnector extends BaseConnector {
 		settings.hooks = {
 			...(settings.hooks as Record<string, unknown>),
 			...hooks,
+		};
+
+		// Register Signet MCP server for native tool access
+		const existingMcp =
+			(settings.mcpServers as Record<string, unknown> | undefined) ?? {};
+		settings.mcpServers = {
+			...existingMcp,
+			signet: {
+				type: "stdio",
+				command: "signet-mcp",
+				args: [] as string[],
+			},
 		};
 
 		writeFileSync(settingsPath, JSON.stringify(settings, null, 2));

@@ -116,7 +116,7 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 | `@signet/core` | Core library: types, database, search, manifest, identity | node |
 | `@signet/connector-base` | Shared connector primitives/utilities | node |
 | `@signet/cli` | CLI tool: setup wizard, daemon management | node |
-| `@signet/daemon` | Background service: HTTP API, file watching | bun |
+| `@signet/daemon` | Background service: HTTP API, MCP server, file watching | bun |
 | `@signet/sdk` | Integration SDK for third-party apps | node |
 | `@signet/connector-claude-code` | Claude Code connector: hooks, CLAUDE.md generation | node |
 | `@signet/connector-opencode` | OpenCode connector: plugin, AGENTS.md sync | node |
@@ -390,6 +390,7 @@ bun src/cli.ts status    # Check status
 | `/api/logs/*` | GET | Daemon log access |
 | `/api/logs/stream` | GET | SSE log streaming |
 | `/api/identity` | GET/POST | Identity file read/write |
+| `/mcp` | ALL | MCP server (Streamable HTTP, memory tools) |
 
 
 ## Identity Files
