@@ -94,12 +94,24 @@ async function initGraph(): Promise<void> {
 
 	try {
 		let projection = await getProjection(2);
+		let pollAttempts = 0;
+		const MAX_POLL_ATTEMPTS = 30;
 
 		while (projection.status === "computing") {
 			if (loadId !== graphLoadId) return;
+			pollAttempts++;
+			if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+				graphError = "Projection timed out after 60s. Try refreshing.";
+				return;
+			}
 			graphStatus = "Computing layout...";
 			await new Promise<void>((resolve) => setTimeout(resolve, 2000));
 			projection = await getProjection(2);
+		}
+
+		if (projection.status === "error") {
+			graphError = projection.message ?? "Projection computation failed";
+			return;
 		}
 
 		if (loadId !== graphLoadId) return;

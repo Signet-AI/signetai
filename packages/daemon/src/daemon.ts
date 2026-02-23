@@ -136,6 +136,8 @@ const repairLimiter = createRateLimiter();
 
 // Prevents concurrent UMAP computations for the same dimension count
 const projectionInFlight = new Map<number, Promise<void>>();
+const projectionErrors = new Map<number, { message: string; expires: number }>();
+const PROJECTION_ERROR_TTL_MS = 30_000;
 
 // Auth state — initialized lazily in main(), but middleware reads from here
 let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
@@ -3374,8 +3376,22 @@ app.get("/api/embeddings/projection", async (c) => {
 		});
 	}
 
+	// Check for recent computation error
+	const recentError = projectionErrors.get(nComponents);
+	if (recentError) {
+		if (Date.now() > recentError.expires) {
+			projectionErrors.delete(nComponents);
+		} else {
+			return c.json(
+				{ status: "error", message: recentError.message },
+				500,
+			);
+		}
+	}
+
 	// Kick off background computation if not already running
 	if (!projectionInFlight.has(nComponents)) {
+		projectionErrors.delete(nComponents);
 		const computation = (async () => {
 			try {
 				const result = getDbAccessor().withReadDb((db) =>
@@ -3395,11 +3411,16 @@ app.get("/api/embeddings/projection", async (c) => {
 					cacheProjection(db, nComponents, result, count),
 				);
 			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
 				logger.error(
 					"projection",
 					"UMAP computation failed",
-					err instanceof Error ? err : new Error(String(err)),
+					err instanceof Error ? err : new Error(msg),
 				);
+				projectionErrors.set(nComponents, {
+					message: msg,
+					expires: Date.now() + PROJECTION_ERROR_TTL_MS,
+				});
 			} finally {
 				projectionInFlight.delete(nComponents);
 			}

@@ -319,7 +319,8 @@ export interface ProjectionNode {
 }
 
 export interface ProjectionResponse {
-	status: "ready" | "computing";
+	status: "ready" | "computing" | "error";
+	message?: string;
 	dimensions?: number;
 	count?: number;
 	total?: number;
@@ -336,10 +337,18 @@ export async function getProjection(
 			`${API_BASE}/api/embeddings/projection?dimensions=${dimensions}`,
 		);
 		if (response.status === 202) return { status: "computing" };
-		if (!response.ok) throw new Error("Failed to fetch projection");
+		if (!response.ok) {
+			const body = await response.json().catch(() => ({}));
+			const msg =
+				(body as Record<string, unknown>).message ?? `HTTP ${response.status}`;
+			return { status: "error", message: String(msg) };
+		}
 		return await response.json();
-	} catch {
-		return { status: "computing" };
+	} catch (err) {
+		return {
+			status: "error",
+			message: err instanceof Error ? err.message : "Network error",
+		};
 	}
 }
 
