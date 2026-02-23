@@ -52,6 +52,7 @@ import {
 	detectSchema,
 	ensureUnifiedSchema,
 	runMigrations,
+	loadSqliteVec,
 	parseSimpleYaml,
 	formatYaml,
 	symlinkSkills,
@@ -4826,6 +4827,14 @@ program
 
 		try {
 			const db = Database(dbPath);
+
+			// Load sqlite-vec extension BEFORE creating virtual table
+			if (!loadSqliteVec(db)) {
+				spinner.fail(
+					"sqlite-vec extension not found — cannot migrate vectors."
+				);
+				return;
+			}
 
 			// Create vec_embeddings virtual table if not exists
 			spinner.text = "Creating vec_embeddings table...";
