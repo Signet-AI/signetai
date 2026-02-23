@@ -18,6 +18,7 @@ import { up as summaryJobs } from "./009-summary-jobs";
 import { up as umapCache } from "./010-umap-cache";
 import { up as sessionScores } from "./011-session-scores";
 import { up as memorySigning } from "./012-memory-signing";
+import { up as temporalMemory } from "./013-temporal-memory";
 
 // -- Public interface consumed by Database.init() --
 
@@ -77,6 +78,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 12,
 		name: "memory-signing",
 		up: memorySigning,
+	},
+	{
+		version: 13,
+		name: "temporal-memory",
+		up: temporalMemory,
 	},
 ];
 

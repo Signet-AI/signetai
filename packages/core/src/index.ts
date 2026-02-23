@@ -245,3 +245,14 @@ export type {
 	DocumentRow,
 	ConnectorRow,
 } from "./connector-types";
+
+// Temporal Memory (Phase 2)
+export {
+	calculateStrength,
+	updateStrengthOnAccess,
+	recalculateAllStrengths,
+} from "./temporal";
+export type {
+	MemoryStrengthInput,
+	TemporalDb,
+} from "./temporal";

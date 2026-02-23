@@ -607,6 +607,10 @@ function rowToMemory(row: Record<string, unknown>): Memory {
 		accessCount: row.access_count as number | undefined,
 		lastAccessed: row.last_accessed as string | undefined,
 		who: row.who as string | undefined,
+		// Temporal memory fields (migration 013)
+		strength: row.strength as number | undefined,
+		lastRehearsed: row.last_rehearsed as string | undefined,
+		rehearsalCount: row.rehearsal_count as number | undefined,
 	};
 }
 

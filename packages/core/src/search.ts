@@ -11,6 +11,10 @@ export interface SearchOptions {
 	type?: "fact" | "preference" | "decision";
 	minScore?: number;
 	topK?: number; // Candidates per source before blending
+	// Temporal filtering (Phase 2)
+	since?: string; // ISO date — filter memories created after this date
+	until?: string; // ISO date — filter memories created before this date
+	temporalBoost?: boolean; // Boost recent memories in scoring
 }
 
 export interface VectorSearchOptions {
@@ -24,6 +28,10 @@ export interface HybridSearchOptions {
 	minScore?: number;
 	topK?: number;
 	type?: "fact" | "preference" | "decision";
+	// Temporal filtering (Phase 2)
+	since?: string;
+	until?: string;
+	temporalBoost?: boolean;
 }
 
 export interface SearchResult {
@@ -237,17 +245,18 @@ export function hybridSearch(
 	// Sort by score descending
 	scored.sort((a, b) => b.score - a.score);
 
-	// Fetch full memory rows for top results
-	const topIds = scored.slice(0, limit).map((s) => s.id);
+	// Fetch full memory rows for top results (expanded set for filtering)
+	// Fetch more than limit to account for temporal filtering removing some
+	const candidateIds = scored.slice(0, limit * 3).map((s) => s.id);
 
-	if (topIds.length === 0) {
+	if (candidateIds.length === 0) {
 		return [];
 	}
 
-	// Build query with placeholders
-	const placeholders = topIds.map(() => "?").join(", ");
+	// Build query with placeholders — include strength + created_at for Phase 2
+	const placeholders = candidateIds.map(() => "?").join(", ");
 	let typeFilter = "";
-	const params: unknown[] = [...topIds];
+	const params: unknown[] = [...candidateIds];
 
 	if (options?.type) {
 		typeFilter = " AND type = ?";
@@ -256,7 +265,7 @@ export function hybridSearch(
 
 	const rows = db
 		.prepare(`
-    SELECT id, content, type, tags, confidence
+    SELECT id, content, type, tags, confidence, strength, created_at
     FROM memories
     WHERE id IN (${placeholders})${typeFilter}
   `)
@@ -266,15 +275,65 @@ export function hybridSearch(
 		type: string;
 		tags: string | null;
 		confidence: number;
+		strength: number | null;
+		created_at: string | null;
 	}>;
 
 	// Map rows by ID for quick lookup
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
 
+	// --- Phase 2: Temporal filtering (since/until) ---
+	let filteredScored = scored.filter((s) => rowMap.has(s.id));
+
+	if (options?.since || options?.until) {
+		filteredScored = filteredScored.filter((s) => {
+			const row = rowMap.get(s.id);
+			if (!row?.created_at) return true; // keep if no date info
+			const createdMs = new Date(row.created_at).getTime();
+			if (Number.isNaN(createdMs)) return true;
+			if (options?.since) {
+				const sinceMs = new Date(options.since).getTime();
+				if (!Number.isNaN(sinceMs) && createdMs < sinceMs) return false;
+			}
+			if (options?.until) {
+				const untilMs = new Date(options.until).getTime();
+				if (!Number.isNaN(untilMs) && createdMs > untilMs) return false;
+			}
+			return true;
+		});
+	}
+
+	// --- Phase 2: Blend strength into scoring ---
+	// finalScore = hybridScore * 0.7 + strength * 0.3
+	for (const s of filteredScored) {
+		const row = rowMap.get(s.id);
+		if (!row) continue;
+		const strength = row.strength ?? 1.0; // default 1.0 for un-migrated rows
+		s.score = s.score * 0.7 + strength * 0.3;
+	}
+
+	// --- Phase 2: Temporal boost (recency multiplier) ---
+	if (options?.temporalBoost) {
+		const nowMs = Date.now();
+		for (const s of filteredScored) {
+			const row = rowMap.get(s.id);
+			if (!row?.created_at) continue;
+			const createdMs = new Date(row.created_at).getTime();
+			if (Number.isNaN(createdMs)) continue;
+			const daysAgo = Math.max(0, (nowMs - createdMs) / 86_400_000);
+			// 0.95^daysAgo: recent memories get higher multiplier
+			// 1 day ago → 0.95, 7 days → 0.70, 30 days → 0.21
+			const recencyMultiplier = Math.pow(0.95, daysAgo);
+			s.score *= recencyMultiplier;
+		}
+	}
+
+	// Re-sort after strength blending and temporal boost
+	filteredScored.sort((a, b) => b.score - a.score);
+
 	// Build final results preserving score order
-	return scored
+	return filteredScored
 		.slice(0, limit)
-		.filter((s) => rowMap.has(s.id))
 		.map((s) => {
 			const r = rowMap.get(s.id);
 			if (!r) return null;
@@ -353,6 +412,9 @@ export async function search(
 			minScore,
 			topK,
 			type: options.type,
+			since: options.since,
+			until: options.until,
+			temporalBoost: options.temporalBoost,
 		});
 
 		// If hybrid search found results, return them

@@ -259,6 +259,10 @@ export interface Memory {
 	// Web3 identity fields (optional, added in migration 012)
 	signature?: string;
 	signerDid?: string;
+	// Temporal memory fields (optional, added in migration 013)
+	strength?: number;
+	lastRehearsed?: string;
+	rehearsalCount?: number;
 }
 
 export interface Conversation {
