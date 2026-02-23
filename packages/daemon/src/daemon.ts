@@ -2910,13 +2910,19 @@ app.post("/api/memory/recall", async (c) => {
 				raw_score: number;
 			}>;
 
+			// Min-max normalize BM25 scores to [0,1] within the batch
+			// (bm25() returns negative values — lower = better — so we use abs)
+			const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
+			const maxRaw = Math.max(...rawScores, 1);
 			for (const row of ftsRows) {
-				const normalised = 1 / (1 + Math.abs(row.raw_score));
+				const normalised = Math.abs(row.raw_score) / maxRaw;
 				bm25Map.set(row.id, normalised);
 			}
 		});
-	} catch {
-		// FTS unavailable (e.g. no matches) — continue with vector only
+	} catch (e) {
+		logger.warn("memory", "FTS search failed, continuing with vector only", {
+			error: e instanceof Error ? e.message : String(e),
+		});
 	}
 
 	// --- Vector search via sqlite-vec ---

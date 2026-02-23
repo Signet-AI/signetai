@@ -234,7 +234,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			dimensions: 768,
 			base_url: "http://localhost:11434",
 		},
-		search: { alpha: 0.7, top_k: 20, min_score: 0.3 },
+		search: { alpha: 0.7, top_k: 20, min_score: 0.1 },
 		pipelineV2: { ...DEFAULT_PIPELINE_V2 },
 		auth: parseAuthConfig(undefined, agentsDir),
 	};

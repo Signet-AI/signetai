@@ -38,8 +38,10 @@ function findSqliteVecExtension(): string | null {
 
 	// Try common locations in order
 	const searchPaths = [
-		// Standard npm/yarn layout
+		// Standard npm/yarn layout: __dirname is node_modules/@signet/core/dist/
 		join(__dirname, "..", "..", platformPkg, extFile),
+		// Installed package: __dirname is signetai/dist/, deps in own node_modules/
+		join(__dirname, "..", "node_modules", platformPkg, extFile),
 		// Bun's hoisted structure (multiple possible locations)
 		join(
 			__dirname,

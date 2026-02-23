@@ -59,6 +59,9 @@ let vecExtPath: string | null | undefined;
 function loadVecExtension(db: Database): void {
 	if (vecExtPath === undefined) {
 		vecExtPath = findSqliteVecExtension();
+		if (!vecExtPath) {
+			console.warn("[db-accessor] sqlite-vec extension not found — vector search disabled");
+		}
 	}
 	if (vecExtPath) {
 		try {
