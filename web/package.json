@@ -3,19 +3,17 @@
 	"version": "0.0.0",
 	"private": true,
 	"scripts": {
-		"build": "echo 'web: use wrangler deploy'",
-		"dev": "wrangler dev",
-		"start": "wrangler dev",
-		"deploy": "wrangler deploy",
-		"test": "vitest",
-		"typecheck": "tsc --noEmit",
-		"cf-typegen": "wrangler types"
+		"dev": "astro dev",
+		"build": "astro build",
+		"preview": "astro preview",
+		"deploy": "wrangler deploy"
+	},
+	"dependencies": {
+		"astro": "^5.0.0"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.12.4",
 		"@types/node": "^25.3.0",
 		"typescript": "^5.5.2",
-		"vitest": "~3.2.0",
 		"wrangler": "^4.67.0"
 	}
 }

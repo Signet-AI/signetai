@@ -1,3 +1,10 @@
+---
+title: "Skills"
+description: "Install, manage, and discover agent skills."
+order: 5
+section: "Core Concepts"
+---
+
 # Skills
 
 Install, manage, and discover agent skills. Skills are packaged instructions that extend what your agent can do.

@@ -1,3 +1,10 @@
+---
+title: "Self-Hosting"
+description: "Self-hosting the Signet daemon."
+order: 21
+section: "Infrastructure"
+---
+
 Self-Hosting the Signet Daemon
 ===============================
 

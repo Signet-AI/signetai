@@ -1,3 +1,10 @@
+---
+title: "HTTP API"
+description: "Signet daemon HTTP API reference."
+order: 10
+section: "Reference"
+---
+
 Signet Daemon HTTP API
 ======================
 

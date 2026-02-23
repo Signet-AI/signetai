@@ -1,3 +1,10 @@
+---
+title: "Memory System"
+description: "The core persistence layer — storage, search, and retrieval."
+order: 3
+section: "Core Concepts"
+---
+
 Memory System
 =============
 

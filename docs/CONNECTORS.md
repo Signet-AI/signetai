@@ -1,3 +1,10 @@
+---
+title: "Connectors"
+description: "Platform-specific connector framework."
+order: 14
+section: "Reference"
+---
+
 Connectors
 ==========
 

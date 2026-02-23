@@ -1,3 +1,10 @@
+---
+title: "Diagnostics"
+description: "Health scoring and system diagnostics."
+order: 18
+section: "Infrastructure"
+---
+
 Diagnostics and Repair
 ===
 

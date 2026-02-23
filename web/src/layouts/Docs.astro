@@ -1,0 +1,31 @@
+---
+import Base from './Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import Sidebar from '../components/docs/Sidebar.astro';
+import '../styles/docs.css';
+
+interface Props {
+  title: string;
+  description?: string;
+  currentSlug?: string;
+}
+
+const { title, description, currentSlug } = Astro.props;
+---
+
+<Base title={`${title} — Signet Docs`} description={description}>
+  <Nav />
+
+  <div class="docs-shell">
+    <Sidebar currentSlug={currentSlug} />
+
+    <main class="docs-main">
+      <article class="prose">
+        <slot />
+      </article>
+
+      <Footer />
+    </main>
+  </div>
+</Base>

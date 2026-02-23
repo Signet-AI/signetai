@@ -1,3 +1,10 @@
+---
+title: "Secrets"
+description: "Encrypted storage for API keys and sensitive values."
+order: 7
+section: "Core Concepts"
+---
+
 # Secrets Management
 
 Encrypted storage for API keys and sensitive values. Agents can *use* secrets without being able to read or expose them.

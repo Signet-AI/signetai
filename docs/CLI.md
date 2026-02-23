@@ -1,3 +1,10 @@
+---
+title: "CLI Reference"
+description: "Complete reference for all Signet CLI commands."
+order: 9
+section: "Reference"
+---
+
 Signet CLI Reference
 ====================
 

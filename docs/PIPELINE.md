@@ -1,3 +1,10 @@
+---
+title: "Memory Pipeline"
+description: "LLM-based memory extraction and processing pipeline."
+order: 4
+section: "Core Concepts"
+---
+
 Memory Pipeline v2
 ==================
 

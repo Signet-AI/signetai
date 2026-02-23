@@ -1,3 +1,10 @@
+---
+title: "Memory Skills"
+description: "Built-in memory management skills."
+order: 6
+section: "Core Concepts"
+---
+
 # Built-in Memory Skills
 
 > **Status:** Implemented

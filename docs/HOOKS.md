@@ -1,3 +1,10 @@
+---
+title: "Hooks"
+description: "Session lifecycle hooks for harness integration."
+order: 8
+section: "Core Concepts"
+---
+
 # Hooks System
 
 Signet's hook system lets harnesses integrate with session lifecycle events — injecting memory at session start, capturing summaries at compaction, and triggering MEMORY.md synthesis.

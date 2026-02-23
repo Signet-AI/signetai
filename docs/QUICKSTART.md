@@ -1,3 +1,10 @@
+---
+title: "Quickstart"
+description: "Get Signet running in about five minutes."
+order: 1
+section: "Getting Started"
+---
+
 Quickstart
 ===
 

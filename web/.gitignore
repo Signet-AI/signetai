@@ -2,3 +2,5 @@
 !.dev.vars.example
 .wrangler/
 worker-configuration.d.ts
+dist/
+.astro/

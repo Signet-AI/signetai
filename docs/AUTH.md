@@ -1,3 +1,10 @@
+---
+title: "Authentication"
+description: "Token-based authentication for the daemon API."
+order: 13
+section: "Reference"
+---
+
 Auth
 ===
 

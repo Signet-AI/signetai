@@ -1,3 +1,10 @@
+---
+title: "Architecture"
+description: "Full technical architecture documentation."
+order: 16
+section: "Infrastructure"
+---
+
 Signet Architecture
 ===================
 

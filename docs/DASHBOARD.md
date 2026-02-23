@@ -1,3 +1,10 @@
+---
+title: "Dashboard"
+description: "Web dashboard for monitoring and management."
+order: 17
+section: "Infrastructure"
+---
+
 Dashboard
 =========
 

@@ -1,3 +1,10 @@
+---
+title: "Analytics"
+description: "Usage analytics, timeline, and metrics."
+order: 19
+section: "Infrastructure"
+---
+
 Analytics, Timeline, and Diagnostics
 ===
 

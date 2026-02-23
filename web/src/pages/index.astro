@@ -1,0 +1,35 @@
+---
+import Base from '../layouts/Base.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import Hero from '../components/landing/Hero.astro';
+import Problem from '../components/landing/Problem.astro';
+import SecretsShowcase from '../components/landing/SecretsShowcase.astro';
+import Manifesto from '../components/landing/Manifesto.astro';
+import Comparison from '../components/landing/Comparison.astro';
+import CoreFeatures from '../components/landing/CoreFeatures.astro';
+import Pipeline from '../components/landing/Pipeline.astro';
+import Quickstart from '../components/landing/Quickstart.astro';
+import Trust from '../components/landing/Trust.astro';
+import Cta from '../components/landing/Cta.astro';
+import '../styles/landing.css';
+---
+
+<Base>
+  <Nav />
+  <Hero />
+  <Problem />
+  <SecretsShowcase />
+  <Manifesto />
+  <Comparison />
+  <CoreFeatures />
+  <Pipeline />
+  <Quickstart />
+  <Trust />
+  <Cta />
+  <Footer />
+
+  <script src="../scripts/theme.ts"></script>
+  <script src="../scripts/interactions.ts"></script>
+  <script src="../scripts/canvas-animations.ts"></script>
+</Base>

@@ -1,3 +1,10 @@
+---
+title: "Daemon"
+description: "Background service for file watching and HTTP API."
+order: 12
+section: "Reference"
+---
+
 Signet Daemon
 =============
 

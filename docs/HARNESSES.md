@@ -1,3 +1,10 @@
+---
+title: "Harnesses"
+description: "AI platform integrations and harness configuration."
+order: 15
+section: "Reference"
+---
+
 # Harnesses
 
 Harnesses are the AI platforms and tools that Signet integrates with. Signet syncs your agent identity and memory to each one.

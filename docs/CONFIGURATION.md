@@ -1,3 +1,10 @@
+---
+title: "Configuration"
+description: "Complete configuration reference for Signet."
+order: 2
+section: "Getting Started"
+---
+
 Configuration Reference
 =======================
 

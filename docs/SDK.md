@@ -1,3 +1,10 @@
+---
+title: "SDK"
+description: "Integration SDK for third-party applications."
+order: 11
+section: "Reference"
+---
+
 @signet/sdk
 ===
 
