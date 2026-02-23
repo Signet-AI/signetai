@@ -5039,6 +5039,458 @@ async function detectVectorSources(
 	return sources;
 }
 
+// ============================================================================
+// DID & Web3 Identity Commands
+// ============================================================================
+
+const didCmd = program.command("did").description("Manage agent decentralized identity (DID)");
+
+didCmd
+	.command("init")
+	.description("Initialize agent DID (generates keypair if needed)")
+	.action(async () => {
+		const { initializeAgentDid } = await import("@signet/core");
+		console.log(signetLogo());
+		console.log(chalk.bold("  DID Initialization\n"));
+
+		const spinner = ora("  Generating identity...").start();
+		try {
+			const result = await initializeAgentDid();
+			spinner.succeed("Identity initialized");
+			console.log();
+
+			if (result.keypairGenerated) {
+				console.log(chalk.green("  ✓ Ed25519 signing keypair generated"));
+			} else {
+				console.log(chalk.dim("  ✓ Existing keypair found"));
+			}
+			console.log(chalk.green(`  ✓ DID: ${chalk.cyan(result.didShort)}`));
+			if (result.yamlUpdated) {
+				console.log(chalk.green("  ✓ agent.yaml updated with DID"));
+			}
+			console.log(chalk.green(`  ✓ DID Document: ${result.didDocumentPath}`));
+			console.log();
+			console.log(chalk.dim("  Full DID:"));
+			console.log(chalk.cyan(`  ${result.did}`));
+		} catch (err) {
+			spinner.fail("Failed to initialize DID");
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		}
+	});
+
+didCmd
+	.command("show")
+	.description("Display the agent's DID")
+	.option("--full", "Show full DID (not abbreviated)")
+	.action(async (options) => {
+		const { getConfiguredDid, hasSigningKeypair } = await import("@signet/core");
+		const { formatDidShort } = await import("@signet/core");
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.log(chalk.yellow("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		if (options.full) {
+			console.log(did);
+		} else {
+			console.log(formatDidShort(did));
+		}
+	});
+
+didCmd
+	.command("document")
+	.description("Export the agent's DID Document (JSON)")
+	.option("-o, --output <path>", "Write to file instead of stdout")
+	.action(async (options) => {
+		const { getConfiguredDid, didToPublicKey, generateDidDocument } = await import("@signet/core");
+		const { writeFileSync } = require("fs");
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.log(chalk.yellow("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const publicKey = didToPublicKey(did);
+		const doc = generateDidDocument(did, publicKey);
+		const json = JSON.stringify(doc, null, 2);
+
+		if (options.output) {
+			writeFileSync(options.output, json);
+			console.log(chalk.green(`  ✓ DID Document written to ${options.output}`));
+		} else {
+			console.log(json);
+		}
+	});
+
+didCmd
+	.command("verify")
+	.description("Verify the agent's keypair and DID consistency")
+	.action(async () => {
+		const {
+			hasSigningKeypair,
+			getPublicKeyBytes,
+			signContent,
+			verifySignature,
+			getConfiguredDid,
+			publicKeyToDid,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  DID Verification\n"));
+
+		// Check keypair
+		if (!hasSigningKeypair()) {
+			console.log(chalk.red("  ✗ No signing keypair found"));
+			console.log(chalk.dim("  Run: signet did init"));
+			process.exit(1);
+		}
+		console.log(chalk.green("  ✓ Signing keypair exists"));
+
+		// Check DID in config
+		const configDid = getConfiguredDid();
+		if (!configDid) {
+			console.log(chalk.yellow("  ⚠ No DID in agent.yaml"));
+		} else {
+			console.log(chalk.green(`  ✓ DID in config: ${configDid.slice(0, 30)}...`));
+		}
+
+		// Verify keypair derives the same DID
+		const pubKey = await getPublicKeyBytes();
+		const derivedDid = publicKeyToDid(pubKey);
+		if (configDid && configDid !== derivedDid) {
+			console.log(chalk.red("  ✗ DID mismatch! Config DID doesn't match keypair."));
+			console.log(chalk.dim(`    Config:  ${configDid}`));
+			console.log(chalk.dim(`    Derived: ${derivedDid}`));
+			process.exit(1);
+		}
+		console.log(chalk.green("  ✓ DID matches keypair"));
+
+		// Test sign/verify round-trip
+		const testMessage = "signet-did-verification-test";
+		const sig = await signContent(testMessage);
+		const valid = await verifySignature(testMessage, sig, pubKey);
+		if (!valid) {
+			console.log(chalk.red("  ✗ Sign/verify round-trip FAILED"));
+			process.exit(1);
+		}
+		console.log(chalk.green("  ✓ Sign/verify round-trip passed"));
+		console.log();
+		console.log(chalk.green.bold("  All checks passed ✓"));
+	});
+
+// ============================================================================
+// Memory Signing Commands
+// ============================================================================
+
+const memoryCmd = program.command("memory").description("Memory provenance and verification");
+
+memoryCmd
+	.command("sign-backfill")
+	.description("Sign all unsigned memories with the agent's keypair")
+	.option("--dry-run", "Show what would be signed without making changes")
+	.action(async (options) => {
+		const { hasSigningKeypair, signContent, getPublicKeyBytes } = await import("@signet/core");
+		const { publicKeyToDid } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Memory Signing Backfill\n"));
+
+		if (!hasSigningKeypair()) {
+			console.log(chalk.red("  No signing keypair found. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			return;
+		}
+
+		const db = new Database(dbPath);
+		const pubKey = await getPublicKeyBytes();
+		const did = publicKeyToDid(pubKey);
+
+		// Count unsigned memories
+		const countRow = db.prepare(
+			"SELECT COUNT(*) as count FROM memories WHERE signature IS NULL AND is_deleted = 0"
+		).get() as { count: number } | undefined;
+		const unsignedCount = countRow?.count ?? 0;
+
+		if (unsignedCount === 0) {
+			console.log(chalk.green("  All memories are already signed ✓"));
+			db.close();
+			return;
+		}
+
+		console.log(chalk.dim(`  Found ${unsignedCount} unsigned memories`));
+
+		if (options.dryRun) {
+			console.log(chalk.yellow(`  Dry run: would sign ${unsignedCount} memories`));
+			db.close();
+			return;
+		}
+
+		const spinner = ora(`  Signing ${unsignedCount} memories...`).start();
+
+		// Fetch unsigned memories
+		const rows = db.prepare(
+			"SELECT id, content_hash, created_at FROM memories WHERE signature IS NULL AND is_deleted = 0"
+		).all() as Array<{ id: string; content_hash: string; created_at: string }>;
+
+		let signed = 0;
+		let failed = 0;
+
+		const updateStmt = db.prepare(
+			"UPDATE memories SET signature = ?, signer_did = ? WHERE id = ?"
+		);
+
+		for (const row of rows) {
+			try {
+				const payload = `${row.content_hash}|${row.created_at}|${did}`;
+				const signature = await signContent(payload);
+				updateStmt.run(signature, did, row.id);
+				signed++;
+
+				if (signed % 100 === 0) {
+					spinner.text = `  Signing memories... ${signed}/${unsignedCount}`;
+				}
+			} catch {
+				failed++;
+			}
+		}
+
+		db.close();
+		spinner.succeed(`Signed ${signed} memories`);
+		if (failed > 0) {
+			console.log(chalk.yellow(`  ⚠ ${failed} memories failed to sign`));
+		}
+	});
+
+memoryCmd
+	.command("verify-signatures")
+	.description("Verify signatures of signed memories")
+	.option("--limit <n>", "Maximum number to verify", "100")
+	.action(async (options) => {
+		const { verifySignature } = await import("@signet/core");
+		const { didToPublicKey } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Memory Signature Verification\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			return;
+		}
+
+		const db = new Database(dbPath);
+		const limit = parseInt(options.limit, 10) || 100;
+
+		const rows = db.prepare(
+			`SELECT id, content_hash, created_at, signature, signer_did
+			 FROM memories
+			 WHERE signature IS NOT NULL
+			 ORDER BY created_at DESC
+			 LIMIT ?`
+		).all(limit) as Array<{
+			id: string;
+			content_hash: string;
+			created_at: string;
+			signature: string;
+			signer_did: string;
+		}>;
+
+		if (rows.length === 0) {
+			console.log(chalk.yellow("  No signed memories found."));
+			db.close();
+			return;
+		}
+
+		let valid = 0;
+		let invalid = 0;
+		const spinner = ora(`  Verifying ${rows.length} signatures...`).start();
+
+		for (const row of rows) {
+			try {
+				const pubKey = didToPublicKey(row.signer_did);
+				const payload = `${row.content_hash}|${row.created_at}|${row.signer_did}`;
+				const isValid = await verifySignature(payload, row.signature, pubKey);
+				if (isValid) {
+					valid++;
+				} else {
+					invalid++;
+				}
+			} catch {
+				invalid++;
+			}
+		}
+
+		db.close();
+		spinner.succeed(`Verified ${rows.length} signatures`);
+		console.log(chalk.green(`  ✓ Valid: ${valid}`));
+		if (invalid > 0) {
+			console.log(chalk.red(`  ✗ Invalid: ${invalid}`));
+		}
+	});
+
+memoryCmd
+	.command("merkle")
+	.description("Compute Merkle root of all memories")
+	.option("--save", "Save the Merkle root to the database")
+	.action(async (options) => {
+		const { computeMerkleRoot, hashContent } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Memory Merkle Root\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			return;
+		}
+
+		const db = new Database(dbPath);
+		const spinner = ora("  Computing Merkle root...").start();
+
+		// Fetch all content hashes
+		const rows = db.prepare(
+			"SELECT content_hash FROM memories WHERE is_deleted = 0 ORDER BY created_at ASC"
+		).all() as Array<{ content_hash: string }>;
+
+		if (rows.length === 0) {
+			spinner.warn("No memories found");
+			db.close();
+			return;
+		}
+
+		// Hash them all with BLAKE2b for consistent Merkle leaves
+		const leafHashes: string[] = [];
+		for (const row of rows) {
+			leafHashes.push(await hashContent(row.content_hash));
+		}
+
+		const root = await computeMerkleRoot(leafHashes);
+		spinner.succeed("Merkle root computed");
+		console.log();
+		console.log(chalk.dim(`  Memories: ${rows.length}`));
+		console.log(chalk.cyan(`  Root:     ${root}`));
+
+		if (options.save) {
+			try {
+				const { getConfiguredDid, signContent } = await import("@signet/core");
+				const did = getConfiguredDid();
+				let sig: string | null = null;
+
+				if (did) {
+					sig = await signContent(root);
+				}
+
+				db.prepare(
+					`INSERT INTO merkle_roots
+					 (root_hash, memory_count, computed_at, signer_did, signature, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?)`
+				).run(root, rows.length, new Date().toISOString(), did, sig, new Date().toISOString());
+
+				console.log(chalk.green("  ✓ Saved to merkle_roots table"));
+			} catch (err) {
+				console.log(chalk.yellow(`  ⚠ Failed to save: ${(err as Error).message}`));
+			}
+		}
+
+		db.close();
+	});
+
+memoryCmd
+	.command("status")
+	.description("Show knowledge health and signing status")
+	.action(async () => {
+		const { getConfiguredDid, formatDidShort, hasSigningKeypair } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Knowledge Status\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			return;
+		}
+
+		const db = new Database(dbPath);
+
+		// Basic counts
+		const total = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE is_deleted = 0").get() as any)?.c ?? 0;
+		const signed = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE signature IS NOT NULL AND is_deleted = 0").get() as any)?.c ?? 0;
+		const unsigned = total - signed;
+
+		// Type breakdown
+		const types = db.prepare(
+			"SELECT type, COUNT(*) as c FROM memories WHERE is_deleted = 0 GROUP BY type ORDER BY c DESC"
+		).all() as Array<{ type: string; c: number }>;
+
+		// Merkle roots
+		let merkleCount = 0;
+		try {
+			merkleCount = (db.prepare("SELECT COUNT(*) as c FROM merkle_roots").get() as any)?.c ?? 0;
+		} catch {
+			// Table may not exist yet
+		}
+
+		db.close();
+
+		// Identity info
+		const did = getConfiguredDid();
+		const hasKeys = hasSigningKeypair();
+
+		console.log(chalk.bold("  Identity"));
+		if (did) {
+			console.log(chalk.green(`    DID:     ${formatDidShort(did)}`));
+		} else {
+			console.log(chalk.yellow(`    DID:     Not configured`));
+		}
+		console.log(`    Keypair: ${hasKeys ? chalk.green("✓") : chalk.yellow("✗ Not generated")}`);
+		console.log();
+
+		console.log(chalk.bold("  Memories"));
+		console.log(`    Total:    ${chalk.cyan(total.toString())}`);
+		console.log(`    Signed:   ${chalk.green(signed.toString())} ${total > 0 ? chalk.dim(`(${Math.round(signed / total * 100)}%)`) : ""}`);
+		if (unsigned > 0) {
+			console.log(`    Unsigned: ${chalk.yellow(unsigned.toString())}`);
+		}
+		console.log();
+
+		if (types.length > 0) {
+			console.log(chalk.bold("  Types"));
+			for (const t of types.slice(0, 8)) {
+				console.log(`    ${t.type.padEnd(16)} ${chalk.dim(t.c.toString())}`);
+			}
+			console.log();
+		}
+
+		console.log(chalk.bold("  Provenance"));
+		console.log(`    Merkle roots: ${chalk.cyan(merkleCount.toString())}`);
+
+		// Health score
+		const healthParts: number[] = [];
+		if (hasKeys) healthParts.push(25);
+		if (did) healthParts.push(25);
+		if (total > 0 && signed / total > 0.9) healthParts.push(25);
+		else if (total > 0 && signed / total > 0.5) healthParts.push(15);
+		if (merkleCount > 0) healthParts.push(25);
+		const health = healthParts.reduce((a, b) => a + b, 0);
+
+		console.log();
+		const healthColor = health >= 75 ? chalk.green : health >= 50 ? chalk.yellow : chalk.red;
+		console.log(chalk.bold(`  Health: ${healthColor(`${health}/100`)}`));
+	});
+
 program
 	.command("migrate-vectors")
 	.description("Migrate existing BLOB vectors to sqlite-vec format")
