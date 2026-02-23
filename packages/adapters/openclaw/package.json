@@ -1,6 +1,6 @@
 {
   "name": "@signetai/adapter-openclaw",
-  "version": "0.1.111",
+  "version": "0.1.112",
   "description": "Signet adapter for OpenClaw — runtime plugin for AI agent memory",
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +16,9 @@
     "openclaw.plugin.json"
   ],
   "openclaw": {
-    "extensions": ["./dist/index.js"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   },
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node && tsc --emitDeclarationOnly --declaration --outDir dist",
