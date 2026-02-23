@@ -384,6 +384,8 @@ bun src/cli.ts status    # Check status
 | `/api/diagnostics/*` | GET | Health scoring and system diagnostics |
 | `/api/repair/*` | POST | Repair actions for broken state |
 | `/api/analytics/*` | GET | Usage analytics and metrics |
+| `/api/analytics/continuity` | GET | Session continuity scores over time |
+| `/api/analytics/continuity/latest` | GET | Latest continuity score per project |
 | `/api/timeline/*` | GET | Event timeline |
 | `/api/git/*` | GET/POST | Git sync status and operations |
 | `/api/update/*` | GET/POST | Update check and apply |

@@ -20,6 +20,9 @@ export interface MemorySearchConfig {
 	alpha: number;
 	top_k: number;
 	min_score: number;
+	rehearsal_enabled: boolean;
+	rehearsal_weight: number;
+	rehearsal_half_life_days: number;
 }
 
 export { PIPELINE_FLAGS };
@@ -29,6 +32,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	enabled: false,
 	shadowMode: false,
 	mutationsFrozen: false,
+	semanticContradictionEnabled: false,
 	extraction: {
 		provider: "claude-code",
 		model: "haiku",
@@ -138,6 +142,8 @@ export function loadPipelineConfig(
 		shadowMode: raw.shadowMode === true,
 		mutationsFrozen:
 			raw.mutationsFrozen === true,
+		semanticContradictionEnabled:
+			raw.semanticContradictionEnabled === true,
 
 		extraction: {
 			provider: resolvedProvider,
@@ -310,7 +316,14 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			dimensions: 768,
 			base_url: "http://localhost:11434",
 		},
-		search: { alpha: 0.7, top_k: 20, min_score: 0.1 },
+		search: {
+			alpha: 0.7,
+			top_k: 20,
+			min_score: 0.1,
+			rehearsal_enabled: true,
+			rehearsal_weight: 0.1,
+			rehearsal_half_life_days: 30,
+		},
 		pipelineV2: { ...DEFAULT_PIPELINE_V2 },
 		auth: parseAuthConfig(undefined, agentsDir),
 	};
@@ -353,6 +366,15 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				defaults.search.min_score = Number.parseFloat(
 					String(srch.min_score ?? "0.3"),
 				);
+			}
+			if (srch.rehearsal_enabled !== undefined) {
+				defaults.search.rehearsal_enabled = srch.rehearsal_enabled === true;
+			}
+			if (typeof srch.rehearsal_weight === "number") {
+				defaults.search.rehearsal_weight = Math.max(0, Math.min(1, srch.rehearsal_weight));
+			}
+			if (typeof srch.rehearsal_half_life_days === "number") {
+				defaults.search.rehearsal_half_life_days = Math.max(1, srch.rehearsal_half_life_days);
 			}
 
 			defaults.pipelineV2 = loadPipelineConfig(yaml);

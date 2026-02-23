@@ -86,7 +86,9 @@ important facts are stored in the database. You do NOT need to:
 **Context injection per prompt:**
 When the user sends you a message, the daemon automatically searches
 your memory database for relevant entries and injects them into your
-context. You do NOT need to:
+context. Frequently-recalled memories are boosted in ranking
+(rehearsal boost), and recent session topics are used to predict what
+context you'll need next (anticipatory recall). You do NOT need to:
 - Call `signet recall` before answering questions
 - Manually query your memory database
 - Pre-load context at the start of conversations
@@ -96,6 +98,17 @@ The daemon watches `~/.agents/` for changes. When files change:
 - Changes are auto-committed to git (if enabled)
 - `AGENTS.md` changes propagate to harness configs (`CLAUDE.md`,
   OpenCode AGENTS.md, etc.) within 2 seconds
+
+**Session continuity scoring:**
+After each session, the daemon scores how useful pre-loaded memories
+were vs. how much you had to re-explain. This trend is tracked over
+time and used to improve memory selection.
+
+**Contradiction detection:**
+When the memory pipeline encounters a potential contradiction (e.g.
+"uses PostgreSQL" vs. "migrated to MongoDB"), it can flag the conflict
+for review instead of silently overwriting. Semantic contradiction
+detection is opt-in via config.
 
 **Pre-installed skills:**
 These skills are included and available immediately after install:
@@ -121,7 +134,19 @@ piece of information — session extraction handles the rest.
 **Explicit memory search:**
 Use `signet recall "query"` when you need to search across all
 memories for something specific that auto-injection did not surface.
+You can scope searches by time with `--since` and `--until` flags.
 This is for targeted, deliberate queries — not routine use.
+
+**Embedding health:**
+If memory search feels degraded or returns poor results, audit your
+embedding coverage with `signet embed audit`. If gaps are found, run
+`signet embed backfill` to regenerate missing embeddings.
+
+**Portable export:**
+Use `signet export` to create a portable bundle of your entire agent
+(identity, memories, entities, relations, skills). This is useful for
+backups, migration to a new machine, or sharing agent state. Import
+a bundle with `signet import <path>`.
 
 **Secrets management:**
 Signet includes an encrypted secrets vault at `~/.agents/.secrets/`.
@@ -452,10 +477,12 @@ signet stop && signet start  # Restart
 ```bash
 signet status                # Verify daemon is running
 signet recall "anything"     # Test search
+signet embed audit           # Check embedding coverage
 ```
 If the daemon is running but recall returns nothing, memories may not
 have been extracted yet. The extraction pipeline runs asynchronously
-after sessions end.
+after sessions end. If `embed audit` shows low coverage, run
+`signet embed backfill` to regenerate missing embeddings.
 
 **Skills not found:**
 ```bash
@@ -463,6 +490,12 @@ signet sync                  # Reinstall built-in templates and skills
 ```
 
 **Embeddings not working:**
+First, check embedding health:
+```bash
+signet embed audit           # Shows coverage stats
+signet embed backfill        # Regenerate missing embeddings
+```
+
 Ollama is optional. Without it, Signet falls back to keyword search
 (FTS5), which still works well. If you want vector search:
 ```bash
@@ -501,6 +534,17 @@ signet daemon logs           # View logs
 # Memory
 signet remember "content"    # Save an important memory
 signet recall "query"        # Search all memories
+signet recall "q" --since 2026-01-01  # Time-scoped search
+signet recall "q" --until 2026-02-01  # Upper bound
+
+# Embeddings
+signet embed audit           # Check embedding coverage
+signet embed backfill        # Fix missing embeddings
+
+# Export / Import
+signet export                # Export agent to portable bundle
+signet export --output ./backup.zip
+signet import ./backup       # Import agent bundle
 
 # Secrets
 signet secret put NAME       # Store a secret

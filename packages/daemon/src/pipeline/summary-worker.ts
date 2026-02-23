@@ -256,6 +256,111 @@ async function processJob(
 			.slice(0, 10)
 			.map((fact) => truncateForLog(fact.content, 240)),
 	});
+
+	// --- Session continuity scoring ---
+	try {
+		await scoreContinuity(accessor, provider, job, result.summary);
+	} catch (e) {
+		logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
+			error: (e as Error).message,
+		});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Continuity scoring
+// ---------------------------------------------------------------------------
+
+function buildContinuityPrompt(
+	transcript: string,
+	summaryPreview: string,
+): string {
+	return `Evaluate how well pre-loaded memories served this coding session.
+
+Consider:
+- Were the memories relevant to what was discussed?
+- Did the user have to re-explain things that memory should have known?
+- Were there gaps where prior context would have helped?
+
+Return ONLY a JSON object (no markdown fences):
+{
+  "score": 0.0-1.0,
+  "memories_used": <number of pre-loaded memories that were actually relevant>,
+  "novel_context_count": <number of times user had to re-explain something>,
+  "reasoning": "Brief explanation of the score"
+}
+
+Score guide: 1.0 = memories perfectly covered all needed context, 0.0 = memories were useless and everything was re-explained.
+
+Session summary:
+${summaryPreview}
+
+Session transcript (last 4000 chars):
+${transcript.slice(-4000)}`;
+}
+
+interface ContinuityResult {
+	readonly score: number;
+	readonly memories_used: number;
+	readonly novel_context_count: number;
+	readonly reasoning: string;
+}
+
+async function scoreContinuity(
+	accessor: DbAccessor,
+	provider: LlmProvider,
+	job: SummaryJobRow,
+	summary: string,
+): Promise<void> {
+	const prompt = buildContinuityPrompt(job.transcript, summary.slice(0, 2000));
+
+	const raw = await provider.generate(prompt, { timeoutMs: LLM_TIMEOUT_MS });
+
+	let jsonStr = raw.trim();
+	const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+	if (fenceMatch) jsonStr = fenceMatch[1].trim();
+	jsonStr = jsonStr.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+
+	const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+	if (typeof parsed.score !== "number") return;
+
+	const result: ContinuityResult = {
+		score: Math.max(0, Math.min(1, parsed.score)),
+		memories_used: typeof parsed.memories_used === "number" ? parsed.memories_used : 0,
+		novel_context_count: typeof parsed.novel_context_count === "number" ? parsed.novel_context_count : 0,
+		reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
+	};
+
+	const id = crypto.randomUUID();
+	const now = new Date().toISOString();
+
+	accessor.withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO session_scores
+			 (id, session_key, project, harness, score, memories_recalled,
+			  memories_used, novel_context_count, reasoning, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			id,
+			job.session_key || "unknown",
+			job.project || null,
+			job.harness,
+			result.score,
+			0, // memories_recalled — would need session-start data to fill accurately
+			result.memories_used,
+			result.novel_context_count,
+			result.reasoning,
+			now,
+		);
+	});
+
+	logger.info("summary-worker", "Session continuity scored", {
+		score: result.score,
+		memoriesUsed: result.memories_used,
+		novelContext: result.novel_context_count,
+		sessionKey: job.session_key,
+		project: job.project,
+	});
 }
 
 // ---------------------------------------------------------------------------

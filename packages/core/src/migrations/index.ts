@@ -16,6 +16,7 @@ import { up as documentsAndConnectors } from "./007-documents-and-connectors";
 import { up as embeddingsUniqueHash } from "./008-embeddings-unique-hash";
 import { up as summaryJobs } from "./009-summary-jobs";
 import { up as umapCache } from "./010-umap-cache";
+import { up as sessionScores } from "./011-session-scores";
 
 // -- Public interface consumed by Database.init() --
 
@@ -65,6 +66,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 10,
 		name: "umap-cache",
 		up: umapCache,
+	},
+	{
+		version: 11,
+		name: "session-scores",
+		up: sessionScores,
 	},
 ];
 

@@ -12,6 +12,7 @@ import type { PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
 import type { DecisionConfig, FactDecisionProposal } from "./decision";
 import { extractFactsAndEntities } from "./extraction";
+import { detectSemanticContradiction } from "./contradiction";
 import { runShadowDecisions } from "./decision";
 import { logger } from "../logger";
 import { txIngestEnvelope, txModifyMemory, txForgetMemory } from "../transactions";
@@ -414,12 +415,14 @@ function applyPhaseCWrites(
 		readonly entityCount: number;
 		readonly minFactConfidenceForWrite: number;
 		readonly allowUpdateDelete: boolean;
+		readonly semanticContradictions?: ReadonlyMap<number, { detected: boolean; confidence: number; reasoning: string }>;
 	},
 	embeddingByHash: ReadonlyMap<string, readonly number[]>,
 ): AppliedWriteStats {
 	const stats = zeroWriteStats();
 
-	for (const proposal of proposals) {
+	for (let proposalIdx = 0; proposalIdx < proposals.length; proposalIdx++) {
+		const proposal = proposals[proposalIdx];
 		if (proposal.action === "add") {
 			if (proposal.fact.confidence < meta.minFactConfidenceForWrite) {
 				stats.skippedLowConfidence++;
@@ -605,6 +608,23 @@ function applyPhaseCWrites(
 				const { storageContent, normalizedContent, contentHash } = normalized;
 				const vector = embeddingByHash.get(contentHash) ?? null;
 				const now = new Date().toISOString();
+
+				// Block update if semantic contradiction was detected
+				const semConflict = meta.semanticContradictions?.get(proposalIdx);
+				if (semConflict?.detected) {
+					stats.reviewNeeded++;
+					stats.blockedDestructive++;
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						blockedReason: "semantic_contradiction",
+						reviewNeeded: true,
+						contradictionRisk: true,
+					});
+					continue;
+				}
 
 				const result = txModifyMemory(db, {
 					memoryId: targetId,
@@ -837,6 +857,40 @@ export function startWorker(
 			}
 		}
 
+		// --- Semantic contradiction check (pre-tx, async) ---
+		const contradictionFlags = new Map<number, { detected: boolean; confidence: number; reasoning: string }>();
+		if (
+			controlledWritesEnabled &&
+			pipelineCfg.semanticContradictionEnabled &&
+			autonomousCfg.allowUpdateDelete
+		) {
+			for (let i = 0; i < decisions.proposals.length; i++) {
+				const proposal = decisions.proposals[i];
+				if (proposal.action !== "update" || !proposal.targetContent) continue;
+
+				// Only run semantic check when syntactic check returned false
+				// and there's enough lexical overlap to suggest related content
+				const factTokens = tokenize(proposal.fact.content);
+				const targetTokens = tokenize(proposal.targetContent);
+				const overlap = overlapCount(factTokens, targetTokens);
+
+				if (overlap >= 3 && !detectContradictionRisk(proposal.fact.content, proposal.targetContent)) {
+					try {
+						const result = await detectSemanticContradiction(
+							proposal.fact.content,
+							proposal.targetContent,
+							provider,
+						);
+						if (result.detected && result.confidence >= 0.7) {
+							contradictionFlags.set(i, result);
+						}
+					} catch {
+						// Non-fatal, skip semantic check for this proposal
+					}
+				}
+			}
+		}
+
 		let writeStats = zeroWriteStats();
 
 		// Record everything atomically.
@@ -853,6 +907,7 @@ export function startWorker(
 						entityCount: extraction.entities.length,
 						minFactConfidenceForWrite: extractionCfg.minConfidence,
 						allowUpdateDelete: autonomousCfg.allowUpdateDelete,
+						semanticContradictions: contradictionFlags,
 					},
 					embeddingByHash,
 				);

@@ -36,7 +36,7 @@ function buildExtractionPrompt(content: string): string {
 
 Return JSON with two arrays: "facts" and "entities".
 
-Each fact: {"content": "...", "type": "fact|preference|decision|procedural|semantic", "confidence": 0.0-1.0}
+Each fact: {"content": "...", "type": "fact|preference|decision|rationale|procedural|semantic", "confidence": 0.0-1.0}
 Each entity: {"source": "...", "relationship": "...", "target": "...", "confidence": 0.0-1.0}
 
 IMPORTANT — Atomic facts:
@@ -48,7 +48,9 @@ GOOD: "The @signet/connector-opencode install() function writes pre-bundled sign
 BAD: "Uses PostgreSQL instead of MongoDB"
 GOOD: "The auth service uses PostgreSQL instead of MongoDB for better relational query support"
 
-Types: fact (objective info), preference (user likes/dislikes), decision (choices made), procedural (how-to knowledge), semantic (concepts/definitions).
+Types: fact (objective info), preference (user likes/dislikes), decision (choices made), rationale (WHY a decision was made — reasoning, alternatives considered, tradeoffs), procedural (how-to knowledge), semantic (concepts/definitions).
+
+When you see a decision with reasoning, extract BOTH a decision fact AND a rationale fact. The rationale should capture the WHY, including alternatives considered and tradeoffs.
 
 Examples:
 
@@ -62,10 +64,11 @@ Output:
   {"source": "User", "relationship": "uses", "target": "vim keybindings", "confidence": 0.9}
 ]}
 
-Input: "Decided to use PostgreSQL instead of MongoDB for the auth service"
+Input: "Decided to use PostgreSQL instead of MongoDB for the auth service because relational queries suit the access-control schema better and we need ACID transactions"
 Output:
 {"facts": [
-  {"content": "The auth service uses PostgreSQL instead of MongoDB because relational queries suit the access-control schema better", "type": "decision", "confidence": 0.85}
+  {"content": "The auth service uses PostgreSQL instead of MongoDB for its database", "type": "decision", "confidence": 0.85},
+  {"content": "PostgreSQL was chosen over MongoDB for the auth service because: (1) relational queries suit the access-control schema, (2) ACID transactions needed for auth state changes. MongoDB was rejected due to lack of native join support.", "type": "rationale", "confidence": 0.85}
 ], "entities": [
   {"source": "auth service", "relationship": "uses", "target": "PostgreSQL", "confidence": 0.85},
   {"source": "auth service", "relationship": "rejected", "target": "MongoDB", "confidence": 0.8}

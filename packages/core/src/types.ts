@@ -156,6 +156,7 @@ export interface PipelineV2Config {
 	readonly enabled: boolean;
 	readonly shadowMode: boolean;
 	readonly mutationsFrozen: boolean;
+	readonly semanticContradictionEnabled: boolean;
 
 	// Grouped sub-objects
 	readonly extraction: PipelineExtractionConfig;
@@ -173,6 +174,7 @@ export const MEMORY_TYPES = [
 	"fact",
 	"preference",
 	"decision",
+	"rationale",
 	"daily-log",
 	"episodic",
 	"procedural",

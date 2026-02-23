@@ -95,6 +95,7 @@ import { createFilesystemConnector } from "./connectors/filesystem";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import { rerank, noopReranker, type RerankCandidate } from "./pipeline/reranker";
+import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createProviderTracker, getDiagnostics } from "./diagnostics";
 import {
 	createAnalyticsCollector,
@@ -2846,6 +2847,7 @@ app.post("/api/memory/recall", async (c) => {
 		pinned?: boolean;
 		importance_min?: number;
 		since?: string;
+		until?: string;
 	};
 
 	try {
@@ -2893,6 +2895,10 @@ app.post("/api/memory/recall", async (c) => {
 		filterParts.push("m.created_at >= ?");
 		filterArgs.push(body.since);
 	}
+	if (body.until) {
+		filterParts.push("m.created_at <= ?");
+		filterArgs.push(body.until);
+	}
 	const filterClause = filterParts.length
 		? " AND " + filterParts.join(" AND ")
 		: "";
@@ -2934,12 +2940,13 @@ app.post("/api/memory/recall", async (c) => {
 
 	// --- Vector search via sqlite-vec ---
 	const vectorMap = new Map<string, number>();
+	let queryVecF32: Float32Array | null = null;
 	try {
 		const queryVec = await fetchEmbedding(query, cfg.embedding);
 		if (queryVec) {
-			const qf32 = new Float32Array(queryVec);
+			queryVecF32 = new Float32Array(queryVec);
 			getDbAccessor().withReadDb((db) => {
-				const vecResults = vectorSearch(db as any, qf32, {
+				const vecResults = vectorSearch(db as any, queryVecF32!, {
 					limit: cfg.search.top_k,
 					type: body.type as "fact" | "preference" | "decision" | undefined,
 				});
@@ -2980,6 +2987,50 @@ app.post("/api/memory/recall", async (c) => {
 
 	scored.sort((a, b) => b.score - a.score);
 
+	// --- Rehearsal boost: frequently accessed memories rank higher ---
+	if (cfg.search.rehearsal_enabled && cfg.search.rehearsal_weight > 0 && scored.length > 0) {
+		try {
+			const rehearsalIds = scored.map((s) => s.id);
+			const placeholders = rehearsalIds.map(() => "?").join(", ");
+			const accessRows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT id, access_count, last_accessed
+							 FROM memories
+							 WHERE id IN (${placeholders})`,
+						)
+						.all(...rehearsalIds) as Array<{
+						id: string;
+						access_count: number;
+						last_accessed: string | null;
+					}>,
+			);
+
+			const nowMs = Date.now();
+			const halfLifeMs = cfg.search.rehearsal_half_life_days * 86_400_000;
+			const rw = cfg.search.rehearsal_weight;
+
+			const accessMap = new Map(accessRows.map((r) => [r.id, r]));
+			for (const s of scored) {
+				const row = accessMap.get(s.id);
+				if (!row || row.access_count <= 0) continue;
+
+				const daysSinceAccess = row.last_accessed
+					? (nowMs - new Date(row.last_accessed).getTime()) / 86_400_000
+					: cfg.search.rehearsal_half_life_days;
+				const recencyFactor = Math.pow(0.5, daysSinceAccess / cfg.search.rehearsal_half_life_days);
+				const boost = rw * Math.log(row.access_count + 1) * recencyFactor;
+				s.score *= 1 + boost;
+			}
+			scored.sort((a, b) => b.score - a.score);
+		} catch (e) {
+			logger.warn("memory", "Rehearsal boost failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
 	// --- Graph boost: pull up memories linked via knowledge graph ---
 	if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.graph.boostWeight > 0) {
 		try {
@@ -3003,7 +3054,7 @@ app.post("/api/memory/recall", async (c) => {
 	}
 
 	// --- Optional reranker hook ---
-	if (cfg.pipelineV2.reranker.enabled && cfg.pipelineV2.reranker.model) {
+	if (cfg.pipelineV2.reranker.enabled) {
 		try {
 			const topForRerank = scored.slice(0, cfg.pipelineV2.reranker.topN);
 			const rerankIds = topForRerank.map((s) => s.id);
@@ -3026,7 +3077,11 @@ app.post("/api/memory/recall", async (c) => {
 				content: contentMap.get(s.id) ?? "",
 				score: s.score,
 			}));
-			const reranked = await rerank(query, candidates, noopReranker, {
+			// Use embedding reranker when query vector is available, else noop
+		const provider = queryVecF32
+			? createEmbeddingReranker(getDbAccessor(), queryVecF32)
+			: noopReranker;
+		const reranked = await rerank(query, candidates, provider, {
 				topN: cfg.pipelineV2.reranker.topN,
 				timeoutMs: cfg.pipelineV2.reranker.timeoutMs,
 				model: cfg.pipelineV2.reranker.model,
@@ -3112,6 +3167,79 @@ app.post("/api/memory/recall", async (c) => {
 					created_at: r.created_at,
 				};
 			});
+
+		// --- Decision-rationale linking: auto-fetch linked rationale memories ---
+		const decisionIds = results
+			.filter((r) => r.type === "decision")
+			.map((r) => r.id);
+		const existingIds = new Set(results.map((r) => r.id));
+
+		if (decisionIds.length > 0 && cfg.pipelineV2.graph.enabled) {
+			try {
+				const supplementary = getDbAccessor().withReadDb((db) => {
+					// Find entities linked to decision memories
+					const dPlaceholders = decisionIds.map(() => "?").join(", ");
+					const entityIds = db
+						.prepare(
+							`SELECT DISTINCT entity_id FROM memory_entity_mentions
+							 WHERE memory_id IN (${dPlaceholders})`,
+						)
+						.all(...decisionIds) as Array<{ entity_id: string }>;
+
+					if (entityIds.length === 0) return [];
+
+					// Find rationale memories linked to same entities
+					const ePlaceholders = entityIds.map(() => "?").join(", ");
+					const eIds = entityIds.map((r) => r.entity_id);
+
+					return db
+						.prepare(
+							`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
+							        m.importance, m.who, m.project, m.created_at
+							 FROM memory_entity_mentions mem
+							 JOIN memories m ON m.id = mem.memory_id
+							 WHERE mem.entity_id IN (${ePlaceholders})
+							   AND m.type = 'rationale'
+							   AND m.is_deleted = 0
+							 LIMIT 10`,
+						)
+						.all(...eIds) as Array<{
+						id: string;
+						content: string;
+						type: string;
+						tags: string | null;
+						pinned: number;
+						importance: number;
+						who: string;
+						project: string | null;
+						created_at: string;
+					}>;
+				});
+
+				for (const r of supplementary) {
+					if (existingIds.has(r.id)) continue;
+					existingIds.add(r.id);
+					results.push({
+						id: r.id,
+						content: r.content,
+						score: 0,
+						source: "graph",
+						type: r.type,
+						tags: r.tags,
+						pinned: !!r.pinned,
+						importance: r.importance,
+						who: r.who,
+						project: r.project,
+						created_at: r.created_at,
+						supplementary: true,
+					});
+				}
+			} catch (e) {
+				logger.warn("memory", "Rationale linking failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
 
 		return c.json({
 			results,
@@ -5233,6 +5361,83 @@ app.get("/api/analytics/memory-safety", (c) => {
 		recentErrors: recentMutationErrors,
 		errorSummary: analyticsCollector.getErrorSummary(),
 	});
+});
+
+app.get("/api/analytics/continuity", (c) => {
+	const project = c.req.query("project");
+	const limit = parseInt(c.req.query("limit") ?? "50", 10);
+
+	const scores = getDbAccessor().withReadDb((db) => {
+		if (project) {
+			return db
+				.prepare(
+					`SELECT id, session_key, project, harness, score,
+					        memories_recalled, memories_used, novel_context_count,
+					        reasoning, created_at
+					 FROM session_scores
+					 WHERE project = ?
+					 ORDER BY created_at DESC
+					 LIMIT ?`,
+				)
+				.all(project, limit) as Array<Record<string, unknown>>;
+		}
+		return db
+			.prepare(
+				`SELECT id, session_key, project, harness, score,
+				        memories_recalled, memories_used, novel_context_count,
+				        reasoning, created_at
+				 FROM session_scores
+				 ORDER BY created_at DESC
+				 LIMIT ?`,
+			)
+			.all(limit) as Array<Record<string, unknown>>;
+	});
+
+	// Compute trend
+	const scoreValues = scores.map((s) => s.score as number).reverse();
+	const trend =
+		scoreValues.length >= 2
+			? scoreValues[scoreValues.length - 1] - scoreValues[0]
+			: 0;
+	const avg =
+		scoreValues.length > 0
+			? scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length
+			: 0;
+
+	return c.json({
+		scores,
+		summary: {
+			count: scores.length,
+			average: Math.round(avg * 100) / 100,
+			trend: Math.round(trend * 100) / 100,
+			latest: scores[0]?.score ?? null,
+		},
+	});
+});
+
+app.get("/api/analytics/continuity/latest", (c) => {
+	const scores = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT project, score, created_at
+					 FROM session_scores
+					 WHERE id IN (
+					   SELECT id FROM session_scores s2
+					   WHERE s2.project = session_scores.project
+					   ORDER BY s2.created_at DESC
+					   LIMIT 1
+					 )
+					 ORDER BY created_at DESC`,
+				)
+				.all() as Array<{
+				project: string | null;
+				score: number;
+				created_at: string;
+			}>,
+	);
+
+	return c.json({ scores });
 });
 
 app.get("/api/timeline/:id", (c) => {
