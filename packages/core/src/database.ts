@@ -33,8 +33,26 @@ function getPlatformPackageName(): string {
 // Handles bun's hoisted node_modules structure where platform packages
 // are in separate .bun directories
 function findSqliteVecExtension(): string | null {
+	// Explicit override — always wins
+	const envPath = process.env.SIGNET_VEC_PATH;
+	if (envPath && existsSync(envPath)) return envPath;
+
 	const platformPkg = getPlatformPackageName();
 	const extFile = `vec0.${getExtensionSuffix()}`;
+
+	// Try `npm root -g` to find the actual global prefix (works regardless of runtime)
+	try {
+		const { execFileSync } = require("child_process");
+		const npmRoot = (execFileSync("npm", ["root", "-g"], { encoding: "utf8", timeout: 3000 }) as string).trim();
+		if (npmRoot) {
+			const direct = join(npmRoot, platformPkg, extFile);
+			if (existsSync(direct)) return direct;
+			const nested = join(npmRoot, "signetai", "node_modules", platformPkg, extFile);
+			if (existsSync(nested)) return nested;
+		}
+	} catch {
+		// npm not available or timed out — continue with static paths
+	}
 
 	// Try common locations in order
 	const searchPaths = [
