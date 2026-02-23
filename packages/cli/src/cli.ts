@@ -5313,11 +5313,11 @@ program
 // signet embed - Embedding management
 // ============================================================================
 
-const embedCmd = program
+const embedMgmtCmd = program
 	.command("embed")
 	.description("Manage memory embeddings");
 
-embedCmd
+embedMgmtCmd
 	.command("backfill")
 	.description("Backfill embeddings for memories missing vectors")
 	.option("--batch-size <n>", "Number of memories per batch", "50")
@@ -5389,7 +5389,7 @@ embedCmd
 		}
 	});
 
-embedCmd
+embedMgmtCmd
 	.command("gaps")
 	.description("Show count of memories missing embeddings")
 	.action(async () => {
