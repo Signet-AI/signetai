@@ -502,10 +502,16 @@ function setupInteractions(): void {
 		requestRedraw();
 	};
 
+	const onPointerLeave = () => {
+		onPointerUp();
+		// Reset hover dedup cache so re-entering fires onhovernode correctly
+		lastHoveredId = null;
+	};
+
 	target.addEventListener("pointerdown", onPointerDown);
 	target.addEventListener("pointermove", onPointerMove);
 	target.addEventListener("pointerup", onPointerUp);
-	target.addEventListener("pointerleave", onPointerUp);
+	target.addEventListener("pointerleave", onPointerLeave);
 	target.addEventListener("click", onClick);
 	target.addEventListener("wheel", onWheel, { passive: false });
 
@@ -513,7 +519,7 @@ function setupInteractions(): void {
 		target.removeEventListener("pointerdown", onPointerDown);
 		target.removeEventListener("pointermove", onPointerMove);
 		target.removeEventListener("pointerup", onPointerUp);
-		target.removeEventListener("pointerleave", onPointerUp);
+		target.removeEventListener("pointerleave", onPointerLeave);
 		target.removeEventListener("click", onClick);
 		target.removeEventListener("wheel", onWheel);
 	};

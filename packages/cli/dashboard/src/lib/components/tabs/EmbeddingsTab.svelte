@@ -195,9 +195,14 @@ function toggleSource(who: string): void {
 
 // Fix 1: position hover card directly via transform, no reactive state
 function handleGraphMouseMove(event: MouseEvent): void {
-	if (!graphRegion || !hoverCardEl) return;
+	if (!graphRegion) return;
 	hoverX = event.clientX - graphRegionRect.left;
 	hoverY = event.clientY - graphRegionRect.top;
+	positionHoverCard();
+}
+
+function positionHoverCard(): void {
+	if (!hoverCardEl) return;
 	const maxX = Math.max(12, graphRegionRect.width - 334);
 	const maxY = Math.max(12, graphRegionRect.height - 170);
 	const left = Math.min(Math.max(12, hoverX + 14), maxX);
@@ -866,6 +871,11 @@ $effect(() => {
 		ro.disconnect();
 		window.removeEventListener("scroll", updateRect);
 	};
+});
+
+// Position the hover card as soon as it mounts (bind:this fires)
+$effect(() => {
+	if (hoverCardEl) positionHoverCard();
 });
 </script>
 
