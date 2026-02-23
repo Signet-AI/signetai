@@ -86,6 +86,11 @@ cd packages/sdk && bun run build
 Svelte 5 + Tailwind v4 + bits-ui + CodeMirror 6 + 3d-force-graph.
 Built to static files, served by daemon at `/`.
 
+All UI work must use components from **shadcn-svelte**
+(https://www.shadcn-svelte.com). LLM reference:
+https://www.shadcn-svelte.com/llms.txt. Prefer existing shadcn-svelte
+components over custom implementations.
+
 ```bash
 cd packages/cli/dashboard
 bun install
