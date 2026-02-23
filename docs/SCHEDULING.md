@@ -1,3 +1,10 @@
+---
+title: "Scheduled Tasks"
+description: "Schedule recurring agent prompts via cron-based daemon tasks."
+order: 8
+section: "Features"
+---
+
 # Scheduled Tasks
 
 Schedule recurring agent prompts that the Signet daemon executes
