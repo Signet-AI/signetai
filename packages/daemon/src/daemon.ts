@@ -6045,13 +6045,32 @@ ${fileList}
 `;
 	};
 
+	// Read and compose additional identity files
+	const identityExtras = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"]
+		.map((name) => {
+			const p = join(AGENTS_DIR, name);
+			if (!existsSync(p)) return "";
+			try {
+				const c = readFileSync(p, "utf-8").trim();
+				if (!c) return "";
+				const header = name.replace(".md", "");
+				return `\n## ${header}\n\n${c}`;
+			} catch {
+				return "";
+			}
+		})
+		.filter(Boolean)
+		.join("\n");
+
+	const composed = withBlock + identityExtras;
+
 	// Sync to Claude Code (~/.claude/CLAUDE.md)
 	const claudeDir = join(homedir(), ".claude");
 	if (existsSync(claudeDir)) {
 		try {
 			writeFileSync(
 				join(claudeDir, "CLAUDE.md"),
-				buildHeader("CLAUDE.md") + withBlock,
+				buildHeader("CLAUDE.md") + composed,
 			);
 			logger.sync.harness("claude-code", "~/.claude/CLAUDE.md");
 		} catch (e) {
@@ -6065,7 +6084,7 @@ ${fileList}
 		try {
 			writeFileSync(
 				join(opencodeDir, "AGENTS.md"),
-				buildHeader("AGENTS.md") + withBlock,
+				buildHeader("AGENTS.md") + composed,
 			);
 			logger.sync.harness("opencode", "~/.config/opencode/AGENTS.md");
 		} catch (e) {
@@ -6112,8 +6131,15 @@ function startFileWatcher() {
 		logger.info("watcher", "File changed", { path });
 		scheduleAutoCommit(path);
 
-		// If AGENTS.md changed, sync to harness configs
-		if (path.endsWith("AGENTS.md")) {
+		// If any identity file changed, sync to harness configs
+		const SYNC_TRIGGER_FILES = [
+			"AGENTS.md",
+			"SOUL.md",
+			"IDENTITY.md",
+			"USER.md",
+			"MEMORY.md",
+		];
+		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f))) {
 			scheduleSyncHarnessConfigs();
 		}
 

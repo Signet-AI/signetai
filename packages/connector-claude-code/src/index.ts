@@ -353,10 +353,14 @@ export class ClaudeCodeConnector extends BaseConnector {
 			// Use base class method to strip existing block
 			const userContent = this.stripSignetBlock(raw);
 			const header = this.generateHeader(agentsMdPath);
+
+			// Compose additional identity files
+			const extras = this.composeIdentityExtras(basePath);
+
 			// Use base class method to build block
 			writeFileSync(
 				claudeMdPath,
-				header + this.buildSignetBlock() + userContent,
+				header + this.buildSignetBlock() + userContent + extras,
 			);
 			return claudeMdPath;
 		}
@@ -387,16 +391,22 @@ export class ClaudeCodeConnector extends BaseConnector {
 			parts.push(identity.soul.content);
 		}
 
-		// Add memory content
-		if (identity.memory?.content) {
-			parts.push("\n# Memory\n\n");
-			parts.push(identity.memory.content);
-		}
-
 		// Add identity content if available
 		if (identity.identity?.content) {
 			parts.push("\n# Identity\n\n");
 			parts.push(identity.identity.content);
+		}
+
+		// Add user profile
+		if (identity.user?.content) {
+			parts.push("\n# About Your User\n\n");
+			parts.push(identity.user.content);
+		}
+
+		// Add memory content
+		if (identity.memory?.content) {
+			parts.push("\n# Memory\n\n");
+			parts.push(identity.memory.content);
 		}
 
 		return parts.join("");

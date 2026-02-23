@@ -485,8 +485,14 @@ export class OpenCodeConnector extends BaseConnector {
 		const userContent = this.stripSignetBlock(raw);
 		const header = this.generateHeader(sourcePath);
 
+		// Compose additional identity files
+		const extras = this.composeIdentityExtras(basePath);
+
 		const destPath = join(this.getOpenCodePath(), "AGENTS.md");
-		writeFileSync(destPath, header + this.buildSignetBlock() + userContent);
+		writeFileSync(
+			destPath,
+			header + this.buildSignetBlock() + userContent + extras,
+		);
 
 		return destPath;
 	}

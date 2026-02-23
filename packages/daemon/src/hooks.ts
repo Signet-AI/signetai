@@ -269,17 +269,25 @@ export function isDuplicate(db: Database, content: string): boolean {
 	return false;
 }
 
-function readMemoryMd(charBudget: number): string | undefined {
-	const memoryMd = join(AGENTS_DIR, "MEMORY.md");
-	if (!existsSync(memoryMd)) return undefined;
+function readIdentityFile(
+	fileName: string,
+	charBudget: number,
+): string | undefined {
+	const filePath = join(AGENTS_DIR, fileName);
+	if (!existsSync(filePath)) return undefined;
 
 	try {
-		const content = readFileSync(memoryMd, "utf-8");
+		const content = readFileSync(filePath, "utf-8").trim();
+		if (!content) return undefined;
 		if (content.length <= charBudget) return content;
 		return `${content.slice(0, charBudget)}\n[truncated]`;
 	} catch {
 		return undefined;
 	}
+}
+
+function readMemoryMd(charBudget: number): string | undefined {
+	return readIdentityFile("MEMORY.md", charBudget);
 }
 
 function readAgentsMd(charBudget: number): string | undefined {
@@ -589,6 +597,30 @@ export function handleSessionStart(
 		injectParts.push(
 			`You are ${identity.name}${identity.description ? `, ${identity.description}` : ""}.`,
 		);
+	}
+
+	// Inject additional identity files
+	const soulContent = includeIdentity
+		? readIdentityFile("SOUL.md", 4000)
+		: undefined;
+	const identityContent = includeIdentity
+		? readIdentityFile("IDENTITY.md", 2000)
+		: undefined;
+	const userContent = includeIdentity
+		? readIdentityFile("USER.md", 6000)
+		: undefined;
+
+	if (soulContent) {
+		injectParts.push("\n## Soul\n");
+		injectParts.push(soulContent);
+	}
+	if (identityContent) {
+		injectParts.push("\n## Identity\n");
+		injectParts.push(identityContent);
+	}
+	if (userContent) {
+		injectParts.push("\n## About Your User\n");
+		injectParts.push(userContent);
 	}
 
 	if (memoryMdContent) {
