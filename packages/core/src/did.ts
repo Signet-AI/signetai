@@ -418,9 +418,10 @@ export function formatDidShort(did: string): string {
 
   const multibaseValue = did.slice(DID_KEY_PREFIX.length);
 
-  // Show first 4 chars + last 3 chars of the multibase portion.
-  const prefixChars = 4;
-  const suffixChars = 3;
+  // Show first 6 chars + last 6 chars of the multibase portion.
+  // (Previously 4+3=7 chars, which had collision risk across agents.)
+  const prefixChars = 6;
+  const suffixChars = 6;
 
   if (multibaseValue.length <= prefixChars + suffixChars) {
     // Short enough to show in full (shouldn't happen with real Ed25519 keys).

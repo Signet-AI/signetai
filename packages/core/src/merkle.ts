@@ -5,6 +5,23 @@
  * Provides construction, proof generation, and verification of Merkle trees
  * over content hashes. All hashing uses BLAKE2b-256 via libsodium.
  *
+ * ## Hash Pipeline (by design)
+ *
+ * Memory content goes through a double-hash pipeline:
+ * 1. Content → SHA-256 → `contentHash` (computed at ingest time in daemon)
+ * 2. `contentHash` → BLAKE2b-256 (with LEAF_PREFIX domain separation) → Merkle leaf
+ *
+ * This is intentional: SHA-256 provides the content-addressable ID (compatible
+ * with IPFS/CAS systems), while BLAKE2b provides the Merkle tree hashing with
+ * domain separation. The double-hash does NOT weaken security — it's equivalent
+ * to a single hash of the content with extra domain separation steps.
+ *
+ * ## Odd-layer handling
+ *
+ * When a layer has an odd number of nodes, the unpaired last node is PROMOTED
+ * directly to the next layer (not duplicated). This prevents the collision
+ * where `[A,B,C]` and `[A,B,C,C]` would produce identical roots.
+ *
  * @example
  * ```typescript
  * import { hashContent, computeMerkleRoot, buildMerkleTree, generateProof, verifyProof } from './merkle';

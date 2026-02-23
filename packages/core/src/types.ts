@@ -191,6 +191,7 @@ export const MEMORY_TYPES = [
 	"procedural",
 	"semantic",
 	"system",
+	"pattern",
 ] as const;
 export type MemoryType = (typeof MEMORY_TYPES)[number];
 
@@ -235,12 +236,16 @@ export interface Memory {
 	confidence: number;
 	sourceId?: string;
 	sourceType?: string;
+	/** Tags — stored as comma-separated string in DB, parsed to array in rowToMemory */
 	tags: string[];
 	createdAt: string;
 	updatedAt: string;
 	updatedBy: string;
+	/** @deprecated Legacy v1 field — always empty object ({}) in current schema */
 	vectorClock: Record<string, number>;
+	/** @deprecated Legacy v1 field — always 1 in current schema */
 	version: number;
+	/** @deprecated Legacy v1 field — always false in current schema */
 	manualOverride: boolean;
 	// v2 fields (optional for backward compatibility)
 	contentHash?: string;

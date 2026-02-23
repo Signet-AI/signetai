@@ -5357,8 +5357,7 @@ didCmd
 	.description("Display the agent's DID")
 	.option("--full", "Show full DID (not abbreviated)")
 	.action(async (options) => {
-		const { getConfiguredDid, hasSigningKeypair } = await import("@signet/core");
-		const { formatDidShort } = await import("@signet/core");
+		const { getConfiguredDid, formatDidShort } = await import("@signet/core");
 
 		const did = getConfiguredDid();
 		if (!did) {
@@ -5388,6 +5387,22 @@ didCmd
 		}
 
 		const publicKey = didToPublicKey(did);
+
+		// Verify the keypair on disk still matches the configured DID
+		const { hasSigningKeypair, getPublicKeyBytes } = await import("@signet/core");
+		if (hasSigningKeypair()) {
+			try {
+				const storedPub = await getPublicKeyBytes();
+				const didPub = publicKey;
+				if (storedPub.length !== didPub.length || !storedPub.every((b, i) => b === didPub[i])) {
+					console.error(chalk.red("  ⚠ Warning: keypair on disk does not match configured DID!"));
+					console.error(chalk.red("    The DID Document may be stale. Run: signet did init"));
+				}
+			} catch {
+				// Keypair load failed — warning only, don't block document export
+			}
+		}
+
 		const doc = generateDidDocument(did, publicKey);
 		const json = JSON.stringify(doc, null, 2);
 
@@ -5403,6 +5418,7 @@ didCmd
 	.command("verify")
 	.description("Verify the agent's keypair and DID consistency")
 	.action(async () => {
+		try {
 		const {
 			hasSigningKeypair,
 			getPublicKeyBytes,
@@ -5453,6 +5469,10 @@ didCmd
 		console.log(chalk.green("  ✓ Sign/verify round-trip passed"));
 		console.log();
 		console.log(chalk.green.bold("  All checks passed ✓"));
+		} catch (err) {
+			console.error(chalk.red(`  ✗ Verification failed: ${err instanceof Error ? err.message : String(err)}`));
+			process.exit(1);
+		}
 	});
 
 // ============================================================================

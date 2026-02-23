@@ -414,6 +414,9 @@ async function decryptBytes(encoded: string, key: Uint8Array): Promise<Uint8Arra
 	const nonce = combined.slice(0, sodium.crypto_secretbox_NONCEBYTES);
 	const box = combined.slice(sodium.crypto_secretbox_NONCEBYTES);
 
+	// crypto_secretbox_open_easy throws on failure in most builds, but
+	// some sodium-wrappers versions return null/undefined instead.
+	// The null check is defensive — not dead code.
 	const plaintext = sodium.crypto_secretbox_open_easy(box, nonce, key);
 	if (!plaintext) {
 		throw new Error(
@@ -777,8 +780,14 @@ export async function verifySignature(
 		}
 
 		return sodium.crypto_sign_verify_detached(sigBytes, message, publicKey);
-	} catch {
-		// Malformed base64 or other decoding errors → invalid signature
+	} catch (err) {
+		// Log the actual error for debugging — silent false makes issues hard to diagnose
+		if (process.env.SIGNET_DEBUG) {
+			console.warn(
+				"[crypto] verifySignature failed:",
+				err instanceof Error ? err.message : String(err),
+			);
+		}
 		return false;
 	}
 }

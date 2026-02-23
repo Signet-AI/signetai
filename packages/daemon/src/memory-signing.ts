@@ -7,6 +7,17 @@
  *
  * Signing is optional — if no keypair exists, memories are stored unsigned.
  * The `autoSign` flag in agent.yaml controls whether signing is attempted.
+ *
+ * ## Signing scope
+ *
+ * Only memories created via the HTTP API (`/api/memory/remember`) are signed.
+ * Pipeline-extracted facts and document chunks are NOT signed because:
+ * 1. They're derived from already-signed parent memories
+ * 2. Signing every extracted fact would be prohibitively slow
+ * 3. The Merkle tree provides batch provenance for groups of memories
+ *
+ * If wallet integration requires signing pipeline output, call
+ * `signEnvelope()` explicitly from the pipeline workers.
  */
 
 import {
