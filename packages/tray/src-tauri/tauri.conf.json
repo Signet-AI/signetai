@@ -1,0 +1,36 @@
+{
+  "$schema": "./gen/schemas/desktop-schema.json",
+  "productName": "Signet Tray",
+  "version": "0.1.81",
+  "identifier": "ai.signet.tray",
+  "build": {
+    "beforeDevCommand": "bun run build:ts",
+    "beforeBuildCommand": "bun run build:ts",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "capabilities": ["default"]
+    },
+    "trayIcon": {
+      "iconPath": "icons/signet-stopped.png",
+      "iconAsTemplate": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage"],
+    "icon": [
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png"
+    ],
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  }
+}

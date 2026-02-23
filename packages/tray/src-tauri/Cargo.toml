@@ -1,0 +1,22 @@
+[package]
+name = "signet-tray"
+version = "0.1.81"
+edition = "2021"
+description = "Signet system tray application"
+
+[lib]
+name = "signet_tray_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+open = "5"
+libc = "0.2"
+png = "0.17"

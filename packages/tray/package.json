@@ -1,0 +1,20 @@
+{
+  "name": "@signet/tray",
+  "version": "0.1.81",
+  "private": true,
+  "description": "Signet system tray application",
+  "scripts": {
+    "build:ts": "bun build src-ts/index.ts --outdir dist --target browser --minify && cp index.html dist/index.html",
+    "dev": "cargo tauri dev",
+    "build": "cargo tauri build",
+    "tauri": "cargo tauri"
+  },
+  "dependencies": {
+    "@signet/sdk": "workspace:*",
+    "@tauri-apps/api": "^2.5.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0",
+    "typescript": "^5.7.0"
+  }
+}
