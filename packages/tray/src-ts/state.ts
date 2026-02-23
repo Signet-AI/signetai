@@ -33,6 +33,11 @@ export type DaemonState =
       readonly recentMemories: RecentMemory[];
       // Ingestion rate (memories/hour)
       readonly ingestionRate: number | null;
+      // Perception
+      readonly perceptionActive: boolean | null;
+      readonly perceptionChannels: string[] | null;
+      readonly perceptionCapturesToday: number | null;
+      readonly perceptionSkillsCount: number | null;
     }
   | { readonly kind: "stopped" }
   | { readonly kind: "error"; readonly message: string };
@@ -72,6 +77,16 @@ let healthData: HealthData | null = null;
 let memoriesData: MemoriesData | null = null;
 let diagnosticsData: DiagnosticsData | null = null;
 let embeddingsData: EmbeddingsData | null = null;
+
+// Perception data
+interface PerceptionData {
+  running: boolean;
+  channels: string[];
+  capturesToday: number;
+  skillsCount: number;
+}
+
+let perceptionData: PerceptionData | null = null;
 
 // For ingestion rate tracking
 let lastMemoryCount: number | null = null;
@@ -203,6 +218,38 @@ export async function fetchEmbeddings(baseUrl: string): Promise<void> {
   }
 }
 
+export async function fetchPerception(baseUrl: string): Promise<void> {
+  try {
+    const res = await fetch(`${baseUrl}/api/perception/status`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      perceptionData = null;
+      return;
+    }
+    const data = await res.json();
+
+    const adapters = data.adapters || {};
+    const channels: string[] = [];
+    let totalCaptures = 0;
+
+    for (const [key, info] of Object.entries(adapters) as [string, any][]) {
+      if (info.enabled) channels.push(key);
+      totalCaptures += info.captureCount || 0;
+    }
+
+    perceptionData = {
+      running: data.running === true,
+      channels,
+      capturesToday: totalCaptures,
+      skillsCount: data.skillsCount || 0,
+    };
+  } catch {
+    // Perception endpoints may not exist yet — that's fine
+    perceptionData = null;
+  }
+}
+
 export function buildCurrentState(): DaemonState {
   if (!healthData) {
     return { kind: "stopped" };
@@ -229,6 +276,10 @@ export function buildCurrentState(): DaemonState {
     queueDepth: diagnosticsData?.queueDepth ?? null,
     recentMemories: memoriesData?.memories ?? [],
     ingestionRate: currentIngestionRate,
+    perceptionActive: perceptionData?.running ?? null,
+    perceptionChannels: perceptionData?.channels ?? null,
+    perceptionCapturesToday: perceptionData?.capturesToday ?? null,
+    perceptionSkillsCount: perceptionData?.skillsCount ?? null,
   };
 }
 
@@ -237,4 +288,5 @@ export function resetState(): void {
   memoriesData = null;
   diagnosticsData = null;
   embeddingsData = null;
+  perceptionData = null;
 }

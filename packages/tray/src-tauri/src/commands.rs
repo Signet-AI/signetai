@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::daemon;
 use crate::tray;
@@ -32,6 +32,10 @@ pub enum TrayState {
         queue_depth: Option<u64>,
         recent_memories: Option<Vec<RecentMemory>>,
         ingestion_rate: Option<f64>,
+        perception_active: Option<bool>,
+        perception_channels: Option<Vec<String>>,
+        perception_captures_today: Option<u64>,
+        perception_skills_count: Option<u64>,
     },
     #[serde(rename = "stopped")]
     Stopped,
@@ -119,6 +123,10 @@ pub async fn update_tray(
             queue_depth,
             recent_memories,
             ingestion_rate,
+            perception_active,
+            perception_channels,
+            perception_captures_today,
+            perception_skills_count,
         } => {
             let empty_memories = Vec::new();
             let memories = recent_memories.as_deref().unwrap_or(&empty_memories);
@@ -136,6 +144,10 @@ pub async fn update_tray(
                 *queue_depth,
                 memories,
                 *ingestion_rate,
+                *perception_active,
+                perception_channels.as_deref(),
+                *perception_captures_today,
+                *perception_skills_count,
             )
             .map_err(|e| e.to_string())?;
 
@@ -254,4 +266,210 @@ pub async fn quit_search_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// Perception Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn perception_start(channels: Vec<String>) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({ "channels": channels });
+
+    let res = client
+        .post(format!("{}/api/perception/start", DAEMON_URL))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn perception_stop() -> Result<(), String> {
+    let client = reqwest::Client::new();
+
+    let res = client
+        .post(format!("{}/api/perception/stop", DAEMON_URL))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn perception_status() -> Result<String, String> {
+    let client = reqwest::Client::new();
+
+    let res = client
+        .get(format!("{}/api/perception/status", DAEMON_URL))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    let text = res.text().await.map_err(|e| format!("Failed to read body: {}", e))?;
+    Ok(text)
+}
+
+#[tauri::command]
+pub async fn perception_toggle_channel(
+    channel: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "channel": channel,
+        "enabled": enabled,
+    });
+
+    let res = client
+        .post(format!("{}/api/perception/channel", DAEMON_URL))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn perception_pause() -> Result<(), String> {
+    let client = reqwest::Client::new();
+
+    let res = client
+        .post(format!("{}/api/perception/pause", DAEMON_URL))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn perception_resume() -> Result<(), String> {
+    let client = reqwest::Client::new();
+
+    let res = client
+        .post(format!("{}/api/perception/resume", DAEMON_URL))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_cognitive_profile() -> Result<String, String> {
+    let client = reqwest::Client::new();
+
+    let res = client
+        .get(format!("{}/api/perception/profile", DAEMON_URL))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    let text = res.text().await.map_err(|e| format!("Failed to read body: {}", e))?;
+    Ok(text)
+}
+
+#[tauri::command]
+pub async fn get_expertise_graph() -> Result<String, String> {
+    let client = reqwest::Client::new();
+
+    let res = client
+        .get(format!("{}/api/perception/graph", DAEMON_URL))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    let text = res.text().await.map_err(|e| format!("Failed to read body: {}", e))?;
+    Ok(text)
+}
+
+#[tauri::command]
+pub async fn open_perception_dashboard(app: AppHandle) -> Result<(), String> {
+    // If window already exists, just focus it
+    if let Some(win) = app.get_webview_window("perception") {
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let url = WebviewUrl::App("perception.html".into());
+    WebviewWindowBuilder::new(&app, "perception", url)
+        .title("Signet Perception")
+        .inner_size(900.0, 700.0)
+        .resizable(true)
+        .center()
+        .visible(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn quit_perception_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("perception") {
+        win.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

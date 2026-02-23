@@ -20,6 +20,10 @@ export interface TrayUpdate {
   readonly queue_depth?: number | null;
   readonly recent_memories?: TrayRecentMemory[];
   readonly ingestion_rate?: number | null;
+  readonly perception_active?: boolean | null;
+  readonly perception_channels?: string[] | null;
+  readonly perception_captures_today?: number | null;
+  readonly perception_skills_count?: number | null;
   readonly message?: string;
 }
 
@@ -57,6 +61,10 @@ export function buildTrayUpdate(state: DaemonState): TrayUpdate {
           importance: m.importance,
         })),
         ingestion_rate: state.ingestionRate,
+        perception_active: state.perceptionActive,
+        perception_channels: state.perceptionChannels,
+        perception_captures_today: state.perceptionCapturesToday,
+        perception_skills_count: state.perceptionSkillsCount,
       };
     }
 

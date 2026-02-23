@@ -4,6 +4,7 @@ import {
   fetchMemories,
   fetchDiagnostics,
   fetchEmbeddings,
+  fetchPerception,
   buildCurrentState,
   resetState,
   type DaemonState,
@@ -18,6 +19,7 @@ const HEALTH_STOPPED_MS = 2_000;
 const MEMORIES_MS = 15_000;
 const DIAGNOSTICS_MS = 30_000;
 const EMBEDDINGS_MS = 60_000;
+const PERCEPTION_MS = 15_000;
 
 let lastUpdateJson = "";
 let isRunning = false;
@@ -43,6 +45,7 @@ async function pollHealth(): Promise<void> {
     fetchMemories(DAEMON_URL);
     fetchDiagnostics(DAEMON_URL);
     fetchEmbeddings(DAEMON_URL);
+    fetchPerception(DAEMON_URL);
   } else if (!alive && isRunning) {
     isRunning = false;
     resetState();
@@ -83,8 +86,19 @@ async function pollEmbeddings(): Promise<void> {
   setTimeout(pollEmbeddings, EMBEDDINGS_MS);
 }
 
+// --- Perception poller ---
+async function pollPerception(): Promise<void> {
+  if (isRunning) {
+    await fetchPerception(DAEMON_URL);
+    const state = buildCurrentState();
+    await updateTray(state);
+  }
+  setTimeout(pollPerception, PERCEPTION_MS);
+}
+
 // Start all pollers
 pollHealth();
 setTimeout(pollMemories, 3_000); // stagger initial fetches
 setTimeout(pollDiagnostics, 4_000);
 setTimeout(pollEmbeddings, 5_000);
+setTimeout(pollPerception, 6_000);
