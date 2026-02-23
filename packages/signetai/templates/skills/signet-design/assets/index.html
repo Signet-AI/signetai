@@ -1,0 +1,1982 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design Brief</title>
+  <link rel="stylesheet" href="globals.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* === SVG noise grain === */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      pointer-events: none;
+      opacity: 0.04;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+    }
+
+    /* === Background Grid === */
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(to right, var(--color-border) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--color-border) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: radial-gradient(circle at 50% 30%, black 20%, transparent 80%);
+      -webkit-mask-image: radial-gradient(circle at 50% 30%, black 20%, transparent 80%);
+      opacity: 0.6;
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      max-width: 820px;
+      margin: 0 auto;
+      padding: var(--space-xl) var(--space-lg);
+    }
+
+    /* === Theme toggle === */
+    .theme-toggle {
+      position: fixed;
+      top: 20px;
+      right: 24px;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      background: none;
+      border: 1px solid var(--color-border-strong);
+      padding: 6px 12px;
+      font-family: var(--font-mono);
+      font-size: 0.5625rem;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+      transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+    }
+    .theme-toggle:hover {
+      color: var(--color-text);
+      border-color: var(--color-text-muted);
+    }
+    .theme-toggle .toggle-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--color-text-muted);
+      transition: background var(--dur) var(--ease);
+    }
+    .theme-toggle:hover .toggle-dot {
+      background: var(--color-text);
+    }
+
+    /* === Bleed typography === */
+    .bleed-text {
+      position: fixed;
+      right: -0.08em;
+      bottom: -0.06em;
+      font-family: var(--font-display);
+      font-size: clamp(12rem, 22vw, 20rem);
+      font-weight: 700;
+      line-height: 0.8;
+      letter-spacing: -0.02em;
+      text-transform: uppercase;
+      color: var(--color-text-bright);
+      opacity: 0.025;
+      pointer-events: none;
+      z-index: 0;
+      user-select: none;
+    }
+
+    /* === Floating panels (depth layers) === */
+    .floating-panels {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+    .fp {
+      position: absolute;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.01) 0%, transparent 100%);
+      border: 1px solid var(--color-border);
+      animation: fp-drift 60s ease-in-out infinite alternate;
+    }
+    .fp::before {
+      content: '';
+      position: absolute;
+      top: -1px; left: -1px;
+      width: 6px; height: 6px;
+      border-top: 1px solid var(--color-text-muted);
+      border-left: 1px solid var(--color-text-muted);
+    }
+    .fp::after {
+      content: '';
+      position: absolute;
+      bottom: -1px; right: -1px;
+      width: 6px; height: 6px;
+      border-bottom: 1px solid var(--color-text-muted);
+      border-right: 1px solid var(--color-text-muted);
+    }
+    .fp--raised {
+      background: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 4px,
+        var(--color-border) 4px,
+        var(--color-border) 5px
+      );
+      border-color: var(--color-border-strong);
+    }
+    @keyframes fp-drift {
+      0% { transform: translate(0, 0); }
+      25% { transform: translate(3px, -2px); }
+      50% { transform: translate(-2px, 4px); }
+      75% { transform: translate(4px, 1px); }
+      100% { transform: translate(-1px, -3px); }
+    }
+    .fp:nth-child(2) { animation-duration: 45s; animation-delay: -8s; }
+    .fp:nth-child(3) { animation-duration: 55s; animation-delay: -15s; }
+    .fp:nth-child(4) { animation-duration: 50s; animation-delay: -22s; }
+    .fp:nth-child(5) { animation-duration: 65s; animation-delay: -30s; }
+    .fp:nth-child(6) { animation-duration: 40s; animation-delay: -5s; }
+
+    /* === Metadata fragments === */
+    .meta-fragments {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+    .mf {
+      position: absolute;
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+      opacity: 0.35;
+      white-space: nowrap;
+      animation: mf-flicker 8s ease-in-out infinite;
+    }
+    .mf--bright {
+      color: var(--color-text);
+      opacity: 0.08;
+      font-size: 0.5rem;
+    }
+    @keyframes mf-flicker {
+      0%, 92%, 100% { opacity: var(--mf-base-opacity, 0.35); }
+      94% { opacity: 0.08; }
+      96% { opacity: var(--mf-base-opacity, 0.35); }
+      97% { opacity: 0.12; }
+    }
+    .mf:nth-child(2) { animation-delay: -3s; animation-duration: 11s; }
+    .mf:nth-child(3) { animation-delay: -7s; animation-duration: 9s; }
+    .mf:nth-child(4) { animation-delay: -1s; animation-duration: 13s; }
+    .mf:nth-child(5) { animation-delay: -5s; animation-duration: 7s; }
+    .mf:nth-child(6) { animation-delay: -9s; animation-duration: 10s; }
+    .mf:nth-child(7) { animation-delay: -2s; animation-duration: 14s; }
+    .mf:nth-child(8) { animation-delay: -6s; animation-duration: 12s; }
+    .mf:nth-child(9) { animation-delay: -4s; animation-duration: 8s; }
+    .mf:nth-child(10) { animation-delay: -11s; animation-duration: 15s; }
+    .mf:nth-child(11) { animation-delay: -8s; animation-duration: 9s; }
+
+    /* === Cursor coordinate readout === */
+    .cursor-coords {
+      position: fixed;
+      pointer-events: none;
+      z-index: 9998;
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      letter-spacing: 0.08em;
+      color: var(--color-text-muted);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      white-space: nowrap;
+    }
+    .cursor-coords.active { opacity: 0.5; }
+
+    /* === Scan line === */
+    .scan-line {
+      position: fixed;
+      left: 0;
+      width: 100%;
+      height: 1px;
+      background: linear-gradient(90deg,
+        transparent 0%,
+        var(--color-text-muted) 15%,
+        var(--color-text) 50%,
+        var(--color-text-muted) 85%,
+        transparent 100%
+      );
+      opacity: 0;
+      pointer-events: none;
+      z-index: 9997;
+      transform: translateY(-100vh);
+    }
+
+    /* === Hero zone === */
+    .hero-zone {
+      position: relative;
+      min-height: 380px;
+      margin-bottom: var(--space-2xl);
+      display: flex;
+      align-items: flex-end;
+    }
+
+    .hero-canvas-wrap {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+
+    #dither-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0.35;
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      padding: var(--space-2xl) var(--space-xl);
+      border-left: 1px solid var(--color-border-strong);
+      border-bottom: 1px solid var(--color-border-strong);
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.02) 0%, transparent 50%);
+    }
+    .hero-content::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -3px;
+      width: 5px;
+      height: 1px;
+      background: var(--color-text-muted);
+    }
+    .hero-content::after {
+      content: '';
+      position: absolute;
+      bottom: -3px;
+      right: 0;
+      width: 1px;
+      height: 5px;
+      background: var(--color-text-muted);
+    }
+    /* Top-right tick to complete the open bracket */
+    .hero-content-tick {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 5px;
+      height: 1px;
+      background: var(--color-text-muted);
+    }
+
+    .hero-title {
+      font-family: var(--font-display);
+      font-size: 4rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      line-height: 0.9;
+      color: var(--color-text-bright);
+      text-transform: uppercase;
+    }
+
+    .hero-sub {
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      color: var(--color-accent);
+      margin-top: var(--space-md);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .hero-sub::before {
+      content: '> ';
+      color: var(--color-text-muted);
+    }
+
+    .hero-meta {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      margin-top: var(--space-2xl);
+      border: 1px solid var(--color-border-strong);
+      background: var(--color-surface);
+    }
+    .hero-meta-item {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: var(--space-md) var(--space-lg);
+      border-right: 1px solid var(--color-border-strong);
+    }
+    .hero-meta-item:last-child {
+      border-right: none;
+    }
+    .hero-meta-label {
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+    }
+    .hero-meta-value {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      color: var(--color-text);
+      letter-spacing: 0.04em;
+    }
+
+    /* === Schematic decorators === */
+    .schematic-circle {
+      position: absolute;
+      border: 1px solid var(--color-border-strong);
+      border-radius: 50%;
+      pointer-events: none;
+      opacity: 0.8;
+      animation: node-pulse 6s ease-in-out infinite;
+    }
+    .schematic-circle:nth-child(2) { animation-delay: -2s; animation-duration: 8s; }
+    .schematic-circle:nth-child(3) { animation-delay: -4s; animation-duration: 5s; }
+    @keyframes node-pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.04); opacity: 0.7; }
+    }
+    .schematic-circle::before,
+    .schematic-circle::after {
+      content: '';
+      position: absolute;
+      background: var(--color-border-strong);
+    }
+    .schematic-circle::before {
+      width: 1px;
+      height: 8px;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .schematic-circle::after {
+      width: 8px;
+      height: 1px;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .sc-inner {
+      position: absolute;
+      inset: 4px;
+      border: 1px dashed var(--color-border-strong);
+      border-radius: 50%;
+      animation: spin 20s linear infinite;
+    }
+    .schematic-circle:nth-child(even) .sc-inner {
+      animation-direction: reverse;
+      animation-duration: 30s;
+    }
+    @keyframes spin {
+      100% { transform: rotate(360deg); }
+    }
+
+    /* === SVG connector overlay === */
+    .connector-svg {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+    .connector-svg g {
+      transition: opacity 0.3s ease;
+    }
+    .connector-svg line,
+    .connector-svg path {
+      stroke: var(--color-border-strong);
+      stroke-width: 1;
+      fill: none;
+      opacity: 0.3;
+      transition: opacity 0.3s ease, stroke 0.3s ease, stroke-width 0.3s ease;
+    }
+    .connector-svg .conn-dashed {
+      stroke-dasharray: 4 6;
+      animation: dash-flow 15s linear infinite;
+    }
+    .connector-svg .conn-dashed-rev {
+      stroke-dasharray: 4 6;
+      animation: dash-flow-rev 15s linear infinite;
+    }
+    @keyframes dash-flow {
+      to { stroke-dashoffset: -100; }
+    }
+    @keyframes dash-flow-rev {
+      to { stroke-dashoffset: 100; }
+    }
+    .connector-svg .conn-dot {
+      fill: var(--color-surface);
+      stroke: var(--color-text-muted);
+      stroke-width: 1px;
+      r: 2.5;
+      opacity: 0.8;
+      transition: opacity 0.3s ease, fill 0.3s ease, stroke 0.3s ease;
+    }
+    .connector-svg .conn-packet {
+      fill: var(--color-text-muted);
+      opacity: 0;
+      transition: r 0.3s ease, fill 0.3s ease, filter 0.3s ease;
+    }
+    .connector-svg .conn-label {
+      font-family: var(--font-mono);
+      font-size: 7px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      fill: var(--color-text-muted);
+      opacity: 0.4;
+      transition: opacity 0.3s ease, fill 0.3s ease;
+    }
+    /* Highlight state for edges connected to hovered node */
+    .connector-svg g.conn-highlight path {
+      stroke: var(--color-text);
+      stroke-width: 1.5;
+      opacity: 0.8;
+    }
+    .connector-svg g.conn-highlight .conn-dot {
+      fill: var(--color-text-bright);
+      stroke: var(--color-text-bright);
+      opacity: 1;
+    }
+    .connector-svg g.conn-highlight .conn-label {
+      fill: var(--color-text);
+      opacity: 0.9;
+    }
+    .connector-svg g.conn-highlight .conn-packet {
+      r: 2.5;
+      fill: var(--color-text-bright);
+      filter: drop-shadow(0 0 3px var(--color-text-bright));
+    }
+
+    /* Vertical sidebar */
+    .sidebar-vert {
+      position: fixed;
+      left: 24px;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 2;
+    }
+    .vertical-text {
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      font-family: var(--font-mono);
+      font-size: 0.5625rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+    }
+
+    /* Right edge dither */
+    #dither-edge {
+      position: fixed;
+      right: 0;
+      top: 0;
+      width: 240px;
+      height: 100vh;
+      opacity: 0.18;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* === Sections === */
+    .section {
+      position: relative;
+      padding-bottom: var(--space-xl);
+      margin-bottom: var(--space-xl);
+      border-bottom: 1px solid var(--color-border);
+    }
+    .section:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+    }
+
+    .section-content { margin-top: var(--space-lg); }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .section-index {
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      color: var(--color-text-muted);
+      letter-spacing: 0.08em;
+      margin-left: auto;
+    }
+
+    /* === Staggered page load reveal === */
+    .reveal {
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+                  transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* === Panel overlay on sections === */
+    .section-panel {
+      position: relative;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      padding: var(--space-lg);
+      margin-top: var(--space-md);
+    }
+    .section-panel::before {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: -1px;
+      width: 6px;
+      height: 6px;
+      border-top: 1px solid var(--color-text-muted);
+      border-left: 1px solid var(--color-text-muted);
+      pointer-events: none;
+    }
+    .section-panel::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      right: -1px;
+      width: 6px;
+      height: 6px;
+      border-bottom: 1px solid var(--color-text-muted);
+      border-right: 1px solid var(--color-text-muted);
+      pointer-events: none;
+    }
+
+    /* === Swatches === */
+    .swatch-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+      gap: var(--space-md);
+    }
+    .swatch-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 6px;
+      border: 1px solid var(--color-border);
+      background: var(--color-bg);
+      transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
+    }
+    .swatch-cell:hover {
+      border-color: var(--color-border-strong);
+      transform: translateY(-2px);
+    }
+    .swatch {
+      width: 100%;
+      aspect-ratio: 4/3;
+      border: 1px solid var(--color-border-strong);
+    }
+    .swatch-label {
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      color: var(--color-text-muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding-left: 2px;
+    }
+    .swatch-hex {
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      color: var(--color-text-muted);
+      opacity: 0.5;
+      letter-spacing: 0.04em;
+      padding-left: 2px;
+    }
+
+    /* Type specimen */
+    .type-specimen {
+      border-left: 1px solid var(--color-border-strong);
+      padding-left: var(--space-md);
+    }
+
+    .type-family-label {
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      color: var(--color-text-muted);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: var(--space-xs);
+    }
+
+    .type-sample-lg {
+      font-family: var(--font-display);
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      line-height: 1;
+      color: var(--color-text-bright);
+      text-transform: uppercase;
+      margin-bottom: var(--space-xs);
+    }
+
+    .type-charset {
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      color: var(--color-text-muted);
+      opacity: 0.6;
+      letter-spacing: 0.06em;
+      word-spacing: 0.2em;
+      line-height: 1.8;
+    }
+
+    .code-block {
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      color: var(--color-text-muted);
+      padding: var(--space-sm) var(--space-md);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      display: block;
+      letter-spacing: 0.03em;
+    }
+
+    .tri {
+      display: inline-block;
+      width: 0;
+      height: 0;
+      border-left: 4px solid currentColor;
+      border-top: 2.5px solid transparent;
+      border-bottom: 2.5px solid transparent;
+      flex-shrink: 0;
+    }
+
+    /* === Dither block === */
+    .dither-block {
+      position: relative;
+      overflow: hidden;
+      background: var(--color-surface);
+    }
+    .dither-block canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .dither-block--section {
+      height: 80px;
+      margin: var(--space-md) 0 var(--space-sm);
+    }
+
+    .dither-block--wide {
+      height: 160px;
+      margin: var(--space-lg) 0;
+    }
+
+    /* === Icon grid === */
+    .icon-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: var(--space-lg) var(--space-md);
+    }
+
+    .icon-cell {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: var(--space-sm);
+      color: var(--color-text);
+      padding: var(--space-md) 0;
+      border: 1px solid transparent;
+      transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+      cursor: crosshair;
+      position: relative;
+    }
+    .icon-cell:hover {
+      border-color: var(--color-border-strong);
+      background: var(--color-surface);
+    }
+    .icon-cell .icon { width: 28px; height: 28px; }
+    .icon-cell .icon-name {
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      color: var(--color-text-muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .icon-cell .icon-coord {
+      position: absolute;
+      top: 2px;
+      right: 4px;
+      font-family: var(--font-mono);
+      font-size: 6px;
+      letter-spacing: 0.06em;
+      color: var(--color-success);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      white-space: nowrap;
+    }
+    .icon-cell:hover .icon-coord {
+      opacity: 0.7;
+    }
+    .icon-cell .icon svg {
+      transition: transform 0.3s var(--ease);
+    }
+    .icon-cell:hover .icon svg {
+      transform: scale(1.12);
+    }
+
+    /* === Numbered index === */
+    .num-index {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 3px 6px;
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      color: var(--color-text-muted);
+      letter-spacing: 0.06em;
+      max-width: 240px;
+    }
+    .num-index span {
+      text-align: right;
+      padding: 2px 0;
+    }
+
+    /* === Editorial offset === */
+    .offset-right {
+      margin-left: auto;
+      margin-right: 0;
+    }
+
+    /* === Footer === */
+    .footer-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-top: var(--space-2xl);
+      padding-top: var(--space-lg);
+      border-top: 1px solid var(--color-border);
+    }
+
+    /* === Crosshair field === */
+    .crosshair-field {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .crosshair-field .ch {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      pointer-events: auto;
+      cursor: crosshair;
+      opacity: 0.8;
+      transition: opacity 0.3s ease;
+    }
+    .crosshair-field .ch::before,
+    .crosshair-field .ch::after {
+      content: '';
+      position: absolute;
+      background: var(--color-border);
+      transition: background 0.25s ease, transform 0.25s ease;
+    }
+    .crosshair-field .ch::before {
+      width: 1px;
+      height: 100%;
+      left: 50%;
+    }
+    .crosshair-field .ch::after {
+      width: 100%;
+      height: 1px;
+      top: 50%;
+    }
+    /* Node hover — expand crosshair, brighten */
+    .crosshair-field .ch:hover {
+      opacity: 1;
+    }
+    .crosshair-field .ch:hover::before {
+      background: var(--color-text);
+      transform: scaleY(1.8);
+    }
+    .crosshair-field .ch:hover::after {
+      background: var(--color-text);
+      transform: scaleX(1.8);
+    }
+    /* Node label — hidden until hover */
+    .crosshair-field .ch-label {
+      position: absolute;
+      bottom: calc(100% + 12px);
+      left: 50%;
+      transform: translateX(-50%) translateY(4px);
+      font-family: var(--font-mono);
+      font-size: 6px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-text);
+      white-space: pre;
+      opacity: 0;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      pointer-events: none;
+      background: var(--color-surface);
+      padding: 4px;
+      border: 1px solid var(--color-border-strong);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      text-align: left;
+    }
+    .crosshair-field .ch-label::before {
+      content: '';
+      position: absolute;
+      bottom: -5px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1px;
+      height: 4px;
+      background: var(--color-border-strong);
+    }
+    .crosshair-field .ch:hover .ch-label {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    /* Ring pulse on hover */
+    .crosshair-field .ch-ring {
+      position: absolute;
+      inset: -10px;
+      border: 1px dashed var(--color-text-muted);
+      border-radius: 50%;
+      opacity: 0;
+      transform: scale(0.5) rotate(-45deg);
+      transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      pointer-events: none;
+    }
+    .crosshair-field .ch:hover .ch-ring {
+      opacity: 0.8;
+      transform: scale(1) rotate(0deg);
+      border-color: var(--color-text);
+      animation: spin 10s linear infinite 0.4s;
+    }
+
+    /* === Schematic overlay === */
+    .schematic-overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      overflow: hidden;
+    }
+
+    .star-marker {
+      position: absolute;
+      font-size: 0.5rem;
+      letter-spacing: 0.12em;
+      color: var(--color-border-strong);
+      font-family: var(--font-mono);
+    }
+
+    /* === Divider with label === */
+    .labeled-divider {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+      margin: var(--space-xl) 0;
+    }
+    .labeled-divider::before,
+    .labeled-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--color-border);
+    }
+    .labeled-divider .ld-label {
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+      flex-shrink: 0;
+    }
+
+    /* === Inline data table === */
+    .data-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--color-border);
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+    }
+    .data-row:last-child { border-bottom: none; }
+    .data-key {
+      color: var(--color-text-muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 0.5rem;
+    }
+    .data-val {
+      color: var(--color-text);
+      letter-spacing: 0.02em;
+    }
+
+    /* === Hex Dump Stream === */
+    .hex-stream {
+      font-family: var(--font-mono);
+      font-size: 0.4375rem;
+      line-height: 1.8;
+      color: var(--color-text-muted);
+      letter-spacing: 0.15em;
+      background: var(--color-surface);
+      padding: var(--space-md);
+      position: relative;
+      overflow: hidden;
+      height: 130px;
+    }
+    .hex-stream::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to bottom, var(--color-surface) 0%, transparent 15%, transparent 70%, var(--color-surface) 100%);
+      pointer-events: none;
+    }
+    .hex-stream-inner {
+      display: flex;
+      flex-direction: column;
+      animation: hex-scroll 25s linear infinite;
+    }
+    @keyframes hex-scroll {
+      0% { transform: translateY(0); }
+      100% { transform: translateY(-50%); }
+    }
+    .hex-row {
+      display: flex;
+      gap: var(--space-lg);
+    }
+    .hex-addr { color: var(--color-accent); opacity: 0.6; width: 40px; }
+    .hex-data { flex: 1; word-spacing: 0.3em; }
+    .hex-ascii { color: var(--color-text); opacity: 0.4; white-space: pre; width: 100px; }
+    .hex-hl { color: var(--color-bg); background: var(--color-text); padding: 0 2px; }
+
+    /* === Barcode Decorative === */
+    .barcode {
+      height: 24px;
+      width: 120px;
+      background: repeating-linear-gradient(
+        90deg,
+        var(--color-text-muted) 0,
+        var(--color-text-muted) 1px,
+        transparent 1px,
+        transparent 3px,
+        var(--color-text-muted) 3px,
+        var(--color-text-muted) 5px,
+        transparent 5px,
+        transparent 8px,
+        var(--color-text-muted) 8px,
+        var(--color-text-muted) 9px,
+        transparent 9px,
+        transparent 12px
+      );
+      opacity: 0.4;
+    }
+
+    /* === Input focus glow === */
+    .input {
+      transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+    }
+    .input:focus {
+      box-shadow: 0 0 0 1px var(--color-border-strong);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Theme toggle -->
+  <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+    <span class="toggle-dot"></span>
+    <span class="toggle-label">Dark</span>
+  </button>
+
+  <!-- Cursor coordinate readout -->
+  <div class="cursor-coords" id="cursor-coords" aria-hidden="true">
+    <span id="coord-text">x: 0  y: 0</span>
+  </div>
+
+  <!-- Scan line -->
+  <div class="scan-line" id="scan-line" aria-hidden="true"></div>
+
+  <!-- Massive bleed typography -->
+  <div class="bleed-text" aria-hidden="true">SIG</div>
+
+  <!-- Floating translucent panels -->
+  <div class="floating-panels" aria-hidden="true">
+    <div class="fp" style="width: 280px; height: 180px; top: 6%; right: 8%; opacity: 0.3;"></div>
+    <div class="fp fp--raised" style="width: 200px; height: 120px; top: 10%; right: 14%; opacity: 0.5;"></div>
+    <div class="fp" style="width: 320px; height: 200px; bottom: 15%; left: 3%; opacity: 0.2;"></div>
+    <div class="fp fp--raised" style="width: 160px; height: 260px; top: 35%; right: 3%; opacity: 0.25;"></div>
+    <div class="fp" style="width: 240px; height: 140px; top: 55%; left: 6%; opacity: 0.15;"></div>
+    <div class="fp fp--raised" style="width: 180px; height: 100px; bottom: 30%; right: 20%; opacity: 0.35;"></div>
+  </div>
+
+  <!-- Scattered metadata fragments -->
+  <div class="meta-fragments" aria-hidden="true">
+    <span class="mf" style="top: 4%; left: 12%;">[ 12:45:00 ]</span>
+    <span class="mf" style="top: 4%; right: 28%;">+ TS_FEB_2026</span>
+    <span class="mf" style="top: 18%; right: 6%;">REF // HJ0291</span>
+    <span class="mf mf--bright" style="top: 32%; left: 5%;">> 001</span>
+    <span class="mf" style="top: 42%; right: 10%;">[ v0.2.1-draft ]</span>
+    <span class="mf" style="top: 55%; left: 8%;">LAT 48.8566°N</span>
+    <span class="mf" style="top: 55%; left: 18%;">LON 2.3522°E</span>
+    <span class="mf mf--bright" style="top: 68%; right: 5%;">> 002</span>
+    <span class="mf" style="top: 75%; left: 4%;">SYS_COMP_LIB</span>
+    <span class="mf" style="top: 88%; right: 12%;">+ ERC-8128</span>
+    <span class="mf" style="bottom: 5%; left: 15%;">STATUS // ACTIVE</span>
+  </div>
+
+  <!-- SVG connector overlay — drawn by JS to connect schematic elements -->
+  <svg class="connector-svg" id="connector-svg" aria-hidden="true"></svg>
+
+  <!-- Background layers -->
+  <div class="bg-grid" aria-hidden="true"></div>
+
+  <div class="schematic-overlay">
+    <!-- Primary hub nodes (larger circles = higher degree) -->
+    <div class="schematic-circle" id="sc-1" style="width: 80px; height: 80px; top: 12%; left: 6%;">
+      <div class="sc-inner"></div>
+    </div>
+    <div class="schematic-circle" id="sc-2" style="width: 60px; height: 60px; top: 52%; left: 3%;">
+      <div class="sc-inner"></div>
+    </div>
+    <div class="schematic-circle" id="sc-3" style="width: 50px; height: 50px; bottom: 18%; right: 8%;">
+      <div class="sc-inner"></div>
+    </div>
+
+    <span class="star-marker" id="sm-1" style="top: 6%; left: 3%;">****</span>
+    <span class="star-marker" id="sm-2" style="top: 6%; right: 3%;">****</span>
+    <span class="star-marker" id="sm-3" style="bottom: 4%; left: 3%;">****</span>
+  </div>
+
+  <!-- Graph nodes — positioned as embedding clusters -->
+  <div class="crosshair-field">
+    <!-- Cluster A: upper-left (near sc-1) -->
+    <div class="ch" id="ch-0" style="top: 6%; left: 12%;"><span class="ch-ring"></span><span class="ch-label">SLOT_00</span></div>
+    <div class="ch" id="ch-1" style="top: 15%; left: 16%;"><span class="ch-ring"></span><span class="ch-label">SLOT_01</span></div>
+    <div class="ch" id="ch-2" style="top: 10%; left: 22%;"><span class="ch-ring"></span><span class="ch-label">SLOT_02</span></div>
+    <div class="ch" id="ch-3" style="top: 20%; left: 10%;"><span class="ch-ring"></span><span class="ch-label">SLOT_03</span></div>
+    <!-- Cluster B: upper-right (sparse) -->
+    <div class="ch" id="ch-4" style="top: 8%; right: 10%;"><span class="ch-ring"></span><span class="ch-label">SLOT_04</span></div>
+    <div class="ch" id="ch-5" style="top: 16%; right: 6%;"><span class="ch-ring"></span><span class="ch-label">SLOT_05</span></div>
+    <!-- Cluster C: mid-left (near sc-2) -->
+    <div class="ch" id="ch-6" style="top: 45%; left: 12%;"><span class="ch-ring"></span><span class="ch-label">SLOT_06</span></div>
+    <div class="ch" id="ch-7" style="top: 55%; left: 14%;"><span class="ch-ring"></span><span class="ch-label">SLOT_07</span></div>
+    <div class="ch" id="ch-8" style="top: 48%; left: 20%;"><span class="ch-ring"></span><span class="ch-label">SLOT_08</span></div>
+    <!-- Cluster D: lower region -->
+    <div class="ch" id="ch-9" style="top: 72%; left: 6%;"><span class="ch-ring"></span><span class="ch-label">SLOT_09</span></div>
+    <div class="ch" id="ch-10" style="top: 78%; left: 12%;"><span class="ch-ring"></span><span class="ch-label">SLOT_10</span></div>
+    <div class="ch" id="ch-11" style="bottom: 14%; right: 14%;"><span class="ch-ring"></span><span class="ch-label">SLOT_11</span></div>
+    <div class="ch" id="ch-12" style="bottom: 22%; right: 10%;"><span class="ch-ring"></span><span class="ch-label">SLOT_12</span></div>
+    <!-- Outliers -->
+    <div class="ch" id="ch-13" style="top: 35%; left: 4%;"><span class="ch-ring"></span><span class="ch-label">SLOT_13</span></div>
+    <div class="ch" id="ch-14" style="top: 65%; right: 5%;"><span class="ch-ring"></span><span class="ch-label">SLOT_14</span></div>
+    <div class="ch" id="ch-15" style="bottom: 8%; left: 8%;"><span class="ch-ring"></span><span class="ch-label">SLOT_15</span></div>
+  </div>
+
+  <canvas id="dither-edge"></canvas>
+
+  <div class="sidebar-vert">
+    <span class="vertical-text">Sys_Component_Library_v01</span>
+  </div>
+
+  <div class="page">
+
+    <!-- Hero -->
+    <div class="hero-zone reveal">
+      <div class="hero-canvas-wrap">
+        <canvas id="dither-canvas"></canvas>
+      </div>
+      <div class="hero-content">
+        <div class="hero-content-tick"></div>
+        <div class="flex items-center gap-sm" style="margin-bottom: var(--space-md);">
+          <span class="label-inv">SYS</span>
+          <span class="star-4"></span>
+          <span class="label">Design_Brief</span>
+        </div>
+        <div class="hero-title">Component<br>Library</div>
+        <p class="hero-sub">Core_UI_Primitives_and_Tokens</p>
+        <div class="hero-meta">
+          <div class="hero-meta-item">
+            <span class="hero-meta-label">Version</span>
+            <span class="hero-meta-value">v0.9</span>
+          </div>
+          <div class="hero-meta-item">
+            <span class="hero-meta-label">Status</span>
+            <span class="hero-meta-value">Draft</span>
+          </div>
+          <div class="hero-meta-item">
+            <span class="hero-meta-label">System</span>
+            <span class="hero-meta-value">Signet</span>
+          </div>
+          <div class="hero-meta-item">
+            <span class="hero-meta-label">Ref</span>
+            <span class="hero-meta-value">//DS-001</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bold dither block -->
+    <div class="dither-block dither-block--wide reveal">
+      <canvas data-dither="glitch-wide"></canvas>
+    </div>
+
+    <!-- Colors -->
+    <div class="section reveal">
+      <div class="section-header">
+        <div class="crosshair"></div>
+        <span class="label">Sys_Palette</span>
+        <span class="section-index">01/08</span>
+      </div>
+      <div class="section-panel">
+        <div class="swatch-row">
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-bg);"></div>
+            <span class="swatch-label">bg</span>
+            <span class="swatch-hex">#08080a</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-surface);"></div>
+            <span class="swatch-label">surface</span>
+            <span class="swatch-hex">#0e0e12</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-surface-raised);"></div>
+            <span class="swatch-label">raised</span>
+            <span class="swatch-hex">#151519</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-border-strong);"></div>
+            <span class="swatch-label">border</span>
+            <span class="swatch-hex">12% white</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-text);"></div>
+            <span class="swatch-label">text</span>
+            <span class="swatch-hex">#d4d4d8</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-text-bright);"></div>
+            <span class="swatch-label">bright</span>
+            <span class="swatch-hex">#f0f0f2</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-text-muted);"></div>
+            <span class="swatch-label">muted</span>
+            <span class="swatch-hex">#3e3e46</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-accent);"></div>
+            <span class="swatch-label">accent</span>
+            <span class="swatch-hex">#8a8a96</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-danger);"></div>
+            <span class="swatch-label">danger</span>
+            <span class="swatch-hex">#8a4a48</span>
+          </div>
+          <div class="swatch-cell">
+            <div class="swatch" style="background: var(--color-success);"></div>
+            <span class="swatch-label">success</span>
+            <span class="swatch-hex">#4a7a5e</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Typography -->
+    <div class="section reveal">
+      <div class="section-header">
+        <div class="crosshair"></div>
+        <span class="label">Sys_Type</span>
+        <span class="section-index">02/08</span>
+      </div>
+      <div class="dither-block dither-block--section">
+        <canvas data-dither="band"></canvas>
+      </div>
+      <div class="section-panel">
+        <div class="flex flex-col gap-lg type-specimen" style="border-left: none; padding-left: 0;">
+          <div>
+            <div class="type-family-label">Chakra Petch — Display / 700</div>
+            <div class="type-sample-lg">Signet Agent</div>
+            <div class="type-charset">A B C D E F G H I J K L M N O P Q R S T U V W X Y Z</div>
+          </div>
+          <div style="padding-top: var(--space-md); border-top: 1px solid var(--color-border);">
+            <div class="type-family-label">Chakra Petch — Headings / 600</div>
+            <h1>Heading One</h1>
+            <div style="height: var(--space-sm);"></div>
+            <h2>Heading Two</h2>
+            <div style="height: var(--space-sm);"></div>
+            <h3>Heading Three</h3>
+          </div>
+          <div style="padding-top: var(--space-md); border-top: 1px solid var(--color-border);">
+            <div class="type-family-label">IBM Plex Mono — Body / 400–600</div>
+            <p style="max-width: 480px; line-height: 1.65; color: var(--color-accent);">Body text for secondary content, descriptions, and functional interface copy. Monospace maintains the technical character.</p>
+            <div style="height: var(--space-sm);"></div>
+            <span class="code-block">const agent = await signet.init({ memory: true });</span>
+          </div>
+        </div>
+        <div style="margin-top: var(--space-lg); padding-top: var(--space-md); border-top: 1px solid var(--color-border);">
+          <div class="data-row">
+            <span class="data-key">Display</span>
+            <span class="data-val">Chakra Petch 600–700</span>
+          </div>
+          <div class="data-row">
+            <span class="data-key">Body</span>
+            <span class="data-val">IBM Plex Mono 400–500</span>
+          </div>
+          <div class="data-row">
+            <span class="data-key">Labels</span>
+            <span class="data-val">IBM Plex Mono 500 / 9px / 0.18em</span>
+          </div>
+          <div class="data-row">
+            <span class="data-key">Hero</span>
+            <span class="data-val">Chakra Petch 700 / 4rem / 0.9 lh</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Icons -->
+    <div class="section reveal">
+      <div class="section-header">
+        <div class="crosshair"></div>
+        <span class="label">Sys_Icons</span>
+        <span class="section-index">03/08</span>
+      </div>
+      <div class="section-panel">
+        <div class="icon-grid">
+
+          <!-- sig-target -->
+          <div class="icon-cell" data-icon-idx="0">
+            <span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="2"/></svg></span>
+            <span class="icon-name">target</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-node -->
+          <div class="icon-cell" data-icon-idx="1">
+            <span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="3" r="1.5"/><circle cx="21" cy="12" r="1.5"/><circle cx="12" cy="21" r="1.5"/><circle cx="3" cy="12" r="1.5"/><line x1="12" y1="8" x2="12" y2="4.5"/><line x1="16" y1="12" x2="19.5" y2="12"/><line x1="12" y1="16" x2="12" y2="19.5"/><line x1="8" y1="12" x2="4.5" y2="12"/></svg></span>
+            <span class="icon-name">node</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-signal -->
+          <div class="icon-cell" data-icon-idx="2">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M12 18 L12 18" stroke-linecap="round"/><circle cx="12" cy="18" r="1.5"/><path d="M8.5 14.5 A5 5 0 0 1 15.5 14.5" fill="none"/><path d="M5.5 11.5 A9 9 0 0 1 18.5 11.5" fill="none"/><path d="M2.5 8.5 A13 13 0 0 1 21.5 8.5" fill="none"/></svg></span>
+            <span class="icon-name">signal</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-split -->
+          <div class="icon-cell" data-icon-idx="3">
+            <span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3 A9 9 0 0 1 12 21" fill="currentColor" stroke="none" opacity="0.3"/><line x1="12" y1="3" x2="12" y2="21"/></svg></span>
+            <span class="icon-name">split</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-diamond -->
+          <div class="icon-cell" data-icon-idx="4">
+            <span class="icon"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" transform="rotate(45 12 12)"/><circle cx="12" cy="12" r="2"/></svg></span>
+            <span class="icon-name">diamond</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-grid -->
+          <div class="icon-cell" data-icon-idx="5">
+            <span class="icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="18" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="6" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="6" cy="18" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="18" r="1.5" fill="currentColor" stroke="none"/><circle cx="18" cy="18" r="1.5" fill="currentColor" stroke="none"/></svg></span>
+            <span class="icon-name">grid</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-chevron -->
+          <div class="icon-cell" data-icon-idx="6">
+            <span class="icon"><svg viewBox="0 0 24 24"><polyline points="7,4 15,12 7,20"/><polyline points="13,4 21,12 13,20"/></svg></span>
+            <span class="icon-name">chevron</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-burst -->
+          <div class="icon-cell" data-icon-idx="7">
+            <span class="icon"><svg viewBox="0 0 24 24"><polygon points="12,2 14,9.5 22,12 14,14.5 12,22 10,14.5 2,12 10,9.5" fill="currentColor" stroke="none"/></svg></span>
+            <span class="icon-name">burst</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-eye -->
+          <div class="icon-cell" data-icon-idx="8">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M2 12 C2 12 6 5 12 5 C18 5 22 12 22 12 C22 12 18 19 12 19 C6 19 2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg></span>
+            <span class="icon-name">eye</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-lock -->
+          <div class="icon-cell" data-icon-idx="9">
+            <span class="icon"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10"/><path d="M8 11 V8 A4 4 0 0 1 16 8 V11" fill="none"/><circle cx="12" cy="16" r="1.5" fill="currentColor" stroke="none"/></svg></span>
+            <span class="icon-name">lock</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-link -->
+          <div class="icon-cell" data-icon-idx="10">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M10 14 L8.5 15.5 A3.5 3.5 0 0 1 3.5 10.5 L6.5 7.5 A3.5 3.5 0 0 1 11.5 7.5"/><path d="M14 10 L15.5 8.5 A3.5 3.5 0 0 1 20.5 13.5 L17.5 16.5 A3.5 3.5 0 0 1 12.5 16.5"/></svg></span>
+            <span class="icon-name">link</span>
+            <span class="icon-coord"></span>
+          </div>
+
+          <!-- sig-orbit -->
+          <div class="icon-cell" data-icon-idx="11">
+            <span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(-30 12 12)"/><circle cx="19" cy="7" r="1.5" fill="currentColor" stroke="none"/></svg></span>
+            <span class="icon-name">orbit</span>
+            <span class="icon-coord"></span>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <div class="labeled-divider reveal">
+      <span class="ld-label">Interactive</span>
+    </div>
+
+    <!-- Buttons -->
+    <div class="section reveal">
+      <div class="section-header">
+        <div class="crosshair"></div>
+        <span class="label">Sys_Buttons</span>
+        <span class="section-index">04/08</span>
+      </div>
+      <div class="section-panel">
+        <div class="flex flex-col gap-lg">
+          <div>
+            <div class="type-family-label" style="margin-bottom: var(--space-md);">Standard</div>
+            <div class="flex gap-md wrap items-center">
+              <button class="btn btn-primary">
+                <span class="tri"></span>
+                Primary
+              </button>
+              <button class="btn btn-secondary">Secondary</button>
+              <button class="btn btn-ghost">Ghost</button>
+              <button class="btn btn-danger">
+                <span class="icon icon--sm"><svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span>
+                Danger
+              </button>
+            </div>
+          </div>
+          <div style="padding-top: var(--space-md); border-top: 1px solid var(--color-border);">
+            <div class="type-family-label" style="margin-bottom: var(--space-md);">Compact</div>
+            <div class="flex gap-md wrap items-center">
+              <button class="btn btn-sm btn-primary">
+                <span class="tri"></span>
+                Sm Primary
+              </button>
+              <button class="btn btn-sm btn-secondary">Sm Secondary</button>
+              <button class="btn btn-sm btn-ghost">Sm Ghost</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Badges -->
+    <div class="section reveal">
+      <div class="section-header">
+        <div class="crosshair"></div>
+        <span class="label">Sys_Badges</span>
+        <span class="section-index">05/08</span>
+      </div>
+      <div class="flex gap-sm wrap items-center section-content">
+        <span class="badge">Default</span>
+        <span class="badge badge-accent">
+          <span class="icon icon--sm"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="2"/></svg></span>
+          Active
+        </span>
+        <span class="label-inv" style="margin-left: 4px;">Inverted</span>
+      </div>
+    </div>
+
+    <!-- Dither block between sections -->
+    <div class="dither-block dither-block--section reveal">
+      <canvas data-dither="smear"></canvas>
+    </div>
+
+    <!-- Inputs -->
+    <div class="section reveal">
+      <div class="section-header">
+        <div class="crosshair"></div>
+        <span class="label">Sys_Form</span>
+        <span class="section-index">06/08</span>
+      </div>
+      <div class="flex flex-col gap-md section-content offset-right" style="max-width: 340px;">
+        <input class="input" type="text" placeholder="Text input...">
+        <select class="input">
+          <option>Select an option</option>
+          <option>Option A</option>
+          <option>Option B</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Cards -->
+    <div class="section reveal">
+      <div class="section-header">
+        <div class="crosshair"></div>
+        <span class="label">Sys_Card</span>
+        <span class="section-index">07/08</span>
+      </div>
+      <div class="dither-block dither-block--section">
+        <canvas data-dither="cloud"></canvas>
+      </div>
+      <div class="card-grid section-content">
+        <!-- Card 1: Standard with metadata bar -->
+        <div class="card card--accent">
+          <div class="card-meta">
+            <span>Node_01</span>
+            <span class="flex items-center gap-xs">
+              <span class="icon icon--sm"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="3" r="1.5"/><circle cx="21" cy="12" r="1.5"/><circle cx="12" cy="21" r="1.5"/><circle cx="3" cy="12" r="1.5"/><line x1="12" y1="8" x2="12" y2="4.5"/><line x1="16" y1="12" x2="19.5" y2="12"/><line x1="12" y1="16" x2="12" y2="19.5"/><line x1="8" y1="12" x2="4.5" y2="12"/></svg></span>
+              Active
+            </span>
+          </div>
+          <div class="flex flex-col gap-md">
+            <div class="flex items-center gap-sm">
+              <h3>Agent Identity</h3>
+              <span class="badge badge-accent">Sig</span>
+            </div>
+            <p>Portable configuration and memory that travels across platforms.</p>
+            <div class="flex gap-sm">
+              <button class="btn btn-sm btn-primary">
+                <span class="tri"></span>
+                Deploy
+              </button>
+              <button class="btn btn-sm btn-ghost">Details</button>
+            </div>
+          </div>
+        </div>
+        <!-- Card 2: Minimal -->
+        <div class="card">
+          <div class="card-meta">
+            <span>Sec_02</span>
+            <span class="flex items-center gap-xs">
+              <span class="icon icon--sm"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10"/><path d="M8 11 V8 A4 4 0 0 1 16 8 V11" fill="none"/><circle cx="12" cy="16" r="1.5" fill="currentColor" stroke="none"/></svg></span>
+              Locked
+            </span>
+          </div>
+          <div class="flex flex-col gap-md">
+            <h3>Auth Layer</h3>
+            <p>ERC-8128 wallet-signed verification for agent operations.</p>
+            <div class="flex gap-sm">
+              <button class="btn btn-sm btn-secondary">
+                <span class="icon icon--sm"><svg viewBox="0 0 24 24"><path d="M2 12 C2 12 6 5 12 5 C18 5 22 12 22 12 C22 12 18 19 12 19 C6 19 2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span>
+                Inspect
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Memory Stream -->
+    <div class="section reveal">
+      <div class="section-header">
+        <div class="crosshair"></div>
+        <span class="label">Sys_Memory</span>
+        <span class="section-index">08/08</span>
+      </div>
+      <div class="section-panel" style="padding: 0;">
+        <div class="hex-stream">
+          <div class="hex-stream-inner">
+            <div class="hex-row"><span class="hex-addr">0x0000</span><span class="hex-data">53 49 47 4E 45 54 5F 41 <span class="hex-hl">47 45 4E 54</span> 5F 4D 45 4D</span><span class="hex-ascii">SIGNET_AGENT_MEM</span></div>
+            <div class="hex-row"><span class="hex-addr">0x0010</span><span class="hex-data">4F 52 59 5F 42 4C 4F 43 4B 5F 30 30 31 5F 49 4E</span><span class="hex-ascii">ORY_BLOCK_001_IN</span></div>
+            <div class="hex-row"><span class="hex-addr">0x0020</span><span class="hex-data">49 54 49 41 4C 49 5A 45 44 2E 2E 2E 00 00 00 00</span><span class="hex-ascii">ITIALIZED.......</span></div>
+            <div class="hex-row"><span class="hex-addr">0x0030</span><span class="hex-data">E2 80 94 45 52 43 2D 38 31 32 38 5F 41 55 54 48</span><span class="hex-ascii">—ERC-8128_AUTH</span></div>
+            <div class="hex-row"><span class="hex-addr">0x0040</span><span class="hex-data">5F 53 55 43 43 45 53 53 00 00 00 00 00 00 00 00</span><span class="hex-ascii">_SUCCESS........</span></div>
+            <div class="hex-row"><span class="hex-addr">0x0050</span><span class="hex-data">41 57 41 49 54 49 4E 47 5F 43 4F 4D 4D 41 4E 44</span><span class="hex-ascii">AWAITING_COMMAND</span></div>
+            <!-- Duplicate for seamless scroll -->
+            <div class="hex-row"><span class="hex-addr">0x0060</span><span class="hex-data">53 49 47 4E 45 54 5F 41 <span class="hex-hl">47 45 4E 54</span> 5F 4D 45 4D</span><span class="hex-ascii">SIGNET_AGENT_MEM</span></div>
+            <div class="hex-row"><span class="hex-addr">0x0070</span><span class="hex-data">4F 52 59 5F 42 4C 4F 43 4B 5F 30 30 31 5F 49 4E</span><span class="hex-ascii">ORY_BLOCK_001_IN</span></div>
+            <div class="hex-row"><span class="hex-addr">0x0080</span><span class="hex-data">49 54 49 41 4C 49 5A 45 44 2E 2E 2E 00 00 00 00</span><span class="hex-ascii">ITIALIZED.......</span></div>
+            <div class="hex-row"><span class="hex-addr">0x0090</span><span class="hex-data">E2 80 94 45 52 43 2D 38 31 32 38 5F 41 55 54 48</span><span class="hex-ascii">—ERC-8128_AUTH</span></div>
+            <div class="hex-row"><span class="hex-addr">0x00A0</span><span class="hex-data">5F 53 55 43 43 45 53 53 00 00 00 00 00 00 00 00</span><span class="hex-ascii">_SUCCESS........</span></div>
+            <div class="hex-row"><span class="hex-addr">0x00B0</span><span class="hex-data">41 57 41 49 54 49 4E 47 5F 43 4F 4D 4D 41 4E 44</span><span class="hex-ascii">AWAITING_COMMAND</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer-bar reveal">
+      <div class="flex flex-col gap-md">
+        <div class="flex items-center gap-sm">
+          <span class="star-4"></span>
+          <span class="label">Sys_Index</span>
+        </div>
+        <div class="barcode"></div>
+      </div>
+      <div class="num-index">
+        <span>00</span><span>01</span><span>02</span><span>03</span>
+        <span>04</span><span>05</span><span>06</span><span>07</span>
+        <span>08</span><span>09</span><span>10</span><span>11</span>
+        <span>12</span><span>13</span><span>14</span><span>15</span>
+        <span>16</span><span>17</span><span>18</span><span>19</span>
+        <span>20</span><span>21</span><span>22</span><span>23</span>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+  (() => {
+    // === Theme toggle ===
+    const toggle = document.getElementById('theme-toggle');
+    const html = document.documentElement;
+    const label = toggle.querySelector('.toggle-label');
+
+    function setTheme(theme) {
+      html.setAttribute('data-theme', theme);
+      label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+      setTimeout(renderAllDither, 60);
+    }
+
+    toggle.addEventListener('click', () => {
+      const current = html.getAttribute('data-theme') || 'dark';
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+
+    // === Staggered reveal on scroll ===
+    const reveals = document.querySelectorAll('.reveal');
+    const revealObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry, i) => {
+        if (entry.isIntersecting) {
+          entry.target.style.transitionDelay = '0ms';
+          entry.target.classList.add('visible');
+          revealObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
+
+    // Stagger initial visible elements
+    reveals.forEach((el, i) => {
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight) {
+        el.style.transitionDelay = `${i * 80}ms`;
+        setTimeout(() => el.classList.add('visible'), 10);
+      } else {
+        revealObserver.observe(el);
+      }
+    });
+
+    // === Cursor coordinate readout ===
+    const coordsEl = document.getElementById('cursor-coords');
+    const coordText = document.getElementById('coord-text');
+    let coordTimeout;
+
+    document.addEventListener('mousemove', (e) => {
+      coordsEl.classList.add('active');
+      coordsEl.style.left = (e.clientX + 16) + 'px';
+      coordsEl.style.top = (e.clientY + 16) + 'px';
+      coordText.textContent = `x: ${e.clientX}  y: ${e.clientY}`;
+      clearTimeout(coordTimeout);
+      coordTimeout = setTimeout(() => coordsEl.classList.remove('active'), 2000);
+    });
+
+    document.addEventListener('mouseleave', () => {
+      coordsEl.classList.remove('active');
+    });
+
+    // === Icon hover coordinate labels ===
+    document.querySelectorAll('.icon-cell').forEach(cell => {
+      const coordSpan = cell.querySelector('.icon-coord');
+      cell.addEventListener('mouseenter', (e) => {
+        const rect = cell.getBoundingClientRect();
+        const x = Math.round(rect.left + rect.width / 2);
+        const y = Math.round(rect.top + rect.height / 2);
+        coordSpan.textContent = `x:${x} y:${y}`;
+      });
+    });
+
+    // === Scan line sweep ===
+    const scanLine = document.getElementById('scan-line');
+    function triggerScan() {
+      scanLine.style.transition = 'none';
+      scanLine.style.transform = 'translateY(-20px)';
+      scanLine.style.opacity = '0';
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          scanLine.style.transition = 'transform 3s linear, opacity 0.8s ease';
+          scanLine.style.opacity = '0.06';
+          scanLine.style.transform = `translateY(${document.documentElement.scrollHeight}px)`;
+
+          setTimeout(() => {
+            scanLine.style.transition = 'opacity 0.5s ease';
+            scanLine.style.opacity = '0';
+          }, 2800);
+        });
+      });
+    }
+
+    // First scan after page load, then every 15-25s
+    setTimeout(triggerScan, 1200);
+    function scheduleScan() {
+      const delay = 15000 + Math.random() * 10000;
+      setTimeout(() => { triggerScan(); scheduleScan(); }, delay);
+    }
+    scheduleScan();
+
+    // === Seeded Perlin noise ===
+    let seed = 42;
+    function seededRand() {
+      seed = (seed * 16807 + 0) % 2147483647;
+      return (seed - 1) / 2147483646;
+    }
+
+    const PERM = new Uint8Array(512);
+    for (let i = 0; i < 256; i++) PERM[i] = i;
+    for (let i = 255; i > 0; i--) {
+      const j = Math.floor(seededRand() * (i + 1));
+      [PERM[i], PERM[j]] = [PERM[j], PERM[i]];
+    }
+    for (let i = 0; i < 256; i++) PERM[i + 256] = PERM[i];
+
+    function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+    function lerp(a, b, t) { return a + t * (b - a); }
+    function grad(hash, x, y) {
+      const h = hash & 3;
+      return (h < 2 ? x : -x) + (h === 0 || h === 3 ? y : -y);
+    }
+
+    function noise2d(x, y) {
+      const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255;
+      const xf = x - Math.floor(x), yf = y - Math.floor(y);
+      const u = fade(xf), v = fade(yf);
+      const aa = PERM[PERM[xi] + yi], ab = PERM[PERM[xi] + yi + 1];
+      const ba = PERM[PERM[xi + 1] + yi], bb = PERM[PERM[xi + 1] + yi + 1];
+      return lerp(
+        lerp(grad(aa, xf, yf), grad(ba, xf - 1, yf), u),
+        lerp(grad(ab, xf, yf - 1), grad(bb, xf - 1, yf - 1), u), v
+      );
+    }
+
+    function fbm(x, y, octaves = 4) {
+      let val = 0, amp = 0.5, freq = 1;
+      for (let i = 0; i < octaves; i++) {
+        val += amp * noise2d(x * freq, y * freq);
+        amp *= 0.5;
+        freq *= 2;
+      }
+      return val;
+    }
+
+    // === Bayer 4x4 ===
+    const BAYER4 = [
+       0,  8,  2, 10,
+      12,  4, 14,  6,
+       3, 11,  1,  9,
+      15,  7, 13,  5,
+    ];
+
+    function getDitherColor() {
+      return getComputedStyle(document.documentElement)
+        .getPropertyValue('--color-dither').trim() || '#f0f0f2';
+    }
+
+    function ditherCanvas(canvas, noiseFn, pixelSize = 4, threshold = 0.5) {
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.floor(rect.width);
+      const h = Math.floor(rect.height);
+      if (w === 0 || h === 0) return;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+      const cols = Math.floor(w / pixelSize);
+      const rows = Math.floor(h / pixelSize);
+      ctx.fillStyle = getDitherColor();
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const val = noiseFn(x, y, cols, rows);
+          const bayerVal = BAYER4[(y % 4) * 4 + (x % 4)] / 16;
+          if (val + (bayerVal - 0.5) * 0.4 > threshold) {
+            ctx.fillRect(x * pixelSize, y * pixelSize, pixelSize - 1, pixelSize - 1);
+          }
+        }
+      }
+    }
+
+    function glitchNoise(x, y, cols, rows, offsetX = 0, offsetY = 0) {
+      const nx = x / cols * 5 + offsetX;
+      const ny = y / rows * 3 + offsetY;
+      const base = fbm(nx, ny, 5) * 0.5 + 0.5;
+      const smearY = y / rows * 0.4;
+      const smear = fbm(nx * 0.3, smearY + offsetY, 3) * 0.5 + 0.5;
+      const bandNoise = noise2d(0.1, y / rows * 20 + offsetY) * 0.5 + 0.5;
+      const glitchShift = bandNoise > 0.65 ? (bandNoise - 0.65) * 8 : 0;
+      const shiftedBase = fbm(nx + glitchShift, ny, 4) * 0.5 + 0.5;
+      return shiftedBase * 0.5 + smear * 0.3 + base * 0.2;
+    }
+
+    function renderAllDither() {
+      const heroCanvas = document.getElementById('dither-canvas');
+      if (heroCanvas) {
+        ditherCanvas(heroCanvas, (x, y, cols, rows) => {
+          const nx = x / cols * 4;
+          const ny = y / rows * 4;
+          const n1 = fbm(nx + 1.3, ny + 0.7, 5);
+          const n2 = fbm(nx * 1.5 + 5, ny * 1.5 + 3, 4);
+          const edgeX = Math.min(x / cols, 1 - x / cols) * 2;
+          const edgeY = Math.min(y / rows, 1 - y / rows) * 2;
+          const edgeFade = Math.min(edgeX, edgeY);
+          const combined = (n1 * 0.6 + n2 * 0.4) - edgeFade * 0.3;
+          return combined * 0.5 + 0.5;
+        }, 4, 0.46);
+      }
+
+      const edgeCanvas = document.getElementById('dither-edge');
+      if (edgeCanvas) {
+        edgeCanvas.style.width = '240px';
+        edgeCanvas.style.height = '100vh';
+        ditherCanvas(edgeCanvas, (x, y, cols, rows) => {
+          const nx = x / cols * 3;
+          const ny = y / rows * 6;
+          const n = fbm(nx + 8, ny + 2, 4);
+          const edgeFade = x / cols;
+          return (n * 0.5 + 0.5) * edgeFade;
+        }, 3, 0.52);
+      }
+
+      document.querySelectorAll('[data-dither]').forEach(canvas => {
+        const type = canvas.dataset.dither;
+        if (type === 'glitch-wide') {
+          ditherCanvas(canvas, (x, y, cols, rows) =>
+            glitchNoise(x, y, cols, rows, 0, 0), 3, 0.42);
+        } else if (type === 'band') {
+          ditherCanvas(canvas, (x, y, cols, rows) => {
+            const nx = x / cols * 8;
+            const ny = y / rows * 3;
+            return fbm(nx, ny + 20, 3) * 0.5 + 0.5;
+          }, 3, 0.55);
+        } else if (type === 'smear') {
+          ditherCanvas(canvas, (x, y, cols, rows) =>
+            glitchNoise(x, y, cols, rows, 15, 7), 3, 0.45);
+        } else if (type === 'cloud') {
+          ditherCanvas(canvas, (x, y, cols, rows) => {
+            const nx = x / cols * 5;
+            const ny = y / rows * 3;
+            const n = fbm(nx + 40, ny + 10, 4);
+            const cx = (x / cols - 0.5) * 2;
+            const cy = (y / rows - 0.5) * 2;
+            const dist = Math.sqrt(cx * cx + cy * cy);
+            return (n * 0.5 + 0.5) * (1 - dist * 0.3);
+          }, 3, 0.5);
+        }
+      });
+    }
+
+    renderAllDither();
+
+    // === SVG connector overlay — connects schematic elements ===
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const connSvg = document.getElementById('connector-svg');
+
+    function elCenter(el) {
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+
+    // Edges: [fromId, toId, style, label?]
+    // Topology: intra-cluster (short), inter-cluster (bridge), hub connections
+    const edges = [
+      // Cluster A internal (upper-left)
+      ['ch-0', 'ch-2', 'dashed', null],
+      ['ch-0', 'sc-1', 'dashed-rev', null],
+      ['sc-1', 'ch-1', 'dashed', 'd=0.12'],
+      ['sc-1', 'ch-3', 'dashed-rev', null],
+      ['ch-1', 'ch-2', 'dashed', null],
+      ['ch-2', 'ch-3', 'dashed-rev', 'd=0.08'],
+      // Cluster A → star marker
+      ['sm-1', 'ch-0', 'dashed', null],
+      // Cluster B internal (upper-right, sparse)
+      ['ch-4', 'ch-5', 'dashed', 'd=0.31'],
+      ['sm-2', 'ch-4', 'dashed-rev', null],
+      // Bridge: A → B
+      ['ch-2', 'ch-4', 'dashed-rev', 'cos=0.74'],
+      // Cluster A → hub sc-2 (bridge down)
+      ['ch-3', 'ch-13', 'dashed', null],
+      ['ch-13', 'sc-2', 'dashed-rev', null],
+      // Cluster C internal (mid-left)
+      ['sc-2', 'ch-6', 'dashed', 'd=0.05'],
+      ['sc-2', 'ch-7', 'dashed-rev', null],
+      ['ch-6', 'ch-8', 'dashed', null],
+      ['ch-7', 'ch-8', 'dashed-rev', 'd=0.09'],
+      // Bridge: C → D
+      ['ch-7', 'ch-9', 'dashed', null],
+      ['ch-8', 'ch-14', 'dashed-rev', 'cos=0.62'],
+      // Cluster D internal (lower)
+      ['ch-9', 'ch-10', 'dashed', 'd=0.11'],
+      ['ch-10', 'sm-3', 'dashed-rev', null],
+      ['ch-10', 'ch-15', 'dashed', null],
+      ['ch-11', 'ch-12', 'dashed', 'd=0.06'],
+      ['ch-12', 'sc-3', 'dashed-rev', null],
+      ['sc-3', 'ch-11', 'dashed', null],
+      ['ch-14', 'sc-3', 'dashed-rev', null],
+      // Long bridge: B → D (outlier connection)
+      ['ch-5', 'ch-14', 'dashed', 'cos=0.41'],
+    ];
+
+    function drawConnectors() {
+      while (connSvg.firstChild) connSvg.removeChild(connSvg.firstChild);
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      connSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+      for (let i = 0; i < edges.length; i++) {
+        const [fromId, toId, style, lbl] = edges[i];
+        const fromEl = document.getElementById(fromId);
+        const toEl = document.getElementById(toId);
+        if (!fromEl || !toEl) continue;
+
+        const a = elCenter(fromEl);
+        const b = elCenter(toEl);
+
+        // Single-curve quadratic bezier — one control point offset perpendicular
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const mx = (a.x + b.x) / 2 + dy * 0.12;
+        const my = (a.y + b.y) / 2 - dx * 0.12;
+        const pathD = `M ${a.x},${a.y} Q ${mx},${my} ${b.x},${b.y}`;
+
+        const g = document.createElementNS(svgNS, 'g');
+        g.dataset.edgeIdx = i;
+
+        const path = document.createElementNS(svgNS, 'path');
+        path.setAttribute('d', pathD);
+        path.classList.add(style === 'dashed-rev' ? 'conn-dashed-rev' : 'conn-dashed');
+        g.appendChild(path);
+
+        // Data packet pulse
+        const packet = document.createElementNS(svgNS, 'circle');
+        packet.setAttribute('r', '1.5');
+        packet.classList.add('conn-packet');
+        
+        const dur = (Math.random() * 4 + 3).toFixed(1) + 's';
+        const delay = (Math.random() * 5).toFixed(1) + 's';
+        
+        const motion = document.createElementNS(svgNS, 'animateMotion');
+        motion.setAttribute('dur', dur);
+        motion.setAttribute('begin', delay);
+        motion.setAttribute('repeatCount', 'indefinite');
+        motion.setAttribute('path', pathD);
+        if (style === 'dashed-rev') {
+          motion.setAttribute('keyPoints', '1;0');
+          motion.setAttribute('keyTimes', '0;1');
+          motion.setAttribute('calcMode', 'linear');
+        }
+        
+        const fade = document.createElementNS(svgNS, 'animate');
+        fade.setAttribute('attributeName', 'opacity');
+        fade.setAttribute('values', '0;1;1;0');
+        fade.setAttribute('keyTimes', '0;0.1;0.9;1');
+        fade.setAttribute('dur', dur);
+        fade.setAttribute('begin', delay);
+        fade.setAttribute('repeatCount', 'indefinite');
+
+        packet.appendChild(motion);
+        packet.appendChild(fade);
+        g.appendChild(packet);
+
+        // Endpoint dots
+        for (const pt of [a, b]) {
+          const dot = document.createElementNS(svgNS, 'circle');
+          dot.setAttribute('cx', pt.x);
+          dot.setAttribute('cy', pt.y);
+          dot.classList.add('conn-dot');
+          g.appendChild(dot);
+        }
+
+        // Label near midpoint
+        if (lbl) {
+          const text = document.createElementNS(svgNS, 'text');
+          text.setAttribute('x', (a.x + b.x) / 2 + 6);
+          text.setAttribute('y', (a.y + b.y) / 2 - 6);
+          text.classList.add('conn-label');
+          text.textContent = lbl;
+          g.appendChild(text);
+        }
+
+        connSvg.appendChild(g);
+      }
+    }
+
+    drawConnectors();
+
+    // === Node hover → highlight connected edges ===
+    // Build adjacency: nodeId → [edge indices]
+    const nodeEdges = {};
+    edges.forEach(([fromId, toId], i) => {
+      if (!nodeEdges[fromId]) nodeEdges[fromId] = [];
+      if (!nodeEdges[toId]) nodeEdges[toId] = [];
+      nodeEdges[fromId].push(i);
+      nodeEdges[toId].push(i);
+    });
+
+    document.querySelectorAll('.crosshair-field .ch').forEach(ch => {
+      // Upgrade label to a rich HUD
+      const labelEl = ch.querySelector('.ch-label');
+      if (labelEl) {
+        const slotName = labelEl.textContent;
+        const hex = Math.floor(Math.random() * 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+        labelEl.innerHTML = `
+          <div style="color: var(--color-text-bright); border-bottom: 1px solid var(--color-border); padding-bottom: 2px; margin-bottom: 2px;">[ ${slotName} ]</div>
+          <div style="color: var(--color-text-muted);">STS: ACTIVE</div>
+          <div style="color: var(--color-text-muted);">MEM: 0x${hex}</div>
+        `;
+      }
+
+      ch.addEventListener('mouseenter', () => {
+        const id = ch.id;
+        const indices = nodeEdges[id] || [];
+        for (const idx of indices) {
+          const g = connSvg.querySelector(`g[data-edge-idx="${idx}"]`);
+          if (g) g.classList.add('conn-highlight');
+        }
+      });
+      ch.addEventListener('mouseleave', () => {
+        connSvg.querySelectorAll('.conn-highlight').forEach(g => {
+          g.classList.remove('conn-highlight');
+        });
+      });
+    });
+
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => { renderAllDither(); drawConnectors(); }, 150);
+    });
+  })();
+  </script>
+</body>
+</html>
