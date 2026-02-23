@@ -263,7 +263,7 @@ All user data lives at `~/.agents/`:
 - `packages/core/src/identity.ts` - Identity file detection/loading
 - `packages/core/src/database.ts` - SQLite wrapper
 - `packages/core/src/search.ts` - Hybrid search
-- `packages/core/src/migrations/` - Database migrations (001 through 010)
+- `packages/core/src/migrations/` - Database migrations (001 through 012)
 - `packages/core/src/skills.ts` - Skills unification across harnesses
 - `packages/cli/src/cli.ts` - Main CLI entrypoint (~4600 LOC)
 - `packages/daemon/src/daemon.ts` - HTTP server + watcher
@@ -283,6 +283,7 @@ All user data lives at `~/.agents/`:
 - `packages/daemon/src/connectors/` - Connector framework
 - `packages/daemon/src/update-system.ts` - Update checker singleton
 - `packages/daemon/src/content-normalization.ts` - Content normalization
+- `packages/daemon/src/scheduler/` - Scheduled task worker (cron, spawn, polling)
 - `packages/sdk/src/index.ts` - SDK client
 - `packages/connector-claude-code/src/index.ts` - Claude Code connector
 - `packages/connector-opencode/src/index.ts` - OpenCode connector
@@ -389,6 +390,10 @@ bun src/cli.ts status    # Check status
 | `/api/timeline/*` | GET | Event timeline |
 | `/api/git/*` | GET/POST | Git sync status and operations |
 | `/api/update/*` | GET/POST | Update check and apply |
+| `/api/tasks` | GET/POST | List/create scheduled tasks |
+| `/api/tasks/:id` | GET/PATCH/DELETE | Get/update/delete task |
+| `/api/tasks/:id/run` | POST | Trigger immediate run |
+| `/api/tasks/:id/runs` | GET | Paginated run history |
 | `/api/logs/*` | GET | Daemon log access |
 | `/api/logs/stream` | GET | SSE log streaming |
 | `/api/identity` | GET/POST | Identity file read/write |
@@ -411,6 +416,25 @@ Signet recognizes these standard identity files at `~/.agents/`:
 | BOOTSTRAP.md | no | Setup ritual (typically deleted after first run) |
 
 The `detectExistingSetup()` function in `packages/core/src/identity.ts` detects existing setups from OpenClaw, Claude Code, and OpenCode.
+
+## CI/CD & Publishing
+
+Releases are fully automated via GitHub Actions
+(`.github/workflows/release.yml`). On every push to `main` (that isn't
+already a release commit):
+
+1. CI builds all packages
+2. Bumps the patch version across all `package.json` files
+3. Generates changelog via `scripts/changelog.ts`
+4. Publishes `signetai` and `@signet/adapter-openclaw` to npm
+5. Commits the version bump and pushes with tags
+
+**Do not publish packages manually.** Just push to `main` and CI
+handles the rest. The npm token is stored as a GitHub Actions secret
+(`NPM_TOKEN`).
+
+To add a new package to the publish step, append it to the "Publish
+to npm" step in `release.yml`.
 
 ## Notes
 

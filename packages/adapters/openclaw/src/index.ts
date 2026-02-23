@@ -9,10 +9,15 @@
  * Usage in OpenClaw config:
  * ```json
  * {
- *   "plugins": ["@signet/adapter-openclaw"],
- *   "signet": {
- *     "enabled": true,
- *     "daemonUrl": "http://localhost:3850"
+ *   "plugins": {
+ *     "entries": {
+ *       "@signet/adapter-openclaw": {
+ *         "enabled": true,
+ *         "config": {
+ *           "daemonUrl": "http://localhost:3850"
+ *         }
+ *       }
+ *     }
  *   }
  * }
  * ```
@@ -475,7 +480,7 @@ export async function recall(
 // ============================================================================
 
 export interface ToolDefinition {
-	fn: (...args: unknown[]) => Promise<unknown>;
+	fn: (...args: never[]) => Promise<unknown>;
 	schema: Record<string, unknown>;
 }
 
