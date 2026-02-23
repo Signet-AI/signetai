@@ -4,7 +4,8 @@
   "description": "Portable AI agent identity - own your agent, bring it anywhere",
   "type": "module",
   "bin": {
-    "signet": "bin/signet.js"
+    "signet": "bin/signet.js",
+    "signet-mcp": "dist/mcp-stdio.js"
   },
   "files": [
     "bin",
@@ -17,7 +18,7 @@
   "scripts": {
     "build": "bun run build:cli && bun run build:daemon && bun run build:dashboard",
     "build:cli": "bun build ../cli/src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
-    "build:daemon": "bun build ../daemon/src/daemon.ts --outfile ./dist/daemon.js --target bun",
+    "build:daemon": "bun build ../daemon/src/daemon.ts --outfile ./dist/daemon.js --target bun && bun build ../daemon/src/mcp-stdio.ts --outfile ./dist/mcp-stdio.js --target bun",
     "build:dashboard": "rm -rf ./dashboard && cp -r ../cli/dashboard/build ./dashboard 2>/dev/null || echo 'Dashboard not built yet'",
     "prepublishOnly": "bun run build",
     "postinstall": "node ./bin/postinstall.js || true"
