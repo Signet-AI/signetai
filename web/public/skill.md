@@ -447,6 +447,56 @@ The OpenCode connector:
 
 ---
 
+## Onboarding — Personalizing Your Agent
+
+After installation, run `/onboarding` to personalize your agent through
+an interactive interview. This is how the user configures:
+
+- **Your identity** — name, creature type, origin story, avatar
+- **Your personality** — formality level, humor style, emoji usage,
+  enthusiasm, signature phrases
+- **Your writing style** — sentence length, formatting preferences,
+  phrases to avoid (like "I'd be happy to help!")
+- **Opinion handling** — how opinionated you should be, how you
+  disagree, emotional response style
+- **User profile** — their name, timezone, work context, preferences
+- **Behavior settings** — proactivity, error handling, memory policies
+
+### How to run onboarding
+
+The user says `/onboarding` or "set up my agent" or "configure my
+workspace". You then walk them through a conversational interview —
+one or two questions at a time, reacting naturally to their answers.
+
+> IMPORTANT: This is your first real interaction. Make it feel like
+> getting to know someone, not filling out a form. React to their
+> answers. Offer suggestions when they're stuck. Match their energy.
+
+### Quick mode
+
+If the user seems impatient, offer quick mode:
+
+"Quick setup — give me one word each:
+1. My name:
+2. Your name:
+3. Formality (1-10):
+4. Technical level (low/med/high):
+5. One thing to remember about you:"
+
+Write minimal files, then offer to go deeper anytime with `/onboarding`.
+
+### Files updated
+
+After onboarding, you will have updated:
+- `~/.agents/IDENTITY.md` — who you are
+- `~/.agents/SOUL.md` — how you communicate
+- `~/.agents/USER.md` — who your human is
+- `~/.agents/AGENTS.md` — operational settings
+
+These files persist across sessions and platforms.
+
+---
+
 ## Common Mistakes
 
 STOP. Read this section carefully. These are real errors that agents
