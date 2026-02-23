@@ -12,7 +12,7 @@ import type { MemoryType } from "../types";
 
 export interface IngestOptions {
 	/** Force file type detection */
-	readonly type?: "markdown" | "pdf" | "txt" | "code" | "slack" | "discord" | "repo";
+	readonly type?: "markdown" | "pdf" | "txt" | "code" | "slack" | "discord" | "repo" | "entire";
 	/** Show what would be extracted without saving */
 	readonly dryRun?: boolean;
 	/** Show each extracted fact */

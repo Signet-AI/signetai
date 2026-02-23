@@ -27,6 +27,7 @@ import { parsePdf } from "./pdf-parser";
 import { parseSlackExport } from "./slack-parser";
 import { parseDiscordExport } from "./discord-parser";
 import { parseCodeRepository } from "./code-parser";
+import { parseEntireRepo, hasEntireBranch } from "./entire-parser";
 import { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
 import { extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
 import type { ExtractorConfig } from "./extractor";
@@ -61,6 +62,9 @@ export { parsePdf } from "./pdf-parser";
 export { parseSlackExport } from "./slack-parser";
 export { parseDiscordExport } from "./discord-parser";
 export { parseCodeRepository } from "./code-parser";
+export { parseEntireRepo, hasEntireBranch } from "./entire-parser";
+export { extractFromEntireSession, extractFromEntireSessions } from "./entire-extractor";
+export type { EntireExtractorConfig } from "./entire-extractor";
 export { extractFromConversation, extractFromConversations, extractParticipants } from "./chat-extractor";
 export type { ChatExtractorConfig } from "./chat-extractor";
 export { computeFileHash, buildProvenance } from "./provenance";
@@ -83,7 +87,7 @@ const SKIP_FILES = new Set([
 	".git", ".env", ".env.local",
 ]);
 
-type FileType = "markdown" | "pdf" | "txt" | "code" | "slack" | "discord" | "repo" | "skip";
+type FileType = "markdown" | "pdf" | "txt" | "code" | "slack" | "discord" | "repo" | "entire" | "skip";
 
 function detectFileType(filePath: string): FileType {
 	const name = basename(filePath);
@@ -189,8 +193,8 @@ function collectFiles(
 
 	const stat = statSync(absPath);
 
-	// Handle forced types for chat/repo (these are directory-level, not file-level)
-	if (forcedType === "slack" || forcedType === "discord" || forcedType === "repo") {
+	// Handle forced types for chat/repo/entire (these are directory-level, not file-level)
+	if (forcedType === "slack" || forcedType === "discord" || forcedType === "repo" || forcedType === "entire") {
 		return [{ path: absPath, type: forcedType as FileType }];
 	}
 
@@ -212,6 +216,10 @@ function collectFiles(
 			}
 			if (isDiscordExport(absPath)) {
 				return [{ path: absPath, type: "discord" }];
+			}
+			if (isGitRepo(absPath) && hasEntireBranch(absPath)) {
+				// Auto-detect Entire.io sessions
+				return [{ path: absPath, type: "entire" }];
 			}
 			if (isGitRepo(absPath)) {
 				// For git repos, only auto-detect if explicitly using --type repo
@@ -276,6 +284,8 @@ async function parseFile(
 			return parseDiscordExport(filePath);
 		case "repo":
 			return parseCodeRepository(filePath);
+		case "entire":
+			return parseEntireRepo(filePath);
 		default:
 			return parseTxt(filePath);
 	}
@@ -394,6 +404,23 @@ export async function ingestPath(
 			byType: {},
 			files: [],
 		};
+	}
+
+	// Emit helpful message when Entire.io sessions are auto-detected
+	const hasEntire = files.some((f) => f.type === "entire");
+	if (hasEntire && !options.type) {
+		onProgress?.({
+			type: "file-start",
+			filePath: inputPath,
+			fileIndex: 0,
+			totalFiles: files.length,
+		});
+		// Log detection message — CLI can display this to the user
+		if (options.verbose) {
+			console.log(
+				"Detected Entire.io sessions — extracting developer skill signals from AI coding transcripts...",
+			);
+		}
 	}
 
 	// Configure extractor
