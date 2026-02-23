@@ -1,12 +1,29 @@
 # Procedural Memory: Skills as Knowledge Graph Nodes
 
-Status: Draft
+Status: Proposed Spec (implementation-targeted)
 
 Audience: Core + Daemon maintainers
 
 Dependency: Memory Pipeline v2 (phases A-E minimum)
 
 Reference: arscontexta kernel (references/arscontexta/)
+
+---
+
+## 0) Current Baseline and Scope
+
+This spec is written against the current Signet codebase state:
+
+- Skills are filesystem artifacts only (`~/.agents/skills/*/SKILL.md`).
+- Graph tables exist (`entities`, `relations`, `memory_entity_mentions`).
+- Graph retrieval currently boosts memory recall via one-hop entity
+  expansion.
+- Hooks currently inject AGENTS/MEMORY/recalled memories, not skills.
+- No watcher currently reconciles skill filesystem changes into graph
+  state.
+
+This document defines the **required contract additions** to bridge
+that gap. Where existing behavior differs, this spec is normative.
 
 ---
 
@@ -176,25 +193,43 @@ discoverable. They can become *less prominent* but never invisible.
 
 ### 6.1 Skill nodes in the entity graph
 
-Skills are stored as entities with `entityType = 'skill'`:
+Skills are stored as entities with `entity_type = 'skill'`:
 
 ```sql
--- No new table needed. Skills use the existing entities table.
--- entityType: 'skill'
+-- No new base graph table needed. Skills use entities + skill_meta.
 -- name: skill name (e.g. 'browser-use')
--- canonicalName: normalized skill name
+-- canonical_name: normalized skill name
 -- description: from SKILL.md frontmatter
--- embedding: vector from enriched frontmatter
+-- mentions: graph mention count
 
 INSERT INTO entities (
-  id, name, canonical_name, entity_type, description,
-  mentions, embedding, created_at, updated_at
+  id, name, canonical_name, entity_type, description, mentions,
+  created_at, updated_at
 ) VALUES (
   'skill:browser-use', 'browser-use', 'browser-use', 'skill',
-  'Automates browser interactions for web testing...',
-  0, <embedding>, datetime('now'), datetime('now')
+  'Automates browser interactions for web testing...', 1,
+  datetime('now'), datetime('now')
 );
 ```
+
+#### Skill embeddings (normative)
+
+Skill retrieval vectors are persisted in the existing `embeddings`
+pipeline path so they can use sqlite-vec indexing consistently.
+
+```sql
+INSERT INTO embeddings (
+  id, source_type, source_id, content_hash, model, dimensions,
+  vector, created_at
+) VALUES (
+  '<embedding-id>', 'skill', 'skill:browser-use', '<hash>',
+  '<embedding-model>', <dims>, <blob>, datetime('now')
+);
+```
+
+The frontmatter embedding may also be mirrored to `entities.embedding`
+for inspection/debug convenience, but ranking/search must use the
+`embeddings` + `vec_embeddings` path.
 
 ### 6.2 Skill metadata table (new)
 
@@ -219,6 +254,7 @@ CREATE TABLE skill_meta (
   use_count     INTEGER DEFAULT 0,
   decay_rate    REAL DEFAULT 0.99,
   fs_path       TEXT NOT NULL,  -- path to SKILL.md on disk
+  uninstalled_at TEXT,           -- null while installed
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -289,7 +325,7 @@ Both use the existing `relations` table:
 
 ```sql
 INSERT INTO relations (
-  source_entity_id, target_entity_id, relationship,
+  source_entity_id, target_entity_id, relation_type,
   strength, mentions, confidence, metadata
 ) VALUES (
   'skill:browser-use', 'skill:web-perf', 'often_used_with',
@@ -326,9 +362,11 @@ or harness unification):
    durable and human-editable. Skills that already have rich
    frontmatter skip this step (determined by checking that
    `description` is >30 chars and `triggers` exists).
+   Implementation requirement: this step must use YAML-aware
+   parse/serialize (round-trip) behavior, not regex-only extraction.
 3. Generate embedding from the enriched frontmatter only:
    `name + description + triggers`. The body is not embedded.
-4. Create entity row with `entityType = 'skill'`.
+4. Create entity row with `entity_type = 'skill'`.
 5. Create `skill_meta` row with installation metadata, including
    `role` (from frontmatter or default 'utility') and `tags`.
 6. Run extraction on SKILL.md body to find entity references
@@ -349,26 +387,62 @@ process rather than relying on skill authors to write good metadata.
 
 When the agent invokes a skill during a session:
 
-1. Increment `use_count` and update `last_used_at` in `skill_meta`.
-2. Boost the skill entity's importance (usage resets decay).
-3. Session-end extraction naturally creates episodic memories that
-   mention the skill — the extraction pipeline links these to the
-   skill entity via `memory_entity_mentions`.
+1. Emit a structured usage event at invocation time.
+2. Increment `use_count` and update `last_used_at` in `skill_meta`.
+3. Upsert a `memory_entity_mentions` link when a memory id is known,
+   otherwise queue link creation until session-end summaries are
+   persisted.
+4. Boost procedural importance/recency score used by suggestions.
 
-No special handling needed: the existing extraction pipeline handles
-this if skill entities exist in the graph.
+Normative API contract:
+
+```http
+POST /api/skills/used
+Content-Type: application/json
+
+{
+  "skill": "browser-use",
+  "sessionKey": "optional",
+  "memoryId": "optional",
+  "project": "optional",
+  "runtimePath": "plugin|legacy"
+}
+```
+
+This endpoint is idempotent per `(skill, sessionKey, memoryId, day)`
+to avoid inflated usage counts from retries.
 
 ### 7.3 Skill uninstallation
 
 When a skill is removed:
 
-1. Soft-delete the entity row (same `is_deleted` pattern as memories).
-2. Soft-delete the `skill_meta` row.
-3. Relations and mentions remain for the retention window.
-4. The filesystem artifact is removed as before.
-5. After retention window, hard-delete cascades through graph tables.
+1. Remove filesystem artifact (existing behavior).
+2. Set `skill_meta.uninstalled_at`.
+3. Immediately remove skill relation edges (`relations` where source or
+   target is the skill entity).
+4. Remove skill mention links from `memory_entity_mentions`.
+5. Hard-delete skill entity row and `skill_meta` row in same write
+   transaction.
 
-### 7.4 Relation discovery (open triangle detection)
+Rationale: current graph retention/orphan cleanup is hard-delete
+oriented; this spec keeps skill lifecycle consistent with current graph
+semantics and avoids introducing a second tombstone model.
+
+### 7.4 Filesystem reconciliation (self-healing)
+
+A periodic reconciler (and startup backfill) must sync filesystem and
+graph state:
+
+1. List installed skills from `~/.agents/skills/*/SKILL.md`.
+2. Ensure each installed skill has entity + `skill_meta` + embedding.
+3. Mark any indexed skill whose file is missing as uninstalled, then
+   execute uninstallation flow.
+4. Emit metrics (`skillsIndexed`, `skillsReconciled`, `skillsRemoved`).
+
+The daemon file watcher should also watch `~/.agents/skills/**/SKILL.md`
+for low-latency reconciliation.
+
+### 7.5 Relation discovery (open triangle detection)
 
 Implicit skill-to-skill relations are discovered through open
 triangle detection in the graph, inspired by arscontexta's graph
@@ -425,13 +499,17 @@ GET /api/skills/suggest?context=<text>
 ```
 
 1. Embed the context text.
-2. Find nearest entities in the graph.
-3. Filter to `entityType = 'skill'`.
+2. Query nearest vectors from `embeddings` where `source_type = 'skill'`.
+3. Resolve to entities (`entity_type = 'skill'`) and join `skill_meta`.
 4. Rank by: embedding similarity × importance × recency boost.
 5. Return top-K skill suggestions with reasoning.
 
-This powers session-start hooks that can suggest relevant skills
-based on the current working context.
+Hook integration (normative):
+
+- `handleSessionStart` should call `/api/skills/suggest` when
+  `context` is present and append a `## Relevant Skills` block.
+- `handleUserPromptSubmit` may also call suggestions with a tighter
+  character budget for per-turn hints.
 
 ### 8.3 Skill search enhancement
 
@@ -439,6 +517,8 @@ The existing `/api/skills` list endpoint gains an optional
 `?ranked=true` parameter that sorts installed skills by graph
 importance rather than alphabetically. Skills with richer graph
 neighborhoods (more linked memories, more relations) rank higher.
+Response shape remains backward-compatible with existing consumers;
+ranking metadata is additive (`score`, `reason`).
 
 ---
 
@@ -474,22 +554,28 @@ showing:
 - Implement frontmatter enrichment: LLM pass to generate rich
   `description` and `triggers` fields for skills with thin metadata.
 - On skill install, enrich → embed → create entity + skill_meta rows.
-- On skill uninstall, soft-delete entity.
+- Persist skill vectors through `embeddings` (`source_type = 'skill'`)
+  and sync into sqlite-vec.
+- On skill uninstall, execute hard-delete lifecycle (section 7.3).
 - Backfill: scan existing installed skills, enrich frontmatter where
   needed, and create nodes for them.
 - Embed enriched frontmatter using configured embedding provider.
+- Add YAML round-trip frontmatter writer for enrichment output.
+- Add reconciler job (startup + interval) and watcher coverage for
+  `~/.agents/skills/**/SKILL.md`.
 
 **Depends on**: Pipeline v2 Phase A (migration infrastructure),
 Phase E (graph tables exist).
 
 ### Phase P2: Usage tracking and linking
 
-- Hook into skill invocation to increment use_count and boost
-  importance.
-- Ensure session-end extraction recognizes skill names as entities
-  and links episodic memories to skill nodes.
-- Add skill name list to extraction prompt context so the LLM knows
-  which skills exist.
+- Add `POST /api/skills/used` usage event endpoint.
+- Wire connectors/hook paths to emit usage events on actual skill
+  invocation.
+- Increment `use_count`, `last_used_at`, and procedural recency score.
+- Link usage to memory rows when memory ids are available; defer link
+  when they are not.
+- Optionally add installed skill names as extraction context hints.
 
 **Depends on**: Phase P1, Pipeline v2 Phase B (extraction pipeline).
 
@@ -507,6 +593,7 @@ Phase E (graph tables exist).
 - `/api/skills/suggest` endpoint.
 - `?ranked=true` parameter for skill listing.
 - Session-start hook integration for proactive suggestions.
+- Optional user-prompt-submit integration with tighter budget.
 
 **Depends on**: Phase P3, Pipeline v2 Phase E (graph retrieval).
 
@@ -522,22 +609,24 @@ Phase E (graph tables exist).
 
 ## 11) Configuration
 
-Extension to the pipeline config block:
+Extension to the existing `memory.pipelineV2` config block:
 
 ```yaml
-pipeline:
-  # ... existing config ...
-  procedural:
-    enabled: true
-    decayRate: 0.99
-    minImportance: 0.3
-    importanceOnInstall: 0.7
-    affinityThreshold: 3       # min shared memories for implicit relation
-    affinityMode: event        # 'event' (threshold-triggered) or 'interval'
-    affinityInterval: 6h       # fallback interval if mode is 'interval'
-    suggestionLimit: 5
-    enrichOnInstall: true      # auto-enrich thin frontmatter via LLM
-    enrichMinDescription: 30   # min chars before description is "rich enough"
+memory:
+  pipelineV2:
+    # ... existing config ...
+    procedural:
+      enabled: true
+      decayRate: 0.99
+      minImportance: 0.3
+      importanceOnInstall: 0.7
+      affinityThreshold: 3       # min shared memories for implicit relation
+      affinityMode: event        # 'event' or 'interval'
+      affinityIntervalMs: 21600000
+      suggestionLimit: 5
+      enrichOnInstall: true
+      enrichMinDescription: 30
+      reconcileIntervalMs: 60000
 ```
 
 ---
@@ -545,14 +634,14 @@ pipeline:
 ## 12) Safety and Invariants
 
 1. **Skill nodes are not deletable by LLM decisions.** Only explicit
-   user action (uninstall) removes a skill node. The extraction
-   pipeline can link memories to skills but cannot delete or modify
-   skill entities.
+   install/uninstall or reconciler logic can create/remove skill nodes.
+   Extraction may increment graph mention counters but may not modify
+   lifecycle fields (`installed_at`, `uninstalled_at`, `use_count`).
 
 2. **Filesystem remains authoritative for skill runtime.** If a
-   SKILL.md exists on disk but has no graph node, the system creates
-   one (self-healing). If a graph node exists but the filesystem
-   artifact is gone, the node is soft-deleted on next scan.
+   SKILL.md exists on disk but has no graph node, reconciler creates
+   one. If a graph node exists but file is missing, reconciler executes
+   uninstallation flow.
 
 3. **Skill importance has a floor.** Unlike semantic memories,
    installed skills never decay below `minImportance`. They can
@@ -563,7 +652,12 @@ pipeline:
    them from explicit relations extracted from SKILL.md content.
 
 5. **Backfill is idempotent.** Running skill node creation on an
-   already-indexed skill is a no-op (matched by canonical name).
+   already-indexed skill is a no-op (matched by canonical name and
+   frontmatter hash).
+
+6. **No regex-only frontmatter rewrites.** Metadata enrichment must use
+   YAML round-trip serialization so existing fields/comments are
+   preserved as much as possible.
 
 ---
 
@@ -617,7 +711,7 @@ pipeline:
 
 ## 15) Resolved Decisions
 
-1. **Embedding strategy** (was open question #4): Embed enriched
+1. **Embedding strategy**: Embed enriched
    frontmatter only (`name + description + triggers`). The SKILL.md
    body is execution context, not retrieval signal. Frontmatter is
    auto-enriched via LLM on install when descriptions are thin or
