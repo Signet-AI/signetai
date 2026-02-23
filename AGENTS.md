@@ -3,7 +3,7 @@ Repo: github.com/signetai/signetai
 GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 Branching: `<username>/<feature>` off main
 Conventional commits: `type(scope): subject`
-Last Updated: 2026/02/21
+Last Updated: 2026/02/23
 This file: AGENTS.md -> Symlinked to CLAUDE.md
 ---
 
@@ -95,11 +95,13 @@ bun run build    # Static build to build/
 
 ### Website Development
 
+Astro static site, deployed to Cloudflare Pages via wrangler.
+
 ```bash
 cd web
-bun run dev      # Local dev (wrangler dev) at localhost:8787
-bun run deploy   # Deploy to Cloudflare
-bun run test     # Tests (vitest + workers pool)
+bun run dev      # Astro dev server
+bun run build    # Static build to dist/
+bun run deploy   # Deploy to Cloudflare (wrangler)
 ```
 
 ## Packages
@@ -116,7 +118,7 @@ bun run test     # Tests (vitest + workers pool)
 | `@signet/connector-openclaw` | OpenClaw connector: config patching, hook handlers | node |
 | `@signet/adapter-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
 | `signetai` | Meta-package bundling CLI + daemon | - |
-| `@signet/web` | Marketing website (Cloudflare Worker) | cloudflare |
+| `@signet/web` | Marketing website (Astro static, Cloudflare Pages) | cloudflare |
 
 ### Package Responsibilities
 
@@ -145,6 +147,8 @@ bun run test     # Tests (vitest + workers pool)
 - System service (launchd/systemd)
 - Pipeline V2 (`src/pipeline/`) — LLM-based memory extraction
 - Session tracker — plugin vs legacy runtime path mutex
+- Update system (`update-system.ts`) — extracted singleton module
+  with `getUpdateState()` / `getUpdateSummary()` accessors
 
 **@signet/sdk** - Third-party integration
 - SignetSDK class for embedding Signet in apps
@@ -158,9 +162,10 @@ bun run test     # Tests (vitest + workers pool)
   daemon-side runtime connector framework (filesystem watch, registry)
 
 **@signet/web** - Marketing website
-- Cloudflare Worker serving static landing page
-- `web/src/index.ts` — Worker fetch handler (routes `/message`, `/random`)
-- `web/public/index.html` — Single-file landing page (~2000 LOC, no build step)
+- Astro static site deployed to Cloudflare Pages
+- `web/src/pages/` — Astro page routes
+- `web/src/components/` — Reusable UI components
+- `web/src/styles/` — Global styles
 - Design: Chakra Petch (display), IBM Plex Mono (body)
 - Dark: `#08080a` bg, `#d4d4d8` text | Light: `#e4dfd8` bg, `#2a2a2e` text
 - CSS vars: `--color-*`, `--space-*`, `--font-*`
@@ -271,15 +276,16 @@ All user data lives at `~/.agents/`:
 - `packages/daemon/src/diagnostics.ts` - Health scoring
 - `packages/daemon/src/repair-actions.ts` - Repair actions for broken state
 - `packages/daemon/src/connectors/` - Connector framework
+- `packages/daemon/src/update-system.ts` - Update checker singleton
 - `packages/daemon/src/content-normalization.ts` - Content normalization
 - `packages/sdk/src/index.ts` - SDK client
 - `packages/connector-claude-code/src/index.ts` - Claude Code connector
 - `packages/connector-opencode/src/index.ts` - OpenCode connector
 - `packages/connector-openclaw/src/index.ts` - OpenClaw connector
 - `packages/adapters/openclaw/src/index.ts` - OpenClaw runtime adapter
-- `web/src/index.ts` - Website Worker fetch handler
-- `web/public/index.html` - Landing page (single-file, no build step)
-- `docs/ARCHITECTURE.md` - Full technical documentation
+- `web/src/pages/` - Astro page routes
+- `docs/` - Full documentation suite (architecture, API, CLI, etc.)
+- `scripts/post-push-sync.sh` - Post-push release sync script
 
 Style & Conventions
 ---
