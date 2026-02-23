@@ -84,7 +84,7 @@ export async function getAgentDid(): Promise<string | null> {
  */
 export async function signEnvelope(
 	envelope: IngestEnvelope,
-): Promise<IngestEnvelope> {
+): Promise<IngestEnvelope & { signed?: boolean }> {
 	if (!isSigningAvailable()) return envelope;
 
 	// Respect the autoSign config flag in agent.yaml
@@ -107,7 +107,7 @@ export async function signEnvelope(
 
 		// Return a new object — don't mutate the input (avoids race conditions
 		// if the caller retries or passes the same envelope elsewhere).
-		return { ...envelope, signerDid: did, signature };
+		return { ...envelope, signerDid: did, signature, signed: true };
 	} catch (err) {
 		// Signing failed — log but don't block memory creation
 		console.warn(

@@ -236,17 +236,14 @@ async function buildLayers(leaves: string[]): Promise<string[][]> {
   let current = layers[0];
 
   while (current.length > 1) {
-    // Duplicate last element if odd count
-    if (current.length % 2 !== 0) {
-      current = [...current, current[current.length - 1]];
-      // Update the layer in place so proof generation sees the padded version
-      layers[layers.length - 1] = current;
-    }
-
     const next: string[] = [];
-    for (let i = 0; i < current.length; i += 2) {
-      const leftBytes = hexToBytes(current[i]);
-      const rightBytes = hexToBytes(current[i + 1]);
+    // Pair up nodes; if odd count, promote the last node directly
+    // instead of duplicating it. Duplication caused [A,B,C] and
+    // [A,B,C,C] to produce identical roots — phantom inclusion proofs.
+    const pairCount = Math.floor(current.length / 2);
+    for (let i = 0; i < pairCount; i++) {
+      const leftBytes = hexToBytes(current[i * 2]);
+      const rightBytes = hexToBytes(current[i * 2 + 1]);
       // Domain separation: internal nodes get 0x01 prefix to prevent
       // second-preimage attacks (leaf vs internal node confusion).
       const combined = new Uint8Array(1 + HASH_BYTES * 2);
@@ -255,6 +252,10 @@ async function buildLayers(leaves: string[]): Promise<string[][]> {
       combined.set(rightBytes, 1 + HASH_BYTES);
       const hash = sodium.crypto_generichash(HASH_BYTES, combined, null);
       next.push(bytesToHex(hash));
+    }
+    // Promote unpaired last node directly (no duplication)
+    if (current.length % 2 !== 0) {
+      next.push(current[current.length - 1]);
     }
 
     layers.push(next);
@@ -372,13 +373,15 @@ export function generateProof(tree: MerkleTree, leafIndex: number): MerkleProof 
     const isLeft = idx % 2 === 0;
     const siblingIdx = isLeft ? idx + 1 : idx - 1;
 
-    // siblingIdx should always be valid because odd layers are padded
+    // With promotion (not duplication), the last unpaired node has no
+    // sibling — it was promoted directly. Skip this level in the proof.
     if (siblingIdx < layer.length) {
       siblings.push({
         hash: layer[siblingIdx],
         position: isLeft ? 'right' : 'left',
       });
     }
+    // else: this node was promoted (no sibling) — no proof step needed
 
     // Move to parent index
     idx = Math.floor(idx / 2);
@@ -443,7 +446,12 @@ export async function verifyProof(
       current = bytesToHex(sodium.crypto_generichash(HASH_BYTES, combined, null));
     }
 
-    return current === root;
+    // Constant-time comparison to prevent timing side-channels.
+    // JavaScript string === short-circuits, leaking prefix information.
+    const currentBytes = hexToBytes(current);
+    const rootBytes = hexToBytes(root);
+    if (currentBytes.length !== rootBytes.length) return false;
+    return sodium.memcmp(currentBytes, rootBytes);
   } catch {
     // Malformed hex in proof siblings → invalid proof, not a crash
     return false;

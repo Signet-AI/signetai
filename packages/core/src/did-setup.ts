@@ -106,7 +106,9 @@ export async function initializeAgentDid(): Promise<DidSetupResult> {
 	const didDocPath = join(AGENTS_DIR, "did.json");
 
 	try {
-		writeFileSync(didDocPath, JSON.stringify(didDocument, null, 2));
+		// DID documents are public data but written with restricted perms
+		// for consistency with the rest of the .agents/ directory.
+		writeFileSync(didDocPath, JSON.stringify(didDocument, null, 2), { mode: 0o644 });
 	} catch (err) {
 		console.warn(
 			"[did-setup] Failed to write did.json:",
@@ -149,17 +151,38 @@ export function hasConfiguredDid(): boolean {
 
 /**
  * Check if auto-signing is enabled in agent.yaml.
+ * Cached for 60 seconds to avoid reading the file on every memory creation.
+ * The cache is invalidated by initializeAgentDid() (key rotation).
  */
+let _autoSignCache: { value: boolean; expiresAt: number } | null = null;
 export function isAutoSignEnabled(): boolean {
+	const now = Date.now();
+	if (_autoSignCache && _autoSignCache.expiresAt > now) {
+		return _autoSignCache.value;
+	}
+
 	const yamlPath = join(AGENTS_DIR, "agent.yaml");
-	if (!existsSync(yamlPath)) return false;
+	if (!existsSync(yamlPath)) {
+		_autoSignCache = { value: false, expiresAt: now + 60_000 };
+		return false;
+	}
 
 	try {
 		const raw = readFileSync(yamlPath, "utf-8");
 		const config = parse(raw) as Record<string, unknown>;
 		const signing = config.signing as Record<string, unknown> | undefined;
-		return signing?.autoSign === true;
+		const result = signing?.autoSign === true;
+		_autoSignCache = { value: result, expiresAt: now + 60_000 };
+		return result;
 	} catch {
+		_autoSignCache = { value: false, expiresAt: now + 60_000 };
 		return false;
 	}
+}
+
+/**
+ * Invalidate the auto-sign cache. Called after key rotation/DID changes.
+ */
+export function invalidateAutoSignCache(): void {
+	_autoSignCache = null;
 }

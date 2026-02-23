@@ -220,6 +220,7 @@ export {
 	getConfiguredDid,
 	hasConfiguredDid,
 	isAutoSignEnabled,
+	invalidateAutoSignCache,
 } from "./did-setup";
 export type { DidSetupResult } from "./did-setup";
 
