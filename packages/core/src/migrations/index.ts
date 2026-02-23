@@ -24,6 +24,7 @@ import { up as decisionsAndContradictions } from "./015-decisions-and-contradict
 import { up as sessionMetrics } from "./016-session-metrics";
 import { up as perceptionTables } from "./017-perception-tables";
 import { up as onchainIdentity } from "./018-onchain-identity";
+import { up as sessionKeysAndExport } from "./019-session-keys-and-export";
 
 // -- Public interface consumed by Database.init() --
 
@@ -113,6 +114,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 18,
 		name: "onchain-identity",
 		up: onchainIdentity,
+	},
+	{
+		version: 19,
+		name: "session-keys-and-export",
+		up: sessionKeysAndExport,
 	},
 ];
 

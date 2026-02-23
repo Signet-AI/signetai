@@ -55,3 +55,33 @@ export type {
 	ChainMerkleTree,
 	ChainMerkleProof,
 } from "./merkle";
+
+// Session keys (Phase 4B)
+export {
+	createSessionKey,
+	loadSessionKey,
+	revokeSessionKey,
+	getActiveSessionKeys,
+	getSessionKeyById,
+	validateSessionKeyPermission,
+} from "./session-keys";
+export type {
+	SessionKey,
+	SessionPermissions,
+	TransactionData,
+} from "./session-keys";
+
+// x402 Payments (Phase 4B)
+export {
+	createPaymentHeader,
+	verifyPaymentHeader,
+	processPayment,
+	getPaymentHistory,
+	getDailySpend,
+	getDailyTransactionCount,
+} from "./payments";
+export type {
+	PaymentHeader,
+	PaymentRecord,
+	PaymentHistoryOptions,
+} from "./payments";

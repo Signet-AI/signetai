@@ -350,3 +350,50 @@ export type {
 	ChainMerkleTree,
 	ChainMerkleProof,
 } from "./chain/index";
+
+// Session Keys (Phase 4B)
+export {
+	createSessionKey,
+	loadSessionKey,
+	revokeSessionKey,
+	getActiveSessionKeys,
+	getSessionKeyById,
+	validateSessionKeyPermission,
+} from "./chain/index";
+export type {
+	SessionKey,
+	SessionPermissions,
+	TransactionData,
+} from "./chain/index";
+
+// x402 Payments (Phase 4B)
+export {
+	createPaymentHeader,
+	verifyPaymentHeader,
+	processPayment,
+	getPaymentHistory,
+	getDailySpend,
+	getDailyTransactionCount,
+} from "./chain/index";
+export type {
+	PaymentHeader,
+	PaymentRecord,
+	PaymentHistoryOptions,
+} from "./chain/index";
+
+// Portable Export/Import Bundles (Phase 4B)
+export {
+	exportBundle,
+	importBundle,
+	exportSelective,
+} from "./export/index";
+export type {
+	ExportBundle as SignetExportBundle,
+	ExportBundleData,
+	ExportBundleMetadata,
+	ExportDb as BundleExportDb,
+	ExportOptions as BundleExportOptions,
+	ImportOptions as BundleImportOptions,
+	ImportResult as BundleImportResult,
+	MergeStrategy,
+} from "./export/index";
