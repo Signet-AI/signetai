@@ -555,6 +555,17 @@ signet sync                  # Sync built-in templates/skills
 signet dashboard             # Open web UI
 ```
 
+## Scheduled Tasks
+
+Signet supports scheduled agent prompts via the daemon. Tasks are
+defined with cron expressions and executed by spawning Claude Code
+or OpenCode CLI processes.
+
+- Create tasks via the dashboard Tasks tab or `POST /api/tasks`
+- Cron presets: every 15 min, hourly, daily 9am, weekly Mon 9am
+- Run history with stdout/stderr capture available per task
+- Maximum 3 concurrent task processes, 10-minute default timeout
+
 ---
 
 *Signet AI — https://signetai.sh — Your agent is yours.*

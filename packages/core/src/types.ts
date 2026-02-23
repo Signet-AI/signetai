@@ -214,6 +214,45 @@ export type HistoryEvent = (typeof HISTORY_EVENTS)[number];
 export const DECISION_ACTIONS = ["add", "update", "delete", "none"] as const;
 export type DecisionAction = (typeof DECISION_ACTIONS)[number];
 
+// -- Scheduled tasks --
+
+export const TASK_HARNESSES = ["claude-code", "opencode"] as const;
+export type TaskHarness = (typeof TASK_HARNESSES)[number];
+
+export const TASK_RUN_STATUSES = [
+	"pending",
+	"running",
+	"completed",
+	"failed",
+] as const;
+export type TaskRunStatus = (typeof TASK_RUN_STATUSES)[number];
+
+export interface ScheduledTask {
+	readonly id: string;
+	readonly name: string;
+	readonly prompt: string;
+	readonly cronExpression: string;
+	readonly harness: TaskHarness;
+	readonly workingDirectory: string | null;
+	readonly enabled: boolean;
+	readonly lastRunAt: string | null;
+	readonly nextRunAt: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface TaskRun {
+	readonly id: string;
+	readonly taskId: string;
+	readonly status: TaskRunStatus;
+	readonly startedAt: string;
+	readonly completedAt: string | null;
+	readonly exitCode: number | null;
+	readonly stdout: string | null;
+	readonly stderr: string | null;
+	readonly error: string | null;
+}
+
 // -- Core interfaces --
 
 export interface Memory {

@@ -80,6 +80,13 @@ import {
 	startSummaryWorker,
 } from "./pipeline";
 import {
+	startSchedulerWorker,
+	validateCron,
+	computeNextRun,
+	isHarnessAvailable,
+	CRON_PRESETS,
+} from "./scheduler";
+import {
 	createOllamaProvider,
 	createClaudeCodeProvider,
 } from "./pipeline/provider";
@@ -5133,6 +5140,250 @@ app.post("/api/update/run", async (c) => {
 });
 
 // ============================================================================
+// Scheduled Tasks API
+// ============================================================================
+
+// List all tasks (joined with last run status)
+app.get("/api/tasks", (c) => {
+	const tasks = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				`SELECT t.*,
+				        r.status AS last_run_status,
+				        r.exit_code AS last_run_exit_code
+				 FROM scheduled_tasks t
+				 LEFT JOIN task_runs r ON r.id = (
+				     SELECT id FROM task_runs
+				     WHERE task_id = t.id
+				     ORDER BY started_at DESC LIMIT 1
+				 )
+				 ORDER BY t.created_at DESC`,
+			)
+			.all(),
+	);
+
+	return c.json({ tasks, presets: CRON_PRESETS });
+});
+
+// Create a new task
+app.post("/api/tasks", async (c) => {
+	const body = await c.req.json();
+	const { name, prompt, cronExpression, harness, workingDirectory } = body;
+
+	if (!name || !prompt || !cronExpression || !harness) {
+		return c.json({ error: "name, prompt, cronExpression, and harness are required" }, 400);
+	}
+
+	if (!validateCron(cronExpression)) {
+		return c.json({ error: "Invalid cron expression" }, 400);
+	}
+
+	if (harness !== "claude-code" && harness !== "opencode") {
+		return c.json({ error: "harness must be 'claude-code' or 'opencode'" }, 400);
+	}
+
+	if (!isHarnessAvailable(harness)) {
+		return c.json({
+			error: `CLI for ${harness} not found on PATH`,
+			warning: true,
+		}, 400);
+	}
+
+	const id = crypto.randomUUID();
+	const now = new Date().toISOString();
+	const nextRunAt = computeNextRun(cronExpression);
+
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO scheduled_tasks
+			 (id, name, prompt, cron_expression, harness, working_directory,
+			  enabled, next_run_at, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+		).run(id, name, prompt, cronExpression, harness, workingDirectory || null, nextRunAt, now, now);
+	});
+
+	logger.info("scheduler", `Task created: ${name}`, { taskId: id });
+	return c.json({ id, nextRunAt }, 201);
+});
+
+// Get a single task + recent runs
+app.get("/api/tasks/:id", (c) => {
+	const taskId = c.req.param("id");
+
+	const task = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+	);
+
+	if (!task) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
+	const runs = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				`SELECT * FROM task_runs
+				 WHERE task_id = ?
+				 ORDER BY started_at DESC
+				 LIMIT 20`,
+			)
+			.all(taskId),
+	);
+
+	return c.json({ task, runs });
+});
+
+// Update a task
+app.patch("/api/tasks/:id", async (c) => {
+	const taskId = c.req.param("id");
+	const body = await c.req.json();
+
+	const existing = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+	) as Record<string, unknown> | undefined;
+
+	if (!existing) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
+	if (body.cronExpression !== undefined && !validateCron(body.cronExpression)) {
+		return c.json({ error: "Invalid cron expression" }, 400);
+	}
+
+	const now = new Date().toISOString();
+	const cronExpr = body.cronExpression ?? existing.cron_expression;
+	const enabled = body.enabled !== undefined ? (body.enabled ? 1 : 0) : existing.enabled;
+	const nextRunAt = body.cronExpression !== undefined || body.enabled !== undefined
+		? (enabled ? computeNextRun(cronExpr as string) : existing.next_run_at)
+		: existing.next_run_at;
+
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`UPDATE scheduled_tasks SET
+			 name = ?, prompt = ?, cron_expression = ?, harness = ?,
+			 working_directory = ?, enabled = ?, next_run_at = ?, updated_at = ?
+			 WHERE id = ?`,
+		).run(
+			body.name ?? existing.name,
+			body.prompt ?? existing.prompt,
+			cronExpr,
+			body.harness ?? existing.harness,
+			body.workingDirectory !== undefined ? body.workingDirectory : existing.working_directory,
+			enabled,
+			nextRunAt,
+			now,
+			taskId,
+		);
+	});
+
+	return c.json({ success: true });
+});
+
+// Delete a task (cascade deletes runs)
+app.delete("/api/tasks/:id", (c) => {
+	const taskId = c.req.param("id");
+
+	const result = getDbAccessor().withWriteTx((db) => {
+		const info = db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
+		return info;
+	});
+
+	return c.json({ success: true });
+});
+
+// Trigger an immediate manual run
+app.post("/api/tasks/:id/run", async (c) => {
+	const taskId = c.req.param("id");
+
+	const task = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+	) as Record<string, unknown> | undefined;
+
+	if (!task) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
+	// Check if already running
+	const running = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				"SELECT 1 FROM task_runs WHERE task_id = ? AND status = 'running' LIMIT 1",
+			)
+			.get(taskId),
+	);
+
+	if (running) {
+		return c.json({ error: "Task is already running" }, 409);
+	}
+
+	const runId = crypto.randomUUID();
+	const now = new Date().toISOString();
+
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO task_runs (id, task_id, status, started_at)
+			 VALUES (?, ?, 'running', ?)`,
+		).run(runId, taskId, now);
+
+		db.prepare(
+			"UPDATE scheduled_tasks SET last_run_at = ?, updated_at = ? WHERE id = ?",
+		).run(now, now, taskId);
+	});
+
+	// Spawn in background (don't await)
+	import("./scheduler/spawn").then((mod) => {
+		mod.spawnTask(
+			task.harness as "claude-code" | "opencode",
+			task.prompt as string,
+			task.working_directory as string | null,
+		).then((result) => {
+			const completedAt = new Date().toISOString();
+			const status =
+				result.error !== null || (result.exitCode !== null && result.exitCode !== 0)
+					? "failed"
+					: "completed";
+
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`UPDATE task_runs
+					 SET status = ?, completed_at = ?, exit_code = ?,
+					     stdout = ?, stderr = ?, error = ?
+					 WHERE id = ?`,
+				).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
+			});
+		});
+	});
+
+	return c.json({ runId, status: "running" }, 202);
+});
+
+// Get paginated run history for a task
+app.get("/api/tasks/:id/runs", (c) => {
+	const taskId = c.req.param("id");
+	const limit = Number(c.req.query("limit") ?? 20);
+	const offset = Number(c.req.query("offset") ?? 0);
+
+	const runs = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				`SELECT * FROM task_runs
+				 WHERE task_id = ?
+				 ORDER BY started_at DESC
+				 LIMIT ? OFFSET ?`,
+			)
+			.all(taskId, limit, offset),
+	);
+
+	const total = getDbAccessor().withReadDb((db) => {
+		const row = db
+			.prepare("SELECT COUNT(*) as count FROM task_runs WHERE task_id = ?")
+			.get(taskId) as { count: number };
+		return row.count;
+	});
+
+	return c.json({ runs, total, hasMore: offset + limit < total });
+});
+
+// ============================================================================
 // Daemon Info
 // ============================================================================
 
@@ -6997,6 +7248,9 @@ async function main() {
 		// summaries are a core feature, not gated on extraction pipeline.
 		startSummaryWorker(getDbAccessor());
 	}
+
+	// Start scheduled task worker
+	const schedulerHandle = startSchedulerWorker(getDbAccessor());
 
 	// Start git sync timer (if enabled and has token)
 	startGitSyncTimer();

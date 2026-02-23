@@ -579,3 +579,160 @@ export async function uninstallSkill(
 		return { success: false, error: String(e) };
 	}
 }
+
+// ============================================================================
+// Scheduled Tasks API
+// ============================================================================
+
+export interface ScheduledTask {
+	id: string;
+	name: string;
+	prompt: string;
+	cron_expression: string;
+	harness: "claude-code" | "opencode";
+	working_directory: string | null;
+	enabled: number;
+	last_run_at: string | null;
+	next_run_at: string | null;
+	created_at: string;
+	updated_at: string;
+	last_run_status?: string | null;
+	last_run_exit_code?: number | null;
+}
+
+export interface TaskRun {
+	id: string;
+	task_id: string;
+	status: "pending" | "running" | "completed" | "failed";
+	started_at: string;
+	completed_at: string | null;
+	exit_code: number | null;
+	stdout: string | null;
+	stderr: string | null;
+	error: string | null;
+}
+
+export interface CronPreset {
+	label: string;
+	expression: string;
+}
+
+export async function getTasks(): Promise<{
+	tasks: ScheduledTask[];
+	presets: CronPreset[];
+}> {
+	try {
+		const response = await fetch(`${API_BASE}/api/tasks`);
+		if (!response.ok) throw new Error("Failed to fetch tasks");
+		return await response.json();
+	} catch {
+		return { tasks: [], presets: [] };
+	}
+}
+
+export async function getTask(
+	id: string,
+): Promise<{ task: ScheduledTask; runs: TaskRun[] } | null> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
+		);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function createTask(data: {
+	name: string;
+	prompt: string;
+	cronExpression: string;
+	harness: string;
+	workingDirectory?: string;
+}): Promise<{ id?: string; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(data),
+		});
+		return await response.json();
+	} catch (e) {
+		return { error: String(e) };
+	}
+}
+
+export async function updateTask(
+	id: string,
+	data: Partial<{
+		name: string;
+		prompt: string;
+		cronExpression: string;
+		harness: string;
+		workingDirectory: string | null;
+		enabled: boolean;
+	}>,
+): Promise<{ success?: boolean; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
+			{
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(data),
+			},
+		);
+		return await response.json();
+	} catch (e) {
+		return { error: String(e) };
+	}
+}
+
+export async function deleteTask(
+	id: string,
+): Promise<{ success?: boolean; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
+			{
+				method: "DELETE",
+			},
+		);
+		return await response.json();
+	} catch (e) {
+		return { error: String(e) };
+	}
+}
+
+export async function triggerTaskRun(
+	id: string,
+): Promise<{ runId?: string; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}/run`,
+			{
+				method: "POST",
+			},
+		);
+		return await response.json();
+	} catch (e) {
+		return { error: String(e) };
+	}
+}
+
+export async function getTaskRuns(
+	id: string,
+	limit = 20,
+	offset = 0,
+): Promise<{ runs: TaskRun[]; total: number; hasMore: boolean }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}/runs?limit=${limit}&offset=${offset}`,
+		);
+		if (!response.ok) throw new Error("Failed to fetch runs");
+		return await response.json();
+	} catch {
+		return { runs: [], total: 0, hasMore: false };
+	}
+}

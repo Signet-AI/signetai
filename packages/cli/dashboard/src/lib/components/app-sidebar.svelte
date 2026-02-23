@@ -9,6 +9,7 @@
 	import ScrollText from "@lucide/svelte/icons/scroll-text";
 	import KeyRound from "@lucide/svelte/icons/key-round";
 	import Zap from "@lucide/svelte/icons/zap";
+	import CalendarClock from "@lucide/svelte/icons/calendar-clock";
 	import Sun from "@lucide/svelte/icons/sun";
 	import Moon from "@lucide/svelte/icons/moon";
 	import Github from "@lucide/svelte/icons/github";
@@ -39,6 +40,7 @@
 		{ id: "logs", label: "Logs", icon: ScrollText },
 		{ id: "secrets", label: "Secrets", icon: KeyRound },
 		{ id: "skills", label: "Skills", icon: Zap },
+		{ id: "tasks", label: "Tasks", icon: CalendarClock },
 	];
 </script>
 

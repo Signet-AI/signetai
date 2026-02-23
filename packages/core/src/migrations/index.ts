@@ -17,6 +17,7 @@ import { up as embeddingsUniqueHash } from "./008-embeddings-unique-hash";
 import { up as summaryJobs } from "./009-summary-jobs";
 import { up as umapCache } from "./010-umap-cache";
 import { up as sessionScores } from "./011-session-scores";
+import { up as scheduledTasks } from "./012-scheduled-tasks";
 
 // -- Public interface consumed by Database.init() --
 
@@ -71,6 +72,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 11,
 		name: "session-scores",
 		up: sessionScores,
+	},
+	{
+		version: 12,
+		name: "scheduled-tasks",
+		up: scheduledTasks,
 	},
 ];
 
