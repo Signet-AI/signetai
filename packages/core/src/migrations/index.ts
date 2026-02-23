@@ -19,6 +19,7 @@ import { up as umapCache } from "./010-umap-cache";
 import { up as sessionScores } from "./011-session-scores";
 import { up as memorySigning } from "./012-memory-signing";
 import { up as temporalMemory } from "./013-temporal-memory";
+import { up as ingestionTracking } from "./014-ingestion-tracking";
 
 // -- Public interface consumed by Database.init() --
 
@@ -83,6 +84,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 13,
 		name: "temporal-memory",
 		up: temporalMemory,
+	},
+	{
+		version: 14,
+		name: "ingestion-tracking",
+		up: ingestionTracking,
 	},
 ];
 
