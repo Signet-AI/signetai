@@ -27,7 +27,8 @@
     "libsodium-wrappers": "0.8.2",
     "sqlite-vec": "^0.1.7-alpha.2",
     "yaml": "^2.6.0",
-    "ethers": "^6.0.0"
+    "ethers": "^6.0.0",
+    "ws": "^8.18.0"
   },
   "optionalDependencies": {
     "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
@@ -39,6 +40,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
     "@types/libsodium-wrappers": "^0.8.2",
+    "@types/ws": "^8.5.0",
     "typescript": "^5.7.0"
   },
   "peerDependenciesMeta": {

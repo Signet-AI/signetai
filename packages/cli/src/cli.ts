@@ -7759,6 +7759,576 @@ perceiveCmd
 	});
 
 // ============================================================================
+// Federation Commands (Phase 5)
+// ============================================================================
+
+const federationCmd = program
+	.command("federation")
+	.description("P2P federation — peer connections, sync, and selective memory publishing");
+
+federationCmd
+	.command("start")
+	.description("Start the federation WebSocket server")
+	.option("--port <port>", "WebSocket server port", "3851")
+	.action(async (options) => {
+		const {
+			createFederationServer,
+			getConfiguredDid,
+			getPublicKeyBase64,
+			hasSigningKeypair,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Federation Server\n"));
+
+		if (!hasSigningKeypair()) {
+			console.error(chalk.red("  No signing keypair found. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.error(chalk.red("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const publicKey = await getPublicKeyBase64();
+		const port = parseInt(options.port, 10);
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const server = createFederationServer(port, db, {
+				port,
+				did,
+				publicKey,
+			});
+
+			console.log(chalk.green.bold("  ✓ Federation server started"));
+			console.log(`    Port:  ${chalk.cyan(String(port))}`);
+			console.log(`    DID:   ${chalk.dim(did)}`);
+			console.log();
+			console.log(chalk.dim("  Peers can connect to: ws://localhost:" + port));
+			console.log(chalk.dim("  Press Ctrl+C to stop"));
+
+			// Keep process alive
+			process.on("SIGINT", () => {
+				console.log(chalk.dim("\n  Shutting down..."));
+				server.close();
+				db.close();
+				process.exit(0);
+			});
+
+			// Keep the process running
+			await new Promise(() => {});
+		} catch (err) {
+			console.error(chalk.red(`  Error: ${(err as Error).message}`));
+			db.close();
+			process.exit(1);
+		}
+	});
+
+federationCmd
+	.command("status")
+	.description("Show federation status")
+	.action(async () => {
+		const {
+			getPeers,
+			getPublishRules,
+			getConfiguredDid,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Federation Status\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const did = getConfiguredDid();
+			const peers = getPeers(db);
+			const rules = getPublishRules(db);
+
+			const trusted = peers.filter((p: any) => p.trustLevel === "trusted").length;
+			const pending = peers.filter((p: any) => p.trustLevel === "pending").length;
+			const blocked = peers.filter((p: any) => p.trustLevel === "blocked").length;
+
+			const totalShared = peers.reduce((sum: number, p: any) => sum + p.memoriesShared, 0);
+			const totalReceived = peers.reduce((sum: number, p: any) => sum + p.memoriesReceived, 0);
+
+			console.log(`  DID:            ${did ? chalk.cyan(did) : chalk.yellow("Not configured")}`);
+			console.log();
+			console.log(chalk.bold("  Peers"));
+			console.log(`    Trusted:      ${chalk.green(String(trusted))}`);
+			console.log(`    Pending:      ${chalk.yellow(String(pending))}`);
+			console.log(`    Blocked:      ${chalk.red(String(blocked))}`);
+			console.log();
+			console.log(chalk.bold("  Sync"));
+			console.log(`    Shared:       ${totalShared} memories`);
+			console.log(`    Received:     ${totalReceived} memories`);
+			console.log();
+			console.log(chalk.bold("  Publish Rules"));
+			console.log(`    Active:       ${rules.length}`);
+			console.log(`    Auto-publish: ${rules.filter((r: any) => r.autoPublish).length}`);
+		} finally {
+			db.close();
+		}
+	});
+
+// -- Peer subcommands --
+
+const peerCmd = federationCmd.command("peer").description("Manage federation peers");
+
+peerCmd
+	.command("add <endpoint-url>")
+	.description("Connect to a peer at the given WebSocket URL")
+	.action(async (endpointUrl) => {
+		const {
+			connectToPeer,
+			addPeer,
+			getConfiguredDid,
+			getPublicKeyBase64,
+			hasSigningKeypair,
+			getPeerByDid,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Add Federation Peer\n"));
+
+		if (!hasSigningKeypair()) {
+			console.error(chalk.red("  No signing keypair. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.error(chalk.red("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const publicKey = await getPublicKeyBase64();
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const spinner = ora(`  Connecting to ${endpointUrl}...`).start();
+
+			const connection = await connectToPeer(endpointUrl, {
+				port: 0,
+				did,
+				publicKey,
+			});
+
+			spinner.succeed(`  Connected! Peer DID verified.`);
+
+			// Check if peer already exists
+			const existing = getPeerByDid(db, connection.peerDid);
+			if (existing) {
+				console.log(chalk.yellow(`  Peer already registered: ${existing.id}`));
+				console.log(chalk.dim(`  DID: ${connection.peerDid}`));
+			} else {
+				const peerId = `peer_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+				const peer = addPeer(db, {
+					id: peerId,
+					did: connection.peerDid,
+					publicKey: connection.peerPublicKey,
+					endpointUrl: endpointUrl,
+					trustLevel: "pending",
+				});
+
+				console.log(chalk.green.bold(`  ✓ Peer added`));
+				console.log(`    ID:        ${chalk.cyan(peer.id)}`);
+				console.log(`    DID:       ${chalk.dim(peer.did)}`);
+				console.log(`    Trust:     ${chalk.yellow("pending")}`);
+				console.log();
+				console.log(chalk.dim("  Run: signet federation peer trust " + peer.id));
+			}
+
+			connection.close();
+		} catch (err) {
+			console.error(chalk.red(`  Failed to connect: ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+peerCmd
+	.command("list")
+	.description("List all federation peers")
+	.action(async () => {
+		const { getPeers } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const peers = getPeers(db);
+
+			if (peers.length === 0) {
+				console.log(chalk.dim("  No federation peers."));
+				console.log(chalk.dim("  Run: signet federation peer add <ws-url>"));
+				return;
+			}
+
+			console.log(chalk.bold(`  Federation Peers (${peers.length})\n`));
+
+			for (const peer of peers) {
+				const trustColor = peer.trustLevel === "trusted" ? chalk.green
+					: peer.trustLevel === "blocked" ? chalk.red
+					: chalk.yellow;
+
+				console.log(`  ${chalk.cyan(peer.id)}`);
+				if (peer.displayName) console.log(`    Name:     ${peer.displayName}`);
+				console.log(`    DID:      ${chalk.dim(peer.did)}`);
+				console.log(`    Trust:    ${trustColor(peer.trustLevel)}`);
+				if (peer.endpointUrl) console.log(`    Endpoint: ${peer.endpointUrl}`);
+				console.log(`    Shared:   ${peer.memoriesShared} | Received: ${peer.memoriesReceived}`);
+				if (peer.lastSeen) console.log(`    Last seen: ${peer.lastSeen}`);
+				console.log();
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+peerCmd
+	.command("trust <peer-id>")
+	.description("Trust a peer (allows sync)")
+	.action(async (peerId) => {
+		const { updatePeerTrust, getPeerById } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const peer = getPeerById(db, peerId);
+			if (!peer) {
+				console.error(chalk.red(`  Peer not found: ${peerId}`));
+				process.exit(1);
+			}
+
+			updatePeerTrust(db, peerId, "trusted");
+			console.log(chalk.green(`  ✓ Peer ${chalk.cyan(peerId)} is now trusted.`));
+			console.log(chalk.dim("  This peer can now sync memories with you."));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+peerCmd
+	.command("block <peer-id>")
+	.description("Block a peer (rejects connections)")
+	.action(async (peerId) => {
+		const { blockFederationPeer, getPeerById } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const peer = getPeerById(db, peerId);
+			if (!peer) {
+				console.error(chalk.red(`  Peer not found: ${peerId}`));
+				process.exit(1);
+			}
+
+			blockFederationPeer(db, peerId);
+			console.log(chalk.red(`  ✓ Peer ${chalk.cyan(peerId)} is now blocked.`));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+peerCmd
+	.command("remove <peer-id>")
+	.description("Remove a peer and all associated records")
+	.action(async (peerId) => {
+		const { removePeer, getPeerById } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const peer = getPeerById(db, peerId);
+			if (!peer) {
+				console.error(chalk.red(`  Peer not found: ${peerId}`));
+				process.exit(1);
+			}
+
+			removePeer(db, peerId);
+			console.log(chalk.green(`  ✓ Peer ${chalk.cyan(peerId)} removed.`));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+// -- Sync subcommand --
+
+federationCmd
+	.command("sync")
+	.description("Sync memories with federation peers")
+	.option("--peer <peer-id>", "Sync with a specific peer")
+	.option("--since <date>", "Only sync memories since this date")
+	.action(async (options) => {
+		const {
+			getTrustedPeers,
+			getPeerById,
+			connectToPeer,
+			getConfiguredDid,
+			getPublicKeyBase64,
+			hasSigningKeypair,
+			processSyncResponse,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Federation Sync\n"));
+
+		if (!hasSigningKeypair()) {
+			console.error(chalk.red("  No signing keypair. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.error(chalk.red("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const publicKey = await getPublicKeyBase64();
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			let peers;
+			if (options.peer) {
+				const peer = getPeerById(db, options.peer);
+				if (!peer) {
+					console.error(chalk.red(`  Peer not found: ${options.peer}`));
+					process.exit(1);
+				}
+				if (peer.trustLevel !== "trusted") {
+					console.error(chalk.red(`  Peer is not trusted. Run: signet federation peer trust ${options.peer}`));
+					process.exit(1);
+				}
+				if (!peer.endpointUrl) {
+					console.error(chalk.red("  Peer has no endpoint URL."));
+					process.exit(1);
+				}
+				peers = [peer];
+			} else {
+				peers = getTrustedPeers(db).filter((p: any) => p.endpointUrl);
+			}
+
+			if (peers.length === 0) {
+				console.log(chalk.yellow("  No trusted peers with endpoints to sync with."));
+				return;
+			}
+
+			for (const peer of peers) {
+				const spinner = ora(`  Syncing with ${peer.displayName || peer.id}...`).start();
+
+				try {
+					const conn = await connectToPeer(peer.endpointUrl!, {
+						port: 0,
+						did,
+						publicKey,
+					});
+
+					const response = await conn.syncWithPeer(options.since || peer.lastSync || undefined);
+					const imported = processSyncResponse(db, peer.id, response.memories);
+
+					conn.close();
+
+					spinner.succeed(
+						`  ${peer.displayName || peer.id}: ${response.memories.length} received, ${imported} new`,
+					);
+				} catch (err) {
+					spinner.fail(`  ${peer.displayName || peer.id}: ${(err as Error).message}`);
+				}
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+// -- Publish subcommands --
+
+const publishCmd = federationCmd.command("publish").description("Manage publish rules for selective memory sharing");
+
+publishCmd
+	.command("add")
+	.description("Create a publish rule")
+	.requiredOption("--name <name>", "Rule name")
+	.option("--query <query>", "Memory search query to match")
+	.option("--tags <tags>", "Comma-separated tags to match")
+	.option("--types <types>", "Comma-separated memory types to match")
+	.option("--min-importance <value>", "Minimum importance threshold", "0.5")
+	.option("--auto", "Enable auto-publishing for this rule")
+	.action(async (options) => {
+		const { createPublishRule } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const rule = createPublishRule(db, {
+				name: options.name,
+				query: options.query,
+				tags: options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined,
+				types: options.types ? options.types.split(",").map((t: string) => t.trim()) : undefined,
+				minImportance: parseFloat(options.minImportance),
+				autoPublish: !!options.auto,
+			});
+
+			console.log(chalk.green.bold("  ✓ Publish rule created"));
+			console.log(`    ID:          ${chalk.cyan(rule.id)}`);
+			console.log(`    Name:        ${rule.name}`);
+			if (rule.query) console.log(`    Query:       ${rule.query}`);
+			if (rule.tags) console.log(`    Tags:        ${rule.tags.join(", ")}`);
+			if (rule.types) console.log(`    Types:       ${rule.types.join(", ")}`);
+			console.log(`    Min import.: ${rule.minImportance}`);
+			console.log(`    Auto:        ${rule.autoPublish ? chalk.green("yes") : "no"}`);
+		} catch (err) {
+			console.error(chalk.red(`  Error: ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+publishCmd
+	.command("list")
+	.description("List all publish rules")
+	.action(async () => {
+		const { getPublishRules } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const rules = getPublishRules(db);
+
+			if (rules.length === 0) {
+				console.log(chalk.dim("  No publish rules defined."));
+				console.log(chalk.dim("  Run: signet federation publish add --name <name> --query <query>"));
+				return;
+			}
+
+			console.log(chalk.bold(`  Publish Rules (${rules.length})\n`));
+
+			for (const rule of rules) {
+				console.log(`  ${chalk.cyan(rule.id)}`);
+				console.log(`    Name:        ${rule.name}`);
+				if (rule.query) console.log(`    Query:       ${rule.query}`);
+				if (rule.tags) console.log(`    Tags:        ${rule.tags.join(", ")}`);
+				if (rule.types) console.log(`    Types:       ${rule.types.join(", ")}`);
+				console.log(`    Min import.: ${rule.minImportance}`);
+				console.log(`    Auto:        ${rule.autoPublish ? chalk.green("yes") : "no"}`);
+				if (rule.peerIds) console.log(`    Peers:       ${rule.peerIds.join(", ")}`);
+				console.log();
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+publishCmd
+	.command("remove <rule-id>")
+	.description("Remove a publish rule")
+	.action(async (ruleId) => {
+		const { deletePublishRule } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			deletePublishRule(db, ruleId);
+			console.log(chalk.green(`  ✓ Publish rule ${chalk.cyan(ruleId)} removed.`));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+// ============================================================================
 // Default action when no command specified
 // ============================================================================
 

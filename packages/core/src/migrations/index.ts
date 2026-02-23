@@ -25,6 +25,7 @@ import { up as sessionMetrics } from "./016-session-metrics";
 import { up as perceptionTables } from "./017-perception-tables";
 import { up as onchainIdentity } from "./018-onchain-identity";
 import { up as sessionKeysAndExport } from "./019-session-keys-and-export";
+import { up as federation } from "./020-federation";
 
 // -- Public interface consumed by Database.init() --
 
@@ -119,6 +120,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 19,
 		name: "session-keys-and-export",
 		up: sessionKeysAndExport,
+	},
+	{
+		version: 20,
+		name: "federation",
+		up: federation,
 	},
 ];
 

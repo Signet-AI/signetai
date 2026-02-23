@@ -381,6 +381,83 @@ export type {
 	PaymentHistoryOptions,
 } from "./chain/index";
 
+// Federation (Phase 5)
+export {
+	// Types & constants
+	TRUST_LEVELS,
+	MESSAGE_TYPES,
+	// Protocol
+	createMessage as createFederationMessage,
+	verifyMessage as verifyFederationMessage,
+	parseMessage as parseFederationMessage,
+	serializeMessage as serializeFederationMessage,
+	buildMessageSignable,
+	// Handshake
+	generateChallenge,
+	initiateHandshake,
+	respondToHandshake,
+	completeHandshake,
+	signCounterChallenge,
+	verifyCounterChallengeResponse,
+	// Peer Manager
+	addPeer,
+	getPeerById,
+	getPeerByDid,
+	getPeers,
+	getTrustedPeers,
+	updatePeerTrust,
+	blockPeer as blockFederationPeer,
+	removePeer,
+	updatePeerLastSeen,
+	updatePeerLastSync,
+	incrementMemoriesShared,
+	incrementMemoriesReceived,
+	updatePeerEndpoint,
+	// Sync
+	requestSync,
+	handleSyncRequest,
+	processSyncResponse,
+	getSharedMemories,
+	getReceivedMemories,
+	// Publisher
+	createPublishRule,
+	getPublishRules,
+	getPublishRuleById,
+	updatePublishRule,
+	deletePublishRule,
+	getPublishableMemories,
+	autoPublish,
+	// Server
+	createFederationServer,
+	// Client
+	connectToPeer,
+	createReconnectingClient,
+} from "./federation/index";
+export type {
+	TrustLevel,
+	FederationPeer,
+	MessageType,
+	PeerMessage,
+	HandshakePayload,
+	HandshakeAckPayload,
+	HandshakeCompletePayload,
+	SyncRequest,
+	SyncMemory,
+	SyncResponse,
+	MemoryPushPayload,
+	MemoryAckPayload,
+	ErrorPayload,
+	SharedMemory,
+	ReceivedMemory,
+	PublishRule,
+	FederationConfig,
+	FederationDb,
+	PeerConnection,
+	FederationServer,
+	FederationClientConnection,
+	ReconnectingClient,
+} from "./federation/index";
+
 // Portable Export/Import Bundles (Phase 4B)
 export {
 	exportBundle,
