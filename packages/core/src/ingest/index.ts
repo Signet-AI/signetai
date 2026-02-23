@@ -21,8 +21,12 @@ import type {
 	ExtractionResult,
 	ProgressCallback,
 } from "./types";
+import { readFileSync } from "fs";
 import { parseMarkdown, parseTxt, parseCode } from "./markdown-parser";
 import { parsePdf } from "./pdf-parser";
+import { parseSlackExport } from "./slack-parser";
+import { parseDiscordExport } from "./discord-parser";
+import { parseCodeRepository } from "./code-parser";
 import { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
 import { extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
 import type { ExtractorConfig } from "./extractor";
@@ -54,6 +58,11 @@ export { extractFromChunk, extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from ".
 export type { ExtractorConfig } from "./extractor";
 export { parseMarkdown, parseMarkdownContent, parseTxt, parseCode } from "./markdown-parser";
 export { parsePdf } from "./pdf-parser";
+export { parseSlackExport } from "./slack-parser";
+export { parseDiscordExport } from "./discord-parser";
+export { parseCodeRepository } from "./code-parser";
+export { extractFromConversation, extractFromConversations, extractParticipants } from "./chat-extractor";
+export type { ChatExtractorConfig } from "./chat-extractor";
 export { computeFileHash, buildProvenance } from "./provenance";
 
 // ---------------------------------------------------------------------------
@@ -74,7 +83,9 @@ const SKIP_FILES = new Set([
 	".git", ".env", ".env.local",
 ]);
 
-function detectFileType(filePath: string): "markdown" | "pdf" | "txt" | "code" | "skip" {
+type FileType = "markdown" | "pdf" | "txt" | "code" | "slack" | "discord" | "repo" | "skip";
+
+function detectFileType(filePath: string): FileType {
 	const name = basename(filePath);
 	const ext = extname(filePath).toLowerCase();
 
@@ -95,6 +106,73 @@ function detectFileType(filePath: string): "markdown" | "pdf" | "txt" | "code" |
 	return "txt";
 }
 
+/**
+ * Detect if a directory is a Slack export.
+ * Slack exports contain users.json or channels.json at the root,
+ * with channel subdirectories containing dated .json files.
+ */
+function isSlackExport(dirPath: string): boolean {
+	try {
+		const entries = readdirSync(dirPath);
+		// Must have users.json or channels.json
+		if (!entries.includes("users.json") && !entries.includes("channels.json")) {
+			return false;
+		}
+		// Should have at least one channel subdirectory with .json files
+		for (const entry of entries) {
+			const fullPath = join(dirPath, entry);
+			try {
+				if (statSync(fullPath).isDirectory() && !entry.startsWith(".")) {
+					const subFiles = readdirSync(fullPath);
+					if (subFiles.some((f) => f.endsWith(".json"))) return true;
+				}
+			} catch { /* skip */ }
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Detect if a path is a Discord export (DiscordChatExporter format).
+ * Single JSON file with guild/channel/messages structure,
+ * or directory of such files.
+ */
+function isDiscordExport(filePath: string): boolean {
+	try {
+		const stat = statSync(filePath);
+		if (stat.isFile() && extname(filePath).toLowerCase() === ".json") {
+			const raw = readFileSync(filePath, "utf-8").slice(0, 4096);
+			return (raw.includes('"guild"') || raw.includes('"channel"')) && raw.includes('"messages"');
+		}
+		if (stat.isDirectory()) {
+			const entries = readdirSync(filePath);
+			// Check for index.json with guild/channel keys
+			if (entries.includes("index.json")) {
+				const indexContent = readFileSync(join(filePath, "index.json"), "utf-8").slice(0, 2048);
+				return indexContent.includes('"guild"') || indexContent.includes('"channel"');
+			}
+			// Check first JSON file for Discord export structure
+			const jsonFile = entries.find((f) => f.endsWith(".json"));
+			if (jsonFile) {
+				const content = readFileSync(join(filePath, jsonFile), "utf-8").slice(0, 4096);
+				return (content.includes('"guild"') || content.includes('"channel"')) && content.includes('"messages"');
+			}
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Detect if a directory is a git repository.
+ */
+function isGitRepo(dirPath: string): boolean {
+	return existsSync(join(dirPath, ".git"));
+}
+
 // ---------------------------------------------------------------------------
 // Collect files from path (file or directory)
 // ---------------------------------------------------------------------------
@@ -102,7 +180,7 @@ function detectFileType(filePath: string): "markdown" | "pdf" | "txt" | "code" |
 function collectFiles(
 	inputPath: string,
 	forcedType?: string,
-): Array<{ path: string; type: "markdown" | "pdf" | "txt" | "code" }> {
+): Array<{ path: string; type: FileType }> {
 	const absPath = resolve(inputPath);
 
 	if (!existsSync(absPath)) {
@@ -111,13 +189,35 @@ function collectFiles(
 
 	const stat = statSync(absPath);
 
+	// Handle forced types for chat/repo (these are directory-level, not file-level)
+	if (forcedType === "slack" || forcedType === "discord" || forcedType === "repo") {
+		return [{ path: absPath, type: forcedType as FileType }];
+	}
+
 	if (stat.isFile()) {
-		const type = (forcedType as "markdown" | "pdf" | "txt" | "code") || detectFileType(absPath);
+		// Check if it's a Discord export JSON file
+		if (!forcedType && isDiscordExport(absPath)) {
+			return [{ path: absPath, type: "discord" }];
+		}
+		const type = (forcedType as FileType) || detectFileType(absPath);
 		if (type === "skip") return [];
 		return [{ path: absPath, type }];
 	}
 
 	if (stat.isDirectory()) {
+		// Auto-detect directory type
+		if (!forcedType) {
+			if (isSlackExport(absPath)) {
+				return [{ path: absPath, type: "slack" }];
+			}
+			if (isDiscordExport(absPath)) {
+				return [{ path: absPath, type: "discord" }];
+			}
+			if (isGitRepo(absPath)) {
+				// For git repos, only auto-detect if explicitly using --type repo
+				// Otherwise treat as a directory of files to ingest
+			}
+		}
 		return collectDirectory(absPath, forcedType);
 	}
 
@@ -127,8 +227,8 @@ function collectFiles(
 function collectDirectory(
 	dirPath: string,
 	forcedType?: string,
-): Array<{ path: string; type: "markdown" | "pdf" | "txt" | "code" }> {
-	const files: Array<{ path: string; type: "markdown" | "pdf" | "txt" | "code" }> = [];
+): Array<{ path: string; type: FileType }> {
+	const files: Array<{ path: string; type: FileType }> = [];
 
 	const entries = readdirSync(dirPath, { withFileTypes: true });
 	for (const entry of entries) {
@@ -143,7 +243,7 @@ function collectDirectory(
 				files.push(...collectDirectory(fullPath, forcedType));
 			}
 		} else if (entry.isFile()) {
-			const type = (forcedType as "markdown" | "pdf" | "txt" | "code") || detectFileType(fullPath);
+			const type = (forcedType as FileType) || detectFileType(fullPath);
 			if (type !== "skip") {
 				files.push({ path: fullPath, type });
 			}
@@ -159,7 +259,7 @@ function collectDirectory(
 
 async function parseFile(
 	filePath: string,
-	fileType: "markdown" | "pdf" | "txt" | "code",
+	fileType: FileType,
 ): Promise<ParsedDocument> {
 	switch (fileType) {
 		case "markdown":
@@ -170,6 +270,12 @@ async function parseFile(
 			return parseTxt(filePath);
 		case "code":
 			return parseCode(filePath);
+		case "slack":
+			return parseSlackExport(filePath);
+		case "discord":
+			return parseDiscordExport(filePath);
+		case "repo":
+			return parseCodeRepository(filePath);
 		default:
 			return parseTxt(filePath);
 	}
@@ -375,7 +481,7 @@ export async function ingestPath(
 
 async function ingestSingleFile(
 	filePath: string,
-	fileType: "markdown" | "pdf" | "txt" | "code",
+	fileType: FileType,
 	extractorConfig: ExtractorConfig,
 	options: IngestOptions,
 	onProgress?: ProgressCallback,

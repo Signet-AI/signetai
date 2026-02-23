@@ -12,7 +12,7 @@ import type { MemoryType } from "../types";
 
 export interface IngestOptions {
 	/** Force file type detection */
-	readonly type?: "markdown" | "pdf" | "txt" | "code";
+	readonly type?: "markdown" | "pdf" | "txt" | "code" | "slack" | "discord" | "repo";
 	/** Show what would be extracted without saving */
 	readonly dryRun?: boolean;
 	/** Show each extracted fact */
@@ -104,7 +104,7 @@ export interface ChunkResult {
 	/** The text content of this chunk */
 	readonly text: string;
 	/** Content type */
-	readonly chunkType: "text" | "code" | "table" | "heading";
+	readonly chunkType: "text" | "code" | "table" | "heading" | "conversation";
 	/** Estimated token count (chars / 4 rough estimate) */
 	readonly tokenCount: number;
 	/** Provenance: which section heading this came from */
@@ -114,6 +114,10 @@ export interface ChunkResult {
 	/** Provenance: line range */
 	readonly sourceLineStart: number | null;
 	readonly sourceLineEnd: number | null;
+	/** Provenance: speaker (chat/email) */
+	readonly speaker?: string | null;
+	/** Provenance: thread ID (chat/email) */
+	readonly threadId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
