@@ -1002,6 +1002,202 @@ describe("Worker phase C controlled writes", () => {
 		const payload = JSON.parse(getJob(db, "mem-src-frozen")?.result ?? "{}");
 		expect(payload.writeMode).toBe("shadow");
 	});
+
+	it("executes update mutation when allowUpdateDelete is true", async () => {
+		insertMemory(
+			db,
+			"mem-target-update",
+			"User prefers dark mode editor theme with high contrast setting",
+		);
+		insertMemory(
+			db,
+			"mem-src-update",
+			"Source envelope for update recommendation",
+		);
+		enqueueExtractionJob(accessor, "mem-src-update");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User prefers dark mode editor theme",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const updateDecision = JSON.stringify({
+			action: "update",
+			targetId: "mem-target-update",
+			confidence: 0.88,
+			reason: "Simplified preference record",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, updateDecision]),
+			{ ...PHASE_C_CFG, allowUpdateDelete: true },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		// Target memory content should be updated
+		const target = db
+			.prepare(`SELECT content, updated_by FROM memories WHERE id = ?`)
+			.get("mem-target-update") as
+			| { content: string; updated_by: string }
+			| undefined;
+		expect(target?.content).toBe("User prefers dark mode editor theme");
+		expect(target?.updated_by).toBe("pipeline-v2");
+
+		// Stats should reflect the update
+		const job = getJob(db, "mem-src-update");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeStats.updated).toBe(1);
+		expect(payload.writeStats.blockedDestructive).toBe(0);
+
+		// Decision history should record updatedMemoryId
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-update") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => row.updatedMemoryId === "mem-target-update"),
+		).toBe(true);
+	});
+
+	it("executes delete mutation when allowUpdateDelete is true", async () => {
+		insertMemory(
+			db,
+			"mem-target-del",
+			"User does not prefer dark mode editor theme",
+		);
+		insertMemory(
+			db,
+			"mem-src-del",
+			"Source envelope for delete recommendation",
+		);
+		enqueueExtractionJob(accessor, "mem-src-del");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User does not prefer dark mode editor theme",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const deleteDecision = JSON.stringify({
+			action: "delete",
+			targetId: "mem-target-del",
+			confidence: 0.85,
+			reason: "Contradicts current preference",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, deleteDecision]),
+			{ ...PHASE_C_CFG, allowUpdateDelete: true },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		// Target memory should be soft-deleted
+		const target = db
+			.prepare(`SELECT is_deleted FROM memories WHERE id = ?`)
+			.get("mem-target-del") as { is_deleted: number } | undefined;
+		expect(target?.is_deleted).toBe(1);
+
+		// Stats should reflect the delete
+		const job = getJob(db, "mem-src-del");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeStats.deleted).toBe(1);
+		expect(payload.writeStats.blockedDestructive).toBe(0);
+
+		// Decision history should record deletedMemoryId
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-del") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => row.deletedMemoryId === "mem-target-del"),
+		).toBe(true);
+	});
+
+	it("skips delete for pinned memories when allowUpdateDelete is true", async () => {
+		insertMemory(
+			db,
+			"mem-target-pinned",
+			"User does not prefer dark mode editor theme",
+		);
+		// Pin the target memory
+		db.prepare(
+			`UPDATE memories SET pinned = 1 WHERE id = ?`,
+		).run("mem-target-pinned");
+
+		insertMemory(
+			db,
+			"mem-src-del-pinned",
+			"Source envelope for delete of pinned target",
+		);
+		enqueueExtractionJob(accessor, "mem-src-del-pinned");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User does not prefer dark mode editor theme",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const deleteDecision = JSON.stringify({
+			action: "delete",
+			targetId: "mem-target-pinned",
+			confidence: 0.85,
+			reason: "Contradicts current preference",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, deleteDecision]),
+			{ ...PHASE_C_CFG, allowUpdateDelete: true },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		// Target should NOT be deleted (pinned protection)
+		const target = db
+			.prepare(`SELECT is_deleted, pinned FROM memories WHERE id = ?`)
+			.get("mem-target-pinned") as
+			| { is_deleted: number; pinned: number }
+			| undefined;
+		expect(target?.is_deleted).toBe(0);
+		expect(target?.pinned).toBe(1);
+
+		// Stats should show 0 deletes
+		const job = getJob(db, "mem-src-del-pinned");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeStats.deleted).toBe(0);
+
+		// History should record the skip reason
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-del-pinned") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => row.skippedReason === "delete_pinned_requires_force"),
+		).toBe(true);
+	});
 });
 
 // ---------------------------------------------------------------------------

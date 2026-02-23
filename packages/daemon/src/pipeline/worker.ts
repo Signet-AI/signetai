@@ -14,7 +14,7 @@ import type { DecisionConfig, FactDecisionProposal } from "./decision";
 import { extractFactsAndEntities } from "./extraction";
 import { runShadowDecisions } from "./decision";
 import { logger } from "../logger";
-import { txIngestEnvelope } from "../transactions";
+import { txIngestEnvelope, txModifyMemory, txForgetMemory } from "../transactions";
 import { normalizeAndHashContent } from "../content-normalization";
 import { vectorToBlob, countChanges, syncVecInsert, syncVecDeleteBySourceExceptHash } from "../db-helpers";
 import { txPersistEntities } from "./graph-transactions";
@@ -44,6 +44,8 @@ interface MemoryContentRow {
 
 interface AppliedWriteStats {
 	added: number;
+	updated: number;
+	deleted: number;
 	deduped: number;
 	skippedLowConfidence: number;
 	blockedDestructive: number;
@@ -145,6 +147,8 @@ function detectContradictionRisk(
 function zeroWriteStats(): AppliedWriteStats {
 	return {
 		added: 0,
+		updated: 0,
+		deleted: 0,
 		deduped: 0,
 		skippedLowConfidence: 0,
 		blockedDestructive: 0,
@@ -280,6 +284,8 @@ interface DecisionAuditMeta {
 	readonly factCount: number;
 	readonly entityCount: number;
 	readonly createdMemoryId?: string;
+	readonly updatedMemoryId?: string;
+	readonly deletedMemoryId?: string;
 	readonly dedupedExistingId?: string;
 	readonly blockedReason?: string;
 	readonly reviewNeeded?: boolean;
@@ -306,6 +312,8 @@ function recordDecisionHistory(
 		factCount: meta.factCount,
 		entityCount: meta.entityCount,
 		createdMemoryId: meta.createdMemoryId ?? null,
+		updatedMemoryId: meta.updatedMemoryId ?? null,
+		deletedMemoryId: meta.deletedMemoryId ?? null,
 		dedupedExistingId: meta.dedupedExistingId ?? null,
 		blockedReason: meta.blockedReason ?? null,
 		reviewNeeded: meta.reviewNeeded === true,
@@ -409,14 +417,7 @@ function applyPhaseCWrites(
 	},
 	embeddingByHash: ReadonlyMap<string, readonly number[]>,
 ): AppliedWriteStats {
-	const stats: AppliedWriteStats = {
-		added: 0,
-		deduped: 0,
-		skippedLowConfidence: 0,
-		blockedDestructive: 0,
-		reviewNeeded: 0,
-		embeddingsAdded: 0,
-	};
+	const stats = zeroWriteStats();
 
 	for (const proposal of proposals) {
 		if (proposal.action === "add") {
@@ -562,6 +563,136 @@ function applyPhaseCWrites(
 			continue;
 		}
 
+		if (meta.allowUpdateDelete) {
+			if (proposal.action === "update") {
+				const targetId = proposal.targetMemoryId;
+				if (!targetId) {
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						skippedReason: "missing_target_id",
+					});
+					continue;
+				}
+
+				if (proposal.fact.confidence < meta.minFactConfidenceForWrite) {
+					stats.skippedLowConfidence++;
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						skippedReason: "low_fact_confidence",
+					});
+					continue;
+				}
+
+				const normalized = normalizeAndHashContent(proposal.fact.content);
+				if (normalized.normalizedContent.length === 0) {
+					stats.skippedLowConfidence++;
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						skippedReason: "empty_fact_content",
+					});
+					continue;
+				}
+
+				const { storageContent, normalizedContent, contentHash } = normalized;
+				const vector = embeddingByHash.get(contentHash) ?? null;
+				const now = new Date().toISOString();
+
+				const result = txModifyMemory(db, {
+					memoryId: targetId,
+					patch: {
+						content: storageContent,
+						normalizedContent,
+						contentHash,
+						type: proposal.fact.type,
+					},
+					reason: proposal.reason,
+					changedBy: "pipeline-v2",
+					changedAt: now,
+					extractionStatusOnContentChange: "completed",
+					extractionModelOnContentChange: meta.extractionModel,
+					embeddingModelOnContentChange: vector
+						? meta.embeddingModel
+						: null,
+					embeddingVector: vector,
+					ctx: { actorType: "pipeline" },
+				});
+
+				if (result.status === "updated") {
+					stats.updated++;
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						updatedMemoryId: targetId,
+					});
+				} else {
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						skippedReason: `update_${result.status}`,
+					});
+				}
+				continue;
+			}
+
+			if (proposal.action === "delete") {
+				const targetId = proposal.targetMemoryId;
+				if (!targetId) {
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						skippedReason: "missing_target_id",
+					});
+					continue;
+				}
+
+				const now = new Date().toISOString();
+				const result = txForgetMemory(db, {
+					memoryId: targetId,
+					reason: proposal.reason,
+					changedBy: "pipeline-v2",
+					changedAt: now,
+					force: false,
+					ctx: { actorType: "pipeline" },
+				});
+
+				if (result.status === "deleted") {
+					stats.deleted++;
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						deletedMemoryId: targetId,
+					});
+				} else {
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						skippedReason: `delete_${result.status}`,
+					});
+				}
+				continue;
+			}
+		}
+
+		// Blocked: allowUpdateDelete is false or unknown action
 		const contradictionRisk = detectContradictionRisk(
 			proposal.fact.content,
 			proposal.targetContent,
@@ -576,9 +707,7 @@ function applyPhaseCWrites(
 			extractionModel: meta.extractionModel,
 			factCount: meta.factCount,
 			entityCount: meta.entityCount,
-			blockedReason: meta.allowUpdateDelete
-				? "destructive_mutations_not_implemented"
-				: "destructive_mutations_disabled",
+			blockedReason: "destructive_mutations_disabled",
 			reviewNeeded: contradictionRisk,
 			contradictionRisk,
 		});
@@ -671,7 +800,8 @@ export function startWorker(
 		const prefetchWarnings: string[] = [];
 		if (controlledWritesEnabled) {
 			for (const proposal of decisions.proposals) {
-				if (proposal.action !== "add") continue;
+				if (proposal.action !== "add" && proposal.action !== "update") continue;
+			if (proposal.action === "update" && !pipelineCfg.allowUpdateDelete) continue;
 				if (proposal.fact.confidence < pipelineCfg.minFactConfidenceForWrite) {
 					continue;
 				}
@@ -784,6 +914,8 @@ export function startWorker(
 			proposals: decisions.proposals.length,
 			writeMode: controlledWritesEnabled ? "phase-c" : "shadow",
 			added: writeStats.added,
+			updated: writeStats.updated,
+			deleted: writeStats.deleted,
 			deduped: writeStats.deduped,
 			skippedLowConfidence: writeStats.skippedLowConfidence,
 			blockedDestructive: writeStats.blockedDestructive,
