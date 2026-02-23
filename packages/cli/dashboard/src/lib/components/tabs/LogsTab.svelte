@@ -22,13 +22,51 @@ let logEventSource: EventSource | null = null;
 let logLevelFilter = $state<string>("");
 let logCategoryFilter = $state<string>("");
 let logAutoScroll = $state(true);
-let logContainer = $state<HTMLDivElement | null>(null);
+let logViewport = $state<HTMLElement | null>(null);
+let selectedLogKey = $state<string | null>(null);
+let copied = $state(false);
 
 const logCategories = [
 	"daemon", "api", "memory", "sync", "git",
 	"watcher", "embedding", "harness", "system",
 ];
 const logLevels = ["debug", "info", "warn", "error"];
+
+function buildLogKey(log: LogEntry, index: number): string {
+	return `${log.timestamp}-${log.level}-${log.category}-${index}`;
+}
+
+function isViewingLatest(): boolean {
+	if (logs.length === 0) return true;
+	if (!selectedLogKey) return true;
+	return selectedLogKey === buildLogKey(logs[logs.length - 1], logs.length - 1);
+}
+
+function selectLatestLog(): void {
+	if (logs.length === 0) {
+		selectedLogKey = null;
+		return;
+	}
+	selectedLogKey = buildLogKey(logs[logs.length - 1], logs.length - 1);
+}
+
+function getSelectedLog(): LogEntry | null {
+	if (!selectedLogKey) return logs.at(-1) ?? null;
+	for (let i = 0; i < logs.length; i += 1) {
+		if (buildLogKey(logs[i], i) === selectedLogKey) return logs[i];
+	}
+	return logs.at(-1) ?? null;
+}
+
+const selectedLog = $derived(getSelectedLog());
+
+function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
+	if (!logViewport) return;
+	logViewport.scrollTo({
+		top: logViewport.scrollHeight,
+		behavior,
+	});
+}
 
 async function fetchLogs() {
 	logsLoading = true;
@@ -40,6 +78,8 @@ async function fetchLogs() {
 		const res = await fetch(`/api/logs?${params}`);
 		const data = await res.json();
 		logs = data.logs || [];
+		selectLatestLog();
+		setTimeout(() => scrollToBottom("auto"), 0);
 	} catch {
 		logsError = "Failed to fetch logs";
 	} finally {
@@ -58,15 +98,10 @@ function startLogStream() {
 			if (entry.type === "connected") return;
 			if (logLevelFilter && entry.level !== logLevelFilter) return;
 			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
+			const wasViewingLatest = isViewingLatest();
 			logs = [...logs.slice(-499), entry];
-			if (logAutoScroll && logContainer) {
-				setTimeout(() => {
-					logContainer?.scrollTo({
-						top: logContainer.scrollHeight,
-						behavior: "smooth",
-					});
-				}, 50);
-			}
+			if (wasViewingLatest) selectLatestLog();
+			if (logAutoScroll && wasViewingLatest) setTimeout(() => scrollToBottom(), 0);
 		} catch {
 			// ignore parse errors
 		}
@@ -92,6 +127,31 @@ function toggleLogStream() {
 
 function formatLogTime(timestamp: string): string {
 	return timestamp.split("T")[1]?.slice(0, 8) || "";
+}
+
+function formatLogDate(timestamp: string): string {
+	try {
+		return new Date(timestamp).toLocaleString();
+	} catch {
+		return timestamp;
+	}
+}
+
+function formatJson(value: unknown): string {
+	return JSON.stringify(value, null, 2);
+}
+
+async function copySelectedLog(): Promise<void> {
+	if (!selectedLog) return;
+	try {
+		await navigator.clipboard.writeText(formatJson(selectedLog));
+		copied = true;
+		setTimeout(() => {
+			copied = false;
+		}, 1200);
+	} catch {
+		copied = false;
+	}
 }
 
 onMount(() => {
@@ -127,9 +187,16 @@ onMount(() => {
 			</Select.Content>
 		</Select.Root>
 		<label class="flex items-center gap-1.5 text-[length:var(--font-size-sm)] text-[var(--sig-text)] cursor-pointer">
-			<Checkbox checked={logAutoScroll} onCheckedChange={(v) => { logAutoScroll = !!v; }} class="rounded-none" />
+			<Checkbox checked={logAutoScroll} onCheckedChange={(value: unknown) => { logAutoScroll = value === true; }} class="rounded-none" />
 			Auto-scroll
 		</label>
+		<button
+			class="text-[11px] px-2 py-1 border border-[var(--sig-border)] text-[var(--sig-text)] hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
+			onclick={fetchLogs}
+			title="Reload logs"
+		>
+			Refresh
+		</button>
 		<button
 			class={`flex items-center justify-center w-7 h-7 text-[var(--sig-text-muted)] bg-transparent border border-transparent cursor-pointer hover:text-[var(--sig-text)] hover:border-[var(--sig-border)] ${logsStreaming ? 'text-[var(--sig-success)]' : ''}`}
 			onclick={toggleLogStream}
@@ -143,40 +210,76 @@ onMount(() => {
 		</button>
 	</div>
 
-	<ScrollArea class="flex-1">
-		<div
-			class="px-[var(--space-md)] py-[var(--space-sm)] font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] leading-relaxed"
-			bind:this={logContainer}
-		>
-			{#if logsLoading}
-				<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">Loading logs...</div>
-			{:else if logsError}
-				<div class="py-[var(--space-xl)] text-center text-[var(--sig-danger)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">{logsError}</div>
-			{:else if logs.length === 0}
-				<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">No logs found</div>
+	<div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+		<ScrollArea class="min-h-0 border-r border-[var(--sig-border)]" viewportRef={logViewport}>
+			<div class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] leading-relaxed">
+				{#if logsLoading}
+					<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">Loading logs...</div>
+				{:else if logsError}
+					<div class="py-[var(--space-xl)] text-center text-[var(--sig-danger)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">{logsError}</div>
+				{:else if logs.length === 0}
+					<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">No logs found</div>
+				{:else}
+					{#each logs as log, i}
+						<button
+							type="button"
+							class={`w-full text-left px-[var(--space-md)] py-1.5 border-b border-[var(--sig-border)] hover:bg-[var(--sig-surface-raised)] cursor-pointer ${
+								selectedLogKey === buildLogKey(log, i) ? "bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)]" : ""
+							}`}
+							onclick={() => {
+								selectedLogKey = buildLogKey(log, i);
+							}}
+						>
+							<div class="flex flex-wrap items-baseline gap-[var(--space-xs)]">
+								<span class="text-[var(--sig-text-muted)] shrink-0">{formatLogTime(log.timestamp)}</span>
+								<span class={`font-semibold shrink-0 min-w-[40px] ${
+									log.level === "error"
+										? "text-[var(--sig-danger)]"
+										: log.level === "warn"
+											? "text-[var(--sig-accent-hover)]"
+											: log.level === "debug"
+												? "text-[var(--sig-text-muted)]"
+												: "text-[var(--sig-accent)]"
+								}`}>{log.level.toUpperCase()}</span>
+								<span class="text-[var(--sig-text)] shrink-0">[{log.category}]</span>
+								<span class="text-[var(--sig-text-bright)] break-all">{log.message}</span>
+								{#if log.duration !== undefined}
+									<span class="text-[var(--sig-text-muted)]">({log.duration}ms)</span>
+								{/if}
+							</div>
+						</button>
+					{/each}
+				{/if}
+			</div>
+		</ScrollArea>
+		<div class="min-h-0 overflow-auto p-[var(--space-md)] font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)]">
+			{#if selectedLog}
+				<div class="flex items-center justify-between gap-2 mb-[var(--space-sm)]">
+					<div class="text-[var(--sig-text-muted)] text-[length:var(--font-size-xs)] uppercase tracking-[0.08em]">Log details</div>
+					<button
+						type="button"
+						class="text-[10px] px-2 py-1 border border-[var(--sig-border)] text-[var(--sig-text)] hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
+						onclick={copySelectedLog}
+					>{copied ? "Copied" : "Copy JSON"}</button>
+				</div>
+				<div class="grid grid-cols-[80px_1fr] gap-y-1 gap-x-2 mb-[var(--space-sm)]">
+					<div class="text-[var(--sig-text-muted)]">Time</div>
+					<div class="text-[var(--sig-text-bright)] break-all">{formatLogDate(selectedLog.timestamp)}</div>
+					<div class="text-[var(--sig-text-muted)]">Level</div>
+					<div class="text-[var(--sig-text-bright)] uppercase">{selectedLog.level}</div>
+					<div class="text-[var(--sig-text-muted)]">Category</div>
+					<div class="text-[var(--sig-text-bright)]">{selectedLog.category}</div>
+					<div class="text-[var(--sig-text-muted)]">Message</div>
+					<div class="text-[var(--sig-text-bright)] break-all">{selectedLog.message}</div>
+					{#if selectedLog.duration !== undefined}
+						<div class="text-[var(--sig-text-muted)]">Duration</div>
+						<div class="text-[var(--sig-text-bright)]">{selectedLog.duration}ms</div>
+					{/if}
+				</div>
+				<pre class="m-0 p-2 text-[10px] leading-relaxed whitespace-pre-wrap break-all border border-[var(--sig-border)] bg-[var(--sig-surface-raised)] text-[var(--sig-text-muted)]">{formatJson(selectedLog)}</pre>
 			{:else}
-				{#each logs as log, i}
-					<div class={`flex flex-wrap items-baseline gap-[var(--space-xs)] py-0.5 ${i < logs.length - 1 ? 'border-b border-[var(--sig-border)]' : ''}`}>
-						<span class="text-[var(--sig-text-muted)] shrink-0">{formatLogTime(log.timestamp)}</span>
-						<span class={`font-semibold shrink-0 min-w-[40px] ${
-							log.level === 'error' ? 'text-[var(--sig-danger)]' :
-							log.level === 'debug' ? 'text-[var(--sig-text-muted)]' :
-							'text-[var(--sig-accent)]'
-						}`}>{log.level.toUpperCase()}</span>
-						<span class="text-[var(--sig-text)] shrink-0">[{log.category}]</span>
-						<span class="text-[var(--sig-text-bright)]">{log.message}</span>
-						{#if log.duration !== undefined}
-							<span class="text-[var(--sig-text-muted)]">({log.duration}ms)</span>
-						{/if}
-						{#if log.data && Object.keys(log.data).length > 0}
-							<span class="text-[var(--sig-text-muted)] text-[length:var(--font-size-xs)] max-w-[300px] overflow-hidden text-ellipsis whitespace-nowrap">{JSON.stringify(log.data)}</span>
-						{/if}
-						{#if log.error}
-							<div class="w-full text-[var(--sig-danger)] pl-[60px] text-[length:var(--font-size-xs)]">{log.error.name}: {log.error.message}</div>
-						{/if}
-					</div>
-				{/each}
+				<div class="text-[var(--sig-text-muted)]">Select a log entry to inspect details.</div>
 			{/if}
 		</div>
-	</ScrollArea>
+	</div>
 </div>
