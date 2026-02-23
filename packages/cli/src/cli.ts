@@ -5259,6 +5259,11 @@ memoryCmd
 			const signedBatch: Array<{ signature: string; id: string }> = [];
 			for (const row of batch) {
 				try {
+					// Validate contentHash is hex-only (prevents delimiter injection)
+					if (!/^[0-9a-f]+$/.test(row.content_hash)) {
+						failed++;
+						continue;
+					}
 					const payload = `${row.content_hash}|${row.created_at}|${did}`;
 					const signature = await signContent(payload);
 					signedBatch.push({ signature, id: row.id });

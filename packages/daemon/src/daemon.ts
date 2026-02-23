@@ -1898,7 +1898,7 @@ app.post("/api/memory/remember", async (c) => {
 			extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
 			embeddingModel: null,
 			extractionModel: pipelineEnqueueEnabled
-				? pipelineCfg.extractionModel
+				? pipelineCfg.extraction.model
 				: null,
 			updatedBy: who,
 			sourceType,
@@ -2038,7 +2038,7 @@ app.post("/api/memory/remember", async (c) => {
 					`UPDATE memories
 						 SET extraction_status = 'failed', extraction_model = ?
 						 WHERE id = ?`,
-				).run(pipelineCfg.extractionModel, id);
+				).run(pipelineCfg.extraction.model, id);
 			});
 			logger.warn("pipeline", "Failed to enqueue extraction job", {
 				memoryId: id,
