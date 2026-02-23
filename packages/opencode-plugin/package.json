@@ -1,0 +1,24 @@
+{
+	"name": "@signet/opencode-plugin",
+	"version": "0.1.87",
+	"description": "Signet runtime plugin for OpenCode — memory tools and session lifecycle hooks",
+	"type": "module",
+	"main": "dist/signet.mjs",
+	"types": "dist/signet.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/signet.mjs",
+			"types": "./dist/signet.d.ts"
+		}
+	},
+	"scripts": {
+		"build": "bun build src/index.ts --outfile dist/signet.mjs --target node --minify --format esm",
+		"typecheck": "tsc --noEmit",
+		"dev": "bun --watch src/index.ts"
+	},
+	"peerDependencies": {
+		"@opencode-ai/plugin": ">=0.1.0"
+	},
+	"keywords": ["signet", "opencode", "plugin", "ai-memory"],
+	"license": "Apache-2.0"
+}

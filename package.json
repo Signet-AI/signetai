@@ -1,40 +1,38 @@
 {
-  "name": "signet",
-  "version": "0.1.88",
-  "private": true,
-  "description": "Portable AI agent identity",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/signetai/signetai.git"
-  },
-  "author": "Signet AI",
-  "license": "Apache-2.0",
-  "workspaces": [
-    "packages/*",
-    "web"
-  ],
-  "scripts": {
-    "build": "bun run build:core && bun run build:connector-base && bun run build:deps && bun run build:signetai",
-    "build:core": "cd packages/core && bun run build",
-    "build:connector-base": "cd packages/connector-base && bun run build",
-    "build:deps": "bun run --filter '@signet/connector-*' --filter '@signet/daemon' --filter '@signet/sdk' --filter '@signet/cli' build",
-    "build:signetai": "cd packages/signetai && bun run build",
-    "build:publish": "bun run build:dashboard && bun run build:signetai",
-    "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
-    "dev": "bun run --filter '*' dev",
-    "test": "bun run --filter '*' test",
-    "lint": "biome check .",
-    "format": "biome format --write .",
-    "typecheck": "bun run --filter '*' typecheck",
-    "version:sync": "bun scripts/version-sync.ts",
-    "publish:signetai": "cd packages/signetai && npm publish --access public",
-    "dev:web": "cd web && bun run dev",
-    "deploy:web": "cd web && bun run deploy",
-    "changelog": "bun scripts/changelog.ts"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^1.9.0",
-    "bun-types": "^1.3.9",
-    "typescript": "^5.7.0"
-  }
+	"name": "signet",
+	"version": "0.1.88",
+	"private": true,
+	"description": "Portable AI agent identity",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/signetai/signetai.git"
+	},
+	"author": "Signet AI",
+	"license": "Apache-2.0",
+	"workspaces": ["packages/*", "web"],
+	"scripts": {
+		"build": "bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:deps && bun run build:signetai",
+		"build:core": "cd packages/core && bun run build",
+		"build:connector-base": "cd packages/connector-base && bun run build",
+		"build:opencode-plugin": "cd packages/opencode-plugin && bun run build",
+		"build:deps": "bun run --filter '@signet/connector-*' --filter '@signet/daemon' --filter '@signet/sdk' --filter '@signet/cli' build",
+		"build:signetai": "cd packages/signetai && bun run build",
+		"build:publish": "bun run build:dashboard && bun run build:signetai",
+		"build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
+		"dev": "bun run --filter '*' dev",
+		"test": "bun run --filter '*' test",
+		"lint": "biome check .",
+		"format": "biome format --write .",
+		"typecheck": "bun run --filter '*' typecheck",
+		"version:sync": "bun scripts/version-sync.ts",
+		"publish:signetai": "cd packages/signetai && npm publish --access public",
+		"dev:web": "cd web && bun run dev",
+		"deploy:web": "cd web && bun run deploy",
+		"changelog": "bun scripts/changelog.ts"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.0",
+		"bun-types": "^1.3.9",
+		"typescript": "^5.7.0"
+	}
 }
