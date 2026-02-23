@@ -191,6 +191,9 @@ export {
 	verifyBytes,
 	getMasterKey,
 	reEncryptKeypair,
+	setPassphraseProvider,
+	getKeypairKdfVersion,
+	resolveAgentsDir,
 } from "./crypto";
 
 export {

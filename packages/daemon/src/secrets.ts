@@ -226,7 +226,9 @@ export async function execWithSecrets(
 	function redact(text: string): string {
 		let out = text;
 		for (const val of secretValues) {
-			if (val.length > 3) {
+			// Redact ALL secret values regardless of length.
+			// Previous version skipped values ≤3 chars, leaking short PINs/codes.
+			if (val.length > 0) {
 				out = out.replaceAll(val, "[REDACTED]");
 			}
 		}

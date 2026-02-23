@@ -7,16 +7,21 @@
 
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { parse, stringify } from "yaml";
 import {
 	generateSigningKeypair,
 	hasSigningKeypair,
 	getPublicKeyBytes,
+	resolveAgentsDir,
 } from "./crypto";
 import { publicKeyToDid, generateDidDocument, formatDidShort } from "./did";
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+/**
+ * Use the shared, validated resolveAgentsDir() from crypto.ts.
+ * This ensures SIGNET_PATH is validated identically in both modules —
+ * no more raw `process.env.SIGNET_PATH` access that bypasses security checks.
+ */
+const AGENTS_DIR = resolveAgentsDir();
 
 // ---------------------------------------------------------------------------
 // Types

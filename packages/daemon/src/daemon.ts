@@ -26,7 +26,7 @@ import {
 	rmSync,
 } from "fs";
 import { spawn } from "child_process";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
 import { initLlmProvider, closeLlmProvider } from "./llm";
@@ -162,8 +162,8 @@ function hardenPermissions(): void {
 			// Dir may not exist yet — that's fine
 		}
 	}
-	// PID file and agent.yaml should be owner-only too
-	const sensitiveFiles = [PID_FILE, join(AGENTS_DIR, "agent.yaml")];
+	// PID file, agent.yaml, and local token should be owner-only too
+	const sensitiveFiles = [PID_FILE, join(AGENTS_DIR, "agent.yaml"), LOCAL_TOKEN_FILE];
 	for (const file of sensitiveFiles) {
 		try {
 			const stat = statSync(file);
@@ -1149,6 +1149,22 @@ app.post("/api/config", async (c) => {
 
 		if (!file.endsWith(".md") && !file.endsWith(".yaml")) {
 			return c.json({ error: "Invalid file type" }, 400);
+		}
+
+		// Security: Block writes to security-sensitive config files.
+		// Modifying agent.yaml could change auth mode, signing config, etc.
+		// Modifying signing.enc/did.json could compromise identity.
+		const BLOCKED_FILES = ["agent.yaml", "did.json"];
+		if (BLOCKED_FILES.includes(file)) {
+			return c.json(
+				{ error: `Cannot modify ${file} via API. Edit directly on disk or use CLI.` },
+				403,
+			);
+		}
+
+		// Cap content size to prevent disk-fill attacks
+		if (content.length > 512 * 1024) { // 512KB max
+			return c.json({ error: "Content exceeds maximum size (512KB)" }, 413);
 		}
 
 		writeFileSync(join(AGENTS_DIR, file), content, "utf-8");
@@ -6964,6 +6980,41 @@ process.on("uncaughtException", (err) => {
 // db-accessor.ts is the sole schema authority. See migrations/ in @signet/core.
 
 async function main() {
+	// Security: Disable Node.js inspector if it was enabled via --inspect flag.
+	// The inspector allows debugger attach → heap dump → private key extraction.
+	// If someone needs to debug, they must explicitly re-enable it.
+	try {
+		const inspector = require("node:inspector");
+		if (typeof inspector.close === "function") {
+			inspector.close();
+		}
+		// Also disable the inspector URL so it can't be opened remotely
+		if (typeof inspector.url === "function" && inspector.url()) {
+			inspector.close();
+			logger.info("security", "Closed active Node.js inspector session (prevents key extraction via debugger)");
+		}
+	} catch {
+		// Inspector module not available — good, nothing to close
+	}
+
+	// Security: Attempt to disable core dumps (prevents private key extraction
+	// from crash dumps). Works on Linux; macOS may require launchd config.
+	try {
+		const { execFileSync } = require("child_process");
+		if (process.platform === "linux") {
+			// Set core dump size to 0 via ulimit (may fail if not root)
+			execFileSync("/bin/sh", ["-c", "ulimit -c 0"], { timeout: 1000 });
+		}
+		// Disable Node.js diagnostic reports (contain heap data)
+		if (process.report) {
+			(process.report as Record<string, unknown>).reportOnFatalError = false;
+			(process.report as Record<string, unknown>).reportOnUncaughtException = false;
+			(process.report as Record<string, unknown>).reportOnSignal = false;
+		}
+	} catch {
+		// Best-effort — don't crash if this fails
+	}
+
 	logger.info("daemon", "Signet Daemon starting");
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
 	logger.info("daemon", "Port configured", { port: PORT });
