@@ -35,6 +35,20 @@ const logCategories = [
 ];
 const logLevels = ["debug", "info", "warn", "error"];
 
+function getLogLevelClass(level: LogEntry["level"]): string {
+	switch (level) {
+		case "error":
+			return "log-level--error";
+		case "warn":
+			return "log-level--warn";
+		case "debug":
+			return "log-level--debug";
+		case "info":
+		default:
+			return "log-level--info";
+	}
+}
+
 function buildLogKey(log: LogEntry, index: number): string {
 	return `${log.timestamp}-${log.level}-${log.category}-${index}`;
 }
@@ -268,7 +282,7 @@ onMount(() => {
 					{#each logs as log, i}
 						<button
 							type="button"
-							class={`w-full text-left px-[var(--space-md)] py-1.5 border-b border-[var(--sig-border)] hover:bg-[var(--sig-surface-raised)] cursor-pointer ${
+							class={`log-row ${getLogLevelClass(log.level)} w-full text-left px-[var(--space-md)] py-1.5 border-b border-[var(--sig-border)] hover:bg-[var(--sig-surface-raised)] cursor-pointer ${
 								selectedLogKey === buildLogKey(log, i) ? "bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)]" : ""
 							}`}
 							onclick={() => {
@@ -277,15 +291,7 @@ onMount(() => {
 						>
 							<div class="flex flex-wrap items-baseline gap-[var(--space-xs)]">
 								<span class="text-[var(--sig-text-muted)] shrink-0">{formatLogTime(log.timestamp)}</span>
-								<span class={`font-semibold shrink-0 min-w-[40px] ${
-									log.level === "error"
-										? "text-[var(--sig-danger)]"
-										: log.level === "warn"
-											? "text-[var(--sig-accent-hover)]"
-											: log.level === "debug"
-												? "text-[var(--sig-text-muted)]"
-												: "text-[var(--sig-accent)]"
-								}`}>{log.level.toUpperCase()}</span>
+								<span class={`font-semibold shrink-0 min-w-[40px] ${getLogLevelClass(log.level)}`}>{log.level.toUpperCase()}</span>
 								<span class="text-[var(--sig-text)] shrink-0">[{log.category}]</span>
 								<span class="text-[var(--sig-text-bright)] break-all">{log.message}</span>
 								{#if log.duration !== undefined}
@@ -314,7 +320,7 @@ onMount(() => {
 					<div class="text-[var(--sig-text-muted)]">Time</div>
 					<div class="text-[var(--sig-text-bright)] break-all">{formatLogDate(selectedLog.timestamp)}</div>
 					<div class="text-[var(--sig-text-muted)]">Level</div>
-					<div class="text-[var(--sig-text-bright)] uppercase">{selectedLog.level}</div>
+					<div class={`uppercase ${getLogLevelClass(selectedLog.level)}`}>{selectedLog.level}</div>
 					<div class="text-[var(--sig-text-muted)]">Category</div>
 					<div class="text-[var(--sig-text-bright)]">{selectedLog.category}</div>
 					<div class="text-[var(--sig-text-muted)]">Message</div>
@@ -338,3 +344,57 @@ onMount(() => {
 		</div>
 	</div>
 </div>
+
+<style>
+.log-row {
+	position: relative;
+	border-left: 2px solid transparent;
+	border-left-color: var(--log-level-color, transparent);
+}
+
+.log-row::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	background: color-mix(in oklab, var(--log-level-color) 9%, transparent);
+	opacity: 0;
+	transition: opacity var(--dur) var(--ease);
+}
+
+.log-row:hover::before {
+	opacity: 1;
+}
+
+.log-row.log-level--debug {
+	--log-level-color: var(--sig-text-muted);
+}
+
+.log-row.log-level--info {
+	--log-level-color: var(--sig-accent);
+}
+
+.log-row.log-level--warn {
+	--log-level-color: var(--sig-accent-hover);
+}
+
+.log-row.log-level--error {
+	--log-level-color: var(--sig-danger);
+}
+
+.log-level--debug {
+	color: var(--sig-text-muted);
+}
+
+.log-level--info {
+	color: var(--sig-accent);
+}
+
+.log-level--warn {
+	color: var(--sig-accent-hover);
+}
+
+.log-level--error {
+	color: var(--sig-danger);
+}
+</style>
