@@ -1,6 +1,6 @@
 {
   "name": "@signet/daemon",
-  "version": "0.1.99",
+  "version": "0.1.100",
   "license": "Apache-2.0",
   "description": "Background daemon for Signet - serves dashboard, API, and memory system",
   "type": "module",
