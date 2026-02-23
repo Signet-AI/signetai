@@ -314,3 +314,39 @@ export type {
 	SourceBreakdown,
 	TopicSummary,
 } from "./knowledge-health";
+
+// On-Chain Identity (Phase 4A — ERC-8004)
+export {
+	CHAIN_CONFIGS,
+	DEFAULT_CHAIN,
+	createWallet,
+	loadWallet,
+	getWalletAddress,
+	exportWalletKey,
+	getWalletBalance,
+	checkWalletFunds,
+	keccak256Hash,
+	SIGNET_IDENTITY_ABI,
+	getContract,
+	getReadOnlyContract,
+	registerIdentity,
+	anchorMemoryOnChain,
+	getIdentityByDID,
+	getLocalIdentity,
+	getLatestAnchor,
+	buildMemoryMerkleTree,
+	getMemoryRoot,
+	generateMemoryProof,
+	verifyMemoryProof,
+} from "./chain/index";
+export type {
+	ChainConfig,
+	OnchainIdentity,
+	MemoryAnchor,
+	WalletConfig,
+	OnchainAgentIdentity,
+	ChainDb,
+	MemoryLeaf,
+	ChainMerkleTree,
+	ChainMerkleProof,
+} from "./chain/index";
