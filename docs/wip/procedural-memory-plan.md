@@ -10,7 +10,21 @@ Reference: arscontexta kernel (references/arscontexta/)
 
 ---
 
-## 1) Purpose
+## 1) North Star
+
+**Problem**: Agents forget to use their installed skills. Skills exist
+as filesystem artifacts outside the memory system, so they're only
+found when the agent (or user) explicitly searches for them. If nobody
+remembers the skill exists, it doesn't get used.
+
+**Solution**: By embedding skills into Signet's memory and hooks
+system, relevant skills are proactively injected into context —
+the agent never has to go search for them. The skill surfaces
+alongside memories when the working context is relevant.
+
+---
+
+## 2) Purpose
 
 Skills in Signet are currently filesystem artifacts — a directory with
 a SKILL.md file, discovered at runtime, with no database presence.
@@ -36,7 +50,7 @@ also a memory.
 
 ---
 
-## 2) Product Objectives
+## 3) Product Objectives
 
 ### Primary goals
 
@@ -66,7 +80,7 @@ also a memory.
 
 ---
 
-## 3) Design Principles
+## 4) Design Principles
 
 ### Skills are knowledge, not just tools
 
@@ -96,13 +110,26 @@ memories, the graph discovers they're related even though nobody
 explicitly linked them. Emergent skill clustering is a natural
 consequence of shared memory neighborhoods.
 
+### Embed the frontmatter, not the body
+
+The SKILL.md body is execution context — prompt instructions, examples,
+formatting rules. That's what the agent needs *after* a skill is
+selected, not what helps it *find* the skill. Embedding the body adds
+noise without improving retrieval precision.
+
+The frontmatter is the discovery surface. It should carry rich semantic
+signal: description, triggers/use-cases, tags. If the frontmatter is
+good enough, embedding it alone produces better recall than embedding
+a random 500-char slice of the body. This also means frontmatter
+quality is the critical investment, which is why skill installation
+includes an automated enrichment step (see section 7.1).
+
 ### Discovery-first
 
 Everything created must be optimized for future agent discovery. If
 the agent can't find a skill node, it doesn't exist. This means
-embedding quality is the critical investment — the embedding input
-should capture mechanism and use-case context, not just restate the
-skill name. (See section 5.1 for embedding strategy.)
+frontmatter quality is the critical investment — rich descriptions
+and trigger keywords make skills findable; vague one-liners don't.
 
 ### Skills have a lifecycle
 
@@ -114,7 +141,7 @@ reflect where a skill sits in this lifecycle through its `role` field.
 
 ---
 
-## 4) Memory Taxonomy Update
+## 5) Memory Taxonomy Update
 
 The existing taxonomy defines four tiers but only treats three:
 
@@ -145,9 +172,9 @@ discoverable. They can become *less prominent* but never invisible.
 
 ---
 
-## 5) Data Model
+## 6) Data Model
 
-### 5.1 Skill nodes in the entity graph
+### 6.1 Skill nodes in the entity graph
 
 Skills are stored as entities with `entityType = 'skill'`:
 
@@ -157,7 +184,7 @@ Skills are stored as entities with `entityType = 'skill'`:
 -- name: skill name (e.g. 'browser-use')
 -- canonicalName: normalized skill name
 -- description: from SKILL.md frontmatter
--- embedding: vector from skill description + metadata
+-- embedding: vector from enriched frontmatter
 
 INSERT INTO entities (
   id, name, canonical_name, entity_type, description,
@@ -169,7 +196,7 @@ INSERT INTO entities (
 );
 ```
 
-### 5.2 Skill metadata table (new)
+### 6.2 Skill metadata table (new)
 
 The entity row captures the graph-facing data. Skill-specific
 metadata lives in a dedicated table that links back:
@@ -183,8 +210,10 @@ CREATE TABLE skill_meta (
   source        TEXT NOT NULL,  -- 'openclaw' | 'claude-code' | 'manual' | 'skills.sh'
   role          TEXT NOT NULL DEFAULT 'utility',
                 -- 'orchestrator' | 'processor' | 'utility' | 'hook-candidate'
+  triggers      TEXT,           -- JSON array of discovery phrases
   tags          TEXT,           -- JSON array (e.g. ["devops", "testing"])
   permissions   TEXT,           -- JSON array of declared permissions
+  enriched      INTEGER DEFAULT 0, -- 1 if frontmatter was auto-enriched
   installed_at  TEXT NOT NULL,
   last_used_at  TEXT,
   use_count     INTEGER DEFAULT 0,
@@ -207,7 +236,7 @@ Tags from SKILL.md frontmatter (if present) are imported directly;
 the affinity computation in Phase P3 can also suggest tags based on
 cluster membership.
 
-### 5.3 Skill-memory links
+### 6.3 Skill-memory links
 
 When the agent uses a skill during a session, the episodic memories
 from that session link to the skill entity through the existing
@@ -225,7 +254,7 @@ INSERT INTO memory_entity_mentions (
 );
 ```
 
-### 5.4 Skill-to-skill relations
+### 6.4 Skill-to-skill relations
 
 Skill relations use a typed vocabulary that distinguishes how and
 why two skills are connected. This is informed by arscontexta's
@@ -270,29 +299,53 @@ INSERT INTO relations (
 
 ---
 
-## 6) Lifecycle
+## 7) Lifecycle
 
-### 6.1 Skill installation
+### 7.1 Skill installation (with frontmatter enrichment)
 
 When a skill is installed (via `signet skill install`, manual copy,
 or harness unification):
 
 1. Parse SKILL.md frontmatter and body.
-2. Generate embedding from description + use-case context. The
-   embedding input should be: frontmatter description + first 500
-   characters of the SKILL.md body. The description should add
-   mechanism or implication, not restate the skill name — this is
-   critical for discovery quality.
-3. Create entity row with `entityType = 'skill'`.
-4. Create `skill_meta` row with installation metadata, including
+2. **Enrich frontmatter** (if needed). If the frontmatter lacks a
+   rich `description` or has no `triggers` field, run an LLM pass
+   over the full SKILL.md body to generate them. This uses the
+   existing pipeline `LlmProvider` (same model and provider config
+   as the extraction worker in `decision.ts`) — no new inference
+   path, just a new prompt function alongside
+   `extractFactsAndEntities()`. The enrichment prompt asks the
+   model to produce:
+   - A 1-2 sentence description that explains *what the skill does*
+     and *when you'd use it* (mechanism + use-case, not restating
+     the skill name).
+   - A `triggers` list of 3-8 short phrases representing contexts
+     where this skill is relevant (e.g. "web scraping", "form
+     filling", "screenshot capture", "browser testing").
+   - `tags` for domain grouping if not already present.
+   The enriched frontmatter is written back to SKILL.md so it's
+   durable and human-editable. Skills that already have rich
+   frontmatter skip this step (determined by checking that
+   `description` is >30 chars and `triggers` exists).
+3. Generate embedding from the enriched frontmatter only:
+   `name + description + triggers`. The body is not embedded.
+4. Create entity row with `entityType = 'skill'`.
+5. Create `skill_meta` row with installation metadata, including
    `role` (from frontmatter or default 'utility') and `tags`.
-5. Run extraction on SKILL.md body to find entity references
+6. Run extraction on SKILL.md body to find entity references
    (e.g. if the skill mentions "Cloudflare", link to the
    Cloudflare entity if it exists) and explicit skill relations
    (e.g. "works with web-perf" → `complements` edge).
-6. Set initial importance to `importanceOnInstall` (default 0.7).
+7. Set initial importance to `importanceOnInstall` (default 0.7).
 
-### 6.2 Skill usage
+The enrichment step is the key quality gate. A skill with a vague
+one-liner description ("browser automation") becomes findable only
+after enrichment produces the semantic detail ("Automates browser
+interactions via Playwright for web scraping, form filling, visual
+testing, and screenshot capture"). This means discovery quality
+scales with frontmatter quality, which is now a machine-assisted
+process rather than relying on skill authors to write good metadata.
+
+### 7.2 Skill usage
 
 When the agent invokes a skill during a session:
 
@@ -305,7 +358,7 @@ When the agent invokes a skill during a session:
 No special handling needed: the existing extraction pipeline handles
 this if skill entities exist in the graph.
 
-### 6.3 Skill uninstallation
+### 7.3 Skill uninstallation
 
 When a skill is removed:
 
@@ -315,7 +368,7 @@ When a skill is removed:
 4. The filesystem artifact is removed as before.
 5. After retention window, hard-delete cascades through graph tables.
 
-### 6.4 Relation discovery (open triangle detection)
+### 7.4 Relation discovery (open triangle detection)
 
 Implicit skill-to-skill relations are discovered through open
 triangle detection in the graph, inspired by arscontexta's graph
@@ -350,9 +403,9 @@ Steps:
 
 ---
 
-## 7) Retrieval Integration
+## 8) Retrieval Integration
 
-### 7.1 Skill-aware recall
+### 8.1 Skill-aware recall
 
 When `signet recall` runs, the existing graph-augmented retrieval
 (section 13 of pipeline v2) already expands one-hop from matched
@@ -363,7 +416,7 @@ Example: user recalls "deploy process" → matches entity "Cloudflare"
 → one-hop expansion finds skill:wrangler → wrangler skill surfaces
 in results alongside relevant memories.
 
-### 7.2 Contextual skill suggestions
+### 8.2 Contextual skill suggestions
 
 New endpoint for proactive skill discovery:
 
@@ -380,7 +433,7 @@ GET /api/skills/suggest?context=<text>
 This powers session-start hooks that can suggest relevant skills
 based on the current working context.
 
-### 7.3 Skill search enhancement
+### 8.3 Skill search enhancement
 
 The existing `/api/skills` list endpoint gains an optional
 `?ranked=true` parameter that sorts installed skills by graph
@@ -389,9 +442,9 @@ neighborhoods (more linked memories, more relations) rank higher.
 
 ---
 
-## 8) Dashboard Integration
+## 9) Dashboard Integration
 
-### 8.1 Graph visualization
+### 9.1 Graph visualization
 
 The existing embeddings/graph view in the dashboard gains
 skill-specific rendering:
@@ -401,7 +454,7 @@ skill-specific rendering:
 - Skill-to-memory edges shown on hover/select.
 - Cluster detection highlights skill neighborhoods.
 
-### 8.2 Skill detail view
+### 9.2 Skill detail view
 
 Each skill's detail page in the dashboard gains a "Knowledge" tab
 showing:
@@ -413,15 +466,18 @@ showing:
 
 ---
 
-## 9) Implementation Phases
+## 10) Implementation Phases
 
-### Phase P1: Schema and node creation
+### Phase P1: Schema, enrichment, and node creation
 
 - Add `skill_meta` table via migration.
-- On skill install, create entity + skill_meta rows.
+- Implement frontmatter enrichment: LLM pass to generate rich
+  `description` and `triggers` fields for skills with thin metadata.
+- On skill install, enrich → embed → create entity + skill_meta rows.
 - On skill uninstall, soft-delete entity.
-- Backfill: scan existing installed skills and create nodes for them.
-- Embed skill descriptions using configured embedding provider.
+- Backfill: scan existing installed skills, enrich frontmatter where
+  needed, and create nodes for them.
+- Embed enriched frontmatter using configured embedding provider.
 
 **Depends on**: Pipeline v2 Phase A (migration infrastructure),
 Phase E (graph tables exist).
@@ -464,7 +520,7 @@ Phase E (graph tables exist).
 
 ---
 
-## 10) Configuration
+## 11) Configuration
 
 Extension to the pipeline config block:
 
@@ -480,13 +536,13 @@ pipeline:
     affinityMode: event        # 'event' (threshold-triggered) or 'interval'
     affinityInterval: 6h       # fallback interval if mode is 'interval'
     suggestionLimit: 5
-    embeddingInput: description+body  # 'description' | 'description+body'
-    embeddingBodyLimit: 500    # max chars from SKILL.md body for embedding
+    enrichOnInstall: true      # auto-enrich thin frontmatter via LLM
+    enrichMinDescription: 30   # min chars before description is "rich enough"
 ```
 
 ---
 
-## 11) Safety and Invariants
+## 12) Safety and Invariants
 
 1. **Skill nodes are not deletable by LLM decisions.** Only explicit
    user action (uninstall) removes a skill node. The extraction
@@ -511,7 +567,7 @@ pipeline:
 
 ---
 
-## 12) Success Criteria
+## 13) Success Criteria
 
 1. All installed skills have corresponding entity nodes in the graph.
 2. Skill usage during sessions creates linked episodic memories.
@@ -524,7 +580,7 @@ pipeline:
 
 ---
 
-## 13) Open Questions
+## 14) Open Questions
 
 1. **Skill versioning in the graph**: when a skill updates, should the
    node be replaced or versioned? Current lean: replace in place,
@@ -559,12 +615,14 @@ pipeline:
 
 ---
 
-## 14) Resolved Decisions
+## 15) Resolved Decisions
 
-1. **Embedding strategy** (was open question #4): description +
-   first 500 chars of SKILL.md body. The description should add
-   mechanism or implication, not restate the skill name. Configurable
-   via `embeddingInput` and `embeddingBodyLimit`.
+1. **Embedding strategy** (was open question #4): Embed enriched
+   frontmatter only (`name + description + triggers`). The SKILL.md
+   body is execution context, not retrieval signal. Frontmatter is
+   auto-enriched via LLM on install when descriptions are thin or
+   `triggers` are missing, ensuring discovery quality without relying
+   on skill authors to write perfect metadata.
 
 2. **Affinity computation trigger**: event-driven (threshold-based)
    rather than fixed interval. Fires when co-occurrence count crosses
@@ -580,7 +638,7 @@ pipeline:
 
 ---
 
-## 15) References
+## 16) References
 
 - arscontexta kernel: `references/arscontexta/reference/kernel.yaml`
   — 15 primitives with dependency DAG. Informed phase ordering.
