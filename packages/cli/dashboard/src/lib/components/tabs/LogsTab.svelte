@@ -29,6 +29,9 @@ let copied = $state(false);
 const logCategories = [
 	"daemon", "api", "memory", "sync", "git",
 	"watcher", "embedding", "harness", "system",
+	"hooks", "pipeline", "skills", "secrets", "auth",
+	"session-tracker", "summary-worker", "document-worker", "maintenance",
+	"retention", "llm",
 ];
 const logLevels = ["debug", "info", "warn", "error"];
 
@@ -141,6 +144,48 @@ function formatJson(value: unknown): string {
 	return JSON.stringify(value, null, 2);
 }
 
+function readString(value: unknown): string | null {
+	return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readStringArray(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function getReadableLogOutput(log: LogEntry): string {
+	const data = log.data;
+	if (!data) return "";
+
+	const sections: string[] = [];
+	const previews = [
+		readString(data.injectPreview),
+		readString(data.summaryPromptPreview),
+		readString(data.summaryPreview),
+		readString(data.transcriptPreview),
+		readString(data.promptPreview),
+	].filter((value): value is string => Boolean(value));
+
+	if (previews.length > 0) {
+		sections.push(previews.join("\n\n"));
+	}
+
+	const factsPreview = readStringArray(data.factsPreview);
+	if (factsPreview.length > 0) {
+		const facts = factsPreview.map((fact) => `- ${fact}`).join("\n");
+		sections.push(`Facts:\n${facts}`);
+	}
+
+	return sections.join("\n\n");
+}
+
+function getReadableLogSnippet(log: LogEntry): string {
+	const detail = getReadableLogOutput(log).trim();
+	if (!detail) return "";
+	if (detail.length <= 220) return detail;
+	return `${detail.slice(0, 220)}...`;
+}
+
 async function copySelectedLog(): Promise<void> {
 	if (!selectedLog) return;
 	try {
@@ -247,6 +292,9 @@ onMount(() => {
 									<span class="text-[var(--sig-text-muted)]">({log.duration}ms)</span>
 								{/if}
 							</div>
+							{#if getReadableLogSnippet(log)}
+								<div class="mt-1 text-[11px] text-[var(--sig-text-muted)] whitespace-pre-wrap break-words">{getReadableLogSnippet(log)}</div>
+							{/if}
 						</button>
 					{/each}
 				{/if}
@@ -276,6 +324,13 @@ onMount(() => {
 						<div class="text-[var(--sig-text-bright)]">{selectedLog.duration}ms</div>
 					{/if}
 				</div>
+				{@const readableOutput = getReadableLogOutput(selectedLog)}
+				{#if readableOutput}
+					<div class="mb-[var(--space-sm)]">
+						<div class="text-[var(--sig-text-muted)] text-[length:var(--font-size-xs)] uppercase tracking-[0.08em] mb-1">Readable output</div>
+						<pre class="m-0 p-2 text-[10px] leading-relaxed whitespace-pre-wrap break-words border border-[var(--sig-border)] bg-[var(--sig-surface)] text-[var(--sig-text)]">{readableOutput}</pre>
+					</div>
+				{/if}
 				<pre class="m-0 p-2 text-[10px] leading-relaxed whitespace-pre-wrap break-all border border-[var(--sig-border)] bg-[var(--sig-surface-raised)] text-[var(--sig-text-muted)]">{formatJson(selectedLog)}</pre>
 			{:else}
 				<div class="text-[var(--sig-text-muted)]">Select a log entry to inspect details.</div>

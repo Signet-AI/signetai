@@ -49,6 +49,13 @@ interface LlmSummaryResult {
 	}>;
 }
 
+function truncateForLog(text: string, maxChars: number): string {
+	const value = text.trim();
+	if (value.length <= maxChars) return value;
+	const overflow = value.length - maxChars;
+	return `${value.slice(0, maxChars)}\n...[truncated ${overflow} chars]`;
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -193,6 +200,10 @@ async function processJob(
 
 	logger.info("summary-worker", "Wrote session summary", {
 		path: filename,
+		sessionKey: job.session_key,
+		project: job.project,
+		summaryChars: result.summary.length,
+		summaryPreview: truncateForLog(result.summary, 5000),
 	});
 
 	// Insert atomic facts (same logic as old handleSessionEnd)
@@ -238,6 +249,9 @@ async function processJob(
 		total: result.facts.length,
 		saved,
 		deduplicated: result.facts.length - saved,
+		factsPreview: result.facts
+			.slice(0, 10)
+			.map((fact) => truncateForLog(fact.content, 240)),
 	});
 }
 
@@ -289,6 +303,8 @@ export function startSummaryWorker(
 				jobId: job.id,
 				harness: job.harness,
 				attempt: job.attempts,
+				sessionKey: job.session_key,
+				project: job.project,
 			});
 
 			await processJob(accessor, provider, job);
@@ -394,6 +410,10 @@ export function enqueueSummaryJob(
 	logger.info("summary-worker", "Enqueued session summary job", {
 		jobId: id,
 		harness: params.harness,
+		sessionKey: params.sessionKey,
+		project: params.project,
+		transcriptChars: params.transcript.length,
+		transcriptPreview: truncateForLog(params.transcript, 1200),
 	});
 
 	return id;
