@@ -4836,12 +4836,18 @@ program
 				return;
 			}
 
+			// Detect actual embedding dimensions from existing data
+			const dimRow = db
+				.prepare("SELECT dimensions FROM embeddings LIMIT 1")
+				.get() as { dimensions: number } | undefined;
+			const dims = dimRow?.dimensions ?? 768;
+
 			// Create vec_embeddings virtual table if not exists
-			spinner.text = "Creating vec_embeddings table...";
+			spinner.text = `Creating vec_embeddings table (${dims}d)...`;
 			db.exec(`
 				CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
 					id TEXT PRIMARY KEY,
-					embedding FLOAT[1024] distance_metric=cosine
+					embedding FLOAT[${dims}] distance_metric=cosine
 				);
 			`);
 

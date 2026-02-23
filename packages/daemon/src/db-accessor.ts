@@ -9,7 +9,11 @@
 import { Database, type Statement } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { runMigrations, findSqliteVecExtension } from "@signet/core";
+import {
+	runMigrations,
+	findSqliteVecExtension,
+	DEFAULT_EMBEDDING_DIMENSIONS,
+} from "@signet/core";
 
 // ---------------------------------------------------------------------------
 // Public interfaces — thin wrappers over the bun:sqlite Database surface
@@ -130,10 +134,16 @@ function ensureVecTable(db: Database): void {
 		db.exec("DROP TABLE vec_embeddings");
 	}
 
+	// Detect actual embedding dimensions from existing data
+	const dimRow = db
+		.prepare("SELECT dimensions FROM embeddings LIMIT 1")
+		.get() as { dimensions: number } | undefined;
+	const dims = dimRow?.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+
 	db.exec(`
 		CREATE VIRTUAL TABLE vec_embeddings USING vec0(
 			id TEXT PRIMARY KEY,
-			embedding FLOAT[768] distance_metric=cosine
+			embedding FLOAT[${dims}] distance_metric=cosine
 		);
 	`);
 }
