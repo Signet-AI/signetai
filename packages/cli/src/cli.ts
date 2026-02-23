@@ -5193,7 +5193,7 @@ memoryCmd
 	.description("Sign all unsigned memories with the agent's keypair")
 	.option("--dry-run", "Show what would be signed without making changes")
 	.action(async (options) => {
-		const { hasSigningKeypair, signContent, getPublicKeyBytes } = await import("@signet/core");
+		const { hasSigningKeypair, signContent, getPublicKeyBytes, buildSignablePayload } = await import("@signet/core");
 		const { publicKeyToDid } = await import("@signet/core");
 
 		console.log(signetLogo());
@@ -5259,12 +5259,8 @@ memoryCmd
 				const signedBatch: Array<{ signature: string; id: string }> = [];
 				for (const row of batch) {
 					try {
-						// Validate contentHash is hex-only (prevents delimiter injection)
-						if (!/^[0-9a-f]+$/.test(row.content_hash)) {
-							failed++;
-							continue;
-						}
-						const payload = `${row.content_hash}|${row.created_at}|${did}`;
+						// Use core's buildSignablePayload for validation + single source of truth
+						const payload = buildSignablePayload(row.content_hash, row.created_at, did);
 						const signature = await signContent(payload);
 						signedBatch.push({ signature, id: row.id });
 						signed++;
@@ -5297,7 +5293,7 @@ memoryCmd
 	.description("Verify signatures of signed memories")
 	.option("--limit <n>", "Maximum number to verify", "100")
 	.action(async (options) => {
-		const { verifySignature } = await import("@signet/core");
+		const { verifySignature, buildSignablePayload } = await import("@signet/core");
 		const { didToPublicKey } = await import("@signet/core");
 
 		console.log(signetLogo());
@@ -5340,7 +5336,7 @@ memoryCmd
 			for (const row of rows) {
 				try {
 					const pubKey = didToPublicKey(row.signer_did);
-					const payload = `${row.content_hash}|${row.created_at}|${row.signer_did}`;
+					const payload = buildSignablePayload(row.content_hash, row.created_at, row.signer_did);
 					const isValid = await verifySignature(payload, row.signature, pubKey);
 					if (isValid) {
 						valid++;

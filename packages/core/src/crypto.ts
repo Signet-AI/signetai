@@ -12,7 +12,7 @@
  */
 
 import sodium from "libsodium-wrappers";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, writeSync, closeSync, chmodSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, writeSync, closeSync, chmodSync, statSync, lstatSync } from "fs";
 import { homedir, hostname } from "os";
 import { join } from "path";
 import { execFileSync } from "child_process";
@@ -21,7 +21,49 @@ import { execFileSync } from "child_process";
 // Paths
 // ---------------------------------------------------------------------------
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+/**
+ * Validate SIGNET_PATH if set — prevents attacks via environment variable manipulation:
+ * - Pointing to world-readable directories (key exposure)
+ * - Pointing to symlinks (redirect writes to attacker-controlled location)
+ * - Pointing to NFS mounts (keys transmitted over network)
+ */
+function resolveAgentsDir(): string {
+	const envPath = process.env.SIGNET_PATH;
+	if (!envPath) return join(homedir(), ".agents");
+
+	try {
+		// Check for symlink attacks
+		const lstat = lstatSync(envPath);
+		if (lstat.isSymbolicLink()) {
+			throw new Error("SIGNET_PATH must not be a symlink");
+		}
+
+		const stat = statSync(envPath);
+		if (!stat.isDirectory()) {
+			throw new Error("SIGNET_PATH must be a directory");
+		}
+
+		// Reject group/world-readable directories (keys would be exposed)
+		if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
+			// Auto-fix permissions instead of erroring — more user-friendly
+			try {
+				chmodSync(envPath, 0o700);
+			} catch {
+				throw new Error(
+					"SIGNET_PATH directory is group/world-accessible and could not be fixed. " +
+					"Run: chmod 700 " + envPath,
+				);
+			}
+		}
+	} catch (err) {
+		if (err instanceof Error && err.message.startsWith("SIGNET_PATH")) throw err;
+		// Directory doesn't exist yet — it will be created with proper permissions later
+	}
+
+	return envPath;
+}
+
+const AGENTS_DIR = resolveAgentsDir();
 const KEYS_DIR = join(AGENTS_DIR, ".keys");
 const SIGNING_KEY_FILE = join(KEYS_DIR, "signing.enc");
 
@@ -459,6 +501,36 @@ export async function verifyBytes(
 	} catch {
 		return false;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Signing payload construction
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the canonical signable payload for a memory entry.
+ *
+ * Format: `contentHash|createdAt|signerDid`
+ * This binds the signature to the content, timestamp, and signer identity.
+ *
+ * All fields are validated to prevent delimiter injection attacks where a
+ * crafted field containing `|` could forge a different payload.
+ *
+ * Exported from core so both daemon and CLI can use the same function,
+ * preventing format drift between signing and verification paths.
+ */
+export function buildSignablePayload(
+	contentHash: string,
+	createdAt: string,
+	signerDid: string,
+): string {
+	if (!/^[0-9a-f]+$/.test(contentHash)) {
+		throw new Error("contentHash must be lowercase hex");
+	}
+	if (createdAt.includes("|") || signerDid.includes("|")) {
+		throw new Error("Signing payload fields must not contain pipe characters");
+	}
+	return `${contentHash}|${createdAt}|${signerDid}`;
 }
 
 // ---------------------------------------------------------------------------

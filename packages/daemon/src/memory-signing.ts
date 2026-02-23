@@ -17,6 +17,7 @@ import {
 	publicKeyToDid,
 	didToPublicKey,
 	isAutoSignEnabled,
+	buildSignablePayload,
 } from "@signet/core";
 import type { IngestEnvelope } from "./transactions";
 
@@ -68,30 +69,8 @@ export async function getAgentDid(): Promise<string | null> {
 	}
 }
 
-/**
- * Build the signable payload for a memory entry.
- *
- * The signed content is: `contentHash|createdAt|signerDid`
- * This binds the signature to the content, timestamp, and signer identity.
- *
- * All fields are validated to prevent delimiter injection attacks where a
- * crafted field containing `|` could forge a different payload.
- */
-export function buildSignablePayload(
-	contentHash: string,
-	createdAt: string,
-	signerDid: string,
-): string {
-	// Validate contentHash is lowercase hex only (SHA-256 output)
-	if (!/^[0-9a-f]+$/.test(contentHash)) {
-		throw new Error("contentHash must be lowercase hex");
-	}
-	// Validate no delimiters in any field (defense in depth)
-	if (createdAt.includes("|") || signerDid.includes("|")) {
-		throw new Error("Signing payload fields must not contain pipe characters");
-	}
-	return `${contentHash}|${createdAt}|${signerDid}`;
-}
+// buildSignablePayload is now imported from @signet/core (single source of truth
+// for both daemon and CLI signing/verification paths).
 
 /**
  * Sign an ingest envelope before database insertion.

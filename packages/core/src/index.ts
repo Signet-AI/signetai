@@ -181,6 +181,7 @@ export {
 	loadSigningKeypair,
 	hasSigningKeypair,
 	clearCachedKeypair,
+	buildSignablePayload,
 	getPublicKeyBytes,
 	getPublicKeyBase64,
 	signContent,
