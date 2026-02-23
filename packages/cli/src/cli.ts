@@ -5106,7 +5106,7 @@ didCmd
 	.option("-o, --output <path>", "Write to file instead of stdout")
 	.action(async (options) => {
 		const { getConfiguredDid, didToPublicKey, generateDidDocument } = await import("@signet/core");
-		const { writeFileSync } = require("fs");
+		// writeFileSync already imported at top of file (line 24)
 
 		const did = getConfiguredDid();
 		if (!did) {

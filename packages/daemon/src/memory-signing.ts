@@ -27,8 +27,10 @@ import type { IngestEnvelope } from "./transactions";
 /** Cached DID — resolved once at first signing attempt. */
 let _cachedDid: string | null = null;
 
-/** Whether signing is available (keypair exists). Cached after first check. */
+/** Whether signing is available (keypair exists). Cached with 60s TTL. */
 let _signingAvailable: boolean | null = null;
+let _signingCheckedAt = 0;
+const SIGNING_CACHE_TTL_MS = 60_000; // Re-check every 60s
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -36,12 +38,16 @@ let _signingAvailable: boolean | null = null;
 
 /**
  * Check if memory signing is available (keypair exists).
- * Result is cached after first check.
- * Synchronous because hasSigningKeypair() only uses existsSync.
+ * Cached with 60s TTL so key creation mid-process is detected
+ * without requiring a daemon restart.
  */
 export function isSigningAvailable(): boolean {
-	if (_signingAvailable !== null) return _signingAvailable;
+	const now = Date.now();
+	if (_signingAvailable !== null && now - _signingCheckedAt < SIGNING_CACHE_TTL_MS) {
+		return _signingAvailable;
+	}
 	_signingAvailable = hasSigningKeypair();
+	_signingCheckedAt = now;
 	return _signingAvailable;
 }
 
@@ -161,4 +167,5 @@ export async function verifyMemorySignature(
 export function resetSigningCache(): void {
 	_cachedDid = null;
 	_signingAvailable = null;
+	_signingCheckedAt = 0;
 }

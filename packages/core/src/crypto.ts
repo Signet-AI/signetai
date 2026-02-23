@@ -15,7 +15,7 @@ import sodium from "libsodium-wrappers";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, writeSync, closeSync, chmodSync } from "fs";
 import { homedir, hostname } from "os";
 import { join } from "path";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -60,16 +60,19 @@ function getMachineId(): string {
 		}
 	}
 
-	// macOS: IOPlatformUUID
+	// macOS: IOPlatformUUID — use execFileSync with absolute path to avoid
+	// $PATH manipulation attacks (defense in depth for key derivation input)
 	try {
-		const out = execSync(
-			"ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk '{print $3}'",
+		const ioregOut = execFileSync(
+			"/usr/sbin/ioreg",
+			["-rd1", "-c", "IOPlatformExpertDevice"],
 			{ timeout: 2000 },
-		)
-			.toString()
-			.trim()
-			.replace(/"/g, "");
-		if (out) return out;
+		).toString();
+		const uuidMatch = ioregOut
+			.split("\n")
+			.find((l) => l.includes("IOPlatformUUID"))
+			?.match(/"([^"]+)"$/);
+		if (uuidMatch?.[1]) return uuidMatch[1];
 	} catch {
 		// ignore
 	}
@@ -92,7 +95,7 @@ let _masterKey: Uint8Array | null = null;
  * interoperable with the daemon's encryption layer.
  */
 export async function getMasterKey(): Promise<Uint8Array> {
-	if (_masterKey) return _masterKey;
+	if (_masterKey) return new Uint8Array(_masterKey); // Defensive copy
 
 	await sodium.ready;
 
@@ -102,7 +105,7 @@ export async function getMasterKey(): Promise<Uint8Array> {
 
 	const key = sodium.crypto_generichash(32, inputBytes, null);
 	_masterKey = key;
-	return key;
+	return new Uint8Array(key); // Defensive copy
 }
 
 // ---------------------------------------------------------------------------
@@ -160,8 +163,7 @@ async function decryptBytes(encoded: string): Promise<Uint8Array> {
 function readKeypairFile(): StoredKeypair {
 	if (!existsSync(SIGNING_KEY_FILE)) {
 		throw new Error(
-			`Signing keypair not found at ${SIGNING_KEY_FILE}. ` +
-			"Call generateSigningKeypair() first.",
+			"Signing keypair not found. Run `signet did init` to generate one.",
 		);
 	}
 
@@ -176,7 +178,7 @@ function readKeypairFile(): StoredKeypair {
 		return data;
 	} catch (err) {
 		if (err instanceof SyntaxError) {
-			throw new Error(`Signing keypair file is corrupt (invalid JSON): ${SIGNING_KEY_FILE}`);
+			throw new Error("Signing keypair file is corrupt (invalid JSON)");
 		}
 		throw err;
 	}
@@ -374,6 +376,9 @@ export async function getPublicKeyBase64(): Promise<string> {
  * @throws If no keypair exists or decryption fails.
  */
 export async function signContent(content: string): Promise<string> {
+	if (!content || content.length === 0) {
+		throw new Error("Cannot sign empty content");
+	}
 	await sodium.ready;
 	const kp = await ensureKeypair();
 	const message = new TextEncoder().encode(content);
