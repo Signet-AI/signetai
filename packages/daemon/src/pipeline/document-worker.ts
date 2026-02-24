@@ -357,28 +357,36 @@ async function processDocument(
 				 VALUES (?, ?, ?)`,
 			).run(docId, memId, i);
 
-			// Store embedding if we got one
+			// Store embedding if we got one (with dimension validation)
 			if (vector) {
-				const embId = crypto.randomUUID();
-				const blob = vectorToBlob(vector);
-				db.prepare(
-					`INSERT INTO embeddings
-					 (id, content_hash, vector, dimensions, source_type,
-					  source_id, chunk_text, created_at)
-					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-					 ON CONFLICT(content_hash) DO UPDATE SET
-					   vector = excluded.vector,
-					   dimensions = excluded.dimensions`,
-				).run(
-					embId,
-					normalized.contentHash,
-					blob,
-					vector.length,
-					memId,
-					chunkText,
-					now,
-				);
-				syncVecInsert(db, embId, vector);
+				if (vector.length !== embeddingCfg.dimensions) {
+					logger.warn("document-worker", "Embedding dimension mismatch, skipping vector insert", {
+						got: vector.length,
+						expected: embeddingCfg.dimensions,
+						documentId: docId,
+					});
+				} else {
+					const embId = crypto.randomUUID();
+					const blob = vectorToBlob(vector);
+					db.prepare(
+						`INSERT INTO embeddings
+						 (id, content_hash, vector, dimensions, source_type,
+						  source_id, chunk_text, created_at)
+						 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+						 ON CONFLICT(content_hash) DO UPDATE SET
+						   vector = excluded.vector,
+						   dimensions = excluded.dimensions`,
+					).run(
+						embId,
+						normalized.contentHash,
+						blob,
+						vector.length,
+						memId,
+						chunkText,
+						now,
+					);
+					syncVecInsert(db, embId, vector);
+				}
 			}
 
 			memoriesCreated++;

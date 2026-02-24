@@ -151,6 +151,12 @@ export interface PipelineDocumentsConfig {
 	readonly maxContentBytes: number;
 }
 
+export interface PipelineGuardrailsConfig {
+	readonly maxContentChars: number;
+	readonly chunkTargetChars: number;
+	readonly recallTruncateChars: number;
+}
+
 export interface PipelineV2Config {
 	// Master switches (flat)
 	readonly enabled: boolean;
@@ -166,6 +172,7 @@ export interface PipelineV2Config {
 	readonly autonomous: PipelineAutonomousConfig;
 	readonly repair: PipelineRepairConfig;
 	readonly documents: PipelineDocumentsConfig;
+	readonly guardrails: PipelineGuardrailsConfig;
 }
 
 // -- Status/union constants --

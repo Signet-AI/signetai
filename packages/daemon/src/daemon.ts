@@ -282,6 +282,45 @@ function blobToVector(blob: Buffer, dimensions: number | null): number[] {
 	return Array.from(vector.slice(0, size));
 }
 
+/**
+ * Split text into sentence-aware chunks of approximately targetChars.
+ * Single sentences exceeding 2x target get hard-split at targetChars.
+ */
+function chunkBySentence(text: string, targetChars: number): readonly string[] {
+	// Split on sentence-ending punctuation followed by whitespace/newline
+	const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+	const chunks: string[] = [];
+	let current = "";
+
+	for (const sentence of sentences) {
+		// If a single sentence exceeds 2x target, hard-split it
+		if (sentence.length > targetChars * 2) {
+			if (current.length > 0) {
+				chunks.push(current.trim());
+				current = "";
+			}
+			for (let i = 0; i < sentence.length; i += targetChars) {
+				chunks.push(sentence.slice(i, i + targetChars).trim());
+			}
+			continue;
+		}
+
+		const combined = current.length > 0 ? `${current} ${sentence}` : sentence;
+		if (combined.length > targetChars && current.length > 0) {
+			chunks.push(current.trim());
+			current = sentence;
+		} else {
+			current = combined;
+		}
+	}
+
+	if (current.trim().length > 0) {
+		chunks.push(current.trim());
+	}
+
+	return chunks.filter((c) => c.length > 0);
+}
+
 function parseTagsField(raw: string | null): string[] {
 	if (!raw) return [];
 
@@ -1843,9 +1882,177 @@ app.post("/api/memory/remember", async (c) => {
 	if (!raw) return c.json({ error: "content is required" }, 400);
 
 	// Pipeline v2 kill switch: refuse writes when mutations are frozen
-	const pipelineCfg = loadMemoryConfig(AGENTS_DIR).pipelineV2;
+	const fullCfg = loadMemoryConfig(AGENTS_DIR);
+	const pipelineCfg = fullCfg.pipelineV2;
 	if (pipelineCfg.mutationsFrozen) {
 		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+	}
+
+	// --- Auto-chunking for oversized memories ---
+	const guardrails = pipelineCfg.guardrails;
+	if (raw.length > guardrails.maxContentChars) {
+		const chunks = chunkBySentence(raw, guardrails.chunkTargetChars);
+		if (chunks.length === 0) {
+			return c.json({ error: "content produced no valid chunks" }, 400);
+		}
+
+		const who = body.who ?? "daemon";
+		const project = body.project ?? null;
+		const sourceType = body.sourceType?.trim() || "manual";
+		const sourceId = body.sourceId?.trim() || null;
+		const parsedPrefixes = parsePrefixes(raw);
+		const importance = body.importance ?? parsedPrefixes.importance;
+		const pinned = (body.pinned ?? parsedPrefixes.pinned) ? 1 : 0;
+		const tags = body.tags ?? parsedPrefixes.tags;
+		const pipelineEnqueueEnabled = pipelineCfg.enabled || pipelineCfg.shadowMode;
+
+		const groupId = crypto.randomUUID();
+		const now = new Date().toISOString();
+		const chunkIds: string[] = [];
+
+		// Create chunk group entity
+		try {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO entities
+					 (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+					 VALUES (?, ?, ?, 'chunk_group', 0, ?, ?)`,
+				).run(groupId, `chunk-group:${groupId}`, `chunk-group:${groupId}`, now, now);
+			});
+		} catch (e) {
+			logger.error("memory", "Failed to create chunk group entity", e as Error);
+			return c.json({ error: "Failed to create chunk group" }, 500);
+		}
+
+		for (const chunk of chunks) {
+			const chunkNormalized = normalizeAndHashContent(chunk);
+			if (!chunkNormalized.storageContent) continue;
+
+			const chunkId = crypto.randomUUID();
+			const chunkContentForInsert =
+				chunkNormalized.normalizedContent.length > 0
+					? chunkNormalized.normalizedContent
+					: chunkNormalized.hashBasis;
+			const memType = inferType(chunk);
+
+			try {
+				// Dedup check + insert
+				const inserted = getDbAccessor().withWriteTx((db) => {
+					const byHash = db
+						.prepare(
+							`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
+						)
+						.get(chunkNormalized.contentHash) as { id: string } | undefined;
+					if (byHash) return false;
+
+					txIngestEnvelope(db, {
+						id: chunkId,
+						content: chunkNormalized.storageContent,
+						normalizedContent: chunkContentForInsert,
+						contentHash: chunkNormalized.contentHash,
+						who,
+						why: pinned ? "explicit-critical" : "explicit",
+						project,
+						importance,
+						type: memType,
+						tags,
+						pinned,
+						isDeleted: 0,
+						extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
+						embeddingModel: null,
+						extractionModel: pipelineEnqueueEnabled
+							? pipelineCfg.extractionModel
+							: null,
+						updatedBy: who,
+						sourceType: "chunk",
+						sourceId: groupId,
+						createdAt: now,
+					});
+
+					// Link chunk to group entity
+					db.prepare(
+						`INSERT OR IGNORE INTO memory_entity_mentions
+						 (memory_id, entity_id, mention_text, confidence, created_at)
+						 VALUES (?, ?, 'chunk', 1.0, ?)`,
+					).run(chunkId, groupId, now);
+
+					return true;
+				});
+
+				if (!inserted) continue;
+				chunkIds.push(chunkId);
+
+				// Generate embedding async
+				try {
+					const vec = await fetchEmbedding(
+						chunkNormalized.storageContent,
+						fullCfg.embedding,
+					);
+					if (vec) {
+						if (vec.length !== fullCfg.embedding.dimensions) {
+							logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
+								got: vec.length,
+								expected: fullCfg.embedding.dimensions,
+								memoryId: chunkId,
+							});
+						} else {
+							const embId = crypto.randomUUID();
+							const blob = vectorToBlob(vec);
+							getDbAccessor().withWriteTx((db) => {
+								syncVecDeleteBySourceId(db, "memory", chunkId);
+								db.prepare(
+									`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
+								).run(chunkId);
+								db.prepare(`
+									INSERT INTO embeddings
+									  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+									VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+								`).run(embId, chunkNormalized.contentHash, blob, vec.length, chunkId, chunkNormalized.storageContent, now);
+								syncVecInsert(db, embId, vec);
+								db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
+									fullCfg.embedding.model,
+									chunkId,
+								);
+							});
+						}
+					}
+				} catch (e) {
+					logger.warn("memory", "Chunk embedding failed (chunk saved without vector)", {
+						chunkId,
+						error: String(e),
+					});
+				}
+
+				// Enqueue pipeline extraction if enabled
+				if (pipelineEnqueueEnabled) {
+					try {
+						enqueueExtractionJob(getDbAccessor(), chunkId);
+					} catch (e) {
+						logger.warn("pipeline", "Failed to enqueue chunk extraction", {
+							chunkId,
+							error: String(e),
+						});
+					}
+				}
+			} catch (e) {
+				logger.warn("memory", "Failed to save chunk", {
+					chunkId,
+					error: String(e),
+				});
+			}
+		}
+
+		logger.info("memory", "Chunked memory saved", {
+			groupId,
+			chunkCount: chunkIds.length,
+		});
+
+		return c.json({
+			chunked: true,
+			chunk_count: chunkIds.length,
+			ids: chunkIds,
+			group_id: groupId,
+		});
 	}
 
 	const who = body.who ?? "daemon";
@@ -1991,35 +2198,43 @@ app.post("/api/memory/remember", async (c) => {
 			cfg.embedding,
 		);
 		if (vec) {
-			const hash = contentHash;
-			const blob = vectorToBlob(vec);
-			const embId = crypto.randomUUID();
+			if (vec.length !== cfg.embedding.dimensions) {
+				logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
+					got: vec.length,
+					expected: cfg.embedding.dimensions,
+					memoryId: id,
+				});
+			} else {
+				const hash = contentHash;
+				const blob = vectorToBlob(vec);
+				const embId = crypto.randomUUID();
 
-			getDbAccessor().withWriteTx((db) => {
-				syncVecDeleteBySourceId(db, "memory", id);
-				db.prepare(
-					`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
-				).run(id);
-				db.prepare(`
-	          INSERT INTO embeddings
-	            (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-	          VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-	        `).run(
-					embId,
-					hash,
-					blob,
-					vec.length,
-					id,
-					normalizedContent.storageContent,
-					now,
-				);
-				syncVecInsert(db, embId, vec);
-				db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
-					cfg.embedding.model,
-					id,
-				);
-			});
-			embedded = true;
+				getDbAccessor().withWriteTx((db) => {
+					syncVecDeleteBySourceId(db, "memory", id);
+					db.prepare(
+						`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
+					).run(id);
+					db.prepare(`
+						INSERT INTO embeddings
+						  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+						VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+					`).run(
+						embId,
+						hash,
+						blob,
+						vec.length,
+						id,
+						normalizedContent.storageContent,
+						now,
+					);
+					syncVecInsert(db, embId, vec);
+					db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
+						cfg.embedding.model,
+						id,
+					);
+				});
+				embedded = true;
+			}
 		}
 	} catch (e) {
 		logger.warn("memory", "Embedding failed (memory saved without vector)", {
@@ -3155,14 +3370,20 @@ app.post("/api/memory/recall", async (c) => {
 		}
 
 		const rowMap = new Map(rows.map((r) => [r.id, r]));
+		const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 		const results = scored
 			.slice(0, limit)
 			.filter((s) => rowMap.has(s.id))
 			.map((s) => {
 				const r = rowMap.get(s.id)!;
+				const isTruncated = r.content.length > recallTruncate;
 				return {
 					id: r.id,
-					content: r.content,
+					content: isTruncated
+						? r.content.slice(0, recallTruncate) + " [truncated]"
+						: r.content,
+					content_length: r.content.length,
+					truncated: isTruncated,
 					score: Math.round(s.score * 100) / 100,
 					source: s.source,
 					type: r.type,
@@ -3226,9 +3447,14 @@ app.post("/api/memory/recall", async (c) => {
 				for (const r of supplementary) {
 					if (existingIds.has(r.id)) continue;
 					existingIds.add(r.id);
+					const isTrunc = r.content.length > recallTruncate;
 					results.push({
 						id: r.id,
-						content: r.content,
+						content: isTrunc
+							? r.content.slice(0, recallTruncate) + " [truncated]"
+							: r.content,
+						content_length: r.content.length,
+						truncated: isTrunc,
 						score: 0,
 						source: "graph",
 						type: r.type,
