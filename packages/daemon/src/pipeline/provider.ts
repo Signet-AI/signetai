@@ -1,24 +1,14 @@
 /**
- * LLM provider interface with Ollama and Claude Code implementations.
+ * LLM provider implementations: Ollama (HTTP) and Claude Code (CLI subprocess).
  *
- * Ollama: HTTP API to local Ollama server.
- * Claude Code: headless CLI subprocess (`claude -p`), uses existing auth.
+ * The LlmProvider interface itself lives in @signet/core so that the
+ * ingestion pipeline and other consumers can accept any provider.
  */
 
+import type { LlmProvider } from "@signet/core";
 import { logger } from "../logger";
 
-// ---------------------------------------------------------------------------
-// Interface
-// ---------------------------------------------------------------------------
-
-export interface LlmProvider {
-	readonly name: string;
-	generate(
-		prompt: string,
-		opts?: { timeoutMs?: number; maxTokens?: number },
-	): Promise<string>;
-	available(): Promise<boolean>;
-}
+export type { LlmProvider } from "@signet/core";
 
 // ---------------------------------------------------------------------------
 // Ollama via HTTP API

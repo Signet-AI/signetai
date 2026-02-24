@@ -17,6 +17,7 @@ export {
 	PIPELINE_FLAGS,
 } from "./types";
 export type {
+	LlmProvider,
 	Memory,
 	MemoryType,
 	Conversation,
@@ -174,6 +175,9 @@ export {
 	type PackageManagerResolution,
 	type PackageManagerCommand,
 } from "./package-manager";
+
+// Document ingestion
+export { ingestPath } from "./ingest/index";
 
 // Connector runtime types
 export {
