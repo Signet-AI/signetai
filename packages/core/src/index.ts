@@ -475,3 +475,6 @@ export type {
 	ImportResult as BundleImportResult,
 	MergeStrategy,
 } from "./export/index";
+
+// Document Ingestion
+export { ingestPath } from "./ingest/index";
