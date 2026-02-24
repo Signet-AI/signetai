@@ -50,10 +50,20 @@ interface OpenClawConfigShape {
 		};
 	};
 	plugins?: {
+		slots?: {
+			memory?: string;
+		};
 		entries?: Record<
 			string,
 			{ enabled?: boolean; config?: Record<string, unknown> }
 		>;
+	};
+	agents?: {
+		defaults?: {
+			memorySearch?: {
+				enabled?: boolean;
+			};
+		};
 	};
 	signet?: Record<string, unknown>;
 }
@@ -290,12 +300,22 @@ export class OpenClawConnector extends BaseConnector {
 		if (runtimePath === "plugin") {
 			deepMerge(patch, {
 				plugins: {
+					slots: {
+						memory: "signet-memory-openclaw",
+					},
 					entries: {
 						"signet-memory-openclaw": {
 							enabled: true,
 							config: {
 								daemonUrl: "http://localhost:3850",
 							},
+						},
+					},
+				},
+				agents: {
+					defaults: {
+						memorySearch: {
+							enabled: false,
 						},
 					},
 				},
@@ -367,12 +387,22 @@ export class OpenClawConnector extends BaseConnector {
 			},
 		});
 
-		// Disable plugin entries (both old and new names)
+		// Disable plugin entries (both old and new names), release slot
 		const pluginResult = this.patchAllConfigs({
 			plugins: {
+				slots: {
+					memory: "memory-core",
+				},
 				entries: {
 					"signet-memory": { enabled: false },
 					"signet-memory-openclaw": { enabled: false },
+				},
+			},
+			agents: {
+				defaults: {
+					memorySearch: {
+						enabled: true,
+					},
 				},
 			},
 		});
