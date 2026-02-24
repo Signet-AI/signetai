@@ -49,6 +49,13 @@ interface OpenClawConfigShape {
 			entries?: Record<string, { enabled?: boolean }>;
 		};
 	};
+	plugins?: {
+		entries?: Record<
+			string,
+			{ enabled?: boolean; config?: Record<string, unknown> }
+		>;
+	};
+	signet?: Record<string, unknown>;
 }
 
 export interface OpenClawInstallOptions {
@@ -284,7 +291,7 @@ export class OpenClawConnector extends BaseConnector {
 			deepMerge(patch, {
 				plugins: {
 					entries: {
-						"signet-memory": {
+						"signet-memory-openclaw": {
 							enabled: true,
 							config: {
 								daemonUrl: "http://localhost:3850",
@@ -344,12 +351,13 @@ export class OpenClawConnector extends BaseConnector {
 	/**
 	 * Uninstall the connector.
 	 *
-	 * Sets `signet-memory.enabled = false` in all found configs and removes
-	 * the hook handler files.
+	 * Disables both legacy hooks and plugin entries, removes hook handler files.
 	 */
 	async uninstall(): Promise<UninstallResult> {
 		const filesRemoved: string[] = [];
-		const patchResult = this.patchAllConfigs({
+
+		// Disable legacy hooks
+		const hookResult = this.patchAllConfigs({
 			hooks: {
 				internal: {
 					entries: {
@@ -358,7 +366,20 @@ export class OpenClawConnector extends BaseConnector {
 				},
 			},
 		});
-		const configsPatched = patchResult.patched;
+
+		// Disable plugin entries (both old and new names)
+		const pluginResult = this.patchAllConfigs({
+			plugins: {
+				entries: {
+					"signet-memory": { enabled: false },
+					"signet-memory-openclaw": { enabled: false },
+				},
+			},
+		});
+
+		const configsPatched = [
+			...new Set([...hookResult.patched, ...pluginResult.patched]),
+		];
 
 		// Remove hook handler files from the first valid base path
 		const basePath = join(homedir(), ".agents");
@@ -375,7 +396,8 @@ export class OpenClawConnector extends BaseConnector {
 	}
 
 	/**
-	 * Check whether any OpenClaw config has signet-memory enabled.
+	 * Check whether any OpenClaw config has signet enabled
+	 * (via legacy hooks or plugin entry).
 	 */
 	isInstalled(): boolean {
 		for (const configPath of this.getDiscoveredConfigPaths()) {
@@ -383,8 +405,21 @@ export class OpenClawConnector extends BaseConnector {
 				const config = parseJsonOrJson5(
 					readFileSync(configPath, "utf-8"),
 				) as OpenClawConfigShape;
+				// Legacy hook system
 				if (
 					config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true
+				) {
+					return true;
+				}
+				// Plugin system (new name)
+				if (
+					config.plugins?.entries?.["signet-memory-openclaw"]?.enabled === true
+				) {
+					return true;
+				}
+				// Plugin system (old name, pre-migration)
+				if (
+					config.plugins?.entries?.["signet-memory"]?.enabled === true
 				) {
 					return true;
 				}
@@ -481,9 +516,12 @@ export class OpenClawConnector extends BaseConnector {
 
 	/**
 	 * Patch configs with plugin entry using the object format:
-	 * plugins.entries["signet-memory"] = { enabled, config }
+	 * plugins.entries["signet-memory-openclaw"] = { enabled, config }
 	 *
-	 * Migrates legacy array-style plugins and top-level `signet` key.
+	 * Migrates:
+	 * - Legacy array-style plugins (["signet-memory"] -> { entries: {...} })
+	 * - Top-level `signet: { daemonUrl }` key
+	 * - Old plugin name "signet-memory" -> "signet-memory-openclaw"
 	 */
 	private patchAllConfigsWithPlugin(patch: JsonObject): {
 		patched: string[];
@@ -491,7 +529,7 @@ export class OpenClawConnector extends BaseConnector {
 	} {
 		const patched: string[] = [];
 		const warnings: string[] = [];
-		const pluginName = "signet-memory";
+		const pluginName = "signet-memory-openclaw";
 
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
@@ -507,6 +545,24 @@ export class OpenClawConnector extends BaseConnector {
 						entries[name] = { enabled: true };
 					}
 					config.plugins = { entries };
+				}
+
+				// Migrate old plugin name "signet-memory" -> "signet-memory-openclaw"
+				{
+					const pluginsObj = (config.plugins ?? {}) as JsonObject;
+					const entriesObj = (pluginsObj.entries ?? {}) as JsonObject;
+					const OLD_NAME = "signet-memory";
+					if (OLD_NAME in entriesObj && !(pluginName in entriesObj)) {
+						entriesObj[pluginName] = entriesObj[OLD_NAME];
+						delete entriesObj[OLD_NAME];
+						pluginsObj.entries = entriesObj;
+						config.plugins = pluginsObj;
+					} else if (OLD_NAME in entriesObj && pluginName in entriesObj) {
+						// Both exist — drop the old one
+						delete entriesObj[OLD_NAME];
+						pluginsObj.entries = entriesObj;
+						config.plugins = pluginsObj;
+					}
 				}
 
 				// Migrate top-level `signet` key into plugin config
@@ -679,7 +735,7 @@ export default handler;
 
 Signet supports two runtime paths for OpenClaw integration:
 
-1. **Plugin path** (preferred): \`signet-memory\` runtime
+1. **Plugin path** (preferred): \`signet-memory-openclaw\` runtime
    plugin handles all memory operations directly.
 2. **Legacy hook path** (compatibility): These handler.js files process
    /remember, /recall, and /context commands via daemon hook endpoints.
@@ -698,7 +754,7 @@ enforces this via session claiming.
 
 Keep legacy hooks active (the default) if:
 
-- \`signet-memory\` is not configured as an OpenClaw plugin
+- \`signet-memory-openclaw\` is not configured as an OpenClaw plugin
 - You need command-based /remember and /recall without plugin support
 
 ## Safety
