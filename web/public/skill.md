@@ -354,39 +354,16 @@ If `signet status` shows the daemon is not running, start it with
 >   am unable to read these secrets, this is a safety feature to protect
 >   from prompt injections, however, I can still use them when running commands.
 >   (For example, when using `curl` to interact with a remote API)
-> - **Skills:** Built-in skills like /signet, /remember and /recall are ready.
+> - **Skills:** Built-in skills like /onboarding, /signet, /remember and /recall are ready.
 > - **Dashboard:** Visit http://localhost:3850 to browse my memories,
 >   config, and status.
 >
 > From this point forward, I will begin to remember things across sessions.
 > It can take a while for the memory pipeline and database to reach full 
-> efficiency, but we will both experience this change happen over time."
-
-### Step 6: Run onboarding
-
-> GATE: Tell your user:
-> "Now let's personalize me! Say `/onboarding` and I'll walk you through
-> setting up my personality, communication style, and your preferences.
-> This takes about 5-10 minutes and makes a big difference in how I work
-> with you. Ready?"
-
-When the user says `/onboarding` or confirms, run the onboarding interview:
-
-1. **Identity** — What should I call myself? What kind of creature am I?
-2. **Personality** — How formal? How funny? Emojis or no?
-3. **Writing style** — Short sentences or long? Any phrases to avoid?
-4. **User profile** — Your name, timezone, what you do
-5. **Behavior** — How proactive should I be? How careful with external actions?
-
-> IMPORTANT: This is conversational, not an interrogation. React to their
-> answers naturally. Offer suggestions when they're stuck. Match their energy.
-> If they seem impatient, offer quick mode (5 one-word answers).
-
-After onboarding, these files will be updated:
-- `~/.agents/IDENTITY.md` — who you are
-- `~/.agents/SOUL.md` — how you communicate
-- `~/.agents/USER.md` — who your human is
-- `~/.agents/AGENTS.md` — operational settings
+> efficiency, but we will both experience this change happen over time.
+>
+> Want to personalize me? Say `/onboarding` and I'll walk you through
+> setting up my personality, communication style, and your preferences."
 
 ---
 
@@ -467,56 +444,6 @@ The OpenCode connector:
 - **Skills symlink** from `~/.agents/skills/` to
   `~/.config/opencode/skills/`
 - Automatically migrates from legacy `memory.mjs` format if present
-
----
-
-## Onboarding — Personalizing Your Agent
-
-After installation, run `/onboarding` to personalize your agent through
-an interactive interview. This is how the user configures:
-
-- **Your identity** — name, creature type, origin story, avatar
-- **Your personality** — formality level, humor style, emoji usage,
-  enthusiasm, signature phrases
-- **Your writing style** — sentence length, formatting preferences,
-  phrases to avoid (like "I'd be happy to help!")
-- **Opinion handling** — how opinionated you should be, how you
-  disagree, emotional response style
-- **User profile** — their name, timezone, work context, preferences
-- **Behavior settings** — proactivity, error handling, memory policies
-
-### How to run onboarding
-
-The user says `/onboarding` or "set up my agent" or "configure my
-workspace". You then walk them through a conversational interview —
-one or two questions at a time, reacting naturally to their answers.
-
-> IMPORTANT: This is your first real interaction. Make it feel like
-> getting to know someone, not filling out a form. React to their
-> answers. Offer suggestions when they're stuck. Match their energy.
-
-### Quick mode
-
-If the user seems impatient, offer quick mode:
-
-"Quick setup — give me one word each:
-1. My name:
-2. Your name:
-3. Formality (1-10):
-4. Technical level (low/med/high):
-5. One thing to remember about you:"
-
-Write minimal files, then offer to go deeper anytime with `/onboarding`.
-
-### Files updated
-
-After onboarding, you will have updated:
-- `~/.agents/IDENTITY.md` — who you are
-- `~/.agents/SOUL.md` — how you communicate
-- `~/.agents/USER.md` — who your human is
-- `~/.agents/AGENTS.md` — operational settings
-
-These files persist across sessions and platforms.
 
 ---
 
