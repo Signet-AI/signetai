@@ -15,7 +15,9 @@ Walk the user through an interactive interview to personalize their Signet works
 - User explicitly says `/onboarding`
 - User says "set up my agent" or "configure my workspace"
 - After a fresh Signet install (agent should suggest this)
+- After a Signet update (to validate and optimize existing setup)
 - User says "I want to redo my agent setup"
+- User says "clean up my memory" or "optimize my workspace"
 
 ## Interview Philosophy
 
@@ -480,7 +482,10 @@ If `/onboarding` is called when files already exist:
 "Looks like you've already been through onboarding. Want to:
 1. Redo everything from scratch
 2. Tweak a specific section
-3. Just view what's set up"
+3. Run a workspace audit (clean up and optimize)
+4. Just view what's set up"
+
+If they pick option 3, skip directly to Phase 6 (Workspace Audit).
 
 ### Partial Completion
 
@@ -505,6 +510,130 @@ When writing files, use the collected values:
 {{variable_name}} — direct substitution
 {{#if variable}}...{{/if}} — conditional section
 {{#each array}}...{{/each}} — loop over array
+```
+
+---
+
+## Phase 6: Workspace Audit
+
+This phase validates the workspace and cleans up issues. Run this
+after updates, when things feel off, or when re-onboarding an
+existing setup. This phase can be run standalone (option 3 in the
+re-running menu).
+
+### Understanding the System First
+
+Before auditing, understand what you're looking at. These identity
+files are **not your entire memory system**. They are generated
+outputs and configuration that sit on top of a SQLite database with
+vector embeddings, semantic search, time-based decay scoring, and
+scheduled synthesis. Do not make assumptions about the system's
+efficiency based on what you see in these files alone.
+
+MEMORY.md in particular is **programmatically synthesized** from the
+database — it is regenerated on a schedule (daily by default) from
+scored, decay-weighted memories. It is not a flat file that grows
+forever. If it looks cluttered, the issue is likely stale database
+content or a synthesis that hasn't run recently, not a fundamental
+design problem.
+
+### File Separation Audit
+
+Read all identity files and check for cross-contamination:
+
+**SOUL.md** should ONLY contain:
+- Personality, tone, communication style
+- Formatting preferences
+- Behavioral boundaries
+- Emotional/social guidelines
+
+**SOUL.md should NOT contain:**
+- Project details, technical notes, code patterns
+- Memory items, recent work logs, session context
+- User profile information
+
+**IDENTITY.md** should ONLY contain:
+- Agent name, creature type, vibe
+- Visual identity / avatar
+- Origin story (if set)
+
+**USER.md** should ONLY contain:
+- User's name, pronouns, timezone
+- Professional context and role
+- Project list with locations
+- Trust and permission settings
+- Known contacts and their permissions
+
+**AGENTS.md** should ONLY contain:
+- Operational instructions and behavioral settings
+- The Signet block (required for harnesses without MCP)
+- Custom rules and instructions
+- Harness-specific configuration
+
+**MEMORY.md** should ONLY contain:
+- Current active context and project status
+- Recent work summaries
+- Technical notes relevant to current work
+- Open threads and blockers
+
+If content is in the wrong file, move it. Be explicit about what
+you're moving and why. Ask the user before making changes.
+
+### Content Quality Audit
+
+For each file, check:
+
+1. **Redundancy** — Is the same information repeated across files?
+   Remove duplicates, keeping the content in its correct file.
+2. **Staleness** — Is there outdated information? Old project
+   references, completed work listed as active, resolved issues
+   still flagged? Remove or update.
+3. **Bloat** — Are there tutorial instructions the agent already
+   knows? Verbose explanations that could be terse? Over-commented
+   sections? Trim to what's actually needed.
+4. **Missing content** — Are the "About Your User" or "Projects"
+   sections still empty templates? If so, interview the user to
+   fill them in (use Phase 3 questions).
+
+### Daemon Health Check
+
+Run these checks and report results:
+
+```bash
+# Check daemon is running and healthy
+curl -s http://localhost:3850/health
+
+# Check memory database stats
+curl -s http://localhost:3850/api/status
+
+# Check synthesis config
+curl -s http://localhost:3850/api/hooks/synthesis/config
+```
+
+If the daemon isn't running, suggest `signet restart`. If synthesis
+hasn't run recently, suggest triggering it manually.
+
+### Report
+
+After the audit, provide a summary:
+
+```
+Workspace audit complete.
+
+Files checked: SOUL.md, IDENTITY.md, USER.md, AGENTS.md, MEMORY.md
+
+Issues found:
+- [list each issue: what was wrong, what was fixed or suggested]
+
+Changes made:
+- [list each change]
+
+Daemon status: [running/stopped]
+Last synthesis: [date or "never"]
+Memory count: [number of memories in database]
+
+Recommendations:
+- [any remaining suggestions]
 ```
 
 ---
