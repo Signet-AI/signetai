@@ -140,6 +140,7 @@ const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 const SKILLS_DIR = join(AGENTS_DIR, "skills");
 const PID_FILE = join(DAEMON_DIR, "pid");
+const LOCAL_TOKEN_FILE = join(DAEMON_DIR, "local.token");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
