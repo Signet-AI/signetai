@@ -3,7 +3,7 @@
  * file paths, and git repository activity.
  */
 
-import { BaseRefiner } from "./base";
+import { BaseRefiner, sanitizeForPrompt, anonymizePath } from "./base";
 import type { CaptureBundle, ExtractedMemory } from "../types";
 import type { RefinerLLMConfig } from "./base";
 
@@ -59,49 +59,50 @@ export class ProjectRefiner extends BaseRefiner {
 
 		if (bundle.screen.length > 0) {
 			sections.push("## Focused Windows");
+			sections.push("<user_data>");
 			const seen = new Set<string>();
 			for (const sc of bundle.screen) {
 				const key = `${sc.focusedApp}: ${sc.focusedWindow}`;
 				if (!seen.has(key)) {
-					sections.push(`  ${key}`);
+					sections.push(`  ${sanitizeForPrompt(key, 300)}`);
 					seen.add(key);
 				}
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
 		if (bundle.files.length > 0) {
 			sections.push("## Recent File Activity");
-			// Extract unique directory roots
-			const dirs = new Set<string>();
+			sections.push("<user_data>");
 			for (const f of bundle.files) {
-				const parts = f.filePath.split("/");
-				// Get project-level directory (e.g., ~/projects/myproject)
-				if (parts.length >= 4) {
-					dirs.add(parts.slice(0, 4).join("/"));
-				}
 				sections.push(
-					`  ${f.eventType}: ${f.filePath}${f.gitBranch ? ` [${f.gitBranch}]` : ""}`,
+					`  ${f.eventType}: ${anonymizePath(f.filePath)}${f.gitBranch ? ` [${f.gitBranch}]` : ""}`,
 				);
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
 		if (bundle.terminal.length > 0) {
 			sections.push("## Terminal Commands");
+			sections.push("<user_data>");
 			for (const tc of bundle.terminal.slice(-15)) {
-				sections.push(`  ${tc.workingDirectory || ""}$ ${tc.command}`);
+				sections.push(`  ${anonymizePath(tc.workingDirectory || "")}$ ${sanitizeForPrompt(tc.command, 500)}`);
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
 		if (bundle.comms.length > 0) {
 			sections.push("## Git Commits");
+			sections.push("<user_data>");
 			for (const cc of bundle.comms) {
 				sections.push(
-					`  [${cc.metadata.repo || ""}] ${cc.content} (${cc.metadata.branch || ""})`,
+					`  [${cc.metadata.repo || ""}] ${sanitizeForPrompt(cc.content, 300)} (${cc.metadata.branch || ""})`,
 				);
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 

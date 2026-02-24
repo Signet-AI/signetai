@@ -5,13 +5,29 @@
  * and deduplicates by tracking recent app+window combinations.
  */
 
-import { execFile } from "child_process";
+import { execFile, spawnSync } from "child_process";
+import { existsSync } from "fs";
 import { promisify } from "util";
 import type { CaptureAdapter, ScreenCapture, ScreenConfig } from "../types";
 
 const execFileAsync = promisify(execFile);
 
-const PEEKABOO_PATH = "/opt/homebrew/bin/peekaboo";
+/** Maximum number of screen captures to retain in memory (C-2). */
+const MAX_CAPTURES = 10_000;
+
+/** Resolve Peekaboo path: try `which`, then check known paths (M-12). */
+function resolvePeekabooPath(): string {
+	try {
+		const result = spawnSync("which", ["peekaboo"], { encoding: "utf-8", timeout: 3000 });
+		const resolved = result.stdout?.trim();
+		if (resolved && existsSync(resolved)) return resolved;
+	} catch { /* fall through */ }
+	if (existsSync("/opt/homebrew/bin/peekaboo")) return "/opt/homebrew/bin/peekaboo";
+	if (existsSync("/usr/local/bin/peekaboo")) return "/usr/local/bin/peekaboo";
+	return "/opt/homebrew/bin/peekaboo"; // fallback
+}
+
+const PEEKABOO_PATH = resolvePeekabooPath();
 
 /** Jaccard similarity on word sets — cheap text similarity check. */
 function textSimilarity(a: string, b: string): number {
@@ -80,6 +96,18 @@ export class ScreenCaptureAdapter implements CaptureAdapter {
 		return this.captures.filter((c) => c.timestamp >= since);
 	}
 
+	/** C-5: Return count without copying the array. */
+	getCount(): number {
+		return this.captures.length;
+	}
+
+	/** C-2: Trim captures older than cutoff. Returns number trimmed. */
+	trimCaptures(cutoff: string): number {
+		const before = this.captures.length;
+		this.captures = this.captures.filter((c) => c.timestamp >= cutoff);
+		return before - this.captures.length;
+	}
+
 	private async captureOnce(): Promise<void> {
 		if (!this.peekabooAvailable) return;
 
@@ -107,6 +135,10 @@ export class ScreenCaptureAdapter implements CaptureAdapter {
 			};
 
 			this.captures.push(capture);
+			// C-2: FIFO trimming
+			if (this.captures.length > MAX_CAPTURES) {
+				this.captures.splice(0, this.captures.length - MAX_CAPTURES);
+			}
 
 			// Update dedup state
 			this.lastApp = focusedApp;
@@ -168,6 +200,8 @@ export class ScreenCaptureAdapter implements CaptureAdapter {
 
 		for (const pattern of this.config.excludeWindows) {
 			const p = pattern.replace(/\*/g, "").toLowerCase();
+			// H-14: Skip empty patterns (e.g., pattern "*" becomes "")
+			if (p.length === 0) continue;
 			if (windowLower.includes(p)) return true;
 		}
 

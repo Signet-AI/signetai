@@ -9,7 +9,7 @@
  * tag "daily-pattern" for long-term agent context enrichment.
  */
 
-import { BaseRefiner } from "./base";
+import { BaseRefiner, sanitizeForPrompt, anonymizePath } from "./base";
 import type { CaptureBundle, ExtractedMemory } from "../types";
 import type { RefinerLLMConfig } from "./base";
 
@@ -165,12 +165,14 @@ export class PatternRefiner extends BaseRefiner {
 			}
 			if (uniqueWindows.size > 0) {
 				sections.push("\nUnique Window Titles (sample):");
+				sections.push("<user_data>");
 				let wCount = 0;
 				for (const w of uniqueWindows) {
 					if (wCount >= 15) break;
-					sections.push(`  • ${w}`);
+					sections.push(`  • ${sanitizeForPrompt(w, 200)}`);
 					wCount++;
 				}
+				sections.push("</user_data>");
 			}
 
 			sections.push("");
@@ -293,10 +295,12 @@ export class PatternRefiner extends BaseRefiner {
 
 			// Commit messages (for project/task context)
 			sections.push("\nRecent commit messages:");
+			sections.push("<user_data>");
 			for (const cc of bundle.comms.slice(-15)) {
 				const repo = cc.metadata?.repo || "unknown";
-				sections.push(`  [${repo}] ${cc.content}`);
+				sections.push(`  [${repo}] ${sanitizeForPrompt(cc.content, 300)}`);
 			}
+			sections.push("</user_data>");
 
 			sections.push("");
 		}
@@ -327,9 +331,11 @@ export class PatternRefiner extends BaseRefiner {
 			// Sample transcripts (redacted)
 			if (speakingSegments.length > 0) {
 				sections.push("\nSample transcripts:");
+				sections.push("<user_data>");
 				for (const vs of speakingSegments.slice(-5)) {
-					sections.push(`  "${vs.transcript.slice(0, 100)}"`);
+					sections.push(`  "${sanitizeForPrompt(vs.transcript, 100)}"`);
 				}
+				sections.push("</user_data>");
 			}
 
 			sections.push("");

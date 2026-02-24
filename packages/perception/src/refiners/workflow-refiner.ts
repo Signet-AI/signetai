@@ -3,7 +3,7 @@
  * from terminal commands and app switching.
  */
 
-import { BaseRefiner } from "./base";
+import { BaseRefiner, sanitizeForPrompt, anonymizePath } from "./base";
 import type { CaptureBundle, ExtractedMemory } from "../types";
 import type { RefinerLLMConfig } from "./base";
 

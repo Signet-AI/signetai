@@ -81,6 +81,10 @@ export interface CaptureAdapter {
 	start(): Promise<void>;
 	stop(): Promise<void>;
 	getCaptures(since: string): Promise<unknown[]>;
+	/** C-5: Return total count without copying the array. Optional for back-compat. */
+	getCount?(): number;
+	/** C-2: Trim captures older than cutoff ISO string. Returns number trimmed. */
+	trimCaptures?(cutoff: string): number;
 }
 
 // ---------------------------------------------------------------------------

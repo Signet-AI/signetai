@@ -3,7 +3,7 @@
  * for agent injection. This enables proactive assistance.
  */
 
-import { BaseRefiner } from "./base";
+import { BaseRefiner, sanitizeForPrompt, anonymizePath } from "./base";
 import type { CaptureBundle, ExtractedMemory } from "../types";
 import type { RefinerLLMConfig } from "./base";
 
@@ -52,30 +52,36 @@ export class ContextRefiner extends BaseRefiner {
 
 		if (bundle.screen.length > 0) {
 			sections.push("## Current Screen (most recent first)");
+			sections.push("<user_data>");
 			// Show the last few captures
 			const recent = bundle.screen.slice(-5);
 			for (const sc of recent.reverse()) {
 				sections.push(`  ${sc.focusedApp}: ${sc.focusedWindow}`);
 				if (sc.ocrText) {
-					sections.push(`  Content preview: ${sc.ocrText.slice(0, 200)}`);
+					sections.push(`  Content preview: ${sanitizeForPrompt(sc.ocrText, 200)}`);
 				}
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
 		if (bundle.terminal.length > 0) {
 			sections.push("## Recent Commands");
+			sections.push("<user_data>");
 			for (const tc of bundle.terminal.slice(-10)) {
-				sections.push(`  $ ${tc.command}`);
+				sections.push(`  $ ${sanitizeForPrompt(tc.command, 500)}`);
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
 		if (bundle.files.length > 0) {
 			sections.push("## Recent File Changes");
+			sections.push("<user_data>");
 			for (const fa of bundle.files.slice(-10)) {
-				sections.push(`  ${fa.eventType}: ${fa.filePath}`);
+				sections.push(`  ${fa.eventType}: ${anonymizePath(fa.filePath)}`);
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 

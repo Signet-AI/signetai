@@ -161,10 +161,11 @@ Return ONLY the JSON object, no explanation.`;
  */
 export function loadCognitiveProfile(db: ProfileDb): CognitiveProfile | null {
 	try {
+		// M-7 FIX: Use quoted tag to avoid false matches
 		const row = db
 			.prepare(
 				`SELECT content FROM memories
-				 WHERE type = 'system' AND tags LIKE '%cognitive-profile%'
+				 WHERE type = 'system' AND tags LIKE '%"cognitive-profile"%'
 				 ORDER BY updated_at DESC
 				 LIMIT 1`,
 			)
@@ -471,10 +472,11 @@ function storeProfile(db: ProfileDb, profile: CognitiveProfile): void {
 
 	try {
 		// Check if a profile memory already exists
+		// M-7 FIX: Use quoted tag to avoid false matches
 		const existing = db
 			.prepare(
 				`SELECT id FROM memories
-				 WHERE type = 'system' AND tags LIKE '%cognitive-profile%'
+				 WHERE type = 'system' AND tags LIKE '%"cognitive-profile"%'
 				 LIMIT 1`,
 			)
 			.get() as { id: string } | undefined;

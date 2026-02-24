@@ -620,11 +620,13 @@ function formatHourRanges(hours: number[]): string {
 }
 
 function formatTimeRange(start: number, end: number): string {
+	// M-10 FIX: Handle midnight wrapping correctly
 	const fmt = (h: number) => {
-		if (h === 0) return "12 AM";
-		if (h < 12) return `${h} AM`;
-		if (h === 12) return "12 PM";
-		return `${h - 12} PM`;
+		const wrapped = h % 24;
+		if (wrapped === 0) return "12 AM";
+		if (wrapped < 12) return `${wrapped} AM`;
+		if (wrapped === 12) return "12 PM";
+		return `${wrapped - 12} PM`;
 	};
 
 	if (start === end) return fmt(start);
@@ -632,10 +634,12 @@ function formatTimeRange(start: number, end: number): string {
 }
 
 function slugify(str: string): string {
-	return str
+	const result = str
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-|-$/g, "");
+	// L-12: Fallback for non-Latin input that produces empty slugs
+	return result || "unknown-" + Math.random().toString(36).slice(2, 6);
 }
 
 function isMetaTag(tag: string): boolean {

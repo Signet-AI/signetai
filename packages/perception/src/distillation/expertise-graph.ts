@@ -454,8 +454,8 @@ function extractEntities(db: GraphDb): ExpertiseNode[] {
 		// empty
 	}
 
-	// Filter out entities with very low mentions (noise)
-	return Array.from(entityMap.values()).filter((e) => e.mentions >= 1);
+	// M-8 FIX: Filter out entities with very low mentions (noise) — require 2+
+	return Array.from(entityMap.values()).filter((e) => e.mentions >= 2);
 }
 
 /**
@@ -533,6 +533,7 @@ function buildCoOccurrenceEdges(
 
 /**
  * Store the graph data in expertise tables.
+ * H-13 FIX: Wrapped in a transaction for atomicity and performance.
  */
 function storeGraphData(
 	db: GraphDb,
@@ -542,44 +543,54 @@ function storeGraphData(
 	const now = new Date().toISOString();
 
 	try {
-		// Clear existing data (rebuild)
-		db.exec("DELETE FROM expertise_edges");
-		db.exec("DELETE FROM expertise_nodes");
+		// H-13: Wrap entire rebuild in a transaction
+		db.exec("BEGIN TRANSACTION");
 
-		// Insert nodes
-		const nodeStmt = db.prepare(
-			`INSERT INTO expertise_nodes (id, name, entity_type, mentions, first_seen, last_seen, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		);
+		try {
+			// Clear existing data (rebuild)
+			db.exec("DELETE FROM expertise_edges");
+			db.exec("DELETE FROM expertise_nodes");
 
-		for (const node of nodes) {
-			nodeStmt.run(
-				node.id,
-				node.name,
-				node.entityType,
-				node.mentions,
-				node.firstSeen,
-				node.lastSeen,
-				now,
-				now,
+			// Insert nodes
+			const nodeStmt = db.prepare(
+				`INSERT INTO expertise_nodes (id, name, entity_type, mentions, first_seen, last_seen, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			);
-		}
 
-		// Insert edges
-		const edgeStmt = db.prepare(
-			`INSERT INTO expertise_edges (source_id, target_id, weight, co_occurrences, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-		);
+			for (const node of nodes) {
+				nodeStmt.run(
+					node.id,
+					node.name,
+					node.entityType,
+					node.mentions,
+					node.firstSeen,
+					node.lastSeen,
+					now,
+					now,
+				);
+			}
 
-		for (const edge of edges) {
-			edgeStmt.run(
-				edge.sourceId,
-				edge.targetId,
-				edge.weight,
-				edge.coOccurrences,
-				now,
-				now,
+			// Insert edges
+			const edgeStmt = db.prepare(
+				`INSERT INTO expertise_edges (source_id, target_id, weight, co_occurrences, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
 			);
+
+			for (const edge of edges) {
+				edgeStmt.run(
+					edge.sourceId,
+					edge.targetId,
+					edge.weight,
+					edge.coOccurrences,
+					now,
+					now,
+				);
+			}
+
+			db.exec("COMMIT");
+		} catch (innerErr) {
+			db.exec("ROLLBACK");
+			throw innerErr;
 		}
 	} catch (err) {
 		console.warn(

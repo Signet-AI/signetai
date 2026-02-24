@@ -26,6 +26,21 @@ let activeConfig: PerceptionConfig | null = null;
 // ---------------------------------------------------------------------------
 
 /**
+ * M-11: Validate critical config values.
+ */
+function validateConfig(config: PerceptionConfig): void {
+	if (config.refinerIntervalMinutes <= 0) {
+		throw new Error("[perception] refinerIntervalMinutes must be positive");
+	}
+	if (config.screen.intervalSeconds <= 0) {
+		throw new Error("[perception] screen.intervalSeconds must be positive");
+	}
+	if (config.voice.vadThreshold < 0 || config.voice.vadThreshold > 1) {
+		throw new Error("[perception] voice.vadThreshold must be between 0 and 1");
+	}
+}
+
+/**
  * Start the perception layer with the given config.
  * Launches capture adapters and the refiner scheduler.
  */
@@ -37,15 +52,50 @@ export async function startPerception(
 		return;
 	}
 
+	// H-7 FIX: Deep merge with array concatenation for exclude lists
 	const mergedConfig: PerceptionConfig = {
 		...DEFAULT_PERCEPTION_CONFIG,
 		...config,
-		screen: { ...DEFAULT_PERCEPTION_CONFIG.screen, ...config.screen },
+		screen: {
+			...DEFAULT_PERCEPTION_CONFIG.screen,
+			...config.screen,
+			excludeApps: [
+				...DEFAULT_PERCEPTION_CONFIG.screen.excludeApps,
+				...(config.screen?.excludeApps ?? []),
+			],
+			excludeWindows: [
+				...DEFAULT_PERCEPTION_CONFIG.screen.excludeWindows,
+				...(config.screen?.excludeWindows ?? []),
+			],
+		},
 		voice: { ...DEFAULT_PERCEPTION_CONFIG.voice, ...config.voice },
-		files: { ...DEFAULT_PERCEPTION_CONFIG.files, ...config.files },
-		terminal: { ...DEFAULT_PERCEPTION_CONFIG.terminal, ...config.terminal },
+		files: {
+			...DEFAULT_PERCEPTION_CONFIG.files,
+			...config.files,
+			excludePatterns: [
+				...DEFAULT_PERCEPTION_CONFIG.files.excludePatterns,
+				...(config.files?.excludePatterns ?? []),
+			],
+		},
+		terminal: {
+			...DEFAULT_PERCEPTION_CONFIG.terminal,
+			...config.terminal,
+			excludeCommands: [
+				...DEFAULT_PERCEPTION_CONFIG.terminal.excludeCommands,
+				...(config.terminal?.excludeCommands ?? []),
+			],
+		},
 		comms: { ...DEFAULT_PERCEPTION_CONFIG.comms, ...config.comms },
 	};
+
+	// M-16: Respect the `enabled` flag
+	if (!mergedConfig.enabled) {
+		console.log("[perception] Disabled by config.");
+		return;
+	}
+
+	// M-11: Validate config
+	validateConfig(mergedConfig);
 
 	activeConfig = mergedConfig;
 
@@ -163,6 +213,8 @@ export {
 	WorkflowRefiner,
 	ContextRefiner,
 	PatternRefiner,
+	sanitizeForPrompt,
+	anonymizePath,
 } from "./refiners/index";
 
 // Distillation layer

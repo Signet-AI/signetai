@@ -327,6 +327,7 @@ function analyzeAppUsage(
  */
 function analyzeTerminalUsagePercent(db: StyleDb): number {
 	try {
+		// L-14: Added warp and ghostty to terminal detection
 		const terminalRow = db
 			.prepare(
 				`SELECT COUNT(*) as cnt FROM perception_screen
@@ -335,7 +336,9 @@ function analyzeTerminalUsagePercent(db: StyleDb): number {
 				    OR LOWER(focused_app) LIKE '%wezterm%'
 				    OR LOWER(focused_app) LIKE '%kitty%'
 				    OR LOWER(focused_app) LIKE '%alacritty%'
-				    OR LOWER(focused_app) LIKE '%hyper%'`,
+				    OR LOWER(focused_app) LIKE '%hyper%'
+				    OR LOWER(focused_app) LIKE '%warp%'
+				    OR LOWER(focused_app) LIKE '%ghostty%'`,
 			)
 			.get() as { cnt: number } | undefined;
 

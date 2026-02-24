@@ -7,12 +7,15 @@
 
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { extname, dirname } from "path";
+import { extname, dirname, basename } from "path";
 import { homedir } from "os";
 import { existsSync, statSync } from "fs";
 import type { CaptureAdapter, FileActivity, FilesConfig } from "../types";
 
 const execFileAsync = promisify(execFile);
+
+/** Maximum number of file captures to retain in memory (C-2). */
+const MAX_CAPTURES = 10_000;
 
 /** Pattern fragments that should always be excluded. */
 const DEFAULT_EXCLUDES = [
@@ -98,11 +101,44 @@ export class FileWatcherAdapter implements CaptureAdapter {
 		return this.captures.filter((c) => c.timestamp >= since);
 	}
 
+	/** C-5: Return count without copying the array. */
+	getCount(): number {
+		return this.captures.length;
+	}
+
+	/** C-2: Trim captures older than cutoff. Returns number trimmed. */
+	trimCaptures(cutoff: string): number {
+		const before = this.captures.length;
+		this.captures = this.captures.filter((c) => c.timestamp >= cutoff);
+		return before - this.captures.length;
+	}
+
+	/**
+	 * H-1 FIX: Proper glob-like matching for exclude patterns.
+	 * Handles patterns like "*.lock", "node_modules", ".git/objects".
+	 */
 	private shouldIgnore(filePath: string): boolean {
 		const lower = filePath.toLowerCase();
+		const fileName = basename(filePath).toLowerCase();
 		for (const pattern of this.excludePatterns) {
-			const p = pattern.replace(/\*/g, "");
-			if (lower.includes(p.toLowerCase())) return true;
+			const p = pattern.toLowerCase();
+			if (p.startsWith("*") && p.length > 1) {
+				// Glob suffix pattern like "*.lock" — match against file name
+				const suffix = p.slice(1); // e.g. ".lock"
+				if (fileName.endsWith(suffix)) return true;
+			} else if (p.endsWith("*") && p.length > 1) {
+				// Glob prefix pattern — match against path segments
+				const prefix = p.slice(0, -1);
+				if (lower.includes(prefix)) return true;
+			} else if (p.includes("/")) {
+				// Path segment pattern like ".git/objects" — match path contains
+				if (lower.includes(p)) return true;
+			} else {
+				// Simple name — match as a path segment (not arbitrary substring)
+				// e.g. "dist" should match "/dist/" but not "distribution/"
+				const segments = lower.split("/");
+				if (segments.includes(p)) return true;
+			}
 		}
 		return false;
 	}
@@ -137,6 +173,10 @@ export class FileWatcherAdapter implements CaptureAdapter {
 			};
 
 			this.captures.push(activity);
+			// C-2: FIFO trimming
+			if (this.captures.length > MAX_CAPTURES) {
+				this.captures.splice(0, this.captures.length - MAX_CAPTURES);
+			}
 		} catch {
 			// Silently skip problematic events
 		}

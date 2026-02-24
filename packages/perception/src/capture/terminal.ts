@@ -5,9 +5,12 @@
  * and plain history (bash). Redacts sensitive commands.
  */
 
-import { readFileSync, existsSync, statSync, watchFile, unwatchFile } from "fs";
+import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from "fs";
 import { homedir } from "os";
 import type { CaptureAdapter, TerminalCapture, TerminalConfig } from "../types";
+
+/** Maximum number of terminal captures to retain in memory (C-2). */
+const MAX_CAPTURES = 10_000;
 
 /** Sensitive patterns — commands matching these are redacted. */
 const SENSITIVE_PATTERNS = [
@@ -45,7 +48,7 @@ export class TerminalWatcherAdapter implements CaptureAdapter {
 	private captures: TerminalCapture[] = [];
 	private watchedFiles: string[] = [];
 	private lastLineCount: Map<string, number> = new Map();
-	private polling = false;
+	private lastFileSize: Map<string, number> = new Map(); // H-10: track file byte offset
 	private pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(config: TerminalConfig) {
@@ -61,7 +64,14 @@ export class TerminalWatcherAdapter implements CaptureAdapter {
 
 		for (const { path, shell } of historyPaths) {
 			if (existsSync(path)) {
-				// Read initial line count so we only capture new commands
+				// H-10: Track initial file size so we only read new bytes
+				try {
+					const st = statSync(path);
+					this.lastFileSize.set(path, st.size);
+				} catch {
+					this.lastFileSize.set(path, 0);
+				}
+				// Also track line count for initial baseline
 				const lines = this.readHistoryLines(path);
 				this.lastLineCount.set(path, lines.length);
 				this.watchedFiles.push(path);
@@ -76,14 +86,12 @@ export class TerminalWatcherAdapter implements CaptureAdapter {
 		}
 
 		// Poll every 5 seconds for new history entries (low overhead)
-		this.polling = true;
 		this.pollTimer = setInterval(() => {
 			this.checkForNewCommands();
 		}, 5000);
 	}
 
 	async stop(): Promise<void> {
-		this.polling = false;
 		if (this.pollTimer) {
 			clearInterval(this.pollTimer);
 			this.pollTimer = null;
@@ -94,16 +102,24 @@ export class TerminalWatcherAdapter implements CaptureAdapter {
 		return this.captures.filter((c) => c.timestamp >= since);
 	}
 
+	/** C-5: Return count without copying the array. */
+	getCount(): number {
+		return this.captures.length;
+	}
+
+	/** C-2: Trim captures older than cutoff. Returns number trimmed. */
+	trimCaptures(cutoff: string): number {
+		const before = this.captures.length;
+		this.captures = this.captures.filter((c) => c.timestamp >= cutoff);
+		return before - this.captures.length;
+	}
+
 	private checkForNewCommands(): void {
 		for (const filePath of this.watchedFiles) {
 			try {
-				const lines = this.readHistoryLines(filePath);
-				const lastCount = this.lastLineCount.get(filePath) ?? 0;
-
-				if (lines.length <= lastCount) continue;
-
-				const newLines = lines.slice(lastCount);
-				this.lastLineCount.set(filePath, lines.length);
+				// H-10: Only read new bytes since last check
+				const newLines = this.readNewLines(filePath);
+				if (newLines.length === 0) continue;
 
 				const shell = filePath.includes("zsh") ? "zsh" : "bash";
 
@@ -117,13 +133,9 @@ export class TerminalWatcherAdapter implements CaptureAdapter {
 
 					if (!parsed.command || parsed.command.length < 2) continue;
 
-					// Redact sensitive commands
-					if (this.isSensitive(parsed.command)) {
-						parsed.command = "[REDACTED — sensitive command]";
-					}
-
-					// Check exclusion patterns from config
+					// H-12 FIX: Check exclusion FIRST, then drop sensitive entirely
 					if (this.isExcluded(parsed.command)) continue;
+					if (this.isSensitive(parsed.command)) continue; // drop entirely, don't store redacted
 
 					const timestamp = parsed.timestamp
 						? new Date(parsed.timestamp * 1000).toISOString()
@@ -138,6 +150,10 @@ export class TerminalWatcherAdapter implements CaptureAdapter {
 					};
 
 					this.captures.push(capture);
+					// C-2: FIFO trimming
+					if (this.captures.length > MAX_CAPTURES) {
+						this.captures.splice(0, this.captures.length - MAX_CAPTURES);
+					}
 				}
 			} catch {
 				// Silently skip read errors
@@ -145,10 +161,49 @@ export class TerminalWatcherAdapter implements CaptureAdapter {
 		}
 	}
 
+	/**
+	 * H-10: Read only new bytes from the history file (incremental).
+	 * H-4: Join backslash-continued lines before splitting.
+	 */
+	private readNewLines(filePath: string): string[] {
+		try {
+			const st = statSync(filePath);
+			const lastSize = this.lastFileSize.get(filePath) ?? st.size;
+
+			if (st.size <= lastSize) {
+				if (st.size < lastSize) {
+					// File was truncated (e.g., history rewrite) — reset
+					this.lastFileSize.set(filePath, st.size);
+				}
+				return [];
+			}
+
+			const bytesToRead = st.size - lastSize;
+			const fd = openSync(filePath, "r");
+			try {
+				const buf = Buffer.alloc(bytesToRead);
+				readSync(fd, buf, 0, bytesToRead, lastSize);
+				this.lastFileSize.set(filePath, st.size);
+
+				let content = buf.toString("utf-8");
+				// H-4: Join backslash-continued lines (zsh multiline commands)
+				content = content.replace(/\\\n/g, " ");
+				return content.split("\n").filter((l) => l.length > 0);
+			} finally {
+				closeSync(fd);
+			}
+		} catch {
+			return [];
+		}
+	}
+
+	/** Full read for initial baseline only. */
 	private readHistoryLines(filePath: string): string[] {
 		try {
 			const content = readFileSync(filePath, "utf-8");
-			return content.split("\n").filter((l) => l.length > 0);
+			// H-4: Join backslash-continued lines
+			const joined = content.replace(/\\\n/g, " ");
+			return joined.split("\n").filter((l) => l.length > 0);
 		} catch {
 			return [];
 		}
@@ -162,6 +217,7 @@ export class TerminalWatcherAdapter implements CaptureAdapter {
 		const cmdLower = command.toLowerCase();
 		return this.config.excludeCommands.some((pattern) => {
 			const p = pattern.replace(/\*/g, "").toLowerCase();
+			if (p.length === 0) return false; // Skip empty patterns
 			return cmdLower.includes(p);
 		});
 	}

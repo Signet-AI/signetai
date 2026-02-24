@@ -3,7 +3,7 @@
  * commit messages, terminal commands, and voice transcripts.
  */
 
-import { BaseRefiner } from "./base";
+import { BaseRefiner, sanitizeForPrompt, anonymizePath } from "./base";
 import type { CaptureBundle, ExtractedMemory } from "../types";
 import type { RefinerLLMConfig } from "./base";
 
@@ -57,39 +57,47 @@ export class DecisionRefiner extends BaseRefiner {
 
 		if (bundle.comms.length > 0) {
 			sections.push("## Git Commits (potential decisions)");
+			sections.push("<user_data>");
 			for (const cc of bundle.comms) {
 				sections.push(
-					`  [${cc.metadata.repo || ""}] ${cc.content}`,
+					`  [${cc.metadata.repo || ""}] ${sanitizeForPrompt(cc.content, 300)}`,
 				);
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
 		if (bundle.terminal.length > 0) {
 			sections.push("## Terminal Commands");
+			sections.push("<user_data>");
 			for (const tc of bundle.terminal.slice(-20)) {
-				sections.push(`  $ ${tc.command}`);
+				sections.push(`  $ ${sanitizeForPrompt(tc.command, 500)}`);
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
 		if (bundle.screen.length > 0) {
 			sections.push("## Screen Content (config/settings screens)");
+			sections.push("<user_data>");
 			for (const sc of bundle.screen.slice(-5)) {
 				if (sc.ocrText) {
-					sections.push(`  [${sc.focusedApp}] ${sc.ocrText.slice(0, 300)}`);
+					sections.push(`  [${sc.focusedApp}] ${sanitizeForPrompt(sc.ocrText, 300)}`);
 				}
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
 		if (bundle.voice.length > 0) {
 			sections.push("## Voice Transcripts");
+			sections.push("<user_data>");
 			for (const vs of bundle.voice) {
 				if (vs.transcript) {
-					sections.push(`  "${vs.transcript}"`);
+					sections.push(`  "${sanitizeForPrompt(vs.transcript, 500)}"`);
 				}
 			}
+			sections.push("</user_data>");
 			sections.push("");
 		}
 
@@ -106,9 +114,11 @@ export class DecisionRefiner extends BaseRefiner {
 			);
 			if (configFiles.length > 0) {
 				sections.push("## Config File Changes");
+				sections.push("<user_data>");
 				for (const f of configFiles) {
-					sections.push(`  ${f.eventType}: ${f.filePath}`);
+					sections.push(`  ${f.eventType}: ${anonymizePath(f.filePath)}`);
 				}
+				sections.push("</user_data>");
 				sections.push("");
 			}
 		}

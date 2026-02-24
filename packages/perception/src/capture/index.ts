@@ -143,15 +143,20 @@ export class CaptureManager {
 
 	/**
 	 * Get capture counts per adapter.
+	 * C-5 FIX: Use getCount() to avoid copying entire capture arrays.
 	 */
 	async getCounts(): Promise<Record<string, number>> {
-		const epoch = "1970-01-01T00:00:00.000Z";
 		const counts: Record<string, number> = {};
 
 		for (const adapter of this.adapters) {
 			try {
-				const captures = await adapter.getCaptures(epoch);
-				counts[adapter.name] = captures.length;
+				if (adapter.getCount) {
+					counts[adapter.name] = adapter.getCount();
+				} else {
+					// Fallback for adapters without getCount
+					const captures = await adapter.getCaptures("1970-01-01T00:00:00.000Z");
+					counts[adapter.name] = captures.length;
+				}
 			} catch {
 				counts[adapter.name] = 0;
 			}
@@ -162,10 +167,9 @@ export class CaptureManager {
 
 	/**
 	 * Rolling cleanup — remove in-memory captures older than max retention.
-	 * In production, this would also clean the SQLite tables.
+	 * C-2 FIX: Actually trim captures in each adapter.
 	 */
 	private cleanup(): void {
-		// For now, trim in-memory arrays (DB cleanup would go here)
 		const maxRetentionDays = Math.max(
 			this.config.screen.retentionDays,
 			this.config.files.retentionDays,
@@ -177,9 +181,16 @@ export class CaptureManager {
 			Date.now() - maxRetentionDays * 24 * 60 * 60 * 1000,
 		).toISOString();
 
-		// Each adapter manages its own in-memory store;
-		// we just log the cleanup cycle for now
-		console.log(`[perception] Cleanup cycle — cutoff: ${cutoff}`);
+		let trimmed = 0;
+		for (const adapter of this.adapters) {
+			if (adapter.trimCaptures) {
+				trimmed += adapter.trimCaptures(cutoff);
+			}
+		}
+
+		if (trimmed > 0) {
+			console.log(`[perception] Cleanup cycle — trimmed ${trimmed} captures older than ${cutoff}`);
+		}
 	}
 }
 

@@ -8,14 +8,30 @@
  * OFF by default — the most privacy-sensitive capture type.
  */
 
-import { execFileSync } from "child_process";
+import { execFile, spawnSync } from "child_process";
+import { promisify } from "util";
 import { existsSync, mkdirSync, unlinkSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import type { CaptureAdapter, VoiceSegment, VoiceConfig } from "../types";
 
-const FFMPEG_PATH = "/opt/homebrew/bin/ffmpeg";
-const WHISPER_PATH = "/opt/homebrew/bin/whisper";
+const execFileAsync = promisify(execFile);
+
+/** Maximum number of voice captures to retain in memory (C-2). */
+const MAX_CAPTURES = 10_000;
+
+/** Resolve tool path: use `which` first, fall back to Homebrew ARM path (M-13). */
+function resolveToolPath(name: string, fallback: string): string {
+	try {
+		const result = spawnSync("which", [name], { encoding: "utf-8", timeout: 3000 });
+		const resolved = result.stdout?.trim();
+		if (resolved && existsSync(resolved)) return resolved;
+	} catch { /* fall through */ }
+	return fallback;
+}
+
+const FFMPEG_PATH = resolveToolPath("ffmpeg", "/opt/homebrew/bin/ffmpeg");
+const WHISPER_PATH = resolveToolPath("whisper", "/opt/homebrew/bin/whisper");
 
 /** Default VAD threshold — maps to -30dB mean volume. */
 const DEFAULT_VAD_THRESHOLD = 0.3;
@@ -100,6 +116,8 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 	private vadThreshold: number;
 	private excludeKeywords: string[];
 	private segmentCounter = 0;
+	private capturing = false; // H-5: concurrency guard
+	private exitHandler: (() => void) | null = null; // M-20: process exit cleanup
 
 	constructor(config: VoiceConfig) {
 		this.config = config;
@@ -108,12 +126,9 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 	}
 
 	async start(): Promise<void> {
-		// Check if ffmpeg is available
+		// Check if ffmpeg is available (async — C-3)
 		try {
-			execFileSync(FFMPEG_PATH, ["-version"], {
-				stdio: "pipe",
-				timeout: 5000,
-			});
+			await execFileAsync(FFMPEG_PATH, ["-version"], { timeout: 5000 });
 			this.ffmpegAvailable = true;
 		} catch {
 			console.warn(
@@ -124,12 +139,9 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 			return;
 		}
 
-		// Check if whisper is available
+		// Check if whisper is available (async — C-3)
 		try {
-			execFileSync(WHISPER_PATH, ["--help"], {
-				stdio: "pipe",
-				timeout: 5000,
-			});
+			await execFileAsync(WHISPER_PATH, ["--help"], { timeout: 5000 });
 			this.whisperAvailable = true;
 		} catch {
 			console.warn(
@@ -145,6 +157,10 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 
 		// Clean up any stale files from previous runs
 		cleanupTempDir();
+
+		// M-20: Register process exit handler for cleanup
+		this.exitHandler = () => cleanupTempDir();
+		process.on("exit", this.exitHandler);
 
 		console.log(
 			"[perception:voice] ⚠ Voice capture active. All processing is local.",
@@ -171,6 +187,12 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 			this.timer = null;
 		}
 
+		// Remove process exit handler
+		if (this.exitHandler) {
+			process.removeListener("exit", this.exitHandler);
+			this.exitHandler = null;
+		}
+
 		// Clean up temp files on stop
 		cleanupTempDir();
 	}
@@ -179,18 +201,34 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 		return this.captures.filter((c) => c.timestamp >= since);
 	}
 
+	/** C-5: Return count without copying the array. */
+	getCount(): number {
+		return this.captures.length;
+	}
+
+	/** C-2: Trim captures older than cutoff. Returns number trimmed. */
+	trimCaptures(cutoff: string): number {
+		const before = this.captures.length;
+		this.captures = this.captures.filter((c) => c.timestamp >= cutoff);
+		return before - this.captures.length;
+	}
+
 	/**
 	 * Record a single audio segment, check VAD, transcribe if speech detected.
 	 */
 	private async captureOnce(): Promise<void> {
 		if (!this.ffmpegAvailable || !this.whisperAvailable) return;
 
+		// H-5: Concurrency guard — prevent overlapping captures
+		if (this.capturing) return;
+		this.capturing = true;
+
 		const segmentId = `voice_${Date.now()}_${this.segmentCounter++}`;
 		const wavPath = join(VOICE_TMP_DIR, `${segmentId}.wav`);
 
 		try {
-			// Step 1: Record audio segment with ffmpeg
-			this.recordSegment(wavPath);
+			// Step 1: Record audio segment with ffmpeg (async — C-3)
+			await this.recordSegment(wavPath);
 
 			// Verify the file was created
 			if (!existsSync(wavPath)) return;
@@ -205,8 +243,8 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 				return;
 			}
 
-			// Step 3: Transcribe with Whisper
-			const transcription = this.transcribe(wavPath, segmentId);
+			// Step 3: Transcribe with Whisper (async — C-3)
+			const transcription = await this.transcribe(wavPath, segmentId);
 
 			if (!transcription || !transcription.text.trim()) {
 				safeUnlink(wavPath);
@@ -219,7 +257,7 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 				transcript = redactKeywords(transcript, this.excludeKeywords);
 			}
 
-			// Step 5: Store the voice segment
+			// Step 5: Store the voice segment (with FIFO trimming — C-2)
 			const segment: VoiceSegment = {
 				id: segmentId,
 				timestamp: new Date().toISOString(),
@@ -231,23 +269,28 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 			};
 
 			this.captures.push(segment);
+			if (this.captures.length > MAX_CAPTURES) {
+				this.captures.splice(0, this.captures.length - MAX_CAPTURES);
+			}
 		} catch (err) {
 			// Silently skip individual capture failures
 		} finally {
 			// Always clean up the audio file
 			safeUnlink(wavPath);
-			// Clean up any whisper output files
+			// Clean up any whisper output files for THIS segment (M-3)
 			this.cleanupWhisperOutputs(segmentId);
+			this.capturing = false;
 		}
 	}
 
 	/**
 	 * Record a WAV segment using ffmpeg's avfoundation input.
 	 * Uses ":0" (default audio input device on macOS).
+	 * Async to avoid blocking the event loop (C-3).
 	 */
-	private recordSegment(outputPath: string): void {
+	private async recordSegment(outputPath: string): Promise<void> {
 		try {
-			execFileSync(
+			await execFileAsync(
 				FFMPEG_PATH,
 				[
 					"-f", "avfoundation",
@@ -259,7 +302,6 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 					outputPath,
 				],
 				{
-					stdio: "pipe",
 					timeout: (SEGMENT_DURATION + 5) * 1000,
 				},
 			);
@@ -275,11 +317,13 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 	/**
 	 * Run ffmpeg volumedetect filter to check audio energy level.
 	 * Returns normalised energy 0-1 (higher = louder).
+	 *
+	 * C-1 FIX: ffmpeg writes volumedetect output to stderr, not stdout.
+	 * Use spawnSync to reliably capture stderr regardless of exit code.
 	 */
 	private detectVoiceActivity(wavPath: string): number {
 		try {
-			// ffmpeg writes volumedetect output to stderr
-			const result = execFileSync(
+			const result = spawnSync(
 				FFMPEG_PATH,
 				[
 					"-i", wavPath,
@@ -293,32 +337,28 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 				},
 			);
 
-			// execFileSync returns stdout; we need stderr
-			// But with stdio: 'pipe', stderr is captured in the error on failure
-			// On success, we need to parse what we can
-			return 0; // If no error, volume was detected
-		} catch (err: any) {
-			// ffmpeg outputs volumedetect to stderr, and writing to /dev/null
-			// may cause a "non-zero exit" even on success.
-			// The stderr contains the volume info.
-			const stderr = err?.stderr?.toString?.() || err?.message || "";
+			// ffmpeg writes volumedetect stats to stderr
+			const stderr = result.stderr?.toString() || "";
 			return parseVolumeDetect(stderr);
+		} catch {
+			return 0;
 		}
 	}
 
 	/**
 	 * Transcribe a WAV file using Whisper CLI.
 	 * Returns transcript text and confidence score.
+	 * Async to avoid blocking the event loop (C-3).
 	 */
-	private transcribe(
+	private async transcribe(
 		wavPath: string,
 		segmentId: string,
-	): { text: string; confidence: number; language: string } | null {
+	): Promise<{ text: string; confidence: number; language: string } | null> {
 		const outputDir = VOICE_TMP_DIR;
 		const model = this.config.model || "tiny.en";
 
 		try {
-			execFileSync(
+			await execFileAsync(
 				WHISPER_PATH,
 				[
 					wavPath,
@@ -327,7 +367,6 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 					"--output_dir", outputDir,
 				],
 				{
-					stdio: "pipe",
 					timeout: 30_000, // 30s timeout for transcription
 				},
 			);
@@ -346,17 +385,17 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 			// Whisper JSON format: { text: "...", segments: [{ ... }] }
 			const text = data.text || "";
 
-			// Calculate average confidence from segments
+			// H-8 FIX: Calculate confidence correctly from no_speech_prob
+			// confidence = 1 - average(no_speech_prob) across segments
 			let confidence = 0.5; // default
 			if (Array.isArray(data.segments) && data.segments.length > 0) {
-				const avgProb =
+				const avgNoSpeech =
 					data.segments.reduce(
 						(sum: number, seg: any) =>
-							sum + (seg.avg_logprob || seg.no_speech_prob ? 1 - seg.no_speech_prob : 0.5),
+							sum + (typeof seg.no_speech_prob === "number" ? seg.no_speech_prob : 0),
 						0,
 					) / data.segments.length;
-				// avg_logprob is negative, convert to 0-1
-				confidence = Math.max(0, Math.min(1, avgProb));
+				confidence = Math.max(0, Math.min(1, 1 - avgNoSpeech));
 			}
 
 			const language = data.language || "en";
@@ -373,12 +412,13 @@ export class VoiceCaptureAdapter implements CaptureAdapter {
 
 	/**
 	 * Clean up any Whisper output files for a given segment.
+	 * M-3 FIX: Only delete files for the specific segmentId, not all voice_ files.
 	 */
 	private cleanupWhisperOutputs(segmentId: string): void {
 		try {
 			const files = readdirSync(VOICE_TMP_DIR);
 			for (const file of files) {
-				if (file.startsWith(`voice_`) && (file.endsWith(".json") || file.endsWith(".txt") || file.endsWith(".srt") || file.endsWith(".vtt") || file.endsWith(".tsv"))) {
+				if (file.startsWith(segmentId) && (file.endsWith(".json") || file.endsWith(".txt") || file.endsWith(".srt") || file.endsWith(".vtt") || file.endsWith(".tsv"))) {
 					safeUnlink(join(VOICE_TMP_DIR, file));
 				}
 			}

@@ -207,7 +207,7 @@ export class RefinerScheduler {
 	}
 }
 
-export { BaseRefiner } from "./base";
+export { BaseRefiner, sanitizeForPrompt, anonymizePath } from "./base";
 export { SkillRefiner } from "./skill-refiner";
 export { ProjectRefiner } from "./project-refiner";
 export { DecisionRefiner } from "./decision-refiner";
