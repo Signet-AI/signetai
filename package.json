@@ -1,6 +1,6 @@
 {
   "name": "signet",
-  "version": "0.1.107",
+  "version": "0.1.125",
   "private": true,
   "description": "Portable AI agent identity",
   "repository": {
@@ -11,6 +11,7 @@
   "license": "Apache-2.0",
   "workspaces": [
     "packages/*",
+    "packages/adapters/*",
     "web"
   ],
   "scripts": {
@@ -18,7 +19,7 @@
     "build:core": "cd packages/core && bun run build",
     "build:connector-base": "cd packages/connector-base && bun run build",
     "build:opencode-plugin": "cd packages/opencode-plugin && bun run build",
-    "build:deps": "bun run --filter '@signet/connector-*' --filter '@signet/daemon' --filter '@signet/sdk' --filter '@signet/cli' build",
+    "build:deps": "bun run --filter '@signet/connector-*' --filter '@signet/adapter-*' --filter '@signet/daemon' --filter '@signet/sdk' --filter '@signet/cli' build",
     "build:signetai": "cd packages/signetai && bun run build",
     "build:publish": "bun run build:dashboard && bun run build:signetai",
     "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",

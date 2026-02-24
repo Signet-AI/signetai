@@ -1,0 +1,41 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
+	"files": {
+		"ignore": [
+			"references/**",
+			"**/dist/**",
+			"**/node_modules/**",
+			"**/.svelte-kit/**",
+			"**/build/**",
+			"web/.wrangler/**",
+			"packages/signetai/dashboard/**",
+			"web/.astro/**"
+		]
+	},
+	"formatter": {
+		"indentStyle": "tab",
+		"lineWidth": 120
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"suspicious": {
+				"noAssignInExpressions": "off",
+				"noExplicitAny": "warn"
+			},
+			"style": {
+				"noNonNullAssertion": "warn"
+			},
+			"complexity": {
+				"noForEach": "warn",
+				"noBannedTypes": "warn"
+			}
+		}
+	},
+	"json": {
+		"formatter": {
+			"indentStyle": "tab"
+		}
+	}
+}

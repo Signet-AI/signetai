@@ -2,30 +2,18 @@
  * Signet Adapter for OpenClaw
  *
  * Runtime plugin integrating Signet's memory system with OpenClaw's
- * lifecycle hooks and tool surface. This is the plugin-first path
- * (Phase G) — all operations route through daemon APIs with the
- * "plugin" runtime path for dedup safety.
+ * plugin API. Uses the register(api) pattern — tools via
+ * api.registerTool(), lifecycle via api.on().
  *
- * Usage in OpenClaw config:
- * ```json
- * {
- *   "plugins": ["@signet/adapter-openclaw"],
- *   "signet": {
- *     "enabled": true,
- *     "daemonUrl": "http://localhost:3850"
- *   }
- * }
- * ```
+ * All operations route through daemon APIs with the "plugin" runtime
+ * path for dedup safety.
  */
 
-import {
-	memorySearchSchema,
-	memoryStoreSchema,
-	memoryGetSchema,
-	memoryListSchema,
-	memoryModifySchema,
-	memoryForgetSchema,
-} from "./tool-schemas.js";
+import { Type } from "@sinclair/typebox";
+import type {
+	OpenClawPluginApi,
+	OpenClawToolResult,
+} from "./openclaw-types.js";
 
 const DEFAULT_DAEMON_URL = "http://localhost:3850";
 const RUNTIME_PATH = "plugin" as const;
@@ -471,131 +459,444 @@ export async function recall(
 }
 
 // ============================================================================
-// Plugin factory
+// Config schema (with parse() method for OpenClaw plugin API)
 // ============================================================================
 
-export interface ToolDefinition {
-	fn: (...args: unknown[]) => Promise<unknown>;
-	schema: Record<string, unknown>;
-}
+const signetConfigSchema = {
+	parse(value: unknown): SignetConfig {
+		if (!value || typeof value !== "object" || Array.isArray(value)) {
+			return { daemonUrl: DEFAULT_DAEMON_URL };
+		}
+		const cfg = value as Record<string, unknown>;
+		return {
+			enabled: cfg.enabled !== false,
+			daemonUrl:
+				typeof cfg.daemonUrl === "string"
+					? cfg.daemonUrl
+					: DEFAULT_DAEMON_URL,
+		};
+	},
+};
 
-export function createPlugin(config: SignetConfig = {}) {
-	const enabled = config.enabled !== false;
-	const daemonUrl = config.daemonUrl || DEFAULT_DAEMON_URL;
+// ============================================================================
+// Tool result helpers
+// ============================================================================
 
-	const opts = { daemonUrl };
-
+function textResult(
+	text: string,
+	details?: Record<string, unknown>,
+): OpenClawToolResult {
 	return {
-		name: "@signet/adapter-openclaw",
-
-		// -- Lifecycle callbacks --
-
-		async onSessionStart(ctx: {
-			harness: string;
-			sessionKey?: string;
-			agentId?: string;
-			context?: string;
-		}) {
-			if (!enabled) return null;
-			return onSessionStart(ctx.harness, { ...opts, ...ctx });
-		},
-
-		async onUserPromptSubmit(ctx: {
-			harness: string;
-			userPrompt: string;
-			sessionKey?: string;
-			project?: string;
-		}) {
-			if (!enabled) return null;
-			return onUserPromptSubmit(ctx.harness, { ...opts, ...ctx });
-		},
-
-		async onPreCompaction(ctx: {
-			harness: string;
-			sessionKey?: string;
-			messageCount?: number;
-			sessionContext?: string;
-		}) {
-			if (!enabled) return null;
-			return onPreCompaction(ctx.harness, { ...opts, ...ctx });
-		},
-
-		async onCompactionComplete(ctx: {
-			harness: string;
-			summary: string;
-			sessionKey?: string;
-		}) {
-			if (!enabled) return false;
-			return onCompactionComplete(ctx.harness, ctx.summary, {
-				...opts,
-				sessionKey: ctx.sessionKey,
-			});
-		},
-
-		async onSessionEnd(ctx: {
-			harness: string;
-			transcriptPath?: string;
-			sessionKey?: string;
-			sessionId?: string;
-			cwd?: string;
-			reason?: string;
-		}) {
-			if (!enabled) return null;
-			return onSessionEnd(ctx.harness, { ...opts, ...ctx });
-		},
-
-		// -- Tool operations (for OpenClaw to expose as agent tools) --
-
-		tools: {
-			memory_search: {
-				fn: (query: string, toolOpts?: Record<string, unknown>) =>
-					memorySearch(query, { ...opts, ...toolOpts }),
-				schema: memorySearchSchema,
-			},
-			memory_store: {
-				fn: (content: string, toolOpts?: Record<string, unknown>) =>
-					memoryStore(content, { ...opts, ...toolOpts }),
-				schema: memoryStoreSchema,
-			},
-			memory_get: {
-				fn: (id: string) => memoryGet(id, opts),
-				schema: memoryGetSchema,
-			},
-			memory_list: {
-				fn: (toolOpts?: Record<string, unknown>) =>
-					memoryList({ ...opts, ...toolOpts }),
-				schema: memoryListSchema,
-			},
-			memory_modify: {
-				fn: (
-					id: string,
-					patch: {
-						content?: string;
-						type?: string;
-						importance?: number;
-						tags?: string;
-						reason: string;
-						if_version?: number;
-					},
-				) => memoryModify(id, patch, opts),
-				schema: memoryModifySchema,
-			},
-			memory_forget: {
-				fn: (
-					id: string,
-					forgetOpts: { reason: string; force?: boolean },
-				) => memoryForget(id, { ...opts, ...forgetOpts }),
-				schema: memoryForgetSchema,
-			},
-		} satisfies Record<string, ToolDefinition>,
-
-		// -- Legacy compat (kept for now) --
-
-		remember: (content: string, legacyOpts = {}) =>
-			memoryStore(content, { ...opts, ...legacyOpts }),
-		recall: (query: string, legacyOpts = {}) =>
-			memorySearch(query, { ...opts, ...legacyOpts }),
+		content: [{ type: "text", text }],
+		...(details ? { details } : {}),
 	};
 }
 
-export default createPlugin;
+// ============================================================================
+// Plugin definition (OpenClaw register(api) pattern)
+// ============================================================================
+
+const signetPlugin = {
+	id: "signet-memory-openclaw",
+	name: "Signet Memory",
+	description:
+		"Signet agent memory — persistent, searchable, identity-aware memory for AI agents",
+	kind: "memory" as const,
+	configSchema: signetConfigSchema,
+
+	register(api: OpenClawPluginApi): void {
+		const cfg = signetConfigSchema.parse(api.pluginConfig);
+		const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
+		const opts = { daemonUrl };
+
+		api.logger.info(`signet-memory: registered (daemon: ${daemonUrl})`);
+
+		// ==================================================================
+		// Tools
+		// ==================================================================
+
+		api.registerTool(
+			{
+				name: "memory_search",
+				label: "Memory Search",
+				description:
+					"Search memories using hybrid vector + keyword search",
+				parameters: Type.Object({
+					query: Type.String({ description: "Search query text" }),
+					limit: Type.Optional(
+						Type.Number({
+							description: "Max results to return (default 10)",
+						}),
+					),
+					type: Type.Optional(
+						Type.String({
+							description: "Filter by memory type",
+						}),
+					),
+					min_score: Type.Optional(
+						Type.Number({
+							description: "Minimum relevance score threshold",
+						}),
+					),
+				}),
+				async execute(_toolCallId, params) {
+					const { query, limit, type, min_score } = params as {
+						query: string;
+						limit?: number;
+						type?: string;
+						min_score?: number;
+					};
+					try {
+						const results = await memorySearch(query, {
+							...opts,
+							limit,
+							type,
+							minScore: min_score,
+						});
+						if (results.length === 0) {
+							return textResult("No relevant memories found.", {
+								count: 0,
+							});
+						}
+						const text = results
+							.map(
+								(r, i) =>
+									`${i + 1}. ${r.content} (score: ${((r.score ?? 0) * 100).toFixed(0)}%, id: ${r.id})`,
+							)
+							.join("\n");
+						return textResult(
+							`Found ${results.length} memories:\n\n${text}`,
+							{ count: results.length, memories: results },
+						);
+					} catch (err) {
+						return textResult(
+							`Memory search failed: ${String(err)}`,
+							{ error: String(err) },
+						);
+					}
+				},
+			},
+			{ name: "memory_search" },
+		);
+
+		api.registerTool(
+			{
+				name: "memory_store",
+				label: "Memory Store",
+				description: "Save a new memory",
+				parameters: Type.Object({
+					content: Type.String({
+						description: "Memory content to save",
+					}),
+					type: Type.Optional(
+						Type.String({
+							description:
+								"Memory type (fact, preference, decision, etc.)",
+						}),
+					),
+					importance: Type.Optional(
+						Type.Number({
+							description: "Importance score 0-1",
+						}),
+					),
+					tags: Type.Optional(
+						Type.String({
+							description:
+								"Comma-separated tags for categorization",
+						}),
+					),
+				}),
+				async execute(_toolCallId, params) {
+					const { content, type, importance, tags } = params as {
+						content: string;
+						type?: string;
+						importance?: number;
+						tags?: string;
+					};
+					try {
+						const id = await memoryStore(content, {
+							...opts,
+							type,
+							importance,
+							tags: tags
+								? tags.split(",").map((t) => t.trim())
+								: undefined,
+						});
+						if (id) {
+							return textResult(
+								`Memory saved successfully (id: ${id})`,
+								{ id },
+							);
+						}
+						return textResult("Failed to save memory.", {
+							error: "no id returned",
+						});
+					} catch (err) {
+						return textResult(
+							`Memory store failed: ${String(err)}`,
+							{ error: String(err) },
+						);
+					}
+				},
+			},
+			{ name: "memory_store" },
+		);
+
+		api.registerTool(
+			{
+				name: "memory_get",
+				label: "Memory Get",
+				description: "Get a single memory by its ID",
+				parameters: Type.Object({
+					id: Type.String({
+						description: "Memory ID to retrieve",
+					}),
+				}),
+				async execute(_toolCallId, params) {
+					const { id } = params as { id: string };
+					try {
+						const memory = await memoryGet(id, opts);
+						if (memory) {
+							return textResult(JSON.stringify(memory, null, 2), {
+								memory,
+							});
+						}
+						return textResult(`Memory ${id} not found.`, {
+							error: "not found",
+						});
+					} catch (err) {
+						return textResult(
+							`Memory get failed: ${String(err)}`,
+							{ error: String(err) },
+						);
+					}
+				},
+			},
+			{ name: "memory_get" },
+		);
+
+		api.registerTool(
+			{
+				name: "memory_list",
+				label: "Memory List",
+				description: "List memories with optional filters",
+				parameters: Type.Object({
+					limit: Type.Optional(
+						Type.Number({
+							description: "Max results (default 100)",
+						}),
+					),
+					offset: Type.Optional(
+						Type.Number({ description: "Pagination offset" }),
+					),
+					type: Type.Optional(
+						Type.String({
+							description: "Filter by memory type",
+						}),
+					),
+				}),
+				async execute(_toolCallId, params) {
+					const { limit, offset, type } = params as {
+						limit?: number;
+						offset?: number;
+						type?: string;
+					};
+					try {
+						const result = await memoryList({
+							...opts,
+							limit,
+							offset,
+							type,
+						});
+						return textResult(
+							`${result.memories.length} memories:\n\n${result.memories.map((m) => `- [${m.type}] ${m.content} (id: ${m.id})`).join("\n")}`,
+							{
+								count: result.memories.length,
+								stats: result.stats,
+							},
+						);
+					} catch (err) {
+						return textResult(
+							`Memory list failed: ${String(err)}`,
+							{ error: String(err) },
+						);
+					}
+				},
+			},
+			{ name: "memory_list" },
+		);
+
+		api.registerTool(
+			{
+				name: "memory_modify",
+				label: "Memory Modify",
+				description: "Edit an existing memory by ID",
+				parameters: Type.Object({
+					id: Type.String({
+						description: "Memory ID to modify",
+					}),
+					reason: Type.String({
+						description: "Why this edit is being made",
+					}),
+					content: Type.Optional(
+						Type.String({ description: "New content" }),
+					),
+					type: Type.Optional(
+						Type.String({ description: "New type" }),
+					),
+					importance: Type.Optional(
+						Type.Number({ description: "New importance" }),
+					),
+					tags: Type.Optional(
+						Type.String({
+							description: "New tags (comma-separated)",
+						}),
+					),
+				}),
+				async execute(_toolCallId, params) {
+					const { id, reason, content, type, importance, tags } =
+						params as {
+							id: string;
+							reason: string;
+							content?: string;
+							type?: string;
+							importance?: number;
+							tags?: string;
+						};
+					try {
+						const ok = await memoryModify(
+							id,
+							{ content, type, importance, tags, reason },
+							opts,
+						);
+						return textResult(
+							ok
+								? `Memory ${id} updated.`
+								: `Failed to update memory ${id}.`,
+							{ success: ok },
+						);
+					} catch (err) {
+						return textResult(
+							`Memory modify failed: ${String(err)}`,
+							{ error: String(err) },
+						);
+					}
+				},
+			},
+			{ name: "memory_modify" },
+		);
+
+		api.registerTool(
+			{
+				name: "memory_forget",
+				label: "Memory Forget",
+				description: "Soft-delete a memory by ID",
+				parameters: Type.Object({
+					id: Type.String({
+						description: "Memory ID to forget",
+					}),
+					reason: Type.String({
+						description: "Why this memory should be forgotten",
+					}),
+				}),
+				async execute(_toolCallId, params) {
+					const { id, reason } = params as {
+						id: string;
+						reason: string;
+					};
+					try {
+						const ok = await memoryForget(id, {
+							...opts,
+							reason,
+						});
+						return textResult(
+							ok
+								? `Memory ${id} forgotten.`
+								: `Failed to forget memory ${id}.`,
+							{ success: ok },
+						);
+					} catch (err) {
+						return textResult(
+							`Memory forget failed: ${String(err)}`,
+							{ error: String(err) },
+						);
+					}
+				},
+			},
+			{ name: "memory_forget" },
+		);
+
+		// ==================================================================
+		// Lifecycle hooks
+		// ==================================================================
+
+		api.on(
+			"before_agent_start",
+			async (
+				event: Record<string, unknown>,
+				ctx: unknown,
+			): Promise<unknown> => {
+				if (!cfg.enabled) return undefined;
+
+				const sessionKey = (
+					ctx as Record<string, unknown> | undefined
+				)?.sessionKey as string | undefined;
+
+				// Session start — claim session with daemon
+				await onSessionStart("openclaw", { ...opts, sessionKey });
+
+				// If there's a prompt, do memory injection
+				const prompt = event.prompt as string | undefined;
+				if (prompt && prompt.length > 3) {
+					const result = await onUserPromptSubmit("openclaw", {
+						...opts,
+						userPrompt: prompt,
+						sessionKey,
+					});
+					if (result?.inject) {
+						return {
+							prependContext: `<signet-memory>\n${result.inject}\n</signet-memory>`,
+						};
+					}
+				}
+
+				return undefined;
+			},
+		);
+
+		api.on(
+			"agent_end",
+			async (
+				_event: Record<string, unknown>,
+				ctx: unknown,
+			): Promise<unknown> => {
+				if (!cfg.enabled) return undefined;
+
+				const sessionKey = (
+					ctx as Record<string, unknown> | undefined
+				)?.sessionKey as string | undefined;
+
+				await onSessionEnd("openclaw", { ...opts, sessionKey });
+				return undefined;
+			},
+		);
+
+		// ==================================================================
+		// Service
+		// ==================================================================
+
+		api.registerService({
+			id: "signet-memory-openclaw",
+			start() {
+				api.logger.info(
+					`signet-memory: service started (daemon: ${daemonUrl})`,
+				);
+			},
+			stop() {
+				api.logger.info("signet-memory: service stopped");
+			},
+		});
+	},
+};
+
+export default signetPlugin;

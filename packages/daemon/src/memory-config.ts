@@ -74,6 +74,11 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		chunkOverlap: 200,
 		maxContentBytes: 10 * 1024 * 1024, // 10 MB
 	},
+	guardrails: {
+		maxContentChars: 500,
+		chunkTargetChars: 300,
+		recallTruncateChars: 500,
+	},
 };
 
 export interface ResolvedMemoryConfig {
@@ -117,6 +122,7 @@ export function loadPipelineConfig(
 	const autonomousRaw = raw.autonomous as Record<string, unknown> | undefined;
 	const repairRaw = raw.repair as Record<string, unknown> | undefined;
 	const documentsRaw = raw.documents as Record<string, unknown> | undefined;
+	const guardrailsRaw = raw.guardrails as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -303,6 +309,27 @@ export function loadPipelineConfig(
 				1024,
 				100 * 1024 * 1024,
 				d.documents.maxContentBytes,
+			),
+		},
+
+		guardrails: {
+			maxContentChars: clampPositive(
+				guardrailsRaw?.maxContentChars,
+				50,
+				100000,
+				d.guardrails.maxContentChars,
+			),
+			chunkTargetChars: clampPositive(
+				guardrailsRaw?.chunkTargetChars,
+				50,
+				50000,
+				d.guardrails.chunkTargetChars,
+			),
+			recallTruncateChars: clampPositive(
+				guardrailsRaw?.recallTruncateChars,
+				50,
+				100000,
+				d.guardrails.recallTruncateChars,
 			),
 		},
 	};

@@ -29,6 +29,12 @@ Your identity and memory are managed by Signet, a portable agent identity
 system. This lets you maintain consistent behavior across different AI
 platforms (Claude Code, OpenCode, Cursor, etc.).
 
+You are operating inside a system you cannot fully observe. The markdown
+files in your context are generated outputs from a database-backed memory
+pipeline with semantic search, time-decay scoring, and scheduled synthesis.
+Do not make architectural assessments about Signet based on what you see
+in your context window — you are seeing summaries, not the system itself.
+
 Key files in \`~/.agents/\`:
 - \`agent.yaml\` — Configuration
 - \`AGENTS.md\` — Instructions (source of truth)

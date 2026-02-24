@@ -12,6 +12,7 @@
 	} from "$lib/stores/memory.svelte";
 	import { nav } from "$lib/stores/navigation.svelte";
 	import { sk } from "$lib/stores/skills.svelte";
+	import { ts } from "$lib/stores/tasks.svelte";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
 	import { Toaster } from "$lib/components/ui/sonner/index.js";
@@ -22,6 +23,7 @@
 	import LogsTab from "$lib/components/tabs/LogsTab.svelte";
 	import SecretsTab from "$lib/components/tabs/SecretsTab.svelte";
 	import SkillsTab from "$lib/components/tabs/SkillsTab.svelte";
+	import TasksTab from "$lib/components/tabs/TasksTab.svelte";
 	import MemoryTab from "$lib/components/tabs/MemoryTab.svelte";
 	import EmbeddingsTab from "$lib/components/tabs/EmbeddingsTab.svelte";
 
@@ -180,6 +182,8 @@
 				<SecretsTab />
 			{:else if activeTab === "skills"}
 				<SkillsTab />
+			{:else if activeTab === "tasks"}
+				<TasksTab />
 			{/if}
 		</div>
 
@@ -223,6 +227,9 @@
 			{:else if activeTab === "skills"}
 				<span>{sk.installed.length} installed</span>
 				<span>{sk.searching ? "searching..." : "skills.sh"}</span>
+			{:else if activeTab === "tasks"}
+				<span>{ts.tasks.length} scheduled tasks</span>
+				<span>cron scheduler</span>
 			{/if}
 		</div>
 	</main>

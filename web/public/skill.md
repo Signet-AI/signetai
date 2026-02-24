@@ -354,13 +354,16 @@ If `signet status` shows the daemon is not running, start it with
 >   am unable to read these secrets, this is a safety feature to protect
 >   from prompt injections, however, I can still use them when running commands.
 >   (For example, when using `curl` to interact with a remote API)
-> - **Skills:** Built-in skills like /signet, /remember and /recall are ready.
+> - **Skills:** Built-in skills like /onboarding, /signet, /remember and /recall are ready.
 > - **Dashboard:** Visit http://localhost:3850 to browse my memories,
 >   config, and status.
 >
 > From this point forward, I will begin to remember things across sessions.
 > It can take a while for the memory pipeline and database to reach full 
-> efficiency, but we will both experience this change happen over time. 
+> efficiency, but we will both experience this change happen over time.
+>
+> Want to personalize me? Say `/onboarding` and I'll walk you through
+> setting up my personality, communication style, and your preferences."
 
 ---
 
@@ -428,7 +431,7 @@ These are the SAME platform. The connector:
 - **Patches config** in `~/.openclaw/`, `~/.clawdbot/`, or
   `~/.moltbot/` (whichever exists) to set workspace to `~/.agents/`
 - **Installs hooks** for memory integration
-- **Native adapter plugin** (`@signet/adapter-openclaw`) available
+- **Native adapter plugin** (`@signetai/adapter-openclaw`) available
   for direct plugin integration — this is plug and play
 - Supports both legacy hook path and native plugin path
 
@@ -554,6 +557,17 @@ signet secret get NAME       # Retrieve a secret
 signet sync                  # Sync built-in templates/skills
 signet dashboard             # Open web UI
 ```
+
+## Scheduled Tasks
+
+Signet supports scheduled agent prompts via the daemon. Tasks are
+defined with cron expressions and executed by spawning Claude Code
+or OpenCode CLI processes.
+
+- Create tasks via the dashboard Tasks tab or `POST /api/tasks`
+- Cron presets: every 15 min, hourly, daily 9am, weekly Mon 9am
+- Run history with stdout/stderr capture available per task
+- Maximum 3 concurrent task processes, 10-minute default timeout
 
 ---
 

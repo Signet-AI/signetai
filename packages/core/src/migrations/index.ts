@@ -26,6 +26,7 @@ import { up as perceptionTables } from "./017-perception-tables";
 import { up as onchainIdentity } from "./018-onchain-identity";
 import { up as sessionKeysAndExport } from "./019-session-keys-and-export";
 import { up as federation } from "./020-federation";
+import { up as scheduledTasks } from "./021-scheduled-tasks";
 
 // -- Public interface consumed by Database.init() --
 
@@ -125,6 +126,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 20,
 		name: "federation",
 		up: federation,
+	},
+	{
+		version: 21,
+		name: "scheduled-tasks",
+		up: scheduledTasks,
 	},
 ];
 

@@ -83,6 +83,11 @@ const BASE_CFG: PipelineV2Config = {
 		chunkOverlap: 200,
 		maxContentBytes: 10 * 1024 * 1024,
 	},
+	guardrails: {
+		maxContentChars: 500,
+		chunkTargetChars: 300,
+		recallTruncateChars: 500,
+	},
 };
 
 const now = new Date().toISOString();

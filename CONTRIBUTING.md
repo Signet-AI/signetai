@@ -39,7 +39,7 @@ packages/
 ├── connector-claude-code/ # @signet/connector-claude-code — Claude Code integration
 ├── connector-opencode/    # @signet/connector-opencode — OpenCode integration
 ├── connector-openclaw/    # @signet/connector-openclaw — OpenClaw integration
-├── adapters/openclaw/     # @signet/adapter-openclaw — OpenClaw runtime plugin
+├── adapters/openclaw/     # @signetai/adapter-openclaw — OpenClaw runtime plugin
 ├── signetai/              # signetai — meta-package bundling CLI + daemon
 └── web/                   # @signet/web — marketing site (Cloudflare Worker)
 ```

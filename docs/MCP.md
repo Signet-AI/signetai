@@ -142,7 +142,7 @@ lifecycle hooks, MCP handles on-demand tool calls.
 
 ### OpenClaw
 
-OpenClaw uses the `@signet/adapter-openclaw` runtime plugin, which already
+OpenClaw uses the `@signetai/adapter-openclaw` runtime plugin, which already
 provides the same tool surface. MCP registration will be added when OpenClaw
 supports native `mcpServers` configuration.
 

@@ -201,7 +201,7 @@ The plugin handles lifecycle hooks; MCP provides on-demand memory tools.
 
 ## OpenClaw
 
-OpenClaw is a desktop AI agent harness. Signet has the deepest integration here via the `@signet/adapter-openclaw` package and the full hooks system.
+OpenClaw is a desktop AI agent harness. Signet has the deepest integration here via the `@signetai/adapter-openclaw` package and the full hooks system.
 
 ### Files managed by Signet
 
@@ -230,12 +230,12 @@ OpenClaw checks these config locations (in order):
 - `~/.clawdbot/clawdbot.json`
 - `~/.moltbot/moltbot.json`
 
-### @signet/adapter-openclaw
+### @signetai/adapter-openclaw
 
 The adapter package provides a full lifecycle integration:
 
 ```javascript
-import createPlugin from '@signet/adapter-openclaw';
+import createPlugin from '@signetai/adapter-openclaw';
 
 const signet = createPlugin({
   enabled: true,
@@ -312,7 +312,7 @@ This is a setup-time package that:
 
 Installed during `signet setup` when OpenClaw is selected.
 
-#### @signet/adapter-openclaw
+#### @signetai/adapter-openclaw
 
 **Purpose:** Runtime plugin
 

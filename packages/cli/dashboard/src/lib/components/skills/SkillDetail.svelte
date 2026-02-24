@@ -36,6 +36,20 @@ async function copyInstallCommand() {
 		toast("Copy failed", "error");
 	}
 }
+
+function formatStat(n: number | undefined): string {
+	if (n === undefined) return "0";
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+	return String(n);
+}
+
+let providerUrl = $derived.by(() => {
+	const src = sk.detailSource;
+	if (!src?.provider) return null;
+	if (src.provider === "clawhub") return `https://clawhub.ai/skills/${src.name}`;
+	return `https://skills.sh`;
+});
 </script>
 
 <Sheet.Root bind:open onOpenChange={handleOpenChange}>
@@ -56,8 +70,16 @@ async function copyInstallCommand() {
 				<div class="flex items-start justify-between gap-4">
 					<div class="flex flex-col gap-1 min-w-0">
 						<h2 class="detail-title">{sk.selectedName}</h2>
-						{#if sk.detailMeta}
-							<div class="flex items-center gap-2 flex-wrap">
+						<div class="flex items-center gap-2 flex-wrap">
+							{#if sk.detailSource?.provider}
+								<span
+									class="provider-badge"
+									class:clawhub={sk.detailSource.provider === "clawhub"}
+								>
+									{sk.detailSource.provider}
+								</span>
+							{/if}
+							{#if sk.detailMeta}
 								{#if sk.detailMeta.user_invocable}
 									<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">
 										/{sk.detailMeta.name}
@@ -71,8 +93,8 @@ async function copyInstallCommand() {
 										{sk.detailMeta.arg_hint}
 									</Badge>
 								{/if}
-							</div>
-						{/if}
+							{/if}
+						</div>
 					</div>
 
 					<!-- Action button -->
@@ -103,6 +125,38 @@ async function copyInstallCommand() {
 					</div>
 				</div>
 
+				<!-- Stats row -->
+				{#if sk.detailSource}
+					<div class="detail-stats">
+						{#if sk.detailSource.downloads !== undefined}
+							<span class="detail-stat">
+								<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+									<path d="M8 12L3 7h3V1h4v6h3L8 12zM2 14h12v1H2v-1z"/>
+								</svg>
+								{formatStat(sk.detailSource.downloads)} downloads
+							</span>
+						{/if}
+						{#if sk.detailSource.stars !== undefined && sk.detailSource.stars > 0}
+							<span class="detail-stat">
+								<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+									<path d="M8 0L10 5.5L16 6L11.5 10L13 16L8 12.5L3 16L4.5 10L0 6L6 5.5L8 0Z"/>
+								</svg>
+								{formatStat(sk.detailSource.stars)} stars
+							</span>
+						{/if}
+						{#if sk.detailSource.versions !== undefined && sk.detailSource.versions > 0}
+							<span class="detail-stat">
+								{sk.detailSource.versions} version{sk.detailSource.versions !== 1 ? "s" : ""}
+							</span>
+						{/if}
+						{#if sk.detailSource.author}
+							<span class="detail-stat">
+								by {sk.detailSource.author}
+							</span>
+						{/if}
+					</div>
+				{/if}
+
 				<!-- Install command -->
 				<button
 					type="button"
@@ -116,6 +170,18 @@ async function copyInstallCommand() {
 						{copied ? "copied!" : "click to copy"}
 					</span>
 				</button>
+
+				<!-- Provider link -->
+				{#if providerUrl}
+					<a
+						href={providerUrl}
+						target="_blank"
+						rel="noopener"
+						class="detail-provider-link"
+					>
+						View on {sk.detailSource?.provider} &rarr;
+					</a>
+				{/if}
 			</div>
 
 			<!-- Body -->
@@ -127,6 +193,10 @@ async function copyInstallCommand() {
 				{:else if sk.detailMeta?.description}
 					<p class="text-[12px] text-[var(--sig-text)] leading-[1.6]">
 						{sk.detailMeta.description}
+					</p>
+				{:else if sk.detailSource?.description}
+					<p class="text-[12px] text-[var(--sig-text)] leading-[1.6]">
+						{sk.detailSource.description}
 					</p>
 				{:else}
 					<p class="text-[12px] text-[var(--sig-text-muted)]">
@@ -150,6 +220,38 @@ async function copyInstallCommand() {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.provider-badge {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		padding: 1px 5px;
+		border: 1px solid var(--sig-border-strong);
+		color: var(--sig-text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+	.provider-badge.clawhub {
+		border-color: var(--sig-accent);
+		color: var(--sig-accent);
+	}
+
+	.detail-stats {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		margin-top: 10px;
+		flex-wrap: wrap;
+	}
+
+	.detail-stat {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+		font-variant-numeric: tabular-nums;
 	}
 
 	.detail-cmd {
@@ -176,6 +278,18 @@ async function copyInstallCommand() {
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		opacity: 0.6;
+	}
+
+	.detail-provider-link {
+		display: inline-block;
+		margin-top: 8px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-accent);
+		text-decoration: none;
+	}
+	.detail-provider-link:hover {
+		text-decoration: underline;
 	}
 
 	:global(.skill-markdown) {

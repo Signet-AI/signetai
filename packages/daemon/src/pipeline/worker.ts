@@ -368,7 +368,16 @@ function insertMemoryEmbedding(
 	content: string,
 	vector: readonly number[],
 	now: string,
+	expectedDimensions?: number,
 ): boolean {
+	if (expectedDimensions !== undefined && vector.length !== expectedDimensions) {
+		logger.warn("pipeline", "Embedding dimension mismatch, skipping vector insert", {
+			got: vector.length,
+			expected: expectedDimensions,
+			memoryId,
+		});
+		return false;
+	}
 	const embId = crypto.randomUUID();
 	const blob = vectorToBlob(vector);
 	syncVecDeleteBySourceExceptHash(db, "memory", memoryId, contentHash);
@@ -415,6 +424,7 @@ function applyPhaseCWrites(
 		readonly entityCount: number;
 		readonly minFactConfidenceForWrite: number;
 		readonly allowUpdateDelete: boolean;
+		readonly expectedEmbeddingDimensions: number;
 		readonly semanticContradictions?: ReadonlyMap<number, { detected: boolean; confidence: number; reasoning: string }>;
 	},
 	embeddingByHash: ReadonlyMap<string, readonly number[]>,
@@ -548,6 +558,7 @@ function applyPhaseCWrites(
 					storageContent,
 					vector,
 					now,
+					meta.expectedEmbeddingDimensions,
 				);
 				if (insertedEmbedding) {
 					stats.embeddingsAdded++;
@@ -841,7 +852,13 @@ export function startWorker(
 						decisionCfg.embedding,
 					);
 					if (vector && vector.length > 0) {
-						embeddingByHash.set(contentHash, vector);
+						if (vector.length !== decisionCfg.embedding.dimensions) {
+							prefetchWarnings.push(
+								`Embedding dimension mismatch (got ${vector.length}, expected ${decisionCfg.embedding.dimensions})`,
+							);
+						} else {
+							embeddingByHash.set(contentHash, vector);
+						}
 					}
 				} catch (e) {
 					const emsg = e instanceof Error ? e.message : String(e);
@@ -907,6 +924,7 @@ export function startWorker(
 						entityCount: extraction.entities.length,
 						minFactConfidenceForWrite: extractionCfg.minConfidence,
 						allowUpdateDelete: autonomousCfg.allowUpdateDelete,
+						expectedEmbeddingDimensions: decisionCfg.embedding.dimensions,
 						semanticContradictions: contradictionFlags,
 					},
 					embeddingByHash,

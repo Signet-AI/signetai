@@ -39,6 +39,7 @@ export type {
 	PipelineAutonomousConfig,
 	PipelineRepairConfig,
 	PipelineDocumentsConfig,
+	PipelineGuardrailsConfig,
 	ExtractedFact,
 	ExtractedEntity,
 	ExtractionResult,

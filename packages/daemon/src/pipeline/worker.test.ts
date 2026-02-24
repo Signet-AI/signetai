@@ -213,6 +213,11 @@ const PIPELINE_CFG: PipelineV2Config = {
 		chunkOverlap: 200,
 		maxContentBytes: 10 * 1024 * 1024,
 	},
+	guardrails: {
+		maxContentChars: 500,
+		chunkTargetChars: 300,
+		recallTruncateChars: 500,
+	},
 };
 
 const PHASE_C_CFG: PipelineV2Config = {
@@ -224,7 +229,7 @@ const DECISION_CFG: DecisionConfig = {
 	embedding: {
 		provider: "ollama",
 		model: "nomic-embed-text",
-		dimensions: 768,
+		dimensions: 3, // matches test mock vectors
 		base_url: "http://localhost:11434",
 	},
 	search: { alpha: 0.7, top_k: 20, min_score: 0.0 },
