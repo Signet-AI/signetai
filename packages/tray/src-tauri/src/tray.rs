@@ -69,6 +69,21 @@ pub fn setup(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Query perception status to determine whether a specific channel is currently enabled.
+async fn get_channel_enabled(channel: &str) -> bool {
+    let Ok(raw) = commands::perception_status().await else {
+        return false;
+    };
+    let Ok(data) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    data.get("adapters")
+        .and_then(|a| a.get(channel))
+        .and_then(|c| c.get("enabled"))
+        .and_then(|e| e.as_bool())
+        .unwrap_or(false)
+}
+
 fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id();
     let id_str = id.as_ref();
@@ -124,39 +139,40 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         }
         "perception-ch-screen" => {
             tauri::async_runtime::spawn(async move {
-                // Toggle: we don't know current state from here, so we toggle
-                // The label says ON or OFF; the TypeScript layer manages actual state.
-                // For simplicity, always toggle to the opposite of what's shown.
+                let enabled = get_channel_enabled("screen").await;
                 let _ = commands::perception_toggle_channel(
                     "screen".to_string(),
-                    true,
+                    !enabled,
                 )
                 .await;
             });
         }
         "perception-ch-files" => {
             tauri::async_runtime::spawn(async move {
+                let enabled = get_channel_enabled("files").await;
                 let _ = commands::perception_toggle_channel(
                     "files".to_string(),
-                    true,
+                    !enabled,
                 )
                 .await;
             });
         }
         "perception-ch-terminal" => {
             tauri::async_runtime::spawn(async move {
+                let enabled = get_channel_enabled("terminal").await;
                 let _ = commands::perception_toggle_channel(
                     "terminal".to_string(),
-                    true,
+                    !enabled,
                 )
                 .await;
             });
         }
         "perception-ch-voice" => {
             tauri::async_runtime::spawn(async move {
+                let enabled = get_channel_enabled("voice").await;
                 let _ = commands::perception_toggle_channel(
                     "voice".to_string(),
-                    true,
+                    !enabled,
                 )
                 .await;
             });
@@ -254,8 +270,14 @@ fn format_number(n: u64) -> String {
 /// Compute a relative time string from ISO timestamp
 fn time_ago(iso: &str) -> String {
     let Ok(ts) = chrono::DateTime::parse_from_rfc3339(iso) else {
-        // Try parsing without timezone
+        // Try parsing without timezone (ISO-style)
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.f") {
+            let now = chrono::Utc::now().naive_utc();
+            let dur = now.signed_duration_since(naive);
+            return format_duration(dur);
+        }
+        // Try space-separated SQLite format (e.g. "2025-07-09 12:34:56")
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%d %H:%M:%S") {
             let now = chrono::Utc::now().naive_utc();
             let dur = now.signed_duration_since(naive);
             return format_duration(dur);
@@ -283,12 +305,12 @@ fn format_duration(dur: chrono::Duration) -> String {
     }
 }
 
-/// Truncate a string to max chars, adding "..." if truncated
+/// Truncate a string to max characters (not bytes), adding "..." if truncated
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        let mut result: String = s.chars().take(max - 3).collect();
+        let mut result: String = s.chars().take(max.saturating_sub(3)).collect();
         result.push_str("...");
         result
     }

@@ -1,3 +1,27 @@
+import { invoke } from "@tauri-apps/api/core";
+
+// Cached auth token for daemon API calls (refreshed periodically)
+let cachedToken: string | null = null;
+let tokenFetchedAt = 0;
+const TOKEN_CACHE_MS = 30_000;
+
+async function refreshToken(): Promise<void> {
+  const now = Date.now();
+  if (cachedToken && now - tokenFetchedAt < TOKEN_CACHE_MS) return;
+  try {
+    const token = await invoke<string | null>("read_auth_token");
+    cachedToken = token;
+  } catch {
+    cachedToken = null;
+  }
+  tokenFetchedAt = now;
+}
+
+function authHeaders(): Record<string, string> {
+  if (cachedToken) return { "X-Local-Token": cachedToken };
+  return {};
+}
+
 // Rich daemon state for Phase 1
 
 export interface RecentMemory {
@@ -110,7 +134,9 @@ function countMemoriesToday(memories: any[]): number {
 
 export async function fetchHealth(baseUrl: string): Promise<boolean> {
   try {
+    await refreshToken();
     const res = await fetch(`${baseUrl}/health`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return false;
@@ -130,6 +156,7 @@ export async function fetchHealth(baseUrl: string): Promise<boolean> {
 export async function fetchMemories(baseUrl: string): Promise<void> {
   try {
     const res = await fetch(`${baseUrl}/api/memories?limit=10`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return;
@@ -185,6 +212,7 @@ export async function fetchMemories(baseUrl: string): Promise<void> {
 export async function fetchDiagnostics(baseUrl: string): Promise<void> {
   try {
     const res = await fetch(`${baseUrl}/api/diagnostics`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return;
@@ -203,6 +231,7 @@ export async function fetchDiagnostics(baseUrl: string): Promise<void> {
 export async function fetchEmbeddings(baseUrl: string): Promise<void> {
   try {
     const res = await fetch(`${baseUrl}/api/embeddings/status`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return;
@@ -221,6 +250,7 @@ export async function fetchEmbeddings(baseUrl: string): Promise<void> {
 export async function fetchPerception(baseUrl: string): Promise<void> {
   try {
     const res = await fetch(`${baseUrl}/api/perception/status`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
@@ -289,4 +319,8 @@ export function resetState(): void {
   diagnosticsData = null;
   embeddingsData = null;
   perceptionData = null;
+  // Reset ingestion rate tracking on daemon restart
+  lastMemoryCount = null;
+  lastMemoryCountTime = null;
+  currentIngestionRate = null;
 }

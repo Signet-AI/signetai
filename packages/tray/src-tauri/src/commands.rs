@@ -7,6 +7,32 @@ use crate::tray;
 const TRAY_ID: &str = "signet-tray";
 const DAEMON_URL: &str = "http://localhost:3850";
 
+/// Read the local auth token for daemon API calls.
+fn read_local_token() -> Option<String> {
+    let path = dirs::home_dir()?.join(".agents/.daemon/local.token");
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
+/// Create a GET request with auth headers.
+fn authed_get(url: &str) -> reqwest::RequestBuilder {
+    let client = reqwest::Client::new();
+    let mut req = client.get(url);
+    if let Some(token) = read_local_token() {
+        req = req.header("X-Local-Token", token);
+    }
+    req
+}
+
+/// Create a POST request with auth headers.
+fn authed_post(url: &str) -> reqwest::RequestBuilder {
+    let client = reqwest::Client::new();
+    let mut req = client.post(url);
+    if let Some(token) = read_local_token() {
+        req = req.header("X-Local-Token", token);
+    }
+    req
+}
+
 #[derive(Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct RecentMemory {
@@ -193,16 +219,19 @@ pub async fn update_tray(
 }
 
 #[tauri::command]
+pub async fn read_auth_token() -> Result<Option<String>, String> {
+    Ok(read_local_token())
+}
+
+#[tauri::command]
 pub async fn quick_capture(content: String) -> Result<(), String> {
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
         "content": content,
         "who": "tray-capture",
         "importance": 0.7
     });
 
-    let res = client
-        .post(format!("{}/api/memory/remember", DAEMON_URL))
+    let res = authed_post(&format!("{}/api/memory/remember", DAEMON_URL))
         .json(&body)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -223,14 +252,12 @@ pub async fn search_memories(
     query: String,
     limit: Option<u32>,
 ) -> Result<String, String> {
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
         "query": query,
         "limit": limit.unwrap_or(10)
     });
 
-    let res = client
-        .post(format!("{}/api/memory/recall", DAEMON_URL))
+    let res = authed_post(&format!("{}/api/memory/recall", DAEMON_URL))
         .json(&body)
         .timeout(std::time::Duration::from_secs(10))
         .send()
@@ -274,11 +301,9 @@ pub async fn quit_app(app: AppHandle) {
 
 #[tauri::command]
 pub async fn perception_start(channels: Vec<String>) -> Result<(), String> {
-    let client = reqwest::Client::new();
     let body = serde_json::json!({ "channels": channels });
 
-    let res = client
-        .post(format!("{}/api/perception/start", DAEMON_URL))
+    let res = authed_post(&format!("{}/api/perception/start", DAEMON_URL))
         .json(&body)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -296,10 +321,7 @@ pub async fn perception_start(channels: Vec<String>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn perception_stop() -> Result<(), String> {
-    let client = reqwest::Client::new();
-
-    let res = client
-        .post(format!("{}/api/perception/stop", DAEMON_URL))
+    let res = authed_post(&format!("{}/api/perception/stop", DAEMON_URL))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -316,10 +338,7 @@ pub async fn perception_stop() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn perception_status() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
-    let res = client
-        .get(format!("{}/api/perception/status", DAEMON_URL))
+    let res = authed_get(&format!("{}/api/perception/status", DAEMON_URL))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -340,14 +359,12 @@ pub async fn perception_toggle_channel(
     channel: String,
     enabled: bool,
 ) -> Result<(), String> {
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
         "channel": channel,
         "enabled": enabled,
     });
 
-    let res = client
-        .post(format!("{}/api/perception/channel", DAEMON_URL))
+    let res = authed_post(&format!("{}/api/perception/channel", DAEMON_URL))
         .json(&body)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -365,10 +382,7 @@ pub async fn perception_toggle_channel(
 
 #[tauri::command]
 pub async fn perception_pause() -> Result<(), String> {
-    let client = reqwest::Client::new();
-
-    let res = client
-        .post(format!("{}/api/perception/pause", DAEMON_URL))
+    let res = authed_post(&format!("{}/api/perception/pause", DAEMON_URL))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -385,10 +399,7 @@ pub async fn perception_pause() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn perception_resume() -> Result<(), String> {
-    let client = reqwest::Client::new();
-
-    let res = client
-        .post(format!("{}/api/perception/resume", DAEMON_URL))
+    let res = authed_post(&format!("{}/api/perception/resume", DAEMON_URL))
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -405,10 +416,7 @@ pub async fn perception_resume() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn get_cognitive_profile() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
-    let res = client
-        .get(format!("{}/api/perception/profile", DAEMON_URL))
+    let res = authed_get(&format!("{}/api/perception/profile", DAEMON_URL))
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
@@ -426,10 +434,7 @@ pub async fn get_cognitive_profile() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_expertise_graph() -> Result<String, String> {
-    let client = reqwest::Client::new();
-
-    let res = client
-        .get(format!("{}/api/perception/graph", DAEMON_URL))
+    let res = authed_get(&format!("{}/api/perception/graph", DAEMON_URL))
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await

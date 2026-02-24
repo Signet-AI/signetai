@@ -1238,7 +1238,7 @@ async function existingSetupWizard(
 		// 3. Initialize SQLite database with unified schema
 		spinner.text = "Initializing database...";
 		const dbPath = join(basePath, "memory", "memories.db");
-		const db = Database(dbPath);
+		const db = new Database(dbPath);
 
 		// Migrate legacy schema if needed, then run versioned migrations
 		const migrationResult = ensureUnifiedSchema(db);
@@ -2021,7 +2021,7 @@ ${agentName} is a helpful assistant.
 
 		spinner.text = "Initializing database...";
 		const dbPath = join(basePath, "memory", "memories.db");
-		const db = Database(dbPath);
+		const db = new Database(dbPath);
 
 		ensureUnifiedSchema(db);
 		runMigrations(db);
@@ -2321,16 +2321,18 @@ async function migrateWizard(basePath: string) {
 		validate: (v) => existsSync(v) || "File not found",
 	});
 
-	const spinner = ora(`Importing from ${source}...`).start();
-
-	try {
-		await new Promise((r) => setTimeout(r, 1500));
-		spinner.succeed(chalk.green("Import complete!"));
-		console.log(chalk.dim("  Imported conversations with memories"));
-	} catch (err) {
-		spinner.fail(chalk.red("Import failed"));
-		console.error(err);
-	}
+	console.log();
+	console.log(
+		chalk.yellow(
+			"  ⚠ Migration from " + source + " is not yet implemented.",
+		),
+	);
+	console.log(
+		chalk.dim("  This feature is coming soon. File: " + inputPath),
+	);
+	console.log(
+		chalk.dim("  Track progress at https://github.com/signetai/signetai/issues"),
+	);
 }
 
 // ============================================================================
@@ -2379,7 +2381,7 @@ async function migrateSchema(options: { path?: string }) {
 
 	try {
 		// First detect schema in readonly mode
-		const db = Database(dbPath, { readonly: true });
+		const db = new Database(dbPath, { readonly: true });
 		const schemaInfo = detectSchema(db);
 		db.close();
 
@@ -2405,7 +2407,7 @@ async function migrateSchema(options: { path?: string }) {
 		}
 
 		// Open with write access and migrate
-		const writeDb = Database(dbPath);
+		const writeDb = new Database(dbPath);
 		const result = ensureUnifiedSchema(writeDb);
 
 		if (result.errors.length > 0) {
@@ -2487,7 +2489,7 @@ async function showStatus(options: { path?: string }) {
 
 	if (existing.memoryDb) {
 		try {
-			const db = Database(join(basePath, "memory", "memories.db"), {
+			const db = new Database(join(basePath, "memory", "memories.db"), {
 				readonly: true,
 			});
 
@@ -2548,7 +2550,7 @@ interface LogEntry {
 }
 
 function formatLogEntry(entry: LogEntry): string {
-	const levelColors: Record<string, string> = {
+	const levelColors: Record<string, (text: string) => string> = {
 		debug: chalk.gray,
 		info: chalk.cyan,
 		warn: chalk.yellow,
@@ -2612,32 +2614,51 @@ async function showLogs(options: {
 				console.log(chalk.dim("  No logs found"));
 			}
 
-			// Follow mode - stream logs
+			// Follow mode - stream logs using Node.js compatible fetch streaming
 			if (follow) {
 				console.log();
 				console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
 
-				const eventSource = new EventSource(
-					`http://localhost:${DEFAULT_PORT}/api/logs/stream`,
-				);
+				const streamUrl = `http://localhost:${DEFAULT_PORT}/api/logs/stream`;
+				const streamRes = await fetch(streamUrl, {
+					headers: { Accept: "text/event-stream", ...daemonAuthHeaders() },
+				});
 
-				eventSource.onmessage = (event) => {
+				if (!streamRes.ok || !streamRes.body) {
+					console.log(chalk.red("  Failed to open log stream"));
+				} else {
+					const reader = streamRes.body.getReader();
+					const decoder = new TextDecoder();
+					let buffer = "";
+
+					const processSSE = () => {
+						const lines = buffer.split("\n");
+						buffer = lines.pop() || "";
+						for (const line of lines) {
+							if (line.startsWith("data: ")) {
+								try {
+									const entry = JSON.parse(line.slice(6));
+									if (entry.type === "connected") continue;
+									console.log("  " + formatLogEntry(entry));
+								} catch {
+									// Ignore parse errors
+								}
+							}
+						}
+					};
+
 					try {
-						const entry = JSON.parse(event.data);
-						if (entry.type === "connected") return;
-						console.log("  " + formatLogEntry(entry));
+						while (true) {
+							const { done, value } = await reader.read();
+							if (done) break;
+							buffer += decoder.decode(value, { stream: true });
+							processSSE();
+						}
 					} catch {
-						// Ignore parse errors
+						// stream closed
 					}
-				};
-
-				eventSource.onerror = () => {
 					console.log(chalk.red("  Stream disconnected"));
-					eventSource.close();
-				};
-
-				// Keep process alive
-				await new Promise(() => {});
+				}
 			}
 		} catch (e) {
 			console.log(chalk.yellow("  Could not fetch logs from daemon"));
@@ -2922,11 +2943,12 @@ program
 			return;
 		}
 
-		// Parse existing config
-		const existingYaml = readFileSync(agentYamlPath, "utf-8");
+		// Helper to re-read YAML fresh from disk each time (avoids stale reads)
+		const readCurrentYaml = () => readFileSync(agentYamlPath, "utf-8");
 		// Simple YAML parsing for our known structure
 		const getYamlValue = (key: string, fallback: string) => {
-			const match = existingYaml.match(
+			const yaml = readCurrentYaml();
+			const match = yaml.match(
 				new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"),
 			);
 			return match ? match[1].trim().replace(/^["']|["']$/g, "") : fallback;
@@ -2953,9 +2975,10 @@ program
 			console.log();
 
 			if (section === "view") {
+				const currentYaml = readCurrentYaml();
 				console.log(chalk.dim("  Current agent.yaml:\n"));
 				console.log(
-					existingYaml
+					currentYaml
 						.split("\n")
 						.map((l) => chalk.dim("  " + l))
 						.join("\n"),
@@ -2974,8 +2997,8 @@ program
 					default: getYamlValue("description", "Personal AI assistant"),
 				});
 
-				// Update the YAML
-				let updatedYaml = existingYaml;
+				// Re-read YAML fresh before editing to avoid stale overwrites
+				let updatedYaml = readCurrentYaml();
 				updatedYaml = updatedYaml.replace(/^(\s*name:)\s*.+$/m, `$1 "${name}"`);
 				updatedYaml = updatedYaml.replace(
 					/^(\s*description:)\s*.+$/m,
@@ -3002,10 +3025,10 @@ program
 					],
 				});
 
-				// Update harnesses in YAML
+				// Update harnesses in YAML (re-read fresh; handle empty list)
 				const harnessYaml = harnesses.map((h) => `  - ${h}`).join("\n");
-				let updatedYaml = existingYaml.replace(
-					/^harnesses:\n(  - .+\n)+/m,
+				let updatedYaml = readCurrentYaml().replace(
+					/^harnesses:\n(  - .+\n)*/m,
 					`harnesses:\n${harnessYaml}\n`,
 				);
 
@@ -3077,9 +3100,9 @@ program
 						dimensions = m === "text-embedding-3-large" ? 3072 : 1536;
 					}
 
-					// Update embedding section
-					let updatedYaml = existingYaml;
-					if (existingYaml.includes("embedding:")) {
+					// Update embedding section (re-read fresh)
+					let updatedYaml = readCurrentYaml();
+					if (updatedYaml.includes("embedding:")) {
 						updatedYaml = updatedYaml.replace(
 							/^embedding:\n(  .+\n)+/m,
 							`embedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
@@ -3118,7 +3141,7 @@ program
 					default: getYamlValue("min_score", "0.3"),
 				});
 
-				let updatedYaml = existingYaml;
+				let updatedYaml = readCurrentYaml();
 				updatedYaml = updatedYaml.replace(/^(\s*alpha:)\s*.+$/m, `$1 ${alpha}`);
 				updatedYaml = updatedYaml.replace(/^(\s*top_k:)\s*.+$/m, `$1 ${topK}`);
 				updatedYaml = updatedYaml.replace(
@@ -3141,7 +3164,7 @@ program
 					default: getYamlValue("decay_rate", "0.95"),
 				});
 
-				let updatedYaml = existingYaml;
+				let updatedYaml = readCurrentYaml();
 				updatedYaml = updatedYaml.replace(
 					/^(\s*session_budget:)\s*.+$/m,
 					`$1 ${sessionBudget}`,
@@ -3372,11 +3395,12 @@ async function fetchFromDaemon<T>(
 ): Promise<T | null> {
 	const { timeout: timeoutMs, ...fetchOpts } = opts || {};
 	try {
-		// Inject local auth token into all daemon requests
+		// Inject local auth token and Content-Type into all daemon requests
 		const authHeaders = daemonAuthHeaders();
-		const headers = {
+		const headers: Record<string, string> = {
 			...authHeaders,
-			...(fetchOpts.headers || {}),
+			...(fetchOpts.body ? { "Content-Type": "application/json" } : {}),
+			...((fetchOpts.headers as Record<string, string>) || {}),
 		};
 		const res = await fetch(`http://localhost:${DEFAULT_PORT}${path}`, {
 			signal: AbortSignal.timeout(timeoutMs || 5000),
@@ -3904,7 +3928,7 @@ program
 					);
 					process.exit(1);
 				}
-				db = Database(dbPath);
+				db = new Database(dbPath);
 				try {
 					loadSqliteVec(db as unknown as Parameters<typeof loadSqliteVec>[0]);
 				} catch {
@@ -5620,7 +5644,7 @@ async function detectVectorSources(
 	const dbPath = join(memoryDir, "memories.db");
 	if (existsSync(dbPath)) {
 		try {
-			const db = Database(dbPath, { readonly: true });
+			const db = new Database(dbPath, { readonly: true });
 
 			// Check if embeddings table exists with BLOB vectors
 			const tableCheck = db
@@ -6317,7 +6341,7 @@ program
 		const spinner = ora("Migrating vectors...").start();
 
 		try {
-			const db = Database(dbPath);
+			const db = new Database(dbPath);
 
 			// Load sqlite-vec extension BEFORE creating virtual table
 			if (!loadSqliteVec(db)) {
@@ -7133,10 +7157,14 @@ chainCmd
 	});
 
 // ============================================================================
-// Export/Import Commands (Phase 4B)
+// Bundle Export/Import Commands (Phase 4B — signed bundles)
 // ============================================================================
 
-program
+const bundleCmd = program
+	.command("bundle")
+	.description("Signed bundle export/import (Phase 4B)");
+
+bundleCmd
 	.command("export")
 	.description("Export agent data as a portable signed bundle")
 	.option("--output <path>", "Output file path")
@@ -7198,7 +7226,7 @@ program
 		}
 	});
 
-program
+bundleCmd
 	.command("import")
 	.description("Import an agent bundle")
 	.argument("<bundle-path>", "Path to .signet-bundle.json.gz file")

@@ -13,6 +13,7 @@ pub fn run() {
             commands::get_daemon_pid,
             commands::open_dashboard,
             commands::update_tray,
+            commands::read_auth_token,
             commands::quick_capture,
             commands::search_memories,
             commands::quit_capture_window,
