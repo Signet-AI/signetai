@@ -175,6 +175,9 @@ export {
 	type PackageManagerCommand,
 } from "./package-manager";
 
+// Document ingestion
+export { ingestPath } from "./ingest/index";
+
 // Connector runtime types
 export {
 	CONNECTOR_PROVIDERS,
