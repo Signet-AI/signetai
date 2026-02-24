@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Signet Perception</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1a1a2e; }
+    ::-webkit-scrollbar-thumb { background: #3a3a5e; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4a4a6e; }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, #1e1e3a 0%, #2a2a4e 100%);
+      border-bottom: 1px solid #3a3a5e;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #f0f0ff;
+    }
+    .header .subtitle {
+      font-size: 12px;
+      color: #808090;
+    }
+
+    /* Status badge */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .status-badge.running {
+      background: rgba(34, 197, 94, 0.15);
+      color: #22c55e;
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+    .status-badge.stopped {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .status-badge.paused {
+      background: rgba(234, 179, 8, 0.15);
+      color: #eab308;
+      border: 1px solid rgba(234, 179, 8, 0.3);
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 2s infinite;
+    }
+    .status-badge.stopped .status-dot,
+    .status-badge.paused .status-dot {
+      animation: none;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Content */
+    .content {
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Stats bar */
+    .stats-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .stat-card {
+      background: #2a2a3e;
+      border: 1px solid #3a3a5e;
+      border-radius: 10px;
+      padding: 14px 16px;
+      text-align: center;
+    }
+    .stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #f0f0ff;
+      line-height: 1.2;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: #808090;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 4px;
+    }
+
+    /* Section */
+    .section {
+      background: #2a2a3e;
+      border: 1px solid #3a3a5e;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .section-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid #3a3a5e;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #a0a0c0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .section-body {
+      padding: 16px;
+    }
+
+    /* Channel toggles */
+    .channels-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .channel-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: #1e1e32;
+      border: 1px solid #3a3a5e;
+      border-radius: 8px;
+      transition: border-color 0.15s;
+    }
+    .channel-card:hover {
+      border-color: #6366f1;
+    }
+    .channel-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .channel-icon {
+      font-size: 18px;
+      width: 28px;
+      text-align: center;
+    }
+    .channel-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: #d0d0e0;
+    }
+    .channel-count {
+      font-size: 11px;
+      color: #808090;
+    }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      cursor: pointer;
+    }
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #3a3a5e;
+      border-radius: 11px;
+      transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: "";
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      left: 3px;
+      bottom: 3px;
+      background: #808090;
+      border-radius: 50%;
+      transition: transform 0.2s, background 0.2s;
+    }
+    .toggle input:checked + .toggle-slider {
+      background: #6366f1;
+    }
+    .toggle input:checked + .toggle-slider::before {
+      transform: translateX(18px);
+      background: #ffffff;
+    }
+
+    /* Recent captures list */
+    .captures-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+    .capture-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      background: #1e1e32;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .capture-app {
+      color: #6366f1;
+      font-weight: 500;
+      min-width: 100px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .capture-window {
+      flex: 1;
+      color: #c0c0d0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .capture-time {
+      color: #606080;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    /* Two-column layout */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    /* Skills list */
+    .skills-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .skill-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .skill-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+    .skill-name {
+      color: #d0d0e0;
+      font-weight: 500;
+    }
+    .skill-level {
+      color: #808090;
+      font-size: 11px;
+    }
+    .skill-bar {
+      height: 6px;
+      background: #1e1e32;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .skill-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: linear-gradient(90deg, #6366f1, #818cf8);
+      transition: width 0.5s ease;
+    }
+
+    /* Context card */
+    .context-content {
+      font-size: 14px;
+      line-height: 1.6;
+      color: #c0c0d0;
+    }
+    .context-content .label {
+      font-size: 11px;
+      color: #808090;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .context-content .value {
+      color: #f0f0ff;
+      font-weight: 500;
+    }
+    .context-row {
+      margin-bottom: 12px;
+    }
+
+    /* Cognitive profile cards */
+    .profile-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .profile-card {
+      background: #1e1e32;
+      border: 1px solid #3a3a5e;
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .profile-trait {
+      font-size: 12px;
+      color: #808090;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .profile-value {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f0f0ff;
+    }
+
+    /* Quick actions */
+    .actions-bar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: #6366f1;
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) { background: #5558e6; }
+    .btn-secondary {
+      background: #3a3a5e;
+      color: #c0c0d0;
+    }
+    .btn-secondary:hover:not(:disabled) { background: #4a4a6e; }
+    .btn-warning {
+      background: rgba(234, 179, 8, 0.2);
+      color: #eab308;
+      border: 1px solid rgba(234, 179, 8, 0.3);
+    }
+    .btn-warning:hover:not(:disabled) { background: rgba(234, 179, 8, 0.3); }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.3); }
+
+    /* Empty / loading state */
+    .empty-state {
+      text-align: center;
+      color: #606080;
+      padding: 24px 0;
+      font-size: 13px;
+    }
+    .loading-spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #3a3a5e;
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Toast notification */
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(60px);
+      background: #6366f1;
+      color: white;
+      padding: 8px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      z-index: 100;
+    }
+    .toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* Refresh indicator */
+    .refresh-hint {
+      font-size: 11px;
+      color: #606080;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <div>
+        <h1>👁 Signet Perception</h1>
+        <div class="subtitle" id="uptimeLabel">Connecting...</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <span class="refresh-hint" id="refreshHint"></span>
+      <div class="status-badge stopped" id="statusBadge">
+        <span class="status-dot"></span>
+        <span id="statusText">Stopped</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="content">
+    <!-- Stats bar -->
+    <div class="stats-bar">
+      <div class="stat-card">
+        <div class="stat-value" id="statCaptures">--</div>
+        <div class="stat-label">Captures Today</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statMemories">--</div>
+        <div class="stat-label">Memories Extracted</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statSkills">--</div>
+        <div class="stat-label">Skills Detected</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statChannels">--</div>
+        <div class="stat-label">Active Channels</div>
+      </div>
+    </div>
+
+    <!-- Active Channels -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">Active Channels</span>
+      </div>
+      <div class="section-body">
+        <div class="channels-grid">
+          <div class="channel-card">
+            <div class="channel-info">
+              <span class="channel-icon">🖥</span>
+              <div>
+                <div class="channel-name">Screen Capture</div>
+                <div class="channel-count" id="chScreenCount">0 captures</div>
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="chScreen" data-channel="screen" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="channel-card">
+            <div class="channel-info">
+              <span class="channel-icon">📁</span>
+              <div>
+                <div class="channel-name">File Watching</div>
+                <div class="channel-count" id="chFilesCount">0 events</div>
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="chFiles" data-channel="files" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="channel-card">
+            <div class="channel-info">
+              <span class="channel-icon">⌨️</span>
+              <div>
+                <div class="channel-name">Terminal</div>
+                <div class="channel-count" id="chTerminalCount">0 commands</div>
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="chTerminal" data-channel="terminal" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="channel-card">
+            <div class="channel-info">
+              <span class="channel-icon">🎤</span>
+              <div>
+                <div class="channel-name">Voice</div>
+                <div class="channel-count" id="chVoiceCount">0 segments</div>
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="chVoice" data-channel="voice" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Two-column: Recent Captures + Skills -->
+    <div class="two-col">
+      <!-- Recent Captures -->
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Recent Captures</span>
+        </div>
+        <div class="section-body">
+          <div class="captures-list" id="capturesList">
+            <div class="empty-state">No captures yet</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Skills Detected -->
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Skills Detected</span>
+        </div>
+        <div class="section-body">
+          <div class="skills-list" id="skillsList">
+            <div class="empty-state">No skills detected yet</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Two-column: Current Context + Cognitive Profile -->
+    <div class="two-col">
+      <!-- Current Context -->
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Current Context</span>
+        </div>
+        <div class="section-body">
+          <div class="context-content" id="contextContent">
+            <div class="empty-state">Waiting for perception data...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cognitive Profile -->
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Cognitive Profile</span>
+        </div>
+        <div class="section-body">
+          <div class="profile-grid" id="profileGrid">
+            <div class="empty-state" style="grid-column:1/-1">No profile data yet</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="section">
+      <div class="section-header">
+        <span class="section-title">Quick Actions</span>
+      </div>
+      <div class="section-body">
+        <div class="actions-bar">
+          <button class="btn-primary" id="btnStartStop">▶ Start Perception</button>
+          <button class="btn-warning" id="btnPauseResume">⏸ Pause (Meeting Mode)</button>
+          <button class="btn-secondary" id="btnRefresh">↻ Refresh Now</button>
+          <button class="btn-secondary" id="btnExportProfile">📤 Export Profile</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">Action completed</div>
+
+  <script>
+    // Tauri invoke helper
+    function invoke(cmd, args) {
+      return window.__TAURI_INTERNALS__.invoke(cmd, args);
+    }
+
+    // -----------------------------------------------------------------------
+    // State
+    // -----------------------------------------------------------------------
+    let perceptionRunning = false;
+    let perceptionPaused = false;
+    let refreshTimer = null;
+    const REFRESH_INTERVAL = 30_000; // 30 seconds
+
+    // DOM refs
+    const statusBadge   = document.getElementById("statusBadge");
+    const statusText    = document.getElementById("statusText");
+    const uptimeLabel   = document.getElementById("uptimeLabel");
+    const refreshHint   = document.getElementById("refreshHint");
+    const statCaptures  = document.getElementById("statCaptures");
+    const statMemories  = document.getElementById("statMemories");
+    const statSkills    = document.getElementById("statSkills");
+    const statChannels  = document.getElementById("statChannels");
+    const capturesList  = document.getElementById("capturesList");
+    const skillsList    = document.getElementById("skillsList");
+    const contextContent = document.getElementById("contextContent");
+    const profileGrid   = document.getElementById("profileGrid");
+    const btnStartStop  = document.getElementById("btnStartStop");
+    const btnPauseResume = document.getElementById("btnPauseResume");
+    const btnRefresh    = document.getElementById("btnRefresh");
+    const btnExportProfile = document.getElementById("btnExportProfile");
+    const toastEl       = document.getElementById("toast");
+
+    // Channel toggles
+    const channelToggles = document.querySelectorAll(".toggle input[data-channel]");
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+    function showToast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add("visible");
+      setTimeout(() => toastEl.classList.remove("visible"), 2000);
+    }
+
+    function escapeHtml(s) {
+      return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function timeAgo(iso) {
+      if (!iso) return "";
+      const ts = new Date(iso).getTime();
+      const now = Date.now();
+      const secs = Math.floor((now - ts) / 1000);
+      if (secs < 60) return "just now";
+      if (secs < 3600) return Math.floor(secs / 60) + "m ago";
+      if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
+      return Math.floor(secs / 86400) + "d ago";
+    }
+
+    function formatUptime(iso) {
+      if (!iso) return "";
+      const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (secs < 60) return secs + "s";
+      if (secs < 3600) return Math.floor(secs / 60) + "m " + (secs % 60) + "s";
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      return h + "h " + m + "m";
+    }
+
+    // -----------------------------------------------------------------------
+    // Fetch & Render
+    // -----------------------------------------------------------------------
+    async function fetchStatus() {
+      try {
+        const raw = await invoke("perception_status");
+        const data = JSON.parse(raw);
+        renderStatus(data);
+      } catch (err) {
+        // Daemon may not have perception endpoints yet — show as stopped
+        renderOffline();
+      }
+    }
+
+    function renderOffline() {
+      statusBadge.className = "status-badge stopped";
+      statusText.textContent = "Stopped";
+      uptimeLabel.textContent = "Perception not running";
+      perceptionRunning = false;
+      perceptionPaused = false;
+      updateButtons();
+    }
+
+    function renderStatus(data) {
+      perceptionRunning = data.running === true;
+      perceptionPaused = data.paused === true;
+
+      // Status badge
+      if (perceptionPaused) {
+        statusBadge.className = "status-badge paused";
+        statusText.textContent = "Paused";
+      } else if (perceptionRunning) {
+        statusBadge.className = "status-badge running";
+        statusText.textContent = "Running";
+      } else {
+        statusBadge.className = "status-badge stopped";
+        statusText.textContent = "Stopped";
+      }
+
+      // Uptime
+      if (data.startedAt) {
+        uptimeLabel.textContent = "Uptime: " + formatUptime(data.startedAt);
+      } else {
+        uptimeLabel.textContent = perceptionRunning ? "Running" : "Perception not running";
+      }
+
+      // Stats
+      const adapters = data.adapters || {};
+      let totalCaptures = 0;
+      let activeCount = 0;
+
+      for (const [key, info] of Object.entries(adapters)) {
+        totalCaptures += (info.captureCount || 0);
+        if (info.enabled) activeCount++;
+      }
+
+      statCaptures.textContent = totalCaptures.toLocaleString();
+      statMemories.textContent = (data.memoriesExtractedToday || 0).toLocaleString();
+      statChannels.textContent = activeCount;
+
+      // Channel toggles and counts
+      setChannelState("screen", adapters.screen);
+      setChannelState("files", adapters.files);
+      setChannelState("terminal", adapters.terminal);
+      setChannelState("voice", adapters.voice);
+
+      // Recent captures
+      if (data.recentCaptures && data.recentCaptures.length > 0) {
+        capturesList.innerHTML = "";
+        for (const cap of data.recentCaptures.slice(0, 10)) {
+          const row = document.createElement("div");
+          row.className = "capture-row";
+          row.innerHTML =
+            '<span class="capture-app">' + escapeHtml(cap.focusedApp || cap.app || "Unknown") + '</span>' +
+            '<span class="capture-window">' + escapeHtml(cap.focusedWindow || cap.window || cap.title || "") + '</span>' +
+            '<span class="capture-time">' + timeAgo(cap.timestamp) + '</span>';
+          capturesList.appendChild(row);
+        }
+      } else {
+        capturesList.innerHTML = '<div class="empty-state">No captures yet</div>';
+      }
+
+      updateButtons();
+    }
+
+    function setChannelState(name, info) {
+      const toggle = document.getElementById("ch" + name.charAt(0).toUpperCase() + name.slice(1));
+      const countEl = document.getElementById("ch" + name.charAt(0).toUpperCase() + name.slice(1) + "Count");
+      if (!toggle || !countEl) return;
+
+      if (info) {
+        toggle.checked = info.enabled === true;
+        const count = info.captureCount || 0;
+        const unit = name === "files" ? "events" : name === "terminal" ? "commands" : name === "voice" ? "segments" : "captures";
+        countEl.textContent = count.toLocaleString() + " " + unit;
+      } else {
+        toggle.checked = false;
+        countEl.textContent = "0";
+      }
+    }
+
+    async function fetchProfile() {
+      try {
+        const raw = await invoke("get_cognitive_profile");
+        const data = JSON.parse(raw);
+        renderProfile(data);
+      } catch {
+        // Profile not available yet
+      }
+    }
+
+    function renderProfile(data) {
+      // Skills
+      const skills = data.skills || data.expertise || [];
+      if (skills.length > 0) {
+        statSkills.textContent = skills.length;
+        skillsList.innerHTML = "";
+        for (const skill of skills.slice(0, 8)) {
+          const name = skill.name || skill.skill || "Unknown";
+          const level = skill.proficiency || skill.level || skill.score || 0;
+          const pct = Math.round(level * 100);
+          const row = document.createElement("div");
+          row.className = "skill-row";
+          row.innerHTML =
+            '<div class="skill-header">' +
+              '<span class="skill-name">' + escapeHtml(name) + '</span>' +
+              '<span class="skill-level">' + pct + '%</span>' +
+            '</div>' +
+            '<div class="skill-bar"><div class="skill-fill" style="width:' + pct + '%"></div></div>';
+          skillsList.appendChild(row);
+        }
+      }
+
+      // Context
+      if (data.currentContext || data.context) {
+        const ctx = data.currentContext || data.context;
+        let html = "";
+        if (ctx.activity || ctx.currentActivity) {
+          html += '<div class="context-row"><div class="label">Current Activity</div><div class="value">' + escapeHtml(ctx.activity || ctx.currentActivity) + '</div></div>';
+        }
+        if (ctx.project) {
+          html += '<div class="context-row"><div class="label">Project</div><div class="value">' + escapeHtml(ctx.project) + '</div></div>';
+        }
+        if (ctx.languages && ctx.languages.length) {
+          html += '<div class="context-row"><div class="label">Languages</div><div class="value">' + escapeHtml(ctx.languages.join(", ")) + '</div></div>';
+        }
+        if (ctx.tools && ctx.tools.length) {
+          html += '<div class="context-row"><div class="label">Tools</div><div class="value">' + escapeHtml(ctx.tools.join(", ")) + '</div></div>';
+        }
+        if (html) {
+          contextContent.innerHTML = html;
+        }
+      }
+
+      // Cognitive traits
+      const traits = data.traits || data.cognitiveTraits || [];
+      if (traits.length > 0) {
+        profileGrid.innerHTML = "";
+        for (const t of traits.slice(0, 6)) {
+          const card = document.createElement("div");
+          card.className = "profile-card";
+          card.innerHTML =
+            '<div class="profile-trait">' + escapeHtml(t.name || t.trait || "") + '</div>' +
+            '<div class="profile-value">' + escapeHtml(String(t.value || t.score || "--")) + '</div>';
+          profileGrid.appendChild(card);
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Actions
+    // -----------------------------------------------------------------------
+    function updateButtons() {
+      if (perceptionRunning) {
+        btnStartStop.textContent = "⏹ Stop Perception";
+        btnStartStop.className = "btn-danger";
+        btnPauseResume.disabled = false;
+        if (perceptionPaused) {
+          btnPauseResume.textContent = "▶ Resume";
+          btnPauseResume.className = "btn-primary";
+        } else {
+          btnPauseResume.textContent = "⏸ Pause (Meeting Mode)";
+          btnPauseResume.className = "btn-warning";
+        }
+      } else {
+        btnStartStop.textContent = "▶ Start Perception";
+        btnStartStop.className = "btn-primary";
+        btnPauseResume.disabled = true;
+        btnPauseResume.textContent = "⏸ Pause (Meeting Mode)";
+        btnPauseResume.className = "btn-warning";
+      }
+    }
+
+    btnStartStop.addEventListener("click", async () => {
+      btnStartStop.disabled = true;
+      try {
+        if (perceptionRunning) {
+          await invoke("perception_stop");
+          showToast("Perception stopped");
+        } else {
+          // Start with default channels based on current toggles
+          const channels = [];
+          channelToggles.forEach((t) => {
+            if (t.checked) channels.push(t.dataset.channel);
+          });
+          // If nothing checked, start with defaults
+          if (channels.length === 0) channels.push("screen", "files", "terminal");
+          await invoke("perception_start", { channels });
+          showToast("Perception started");
+        }
+        await fetchStatus();
+      } catch (err) {
+        showToast("Error: " + (err || "unknown"));
+      } finally {
+        btnStartStop.disabled = false;
+      }
+    });
+
+    btnPauseResume.addEventListener("click", async () => {
+      btnPauseResume.disabled = true;
+      try {
+        if (perceptionPaused) {
+          await invoke("perception_resume");
+          showToast("Perception resumed");
+        } else {
+          await invoke("perception_pause");
+          showToast("Meeting mode — all perception paused");
+        }
+        await fetchStatus();
+      } catch (err) {
+        showToast("Error: " + (err || "unknown"));
+      } finally {
+        btnPauseResume.disabled = false;
+      }
+    });
+
+    btnRefresh.addEventListener("click", async () => {
+      btnRefresh.disabled = true;
+      btnRefresh.textContent = "↻ Refreshing...";
+      await refreshAll();
+      btnRefresh.textContent = "↻ Refresh Now";
+      btnRefresh.disabled = false;
+      showToast("Refreshed");
+    });
+
+    btnExportProfile.addEventListener("click", async () => {
+      try {
+        const raw = await invoke("get_cognitive_profile");
+        // Copy to clipboard as a simple export
+        await navigator.clipboard.writeText(raw);
+        showToast("Profile JSON copied to clipboard");
+      } catch (err) {
+        showToast("Error: " + (err || "unknown"));
+      }
+    });
+
+    // Channel toggle handlers
+    channelToggles.forEach((toggle) => {
+      toggle.addEventListener("change", async (e) => {
+        const channel = e.target.dataset.channel;
+        const enabled = e.target.checked;
+        try {
+          await invoke("perception_toggle_channel", { channel, enabled });
+          showToast(channel + " " + (enabled ? "enabled" : "disabled"));
+        } catch (err) {
+          // Revert toggle on error
+          e.target.checked = !enabled;
+          showToast("Error toggling " + channel);
+        }
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // Auto-refresh loop
+    // -----------------------------------------------------------------------
+    async function refreshAll() {
+      await Promise.all([fetchStatus(), fetchProfile()]);
+      refreshHint.textContent = "Updated " + new Date().toLocaleTimeString();
+    }
+
+    function startAutoRefresh() {
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(refreshAll, REFRESH_INTERVAL);
+    }
+
+    // Initial load
+    refreshAll();
+    startAutoRefresh();
+  </script>
+</body>
+</html>

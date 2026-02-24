@@ -234,15 +234,18 @@ export class Database {
 		// Load sqlite-vec extension for vector search capabilities
 		this.vecEnabled = loadSqliteVec(this.db);
 
-		// Enable WAL mode (skip for readonly)
-		if (!this.options?.readonly) {
-			if (isBun) {
+		// Enable WAL mode and foreign keys (skip WAL for readonly)
+		if (isBun) {
+			if (!this.options?.readonly) {
 				this.getDb().exec("PRAGMA journal_mode = WAL");
-			} else {
-				(this.getDb() as { pragma(s: string): void }).pragma(
-					"journal_mode = WAL",
-				);
 			}
+			this.getDb().exec("PRAGMA foreign_keys = ON");
+		} else {
+			const pragmaDb = this.getDb() as { pragma(s: string): void };
+			if (!this.options?.readonly) {
+				pragmaDb.pragma("journal_mode = WAL");
+			}
+			pragmaDb.pragma("foreign_keys = ON");
 		}
 
 		// Run migrations
@@ -292,15 +295,19 @@ export class Database {
 		return id;
 	}
 
-	getMemories(type?: string): Memory[] {
-		let query = "SELECT * FROM memories";
-		if (type) query += " WHERE type = ?";
-		query += " ORDER BY created_at DESC";
+	getMemories(type?: string, limit = 1000): Memory[] {
+		const conditions = ["COALESCE(is_deleted, 0) = 0"];
+		const params: unknown[] = [];
 
-		const rows = type
-			? this.getDb().prepare(query).all(type)
-			: this.getDb().prepare(query).all();
+		if (type) {
+			conditions.push("type = ?");
+			params.push(type);
+		}
 
+		const query = `SELECT * FROM memories WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ?`;
+		params.push(limit);
+
+		const rows = this.getDb().prepare(query).all(...params);
 		return rows.map(rowToMemory);
 	}
 
@@ -316,6 +323,7 @@ export class Database {
 		const sets: string[] = [];
 		const values: unknown[] = [];
 
+		// SECURITY: col values are hardcoded — never derive from user input.
 		const fieldMap: Record<string, string> = {
 			type: "type",
 			category: "category",
@@ -329,6 +337,13 @@ export class Database {
 			embeddingModel: "embedding_model",
 			extractionModel: "extraction_model",
 			who: "who",
+			signature: "signature",
+			signerDid: "signer_did",
+			strength: "strength",
+			lastRehearsed: "last_rehearsed",
+			rehearsalCount: "rehearsal_count",
+			sourceId: "source_id",
+			sourceType: "source_type",
 		};
 
 		for (const [key, col] of Object.entries(fieldMap)) {
@@ -566,10 +581,25 @@ export class Database {
 		return count !== undefined ? (count.n as number) : 0;
 	}
 
+	/** Get the underlying SQLite database for direct queries. */
+	getRawDb(): SQLiteDatabase {
+		return this.getDb();
+	}
+
 	close(): void {
 		if (this.db) {
 			this.db.close();
 		}
+	}
+}
+
+// -- Helpers --
+
+function safeJsonParse<T>(json: string, fallback: T): T {
+	try {
+		return JSON.parse(json) as T;
+	} catch {
+		return fallback;
 	}
 }
 
@@ -584,11 +614,11 @@ function rowToMemory(row: Record<string, unknown>): Memory {
 		confidence: row.confidence as number,
 		sourceId: row.source_id as string | undefined,
 		sourceType: row.source_type as string | undefined,
-		tags: JSON.parse((row.tags as string) || "[]"),
+		tags: safeJsonParse((row.tags as string) || "[]", []),
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,
 		updatedBy: row.updated_by as string,
-		vectorClock: JSON.parse((row.vector_clock as string) || "{}"),
+		vectorClock: safeJsonParse((row.vector_clock as string) || "{}", {}),
 		version: row.version as number,
 		manualOverride: Boolean(row.manual_override),
 		// v2 optional fields
@@ -607,6 +637,10 @@ function rowToMemory(row: Record<string, unknown>): Memory {
 		accessCount: row.access_count as number | undefined,
 		lastAccessed: row.last_accessed as string | undefined,
 		who: row.who as string | undefined,
+		// Temporal memory fields (migration 013)
+		strength: row.strength as number | undefined,
+		lastRehearsed: row.last_rehearsed as string | undefined,
+		rehearsalCount: row.rehearsal_count as number | undefined,
 	};
 }
 

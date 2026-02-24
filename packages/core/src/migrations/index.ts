@@ -17,7 +17,16 @@ import { up as embeddingsUniqueHash } from "./008-embeddings-unique-hash";
 import { up as summaryJobs } from "./009-summary-jobs";
 import { up as umapCache } from "./010-umap-cache";
 import { up as sessionScores } from "./011-session-scores";
-import { up as scheduledTasks } from "./012-scheduled-tasks";
+import { up as memorySigning } from "./012-memory-signing";
+import { up as temporalMemory } from "./013-temporal-memory";
+import { up as ingestionTracking } from "./014-ingestion-tracking";
+import { up as decisionsAndContradictions } from "./015-decisions-and-contradictions";
+import { up as sessionMetrics } from "./016-session-metrics";
+import { up as perceptionTables } from "./017-perception-tables";
+import { up as onchainIdentity } from "./018-onchain-identity";
+import { up as sessionKeysAndExport } from "./019-session-keys-and-export";
+import { up as federation } from "./020-federation";
+import { up as scheduledTasks } from "./021-scheduled-tasks";
 
 // -- Public interface consumed by Database.init() --
 
@@ -75,6 +84,51 @@ export const MIGRATIONS: readonly Migration[] = [
 	},
 	{
 		version: 12,
+		name: "memory-signing",
+		up: memorySigning,
+	},
+	{
+		version: 13,
+		name: "temporal-memory",
+		up: temporalMemory,
+	},
+	{
+		version: 14,
+		name: "ingestion-tracking",
+		up: ingestionTracking,
+	},
+	{
+		version: 15,
+		name: "decisions-and-contradictions",
+		up: decisionsAndContradictions,
+	},
+	{
+		version: 16,
+		name: "session-metrics",
+		up: sessionMetrics,
+	},
+	{
+		version: 17,
+		name: "perception-tables",
+		up: perceptionTables,
+	},
+	{
+		version: 18,
+		name: "onchain-identity",
+		up: onchainIdentity,
+	},
+	{
+		version: 19,
+		name: "session-keys-and-export",
+		up: sessionKeysAndExport,
+	},
+	{
+		version: 20,
+		name: "federation",
+		up: federation,
+	},
+	{
+		version: 21,
 		name: "scheduled-tasks",
 		up: scheduledTasks,
 	},

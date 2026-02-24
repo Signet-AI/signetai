@@ -33,7 +33,8 @@ describe("migration framework", () => {
 				"SELECT version, applied_at FROM schema_migrations ORDER BY version",
 			)
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(migrations.length).toBe(12);
+
+		expect(migrations.length).toBe(21);
 		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
@@ -46,6 +47,15 @@ describe("migration framework", () => {
 		expect(migrations[9].version).toBe(10);
 		expect(migrations[10].version).toBe(11);
 		expect(migrations[11].version).toBe(12);
+		expect(migrations[12].version).toBe(13);
+		expect(migrations[13].version).toBe(14);
+		expect(migrations[14].version).toBe(15);
+		expect(migrations[15].version).toBe(16);
+		expect(migrations[16].version).toBe(17);
+		expect(migrations[17].version).toBe(18);
+		expect(migrations[18].version).toBe(19);
+		expect(migrations[19].version).toBe(20);
+		expect(migrations[20].version).toBe(21);
 	});
 
 	test("re-running migrations is idempotent", () => {
@@ -99,9 +109,18 @@ describe("migration framework", () => {
 		// v11 tables
 		expect(tableNames).toContain("session_scores");
 
+
+		// v15 tables
+		expect(tableNames).toContain("decisions");
+		expect(tableNames).toContain("contradictions");
+
+		// v16 tables
+		expect(tableNames).toContain("session_metrics");
+
 		// v12 tables
 		expect(tableNames).toContain("scheduled_tasks");
 		expect(tableNames).toContain("task_runs");
+
 	});
 
 	test("memories table has expected v2 columns", () => {
@@ -149,7 +168,9 @@ describe("migration framework", () => {
 		const audits = db
 			.query("SELECT version, applied_at FROM schema_migrations_audit")
 			.all() as Array<{ version: number; applied_at: string }>;
-		expect(audits.length).toBe(12);
+
+		expect(audits.length).toBe(21);
+
 		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}
@@ -351,7 +372,9 @@ describe("migration framework", () => {
 		const migrations = db
 			.query("SELECT version FROM schema_migrations ORDER BY version")
 			.all() as Array<{ version: number }>;
-		expect(migrations.length).toBe(12);
+
+		expect(migrations.length).toBe(21);
+
 	});
 
 	test("version 1 stamped by old inline migrate upgrades cleanly", () => {
@@ -394,7 +417,9 @@ describe("migration framework", () => {
 		const migrations = db
 			.query("SELECT version FROM schema_migrations ORDER BY version")
 			.all() as Array<{ version: number }>;
-		expect(migrations.length).toBe(12);
+
+		expect(migrations.length).toBe(21);
+
 	});
 
 	test("DB with existing v1 schema only gets v2 migration", () => {

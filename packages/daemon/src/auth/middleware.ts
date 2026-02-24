@@ -24,11 +24,64 @@ function extractBearerToken(header: string | undefined): string | null {
 	return parts[1] ?? null;
 }
 
-// Known limitation: checks Host header, not connection peer address.
-// Spoofable by remote clients in theory, but daemon typically binds to
-// localhost anyway. Hono doesn't expose peer IP portably. Acceptable
-// for v1; revisit if daemon gets exposed to untrusted networks.
+/** Endpoints that are always public (health checks). */
+function isPublicEndpoint(c: Context): boolean {
+	const method = c.req.method;
+	const path = c.req.path;
+	if (method !== "GET") return false;
+	return path === "/health" || path === "/api/status";
+}
+
+/** Extract the local auth token from headers or query param (for EventSource). */
+function extractLocalToken(c: Context): string | null {
+	// Check X-Local-Token header first
+	const localHeader = c.req.header("x-local-token");
+	if (localHeader) return localHeader.trim();
+	// Fall back to Authorization: Bearer
+	const bearer = extractBearerToken(c.req.header("authorization"));
+	if (bearer) return bearer;
+	// Fall back to ?token= query param (for EventSource which can't set headers)
+	const queryToken = c.req.query("token");
+	if (queryToken) return queryToken.trim();
+	return null;
+}
+
+/**
+ * Check if request originates from localhost using the actual connection
+ * peer address (not the spoofable Host header).
+ *
+ * Hono exposes the raw Request via c.req.raw, and Bun's server attaches
+ * the remote address to the request's socket info. We also check the
+ * X-Forwarded-For header as a fallback (only trusted when the daemon
+ * binds to localhost, which prevents external clients from setting it).
+ */
 function isLocalhost(c: Context): boolean {
+	// Method 1: Bun exposes requestIP on the server object via c.env
+	const env = c.env as Record<string, unknown> | undefined;
+	if (env && typeof env === "object") {
+		// Bun's Hono adapter passes { ip } in env for Bun.serve
+		const connInfo = env as { ip?: string; remoteAddr?: string };
+		const peerIp = connInfo.ip ?? connInfo.remoteAddr;
+		if (peerIp) {
+			return (
+				peerIp === "127.0.0.1" ||
+				peerIp === "::1" ||
+				peerIp === "::ffff:127.0.0.1" ||
+				peerIp === "localhost"
+			);
+		}
+	}
+
+	// Method 2: Check the raw request for Bun's .address property
+	const raw = c.req.raw as Record<string, unknown>;
+	if (raw && typeof raw.address === "string") {
+		const addr = raw.address;
+		return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+	}
+
+	// Method 3: Fallback to Host header (only safe when daemon binds to localhost).
+	// This is the weakest check — a remote attacker can spoof the Host header.
+	// Since we bind to localhost by default, this is acceptable as a last resort.
 	const host = c.req.header("host") ?? "";
 	const hostWithoutPort = host.split(":")[0] ?? "";
 	return (
@@ -38,13 +91,66 @@ function isLocalhost(c: Context): boolean {
 	);
 }
 
+/**
+ * Simple in-memory rate limiter for write operations.
+ * Prevents memory injection floods even in local/unauthenticated mode.
+ * Tracks per-endpoint request counts in a sliding window.
+ */
+const _writeRateLimiter = {
+	window: new Map<string, { count: number; resetAt: number }>(),
+	maxPerMinute: 120, // 2 writes/sec average
+	check(endpoint: string): boolean {
+		const now = Date.now();
+		const entry = this.window.get(endpoint);
+		if (!entry || entry.resetAt < now) {
+			this.window.set(endpoint, { count: 1, resetAt: now + 60_000 });
+			return true;
+		}
+		entry.count++;
+		return entry.count <= this.maxPerMinute;
+	},
+};
+
 export function createAuthMiddleware(
 	config: AuthConfig,
 	secret: Buffer | null,
 ): MiddlewareHandler {
 	return async (c, next) => {
-		// Local mode: no auth required at all
+		// Rate limit write operations in ALL modes (including local)
+		const method = c.req.method;
+		if (method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH") {
+			const endpoint = c.req.path;
+			if (!_writeRateLimiter.check(endpoint)) {
+				return c.json({ error: "Rate limit exceeded. Max 120 writes per minute per endpoint." }, 429);
+			}
+		}
+
+		// local-notoken mode: no auth required at all (explicit dev opt-out)
+		if (config.mode === "local-notoken") {
+			c.set("auth", { authenticated: false, claims: null });
+			await next();
+			return;
+		}
+
+		// Local mode: require local auth token (except public health/status endpoints)
 		if (config.mode === "local") {
+			if (isPublicEndpoint(c)) {
+				c.set("auth", { authenticated: false, claims: null });
+				await next();
+				return;
+			}
+
+			const expectedToken = config.localToken;
+			if (expectedToken) {
+				const providedToken = extractLocalToken(c);
+				if (!providedToken || providedToken !== expectedToken) {
+					c.status(401);
+					return c.json({
+						error: "Local token required. See ~/.agents/.daemon/local.token",
+					});
+				}
+			}
+			// Token validated (or no token file configured — fallback for tests)
 			c.set("auth", { authenticated: false, claims: null });
 			await next();
 			return;
@@ -159,8 +265,8 @@ export function requireRateLimit(
 	config: AuthConfig,
 ): MiddlewareHandler {
 	return async (c, next) => {
-		// No rate limiting in local mode
-		if (config.mode === "local") {
+		// No rate limiting in local/local-notoken mode
+		if (config.mode === "local" || config.mode === "local-notoken") {
 			await next();
 			return;
 		}

@@ -33,6 +33,9 @@ export interface IngestEnvelope {
 	sourceType: string;
 	sourceId: string | null;
 	createdAt: string;
+	// Web3 identity fields (optional — populated by signing middleware)
+	signature?: string | null;
+	signerDid?: string | null;
 }
 
 export type DecisionAction = "update" | "delete" | "merge";
@@ -215,8 +218,8 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		 (id, content, normalized_content, content_hash, who, why, project,
 		  importance, type, tags, pinned, is_deleted, extraction_status,
 		  embedding_model, extraction_model, created_at, updated_at, updated_by,
-		  source_type, source_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  source_type, source_id, signature, signer_did)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		mem.id,
 		mem.content,
@@ -238,6 +241,8 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.updatedBy ?? mem.who,
 		mem.sourceType,
 		mem.sourceId,
+		mem.signature ?? null,
+		mem.signerDid ?? null,
 	);
 
 	// FTS sync handled by memories_ai AFTER INSERT trigger (migration 001)

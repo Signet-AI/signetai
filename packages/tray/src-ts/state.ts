@@ -1,3 +1,27 @@
+import { invoke } from "@tauri-apps/api/core";
+
+// Cached auth token for daemon API calls (refreshed periodically)
+let cachedToken: string | null = null;
+let tokenFetchedAt = 0;
+const TOKEN_CACHE_MS = 30_000;
+
+async function refreshToken(): Promise<void> {
+  const now = Date.now();
+  if (cachedToken && now - tokenFetchedAt < TOKEN_CACHE_MS) return;
+  try {
+    const token = await invoke<string | null>("read_auth_token");
+    cachedToken = token;
+  } catch {
+    cachedToken = null;
+  }
+  tokenFetchedAt = now;
+}
+
+function authHeaders(): Record<string, string> {
+  if (cachedToken) return { "X-Local-Token": cachedToken };
+  return {};
+}
+
 // Rich daemon state for Phase 1
 
 export interface RecentMemory {
@@ -33,6 +57,11 @@ export type DaemonState =
       readonly recentMemories: RecentMemory[];
       // Ingestion rate (memories/hour)
       readonly ingestionRate: number | null;
+      // Perception
+      readonly perceptionActive: boolean | null;
+      readonly perceptionChannels: string[] | null;
+      readonly perceptionCapturesToday: number | null;
+      readonly perceptionSkillsCount: number | null;
     }
   | { readonly kind: "stopped" }
   | { readonly kind: "error"; readonly message: string };
@@ -73,6 +102,16 @@ let memoriesData: MemoriesData | null = null;
 let diagnosticsData: DiagnosticsData | null = null;
 let embeddingsData: EmbeddingsData | null = null;
 
+// Perception data
+interface PerceptionData {
+  running: boolean;
+  channels: string[];
+  capturesToday: number;
+  skillsCount: number;
+}
+
+let perceptionData: PerceptionData | null = null;
+
 // For ingestion rate tracking
 let lastMemoryCount: number | null = null;
 let lastMemoryCountTime: number | null = null;
@@ -95,7 +134,9 @@ function countMemoriesToday(memories: any[]): number {
 
 export async function fetchHealth(baseUrl: string): Promise<boolean> {
   try {
+    await refreshToken();
     const res = await fetch(`${baseUrl}/health`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return false;
@@ -115,6 +156,7 @@ export async function fetchHealth(baseUrl: string): Promise<boolean> {
 export async function fetchMemories(baseUrl: string): Promise<void> {
   try {
     const res = await fetch(`${baseUrl}/api/memories?limit=10`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return;
@@ -170,6 +212,7 @@ export async function fetchMemories(baseUrl: string): Promise<void> {
 export async function fetchDiagnostics(baseUrl: string): Promise<void> {
   try {
     const res = await fetch(`${baseUrl}/api/diagnostics`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return;
@@ -188,6 +231,7 @@ export async function fetchDiagnostics(baseUrl: string): Promise<void> {
 export async function fetchEmbeddings(baseUrl: string): Promise<void> {
   try {
     const res = await fetch(`${baseUrl}/api/embeddings/status`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return;
@@ -200,6 +244,39 @@ export async function fetchEmbeddings(baseUrl: string): Promise<void> {
     };
   } catch {
     // Keep stale data
+  }
+}
+
+export async function fetchPerception(baseUrl: string): Promise<void> {
+  try {
+    const res = await fetch(`${baseUrl}/api/perception/status`, {
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      perceptionData = null;
+      return;
+    }
+    const data = await res.json();
+
+    const adapters = data.adapters || {};
+    const channels: string[] = [];
+    let totalCaptures = 0;
+
+    for (const [key, info] of Object.entries(adapters) as [string, any][]) {
+      if (info.enabled) channels.push(key);
+      totalCaptures += info.captureCount || 0;
+    }
+
+    perceptionData = {
+      running: data.running === true,
+      channels,
+      capturesToday: totalCaptures,
+      skillsCount: data.skillsCount || 0,
+    };
+  } catch {
+    // Perception endpoints may not exist yet — that's fine
+    perceptionData = null;
   }
 }
 
@@ -229,6 +306,10 @@ export function buildCurrentState(): DaemonState {
     queueDepth: diagnosticsData?.queueDepth ?? null,
     recentMemories: memoriesData?.memories ?? [],
     ingestionRate: currentIngestionRate,
+    perceptionActive: perceptionData?.running ?? null,
+    perceptionChannels: perceptionData?.channels ?? null,
+    perceptionCapturesToday: perceptionData?.capturesToday ?? null,
+    perceptionSkillsCount: perceptionData?.skillsCount ?? null,
   };
 }
 
@@ -237,4 +318,9 @@ export function resetState(): void {
   memoriesData = null;
   diagnosticsData = null;
   embeddingsData = null;
+  perceptionData = null;
+  // Reset ingestion rate tracking on daemon restart
+  lastMemoryCount = null;
+  lastMemoryCountTime = null;
+  currentIngestionRate = null;
 }

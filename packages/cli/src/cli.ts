@@ -242,11 +242,28 @@ async function gitAutoCommit(
 // Daemon Management
 // ============================================================================
 
-const AGENTS_DIR = join(homedir(), ".agents");
+const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 const DEFAULT_PORT = 3850;
+const LOCAL_TOKEN_FILE = join(DAEMON_DIR, "local.token");
+
+/** Read the local auth token for daemon API calls. */
+function getLocalToken(): string | null {
+	try {
+		return readFileSync(LOCAL_TOKEN_FILE, "utf-8").trim();
+	} catch {
+		return null;
+	}
+}
+
+/** Build auth headers for daemon API requests. */
+function daemonAuthHeaders(): Record<string, string> {
+	const token = getLocalToken();
+	if (token) return { "X-Local-Token": token };
+	return {};
+}
 
 async function isDaemonRunning(): Promise<boolean> {
 	try {
@@ -1221,7 +1238,7 @@ async function existingSetupWizard(
 		// 3. Initialize SQLite database with unified schema
 		spinner.text = "Initializing database...";
 		const dbPath = join(basePath, "memory", "memories.db");
-		const db = Database(dbPath);
+		const db = new Database(dbPath);
 
 		// Migrate legacy schema if needed, then run versioned migrations
 		const migrationResult = ensureUnifiedSchema(db);
@@ -2022,7 +2039,7 @@ ${agentName} is a helpful assistant.
 
 		spinner.text = "Initializing database...";
 		const dbPath = join(basePath, "memory", "memories.db");
-		const db = Database(dbPath);
+		const db = new Database(dbPath);
 
 		ensureUnifiedSchema(db);
 		runMigrations(db);
@@ -2340,16 +2357,18 @@ async function migrateWizard(basePath: string) {
 		validate: (v) => existsSync(v) || "File not found",
 	});
 
-	const spinner = ora(`Importing from ${source}...`).start();
-
-	try {
-		await new Promise((r) => setTimeout(r, 1500));
-		spinner.succeed(chalk.green("Import complete!"));
-		console.log(chalk.dim("  Imported conversations with memories"));
-	} catch (err) {
-		spinner.fail(chalk.red("Import failed"));
-		console.error(err);
-	}
+	console.log();
+	console.log(
+		chalk.yellow(
+			"  ⚠ Migration from " + source + " is not yet implemented.",
+		),
+	);
+	console.log(
+		chalk.dim("  This feature is coming soon. File: " + inputPath),
+	);
+	console.log(
+		chalk.dim("  Track progress at https://github.com/signetai/signetai/issues"),
+	);
 }
 
 // ============================================================================
@@ -2398,7 +2417,7 @@ async function migrateSchema(options: { path?: string }) {
 
 	try {
 		// First detect schema in readonly mode
-		const db = Database(dbPath, { readonly: true });
+		const db = new Database(dbPath, { readonly: true });
 		const schemaInfo = detectSchema(db);
 		db.close();
 
@@ -2424,7 +2443,7 @@ async function migrateSchema(options: { path?: string }) {
 		}
 
 		// Open with write access and migrate
-		const writeDb = Database(dbPath);
+		const writeDb = new Database(dbPath);
 		const result = ensureUnifiedSchema(writeDb);
 
 		if (result.errors.length > 0) {
@@ -2506,7 +2525,7 @@ async function showStatus(options: { path?: string }) {
 
 	if (existing.memoryDb) {
 		try {
-			const db = Database(join(basePath, "memory", "memories.db"), {
+			const db = new Database(join(basePath, "memory", "memories.db"), {
 				readonly: true,
 			});
 
@@ -2567,7 +2586,7 @@ interface LogEntry {
 }
 
 function formatLogEntry(entry: LogEntry): string {
-	const levelColors: Record<string, string> = {
+	const levelColors: Record<string, (text: string) => string> = {
 		debug: chalk.gray,
 		info: chalk.cyan,
 		warn: chalk.yellow,
@@ -2631,32 +2650,51 @@ async function showLogs(options: {
 				console.log(chalk.dim("  No logs found"));
 			}
 
-			// Follow mode - stream logs
+			// Follow mode - stream logs using Node.js compatible fetch streaming
 			if (follow) {
 				console.log();
 				console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
 
-				const eventSource = new EventSource(
-					`http://localhost:${DEFAULT_PORT}/api/logs/stream`,
-				);
+				const streamUrl = `http://localhost:${DEFAULT_PORT}/api/logs/stream`;
+				const streamRes = await fetch(streamUrl, {
+					headers: { Accept: "text/event-stream", ...daemonAuthHeaders() },
+				});
 
-				eventSource.onmessage = (event) => {
+				if (!streamRes.ok || !streamRes.body) {
+					console.log(chalk.red("  Failed to open log stream"));
+				} else {
+					const reader = streamRes.body.getReader();
+					const decoder = new TextDecoder();
+					let buffer = "";
+
+					const processSSE = () => {
+						const lines = buffer.split("\n");
+						buffer = lines.pop() || "";
+						for (const line of lines) {
+							if (line.startsWith("data: ")) {
+								try {
+									const entry = JSON.parse(line.slice(6));
+									if (entry.type === "connected") continue;
+									console.log("  " + formatLogEntry(entry));
+								} catch {
+									// Ignore parse errors
+								}
+							}
+						}
+					};
+
 					try {
-						const entry = JSON.parse(event.data);
-						if (entry.type === "connected") return;
-						console.log("  " + formatLogEntry(entry));
+						while (true) {
+							const { done, value } = await reader.read();
+							if (done) break;
+							buffer += decoder.decode(value, { stream: true });
+							processSSE();
+						}
 					} catch {
-						// Ignore parse errors
+						// stream closed
 					}
-				};
-
-				eventSource.onerror = () => {
 					console.log(chalk.red("  Stream disconnected"));
-					eventSource.close();
-				};
-
-				// Keep process alive
-				await new Promise(() => {});
+				}
 			}
 		} catch (e) {
 			console.log(chalk.yellow("  Could not fetch logs from daemon"));
@@ -2941,11 +2979,12 @@ program
 			return;
 		}
 
-		// Parse existing config
-		const existingYaml = readFileSync(agentYamlPath, "utf-8");
+		// Helper to re-read YAML fresh from disk each time (avoids stale reads)
+		const readCurrentYaml = () => readFileSync(agentYamlPath, "utf-8");
 		// Simple YAML parsing for our known structure
 		const getYamlValue = (key: string, fallback: string) => {
-			const match = existingYaml.match(
+			const yaml = readCurrentYaml();
+			const match = yaml.match(
 				new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"),
 			);
 			return match ? match[1].trim().replace(/^["']|["']$/g, "") : fallback;
@@ -2972,9 +3011,10 @@ program
 			console.log();
 
 			if (section === "view") {
+				const currentYaml = readCurrentYaml();
 				console.log(chalk.dim("  Current agent.yaml:\n"));
 				console.log(
-					existingYaml
+					currentYaml
 						.split("\n")
 						.map((l) => chalk.dim("  " + l))
 						.join("\n"),
@@ -2993,8 +3033,8 @@ program
 					default: getYamlValue("description", "Personal AI assistant"),
 				});
 
-				// Update the YAML
-				let updatedYaml = existingYaml;
+				// Re-read YAML fresh before editing to avoid stale overwrites
+				let updatedYaml = readCurrentYaml();
 				updatedYaml = updatedYaml.replace(/^(\s*name:)\s*.+$/m, `$1 "${name}"`);
 				updatedYaml = updatedYaml.replace(
 					/^(\s*description:)\s*.+$/m,
@@ -3021,10 +3061,10 @@ program
 					],
 				});
 
-				// Update harnesses in YAML
+				// Update harnesses in YAML (re-read fresh; handle empty list)
 				const harnessYaml = harnesses.map((h) => `  - ${h}`).join("\n");
-				let updatedYaml = existingYaml.replace(
-					/^harnesses:\n(  - .+\n)+/m,
+				let updatedYaml = readCurrentYaml().replace(
+					/^harnesses:\n(  - .+\n)*/m,
 					`harnesses:\n${harnessYaml}\n`,
 				);
 
@@ -3096,9 +3136,9 @@ program
 						dimensions = m === "text-embedding-3-large" ? 3072 : 1536;
 					}
 
-					// Update embedding section
-					let updatedYaml = existingYaml;
-					if (existingYaml.includes("embedding:")) {
+					// Update embedding section (re-read fresh)
+					let updatedYaml = readCurrentYaml();
+					if (updatedYaml.includes("embedding:")) {
 						updatedYaml = updatedYaml.replace(
 							/^embedding:\n(  .+\n)+/m,
 							`embedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
@@ -3137,7 +3177,7 @@ program
 					default: getYamlValue("min_score", "0.3"),
 				});
 
-				let updatedYaml = existingYaml;
+				let updatedYaml = readCurrentYaml();
 				updatedYaml = updatedYaml.replace(/^(\s*alpha:)\s*.+$/m, `$1 ${alpha}`);
 				updatedYaml = updatedYaml.replace(/^(\s*top_k:)\s*.+$/m, `$1 ${topK}`);
 				updatedYaml = updatedYaml.replace(
@@ -3160,7 +3200,7 @@ program
 					default: getYamlValue("decay_rate", "0.95"),
 				});
 
-				let updatedYaml = existingYaml;
+				let updatedYaml = readCurrentYaml();
 				updatedYaml = updatedYaml.replace(
 					/^(\s*session_budget:)\s*.+$/m,
 					`$1 ${sessionBudget}`,
@@ -3192,9 +3232,13 @@ async function secretApiCall(
 	path: string,
 	body?: unknown,
 ): Promise<{ ok: boolean; data: unknown }> {
+	const authHeaders = daemonAuthHeaders();
 	const res = await fetch(`${DAEMON_URL}${path}`, {
 		method,
-		headers: body ? { "Content-Type": "application/json" } : {},
+		headers: {
+			...authHeaders,
+			...(body ? { "Content-Type": "application/json" } : {}),
+		},
 		body: body ? JSON.stringify(body) : undefined,
 		signal: AbortSignal.timeout(5000),
 	});
@@ -3387,9 +3431,17 @@ async function fetchFromDaemon<T>(
 ): Promise<T | null> {
 	const { timeout: timeoutMs, ...fetchOpts } = opts || {};
 	try {
+		// Inject local auth token and Content-Type into all daemon requests
+		const authHeaders = daemonAuthHeaders();
+		const headers: Record<string, string> = {
+			...authHeaders,
+			...(fetchOpts.body ? { "Content-Type": "application/json" } : {}),
+			...((fetchOpts.headers as Record<string, string>) || {}),
+		};
 		const res = await fetch(`http://localhost:${DEFAULT_PORT}${path}`, {
 			signal: AbortSignal.timeout(timeoutMs || 5000),
 			...fetchOpts,
+			headers,
 		});
 		if (!res.ok) return null;
 		return (await res.json()) as T;
@@ -3831,6 +3883,623 @@ program
 			console.log(chalk.dim(`      by ${r.who} · ${r.type} · ${source}`));
 		}
 		console.log();
+	});
+
+// ============================================================================
+// signet ingest - Document ingestion engine ("pour your brain in")
+// ============================================================================
+
+program
+	.command("ingest <path>")
+	.description(
+		"Ingest documents into memory (Markdown, PDF, TXT, code files or directories)",
+	)
+	.option("--type <type>", "Force file type (markdown|pdf|txt|code)")
+	.option("--dry-run", "Show what would be extracted without saving", false)
+	.option("--verbose", "Show each extracted fact", false)
+	.option("--model <model>", "LLM model for extraction")
+	.option("--ollama-url <url>", "Ollama base URL", "http://localhost:11434")
+	.option(
+		"--skip-extraction",
+		"Store raw chunks without LLM extraction",
+		false,
+	)
+	.option(
+		"--max-chunks <n>",
+		"Max chunks to process (for testing)",
+		parseInt,
+	)
+	.option("-w, --workspace <name>", "Workspace name", "user")
+	.action(
+		async (
+			inputPath: string,
+			options: {
+				type?: string;
+				dryRun: boolean;
+				verbose: boolean;
+				model?: string;
+				ollamaUrl: string;
+				skipExtraction: boolean;
+				maxChunks?: number;
+				workspace: string;
+			},
+		) => {
+			const { resolve: resolvePath } = await import("path");
+			const absPath = resolvePath(inputPath);
+
+			if (!existsSync(absPath)) {
+				console.error(chalk.red(`  Path does not exist: ${absPath}`));
+				process.exit(1);
+			}
+
+			// Load model from agent.yaml if not specified
+			let model = options.model;
+			if (!model) {
+				try {
+					const agentsDir = join(homedir(), ".agents");
+					const yamlPath = join(agentsDir, "agent.yaml");
+					if (existsSync(yamlPath)) {
+						const yaml = readFileSync(yamlPath, "utf-8");
+						const config = parseSimpleYaml(yaml);
+						const extractionModel =
+							config?.memory?.pipelineV2?.extraction?.model;
+						const embeddingModel = config?.embedding?.model;
+						model = extractionModel || embeddingModel || undefined;
+					}
+				} catch {
+					// Ignore — will use default
+				}
+			}
+
+			// Open database (unless dry-run)
+			let db: ReturnType<typeof Database> | null = null;
+			if (!options.dryRun) {
+				const agentsDir = join(homedir(), ".agents");
+				const dbPath = join(agentsDir, "memory", "memories.db");
+				if (!existsSync(dbPath)) {
+					console.error(
+						chalk.red(
+							"  No memory database found. Run `signet setup` first.",
+						),
+					);
+					process.exit(1);
+				}
+				db = new Database(dbPath);
+				try {
+					loadSqliteVec(db as unknown as Parameters<typeof loadSqliteVec>[0]);
+				} catch {
+					// Non-fatal
+				}
+				runMigrations(
+					db as unknown as Parameters<typeof runMigrations>[0],
+				);
+			}
+
+			const spinner = ora("Scanning files...").start();
+
+			try {
+				const { ingestPath } = await import("@signet/core");
+
+				const result = await ingestPath(
+					absPath,
+					{
+						type: options.type as
+							| "markdown"
+							| "pdf"
+							| "txt"
+							| "code"
+							| undefined,
+						dryRun: options.dryRun,
+						verbose: options.verbose,
+						model,
+						ollamaUrl: options.ollamaUrl,
+						skipExtraction: options.skipExtraction,
+						maxChunks: options.maxChunks,
+						db,
+						workspace: options.workspace,
+					},
+					(event) => {
+						switch (event.type) {
+							case "file-start":
+								spinner.text = `[${event.fileIndex + 1}/${event.totalFiles}] ${event.filePath.replace(homedir(), "~")}`;
+								break;
+							case "file-done":
+								if (options.verbose) {
+									spinner.info(
+										`  ${chalk.dim(event.filePath.replace(homedir(), "~"))} → ${event.memories} memories from ${event.chunks} chunks`,
+									);
+									spinner.start();
+								}
+								break;
+							case "file-error":
+								spinner.warn(
+									`  ${chalk.yellow("⚠")} ${event.filePath.replace(homedir(), "~")}: ${event.error}`,
+								);
+								spinner.start();
+								break;
+							case "chunk-done":
+								if (options.verbose && event.items > 0) {
+									spinner.text = `  Chunk ${event.chunkIndex + 1}: extracted ${event.items} items`;
+								}
+								break;
+						}
+					},
+				);
+
+				// Close database
+				if (db) {
+					(db as { close(): void }).close();
+				}
+
+				spinner.stop();
+
+				// Summary
+				const dryRunLabel = options.dryRun
+					? chalk.yellow(" (dry run)")
+					: "";
+				console.log();
+
+				if (
+					result.filesProcessed === 0 &&
+					result.filesErrored === 0
+				) {
+					console.log(
+						chalk.dim(
+							"  No supported files found at the specified path.",
+						),
+					);
+					console.log(
+						chalk.dim(
+							"  Supported: .md, .txt, .pdf, .py, .ts, .js, and more",
+						),
+					);
+					return;
+				}
+
+				// Type breakdown
+				const typeBreakdown = Object.entries(result.byType)
+					.map(([type, count]) => `${count} ${type}s`)
+					.join(", ");
+
+				const filesLabel =
+					result.filesProcessed === 1
+						? "1 file"
+						: `${result.filesProcessed} files`;
+
+				console.log(
+					chalk.bold(
+						`  Ingested ${filesLabel} → ${chalk.green(String(result.memoriesCreated))} memories created${dryRunLabel}`,
+					),
+				);
+
+				if (typeBreakdown) {
+					console.log(chalk.dim(`  (${typeBreakdown})`));
+				}
+
+				if (result.filesErrored > 0) {
+					console.log(
+						chalk.yellow(
+							`  ${result.filesErrored} file(s) had errors`,
+						),
+					);
+				}
+
+				console.log(
+					chalk.dim(
+						`  ${result.totalChunks} chunks processed across ${result.filesProcessed + result.filesErrored} files`,
+					),
+				);
+				console.log();
+
+				if (options.dryRun) {
+					console.log(
+						chalk.dim(
+							"  Run without --dry-run to save to memory database.",
+						),
+					);
+					console.log();
+				}
+
+				// Show per-file results in verbose mode
+				if (options.verbose) {
+					for (const file of result.files) {
+						const status =
+							file.status === "success"
+								? chalk.green("✓")
+								: file.status === "error"
+									? chalk.red("✗")
+									: chalk.dim("○");
+						const path = file.filePath.replace(homedir(), "~");
+						const info =
+							file.status === "error"
+								? chalk.red(file.error || "unknown error")
+								: `${file.memoriesCreated} memories`;
+						console.log(`  ${status} ${chalk.dim(path)} ${info}`);
+					}
+					console.log();
+				}
+			} catch (err) {
+				if (db) {
+					(db as { close(): void }).close();
+				}
+				spinner.fail(
+					`Ingestion failed: ${(err as Error).message}`,
+				);
+				process.exit(1);
+			}
+		},
+	);
+
+// ============================================================================
+// signet knowledge - Knowledge health dashboard
+// ============================================================================
+
+const knowledgeCmd = program
+	.command("knowledge")
+	.description("Knowledge base health and analytics");
+
+knowledgeCmd
+	.command("status")
+	.description("Show knowledge health report with scoring")
+	.option("--json", "Output as JSON")
+	.action(async (options) => {
+		const { getKnowledgeHealth, runMigrations, loadSqliteVec } = await import(
+			"@signet/core"
+		);
+
+		const agentsDir = join(homedir(), ".agents");
+		const dbPath = join(agentsDir, "memory", "memories.db");
+
+		if (!existsSync(dbPath)) {
+			console.error(
+				chalk.red("  No memory database found. Run `signet setup` first."),
+			);
+			process.exit(1);
+		}
+
+		const spinner = ora("Analyzing knowledge health...").start();
+
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			loadSqliteVec(db);
+		} catch {
+			// Non-fatal
+		}
+
+		try {
+			// Run migrations to ensure schema is up to date (read-only is fine for queries)
+			// We'll open a writable connection for migrations then reopen readonly
+		} catch {
+			// ignore
+		}
+
+		try {
+			const report = getKnowledgeHealth(db);
+			db.close();
+			spinner.stop();
+
+			if (options.json) {
+				console.log(JSON.stringify(report, null, 2));
+				return;
+			}
+
+			// -- Header --
+			console.log();
+			const scoreColor =
+				report.overallScore > 80
+					? chalk.green
+					: report.overallScore > 60
+						? chalk.yellow
+						: chalk.red;
+			const scoreBar = renderScoreBar(report.overallScore);
+			console.log(
+				chalk.bold("  📊 Knowledge Health Report"),
+			);
+			console.log();
+			console.log(
+				`  Overall Score: ${scoreColor(chalk.bold(report.overallScore.toString()))} / 100  ${scoreBar}`,
+			);
+			console.log();
+
+			// -- Score breakdown --
+			console.log(chalk.bold("  Score Breakdown:"));
+			const bd = report.scoreBreakdown;
+			printScoreLine("Type Diversity", bd.typeDiversity, 10);
+			printScoreLine("Signing", bd.signingCompleteness, 15);
+			printScoreLine("Provenance", bd.provenanceCoverage, 15);
+			printScoreLine("Graph Connectivity", bd.graphConnectivity, 15);
+			printScoreLine("Freshness", bd.freshness, 15);
+			printScoreLine("Contradictions", bd.contradictionResolution, 15);
+			printScoreLine("Session Continuity", bd.sessionContinuity, 15);
+			console.log();
+
+			// -- Memory overview --
+			console.log(chalk.bold("  Memory Overview:"));
+			console.log(
+				`    Total: ${chalk.cyan(report.totalMemories.toString())}  Active: ${chalk.cyan(report.activeMemories.toString())}  Stale: ${report.staleMemoryCount > 0 ? chalk.yellow(report.staleMemoryCount.toString()) : chalk.dim("0")}`,
+			);
+			console.log(
+				`    Signed: ${chalk.green(report.signedCount.toString())}  Unsigned: ${report.unsignedCount > 0 ? chalk.yellow(report.unsignedCount.toString()) : chalk.dim("0")}`,
+			);
+			console.log(
+				`    With provenance: ${chalk.green(report.withProvenanceCount.toString())}  Without: ${report.withoutProvenanceCount > 0 ? chalk.yellow(report.withoutProvenanceCount.toString()) : chalk.dim("0")}`,
+			);
+			console.log();
+
+			// -- Type breakdown --
+			if (report.typeBreakdown.length > 0) {
+				console.log(chalk.bold("  Types:"));
+				for (const t of report.typeBreakdown) {
+					const bar = "█".repeat(
+						Math.max(
+							1,
+							Math.round(
+								(t.count / Math.max(1, report.activeMemories)) * 30,
+							),
+						),
+					);
+					console.log(
+						`    ${chalk.dim(t.type.padEnd(14))} ${chalk.cyan(bar)} ${t.count}`,
+					);
+				}
+				console.log();
+			}
+
+			// -- Graph --
+			console.log(chalk.bold("  Knowledge Graph:"));
+			console.log(
+				`    Entities: ${chalk.cyan(report.totalEntities.toString())}  Relations: ${chalk.cyan(report.totalRelations.toString())}  Connected: ${chalk.cyan(report.connectedEntities.toString())}`,
+			);
+			if (report.totalEntities > 0) {
+				const orphans = report.totalEntities - report.connectedEntities;
+				if (orphans > 0) {
+					console.log(
+						`    Orphan entities: ${chalk.yellow(orphans.toString())}`,
+					);
+				}
+			}
+			console.log();
+
+			// -- Contradictions --
+			if (
+				report.contradictionsPending > 0 ||
+				report.contradictionsResolved > 0
+			) {
+				console.log(chalk.bold("  Contradictions:"));
+				console.log(
+					`    Resolved: ${chalk.green(report.contradictionsResolved.toString())}  Pending: ${report.contradictionsPending > 0 ? chalk.red(report.contradictionsPending.toString()) : chalk.dim("0")}`,
+				);
+				console.log();
+			}
+
+			// -- Sources --
+			if (report.sourceBreakdown.length > 0) {
+				console.log(chalk.bold("  Sources:"));
+				for (const s of report.sourceBreakdown.slice(0, 8)) {
+					console.log(
+						`    ${chalk.dim(s.source.padEnd(18))} ${s.count}`,
+					);
+				}
+				console.log();
+			}
+
+			// -- Top topics --
+			if (report.topTopics.length > 0) {
+				console.log(chalk.bold("  Top Topics:"));
+				for (const t of report.topTopics.slice(0, 8)) {
+					console.log(
+						`    ${chalk.cyan(t.name.padEnd(24))} ${chalk.dim(t.count + " mentions")}`,
+					);
+				}
+				console.log();
+			}
+
+			// -- Weakest areas --
+			if (report.weakestAreas.length > 0) {
+				console.log(chalk.bold("  Weakest Areas:"));
+				for (const t of report.weakestAreas.slice(0, 5)) {
+					console.log(
+						`    ${chalk.yellow(t.name.padEnd(24))} ${chalk.dim(t.count + " mention" + (t.count === 1 ? "" : "s"))}`,
+					);
+				}
+				console.log();
+			}
+
+			// -- Suggestions --
+			if (report.suggestions.length > 0) {
+				console.log(chalk.bold("  💡 Suggestions:"));
+				for (const s of report.suggestions) {
+					console.log(`    ${chalk.yellow("→")} ${s}`);
+				}
+				console.log();
+			}
+		} catch (err) {
+			db.close();
+			spinner.fail("Failed to compute knowledge health");
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		}
+	});
+
+// Helper: render a text-based score bar
+function renderScoreBar(score: number): string {
+	const width = 20;
+	const filled = Math.round((score / 100) * width);
+	const empty = width - filled;
+	const color =
+		score > 80 ? chalk.green : score > 60 ? chalk.yellow : chalk.red;
+	return color("█".repeat(filled)) + chalk.dim("░".repeat(empty));
+}
+
+// Helper: print a single score line with visual bar
+function printScoreLine(label: string, value: number, max: number): void {
+	const pct = max > 0 ? value / max : 0;
+	const barWidth = 12;
+	const filled = Math.round(pct * barWidth);
+	const empty = barWidth - filled;
+	const color = pct > 0.8 ? chalk.green : pct > 0.5 ? chalk.yellow : chalk.red;
+	console.log(
+		`    ${chalk.dim(label.padEnd(22))} ${color("█".repeat(filled))}${chalk.dim("░".repeat(empty))} ${value}/${max}`,
+	);
+}
+
+// ============================================================================
+// signet session-stats - Session continuity trend
+// ============================================================================
+
+program
+	.command("session-stats")
+	.description("Show session continuity score trend")
+	.option("-l, --limit <n>", "Number of sessions to show", parseInt, 20)
+	.option("--json", "Output as JSON")
+	.action(async (options) => {
+		const { getSessionTrend, runMigrations, loadSqliteVec } = await import(
+			"@signet/core"
+		);
+
+		const agentsDir = join(homedir(), ".agents");
+		const dbPath = join(agentsDir, "memory", "memories.db");
+
+		if (!existsSync(dbPath)) {
+			console.error(
+				chalk.red("  No memory database found. Run `signet setup` first."),
+			);
+			process.exit(1);
+		}
+
+		const spinner = ora("Loading session stats...").start();
+
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			loadSqliteVec(db);
+		} catch {
+			// Non-fatal
+		}
+
+		try {
+			const trend = getSessionTrend(db, options.limit);
+			db.close();
+			spinner.stop();
+
+			if (options.json) {
+				console.log(JSON.stringify(trend, null, 2));
+				return;
+			}
+
+			console.log();
+			console.log(chalk.bold("  📈 Session Continuity Trend"));
+			console.log();
+
+			if (trend.sessions.length === 0) {
+				console.log(
+					chalk.dim(
+						"  No session metrics recorded yet.",
+					),
+				);
+				console.log(
+					chalk.dim(
+						"  Metrics are recorded at the end of each AI session.",
+					),
+				);
+				console.log();
+				return;
+			}
+
+			// -- Summary --
+			const avgColor =
+				trend.averageScore > 0.7
+					? chalk.green
+					: trend.averageScore > 0.4
+						? chalk.yellow
+						: chalk.red;
+
+			const directionIcon =
+				trend.direction === "improving"
+					? chalk.green("↑ Improving")
+					: trend.direction === "declining"
+						? chalk.red("↓ Declining")
+						: trend.direction === "stable"
+							? chalk.blue("→ Stable")
+							: chalk.dim("- Insufficient data");
+
+			console.log(
+				`  Average Score: ${avgColor(chalk.bold((trend.averageScore * 100).toFixed(1) + "%"))}  Trend: ${directionIcon}`,
+			);
+			console.log(
+				`  Sessions analyzed: ${chalk.cyan(trend.sessions.length.toString())}`,
+			);
+			console.log();
+
+			// -- Table --
+			console.log(
+				chalk.bold(
+					"  " +
+						"Session".padEnd(14) +
+						"Score".padEnd(10) +
+						"Injected".padEnd(10) +
+						"Used".padEnd(8) +
+						"Reconstructed".padEnd(15) +
+						"New",
+				),
+			);
+			console.log(chalk.dim("  " + "─".repeat(65)));
+
+			for (const s of trend.sessions) {
+				const scorePct = (s.continuityScore * 100).toFixed(0) + "%";
+				const scoreColor =
+					s.continuityScore > 0.7
+						? chalk.green
+						: s.continuityScore > 0.4
+							? chalk.yellow
+							: chalk.red;
+
+				const sessionLabel = s.harness
+					? s.harness.slice(0, 12)
+					: s.sessionId.slice(0, 12);
+
+				const dateStr = new Date(s.createdAt).toLocaleDateString("en-US", {
+					month: "short",
+					day: "numeric",
+				});
+
+				console.log(
+					"  " +
+						chalk.dim(dateStr.padEnd(14)) +
+						scoreColor(scorePct.padEnd(10)) +
+						s.memoriesInjected.toString().padEnd(10) +
+						s.memoriesUsed.toString().padEnd(8) +
+						s.factsReconstructed.toString().padEnd(15) +
+						s.newMemories.toString(),
+				);
+			}
+
+			console.log();
+
+			// -- Mini chart (sparkline-style) --
+			if (trend.sessions.length >= 3) {
+				const reversed = [...trend.sessions].reverse(); // chronological order
+				const sparkChars = " ▁▂▃▄▅▆▇█";
+				const spark = reversed
+					.map((s) => {
+						const idx = Math.min(
+							sparkChars.length - 1,
+							Math.round(s.continuityScore * (sparkChars.length - 1)),
+						);
+						return sparkChars[idx];
+					})
+					.join("");
+				console.log(`  Trend: ${chalk.cyan(spark)}`);
+				console.log(
+					chalk.dim("         oldest → newest"),
+				);
+				console.log();
+			}
+		} catch (err) {
+			db.close();
+			spinner.fail("Failed to load session stats");
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		}
 	});
 
 // ============================================================================
@@ -5011,7 +5680,7 @@ async function detectVectorSources(
 	const dbPath = join(memoryDir, "memories.db");
 	if (existsSync(dbPath)) {
 		try {
-			const db = Database(dbPath, { readonly: true });
+			const db = new Database(dbPath, { readonly: true });
 
 			// Check if embeddings table exists with BLOB vectors
 			const tableCheck = db
@@ -5074,6 +5743,516 @@ async function detectVectorSources(
 
 	return sources;
 }
+
+// ============================================================================
+// DID & Web3 Identity Commands
+// ============================================================================
+
+const didCmd = program.command("did").description("Manage agent decentralized identity (DID)");
+
+didCmd
+	.command("init")
+	.description("Initialize agent DID (generates keypair if needed)")
+	.action(async () => {
+		const { initializeAgentDid } = await import("@signet/core");
+		console.log(signetLogo());
+		console.log(chalk.bold("  DID Initialization\n"));
+
+		const spinner = ora("  Generating identity...").start();
+		try {
+			const result = await initializeAgentDid();
+			spinner.succeed("Identity initialized");
+			console.log();
+
+			if (result.keypairGenerated) {
+				console.log(chalk.green("  ✓ Ed25519 signing keypair generated"));
+			} else {
+				console.log(chalk.dim("  ✓ Existing keypair found"));
+			}
+			console.log(chalk.green(`  ✓ DID: ${chalk.cyan(result.didShort)}`));
+			if (result.yamlUpdated) {
+				console.log(chalk.green("  ✓ agent.yaml updated with DID"));
+			}
+			console.log(chalk.green(`  ✓ DID Document: ${result.didDocumentPath}`));
+			console.log();
+			console.log(chalk.dim("  Full DID:"));
+			console.log(chalk.cyan(`  ${result.did}`));
+		} catch (err) {
+			spinner.fail("Failed to initialize DID");
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		}
+	});
+
+didCmd
+	.command("show")
+	.description("Display the agent's DID")
+	.option("--full", "Show full DID (not abbreviated)")
+	.action(async (options) => {
+		const { getConfiguredDid, formatDidShort } = await import("@signet/core");
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.log(chalk.yellow("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		if (options.full) {
+			console.log(did);
+		} else {
+			console.log(formatDidShort(did));
+		}
+	});
+
+didCmd
+	.command("document")
+	.description("Export the agent's DID Document (JSON)")
+	.option("-o, --output <path>", "Write to file instead of stdout")
+	.action(async (options) => {
+		const { getConfiguredDid, didToPublicKey, generateDidDocument } = await import("@signet/core");
+		// writeFileSync already imported at top of file (line 24)
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.log(chalk.yellow("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const publicKey = didToPublicKey(did);
+
+		// Verify the keypair on disk still matches the configured DID
+		const { hasSigningKeypair, getPublicKeyBytes } = await import("@signet/core");
+		if (hasSigningKeypair()) {
+			try {
+				const storedPub = await getPublicKeyBytes();
+				const didPub = publicKey;
+				if (storedPub.length !== didPub.length || !storedPub.every((b, i) => b === didPub[i])) {
+					console.error(chalk.red("  ⚠ Warning: keypair on disk does not match configured DID!"));
+					console.error(chalk.red("    The DID Document may be stale. Run: signet did init"));
+				}
+			} catch {
+				// Keypair load failed — warning only, don't block document export
+			}
+		}
+
+		const doc = generateDidDocument(did, publicKey);
+		const json = JSON.stringify(doc, null, 2);
+
+		if (options.output) {
+			writeFileSync(options.output, json);
+			console.log(chalk.green(`  ✓ DID Document written to ${options.output}`));
+		} else {
+			console.log(json);
+		}
+	});
+
+didCmd
+	.command("verify")
+	.description("Verify the agent's keypair and DID consistency")
+	.action(async () => {
+		try {
+		const {
+			hasSigningKeypair,
+			getPublicKeyBytes,
+			signContent,
+			verifySignature,
+			getConfiguredDid,
+			publicKeyToDid,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  DID Verification\n"));
+
+		// Check keypair
+		if (!hasSigningKeypair()) {
+			console.log(chalk.red("  ✗ No signing keypair found"));
+			console.log(chalk.dim("  Run: signet did init"));
+			process.exit(1);
+		}
+		console.log(chalk.green("  ✓ Signing keypair exists"));
+
+		// Check DID in config
+		const configDid = getConfiguredDid();
+		if (!configDid) {
+			console.log(chalk.yellow("  ⚠ No DID in agent.yaml"));
+		} else {
+			console.log(chalk.green(`  ✓ DID in config: ${configDid.slice(0, 30)}...`));
+		}
+
+		// Verify keypair derives the same DID
+		const pubKey = await getPublicKeyBytes();
+		const derivedDid = publicKeyToDid(pubKey);
+		if (configDid && configDid !== derivedDid) {
+			console.log(chalk.red("  ✗ DID mismatch! Config DID doesn't match keypair."));
+			console.log(chalk.dim(`    Config:  ${configDid}`));
+			console.log(chalk.dim(`    Derived: ${derivedDid}`));
+			process.exit(1);
+		}
+		console.log(chalk.green("  ✓ DID matches keypair"));
+
+		// Test sign/verify round-trip
+		const testMessage = "signet-did-verification-test";
+		const sig = await signContent(testMessage);
+		const valid = await verifySignature(testMessage, sig, pubKey);
+		if (!valid) {
+			console.log(chalk.red("  ✗ Sign/verify round-trip FAILED"));
+			process.exit(1);
+		}
+		console.log(chalk.green("  ✓ Sign/verify round-trip passed"));
+		console.log();
+		console.log(chalk.green.bold("  All checks passed ✓"));
+		} catch (err) {
+			console.error(chalk.red(`  ✗ Verification failed: ${err instanceof Error ? err.message : String(err)}`));
+			process.exit(1);
+		}
+	});
+
+// ============================================================================
+// Memory Signing Commands
+// ============================================================================
+
+const memoryCmd = program.command("memory").description("Memory provenance and verification");
+
+memoryCmd
+	.command("sign-backfill")
+	.description("Sign all unsigned memories with the agent's keypair")
+	.option("--dry-run", "Show what would be signed without making changes")
+	.action(async (options) => {
+		const { hasSigningKeypair, signContent, getPublicKeyBytes, buildSignablePayload } = await import("@signet/core");
+		const { publicKeyToDid } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Memory Signing Backfill\n"));
+
+		if (!hasSigningKeypair()) {
+			console.log(chalk.red("  No signing keypair found. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			return;
+		}
+
+		// Resolve crypto BEFORE opening DB — if these throw, no DB handle to leak
+		const pubKey = await getPublicKeyBytes();
+		const did = publicKeyToDid(pubKey);
+
+		const db = new Database(dbPath);
+		try {
+			// Count unsigned memories
+			const countRow = db.prepare(
+				"SELECT COUNT(*) as count FROM memories WHERE signature IS NULL AND is_deleted = 0 AND content_hash IS NOT NULL"
+			).get() as { count: number } | undefined;
+			const unsignedCount = countRow?.count ?? 0;
+
+			if (unsignedCount === 0) {
+				console.log(chalk.green("  All memories are already signed ✓"));
+				return;
+			}
+
+			console.log(chalk.dim(`  Found ${unsignedCount} unsigned memories`));
+
+			if (options.dryRun) {
+				console.log(chalk.yellow(`  Dry run: would sign ${unsignedCount} memories`));
+				return;
+			}
+
+			const spinner = ora(`  Signing ${unsignedCount} memories...`).start();
+
+			// Fetch unsigned memories
+			const rows = db.prepare(
+				"SELECT id, content_hash, created_at FROM memories WHERE signature IS NULL AND is_deleted = 0 AND content_hash IS NOT NULL"
+			).all() as Array<{ id: string; content_hash: string; created_at: string }>;
+
+			let signed = 0;
+			let failed = 0;
+
+			const updateStmt = db.prepare(
+				"UPDATE memories SET signature = ?, signer_did = ? WHERE id = ?"
+			);
+
+			// Sign in batches with transactions for performance
+			// (individual UPDATEs without explicit tx = ~1000x slower)
+			const BATCH_SIZE = 500;
+			for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+				const batch = rows.slice(i, i + BATCH_SIZE);
+
+				// Sign all in batch (async, outside transaction)
+				const signedBatch: Array<{ signature: string; id: string }> = [];
+				for (const row of batch) {
+					try {
+						// Use core's buildSignablePayload for validation + single source of truth
+						const payload = buildSignablePayload(row.content_hash, row.created_at, did);
+						const signature = await signContent(payload);
+						signedBatch.push({ signature, id: row.id });
+						signed++;
+					} catch {
+						failed++;
+					}
+				}
+
+				// Write batch in single transaction
+				db.transaction(() => {
+					for (const s of signedBatch) {
+						updateStmt.run(s.signature, did, s.id);
+					}
+				})();
+
+				spinner.text = `  Signing memories... ${signed}/${unsignedCount}`;
+			}
+
+			spinner.succeed(`Signed ${signed} memories`);
+			if (failed > 0) {
+				console.log(chalk.yellow(`  ⚠ ${failed} memories failed to sign`));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+memoryCmd
+	.command("verify-signatures")
+	.description("Verify signatures of signed memories")
+	.option("--limit <n>", "Maximum number to verify", "100")
+	.action(async (options) => {
+		const { verifySignature, buildSignablePayload, buildSignablePayloadV2 } = await import("@signet/core");
+		const { didToPublicKey } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Memory Signature Verification\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			return;
+		}
+
+		const db = new Database(dbPath);
+		try {
+			const limit = parseInt(options.limit, 10) || 100;
+
+			const rows = db.prepare(
+				`SELECT id, content_hash, created_at, signature, signer_did
+				 FROM memories
+				 WHERE signature IS NOT NULL
+				 ORDER BY created_at DESC
+				 LIMIT ?`
+			).all(limit) as Array<{
+				id: string;
+				content_hash: string;
+				created_at: string;
+				signature: string;
+				signer_did: string;
+			}>;
+
+			if (rows.length === 0) {
+				console.log(chalk.yellow("  No signed memories found."));
+				return;
+			}
+
+			let valid = 0;
+			let invalid = 0;
+			const spinner = ora(`  Verifying ${rows.length} signatures...`).start();
+
+			for (const row of rows) {
+				try {
+					const pubKey = didToPublicKey(row.signer_did);
+					// Try v2 format first (includes memory ID), fall back to v1
+					const v2Payload = buildSignablePayloadV2(row.id, row.content_hash, row.created_at, row.signer_did);
+					let isValid = await verifySignature(v2Payload, row.signature, pubKey);
+					if (!isValid) {
+						// Fall back to v1 for legacy signatures
+						const v1Payload = buildSignablePayload(row.content_hash, row.created_at, row.signer_did);
+						isValid = await verifySignature(v1Payload, row.signature, pubKey);
+					}
+					if (isValid) {
+						valid++;
+					} else {
+						invalid++;
+					}
+				} catch {
+					invalid++;
+				}
+			}
+
+			spinner.succeed(`Verified ${rows.length} signatures`);
+			console.log(chalk.green(`  ✓ Valid: ${valid}`));
+			if (invalid > 0) {
+				console.log(chalk.red(`  ✗ Invalid: ${invalid}`));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+memoryCmd
+	.command("merkle")
+	.description("Compute Merkle root of all memories")
+	.option("--save", "Save the Merkle root to the database")
+	.action(async (options) => {
+		const { computeMerkleRoot, hashContent } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Memory Merkle Root\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			return;
+		}
+
+		const db = new Database(dbPath);
+		const spinner = ora("  Computing Merkle root...").start();
+
+		// Fetch all content hashes
+		const rows = db.prepare(
+			"SELECT content_hash FROM memories WHERE is_deleted = 0 ORDER BY created_at ASC"
+		).all() as Array<{ content_hash: string }>;
+
+		if (rows.length === 0) {
+			spinner.warn("No memories found");
+			db.close();
+			return;
+		}
+
+		// Hash them all with BLAKE2b for consistent Merkle leaves
+		const leafHashes: string[] = [];
+		for (const row of rows) {
+			leafHashes.push(await hashContent(row.content_hash));
+		}
+
+		const root = await computeMerkleRoot(leafHashes);
+		spinner.succeed("Merkle root computed");
+		console.log();
+		console.log(chalk.dim(`  Memories: ${rows.length}`));
+		console.log(chalk.cyan(`  Root:     ${root}`));
+
+		if (options.save) {
+			try {
+				const { getConfiguredDid, signContent } = await import("@signet/core");
+				const did = getConfiguredDid();
+				let sig: string | null = null;
+
+				const now = new Date().toISOString();
+
+				if (did) {
+					// Bind identity, count, and timestamp into the signed payload
+					// (prevents replay: same root at different times can't reuse sig)
+					const payload = `merkle|${root}|${rows.length}|${now}|${did}`;
+					sig = await signContent(payload);
+				}
+				db.prepare(
+					`INSERT INTO merkle_roots
+					 (root_hash, memory_count, leaf_hashes, computed_at, signer_did, signature, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?)`
+				).run(root, rows.length, JSON.stringify(leafHashes), now, did, sig, now);
+
+				console.log(chalk.green("  ✓ Saved to merkle_roots table"));
+			} catch (err) {
+				console.log(chalk.yellow(`  ⚠ Failed to save: ${(err as Error).message}`));
+			}
+		}
+
+		db.close();
+	});
+
+memoryCmd
+	.command("status")
+	.description("Show knowledge health and signing status")
+	.action(async () => {
+		const { getConfiguredDid, formatDidShort, hasSigningKeypair } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Knowledge Status\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.log(chalk.yellow("  No memories database found."));
+			return;
+		}
+
+		const db = new Database(dbPath);
+		let total = 0;
+		let signed = 0;
+		let unsigned = 0;
+		let types: Array<{ type: string; c: number }> = [];
+		let merkleCount = 0;
+		try {
+			// Basic counts
+			total = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE is_deleted = 0").get() as any)?.c ?? 0;
+			try {
+				signed = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE signature IS NOT NULL AND is_deleted = 0").get() as any)?.c ?? 0;
+			} catch {
+				// signature column may not exist yet (pre-migration 012)
+			}
+			unsigned = total - signed;
+
+			// Type breakdown
+			types = db.prepare(
+				"SELECT type, COUNT(*) as c FROM memories WHERE is_deleted = 0 GROUP BY type ORDER BY c DESC"
+			).all() as Array<{ type: string; c: number }>;
+
+			// Merkle roots
+			try {
+				merkleCount = (db.prepare("SELECT COUNT(*) as c FROM merkle_roots").get() as any)?.c ?? 0;
+			} catch {
+				// Table may not exist yet
+			}
+		} finally {
+			db.close();
+		}
+
+		// Identity info
+		const did = getConfiguredDid();
+		const hasKeys = hasSigningKeypair();
+
+		console.log(chalk.bold("  Identity"));
+		if (did) {
+			console.log(chalk.green(`    DID:     ${formatDidShort(did)}`));
+		} else {
+			console.log(chalk.yellow(`    DID:     Not configured`));
+		}
+		console.log(`    Keypair: ${hasKeys ? chalk.green("✓") : chalk.yellow("✗ Not generated")}`);
+		console.log();
+
+		console.log(chalk.bold("  Memories"));
+		console.log(`    Total:    ${chalk.cyan(total.toString())}`);
+		console.log(`    Signed:   ${chalk.green(signed.toString())} ${total > 0 ? chalk.dim(`(${Math.round(signed / total * 100)}%)`) : ""}`);
+		if (unsigned > 0) {
+			console.log(`    Unsigned: ${chalk.yellow(unsigned.toString())}`);
+		}
+		console.log();
+
+		if (types.length > 0) {
+			console.log(chalk.bold("  Types"));
+			for (const t of types.slice(0, 8)) {
+				console.log(`    ${t.type.padEnd(16)} ${chalk.dim(t.c.toString())}`);
+			}
+			console.log();
+		}
+
+		console.log(chalk.bold("  Provenance"));
+		console.log(`    Merkle roots: ${chalk.cyan(merkleCount.toString())}`);
+
+		// Health score
+		const healthParts: number[] = [];
+		if (hasKeys) healthParts.push(25);
+		if (did) healthParts.push(25);
+		if (total > 0 && signed / total > 0.9) healthParts.push(25);
+		else if (total > 0 && signed / total > 0.5) healthParts.push(15);
+		if (merkleCount > 0) healthParts.push(25);
+		const health = healthParts.reduce((a, b) => a + b, 0);
+
+		console.log();
+		const healthColor = health >= 75 ? chalk.green : health >= 50 ? chalk.yellow : chalk.red;
+		console.log(chalk.bold(`  Health: ${healthColor(`${health}/100`)}`));
+	});
 
 program
 	.command("migrate-vectors")
@@ -5198,7 +6377,7 @@ program
 		const spinner = ora("Migrating vectors...").start();
 
 		try {
-			const db = Database(dbPath);
+			const db = new Database(dbPath);
 
 			// Load sqlite-vec extension BEFORE creating virtual table
 			if (!loadSqliteVec(db)) {
@@ -5342,6 +6521,1874 @@ program
 			spinner.fail("Migration failed");
 			console.error(chalk.red(`  ${(err as Error).message}`));
 			process.exit(1);
+		}
+	});
+
+// ============================================================================
+// On-Chain Identity Commands (Phase 4A)
+// ============================================================================
+
+const chainCmd = program.command("chain").description("On-chain identity and memory anchoring");
+
+chainCmd
+	.command("register")
+	.description("Register agent identity on-chain (ERC-8004)")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.option("--contract <address>", "SignetIdentity contract address")
+	.option("--metadata-uri <uri>", "Metadata URI (IPFS or HTTP)")
+	.action(async (options) => {
+		const {
+			getConfiguredDid,
+			getPublicKeyBytes,
+			CHAIN_CONFIGS,
+			createWallet,
+			loadWallet,
+			getWalletAddress,
+			checkWalletFunds,
+			registerIdentity,
+			getLocalIdentity,
+			keccak256Hash,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  On-Chain Identity Registration\n"));
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			console.error(chalk.dim(`  Supported: ${Object.keys(CHAIN_CONFIGS).join(", ")}`));
+			process.exit(1);
+		}
+
+		// Check DID exists
+		const did = getConfiguredDid();
+		if (!did) {
+			console.error(chalk.red("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+		console.log(chalk.dim(`  DID: ${did.slice(0, 40)}...`));
+
+		// Check contract address
+		const contractAddress = options.contract || chainConfig.contractAddress;
+		if (!contractAddress) {
+			console.error(chalk.red("  No contract address configured for this chain."));
+			console.error(chalk.dim("  Use --contract <address> to specify the deployed SignetIdentity contract."));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			// Check if already registered on this chain
+			const existing = getLocalIdentity(db, chain);
+			if (existing) {
+				console.log(chalk.yellow(`  Already registered on ${chain}!`));
+				console.log(chalk.dim(`  Token ID: ${existing.tokenId}`));
+				console.log(chalk.dim(`  TX: ${existing.txHash}`));
+				return;
+			}
+
+			// Ensure wallet exists
+			let walletAddress = getWalletAddress(db, chain);
+			if (!walletAddress) {
+				const spinner = ora("  Creating wallet...").start();
+				const walletConfig = await createWallet(db, chain);
+				walletAddress = walletConfig.address;
+				spinner.succeed(`  Wallet created: ${chalk.cyan(walletAddress)}`);
+			} else {
+				console.log(chalk.dim(`  Wallet: ${walletAddress}`));
+			}
+
+			// Check funds
+			const funds = await checkWalletFunds(walletAddress, chainConfig.rpcUrl);
+			console.log(chalk.dim(`  Balance: ${funds.balance} ETH`));
+
+			if (!funds.sufficient) {
+				console.log();
+				console.error(chalk.yellow("  ⚠ Insufficient ETH for registration transaction."));
+				console.error(chalk.dim(`  Send testnet ETH to: ${walletAddress}`));
+				if (chain === "base-sepolia") {
+					console.error(chalk.dim("  Faucet: https://www.coinbase.com/faucets/base-ethereum-goerli-faucet"));
+				}
+				process.exit(1);
+			}
+
+			// Compute public key hash
+			const pubKeyBytes = await getPublicKeyBytes();
+			const pubKeyHash = keccak256Hash(pubKeyBytes);
+
+			// Metadata URI (default: empty, can be IPFS later)
+			const metadataURI = options.metadataUri || "";
+
+			// Register on-chain
+			const spinner = ora("  Submitting registration transaction...").start();
+			const wallet = await loadWallet(db, chain, chainConfig.rpcUrl);
+			const result = await registerIdentity(
+				db, wallet, contractAddress, did, metadataURI, pubKeyHash, chain,
+			);
+			spinner.succeed("  Identity registered on-chain!");
+
+			console.log();
+			console.log(chalk.green.bold("  ✓ Registration complete"));
+			console.log(chalk.dim(`  Chain:    ${chain}`));
+			console.log(chalk.dim(`  Token ID: ${result.tokenId}`));
+			console.log(chalk.dim(`  TX:       ${result.txHash}`));
+			if (chainConfig.explorerUrl && result.txHash) {
+				console.log(chalk.dim(`  Explorer: ${chainConfig.explorerUrl}/tx/${result.txHash}`));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+chainCmd
+	.command("anchor")
+	.description("Anchor memory Merkle root on-chain")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.option("--contract <address>", "SignetIdentity contract address")
+	.action(async (options) => {
+		const {
+			CHAIN_CONFIGS,
+			loadWallet,
+			getLocalIdentity,
+			getMemoryRoot,
+			anchorMemoryOnChain,
+			checkWalletFunds,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Memory Anchoring\n"));
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			// Check on-chain identity exists
+			const identity = getLocalIdentity(db, chain);
+			if (!identity || !identity.tokenId) {
+				console.error(chalk.red("  No on-chain identity found. Run: signet chain register"));
+				process.exit(1);
+			}
+
+			const contractAddress = options.contract || identity.contractAddress || chainConfig.contractAddress;
+			if (!contractAddress) {
+				console.error(chalk.red("  No contract address found."));
+				process.exit(1);
+			}
+
+			// Check funds
+			const funds = await checkWalletFunds(identity.walletAddress, chainConfig.rpcUrl);
+			if (!funds.sufficient) {
+				console.error(chalk.yellow("  ⚠ Insufficient ETH for anchor transaction."));
+				console.error(chalk.dim(`  Balance: ${funds.balance} ETH`));
+				console.error(chalk.dim(`  Send ETH to: ${identity.walletAddress}`));
+				process.exit(1);
+			}
+
+			// Compute Merkle root
+			const spinner = ora("  Computing memory Merkle root...").start();
+			const merkleTree = getMemoryRoot(db);
+
+			if (merkleTree.count === 0) {
+				spinner.fail("  No memories to anchor");
+				return;
+			}
+
+			spinner.text = `  Anchoring ${merkleTree.count} memories...`;
+
+			// Submit anchor transaction
+			const wallet = await loadWallet(db, chain, chainConfig.rpcUrl);
+			const result = await anchorMemoryOnChain(
+				db, wallet, contractAddress,
+				identity.tokenId, merkleTree.root, merkleTree.count, identity.id,
+			);
+
+			spinner.succeed("  Memories anchored on-chain!");
+			console.log();
+			console.log(chalk.green.bold(`  ✓ Anchored ${merkleTree.count} memories`));
+			console.log(chalk.dim(`  Root: ${merkleTree.root}`));
+			console.log(chalk.dim(`  TX:   ${result.txHash}`));
+			if (chainConfig.explorerUrl) {
+				console.log(chalk.dim(`  Explorer: ${chainConfig.explorerUrl}/tx/${result.txHash}`));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+chainCmd
+	.command("status")
+	.description("Show on-chain identity status")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.action(async (options) => {
+		const {
+			CHAIN_CONFIGS,
+			getWalletAddress,
+			getWalletBalance,
+			getLocalIdentity,
+			getLatestAnchor,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  On-Chain Identity Status\n"));
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			console.log(chalk.dim(`  Chain: ${chain} (${chainConfig.chainId})`));
+			console.log(chalk.dim(`  RPC:   ${chainConfig.rpcUrl}`));
+			console.log();
+
+			// Wallet info
+			const walletAddress = getWalletAddress(db, chain);
+			if (walletAddress) {
+				console.log(chalk.bold("  Wallet"));
+				console.log(`    Address: ${chalk.cyan(walletAddress)}`);
+				try {
+					const balance = await getWalletBalance(walletAddress, chainConfig.rpcUrl);
+					console.log(`    Balance: ${balance} ETH`);
+				} catch {
+					console.log(chalk.dim("    Balance: (unable to fetch)"));
+				}
+			} else {
+				console.log(chalk.yellow("  No wallet configured"));
+				console.log(chalk.dim("  Run: signet chain wallet create"));
+			}
+			console.log();
+
+			// Identity info
+			const identity = getLocalIdentity(db, chain);
+			if (identity) {
+				console.log(chalk.bold("  On-Chain Identity"));
+				console.log(`    Token ID: ${chalk.cyan(identity.tokenId || "pending")}`);
+				console.log(`    DID:      ${identity.did.slice(0, 40)}...`);
+				console.log(`    TX:       ${identity.txHash || "none"}`);
+				console.log(`    Registered: ${identity.registeredAt || "pending"}`);
+
+				// Latest anchor
+				const anchor = getLatestAnchor(db, identity.id);
+				console.log();
+				if (anchor) {
+					console.log(chalk.bold("  Latest Memory Anchor"));
+					console.log(`    Root:   ${anchor.memoryRoot.slice(0, 20)}...`);
+					console.log(`    Count:  ${anchor.memoryCount} memories`);
+					console.log(`    TX:     ${anchor.txHash || "none"}`);
+					console.log(`    At:     ${anchor.anchoredAt || "unknown"}`);
+				} else {
+					console.log(chalk.dim("  No memory anchors yet"));
+					console.log(chalk.dim("  Run: signet chain anchor"));
+				}
+			} else {
+				console.log(chalk.yellow("  No on-chain identity"));
+				console.log(chalk.dim("  Run: signet chain register"));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+// Wallet subcommand
+const walletCmd = chainCmd.command("wallet").description("Manage Ethereum wallet");
+
+walletCmd
+	.command("create")
+	.description("Create a new Ethereum wallet")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.action(async (options) => {
+		const { CHAIN_CONFIGS, createWallet, getWalletAddress } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Wallet Creation\n"));
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			// Check for existing wallet
+			const existing = getWalletAddress(db, chain);
+			if (existing) {
+				console.log(chalk.yellow(`  Wallet already exists for ${chain}: ${existing}`));
+				return;
+			}
+
+			const spinner = ora("  Generating wallet...").start();
+			const wallet = await createWallet(db, chain);
+			spinner.succeed("  Wallet created!");
+
+			console.log();
+			console.log(chalk.green.bold("  ✓ New wallet ready"));
+			console.log(`    Chain:   ${chain}`);
+			console.log(`    Address: ${chalk.cyan(wallet.address)}`);
+			console.log();
+			console.log(chalk.dim("  Private key encrypted with master key."));
+			if (chain === "base-sepolia") {
+				console.log(chalk.dim("  Fund with testnet ETH:"));
+				console.log(chalk.dim("    https://www.coinbase.com/faucets/base-ethereum-goerli-faucet"));
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+walletCmd
+	.command("show")
+	.description("Show wallet address and balance")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.action(async (options) => {
+		const { CHAIN_CONFIGS, getWalletAddress, getWalletBalance } = await import("@signet/core");
+
+		const chain = options.chain;
+		const chainConfig = CHAIN_CONFIGS[chain];
+		if (!chainConfig) {
+			console.error(chalk.red(`  Unknown chain: ${chain}`));
+			process.exit(1);
+		}
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const address = getWalletAddress(db, chain);
+			if (!address) {
+				console.log(chalk.yellow("  No wallet found. Run: signet chain wallet create"));
+				process.exit(1);
+			}
+
+			console.log(`  Address: ${chalk.cyan(address)}`);
+			try {
+				const balance = await getWalletBalance(address, chainConfig.rpcUrl);
+				console.log(`  Balance: ${balance} ETH`);
+			} catch {
+				console.log(chalk.dim("  Balance: (unable to fetch)"));
+			}
+			console.log(`  Chain:   ${chain} (${chainConfig.chainId})`);
+		} finally {
+			db.close();
+		}
+	});
+
+walletCmd
+	.command("export")
+	.description("Export wallet private key (DANGEROUS)")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.action(async (options) => {
+		const { CHAIN_CONFIGS, exportWalletKey, getWalletAddress } = await import("@signet/core");
+
+		const chain = options.chain;
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const address = getWalletAddress(db, chain);
+			if (!address) {
+				console.error(chalk.red("  No wallet found."));
+				process.exit(1);
+			}
+
+			console.log(chalk.red.bold("\n  ⚠ WARNING: This will display your private key!"));
+			console.log(chalk.red("  Anyone with this key can spend your funds.\n"));
+
+			const confirmed = await confirm({
+				message: "Are you sure you want to export the private key?",
+				default: false,
+			});
+
+			if (!confirmed) {
+				console.log(chalk.dim("  Cancelled."));
+				return;
+			}
+
+			const key = await exportWalletKey(db, chain);
+			console.log();
+			console.log(chalk.dim(`  Address: ${address}`));
+			console.log(`  Private Key: ${chalk.red(key)}`);
+			console.log();
+			console.log(chalk.yellow("  Store this securely and never share it."));
+		} finally {
+			db.close();
+		}
+	});
+
+// ============================================================================
+// Session Key Commands (Phase 4B)
+// ============================================================================
+
+const sessionCmd = chainCmd.command("session").description("Manage session keys for scoped operations");
+
+sessionCmd
+	.command("create")
+	.description("Create a new session key with scoped permissions")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.option("--duration <hours>", "Validity duration in hours", "24")
+	.option("--max-tx <eth>", "Maximum transaction value in ETH", "0.01")
+	.option("--max-daily-spend <eth>", "Maximum daily spend in ETH", "0.1")
+	.option("--max-daily-tx <count>", "Maximum daily transactions", "100")
+	.option("--contracts <addresses>", "Comma-separated allowed contract addresses")
+	.option("--functions <selectors>", "Comma-separated allowed function selectors")
+	.action(async (options) => {
+		const { getWalletAddress, createSessionKey } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Session Key Creation\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const walletAddress = getWalletAddress(db, options.chain);
+			if (!walletAddress) {
+				console.error(chalk.red("  No wallet found. Run: signet chain wallet create"));
+				process.exit(1);
+			}
+
+			const permissions = {
+				maxTransactionValue: options.maxTx,
+				allowedContracts: options.contracts ? options.contracts.split(",").map((s: string) => s.trim()) : [],
+				allowedFunctions: options.functions ? options.functions.split(",").map((s: string) => s.trim()) : [],
+				maxDailyTransactions: parseInt(options.maxDailyTx, 10),
+				maxDailySpend: options.maxDailySpend,
+			};
+
+			const spinner = ora("  Creating session key...").start();
+			const sessionKey = await createSessionKey(
+				db,
+				walletAddress,
+				permissions,
+				parseFloat(options.duration),
+			);
+			spinner.succeed("  Session key created!");
+
+			console.log();
+			console.log(chalk.green.bold("  ✓ Session key ready"));
+			console.log(`    ID:        ${chalk.cyan(sessionKey.id)}`);
+			console.log(`    Address:   ${chalk.cyan(sessionKey.sessionAddress)}`);
+			console.log(`    Expires:   ${sessionKey.expiresAt}`);
+			console.log(`    Max TX:    ${permissions.maxTransactionValue} ETH`);
+			console.log(`    Daily cap: ${permissions.maxDailySpend} ETH`);
+			console.log();
+			console.log(chalk.dim("  Fund the session key address to enable transactions."));
+			console.log(chalk.dim("  Private key encrypted with master key — never exposed."));
+		} finally {
+			db.close();
+		}
+	});
+
+sessionCmd
+	.command("list")
+	.description("List active session keys")
+	.option("--chain <chain>", "Target chain", "base-sepolia")
+	.option("--all", "Include expired/revoked keys")
+	.action(async (options) => {
+		const { getWalletAddress, getActiveSessionKeys } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const walletAddress = getWalletAddress(db, options.chain);
+			if (!walletAddress) {
+				console.error(chalk.red("  No wallet found. Run: signet chain wallet create"));
+				process.exit(1);
+			}
+
+			let keys;
+			if (options.all) {
+				keys = db
+					.prepare("SELECT * FROM session_keys WHERE wallet_address = ? ORDER BY created_at DESC")
+					.all(walletAddress)
+					.map((row: Record<string, unknown>) => ({
+						id: row.id as string,
+						sessionAddress: row.session_address as string,
+						permissions: JSON.parse(row.permissions as string),
+						expiresAt: row.expires_at as string,
+						createdAt: row.created_at as string,
+						revokedAt: row.revoked_at as string | null,
+					}));
+			} else {
+				keys = getActiveSessionKeys(db, walletAddress);
+			}
+
+			if (keys.length === 0) {
+				console.log(chalk.yellow("  No session keys found."));
+				console.log(chalk.dim("  Run: signet chain session create"));
+				return;
+			}
+
+			console.log(chalk.bold(`  Session Keys (${keys.length})\n`));
+			for (const key of keys) {
+				const expired = new Date(key.expiresAt) <= new Date();
+				const revoked = !!(key as any).revokedAt;
+				let status = chalk.green("ACTIVE");
+				if (revoked) status = chalk.red("REVOKED");
+				else if (expired) status = chalk.yellow("EXPIRED");
+
+				console.log(`  ${chalk.cyan(key.id)}`);
+				console.log(`    Address:  ${key.sessionAddress}`);
+				console.log(`    Status:   ${status}`);
+				console.log(`    Expires:  ${key.expiresAt}`);
+				console.log(`    Max TX:   ${key.permissions.maxTransactionValue} ETH`);
+				console.log();
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+sessionCmd
+	.command("revoke")
+	.description("Revoke a session key")
+	.argument("<id>", "Session key ID to revoke")
+	.action(async (id) => {
+		const { revokeSessionKey } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			revokeSessionKey(db, id);
+			console.log(chalk.green(`  ✓ Session key ${chalk.cyan(id)} revoked.`));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+// ============================================================================
+// Payment Commands (Phase 4B)
+// ============================================================================
+
+chainCmd
+	.command("payments")
+	.description("View x402 payment history")
+	.option("--limit <count>", "Number of payments to show", "20")
+	.option("--session-key <id>", "Filter by session key ID")
+	.option("--status <status>", "Filter by status (pending|completed|failed)")
+	.action(async (options) => {
+		const { getPaymentHistory } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  x402 Payment History\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const payments = getPaymentHistory(db, {
+				limit: parseInt(options.limit, 10),
+				sessionKeyId: options.sessionKey,
+				status: options.status,
+			});
+
+			if (payments.length === 0) {
+				console.log(chalk.dim("  No payments found."));
+				return;
+			}
+
+			for (const payment of payments) {
+				const statusColor = payment.status === "completed" ? chalk.green
+					: payment.status === "failed" ? chalk.red
+					: chalk.yellow;
+
+				console.log(`  ${chalk.cyan(payment.id)}`);
+				console.log(`    Amount:  ${payment.amount} ETH`);
+				console.log(`    To:      ${payment.toAddress}`);
+				console.log(`    Status:  ${statusColor(payment.status)}`);
+				console.log(`    Purpose: ${payment.purpose || "(none)"}`);
+				if (payment.txHash) {
+					console.log(`    TX:      ${payment.txHash}`);
+				}
+				console.log(`    Date:    ${payment.createdAt}`);
+				console.log();
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+// ============================================================================
+// Bundle Export/Import Commands (Phase 4B — signed bundles)
+// ============================================================================
+
+const bundleCmd = program
+	.command("bundle")
+	.description("Signed bundle export/import (Phase 4B)");
+
+bundleCmd
+	.command("export")
+	.description("Export agent data as a portable signed bundle")
+	.option("--output <path>", "Output file path")
+	.option("--query <search>", "Export only memories matching this search")
+	.option("--format <format>", "Export format: full, selective, agent-card", "full")
+	.action(async (options) => {
+		const { exportBundle, exportSelective } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Portable Export\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const spinner = ora("  Exporting agent data...").start();
+
+			let result: { filePath: string; metadata: any };
+
+			if (options.query || options.format === "selective") {
+				if (!options.query) {
+					spinner.fail("  --query is required for selective export");
+					process.exit(1);
+				}
+				result = await exportSelective(db, options.query, {
+					outputPath: options.output,
+				});
+			} else {
+				result = await exportBundle(db, {
+					outputPath: options.output,
+					format: options.format,
+				});
+			}
+
+			spinner.succeed("  Export complete!");
+
+			console.log();
+			console.log(chalk.green.bold("  ✓ Bundle created"));
+			console.log(`    File:       ${result.filePath}`);
+			console.log(`    Format:     ${result.metadata.format}`);
+			console.log(`    Memories:   ${result.metadata.counts.memories}`);
+			console.log(`    Decisions:  ${result.metadata.counts.decisions}`);
+			console.log(`    Entities:   ${result.metadata.counts.entities}`);
+			console.log(`    Relations:  ${result.metadata.counts.relations}`);
+			console.log(`    Checksum:   ${result.metadata.checksum.slice(0, 16)}...`);
+			if (result.metadata.signature) {
+				console.log(`    Signed:     ${chalk.green("✓")} (DID verified)`);
+			} else {
+				console.log(`    Signed:     ${chalk.yellow("✗")} (no signing key)`);
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+bundleCmd
+	.command("import")
+	.description("Import an agent bundle")
+	.argument("<bundle-path>", "Path to .signet-bundle.json.gz file")
+	.option("--dry-run", "Preview import without writing data")
+	.option("--merge-strategy <strategy>", "Merge strategy: replace, merge, skip", "merge")
+	.option("--skip-verification", "Skip signature verification")
+	.action(async (bundlePath, options) => {
+		const { importBundle } = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Bundle Import\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		if (!existsSync(bundlePath)) {
+			console.error(chalk.red(`  Bundle not found: ${bundlePath}`));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const spinner = ora(
+				options.dryRun ? "  Analyzing bundle (dry run)..." : "  Importing bundle...",
+			).start();
+
+			const result = await importBundle(db, bundlePath, {
+				mergeStrategy: options.mergeStrategy === "skip" ? "skip-existing" : options.mergeStrategy,
+				dryRun: !!options.dryRun,
+				skipVerification: !!options.skipVerification,
+			});
+
+			if (options.dryRun) {
+				spinner.succeed("  Dry run complete — no data written");
+			} else {
+				spinner.succeed("  Import complete!");
+			}
+
+			console.log();
+			console.log(chalk.bold("  Bundle Info"));
+			console.log(`    Version:  ${result.bundleMetadata.version}`);
+			console.log(`    Format:   ${result.bundleMetadata.format}`);
+			console.log(`    Exported: ${result.bundleMetadata.exportedAt}`);
+			if (result.bundleMetadata.did) {
+				console.log(`    DID:      ${result.bundleMetadata.did.slice(0, 40)}...`);
+			}
+
+			console.log();
+			console.log(chalk.bold("  Import Summary"));
+			console.log(`    Strategy:           ${result.mergeStrategy}`);
+			console.log(`    Memories imported:   ${chalk.green(String(result.imported.memories))}`);
+			console.log(`    Memories skipped:    ${chalk.dim(String(result.skipped.memories))}`);
+			console.log(`    Decisions imported:  ${chalk.green(String(result.imported.decisions))}`);
+			console.log(`    Decisions skipped:   ${chalk.dim(String(result.skipped.decisions))}`);
+			console.log(`    Entities imported:   ${chalk.green(String(result.imported.entities))}`);
+			console.log(`    Relations imported:  ${chalk.green(String(result.imported.relations))}`);
+
+			if (result.warnings.length > 0) {
+				console.log();
+				console.log(chalk.yellow("  Warnings:"));
+				for (const w of result.warnings) {
+					console.log(chalk.yellow(`    ⚠ ${w}`));
+				}
+			}
+		} catch (err) {
+			console.error(chalk.red(`  Import failed: ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+// ============================================================================
+// Perception Layer Commands
+// ============================================================================
+
+const perceiveCmd = program
+	.command("perceive")
+	.description("Ambient perception layer — learn from your work activity");
+
+perceiveCmd
+	.command("start")
+	.description("Start perception capture")
+	.option("--screen", "Enable screen capture")
+	.option("--voice", "Enable voice capture")
+	.option("--files", "Enable file watching")
+	.option("--terminal", "Enable terminal watching")
+	.option("--comms", "Enable communications watching")
+	.option("--no-screen", "Disable screen capture")
+	.option("--no-files", "Disable file watching")
+	.option("--no-terminal", "Disable terminal watching")
+	.option("--no-comms", "Disable communications watching")
+	.action(async (options: Record<string, boolean | undefined>) => {
+		console.log(signetLogo());
+
+		// Build config overrides from CLI flags
+		const configOverrides: Record<string, unknown> = {};
+		if (options.screen !== undefined) configOverrides.screen = { enabled: options.screen };
+		if (options.voice !== undefined) configOverrides.voice = { enabled: options.voice };
+		if (options.files !== undefined) configOverrides.files = { enabled: options.files };
+		if (options.terminal !== undefined) configOverrides.terminal = { enabled: options.terminal };
+		if (options.comms !== undefined) configOverrides.comms = { enabled: options.comms };
+
+		// Also load from agent.yaml if available
+		const agentYamlPath = join(AGENTS_DIR, "agent.yaml");
+		let yamlConfig: Record<string, unknown> = {};
+		if (existsSync(agentYamlPath)) {
+			try {
+				const raw = readFileSync(agentYamlPath, "utf-8");
+				const parsed = parseSimpleYaml(raw);
+				if (parsed.perception && typeof parsed.perception === "object") {
+					yamlConfig = parsed.perception as Record<string, unknown>;
+				}
+			} catch {
+				// Use defaults
+			}
+		}
+
+		// Voice capture warning
+		const voiceEnabled =
+			options.voice === true ||
+			(!options.voice && (yamlConfig as any)?.voice?.enabled === true);
+		if (voiceEnabled) {
+			console.log(
+				chalk.yellow(
+					"  ⚠ Voice capture requires microphone access. All processing is local.",
+				),
+			);
+			console.log();
+		}
+
+		const spinner = ora("Starting perception layer...").start();
+
+		try {
+			const { startPerception } = await import("@signet/perception");
+			const mergedConfig = { ...yamlConfig, ...configOverrides };
+			await startPerception(mergedConfig as any);
+
+			spinner.succeed("Perception layer started");
+			console.log(chalk.dim("  Capturing ambient activity..."));
+			if (voiceEnabled) {
+				console.log(chalk.dim("  🎤 Voice capture: ACTIVE (local Whisper transcription)"));
+			}
+			console.log(chalk.dim("  Run `signet perceive status` for details"));
+			console.log(chalk.dim("  Run `signet perceive stop` to stop"));
+			console.log();
+
+			// Keep the process running
+			process.on("SIGINT", async () => {
+				console.log();
+				const stopSpinner = ora("Stopping perception...").start();
+				const { stopPerception } = await import("@signet/perception");
+				await stopPerception();
+				stopSpinner.succeed("Perception stopped");
+				process.exit(0);
+			});
+
+			// Block — run until interrupted
+			await new Promise(() => {});
+		} catch (err) {
+			spinner.fail(`Failed to start perception: ${(err as Error).message}`);
+		}
+	});
+
+perceiveCmd
+	.command("stop")
+	.description("Stop perception capture")
+	.action(async () => {
+		console.log(signetLogo());
+		try {
+			const { stopPerception } = await import("@signet/perception");
+			await stopPerception();
+			console.log(chalk.green("  Perception stopped."));
+		} catch (err) {
+			console.log(chalk.yellow("  Perception is not running or already stopped."));
+		}
+	});
+
+perceiveCmd
+	.command("status")
+	.description("Show perception status")
+	.action(async () => {
+		console.log(signetLogo());
+
+		try {
+			const { getPerceptionStatus } = await import("@signet/perception");
+			const status = await getPerceptionStatus();
+
+			if (!status.running) {
+				console.log(chalk.yellow("  Perception: INACTIVE"));
+				console.log(chalk.dim("  Run `signet perceive start` to begin."));
+				return;
+			}
+
+			const uptime = status.startedAt
+				? formatUptime((Date.now() - new Date(status.startedAt).getTime()) / 1000)
+				: "unknown";
+
+			console.log(chalk.green(`  Perception: ACTIVE (${uptime})`));
+
+			const adapters = status.adapters;
+			const adapterLine = (name: string, a: { enabled: boolean; captureCount: number }) =>
+				a.enabled
+					? chalk.green(`  ├── ${name}: ON (${a.captureCount} captures)`)
+					: chalk.dim(`  ├── ${name}: OFF`);
+
+			console.log(adapterLine("Screen", adapters.screen));
+			console.log(adapterLine("Voice", adapters.voice));
+			console.log(adapterLine("Files", adapters.files));
+			console.log(adapterLine("Terminal", adapters.terminal));
+			// Last one uses └
+			const commsLine = adapters.comms.enabled
+				? chalk.green(`  └── Comms: ON (${adapters.comms.captureCount} captures)`)
+				: chalk.dim(`  └── Comms: OFF`);
+			console.log(commsLine);
+
+			console.log();
+			if (status.lastRefinerRun) {
+				const ago = Math.round(
+					(Date.now() - new Date(status.lastRefinerRun).getTime()) / 60000,
+				);
+				console.log(chalk.dim(`  Last refiner run: ${ago} minutes ago`));
+			}
+			console.log(chalk.dim(`  Memories extracted today: ${status.memoriesExtractedToday}`));
+		} catch (err) {
+			console.log(chalk.yellow("  Could not get perception status."));
+			console.log(chalk.dim(`  ${(err as Error).message}`));
+		}
+	});
+
+// ============================================================================
+// signet perceive profile / export / graph — Distillation commands
+// ============================================================================
+
+perceiveCmd
+	.command("profile")
+	.description("Show cognitive profile built from observations")
+	.option("--full", "Show full JSON profile")
+	.option("--json", "Output as JSON")
+	.option("--rebuild", "Force rebuild (re-run LLM synthesis)")
+	.action(async (options: { full?: boolean; json?: boolean; rebuild?: boolean }) => {
+		console.log(signetLogo());
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run `signet setup` first."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const {
+				loadCognitiveProfile,
+				buildCognitiveProfile,
+				runDistillation,
+			} = await import("@signet/perception");
+
+			let profile = options.rebuild ? null : loadCognitiveProfile(db);
+
+			if (!profile) {
+				const spinner = ora("Building cognitive profile (this may take a minute)...").start();
+				try {
+					const result = await runDistillation(db);
+					profile = result.profile;
+					if (profile) {
+						spinner.succeed("Cognitive profile built");
+					} else {
+						spinner.fail("Could not build profile (not enough data?)");
+						return;
+					}
+				} catch (err) {
+					spinner.fail(`Profile build failed: ${(err as Error).message}`);
+					return;
+				}
+			}
+
+			if (options.json) {
+				console.log(JSON.stringify(profile, null, 2));
+				return;
+			}
+
+			// Pretty print
+			console.log(
+				chalk.bold(
+					`  🧠 Cognitive Profile (${Math.round(profile.confidenceScore * 100)}% confidence, ${profile.observationDays} days observed)`,
+				),
+			);
+			console.log();
+
+			console.log(
+				`  ${chalk.cyan("Problem Solving:")} ${profile.problemSolving.approach}` +
+					(profile.problemSolving.debuggingStyle !== "unknown"
+						? ` (${profile.problemSolving.debuggingStyle})`
+						: ""),
+			);
+			console.log(
+				`  ${chalk.cyan("Communication:")} ${profile.communication.verbosity} + ${profile.communication.formality}` +
+					(profile.communication.preferredFormats.length > 0
+						? `, prefers ${profile.communication.preferredFormats.join(", ")}`
+						: ""),
+			);
+			console.log(
+				`  ${chalk.cyan("Peak Hours:")} ${profile.workPatterns.peakHours.length > 0 ? profile.workPatterns.peakHours.map((h: number) => `${h}:00`).join(", ") : "unknown"}`,
+			);
+
+			if (profile.expertise.languages.length > 0) {
+				console.log(
+					`  ${chalk.cyan("Languages:")} ${profile.expertise.languages.join(", ")}`,
+				);
+			}
+			if (profile.expertise.frameworks.length > 0) {
+				console.log(
+					`  ${chalk.cyan("Frameworks:")} ${profile.expertise.frameworks.join(", ")}`,
+				);
+			}
+			if (profile.expertise.primaryDomains.length > 0) {
+				console.log(
+					`  ${chalk.cyan("Domains:")} ${profile.expertise.primaryDomains.join(", ")}`,
+				);
+			}
+
+			console.log(
+				`  ${chalk.cyan("Tools:")} ${profile.toolPreferences.editor}` +
+					(profile.toolPreferences.terminal !== "unknown"
+						? ` + ${profile.toolPreferences.terminal}`
+						: "") +
+					(profile.toolPreferences.prefersCLI ? ", prefers CLI" : ""),
+			);
+			console.log(
+				`  ${chalk.cyan("Decision Style:")} ${profile.decisionMaking.speed}` +
+					(profile.decisionMaking.revisitsDecisions
+						? ", revisits decisions"
+						: ", commits once decided"),
+			);
+
+			if (options.full) {
+				console.log();
+				console.log(chalk.dim("  Full profile JSON:"));
+				console.log(chalk.dim(JSON.stringify(profile, null, 2)));
+			}
+
+			console.log();
+			console.log(chalk.dim("  Run `signet perceive profile --full` for detailed breakdown"));
+			console.log(chalk.dim("  Run `signet perceive export` to generate training context"));
+		} catch (err) {
+			console.error(chalk.red(`  Error: ${(err as Error).message}`));
+		} finally {
+			db.close();
+		}
+	});
+
+perceiveCmd
+	.command("export")
+	.description("Export agent card and training context for agent personalization")
+	.option("--output <path>", "Output directory", join(AGENTS_DIR))
+	.action(async (options: { output: string }) => {
+		console.log(signetLogo());
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run `signet setup` first."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const {
+				loadCognitiveProfile,
+				runDistillation,
+				generateAgentCard,
+				exportAgentCard,
+				generateTrainingContext,
+				loadMemoriesForCard,
+			} = await import("@signet/perception");
+
+			let profile = loadCognitiveProfile(db);
+
+			if (!profile) {
+				const spinner = ora("Building cognitive profile first...").start();
+				const result = await runDistillation(db);
+				profile = result.profile;
+				if (!profile) {
+					spinner.fail("Could not build profile");
+					return;
+				}
+				spinner.succeed("Profile built");
+			}
+
+			const memories = loadMemoriesForCard(db);
+			const card = generateAgentCard(profile, memories);
+			const training = generateTrainingContext(profile, memories);
+
+			const outputDir = options.output;
+			mkdirSync(outputDir, { recursive: true });
+
+			// Export agent card
+			const cardPath = join(outputDir, "agent-card.json");
+			exportAgentCard(card, cardPath);
+			console.log(chalk.green(`  ✓ Agent card: ${cardPath}`));
+
+			// Export training context
+			const contextPath = join(outputDir, "training-context.md");
+			writeFileSync(contextPath, training, "utf-8");
+			console.log(chalk.green(`  ✓ Training context: ${contextPath}`));
+
+			// Export cognitive profile
+			const profilePath = join(outputDir, "cognitive-profile.json");
+			writeFileSync(profilePath, JSON.stringify(profile, null, 2), "utf-8");
+			console.log(chalk.green(`  ✓ Cognitive profile: ${profilePath}`));
+
+			console.log();
+			console.log(
+				chalk.dim(
+					"  The training-context.md can be injected into any agent's system prompt",
+				),
+			);
+			console.log(
+				chalk.dim("  to make the agent personalized to your working style."),
+			);
+		} catch (err) {
+			console.error(chalk.red(`  Error: ${(err as Error).message}`));
+		} finally {
+			db.close();
+		}
+	});
+
+perceiveCmd
+	.command("graph")
+	.description("Show expertise graph — skill/tool relationships")
+	.option("--domain <domain>", "Show depth for a specific domain")
+	.option("--json", "Output as JSON")
+	.action(async (options: { domain?: string; json?: boolean }) => {
+		console.log(signetLogo());
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run `signet setup` first."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const {
+				getExpertiseGraph,
+				buildExpertiseGraph,
+				getExpertiseDepth,
+				getRelatedSkills,
+			} = await import("@signet/perception");
+
+			if (options.domain) {
+				// Show depth for a specific domain
+				const depth = await getExpertiseDepth(db, options.domain);
+				const related = await getRelatedSkills(db, options.domain);
+
+				if (options.json) {
+					console.log(JSON.stringify({ depth, related }, null, 2));
+					return;
+				}
+
+				console.log(chalk.bold(`  📊 Expertise: ${options.domain}`));
+				console.log();
+				console.log(`  ${chalk.cyan("Depth:")} ${depth.depth}`);
+				console.log(`  ${chalk.cyan("Memories:")} ${depth.memoryCount}`);
+				console.log(`  ${chalk.cyan("Unique skills:")} ${depth.uniqueSkills}`);
+
+				if (depth.relatedEntities.length > 0) {
+					console.log(
+						`  ${chalk.cyan("Related:")} ${depth.relatedEntities.join(", ")}`,
+					);
+				}
+
+				if (related.length > 0) {
+					console.log();
+					console.log(chalk.dim("  Commonly used with:"));
+					for (const r of related.slice(0, 10)) {
+						const bar = "█".repeat(Math.round(r.weight * 3));
+						console.log(
+							`    ${chalk.dim(bar)} ${r.skill} (weight: ${r.weight.toFixed(1)})`,
+						);
+					}
+				}
+
+				return;
+			}
+
+			// Build or load the full graph
+			let graph = await getExpertiseGraph(db);
+			if (graph.nodes.length === 0) {
+				const spinner = ora("Building expertise graph...").start();
+				graph = await buildExpertiseGraph(db);
+				spinner.succeed("Graph built");
+			}
+
+			if (options.json) {
+				console.log(JSON.stringify(graph, null, 2));
+				return;
+			}
+
+			console.log(
+				chalk.bold(
+					`  🕸️  Expertise Graph — ${graph.nodes.length} entities, ${graph.edges.length} connections`,
+				),
+			);
+			console.log();
+
+			// Group nodes by type
+			const byType = new Map<string, Array<{ name: string; mentions: number }>>();
+			for (const node of graph.nodes) {
+				const group = byType.get(node.entityType) || [];
+				group.push({ name: node.name, mentions: node.mentions });
+				byType.set(node.entityType, group);
+			}
+
+			const typeEmoji: Record<string, string> = {
+				language: "💻",
+				framework: "🏗️",
+				tool: "🔧",
+				skill: "⚡",
+				project: "📁",
+				person: "👤",
+				domain: "🌐",
+			};
+
+			for (const [type, items] of byType) {
+				const sorted = items.sort((a, b) => b.mentions - a.mentions);
+				const emoji = typeEmoji[type] || "•";
+				console.log(
+					`  ${emoji} ${chalk.cyan(type.toUpperCase())} (${sorted.length})`,
+				);
+				for (const item of sorted.slice(0, 8)) {
+					console.log(
+						`    ${chalk.dim("•")} ${item.name} ${chalk.dim(`(${item.mentions}×)`)}`,
+					);
+				}
+				if (sorted.length > 8) {
+					console.log(chalk.dim(`    ... and ${sorted.length - 8} more`));
+				}
+				console.log();
+			}
+
+			console.log(chalk.dim("  Run `signet perceive graph --domain <name>` for depth analysis"));
+		} catch (err) {
+			console.error(chalk.red(`  Error: ${(err as Error).message}`));
+		} finally {
+			db.close();
+		}
+	});
+
+// ============================================================================
+// Federation Commands (Phase 5)
+// ============================================================================
+
+const federationCmd = program
+	.command("federation")
+	.description("P2P federation — peer connections, sync, and selective memory publishing");
+
+federationCmd
+	.command("start")
+	.description("Start the federation WebSocket server")
+	.option("--port <port>", "WebSocket server port", "3851")
+	.action(async (options) => {
+		const {
+			createFederationServer,
+			getConfiguredDid,
+			getPublicKeyBase64,
+			hasSigningKeypair,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Federation Server\n"));
+
+		if (!hasSigningKeypair()) {
+			console.error(chalk.red("  No signing keypair found. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.error(chalk.red("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const publicKey = await getPublicKeyBase64();
+		const port = parseInt(options.port, 10);
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Run: signet setup"));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const server = createFederationServer(port, db, {
+				port,
+				did,
+				publicKey,
+			});
+
+			console.log(chalk.green.bold("  ✓ Federation server started"));
+			console.log(`    Port:  ${chalk.cyan(String(port))}`);
+			console.log(`    DID:   ${chalk.dim(did)}`);
+			console.log();
+			console.log(chalk.dim("  Peers can connect to: ws://localhost:" + port));
+			console.log(chalk.dim("  Press Ctrl+C to stop"));
+
+			// Keep process alive
+			process.on("SIGINT", () => {
+				console.log(chalk.dim("\n  Shutting down..."));
+				server.close();
+				db.close();
+				process.exit(0);
+			});
+
+			// Keep the process running
+			await new Promise(() => {});
+		} catch (err) {
+			console.error(chalk.red(`  Error: ${(err as Error).message}`));
+			db.close();
+			process.exit(1);
+		}
+	});
+
+federationCmd
+	.command("status")
+	.description("Show federation status")
+	.action(async () => {
+		const {
+			getPeers,
+			getPublishRules,
+			getConfiguredDid,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Federation Status\n"));
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const did = getConfiguredDid();
+			const peers = getPeers(db);
+			const rules = getPublishRules(db);
+
+			const trusted = peers.filter((p: any) => p.trustLevel === "trusted").length;
+			const pending = peers.filter((p: any) => p.trustLevel === "pending").length;
+			const blocked = peers.filter((p: any) => p.trustLevel === "blocked").length;
+
+			const totalShared = peers.reduce((sum: number, p: any) => sum + p.memoriesShared, 0);
+			const totalReceived = peers.reduce((sum: number, p: any) => sum + p.memoriesReceived, 0);
+
+			console.log(`  DID:            ${did ? chalk.cyan(did) : chalk.yellow("Not configured")}`);
+			console.log();
+			console.log(chalk.bold("  Peers"));
+			console.log(`    Trusted:      ${chalk.green(String(trusted))}`);
+			console.log(`    Pending:      ${chalk.yellow(String(pending))}`);
+			console.log(`    Blocked:      ${chalk.red(String(blocked))}`);
+			console.log();
+			console.log(chalk.bold("  Sync"));
+			console.log(`    Shared:       ${totalShared} memories`);
+			console.log(`    Received:     ${totalReceived} memories`);
+			console.log();
+			console.log(chalk.bold("  Publish Rules"));
+			console.log(`    Active:       ${rules.length}`);
+			console.log(`    Auto-publish: ${rules.filter((r: any) => r.autoPublish).length}`);
+		} finally {
+			db.close();
+		}
+	});
+
+// -- Peer subcommands --
+
+const peerCmd = federationCmd.command("peer").description("Manage federation peers");
+
+peerCmd
+	.command("add <endpoint-url>")
+	.description("Connect to a peer at the given WebSocket URL")
+	.action(async (endpointUrl) => {
+		const {
+			connectToPeer,
+			addPeer,
+			getConfiguredDid,
+			getPublicKeyBase64,
+			hasSigningKeypair,
+			getPeerByDid,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Add Federation Peer\n"));
+
+		if (!hasSigningKeypair()) {
+			console.error(chalk.red("  No signing keypair. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.error(chalk.red("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const publicKey = await getPublicKeyBase64();
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const spinner = ora(`  Connecting to ${endpointUrl}...`).start();
+
+			const connection = await connectToPeer(endpointUrl, {
+				port: 0,
+				did,
+				publicKey,
+			});
+
+			spinner.succeed(`  Connected! Peer DID verified.`);
+
+			// Check if peer already exists
+			const existing = getPeerByDid(db, connection.peerDid);
+			if (existing) {
+				console.log(chalk.yellow(`  Peer already registered: ${existing.id}`));
+				console.log(chalk.dim(`  DID: ${connection.peerDid}`));
+			} else {
+				const peerId = `peer_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+				const peer = addPeer(db, {
+					id: peerId,
+					did: connection.peerDid,
+					publicKey: connection.peerPublicKey,
+					endpointUrl: endpointUrl,
+					trustLevel: "pending",
+				});
+
+				console.log(chalk.green.bold(`  ✓ Peer added`));
+				console.log(`    ID:        ${chalk.cyan(peer.id)}`);
+				console.log(`    DID:       ${chalk.dim(peer.did)}`);
+				console.log(`    Trust:     ${chalk.yellow("pending")}`);
+				console.log();
+				console.log(chalk.dim("  Run: signet federation peer trust " + peer.id));
+			}
+
+			connection.close();
+		} catch (err) {
+			console.error(chalk.red(`  Failed to connect: ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+peerCmd
+	.command("list")
+	.description("List all federation peers")
+	.action(async () => {
+		const { getPeers } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const peers = getPeers(db);
+
+			if (peers.length === 0) {
+				console.log(chalk.dim("  No federation peers."));
+				console.log(chalk.dim("  Run: signet federation peer add <ws-url>"));
+				return;
+			}
+
+			console.log(chalk.bold(`  Federation Peers (${peers.length})\n`));
+
+			for (const peer of peers) {
+				const trustColor = peer.trustLevel === "trusted" ? chalk.green
+					: peer.trustLevel === "blocked" ? chalk.red
+					: chalk.yellow;
+
+				console.log(`  ${chalk.cyan(peer.id)}`);
+				if (peer.displayName) console.log(`    Name:     ${peer.displayName}`);
+				console.log(`    DID:      ${chalk.dim(peer.did)}`);
+				console.log(`    Trust:    ${trustColor(peer.trustLevel)}`);
+				if (peer.endpointUrl) console.log(`    Endpoint: ${peer.endpointUrl}`);
+				console.log(`    Shared:   ${peer.memoriesShared} | Received: ${peer.memoriesReceived}`);
+				if (peer.lastSeen) console.log(`    Last seen: ${peer.lastSeen}`);
+				console.log();
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+peerCmd
+	.command("trust <peer-id>")
+	.description("Trust a peer (allows sync)")
+	.action(async (peerId) => {
+		const { updatePeerTrust, getPeerById } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const peer = getPeerById(db, peerId);
+			if (!peer) {
+				console.error(chalk.red(`  Peer not found: ${peerId}`));
+				process.exit(1);
+			}
+
+			updatePeerTrust(db, peerId, "trusted");
+			console.log(chalk.green(`  ✓ Peer ${chalk.cyan(peerId)} is now trusted.`));
+			console.log(chalk.dim("  This peer can now sync memories with you."));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+peerCmd
+	.command("block <peer-id>")
+	.description("Block a peer (rejects connections)")
+	.action(async (peerId) => {
+		const { blockFederationPeer, getPeerById } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const peer = getPeerById(db, peerId);
+			if (!peer) {
+				console.error(chalk.red(`  Peer not found: ${peerId}`));
+				process.exit(1);
+			}
+
+			blockFederationPeer(db, peerId);
+			console.log(chalk.red(`  ✓ Peer ${chalk.cyan(peerId)} is now blocked.`));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+peerCmd
+	.command("remove <peer-id>")
+	.description("Remove a peer and all associated records")
+	.action(async (peerId) => {
+		const { removePeer, getPeerById } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const peer = getPeerById(db, peerId);
+			if (!peer) {
+				console.error(chalk.red(`  Peer not found: ${peerId}`));
+				process.exit(1);
+			}
+
+			removePeer(db, peerId);
+			console.log(chalk.green(`  ✓ Peer ${chalk.cyan(peerId)} removed.`));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+// -- Sync subcommand --
+
+federationCmd
+	.command("sync")
+	.description("Sync memories with federation peers")
+	.option("--peer <peer-id>", "Sync with a specific peer")
+	.option("--since <date>", "Only sync memories since this date")
+	.action(async (options) => {
+		const {
+			getTrustedPeers,
+			getPeerById,
+			connectToPeer,
+			getConfiguredDid,
+			getPublicKeyBase64,
+			hasSigningKeypair,
+			processSyncResponse,
+		} = await import("@signet/core");
+
+		console.log(signetLogo());
+		console.log(chalk.bold("  Federation Sync\n"));
+
+		if (!hasSigningKeypair()) {
+			console.error(chalk.red("  No signing keypair. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const did = getConfiguredDid();
+		if (!did) {
+			console.error(chalk.red("  No DID configured. Run: signet did init"));
+			process.exit(1);
+		}
+
+		const publicKey = await getPublicKeyBase64();
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			let peers;
+			if (options.peer) {
+				const peer = getPeerById(db, options.peer);
+				if (!peer) {
+					console.error(chalk.red(`  Peer not found: ${options.peer}`));
+					process.exit(1);
+				}
+				if (peer.trustLevel !== "trusted") {
+					console.error(chalk.red(`  Peer is not trusted. Run: signet federation peer trust ${options.peer}`));
+					process.exit(1);
+				}
+				if (!peer.endpointUrl) {
+					console.error(chalk.red("  Peer has no endpoint URL."));
+					process.exit(1);
+				}
+				peers = [peer];
+			} else {
+				peers = getTrustedPeers(db).filter((p: any) => p.endpointUrl);
+			}
+
+			if (peers.length === 0) {
+				console.log(chalk.yellow("  No trusted peers with endpoints to sync with."));
+				return;
+			}
+
+			for (const peer of peers) {
+				const spinner = ora(`  Syncing with ${peer.displayName || peer.id}...`).start();
+
+				try {
+					const conn = await connectToPeer(peer.endpointUrl!, {
+						port: 0,
+						did,
+						publicKey,
+					});
+
+					const response = await conn.syncWithPeer(options.since || peer.lastSync || undefined);
+					const imported = processSyncResponse(db, peer.id, response.memories);
+
+					conn.close();
+
+					spinner.succeed(
+						`  ${peer.displayName || peer.id}: ${response.memories.length} received, ${imported} new`,
+					);
+				} catch (err) {
+					spinner.fail(`  ${peer.displayName || peer.id}: ${(err as Error).message}`);
+				}
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+// -- Publish subcommands --
+
+const publishCmd = federationCmd.command("publish").description("Manage publish rules for selective memory sharing");
+
+publishCmd
+	.command("add")
+	.description("Create a publish rule")
+	.requiredOption("--name <name>", "Rule name")
+	.option("--query <query>", "Memory search query to match")
+	.option("--tags <tags>", "Comma-separated tags to match")
+	.option("--types <types>", "Comma-separated memory types to match")
+	.option("--min-importance <value>", "Minimum importance threshold", "0.5")
+	.option("--auto", "Enable auto-publishing for this rule")
+	.action(async (options) => {
+		const { createPublishRule } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const rule = createPublishRule(db, {
+				name: options.name,
+				query: options.query,
+				tags: options.tags ? options.tags.split(",").map((t: string) => t.trim()) : undefined,
+				types: options.types ? options.types.split(",").map((t: string) => t.trim()) : undefined,
+				minImportance: parseFloat(options.minImportance),
+				autoPublish: !!options.auto,
+			});
+
+			console.log(chalk.green.bold("  ✓ Publish rule created"));
+			console.log(`    ID:          ${chalk.cyan(rule.id)}`);
+			console.log(`    Name:        ${rule.name}`);
+			if (rule.query) console.log(`    Query:       ${rule.query}`);
+			if (rule.tags) console.log(`    Tags:        ${rule.tags.join(", ")}`);
+			if (rule.types) console.log(`    Types:       ${rule.types.join(", ")}`);
+			console.log(`    Min import.: ${rule.minImportance}`);
+			console.log(`    Auto:        ${rule.autoPublish ? chalk.green("yes") : "no"}`);
+		} catch (err) {
+			console.error(chalk.red(`  Error: ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
+		}
+	});
+
+publishCmd
+	.command("list")
+	.description("List all publish rules")
+	.action(async () => {
+		const { getPublishRules } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			const rules = getPublishRules(db);
+
+			if (rules.length === 0) {
+				console.log(chalk.dim("  No publish rules defined."));
+				console.log(chalk.dim("  Run: signet federation publish add --name <name> --query <query>"));
+				return;
+			}
+
+			console.log(chalk.bold(`  Publish Rules (${rules.length})\n`));
+
+			for (const rule of rules) {
+				console.log(`  ${chalk.cyan(rule.id)}`);
+				console.log(`    Name:        ${rule.name}`);
+				if (rule.query) console.log(`    Query:       ${rule.query}`);
+				if (rule.tags) console.log(`    Tags:        ${rule.tags.join(", ")}`);
+				if (rule.types) console.log(`    Types:       ${rule.types.join(", ")}`);
+				console.log(`    Min import.: ${rule.minImportance}`);
+				console.log(`    Auto:        ${rule.autoPublish ? chalk.green("yes") : "no"}`);
+				if (rule.peerIds) console.log(`    Peers:       ${rule.peerIds.join(", ")}`);
+				console.log();
+			}
+		} finally {
+			db.close();
+		}
+	});
+
+publishCmd
+	.command("remove <rule-id>")
+	.description("Remove a publish rule")
+	.action(async (ruleId) => {
+		const { deletePublishRule } = await import("@signet/core");
+
+		const basePath = AGENTS_DIR;
+		const dbPath = join(basePath, "memory", "memories.db");
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found."));
+			process.exit(1);
+		}
+
+		const db = new Database(dbPath);
+
+		try {
+			deletePublishRule(db, ruleId);
+			console.log(chalk.green(`  ✓ Publish rule ${chalk.cyan(ruleId)} removed.`));
+		} catch (err) {
+			console.error(chalk.red(`  ${(err as Error).message}`));
+			process.exit(1);
+		} finally {
+			db.close();
 		}
 	});
 

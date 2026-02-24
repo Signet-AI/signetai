@@ -69,6 +69,21 @@ pub fn setup(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Query perception status to determine whether a specific channel is currently enabled.
+async fn get_channel_enabled(channel: &str) -> bool {
+    let Ok(raw) = commands::perception_status().await else {
+        return false;
+    };
+    let Ok(data) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    data.get("adapters")
+        .and_then(|a| a.get(channel))
+        .and_then(|c| c.get("enabled"))
+        .and_then(|e| e.as_bool())
+        .unwrap_or(false)
+}
+
 fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
     let id = event.id();
     let id_str = id.as_ref();
@@ -104,6 +119,80 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         "quit" => {
             app.exit(0);
         }
+        "perception-start" => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let channels = vec![
+                    "screen".to_string(),
+                    "files".to_string(),
+                    "terminal".to_string(),
+                ];
+                let _ = commands::perception_start(channels).await;
+                // Emit event so TypeScript poller picks up the change
+                let _ = handle.emit("perception-changed", ());
+            });
+        }
+        "perception-stop" => {
+            tauri::async_runtime::spawn(async move {
+                let _ = commands::perception_stop().await;
+            });
+        }
+        "perception-ch-screen" => {
+            tauri::async_runtime::spawn(async move {
+                let enabled = get_channel_enabled("screen").await;
+                let _ = commands::perception_toggle_channel(
+                    "screen".to_string(),
+                    !enabled,
+                )
+                .await;
+            });
+        }
+        "perception-ch-files" => {
+            tauri::async_runtime::spawn(async move {
+                let enabled = get_channel_enabled("files").await;
+                let _ = commands::perception_toggle_channel(
+                    "files".to_string(),
+                    !enabled,
+                )
+                .await;
+            });
+        }
+        "perception-ch-terminal" => {
+            tauri::async_runtime::spawn(async move {
+                let enabled = get_channel_enabled("terminal").await;
+                let _ = commands::perception_toggle_channel(
+                    "terminal".to_string(),
+                    !enabled,
+                )
+                .await;
+            });
+        }
+        "perception-ch-voice" => {
+            tauri::async_runtime::spawn(async move {
+                let enabled = get_channel_enabled("voice").await;
+                let _ = commands::perception_toggle_channel(
+                    "voice".to_string(),
+                    !enabled,
+                )
+                .await;
+            });
+        }
+        "perception-pause" => {
+            tauri::async_runtime::spawn(async move {
+                let _ = commands::perception_pause().await;
+            });
+        }
+        "perception-resume" => {
+            tauri::async_runtime::spawn(async move {
+                let _ = commands::perception_resume().await;
+            });
+        }
+        "perception-view-profile" => {
+            let _ = open::that("http://localhost:3850/perception/profile");
+        }
+        "perception-view-dashboard" => {
+            open_perception_dashboard(app);
+        }
         _ => {
             // Handle recent memory clicks (copy content to clipboard)
             if id_str.starts_with("recent-memory-") {
@@ -127,6 +216,22 @@ fn open_quick_capture(app: &tauri::AppHandle) {
         .inner_size(400.0, 160.0)
         .resizable(false)
         .always_on_top(true)
+        .center()
+        .visible(true)
+        .build();
+}
+
+fn open_perception_dashboard(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("perception") {
+        let _ = win.set_focus();
+        return;
+    }
+
+    let url = WebviewUrl::App("perception.html".into());
+    let _ = WebviewWindowBuilder::new(app, "perception", url)
+        .title("Signet Perception")
+        .inner_size(900.0, 700.0)
+        .resizable(true)
         .center()
         .visible(true)
         .build();
@@ -165,8 +270,14 @@ fn format_number(n: u64) -> String {
 /// Compute a relative time string from ISO timestamp
 fn time_ago(iso: &str) -> String {
     let Ok(ts) = chrono::DateTime::parse_from_rfc3339(iso) else {
-        // Try parsing without timezone
+        // Try parsing without timezone (ISO-style)
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.f") {
+            let now = chrono::Utc::now().naive_utc();
+            let dur = now.signed_duration_since(naive);
+            return format_duration(dur);
+        }
+        // Try space-separated SQLite format (e.g. "2025-07-09 12:34:56")
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%d %H:%M:%S") {
             let now = chrono::Utc::now().naive_utc();
             let dur = now.signed_duration_since(naive);
             return format_duration(dur);
@@ -194,12 +305,12 @@ fn format_duration(dur: chrono::Duration) -> String {
     }
 }
 
-/// Truncate a string to max chars, adding "..." if truncated
+/// Truncate a string to max characters (not bytes), adding "..." if truncated
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        let mut result: String = s.chars().take(max - 3).collect();
+        let mut result: String = s.chars().take(max.saturating_sub(3)).collect();
         result.push_str("...");
         result
     }
@@ -218,6 +329,10 @@ pub fn build_running_menu(
     queue_depth: Option<u64>,
     recent_memories: &[commands::RecentMemory],
     _ingestion_rate: Option<f64>,
+    perception_active: Option<bool>,
+    perception_channels: Option<&[String]>,
+    perception_captures_today: Option<u64>,
+    perception_skills_count: Option<u64>,
 ) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
     let mut builder = MenuBuilder::new(app);
 
@@ -332,6 +447,121 @@ pub fn build_running_menu(
         }
 
         builder = builder.item(&submenu.build()?);
+        builder = builder.item(&PredefinedMenuItem::separator(app)?);
+    }
+
+    // Perception submenu
+    {
+        let is_active = perception_active.unwrap_or(false);
+        let active_channels: Vec<&str> = perception_channels
+            .map(|chs| chs.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+
+        let mut perception = SubmenuBuilder::new(app, "👁 Perception");
+
+        // Start / Stop toggle
+        if is_active {
+            perception = perception.item(
+                &MenuItemBuilder::with_id("perception-stop", "⏹ Stop Perception")
+                    .build(app)?,
+            );
+        } else {
+            perception = perception.item(
+                &MenuItemBuilder::with_id("perception-start", "▶ Start Perception")
+                    .build(app)?,
+            );
+        }
+
+        perception = perception.item(&PredefinedMenuItem::separator(app)?);
+
+        // Channel toggles
+        let screen_on = active_channels.contains(&"screen");
+        perception = perception.item(
+            &MenuItemBuilder::with_id(
+                "perception-ch-screen",
+                if screen_on { "🖥 Screen Capture: ON" } else { "🖥 Screen Capture: OFF" },
+            )
+            .build(app)?,
+        );
+
+        let files_on = active_channels.contains(&"files");
+        perception = perception.item(
+            &MenuItemBuilder::with_id(
+                "perception-ch-files",
+                if files_on { "📁 File Watching: ON" } else { "📁 File Watching: OFF" },
+            )
+            .build(app)?,
+        );
+
+        let terminal_on = active_channels.contains(&"terminal");
+        perception = perception.item(
+            &MenuItemBuilder::with_id(
+                "perception-ch-terminal",
+                if terminal_on { "⌨️ Terminal: ON" } else { "⌨️ Terminal: OFF" },
+            )
+            .build(app)?,
+        );
+
+        let voice_on = active_channels.contains(&"voice");
+        perception = perception.item(
+            &MenuItemBuilder::with_id(
+                "perception-ch-voice",
+                if voice_on { "🎤 Voice: ON" } else { "🎤 Voice: OFF" },
+            )
+            .build(app)?,
+        );
+
+        perception = perception.item(&PredefinedMenuItem::separator(app)?);
+
+        // Meeting mode (pause / resume)
+        if is_active {
+            perception = perception.item(
+                &MenuItemBuilder::with_id("perception-pause", "⏸ Meeting Mode (Pause All)")
+                    .build(app)?,
+            );
+        } else {
+            perception = perception.item(
+                &MenuItemBuilder::with_id("perception-resume", "▶ Resume")
+                    .build(app)?,
+            );
+        }
+
+        perception = perception.item(&PredefinedMenuItem::separator(app)?);
+
+        // Stats line
+        let captures_label = match perception_captures_today {
+            Some(n) => format!("📸 {} captures today", format_number(n)),
+            None => "📸 Captures: --".to_string(),
+        };
+        perception = perception.item(
+            &MenuItemBuilder::with_id("perception-info-captures", &captures_label)
+                .enabled(false)
+                .build(app)?,
+        );
+
+        let skills_label = match perception_skills_count {
+            Some(n) => format!("🧩 {} skills detected", format_number(n)),
+            None => "🧩 Skills: --".to_string(),
+        };
+        perception = perception.item(
+            &MenuItemBuilder::with_id("perception-info-skills", &skills_label)
+                .enabled(false)
+                .build(app)?,
+        );
+
+        perception = perception.item(&PredefinedMenuItem::separator(app)?);
+
+        // Views
+        perception = perception.item(
+            &MenuItemBuilder::with_id("perception-view-profile", "View Profile...")
+                .build(app)?,
+        );
+        perception = perception.item(
+            &MenuItemBuilder::with_id("perception-view-dashboard", "View Dashboard...")
+                .build(app)?,
+        );
+
+        builder = builder.item(&perception.build()?);
         builder = builder.item(&PredefinedMenuItem::separator(app)?);
     }
 

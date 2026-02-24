@@ -26,7 +26,7 @@ import {
 	rmSync,
 } from "fs";
 import { spawn } from "child_process";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
 import { initLlmProvider, closeLlmProvider } from "./llm";
@@ -69,7 +69,9 @@ import {
 	txModifyMemory,
 	txRecoverMemory,
 	type MutationContext,
+	type IngestEnvelope,
 } from "./transactions";
+import { signEnvelope } from "./memory-signing";
 import {
 	startPipeline,
 	stopPipeline,
@@ -147,9 +149,42 @@ const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 const SKILLS_DIR = join(AGENTS_DIR, "skills");
 const PID_FILE = join(DAEMON_DIR, "pid");
+const LOCAL_TOKEN_FILE = join(DAEMON_DIR, "local.token");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
+
+// ---------------------------------------------------------------------------
+// Security: Harden directory permissions on startup
+// ---------------------------------------------------------------------------
+function hardenPermissions(): void {
+	if (process.platform === "win32") return; // Windows doesn't use Unix perms
+	const { chmodSync, statSync } = require("fs") as typeof import("fs");
+	const sensitiveDirs = [AGENTS_DIR, DAEMON_DIR, join(AGENTS_DIR, ".keys"), join(AGENTS_DIR, ".secrets")];
+	for (const dir of sensitiveDirs) {
+		try {
+			const stat = statSync(dir);
+			if (stat.isDirectory() && (stat.mode & 0o077) !== 0) {
+				chmodSync(dir, 0o700);
+				logger.info("security", `Fixed permissions on ${dir} → 0700`);
+			}
+		} catch {
+			// Dir may not exist yet — that's fine
+		}
+	}
+	// PID file, agent.yaml, and local token should be owner-only too
+	const sensitiveFiles = [PID_FILE, join(AGENTS_DIR, "agent.yaml"), LOCAL_TOKEN_FILE];
+	for (const file of sensitiveFiles) {
+		try {
+			const stat = statSync(file);
+			if (stat.isFile() && (stat.mode & 0o077) !== 0) {
+				chmodSync(file, 0o600);
+			}
+		} catch {
+			// File may not exist yet
+		}
+	}
+}
 
 // Config
 const PORT = parseInt(process.env.SIGNET_PORT || "3850", 10);
@@ -1165,6 +1200,22 @@ app.post("/api/config", async (c) => {
 			return c.json({ error: "Invalid file type" }, 400);
 		}
 
+		// Security: Block writes to security-sensitive config files.
+		// Modifying agent.yaml could change auth mode, signing config, etc.
+		// Modifying signing.enc/did.json could compromise identity.
+		const BLOCKED_FILES = ["agent.yaml", "did.json"];
+		if (BLOCKED_FILES.includes(file)) {
+			return c.json(
+				{ error: `Cannot modify ${file} via API. Edit directly on disk or use CLI.` },
+				403,
+			);
+		}
+
+		// Cap content size to prevent disk-fill attacks
+		if (content.length > 512 * 1024) { // 512KB max
+			return c.json({ error: "Content exceeds maximum size (512KB)" }, 413);
+		}
+
 		writeFileSync(join(AGENTS_DIR, file), content, "utf-8");
 		logger.info("api", "Config file updated", { file });
 		return c.json({ success: true });
@@ -2094,6 +2145,33 @@ app.post("/api/memory/remember", async (c) => {
 	};
 
 	try {
+		// Build and sign the envelope BEFORE the sync transaction.
+		// signEnvelope is async (libsodium); withWriteTx is sync.
+		const envelope: IngestEnvelope = {
+			id,
+			content: normalizedContent.storageContent,
+			normalizedContent: normalizedContentForInsert,
+			contentHash,
+			who,
+			why: pinned ? "explicit-critical" : "explicit",
+			project,
+			importance,
+			type: memType,
+			tags,
+			pinned,
+			isDeleted: 0,
+			extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
+			embeddingModel: null,
+			extractionModel: pipelineEnqueueEnabled
+				? pipelineCfg.extraction.model
+				: null,
+			updatedBy: who,
+			sourceType,
+			sourceId,
+			createdAt: now,
+		};
+		const signedEnvelope = await signEnvelope(envelope);
+
 		// Single atomic write tx: check dedupe then insert.
 		// On UNIQUE constraint race (two concurrent inserts with same
 		// content_hash), catch the error and re-read the winner.
@@ -2119,30 +2197,8 @@ app.post("/api/memory/remember", async (c) => {
 				.get(contentHash) as DedupeRow | undefined;
 			if (byHash) return { deduped: true as const, row: byHash };
 
-			// No duplicate — insert
-			txIngestEnvelope(db, {
-				id,
-				content: normalizedContent.storageContent,
-				normalizedContent: normalizedContentForInsert,
-				contentHash,
-				who,
-				why: pinned ? "explicit-critical" : "explicit",
-				project,
-				importance,
-				type: memType,
-				tags,
-				pinned,
-				isDeleted: 0,
-				extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
-				embeddingModel: null,
-				extractionModel: pipelineEnqueueEnabled
-					? pipelineCfg.extractionModel
-					: null,
-				updatedBy: who,
-				sourceType,
-				sourceId,
-				createdAt: now,
-			});
+			// No duplicate — insert (envelope pre-signed outside tx)
+			txIngestEnvelope(db, signedEnvelope);
 			return { deduped: false as const };
 		});
 
@@ -2255,7 +2311,7 @@ app.post("/api/memory/remember", async (c) => {
 					`UPDATE memories
 						 SET extraction_status = 'failed', extraction_model = ?
 						 WHERE id = ?`,
-				).run(pipelineCfg.extractionModel, id);
+				).run(pipelineCfg.extraction.model, id);
 			});
 			logger.warn("pipeline", "Failed to enqueue extraction job", {
 				memoryId: id,
@@ -7566,13 +7622,51 @@ process.on("uncaughtException", (err) => {
 // db-accessor.ts is the sole schema authority. See migrations/ in @signet/core.
 
 async function main() {
+	// Security: Disable Node.js inspector if it was enabled via --inspect flag.
+	// The inspector allows debugger attach → heap dump → private key extraction.
+	// If someone needs to debug, they must explicitly re-enable it.
+	try {
+		const inspector = require("node:inspector");
+		if (typeof inspector.close === "function") {
+			inspector.close();
+		}
+		// Also disable the inspector URL so it can't be opened remotely
+		if (typeof inspector.url === "function" && inspector.url()) {
+			inspector.close();
+			logger.info("security", "Closed active Node.js inspector session (prevents key extraction via debugger)");
+		}
+	} catch {
+		// Inspector module not available — good, nothing to close
+	}
+
+	// Security: Attempt to disable core dumps (prevents private key extraction
+	// from crash dumps). Works on Linux; macOS may require launchd config.
+	try {
+		const { execFileSync } = require("child_process");
+		if (process.platform === "linux") {
+			// Set core dump size to 0 via ulimit (may fail if not root)
+			execFileSync("/bin/sh", ["-c", "ulimit -c 0"], { timeout: 1000 });
+		}
+		// Disable Node.js diagnostic reports (contain heap data)
+		if (process.report) {
+			(process.report as Record<string, unknown>).reportOnFatalError = false;
+			(process.report as Record<string, unknown>).reportOnUncaughtException = false;
+			(process.report as Record<string, unknown>).reportOnSignal = false;
+		}
+	} catch {
+		// Best-effort — don't crash if this fails
+	}
+
 	logger.info("daemon", "Signet Daemon starting");
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
 	logger.info("daemon", "Port configured", { port: PORT });
 
 	// Ensure daemon directory exists
-	mkdirSync(DAEMON_DIR, { recursive: true });
-	mkdirSync(LOG_DIR, { recursive: true });
+	mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
+	mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
+
+	// Harden permissions on sensitive directories/files
+	hardenPermissions();
 
 	// Initialise singleton DB accessor (opens write connection, sets pragmas,
 	// runs migrations). This is the sole schema authority.
