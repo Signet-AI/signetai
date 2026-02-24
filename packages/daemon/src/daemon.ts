@@ -4494,22 +4494,128 @@ async function fetchCatalog(): Promise<CatalogEntry[]> {
 	}
 }
 
-// GET /api/skills/browse - browse all skills from skills.sh
+// --- ClawHub catalog cache ---
+type ClawhubItem = {
+	slug: string;
+	displayName: string;
+	summary: string;
+	tags: { latest: string };
+	stats: {
+		downloads: number;
+		installsAllTime: number;
+		installsCurrent: number;
+		stars: number;
+		comments: number;
+		versions: number;
+	};
+	createdAt: number;
+	updatedAt: number;
+	latestVersion: {
+		version: string;
+		createdAt: number;
+		changelog: string;
+	};
+};
+let clawhubCache: ClawhubItem[] = [];
+let clawhubFetchedAt = 0;
+
+async function fetchClawhubCatalog(): Promise<ClawhubItem[]> {
+	const now = Date.now();
+	if (clawhubCache.length > 0 && now - clawhubFetchedAt < CATALOG_TTL) {
+		return clawhubCache;
+	}
+	logger.info("skills", "Fetching ClawHub catalog");
+	try {
+		const items: ClawhubItem[] = [];
+		let cursor: string | undefined;
+		const MAX_ITEMS = 500;
+		const MAX_PAGES = 10;
+		let page = 0;
+		while (page < MAX_PAGES && items.length < MAX_ITEMS) {
+			const url = new URL("https://clawhub.ai/api/v1/skills");
+			url.searchParams.set("sort", "downloads");
+			url.searchParams.set("limit", "50");
+			if (cursor) url.searchParams.set("cursor", cursor);
+
+			const res = await fetch(url.toString(), {
+				headers: { "User-Agent": "signet-daemon" },
+			});
+			if (!res.ok) throw new Error(`ClawHub returned ${res.status}`);
+			const data = (await res.json()) as {
+				items: ClawhubItem[];
+				nextCursor: string | null;
+			};
+			items.push(...data.items);
+			if (!data.nextCursor) break;
+			cursor = data.nextCursor;
+			page++;
+		}
+		if (items.length > 0) {
+			clawhubCache = items;
+			clawhubFetchedAt = now;
+			logger.info("skills", `Cached ${items.length} ClawHub skills`);
+		}
+		return items.length > 0 ? items : clawhubCache;
+	} catch (err) {
+		logger.error("skills", "ClawHub catalog fetch failed", err as Error);
+		return clawhubCache;
+	}
+}
+
+type SkillBrowseResult = {
+	name: string;
+	fullName: string;
+	installs: string;
+	installsRaw: number;
+	description: string;
+	installed: boolean;
+	provider: "skills.sh" | "clawhub";
+	stars?: number;
+	downloads?: number;
+	versions?: number;
+	author?: string;
+};
+
+// GET /api/skills/browse - browse all skills (skills.sh + ClawHub)
 app.get("/api/skills/browse", async (c) => {
-	const catalog = await fetchCatalog();
+	const [skillsShCatalog, clawhubItems] = await Promise.all([
+		fetchCatalog(),
+		fetchClawhubCatalog(),
+	]);
 	const installed = listInstalledSkills().map((s) => s.name);
-	const results = catalog.map((s) => ({
+
+	const skillsShResults: SkillBrowseResult[] = skillsShCatalog.map((s) => ({
 		name: s.name,
 		fullName: `${s.source}@${s.skillId}`,
 		installs: formatInstalls(s.installs),
 		installsRaw: s.installs,
 		description: "",
 		installed: installed.includes(s.name),
+		provider: "skills.sh" as const,
+		downloads: s.installs,
 	}));
+
+	const clawhubResults: SkillBrowseResult[] = clawhubItems.map((s) => ({
+		name: s.slug,
+		fullName: `clawhub@${s.slug}`,
+		installs: formatInstalls(s.stats.installsAllTime),
+		installsRaw: s.stats.installsAllTime,
+		description: s.summary,
+		installed: installed.includes(s.slug),
+		provider: "clawhub" as const,
+		stars: s.stats.stars,
+		downloads: s.stats.downloads,
+		versions: s.stats.versions,
+		author: s.displayName,
+	}));
+
+	const results = [...skillsShResults, ...clawhubResults].sort(
+		(a, b) => b.installsRaw - a.installsRaw,
+	);
 	return c.json({ results, total: results.length });
 });
 
-// GET /api/skills/search?q=query - proxy to skills.sh API
+// GET /api/skills/search?q=query - search both skills.sh and ClawHub
 app.get("/api/skills/search", async (c) => {
 	const query = c.req.query("q");
 	if (!query) {
@@ -4519,37 +4625,72 @@ app.get("/api/skills/search", async (c) => {
 		);
 	}
 
-	logger.info("skills", "Searching skills.sh", { query });
-	try {
-		const res = await fetch(
-			`https://skills.sh/api/search?q=${encodeURIComponent(query)}`,
-			{ headers: { "User-Agent": "signet-daemon" } },
-		);
-		if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
-		const data = (await res.json()) as {
-			skills: Array<{
-				id: string;
-				skillId: string;
-				name: string;
-				installs: number;
-				source: string;
-			}>;
-		};
+	logger.info("skills", "Searching skills", { query });
+	const installed = listInstalledSkills().map((s) => s.name);
+	const lowerQuery = query.toLowerCase();
 
-		const installed = listInstalledSkills().map((s) => s.name);
-		const results = (data.skills ?? []).map((s) => ({
-			name: s.name,
-			fullName: `${s.source}@${s.skillId}`,
-			installs: formatInstalls(s.installs),
-			description: "",
-			installed: installed.includes(s.name),
-		}));
+	// Search skills.sh API + filter cached ClawHub in parallel
+	const [skillsShResults, clawhubFiltered] = await Promise.all([
+		(async (): Promise<SkillBrowseResult[]> => {
+			try {
+				const res = await fetch(
+					`https://skills.sh/api/search?q=${encodeURIComponent(query)}`,
+					{ headers: { "User-Agent": "signet-daemon" } },
+				);
+				if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
+				const data = (await res.json()) as {
+					skills: Array<{
+						id: string;
+						skillId: string;
+						name: string;
+						installs: number;
+						source: string;
+					}>;
+				};
+				return (data.skills ?? []).map((s) => ({
+					name: s.name,
+					fullName: `${s.source}@${s.skillId}`,
+					installs: formatInstalls(s.installs),
+					installsRaw: s.installs,
+					description: "",
+					installed: installed.includes(s.name),
+					provider: "skills.sh" as const,
+					downloads: s.installs,
+				}));
+			} catch (err) {
+				logger.error("skills", "skills.sh search failed", err as Error);
+				return [];
+			}
+		})(),
+		(async (): Promise<SkillBrowseResult[]> => {
+			const cached = await fetchClawhubCatalog();
+			return cached
+				.filter(
+					(s) =>
+						s.slug.toLowerCase().includes(lowerQuery) ||
+						s.displayName.toLowerCase().includes(lowerQuery) ||
+						s.summary.toLowerCase().includes(lowerQuery),
+				)
+				.map((s) => ({
+					name: s.slug,
+					fullName: `clawhub@${s.slug}`,
+					installs: formatInstalls(s.stats.installsAllTime),
+					installsRaw: s.stats.installsAllTime,
+					description: s.summary,
+					installed: installed.includes(s.slug),
+					provider: "clawhub" as const,
+					stars: s.stats.stars,
+					downloads: s.stats.downloads,
+					versions: s.stats.versions,
+					author: s.displayName,
+				}));
+		})(),
+	]);
 
-		return c.json({ results });
-	} catch (err) {
-		logger.error("skills", "skills.sh search failed", err as Error);
-		return c.json({ results: [], error: "Search failed" });
-	}
+	const results = [...skillsShResults, ...clawhubFiltered].sort(
+		(a, b) => b.installsRaw - a.installsRaw,
+	);
+	return c.json({ results });
 });
 
 // GET /api/skills/:name - get skill details and SKILL.md content

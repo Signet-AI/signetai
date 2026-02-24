@@ -9,20 +9,34 @@ import {
 	doInstall,
 	doUninstall,
 	closeDetail,
+	getFilteredCatalog,
+	getFilteredResults,
 	type SkillsView,
+	type SortBy,
+	type ProviderFilter,
 } from "$lib/stores/skills.svelte";
-import SkillsTable from "$lib/components/skills/SkillsTable.svelte";
+import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
 import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
 
 let searchInput = $state<HTMLInputElement | null>(null);
 
+const sortOptions: { value: SortBy; label: string }[] = [
+	{ value: "installs", label: "Downloads" },
+	{ value: "stars", label: "Stars" },
+	{ value: "name", label: "Name" },
+	{ value: "newest", label: "Newest" },
+];
+
+const providerOptions: { value: ProviderFilter; label: string }[] = [
+	{ value: "all", label: "All" },
+	{ value: "skills.sh", label: "skills.sh" },
+	{ value: "clawhub", label: "ClawHub" },
+];
+
 function switchView(v: SkillsView) {
 	sk.view = v;
-	if (v === "all-time") fetchCatalog();
-	if (v === "search") {
-		requestAnimationFrame(() => searchInput?.focus());
-	}
+	if (v === "browse") fetchCatalog();
 }
 
 function handleGlobalKey(e: KeyboardEvent) {
@@ -34,7 +48,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 
 	if (e.key === "/" && !isInput) {
 		e.preventDefault();
-		switchView("search");
+		searchInput?.focus();
 		return;
 	}
 	if (e.key === "Escape") {
@@ -46,8 +60,24 @@ function handleGlobalKey(e: KeyboardEvent) {
 	}
 }
 
+// Derived items based on current view + filters
+let displayItems = $derived.by(() => {
+	if (sk.query.trim()) {
+		return getFilteredResults();
+	}
+	if (sk.view === "installed") {
+		return sk.installed;
+	}
+	return getFilteredCatalog();
+});
+
+let displayMode = $derived<"installed" | "browse">(
+	sk.view === "installed" && !sk.query.trim() ? "installed" : "browse",
+);
+
 onMount(() => {
 	fetchInstalled();
+	fetchCatalog();
 });
 </script>
 
@@ -57,128 +87,50 @@ onMount(() => {
 	<!-- Hero header -->
 	<div
 		class="shrink-0 px-[var(--space-md)] pt-[var(--space-md)]
-			pb-[var(--space-sm)] flex items-start gap-6
+			pb-[var(--space-sm)]
 			border-b border-[var(--sig-border)]"
 	>
-		<div class="flex flex-col gap-1 shrink-0">
-			<h1 class="absolute hidden">Skills</h1>
-			<div class="relative max-w-[260px] overflow-hidden">
-				<pre
-					class="skills-ascii m-0 text-[var(--sig-text-muted)]
-						select-none whitespace-pre"
-					aria-hidden="true"
-				>███████╗██╗  ██╗██╗██╗     ██╗     ███████╗
+		<div class="flex items-start gap-6">
+			<div class="flex flex-col gap-1 shrink-0">
+				<h1 class="absolute hidden">Skills</h1>
+				<div class="relative max-w-[260px] overflow-hidden">
+					<pre
+						class="skills-ascii m-0 text-[var(--sig-text-muted)]
+							select-none whitespace-pre"
+						aria-hidden="true"
+					>███████╗██╗  ██╗██╗██╗     ██╗     ███████╗
 ██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝
 ███████╗█████╔╝ ██║██║     ██║     ███████╗
 ╚════██║██╔═██╗ ██║██║     ██║     ╚════██║
 ███████║██║  ██╗██║███████╗███████╗███████║
 ╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚══════╝</pre>
-				<pre
-					class="skills-ascii absolute top-0 left-0 m-0
-						text-[var(--sig-text-bright)] select-none whitespace-pre"
-					aria-label="SKILLS"
-				>███████ ██   ██ ██ ██      ██      ███████
+					<pre
+						class="skills-ascii absolute top-0 left-0 m-0
+							text-[var(--sig-text-bright)] select-none whitespace-pre"
+						aria-label="SKILLS"
+					>███████ ██   ██ ██ ██      ██      ███████
 ██      ██  ██  ██ ██      ██      ██
 ███████ █████   ██ ██      ██      ███████
      ██ ██  ██  ██ ██      ██           ██
 ███████ ██   ██ ██ ███████ ███████ ███████
 {' '}</pre>
-			</div>
-			<span
-				class="font-[family-name:var(--font-mono)] text-[10px]
-					font-medium text-[var(--sig-text)]
-					uppercase tracking-[0.12em]"
-			>
-				The open agent skills ecosystem
-			</span>
-		</div>
-		<div class="flex flex-col gap-2 pt-[2px]">
-			<p
-				class="text-[12px] text-[var(--sig-text)] leading-[1.5] m-0
-					max-w-[460px]"
-			>
-				Skills are reusable capabilities for AI agents.
-				Install them with a single command to enhance
-				your agents with access to procedural knowledge.
-			</p>
-			<div class="flex items-center gap-3 flex-wrap">
-				<a
-					href="https://skills.sh"
-					target="_blank"
-					rel="noopener"
-					class="font-[family-name:var(--font-mono)] text-[10px]
-						text-[var(--sig-text-muted)]
-						hover:text-[var(--sig-accent)] no-underline"
-				>
-					skills.sh
-				</a>
-				<span class="text-[var(--sig-border-strong)]">|</span>
+				</div>
 				<span
 					class="font-[family-name:var(--font-mono)] text-[10px]
-						text-[var(--sig-text-muted)]"
+						font-medium text-[var(--sig-text)]
+						uppercase tracking-[0.12em]"
 				>
-					by <a
-						href="https://vercel.com/labs"
-						target="_blank"
-						rel="noopener"
-						class="text-[var(--sig-text-muted)]
-							hover:text-[var(--sig-accent)] no-underline"
-					>Vercel Labs</a>
+					The open agent skills ecosystem
 				</span>
-				<span class="text-[var(--sig-border-strong)]">|</span>
-				<a
-					href="https://socket.dev/blog/socket-brings-supply-chain-security-to-skills"
-					target="_blank"
-					rel="noopener"
-					class="inline-flex items-center gap-[5px]
-						font-[family-name:var(--font-mono)] text-[10px]
-						text-[var(--sig-success)] no-underline
-						hover:underline"
-				>
-					<svg width="10" height="10" viewBox="0 0 16 16" fill="none"
-						class="shrink-0"
-					>
-						<path
-							d="M8 0L10 5.5L16 6L11.5 10L13 16L8 12.5L3 16L4.5 10L0 6L6 5.5L8 0Z"
-							fill="currentColor"
-						/>
-					</svg>
-					Verified by Socket.dev
-				</a>
 			</div>
-		</div>
-	</div>
 
-	<!-- Tabs bar -->
-	<Tabs.Root value={sk.view} onValueChange={(v) => switchView(v as SkillsView)}>
-		<div class="flex items-center shrink-0 border-b border-[var(--sig-border)]">
-			<Tabs.List class="bg-transparent h-auto gap-0 rounded-none border-none">
-				<Tabs.Trigger
-					value="installed"
-					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
-				>
-					Installed ({sk.installed.length})
-				</Tabs.Trigger>
-				<Tabs.Trigger
-					value="all-time"
-					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
-				>
-					All Time{sk.catalogTotal ? ` (${sk.catalogTotal.toLocaleString()})` : ""}
-				</Tabs.Trigger>
-				<Tabs.Trigger
-					value="search"
-					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
-				>
-					Search
-				</Tabs.Trigger>
-			</Tabs.List>
-
-			{#if sk.view === "search"}
-				<div class="flex-1 relative mx-[var(--space-sm)]">
+			<!-- Search bar -->
+			<div class="flex-1 flex flex-col gap-2 pt-[2px] min-w-0">
+				<div class="relative">
 					<input
 						bind:this={searchInput}
 						type="text"
-						class="w-full px-3 py-[5px]
+						class="w-full px-3 py-[6px]
 							border border-[var(--sig-border-strong)]
 							bg-[var(--sig-surface-raised)]
 							text-[var(--sig-text-bright)] text-[11px]
@@ -187,7 +139,7 @@ onMount(() => {
 							pr-8"
 						value={sk.query}
 						oninput={(e) => setQuery(e.currentTarget.value)}
-						placeholder="Search skills.sh..."
+						placeholder="Search skills..."
 					/>
 					<kbd
 						class="absolute right-2 top-1/2 -translate-y-1/2
@@ -198,83 +150,123 @@ onMount(() => {
 							pointer-events-none"
 					>/</kbd>
 				</div>
-			{/if}
+				<div class="flex items-center gap-3 flex-wrap">
+					<a
+						href="https://skills.sh"
+						target="_blank"
+						rel="noopener"
+						class="font-[family-name:var(--font-mono)] text-[10px]
+							text-[var(--sig-text-muted)]
+							hover:text-[var(--sig-accent)] no-underline"
+					>
+						skills.sh
+					</a>
+					<span class="text-[var(--sig-border-strong)]">|</span>
+					<a
+						href="https://clawhub.ai"
+						target="_blank"
+						rel="noopener"
+						class="font-[family-name:var(--font-mono)] text-[10px]
+							text-[var(--sig-text-muted)]
+							hover:text-[var(--sig-accent)] no-underline"
+					>
+						clawhub.ai
+					</a>
+					<span class="text-[var(--sig-border-strong)]">|</span>
+					<a
+						href="https://socket.dev/blog/socket-brings-supply-chain-security-to-skills"
+						target="_blank"
+						rel="noopener"
+						class="inline-flex items-center gap-[5px]
+							font-[family-name:var(--font-mono)] text-[10px]
+							text-[var(--sig-success)] no-underline
+							hover:underline"
+					>
+						<svg width="10" height="10" viewBox="0 0 16 16" fill="none"
+							class="shrink-0"
+						>
+							<path
+								d="M8 0L10 5.5L16 6L11.5 10L13 16L8 12.5L3 16L4.5 10L0 6L6 5.5L8 0Z"
+								fill="currentColor"
+							/>
+						</svg>
+						Verified by Socket.dev
+					</a>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Tabs bar + controls -->
+	<Tabs.Root value={sk.view} onValueChange={(v) => switchView(v as SkillsView)}>
+		<div class="flex items-center shrink-0 border-b border-[var(--sig-border)] gap-2">
+			<Tabs.List class="bg-transparent h-auto gap-0 rounded-none border-none">
+				<Tabs.Trigger
+					value="browse"
+					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+				>
+					Browse{sk.catalogTotal ? ` (${sk.catalogTotal.toLocaleString()})` : ""}
+				</Tabs.Trigger>
+				<Tabs.Trigger
+					value="installed"
+					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+				>
+					Installed ({sk.installed.length})
+				</Tabs.Trigger>
+			</Tabs.List>
+
+			<!-- Sort + filter controls -->
+			<div class="flex items-center gap-2 ml-auto pr-[var(--space-md)]">
+				<!-- Sort dropdown -->
+				<div class="flex items-center gap-1">
+					<span class="text-[9px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)] uppercase tracking-wider">Sort</span>
+					<select
+						class="sort-select"
+						value={sk.sortBy}
+						onchange={(e) => { sk.sortBy = e.currentTarget.value as SortBy; }}
+					>
+						{#each sortOptions as opt}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
+					</select>
+				</div>
+
+				<!-- Provider filter chips -->
+				<div class="flex items-center gap-0">
+					{#each providerOptions as opt}
+						<button
+							type="button"
+							class="filter-chip"
+							class:active={sk.providerFilter === opt.value}
+							onclick={() => { sk.providerFilter = opt.value; }}
+						>
+							{opt.label}
+						</button>
+					{/each}
+				</div>
+			</div>
 		</div>
 	</Tabs.Root>
 
 	<!-- Content -->
-	{#if sk.view === "installed"}
-		{#if sk.loading}
-			<div
-				class="flex-1 flex items-center justify-center
-					text-[var(--sig-text-muted)] text-[12px]"
-			>
-				Loading skills...
-			</div>
-		{:else}
-			<SkillsTable
-				items={sk.installed}
-				mode="installed"
-				selectedName={sk.selectedName}
-				uninstalling={sk.uninstalling}
-				onrowclick={(name) => openDetail(name)}
-				onuninstall={(name) => doUninstall(name)}
-			/>
-		{/if}
-	{:else if sk.view === "all-time"}
-		{#if sk.catalogLoading}
-			<div
-				class="flex-1 flex items-center justify-center
-					text-[var(--sig-text-muted)] text-[12px]"
-			>
-				Loading catalog...
-			</div>
-		{:else}
-			<SkillsTable
-				items={sk.catalog}
-				mode="search"
-				selectedName={sk.selectedName}
-				installing={sk.installing}
-				uninstalling={sk.uninstalling}
-				onrowclick={(name) => openDetail(name)}
-				oninstall={(name) => doInstall(name)}
-				onuninstall={(name) => doUninstall(name)}
-			/>
-		{/if}
+	{#if sk.searching || sk.catalogLoading || sk.loading}
+		<div
+			class="flex-1 flex items-center justify-center
+				text-[var(--sig-text-muted)] text-[12px]"
+		>
+			{sk.searching ? "Searching..." : "Loading..."}
+		</div>
 	{:else}
-		{#if sk.searching}
-			<div
-				class="flex-1 flex items-center justify-center
-					text-[var(--sig-text-muted)] text-[12px]"
-			>
-				Searching...
-			</div>
-		{:else if sk.results.length > 0}
-			<SkillsTable
-				items={sk.results}
-				mode="search"
-				selectedName={sk.selectedName}
-				installing={sk.installing}
-				uninstalling={sk.uninstalling}
-				onrowclick={(name) => openDetail(name)}
-				oninstall={(name) => doInstall(name)}
-				onuninstall={(name) => doUninstall(name)}
-			/>
-		{:else if sk.query.trim()}
-			<div
-				class="flex-1 flex items-center justify-center
-					text-[var(--sig-text-muted)] text-[12px]"
-			>
-				No results found.
-			</div>
-		{:else}
-			<div
-				class="flex-1 flex items-center justify-center
-					text-[var(--sig-text-muted)] text-[12px]"
-			>
-				Type to search skills.sh
-			</div>
-		{/if}
+		<SkillGrid
+			items={displayItems}
+			mode={displayMode}
+			selectedName={sk.selectedName}
+			installing={sk.installing}
+			uninstalling={sk.uninstalling}
+			onitemclick={(name) => openDetail(name)}
+			oninstall={(name) => doInstall(name)}
+			onuninstall={(name) => doUninstall(name)}
+		/>
 	{/if}
 </div>
 
@@ -287,5 +279,47 @@ onMount(() => {
 		font-size: 10px;
 		letter-spacing: -1px;
 		line-height: 125%;
+	}
+
+	.sort-select {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-bright);
+		background: var(--sig-surface-raised);
+		border: 1px solid var(--sig-border-strong);
+		padding: 2px 6px;
+		outline: none;
+		cursor: pointer;
+	}
+	.sort-select:focus {
+		border-color: var(--sig-accent);
+	}
+
+	.filter-chip {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--sig-text-muted);
+		background: transparent;
+		border: 1px solid var(--sig-border);
+		padding: 2px 8px;
+		cursor: pointer;
+		transition: all 0.1s;
+	}
+	.filter-chip:not(:first-child) {
+		border-left: none;
+	}
+	.filter-chip:hover {
+		color: var(--sig-text);
+		background: var(--sig-surface-raised);
+	}
+	.filter-chip.active {
+		color: var(--sig-text-bright);
+		background: var(--sig-surface-raised);
+		border-color: var(--sig-accent);
+	}
+	.filter-chip.active + .filter-chip {
+		border-left-color: var(--sig-accent);
 	}
 </style>

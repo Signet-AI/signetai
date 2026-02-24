@@ -16,15 +16,17 @@ import {
 } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 
-export type SkillsView = "installed" | "all-time" | "search";
+export type SkillsView = "browse" | "installed";
+export type SortBy = "installs" | "stars" | "name" | "newest";
+export type ProviderFilter = "all" | "skills.sh" | "clawhub";
 
 export const sk = $state({
-	view: "installed" as SkillsView,
+	view: "browse" as SkillsView,
 
 	installed: [] as Skill[],
 	loading: false,
 
-	// Browse catalog (all-time)
+	// Browse catalog
 	catalog: [] as SkillSearchResult[],
 	catalogTotal: 0,
 	catalogLoading: false,
@@ -35,12 +37,17 @@ export const sk = $state({
 	results: [] as SkillSearchResult[],
 	searching: false,
 
+	// Sort & filter
+	sortBy: "installs" as SortBy,
+	providerFilter: "all" as ProviderFilter,
+
 	// Detail panel
 	selectedName: null as string | null,
 	detailOpen: false,
 	detailContent: "",
 	detailMeta: null as Skill | null,
 	detailLoading: false,
+	detailSource: null as SkillSearchResult | null,
 
 	// Actions
 	installing: null as string | null,
@@ -48,6 +55,41 @@ export const sk = $state({
 });
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+function sortItems(items: readonly SkillSearchResult[], sortBy: SortBy): SkillSearchResult[] {
+	const sorted = [...items];
+	switch (sortBy) {
+		case "installs":
+			return sorted.sort((a, b) => (b.installsRaw ?? 0) - (a.installsRaw ?? 0));
+		case "stars":
+			return sorted.sort((a, b) => (b.stars ?? 0) - (a.stars ?? 0));
+		case "name":
+			return sorted.sort((a, b) => a.name.localeCompare(b.name));
+		case "newest":
+			// Items without timestamps sort to the end
+			return sorted;
+		default:
+			return sorted;
+	}
+}
+
+function filterByProvider(
+	items: readonly SkillSearchResult[],
+	provider: ProviderFilter,
+): SkillSearchResult[] {
+	if (provider === "all") return [...items];
+	return items.filter((s) => s.provider === provider);
+}
+
+export function getFilteredCatalog(): SkillSearchResult[] {
+	const filtered = filterByProvider(sk.catalog, sk.providerFilter);
+	return sortItems(filtered, sk.sortBy);
+}
+
+export function getFilteredResults(): SkillSearchResult[] {
+	const filtered = filterByProvider(sk.results, sk.providerFilter);
+	return sortItems(filtered, sk.sortBy);
+}
 
 export async function fetchInstalled(): Promise<void> {
 	sk.loading = true;
@@ -100,6 +142,7 @@ export async function openDetail(name: string): Promise<void> {
 	const match =
 		sk.results.find((s) => s.name === name) ||
 		sk.catalog.find((s) => s.name === name);
+	sk.detailSource = match ?? null;
 	const source = match?.fullName || undefined;
 
 	const detail = await getSkill(name, source);
@@ -115,6 +158,7 @@ export function closeDetail(): void {
 	sk.selectedName = null;
 	sk.detailContent = "";
 	sk.detailMeta = null;
+	sk.detailSource = null;
 }
 
 export async function doInstall(name: string): Promise<void> {

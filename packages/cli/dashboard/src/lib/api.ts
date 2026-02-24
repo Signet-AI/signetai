@@ -549,6 +549,11 @@ export interface SkillSearchResult {
 	installsRaw?: number;
 	description: string;
 	installed: boolean;
+	provider?: "skills.sh" | "clawhub";
+	stars?: number;
+	downloads?: number;
+	versions?: number;
+	author?: string;
 }
 
 export interface SkillDetail extends Skill {
