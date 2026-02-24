@@ -272,6 +272,9 @@ export class OpenCodeConnector extends BaseConnector {
 			filesWritten.push(agentsMdPath);
 		}
 
+		// Register Signet MCP server in OpenCode config
+		this.registerMcpServer(opencodePath);
+
 		// Symlink skills directory
 		const skillsSource = join(basePath, "skills");
 		const skillsDest = join(opencodePath, "skills");
@@ -306,6 +309,7 @@ export class OpenCodeConnector extends BaseConnector {
 		}
 
 		this.migrateFromLegacy(opencodePath);
+		this.removeMcpServer(opencodePath);
 
 		return { filesRemoved };
 	}
@@ -404,6 +408,61 @@ export class OpenCodeConnector extends BaseConnector {
 	// Internal helpers
 	// ============================================================================
 
+	/**
+	 * Register Signet MCP server in OpenCode config file
+	 */
+	private registerMcpServer(opencodePath: string): void {
+		for (const configPath of this.getConfigCandidates(opencodePath)) {
+			if (!existsSync(configPath)) continue;
+
+			let config: JsonObject;
+			try {
+				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
+			} catch {
+				continue;
+			}
+
+			const existingMcp = isJsonObject(config.mcp)
+				? (config.mcp as JsonObject)
+				: {};
+			config.mcp = {
+				...existingMcp,
+				signet: {
+					type: "local",
+					command: ["signet-mcp"],
+					enabled: true,
+				},
+			};
+			writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+			return; // Only update first found config
+		}
+	}
+
+	/**
+	 * Remove Signet MCP server from OpenCode config file
+	 */
+	private removeMcpServer(opencodePath: string): void {
+		for (const configPath of this.getConfigCandidates(opencodePath)) {
+			if (!existsSync(configPath)) continue;
+
+			let config: JsonObject;
+			try {
+				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
+			} catch {
+				continue;
+			}
+
+			if (isJsonObject(config.mcp)) {
+				const mcp = config.mcp as JsonObject;
+				delete mcp.signet;
+				if (Object.keys(mcp).length === 0) {
+					delete config.mcp;
+				}
+				writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+			}
+		}
+	}
+
 	private getConfigCandidates(opencodePath: string): string[] {
 		return [
 			join(opencodePath, "opencode.json"),
@@ -426,8 +485,14 @@ export class OpenCodeConnector extends BaseConnector {
 		const userContent = this.stripSignetBlock(raw);
 		const header = this.generateHeader(sourcePath);
 
+		// Compose additional identity files
+		const extras = this.composeIdentityExtras(basePath);
+
 		const destPath = join(this.getOpenCodePath(), "AGENTS.md");
-		writeFileSync(destPath, header + this.buildSignetBlock() + userContent);
+		writeFileSync(
+			destPath,
+			header + this.buildSignetBlock() + userContent + extras,
+		);
 
 		return destPath;
 	}

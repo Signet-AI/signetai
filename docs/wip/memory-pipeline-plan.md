@@ -111,7 +111,7 @@ Current Signet state in-repo:
    `~/.agents/hooks/agent-memory/`.
 2. Installed hook handler supports command actions `/remember`,
    `/recall`, and `/context` via daemon hook endpoints.
-3. `@signet/adapter-openclaw` exists as a runtime plugin entry point and
+3. `@signetai/adapter-openclaw` exists as a runtime plugin entry point and
    currently exposes lifecycle calls for session start/pre-compaction/
    compaction complete plus manual remember/recall helpers.
 4. Daemon hook surface already includes richer lifecycle endpoints,
@@ -692,7 +692,7 @@ increasing accidental mutation incidents.
 
 ### Phase G: OpenClaw plugin-first runtime migration
 
-- define canonical runtime path as `@signet/adapter-openclaw`
+- define canonical runtime path as `@signetai/adapter-openclaw`
 - keep `@signet/connector-openclaw` as install/bootstrap only
 - add runtime operations for explicit modify/forget and full lifecycle
   parity with daemon hook surface
@@ -944,7 +944,7 @@ Pass criteria:
 Method:
 
 1. Run the same scripted conversations through:
-   - plugin-first runtime path (`@signet/adapter-openclaw`)
+   - plugin-first runtime path (`@signetai/adapter-openclaw`)
    - legacy command-hook compatibility path
 2. Measure recall quality parity, capture quality parity, and operation
    latency.
@@ -1176,7 +1176,7 @@ consistent with the rest of this spec.
    - patch OpenClaw config entries
    - install compatibility hook files
    - no long-term ownership of runtime memory policy
-2. `@signet/adapter-openclaw` (runtime integration):
+2. `@signetai/adapter-openclaw` (runtime integration):
    - lifecycle callbacks to daemon hook endpoints
    - runtime tool surface for memory operations
    - primary path for remember/recall/modify/forget in OpenClaw
@@ -1434,7 +1434,7 @@ component ownership, and sequencing constraints.
 3. `@signet/sdk` owns:
    - typed client surface for all memory lifecycle APIs
    - integration-safe wrappers and transport defaults
-4. `@signet/adapter-openclaw` owns runtime plugin behavior.
+4. `@signetai/adapter-openclaw` owns runtime plugin behavior.
 5. `@signet/connector-openclaw` owns install/bootstrap and fallback hooks.
 
 ### 32.2 Phase A implementation tracks (infrastructure hardening)

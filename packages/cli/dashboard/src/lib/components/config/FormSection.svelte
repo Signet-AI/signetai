@@ -1,7 +1,7 @@
 <script lang="ts">
-import type { Snippet } from "svelte";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import type { Snippet } from "svelte";
 
 interface Props {
 	title: string;
@@ -10,7 +10,7 @@ interface Props {
 	defaultOpen?: boolean;
 }
 
-let { title, description, children, defaultOpen = true }: Props = $props();
+const { title, description, children, defaultOpen = true }: Props = $props();
 let open = $state(defaultOpen);
 </script>
 

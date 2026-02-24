@@ -253,7 +253,7 @@ async function processDocument(
 
 	if (doc.source_type === "url" && doc.source_url) {
 		const result = await fetchUrlContent(doc.source_url, {
-			maxBytes: pipelineCfg.documentMaxContentBytes,
+			maxBytes: pipelineCfg.documents.maxContentBytes,
 		});
 		content = result.content;
 		if (result.title && !title) title = result.title;
@@ -285,8 +285,8 @@ async function processDocument(
 
 	const chunks = chunkText(
 		content,
-		pipelineCfg.documentChunkSize,
-		pipelineCfg.documentChunkOverlap,
+		pipelineCfg.documents.chunkSize,
+		pipelineCfg.documents.chunkOverlap,
 	);
 
 	accessor.withWriteTx((db) => {
@@ -357,28 +357,36 @@ async function processDocument(
 				 VALUES (?, ?, ?)`,
 			).run(docId, memId, i);
 
-			// Store embedding if we got one
+			// Store embedding if we got one (with dimension validation)
 			if (vector) {
-				const embId = crypto.randomUUID();
-				const blob = vectorToBlob(vector);
-				db.prepare(
-					`INSERT INTO embeddings
-					 (id, content_hash, vector, dimensions, source_type,
-					  source_id, chunk_text, created_at)
-					 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-					 ON CONFLICT(content_hash) DO UPDATE SET
-					   vector = excluded.vector,
-					   dimensions = excluded.dimensions`,
-				).run(
-					embId,
-					normalized.contentHash,
-					blob,
-					vector.length,
-					memId,
-					chunkText,
-					now,
-				);
-				syncVecInsert(db, embId, vector);
+				if (vector.length !== embeddingCfg.dimensions) {
+					logger.warn("document-worker", "Embedding dimension mismatch, skipping vector insert", {
+						got: vector.length,
+						expected: embeddingCfg.dimensions,
+						documentId: docId,
+					});
+				} else {
+					const embId = crypto.randomUUID();
+					const blob = vectorToBlob(vector);
+					db.prepare(
+						`INSERT INTO embeddings
+						 (id, content_hash, vector, dimensions, source_type,
+						  source_id, chunk_text, created_at)
+						 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+						 ON CONFLICT(content_hash) DO UPDATE SET
+						   vector = excluded.vector,
+						   dimensions = excluded.dimensions`,
+					).run(
+						embId,
+						normalized.contentHash,
+						blob,
+						vector.length,
+						memId,
+						chunkText,
+						now,
+					);
+					syncVecInsert(db, embId, vector);
+				}
 			}
 
 			memoriesCreated++;
@@ -417,7 +425,7 @@ export function startDocumentWorker(
 		if (!running) return;
 
 		const job = deps.accessor.withWriteTx((db) =>
-			leaseDocumentJob(db, deps.pipelineCfg.workerMaxRetries),
+			leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries),
 		);
 
 		if (!job) return;
@@ -448,11 +456,11 @@ export function startDocumentWorker(
 				error: String(e),
 			});
 		});
-	}, deps.pipelineCfg.documentWorkerIntervalMs);
+	}, deps.pipelineCfg.documents.workerIntervalMs);
 
 	logger.info("document-worker", "Worker started", {
-		intervalMs: deps.pipelineCfg.documentWorkerIntervalMs,
-		chunkSize: deps.pipelineCfg.documentChunkSize,
+		intervalMs: deps.pipelineCfg.documents.workerIntervalMs,
+		chunkSize: deps.pipelineCfg.documents.chunkSize,
 	});
 
 	return {

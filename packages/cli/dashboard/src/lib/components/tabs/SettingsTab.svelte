@@ -14,27 +14,40 @@ let { configFiles }: Props = $props();
 
 const KNOWN_HARNESSES = ["claude-code", "openclaw", "opencode"];
 
-const PIPELINE_BOOLS = [
+const PIPELINE_CORE_BOOLS = [
 	{ key: "enabled", desc: "Master switch. Pipeline does nothing when disabled." },
 	{ key: "shadowMode", desc: "Run extraction and decisions without writing. Safe for evaluation." },
-	{ key: "allowUpdateDelete", desc: "Permit UPDATE/DELETE decisions on existing memories. Infrastructure-only for now." },
-	{ key: "graphEnabled", desc: "Build and query a knowledge graph from extracted entity relationships." },
-	{ key: "autonomousEnabled", desc: "Allow autonomous pipeline operations like maintenance and repair." },
 	{ key: "mutationsFrozen", desc: "Emergency brake. Block all writes even if shadowMode is off." },
-	{ key: "autonomousFrozen", desc: "Block autonomous writes while still allowing autonomous reads." },
-	{ key: "rerankerEnabled", desc: "Enable cross-encoder reranking pass after initial retrieval." },
 ] as const;
 
-const PIPELINE_NUMS = [
-	{ key: "extractionTimeout", label: "Extraction timeout (ms)", desc: "Timeout for the Ollama extraction call. Range: 5,000–300,000 ms.", min: 5000, max: 300000, step: 1000 },
-	{ key: "workerPollMs", label: "Worker poll (ms)", desc: "How often the worker polls for pending jobs. Range: 100–60,000 ms.", min: 100, max: 60000, step: 100 },
-	{ key: "workerMaxRetries", label: "Worker max retries", desc: "Max retry attempts before a job goes to dead-letter. Range: 1–10.", min: 1, max: 10, step: 1 },
-	{ key: "leaseTimeoutMs", label: "Lease timeout (ms)", desc: "Time before an uncompleted job lease expires and is retried. Range: 10,000–600,000 ms.", min: 10000, max: 600000, step: 1000 },
-	{ key: "minFactConfidenceForWrite", label: "Min fact confidence", desc: "Facts below this threshold are dropped. Lower captures more at the cost of noise. Range: 0.0–1.0.", min: 0, max: 1, step: 0.05 },
-	{ key: "graphBoostWeight", label: "Graph boost weight", desc: "Score boost applied to graph-linked memories during search. Range: 0.0–1.0.", min: 0, max: 1, step: 0.05 },
-	{ key: "maintenanceIntervalMs", label: "Maintenance interval (ms)", desc: "How often the maintenance worker runs diagnostics. Range: 60s–24h.", min: 60000, max: 86400000, step: 60000 },
-	{ key: "rerankerTopN", label: "Reranker top N", desc: "Number of candidates passed to the cross-encoder reranker. Range: 1–100.", min: 1, max: 100, step: 1 },
-	{ key: "rerankerTimeoutMs", label: "Reranker timeout (ms)", desc: "Timeout for the reranking call. Original order returned on timeout. Range: 100–30,000 ms.", min: 100, max: 30000, step: 100 },
+const PIPELINE_FEATURE_BOOLS = [
+	{ key: "allowUpdateDelete", desc: "Permit UPDATE/DELETE decisions on existing memories." },
+	{ key: "graphEnabled", desc: "Build and query a knowledge graph from extracted entity relationships." },
+	{ key: "autonomousEnabled", desc: "Allow autonomous pipeline operations like maintenance and repair." },
+	{ key: "autonomousFrozen", desc: "Block autonomous writes while still allowing autonomous reads." },
+	{ key: "semanticContradictionEnabled", desc: "Use LLM to detect semantic contradictions on update proposals. Adds latency but catches subtle conflicts." },
+] as const;
+
+const PIPELINE_RERANKER_BOOLS = [
+	{ key: "rerankerEnabled", desc: "Re-score recall candidates using full-content embedding similarity. No LLM call needed." },
+] as const;
+
+const PIPELINE_EXTRACTION_NUMS = [
+	{ key: "extractionTimeout", label: "Extraction timeout (ms)", desc: "Timeout for the extraction LLM call.", min: 5000, max: 300000, step: 1000 },
+	{ key: "minFactConfidenceForWrite", label: "Min fact confidence", desc: "Facts below this threshold are dropped. Lower captures more at the cost of noise.", min: 0, max: 1, step: 0.05 },
+] as const;
+
+const PIPELINE_SEARCH_NUMS = [
+	{ key: "graphBoostWeight", label: "Graph boost weight", desc: "Score boost applied to graph-linked memories during search.", min: 0, max: 1, step: 0.05 },
+	{ key: "rerankerTopN", label: "Reranker top N", desc: "Number of top candidates re-scored by embedding similarity.", min: 1, max: 100, step: 1 },
+	{ key: "rerankerTimeoutMs", label: "Reranker timeout (ms)", desc: "Timeout for the reranking pass. Original order returned on timeout.", min: 100, max: 30000, step: 100 },
+] as const;
+
+const PIPELINE_WORKER_NUMS = [
+	{ key: "workerPollMs", label: "Worker poll (ms)", desc: "How often the worker polls for pending jobs.", min: 100, max: 60000, step: 100 },
+	{ key: "workerMaxRetries", label: "Worker max retries", desc: "Max retry attempts before a job goes to dead-letter.", min: 1, max: 10, step: 1 },
+	{ key: "leaseTimeoutMs", label: "Lease timeout (ms)", desc: "Time before an uncompleted job lease expires and is retried.", min: 10000, max: 600000, step: 1000 },
+	{ key: "maintenanceIntervalMs", label: "Maintenance interval (ms)", desc: "How often the maintenance worker runs diagnostics.", min: 60000, max: 86400000, step: 60000 },
 ] as const;
 
 type YamlValue = string | number | boolean | null | YamlObject | YamlValue[];
@@ -286,6 +299,25 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "min_score"])} oninput={cOnNum(["search", "min_score"])} />
 							{/snippet}
 						</FormField>
+						<div class="sub-heading">Rehearsal Boost</div>
+						<FormField label="Rehearsal enabled" description="Boost scores for frequently-recalled memories. Uses access_count and last_accessed to reward useful memories.">
+							{#snippet children()}
+								<label class="toggle">
+									<input type="checkbox" checked={Boolean(get(config, "search", "rehearsal_enabled"))} onchange={(e) => set(config, ["search", "rehearsal_enabled"], (e.target as HTMLInputElement).checked)} />
+									<span class="toggle-track"><span class="toggle-thumb"></span></span>
+								</label>
+							{/snippet}
+						</FormField>
+						<FormField label="Rehearsal weight" description="Score multiplier for rehearsal boost. Higher = more impact from recall frequency. Default: 0.1.">
+							{#snippet children()}
+								<input type="number" class="inp" min="0" max="1" step="0.05" value={cNum(["search", "rehearsal_weight"])} oninput={cOnNum(["search", "rehearsal_weight"])} />
+							{/snippet}
+						</FormField>
+						<FormField label="Rehearsal half-life (days)" description="Days until rehearsal boost decays to half. Lower = faster decay of recall-frequency boost. Default: 30.">
+							{#snippet children()}
+								<input type="number" class="inp" min="1" max="365" step="1" value={cNum(["search", "rehearsal_half_life_days"])} oninput={cOnNum(["search", "rehearsal_half_life_days"])} />
+							{/snippet}
+						</FormField>
 					{/snippet}
 				</FormSection>
 
@@ -331,83 +363,113 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 			{#if agentFile}
 				<FormSection title="Pipeline" defaultOpen={false} description="V2 memory pipeline. Runs LLM-based fact extraction on incoming memories, then decides whether to write, update, or skip. Lives under memory.pipelineV2 in agent.yaml.">
 					{#snippet children()}
-						{#each PIPELINE_BOOLS as { key, desc } (key)}
-							<FormField label={key} description={desc}>
-								{#snippet children()}
-									<label class="toggle">
-										<input type="checkbox" checked={aBool(["memory", "pipelineV2", key])} onchange={aOnBool(["memory", "pipelineV2", key])} />
-										<span class="toggle-track"><span class="toggle-thumb"></span></span>
-									</label>
-								{/snippet}
-							</FormField>
-						{/each}
+					<div class="sub-heading">Core</div>
+					{#each PIPELINE_CORE_BOOLS as { key, desc } (key)}
+						<FormField label={key} description={desc}>
+							{#snippet children()}
+								<label class="toggle">
+									<input type="checkbox" checked={aBool(["memory", "pipelineV2", key])} onchange={aOnBool(["memory", "pipelineV2", key])} />
+									<span class="toggle-track"><span class="toggle-thumb"></span></span>
+								</label>
+							{/snippet}
+						</FormField>
+					{/each}
 
-						<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses the Claude Code headless provider.">
-							{#snippet children()}
-								<Select.Root
-									type="single"
-									value={aStr(["memory", "pipelineV2", "extractionProvider"])}
-									onValueChange={(v) =>
-										set(agent, ["memory", "pipelineV2", "extractionProvider"], v ?? "")
-									}
-								>
-									<Select.Trigger class={selectTriggerClass}>
-										{aStr(["memory", "pipelineV2", "extractionProvider"]) || "— select —"}
-									</Select.Trigger>
-									<Select.Content class={selectContentClass}>
-										<Select.Item class={selectItemClass} value="" label="— select —" />
-										<Select.Item class={selectItemClass} value="ollama" label="ollama" />
-										<Select.Item class={selectItemClass} value="claude-code" label="claude-code" />
-									</Select.Content>
-								</Select.Root>
-							{/snippet}
-						</FormField>
-						<FormField label="Extraction model" description="Model name for fact extraction. Must be available locally via Ollama. Default: qwen3:4b.">
-							{#snippet children()}
-								<input type="text" class="inp" value={aStr(["memory", "pipelineV2", "extractionModel"])} oninput={aOnStr(["memory", "pipelineV2", "extractionModel"])} />
-							{/snippet}
-						</FormField>
-						<FormField label="Maintenance mode" description="'observe' logs diagnostics without changes. 'execute' attempts repairs. Only works when autonomousEnabled is true.">
-							{#snippet children()}
-								<Select.Root
-									type="single"
-									value={aStr(["memory", "pipelineV2", "maintenanceMode"])}
-									onValueChange={(v) =>
-										set(agent, ["memory", "pipelineV2", "maintenanceMode"], v ?? "")
-									}
-								>
-									<Select.Trigger class={selectTriggerClass}>
-										{aStr(["memory", "pipelineV2", "maintenanceMode"]) || "— select —"}
-									</Select.Trigger>
-									<Select.Content class={selectContentClass}>
-										<Select.Item class={selectItemClass} value="" label="— select —" />
-										<Select.Item class={selectItemClass} value="observe" label="observe" />
-										<Select.Item class={selectItemClass} value="execute" label="execute" />
-									</Select.Content>
-								</Select.Root>
-							{/snippet}
-						</FormField>
-						<FormField label="Reranker model" description="Cross-encoder model for optional reranking pass. Leave empty to disable.">
-							{#snippet children()}
-								<input type="text" class="inp" value={aStr(["memory", "pipelineV2", "rerankerModel"])} oninput={aOnStr(["memory", "pipelineV2", "rerankerModel"])} />
-							{/snippet}
-						</FormField>
+					<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses the Claude Code headless provider.">
+						{#snippet children()}
+							<Select.Root
+								type="single"
+								value={aStr(["memory", "pipelineV2", "extractionProvider"])}
+								onValueChange={(v) =>
+									set(agent, ["memory", "pipelineV2", "extractionProvider"], v ?? "")
+								}
+							>
+								<Select.Trigger class={selectTriggerClass}>
+									{aStr(["memory", "pipelineV2", "extractionProvider"]) || "\u2014 select \u2014"}
+								</Select.Trigger>
+								<Select.Content class={selectContentClass}>
+									<Select.Item class={selectItemClass} value="" label="\u2014 select \u2014" />
+									<Select.Item class={selectItemClass} value="ollama" label="ollama" />
+									<Select.Item class={selectItemClass} value="claude-code" label="claude-code" />
+								</Select.Content>
+							</Select.Root>
+						{/snippet}
+					</FormField>
+					<FormField label="Extraction model" description="Model name for fact extraction. Must be available locally via Ollama. Default: qwen3:4b.">
+						{#snippet children()}
+							<input type="text" class="inp" value={aStr(["memory", "pipelineV2", "extractionModel"])} oninput={aOnStr(["memory", "pipelineV2", "extractionModel"])} />
+						{/snippet}
+					</FormField>
+					<FormField label="Maintenance mode" description="'observe' logs diagnostics without changes. 'execute' attempts repairs. Only works when autonomousEnabled is true.">
+						{#snippet children()}
+							<Select.Root
+								type="single"
+								value={aStr(["memory", "pipelineV2", "maintenanceMode"])}
+								onValueChange={(v) =>
+									set(agent, ["memory", "pipelineV2", "maintenanceMode"], v ?? "")
+								}
+							>
+								<Select.Trigger class={selectTriggerClass}>
+									{aStr(["memory", "pipelineV2", "maintenanceMode"]) || "\u2014 select \u2014"}
+								</Select.Trigger>
+								<Select.Content class={selectContentClass}>
+									<Select.Item class={selectItemClass} value="" label="\u2014 select \u2014" />
+									<Select.Item class={selectItemClass} value="observe" label="observe" />
+									<Select.Item class={selectItemClass} value="execute" label="execute" />
+								</Select.Content>
+							</Select.Root>
+						{/snippet}
+					</FormField>
 
-						{#each PIPELINE_NUMS as { key, label, desc, min, max, step } (key)}
-							<FormField {label} description={desc}>
-								{#snippet children()}
-									<input
-										type="number"
-										class="inp"
-										{min}
-										{max}
-										{step}
-										value={aNum(["memory", "pipelineV2", key])}
-										oninput={aOnNum(["memory", "pipelineV2", key])}
-									/>
-								{/snippet}
-							</FormField>
-						{/each}
+					{#each PIPELINE_EXTRACTION_NUMS as { key, label, desc, min, max, step } (key)}
+						<FormField {label} description={desc}>
+							{#snippet children()}
+								<input type="number" class="inp" {min} {max} {step} value={aNum(["memory", "pipelineV2", key])} oninput={aOnNum(["memory", "pipelineV2", key])} />
+							{/snippet}
+						</FormField>
+					{/each}
+
+					<div class="sub-heading">Features</div>
+					{#each PIPELINE_FEATURE_BOOLS as { key, desc } (key)}
+						<FormField label={key} description={desc}>
+							{#snippet children()}
+								<label class="toggle">
+									<input type="checkbox" checked={aBool(["memory", "pipelineV2", key])} onchange={aOnBool(["memory", "pipelineV2", key])} />
+									<span class="toggle-track"><span class="toggle-thumb"></span></span>
+								</label>
+							{/snippet}
+						</FormField>
+					{/each}
+
+					<div class="sub-heading">Reranker</div>
+					{#each PIPELINE_RERANKER_BOOLS as { key, desc } (key)}
+						<FormField label={key} description={desc}>
+							{#snippet children()}
+								<label class="toggle">
+									<input type="checkbox" checked={aBool(["memory", "pipelineV2", key])} onchange={aOnBool(["memory", "pipelineV2", key])} />
+									<span class="toggle-track"><span class="toggle-thumb"></span></span>
+								</label>
+							{/snippet}
+						</FormField>
+					{/each}
+
+					{#each PIPELINE_SEARCH_NUMS as { key, label, desc, min, max, step } (key)}
+						<FormField {label} description={desc}>
+							{#snippet children()}
+								<input type="number" class="inp" {min} {max} {step} value={aNum(["memory", "pipelineV2", key])} oninput={aOnNum(["memory", "pipelineV2", key])} />
+							{/snippet}
+						</FormField>
+					{/each}
+
+					<div class="sub-heading">Worker</div>
+					{#each PIPELINE_WORKER_NUMS as { key, label, desc, min, max, step } (key)}
+						<FormField {label} description={desc}>
+							{#snippet children()}
+								<input type="number" class="inp" {min} {max} {step} value={aNum(["memory", "pipelineV2", key])} oninput={aOnNum(["memory", "pipelineV2", key])} />
+							{/snippet}
+						</FormField>
+					{/each}
+
 					{/snippet}
 				</FormSection>
 
@@ -589,6 +651,18 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 	}
 
 	.btn-add:hover { background: var(--sig-border-strong); }
+
+	/* Sub-heading */
+	.sub-heading {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sig-text-muted);
+		padding: 12px 0 4px;
+		border-bottom: 1px solid var(--sig-border);
+		margin-bottom: 4px;
+	}
 
 	/* Toggle */
 	.toggle { display: inline-flex; align-items: center; cursor: pointer; }

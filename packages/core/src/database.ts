@@ -33,13 +33,33 @@ function getPlatformPackageName(): string {
 // Handles bun's hoisted node_modules structure where platform packages
 // are in separate .bun directories
 function findSqliteVecExtension(): string | null {
+	// Explicit override — always wins
+	const envPath = process.env.SIGNET_VEC_PATH;
+	if (envPath && existsSync(envPath)) return envPath;
+
 	const platformPkg = getPlatformPackageName();
 	const extFile = `vec0.${getExtensionSuffix()}`;
 
+	// Try `npm root -g` to find the actual global prefix (works regardless of runtime)
+	try {
+		const { execFileSync } = require("child_process");
+		const npmRoot = (execFileSync("npm", ["root", "-g"], { encoding: "utf8", timeout: 3000 }) as string).trim();
+		if (npmRoot) {
+			const direct = join(npmRoot, platformPkg, extFile);
+			if (existsSync(direct)) return direct;
+			const nested = join(npmRoot, "signetai", "node_modules", platformPkg, extFile);
+			if (existsSync(nested)) return nested;
+		}
+	} catch {
+		// npm not available or timed out — continue with static paths
+	}
+
 	// Try common locations in order
 	const searchPaths = [
-		// Standard npm/yarn layout
+		// Standard npm/yarn layout: __dirname is node_modules/@signet/core/dist/
 		join(__dirname, "..", "..", platformPkg, extFile),
+		// Installed package: __dirname is signetai/dist/, deps in own node_modules/
+		join(__dirname, "..", "node_modules", platformPkg, extFile),
 		// Bun's hoisted structure (multiple possible locations)
 		join(
 			__dirname,
@@ -78,6 +98,40 @@ function findSqliteVecExtension(): string | null {
 			`${platformPkg}@*`,
 			extFile,
 		),
+		// Global npm install: derive from process.execPath
+		// e.g. /opt/homebrew/bin/node → /opt/homebrew/lib/node_modules/<pkg>/vec0.dylib
+		// e.g. /usr/bin/node → /usr/lib/node_modules/<pkg>/vec0.so
+		// Also covers nvm: ~/.nvm/versions/node/vXX/bin/node → .../lib/node_modules/
+		join(
+			dirname(dirname(process.execPath)),
+			"lib",
+			"node_modules",
+			platformPkg,
+			extFile,
+		),
+		// Global npm install via signetai meta-package
+		join(
+			dirname(dirname(process.execPath)),
+			"lib",
+			"node_modules",
+			"signetai",
+			"node_modules",
+			platformPkg,
+			extFile,
+		),
+		// Well-known npm global prefixes (when process.execPath is bun, not node)
+		join("/opt/homebrew/lib/node_modules", platformPkg, extFile),
+		join("/opt/homebrew/lib/node_modules", "signetai", "node_modules", platformPkg, extFile),
+		join("/usr/local/lib/node_modules", platformPkg, extFile),
+		join("/usr/local/lib/node_modules", "signetai", "node_modules", platformPkg, extFile),
+		join("/usr/lib/node_modules", platformPkg, extFile),
+		join("/usr/lib/node_modules", "signetai", "node_modules", platformPkg, extFile),
+		// nvm global paths
+		join(homedir(), ".nvm", "versions", "node", "*", "lib", "node_modules", platformPkg, extFile),
+		join(homedir(), ".nvm", "versions", "node", "*", "lib", "node_modules", "signetai", "node_modules", platformPkg, extFile),
+		// Bun global install (bun add -g signetai)
+		join(homedir(), ".bun", "install", "global", "node_modules", platformPkg, extFile),
+		join(homedir(), ".bun", "install", "global", "node_modules", "signetai", "node_modules", platformPkg, extFile),
 	];
 
 	for (const searchPath of searchPaths) {

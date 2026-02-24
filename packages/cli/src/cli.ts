@@ -52,6 +52,7 @@ import {
 	detectSchema,
 	ensureUnifiedSchema,
 	runMigrations,
+	loadSqliteVec,
 	parseSimpleYaml,
 	formatYaml,
 	symlinkSkills,
@@ -1396,6 +1397,24 @@ async function existingSetupWizard(
 		if (launchNow) {
 			await open(`http://localhost:${DEFAULT_PORT}`);
 		}
+
+		// Suggest onboarding
+		console.log();
+		console.log(
+			chalk.cyan(
+				"  → Next step: Say '/onboarding' to personalize your agent",
+			),
+		);
+		console.log(
+			chalk.dim(
+				"    This will walk you through setting up your agent's personality,",
+			),
+		);
+		console.log(
+			chalk.dim(
+				"    communication style, and your preferences.",
+			),
+		);
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);
@@ -1641,7 +1660,7 @@ async function setupWizard(options: { path?: string }) {
 					value: "plugin" as const,
 					name: "Plugin adapter (recommended)",
 					description:
-						"@signet/adapter-openclaw — full lifecycle + memory tools",
+						"@signetai/signet-memory-openclaw — full lifecycle + memory tools",
 				},
 				{
 					value: "legacy" as const,
@@ -2092,6 +2111,24 @@ ${agentName} is a helpful assistant.
 		if (launchNow) {
 			await open(`http://localhost:${DEFAULT_PORT}`);
 		}
+
+		// Suggest onboarding
+		console.log();
+		console.log(
+			chalk.cyan(
+				"  → Next step: Say '/onboarding' to personalize your agent",
+			),
+		);
+		console.log(
+			chalk.dim(
+				"    This will walk you through setting up your agent's personality,",
+			),
+		);
+		console.log(
+			chalk.dim(
+				"    communication style, and your preferences.",
+			),
+		);
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);
@@ -3720,6 +3757,8 @@ program
 	.option("-t, --type <type>", "Filter by type")
 	.option("--tags <tags>", "Filter by tags (comma-separated)")
 	.option("--who <who>", "Filter by who")
+	.option("--since <date>", "Only memories created after this date (ISO or YYYY-MM-DD)")
+	.option("--until <date>", "Only memories created before this date (ISO or YYYY-MM-DD)")
 	.option("--json", "Output as JSON")
 	.action(async (query: string, options) => {
 		if (!(await ensureDaemonForSecrets())) return;
@@ -3732,6 +3771,8 @@ program
 			type: options.type,
 			tags: options.tags,
 			who: options.who,
+			since: options.since,
+			until: options.until,
 		});
 
 		if (!ok || (data as { error?: string }).error) {
@@ -3791,6 +3832,338 @@ program
 		}
 		console.log();
 	});
+
+// ============================================================================
+// signet embed - Embedding audit and backfill
+// ============================================================================
+
+const embedCmd = program
+	.command("embed")
+	.description("Embedding management (audit, backfill)");
+
+embedCmd
+	.command("audit")
+	.description("Check embedding coverage for memories")
+	.option("--json", "Output as JSON")
+	.action(async (options) => {
+		if (!(await ensureDaemonForSecrets())) return;
+
+		const spinner = ora("Checking embedding coverage...").start();
+
+		const { ok, data } = await secretApiCall(
+			"GET",
+			"/api/repair/embedding-gaps",
+		);
+
+		if (!ok || (data as { error?: string }).error) {
+			spinner.fail((data as { error?: string }).error || "Audit failed");
+			process.exit(1);
+		}
+
+		spinner.stop();
+
+		const stats = data as {
+			total: number;
+			unembedded: number;
+			coverage: string;
+		};
+
+		if (options.json) {
+			console.log(JSON.stringify(stats, null, 2));
+			return;
+		}
+
+		const embedded = stats.total - stats.unembedded;
+		const coverageColor =
+			stats.unembedded === 0
+				? chalk.green
+				: stats.unembedded > stats.total * 0.3
+					? chalk.red
+					: chalk.yellow;
+
+		console.log(chalk.bold("\n  Embedding Coverage Audit\n"));
+		console.log(`  Total memories:    ${chalk.cyan(stats.total)}`);
+		console.log(`  Embedded:          ${chalk.green(embedded)}`);
+		console.log(
+			`  Missing:           ${stats.unembedded > 0 ? chalk.red(stats.unembedded) : chalk.green(0)}`,
+		);
+		console.log(`  Coverage:          ${coverageColor(stats.coverage)}`);
+		console.log();
+
+		if (stats.unembedded > 0) {
+			console.log(
+				chalk.dim(
+					"  Run `signet embed backfill` to generate missing embeddings",
+				),
+			);
+			console.log(
+				chalk.dim(
+					"  Run `signet embed backfill --dry-run` to preview without changes",
+				),
+			);
+			console.log();
+		}
+	});
+
+embedCmd
+	.command("backfill")
+	.description("Generate embeddings for memories that are missing them")
+	.option("--dry-run", "Preview what would be embedded without making changes")
+	.option(
+		"--batch-size <n>",
+		"Number of memories to embed per batch",
+		parseInt,
+		50,
+	)
+	.option("--json", "Output as JSON")
+	.action(async (options) => {
+		if (!(await ensureDaemonForSecrets())) return;
+
+		const spinner = ora(
+			options.dryRun
+				? "Checking missing embeddings..."
+				: "Backfilling embeddings...",
+		).start();
+
+		const { ok, data } = await secretApiCall("POST", "/api/repair/re-embed", {
+			batchSize: options.batchSize,
+			dryRun: !!options.dryRun,
+		});
+
+		if (!ok || (data as { error?: string }).error) {
+			spinner.fail((data as { error?: string }).error || "Backfill failed");
+			process.exit(1);
+		}
+
+		spinner.stop();
+
+		const result = data as {
+			action: string;
+			success: boolean;
+			affected: number;
+			message: string;
+		};
+
+		if (options.json) {
+			console.log(JSON.stringify(result, null, 2));
+			return;
+		}
+
+		if (result.success) {
+			if (options.dryRun) {
+				console.log(chalk.bold("\n  Dry Run Results\n"));
+			} else {
+				console.log(chalk.bold("\n  Backfill Results\n"));
+			}
+			console.log(`  ${result.message}`);
+			if (!options.dryRun && result.affected > 0) {
+				console.log(
+					chalk.dim(
+						"\n  Run `signet embed audit` to check updated coverage",
+					),
+				);
+			}
+		} else {
+			console.log(chalk.yellow(`\n  ${result.message}`));
+		}
+		console.log();
+	});
+
+// ============================================================================
+// signet export / import - Portable agent bundles
+// ============================================================================
+
+program
+	.command("export")
+	.description("Export agent identity, memories, and skills to a portable bundle")
+	.option("-o, --output <path>", "Output file path")
+	.option("--include-embeddings", "Include embedding vectors (can be regenerated)")
+	.option("--json", "Output as JSON instead of ZIP")
+	.action(async (options) => {
+		const {
+			collectExportData,
+			serializeExportData,
+			loadSqliteVec,
+		} = await import("@signet/core");
+
+		const agentsDir = join(homedir(), ".agents");
+		const dbPath = join(agentsDir, "memory", "memories.db");
+
+		if (!existsSync(dbPath)) {
+			console.error(chalk.red("  No memory database found. Nothing to export."));
+			process.exit(1);
+		}
+
+		const spinner = ora("Collecting export data...").start();
+
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			loadSqliteVec(db);
+		} catch {
+			// Non-fatal, vec extension may not be needed for export
+		}
+
+		const data = collectExportData(agentsDir, db, {
+			includeEmbeddings: options.includeEmbeddings,
+			includeSkills: true,
+		});
+
+		db.close();
+
+		const fileMap = serializeExportData(data);
+
+		const today = new Date().toISOString().slice(0, 10);
+		const defaultName = `signet-export-${today}`;
+
+		if (options.json) {
+			const outPath = options.output || `${defaultName}.json`;
+			writeFileSync(outPath, JSON.stringify(Object.fromEntries(fileMap), null, 2));
+			spinner.succeed(`Exported to ${chalk.cyan(outPath)}`);
+		} else {
+			// Write as a directory bundle (ZIP requires additional dep)
+			const outDir = options.output || defaultName;
+			mkdirSync(outDir, { recursive: true });
+			for (const [path, content] of fileMap) {
+				const fullPath = join(outDir, path);
+				mkdirSync(dirname(fullPath), { recursive: true });
+				writeFileSync(fullPath, content);
+			}
+			spinner.succeed(`Exported to ${chalk.cyan(outDir + "/")}`);
+		}
+
+		console.log(chalk.dim(`  ${data.manifest.stats.memories} memories`));
+		console.log(chalk.dim(`  ${data.manifest.stats.entities} entities`));
+		console.log(chalk.dim(`  ${data.manifest.stats.relations} relations`));
+		console.log(chalk.dim(`  ${data.manifest.stats.skills} skills`));
+		console.log();
+	});
+
+program
+	.command("import <path>")
+	.description("Import agent data from an export bundle")
+	.option(
+		"--conflict <strategy>",
+		"Conflict resolution: skip, overwrite, merge",
+		"skip",
+	)
+	.option("--json", "Input is a JSON file instead of a directory")
+	.action(async (importPath: string, options) => {
+		const {
+			importMemories,
+			importEntities,
+			importRelations,
+			loadSqliteVec,
+			runMigrations,
+		} = await import("@signet/core");
+
+		const agentsDir = join(homedir(), ".agents");
+		const dbPath = join(agentsDir, "memory", "memories.db");
+
+		if (!existsSync(importPath)) {
+			console.error(chalk.red(`  Path not found: ${importPath}`));
+			process.exit(1);
+		}
+
+		const spinner = ora("Importing agent data...").start();
+
+		let fileMap: Map<string, string>;
+
+		if (options.json || importPath.endsWith(".json")) {
+			const raw = readFileSync(importPath, "utf-8");
+			const obj = JSON.parse(raw) as Record<string, string>;
+			fileMap = new Map(Object.entries(obj));
+		} else {
+			fileMap = new Map();
+			loadDirRecursive(importPath, "", fileMap);
+		}
+
+		// Write identity files
+		let identityCount = 0;
+		for (const [path, content] of fileMap) {
+			if (path.startsWith("identity/")) {
+				const name = path.replace("identity/", "");
+				const destPath = join(agentsDir, name);
+				writeFileSync(destPath, content);
+				identityCount++;
+			}
+		}
+
+		if (fileMap.has("agent.yaml")) {
+			writeFileSync(join(agentsDir, "agent.yaml"), fileMap.get("agent.yaml")!);
+		}
+
+		// Import database records
+		mkdirSync(join(agentsDir, "memory"), { recursive: true });
+		const db = new Database(dbPath);
+		try {
+			loadSqliteVec(db);
+		} catch {
+			// Non-fatal
+		}
+		runMigrations(db);
+
+		const memResult = fileMap.has("memories.jsonl")
+			? importMemories(db, fileMap.get("memories.jsonl")!, {
+					conflictStrategy: options.conflict as "skip" | "overwrite" | "merge",
+				})
+			: { imported: 0, skipped: 0 };
+
+		const entityCount = fileMap.has("entities.jsonl")
+			? importEntities(db, fileMap.get("entities.jsonl")!)
+			: 0;
+
+		const relationCount = fileMap.has("relations.jsonl")
+			? importRelations(db, fileMap.get("relations.jsonl")!)
+			: 0;
+
+		db.close();
+
+		// Write skill files
+		let skillCount = 0;
+		const skillsDir = join(agentsDir, "skills");
+		for (const [path, content] of fileMap) {
+			if (path.startsWith("skills/")) {
+				const destPath = join(agentsDir, path);
+				mkdirSync(dirname(destPath), { recursive: true });
+				writeFileSync(destPath, content);
+				skillCount++;
+			}
+		}
+
+		spinner.succeed("Import complete");
+		console.log(chalk.dim(`  ${memResult.imported} memories imported`));
+		if (memResult.skipped > 0) {
+			console.log(chalk.dim(`  ${memResult.skipped} memories skipped (conflict: ${options.conflict})`));
+		}
+		console.log(chalk.dim(`  ${entityCount} entities imported`));
+		console.log(chalk.dim(`  ${relationCount} relations imported`));
+		console.log(chalk.dim(`  ${identityCount} identity files written`));
+		if (skillCount > 0) {
+			console.log(chalk.dim(`  ${skillCount} skill files written`));
+		}
+		console.log();
+	});
+
+function loadDirRecursive(
+	dir: string,
+	prefix: string,
+	out: Map<string, string>,
+): void {
+	const entries = readdirSync(dir, { withFileTypes: true });
+	for (const entry of entries) {
+		const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+		const fullPath = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			loadDirRecursive(fullPath, relPath, out);
+		} else {
+			try {
+				out.set(relPath, readFileSync(fullPath, "utf-8"));
+			} catch {
+				// Skip binary files
+			}
+		}
+	}
+}
 
 // ============================================================================
 // signet hook - Lifecycle hooks for harness integration
@@ -4827,12 +5200,27 @@ program
 		try {
 			const db = Database(dbPath);
 
-			// Create vec_embeddings virtual table if not exists
-			spinner.text = "Creating vec_embeddings table...";
+			// Load sqlite-vec extension BEFORE creating virtual table
+			if (!loadSqliteVec(db)) {
+				spinner.fail(
+					"sqlite-vec extension not found — cannot migrate vectors."
+				);
+				return;
+			}
+
+			// Detect actual embedding dimensions from existing data
+			const dimRow = db
+				.prepare("SELECT dimensions FROM embeddings LIMIT 1")
+				.get() as { dimensions: number } | undefined;
+			const dims = dimRow?.dimensions ?? 768;
+
+			// Drop existing vec_embeddings (may have wrong dimensions from prior run)
+			spinner.text = `Creating vec_embeddings table (${dims}d)...`;
+			db.exec("DROP TABLE IF EXISTS vec_embeddings");
 			db.exec(`
-				CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
+				CREATE VIRTUAL TABLE vec_embeddings USING vec0(
 					id TEXT PRIMARY KEY,
-					embedding FLOAT[1024] distance_metric=cosine
+					embedding FLOAT[${dims}] distance_metric=cosine
 				);
 			`);
 
@@ -4954,116 +5342,6 @@ program
 			spinner.fail("Migration failed");
 			console.error(chalk.red(`  ${(err as Error).message}`));
 			process.exit(1);
-		}
-	});
-
-// ============================================================================
-// signet embed - Embedding management
-// ============================================================================
-
-const embedCmd = program
-	.command("embed")
-	.description("Manage memory embeddings");
-
-embedCmd
-	.command("backfill")
-	.description("Backfill embeddings for memories missing vectors")
-	.option("--batch-size <n>", "Number of memories per batch", "50")
-	.option("--dry-run", "Preview without embedding")
-	.action(async (options) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const batchSize = parseInt(options.batchSize, 10);
-		const dryRun = !!options.dryRun;
-
-		if (dryRun) {
-			console.log(chalk.dim("  Checking for unembedded memories...\n"));
-		}
-
-		const spinner = dryRun
-			? undefined
-			: ora("  Backfilling embeddings...").start();
-
-		try {
-			const { ok, data } = await secretApiCall(
-				"POST",
-				"/api/repair/re-embed",
-				{ batchSize, dryRun },
-			);
-			const result = data as {
-				action: string;
-				success: boolean;
-				affected: number;
-				message: string;
-			};
-
-			if (!ok) {
-				if (spinner) spinner.fail(chalk.red(`  ${result.message}`));
-				else console.log(chalk.red(`  ${result.message}`));
-				return;
-			}
-
-			if (dryRun) {
-				console.log(chalk.cyan(`  ${result.message}`));
-			} else if (result.affected > 0) {
-				spinner?.succeed(
-					chalk.green(`  ${result.message}`),
-				);
-			} else {
-				spinner?.succeed(chalk.dim(`  ${result.message}`));
-			}
-
-			// Show remaining gaps
-			const { ok: gapOk, data: gapData } = await secretApiCall(
-				"GET",
-				"/api/repair/embedding-gaps",
-			);
-			if (gapOk) {
-				const gaps = gapData as {
-					unembedded: number;
-					total: number;
-					coverage: string;
-				};
-				console.log(
-					chalk.dim(
-						`  Coverage: ${gaps.coverage} (${gaps.total - gaps.unembedded}/${gaps.total} embedded)`,
-					),
-				);
-			}
-		} catch (err) {
-			if (spinner) spinner.fail(chalk.red("  Failed to reach daemon"));
-			else console.log(chalk.red("  Failed to reach daemon"));
-			console.log(chalk.dim(`  ${(err as Error).message}`));
-		}
-	});
-
-embedCmd
-	.command("gaps")
-	.description("Show count of memories missing embeddings")
-	.action(async () => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		try {
-			const { ok, data } = await secretApiCall(
-				"GET",
-				"/api/repair/embedding-gaps",
-			);
-			if (!ok) {
-				console.log(chalk.red("  Failed to check embedding gaps"));
-				return;
-			}
-			const gaps = data as {
-				unembedded: number;
-				total: number;
-				coverage: string;
-			};
-			console.log(chalk.bold("  Embedding Coverage\n"));
-			console.log(`  Total memories:  ${gaps.total}`);
-			console.log(`  Embedded:        ${gaps.total - gaps.unembedded}`);
-			console.log(`  Missing:         ${gaps.unembedded}`);
-			console.log(`  Coverage:        ${gaps.coverage}`);
-		} catch {
-			console.log(chalk.red("  Failed to reach daemon"));
 		}
 	});
 

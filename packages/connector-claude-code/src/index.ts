@@ -151,6 +151,9 @@ export class ClaudeCodeConnector extends BaseConnector {
 			// If parsing fails, leave settings as-is
 		}
 
+		// Remove MCP server from ~/.claude.json
+		this.removeMcpServer();
+
 		return { filesRemoved };
 	}
 
@@ -329,6 +332,9 @@ export class ClaudeCodeConnector extends BaseConnector {
 		};
 
 		writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+		// Register Signet MCP server in ~/.claude.json (user scope)
+		this.registerMcpServer();
 	}
 
 	/**
@@ -347,10 +353,14 @@ export class ClaudeCodeConnector extends BaseConnector {
 			// Use base class method to strip existing block
 			const userContent = this.stripSignetBlock(raw);
 			const header = this.generateHeader(agentsMdPath);
+
+			// Compose additional identity files
+			const extras = this.composeIdentityExtras(basePath);
+
 			// Use base class method to build block
 			writeFileSync(
 				claudeMdPath,
-				header + this.buildSignetBlock() + userContent,
+				header + this.buildSignetBlock() + userContent + extras,
 			);
 			return claudeMdPath;
 		}
@@ -381,19 +391,87 @@ export class ClaudeCodeConnector extends BaseConnector {
 			parts.push(identity.soul.content);
 		}
 
-		// Add memory content
-		if (identity.memory?.content) {
-			parts.push("\n# Memory\n\n");
-			parts.push(identity.memory.content);
-		}
-
 		// Add identity content if available
 		if (identity.identity?.content) {
 			parts.push("\n# Identity\n\n");
 			parts.push(identity.identity.content);
 		}
 
+		// Add user profile
+		if (identity.user?.content) {
+			parts.push("\n# About Your User\n\n");
+			parts.push(identity.user.content);
+		}
+
+		// Add memory content
+		if (identity.memory?.content) {
+			parts.push("\n# Memory\n\n");
+			parts.push(identity.memory.content);
+		}
+
 		return parts.join("");
+	}
+
+	/**
+	 * Register Signet MCP server in ~/.claude.json (user scope)
+	 *
+	 * Claude Code reads MCP servers from the top-level `mcpServers` key
+	 * in ~/.claude.json, NOT from ~/.claude/settings.json.
+	 */
+	private registerMcpServer(): void {
+		const claudeJsonPath = join(homedir(), ".claude.json");
+
+		let config: Record<string, unknown> = {};
+		if (existsSync(claudeJsonPath)) {
+			try {
+				config = JSON.parse(readFileSync(claudeJsonPath, "utf-8"));
+			} catch {
+				return; // Don't corrupt an unparseable config
+			}
+		}
+
+		const existingMcp =
+			(config.mcpServers as Record<string, unknown> | undefined) ?? {};
+		config.mcpServers = {
+			...existingMcp,
+			signet: {
+				type: "stdio",
+				command: "signet-mcp",
+				args: [] as string[],
+				env: {},
+			},
+		};
+
+		writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2));
+	}
+
+	/**
+	 * Remove Signet MCP server from ~/.claude.json
+	 */
+	private removeMcpServer(): void {
+		const claudeJsonPath = join(homedir(), ".claude.json");
+
+		if (!existsSync(claudeJsonPath)) return;
+
+		let config: Record<string, unknown>;
+		try {
+			config = JSON.parse(readFileSync(claudeJsonPath, "utf-8"));
+		} catch {
+			return;
+		}
+
+		if (
+			config.mcpServers &&
+			typeof config.mcpServers === "object" &&
+			!Array.isArray(config.mcpServers)
+		) {
+			const mcp = config.mcpServers as Record<string, unknown>;
+			delete mcp.signet;
+			if (Object.keys(mcp).length === 0) {
+				delete config.mcpServers;
+			}
+			writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2));
+		}
 	}
 
 	/**

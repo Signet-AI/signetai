@@ -390,6 +390,68 @@ export async function getProjection(
 	}
 }
 
+// ============================================================================
+// Embedding Health API
+// ============================================================================
+
+export interface EmbeddingCheckResult {
+	name: string;
+	status: "ok" | "warn" | "fail";
+	message: string;
+	detail?: Record<string, unknown>;
+	fix?: string;
+}
+
+export interface EmbeddingHealthReport {
+	status: "healthy" | "degraded" | "unhealthy";
+	score: number;
+	checkedAt: string;
+	config: {
+		provider: string;
+		model: string;
+		dimensions: number;
+	};
+	checks: EmbeddingCheckResult[];
+}
+
+export async function getEmbeddingHealth(): Promise<EmbeddingHealthReport | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/embeddings/health`);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function repairCleanOrphans(): Promise<{ success: boolean; affected: number; message: string } | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/repair/clean-orphans`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ reason: "dashboard: embedding health", actor: "dashboard" }),
+		});
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function repairReEmbed(): Promise<{ success: boolean; affected: number; message: string } | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/repair/re-embed`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ reason: "dashboard: embedding health", actor: "dashboard" }),
+		});
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
 export async function getHarnesses(): Promise<Harness[]> {
 	try {
 		const response = await fetch(`${API_BASE}/api/harnesses`);
@@ -487,6 +549,11 @@ export interface SkillSearchResult {
 	installsRaw?: number;
 	description: string;
 	installed: boolean;
+	provider?: "skills.sh" | "clawhub";
+	stars?: number;
+	downloads?: number;
+	versions?: number;
+	author?: string;
 }
 
 export interface SkillDetail extends Skill {
@@ -577,5 +644,162 @@ export async function uninstallSkill(
 		return await response.json();
 	} catch (e) {
 		return { success: false, error: String(e) };
+	}
+}
+
+// ============================================================================
+// Scheduled Tasks API
+// ============================================================================
+
+export interface ScheduledTask {
+	id: string;
+	name: string;
+	prompt: string;
+	cron_expression: string;
+	harness: "claude-code" | "opencode";
+	working_directory: string | null;
+	enabled: number;
+	last_run_at: string | null;
+	next_run_at: string | null;
+	created_at: string;
+	updated_at: string;
+	last_run_status?: string | null;
+	last_run_exit_code?: number | null;
+}
+
+export interface TaskRun {
+	id: string;
+	task_id: string;
+	status: "pending" | "running" | "completed" | "failed";
+	started_at: string;
+	completed_at: string | null;
+	exit_code: number | null;
+	stdout: string | null;
+	stderr: string | null;
+	error: string | null;
+}
+
+export interface CronPreset {
+	label: string;
+	expression: string;
+}
+
+export async function getTasks(): Promise<{
+	tasks: ScheduledTask[];
+	presets: CronPreset[];
+}> {
+	try {
+		const response = await fetch(`${API_BASE}/api/tasks`);
+		if (!response.ok) throw new Error("Failed to fetch tasks");
+		return await response.json();
+	} catch {
+		return { tasks: [], presets: [] };
+	}
+}
+
+export async function getTask(
+	id: string,
+): Promise<{ task: ScheduledTask; runs: TaskRun[] } | null> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
+		);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function createTask(data: {
+	name: string;
+	prompt: string;
+	cronExpression: string;
+	harness: string;
+	workingDirectory?: string;
+}): Promise<{ id?: string; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/tasks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(data),
+		});
+		return await response.json();
+	} catch (e) {
+		return { error: String(e) };
+	}
+}
+
+export async function updateTask(
+	id: string,
+	data: Partial<{
+		name: string;
+		prompt: string;
+		cronExpression: string;
+		harness: string;
+		workingDirectory: string | null;
+		enabled: boolean;
+	}>,
+): Promise<{ success?: boolean; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
+			{
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(data),
+			},
+		);
+		return await response.json();
+	} catch (e) {
+		return { error: String(e) };
+	}
+}
+
+export async function deleteTask(
+	id: string,
+): Promise<{ success?: boolean; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
+			{
+				method: "DELETE",
+			},
+		);
+		return await response.json();
+	} catch (e) {
+		return { error: String(e) };
+	}
+}
+
+export async function triggerTaskRun(
+	id: string,
+): Promise<{ runId?: string; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}/run`,
+			{
+				method: "POST",
+			},
+		);
+		return await response.json();
+	} catch (e) {
+		return { error: String(e) };
+	}
+}
+
+export async function getTaskRuns(
+	id: string,
+	limit = 20,
+	offset = 0,
+): Promise<{ runs: TaskRun[]; total: number; hasMore: boolean }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/tasks/${encodeURIComponent(id)}/runs?limit=${limit}&offset=${offset}`,
+		);
+		if (!response.ok) throw new Error("Failed to fetch runs");
+		return await response.json();
+	} catch {
+		return { runs: [], total: 0, hasMore: false };
 	}
 }

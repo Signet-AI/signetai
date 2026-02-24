@@ -1,0 +1,23 @@
+{
+  "id": "signet-memory-openclaw",
+  "kind": "memory",
+  "uiHints": {
+    "daemonUrl": {
+      "label": "Daemon URL",
+      "placeholder": "http://localhost:3850",
+      "help": "URL of the Signet daemon. Default: http://localhost:3850"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "daemonUrl": {
+        "type": "string",
+        "description": "URL of the Signet daemon",
+        "default": "http://localhost:3850"
+      }
+    },
+    "required": []
+  }
+}

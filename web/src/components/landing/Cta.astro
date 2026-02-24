@@ -9,12 +9,29 @@
     </div>
 
     <div class="cta-actions">
-      <div class="install-box">
-        <span class="install-prompt">&gt;</span>
-        <code class="install-cmd">npm install -g signetai</code>
-        <button class="copy-btn push-right" aria-label="Copy install command">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-        </button>
+      <div class="install-tabs">
+        <button class="install-tab active" data-install="terminal">Terminal</button>
+        <button class="install-tab" data-install="agent">Tell Your Agent</button>
+      </div>
+      <div class="install-panels">
+        <div class="install-panel active" id="cta-install-terminal">
+          <div class="install-box">
+            <span class="install-prompt">&gt;</span>
+            <code class="install-cmd">npm install -g signetai</code>
+            <button class="copy-btn push-right" aria-label="Copy install command">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            </button>
+          </div>
+        </div>
+        <div class="install-panel" id="cta-install-agent">
+          <div class="install-box install-box--agent">
+            <code class="install-cmd">Install Signet AI, the open agent memory and identity system: https://signetai.sh/skill.md</code>
+            <button class="copy-btn push-right" aria-label="Copy agent prompt">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            </button>
+          </div>
+          <p class="install-hint">Copy and paste this to Claude Code, OpenClaw, or any AI agent</p>
+        </div>
       </div>
       <div class="cta-buttons">
         <a href="/docs" class="btn btn-primary">Read Docs</a>

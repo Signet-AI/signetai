@@ -145,6 +145,29 @@ This starts a Vite dev server at `http://localhost:5173`. The daemon
 must still be running at port 3850 for API calls to work.
 
 
+Tasks Tab
+---------
+
+The Tasks tab shows a kanban board for scheduled agent prompts. Four
+columns display task state:
+
+- **Scheduled** — Enabled tasks waiting for their next run
+- **Running** — Currently executing tasks with elapsed timer
+- **Completed** — Recent successful runs
+- **Failed** — Recent failed runs with error summary
+
+Each card shows the task name, harness badge, cron schedule, and
+next/last run time. Click a card to open the detail sheet with full
+run history and stdout/stderr logs.
+
+Use the **+ New Task** button to create tasks. The form includes
+cron presets, harness selection, and a security warning for Claude
+Code's `--dangerously-skip-permissions` flag.
+
+Tasks can be enabled/disabled via the toggle switch on each card,
+or triggered for an immediate manual run.
+
+
 Port Configuration
 ------------------
 

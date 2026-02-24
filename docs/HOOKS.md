@@ -223,10 +223,10 @@ Returns the current synthesis configuration. Harnesses can poll this to know whe
 
 ## OpenClaw Integration
 
-The `@signet/adapter-openclaw` package provides a ready-made plugin:
+The `@signetai/adapter-openclaw` package provides a ready-made plugin:
 
 ```javascript
-import createPlugin from '@signet/adapter-openclaw';
+import createPlugin from '@signetai/adapter-openclaw';
 
 const signet = createPlugin({
   enabled: true,

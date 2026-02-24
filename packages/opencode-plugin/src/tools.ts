@@ -2,7 +2,7 @@
  * Signet memory tools for OpenCode.
  *
  * 8 tools using tool() from @opencode-ai/plugin, mirroring the
- * tool surface of @signet/adapter-openclaw.
+ * tool surface of @signetai/adapter-openclaw.
  */
 
 import { tool } from "@opencode-ai/plugin";

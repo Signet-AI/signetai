@@ -1,13 +1,14 @@
 {
   "name": "@signet/daemon",
-  "version": "0.1.89",
+  "version": "0.1.124",
   "license": "Apache-2.0",
   "description": "Background daemon for Signet - serves dashboard, API, and memory system",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "signet-daemon": "./dist/daemon.js"
+    "signet-daemon": "./dist/daemon.js",
+    "signet-mcp": "./dist/mcp-stdio.js"
   },
   "exports": {
     ".": {
@@ -20,7 +21,7 @@
     "dashboard"
   ],
   "scripts": {
-    "build": "bun build ./src/daemon.ts --outfile ./dist/daemon.js --target bun && bun build ./src/index.ts --outfile ./dist/index.js --target bun",
+    "build": "bun build ./src/daemon.ts --outfile ./dist/daemon.js --target bun && bun build ./src/mcp-stdio.ts --outfile ./dist/mcp-stdio.js --target bun && bun build ./src/index.ts --outfile ./dist/index.js --target bun",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "dev": "bun --watch src/daemon.ts",
     "start": "bun src/daemon.ts",
@@ -30,11 +31,14 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.14.0",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@signet/core": "workspace:*",
     "chokidar": "^4.0.0",
+    "cron-parser": "^5.5.0",
     "hono": "^4.8.0",
     "libsodium-wrappers": "^0.8.2",
-    "umap-js": "^1.4.0"
+    "umap-js": "^1.4.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/libsodium-wrappers": "^0.8.2"

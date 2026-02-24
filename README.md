@@ -203,27 +203,33 @@ Install
 ---
 
 ```bash
-# one-line installer
-curl -sL https://signetai.sh/install | bash
-
-# or global install
+# Global install (pick one)
 npm install -g signetai
-# bun add -g signetai
-
-# or run without installing
-npx signetai setup
+bun add -g signetai
 ```
 
-Setup
----
+Then run the interactive setup wizard:
 
 ```bash
-signet setup
+signet
 ```
 
-The setup wizard initializes `~/.agents/`, configures your selected
+The wizard initializes `~/.agents/`, configures your selected
 harnesses, prompts for an embedding provider (Ollama/OpenAI/skip),
 creates the memory database, and starts the daemon.
+
+### Tell your agent to install it
+
+Copy this prompt and paste it to your AI agent (Claude Code, OpenClaw,
+Clawdbot, OpenCode, etc.):
+
+```
+Install Signet AI, the open agent memory and identity system: https://signetai.sh/skill.md
+```
+
+The linked guide walks your agent through prerequisites, installation,
+setup, and verification step by step — with gates that ensure it stops
+and explains what it's doing before each phase.
 
 Use it
 ---
@@ -255,7 +261,7 @@ Harness support
 |---|---|---|
 | Claude Code | Supported | Connector writes `~/.claude/CLAUDE.md` + hook config |
 | OpenCode | Supported | Connector writes `~/.config/opencode/AGENTS.md` + plugin |
-| OpenClaw | Supported | Connector bootstrap + `@signet/adapter-openclaw` runtime |
+| OpenClaw | Supported | Connector bootstrap + `@signetai/adapter-openclaw` runtime |
 | Cursor | Planned | File-based identity sync |
 | Windsurf | Planned | File/plugin integration |
 
@@ -351,7 +357,7 @@ Packages
 | [`@signet/connector-claude-code`](./packages/connector-claude-code) | Claude Code integration |
 | [`@signet/connector-opencode`](./packages/connector-opencode) | OpenCode integration |
 | [`@signet/connector-openclaw`](./packages/connector-openclaw) | OpenClaw bootstrap integration |
-| [`@signet/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
+| [`@signetai/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
 | [`@signet/web`](./web) | Marketing website (Cloudflare Worker) |
 | [`signetai`](./packages/signetai) | Meta-package bundling CLI + daemon (`signet` binary) |
 

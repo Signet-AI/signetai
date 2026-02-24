@@ -91,47 +91,88 @@ export interface AgentConfig {
 export const PIPELINE_FLAGS = [
 	"enabled",
 	"shadowMode",
-	"allowUpdateDelete",
-	"graphEnabled",
-	"autonomousEnabled",
 	"mutationsFrozen",
-	"autonomousFrozen",
+	"graph.enabled",
+	"reranker.enabled",
+	"autonomous.enabled",
+	"autonomous.frozen",
+	"autonomous.allowUpdateDelete",
 ] as const;
 
 export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
 
-export interface PipelineV2Config {
-	readonly enabled: boolean;
-	readonly shadowMode: boolean;
-	readonly allowUpdateDelete: boolean;
-	readonly graphEnabled: boolean;
-	readonly autonomousEnabled: boolean;
-	readonly mutationsFrozen: boolean;
-	readonly autonomousFrozen: boolean;
-	readonly extractionProvider: "ollama" | "claude-code";
-	readonly extractionModel: string;
-	readonly extractionTimeout: number;
-	readonly workerPollMs: number;
-	readonly workerMaxRetries: number;
+// -- Pipeline v2 sub-config interfaces --
+
+export interface PipelineExtractionConfig {
+	readonly provider: "ollama" | "claude-code";
+	readonly model: string;
+	readonly timeout: number;
+	readonly minConfidence: number;
+}
+
+export interface PipelineWorkerConfig {
+	readonly pollMs: number;
+	readonly maxRetries: number;
 	readonly leaseTimeoutMs: number;
-	readonly minFactConfidenceForWrite: number;
-	readonly graphBoostWeight: number;
-	readonly graphBoostTimeoutMs: number;
-	readonly rerankerEnabled: boolean;
-	readonly rerankerModel: string;
-	readonly rerankerTopN: number;
-	readonly rerankerTimeoutMs: number;
+}
+
+export interface PipelineGraphConfig {
+	readonly enabled: boolean;
+	readonly boostWeight: number;
+	readonly boostTimeoutMs: number;
+}
+
+export interface PipelineRerankerConfig {
+	readonly enabled: boolean;
+	readonly model: string;
+	readonly topN: number;
+	readonly timeoutMs: number;
+}
+
+export interface PipelineAutonomousConfig {
+	readonly enabled: boolean;
+	readonly frozen: boolean;
+	readonly allowUpdateDelete: boolean;
 	readonly maintenanceIntervalMs: number;
 	readonly maintenanceMode: "observe" | "execute";
-	readonly repairReembedCooldownMs: number;
-	readonly repairReembedHourlyBudget: number;
-	readonly repairRequeueCooldownMs: number;
-	readonly repairRequeueHourlyBudget: number;
-	// Document ingest worker
-	readonly documentWorkerIntervalMs: number;
-	readonly documentChunkSize: number;
-	readonly documentChunkOverlap: number;
-	readonly documentMaxContentBytes: number;
+}
+
+export interface PipelineRepairConfig {
+	readonly reembedCooldownMs: number;
+	readonly reembedHourlyBudget: number;
+	readonly requeueCooldownMs: number;
+	readonly requeueHourlyBudget: number;
+}
+
+export interface PipelineDocumentsConfig {
+	readonly workerIntervalMs: number;
+	readonly chunkSize: number;
+	readonly chunkOverlap: number;
+	readonly maxContentBytes: number;
+}
+
+export interface PipelineGuardrailsConfig {
+	readonly maxContentChars: number;
+	readonly chunkTargetChars: number;
+	readonly recallTruncateChars: number;
+}
+
+export interface PipelineV2Config {
+	// Master switches (flat)
+	readonly enabled: boolean;
+	readonly shadowMode: boolean;
+	readonly mutationsFrozen: boolean;
+	readonly semanticContradictionEnabled: boolean;
+
+	// Grouped sub-objects
+	readonly extraction: PipelineExtractionConfig;
+	readonly worker: PipelineWorkerConfig;
+	readonly graph: PipelineGraphConfig;
+	readonly reranker: PipelineRerankerConfig;
+	readonly autonomous: PipelineAutonomousConfig;
+	readonly repair: PipelineRepairConfig;
+	readonly documents: PipelineDocumentsConfig;
+	readonly guardrails: PipelineGuardrailsConfig;
 }
 
 // -- Status/union constants --
@@ -140,6 +181,7 @@ export const MEMORY_TYPES = [
 	"fact",
 	"preference",
 	"decision",
+	"rationale",
 	"daily-log",
 	"episodic",
 	"procedural",
@@ -178,6 +220,45 @@ export type HistoryEvent = (typeof HISTORY_EVENTS)[number];
 
 export const DECISION_ACTIONS = ["add", "update", "delete", "none"] as const;
 export type DecisionAction = (typeof DECISION_ACTIONS)[number];
+
+// -- Scheduled tasks --
+
+export const TASK_HARNESSES = ["claude-code", "opencode"] as const;
+export type TaskHarness = (typeof TASK_HARNESSES)[number];
+
+export const TASK_RUN_STATUSES = [
+	"pending",
+	"running",
+	"completed",
+	"failed",
+] as const;
+export type TaskRunStatus = (typeof TASK_RUN_STATUSES)[number];
+
+export interface ScheduledTask {
+	readonly id: string;
+	readonly name: string;
+	readonly prompt: string;
+	readonly cronExpression: string;
+	readonly harness: TaskHarness;
+	readonly workingDirectory: string | null;
+	readonly enabled: boolean;
+	readonly lastRunAt: string | null;
+	readonly nextRunAt: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface TaskRun {
+	readonly id: string;
+	readonly taskId: string;
+	readonly status: TaskRunStatus;
+	readonly startedAt: string;
+	readonly completedAt: string | null;
+	readonly exitCode: number | null;
+	readonly stdout: string | null;
+	readonly stderr: string | null;
+	readonly error: string | null;
+}
 
 // -- Core interfaces --
 

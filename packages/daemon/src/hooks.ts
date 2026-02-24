@@ -269,17 +269,25 @@ export function isDuplicate(db: Database, content: string): boolean {
 	return false;
 }
 
-function readMemoryMd(charBudget: number): string | undefined {
-	const memoryMd = join(AGENTS_DIR, "MEMORY.md");
-	if (!existsSync(memoryMd)) return undefined;
+function readIdentityFile(
+	fileName: string,
+	charBudget: number,
+): string | undefined {
+	const filePath = join(AGENTS_DIR, fileName);
+	if (!existsSync(filePath)) return undefined;
 
 	try {
-		const content = readFileSync(memoryMd, "utf-8");
+		const content = readFileSync(filePath, "utf-8").trim();
+		if (!content) return undefined;
 		if (content.length <= charBudget) return content;
 		return `${content.slice(0, charBudget)}\n[truncated]`;
 	} catch {
 		return undefined;
 	}
+}
+
+function readMemoryMd(charBudget: number): string | undefined {
+	return readIdentityFile("MEMORY.md", charBudget);
 }
 
 function readAgentsMd(charBudget: number): string | undefined {
@@ -364,6 +372,118 @@ function getProjectMemories(
 		return selected;
 	} catch (e) {
 		logger.error("hooks", "Failed to get project memories", e as Error);
+		return [];
+	}
+}
+
+/**
+ * Get predicted context memories by analyzing recent session summaries
+ * and using recurring topics as additional search terms. Supplements
+ * the regular project-filtered memories with context the user is
+ * likely to need based on recent sessions.
+ */
+function getPredictedContextMemories(
+	project: string | undefined,
+	limit: number,
+	charBudget: number,
+	excludeIds: ReadonlySet<string>,
+): ScoredMemory[] {
+	if (!existsSync(MEMORY_DB)) return [];
+
+	try {
+		// Get recent session summaries for this project
+		const summaryRows = getDbAccessor().withReadDb((db) => {
+			if (project) {
+				return db
+					.prepare(
+						`SELECT transcript FROM summary_jobs
+						 WHERE project = ? AND status = 'completed'
+						 ORDER BY created_at DESC LIMIT 5`,
+					)
+					.all(project) as Array<{ transcript: string }>;
+			}
+			return db
+				.prepare(
+					`SELECT transcript FROM summary_jobs
+					 WHERE status = 'completed'
+					 ORDER BY created_at DESC LIMIT 5`,
+				)
+				.all() as Array<{ transcript: string }>;
+		});
+
+		if (summaryRows.length === 0) return [];
+
+		// Extract recurring terms from recent sessions
+		const termFreq = new Map<string, number>();
+		for (const row of summaryRows) {
+			const text = row.transcript.slice(0, 3000);
+			const words = text
+				.toLowerCase()
+				.replace(/[^a-z0-9\s]/g, " ")
+				.split(/\s+/)
+				.filter((w) => w.length >= 4);
+			const seen = new Set<string>();
+			for (const w of words) {
+				if (seen.has(w)) continue;
+				seen.add(w);
+				termFreq.set(w, (termFreq.get(w) ?? 0) + 1);
+			}
+		}
+
+		// Take terms that appear in 2+ sessions (recurring topics)
+		const recurring = [...termFreq.entries()]
+			.filter(([_, count]) => count >= 2)
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, 10)
+			.map(([term]) => term);
+
+		if (recurring.length === 0) return [];
+
+		// Use recurring terms as FTS query
+		const ftsQuery = recurring.join(" OR ");
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT m.id, m.content, m.type, m.importance, m.tags,
+						        m.pinned, m.project, m.created_at
+						 FROM memories_fts
+						 JOIN memories m ON memories_fts.rowid = m.rowid
+						 WHERE memories_fts MATCH ?
+						   AND m.is_deleted = 0
+						 ORDER BY bm25(memories_fts)
+						 LIMIT ?`,
+					)
+					.all(ftsQuery, limit * 2) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					importance: number;
+					tags: string | null;
+					pinned: number;
+					project: string | null;
+					created_at: string;
+				}>,
+		);
+
+		const selected: ScoredMemory[] = [];
+		let used = 0;
+		for (const r of rows) {
+			if (excludeIds.has(r.id)) continue;
+			if (selected.length >= limit) break;
+			if (used + r.content.length > charBudget) break;
+			selected.push({
+				...r,
+				effScore: effectiveScore(r.importance, r.created_at, r.pinned === 1),
+			});
+			used += r.content.length;
+		}
+
+		return selected;
+	} catch (e) {
+		logger.warn("hooks", "Predicted context failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
 		return [];
 	}
 }
@@ -573,6 +693,18 @@ export function handleSessionStart(
 	// Get project memories with scoring
 	const memories = getProjectMemories(req.project, 30, 2000);
 
+	// Get predicted context from recent session analysis (~30% of budget)
+	const existingIds = new Set(memories.map((m) => m.id));
+	const predictedMemories = getPredictedContextMemories(
+		req.project,
+		10,
+		600,
+		existingIds,
+	);
+	if (predictedMemories.length > 0) {
+		memories.push(...predictedMemories);
+	}
+
 	// Update access tracking for served memories
 	const servedIds = memories.map((m) => m.id);
 	updateAccessTracking(servedIds);
@@ -582,6 +714,15 @@ export function handleSessionStart(
 
 	injectParts.push("[memory active | /remember | /recall]");
 
+	// Inject local date/time and timezone
+	const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+	const now = new Date().toLocaleString("en-US", {
+		timeZone: tz,
+		dateStyle: "full",
+		timeStyle: "short",
+	});
+	injectParts.push(`\n# Current Date & Time\n${now} (${tz})\n`);
+
 	if (agentsMdContent) {
 		injectParts.push("\n## Agent Instructions\n");
 		injectParts.push(agentsMdContent);
@@ -589,6 +730,30 @@ export function handleSessionStart(
 		injectParts.push(
 			`You are ${identity.name}${identity.description ? `, ${identity.description}` : ""}.`,
 		);
+	}
+
+	// Inject additional identity files
+	const soulContent = includeIdentity
+		? readIdentityFile("SOUL.md", 4000)
+		: undefined;
+	const identityContent = includeIdentity
+		? readIdentityFile("IDENTITY.md", 2000)
+		: undefined;
+	const userContent = includeIdentity
+		? readIdentityFile("USER.md", 6000)
+		: undefined;
+
+	if (soulContent) {
+		injectParts.push("\n## Soul\n");
+		injectParts.push(soulContent);
+	}
+	if (identityContent) {
+		injectParts.push("\n## Identity\n");
+		injectParts.push(identityContent);
+	}
+	if (userContent) {
+		injectParts.push("\n## About Your User\n");
+		injectParts.push(userContent);
 	}
 
 	if (memoryMdContent) {

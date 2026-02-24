@@ -22,7 +22,7 @@ import { logger } from "../logger";
 const MAX_FACTS = 20;
 const MAX_ENTITIES = 50;
 const MAX_FACT_LENGTH = 2000;
-const MIN_FACT_LENGTH = 10;
+const MIN_FACT_LENGTH = 20;
 const MAX_INPUT_CHARS = 12000;
 
 const VALID_TYPES = new Set<string>(MEMORY_TYPES);
@@ -36,27 +36,39 @@ function buildExtractionPrompt(content: string): string {
 
 Return JSON with two arrays: "facts" and "entities".
 
-Each fact: {"content": "...", "type": "fact|preference|decision|procedural|semantic", "confidence": 0.0-1.0}
+Each fact: {"content": "...", "type": "fact|preference|decision|rationale|procedural|semantic", "confidence": 0.0-1.0}
 Each entity: {"source": "...", "relationship": "...", "target": "...", "confidence": 0.0-1.0}
 
-Types: fact (objective info), preference (user likes/dislikes), decision (choices made), procedural (how-to knowledge), semantic (concepts/definitions).
+IMPORTANT — Atomic facts:
+Each fact must be fully understandable WITHOUT the original conversation. Include the specific subject (package name, file path, component, tool) and enough context that a reader seeing only this fact knows exactly what it refers to.
+
+BAD: "install() writes bundled plugin"
+GOOD: "The @signet/connector-opencode install() function writes pre-bundled signet.mjs to ~/.config/opencode/plugins/"
+
+BAD: "Uses PostgreSQL instead of MongoDB"
+GOOD: "The auth service uses PostgreSQL instead of MongoDB for better relational query support"
+
+Types: fact (objective info), preference (user likes/dislikes), decision (choices made), rationale (WHY a decision was made — reasoning, alternatives considered, tradeoffs), procedural (how-to knowledge), semantic (concepts/definitions).
+
+When you see a decision with reasoning, extract BOTH a decision fact AND a rationale fact. The rationale should capture the WHY, including alternatives considered and tradeoffs.
 
 Examples:
 
 Input: "User prefers dark mode and uses vim keybindings in VS Code"
 Output:
 {"facts": [
-  {"content": "User prefers dark mode", "type": "preference", "confidence": 0.9},
-  {"content": "User uses vim keybindings in VS Code", "type": "preference", "confidence": 0.9}
+  {"content": "User prefers dark mode for all editor and terminal interfaces", "type": "preference", "confidence": 0.9},
+  {"content": "User uses vim keybindings in VS Code as their primary editing mode", "type": "preference", "confidence": 0.9}
 ], "entities": [
   {"source": "User", "relationship": "prefers", "target": "dark mode", "confidence": 0.9},
   {"source": "User", "relationship": "uses", "target": "vim keybindings", "confidence": 0.9}
 ]}
 
-Input: "Decided to use PostgreSQL instead of MongoDB for the auth service"
+Input: "Decided to use PostgreSQL instead of MongoDB for the auth service because relational queries suit the access-control schema better and we need ACID transactions"
 Output:
 {"facts": [
-  {"content": "Auth service uses PostgreSQL instead of MongoDB", "type": "decision", "confidence": 0.85}
+  {"content": "The auth service uses PostgreSQL instead of MongoDB for its database", "type": "decision", "confidence": 0.85},
+  {"content": "PostgreSQL was chosen over MongoDB for the auth service because: (1) relational queries suit the access-control schema, (2) ACID transactions needed for auth state changes. MongoDB was rejected due to lack of native join support.", "type": "rationale", "confidence": 0.85}
 ], "entities": [
   {"source": "auth service", "relationship": "uses", "target": "PostgreSQL", "confidence": 0.85},
   {"source": "auth service", "relationship": "rejected", "target": "MongoDB", "confidence": 0.8}

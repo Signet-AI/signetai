@@ -206,7 +206,7 @@ export function startMaintenanceWorker(
 			return { report, recommendations, executed };
 		}
 
-		if (cfg.maintenanceMode === "observe") {
+		if (cfg.autonomous.maintenanceMode === "observe") {
 			logger.info("maintenance", "Recommendations (observe-only)", {
 				composite: report.composite.score.toFixed(2),
 				recommendations: recommendations.map((r) => r.action),
@@ -260,7 +260,7 @@ export function startMaintenanceWorker(
 	}
 
 	// Only start the interval if autonomous maintenance is allowed
-	if (cfg.autonomousEnabled && !cfg.autonomousFrozen) {
+	if (cfg.autonomous.enabled && !cfg.autonomous.frozen) {
 		timer = setInterval(() => {
 			if (!running) return;
 			try {
@@ -270,11 +270,11 @@ export function startMaintenanceWorker(
 					error: e instanceof Error ? e.message : String(e),
 				});
 			}
-		}, cfg.maintenanceIntervalMs);
+		}, cfg.autonomous.maintenanceIntervalMs);
 
 		logger.info("maintenance", "Worker started", {
-			mode: cfg.maintenanceMode,
-			intervalMs: cfg.maintenanceIntervalMs,
+			mode: cfg.autonomous.maintenanceMode,
+			intervalMs: cfg.autonomous.maintenanceIntervalMs,
 		});
 	} else {
 		logger.info("maintenance", "Worker skipped (disabled or frozen)");

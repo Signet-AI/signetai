@@ -32,6 +32,14 @@ export type {
 	DecisionAction,
 	PipelineFlag,
 	PipelineV2Config,
+	PipelineExtractionConfig,
+	PipelineWorkerConfig,
+	PipelineGraphConfig,
+	PipelineRerankerConfig,
+	PipelineAutonomousConfig,
+	PipelineRepairConfig,
+	PipelineDocumentsConfig,
+	PipelineGuardrailsConfig,
 	ExtractedFact,
 	ExtractedEntity,
 	ExtractionResult,
@@ -65,6 +73,23 @@ export type {
 	MigrationResult,
 } from "./migration";
 export * from "./constants";
+
+// Portable export/import
+export {
+	collectExportData,
+	serializeExportData,
+	importMemories,
+	importEntities,
+	importRelations,
+} from "./export";
+export type {
+	ExportOptions,
+	ExportManifest,
+	ExportData,
+	ImportOptions,
+	ExportImportResult,
+	ImportConflictStrategy,
+} from "./export";
 
 // Migration runner
 export { runMigrations, MIGRATIONS } from "./migrations/index";

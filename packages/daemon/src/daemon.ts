@@ -80,6 +80,13 @@ import {
 	startSummaryWorker,
 } from "./pipeline";
 import {
+	startSchedulerWorker,
+	validateCron,
+	computeNextRun,
+	isHarnessAvailable,
+	CRON_PRESETS,
+} from "./scheduler";
+import {
 	createOllamaProvider,
 	createClaudeCodeProvider,
 } from "./pipeline/provider";
@@ -95,7 +102,9 @@ import { createFilesystemConnector } from "./connectors/filesystem";
 import { normalizeAndHashContent } from "./content-normalization";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import { rerank, noopReranker, type RerankCandidate } from "./pipeline/reranker";
+import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createProviderTracker, getDiagnostics } from "./diagnostics";
+import { buildEmbeddingHealth } from "./embedding-health";
 import {
 	createAnalyticsCollector,
 	type AnalyticsCollector,
@@ -110,6 +119,7 @@ import {
 	triggerRetentionSweep,
 	reembedMissingMemories,
 	getEmbeddingGapStats,
+	cleanOrphanedEmbeddings,
 	type RepairContext,
 } from "./repair-actions";
 import {
@@ -272,6 +282,45 @@ function blobToVector(blob: Buffer, dimensions: number | null): number[] {
 			? dimensions
 			: vector.length;
 	return Array.from(vector.slice(0, size));
+}
+
+/**
+ * Split text into sentence-aware chunks of approximately targetChars.
+ * Single sentences exceeding 2x target get hard-split at targetChars.
+ */
+function chunkBySentence(text: string, targetChars: number): readonly string[] {
+	// Split on sentence-ending punctuation followed by whitespace/newline
+	const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+	const chunks: string[] = [];
+	let current = "";
+
+	for (const sentence of sentences) {
+		// If a single sentence exceeds 2x target, hard-split it
+		if (sentence.length > targetChars * 2) {
+			if (current.length > 0) {
+				chunks.push(current.trim());
+				current = "";
+			}
+			for (let i = 0; i < sentence.length; i += targetChars) {
+				chunks.push(sentence.slice(i, i + targetChars).trim());
+			}
+			continue;
+		}
+
+		const combined = current.length > 0 ? `${current} ${sentence}` : sentence;
+		if (combined.length > targetChars && current.length > 0) {
+			chunks.push(current.trim());
+			current = sentence;
+		} else {
+			current = combined;
+		}
+	}
+
+	if (current.trim().length > 0) {
+		chunks.push(current.trim());
+	}
+
+	return chunks.filter((c) => c.length > 0);
 }
 
 function parseTagsField(raw: string | null): string[] {
@@ -789,6 +838,13 @@ app.get("/health", (c) => {
 		pendingRestart: us.pendingRestartVersion !== null,
 	});
 });
+
+// ============================================================================
+// MCP Server (Streamable HTTP at /mcp)
+// ============================================================================
+
+import { mountMcpRoute } from "./mcp/route.js";
+mountMcpRoute(app);
 
 // ============================================================================
 // Auth API
@@ -1828,9 +1884,177 @@ app.post("/api/memory/remember", async (c) => {
 	if (!raw) return c.json({ error: "content is required" }, 400);
 
 	// Pipeline v2 kill switch: refuse writes when mutations are frozen
-	const pipelineCfg = loadMemoryConfig(AGENTS_DIR).pipelineV2;
+	const fullCfg = loadMemoryConfig(AGENTS_DIR);
+	const pipelineCfg = fullCfg.pipelineV2;
 	if (pipelineCfg.mutationsFrozen) {
 		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+	}
+
+	// --- Auto-chunking for oversized memories ---
+	const guardrails = pipelineCfg.guardrails;
+	if (raw.length > guardrails.maxContentChars) {
+		const chunks = chunkBySentence(raw, guardrails.chunkTargetChars);
+		if (chunks.length === 0) {
+			return c.json({ error: "content produced no valid chunks" }, 400);
+		}
+
+		const who = body.who ?? "daemon";
+		const project = body.project ?? null;
+		const sourceType = body.sourceType?.trim() || "manual";
+		const sourceId = body.sourceId?.trim() || null;
+		const parsedPrefixes = parsePrefixes(raw);
+		const importance = body.importance ?? parsedPrefixes.importance;
+		const pinned = (body.pinned ?? parsedPrefixes.pinned) ? 1 : 0;
+		const tags = body.tags ?? parsedPrefixes.tags;
+		const pipelineEnqueueEnabled = pipelineCfg.enabled || pipelineCfg.shadowMode;
+
+		const groupId = crypto.randomUUID();
+		const now = new Date().toISOString();
+		const chunkIds: string[] = [];
+
+		// Create chunk group entity
+		try {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO entities
+					 (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+					 VALUES (?, ?, ?, 'chunk_group', 0, ?, ?)`,
+				).run(groupId, `chunk-group:${groupId}`, `chunk-group:${groupId}`, now, now);
+			});
+		} catch (e) {
+			logger.error("memory", "Failed to create chunk group entity", e as Error);
+			return c.json({ error: "Failed to create chunk group" }, 500);
+		}
+
+		for (const chunk of chunks) {
+			const chunkNormalized = normalizeAndHashContent(chunk);
+			if (!chunkNormalized.storageContent) continue;
+
+			const chunkId = crypto.randomUUID();
+			const chunkContentForInsert =
+				chunkNormalized.normalizedContent.length > 0
+					? chunkNormalized.normalizedContent
+					: chunkNormalized.hashBasis;
+			const memType = inferType(chunk);
+
+			try {
+				// Dedup check + insert
+				const inserted = getDbAccessor().withWriteTx((db) => {
+					const byHash = db
+						.prepare(
+							`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
+						)
+						.get(chunkNormalized.contentHash) as { id: string } | undefined;
+					if (byHash) return false;
+
+					txIngestEnvelope(db, {
+						id: chunkId,
+						content: chunkNormalized.storageContent,
+						normalizedContent: chunkContentForInsert,
+						contentHash: chunkNormalized.contentHash,
+						who,
+						why: pinned ? "explicit-critical" : "explicit",
+						project,
+						importance,
+						type: memType,
+						tags,
+						pinned,
+						isDeleted: 0,
+						extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
+						embeddingModel: null,
+						extractionModel: pipelineEnqueueEnabled
+							? pipelineCfg.extractionModel
+							: null,
+						updatedBy: who,
+						sourceType: "chunk",
+						sourceId: groupId,
+						createdAt: now,
+					});
+
+					// Link chunk to group entity
+					db.prepare(
+						`INSERT OR IGNORE INTO memory_entity_mentions
+						 (memory_id, entity_id, mention_text, confidence, created_at)
+						 VALUES (?, ?, 'chunk', 1.0, ?)`,
+					).run(chunkId, groupId, now);
+
+					return true;
+				});
+
+				if (!inserted) continue;
+				chunkIds.push(chunkId);
+
+				// Generate embedding async
+				try {
+					const vec = await fetchEmbedding(
+						chunkNormalized.storageContent,
+						fullCfg.embedding,
+					);
+					if (vec) {
+						if (vec.length !== fullCfg.embedding.dimensions) {
+							logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
+								got: vec.length,
+								expected: fullCfg.embedding.dimensions,
+								memoryId: chunkId,
+							});
+						} else {
+							const embId = crypto.randomUUID();
+							const blob = vectorToBlob(vec);
+							getDbAccessor().withWriteTx((db) => {
+								syncVecDeleteBySourceId(db, "memory", chunkId);
+								db.prepare(
+									`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
+								).run(chunkId);
+								db.prepare(`
+									INSERT INTO embeddings
+									  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+									VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+								`).run(embId, chunkNormalized.contentHash, blob, vec.length, chunkId, chunkNormalized.storageContent, now);
+								syncVecInsert(db, embId, vec);
+								db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
+									fullCfg.embedding.model,
+									chunkId,
+								);
+							});
+						}
+					}
+				} catch (e) {
+					logger.warn("memory", "Chunk embedding failed (chunk saved without vector)", {
+						chunkId,
+						error: String(e),
+					});
+				}
+
+				// Enqueue pipeline extraction if enabled
+				if (pipelineEnqueueEnabled) {
+					try {
+						enqueueExtractionJob(getDbAccessor(), chunkId);
+					} catch (e) {
+						logger.warn("pipeline", "Failed to enqueue chunk extraction", {
+							chunkId,
+							error: String(e),
+						});
+					}
+				}
+			} catch (e) {
+				logger.warn("memory", "Failed to save chunk", {
+					chunkId,
+					error: String(e),
+				});
+			}
+		}
+
+		logger.info("memory", "Chunked memory saved", {
+			groupId,
+			chunkCount: chunkIds.length,
+		});
+
+		return c.json({
+			chunked: true,
+			chunk_count: chunkIds.length,
+			ids: chunkIds,
+			group_id: groupId,
+		});
 	}
 
 	const who = body.who ?? "daemon";
@@ -1976,35 +2200,43 @@ app.post("/api/memory/remember", async (c) => {
 			cfg.embedding,
 		);
 		if (vec) {
-			const hash = contentHash;
-			const blob = vectorToBlob(vec);
-			const embId = crypto.randomUUID();
+			if (vec.length !== cfg.embedding.dimensions) {
+				logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
+					got: vec.length,
+					expected: cfg.embedding.dimensions,
+					memoryId: id,
+				});
+			} else {
+				const hash = contentHash;
+				const blob = vectorToBlob(vec);
+				const embId = crypto.randomUUID();
 
-			getDbAccessor().withWriteTx((db) => {
-				syncVecDeleteBySourceId(db, "memory", id);
-				db.prepare(
-					`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
-				).run(id);
-				db.prepare(`
-	          INSERT INTO embeddings
-	            (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
-	          VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-	        `).run(
-					embId,
-					hash,
-					blob,
-					vec.length,
-					id,
-					normalizedContent.storageContent,
-					now,
-				);
-				syncVecInsert(db, embId, vec);
-				db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
-					cfg.embedding.model,
-					id,
-				);
-			});
-			embedded = true;
+				getDbAccessor().withWriteTx((db) => {
+					syncVecDeleteBySourceId(db, "memory", id);
+					db.prepare(
+						`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
+					).run(id);
+					db.prepare(`
+						INSERT INTO embeddings
+						  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+						VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+					`).run(
+						embId,
+						hash,
+						blob,
+						vec.length,
+						id,
+						normalizedContent.storageContent,
+						now,
+					);
+					syncVecInsert(db, embId, vec);
+					db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
+						cfg.embedding.model,
+						id,
+					);
+				});
+				embedded = true;
+			}
 		}
 	} catch (e) {
 		logger.warn("memory", "Embedding failed (memory saved without vector)", {
@@ -2839,6 +3071,7 @@ app.post("/api/memory/recall", async (c) => {
 		pinned?: boolean;
 		importance_min?: number;
 		since?: string;
+		until?: string;
 	};
 
 	try {
@@ -2886,6 +3119,10 @@ app.post("/api/memory/recall", async (c) => {
 		filterParts.push("m.created_at >= ?");
 		filterArgs.push(body.since);
 	}
+	if (body.until) {
+		filterParts.push("m.created_at <= ?");
+		filterArgs.push(body.until);
+	}
 	const filterClause = filterParts.length
 		? " AND " + filterParts.join(" AND ")
 		: "";
@@ -2910,23 +3147,30 @@ app.post("/api/memory/recall", async (c) => {
 				raw_score: number;
 			}>;
 
+			// Min-max normalize BM25 scores to [0,1] within the batch
+			// (bm25() returns negative values — lower = better — so we use abs)
+			const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
+			const maxRaw = Math.max(...rawScores, 1);
 			for (const row of ftsRows) {
-				const normalised = 1 / (1 + Math.abs(row.raw_score));
+				const normalised = Math.abs(row.raw_score) / maxRaw;
 				bm25Map.set(row.id, normalised);
 			}
 		});
-	} catch {
-		// FTS unavailable (e.g. no matches) — continue with vector only
+	} catch (e) {
+		logger.warn("memory", "FTS search failed, continuing with vector only", {
+			error: e instanceof Error ? e.message : String(e),
+		});
 	}
 
 	// --- Vector search via sqlite-vec ---
 	const vectorMap = new Map<string, number>();
+	let queryVecF32: Float32Array | null = null;
 	try {
 		const queryVec = await fetchEmbedding(query, cfg.embedding);
 		if (queryVec) {
-			const qf32 = new Float32Array(queryVec);
+			queryVecF32 = new Float32Array(queryVec);
 			getDbAccessor().withReadDb((db) => {
-				const vecResults = vectorSearch(db as any, qf32, {
+				const vecResults = vectorSearch(db as any, queryVecF32!, {
 					limit: cfg.search.top_k,
 					type: body.type as "fact" | "preference" | "decision" | undefined,
 				});
@@ -2967,14 +3211,58 @@ app.post("/api/memory/recall", async (c) => {
 
 	scored.sort((a, b) => b.score - a.score);
 
+	// --- Rehearsal boost: frequently accessed memories rank higher ---
+	if (cfg.search.rehearsal_enabled && cfg.search.rehearsal_weight > 0 && scored.length > 0) {
+		try {
+			const rehearsalIds = scored.map((s) => s.id);
+			const placeholders = rehearsalIds.map(() => "?").join(", ");
+			const accessRows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT id, access_count, last_accessed
+							 FROM memories
+							 WHERE id IN (${placeholders})`,
+						)
+						.all(...rehearsalIds) as Array<{
+						id: string;
+						access_count: number;
+						last_accessed: string | null;
+					}>,
+			);
+
+			const nowMs = Date.now();
+			const halfLifeMs = cfg.search.rehearsal_half_life_days * 86_400_000;
+			const rw = cfg.search.rehearsal_weight;
+
+			const accessMap = new Map(accessRows.map((r) => [r.id, r]));
+			for (const s of scored) {
+				const row = accessMap.get(s.id);
+				if (!row || row.access_count <= 0) continue;
+
+				const daysSinceAccess = row.last_accessed
+					? (nowMs - new Date(row.last_accessed).getTime()) / 86_400_000
+					: cfg.search.rehearsal_half_life_days;
+				const recencyFactor = Math.pow(0.5, daysSinceAccess / cfg.search.rehearsal_half_life_days);
+				const boost = rw * Math.log(row.access_count + 1) * recencyFactor;
+				s.score *= 1 + boost;
+			}
+			scored.sort((a, b) => b.score - a.score);
+		} catch (e) {
+			logger.warn("memory", "Rehearsal boost failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
 	// --- Graph boost: pull up memories linked via knowledge graph ---
-	if (cfg.pipelineV2.graphEnabled && cfg.pipelineV2.graphBoostWeight > 0) {
+	if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.graph.boostWeight > 0) {
 		try {
 			const graphResult = getDbAccessor().withReadDb((db) =>
-				getGraphBoostIds(query, db, cfg.pipelineV2.graphBoostTimeoutMs),
+				getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs),
 			);
 			if (graphResult.graphLinkedIds.size > 0) {
-				const gw = cfg.pipelineV2.graphBoostWeight;
+				const gw = cfg.pipelineV2.graph.boostWeight;
 				for (const s of scored) {
 					if (graphResult.graphLinkedIds.has(s.id)) {
 						s.score = (1 - gw) * s.score + gw;
@@ -2990,9 +3278,9 @@ app.post("/api/memory/recall", async (c) => {
 	}
 
 	// --- Optional reranker hook ---
-	if (cfg.pipelineV2.rerankerEnabled && cfg.pipelineV2.rerankerModel) {
+	if (cfg.pipelineV2.reranker.enabled) {
 		try {
-			const topForRerank = scored.slice(0, cfg.pipelineV2.rerankerTopN);
+			const topForRerank = scored.slice(0, cfg.pipelineV2.reranker.topN);
 			const rerankIds = topForRerank.map((s) => s.id);
 			const rerankPlaceholders = rerankIds.map(() => "?").join(", ");
 
@@ -3013,10 +3301,14 @@ app.post("/api/memory/recall", async (c) => {
 				content: contentMap.get(s.id) ?? "",
 				score: s.score,
 			}));
-			const reranked = await rerank(query, candidates, noopReranker, {
-				topN: cfg.pipelineV2.rerankerTopN,
-				timeoutMs: cfg.pipelineV2.rerankerTimeoutMs,
-				model: cfg.pipelineV2.rerankerModel,
+			// Use embedding reranker when query vector is available, else noop
+		const provider = queryVecF32
+			? createEmbeddingReranker(getDbAccessor(), queryVecF32)
+			: noopReranker;
+		const reranked = await rerank(query, candidates, provider, {
+				topN: cfg.pipelineV2.reranker.topN,
+				timeoutMs: cfg.pipelineV2.reranker.timeoutMs,
+				model: cfg.pipelineV2.reranker.model,
 			});
 			// Update scores from reranked results
 			const rerankedMap = new Map(reranked.map((r, i) => [r.id, i]));
@@ -3080,14 +3372,20 @@ app.post("/api/memory/recall", async (c) => {
 		}
 
 		const rowMap = new Map(rows.map((r) => [r.id, r]));
+		const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 		const results = scored
 			.slice(0, limit)
 			.filter((s) => rowMap.has(s.id))
 			.map((s) => {
 				const r = rowMap.get(s.id)!;
+				const isTruncated = r.content.length > recallTruncate;
 				return {
 					id: r.id,
-					content: r.content,
+					content: isTruncated
+						? r.content.slice(0, recallTruncate) + " [truncated]"
+						: r.content,
+					content_length: r.content.length,
+					truncated: isTruncated,
 					score: Math.round(s.score * 100) / 100,
 					source: s.source,
 					type: r.type,
@@ -3099,6 +3397,84 @@ app.post("/api/memory/recall", async (c) => {
 					created_at: r.created_at,
 				};
 			});
+
+		// --- Decision-rationale linking: auto-fetch linked rationale memories ---
+		const decisionIds = results
+			.filter((r) => r.type === "decision")
+			.map((r) => r.id);
+		const existingIds = new Set(results.map((r) => r.id));
+
+		if (decisionIds.length > 0 && cfg.pipelineV2.graph.enabled) {
+			try {
+				const supplementary = getDbAccessor().withReadDb((db) => {
+					// Find entities linked to decision memories
+					const dPlaceholders = decisionIds.map(() => "?").join(", ");
+					const entityIds = db
+						.prepare(
+							`SELECT DISTINCT entity_id FROM memory_entity_mentions
+							 WHERE memory_id IN (${dPlaceholders})`,
+						)
+						.all(...decisionIds) as Array<{ entity_id: string }>;
+
+					if (entityIds.length === 0) return [];
+
+					// Find rationale memories linked to same entities
+					const ePlaceholders = entityIds.map(() => "?").join(", ");
+					const eIds = entityIds.map((r) => r.entity_id);
+
+					return db
+						.prepare(
+							`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
+							        m.importance, m.who, m.project, m.created_at
+							 FROM memory_entity_mentions mem
+							 JOIN memories m ON m.id = mem.memory_id
+							 WHERE mem.entity_id IN (${ePlaceholders})
+							   AND m.type = 'rationale'
+							   AND m.is_deleted = 0
+							 LIMIT 10`,
+						)
+						.all(...eIds) as Array<{
+						id: string;
+						content: string;
+						type: string;
+						tags: string | null;
+						pinned: number;
+						importance: number;
+						who: string;
+						project: string | null;
+						created_at: string;
+					}>;
+				});
+
+				for (const r of supplementary) {
+					if (existingIds.has(r.id)) continue;
+					existingIds.add(r.id);
+					const isTrunc = r.content.length > recallTruncate;
+					results.push({
+						id: r.id,
+						content: isTrunc
+							? r.content.slice(0, recallTruncate) + " [truncated]"
+							: r.content,
+						content_length: r.content.length,
+						truncated: isTrunc,
+						score: 0,
+						source: "graph",
+						type: r.type,
+						tags: r.tags,
+						pinned: !!r.pinned,
+						importance: r.importance,
+						who: r.who,
+						project: r.project,
+						created_at: r.created_at,
+						supplementary: true,
+					});
+				}
+			} catch (e) {
+				logger.warn("memory", "Rationale linking failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
 
 		return c.json({
 			results,
@@ -3362,6 +3738,15 @@ app.get("/api/embeddings/status", async (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
 	const status = await checkEmbeddingProvider(config.embedding);
 	return c.json(status);
+});
+
+app.get("/api/embeddings/health", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const providerStatus = await checkEmbeddingProvider(cfg.embedding);
+	const report = getDbAccessor().withReadDb((db) =>
+		buildEmbeddingHealth(db, cfg.embedding, providerStatus),
+	);
+	return c.json(report);
 });
 
 app.get("/api/embeddings/projection", async (c) => {
@@ -4109,22 +4494,128 @@ async function fetchCatalog(): Promise<CatalogEntry[]> {
 	}
 }
 
-// GET /api/skills/browse - browse all skills from skills.sh
+// --- ClawHub catalog cache ---
+type ClawhubItem = {
+	slug: string;
+	displayName: string;
+	summary: string;
+	tags: { latest: string };
+	stats: {
+		downloads: number;
+		installsAllTime: number;
+		installsCurrent: number;
+		stars: number;
+		comments: number;
+		versions: number;
+	};
+	createdAt: number;
+	updatedAt: number;
+	latestVersion: {
+		version: string;
+		createdAt: number;
+		changelog: string;
+	};
+};
+let clawhubCache: ClawhubItem[] = [];
+let clawhubFetchedAt = 0;
+
+async function fetchClawhubCatalog(): Promise<ClawhubItem[]> {
+	const now = Date.now();
+	if (clawhubCache.length > 0 && now - clawhubFetchedAt < CATALOG_TTL) {
+		return clawhubCache;
+	}
+	logger.info("skills", "Fetching ClawHub catalog");
+	try {
+		const items: ClawhubItem[] = [];
+		let cursor: string | undefined;
+		const MAX_ITEMS = 500;
+		const MAX_PAGES = 10;
+		let page = 0;
+		while (page < MAX_PAGES && items.length < MAX_ITEMS) {
+			const url = new URL("https://clawhub.ai/api/v1/skills");
+			url.searchParams.set("sort", "downloads");
+			url.searchParams.set("limit", "50");
+			if (cursor) url.searchParams.set("cursor", cursor);
+
+			const res = await fetch(url.toString(), {
+				headers: { "User-Agent": "signet-daemon" },
+			});
+			if (!res.ok) throw new Error(`ClawHub returned ${res.status}`);
+			const data = (await res.json()) as {
+				items: ClawhubItem[];
+				nextCursor: string | null;
+			};
+			items.push(...data.items);
+			if (!data.nextCursor) break;
+			cursor = data.nextCursor;
+			page++;
+		}
+		if (items.length > 0) {
+			clawhubCache = items;
+			clawhubFetchedAt = now;
+			logger.info("skills", `Cached ${items.length} ClawHub skills`);
+		}
+		return items.length > 0 ? items : clawhubCache;
+	} catch (err) {
+		logger.error("skills", "ClawHub catalog fetch failed", err as Error);
+		return clawhubCache;
+	}
+}
+
+type SkillBrowseResult = {
+	name: string;
+	fullName: string;
+	installs: string;
+	installsRaw: number;
+	description: string;
+	installed: boolean;
+	provider: "skills.sh" | "clawhub";
+	stars?: number;
+	downloads?: number;
+	versions?: number;
+	author?: string;
+};
+
+// GET /api/skills/browse - browse all skills (skills.sh + ClawHub)
 app.get("/api/skills/browse", async (c) => {
-	const catalog = await fetchCatalog();
+	const [skillsShCatalog, clawhubItems] = await Promise.all([
+		fetchCatalog(),
+		fetchClawhubCatalog(),
+	]);
 	const installed = listInstalledSkills().map((s) => s.name);
-	const results = catalog.map((s) => ({
+
+	const skillsShResults: SkillBrowseResult[] = skillsShCatalog.map((s) => ({
 		name: s.name,
 		fullName: `${s.source}@${s.skillId}`,
 		installs: formatInstalls(s.installs),
 		installsRaw: s.installs,
 		description: "",
 		installed: installed.includes(s.name),
+		provider: "skills.sh" as const,
+		downloads: s.installs,
 	}));
+
+	const clawhubResults: SkillBrowseResult[] = clawhubItems.map((s) => ({
+		name: s.slug,
+		fullName: `clawhub@${s.slug}`,
+		installs: formatInstalls(s.stats.installsAllTime),
+		installsRaw: s.stats.installsAllTime,
+		description: s.summary,
+		installed: installed.includes(s.slug),
+		provider: "clawhub" as const,
+		stars: s.stats.stars,
+		downloads: s.stats.downloads,
+		versions: s.stats.versions,
+		author: s.displayName,
+	}));
+
+	const results = [...skillsShResults, ...clawhubResults].sort(
+		(a, b) => b.installsRaw - a.installsRaw,
+	);
 	return c.json({ results, total: results.length });
 });
 
-// GET /api/skills/search?q=query - proxy to skills.sh API
+// GET /api/skills/search?q=query - search both skills.sh and ClawHub
 app.get("/api/skills/search", async (c) => {
 	const query = c.req.query("q");
 	if (!query) {
@@ -4134,37 +4625,72 @@ app.get("/api/skills/search", async (c) => {
 		);
 	}
 
-	logger.info("skills", "Searching skills.sh", { query });
-	try {
-		const res = await fetch(
-			`https://skills.sh/api/search?q=${encodeURIComponent(query)}`,
-			{ headers: { "User-Agent": "signet-daemon" } },
-		);
-		if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
-		const data = (await res.json()) as {
-			skills: Array<{
-				id: string;
-				skillId: string;
-				name: string;
-				installs: number;
-				source: string;
-			}>;
-		};
+	logger.info("skills", "Searching skills", { query });
+	const installed = listInstalledSkills().map((s) => s.name);
+	const lowerQuery = query.toLowerCase();
 
-		const installed = listInstalledSkills().map((s) => s.name);
-		const results = (data.skills ?? []).map((s) => ({
-			name: s.name,
-			fullName: `${s.source}@${s.skillId}`,
-			installs: formatInstalls(s.installs),
-			description: "",
-			installed: installed.includes(s.name),
-		}));
+	// Search skills.sh API + filter cached ClawHub in parallel
+	const [skillsShResults, clawhubFiltered] = await Promise.all([
+		(async (): Promise<SkillBrowseResult[]> => {
+			try {
+				const res = await fetch(
+					`https://skills.sh/api/search?q=${encodeURIComponent(query)}`,
+					{ headers: { "User-Agent": "signet-daemon" } },
+				);
+				if (!res.ok) throw new Error(`skills.sh returned ${res.status}`);
+				const data = (await res.json()) as {
+					skills: Array<{
+						id: string;
+						skillId: string;
+						name: string;
+						installs: number;
+						source: string;
+					}>;
+				};
+				return (data.skills ?? []).map((s) => ({
+					name: s.name,
+					fullName: `${s.source}@${s.skillId}`,
+					installs: formatInstalls(s.installs),
+					installsRaw: s.installs,
+					description: "",
+					installed: installed.includes(s.name),
+					provider: "skills.sh" as const,
+					downloads: s.installs,
+				}));
+			} catch (err) {
+				logger.error("skills", "skills.sh search failed", err as Error);
+				return [];
+			}
+		})(),
+		(async (): Promise<SkillBrowseResult[]> => {
+			const cached = await fetchClawhubCatalog();
+			return cached
+				.filter(
+					(s) =>
+						s.slug.toLowerCase().includes(lowerQuery) ||
+						s.displayName.toLowerCase().includes(lowerQuery) ||
+						s.summary.toLowerCase().includes(lowerQuery),
+				)
+				.map((s) => ({
+					name: s.slug,
+					fullName: `clawhub@${s.slug}`,
+					installs: formatInstalls(s.stats.installsAllTime),
+					installsRaw: s.stats.installsAllTime,
+					description: s.summary,
+					installed: installed.includes(s.slug),
+					provider: "clawhub" as const,
+					stars: s.stats.stars,
+					downloads: s.stats.downloads,
+					versions: s.stats.versions,
+					author: s.displayName,
+				}));
+		})(),
+	]);
 
-		return c.json({ results });
-	} catch (err) {
-		logger.error("skills", "skills.sh search failed", err as Error);
-		return c.json({ results: [], error: "Search failed" });
-	}
+	const results = [...skillsShResults, ...clawhubFiltered].sort(
+		(a, b) => b.installsRaw - a.installsRaw,
+	);
+	return c.json({ results });
 });
 
 // GET /api/skills/:name - get skill details and SKILL.md content
@@ -4992,6 +5518,250 @@ app.post("/api/update/run", async (c) => {
 });
 
 // ============================================================================
+// Scheduled Tasks API
+// ============================================================================
+
+// List all tasks (joined with last run status)
+app.get("/api/tasks", (c) => {
+	const tasks = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				`SELECT t.*,
+				        r.status AS last_run_status,
+				        r.exit_code AS last_run_exit_code
+				 FROM scheduled_tasks t
+				 LEFT JOIN task_runs r ON r.id = (
+				     SELECT id FROM task_runs
+				     WHERE task_id = t.id
+				     ORDER BY started_at DESC LIMIT 1
+				 )
+				 ORDER BY t.created_at DESC`,
+			)
+			.all(),
+	);
+
+	return c.json({ tasks, presets: CRON_PRESETS });
+});
+
+// Create a new task
+app.post("/api/tasks", async (c) => {
+	const body = await c.req.json();
+	const { name, prompt, cronExpression, harness, workingDirectory } = body;
+
+	if (!name || !prompt || !cronExpression || !harness) {
+		return c.json({ error: "name, prompt, cronExpression, and harness are required" }, 400);
+	}
+
+	if (!validateCron(cronExpression)) {
+		return c.json({ error: "Invalid cron expression" }, 400);
+	}
+
+	if (harness !== "claude-code" && harness !== "opencode") {
+		return c.json({ error: "harness must be 'claude-code' or 'opencode'" }, 400);
+	}
+
+	if (!isHarnessAvailable(harness)) {
+		return c.json({
+			error: `CLI for ${harness} not found on PATH`,
+			warning: true,
+		}, 400);
+	}
+
+	const id = crypto.randomUUID();
+	const now = new Date().toISOString();
+	const nextRunAt = computeNextRun(cronExpression);
+
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO scheduled_tasks
+			 (id, name, prompt, cron_expression, harness, working_directory,
+			  enabled, next_run_at, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+		).run(id, name, prompt, cronExpression, harness, workingDirectory || null, nextRunAt, now, now);
+	});
+
+	logger.info("scheduler", `Task created: ${name}`, { taskId: id });
+	return c.json({ id, nextRunAt }, 201);
+});
+
+// Get a single task + recent runs
+app.get("/api/tasks/:id", (c) => {
+	const taskId = c.req.param("id");
+
+	const task = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+	);
+
+	if (!task) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
+	const runs = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				`SELECT * FROM task_runs
+				 WHERE task_id = ?
+				 ORDER BY started_at DESC
+				 LIMIT 20`,
+			)
+			.all(taskId),
+	);
+
+	return c.json({ task, runs });
+});
+
+// Update a task
+app.patch("/api/tasks/:id", async (c) => {
+	const taskId = c.req.param("id");
+	const body = await c.req.json();
+
+	const existing = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+	) as Record<string, unknown> | undefined;
+
+	if (!existing) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
+	if (body.cronExpression !== undefined && !validateCron(body.cronExpression)) {
+		return c.json({ error: "Invalid cron expression" }, 400);
+	}
+
+	const now = new Date().toISOString();
+	const cronExpr = body.cronExpression ?? existing.cron_expression;
+	const enabled = body.enabled !== undefined ? (body.enabled ? 1 : 0) : existing.enabled;
+	const nextRunAt = body.cronExpression !== undefined || body.enabled !== undefined
+		? (enabled ? computeNextRun(cronExpr as string) : existing.next_run_at)
+		: existing.next_run_at;
+
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`UPDATE scheduled_tasks SET
+			 name = ?, prompt = ?, cron_expression = ?, harness = ?,
+			 working_directory = ?, enabled = ?, next_run_at = ?, updated_at = ?
+			 WHERE id = ?`,
+		).run(
+			body.name ?? existing.name,
+			body.prompt ?? existing.prompt,
+			cronExpr,
+			body.harness ?? existing.harness,
+			body.workingDirectory !== undefined ? body.workingDirectory : existing.working_directory,
+			enabled,
+			nextRunAt,
+			now,
+			taskId,
+		);
+	});
+
+	return c.json({ success: true });
+});
+
+// Delete a task (cascade deletes runs)
+app.delete("/api/tasks/:id", (c) => {
+	const taskId = c.req.param("id");
+
+	const result = getDbAccessor().withWriteTx((db) => {
+		const info = db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
+		return info;
+	});
+
+	return c.json({ success: true });
+});
+
+// Trigger an immediate manual run
+app.post("/api/tasks/:id/run", async (c) => {
+	const taskId = c.req.param("id");
+
+	const task = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+	) as Record<string, unknown> | undefined;
+
+	if (!task) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
+	// Check if already running
+	const running = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				"SELECT 1 FROM task_runs WHERE task_id = ? AND status = 'running' LIMIT 1",
+			)
+			.get(taskId),
+	);
+
+	if (running) {
+		return c.json({ error: "Task is already running" }, 409);
+	}
+
+	const runId = crypto.randomUUID();
+	const now = new Date().toISOString();
+
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO task_runs (id, task_id, status, started_at)
+			 VALUES (?, ?, 'running', ?)`,
+		).run(runId, taskId, now);
+
+		db.prepare(
+			"UPDATE scheduled_tasks SET last_run_at = ?, updated_at = ? WHERE id = ?",
+		).run(now, now, taskId);
+	});
+
+	// Spawn in background (don't await)
+	import("./scheduler/spawn").then((mod) => {
+		mod.spawnTask(
+			task.harness as "claude-code" | "opencode",
+			task.prompt as string,
+			task.working_directory as string | null,
+		).then((result) => {
+			const completedAt = new Date().toISOString();
+			const status =
+				result.error !== null || (result.exitCode !== null && result.exitCode !== 0)
+					? "failed"
+					: "completed";
+
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`UPDATE task_runs
+					 SET status = ?, completed_at = ?, exit_code = ?,
+					     stdout = ?, stderr = ?, error = ?
+					 WHERE id = ?`,
+				).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
+			});
+		});
+	});
+
+	return c.json({ runId, status: "running" }, 202);
+});
+
+// Get paginated run history for a task
+app.get("/api/tasks/:id/runs", (c) => {
+	const taskId = c.req.param("id");
+	const limit = Number(c.req.query("limit") ?? 20);
+	const offset = Number(c.req.query("offset") ?? 0);
+
+	const runs = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				`SELECT * FROM task_runs
+				 WHERE task_id = ?
+				 ORDER BY started_at DESC
+				 LIMIT ? OFFSET ?`,
+			)
+			.all(taskId, limit, offset),
+	);
+
+	const total = getDbAccessor().withReadDb((db) => {
+		const row = db
+			.prepare("SELECT COUNT(*) as count FROM task_runs WHERE task_id = ?")
+			.get(taskId) as { count: number };
+		return row.count;
+	});
+
+	return c.json({ runs, total, hasMore: offset + limit < total });
+});
+
+// ============================================================================
 // Daemon Info
 // ============================================================================
 
@@ -5171,6 +5941,18 @@ app.post("/api/repair/re-embed", async (c) => {
 	return c.json(result, result.success ? 200 : 429);
 });
 
+app.post("/api/repair/clean-orphans", (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	const result = cleanOrphanedEmbeddings(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+	);
+	return c.json(result, result.success ? 200 : 429);
+});
+
 // ============================================================================
 // Analytics & Timeline (Phase K)
 // ============================================================================
@@ -5220,6 +6002,83 @@ app.get("/api/analytics/memory-safety", (c) => {
 		recentErrors: recentMutationErrors,
 		errorSummary: analyticsCollector.getErrorSummary(),
 	});
+});
+
+app.get("/api/analytics/continuity", (c) => {
+	const project = c.req.query("project");
+	const limit = parseInt(c.req.query("limit") ?? "50", 10);
+
+	const scores = getDbAccessor().withReadDb((db) => {
+		if (project) {
+			return db
+				.prepare(
+					`SELECT id, session_key, project, harness, score,
+					        memories_recalled, memories_used, novel_context_count,
+					        reasoning, created_at
+					 FROM session_scores
+					 WHERE project = ?
+					 ORDER BY created_at DESC
+					 LIMIT ?`,
+				)
+				.all(project, limit) as Array<Record<string, unknown>>;
+		}
+		return db
+			.prepare(
+				`SELECT id, session_key, project, harness, score,
+				        memories_recalled, memories_used, novel_context_count,
+				        reasoning, created_at
+				 FROM session_scores
+				 ORDER BY created_at DESC
+				 LIMIT ?`,
+			)
+			.all(limit) as Array<Record<string, unknown>>;
+	});
+
+	// Compute trend
+	const scoreValues = scores.map((s) => s.score as number).reverse();
+	const trend =
+		scoreValues.length >= 2
+			? scoreValues[scoreValues.length - 1] - scoreValues[0]
+			: 0;
+	const avg =
+		scoreValues.length > 0
+			? scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length
+			: 0;
+
+	return c.json({
+		scores,
+		summary: {
+			count: scores.length,
+			average: Math.round(avg * 100) / 100,
+			trend: Math.round(trend * 100) / 100,
+			latest: scores[0]?.score ?? null,
+		},
+	});
+});
+
+app.get("/api/analytics/continuity/latest", (c) => {
+	const scores = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT project, score, created_at
+					 FROM session_scores
+					 WHERE id IN (
+					   SELECT id FROM session_scores s2
+					   WHERE s2.project = session_scores.project
+					   ORDER BY s2.created_at DESC
+					   LIMIT 1
+					 )
+					 ORDER BY created_at DESC`,
+				)
+				.all() as Array<{
+				project: string | null;
+				score: number;
+				created_at: string;
+			}>,
+	);
+
+	return c.json({ scores });
 });
 
 app.get("/api/timeline/:id", (c) => {
@@ -6032,13 +6891,32 @@ ${fileList}
 `;
 	};
 
+	// Read and compose additional identity files
+	const identityExtras = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"]
+		.map((name) => {
+			const p = join(AGENTS_DIR, name);
+			if (!existsSync(p)) return "";
+			try {
+				const c = readFileSync(p, "utf-8").trim();
+				if (!c) return "";
+				const header = name.replace(".md", "");
+				return `\n## ${header}\n\n${c}`;
+			} catch {
+				return "";
+			}
+		})
+		.filter(Boolean)
+		.join("\n");
+
+	const composed = withBlock + identityExtras;
+
 	// Sync to Claude Code (~/.claude/CLAUDE.md)
 	const claudeDir = join(homedir(), ".claude");
 	if (existsSync(claudeDir)) {
 		try {
 			writeFileSync(
 				join(claudeDir, "CLAUDE.md"),
-				buildHeader("CLAUDE.md") + withBlock,
+				buildHeader("CLAUDE.md") + composed,
 			);
 			logger.sync.harness("claude-code", "~/.claude/CLAUDE.md");
 		} catch (e) {
@@ -6052,7 +6930,7 @@ ${fileList}
 		try {
 			writeFileSync(
 				join(opencodeDir, "AGENTS.md"),
-				buildHeader("AGENTS.md") + withBlock,
+				buildHeader("AGENTS.md") + composed,
 			);
 			logger.sync.harness("opencode", "~/.config/opencode/AGENTS.md");
 		} catch (e) {
@@ -6099,8 +6977,15 @@ function startFileWatcher() {
 		logger.info("watcher", "File changed", { path });
 		scheduleAutoCommit(path);
 
-		// If AGENTS.md changed, sync to harness configs
-		if (path.endsWith("AGENTS.md")) {
+		// If any identity file changed, sync to harness configs
+		const SYNC_TRIGGER_FILES = [
+			"AGENTS.md",
+			"SOUL.md",
+			"IDENTITY.md",
+			"USER.md",
+			"MEMORY.md",
+		];
+		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f))) {
 			scheduleSyncHarnessConfigs();
 		}
 
@@ -6720,16 +7605,16 @@ async function main() {
 
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider =
-		memoryCfg.pipelineV2.extractionProvider === "claude-code"
+		memoryCfg.pipelineV2.extraction.provider === "claude-code"
 			? createClaudeCodeProvider({
-					model: memoryCfg.pipelineV2.extractionModel || "haiku",
+					model: memoryCfg.pipelineV2.extraction.model || "haiku",
 					defaultTimeoutMs:
-						memoryCfg.pipelineV2.extractionTimeout || 60000,
+						memoryCfg.pipelineV2.extraction.timeout || 60000,
 				})
 			: createOllamaProvider({
-					model: memoryCfg.pipelineV2.extractionModel || "qwen3:4b",
+					model: memoryCfg.pipelineV2.extraction.model || "qwen3:4b",
 					defaultTimeoutMs:
-						memoryCfg.pipelineV2.extractionTimeout || 90000,
+						memoryCfg.pipelineV2.extraction.timeout || 90000,
 				});
 	initLlmProvider(llmProvider);
 
@@ -6753,6 +7638,9 @@ async function main() {
 		// summaries are a core feature, not gated on extraction pipeline.
 		startSummaryWorker(getDbAccessor());
 	}
+
+	// Start scheduled task worker
+	const schedulerHandle = startSchedulerWorker(getDbAccessor());
 
 	// Start git sync timer (if enabled and has token)
 	startGitSyncTimer();

@@ -41,30 +41,53 @@ function asAccessor(db: Database): DbAccessor {
 const BASE_CFG: PipelineV2Config = {
 	enabled: true,
 	shadowMode: false,
-	allowUpdateDelete: true,
-	graphEnabled: true,
-	autonomousEnabled: true,
 	mutationsFrozen: false,
-	autonomousFrozen: false,
-	extractionProvider: "ollama",
-	extractionModel: "test",
-	extractionTimeout: 45000,
-	workerPollMs: 2000,
-	workerMaxRetries: 3,
-	leaseTimeoutMs: 300000,
-	minFactConfidenceForWrite: 0.7,
-	graphBoostWeight: 0.15,
-	graphBoostTimeoutMs: 500,
-	rerankerEnabled: false,
-	rerankerModel: "",
-	rerankerTopN: 20,
-	rerankerTimeoutMs: 2000,
-	maintenanceIntervalMs: 1800000,
-	maintenanceMode: "execute",
-	repairReembedCooldownMs: 300000,
-	repairReembedHourlyBudget: 10,
-	repairRequeueCooldownMs: 0, // no cooldown for tests
-	repairRequeueHourlyBudget: 1000,
+	extraction: {
+		provider: "ollama",
+		model: "test",
+		timeout: 45000,
+		minConfidence: 0.7,
+	},
+	worker: {
+		pollMs: 2000,
+		maxRetries: 3,
+		leaseTimeoutMs: 300000,
+	},
+	graph: {
+		enabled: true,
+		boostWeight: 0.15,
+		boostTimeoutMs: 500,
+	},
+	reranker: {
+		enabled: false,
+		model: "",
+		topN: 20,
+		timeoutMs: 2000,
+	},
+	autonomous: {
+		enabled: true,
+		frozen: false,
+		allowUpdateDelete: true,
+		maintenanceIntervalMs: 1800000,
+		maintenanceMode: "execute",
+	},
+	repair: {
+		reembedCooldownMs: 300000,
+		reembedHourlyBudget: 10,
+		requeueCooldownMs: 0, // no cooldown for tests
+		requeueHourlyBudget: 1000,
+	},
+	documents: {
+		workerIntervalMs: 10000,
+		chunkSize: 2000,
+		chunkOverlap: 200,
+		maxContentBytes: 10 * 1024 * 1024,
+	},
+	guardrails: {
+		maxContentChars: 500,
+		chunkTargetChars: 300,
+		recallTruncateChars: 500,
+	},
 };
 
 const now = new Date().toISOString();
@@ -170,7 +193,7 @@ describe("maintenance-worker", () => {
 		const tracker = createProviderTracker();
 		const observeCfg: PipelineV2Config = {
 			...BASE_CFG,
-			maintenanceMode: "observe",
+			autonomous: { ...BASE_CFG.autonomous, maintenanceMode: "observe" },
 		};
 
 		// Insert dead jobs + 1 completed
@@ -213,7 +236,7 @@ describe("maintenance-worker", () => {
 		const tracker = createProviderTracker();
 		const disabledCfg: PipelineV2Config = {
 			...BASE_CFG,
-			autonomousEnabled: false,
+			autonomous: { ...BASE_CFG.autonomous, enabled: false },
 		};
 
 		const handle = startMaintenanceWorker(

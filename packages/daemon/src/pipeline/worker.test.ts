@@ -171,30 +171,53 @@ function scriptedProvider(outputs: readonly string[]): LlmProvider {
 const PIPELINE_CFG: PipelineV2Config = {
 	enabled: true,
 	shadowMode: true,
-	allowUpdateDelete: false,
-	graphEnabled: false,
-	autonomousEnabled: false,
 	mutationsFrozen: false,
-	autonomousFrozen: false,
-	extractionProvider: "ollama",
-	extractionModel: "qwen3:4b",
-	extractionTimeout: 5000,
-	workerPollMs: 10, // fast polling for tests
-	workerMaxRetries: 3,
-	leaseTimeoutMs: 300000,
-	minFactConfidenceForWrite: 0.7,
-	graphBoostWeight: 0.15,
-	graphBoostTimeoutMs: 500,
-	rerankerEnabled: false,
-	rerankerModel: "",
-	rerankerTopN: 20,
-	rerankerTimeoutMs: 2000,
-	maintenanceIntervalMs: 1800000,
-	maintenanceMode: "observe" as const,
-	repairReembedCooldownMs: 300000,
-	repairReembedHourlyBudget: 10,
-	repairRequeueCooldownMs: 60000,
-	repairRequeueHourlyBudget: 50,
+	extraction: {
+		provider: "ollama",
+		model: "qwen3:4b",
+		timeout: 5000,
+		minConfidence: 0.7,
+	},
+	worker: {
+		pollMs: 10, // fast polling for tests
+		maxRetries: 3,
+		leaseTimeoutMs: 300000,
+	},
+	graph: {
+		enabled: false,
+		boostWeight: 0.15,
+		boostTimeoutMs: 500,
+	},
+	reranker: {
+		enabled: false,
+		model: "",
+		topN: 20,
+		timeoutMs: 2000,
+	},
+	autonomous: {
+		enabled: false,
+		frozen: false,
+		allowUpdateDelete: false,
+		maintenanceIntervalMs: 1800000,
+		maintenanceMode: "observe",
+	},
+	repair: {
+		reembedCooldownMs: 300000,
+		reembedHourlyBudget: 10,
+		requeueCooldownMs: 60000,
+		requeueHourlyBudget: 50,
+	},
+	documents: {
+		workerIntervalMs: 10000,
+		chunkSize: 2000,
+		chunkOverlap: 200,
+		maxContentBytes: 10 * 1024 * 1024,
+	},
+	guardrails: {
+		maxContentChars: 500,
+		chunkTargetChars: 300,
+		recallTruncateChars: 500,
+	},
 };
 
 const PHASE_C_CFG: PipelineV2Config = {
@@ -206,7 +229,7 @@ const DECISION_CFG: DecisionConfig = {
 	embedding: {
 		provider: "ollama",
 		model: "nomic-embed-text",
-		dimensions: 768,
+		dimensions: 3, // matches test mock vectors
 		base_url: "http://localhost:11434",
 	},
 	search: { alpha: 0.7, top_k: 20, min_score: 0.0 },
@@ -754,7 +777,7 @@ describe("Worker phase C controlled writes", () => {
 		const worker = startWorker(
 			accessor,
 			lowConfidenceProvider,
-			{ ...PHASE_C_CFG, minFactConfidenceForWrite: 0.9 },
+			{ ...PHASE_C_CFG, extraction: { ...PHASE_C_CFG.extraction, minConfidence: 0.9 } },
 			DECISION_CFG,
 		);
 
@@ -797,7 +820,7 @@ describe("Worker phase C controlled writes", () => {
 				JSON.stringify({
 					facts: [
 						{
-							content: "..........",
+							content: "..........!!!!!!!!!!..........",
 							type: "preference",
 							confidence: 0.92,
 						},
@@ -1002,6 +1025,202 @@ describe("Worker phase C controlled writes", () => {
 		const payload = JSON.parse(getJob(db, "mem-src-frozen")?.result ?? "{}");
 		expect(payload.writeMode).toBe("shadow");
 	});
+
+	it("executes update mutation when allowUpdateDelete is true", async () => {
+		insertMemory(
+			db,
+			"mem-target-update",
+			"User prefers dark mode editor theme with high contrast setting",
+		);
+		insertMemory(
+			db,
+			"mem-src-update",
+			"Source envelope for update recommendation",
+		);
+		enqueueExtractionJob(accessor, "mem-src-update");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User prefers dark mode editor theme",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const updateDecision = JSON.stringify({
+			action: "update",
+			targetId: "mem-target-update",
+			confidence: 0.88,
+			reason: "Simplified preference record",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, updateDecision]),
+			{ ...PHASE_C_CFG, autonomous: { ...PHASE_C_CFG.autonomous, allowUpdateDelete: true } },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		// Target memory content should be updated
+		const target = db
+			.prepare(`SELECT content, updated_by FROM memories WHERE id = ?`)
+			.get("mem-target-update") as
+			| { content: string; updated_by: string }
+			| undefined;
+		expect(target?.content).toBe("User prefers dark mode editor theme");
+		expect(target?.updated_by).toBe("pipeline-v2");
+
+		// Stats should reflect the update
+		const job = getJob(db, "mem-src-update");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeStats.updated).toBe(1);
+		expect(payload.writeStats.blockedDestructive).toBe(0);
+
+		// Decision history should record updatedMemoryId
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-update") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => row.updatedMemoryId === "mem-target-update"),
+		).toBe(true);
+	});
+
+	it("executes delete mutation when allowUpdateDelete is true", async () => {
+		insertMemory(
+			db,
+			"mem-target-del",
+			"User does not prefer dark mode editor theme",
+		);
+		insertMemory(
+			db,
+			"mem-src-del",
+			"Source envelope for delete recommendation",
+		);
+		enqueueExtractionJob(accessor, "mem-src-del");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User does not prefer dark mode editor theme",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const deleteDecision = JSON.stringify({
+			action: "delete",
+			targetId: "mem-target-del",
+			confidence: 0.85,
+			reason: "Contradicts current preference",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, deleteDecision]),
+			{ ...PHASE_C_CFG, autonomous: { ...PHASE_C_CFG.autonomous, allowUpdateDelete: true } },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		// Target memory should be soft-deleted
+		const target = db
+			.prepare(`SELECT is_deleted FROM memories WHERE id = ?`)
+			.get("mem-target-del") as { is_deleted: number } | undefined;
+		expect(target?.is_deleted).toBe(1);
+
+		// Stats should reflect the delete
+		const job = getJob(db, "mem-src-del");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeStats.deleted).toBe(1);
+		expect(payload.writeStats.blockedDestructive).toBe(0);
+
+		// Decision history should record deletedMemoryId
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-del") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => row.deletedMemoryId === "mem-target-del"),
+		).toBe(true);
+	});
+
+	it("skips delete for pinned memories when allowUpdateDelete is true", async () => {
+		insertMemory(
+			db,
+			"mem-target-pinned",
+			"User does not prefer dark mode editor theme",
+		);
+		// Pin the target memory
+		db.prepare(
+			`UPDATE memories SET pinned = 1 WHERE id = ?`,
+		).run("mem-target-pinned");
+
+		insertMemory(
+			db,
+			"mem-src-del-pinned",
+			"Source envelope for delete of pinned target",
+		);
+		enqueueExtractionJob(accessor, "mem-src-del-pinned");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User does not prefer dark mode editor theme",
+					type: "preference",
+					confidence: 0.9,
+				},
+			],
+			entities: [],
+		});
+		const deleteDecision = JSON.stringify({
+			action: "delete",
+			targetId: "mem-target-pinned",
+			confidence: 0.85,
+			reason: "Contradicts current preference",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, deleteDecision]),
+			{ ...PHASE_C_CFG, autonomous: { ...PHASE_C_CFG.autonomous, allowUpdateDelete: true } },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		// Target should NOT be deleted (pinned protection)
+		const target = db
+			.prepare(`SELECT is_deleted, pinned FROM memories WHERE id = ?`)
+			.get("mem-target-pinned") as
+			| { is_deleted: number; pinned: number }
+			| undefined;
+		expect(target?.is_deleted).toBe(0);
+		expect(target?.pinned).toBe(1);
+
+		// Stats should show 0 deletes
+		const job = getJob(db, "mem-src-del-pinned");
+		const payload = JSON.parse(job?.result ?? "{}");
+		expect(payload.writeStats.deleted).toBe(0);
+
+		// History should record the skip reason
+		const sourceHistory = db
+			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.all("mem-src-del-pinned") as Array<{ metadata: string | null }>;
+		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
+		expect(
+			parsed.some((row) => row.skippedReason === "delete_pinned_requires_force"),
+		).toBe(true);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -1067,7 +1286,7 @@ describe("Worker dead-job path", () => {
 			close() {},
 		};
 
-		const cfg = { ...PIPELINE_CFG, workerMaxRetries: 1, workerPollMs: 10 };
+		const cfg = { ...PIPELINE_CFG, worker: { ...PIPELINE_CFG.worker, maxRetries: 1, pollMs: 10 } };
 		const worker = startWorker(
 			faultyAccessor,
 			goodProvider(),
@@ -1111,7 +1330,7 @@ describe("Worker dead-job path", () => {
 			close() {},
 		};
 
-		const cfg = { ...PIPELINE_CFG, workerMaxRetries: 3, workerPollMs: 10 };
+		const cfg = { ...PIPELINE_CFG, worker: { ...PIPELINE_CFG.worker, maxRetries: 3, pollMs: 10 } };
 		const worker = startWorker(
 			faultyAccessor,
 			goodProvider(),

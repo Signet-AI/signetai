@@ -193,6 +193,53 @@
 .copy-btn.push-right { margin-left: auto; }
 .copy-btn.is-copied { color: var(--color-success); }
 
+/* Install method tabs */
+.install-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0;
+}
+.install-tab {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-bottom: none;
+  padding: 6px 16px;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.install-tab:hover { color: var(--color-text-bright); }
+.install-tab.active {
+  color: var(--color-text-bright);
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+}
+.install-panels {
+  min-height: 76px;
+}
+.install-panel { display: none; }
+.install-panel.active { display: block; }
+.install-panel .install-box {
+  border-top-left-radius: 0;
+  width: 100%;
+}
+.install-box--agent .install-cmd {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  display: block;
+}
+.install-hint {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+  margin-top: 6px;
+}
+
 .hero-meta-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -32,6 +32,8 @@
  * ```
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
 	buildSignetBlock,
 	stripSignetBlock,
@@ -144,6 +146,32 @@ export abstract class BaseConnector {
 # Edit the source files in ~/.agents/ instead
 
 `;
+	}
+
+	/**
+	 * Read and compose additional identity files (SOUL.md, IDENTITY.md,
+	 * USER.md, MEMORY.md) into a single string with section headers.
+	 *
+	 * @param basePath - Path to ~/.agents/ or equivalent identity directory
+	 */
+	protected composeIdentityExtras(basePath: string): string {
+		const files = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"] as const;
+		const parts: string[] = [];
+
+		for (const name of files) {
+			const filePath = join(basePath, name);
+			if (!existsSync(filePath)) continue;
+			try {
+				const content = readFileSync(filePath, "utf-8").trim();
+				if (!content) continue;
+				const header = name.replace(".md", "");
+				parts.push(`\n## ${header}\n\n${content}`);
+			} catch {
+				// Skip unreadable files
+			}
+		}
+
+		return parts.join("\n");
 	}
 
 	// ==========================================================================

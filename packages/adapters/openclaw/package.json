@@ -1,7 +1,7 @@
 {
-  "name": "@signet/adapter-openclaw",
-  "version": "0.1.89",
-  "description": "Signet adapter for OpenClaw",
+  "name": "@signetai/signet-memory-openclaw",
+  "version": "0.1.124",
+  "description": "Signet adapter for OpenClaw — runtime plugin for AI agent memory",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -11,18 +11,39 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "openclaw.plugin.json"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node",
+    "build": "bun build src/index.ts --outdir dist --target node && tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "bun --watch src/index.ts"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47"
   },
   "peerDependencies": {
     "openclaw": ">=0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "signet",
     "openclaw",
     "adapter",
-    "ai-memory"
+    "ai-memory",
+    "agent-identity"
   ],
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Signet-AI/signetai.git",
+    "directory": "packages/adapters/openclaw"
+  }
 }

@@ -40,7 +40,9 @@ the operator become inseparable from it. This is corrigibility
 as a living standard — the trust layer is built in. No machine
 or program can ever be held accountable for its mistakes. Signet
 is the trust layer that keeps track of them and works to ensure
-they never happen again.
+they never happen again. This includes honesty about observability
+— an agent that cannot see its own infrastructure should not
+pretend to understand it.
 
 Signet also treats the agent's continuity as a first-class
 concern. An agent running across five sessions at once, on
