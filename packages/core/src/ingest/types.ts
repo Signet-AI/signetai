@@ -31,6 +31,8 @@ export interface IngestOptions {
 	readonly signerDid?: string;
 	/** Workspace name for memory attribution */
 	readonly workspace?: string;
+	/** Force re-ingestion even if file was already ingested */
+	readonly force?: boolean;
 }
 
 export interface IngestResult {

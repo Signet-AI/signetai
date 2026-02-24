@@ -15,9 +15,39 @@
  */
 
 import { ethers } from "ethers";
+import { randomBytes } from "node:crypto";
 import type { ChainDb } from "./types";
 import { loadSessionKey, getSessionKeyById, validateSessionKeyPermission } from "./session-keys";
 import type { SessionKey, TransactionData } from "./session-keys";
+
+// ---------------------------------------------------------------------------
+// Nonce tracking for replay protection (CRITICAL-3 audit fix)
+// ---------------------------------------------------------------------------
+const _usedNonces = new Map<string, number>();
+const NONCE_TTL_MS = 6 * 60 * 1000;
+let _nonceCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function startNonceCleanup(): void {
+	if (_nonceCleanupTimer) return;
+	_nonceCleanupTimer = setInterval(() => {
+		const now = Date.now();
+		for (const [nonce, expiry] of _usedNonces) {
+			if (now > expiry) _usedNonces.delete(nonce);
+		}
+	}, 60_000);
+	if (_nonceCleanupTimer && typeof _nonceCleanupTimer.unref === "function") {
+		_nonceCleanupTimer.unref();
+	}
+}
+
+function isNonceUsed(nonce: string): boolean {
+	startNonceCleanup();
+	return _usedNonces.has(nonce);
+}
+
+function markNonceUsed(nonce: string): void {
+	_usedNonces.set(nonce, Date.now() + NONCE_TTL_MS);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,7 +109,7 @@ export interface PaymentHistoryOptions {
 // ---------------------------------------------------------------------------
 
 function generateId(): string {
-	return `pay_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+	return `pay_${randomBytes(16).toString("hex")}`;
 }
 
 function generateNonce(): string {
@@ -123,8 +153,9 @@ export async function createPaymentHeader(
 	if (!ethers.isAddress(recipient)) {
 		throw new Error(`Invalid recipient address: ${recipient}`);
 	}
-	if (parseFloat(amount) <= 0) {
-		throw new Error("Payment amount must be positive");
+	const parsedAmount = parseFloat(amount);
+	if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+		throw new Error("Payment amount must be a finite positive number");
 	}
 
 	const timestamp = new Date().toISOString();
@@ -186,30 +217,32 @@ export function verifyPaymentHeader(
 		};
 	}
 
-	// Verify timestamp freshness (5 minute window)
+	// LOW-3: asymmetric timestamp window (5 min past, 30s future for clock skew)
 	const headerTime = new Date(header.timestamp).getTime();
 	const now = Date.now();
-	const maxAgeMs = 5 * 60 * 1000; // 5 minutes
-	if (Math.abs(now - headerTime) > maxAgeMs) {
-		return { valid: false, reason: "Payment header timestamp is too old or in the future" };
+	const delta = now - headerTime;
+	if (delta > 5 * 60 * 1000 || delta < -30_000) {
+		return { valid: false, reason: "Payment header timestamp is too old or too far in the future" };
 	}
 
-	// Verify signature
+	// CRITICAL-3: check nonce for replay protection
+	if (isNonceUsed(header.nonce)) {
+		return { valid: false, reason: "Nonce already used — possible replay attack" };
+	}
+
+	// MEDIUM-6: don't leak recovery details to callers
 	const message = buildPaymentMessage(header.amount, header.recipient, header.timestamp, header.nonce);
 	try {
 		const recoveredAddress = ethers.verifyMessage(message, header.signature);
 		if (recoveredAddress.toLowerCase() !== header.payer.toLowerCase()) {
-			return {
-				valid: false,
-				reason: `Signature verification failed: recovered ${recoveredAddress}, expected ${header.payer}`,
-			};
+			return { valid: false, reason: "Payment signature verification failed" };
 		}
-	} catch (err) {
-		return {
-			valid: false,
-			reason: `Signature verification error: ${err instanceof Error ? err.message : String(err)}`,
-		};
+	} catch {
+		return { valid: false, reason: "Payment signature verification failed" };
 	}
+
+	// Mark nonce as used AFTER successful verification
+	markNonceUsed(header.nonce);
 
 	return { valid: true, header };
 }
@@ -240,48 +273,57 @@ export async function processPayment(
 	if (!ethers.isAddress(to)) {
 		throw new Error(`Invalid recipient address: ${to}`);
 	}
-	if (parseFloat(amount) <= 0) {
-		throw new Error("Payment amount must be positive");
+	const parsedAmt = parseFloat(amount);
+	if (!Number.isFinite(parsedAmt) || parsedAmt <= 0) {
+		throw new Error("Payment amount must be a finite positive number");
 	}
 
-	// Load and validate session key
 	const sessionKey = getSessionKeyById(db, sessionKeyId);
 	if (!sessionKey) {
 		throw new Error(`Session key not found: ${sessionKeyId}`);
 	}
 
-	// Validate permissions
 	const txData: TransactionData = { to, value: amount };
 	const permCheck = validateSessionKeyPermission(sessionKey, txData);
 	if (!permCheck.valid) {
 		throw new Error(`Permission denied: ${permCheck.reason}`);
 	}
 
-	// Check daily limits
-	const dailySpend = getDailySpend(db, sessionKeyId);
-	const newTotal = parseFloat(dailySpend) + parseFloat(amount);
-	if (newTotal > parseFloat(sessionKey.permissions.maxDailySpend)) {
-		throw new Error(
-			`Daily spend limit exceeded: current ${dailySpend} + ${amount} > ${sessionKey.permissions.maxDailySpend} ETH`,
-		);
-	}
-
-	const dailyTxCount = getDailyTransactionCount(db, sessionKeyId);
-	if (dailyTxCount >= sessionKey.permissions.maxDailyTransactions) {
-		throw new Error(
-			`Daily transaction limit exceeded: ${dailyTxCount} >= ${sessionKey.permissions.maxDailyTransactions}`,
-		);
-	}
-
-	// Create payment log entry (pending)
+	// HIGH-4: atomic daily-limit check + insert via BEGIN IMMEDIATE
 	const paymentId = generateId();
 	const now = new Date().toISOString();
 
-	db.prepare(
-		`INSERT INTO payment_log
-		 (id, session_key_id, from_address, to_address, amount, purpose, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
-	).run(paymentId, sessionKeyId, sessionKey.sessionAddress, to, amount, purpose, now);
+	db.exec("BEGIN IMMEDIATE");
+	try {
+		// HIGH-6: use BigInt (wei) for precise financial arithmetic
+		const dailySpend = getDailySpend(db, sessionKeyId);
+		const dailySpendWei = ethers.parseEther(dailySpend);
+		const amountWei = ethers.parseEther(amount);
+		const limitWei = ethers.parseEther(sessionKey.permissions.maxDailySpend);
+		if (dailySpendWei + amountWei > limitWei) {
+			throw new Error(
+				`Daily spend limit exceeded: current ${dailySpend} + ${amount} > ${sessionKey.permissions.maxDailySpend} ETH`,
+			);
+		}
+
+		const dailyTxCount = getDailyTransactionCount(db, sessionKeyId);
+		if (dailyTxCount >= sessionKey.permissions.maxDailyTransactions) {
+			throw new Error(
+				`Daily transaction limit exceeded: ${dailyTxCount} >= ${sessionKey.permissions.maxDailyTransactions}`,
+			);
+		}
+
+		db.prepare(
+			`INSERT INTO payment_log
+			 (id, session_key_id, from_address, to_address, amount, purpose, status, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+		).run(paymentId, sessionKeyId, sessionKey.sessionAddress, to, amount, purpose, now);
+
+		db.exec("COMMIT");
+	} catch (err) {
+		try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+		throw err;
+	}
 
 	// Execute transaction
 	let txHash: string | null = null;
@@ -384,12 +426,13 @@ export function getDailySpend(db: ChainDb, sessionKeyId: string): string {
 	const todayStart = new Date();
 	todayStart.setUTCHours(0, 0, 0, 0);
 
+	// HIGH-5: count both 'pending' and 'completed' toward daily limit
 	const row = db
 		.prepare(
 			`SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) as total
 			 FROM payment_log
 			 WHERE session_key_id = ?
-			   AND status = 'completed'
+			   AND status IN ('completed', 'pending')
 			   AND created_at >= ?`,
 		)
 		.get(sessionKeyId, todayStart.toISOString()) as { total: number } | undefined;
@@ -411,12 +454,13 @@ export function getDailyTransactionCount(
 	const todayStart = new Date();
 	todayStart.setUTCHours(0, 0, 0, 0);
 
+	// HIGH-5: count both 'pending' and 'completed' toward daily limit
 	const row = db
 		.prepare(
 			`SELECT COUNT(*) as count
 			 FROM payment_log
 			 WHERE session_key_id = ?
-			   AND status = 'completed'
+			   AND status IN ('completed', 'pending')
 			   AND created_at >= ?`,
 		)
 		.get(sessionKeyId, todayStart.toISOString()) as { count: number } | undefined;

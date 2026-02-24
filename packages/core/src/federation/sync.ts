@@ -7,6 +7,9 @@
  */
 
 import { randomBytes } from "node:crypto";
+import sodium from "libsodium-wrappers";
+import { verifySignature } from "../crypto";
+import { didToPublicKey, isValidDid } from "../did";
 import type {
 	FederationDb,
 	SyncRequest,
@@ -147,11 +150,12 @@ export function handleSyncRequest(
  * @param memories - The memories received
  * @returns Number of memories imported
  */
-export function processSyncResponse(
+export async function processSyncResponse(
 	db: FederationDb,
 	peerId: string,
 	memories: SyncMemory[],
-): number {
+): Promise<number> {
+	await sodium.ready;
 	let imported = 0;
 
 	for (const memory of memories) {
@@ -164,18 +168,37 @@ export function processSyncResponse(
 		).get(peerId, memory.content);
 		if (existing) continue;
 
+		// C-3 audit fix: actually verify the memory signature instead of
+		// just checking for field presence.
+		let verified = 0;
+		if (memory.signature && memory.signerDid && memory.contentHash) {
+			try {
+				if (isValidDid(memory.signerDid)) {
+					const signerPubKey = didToPublicKey(memory.signerDid);
+					const sigValid = await verifySignature(
+						memory.contentHash,
+						memory.signature,
+						signerPubKey,
+					);
+					verified = sigValid ? 1 : 0;
+				}
+			} catch {
+				verified = 0;
+			}
+		}
+
 		db.prepare(
 			`INSERT INTO federation_received
 			 (id, memory_id, peer_id, original_content, original_signature, original_did, verified)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			id,
-			null, // memory_id is null until explicitly imported into local memory
+			null,
 			peerId,
 			memory.content,
 			memory.signature ?? null,
 			memory.signerDid ?? null,
-			memory.signature && memory.signerDid ? 1 : 0,
+			verified,
 		);
 		imported++;
 	}

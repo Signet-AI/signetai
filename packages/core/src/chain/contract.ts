@@ -21,8 +21,10 @@ import { CHAIN_CONFIGS, DEFAULT_CHAIN } from "./types";
  * This will be replaced with a compiled ABI once Hardhat compilation is set up.
  */
 export const SIGNET_IDENTITY_ABI = [
-	// register(string did, string metadataURI, bytes32 publicKeyHash) → uint256
-	"function register(string calldata did, string calldata metadataURI, bytes32 publicKeyHash) external returns (uint256)",
+	// commitRegistration(bytes32 commitment)
+	"function commitRegistration(bytes32 commitment) external",
+	// register(string did, string metadataURI, bytes32 publicKeyHash, bytes32 salt) → uint256
+	"function register(string calldata did, string calldata metadataURI, bytes32 publicKeyHash, bytes32 salt) external returns (uint256)",
 	// anchorMemory(uint256 tokenId, bytes32 memoryRoot, uint64 memoryCount)
 	"function anchorMemory(uint256 tokenId, bytes32 memoryRoot, uint64 memoryCount) external",
 	// updateMetadata(uint256 tokenId, string metadataURI)
@@ -48,7 +50,8 @@ export const SIGNET_IDENTITY_ABI = [
 // ---------------------------------------------------------------------------
 
 function generateId(): string {
-	return `onchain_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+	const { randomBytes } = require("node:crypto");
+	return `onchain_${randomBytes(16).toString("hex")}`;
 }
 
 function getChainConfig(chain: string): ChainConfig {
@@ -120,8 +123,22 @@ export async function registerIdentity(
 ): Promise<OnchainIdentity> {
 	const contract = getContract(wallet, contractAddress);
 
-	// Submit registration transaction
-	const tx = await contract.register(did, metadataURI, publicKeyHash);
+	// C-1 audit fix: commit-reveal to prevent front-running
+	const salt = ethers.hexlify(ethers.randomBytes(32));
+	const commitment = ethers.keccak256(
+		ethers.solidityPacked(
+			["string", "string", "bytes32", "address", "bytes32"],
+			[did, metadataURI, publicKeyHash, wallet.address, salt],
+		),
+	);
+	const commitTx = await contract.commitRegistration(commitment);
+	await commitTx.wait();
+
+	// Wait for the commit delay requirement (1 block ≈ 2-3s on Base)
+	await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+
+	// Submit registration with salt
+	const tx = await contract.register(did, metadataURI, publicKeyHash, salt);
 	const receipt = await tx.wait();
 
 	if (!receipt || receipt.status !== 1) {
@@ -200,10 +217,11 @@ export async function anchorMemoryOnChain(
 ): Promise<{ id: string; txHash: string }> {
 	const contract = getContract(wallet, contractAddress);
 
-	// Ensure memoryRoot is bytes32 (0x-prefixed, 66 chars)
-	const rootBytes32 = memoryRoot.startsWith("0x")
-		? memoryRoot.padEnd(66, "0")
-		: `0x${memoryRoot}`.padEnd(66, "0");
+	// C-5 audit fix: validate root length, never silently pad
+	const rootBytes32 = memoryRoot.startsWith("0x") ? memoryRoot : `0x${memoryRoot}`;
+	if (rootBytes32.length !== 66) {
+		throw new Error(`Invalid memory root length: expected 66 chars (0x + 64 hex), got ${rootBytes32.length}`);
+	}
 
 	const tx = await contract.anchorMemory(
 		BigInt(tokenId),
@@ -217,7 +235,8 @@ export async function anchorMemoryOnChain(
 	}
 
 	// Store in local DB
-	const id = `anchor_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+	const { randomBytes: rb } = require("node:crypto");
+	const id = `anchor_${rb(16).toString("hex")}`;
 	const now = new Date().toISOString();
 
 	db.prepare(

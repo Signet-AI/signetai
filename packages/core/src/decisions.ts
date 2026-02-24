@@ -108,6 +108,13 @@ function rowToDecisionWithContent(row: Record<string, unknown>): DecisionWithCon
  * Returns the decision ID.
  */
 export function storeDecision(db: Db, decision: Decision): string {
+	if (!decision.conclusion?.trim()) {
+		throw new Error("Decision conclusion is required");
+	}
+	if (!decision.memoryId) {
+		throw new Error("Decision memory_id is required");
+	}
+
 	const id = decision.id ?? crypto.randomUUID();
 	const now = new Date().toISOString();
 
@@ -155,9 +162,10 @@ export function queryDecisions(
 	// Text search across conclusion + reasoning + alternatives
 	if (query.trim().length > 0) {
 		whereParts.push(
-			"(d.conclusion LIKE ? OR d.reasoning LIKE ? OR d.alternatives LIKE ?)",
+			"(d.conclusion LIKE ? ESCAPE '\\' OR d.reasoning LIKE ? ESCAPE '\\' OR d.alternatives LIKE ? ESCAPE '\\')",
 		);
-		const like = `%${query}%`;
+		const escaped = query.replace(/[%_\\]/g, (c) => `\\${c}`);
+		const like = `%${escaped}%`;
 		params.push(like, like, like);
 	}
 
@@ -198,6 +206,11 @@ export function recordOutcome(
 	outcome: string,
 	notes?: string,
 ): void {
+	const existing = db.prepare("SELECT id FROM decisions WHERE id = ?").get(decisionId);
+	if (!existing) {
+		throw new Error(`Decision not found: ${decisionId}`);
+	}
+
 	const now = new Date().toISOString();
 
 	db.prepare(`

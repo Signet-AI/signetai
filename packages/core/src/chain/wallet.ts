@@ -8,9 +8,10 @@
  */
 
 import { ethers } from "ethers";
+import { randomBytes } from "node:crypto";
 import sodium from "libsodium-wrappers";
-import { getMasterKey, getKeypairKdfVersion } from "../crypto";
-import type { ChainDb, WalletConfig, ChainConfig, CHAIN_CONFIGS } from "./types";
+import { getMasterKeyForCurrentKeypair } from "../crypto";
+import type { ChainDb, WalletConfig } from "./types";
 import { DEFAULT_CHAIN } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -18,7 +19,7 @@ import { DEFAULT_CHAIN } from "./types";
 // ---------------------------------------------------------------------------
 
 function generateId(): string {
-	return `wallet_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+	return `wallet_${randomBytes(16).toString("hex")}`;
 }
 
 /**
@@ -28,10 +29,8 @@ function generateId(): string {
 async function encryptPrivateKey(privateKey: string): Promise<string> {
 	await sodium.ready;
 
-	const kdfVersion = getKeypairKdfVersion() ?? 1;
-	// For v2/v3, we need the salt from the signing keypair file.
-	// For simplicity, we derive the master key the same way crypto.ts does.
-	const masterKey = await getMasterKey(kdfVersion);
+	// CRITICAL-1 audit fix: derive master key with correct version + salt
+	const masterKey = await getMasterKeyForCurrentKeypair();
 
 	const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
 	const plaintext = new TextEncoder().encode(privateKey);
@@ -51,8 +50,8 @@ async function encryptPrivateKey(privateKey: string): Promise<string> {
 async function decryptPrivateKey(encrypted: string): Promise<string> {
 	await sodium.ready;
 
-	const kdfVersion = getKeypairKdfVersion() ?? 1;
-	const masterKey = await getMasterKey(kdfVersion);
+	// CRITICAL-1 audit fix: derive master key with correct version + salt
+	const masterKey = await getMasterKeyForCurrentKeypair();
 
 	const combined = sodium.from_base64(encrypted, sodium.base64_variants.ORIGINAL);
 	if (combined.length < sodium.crypto_secretbox_NONCEBYTES + sodium.crypto_secretbox_MACBYTES) {
@@ -154,8 +153,9 @@ export async function loadWallet(
 		throw new Error("Wallet has no encrypted key — it may be a watch-only wallet");
 	}
 
-	const privateKey = await decryptPrivateKey(row.encrypted_key);
+	let privateKey: string | null = await decryptPrivateKey(row.encrypted_key);
 	let wallet = new ethers.Wallet(privateKey);
+	privateKey = null; // HIGH-2: allow GC to collect sooner (JS strings can't be zeroed)
 
 	// Connect to provider if RPC URL provided
 	if (rpcUrl) {
@@ -243,6 +243,6 @@ export async function checkWalletFunds(
 	minEth: string = "0.001",
 ): Promise<{ balance: string; sufficient: boolean }> {
 	const balance = await getWalletBalance(address, rpcUrl);
-	const sufficient = parseFloat(balance) >= parseFloat(minEth);
+	const sufficient = ethers.parseEther(balance) >= ethers.parseEther(minEth);
 	return { balance, sufficient };
 }

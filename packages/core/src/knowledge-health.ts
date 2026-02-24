@@ -325,16 +325,21 @@ export function getKnowledgeHealth(db: MigrationDb): KnowledgeHealthReport {
 			: 0;
 
 	// 6. Contradiction resolution (15 pts)
+	// No contradictions AND no memories = 0 (empty DB shouldn't score 15)
 	const contradictionResolution =
-		contradictionsTotal > 0
-			? (contradictionsResolved / contradictionsTotal) * 15
-			: 15; // No contradictions = full marks
+		activeMemories === 0
+			? 0
+			: contradictionsTotal > 0
+				? (contradictionsResolved / contradictionsTotal) * 15
+				: 15; // No contradictions = full marks
 
 	// 7. Session continuity trend (15 pts)
 	let sessionContinuity = 0;
 	try {
 		const trend = getSessionTrend(db, 20);
-		sessionContinuity = trend.averageScore * 15;
+		sessionContinuity = Number.isFinite(trend.averageScore)
+			? trend.averageScore * 15
+			: 0;
 	} catch {
 		// session_metrics table might not exist yet — 0 pts
 	}

@@ -17,7 +17,12 @@
  * but with a prompt specifically designed for developer skill assessment.
  */
 
-import type { ChunkResult, ExtractionResult, ExtractedItem, ExtractedRelation } from "./types";
+import type { ChunkResult, ExtractionResult } from "./types";
+import {
+	callOllama as sharedCallOllama,
+	parseExtractionResponse as sharedParseExtractionResponse,
+	type ParseOptions,
+} from "./ollama-client";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -225,176 +230,50 @@ export async function extractFromEntireSessions(
 }
 
 // ---------------------------------------------------------------------------
-// Ollama API call (matches document/chat extractor pattern)
+// Ollama API call — delegates to shared client
 // ---------------------------------------------------------------------------
 
 async function callOllama(
 	prompt: string,
 	config: EntireExtractorConfig,
 ): Promise<string> {
-	const url = `${config.ollamaUrl}/api/generate`;
-
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-
-	try {
-		const res = await fetch(url, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: config.model,
-				prompt,
-				stream: false,
-				options: {
-					temperature: 0.1,
-					num_predict: 4096,
-				},
-			}),
-			signal: controller.signal,
-		});
-
-		if (!res.ok) {
-			const body = await res.text().catch(() => "");
-			throw new Error(`Ollama returned ${res.status}: ${body.slice(0, 200)}`);
-		}
-
-		const data = (await res.json()) as { response: string };
-		return data.response;
-	} finally {
-		clearTimeout(timeout);
-	}
+	return sharedCallOllama(prompt, config);
 }
 
 // ---------------------------------------------------------------------------
-// Parse LLM response (matches chat-extractor pattern)
+// Parse LLM response — delegates to shared parser with Entire-specific config
 // ---------------------------------------------------------------------------
+
+/** Valid types for Entire session extraction */
+const ENTIRE_VALID_TYPES = new Set([
+	"skill", "preference", "decision", "rationale",
+	"procedural", "semantic", "fact",
+]);
+
+/** Map alternative type names to valid ones */
+const ENTIRE_TYPE_MAP: Record<string, string> = {
+	technology: "skill",
+	expertise: "skill",
+	tool: "skill",
+	pattern: "skill",
+	knowledge: "semantic",
+	workflow: "procedural",
+	process: "procedural",
+	architectural: "decision",
+	configuration: "fact",
+	system: "fact",
+};
 
 function parseExtractionResponse(
 	raw: string,
 	minConfidence: number,
-): {
-	items: ExtractedItem[];
-	relations: ExtractedRelation[];
-	warnings: string[];
-} {
-	const warnings: string[] = [];
-
-	// Strip markdown code fences if present
-	let jsonStr = raw.trim();
-	const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-	if (fenceMatch) {
-		jsonStr = fenceMatch[1].trim();
-	}
-
-	// Strip <think> tags (some models include reasoning)
-	jsonStr = jsonStr.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
-
-	// Find the JSON object
-	const jsonStart = jsonStr.indexOf("{");
-	const jsonEnd = jsonStr.lastIndexOf("}");
-	if (jsonStart >= 0 && jsonEnd > jsonStart) {
-		jsonStr = jsonStr.slice(jsonStart, jsonEnd + 1);
-	}
-
-	let parsed: {
-		items?: unknown[];
-		facts?: unknown[];
-		relations?: unknown[];
+) {
+	const opts: ParseOptions = {
+		minConfidence,
+		validTypes: ENTIRE_VALID_TYPES,
+		typeMap: ENTIRE_TYPE_MAP,
+		defaultType: "skill",
+		minContentLength: 15,
 	};
-
-	try {
-		parsed = JSON.parse(jsonStr);
-	} catch {
-		try {
-			const cleaned = jsonStr
-				.replace(/,\s*([}\]])/g, "$1")
-				.replace(/\n/g, " ");
-			parsed = JSON.parse(cleaned);
-		} catch {
-			warnings.push(`Failed to parse LLM response as JSON: ${raw.slice(0, 100)}...`);
-			return { items: [], relations: [], warnings };
-		}
-	}
-
-	// Normalize — handle both "items" and "facts" keys
-	const rawItems = Array.isArray(parsed.items)
-		? parsed.items
-		: Array.isArray(parsed.facts)
-			? parsed.facts
-			: [];
-
-	const rawRelations = Array.isArray(parsed.relations) ? parsed.relations : [];
-
-	// Valid types for Entire extraction
-	const validTypes = new Set([
-		"skill", "preference", "decision", "rationale",
-		"procedural", "semantic", "fact",
-	]);
-
-	// Map alternative type names to valid ones
-	const typeMap: Record<string, string> = {
-		technology: "skill",
-		expertise: "skill",
-		tool: "skill",
-		pattern: "skill",
-		knowledge: "semantic",
-		workflow: "procedural",
-		process: "procedural",
-		architectural: "decision",
-		configuration: "fact",
-		system: "fact",
-	};
-
-	const items: ExtractedItem[] = [];
-	for (const item of rawItems) {
-		if (typeof item !== "object" || item === null) continue;
-		const obj = item as Record<string, unknown>;
-
-		if (typeof obj.content !== "string" || obj.content.trim().length === 0) continue;
-		if (obj.content.trim().length < 15) continue;
-
-		let type = typeof obj.type === "string" ? obj.type.toLowerCase() : "skill";
-		if (typeMap[type]) type = typeMap[type];
-		if (!validTypes.has(type)) type = "skill";
-
-		const confidence = typeof obj.confidence === "number"
-			? Math.max(0, Math.min(1, obj.confidence))
-			: 0.7;
-
-		if (confidence < minConfidence) continue;
-
-		items.push({
-			content: obj.content.trim(),
-			type,
-			confidence,
-		});
-	}
-
-	// Validate relations
-	const relations: ExtractedRelation[] = [];
-	for (const rel of rawRelations) {
-		if (typeof rel !== "object" || rel === null) continue;
-		const obj = rel as Record<string, unknown>;
-
-		if (
-			typeof obj.source !== "string" ||
-			typeof obj.relationship !== "string" ||
-			typeof obj.target !== "string"
-		) continue;
-
-		const confidence = typeof obj.confidence === "number"
-			? Math.max(0, Math.min(1, obj.confidence))
-			: 0.7;
-
-		if (confidence < minConfidence) continue;
-
-		relations.push({
-			source: obj.source.trim(),
-			relationship: obj.relationship.trim(),
-			target: obj.target.trim(),
-			confidence,
-		});
-	}
-
-	return { items, relations, warnings };
+	return sharedParseExtractionResponse(raw, opts);
 }

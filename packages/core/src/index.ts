@@ -267,6 +267,7 @@ export type {
 
 // Contradiction Detection (Phase 2 — Task 2.6)
 export {
+	DEFAULT_LLM_CONFIG,
 	detectContradiction,
 	resolveContradiction,
 	getPendingContradictions,

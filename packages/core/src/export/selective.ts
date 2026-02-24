@@ -56,7 +56,8 @@ export async function exportSelective(
 		throw new Error("Search query is required for selective export");
 	}
 
-	const likePattern = `%${query}%`;
+	const escaped = query.replace(/[%_\\]/g, (c) => `\\${c}`);
+	const likePattern = `%${escaped}%`;
 
 	// Find matching memories
 	const memories = db
@@ -66,7 +67,7 @@ export async function exportSelective(
 			        signer_did, created_at, updated_at
 			 FROM memories
 			 WHERE is_deleted = 0
-			   AND (content LIKE ? OR tags LIKE ? OR type LIKE ? OR category LIKE ?)
+			   AND (content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR type LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\')
 			 ORDER BY created_at ASC`,
 		)
 		.all(likePattern, likePattern, likePattern, likePattern);

@@ -149,6 +149,21 @@ export function vectorSearch(
 }
 
 /**
+ * Escape a user query for safe use in FTS5 MATCH.
+ * Wraps each term in double quotes so FTS5 operators (AND, OR, NOT, *, etc.)
+ * are treated as literal text.
+ */
+function escapeFts5Query(query: string): string {
+	const terms = query
+		.split(/\s+/)
+		.filter((t) => t.length > 0)
+		.map((term) => `"${term.replace(/"/g, '""')}"`)
+		;
+
+	return terms.join(" ");
+}
+
+/**
  * Pure BM25 keyword search using FTS5
  */
 export function keywordSearch(
@@ -158,6 +173,9 @@ export function keywordSearch(
 ): Array<{ id: string; score: number }> {
 	const effectiveLimit = limit ?? 20;
 	const results: Array<{ id: string; score: number }> = [];
+
+	const safeQuery = escapeFts5Query(query);
+	if (safeQuery.length === 0) return results;
 
 	try {
 		// FTS5 bm25() returns negative values (lower = better match)
@@ -171,7 +189,7 @@ export function keywordSearch(
       ORDER BY raw_score
       LIMIT ?
     `)
-			.all(query, effectiveLimit) as Array<{ id: string; raw_score: number }>;
+			.all(safeQuery, effectiveLimit) as Array<{ id: string; raw_score: number }>;
 
 		for (const row of rows) {
 			// Normalize BM25 score: convert negative to 0-1
@@ -309,7 +327,7 @@ export function hybridSearch(
 		const row = rowMap.get(s.id);
 		if (!row) continue;
 		const strength = row.strength ?? 1.0; // default 1.0 for un-migrated rows
-		s.score = s.score * 0.7 + strength * 0.3;
+		s.score = Math.min(1.0, s.score * 0.7 + strength * 0.3);
 	}
 
 	// --- Phase 2: Temporal boost (recency multiplier) ---
@@ -340,7 +358,7 @@ export function hybridSearch(
 			return {
 				id: s.id,
 				content: r.content,
-				score: Math.round(s.score * 100) / 100,
+				score: Math.round(s.score * 10000) / 10000,
 				type: r.type,
 				source: s.source,
 				tags: r.tags ? JSON.parse(r.tags) : [],

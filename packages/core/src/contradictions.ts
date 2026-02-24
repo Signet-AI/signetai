@@ -228,14 +228,21 @@ export async function detectContradiction(
 					confidence,
 				},
 			});
-		} catch {
-			// If LLM call fails for a candidate, skip it (non-fatal)
+		} catch (err) {
+			// LLM call failed for this candidate — log and skip (non-fatal).
+			// If Ollama is consistently unavailable, contradiction detection
+			// silently degrades to "no contradictions detected".
+			const errMsg = err instanceof Error ? err.message : String(err);
+			console.warn(
+				`[contradictions] Ollama call failed for candidate ${candidate.id}: ${errMsg}. ` +
+				"Contradiction detection skipped for this pair.",
+			);
 			results.push({
 				candidate,
 				result: {
 					contradictionFound: false,
 					resolution: "keep_both",
-					reasoning: "Detection failed — skipped",
+					reasoning: `Detection failed — skipped (${errMsg})`,
 					confidence: 0,
 				},
 			});

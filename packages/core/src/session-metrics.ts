@@ -65,7 +65,7 @@ export function computeContinuityScore(
 	used: number,
 	reconstructed: number,
 ): number {
-	const carryOver = used / Math.max(1, injected);
+	const carryOver = Math.min(1, used / Math.max(1, injected));
 	const reconstructionRate =
 		reconstructed / Math.max(1, used + reconstructed);
 	const score = carryOver * (1 - reconstructionRate);

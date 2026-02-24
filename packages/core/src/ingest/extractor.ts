@@ -8,7 +8,12 @@
  * It needs to produce genuinely useful, self-contained memories — not noise.
  */
 
-import type { ChunkResult, ExtractionResult, ExtractedItem, ExtractedRelation } from "./types";
+import type { ChunkResult, ExtractionResult } from "./types";
+import {
+	callOllama as sharedCallOllama,
+	parseExtractionResponse as sharedParseExtractionResponse,
+	type ParseOptions,
+} from "./ollama-client";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -189,183 +194,47 @@ export async function extractFromChunks(
 }
 
 // ---------------------------------------------------------------------------
-// Ollama API call
+// Ollama API call — delegates to shared client
 // ---------------------------------------------------------------------------
 
 async function callOllama(
 	prompt: string,
 	config: ExtractorConfig,
 ): Promise<string> {
-	const url = `${config.ollamaUrl}/api/generate`;
-
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-
-	try {
-		const res = await fetch(url, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: config.model,
-				prompt,
-				stream: false,
-				options: {
-					temperature: 0.1,
-					num_predict: 4096,
-				},
-			}),
-			signal: controller.signal,
-		});
-
-		if (!res.ok) {
-			const body = await res.text().catch(() => "");
-			throw new Error(`Ollama returned ${res.status}: ${body.slice(0, 200)}`);
-		}
-
-		const data = (await res.json()) as { response: string };
-		return data.response;
-	} finally {
-		clearTimeout(timeout);
-	}
+	return sharedCallOllama(prompt, config);
 }
 
 // ---------------------------------------------------------------------------
-// Parse LLM response into structured extraction
+// Parse LLM response — delegates to shared parser with document-specific config
 // ---------------------------------------------------------------------------
+
+/** Valid types for document extraction */
+const DOCUMENT_VALID_TYPES = new Set([
+	"fact", "decision", "rationale", "preference",
+	"procedural", "semantic", "system",
+	// Allow these additional types gracefully
+	"configuration", "architectural", "relationship",
+	"episodic", "daily-log",
+]);
+
+/** Map non-standard types to canonical MemoryType values */
+const DOCUMENT_TYPE_MAP: Record<string, string> = {
+	configuration: "system",
+	architectural: "decision",
+	relationship: "fact",
+	commitment: "decision",
+};
 
 function parseExtractionResponse(
 	raw: string,
 	minConfidence: number,
-): {
-	items: ExtractedItem[];
-	relations: ExtractedRelation[];
-	warnings: string[];
-} {
-	const warnings: string[] = [];
-
-	// Try to find JSON in the response — LLMs sometimes wrap in markdown fences
-	let jsonStr = raw.trim();
-
-	// Strip markdown code fences if present
-	const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-	if (fenceMatch) {
-		jsonStr = fenceMatch[1].trim();
-	}
-
-	// Try to find the JSON object
-	const jsonStart = jsonStr.indexOf("{");
-	const jsonEnd = jsonStr.lastIndexOf("}");
-	if (jsonStart >= 0 && jsonEnd > jsonStart) {
-		jsonStr = jsonStr.slice(jsonStart, jsonEnd + 1);
-	}
-
-	let parsed: {
-		items?: unknown[];
-		facts?: unknown[];
-		relations?: unknown[];
-		entities?: unknown[];
+) {
+	const opts: ParseOptions = {
+		minConfidence,
+		validTypes: DOCUMENT_VALID_TYPES,
+		typeMap: DOCUMENT_TYPE_MAP,
+		defaultType: "fact",
+		minContentLength: 0,
 	};
-
-	try {
-		parsed = JSON.parse(jsonStr);
-	} catch {
-		// Try to repair common JSON issues
-		try {
-			// Remove trailing commas
-			const cleaned = jsonStr
-				.replace(/,\s*([}\]])/g, "$1")
-				.replace(/\n/g, " ");
-			parsed = JSON.parse(cleaned);
-		} catch {
-			warnings.push(`Failed to parse LLM response as JSON: ${raw.slice(0, 100)}...`);
-			return { items: [], relations: [], warnings };
-		}
-	}
-
-	// Normalize — handle both "items" and "facts" keys
-	const rawItems = Array.isArray(parsed.items)
-		? parsed.items
-		: Array.isArray(parsed.facts)
-			? parsed.facts
-			: [];
-
-	const rawRelations = Array.isArray(parsed.relations)
-		? parsed.relations
-		: Array.isArray(parsed.entities)
-			? parsed.entities
-			: [];
-
-	// Validate and filter items
-	const validTypes = new Set([
-		"fact", "decision", "rationale", "preference",
-		"procedural", "semantic", "system",
-		// Allow these additional types gracefully
-		"configuration", "architectural", "relationship",
-		"episodic", "daily-log",
-	]);
-
-	// Map non-standard types to valid MemoryType values
-	const typeMap: Record<string, string> = {
-		configuration: "system",
-		architectural: "decision",
-		relationship: "fact",
-		commitment: "decision",
-	};
-
-	const items: ExtractedItem[] = [];
-	for (const item of rawItems) {
-		if (typeof item !== "object" || item === null) continue;
-		const obj = item as Record<string, unknown>;
-
-		if (typeof obj.content !== "string" || obj.content.trim().length === 0) {
-			warnings.push("Skipped item with missing/empty content");
-			continue;
-		}
-
-		let type = typeof obj.type === "string" ? obj.type.toLowerCase() : "fact";
-		if (typeMap[type]) type = typeMap[type];
-		if (!validTypes.has(type)) type = "fact";
-
-		const confidence = typeof obj.confidence === "number"
-			? Math.max(0, Math.min(1, obj.confidence))
-			: 0.7;
-
-		if (confidence < minConfidence) continue;
-
-		items.push({
-			content: obj.content.trim(),
-			type,
-			confidence,
-		});
-	}
-
-	// Validate relations
-	const relations: ExtractedRelation[] = [];
-	for (const rel of rawRelations) {
-		if (typeof rel !== "object" || rel === null) continue;
-		const obj = rel as Record<string, unknown>;
-
-		if (
-			typeof obj.source !== "string" ||
-			typeof obj.relationship !== "string" ||
-			typeof obj.target !== "string"
-		) {
-			continue;
-		}
-
-		const confidence = typeof obj.confidence === "number"
-			? Math.max(0, Math.min(1, obj.confidence))
-			: 0.7;
-
-		if (confidence < minConfidence) continue;
-
-		relations.push({
-			source: obj.source.trim(),
-			relationship: obj.relationship.trim(),
-			target: obj.target.trim(),
-			confidence,
-		});
-	}
-
-	return { items, relations, warnings };
+	return sharedParseExtractionResponse(raw, opts);
 }

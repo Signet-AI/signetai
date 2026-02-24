@@ -15,8 +15,9 @@
  */
 
 import { ethers } from "ethers";
+import { randomBytes } from "node:crypto";
 import sodium from "libsodium-wrappers";
-import { getMasterKey, getKeypairKdfVersion } from "../crypto";
+import { getMasterKeyForCurrentKeypair } from "../crypto";
 import type { ChainDb } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ export interface TransactionData {
 // ---------------------------------------------------------------------------
 
 function generateId(): string {
-	return `sk_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+	return `sk_${randomBytes(16).toString("hex")}`;
 }
 
 /**
@@ -79,8 +80,8 @@ function generateId(): string {
 async function encryptPrivateKey(privateKey: string): Promise<string> {
 	await sodium.ready;
 
-	const kdfVersion = getKeypairKdfVersion() ?? 1;
-	const masterKey = await getMasterKey(kdfVersion);
+	// CRITICAL-2 audit fix: derive master key with correct version + salt
+	const masterKey = await getMasterKeyForCurrentKeypair();
 
 	const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
 	const plaintext = new TextEncoder().encode(privateKey);
@@ -100,8 +101,8 @@ async function encryptPrivateKey(privateKey: string): Promise<string> {
 async function decryptPrivateKey(encrypted: string): Promise<string> {
 	await sodium.ready;
 
-	const kdfVersion = getKeypairKdfVersion() ?? 1;
-	const masterKey = await getMasterKey(kdfVersion);
+	// CRITICAL-2 audit fix: derive master key with correct version + salt
+	const masterKey = await getMasterKeyForCurrentKeypair();
 
 	const combined = sodium.from_base64(encrypted, sodium.base64_variants.ORIGINAL);
 	if (combined.length < sodium.crypto_secretbox_NONCEBYTES + sodium.crypto_secretbox_MACBYTES) {
@@ -146,14 +147,17 @@ export async function createSessionKey(
 	durationHours: number = 24,
 ): Promise<SessionKey> {
 	// Validate permissions
-	if (parseFloat(permissions.maxTransactionValue) <= 0) {
-		throw new Error("maxTransactionValue must be positive");
+	// MEDIUM-5: reject NaN/Infinity
+	const parsedMaxTx = parseFloat(permissions.maxTransactionValue);
+	if (!Number.isFinite(parsedMaxTx) || parsedMaxTx <= 0) {
+		throw new Error("maxTransactionValue must be a finite positive number");
 	}
-	if (permissions.maxDailyTransactions <= 0) {
+	if (!Number.isFinite(permissions.maxDailyTransactions) || permissions.maxDailyTransactions <= 0) {
 		throw new Error("maxDailyTransactions must be positive");
 	}
-	if (parseFloat(permissions.maxDailySpend) <= 0) {
-		throw new Error("maxDailySpend must be positive");
+	const parsedMaxDaily = parseFloat(permissions.maxDailySpend);
+	if (!Number.isFinite(parsedMaxDaily) || parsedMaxDaily <= 0) {
+		throw new Error("maxDailySpend must be a finite positive number");
 	}
 	if (durationHours <= 0 || durationHours > 720) {
 		throw new Error("Duration must be between 1 and 720 hours (30 days)");
@@ -334,14 +338,18 @@ export function validateSessionKeyPermission(
 		return { valid: false, reason: "Session key has been revoked" };
 	}
 
-	// Check transaction value
-	const txValue = parseFloat(txData.value);
-	const maxValue = parseFloat(key.permissions.maxTransactionValue);
-	if (txValue > maxValue) {
-		return {
-			valid: false,
-			reason: `Transaction value ${txData.value} ETH exceeds limit ${key.permissions.maxTransactionValue} ETH`,
-		};
+	// HIGH-6: use BigInt (wei) to avoid float imprecision for financial values
+	try {
+		const txValueWei = ethers.parseEther(txData.value);
+		const maxValueWei = ethers.parseEther(key.permissions.maxTransactionValue);
+		if (txValueWei > maxValueWei) {
+			return {
+				valid: false,
+				reason: `Transaction value ${txData.value} ETH exceeds limit ${key.permissions.maxTransactionValue} ETH`,
+			};
+		}
+	} catch {
+		return { valid: false, reason: "Invalid transaction value or limit format" };
 	}
 
 	// Check allowed contracts
@@ -356,9 +364,15 @@ export function validateSessionKeyPermission(
 		}
 	}
 
-	// Check allowed functions (first 4 bytes of calldata)
-	if (key.permissions.allowedFunctions.length > 0 && txData.data) {
-		const selector = txData.data.slice(0, 10); // 0x + 8 hex chars
+	// MEDIUM-3 / H-8: if allowedFunctions is set but txData.data is missing, reject
+	if (key.permissions.allowedFunctions.length > 0) {
+		if (!txData.data || txData.data.length < 10) {
+			return {
+				valid: false,
+				reason: "Transaction has no function selector but session key restricts to specific functions",
+			};
+		}
+		const selector = txData.data.slice(0, 10);
 		const normalizedSelector = selector.toLowerCase();
 		const allowed = key.permissions.allowedFunctions.map((f) => f.toLowerCase());
 		if (!allowed.includes(normalizedSelector)) {

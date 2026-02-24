@@ -189,6 +189,8 @@ export interface FederationConfig {
 	pingIntervalMs?: number;
 	/** Max messages per minute per peer (rate limiting) */
 	maxMessagesPerMinute?: number;
+	/** Max concurrent WebSocket connections (H-6 audit fix) */
+	maxConnections?: number;
 	/** Auto-reconnect delay in ms for client connections */
 	reconnectDelayMs?: number;
 	/** Max reconnect attempts before giving up */

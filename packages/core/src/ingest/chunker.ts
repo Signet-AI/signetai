@@ -254,7 +254,8 @@ function splitText(text: string, maxChars: number, overlapChars: number): string
 }
 
 /**
- * Split code on blank lines / function boundaries.
+ * Split code on blank lines / function boundaries with overlap
+ * to preserve context (imports, variable declarations) across chunks.
  */
 function splitCode(code: string, maxChars: number, overlapChars: number): string[] {
 	// Try to split on double newlines (between functions/classes)
@@ -265,7 +266,10 @@ function splitCode(code: string, maxChars: number, overlapChars: number): string
 	for (const block of blocks) {
 		if (current.length + block.length + 2 > maxChars && current.length > 0) {
 			chunks.push(current.trim());
-			current = "";
+			// Carry forward overlap: last N lines for code context
+			const lines = current.split("\n");
+			const overlapLines = Math.max(1, Math.ceil(overlapChars / 80)); // ~80 chars/line
+			current = lines.slice(-overlapLines).join("\n") + "\n\n";
 		}
 		current += block + "\n\n";
 	}
@@ -286,7 +290,10 @@ function splitCode(code: string, maxChars: number, overlapChars: number): string
 			for (const line of lines) {
 				if (cur.length + line.length + 1 > maxChars && cur.length > 0) {
 					result.push(cur.trim());
-					cur = "";
+					// Carry forward a few lines of overlap
+					const curLines = cur.split("\n");
+					const overlapLines = Math.max(1, Math.ceil(overlapChars / 80));
+					cur = curLines.slice(-overlapLines).join("\n") + "\n";
 				}
 				cur += line + "\n";
 			}

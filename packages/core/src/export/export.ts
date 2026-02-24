@@ -152,8 +152,9 @@ function collectData(
 	try {
 		decisions = db
 			.prepare(
-				`SELECT id, memory_id, action, confidence, reason,
-				        model, outcome, outcome_at, created_at
+				`SELECT id, memory_id, conclusion, reasoning, alternatives,
+				        context_session, confidence, revisitable, outcome,
+				        outcome_notes, outcome_at, created_at, reviewed_at
 				 FROM decisions
 				 ORDER BY created_at ASC`,
 			)

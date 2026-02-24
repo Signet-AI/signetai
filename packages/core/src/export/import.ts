@@ -141,6 +141,11 @@ export async function importBundle(
 
 	// Import memories
 	for (const mem of bundle.data.memories) {
+		if (!mem || typeof mem !== "object" || typeof (mem as Record<string, unknown>).id !== "string" || typeof (mem as Record<string, unknown>).content !== "string") {
+			warnings.push("Skipping invalid memory record (missing id or content)");
+			skipped.memories++;
+			continue;
+		}
 		const result = importMemory(db, mem, mergeStrategy);
 		if (result === "imported") imported.memories++;
 		else skipped.memories++;
@@ -148,6 +153,11 @@ export async function importBundle(
 
 	// Import decisions
 	for (const dec of bundle.data.decisions) {
+		if (!dec || typeof dec !== "object" || typeof (dec as Record<string, unknown>).id !== "string") {
+			warnings.push("Skipping invalid decision record (missing id)");
+			skipped.decisions++;
+			continue;
+		}
 		const result = importDecision(db, dec, mergeStrategy);
 		if (result === "imported") imported.decisions++;
 		else skipped.decisions++;
@@ -254,6 +264,8 @@ function importDecision(
 ): "imported" | "skipped" {
 	const id = dec.id as string;
 
+	if (!id || typeof id !== "string") return "skipped";
+
 	try {
 		const existing = db.prepare("SELECT id FROM decisions WHERE id = ?").get(id);
 		if (existing && strategy !== "replace") {
@@ -263,24 +275,34 @@ function importDecision(
 		if (existing && strategy === "replace") {
 			db.prepare(
 				`UPDATE decisions
-				 SET memory_id = ?, action = ?, confidence = ?, reason = ?,
-				     model = ?, outcome = ?, outcome_at = ?
+				 SET memory_id = ?, conclusion = ?, reasoning = ?, alternatives = ?,
+				     context_session = ?, confidence = ?, revisitable = ?,
+				     outcome = ?, outcome_notes = ?, outcome_at = ?, reviewed_at = ?
 				 WHERE id = ?`,
 			).run(
-				dec.memory_id, dec.action, dec.confidence, dec.reason,
-				dec.model ?? null, dec.outcome ?? null, dec.outcome_at ?? null, id,
+				dec.memory_id, dec.conclusion, dec.reasoning ?? "[]",
+				dec.alternatives ?? "[]", dec.context_session ?? null,
+				dec.confidence ?? 0.8, dec.revisitable ?? 0,
+				dec.outcome ?? null, dec.outcome_notes ?? null,
+				dec.outcome_at ?? null, dec.reviewed_at ?? null, id,
 			);
 			return "imported";
 		}
 
 		db.prepare(
 			`INSERT OR IGNORE INTO decisions
-			 (id, memory_id, action, confidence, reason, model, outcome, outcome_at, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 (id, memory_id, conclusion, reasoning, alternatives,
+			  context_session, confidence, revisitable, outcome,
+			  outcome_notes, outcome_at, created_at, reviewed_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
-			id, dec.memory_id, dec.action, dec.confidence ?? 0.8,
-			dec.reason ?? "", dec.model ?? null, dec.outcome ?? null,
-			dec.outcome_at ?? null, dec.created_at ?? new Date().toISOString(),
+			id, dec.memory_id, dec.conclusion ?? "",
+			dec.reasoning ?? "[]", dec.alternatives ?? "[]",
+			dec.context_session ?? null, dec.confidence ?? 0.8,
+			dec.revisitable ?? 0, dec.outcome ?? null,
+			dec.outcome_notes ?? null, dec.outcome_at ?? null,
+			dec.created_at ?? new Date().toISOString(),
+			dec.reviewed_at ?? null,
 		);
 		return "imported";
 	} catch {

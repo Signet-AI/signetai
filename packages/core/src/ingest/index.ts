@@ -33,6 +33,7 @@ import { extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
 import type { ExtractorConfig } from "./extractor";
 import {
 	computeFileHash,
+	checkAlreadyIngested,
 	createIngestionJob,
 	updateIngestionJob,
 	buildProvenance,
@@ -506,6 +507,9 @@ export async function ingestPath(
 // Single file ingestion
 // ---------------------------------------------------------------------------
 
+/** Maximum file size to ingest (50 MB). Files larger than this are skipped. */
+const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
+
 async function ingestSingleFile(
 	filePath: string,
 	fileType: FileType,
@@ -513,6 +517,47 @@ async function ingestSingleFile(
 	options: IngestOptions,
 	onProgress?: ProgressCallback,
 ): Promise<FileIngestResult> {
+	// 0a. File size guard — skip files > 50 MB
+	try {
+		const fileStat = statSync(filePath);
+		if (fileStat.isFile() && fileStat.size > MAX_INGEST_FILE_BYTES) {
+			const sizeMB = Math.round(fileStat.size / (1024 * 1024));
+			console.warn(
+				`[ingest] Skipping ${filePath}: file size ${sizeMB} MB exceeds ${MAX_INGEST_FILE_BYTES / (1024 * 1024)} MB limit`,
+			);
+			return {
+				filePath,
+				status: "skipped",
+				error: `File too large (${sizeMB} MB)`,
+				chunks: 0,
+				memoriesCreated: 0,
+				byType: {},
+			};
+		}
+	} catch {
+		// stat may fail for special file types (e.g., repo, slack dir) — continue
+	}
+
+	// 0b. Deduplication — skip if already ingested (by file hash)
+	if (options.db && !options.force) {
+		try {
+			const earlyHash = computeFileHash(filePath);
+			const existingJobId = checkAlreadyIngested(options.db, earlyHash);
+			if (existingJobId) {
+				return {
+					filePath,
+					status: "skipped",
+					error: "Already ingested (duplicate file hash)",
+					chunks: 0,
+					memoriesCreated: 0,
+					byType: {},
+				};
+			}
+		} catch {
+			// Hash computation may fail for directories — continue
+		}
+	}
+
 	// 1. Parse
 	const doc = await parseFile(filePath, fileType);
 

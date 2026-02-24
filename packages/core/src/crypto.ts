@@ -996,6 +996,21 @@ export async function reEncryptKeypair(
 }
 
 /**
+ * Derive the master key matching the current signing keypair's KDF version + salt.
+ * Encapsulates reading version/salt from the keypair file so callers (wallet.ts,
+ * session-keys.ts) don't duplicate this logic (CRITICAL-1/2 audit fix).
+ */
+export async function getMasterKeyForCurrentKeypair(): Promise<Uint8Array> {
+	await sodium.ready;
+	const stored = readKeypairFile();
+	const kdfVersion = stored.kdfVersion ?? 1;
+	const salt = stored.salt
+		? sodium.from_base64(stored.salt, sodium.base64_variants.ORIGINAL)
+		: undefined;
+	return getMasterKey(kdfVersion, salt);
+}
+
+/**
  * Get the current KDF version of the stored keypair file.
  * Returns null if no keypair exists.
  */

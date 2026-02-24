@@ -445,7 +445,7 @@ async function handleMemoryPush(
 		return;
 	}
 
-	const imported = processSyncResponse(db, peer.peerId, [message.payload.memory]);
+	const imported = await processSyncResponse(db, peer.peerId, [message.payload.memory]);
 
 	const ack = await createMessage<MemoryAckPayload>("MEMORY_ACK", {
 		memoryId: message.payload.memory.id,
