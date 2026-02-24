@@ -17,6 +17,7 @@ export {
 	PIPELINE_FLAGS,
 } from "./types";
 export type {
+	LlmProvider,
 	Memory,
 	MemoryType,
 	Conversation,

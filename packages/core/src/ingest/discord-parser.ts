@@ -14,6 +14,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, basename, extname } from "path";
 import type { ParsedDocument, ParsedSection } from "./types";
+import { batchByTimeGap } from "./chat-utils";
 
 // ---------------------------------------------------------------------------
 // DiscordChatExporter JSON types
@@ -328,9 +329,6 @@ interface ConversationThread {
 	readonly endTimestamp: string;
 }
 
-/** Time gap threshold for splitting unthreaded messages (30 minutes) */
-const TIME_GAP_MS = 30 * 60 * 1000;
-
 function groupIntoThreads(messages: DiscordMessage[]): ConversationThread[] {
 	// Sort by timestamp
 	const sorted = [...messages].sort(
@@ -382,32 +380,13 @@ function groupIntoThreads(messages: DiscordMessage[]): ConversationThread[] {
 	}
 
 	// Group standalone messages by time proximity
-	let currentBatch: DiscordMessage[] = [];
-
-	for (const msg of standalone) {
-		if (currentBatch.length > 0) {
-			const lastTime = Date.parse(currentBatch[currentBatch.length - 1].timestamp);
-			const currentTime = Date.parse(msg.timestamp);
-
-			if (currentTime - lastTime > TIME_GAP_MS) {
-				threads.push({
-					threadId: `conv-${currentBatch[0].id}`,
-					messages: currentBatch,
-					startTimestamp: currentBatch[0].timestamp,
-					endTimestamp: currentBatch[currentBatch.length - 1].timestamp,
-				});
-				currentBatch = [];
-			}
-		}
-		currentBatch.push(msg);
-	}
-
-	if (currentBatch.length > 0) {
+	const batches = batchByTimeGap(standalone, (msg) => Date.parse(msg.timestamp));
+	for (const batch of batches) {
 		threads.push({
-			threadId: `conv-${currentBatch[0].id}`,
-			messages: currentBatch,
-			startTimestamp: currentBatch[0].timestamp,
-			endTimestamp: currentBatch[currentBatch.length - 1].timestamp,
+			threadId: `conv-${batch[0].id}`,
+			messages: batch,
+			startTimestamp: batch[0].timestamp,
+			endTimestamp: batch[batch.length - 1].timestamp,
 		});
 	}
 

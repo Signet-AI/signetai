@@ -12,6 +12,7 @@
 
 import { existsSync, statSync, readdirSync } from "fs";
 import { join, extname, resolve, basename } from "path";
+import type { LlmProvider } from "../types";
 import type {
 	DatabaseLike,
 	IngestOptions,
@@ -31,7 +32,7 @@ import { parseCodeRepository } from "./code-parser";
 import { parseEntireRepo, hasEntireBranch } from "./entire-parser";
 import { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
 import { extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
-import type { ExtractorConfig } from "./extractor";
+import type { ExtractionOptions } from "./extractor";
 import {
 	computeFileHash,
 	checkAlreadyIngested,
@@ -59,7 +60,7 @@ export type {
 export { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
 export type { ChunkerConfig } from "./chunker";
 export { extractFromChunk, extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
-export type { ExtractorConfig } from "./extractor";
+export type { ExtractionOptions, ExtractorConfig } from "./extractor";
 export { parseMarkdown, parseMarkdownContent, parseTxt, parseCode } from "./markdown-parser";
 export { parsePdf } from "./pdf-parser";
 export { parseSlackExport } from "./slack-parser";
@@ -71,6 +72,10 @@ export type { EntireExtractorConfig } from "./entire-extractor";
 export { extractFromConversation, extractFromConversations, extractParticipants } from "./chat-extractor";
 export type { ChatExtractorConfig } from "./chat-extractor";
 export { computeFileHash, buildProvenance } from "./provenance";
+export { parseExtractionResponse } from "./response-parser";
+export type { ParseOptions } from "./response-parser";
+export { findGit } from "./git-utils";
+export { batchByTimeGap, TIME_GAP_MS } from "./chat-utils";
 
 // ---------------------------------------------------------------------------
 // File type detection
@@ -383,12 +388,14 @@ function storeMemories(
  *
  * @param inputPath - File or directory to ingest
  * @param options - Configuration options
+ * @param provider - LLM provider for extraction (required unless skipExtraction)
  * @param onProgress - Optional progress callback
  * @returns Ingestion results summary
  */
 export async function ingestPath(
 	inputPath: string,
 	options: IngestOptions = {},
+	provider?: LlmProvider,
 	onProgress?: ProgressCallback,
 ): Promise<IngestResult> {
 	// Collect files
@@ -421,11 +428,8 @@ export async function ingestPath(
 		}
 	}
 
-	// Configure extractor
-	const extractorConfig: ExtractorConfig = {
-		ollamaUrl: options.ollamaUrl || DEFAULT_EXTRACTOR_CONFIG.ollamaUrl,
-		model: options.model || DEFAULT_EXTRACTOR_CONFIG.model,
-		timeoutMs: DEFAULT_EXTRACTOR_CONFIG.timeoutMs,
+	// Configure extraction options
+	const extractionOpts: ExtractionOptions = {
 		minConfidence: DEFAULT_EXTRACTOR_CONFIG.minConfidence,
 	};
 
@@ -448,7 +452,8 @@ export async function ingestPath(
 			const result = await ingestSingleFile(
 				file.path,
 				file.type,
-				extractorConfig,
+				provider,
+				extractionOpts,
 				options,
 				onProgress,
 			);
@@ -510,7 +515,8 @@ const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
 async function ingestSingleFile(
 	filePath: string,
 	fileType: FileType,
-	extractorConfig: ExtractorConfig,
+	provider: LlmProvider | undefined,
+	extractionOpts: ExtractionOptions,
 	options: IngestOptions,
 	onProgress?: ProgressCallback,
 ): Promise<FileIngestResult> {
@@ -594,11 +600,11 @@ async function ingestSingleFile(
 		updateIngestionJob(options.db, jobId, { chunksTotal: chunks.length });
 	}
 
-	// 4. Extract (unless skipExtraction or dryRun with no model)
+	// 4. Extract (unless skipExtraction or no provider)
 	let memoriesCreated = 0;
 	const byType: Record<string, number> = {};
 
-	if (options.skipExtraction) {
+	if (options.skipExtraction || !provider) {
 		// Store raw chunks as memories directly
 		if (!options.dryRun && options.db) {
 			for (const chunk of chunks) {
@@ -619,7 +625,7 @@ async function ingestSingleFile(
 		const extractions = await extractFromChunks(
 			chunks,
 			doc.title,
-			extractorConfig,
+			provider,
 			(chunkIdx, itemCount) => {
 				onProgress?.({
 					type: "chunk-done",
@@ -634,6 +640,7 @@ async function ingestSingleFile(
 					});
 				}
 			},
+			extractionOpts,
 		);
 
 		// Store extracted items

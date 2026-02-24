@@ -17,6 +17,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, basename, extname, relative } from "path";
 import { execFileSync } from "child_process";
 import type { ParsedDocument, ParsedSection } from "./types";
+import { findGit } from "./git-utils";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -527,32 +528,6 @@ function parseGitLog(repoPath: string, maxCommits: number): ParsedSection[] {
 	}
 
 	return sections;
-}
-
-function findGit(): string | null {
-	const candidates = [
-		"/usr/bin/git",
-		"/usr/local/bin/git",
-		"/opt/homebrew/bin/git",
-	];
-
-	for (const candidate of candidates) {
-		if (existsSync(candidate)) return candidate;
-	}
-
-	// Try which
-	try {
-		const result = execFileSync("/usr/bin/which", ["git"], {
-			encoding: "utf-8",
-			timeout: 5000,
-		});
-		const path = result.trim();
-		if (path && existsSync(path)) return path;
-	} catch {
-		// which not available
-	}
-
-	return null;
 }
 
 function isTrivialCommit(subject: string): boolean {

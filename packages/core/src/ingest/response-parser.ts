@@ -1,26 +1,19 @@
 /**
- * Shared Ollama LLM client for extraction pipeline.
+ * Shared LLM response parser for the extraction pipeline.
  *
- * Consolidates the callOllama / parseExtractionResponse logic that was
- * previously duplicated across extractor.ts, chat-extractor.ts, and
- * entire-extractor.ts. Each extractor passes config-specific options
- * (validTypes, typeMap, defaultType) to the shared parser.
+ * Parses raw LLM text responses into structured extraction results.
+ * Handles markdown fences, <think> blocks, JSON repair, type normalization,
+ * and confidence filtering.
+ *
+ * Previously named ollama-client.ts — renamed to reflect actual responsibility
+ * now that LLM transport is handled by the LlmProvider interface.
  */
 
 import type { ExtractedItem, ExtractedRelation } from "./types";
 
 // ---------------------------------------------------------------------------
-// Configuration interface shared by all extractors
+// Parse options
 // ---------------------------------------------------------------------------
-
-export interface OllamaClientConfig {
-	/** Ollama base URL */
-	readonly ollamaUrl: string;
-	/** Model to use */
-	readonly model: string;
-	/** Request timeout in ms */
-	readonly timeoutMs: number;
-}
 
 export interface ParseOptions {
 	/** Minimum confidence to keep an extracted item */
@@ -33,50 +26,6 @@ export interface ParseOptions {
 	readonly defaultType: string;
 	/** Minimum content length to keep an item (0 = no minimum) */
 	readonly minContentLength?: number;
-}
-
-// ---------------------------------------------------------------------------
-// Ollama API call
-// ---------------------------------------------------------------------------
-
-/**
- * Call the Ollama generate API with timeout and abort handling.
- */
-export async function callOllama(
-	prompt: string,
-	config: OllamaClientConfig,
-): Promise<string> {
-	const url = `${config.ollamaUrl}/api/generate`;
-
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-
-	try {
-		const res = await fetch(url, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: config.model,
-				prompt,
-				stream: false,
-				options: {
-					temperature: 0.1,
-					num_predict: 4096,
-				},
-			}),
-			signal: controller.signal,
-		});
-
-		if (!res.ok) {
-			const body = await res.text().catch(() => "");
-			throw new Error(`Ollama returned ${res.status}: ${body.slice(0, 200)}`);
-		}
-
-		const data = (await res.json()) as { response: string };
-		return data.response;
-	} finally {
-		clearTimeout(timeout);
-	}
 }
 
 // ---------------------------------------------------------------------------

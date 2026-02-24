@@ -2,6 +2,16 @@
  * Core types for Signet
  */
 
+// ---------------------------------------------------------------------------
+// LLM Provider interface (used by ingest extractors, daemon pipeline, etc.)
+// ---------------------------------------------------------------------------
+
+export interface LlmProvider {
+	readonly name: string;
+	generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<string>;
+	available(): Promise<boolean>;
+}
+
 export interface AgentManifest {
 	version: number;
 	schema: string;

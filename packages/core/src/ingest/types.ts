@@ -29,10 +29,6 @@ export interface IngestOptions {
 	readonly dryRun?: boolean;
 	/** Show each extracted fact */
 	readonly verbose?: boolean;
-	/** LLM model for extraction (default: from agent.yaml) */
-	readonly model?: string;
-	/** Ollama base URL (default: http://localhost:11434) */
-	readonly ollamaUrl?: string;
 	/** Skip LLM extraction (store raw chunks only) */
 	readonly skipExtraction?: boolean;
 	/** Maximum chunks to process (for testing) */

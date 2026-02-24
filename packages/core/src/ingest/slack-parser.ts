@@ -13,6 +13,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, basename } from "path";
 import type { ParsedDocument, ParsedSection } from "./types";
+import { batchByTimeGap } from "./chat-utils";
 
 // ---------------------------------------------------------------------------
 // Slack JSON types (subset of the export schema)
@@ -346,9 +347,6 @@ interface ConversationThread {
 	readonly endTs: string;
 }
 
-/** Time gap threshold for splitting unthreaded messages (30 minutes) */
-const TIME_GAP_MS = 30 * 60 * 1000;
-
 function groupIntoThreads(messages: SlackMessage[]): ConversationThread[] {
 	// Sort by timestamp
 	const sorted = [...messages].sort((a, b) =>
@@ -389,33 +387,13 @@ function groupIntoThreads(messages: SlackMessage[]): ConversationThread[] {
 	}
 
 	// Group unthreaded messages by time proximity
-	let currentBatch: SlackMessage[] = [];
-
-	for (const msg of unthreaded) {
-		if (currentBatch.length > 0) {
-			const lastTs = parseFloat(currentBatch[currentBatch.length - 1].ts) * 1000;
-			const currentTs = parseFloat(msg.ts) * 1000;
-
-			if (currentTs - lastTs > TIME_GAP_MS) {
-				// Time gap — flush current batch
-				threads.push({
-					threadId: `conv-${currentBatch[0].ts}`,
-					messages: currentBatch,
-					startTs: currentBatch[0].ts,
-					endTs: currentBatch[currentBatch.length - 1].ts,
-				});
-				currentBatch = [];
-			}
-		}
-		currentBatch.push(msg);
-	}
-
-	if (currentBatch.length > 0) {
+	const batches = batchByTimeGap(unthreaded, (msg) => parseFloat(msg.ts) * 1000);
+	for (const batch of batches) {
 		threads.push({
-			threadId: `conv-${currentBatch[0].ts}`,
-			messages: currentBatch,
-			startTs: currentBatch[0].ts,
-			endTs: currentBatch[currentBatch.length - 1].ts,
+			threadId: `conv-${batch[0].ts}`,
+			messages: batch,
+			startTs: batch[0].ts,
+			endTs: batch[batch.length - 1].ts,
 		});
 	}
 

@@ -1,39 +1,33 @@
 /**
  * LLM-based knowledge extraction from document chunks.
  *
- * Uses Ollama (or compatible API) to extract structured knowledge:
+ * Uses an LlmProvider to extract structured knowledge:
  * facts, decisions, preferences, procedures, relationships.
  *
  * The extraction prompt is the most critical part of the ingestion engine.
  * It needs to produce genuinely useful, self-contained memories — not noise.
  */
 
+import type { LlmProvider } from "../types";
 import type { ChunkResult, ExtractionResult } from "./types";
 import {
-	callOllama as sharedCallOllama,
 	parseExtractionResponse as sharedParseExtractionResponse,
 	type ParseOptions,
-} from "./ollama-client";
+} from "./response-parser";
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-export interface ExtractorConfig {
-	/** Ollama base URL */
-	readonly ollamaUrl: string;
-	/** Model to use for extraction */
-	readonly model: string;
-	/** Request timeout in ms */
-	readonly timeoutMs: number;
+export interface ExtractionOptions {
 	/** Minimum confidence to keep an extracted item */
 	readonly minConfidence: number;
 }
 
-export const DEFAULT_EXTRACTOR_CONFIG: ExtractorConfig = {
-	ollamaUrl: "http://localhost:11434",
-	model: "llama3.2",
-	timeoutMs: 120_000,
+/** @deprecated Use ExtractionOptions instead */
+export type ExtractorConfig = ExtractionOptions;
+
+export const DEFAULT_EXTRACTOR_CONFIG: ExtractionOptions = {
 	minConfidence: 0.5,
 };
 
@@ -144,7 +138,8 @@ ${chunkText}
 export async function extractFromChunk(
 	chunk: ChunkResult,
 	sourceTitle: string | null,
-	config: ExtractorConfig = DEFAULT_EXTRACTOR_CONFIG,
+	provider: LlmProvider,
+	opts: ExtractionOptions = DEFAULT_EXTRACTOR_CONFIG,
 ): Promise<ExtractionResult> {
 	const prompt = buildExtractionPrompt(
 		chunk.text,
@@ -153,8 +148,8 @@ export async function extractFromChunk(
 	);
 
 	try {
-		const response = await callOllama(prompt, config);
-		const parsed = parseExtractionResponse(response, config.minConfidence);
+		const response = await provider.generate(prompt);
+		const parsed = parseExtractionResponse(response, opts.minConfidence);
 
 		return {
 			chunkIndex: chunk.index,
@@ -179,14 +174,15 @@ export async function extractFromChunk(
 export async function extractFromChunks(
 	chunks: readonly ChunkResult[],
 	sourceTitle: string | null,
-	config: ExtractorConfig = DEFAULT_EXTRACTOR_CONFIG,
+	provider: LlmProvider,
 	onChunkDone?: (chunkIndex: number, itemCount: number) => void,
+	opts: ExtractionOptions = DEFAULT_EXTRACTOR_CONFIG,
 ): Promise<ExtractionResult[]> {
 	const results: ExtractionResult[] = [];
 
-	// Process sequentially to avoid overwhelming Ollama
+	// Process sequentially to avoid overwhelming the LLM
 	for (const chunk of chunks) {
-		const result = await extractFromChunk(chunk, sourceTitle, config);
+		const result = await extractFromChunk(chunk, sourceTitle, provider, opts);
 		results.push(result);
 		if (onChunkDone) {
 			onChunkDone(chunk.index, result.items.length);
@@ -194,17 +190,6 @@ export async function extractFromChunks(
 	}
 
 	return results;
-}
-
-// ---------------------------------------------------------------------------
-// Ollama API call — delegates to shared client
-// ---------------------------------------------------------------------------
-
-async function callOllama(
-	prompt: string,
-	config: ExtractorConfig,
-): Promise<string> {
-	return sharedCallOllama(prompt, config);
 }
 
 // ---------------------------------------------------------------------------

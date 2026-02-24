@@ -27,6 +27,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { execFileSync } from "child_process";
 import type { ParsedDocument, ParsedSection } from "./types";
+import { findGit } from "./git-utils";
 
 // ---------------------------------------------------------------------------
 // Branch name (matches Entire CLI's paths.MetadataBranchName)
@@ -617,31 +618,6 @@ function formatTimestamp(ts: string): string {
 // ---------------------------------------------------------------------------
 // Git helpers
 // ---------------------------------------------------------------------------
-
-function findGit(): string | null {
-	const candidates = [
-		"/usr/bin/git",
-		"/usr/local/bin/git",
-		"/opt/homebrew/bin/git",
-	];
-
-	for (const candidate of candidates) {
-		if (existsSync(candidate)) return candidate;
-	}
-
-	try {
-		const result = execFileSync("/usr/bin/which", ["git"], {
-			encoding: "utf-8",
-			timeout: 5000,
-		});
-		const path = result.trim();
-		if (path && existsSync(path)) return path;
-	} catch {
-		// which not available
-	}
-
-	return null;
-}
 
 /**
  * Read a file from the entire/checkpoints/v1 branch without checkout.

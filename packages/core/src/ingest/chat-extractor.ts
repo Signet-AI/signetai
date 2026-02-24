@@ -8,36 +8,25 @@
  * - Filters out greetings, casual banter, meta-conversation
  * - Understands conversational context (agreements, disagreements)
  *
- * Uses the same Ollama-based extraction as the document extractor
- * but with a conversation-specific prompt.
+ * Uses an LlmProvider for extraction with a conversation-specific prompt.
  */
 
+import type { LlmProvider } from "../types";
 import type { ChunkResult, ExtractionResult } from "./types";
+import type { ExtractionOptions } from "./extractor";
 import {
-	callOllama as sharedCallOllama,
 	parseExtractionResponse as sharedParseExtractionResponse,
 	type ParseOptions,
-} from "./ollama-client";
+} from "./response-parser";
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-export interface ChatExtractorConfig {
-	/** Ollama base URL */
-	readonly ollamaUrl: string;
-	/** Model to use for extraction */
-	readonly model: string;
-	/** Request timeout in ms */
-	readonly timeoutMs: number;
-	/** Minimum confidence to keep an extracted item */
-	readonly minConfidence: number;
-}
+/** @deprecated Use ExtractionOptions instead */
+export type ChatExtractorConfig = ExtractionOptions;
 
-export const DEFAULT_CHAT_EXTRACTOR_CONFIG: ChatExtractorConfig = {
-	ollamaUrl: "http://localhost:11434",
-	model: "llama3.2",
-	timeoutMs: 120_000,
+export const DEFAULT_CHAT_EXTRACTOR_CONFIG: ExtractionOptions = {
 	minConfidence: 0.5,
 };
 
@@ -95,7 +84,7 @@ QUALITY RULES:
 
 SKIP ENTIRELY:
 - Greetings ("hi", "good morning", "hey", "what's up")
-- Casual reactions ("lol", "haha", "nice", "cool", "👍")
+- Casual reactions ("lol", "haha", "nice", "cool", "\u{1F44D}")
 - Meta-conversation ("can you see my screen?", "are you there?", "brb")
 - Acknowledgments without information ("ok", "got it", "sounds good")
 - Repeated information (extract once, not every time it's mentioned)
@@ -192,7 +181,8 @@ export async function extractFromConversation(
 	chunk: ChunkResult,
 	channelName: string | null,
 	participants: string[],
-	config: ChatExtractorConfig = DEFAULT_CHAT_EXTRACTOR_CONFIG,
+	provider: LlmProvider,
+	opts: ExtractionOptions = DEFAULT_CHAT_EXTRACTOR_CONFIG,
 ): Promise<ExtractionResult> {
 	// Detect if this is a code-heavy conversation
 	const isCodeDiscussion = detectCodeDiscussion(chunk.text);
@@ -202,8 +192,8 @@ export async function extractFromConversation(
 		: buildConversationExtractionPrompt(chunk.text, channelName, participants);
 
 	try {
-		const response = await callOllama(prompt, config);
-		const parsed = parseExtractionResponse(response, config.minConfidence);
+		const response = await provider.generate(prompt);
+		const parsed = parseExtractionResponse(response, opts.minConfidence);
 
 		return {
 			chunkIndex: chunk.index,
@@ -229,8 +219,9 @@ export async function extractFromConversations(
 	chunks: readonly ChunkResult[],
 	channelName: string | null,
 	participants: string[],
-	config: ChatExtractorConfig = DEFAULT_CHAT_EXTRACTOR_CONFIG,
+	provider: LlmProvider,
 	onChunkDone?: (chunkIndex: number, itemCount: number) => void,
+	opts: ExtractionOptions = DEFAULT_CHAT_EXTRACTOR_CONFIG,
 ): Promise<ExtractionResult[]> {
 	const results: ExtractionResult[] = [];
 
@@ -239,7 +230,8 @@ export async function extractFromConversations(
 			chunk,
 			channelName,
 			participants,
-			config,
+			provider,
+			opts,
 		);
 		results.push(result);
 		if (onChunkDone) {
@@ -288,17 +280,6 @@ function detectCodeDiscussion(text: string): boolean {
 	}
 
 	return matches >= 3;
-}
-
-// ---------------------------------------------------------------------------
-// Ollama API call — delegates to shared client
-// ---------------------------------------------------------------------------
-
-async function callOllama(
-	prompt: string,
-	config: ChatExtractorConfig,
-): Promise<string> {
-	return sharedCallOllama(prompt, config);
 }
 
 // ---------------------------------------------------------------------------

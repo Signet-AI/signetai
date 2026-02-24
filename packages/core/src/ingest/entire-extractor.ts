@@ -10,39 +10,29 @@
  * - Decision paths: choices made, alternatives considered
  * - Communication style with AI: prompt craftsmanship
  * - Domain knowledge signals: what they know vs. ask about
- * - Workflow patterns: build→test→commit cycles
+ * - Workflow patterns: build->test->commit cycles
  * - Tool mastery: IDE features, CLI commands, framework expertise
  *
- * Uses the same Ollama-based extraction as the document/chat extractors
- * but with a prompt specifically designed for developer skill assessment.
+ * Uses an LlmProvider for extraction with a prompt specifically designed
+ * for developer skill assessment.
  */
 
+import type { LlmProvider } from "../types";
 import type { ChunkResult, ExtractionResult } from "./types";
+import type { ExtractionOptions } from "./extractor";
 import {
-	callOllama as sharedCallOllama,
 	parseExtractionResponse as sharedParseExtractionResponse,
 	type ParseOptions,
-} from "./ollama-client";
+} from "./response-parser";
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-export interface EntireExtractorConfig {
-	/** Ollama base URL */
-	readonly ollamaUrl: string;
-	/** Model to use for extraction */
-	readonly model: string;
-	/** Request timeout in ms */
-	readonly timeoutMs: number;
-	/** Minimum confidence to keep an extracted item */
-	readonly minConfidence: number;
-}
+/** @deprecated Use ExtractionOptions instead */
+export type EntireExtractorConfig = ExtractionOptions;
 
-export const DEFAULT_ENTIRE_EXTRACTOR_CONFIG: EntireExtractorConfig = {
-	ollamaUrl: "http://localhost:11434",
-	model: "llama3.2",
-	timeoutMs: 120_000,
+export const DEFAULT_ENTIRE_EXTRACTOR_CONFIG: ExtractionOptions = {
 	minConfidence: 0.4,
 };
 
@@ -113,7 +103,7 @@ WHAT TO EXTRACT:
    - Trust calibration (when do they verify AI output vs. accept it?)
 
 5. WORKFLOW SIGNALS:
-   - Build→test→commit rhythm
+   - Build->test->commit rhythm
    - Code review habits (self-review, asking AI to review)
    - Documentation practices
    - Refactoring patterns
@@ -147,7 +137,7 @@ EXAMPLES:
 Session excerpt:
 [USER]: Refactor the auth middleware to use the decorator pattern instead of the current chain. Make sure the refresh token rotation still works with the new structure.
 [ASSISTANT]: I'll refactor the auth middleware...
-[TOOL:Write] → src/middleware/auth.ts
+[TOOL:Write] -> src/middleware/auth.ts
 [USER]: The refresh token needs to check the jti claim for replay protection. You missed that.
 
 Extraction:
@@ -181,13 +171,14 @@ ${sessionText}
 export async function extractFromEntireSession(
 	chunk: ChunkResult,
 	sessionMetadata: string | null,
-	config: EntireExtractorConfig = DEFAULT_ENTIRE_EXTRACTOR_CONFIG,
+	provider: LlmProvider,
+	opts: ExtractionOptions = DEFAULT_ENTIRE_EXTRACTOR_CONFIG,
 ): Promise<ExtractionResult> {
 	const prompt = buildSkillExtractionPrompt(chunk.text, sessionMetadata);
 
 	try {
-		const response = await callOllama(prompt, config);
-		const parsed = parseExtractionResponse(response, config.minConfidence);
+		const response = await provider.generate(prompt);
+		const parsed = parseExtractionResponse(response, opts.minConfidence);
 
 		return {
 			chunkIndex: chunk.index,
@@ -212,8 +203,9 @@ export async function extractFromEntireSession(
 export async function extractFromEntireSessions(
 	chunks: readonly ChunkResult[],
 	sessionMetadata: string | null,
-	config: EntireExtractorConfig = DEFAULT_ENTIRE_EXTRACTOR_CONFIG,
+	provider: LlmProvider,
 	onChunkDone?: (chunkIndex: number, itemCount: number) => void,
+	opts: ExtractionOptions = DEFAULT_ENTIRE_EXTRACTOR_CONFIG,
 ): Promise<ExtractionResult[]> {
 	const results: ExtractionResult[] = [];
 
@@ -221,7 +213,8 @@ export async function extractFromEntireSessions(
 		const result = await extractFromEntireSession(
 			chunk,
 			sessionMetadata,
-			config,
+			provider,
+			opts,
 		);
 		results.push(result);
 		if (onChunkDone) {
@@ -230,17 +223,6 @@ export async function extractFromEntireSessions(
 	}
 
 	return results;
-}
-
-// ---------------------------------------------------------------------------
-// Ollama API call — delegates to shared client
-// ---------------------------------------------------------------------------
-
-async function callOllama(
-	prompt: string,
-	config: EntireExtractorConfig,
-): Promise<string> {
-	return sharedCallOllama(prompt, config);
 }
 
 // ---------------------------------------------------------------------------
