@@ -8,7 +8,7 @@
 
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import type { EmbeddingConfig } from "./memory-config";
-import { countChanges, vectorToBlob, syncVecInsert, syncVecDeleteBySourceExceptHash } from "./db-helpers";
+import { countChanges, vectorToBlob, syncVecInsert, syncVecDeleteBySourceExceptHash, syncVecDeleteByEmbeddingIds } from "./db-helpers";
 import { insertHistoryEvent } from "./transactions";
 import { logger } from "./logger";
 import type { PipelineV2Config } from "./memory-config";
@@ -647,5 +647,79 @@ export async function reembedMissingMemories(
 		success: true,
 		affected: written,
 		message: `re-embedded ${written} of ${unembedded.length} memories`,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Clean orphaned embeddings
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove embeddings whose source memory is deleted or missing.
+ * Syncs vec_embeddings to match.
+ */
+export function cleanOrphanedEmbeddings(
+	accessor: DbAccessor,
+	cfg: PipelineV2Config,
+	ctx: RepairContext,
+	limiter: RateLimiter,
+): RepairResult {
+	const action = "cleanOrphanedEmbeddings";
+	const gate = checkRepairGate(
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.requeueCooldownMs,
+		cfg.repair.requeueHourlyBudget,
+	);
+
+	if (!gate.allowed) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			message: gate.reason ?? "denied by policy gate",
+		};
+	}
+
+	const affected = accessor.withWriteTx((db) => {
+		const orphans = db
+			.prepare(
+				`SELECT e.id FROM embeddings e
+				 LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
+				 WHERE e.source_type = 'memory'
+				   AND (m.id IS NULL OR m.is_deleted = 1)`,
+			)
+			.all() as Array<{ id: string }>;
+
+		if (orphans.length === 0) return 0;
+
+		const ids = orphans.map((r) => r.id);
+		syncVecDeleteByEmbeddingIds(db, ids);
+
+		const placeholders = ids.map(() => "?").join(", ");
+		const result = db
+			.prepare(`DELETE FROM embeddings WHERE id IN (${placeholders})`)
+			.run(...ids);
+
+		const count = countChanges(result);
+		const msg = `cleaned ${count} orphaned embedding(s)`;
+		writeRepairAudit(db, action, ctx, count, msg);
+		return count;
+	});
+
+	limiter.record(action);
+	logger.info("pipeline", "repair: cleaned orphaned embeddings", {
+		affected,
+		actor: ctx.actor,
+		reason: ctx.reason,
+	});
+
+	return {
+		action,
+		success: true,
+		affected,
+		message: `cleaned ${affected} orphaned embedding(s)`,
 	};
 }

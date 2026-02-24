@@ -390,6 +390,68 @@ export async function getProjection(
 	}
 }
 
+// ============================================================================
+// Embedding Health API
+// ============================================================================
+
+export interface EmbeddingCheckResult {
+	name: string;
+	status: "ok" | "warn" | "fail";
+	message: string;
+	detail?: Record<string, unknown>;
+	fix?: string;
+}
+
+export interface EmbeddingHealthReport {
+	status: "healthy" | "degraded" | "unhealthy";
+	score: number;
+	checkedAt: string;
+	config: {
+		provider: string;
+		model: string;
+		dimensions: number;
+	};
+	checks: EmbeddingCheckResult[];
+}
+
+export async function getEmbeddingHealth(): Promise<EmbeddingHealthReport | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/embeddings/health`);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function repairCleanOrphans(): Promise<{ success: boolean; affected: number; message: string } | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/repair/clean-orphans`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ reason: "dashboard: embedding health", actor: "dashboard" }),
+		});
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function repairReEmbed(): Promise<{ success: boolean; affected: number; message: string } | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/repair/re-embed`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ reason: "dashboard: embedding health", actor: "dashboard" }),
+		});
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
 export async function getHarnesses(): Promise<Harness[]> {
 	try {
 		const response = await fetch(`${API_BASE}/api/harnesses`);

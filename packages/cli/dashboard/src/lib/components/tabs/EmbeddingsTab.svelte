@@ -4,9 +4,14 @@ import {
 	getProjection,
 	getSimilarMemories,
 	setMemoryPinned,
+	getEmbeddingHealth,
+	repairCleanOrphans,
+	repairReEmbed,
 	type Memory,
 	type EmbeddingPoint,
 	type ProjectionNode,
+	type EmbeddingHealthReport,
+	type EmbeddingCheckResult,
 } from "$lib/api";
 import { mem } from "$lib/stores/memory.svelte";
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
@@ -96,6 +101,50 @@ let cachedRegionRect: DOMRect | null = null;
 
 let canvas2d = $state<EmbeddingCanvas2D | null>(null);
 let canvas3d = $state<EmbeddingCanvas3D | null>(null);
+
+let healthReport = $state<EmbeddingHealthReport | null>(null);
+let healthExpanded = $state(false);
+let healthFixBusy = $state(false);
+let healthTimer: ReturnType<typeof setInterval> | undefined;
+
+async function fetchHealth(): Promise<void> {
+	healthReport = await getEmbeddingHealth();
+}
+
+async function runFix(check: EmbeddingCheckResult): Promise<void> {
+	if (healthFixBusy) return;
+	healthFixBusy = true;
+	try {
+		if (check.name === "orphaned-embeddings") {
+			await repairCleanOrphans();
+		} else if (check.name === "coverage" || check.name === "null-vectors") {
+			await repairReEmbed();
+		}
+		await fetchHealth();
+	} finally {
+		healthFixBusy = false;
+	}
+}
+
+function healthDotColor(status: "healthy" | "degraded" | "unhealthy"): string {
+	if (status === "healthy") return "#4a7a5e";
+	if (status === "degraded") return "#c4a24a";
+	return "#8a4a48";
+}
+
+function checkDotColor(status: "ok" | "warn" | "fail"): string {
+	if (status === "ok") return "#4a7a5e";
+	if (status === "warn") return "#c4a24a";
+	return "#8a4a48";
+}
+
+$effect(() => {
+	fetchHealth();
+	healthTimer = setInterval(fetchHealth, 60000);
+	return () => {
+		if (healthTimer) clearInterval(healthTimer);
+	};
+});
 
 let refresh3dQueued = false;
 function scheduleRefresh3d(): void {
@@ -955,6 +1004,60 @@ $effect(() => {
 				>
 					Unlock preview
 				</button>
+			</div>
+		{/if}
+
+		{#if healthReport}
+			<div class="absolute top-2 right-3 z-[8] pointer-events-none">
+				<div class="pointer-events-auto">
+					<button
+						type="button"
+						class="flex items-center gap-1.5 px-2 py-[4px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.22)] bg-[rgba(5,5,5,0.75)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
+						onclick={() => (healthExpanded = !healthExpanded)}
+					>
+						<span
+							class="inline-block w-[7px] h-[7px] rounded-full shrink-0"
+							style="background:{healthDotColor(healthReport.status)}"
+						></span>
+						{healthReport.status}
+						<span class="text-[var(--sig-text-muted)]">{Math.round(healthReport.score * 100)}%</span>
+					</button>
+					{#if healthExpanded}
+						<div class="mt-1 border border-[rgba(255,255,255,0.22)] bg-[rgba(5,5,5,0.92)] px-2 py-2 w-[320px]">
+							<div class="flex items-center justify-between mb-2">
+								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em]">Embedding Health</span>
+								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)]">{healthReport.config.provider}/{healthReport.config.model}</span>
+							</div>
+							<div class="space-y-1">
+								{#each healthReport.checks as check}
+									<div class="flex items-start gap-1.5 px-1.5 py-1 border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.02)]">
+										<span
+											class="inline-block w-[6px] h-[6px] rounded-full shrink-0 mt-[4px]"
+											style="background:{checkDotColor(check.status)}"
+										></span>
+										<div class="flex-1 min-w-0">
+											<div class="flex items-center justify-between gap-2">
+												<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)]">{check.name}</span>
+												<span class="font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)] uppercase">{check.status}</span>
+											</div>
+											<div class="font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)] leading-[1.3] mt-0.5">{check.message}</div>
+											{#if check.fix && check.status !== "ok"}
+												<button
+													type="button"
+													class="mt-1 font-[family-name:var(--font-mono)] text-[9px] text-[#c4a24a] hover:text-[var(--sig-text-bright)] underline underline-offset-2 disabled:opacity-40 disabled:no-underline"
+													disabled={healthFixBusy}
+													onclick={() => runFix(check)}
+												>
+													{healthFixBusy ? "running..." : check.fix}
+												</button>
+											{/if}
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+				</div>
 			</div>
 		{/if}
 

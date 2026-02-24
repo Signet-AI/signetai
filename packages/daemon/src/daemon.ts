@@ -104,6 +104,7 @@ import { getGraphBoostIds } from "./pipeline/graph-search";
 import { rerank, noopReranker, type RerankCandidate } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createProviderTracker, getDiagnostics } from "./diagnostics";
+import { buildEmbeddingHealth } from "./embedding-health";
 import {
 	createAnalyticsCollector,
 	type AnalyticsCollector,
@@ -118,6 +119,7 @@ import {
 	triggerRetentionSweep,
 	reembedMissingMemories,
 	getEmbeddingGapStats,
+	cleanOrphanedEmbeddings,
 	type RepairContext,
 } from "./repair-actions";
 import {
@@ -3738,6 +3740,15 @@ app.get("/api/embeddings/status", async (c) => {
 	return c.json(status);
 });
 
+app.get("/api/embeddings/health", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const providerStatus = await checkEmbeddingProvider(cfg.embedding);
+	const report = getDbAccessor().withReadDb((db) =>
+		buildEmbeddingHealth(db, cfg.embedding, providerStatus),
+	);
+	return c.json(report);
+});
+
 app.get("/api/embeddings/projection", async (c) => {
 	const dimParam = c.req.query("dimensions");
 	const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
@@ -5786,6 +5797,18 @@ app.post("/api/repair/re-embed", async (c) => {
 		dryRun,
 	);
 
+	return c.json(result, result.success ? 200 : 429);
+});
+
+app.post("/api/repair/clean-orphans", (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	const result = cleanOrphanedEmbeddings(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+	);
 	return c.json(result, result.success ? 200 : 429);
 });
 
