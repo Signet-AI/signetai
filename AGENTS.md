@@ -121,7 +121,7 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 | `@signet/connector-claude-code` | Claude Code connector: hooks, CLAUDE.md generation | node |
 | `@signet/connector-opencode` | OpenCode connector: plugin, AGENTS.md sync | node |
 | `@signet/connector-openclaw` | OpenClaw connector: config patching, hook handlers | node |
-| `@signetai/adapter-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
+| `@signetai/signet-memory-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
 | `signetai` | Meta-package bundling CLI + daemon | - |
 | `@signet/web` | Marketing website (Astro static, Cloudflare Pages) | cloudflare |
 
@@ -426,7 +426,7 @@ already a release commit):
 1. CI builds all packages
 2. Bumps the patch version across all `package.json` files
 3. Generates changelog via `scripts/changelog.ts`
-4. Publishes `signetai` and `@signetai/adapter-openclaw` to npm
+4. Publishes `signetai` and `@signetai/signet-memory-openclaw` to npm
 5. Commits the version bump and pushes with tags
 
 **Do not publish packages manually.** Just push to `main` and CI
