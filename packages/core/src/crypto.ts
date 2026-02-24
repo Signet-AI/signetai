@@ -16,7 +16,7 @@
  */
 
 import sodium from "libsodium-wrappers";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, writeSync, closeSync, chmodSync, statSync, lstatSync, realpathSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, writeSync, closeSync, chmodSync, statSync, lstatSync, realpathSync, renameSync } from "fs";
 import { homedir, hostname } from "os";
 import { join, resolve, normalize } from "path";
 import { execFileSync } from "child_process";
@@ -219,9 +219,16 @@ async function resolvePassphrase(): Promise<string | null> {
 		if (pp && pp.length > 0) return pp;
 	}
 
-	// 2. Environment variable (for daemons — documented as less secure)
+	// 2. Environment variable (for daemons — MEDIUM-2: warn + clear from env)
 	const envPassphrase = process.env.SIGNET_PASSPHRASE;
 	if (envPassphrase && envPassphrase.length > 0) {
+		if (!process.env.SIGNET_SUPPRESS_PASSPHRASE_WARNING) {
+			console.warn(
+				"⚠️  Using SIGNET_PASSPHRASE from environment — visible to other processes. " +
+				"Consider using setPassphraseProvider() or a secrets manager instead.",
+			);
+		}
+		delete process.env.SIGNET_PASSPHRASE;
 		return envPassphrase;
 	}
 
@@ -235,9 +242,27 @@ async function resolvePassphrase(): Promise<string | null> {
 
 /**
  * Cache keyed by KDF version + salt to avoid re-deriving on every operation.
- * v1 keys have no salt so we use the string "v1" as the cache key.
+ * Each entry has a TTL — keys are zeroed and evicted after MASTER_KEY_TTL_MS
+ * to limit exposure window for memory-scraping attacks (MEDIUM-1 audit fix).
  */
-const _masterKeyCache = new Map<string, Uint8Array>();
+interface CachedMasterKey { key: Uint8Array; expiresAt: number; }
+const MASTER_KEY_TTL_MS = 5 * 60 * 1000;
+const _masterKeyCache = new Map<string, CachedMasterKey>();
+
+function getCachedMasterKey(cacheKey: string): Uint8Array | undefined {
+	const cached = _masterKeyCache.get(cacheKey);
+	if (!cached) return undefined;
+	if (Date.now() > cached.expiresAt) {
+		cached.key.fill(0);
+		_masterKeyCache.delete(cacheKey);
+		return undefined;
+	}
+	return new Uint8Array(cached.key);
+}
+
+function setCachedMasterKey(cacheKey: string, key: Uint8Array): void {
+	_masterKeyCache.set(cacheKey, { key: new Uint8Array(key), expiresAt: Date.now() + MASTER_KEY_TTL_MS });
+}
 
 /**
  * Derive the legacy v1 master key (BLAKE2b, zero stretching).
@@ -247,19 +272,14 @@ const _masterKeyCache = new Map<string, Uint8Array>();
  */
 async function getMasterKeyV1(): Promise<Uint8Array> {
 	const cacheKey = "v1";
-	const cached = _masterKeyCache.get(cacheKey);
-	if (cached) return new Uint8Array(cached);
+	const cached = getCachedMasterKey(cacheKey);
+	if (cached) return cached;
 
 	await sodium.ready;
-
 	const machineId = getMachineId();
-	const input = `signet:secrets:${machineId}`;
-	const inputBytes = new TextEncoder().encode(input);
-
-	const key = sodium.crypto_generichash(32, inputBytes, null);
-	const copy = new Uint8Array(key);
-	_masterKeyCache.set(cacheKey, copy);
-	return new Uint8Array(copy);
+	const key = sodium.crypto_generichash(32, new TextEncoder().encode(`signet:secrets:${machineId}`), null);
+	setCachedMasterKey(cacheKey, key);
+	return new Uint8Array(key);
 }
 
 /**
@@ -270,26 +290,15 @@ async function getMasterKeyV1(): Promise<Uint8Array> {
  */
 async function getMasterKeyV2(salt: Uint8Array): Promise<Uint8Array> {
 	const cacheKey = `v2:${sodium.to_base64(salt, sodium.base64_variants.ORIGINAL)}`;
-	const cached = _masterKeyCache.get(cacheKey);
-	if (cached) return new Uint8Array(cached);
+	const cached = getCachedMasterKey(cacheKey);
+	if (cached) return cached;
 
 	await sodium.ready;
-
-	const machineId = getMachineId();
-	const password = `signet:secrets:${machineId}`;
-
-	const key = sodium.crypto_pwhash(
-		32,
-		password,
-		salt,
-		sodium.crypto_pwhash_OPSLIMIT_MODERATE,
-		sodium.crypto_pwhash_MEMLIMIT_MODERATE,
-		sodium.crypto_pwhash_ALG_ARGON2ID13,
-	);
-
-	const copy = new Uint8Array(key);
-	_masterKeyCache.set(cacheKey, copy);
-	return new Uint8Array(copy);
+	const key = sodium.crypto_pwhash(32, `signet:secrets:${getMachineId()}`, salt,
+		sodium.crypto_pwhash_OPSLIMIT_MODERATE, sodium.crypto_pwhash_MEMLIMIT_MODERATE,
+		sodium.crypto_pwhash_ALG_ARGON2ID13);
+	setCachedMasterKey(cacheKey, key);
+	return new Uint8Array(key);
 }
 
 /**
@@ -304,28 +313,20 @@ async function getMasterKeyV2(salt: Uint8Array): Promise<Uint8Array> {
  * Cost: OPSLIMIT_MODERATE / MEMLIMIT_MODERATE (~0.7s on modern hardware).
  */
 async function getMasterKeyV3(salt: Uint8Array, passphrase: string): Promise<Uint8Array> {
-	const cacheKey = `v3:${sodium.to_base64(salt, sodium.base64_variants.ORIGINAL)}`;
-	const cached = _masterKeyCache.get(cacheKey);
-	if (cached) return new Uint8Array(cached);
+	// HIGH-1 audit fix: include passphrase hash in cache key to prevent
+	// returning a cached key derived from a different passphrase.
+	const ppHash = sodium.crypto_generichash(16, new TextEncoder().encode(passphrase), null);
+	const cacheKey = `v3:${sodium.to_base64(salt, sodium.base64_variants.ORIGINAL)}:${sodium.to_base64(ppHash, sodium.base64_variants.ORIGINAL)}`;
+	const cached = getCachedMasterKey(cacheKey);
+	if (cached) return cached;
 
 	await sodium.ready;
-
-	const machineId = getMachineId();
-	// Combine passphrase + machineId: requires BOTH to derive the key
-	const password = `signet:v3:${passphrase}:${machineId}`;
-
-	const key = sodium.crypto_pwhash(
-		32,
-		password,
-		salt,
-		sodium.crypto_pwhash_OPSLIMIT_MODERATE,
-		sodium.crypto_pwhash_MEMLIMIT_MODERATE,
-		sodium.crypto_pwhash_ALG_ARGON2ID13,
-	);
-
-	const copy = new Uint8Array(key);
-	_masterKeyCache.set(cacheKey, copy);
-	return new Uint8Array(copy);
+	const password = `signet:v3:${passphrase}:${getMachineId()}`;
+	const key = sodium.crypto_pwhash(32, password, salt,
+		sodium.crypto_pwhash_OPSLIMIT_MODERATE, sodium.crypto_pwhash_MEMLIMIT_MODERATE,
+		sodium.crypto_pwhash_ALG_ARGON2ID13);
+	setCachedMasterKey(cacheKey, key);
+	return new Uint8Array(key);
 }
 
 /**
@@ -518,6 +519,7 @@ function resetKeypairCacheTimer(): void {
  * Prevents duplicate loads when multiple async callers hit ensureKeypair() simultaneously.
  */
 let _loadPromise: Promise<DecryptedKeypair> | null = null;
+let _kdfWarningEmitted = false;
 
 /**
  * Ensure libsodium is initialised and the cached keypair is loaded.
@@ -657,8 +659,9 @@ export async function loadSigningKeypair(): Promise<DecryptedKeypair> {
 		? sodium.from_base64(stored.salt, sodium.base64_variants.ORIGINAL)
 		: undefined;
 
-	// Emit upgrade warnings for legacy KDF versions
-	if (kdfVersion <= 2) {
+	// LOW-1: emit upgrade warning only once per process
+	if (kdfVersion <= 2 && !_kdfWarningEmitted) {
+		_kdfWarningEmitted = true;
 		console.warn(
 			`⚠️  Keypair uses KDF v${kdfVersion} (${kdfVersion === 1 ? "BLAKE2b — no stretching" : "Argon2id — machineId only"}). ` +
 			"Run `signet rekey` to upgrade to passphrase-based key derivation (v3).",
@@ -800,6 +803,9 @@ export async function verifySignature(
  * @throws If no keypair exists or decryption fails.
  */
 export async function signBytes(data: Uint8Array): Promise<Uint8Array> {
+	if (!data || data.length === 0) {
+		throw new Error("Cannot sign empty data");
+	}
 	await sodium.ready;
 	const kp = await ensureKeypair();
 	return sodium.crypto_sign_detached(data, kp.privateKey);
@@ -979,9 +985,11 @@ export async function reEncryptKeypair(
 		kdfVersion: 3,
 	};
 
-	// Overwrite the file (not exclusive — file must already exist)
-	writeFileSync(SIGNING_KEY_FILE, JSON.stringify(upgraded, null, 2), { mode: 0o600 });
-	chmodSync(SIGNING_KEY_FILE, 0o600);
+	// MEDIUM-4: atomic write via temp+rename to prevent data loss on crash
+	const tmpFile = SIGNING_KEY_FILE + ".tmp";
+	writeFileSync(tmpFile, JSON.stringify(upgraded, null, 2), { mode: 0o600 });
+	chmodSync(tmpFile, 0o600);
+	renameSync(tmpFile, SIGNING_KEY_FILE);
 
 	// Invalidate any cached keypair and master keys so next load uses v3 derivation
 	if (_cachedKeypair) {
@@ -989,7 +997,7 @@ export async function reEncryptKeypair(
 		_cachedKeypair.publicKey.fill(0);
 		_cachedKeypair = null;
 	}
-	_masterKeyCache.forEach((key) => key.fill(0));
+	_masterKeyCache.forEach((e) => e.key.fill(0));
 	_masterKeyCache.clear();
 
 	return { upgraded: true, fromVersion, toVersion: 3 };
@@ -1045,7 +1053,7 @@ export function clearCachedKeypair(): void {
 		_cachedKeypair = null;
 	}
 	// Zero and clear all cached master keys
-	_masterKeyCache.forEach((key) => key.fill(0));
+	_masterKeyCache.forEach((e) => e.key.fill(0));
 	_masterKeyCache.clear();
 }
 
