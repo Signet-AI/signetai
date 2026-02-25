@@ -35,11 +35,30 @@ signet status
 curl -s http://localhost:3850/health
 ```
 
-If daemon is down, run:
+If daemon is down or unresponsive, restart it:
 
 ```bash
+# preferred: CLI commands
+signet start          # start if not running
+signet restart        # stop + start (graceful)
+
+# if CLI restart doesn't work, kill and restart manually
+signet stop
+pkill -f "signet.*daemon"   # force kill if stop hangs
 signet start
-signet restart
+
+# if installed as a system service (launchd on macOS, systemd on Linux)
+# macOS:
+launchctl kickstart -k gui/$(id -u)/com.signet.daemon
+# Linux:
+systemctl --user restart signet-daemon
+```
+
+After restart, confirm daemon is healthy:
+
+```bash
+signet status
+curl -s http://localhost:3850/health
 ```
 
 Then verify key files exist:
