@@ -475,3 +475,60 @@ This isn't a tool community -- it's a movement.
 | Session log accessibility | 4.4 | DX |
 | Predictive memory scorer | 3.3 | Feature |
 | Ethereum/blockchain | 3.2 | Architecture |
+
+
+---
+
+# Sprint Log
+========
+
+Append-only record of completed work against this spec.
+
+
+## 2026-02-25 — Hook Isolation Gaps (Section 1.3)
+
+**Status:** Complete, tested against running daemon.
+
+### Changes
+
+**`packages/daemon/src/daemon.ts`** — Added `isInternalCall(c)` guards
+to `/api/hooks/remember` and `/api/hooks/recall` routes. These were the
+only two hook routes missing the guard. Pattern matches the existing
+guards on session-start, user-prompt-submit, and session-end routes.
+Guards are placed before `try` block for consistency.
+
+- remember returns `{ success: true, memories: [] }` on internal call
+- recall returns `{ memories: [], count: 0 }` on internal call
+
+**`packages/daemon/src/pipeline/provider.ts`** — Added
+`env: { ...process.env, SIGNET_NO_HOOKS: "1" }` to the
+`Bun.spawn(["claude", "--version"])` call in the ClaudeCode provider's
+`available()` method. Low practical risk (--version doesn't trigger
+hooks) but closes the inconsistency.
+
+**`CLAUDE.md`** — Added "typecheck and build don't prove behavior" note
+to development workflow section.
+
+### What worked
+
+- All three edits applied cleanly, typecheck and build passed
+- Tested by running daemon from local source (`bun packages/daemon/src/daemon.ts`)
+  since the system-installed daemon doesn't pick up local changes
+- Four test cases verified:
+  1. remember + internal header → no-op response (pass)
+  2. recall + internal header → no-op response (pass)
+  3. remember without header → normal save (pass)
+  4. recall without header → normal search (pass)
+
+### What didn't work
+
+- First test attempt ran against the system-installed daemon (npm),
+  not the local build. Guards weren't present, so remember saved a
+  real memory and recall returned real results. Had to stop the system
+  daemon and run from source to test properly. Cleaned up the two
+  stray test memories afterward.
+
+### Deferred
+
+- NPM gate (section 1.2) — don't want to break installs mid-sprint
+- Defaults + non-interactive CLI (sections 1.1, 1.4) — next session

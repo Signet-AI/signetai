@@ -4783,6 +4783,9 @@ app.post("/api/hooks/session-end", async (c) => {
 
 // Remember hook - explicit memory save
 app.post("/api/hooks/remember", async (c) => {
+	if (isInternalCall(c)) {
+		return c.json({ success: true, memories: [] });
+	}
 	try {
 		const body = (await c.req.json()) as RememberRequest;
 
@@ -4806,6 +4809,9 @@ app.post("/api/hooks/remember", async (c) => {
 
 // Recall hook - explicit memory query
 app.post("/api/hooks/recall", async (c) => {
+	if (isInternalCall(c)) {
+		return c.json({ memories: [], count: 0 });
+	}
 	try {
 		const body = (await c.req.json()) as RecallRequest;
 

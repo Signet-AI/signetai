@@ -339,6 +339,9 @@ These rules are enforced by convention, not tooling.
 
 ## Development Workflow
 
+Typecheck and build don't prove behavior. Always test changes against
+the running daemon or actual runtime before calling something done.
+
 1. Make changes to source files
 2. Run `bun run build` to rebuild affected packages
 3. Run `bun test` to verify behavior

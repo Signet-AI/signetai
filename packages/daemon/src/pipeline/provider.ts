@@ -275,6 +275,7 @@ export function createClaudeCodeProvider(
 				const proc = Bun.spawn(["claude", "--version"], {
 					stdout: "pipe",
 					stderr: "pipe",
+					env: { ...process.env, SIGNET_NO_HOOKS: "1" },
 				});
 				const exitCode = await proc.exited;
 				return exitCode === 0;
