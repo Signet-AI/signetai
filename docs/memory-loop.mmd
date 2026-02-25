@@ -1,0 +1,144 @@
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#1e1e1e', 'lineColor': '#868e96'}}}%%
+flowchart TD
+    subgraph HARNESS["AI Harness -- Claude Code / OpenCode"]
+        H1["session-start hook"]
+        H2["user-prompt-submit hook"]
+        H3["/remember + /recall"]
+        H4["session-end hook"]
+    end
+
+    subgraph DAEMON["Signet Daemon :3850"]
+        HOOKS["Hook Handlers -- hooks.ts"]
+        MUTEX["Session Mutex -- session-tracker.ts"]
+        QUEUE["Job Queues -- memory_jobs / summary_jobs"]
+        WATCHER["File Watcher -- chokidar -- ~/.agents/*"]
+        SYNC["Harness Sync -- syncHarnessConfigs"]
+    end
+
+    subgraph PIPELINE["Pipeline V2 -- Async Workers"]
+        direction TB
+        EW["Extraction Worker -- 2s poll\nLLM: facts + entities\ndecision: add / update / delete / none\nembedding prefetch then write tx"]
+        SW["Summary Worker -- 5s poll\ntranscript then LLM then JSON\nsummary + facts\n+ continuity score"]
+        DW["Document Worker -- 10s poll\nchunkText 2000 overlap 200\nembedding per chunk"]
+        RW["Retention Worker -- 6h\npurge tombstones, embeddings,\ngraph links, old jobs"]
+        MW["Maintenance Worker -- 30min\ndiagnostics, FTS consistency, self-repair"]
+    end
+
+    subgraph DB["memories.db -- SQLite"]
+        T1["memories + memories_fts -- FTS5"]
+        T2["embeddings + vec_embeddings -- sqlite-vec"]
+        T3["entities + relations -- knowledge graph"]
+        T4["memory_jobs + summary_jobs"]
+        T5["memory_history -- audit trail"]
+    end
+
+    subgraph SEARCH["Hybrid Recall -- search.ts"]
+        BM["BM25 -- FTS5 MATCH"]
+        VEC["Vector -- vec_embeddings cosine"]
+        MERGE["alpha-weighted merge\n+ graph boost\n+ optional reranker"]
+    end
+
+    subgraph FILES["~/.agents/ -- source of truth"]
+        AGENTS["AGENTS.md -- instructions"]
+        SOUL["SOUL.md -- personality"]
+        IDENTITY["IDENTITY.md -- identity"]
+        USERMD["USER.md -- user profile"]
+        MEMORY["MEMORY.md -- generated summary"]
+        SUMMARIES["memory/*.md -- session summaries"]
+    end
+
+    subgraph CONFIGS["Generated Harness Configs"]
+        CLAUDE_MD["~/.claude/CLAUDE.md"]
+        OPENCODE_MD["~/.config/opencode/AGENTS.md"]
+    end
+
+    LLM{{"LLM Provider -- Ollama qwen3:4b"}}
+    CONNECTOR["Filesystem Connector\nglob scan *.md, *.txt\ninsertDocument"]
+
+    %% Hook flows
+    H1 -->|"POST session-start"| HOOKS
+    H2 -->|"POST user-prompt-submit"| HOOKS
+    H3 -->|"POST remember"| HOOKS
+    H4 -->|"POST session-end + transcript"| HOOKS
+
+    HOOKS --> MUTEX
+    HOOKS -->|"enqueue extract job"| QUEUE
+    HOOKS -->|"enqueue summary job"| QUEUE
+
+    %% Context injection return path
+    HOOKS -.->|"inject string -- identity + memories"| HARNESS
+
+    %% Pipeline picks up jobs
+    QUEUE --> EW
+    QUEUE --> SW
+    QUEUE --> DW
+
+    %% LLM calls outside write locks
+    EW <-->|"generate"| LLM
+    SW <-->|"generate"| LLM
+
+    %% Workers write to DB
+    EW -->|"txIngestEnvelope\n+ insertMemoryEmbedding"| T1
+    EW -->|"syncVecInsert"| T2
+    EW -->|"txPersistEntities"| T3
+    EW -->|"recordDecisionHistory"| T5
+    SW -->|"INSERT memories\nsource_type=session_end"| T1
+    DW -->|"txIngestEnvelope\ntype=document_chunk"| T1
+    DW -->|"INSERT embeddings"| T2
+
+    %% Summary writes .md files
+    SW -->|"writeFileSync\nYYYY-MM-DD-slug.md"| SUMMARIES
+
+    %% File watcher detects changes
+    SUMMARIES -->|"file change detected"| WATCHER
+    AGENTS -->|"file change detected"| WATCHER
+    MEMORY -->|"file change detected"| WATCHER
+
+    WATCHER -->|"2s debounce"| SYNC
+    WATCHER -->|"5s debounce"| GIT["git add + commit"]
+    WATCHER -->|"ingestMemoryMarkdown"| QUEUE
+
+    %% Sync generates harness configs
+    SYNC -->|"stripSignetBlock\nbuildSignetBlock\ncompose sections"| CONFIGS
+
+    %% Identity files feed sync
+    FILES -->|"read all identity files"| SYNC
+
+    %% The loop closes
+    CLAUDE_MD -.->|"loaded at next session-start"| HARNESS
+    OPENCODE_MD -.->|"loaded at next session-start"| HARNESS
+
+    %% Search used by hooks + pipeline
+    T1 --> BM
+    T2 --> VEC
+    BM --> MERGE
+    VEC --> MERGE
+    T3 -->|"graph boost +0.15"| MERGE
+    MERGE -.->|"used by session-start,\nrecall, pipeline candidates"| HOOKS
+
+    %% Connector feeds document worker
+    CONNECTOR -->|"enqueueDocumentIngestJob"| QUEUE
+
+    %% Retention + maintenance
+    RW -->|"purge expired"| DB
+    MW -->|"repair actions"| DB
+
+    %% Styling
+    classDef harness fill:#1864ab22,stroke:#4dabf7,color:#4dabf7
+    classDef daemon fill:#d9480f22,stroke:#ff922b,color:#ff922b
+    classDef pipeline fill:#862e9c22,stroke:#da77f2,color:#da77f2
+    classDef db fill:#f08c0022,stroke:#ffd43b,color:#ffd43b
+    classDef search fill:#862e9c22,stroke:#da77f2,color:#da77f2
+    classDef files fill:#0b7a4e22,stroke:#20c997,color:#20c997
+    classDef configs fill:#1864ab22,stroke:#4dabf7,color:#4dabf7
+    classDef llm fill:#e67f2222,stroke:#fcc419,color:#fcc419
+    classDef worker fill:#c9290522,stroke:#ff6b6b,color:#e8e8e8
+
+    class H1,H2,H3,H4 harness
+    class HOOKS,MUTEX,QUEUE,WATCHER,SYNC daemon
+    class EW,SW,DW,RW,MW worker
+    class T1,T2,T3,T4,T5 db
+    class BM,VEC,MERGE search
+    class AGENTS,SOUL,IDENTITY,USERMD,MEMORY,SUMMARIES files
+    class CLAUDE_MD,OPENCODE_MD configs
+    class LLM llm
