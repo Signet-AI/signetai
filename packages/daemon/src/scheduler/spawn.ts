@@ -60,11 +60,14 @@ export async function spawnTask(
 		cwd: workingDirectory,
 	});
 
+	// Strip existing sentinel and re-inject to prevent recursive hook loops
+	const { SIGNET_NO_HOOKS: _, ...baseEnv } = process.env;
+
 	const proc = Bun.spawn([resolvedBin, ...args], {
 		cwd: workingDirectory ?? undefined,
 		stdout: "pipe",
 		stderr: "pipe",
-		env: { ...process.env },
+		env: { ...baseEnv, SIGNET_NO_HOOKS: "1" },
 	});
 
 	let timedOut = false;

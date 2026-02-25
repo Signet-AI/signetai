@@ -4173,6 +4173,14 @@ const hookCmd = program
 	.command("hook")
 	.description("Lifecycle hooks for harness integration");
 
+// Suppress all hook subcommands in spawned agent contexts to prevent
+// recursive extraction loops (scheduler spawn, pipeline provider, etc.)
+hookCmd.hook("preAction", () => {
+	if (process.env.SIGNET_NO_HOOKS === "1") {
+		process.exit(0);
+	}
+});
+
 // signet hook session-start
 hookCmd
 	.command("session-start")

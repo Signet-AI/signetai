@@ -128,12 +128,13 @@ export function createClaudeCodeProvider(
 
 			// Unset CLAUDECODE to avoid nested-session detection when the
 			// daemon itself is launched from within a Claude Code session.
-			const { CLAUDECODE: _, ...cleanEnv } = process.env;
+			// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
+			const { CLAUDECODE: _, SIGNET_NO_HOOKS: __, ...cleanEnv } = process.env;
 
 			const proc = Bun.spawn(["claude", ...args], {
 				stdout: "pipe",
 				stderr: "pipe",
-				env: { ...cleanEnv, NO_COLOR: "1" },
+				env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
 			});
 
 			const timer = setTimeout(() => {
