@@ -162,6 +162,20 @@ function repairBogusVersion(db: MigrationDb, current: number): number {
 }
 
 /**
+ * Check whether there are unapplied migrations without running them.
+ * Useful for backup-before-migrate logic in the daemon.
+ */
+export function hasPendingMigrations(db: MigrationDb): boolean {
+	ensureMetaTables(db);
+	const current = repairBogusVersion(db, currentVersion(db));
+	return MIGRATIONS.some((m) => m.version > current);
+}
+
+/** The highest migration version defined. */
+export const LATEST_SCHEMA_VERSION =
+	MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+
+/**
  * Run all pending migrations against `db`.
  *
  * Idempotent — safe to call on every startup. Migrations that have

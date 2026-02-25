@@ -96,7 +96,7 @@ export type {
 } from "./export";
 
 // Migration runner
-export { runMigrations, MIGRATIONS } from "./migrations/index";
+export { runMigrations, hasPendingMigrations, MIGRATIONS, LATEST_SCHEMA_VERSION } from "./migrations/index";
 export type { MigrationDb, Migration } from "./migrations/index";
 
 // Identity file management

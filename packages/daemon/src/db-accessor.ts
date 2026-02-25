@@ -7,10 +7,11 @@
  */
 
 import { Database, type Statement } from "bun:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
 	runMigrations,
+	hasPendingMigrations,
 	findSqliteVecExtension,
 	DEFAULT_EMBEDDING_DIMENSIONS,
 } from "@signet/core";
@@ -76,6 +77,44 @@ function loadVecExtension(db: Database): void {
 	}
 }
 
+const MAX_MIGRATION_BACKUPS = 5;
+
+/**
+ * Back up the database file before running migrations.
+ * Flushes WAL first, then copies the main file. Prunes old
+ * backups beyond MAX_MIGRATION_BACKUPS (oldest by mtime).
+ */
+function backupBeforeMigration(db: Database, dbPath: string, schemaVersion: number): void {
+	// Flush WAL so the .db file is self-contained
+	try {
+		db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+	} catch {
+		// Non-fatal — backup still useful even with WAL
+	}
+
+	const timestamp = Date.now();
+	const backupDest = `${dbPath}.bak-v${schemaVersion}-${timestamp}`;
+	copyFileSync(dbPath, backupDest);
+	console.log(`[db-accessor] Pre-migration backup: ${backupDest}`);
+
+	// Prune old backups
+	const dir = dirname(dbPath);
+	const base = basename(dbPath);
+	const backups = readdirSync(dir)
+		.filter((f) => f.startsWith(`${base}.bak-v`))
+		.map((f) => ({ name: f, mtime: statSync(join(dir, f)).mtimeMs }))
+		.sort((a, b) => b.mtime - a.mtime);
+
+	for (const old of backups.slice(MAX_MIGRATION_BACKUPS)) {
+		try {
+			unlinkSync(join(dir, old.name));
+			console.log(`[db-accessor] Pruned old backup: ${old.name}`);
+		} catch {
+			// Best effort
+		}
+	}
+}
+
 /**
  * Initialise the singleton accessor. Must be called once at daemon startup
  * before any route handler runs. Ensures the memory directory exists, opens
@@ -96,6 +135,16 @@ export function initDbAccessor(path: string): void {
 	const writeConn = new Database(path);
 	configurePragmas(writeConn);
 	loadVecExtension(writeConn);
+
+	// Back up before migrations if there are pending changes
+	if (existsSync(path) && hasPendingMigrations(writeConn)) {
+		const row = writeConn.prepare(
+			"SELECT MAX(version) as version FROM schema_migrations",
+		).get() as { version: number } | undefined;
+		const currentSchemaVersion =
+			row && typeof row.version === "number" ? row.version : 0;
+		backupBeforeMigration(writeConn, path, currentSchemaVersion);
+	}
 
 	// Run schema migrations — this is the sole schema authority.
 	// Failures here are fatal: the daemon must not start on bad schema.

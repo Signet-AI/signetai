@@ -2,6 +2,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { computeBumpLevel } from "./bump-level";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
 const PACKAGE_JSON_PATH = "packages/signetai/package.json";
@@ -117,6 +118,12 @@ function main(): void {
 			groups.set(commit.type, [entry]);
 		}
 	}
+
+	// Compute and write bump level for CI
+	const allSubjects = lines.filter((l) => !l.startsWith("chore: release"));
+	const bumpLevel = computeBumpLevel(allSubjects);
+	writeFileSync(".bump-level", bumpLevel);
+	console.log(`Bump level: ${bumpLevel}`);
 
 	const totalEntries = [...groups.values()].reduce(
 		(sum, arr) => sum + arr.length,

@@ -14,7 +14,7 @@ import {
 	getGlobalInstallCommand,
 } from "@signet/core";
 import { logger } from "./logger";
-import { compareVersions, isVersionNewer } from "./version";
+import { compareVersions, isVersionNewer, isMajorUpgrade } from "./version";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,6 +30,7 @@ export interface UpdateInfo {
 	checkError?: string;
 	restartRequired?: boolean;
 	pendingVersion?: string;
+	isMajorUpgrade?: boolean;
 }
 
 export interface UpdateRunResult {
@@ -43,6 +44,7 @@ export interface UpdateRunResult {
 export interface UpdateConfig {
 	autoInstall: boolean;
 	checkInterval: number; // seconds
+	channel: "latest" | "next";
 }
 
 export interface UpdateState {
@@ -95,6 +97,7 @@ let lastAutoUpdateError: string | null = null;
 let updateConfig: UpdateConfig = {
 	autoInstall: false,
 	checkInterval: DEFAULT_UPDATE_INTERVAL_SECONDS,
+	channel: "latest" as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -191,16 +194,21 @@ export function getUpdateSummary(): string | null {
 
 	const latest = lastUpdateCheck?.latestVersion;
 	if (lastUpdateCheck?.updateAvailable && latest) {
+		const notes = lastUpdateCheck.releaseNotes
+			? `\n\nWhat's new:\n${lastUpdateCheck.releaseNotes}`
+			: "";
 		if (updateConfig.autoInstall) {
 			return (
 				`Signet v${latest} is available (current: v${currentVersion}). ` +
-				"Auto-update will install it on the next check cycle."
+				"Auto-update will install it on the next check cycle." +
+				notes
 			);
 		}
 		return (
 			`Signet v${latest} is available (current: v${currentVersion}). ` +
 			"Run `signet update install` to update, or " +
-			"`signet update enable` for automatic updates."
+			"`signet update enable` for automatic updates." +
+			notes
 		);
 	}
 
@@ -236,6 +244,7 @@ function loadUpdateConfig(): UpdateConfig {
 	const defaults: UpdateConfig = {
 		autoInstall: false,
 		checkInterval: DEFAULT_UPDATE_INTERVAL_SECONDS,
+		channel: "latest" as const,
 	};
 
 	const paths = [
@@ -269,6 +278,11 @@ function loadUpdateConfig(): UpdateConfig {
 						defaults.checkInterval = interval;
 					}
 				}
+
+				const channelRaw = updates.channel;
+				if (channelRaw === "next" || channelRaw === "latest") {
+					defaults.channel = channelRaw;
+				}
 			}
 
 			break;
@@ -284,7 +298,8 @@ function formatUpdatesSection(config: UpdateConfig): string {
 	return (
 		`updates:\n` +
 		`  auto_install: ${config.autoInstall}\n` +
-		`  check_interval: ${config.checkInterval}\n`
+		`  check_interval: ${config.checkInterval}\n` +
+		`  channel: ${config.channel}\n`
 	);
 }
 
@@ -362,9 +377,9 @@ async function fetchLatestFromGitHub(): Promise<{
 	};
 }
 
-async function fetchLatestFromNpm(): Promise<string> {
+async function fetchLatestFromNpm(channel: "latest" | "next" = "latest"): Promise<string> {
 	const npmRes = await fetch(
-		`https://registry.npmjs.org/${NPM_PACKAGE}/latest`,
+		`https://registry.npmjs.org/${NPM_PACKAGE}/${channel}`,
 		{
 			signal: AbortSignal.timeout(10000),
 		},
@@ -409,7 +424,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 
 	if (!result.latestVersion) {
 		try {
-			result.latestVersion = await fetchLatestFromNpm();
+			result.latestVersion = await fetchLatestFromNpm(updateConfig.channel);
 		} catch (e) {
 			errors.push((e as Error).message);
 		}
@@ -420,6 +435,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 			result.latestVersion,
 			currentVersion,
 		);
+		result.isMajorUpgrade = isMajorUpgrade(currentVersion, result.latestVersion);
 	}
 
 	if (pendingRestartVersion) {
@@ -555,6 +571,12 @@ async function runAutoUpdateCycle(): Promise<void> {
 		}
 
 		if (!checkResult.updateAvailable || !checkResult.latestVersion) {
+			return;
+		}
+
+		if (isMajorUpgrade(currentVersion, checkResult.latestVersion)) {
+			logger.warn("system", "Major upgrade available — manual install required");
+			lastAutoUpdateError = "Major version upgrade requires manual install";
 			return;
 		}
 

@@ -1,0 +1,24 @@
+name: Promote Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to promote to latest (e.g. 0.2.0)"
+        required: true
+        type: string
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Promote to latest
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          npm dist-tag add "signetai@${VERSION}" latest
+          npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true
+          echo "Promoted v${VERSION} to latest"
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ inputs.version }}

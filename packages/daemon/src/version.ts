@@ -101,3 +101,15 @@ export function compareVersions(a: string, b: string): number {
 export function isVersionNewer(latest: string, current: string): boolean {
 	return compareVersions(latest, current) > 0;
 }
+
+/** Extract the major version number from a semver string. */
+export function getMajorVersion(v: string): number {
+	const parsed = parseVersion(v);
+	if (!parsed || parsed.core.length === 0) return 0;
+	return parsed.core[0] ?? 0;
+}
+
+/** True when the candidate has a higher major version than current. */
+export function isMajorUpgrade(current: string, candidate: string): boolean {
+	return getMajorVersion(candidate) > getMajorVersion(current);
+}

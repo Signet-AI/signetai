@@ -68,6 +68,10 @@ import {
 	type UpdateConfig,
 } from "./update-system";
 import {
+	initFeatureFlags,
+	getAllFeatureFlags,
+} from "./feature-flags";
+import {
 	txIngestEnvelope,
 	txFinalizeAccessAndHistory,
 	txForgetMemory,
@@ -849,6 +853,15 @@ app.use("*", async (c, next) => {
 // Health check
 app.get("/health", (c) => {
 	const us = getUpdateState();
+	let dbOk = false;
+	try {
+		getDbAccessor().withReadDb((db) => {
+			db.prepare("SELECT 1").get();
+			dbOk = true;
+		});
+	} catch {
+		// DB unreachable
+	}
 	return c.json({
 		status: "healthy",
 		uptime: process.uptime(),
@@ -856,9 +869,15 @@ app.get("/health", (c) => {
 		version: CURRENT_VERSION,
 		port: PORT,
 		agentsDir: AGENTS_DIR,
+		db: dbOk,
 		updateAvailable: us.lastCheck?.updateAvailable ?? false,
 		pendingRestart: us.pendingRestartVersion !== null,
 	});
+});
+
+// Feature flags
+app.get("/api/features", (c) => {
+	return c.json(getAllFeatureFlags());
 });
 
 // ============================================================================
@@ -7604,6 +7623,7 @@ async function main() {
 	// Start git sync timer (if enabled and has token)
 	startGitSyncTimer();
 	initUpdateSystem(CURRENT_VERSION, AGENTS_DIR);
+	initFeatureFlags(AGENTS_DIR);
 	startUpdateTimer();
 
 	// Start HTTP server
@@ -7619,6 +7639,17 @@ async function main() {
 				port: info.port,
 			});
 			logger.info("daemon", "Daemon ready");
+
+			// Write health stamp for CLI verification
+			try {
+				writeFileSync(join(DAEMON_DIR, "last-healthy-start"), JSON.stringify({
+					version: CURRENT_VERSION,
+					startedAt: new Date().toISOString(),
+					pid: process.pid,
+				}));
+			} catch {
+				// Best effort — DAEMON_DIR might not exist yet in edge cases
+			}
 
 			// Import existing memory markdown files (OpenClaw memory logs)
 			// Do this after server starts so the HTTP API is available for ingestion

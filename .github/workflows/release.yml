@@ -47,15 +47,23 @@ jobs:
 
           BASE_VERSION=$(printf '%s\n%s\n' "$LOCAL_VERSION" "$REMOTE_VERSION" | sort -V | tail -n1)
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-          NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+
+          bun scripts/changelog.ts
+
+          BUMP=$(cat .bump-level 2>/dev/null || echo "patch")
+          case "$BUMP" in
+            major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+            minor) NEW_VERSION="$MAJOR.$((MINOR + 1)).0" ;;
+            *)     NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+          esac
+
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "BUMP_LEVEL=$BUMP" >> $GITHUB_ENV
 
           PACKAGE_FILES=$(git ls-files package.json 'packages/**/package.json' | grep -v '^packages/cli/dashboard/package.json$')
           for file in $PACKAGE_FILES; do
             jq --arg v "$NEW_VERSION" '.version = $v' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
           done
-
-          bun scripts/changelog.ts
 
           git add $PACKAGE_FILES CHANGELOG.md
           git commit -m "chore: release $NEW_VERSION"
@@ -64,10 +72,26 @@ jobs:
       - name: Publish to npm
         run: |
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
-          cd packages/signetai && npm publish --access public
-          cd ../adapters/openclaw && npm publish --access public || true
+          cd packages/signetai && npm publish --tag next --access public
+          cd ../adapters/openclaw && npm publish --tag next --access public || true
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Promote to latest
+        if: env.BUMP_LEVEL != 'major'
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          npm dist-tag add signetai@${{ env.NEW_VERSION }} latest
+          npm dist-tag add @signetai/signet-memory-openclaw@${{ env.NEW_VERSION }} latest || true
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Push version bump
-        run: git push --follow-tags
+        run: git push && git push origin "v$NEW_VERSION"
+
+      - name: Create GitHub Release
+        run: |
+          NOTES=$(bun scripts/extract-changelog-section.ts "$NEW_VERSION" 2>/dev/null || echo "See CHANGELOG.md for details")
+          gh release create "v$NEW_VERSION" --title "v$NEW_VERSION" --notes "$NOTES"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
