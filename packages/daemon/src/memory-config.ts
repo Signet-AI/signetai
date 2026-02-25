@@ -83,6 +83,14 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		chunkTargetChars: 300,
 		recallTruncateChars: 500,
 	},
+	telemetryEnabled: false,
+	telemetry: {
+		posthogHost: "",
+		posthogApiKey: "",
+		flushIntervalMs: 60000,
+		flushBatchSize: 50,
+		retentionDays: 90,
+	},
 };
 
 export interface ResolvedMemoryConfig {
@@ -127,6 +135,7 @@ export function loadPipelineConfig(
 	const repairRaw = raw.repair as Record<string, unknown> | undefined;
 	const documentsRaw = raw.documents as Record<string, unknown> | undefined;
 	const guardrailsRaw = raw.guardrails as Record<string, unknown> | undefined;
+	const telemetryRaw = raw.telemetry as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -357,6 +366,37 @@ export function loadPipelineConfig(
 				50,
 				100000,
 				d.guardrails.recallTruncateChars,
+			),
+		},
+
+		telemetryEnabled:
+			raw.telemetryEnabled === true,
+		telemetry: {
+			posthogHost:
+				typeof telemetryRaw?.posthogHost === "string"
+					? telemetryRaw.posthogHost
+					: d.telemetry.posthogHost,
+			posthogApiKey:
+				typeof telemetryRaw?.posthogApiKey === "string"
+					? telemetryRaw.posthogApiKey
+					: d.telemetry.posthogApiKey,
+			flushIntervalMs: clampPositive(
+				telemetryRaw?.flushIntervalMs,
+				5000,
+				600000,
+				d.telemetry.flushIntervalMs,
+			),
+			flushBatchSize: clampPositive(
+				telemetryRaw?.flushBatchSize,
+				1,
+				500,
+				d.telemetry.flushBatchSize,
+			),
+			retentionDays: clampPositive(
+				telemetryRaw?.retentionDays,
+				1,
+				365,
+				d.telemetry.retentionDays,
 			),
 		},
 	};

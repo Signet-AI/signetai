@@ -20,6 +20,8 @@ import { normalizeAndHashContent } from "../content-normalization";
 import { vectorToBlob, countChanges, syncVecInsert, syncVecDeleteBySourceExceptHash } from "../db-helpers";
 import { txPersistEntities } from "./graph-transactions";
 import type { AnalyticsCollector } from "../analytics";
+import type { TelemetryCollector } from "../telemetry";
+import { generateWithTracking } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -199,18 +201,29 @@ function leaseJob(
 	maxAttempts: number,
 ): JobRow | null {
 	const now = new Date().toISOString();
+	const nowMs = Date.now();
 
 	const row = db
 		.prepare(
-			`SELECT id, memory_id, job_type, payload, attempts, max_attempts
+			`SELECT id, memory_id, job_type, payload, attempts, max_attempts, failed_at
 			 FROM memory_jobs
 			 WHERE job_type = ? AND status = 'pending' AND attempts < ?
 			 ORDER BY created_at ASC
 			 LIMIT 1`,
 		)
-		.get(jobType, maxAttempts) as JobRow | undefined;
+		.get(jobType, maxAttempts) as (JobRow & { failed_at: string | null }) | undefined;
 
 	if (!row) return null;
+
+	// Per-job exponential backoff: skip jobs that failed too recently.
+	// 5s after 1st fail, 10s after 2nd, 20s after 3rd... capped at 2min.
+	if (row.failed_at) {
+		const failedAtMs = new Date(row.failed_at).getTime();
+		const backoffMs = Math.min((1 << row.attempts) * 5000, 120_000);
+		if (nowMs - failedAtMs < backoffMs) {
+			return null;
+		}
+	}
 
 	db.prepare(
 		`UPDATE memory_jobs
@@ -776,6 +789,7 @@ export function startWorker(
 	pipelineCfg: PipelineV2Config,
 	decisionCfg: DecisionConfig,
 	analytics?: AnalyticsCollector,
+	telemetry?: TelemetryCollector,
 ): WorkerHandle {
 	let running = true;
 	let inflight: Promise<void> | null = null;
@@ -808,8 +822,58 @@ export function startWorker(
 			return;
 		}
 
+		// Wrap provider to capture llm.generate telemetry on every call
+		const instrumentedProvider: LlmProvider = telemetry
+			? {
+					name: provider.name,
+					available: () => provider.available(),
+					async generate(prompt, opts) {
+						const start = Date.now();
+						try {
+							const result = await generateWithTracking(provider, prompt, opts);
+							telemetry.record("llm.generate", {
+								provider: provider.name,
+								inputTokens: result.usage?.inputTokens ?? null,
+								outputTokens: result.usage?.outputTokens ?? null,
+								cacheReadTokens: result.usage?.cacheReadTokens ?? null,
+								cacheCreationTokens: result.usage?.cacheCreationTokens ?? null,
+								totalCost: result.usage?.totalCost ?? null,
+								durationMs: Date.now() - start,
+								success: true,
+								errorCode: null,
+							});
+							return result.text;
+						} catch (e) {
+							const msg = e instanceof Error ? e.message : String(e);
+							telemetry.record("llm.generate", {
+								provider: provider.name,
+								inputTokens: null,
+								outputTokens: null,
+								cacheReadTokens: null,
+								cacheCreationTokens: null,
+								totalCost: null,
+								durationMs: Date.now() - start,
+								success: false,
+								errorCode: msg.includes("timeout") ? "TIMEOUT" : "ERROR",
+							});
+							throw e;
+						}
+					},
+				}
+			: provider;
+
 		// Run extraction
-		const extraction = await extractFactsAndEntities(row.content, provider);
+		const extractionStart = Date.now();
+		const extraction = await extractFactsAndEntities(row.content, instrumentedProvider);
+		const extractionMs = Date.now() - extractionStart;
+
+		telemetry?.record("pipeline.extraction", {
+			factCount: extraction.facts.length,
+			entityCount: extraction.entities.length,
+			warningCount: extraction.warnings.length,
+			durationMs: extractionMs,
+			model: pipelineCfg.extraction.model,
+		});
 
 		// Run shadow decisions on extracted facts
 		const decisions =
@@ -817,7 +881,7 @@ export function startWorker(
 				? await runShadowDecisions(
 						extraction.facts,
 						accessor,
-						provider,
+						instrumentedProvider,
 						decisionCfg,
 					)
 				: { proposals: [], warnings: [] };
@@ -896,7 +960,7 @@ export function startWorker(
 						const result = await detectSemanticContradiction(
 							proposal.fact.content,
 							proposal.targetContent,
-							provider,
+							instrumentedProvider,
 						);
 						if (result.detected && result.confidence >= 0.7) {
 							contradictionFlags.set(i, result);
@@ -1033,6 +1097,11 @@ export function startWorker(
 					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
 					message: msg,
 					memoryId: job.memory_id,
+				});
+				telemetry?.record("pipeline.error", {
+					stage: "extraction",
+					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
+					durationMs: Date.now() - jobStart,
 				});
 				accessor.withWriteTx((db) => {
 					failJob(db, job.id, msg, job.attempts, job.max_attempts);

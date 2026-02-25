@@ -19,6 +19,7 @@ import { up as umapCache } from "./010-umap-cache";
 import { up as sessionScores } from "./011-session-scores";
 import { up as scheduledTasks } from "./012-scheduled-tasks";
 import { up as ingestionTracking } from "./013-ingestion-tracking";
+import { up as telemetry } from "./014-telemetry";
 
 // -- Public interface consumed by Database.init() --
 
@@ -83,6 +84,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 13,
 		name: "ingestion-tracking",
 		up: ingestionTracking,
+	},
+	{
+		version: 14,
+		name: "telemetry",
+		up: telemetry,
 	},
 ];
 

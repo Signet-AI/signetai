@@ -18,6 +18,8 @@ export {
 } from "./types";
 export type {
 	LlmProvider,
+	LlmUsage,
+	LlmGenerateResult,
 	Memory,
 	MemoryType,
 	Conversation,
@@ -41,6 +43,7 @@ export type {
 	PipelineRepairConfig,
 	PipelineDocumentsConfig,
 	PipelineGuardrailsConfig,
+	PipelineTelemetryConfig,
 	ExtractedFact,
 	ExtractedEntity,
 	ExtractionResult,

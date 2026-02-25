@@ -6,9 +6,24 @@
 // LLM Provider interface (used by ingest extractors, daemon pipeline, etc.)
 // ---------------------------------------------------------------------------
 
+export interface LlmUsage {
+	readonly inputTokens: number | null;
+	readonly outputTokens: number | null;
+	readonly cacheReadTokens: number | null;
+	readonly cacheCreationTokens: number | null;
+	readonly totalCost: number | null;
+	readonly totalDurationMs: number | null;
+}
+
+export interface LlmGenerateResult {
+	readonly text: string;
+	readonly usage: LlmUsage | null;
+}
+
 export interface LlmProvider {
 	readonly name: string;
 	generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<string>;
+	generateWithUsage?(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<LlmGenerateResult>;
 	available(): Promise<boolean>;
 }
 
@@ -107,6 +122,7 @@ export const PIPELINE_FLAGS = [
 	"autonomous.enabled",
 	"autonomous.frozen",
 	"autonomous.allowUpdateDelete",
+	"telemetryEnabled",
 ] as const;
 
 export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
@@ -171,12 +187,21 @@ export interface PipelineGuardrailsConfig {
 	readonly recallTruncateChars: number;
 }
 
+export interface PipelineTelemetryConfig {
+	readonly posthogHost: string;
+	readonly posthogApiKey: string;
+	readonly flushIntervalMs: number;
+	readonly flushBatchSize: number;
+	readonly retentionDays: number;
+}
+
 export interface PipelineV2Config {
 	// Master switches (flat)
 	readonly enabled: boolean;
 	readonly shadowMode: boolean;
 	readonly mutationsFrozen: boolean;
 	readonly semanticContradictionEnabled: boolean;
+	readonly telemetryEnabled: boolean;
 
 	// Grouped sub-objects
 	readonly extraction: PipelineExtractionConfig;
@@ -187,6 +212,7 @@ export interface PipelineV2Config {
 	readonly repair: PipelineRepairConfig;
 	readonly documents: PipelineDocumentsConfig;
 	readonly guardrails: PipelineGuardrailsConfig;
+	readonly telemetry: PipelineTelemetryConfig;
 }
 
 // -- Status/union constants --

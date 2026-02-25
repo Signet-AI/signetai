@@ -174,6 +174,7 @@ const repairLimiter = createRateLimiter();
 
 // Telemetry — assigned in main(), read by cleanup()
 let telemetryRef: TelemetryCollector | undefined;
+let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
 // Prevents concurrent UMAP computations for the same dimension count
 const projectionInFlight = new Map<number, Promise<void>>();
@@ -7725,6 +7726,10 @@ async function cleanup() {
 	logger.info("daemon", "Shutting down");
 
 	// Flush telemetry before closing DB
+	if (heartbeatTimer) {
+		clearInterval(heartbeatTimer);
+		heartbeatTimer = undefined;
+	}
 	if (telemetryRef) {
 		try {
 			await telemetryRef.stop();
@@ -7839,13 +7844,13 @@ async function main() {
 	let telemetryCollector: TelemetryCollector | undefined;
 	if (memoryCfg.pipelineV2.telemetryEnabled) {
 		// Resolve PostHog API key: secrets first, then inline config
-		const resolvedTelemetryCfg = { ...memoryCfg.pipelineV2.telemetry };
-		if (!resolvedTelemetryCfg.posthogApiKey) {
-			const secretKey = getSecret("POSTHOG_API_KEY");
-			if (secretKey) {
-				(resolvedTelemetryCfg as Record<string, unknown>).posthogApiKey = secretKey;
-			}
-		}
+		const secretKey = !memoryCfg.pipelineV2.telemetry.posthogApiKey
+			? getSecret("POSTHOG_API_KEY") ?? ""
+			: memoryCfg.pipelineV2.telemetry.posthogApiKey;
+		const resolvedTelemetryCfg = {
+			...memoryCfg.pipelineV2.telemetry,
+			posthogApiKey: secretKey,
+		};
 		telemetryCollector = createTelemetryCollector(
 			getDbAccessor(),
 			resolvedTelemetryCfg,
@@ -7856,7 +7861,7 @@ async function main() {
 
 		// Heartbeat: record daemon stats every 5 minutes
 		const daemonStartTime = Date.now();
-		setInterval(() => {
+		heartbeatTimer = setInterval(() => {
 			if (!telemetryRef) return;
 			try {
 				const memoryCount = getDbAccessor().withReadDb((db) => {
