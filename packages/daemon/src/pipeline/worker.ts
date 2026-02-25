@@ -201,29 +201,26 @@ function leaseJob(
 	maxAttempts: number,
 ): JobRow | null {
 	const now = new Date().toISOString();
-	const nowMs = Date.now();
+	const nowEpoch = Math.floor(Date.now() / 1000);
 
+	// Per-job exponential backoff baked into the query: skip jobs whose
+	// failed_at is too recent relative to their attempt count.
+	// Backoff: ~5s after 1st fail, ~10s after 2nd, ~20s after 3rd... capped at 120s.
+	// Jobs that have never failed (failed_at IS NULL) are always eligible.
 	const row = db
 		.prepare(
-			`SELECT id, memory_id, job_type, payload, attempts, max_attempts, failed_at
+			`SELECT id, memory_id, job_type, payload, attempts, max_attempts
 			 FROM memory_jobs
 			 WHERE job_type = ? AND status = 'pending' AND attempts < ?
+			   AND (failed_at IS NULL
+			        OR (? - CAST(strftime('%s', failed_at) AS INTEGER))
+			           > MIN((1 << attempts) * 5, 120))
 			 ORDER BY created_at ASC
 			 LIMIT 1`,
 		)
-		.get(jobType, maxAttempts) as (JobRow & { failed_at: string | null }) | undefined;
+		.get(jobType, maxAttempts, nowEpoch) as JobRow | undefined;
 
 	if (!row) return null;
-
-	// Per-job exponential backoff: skip jobs that failed too recently.
-	// 5s after 1st fail, 10s after 2nd, 20s after 3rd... capped at 2min.
-	if (row.failed_at) {
-		const failedAtMs = new Date(row.failed_at).getTime();
-		const backoffMs = Math.min((1 << row.attempts) * 5000, 120_000);
-		if (nowMs - failedAtMs < backoffMs) {
-			return null;
-		}
-	}
 
 	db.prepare(
 		`UPDATE memory_jobs
@@ -1081,7 +1078,7 @@ export function startWorker(
 			const jobStart = Date.now();
 			try {
 				await processExtractJob(job);
-				consecutiveFailures = 0;
+				if (consecutiveFailures > 0) consecutiveFailures--;
 				analytics?.recordLatency("jobs", Date.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
