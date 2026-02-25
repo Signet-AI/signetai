@@ -20,6 +20,7 @@ import { getDbAccessor } from "./db-accessor";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { getUpdateSummary } from "./update-system";
 import { loadMemoryConfig } from "./memory-config";
+import { recordSessionCandidates, trackFtsHits } from "./session-memories";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
@@ -215,12 +216,12 @@ export function effectiveScore(
 	return importance * 0.95 ** ageDays;
 }
 
-/** Truncate rows to fit a character budget */
-export function selectWithBudget(
-	rows: ReadonlyArray<{ content: string }>,
+/** Truncate rows to fit a character budget, preserving the input type */
+export function selectWithBudget<T extends { content: string }>(
+	rows: ReadonlyArray<T>,
 	charBudget: number,
-): Array<{ content: string }> {
-	const selected: Array<{ content: string }> = [];
+): T[] {
+	const selected: T[] = [];
 	let used = 0;
 	for (const row of rows) {
 		if (used + row.content.length > charBudget) break;
@@ -352,7 +353,7 @@ function readAgentsMd(charBudget: number): string | undefined {
 	}
 }
 
-interface ScoredMemory {
+export interface ScoredMemory {
 	id: string;
 	content: string;
 	type: string;
@@ -364,10 +365,14 @@ interface ScoredMemory {
 	effScore: number;
 }
 
-function getProjectMemories(
+/**
+ * Return all memories that pass the 0.2 effective score threshold,
+ * sorted by project match + score. No budget applied — caller
+ * handles truncation via selectWithBudget().
+ */
+export function getAllScoredCandidates(
 	project: string | undefined,
 	limit: number,
-	charBudget: number,
 ): ScoredMemory[] {
 	if (!existsSync(MEMORY_DB)) return [];
 
@@ -408,20 +413,21 @@ function getProjectMemories(
 			return b.effScore - a.effScore;
 		});
 
-		// Apply budget
-		const selected: ScoredMemory[] = [];
-		let used = 0;
-		for (const row of scored) {
-			if (selected.length >= limit) break;
-			if (used + row.content.length > charBudget) break;
-			selected.push(row);
-			used += row.content.length;
-		}
-		return selected;
+		return scored;
 	} catch (e) {
-		logger.error("hooks", "Failed to get project memories", e as Error);
+		logger.error("hooks", "Failed to get scored candidates", e as Error);
 		return [];
 	}
+}
+
+/** Backwards-compatible wrapper: scored candidates + budget selection */
+function getProjectMemories(
+	project: string | undefined,
+	limit: number,
+	charBudget: number,
+): ScoredMemory[] {
+	const candidates = getAllScoredCandidates(project, limit);
+	return selectWithBudget(candidates.slice(0, limit), charBudget);
 }
 
 /**
@@ -739,8 +745,12 @@ export function handleSessionStart(
 	// Read MEMORY.md with 10k char budget
 	const memoryMdContent = readMemoryMd(10000);
 
-	// Get project memories with scoring
-	const memories = getProjectMemories(req.project, config.recallLimit ?? 30, 2000);
+	// Get all scored candidates (no budget yet — need full pool for recording)
+	const recallLimit = config.recallLimit ?? 30;
+	const allCandidates = getAllScoredCandidates(req.project, recallLimit);
+
+	// Apply budget to select what we actually inject
+	const memories = selectWithBudget(allCandidates.slice(0, recallLimit), 2000);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -757,6 +767,24 @@ export function handleSessionStart(
 	// Update access tracking for served memories
 	const servedIds = memories.map((m) => m.id);
 	updateAccessTracking(servedIds);
+
+	// Record all candidates + which were injected for predictive scorer
+	const injectedSet = new Set(memories.map((m) => m.id));
+	const candidatesForRecording = [
+		...allCandidates.map((c) => ({
+			id: c.id,
+			effScore: c.effScore,
+			source: "effective" as const,
+		})),
+		...predictedMemories
+			.filter((m) => !allCandidates.some((c) => c.id === m.id))
+			.map((m) => ({
+				id: m.id,
+				effScore: m.effScore,
+				source: "effective" as const,
+			})),
+	];
+	recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet);
 
 	// Format inject text
 	const injectParts: string[] = [];
@@ -990,6 +1018,10 @@ export function handleUserPromptSubmit(
 			.slice(0, selected.length)
 			.map((s) => (s as ScoredMemory).id);
 		updateAccessTracking(ids);
+
+		// Track FTS hits for predictive scorer data collection
+		const allMatchedIds = scored.map((s) => s.id);
+		trackFtsHits(req.sessionKey, allMatchedIds);
 
 		const queryTerms = words.join(" ");
 		const lines = selected.map((s) => `- ${s.content}`);

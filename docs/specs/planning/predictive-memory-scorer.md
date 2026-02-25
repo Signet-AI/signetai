@@ -1779,3 +1779,89 @@ after everything. Agent 6 runs in background after Agent 4.
 - [Hindsight: Agent Memory That Learns](https://github.com/vectorize-io/hindsight) (RRF + cross-encoder reranking reference)
 - [Generalized Contrastive Learning for Multi-Modal Retrieval and Ranking](https://dl.acm.org/doi/10.1145/3701716.3715227) (listwise loss reference)
 - [Solving Freshness in RAG: A Simple Recency Prior](https://arxiv.org/html/2509.19376) (recency fusion reference)
+
+---
+
+## Phase 0 Implementation Notes
+
+### What was implemented
+
+**Migration 015-session-memories** (`packages/core/src/migrations/015-session-memories.ts`)
+- `session_memories` table with full schema as planned (id, session_key,
+  memory_id, source, effective_score, predictor_score, final_score, rank,
+  was_injected, relevance_score, fts_hit_count, agent_preference, created_at)
+- UNIQUE constraint on (session_key, memory_id)
+- Indexes on session_key and memory_id
+- Two new columns on session_scores: `confidence REAL`, `continuity_reasoning TEXT`
+- Registered as version 15 in migration index
+
+**Session memory recording** (`packages/daemon/src/session-memories.ts`)
+- `recordSessionCandidates()`: batch INSERT OR IGNORE in a single write transaction
+- `trackFtsHits()`: UPDATE existing + INSERT OR IGNORE for new fts_only rows
+- Both bail early on missing sessionKey or empty inputs
+- All failures are non-fatal (warn + continue)
+
+**hooks.ts refactoring**
+- `ScoredMemory` interface exported for use by session-memories.ts
+- `selectWithBudget()` made generic: `<T extends { content: string }>`
+- `getProjectMemories()` split into `getAllScoredCandidates()` (no budget)
+  + wrapper that applies budget. Preserves existing behavior exactly.
+- `handleSessionStart()`: calls `getAllScoredCandidates()`, applies budget
+  via `selectWithBudget()`, records full candidate pool + injected set
+- `handleUserPromptSubmit()`: calls `trackFtsHits()` with all scored FTS matches
+- Predicted context memories that aren't in the main candidate pool are
+  included in recording with source="effective"
+
+**Enhanced continuity scoring** (`packages/daemon/src/pipeline/summary-worker.ts`)
+- `loadInjectedMemories()`: joins session_memories + memories to get injected
+  memory content previews. Falls back to empty array for old sessions.
+- `writePerMemoryRelevance()`: maps 8-char ID prefixes from LLM response
+  back to full memory IDs, writes relevance_score to session_memories.
+- `buildContinuityPrompt()` now includes injected memory list with truncated
+  previews and 8-char ID prefixes. Asks for confidence + per_memory array.
+- `ContinuityResult` extended with `confidence` and `per_memory` fields.
+- `scoreContinuity()` writes `memories_recalled` from actual injected count
+  (was hardcoded 0), writes `confidence` and `continuity_reasoning` to
+  session_scores.
+
+**Logger categories** — added `"summary-worker"` and `"session-memories"` to
+LogCategory union in logger.ts.
+
+### Why it was done this way
+
+- `getAllScoredCandidates()` was extracted as a separate exported function
+  rather than modifying `getProjectMemories()` in-place because the original
+  function tightly couples scoring with budget selection. The wrapper
+  `getProjectMemories()` was kept for backward compatibility with any internal
+  callers — minimal diff, same behavior.
+- `final_score` is set equal to `effective_score` until the predictor exists.
+  This means Phase 1 can simply start writing predictor_score and updating
+  final_score without schema changes.
+- FTS tracking uses UPDATE + INSERT OR IGNORE pair rather than UPSERT because
+  SQLite's UPSERT syntax would need the full column list and is harder to
+  read for the "increment if exists, create if not" pattern.
+- Per-memory relevance uses 8-char ID prefixes in the LLM prompt to keep
+  token count down while still being unambiguous (collision probability is
+  negligible for <50 memories per session).
+
+### What was different than planned
+
+- The plan suggested the UPDATE in trackFtsHits would be a "no-op if row
+  doesn't exist" — this is correct for SQLite (UPDATE WHERE with no match
+  returns 0 rows affected, no error), but worth noting explicitly.
+- Added LogCategory entries for the new modules — not in the original plan
+  but necessary since the codebase was using string literals that didn't
+  match the union type.
+- Migration test assertions needed updating (14 → 15 migration count).
+
+### Next steps
+
+1. **Phase 1: Rust crate scaffold + autograd** — the training data pipeline
+   is now in place. Next is building the Rust predictor crate with a small
+   MLP, autograd, and the training loop that reads from session_memories.
+2. **Phase 0 follow-ups** (optional, before Phase 1):
+   - Add a dashboard widget showing session_memories stats (candidate count,
+     injection rate, average relevance scores)
+   - Add an API endpoint to query session_memories for debugging
+   - Consider adding `source='predicted'` for predicted context memories
+     (currently all recorded as "effective")

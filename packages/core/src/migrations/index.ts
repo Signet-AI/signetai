@@ -20,6 +20,7 @@ import { up as sessionScores } from "./011-session-scores";
 import { up as scheduledTasks } from "./012-scheduled-tasks";
 import { up as ingestionTracking } from "./013-ingestion-tracking";
 import { up as telemetry } from "./014-telemetry";
+import { up as sessionMemories } from "./015-session-memories";
 
 // -- Public interface consumed by Database.init() --
 
@@ -89,6 +90,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 14,
 		name: "telemetry",
 		up: telemetry,
+	},
+	{
+		version: 15,
+		name: "session-memories",
+		up: sessionMemories,
 	},
 ];
 

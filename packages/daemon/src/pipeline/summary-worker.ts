@@ -265,10 +265,113 @@ async function processJob(
 // Continuity scoring
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Injected memory loading for continuity scoring
+// ---------------------------------------------------------------------------
+
+interface InjectedMemoryPreview {
+	readonly memoryId: string;
+	readonly content: string;
+	readonly source: string;
+	readonly effectiveScore: number;
+}
+
+function loadInjectedMemories(
+	accessor: DbAccessor,
+	sessionKey: string | null,
+): ReadonlyArray<InjectedMemoryPreview> {
+	if (!sessionKey) return [];
+
+	try {
+		return accessor.withReadDb((db) => {
+			const rows = db
+				.prepare(
+					`SELECT sm.memory_id, m.content, sm.source, sm.effective_score
+					 FROM session_memories sm
+					 JOIN memories m ON m.id = sm.memory_id
+					 WHERE sm.session_key = ? AND sm.was_injected = 1
+					 ORDER BY sm.rank ASC LIMIT 50`,
+				)
+				.all(sessionKey) as Array<{
+				memory_id: string;
+				content: string;
+				source: string;
+				effective_score: number | null;
+			}>;
+
+			return rows.map((r) => ({
+				memoryId: r.memory_id,
+				content: r.content,
+				source: r.source,
+				effectiveScore: r.effective_score ?? 0,
+			}));
+		});
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Write per-memory relevance scores back to session_memories.
+ * Maps LLM's 8-char ID prefixes to full memory IDs.
+ */
+function writePerMemoryRelevance(
+	accessor: DbAccessor,
+	sessionKey: string,
+	perMemory: ReadonlyArray<{ readonly id: string; readonly relevance: number }>,
+	injectedMemories: ReadonlyArray<InjectedMemoryPreview>,
+): void {
+	if (perMemory.length === 0) return;
+
+	// Build prefix → full ID lookup
+	const prefixMap = new Map<string, string>();
+	for (const mem of injectedMemories) {
+		prefixMap.set(mem.memoryId.slice(0, 8), mem.memoryId);
+	}
+
+	try {
+		accessor.withWriteTx((db) => {
+			const stmt = db.prepare(
+				`UPDATE session_memories SET relevance_score = ?
+				 WHERE session_key = ? AND memory_id = ?`,
+			);
+
+			for (const entry of perMemory) {
+				const fullId = prefixMap.get(entry.id);
+				if (!fullId) continue;
+				const score = Math.max(0, Math.min(1, entry.relevance));
+				stmt.run(score, sessionKey, fullId);
+			}
+		});
+	} catch (e) {
+		logger.warn("summary-worker", "Failed to write per-memory relevance", {
+			error: (e as Error).message,
+		});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Continuity scoring
+// ---------------------------------------------------------------------------
+
 function buildContinuityPrompt(
 	transcript: string,
 	summaryPreview: string,
+	injectedMemories: ReadonlyArray<InjectedMemoryPreview>,
 ): string {
+	let memorySection: string;
+	if (injectedMemories.length === 0) {
+		memorySection = "(no memories were injected for this session)";
+	} else {
+		const previews = injectedMemories.map((m) => {
+			const preview = m.content.length > 120
+				? `${m.content.slice(0, 120)}...`
+				: m.content;
+			return `- [${m.memoryId.slice(0, 8)}] (score=${m.effectiveScore.toFixed(2)}) ${preview}`;
+		});
+		memorySection = previews.join("\n");
+	}
+
 	return `Evaluate how well pre-loaded memories served this coding session.
 
 Consider:
@@ -276,15 +379,22 @@ Consider:
 - Did the user have to re-explain things that memory should have known?
 - Were there gaps where prior context would have helped?
 
+Pre-loaded memories (${injectedMemories.length} total):
+${memorySection}
+
 Return ONLY a JSON object (no markdown fences):
 {
   "score": 0.0-1.0,
+  "confidence": 0.0-1.0,
   "memories_used": <number of pre-loaded memories that were actually relevant>,
   "novel_context_count": <number of times user had to re-explain something>,
-  "reasoning": "Brief explanation of the score"
+  "reasoning": "Brief explanation of the score",
+  "per_memory": [{"id": "<8-char prefix>", "relevance": 0.0-1.0}]
 }
 
 Score guide: 1.0 = memories perfectly covered all needed context, 0.0 = memories were useless and everything was re-explained.
+Confidence: how certain you are in your scoring (1.0 = very confident, 0.0 = basically guessing).
+per_memory: rate each injected memory's relevance to the session. Use the 8-char ID prefix shown in brackets above.
 
 Session summary:
 ${summaryPreview}
@@ -295,9 +405,14 @@ ${transcript.slice(-4000)}`;
 
 interface ContinuityResult {
 	readonly score: number;
+	readonly confidence: number;
 	readonly memories_used: number;
 	readonly novel_context_count: number;
 	readonly reasoning: string;
+	readonly per_memory: ReadonlyArray<{
+		readonly id: string;
+		readonly relevance: number;
+	}>;
 }
 
 async function scoreContinuity(
@@ -306,7 +421,14 @@ async function scoreContinuity(
 	job: SummaryJobRow,
 	summary: string,
 ): Promise<void> {
-	const prompt = buildContinuityPrompt(job.transcript, summary.slice(0, 2000));
+	// Load injected memories for this session (empty array for old sessions)
+	const injectedMemories = loadInjectedMemories(accessor, job.session_key);
+
+	const prompt = buildContinuityPrompt(
+		job.transcript,
+		summary.slice(0, 2000),
+		injectedMemories,
+	);
 
 	const raw = await provider.generate(prompt, { timeoutMs: LLM_TIMEOUT_MS });
 
@@ -323,12 +445,37 @@ async function scoreContinuity(
 	}
 	if (typeof parsed.score !== "number") return;
 
+	const perMemoryRaw = Array.isArray(parsed.per_memory) ? parsed.per_memory : [];
+	const perMemory = perMemoryRaw
+		.filter(
+			(e: unknown): e is { id: string; relevance: number } =>
+				typeof e === "object" &&
+				e !== null &&
+				typeof (e as Record<string, unknown>).id === "string" &&
+				typeof (e as Record<string, unknown>).relevance === "number",
+		)
+		.map((e) => ({ id: e.id, relevance: e.relevance }));
+
 	const result: ContinuityResult = {
 		score: Math.max(0, Math.min(1, parsed.score)),
+		confidence: typeof parsed.confidence === "number"
+			? Math.max(0, Math.min(1, parsed.confidence))
+			: 0,
 		memories_used: typeof parsed.memories_used === "number" ? parsed.memories_used : 0,
 		novel_context_count: typeof parsed.novel_context_count === "number" ? parsed.novel_context_count : 0,
 		reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
+		per_memory: perMemory,
 	};
+
+	// Write per-memory relevance scores back to session_memories
+	if (job.session_key && result.per_memory.length > 0) {
+		writePerMemoryRelevance(
+			accessor,
+			job.session_key,
+			result.per_memory,
+			injectedMemories,
+		);
+	}
 
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
@@ -337,26 +484,32 @@ async function scoreContinuity(
 		db.prepare(
 			`INSERT INTO session_scores
 			 (id, session_key, project, harness, score, memories_recalled,
-			  memories_used, novel_context_count, reasoning, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  memories_used, novel_context_count, reasoning,
+			  confidence, continuity_reasoning, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			id,
 			job.session_key || "unknown",
 			job.project || null,
 			job.harness,
 			result.score,
-			0, // memories_recalled — would need session-start data to fill accurately
+			injectedMemories.length,
 			result.memories_used,
 			result.novel_context_count,
 			result.reasoning,
+			result.confidence,
+			result.reasoning, // full reasoning for audit trail
 			now,
 		);
 	});
 
 	logger.info("summary-worker", "Session continuity scored", {
 		score: result.score,
+		confidence: result.confidence,
+		memoriesRecalled: injectedMemories.length,
 		memoriesUsed: result.memories_used,
 		novelContext: result.novel_context_count,
+		perMemoryScores: result.per_memory.length,
 		sessionKey: job.session_key,
 		project: job.project,
 	});

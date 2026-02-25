@@ -38,6 +38,8 @@ export type LogCategory =
 	| "secrets" // Secrets management
 	| "hooks" // Hook handlers
 	| "pipeline" // Extraction/decision pipeline
+	| "summary-worker" // Session summary worker
+	| "session-memories" // Session memory tracking
 	| "system"; // System events
 
 export interface LogEntry {

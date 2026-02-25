@@ -29,6 +29,7 @@ const {
 	selectWithBudget,
 	isDuplicate,
 	inferType,
+	getAllScoredCandidates,
 } = hooks;
 
 // ============================================================================
@@ -118,6 +119,44 @@ function createMemoryDb(
 			INSERT INTO memories_fts(rowid, content, tags)
 			VALUES (new.rowid, new.content, new.tags);
 		END
+	`);
+
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS session_memories (
+			id TEXT PRIMARY KEY,
+			session_key TEXT NOT NULL,
+			memory_id TEXT NOT NULL,
+			source TEXT NOT NULL,
+			effective_score REAL,
+			predictor_score REAL,
+			final_score REAL NOT NULL,
+			rank INTEGER NOT NULL,
+			was_injected INTEGER NOT NULL,
+			relevance_score REAL,
+			fts_hit_count INTEGER NOT NULL DEFAULT 0,
+			agent_preference TEXT,
+			created_at TEXT NOT NULL,
+			UNIQUE(session_key, memory_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_session_memories_session
+			ON session_memories(session_key);
+		CREATE INDEX IF NOT EXISTS idx_session_memories_memory
+			ON session_memories(memory_id)
+	`);
+
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS summary_jobs (
+			id TEXT PRIMARY KEY,
+			session_key TEXT,
+			harness TEXT NOT NULL,
+			project TEXT,
+			transcript TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			attempts INTEGER DEFAULT 0,
+			max_attempts INTEGER DEFAULT 3,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			completed_at TEXT
+		)
 	`);
 
 	const stmt = db.prepare(`
@@ -1080,5 +1119,196 @@ agent:
 
 		expect(result.inject).toContain("- First fact");
 		expect(result.inject).toContain("- Second fact");
+	});
+});
+
+// ============================================================================
+// selectWithBudget generic type preservation
+// ============================================================================
+
+describe("selectWithBudget type preservation", () => {
+	test("preserves extra properties on input type", () => {
+		const rows = [
+			{ content: "aaaa", id: "1", score: 0.9 },
+			{ content: "bbbb", id: "2", score: 0.7 },
+		];
+		const result = selectWithBudget(rows, 10);
+		// Should preserve id and score properties
+		expect(result[0].id).toBe("1");
+		expect(result[0].score).toBe(0.9);
+		expect(result[1].id).toBe("2");
+	});
+});
+
+// ============================================================================
+// getAllScoredCandidates
+// ============================================================================
+
+describe("getAllScoredCandidates", () => {
+	test("returns scored memories without budget truncation", () => {
+		createMemoryDb([
+			{ content: "Memory A", importance: 0.9 },
+			{ content: "Memory B", importance: 0.8 },
+			{ content: "Memory C", importance: 0.7 },
+		]);
+
+		const candidates = getAllScoredCandidates(undefined, 30);
+
+		// All three should be returned (no budget applied)
+		expect(candidates.length).toBe(3);
+		// Each should have effScore
+		for (const c of candidates) {
+			expect(c.effScore).toBeGreaterThan(0);
+			expect(c.id).toBeTruthy();
+			expect(c.content).toBeTruthy();
+		}
+	});
+
+	test("filters out low-score memories below 0.2 threshold", () => {
+		const veryOld = new Date(
+			Date.now() - 365 * 24 * 60 * 60 * 1000,
+		).toISOString();
+		createMemoryDb([
+			{
+				content: "Ancient low-importance fact",
+				importance: 0.1,
+				created_at: veryOld,
+			},
+			{ content: "Recent important fact", importance: 0.9 },
+		]);
+
+		const candidates = getAllScoredCandidates(undefined, 30);
+
+		// Only the recent one should pass
+		expect(candidates.length).toBe(1);
+		expect(candidates[0].content).toBe("Recent important fact");
+	});
+
+	test("sorts project matches first", () => {
+		createMemoryDb([
+			{
+				content: "General memory",
+				importance: 0.9,
+				project: undefined,
+			},
+			{
+				content: "Project-specific memory",
+				importance: 0.7,
+				project: "/home/user/myproject",
+			},
+		]);
+
+		const candidates = getAllScoredCandidates("/home/user/myproject", 30);
+
+		if (candidates.length >= 2) {
+			expect(candidates[0].content).toBe("Project-specific memory");
+		}
+	});
+
+	test("returns empty for missing database", () => {
+		// No createMemoryDb call
+		const candidates = getAllScoredCandidates(undefined, 30);
+		expect(candidates).toEqual([]);
+	});
+});
+
+// ============================================================================
+// Session memory recording integration
+// ============================================================================
+
+describe("session memory recording integration", () => {
+	test("handleSessionStart records candidates to session_memories table", () => {
+		createMemoryDb([
+			{ content: "User prefers dark mode", importance: 0.9 },
+			{ content: "Project uses TypeScript", importance: 0.7 },
+		]);
+
+		handleSessionStart({
+			harness: "test",
+			sessionKey: "integration-session-001",
+		});
+
+		// Read session_memories directly
+		const db = openTestDb();
+		const rows = db
+			.prepare(
+				"SELECT memory_id, source, was_injected, rank, effective_score FROM session_memories WHERE session_key = ? ORDER BY rank ASC",
+			)
+			.all("integration-session-001") as Array<{
+			memory_id: string;
+			source: string;
+			was_injected: number;
+			rank: number;
+			effective_score: number;
+		}>;
+		db.close();
+
+		// Should have recorded at least some candidates
+		expect(rows.length).toBeGreaterThan(0);
+		// All should have source = 'effective'
+		for (const row of rows) {
+			expect(row.source).toBe("effective");
+			expect(row.effective_score).toBeGreaterThan(0);
+		}
+		// At least one should be injected
+		const injectedCount = rows.filter((r) => r.was_injected === 1).length;
+		expect(injectedCount).toBeGreaterThan(0);
+	});
+
+	test("handleSessionStart does not record when sessionKey is missing", () => {
+		createMemoryDb([
+			{ content: "Some memory", importance: 0.9 },
+		]);
+
+		handleSessionStart({
+			harness: "test",
+			// no sessionKey
+		});
+
+		const db = openTestDb();
+		const count = db
+			.prepare("SELECT COUNT(*) as cnt FROM session_memories")
+			.get() as { cnt: number };
+		db.close();
+
+		expect(count.cnt).toBe(0);
+	});
+
+	test("handleUserPromptSubmit tracks FTS hits", () => {
+		createMemoryDb([
+			{
+				content: "TypeScript is the preferred language for this project",
+				importance: 0.8,
+			},
+		]);
+
+		// First, do a session start to establish context
+		handleSessionStart({
+			harness: "test",
+			sessionKey: "fts-tracking-session",
+		});
+
+		// Now submit a prompt that will match via FTS
+		handleUserPromptSubmit({
+			harness: "test",
+			sessionKey: "fts-tracking-session",
+			userPrompt: "What TypeScript language config should we use?",
+		});
+
+		const db = openTestDb();
+		const rows = db
+			.prepare(
+				"SELECT memory_id, fts_hit_count, source FROM session_memories WHERE session_key = ?",
+			)
+			.all("fts-tracking-session") as Array<{
+			memory_id: string;
+			fts_hit_count: number;
+			source: string;
+		}>;
+		db.close();
+
+		// Should have at least one row with fts_hit_count > 0
+		const withHits = rows.filter((r) => r.fts_hit_count > 0);
+		expect(withHits.length).toBeGreaterThan(0);
 	});
 });
