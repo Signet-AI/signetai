@@ -115,6 +115,8 @@ export interface UserPromptSubmitRequest {
 export interface UserPromptSubmitResponse {
 	inject: string;
 	memoryCount: number;
+	queryTerms?: string;
+	engine?: string;
 }
 
 export interface SessionEndRequest {
@@ -224,6 +226,57 @@ export function selectWithBudget(
 		used += row.content.length;
 	}
 	return selected;
+}
+
+/** Build a brief "since your last session" summary for temporal awareness */
+function getSessionGapSummary(): string | undefined {
+	if (!existsSync(MEMORY_DB)) return undefined;
+
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			// Find last completed session end time
+			const lastSession = db
+				.prepare(
+					"SELECT MAX(completed_at) as last_end FROM summary_jobs WHERE status = 'completed'",
+				)
+				.get() as { last_end: string | null } | undefined;
+
+			if (!lastSession?.last_end) return undefined;
+
+			const lastEnd = lastSession.last_end;
+			const lastEndMs = new Date(lastEnd).getTime();
+			const gapMs = Date.now() - lastEndMs;
+
+			// Format time gap
+			let gapStr: string;
+			const gapMins = Math.floor(gapMs / 60000);
+			const gapHours = Math.floor(gapMs / 3600000);
+			const gapDays = Math.floor(gapMs / 86400000);
+
+			if (gapDays > 7) gapStr = "7+ days ago";
+			else if (gapDays >= 1) gapStr = `${gapDays}d ago`;
+			else if (gapHours >= 1) gapStr = `${gapHours}h ago`;
+			else gapStr = `${Math.max(1, gapMins)}m ago`;
+
+			// Count new memories since last session
+			const memCount = db
+				.prepare(
+					"SELECT COUNT(*) as cnt FROM memories WHERE created_at > ?",
+				)
+				.get(lastEnd) as { cnt: number };
+
+			// Count sessions since last session
+			const sessionCount = db
+				.prepare(
+					"SELECT COUNT(*) as cnt FROM summary_jobs WHERE completed_at > ? AND status = 'completed'",
+				)
+				.get(lastEnd) as { cnt: number };
+
+			return `[since last session: ${memCount.cnt} new memories, ${sessionCount.cnt} sessions captured, last active ${gapStr}]`;
+		});
+	} catch {
+		return undefined;
+	}
 }
 
 /** Check if content overlaps 70%+ with existing memories via FTS */
@@ -707,6 +760,12 @@ export function handleSessionStart(
 
 	injectParts.push("[memory active | /remember | /recall]");
 
+	// Inject session gap summary for temporal awareness
+	const gapSummary = getSessionGapSummary();
+	if (gapSummary) {
+		injectParts.push(gapSummary);
+	}
+
 	// Inject local date/time and timezone
 	const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 	const now = new Date().toLocaleString("en-US", {
@@ -755,7 +814,9 @@ export function handleSessionStart(
 	}
 
 	if (memories.length > 0) {
-		injectParts.push("\n## Relevant Memories\n");
+		injectParts.push(
+			`\n## Relevant Memories (auto-loaded | scored by importance x recency | ${memories.length} results)\n`,
+		);
 		for (const mem of memories) {
 			const tagStr = mem.tags ? ` [${mem.tags}]` : "";
 			injectParts.push(`- ${mem.content}${tagStr}`);
@@ -921,8 +982,9 @@ export function handleUserPromptSubmit(
 			.map((s) => (s as ScoredMemory).id);
 		updateAccessTracking(ids);
 
+		const queryTerms = words.join(" ");
 		const lines = selected.map((s) => `- ${s.content}`);
-		const inject = `[relevant memories]\n${lines.join("\n")}`;
+		const inject = `[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=fts+decay]\n${lines.join("\n")}`;
 
 		const duration = Date.now() - start;
 		logger.info("hooks", "User prompt submit", {
@@ -936,7 +998,12 @@ export function handleUserPromptSubmit(
 			durationMs: duration,
 		});
 
-		return { inject, memoryCount: selected.length };
+		return {
+			inject,
+			memoryCount: selected.length,
+			queryTerms,
+			engine: "fts+decay",
+		};
 	} catch (e) {
 		logger.error("hooks", "User prompt submit failed", e as Error);
 		return { inject: "", memoryCount: 0 };

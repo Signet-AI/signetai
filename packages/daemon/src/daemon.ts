@@ -42,6 +42,7 @@ import {
 import {
 	parseSimpleYaml,
 	buildSignetBlock,
+	buildArchitectureDoc,
 	stripSignetBlock,
 	vectorSearch,
 	keywordSearch,
@@ -6936,6 +6937,21 @@ ${fileList}
 		} catch (e) {
 			logger.sync.failed("opencode", e as Error);
 		}
+	}
+
+	// Write SIGNET-ARCHITECTURE.md if missing or outdated
+	const archPath = join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md");
+	try {
+		const archContent = buildArchitectureDoc();
+		const existing = existsSync(archPath)
+			? readFileSync(archPath, "utf-8")
+			: "";
+		if (existing !== archContent) {
+			writeFileSync(archPath, archContent);
+			logger.info("sync", "SIGNET-ARCHITECTURE.md updated");
+		}
+	} catch (e) {
+		logger.error("sync", "Failed to write SIGNET-ARCHITECTURE.md", e as Error);
 	}
 }
 

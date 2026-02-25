@@ -146,6 +146,7 @@ export type {
 // Markdown utilities
 export {
 	buildSignetBlock,
+	buildArchitectureDoc,
 	stripSignetBlock,
 	hasSignetBlock,
 	extractSignetBlock,

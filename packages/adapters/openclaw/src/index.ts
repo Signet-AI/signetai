@@ -53,6 +53,8 @@ export interface PreCompactionResult {
 export interface UserPromptSubmitResult {
 	inject: string;
 	memoryCount: number;
+	queryTerms?: string;
+	engine?: string;
 }
 
 export interface SessionEndResult {
@@ -854,8 +856,12 @@ const signetPlugin = {
 						sessionKey,
 					});
 					if (result?.inject) {
+						const queryAttr = result.queryTerms
+							? ` query="${result.queryTerms.replace(/"/g, "'").slice(0, 100)}"`
+							: "";
+						const attrs = `source="auto-recall"${queryAttr} results="${result.memoryCount}" engine="${result.engine ?? "fts+decay"}"`;
 						return {
-							prependContext: `<signet-memory>\n${result.inject}\n</signet-memory>`,
+							prependContext: `<signet-memory ${attrs}>\n${result.inject}\n</signet-memory>`,
 						};
 					}
 				}
