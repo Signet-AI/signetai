@@ -53,9 +53,18 @@ const PIPELINE_WORKER_NUMS = [
 type YamlValue = string | number | boolean | null | YamlObject | YamlValue[];
 type YamlObject = { [key: string]: YamlValue };
 
+// Source tracking: which file each section was resolved from
+type ConfigSource = "agent" | "config";
+
 // Parse both files into separate form states
 let agent = $state<YamlObject>({});
 let config = $state<YamlObject>({});
+
+// Track where each config section came from (for saving back to the right file)
+let embeddingsSource = $state<ConfigSource>("config");
+let searchSource = $state<ConfigSource>("config");
+let memorySource = $state<ConfigSource>("config");
+let pathsSource = $state<ConfigSource>("config");
 
 let agentFile = $derived(
 	configFiles?.find((f) => f.name === "agent.yaml")
@@ -78,6 +87,30 @@ $effect(() => {
 			config = JSON.parse(JSON.stringify(parse(configFile.content) ?? {}));
 		} catch { config = {}; }
 	} else { config = {}; }
+});
+
+// Determine config sources after both files are parsed
+// Prefer config.yaml if it has the setting, else fall back to agent.yaml
+$effect(() => {
+	// Embeddings: check config.embeddings, then agent.embedding (singular) or agent.embeddings
+	const configHasEmb = get(config, "embeddings", "provider") !== null;
+	const agentHasEmb = get(agent, "embedding", "provider") !== null || get(agent, "embeddings", "provider") !== null;
+	embeddingsSource = configHasEmb ? "config" : agentHasEmb ? "agent" : "config";
+
+	// Search
+	const configHasSearch = get(config, "search", "alpha") !== null;
+	const agentHasSearch = get(agent, "search", "alpha") !== null;
+	searchSource = configHasSearch ? "config" : agentHasSearch ? "agent" : "config";
+
+	// Memory (session_budget, decay_rate - not pipelineV2 which is always in agent)
+	const configHasMem = get(config, "memory", "session_budget") !== null || get(config, "memory", "decay_rate") !== null;
+	const agentHasMem = get(agent, "memory", "session_budget") !== null || get(agent, "memory", "decay_rate") !== null;
+	memorySource = configHasMem ? "config" : agentHasMem ? "agent" : "config";
+
+	// Paths
+	const configHasPaths = get(config, "paths", "database") !== null;
+	const agentHasPaths = get(agent, "paths", "database") !== null;
+	pathsSource = configHasPaths ? "config" : agentHasPaths ? "agent" : "config";
 });
 
 // Helpers scoped to a specific form object
@@ -115,6 +148,88 @@ const cStr = (path: string[]) => String(get(config, ...path) ?? "");
 const cNum = (path: string[]) => { const v = get(config, ...path); return typeof v === "number" ? v : (v ? Number(v) : ""); };
 const cOnStr = (path: string[]) => (e: Event) => set(config, path, (e.target as HTMLInputElement).value);
 const cOnNum = (path: string[]) => (e: Event) => { const v = (e.target as HTMLInputElement).value; set(config, path, v === "" ? null : Number(v)); };
+
+// Helper to get embeddings path - handles singular "embedding" vs plural "embeddings"
+function getEmbPath(): string[] {
+	if (embeddingsSource === "config") return ["embeddings"];
+	// agent.yaml might use "embedding" (singular) or "embeddings" (plural)
+	if (get(agent, "embedding", "provider") !== null) return ["embedding"];
+	return ["embeddings"];
+}
+
+// Unified accessors for embeddings (reads/writes to correct source)
+const embStr = (field: string) => {
+	const src = embeddingsSource === "config" ? config : agent;
+	return String(get(src, ...getEmbPath(), field) ?? "");
+};
+const embNum = (field: string) => {
+	const src = embeddingsSource === "config" ? config : agent;
+	const v = get(src, ...getEmbPath(), field);
+	return typeof v === "number" ? v : (v ? Number(v) : "");
+};
+const embOnStr = (field: string) => (e: Event) => {
+	const target = embeddingsSource === "config" ? config : agent;
+	set(target, [...getEmbPath(), field], (e.target as HTMLInputElement).value);
+};
+const embOnNum = (field: string) => (e: Event) => {
+	const target = embeddingsSource === "config" ? config : agent;
+	const v = (e.target as HTMLInputElement).value;
+	set(target, [...getEmbPath(), field], v === "" ? null : Number(v));
+};
+const embOnSelect = (field: string) => (v: string | undefined) => {
+	const target = embeddingsSource === "config" ? config : agent;
+	set(target, [...getEmbPath(), field], v ?? "");
+};
+
+// Unified accessors for search
+const srchStr = (field: string) => {
+	const src = searchSource === "config" ? config : agent;
+	return String(get(src, "search", field) ?? "");
+};
+const srchNum = (field: string) => {
+	const src = searchSource === "config" ? config : agent;
+	const v = get(src, "search", field);
+	return typeof v === "number" ? v : (v ? Number(v) : "");
+};
+const srchBool = (field: string) => {
+	const src = searchSource === "config" ? config : agent;
+	return Boolean(get(src, "search", field));
+};
+const srchOnNum = (field: string) => (e: Event) => {
+	const target = searchSource === "config" ? config : agent;
+	const v = (e.target as HTMLInputElement).value;
+	set(target, ["search", field], v === "" ? null : Number(v));
+};
+const srchOnBool = (field: string) => (e: Event) => {
+	const target = searchSource === "config" ? config : agent;
+	set(target, ["search", field], (e.target as HTMLInputElement).checked);
+};
+
+// Unified accessors for memory settings (not pipelineV2)
+const memStr = (field: string) => {
+	const src = memorySource === "config" ? config : agent;
+	return String(get(src, "memory", field) ?? "");
+};
+const memNum = (field: string) => {
+	const src = memorySource === "config" ? config : agent;
+	const v = get(src, "memory", field);
+	return typeof v === "number" ? v : (v ? Number(v) : "");
+};
+const memOnNum = (field: string) => (e: Event) => {
+	const target = memorySource === "config" ? config : agent;
+	const v = (e.target as HTMLInputElement).value;
+	set(target, ["memory", field], v === "" ? null : Number(v));
+};
+
+// Unified accessors for paths
+const pathStr = (field: string) => {
+	const src = pathsSource === "config" ? config : agent;
+	return String(get(src, "paths", field) ?? "");
+};
+const pathOnStr = (field: string) => (e: Event) => {
+	const target = pathsSource === "config" ? config : agent;
+	set(target, ["paths", field], (e.target as HTMLInputElement).value);
+};
 
 function harnessArray(): string[] {
 	const v = get(agent, "harnesses");
@@ -234,21 +349,19 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 				</FormSection>
 			{/if}
 
-			<!-- === EMBEDDINGS (config.yaml) === -->
-			{#if configFile}
+			<!-- === EMBEDDINGS (config.yaml or agent.yaml) === -->
+			{#if configFile || agentFile}
 				<FormSection title="Embeddings" defaultOpen={false} description="Vector embedding configuration for semantic memory search. Embeddings power the vector half of hybrid recall.">
 					{#snippet children()}
 						<FormField label="Provider" description="Embedding backend. Ollama runs locally, OpenAI requires an API key.">
 							{#snippet children()}
 								<Select.Root
 									type="single"
-									value={cStr(["embeddings", "provider"])}
-									onValueChange={(v) =>
-										set(config, ["embeddings", "provider"], v ?? "")
-									}
+									value={embStr("provider")}
+									onValueChange={embOnSelect("provider")}
 								>
 									<Select.Trigger class={selectTriggerClass}>
-										{cStr(["embeddings", "provider"]) || "— select —"}
+										{embStr("provider") || "— select —"}
 									</Select.Trigger>
 									<Select.Content class={selectContentClass}>
 										<Select.Item class={selectItemClass} value="" label="— select —" />
@@ -260,99 +373,99 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 						</FormField>
 						<FormField label="Model" description="Ollama: nomic-embed-text (768d), all-minilm (384d), mxbai-embed-large (1024d). OpenAI: text-embedding-3-small (1536d), text-embedding-3-large (3072d).">
 							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["embeddings", "model"])} oninput={cOnStr(["embeddings", "model"])} />
+								<input type="text" class="inp" value={embStr("model")} oninput={embOnStr("model")} />
 							{/snippet}
 						</FormField>
 						<FormField label="Dimensions" description="Must match the model's output dimension. Mismatched dimensions will produce broken search results.">
 							{#snippet children()}
-								<input type="number" class="inp" value={cNum(["embeddings", "dimensions"])} oninput={cOnNum(["embeddings", "dimensions"])} />
+								<input type="number" class="inp" value={embNum("dimensions")} oninput={embOnNum("dimensions")} />
 							{/snippet}
 						</FormField>
 						<FormField label="Base URL" description="Ollama default: http://localhost:11434. OpenAI default: https://api.openai.com/v1.">
 							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["embeddings", "base_url"])} oninput={cOnStr(["embeddings", "base_url"])} />
+								<input type="text" class="inp" value={embStr("base_url")} oninput={embOnStr("base_url")} />
 							{/snippet}
 						</FormField>
 						<FormField label="API Key" description="Optional for Ollama, required for OpenAI. Use $secret:NAME to reference a stored secret instead of plaintext.">
 							{#snippet children()}
-								<input type="password" class="inp" value={cStr(["embeddings", "api_key"])} oninput={cOnStr(["embeddings", "api_key"])} />
+								<input type="password" class="inp" value={embStr("api_key")} oninput={embOnStr("api_key")} />
 							{/snippet}
 						</FormField>
 					{/snippet}
 				</FormSection>
 
-				<!-- === SEARCH (config.yaml) === -->
+				<!-- === SEARCH (config.yaml or agent.yaml) === -->
 				<FormSection title="Search" defaultOpen={false} description="Hybrid search tuning. Controls the blend between semantic (vector) and keyword (BM25) retrieval.">
 					{#snippet children()}
 						<FormField label="Alpha" description="Vector weight (0–1). At 0.9 results are heavily semantic; at 0.3 they skew toward keyword matching. Default 0.7 works well generally.">
 							{#snippet children()}
-								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "alpha"])} oninput={cOnNum(["search", "alpha"])} />
+								<input type="number" class="inp" min="0" max="1" step="0.1" value={srchNum("alpha")} oninput={srchOnNum("alpha")} />
 							{/snippet}
 						</FormField>
 						<FormField label="Top K" description="Candidate count fetched from each source (BM25 and vector) before alpha-blending. Default: 20.">
 							{#snippet children()}
-								<input type="number" class="inp" value={cNum(["search", "top_k"])} oninput={cOnNum(["search", "top_k"])} />
+								<input type="number" class="inp" value={srchNum("top_k")} oninput={srchOnNum("top_k")} />
 							{/snippet}
 						</FormField>
 						<FormField label="Min Score" description="Minimum combined score to include in results. Results below this threshold are dropped. Default: 0.3.">
 							{#snippet children()}
-								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "min_score"])} oninput={cOnNum(["search", "min_score"])} />
+								<input type="number" class="inp" min="0" max="1" step="0.1" value={srchNum("min_score")} oninput={srchOnNum("min_score")} />
 							{/snippet}
 						</FormField>
 						<div class="sub-heading">Rehearsal Boost</div>
 						<FormField label="Rehearsal enabled" description="Boost scores for frequently-recalled memories. Uses access_count and last_accessed to reward useful memories.">
 							{#snippet children()}
 								<label class="toggle">
-									<input type="checkbox" checked={Boolean(get(config, "search", "rehearsal_enabled"))} onchange={(e) => set(config, ["search", "rehearsal_enabled"], (e.target as HTMLInputElement).checked)} />
+									<input type="checkbox" checked={srchBool("rehearsal_enabled")} onchange={srchOnBool("rehearsal_enabled")} />
 									<span class="toggle-track"><span class="toggle-thumb"></span></span>
 								</label>
 							{/snippet}
 						</FormField>
 						<FormField label="Rehearsal weight" description="Score multiplier for rehearsal boost. Higher = more impact from recall frequency. Default: 0.1.">
 							{#snippet children()}
-								<input type="number" class="inp" min="0" max="1" step="0.05" value={cNum(["search", "rehearsal_weight"])} oninput={cOnNum(["search", "rehearsal_weight"])} />
+								<input type="number" class="inp" min="0" max="1" step="0.05" value={srchNum("rehearsal_weight")} oninput={srchOnNum("rehearsal_weight")} />
 							{/snippet}
 						</FormField>
 						<FormField label="Rehearsal half-life (days)" description="Days until rehearsal boost decays to half. Lower = faster decay of recall-frequency boost. Default: 30.">
 							{#snippet children()}
-								<input type="number" class="inp" min="1" max="365" step="1" value={cNum(["search", "rehearsal_half_life_days"])} oninput={cOnNum(["search", "rehearsal_half_life_days"])} />
+								<input type="number" class="inp" min="1" max="365" step="1" value={srchNum("rehearsal_half_life_days")} oninput={srchOnNum("rehearsal_half_life_days")} />
 							{/snippet}
 						</FormField>
 					{/snippet}
 				</FormSection>
 
-				<!-- === MEMORY (config.yaml) === -->
+				<!-- === MEMORY (config.yaml or agent.yaml) === -->
 				<FormSection title="Memory" defaultOpen={false} description="Memory system settings. Controls how much context is injected into sessions and how memories age over time.">
 					{#snippet children()}
 						<FormField label="Session budget" description="Character limit for context injected at session start via hooks. Default: 2000.">
 							{#snippet children()}
-								<input type="number" class="inp" value={cNum(["memory", "session_budget"])} oninput={cOnNum(["memory", "session_budget"])} />
+								<input type="number" class="inp" value={memNum("session_budget")} oninput={memOnNum("session_budget")} />
 							{/snippet}
 						</FormField>
 						<FormField label="MEMORY.md budget" description="Character limit for the auto-generated MEMORY.md summary. Default: 10000.">
 							{#snippet children()}
-								<input type="number" class="inp" value={cNum(["memory", "current_md_budget"])} oninput={cOnNum(["memory", "current_md_budget"])} />
+								<input type="number" class="inp" value={memNum("current_md_budget")} oninput={memOnNum("current_md_budget")} />
 							{/snippet}
 						</FormField>
 						<FormField label="Decay rate" description="Daily importance decay factor for non-pinned memories. Formula: importance(t) = base × decay_rate^days. 0.99 = slow, 0.95 = default, 0.90 = fast.">
 							{#snippet children()}
-								<input type="number" class="inp" min="0" max="1" step="0.01" value={cNum(["memory", "decay_rate"])} oninput={cOnNum(["memory", "decay_rate"])} />
+								<input type="number" class="inp" min="0" max="1" step="0.01" value={memNum("decay_rate")} oninput={memOnNum("decay_rate")} />
 							{/snippet}
 						</FormField>
 					{/snippet}
 				</FormSection>
 
-				<!-- === PATHS (config.yaml) === -->
+				<!-- === PATHS (config.yaml or agent.yaml) === -->
 				<FormSection title="Paths" defaultOpen={false} description="File paths for memory storage. All paths are relative to ~/.agents/ (or $SIGNET_PATH).">
 					{#snippet children()}
 						<FormField label="Database" description="SQLite database file for structured memory storage.">
 							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["paths", "database"])} oninput={cOnStr(["paths", "database"])} />
+								<input type="text" class="inp" value={pathStr("database")} oninput={pathOnStr("database")} />
 							{/snippet}
 						</FormField>
 						<FormField label="MEMORY.md" description="Output path for the auto-generated working memory summary.">
 							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["paths", "current_md"])} oninput={cOnStr(["paths", "current_md"])} />
+								<input type="text" class="inp" value={pathStr("current_md")} oninput={pathOnStr("current_md")} />
 							{/snippet}
 						</FormField>
 					{/snippet}
