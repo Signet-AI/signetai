@@ -377,7 +377,7 @@ export function startSummaryWorker(
 		if (stopped) return;
 
 		// Re-check config each tick — respect runtime config changes
-		const cfg = loadMemoryConfig();
+		const cfg = loadMemoryConfig(AGENTS_DIR);
 		if (!cfg.pipelineV2.enabled && !cfg.pipelineV2.shadowMode) {
 			scheduleTick(POLL_INTERVAL_MS);
 			return;

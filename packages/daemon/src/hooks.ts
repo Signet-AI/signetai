@@ -1031,7 +1031,7 @@ export function handleSessionEnd(
 	}
 
 	// Respect the pipeline master switch
-	const memoryCfg = loadMemoryConfig();
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
 		logger.info("hooks", "Session end skipped — pipeline disabled");
 		return { memoriesSaved: 0 };
