@@ -9,9 +9,20 @@ use crate::commands;
 
 pub const TRAY_ID: &str = "signet-tray";
 
-// Embed icons at compile time so they work in release builds
+// Embed icons at compile time so they work in release builds.
+// Use @2x (44x44) on macOS for retina crispness; 1x (22x22) elsewhere.
+#[cfg(target_os = "macos")]
+const ICON_RUNNING: &[u8] = include_bytes!("../../icons/signet-running@2x.png");
+#[cfg(target_os = "macos")]
+const ICON_STOPPED: &[u8] = include_bytes!("../../icons/signet-stopped@2x.png");
+#[cfg(target_os = "macos")]
+const ICON_ERROR: &[u8] = include_bytes!("../../icons/signet-error@2x.png");
+
+#[cfg(not(target_os = "macos"))]
 const ICON_RUNNING: &[u8] = include_bytes!("../../icons/signet-running.png");
+#[cfg(not(target_os = "macos"))]
 const ICON_STOPPED: &[u8] = include_bytes!("../../icons/signet-stopped.png");
+#[cfg(not(target_os = "macos"))]
 const ICON_ERROR: &[u8] = include_bytes!("../../icons/signet-error.png");
 
 fn decode_png(data: &[u8]) -> Image<'static> {
@@ -100,6 +111,26 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         }
         "search-memories" => {
             open_search_window(app);
+        }
+        "toggle-autostart" => {
+            #[cfg(target_os = "macos")]
+            {
+                use crate::platform::autostart;
+                if autostart::is_autostart_enabled() {
+                    autostart::remove_autostart();
+                } else {
+                    autostart::ensure_autostart();
+                }
+                // Rebuild the current menu to reflect the new state
+                if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                    // Rebuild whichever menu is currently showing
+                    // Use stopped menu as a simple refresh — the poll loop
+                    // will replace it with the correct state on next tick
+                    if let Ok(menu) = build_stopped_menu(app) {
+                        let _ = tray.set_menu(Some(menu));
+                    }
+                }
+            }
         }
         "quit" => {
             app.exit(0);
@@ -349,6 +380,20 @@ pub fn build_running_menu(
             .build(app)?,
     );
 
+    // Autostart toggle (macOS only)
+    #[cfg(target_os = "macos")]
+    {
+        let autostart_label = if crate::platform::autostart::is_autostart_enabled() {
+            "Start at Login ✓"
+        } else {
+            "Start at Login"
+        };
+        builder = builder.item(
+            &MenuItemBuilder::with_id("toggle-autostart", autostart_label)
+                .build(app)?,
+        );
+    }
+
     builder = builder.item(&PredefinedMenuItem::separator(app)?);
     builder = builder.item(
         &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
@@ -372,12 +417,36 @@ pub fn build_stopped_menu(
             &MenuItemBuilder::with_id("start-daemon", "Start Daemon")
                 .build(app)?,
         )
+        .item(&PredefinedMenuItem::separator(app)?);
+
+    // Autostart toggle (macOS only)
+    #[cfg(target_os = "macos")]
+    let menu = {
+        let autostart_label = if crate::platform::autostart::is_autostart_enabled() {
+            "Start at Login ✓"
+        } else {
+            "Start at Login"
+        };
+        menu.item(
+            &MenuItemBuilder::with_id("toggle-autostart", autostart_label)
+                .build(app)?,
+        )
         .item(&PredefinedMenuItem::separator(app)?)
         .item(
             &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
                 .build(app)?,
         )
+        .build()?
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let menu = menu
+        .item(
+            &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
+                .build(app)?,
+        )
         .build()?;
+
     Ok(menu)
 }
 
@@ -403,11 +472,35 @@ pub fn build_error_menu(
             &MenuItemBuilder::with_id("restart-daemon", "Restart Daemon")
                 .build(app)?,
         )
+        .item(&PredefinedMenuItem::separator(app)?);
+
+    // Autostart toggle (macOS only)
+    #[cfg(target_os = "macos")]
+    let menu = {
+        let autostart_label = if crate::platform::autostart::is_autostart_enabled() {
+            "Start at Login ✓"
+        } else {
+            "Start at Login"
+        };
+        menu.item(
+            &MenuItemBuilder::with_id("toggle-autostart", autostart_label)
+                .build(app)?,
+        )
         .item(&PredefinedMenuItem::separator(app)?)
         .item(
             &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
                 .build(app)?,
         )
+        .build()?
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let menu = menu
+        .item(
+            &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
+                .build(app)?,
+        )
         .build()?;
+
     Ok(menu)
 }

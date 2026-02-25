@@ -9,7 +9,7 @@ import {
 import { parseAuthConfig, type AuthConfig } from "./auth/config";
 
 export interface EmbeddingConfig {
-	provider: "ollama" | "openai";
+	provider: "ollama" | "openai" | "none";
 	model: string;
 	dimensions: number;
 	base_url: string;
@@ -441,7 +441,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 				{};
 			const srch = (yaml.search as Record<string, unknown> | undefined) ?? {};
 
-			if (emb.provider) {
+			if (emb.provider === "none") {
+				defaults.embedding.provider = "none";
+			} else if (emb.provider) {
 				defaults.embedding.provider = emb.provider as "ollama" | "openai";
 				defaults.embedding.model =
 					(emb.model as string | undefined) ?? defaults.embedding.model;

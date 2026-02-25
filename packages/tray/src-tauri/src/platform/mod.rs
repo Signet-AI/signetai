@@ -9,6 +9,8 @@ pub trait DaemonManager {
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub mod autostart;
 #[cfg(target_os = "windows")]
 mod windows;
 

@@ -162,7 +162,7 @@
 					</span>
 				{:else if activeTab === "embeddings"}
 					<span class="text-[11px] text-[var(--sig-text-muted)]">
-						Embedding graph
+						Constellation
 					</span>
 				{/if}
 			</div>
@@ -219,14 +219,14 @@
 					{:else if mem.similarSourceId}
 						similarity mode
 					{:else}
-						hybrid embedding index
+						hybrid search index
 					{/if}
 				</span>
 			{:else if activeTab === "pipeline"}
 				<span>Pipeline</span>
 				<span>memory loop v2</span>
 			{:else if activeTab === "embeddings"}
-				<span>Embedding graph</span>
+				<span>Constellation</span>
 				<span>UMAP</span>
 			{:else if activeTab === "logs"}
 				<span>Log viewer</span>

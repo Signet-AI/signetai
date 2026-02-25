@@ -135,7 +135,7 @@ function formatIsoDate(value: string): string {
 			bind:value={mem.query}
 			oninput={queueMemorySearch}
 			onkeydown={(e) => e.key === 'Enter' && doSearch()}
-			placeholder="Search across embeddings..."
+			placeholder="Search across memories..."
 		/>
 		{#if mem.searched || hasActiveFilters() || mem.similarSourceId}
 			<button

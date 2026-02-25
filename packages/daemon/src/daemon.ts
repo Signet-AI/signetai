@@ -243,6 +243,7 @@ async function fetchEmbedding(
 	text: string,
 	cfg: EmbeddingConfig,
 ): Promise<number[] | null> {
+	if (cfg.provider === "none") return null;
 	try {
 		if (cfg.provider === "ollama") {
 			const res = await fetch(
@@ -672,6 +673,14 @@ async function checkEmbeddingProvider(
 		available: false,
 		checkedAt: new Date().toISOString(),
 	};
+
+	if (cfg.provider === "none") {
+		status.available = false;
+		status.error = "Embedding provider set to 'none' — vector search disabled";
+		cachedEmbeddingStatus = status;
+		statusCacheTime = now;
+		return status;
+	}
 
 	try {
 		if (cfg.provider === "ollama") {
@@ -7808,8 +7817,15 @@ async function main() {
 	startFileWatcher();
 	logger.info("watcher", "File watcher started");
 
-	// Initialize auth
+	// Load config and log resolved embedding settings for diagnostics
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	logger.info("config", "Resolved embedding config", {
+		provider: memoryCfg.embedding.provider,
+		model: memoryCfg.embedding.model,
+		dimensions: memoryCfg.embedding.dimensions,
+	});
+
+	// Initialize auth
 	authConfig = memoryCfg.auth;
 	if (authConfig.mode !== "local") {
 		authSecret = loadOrCreateSecret(authConfig.secretPath);

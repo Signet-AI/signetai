@@ -101,6 +101,10 @@ export function initDbAccessor(path: string): void {
 	// Failures here are fatal: the daemon must not start on bad schema.
 	runMigrations(writeConn);
 
+	// Ensure FTS5 virtual table exists — may be missing on upgrades from
+	// older installs where the table was dropped or never created.
+	ensureFtsTable(writeConn);
+
 	// Ensure vec_embeddings virtual table exists with correct schema.
 	// Older tables may lack the TEXT id column needed to join with embeddings.
 	if (vecExtPath) {
@@ -113,6 +117,68 @@ export function initDbAccessor(path: string): void {
 	}
 
 	accessor = createAccessor(writeConn);
+}
+
+// ---------------------------------------------------------------------------
+// FTS table creation (self-healing for upgrades)
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensure the memories_fts virtual table exists. On upgrades from older
+ * installs the table can be missing entirely, silently breaking search.
+ * If missing, recreates the FTS5 table, sync triggers, and backfills
+ * from existing memories rows.
+ */
+export function ensureFtsTable(db: Database): void {
+	const existing = db
+		.prepare(
+			"SELECT name FROM sqlite_master WHERE name = 'memories_fts' AND type = 'table'",
+		)
+		.get() as { name: string } | undefined;
+
+	if (existing) return;
+
+	console.log("[db-accessor] memories_fts missing — recreating FTS5 table");
+
+	db.exec(`
+		CREATE VIRTUAL TABLE memories_fts USING fts5(
+			content,
+			content='memories',
+			content_rowid='rowid'
+		);
+	`);
+
+	// Sync triggers so FTS stays in sync with the memories table
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+
+	// Backfill existing rows
+	const backfilled = db
+		.prepare("SELECT COUNT(*) as n FROM memories")
+		.get() as { n: number };
+
+	if (backfilled.n > 0) {
+		db.exec(
+			"INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories",
+		);
+		console.log(
+			`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`,
+		);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -154,17 +220,23 @@ function backfillVecEmbeddings(db: Database): void {
 			n: number;
 		}
 	).n;
-	if (vecCount > 0) return;
 
 	const embCount = (
 		db.prepare("SELECT count(*) as n FROM embeddings").get() as {
 			n: number;
 		}
 	).n;
-	if (embCount === 0) return;
 
+	// Skip if vec_embeddings already has all rows (or no embeddings exist)
+	if (embCount === 0 || vecCount >= embCount) return;
+
+	// Only fetch embeddings missing from vec_embeddings
 	const rows = db
-		.prepare("SELECT id, vector FROM embeddings")
+		.prepare(
+			`SELECT e.id, e.vector FROM embeddings e
+			 LEFT JOIN vec_embeddings v ON v.id = e.id
+			 WHERE v.id IS NULL`,
+		)
 		.all() as Array<{ id: string; vector: Buffer }>;
 
 	const insert = db.prepare(
@@ -201,7 +273,7 @@ function backfillVecEmbeddings(db: Database): void {
 	if (migrated > 0) {
 		// eslint-disable-next-line no-console
 		console.log(
-			`[db-accessor] Backfilled ${migrated}/${embCount} embeddings into vec_embeddings`,
+			`[db-accessor] Backfilled ${migrated}/${rows.length} missing embeddings into vec_embeddings`,
 		);
 	}
 }

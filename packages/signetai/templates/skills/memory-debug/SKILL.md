@@ -49,7 +49,7 @@ signet start
 
 # if installed as a system service (launchd on macOS, systemd on Linux)
 # macOS:
-launchctl kickstart -k gui/$(id -u)/com.signet.daemon
+launchctl kickstart -k gui/$(id -u)/ai.signet.daemon
 # Linux:
 systemctl --user restart signet-daemon
 ```

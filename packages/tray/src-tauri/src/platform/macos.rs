@@ -4,7 +4,7 @@ use super::DaemonManager;
 
 pub struct MacosManager;
 
-const LAUNCHD_LABEL: &str = "com.signet.daemon";
+const LAUNCHD_LABEL: &str = "ai.signet.daemon";
 
 impl MacosManager {
     /// Check if a launchd plist exists for the signet daemon.

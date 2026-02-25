@@ -895,7 +895,7 @@ $effect(() => {
 				class="flex-1 max-w-[420px] pointer-events-auto font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-bright)] bg-[var(--sig-surface)] border border-[rgba(255,255,255,0.22)] px-[9px] py-[6px] outline-none"
 				bind:value={embeddingSearch}
 				oninput={() => (activePresetId = "custom-live")}
-				placeholder="Filter embeddings (content, source, tags)..."
+				placeholder="Search constellation (content, source, tags)..."
 			/>
 			{#if embeddingSearch}
 				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[rgba(220,220,220,0.75)] bg-[rgba(5,5,5,0.55)] border border-[rgba(255,255,255,0.16)] px-2 py-1">
@@ -1025,7 +1025,7 @@ $effect(() => {
 					{#if healthExpanded}
 						<div class="mt-1 border border-[rgba(255,255,255,0.22)] bg-[rgba(5,5,5,0.92)] px-2 py-2 w-[320px]">
 							<div class="flex items-center justify-between mb-2">
-								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em]">Embedding Health</span>
+								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em]">Constellation Health</span>
 								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)]">{healthReport.config.provider}/{healthReport.config.model}</span>
 							</div>
 							<div class="space-y-1">
@@ -1071,7 +1071,7 @@ $effect(() => {
 			</div>
 		{:else if graphInitialized && embeddings.length === 0}
 			<div class="absolute inset-0 flex items-center justify-center bg-[var(--sig-bg)] z-10">
-				<p>No embeddings found</p>
+				<p>No memories found</p>
 			</div>
 		{:else if !graphInitialized}
 			<div class="absolute inset-0 flex items-center justify-center bg-[var(--sig-bg)] z-10">

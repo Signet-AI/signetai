@@ -140,7 +140,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		<div class="flex flex-col gap-2">
 			{#if activeNeighbors.length === 0}
 				<div class="border border-dashed border-[var(--sig-border-strong)] p-3 text-[12px] text-[var(--sig-text-muted)] leading-[1.5]">
-					No related embeddings in this view.
+					No related memories in this view.
 				</div>
 			{:else}
 				{#each activeNeighbors as relation}
@@ -164,7 +164,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 
 		{#if loadingGlobalSimilar}
 			<div class="border border-dashed border-[var(--sig-border-strong)] p-3 text-[12px] text-[var(--sig-text-muted)] leading-[1.5]">
-				Finding globally similar embeddings...
+				Finding similar memories...
 			</div>
 		{:else if globalSimilar.length > 0}
 			<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Global similar</div>

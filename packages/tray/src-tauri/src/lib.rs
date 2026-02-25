@@ -20,6 +20,9 @@ pub fn run() {
             commands::quit_app,
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            platform::autostart::ensure_autostart();
+
             tray::setup(app)?;
             Ok(())
         })

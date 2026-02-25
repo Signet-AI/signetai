@@ -335,15 +335,43 @@ export function checkFtsConsistency(
 		};
 	}
 
-	const { memCount, ftsCount } = accessor.withReadDb((db) => {
+	const { memCount, ftsCount, ftsMissing } = accessor.withReadDb((db) => {
 		const memRow = db
 			.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0")
 			.get() as { n: number };
-		const ftsRow = db
-			.prepare("SELECT COUNT(*) as n FROM memories_fts")
-			.get() as { n: number };
-		return { memCount: memRow.n, ftsCount: ftsRow.n };
+
+		// Guard against missing FTS table (can happen on upgrades)
+		let ftsN = 0;
+		let missing = false;
+		try {
+			const ftsRow = db
+				.prepare("SELECT COUNT(*) as n FROM memories_fts")
+				.get() as { n: number };
+			ftsN = ftsRow.n;
+		} catch {
+			missing = true;
+		}
+		return { memCount: memRow.n, ftsCount: ftsN, ftsMissing: missing };
 	});
+
+	// If FTS table is missing entirely, report it (startup self-heal
+	// via ensureFtsTable should have caught this, but handle gracefully)
+	if (ftsMissing) {
+		limiter.record(action);
+		const msg = repair
+			? "FTS table missing — restart daemon to trigger self-healing rebuild"
+			: "FTS table missing — run with repair=true or restart daemon";
+		logger.warn("pipeline", "repair: FTS table missing", {
+			memCount,
+			actor: ctx.actor,
+		});
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: msg,
+		};
+	}
 
 	// FTS5 external content tables include tombstones, so ftsCount >=
 	// memCount is normal. Only flag when the gap exceeds 10%, matching
@@ -353,7 +381,7 @@ export function checkFtsConsistency(
 
 	if (mismatch && repair) {
 		accessor.withWriteTx((db) => {
-			db.exec("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')");
+			db.prepare("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')").run();
 			writeRepairAudit(
 				db,
 				action,

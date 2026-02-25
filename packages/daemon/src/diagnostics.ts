@@ -258,11 +258,16 @@ export function getIndexHealth(db: ReadDb): IndexHealth {
 	// memories_fts is a content table backed by memories — COUNT(*) returns
 	// the total memories row count (active + tombstones). A mismatch against
 	// the active count reveals tombstone accumulation visible in FTS.
-	const ftsRow = db
-		.prepare(`SELECT COUNT(*) AS cnt FROM memories_fts`)
-		.get() as { cnt: number } | undefined;
-
-	const ftsRowCount = ftsRow?.cnt ?? 0;
+	// Guard against missing table (can happen on upgrades before self-heal).
+	let ftsRowCount = 0;
+	try {
+		const ftsRow = db
+			.prepare("SELECT COUNT(*) AS cnt FROM memories_fts")
+			.get() as { cnt: number } | undefined;
+		ftsRowCount = ftsRow?.cnt ?? 0;
+	} catch {
+		// FTS table missing — report as full mismatch
+	}
 
 	// Mismatch means FTS backing table has more rows than active memories,
 	// i.e., tombstones are included in the FTS index. Detect when the gap

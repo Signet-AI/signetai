@@ -37,7 +37,7 @@
 		{ id: "config", label: "Config", icon: FileText },
 		{ id: "settings", label: "Settings", icon: SlidersHorizontal },
 		{ id: "memory", label: "Memory", icon: Database },
-		{ id: "embeddings", label: "Embeddings", icon: Network },
+		{ id: "embeddings", label: "Constellation", icon: Network },
 		{ id: "pipeline", label: "Pipeline", icon: Activity },
 		{ id: "logs", label: "Logs", icon: ScrollText },
 		{ id: "secrets", label: "Secrets", icon: KeyRound },
