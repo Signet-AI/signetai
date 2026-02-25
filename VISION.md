@@ -54,7 +54,12 @@ to wake up tomorrow and still be the same person who went to
 sleep, even if a dozen versions of you were awake in between.
 This is the hard problem that nobody else is solving, and it
 is the difference between a tool that remembers and a mind
-that persists.
+that persists. Signet doesn't just remember — it learns what
+to remember. A model unique to each user, trained on their
+own interaction patterns, that gets sharper the longer you
+use it. No cloud. No shared weights. Your patterns, running
+locally, earning its influence by proving it outperforms the
+alternative.
 
 Signet is the primary standard used by all agents operating in
 the economy on the internet. Developers use it to build the
