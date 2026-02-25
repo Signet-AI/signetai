@@ -803,3 +803,41 @@ export async function getTaskRuns(
 		return { runs: [], total: 0, hasMore: false };
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Pipeline status
+// ---------------------------------------------------------------------------
+
+export interface PipelineStatus {
+	workers: Record<string, { running: boolean }>;
+	queues: {
+		memory: {
+			pending: number;
+			leased: number;
+			completed: number;
+			failed: number;
+			dead: number;
+		};
+		summary: {
+			pending: number;
+			leased: number;
+			completed: number;
+			failed: number;
+			dead: number;
+		};
+	};
+	diagnostics: Record<string, unknown>;
+	latency: Record<string, unknown>;
+	errorSummary: Record<string, number>;
+	mode: string;
+}
+
+export async function getPipelineStatus(): Promise<PipelineStatus | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/pipeline/status`);
+		if (!res.ok) return null;
+		return await res.json();
+	} catch {
+		return null;
+	}
+}

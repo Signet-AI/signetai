@@ -7,6 +7,7 @@ export type TabId =
 	| "settings"
 	| "memory"
 	| "embeddings"
+	| "pipeline"
 	| "logs"
 	| "secrets"
 	| "skills"

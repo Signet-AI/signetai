@@ -10,6 +10,7 @@
 	import KeyRound from "@lucide/svelte/icons/key-round";
 	import Zap from "@lucide/svelte/icons/zap";
 	import CalendarClock from "@lucide/svelte/icons/calendar-clock";
+	import Activity from "@lucide/svelte/icons/activity";
 	import Sun from "@lucide/svelte/icons/sun";
 	import Moon from "@lucide/svelte/icons/moon";
 	import Github from "@lucide/svelte/icons/github";
@@ -37,6 +38,7 @@
 		{ id: "settings", label: "Settings", icon: SlidersHorizontal },
 		{ id: "memory", label: "Memory", icon: Database },
 		{ id: "embeddings", label: "Embeddings", icon: Network },
+		{ id: "pipeline", label: "Pipeline", icon: Activity },
 		{ id: "logs", label: "Logs", icon: ScrollText },
 		{ id: "secrets", label: "Secrets", icon: KeyRound },
 		{ id: "skills", label: "Skills", icon: Zap },

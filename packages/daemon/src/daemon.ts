@@ -83,6 +83,7 @@ import {
 	enqueueExtractionJob,
 	enqueueDocumentIngestJob,
 	startSummaryWorker,
+	getPipelineWorkerStatus,
 } from "./pipeline";
 import {
 	startSchedulerWorker,
@@ -5073,8 +5074,16 @@ function checkSessionClaim(
 // Start session cleanup timer
 startSessionCleanup();
 
+// Guard against recursive hook calls from spawned agent contexts
+function isInternalCall(c: Context): boolean {
+	return c.req.header("x-signet-no-hooks") === "1";
+}
+
 // Session start hook - provides context/memories for injection
 app.post("/api/hooks/session-start", async (c) => {
+	if (isInternalCall(c)) {
+		return c.json({ inject: "", memories: [] });
+	}
 	try {
 		const body = (await c.req.json()) as SessionStartRequest;
 
@@ -5105,6 +5114,9 @@ app.post("/api/hooks/session-start", async (c) => {
 
 // User prompt submit hook - inject relevant memories per prompt
 app.post("/api/hooks/user-prompt-submit", async (c) => {
+	if (isInternalCall(c)) {
+		return c.json({ inject: "", memoryCount: 0 });
+	}
 	try {
 		const body = (await c.req.json()) as UserPromptSubmitRequest;
 
@@ -5128,6 +5140,9 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 
 // Session end hook - extract memories from transcript
 app.post("/api/hooks/session-end", async (c) => {
+	if (isInternalCall(c)) {
+		return c.json({ memoriesSaved: 0 });
+	}
 	try {
 		const body = (await c.req.json()) as SessionEndRequest;
 
@@ -5839,6 +5854,71 @@ app.get("/api/diagnostics/:domain", (c) => {
 		return c.json({ error: `Unknown domain: ${domain}` }, 400);
 	}
 	return c.json(domainData);
+});
+
+// ---------------------------------------------------------------------------
+// Pipeline status (composite snapshot for dashboard visualization)
+// ---------------------------------------------------------------------------
+
+app.get("/api/pipeline/status", (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const accessor = getDbAccessor();
+
+	const dbData = accessor.withReadDb((db) => {
+		const memoryRows = db
+			.prepare(
+				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
+			)
+			.all() as Array<{ status: string; count: number }>;
+		const summaryRows = db
+			.prepare(
+				"SELECT status, COUNT(*) as count FROM summary_jobs GROUP BY status",
+			)
+			.all() as Array<{ status: string; count: number }>;
+
+		const toCountMap = (
+			rows: Array<{ status: string; count: number }>,
+		): Record<string, number> => {
+			const out: Record<string, number> = {
+				pending: 0,
+				leased: 0,
+				completed: 0,
+				failed: 0,
+				dead: 0,
+			};
+			for (const r of rows) out[r.status] = r.count;
+			return out;
+		};
+
+		const diagnostics = getDiagnostics(db, providerTracker, getUpdateState());
+
+		return {
+			queues: {
+				memory: toCountMap(memoryRows),
+				summary: toCountMap(summaryRows),
+			},
+			diagnostics,
+		};
+	});
+
+	const pipelineV2 = cfg.pipelineV2;
+	const mode =
+		!pipelineV2.enabled
+			? "disabled"
+			: pipelineV2.mutationsFrozen
+				? "frozen"
+				: pipelineV2.shadowMode
+					? "shadow"
+					: "controlled-write";
+
+	return c.json({
+		workers: getPipelineWorkerStatus(),
+		queues: dbData.queues,
+		diagnostics: dbData.diagnostics,
+		latency: analyticsCollector.getLatency(),
+		errorSummary: analyticsCollector.getErrorSummary(),
+		mode,
+	});
 });
 
 function resolveRepairContext(c: Context): RepairContext {

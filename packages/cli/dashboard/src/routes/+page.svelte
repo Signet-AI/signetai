@@ -26,6 +26,7 @@
 	import TasksTab from "$lib/components/tabs/TasksTab.svelte";
 	import MemoryTab from "$lib/components/tabs/MemoryTab.svelte";
 	import EmbeddingsTab from "$lib/components/tabs/EmbeddingsTab.svelte";
+	import PipelineTab from "$lib/components/tabs/PipelineTab.svelte";
 
 	let { data } = $props();
 	let daemonStatus = $state<DaemonStatus | null>(null);
@@ -155,6 +156,10 @@
 							Reset
 						</button>
 					{/if}
+				{:else if activeTab === "pipeline"}
+					<span class="text-[11px] text-[var(--sig-text-muted)]">
+						Memory loop
+					</span>
 				{:else if activeTab === "embeddings"}
 					<span class="text-[11px] text-[var(--sig-text-muted)]">
 						Embedding graph
@@ -176,6 +181,8 @@
 				<MemoryTab memories={memoryDocs} />
 			{:else if activeTab === "embeddings"}
 				<EmbeddingsTab onopenglobalsimilar={openGlobalSimilar} />
+			{:else if activeTab === "pipeline"}
+				<PipelineTab />
 			{:else if activeTab === "logs"}
 				<LogsTab />
 			{:else if activeTab === "secrets"}
@@ -215,6 +222,9 @@
 						hybrid embedding index
 					{/if}
 				</span>
+			{:else if activeTab === "pipeline"}
+				<span>Pipeline</span>
+				<span>memory loop v2</span>
 			{:else if activeTab === "embeddings"}
 				<span>Embedding graph</span>
 				<span>UMAP</span>

@@ -53,6 +53,17 @@ let maintenanceHandle: MaintenanceHandle | null = null;
 let documentWorkerHandle: DocumentWorkerHandle | null = null;
 let summaryWorkerHandle: SummaryWorkerHandle | null = null;
 
+/** Snapshot of running state for each worker — used by /api/pipeline/status */
+export function getPipelineWorkerStatus(): Record<string, { running: boolean }> {
+	return {
+		extraction: { running: workerHandle !== null },
+		summary: { running: summaryWorkerHandle !== null },
+		document: { running: documentWorkerHandle !== null },
+		retention: { running: retentionHandle !== null },
+		maintenance: { running: maintenanceHandle !== null },
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Start / Stop
 // ---------------------------------------------------------------------------
