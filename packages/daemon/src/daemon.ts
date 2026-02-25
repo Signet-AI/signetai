@@ -6043,7 +6043,7 @@ function isGitRepo(dir: string): boolean {
 
 // Git credential resolution result
 interface GitCredentials {
-	method: "token" | "gh" | "credential-helper" | "ssh" | "none";
+	method: "token" | "gh" | "credential-helper" | "ssh" | "no-remote" | "none";
 	authUrl?: string; // For HTTPS with embedded auth
 	usePlainGit?: boolean; // For SSH - just run git without URL modification
 }
@@ -6052,10 +6052,10 @@ interface GitCredentials {
 async function runCommand(
 	cmd: string,
 	args: string[],
-	options?: { input?: string },
+	options?: { input?: string; cwd?: string },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
 	return new Promise((resolve) => {
-		const proc = spawn(cmd, args, { stdio: "pipe" });
+		const proc = spawn(cmd, args, { cwd: options?.cwd, stdio: "pipe" });
 		let stdout = "";
 		let stderr = "";
 
@@ -6084,26 +6084,24 @@ async function getRemoteUrl(
 	dir: string,
 	remote: string,
 ): Promise<string | null> {
-	const result = await runCommand("git", ["remote", "get-url", remote]);
+	const result = await runCommand("git", ["remote", "get-url", remote], {
+		cwd: dir,
+	});
 	return result.code === 0 ? result.stdout.trim() : null;
 }
 
 // Build authenticated URL from token
 function buildAuthUrlFromToken(baseUrl: string, token: string): string {
-	// Convert SSH to HTTPS if needed
+	// Convert SSH to HTTPS if needed (github-specific shorthand)
 	let url = baseUrl;
 	if (url.startsWith("git@github.com:")) {
 		url = url.replace("git@github.com:", "https://github.com/");
 	}
 
-	// Embed token in HTTPS URL
-	if (url.startsWith("https://github.com/")) {
-		return url.replace("https://github.com/", `https://${token}@github.com/`);
-	} else if (url.startsWith("https://") && url.includes("github.com")) {
-		return url.replace(
-			/https:\/\/([^@]+@)?github\.com/,
-			`https://${token}@github.com`,
-		);
+	// Embed token in any HTTPS URL — strip existing auth first
+	if (url.startsWith("https://")) {
+		url = url.replace(/https:\/\/[^@]+@/, "https://");
+		return url.replace("https://", `https://${token}@`);
 	}
 	return url;
 }
@@ -6114,10 +6112,12 @@ function buildAuthUrlFromCreds(
 	creds: { username: string; password: string },
 ): string {
 	let url = baseUrl;
+	// Convert SSH to HTTPS if needed (github-specific shorthand)
 	if (url.startsWith("git@github.com:")) {
 		url = url.replace("git@github.com:", "https://github.com/");
 	}
-	// Remove existing auth if any
+	if (!url.startsWith("https://")) return url;
+	// Remove existing auth if any, then embed credentials
 	url = url.replace(/https:\/\/[^@]+@/, "https://");
 	return url.replace(
 		"https://",
@@ -6128,12 +6128,16 @@ function buildAuthUrlFromCreds(
 // Get credentials from git credential helper
 async function getCredentialHelperToken(
 	url: string,
+	cwd?: string,
 ): Promise<{ username: string; password: string } | null> {
 	try {
 		// Parse URL to get host
 		const urlObj = new URL(url);
 		const input = `protocol=${urlObj.protocol.replace(":", "")}\nhost=${urlObj.host}\n\n`;
-		const result = await runCommand("git", ["credential", "fill"], { input });
+		const result = await runCommand("git", ["credential", "fill"], {
+			input,
+			cwd,
+		});
 
 		if (result.code !== 0) return null;
 
@@ -6160,22 +6164,25 @@ async function getGhCliToken(): Promise<string | null> {
 
 // Check if any git credentials are available (for status checks)
 async function hasAnyGitCredentials(): Promise<boolean> {
-	// Check stored token
-	if (await hasSecret("GITHUB_TOKEN")) return true;
+	// No remote configured means nothing to push/pull
+	if (!isGitRepo(AGENTS_DIR)) return false;
+	const remoteUrl = await getRemoteUrl(AGENTS_DIR, gitConfig.remote);
+	if (!remoteUrl) return false;
 
-	// Check gh CLI
-	if (await getGhCliToken()) return true;
+	// SSH remotes work without explicit tokens
+	if (remoteUrl.startsWith("git@")) return true;
 
-	// Check if remote uses SSH
-	if (isGitRepo(AGENTS_DIR)) {
-		const remoteUrl = await getRemoteUrl(AGENTS_DIR, gitConfig.remote);
-		if (remoteUrl?.startsWith("git@")) return true;
+	// Credential helper — per-host, works for any forge
+	if (remoteUrl.startsWith("https://")) {
+		const creds = await getCredentialHelperToken(remoteUrl, AGENTS_DIR);
+		if (creds) return true;
+	}
 
-		// Check credential helper for HTTPS
-		if (remoteUrl?.startsWith("https://")) {
-			const creds = await getCredentialHelperToken(remoteUrl);
-			if (creds) return true;
-		}
+	// GitHub-specific token methods
+	const isGitHub = remoteUrl.includes("github.com");
+	if (isGitHub) {
+		if (await hasSecret("GITHUB_TOKEN")) return true;
+		if (await getGhCliToken()) return true;
 	}
 
 	return false;
@@ -6188,52 +6195,62 @@ async function resolveGitCredentials(
 ): Promise<GitCredentials> {
 	const remoteUrl = await getRemoteUrl(dir, remote);
 	if (!remoteUrl) {
-		return { method: "none" };
+		logger.debug(
+			"git",
+			`No remote '${remote}' configured in ${dir} — skipping push/pull`,
+		);
+		return { method: "no-remote" };
 	}
 
-	// 1. Try stored GITHUB_TOKEN first (highest priority)
-	try {
-		const token = await getSecret("GITHUB_TOKEN");
-		if (token) {
-			logger.debug("git", "Using stored GITHUB_TOKEN for authentication");
-			return {
-				method: "token",
-				authUrl: buildAuthUrlFromToken(remoteUrl, token),
-			};
-		}
-	} catch {
-		/* ignore */
-	}
-
-	// 2. Try gh CLI auth token
-	try {
-		const ghToken = await getGhCliToken();
-		if (ghToken) {
-			logger.debug("git", "Using gh CLI token for authentication");
-			return {
-				method: "gh",
-				authUrl: buildAuthUrlFromToken(remoteUrl, ghToken),
-			};
-		}
-	} catch {
-		/* ignore */
-	}
-
-	// 3. Check for SSH remote (works without modification)
+	// 1. SSH remotes — just work without URL modification
 	if (remoteUrl.startsWith("git@")) {
 		logger.debug("git", "Using SSH for authentication");
 		return { method: "ssh", usePlainGit: true };
 	}
 
-	// 4. Try credential helper for HTTPS
+	// 2. Try credential helper first — per-host, works for any git forge
 	if (remoteUrl.startsWith("https://")) {
 		try {
-			const creds = await getCredentialHelperToken(remoteUrl);
+			const creds = await getCredentialHelperToken(remoteUrl, dir);
 			if (creds) {
 				logger.debug("git", "Using git credential helper for authentication");
 				return {
 					method: "credential-helper",
 					authUrl: buildAuthUrlFromCreds(remoteUrl, creds),
+				};
+			}
+		} catch {
+			/* ignore */
+		}
+	}
+
+	// 3. GitHub-specific token methods — only for github.com remotes
+	const isGitHub =
+		remoteUrl.includes("github.com") || remoteUrl.includes("github.com:");
+
+	if (isGitHub) {
+		// 3a. Stored GITHUB_TOKEN
+		try {
+			const token = await getSecret("GITHUB_TOKEN");
+			if (token) {
+				logger.debug("git", "Using stored GITHUB_TOKEN for authentication");
+				return {
+					method: "token",
+					authUrl: buildAuthUrlFromToken(remoteUrl, token),
+				};
+			}
+		} catch {
+			/* ignore */
+		}
+
+		// 3b. gh CLI auth token
+		try {
+			const ghToken = await getGhCliToken();
+			if (ghToken) {
+				logger.debug("git", "Using gh CLI token for authentication");
+				return {
+					method: "gh",
+					authUrl: buildAuthUrlFromToken(remoteUrl, ghToken),
 				};
 			}
 		} catch {
@@ -6279,6 +6296,14 @@ async function gitPull(): Promise<{
 	}
 
 	const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
+
+	if (creds.method === "no-remote") {
+		return {
+			success: true,
+			message: `No remote '${gitConfig.remote}' configured — skipping pull`,
+			changes: 0,
+		};
+	}
 
 	let fetchResult: { code: number; stdout: string; stderr: string };
 
@@ -6326,11 +6351,20 @@ async function gitPull(): Promise<{
 	);
 	const hasLocalChanges = statusResult.stdout.trim().length > 0;
 
+	let stashed = false;
 	if (hasLocalChanges) {
-		await runGitCommand(
+		const stashResult = await runGitCommand(
 			["stash", "push", "-m", "signet-auto-stash"],
 			AGENTS_DIR,
 		);
+		if (stashResult.code !== 0) {
+			logger.warn("git", `Stash failed: ${stashResult.stderr}`);
+			return {
+				success: false,
+				message: `Failed to stash local changes: ${stashResult.stderr}`,
+			};
+		}
+		stashed = true;
 	}
 
 	// Pull (merge)
@@ -6340,8 +6374,14 @@ async function gitPull(): Promise<{
 	);
 
 	// Restore stashed changes if any
-	if (hasLocalChanges) {
-		await runGitCommand(["stash", "pop"], AGENTS_DIR);
+	if (stashed) {
+		const popResult = await runGitCommand(["stash", "pop"], AGENTS_DIR);
+		if (popResult.code !== 0) {
+			logger.warn(
+				"git",
+				`Stash pop failed — local changes preserved in git stash: ${popResult.stderr}`,
+			);
+		}
 	}
 
 	if (pullResult.code !== 0) {
@@ -6368,6 +6408,14 @@ async function gitPush(): Promise<{
 	}
 
 	const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
+
+	if (creds.method === "no-remote") {
+		return {
+			success: true,
+			message: `No remote '${gitConfig.remote}' configured — skipping push`,
+			changes: 0,
+		};
+	}
 
 	// Check for outgoing changes
 	const diffResult = await runGitCommand(
@@ -6518,7 +6566,8 @@ async function getGitStatus(): Promise<{
 
 	// Check credentials and auth method
 	const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
-	status.hasCredentials = creds.method !== "none";
+	status.hasCredentials =
+		creds.method !== "none" && creds.method !== "no-remote";
 	status.authMethod = creds.method;
 
 	// Get current branch
@@ -6550,7 +6599,7 @@ async function getGitStatus(): Promise<{
 			.filter((l) => l.trim()).length;
 	}
 
-	// Unpushed commits (only if we have credentials)
+	// Unpushed/unpulled commits (only if remote tracking branch exists)
 	if (status.hasCredentials) {
 		const unpushedResult = await runGitCommand(
 			["rev-list", "--count", `${gitConfig.remote}/${gitConfig.branch}..HEAD`],
@@ -6558,6 +6607,15 @@ async function getGitStatus(): Promise<{
 		);
 		if (unpushedResult.code === 0) {
 			status.unpushedCommits = parseInt(unpushedResult.stdout.trim(), 10) || 0;
+		}
+
+		const unpulledResult = await runGitCommand(
+			["rev-list", "--count", `HEAD..${gitConfig.remote}/${gitConfig.branch}`],
+			AGENTS_DIR,
+		);
+		if (unpulledResult.code === 0) {
+			status.unpulledCommits =
+				parseInt(unpulledResult.stdout.trim(), 10) || 0;
 		}
 	}
 

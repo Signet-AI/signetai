@@ -222,6 +222,23 @@ Notable pipeline files beyond the main worker:
 - `url-fetcher.ts` — URL content fetching for document ingest
 - `provider.ts` — LLM provider abstraction
 
+### Git Sync
+
+The daemon auto-commits changes in `~/.agents/` and syncs with a
+configured git remote. Credential resolution order matters:
+
+1. **SSH** (`git@...`) — used as-is, no URL modification
+2. **Credential helper** — per-host, works for any forge (gitea, gitlab, etc.)
+3. **GITHUB_TOKEN / gh CLI** — only for `github.com` remotes
+
+GitHub tokens must never be injected into non-GitHub remote URLs.
+If no remote is configured, push/pull gracefully skip (no error).
+The `buildAuthUrlFromToken`/`buildAuthUrlFromCreds` helpers work
+with any HTTPS host, not just GitHub.
+
+All git subprocess calls must pass `cwd` to run in `AGENTS_DIR`,
+not the daemon's process working directory.
+
 ### Database Migrations
 
 `packages/core/src/migrations/` contains numbered migrations

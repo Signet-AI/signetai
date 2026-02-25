@@ -4814,11 +4814,13 @@ gitCmd
 			isRepo?: boolean;
 			branch?: string;
 			remote?: string;
-			hasToken?: boolean;
+			hasCredentials?: boolean;
+			authMethod?: string;
 			autoSync?: boolean;
 			lastSync?: string;
 			uncommittedChanges?: number;
 			unpushedCommits?: number;
+			unpulledCommits?: number;
 		}>("/api/git/status");
 
 		if (!data) {
@@ -4836,9 +4838,22 @@ gitCmd
 
 		console.log(`  ${chalk.dim("Branch:")}     ${data.branch || "unknown"}`);
 		console.log(`  ${chalk.dim("Remote:")}     ${data.remote || "none"}`);
-		console.log(
-			`  ${chalk.dim("Token:")}      ${data.hasToken ? chalk.green("configured") : chalk.yellow("not set")}`,
-		);
+
+		// Show auth status with context-appropriate messaging
+		if (data.authMethod === "no-remote") {
+			console.log(
+				`  ${chalk.dim("Auth:")}       ${chalk.dim("no remote configured")}`,
+			);
+		} else if (data.hasCredentials) {
+			console.log(
+				`  ${chalk.dim("Auth:")}       ${chalk.green(data.authMethod || "configured")}`,
+			);
+		} else {
+			console.log(
+				`  ${chalk.dim("Auth:")}       ${chalk.yellow("no credentials")}`,
+			);
+		}
+
 		console.log(
 			`  ${chalk.dim("Auto-sync:")}  ${data.autoSync ? chalk.green("enabled") : chalk.dim("disabled")}`,
 		);
@@ -4859,9 +4874,20 @@ gitCmd
 			);
 		}
 
-		if (!data.hasToken) {
+		if (data.unpulledCommits !== undefined && data.unpulledCommits > 0) {
 			console.log(
-				chalk.dim("\n  To enable sync: signet secret put GITHUB_TOKEN"),
+				`  ${chalk.dim("Unpulled:")}   ${chalk.cyan(data.unpulledCommits + " commits")}`,
+			);
+		}
+
+		// Context-appropriate help message
+		if (data.authMethod === "no-remote") {
+			console.log(
+				chalk.dim("\n  To enable sync: git -C ~/.agents remote add origin <url>"),
+			);
+		} else if (!data.hasCredentials) {
+			console.log(
+				chalk.dim("\n  To enable sync: gh auth login, or signet secret put GITHUB_TOKEN"),
 			);
 		}
 	});
