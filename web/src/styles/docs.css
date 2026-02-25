@@ -35,6 +35,102 @@
   border-radius: 2px;
 }
 
+/* ==========================================================================
+   DOC SEARCH
+   ========================================================================== */
+.doc-search {
+  position: relative;
+  padding: 0 var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-sm);
+}
+
+.doc-search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.doc-search-input-wrap input {
+  width: 100%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 0;
+  padding: 6px 32px 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--color-text);
+  outline: none;
+  transition: border-color var(--dur) var(--ease);
+}
+
+.doc-search-input-wrap input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.doc-search-input-wrap input:focus {
+  border-color: var(--color-text-muted);
+}
+
+.doc-search-shortcut {
+  position: absolute;
+  right: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-strong);
+  padding: 1px 5px;
+  pointer-events: none;
+}
+
+.doc-search-results {
+  position: absolute;
+  top: 100%;
+  left: var(--space-md);
+  right: var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-top: none;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  z-index: 50;
+  max-height: 320px;
+  overflow-y: auto;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.3);
+}
+
+.doc-search-results li {
+  margin: 0;
+}
+
+.doc-search-results li a {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.doc-search-results li:hover a,
+.doc-search-results li.selected a {
+  background: var(--color-glow);
+  border-left-color: var(--color-text-bright);
+}
+
+.doc-search-result-title {
+  font-size: 0.75rem;
+  color: var(--color-text-bright);
+}
+
+.doc-search-result-section {
+  font-size: 0.5625rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
 .sidebar-section {
   margin-bottom: var(--space-lg);
 }

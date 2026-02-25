@@ -1,0 +1,27 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://www.signetai.sh/sitemap-index.xml
+
+# LLM crawlers
+User-agent: GPTBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Anthropic-AI
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+# LLM-readable content
+# llms.txt: https://www.signetai.sh/llms.txt
+# llms-full.txt: https://www.signetai.sh/llms-full.txt

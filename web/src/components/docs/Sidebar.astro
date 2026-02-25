@@ -1,5 +1,6 @@
 ---
 import { getCollection } from 'astro:content';
+import DocSearch from './DocSearch.tsx';
 
 interface Props {
   currentSlug?: string;
@@ -49,6 +50,7 @@ function toSlug(id: string): string {
 ---
 
 <aside class="docs-sidebar">
+  <DocSearch client:idle />
   {sections.map(({ label, items }) => (
     <div class="sidebar-section">
       <span class="sidebar-section-label">{label}</span>

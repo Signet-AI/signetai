@@ -55,10 +55,9 @@ window.addEventListener('scroll', () => {
   }
 }, { passive: true });
 
-// --- Reveal ---
-document.querySelectorAll('.reveal').forEach((el) => {
-  el.classList.add('visible');
-});
+// --- Reveal (GSAP ScrollTrigger) ---
+import { initReveal } from './scroll-reveal';
+initReveal();
 
 // --- Code Tab Switching ---
 document.querySelectorAll('.code-tab').forEach((tab) => {

@@ -124,7 +124,7 @@
   color: var(--color-text-bright);
   padding: 6px 12px;
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   white-space: nowrap;
 }
 .hero-feat a {
@@ -159,7 +159,7 @@
   box-shadow: 0 12px 32px rgba(0,0,0,0.2);
   width: max-content;
   max-width: 100%;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   backdrop-filter: blur(6px);
 }
 .install-box::before, .install-box::after {
@@ -210,7 +210,7 @@
   color: var(--color-text-muted);
   cursor: pointer;
   transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-radius: 0;
 }
 .install-tab:hover { color: var(--color-text-bright); }
 .install-tab.active {
@@ -377,7 +377,7 @@
 .secrets-demo {
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
+  border-radius: 0;
   overflow: hidden;
 }
 .secrets-demo-header {
@@ -591,7 +591,7 @@
 .code-tabs {
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   overflow: hidden;
   position: relative;
   box-shadow: 0 24px 48px rgba(0,0,0,0.4);
@@ -655,7 +655,7 @@
 .trust-card {
   padding: var(--space-xl) var(--space-lg);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   position: relative;
   transition: background-color var(--dur) var(--ease);
 }
@@ -710,7 +710,7 @@
   border: 1px solid var(--color-border-strong);
   position: relative;
   box-shadow: 0 24px 48px rgba(0,0,0,0.4);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   overflow: hidden;
 }
 .terminal-window::before, .terminal-window::after {
@@ -763,7 +763,7 @@
   padding: clamp(28px, 7vw, 80px);
   position: relative;
   box-shadow: 0 24px 48px rgba(0,0,0,0.2);
-  border-radius: var(--radius-md);
+  border-radius: 0;
 }
 .cta-panel::before, .cta-panel::after {
   content: '';
