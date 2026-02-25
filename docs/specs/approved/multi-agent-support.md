@@ -1,3 +1,7 @@
+---
+title: "Multi-agent support for Signet"
+---
+
 Multi-agent support for Signet
 ===
 

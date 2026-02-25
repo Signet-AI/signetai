@@ -1,3 +1,7 @@
+---
+title: "Refactor daemon.ts (7194 LOC → ~800 LOC coordinator)"
+---
+
 Refactor daemon.ts (7194 LOC → ~800 LOC coordinator)
 ===
 

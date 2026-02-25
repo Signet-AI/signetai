@@ -1,3 +1,7 @@
+---
+title: "Signet Strategy Split: Desktop Embeddings + OpenClaw Contributions"
+---
+
 # Signet Strategy Split: Desktop Embeddings + OpenClaw Contributions
 
 ## Plan A: Desktop Embedding Dependency Tiers (Signet-wide)

@@ -1,3 +1,7 @@
+---
+title: Signet Memory Pipeline v2 Implementation Specification
+---
+
 # Signet Memory Pipeline v2: Implementation Specification
 
 Status: Draft for implementation

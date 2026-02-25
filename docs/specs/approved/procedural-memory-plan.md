@@ -1,3 +1,7 @@
+---
+title: "Procedural Memory: Skills as Knowledge Graph Nodes"
+---
+
 # Procedural Memory: Skills as Knowledge Graph Nodes
 
 Status: Proposed Spec (implementation-targeted)
