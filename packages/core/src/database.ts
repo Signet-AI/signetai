@@ -225,7 +225,16 @@ export class Database {
 				bunOpts,
 			) as unknown as SQLiteDatabase;
 		} else {
-			const BetterSqlite3 = (await import("better-sqlite3")).default;
+			let BetterSqlite3;
+			try {
+				BetterSqlite3 = (await import("better-sqlite3")).default;
+			} catch {
+				throw new Error(
+					"Signet requires Bun (recommended) or the better-sqlite3 npm package. " +
+					"Install Bun: curl -fsSL https://bun.sh/install | bash\n" +
+					"Or install better-sqlite3: npm install -g better-sqlite3",
+				);
+			}
 			this.db = new BetterSqlite3(this.dbPath, {
 				readonly: this.options?.readonly,
 			}) as SQLiteDatabase;

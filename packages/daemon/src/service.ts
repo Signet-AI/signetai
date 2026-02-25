@@ -97,7 +97,7 @@ function generateLaunchdPlist(port: number = 3850): string {
     
     <key>ProgramArguments</key>
     <array>
-        <string>${runtime === "bun" ? "/opt/homebrew/bin/bun" : "/usr/local/bin/node"}</string>
+        <string>${resolveRuntimePath()}</string>
         <string>${daemonPath}</string>
     </array>
     
@@ -177,10 +177,28 @@ function isLaunchdRunning(): boolean {
 // Linux (systemd)
 // ============================================================================
 
+function resolveRuntimePath(): string {
+	// Use the currently running process's executable if it's bun/node
+	const execPath = process.execPath;
+	if (execPath && existsSync(execPath)) {
+		return execPath;
+	}
+	// Fall back to which (hardcoded strings only — no user input)
+	try {
+		return execSync("which bun", { encoding: "utf-8" }).trim();
+	} catch {
+		try {
+			return execSync("which node", { encoding: "utf-8" }).trim();
+		} catch {
+			return "/usr/bin/bun";
+		}
+	}
+}
+
 function generateSystemdUnit(port: number = 3850): string {
 	const runtime = getRuntime();
 	const daemonPath = getDaemonPath();
-	const runtimePath = runtime === "bun" ? "/usr/bin/bun" : "/usr/bin/node";
+	const runtimePath = resolveRuntimePath();
 
 	return `[Unit]
 Description=Signet Daemon
@@ -192,7 +210,7 @@ ExecStart=${runtimePath} ${daemonPath}
 Environment=SIGNET_PORT=${port}
 Environment=SIGNET_PATH=${AGENTS_DIR}
 WorkingDirectory=${AGENTS_DIR}
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 StandardOutput=append:${LOG_DIR}/daemon.out.log

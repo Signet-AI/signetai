@@ -5123,28 +5123,45 @@ app.post("/api/update/config", async (c) => {
 });
 
 // API: Run update
+// Accepts optional { targetVersion } in body to skip redundant version check
 app.post("/api/update/run", async (c) => {
-	const check = await checkForUpdatesImpl();
+	let targetVersion: string | undefined;
 
-	if (check.restartRequired && !check.updateAvailable) {
-		return c.json({
-			success: true,
-			message: `Update ${check.pendingVersion || check.latestVersion || "already"} installed. Restart daemon to apply.`,
-			installedVersion: check.pendingVersion || check.latestVersion,
-			restartRequired: true,
-		});
+	try {
+		const body = await c.req.json<{ targetVersion?: string }>();
+		if (body.targetVersion && typeof body.targetVersion === "string") {
+			targetVersion = body.targetVersion;
+		}
+	} catch {
+		// No body or invalid JSON — fall through to check
 	}
 
-	if (!check.updateAvailable && check.latestVersion) {
-		return c.json({
-			success: true,
-			message: "Already running the latest version.",
-			installedVersion: check.latestVersion,
-			restartRequired: false,
-		});
+	// If caller already knows the target version, skip the redundant check
+	if (!targetVersion) {
+		const check = await checkForUpdatesImpl();
+
+		if (check.restartRequired && !check.updateAvailable) {
+			return c.json({
+				success: true,
+				message: `Update ${check.pendingVersion || check.latestVersion || "already"} installed. Restart daemon to apply.`,
+				installedVersion: check.pendingVersion || check.latestVersion,
+				restartRequired: true,
+			});
+		}
+
+		if (!check.updateAvailable && check.latestVersion) {
+			return c.json({
+				success: true,
+				message: "Already running the latest version.",
+				installedVersion: check.latestVersion,
+				restartRequired: false,
+			});
+		}
+
+		targetVersion = check.latestVersion ?? undefined;
 	}
 
-	const result = await runUpdateImpl(check.latestVersion ?? undefined);
+	const result = await runUpdateImpl(targetVersion);
 	return c.json(result);
 });
 

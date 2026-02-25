@@ -25,6 +25,7 @@ interface ResolvePackageManagerOptions {
 	userAgent?: string;
 	fallbackOrder?: PackageManagerFamily[];
 	commandExists?: (command: string) => boolean;
+	execPath?: string;
 }
 
 const DEFAULT_FALLBACK_ORDER: PackageManagerFamily[] = [
@@ -93,6 +94,21 @@ function pickFirstAvailable(
 	return null;
 }
 
+/**
+ * Detect the package manager that installed the running binary by inspecting
+ * the executable path. E.g. `~/.bun/bin/signet` → bun, `/usr/lib/node_modules/` → npm.
+ */
+function detectFromExecPath(execPath: string | undefined): PackageManagerFamily | null {
+	if (!execPath) return null;
+	const lower = execPath.toLowerCase();
+	if (lower.includes(".bun/") || lower.includes("/bun/")) return "bun";
+	if (lower.includes(".pnpm/") || lower.includes("/pnpm/")) return "pnpm";
+	if (lower.includes(".yarn/") || lower.includes("/yarn/")) return "yarn";
+	// npm global installs go to /usr/lib/node_modules or similar
+	if (lower.includes("node_modules")) return "npm";
+	return null;
+}
+
 function readConfiguredPackageManager(
 	agentsDir: string | undefined,
 ): PackageManagerFamily | null {
@@ -109,6 +125,11 @@ function readConfiguredPackageManager(
 		try {
 			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
 			const install = yaml.install as Record<string, unknown> | undefined;
+
+			// Skip config values that were auto-detected (source: fallback)
+			// rather than explicitly chosen by the user
+			const source = install?.source;
+			if (source === "fallback") return null;
 
 			const configured =
 				normalizePackageManager(install?.primary_package_manager) ||
@@ -134,6 +155,20 @@ export function resolvePrimaryPackageManager(
 	const userAgentFamily = parsePackageManagerUserAgent(
 		options.userAgent ?? options.env?.npm_config_user_agent,
 	);
+	// Try the provided exec path, then process.argv[0], then `which signet`
+	let execPathForDetection =
+		options.execPath ?? (typeof process !== "undefined" ? process.argv[0] : undefined);
+	if (!detectFromExecPath(execPathForDetection)) {
+		try {
+			const result = spawnSync("which", ["signet"], { encoding: "utf-8" });
+			if (result.status === 0 && result.stdout.trim()) {
+				execPathForDetection = result.stdout.trim();
+			}
+		} catch {
+			// Ignore — best effort
+		}
+	}
+	const execPathFamily = detectFromExecPath(execPathForDetection);
 
 	const fallbackFamily =
 		pickFirstAvailable(available, fallbackOrder) ?? fallbackOrder[0] ?? "npm";
@@ -176,6 +211,18 @@ export function resolvePrimaryPackageManager(
 			family: fallbackFamily,
 			source: "fallback",
 			reason: `Package manager '${userAgentFamily}' from npm_config_user_agent is unavailable; using '${fallbackFamily}'`,
+			available,
+			configuredFamily,
+			userAgentFamily,
+		};
+	}
+
+	// Detect from the running binary's install path (e.g. ~/.bun/bin/signet → bun)
+	if (execPathFamily && available[execPathFamily]) {
+		return {
+			family: execPathFamily,
+			source: "fallback",
+			reason: `Detected package manager '${execPathFamily}' from executable path`,
 			available,
 			configuredFamily,
 			userAgentFamily,

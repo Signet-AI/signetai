@@ -4576,7 +4576,12 @@ updateCmd
 			output?: string;
 			restartRequired?: boolean;
 			installedVersion?: string;
-		}>("/api/update/run", { method: "POST" });
+		}>("/api/update/run", {
+			method: "POST",
+			timeout: 120_000,
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ targetVersion: check.latestVersion }),
+		});
 
 		if (!data?.success) {
 			spinner.fail(data?.message || "Update failed");

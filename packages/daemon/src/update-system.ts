@@ -498,9 +498,7 @@ export async function runUpdate(
 
 			proc.on("close", (code) => {
 				if (code === 0) {
-					if (targetVersion) {
-						pendingRestartVersion = targetVersion;
-					}
+					pendingRestartVersion = targetVersion ?? "unknown";
 					lastUpdateCheck = null;
 					lastUpdateCheckTime = null;
 
@@ -509,7 +507,7 @@ export async function runUpdate(
 						success: true,
 						message: "Update installed. Restart daemon to apply.",
 						output: stdout,
-						installedVersion: targetVersion,
+						installedVersion: targetVersion ?? "unknown",
 						restartRequired: true,
 					});
 				} else {
@@ -571,8 +569,16 @@ async function runAutoUpdateCycle(): Promise<void> {
 			lastAutoUpdateError = null;
 			logger.info(
 				"system",
-				`Auto-update installed v${checkResult.latestVersion}. Restart required.`,
+				`Auto-update installed v${checkResult.latestVersion}. Restarting daemon.`,
 			);
+
+			// Clean exit — systemd/launchd Restart=always will respawn us.
+			// For non-service runs, the CLI's `signet daemon start` can
+			// detect the clean exit and re-launch if desired.
+			stopUpdateTimer();
+			setTimeout(() => {
+				process.exit(0);
+			}, 500);
 			return;
 		}
 
@@ -602,7 +608,10 @@ export function startUpdateTimer(): void {
 	}
 
 	if (!updateConfig.autoInstall || updateConfig.checkInterval <= 0) {
-		logger.debug("system", "Auto-update disabled");
+		logger.info(
+			"system",
+			"Auto-updates not enabled. Run `signet update enable` to enable.",
+		);
 		return;
 	}
 
