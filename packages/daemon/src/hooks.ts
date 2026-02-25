@@ -34,6 +34,7 @@ export interface HooksConfig {
 		includeRecentContext?: boolean;
 		recencyBias?: number;
 		query?: string;
+		maxInjectChars?: number;
 	};
 	preCompaction?: {
 		summaryGuidelines?: string;
@@ -261,7 +262,7 @@ function getSessionGapSummary(): string | undefined {
 			// Count new memories since last session
 			const memCount = db
 				.prepare(
-					"SELECT COUNT(*) as cnt FROM memories WHERE created_at > ?",
+					"SELECT COUNT(*) as cnt FROM memories WHERE created_at > ? AND is_deleted = 0",
 				)
 				.get(lastEnd) as { cnt: number };
 
@@ -375,7 +376,7 @@ function getProjectMemories(
 				db
 					.prepare(
 						`SELECT id, content, type, importance, tags, pinned, project, created_at
-					 FROM memories ORDER BY created_at DESC LIMIT ?`,
+					 FROM memories WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT ?`,
 					)
 					.all(limit * 3) as Array<{
 					id: string;
@@ -683,6 +684,7 @@ function getRecentMemories(
           id, content, type, importance, created_at,
           (julianday('now') - julianday(created_at)) as age_days
         FROM memories
+        WHERE is_deleted = 0
         ORDER BY
           (importance * ${1 - recencyBias}) +
           (1.0 / (1.0 + (julianday('now') - julianday(created_at)))) * ${recencyBias}
@@ -737,7 +739,7 @@ export function handleSessionStart(
 	const memoryMdContent = readMemoryMd(10000);
 
 	// Get project memories with scoring
-	const memories = getProjectMemories(req.project, 30, 2000);
+	const memories = getProjectMemories(req.project, config.recallLimit ?? 30, 2000);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -830,7 +832,11 @@ export function handleSessionStart(
 	}
 
 	const duration = Date.now() - start;
-	const inject = injectParts.join("\n");
+	const maxInject = config.maxInjectChars ?? 24000;
+	let inject = injectParts.join("\n");
+	if (inject.length > maxInject) {
+		inject = inject.slice(0, maxInject) + "\n[context truncated]";
+	}
 	logger.info("hooks", "Session start completed", {
 		harness: req.harness,
 		project: req.project,
@@ -942,6 +948,7 @@ export function handleUserPromptSubmit(
 					   FROM memories m
 					   JOIN memories_fts f ON m.rowid = f.rowid
 					   WHERE memories_fts MATCH ?
+					   AND m.is_deleted = 0
 					   AND m.project = ?
 					   LIMIT 30`
 					: `SELECT m.id, m.content, m.type, m.importance, m.tags,
@@ -949,6 +956,7 @@ export function handleUserPromptSubmit(
 					   FROM memories m
 					   JOIN memories_fts f ON m.rowid = f.rowid
 					   WHERE memories_fts MATCH ?
+					   AND m.is_deleted = 0
 					   LIMIT 30`;
 
 				return req.project
@@ -1197,12 +1205,14 @@ export function handleRecall(req: RecallRequest): RecallResponse {
 						   FROM memories m
 						   JOIN memories_fts f ON m.rowid = f.rowid
 						   WHERE memories_fts MATCH ?
+						   AND m.is_deleted = 0
 						   AND m.project = ?
 						   LIMIT ?`
 						: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
 						   FROM memories m
 						   JOIN memories_fts f ON m.rowid = f.rowid
 						   WHERE memories_fts MATCH ?
+						   AND m.is_deleted = 0
 						   LIMIT ?`;
 
 					found = req.project
@@ -1221,12 +1231,12 @@ export function handleRecall(req: RecallRequest): RecallResponse {
 				const baseQuery = req.project
 					? `SELECT id, content, type, importance, tags, created_at
 					   FROM memories
-					   WHERE content LIKE ? AND project = ?
+					   WHERE content LIKE ? AND is_deleted = 0 AND project = ?
 					   ORDER BY importance DESC
 					   LIMIT ?`
 					: `SELECT id, content, type, importance, tags, created_at
 					   FROM memories
-					   WHERE content LIKE ?
+					   WHERE content LIKE ? AND is_deleted = 0
 					   ORDER BY importance DESC
 					   LIMIT ?`;
 

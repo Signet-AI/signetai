@@ -685,7 +685,7 @@ const signetPlugin = {
 				parameters: Type.Object({
 					limit: Type.Optional(
 						Type.Number({
-							description: "Max results (default 100)",
+							description: "Max results (default 50, max 50)",
 						}),
 					),
 					offset: Type.Optional(
@@ -703,17 +703,32 @@ const signetPlugin = {
 						offset?: number;
 						type?: string;
 					};
+					const ITEM_CHAR_LIMIT = 500;
+					const TOTAL_CHAR_BUDGET = 8000;
 					try {
 						const result = await memoryList({
 							...opts,
-							limit,
+							limit: Math.min(limit ?? 50, 50),
 							offset,
 							type,
 						});
+						const lines: string[] = [];
+						let totalChars = 0;
+						for (const m of result.memories) {
+							const content =
+								m.content.length > ITEM_CHAR_LIMIT
+									? `${m.content.slice(0, ITEM_CHAR_LIMIT)}[truncated]`
+									: m.content;
+							const line = `- [${m.type}] ${content} (id: ${m.id})`;
+							if (totalChars + line.length > TOTAL_CHAR_BUDGET) break;
+							lines.push(line);
+							totalChars += line.length;
+						}
 						return textResult(
-							`${result.memories.length} memories:\n\n${result.memories.map((m) => `- [${m.type}] ${m.content} (id: ${m.id})`).join("\n")}`,
+							`${lines.length} of ${result.memories.length} memories:\n\n${lines.join("\n")}`,
 							{
 								count: result.memories.length,
+								shown: lines.length,
 								stats: result.stats,
 							},
 						);
