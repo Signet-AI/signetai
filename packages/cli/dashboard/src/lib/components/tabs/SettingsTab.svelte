@@ -64,6 +64,18 @@ let configFile = $derived(
 	configFiles?.find((f) => f.name === "config.yaml")
 );
 
+// Mirror daemon's loadMemoryConfig priority: agent.yaml > AGENT.yaml > config.yaml
+// The daemon uses first-match-wins (breaks after first successful parse), not merge.
+const SETTINGS_PRIORITY = ["agent.yaml", "AGENT.yaml", "config.yaml"] as const;
+let settingsFileName = $derived(
+	SETTINGS_PRIORITY.find((name) =>
+		configFiles?.some((f) => f.name === name && f.content)
+	) ?? null
+);
+let settingsIsSameAsAgent = $derived(
+	settingsFileName === "agent.yaml" || settingsFileName === "AGENT.yaml"
+);
+
 $effect(() => {
 	if (agentFile?.content) {
 		try {
@@ -116,6 +128,24 @@ const cNum = (path: string[]) => { const v = get(config, ...path); return typeof
 const cOnStr = (path: string[]) => (e: Event) => set(config, path, (e.target as HTMLInputElement).value);
 const cOnNum = (path: string[]) => (e: Event) => { const v = (e.target as HTMLInputElement).value; set(config, path, v === "" ? null : Number(v)); };
 
+// Settings accessors: route to agent or config based on daemon's resolution
+function sObj(): YamlObject { return settingsIsSameAsAgent ? agent : config; }
+const sStr = (path: string[]) => String(get(sObj(), ...path) ?? "");
+const sNum = (path: string[]) => { const v = get(sObj(), ...path); return typeof v === "number" ? v : (v ? Number(v) : ""); };
+const sBool = (path: string[]) => Boolean(get(sObj(), ...path));
+const sOnStr = (path: string[]) => (e: Event) => set(sObj(), path, (e.target as HTMLInputElement).value);
+const sOnNum = (path: string[]) => (e: Event) => { const v = (e.target as HTMLInputElement).value; set(sObj(), path, v === "" ? null : Number(v)); };
+const sOnBool = (path: string[]) => (e: Event) => set(sObj(), path, (e.target as HTMLInputElement).checked);
+const sOnSelect = (path: string[]) => (v: string | undefined) => set(sObj(), path, v ?? "");
+
+// Embedding key: daemon reads "embedding" > "memory.embeddings" > "embeddings"
+function embPath(): string[] {
+	const s = sObj();
+	if (get(s, "embedding") != null) return ["embedding"];
+	if (get(s, "memory", "embeddings") != null) return ["memory", "embeddings"];
+	return ["embeddings"];
+}
+
 function harnessArray(): string[] {
 	const v = get(agent, "harnesses");
 	return Array.isArray(v) ? v.map(String) : [];
@@ -154,8 +184,9 @@ async function saveSettings(): Promise<void> {
 		if (agentFile) {
 			results.push(await saveConfigFile("agent.yaml", stringify(agent)));
 		}
-		if (configFile) {
-			results.push(await saveConfigFile("config.yaml", stringify(config)));
+		// Only save config.yaml separately when settings live there (not in agent.yaml)
+		if (!settingsIsSameAsAgent && settingsFileName) {
+			results.push(await saveConfigFile(settingsFileName, stringify(config)));
 		}
 		const allOk = results.length > 0 && results.every(Boolean);
 		toast(allOk ? "Settings saved" : "Failed to save settings", allOk ? "success" : "error");
@@ -234,21 +265,19 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 				</FormSection>
 			{/if}
 
-			<!-- === EMBEDDINGS (config.yaml) === -->
-			{#if configFile}
+			<!-- === EMBEDDINGS (resolved from daemon's config priority) === -->
+			{#if settingsFileName}
 				<FormSection title="Embeddings" defaultOpen={false} description="Vector embedding configuration for semantic memory search. Embeddings power the vector half of hybrid recall.">
 					{#snippet children()}
 						<FormField label="Provider" description="Embedding backend. Ollama runs locally, OpenAI requires an API key.">
 							{#snippet children()}
 								<Select.Root
 									type="single"
-									value={cStr(["embeddings", "provider"])}
-									onValueChange={(v) =>
-										set(config, ["embeddings", "provider"], v ?? "")
-									}
+									value={sStr([...embPath(), "provider"])}
+									onValueChange={sOnSelect([...embPath(), "provider"])}
 								>
 									<Select.Trigger class={selectTriggerClass}>
-										{cStr(["embeddings", "provider"]) || "— select —"}
+										{sStr([...embPath(), "provider"]) || "— select —"}
 									</Select.Trigger>
 									<Select.Content class={selectContentClass}>
 										<Select.Item class={selectItemClass} value="" label="— select —" />
@@ -260,99 +289,99 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 						</FormField>
 						<FormField label="Model" description="Ollama: nomic-embed-text (768d), all-minilm (384d), mxbai-embed-large (1024d). OpenAI: text-embedding-3-small (1536d), text-embedding-3-large (3072d).">
 							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["embeddings", "model"])} oninput={cOnStr(["embeddings", "model"])} />
+								<input type="text" class="inp" value={sStr([...embPath(), "model"])} oninput={sOnStr([...embPath(), "model"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="Dimensions" description="Must match the model's output dimension. Mismatched dimensions will produce broken search results.">
 							{#snippet children()}
-								<input type="number" class="inp" value={cNum(["embeddings", "dimensions"])} oninput={cOnNum(["embeddings", "dimensions"])} />
+								<input type="number" class="inp" value={sNum([...embPath(), "dimensions"])} oninput={sOnNum([...embPath(), "dimensions"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="Base URL" description="Ollama default: http://localhost:11434. OpenAI default: https://api.openai.com/v1.">
 							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["embeddings", "base_url"])} oninput={cOnStr(["embeddings", "base_url"])} />
+								<input type="text" class="inp" value={sStr([...embPath(), "base_url"])} oninput={sOnStr([...embPath(), "base_url"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="API Key" description="Optional for Ollama, required for OpenAI. Use $secret:NAME to reference a stored secret instead of plaintext.">
 							{#snippet children()}
-								<input type="password" class="inp" value={cStr(["embeddings", "api_key"])} oninput={cOnStr(["embeddings", "api_key"])} />
+								<input type="password" class="inp" value={sStr([...embPath(), "api_key"])} oninput={sOnStr([...embPath(), "api_key"])} />
 							{/snippet}
 						</FormField>
 					{/snippet}
 				</FormSection>
 
-				<!-- === SEARCH (config.yaml) === -->
+				<!-- === SEARCH === -->
 				<FormSection title="Search" defaultOpen={false} description="Hybrid search tuning. Controls the blend between semantic (vector) and keyword (BM25) retrieval.">
 					{#snippet children()}
 						<FormField label="Alpha" description="Vector weight (0–1). At 0.9 results are heavily semantic; at 0.3 they skew toward keyword matching. Default 0.7 works well generally.">
 							{#snippet children()}
-								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "alpha"])} oninput={cOnNum(["search", "alpha"])} />
+								<input type="number" class="inp" min="0" max="1" step="0.1" value={sNum(["search", "alpha"])} oninput={sOnNum(["search", "alpha"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="Top K" description="Candidate count fetched from each source (BM25 and vector) before alpha-blending. Default: 20.">
 							{#snippet children()}
-								<input type="number" class="inp" value={cNum(["search", "top_k"])} oninput={cOnNum(["search", "top_k"])} />
+								<input type="number" class="inp" value={sNum(["search", "top_k"])} oninput={sOnNum(["search", "top_k"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="Min Score" description="Minimum combined score to include in results. Results below this threshold are dropped. Default: 0.3.">
 							{#snippet children()}
-								<input type="number" class="inp" min="0" max="1" step="0.1" value={cNum(["search", "min_score"])} oninput={cOnNum(["search", "min_score"])} />
+								<input type="number" class="inp" min="0" max="1" step="0.1" value={sNum(["search", "min_score"])} oninput={sOnNum(["search", "min_score"])} />
 							{/snippet}
 						</FormField>
 						<div class="sub-heading">Rehearsal Boost</div>
 						<FormField label="Rehearsal enabled" description="Boost scores for frequently-recalled memories. Uses access_count and last_accessed to reward useful memories.">
 							{#snippet children()}
 								<label class="toggle">
-									<input type="checkbox" checked={Boolean(get(config, "search", "rehearsal_enabled"))} onchange={(e) => set(config, ["search", "rehearsal_enabled"], (e.target as HTMLInputElement).checked)} />
+									<input type="checkbox" checked={sBool(["search", "rehearsal_enabled"])} onchange={sOnBool(["search", "rehearsal_enabled"])} />
 									<span class="toggle-track"><span class="toggle-thumb"></span></span>
 								</label>
 							{/snippet}
 						</FormField>
 						<FormField label="Rehearsal weight" description="Score multiplier for rehearsal boost. Higher = more impact from recall frequency. Default: 0.1.">
 							{#snippet children()}
-								<input type="number" class="inp" min="0" max="1" step="0.05" value={cNum(["search", "rehearsal_weight"])} oninput={cOnNum(["search", "rehearsal_weight"])} />
+								<input type="number" class="inp" min="0" max="1" step="0.05" value={sNum(["search", "rehearsal_weight"])} oninput={sOnNum(["search", "rehearsal_weight"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="Rehearsal half-life (days)" description="Days until rehearsal boost decays to half. Lower = faster decay of recall-frequency boost. Default: 30.">
 							{#snippet children()}
-								<input type="number" class="inp" min="1" max="365" step="1" value={cNum(["search", "rehearsal_half_life_days"])} oninput={cOnNum(["search", "rehearsal_half_life_days"])} />
+								<input type="number" class="inp" min="1" max="365" step="1" value={sNum(["search", "rehearsal_half_life_days"])} oninput={sOnNum(["search", "rehearsal_half_life_days"])} />
 							{/snippet}
 						</FormField>
 					{/snippet}
 				</FormSection>
 
-				<!-- === MEMORY (config.yaml) === -->
+				<!-- === MEMORY === -->
 				<FormSection title="Memory" defaultOpen={false} description="Memory system settings. Controls how much context is injected into sessions and how memories age over time.">
 					{#snippet children()}
 						<FormField label="Session budget" description="Character limit for context injected at session start via hooks. Default: 2000.">
 							{#snippet children()}
-								<input type="number" class="inp" value={cNum(["memory", "session_budget"])} oninput={cOnNum(["memory", "session_budget"])} />
+								<input type="number" class="inp" value={sNum(["memory", "session_budget"])} oninput={sOnNum(["memory", "session_budget"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="MEMORY.md budget" description="Character limit for the auto-generated MEMORY.md summary. Default: 10000.">
 							{#snippet children()}
-								<input type="number" class="inp" value={cNum(["memory", "current_md_budget"])} oninput={cOnNum(["memory", "current_md_budget"])} />
+								<input type="number" class="inp" value={sNum(["memory", "current_md_budget"])} oninput={sOnNum(["memory", "current_md_budget"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="Decay rate" description="Daily importance decay factor for non-pinned memories. Formula: importance(t) = base × decay_rate^days. 0.99 = slow, 0.95 = default, 0.90 = fast.">
 							{#snippet children()}
-								<input type="number" class="inp" min="0" max="1" step="0.01" value={cNum(["memory", "decay_rate"])} oninput={cOnNum(["memory", "decay_rate"])} />
+								<input type="number" class="inp" min="0" max="1" step="0.01" value={sNum(["memory", "decay_rate"])} oninput={sOnNum(["memory", "decay_rate"])} />
 							{/snippet}
 						</FormField>
 					{/snippet}
 				</FormSection>
 
-				<!-- === PATHS (config.yaml) === -->
+				<!-- === PATHS === -->
 				<FormSection title="Paths" defaultOpen={false} description="File paths for memory storage. All paths are relative to ~/.agents/ (or $SIGNET_PATH).">
 					{#snippet children()}
 						<FormField label="Database" description="SQLite database file for structured memory storage.">
 							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["paths", "database"])} oninput={cOnStr(["paths", "database"])} />
+								<input type="text" class="inp" value={sStr(["paths", "database"])} oninput={sOnStr(["paths", "database"])} />
 							{/snippet}
 						</FormField>
 						<FormField label="MEMORY.md" description="Output path for the auto-generated working memory summary.">
 							{#snippet children()}
-								<input type="text" class="inp" value={cStr(["paths", "current_md"])} oninput={cOnStr(["paths", "current_md"])} />
+								<input type="text" class="inp" value={sStr(["paths", "current_md"])} oninput={sOnStr(["paths", "current_md"])} />
 							{/snippet}
 						</FormField>
 					{/snippet}
