@@ -171,23 +171,32 @@ function backfillVecEmbeddings(db: Database): void {
 		"INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)",
 	);
 
-	db.exec("BEGIN");
 	let migrated = 0;
-	for (const row of rows) {
-		try {
-			const vec = new Float32Array(
-				row.vector.buffer.slice(
-					row.vector.byteOffset,
-					row.vector.byteOffset + row.vector.byteLength,
-				),
-			);
-			insert.run(row.id, vec);
-			migrated++;
-		} catch {
-			// Skip malformed rows
+	try {
+		db.exec("BEGIN");
+		for (const row of rows) {
+			try {
+				const vec = new Float32Array(
+					row.vector.buffer.slice(
+						row.vector.byteOffset,
+						row.vector.byteOffset + row.vector.byteLength,
+					),
+				);
+				insert.run(row.id, vec);
+				migrated++;
+			} catch {
+				// Skip malformed rows
+			}
 		}
+		db.exec("COMMIT");
+	} catch (e) {
+		try {
+			db.exec("ROLLBACK");
+		} catch {
+			// Rollback failed — transaction already closed or rolled back
+		}
+		throw e;
 	}
-	db.exec("COMMIT");
 
 	if (migrated > 0) {
 		// eslint-disable-next-line no-console

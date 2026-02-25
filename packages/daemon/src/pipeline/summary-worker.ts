@@ -314,7 +314,12 @@ async function scoreContinuity(
 	if (fenceMatch) jsonStr = fenceMatch[1].trim();
 	jsonStr = jsonStr.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 
-	const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+	} catch {
+		return; // Invalid JSON from LLM, skip scoring
+	}
 	if (typeof parsed.score !== "number") return;
 
 	const result: ContinuityResult = {
@@ -370,6 +375,8 @@ export function startSummaryWorker(
 	async function tick(): Promise<void> {
 		if (stopped) return;
 
+		let jobId: string | null = null;
+
 		try {
 			// Lease a pending job
 			const job = accessor.withWriteTx((db) => {
@@ -400,6 +407,8 @@ export function startSummaryWorker(
 				return;
 			}
 
+			jobId = job.id;
+
 			logger.info("summary-worker", "Processing session summary", {
 				jobId: job.id,
 				harness: job.harness,
@@ -429,24 +438,28 @@ export function startSummaryWorker(
 
 			// Try to mark the job as failed/pending for retry
 			try {
-				accessor.withWriteTx((db) => {
-					const row = db
-						.prepare(
-							"SELECT attempts, max_attempts FROM summary_jobs WHERE id = ?",
-						)
-						.get() as { attempts: number; max_attempts: number } | undefined;
+				if (jobId) {
+					accessor.withWriteTx((db) => {
+						const row = db
+							.prepare(
+								"SELECT attempts, max_attempts FROM summary_jobs WHERE id = ?",
+							)
+							.get(jobId) as
+							| { attempts: number; max_attempts: number }
+							| undefined;
 
-					if (!row) return;
+						if (!row) return;
 
-					const status =
-						row.attempts >= row.max_attempts ? "dead" : "pending";
+						const status =
+							row.attempts >= row.max_attempts ? "dead" : "pending";
 
-					db.prepare(
-						`UPDATE summary_jobs
-						 SET status = ?, error = ?
-						 WHERE id = ? AND status = 'processing'`,
-					).run(status, err.message, row);
-				});
+						db.prepare(
+							`UPDATE summary_jobs
+							 SET status = ?, error = ?
+							 WHERE id = ? AND status = 'processing'`,
+						).run(status, err.message, jobId);
+					});
+				}
 			} catch {
 				// DB error during error handling — just log and move on
 			}
@@ -459,7 +472,9 @@ export function startSummaryWorker(
 	function scheduleTick(delay: number): void {
 		if (stopped) return;
 		timer = setTimeout(() => {
-			tick();
+			tick().catch((err) => {
+				logger.error("summary-worker", "Unhandled tick error", err as Error);
+			});
 		}, delay);
 	}
 

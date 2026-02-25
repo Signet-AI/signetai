@@ -30,7 +30,11 @@ import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
 import { initLlmProvider, closeLlmProvider } from "./llm";
-import { syncVecInsert, syncVecDeleteBySourceId } from "./db-helpers";
+import {
+	syncVecInsert,
+	syncVecDeleteBySourceId,
+	vectorToBlob,
+} from "./db-helpers";
 import {
 	putSecret,
 	getSecret,
@@ -267,10 +271,6 @@ async function fetchEmbedding(
 	}
 }
 
-function vectorToBlob(vec: number[]): Buffer {
-	const f32 = new Float32Array(vec);
-	return Buffer.from(f32.buffer);
-}
 
 function blobToVector(blob: Buffer, dimensions: number | null): number[] {
 	const raw = blob.buffer.slice(
@@ -3603,7 +3603,7 @@ app.get("/memory/similar", async (c) => {
 					id: r.id,
 					content: row.content,
 					type: row.type,
-					tags: row.tags ? JSON.parse(row.tags) : [],
+					tags: parseTagsField(row.tags),
 					score: Math.round(r.score * 100) / 100,
 					confidence: row.confidence,
 					created_at: row.created_at,
