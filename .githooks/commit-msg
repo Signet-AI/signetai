@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#
+# commit-msg hook: reject commits with default AI co-authored-by lines
+#
+# Blocks the boilerplate "Co-Authored-By: Claude" lines that Anthropic
+# injects into every Claude Code commit by default.
+
+COMMIT_MSG_FILE="$1"
+
+if grep -qiE 'Co-Authored-By:.*Claude.*<noreply@anthropic\.com>' "$COMMIT_MSG_FILE"; then
+    echo ""
+    echo "REJECTED: commit contains default Anthropic co-authored-by line."
+    echo "Remove the 'Co-Authored-By: Claude' trailer before committing."
+    echo ""
+    exit 1
+fi
