@@ -6,7 +6,7 @@
  * All actions respect autonomousFrozen regardless of actor type.
  */
 
-import type { DbAccessor, WriteDb } from "./db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { EmbeddingConfig } from "./memory-config";
 import { countChanges, vectorToBlob, syncVecInsert, syncVecDeleteBySourceExceptHash, syncVecDeleteByEmbeddingIds } from "./db-helpers";
 import { insertHistoryEvent } from "./transactions";
@@ -722,4 +722,396 @@ export function cleanOrphanedEmbeddings(
 		affected,
 		message: `cleaned ${affected} orphaned embedding(s)`,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Deduplication stats (read-only)
+// ---------------------------------------------------------------------------
+
+export interface DedupStats {
+	readonly exactClusters: number;
+	readonly exactExcess: number;
+	readonly totalActive: number;
+}
+
+export function getDedupStats(accessor: DbAccessor): DedupStats {
+	return accessor.withReadDb((db) => {
+		const row = db
+			.prepare(
+				`SELECT COUNT(*) AS clusters, COALESCE(SUM(excess), 0) AS excess_total
+				 FROM (
+					SELECT content_hash, COUNT(*) - 1 AS excess
+					FROM memories
+					WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
+					  AND content_hash IS NOT NULL
+					GROUP BY content_hash
+					HAVING COUNT(*) > 1
+				 )`,
+			)
+			.get() as { clusters: number; excess_total: number } | undefined;
+
+		const totalRow = db
+			.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
+			.get() as { n: number };
+
+		return {
+			exactClusters: row?.clusters ?? 0,
+			exactExcess: row?.excess_total ?? 0,
+			totalActive: totalRow.n,
+		};
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Deduplication action
+// ---------------------------------------------------------------------------
+
+interface DedupCandidate {
+	readonly id: string;
+	readonly content: string;
+	readonly content_hash: string;
+	readonly tags: string | null;
+	readonly importance: number;
+	readonly access_count: number;
+	readonly update_count: number;
+	readonly updated_at: string;
+	readonly pinned: number;
+	readonly manual_override: number;
+}
+
+export interface DedupResult extends RepairResult {
+	readonly clusters: number;
+}
+
+function scoreDedupCandidate(c: DedupCandidate): number {
+	let s = c.importance * 3;
+	s += Math.min(c.access_count, 50) / 50;
+	s += Math.min(c.update_count, 20) / 20;
+	// Recency tiebreaker — normalized to a small range
+	const updatedMs = new Date(c.updated_at).getTime();
+	s += updatedMs / 1e15; // tiny but deterministic
+	if (c.pinned) s += 100;
+	if (c.manual_override) s += 100;
+	return s;
+}
+
+function mergeTags(existing: string | null, incoming: string | null): string | null {
+	const a = existing ? existing.split(",").map((t) => t.trim()).filter(Boolean) : [];
+	const b = incoming ? incoming.split(",").map((t) => t.trim()).filter(Boolean) : [];
+	const merged = [...new Set([...a, ...b])];
+	return merged.length > 0 ? merged.join(",") : null;
+}
+
+function processCluster(
+	db: WriteDb,
+	candidates: readonly DedupCandidate[],
+	ctx: RepairContext,
+): { keeperId: string; removed: number } | null {
+	// Safety: skip if any member is protected
+	if (candidates.some((c) => c.pinned || c.manual_override)) {
+		return null;
+	}
+
+	if (candidates.length < 2) return null;
+
+	// Score and pick keeper
+	let bestIdx = 0;
+	let bestScore = -Infinity;
+	for (let i = 0; i < candidates.length; i++) {
+		const score = scoreDedupCandidate(candidates[i]);
+		if (score > bestScore) {
+			bestScore = score;
+			bestIdx = i;
+		}
+	}
+
+	const keeper = candidates[bestIdx];
+	const losers = candidates.filter((_, i) => i !== bestIdx);
+	const now = new Date().toISOString();
+
+	// Merge tags into keeper
+	let mergedTags = keeper.tags;
+	for (const loser of losers) {
+		mergedTags = mergeTags(mergedTags, loser.tags);
+	}
+
+	if (mergedTags !== keeper.tags) {
+		db.prepare("UPDATE memories SET tags = ?, updated_at = ? WHERE id = ?")
+			.run(mergedTags, now, keeper.id);
+	}
+
+	// Audit keeper
+	insertHistoryEvent(db, {
+		memoryId: keeper.id,
+		event: "merged",
+		oldContent: null,
+		newContent: null,
+		changedBy: ctx.actor,
+		reason: `dedup: merged ${losers.length} duplicate(s)`,
+		metadata: JSON.stringify({
+			mergedFrom: losers.map((l) => l.id),
+			mergedTags,
+		}),
+		createdAt: now,
+		actorType: ctx.actorType,
+		requestId: ctx.requestId,
+	});
+
+	// Soft-delete losers
+	for (const loser of losers) {
+		db.prepare(
+			"UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?",
+		).run(now, now, loser.id);
+
+		insertHistoryEvent(db, {
+			memoryId: loser.id,
+			event: "deleted",
+			oldContent: loser.content,
+			newContent: null,
+			changedBy: ctx.actor,
+			reason: `dedup: duplicate of ${keeper.id}`,
+			metadata: null,
+			createdAt: now,
+			actorType: ctx.actorType,
+			requestId: ctx.requestId,
+		});
+	}
+
+	return { keeperId: keeper.id, removed: losers.length };
+}
+
+export async function deduplicateMemories(
+	accessor: DbAccessor,
+	cfg: PipelineV2Config,
+	ctx: RepairContext,
+	limiter: RateLimiter,
+	options?: {
+		batchSize?: number;
+		semanticThreshold?: number;
+		dryRun?: boolean;
+		semanticEnabled?: boolean;
+	},
+): Promise<DedupResult> {
+	const action = "deduplicateMemories";
+	const gate = checkRepairGate(
+		cfg,
+		ctx,
+		limiter,
+		action,
+		cfg.repair.dedupCooldownMs,
+		cfg.repair.dedupHourlyBudget,
+	);
+
+	if (!gate.allowed) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			clusters: 0,
+			message: gate.reason ?? "denied by policy gate",
+		};
+	}
+
+	const batchSize = options?.batchSize ?? cfg.repair.dedupBatchSize;
+	const semanticThreshold =
+		options?.semanticThreshold ?? cfg.repair.dedupSemanticThreshold;
+	const dryRun = options?.dryRun ?? false;
+	const semanticEnabled = options?.semanticEnabled ?? false;
+
+	// Phase 1: Exact hash clusters
+	const hashClusters = accessor.withReadDb((db) => {
+		return db
+			.prepare(
+				`SELECT content_hash, COUNT(*) AS cnt
+				 FROM memories
+				 WHERE is_deleted = 0 AND pinned = 0 AND manual_override = 0
+				   AND content_hash IS NOT NULL
+				 GROUP BY content_hash
+				 HAVING COUNT(*) > 1
+				 ORDER BY cnt DESC
+				 LIMIT ?`,
+			)
+			.all(batchSize) as Array<{ content_hash: string; cnt: number }>;
+	});
+
+	if (dryRun) {
+		const totalExcess = hashClusters.reduce((sum, c) => sum + c.cnt - 1, 0);
+		let semanticClusterCount = 0;
+		if (semanticEnabled) {
+			const semanticClusters = await findSemanticDuplicates(
+				accessor,
+				semanticThreshold,
+				batchSize,
+			);
+			semanticClusterCount = semanticClusters.length;
+		}
+		limiter.record(action);
+		const parts = [`${hashClusters.length} exact cluster(s), ${totalExcess} excess duplicate(s)`];
+		if (semanticEnabled) {
+			parts.push(`${semanticClusterCount} semantic cluster(s)`);
+		}
+		return {
+			action,
+			success: true,
+			affected: 0,
+			clusters: hashClusters.length + semanticClusterCount,
+			message: `dry run: ${parts.join(", ")}`,
+		};
+	}
+
+	let totalRemoved = 0;
+	let totalClusters = 0;
+
+	// Process exact hash clusters
+	for (const cluster of hashClusters) {
+		const removed = accessor.withWriteTx((db) => {
+			const candidates = db
+				.prepare(
+					`SELECT id, content, content_hash, tags, importance,
+							access_count, update_count, updated_at, pinned, manual_override
+					 FROM memories
+					 WHERE content_hash = ? AND is_deleted = 0
+					   AND pinned = 0 AND manual_override = 0
+					 ORDER BY importance DESC`,
+				)
+				.all(cluster.content_hash) as DedupCandidate[];
+
+			const result = processCluster(db, candidates, ctx);
+			return result?.removed ?? 0;
+		});
+
+		if (removed > 0) {
+			totalRemoved += removed;
+			totalClusters++;
+		}
+	}
+
+	// Phase 2: Semantic clusters (only if exact phase didn't fill batch)
+	if (semanticEnabled && totalClusters < batchSize) {
+		const semanticClusters = await findSemanticDuplicates(
+			accessor,
+			semanticThreshold,
+			batchSize - totalClusters,
+		);
+
+		for (const cluster of semanticClusters) {
+			const removed = accessor.withWriteTx((db) => {
+				const ids = cluster.map((c) => c.id);
+				const placeholders = ids.map(() => "?").join(", ");
+				const candidates = db
+					.prepare(
+						`SELECT id, content, content_hash, tags, importance,
+								access_count, update_count, updated_at, pinned, manual_override
+						 FROM memories
+						 WHERE id IN (${placeholders}) AND is_deleted = 0`,
+					)
+					.all(...ids) as DedupCandidate[];
+
+				const result = processCluster(db, candidates, ctx);
+				return result?.removed ?? 0;
+			});
+
+			if (removed > 0) {
+				totalRemoved += removed;
+				totalClusters++;
+			}
+		}
+	}
+
+	limiter.record(action);
+	const msg = `deduplicated ${totalRemoved} memory/memories across ${totalClusters} cluster(s)`;
+
+	logger.info("pipeline", "repair: deduplication complete", {
+		affected: totalRemoved,
+		clusters: totalClusters,
+		semanticEnabled,
+		actor: ctx.actor,
+		reason: ctx.reason,
+	});
+
+	return {
+		action,
+		success: true,
+		affected: totalRemoved,
+		clusters: totalClusters,
+		message: msg,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Semantic duplicate finder
+// ---------------------------------------------------------------------------
+
+interface SemanticCandidate {
+	readonly id: string;
+	readonly embeddingId: string;
+}
+
+async function findSemanticDuplicates(
+	accessor: DbAccessor,
+	threshold: number,
+	maxClusters: number,
+): Promise<Array<Array<{ id: string }>>> {
+	const clusters: Array<Array<{ id: string }>> = [];
+	const seen = new Set<string>();
+
+	const candidates = accessor.withReadDb((db) => {
+		return db
+			.prepare(
+				`SELECT m.id, e.id AS embedding_id
+				 FROM memories m
+				 JOIN embeddings e ON e.source_type = 'memory' AND e.source_id = m.id
+				 WHERE m.is_deleted = 0 AND m.pinned = 0 AND m.manual_override = 0
+				 ORDER BY m.created_at ASC
+				 LIMIT 500`,
+			)
+			.all() as Array<{ id: string; embedding_id: string }>;
+	});
+
+	for (const candidate of candidates) {
+		if (seen.has(candidate.id)) continue;
+		if (clusters.length >= maxClusters) break;
+
+		const neighbors = accessor.withReadDb((db) => {
+			// Get the vector for this candidate's embedding
+			const vecRow = db
+				.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?")
+				.get(candidate.embedding_id) as { embedding: ArrayBuffer } | undefined;
+
+			if (!vecRow) return [];
+
+			const queryVec = new Float32Array(vecRow.embedding);
+			// KNN search for nearby vectors
+			const rows = db
+				.prepare(
+					`SELECT e.source_id, v.distance
+					 FROM vec_embeddings v
+					 JOIN embeddings e ON v.id = e.id
+					 JOIN memories m ON e.source_id = m.id
+					 WHERE v.embedding MATCH ? AND k = 6
+					   AND m.is_deleted = 0 AND m.pinned = 0 AND m.manual_override = 0
+					 ORDER BY v.distance`,
+				)
+				.all(queryVec) as Array<{ source_id: string; distance: number }>;
+
+			// Convert distance to cosine similarity and filter
+			return rows
+				.filter((r) => r.source_id !== candidate.id)
+				.filter((r) => {
+					const similarity = 1 - r.distance;
+					return similarity >= threshold;
+				})
+				.map((r) => ({ id: r.source_id }));
+		});
+
+		if (neighbors.length > 0) {
+			const cluster = [{ id: candidate.id }, ...neighbors];
+			for (const member of cluster) {
+				seen.add(member.id);
+			}
+			clusters.push(cluster);
+		}
+	}
+
+	return clusters;
 }

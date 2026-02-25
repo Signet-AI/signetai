@@ -67,6 +67,10 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		reembedHourlyBudget: 10,
 		requeueCooldownMs: 60000, // 1 min
 		requeueHourlyBudget: 50,
+		dedupCooldownMs: 600000, // 10 min
+		dedupHourlyBudget: 3,
+		dedupSemanticThreshold: 0.92,
+		dedupBatchSize: 100,
 	},
 	documents: {
 		workerIntervalMs: 10000,
@@ -280,6 +284,29 @@ export function loadPipelineConfig(
 				1,
 				1000,
 				d.repair.requeueHourlyBudget,
+			),
+			dedupCooldownMs: clampPositive(
+				repairRaw?.dedupCooldownMs ?? raw.repairDedupCooldownMs,
+				10000,
+				3600000,
+				d.repair.dedupCooldownMs,
+			),
+			dedupHourlyBudget: clampPositive(
+				repairRaw?.dedupHourlyBudget ?? raw.repairDedupHourlyBudget,
+				1,
+				100,
+				d.repair.dedupHourlyBudget,
+			),
+			dedupSemanticThreshold: clampFraction(
+				repairRaw?.dedupSemanticThreshold ??
+					raw.repairDedupSemanticThreshold,
+				d.repair.dedupSemanticThreshold,
+			),
+			dedupBatchSize: clampPositive(
+				repairRaw?.dedupBatchSize ?? raw.repairDedupBatchSize,
+				10,
+				1000,
+				d.repair.dedupBatchSize,
 			),
 		},
 

@@ -152,6 +152,10 @@ export interface PipelineRepairConfig {
 	readonly reembedHourlyBudget: number;
 	readonly requeueCooldownMs: number;
 	readonly requeueHourlyBudget: number;
+	readonly dedupCooldownMs: number;
+	readonly dedupHourlyBudget: number;
+	readonly dedupSemanticThreshold: number;
+	readonly dedupBatchSize: number;
 }
 
 export interface PipelineDocumentsConfig {

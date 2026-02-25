@@ -50,6 +50,13 @@ export interface MutationHealth extends HealthScore {
 	readonly recentDeletes: number;
 }
 
+export interface DuplicateHealth extends HealthScore {
+	readonly exactDuplicates: number;
+	readonly exactClusters: number;
+	readonly totalActive: number;
+	readonly duplicateRatio: number;
+}
+
 export interface ConnectorHealth extends HealthScore {
 	readonly connectorCount: number;
 	readonly syncingCount: number;
@@ -73,6 +80,7 @@ export interface DiagnosticsReport {
 	readonly index: IndexHealth;
 	readonly provider: ProviderHealth;
 	readonly mutation: MutationHealth;
+	readonly duplicate: DuplicateHealth;
 	readonly connector: ConnectorHealth;
 	readonly update: UpdateHealth;
 }
@@ -336,6 +344,48 @@ export function getMutationHealth(db: ReadDb): MutationHealth {
 	};
 }
 
+export function getDuplicateHealth(db: ReadDb): DuplicateHealth {
+	const dupRow = db
+		.prepare(
+			`SELECT
+				COALESCE(SUM(excess), 0) AS exact_dupes,
+				COUNT(*) AS exact_clusters
+			 FROM (
+				SELECT content_hash, COUNT(*) - 1 AS excess
+				FROM memories
+				WHERE is_deleted = 0 AND content_hash IS NOT NULL
+				  AND pinned = 0 AND manual_override = 0
+				GROUP BY content_hash
+				HAVING COUNT(*) > 1
+			 )`,
+		)
+		.get() as { exact_dupes: number; exact_clusters: number } | undefined;
+
+	const totalRow = db
+		.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
+		.get() as { n: number };
+
+	const totalActive = totalRow.n;
+	const exactDuplicates = dupRow?.exact_dupes ?? 0;
+	const exactClusters = dupRow?.exact_clusters ?? 0;
+	const duplicateRatio =
+		totalActive > 0 ? exactDuplicates / totalActive : 0;
+
+	let score = 1.0;
+	if (duplicateRatio > 0.1) score -= 0.5;
+	else if (duplicateRatio > 0.05) score -= 0.3;
+
+	score = clamp(score);
+	return {
+		score,
+		status: scoreStatus(score),
+		exactDuplicates,
+		exactClusters,
+		totalActive,
+		duplicateRatio,
+	};
+}
+
 export function getConnectorHealth(db: ReadDb): ConnectorHealth {
 	const perfect: ConnectorHealth = {
 		score: 1.0,
@@ -460,10 +510,11 @@ export function getUpdateHealth(state?: UpdateState): UpdateHealth {
 
 const WEIGHTS = {
 	queue: 0.25,
-	storage: 0.12,
-	index: 0.17,
+	storage: 0.10,
+	index: 0.15,
 	provider: 0.22,
 	mutation: 0.08,
+	duplicate: 0.04,
 	connector: 0.05,
 	update: 0.11,
 } as const;
@@ -478,6 +529,7 @@ export function getDiagnostics(
 	const index = getIndexHealth(db);
 	const provider = getProviderHealth(tracker);
 	const mutation = getMutationHealth(db);
+	const duplicate = getDuplicateHealth(db);
 	const connector = getConnectorHealth(db);
 	const update = getUpdateHealth(updateState);
 
@@ -487,6 +539,7 @@ export function getDiagnostics(
 			index.score * WEIGHTS.index +
 			provider.score * WEIGHTS.provider +
 			mutation.score * WEIGHTS.mutation +
+			duplicate.score * WEIGHTS.duplicate +
 			connector.score * WEIGHTS.connector +
 			update.score * WEIGHTS.update,
 	);
@@ -504,6 +557,7 @@ export function getDiagnostics(
 		index,
 		provider,
 		mutation,
+		duplicate,
 		connector,
 		update,
 	};

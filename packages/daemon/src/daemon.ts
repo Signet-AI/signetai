@@ -121,6 +121,8 @@ import {
 	reembedMissingMemories,
 	getEmbeddingGapStats,
 	cleanOrphanedEmbeddings,
+	getDedupStats,
+	deduplicateMemories,
 	type RepairContext,
 } from "./repair-actions";
 import {
@@ -5950,6 +5952,41 @@ app.post("/api/repair/clean-orphans", (c) => {
 		cfg.pipelineV2,
 		ctx,
 		repairLimiter,
+	);
+	return c.json(result, result.success ? 200 : 429);
+});
+
+app.get("/api/repair/dedup-stats", (c) => {
+	const stats = getDedupStats(getDbAccessor());
+	return c.json(stats);
+});
+
+app.post("/api/repair/deduplicate", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	let options: {
+		batchSize?: number;
+		dryRun?: boolean;
+		semanticThreshold?: number;
+		semanticEnabled?: boolean;
+	} = {};
+	try {
+		const body = await c.req.json();
+		if (typeof body?.batchSize === "number") options.batchSize = body.batchSize;
+		if (typeof body?.dryRun === "boolean") options.dryRun = body.dryRun;
+		if (typeof body?.semanticThreshold === "number")
+			options.semanticThreshold = body.semanticThreshold;
+		if (typeof body?.semanticEnabled === "boolean")
+			options.semanticEnabled = body.semanticEnabled;
+	} catch {
+		// no body or invalid JSON — use defaults
+	}
+	const result = await deduplicateMemories(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+		options,
 	);
 	return c.json(result, result.success ? 200 : 429);
 });

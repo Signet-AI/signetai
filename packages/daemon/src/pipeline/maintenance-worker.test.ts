@@ -76,6 +76,10 @@ const BASE_CFG: PipelineV2Config = {
 		reembedHourlyBudget: 10,
 		requeueCooldownMs: 0, // no cooldown for tests
 		requeueHourlyBudget: 1000,
+		dedupCooldownMs: 600000,
+		dedupHourlyBudget: 3,
+		dedupSemanticThreshold: 0.92,
+		dedupBatchSize: 100,
 	},
 	documents: {
 		workerIntervalMs: 10000,
@@ -97,7 +101,7 @@ const now = new Date().toISOString();
 // ---------------------------------------------------------------------------
 
 describe("maintenance-worker", () => {
-	it("returns healthy report on empty database", () => {
+	it("returns healthy report on empty database", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
@@ -109,14 +113,14 @@ describe("maintenance-worker", () => {
 		);
 		handle.stop();
 
-		const result = handle.tick();
+		const result = await handle.tick();
 		expect(result.report.composite.status).toBe("healthy");
 		expect(result.recommendations).toHaveLength(0);
 		expect(result.executed).toHaveLength(0);
 		db.close();
 	});
 
-	it("recommends requeueDeadJobs when dead rate is high", () => {
+	it("recommends requeueDeadJobs when dead rate is high", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
@@ -143,13 +147,13 @@ describe("maintenance-worker", () => {
 		);
 		handle.stop();
 
-		const result = handle.tick();
+		const result = await handle.tick();
 		const actions = result.recommendations.map((r) => r.action);
 		expect(actions).toContain("requeueDeadJobs");
 		db.close();
 	});
 
-	it("executes repairs in execute mode", () => {
+	it("executes repairs in execute mode", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
@@ -174,7 +178,7 @@ describe("maintenance-worker", () => {
 		);
 		handle.stop();
 
-		const result = handle.tick();
+		const result = await handle.tick();
 		expect(result.executed.length).toBeGreaterThan(0);
 
 		// Dead jobs should be requeued
@@ -187,7 +191,7 @@ describe("maintenance-worker", () => {
 		db.close();
 	});
 
-	it("only logs recommendations in observe mode", () => {
+	it("only logs recommendations in observe mode", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
@@ -216,7 +220,7 @@ describe("maintenance-worker", () => {
 		);
 		handle.stop();
 
-		const result = handle.tick();
+		const result = await handle.tick();
 		expect(result.recommendations.length).toBeGreaterThan(0);
 		expect(result.executed).toHaveLength(0);
 
@@ -230,7 +234,7 @@ describe("maintenance-worker", () => {
 		db.close();
 	});
 
-	it("does not start interval when autonomous is disabled", () => {
+	it("does not start interval when autonomous is disabled", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
@@ -247,14 +251,14 @@ describe("maintenance-worker", () => {
 		);
 
 		// tick() still works for manual invocation
-		const result = handle.tick();
+		const result = await handle.tick();
 		expect(result.report.composite.status).toBe("healthy");
 
 		handle.stop();
 		db.close();
 	});
 
-	it("recommends releaseStaleLeases for stuck leased jobs", () => {
+	it("recommends releaseStaleLeases for stuck leased jobs", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
@@ -274,13 +278,13 @@ describe("maintenance-worker", () => {
 		);
 		handle.stop();
 
-		const result = handle.tick();
+		const result = await handle.tick();
 		const actions = result.recommendations.map((r) => r.action);
 		expect(actions).toContain("releaseStaleLeases");
 		db.close();
 	});
 
-	it("calls retention sweep when tombstone ratio is high", () => {
+	it("calls retention sweep when tombstone ratio is high", async () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
@@ -316,7 +320,7 @@ describe("maintenance-worker", () => {
 		);
 		handle.stop();
 
-		const result = handle.tick();
+		const result = await handle.tick();
 		const actions = result.recommendations.map((r) => r.action);
 		expect(actions).toContain("triggerRetentionSweep");
 		expect(sweepCalled).toBe(true);

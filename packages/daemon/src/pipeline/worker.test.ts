@@ -206,6 +206,10 @@ const PIPELINE_CFG: PipelineV2Config = {
 		reembedHourlyBudget: 10,
 		requeueCooldownMs: 60000,
 		requeueHourlyBudget: 50,
+		dedupCooldownMs: 600000,
+		dedupHourlyBudget: 3,
+		dedupSemanticThreshold: 0.92,
+		dedupBatchSize: 100,
 	},
 	documents: {
 		workerIntervalMs: 10000,

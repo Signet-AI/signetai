@@ -18,6 +18,7 @@ import {
 	releaseStaleLeases,
 	checkFtsConsistency,
 	triggerRetentionSweep,
+	deduplicateMemories,
 	type RateLimiter,
 	type RepairContext,
 	type RepairResult,
@@ -32,7 +33,7 @@ export interface MaintenanceHandle {
 	stop(): void;
 	readonly running: boolean;
 	/** Run a single maintenance cycle (for testing) */
-	tick(): MaintenanceCycleResult;
+	tick(): Promise<MaintenanceCycleResult>;
 }
 
 export interface MaintenanceCycleResult {
@@ -90,6 +91,13 @@ function buildRecommendations(
 			});
 		}
 	}
+	if (report.duplicate.duplicateRatio > 0.05) {
+		recs.push({
+			domain: "duplicate",
+			action: "deduplicateMemories",
+			trigger: `duplicate ratio ${(report.duplicate.duplicateRatio * 100).toFixed(1)}% > 5%`,
+		});
+	}
 
 	return recs;
 }
@@ -105,11 +113,11 @@ interface ExecutionDeps {
 	retentionHandle: { sweep(): unknown } | null;
 }
 
-function executeRecommendation(
+async function executeRecommendation(
 	rec: RepairRecommendation,
 	deps: ExecutionDeps,
 	ctx: RepairContext,
-): RepairResult | null {
+): Promise<RepairResult | null> {
 	switch (rec.action) {
 		case "requeueDeadJobs":
 			return requeueDeadJobs(deps.accessor, deps.cfg, ctx, deps.limiter);
@@ -133,6 +141,13 @@ function executeRecommendation(
 				);
 			}
 			return null;
+		case "deduplicateMemories":
+			return deduplicateMemories(
+				deps.accessor,
+				deps.cfg,
+				ctx,
+				deps.limiter,
+			);
 		default:
 			return null;
 	}
@@ -193,7 +208,7 @@ export function startMaintenanceWorker(
 		retentionHandle,
 	};
 
-	function doTick(): MaintenanceCycleResult {
+	async function doTick(): Promise<MaintenanceCycleResult> {
 		const report = accessor.withReadDb((db) =>
 			getDiagnostics(db, tracker),
 		);
@@ -231,7 +246,7 @@ export function startMaintenanceWorker(
 				continue;
 			}
 
-			const result = executeRecommendation(rec, deps, ctx);
+			const result = await executeRecommendation(rec, deps, ctx);
 			if (result) {
 				executed.push(result);
 			}
@@ -263,13 +278,11 @@ export function startMaintenanceWorker(
 	if (cfg.autonomous.enabled && !cfg.autonomous.frozen) {
 		timer = setInterval(() => {
 			if (!running) return;
-			try {
-				doTick();
-			} catch (e) {
+			doTick().catch((e) => {
 				logger.warn("maintenance", "Cycle error", {
 					error: e instanceof Error ? e.message : String(e),
 				});
-			}
+			});
 		}, cfg.autonomous.maintenanceIntervalMs);
 
 		logger.info("maintenance", "Worker started", {

@@ -14,6 +14,8 @@ import {
 	releaseStaleLeases,
 	checkFtsConsistency,
 	triggerRetentionSweep,
+	getDedupStats,
+	deduplicateMemories,
 } from "./repair-actions";
 
 // ---------------------------------------------------------------------------
@@ -80,6 +82,10 @@ const TEST_CFG: PipelineV2Config = {
 		reembedHourlyBudget: 10,
 		requeueCooldownMs: 60000,
 		requeueHourlyBudget: 50,
+		dedupCooldownMs: 600000,
+		dedupHourlyBudget: 3,
+		dedupSemanticThreshold: 0.92,
+		dedupBatchSize: 100,
 	},
 	documents: {
 		workerIntervalMs: 10000,
@@ -388,6 +394,345 @@ describe("checkFtsConsistency", () => {
 		);
 		// Rebuild only runs on mismatch; consistent case is a no-op
 		expect(result.success).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// triggerRetentionSweep
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// getDedupStats
+// ---------------------------------------------------------------------------
+
+describe("getDedupStats", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		// Drop the unique index to simulate a legacy database with duplicates
+		db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
+		accessor = asAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("returns zero stats on empty database", () => {
+		const stats = getDedupStats(accessor);
+		expect(stats.exactClusters).toBe(0);
+		expect(stats.exactExcess).toBe(0);
+		expect(stats.totalActive).toBe(0);
+	});
+
+	it("counts exact hash clusters and excess", () => {
+		const now = new Date().toISOString();
+		// 3 memories with the same hash = 1 cluster, 2 excess
+		for (let i = 0; i < 3; i++) {
+			db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+				 VALUES (?, ?, 'hash-A', 'fact', ?, ?, 'test', 0.5)`,
+			).run(`dup-a-${i}`, "duplicate content A", now, now);
+		}
+		// 2 memories with another hash = 1 cluster, 1 excess
+		for (let i = 0; i < 2; i++) {
+			db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+				 VALUES (?, ?, 'hash-B', 'fact', ?, ?, 'test', 0.5)`,
+			).run(`dup-b-${i}`, "duplicate content B", now, now);
+		}
+		// 1 unique memory
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-C', 'fact', ?, ?, 'test', 0.5)`,
+		).run("unique-c", "unique content", now, now);
+
+		const stats = getDedupStats(accessor);
+		expect(stats.exactClusters).toBe(2);
+		expect(stats.exactExcess).toBe(3); // 2 + 1
+		expect(stats.totalActive).toBe(6);
+	});
+
+	it("excludes pinned and manual_override memories", () => {
+		const now = new Date().toISOString();
+		// Insert 2 with same hash, but one is pinned
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance, pinned)
+			 VALUES (?, ?, 'hash-pin', 'fact', ?, ?, 'test', 0.5, 1)`,
+		).run("pinned-1", "content", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-pin', 'fact', ?, ?, 'test', 0.5)`,
+		).run("unpinned-1", "content", now, now);
+
+		const stats = getDedupStats(accessor);
+		// The pinned one is excluded from the query, so there is only 1
+		// non-pinned row with hash-pin -- not a cluster
+		expect(stats.exactClusters).toBe(0);
+	});
+
+	it("excludes NULL content_hash from clustering", () => {
+		const now = new Date().toISOString();
+		// 3 memories with NULL hash -- should NOT form a cluster
+		for (let i = 0; i < 3; i++) {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by, importance)
+				 VALUES (?, ?, 'fact', ?, ?, 'test', 0.5)`,
+			).run(`null-hash-${i}`, `content ${i}`, now, now);
+		}
+
+		const stats = getDedupStats(accessor);
+		expect(stats.exactClusters).toBe(0);
+		expect(stats.exactExcess).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// deduplicateMemories
+// ---------------------------------------------------------------------------
+
+describe("deduplicateMemories", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		// Drop the unique index to simulate a legacy database with duplicates
+		db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
+		accessor = asAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("removes exact duplicates and keeps the best keeper", async () => {
+		const now = new Date().toISOString();
+		// Insert 3 memories with same hash but different importance
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance, access_count, update_count)
+			 VALUES (?, ?, 'hash-dup', 'fact', ?, ?, 'test', 0.3, 1, 0)`,
+		).run("low-importance", "duplicate content", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance, access_count, update_count)
+			 VALUES (?, ?, 'hash-dup', 'fact', ?, ?, 'test', 0.9, 5, 3)`,
+		).run("high-importance", "duplicate content", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance, access_count, update_count)
+			 VALUES (?, ?, 'hash-dup', 'fact', ?, ?, 'test', 0.5, 2, 1)`,
+		).run("mid-importance", "duplicate content", now, now);
+
+		const limiter = createRateLimiter();
+		const result = await deduplicateMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(2); // 2 losers soft-deleted
+		expect(result.clusters).toBe(1);
+
+		// The high-importance one should be kept
+		const kept = db
+			.prepare("SELECT id FROM memories WHERE content_hash = 'hash-dup' AND is_deleted = 0")
+			.all() as Array<{ id: string }>;
+		expect(kept).toHaveLength(1);
+		expect(kept[0].id).toBe("high-importance");
+
+		// Losers should be soft-deleted
+		const deleted = db
+			.prepare("SELECT id FROM memories WHERE content_hash = 'hash-dup' AND is_deleted = 1")
+			.all() as Array<{ id: string }>;
+		expect(deleted).toHaveLength(2);
+	});
+
+	it("merges tags from all duplicates into the keeper", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, tags, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-tags', 'alpha,beta', 'fact', ?, ?, 'test', 0.9)`,
+		).run("keeper-tags", "content", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, tags, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-tags', 'beta,gamma', 'fact', ?, ?, 'test', 0.3)`,
+		).run("loser-tags", "content", now, now);
+
+		const limiter = createRateLimiter();
+		await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+
+		const row = db
+			.prepare("SELECT tags FROM memories WHERE id = 'keeper-tags'")
+			.get() as { tags: string };
+		const tags = row.tags.split(",");
+		expect(tags).toContain("alpha");
+		expect(tags).toContain("beta");
+		expect(tags).toContain("gamma");
+		expect(tags).toHaveLength(3); // no duplicates
+	});
+
+	it("skips clusters containing pinned memories", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance, pinned)
+			 VALUES (?, ?, 'hash-pinned', 'fact', ?, ?, 'test', 0.5, 1)`,
+		).run("pinned-mem", "content", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-pinned', 'fact', ?, ?, 'test', 0.5)`,
+		).run("unpinned-mem", "content", now, now);
+
+		const limiter = createRateLimiter();
+		const result = await deduplicateMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+		);
+
+		// Pinned memories are excluded from the initial query, so the
+		// cluster only contains unpinned-mem (1 row) -- not enough to deduplicate
+		expect(result.affected).toBe(0);
+	});
+
+	it("writes audit trail for keeper and losers", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-audit', 'fact', ?, ?, 'test', 0.9)`,
+		).run("audit-keeper", "content", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-audit', 'fact', ?, ?, 'test', 0.3)`,
+		).run("audit-loser", "content", now, now);
+
+		const limiter = createRateLimiter();
+		await deduplicateMemories(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+
+		// Check audit trail
+		const keeperHistory = db
+			.prepare("SELECT event FROM memory_history WHERE memory_id = 'audit-keeper'")
+			.all() as Array<{ event: string }>;
+		expect(keeperHistory.some((h) => h.event === "merged")).toBe(true);
+
+		const loserHistory = db
+			.prepare("SELECT event, reason FROM memory_history WHERE memory_id = 'audit-loser'")
+			.all() as Array<{ event: string; reason: string }>;
+		expect(loserHistory.some((h) => h.event === "deleted")).toBe(true);
+		expect(loserHistory.some((h) => h.reason.includes("audit-keeper"))).toBe(true);
+	});
+
+	it("respects dry-run mode", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-dry', 'fact', ?, ?, 'test', 0.9)`,
+		).run("dry-1", "content", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-dry', 'fact', ?, ?, 'test', 0.3)`,
+		).run("dry-2", "content", now, now);
+
+		const limiter = createRateLimiter();
+		const result = await deduplicateMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			{ dryRun: true },
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(0);
+		expect(result.clusters).toBe(1);
+		expect(result.message).toMatch(/dry run/);
+
+		// Nothing should be deleted
+		const active = db
+			.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
+			.get() as { n: number };
+		expect(active.n).toBe(2);
+	});
+
+	it("is idempotent -- second run finds nothing", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-idem', 'fact', ?, ?, 'test', 0.9)`,
+		).run("idem-1", "content", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+			 VALUES (?, ?, 'hash-idem', 'fact', ?, ?, 'test', 0.3)`,
+		).run("idem-2", "content", now, now);
+
+		const limiter = createRateLimiter();
+		// Use no cooldown for idempotency test
+		const cfg = {
+			...TEST_CFG,
+			repair: { ...TEST_CFG.repair, dedupCooldownMs: 0 },
+		};
+
+		const first = await deduplicateMemories(accessor, cfg, CTX_OPERATOR, limiter);
+		expect(first.affected).toBe(1);
+
+		const second = await deduplicateMemories(accessor, cfg, CTX_OPERATOR, limiter);
+		expect(second.affected).toBe(0);
+		expect(second.clusters).toBe(0);
+	});
+
+	it("respects policy gate -- denies when frozen", async () => {
+		const frozenCfg = {
+			...TEST_CFG,
+			autonomous: { ...TEST_CFG.autonomous, frozen: true },
+		};
+		const limiter = createRateLimiter();
+		const result = await deduplicateMemories(
+			accessor,
+			frozenCfg,
+			CTX_OPERATOR,
+			limiter,
+		);
+		expect(result.success).toBe(false);
+	});
+
+	it("handles multiple clusters in one batch", async () => {
+		const now = new Date().toISOString();
+		// Cluster 1: hash-multi-A (3 dupes)
+		for (let i = 0; i < 3; i++) {
+			db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+				 VALUES (?, ?, 'hash-multi-A', 'fact', ?, ?, 'test', ?)`,
+			).run(`multi-a-${i}`, "content A", now, now, 0.5 + i * 0.1);
+		}
+		// Cluster 2: hash-multi-B (2 dupes)
+		for (let i = 0; i < 2; i++) {
+			db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by, importance)
+				 VALUES (?, ?, 'hash-multi-B', 'fact', ?, ?, 'test', ?)`,
+			).run(`multi-b-${i}`, "content B", now, now, 0.8 - i * 0.3);
+		}
+
+		const limiter = createRateLimiter();
+		const result = await deduplicateMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.clusters).toBe(2);
+		expect(result.affected).toBe(3); // 2 from cluster A + 1 from cluster B
+
+		const active = db
+			.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
+			.get() as { n: number };
+		expect(active.n).toBe(2); // 1 keeper per cluster
 	});
 });
 
