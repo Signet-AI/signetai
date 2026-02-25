@@ -25,6 +25,15 @@ $effect(() => {
 
 let activeFile = $derived(mdFiles.find((f) => f.name === selectedFile));
 
+// Char budgets from session start hook (packages/daemon/src/hooks.ts)
+const CHAR_BUDGETS: Record<string, number> = {
+	"AGENTS.md": 12000,
+	"MEMORY.md": 10000,
+	"USER.md": 6000,
+	"SOUL.md": 4000,
+	"IDENTITY.md": 2000,
+};
+
 let editorContent = $state("");
 let saving = $state(false);
 
@@ -62,6 +71,9 @@ async function saveFile() {
 						hover:text-[var(--sig-text)]"
 				>
 					{file.name}
+					{#if CHAR_BUDGETS[file.name]}
+						<span class="ml-1 text-[8px] opacity-40">{Math.round((file.content.length / CHAR_BUDGETS[file.name]) * 100)}%</span>
+					{/if}
 				</Tabs.Trigger>
 			{/each}
 		</Tabs.List>
@@ -71,6 +83,7 @@ async function saveFile() {
 		<MarkdownViewer
 			content={editorContent}
 			filename={selectedFile}
+			charBudget={CHAR_BUDGETS[selectedFile]}
 			onchange={(v) => { editorContent = v; }}
 			onsave={saveFile}
 		/>

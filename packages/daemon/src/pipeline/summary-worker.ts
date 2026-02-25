@@ -49,13 +49,6 @@ interface LlmSummaryResult {
 	}>;
 }
 
-function truncateForLog(text: string, maxChars: number): string {
-	const value = text.trim();
-	if (value.length <= maxChars) return value;
-	const overflow = value.length - maxChars;
-	return `${value.slice(0, maxChars)}\n...[truncated ${overflow} chars]`;
-}
-
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -206,7 +199,7 @@ async function processJob(
 		sessionKey: job.session_key,
 		project: job.project,
 		summaryChars: result.summary.length,
-		summaryPreview: truncateForLog(result.summary, 5000),
+		summary: result.summary,
 	});
 
 	// Insert atomic facts (same logic as old handleSessionEnd)
@@ -254,7 +247,7 @@ async function processJob(
 		deduplicated: result.facts.length - saved,
 		factsPreview: result.facts
 			.slice(0, 10)
-			.map((fact) => truncateForLog(fact.content, 240)),
+			.map((fact) => fact.content),
 	});
 
 	// --- Session continuity scoring ---
@@ -521,7 +514,7 @@ export function enqueueSummaryJob(
 		sessionKey: params.sessionKey,
 		project: params.project,
 		transcriptChars: params.transcript.length,
-		transcriptPreview: truncateForLog(params.transcript, 1200),
+		transcript: params.transcript,
 	});
 
 	return id;

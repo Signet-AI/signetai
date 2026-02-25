@@ -8,11 +8,15 @@ import Eye from "@lucide/svelte/icons/eye";
 interface Props {
 	content: string;
 	filename: string;
+	charBudget?: number;
 	onchange?: (value: string) => void;
 	onsave?: () => void;
 }
 
-let { content, filename, onchange, onsave }: Props = $props();
+let { content, filename, charBudget, onchange, onsave }: Props = $props();
+
+let charCount = $derived(content?.length ?? 0);
+let budgetPct = $derived(charBudget ? Math.round((charCount / charBudget) * 100) : 0);
 let editing = $state(false);
 
 let rendered = $derived.by(() => {
@@ -26,6 +30,16 @@ let rendered = $derived.by(() => {
 		<span class="md-viewer-filename">
 			<span class="md-viewer-path">~/.agents/</span>{filename}
 		</span>
+		{#if charBudget}
+			<span class="md-viewer-budget" class:over-budget={charCount > charBudget} class:near-budget={budgetPct >= 80 && charCount <= charBudget}>
+				{charCount.toLocaleString()} / {charBudget.toLocaleString()} chars
+				<span class="md-viewer-budget-pct">({budgetPct}%)</span>
+			</span>
+		{:else}
+			<span class="md-viewer-budget">
+				{charCount.toLocaleString()} chars
+			</span>
+		{/if}
 		<div class="md-viewer-actions">
 			{#if editing && onsave}
 				<Button
@@ -102,6 +116,26 @@ let rendered = $derived.by(() => {
 
 	.md-viewer-path {
 		color: var(--sig-text-muted);
+	}
+
+	.md-viewer-budget {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+		letter-spacing: 0.02em;
+	}
+
+	.md-viewer-budget-pct {
+		opacity: 0.6;
+	}
+
+	.md-viewer-budget.near-budget {
+		color: var(--sig-warning, #d4a017);
+	}
+
+	.md-viewer-budget.over-budget {
+		color: var(--sig-error, #e05252);
+		font-weight: 600;
 	}
 
 	.md-viewer-actions {

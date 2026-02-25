@@ -226,13 +226,6 @@ export function selectWithBudget(
 	return selected;
 }
 
-function truncateForLog(text: string, maxChars: number): string {
-	const value = text.trim();
-	if (value.length <= maxChars) return value;
-	const overflow = value.length - maxChars;
-	return `${value.slice(0, maxChars)}\n...[truncated ${overflow} chars]`;
-}
-
 /** Check if content overlaps 70%+ with existing memories via FTS */
 export function isDuplicate(db: Database, content: string): boolean {
 	const words = content
@@ -784,7 +777,7 @@ export function handleSessionStart(
 		runtimePath: req.runtimePath,
 		memoryCount: memories.length,
 		injectChars: inject.length,
-		injectPreview: truncateForLog(inject, 2500),
+		inject,
 		durationMs: duration,
 	});
 
@@ -837,7 +830,7 @@ ${guidelines}
 		sessionKey: req.sessionKey,
 		messageCount: req.messageCount,
 		summaryPromptChars: summaryPrompt.length,
-		summaryPromptPreview: truncateForLog(summaryPrompt, 2500),
+		summaryPrompt,
 	});
 
 	return {
@@ -937,9 +930,9 @@ export function handleUserPromptSubmit(
 			project: req.project,
 			sessionKey: req.sessionKey,
 			memoryCount: selected.length,
-			promptPreview: truncateForLog(req.userPrompt, 600),
+			prompt: req.userPrompt,
 			injectChars: inject.length,
-			injectPreview: truncateForLog(inject, 1800),
+			inject,
 			durationMs: duration,
 		});
 
@@ -1002,7 +995,7 @@ export function handleSessionEnd(
 		transcriptPath: req.transcriptPath,
 		transcriptChars: transcript.length,
 		queuedChars: truncated.length,
-		transcriptPreview: truncateForLog(truncated, 1500),
+		transcript: truncated,
 	});
 
 	return { memoriesSaved: 0, queued: true, jobId };

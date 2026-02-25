@@ -167,35 +167,46 @@ function readStringArray(value: unknown): string[] {
 	return value.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
-function getReadableLogOutput(log: LogEntry): string {
+interface LogSection {
+	label: string;
+	content: string;
+}
+
+function getReadableLogSections(log: LogEntry): LogSection[] {
 	const data = log.data;
-	if (!data) return "";
+	if (!data) return [];
 
-	const sections: string[] = [];
-	const previews = [
-		readString(data.injectPreview),
-		readString(data.summaryPromptPreview),
-		readString(data.summaryPreview),
-		readString(data.transcriptPreview),
-		readString(data.promptPreview),
-	].filter((value): value is string => Boolean(value));
+	const sections: LogSection[] = [];
 
-	if (previews.length > 0) {
-		sections.push(previews.join("\n\n"));
-	}
+	// New full-content fields first, fall back to old *Preview keys
+	const inject = readString(data.inject) ?? readString(data.injectPreview);
+	if (inject) sections.push({ label: "Inject", content: inject });
+
+	const prompt = readString(data.prompt) ?? readString(data.promptPreview);
+	if (prompt) sections.push({ label: "Prompt", content: prompt });
+
+	const summaryPrompt = readString(data.summaryPrompt) ?? readString(data.summaryPromptPreview);
+	if (summaryPrompt) sections.push({ label: "Summary Prompt", content: summaryPrompt });
+
+	const summary = readString(data.summary) ?? readString(data.summaryPreview);
+	if (summary) sections.push({ label: "Summary", content: summary });
+
+	const transcript = readString(data.transcript) ?? readString(data.transcriptPreview);
+	if (transcript) sections.push({ label: "Transcript", content: transcript });
 
 	const factsPreview = readStringArray(data.factsPreview);
 	if (factsPreview.length > 0) {
 		const facts = factsPreview.map((fact) => `- ${fact}`).join("\n");
-		sections.push(`Facts:\n${facts}`);
+		sections.push({ label: "Facts", content: facts });
 	}
 
-	return sections.join("\n\n");
+	return sections;
 }
 
 function getReadableLogSnippet(log: LogEntry): string {
-	const detail = getReadableLogOutput(log).trim();
-	if (!detail) return "";
+	const sections = getReadableLogSections(log);
+	if (sections.length === 0) return "";
+	const detail = sections.map((s) => s.content).join("\n\n").trim();
 	if (detail.length <= 220) return detail;
 	return `${detail.slice(0, 220)}...`;
 }
@@ -330,11 +341,27 @@ onMount(() => {
 						<div class="text-[var(--sig-text-bright)]">{selectedLog.duration}ms</div>
 					{/if}
 				</div>
-				{@const readableOutput = getReadableLogOutput(selectedLog)}
-				{#if readableOutput}
+				{@const logSections = getReadableLogSections(selectedLog)}
+				{#if logSections.length > 0}
 					<div class="mb-[var(--space-sm)]">
 						<div class="text-[var(--sig-text-muted)] text-[length:var(--font-size-xs)] uppercase tracking-[0.08em] mb-1">Readable output</div>
-						<pre class="m-0 p-2 text-[10px] leading-relaxed whitespace-pre-wrap break-words border border-[var(--sig-border)] bg-[var(--sig-surface)] text-[var(--sig-text)]">{readableOutput}</pre>
+						{#each logSections as section}
+							{#if section.content.length > 500}
+								<details class="mb-1 border border-[var(--sig-border)] bg-[var(--sig-surface)]">
+									<summary class="cursor-pointer px-2 py-1 text-[10px] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] select-none">
+										<span class="font-semibold text-[var(--sig-text)]">{section.label}</span>
+										<span class="ml-1 opacity-60">({section.content.length.toLocaleString()} chars)</span>
+										<span class="ml-1 opacity-40">{section.content.slice(0, 100).replace(/\n/g, " ")}...</span>
+									</summary>
+									<pre class="m-0 px-2 py-1 text-[10px] leading-relaxed whitespace-pre-wrap break-words text-[var(--sig-text)]">{section.content}</pre>
+								</details>
+							{:else}
+								<div class="mb-1">
+									<div class="text-[10px] text-[var(--sig-text-muted)] font-semibold mb-0.5">{section.label}</div>
+									<pre class="m-0 p-2 text-[10px] leading-relaxed whitespace-pre-wrap break-words border border-[var(--sig-border)] bg-[var(--sig-surface)] text-[var(--sig-text)]">{section.content}</pre>
+								</div>
+							{/if}
+						{/each}
 					</div>
 				{/if}
 				<pre class="m-0 p-2 text-[10px] leading-relaxed whitespace-pre-wrap break-all border border-[var(--sig-border)] bg-[var(--sig-surface-raised)] text-[var(--sig-text-muted)]">{formatJson(selectedLog)}</pre>
