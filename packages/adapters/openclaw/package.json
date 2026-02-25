@@ -13,9 +13,15 @@
   },
   "files": [
     "dist",
-    "openclaw.plugin.json"
+    "openclaw.plugin.json",
+    "clawdbot.plugin.json"
   ],
   "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "clawdbot": {
     "extensions": [
       "./dist/index.js"
     ]
@@ -36,6 +42,7 @@
   "keywords": [
     "signet",
     "openclaw",
+    "clawdbot",
     "adapter",
     "ai-memory",
     "agent-identity"
