@@ -82,7 +82,6 @@ import {
 	DEFAULT_RETENTION,
 	enqueueExtractionJob,
 	enqueueDocumentIngestJob,
-	startSummaryWorker,
 	getPipelineWorkerStatus,
 } from "./pipeline";
 import {
@@ -116,6 +115,11 @@ import {
 	type AnalyticsCollector,
 	type ErrorStage,
 } from "./analytics";
+import {
+	createTelemetryCollector,
+	type TelemetryCollector,
+	type TelemetryEventType,
+} from "./telemetry";
 import { buildTimeline, type TimelineSources } from "./timeline";
 import {
 	createRateLimiter,
@@ -167,6 +171,9 @@ const HOST = process.env.SIGNET_HOST || "localhost";
 const providerTracker = createProviderTracker();
 const analyticsCollector = createAnalyticsCollector();
 const repairLimiter = createRateLimiter();
+
+// Telemetry — assigned in main(), read by cleanup()
+let telemetryRef: TelemetryCollector | undefined;
 
 // Prevents concurrent UMAP computations for the same dimension count
 const projectionInFlight = new Map<number, Promise<void>>();
@@ -6199,6 +6206,73 @@ app.get("/api/analytics/continuity/latest", (c) => {
 	return c.json({ scores });
 });
 
+// ---------------------------------------------------------------------------
+// Telemetry endpoints
+// ---------------------------------------------------------------------------
+
+app.get("/api/telemetry/events", (c) => {
+	if (!telemetryRef) {
+		return c.json({ events: [], enabled: false });
+	}
+	const event = c.req.query("event") as TelemetryEventType | undefined;
+	const since = c.req.query("since");
+	const until = c.req.query("until");
+	const limit = parseInt(c.req.query("limit") ?? "100", 10);
+	const events = telemetryRef.query({ event, since, until, limit });
+	return c.json({ events, enabled: true });
+});
+
+app.get("/api/telemetry/stats", (c) => {
+	if (!telemetryRef) {
+		return c.json({ enabled: false });
+	}
+	const since = c.req.query("since");
+	const events = telemetryRef.query({ since, limit: 10000 });
+
+	let totalInputTokens = 0;
+	let totalOutputTokens = 0;
+	let totalCost = 0;
+	let llmCalls = 0;
+	let llmErrors = 0;
+	let pipelineErrors = 0;
+	const latencies: number[] = [];
+
+	for (const e of events) {
+		if (e.event === "llm.generate") {
+			llmCalls++;
+			if (typeof e.properties.inputTokens === "number") totalInputTokens += e.properties.inputTokens;
+			if (typeof e.properties.outputTokens === "number") totalOutputTokens += e.properties.outputTokens;
+			if (typeof e.properties.totalCost === "number") totalCost += e.properties.totalCost;
+			if (e.properties.success === false) llmErrors++;
+			if (typeof e.properties.durationMs === "number") latencies.push(e.properties.durationMs);
+		}
+		if (e.event === "pipeline.error") pipelineErrors++;
+	}
+
+	latencies.sort((a, b) => a - b);
+	const p50 = latencies[Math.floor(latencies.length * 0.5)] ?? 0;
+	const p95 = latencies[Math.floor(latencies.length * 0.95)] ?? 0;
+
+	return c.json({
+		enabled: true,
+		totalEvents: events.length,
+		llm: { calls: llmCalls, errors: llmErrors, totalInputTokens, totalOutputTokens, totalCost, p50, p95 },
+		pipelineErrors,
+	});
+});
+
+app.get("/api/telemetry/export", (c) => {
+	if (!telemetryRef) {
+		return c.text("telemetry not enabled", 404);
+	}
+	const since = c.req.query("since");
+	const limit = parseInt(c.req.query("limit") ?? "10000", 10);
+	const events = telemetryRef.query({ since, limit });
+
+	const lines = events.map((e) => JSON.stringify(e)).join("\n");
+	return c.text(lines, 200, { "Content-Type": "application/x-ndjson" });
+});
+
 app.get("/api/timeline/:id", (c) => {
 	const entityId = c.req.param("id");
 	const timeline = getDbAccessor().withReadDb((db) =>
@@ -7650,6 +7724,16 @@ async function importExistingMemoryFiles(): Promise<number> {
 async function cleanup() {
 	logger.info("daemon", "Shutting down");
 
+	// Flush telemetry before closing DB
+	if (telemetryRef) {
+		try {
+			await telemetryRef.stop();
+		} catch {
+			// best-effort
+		}
+		telemetryRef = undefined;
+	}
+
 	// Drain pipeline before closing DB so in-flight jobs finish writes
 	try {
 		await stopPipeline();
@@ -7751,6 +7835,53 @@ async function main() {
 				});
 	initLlmProvider(llmProvider);
 
+	// Telemetry collector (opt-in, anonymous)
+	let telemetryCollector: TelemetryCollector | undefined;
+	if (memoryCfg.pipelineV2.telemetryEnabled) {
+		// Resolve PostHog API key: secrets first, then inline config
+		const resolvedTelemetryCfg = { ...memoryCfg.pipelineV2.telemetry };
+		if (!resolvedTelemetryCfg.posthogApiKey) {
+			const secretKey = getSecret("POSTHOG_API_KEY");
+			if (secretKey) {
+				(resolvedTelemetryCfg as Record<string, unknown>).posthogApiKey = secretKey;
+			}
+		}
+		telemetryCollector = createTelemetryCollector(
+			getDbAccessor(),
+			resolvedTelemetryCfg,
+			CURRENT_VERSION,
+		);
+		telemetryCollector.start();
+		telemetryRef = telemetryCollector;
+
+		// Heartbeat: record daemon stats every 5 minutes
+		const daemonStartTime = Date.now();
+		setInterval(() => {
+			if (!telemetryRef) return;
+			try {
+				const memoryCount = getDbAccessor().withReadDb((db) => {
+					const row = db
+						.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
+						.get() as { cnt: number } | undefined;
+					return row?.cnt ?? 0;
+				});
+				const connectors = listConnectors();
+				telemetryRef.record("daemon.heartbeat", {
+					uptimeMs: Date.now() - daemonStartTime,
+					memoryCount,
+					connectorsActive: connectors.filter((cn) => cn.status === "active").length,
+					pipelineMode: memoryCfg.pipelineV2.enabled
+						? memoryCfg.pipelineV2.shadowMode ? "shadow" : "controlled-write"
+						: "disabled",
+					extractionProvider: memoryCfg.pipelineV2.extraction.provider,
+					embeddingProvider: memoryCfg.embedding.provider,
+				});
+			} catch {
+				// best effort
+			}
+		}, 5 * 60 * 1000);
+	}
+
 	// Start extraction pipeline if enabled
 	if (memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode) {
 		startPipeline(
@@ -7761,15 +7892,12 @@ async function main() {
 			memoryCfg.search,
 			providerTracker,
 			analyticsCollector,
+			telemetryCollector,
 		);
 	} else {
 		// Retention worker runs unconditionally — cleans up tombstones,
 		// expired history, and dead jobs even without the full pipeline.
 		startRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
-
-		// Summary worker runs regardless of pipeline state — session
-		// summaries are a core feature, not gated on extraction pipeline.
-		startSummaryWorker(getDbAccessor());
 	}
 
 	// Start scheduled task worker

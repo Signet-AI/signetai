@@ -18,6 +18,7 @@ import type { DbAccessor } from "../db-accessor";
 import type { LlmProvider } from "./provider";
 import { getLlmProvider } from "../llm";
 import { isDuplicate, inferType } from "../hooks";
+import { loadMemoryConfig } from "../memory-config";
 import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
@@ -374,6 +375,13 @@ export function startSummaryWorker(
 
 	async function tick(): Promise<void> {
 		if (stopped) return;
+
+		// Re-check config each tick — respect runtime config changes
+		const cfg = loadMemoryConfig();
+		if (!cfg.pipelineV2.enabled && !cfg.pipelineV2.shadowMode) {
+			scheduleTick(POLL_INTERVAL_MS);
+			return;
+		}
 
 		let jobId: string | null = null;
 

@@ -19,6 +19,7 @@ import { logger } from "./logger";
 import { getDbAccessor } from "./db-accessor";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { getUpdateSummary } from "./update-system";
+import { loadMemoryConfig } from "./memory-config";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
@@ -1026,6 +1027,13 @@ export function handleSessionEnd(
 	req: SessionEndRequest,
 ): SessionEndResponse {
 	if (req.reason === "clear") {
+		return { memoriesSaved: 0 };
+	}
+
+	// Respect the pipeline master switch
+	const memoryCfg = loadMemoryConfig();
+	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
+		logger.info("hooks", "Session end skipped — pipeline disabled");
 		return { memoriesSaved: 0 };
 	}
 
