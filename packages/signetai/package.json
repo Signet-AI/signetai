@@ -21,7 +21,7 @@
     "build:daemon": "bun build ../daemon/src/daemon.ts --outfile ./dist/daemon.js --target bun && bun build ../daemon/src/mcp-stdio.ts --outfile ./dist/mcp-stdio.js --target bun",
     "build:dashboard": "rm -rf ./dashboard && cp -r ../cli/dashboard/build ./dashboard 2>/dev/null || echo 'Dashboard not built yet'",
     "prepublishOnly": "bun run build",
-    "postinstall": "node ./bin/postinstall.js || true"
+    "postinstall": "node ./bin/postinstall.cjs || true"
   },
   "keywords": [
     "ai",

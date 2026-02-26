@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Signet postinstall script
+ * Signet postinstall script (CommonJS for npm compatibility)
  * Shows installation info and checks for Bun
  */
 
-import { execSync } from "node:child_process";
+const { execFileSync } = require("node:child_process");
 
 const RESET = "\x1b[0m";
 const CYAN = "\x1b[36m";
@@ -15,7 +15,7 @@ const BOLD = "\x1b[1m";
 
 function hasBun() {
 	try {
-		execSync("bun --version", { stdio: "pipe" });
+		execFileSync("bun", ["--version"], { stdio: "pipe" });
 		return true;
 	} catch {
 		return false;
@@ -30,10 +30,12 @@ console.log(`  ${DIM}Portable AI agent identity${RESET}`);
 console.log();
 
 if (!hasBun()) {
-	console.log(`  ${YELLOW}⚠ Bun not found${RESET} (required for daemon)`);
-	console.log(
-		`  ${DIM}Install: curl -fsSL https://bun.sh/install | bash${RESET}`,
-	);
+	console.log(`  ${YELLOW}⚠ Bun not found${RESET}`);
+	console.log(`  ${DIM}CLI commands work fine with Node.js:${RESET}`);
+	console.log(`  ${DIM}  signet, signet status, signet recall, etc.${RESET}`);
+	console.log();
+	console.log(`  ${DIM}Bun is required for the daemon (signet start):${RESET}`);
+	console.log(`  ${DIM}  curl -fsSL https://bun.sh/install | bash${RESET}`);
 	console.log();
 }
 

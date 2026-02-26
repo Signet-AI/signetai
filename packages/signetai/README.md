@@ -12,6 +12,9 @@ npm install -g signetai
 
 # bun (recommended)
 bun add -g signetai
+
+# or run directly
+npx signetai
 ```
 
 ## Quick Start
@@ -77,8 +80,8 @@ signet update enable    # Enable unattended installs
 
 ## Requirements
 
-- Node.js 18+ or Bun 1.0+
-- Bun recommended for the daemon (uses bun:sqlite)
+- **Node.js 18+** for CLI commands (setup, config, status, recall, etc.)
+- **Bun 1.0+** required for the daemon (`signet start`) — uses `bun:sqlite`
 
 ## Documentation
 
