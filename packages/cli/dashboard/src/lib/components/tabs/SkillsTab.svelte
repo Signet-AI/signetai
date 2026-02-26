@@ -122,6 +122,13 @@ onMount(() => {
 				>
 					The open agent skills ecosystem
 				</span>
+				<span class="stats-bar">
+					{#if sk.catalogTotal}
+						{sk.catalogTotal.toLocaleString()} available
+						<span class="stats-sep">·</span>
+					{/if}
+					{sk.installed.length} installed
+				</span>
 			</div>
 
 			<!-- Search bar -->
@@ -274,6 +281,19 @@ onMount(() => {
 <SkillDetail />
 
 <style>
+	.stats-bar {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.stats-sep {
+		color: var(--sig-border-strong);
+	}
+
 	.skills-ascii {
 		font-family: var(--font-mono);
 		font-size: 10px;
