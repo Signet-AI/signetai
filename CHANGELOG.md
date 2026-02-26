@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.2.0] - 2026-02-26
+
+### Bug Fixes
+
+- **pipeline**: propagate LLM failures and improve observability
+
+
 ## [0.1.135] - 2026-02-25
 
 ### Features
