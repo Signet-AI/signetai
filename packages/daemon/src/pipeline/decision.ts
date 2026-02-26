@@ -109,8 +109,9 @@ async function findCandidatesVector(
 				}
 			});
 		}
-	} catch {
-		// Vector search unavailable — continue with BM25 only
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		logger.warn("pipeline", "Vector search unavailable, falling back to BM25-only", { error: msg });
 	}
 	return vectorMap;
 }

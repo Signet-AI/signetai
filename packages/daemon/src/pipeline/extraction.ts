@@ -202,7 +202,7 @@ export async function extractFactsAndEntities(
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		logger.warn("pipeline", "Extraction LLM call failed", { error: msg });
-		return { facts: [], entities: [], warnings: [`LLM error: ${msg}`] };
+		throw new Error(`LLM extraction failed: ${msg}`);
 	}
 
 	const jsonStr = stripFences(rawOutput);

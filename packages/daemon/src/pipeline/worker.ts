@@ -952,7 +952,7 @@ export function startWorker(
 				const targetTokens = tokenize(proposal.targetContent);
 				const overlap = overlapCount(factTokens, targetTokens);
 
-				if (overlap >= 3 && !detectContradictionRisk(proposal.fact.content, proposal.targetContent)) {
+				if (overlap >= 1 && !detectContradictionRisk(proposal.fact.content, proposal.targetContent)) {
 					try {
 						const result = await detectSemanticContradiction(
 							proposal.fact.content,
@@ -962,8 +962,12 @@ export function startWorker(
 						if (result.detected && result.confidence >= 0.7) {
 							contradictionFlags.set(i, result);
 						}
-					} catch {
-						// Non-fatal, skip semantic check for this proposal
+					} catch (e) {
+						const semMsg = e instanceof Error ? e.message : String(e);
+						logger.warn("pipeline", "Semantic contradiction check failed, proceeding with update", {
+							proposalIdx: i,
+							error: semMsg,
+						});
 					}
 				}
 			}

@@ -480,10 +480,9 @@ describe("Worker processing", () => {
 		expect(result.skipped).toBe("memory_not_found");
 	});
 
-	it("records LLM error in result warnings when provider throws", async () => {
-		// When the LLM throws, extractFactsAndEntities catches it and returns
-		// empty facts with a warning. The job still completes successfully
-		// (no facts = no proposals = clean write). The error is in the payload.
+	it("fails job with retry when LLM provider throws", async () => {
+		// When the LLM throws, extraction now propagates the error so the
+		// worker's failJob() path handles it with exponential backoff retry.
 		insertMemory(db, "mem-llm-err", "Some content about preferences");
 		enqueueExtractionJob(accessor, "mem-llm-err");
 
@@ -498,14 +497,10 @@ describe("Worker processing", () => {
 		await worker.stop();
 
 		const job = getJob(db, "mem-llm-err");
-		// Job completes (extraction caught the error and returned empty)
-		expect(job?.status).toBe("completed");
-
-		const result = JSON.parse(job?.result ?? "{}");
-		expect(Array.isArray(result.warnings)).toBe(true);
-		expect(result.warnings.some((w: string) => w.includes("LLM error"))).toBe(
-			true,
-		);
+		// Job goes to pending (failed with retry available)
+		expect(job?.status).toBe("pending");
+		expect(job?.attempts).toBeGreaterThanOrEqual(1);
+		expect(job?.error).toContain("LLM extraction failed");
 	});
 
 	it("worker stop() waits for in-flight job", async () => {

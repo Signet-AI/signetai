@@ -74,6 +74,7 @@ interface PostHogBatchEvent {
 }
 
 const MAX_BUFFER_SIZE = 200;
+const MAX_BUFFER_EVENTS = 5000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const BACKOFF_MULTIPLIER = 5;
 
@@ -250,6 +251,15 @@ export function createTelemetryCollector(
 		enabled: true,
 
 		record(event, properties): void {
+			if (buffer.length >= MAX_BUFFER_EVENTS) {
+				const dropCount = buffer.length - MAX_BUFFER_EVENTS + 1;
+				buffer.splice(0, dropCount);
+				logger.warn("telemetry", "Buffer exceeded max capacity, dropping oldest events", {
+					dropped: dropCount,
+					maxBufferEvents: MAX_BUFFER_EVENTS,
+				});
+			}
+
 			buffer.push({
 				id: crypto.randomUUID(),
 				event,

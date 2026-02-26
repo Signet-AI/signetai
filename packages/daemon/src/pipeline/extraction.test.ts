@@ -268,7 +268,7 @@ describe("extractFactsAndEntities", () => {
 		).toHaveLength(2);
 	});
 
-	it("returns empty + warning on provider error", async () => {
+	it("throws on provider error so job goes through failJob retry", async () => {
 		const errorProvider: LlmProvider = {
 			name: "failing",
 			async generate() {
@@ -278,14 +278,13 @@ describe("extractFactsAndEntities", () => {
 				return false;
 			},
 		};
-		const result = await extractFactsAndEntities(
-			"Some content that is long enough to process",
-			errorProvider,
-		);
 
-		expect(result.facts).toHaveLength(0);
-		expect(result.entities).toHaveLength(0);
-		expect(result.warnings.some((w) => w.includes("LLM error"))).toBe(true);
+		await expect(
+			extractFactsAndEntities(
+				"Some content that is long enough to process",
+				errorProvider,
+			),
+		).rejects.toThrow("LLM extraction failed: connection refused");
 	});
 
 	it("accepts all valid memory types", async () => {
