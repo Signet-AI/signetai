@@ -1285,6 +1285,7 @@ async function existingSetupWizard(
 	options?: {
 		nonInteractive?: boolean;
 		openDashboard?: boolean;
+		skipGit?: boolean;
 		embeddingProvider?: EmbeddingProviderChoice;
 		embeddingModel?: string;
 		extractionProvider?: ExtractionProviderChoice;
@@ -1528,11 +1529,13 @@ async function existingSetupWizard(
 
 		// 8. Initialize git if not already a repo
 		let gitEnabled = false;
-		if (!isGitRepo(basePath)) {
-			spinner.text = "Initializing git...";
-			gitEnabled = await gitInit(basePath);
-		} else {
-			gitEnabled = true;
+		if (options?.skipGit !== true) {
+			if (!isGitRepo(basePath)) {
+				spinner.text = "Initializing git...";
+				gitEnabled = await gitInit(basePath);
+			} else {
+				gitEnabled = true;
+			}
 		}
 
 		// 9. Start the daemon
@@ -1586,7 +1589,7 @@ async function existingSetupWizard(
 		}
 
 		// Git commit
-		if (gitEnabled) {
+		if (options?.skipGit !== true && gitEnabled) {
 			const date = new Date().toISOString().split("T")[0];
 			const committed = await gitAddAndCommit(basePath, `${date}_signet-setup`);
 			if (committed) {
@@ -1803,6 +1806,7 @@ async function setupWizard(options: SetupWizardOptions) {
 			await existingSetupWizard(basePath, existing, existingConfig, {
 				nonInteractive: true,
 				openDashboard: options.openDashboard === true,
+				skipGit: options.skipGit === true,
 				embeddingProvider: migrationEmbeddingProvider,
 				embeddingModel: normalizeStringValue(options.embeddingModel) || undefined,
 				extractionProvider: migrationExtractionProvider,
@@ -1896,7 +1900,24 @@ async function setupWizard(options: SetupWizardOptions) {
 
 	let harnesses: string[] = [];
 	if (nonInteractive) {
+		const rawParts = (options.harness ?? []).flatMap((v) =>
+			v
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean),
+		);
 		const requestedHarnesses = normalizeHarnessList(options.harness);
+
+		// Reject unknown harness values in non-interactive mode
+		if (rawParts.length > 0 && rawParts.length !== requestedHarnesses.length) {
+			const unknown = rawParts.filter(
+				(p) => !normalizeChoice(p, SETUP_HARNESS_CHOICES),
+			);
+			failNonInteractiveSetup(
+				`Unknown --harness value(s): ${unknown.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
+			);
+		}
+
 		if (requestedHarnesses.length > 0) {
 			harnesses = requestedHarnesses;
 		} else {
