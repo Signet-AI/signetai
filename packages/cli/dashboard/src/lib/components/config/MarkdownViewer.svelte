@@ -15,13 +15,68 @@ interface Props {
 
 let { content, filename, charBudget, onchange, onsave }: Props = $props();
 
+const BOXED_SECTION_TITLES = new Set([
+	"behavioral guidelines",
+	"signet agent system",
+	"memory",
+	"secrets",
+	"about your user",
+	"projects",
+	"operational settings",
+	"custom instructions",
+]);
+
+function normalizeHeading(text: string): string {
+	return text
+		.toLowerCase()
+		.replace(/&amp;/g, "and")
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+function addBoxedHeadingClass(attrs: string): string {
+	const classMatch = attrs.match(/\sclass=(['"])(.*?)\1/i);
+	if (!classMatch) {
+		return `${attrs} class="md-boxed-heading"`;
+	}
+
+	const quote = classMatch[1];
+	const classes = classMatch[2]
+		.split(/\s+/)
+		.filter(Boolean);
+	if (!classes.includes("md-boxed-heading")) {
+		classes.push("md-boxed-heading");
+	}
+
+	return attrs.replace(
+		/\sclass=(['"])(.*?)\1/i,
+		` class=${quote}${classes.join(" ")}${quote}`,
+	);
+}
+
+function addSectionHeadingBoxes(markdownHtml: string): string {
+	return markdownHtml.replace(
+		/<h([1-6])(\s[^>]*)?>([\s\S]*?)<\/h\1>/gi,
+		(full, level, attrs = "", inner = "") => {
+			const plainText = normalizeHeading(inner.replace(/<[^>]*>/g, " "));
+			if (!BOXED_SECTION_TITLES.has(plainText)) {
+				return full;
+			}
+
+			const attrsWithClass = addBoxedHeadingClass(attrs);
+			return `<h${level}${attrsWithClass}>${inner}</h${level}>`;
+		},
+	);
+}
+
 let charCount = $derived(content?.length ?? 0);
 let budgetPct = $derived(charBudget ? Math.round((charCount / charBudget) * 100) : 0);
 let editing = $state(false);
 
 let rendered = $derived.by(() => {
 	if (!content) return "";
-	return marked.parse(content, { async: false }) as string;
+	const html = marked.parse(content, { async: false }) as string;
+	return addSectionHeadingBoxes(html);
 });
 </script>
 
@@ -148,5 +203,12 @@ let rendered = $derived.by(() => {
 		flex: 1;
 		overflow-y: auto;
 		padding: var(--space-md) var(--space-lg);
+	}
+
+	:global(.md-viewer-prose .md-boxed-heading) {
+		display: inline-block;
+		padding: 0.35em 0.7em;
+		border: 1px solid var(--sig-border-strong);
+		background: var(--sig-surface-raised);
 	}
 </style>
