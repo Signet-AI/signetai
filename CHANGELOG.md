@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.5.2] - 2026-02-27
+
+### Refactoring
+
+- **cli**: restrict setup wizard to supported connectors
+
+
 ## [0.5.1] - 2026-02-27
 
 ### Bug Fixes
