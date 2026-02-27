@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.6.2] - 2026-02-27
+
+### Bug Fixes
+
+- **defaults**: enable pipeline, graph, reranker, and autonomous by default
+
+
 ## [0.6.1] - 2026-02-27
 
 ### Bug Fixes
