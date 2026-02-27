@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Query persistent memory using hybrid search (vector + keyword). Use when user says "/recall X" or asks to recall/find something from memory.
+description: "Query persistent memory using hybrid search (vector + keyword). NOTE: Relevant memories are automatically injected at session start. Use /recall for targeted searches beyond current context."
 user_invocable: true
 arg_hint: "search query"
 builtin: true
@@ -11,6 +11,26 @@ builtin: true
 Query persistent memory shared between all agents (claude-code, opencode,
 clawdbot) using hybrid search: 70% semantic vector similarity + 30% BM25
 keyword matching.
+
+## When You Need This (And When You Don't)
+
+At session start, Signet automatically injects relevant memories into
+your context — scored by importance, recency, and relevance to the
+current conversation. MEMORY.md is also regenerated periodically from
+the full database using decay-weighted scoring. For most interactions,
+the right memories are already present without any manual searching.
+
+Use /recall when you need to:
+- Search for something specific that isn't in current context
+- Look up old decisions or past conversations
+- Debug whether a memory was actually captured
+- Find memories by type, tag, or date range
+- Explore what the system knows about a topic
+
+You do NOT need /recall to:
+- Access recent memories (they're already injected)
+- Check if the system "remembers" something (it does, automatically)
+- Build session-start rituals (injection handles this)
 
 ## syntax
 
@@ -112,6 +132,6 @@ Edit `~/.agents/config.yaml` or `~/.agents/AGENT.yaml` to adjust:
 ## follow-up
 
 After showing results, offer to:
-- save new related memories (`/remember ...`)
 - search with different terms
 - show memories by type: add `"type": "preference"` to the request
+- filter by date range or project

@@ -1,7 +1,7 @@
 ---
 name: remember
-description: Save something to persistent memory with auto-embedding. Use when user says "/remember X" or asks to remember something important.
-user_invocable: true
+description: "[Internal] Save something to persistent memory with auto-embedding. Hidden from users — the automatic pipeline handles memory capture. Use for debug/dev only."
+user_invocable: false
 arg_hint: "[critical:] [[tag1,tag2]:] content to remember"
 builtin: true
 ---
@@ -11,6 +11,25 @@ builtin: true
 Save to persistent memory across sessions. Shared between all agents
 (claude-code, opencode, clawdbot). Memories are auto-embedded for
 semantic search via the Signet daemon.
+
+## Why This Skill Is Hidden
+
+This skill is not exposed to users because the automatic memory
+pipeline handles capture better:
+
+- The pipeline extracts memories from natural conversation with
+  calibrated importance scores (~0.5-0.7 based on content analysis)
+- Manual /remember defaults to 0.8 importance, which distorts the
+  scoring curve and makes everything look equally important
+- Users who discover /remember tend to build hook-based auto-remember
+  workflows that double token usage for zero benefit (the pipeline
+  already captures everything worth keeping)
+- The pipeline also handles deduplication, type inference, and
+  decay-weighted retention — manual saves bypass all of that
+
+If a user asks "how do I save something to memory," point them to
+the fact that it happens automatically. If they want to verify
+something was captured, suggest /recall instead.
 
 ## syntax
 
@@ -96,17 +115,17 @@ The daemon returns JSON:
 After saving, confirm to the user:
 
 ```
-✓ Saved: "nicholai prefers tabs over spaces"
+saved: "nicholai prefers tabs over spaces"
   type: preference | embedded
 ```
 
 For critical:
 ```
-✓ Saved (pinned): "never push directly to main"
+saved (pinned): "never push directly to main"
   type: rule | importance: 1.0 | embedded
 ```
 
 If embedding failed (daemon running but Ollama/OpenAI unavailable):
 ```
-✓ Saved: "content..." (keyword search only — embedding unavailable)
+saved: "content..." (keyword search only — embedding unavailable)
 ```

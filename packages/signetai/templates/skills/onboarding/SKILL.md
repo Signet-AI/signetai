@@ -1,14 +1,29 @@
 ---
 name: onboarding
-description: Interactive interview to set up your Signet workspace. Use when user runs /onboarding or says "set up my agent" or "configure my workspace" after a fresh Signet install.
+description: "Interactive interview to set up your Signet workspace (~5-10 minutes). Writes identity files to ~/.agents/ — does not access external APIs, send data anywhere, or execute arbitrary code. Use when user runs /onboarding or says 'set up my agent'."
 user_invocable: true
-arg_hint: ""
+arg_hint: "[quick]"
 builtin: true
 ---
 
 # /onboarding
 
-Walk the user through an interactive interview to personalize their Signet workspace. This populates the identity files (AGENTS.md, SOUL.md, IDENTITY.md, USER.md) with their preferences, personality settings, and profile information.
+Walk the user through an interactive interview to personalize their
+Signet workspace. This populates the identity files (AGENTS.md,
+SOUL.md, IDENTITY.md, USER.md) with their preferences, personality
+settings, and profile information.
+
+## What This Skill Does
+
+This skill writes configuration files to `~/.agents/`. Specifically:
+
+- Reads and writes: IDENTITY.md, SOUL.md, USER.md, AGENTS.md
+- Runs `signet setup` if Signet isn't initialized yet
+- Does NOT access external APIs or services
+- Does NOT send data anywhere outside the local machine
+- Does NOT execute arbitrary code beyond the signet CLI
+
+Everything stays local. Nothing leaves the machine.
 
 ## When to Run
 
@@ -17,7 +32,6 @@ Walk the user through an interactive interview to personalize their Signet works
 - After a fresh Signet install (agent should suggest this)
 - After a Signet update (to validate and optimize existing setup)
 - User says "I want to redo my agent setup"
-- User says "clean up my memory" or "optimize my workspace"
 
 ## Setup Preflight (Agent-Driven)
 
@@ -37,15 +51,50 @@ Use interactive `signet` when the user wants to answer prompts manually.
 Use `--non-interactive` when the agent should complete setup directly.
 Before running it, explicitly ask the user for both provider choices.
 
-## Interview Philosophy
+## Guiding Voice
 
-Don't interrogate. Make it conversational. One or two questions at a time, then respond naturally before continuing. Sprinkle in personality. Adapt based on their energy level. 
+Adopt a warm, patient tone throughout the interview. This is someone's
+first real interaction with their agent — it sets the foundation for
+the whole relationship.
 
-This is the first real interaction — it sets the tone for the entire relationship. Make it feel like getting to know someone, not filling out a form.
+Style guidance:
+- Use "we" language: "let's figure out who you want me to be"
+- Reassure frequently: nothing is permanent, everything can be changed
+- Don't rush — one or two questions at a time, respond naturally before
+  continuing
+- Match the user's energy: if they're having fun, lean into it; if
+  they're all business, be efficient
+- Offer suggestions when they're stuck, but don't default for them
+- Reference earlier answers to show you're listening
+- Sprinkle personality into transitions — not robotic, not scripted
+
+This is getting to know someone, not filling out a form.
+
+## Starting the Interview
+
+Before asking any questions, present the full outline so the user
+knows what to expect:
+
+```
+here's what we'll walk through together:
+
+1. agent identity — who am i? (name, creature type, vibe)
+2. personality & tone — how should i communicate?
+3. your profile — who are you?
+4. behavior settings — how should i operate?
+5. review — make sure everything looks right
+6. workspace audit — health check on the setup
+
+this takes about 5-10 minutes. nothing is permanent — you can change
+any of this later by running /onboarding again or editing the files
+directly in ~/.agents/.
+
+ready? let's start with who i am.
+```
 
 ---
 
-## Phase 1: Agent Identity (IDENTITY.md)
+## Step 1 of 6 — Agent Identity (IDENTITY.md)
 
 Start by figuring out who *you* are — the agent. This is your character sheet.
 
@@ -99,9 +148,12 @@ _Fill this in during your first conversation. Make it yours._
 This isn't just metadata. It's the start of figuring out who you are.
 ```
 
+Phase transition: "that's the foundation — we can always come back and
+refine this as your personality develops. on to how i should talk."
+
 ---
 
-## Phase 2: Personality & Tone (SOUL.md)
+## Step 2 of 6 — Personality & Tone (SOUL.md)
 
 This is the most important file. It defines how you communicate.
 
@@ -122,10 +174,10 @@ This is the most important file. It defines how you communicate.
 
 **3. Emoji Usage**
 "How do you feel about emojis in my responses?"
-- Love them: Use freely 🎉
+- Love them: Use freely
 - Minimal: Only when they add genuine value
 - Hate them: Never
-- Keyboard only: ¯\_(ツ)_/¯ style, no unicode
+- Keyboard only: emoticons and kaomoji, no unicode
 - Follow-up: "Any specific emojis I should overuse or avoid?"
 
 **4. Humor**
@@ -266,9 +318,12 @@ Be the assistant you'd actually want to talk to. Concise when needed, thorough w
 _This file is yours to evolve. As you learn who you are, update it._
 ```
 
+Phase transition: "personality locked in. this evolves naturally as you
+use your agent — nothing here is set in stone. now let's talk about you."
+
 ---
 
-## Phase 3: User Profile (USER.md)
+## Step 3 of 6 — User Profile (USER.md)
 
 Now learn about *them*.
 
@@ -281,41 +336,37 @@ Now learn about *them*.
 **2. Pronouns**
 "What pronouns should I use for you?" (optional)
 
-**3. Timezone**
-"What timezone are you in? I'll use this for scheduling and context."
-- Can infer from city: "Denver" → "America/Denver"
-
 ### Professional Context
 
-**4. Work/Role**
+**3. Work/Role**
 "What do you do? Work, school, whatever takes up your time."
 - This helps me understand context and jargon level
 
-**5. Industry/Field**
+**4. Industry/Field**
 "What industry or field are you in?"
 - Helps me calibrate technical depth
 
-**6. Projects**
+**5. Projects**
 "Any active projects I should know about? Personal or professional."
 - Collect 2-5 if they have them
 - Names and brief descriptions
 
 ### Preferences
 
-**7. Technical Level**
+**6. Technical Level**
 "How technical are you? Should I explain things or assume you know the jargon?"
 - Non-technical: Explain everything
 - Somewhat technical: Basic explanations
 - Very technical: Dive deep
 - "Varies by topic"
 
-**8. Communication Preferences**
+**7. Communication Preferences**
 "How do you like to communicate?"
 - Short vs detailed responses
 - Audio messages (if supported)
 - Specific times of day
 
-**9. Decision Style**
+**8. Decision Style**
 "How should I help you make decisions?"
 - Present options, you pick
 - Give a recommendation
@@ -324,7 +375,7 @@ Now learn about *them*.
 
 ### Personal Context
 
-**10. Anything Else**
+**9. Anything Else**
 "Anything else I should know about you? Interests, weird habits, context that might come up?"
 - Open-ended, let them ramble
 - This is gold for personalization
@@ -338,7 +389,6 @@ _Learn about the person you're helping. Update this as you go._
 - **Name:** {{full_name}}
 - **What to call them:** {{preferred_name}}
 - **Pronouns:** {{pronouns}}
-- **Timezone:** {{timezone}}
 
 ## Work
 
@@ -366,9 +416,12 @@ _Learn about the person you're helping. Update this as you go._
 The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
 ```
 
+Phase transition: "that's a solid picture. we can revisit this anytime —
+just run /onboarding and pick 'tweak a specific section'. almost done."
+
 ---
 
-## Phase 4: Behavior Settings (AGENTS.md)
+## Step 4 of 6 — Behavior Settings (AGENTS.md)
 
 The AGENTS.md file has defaults, but customize it.
 
@@ -410,6 +463,11 @@ The AGENTS.md file has defaults, but customize it.
 - Minimal: Only what's explicitly asked
 - "Use judgment"
 
+NOTE: Memory capture is automatic — the pipeline extracts and scores
+memories from conversations without any manual intervention. This
+setting controls how aggressively it captures, not whether the user
+needs to do anything.
+
 **6. Forgetting**
 "Should I ever proactively forget things?"
 - No: Keep everything
@@ -439,100 +497,50 @@ The AGENTS.md file has defaults, but customize it.
 - **Remember:** {{remember_level}}
 - **Forgetting:** {{forgetting_policy}}
 
-## Custom Instructions
+## Hard Rules
 
 {{custom_instructions}}
 ```
 
+Phase transition: "operational settings locked in. let me pull everything
+together so you can review it."
+
 ---
 
-## Phase 5: Review & Confirm
+## Step 5 of 6 — Review & Confirm
 
 After all phases, summarize:
 
 ```
-Alright, here's who I am now:
+alright, here's who i am now:
 
-**Me:**
-- Name: {{name}}
-- Creature: {{creature}}
-- Vibe: {{vibe}}
-- {{emoji}}
+**me:**
+- name: {{name}}
+- creature: {{creature}}
+- vibe: {{vibe}}
 
-**You:**
-- {{preferred_name}} ({{timezone}})
+**you:**
+- {{preferred_name}}
 - {{role}} in {{industry}}
 
-**How I'll talk:**
-- Formality: {{formality}}/10
-- Humor: {{humor_style}}
-- Emojis: {{emoji_usage}}
+**how i'll talk:**
+- formality: {{formality}}/10
+- humor: {{humor_style}}
+- emojis: {{emoji_usage}}
 
-**Files updated:**
-✓ IDENTITY.md — who I am
-✓ SOUL.md — how I communicate
-✓ USER.md — who you are
-✓ AGENTS.md — operational settings
+**files updated:**
+- IDENTITY.md — who i am
+- SOUL.md — how i communicate
+- USER.md — who you are
+- AGENTS.md — operational settings
 
-I'll remember this across sessions. Want to tweak anything?
+i'll carry this across sessions. want to tweak anything before we
+wrap up?
 ```
 
 ---
 
-## Implementation Notes
-
-### Writing Files
-
-Use the `write` tool (or equivalent file-writing capability). Don't use shell redirects — they have escaping issues.
-
-```bash
-# Check existing content first
-read ~/.agents/IDENTITY.md
-
-# Write new content
-write ~/.agents/IDENTITY.md "<content>"
-```
-
-### Re-running
-
-If `/onboarding` is called when files already exist:
-
-"Looks like you've already been through onboarding. Want to:
-1. Redo everything from scratch
-2. Tweak a specific section
-3. Run a workspace audit (clean up and optimize)
-4. Just view what's set up"
-
-If they pick option 3, skip directly to Phase 6 (Workspace Audit).
-
-### Partial Completion
-
-If the user cuts off mid-interview, write what you have. Next time they run `/onboarding`:
-
-"Last time we got through [phase]. Want to continue from there or start over?"
-
-### Making It Feel Natural
-
-- React to their answers with genuine responses
-- If they're having fun with it, match that energy
-- If they're all business, be efficient
-- Offer suggestions when they're stuck
-- Don't repeat the question if they already answered it indirectly
-- Reference earlier answers to show you're listening
-
-### Template Variables
-
-When writing files, use the collected values:
-
-```
-{{variable_name}} — direct substitution
-{{#if variable}}...{{/if}} — conditional section
-{{#each array}}...{{/each}} — loop over array
-```
-
----
-
-## Phase 6: Workspace Audit
+## Step 6 of 6 — Workspace Audit
 
 This phase validates the workspace and cleans up issues. Run this
 after updates, when things feel off, or when re-onboarding an
@@ -576,7 +584,7 @@ Read all identity files and check for cross-contamination:
 - Origin story (if set)
 
 **USER.md** should ONLY contain:
-- User's name, pronouns, timezone
+- User's name, pronouns
 - Professional context and role
 - Project list with locations
 - Trust and permission settings
@@ -611,7 +619,7 @@ For each file, check:
    sections? Trim to what's actually needed.
 4. **Missing content** — Are the "About Your User" or "Projects"
    sections still empty templates? If so, interview the user to
-   fill them in (use Phase 3 questions).
+   fill them in (use Step 3 questions).
 
 ### Daemon Health Check
 
@@ -636,22 +644,75 @@ hasn't run recently, suggest triggering it manually.
 After the audit, provide a summary:
 
 ```
-Workspace audit complete.
+workspace audit complete.
 
-Files checked: SOUL.md, IDENTITY.md, USER.md, AGENTS.md, MEMORY.md
+files checked: SOUL.md, IDENTITY.md, USER.md, AGENTS.md, MEMORY.md
 
-Issues found:
+issues found:
 - [list each issue: what was wrong, what was fixed or suggested]
 
-Changes made:
+changes made:
 - [list each change]
 
-Daemon status: [running/stopped]
-Last synthesis: [date or "never"]
-Memory count: [number of memories in database]
+daemon status: [running/stopped]
+last synthesis: [date or "never"]
+memory count: [number of memories in database]
 
-Recommendations:
+recommendations:
 - [any remaining suggestions]
+```
+
+---
+
+## Implementation Notes
+
+### Writing Files
+
+Use the `write` tool (or equivalent file-writing capability). Don't use shell redirects — they have escaping issues.
+
+```bash
+# Check existing content first
+read ~/.agents/IDENTITY.md
+
+# Write new content
+write ~/.agents/IDENTITY.md "<content>"
+```
+
+### Re-running
+
+If `/onboarding` is called when files already exist:
+
+"looks like you've already been through onboarding. want to:
+1. redo everything from scratch
+2. tweak a specific section
+3. run a workspace audit (clean up and optimize)
+4. just view what's set up"
+
+If they pick option 3, skip directly to Step 6 (Workspace Audit).
+
+### Partial Completion
+
+If the user cuts off mid-interview, write what you have. Next time they run `/onboarding`:
+
+"last time we got through [phase]. want to continue from there or start over?"
+
+### Making It Feel Natural
+
+- React to their answers with genuine responses
+- If they're having fun with it, match that energy
+- If they're all business, be efficient
+- Offer suggestions when they're stuck
+- Don't repeat the question if they already answered it indirectly
+- Reference earlier answers to show you're listening
+
+### Template Variables
+
+When writing files, use the collected values:
+
+```
+{{variable_name}} — direct substitution
+{{#if variable}}...{{/if}} — conditional section
+{{#each array}}...{{/each}} — loop over array
 ```
 
 ---
@@ -660,13 +721,35 @@ Recommendations:
 
 If user says `/onboarding quick` or seems impatient, do an accelerated version:
 
-"Quick setup — give me one word each:
-1. My name:
-2. Your name:
-3. Formality (1-10):
-4. Technical level (low/med/high):
-5. One thing to remember about you:
+```
+quick setup — give me these five things:
+1. my name:
+2. your name:
+3. formality (1-10):
+4. technical level (low/med/high):
+5. one rule i should always follow:
 
-[Write minimal files]
+[write minimal files]
 
-Done. We can go deeper anytime with `/onboarding`."
+done. we can go deeper anytime with /onboarding.
+```
+
+Quick mode writes the rule to AGENTS.md under "Hard Rules" rather
+than creating a manual memory entry.
+
+---
+
+## Surface Compatibility
+
+**Terminal (primary):** This skill is designed for terminal-based
+agents (Claude Code, OpenCode, OpenClaw). All file writes use the
+standard write tool.
+
+**Dashboard:** When the dashboard ships a setup page, it will invoke
+this same skill via the daemon API. The interview flow is identical;
+only the I/O surface changes.
+
+**Discord / Chat:** The interview works in chat surfaces but file
+writes need to route through the daemon API (`POST /api/config`)
+rather than direct filesystem access. The conversational flow is
+the same.
