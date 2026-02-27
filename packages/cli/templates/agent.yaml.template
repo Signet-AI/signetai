@@ -57,12 +57,15 @@ search:
   # Alpha: weight for vector similarity (1-alpha = BM25 keyword weight)
   # 0.7 = 70% semantic, 30% keyword
   alpha: 0.7
-  
+
   # Candidates to fetch from each source before blending
   top_k: 20
-  
+
   # Minimum score threshold for results
   min_score: 0.3
+
+  # Spaced rehearsal — boosts frequently-accessed memories
+  rehearsal_enabled: true
 
 # ============================================================================
 # Memory Configuration
@@ -92,6 +95,42 @@ memory:
     
     # Maximum tokens for synthesis output
     max_tokens: 4000
+
+  # Pipeline V2 — automatic memory extraction from conversations
+  pipelineV2:
+    # Master switch (true = extract memories from conversations)
+    enabled: true
+
+    # Shadow mode: extract but don't write to DB (dry-run for testing)
+    # shadowMode: false
+
+    # Freeze all mutations (reads only, no writes/updates/deletes)
+    # mutationsFrozen: false
+
+    # Extraction provider and model
+    extraction:
+      # "claude-code" (uses Claude CLI) or "ollama" (local)
+      provider: claude-code
+      model: haiku
+      # timeout: 45000
+      # minConfidence: 0.7
+
+    # Knowledge graph — boosts related memories in search results
+    graph:
+      enabled: true
+      # boostWeight: 0.15
+
+    # Reranker — re-scores search results for better relevance
+    reranker:
+      enabled: true
+      # topN: 20
+
+    # Autonomous maintenance — prunes, merges, and updates memories
+    autonomous:
+      enabled: true
+      allowUpdateDelete: true
+      maintenanceMode: execute  # "execute" or "observe"
+      # maintenanceIntervalMs: 1800000  # 30 min
 
 # ============================================================================
 # Hooks Configuration

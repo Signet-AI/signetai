@@ -109,11 +109,11 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2.enabled).toBe(true);
 		expect(cfg.pipelineV2.shadowMode).toBe(true);
 		expect(cfg.pipelineV2.graph.enabled).toBe(true);
-		// unset flags remain false
-		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(false);
-		expect(cfg.pipelineV2.autonomous.enabled).toBe(false);
-		expect(cfg.pipelineV2.mutationsFrozen).toBe(false);
-		expect(cfg.pipelineV2.autonomous.frozen).toBe(false);
+		// unset flags fall through to DEFAULT_PIPELINE_V2 values
+		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
+		expect(cfg.pipelineV2.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
+		expect(cfg.pipelineV2.mutationsFrozen).toBe(DEFAULT_PIPELINE_V2.mutationsFrozen);
+		expect(cfg.pipelineV2.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
 		expect(cfg.pipelineV2.extraction.minConfidence).toBe(0.82);
 	});
 });
@@ -153,7 +153,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.autonomous.frozen).toBe(true);
 	});
 
-	it("merges partial config with false defaults", () => {
+	it("merges partial config with defaults", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
@@ -165,15 +165,15 @@ describe("loadPipelineConfig", () => {
 
 		expect(result.enabled).toBe(true);
 		expect(result.mutationsFrozen).toBe(true);
-		// everything else false
-		expect(result.shadowMode).toBe(false);
-		expect(result.autonomous.allowUpdateDelete).toBe(false);
-		expect(result.graph.enabled).toBe(false);
-		expect(result.autonomous.enabled).toBe(false);
-		expect(result.autonomous.frozen).toBe(false);
+		// absent keys fall through to DEFAULT_PIPELINE_V2
+		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
+		expect(result.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
+		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
+		expect(result.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
+		expect(result.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
 	});
 
-	it("treats non-boolean truthy values as false", () => {
+	it("treats non-boolean truthy values as defaults (not coerced)", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
@@ -184,10 +184,10 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		// strict === true check means these are all false
-		expect(result.enabled).toBe(false);
-		expect(result.shadowMode).toBe(false);
-		expect(result.graph.enabled).toBe(false);
+		// non-boolean values are not typeof "boolean", so they fall through to defaults
+		expect(result.enabled).toBe(DEFAULT_PIPELINE_V2.enabled);
+		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
+		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
 	});
 
 	it("clamps numeric fields to valid ranges (flat keys)", () => {
@@ -286,12 +286,12 @@ describe("loadPipelineConfig", () => {
 			memory: { pipelineV2: { enabled: true } },
 		});
 
-		expect(result.graph.boostWeight).toBe(0.15);
-		expect(result.graph.boostTimeoutMs).toBe(500);
-		expect(result.reranker.enabled).toBe(false);
-		expect(result.reranker.model).toBe("");
-		expect(result.reranker.topN).toBe(20);
-		expect(result.reranker.timeoutMs).toBe(2000);
+		expect(result.graph.boostWeight).toBe(DEFAULT_PIPELINE_V2.graph.boostWeight);
+		expect(result.graph.boostTimeoutMs).toBe(DEFAULT_PIPELINE_V2.graph.boostTimeoutMs);
+		expect(result.reranker.enabled).toBe(DEFAULT_PIPELINE_V2.reranker.enabled);
+		expect(result.reranker.model).toBe(DEFAULT_PIPELINE_V2.reranker.model);
+		expect(result.reranker.topN).toBe(DEFAULT_PIPELINE_V2.reranker.topN);
+		expect(result.reranker.timeoutMs).toBe(DEFAULT_PIPELINE_V2.reranker.timeoutMs);
 	});
 
 	it("loads maintenance and repair config fields (flat keys)", () => {
@@ -321,12 +321,12 @@ describe("loadPipelineConfig", () => {
 			memory: { pipelineV2: { enabled: true } },
 		});
 
-		expect(result.autonomous.maintenanceIntervalMs).toBe(1800000);
-		expect(result.autonomous.maintenanceMode).toBe("observe");
-		expect(result.repair.reembedCooldownMs).toBe(300000);
-		expect(result.repair.reembedHourlyBudget).toBe(10);
-		expect(result.repair.requeueCooldownMs).toBe(60000);
-		expect(result.repair.requeueHourlyBudget).toBe(50);
+		expect(result.autonomous.maintenanceIntervalMs).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceIntervalMs);
+		expect(result.autonomous.maintenanceMode).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceMode);
+		expect(result.repair.reembedCooldownMs).toBe(DEFAULT_PIPELINE_V2.repair.reembedCooldownMs);
+		expect(result.repair.reembedHourlyBudget).toBe(DEFAULT_PIPELINE_V2.repair.reembedHourlyBudget);
+		expect(result.repair.requeueCooldownMs).toBe(DEFAULT_PIPELINE_V2.repair.requeueCooldownMs);
+		expect(result.repair.requeueHourlyBudget).toBe(DEFAULT_PIPELINE_V2.repair.requeueHourlyBudget);
 	});
 
 	it("rejects invalid maintenanceMode values", () => {
@@ -338,6 +338,30 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
+		expect(result.autonomous.maintenanceMode).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceMode);
+	});
+
+	it("preserves explicit false values over defaults", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: false,
+					graph: { enabled: false },
+					reranker: { enabled: false },
+					autonomous: {
+						enabled: false,
+						allowUpdateDelete: false,
+						maintenanceMode: "observe",
+					},
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(false);
+		expect(result.graph.enabled).toBe(false);
+		expect(result.reranker.enabled).toBe(false);
+		expect(result.autonomous.enabled).toBe(false);
+		expect(result.autonomous.allowUpdateDelete).toBe(false);
 		expect(result.autonomous.maintenanceMode).toBe("observe");
 	});
 

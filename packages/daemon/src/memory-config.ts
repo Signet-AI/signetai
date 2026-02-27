@@ -29,7 +29,7 @@ export { PIPELINE_FLAGS };
 export type { PipelineFlag, PipelineV2Config };
 
 export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
-	enabled: false,
+	enabled: true,
 	shadowMode: false,
 	mutationsFrozen: false,
 	semanticContradictionEnabled: false,
@@ -45,22 +45,22 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		leaseTimeoutMs: 300000,
 	},
 	graph: {
-		enabled: false,
+		enabled: true,
 		boostWeight: 0.15,
 		boostTimeoutMs: 500,
 	},
 	reranker: {
-		enabled: false,
+		enabled: true,
 		model: "",
 		topN: 20,
 		timeoutMs: 2000,
 	},
 	autonomous: {
-		enabled: false,
+		enabled: true,
 		frozen: false,
-		allowUpdateDelete: false,
+		allowUpdateDelete: true,
 		maintenanceIntervalMs: 30 * 60 * 1000, // 30 min
-		maintenanceMode: "observe",
+		maintenanceMode: "execute",
 	},
 	repair: {
 		reembedCooldownMs: 300000, // 5 min
@@ -140,6 +140,12 @@ export function loadPipelineConfig(
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
 
+	function resolveBool(nested: unknown, flat: unknown, fallback: boolean): boolean {
+		if (typeof nested === "boolean") return nested;
+		if (typeof flat === "boolean") return flat;
+		return fallback;
+	}
+
 	// -- Extraction provider resolution --
 	// Nested wins; flat fallback preserves legacy ollama inference
 	const nestedProvider = extractionRaw?.provider;
@@ -157,12 +163,14 @@ export function loadPipelineConfig(
 					: d.extraction.provider;
 
 	return {
-		enabled: raw.enabled === true,
-		shadowMode: raw.shadowMode === true,
+		enabled: typeof raw.enabled === "boolean" ? raw.enabled : d.enabled,
+		shadowMode: typeof raw.shadowMode === "boolean" ? raw.shadowMode : d.shadowMode,
 		mutationsFrozen:
-			raw.mutationsFrozen === true,
+			typeof raw.mutationsFrozen === "boolean" ? raw.mutationsFrozen : d.mutationsFrozen,
 		semanticContradictionEnabled:
-			raw.semanticContradictionEnabled === true,
+			typeof raw.semanticContradictionEnabled === "boolean"
+				? raw.semanticContradictionEnabled
+				: d.semanticContradictionEnabled,
 
 		extraction: {
 			provider: resolvedProvider,
@@ -206,8 +214,7 @@ export function loadPipelineConfig(
 		},
 
 		graph: {
-			enabled:
-				graphRaw?.enabled === true || raw.graphEnabled === true,
+			enabled: resolveBool(graphRaw?.enabled, raw.graphEnabled, d.graph.enabled),
 			boostWeight: clampFraction(
 				graphRaw?.boostWeight ?? raw.graphBoostWeight,
 				d.graph.boostWeight,
@@ -221,8 +228,7 @@ export function loadPipelineConfig(
 		},
 
 		reranker: {
-			enabled:
-				rerankerRaw?.enabled === true || raw.rerankerEnabled === true,
+			enabled: resolveBool(rerankerRaw?.enabled, raw.rerankerEnabled, d.reranker.enabled),
 			model:
 				typeof rerankerRaw?.model === "string"
 					? rerankerRaw.model
@@ -244,15 +250,11 @@ export function loadPipelineConfig(
 		},
 
 		autonomous: {
-			enabled:
-				autonomousRaw?.enabled === true ||
-				raw.autonomousEnabled === true,
-			frozen:
-				autonomousRaw?.frozen === true ||
-				raw.autonomousFrozen === true,
-			allowUpdateDelete:
-				autonomousRaw?.allowUpdateDelete === true ||
-				raw.allowUpdateDelete === true,
+			enabled: resolveBool(autonomousRaw?.enabled, raw.autonomousEnabled, d.autonomous.enabled),
+			frozen: resolveBool(autonomousRaw?.frozen, raw.autonomousFrozen, d.autonomous.frozen),
+			allowUpdateDelete: resolveBool(
+				autonomousRaw?.allowUpdateDelete, raw.allowUpdateDelete, d.autonomous.allowUpdateDelete,
+			),
 			maintenanceIntervalMs: clampPositive(
 				autonomousRaw?.maintenanceIntervalMs ??
 					raw.maintenanceIntervalMs,
@@ -260,11 +262,11 @@ export function loadPipelineConfig(
 				86400000,
 				d.autonomous.maintenanceIntervalMs,
 			),
-			maintenanceMode:
-				(autonomousRaw?.maintenanceMode ?? raw.maintenanceMode) ===
-				"execute"
-					? "execute"
-					: d.autonomous.maintenanceMode,
+			maintenanceMode: (() => {
+				const v = autonomousRaw?.maintenanceMode ?? raw.maintenanceMode;
+				if (v === "execute" || v === "observe") return v;
+				return d.autonomous.maintenanceMode;
+			})(),
 		},
 
 		repair: {
@@ -370,7 +372,7 @@ export function loadPipelineConfig(
 		},
 
 		telemetryEnabled:
-			raw.telemetryEnabled === true,
+			typeof raw.telemetryEnabled === "boolean" ? raw.telemetryEnabled : d.telemetryEnabled,
 		telemetry: {
 			posthogHost:
 				typeof telemetryRaw?.posthogHost === "string"

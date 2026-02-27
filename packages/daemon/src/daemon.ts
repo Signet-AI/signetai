@@ -7841,9 +7841,28 @@ async function main() {
 	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
+	// Auto-detect extraction provider: if configured as claude-code but CLI
+	// isn't available, fall back to ollama with a warning.
+	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
+	if (effectiveExtractionProvider === "claude-code") {
+		try {
+			const proc = Bun.spawn(["claude", "--version"], {
+				stdout: "pipe",
+				stderr: "pipe",
+				env: { ...process.env, SIGNET_NO_HOOKS: "1" },
+			});
+			const exitCode = await proc.exited;
+			if (exitCode !== 0) throw new Error("non-zero exit");
+		} catch {
+			logger.warn("config", "Claude Code CLI not found, falling back to ollama for extraction");
+			effectiveExtractionProvider = "ollama";
+		}
+	}
+	logger.info("config", "Extraction provider", { provider: effectiveExtractionProvider });
+
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider =
-		memoryCfg.pipelineV2.extraction.provider === "claude-code"
+		effectiveExtractionProvider === "claude-code"
 			? createClaudeCodeProvider({
 					model: memoryCfg.pipelineV2.extraction.model || "haiku",
 					defaultTimeoutMs:

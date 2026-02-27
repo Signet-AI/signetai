@@ -2101,7 +2101,13 @@ async function setupWizard(options: SetupWizardOptions) {
 				],
 			});
 
-	// Memory pipeline provider
+	// Memory pipeline provider — auto-detect best default
+	const detectedProvider: ExtractionProviderChoice = hasCommand("claude")
+		? "claude-code"
+		: hasCommand("ollama")
+			? "ollama"
+			: "none";
+
 	let extractionProvider: ExtractionProviderChoice;
 	if (nonInteractive) {
 		const providerFromConfig = normalizeChoice(
@@ -2109,22 +2115,24 @@ async function setupWizard(options: SetupWizardOptions) {
 			EXTRACTION_PROVIDER_CHOICES,
 		);
 		extractionProvider =
-			requestedExtractionProvider ?? providerFromConfig ?? "none";
+			requestedExtractionProvider ?? providerFromConfig ?? detectedProvider;
 	} else {
 		console.log();
+		const choices = [
+			{
+				value: "claude-code" as const,
+				name: `Claude Code (uses your Claude subscription via CLI)${detectedProvider === "claude-code" ? " — detected" : ""}`,
+			},
+			{
+				value: "ollama" as const,
+				name: `Ollama (local, requires running Ollama server)${detectedProvider === "ollama" ? " — detected" : ""}`,
+			},
+			{ value: "none" as const, name: "Skip extraction pipeline" },
+		];
 		extractionProvider = (await select({
 			message: "Memory extraction provider (analyzes conversations):",
-			choices: [
-				{
-					value: "claude-code",
-					name: "Claude Code (uses your Claude subscription via CLI)",
-				},
-				{
-					value: "ollama",
-					name: "Ollama (local, requires running Ollama server)",
-				},
-				{ value: "none", name: "Skip extraction pipeline" },
-			],
+			choices,
+			default: detectedProvider,
 		})) as ExtractionProviderChoice;
 	}
 
@@ -2378,8 +2386,17 @@ ${agentName} is a helpful assistant.
 		if (extractionProvider !== "none") {
 			(config.memory as Record<string, unknown>).pipelineV2 = {
 				enabled: true,
-				extractionProvider,
-				extractionModel,
+				extraction: {
+					provider: extractionProvider,
+					model: extractionModel,
+				},
+				graph: { enabled: true },
+				reranker: { enabled: true },
+				autonomous: {
+					enabled: true,
+					allowUpdateDelete: true,
+					maintenanceMode: "execute",
+				},
 			};
 		}
 
