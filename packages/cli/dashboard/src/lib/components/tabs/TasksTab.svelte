@@ -138,7 +138,10 @@ onMount(() => {
 	onclose={closeDetail}
 	ontrigger={doTrigger}
 	ondelete={doDelete}
-	onedit={(id) => openForm(id)}
+	onedit={(id) => {
+		closeDetail();
+		openForm(id);
+	}}
 />
 
 <style>

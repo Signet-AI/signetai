@@ -40,6 +40,7 @@ function formatDate(iso: string | null): string {
 }
 
 let confirmingDelete = $state(false);
+let taskIsRunning = $derived(runs.some((run) => run.status === "running"));
 
 function handleDelete() {
 	if (!task) return;
@@ -131,15 +132,26 @@ function handleDelete() {
 
 				<!-- Actions -->
 				<div class="flex gap-2">
-					<Button
-						variant="outline"
-						size="sm"
-						class="h-7 gap-1.5 text-[11px]"
-						onclick={() => task && ontrigger(task.id)}
-					>
-						<Play class="size-3" />
-						Run Now
-					</Button>
+					{#if taskIsRunning}
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-7 gap-1.5 text-[11px]"
+							disabled
+						>
+							Running...
+						</Button>
+					{:else}
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-7 gap-1.5 text-[11px]"
+							onclick={() => task && ontrigger(task.id)}
+						>
+							<Play class="size-3" />
+							Run Now
+						</Button>
+					{/if}
 					<Button
 						variant="outline"
 						size="sm"

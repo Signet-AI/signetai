@@ -81,13 +81,16 @@ async function handleSubmit() {
 	submitting = true;
 
 	if (editingId) {
-		await doUpdate(editingId, {
+		const success = await doUpdate(editingId, {
 			name: name.trim(),
 			prompt: prompt.trim(),
 			cronExpression: cronExpression.trim(),
 			harness,
 			workingDirectory: workingDirectory.trim() || null,
 		});
+		if (success) {
+			onclose();
+		}
 	} else {
 		await doCreate({
 			name: name.trim(),
