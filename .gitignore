@@ -56,3 +56,6 @@ references/
 # Web (Cloudflare Worker)
 web/.wrangler/
 web/.dev.vars*
+
+# Rust sidecar build artifacts
+packages/predictor/target/

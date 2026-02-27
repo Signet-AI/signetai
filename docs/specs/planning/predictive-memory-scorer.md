@@ -1865,3 +1865,100 @@ LogCategory union in logger.ts.
    - Add an API endpoint to query session_memories for debugging
    - Consider adding `source='predicted'` for predicted context memories
      (currently all recorded as "effective")
+
+---
+
+## Phase 1 Implementation Notes (Updated 2026-02-27)
+
+### What was implemented
+
+**New Rust crate scaffold** (`packages/predictor/`)
+- Added `Cargo.toml`, `Cargo.lock`, and module structure:
+  `autograd.rs`, `model.rs`, `tokenizer.rs`, `training.rs`, `data.rs`,
+  `protocol.rs`, `checkpoint.rs`, `main.rs`, `lib.rs`
+- Stdin/stdout JSON-RPC service with `score`, `train`, and `status`
+  methods in `main.rs`
+
+**Autograd core** (`packages/predictor/src/autograd.rs`)
+- Implemented operation-level tape with parameter storage and gradients
+- Added ops required by Phase 1 plan:
+  - `Sigmoid`
+  - `MeanPool`
+  - `FeatureConcat`
+  - `ListwiseLoss` (KL divergence over temperature-scaled softmax)
+- Added additional ops needed to support plan-aligned model evolution:
+  - `Embed` (trainable row lookup for hash/project embedding tables)
+  - `LayerNorm` (per-path normalization before attention)
+- Backward pass now consumes op tape via `std::mem::take` and iterates
+  by ownership (no per-iteration `Op` clone in reverse loop)
+
+**Model core** (`packages/predictor/src/model.rs`)
+- Implemented cross-attention style scorer with:
+  - pre-embedded path (`native_dim -> internal_dim` downprojection)
+  - attention projections (`Q`, `K`, `V`)
+  - learned gate over similarity + feature signals
+- Added both encoding paths from the planning spec:
+  - pre-embedded path
+  - text path (HashTrick token IDs -> embedding lookup -> mean pool)
+- Added per-path layer normalization before attention for both paths
+- Added project embedding table (`project_slots x internal_dim`) and
+  included project signal in gate input
+
+**Training execution** (`packages/predictor/src/training.rs`, `main.rs`)
+- Implemented Adam optimizer
+- Implemented `train_batch()` with listwise loss and model update
+- JSON-RPC `train` now performs real gradient updates (no longer stub),
+  returns non-zero loss, and updates model status counters/version
+
+**Checkpoint + protocol**
+- Implemented checkpoint format with `SGPT` magic/version/flags/config/params
+- Extended protocol params to support:
+  - optional text candidates (`candidate_texts`)
+  - optional feature matrix (`candidate_features`)
+  - `project_slot`
+
+### What was different than planned
+
+- `LayerNorm` and project embeddings were initially deferred but were
+  pulled into Phase 1 to align model behavior with the architecture
+  section (path normalization + project context) before daemon wiring.
+- `train` RPC was initially scaffolded as a placeholder; it now executes
+  real training updates to avoid false-positive integration confidence.
+- `data.rs` remains a Phase 2 placeholder; it currently discovers session
+  keys only and does not yet assemble training tensors from
+  `session_memories` + embeddings.
+
+### Verification completed
+
+- `cargo fmt --all`
+- `cargo test --offline` passes (12 tests)
+  - includes autograd gradient tests, model path tests, protocol parse,
+    tokenizer tests, and training-step parameter update test
+- Manual JSON-RPC smoke:
+  - `train` returns finite/non-zero loss
+  - `status` transitions to `trained: true` and increments model version
+
+### Open gaps vs full plan
+
+- `data.rs` does not yet build real `TrainingSample` rows from SQLite joins
+- Daemon sidecar integration (`predictor-client.ts`, spawn lifecycle,
+  fallback/timeout/crash handling) not started
+- RRF fusion, EMA success tracking, and `predictor_comparisons` migration
+  not started
+- Dashboard/observability predictor domain not started
+
+### Next steps
+
+1. **Phase 2 (data + training pipeline)**
+   - Implement SQLite joins in `data.rs` for
+     `session_memories`/`session_scores`/embeddings
+   - Map behavioral + continuity labels into final training labels
+   - Add checkpoint load path (`--base-weights`) and periodic save hooks
+2. **Phase 3 (daemon integration)**
+   - Add predictor sidecar lifecycle manager and JSON-RPC client
+   - Wire scoring into session-start flow with bounded candidate pool
+   - Add training trigger from session-end and comparison logging
+3. **Phase 4 (observability + dashboard)**
+   - Add diagnostics domain, analytics stages, timeline events, and
+     `/api/predictor/*` routes
+   - Add dashboard Predictor tab with cold-start and active modes
