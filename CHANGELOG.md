@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.4.1] - 2026-02-27
+
+### Bug Fixes
+
+- **connector-openclaw**: prevent temp workspace paths from leaking into config
+
+
 ## [0.4.0] - 2026-02-27
 
 ### Docs
