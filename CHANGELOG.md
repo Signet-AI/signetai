@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.4.2] - 2026-02-27
+
+### Features
+
+- **embeddings**: add scoped projection filters and point window controls
+
+
 ## [0.4.1] - 2026-02-27
 
 ### Bug Fixes
