@@ -12,6 +12,8 @@ import { Badge } from "$lib/components/ui/badge/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Popover from "$lib/components/ui/popover/index.js";
 import { Calendar } from "$lib/components/ui/calendar/index.js";
+import PageHero from "$lib/components/layout/PageHero.svelte";
+import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 import CalendarIcon from "@lucide/svelte/icons/calendar";
 import { getLocalTimeZone, CalendarDate, type DateValue } from "@internationalized/date";
 
@@ -120,7 +122,15 @@ function formatIsoDate(value: string): string {
 }
 </script>
 
-<section class="flex flex-col flex-1 min-h-0 gap-2.5 p-3 bg-[var(--sig-bg)]">
+<div class="flex flex-col flex-1 min-h-0 overflow-hidden">
+	<PageHero
+		title={PAGE_HEADERS.memory.title}
+		wordmarkLines={PAGE_HEADERS.memory.wordmarkLines}
+		eyebrow={PAGE_HEADERS.memory.eyebrow}
+		description={PAGE_HEADERS.memory.description}
+	/>
+
+	<section class="flex flex-col flex-1 min-h-0 gap-2.5 p-3 bg-[var(--sig-bg)]">
 	<!-- Search bar -->
 	<label class="flex items-center gap-2 px-3 py-1.5
 		border border-[var(--sig-border-strong)]
@@ -192,7 +202,7 @@ function formatIsoDate(value: string): string {
 					type="single"
 					captionLayout="dropdown"
 					value={toCalendarDate(mem.filterSince)}
-					onValueChange={(v) => {
+					onValueChange={(v: DateValue | undefined) => {
 						mem.filterSince = toIsoDate(v);
 						sincePickerOpen = false;
 					}}
@@ -326,7 +336,8 @@ function formatIsoDate(value: string): string {
 			{/each}
 		{/if}
 	</div>
-</section>
+	</section>
+</div>
 
 <style>
 	.doc-card::before,

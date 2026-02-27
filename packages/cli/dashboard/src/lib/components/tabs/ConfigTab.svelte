@@ -3,6 +3,8 @@ import { saveConfigFile, type ConfigFile } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import MarkdownViewer from "$lib/components/config/MarkdownViewer.svelte";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
+import PageHero from "$lib/components/layout/PageHero.svelte";
+import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 
 interface Props {
 	configFiles: ConfigFile[];
@@ -57,6 +59,13 @@ async function saveFile() {
 </script>
 
 <div class="config-tab">
+	<PageHero
+		title={PAGE_HEADERS.config.title}
+		wordmarkLines={PAGE_HEADERS.config.wordmarkLines}
+		eyebrow={PAGE_HEADERS.config.eyebrow}
+		description={PAGE_HEADERS.config.description}
+	/>
+
 	<Tabs.Root value={selectedFile} onValueChange={(v) => onselectfile(v)}>
 		<Tabs.List class="bg-transparent h-auto gap-0 rounded-none border-b border-[var(--sig-border)] px-[var(--space-md)] w-full justify-start">
 			{#each mdFiles as file (file.name)}

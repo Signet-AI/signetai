@@ -19,6 +19,8 @@ import { mem } from "$lib/stores/memory.svelte";
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
 import EmbeddingCanvas3D from "../embeddings/EmbeddingCanvas3D.svelte";
 import EmbeddingInspector from "../embeddings/EmbeddingInspector.svelte";
+import PageHero from "$lib/components/layout/PageHero.svelte";
+import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 import {
 	type RelationKind,
 	type EmbeddingRelation,
@@ -1156,8 +1158,17 @@ $effect(() => {
 });
 </script>
 
-<div class="flex flex-1 min-h-0 bg-[#050505] max-lg:flex-col">
-	<div
+<div class="flex h-full flex-col overflow-hidden">
+	<PageHero
+		title={PAGE_HEADERS.embeddings.title}
+		wordmarkLines={PAGE_HEADERS.embeddings.wordmarkLines}
+		wordmarkMaxWidth={PAGE_HEADERS.embeddings.wordmarkMaxWidth}
+		eyebrow={PAGE_HEADERS.embeddings.eyebrow}
+		description={PAGE_HEADERS.embeddings.description}
+	/>
+
+	<div class="flex flex-1 min-h-0 bg-[#050505] max-lg:flex-col">
+		<div
 		bind:this={graphRegion}
 		class="flex-1 relative overflow-hidden bg-[#050505]"
 		role="presentation"
@@ -1165,7 +1176,7 @@ $effect(() => {
 		onmouseleave={() => {
 			if (!hoverLockedId) graphHovered = null;
 		}}
-	>
+		>
 		<div class="absolute top-2 left-3 right-3 z-[8] flex items-center gap-2 pointer-events-none">
 			<input
 				type="text"
@@ -1591,9 +1602,9 @@ $effect(() => {
 				onhovernode={updateGraphHover}
 			/>
 		</div>
-	</div>
+		</div>
 
-	<EmbeddingInspector
+		<EmbeddingInspector
 		{graphSelected}
 		{embeddings}
 		{embeddingById}
@@ -1612,5 +1623,6 @@ $effect(() => {
 		onsetrelationmode={(mode) => (relationMode = mode)}
 		onfocusembedding={() => graphSelected && focusEmbedding(graphSelected.id)}
 		onpintoggle={togglePinForSelected}
-	/>
+		/>
+	</div>
 </div>

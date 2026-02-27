@@ -4,6 +4,8 @@ import { getSecrets, putSecret, deleteSecret } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
+import PageHero from "$lib/components/layout/PageHero.svelte";
+import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 
 let secrets = $state<string[]>([]);
 let secretsLoading = $state(false);
@@ -50,8 +52,16 @@ onMount(() => {
 });
 </script>
 
-<div class="flex h-full flex-col gap-[var(--space-md)] overflow-hidden p-[var(--space-md)]">
-	<div class="flex shrink-0 gap-[var(--space-sm)]">
+<div class="flex h-full flex-col overflow-hidden">
+	<PageHero
+		title={PAGE_HEADERS.secrets.title}
+		wordmarkLines={PAGE_HEADERS.secrets.wordmarkLines}
+		eyebrow={PAGE_HEADERS.secrets.eyebrow}
+		description={PAGE_HEADERS.secrets.description}
+	/>
+
+	<div class="flex flex-1 flex-col gap-[var(--space-md)] overflow-hidden p-[var(--space-md)]">
+		<div class="flex shrink-0 gap-[var(--space-sm)]">
 		<Input
 			type="text"
 			class="flex-1 rounded-none border-[var(--sig-border-strong)]
@@ -79,30 +89,31 @@ onMount(() => {
 		>
 			{secretAdding ? 'Adding...' : 'Add'}
 		</Button>
-	</div>
+		</div>
 
-	<div class="flex flex-1 flex-col gap-[var(--space-sm)] overflow-y-auto">
-		{#if secretsLoading}
-			<div class="p-8 text-center text-[var(--sig-text-muted)]">Loading secrets...</div>
-		{:else if secrets.length === 0}
-			<div class="p-8 text-center text-[var(--sig-text-muted)]">No secrets stored. Add one above.</div>
-		{:else}
-			{#each secrets as name}
-				<div class="flex items-center gap-3 border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3">
-					<span class="flex-1 font-[family-name:var(--font-mono)] text-[13px] text-[var(--sig-text-bright)]">{name}</span>
-					<span class="font-[family-name:var(--font-mono)] text-[12px] text-[var(--sig-text-muted)]">••••••••</span>
-					<Button
-						variant="outline"
-						size="sm"
-						class="rounded-none border-[var(--sig-danger)] text-[var(--sig-danger)]
-							text-[11px] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
-						onclick={() => removeSecret(name)}
-						disabled={secretDeleting === name}
-					>
-						{secretDeleting === name ? '...' : 'Delete'}
-					</Button>
-				</div>
-			{/each}
-		{/if}
+		<div class="flex flex-1 flex-col gap-[var(--space-sm)] overflow-y-auto">
+			{#if secretsLoading}
+				<div class="p-8 text-center text-[var(--sig-text-muted)]">Loading secrets...</div>
+			{:else if secrets.length === 0}
+				<div class="p-8 text-center text-[var(--sig-text-muted)]">No secrets stored. Add one above.</div>
+			{:else}
+				{#each secrets as name}
+					<div class="flex items-center gap-3 border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3">
+						<span class="flex-1 font-[family-name:var(--font-mono)] text-[13px] text-[var(--sig-text-bright)]">{name}</span>
+						<span class="font-[family-name:var(--font-mono)] text-[12px] text-[var(--sig-text-muted)]">••••••••</span>
+						<Button
+							variant="outline"
+							size="sm"
+							class="rounded-none border-[var(--sig-danger)] text-[var(--sig-danger)]
+								text-[11px] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+							onclick={() => removeSecret(name)}
+							disabled={secretDeleting === name}
+						>
+							{secretDeleting === name ? '...' : 'Delete'}
+						</Button>
+					</div>
+				{/each}
+			{/if}
+		</div>
 	</div>
 </div>
