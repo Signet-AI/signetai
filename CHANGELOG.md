@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.8.0] - 2026-02-27
+
+### Bug Fixes
+
+- **docs**: add missing frontmatter to daemon-rust-rewrite spec
+
+
 ## [0.7.0] - 2026-02-27
 
 ### Features
