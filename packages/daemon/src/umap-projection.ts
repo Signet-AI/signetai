@@ -32,6 +32,34 @@ export interface ProjectionResult {
 	readonly edges: readonly [number, number][];
 }
 
+export interface ProjectionFilters {
+	readonly query?: string;
+	readonly who?: readonly string[];
+	readonly types?: readonly string[];
+	readonly sourceTypes?: readonly string[];
+	readonly tags?: readonly string[];
+	readonly pinned?: boolean;
+	readonly since?: string;
+	readonly until?: string;
+	readonly importanceMin?: number;
+	readonly importanceMax?: number;
+}
+
+export interface ProjectionQuery {
+	readonly limit?: number;
+	readonly offset?: number;
+	readonly filters?: ProjectionFilters;
+}
+
+export interface ProjectionQueryResult {
+	readonly result: ProjectionResult;
+	readonly total: number;
+	readonly count: number;
+	readonly limit: number;
+	readonly offset: number;
+	readonly hasMore: boolean;
+}
+
 export interface CachedProjection {
 	readonly result: ProjectionResult;
 	readonly embeddingCount: number;
@@ -215,41 +243,168 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 // Public API
 // ---------------------------------------------------------------------------
 
-const EMBEDDINGS_SQL = `
+const EMBEDDINGS_SELECT_SQL = `
 	SELECT m.id, m.content, m.who, m.importance, m.type, m.tags, m.pinned,
 	       m.source_type, m.source_id, m.created_at,
 	       e.vector, e.dimensions
+`;
+
+const EMBEDDINGS_FROM_SQL = `
 	FROM embeddings e
 	INNER JOIN memories m ON m.id = e.source_id
 	WHERE e.source_type = 'memory'
-	ORDER BY m.created_at DESC
 `;
 
-export function computeProjection(
+function normalizeFilterValues(values: readonly string[] | undefined): string[] {
+	if (!values) return [];
+	const normalized = values
+		.map((value) => value.trim())
+		.filter((value) => value.length > 0);
+	return [...new Set(normalized)];
+}
+
+function buildProjectionWhere(filters: ProjectionFilters | undefined): {
+	clause: string;
+	params: unknown[];
+} {
+	if (!filters) return { clause: "", params: [] };
+
+	const parts: string[] = [];
+	const params: unknown[] = [];
+
+	const query = filters.query?.trim();
+	if (query && query.length > 0) {
+		const pattern = `%${query}%`;
+		parts.push(
+			"(m.content LIKE ? OR m.tags LIKE ? OR m.who LIKE ? OR m.type LIKE ? OR m.source_type LIKE ? OR m.source_id LIKE ?)",
+		);
+		params.push(pattern, pattern, pattern, pattern, pattern, pattern);
+	}
+
+	const whoValues = normalizeFilterValues(filters.who);
+	if (whoValues.length > 0) {
+		parts.push(`m.who IN (${whoValues.map(() => "?").join(", ")})`);
+		params.push(...whoValues);
+	}
+
+	const typeValues = normalizeFilterValues(filters.types);
+	if (typeValues.length > 0) {
+		parts.push(`m.type IN (${typeValues.map(() => "?").join(", ")})`);
+		params.push(...typeValues);
+	}
+
+	const sourceTypeValues = normalizeFilterValues(filters.sourceTypes);
+	if (sourceTypeValues.length > 0) {
+		parts.push(
+			`m.source_type IN (${sourceTypeValues.map(() => "?").join(", ")})`,
+		);
+		params.push(...sourceTypeValues);
+	}
+
+	const tagValues = normalizeFilterValues(filters.tags);
+	for (const tag of tagValues) {
+		parts.push("m.tags LIKE ?");
+		params.push(`%${tag}%`);
+	}
+
+	if (typeof filters.pinned === "boolean") {
+		parts.push("m.pinned = ?");
+		params.push(filters.pinned ? 1 : 0);
+	}
+
+	if (typeof filters.since === "string" && filters.since.length > 0) {
+		parts.push("m.created_at >= ?");
+		params.push(filters.since);
+	}
+
+	if (typeof filters.until === "string" && filters.until.length > 0) {
+		parts.push("m.created_at <= ?");
+		params.push(filters.until);
+	}
+
+	if (
+		typeof filters.importanceMin === "number" &&
+		Number.isFinite(filters.importanceMin)
+	) {
+		parts.push("m.importance >= ?");
+		params.push(filters.importanceMin);
+	}
+
+	if (
+		typeof filters.importanceMax === "number" &&
+		Number.isFinite(filters.importanceMax)
+	) {
+		parts.push("m.importance <= ?");
+		params.push(filters.importanceMax);
+	}
+
+	return {
+		clause: parts.length > 0 ? ` AND ${parts.join(" AND ")}` : "",
+		params,
+	};
+}
+
+interface ProjectionRowsResult {
+	readonly rows: EmbeddingRow[];
+	readonly total: number;
+	readonly offset: number;
+	readonly limit: number;
+	readonly hasMore: boolean;
+}
+
+function loadProjectionRows(
 	db: ReadDb,
-	nComponents: 2 | 3,
-): ProjectionResult {
-	const rawRows: Record<string, unknown>[] = db.prepare(EMBEDDINGS_SQL).all();
-	const rows = rawRows
-		.map(toEmbeddingRow)
-		.filter((r): r is EmbeddingRow => r !== null);
-
-	if (rows.length === 0) return { nodes: [], edges: [] };
-
-	const vectors = rows.map((r) => blobToVector(r.vector, r.dimensions));
-	const nNeighbors = Math.min(15, Math.max(2, vectors.length - 1));
-
-	const umap = new UMAP({ nComponents, nNeighbors, minDist: 0.1, spread: 1.0 });
-	const projected: number[][] = umap.fit(vectors);
-
-	const xs = normaliseAxis(projected.map((p) => p[0]));
-	const ys = normaliseAxis(projected.map((p) => p[1]));
-	const zs: number[] | null =
-		nComponents === 3
-			? normaliseAxis(projected.map((p) => p[2] ?? 0))
+	query: ProjectionQuery,
+): ProjectionRowsResult {
+	const offset =
+		typeof query.offset === "number" && Number.isFinite(query.offset)
+			? Math.max(0, Math.trunc(query.offset))
+			: 0;
+	const requestedLimit =
+		typeof query.limit === "number" && Number.isFinite(query.limit)
+			? Math.max(1, Math.trunc(query.limit))
 			: null;
 
-	const nodes: ProjectionNode[] = rows.map((row, i) => {
+	const { clause, params } = buildProjectionWhere(query.filters);
+
+	const totalRow = db
+		.prepare(
+			`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`,
+		)
+		.get(...params) as { count?: number } | undefined;
+	const total =
+		totalRow !== undefined && typeof totalRow.count === "number"
+			? totalRow.count
+			: 0;
+
+	let sql = `${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause} ORDER BY m.created_at DESC`;
+	const rowParams: unknown[] = [...params];
+	if (requestedLimit !== null) {
+		sql += " LIMIT ? OFFSET ?";
+		rowParams.push(requestedLimit, offset);
+	} else if (offset > 0) {
+		sql += " LIMIT -1 OFFSET ?";
+		rowParams.push(offset);
+	}
+
+	const rawRows = db.prepare(sql).all(...rowParams) as Record<string, unknown>[];
+	const rows = rawRows
+		.map(toEmbeddingRow)
+		.filter((row): row is EmbeddingRow => row !== null);
+	const limit =
+		requestedLimit ?? Math.max(0, total - offset);
+	const hasMore = offset + rows.length < total;
+
+	return { rows, total, offset, limit, hasMore };
+}
+
+function buildNodesFromRows(
+	rows: readonly EmbeddingRow[],
+	xs: readonly number[],
+	ys: readonly number[],
+	zs: readonly number[] | null,
+): ProjectionNode[] {
+	return rows.map((row, i) => {
 		const base = {
 			id: row.id,
 			x: xs[i],
@@ -266,17 +421,76 @@ export function computeProjection(
 		};
 		return zs !== null ? { ...base, z: zs[i] } : base;
 	});
+}
 
+function computeProjectionFromRows(
+	rows: readonly EmbeddingRow[],
+	nComponents: 2 | 3,
+): ProjectionResult {
+	if (rows.length === 0) return { nodes: [], edges: [] };
+	if (rows.length === 1) {
+		return {
+			nodes: buildNodesFromRows(rows, [0], [0], nComponents === 3 ? [0] : null),
+			edges: [],
+		};
+	}
+	if (rows.length === 2) {
+		const xs = [-SCALE * 0.25, SCALE * 0.25];
+		const ys = [0, 0];
+		const zs = nComponents === 3 ? [0, 0] : null;
+		return {
+			nodes: buildNodesFromRows(rows, xs, ys, zs),
+			edges: [[0, 1]],
+		};
+	}
+
+	const vectors = rows.map((row) => blobToVector(row.vector, row.dimensions));
+	const nNeighbors = Math.min(15, Math.max(2, vectors.length - 1));
+	const umap = new UMAP({ nComponents, nNeighbors, minDist: 0.1, spread: 1.0 });
+	const projected: number[][] = umap.fit(vectors);
+
+	const xs = normaliseAxis(projected.map((point) => point[0]));
+	const ys = normaliseAxis(projected.map((point) => point[1]));
+	const zs: number[] | null =
+		nComponents === 3
+			? normaliseAxis(projected.map((point) => point[2] ?? 0))
+			: null;
+	const nodes = buildNodesFromRows(rows, xs, ys, zs);
 	const edges = buildKnnEdges(projected, KNN_K);
 
 	return { nodes, edges };
+}
+
+export function computeProjection(
+	db: ReadDb,
+	nComponents: 2 | 3,
+): ProjectionResult {
+	const { rows } = loadProjectionRows(db, {});
+	return computeProjectionFromRows(rows, nComponents);
+}
+
+export function computeProjectionForQuery(
+	db: ReadDb,
+	nComponents: 2 | 3,
+	query: ProjectionQuery,
+): ProjectionQueryResult {
+	const loaded = loadProjectionRows(db, query);
+	const result = computeProjectionFromRows(loaded.rows, nComponents);
+	return {
+		result,
+		total: loaded.total,
+		count: loaded.rows.length,
+		limit: loaded.limit,
+		offset: loaded.offset,
+		hasMore: loaded.hasMore,
+	};
 }
 
 export function getCachedProjection(
 	db: ReadDb,
 	nComponents: 2 | 3,
 ): CachedProjection | null {
-	const rawRow: Record<string, unknown> | undefined = db
+	const rawRow: Record<string, unknown> | null | undefined = db
 		.prepare(
 			"SELECT dimensions, embedding_count, payload, created_at FROM umap_cache WHERE dimensions = ? LIMIT 1",
 		)

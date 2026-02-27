@@ -156,6 +156,7 @@ import {
 import {
 	getCachedProjection,
 	computeProjection,
+	computeProjectionForQuery,
 	cacheProjection,
 } from "./umap-projection";
 
@@ -371,6 +372,47 @@ function parseBoundedInt(
 	const parsed = Number.parseInt(raw, 10);
 	if (!Number.isFinite(parsed)) return fallback;
 	return Math.min(max, Math.max(min, parsed));
+}
+
+function parseOptionalBoundedInt(
+	raw: string | undefined,
+	min: number,
+	max: number,
+): number | undefined {
+	if (!raw) return undefined;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed)) return undefined;
+	return Math.min(max, Math.max(min, parsed));
+}
+
+function parseOptionalBoundedFloat(
+	raw: string | undefined,
+	min: number,
+	max: number,
+): number | undefined {
+	if (!raw) return undefined;
+	const parsed = Number.parseFloat(raw);
+	if (!Number.isFinite(parsed)) return undefined;
+	return Math.min(max, Math.max(min, parsed));
+}
+
+function parseCsvQuery(raw: string | undefined): string[] {
+	if (!raw) return [];
+	return [...new Set(
+		raw
+			.split(",")
+			.map((entry) => entry.trim())
+			.filter((entry) => entry.length > 0),
+	)];
+}
+
+function parseIsoDateQuery(raw: string | undefined): string | undefined {
+	if (!raw) return undefined;
+	const value = raw.trim();
+	if (!value) return undefined;
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return undefined;
+	return date.toISOString();
 }
 
 interface LegacyEmbeddingsResponse {
@@ -3388,6 +3430,103 @@ app.get("/api/embeddings/health", async (c) => {
 app.get("/api/embeddings/projection", async (c) => {
 	const dimParam = c.req.query("dimensions");
 	const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
+	const limit = parseOptionalBoundedInt(c.req.query("limit"), 1, 5000);
+	const offset = parseOptionalBoundedInt(c.req.query("offset"), 0, 100000) ?? 0;
+
+	const query = parseOptionalString(c.req.query("q"));
+	const whoFilters = [
+		...new Set([
+			...parseCsvQuery(c.req.query("who")),
+			...parseCsvQuery(c.req.query("harness")),
+		]),
+	];
+	const typeFilters = (() => {
+		const list = parseCsvQuery(c.req.query("types"));
+		if (list.length > 0) return list;
+		const single = parseOptionalString(c.req.query("type"));
+		return single ? [single] : [];
+	})();
+	const sourceTypeFilters = (() => {
+		const list = parseCsvQuery(c.req.query("sourceTypes"));
+		if (list.length > 0) return list;
+		const legacy = parseCsvQuery(c.req.query("source_type"));
+		if (legacy.length > 0) return legacy;
+		const single = parseOptionalString(c.req.query("sourceType"));
+		return single ? [single] : [];
+	})();
+	const tagFilters = parseCsvQuery(c.req.query("tags"));
+	const pinned = parseOptionalBoolean(c.req.query("pinned"));
+	const since = parseIsoDateQuery(c.req.query("since"));
+	const until = parseIsoDateQuery(c.req.query("until"));
+	let importanceMin =
+		parseOptionalBoundedFloat(c.req.query("importanceMin"), 0, 1) ??
+		parseOptionalBoundedFloat(c.req.query("importance_min"), 0, 1);
+	let importanceMax =
+		parseOptionalBoundedFloat(c.req.query("importanceMax"), 0, 1) ??
+		parseOptionalBoundedFloat(c.req.query("importance_max"), 0, 1);
+	if (
+		typeof importanceMin === "number" &&
+		typeof importanceMax === "number" &&
+		importanceMin > importanceMax
+	) {
+		const swap = importanceMin;
+		importanceMin = importanceMax;
+		importanceMax = swap;
+	}
+
+	const hasFilters =
+		query !== undefined ||
+		whoFilters.length > 0 ||
+		typeFilters.length > 0 ||
+		sourceTypeFilters.length > 0 ||
+		tagFilters.length > 0 ||
+		pinned !== undefined ||
+		since !== undefined ||
+		until !== undefined ||
+		importanceMin !== undefined ||
+		importanceMax !== undefined;
+	const useCachedProjection =
+		!hasFilters && limit === undefined && offset === 0;
+
+	if (!useCachedProjection) {
+		try {
+			const projection = getDbAccessor().withReadDb((db) =>
+				computeProjectionForQuery(db, nComponents, {
+					limit,
+					offset,
+					filters: hasFilters
+						? {
+							query,
+							who: whoFilters,
+							types: typeFilters,
+							sourceTypes: sourceTypeFilters,
+							tags: tagFilters,
+							pinned,
+							since,
+							until,
+							importanceMin,
+							importanceMax,
+						}
+						: undefined,
+				}),
+			);
+
+			return c.json({
+				status: "ready",
+				dimensions: nComponents,
+				count: projection.count,
+				total: projection.total,
+				limit: projection.limit,
+				offset: projection.offset,
+				hasMore: projection.hasMore,
+				nodes: projection.result.nodes,
+				edges: projection.result.edges,
+			});
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return c.json({ status: "error", message }, 500);
+		}
+	}
 
 	const { cached, total } = getDbAccessor().withReadDb((db) => {
 		const cachedResult = getCachedProjection(db, nComponents);
@@ -3410,6 +3549,9 @@ app.get("/api/embeddings/projection", async (c) => {
 			dimensions: nComponents,
 			count: total,
 			total,
+			limit: total,
+			offset: 0,
+			hasMore: false,
 			nodes: cached.result.nodes,
 			edges: cached.result.edges,
 			cachedAt: cached.cachedAt,

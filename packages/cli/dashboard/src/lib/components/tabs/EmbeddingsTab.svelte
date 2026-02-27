@@ -7,11 +7,13 @@ import {
 	getEmbeddingHealth,
 	repairCleanOrphans,
 	repairReEmbed,
+	getDistinctWho,
 	type Memory,
 	type EmbeddingPoint,
 	type ProjectionNode,
 	type EmbeddingHealthReport,
 	type EmbeddingCheckResult,
+	type ProjectionQueryOptions,
 } from "$lib/api";
 import { mem } from "$lib/stores/memory.svelte";
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
@@ -24,6 +26,8 @@ import {
 	type GraphEdge,
 	sourceColorRgba,
 	embeddingLabel,
+	DEFAULT_EMBEDDING_LIMIT,
+	MAX_EMBEDDING_LIMIT,
 } from "../embeddings/embedding-graph";
 
 interface Props {
@@ -73,6 +77,28 @@ let lensIds = $state<Set<string>>(new Set());
 let activePresetId = $state("focus");
 let customPresets = $state<FilterPreset[]>([]);
 let presetsHydrated = $state(false);
+let showAdvancedFilters = $state(false);
+
+type TimeFilterPreset = "all" | "24h" | "7d" | "30d" | "90d" | "custom";
+
+let projectionRangeMin = $state(0);
+let projectionRangeMax = $state(DEFAULT_EMBEDDING_LIMIT);
+let projectionTimePreset = $state<TimeFilterPreset>("all");
+let projectionSinceDate = $state("");
+let projectionUntilDate = $state("");
+let projectionSearch = $state("");
+let projectionTagFilter = $state("");
+let projectionPinnedFilter = $state<"all" | "pinned" | "unpinned">("all");
+let projectionImportanceMin = $state("");
+let projectionImportanceMax = $state("");
+let harnessOptions = $state<string[]>([]);
+let selectedHarnesses = $state<Set<string>>(new Set());
+let typeCounts = $state<Array<{ value: string; count: number }>>([]);
+let sourceTypeCounts = $state<Array<{ value: string; count: number }>>([]);
+let selectedServerTypes = $state<Set<string>>(new Set());
+let selectedServerSourceTypes = $state<Set<string>>(new Set());
+let lastAppliedProjectionKey = $state("");
+let projectionReloadTimer = 0;
 
 let relationMode = $state<RelationKind>("similar");
 let similarNeighbors = $state<EmbeddingRelation[]>([]);
@@ -187,6 +213,129 @@ function formatShortDate(dateLike: string | undefined): string {
 	});
 }
 
+function normalizeProjectionWindow(): { offset: number; limit: number } {
+	const offset = Number.isFinite(projectionRangeMin)
+		? Math.max(0, Math.trunc(projectionRangeMin))
+		: 0;
+	const requestedMax = Number.isFinite(projectionRangeMax)
+		? Math.max(1, Math.trunc(projectionRangeMax))
+		: DEFAULT_EMBEDDING_LIMIT;
+	const maxExclusive = Math.max(
+		offset + 1,
+		Math.min(requestedMax, offset + MAX_EMBEDDING_LIMIT),
+	);
+	return { offset, limit: maxExclusive - offset };
+}
+
+function syncProjectionWindowInputs(): void {
+	const { offset, limit } = normalizeProjectionWindow();
+	projectionRangeMin = offset;
+	projectionRangeMax = offset + limit;
+}
+
+function parseLocalDateToIso(
+	dateValue: string,
+	endOfDay: boolean,
+): string | undefined {
+	const trimmed = dateValue.trim();
+	if (!trimmed) return undefined;
+	const suffix = endOfDay ? "T23:59:59.999" : "T00:00:00.000";
+	const localDate = new Date(`${trimmed}${suffix}`);
+	if (Number.isNaN(localDate.getTime())) return undefined;
+	return localDate.toISOString();
+}
+
+function parseImportanceBound(raw: string): number | undefined {
+	const trimmed = raw.trim();
+	if (!trimmed) return undefined;
+	const parsed = Number.parseFloat(trimmed);
+	if (!Number.isFinite(parsed)) return undefined;
+	return Math.min(1, Math.max(0, parsed));
+}
+
+function timePresetSinceIso(preset: TimeFilterPreset): string | undefined {
+	if (preset === "all" || preset === "custom") return undefined;
+	const now = Date.now();
+	const spanMs =
+		preset === "24h"
+			? 24 * 60 * 60 * 1000
+			: preset === "7d"
+				? 7 * 24 * 60 * 60 * 1000
+				: preset === "30d"
+					? 30 * 24 * 60 * 60 * 1000
+					: 90 * 24 * 60 * 60 * 1000;
+	return new Date(now - spanMs).toISOString();
+}
+
+function buildProjectionQueryOptions(): ProjectionQueryOptions {
+	const { offset, limit } = normalizeProjectionWindow();
+	const options: ProjectionQueryOptions = { offset, limit };
+	const search = projectionSearch.trim();
+	if (search.length > 0) options.q = search;
+
+	const harnesses = [...selectedHarnesses];
+	if (harnesses.length > 0) options.who = harnesses;
+	const types = [...selectedServerTypes];
+	if (types.length > 0) options.types = types;
+	const sourceTypes = [...selectedServerSourceTypes];
+	if (sourceTypes.length > 0) options.sourceTypes = sourceTypes;
+
+	const tags = projectionTagFilter
+		.split(",")
+		.map((tag) => tag.trim())
+		.filter((tag) => tag.length > 0);
+	if (tags.length > 0) options.tags = tags;
+
+	if (projectionPinnedFilter === "pinned") options.pinned = true;
+	if (projectionPinnedFilter === "unpinned") options.pinned = false;
+
+	let since: string | undefined;
+	let until: string | undefined;
+	if (projectionTimePreset === "custom") {
+		since = parseLocalDateToIso(projectionSinceDate, false);
+		until = parseLocalDateToIso(projectionUntilDate, true);
+	} else {
+		since = timePresetSinceIso(projectionTimePreset);
+	}
+	if (since) options.since = since;
+	if (until) options.until = until;
+
+	let importanceMin = parseImportanceBound(projectionImportanceMin);
+	let importanceMax = parseImportanceBound(projectionImportanceMax);
+	if (
+		typeof importanceMin === "number" &&
+		typeof importanceMax === "number" &&
+		importanceMin > importanceMax
+	) {
+		const swap = importanceMin;
+		importanceMin = importanceMax;
+		importanceMax = swap;
+	}
+	if (typeof importanceMin === "number") options.importanceMin = importanceMin;
+	if (typeof importanceMax === "number") options.importanceMax = importanceMax;
+
+	return options;
+}
+
+function projectionQueryKey(options: ProjectionQueryOptions): string {
+	return JSON.stringify({
+		offset: options.offset ?? 0,
+		limit: options.limit ?? DEFAULT_EMBEDDING_LIMIT,
+		q: options.q ?? "",
+		who: [...(options.who ?? [])].sort(),
+		types: [...(options.types ?? [])].sort(),
+		sourceTypes: [...(options.sourceTypes ?? [])].sort(),
+		tags: [...(options.tags ?? [])].sort(),
+		pinned: options.pinned ?? "all",
+		since: options.since ?? "",
+		until: options.until ?? "",
+		importanceMin:
+			typeof options.importanceMin === "number" ? options.importanceMin : "",
+		importanceMax:
+			typeof options.importanceMax === "number" ? options.importanceMax : "",
+	});
+}
+
 function intersectFilterSets(
 	filters: Array<Set<string> | null>,
 ): Set<string> | null {
@@ -231,6 +380,53 @@ function toggleSource(who: string): void {
 		next.add(who);
 	}
 	selectedSources = next;
+}
+
+function toggleHarness(who: string): void {
+	const next = new Set(selectedHarnesses);
+	if (next.has(who)) {
+		next.delete(who);
+	} else {
+		next.add(who);
+	}
+	selectedHarnesses = next;
+}
+
+function toggleServerType(value: string): void {
+	const next = new Set(selectedServerTypes);
+	if (next.has(value)) {
+		next.delete(value);
+	} else {
+		next.add(value);
+	}
+	selectedServerTypes = next;
+}
+
+function toggleServerSourceType(value: string): void {
+	const next = new Set(selectedServerSourceTypes);
+	if (next.has(value)) {
+		next.delete(value);
+	} else {
+		next.add(value);
+	}
+	selectedServerSourceTypes = next;
+}
+
+function resetProjectionFilters(): void {
+	projectionRangeMin = 0;
+	projectionRangeMax = DEFAULT_EMBEDDING_LIMIT;
+	projectionTimePreset = "all";
+	projectionSinceDate = "";
+	projectionUntilDate = "";
+	projectionSearch = "";
+	projectionTagFilter = "";
+	projectionPinnedFilter = "all";
+	projectionImportanceMin = "";
+	projectionImportanceMax = "";
+	selectedHarnesses = new Set();
+	selectedServerTypes = new Set();
+	selectedServerSourceTypes = new Set();
+	syncProjectionWindowInputs();
 }
 
 function positionHoverCard(): void {
@@ -358,9 +554,11 @@ async function initGraph(): Promise<void> {
 	graphError = "";
 	graphStatus = "Loading projection...";
 	const loadId = ++graphLoadId;
+	const requestOptions = buildProjectionQueryOptions();
+	const requestKey = projectionQueryKey(requestOptions);
 
 	try {
-		let projection = await getProjection(2);
+		let projection = await getProjection(2, requestOptions);
 		let pollAttempts = 0;
 		const maxPollAttempts = 30;
 
@@ -369,15 +567,17 @@ async function initGraph(): Promise<void> {
 			pollAttempts++;
 			if (pollAttempts >= maxPollAttempts) {
 				graphError = "Projection timed out after 60s. Try refreshing.";
+				lastAppliedProjectionKey = requestKey;
 				return;
 			}
 			graphStatus = "Computing layout...";
 			await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-			projection = await getProjection(2);
+			projection = await getProjection(2, requestOptions);
 		}
 
 		if (projection.status === "error") {
 			graphError = projection.message ?? "Projection computation failed";
+			lastAppliedProjectionKey = requestKey;
 			return;
 		}
 
@@ -387,9 +587,12 @@ async function initGraph(): Promise<void> {
 
 		embeddings = projNodes.map(projectionNodeToEmbeddingPoint);
 		embeddingsTotal = projection.total ?? projNodes.length;
-		embeddingsHasMore =
-			(projection.count ?? projNodes.length) <
-			(projection.total ?? projNodes.length);
+		embeddingsHasMore = Boolean(
+			projection.hasMore ??
+				(projection.count ?? projNodes.length) <
+					(projection.total ?? projNodes.length),
+		);
+		lastAppliedProjectionKey = requestKey;
 		embeddingById = new Map(embeddings.map((item) => [item.id, item]));
 
 		if (projNodes.length === 0) {
@@ -434,6 +637,7 @@ async function initGraph(): Promise<void> {
 	} catch (error) {
 		graphError = (error as Error).message || "Failed to load projection";
 		graphStatus = "";
+		lastAppliedProjectionKey = requestKey;
 	}
 }
 
@@ -568,12 +772,13 @@ async function switchGraphMode(mode: "2d" | "3d"): Promise<void> {
 
 		graphStatus = "Loading 3D projection...";
 		const loadId = ++graphLoadId;
-		let projection = await getProjection(3);
+		const requestOptions = buildProjectionQueryOptions();
+		let projection = await getProjection(3, requestOptions);
 
 		while (projection.status === "computing") {
 			if (loadId !== graphLoadId) return;
 			await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-			projection = await getProjection(3);
+			projection = await getProjection(3, requestOptions);
 		}
 
 		if (loadId !== graphLoadId) return;
@@ -607,21 +812,64 @@ $effect(() => {
 	pinnedIds = new Set(rows.filter((row) => row.pinned).map((row) => row.id));
 
 	const counts = new Map<string, number>();
+	const typeMap = new Map<string, number>();
+	const sourceTypeMap = new Map<string, number>();
 	for (const row of rows) {
 		const key = row.who ?? "unknown";
 		counts.set(key, (counts.get(key) ?? 0) + 1);
+		if (typeof row.type === "string" && row.type.length > 0) {
+			typeMap.set(row.type, (typeMap.get(row.type) ?? 0) + 1);
+		}
+		const sourceType = row.sourceType ?? "memory";
+		sourceTypeMap.set(
+			sourceType,
+			(sourceTypeMap.get(sourceType) ?? 0) + 1,
+		);
 	}
 	sourceCounts = [...counts.entries()]
 		.sort(
 			(left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
 		)
 		.map(([who, count]) => ({ who, count }));
+	typeCounts = [...typeMap.entries()]
+		.sort(
+			(left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+		)
+		.map(([value, count]) => ({ value, count }));
+	sourceTypeCounts = [...sourceTypeMap.entries()]
+		.sort(
+			(left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+		)
+		.map(([value, count]) => ({ value, count }));
 
 	if (selectedSources.size > 0) {
 		const next = new Set([...selectedSources].filter((who) => counts.has(who)));
 		if (next.size !== selectedSources.size) {
 			selectedSources = next;
 		}
+	}
+});
+
+$effect(() => {
+	let cancelled = false;
+	void (async () => {
+		const values = await getDistinctWho();
+		if (cancelled) return;
+		harnessOptions = values.filter((value) => value.trim().length > 0);
+	})();
+	return () => {
+		cancelled = true;
+	};
+});
+
+$effect(() => {
+	if (selectedHarnesses.size === 0 || harnessOptions.length === 0) return;
+	const available = new Set(harnessOptions);
+	const next = new Set(
+		[...selectedHarnesses].filter((value) => available.has(value)),
+	);
+	if (next.size !== selectedHarnesses.size) {
+		selectedHarnesses = next;
 	}
 });
 
@@ -746,6 +994,24 @@ $effect(() => {
 	scheduleRefresh3d();
 });
 
+const projectionRequestKey = $derived(
+	projectionQueryKey(buildProjectionQueryOptions()),
+);
+
+$effect(() => {
+	const nextKey = projectionRequestKey;
+	if (!graphInitialized) return;
+	if (graphStatus.length > 0) return;
+	if (nextKey === lastAppliedProjectionKey) return;
+
+	clearTimeout(projectionReloadTimer);
+	const timer = window.setTimeout(() => {
+		void reloadEmbeddingsGraph();
+	}, 220);
+	projectionReloadTimer = timer;
+	return () => clearTimeout(timer);
+});
+
 
 $effect(() => {
 	const pinnedFilterIds = showPinnedOnly === true ? new Set(pinnedIds) : null;
@@ -779,6 +1045,8 @@ $effect(() => {
 const previewHovered = $derived(
 	hoverLockedId ? (embeddingById.get(hoverLockedId) ?? null) : graphHovered,
 );
+
+const activeProjectionWindow = $derived(normalizeProjectionWindow());
 
 const hoverAdjacency = $derived.by(() => {
 	const ids = nodeIdsByIndex;
@@ -902,9 +1170,9 @@ $effect(() => {
 					{embeddingSearchMatches.length} match{embeddingSearchMatches.length === 1 ? "" : "es"}
 				</span>
 			{/if}
-			{#if embeddingsHasMore}
+			{#if embeddingsHasMore || activeProjectionWindow.offset > 0}
 				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[rgba(220,220,220,0.75)] bg-[rgba(5,5,5,0.55)] border border-[rgba(255,255,255,0.16)] px-2 py-1">
-					showing latest {embeddings.length} of {embeddingsTotal}
+					showing {embeddings.length === 0 ? 0 : activeProjectionWindow.offset + 1}-{activeProjectionWindow.offset + embeddings.length} of {embeddingsTotal}
 				</span>
 			{/if}
 		</div>
@@ -976,6 +1244,22 @@ $effect(() => {
 				>
 					Cluster lens
 				</button>
+				<button
+					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {showAdvancedFilters ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+					onclick={() => {
+						showAdvancedFilters = !showAdvancedFilters;
+					}}
+				>
+					Scope
+				</button>
+				<button
+					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
+					onclick={() => {
+						resetProjectionFilters();
+					}}
+				>
+					Reset scope
+				</button>
 			</div>
 			<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.6)] px-1.5 py-1 max-w-[calc(100%-300px)]">
 				{#if sourceCounts.length === 0}
@@ -995,8 +1279,130 @@ $effect(() => {
 				{/if}
 			</div>
 		</div>
+		{#if showAdvancedFilters}
+			<div class="absolute top-[94px] left-3 right-3 z-[8] flex items-center gap-2 flex-wrap pointer-events-none">
+				<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.68)] px-1.5 py-1">
+					<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Window</span>
+					<input
+						type="number"
+						min="0"
+						max="100000"
+						class="w-[70px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+						bind:value={projectionRangeMin}
+						onblur={syncProjectionWindowInputs}
+					/>
+					<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">to</span>
+					<input
+						type="number"
+						min="1"
+						max="100000"
+						class="w-[70px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+						bind:value={projectionRangeMax}
+						onblur={syncProjectionWindowInputs}
+					/>
+					<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">{activeProjectionWindow.limit} pts</span>
+					<select
+						class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+						bind:value={projectionTimePreset}
+					>
+						<option value="all">time: all</option>
+						<option value="24h">time: 24h</option>
+						<option value="7d">time: 7d</option>
+						<option value="30d">time: 30d</option>
+						<option value="90d">time: 90d</option>
+						<option value="custom">time: custom</option>
+					</select>
+					{#if projectionTimePreset === "custom"}
+						<input
+							type="date"
+							class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+							bind:value={projectionSinceDate}
+						/>
+						<input
+							type="date"
+							class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+							bind:value={projectionUntilDate}
+						/>
+					{/if}
+					<select
+						class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+						bind:value={projectionPinnedFilter}
+					>
+						<option value="all">pins: all</option>
+						<option value="pinned">pins: pinned</option>
+						<option value="unpinned">pins: unpinned</option>
+					</select>
+					<input
+						type="text"
+						class="w-[150px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+						bind:value={projectionSearch}
+						placeholder="server query"
+					/>
+					<input
+						type="text"
+						class="w-[120px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+						bind:value={projectionTagFilter}
+						placeholder="tags csv"
+					/>
+					<input
+						type="text"
+						class="w-[62px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+						bind:value={projectionImportanceMin}
+						placeholder="imp>"
+					/>
+					<input
+						type="text"
+						class="w-[62px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
+						bind:value={projectionImportanceMax}
+						placeholder="imp<"
+					/>
+				</div>
+				<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.68)] px-1.5 py-1 max-w-[100%]">
+					<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Harness</span>
+					{#if harnessOptions.length === 0}
+						<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">none</span>
+					{:else}
+						{#each harnessOptions as harness}
+							<button
+								class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.18)] {selectedHarnesses.has(harness) ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+								onclick={() => toggleHarness(harness)}
+							>
+								{harness}
+							</button>
+						{/each}
+					{/if}
+					{#if typeCounts.length > 0 || selectedServerTypes.size > 0}
+						<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Type</span>
+						{#each [...new Set([...selectedServerTypes, ...typeCounts.map((entry) => entry.value)])] as value}
+							{@const count = typeCounts.find((entry) => entry.value === value)?.count ?? 0}
+							<button
+								class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.18)] {selectedServerTypes.has(value) ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+								onclick={() => toggleServerType(value)}
+							>
+								{value}{count > 0 ? ` ${count}` : ""}
+							</button>
+						{/each}
+					{/if}
+					{#if sourceTypeCounts.length > 0 || selectedServerSourceTypes.size > 0}
+						<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Source type</span>
+						{#each [...new Set([...selectedServerSourceTypes, ...sourceTypeCounts.map((entry) => entry.value)])] as value}
+							{@const count = sourceTypeCounts.find((entry) => entry.value === value)?.count ?? 0}
+							<button
+								class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.18)] {selectedServerSourceTypes.has(value) ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+								onclick={() => toggleServerSourceType(value)}
+							>
+								{value}{count > 0 ? ` ${count}` : ""}
+							</button>
+						{/each}
+					{/if}
+				</div>
+			</div>
+		{/if}
 		{#if hoverLockedId}
-			<div class="absolute top-[96px] right-3 z-[9] pointer-events-none">
+			<div
+				class="absolute right-3 z-[9] pointer-events-none"
+				style:top={showAdvancedFilters ? "126px" : "96px"}
+			>
 				<button
 					type="button"
 					class="pointer-events-auto px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.74)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
@@ -1080,7 +1486,8 @@ $effect(() => {
 		{/if}
 
 		<div
-			class="absolute left-[14px] top-[100px] z-[6] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.08em] uppercase pointer-events-none"
+			class="absolute left-[14px] z-[6] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.08em] uppercase pointer-events-none"
+			style:top={showAdvancedFilters ? "132px" : "100px"}
 			aria-hidden="true"
 		>:: &#9675; &#9675; 01 10 11 // latent topology</div>
 

@@ -362,17 +362,66 @@ export interface ProjectionResponse {
 	dimensions?: number;
 	count?: number;
 	total?: number;
+	limit?: number;
+	offset?: number;
+	hasMore?: boolean;
 	nodes?: ProjectionNode[];
 	edges?: [number, number][];
 	cachedAt?: string;
 }
 
+export interface ProjectionQueryOptions {
+	limit?: number;
+	offset?: number;
+	q?: string;
+	who?: string[];
+	types?: string[];
+	sourceTypes?: string[];
+	tags?: string[];
+	pinned?: boolean;
+	since?: string;
+	until?: string;
+	importanceMin?: number;
+	importanceMax?: number;
+}
+
 export async function getProjection(
 	dimensions: 2 | 3 = 2,
+	options: ProjectionQueryOptions = {},
 ): Promise<ProjectionResponse> {
 	try {
+		const params = new URLSearchParams({ dimensions: String(dimensions) });
+		if (typeof options.limit === "number")
+			params.set("limit", String(options.limit));
+		if (typeof options.offset === "number")
+			params.set("offset", String(options.offset));
+		if (typeof options.q === "string" && options.q.trim().length > 0)
+			params.set("q", options.q.trim());
+		if (Array.isArray(options.who) && options.who.length > 0)
+			params.set("who", options.who.join(","));
+		if (Array.isArray(options.types) && options.types.length > 0)
+			params.set("types", options.types.join(","));
+		if (
+			Array.isArray(options.sourceTypes) &&
+			options.sourceTypes.length > 0
+		) {
+			params.set("sourceTypes", options.sourceTypes.join(","));
+		}
+		if (Array.isArray(options.tags) && options.tags.length > 0)
+			params.set("tags", options.tags.join(","));
+		if (typeof options.pinned === "boolean")
+			params.set("pinned", options.pinned ? "1" : "0");
+		if (typeof options.since === "string" && options.since.length > 0)
+			params.set("since", options.since);
+		if (typeof options.until === "string" && options.until.length > 0)
+			params.set("until", options.until);
+		if (typeof options.importanceMin === "number")
+			params.set("importanceMin", String(options.importanceMin));
+		if (typeof options.importanceMax === "number")
+			params.set("importanceMax", String(options.importanceMax));
+
 		const response = await fetch(
-			`${API_BASE}/api/embeddings/projection?dimensions=${dimensions}`,
+			`${API_BASE}/api/embeddings/projection?${params}`,
 		);
 		if (response.status === 202) return { status: "computing" };
 		if (!response.ok) {
