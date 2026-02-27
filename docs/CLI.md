@@ -92,12 +92,17 @@ If the daemon is not running, you'll be prompted to start it.
 `signet setup`
 ---
 
-Interactive first-time setup wizard. Creates the `~/.agents/` directory
-and all necessary files.
+Interactive first-time setup wizard (with optional non-interactive mode).
+Creates the `~/.agents/` directory and all necessary files.
 
 ```bash
 signet setup
 signet setup --path /custom/path
+signet setup --non-interactive \
+  --name "My Agent" \
+  --harness claude-code \
+  --embedding-provider ollama \
+  --extraction-provider claude-code
 ```
 
 Options:
@@ -105,6 +110,26 @@ Options:
 | Option | Description |
 |--------|-------------|
 | `-p, --path <path>` | Custom base path (default: `~/.agents`) |
+| `--non-interactive` | Run setup without prompts |
+| `--name <name>` | Agent name in non-interactive mode |
+| `--description <description>` | Agent description in non-interactive mode |
+| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`) |
+| `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `none`) — required in non-interactive setup |
+| `--embedding-model <model>` | Non-interactive embedding model |
+| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `ollama`, `none`) — required in non-interactive setup |
+| `--extraction-model <model>` | Non-interactive extraction model |
+| `--search-balance <alpha>` | Non-interactive search alpha (`0-1`) |
+| `--openclaw-runtime-path <mode>` | Non-interactive OpenClaw mode (`plugin`, `legacy`) |
+| `--configure-openclaw-workspace` | Patch discovered OpenClaw configs to `~/.agents` |
+| `--open-dashboard` | Open dashboard after non-interactive setup |
+| `--skip-git` | Skip git initialization/commits in non-interactive mode |
+
+Non-interactive behavior:
+
+- setup method: create new identity (no GitHub import)
+- embedding provider must be explicitly provided via `--embedding-provider`
+- extraction provider must be explicitly provided via `--extraction-provider`
+- git: enabled unless `--skip-git` is passed
 
 Wizard steps:
 

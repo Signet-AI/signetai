@@ -40,6 +40,19 @@ the full setup. You don't need to read anything else first. Signet records
 your primary package manager during setup and reuses it for skill installs
 and update commands.
 
+For agent-driven onboarding, use non-interactive mode:
+
+```bash
+signet setup --non-interactive \
+  --name "My Agent" \
+  --harness claude-code \
+  --embedding-provider ollama \
+  --extraction-provider claude-code
+```
+
+In non-interactive mode, agents should ask the user to choose both
+providers first, then pass those choices explicitly.
+
 ---
 
 Setup Wizard
