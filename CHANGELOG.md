@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.6.3] - 2026-02-27
+
+### Features
+
+- **predictor**: implement phase 1 scorer scaffold
+
+
 ## [0.6.2] - 2026-02-27
 
 ### Bug Fixes
