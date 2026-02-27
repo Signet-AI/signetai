@@ -29,6 +29,7 @@ function formatDate(iso: string | null): string {
 }
 
 let confirmingDelete = $state(false);
+let taskIsRunning = $derived(runs.some((run) => run.status === "running"));
 
 function handleDelete() {
 	if (!task) return;
@@ -120,15 +121,26 @@ function handleDelete() {
 
 				<!-- Actions -->
 				<div class="flex gap-2">
-					<Button
-						variant="outline"
-						size="sm"
-						class="h-7 gap-1.5 text-[11px]"
-						onclick={() => task && ontrigger(task.id)}
-					>
-						<Play class="size-3" />
-						Run Now
-					</Button>
+					{#if taskIsRunning}
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-7 gap-1.5 text-[11px]"
+							disabled
+						>
+							Running...
+						</Button>
+					{:else}
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-7 gap-1.5 text-[11px]"
+							onclick={() => task && ontrigger(task.id)}
+						>
+							<Play class="size-3" />
+							Run Now
+						</Button>
+					{/if}
 					<Button
 						variant="outline"
 						size="sm"
@@ -165,13 +177,11 @@ function handleDelete() {
 						</span>
 					{:else}
 						<ScrollArea.Root class="max-h-[400px]">
-							<ScrollArea.Viewport class="w-full">
-								<div class="flex flex-col gap-2">
-									{#each runs as run (run.id)}
-										<RunLog {run} />
-									{/each}
-								</div>
-							</ScrollArea.Viewport>
+							<div class="flex flex-col gap-2 w-full">
+								{#each runs as run (run.id)}
+									<RunLog {run} />
+								{/each}
+							</div>
 							<ScrollArea.Scrollbar orientation="vertical" />
 						</ScrollArea.Root>
 					{/if}
