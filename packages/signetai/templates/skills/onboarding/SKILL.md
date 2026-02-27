@@ -19,6 +19,24 @@ Walk the user through an interactive interview to personalize their Signet works
 - User says "I want to redo my agent setup"
 - User says "clean up my memory" or "optimize my workspace"
 
+## Setup Preflight (Agent-Driven)
+
+If Signet is not initialized yet (`~/.agents/agent.yaml` missing),
+bootstrap setup first and then continue onboarding:
+
+```bash
+signet setup --non-interactive \
+  --name "My Agent" \
+  --description "Personal AI assistant" \
+  --harness claude-code \
+  --embedding-provider <ollama|openai|none> \
+  --extraction-provider <claude-code|ollama|none>
+```
+
+Use interactive `signet` when the user wants to answer prompts manually.
+Use `--non-interactive` when the agent should complete setup directly.
+Before running it, explicitly ask the user for both provider choices.
+
 ## Interview Philosophy
 
 Don't interrogate. Make it conversational. One or two questions at a time, then respond naturally before continuing. Sprinkle in personality. Adapt based on their energy level. 

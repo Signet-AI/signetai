@@ -560,6 +560,148 @@ function formatDetectionSummary(detection: SetupDetection): string {
 	return lines.join("\n");
 }
 
+type HarnessChoice = "claude-code" | "opencode" | "openclaw";
+type EmbeddingProviderChoice = "ollama" | "openai" | "none";
+type ExtractionProviderChoice = "claude-code" | "ollama" | "none";
+type OpenClawRuntimeChoice = "plugin" | "legacy";
+
+interface SetupWizardOptions {
+	path?: string;
+	nonInteractive?: boolean;
+	name?: string;
+	description?: string;
+	harness?: string[];
+	embeddingProvider?: string;
+	embeddingModel?: string;
+	extractionProvider?: string;
+	extractionModel?: string;
+	searchBalance?: string;
+	skipGit?: boolean;
+	openDashboard?: boolean;
+	openclawRuntimePath?: string;
+	configureOpenclawWorkspace?: boolean;
+}
+
+const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
+	"claude-code",
+	"opencode",
+	"openclaw",
+];
+const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = [
+	"ollama",
+	"openai",
+	"none",
+];
+const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
+	"claude-code",
+	"ollama",
+	"none",
+];
+const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = [
+	"plugin",
+	"legacy",
+];
+
+function collectListOption(value: string, previous: string[]): string[] {
+	const parts = value
+		.split(",")
+		.map((part) => part.trim())
+		.filter((part) => part.length > 0);
+
+	return [...previous, ...parts];
+}
+
+function normalizeStringValue(value: unknown): string | null {
+	if (typeof value !== "string") {
+		return null;
+	}
+
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeChoice<T extends string>(
+	value: unknown,
+	allowed: readonly T[],
+): T | null {
+	const normalized = normalizeStringValue(value);
+	if (!normalized) {
+		return null;
+	}
+
+	for (const candidate of allowed) {
+		if (candidate === normalized) {
+			return candidate;
+		}
+	}
+
+	return null;
+}
+
+function parseNumericValue(value: unknown): number | null {
+	if (typeof value === "number" && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === "string") {
+		const parsed = Number.parseFloat(value);
+		return Number.isFinite(parsed) ? parsed : null;
+	}
+
+	return null;
+}
+
+function parseIntegerValue(value: unknown): number | null {
+	const parsed = parseNumericValue(value);
+	if (parsed === null) {
+		return null;
+	}
+
+	return Number.isInteger(parsed) ? parsed : Math.trunc(parsed);
+}
+
+function parseSearchBalanceValue(value: unknown): number | null {
+	const parsed = parseNumericValue(value);
+	if (parsed === null || parsed < 0 || parsed > 1) {
+		return null;
+	}
+
+	return parsed;
+}
+
+function normalizeHarnessList(rawValues: readonly string[] | undefined): HarnessChoice[] {
+	if (!rawValues || rawValues.length === 0) {
+		return [];
+	}
+
+	const harnesses: HarnessChoice[] = [];
+	for (const rawValue of rawValues) {
+		const parts = rawValue
+			.split(",")
+			.map((part) => part.trim())
+			.filter((part) => part.length > 0);
+
+		for (const part of parts) {
+			const harness = normalizeChoice(part, SETUP_HARNESS_CHOICES);
+			if (harness && !harnesses.includes(harness)) {
+				harnesses.push(harness);
+			}
+		}
+	}
+
+	return harnesses;
+}
+
+function failNonInteractiveSetup(message: string): never {
+	console.error(chalk.red(`  ${message}`));
+	console.error(
+		chalk.dim(
+			"  Ask the user for explicit provider choices and pass them as CLI flags.",
+		),
+	);
+	process.exit(1);
+}
+
 function getEmbeddingDimensions(model: string): number {
 	switch (model) {
 		case "all-minilm":
@@ -1140,6 +1282,14 @@ async function existingSetupWizard(
 	basePath: string,
 	detection: SetupDetection,
 	existingConfig: Record<string, any>,
+	options?: {
+		nonInteractive?: boolean;
+		openDashboard?: boolean;
+		embeddingProvider?: EmbeddingProviderChoice;
+		embeddingModel?: string;
+		extractionProvider?: ExtractionProviderChoice;
+		extractionModel?: string;
+	},
 ) {
 	const spinner = ora("Setting up Signet for existing identity...").start();
 
@@ -1206,7 +1356,7 @@ async function existingSetupWizard(
 			env: process.env,
 		});
 
-		const config: Record<string, unknown> = {
+			const config: Record<string, unknown> = {
 			version: 1,
 			schema: "signet/v1",
 			agent: {
@@ -1242,8 +1392,33 @@ async function existingSetupWizard(
 				heartbeat: "HEARTBEAT.md",
 				memory: "MEMORY.md",
 				tools: "TOOLS.md",
-			},
-		};
+				},
+			};
+
+			if (options?.embeddingProvider && options.embeddingProvider !== "none") {
+				const embeddingModel =
+					options.embeddingModel ||
+					(options.embeddingProvider === "openai"
+						? "text-embedding-3-small"
+						: "nomic-embed-text");
+				config.embedding = {
+					provider: options.embeddingProvider,
+					model: embeddingModel,
+					dimensions: getEmbeddingDimensions(embeddingModel),
+				};
+			}
+
+			if (options?.extractionProvider && options.extractionProvider !== "none") {
+				(config.memory as Record<string, unknown>).pipelineV2 = {
+					enabled: true,
+					extractionProvider: options.extractionProvider,
+					extractionModel:
+						options.extractionModel ||
+						(options.extractionProvider === "claude-code"
+							? "haiku"
+							: "glm-4.7-flash"),
+				};
+			}
 
 		// Only write agent.yaml if it doesn't exist
 		if (!existsSync(join(basePath, "agent.yaml"))) {
@@ -1421,13 +1596,19 @@ async function existingSetupWizard(
 
 		console.log();
 
-		const launchNow = await confirm({
-			message: "Open the dashboard?",
-			default: true,
-		});
+		if (options?.nonInteractive === true) {
+			if (options.openDashboard === true) {
+				await open(`http://localhost:${DEFAULT_PORT}`);
+			}
+		} else {
+			const launchNow = await confirm({
+				message: "Open the dashboard?",
+				default: true,
+			});
 
-		if (launchNow) {
-			await open(`http://localhost:${DEFAULT_PORT}`);
+			if (launchNow) {
+				await open(`http://localhost:${DEFAULT_PORT}`);
+			}
 		}
 
 		// Suggest onboarding
@@ -1458,12 +1639,18 @@ async function existingSetupWizard(
 // signet setup - Interactive Setup Wizard
 // ============================================================================
 
-async function setupWizard(options: { path?: string }) {
+async function setupWizard(options: SetupWizardOptions) {
 	console.log(signetLogo());
 	console.log();
 
+	const nonInteractive = options.nonInteractive === true;
 	const basePath = options.path || AGENTS_DIR;
 	const existing = detectExistingSetup(basePath);
+
+	if (nonInteractive) {
+		console.log(chalk.dim("  Running in non-interactive mode"));
+		console.log();
+	}
 
 	// Load existing config for defaults
 	let existingConfig: Record<string, any> = {};
@@ -1483,19 +1670,45 @@ async function setupWizard(options: { path?: string }) {
 		existingConfig.description ||
 		existingConfig.agent?.description ||
 		"Personal AI assistant";
-	const existingHarnesses: string[] = existingConfig.harnesses
-		? typeof existingConfig.harnesses === "string"
-			? existingConfig.harnesses.split(",").map((s: string) => s.trim())
-			: []
-		: [];
+	const existingHarnesses: string[] = Array.isArray(existingConfig.harnesses)
+		? existingConfig.harnesses
+				.filter((value: unknown): value is string => typeof value === "string")
+				.map((value) => value.trim())
+				.filter((value) => value.length > 0)
+		: typeof existingConfig.harnesses === "string"
+			? existingConfig.harnesses
+					.split(",")
+					.map((value: string) => value.trim())
+					.filter((value: string) => value.length > 0)
+			: [];
 	const existingEmbedding = existingConfig.embedding || {};
 	const existingSearch = existingConfig.search || {};
+	const existingMemory = existingConfig.memory || {};
 
 	// Check for existing Signet installation with database
 	if (existing.agentsDir && existing.memoryDb) {
 		console.log(chalk.green("  ✓ Existing Signet installation detected"));
 		console.log(chalk.dim(`    ${basePath}`));
 		console.log();
+
+		if (nonInteractive) {
+			const running = await isDaemonRunning();
+			if (!running) {
+				const spinner = ora("Starting daemon...").start();
+				const started = await startDaemon();
+				if (started) {
+					spinner.succeed("Daemon started");
+				} else {
+					spinner.fail("Failed to start daemon");
+				}
+			}
+
+			if (options.openDashboard === true) {
+				await open(`http://localhost:${DEFAULT_PORT}`);
+			}
+
+			return;
+		}
 
 		const action = await select({
 			message: "What would you like to do?",
@@ -1511,13 +1724,19 @@ async function setupWizard(options: { path?: string }) {
 		if (action === "dashboard") {
 			await launchDashboard({});
 			return;
-		} else if (action === "github-import") {
+		}
+
+		if (action === "github-import") {
 			await importFromGitHub(basePath);
 			return;
-		} else if (action === "status") {
+		}
+
+		if (action === "status") {
 			await showStatus({ path: basePath });
 			return;
-		} else if (action === "exit") {
+		}
+
+		if (action === "exit") {
 			return;
 		}
 
@@ -1561,6 +1780,37 @@ async function setupWizard(options: { path?: string }) {
 		console.log(chalk.dim("    5. Keep all existing files unchanged"));
 		console.log();
 
+		if (nonInteractive) {
+			const migrationEmbeddingProvider = normalizeChoice(
+				options.embeddingProvider,
+				EMBEDDING_PROVIDER_CHOICES,
+			);
+			const migrationExtractionProvider = normalizeChoice(
+				options.extractionProvider,
+				EXTRACTION_PROVIDER_CHOICES,
+			);
+			if (!migrationEmbeddingProvider) {
+				failNonInteractiveSetup(
+					"Non-interactive setup requires --embedding-provider (ollama, openai, or none).",
+				);
+			}
+			if (!migrationExtractionProvider) {
+				failNonInteractiveSetup(
+					"Non-interactive setup requires --extraction-provider (claude-code, ollama, or none).",
+				);
+			}
+
+			await existingSetupWizard(basePath, existing, existingConfig, {
+				nonInteractive: true,
+				openDashboard: options.openDashboard === true,
+				embeddingProvider: migrationEmbeddingProvider,
+				embeddingModel: normalizeStringValue(options.embeddingModel) || undefined,
+				extractionProvider: migrationExtractionProvider,
+				extractionModel: normalizeStringValue(options.extractionModel) || undefined,
+			});
+			return;
+		}
+
 		const proceed = await confirm({
 			message: "Proceed with Signet setup?",
 			default: true,
@@ -1597,13 +1847,15 @@ async function setupWizard(options: { path?: string }) {
 		console.log(chalk.bold("  Let's set up your agent identity.\n"));
 
 		// For fresh installs, offer to import from GitHub
-		const setupMethod = await select({
-			message: "How would you like to set up?",
-			choices: [
-				{ value: "new", name: "Create new agent identity" },
-				{ value: "github", name: "Import from GitHub repository" },
-			],
-		});
+		const setupMethod = nonInteractive
+			? "new"
+			: await select({
+					message: "How would you like to set up?",
+					choices: [
+						{ value: "new", name: "Create new agent identity" },
+						{ value: "github", name: "Import from GitHub repository" },
+					],
+				});
 
 		if (setupMethod === "github") {
 			// Create minimal structure first
@@ -1615,10 +1867,13 @@ async function setupWizard(options: { path?: string }) {
 		console.log();
 	}
 
-	const agentName = await input({
-		message: "What should your agent be called?",
-		default: existingName,
-	});
+	const configuredName = normalizeStringValue(options.name);
+	const agentName = nonInteractive
+		? configuredName || existingName
+		: await input({
+				message: "What should your agent be called?",
+				default: existingName,
+			});
 
 	// Build harness choices with existing selections pre-checked
 	const harnessChoices = [
@@ -1639,163 +1894,270 @@ async function setupWizard(options: { path?: string }) {
 		},
 	];
 
-	console.log();
-	const harnesses = await checkbox({
-		message: "Which AI platforms do you use?",
-		choices: harnessChoices,
-	});
+	let harnesses: string[] = [];
+	if (nonInteractive) {
+		const requestedHarnesses = normalizeHarnessList(options.harness);
+		if (requestedHarnesses.length > 0) {
+			harnesses = requestedHarnesses;
+		} else {
+			harnesses = normalizeHarnessList(existingHarnesses);
+		}
+	} else {
+		console.log();
+		harnesses = await checkbox({
+			message: "Which AI platforms do you use?",
+			choices: harnessChoices,
+		});
+	}
 
 	// OpenClaw configuration (handles openclaw/clawdbot/moltbot)
 	let configureOpenClawWs = false;
-	let openclawRuntimePath: "plugin" | "legacy" = "plugin";
+	let openclawRuntimePath: OpenClawRuntimeChoice = "plugin";
 	if (harnesses.includes("openclaw")) {
 		const connector = new OpenClawConnector();
 		const existingConfigs = connector.getDiscoveredConfigPaths();
 
-		if (existingConfigs.length > 0) {
-			console.log();
-			configureOpenClawWs = await confirm({
-				message: `Set OpenClaw workspace to ~/.agents in ${existingConfigs.length} config file(s)?`,
-				default: true,
-			});
-		}
+		if (nonInteractive) {
+			configureOpenClawWs =
+				options.configureOpenclawWorkspace === true &&
+				existingConfigs.length > 0;
 
-		console.log();
-		openclawRuntimePath = (await select({
-			message: "OpenClaw integration mode:",
-			choices: [
-				{
-					value: "plugin" as const,
-					name: "Plugin adapter (recommended)",
-					description:
-						"@signetai/signet-memory-openclaw — full lifecycle + memory tools",
-				},
-				{
-					value: "legacy" as const,
-					name: "Legacy hooks",
-					description:
-						"handler.js for /remember, /recall, /context commands",
-				},
-			],
-			default: "plugin",
-		})) as "plugin" | "legacy";
+			const requestedRuntimePath = normalizeChoice(
+				options.openclawRuntimePath,
+				OPENCLAW_RUNTIME_CHOICES,
+			);
+			openclawRuntimePath = requestedRuntimePath ?? "plugin";
+		} else {
+			if (existingConfigs.length > 0) {
+				console.log();
+				configureOpenClawWs = await confirm({
+					message: `Set OpenClaw workspace to ~/.agents in ${existingConfigs.length} config file(s)?`,
+					default: true,
+				});
+			}
+
+			console.log();
+			openclawRuntimePath = (await select({
+				message: "OpenClaw integration mode:",
+				choices: [
+					{
+						value: "plugin" as const,
+						name: "Plugin adapter (recommended)",
+						description:
+							"@signetai/signet-memory-openclaw — full lifecycle + memory tools",
+					},
+					{
+						value: "legacy" as const,
+						name: "Legacy hooks",
+						description:
+							"handler.js for /remember, /recall, /context commands",
+					},
+				],
+				default: "plugin",
+			})) as OpenClawRuntimeChoice;
+		}
 	}
 
-	console.log();
-	const agentDescription = await input({
-		message: "Short description of your agent:",
-		default: existingDesc,
-	});
+	const configuredDescription = normalizeStringValue(options.description);
+	const agentDescription = nonInteractive
+		? configuredDescription || existingDesc
+		: await input({
+				message: "Short description of your agent:",
+				default: existingDesc,
+			});
 
-	console.log();
-	let embeddingProvider = (await select({
-		message: "How should memories be embedded for search?",
-		choices: [
-			{ value: "ollama", name: "Ollama (local, recommended)" },
-			{ value: "openai", name: "OpenAI API" },
-			{ value: "none", name: "Skip embeddings for now" },
-		],
-	})) as "ollama" | "openai" | "none";
+	const requestedEmbeddingProvider = normalizeChoice(
+		options.embeddingProvider,
+		EMBEDDING_PROVIDER_CHOICES,
+	);
+	const requestedExtractionProvider = normalizeChoice(
+		options.extractionProvider,
+		EXTRACTION_PROVIDER_CHOICES,
+	);
+
+	if (nonInteractive && !requestedEmbeddingProvider) {
+		failNonInteractiveSetup(
+			"Non-interactive setup requires --embedding-provider (ollama, openai, or none).",
+		);
+	}
+
+	if (nonInteractive && !requestedExtractionProvider) {
+		failNonInteractiveSetup(
+			"Non-interactive setup requires --extraction-provider (claude-code, ollama, or none).",
+		);
+	}
+
+	let embeddingProvider: EmbeddingProviderChoice;
+	if (nonInteractive) {
+		const providerFromConfig = normalizeChoice(
+			existingEmbedding.provider,
+			EMBEDDING_PROVIDER_CHOICES,
+		);
+		embeddingProvider =
+			requestedEmbeddingProvider ?? providerFromConfig ?? "none";
+	} else {
+		console.log();
+		embeddingProvider = (await select({
+			message: "How should memories be embedded for search?",
+			choices: [
+				{ value: "ollama", name: "Ollama (local, recommended)" },
+				{ value: "openai", name: "OpenAI API" },
+				{ value: "none", name: "Skip embeddings for now" },
+			],
+		})) as EmbeddingProviderChoice;
+	}
 
 	// Embedding model selection based on provider
 	let embeddingModel = "nomic-embed-text";
 	let embeddingDimensions = 768;
 
 	if (embeddingProvider === "ollama") {
-		console.log();
-		const model = await select({
-			message: "Which embedding model?",
-			choices: [
-				{
-					value: "nomic-embed-text",
-					name: "nomic-embed-text (768d, recommended)",
-				},
-				{ value: "all-minilm", name: "all-minilm (384d, faster)" },
-				{
-					value: "mxbai-embed-large",
-					name: "mxbai-embed-large (1024d, better quality)",
-				},
-			],
-		});
+		if (nonInteractive) {
+			const configuredModel =
+				normalizeStringValue(options.embeddingModel) ||
+				normalizeStringValue(existingEmbedding.model) ||
+				"nomic-embed-text";
+			embeddingModel = configuredModel;
+			embeddingDimensions = getEmbeddingDimensions(configuredModel);
+		} else {
+			console.log();
+			const model = await select({
+				message: "Which embedding model?",
+				choices: [
+					{
+						value: "nomic-embed-text",
+						name: "nomic-embed-text (768d, recommended)",
+					},
+					{ value: "all-minilm", name: "all-minilm (384d, faster)" },
+					{
+						value: "mxbai-embed-large",
+						name: "mxbai-embed-large (1024d, better quality)",
+					},
+				],
+			});
 
-		const preflight = await preflightOllamaEmbedding(model);
-		embeddingProvider = preflight.provider;
-		embeddingModel = preflight.model ?? embeddingModel;
-		embeddingDimensions = preflight.dimensions ?? embeddingDimensions;
+			const preflight = await preflightOllamaEmbedding(model);
+			embeddingProvider = preflight.provider;
+			embeddingModel = preflight.model ?? embeddingModel;
+			embeddingDimensions = preflight.dimensions ?? embeddingDimensions;
+		}
 	} else if (embeddingProvider === "openai") {
-		const openai = await promptOpenAIEmbeddingModel();
-		embeddingModel = openai.model;
-		embeddingDimensions = openai.dimensions;
+		if (nonInteractive) {
+			const configuredModel =
+				normalizeChoice(options.embeddingModel, [
+					"text-embedding-3-small",
+					"text-embedding-3-large",
+				]) ||
+				normalizeChoice(existingEmbedding.model, [
+					"text-embedding-3-small",
+					"text-embedding-3-large",
+				]) ||
+				"text-embedding-3-small";
+			embeddingModel = configuredModel;
+			embeddingDimensions = getEmbeddingDimensions(configuredModel);
+		} else {
+			const openai = await promptOpenAIEmbeddingModel();
+			embeddingModel = openai.model;
+			embeddingDimensions = openai.dimensions;
+		}
 	}
 
 	// Search settings
-	console.log();
-	const searchBalance = await select({
-		message: "Search style (semantic vs keyword matching):",
-		choices: [
-			{
-				value: 0.7,
-				name: "Balanced (70% semantic, 30% keyword) - recommended",
-			},
-			{ value: 0.9, name: "Semantic-heavy (90% semantic, 10% keyword)" },
-			{ value: 0.5, name: "Equal (50/50)" },
-			{ value: 0.3, name: "Keyword-heavy (30% semantic, 70% keyword)" },
-		],
-	});
+	const existingSearchBalance = parseSearchBalanceValue(existingSearch.alpha);
+	const requestedSearchBalance = parseSearchBalanceValue(options.searchBalance);
+	const searchBalance = nonInteractive
+		? requestedSearchBalance ?? existingSearchBalance ?? 0.7
+		: await select({
+				message: "Search style (semantic vs keyword matching):",
+				choices: [
+					{
+						value: 0.7,
+						name: "Balanced (70% semantic, 30% keyword) - recommended",
+					},
+					{ value: 0.9, name: "Semantic-heavy (90% semantic, 10% keyword)" },
+					{ value: 0.5, name: "Equal (50/50)" },
+					{ value: 0.3, name: "Keyword-heavy (30% semantic, 70% keyword)" },
+				],
+			});
 
 	// Memory pipeline provider
-	console.log();
-	const extractionProvider = (await select({
-		message: "Memory extraction provider (analyzes conversations):",
-		choices: [
-			{
-				value: "claude-code",
-				name: "Claude Code (uses your Claude subscription via CLI)",
-			},
-			{
-				value: "ollama",
-				name: "Ollama (local, requires running Ollama server)",
-			},
-			{ value: "none", name: "Skip extraction pipeline" },
-		],
-	})) as "claude-code" | "ollama" | "none";
+	let extractionProvider: ExtractionProviderChoice;
+	if (nonInteractive) {
+		const providerFromConfig = normalizeChoice(
+			existingMemory.pipelineV2?.extractionProvider,
+			EXTRACTION_PROVIDER_CHOICES,
+		);
+		extractionProvider =
+			requestedExtractionProvider ?? providerFromConfig ?? "none";
+	} else {
+		console.log();
+		extractionProvider = (await select({
+			message: "Memory extraction provider (analyzes conversations):",
+			choices: [
+				{
+					value: "claude-code",
+					name: "Claude Code (uses your Claude subscription via CLI)",
+				},
+				{
+					value: "ollama",
+					name: "Ollama (local, requires running Ollama server)",
+				},
+				{ value: "none", name: "Skip extraction pipeline" },
+			],
+		})) as ExtractionProviderChoice;
+	}
 
 	let extractionModel = "haiku";
 	if (extractionProvider === "claude-code") {
-		console.log();
-		extractionModel = (await select({
-			message: "Which Claude model for extraction?",
-			choices: [
-				{ value: "haiku", name: "Haiku (fast, cheap, recommended)" },
-				{ value: "sonnet", name: "Sonnet (better quality, slower)" },
-			],
-		})) as string;
+		if (nonInteractive) {
+			extractionModel =
+				normalizeStringValue(options.extractionModel) ||
+				normalizeStringValue(existingMemory.pipelineV2?.extractionModel) ||
+				"haiku";
+		} else {
+			console.log();
+			extractionModel = (await select({
+				message: "Which Claude model for extraction?",
+				choices: [
+					{ value: "haiku", name: "Haiku (fast, cheap, recommended)" },
+					{ value: "sonnet", name: "Sonnet (better quality, slower)" },
+				],
+			})) as string;
+		}
 	} else if (extractionProvider === "ollama") {
-		console.log();
-		extractionModel = (await select({
-			message: "Which Ollama model for extraction?",
-			choices: [
-				{
-					value: "glm-4.7-flash",
-					name: "glm-4.7-flash (good quality, recommended)",
-				},
-				{ value: "qwen3:4b", name: "qwen3:4b (lighter, faster)" },
-				{ value: "llama3", name: "llama3 (general purpose)" },
-			],
-		})) as string;
+		if (nonInteractive) {
+			extractionModel =
+				normalizeStringValue(options.extractionModel) ||
+				normalizeStringValue(existingMemory.pipelineV2?.extractionModel) ||
+				"glm-4.7-flash";
+		} else {
+			console.log();
+			extractionModel = (await select({
+				message: "Which Ollama model for extraction?",
+				choices: [
+					{
+						value: "glm-4.7-flash",
+						name: "glm-4.7-flash (good quality, recommended)",
+					},
+					{ value: "qwen3:4b", name: "qwen3:4b (lighter, faster)" },
+					{ value: "llama3", name: "llama3 (general purpose)" },
+				],
+			})) as string;
+		}
 	}
 
 	// Advanced settings (optional)
-	console.log();
-	const wantAdvanced = await confirm({
-		message: "Configure advanced settings?",
-		default: false,
-	});
+	const wantAdvanced = nonInteractive
+		? false
+		: await confirm({
+				message: "Configure advanced settings?",
+				default: false,
+			});
 
-	let searchTopK = 20;
-	let searchMinScore = 0.3;
-	let memorySessionBudget = 2000;
-	let memoryDecayRate = 0.95;
+	let searchTopK = parseIntegerValue(existingSearch.top_k) ?? 20;
+	let searchMinScore = parseSearchBalanceValue(existingSearch.min_score) ?? 0.3;
+	let memorySessionBudget = parseIntegerValue(existingMemory.session_budget) ?? 2000;
+	let memoryDecayRate = parseSearchBalanceValue(existingMemory.decay_rate) ?? 0.95;
 
 	if (wantAdvanced) {
 		console.log();
@@ -1827,8 +2189,8 @@ async function setupWizard(options: { path?: string }) {
 	}
 
 	// Git version control setup
-	console.log();
 	let gitEnabled = false;
+	const shouldSkipGit = nonInteractive && options.skipGit === true;
 
 	if (existing.agentsDir) {
 		// Directory exists - check if it's a git repo
@@ -1839,11 +2201,13 @@ async function setupWizard(options: { path?: string }) {
 					"  Git repo detected. Will create backup commit before changes.",
 				),
 			);
-		} else {
-			const initGit = await confirm({
-				message: "Initialize git for version history?",
-				default: true,
-			});
+		} else if (!shouldSkipGit) {
+			const initGit = nonInteractive
+				? true
+				: await confirm({
+						message: "Initialize git for version history?",
+						default: true,
+					});
 
 			if (initGit) {
 				const initialized = await gitInit(basePath);
@@ -1855,12 +2219,14 @@ async function setupWizard(options: { path?: string }) {
 				}
 			}
 		}
-	} else {
+	} else if (!shouldSkipGit) {
 		// Fresh install - ask about git
-		const initGit = await confirm({
-			message: "Initialize git for version history?",
-			default: true,
-		});
+		const initGit = nonInteractive
+			? true
+			: await confirm({
+					message: "Initialize git for version history?",
+					default: true,
+				});
 		gitEnabled = initGit;
 	}
 
@@ -2101,13 +2467,19 @@ ${agentName} is a helpful assistant.
 			}
 		}
 
-		const launchNow = await confirm({
-			message: "Open the dashboard?",
-			default: true,
-		});
+		if (nonInteractive) {
+			if (options.openDashboard === true) {
+				await open(`http://localhost:${DEFAULT_PORT}`);
+			}
+		} else {
+			const launchNow = await confirm({
+				message: "Open the dashboard?",
+				default: true,
+			});
 
-		if (launchNow) {
-			await open(`http://localhost:${DEFAULT_PORT}`);
+			if (launchNow) {
+				await open(`http://localhost:${DEFAULT_PORT}`);
+			}
 		}
 
 		// Suggest onboarding
@@ -2672,8 +3044,47 @@ program
 
 program
 	.command("setup")
-	.description("Interactive setup wizard")
+	.description("Setup wizard (interactive by default)")
 	.option("-p, --path <path>", "Base path for agent files")
+	.option("--non-interactive", "Run setup without prompts")
+	.option("--name <name>", "Agent name (non-interactive mode)")
+	.option("--description <description>", "Agent description (non-interactive mode)")
+	.option(
+		"--harness <harness>",
+		"Harness to configure (repeatable or comma-separated: claude-code, opencode, openclaw)",
+		collectListOption,
+		[],
+	)
+	.option(
+		"--embedding-provider <provider>",
+		"Embedding provider in non-interactive mode (ollama, openai, none)",
+	)
+	.option("--embedding-model <model>", "Embedding model in non-interactive mode")
+	.option(
+		"--extraction-provider <provider>",
+		"Extraction provider in non-interactive mode (claude-code, ollama, none)",
+	)
+	.option("--extraction-model <model>", "Extraction model in non-interactive mode")
+	.option(
+		"--search-balance <alpha>",
+		"Search balance alpha in non-interactive mode (0-1)",
+	)
+	.option(
+		"--openclaw-runtime-path <mode>",
+		"OpenClaw runtime path in non-interactive mode (plugin, legacy)",
+	)
+	.option(
+		"--configure-openclaw-workspace",
+		"Patch discovered OpenClaw configs to use ~/.agents in non-interactive mode",
+	)
+	.option(
+		"--open-dashboard",
+		"Open dashboard after setup in non-interactive mode",
+	)
+	.option(
+		"--skip-git",
+		"Skip git initialization and setup commits in non-interactive mode",
+	)
 	.action(setupWizard);
 
 program

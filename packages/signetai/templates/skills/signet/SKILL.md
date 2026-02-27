@@ -217,10 +217,32 @@ Install skills:
 npx skills install <skill-name>
 ```
 
+## Setup Modes
+
+When helping a user bootstrap Signet, both setup modes are valid:
+
+```bash
+# Interactive setup
+signet
+
+# Non-interactive setup (agent-driven)
+signet setup --non-interactive \
+  --name "My Agent" \
+  --harness claude-code \
+  --embedding-provider <ollama|openai|none> \
+  --extraction-provider <claude-code|ollama|none>
+```
+
+Use `--non-interactive` when the agent needs to complete setup without
+waiting for terminal prompts. Ask the user for provider choices first,
+then pass both provider flags explicitly.
+
 ## Commands Reference
 
 ```bash
 signet                  # Interactive menu
+signet setup            # Setup wizard
+signet setup --non-interactive --name "Agent" --harness claude-code --embedding-provider ollama --extraction-provider claude-code
 signet status           # Show status
 signet dashboard        # Open web UI
 signet secret put NAME  # Store a secret

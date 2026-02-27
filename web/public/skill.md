@@ -279,7 +279,7 @@ These are the ONLY two supported install methods. Do not use:
 ### Step 3: Run the setup wizard
 
 > GATE: Tell your user:
-> "Signet is installed. Now I need to run the interactive setup wizard.
+> "Signet is installed. Now I need to run the setup wizard.
 > This will ask you to choose:
 > - A name and description for your agent (me)
 > - Which platforms to connect (Claude Code, OpenClaw, OpenCode)
@@ -288,18 +288,38 @@ These are the ONLY two supported install methods. Do not use:
 > - Whether to enable git sync for your agent config
 >
 > The wizard will configure hooks, connectors, and skills automatically.
-> Some prompts are interactive — I may need you to answer them directly
-> in the terminal. Ready?"
+> I can run this interactively (you answer prompts) or non-interactively
+> (I pass flags myself). Ready?"
 >
 > WAIT for the user to confirm before running the wizard.
 > 
 
+Interactive mode:
 ```bash
 signet
 ```
 
 Run `signet` with no arguments. It automatically detects a fresh
 install and launches the interactive setup wizard.
+
+Non-interactive mode (for agent-driven setup):
+```bash
+signet setup --non-interactive \
+  --name "Your Agent Name" \
+  --description "Personal AI assistant" \
+  --harness claude-code \
+  --embedding-provider <ollama|openai|none> \
+  --extraction-provider <claude-code|ollama|none>
+```
+
+For non-interactive mode:
+- Ask the user to choose both providers before running the command
+- Do not default providers silently
+- Use `--harness` multiple times or as comma-separated values
+- Add `--embedding-provider ollama` and `--embedding-model nomic-embed-text`
+  if Ollama is available
+- Add `--openclaw-runtime-path plugin` for OpenClaw
+- Add `--skip-git` if the user does not want git initialized
 
 The wizard will ask:
 1. **Agent name and description** — the identity for your agent
@@ -459,9 +479,10 @@ make during installation. Do not repeat them.
 | Running `npx signet init` | Not a thing. Install globally first, then run `signet`. |
 | Manually writing to `~/.agents/memory/` | The daemon manages memory files. Do not write there directly. |
 | Calling `signet recall` before every response | Context injection is automatic. Only use recall for explicit searches. |
+| Defaulting embedding/extraction providers without asking | In non-interactive setup, ask the user which providers they want and pass both flags explicitly. |
 | Building a custom HTTP integration | Use the setup wizard's connector selection. It handles everything. |
 | Treating Clawdbot/Moltbot as separate from OpenClaw | They are the same platform. One connector handles all three. |
-| Skipping the interactive setup wizard | The wizard configures connectors, hooks, skills, and identity. Do not try to set these up manually. |
+| Skipping setup or manually writing files | Setup configures connectors, hooks, skills, and identity. Use interactive or `--non-interactive`, but do not hand-roll files. |
 | Manually editing `~/.claude/settings.json` hooks | The Claude Code connector manages these. Run setup to install them. |
 | Cloning the git repository to install | Signet is installed via npm/bun as a global package, not by cloning. |
 
@@ -527,6 +548,7 @@ bun add -g signetai          # or: npm install -g signetai
 # Setup
 signet                       # First run launches setup wizard
 signet setup                 # Explicit setup command
+signet setup --non-interactive --name "Agent" --harness claude-code --embedding-provider ollama --extraction-provider claude-code
 
 # Daemon
 signet start                 # Start daemon
