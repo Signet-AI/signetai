@@ -26,6 +26,11 @@ import { listSecrets } from "./secrets";
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 
+function formatMemoryDate(isoDate: string): string {
+	const d = new Date(isoDate);
+	return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -851,7 +856,8 @@ export function handleSessionStart(
 		);
 		for (const mem of memories) {
 			const tagStr = mem.tags ? ` [${mem.tags}]` : "";
-			injectParts.push(`- ${mem.content}${tagStr}`);
+			const dateStr = formatMemoryDate(mem.created_at);
+			injectParts.push(`- ${mem.content}${tagStr} (${dateStr})`);
 		}
 	}
 
@@ -1041,7 +1047,10 @@ export function handleUserPromptSubmit(
 		trackFtsHits(req.sessionKey, allMatchedIds);
 
 		const queryTerms = words.join(" ");
-		const lines = selected.map((s) => `- ${s.content}`);
+		const lines = selected.map((s) => {
+			const dateStr = formatMemoryDate(s.created_at);
+			return `- ${s.content} (${dateStr})`;
+		});
 		const inject = `[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=fts+decay]\n${lines.join("\n")}`;
 
 		const duration = Date.now() - start;
@@ -1376,7 +1385,10 @@ Maximum length: ${config.max_tokens} tokens.
 
 ## Memories to Synthesize
 
-${memories.map((m) => `- [${m.type}] ${m.content}`).join("\n")}
+${memories.map((m) => {
+		const dateStr = formatMemoryDate(m.created_at);
+		return `- [${m.type}] ${m.content} (${dateStr})`;
+	}).join("\n")}
 `;
 
 	return {
