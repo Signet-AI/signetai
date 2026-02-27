@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.8.1] - 2026-02-27
+
+### Refactoring
+
+- **hooks**: add timestamps to memory injection context
+
+### Docs
+
+- clarify commit prefix guidance — reserve feat: for user-facing features
+
+
 ## [0.8.0] - 2026-02-27
 
 ### Bug Fixes
