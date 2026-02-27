@@ -66,8 +66,9 @@ export async function spawnTask(
 		cwd: workingDirectory,
 	});
 
-	// Strip existing sentinel and re-inject to prevent recursive hook loops
-	const { SIGNET_NO_HOOKS: _, ...baseEnv } = process.env;
+	// Strip CLAUDECODE to avoid nested-session detection, and strip
+	// SIGNET_NO_HOOKS sentinel before re-injecting to prevent hook loops
+	const { CLAUDECODE: _cc, SIGNET_NO_HOOKS: _, ...baseEnv } = process.env;
 
 	const proc = Bun.spawn([resolvedBin, ...args], {
 		cwd: workingDirectory ?? undefined,
