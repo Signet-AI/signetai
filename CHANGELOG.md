@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.4.0] - 2026-02-27
+
+### Docs
+
+- add secrets API endpoints and MCP tools to CLAUDE.md
+
+
 ## [0.3.0] - 2026-02-27
 
 ### Features
