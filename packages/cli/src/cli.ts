@@ -1501,7 +1501,6 @@ async function setupWizard(options: { path?: string }) {
 			message: "What would you like to do?",
 			choices: [
 				{ value: "dashboard", name: "Launch dashboard" },
-				{ value: "migrate", name: "Import memories from another platform" },
 				{ value: "github-import", name: "Import agent config from GitHub" },
 				{ value: "reconfigure", name: "Reconfigure settings" },
 				{ value: "status", name: "View status" },
@@ -1511,9 +1510,6 @@ async function setupWizard(options: { path?: string }) {
 
 		if (action === "dashboard") {
 			await launchDashboard({});
-			return;
-		} else if (action === "migrate") {
-			await migrateWizard(basePath);
 			return;
 		} else if (action === "github-import") {
 			await importFromGitHub(basePath);
@@ -1640,26 +1636,6 @@ async function setupWizard(options: { path?: string }) {
 			value: "openclaw",
 			name: "OpenClaw",
 			checked: existingHarnesses.includes("openclaw"),
-		},
-		{
-			value: "cursor",
-			name: "Cursor",
-			checked: existingHarnesses.includes("cursor"),
-		},
-		{
-			value: "windsurf",
-			name: "Windsurf",
-			checked: existingHarnesses.includes("windsurf"),
-		},
-		{
-			value: "chatgpt",
-			name: "ChatGPT",
-			checked: existingHarnesses.includes("chatgpt"),
-		},
-		{
-			value: "gemini",
-			name: "Gemini",
-			checked: existingHarnesses.includes("gemini"),
 		},
 	];
 
@@ -1849,12 +1825,6 @@ async function setupWizard(options: { path?: string }) {
 		});
 		memoryDecayRate = parseFloat(decayInput) || 0.95;
 	}
-
-	console.log();
-	const wantImport = await confirm({
-		message: "Do you want to import existing conversations?",
-		default: false,
-	});
 
 	// Git version control setup
 	console.log();
@@ -2122,10 +2092,6 @@ ${agentName} is a helpful assistant.
 
 		console.log();
 
-		if (wantImport) {
-			await migrateWizard(basePath);
-		}
-
 		// Commit the initial setup
 		if (gitEnabled) {
 			const date = new Date().toISOString().split("T")[0];
@@ -2350,41 +2316,6 @@ async function importFromGitHub(basePath: string) {
 	}
 }
 
-// signet migrate - Import Wizard
-// ============================================================================
-
-async function migrateWizard(basePath: string) {
-	console.log();
-	console.log(chalk.bold("  Import existing conversations\n"));
-
-	const source = await select({
-		message: "Where are you importing from?",
-		choices: [
-			{ value: "chatgpt", name: "ChatGPT export (conversations.json)" },
-			{ value: "claude", name: "Claude export" },
-			{ value: "gemini", name: "Gemini / Google AI Studio" },
-			{ value: "custom", name: "Custom JSON format" },
-		],
-	});
-
-	const inputPath = await input({
-		message: "Path to export file:",
-		validate: (v) => existsSync(v) || "File not found",
-	});
-
-	const spinner = ora(`Importing from ${source}...`).start();
-
-	try {
-		await new Promise((r) => setTimeout(r, 1500));
-		spinner.succeed(chalk.green("Import complete!"));
-		console.log(chalk.dim("  Imported conversations with memories"));
-	} catch (err) {
-		spinner.fail(chalk.red("Import failed"));
-		console.error(err);
-	}
-}
-
-// ============================================================================
 // signet dashboard - Launch Web UI
 // ============================================================================
 
@@ -2883,15 +2814,6 @@ program
 		"Filter by category (daemon, api, memory, sync, git, watcher)",
 	)
 	.action(showLogs);
-
-program
-	.command("migrate")
-	.description("Import from another platform")
-	.argument("[source]", "Source platform (chatgpt, claude, gemini)")
-	.action(async (source) => {
-		const basePath = AGENTS_DIR;
-		await migrateWizard(basePath);
-	});
 
 program
 	.command("sync")
