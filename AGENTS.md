@@ -397,6 +397,9 @@ bun src/cli.ts status    # Check status
 | `/api/skills/:name` | GET/DELETE | Get or uninstall a skill |
 | `/api/skills/install` | POST | Install a skill |
 | `/api/secrets` | GET | List secret names |
+| `/api/secrets/:name` | POST/DELETE | Store or delete a secret |
+| `/api/secrets/exec` | POST | Execute command with multiple secrets as env vars |
+| `/api/secrets/:name/exec` | POST | Execute command with single secret (legacy) |
 | `/api/hooks/*` | POST/GET | Session + synthesis hooks |
 | `/api/harnesses` | GET | List harnesses |
 | `/api/auth/*` | POST/GET | Auth token management |
@@ -417,7 +420,7 @@ bun src/cli.ts status    # Check status
 | `/api/logs/*` | GET | Daemon log access |
 | `/api/logs/stream` | GET | SSE log streaming |
 | `/api/identity` | GET/POST | Identity file read/write |
-| `/mcp` | ALL | MCP server (Streamable HTTP, memory tools) |
+| `/mcp` | ALL | MCP server (Streamable HTTP, memory + secret tools) |
 
 
 ## Identity Files
