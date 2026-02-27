@@ -2,6 +2,15 @@
 
 All notable changes to Signet are documented here.
 
+## [0.5.1] - 2026-02-27
+
+### Bug Fixes
+
+- add dashboard screenshots as jpg to public/
+- **tasks**: streamline edit flow and detail run state
+- **tasks**: stream live task runs and correct opencode execution
+
+
 ## [0.5.0] - 2026-02-27
 
 ### Bug Fixes
