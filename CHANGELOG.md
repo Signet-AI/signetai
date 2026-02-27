@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.6.0] - 2026-02-27
+
+### Bug Fixes
+
+- **scheduler**: strip CLAUDECODE env var when spawning tasks
+
+
 ## [0.5.3] - 2026-02-27
 
 ### Features
