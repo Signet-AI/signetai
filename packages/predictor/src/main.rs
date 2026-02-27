@@ -76,10 +76,12 @@ impl PredictorService {
             candidate_texts
         };
 
-        let features = if candidate_features.len() == candidate_ids.len() {
+        let features = if candidate_features.is_empty() {
+            vec![vec![0.0; cfg.extra_features]; candidate_ids.len()]
+        } else if candidate_features.len() == candidate_ids.len() {
             candidate_features
         } else {
-            vec![vec![0.0; cfg.extra_features]; candidate_ids.len()]
+            return Err("candidate_ids and candidate_features length mismatch".to_string());
         };
         if features.iter().any(|f| f.len() != cfg.extra_features) {
             return Err("candidate_features row has invalid dimension".to_string());
