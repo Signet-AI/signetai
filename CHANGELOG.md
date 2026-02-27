@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.7.0] - 2026-02-27
+
+### Features
+
+- **onboarding**: overhaul onboarding skill and fix remember/recall guidance
+
+### Bug Fixes
+
+- **predictor**: reject mismatched candidate_features instead of silent zero-fill
+
+
 ## [0.6.3] - 2026-02-27
 
 ### Features
