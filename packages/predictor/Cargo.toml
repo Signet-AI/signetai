@@ -1,0 +1,11 @@
+[package]
+name = "predictor"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Signet predictive memory scorer sidecar"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
