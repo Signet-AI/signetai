@@ -7,7 +7,10 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Skip if this commit is already a release commit to prevent loops
+    concurrency:
+      group: release-pipeline
+      cancel-in-progress: true
+    # Skip release commits (prevent loops) and non-code commits
     if: "!contains(github.event.head_commit.message, 'chore: release')"
 
     permissions:
@@ -19,20 +22,46 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check for code changes
+        id: changes
+        run: |
+          CODE_CHANGES=$(git diff --name-only HEAD~1 HEAD -- \
+            'packages/**' 'scripts/**' 'web/**' \
+            'package.json' 'bunfig.toml' 'tsconfig*.json' \
+            '.github/workflows/**' \
+            | grep -v '\.md$' \
+            | grep -v '\.jpg$' \
+            | grep -v '\.jpeg$' \
+            | grep -v '\.png$' \
+            | grep -v '\.svg$' \
+            | head -1 || true)
+          if [ -z "$CODE_CHANGES" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "No code changes detected, skipping release"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "Code changes detected, proceeding with release"
+          fi
+
       - uses: oven-sh/setup-bun@v2
+        if: steps.changes.outputs.skip != 'true'
 
       - name: Install dependencies
+        if: steps.changes.outputs.skip != 'true'
         run: bun install
 
       - name: Build
+        if: steps.changes.outputs.skip != 'true'
         run: bun run build
 
       - name: Configure Git
+        if: steps.changes.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump version
+        if: steps.changes.outputs.skip != 'true'
         run: |
           set -euo pipefail
 
@@ -70,15 +99,21 @@ jobs:
           git tag "v$NEW_VERSION"
 
       - name: Publish to npm
+        if: steps.changes.outputs.skip != 'true'
         run: |
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
-          cd packages/signetai && npm publish --tag next --access public
-          cd ../adapters/openclaw && npm publish --tag next --access public || true
+          CURRENT=$(npm view signetai version 2>/dev/null || echo "0.0.0")
+          if [ "$CURRENT" = "$NEW_VERSION" ]; then
+            echo "signetai@$NEW_VERSION already published, skipping"
+          else
+            cd packages/signetai && npm publish --tag next --access public
+            cd ../adapters/openclaw && npm publish --tag next --access public || true
+          fi
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Promote to latest
-        if: env.BUMP_LEVEL != 'major'
+        if: steps.changes.outputs.skip != 'true' && env.BUMP_LEVEL != 'major'
         run: |
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
           npm dist-tag add signetai@${{ env.NEW_VERSION }} latest
@@ -87,9 +122,13 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Push version bump
-        run: git push && git push origin "v$NEW_VERSION"
+        if: steps.changes.outputs.skip != 'true'
+        run: |
+          git pull --rebase origin main
+          git push && git push origin "v$NEW_VERSION"
 
       - name: Create GitHub Release
+        if: steps.changes.outputs.skip != 'true'
         run: |
           NOTES=$(bun scripts/extract-changelog-section.ts "$NEW_VERSION" 2>/dev/null || echo "See CHANGELOG.md for details")
           gh release create "v$NEW_VERSION" --title "v$NEW_VERSION" --notes "$NOTES"
