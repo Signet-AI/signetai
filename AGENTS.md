@@ -2,7 +2,7 @@
 Repo: github.com/signetai/signetai 
 GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 Branching: `<username>/<feature>` off main
-Conventional commits: `type(scope): subject`
+Conventional commits: `type(scope): subject` — reserve `feat:` for user-facing features only; use `fix:`, `refactor:`, `chore:`, or `perf:` for internal changes (feat bumps minor version)
 Last Updated: 2026/02/23
 This file: AGENTS.md -> Symlinked to CLAUDE.md
 ---
@@ -316,7 +316,10 @@ Style & Conventions
 - Package manager: **bun**
 - Linting/formatting: **Biome**
 - Build tool: **bun build**
-- Commit style: conventional commits
+- Commit style: conventional commits — `feat:` is reserved for
+  user-facing features (it bumps the minor version). For internal
+  improvements, helpers, refactors, or plumbing use `fix:`, `refactor:`,
+  `chore:`, or `perf:` instead
 - Line width: 80-100 soft, 120 hard
 - Add brief code comments for tricky or non-obvious logic.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail).
