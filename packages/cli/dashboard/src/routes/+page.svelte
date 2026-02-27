@@ -18,15 +18,6 @@
 	import { Toaster } from "$lib/components/ui/sonner/index.js";
 
 	let activeTab = $derived(nav.activeTab);
-	import ConfigTab from "$lib/components/tabs/ConfigTab.svelte";
-	import SettingsTab from "$lib/components/tabs/SettingsTab.svelte";
-	import LogsTab from "$lib/components/tabs/LogsTab.svelte";
-	import SecretsTab from "$lib/components/tabs/SecretsTab.svelte";
-	import SkillsTab from "$lib/components/tabs/SkillsTab.svelte";
-	import TasksTab from "$lib/components/tabs/TasksTab.svelte";
-	import MemoryTab from "$lib/components/tabs/MemoryTab.svelte";
-	import EmbeddingsTab from "$lib/components/tabs/EmbeddingsTab.svelte";
-	import PipelineTab from "$lib/components/tabs/PipelineTab.svelte";
 
 	let { data } = $props();
 	let daemonStatus = $state<DaemonStatus | null>(null);
@@ -60,7 +51,7 @@
 	}
 
 	// --- Memory display ---
-	let memoryDocs = $derived((data.memories ?? []) as Memory[]);
+	let memoryDocs = $derived(data.memories ?? []);
 
 	let displayMemories = $derived(
 		mem.similarSourceId
@@ -170,27 +161,81 @@
 
 		<div class="flex flex-1 flex-col min-h-0 relative">
 			{#if activeTab === "config"}
-				<ConfigTab
-					configFiles={data.configFiles}
-					{selectedFile}
-					onselectfile={selectFile}
-				/>
+				{#await import("$lib/components/tabs/ConfigTab.svelte") then module}
+					<module.default
+						configFiles={data.configFiles}
+						{selectedFile}
+						onselectfile={selectFile}
+					/>
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{:else if activeTab === "settings"}
-				<SettingsTab configFiles={data.configFiles} />
+				{#await import("$lib/components/tabs/SettingsTab.svelte") then module}
+					<module.default configFiles={data.configFiles} />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{:else if activeTab === "memory"}
-				<MemoryTab memories={memoryDocs} />
+				{#await import("$lib/components/tabs/MemoryTab.svelte") then module}
+					<module.default memories={memoryDocs} />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{:else if activeTab === "embeddings"}
-				<EmbeddingsTab onopenglobalsimilar={openGlobalSimilar} />
+				{#await import("$lib/components/tabs/EmbeddingsTab.svelte") then module}
+					<module.default onopenglobalsimilar={openGlobalSimilar} />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{:else if activeTab === "pipeline"}
-				<PipelineTab />
+				{#await import("$lib/components/tabs/PipelineTab.svelte") then module}
+					<module.default />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{:else if activeTab === "logs"}
-				<LogsTab />
+				{#await import("$lib/components/tabs/LogsTab.svelte") then module}
+					<module.default />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{:else if activeTab === "secrets"}
-				<SecretsTab />
+				{#await import("$lib/components/tabs/SecretsTab.svelte") then module}
+					<module.default />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{:else if activeTab === "skills"}
-				<SkillsTab />
+				{#await import("$lib/components/tabs/SkillsTab.svelte") then module}
+					<module.default />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{:else if activeTab === "tasks"}
-				<TasksTab />
+				{#await import("$lib/components/tabs/TasksTab.svelte") then module}
+					<module.default />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{/if}
 		</div>
 
