@@ -17,13 +17,15 @@ beforeEach(() => {
 
 afterEach(() => {
 	if (previousConfigPath === undefined) {
-		process.env.OPENCLAW_CONFIG_PATH = undefined;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stringifies it
+		delete process.env.OPENCLAW_CONFIG_PATH;
 	} else {
 		process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
 	}
 
 	if (previousHome === undefined) {
-		process.env.HOME = undefined;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stringifies it
+		delete process.env.HOME;
 	} else {
 		process.env.HOME = previousHome;
 	}
@@ -36,13 +38,14 @@ afterEach(() => {
 describe("OpenClawConnector config patching", () => {
 	it("does not patch workspace when configureWorkspace is false", async () => {
 		const configPath = join(tmpRoot, "openclaw.json");
-		const agentsDir = join(tmpRoot, "agents");
+		const hookBasePath = join(tmpRoot, "agents");
+		const workspacePath = "/home/test-user/.agents";
 
 		writeFileSync(
 			configPath,
 			JSON.stringify(
 				{
-					agents: { defaults: { workspace: "/tmp/original-workspace" } },
+					agents: { defaults: { workspace: "/home/other/.agents" } },
 					hooks: { internal: { entries: {} } },
 				},
 				null,
@@ -52,20 +55,20 @@ describe("OpenClawConnector config patching", () => {
 		process.env.OPENCLAW_CONFIG_PATH = configPath;
 
 		const connector = new OpenClawConnector();
-		await connector.install(agentsDir, { configureWorkspace: false });
+		await connector.install(hookBasePath, { configureWorkspace: false });
 
 		const patched = JSON.parse(readFileSync(configPath, "utf-8"));
-		expect(patched.agents.defaults.workspace).toBe("/tmp/original-workspace");
+		expect(patched.agents.defaults.workspace).toBe("/home/other/.agents");
 		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(true);
 
-		await connector.configureWorkspace(agentsDir);
+		await connector.configureWorkspace(workspacePath);
 		const workspacePatched = JSON.parse(readFileSync(configPath, "utf-8"));
-		expect(workspacePatched.agents.defaults.workspace).toBe(agentsDir);
+		expect(workspacePatched.agents.defaults.workspace).toBe(workspacePath);
 	});
 
 	it("patches JSON5 config files with comments and trailing commas", async () => {
 		const configPath = join(tmpRoot, "openclaw.json5");
-		const agentsDir = join(tmpRoot, "agents");
+		const hookBasePath = join(tmpRoot, "agents");
 
 		writeFileSync(
 			configPath,
@@ -73,7 +76,7 @@ describe("OpenClawConnector config patching", () => {
   // OpenClaw config
   agents: {
     defaults: {
-      workspace: "/tmp/legacy",
+      workspace: "/home/old/.agents",
     },
   },
   hooks: {
@@ -87,15 +90,36 @@ describe("OpenClawConnector config patching", () => {
 		process.env.OPENCLAW_CONFIG_PATH = configPath;
 
 		const connector = new OpenClawConnector();
-		const result = await connector.install(agentsDir, {
-			configureWorkspace: true,
+		const result = await connector.install(hookBasePath, {
+			configureWorkspace: false,
 			configureHooks: true,
 		});
 
 		expect(result.configsPatched).toContain(configPath);
 
 		const patched = JSON.parse(readFileSync(configPath, "utf-8"));
-		expect(patched.agents.defaults.workspace).toBe(agentsDir);
+		// workspace unchanged since configureWorkspace is false
+		expect(patched.agents.defaults.workspace).toBe("/home/old/.agents");
 		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(true);
+	});
+
+	it("rejects temp directory as workspace", async () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					agents: { defaults: { workspace: "/home/user/.agents" } },
+					hooks: { internal: { entries: {} } },
+				},
+				null,
+				2,
+			),
+		);
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		expect(connector.configureWorkspace(tmpRoot)).rejects.toThrow(/temp directory/);
+		expect(connector.install(tmpRoot, { configureWorkspace: true })).rejects.toThrow(/temp directory/);
 	});
 });

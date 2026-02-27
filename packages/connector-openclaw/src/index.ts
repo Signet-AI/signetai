@@ -33,8 +33,8 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 
 // ============================================================================
@@ -279,6 +279,7 @@ export class OpenClawConnector extends BaseConnector {
 
 		const patch: JsonObject = {};
 		if (configureWorkspace) {
+			this.validateWorkspacePath(basePath);
 			deepMerge(patch, {
 				agents: { defaults: { workspace: expandedBasePath } },
 			});
@@ -350,6 +351,7 @@ export class OpenClawConnector extends BaseConnector {
 	 * Patch OpenClaw configs to set workspace only.
 	 */
 	async configureWorkspace(basePath: string): Promise<string[]> {
+		this.validateWorkspacePath(basePath);
 		const expandedBasePath = this.expandPath(basePath);
 		const result = this.patchAllConfigs({
 			agents: {
@@ -477,6 +479,21 @@ export class OpenClawConnector extends BaseConnector {
 	// ==========================================================================
 	// Private helpers
 	// ==========================================================================
+
+	/**
+	 * Reject workspace paths that point into temp directories.
+	 * Prevents accidental persistence of test/ephemeral paths
+	 * in production OpenClaw configs.
+	 */
+	private validateWorkspacePath(p: string): void {
+		const resolved = resolve(this.expandPath(p));
+		const tmp = tmpdir();
+		if (resolved.startsWith(tmp) || resolved.startsWith("/tmp/")) {
+			throw new Error(
+				`Refusing to set workspace to temp directory: ${resolved}`,
+			);
+		}
+	}
 
 	private getConfigCandidates(): string[] {
 		const seen = new Set<string>();
