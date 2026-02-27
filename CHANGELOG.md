@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.6.1] - 2026-02-27
+
+### Bug Fixes
+
+- **cli**: honor --skip-git and reject unknown --harness in non-interactive setup
+
+### Performance
+
+- **dashboard**: lazy-load tab content modules
+
+
 ## [0.6.0] - 2026-02-27
 
 ### Bug Fixes
