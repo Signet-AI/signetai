@@ -74,7 +74,7 @@ Custom expressions are validated before saving.
 ### Process Commands
 
 - **Claude Code**: `claude --dangerously-skip-permissions -p "<prompt>"`
-- **OpenCode**: `opencode -m "<prompt>"`
+- **OpenCode**: `opencode run --format json "<prompt>"`
 
 ## Managing Tasks
 

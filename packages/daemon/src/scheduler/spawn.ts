@@ -6,8 +6,13 @@
 import type { TaskHarness } from "@signet/core";
 import { logger } from "../logger";
 
-const MAX_OUTPUT_BYTES = 1_048_576; // 1MB
+const MAX_OUTPUT_CHARS = 1_048_576;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+export interface SpawnHooks {
+	readonly onStdoutChunk?: (chunk: string) => void;
+	readonly onStderrChunk?: (chunk: string) => void;
+}
 
 export interface SpawnResult {
 	readonly exitCode: number | null;
@@ -25,7 +30,7 @@ function buildCommand(
 		case "claude-code":
 			return ["claude", ["--dangerously-skip-permissions", "-p", prompt]];
 		case "opencode":
-			return ["opencode", ["-m", prompt]];
+			return ["opencode", ["run", "--format", "json", prompt]];
 	}
 }
 
@@ -41,6 +46,7 @@ export async function spawnTask(
 	prompt: string,
 	workingDirectory: string | null,
 	timeoutMs: number = DEFAULT_TIMEOUT_MS,
+	hooks?: SpawnHooks,
 ): Promise<SpawnResult> {
 	const [bin, args] = buildCommand(harness, prompt);
 	const resolvedBin = Bun.which(bin);
@@ -85,18 +91,13 @@ export async function spawnTask(
 	}, timeoutMs);
 
 	try {
-		const [stdoutBuf, stderrBuf] = await Promise.all([
-			new Response(proc.stdout).arrayBuffer(),
-			new Response(proc.stderr).arrayBuffer(),
+		const [stdout, stderr, exitCode] = await Promise.all([
+			readProcessStream(proc.stdout, hooks?.onStdoutChunk),
+			readProcessStream(proc.stderr, hooks?.onStderrChunk),
+			proc.exited,
 		]);
 
-		const exitCode = await proc.exited;
 		clearTimeout(timer);
-
-		const stdout = new TextDecoder()
-			.decode(stdoutBuf.slice(0, MAX_OUTPUT_BYTES));
-		const stderr = new TextDecoder()
-			.decode(stderrBuf.slice(0, MAX_OUTPUT_BYTES));
 
 		return {
 			exitCode,
@@ -115,4 +116,38 @@ export async function spawnTask(
 			timedOut,
 		};
 	}
+}
+
+async function readProcessStream(
+	stream: ReadableStream<Uint8Array>,
+	onChunk?: (chunk: string) => void,
+): Promise<string> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let output = "";
+
+	while (true) {
+		const result = await reader.read();
+		if (result.done) break;
+
+		const chunkText = decoder.decode(result.value, { stream: true });
+		if (chunkText.length > 0) {
+			onChunk?.(chunkText);
+			if (output.length < MAX_OUTPUT_CHARS) {
+				const remaining = MAX_OUTPUT_CHARS - output.length;
+				output += chunkText.slice(0, remaining);
+			}
+		}
+	}
+
+	const tail = decoder.decode();
+	if (tail.length > 0) {
+		onChunk?.(tail);
+		if (output.length < MAX_OUTPUT_CHARS) {
+			const remaining = MAX_OUTPUT_CHARS - output.length;
+			output += tail.slice(0, remaining);
+		}
+	}
+
+	return output;
 }

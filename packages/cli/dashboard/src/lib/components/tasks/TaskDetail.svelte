@@ -14,13 +14,24 @@ interface Props {
 	task: ScheduledTask | null;
 	runs: TaskRun[];
 	loading: boolean;
+	liveConnected: boolean;
 	onclose: () => void;
 	ontrigger: (id: string) => void;
 	ondelete: (id: string) => void;
 	onedit: (id: string) => void;
 }
 
-let { open, task, runs, loading, onclose, ontrigger, ondelete, onedit }: Props =
+let {
+	open,
+	task,
+	runs,
+	loading,
+	liveConnected,
+	onclose,
+	ontrigger,
+	ondelete,
+	onedit,
+}: Props =
 	$props();
 
 function formatDate(iso: string | null): string {
@@ -151,13 +162,23 @@ function handleDelete() {
 
 				<!-- Run history -->
 				<div class="flex flex-col gap-2 min-h-0">
-					<span
-						class="text-[10px] font-bold uppercase tracking-[0.1em]
+					<div class="flex items-center gap-2">
+						<span
+							class="text-[10px] font-bold uppercase tracking-[0.1em]
 							text-[var(--sig-text-muted)]
 							font-[family-name:var(--font-display)]"
-					>
-						Run History ({runs.length})
-					</span>
+						>
+							Run History ({runs.length})
+						</span>
+						{#if liveConnected}
+							<span
+								class="text-[9px] text-[var(--sig-success)]
+									font-[family-name:var(--font-mono)]"
+							>
+								Live
+							</span>
+						{/if}
+					</div>
 
 					{#if runs.length === 0}
 						<span class="text-[11px] text-[var(--sig-text-muted)]">
@@ -165,13 +186,11 @@ function handleDelete() {
 						</span>
 					{:else}
 						<ScrollArea.Root class="max-h-[400px]">
-							<ScrollArea.Viewport class="w-full">
-								<div class="flex flex-col gap-2">
-									{#each runs as run (run.id)}
-										<RunLog {run} />
-									{/each}
-								</div>
-							</ScrollArea.Viewport>
+							<div class="flex flex-col gap-2 w-full">
+								{#each runs as run (run.id)}
+									<RunLog {run} />
+								{/each}
+							</div>
 							<ScrollArea.Scrollbar orientation="vertical" />
 						</ScrollArea.Root>
 					{/if}
