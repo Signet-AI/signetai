@@ -21,6 +21,7 @@ import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { getUpdateSummary } from "./update-system";
 import { loadMemoryConfig } from "./memory-config";
 import { recordSessionCandidates, trackFtsHits } from "./session-memories";
+import { listSecrets } from "./secrets";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
@@ -858,6 +859,22 @@ export function handleSessionStart(
 	if (updateStatus) {
 		injectParts.push("\n## Signet Status\n");
 		injectParts.push(updateStatus);
+	}
+
+	// Surface available secrets so agents know what's available
+	try {
+		const secretNames = listSecrets();
+		if (secretNames.length > 0) {
+			injectParts.push("\n## Available Secrets\n");
+			injectParts.push(
+				"Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars.\n",
+			);
+			for (const name of secretNames) {
+				injectParts.push(`- ${name}`);
+			}
+		}
+	} catch {
+		// Secrets store may not exist yet — non-fatal
 	}
 
 	const duration = Date.now() - start;

@@ -86,7 +86,7 @@ describe("createMcpServer", () => {
 		expect(server.server).toBeDefined();
 	});
 
-	it("registers all 6 tools", () => {
+	it("registers all 8 tools", () => {
 		const names = getToolNames(server);
 		expect(names).toContain("memory_search");
 		expect(names).toContain("memory_store");
@@ -94,7 +94,9 @@ describe("createMcpServer", () => {
 		expect(names).toContain("memory_list");
 		expect(names).toContain("memory_modify");
 		expect(names).toContain("memory_forget");
-		expect(names.length).toBe(6);
+		expect(names).toContain("secret_list");
+		expect(names).toContain("secret_exec");
+		expect(names.length).toBe(8);
 	});
 
 	describe("memory_search", () => {

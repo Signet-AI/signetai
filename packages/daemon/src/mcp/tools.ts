@@ -287,5 +287,64 @@ export function createMcpServer(opts?: McpServerOptions): McpServer {
 		return textResult(result.data);
 	});
 
+	// ------------------------------------------------------------------
+	// secret_list — list available secret names
+	// ------------------------------------------------------------------
+	server.registerTool("secret_list", {
+		title: "List Secrets",
+		description:
+			"List available secret names. Returns names only — raw values are never exposed to agents.",
+		inputSchema: z.object({}),
+	}, async () => {
+		const result = await daemonFetch<{ secrets: ReadonlyArray<string> }>(
+			baseUrl,
+			"/api/secrets",
+		);
+
+		if (!result.ok) {
+			return errorResult(`Failed to list secrets: ${result.error}`);
+		}
+		return textResult(result.data);
+	});
+
+	// ------------------------------------------------------------------
+	// secret_exec — run a command with secrets injected as env vars
+	// ------------------------------------------------------------------
+	server.registerTool("secret_exec", {
+		title: "Execute with Secrets",
+		description:
+			"Run a shell command with secrets injected as environment variables. " +
+			"Provide a secrets map where keys are env var names and values are secret names. " +
+			"Output is automatically redacted — secret values never appear in results.",
+		inputSchema: z.object({
+			command: z.string().describe("Shell command to execute"),
+			secrets: z
+				.record(z.string(), z.string())
+				.describe(
+					'Map of env var name → secret name, e.g. { "OPENAI_API_KEY": "OPENAI_API_KEY" }',
+				),
+		}),
+		annotations: { readOnlyHint: false },
+	}, async ({ command, secrets }) => {
+		if (Object.keys(secrets).length === 0) {
+			return errorResult("secrets map must contain at least one entry");
+		}
+
+		const result = await daemonFetch<{
+			stdout: string;
+			stderr: string;
+			code: number;
+		}>(baseUrl, "/api/secrets/exec", {
+			method: "POST",
+			body: { command, secrets },
+			timeout: 30_000,
+		});
+
+		if (!result.ok) {
+			return errorResult(`Exec failed: ${result.error}`);
+		}
+		return textResult(result.data);
+	});
+
 	return server;
 }

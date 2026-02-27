@@ -4612,8 +4612,40 @@ app.delete("/api/secrets/:name", (c) => {
 	}
 });
 
+// Execute a command with multiple secrets injected into the subprocess
+// environment. The agent provides a secrets map (env var → secret name),
+// never the actual values. This general-purpose route must be registered
+// BEFORE the parameterized /:name/exec to avoid Hono treating "exec" as :name.
+app.post("/api/secrets/exec", async (c) => {
+	try {
+		const body = (await c.req.json()) as {
+			command?: string;
+			secrets?: Record<string, string>;
+		};
+
+		if (!body.command) {
+			return c.json({ error: "command is required" }, 400);
+		}
+		if (!body.secrets || Object.keys(body.secrets).length === 0) {
+			return c.json({ error: "secrets map is required" }, 400);
+		}
+
+		const result = await execWithSecrets(body.command, body.secrets);
+		logger.info("secrets", "exec_with_secrets completed", {
+			secretCount: Object.keys(body.secrets).length,
+			code: result.code,
+		});
+		return c.json(result);
+	} catch (e) {
+		const err = e as Error;
+		logger.error("secrets", "exec_with_secrets failed", err);
+		return c.json({ error: err.message }, 500);
+	}
+});
+
 // Execute a command with secrets injected into the subprocess environment.
 // The agent provides references (env var → secret name), never values.
+// Legacy single-secret route — kept for backwards compatibility.
 app.post("/api/secrets/:name/exec", async (c) => {
 	const { name } = c.req.param();
 	try {

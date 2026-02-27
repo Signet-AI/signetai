@@ -56,12 +56,16 @@ summarized in \`~/.agents/MEMORY.md\`.
 Secrets
 ---
 
-API keys and tokens are stored securely in Signet:
+API keys and tokens are stored securely in Signet. Agents never see
+raw values — secrets are injected into subprocesses as environment
+variables with output automatically redacted.
 
-\`\`\`bash
-signet secret get OPENAI_API_KEY
-signet secret list
-\`\`\`
+- \`secret_list\` MCP tool — discover available secret names
+- \`secret_exec\` MCP tool — run a command with secrets injected as env vars
+
+Example: to use an API key stored as "OPENAI_API_KEY", call \`secret_exec\`
+with \`command: "curl -H \\"Authorization: Bearer $OPENAI_API_KEY\\" ..."\`
+and \`secrets: { "OPENAI_API_KEY": "OPENAI_API_KEY" }\`.
 
 About This System
 ---
