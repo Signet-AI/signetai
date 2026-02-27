@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.5.0] - 2026-02-27
+
+### Bug Fixes
+
+- **embeddings**: stop scope time-filter refresh loop
+
+
 ## [0.4.2] - 2026-02-27
 
 ### Features
