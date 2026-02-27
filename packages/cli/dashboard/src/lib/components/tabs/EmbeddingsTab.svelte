@@ -84,6 +84,7 @@ type TimeFilterPreset = "all" | "24h" | "7d" | "30d" | "90d" | "custom";
 let projectionRangeMin = $state(0);
 let projectionRangeMax = $state(DEFAULT_EMBEDDING_LIMIT);
 let projectionTimePreset = $state<TimeFilterPreset>("all");
+let projectionTimeAnchorMs = $state(Date.now());
 let projectionSinceDate = $state("");
 let projectionUntilDate = $state("");
 let projectionSearch = $state("");
@@ -253,9 +254,11 @@ function parseImportanceBound(raw: string): number | undefined {
 	return Math.min(1, Math.max(0, parsed));
 }
 
-function timePresetSinceIso(preset: TimeFilterPreset): string | undefined {
+function timePresetSinceIso(
+	preset: TimeFilterPreset,
+	anchorMs: number,
+): string | undefined {
 	if (preset === "all" || preset === "custom") return undefined;
-	const now = Date.now();
 	const spanMs =
 		preset === "24h"
 			? 24 * 60 * 60 * 1000
@@ -264,7 +267,7 @@ function timePresetSinceIso(preset: TimeFilterPreset): string | undefined {
 				: preset === "30d"
 					? 30 * 24 * 60 * 60 * 1000
 					: 90 * 24 * 60 * 60 * 1000;
-	return new Date(now - spanMs).toISOString();
+	return new Date(anchorMs - spanMs).toISOString();
 }
 
 function buildProjectionQueryOptions(): ProjectionQueryOptions {
@@ -295,7 +298,7 @@ function buildProjectionQueryOptions(): ProjectionQueryOptions {
 		since = parseLocalDateToIso(projectionSinceDate, false);
 		until = parseLocalDateToIso(projectionUntilDate, true);
 	} else {
-		since = timePresetSinceIso(projectionTimePreset);
+		since = timePresetSinceIso(projectionTimePreset, projectionTimeAnchorMs);
 	}
 	if (since) options.since = since;
 	if (until) options.until = until;
@@ -871,6 +874,12 @@ $effect(() => {
 	if (next.size !== selectedHarnesses.size) {
 		selectedHarnesses = next;
 	}
+});
+
+$effect(() => {
+	const preset = projectionTimePreset;
+	if (preset === "all" || preset === "custom") return;
+	projectionTimeAnchorMs = Date.now();
 });
 
 $effect(() => {
