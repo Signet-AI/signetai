@@ -5,7 +5,7 @@
  * Polls every 15 seconds (cron granularity is minutes).
  */
 
-import type { DbAccessor } from "../db-accessor";
+import type { DbAccessor, ReadDb } from "../db-accessor";
 import type { WorkerHandle } from "../pipeline/worker";
 import { computeNextRun } from "./cron";
 import { spawnTask, type SpawnResult } from "./spawn";
@@ -15,13 +15,38 @@ import { logger } from "../logger";
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
 
-interface DueTaskRow {
+export interface DueTaskRow {
 	readonly id: string;
 	readonly name: string;
 	readonly prompt: string;
 	readonly cron_expression: string;
 	readonly harness: string;
 	readonly working_directory: string | null;
+}
+
+export function selectDueTasks(
+	db: ReadDb,
+	nowIso: string,
+	limit: number,
+): ReadonlyArray<DueTaskRow> {
+	if (limit <= 0) return [];
+
+	return db
+		.prepare(
+			`SELECT t.id, t.name, t.prompt, t.cron_expression,
+			        t.harness, t.working_directory
+			 FROM scheduled_tasks t
+			 WHERE t.enabled = 1
+			   AND t.next_run_at IS NOT NULL
+			   AND t.next_run_at <= ?
+			   AND NOT EXISTS (
+			       SELECT 1 FROM task_runs r
+			       WHERE r.task_id = t.id AND r.status = 'running'
+			   )
+			 ORDER BY t.next_run_at ASC
+			 LIMIT ?`,
+		)
+		.all(nowIso, limit) as ReadonlyArray<DueTaskRow>;
 }
 
 /** Start the scheduler worker. Returns a handle to stop it. */
@@ -45,22 +70,9 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 
 		try {
 			// Find due tasks (enabled, next_run_at <= now, not already running)
+			const nowIso = new Date().toISOString();
 			const dueTasks = db.withReadDb((rdb) =>
-				rdb
-					.prepare(
-						`SELECT t.id, t.name, t.prompt, t.cron_expression,
-						        t.harness, t.working_directory
-						 FROM scheduled_tasks t
-						 WHERE t.enabled = 1
-						   AND t.next_run_at <= datetime('now')
-						   AND NOT EXISTS (
-						       SELECT 1 FROM task_runs r
-						       WHERE r.task_id = t.id AND r.status = 'running'
-						   )
-						 ORDER BY t.next_run_at ASC
-						 LIMIT ?`,
-					)
-					.all(MAX_CONCURRENT - activeProcesses.size) as ReadonlyArray<DueTaskRow>,
+				selectDueTasks(rdb, nowIso, MAX_CONCURRENT - activeProcesses.size),
 			);
 
 			for (const task of dueTasks) {
