@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.5.3] - 2026-02-27
+
+### Features
+
+- **cli**: require explicit providers for non-interactive setup
+
+
 ## [0.5.2] - 2026-02-27
 
 ### Refactoring
