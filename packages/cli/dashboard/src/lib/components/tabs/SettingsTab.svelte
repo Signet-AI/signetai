@@ -5,6 +5,8 @@ import { toast } from "$lib/stores/toast.svelte";
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
 import * as Select from "$lib/components/ui/select/index.js";
+import PageHero from "$lib/components/layout/PageHero.svelte";
+import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 
 interface Props {
 	configFiles: ConfigFile[];
@@ -201,6 +203,13 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 </script>
 
 <div class="settings-tab">
+	<PageHero
+		title={PAGE_HEADERS.settings.title}
+		wordmarkLines={PAGE_HEADERS.settings.wordmarkLines}
+		eyebrow={PAGE_HEADERS.settings.eyebrow}
+		description={PAGE_HEADERS.settings.description}
+	/>
+
 	{#if !hasFiles}
 		<div class="empty-state">No YAML config files found</div>
 	{:else}
