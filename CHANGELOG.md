@@ -2,6 +2,19 @@
 
 All notable changes to Signet are documented here.
 
+## [0.3.0] - 2026-02-27
+
+### Features
+
+- **secrets**: expose secrets to agents via MCP tools and session context
+- **dashboard**: enhance skills UI with monograms, trending row, and polish
+
+### Bug Fixes
+
+- **ci**: bump base version past deprecated 0.3.0 on npm
+- **publish**: convert postinstall to CJS for reliable npm install
+
+
 ## [0.2.0] - 2026-02-26
 
 ### Bug Fixes
