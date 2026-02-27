@@ -9,6 +9,7 @@ import type { DbAccessor } from "../db-accessor";
 import type { WorkerHandle } from "../pipeline/worker";
 import { computeNextRun } from "./cron";
 import { spawnTask, type SpawnResult } from "./spawn";
+import { emitTaskStream } from "./task-stream";
 import { logger } from "../logger";
 
 const POLL_INTERVAL_MS = 15_000;
@@ -143,6 +144,14 @@ async function executeTask(
 		).run(nextRun, now, now, task.id);
 	});
 
+	emitTaskStream({
+		type: "run-started",
+		taskId: task.id,
+		runId,
+		startedAt: now,
+		timestamp: new Date().toISOString(),
+	});
+
 	logger.info("scheduler", `Executing task: ${task.name}`, {
 		taskId: task.id,
 		runId,
@@ -156,6 +165,29 @@ async function executeTask(
 			task.harness as "claude-code" | "opencode",
 			task.prompt,
 			task.working_directory,
+			undefined,
+			{
+				onStdoutChunk: (chunk) => {
+					emitTaskStream({
+						type: "run-output",
+						taskId: task.id,
+						runId,
+						stream: "stdout",
+						chunk,
+						timestamp: new Date().toISOString(),
+					});
+				},
+				onStderrChunk: (chunk) => {
+					emitTaskStream({
+						type: "run-output",
+						taskId: task.id,
+						runId,
+						stream: "stderr",
+						chunk,
+						timestamp: new Date().toISOString(),
+					});
+				},
+			},
 		);
 	} catch (err) {
 		result = {
@@ -188,6 +220,17 @@ async function executeTask(
 			result.error,
 			runId,
 		);
+	});
+
+	emitTaskStream({
+		type: "run-completed",
+		taskId: task.id,
+		runId,
+		status,
+		completedAt,
+		exitCode: result.exitCode,
+		error: result.error,
+		timestamp: new Date().toISOString(),
 	});
 
 	logger.info("scheduler", `Task ${task.name} ${status}`, {

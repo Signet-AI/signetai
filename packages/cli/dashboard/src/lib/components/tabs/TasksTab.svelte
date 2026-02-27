@@ -134,6 +134,7 @@ onMount(() => {
 	task={ts.detailTask}
 	runs={ts.detailRuns}
 	loading={ts.detailLoading}
+	liveConnected={ts.detailStreamConnected}
 	onclose={closeDetail}
 	ontrigger={doTrigger}
 	ondelete={doDelete}

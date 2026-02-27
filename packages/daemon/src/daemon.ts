@@ -96,6 +96,11 @@ import {
 	CRON_PRESETS,
 } from "./scheduler";
 import {
+	emitTaskStream,
+	getTaskStreamSnapshot,
+	subscribeTaskStream,
+} from "./scheduler/task-stream";
+import {
 	createOllamaProvider,
 	createClaudeCodeProvider,
 } from "./pipeline/provider";
@@ -5368,6 +5373,89 @@ app.post("/api/update/run", async (c) => {
 // Scheduled Tasks API
 // ============================================================================
 
+app.get("/api/tasks/:id/stream", (c) => {
+	const taskId = c.req.param("id");
+
+	const taskExists = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ?").get(taskId),
+	);
+
+	if (!taskExists) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
+	const encoder = new TextEncoder();
+
+	const stream = new ReadableStream({
+		start(controller) {
+			const writeEvent = (event: unknown) => {
+				const data = `data: ${JSON.stringify(event)}\n\n`;
+				controller.enqueue(encoder.encode(data));
+			};
+
+			writeEvent({
+				type: "connected",
+				taskId,
+				timestamp: new Date().toISOString(),
+			});
+
+			const snapshot = getTaskStreamSnapshot(taskId);
+			if (snapshot) {
+				writeEvent({
+					type: "run-started",
+					taskId,
+					runId: snapshot.runId,
+					startedAt: snapshot.startedAt,
+					timestamp: new Date().toISOString(),
+				});
+
+				for (const chunk of snapshot.stdoutChunks) {
+					writeEvent({
+						type: "run-output",
+						taskId,
+						runId: snapshot.runId,
+						stream: "stdout",
+						chunk,
+						timestamp: new Date().toISOString(),
+					});
+				}
+
+				for (const chunk of snapshot.stderrChunks) {
+					writeEvent({
+						type: "run-output",
+						taskId,
+						runId: snapshot.runId,
+						stream: "stderr",
+						chunk,
+						timestamp: new Date().toISOString(),
+					});
+				}
+			}
+
+			const unsubscribe = subscribeTaskStream(taskId, (event) => {
+				writeEvent(event);
+			});
+
+			const keepAlive = setInterval(() => {
+				controller.enqueue(encoder.encode(": keepalive\n\n"));
+			}, 15_000);
+
+			c.req.raw.signal.addEventListener("abort", () => {
+				clearInterval(keepAlive);
+				unsubscribe();
+			});
+		},
+	});
+
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+		},
+	});
+});
+
 // List all tasks (joined with last run status)
 app.get("/api/tasks", (c) => {
 	const tasks = getDbAccessor().withReadDb((db) =>
@@ -5554,12 +5642,43 @@ app.post("/api/tasks/:id/run", async (c) => {
 		).run(now, now, taskId);
 	});
 
+	emitTaskStream({
+		type: "run-started",
+		taskId,
+		runId,
+		startedAt: now,
+		timestamp: new Date().toISOString(),
+	});
+
 	// Spawn in background (don't await)
 	import("./scheduler/spawn").then((mod) => {
 		mod.spawnTask(
 			task.harness as "claude-code" | "opencode",
 			task.prompt as string,
 			task.working_directory as string | null,
+			undefined,
+			{
+				onStdoutChunk: (chunk) => {
+					emitTaskStream({
+						type: "run-output",
+						taskId,
+						runId,
+						stream: "stdout",
+						chunk,
+						timestamp: new Date().toISOString(),
+					});
+				},
+				onStderrChunk: (chunk) => {
+					emitTaskStream({
+						type: "run-output",
+						taskId,
+						runId,
+						stream: "stderr",
+						chunk,
+						timestamp: new Date().toISOString(),
+					});
+				},
+			},
 		).then((result) => {
 			const completedAt = new Date().toISOString();
 			const status =
@@ -5574,6 +5693,17 @@ app.post("/api/tasks/:id/run", async (c) => {
 					     stdout = ?, stderr = ?, error = ?
 					 WHERE id = ?`,
 				).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
+			});
+
+			emitTaskStream({
+				type: "run-completed",
+				taskId,
+				runId,
+				status,
+				completedAt,
+				exitCode: result.exitCode,
+				error: result.error,
+				timestamp: new Date().toISOString(),
 			});
 		});
 	});
