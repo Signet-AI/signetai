@@ -1962,3 +1962,102 @@ LogCategory union in logger.ts.
    - Add diagnostics domain, analytics stages, timeline events, and
      `/api/predictor/*` routes
    - Add dashboard Predictor tab with cold-start and active modes
+
+---
+
+## Phase 2 Implementation Notes
+
+Completed: 2026-02-27
+
+### What was built
+
+`data.rs` — complete rewrite (~480 LOC) implementing the SQLite data
+pipeline for autonomous training:
+
+- **DataConfig** — min_scorer_confidence (0.6), loss_temperature (0.5),
+  native_dim (768)
+- **LoadResult** — returns both samples and `sessions_skipped` count
+  for accurate telemetry
+- **3-query pipeline**: scored sessions → per-session candidates
+  (session_memories + memories + embeddings join) → session gap
+- **12-dim feature vector**: recency (log), importance, access frequency
+  (log), cyclical time encodings (hour/dow/month sin+cos), session gap
+  (log), embedding flag, deletion flag
+- **Blended label construction**: deleted → -0.3, injected with
+  per-memory relevance ± FTS adjustment, non-injected with graduated
+  FTS signal (0/1/2+ hits → 0.0/0.3/0.6)
+- **Synthetic query embedding**: mean of injected candidate embeddings
+- **FNV1a project slot hashing**: 32 slots via public fnv1a_hash from
+  tokenizer
+- **Manual ISO 8601 parsing**: Howard Hinnant civil date algorithm,
+  Tomohiko Sakamoto day-of-week — no chrono dependency
+
+`training.rs` — extended with:
+- `build_candidates_for_sample` helper (shared by train_batch,
+  record_top5, evaluate_canary)
+- `train_epochs` — multi-epoch training with early stopping at loss <
+  1e-6
+- `CanaryMetrics` + `record_top5` + `evaluate_canary` — pre/post
+  training top-5 overlap stability and score variance
+
+`protocol.rs` — new types:
+- `TrainFromDbParams` (db_path, checkpoint_path, limit, epochs,
+  temperature, min_confidence)
+- `TrainFromDbResult` (loss, step, samples_used/skipped, duration_ms,
+  canary metrics, checkpoint_saved)
+- `SaveCheckpointParams` / `SaveCheckpointResult`
+
+`main.rs` — new capabilities:
+- `--checkpoint` CLI arg for checkpoint restore at startup
+- `train_from_db` RPC method: SQLite load → canary/training split →
+  multi-epoch training → canary evaluation → validation gates → auto
+  checkpoint save
+- `save_checkpoint` RPC method
+- `handle_rpc` generic helper to DRY up JSON-RPC dispatch
+- `format_timestamp()` producing RFC3339 via Howard Hinnant civil_from_days
+
+`tokenizer.rs` — `fnv1a64` → `pub fn fnv1a_hash` for cross-module use
+
+### Test results
+
+29 tests passing, 0 clippy warnings. Test coverage:
+- Embedding blob parsing (valid, wrong size, empty)
+- Feature vector construction (12 dims, known values)
+- Label construction (all 5 branches)
+- Project slot hashing (determinism, None → 0)
+- Query embedding (mean of 2, no injected → zero vec)
+- Timestamp parsing, days_since_epoch (epoch 0, Y2K)
+- Integration test with in-memory SQLite + VACUUM INTO
+- train_epochs loss reduction
+
+### Smoke test
+
+```
+echo '{"jsonrpc":"2.0","id":1,"method":"train_from_db","params":{...}}' \
+  | ./target/release/predictor
+```
+Returns valid JSON-RPC response. Current production DB has 0
+session_memories rows (Phase 0 table exists but not yet populated by
+running daemon), so samples_used=0 is expected. Pipeline correctly
+queries, filters by confidence, and handles empty candidate sets.
+
+### Schema deviations (documented)
+
+1. **No `superseded_by` column** — using `is_deleted` (migration 002)
+   as the negative signal. Label is -0.3.
+2. **No session context embedding** — using FTS hit count as proxy for
+   topical relevance of non-injected memories. Phase 3 will compute
+   real context embeddings.
+3. **`fts_hit_count == 1 → 0.3`** — graduated signal not in original
+   spec. Provides smoother gradient between "never matched" (0.0) and
+   "matched 2+ times" (0.6).
+
+### Open gaps (deferred to Phase 3+)
+
+- Daemon sidecar lifecycle (spawn, health, restart)
+- `predictor-client.ts` JSON-RPC client
+- RRF fusion in hooks.ts
+- NDCG comparison + success rate EMA
+- `predictor_comparisons` / `predictor_training_log` migrations
+- Cosine similarity threshold for non-injected negatives
+- Dashboard predictor tab

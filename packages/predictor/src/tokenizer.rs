@@ -16,7 +16,7 @@ impl HashTrickTokenizer {
     pub fn token_indices(&self, text: &str) -> Vec<usize> {
         split_tokens(text)
             .into_iter()
-            .map(|token| fnv1a64(token.as_bytes()) as usize % self.buckets)
+            .map(|token| fnv1a_hash(token.as_bytes()) as usize % self.buckets)
             .collect()
     }
 
@@ -55,7 +55,7 @@ fn split_tokens(text: &str) -> Vec<&str> {
         .collect()
 }
 
-fn fnv1a64(bytes: &[u8]) -> u64 {
+pub fn fnv1a_hash(bytes: &[u8]) -> u64 {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
 
