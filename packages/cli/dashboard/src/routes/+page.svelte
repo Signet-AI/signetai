@@ -114,7 +114,7 @@
 		onthemetoggle={toggleTheme}
 	/>
 	<main class="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden
-		m-2 ml-0 rounded-lg border border-[var(--sig-border)]
+		m-2 ml-0 rounded-lg border border-[var(--sig-border)] md:border-l-0
 		bg-[var(--sig-surface)]">
 		<header
 			class="flex h-10 shrink-0 items-center justify-between

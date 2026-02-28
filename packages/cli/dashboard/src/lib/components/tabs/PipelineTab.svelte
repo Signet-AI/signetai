@@ -364,7 +364,7 @@
 
 		<!-- Live feed panel -->
 		<div
-			class={`w-full shrink-0 border-t lg:border-t-0 lg:border-l border-[var(--sig-border)] flex flex-col bg-[var(--sig-bg)] min-h-[220px] max-h-[40vh] lg:max-h-none ${feedWidthClass}`}
+			class={`w-full shrink-0 border-t lg:border-t-0 border-[var(--sig-border)] flex flex-col bg-[var(--sig-bg)] min-h-[220px] max-h-[40vh] lg:max-h-none ${feedWidthClass}`}
 		>
 			<!-- Feed header -->
 			<div class="px-3 py-2 border-b border-[var(--sig-border)] space-y-2">
