@@ -1,6 +1,7 @@
 <script lang="ts">
-import { saveConfigFile, type ConfigFile } from "$lib/api";
+import { saveConfigFileResult, type ConfigFile } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
+import { confirmDiscardChanges, setConfigDirty } from "$lib/stores/unsaved-changes.svelte";
 import MarkdownViewer from "$lib/components/config/MarkdownViewer.svelte";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
 
@@ -37,19 +38,65 @@ const CHAR_BUDGETS: Record<string, number> = {
 
 let editorContent = $state("");
 let saving = $state(false);
+let lastSavedAt = $state<string | null>(null);
+let saveFeedback = $state("");
+let savedByFile = $state<Record<string, string>>({});
+
+let isDirty = $derived((savedByFile[selectedFile] ?? activeFile?.content ?? "") !== editorContent);
+
+$effect(() => {
+	for (const file of mdFiles) {
+		if (savedByFile[file.name] === undefined) {
+			savedByFile = { ...savedByFile, [file.name]: file.content };
+		}
+	}
+});
 
 $effect(() => {
 	editorContent = activeFile?.content ?? "";
 });
 
+$effect(() => {
+	setConfigDirty(isDirty);
+	return () => {
+		setConfigDirty(false);
+	};
+});
+
+function selectFileWithGuard(name: string): void {
+	if (name === selectedFile) return;
+	if (isDirty && !confirmDiscardChanges(`switch files from ${selectedFile} to ${name}`)) {
+		return;
+	}
+	onselectfile(name);
+}
+
+function formatSavedAt(raw: string | null): string {
+	if (!raw) return "";
+	try {
+		return `Last saved ${new Date(raw).toLocaleTimeString()}`;
+	} catch {
+		return "";
+	}
+}
+
 async function saveFile() {
+	if (!isDirty) {
+		saveFeedback = "No changes to save";
+		return;
+	}
+
 	saving = true;
 	try {
-		const success = await saveConfigFile(selectedFile, editorContent);
-		if (success) {
-			toast(`${selectedFile} saved`, "success");
+		const result = await saveConfigFileResult(selectedFile, editorContent);
+		if (result.ok) {
+			savedByFile = { ...savedByFile, [selectedFile]: editorContent };
+			lastSavedAt = new Date().toISOString();
+			saveFeedback = `Saved ${selectedFile}`;
+			toast(saveFeedback, "success");
 		} else {
-			toast("Failed to save file", "error");
+			saveFeedback = `Failed to save ${selectedFile}`;
+			toast(`${saveFeedback}: ${result.error ?? "unknown error"}`, "error");
 		}
 	} finally {
 		saving = false;
@@ -58,7 +105,7 @@ async function saveFile() {
 </script>
 
 <div class="config-tab">
-	<Tabs.Root value={selectedFile} onValueChange={(v) => onselectfile(v)}>
+	<Tabs.Root value={selectedFile} onValueChange={selectFileWithGuard}>
 		<Tabs.List class="bg-transparent h-auto gap-0 rounded-none border-b border-[var(--sig-border)] px-[var(--space-md)] w-full justify-start">
 			{#each mdFiles as file (file.name)}
 				<Tabs.Trigger
@@ -87,6 +134,11 @@ async function saveFile() {
 			charBudget={CHAR_BUDGETS[selectedFile]}
 			onchange={(v) => { editorContent = v; }}
 			onsave={saveFile}
+			dirty={isDirty}
+			saving={saving}
+			saveDisabled={!isDirty || saving}
+			lastSavedText={formatSavedAt(lastSavedAt)}
+			saveFeedback={saveFeedback}
 		/>
 	{:else}
 		<div class="config-empty">
