@@ -88,6 +88,7 @@ jobs:
 
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
           echo "BUMP_LEVEL=$BUMP" >> $GITHUB_ENV
+          rm -f .bump-level
 
           PACKAGE_FILES=$(git ls-files package.json 'packages/**/package.json' | grep -v '^packages/cli/dashboard/package.json$')
           for file in $PACKAGE_FILES; do
@@ -126,6 +127,7 @@ jobs:
       - name: Push version bump
         if: steps.changes.outputs.skip != 'true'
         run: |
+          rm -f .bump-level
           git pull --rebase origin main
           git push && git push origin "v$NEW_VERSION"
 
