@@ -151,16 +151,18 @@ export function loadPipelineConfig(
 	const nestedProvider = extractionRaw?.provider;
 	const flatProvider = raw.extractionProvider;
 	const flatModel = raw.extractionModel;
-	const resolvedProvider: "ollama" | "claude-code" =
-		nestedProvider === "claude-code" || flatProvider === "claude-code"
-			? "claude-code"
-			: nestedProvider === "ollama" || flatProvider === "ollama"
-				? "ollama"
-				: typeof (extractionRaw?.model ?? flatModel) === "string" &&
-					  nestedProvider === undefined &&
-					  flatProvider === undefined
+	const resolvedProvider: "ollama" | "claude-code" | "opencode" =
+		nestedProvider === "opencode" || flatProvider === "opencode"
+			? "opencode"
+			: nestedProvider === "claude-code" || flatProvider === "claude-code"
+				? "claude-code"
+				: nestedProvider === "ollama" || flatProvider === "ollama"
 					? "ollama"
-					: d.extraction.provider;
+					: typeof (extractionRaw?.model ?? flatModel) === "string" &&
+						  nestedProvider === undefined &&
+						  flatProvider === undefined
+						? "ollama"
+						: d.extraction.provider;
 
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : d.enabled,

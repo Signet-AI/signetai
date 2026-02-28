@@ -413,7 +413,7 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 						</FormField>
 					{/each}
 
-					<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses the Claude Code headless provider.">
+					<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses Claude Code CLI; opencode uses the OpenCode HTTP server.">
 						{#snippet children()}
 							<Select.Root
 								type="single"
@@ -429,6 +429,7 @@ let hasFiles = $derived(!!agentFile || !!configFile);
 									<Select.Item class={selectItemClass} value="" label="\u2014 select \u2014" />
 									<Select.Item class={selectItemClass} value="ollama" label="ollama" />
 									<Select.Item class={selectItemClass} value="claude-code" label="claude-code" />
+									<Select.Item class={selectItemClass} value="opencode" label="opencode" />
 								</Select.Content>
 							</Select.Root>
 						{/snippet}

@@ -130,7 +130,7 @@ export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
 // -- Pipeline v2 sub-config interfaces --
 
 export interface PipelineExtractionConfig {
-	readonly provider: "ollama" | "claude-code";
+	readonly provider: "ollama" | "claude-code" | "opencode";
 	readonly model: string;
 	readonly timeout: number;
 	readonly minConfidence: number;
