@@ -248,37 +248,7 @@ const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 const DEFAULT_PORT = 3850;
 
-async function waitForDaemonHealthy(
-	port: number,
-	targetVersion: string | undefined,
-	timeoutMs = 15000,
-): Promise<"healthy" | "timeout" | "wrong-version"> {
-	const start = Date.now();
-	while (Date.now() - start < timeoutMs) {
-		try {
-			const res = await fetch(`http://localhost:${port}/health`, {
-				signal: AbortSignal.timeout(2000),
-			});
-			if (res.ok) {
-				const data = (await res.json()) as {
-					version?: string;
-					db?: boolean;
-				};
-				if (data.db !== true) {
-					// DB not ready yet, keep polling
-				} else if (targetVersion && data.version !== targetVersion) {
-					return "wrong-version";
-				} else {
-					return "healthy";
-				}
-			}
-		} catch {
-			// Not up yet
-		}
-		await new Promise((resolve) => setTimeout(resolve, 500));
-	}
-	return "timeout";
-}
+
 
 async function isDaemonRunning(): Promise<boolean> {
 	try {
@@ -351,25 +321,15 @@ async function startDaemon(): Promise<boolean> {
 	// Always use bun for better native module support
 	const runtime = "bun";
 
-	const outLog = join(LOG_DIR, "daemon.out.log");
-	const errLog = join(LOG_DIR, "daemon.err.log");
-
 	const proc = spawn(runtime, [daemonPath], {
 		detached: true,
-		stdio: ["ignore", "pipe", "pipe"],
+		stdio: "ignore",
 		env: {
 			...process.env,
 			SIGNET_PORT: DEFAULT_PORT.toString(),
 			SIGNET_PATH: AGENTS_DIR,
 		},
 	});
-
-	// Write logs to files
-	const fs = await import("fs");
-	const out = fs.createWriteStream(outLog, { flags: "a" });
-	const err = fs.createWriteStream(errLog, { flags: "a" });
-	proc.stdout?.pipe(out);
-	proc.stderr?.pipe(err);
 
 	proc.unref();
 
@@ -3224,12 +3184,7 @@ async function doRestart() {
 	const started = await startDaemon();
 
 	if (started) {
-		const health = await waitForDaemonHealthy(DEFAULT_PORT, undefined);
-		if (health === "healthy") {
-			spinner.succeed("Daemon restarted and healthy");
-		} else {
-			spinner.warn("Daemon restarted but health check " + health);
-		}
+		spinner.succeed("Daemon restarted");
 		console.log(chalk.dim(`  Dashboard: http://localhost:${DEFAULT_PORT}`));
 	} else {
 		spinner.fail("Failed to restart daemon");
