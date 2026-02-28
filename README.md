@@ -221,7 +221,7 @@ Copy this prompt and paste it to your AI agent (Claude Code, OpenClaw,
 Clawdbot, OpenCode, etc.):
 
 ```
-Install Signet AI, the open agent memory and identity system: https://signetai.sh/skill.md
+Install and fully configure Signet AI by following this guide exactly: https://signetai.sh/skill.md
 ```
 
 The linked guide walks your agent through prerequisites, installation,
