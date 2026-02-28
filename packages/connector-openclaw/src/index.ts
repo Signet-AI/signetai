@@ -60,6 +60,7 @@ interface OpenClawConfigShape {
 	};
 	agents?: {
 		defaults?: {
+			workspace?: string;
 			memorySearch?: {
 				enabled?: boolean;
 			};
@@ -371,6 +372,45 @@ export class OpenClawConnector extends BaseConnector {
 	}
 
 	/**
+	 * Return normalized workspace paths declared in discovered OpenClaw configs.
+	 *
+	 * Paths are expanded (`~` -> home) and de-duplicated.
+	 */
+	getDiscoveredWorkspacePaths(): string[] {
+		const workspaces: string[] = [];
+		const seen = new Set<string>();
+
+		for (const configPath of this.getDiscoveredConfigPaths()) {
+			try {
+				const config = parseJsonOrJson5(
+					readFileSync(configPath, "utf-8"),
+				) as OpenClawConfigShape;
+				const rawWorkspace = config.agents?.defaults?.workspace;
+				if (typeof rawWorkspace !== "string") {
+					continue;
+				}
+
+				const trimmed = rawWorkspace.trim();
+				if (trimmed.length === 0) {
+					continue;
+				}
+
+				const expanded = resolve(this.expandPath(trimmed));
+				if (seen.has(expanded)) {
+					continue;
+				}
+
+				seen.add(expanded);
+				workspaces.push(expanded);
+			} catch {
+				// Malformed config; skip workspace extraction.
+			}
+		}
+
+		return workspaces;
+	}
+
+	/**
 	 * Uninstall the connector.
 	 *
 	 * Disables both legacy hooks and plugin entries, removes hook handler files.
@@ -414,7 +454,7 @@ export class OpenClawConnector extends BaseConnector {
 		];
 
 		// Remove hook handler files from the first valid base path
-		const basePath = join(homedir(), ".agents");
+		const basePath = join(this.getHomeDir(), ".agents");
 		const hookDir = join(basePath, "hooks", "agent-memory");
 		for (const file of ["HOOK.md", "handler.js", "package.json"]) {
 			const filePath = join(hookDir, file);
@@ -514,7 +554,7 @@ export class OpenClawConnector extends BaseConnector {
 			}
 		}
 
-		const home = homedir();
+		const home = this.getHomeDir();
 		const xdgConfigHome = process.env.XDG_CONFIG_HOME
 			? this.expandPath(process.env.XDG_CONFIG_HOME)
 			: join(home, ".config");
@@ -833,10 +873,27 @@ configured by rejecting session claims from the second path (HTTP 409).
 		return 2;
 	}
 
+	private getHomeDir(): string {
+		const home = process.env.HOME;
+		if (typeof home === "string" && home.trim().length > 0) {
+			return home.trim();
+		}
+
+		return homedir();
+	}
+
 	/** Expand `~` to the home directory. */
 	private expandPath(path: string): string {
+		if (path === "~") {
+			return this.getHomeDir();
+		}
+
+		if (path.startsWith("~/")) {
+			return join(this.getHomeDir(), path.slice(2));
+		}
+
 		if (path.startsWith("~")) {
-			return join(homedir(), path.slice(1));
+			return join(this.getHomeDir(), path.slice(1));
 		}
 		return path;
 	}
