@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.11.1] - 2026-02-28
+
+### Bug Fixes
+
+- **install**: harden agent setup instructions and add guard
+
+
 ## [0.11.0] - 2026-02-28
 
 ### Bug Fixes
