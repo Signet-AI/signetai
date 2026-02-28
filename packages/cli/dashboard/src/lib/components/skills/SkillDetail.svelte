@@ -5,6 +5,7 @@ import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import { sk, doInstall, doUninstall, closeDetail } from "$lib/stores/skills.svelte";
 import { toast } from "$lib/stores/toast.svelte";
+import { computeTrustProfile } from "$lib/skills/risk-profile";
 
 let open = $derived(sk.detailOpen);
 
@@ -49,6 +50,14 @@ let providerUrl = $derived.by(() => {
 	if (!src?.provider) return null;
 	if (src.provider === "clawhub") return `https://clawhub.ai/skills/${src.name}`;
 	return `https://skills.sh`;
+});
+
+let trustProfile = $derived.by(() => {
+	const source = sk.detailSource;
+	const meta = sk.detailMeta;
+	if (!source && !meta) return null;
+	const item = { ...(source ?? {}), ...(meta ?? {}) };
+	return computeTrustProfile(item, sk.installed.map((s) => s.name));
 });
 </script>
 
@@ -149,11 +158,45 @@ let providerUrl = $derived.by(() => {
 								{sk.detailSource.versions} version{sk.detailSource.versions !== 1 ? "s" : ""}
 							</span>
 						{/if}
-						{#if sk.detailSource.author}
+						{#if sk.detailSource.maintainer || sk.detailSource.author}
 							<span class="detail-stat">
-								by {sk.detailSource.author}
+								by {sk.detailSource.maintainer ?? sk.detailSource.author}
 							</span>
 						{/if}
+					</div>
+				{/if}
+
+				{#if trustProfile}
+					<div class="trust-card">
+						<div class="trust-head">Trust profile before install</div>
+						<div class="trust-grid">
+							<div>
+								<span class="trust-label">Compatibility</span>
+								<span class="trust-value">{trustProfile.compatibilityScore}%</span>
+							</div>
+							<div>
+								<span class="trust-label">Security confidence</span>
+								<span class="trust-value">{trustProfile.securityConfidence}%</span>
+							</div>
+							<div>
+								<span class="trust-label">Verified</span>
+								<span class="trust-value">{trustProfile.verified}</span>
+							</div>
+							<div>
+								<span class="trust-label">Maintainer</span>
+								<span class="trust-value">{trustProfile.maintainer}</span>
+							</div>
+							<div>
+								<span class="trust-label">Permissions</span>
+								<span class="trust-value">{trustProfile.permissionFootprint}</span>
+							</div>
+						</div>
+						<p class="trust-reason">
+							Compatibility: {trustProfile.compatibilityReason}
+						</p>
+						<p class="trust-reason">
+							Security: {trustProfile.securityReason}
+						</p>
 					</div>
 				{/if}
 
@@ -290,6 +333,55 @@ let providerUrl = $derived.by(() => {
 	}
 	.detail-provider-link:hover {
 		text-decoration: underline;
+	}
+
+	.trust-card {
+		margin-top: 12px;
+		padding: 10px;
+		border: 1px solid var(--sig-border-strong);
+		background: var(--sig-bg);
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.trust-head {
+		font-family: var(--font-display);
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--sig-text-bright);
+	}
+
+	.trust-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 6px;
+	}
+
+	.trust-label {
+		display: block;
+		font-family: var(--font-mono);
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--sig-text-muted);
+	}
+
+	.trust-value {
+		display: block;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--sig-text);
+		margin-top: 2px;
+	}
+
+	.trust-reason {
+		margin: 0;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		line-height: 1.45;
+		color: var(--sig-text-muted);
 	}
 
 	:global(.skill-markdown) {

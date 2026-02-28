@@ -41,6 +41,9 @@ export const sk = $state({
 	sortBy: "installs" as SortBy,
 	providerFilter: "all" as ProviderFilter,
 
+	// Compare mode
+	compareSelected: [] as string[],
+
 	// Detail panel
 	selectedName: null as string | null,
 	detailOpen: false,
@@ -89,6 +92,25 @@ export function getFilteredCatalog(): SkillSearchResult[] {
 export function getFilteredResults(): SkillSearchResult[] {
 	const filtered = filterByProvider(sk.results, sk.providerFilter);
 	return sortItems(filtered, sk.sortBy);
+}
+
+export function resetFilters(): void {
+	sk.sortBy = "installs";
+	sk.providerFilter = "all";
+}
+
+export function clearCompare(): void {
+	sk.compareSelected = [];
+}
+
+export function toggleCompare(skillKey: string): void {
+	const has = sk.compareSelected.includes(skillKey);
+	if (has) {
+		sk.compareSelected = sk.compareSelected.filter((k) => k !== skillKey);
+		return;
+	}
+	if (sk.compareSelected.length >= 3) return;
+	sk.compareSelected = [...sk.compareSelected, skillKey];
 }
 
 export async function fetchInstalled(): Promise<void> {

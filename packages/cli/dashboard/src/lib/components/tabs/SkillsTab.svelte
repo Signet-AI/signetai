@@ -5,6 +5,9 @@ import {
 	fetchInstalled,
 	fetchCatalog,
 	setQuery,
+	resetFilters,
+	clearCompare,
+	toggleCompare,
 	openDetail,
 	doInstall,
 	doUninstall,
@@ -17,7 +20,9 @@ import {
 } from "$lib/stores/skills.svelte";
 import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
 import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
+import SkillsComparePanel from "$lib/components/skills/SkillsComparePanel.svelte";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
+import type { SkillSearchResult } from "$lib/api";
 
 
 let searchInput = $state<HTMLInputElement | null>(null);
@@ -75,6 +80,52 @@ let displayItems = $derived.by(() => {
 let displayMode = $derived<"installed" | "browse">(
 	sk.view === "installed" && !sk.query.trim() ? "installed" : "browse",
 );
+
+let emptyState = $derived<"installed" | "browse" | "search" | null>(
+	sk.query.trim() && displayItems.length === 0
+		? "search"
+		: sk.view === "installed" && !sk.query.trim() && displayItems.length === 0
+			? "installed"
+			: sk.view === "browse" && !sk.query.trim() && displayItems.length === 0
+				? "browse"
+				: null,
+);
+
+let compareItems = $derived.by(() => {
+	const available = displayItems.filter((item): item is SkillSearchResult => "fullName" in item);
+	return available.filter((item) => sk.compareSelected.includes(item.fullName));
+});
+
+function handleEmptyAction(action: "primary" | "secondary") {
+	if (emptyState === "installed") {
+		if (action === "primary") {
+			sk.view = "browse";
+			fetchCatalog();
+			return;
+		}
+		resetFilters();
+		return;
+	}
+	if (emptyState === "browse") {
+		if (action === "primary") {
+			sk.providerFilter = "all";
+			return;
+		}
+		sk.catalogLoaded = false;
+		fetchCatalog();
+		return;
+	}
+	if (emptyState === "search") {
+		if (action === "primary") {
+			setQuery("");
+			return;
+		}
+		setQuery("");
+		sk.view = "browse";
+		sk.providerFilter = "all";
+		fetchCatalog();
+	}
+}
 
 onMount(() => {
 	fetchInstalled();
@@ -210,6 +261,14 @@ onMount(() => {
 	</Tabs.Root>
 
 	<!-- Content -->
+	{#if compareItems.length > 0}
+		<SkillsComparePanel
+			items={compareItems}
+			onRemove={(key) => toggleCompare(key)}
+			onClear={clearCompare}
+		/>
+	{/if}
+
 	{#if sk.searching || sk.catalogLoading || sk.loading}
 		<div
 			class="flex-1 flex items-center justify-center
@@ -227,6 +286,10 @@ onMount(() => {
 			onitemclick={(name) => openDetail(name)}
 			oninstall={(name) => doInstall(name)}
 			onuninstall={(name) => doUninstall(name)}
+			emptyState={emptyState}
+			onemptyaction={handleEmptyAction}
+			compareSelectedKeys={sk.compareSelected}
+			oncomparetoggle={toggleCompare}
 		/>
 	{/if}
 </div>

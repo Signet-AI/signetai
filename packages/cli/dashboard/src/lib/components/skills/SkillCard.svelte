@@ -8,11 +8,13 @@ type Props = {
 	mode: "installed" | "browse";
 	featured?: boolean;
 	selected?: boolean;
+	compareSelected?: boolean;
 	installing?: boolean;
 	uninstalling?: boolean;
 	onclick?: () => void;
 	oninstall?: () => void;
 	onuninstall?: () => void;
+	oncomparetoggle?: () => void;
 };
 
 let {
@@ -20,11 +22,13 @@ let {
 	mode,
 	featured = false,
 	selected = false,
+	compareSelected = false,
 	installing = false,
 	uninstalling = false,
 	onclick,
 	oninstall,
 	onuninstall,
+	oncomparetoggle,
 }: Props = $props();
 
 function isSearchResult(
@@ -90,6 +94,28 @@ let isInstalled = $derived(
 				<div class="card-header">
 					<span class="card-name" class:card-name-featured={featured}>{item.name}</span>
 					<div class="badge-row">
+						{#if mode === "browse" && isSearchResult(item)}
+							<span
+								class="compare-toggle"
+								role="checkbox"
+								aria-checked={compareSelected}
+								tabindex="0"
+								onclick={(e) => {
+									e.stopPropagation();
+									oncomparetoggle?.();
+								}}
+								onkeydown={(e) => {
+									if (e.key === "Enter" || e.key === " ") {
+										e.preventDefault();
+										e.stopPropagation();
+										oncomparetoggle?.();
+									}
+								}}
+							>
+								<span class="compare-dot" class:active={compareSelected}></span>
+								<span>Compare</span>
+							</span>
+						{/if}
 						{#if isSearchResult(item) && item.provider}
 							<span
 								class="provider-badge"
@@ -376,5 +402,30 @@ let isInstalled = $derived(
 
 	.card-action {
 		margin-top: auto;
+	}
+
+	.compare-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--font-mono);
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--sig-text-muted);
+		cursor: pointer;
+		outline: none;
+	}
+
+	.compare-dot {
+		display: inline-block;
+		width: 8px;
+		height: 8px;
+		border: 1px solid var(--sig-border-strong);
+	}
+
+	.compare-dot.active {
+		background: var(--sig-accent);
+		border-color: var(--sig-accent);
 	}
 </style>

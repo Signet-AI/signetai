@@ -65,6 +65,18 @@ author: 'single-quoted'
 		expect(meta.description).toBe("quoted description");
 		expect(meta.author).toBe("single-quoted");
 	});
+
+	it("parses optional verified and permissions metadata", () => {
+		const content = `---
+description: metadata skill
+verified: true
+permissions: [network, filesystem]
+---`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.verified).toBe(true);
+		expect(meta.permissions).toEqual(["network", "filesystem"]);
+	});
 });
 
 // ---------------------------------------------------------------------------
