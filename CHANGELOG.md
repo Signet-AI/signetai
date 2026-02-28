@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.10.2] - 2026-02-28
+
+### Bug Fixes
+
+- **dashboard**: improve expanded pipeline log visibility
+
+
 ## [0.10.1] - 2026-02-28
 
 ### Refactoring
