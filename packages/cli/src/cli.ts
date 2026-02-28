@@ -243,9 +243,6 @@ async function gitAutoCommit(
 // ============================================================================
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
-const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
-const PID_FILE = join(DAEMON_DIR, "pid");
-const LOG_DIR = join(DAEMON_DIR, "logs");
 const DEFAULT_PORT = 3850;
 
 
@@ -716,10 +713,6 @@ function detectPreferredOpenClawWorkspace(defaultPath: string): string | null {
 			score: scoreOpenClawWorkspace(workspacePath),
 		}))
 		.sort((a, b) => b.score - a.score);
-
-	if (ranked.length === 0) {
-		return null;
-	}
 
 	if (ranked[0].score > 0) {
 		return ranked[0].workspacePath;
