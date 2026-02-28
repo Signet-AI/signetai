@@ -4,8 +4,7 @@ import { getSecrets, putSecret, deleteSecret } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
-import PageHero from "$lib/components/layout/PageHero.svelte";
-import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
+
 
 let secrets = $state<string[]>([]);
 let secretsLoading = $state(false);
@@ -53,13 +52,6 @@ onMount(() => {
 </script>
 
 <div class="flex h-full flex-col overflow-hidden">
-	<PageHero
-		title={PAGE_HEADERS.secrets.title}
-		wordmarkLines={PAGE_HEADERS.secrets.wordmarkLines}
-		eyebrow={PAGE_HEADERS.secrets.eyebrow}
-		description={PAGE_HEADERS.secrets.description}
-	/>
-
 	<div class="flex flex-1 flex-col gap-[var(--space-md)] overflow-hidden p-[var(--space-md)]">
 		<div class="flex shrink-0 gap-[var(--space-sm)]">
 		<Input

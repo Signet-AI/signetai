@@ -19,8 +19,7 @@ import { mem } from "$lib/stores/memory.svelte";
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
 import EmbeddingCanvas3D from "../embeddings/EmbeddingCanvas3D.svelte";
 import EmbeddingInspector from "../embeddings/EmbeddingInspector.svelte";
-import PageHero from "$lib/components/layout/PageHero.svelte";
-import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
+
 import {
 	type RelationKind,
 	type EmbeddingRelation,
@@ -1159,14 +1158,6 @@ $effect(() => {
 </script>
 
 <div class="flex h-full flex-col overflow-hidden">
-	<PageHero
-		title={PAGE_HEADERS.embeddings.title}
-		wordmarkLines={PAGE_HEADERS.embeddings.wordmarkLines}
-		wordmarkMaxWidth={PAGE_HEADERS.embeddings.wordmarkMaxWidth}
-		eyebrow={PAGE_HEADERS.embeddings.eyebrow}
-		description={PAGE_HEADERS.embeddings.description}
-	/>
-
 	<div class="flex flex-1 min-h-0 bg-[#050505] max-lg:flex-col">
 		<div
 		bind:this={graphRegion}
