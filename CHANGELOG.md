@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.10.0] - 2026-02-28
+
+### Bug Fixes
+
+- **dashboard**: improve pipeline live feed usability
+- **cli**: prevent CLI from hanging after daemon start/restart
+
+
 ## [0.9.0] - 2026-02-28
 
 ### Features
