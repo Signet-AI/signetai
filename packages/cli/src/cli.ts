@@ -10,7 +10,7 @@ import ora from "ora";
 import { input, select, confirm, checkbox, password } from "@inquirer/prompts";
 import { spawn, spawnSync } from "child_process";
 import { homedir, platform } from "os";
-import { join, dirname } from "path";
+import { join, dirname, resolve as resolvePath } from "path";
 import {
 	existsSync,
 	mkdirSync,
@@ -242,10 +242,7 @@ async function gitAutoCommit(
 // Daemon Management
 // ============================================================================
 
-const AGENTS_DIR = join(homedir(), ".agents");
-const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
-const PID_FILE = join(DAEMON_DIR, "pid");
-const LOG_DIR = join(DAEMON_DIR, "logs");
+const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const DEFAULT_PORT = 3850;
 
 
@@ -294,9 +291,12 @@ async function getDaemonStatus(): Promise<{
 	return { running: false, pid: null, uptime: null, version: null };
 }
 
-async function startDaemon(): Promise<boolean> {
-	mkdirSync(DAEMON_DIR, { recursive: true });
-	mkdirSync(LOG_DIR, { recursive: true });
+async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
+	const daemonDir = join(agentsDir, ".daemon");
+	const logDir = join(daemonDir, "logs");
+
+	mkdirSync(daemonDir, { recursive: true });
+	mkdirSync(logDir, { recursive: true });
 
 	// Find daemon script (check multiple locations for dev vs published package)
 	const daemonLocations = [
@@ -327,7 +327,7 @@ async function startDaemon(): Promise<boolean> {
 		env: {
 			...process.env,
 			SIGNET_PORT: DEFAULT_PORT.toString(),
-			SIGNET_PATH: AGENTS_DIR,
+			SIGNET_PATH: agentsDir,
 		},
 	});
 
@@ -344,11 +344,13 @@ async function startDaemon(): Promise<boolean> {
 	return false;
 }
 
-async function stopDaemon(): Promise<boolean> {
+async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
+	const pidFile = join(agentsDir, ".daemon", "pid");
+
 	// Try graceful shutdown via PID
-	if (existsSync(PID_FILE)) {
+	if (existsSync(pidFile)) {
 		try {
-			const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
+			const pid = parseInt(readFileSync(pidFile, "utf-8").trim(), 10);
 			process.kill(pid, "SIGTERM");
 
 			// Wait for shutdown
@@ -581,6 +583,27 @@ function normalizeStringValue(value: unknown): string | null {
 	return trimmed.length > 0 ? trimmed : null;
 }
 
+function extractPathOption(value: unknown): string | null {
+	if (typeof value !== "object" || value === null) {
+		return null;
+	}
+
+	const directPath = normalizeStringValue(Reflect.get(value, "path"));
+	if (directPath) {
+		return directPath;
+	}
+
+	const optsGetter = Reflect.get(value, "opts");
+	if (typeof optsGetter === "function") {
+		const optsValue = optsGetter();
+		if (typeof optsValue === "object" && optsValue !== null) {
+			return normalizeStringValue(Reflect.get(optsValue, "path"));
+		}
+	}
+
+	return null;
+}
+
 function normalizeChoice<T extends string>(
 	value: unknown,
 	allowed: readonly T[],
@@ -628,6 +651,74 @@ function parseSearchBalanceValue(value: unknown): number | null {
 	}
 
 	return parsed;
+}
+
+function expandUserPath(pathValue: string): string {
+	const trimmed = pathValue.trim();
+	if (trimmed === "~") {
+		return homedir();
+	}
+
+	if (trimmed.startsWith("~/")) {
+		return join(homedir(), trimmed.slice(2));
+	}
+
+	if (trimmed.startsWith("~")) {
+		return join(homedir(), trimmed.slice(1));
+	}
+
+	return trimmed;
+}
+
+function normalizeAgentPath(pathValue: string): string {
+	return resolvePath(expandUserPath(pathValue));
+}
+
+function hasExistingAgentState(detection: SetupDetection): boolean {
+	return (
+		detection.memoryDb ||
+		detection.agentYaml ||
+		detection.identityFiles.length > 0
+	);
+}
+
+function scoreOpenClawWorkspace(pathValue: string): number {
+	const detection = detectExistingSetup(pathValue);
+	let score = 0;
+
+	if (detection.memoryDb) score += 100;
+	if (detection.agentYaml) score += 60;
+	if (detection.identityFiles.length >= 2) score += 40;
+	if (detection.agentsDir) score += 10;
+
+	return score;
+}
+
+function detectPreferredOpenClawWorkspace(defaultPath: string): string | null {
+	const connector = new OpenClawConnector();
+	const normalizedDefault = normalizeAgentPath(defaultPath);
+	const discovered = connector
+		.getDiscoveredWorkspacePaths()
+		.map((workspacePath) => normalizeAgentPath(workspacePath))
+		.filter((workspacePath) => workspacePath !== normalizedDefault);
+
+	if (discovered.length === 0) {
+		return null;
+	}
+
+	const unique = [...new Set(discovered)];
+	const ranked = unique
+		.map((workspacePath) => ({
+			workspacePath,
+			score: scoreOpenClawWorkspace(workspacePath),
+		}))
+		.sort((a, b) => b.score - a.score);
+
+	if (ranked[0].score > 0) {
+		return ranked[0].workspacePath;
+	}
+
+	return ranked.length === 1 ? ranked[0].workspacePath : null;
 }
 
 function normalizeHarnessList(rawValues: readonly string[] | undefined): HarnessChoice[] {
@@ -1503,7 +1594,7 @@ async function existingSetupWizard(
 
 		// 9. Start the daemon
 		spinner.text = "Starting daemon...";
-		const daemonStarted = await startDaemon();
+		const daemonStarted = await startDaemon(basePath);
 
 		spinner.succeed(chalk.green("Signet setup complete!"));
 
@@ -1610,11 +1701,40 @@ async function setupWizard(options: SetupWizardOptions) {
 	console.log();
 
 	const nonInteractive = options.nonInteractive === true;
-	const basePath = options.path || AGENTS_DIR;
+	const explicitPath = normalizeStringValue(options.path);
+	let basePath = normalizeAgentPath(explicitPath ?? AGENTS_DIR);
+
+	if (!explicitPath) {
+		const defaultDetection = detectExistingSetup(basePath);
+		if (!hasExistingAgentState(defaultDetection)) {
+			const openClawWorkspace = detectPreferredOpenClawWorkspace(basePath);
+			if (openClawWorkspace) {
+				if (nonInteractive) {
+					basePath = openClawWorkspace;
+				} else {
+					console.log(
+						chalk.cyan(`  Detected OpenClaw workspace: ${openClawWorkspace}`),
+					);
+					const useDetectedWorkspace = await confirm({
+						message: "Use this as the Signet agent directory?",
+						default: true,
+					});
+					if (useDetectedWorkspace) {
+						basePath = openClawWorkspace;
+					}
+					console.log();
+				}
+			}
+		}
+	}
+
 	const existing = detectExistingSetup(basePath);
 
 	if (nonInteractive) {
 		console.log(chalk.dim("  Running in non-interactive mode"));
+		if (!explicitPath && basePath !== AGENTS_DIR) {
+			console.log(chalk.dim(`  Using detected OpenClaw workspace: ${basePath}`));
+		}
 		console.log();
 	}
 
@@ -1661,7 +1781,7 @@ async function setupWizard(options: SetupWizardOptions) {
 			const running = await isDaemonRunning();
 			if (!running) {
 				const spinner = ora("Starting daemon...").start();
-				const started = await startDaemon();
+				const started = await startDaemon(basePath);
 				if (started) {
 					spinner.succeed("Daemon started");
 				} else {
@@ -1688,7 +1808,7 @@ async function setupWizard(options: SetupWizardOptions) {
 		});
 
 		if (action === "dashboard") {
-			await launchDashboard({});
+			await launchDashboard({ path: basePath });
 			return;
 		}
 
@@ -1915,7 +2035,7 @@ async function setupWizard(options: SetupWizardOptions) {
 			if (existingConfigs.length > 0) {
 				console.log();
 				configureOpenClawWs = await confirm({
-					message: `Set OpenClaw workspace to ~/.agents in ${existingConfigs.length} config file(s)?`,
+					message: `Set OpenClaw workspace to ${basePath} in ${existingConfigs.length} config file(s)?`,
 					default: true,
 				});
 			}
@@ -2449,13 +2569,13 @@ ${agentName} is a helpful assistant.
 				basePath,
 			);
 			if (patched.length > 0) {
-				console.log(chalk.dim("\n  ✓ OpenClaw workspace set to ~/.agents"));
+				console.log(chalk.dim(`\n  ✓ OpenClaw workspace set to ${basePath}`));
 			}
 		}
 
 		// Start the daemon
 		spinner.text = "Starting daemon...";
-		const daemonStarted = await startDaemon();
+		const daemonStarted = await startDaemon(basePath);
 
 		spinner.succeed(chalk.green("Signet initialized!"));
 
@@ -2722,12 +2842,15 @@ async function importFromGitHub(basePath: string) {
 
 async function launchDashboard(options: { path?: string }) {
 	console.log(signetLogo());
+	const basePath = normalizeAgentPath(
+		extractPathOption(options) ?? AGENTS_DIR,
+	);
 
 	const running = await isDaemonRunning();
 
 	if (!running) {
 		console.log(chalk.yellow("  Daemon is not running. Starting..."));
-		const started = await startDaemon();
+		const started = await startDaemon(basePath);
 		if (!started) {
 			console.error(chalk.red("  Failed to start daemon"));
 			process.exit(1);
@@ -2747,7 +2870,9 @@ async function launchDashboard(options: { path?: string }) {
 // ============================================================================
 
 async function migrateSchema(options: { path?: string }) {
-	const basePath = options.path || AGENTS_DIR;
+	const basePath = normalizeAgentPath(
+		extractPathOption(options) ?? AGENTS_DIR,
+	);
 	const dbPath = join(basePath, "memory", "memories.db");
 
 	console.log(signetLogo());
@@ -2783,7 +2908,7 @@ async function migrateSchema(options: { path?: string }) {
 		const running = await isDaemonRunning();
 		if (running) {
 			console.log(chalk.dim("  Stopping daemon for migration..."));
-			await stopDaemon();
+			await stopDaemon(basePath);
 			await new Promise((r) => setTimeout(r, 1000));
 		}
 
@@ -2814,7 +2939,7 @@ async function migrateSchema(options: { path?: string }) {
 		// Restart daemon if it was running
 		if (running) {
 			console.log(chalk.dim("  Restarting daemon..."));
-			await startDaemon();
+			await startDaemon(basePath);
 		}
 
 		console.log();
@@ -2830,7 +2955,9 @@ async function migrateSchema(options: { path?: string }) {
 // ============================================================================
 
 async function showStatus(options: { path?: string }) {
-	const basePath = options.path || AGENTS_DIR;
+	const basePath = normalizeAgentPath(
+		extractPathOption(options) ?? AGENTS_DIR,
+	);
 	const existing = detectExistingSetup(basePath);
 
 	console.log(signetLogo());
@@ -2965,9 +3092,13 @@ async function showLogs(options: {
 	follow?: boolean;
 	level?: string;
 	category?: string;
+	path?: string;
 }) {
 	const limit = parseInt(options.lines || "50", 10);
 	const { follow, level, category } = options;
+	const basePath = normalizeAgentPath(
+		extractPathOption(options) ?? AGENTS_DIR,
+	);
 
 	console.log(signetLogo());
 
@@ -3035,8 +3166,9 @@ async function showLogs(options: {
 
 	function fallbackToFile() {
 		// Fall back to reading log files directly
+		const logDir = join(basePath, ".daemon", "logs");
 		const logFile = join(
-			LOG_DIR,
+			logDir,
 			`signet-${new Date().toISOString().split("T")[0]}.log`,
 		);
 
@@ -3104,7 +3236,7 @@ program
 	)
 	.option(
 		"--configure-openclaw-workspace",
-		"Patch discovered OpenClaw configs to use ~/.agents in non-interactive mode",
+		"Patch discovered OpenClaw configs to use the selected setup path in non-interactive mode",
 	)
 	.option(
 		"--open-dashboard",
@@ -3136,8 +3268,11 @@ program
 	.action(migrateSchema);
 
 // Daemon action handlers (shared between top-level and subcommand)
-async function doStart() {
+async function doStart(options: { path?: string } = {}) {
 	console.log(signetLogo());
+	const basePath = normalizeAgentPath(
+		extractPathOption(options) ?? AGENTS_DIR,
+	);
 
 	const running = await isDaemonRunning();
 	if (running) {
@@ -3146,7 +3281,7 @@ async function doStart() {
 	}
 
 	const spinner = ora("Starting daemon...").start();
-	const started = await startDaemon();
+	const started = await startDaemon(basePath);
 
 	if (started) {
 		spinner.succeed("Daemon started");
@@ -3156,8 +3291,11 @@ async function doStart() {
 	}
 }
 
-async function doStop() {
+async function doStop(options: { path?: string } = {}) {
 	console.log(signetLogo());
+	const basePath = normalizeAgentPath(
+		extractPathOption(options) ?? AGENTS_DIR,
+	);
 
 	const running = await isDaemonRunning();
 	if (!running) {
@@ -3166,7 +3304,7 @@ async function doStop() {
 	}
 
 	const spinner = ora("Stopping daemon...").start();
-	const stopped = await stopDaemon();
+	const stopped = await stopDaemon(basePath);
 
 	if (stopped) {
 		spinner.succeed("Daemon stopped");
@@ -3175,13 +3313,16 @@ async function doStop() {
 	}
 }
 
-async function doRestart() {
+async function doRestart(options: { path?: string } = {}) {
 	console.log(signetLogo());
+	const basePath = normalizeAgentPath(
+		extractPathOption(options) ?? AGENTS_DIR,
+	);
 
 	const spinner = ora("Restarting daemon...").start();
-	await stopDaemon();
+	await stopDaemon(basePath);
 	await new Promise((resolve) => setTimeout(resolve, 500));
-	const started = await startDaemon();
+	const started = await startDaemon(basePath);
 
 	if (started) {
 		spinner.succeed("Daemon restarted");
@@ -3196,23 +3337,34 @@ const daemonCmd = program
 	.command("daemon")
 	.description("Manage the Signet daemon");
 
-daemonCmd.command("start").description("Start the daemon").action(doStart);
+daemonCmd
+	.command("start")
+	.description("Start the daemon")
+	.option("-p, --path <path>", "Base path for agent files")
+	.action(doStart);
 
-daemonCmd.command("stop").description("Stop the daemon").action(doStop);
+daemonCmd
+	.command("stop")
+	.description("Stop the daemon")
+	.option("-p, --path <path>", "Base path for agent files")
+	.action(doStop);
 
 daemonCmd
 	.command("restart")
 	.description("Restart the daemon")
+	.option("-p, --path <path>", "Base path for agent files")
 	.action(doRestart);
 
 daemonCmd
 	.command("status")
 	.description("Show daemon status")
+	.option("-p, --path <path>", "Base path for agent files")
 	.action(showStatus);
 
 daemonCmd
 	.command("logs")
 	.description("View daemon logs")
+	.option("-p, --path <path>", "Base path for agent files")
 	.option("-n, --lines <lines>", "Number of lines to show", "50")
 	.option("-f, --follow", "Follow log output in real-time")
 	.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")
@@ -3226,21 +3378,25 @@ daemonCmd
 program
 	.command("start")
 	.description("Start the daemon (alias for: signet daemon start)")
+	.option("-p, --path <path>", "Base path for agent files")
 	.action(doStart);
 
 program
 	.command("stop")
 	.description("Stop the daemon (alias for: signet daemon stop)")
+	.option("-p, --path <path>", "Base path for agent files")
 	.action(doStop);
 
 program
 	.command("restart")
 	.description("Restart the daemon (alias for: signet daemon restart)")
+	.option("-p, --path <path>", "Base path for agent files")
 	.action(doRestart);
 
 program
 	.command("logs")
 	.description("View daemon logs (alias for: signet daemon logs)")
+	.option("-p, --path <path>", "Base path for agent files")
 	.option("-n, --lines <lines>", "Number of lines to show", "50")
 	.option("-f, --follow", "Follow log output in real-time")
 	.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")

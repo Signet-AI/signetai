@@ -122,4 +122,60 @@ describe("OpenClawConnector config patching", () => {
 		expect(connector.configureWorkspace(tmpRoot)).rejects.toThrow(/temp directory/);
 		expect(connector.install(tmpRoot, { configureWorkspace: true })).rejects.toThrow(/temp directory/);
 	});
+
+	it("discovers workspace paths from config files", () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		const configPath2 = join(tmpRoot, "openclaw-2.json");
+		const workspacePath = join(tmpRoot, "clawd");
+
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					agents: { defaults: { workspace: workspacePath } },
+				},
+				null,
+				2,
+			),
+		);
+		writeFileSync(
+			configPath2,
+			JSON.stringify(
+				{
+					agents: { defaults: { workspace: workspacePath } },
+				},
+				null,
+				2,
+			),
+		);
+
+		process.env.OPENCLAW_CONFIG_PATH = `${configPath}:${configPath2}`;
+
+		const connector = new OpenClawConnector();
+		const workspaces = connector.getDiscoveredWorkspacePaths();
+		expect(workspaces).toContain(workspacePath);
+		expect(workspaces.filter((path) => path === workspacePath)).toHaveLength(1);
+	});
+
+	it("ignores invalid configs when discovering workspaces", () => {
+		const goodConfigPath = join(tmpRoot, "openclaw.json");
+		const badConfigPath = join(tmpRoot, "broken.json");
+
+		writeFileSync(
+			goodConfigPath,
+			JSON.stringify(
+				{
+					agents: { defaults: { workspace: "/home/test-user/workspace" } },
+				},
+				null,
+				2,
+			),
+		);
+		writeFileSync(badConfigPath, "{ not valid json");
+
+		process.env.OPENCLAW_CONFIG_PATH = `${goodConfigPath}:${badConfigPath}`;
+
+		const connector = new OpenClawConnector();
+		expect(connector.getDiscoveredWorkspacePaths()).toContain("/home/test-user/workspace");
+	});
 });
