@@ -2,7 +2,7 @@
 
 All notable changes to Signet are documented here.
 
-## [0.8.3] - 2026-02-28
+## [0.9.0] - 2026-02-28
 
 ### Features
 
