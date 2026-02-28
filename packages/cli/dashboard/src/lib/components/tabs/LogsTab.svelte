@@ -3,8 +3,7 @@ import { onMount } from "svelte";
 import * as Select from "$lib/components/ui/select/index.js";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-import PageHero from "$lib/components/layout/PageHero.svelte";
-import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
+
 
 interface LogEntry {
 	timestamp: string;
@@ -235,13 +234,6 @@ onMount(() => {
 </script>
 
 <div class="flex flex-col flex-1 min-h-0">
-	<PageHero
-		title={PAGE_HEADERS.logs.title}
-		wordmarkLines={PAGE_HEADERS.logs.wordmarkLines}
-		eyebrow={PAGE_HEADERS.logs.eyebrow}
-		description={PAGE_HEADERS.logs.description}
-	/>
-
 	<div class="flex items-center gap-[var(--space-sm)] px-[var(--space-md)] py-[var(--space-sm)] border-b border-[var(--sig-border)] shrink-0">
 		<Select.Root type="single" value={logLevelFilter} onValueChange={(v) => { logLevelFilter = v ?? ""; fetchLogs(); }}>
 			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-none h-auto py-1 px-2 min-w-[100px]">

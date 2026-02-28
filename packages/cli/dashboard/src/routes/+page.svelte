@@ -12,8 +12,11 @@
 	} from "$lib/stores/memory.svelte";
 	import { nav } from "$lib/stores/navigation.svelte";
 	import { sk } from "$lib/stores/skills.svelte";
-	import { ts } from "$lib/stores/tasks.svelte";
+	import { ts, openForm } from "$lib/stores/tasks.svelte";
+	import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
+	import { Button } from "$lib/components/ui/button/index.js";
+	import Plus from "@lucide/svelte/icons/plus";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
 	import { Toaster } from "$lib/components/ui/sonner/index.js";
 
@@ -114,17 +117,25 @@
 		m-2 ml-0 rounded-lg border border-[var(--sig-border)]
 		bg-[var(--sig-surface)]">
 		<header
-			class="flex h-9 shrink-0 items-center justify-between
+			class="flex h-10 shrink-0 items-center justify-between
 				border-b border-[var(--sig-border)] px-4"
 		>
 			<div class="flex items-center gap-2">
 				<Sidebar.Trigger class="-ml-1" />
 				<span
-					class="text-[10px] font-bold uppercase tracking-[0.14em]
-						text-[var(--sig-text-muted)]
+					class="text-[11px] font-bold uppercase tracking-[0.1em]
+						text-[var(--sig-text-bright)]
 						font-[family-name:var(--font-display)]"
 				>
-					{activeTab}
+					{PAGE_HEADERS[activeTab].title}
+				</span>
+				<span class="text-[10px] text-[var(--sig-text-muted)]">&middot;</span>
+				<span
+					class="text-[10px] uppercase tracking-[0.1em]
+						text-[var(--sig-text-muted)]
+						font-[family-name:var(--font-mono)]"
+				>
+					{PAGE_HEADERS[activeTab].eyebrow}
 				</span>
 			</div>
 			<div class="flex items-center gap-3">
@@ -155,6 +166,25 @@
 					<span class="text-[11px] text-[var(--sig-text-muted)]">
 						Constellation
 					</span>
+				{:else if activeTab === "skills"}
+					<span class="text-[10px] text-[var(--sig-text-muted)]
+						font-[family-name:var(--font-mono)]">
+						{#if sk.catalogTotal}
+							{sk.catalogTotal.toLocaleString()} available
+							<span class="text-[var(--sig-border-strong)]">&middot;</span>
+						{/if}
+						{sk.installed.length} installed
+					</span>
+				{:else if activeTab === "tasks"}
+					<Button
+						variant="outline"
+						size="sm"
+						class="h-7 gap-1.5 text-[11px]"
+						onclick={() => openForm()}
+					>
+						<Plus class="size-3.5" />
+						New Task
+					</Button>
 				{/if}
 			</div>
 		</header>

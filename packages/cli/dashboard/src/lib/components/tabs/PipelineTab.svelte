@@ -12,8 +12,7 @@
 		selectNode,
 	} from "$lib/components/pipeline/pipeline-store.svelte";
 	import { PIPELINE_NODES, type LogEntry } from "$lib/components/pipeline/pipeline-types";
-	import PageHero from "$lib/components/layout/PageHero.svelte";
-	import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
+
 
 	function handleSelectNode(id: string) {
 		selectNode(pipeline.selectedNodeId === id ? null : id);
@@ -95,13 +94,6 @@
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
-	<PageHero
-		title={PAGE_HEADERS.pipeline.title}
-		wordmarkLines={PAGE_HEADERS.pipeline.wordmarkLines}
-		eyebrow={PAGE_HEADERS.pipeline.eyebrow}
-		description={PAGE_HEADERS.pipeline.description}
-	/>
-
 	<!-- Toolbar -->
 	<div class="flex items-center justify-between px-4 py-2 border-b border-[var(--sig-border)] shrink-0">
 		<div class="flex items-center gap-3">
