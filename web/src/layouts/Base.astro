@@ -1,5 +1,7 @@
 ---
 import '../styles/global.css';
+import '../styles/tailwind.css';
+import { ClientRouter } from 'astro:transitions';
 
 interface Props {
   title?: string;
@@ -28,12 +30,32 @@ const {
     <!-- Inline theme script prevents flash of wrong theme -->
     <script is:inline>
       (function () {
-        const saved = localStorage.getItem('signet-theme');
-        if (saved === 'dark' || saved === 'light') {
-          document.documentElement.setAttribute('data-theme', saved);
+        const THEME_KEY = 'signet-theme';
+
+        function getSavedTheme() {
+          const saved = localStorage.getItem(THEME_KEY);
+          return saved === 'dark' || saved === 'light' ? saved : null;
         }
+
+        function applySavedTheme(targetDocument) {
+          const saved = getSavedTheme();
+          if (!saved) return;
+          targetDocument.documentElement.setAttribute('data-theme', saved);
+        }
+
+        applySavedTheme(document);
+
+        document.addEventListener('astro:before-swap', (event) => {
+          if (!event.newDocument) return;
+          applySavedTheme(event.newDocument);
+        });
+
+        document.addEventListener('astro:after-swap', () => {
+          applySavedTheme(document);
+        });
       })();
     </script>
+    <ClientRouter />
   </head>
   <body>
     <!-- Noise SVG filter for CRT grain effect -->

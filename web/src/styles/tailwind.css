@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/*
+ * shadcn/ui theme mapped to Signet's existing CSS variables.
+ * These reference the vars defined in global.css so dark/light
+ * mode works automatically via [data-theme].
+ */
+@theme inline {
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-text);
+  --color-card: var(--color-surface);
+  --color-card-foreground: var(--color-text);
+  --color-popover: var(--color-surface);
+  --color-popover-foreground: var(--color-text);
+  --color-primary: var(--color-text-bright);
+  --color-primary-foreground: var(--color-bg);
+  --color-secondary: var(--color-surface-raised);
+  --color-secondary-foreground: var(--color-text);
+  --color-muted: var(--color-surface-raised);
+  --color-muted-foreground: var(--color-text-muted);
+  --color-accent: var(--color-surface-raised);
+  --color-accent-foreground: var(--color-text-bright);
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fafafa;
+  --color-border: var(--color-border-strong);
+  --color-input: var(--color-border-strong);
+  --color-ring: var(--color-text-muted);
+
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+}
