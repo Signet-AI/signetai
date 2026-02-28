@@ -6,6 +6,25 @@ All notable changes to Signet are documented here.
 
 ### Features
 
+- **predictor**: implement phase 2 training pipeline
+
+### Bug Fixes
+
+- **ci**: harden release push step against temp files
+- **ci**: clean bump-level temp file in release workflow
+- **ci**: avoid dirty worktree in release publish steps
+- restore typecheck and cross-platform config tests
+
+### Refactoring
+
+- **daemon**: extract skills routes into standalone module
+- **dashboard**: replace PageHero with compact top bar headers
+
+
+## [0.9.0] - 2026-02-28
+
+### Features
+
 - add OpenCode as extraction LLM provider
 
 ### Bug Fixes
