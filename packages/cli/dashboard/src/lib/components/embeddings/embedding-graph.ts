@@ -20,6 +20,8 @@ export const EMBEDDING_PAGE_PROBE_LIMIT = 24;
 export const sourceColors: Record<string, string> = {
 	"claude-code": "#5eada4",
 	clawdbot: "#a78bfa",
+	daemon: "#22c55e",
+	"signet-daemon": "#22c55e",
 	openclaw: "#4ade80",
 	opencode: "#60a5fa",
 	manual: "#f472b6",
