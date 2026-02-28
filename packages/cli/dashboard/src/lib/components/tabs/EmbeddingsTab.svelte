@@ -1231,15 +1231,7 @@ $effect(() => {
 
 $effect(() => {
 	workspaceLayout.embeddings.controlsOpen = controlsMenuOpen;
-	syncLayoutToStorage();
-});
-
-$effect(() => {
 	workspaceLayout.embeddings.presetsOpen = presetsMenuOpen;
-	syncLayoutToStorage();
-});
-
-$effect(() => {
 	workspaceLayout.embeddings.sourcesOpen = sourcesMenuOpen;
 	syncLayoutToStorage();
 });
