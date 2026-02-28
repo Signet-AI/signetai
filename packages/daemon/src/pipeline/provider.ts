@@ -446,10 +446,11 @@ interface OpenCodeMessageResponse {
  * Response shape: `{ info: AssistantMessage, parts: Part[] }`
  * Text lives in parts where `type === "text"`.
  */
-function extractOpenCodeText(data: OpenCodeMessageResponse): string {
+function extractOpenCodeText(data: OpenCodeMessageResponse | null | undefined): string {
+	if (!data?.parts) return "";
 	const textParts: string[] = [];
 	for (const part of data.parts) {
-		if (part.type === "text" && typeof part.text === "string") {
+		if (part?.type === "text" && typeof part.text === "string") {
 			textParts.push(part.text);
 		}
 	}
