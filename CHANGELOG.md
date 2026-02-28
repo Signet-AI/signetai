@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.11.0] - 2026-02-28
+
+### Bug Fixes
+
+- **cli**: make logs path-aware for custom workspaces
+- **setup**: support existing OpenClaw workspace directories
+
+
 ## [0.10.4] - 2026-02-28
 
 ### Features
