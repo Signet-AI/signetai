@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.10.1] - 2026-02-28
+
+### Refactoring
+
+- **dashboard**: componentize settings tab and extract state
+
+
 ## [0.10.0] - 2026-02-28
 
 ### Bug Fixes
