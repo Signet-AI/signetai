@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { ConfigFile } from "$lib/api";
 import { st } from "$lib/stores/settings.svelte";
+import { untrack } from "svelte";
 import AgentSection from "./settings/AgentSection.svelte";
 import AuthSection from "./settings/AuthSection.svelte";
 import EmbeddingsSection from "./settings/EmbeddingsSection.svelte";
@@ -16,8 +17,12 @@ interface Props {
 
 const { configFiles }: Props = $props();
 
+// Track configFiles so the effect re-runs when the prop changes,
+// but untrack the init call — it mutates $state which would
+// otherwise trigger an infinite reactive loop.
 $effect(() => {
-	st.init(configFiles);
+	const files = configFiles;
+	untrack(() => st.init(files));
 });
 
 async function saveSettings() {
