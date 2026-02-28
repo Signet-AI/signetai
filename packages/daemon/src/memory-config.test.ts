@@ -36,12 +36,11 @@ describe("loadMemoryConfig", () => {
 `,
 		);
 		writeFileSync(
-			join(agentsDir, "AGENT.yaml"),
-			`memory:
-  embeddings:
-    provider: openai
-    model: text-embedding-3-large
-    dimensions: 3072
+			join(agentsDir, "config.yaml"),
+			`embeddings:
+  provider: openai
+  model: text-embedding-3-large
+  dimensions: 3072
 `,
 		);
 

@@ -12,8 +12,6 @@ import {
 	type GraphNode,
 	type GraphEdge,
 	type RelationKind,
-	hexToRgb,
-	sourceColors,
 	nodeFillStyle,
 	edgeStrokeStyle,
 	embeddingLabel,
@@ -170,6 +168,7 @@ function resizeCanvas(): void {
 	if (!rect || rect.width === 0) return;
 	canvas.width = rect.width;
 	canvas.height = rect.height;
+	requestRedraw();
 }
 
 function screenToWorld(sx: number, sy: number): [number, number] {
@@ -301,28 +300,6 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 	}
 
 	ctx.restore();
-
-	// Legend
-	const legendSources = [
-		"claude-code",
-		"clawdbot",
-		"openclaw",
-		"opencode",
-		"manual",
-	];
-	const lx = 12;
-	let ly = h - 12 - legendSources.length * 16;
-	ctx.font = "10px var(--font-mono)";
-	for (const name of legendSources) {
-		const [r, g, b] = hexToRgb(sourceColors[name] ?? sourceColors["unknown"]);
-		ctx.beginPath();
-		ctx.arc(lx + 3, ly, 3, 0, Math.PI * 2);
-		ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.8)`;
-		ctx.fill();
-		ctx.fillStyle = "rgba(200, 200, 200, 0.4)";
-		ctx.fillText(name, lx + 12, ly + 3);
-		ly += 16;
-	}
 
 	animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
 }

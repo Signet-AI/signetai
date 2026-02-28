@@ -8,6 +8,7 @@ import {
 } from "./embedding-graph";
 
 interface Props {
+	containerClass?: string;
 	graphSelected: EmbeddingPoint | null;
 	embeddings: EmbeddingPoint[];
 	embeddingById: Map<string, EmbeddingPoint>;
@@ -29,6 +30,7 @@ interface Props {
 }
 
 let {
+	containerClass = "",
 	graphSelected,
 	embeddings,
 	embeddingById,
@@ -54,7 +56,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 }
 </script>
 
-<aside class="w-[340px] min-w-[300px] border-l border-[var(--sig-border)] bg-[var(--sig-surface)] flex flex-col gap-3 p-3 overflow-y-auto max-lg:w-full max-lg:min-w-0 max-lg:max-h-[42%] max-lg:border-l-0 max-lg:border-t max-lg:border-t-[var(--sig-border)]">
+<aside class={`flex flex-col gap-3 p-3 overflow-y-auto ${containerClass}`}>
 	<div class="flex items-center justify-between gap-2">
 		<span class="font-[family-name:var(--font-mono)] text-[11px] tracking-[0.06em] uppercase text-[var(--sig-text)]">Inspector</span>
 		{#if graphSelected}

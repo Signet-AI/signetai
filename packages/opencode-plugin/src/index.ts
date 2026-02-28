@@ -36,15 +36,30 @@ interface PreCompactionResult {
 	readonly summaryPrompt?: string;
 }
 
+function readRuntimeEnv(name: string): string | undefined {
+	const runtimeProcess = Reflect.get(globalThis, "process");
+	if (!runtimeProcess || typeof runtimeProcess !== "object") {
+		return undefined;
+	}
+
+	const runtimeEnv = Reflect.get(runtimeProcess, "env");
+	if (!runtimeEnv || typeof runtimeEnv !== "object") {
+		return undefined;
+	}
+
+	const value = Reflect.get(runtimeEnv, name);
+	return typeof value === "string" ? value : undefined;
+}
+
 // ============================================================================
 // Plugin
 // ============================================================================
 
 export const SignetPlugin: Plugin = async ({ directory }) => {
-	const enabled = process.env.SIGNET_ENABLED !== "false";
+	const enabled = readRuntimeEnv("SIGNET_ENABLED") !== "false";
 	if (!enabled) return {};
 
-	const daemonUrl = process.env.SIGNET_DAEMON_URL ?? DAEMON_URL_DEFAULT;
+	const daemonUrl = readRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT;
 
 	const client = createDaemonClient(daemonUrl);
 

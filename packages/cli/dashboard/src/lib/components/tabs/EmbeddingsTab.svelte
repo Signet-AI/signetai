@@ -19,7 +19,8 @@ import { mem } from "$lib/stores/memory.svelte";
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
 import EmbeddingCanvas3D from "../embeddings/EmbeddingCanvas3D.svelte";
 import EmbeddingInspector from "../embeddings/EmbeddingInspector.svelte";
-
+import * as Collapsible from "$lib/components/ui/collapsible/index.js";
+import ChevronDown from "@lucide/svelte/icons/chevron-down";
 import {
 	type RelationKind,
 	type EmbeddingRelation,
@@ -79,6 +80,12 @@ let activePresetId = $state("focus");
 let customPresets = $state<FilterPreset[]>([]);
 let presetsHydrated = $state(false);
 let showAdvancedFilters = $state(false);
+let controlsMenuOpen = $state(true);
+let presetsMenuOpen = $state(false);
+let sourcesMenuOpen = $state(true);
+
+const LEGEND_PRIORITY_SOURCES = ["daemon", "user", "opencode"] as const;
+const LEGEND_PRIORITY_SOURCE_SET = new Set<string>(LEGEND_PRIORITY_SOURCES);
 
 type TimeFilterPreset = "all" | "24h" | "7d" | "30d" | "90d" | "custom";
 
@@ -122,7 +129,7 @@ let relationLookup = $state(new Map<string, RelationKind>());
 let hoverLockedId = $state<string | null>(null);
 
 let graphRegion = $state<HTMLDivElement | null>(null);
-let hoverCardEl: HTMLDivElement | null = null;
+let hoverCardEl = $state<HTMLDivElement | null>(null);
 let hoverX = 0;
 let hoverY = 0;
 let cachedRegionRect: DOMRect | null = null;
@@ -433,6 +440,47 @@ function resetProjectionFilters(): void {
 	syncProjectionWindowInputs();
 }
 
+function togglePinnedOnly(): void {
+	showPinnedOnly = !showPinnedOnly;
+	activePresetId = "custom-live";
+}
+
+function ensureConstellationSeed(): EmbeddingPoint | null {
+	if (graphSelected) return graphSelected;
+	if (previewHovered) {
+		graphSelected = previewHovered;
+		return previewHovered;
+	}
+	const fallback = embeddings[0] ?? null;
+	if (fallback) {
+		graphSelected = fallback;
+	}
+	return fallback;
+}
+
+function toggleNeighborhoodOnly(): void {
+	if (!showNeighborhoodOnly) {
+		const seed = ensureConstellationSeed();
+		if (!seed) return;
+	}
+	showNeighborhoodOnly = !showNeighborhoodOnly;
+	activePresetId = "custom-live";
+}
+
+function toggleClusterLens(): void {
+	if (!clusterLensMode) {
+		const seed = ensureConstellationSeed();
+		if (!seed) return;
+	}
+	clusterLensMode = !clusterLensMode;
+	activePresetId = "custom-live";
+}
+
+function toggleSourceFromPanel(who: string): void {
+	toggleSource(who);
+	activePresetId = "custom-live";
+}
+
 function positionHoverCard(): void {
 	if (!hoverCardEl || !cachedRegionRect) return;
 	const maxX = Math.max(12, cachedRegionRect.width - 334);
@@ -616,7 +664,7 @@ async function initGraph(): Promise<void> {
 		}
 		const rangeX = maxX - minX || 1;
 		const rangeY = maxY - minY || 1;
-		const scale = 420;
+		const scale = 560;
 
 		nodes = projNodes.map((node, index) => ({
 			x: ((node.x - minX) / rangeX - 0.5) * scale,
@@ -1025,9 +1073,14 @@ $effect(() => {
 
 $effect(() => {
 	const pinnedFilterIds = showPinnedOnly === true ? new Set(pinnedIds) : null;
+	const neighborhoodSeed = graphSelected ?? previewHovered;
+	const neighborhoodNeighbors = graphSelected ? activeNeighbors : hoverNeighbors;
 	const neighborhoodFilterIds =
-		showNeighborhoodOnly === true && graphSelected
-			? new Set([graphSelected.id, ...activeNeighbors.map((n) => n.id)])
+		showNeighborhoodOnly === true && neighborhoodSeed
+			? new Set([
+					neighborhoodSeed.id,
+					...neighborhoodNeighbors.map((n) => n.id),
+				])
 			: null;
 
 	embeddingFilterIds = intersectFilterSets([
@@ -1102,6 +1155,17 @@ const effectiveRelationLookup = $derived(
 
 const effectiveHoverNeighbors = $derived(graphSelected ? [] : hoverNeighbors);
 
+const legendSourceCounts = $derived.by(() => {
+	const byName = new Map(sourceCounts.map((entry) => [entry.who, entry]));
+	const prioritized = LEGEND_PRIORITY_SOURCES.map((name) => byName.get(name)).filter(
+		(entry): entry is { who: string; count: number } => Boolean(entry),
+	);
+	const rest = sourceCounts.filter(
+		(entry) => !LEGEND_PRIORITY_SOURCE_SET.has(entry.who),
+	);
+	return [...prioritized, ...rest].slice(0, 8);
+});
+
 $effect(() => {
 	if (graphSelected && hoverLockedId) {
 		hoverLockedId = null;
@@ -1168,251 +1232,11 @@ $effect(() => {
 			if (!hoverLockedId) graphHovered = null;
 		}}
 		>
-		<div class="absolute top-2 left-3 right-3 z-[8] flex items-center gap-2 pointer-events-none">
-			<input
-				type="text"
-				class="flex-1 max-w-[420px] pointer-events-auto font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-bright)] bg-[var(--sig-surface)] border border-[rgba(255,255,255,0.22)] px-[9px] py-[6px] outline-none"
-				bind:value={embeddingSearch}
-				oninput={() => (activePresetId = "custom-live")}
-				placeholder="Search constellation (content, source, tags)..."
-			/>
-			{#if embeddingSearch}
-				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[rgba(220,220,220,0.75)] bg-[rgba(5,5,5,0.55)] border border-[rgba(255,255,255,0.16)] px-2 py-1">
-					{embeddingSearchMatches.length} match{embeddingSearchMatches.length === 1 ? "" : "es"}
-				</span>
-			{/if}
-			{#if embeddingsHasMore || activeProjectionWindow.offset > 0}
-				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[rgba(220,220,220,0.75)] bg-[rgba(5,5,5,0.55)] border border-[rgba(255,255,255,0.16)] px-2 py-1">
-					showing {embeddings.length === 0 ? 0 : activeProjectionWindow.offset + 1}-{activeProjectionWindow.offset + embeddings.length} of {embeddingsTotal}
-				</span>
-			{/if}
-		</div>
 
-		<div class="absolute top-[38px] left-3 right-3 z-[8] flex items-center gap-2 flex-wrap pointer-events-none">
-			<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.6)] px-1.5 py-1">
-				{#each builtinPresets as preset}
-					<button
-						class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {activePresetId === preset.id ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-						onclick={() => applyPreset(preset)}
-					>
-						{preset.name}
-					</button>
-				{/each}
-				{#each customPresets as preset}
-					<div class="inline-flex items-center border border-[rgba(255,255,255,0.18)] bg-transparent">
-						<button
-							class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] {activePresetId === preset.id ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-							onclick={() => applyPreset(preset)}
-						>
-							{preset.name}
-						</button>
-						<button
-							class="px-1.5 py-[2px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
-							onclick={() => removeCustomPreset(preset.id)}
-							aria-label={`Delete ${preset.name} preset`}
-						>
-							×
-						</button>
-					</div>
-				{/each}
-				<button
-					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
-					onclick={saveCurrentPreset}
-				>
-					Save preset
-				</button>
-			</div>
-		</div>
-
-		<div class="absolute top-[66px] left-3 right-3 z-[8] flex items-center gap-2 flex-wrap pointer-events-none">
-			<div class="pointer-events-auto flex items-center gap-1 border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.6)] px-1.5 py-1">
-				<button
-					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {showPinnedOnly ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-					onclick={() => {
-						showPinnedOnly = !showPinnedOnly;
-						activePresetId = "custom-live";
-					}}
-				>
-					Pinned only ({pinnedIds.size})
-				</button>
-				<button
-					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {showNeighborhoodOnly ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-					onclick={() => {
-						showNeighborhoodOnly = !showNeighborhoodOnly;
-						activePresetId = "custom-live";
-					}}
-					disabled={!graphSelected}
-				>
-					Neighborhood
-				</button>
-				<button
-					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {clusterLensMode ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-					onclick={() => {
-						clusterLensMode = !clusterLensMode;
-						activePresetId = "custom-live";
-					}}
-					disabled={!graphSelected && !previewHovered}
-				>
-					Cluster lens
-				</button>
-				<button
-					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] {showAdvancedFilters ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-					onclick={() => {
-						showAdvancedFilters = !showAdvancedFilters;
-					}}
-				>
-					Scope
-				</button>
-				<button
-					class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.18)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
-					onclick={() => {
-						resetProjectionFilters();
-					}}
-				>
-					Reset scope
-				</button>
-			</div>
-			<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.6)] px-1.5 py-1 max-w-[calc(100%-300px)]">
-				{#if sourceCounts.length === 0}
-					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase">No sources</span>
-				{:else}
-					{#each sourceCounts as source}
-						<button
-							class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.18)] {selectedSources.has(source.who) ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-							onclick={() => {
-								toggleSource(source.who);
-								activePresetId = "custom-live";
-							}}
-						>
-							{source.who} {source.count}
-						</button>
-					{/each}
-				{/if}
-			</div>
-		</div>
-		{#if showAdvancedFilters}
-			<div class="absolute top-[94px] left-3 right-3 z-[8] flex items-center gap-2 flex-wrap pointer-events-none">
-				<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.68)] px-1.5 py-1">
-					<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Window</span>
-					<input
-						type="number"
-						min="0"
-						max="100000"
-						class="w-[70px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-						bind:value={projectionRangeMin}
-						onblur={syncProjectionWindowInputs}
-					/>
-					<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">to</span>
-					<input
-						type="number"
-						min="1"
-						max="100000"
-						class="w-[70px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-						bind:value={projectionRangeMax}
-						onblur={syncProjectionWindowInputs}
-					/>
-					<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">{activeProjectionWindow.limit} pts</span>
-					<select
-						class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-						bind:value={projectionTimePreset}
-					>
-						<option value="all">time: all</option>
-						<option value="24h">time: 24h</option>
-						<option value="7d">time: 7d</option>
-						<option value="30d">time: 30d</option>
-						<option value="90d">time: 90d</option>
-						<option value="custom">time: custom</option>
-					</select>
-					{#if projectionTimePreset === "custom"}
-						<input
-							type="date"
-							class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-							bind:value={projectionSinceDate}
-						/>
-						<input
-							type="date"
-							class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-							bind:value={projectionUntilDate}
-						/>
-					{/if}
-					<select
-						class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-						bind:value={projectionPinnedFilter}
-					>
-						<option value="all">pins: all</option>
-						<option value="pinned">pins: pinned</option>
-						<option value="unpinned">pins: unpinned</option>
-					</select>
-					<input
-						type="text"
-						class="w-[150px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-						bind:value={projectionSearch}
-						placeholder="server query"
-					/>
-					<input
-						type="text"
-						class="w-[120px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-						bind:value={projectionTagFilter}
-						placeholder="tags csv"
-					/>
-					<input
-						type="text"
-						class="w-[62px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-						bind:value={projectionImportanceMin}
-						placeholder="imp>"
-					/>
-					<input
-						type="text"
-						class="w-[62px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.85)] border border-[rgba(255,255,255,0.18)] px-1.5 py-[2px] outline-none"
-						bind:value={projectionImportanceMax}
-						placeholder="imp<"
-					/>
-				</div>
-				<div class="pointer-events-auto flex items-center gap-1 flex-wrap border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.68)] px-1.5 py-1 max-w-[100%]">
-					<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Harness</span>
-					{#if harnessOptions.length === 0}
-						<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">none</span>
-					{:else}
-						{#each harnessOptions as harness}
-							<button
-								class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.18)] {selectedHarnesses.has(harness) ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-								onclick={() => toggleHarness(harness)}
-							>
-								{harness}
-							</button>
-						{/each}
-					{/if}
-					{#if typeCounts.length > 0 || selectedServerTypes.size > 0}
-						<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Type</span>
-						{#each [...new Set([...selectedServerTypes, ...typeCounts.map((entry) => entry.value)])] as value}
-							{@const count = typeCounts.find((entry) => entry.value === value)?.count ?? 0}
-							<button
-								class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.18)] {selectedServerTypes.has(value) ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-								onclick={() => toggleServerType(value)}
-							>
-								{value}{count > 0 ? ` ${count}` : ""}
-							</button>
-						{/each}
-					{/if}
-					{#if sourceTypeCounts.length > 0 || selectedServerSourceTypes.size > 0}
-						<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Source type</span>
-						{#each [...new Set([...selectedServerSourceTypes, ...sourceTypeCounts.map((entry) => entry.value)])] as value}
-							{@const count = sourceTypeCounts.find((entry) => entry.value === value)?.count ?? 0}
-							<button
-								class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.18)] {selectedServerSourceTypes.has(value) ? 'text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.1)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
-								onclick={() => toggleServerSourceType(value)}
-							>
-								{value}{count > 0 ? ` ${count}` : ""}
-							</button>
-						{/each}
-					{/if}
-				</div>
-			</div>
-		{/if}
 		{#if hoverLockedId}
 			<div
 				class="absolute right-3 z-[9] pointer-events-none"
-				style:top={showAdvancedFilters ? "126px" : "96px"}
+				style:top="52px"
 			>
 				<button
 					type="button"
@@ -1478,6 +1302,35 @@ $effect(() => {
 			</div>
 		{/if}
 
+		<div class="absolute left-3 bottom-3 z-[8] pointer-events-none space-y-2 max-w-[320px]">
+			<div class="pointer-events-auto border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.72)] px-2 py-1.5">
+				<div class="text-[10px] font-[family-name:var(--font-mono)] uppercase tracking-[0.06em] text-[var(--sig-text-muted)] mb-1">Legend</div>
+				<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1">
+					<span class="text-[var(--sig-text)]">Color</span> = source
+				</div>
+				<div class="flex flex-wrap gap-1 mb-1.5">
+					{#each legendSourceCounts as source}
+						<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.14)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'bg-[rgba(255,255,255,0.08)] text-[var(--sig-text-bright)]' : 'bg-transparent text-[var(--sig-text-muted)]'}">
+							<span class="inline-block w-[6px] h-[6px] rounded-full" style={`background:${sourceColorRgba(source.who, 1)}`}></span>
+							{source.who} {source.count}
+						</span>
+					{/each}
+				</div>
+				<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1">
+					<span class="text-[var(--sig-text)]">Radius</span> = importance
+				</div>
+				<div class="flex items-center gap-2 text-[10px] text-[var(--sig-text-muted)] mb-1.5">
+					<span class="inline-block w-[6px] h-[6px] rounded-full border border-[rgba(255,255,255,0.24)]"></span>
+					<span class="inline-block w-[9px] h-[9px] rounded-full border border-[rgba(255,255,255,0.28)]"></span>
+					<span class="inline-block w-[12px] h-[12px] rounded-full border border-[rgba(255,255,255,0.32)]"></span>
+					<span>low to high</span>
+				</div>
+				<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35]">
+					<span class="text-[var(--sig-text)]">Relation highlight</span> = selected node neighborhood emphasis
+				</div>
+			</div>
+		</div>
+
 		{#if graphStatus}
 			<div class="absolute inset-0 flex items-center justify-center bg-[var(--sig-bg)] z-10">
 				<p>{graphStatus}</p>
@@ -1498,7 +1351,7 @@ $effect(() => {
 
 		<div
 			class="absolute left-[14px] z-[6] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.08em] uppercase pointer-events-none"
-			style:top={showAdvancedFilters ? "132px" : "100px"}
+			style:top="20px"
 			aria-hidden="true"
 		>:: &#9675; &#9675; 01 10 11 // latent topology</div>
 
@@ -1595,25 +1448,169 @@ $effect(() => {
 		</div>
 		</div>
 
-		<EmbeddingInspector
-		{graphSelected}
-		{embeddings}
-		{embeddingById}
-		{activeNeighbors}
-		{relationMode}
-		{loadingGlobalSimilar}
-		{globalSimilar}
-		{embeddingSearchMatches}
-		{embeddingSearch}
-		{pinBusy}
-		{pinError}
-		onselectembedding={selectEmbeddingById}
-		onclearselection={clearEmbeddingSelection}
-		onloadglobalsimilar={loadGlobalSimilarForSelected}
-		{onopenglobalsimilar}
-		onsetrelationmode={(mode) => (relationMode = mode)}
-		onfocusembedding={() => graphSelected && focusEmbedding(graphSelected.id)}
-		onpintoggle={togglePinForSelected}
-		/>
+		<div class="w-[360px] min-w-[320px] border-l border-[var(--sig-border)] bg-[var(--sig-surface)] flex flex-col min-h-0 max-lg:w-full max-lg:min-w-0 max-lg:max-h-[48%] max-lg:border-l-0 max-lg:border-t max-lg:border-t-[var(--sig-border)]">
+			<div class="p-3 border-b border-[var(--sig-border)] space-y-2 overflow-y-auto">
+				<Collapsible.Root bind:open={controlsMenuOpen} class="border border-[var(--sig-border)]">
+					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 bg-transparent border-none text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] text-[var(--sig-text)] hover:bg-[var(--sig-surface-raised)]">
+						<span>View Controls</span>
+						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${controlsMenuOpen ? 'rotate-180' : ''}`} />
+					</Collapsible.Trigger>
+					<Collapsible.Content>
+						<div class="p-2 space-y-2 border-t border-[var(--sig-border)]">
+							<div class="flex items-center gap-2">
+								<input
+									type="text"
+									class="flex-1 font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-bright)] bg-[var(--sig-surface)] border border-[var(--sig-border-strong)] px-[9px] py-[6px] outline-none"
+									bind:value={embeddingSearch}
+									oninput={() => (activePresetId = "custom-live")}
+									placeholder="Search constellation"
+								/>
+								{#if embeddingSearch}
+									<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] border border-[var(--sig-border)] px-2 py-1">{embeddingSearchMatches.length}</span>
+								{/if}
+							</div>
+							<div class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">Window {activeProjectionWindow.offset + 1}-{activeProjectionWindow.offset + embeddings.length} / {embeddingsTotal}</div>
+							<div class="flex flex-wrap gap-1">
+								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showPinnedOnly ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={togglePinnedOnly}>Pinned</button>
+								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showNeighborhoodOnly ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleNeighborhoodOnly}>Neighborhood</button>
+								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {clusterLensMode ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleClusterLens}>Lens</button>
+								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={resetProjectionFilters}>Reset</button>
+							</div>
+						</div>
+					</Collapsible.Content>
+				</Collapsible.Root>
+
+				<Collapsible.Root bind:open={presetsMenuOpen} class="border border-[var(--sig-border)]">
+					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 bg-transparent border-none text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] text-[var(--sig-text)] hover:bg-[var(--sig-surface-raised)]">
+						<span>Presets</span>
+						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${presetsMenuOpen ? 'rotate-180' : ''}`} />
+					</Collapsible.Trigger>
+					<Collapsible.Content>
+						<div class="p-2 border-t border-[var(--sig-border)] flex flex-wrap gap-1">
+							{#each builtinPresets as preset}
+								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {activePresetId === preset.id ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => applyPreset(preset)}>{preset.name}</button>
+							{/each}
+							{#each customPresets as preset}
+								<div class="inline-flex items-center border border-[var(--sig-border-strong)]">
+									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] {activePresetId === preset.id ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => applyPreset(preset)}>{preset.name}</button>
+									<button class="px-1.5 py-[2px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={() => removeCustomPreset(preset.id)} aria-label={`Delete ${preset.name} preset`}>×</button>
+								</div>
+							{/each}
+							<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={saveCurrentPreset}>Save</button>
+						</div>
+					</Collapsible.Content>
+				</Collapsible.Root>
+
+				<Collapsible.Root bind:open={sourcesMenuOpen} class="border border-[var(--sig-border)]">
+					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 bg-transparent border-none text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] text-[var(--sig-text)] hover:bg-[var(--sig-surface-raised)]">
+						<span>Sources</span>
+						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${sourcesMenuOpen ? 'rotate-180' : ''}`} />
+					</Collapsible.Trigger>
+					<Collapsible.Content>
+						<div class="p-2 border-t border-[var(--sig-border)] flex flex-wrap gap-1">
+							{#if sourceCounts.length === 0}
+								<span class="text-[10px] text-[var(--sig-text-muted)]">No sources</span>
+							{:else}
+								{#each sourceCounts as source}
+									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleSourceFromPanel(source.who)}>{source.who} {source.count}</button>
+								{/each}
+							{/if}
+						</div>
+					</Collapsible.Content>
+				</Collapsible.Root>
+
+				<Collapsible.Root bind:open={showAdvancedFilters} class="border border-[var(--sig-border)]">
+					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 bg-transparent border-none text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] text-[var(--sig-text)] hover:bg-[var(--sig-surface-raised)]">
+						<span>Advanced</span>
+						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`} />
+					</Collapsible.Trigger>
+					<Collapsible.Content>
+						<div class="p-2 border-t border-[var(--sig-border)] space-y-2">
+							<div class="flex items-center gap-1 flex-wrap">
+								<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Window</span>
+								<input type="number" min="0" max="100000" class="w-[70px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionRangeMin} onblur={syncProjectionWindowInputs} />
+								<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">to</span>
+								<input type="number" min="1" max="100000" class="w-[70px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionRangeMax} onblur={syncProjectionWindowInputs} />
+								<select class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionTimePreset}>
+									<option value="all">time: all</option>
+									<option value="24h">time: 24h</option>
+									<option value="7d">time: 7d</option>
+									<option value="30d">time: 30d</option>
+									<option value="90d">time: 90d</option>
+									<option value="custom">time: custom</option>
+								</select>
+							</div>
+							{#if projectionTimePreset === "custom"}
+								<div class="flex items-center gap-1 flex-wrap">
+									<input type="date" class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionSinceDate} />
+									<input type="date" class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionUntilDate} />
+								</div>
+							{/if}
+							<div class="flex items-center gap-1 flex-wrap">
+								<select class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionPinnedFilter}>
+									<option value="all">pins: all</option>
+									<option value="pinned">pins: pinned</option>
+									<option value="unpinned">pins: unpinned</option>
+								</select>
+								<input type="text" class="w-[140px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionSearch} placeholder="server query" />
+								<input type="text" class="w-[110px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionTagFilter} placeholder="tags csv" />
+								<input type="text" class="w-[60px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionImportanceMin} placeholder="imp>" />
+								<input type="text" class="w-[60px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionImportanceMax} placeholder="imp<" />
+							</div>
+							<div class="flex items-center gap-1 flex-wrap">
+								<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Harness</span>
+								{#if harnessOptions.length === 0}
+									<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">none</span>
+								{:else}
+									{#each harnessOptions as harness}
+										<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] {selectedHarnesses.has(harness) ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleHarness(harness)}>{harness}</button>
+									{/each}
+								{/if}
+							</div>
+							{#if typeCounts.length > 0 || selectedServerTypes.size > 0}
+								<div class="flex items-center gap-1 flex-wrap">
+									<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Type</span>
+									{#each [...new Set([...selectedServerTypes, ...typeCounts.map((entry) => entry.value)])] as value}
+										{@const count = typeCounts.find((entry) => entry.value === value)?.count ?? 0}
+										<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] {selectedServerTypes.has(value) ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleServerType(value)}>{value}{count > 0 ? ` ${count}` : ""}</button>
+									{/each}
+								</div>
+							{/if}
+							{#if sourceTypeCounts.length > 0 || selectedServerSourceTypes.size > 0}
+								<div class="flex items-center gap-1 flex-wrap">
+									<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Source type</span>
+									{#each [...new Set([...selectedServerSourceTypes, ...sourceTypeCounts.map((entry) => entry.value)])] as value}
+										{@const count = sourceTypeCounts.find((entry) => entry.value === value)?.count ?? 0}
+										<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] {selectedServerSourceTypes.has(value) ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleServerSourceType(value)}>{value}{count > 0 ? ` ${count}` : ""}</button>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					</Collapsible.Content>
+				</Collapsible.Root>
+			</div>
+
+			<EmbeddingInspector
+				containerClass="flex-1 min-h-0 w-full min-w-0 border-l-0 border-t-0 max-lg:max-h-none"
+				{graphSelected}
+				{embeddings}
+				{embeddingById}
+				{activeNeighbors}
+				{relationMode}
+				{loadingGlobalSimilar}
+				{globalSimilar}
+				{embeddingSearchMatches}
+				{embeddingSearch}
+				{pinBusy}
+				{pinError}
+				onselectembedding={selectEmbeddingById}
+				onclearselection={clearEmbeddingSelection}
+				onloadglobalsimilar={loadGlobalSimilarForSelected}
+				{onopenglobalsimilar}
+				onsetrelationmode={(mode) => (relationMode = mode)}
+				onfocusembedding={() => graphSelected && focusEmbedding(graphSelected.id)}
+				onpintoggle={togglePinForSelected}
+			/>
+		</div>
 	</div>
 </div>
