@@ -1,5 +1,6 @@
 <script lang="ts">
 import { tick } from "svelte";
+import { onMount } from "svelte";
 import {
 	getProjection,
 	getSimilarMemories,
@@ -143,6 +144,12 @@ let healthReport = $state<EmbeddingHealthReport | null>(null);
 let healthExpanded = $state(false);
 let healthFixBusy = $state(false);
 let healthTimer: ReturnType<typeof setInterval> | undefined;
+
+onMount(() => {
+	controlsMenuOpen = workspaceLayout.embeddings.controlsOpen;
+	presetsMenuOpen = workspaceLayout.embeddings.presetsOpen;
+	sourcesMenuOpen = workspaceLayout.embeddings.sourcesOpen;
+});
 
 async function fetchHealth(): Promise<void> {
 	healthReport = await getEmbeddingHealth();

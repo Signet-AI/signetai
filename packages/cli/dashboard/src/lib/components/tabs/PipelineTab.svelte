@@ -127,6 +127,9 @@
 	onMount(() => {
 		connectSSE();
 		startPolling();
+		// Restore persisted layout state
+		autoScroll = workspaceLayout.pipeline.autoScroll;
+		feedExpanded = workspaceLayout.pipeline.feedExpanded;
 		return () => {
 			disconnectSSE();
 			stopPolling();

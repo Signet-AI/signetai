@@ -69,10 +69,6 @@
 		}
 	});
 
-	$effect(() => {
-		selectedIndex = 0;
-	});
-
 	function handleGlobalKeydown(e: KeyboardEvent) {
 		if ((e.metaKey || e.ctrlKey) && e.key === "k") {
 			e.preventDefault();
