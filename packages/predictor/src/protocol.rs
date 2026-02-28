@@ -111,6 +111,46 @@ pub struct StatusResult {
     pub last_trained: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TrainFromDbParams {
+    pub db_path: String,
+    pub checkpoint_path: Option<String>,
+    pub limit: usize,
+    pub epochs: usize,
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+    #[serde(default = "default_min_confidence")]
+    pub min_confidence: f64,
+}
+
+fn default_min_confidence() -> f64 {
+    0.6
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrainFromDbResult {
+    pub loss: f64,
+    pub step: u64,
+    pub samples_used: usize,
+    pub samples_skipped: usize,
+    pub duration_ms: u64,
+    pub canary_score_variance: f64,
+    pub canary_topk_stability: f64,
+    pub checkpoint_saved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveCheckpointParams {
+    pub path: String,
+    #[serde(default)]
+    pub flags: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SaveCheckpointResult {
+    pub saved: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
