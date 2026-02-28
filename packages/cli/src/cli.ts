@@ -3099,9 +3099,13 @@ async function showLogs(options: {
 	follow?: boolean;
 	level?: string;
 	category?: string;
+	path?: string;
 }) {
 	const limit = parseInt(options.lines || "50", 10);
 	const { follow, level, category } = options;
+	const basePath = normalizeAgentPath(
+		extractPathOption(options) ?? AGENTS_DIR,
+	);
 
 	console.log(signetLogo());
 
@@ -3169,8 +3173,9 @@ async function showLogs(options: {
 
 	function fallbackToFile() {
 		// Fall back to reading log files directly
+		const logDir = join(basePath, ".daemon", "logs");
 		const logFile = join(
-			LOG_DIR,
+			logDir,
 			`signet-${new Date().toISOString().split("T")[0]}.log`,
 		);
 
@@ -3366,6 +3371,7 @@ daemonCmd
 daemonCmd
 	.command("logs")
 	.description("View daemon logs")
+	.option("-p, --path <path>", "Base path for agent files")
 	.option("-n, --lines <lines>", "Number of lines to show", "50")
 	.option("-f, --follow", "Follow log output in real-time")
 	.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")
@@ -3397,6 +3403,7 @@ program
 program
 	.command("logs")
 	.description("View daemon logs (alias for: signet daemon logs)")
+	.option("-p, --path <path>", "Base path for agent files")
 	.option("-n, --lines <lines>", "Number of lines to show", "50")
 	.option("-f, --follow", "Follow log output in real-time")
 	.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")
