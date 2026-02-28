@@ -7,6 +7,8 @@
  */
 
 import type { LlmProvider, LlmGenerateResult } from "@signet/core";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { logger } from "../logger";
 
 export type { LlmProvider, LlmGenerateResult } from "@signet/core";
@@ -296,12 +298,16 @@ export interface OpenCodeProviderConfig {
 	readonly baseUrl: string;
 	readonly model: string;
 	readonly defaultTimeoutMs: number;
+	readonly enableOllamaFallback: boolean;
+	readonly ollamaFallbackModel: string;
 }
 
 const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
 	baseUrl: "http://localhost:4096",
 	model: "anthropic/claude-haiku-4-5-20251001",
 	defaultTimeoutMs: 60000,
+	enableOllamaFallback: true,
+	ollamaFallbackModel: "qwen3:4b",
 };
 
 /**
@@ -324,8 +330,6 @@ function resolveOpenCodeBin(): string | null {
 	}
 
 	// Fall back to ~/.opencode/bin/opencode
-	const { existsSync } = require("fs");
-	const { homedir } = require("os");
 	const fallback = `${homedir()}/.opencode/bin/opencode`;
 	if (existsSync(fallback)) return fallback;
 
@@ -432,6 +436,7 @@ interface OpenCodeTokens {
 }
 
 interface OpenCodeAssistantMessage {
+	readonly role?: string;
 	readonly cost?: number;
 	readonly tokens?: OpenCodeTokens;
 }
@@ -439,6 +444,108 @@ interface OpenCodeAssistantMessage {
 interface OpenCodeMessageResponse {
 	readonly info: OpenCodeAssistantMessage;
 	readonly parts: ReadonlyArray<{ readonly type: string } & Record<string, unknown>>;
+}
+
+const OPENCODE_EXTRACTION_FALLBACK = '{"facts":[],"entities":[]}';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function parseOpenCodeTokens(value: unknown): OpenCodeTokens | undefined {
+	if (!isRecord(value)) return undefined;
+
+	const cacheValue = value.cache;
+	const cache = isRecord(cacheValue)
+		? {
+				...(typeof cacheValue.read === "number"
+					? { read: cacheValue.read }
+					: {}),
+				...(typeof cacheValue.write === "number"
+					? { write: cacheValue.write }
+					: {}),
+			}
+		: undefined;
+
+	return {
+		...(typeof value.input === "number" ? { input: value.input } : {}),
+		...(typeof value.output === "number" ? { output: value.output } : {}),
+		...(typeof value.reasoning === "number"
+			? { reasoning: value.reasoning }
+			: {}),
+		...(cache ? { cache } : {}),
+	};
+}
+
+function parseOpenCodeMessageResponse(value: unknown): OpenCodeMessageResponse | null {
+	if (!isRecord(value)) return null;
+
+	const rawParts = value.parts;
+	if (!Array.isArray(rawParts)) return null;
+
+	const parts = rawParts.filter(
+		(part): part is { readonly type: string } & Record<string, unknown> =>
+			isRecord(part) && typeof part.type === "string",
+	);
+
+	const rawInfo = value.info;
+	const infoRecord = isRecord(rawInfo) ? rawInfo : {};
+
+	const info: OpenCodeAssistantMessage = {
+		...(typeof infoRecord.role === "string" ? { role: infoRecord.role } : {}),
+		...(typeof infoRecord.cost === "number" ? { cost: infoRecord.cost } : {}),
+		...(parseOpenCodeTokens(infoRecord.tokens)
+			? { tokens: parseOpenCodeTokens(infoRecord.tokens) }
+			: {}),
+	};
+
+	return { info, parts };
+}
+
+function parseOpenCodeMessageList(value: unknown): readonly OpenCodeMessageResponse[] {
+	if (!Array.isArray(value)) return [];
+	const messages: OpenCodeMessageResponse[] = [];
+	for (const item of value) {
+		const parsed = parseOpenCodeMessageResponse(item);
+		if (parsed) messages.push(parsed);
+	}
+	return messages;
+}
+
+function selectLatestAssistantMessage(
+	messages: readonly OpenCodeMessageResponse[],
+): OpenCodeMessageResponse | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		const info = isRecord(message.info) ? message.info : null;
+		if (!info || info.role !== "assistant") continue;
+		if (!hasUsableOpenCodeText(message)) continue;
+		return message;
+	}
+	return null;
+}
+
+function buildOpenCodeFallbackResponse(): OpenCodeMessageResponse {
+	return {
+		info: {
+			cost: 0,
+			tokens: {
+				input: 0,
+				output: 0,
+				cache: { read: 0, write: 0 },
+			},
+		},
+		parts: [{ type: "text", text: OPENCODE_EXTRACTION_FALLBACK }],
+	};
+}
+
+function hasUsableOpenCodeText(data: OpenCodeMessageResponse): boolean {
+	for (const part of data.parts) {
+		if (part.type !== "text") continue;
+		if (typeof part.text !== "string") continue;
+		if (part.text.trim().length > 0) return true;
+	}
+	return false;
 }
 
 /**
@@ -467,6 +574,102 @@ export function createOpenCodeProvider(
 	const modelID = slashIdx > 0 ? cfg.model.slice(slashIdx + 1) : cfg.model;
 
 	let sessionId: string | null = null;
+	let ollamaFallbackProvider: LlmProvider | null = null;
+
+	function getOllamaFallbackProvider(): LlmProvider {
+		if (ollamaFallbackProvider) return ollamaFallbackProvider;
+		ollamaFallbackProvider = createOllamaProvider({
+			model: cfg.ollamaFallbackModel,
+			defaultTimeoutMs: cfg.defaultTimeoutMs,
+		});
+		return ollamaFallbackProvider;
+	}
+
+	async function tryOllamaFallback(
+		prompt: string,
+		opts: { timeoutMs?: number; maxTokens?: number } | undefined,
+		reason: string,
+	): Promise<OpenCodeMessageResponse | null> {
+		if (!cfg.enableOllamaFallback) return null;
+
+		const provider = getOllamaFallbackProvider();
+		if (!(await provider.available())) {
+			logger.warn("pipeline", "OpenCode fallback to Ollama skipped (unavailable)", {
+				reason,
+				model: cfg.ollamaFallbackModel,
+			});
+			return null;
+		}
+
+		try {
+			const fallbackOpts = {
+				timeoutMs: Math.min(opts?.timeoutMs ?? cfg.defaultTimeoutMs, 20000),
+				maxTokens: opts?.maxTokens ?? 512,
+			};
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), fallbackOpts.timeoutMs);
+			let resultText = "";
+			let inputTokens: number | null = null;
+			let outputTokens: number | null = null;
+			try {
+				const res = await fetch("http://localhost:11434/api/generate", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						model: cfg.ollamaFallbackModel,
+						prompt,
+						stream: false,
+						format: "json",
+						think: false,
+						options: { num_predict: fallbackOpts.maxTokens },
+					}),
+					signal: controller.signal,
+				});
+
+				if (!res.ok) {
+					const body = await res.text().catch(() => "");
+					throw new Error(`Ollama HTTP ${res.status}: ${body.slice(0, 200)}`);
+				}
+
+				const data = (await res.json()) as OllamaGenerateResponse;
+				resultText = typeof data.response === "string" ? data.response.trim() : "";
+				inputTokens =
+					typeof data.prompt_eval_count === "number"
+						? data.prompt_eval_count
+						: null;
+				outputTokens =
+					typeof data.eval_count === "number" ? data.eval_count : null;
+			} finally {
+				clearTimeout(timer);
+			}
+
+			logger.warn("pipeline", "OpenCode fallback to Ollama used", {
+				reason,
+				model: cfg.ollamaFallbackModel,
+			});
+
+			return {
+				info: {
+					tokens: {
+						...(inputTokens !== null
+							? { input: inputTokens }
+							: {}),
+						...(outputTokens !== null
+							? { output: outputTokens }
+							: {}),
+					},
+				},
+				parts: [{ type: "text", text: resultText }],
+			};
+		} catch (e) {
+			logger.warn("pipeline", "OpenCode fallback to Ollama failed", {
+				reason,
+				model: cfg.ollamaFallbackModel,
+				error: e instanceof Error ? e.message : String(e),
+			});
+			return null;
+		}
+	}
 
 	async function getOrCreateSession(): Promise<string> {
 		if (sessionId) return sessionId;
@@ -513,15 +716,98 @@ export function createOpenCodeProvider(
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
 
 		try {
-			const res = await fetch(
-				`${cfg.baseUrl}/session/${sid}/message`,
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: buildMessageBody(prompt),
-					signal: controller.signal,
-				},
-			);
+			const postMessage = async (sid: string): Promise<Response> =>
+				fetch(
+					`${cfg.baseUrl}/session/${sid}/message`,
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: buildMessageBody(prompt),
+						signal: controller.signal,
+					},
+				);
+
+			const listMessages = async (sid: string): Promise<Response> =>
+				fetch(
+					`${cfg.baseUrl}/session/${sid}/message`,
+					{
+						method: "GET",
+						signal: controller.signal,
+					},
+				);
+
+			const parseResponsePayload = async (res: Response): Promise<unknown> => {
+				const text = await res.text().catch(() => "");
+				if (text.trim().length === 0) return null;
+				try {
+					return JSON.parse(text);
+				} catch {
+					return null;
+				}
+			};
+
+			const parseMessagePayload = (
+				payload: unknown,
+				forSessionId: string,
+				source: "post" | "poll",
+			): OpenCodeMessageResponse | null => {
+				const single = parseOpenCodeMessageResponse(payload);
+				if (single && hasUsableOpenCodeText(single)) {
+					return single;
+				}
+
+				const list = parseOpenCodeMessageList(payload);
+				if (list.length > 0) {
+					const selected = selectLatestAssistantMessage(list);
+					if (selected) return selected;
+					if (source === "post") {
+						logger.warn("pipeline", "OpenCode payload had no assistant text yet", {
+							sessionId: forSessionId,
+						});
+					}
+					return null;
+				}
+
+				if (single && source === "post") {
+					logger.warn("pipeline", "OpenCode response contained no usable text parts", {
+						sessionId: forSessionId,
+					});
+				} else if (source === "post") {
+					logger.warn("pipeline", "OpenCode response missing expected fields", {
+						sessionId: forSessionId,
+					});
+				}
+
+				return null;
+			};
+
+			const pollForAssistantMessage = async (
+				forSessionId: string,
+			): Promise<OpenCodeMessageResponse | null> => {
+				const deadline = Date.now() + Math.max(1000, Math.min(timeoutMs, 20000));
+				while (Date.now() < deadline) {
+					const res = await listMessages(forSessionId);
+					if (res.ok) {
+						const payload = await parseResponsePayload(res);
+						const parsed = parseMessagePayload(payload, forSessionId, "poll");
+						if (parsed) return parsed;
+					}
+					await new Promise((resolve) => setTimeout(resolve, 250));
+				}
+				return null;
+			};
+
+			const parsePostResponse = async (
+				res: Response,
+				forSessionId: string,
+			): Promise<OpenCodeMessageResponse | null> => {
+				const payload = await parseResponsePayload(res);
+				const parsed = parseMessagePayload(payload, forSessionId, "post");
+				if (parsed) return parsed;
+				return pollForAssistantMessage(forSessionId);
+			};
+
+			const res = await postMessage(sid);
 
 			if (!res.ok) {
 				const body = await res.text().catch(() => "");
@@ -529,29 +815,57 @@ export function createOpenCodeProvider(
 				if (res.status === 404 || res.status === 410) {
 					sessionId = null;
 					const retrySid = await getOrCreateSession();
-					const retryRes = await fetch(
-						`${cfg.baseUrl}/session/${retrySid}/message`,
-						{
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: buildMessageBody(prompt),
-							signal: controller.signal,
-						},
-					);
+					const retryRes = await postMessage(retrySid);
 					if (!retryRes.ok) {
 						const retryBody = await retryRes.text().catch(() => "");
 						throw new Error(
 							`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`,
 						);
 					}
-					return (await retryRes.json()) as OpenCodeMessageResponse;
+					const retryParsed = await parsePostResponse(retryRes, retrySid);
+					if (retryParsed) return retryParsed;
+					logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
+						sessionId: retrySid,
+					});
+					const ollamaFallback = await tryOllamaFallback(
+						prompt,
+						opts,
+						"post-response-malformed-after-http-retry",
+					);
+					if (ollamaFallback) return ollamaFallback;
+					return buildOpenCodeFallbackResponse();
 				}
 				throw new Error(
 					`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`,
 				);
 			}
 
-			return (await res.json()) as OpenCodeMessageResponse;
+			const parsed = await parsePostResponse(res, sid);
+			if (parsed) return parsed;
+
+			// Malformed successful payload — reset session and retry once
+			sessionId = null;
+			const retrySid = await getOrCreateSession();
+			const retryRes = await postMessage(retrySid);
+			if (!retryRes.ok) {
+				const retryBody = await retryRes.text().catch(() => "");
+				throw new Error(
+					`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`,
+				);
+			}
+			const retryParsed = await parsePostResponse(retryRes, retrySid);
+			if (retryParsed) return retryParsed;
+
+			logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
+				sessionId: retrySid,
+			});
+			const ollamaFallback = await tryOllamaFallback(
+				prompt,
+				opts,
+				"post-response-malformed-after-session-reset",
+			);
+			if (ollamaFallback) return ollamaFallback;
+			return buildOpenCodeFallbackResponse();
 		} catch (e) {
 			if (e instanceof DOMException && e.name === "AbortError") {
 				throw new Error(`OpenCode timeout after ${timeoutMs}ms`);

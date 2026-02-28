@@ -66,7 +66,9 @@ describe("extractFactsAndEntities", () => {
 	});
 
 	it("parses markdown-fenced JSON correctly", async () => {
-		const fenced = "```json\n" + VALID_RESPONSE + "\n```";
+		const fenced = `\`\`\`json
+${VALID_RESPONSE}
+\`\`\``;
 		const provider = mockProvider([fenced]);
 		const result = await extractFactsAndEntities(
 			"User prefers dark mode and uses vim keybindings",
@@ -79,7 +81,9 @@ describe("extractFactsAndEntities", () => {
 	});
 
 	it("also handles unmarked code fences", async () => {
-		const fenced = "```\n" + VALID_RESPONSE + "\n```";
+		const fenced = `\`\`\`
+${VALID_RESPONSE}
+\`\`\``;
 		const provider = mockProvider([fenced]);
 		const result = await extractFactsAndEntities(
 			"User prefers dark mode and uses vim keybindings",
@@ -87,6 +91,39 @@ describe("extractFactsAndEntities", () => {
 		);
 
 		expect(result.facts).toHaveLength(2);
+	});
+
+	it("parses JSON when model adds prose before and after", async () => {
+		const wrapped = `Here is the extracted data:\n\n${VALID_RESPONSE}\n\nDone.`;
+		const provider = mockProvider([wrapped]);
+		const result = await extractFactsAndEntities(
+			"User prefers dark mode and uses vim keybindings",
+			provider,
+		);
+
+		expect(result.facts).toHaveLength(2);
+		expect(result.entities).toHaveLength(1);
+		expect(result.warnings).toHaveLength(0);
+	});
+
+	it("parses JSON with trailing commas from fallback model", async () => {
+		const trailingCommaResponse = `{
+		  "facts": [
+		    {"content": "User prefers dark mode for terminal and editor interfaces", "type": "preference", "confidence": 0.9,},
+		  ],
+		  "entities": [
+		    {"source": "User", "relationship": "prefers", "target": "dark mode", "confidence": 0.9,},
+		  ],
+		}`;
+		const provider = mockProvider([trailingCommaResponse]);
+		const result = await extractFactsAndEntities(
+			"User prefers dark mode and uses vim keybindings",
+			provider,
+		);
+
+		expect(result.facts).toHaveLength(1);
+		expect(result.entities).toHaveLength(1);
+		expect(result.warnings).toHaveLength(0);
 	});
 
 	it("truncates over-limit facts to 20", async () => {
