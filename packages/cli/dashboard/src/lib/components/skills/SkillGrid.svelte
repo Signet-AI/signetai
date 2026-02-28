@@ -1,6 +1,9 @@
 <script lang="ts">
 import type { Skill, SkillSearchResult } from "$lib/api";
 import SkillCard from "./SkillCard.svelte";
+import SkillsEmptyState from "./SkillsEmptyState.svelte";
+
+type EmptyStateKind = "installed" | "browse" | "search";
 
 type Props = {
 	items: (Skill | SkillSearchResult)[];
@@ -11,6 +14,10 @@ type Props = {
 	onitemclick?: (name: string) => void;
 	oninstall?: (name: string) => void;
 	onuninstall?: (name: string) => void;
+	emptyState?: EmptyStateKind | null;
+	onemptyaction?: (action: "primary" | "secondary") => void;
+	compareSelectedKeys?: string[];
+	oncomparetoggle?: (key: string) => void;
 };
 
 let {
@@ -22,11 +29,41 @@ let {
 	onitemclick,
 	oninstall,
 	onuninstall,
+	emptyState = null,
+	onemptyaction,
+	compareSelectedKeys = [],
+	oncomparetoggle,
 }: Props = $props();
 
 function isSearchResult(i: Skill | SkillSearchResult): i is SkillSearchResult {
 	return "installed" in i && "fullName" in i;
 }
+
+function skillKey(i: Skill | SkillSearchResult): string {
+	return isSearchResult(i) ? i.fullName : i.name;
+}
+
+let emptyActions = $derived.by(() => {
+	if (emptyState === "installed") {
+		return [
+			{ label: "Go to Browse", onClick: () => onemptyaction?.("primary"), variant: "primary" as const },
+			{ label: "Reset filters", onClick: () => onemptyaction?.("secondary") },
+		];
+	}
+	if (emptyState === "browse") {
+		return [
+			{ label: "Clear provider filter", onClick: () => onemptyaction?.("primary"), variant: "primary" as const },
+			{ label: "Retry catalog", onClick: () => onemptyaction?.("secondary") },
+		];
+	}
+	if (emptyState === "search") {
+		return [
+			{ label: "Clear search", onClick: () => onemptyaction?.("primary"), variant: "primary" as const },
+			{ label: "Browse top skills", onClick: () => onemptyaction?.("secondary") },
+		];
+	}
+	return [];
+});
 
 // Featured items: top 6 with installsRaw > 0, only in browse mode
 let featuredItems = $derived.by(() => {
@@ -45,7 +82,7 @@ let showFeatured = $derived(mode === "browse" && featuredItems.length > 0);
 		{#if showFeatured}
 			<div class="section-label">TRENDING</div>
 			<div class="featured-row">
-				{#each featuredItems as item (`${'fullName' in item ? item.fullName : item.name}-featured`)}
+				{#each featuredItems as item (`${item.fullName}-featured`)}
 					<div class="featured-card-wrapper">
 						<SkillCard
 							{item}
@@ -54,9 +91,11 @@ let showFeatured = $derived(mode === "browse" && featuredItems.length > 0);
 							selected={selectedName === item.name}
 							installing={installing === item.name}
 							uninstalling={uninstalling === item.name}
+							compareSelected={compareSelectedKeys.includes(skillKey(item))}
 							onclick={() => onitemclick?.(item.name)}
 							oninstall={() => oninstall?.(item.name)}
 							onuninstall={() => onuninstall?.(item.name)}
+							oncomparetoggle={() => oncomparetoggle?.(skillKey(item))}
 						/>
 					</div>
 				{/each}
@@ -73,20 +112,20 @@ let showFeatured = $derived(mode === "browse" && featuredItems.length > 0);
 					selected={selectedName === item.name}
 					installing={installing === item.name}
 					uninstalling={uninstalling === item.name}
+					compareSelected={compareSelectedKeys.includes(skillKey(item))}
 					onclick={() => onitemclick?.(item.name)}
 					oninstall={() => oninstall?.(item.name)}
 					onuninstall={() => onuninstall?.(item.name)}
+					oncomparetoggle={() => oncomparetoggle?.(skillKey(item))}
 				/>
 			{/each}
 		</div>
 	{:else}
-		<div class="empty">
-			{#if mode === "installed"}
-				No skills installed. Browse the marketplace to find skills.
-			{:else}
-				No results found.
-			{/if}
-		</div>
+		{#if emptyState}
+			<SkillsEmptyState kind={emptyState} actions={emptyActions} />
+		{:else}
+			<div class="empty">No results found.</div>
+		{/if}
 	{/if}
 </div>
 

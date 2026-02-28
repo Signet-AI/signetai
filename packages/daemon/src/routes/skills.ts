@@ -29,9 +29,12 @@ interface SkillMeta {
 	description: string;
 	version?: string;
 	author?: string;
+	maintainer?: string;
 	license?: string;
 	user_invocable?: boolean;
 	arg_hint?: string;
+	verified?: boolean;
+	permissions?: string[];
 }
 
 type CatalogEntry = {
@@ -75,6 +78,9 @@ type SkillBrowseResult = {
 	downloads?: number;
 	versions?: number;
 	author?: string;
+	maintainer?: string;
+	verified?: boolean;
+	permissions?: string[];
 };
 
 // ---------------------------------------------------------------------------
@@ -100,14 +106,39 @@ export function parseSkillFrontmatter(content: string): SkillMeta {
 		const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
 		return m ? m[1].trim().replace(/^["']|["']$/g, "") : "";
 	};
+	const getList = (key: string): string[] | undefined => {
+		const raw = get(key);
+		if (!raw) return undefined;
+		const trimmed = raw.trim();
+		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+			const values = trimmed
+				.slice(1, -1)
+				.split(",")
+				.map((v) => v.trim().replace(/^["']|["']$/g, ""))
+				.filter(Boolean);
+			return values.length > 0 ? values : undefined;
+		}
+		const values = trimmed
+			.split(",")
+			.map((v) => v.trim().replace(/^["']|["']$/g, ""))
+			.filter(Boolean);
+		return values.length > 0 ? values : undefined;
+	};
 
 	return {
 		description: get("description"),
 		version: get("version") || undefined,
 		author: get("author") || undefined,
+		maintainer: get("maintainer") || get("author") || undefined,
 		license: get("license") || undefined,
 		user_invocable: /^user_invocable:\s*true$/m.test(fm),
 		arg_hint: get("arg_hint") || undefined,
+		verified: /^verified:\s*true$/m.test(fm)
+			? true
+			: /^verified:\s*false$/m.test(fm)
+				? false
+				: undefined,
+		permissions: getList("permissions"),
 	};
 }
 
@@ -247,6 +278,7 @@ export function mountSkillsRoutes(app: Hono): void {
 			installed: installed.includes(s.name),
 			provider: "skills.sh" as const,
 			downloads: s.installs,
+			maintainer: s.source.split("/")[0] || undefined,
 		}));
 
 		const clawhubResults: SkillBrowseResult[] = clawhubItems.map((s) => ({
@@ -261,6 +293,7 @@ export function mountSkillsRoutes(app: Hono): void {
 			downloads: s.stats.downloads,
 			versions: s.stats.versions,
 			author: s.displayName,
+			maintainer: s.displayName,
 		}));
 
 		const results = [...skillsShResults, ...clawhubResults].sort((a, b) => b.installsRaw - a.installsRaw);
@@ -304,6 +337,7 @@ export function mountSkillsRoutes(app: Hono): void {
 						installed: installed.includes(s.name),
 						provider: "skills.sh" as const,
 						downloads: s.installs,
+						maintainer: s.source.split("/")[0] || undefined,
 					}));
 				} catch (err) {
 					logger.error("skills", "skills.sh search failed", err as Error);
@@ -331,6 +365,7 @@ export function mountSkillsRoutes(app: Hono): void {
 						downloads: s.stats.downloads,
 						versions: s.stats.versions,
 						author: s.displayName,
+						maintainer: s.displayName,
 					}));
 			})(),
 		]);

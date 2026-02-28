@@ -619,6 +619,10 @@ export interface Skill {
 	builtin?: boolean;
 	user_invocable?: boolean;
 	arg_hint?: string;
+	author?: string;
+	maintainer?: string;
+	verified?: boolean;
+	permissions?: string[];
 }
 
 export interface SkillSearchResult {
@@ -633,6 +637,9 @@ export interface SkillSearchResult {
 	downloads?: number;
 	versions?: number;
 	author?: string;
+	maintainer?: string;
+	verified?: boolean;
+	permissions?: string[];
 }
 
 export interface SkillDetail extends Skill {
