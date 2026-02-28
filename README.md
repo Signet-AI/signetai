@@ -55,9 +55,6 @@ The memory pipeline is privacy-first: the default LLM is a local Ollama
 model. Nothing leaves your machine unless you configure it to.
 
 </td>
-<td width="520" valign="top">
-  <img src="public/memory-loop-blueprint.jpg" alt="Signet Memory Loop — session hooks, remember/recall pipeline, and persistence cycle" width="500" />
-</td>
 </tr>
 </table>
 

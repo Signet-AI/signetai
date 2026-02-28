@@ -562,7 +562,7 @@ function formatDetectionSummary(detection: SetupDetection): string {
 
 type HarnessChoice = "claude-code" | "opencode" | "openclaw";
 type EmbeddingProviderChoice = "ollama" | "openai" | "none";
-type ExtractionProviderChoice = "claude-code" | "ollama" | "none";
+type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "none";
 type OpenClawRuntimeChoice = "plugin" | "legacy";
 
 interface SetupWizardOptions {
@@ -595,6 +595,7 @@ const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = [
 const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
 	"claude-code",
 	"ollama",
+	"opencode",
 	"none",
 ];
 const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = [
@@ -1417,7 +1418,9 @@ async function existingSetupWizard(
 						options.extractionModel ||
 						(options.extractionProvider === "claude-code"
 							? "haiku"
-							: "glm-4.7-flash"),
+							: options.extractionProvider === "opencode"
+								? "anthropic/claude-haiku-4-5-20251001"
+								: "glm-4.7-flash"),
 				};
 			}
 
@@ -2104,9 +2107,11 @@ async function setupWizard(options: SetupWizardOptions) {
 	// Memory pipeline provider — auto-detect best default
 	const detectedProvider: ExtractionProviderChoice = hasCommand("claude")
 		? "claude-code"
-		: hasCommand("ollama")
-			? "ollama"
-			: "none";
+		: hasCommand("opencode")
+			? "opencode"
+			: hasCommand("ollama")
+				? "ollama"
+				: "none";
 
 	let extractionProvider: ExtractionProviderChoice;
 	if (nonInteractive) {
@@ -2150,6 +2155,32 @@ async function setupWizard(options: SetupWizardOptions) {
 				choices: [
 					{ value: "haiku", name: "Haiku (fast, cheap, recommended)" },
 					{ value: "sonnet", name: "Sonnet (better quality, slower)" },
+				],
+			})) as string;
+		}
+	} else if (extractionProvider === "opencode") {
+		if (nonInteractive) {
+			extractionModel =
+				normalizeStringValue(options.extractionModel) ||
+				normalizeStringValue(existingMemory.pipelineV2?.extractionModel) ||
+				"anthropic/claude-haiku-4-5-20251001";
+		} else {
+			console.log();
+			extractionModel = (await select({
+				message: "Which model for OpenCode extraction? (provider/model format)",
+				choices: [
+					{
+						value: "anthropic/claude-haiku-4-5-20251001",
+						name: "Claude Haiku (fast, cheap, recommended)",
+					},
+					{
+						value: "anthropic/claude-sonnet-4-5-20250514",
+						name: "Claude Sonnet (better quality, slower)",
+					},
+					{
+						value: "google/gemini-2.5-flash",
+						name: "Gemini 2.5 Flash (fast, multimodal)",
+					},
 				],
 			})) as string;
 		}

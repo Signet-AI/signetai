@@ -103,6 +103,9 @@ import {
 import {
 	createOllamaProvider,
 	createClaudeCodeProvider,
+	createOpenCodeProvider,
+	ensureOpenCodeServer,
+	stopOpenCodeServer,
 } from "./pipeline/provider";
 import {
 	registerConnector,
@@ -7756,6 +7759,7 @@ async function cleanup() {
 	}
 
 	closeLlmProvider();
+	stopOpenCodeServer();
 
 	// Stop git sync timer
 	stopGitSyncTimer();
@@ -7841,10 +7845,16 @@ async function main() {
 	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
-	// Auto-detect extraction provider: if configured as claude-code but CLI
-	// isn't available, fall back to ollama with a warning.
+	// Auto-detect extraction provider: verify the configured provider is
+	// available, falling back to ollama with a warning if not.
 	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
-	if (effectiveExtractionProvider === "claude-code") {
+	if (effectiveExtractionProvider === "opencode") {
+		const serverReady = await ensureOpenCodeServer(4096);
+		if (!serverReady) {
+			logger.warn("config", "OpenCode server not available, falling back to ollama for extraction");
+			effectiveExtractionProvider = "ollama";
+		}
+	} else if (effectiveExtractionProvider === "claude-code") {
 		try {
 			const proc = Bun.spawn(["claude", "--version"], {
 				stdout: "pipe",
@@ -7862,17 +7872,23 @@ async function main() {
 
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider =
-		effectiveExtractionProvider === "claude-code"
-			? createClaudeCodeProvider({
-					model: memoryCfg.pipelineV2.extraction.model || "haiku",
+		effectiveExtractionProvider === "opencode"
+			? createOpenCodeProvider({
+					model: memoryCfg.pipelineV2.extraction.model || "anthropic/claude-haiku-4-5-20251001",
 					defaultTimeoutMs:
 						memoryCfg.pipelineV2.extraction.timeout || 60000,
 				})
-			: createOllamaProvider({
-					model: memoryCfg.pipelineV2.extraction.model || "qwen3:4b",
-					defaultTimeoutMs:
-						memoryCfg.pipelineV2.extraction.timeout || 90000,
-				});
+			: effectiveExtractionProvider === "claude-code"
+				? createClaudeCodeProvider({
+						model: memoryCfg.pipelineV2.extraction.model || "haiku",
+						defaultTimeoutMs:
+							memoryCfg.pipelineV2.extraction.timeout || 60000,
+					})
+				: createOllamaProvider({
+						model: memoryCfg.pipelineV2.extraction.model || "qwen3:4b",
+						defaultTimeoutMs:
+							memoryCfg.pipelineV2.extraction.timeout || 90000,
+					});
 	initLlmProvider(llmProvider);
 
 	// Telemetry collector (opt-in, anonymous)
