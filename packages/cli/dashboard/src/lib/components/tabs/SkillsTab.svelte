@@ -18,8 +18,7 @@ import {
 import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
 import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
-import PageHero from "$lib/components/layout/PageHero.svelte";
-import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
+
 
 let searchInput = $state<HTMLInputElement | null>(null);
 
@@ -86,23 +85,6 @@ onMount(() => {
 <svelte:window onkeydown={handleGlobalKey} />
 
 <div class="h-full flex flex-col overflow-hidden">
-	<PageHero
-		title={PAGE_HEADERS.skills.title}
-		wordmarkLines={PAGE_HEADERS.skills.wordmarkLines}
-		eyebrow={PAGE_HEADERS.skills.eyebrow}
-		description={PAGE_HEADERS.skills.description}
-	>
-		{#snippet meta()}
-			<span class="stats-bar">
-				{#if sk.catalogTotal}
-					{sk.catalogTotal.toLocaleString()} available
-					<span class="stats-sep">·</span>
-				{/if}
-				{sk.installed.length} installed
-			</span>
-		{/snippet}
-	</PageHero>
-
 	<div
 		class="shrink-0 px-[var(--space-md)] py-[var(--space-sm)]
 			border-b border-[var(--sig-border)] flex flex-col gap-2"
@@ -253,19 +235,6 @@ onMount(() => {
 <SkillDetail />
 
 <style>
-	.stats-bar {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--sig-text-muted);
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.stats-sep {
-		color: var(--sig-border-strong);
-	}
-
 	.sort-select {
 		font-family: var(--font-mono);
 		font-size: 10px;
