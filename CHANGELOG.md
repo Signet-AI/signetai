@@ -2,6 +2,22 @@
 
 All notable changes to Signet are documented here.
 
+## [0.10.4] - 2026-02-28
+
+### Features
+
+- **dashboard**: cross-page polish - microcopy, command palette, layout persistence
+- **dashboard**: improve skills discovery trust and comparison
+
+### Bug Fixes
+
+- deep merge layout defaults for schema evolution
+- persist embeddings layout changes to localStorage
+- complete layout persistence and remove duplicate effect
+- **dashboard**: improve config/settings save-state UX
+- **pipeline**: harden OpenCode extraction recovery
+
+
 ## [0.10.3] - 2026-02-28
 
 ### Bug Fixes
