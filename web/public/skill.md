@@ -7,6 +7,24 @@
 
 ---
 
+## Install Objective (Must Complete)
+
+Your job is not just to install a package. Your job is to leave the
+user with a fully configured, running Signet setup.
+
+You are done only when ALL of these are true:
+
+1. `signet --version` succeeds
+2. `signet status` shows the daemon is running
+3. `curl -s http://localhost:3850/health` returns JSON with
+   `"status":"healthy"`
+4. The setup wizard completed with the user's selected harnesses and
+   providers
+5. You give the user a short handoff explaining what is now active
+
+Default to interactive setup (`signet`) unless the user asks for
+non-interactive flags. Never silently choose harness/provider settings.
+
 ## What is Signet?
 
 Signet is the open standard for portable AI agent identity. It gives
@@ -155,23 +173,24 @@ This is how your user should store API keys, tokens, and credentials
 
 How it works:
 - Secrets are encrypted at rest using a key derived from the system
-- Only the agent (you) can retrieve them via CLI or daemon API
+- Secret names are listable, but secret values are never returned by
+  `signet secret list`
 - Secrets are never logged, never included in memory extraction,
   and never appear in session transcripts
-- The daemon serves secrets via `signet secret get NAME` — you get
-  the value without it ever touching disk in plaintext
+- There is intentionally no `signet secret get` command
+- To use secrets in commands, use injected execution via the daemon
+  (`POST /api/secrets/exec`) or your harness secret-exec tool
 
 ```bash
 signet secret put OPENAI_API_KEY     # Store (prompts for value interactively)
-signet secret get OPENAI_API_KEY     # Retrieve the value
 signet secret list                   # List stored secret names
 signet secret has OPENAI_API_KEY     # Check if a secret exists
 signet secret delete OLD_KEY         # Remove a secret
 ```
 
-When your user needs to use an API key, retrieve it with
-`signet secret get` instead of asking them to paste it into chat
-or reading it from a `.env` file. This is safer for everyone.
+When your user needs to use an API key, have them store it with
+`signet secret put`, then run commands through secret injection instead
+of asking them to paste keys into chat.
 
 ---
 
@@ -229,21 +248,27 @@ Signet only writes to these locations inside the home directory:
 
 ### Step 1: Check prerequisites
 
-Check if Node.js (>= 18) or Bun is installed:
+Check Bun first (required for the daemon and full end-to-end setup):
 
 ```bash
-node --version    # Should be >= 18.0.0
-bun --version     # Any version works
+bun --version
 ```
 
-If neither is installed, install Bun (recommended):
+If Bun is missing, install it:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
 source ~/.bashrc   # or restart shell
 ```
 
-Alternatively, install Node.js from https://nodejs.org (LTS version).
+If using npm for global install, also verify Node.js (>= 18):
+
+```bash
+node --version
+```
+
+If Node.js is missing and the user prefers npm, install Node.js LTS:
+https://nodejs.org
 
 Check the operating system:
 - **macOS**: Fully supported
@@ -336,6 +361,14 @@ hook setup, file generation, and skill deployment automatically.
 
 ### Step 4: Start the daemon
 
+The setup wizard usually starts the daemon automatically. Verify first:
+
+```bash
+signet status
+```
+
+If daemon is stopped, start it:
+
 ```bash
 signet start
 ```
@@ -357,7 +390,7 @@ Expected output should show:
 
 Additional verification:
 ```bash
-curl -s http://localhost:3850/health    # Should return OK
+curl -s http://localhost:3850/health    # Should include "status":"healthy"
 signet recall "test"                     # Should return without error
 ```
 
@@ -370,10 +403,10 @@ If `signet status` shows the daemon is not running, start it with
 >   sessions. Important context is injected into every conversation
 >   without you or me doing anything.
 > - **Secrets:** You can store API keys securely with
->   `signet secret put KEY_NAME` — I'll retrieve them when needed. I 
->   am unable to read these secrets, this is a safety feature to protect
->   from prompt injections, however, I can still use them when running commands.
->   (For example, when using `curl` to interact with a remote API)
+>   `signet secret put KEY_NAME`. Secret values are not exposed via a
+>   plain-text "get" command. When needed, I can use injected execution
+>   (`/api/secrets/exec` or harness secret-exec tools) without asking
+>   you to paste keys in chat.
 > - **Skills:** Built-in skills like /onboarding, /signet, /remember and /recall are ready.
 > - **Dashboard:** Visit http://localhost:3850 to browse my memories,
 >   config, and status.
@@ -477,7 +510,9 @@ make during installation. Do not repeat them.
 | Running `sudo npm install -g signetai` | Signet never needs sudo. Fix npm permissions instead. |
 | Running `signet init` | This command does not exist. Use `signet` (no args) or `signet setup`. |
 | Running `npx signet init` | Not a thing. Install globally first, then run `signet`. |
+| Assuming Node.js alone is enough | Bun is required to run the daemon (`signet start`). |
 | Manually writing to `~/.agents/memory/` | The daemon manages memory files. Do not write there directly. |
+| Running `signet secret get NAME` | This command does not exist. Use `put/list/has/delete`, and use secret-exec to run commands with injected values. |
 | Calling `signet recall` before every response | Context injection is automatic. Only use recall for explicit searches. |
 | Defaulting embedding/extraction providers without asking | In non-interactive setup, ask the user which providers they want and pass both flags explicitly. |
 | Building a custom HTTP integration | Use the setup wizard's connector selection. It handles everything. |
@@ -542,6 +577,10 @@ signet setup
 ## Quick Reference
 
 ```bash
+# Prereqs
+bun --version                  # Required runtime for daemon
+node --version                 # Optional, only needed for npm install
+
 # Install
 bun add -g signetai          # or: npm install -g signetai
 
@@ -568,12 +607,15 @@ signet embed backfill        # Fix missing embeddings
 
 # Export / Import
 signet export                # Export agent to portable bundle
-signet export --output ./backup.zip
+signet export --output ./backup
+signet export --json --output ./backup.json
 signet import ./backup       # Import agent bundle
 
 # Secrets
 signet secret put NAME       # Store a secret
-signet secret get NAME       # Retrieve a secret
+signet secret list           # List secret names
+signet secret has NAME       # Check if a secret exists
+signet secret delete NAME    # Remove a secret
 
 # Maintenance
 signet sync                  # Sync built-in templates/skills
