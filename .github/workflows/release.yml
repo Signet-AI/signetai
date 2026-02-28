@@ -101,7 +101,7 @@ jobs:
       - name: Publish to npm
         if: steps.changes.outputs.skip != 'true'
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
           CURRENT=$(npm view signetai version 2>/dev/null || echo "0.0.0")
           if [ "$CURRENT" = "$NEW_VERSION" ]; then
             echo "signetai@$NEW_VERSION already published, skipping"
@@ -111,15 +111,17 @@ jobs:
           fi
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
 
       - name: Promote to latest
         if: steps.changes.outputs.skip != 'true' && env.BUMP_LEVEL != 'major'
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
           npm dist-tag add signetai@${{ env.NEW_VERSION }} latest
           npm dist-tag add @signetai/signet-memory-openclaw@${{ env.NEW_VERSION }} latest || true
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
 
       - name: Push version bump
         if: steps.changes.outputs.skip != 'true'
