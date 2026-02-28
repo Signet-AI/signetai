@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.8.3] - 2026-02-28
+
+### Features
+
+- add OpenCode as extraction LLM provider
+
+### Bug Fixes
+
+- **config-ui**: box key config section titles
+
+
 ## [0.8.1] - 2026-02-27
 
 ### Refactoring
