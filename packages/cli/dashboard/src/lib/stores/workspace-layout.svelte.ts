@@ -37,13 +37,25 @@ const defaultLayout: WorkspaceLayout = {
 	density: "default",
 };
 
+function mergeLayoutWithDefaults(
+	defaults: WorkspaceLayout,
+	partial: Partial<WorkspaceLayout>,
+): WorkspaceLayout {
+	return {
+		pipeline: { ...defaults.pipeline, ...partial.pipeline },
+		embeddings: { ...defaults.embeddings, ...partial.embeddings },
+		settings: { ...defaults.settings, ...partial.settings },
+		density: partial.density ?? defaults.density,
+	};
+}
+
 function loadLayout(): WorkspaceLayout {
 	if (!browser) return defaultLayout;
 	try {
 		const raw = localStorage.getItem(STORAGE_KEY);
 		if (!raw) return defaultLayout;
-		const parsed = JSON.parse(raw);
-		return { ...defaultLayout, ...parsed };
+		const parsed = JSON.parse(raw) as Partial<WorkspaceLayout>;
+		return mergeLayoutWithDefaults(defaultLayout, parsed);
 	} catch {
 		return defaultLayout;
 	}
