@@ -1,5 +1,6 @@
 <script lang="ts">
 import { tick } from "svelte";
+import { onMount } from "svelte";
 import {
 	getProjection,
 	getSimilarMemories,
@@ -16,6 +17,8 @@ import {
 	type ProjectionQueryOptions,
 } from "$lib/api";
 import { mem } from "$lib/stores/memory.svelte";
+import { ActionLabels } from "$lib/ui/action-labels";
+import { workspaceLayout, syncLayoutToStorage } from "$lib/stores/workspace-layout.svelte";
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
 import EmbeddingCanvas3D from "../embeddings/EmbeddingCanvas3D.svelte";
 import EmbeddingInspector from "../embeddings/EmbeddingInspector.svelte";
@@ -141,6 +144,12 @@ let healthReport = $state<EmbeddingHealthReport | null>(null);
 let healthExpanded = $state(false);
 let healthFixBusy = $state(false);
 let healthTimer: ReturnType<typeof setInterval> | undefined;
+
+onMount(() => {
+	controlsMenuOpen = workspaceLayout.embeddings.controlsOpen;
+	presetsMenuOpen = workspaceLayout.embeddings.presetsOpen;
+	sourcesMenuOpen = workspaceLayout.embeddings.sourcesOpen;
+});
 
 async function fetchHealth(): Promise<void> {
 	healthReport = await getEmbeddingHealth();
@@ -1219,6 +1228,13 @@ $effect(() => {
 		initGraph();
 	}
 });
+
+$effect(() => {
+	workspaceLayout.embeddings.controlsOpen = controlsMenuOpen;
+	workspaceLayout.embeddings.presetsOpen = presetsMenuOpen;
+	workspaceLayout.embeddings.sourcesOpen = sourcesMenuOpen;
+	syncLayoutToStorage();
+});
 </script>
 
 <div class="flex h-full flex-col overflow-hidden">
@@ -1243,7 +1259,7 @@ $effect(() => {
 					class="pointer-events-auto px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.74)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
 					onclick={unlockHoverPreview}
 				>
-					Unlock preview
+					{ActionLabels.Unlock} preview
 				</button>
 			</div>
 		{/if}
@@ -1474,7 +1490,7 @@ $effect(() => {
 								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showPinnedOnly ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={togglePinnedOnly}>Pinned</button>
 								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showNeighborhoodOnly ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleNeighborhoodOnly}>Neighborhood</button>
 								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {clusterLensMode ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleClusterLens}>Lens</button>
-								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={resetProjectionFilters}>Reset</button>
+								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={resetProjectionFilters}>{ActionLabels.Reset}</button>
 							</div>
 						</div>
 					</Collapsible.Content>
@@ -1496,7 +1512,7 @@ $effect(() => {
 									<button class="px-1.5 py-[2px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={() => removeCustomPreset(preset.id)} aria-label={`Delete ${preset.name} preset`}>×</button>
 								</div>
 							{/each}
-							<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={saveCurrentPreset}>Save</button>
+							<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={saveCurrentPreset}>{ActionLabels.Save}</button>
 						</div>
 					</Collapsible.Content>
 				</Collapsible.Root>

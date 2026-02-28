@@ -9,6 +9,7 @@ import {
 	clearAll,
 } from "$lib/stores/memory.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
+import { ActionLabels } from "$lib/ui/action-labels";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Popover from "$lib/components/ui/popover/index.js";
 import { Calendar } from "$lib/components/ui/calendar/index.js";
@@ -145,7 +146,7 @@ function formatIsoDate(value: string): string {
 					bg-transparent border-none cursor-pointer
 					hover:underline whitespace-nowrap"
 				onclick={clearAll}
-			>clear</button>
+			>{ActionLabels.Clear}</button>
 		{/if}
 	</label>
 
@@ -204,7 +205,7 @@ function formatIsoDate(value: string): string {
 		</Popover.Root>
 		{#if mem.filterSince}
 			<button class={dateClearClass} onclick={() => { mem.filterSince = ""; }}>
-				clear
+				{ActionLabels.Clear}
 			</button>
 		{/if}
 
