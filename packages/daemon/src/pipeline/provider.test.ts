@@ -358,4 +358,69 @@ describe("createOpenCodeProvider", () => {
 		const result = await provider.generate("test");
 		expect(result).toBe("first part\nsecond part");
 	});
+
+	it("generate() polls session messages when post response is empty", async () => {
+		let postCalls = 0;
+		let getCalls = 0;
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({ id: "ses_poll", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+			}
+			if (init?.method === "POST") {
+				postCalls++;
+				return new Response("", {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			getCalls++;
+			if (getCalls === 1) {
+				return Response.json([
+					{
+						info: { role: "user" },
+						parts: [{ type: "text", text: "pending" }],
+					},
+				]);
+			}
+			return Response.json([
+				{
+					info: { role: "assistant", tokens: { input: 1, output: 1 } },
+					parts: [{ type: "text", text: "recovered" }],
+				},
+			]);
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const result = await provider.generate("test");
+		expect(result).toBe("recovered");
+		expect(postCalls).toBe(1);
+		expect(getCalls).toBe(2);
+	});
+
+	it("generate() returns fallback JSON when no assistant text appears", async () => {
+		let getCalls = 0;
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({ id: "ses_bad", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+			}
+			if (init?.method === "POST") {
+				return new Response("", {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			getCalls++;
+			return Response.json([
+				{
+					info: { role: "user" },
+					parts: [{ type: "text", text: "still pending" }],
+				},
+			]);
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const result = await provider.generate("test", { timeoutMs: 200 });
+		expect(result).toBe('{"facts":[],"entities":[]}');
+		expect(getCalls).toBeGreaterThan(0);
+	});
 });
