@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.10.3] - 2026-02-28
+
+### Bug Fixes
+
+- **dashboard**: remove sidebar and pipeline divider lines
+- **dashboard**: make settings collapsible sections clickable
+
+
 ## [0.10.2] - 2026-02-28
 
 ### Bug Fixes
