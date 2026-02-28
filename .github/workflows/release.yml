@@ -127,9 +127,12 @@ jobs:
       - name: Push version bump
         if: steps.changes.outputs.skip != 'true'
         run: |
-          rm -f .bump-level
+          # Ensure transient build/publish files never block rebase.
+          git reset --hard HEAD
+          git clean -fd
           git pull --rebase origin main
-          git push && git push origin "v$NEW_VERSION"
+          git push origin HEAD:main
+          git push origin "v$NEW_VERSION"
 
       - name: Create GitHub Release
         if: steps.changes.outputs.skip != 'true'
