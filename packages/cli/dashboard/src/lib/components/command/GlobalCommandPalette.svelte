@@ -32,13 +32,20 @@
 		{ id: "refresh", label: ActionLabels.Refresh, action: () => window.location.reload() },
 	];
 
-	const filteredItems = $derived.by(() => {
-		const q = query.toLowerCase().trim();
-		if (!q) return [...tabItems, ...actionItems];
-		return [...tabItems, ...actionItems].filter(item => 
-			item.label.toLowerCase().includes(q)
-		);
-	});
+const filteredItems = $derived.by(() => {
+	const q = query.toLowerCase().trim();
+	if (!q) return [...tabItems, ...actionItems];
+	return [...tabItems, ...actionItems].filter(item => 
+		item.label.toLowerCase().includes(q)
+	);
+});
+
+$effect(() => {
+	const _ = filteredItems.length;
+	if (selectedIndex >= filteredItems.length) {
+		selectedIndex = Math.max(0, filteredItems.length - 1);
+	}
+});
 
 	function setTabAndClose(tab: TabId) {
 		nav.activeTab = tab;
