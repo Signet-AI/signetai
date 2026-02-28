@@ -4,6 +4,7 @@ import { getSecrets, putSecret, deleteSecret } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
+import { ActionLabels } from "$lib/ui/action-labels";
 
 
 let secrets = $state<string[]>([]);
@@ -79,7 +80,7 @@ onMount(() => {
 			onclick={addSecret}
 			disabled={secretAdding || !newSecretName.trim() || !newSecretValue.trim()}
 		>
-			{secretAdding ? 'Adding...' : 'Add'}
+			{secretAdding ? 'Adding...' : ActionLabels.Add}
 		</Button>
 		</div>
 
@@ -101,7 +102,7 @@ onMount(() => {
 							onclick={() => removeSecret(name)}
 							disabled={secretDeleting === name}
 						>
-							{secretDeleting === name ? '...' : 'Delete'}
+							{secretDeleting === name ? '...' : ActionLabels.Delete}
 						</Button>
 					</div>
 				{/each}

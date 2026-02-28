@@ -19,6 +19,7 @@
 	import Plus from "@lucide/svelte/icons/plus";
 	import AppSidebar from "$lib/components/app-sidebar.svelte";
 	import { Toaster } from "$lib/components/ui/sonner/index.js";
+	import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.svelte";
 
 	let activeTab = $derived(nav.activeTab);
 
@@ -319,6 +320,8 @@
 		</div>
 	</main>
 </Sidebar.Provider>
+
+<GlobalCommandPalette />
 
 <Toaster
 	position="bottom-right"

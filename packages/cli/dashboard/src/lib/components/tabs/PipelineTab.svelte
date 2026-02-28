@@ -14,6 +14,7 @@
 		selectNode,
 	} from "$lib/components/pipeline/pipeline-store.svelte";
 	import { PIPELINE_NODES } from "$lib/components/pipeline/pipeline-types";
+	import { workspaceLayout, syncLayoutToStorage } from "$lib/stores/workspace-layout.svelte";
 
 
 	function handleSelectNode(id: string) {
@@ -81,6 +82,8 @@
 
 	function handleAutoScrollChange(checked: boolean): void {
 		autoScroll = checked;
+		workspaceLayout.pipeline.autoScroll = checked;
+		syncLayoutToStorage();
 		if (checked) {
 			feedAtLatest = true;
 			requestAnimationFrame(() => {
@@ -92,6 +95,8 @@
 
 	function handleFeedWidthToggle(event?: Event): void {
 		feedExpanded = !feedExpanded;
+		workspaceLayout.pipeline.feedExpanded = feedExpanded;
+		syncLayoutToStorage();
 		if (event?.currentTarget instanceof HTMLElement) {
 			event.currentTarget.blur();
 		}

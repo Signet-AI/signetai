@@ -15,25 +15,6 @@ interface Props {
 
 let { content, filename, charBudget, onchange, onsave }: Props = $props();
 
-const BOXED_SECTION_TITLES = new Set([
-	"behavioral guidelines",
-	"signet agent system",
-	"memory",
-	"secrets",
-	"about your user",
-	"projects",
-	"operational settings",
-	"custom instructions",
-]);
-
-function normalizeHeading(text: string): string {
-	return text
-		.toLowerCase()
-		.replace(/&amp;/g, "and")
-		.replace(/[^a-z0-9]+/g, " ")
-		.trim();
-}
-
 function addBoxedHeadingClass(attrs: string): string {
 	const classMatch = attrs.match(/\sclass=(['"])(.*?)\1/i);
 	if (!classMatch) {
@@ -58,11 +39,6 @@ function addSectionHeadingBoxes(markdownHtml: string): string {
 	return markdownHtml.replace(
 		/<h([1-6])(\s[^>]*)?>([\s\S]*?)<\/h\1>/gi,
 		(full, level, attrs = "", inner = "") => {
-			const plainText = normalizeHeading(inner.replace(/<[^>]*>/g, " "));
-			if (!BOXED_SECTION_TITLES.has(plainText)) {
-				return full;
-			}
-
 			const attrsWithClass = addBoxedHeadingClass(attrs);
 			return `<h${level}${attrsWithClass}>${inner}</h${level}>`;
 		},

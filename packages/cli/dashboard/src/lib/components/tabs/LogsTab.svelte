@@ -3,6 +3,7 @@ import { onMount } from "svelte";
 import * as Select from "$lib/components/ui/select/index.js";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+import { ActionLabels } from "$lib/ui/action-labels";
 
 
 interface LogEntry {
@@ -266,7 +267,7 @@ onMount(() => {
 			onclick={fetchLogs}
 			title="Reload logs"
 		>
-			Refresh
+			{ActionLabels.Refresh}
 		</button>
 		<button
 			class={`flex items-center justify-center w-7 h-7 text-[var(--sig-text-muted)] bg-transparent border border-transparent cursor-pointer hover:text-[var(--sig-text)] hover:border-[var(--sig-border)] ${logsStreaming ? 'text-[var(--sig-success)]' : ''}`}
@@ -326,7 +327,7 @@ onMount(() => {
 						type="button"
 						class="text-[10px] px-2 py-1 border border-[var(--sig-border)] text-[var(--sig-text)] hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
 						onclick={copySelectedLog}
-					>{copied ? "Copied" : "Copy JSON"}</button>
+					>{copied ? "Copied" : ActionLabels.CopyJson}</button>
 				</div>
 				<div class="grid grid-cols-[80px_1fr] gap-y-1 gap-x-2 mb-[var(--space-sm)]">
 					<div class="text-[var(--sig-text-muted)]">Time</div>
