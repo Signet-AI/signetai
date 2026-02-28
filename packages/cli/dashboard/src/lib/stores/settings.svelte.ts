@@ -1,4 +1,4 @@
-import { type ConfigFile, saveConfigFile } from "$lib/api";
+import { type ConfigFile, saveConfigFileResult } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import { parse, stringify } from "yaml";
 
@@ -118,9 +118,13 @@ class SettingsStore {
 	agent = $state<YamlObject>({});
 	config = $state<YamlObject>({});
 	saving = $state(false);
+	lastSavedAt = $state<string | null>(null);
+	lastSaveFeedback = $state<string>("");
 
 	agentFile = $state<ConfigFile | null>(null);
 	configFile = $state<ConfigFile | null>(null);
+	agentSnapshot = $state("{}");
+	configSnapshot = $state("{}");
 
 	settingsFileName = $derived(
 		SETTINGS_PRIORITY.find((name) => this.agentFile?.name === name || this.configFile?.name === name) ?? null,
@@ -129,6 +133,12 @@ class SettingsStore {
 	settingsIsSameAsAgent = $derived(this.settingsFileName === "agent.yaml" || this.settingsFileName === "AGENT.yaml");
 
 	hasFiles = $derived(!!this.agentFile || !!this.configFile);
+
+	isDirty = $derived(
+		this.agentSnapshot !== JSON.stringify(this.agent) ||
+			(!this.settingsIsSameAsAgent &&
+				this.configSnapshot !== JSON.stringify(this.config)),
+	);
 
 	init(configFiles: ConfigFile[]) {
 		this.agentFile = configFiles.find((f) => f.name === "agent.yaml" || f.name === "AGENT.yaml") ?? null;
@@ -153,6 +163,10 @@ class SettingsStore {
 		} else {
 			this.config = {};
 		}
+
+		this.agentSnapshot = JSON.stringify(this.agent);
+		this.configSnapshot = JSON.stringify(this.config);
+		this.lastSaveFeedback = "";
 	}
 
 	get(obj: YamlObject, ...path: string[]): YamlValue {
@@ -255,18 +269,78 @@ class SettingsStore {
 	}
 
 	async save(): Promise<void> {
+		if (!this.isDirty) {
+			this.lastSaveFeedback = "No changes to save";
+			return;
+		}
+
 		this.saving = true;
-		const results: boolean[] = [];
+		const successfulFiles: string[] = [];
+		const failed: Array<{ file: string; error: string }> = [];
 		try {
 			if (this.agentFile) {
-				results.push(await saveConfigFile(this.agentFile.name, stringify(this.agent)));
+				const result = await saveConfigFileResult(
+					this.agentFile.name,
+					stringify(this.agent),
+				);
+				if (result.ok) {
+					successfulFiles.push(this.agentFile.name);
+					this.agentSnapshot = JSON.stringify(this.agent);
+				} else {
+					failed.push({
+						file: this.agentFile.name,
+						error: result.error ?? `HTTP ${result.status}`,
+					});
+				}
 			}
 			if (!this.settingsIsSameAsAgent && this.settingsFileName) {
-				results.push(await saveConfigFile(this.settingsFileName, stringify(this.config)));
+				const result = await saveConfigFileResult(
+					this.settingsFileName,
+					stringify(this.config),
+				);
+				if (result.ok) {
+					successfulFiles.push(this.settingsFileName);
+					this.configSnapshot = JSON.stringify(this.config);
+				} else {
+					failed.push({
+						file: this.settingsFileName,
+						error: result.error ?? `HTTP ${result.status}`,
+					});
+				}
 			}
-			const allOk = results.length > 0 && results.every(Boolean);
-			toast(allOk ? "Settings saved" : "Failed to save settings", allOk ? "success" : "error");
+
+			if (successfulFiles.length > 0) {
+				this.lastSavedAt = new Date().toISOString();
+			}
+
+			if (failed.length === 0 && successfulFiles.length > 0) {
+				this.lastSaveFeedback = `Saved ${successfulFiles.join(", ")}`;
+				toast(this.lastSaveFeedback, "success");
+			} else if (failed.length > 0 && successfulFiles.length > 0) {
+				this.lastSaveFeedback = `Saved ${successfulFiles.join(", ")}; failed ${failed
+					.map((f) => f.file)
+					.join(", ")}`;
+				toast(
+					`${this.lastSaveFeedback}: ${failed
+						.map((f) => `${f.file} (${f.error})`)
+						.join(", ")}`,
+					"warning",
+					5000,
+				);
+			} else if (failed.length > 0) {
+				this.lastSaveFeedback = `Failed to save ${failed
+					.map((f) => f.file)
+					.join(", ")}`;
+				toast(
+					`${this.lastSaveFeedback}: ${failed
+						.map((f) => `${f.file} (${f.error})`)
+						.join(", ")}`,
+					"error",
+					5000,
+				);
+			}
 		} catch (err) {
+			this.lastSaveFeedback = "Save failed";
 			toast(`Error: ${String(err)}`, "error");
 		} finally {
 			this.saving = false;

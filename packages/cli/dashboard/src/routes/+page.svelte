@@ -2,15 +2,16 @@
 	import { onMount } from "svelte";
 	import { browser } from "$app/environment";
 	import { getStatus, type DaemonStatus, type Memory } from "$lib/api";
-	import {
-		mem,
+import {
+	mem,
 		hasActiveFilters,
 		clearAll,
 		clearSearchTimer,
 		queueMemorySearch,
 		loadWhoOptions,
-	} from "$lib/stores/memory.svelte";
-	import { nav } from "$lib/stores/navigation.svelte";
+} from "$lib/stores/memory.svelte";
+import { nav } from "$lib/stores/navigation.svelte";
+import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
 	import { sk } from "$lib/stores/skills.svelte";
 	import { ts, openForm } from "$lib/stores/tasks.svelte";
 	import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
@@ -92,12 +93,24 @@
 	});
 
 	// --- Init ---
-	onMount(() => {
-		getStatus().then((s) => {
-			daemonStatus = s;
-		});
-		loadWhoOptions();
+onMount(() => {
+	getStatus().then((s) => {
+		daemonStatus = s;
 	});
+	loadWhoOptions();
+
+	const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+		if (!hasUnsavedChanges()) return;
+		event.preventDefault();
+		event.returnValue = "";
+	};
+
+	window.addEventListener("beforeunload", handleBeforeUnload);
+
+	return () => {
+		window.removeEventListener("beforeunload", handleBeforeUnload);
+	};
+});
 </script>
 
 <svelte:head>

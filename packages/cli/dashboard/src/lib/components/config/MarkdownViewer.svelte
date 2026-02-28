@@ -11,9 +11,25 @@ interface Props {
 	charBudget?: number;
 	onchange?: (value: string) => void;
 	onsave?: () => void;
+	dirty?: boolean;
+	saving?: boolean;
+	saveDisabled?: boolean;
+	lastSavedText?: string;
+	saveFeedback?: string;
 }
 
-let { content, filename, charBudget, onchange, onsave }: Props = $props();
+let {
+	content,
+	filename,
+	charBudget,
+	onchange,
+	onsave,
+	dirty = false,
+	saving = false,
+	saveDisabled = false,
+	lastSavedText,
+	saveFeedback,
+}: Props = $props();
 
 const BOXED_SECTION_TITLES = new Set([
 	"behavioral guidelines",
@@ -96,6 +112,15 @@ let rendered = $derived.by(() => {
 			</span>
 		{/if}
 		<div class="md-viewer-actions">
+			{#if lastSavedText}
+				<span class="md-viewer-save-meta">{lastSavedText}</span>
+			{/if}
+			{#if saveFeedback}
+				<span class="md-viewer-save-meta">{saveFeedback}</span>
+			{/if}
+			<span class="md-viewer-save-state" class:dirty={dirty}>
+				{dirty ? "Unsaved changes" : "All changes saved"}
+			</span>
 			{#if editing && onsave}
 				<Button
 					variant="outline"
@@ -105,9 +130,10 @@ let rendered = $derived.by(() => {
 						border-[var(--sig-accent)] text-[var(--sig-text-bright)]
 						hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]
 						hover:border-[var(--sig-text-bright)]"
+					disabled={saveDisabled}
 					onclick={onsave}
 				>
-					SAVE
+					{saving ? "SAVING..." : "SAVE"}
 				</Button>
 			{/if}
 			<Button
@@ -197,6 +223,25 @@ let rendered = $derived.by(() => {
 		display: flex;
 		align-items: center;
 		gap: 6px;
+	}
+
+	.md-viewer-save-meta {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+		letter-spacing: 0.02em;
+	}
+
+	.md-viewer-save-state {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sig-text-muted);
+	}
+
+	.md-viewer-save-state.dirty {
+		color: var(--sig-warning, #d4a017);
 	}
 
 	.md-viewer-prose {

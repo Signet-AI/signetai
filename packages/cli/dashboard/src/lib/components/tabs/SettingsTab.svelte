@@ -1,6 +1,7 @@
 <script lang="ts">
 import type { ConfigFile } from "$lib/api";
 import { st } from "$lib/stores/settings.svelte";
+import { setSettingsDirty } from "$lib/stores/unsaved-changes.svelte";
 import { untrack } from "svelte";
 import AgentSection from "./settings/AgentSection.svelte";
 import AuthSection from "./settings/AuthSection.svelte";
@@ -28,6 +29,22 @@ $effect(() => {
 async function saveSettings() {
 	await st.save();
 }
+
+function formatSavedAt(raw: string | null): string {
+	if (!raw) return "";
+	try {
+		return `Last saved ${new Date(raw).toLocaleTimeString()}`;
+	} catch {
+		return "";
+	}
+}
+
+$effect(() => {
+	setSettingsDirty(st.isDirty);
+	return () => {
+		setSettingsDirty(false);
+	};
+});
 </script>
 
 <div class="settings-tab">
@@ -46,7 +63,18 @@ async function saveSettings() {
 		</div>
 
 		<div class="save-bar">
-			<button class="save-btn" onclick={saveSettings} disabled={st.saving}>
+			<div class="save-meta">
+				<span class="save-state" class:dirty={st.isDirty}>
+					{st.isDirty ? "Unsaved changes" : "All changes saved"}
+				</span>
+				{#if st.lastSavedAt}
+					<span>{formatSavedAt(st.lastSavedAt)}</span>
+				{/if}
+				{#if st.lastSaveFeedback}
+					<span>{st.lastSaveFeedback}</span>
+				{/if}
+			</div>
+			<button class="save-btn" onclick={saveSettings} disabled={st.saving || !st.isDirty}>
 				{st.saving ? "Saving…" : "Save"}
 			</button>
 		</div>
@@ -82,11 +110,31 @@ async function saveSettings() {
 		position: sticky;
 		bottom: 0;
 		display: flex;
+		align-items: center;
+		gap: var(--space-md);
 		justify-content: flex-end;
 		padding: var(--space-sm) var(--space-md);
 		background: var(--sig-surface);
 		border-top: 1px solid var(--sig-border);
 		flex-shrink: 0;
+	}
+
+	.save-meta {
+		margin-right: auto;
+		display: flex;
+		gap: var(--space-sm);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+	}
+
+	.save-state {
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+
+	.save-state.dirty {
+		color: var(--sig-warning, #d4a017);
 	}
 
 	.save-btn {

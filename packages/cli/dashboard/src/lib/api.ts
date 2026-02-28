@@ -131,15 +131,45 @@ export async function saveConfigFile(
 	file: string,
 	content: string,
 ): Promise<boolean> {
+	const result = await saveConfigFileResult(file, content);
+	return result.ok;
+}
+
+export interface SaveConfigResult {
+	readonly ok: boolean;
+	readonly status: number;
+	readonly error?: string;
+}
+
+export async function saveConfigFileResult(
+	file: string,
+	content: string,
+): Promise<SaveConfigResult> {
 	try {
 		const response = await fetch(`${API_BASE}/api/config`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ file, content }),
 		});
-		return response.ok;
-	} catch {
-		return false;
+
+		if (response.ok) {
+			return { ok: true, status: response.status };
+		}
+
+		const payload = (await response.json().catch(() => null)) as
+			| { error?: unknown }
+			| null;
+		const message =
+			typeof payload?.error === "string"
+				? payload.error
+				: `HTTP ${response.status}`;
+		return { ok: false, status: response.status, error: message };
+	} catch (error) {
+		return {
+			ok: false,
+			status: 0,
+			error: error instanceof Error ? error.message : String(error),
+		};
 	}
 }
 
