@@ -18,7 +18,7 @@ import {
 } from "$lib/api";
 import { mem } from "$lib/stores/memory.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
-import { workspaceLayout } from "$lib/stores/workspace-layout.svelte";
+import { workspaceLayout, syncLayoutToStorage } from "$lib/stores/workspace-layout.svelte";
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
 import EmbeddingCanvas3D from "../embeddings/EmbeddingCanvas3D.svelte";
 import EmbeddingInspector from "../embeddings/EmbeddingInspector.svelte";
@@ -1231,14 +1231,17 @@ $effect(() => {
 
 $effect(() => {
 	workspaceLayout.embeddings.controlsOpen = controlsMenuOpen;
+	syncLayoutToStorage();
 });
 
 $effect(() => {
 	workspaceLayout.embeddings.presetsOpen = presetsMenuOpen;
+	syncLayoutToStorage();
 });
 
 $effect(() => {
 	workspaceLayout.embeddings.sourcesOpen = sourcesMenuOpen;
+	syncLayoutToStorage();
 });
 </script>
 
