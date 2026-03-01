@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.14.0] - 2026-03-01
+
+### Bug Fixes
+
+- use PreCompact hook key instead of PreCompaction for Claude Code
+
+
 ## [0.13.0] - 2026-03-01
 
 ### Features
