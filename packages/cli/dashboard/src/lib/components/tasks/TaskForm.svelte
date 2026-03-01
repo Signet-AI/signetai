@@ -44,9 +44,16 @@ function presetLabel(expr: string): string {
 	return match ? match.label : expr;
 }
 
-// Reset form when opening
+// Track the last initialized task to prevent re-initialization on auto-refresh
+// Use undefined as sentinel to distinguish from null (new task)
+let lastInitializedId = $state<string | null | undefined>(undefined);
+
+// Initialize form state only when opening or switching tasks
 $effect(() => {
-	if (open) {
+	// Only initialize when:
+	// 1. Form just opened (open is true)
+	// 2. editingId changed (different task being edited)
+	if (open && (lastInitializedId === undefined || editingId !== lastInitializedId)) {
 		if (editing) {
 			name = editing.name;
 			prompt = editing.prompt;
@@ -63,6 +70,12 @@ $effect(() => {
 			workingDirectory = "";
 			cronMode = "preset";
 		}
+		lastInitializedId = editingId;
+	}
+	
+	// Reset tracking when form closes
+	if (!open) {
+		lastInitializedId = undefined;
 	}
 });
 
