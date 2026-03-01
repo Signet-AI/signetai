@@ -99,6 +99,11 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		flushBatchSize: 50,
 		retentionDays: 90,
 	},
+	embeddingTracker: {
+		enabled: true,
+		pollMs: 5000,
+		batchSize: 8,
+	},
 };
 
 export interface ResolvedMemoryConfig {
@@ -145,6 +150,7 @@ export function loadPipelineConfig(
 	const guardrailsRaw = raw.guardrails as Record<string, unknown> | undefined;
 	const telemetryRaw = raw.telemetry as Record<string, unknown> | undefined;
 	const continuityRaw = raw.continuity as Record<string, unknown> | undefined;
+	const embeddingTrackerRaw = raw.embeddingTracker as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -444,6 +450,24 @@ export function loadPipelineConfig(
 				1,
 				365,
 				d.telemetry.retentionDays,
+			),
+		},
+
+		embeddingTracker: {
+			enabled: resolveBool(
+				embeddingTrackerRaw?.enabled, undefined, d.embeddingTracker.enabled,
+			),
+			pollMs: clampPositive(
+				embeddingTrackerRaw?.pollMs,
+				1000,
+				60000,
+				d.embeddingTracker.pollMs,
+			),
+			batchSize: clampPositive(
+				embeddingTrackerRaw?.batchSize,
+				1,
+				20,
+				d.embeddingTracker.batchSize,
 			),
 		},
 	};
