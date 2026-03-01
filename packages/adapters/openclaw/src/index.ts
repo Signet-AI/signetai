@@ -511,7 +511,22 @@ const signetPlugin = {
 		const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
 		const opts = { daemonUrl };
 
+		// Instance-scoped health state (safe for multi-register)
+		let daemonReachable = true;
+		let healthTimer: ReturnType<typeof setInterval> | null = null;
+
 		api.logger.info(`signet-memory: registered (daemon: ${daemonUrl})`);
+
+		// Fire-and-forget startup health check
+		isDaemonRunning(daemonUrl).then((ok) => {
+			daemonReachable = ok;
+			if (!ok) {
+				api.logger.warn(
+					`signet-memory: daemon unreachable at ${daemonUrl}. ` +
+						`Memory tools will silently no-op until daemon is running.`,
+				);
+			}
+		});
 
 		// ==================================================================
 		// Tools
@@ -912,9 +927,28 @@ const signetPlugin = {
 				api.logger.info(
 					`signet-memory: service started (daemon: ${daemonUrl})`,
 				);
+				healthTimer = setInterval(async () => {
+					const ok = await isDaemonRunning(daemonUrl);
+					if (ok !== daemonReachable) {
+						daemonReachable = ok;
+						if (ok) {
+							api.logger.info(
+								"signet-memory: daemon reconnected",
+							);
+						} else {
+							api.logger.warn(
+								"signet-memory: daemon became unreachable",
+							);
+						}
+					}
+				}, 60_000);
 			},
 			stop() {
 				api.logger.info("signet-memory: service stopped");
+				if (healthTimer) {
+					clearInterval(healthTimer);
+					healthTimer = null;
+				}
 			},
 		});
 	},

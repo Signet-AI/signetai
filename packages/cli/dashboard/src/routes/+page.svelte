@@ -280,6 +280,14 @@ onMount(() => {
 						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
 					</div>
 				{/await}
+			{:else if activeTab === "connectors"}
+				{#await import("$lib/components/tabs/ConnectorsTab.svelte") then module}
+					<module.default />
+				{:catch error}
+					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
+						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+					</div>
+				{/await}
 			{/if}
 		</div>
 
@@ -329,6 +337,9 @@ onMount(() => {
 			{:else if activeTab === "tasks"}
 				<span>{ts.tasks.length} scheduled tasks</span>
 				<span>cron scheduler</span>
+			{:else if activeTab === "connectors"}
+				<span>platform harnesses + data sources</span>
+				<span>connector health</span>
 			{/if}
 		</div>
 	</main>

@@ -11,6 +11,7 @@
 	import Zap from "@lucide/svelte/icons/zap";
 	import CalendarClock from "@lucide/svelte/icons/calendar-clock";
 	import Activity from "@lucide/svelte/icons/activity";
+	import Plug from "@lucide/svelte/icons/plug";
 	import Sun from "@lucide/svelte/icons/sun";
 	import Moon from "@lucide/svelte/icons/moon";
 	import Github from "@lucide/svelte/icons/github";
@@ -43,6 +44,7 @@
 		{ id: "secrets", label: "Secrets", icon: KeyRound },
 		{ id: "skills", label: "Skills", icon: Zap },
 		{ id: "tasks", label: "Tasks", icon: CalendarClock },
+		{ id: "connectors", label: "Connectors", icon: Plug },
 	];
 </script>
 

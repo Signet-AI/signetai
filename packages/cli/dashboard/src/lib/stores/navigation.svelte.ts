@@ -13,7 +13,8 @@ export type TabId =
 	| "logs"
 	| "secrets"
 	| "skills"
-	| "tasks";
+	| "tasks"
+	| "connectors";
 
 export const nav = $state({
 	activeTab: "config" as TabId,
