@@ -7,7 +7,10 @@ import {
 	doSearch,
 	findSimilar,
 	clearAll,
+	openEditForm,
+	closeEditForm,
 } from "$lib/stores/memory.svelte";
+import MemoryForm from "$lib/components/memory/MemoryForm.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { ActionLabels } from "$lib/ui/action-labels";
 import * as Select from "$lib/components/ui/select/index.js";
@@ -23,12 +26,19 @@ interface Props {
 
 let { memories }: Props = $props();
 
-let display = $derived(
+let rawDisplay = $derived(
 	mem.similarSourceId
 		? mem.similarResults
 		: mem.searched || hasActiveFilters()
 			? mem.results
 			: memories,
+);
+
+// Filter out locally-deleted memories so they disappear immediately
+let display = $derived(
+	mem.deletedIds.size > 0
+		? rawDisplay.filter((m) => !mem.deletedIds.has(m.id))
+		: rawDisplay,
 );
 
 function parseMemoryTags(raw: Memory["tags"]): string[] {
@@ -307,13 +317,23 @@ function formatIsoDate(value: string): string {
 							<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-accent)]">{scoreLabel}</Badge>
 						{/if}
 
-						{#if memory.id}
-							<button
-								class="ml-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-accent)] transition-colors duration-100 bg-transparent"
-								onclick={() => findSimilar(memory.id, memory)}
-								title="Find similar"
-							>similar</button>
-						{/if}
+					{#if memory.id}
+						<button
+							class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-accent)] transition-colors duration-100 bg-transparent"
+							onclick={() => openEditForm(memory.id, "edit")}
+							title="Edit memory"
+						>edit</button>
+						<button
+							class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-red-400 transition-colors duration-100 bg-transparent"
+							onclick={() => openEditForm(memory.id, "delete")}
+							title="Delete memory"
+						>delete</button>
+						<button
+							class="ml-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-accent)] transition-colors duration-100 bg-transparent"
+							onclick={() => findSimilar(memory.id, memory)}
+							title="Find similar"
+						>similar</button>
+					{/if}
 					</footer>
 				</article>
 			{:else}
@@ -330,6 +350,14 @@ function formatIsoDate(value: string): string {
 		{/if}
 	</div>
 	</section>
+
+	<MemoryForm
+		open={mem.formOpen}
+		editingId={mem.editingId}
+		mode={mem.editMode}
+		memories={display}
+		onclose={closeEditForm}
+	/>
 </div>
 
 <style>

@@ -9,6 +9,8 @@ import {
 	recallMemories,
 	getSimilarMemories,
 	getDistinctWho,
+	updateMemory,
+	deleteMemory,
 	type Memory,
 } from "$lib/api";
 
@@ -31,6 +33,14 @@ export const mem = $state({
 	similarSource: null as Memory | null,
 	similarResults: [] as Memory[],
 	loadingSimilar: false,
+
+	// Edit / delete form state
+	editingId: null as string | null,
+	editMode: null as "edit" | "delete" | null,
+	formOpen: false,
+
+	// Track locally-deleted IDs so the default (prop) view hides them
+	deletedIds: new Set<string>(),
 });
 
 export function hasActiveFilters(): boolean {
@@ -145,4 +155,63 @@ export function loadWhoOptions(): void {
 			mem.whoOptions = values;
 		})
 		.catch(() => {});
+}
+
+// --- Edit / Delete ---
+
+export function openEditForm(id: string, mode: "edit" | "delete"): void {
+	mem.editingId = id;
+	mem.editMode = mode;
+	mem.formOpen = true;
+}
+
+export function closeEditForm(): void {
+	mem.editingId = null;
+	mem.editMode = null;
+	mem.formOpen = false;
+}
+
+export async function doUpdateMemory(
+	id: string,
+	updates: {
+		content?: string;
+		type?: string;
+		importance?: number;
+		tags?: string;
+		pinned?: boolean;
+	},
+	reason: string,
+): Promise<{ success: boolean; error?: string }> {
+	const result = await updateMemory(id, updates, reason);
+	if (result.success) {
+		// Refresh current view from server
+		await doSearch();
+	}
+	return result;
+}
+
+export async function doDeleteMemory(
+	id: string,
+	reason: string,
+	force = false,
+): Promise<{ success: boolean; error?: string }> {
+	const result = await deleteMemory(id, reason, force);
+	if (result.success) {
+		// If we deleted the similarity source, clear that panel
+		if (id === mem.similarSourceId) {
+			mem.similarSourceId = null;
+			mem.similarSource = null;
+			mem.similarResults = [];
+		}
+		// Remove from local results and track deletion
+		mem.results = mem.results.filter((m) => m.id !== id);
+		mem.similarResults = mem.similarResults.filter((m) => m.id !== id);
+		mem.deletedIds.add(id);
+
+		// Only re-fetch if there's an active search/filter
+		if (mem.query.trim() || hasActiveFilters()) {
+			await doSearch();
+		}
+	}
+	return result;
 }
