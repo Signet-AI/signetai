@@ -213,6 +213,13 @@ export interface PipelineV2Config {
 	readonly documents: PipelineDocumentsConfig;
 	readonly guardrails: PipelineGuardrailsConfig;
 	readonly telemetry: PipelineTelemetryConfig;
+	readonly embeddingTracker: PipelineEmbeddingTrackerConfig;
+}
+
+export interface PipelineEmbeddingTrackerConfig {
+	readonly enabled: boolean;
+	readonly pollMs: number;
+	readonly batchSize: number;
 }
 
 // -- Status/union constants --

@@ -28,6 +28,7 @@ import { spawn } from "child_process";
 import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
+import { startEmbeddingTracker, type EmbeddingTrackerHandle } from "./embedding-tracker";
 import { initLlmProvider, closeLlmProvider } from "./llm";
 import {
 	syncVecInsert,
@@ -184,6 +185,7 @@ const repairLimiter = createRateLimiter();
 
 // Telemetry — assigned in main(), read by cleanup()
 let telemetryRef: TelemetryCollector | undefined;
+let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
 // Prevents concurrent UMAP computations for the same dimension count
@@ -3419,7 +3421,8 @@ app.get("/api/embeddings", async (c) => {
 app.get("/api/embeddings/status", async (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
 	const status = await checkEmbeddingProvider(config.embedding);
-	return c.json(status);
+	const tracker = embeddingTrackerHandle?.getStats() ?? null;
+	return c.json({ ...status, tracker });
 });
 
 app.get("/api/embeddings/health", async (c) => {
@@ -7295,6 +7298,16 @@ async function cleanup() {
 		telemetryRef = undefined;
 	}
 
+	// Stop embedding tracker before pipeline/DB teardown
+	if (embeddingTrackerHandle) {
+		try {
+			await embeddingTrackerHandle.stop();
+		} catch {
+			// best-effort
+		}
+		embeddingTrackerHandle = null;
+	}
+
 	// Drain pipeline before closing DB so in-flight jobs finish writes
 	try {
 		await stopPipeline();
@@ -7498,6 +7511,20 @@ async function main() {
 		// Retention worker runs unconditionally — cleans up tombstones,
 		// expired history, and dead jobs even without the full pipeline.
 		startRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
+	}
+
+	// Start embedding tracker if provider is configured and tracker enabled
+	if (
+		memoryCfg.embedding.provider !== "none" &&
+		memoryCfg.pipelineV2.embeddingTracker.enabled
+	) {
+		embeddingTrackerHandle = startEmbeddingTracker(
+			getDbAccessor(),
+			memoryCfg.embedding,
+			memoryCfg.pipelineV2.embeddingTracker,
+			fetchEmbedding,
+			checkEmbeddingProvider,
+		);
 	}
 
 	// Start scheduled task worker
