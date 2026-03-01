@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.14.1] - 2026-03-01
+
+### Bug Fixes
+
+- resolve embedding tracker dimensions constraint and prompt recall query issues
+
+
 ## [0.14.0] - 2026-03-01
 
 ### Bug Fixes
