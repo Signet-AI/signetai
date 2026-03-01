@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.12.0] - 2026-03-01
+
+### Bug Fixes
+
+- **dashboard**: handle null editingId for new task creation
+- **dashboard**: prevent task form from resetting on auto-refresh
+
+
 ## [0.11.2] - 2026-03-01
 
 ### Features
