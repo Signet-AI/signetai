@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.14.5] - 2026-03-01
+
+### Features
+
+- **web**: add SEO and AEO infrastructure
+
+
 ## [0.14.4] - 2026-03-01
 
 ### Bug Fixes
