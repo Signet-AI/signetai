@@ -14,8 +14,25 @@ export const MIN_EMBEDDING_LIMIT = 50;
 export const MAX_EMBEDDING_LIMIT = 5000;
 export const EMBEDDING_LIMIT_STORAGE_KEY = "signet-embedding-limit";
 export const GRAPH_K = 4;
+export const KNN_EXACT_THRESHOLD = 450;
+export const KNN_APPROX_WINDOW_MULTIPLIER = 6;
 export const RELATION_LIMIT = 10;
 export const EMBEDDING_PAGE_PROBE_LIMIT = 24;
+export const GRAPH_PHYSICS_STORAGE_KEY = "signet-embeddings-graph-physics";
+
+export interface GraphPhysicsConfig {
+	centerForce: number;
+	repelForce: number;
+	linkForce: number;
+	linkDistance: number;
+}
+
+export const DEFAULT_GRAPH_PHYSICS: GraphPhysicsConfig = {
+	centerForce: 0.28,
+	repelForce: -260,
+	linkForce: 0.12,
+	linkDistance: 92,
+};
 
 export const sourceColors: Record<string, string> = {
 	"claude-code": "#5eada4",
@@ -68,22 +85,51 @@ export interface GraphEdge {
 	target: GraphNode | number;
 }
 
+export function clampGraphPhysics(value: GraphPhysicsConfig): GraphPhysicsConfig {
+	const clamp = (raw: number, min: number, max: number): number => Math.min(max, Math.max(min, raw));
+	return {
+		centerForce: clamp(value.centerForce, 0, 1),
+		repelForce: clamp(value.repelForce, -600, -10),
+		linkForce: clamp(value.linkForce, 0.01, 1),
+		linkDistance: clamp(value.linkDistance, 12, 280),
+	};
+}
+
+interface ScoredNeighbor {
+	index: number;
+	distance: number;
+}
+
+function squaredDistance(left: readonly number[], right: readonly number[]): number {
+	let distance = 0;
+	for (let index = 0; index < left.length; index += 1) {
+		const diff = left[index] - right[index];
+		distance += diff * diff;
+	}
+	return distance;
+}
+
+function insertNearestNeighbor(neighbors: ScoredNeighbor[], next: ScoredNeighbor, k: number): void {
+	let index = 0;
+	while (index < neighbors.length && neighbors[index].distance <= next.distance) {
+		index += 1;
+	}
+	if (index >= k) return;
+	neighbors.splice(index, 0, next);
+	if (neighbors.length > k) neighbors.pop();
+}
+
 // ---------------------------------------------------------------------------
 // Color helpers
 // ---------------------------------------------------------------------------
 
 export function hexToRgb(hex: string): [number, number, number] {
-	const v = parseInt(hex.slice(1), 16);
+	const v = Number.parseInt(hex.slice(1), 16);
 	return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
-export function sourceColorRgba(
-	who: string | undefined,
-	alpha: number,
-): string {
-	const [r, g, b] = hexToRgb(
-		sourceColors[who ?? "unknown"] ?? sourceColors["unknown"],
-	);
+export function sourceColorRgba(who: string | undefined, alpha: number): string {
+	const [r, g, b] = hexToRgb(sourceColors[who ?? "unknown"] ?? sourceColors["unknown"]);
 	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
@@ -103,8 +149,7 @@ export function cosineSimilarity(
 	leftNorm: number,
 	rightNorm: number,
 ): number {
-	if (leftNorm === 0 || rightNorm === 0 || left.length !== right.length)
-		return 0;
+	if (leftNorm === 0 || rightNorm === 0 || left.length !== right.length) return 0;
 	let dot = 0;
 	for (let i = 0; i < left.length; i++) dot += left[i] * right[i];
 	return dot / (leftNorm * rightNorm);
@@ -114,17 +159,12 @@ export function cosineSimilarity(
 // Embedding accessors
 // ---------------------------------------------------------------------------
 
-export function hasEmbeddingVector(
-	entry: EmbeddingPoint,
-): entry is EmbeddingPoint & { vector: number[] } {
+export function hasEmbeddingVector(entry: EmbeddingPoint): entry is EmbeddingPoint & { vector: number[] } {
 	return Array.isArray(entry.vector) && entry.vector.length > 0;
 }
 
 /** Cached norm lookup -- pass the mutable cache from the caller. */
-export function embeddingNorm(
-	embedding: EmbeddingPoint,
-	cache: Map<string, number>,
-): number {
+export function embeddingNorm(embedding: EmbeddingPoint, cache: Map<string, number>): number {
 	const cached = cache.get(embedding.id);
 	if (typeof cached === "number") return cached;
 	if (!hasEmbeddingVector(embedding)) return 0;
@@ -148,25 +188,17 @@ export function embeddingSourceLabel(embedding: EmbeddingPoint): string {
 // Relation scoring
 // ---------------------------------------------------------------------------
 
-export function insertTopScore(
-	scores: RelationScore[],
-	next: RelationScore,
-): void {
+export function insertTopScore(scores: RelationScore[], next: RelationScore): void {
 	let index = 0;
-	while (index < scores.length && scores[index].score >= next.score)
-		index += 1;
+	while (index < scores.length && scores[index].score >= next.score) index += 1;
 	if (index >= RELATION_LIMIT) return;
 	scores.splice(index, 0, next);
 	if (scores.length > RELATION_LIMIT) scores.pop();
 }
 
-export function insertBottomScore(
-	scores: RelationScore[],
-	next: RelationScore,
-): void {
+export function insertBottomScore(scores: RelationScore[], next: RelationScore): void {
 	let index = 0;
-	while (index < scores.length && scores[index].score <= next.score)
-		index += 1;
+	while (index < scores.length && scores[index].score <= next.score) index += 1;
 	if (index >= RELATION_LIMIT) return;
 	scores.splice(index, 0, next);
 	if (scores.length > RELATION_LIMIT) scores.pop();
@@ -176,10 +208,7 @@ export function insertBottomScore(
 // KNN edge construction
 // ---------------------------------------------------------------------------
 
-export function buildExactKnnEdges(
-	projected: number[][],
-	k: number,
-): [number, number][] {
+export function buildExactKnnEdges(projected: number[][], k: number): [number, number][] {
 	const edgeSet = new Set<string>();
 	const result: [number, number][] = [];
 	for (let i = 0; i < projected.length; i++) {
@@ -207,22 +236,18 @@ export function buildExactKnnEdges(
 	return result;
 }
 
-export function buildApproximateKnnEdges(
-	projected: number[][],
-	k: number,
-): [number, number][] {
+export function buildApproximateKnnEdges(projected: number[][], k: number): [number, number][] {
 	const edgeSet = new Set<string>();
 	const result: [number, number][] = [];
-	const ids = projected.map((_, index) => index);
-	const byX = [...ids].sort(
-		(a, b) => projected[a][0] - projected[b][0],
-	);
-	const byY = [...ids].sort(
-		(a, b) => projected[a][1] - projected[b][1],
-	);
-	const windowSize = Math.max(2, k * 3);
+	if (projected.length <= 2) return result;
 
-	const addEdge = (a: number, b: number) => {
+	const ids = projected.map((_, index) => index);
+	const byX = [...ids].sort((a, b) => projected[a][0] - projected[b][0]);
+	const byY = [...ids].sort((a, b) => projected[a][1] - projected[b][1]);
+	const windowSize = Math.max(4, k * KNN_APPROX_WINDOW_MULTIPLIER);
+	const candidateNeighbors: Array<Set<number>> = projected.map(() => new Set<number>());
+
+	const addEdge = (a: number, b: number): void => {
 		if (a === b) return;
 		const left = Math.min(a, b);
 		const right = Math.max(a, b);
@@ -232,29 +257,44 @@ export function buildApproximateKnnEdges(
 		result.push([left, right]);
 	};
 
-	const addFromOrdering = (ordering: number[]) => {
+	const collectCandidates = (ordering: number[]): void => {
 		for (let idx = 0; idx < ordering.length; idx++) {
 			const source = ordering[idx];
+			const candidates = candidateNeighbors[source];
 			for (let offset = 1; offset <= windowSize; offset++) {
 				const left = idx - offset;
 				const right = idx + offset;
-				if (left >= 0) addEdge(source, ordering[left]);
-				if (right < ordering.length)
-					addEdge(source, ordering[right]);
+				if (left >= 0) candidates.add(ordering[left]);
+				if (right < ordering.length) candidates.add(ordering[right]);
 			}
 		}
 	};
 
-	addFromOrdering(byX);
-	addFromOrdering(byY);
+	collectCandidates(byX);
+	collectCandidates(byY);
+
+	for (let source = 0; source < projected.length; source += 1) {
+		const nearest: ScoredNeighbor[] = [];
+		for (const candidate of candidateNeighbors[source]) {
+			insertNearestNeighbor(
+				nearest,
+				{
+					index: candidate,
+					distance: squaredDistance(projected[source], projected[candidate]),
+				},
+				k,
+			);
+		}
+		for (const neighbor of nearest) {
+			addEdge(source, neighbor.index);
+		}
+	}
+
 	return result;
 }
 
-export function buildKnnEdges(
-	projected: number[][],
-	k: number,
-): [number, number][] {
-	if (projected.length <= 450) return buildExactKnnEdges(projected, k);
+export function buildKnnEdges(projected: number[][], k: number): [number, number][] {
+	if (projected.length <= KNN_EXACT_THRESHOLD) return buildExactKnnEdges(projected, k);
 	return buildApproximateKnnEdges(projected, k);
 }
 
@@ -263,10 +303,7 @@ export function buildKnnEdges(
 // ---------------------------------------------------------------------------
 
 export function clampEmbeddingLimit(value: number): number {
-	return Math.min(
-		MAX_EMBEDDING_LIMIT,
-		Math.max(MIN_EMBEDDING_LIMIT, value),
-	);
+	return Math.min(MAX_EMBEDDING_LIMIT, Math.max(MIN_EMBEDDING_LIMIT, value));
 }
 
 export function mergeUniqueEmbeddings(
@@ -325,14 +362,8 @@ export function nodeFillStyle(
 
 	if (selectedId === id) return "rgba(255, 255, 255, 0.95)";
 	if (outsideLens) return dimmed ? "rgba(80, 80, 80, 0.08)" : "rgba(95, 95, 95, 0.15)";
-	if (relation === "similar")
-		return dimmed
-			? "rgba(129, 180, 255, 0.35)"
-			: "rgba(129, 180, 255, 0.9)";
-	if (relation === "dissimilar")
-		return dimmed
-			? "rgba(255, 146, 146, 0.35)"
-			: "rgba(255, 146, 146, 0.9)";
+	if (relation === "similar") return dimmed ? "rgba(129, 180, 255, 0.35)" : "rgba(129, 180, 255, 0.9)";
+	if (relation === "dissimilar") return dimmed ? "rgba(255, 146, 146, 0.35)" : "rgba(255, 146, 146, 0.9)";
 	if (isPinned) return dimmed ? "rgba(220, 220, 220, 0.42)" : "rgba(235, 235, 235, 0.95)";
 	if (dimmed) return "rgba(120, 120, 120, 0.2)";
 	return sourceColorRgba(node.data.who, 0.85);
@@ -349,16 +380,14 @@ export function edgeStrokeStyle(
 ): string {
 	const sourceDimmed = filterIds !== null && !filterIds.has(sourceId);
 	const targetDimmed = filterIds !== null && !filterIds.has(targetId);
-	if (sourceDimmed || targetDimmed)
-		return "rgba(120, 120, 120, 0.12)";
+	if (sourceDimmed || targetDimmed) return "rgba(120, 120, 120, 0.12)";
 	if (lensActive) {
 		const sourceInLens = lensIds.has(sourceId);
 		const targetInLens = lensIds.has(targetId);
 		if (sourceInLens && targetInLens) return "rgba(220, 220, 220, 0.72)";
 		return "rgba(90, 90, 90, 0.08)";
 	}
-	if (relations.get(sourceId) || relations.get(targetId))
-		return "rgba(200, 200, 200, 0.6)";
+	if (relations.get(sourceId) || relations.get(targetId)) return "rgba(200, 200, 200, 0.6)";
 	return "rgba(180, 180, 180, 0.4)";
 }
 

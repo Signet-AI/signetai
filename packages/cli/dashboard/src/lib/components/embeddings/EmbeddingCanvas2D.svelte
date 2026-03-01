@@ -1,20 +1,15 @@
 <script lang="ts">
-import { tick } from "svelte";
-import {
-	forceSimulation,
-	forceLink,
-	forceManyBody,
-	forceCenter,
-	forceCollide,
-} from "d3-force";
+import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY } from "d3-force";
 import type { EmbeddingPoint } from "../../api";
 import {
-	type GraphNode,
 	type GraphEdge,
+	type GraphNode,
+	type GraphPhysicsConfig,
 	type RelationKind,
-	nodeFillStyle,
+	clampGraphPhysics,
 	edgeStrokeStyle,
 	embeddingLabel,
+	nodeFillStyle,
 } from "./embedding-graph";
 
 interface Props {
@@ -27,10 +22,12 @@ interface Props {
 	pinnedIds: Set<string>;
 	lensIds: Set<string>;
 	clusterLensMode: boolean;
+	graphPhysics: GraphPhysicsConfig;
 	onselectnode: (embedding: EmbeddingPoint | null) => void;
 	onhovernode: (embedding: EmbeddingPoint | null) => void;
 }
 
+// biome-ignore lint/style/useConst: Svelte keeps prop bindings reactive.
 let {
 	nodes,
 	edges,
@@ -41,10 +38,12 @@ let {
 	pinnedIds,
 	lensIds,
 	clusterLensMode,
+	graphPhysics,
 	onselectnode,
 	onhovernode,
 }: Props = $props();
 
+// biome-ignore lint/style/useConst: Mutated by bind:this.
 let canvas = $state<HTMLCanvasElement | null>(null);
 
 // Camera state (internal)
@@ -106,18 +105,27 @@ export function focusNode(id: string): void {
 export function startSimulation(
 	graphNodes: GraphNode[],
 	graphEdges: GraphEdge[],
+	nextPhysics: GraphPhysicsConfig = graphPhysics,
 ): void {
 	simulation?.stop();
+	const physics = clampGraphPhysics(nextPhysics);
 	simulation = forceSimulation(graphNodes as any)
-		.force("link", forceLink(graphEdges).distance(58).strength(0.28))
-		.force("charge", forceManyBody().strength(-72))
-		.force("center", forceCenter(0, 0))
+		.force("link", forceLink(graphEdges).distance(physics.linkDistance).strength(physics.linkForce))
+		.force("charge", forceManyBody().strength(physics.repelForce))
+		.force("x", forceX(0).strength(physics.centerForce))
+		.force("y", forceY(0).strength(physics.centerForce))
 		.force(
 			"collide",
 			forceCollide().radius((entry: any) => entry.radius + 2),
 		)
 		.alphaDecay(0.03)
 		.on("tick", requestRedraw);
+}
+
+export function updatePhysics(nextPhysics: GraphPhysicsConfig): void {
+	if (!simulation) return;
+	startSimulation(nodes, edges, nextPhysics);
+	requestRedraw();
 }
 
 export function stopSimulation(): void {
@@ -176,10 +184,7 @@ function screenToWorld(sx: number, sy: number): [number, number] {
 	const rect = canvas.getBoundingClientRect();
 	const cx = rect.width / 2;
 	const cy = rect.height / 2;
-	return [
-		(sx - rect.left - cx) / camZoom + camX,
-		(sy - rect.top - cy) / camZoom + camY,
-	];
+	return [(sx - rect.left - cx) / camZoom + camX, (sy - rect.top - cy) / camZoom + camY];
 }
 
 function findNodeAt(wx: number, wy: number): GraphNode | null {
@@ -226,12 +231,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 
 	const selectedId = graphSelected?.id ?? null;
 
-	const edgeBudget =
-		camZoom >= 1.4
-			? MAX_EDGES_NEAR
-			: camZoom >= 0.8
-				? MAX_EDGES_MID
-				: MAX_EDGES_FAR;
+	const edgeBudget = camZoom >= 1.4 ? MAX_EDGES_NEAR : camZoom >= 0.8 ? MAX_EDGES_MID : MAX_EDGES_FAR;
 	const edgeStep = Math.max(1, Math.ceil(edges.length / edgeBudget));
 	for (let i = 0; i < edges.length; i += edgeStep) {
 		const edge = edges[i];
@@ -290,11 +290,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 			ctx.font = `${fs}px var(--font-mono)`;
 			ctx.fillStyle = "rgba(220, 220, 220, 0.9)";
 			ctx.textAlign = "left";
-			ctx.fillText(
-				text,
-				node.x + node.radius + 5 / camZoom,
-				node.y + fs * 0.35,
-			);
+			ctx.fillText(text, node.x + node.radius + 5 / camZoom, node.y + fs * 0.35);
 			ctx.textAlign = "start";
 		}
 	}

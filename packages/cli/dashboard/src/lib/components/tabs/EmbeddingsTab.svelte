@@ -1,38 +1,44 @@
 <script lang="ts">
-import { tick } from "svelte";
-import { onMount } from "svelte";
 import {
+	type EmbeddingCheckResult,
+	type EmbeddingHealthReport,
+	type EmbeddingPoint,
+	type Memory,
+	type ProjectionNode,
+	type ProjectionQueryOptions,
+	getDistinctWho,
+	getEmbeddingHealth,
 	getProjection,
 	getSimilarMemories,
-	setMemoryPinned,
-	getEmbeddingHealth,
 	repairCleanOrphans,
 	repairReEmbed,
-	getDistinctWho,
-	type Memory,
-	type EmbeddingPoint,
-	type ProjectionNode,
-	type EmbeddingHealthReport,
-	type EmbeddingCheckResult,
-	type ProjectionQueryOptions,
+	setMemoryPinned,
 } from "$lib/api";
+import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import { mem } from "$lib/stores/memory.svelte";
+import { syncLayoutToStorage, workspaceLayout } from "$lib/stores/workspace-layout.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
-import { workspaceLayout, syncLayoutToStorage } from "$lib/stores/workspace-layout.svelte";
+import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { tick } from "svelte";
+import { onMount } from "svelte";
+// biome-ignore lint/style/useImportType: Svelte component tags need value imports.
 import EmbeddingCanvas2D from "../embeddings/EmbeddingCanvas2D.svelte";
+// biome-ignore lint/style/useImportType: Svelte component tags need value imports.
 import EmbeddingCanvas3D from "../embeddings/EmbeddingCanvas3D.svelte";
 import EmbeddingInspector from "../embeddings/EmbeddingInspector.svelte";
-import * as Collapsible from "$lib/components/ui/collapsible/index.js";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
 import {
-	type RelationKind,
-	type EmbeddingRelation,
-	type GraphNode,
-	type GraphEdge,
-	sourceColorRgba,
-	embeddingLabel,
 	DEFAULT_EMBEDDING_LIMIT,
+	DEFAULT_GRAPH_PHYSICS,
+	type EmbeddingRelation,
+	GRAPH_PHYSICS_STORAGE_KEY,
+	type GraphEdge,
+	type GraphNode,
+	type GraphPhysicsConfig,
 	MAX_EMBEDDING_LIMIT,
+	type RelationKind,
+	clampGraphPhysics,
+	embeddingLabel,
+	sourceColorRgba,
 } from "../embeddings/embedding-graph";
 
 interface Props {
@@ -49,7 +55,7 @@ interface FilterPreset {
 	clusterLensMode: boolean;
 }
 
-let { onopenglobalsimilar }: Props = $props();
+const { onopenglobalsimilar }: Props = $props();
 
 // -----------------------------------------------------------------------
 // State
@@ -82,6 +88,7 @@ let lensIds = $state<Set<string>>(new Set());
 let activePresetId = $state("focus");
 let customPresets = $state<FilterPreset[]>([]);
 let presetsHydrated = $state(false);
+// biome-ignore lint/style/useConst: Mutated by Svelte bind:open.
 let showAdvancedFilters = $state(false);
 let controlsMenuOpen = $state(true);
 let presetsMenuOpen = $state(false);
@@ -112,6 +119,7 @@ let selectedServerSourceTypes = $state<Set<string>>(new Set());
 let lastAppliedProjectionKey = $state("");
 let projectionReloadTimer = 0;
 
+// biome-ignore lint/style/useConst: Mutated from template callback.
 let relationMode = $state<RelationKind>("similar");
 let similarNeighbors = $state<EmbeddingRelation[]>([]);
 let dissimilarNeighbors = $state<EmbeddingRelation[]>([]);
@@ -126,21 +134,28 @@ let nodeIdsByIndex = $state<string[]>([]);
 let graphMode: "2d" | "3d" = $state("2d");
 let projected3dCoords = $state<number[][]>([]);
 let graphLoadId = 0;
+let graphPhysics = $state<GraphPhysicsConfig>(DEFAULT_GRAPH_PHYSICS);
+let graphPhysicsHydrated = $state(false);
 
 let embeddingById = $state(new Map<string, EmbeddingPoint>());
 let relationLookup = $state(new Map<string, RelationKind>());
 let hoverLockedId = $state<string | null>(null);
 
+// biome-ignore lint/style/useConst: Mutated by bind:this.
 let graphRegion = $state<HTMLDivElement | null>(null);
+// biome-ignore lint/style/useConst: Mutated by bind:this.
 let hoverCardEl = $state<HTMLDivElement | null>(null);
 let hoverX = 0;
 let hoverY = 0;
 let cachedRegionRect: DOMRect | null = null;
 
+// biome-ignore lint/style/useConst: Mutated by bind:this.
 let canvas2d = $state<EmbeddingCanvas2D | null>(null);
+// biome-ignore lint/style/useConst: Mutated by bind:this.
 let canvas3d = $state<EmbeddingCanvas3D | null>(null);
 
 let healthReport = $state<EmbeddingHealthReport | null>(null);
+// biome-ignore lint/style/useConst: Mutated from template callback.
 let healthExpanded = $state(false);
 let healthFixBusy = $state(false);
 let healthTimer: ReturnType<typeof setInterval> | undefined;
@@ -232,16 +247,11 @@ function formatShortDate(dateLike: string | undefined): string {
 }
 
 function normalizeProjectionWindow(): { offset: number; limit: number } {
-	const offset = Number.isFinite(projectionRangeMin)
-		? Math.max(0, Math.trunc(projectionRangeMin))
-		: 0;
+	const offset = Number.isFinite(projectionRangeMin) ? Math.max(0, Math.trunc(projectionRangeMin)) : 0;
 	const requestedMax = Number.isFinite(projectionRangeMax)
 		? Math.max(1, Math.trunc(projectionRangeMax))
 		: DEFAULT_EMBEDDING_LIMIT;
-	const maxExclusive = Math.max(
-		offset + 1,
-		Math.min(requestedMax, offset + MAX_EMBEDDING_LIMIT),
-	);
+	const maxExclusive = Math.max(offset + 1, Math.min(requestedMax, offset + MAX_EMBEDDING_LIMIT));
 	return { offset, limit: maxExclusive - offset };
 }
 
@@ -251,10 +261,7 @@ function syncProjectionWindowInputs(): void {
 	projectionRangeMax = offset + limit;
 }
 
-function parseLocalDateToIso(
-	dateValue: string,
-	endOfDay: boolean,
-): string | undefined {
+function parseLocalDateToIso(dateValue: string, endOfDay: boolean): string | undefined {
 	const trimmed = dateValue.trim();
 	if (!trimmed) return undefined;
 	const suffix = endOfDay ? "T23:59:59.999" : "T00:00:00.000";
@@ -271,10 +278,18 @@ function parseImportanceBound(raw: string): number | undefined {
 	return Math.min(1, Math.max(0, parsed));
 }
 
-function timePresetSinceIso(
-	preset: TimeFilterPreset,
-	anchorMs: number,
-): string | undefined {
+function readInputNumber(event: Event, fallback: number): number {
+	const target = event.currentTarget;
+	if (!(target instanceof HTMLInputElement)) return fallback;
+	const parsed = Number.parseFloat(target.value);
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function updateGraphPhysics(patch: Partial<GraphPhysicsConfig>): void {
+	graphPhysics = clampGraphPhysics({ ...graphPhysics, ...patch });
+}
+
+function timePresetSinceIso(preset: TimeFilterPreset, anchorMs: number): string | undefined {
 	if (preset === "all" || preset === "custom") return undefined;
 	const spanMs =
 		preset === "24h"
@@ -322,11 +337,7 @@ function buildProjectionQueryOptions(): ProjectionQueryOptions {
 
 	let importanceMin = parseImportanceBound(projectionImportanceMin);
 	let importanceMax = parseImportanceBound(projectionImportanceMax);
-	if (
-		typeof importanceMin === "number" &&
-		typeof importanceMax === "number" &&
-		importanceMin > importanceMax
-	) {
+	if (typeof importanceMin === "number" && typeof importanceMax === "number" && importanceMin > importanceMax) {
 		const swap = importanceMin;
 		importanceMin = importanceMax;
 		importanceMax = swap;
@@ -349,16 +360,12 @@ function projectionQueryKey(options: ProjectionQueryOptions): string {
 		pinned: options.pinned ?? "all",
 		since: options.since ?? "",
 		until: options.until ?? "",
-		importanceMin:
-			typeof options.importanceMin === "number" ? options.importanceMin : "",
-		importanceMax:
-			typeof options.importanceMax === "number" ? options.importanceMax : "",
+		importanceMin: typeof options.importanceMin === "number" ? options.importanceMin : "",
+		importanceMax: typeof options.importanceMax === "number" ? options.importanceMax : "",
 	});
 }
 
-function intersectFilterSets(
-	filters: Array<Set<string> | null>,
-): Set<string> | null {
+function intersectFilterSets(filters: Array<Set<string> | null>): Set<string> | null {
 	let out: Set<string> | null = null;
 	for (const filter of filters) {
 		if (filter === null) continue;
@@ -371,17 +378,10 @@ function intersectFilterSets(
 	return out;
 }
 
-function updateEmbeddingInState(
-	id: string,
-	patch: (entry: EmbeddingPoint) => EmbeddingPoint,
-): void {
-	embeddings = embeddings.map((entry) =>
-		entry.id === id ? patch(entry) : entry,
-	);
+function updateEmbeddingInState(id: string, patch: (entry: EmbeddingPoint) => EmbeddingPoint): void {
+	embeddings = embeddings.map((entry) => (entry.id === id ? patch(entry) : entry));
 	embeddingById = new Map(embeddings.map((entry) => [entry.id, entry]));
-	nodes = nodes.map((node) =>
-		node.data.id === id ? { ...node, data: patch(node.data) } : node,
-	);
+	nodes = nodes.map((node) => (node.data.id === id ? { ...node, data: patch(node.data) } : node));
 	if (graphSelected?.id === id) {
 		const next = embeddingById.get(id) ?? null;
 		graphSelected = next;
@@ -530,7 +530,6 @@ function getEdgeEndpointId(endpoint: GraphEdge["source"]): string | null {
 	return endpoint?.data.id ?? null;
 }
 
-
 const FILTER_PRESET_STORAGE_KEY = "signet-embeddings-filter-presets";
 
 const builtinPresets: FilterPreset[] = [
@@ -586,9 +585,7 @@ function applyPreset(preset: FilterPreset): void {
 
 function saveCurrentPreset(): void {
 	if (typeof window === "undefined") return;
-	const suggested = graphSelected
-		? `Cluster: ${graphSelected.who ?? "source"}`
-		: "Custom preset";
+	const suggested = graphSelected ? `Cluster: ${graphSelected.who ?? "source"}` : "Custom preset";
 	const raw = window.prompt("Preset name", suggested);
 	const name = raw?.trim();
 	if (!name) return;
@@ -649,9 +646,7 @@ async function initGraph(): Promise<void> {
 		embeddings = projNodes.map(projectionNodeToEmbeddingPoint);
 		embeddingsTotal = projection.total ?? projNodes.length;
 		embeddingsHasMore = Boolean(
-			projection.hasMore ??
-				(projection.count ?? projNodes.length) <
-					(projection.total ?? projNodes.length),
+			projection.hasMore ?? (projection.count ?? projNodes.length) < (projection.total ?? projNodes.length),
 		);
 		lastAppliedProjectionKey = requestKey;
 		embeddingById = new Map(embeddings.map((item) => [item.id, item]));
@@ -661,10 +656,10 @@ async function initGraph(): Promise<void> {
 			return;
 		}
 
-		let minX = Infinity;
-		let maxX = -Infinity;
-		let minY = Infinity;
-		let maxY = -Infinity;
+		let minX = Number.POSITIVE_INFINITY;
+		let maxX = Number.NEGATIVE_INFINITY;
+		let minY = Number.POSITIVE_INFINITY;
+		let maxY = Number.NEGATIVE_INFINITY;
 		for (const n of projNodes) {
 			if (n.x < minX) minX = n.x;
 			if (n.x > maxX) maxX = n.x;
@@ -693,7 +688,7 @@ async function initGraph(): Promise<void> {
 		await tick();
 		if (loadId !== graphLoadId) return;
 
-		canvas2d?.startSimulation(nodes, edges);
+		canvas2d?.startSimulation(nodes, edges, graphPhysics);
 		canvas2d?.startRendering();
 	} catch (error) {
 		graphError = (error as Error).message || "Failed to load projection";
@@ -706,9 +701,7 @@ async function initGraph(): Promise<void> {
 // Relation computation (server-side via getSimilarMemories)
 // -----------------------------------------------------------------------
 
-async function computeRelationsForSelection(
-	selected: EmbeddingPoint | null,
-): Promise<void> {
+async function computeRelationsForSelection(selected: EmbeddingPoint | null): Promise<void> {
 	if (!selected) {
 		similarNeighbors = [];
 		dissimilarNeighbors = [];
@@ -725,9 +718,7 @@ async function computeRelationsForSelection(
 	}));
 	dissimilarNeighbors = [];
 	activeNeighbors = similarNeighbors;
-	relationLookup = new Map(
-		similarNeighbors.map((item) => [item.id, item.kind]),
-	);
+	relationLookup = new Map(similarNeighbors.map((item) => [item.id, item.kind]));
 }
 
 // -----------------------------------------------------------------------
@@ -780,11 +771,7 @@ async function loadGlobalSimilarForSelected(): Promise<void> {
 	if (!graphSelected) return;
 	loadingGlobalSimilar = true;
 	try {
-		globalSimilar = await getSimilarMemories(
-			graphSelected.id,
-			10,
-			mem.filterType || undefined,
-		);
+		globalSimilar = await getSimilarMemories(graphSelected.id, 10, mem.filterType || undefined);
 	} finally {
 		loadingGlobalSimilar = false;
 	}
@@ -882,25 +869,16 @@ $effect(() => {
 			typeMap.set(row.type, (typeMap.get(row.type) ?? 0) + 1);
 		}
 		const sourceType = row.sourceType ?? "memory";
-		sourceTypeMap.set(
-			sourceType,
-			(sourceTypeMap.get(sourceType) ?? 0) + 1,
-		);
+		sourceTypeMap.set(sourceType, (sourceTypeMap.get(sourceType) ?? 0) + 1);
 	}
 	sourceCounts = [...counts.entries()]
-		.sort(
-			(left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
-		)
+		.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
 		.map(([who, count]) => ({ who, count }));
 	typeCounts = [...typeMap.entries()]
-		.sort(
-			(left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
-		)
+		.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
 		.map(([value, count]) => ({ value, count }));
 	sourceTypeCounts = [...sourceTypeMap.entries()]
-		.sort(
-			(left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
-		)
+		.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
 		.map(([value, count]) => ({ value, count }));
 
 	if (selectedSources.size > 0) {
@@ -926,9 +904,7 @@ $effect(() => {
 $effect(() => {
 	if (selectedHarnesses.size === 0 || harnessOptions.length === 0) return;
 	const available = new Set(harnessOptions);
-	const next = new Set(
-		[...selectedHarnesses].filter((value) => available.has(value)),
-	);
+	const next = new Set([...selectedHarnesses].filter((value) => available.has(value)));
 	if (next.size !== selectedHarnesses.size) {
 		selectedHarnesses = next;
 	}
@@ -995,11 +971,7 @@ $effect(() => {
 		sourceFilterIds = null;
 		return;
 	}
-	sourceFilterIds = new Set(
-		embeddings
-			.filter((row) => selected.has(row.who ?? "unknown"))
-			.map((row) => row.id),
-	);
+	sourceFilterIds = new Set(embeddings.filter((row) => selected.has(row.who ?? "unknown")).map((row) => row.id));
 });
 
 $effect(() => {
@@ -1033,10 +1005,36 @@ $effect(() => {
 
 $effect(() => {
 	if (typeof window === "undefined" || !presetsHydrated) return;
-	window.localStorage.setItem(
-		FILTER_PRESET_STORAGE_KEY,
-		JSON.stringify(customPresets),
-	);
+	window.localStorage.setItem(FILTER_PRESET_STORAGE_KEY, JSON.stringify(customPresets));
+});
+
+$effect(() => {
+	if (typeof window === "undefined" || graphPhysicsHydrated) return;
+	try {
+		const raw = window.localStorage.getItem(GRAPH_PHYSICS_STORAGE_KEY);
+		if (raw) {
+			const parsed = JSON.parse(raw) as unknown;
+			if (typeof parsed === "object" && parsed !== null) {
+				const candidate = parsed as Record<string, unknown>;
+				graphPhysics = clampGraphPhysics({
+					centerForce:
+						typeof candidate.centerForce === "number" ? candidate.centerForce : DEFAULT_GRAPH_PHYSICS.centerForce,
+					repelForce:
+						typeof candidate.repelForce === "number" ? candidate.repelForce : DEFAULT_GRAPH_PHYSICS.repelForce,
+					linkForce: typeof candidate.linkForce === "number" ? candidate.linkForce : DEFAULT_GRAPH_PHYSICS.linkForce,
+					linkDistance:
+						typeof candidate.linkDistance === "number" ? candidate.linkDistance : DEFAULT_GRAPH_PHYSICS.linkDistance,
+				});
+			}
+		}
+	} finally {
+		graphPhysicsHydrated = true;
+	}
+});
+
+$effect(() => {
+	if (typeof window === "undefined" || !graphPhysicsHydrated) return;
+	window.localStorage.setItem(GRAPH_PHYSICS_STORAGE_KEY, JSON.stringify(graphPhysics));
 });
 
 $effect(() => {
@@ -1045,8 +1043,7 @@ $effect(() => {
 		const seed = graphSelected ?? previewHovered;
 		if (seed) {
 			ids.add(seed.id);
-			const neighborhood =
-				graphSelected !== null ? activeNeighbors : hoverNeighbors;
+			const neighborhood = graphSelected !== null ? activeNeighbors : hoverNeighbors;
 			for (const neighbor of neighborhood) {
 				ids.add(neighbor.id);
 			}
@@ -1061,9 +1058,15 @@ $effect(() => {
 	scheduleRefresh3d();
 });
 
-const projectionRequestKey = $derived(
-	projectionQueryKey(buildProjectionQueryOptions()),
-);
+$effect(() => {
+	graphPhysics;
+	if (!graphInitialized) return;
+	if (graphMode === "2d") {
+		canvas2d?.updatePhysics(graphPhysics);
+	}
+});
+
+const projectionRequestKey = $derived(projectionQueryKey(buildProjectionQueryOptions()));
 
 $effect(() => {
 	const nextKey = projectionRequestKey;
@@ -1079,25 +1082,16 @@ $effect(() => {
 	return () => clearTimeout(timer);
 });
 
-
 $effect(() => {
 	const pinnedFilterIds = showPinnedOnly === true ? new Set(pinnedIds) : null;
 	const neighborhoodSeed = graphSelected ?? previewHovered;
 	const neighborhoodNeighbors = graphSelected ? activeNeighbors : hoverNeighbors;
 	const neighborhoodFilterIds =
 		showNeighborhoodOnly === true && neighborhoodSeed
-			? new Set([
-					neighborhoodSeed.id,
-					...neighborhoodNeighbors.map((n) => n.id),
-				])
+			? new Set([neighborhoodSeed.id, ...neighborhoodNeighbors.map((n) => n.id)])
 			: null;
 
-	embeddingFilterIds = intersectFilterSets([
-		searchFilterIds,
-		sourceFilterIds,
-		pinnedFilterIds,
-		neighborhoodFilterIds,
-	]);
+	embeddingFilterIds = intersectFilterSets([searchFilterIds, sourceFilterIds, pinnedFilterIds, neighborhoodFilterIds]);
 	scheduleRefresh3d();
 });
 
@@ -1114,9 +1108,7 @@ $effect(() => {
 	scheduleRefresh3d();
 });
 
-const previewHovered = $derived(
-	hoverLockedId ? (embeddingById.get(hoverLockedId) ?? null) : graphHovered,
-);
+const previewHovered = $derived(hoverLockedId ? (embeddingById.get(hoverLockedId) ?? null) : graphHovered);
 
 const activeProjectionWindow = $derived(normalizeProjectionWindow());
 
@@ -1143,9 +1135,7 @@ const hoverNeighbors: EmbeddingRelation[] = $derived.by(() => {
 	if (!hovered) return [];
 	const ranked = hoverAdjacency.get(hovered.id);
 	if (!ranked || ranked.size === 0) return [];
-	const topNeighbors = [...ranked.entries()]
-		.sort((l, r) => r[1] - l[1])
-		.slice(0, 6);
+	const topNeighbors = [...ranked.entries()].sort((l, r) => r[1] - l[1]).slice(0, 6);
 	const topScore = topNeighbors[0]?.[1] ?? 1;
 	return topNeighbors.map(([id, score]) => ({
 		id,
@@ -1154,13 +1144,9 @@ const hoverNeighbors: EmbeddingRelation[] = $derived.by(() => {
 	}));
 });
 
-const hoverRelationLookup = $derived(
-	new Map(hoverNeighbors.map((n) => [n.id, "similar" as const])),
-);
+const hoverRelationLookup = $derived(new Map(hoverNeighbors.map((n) => [n.id, "similar" as const])));
 
-const effectiveRelationLookup = $derived(
-	graphSelected ? relationLookup : hoverRelationLookup,
-);
+const effectiveRelationLookup = $derived(graphSelected ? relationLookup : hoverRelationLookup);
 
 const effectiveHoverNeighbors = $derived(graphSelected ? [] : hoverNeighbors);
 
@@ -1169,9 +1155,7 @@ const legendSourceCounts = $derived.by(() => {
 	const prioritized = LEGEND_PRIORITY_SOURCES.map((name) => byName.get(name)).filter(
 		(entry): entry is { who: string; count: number } => Boolean(entry),
 	);
-	const rest = sourceCounts.filter(
-		(entry) => !LEGEND_PRIORITY_SOURCE_SET.has(entry.who),
-	);
+	const rest = sourceCounts.filter((entry) => !LEGEND_PRIORITY_SOURCE_SET.has(entry.who));
 	return [...prioritized, ...rest].slice(0, 8);
 });
 
@@ -1429,6 +1413,7 @@ $effect(() => {
 				bind:this={canvas2d}
 				{nodes}
 				{edges}
+				{graphPhysics}
 				{graphSelected}
 				graphHovered={previewHovered}
 				{embeddingFilterIds}
@@ -1491,6 +1476,72 @@ $effect(() => {
 								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showNeighborhoodOnly ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleNeighborhoodOnly}>Neighborhood</button>
 								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {clusterLensMode ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleClusterLens}>Lens</button>
 								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={resetProjectionFilters}>{ActionLabels.Reset}</button>
+							</div>
+							<div class="border border-[var(--sig-border)] px-2 py-2 space-y-1.5">
+								<div class="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Graph Physics</div>
+								<label class="block">
+									<div class="flex items-center justify-between text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+										<span>center force</span>
+										<span>{graphPhysics.centerForce.toFixed(2)}</span>
+									</div>
+									<input
+										type="range"
+										min="0"
+										max="1"
+										step="0.01"
+										value={graphPhysics.centerForce}
+										oninput={(event) => updateGraphPhysics({ centerForce: readInputNumber(event, graphPhysics.centerForce) })}
+									/>
+								</label>
+								<label class="block">
+									<div class="flex items-center justify-between text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+										<span>repel force</span>
+										<span>{Math.round(graphPhysics.repelForce)}</span>
+									</div>
+									<input
+										type="range"
+										min="-600"
+										max="-10"
+										step="5"
+										value={graphPhysics.repelForce}
+										oninput={(event) => updateGraphPhysics({ repelForce: readInputNumber(event, graphPhysics.repelForce) })}
+									/>
+								</label>
+								<label class="block">
+									<div class="flex items-center justify-between text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+										<span>link force</span>
+										<span>{graphPhysics.linkForce.toFixed(2)}</span>
+									</div>
+									<input
+										type="range"
+										min="0.01"
+										max="1"
+										step="0.01"
+										value={graphPhysics.linkForce}
+										oninput={(event) => updateGraphPhysics({ linkForce: readInputNumber(event, graphPhysics.linkForce) })}
+									/>
+								</label>
+								<label class="block">
+									<div class="flex items-center justify-between text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+										<span>link distance</span>
+										<span>{Math.round(graphPhysics.linkDistance)}</span>
+									</div>
+									<input
+										type="range"
+										min="12"
+										max="280"
+										step="1"
+										value={graphPhysics.linkDistance}
+										oninput={(event) => updateGraphPhysics({ linkDistance: readInputNumber(event, graphPhysics.linkDistance) })}
+									/>
+								</label>
+								<button
+									type="button"
+									class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
+									onclick={() => updateGraphPhysics(DEFAULT_GRAPH_PHYSICS)}
+								>
+									physics reset
+								</button>
 							</div>
 						</div>
 					</Collapsible.Content>

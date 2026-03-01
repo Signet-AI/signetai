@@ -73,6 +73,31 @@ export interface CachedProjection {
 const SCALE = 420;
 const KNN_K = 4;
 const KNN_EXACT_THRESHOLD = 450;
+const KNN_APPROX_WINDOW_MULTIPLIER = 6;
+
+interface ScoredNeighbor {
+	readonly index: number;
+	readonly distance: number;
+}
+
+function squaredDistance(left: readonly number[], right: readonly number[]): number {
+	let distance = 0;
+	for (let index = 0; index < left.length; index += 1) {
+		const diff = left[index] - right[index];
+		distance += diff * diff;
+	}
+	return distance;
+}
+
+function insertNearestNeighbor(neighbors: ScoredNeighbor[], next: ScoredNeighbor, k: number): void {
+	let index = 0;
+	while (index < neighbors.length && neighbors[index].distance <= next.distance) {
+		index += 1;
+	}
+	if (index >= k) return;
+	neighbors.splice(index, 0, next);
+	if (neighbors.length > k) neighbors.pop();
+}
 
 // ---------------------------------------------------------------------------
 // Vector helpers
@@ -81,10 +106,7 @@ const KNN_EXACT_THRESHOLD = 450;
 function blobToVector(buf: Uint8Array, dimensions: number | null): number[] {
 	const raw = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 	const f32 = new Float32Array(raw);
-	const size =
-		typeof dimensions === "number" && dimensions > 0 && dimensions <= f32.length
-			? dimensions
-			: f32.length;
+	const size = typeof dimensions === "number" && dimensions > 0 && dimensions <= f32.length ? dimensions : f32.length;
 	return Array.from(f32.slice(0, size));
 }
 
@@ -97,8 +119,8 @@ function parseTags(raw: unknown): string[] {
 }
 
 function normaliseAxis(values: readonly number[]): number[] {
-	let min = Infinity;
-	let max = -Infinity;
+	let min = Number.POSITIVE_INFINITY;
+	let max = Number.NEGATIVE_INFINITY;
 	for (const v of values) {
 		if (v < min) min = v;
 		if (v > max) max = v;
@@ -111,10 +133,7 @@ function normaliseAxis(values: readonly number[]): number[] {
 // KNN edge builders (ported from embedding-graph.ts)
 // ---------------------------------------------------------------------------
 
-function buildExactKnnEdges(
-	projected: readonly number[][],
-	k: number,
-): [number, number][] {
+function buildExactKnnEdges(projected: readonly number[][], k: number): [number, number][] {
 	const edgeSet = new Set<string>();
 	const result: [number, number][] = [];
 	for (let i = 0; i < projected.length; i++) {
@@ -142,16 +161,16 @@ function buildExactKnnEdges(
 	return result;
 }
 
-function buildApproximateKnnEdges(
-	projected: readonly number[][],
-	k: number,
-): [number, number][] {
+function buildApproximateKnnEdges(projected: readonly number[][], k: number): [number, number][] {
 	const edgeSet = new Set<string>();
 	const result: [number, number][] = [];
+	if (projected.length <= 2) return result;
+
 	const ids = projected.map((_, i) => i);
 	const byX = [...ids].sort((a, b) => projected[a][0] - projected[b][0]);
 	const byY = [...ids].sort((a, b) => projected[a][1] - projected[b][1]);
-	const windowSize = Math.max(2, k * 3);
+	const windowSize = Math.max(4, k * KNN_APPROX_WINDOW_MULTIPLIER);
+	const candidateNeighbors: Array<Set<number>> = projected.map(() => new Set<number>());
 
 	const addEdge = (a: number, b: number): void => {
 		if (a === b) return;
@@ -163,29 +182,44 @@ function buildApproximateKnnEdges(
 		result.push([left, right]);
 	};
 
-	const addFromOrdering = (ordering: number[]): void => {
+	const collectCandidates = (ordering: number[]): void => {
 		for (let idx = 0; idx < ordering.length; idx++) {
 			const source = ordering[idx];
+			const candidates = candidateNeighbors[source];
 			for (let offset = 1; offset <= windowSize; offset++) {
 				const left = idx - offset;
 				const right = idx + offset;
-				if (left >= 0) addEdge(source, ordering[left]);
-				if (right < ordering.length) addEdge(source, ordering[right]);
+				if (left >= 0) candidates.add(ordering[left]);
+				if (right < ordering.length) candidates.add(ordering[right]);
 			}
 		}
 	};
 
-	addFromOrdering(byX);
-	addFromOrdering(byY);
+	collectCandidates(byX);
+	collectCandidates(byY);
+
+	for (let source = 0; source < projected.length; source += 1) {
+		const nearest: ScoredNeighbor[] = [];
+		for (const candidate of candidateNeighbors[source]) {
+			insertNearestNeighbor(
+				nearest,
+				{
+					index: candidate,
+					distance: squaredDistance(projected[source], projected[candidate]),
+				},
+				k,
+			);
+		}
+		for (const neighbor of nearest) {
+			addEdge(source, neighbor.index);
+		}
+	}
+
 	return result;
 }
 
-function buildKnnEdges(
-	projected: readonly number[][],
-	k: number,
-): [number, number][] {
-	if (projected.length <= KNN_EXACT_THRESHOLD)
-		return buildExactKnnEdges(projected, k);
+function buildKnnEdges(projected: readonly number[][], k: number): [number, number][] {
+	if (projected.length <= KNN_EXACT_THRESHOLD) return buildExactKnnEdges(projected, k);
 	return buildApproximateKnnEdges(projected, k);
 }
 
@@ -214,12 +248,7 @@ function isBlob(v: unknown): v is Uint8Array {
 
 function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 	const { id, content, created_at, vector } = raw;
-	if (
-		typeof id !== "string" ||
-		typeof content !== "string" ||
-		typeof created_at !== "string" ||
-		!isBlob(vector)
-	) {
+	if (typeof id !== "string" || typeof content !== "string" || typeof created_at !== "string" || !isBlob(vector)) {
 		return null;
 	}
 	return {
@@ -230,8 +259,7 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 		type: typeof raw.type === "string" ? raw.type : null,
 		tags: typeof raw.tags === "string" ? raw.tags : null,
 		pinned: typeof raw.pinned === "number" ? raw.pinned : null,
-		source_type:
-			typeof raw.source_type === "string" ? raw.source_type : null,
+		source_type: typeof raw.source_type === "string" ? raw.source_type : null,
 		source_id: typeof raw.source_id === "string" ? raw.source_id : null,
 		created_at,
 		vector,
@@ -257,9 +285,7 @@ const EMBEDDINGS_FROM_SQL = `
 
 function normalizeFilterValues(values: readonly string[] | undefined): string[] {
 	if (!values) return [];
-	const normalized = values
-		.map((value) => value.trim())
-		.filter((value) => value.length > 0);
+	const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
 	return [...new Set(normalized)];
 }
 
@@ -295,9 +321,7 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 	const sourceTypeValues = normalizeFilterValues(filters.sourceTypes);
 	if (sourceTypeValues.length > 0) {
-		parts.push(
-			`m.source_type IN (${sourceTypeValues.map(() => "?").join(", ")})`,
-		);
+		parts.push(`m.source_type IN (${sourceTypeValues.map(() => "?").join(", ")})`);
 		params.push(...sourceTypeValues);
 	}
 
@@ -322,18 +346,12 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 		params.push(filters.until);
 	}
 
-	if (
-		typeof filters.importanceMin === "number" &&
-		Number.isFinite(filters.importanceMin)
-	) {
+	if (typeof filters.importanceMin === "number" && Number.isFinite(filters.importanceMin)) {
 		parts.push("m.importance >= ?");
 		params.push(filters.importanceMin);
 	}
 
-	if (
-		typeof filters.importanceMax === "number" &&
-		Number.isFinite(filters.importanceMax)
-	) {
+	if (typeof filters.importanceMax === "number" && Number.isFinite(filters.importanceMax)) {
 		parts.push("m.importance <= ?");
 		params.push(filters.importanceMax);
 	}
@@ -352,30 +370,18 @@ interface ProjectionRowsResult {
 	readonly hasMore: boolean;
 }
 
-function loadProjectionRows(
-	db: ReadDb,
-	query: ProjectionQuery,
-): ProjectionRowsResult {
+function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsResult {
 	const offset =
-		typeof query.offset === "number" && Number.isFinite(query.offset)
-			? Math.max(0, Math.trunc(query.offset))
-			: 0;
+		typeof query.offset === "number" && Number.isFinite(query.offset) ? Math.max(0, Math.trunc(query.offset)) : 0;
 	const requestedLimit =
-		typeof query.limit === "number" && Number.isFinite(query.limit)
-			? Math.max(1, Math.trunc(query.limit))
-			: null;
+		typeof query.limit === "number" && Number.isFinite(query.limit) ? Math.max(1, Math.trunc(query.limit)) : null;
 
 	const { clause, params } = buildProjectionWhere(query.filters);
 
-	const totalRow = db
-		.prepare(
-			`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`,
-		)
-		.get(...params) as { count?: number } | undefined;
-	const total =
-		totalRow !== undefined && typeof totalRow.count === "number"
-			? totalRow.count
-			: 0;
+	const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
+		| { count?: number }
+		| undefined;
+	const total = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
 
 	let sql = `${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause} ORDER BY m.created_at DESC`;
 	const rowParams: unknown[] = [...params];
@@ -388,11 +394,8 @@ function loadProjectionRows(
 	}
 
 	const rawRows = db.prepare(sql).all(...rowParams) as Record<string, unknown>[];
-	const rows = rawRows
-		.map(toEmbeddingRow)
-		.filter((row): row is EmbeddingRow => row !== null);
-	const limit =
-		requestedLimit ?? Math.max(0, total - offset);
+	const rows = rawRows.map(toEmbeddingRow).filter((row): row is EmbeddingRow => row !== null);
+	const limit = requestedLimit ?? Math.max(0, total - offset);
 	const hasMore = offset + rows.length < total;
 
 	return { rows, total, offset, limit, hasMore };
@@ -423,10 +426,7 @@ function buildNodesFromRows(
 	});
 }
 
-function computeProjectionFromRows(
-	rows: readonly EmbeddingRow[],
-	nComponents: 2 | 3,
-): ProjectionResult {
+function computeProjectionFromRows(rows: readonly EmbeddingRow[], nComponents: 2 | 3): ProjectionResult {
 	if (rows.length === 0) return { nodes: [], edges: [] };
 	if (rows.length === 1) {
 		return {
@@ -451,20 +451,14 @@ function computeProjectionFromRows(
 
 	const xs = normaliseAxis(projected.map((point) => point[0]));
 	const ys = normaliseAxis(projected.map((point) => point[1]));
-	const zs: number[] | null =
-		nComponents === 3
-			? normaliseAxis(projected.map((point) => point[2] ?? 0))
-			: null;
+	const zs: number[] | null = nComponents === 3 ? normaliseAxis(projected.map((point) => point[2] ?? 0)) : null;
 	const nodes = buildNodesFromRows(rows, xs, ys, zs);
 	const edges = buildKnnEdges(projected, KNN_K);
 
 	return { nodes, edges };
 }
 
-export function computeProjection(
-	db: ReadDb,
-	nComponents: 2 | 3,
-): ProjectionResult {
+export function computeProjection(db: ReadDb, nComponents: 2 | 3): ProjectionResult {
 	const { rows } = loadProjectionRows(db, {});
 	return computeProjectionFromRows(rows, nComponents);
 }
@@ -486,14 +480,9 @@ export function computeProjectionForQuery(
 	};
 }
 
-export function getCachedProjection(
-	db: ReadDb,
-	nComponents: 2 | 3,
-): CachedProjection | null {
+export function getCachedProjection(db: ReadDb, nComponents: 2 | 3): CachedProjection | null {
 	const rawRow: Record<string, unknown> | null | undefined = db
-		.prepare(
-			"SELECT dimensions, embedding_count, payload, created_at FROM umap_cache WHERE dimensions = ? LIMIT 1",
-		)
+		.prepare("SELECT dimensions, embedding_count, payload, created_at FROM umap_cache WHERE dimensions = ? LIMIT 1")
 		.get(nComponents);
 
 	if (!rawRow) return null;
@@ -502,11 +491,7 @@ export function getCachedProjection(
 	const embeddingCount = rawRow.embedding_count;
 	const cachedAt = rawRow.created_at;
 
-	if (
-		typeof payload !== "string" ||
-		typeof embeddingCount !== "number" ||
-		typeof cachedAt !== "string"
-	) {
+	if (typeof payload !== "string" || typeof embeddingCount !== "number" || typeof cachedAt !== "string") {
 		return null;
 	}
 
@@ -525,9 +510,12 @@ export function cacheProjection(
 	embeddingCount: number,
 ): void {
 	db.prepare("DELETE FROM umap_cache WHERE dimensions = ?").run(nComponents);
-	db.prepare(
-		"INSERT INTO umap_cache (dimensions, embedding_count, payload, created_at) VALUES (?, ?, ?, ?)",
-	).run(nComponents, embeddingCount, JSON.stringify(payload), new Date().toISOString());
+	db.prepare("INSERT INTO umap_cache (dimensions, embedding_count, payload, created_at) VALUES (?, ?, ?, ?)").run(
+		nComponents,
+		embeddingCount,
+		JSON.stringify(payload),
+		new Date().toISOString(),
+	);
 }
 
 export function invalidateProjectionCache(db: WriteDb): void {
