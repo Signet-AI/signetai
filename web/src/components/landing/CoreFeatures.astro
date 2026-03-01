@@ -30,13 +30,22 @@ const features = [
     <span class="section-index">03 / 07</span>
   </div>
 
-  <div class="feature-grid reveal">
-    {features.map((feature) => (
-      <article class="feature-card">
-        <span class="feature-symbol" aria-hidden="true" set:html={feature.symbol}></span>
-        <h3 class="feature-title">{feature.title}</h3>
-        <p class="feature-desc">{feature.description}</p>
-      </article>
+  <div class="features-showcase reveal">
+    {features.map((feature, i) => (
+      <div class="feature-module">
+        <div class="feature-module-barcode" aria-hidden="true"></div>
+        <div class="feature-module-body">
+          <div class="feature-schematic">
+            <span class="feature-symbol" aria-hidden="true" set:html={feature.symbol}></span>
+            <div class="schematic-crosshair top-left"></div>
+            <div class="schematic-crosshair bottom-right"></div>
+          </div>
+          <div class="feature-content">
+            <h3 class="feature-title">{feature.title}</h3>
+            <p class="feature-desc">{feature.description}</p>
+          </div>
+        </div>
+      </div>
     ))}
   </div>
 </section>
