@@ -4251,24 +4251,6 @@ app.post("/api/harnesses/regenerate", async (c) => {
 // Secrets API
 // ============================================================================
 
-// Store a secret
-app.post("/api/secrets/:name", async (c) => {
-	const { name } = c.req.param();
-	try {
-		const body = (await c.req.json()) as { value?: string };
-		if (typeof body.value !== "string" || body.value.length === 0) {
-			return c.json({ error: "value is required" }, 400);
-		}
-		await putSecret(name, body.value);
-		logger.info("secrets", "Secret stored", { name });
-		return c.json({ success: true, name });
-	} catch (e) {
-		const err = e as Error;
-		logger.error("secrets", "Failed to store secret", err, { name });
-		return c.json({ error: err.message }, 400);
-	}
-});
-
 // List secret names (never values)
 app.get("/api/secrets", (c) => {
 	try {
@@ -4280,24 +4262,10 @@ app.get("/api/secrets", (c) => {
 	}
 });
 
-// Delete a secret
-app.delete("/api/secrets/:name", (c) => {
-	const { name } = c.req.param();
-	try {
-		const deleted = deleteSecret(name);
-		if (!deleted) return c.json({ error: `Secret '${name}' not found` }, 404);
-		logger.info("secrets", "Secret deleted", { name });
-		return c.json({ success: true, name });
-	} catch (e) {
-		logger.error("secrets", "Failed to delete secret", e as Error, { name });
-		return c.json({ error: (e as Error).message }, 500);
-	}
-});
-
 // Execute a command with multiple secrets injected into the subprocess
 // environment. The agent provides a secrets map (env var → secret name),
-// never the actual values. This general-purpose route must be registered
-// BEFORE the parameterized /:name/exec to avoid Hono treating "exec" as :name.
+// never the actual values. Registered BEFORE parameterized /:name routes
+// so Hono doesn't match "exec" as :name.
 app.post("/api/secrets/exec", async (c) => {
 	try {
 		const body = (await c.req.json()) as {
@@ -4354,6 +4322,39 @@ app.post("/api/secrets/:name/exec", async (c) => {
 		const err = e as Error;
 		logger.error("secrets", "exec_with_secrets failed", err, { name });
 		return c.json({ error: err.message }, 500);
+	}
+});
+
+// Store a secret (registered after /exec routes so Hono doesn't match
+// "exec" as :name)
+app.post("/api/secrets/:name", async (c) => {
+	const { name } = c.req.param();
+	try {
+		const body = (await c.req.json()) as { value?: string };
+		if (typeof body.value !== "string" || body.value.length === 0) {
+			return c.json({ error: "value is required" }, 400);
+		}
+		await putSecret(name, body.value);
+		logger.info("secrets", "Secret stored", { name });
+		return c.json({ success: true, name });
+	} catch (e) {
+		const err = e as Error;
+		logger.error("secrets", "Failed to store secret", err, { name });
+		return c.json({ error: err.message }, 400);
+	}
+});
+
+// Delete a secret
+app.delete("/api/secrets/:name", (c) => {
+	const { name } = c.req.param();
+	try {
+		const deleted = deleteSecret(name);
+		if (!deleted) return c.json({ error: `Secret '${name}' not found` }, 404);
+		logger.info("secrets", "Secret deleted", { name });
+		return c.json({ success: true, name });
+	} catch (e) {
+		logger.error("secrets", "Failed to delete secret", e as Error, { name });
+		return c.json({ error: (e as Error).message }, 500);
 	}
 });
 
