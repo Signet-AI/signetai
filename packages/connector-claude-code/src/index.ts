@@ -137,6 +137,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			if (settings.hooks) {
 				settings.hooks.SessionStart = undefined;
 				settings.hooks.UserPromptSubmit = undefined;
+				settings.hooks.PreCompaction = undefined;
 				settings.hooks.SessionEnd = undefined;
 
 				// Remove empty hooks object
@@ -311,6 +312,19 @@ export class ClaudeCodeConnector extends BaseConnector {
 				},
 			];
 		}
+
+		hooks.PreCompaction = [
+			{
+				hooks: [
+					{
+						type: "command",
+						command:
+							'signet hook pre-compaction -H claude-code --project "$(pwd)"',
+						timeout: 3000,
+					},
+				],
+			},
+		];
 
 		if (hooksConfig.sessionEnd !== false) {
 			hooks.SessionEnd = [

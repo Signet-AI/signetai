@@ -23,6 +23,7 @@ import {
 	readdirSync,
 	statSync,
 	appendFileSync,
+	realpathSync,
 } from "fs";
 import { spawn } from "child_process";
 import { createHash } from "crypto";
@@ -133,6 +134,14 @@ import {
 } from "./telemetry";
 import { buildTimeline, type TimelineSources } from "./timeline";
 import {
+	getCheckpointsByProject,
+	getCheckpointsBySession,
+	initCheckpointFlush,
+	flushPendingCheckpoints,
+	pruneCheckpoints,
+	redactCheckpointRow,
+} from "./session-checkpoints";
+import {
 	createRateLimiter,
 	requeueDeadJobs,
 	releaseStaleLeases,
@@ -187,6 +196,7 @@ const repairLimiter = createRateLimiter();
 let telemetryRef: TelemetryCollector | undefined;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 
 // Prevents concurrent UMAP computations for the same dimension count
 const projectionInFlight = new Map<number, Promise<void>>();
@@ -4254,24 +4264,6 @@ app.post("/api/harnesses/regenerate", async (c) => {
 // Secrets API
 // ============================================================================
 
-// Store a secret
-app.post("/api/secrets/:name", async (c) => {
-	const { name } = c.req.param();
-	try {
-		const body = (await c.req.json()) as { value?: string };
-		if (typeof body.value !== "string" || body.value.length === 0) {
-			return c.json({ error: "value is required" }, 400);
-		}
-		await putSecret(name, body.value);
-		logger.info("secrets", "Secret stored", { name });
-		return c.json({ success: true, name });
-	} catch (e) {
-		const err = e as Error;
-		logger.error("secrets", "Failed to store secret", err, { name });
-		return c.json({ error: err.message }, 400);
-	}
-});
-
 // List secret names (never values)
 app.get("/api/secrets", (c) => {
 	try {
@@ -4283,24 +4275,10 @@ app.get("/api/secrets", (c) => {
 	}
 });
 
-// Delete a secret
-app.delete("/api/secrets/:name", (c) => {
-	const { name } = c.req.param();
-	try {
-		const deleted = deleteSecret(name);
-		if (!deleted) return c.json({ error: `Secret '${name}' not found` }, 404);
-		logger.info("secrets", "Secret deleted", { name });
-		return c.json({ success: true, name });
-	} catch (e) {
-		logger.error("secrets", "Failed to delete secret", e as Error, { name });
-		return c.json({ error: (e as Error).message }, 500);
-	}
-});
-
 // Execute a command with multiple secrets injected into the subprocess
 // environment. The agent provides a secrets map (env var → secret name),
-// never the actual values. This general-purpose route must be registered
-// BEFORE the parameterized /:name/exec to avoid Hono treating "exec" as :name.
+// never the actual values. Registered BEFORE parameterized /:name routes
+// so Hono doesn't match "exec" as :name.
 app.post("/api/secrets/exec", async (c) => {
 	try {
 		const body = (await c.req.json()) as {
@@ -4357,6 +4335,39 @@ app.post("/api/secrets/:name/exec", async (c) => {
 		const err = e as Error;
 		logger.error("secrets", "exec_with_secrets failed", err, { name });
 		return c.json({ error: err.message }, 500);
+	}
+});
+
+// Store a secret (registered after /exec routes so Hono doesn't match
+// "exec" as :name)
+app.post("/api/secrets/:name", async (c) => {
+	const { name } = c.req.param();
+	try {
+		const body = (await c.req.json()) as { value?: string };
+		if (typeof body.value !== "string" || body.value.length === 0) {
+			return c.json({ error: "value is required" }, 400);
+		}
+		await putSecret(name, body.value);
+		logger.info("secrets", "Secret stored", { name });
+		return c.json({ success: true, name });
+	} catch (e) {
+		const err = e as Error;
+		logger.error("secrets", "Failed to store secret", err, { name });
+		return c.json({ error: err.message }, 400);
+	}
+});
+
+// Delete a secret
+app.delete("/api/secrets/:name", (c) => {
+	const { name } = c.req.param();
+	try {
+		const deleted = deleteSecret(name);
+		if (!deleted) return c.json({ error: `Secret '${name}' not found` }, 404);
+		logger.info("secrets", "Secret deleted", { name });
+		return c.json({ success: true, name });
+	} catch (e) {
+		logger.error("secrets", "Failed to delete secret", e as Error, { name });
+		return c.json({ error: (e as Error).message }, 500);
 	}
 });
 
@@ -5578,6 +5589,42 @@ app.post("/api/repair/deduplicate", async (c) => {
 		options,
 	);
 	return c.json(result, result.success ? 200 : 429);
+});
+
+// ============================================================================
+// Session Checkpoints (Continuity Protocol)
+// ============================================================================
+
+app.get("/api/checkpoints", (c) => {
+	const project = c.req.query("project");
+	const limit = parseInt(c.req.query("limit") ?? "10", 10);
+
+	if (!project) {
+		return c.json({ error: "project query parameter required" }, 400);
+	}
+
+	// Normalize project path for consistent matching
+	let projectNormalized = project;
+	try {
+		projectNormalized = realpathSync(project);
+	} catch {
+		// Use raw path if realpath fails
+	}
+
+	const rows = getCheckpointsByProject(
+		getDbAccessor(),
+		projectNormalized,
+		Math.min(limit, 100),
+	);
+	const redacted = rows.map(redactCheckpointRow);
+	return c.json({ checkpoints: redacted, count: redacted.length });
+});
+
+app.get("/api/checkpoints/:sessionKey", (c) => {
+	const sessionKey = c.req.param("sessionKey");
+	const rows = getCheckpointsBySession(getDbAccessor(), sessionKey);
+	const redacted = rows.map(redactCheckpointRow);
+	return c.json({ checkpoints: redacted, count: redacted.length });
 });
 
 // ============================================================================
@@ -7289,6 +7336,10 @@ async function cleanup() {
 		clearInterval(heartbeatTimer);
 		heartbeatTimer = undefined;
 	}
+	if (checkpointPruneTimer) {
+		clearInterval(checkpointPruneTimer);
+		checkpointPruneTimer = undefined;
+	}
 	if (telemetryRef) {
 		try {
 			await telemetryRef.stop();
@@ -7306,6 +7357,13 @@ async function cleanup() {
 			// best-effort
 		}
 		embeddingTrackerHandle = null;
+	}
+
+	// Flush any pending checkpoint writes before closing DB
+	try {
+		flushPendingCheckpoints();
+	} catch {
+		// best-effort
 	}
 
 	// Drain pipeline before closing DB so in-flight jobs finish writes
@@ -7527,8 +7585,25 @@ async function main() {
 		);
 	}
 
+	// Initialize checkpoint flush queue for continuity protocol
+	initCheckpointFlush(getDbAccessor());
+
 	// Start scheduled task worker
 	const schedulerHandle = startSchedulerWorker(getDbAccessor());
+
+	// Checkpoint pruning timer — runs once per hour
+	checkpointPruneTimer = setInterval(() => {
+		try {
+			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+			if (cfg.enabled) {
+				pruneCheckpoints(getDbAccessor(), cfg.retentionDays);
+			}
+		} catch (err) {
+			logger.warn("daemon", "Checkpoint pruning failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, 3600_000);
 
 	// Start git sync timer (if enabled and has token)
 	startGitSyncTimer();

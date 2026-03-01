@@ -2,6 +2,21 @@
 
 All notable changes to Signet are documented here.
 
+## [0.12.3] - 2026-03-01
+
+### Features
+
+- pre-compaction capture + enriched passive checkpoints (Phase 2)
+- session continuity protocol (Phase 1)
+
+
+## [0.12.2] - 2026-03-01
+
+### Bug Fixes
+
+- **daemon**: reorder secrets routes so /exec isn't swallowed by /:name
+
+
 ## [0.12.1] - 2026-03-01
 
 ### Bug Fixes

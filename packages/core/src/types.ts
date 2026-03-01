@@ -195,6 +195,15 @@ export interface PipelineTelemetryConfig {
 	readonly retentionDays: number;
 }
 
+export interface PipelineContinuityConfig {
+	readonly enabled: boolean;
+	readonly promptInterval: number;
+	readonly timeIntervalMs: number;
+	readonly maxCheckpointsPerSession: number;
+	readonly retentionDays: number;
+	readonly recoveryBudgetChars: number;
+}
+
 export interface PipelineV2Config {
 	// Master switches (flat)
 	readonly enabled: boolean;
@@ -213,6 +222,7 @@ export interface PipelineV2Config {
 	readonly documents: PipelineDocumentsConfig;
 	readonly guardrails: PipelineGuardrailsConfig;
 	readonly telemetry: PipelineTelemetryConfig;
+	readonly continuity: PipelineContinuityConfig;
 	readonly embeddingTracker: PipelineEmbeddingTrackerConfig;
 }
 
