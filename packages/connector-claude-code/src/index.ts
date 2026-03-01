@@ -31,6 +31,7 @@ export interface ConnectorConfig {
 	hooks?: {
 		sessionStart?: boolean;
 		userPromptSubmit?: boolean;
+		preCompact?: boolean;
 		sessionEnd?: boolean;
 	};
 }
@@ -137,7 +138,8 @@ export class ClaudeCodeConnector extends BaseConnector {
 			if (settings.hooks) {
 				settings.hooks.SessionStart = undefined;
 				settings.hooks.UserPromptSubmit = undefined;
-				settings.hooks.PreCompaction = undefined;
+				settings.hooks.PreCompaction = undefined; // legacy
+				settings.hooks.PreCompact = undefined;
 				settings.hooks.SessionEnd = undefined;
 
 				// Remove empty hooks object
@@ -278,6 +280,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 		const hooksConfig = this.config.hooks || {
 			sessionStart: true,
 			userPromptSubmit: true,
+			preCompact: true,
 			sessionEnd: true,
 		};
 
@@ -313,18 +316,20 @@ export class ClaudeCodeConnector extends BaseConnector {
 			];
 		}
 
-		hooks.PreCompaction = [
-			{
-				hooks: [
-					{
-						type: "command",
-						command:
-							'signet hook pre-compaction -H claude-code --project "$(pwd)"',
-						timeout: 3000,
-					},
-				],
-			},
-		];
+		if (hooksConfig.preCompact !== false) {
+			hooks.PreCompact = [
+				{
+					hooks: [
+						{
+							type: "command",
+							command:
+								'signet hook pre-compaction -H claude-code --project "$(pwd)"',
+							timeout: 3000,
+						},
+					],
+				},
+			];
+		}
 
 		if (hooksConfig.sessionEnd !== false) {
 			hooks.SessionEnd = [
@@ -344,6 +349,9 @@ export class ClaudeCodeConnector extends BaseConnector {
 			...(settings.hooks as Record<string, unknown>),
 			...hooks,
 		};
+
+		// Migration: remove stale PreCompaction key from existing installs
+		delete (settings.hooks as Record<string, unknown>).PreCompaction;
 
 		writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 
