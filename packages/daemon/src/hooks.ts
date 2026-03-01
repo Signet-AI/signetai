@@ -11,7 +11,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
@@ -22,6 +22,21 @@ import { getUpdateSummary } from "./update-system";
 import { loadMemoryConfig } from "./memory-config";
 import { recordSessionCandidates, trackFtsHits } from "./session-memories";
 import { listSecrets } from "./secrets";
+import {
+	initContinuity,
+	recordPrompt,
+	recordRemember,
+	shouldCheckpoint,
+	consumeState,
+	clearContinuity,
+} from "./continuity-state";
+import {
+	getLatestCheckpoint,
+	getLatestCheckpointBySession,
+	formatPeriodicDigest,
+	queueCheckpointWrite,
+	flushPendingCheckpoints,
+} from "./session-checkpoints";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
@@ -743,6 +758,11 @@ export function handleSessionStart(
 		project: req.project,
 	});
 
+	// Initialize continuity state for checkpoint accumulation
+	if (req.sessionKey) {
+		initContinuity(req.sessionKey, req.harness, req.project);
+	}
+
 	const identity = includeIdentity ? loadIdentity() : { name: "Agent" };
 
 	// Read AGENTS.md first so harness instructions precede synthesized memory
@@ -794,6 +814,7 @@ export function handleSessionStart(
 
 	// Format inject text
 	const injectParts: string[] = [];
+	let recoverySection = "";
 
 	injectParts.push("[memory active | /remember | /recall]");
 
@@ -861,6 +882,49 @@ export function handleSessionStart(
 		}
 	}
 
+	// Inject session recovery context from recent checkpoints
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const continuityCfg = memoryCfg.pipelineV2.continuity;
+	if (continuityCfg.enabled) {
+		try {
+			const dbAcc = getDbAccessor();
+			const withinMs = 4 * 60 * 60 * 1000; // 4 hours
+
+			// Priority 1: session key lineage (same or previous session)
+			let checkpoint = req.sessionKey
+				? getLatestCheckpointBySession(dbAcc, req.sessionKey)
+				: undefined;
+
+			// Priority 2: normalized project path
+			if (!checkpoint) {
+				let projNorm: string | undefined;
+				if (req.project) {
+					try {
+						projNorm = realpathSync(req.project);
+					} catch {
+						projNorm = req.project;
+					}
+				}
+				checkpoint = getLatestCheckpoint(dbAcc, projNorm, withinMs);
+			}
+
+			if (checkpoint) {
+				let recoveryText = checkpoint.digest;
+				if (recoveryText.length > continuityCfg.recoveryBudgetChars) {
+					recoveryText =
+						recoveryText.slice(0, continuityCfg.recoveryBudgetChars) +
+						"\n[truncated]";
+				}
+				// Store separately — appended after budget truncation to guarantee space
+				recoverySection = `\n## Session Recovery Context\n${recoveryText}`;
+			}
+		} catch (err) {
+			logger.warn("hooks", "Recovery context injection failed (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	const updateStatus = getUpdateSummary();
 	if (updateStatus) {
 		injectParts.push("\n## Signet Status\n");
@@ -885,9 +949,15 @@ export function handleSessionStart(
 
 	const duration = Date.now() - start;
 	const maxInject = config.maxInjectChars ?? 24000;
+	// Pre-reserve space for recovery context so it's never truncated
+	const reservedChars = recoverySection.length;
+	const mainBudget = maxInject - reservedChars;
 	let inject = injectParts.join("\n");
-	if (inject.length > maxInject) {
-		inject = inject.slice(0, maxInject) + "\n[context truncated]";
+	if (inject.length > mainBudget) {
+		inject = inject.slice(0, mainBudget) + "\n[context truncated]";
+	}
+	if (recoverySection) {
+		inject += recoverySection;
 	}
 	logger.info("hooks", "Session start completed", {
 		harness: req.harness,
@@ -973,6 +1043,31 @@ export function handleUserPromptSubmit(
 		.split(/\W+/)
 		.filter((w) => w.length >= 3)
 		.slice(0, 10);
+
+	// Always record the prompt for continuity tracking, even if no FTS query
+	recordPrompt(req.sessionKey, words.length > 0 ? words.join(" ") : undefined);
+	{
+		const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+		if (shouldCheckpoint(req.sessionKey, cfg)) {
+			const snap = consumeState(req.sessionKey);
+			if (snap) {
+				queueCheckpointWrite(
+					{
+						sessionKey: snap.sessionKey,
+						harness: snap.harness,
+						project: snap.project,
+						projectNormalized: snap.projectNormalized,
+						trigger: "periodic",
+						digest: formatPeriodicDigest(snap),
+						promptCount: snap.promptCount,
+						memoryQueries: snap.pendingQueries,
+						recentRemembers: snap.pendingRemembers,
+					},
+					cfg.maxCheckpointsPerSession,
+				);
+			}
+		}
+	}
 
 	if (words.length === 0 || !existsSync(MEMORY_DB)) {
 		return { inject: "", memoryCount: 0 };
@@ -1084,6 +1179,18 @@ export function handleUserPromptSubmit(
 export function handleSessionEnd(
 	req: SessionEndRequest,
 ): SessionEndResponse {
+	const sessionKey = req.sessionKey || req.sessionId;
+
+	// Flush pending checkpoints and clean up continuity state on all paths
+	try {
+		flushPendingCheckpoints();
+	} catch (err) {
+		logger.warn("hooks", "Checkpoint flush on session-end failed", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+	clearContinuity(sessionKey);
+
 	if (req.reason === "clear") {
 		return { memoriesSaved: 0 };
 	}
@@ -1124,7 +1231,7 @@ export function handleSessionEnd(
 	const jobId = enqueueSummaryJob(getDbAccessor(), {
 		harness: req.harness,
 		transcript: truncated,
-		sessionKey: req.sessionKey || req.sessionId,
+		sessionKey,
 		project: req.cwd,
 	});
 
@@ -1132,7 +1239,7 @@ export function handleSessionEnd(
 	logger.info("hooks", "Session end transcript queued", {
 		harness: req.harness,
 		project: req.cwd,
-		sessionKey: req.sessionKey || req.sessionId,
+		sessionKey,
 		transcriptPath: req.transcriptPath,
 		transcriptChars: transcript.length,
 		queuedChars: truncated.length,
@@ -1217,6 +1324,9 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 
 			return id;
 		});
+
+		// Track for continuity checkpointing
+		recordRemember(req.sessionKey, content);
 
 		logger.info("hooks", "Memory saved", {
 			id: resultId,

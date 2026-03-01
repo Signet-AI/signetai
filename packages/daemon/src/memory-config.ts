@@ -83,6 +83,14 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		chunkTargetChars: 300,
 		recallTruncateChars: 500,
 	},
+	continuity: {
+		enabled: true,
+		promptInterval: 10,
+		timeIntervalMs: 900_000, // 15 min
+		maxCheckpointsPerSession: 50,
+		retentionDays: 7,
+		recoveryBudgetChars: 2000,
+	},
 	telemetryEnabled: false,
 	telemetry: {
 		posthogHost: "",
@@ -136,6 +144,7 @@ export function loadPipelineConfig(
 	const documentsRaw = raw.documents as Record<string, unknown> | undefined;
 	const guardrailsRaw = raw.guardrails as Record<string, unknown> | undefined;
 	const telemetryRaw = raw.telemetry as Record<string, unknown> | undefined;
+	const continuityRaw = raw.continuity as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -370,6 +379,40 @@ export function loadPipelineConfig(
 				50,
 				100000,
 				d.guardrails.recallTruncateChars,
+			),
+		},
+
+		continuity: {
+			enabled: resolveBool(continuityRaw?.enabled, undefined, d.continuity.enabled),
+			promptInterval: clampPositive(
+				continuityRaw?.promptInterval,
+				1,
+				1000,
+				d.continuity.promptInterval,
+			),
+			timeIntervalMs: clampPositive(
+				continuityRaw?.timeIntervalMs,
+				60000,
+				3600000,
+				d.continuity.timeIntervalMs,
+			),
+			maxCheckpointsPerSession: clampPositive(
+				continuityRaw?.maxCheckpointsPerSession,
+				1,
+				500,
+				d.continuity.maxCheckpointsPerSession,
+			),
+			retentionDays: clampPositive(
+				continuityRaw?.retentionDays,
+				1,
+				90,
+				d.continuity.retentionDays,
+			),
+			recoveryBudgetChars: clampPositive(
+				continuityRaw?.recoveryBudgetChars,
+				200,
+				10000,
+				d.continuity.recoveryBudgetChars,
 			),
 		},
 

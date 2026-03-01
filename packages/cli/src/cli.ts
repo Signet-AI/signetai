@@ -4741,6 +4741,24 @@ hookCmd
 	.option("--context <context>", "Additional context")
 	.option("--json", "Output as JSON")
 	.action(async (options) => {
+		// Parse stdin for session_id and other fields from harness
+		let sessionKey = "";
+		let stdinProject = "";
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of process.stdin) {
+				chunks.push(chunk);
+			}
+			const input = Buffer.concat(chunks).toString("utf-8").trim();
+			if (input) {
+				const parsed = JSON.parse(input);
+				sessionKey = parsed.session_id || parsed.sessionId || "";
+				stdinProject = parsed.cwd || "";
+			}
+		} catch {
+			// No stdin or invalid JSON
+		}
+
 		const data = await fetchFromDaemon<{
 			identity?: { name: string; description?: string };
 			memories?: Array<{ content: string }>;
@@ -4751,9 +4769,10 @@ hookCmd
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				harness: options.harness,
-				project: options.project,
+				project: options.project || stdinProject,
 				agentId: options.agentId,
 				context: options.context,
+				sessionKey,
 			}),
 		});
 
@@ -4784,6 +4803,8 @@ hookCmd
 	.option("--project <project>", "Project path")
 	.action(async (options) => {
 		let userPrompt = "";
+		let sessionKey = "";
+		let stdinProject = "";
 		try {
 			const chunks: Buffer[] = [];
 			for await (const chunk of process.stdin) {
@@ -4793,6 +4814,8 @@ hookCmd
 			if (input) {
 				const parsed = JSON.parse(input);
 				userPrompt = parsed.user_prompt || parsed.userPrompt || "";
+				sessionKey = parsed.session_id || parsed.sessionId || "";
+				stdinProject = parsed.cwd || "";
 			}
 		} catch {
 			// No stdin or invalid JSON
@@ -4807,8 +4830,9 @@ hookCmd
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				harness: options.harness,
-				project: options.project,
+				project: options.project || stdinProject,
 				userPrompt,
+				sessionKey,
 			}),
 		});
 
@@ -4852,6 +4876,7 @@ hookCmd
 				harness: options.harness,
 				transcriptPath: body.transcript_path || body.transcriptPath,
 				sessionId: body.session_id || body.sessionId,
+				sessionKey: body.session_id || body.sessionId,
 				cwd: body.cwd,
 				reason: body.reason,
 			}),
@@ -4876,6 +4901,24 @@ hookCmd
 	.option("--message-count <count>", "Number of messages in session", parseInt)
 	.option("--json", "Output as JSON")
 	.action(async (options) => {
+		// Parse stdin for session_id and context from harness
+		let sessionKey = "";
+		let sessionContext = "";
+		try {
+			const chunks: Buffer[] = [];
+			for await (const chunk of process.stdin) {
+				chunks.push(chunk);
+			}
+			const input = Buffer.concat(chunks).toString("utf-8").trim();
+			if (input) {
+				const parsed = JSON.parse(input);
+				sessionKey = parsed.session_id || parsed.sessionId || "";
+				sessionContext = parsed.session_context || parsed.sessionContext || "";
+			}
+		} catch {
+			// No stdin or invalid JSON
+		}
+
 		const data = await fetchFromDaemon<{
 			summaryPrompt?: string;
 			guidelines?: string;
@@ -4885,6 +4928,8 @@ hookCmd
 			body: JSON.stringify({
 				harness: options.harness,
 				messageCount: options.messageCount,
+				sessionKey,
+				sessionContext,
 			}),
 		});
 
