@@ -164,7 +164,10 @@ async function handleEdit() {
 
 	if (result.success) {
 		onclose();
+	} else {
+		error = result.error ?? "Update failed.";
 	}
+}
 
 async function handleDelete() {
 	if (!editingId) return;
