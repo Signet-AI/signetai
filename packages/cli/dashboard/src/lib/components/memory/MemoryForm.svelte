@@ -167,7 +167,8 @@ async function handleEdit() {
 	submitting = false;
 
 	if (result.success) {
-}
+		onclose();
+	}
 
 async function handleDelete() {
 	if (!editingId) return;
