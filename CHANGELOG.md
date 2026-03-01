@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.13.0] - 2026-03-01
+
+### Features
+
+- add incremental embedding refresh tracker
+
+
 ## [0.12.3] - 2026-03-01
 
 ### Features
