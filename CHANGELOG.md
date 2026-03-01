@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.12.2] - 2026-03-01
+
+### Bug Fixes
+
+- **daemon**: reorder secrets routes so /exec isn't swallowed by /:name
+
+
 ## [0.12.1] - 2026-03-01
 
 ### Bug Fixes
