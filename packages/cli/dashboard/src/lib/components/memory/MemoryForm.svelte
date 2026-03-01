@@ -153,21 +153,20 @@ async function handleEdit() {
 		return;
 	}
 
-	const updates: {
-		content?: string;
-		type?: string;
-		importance?: number;
-		tags?: string;
-		pinned?: boolean;
-	} = {};
+	const result = await doUpdateMemory(
+		editingId,
+		updates as {
+			content?: string;
+			type?: string;
+			importance?: number;
+			tags?: string;
+			pinned?: boolean;
+		},
+		trimmedReason,
 	);
 	submitting = false;
 
 	if (result.success) {
-		onclose();
-	} else {
-		error = result.error ?? "Update failed.";
-	}
 }
 
 async function handleDelete() {
