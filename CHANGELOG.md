@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.12.1] - 2026-03-01
+
+### Bug Fixes
+
+- **openclaw**: harden workspace path validation and add connector health visibility
+
+
 ## [0.12.0] - 2026-03-01
 
 ### Bug Fixes
