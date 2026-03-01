@@ -1896,7 +1896,7 @@
 	left: 0;
 	color: var(--color-text-bright);
 	/* Idle animation: extremely subtle, occasional dither swap */
-	animation: char-idle calc(var(--t) * 8) steps(1, end) calc(var(--d) * -3) infinite;
+	animation: char-idle calc(var(--t) * 16) steps(1, end) calc(var(--d) * -6) infinite;
 }
 
 @keyframes char-idle {
