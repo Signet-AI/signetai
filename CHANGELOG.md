@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.11.2] - 2026-03-01
+
+### Features
+
+- **web**: redesign CoreFeatures into a modular blueprint layout
+- **web**: add interactive dithered ASCII animation to hero section
+- **web**: polish landing page design based on signet-design system
+- **web**: redesign landing page, add MDX testimonials, mobile optimization
+- **web**: add shadcn/ui component library with Tailwind v4
+
+
 ## [0.11.1] - 2026-02-28
 
 ### Bug Fixes
