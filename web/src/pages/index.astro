@@ -9,10 +9,35 @@ import Quickstart from '../components/landing/Quickstart.astro';
 import Harnesses from '../components/landing/Harnesses.astro';
 import QuickLinks from '../components/landing/QuickLinks.astro';
 import Cta from '../components/landing/Cta.astro';
+import StructuredData from '../components/StructuredData.astro';
 import '../styles/landing.css';
+
+const siteUrl = Astro.site?.toString().replace(/\/$/, '') ?? 'https://www.signetai.sh';
 ---
 
 <Base>
+  <StructuredData data={{
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: 'SignetAI',
+    url: siteUrl,
+    description: "Signet is local-first agent infrastructure. Portable memory and identity that lives on your machine.",
+  }} />
+  <StructuredData data={{
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Signet',
+    url: siteUrl,
+    description: "Portable memory, encrypted secrets, and identity for AI coding agents. Local-first, open standard.",
+    applicationCategory: 'DeveloperApplication',
+    operatingSystem: 'Linux, macOS',
+    offers: {
+      '@type': 'Offer',
+      price: '0',
+      priceCurrency: 'USD',
+    },
+  }} />
+
   <Nav />
   <main class="landing-page">
     <Hero />

@@ -5,12 +5,24 @@ import '../styles/tailwind.css';
 interface Props {
   title?: string;
   description?: string;
+  image?: string;
+  type?: string;
 }
 
+const SITE_NAME = 'SignetAI';
+const DEFAULT_TITLE = "SignetAI — Your Agent's Memory. Your Machine. Every Platform.";
+const DEFAULT_DESCRIPTION = "Signet is local-first agent infrastructure. Portable memory and identity that lives on your machine — not locked inside someone else's API. Encrypted secrets your agent can use but never read.";
+const DEFAULT_IMAGE = '/signetposter-01.jpg';
+
 const {
-  title = 'SignetAI — Your Agent\'s Memory. Your Machine. Every Platform.',
-  description = 'Signet is local-first agent infrastructure. Portable memory and identity that lives on your machine — not locked inside someone else\'s API. Encrypted secrets your agent can use but never read.',
+  title = DEFAULT_TITLE,
+  description = DEFAULT_DESCRIPTION,
+  image = DEFAULT_IMAGE,
+  type = 'website',
 } = Astro.props;
+
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site ?? 'https://www.signetai.sh');
+const imageUrl = new URL(image, Astro.site ?? 'https://www.signetai.sh');
 ---
 
 <!doctype html>
@@ -18,14 +30,40 @@ const {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="generator" content={Astro.generator} />
+
     <title>{title}</title>
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl.href} />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- RSS autodiscovery -->
+    <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Documentation`} href="/rss.xml" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content={type} />
+    <meta property="og:site_name" content={SITE_NAME} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl.href} />
+    <meta property="og:image" content={imageUrl.href} />
+
+    <!-- Twitter/X Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={imageUrl.href} />
+
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+
     <!-- Inline theme script prevents flash of wrong theme -->
     <script is:inline>
       (function () {

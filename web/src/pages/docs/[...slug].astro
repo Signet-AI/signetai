@@ -1,6 +1,7 @@
 ---
 import { getCollection, render } from 'astro:content';
 import Docs from '../../layouts/Docs.astro';
+import StructuredData from '../../components/StructuredData.astro';
 import { buildDocsNav, getDocNeighbors } from '../../lib/docs-nav';
 
 export async function getStaticPaths() {
@@ -20,6 +21,9 @@ const { previous, next } = getDocNeighbors(flat, currentSlug);
 const toc = headings
   .filter((heading) => heading.depth === 2 || heading.depth === 3)
   .slice(0, 24);
+
+const siteUrl = Astro.site?.toString().replace(/\/$/, '') ?? 'https://www.signetai.sh';
+const pageUrl = `${siteUrl}/docs/${currentSlug}/`;
 ---
 
 <Docs
@@ -31,5 +35,26 @@ const toc = headings
   previousDoc={previous}
   nextDoc={next}
 >
+  <StructuredData data={{
+    '@context': 'https://schema.org',
+    '@type': 'TechArticle',
+    headline: doc.data.title,
+    description: doc.data.description ?? `Signet documentation: ${doc.data.title}`,
+    url: pageUrl,
+    publisher: {
+      '@type': 'Organization',
+      name: 'SignetAI',
+      url: siteUrl,
+    },
+  }} />
+  <StructuredData data={{
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: siteUrl },
+      { '@type': 'ListItem', position: 2, name: 'Docs', item: `${siteUrl}/docs/` },
+      { '@type': 'ListItem', position: 3, name: doc.data.title, item: pageUrl },
+    ],
+  }} />
   <Content />
 </Docs>

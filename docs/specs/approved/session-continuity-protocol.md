@@ -1,3 +1,9 @@
+---
+title: Session Continuity Protocol
+description: Spec for capturing context at compaction boundaries so agents survive context window resets.
+section: Specs
+---
+
 # Session Continuity Protocol
 
 ## Context
