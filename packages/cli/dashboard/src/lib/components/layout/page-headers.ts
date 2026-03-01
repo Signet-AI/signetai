@@ -40,4 +40,8 @@ export const PAGE_HEADERS = {
 		title: "Tasks",
 		eyebrow: "Scheduled agent prompts",
 	},
+	connectors: {
+		title: "Connectors",
+		eyebrow: "Harness and data source health",
+	},
 } as const satisfies Record<string, PageHeaderDefinition>;

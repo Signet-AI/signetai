@@ -36,8 +36,21 @@ export interface ConfigFile {
 
 export interface Harness {
 	name: string;
+	id: string;
 	path: string;
 	exists: boolean;
+	lastSeen: string | null;
+}
+
+export interface DocumentConnector {
+	id: string;
+	provider: string;
+	display_name: string | null;
+	status: string;
+	last_sync_at: string | null;
+	last_error: string | null;
+	created_at: string;
+	updated_at: string;
 }
 
 export interface Identity {
@@ -537,6 +550,17 @@ export async function getHarnesses(): Promise<Harness[]> {
 		if (!response.ok) throw new Error("Failed to fetch harnesses");
 		const data = await response.json();
 		return data.harnesses || [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getConnectors(): Promise<DocumentConnector[]> {
+	try {
+		const response = await fetch(`${API_BASE}/api/connectors`);
+		if (!response.ok) return [];
+		const data = await response.json();
+		return data.connectors ?? [];
 	} catch {
 		return [];
 	}

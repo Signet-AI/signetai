@@ -4172,18 +4172,21 @@ mountSkillsRoutes(app);
 
 app.get("/api/harnesses", async (c) => {
 	const configs = [
-		{ name: "Claude Code", path: join(homedir(), ".claude", "CLAUDE.md") },
+		{ name: "Claude Code", id: "claude-code", path: join(homedir(), ".claude", "CLAUDE.md") },
 		{
 			name: "OpenCode",
+			id: "opencode",
 			path: join(homedir(), ".config", "opencode", "AGENTS.md"),
 		},
-		{ name: "OpenClaw (Source)", path: join(AGENTS_DIR, "AGENTS.md") },
+		{ name: "OpenClaw", id: "openclaw", path: join(AGENTS_DIR, "AGENTS.md") },
 	];
 
 	const harnesses = configs.map((config) => ({
 		name: config.name,
+		id: config.id,
 		path: config.path,
 		exists: existsSync(config.path),
+		lastSeen: harnessLastSeen.get(config.id) ?? null,
 	}));
 
 	return c.json({ harnesses });
@@ -4417,6 +4420,15 @@ function checkSessionClaim(
 // Start session cleanup timer
 startSessionCleanup();
 
+// Harness last-seen registry — in-memory, resets on daemon restart
+const harnessLastSeen = new Map<string, string>();
+
+function stampHarness(harness: string | undefined): void {
+	if (harness) {
+		harnessLastSeen.set(harness, new Date().toISOString());
+	}
+}
+
 // Guard against recursive hook calls from spawned agent contexts
 function isInternalCall(c: Context): boolean {
 	return c.req.header("x-signet-no-hooks") === "1";
@@ -4447,6 +4459,7 @@ app.post("/api/hooks/session-start", async (c) => {
 			}
 		}
 
+		stampHarness(body.harness);
 		const result = handleSessionStart(body);
 		return c.json(result);
 	} catch (e) {
@@ -4473,6 +4486,7 @@ app.post("/api/hooks/user-prompt-submit", async (c) => {
 		const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
 		if (conflict) return conflict;
 
+		stampHarness(body.harness);
 		const result = handleUserPromptSubmit(body);
 		return c.json(result);
 	} catch (e) {
@@ -4496,6 +4510,7 @@ app.post("/api/hooks/session-end", async (c) => {
 		const runtimePath = resolveRuntimePath(c, body);
 		if (runtimePath) body.runtimePath = runtimePath;
 
+		stampHarness(body.harness);
 		const result = await handleSessionEnd(body);
 
 		// Release session claim on end

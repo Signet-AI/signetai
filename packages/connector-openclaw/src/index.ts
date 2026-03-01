@@ -281,6 +281,9 @@ export class OpenClawConnector extends BaseConnector {
 		const patch: JsonObject = {};
 		if (configureWorkspace) {
 			this.validateWorkspacePath(basePath);
+			const ownershipWarnings =
+				this.checkWorkspaceOwnership(expandedBasePath);
+			warnings.push(...ownershipWarnings);
 			deepMerge(patch, {
 				agents: { defaults: { workspace: expandedBasePath } },
 			});
@@ -354,6 +357,11 @@ export class OpenClawConnector extends BaseConnector {
 	async configureWorkspace(basePath: string): Promise<string[]> {
 		this.validateWorkspacePath(basePath);
 		const expandedBasePath = this.expandPath(basePath);
+		const ownershipWarnings =
+			this.checkWorkspaceOwnership(expandedBasePath);
+		for (const w of ownershipWarnings) {
+			console.warn(w);
+		}
 		const result = this.patchAllConfigs({
 			agents: {
 				defaults: {
@@ -533,6 +541,33 @@ export class OpenClawConnector extends BaseConnector {
 				`Refusing to set workspace to temp directory: ${resolved}`,
 			);
 		}
+	}
+
+	/**
+	 * Check that a resolved workspace path exists and belongs to
+	 * the current user's home directory. Returns warnings (non-fatal)
+	 * so callers can surface them without blocking the install.
+	 */
+	private checkWorkspaceOwnership(resolved: string): string[] {
+		const warnings: string[] = [];
+		const home = this.getHomeDir();
+
+		const homeSep = home.endsWith("/") ? home : `${home}/`;
+		if (!resolved.startsWith(homeSep) && resolved !== home) {
+			warnings.push(
+				`[signet/openclaw] workspace path "${resolved}" is outside ` +
+					`current user home "${home}". This is likely a misconfiguration.`,
+			);
+		}
+
+		if (!existsSync(resolved)) {
+			warnings.push(
+				`[signet/openclaw] workspace path "${resolved}" does not exist. ` +
+					`Run \`signet setup\` or create the directory manually.`,
+			);
+		}
+
+		return warnings;
 	}
 
 	private getConfigCandidates(): string[] {
