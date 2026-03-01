@@ -16,11 +16,19 @@ interface LogEntry {
 	error?: { name: string; message: string };
 }
 
+const RECONNECT_BASE_MS = 2000;
+const RECONNECT_MAX_MS = 30000;
+const RECONNECT_MAX_ATTEMPTS = 5;
+
 let logs = $state<LogEntry[]>([]);
 let logsLoading = $state(false);
 let logsError = $state("");
 let logsStreaming = $state(false);
+let logsReconnecting = $state(false);
+let streamError = $state("");
 let logEventSource: EventSource | null = null;
+let reconnectAttempt = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let logLevelFilter = $state<string>("");
 let logCategoryFilter = $state<string>("");
 let logAutoScroll = $state(true);
@@ -107,6 +115,15 @@ async function fetchLogs() {
 }
 
 function startLogStream() {
+	// Cancel any pending reconnect before opening a fresh connection
+	if (reconnectTimer !== null) {
+		clearTimeout(reconnectTimer);
+		reconnectTimer = null;
+	}
+	reconnectAttempt = 0;
+	logsReconnecting = false;
+	streamError = "";
+
 	if (logEventSource) logEventSource.close();
 	logsStreaming = true;
 	logEventSource = new EventSource("/api/logs/stream");
@@ -114,7 +131,13 @@ function startLogStream() {
 	logEventSource.onmessage = (event) => {
 		try {
 			const entry = JSON.parse(event.data);
-			if (entry.type === "connected") return;
+			if (entry.type === "connected") {
+				// Server confirmed healthy — clear any leftover retry state
+				reconnectAttempt = 0;
+				logsReconnecting = false;
+				streamError = "";
+				return;
+			}
 			if (logLevelFilter && entry.level !== logLevelFilter) return;
 			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
 			const wasViewingLatest = isViewingLatest();
@@ -130,17 +153,48 @@ function startLogStream() {
 		logsStreaming = false;
 		logEventSource?.close();
 		logEventSource = null;
+
+		// Guard: onerror can fire repeatedly — don't stack timers
+		if (reconnectTimer !== null) return;
+
+		if (reconnectAttempt < RECONNECT_MAX_ATTEMPTS) {
+			const delay = Math.min(
+				RECONNECT_BASE_MS * 2 ** reconnectAttempt,
+				RECONNECT_MAX_MS,
+			);
+			reconnectAttempt++;
+			logsReconnecting = true;
+			streamError = `Stream lost — reconnecting in ${delay / 1000}s (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`;
+
+			reconnectTimer = setTimeout(() => {
+				reconnectTimer = null;
+				startLogStream();
+			}, delay);
+		} else {
+			// Give up — let the user reconnect manually
+			logsReconnecting = false;
+			streamError = "Stream disconnected. Click ▶ to reconnect.";
+			reconnectAttempt = 0;
+		}
 	};
 }
 
 function stopLogStream() {
 	logsStreaming = false;
+	logsReconnecting = false;
+	streamError = "";
+	reconnectAttempt = 0;
+	if (reconnectTimer !== null) {
+		clearTimeout(reconnectTimer);
+		reconnectTimer = null;
+	}
 	logEventSource?.close();
 	logEventSource = null;
 }
 
 function toggleLogStream() {
-	if (logsStreaming) stopLogStream();
+	// Treat reconnecting state as "active" — clicking cancels and stops cleanly
+	if (logsStreaming || logsReconnecting) stopLogStream();
 	else startLogStream();
 }
 
@@ -229,6 +283,7 @@ async function copySelectedLog(): Promise<void> {
 onMount(() => {
 	fetchLogs();
 	return () => {
+		if (reconnectTimer !== null) clearTimeout(reconnectTimer);
 		if (logEventSource) logEventSource.close();
 	};
 });
@@ -270,16 +325,23 @@ onMount(() => {
 			{ActionLabels.Refresh}
 		</button>
 		<button
-			class={`flex items-center justify-center w-7 h-7 text-[var(--sig-text-muted)] bg-transparent border border-transparent cursor-pointer hover:text-[var(--sig-text)] hover:border-[var(--sig-border)] ${logsStreaming ? 'text-[var(--sig-success)]' : ''}`}
+			class={`flex items-center justify-center w-7 h-7 bg-transparent border border-transparent cursor-pointer hover:text-[var(--sig-text)] hover:border-[var(--sig-border)] ${logsStreaming ? 'text-[var(--sig-success)]' : 'text-[var(--sig-text-muted)]'}`}
 			onclick={toggleLogStream}
-			title={logsStreaming ? 'Stop stream' : 'Start stream'}
+			title={logsStreaming ? 'Stop stream' : logsReconnecting ? 'Cancel reconnect' : 'Start stream'}
 		>
 			{#if logsStreaming}
 				<span class="text-[var(--sig-success)] text-[length:var(--font-size-sm)] font-medium [animation:pulse_2s_infinite]">● Live</span>
+			{:else if logsReconnecting}
+				<span class="text-[var(--sig-text-muted)] text-[length:var(--font-size-sm)] [animation:pulse_2s_infinite]">↺</span>
 			{:else}
 				▶
 			{/if}
 		</button>
+		{#if streamError}
+			<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)] truncate max-w-[220px]">
+				{streamError}
+			</span>
+		{/if}
 	</div>
 
 	<div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
