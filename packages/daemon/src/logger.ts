@@ -9,18 +9,10 @@
  * - Real-time streaming for dashboard
  */
 
-import {
-	existsSync,
-	mkdirSync,
-	appendFileSync,
-	readdirSync,
-	statSync,
-	unlinkSync,
-	readFileSync,
-} from "fs";
-import { join } from "path";
-import { homedir } from "os";
 import { EventEmitter } from "events";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 
 // Types
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -38,6 +30,7 @@ export type LogCategory =
 	| "secrets" // Secrets management
 	| "hooks" // Hook handlers
 	| "pipeline" // Extraction/decision pipeline
+	| "embedding-tracker" // Incremental embedding refresh tracker
 	| "summary-worker" // Session summary worker
 	| "session-memories" // Session memory tracking
 	| "system"; // System events
@@ -167,11 +160,7 @@ class Logger extends EventEmitter {
 
 		const lines =
 			this.buffer
-				.map((entry) =>
-					this.config.jsonFormat
-						? this.formatJson(entry)
-						: this.formatConsole(entry),
-				)
+				.map((entry) => (this.config.jsonFormat ? this.formatJson(entry) : this.formatConsole(entry)))
 				.join("\n") + "\n";
 
 		try {
@@ -208,10 +197,7 @@ class Logger extends EventEmitter {
 
 	private rotate() {
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-		const rotatedName = this.currentLogFile.replace(
-			".log",
-			`-${timestamp}.log`,
-		);
+		const rotatedName = this.currentLogFile.replace(".log", `-${timestamp}.log`);
 
 		try {
 			// Rename current to rotated
@@ -246,12 +232,7 @@ class Logger extends EventEmitter {
 	}
 
 	// Public logging methods
-	log(
-		level: LogLevel,
-		category: LogCategory,
-		message: string,
-		data?: Record<string, unknown>,
-	) {
+	log(level: LogLevel, category: LogCategory, message: string, data?: Record<string, unknown>) {
 		if (!this.shouldLog(level)) return;
 
 		const entry: LogEntry = {
@@ -265,11 +246,7 @@ class Logger extends EventEmitter {
 		this.write(entry);
 	}
 
-	debug(
-		category: LogCategory,
-		message: string,
-		data?: Record<string, unknown>,
-	) {
+	debug(category: LogCategory, message: string, data?: Record<string, unknown>) {
 		this.log("debug", category, message, data);
 	}
 
@@ -277,11 +254,7 @@ class Logger extends EventEmitter {
 		this.log("info", category, message, data);
 	}
 
-	warn(
-		category: LogCategory,
-		message: string,
-		errorOrData?: Error | Record<string, unknown>,
-	) {
+	warn(category: LogCategory, message: string, errorOrData?: Error | Record<string, unknown>) {
 		if (errorOrData instanceof Error) {
 			const entry: LogEntry = {
 				timestamp: new Date().toISOString(),
@@ -300,12 +273,7 @@ class Logger extends EventEmitter {
 		}
 	}
 
-	error(
-		category: LogCategory,
-		message: string,
-		error?: Error,
-		data?: Record<string, unknown>,
-	) {
+	error(category: LogCategory, message: string, error?: Error, data?: Record<string, unknown>) {
 		const entry: LogEntry = {
 			timestamp: new Date().toISOString(),
 			level: "error",
@@ -383,12 +351,7 @@ class Logger extends EventEmitter {
 	};
 
 	api = {
-		request: (
-			method: string,
-			path: string,
-			status: number,
-			duration: number,
-		) => {
+		request: (method: string, path: string, status: number, duration: number) => {
 			this.debug("api", `${method} ${path}`, { status, duration });
 		},
 	};

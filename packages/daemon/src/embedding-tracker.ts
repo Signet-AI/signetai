@@ -132,13 +132,15 @@ export function startEmbeddingTracker(
 					// Upsert embedding row
 					const embId = randomUUID();
 					db.prepare(
-						`INSERT INTO embeddings (id, source_type, source_id, content_hash, vector, dimensions, created_at)
-						 VALUES (?, 'memory', ?, ?, ?, ?, datetime('now'))
+						`INSERT INTO embeddings
+						   (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at)
+						 VALUES (?, 'memory', ?, ?, ?, ?, ?, datetime('now'))
 						 ON CONFLICT(content_hash) DO UPDATE SET
 						   vector = excluded.vector,
 						   dimensions = excluded.dimensions,
+						   chunk_text = excluded.chunk_text,
 						   created_at = excluded.created_at`,
-					).run(embId, row.id, contentHash, vectorToBlob(vector), vector.length);
+					).run(embId, row.id, contentHash, vectorToBlob(vector), vector.length, row.content);
 
 					// Sync vec table -- grab the actual id (may be existing on conflict)
 					const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
