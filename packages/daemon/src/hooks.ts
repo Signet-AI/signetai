@@ -34,6 +34,9 @@ import {
 	getLatestCheckpoint,
 	getLatestCheckpointBySession,
 	formatPeriodicDigest,
+	formatPreCompactionDigest,
+	formatSessionEndDigest,
+	writeCheckpoint,
 	queueCheckpointWrite,
 	flushPendingCheckpoints,
 } from "./session-checkpoints";
@@ -1022,6 +1025,33 @@ ${guidelines}
 		summaryPrompt,
 	});
 
+	// Write pre-compaction checkpoint from accumulated continuity state.
+	// Direct write (not queued) since this is a one-shot critical capture.
+	// Wrapped in try/catch so a DB failure doesn't prevent the summary
+	// prompt from being returned to the harness.
+	const snap = consumeState(req.sessionKey);
+	if (snap) {
+		try {
+			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+			const digest = formatPreCompactionDigest(snap, req.sessionContext);
+			writeCheckpoint(getDbAccessor(), {
+				sessionKey: snap.sessionKey,
+				harness: snap.harness,
+				project: snap.project,
+				projectNormalized: snap.projectNormalized,
+				trigger: "pre_compaction",
+				digest,
+				promptCount: snap.promptCount,
+				memoryQueries: snap.pendingQueries,
+				recentRemembers: snap.pendingRemembers,
+			}, cfg.maxCheckpointsPerSession);
+		} catch (err) {
+			logger.warn("hooks", "Pre-compaction checkpoint write failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	return {
 		summaryPrompt,
 		guidelines,
@@ -1045,7 +1075,12 @@ export function handleUserPromptSubmit(
 		.slice(0, 10);
 
 	// Always record the prompt for continuity tracking, even if no FTS query
-	recordPrompt(req.sessionKey, words.length > 0 ? words.join(" ") : undefined);
+	const snippet = req.userPrompt.slice(0, 200).trim();
+	recordPrompt(
+		req.sessionKey,
+		words.length > 0 ? words.join(" ") : undefined,
+		snippet.length > 0 ? snippet : undefined,
+	);
 	{
 		const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
 		if (shouldCheckpoint(req.sessionKey, cfg)) {
@@ -1181,7 +1216,7 @@ export function handleSessionEnd(
 ): SessionEndResponse {
 	const sessionKey = req.sessionKey || req.sessionId;
 
-	// Flush pending checkpoints and clean up continuity state on all paths
+	// Flush pending periodic checkpoints
 	try {
 		flushPendingCheckpoints();
 	} catch (err) {
@@ -1189,11 +1224,38 @@ export function handleSessionEnd(
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
-	clearContinuity(sessionKey);
 
 	if (req.reason === "clear") {
+		// Caller intends to discard session context — skip checkpoint, just clean up
+		clearContinuity(sessionKey);
 		return { memoriesSaved: 0 };
 	}
+
+	// Capture final session-end checkpoint before clearing state.
+	// Uses totalPromptCount so this reflects the full session, not just
+	// the interval since the last periodic/pre-compaction consume.
+	const snap = consumeState(sessionKey);
+	if (snap && snap.totalPromptCount > 0) {
+		try {
+			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+			writeCheckpoint(getDbAccessor(), {
+				sessionKey: snap.sessionKey,
+				harness: snap.harness,
+				project: snap.project,
+				projectNormalized: snap.projectNormalized,
+				trigger: "session_end",
+				digest: formatSessionEndDigest(snap),
+				promptCount: snap.totalPromptCount,
+				memoryQueries: snap.pendingQueries,
+				recentRemembers: snap.pendingRemembers,
+			}, cfg.maxCheckpointsPerSession);
+		} catch (err) {
+			logger.warn("hooks", "Session-end checkpoint write failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+	clearContinuity(sessionKey);
 
 	// Respect the pipeline master switch
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);

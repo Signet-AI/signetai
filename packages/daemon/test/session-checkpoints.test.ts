@@ -214,9 +214,11 @@ describe("formatPeriodicDigest", () => {
 			project: "/tmp/project",
 			projectNormalized: "/tmp/project",
 			promptCount: 15,
+			totalPromptCount: 15,
 			lastCheckpointAt: Date.now(),
 			pendingQueries: ["typescript", "auth"],
 			pendingRemembers: ["User likes dark mode"],
+			pendingPromptSnippets: [],
 			startedAt: Date.now() - 600_000, // 10 min ago
 		};
 
@@ -236,9 +238,11 @@ describe("formatPeriodicDigest", () => {
 			project: undefined,
 			projectNormalized: undefined,
 			promptCount: 3,
+			totalPromptCount: 3,
 			lastCheckpointAt: Date.now(),
 			pendingQueries: [],
 			pendingRemembers: [],
+			pendingPromptSnippets: [],
 			startedAt: Date.now() - 120_000,
 		};
 

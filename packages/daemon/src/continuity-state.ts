@@ -14,15 +14,21 @@ export interface ContinuityState {
 	readonly harness: string;
 	readonly project: string | undefined;
 	readonly projectNormalized: string | undefined;
+	/** Prompts since last consume (interval count). */
 	promptCount: number;
+	/** Total prompts across the entire session (never reset). */
+	totalPromptCount: number;
 	lastCheckpointAt: number;
 	pendingQueries: string[];
 	pendingRemembers: string[];
+	pendingPromptSnippets: string[];
 	startedAt: number;
 }
 
 const MAX_PENDING_QUERIES = 20;
 const MAX_PENDING_REMEMBERS = 10;
+const MAX_PENDING_SNIPPETS = 10;
+const SNIPPET_MAX_CHARS = 200;
 
 const state = new Map<string, ContinuityState>();
 
@@ -50,26 +56,39 @@ export function initContinuity(
 		project,
 		projectNormalized: normalizePath(project),
 		promptCount: 0,
+		totalPromptCount: 0,
 		lastCheckpointAt: now,
 		pendingQueries: [],
 		pendingRemembers: [],
+		pendingPromptSnippets: [],
 		startedAt: now,
 	});
 }
 
-/** Record a user prompt and its search terms. */
+/** Record a user prompt, its search terms, and a truncated snippet. */
 export function recordPrompt(
 	sessionKey: string | undefined,
 	queryTerms: string | undefined,
+	promptSnippet: string | undefined,
 ): void {
 	if (!sessionKey) return;
 	const s = state.get(sessionKey);
 	if (!s) return;
 	s.promptCount++;
+	s.totalPromptCount++;
 	if (queryTerms) {
 		s.pendingQueries.push(queryTerms);
 		if (s.pendingQueries.length > MAX_PENDING_QUERIES) {
 			s.pendingQueries.shift();
+		}
+	}
+	if (promptSnippet) {
+		const trimmed = promptSnippet.slice(0, SNIPPET_MAX_CHARS).trim();
+		if (trimmed.length > 0) {
+			s.pendingPromptSnippets.push(trimmed);
+			if (s.pendingPromptSnippets.length > MAX_PENDING_SNIPPETS) {
+				s.pendingPromptSnippets.shift();
+			}
 		}
 	}
 }
@@ -123,6 +142,7 @@ export function consumeState(
 		...s,
 		pendingQueries: [...s.pendingQueries],
 		pendingRemembers: [...s.pendingRemembers],
+		pendingPromptSnippets: [...s.pendingPromptSnippets],
 	};
 
 	// Reset for next interval
@@ -130,6 +150,7 @@ export function consumeState(
 	s.lastCheckpointAt = Date.now();
 	s.pendingQueries = [];
 	s.pendingRemembers = [];
+	s.pendingPromptSnippets = [];
 
 	return snapshot;
 }

@@ -15,6 +15,7 @@ import { logger } from "./logger";
 export type CheckpointTrigger =
 	| "periodic"
 	| "pre_compaction"
+	| "session_end"
 	| "agent"
 	| "explicit";
 
@@ -280,8 +281,86 @@ export function formatPeriodicDigest(state: ContinuityState): string {
 		`Prompts: ${state.promptCount} | Duration: ${elapsedStr}`,
 	];
 
+	if (state.pendingPromptSnippets.length > 0) {
+		parts.push("", "### Recent Prompts");
+		for (const snippet of state.pendingPromptSnippets) {
+			parts.push(`- ${snippet}`);
+		}
+	}
+
 	if (state.pendingQueries.length > 0 || state.pendingRemembers.length > 0) {
 		parts.push("", "### Memory Activity Since Last Checkpoint");
+		if (state.pendingQueries.length > 0) {
+			parts.push(`Queries: ${state.pendingQueries.join(", ")}`);
+		}
+		if (state.pendingRemembers.length > 0) {
+			parts.push(
+				`Remembered: ${state.pendingRemembers.map((r) => r.slice(0, 120)).join("; ")}`,
+			);
+		}
+	}
+
+	return parts.join("\n");
+}
+
+export function formatPreCompactionDigest(
+	state: ContinuityState,
+	sessionContext?: string,
+): string {
+	const elapsed = Date.now() - state.startedAt;
+	const elapsedStr = formatDuration(elapsed);
+
+	const parts: string[] = [
+		"## Pre-Compaction Checkpoint",
+		`Project: ${state.project ?? "unknown"}`,
+		`Duration: ${elapsedStr} | Prompts: ${state.promptCount}`,
+	];
+
+	if (sessionContext) {
+		parts.push("", "### Session Context", sessionContext);
+	}
+
+	if (state.pendingPromptSnippets.length > 0) {
+		parts.push("", "### Recent Prompts");
+		for (const snippet of state.pendingPromptSnippets) {
+			parts.push(`- ${snippet}`);
+		}
+	}
+
+	if (state.pendingQueries.length > 0 || state.pendingRemembers.length > 0) {
+		parts.push("", "### Memory Activity");
+		if (state.pendingQueries.length > 0) {
+			parts.push(`Queries: ${state.pendingQueries.join(", ")}`);
+		}
+		if (state.pendingRemembers.length > 0) {
+			parts.push(
+				`Remembered: ${state.pendingRemembers.map((r) => r.slice(0, 120)).join("; ")}`,
+			);
+		}
+	}
+
+	return parts.join("\n");
+}
+
+export function formatSessionEndDigest(state: ContinuityState): string {
+	const elapsed = Date.now() - state.startedAt;
+	const elapsedStr = formatDuration(elapsed);
+
+	const parts: string[] = [
+		"## Session End Checkpoint",
+		`Project: ${state.project ?? "unknown"}`,
+		`Duration: ${elapsedStr} | Total Prompts: ${state.totalPromptCount}`,
+	];
+
+	if (state.pendingPromptSnippets.length > 0) {
+		parts.push("", "### Recent Prompts");
+		for (const snippet of state.pendingPromptSnippets) {
+			parts.push(`- ${snippet}`);
+		}
+	}
+
+	if (state.pendingQueries.length > 0 || state.pendingRemembers.length > 0) {
+		parts.push("", "### Memory Activity");
 		if (state.pendingQueries.length > 0) {
 			parts.push(`Queries: ${state.pendingQueries.join(", ")}`);
 		}
