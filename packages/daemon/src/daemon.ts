@@ -23,6 +23,7 @@ import {
 	readdirSync,
 	statSync,
 	appendFileSync,
+	realpathSync,
 } from "fs";
 import { spawn } from "child_process";
 import { createHash } from "crypto";
@@ -132,6 +133,14 @@ import {
 } from "./telemetry";
 import { buildTimeline, type TimelineSources } from "./timeline";
 import {
+	getCheckpointsByProject,
+	getCheckpointsBySession,
+	initCheckpointFlush,
+	flushPendingCheckpoints,
+	pruneCheckpoints,
+	redactCheckpointRow,
+} from "./session-checkpoints";
+import {
 	createRateLimiter,
 	requeueDeadJobs,
 	releaseStaleLeases,
@@ -185,6 +194,7 @@ const repairLimiter = createRateLimiter();
 // Telemetry — assigned in main(), read by cleanup()
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 
 // Prevents concurrent UMAP computations for the same dimension count
 const projectionInFlight = new Map<number, Promise<void>>();
@@ -5579,6 +5589,42 @@ app.post("/api/repair/deduplicate", async (c) => {
 });
 
 // ============================================================================
+// Session Checkpoints (Continuity Protocol)
+// ============================================================================
+
+app.get("/api/checkpoints", (c) => {
+	const project = c.req.query("project");
+	const limit = parseInt(c.req.query("limit") ?? "10", 10);
+
+	if (!project) {
+		return c.json({ error: "project query parameter required" }, 400);
+	}
+
+	// Normalize project path for consistent matching
+	let projectNormalized = project;
+	try {
+		projectNormalized = realpathSync(project);
+	} catch {
+		// Use raw path if realpath fails
+	}
+
+	const rows = getCheckpointsByProject(
+		getDbAccessor(),
+		projectNormalized,
+		Math.min(limit, 100),
+	);
+	const redacted = rows.map(redactCheckpointRow);
+	return c.json({ checkpoints: redacted, count: redacted.length });
+});
+
+app.get("/api/checkpoints/:sessionKey", (c) => {
+	const sessionKey = c.req.param("sessionKey");
+	const rows = getCheckpointsBySession(getDbAccessor(), sessionKey);
+	const redacted = rows.map(redactCheckpointRow);
+	return c.json({ checkpoints: redacted, count: redacted.length });
+});
+
+// ============================================================================
 // Analytics & Timeline (Phase K)
 // ============================================================================
 
@@ -7287,6 +7333,10 @@ async function cleanup() {
 		clearInterval(heartbeatTimer);
 		heartbeatTimer = undefined;
 	}
+	if (checkpointPruneTimer) {
+		clearInterval(checkpointPruneTimer);
+		checkpointPruneTimer = undefined;
+	}
 	if (telemetryRef) {
 		try {
 			await telemetryRef.stop();
@@ -7294,6 +7344,13 @@ async function cleanup() {
 			// best-effort
 		}
 		telemetryRef = undefined;
+	}
+
+	// Flush any pending checkpoint writes before closing DB
+	try {
+		flushPendingCheckpoints();
+	} catch {
+		// best-effort
 	}
 
 	// Drain pipeline before closing DB so in-flight jobs finish writes
@@ -7501,8 +7558,25 @@ async function main() {
 		startRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);
 	}
 
+	// Initialize checkpoint flush queue for continuity protocol
+	initCheckpointFlush(getDbAccessor());
+
 	// Start scheduled task worker
 	const schedulerHandle = startSchedulerWorker(getDbAccessor());
+
+	// Checkpoint pruning timer — runs once per hour
+	checkpointPruneTimer = setInterval(() => {
+		try {
+			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+			if (cfg.enabled) {
+				pruneCheckpoints(getDbAccessor(), cfg.retentionDays);
+			}
+		} catch (err) {
+			logger.warn("daemon", "Checkpoint pruning failed", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, 3600_000);
 
 	// Start git sync timer (if enabled and has token)
 	startGitSyncTimer();
