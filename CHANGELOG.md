@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.14.3] - 2026-03-01
+
+### Bug Fixes
+
+- **embeddings**: stabilize large constellation layouts and add physics tuning
+
+
 ## [0.14.2] - 2026-03-01
 
 ### Bug Fixes
