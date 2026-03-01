@@ -20,6 +20,55 @@ export type SkillsView = "browse" | "installed";
 export type SortBy = "installs" | "stars" | "name" | "newest";
 export type ProviderFilter = "all" | "skills.sh" | "clawhub";
 
+// Cache the browse catalog in localStorage so the grid renders instantly on
+// repeat loads. Background-refresh if the entry is older than CATALOG_CACHE_TTL.
+const CATALOG_CACHE_KEY = "signet:skills:catalog:v1";
+const CATALOG_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+type CatalogCache = {
+	ts: number;
+	results: SkillSearchResult[];
+	total: number;
+};
+
+function loadCatalogCache(): CatalogCache | null {
+	try {
+		const raw = localStorage.getItem(CATALOG_CACHE_KEY);
+		if (!raw) return null;
+		const cache = JSON.parse(raw) as CatalogCache;
+		if (
+			typeof cache.ts !== "number" ||
+			!Array.isArray(cache.results) ||
+			typeof cache.total !== "number"
+		) {
+			return null;
+		}
+		return cache;
+	} catch {
+		return null;
+	}
+}
+
+function saveCatalogCache(results: SkillSearchResult[], total: number): void {
+	try {
+		const entry: CatalogCache = { ts: Date.now(), results, total };
+		localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify(entry));
+	} catch {
+		// localStorage unavailable (private browsing, storage quota, etc.)
+	}
+}
+
+async function refreshCatalogInBackground(): Promise<void> {
+	try {
+		const data = await browseSkills();
+		sk.catalog = data.results;
+		sk.catalogTotal = data.total;
+		saveCatalogCache(data.results, data.total);
+	} catch {
+		// Background refresh failing silently is acceptable — cache still served
+	}
+}
+
 export const sk = $state({
 	view: "browse" as SkillsView,
 
@@ -121,12 +170,29 @@ export async function fetchInstalled(): Promise<void> {
 
 export async function fetchCatalog(): Promise<void> {
 	if (sk.catalogLoaded) return;
+
+	const cached = loadCatalogCache();
+	if (cached) {
+		// Serve cache immediately — grid renders with no loading state
+		sk.catalog = cached.results;
+		sk.catalogTotal = cached.total;
+		sk.catalogLoaded = true;
+		sk.catalogLoading = false;
+		// Refresh in the background if the entry is stale
+		if (Date.now() - cached.ts > CATALOG_CACHE_TTL) {
+			void refreshCatalogInBackground();
+		}
+		return;
+	}
+
+	// Cold load — no cache yet, show spinner and wait
 	sk.catalogLoading = true;
 	const data = await browseSkills();
 	sk.catalog = data.results;
 	sk.catalogTotal = data.total;
 	sk.catalogLoaded = true;
 	sk.catalogLoading = false;
+	saveCatalogCache(data.results, data.total);
 }
 
 export function setQuery(q: string): void {

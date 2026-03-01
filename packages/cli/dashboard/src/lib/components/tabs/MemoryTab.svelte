@@ -31,6 +31,9 @@ let display = $derived(
 			: memories,
 );
 
+let totalCount = $derived(memories.length);
+let displayCount = $derived(display.length);
+
 function parseMemoryTags(raw: Memory["tags"]): string[] {
 	if (!raw) return [];
 	if (Array.isArray(raw)) {
@@ -221,6 +224,17 @@ function formatIsoDate(value: string): string {
 				onclick={() => mem.filterType = mem.filterType === t ? '' : t}
 			>{t}</button>
 		{/each}
+	</div>
+
+	<!-- Count bar -->
+	<div class="flex items-center text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+		{#if mem.similarSourceId}
+			Showing {displayCount} similar {displayCount === 1 ? 'memory' : 'memories'}
+		{:else if mem.searched || hasActiveFilters()}
+			Showing {displayCount} of {totalCount} {totalCount === 1 ? 'memory' : 'memories'}
+		{:else}
+			{totalCount} {totalCount === 1 ? 'memory' : 'memories'}
+		{/if}
 	</div>
 
 	<!-- Similarity mode banner -->
