@@ -153,16 +153,13 @@ async function handleEdit() {
 		return;
 	}
 
-	const result = await doUpdateMemory(
-		editingId,
-		updates as {
-			content?: string;
-			type?: string;
-			importance?: number;
-			tags?: string;
-			pinned?: boolean;
-		},
-		trimmedReason,
+	const updates: {
+		content?: string;
+		type?: string;
+		importance?: number;
+		tags?: string;
+		pinned?: boolean;
+	} = {};
 	);
 	submitting = false;
 
