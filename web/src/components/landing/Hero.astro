@@ -1,4 +1,17 @@
 ---
+const rawAscii = `
+ ███████╗██╗ ██████╗ ███╗   ██╗███████╗████████╗
+ ██╔════╝██║██╔════╝ ████╗  ██║██╔════╝╚══██╔══╝
+ ███████╗██║██║  ███╗██╔██╗ ██║█████╗     ██║
+ ╚════██║██║██║   ██║██║╚██╗██║██╔══╝     ██║
+ ███████║██║╚██████╔╝██║ ╚████║███████╗   ██║
+ ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝`.trimStart();
+
+const animatedAscii = rawAscii.replace(/█/g, () => {
+  const d = (Math.random() * 2).toFixed(2);
+  const t = (0.5 + Math.random() * 1.5).toFixed(2);
+  return `<span class="ascii-block" style="--d: ${d}s; --t: ${t}s">█</span>`;
+});
 ---
 
 <section class="hero">
@@ -6,13 +19,12 @@
     <div class="hero-grid reveal">
       <div class="hero-content-tick"></div>
       <div class="hero-left">
-        <h1 class="hero-title" aria-label="Signet"><pre class="hero-ascii" aria-hidden="true">{`
- ███████╗██╗ ██████╗ ███╗   ██╗███████╗████████╗
- ██╔════╝██║██╔════╝ ████╗  ██║██╔════╝╚══██╔══╝
- ███████╗██║██║  ███╗██╔██╗ ██║█████╗     ██║
- ╚════██║██║██║   ██║██║╚██╗██║██╔══╝     ██║
- ███████║██║╚██████╔╝██║ ╚████║███████╗   ██║
- ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝`.trimStart()}</pre></h1>
+        <h1 class="hero-title" aria-label="Signet">
+          <div class="ascii-wrapper" id="ascii-wrapper">
+            <pre class="hero-ascii base-ascii" aria-hidden="true" set:html={animatedAscii}></pre>
+            <pre class="hero-ascii hover-ascii" aria-hidden="true" set:html={animatedAscii}></pre>
+          </div>
+        </h1>
         <div class="hero-eyebrow">Portable Agent Infrastructure</div>
 
         <div class="hero-actions">
@@ -62,3 +74,21 @@
     </div>
   </div>
 </section>
+
+<script>
+  const wrapper = document.getElementById('ascii-wrapper');
+  if (wrapper) {
+    wrapper.addEventListener('mousemove', (e) => {
+      const rect = wrapper.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      wrapper.style.setProperty('--mx', `${x}px`);
+      wrapper.style.setProperty('--my', `${y}px`);
+    });
+    
+    wrapper.addEventListener('mouseleave', () => {
+      wrapper.style.setProperty('--mx', `-100px`);
+      wrapper.style.setProperty('--my', `-100px`);
+    });
+  }
+</script>

@@ -1876,6 +1876,92 @@
 	max-width: 100%;
 }
 
+.ascii-wrapper {
+	position: relative;
+	display: inline-block;
+	cursor: crosshair;
+}
+
+.ascii-block {
+	display: inline-block;
+	position: relative;
+	color: transparent; /* Hide the actual character so we can swap it with ::before */
+	width: 1ch;
+}
+
+.base-ascii .ascii-block::before {
+	content: "█";
+	position: absolute;
+	top: 0;
+	left: 0;
+	color: var(--color-text-bright);
+	/* Idle animation: extremely subtle, occasional dither swap */
+	animation: char-idle calc(var(--t) * 8) steps(1, end) calc(var(--d) * -3) infinite;
+}
+
+@keyframes char-idle {
+	0%,
+	96%,
+	100% {
+		content: "█";
+		color: var(--color-text-bright);
+	}
+	97%,
+	99% {
+		content: "▓";
+		color: color-mix(in srgb, var(--color-text-bright) 80%, transparent);
+	}
+	98% {
+		content: "▒";
+		color: color-mix(in srgb, var(--color-text-bright) 60%, transparent);
+	}
+}
+
+.hover-ascii {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+	mask-image: radial-gradient(circle 80px at var(--mx, -100px) var(--my, -100px), black 20%, transparent 100%);
+	-webkit-mask-image: radial-gradient(circle 80px at var(--mx, -100px) var(--my, -100px), black 20%, transparent 100%);
+	z-index: 2;
+}
+
+.hover-ascii .ascii-block::before {
+	content: "█";
+	position: absolute;
+	top: 0;
+	left: 0;
+	/* Hover animation: rapid, dithered character swapping */
+	animation: char-hover calc(var(--t) * 1.5) steps(1, end) calc(var(--d) * -1) infinite;
+}
+
+@keyframes char-hover {
+	0%,
+	100% {
+		content: "█";
+		color: var(--color-text-bright);
+	}
+	20% {
+		content: "▓";
+		color: color-mix(in srgb, var(--color-text-bright) 85%, transparent);
+	}
+	40% {
+		content: "▒";
+		color: color-mix(in srgb, var(--color-text-bright) 70%, transparent);
+	}
+	60% {
+		content: "░";
+		color: color-mix(in srgb, var(--color-text-bright) 50%, transparent);
+	}
+	80% {
+		content: "▓";
+		color: color-mix(in srgb, var(--color-text-bright) 85%, transparent);
+	}
+}
+
 .landing-page .hero-tagline {
 	font-size: clamp(0.88rem, 1.8vw, 1.05rem);
 	line-height: 1.35;
