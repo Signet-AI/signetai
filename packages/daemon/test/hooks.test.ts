@@ -642,6 +642,43 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).toContain("TypeScript");
 	});
 
+	test("strips untrusted metadata block from user prompt", () => {
+		createMemoryDb([
+			{
+				content: "Reiterate the release checklist before deploy",
+				importance: 0.8,
+			},
+		]);
+
+		const result = handleUserPromptSubmit({
+			harness: "test",
+			userPrompt:
+				"Conversation info (untrusted metadata):\n{\"conversation_label\":\"OpenClaw Session\",\"message_id\":\"msg_123\",\"sender_id\":\"user_456\"}\n\nCan you reiterate the release checklist?",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.queryTerms).toContain("reiterate");
+		expect(result.queryTerms).not.toContain("conversation_label");
+	});
+
+	test("includes last assistant message in recall query terms", () => {
+		createMemoryDb([
+			{
+				content: "Use pgvector in PostgreSQL for semantic embeddings",
+				importance: 0.8,
+			},
+		]);
+
+		const result = handleUserPromptSubmit({
+			harness: "test",
+			userPrompt: "Can you remind me what to use?",
+			lastAssistantMessage: "Earlier I suggested pgvector for embeddings.",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.queryTerms).toContain("pgvector");
+	});
+
 	test("returns empty for no-match prompt", () => {
 		createMemoryDb([
 			{ content: "PostgreSQL replication setup guide", importance: 0.8 },
