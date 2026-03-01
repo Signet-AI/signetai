@@ -39,7 +39,7 @@ const {
 <Base title={`${title} — Signet Docs`} description={description}>
   <Nav />
 
-  <div class="docs-shell">
+  <div class="docs-shell" data-has-toc={toc && toc.length > 0 ? "true" : undefined}>
     <Sidebar currentSlug={currentSlug} />
 
     <main class="docs-main">
@@ -89,6 +89,19 @@ const {
 
       <Footer />
     </main>
+
+    {toc && toc.length > 0 ? (
+      <aside class="docs-toc-rail" aria-label="Table of contents">
+        <p class="docs-toc-rail-heading">On this page</p>
+        <ol class="docs-toc-rail-list">
+          {toc.map((item) => (
+            <li class={item.depth >= 3 ? 'toc-rail-subitem' : undefined}>
+              <a href={`#${item.slug}`}>{item.text}</a>
+            </li>
+          ))}
+        </ol>
+      </aside>
+    ) : null}
   </div>
 
   <script src="../scripts/docs-toc.ts"></script>

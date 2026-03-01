@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Menu } from "lucide-react";
+import { ChevronRight, Menu } from "lucide-react";
 import {
 	Collapsible,
 	CollapsibleContent,
@@ -34,6 +34,18 @@ function sectionContainsSlug(section: NavSection, slug?: string): boolean {
 	return section.items.some((item) => item.slug === slug);
 }
 
+function shouldDefaultOpen(
+	section: NavSection,
+	index: number,
+	currentSlug?: string,
+): boolean {
+	// Always open the active section
+	if (sectionContainsSlug(section, currentSlug)) return true;
+	// On the docs index (no currentSlug), open "Getting Started"
+	if (!currentSlug && index === 0) return true;
+	return false;
+}
+
 function SidebarSections({
 	sections,
 	currentSlug,
@@ -45,30 +57,28 @@ function SidebarSections({
 }) {
 	return (
 		<div className="docs-sidebar-sections">
-			{sections.map((section) => {
+			{sections.map((section, index) => {
 				const isActiveSection = sectionContainsSlug(section, currentSlug);
+				const isOpen = shouldDefaultOpen(section, index, currentSlug);
 
 				return (
 					<Collapsible
 						key={section.label}
-						defaultOpen={isActiveSection}
+						defaultOpen={isOpen}
 						className="sidebar-collapsible-section"
 					>
 						<CollapsibleTrigger className="sidebar-section-trigger">
+							<ChevronRight
+								size={14}
+								className="sidebar-chevron"
+								aria-hidden="true"
+							/>
 							<span
 								className="sidebar-section-label"
 								data-active={isActiveSection || undefined}
 							>
 								{section.label}
-								<span className="sidebar-section-count">
-									{section.items.length}
-								</span>
 							</span>
-							<ChevronDown
-								size={14}
-								className="sidebar-chevron"
-								aria-hidden="true"
-							/>
 						</CollapsibleTrigger>
 						<CollapsibleContent>
 							<ul className="sidebar-nav">

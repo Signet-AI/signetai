@@ -12,7 +12,6 @@ function setActive(links: HTMLAnchorElement[], id: string): void {
 		const href = link.getAttribute("href");
 		if (href === `#${id}`) {
 			link.classList.add("is-active");
-			return;
 		}
 	}
 }
@@ -25,28 +24,34 @@ function initDocsToc(): void {
 	cleanup?.();
 	cleanup = null;
 
-	const nav = document.querySelector(".docs-inpage");
-	if (!(nav instanceof HTMLElement)) return;
+	const containers = document.querySelectorAll(
+		".docs-inpage, .docs-toc-rail-list",
+	);
+	if (containers.length === 0) return;
 
-	const linkNodes = nav.querySelectorAll('a[href^="#"]');
 	const links: HTMLAnchorElement[] = [];
-	const headings: HTMLElement[] = [];
+	const headingMap = new Map<string, HTMLElement>();
 
-	for (const node of linkNodes) {
-		if (!(node instanceof HTMLAnchorElement)) continue;
-		const hash = node.getAttribute("href");
-		if (!hash) continue;
-		const id = getIdFromHash(hash);
-		if (!id) continue;
+	for (const container of containers) {
+		const linkNodes = container.querySelectorAll('a[href^="#"]');
+		for (const node of linkNodes) {
+			if (!(node instanceof HTMLAnchorElement)) continue;
+			const hash = node.getAttribute("href");
+			if (!hash) continue;
+			const id = getIdFromHash(hash);
+			if (!id) continue;
 
-		const heading = document.getElementById(id);
-		if (!(heading instanceof HTMLElement)) continue;
+			const heading = document.getElementById(id);
+			if (!(heading instanceof HTMLElement)) continue;
 
-		links.push(node);
-		headings.push(heading);
+			links.push(node);
+			headingMap.set(id, heading);
+		}
 	}
 
-	if (links.length === 0 || headings.length === 0) return;
+	if (links.length === 0) return;
+
+	const headings = [...new Set(headingMap.values())];
 
 	const onScroll = () => {
 		const marker = window.scrollY + 140;
@@ -98,13 +103,17 @@ function initDocsToc(): void {
 
 	window.addEventListener("scroll", onScrollThrottled, { passive: true });
 	window.addEventListener("hashchange", onHashChange);
-	nav.addEventListener("click", onClick);
+	for (const container of containers) {
+		container.addEventListener("click", onClick);
+	}
 	onScroll();
 
 	cleanup = () => {
 		window.removeEventListener("scroll", onScrollThrottled);
 		window.removeEventListener("hashchange", onHashChange);
-		nav.removeEventListener("click", onClick);
+		for (const container of containers) {
+			container.removeEventListener("click", onClick);
+		}
 	};
 
 	document.addEventListener(

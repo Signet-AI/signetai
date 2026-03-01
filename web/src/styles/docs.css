@@ -3,11 +3,15 @@
    ========================================================================== */
 .docs-shell {
 	display: grid;
-	grid-template-columns: 240px 1fr;
+	grid-template-columns: 260px 1fr;
 	min-height: 100vh;
 	padding-top: 56px;
 	position: relative;
 	z-index: 1;
+}
+
+.docs-shell[data-has-toc] {
+	grid-template-columns: 260px 1fr 220px;
 }
 
 /* ==========================================================================
@@ -17,48 +21,52 @@
 	position: fixed;
 	top: 56px;
 	left: 0;
-	width: 240px;
+	width: 260px;
 	height: calc(100vh - 56px);
 	overflow-y: auto;
-	background: color-mix(in srgb, var(--color-bg) 90%, transparent);
-	backdrop-filter: blur(8px);
-	-webkit-backdrop-filter: blur(8px);
-	padding: var(--space-lg) 0 var(--space-xl);
+	background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+	backdrop-filter: blur(12px);
+	-webkit-backdrop-filter: blur(12px);
+	border-right: 1px solid var(--color-border);
+	padding: var(--space-lg) 0 var(--space-2xl);
 	z-index: 10;
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-border-strong) transparent;
 }
 
 .docs-home-link {
-	display: block;
-	margin: 0 var(--space-md) var(--space-md);
-	padding: 7px 10px;
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	margin: 0 var(--space-lg) var(--space-lg);
+	padding: 8px 12px;
 	border: 1px solid var(--color-border-strong);
-	color: var(--color-text-bright);
+	color: var(--color-text);
 	font-family: var(--font-display);
-	font-size: 0.625rem;
-	letter-spacing: 0.12em;
+	font-size: 0.6875rem;
+	letter-spacing: 0.1em;
 	text-transform: uppercase;
 	text-decoration: none;
-	transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+	transition: background-color var(--dur) var(--ease),
+		color var(--dur) var(--ease),
+		border-color var(--dur) var(--ease);
 }
 
-.docs-home-link:hover,
+.docs-home-link:hover {
+	background: var(--color-glow);
+	border-color: var(--color-text-muted);
+	color: var(--color-text-bright);
+}
+
 .docs-home-link[aria-current="page"] {
 	background: var(--color-glow);
+	color: var(--color-text-bright);
+	border-color: var(--color-text-muted);
 }
 
 .docs-sidebar-sections {
-	padding-bottom: var(--space-lg);
+	padding: 0 0 var(--space-lg);
 }
-
-.sidebar-section-count {
-	font-family: var(--font-mono);
-	font-size: 0.5625rem;
-	letter-spacing: 0.02em;
-	color: var(--color-text-muted);
-}
-
 
 .docs-sidebar::-webkit-scrollbar {
 	width: 4px;
@@ -76,8 +84,8 @@
    ========================================================================== */
 .doc-search {
 	position: relative;
-	padding: 0 var(--space-md) var(--space-lg);
-	margin-bottom: var(--space-sm);
+	padding: 0 var(--space-lg) var(--space-md);
+	margin-bottom: var(--space-md);
 }
 
 .doc-search-input-wrap {
@@ -121,8 +129,8 @@
 .doc-search-results {
 	position: absolute;
 	top: 100%;
-	left: var(--space-md);
-	right: var(--space-md);
+	left: var(--space-lg);
+	right: var(--space-lg);
 	background: var(--color-surface);
 	border: 1px solid var(--color-border-strong);
 	border-top: none;
@@ -169,14 +177,11 @@
 
 .sidebar-section-label {
 	font-family: var(--font-display);
-	font-size: 0.6875rem;
+	font-size: 0.75rem;
 	font-weight: 600;
-	letter-spacing: 0.14em;
+	letter-spacing: 0.08em;
 	text-transform: uppercase;
 	color: var(--color-text);
-	display: flex;
-	align-items: center;
-	gap: var(--space-sm);
 	flex: 1;
 }
 
@@ -186,7 +191,7 @@
 
 .sidebar-nav {
 	list-style: none;
-	padding: 0;
+	padding: 2px 0 var(--space-md);
 	margin: 0;
 }
 
@@ -196,17 +201,21 @@
 
 .sidebar-nav a {
 	display: block;
-	padding: 6px var(--space-lg);
+	padding: 4px var(--space-md) 4px 38px;
+	font-family: var(--font-mono);
 	font-size: 0.75rem;
-	letter-spacing: 0.04em;
+	line-height: 1.5;
+	letter-spacing: 0.01em;
 	color: var(--color-text-muted);
 	text-decoration: none;
 	border-left: 2px solid transparent;
-	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+	transition: color var(--dur) var(--ease),
+		border-color var(--dur) var(--ease),
+		background-color var(--dur) var(--ease);
 }
 
 .sidebar-nav a:hover {
-	color: var(--color-text-bright);
+	color: var(--color-text);
 	background: var(--color-glow);
 }
 
@@ -223,10 +232,9 @@
 	grid-column: 2;
 	min-width: 0;
 	padding: var(--space-2xl) clamp(var(--space-xl), 5vw, 80px);
-	max-width: 1080px;
+	max-width: 920px;
 	width: 100%;
-	margin-left: max(0px, calc((100vw - 1080px) / 2 - 240px));
-	margin-right: auto;
+	margin: 0 auto;
 }
 
 .docs-article-header {
@@ -734,14 +742,21 @@
    COLLAPSIBLE SECTIONS
    ========================================================================== */
 .sidebar-collapsible-section {
-	margin-bottom: 2px;
+	margin-bottom: 0;
+}
+
+.sidebar-collapsible-section + .sidebar-collapsible-section {
+	margin-top: 2px;
 }
 
 .sidebar-section-trigger {
 	display: flex;
 	align-items: center;
+	gap: var(--space-sm);
 	width: 100%;
-	padding: 8px var(--space-lg);
+	padding: 10px var(--space-md);
+	margin: 0 var(--space-sm);
+	width: calc(100% - var(--space-md));
 	background: none;
 	border: none;
 	cursor: pointer;
@@ -756,18 +771,92 @@
 .sidebar-chevron {
 	color: var(--color-text-muted);
 	flex-shrink: 0;
-	transition: transform 200ms ease;
+	transition: transform 200ms ease, color 200ms ease;
+}
+
+.sidebar-section-trigger:hover .sidebar-chevron {
+	color: var(--color-text);
 }
 
 .sidebar-section-trigger[data-state="open"] .sidebar-chevron {
-	transform: rotate(180deg);
+	transform: rotate(90deg);
+	color: var(--color-text);
 }
 
-.sidebar-section-count {
-	font-family: var(--font-mono);
-	font-size: 0.5625rem;
-	letter-spacing: 0.02em;
+/* ==========================================================================
+   TOC RAIL (right column)
+   ========================================================================== */
+.docs-toc-rail {
+	grid-column: 3;
+	position: fixed;
+	top: 56px;
+	right: 0;
+	width: 220px;
+	height: calc(100vh - 56px);
+	overflow-y: auto;
+	padding: var(--space-2xl) var(--space-md) var(--space-xl);
+	border-left: 1px solid var(--color-border);
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-border-strong) transparent;
+}
+
+.docs-toc-rail::-webkit-scrollbar {
+	width: 4px;
+}
+.docs-toc-rail::-webkit-scrollbar-track {
+	background: transparent;
+}
+.docs-toc-rail::-webkit-scrollbar-thumb {
+	background: var(--color-border-strong);
+	border-radius: 2px;
+}
+
+.docs-toc-rail-heading {
+	margin: 0 0 var(--space-md);
+	font-family: var(--font-display);
+	font-size: 0.625rem;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
 	color: var(--color-text-muted);
+}
+
+.docs-toc-rail-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.docs-toc-rail-list li {
+	margin: 0;
+}
+
+.docs-toc-rail-list a {
+	display: block;
+	padding: 4px 0 4px var(--space-sm);
+	font-family: var(--font-mono);
+	font-size: 0.6875rem;
+	line-height: 1.5;
+	color: var(--color-text-muted);
+	text-decoration: none;
+	border-left: 1px solid transparent;
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.docs-toc-rail-list a:hover {
+	color: var(--color-text-bright);
+}
+
+.docs-toc-rail-list a.is-active {
+	color: var(--color-text-bright);
+	border-left-color: var(--color-text-bright);
+}
+
+.toc-rail-subitem {
+	padding-left: var(--space-sm);
+}
+
+.toc-rail-subitem a {
+	font-size: 0.625rem;
 }
 
 /* ==========================================================================
@@ -811,12 +900,38 @@
 /* ==========================================================================
    RESPONSIVE
    ========================================================================== */
+
+/* Wide screens: hide inline TOC when rail is visible */
+@media (min-width: 1201px) {
+	.docs-shell[data-has-toc] .docs-inpage {
+		display: none;
+	}
+}
+
+/* Medium screens: hide rail, show inline TOC */
+@media (max-width: 1200px) {
+	.docs-shell,
+	.docs-shell[data-has-toc] {
+		grid-template-columns: 260px 1fr;
+	}
+
+	.docs-toc-rail {
+		display: none;
+	}
+}
+
+/* Small screens: mobile layout */
 @media (max-width: 900px) {
-	.docs-shell {
+	.docs-shell,
+	.docs-shell[data-has-toc] {
 		grid-template-columns: 1fr;
 	}
 
 	.docs-sidebar-desktop {
+		display: none;
+	}
+
+	.docs-toc-rail {
 		display: none;
 	}
 
