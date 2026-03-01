@@ -3,22 +3,22 @@ const features = [
   {
     title: 'Smart Memory',
     description: 'Your agent remembers what matters. Automatic extraction, hybrid search, and intelligent decay.',
-    symbol: '~',
+    symbol: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"><circle cx="12" cy="12" r="4"/><path d="M12 4v4M12 16v4M4 12h4M16 12h4"/></svg>',
   },
   {
     title: 'One Agent, Every Platform',
     description: 'Same identity across Claude Code, OpenClaw, and OpenCode. One config, everywhere.',
-    symbol: '=',
+    symbol: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>',
   },
   {
     title: 'Secrets & Passwords',
     description: 'Encrypted at rest, injected at runtime. Your agent never sees raw values.',
-    symbol: '#',
+    symbol: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"><rect x="5" y="10" width="14" height="10"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>',
   },
   {
     title: 'Skills Marketplace',
     description: 'Browse, install, and share agent capabilities. No rebuild — just plug in.',
-    symbol: '>',
+    symbol: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"><path d="M4 4h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 10h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 16h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4z"/></svg>',
   },
 ];
 ---
@@ -33,7 +33,7 @@ const features = [
   <div class="feature-grid reveal">
     {features.map((feature) => (
       <article class="feature-card">
-        <span class="feature-symbol" aria-hidden="true">{feature.symbol}</span>
+        <span class="feature-symbol" aria-hidden="true" set:html={feature.symbol}></span>
         <h3 class="feature-title">{feature.title}</h3>
         <p class="feature-desc">{feature.description}</p>
       </article>
