@@ -20,6 +20,33 @@ const RUNTIME_PATH = "plugin" as const;
 const READ_TIMEOUT = 5000;
 const WRITE_TIMEOUT = 10000;
 
+// ---------------------------------------------------------------------------
+// Prompt extraction — OpenClaw wraps user messages in metadata envelopes.
+// Strip the envelope so FTS queries only see the actual user text.
+// ---------------------------------------------------------------------------
+
+const METADATA_LINE_PREFIXES = [
+	"<<<EXTERNAL_UNTRUSTED_CONTENT",
+	">>>",
+	"Conversation info",
+	"Sender (untrusted",
+	"Untrusted context",
+	"END_EXTERNAL_UNTRUSTED_CONTENT",
+] as const;
+
+function extractUserMessage(rawPrompt: string): string {
+	const lines = rawPrompt.split("\n");
+	let lastContentStart = 0;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (METADATA_LINE_PREFIXES.some((p) => line.startsWith(p) || line.includes(p))) {
+			lastContentStart = i + 1;
+		}
+	}
+	const extracted = lines.slice(lastContentStart).join("\n").trim();
+	return extracted.length > 0 ? extracted : rawPrompt;
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -878,7 +905,8 @@ const signetPlugin = {
 				await onSessionStart("openclaw", { ...opts, sessionKey });
 
 				// If there's a prompt, do memory injection
-				const prompt = event.prompt as string | undefined;
+				const rawPrompt = event.prompt as string | undefined;
+				const prompt = rawPrompt ? extractUserMessage(rawPrompt) : undefined;
 				if (prompt && prompt.length > 3) {
 					const result = await onUserPromptSubmit("openclaw", {
 						...opts,

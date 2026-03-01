@@ -4813,7 +4813,7 @@ hookCmd
 			const input = Buffer.concat(chunks).toString("utf-8").trim();
 			if (input) {
 				const parsed = JSON.parse(input);
-				userPrompt = parsed.user_prompt || parsed.userPrompt || "";
+				userPrompt = parsed.prompt || parsed.user_prompt || parsed.userPrompt || "";
 				sessionKey = parsed.session_id || parsed.sessionId || "";
 				stdinProject = parsed.cwd || "";
 			}
