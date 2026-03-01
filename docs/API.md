@@ -1433,12 +1433,14 @@ for in-context injection.
 {
   "harness": "claude-code",
   "userPrompt": "How do I set up dark mode?",
+  "lastAssistantMessage": "Earlier we discussed using CSS variables for theme tokens.",
   "sessionKey": "session-uuid",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` and `userPrompt` are required.
+`lastAssistantMessage` is optional and improves recall matching.
 
 ### POST /api/hooks/session-end
 

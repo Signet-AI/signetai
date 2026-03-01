@@ -4784,6 +4784,7 @@ hookCmd
 	.option("--project <project>", "Project path")
 	.action(async (options) => {
 		let userPrompt = "";
+		let lastAssistantMessage = "";
 		try {
 			const chunks: Buffer[] = [];
 			for await (const chunk of process.stdin) {
@@ -4791,8 +4792,60 @@ hookCmd
 			}
 			const input = Buffer.concat(chunks).toString("utf-8").trim();
 			if (input) {
-				const parsed = JSON.parse(input);
-				userPrompt = parsed.user_prompt || parsed.userPrompt || "";
+				const parsed = JSON.parse(input) as Record<string, unknown>;
+
+				const pickString = (...values: unknown[]): string => {
+					for (const value of values) {
+						if (typeof value === "string" && value.trim().length > 0) {
+							return value;
+						}
+					}
+					return "";
+				};
+
+				userPrompt = pickString(parsed.user_prompt, parsed.userPrompt, parsed.prompt);
+
+				lastAssistantMessage = pickString(
+					parsed.last_assistant_message,
+					parsed.lastAssistantMessage,
+					parsed.assistant_message,
+					parsed.assistantMessage,
+					parsed.previous_assistant_message,
+					parsed.previousAssistantMessage,
+				);
+
+				if (!lastAssistantMessage && Array.isArray(parsed.messages)) {
+					for (let i = parsed.messages.length - 1; i >= 0; i--) {
+						const msg = parsed.messages[i];
+						if (typeof msg !== "object" || msg === null) continue;
+
+						const record = msg as Record<string, unknown>;
+						const role =
+							typeof record.role === "string" ? record.role.toLowerCase() : "";
+						const sender =
+							typeof record.sender === "string"
+								? record.sender.toLowerCase()
+								: "";
+						const isAssistant =
+							role === "assistant" ||
+							role === "agent" ||
+							role === "model" ||
+							sender === "assistant" ||
+							sender === "agent";
+
+						if (!isAssistant) continue;
+
+						const content = pickString(
+							record.content,
+							record.text,
+							record.message,
+						);
+						if (content) {
+							lastAssistantMessage = content;
+							break;
+						}
+					}
+				}
 			}
 		} catch {
 			// No stdin or invalid JSON
@@ -4809,6 +4862,7 @@ hookCmd
 				harness: options.harness,
 				project: options.project,
 				userPrompt,
+				lastAssistantMessage: lastAssistantMessage || undefined,
 			}),
 		});
 
