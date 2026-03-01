@@ -117,6 +117,7 @@ export interface UserPromptSubmitRequest {
 	harness: string;
 	project?: string;
 	userPrompt: string;
+	lastAssistantMessage?: string;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
 }
@@ -962,17 +963,104 @@ ${guidelines}
 // User Prompt Submit
 // ============================================================================
 
+const UNTRUSTED_METADATA_HEADER =
+	/conversation info \(untrusted metadata\)\s*:/i;
+
+function findJsonObjectEnd(text: string, startIndex: number): number {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+
+	for (let i = startIndex; i < text.length; i++) {
+		const ch = text[i];
+
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (ch === "\\") {
+				escaped = true;
+				continue;
+			}
+			if (ch === '"') {
+				inString = false;
+			}
+			continue;
+		}
+
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
+
+		if (ch === "{") {
+			depth++;
+			continue;
+		}
+
+		if (ch === "}") {
+			depth--;
+			if (depth === 0) return i;
+		}
+	}
+
+	return -1;
+}
+
+function stripUntrustedMetadata(text: string): string {
+	let remaining = text;
+
+	while (true) {
+		const match = UNTRUSTED_METADATA_HEADER.exec(remaining);
+		if (!match || match.index === undefined) break;
+
+		const blockStart = match.index;
+		let blockEnd = blockStart + match[0].length;
+
+		while (blockEnd < remaining.length && /\s/.test(remaining[blockEnd])) {
+			blockEnd++;
+		}
+
+		if (remaining[blockEnd] === "{") {
+			const jsonEnd = findJsonObjectEnd(remaining, blockEnd);
+			if (jsonEnd > blockEnd) {
+				blockEnd = jsonEnd + 1;
+			}
+		}
+
+		const before = remaining.slice(0, blockStart).trimEnd();
+		const after = remaining.slice(blockEnd).trimStart();
+		remaining = [before, after].filter((part) => part.length > 0).join("\n\n");
+	}
+
+	return remaining.trim();
+}
+
+function extractRecallWords(
+	userPrompt: string,
+	lastAssistantMessage?: string,
+): string[] {
+	const cleanedUserPrompt = stripUntrustedMetadata(userPrompt);
+	const cleanedAssistant = lastAssistantMessage
+		? stripUntrustedMetadata(lastAssistantMessage)
+		: "";
+
+	return [cleanedUserPrompt, cleanedAssistant]
+		.filter((part) => part.length > 0)
+		.join(" ")
+		.toLowerCase()
+		.split(/\W+/)
+		.filter((word) => word.length >= 3)
+		.slice(0, 12);
+}
+
 export function handleUserPromptSubmit(
 	req: UserPromptSubmitRequest,
 ): UserPromptSubmitResponse {
 	const start = Date.now();
 
-	// Extract meaningful words from prompt
-	const words = req.userPrompt
-		.toLowerCase()
-		.split(/\W+/)
-		.filter((w) => w.length >= 3)
-		.slice(0, 10);
+	const words = extractRecallWords(req.userPrompt, req.lastAssistantMessage);
 
 	if (words.length === 0 || !existsSync(MEMORY_DB)) {
 		return { inject: "", memoryCount: 0 };

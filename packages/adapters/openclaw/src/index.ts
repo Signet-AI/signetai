@@ -57,6 +57,84 @@ export interface UserPromptSubmitResult {
 	engine?: string;
 }
 
+function firstNonEmptyString(...values: readonly unknown[]): string | undefined {
+	for (const value of values) {
+		if (typeof value === "string" && value.trim().length > 0) {
+			return value;
+		}
+	}
+	return undefined;
+}
+
+function isAssistantMessage(message: Record<string, unknown>): boolean {
+	const role =
+		typeof message.role === "string" ? message.role.toLowerCase() : "";
+	const sender =
+		typeof message.sender === "string" ? message.sender.toLowerCase() : "";
+
+	return (
+		role === "assistant" ||
+		role === "agent" ||
+		role === "model" ||
+		sender === "assistant" ||
+		sender === "agent"
+	);
+}
+
+function getMessageText(message: Record<string, unknown>): string | undefined {
+	const direct = firstNonEmptyString(
+		message.content,
+		message.text,
+		message.message,
+	);
+	if (direct) return direct;
+
+	if (!Array.isArray(message.content)) return undefined;
+
+	const textParts: string[] = [];
+	for (const chunk of message.content) {
+		if (typeof chunk !== "object" || chunk === null) continue;
+		const part = chunk as Record<string, unknown>;
+		if (part.type !== "text") continue;
+		if (typeof part.text === "string" && part.text.trim().length > 0) {
+			textParts.push(part.text);
+		}
+	}
+
+	if (textParts.length === 0) return undefined;
+	return textParts.join("\n");
+}
+
+function extractLastAssistantMessage(
+	event: Record<string, unknown>,
+): string | undefined {
+	const explicit = firstNonEmptyString(
+		event.lastAssistantMessage,
+		event.last_assistant_message,
+		event.assistantMessage,
+		event.assistant_message,
+		event.previousAssistantMessage,
+		event.previous_assistant_message,
+	);
+	if (explicit) return explicit;
+
+	const messages = event.messages;
+	if (!Array.isArray(messages)) return undefined;
+
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const raw = messages[i];
+		if (typeof raw !== "object" || raw === null) continue;
+
+		const message = raw as Record<string, unknown>;
+		if (!isAssistantMessage(message)) continue;
+
+		const text = getMessageText(message);
+		if (text) return text;
+	}
+
+	return undefined;
+}
+
 export interface SessionEndResult {
 	memoriesSaved: number;
 }
@@ -183,6 +261,7 @@ export async function onUserPromptSubmit(
 	options: {
 		daemonUrl?: string;
 		userPrompt: string;
+		lastAssistantMessage?: string;
 		sessionKey?: string;
 		project?: string;
 	},
@@ -195,6 +274,7 @@ export async function onUserPromptSubmit(
 			body: {
 				harness,
 				userPrompt: options.userPrompt,
+				lastAssistantMessage: options.lastAssistantMessage,
 				sessionKey: options.sessionKey,
 				project: options.project,
 				runtimePath: RUNTIME_PATH,
@@ -865,9 +945,11 @@ const signetPlugin = {
 				// If there's a prompt, do memory injection
 				const prompt = event.prompt as string | undefined;
 				if (prompt && prompt.length > 3) {
+					const lastAssistantMessage = extractLastAssistantMessage(event);
 					const result = await onUserPromptSubmit("openclaw", {
 						...opts,
 						userPrompt: prompt,
+						lastAssistantMessage,
 						sessionKey,
 					});
 					if (result?.inject) {
