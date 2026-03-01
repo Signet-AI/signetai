@@ -1,95 +1,59 @@
 ---
+import InlineCode from '../ui/InlineCode.astro';
+
+const methods = [
+  { key: 'bun', label: 'Bun', commands: ['bun add -g signetai', 'signet setup'], comment: '# recommended', docs: '/docs/quickstart#install', docsLabel: 'Quickstart docs' },
+  { key: 'npm', label: 'npm', commands: ['npm install -g signetai', 'signet setup'], comment: '# works everywhere', docs: '/docs/quickstart#install', docsLabel: 'npm docs' },
+  { key: 'source', label: 'Source', commands: ['git clone https://github.com/Signet-AI/signetai.git', 'cd signetai && bun install && bun run build'], comment: '# build from source', docs: '/docs/contributing#development-setup', docsLabel: 'Build docs' },
+];
 ---
 
-<section class="container" style="border-top: 1px solid var(--color-border)">
+<section id="quickstart" class="container" style="border-top: 1px solid var(--color-border)">
   <div class="section-header reveal">
     <div class="crosshair"></div>
-    <span class="section-label">Quickstart</span>
-    <span class="section-index">06 / 09</span>
+    <span class="section-label">Quick Start</span>
+    <span class="section-index">02 / 07</span>
   </div>
 
-  <div class="code-tabs reveal">
-    <div class="code-tab-nav">
-      <button class="code-tab active" data-panel="tab-cli">CLI</button>
-      <button class="code-tab" data-panel="tab-sdk">Node.js</button>
-      <button class="code-tab" data-panel="tab-config">Config</button>
+  <div class="quickstart-shell reveal">
+    <div class="quickstart-tabs" role="tablist" aria-label="Install method">
+      {methods.map((m, i) => (
+        <button
+          type="button"
+          class:list={['quickstart-tab', { 'is-active': i === 0 }]}
+          role="tab"
+          aria-selected={i === 0 ? 'true' : 'false'}
+          data-quickstart-target={m.key}
+        >
+          {m.label}
+        </button>
+      ))}
     </div>
 
-    <div class="code-panel active" id="tab-cli">
-      <div class="term-block">
-        <div class="term-line comment"># Initialize signet in your home directory</div>
-        <div class="term-line cmd"><span class="term-prompt">&gt;</span> <span>bun add -g signetai</span></div>
-        <div class="term-line output">Created ~/.agents/agent.yaml</div>
-        <div class="term-line output">Created ~/.agents/memory.db</div>
-      </div>
-      <div class="term-block">
-        <div class="term-line comment"># Store a memory (auto-embedded)</div>
-        <div class="term-line cmd"><span class="term-prompt">&gt;</span> <span>signet remember "prefer bun over npm" -t preference</span></div>
-        <div class="term-line output">[ok] Memory stored (importance: 0.72)</div>
-      </div>
-      <div class="term-block">
-        <div class="term-line comment"># Query memories</div>
-        <div class="term-line cmd"><span class="term-prompt">&gt;</span> <span>signet recall "package manager preferences"</span></div>
-        <div class="term-line output">[1] prefer bun over npm (0.72)</div>
-      </div>
-      <div class="term-block">
-        <div class="term-line comment"># Manage secrets</div>
-        <div class="term-line cmd"><span class="term-prompt">&gt;</span> <span>signet secret set OPENAI_API_KEY</span></div>
-        <div class="term-line output">[ok] Secret encrypted and stored</div>
-      </div>
-      <div class="term-block">
-        <div class="term-line comment"># Check status</div>
-        <div class="term-line cmd"><span class="term-prompt">&gt;</span> <span>signet status</span></div>
-        <div class="term-line output">Agent: mr-claude | Memories: 847 | Secrets: 12 | Daemon: running</div>
-      </div>
-    </div>
-
-    <div class="code-panel" id="tab-sdk">
-      <div class="term-block">
-        <div class="term-line comment">// @signet/sdk — use from any Node.js app</div>
-        <div class="term-line cmd"><span>import &lbrace; Signet &rbrace; from '@signet/sdk';</span></div>
-        <div class="term-line cmd"><span></span></div>
-        <div class="term-line cmd"><span>const agent = new Signet();</span></div>
-      </div>
-      <div class="term-block">
-        <div class="term-line comment">// Store a memory</div>
-        <div class="term-line cmd"><span>await agent.remember('migrated to bun', &lbrace;</span></div>
-        <div class="term-line cmd"><span>  tags: ['build', 'decision'],</span></div>
-        <div class="term-line cmd"><span>  importance: 0.8</span></div>
-        <div class="term-line cmd"><span>&rbrace;);</span></div>
-      </div>
-      <div class="term-block">
-        <div class="term-line comment">// Recall with hybrid search</div>
-        <div class="term-line cmd"><span>const results = await agent.recall('build tools');</span></div>
-      </div>
-      <div class="term-block">
-        <div class="term-line comment">// Access secrets (value never in model output)</div>
-        <div class="term-line cmd"><span>const key = await agent.secret('OPENAI_API_KEY');</span></div>
-      </div>
-    </div>
-
-    <div class="code-panel" id="tab-config">
-      <div class="term-block">
-        <div class="term-line comment"># ~/.agents/agent.yaml</div>
-        <div class="term-line cmd"><span>name: mr-claude</span></div>
-        <div class="term-line cmd"><span>version: "0.2.1"</span></div>
-        <div class="term-line cmd"><span></span></div>
-        <div class="term-line cmd"><span>personality: ./soul.md</span></div>
-        <div class="term-line cmd"><span>memory: ./memory.db</span></div>
-        <div class="term-line cmd"><span></span></div>
-        <div class="term-line cmd"><span>harnesses:</span></div>
-        <div class="term-line cmd"><span>  claude-code:</span></div>
-        <div class="term-line cmd"><span>    output: ~/.claude/CLAUDE.md</span></div>
-        <div class="term-line cmd"><span>  cursor:</span></div>
-        <div class="term-line cmd"><span>    output: ./.cursorrules</span></div>
-        <div class="term-line cmd"><span>  opencode:</span></div>
-        <div class="term-line cmd"><span>    output: ./AGENTS.md</span></div>
-        <div class="term-line cmd"><span></span></div>
-        <div class="term-line cmd"><span>memory_backend:</span></div>
-        <div class="term-line cmd"><span>  embedding: nomic-embed-text</span></div>
-        <div class="term-line cmd"><span>  search: hybrid</span></div>
-        <div class="term-line cmd"><span>  decay: true</span></div>
-      </div>
+    <div class="quickstart-panels">
+      {methods.map((m, i) => (
+        <div
+          id={`quickstart-panel-${m.key}`}
+          class:list={['quickstart-panel', { 'is-active': i === 0 }]}
+          role="tabpanel"
+          data-quickstart-panel={m.key}
+          hidden={i !== 0 ? true : undefined}
+        >
+          {m.commands.map((cmd) => (
+            <div class="quickstart-cmd">
+              <span class="quickstart-prompt">$</span>
+              <code class="quickstart-code">{cmd}</code>
+              <button type="button" class="copy-btn quickstart-copy-btn" aria-label={`Copy: ${cmd}`}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
+            </div>
+          ))}
+          <div class="quickstart-meta">
+            <span class="quickstart-hint">{m.comment}</span>
+            <a href={m.docs} class="quickstart-docs-link">{m.docsLabel} &#8594;</a>
+          </div>
+        </div>
+      ))}
     </div>
   </div>
 </section>

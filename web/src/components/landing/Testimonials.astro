@@ -1,0 +1,40 @@
+---
+import { getCollection, render } from 'astro:content';
+
+const entries = await getCollection('testimonials');
+const testimonials = await Promise.all(
+  entries.map(async (entry) => {
+    const { Content } = await render(entry);
+    return {
+      Content,
+      author: entry.data.author,
+      role: entry.data.role,
+    };
+  })
+);
+
+const marqueeItems = [...testimonials, ...testimonials];
+---
+
+<section id="testimonials" class="container" style="border-top: 1px solid var(--color-border)">
+  <div class="section-header reveal">
+    <div class="crosshair"></div>
+    <span class="section-label">Testimonials</span>
+    <span class="section-index">01 / 07</span>
+  </div>
+
+  <div class="testimonials-shell reveal">
+    <p class="testimonials-intro">Early feedback from current Signet beta testers.</p>
+    <div class="testimonial-marquee" aria-label="Scrolling testimonials">
+      <div class="testimonial-track">
+        {marqueeItems.map((item) => (
+          <article class="testimonial-card">
+            <div class="testimonial-quote"><item.Content /></div>
+            <span class="testimonial-divider"></span>
+            <p class="testimonial-author">{item.author}{item.role ? `, ${item.role}` : ''}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </div>
+</section>

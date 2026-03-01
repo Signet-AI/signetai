@@ -1,6 +1,7 @@
 ---
 import { getCollection } from 'astro:content';
-import DocSearch from './DocSearch.tsx';
+import { buildDocsNav } from '../../lib/docs-nav';
+import DocsSidebar from './DocsSidebar.tsx';
 
 interface Props {
   currentSlug?: string;
@@ -9,67 +10,17 @@ interface Props {
 const { currentSlug } = Astro.props;
 
 const allDocs = await getCollection('docs');
+const { sections } = buildDocsNav(allDocs);
 
-const SECTION_ORDER = [
-  'Getting Started',
-  'Core Concepts',
-  'Reference',
-  'Infrastructure',
-  'Project',
-];
-
-// Group by section
-const grouped = new Map<string, typeof allDocs>();
-
-for (const doc of allDocs) {
-  const section = doc.data.section ?? 'Other';
-  if (!grouped.has(section)) grouped.set(section, []);
-  grouped.get(section)!.push(doc);
-}
-
-// Sort within each section by order field
-for (const [, items] of grouped) {
-  items.sort((a, b) => (a.data.order ?? 999) - (b.data.order ?? 999));
-}
-
-// Build ordered sections list
-const sections = SECTION_ORDER
-  .filter(s => grouped.has(s))
-  .map(s => ({ label: s, items: grouped.get(s)! }));
-
-// Add any unexpected sections at the end
-for (const [label, items] of grouped) {
-  if (!SECTION_ORDER.includes(label)) {
-    sections.push({ label, items });
-  }
-}
-
-function toSlug(id: string): string {
-  return id.replace(/\.md$/, '').toLowerCase();
-}
+// Serialize to plain objects for the React component
+const serializedSections = sections.map((s) => ({
+  label: s.label,
+  items: s.items.map((item) => ({
+    title: item.title,
+    slug: item.slug,
+    url: item.url,
+  })),
+}));
 ---
 
-<aside class="docs-sidebar">
-  <DocSearch client:idle />
-  {sections.map(({ label, items }) => (
-    <div class="sidebar-section">
-      <span class="sidebar-section-label">{label}</span>
-      <ul class="sidebar-nav">
-        {items.map(doc => {
-          const slug = toSlug(doc.id);
-          const isCurrent = slug === currentSlug;
-          return (
-            <li>
-              <a
-                href={`/docs/${slug}`}
-                aria-current={isCurrent ? 'page' : undefined}
-              >
-                {doc.data.title}
-              </a>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  ))}
-</aside>
+<DocsSidebar client:load sections={serializedSections} currentSlug={currentSlug} />

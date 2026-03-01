@@ -1,7 +1,6 @@
 ---
 import '../styles/global.css';
 import '../styles/tailwind.css';
-import { ClientRouter } from 'astro:transitions';
 
 interface Props {
   title?: string;
@@ -45,17 +44,8 @@ const {
 
         applySavedTheme(document);
 
-        document.addEventListener('astro:before-swap', (event) => {
-          if (!event.newDocument) return;
-          applySavedTheme(event.newDocument);
-        });
-
-        document.addEventListener('astro:after-swap', () => {
-          applySavedTheme(document);
-        });
       })();
     </script>
-    <ClientRouter />
   </head>
   <body>
     <!-- Noise SVG filter for CRT grain effect -->
@@ -67,6 +57,13 @@ const {
 
     <div class="bg-grid"></div>
 
+    <div class="site-canvas-bg" aria-hidden="true">
+      <canvas id="ascii-dither"></canvas>
+      <canvas id="latent-topology"></canvas>
+    </div>
+
     <slot />
+
+    <script src="../scripts/canvas-animations.ts"></script>
   </body>
 </html>

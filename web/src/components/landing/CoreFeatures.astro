@@ -1,70 +1,42 @@
 ---
+const features = [
+  {
+    title: 'Smart Memory',
+    description: 'Your agent remembers what matters. Automatic extraction, hybrid search, and intelligent decay.',
+    symbol: '~',
+  },
+  {
+    title: 'One Agent, Every Platform',
+    description: 'Same identity across Claude Code, OpenClaw, and OpenCode. One config, everywhere.',
+    symbol: '=',
+  },
+  {
+    title: 'Secrets & Passwords',
+    description: 'Encrypted at rest, injected at runtime. Your agent never sees raw values.',
+    symbol: '#',
+  },
+  {
+    title: 'Skills Marketplace',
+    description: 'Browse, install, and share agent capabilities. No rebuild — just plug in.',
+    symbol: '>',
+  },
+];
 ---
 
-<section class="container" style="border-top: 1px solid var(--color-border)">
+<section id="what-it-does" class="container" style="border-top: 1px solid var(--color-border)">
   <div class="section-header reveal">
     <div class="crosshair"></div>
-    <span class="section-label">Core Features</span>
-    <span class="section-index">04 / 09</span>
+    <span class="section-label">What It Does</span>
+    <span class="section-index">03 / 07</span>
   </div>
 
-  <div class="arch-list reveal">
-
-    <div class="arch-item">
-      <div class="arch-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="4"/><circle cx="12" cy="3" r="1.5"/><circle cx="21" cy="12" r="1.5"/><circle cx="12" cy="21" r="1.5"/><circle cx="3" cy="12" r="1.5"/><line x1="12" y1="8" x2="12" y2="4.5"/><line x1="16" y1="12" x2="19.5" y2="12"/><line x1="12" y1="16" x2="12" y2="19.5"/><line x1="8" y1="12" x2="4.5" y2="12"/></svg>
-      </div>
-      <div class="arch-title-col">
-        <h3 class="arch-title">Curated Memory</h3>
-        <a href="#" class="arch-link">View Spec &#8594;</a>
-      </div>
-      <div class="arch-desc-col">
-        <p class="arch-desc">Not a vector dump. Signet's memory system uses hybrid retrieval (semantic + keyword), importance decay, and a four-tier taxonomy (session, episodic, semantic, procedural) to surface what matters <em>right now</em> -- not everything that was ever stored. Your agent learns what to forget.</p>
-        <p class="arch-scenario">Switch from Cursor to Claude Code mid-project? Your agent remembers your architectural decisions, patterns, deploy setup -- and doesn't waste context on last month's debugging notes.</p>
-      </div>
-    </div>
-
-    <div class="arch-item">
-      <div class="arch-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="10"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-      </div>
-      <div class="arch-title-col">
-        <h3 class="arch-title">Secrets &amp; Injection Safety</h3>
-        <a href="#" class="arch-link">Learn More &#8594;</a>
-      </div>
-      <div class="arch-desc-col">
-        <p class="arch-desc">API keys encrypted at rest with libsodium. Secret values are never returned in model output -- even if a prompt injection attack tries to extract them. Agents use credentials through a secure proxy that redacts values from all output streams. The only agent framework with built-in prompt injection protection for secrets.</p>
-        <p class="arch-scenario">Your agent needs OPENAI_API_KEY to run evals and CLOUDFLARE_TOKEN to deploy. A malicious prompt tries to extract them. Signet's output redaction catches it before it leaves the sandbox.</p>
-      </div>
-    </div>
-
-    <div class="arch-item">
-      <div class="arch-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>
-      </div>
-      <div class="arch-title-col">
-        <h3 class="arch-title">Skills Registry</h3>
-        <a href="#" class="arch-link">Browse Skills &#8594;</a>
-      </div>
-      <div class="arch-desc-col">
-        <p class="arch-desc">Install, vet, and manage agent skills from a curated registry. Skills are sandboxed -- they can access the capabilities they declare but nothing else. Review skill permissions before installation. No supply-chain surprises.</p>
-        <p class="arch-scenario">Your agent needs browser automation. <code>signet skill install browser-use</code> -- review its declared permissions, approve, done. The skill can browse but can't read your secrets or memory unless you grant it.</p>
-      </div>
-    </div>
-
-    <div class="arch-item">
-      <div class="arch-icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-      </div>
-      <div class="arch-title-col">
-        <h3 class="arch-title">Multitenant Config</h3>
-        <a href="#" class="arch-link">Architecture &#8594;</a>
-      </div>
-      <div class="arch-desc-col">
-        <p class="arch-desc">Manage one agent or hundreds from a single config. Each agent gets its own memory, identity, and secrets while sharing a common daemon and storage layer.</p>
-        <p class="arch-scenario">Personal coding agent + work research agent on same machine. Separate memory, secrets, personality. One CLI.</p>
-      </div>
-    </div>
-
+  <div class="feature-grid reveal">
+    {features.map((feature) => (
+      <article class="feature-card">
+        <span class="feature-symbol" aria-hidden="true">{feature.symbol}</span>
+        <h3 class="feature-title">{feature.title}</h3>
+        <p class="feature-desc">{feature.description}</p>
+      </article>
+    ))}
   </div>
 </section>

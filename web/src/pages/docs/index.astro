@@ -1,3 +1,51 @@
 ---
-return Astro.redirect('/docs/quickstart', 301);
+import { getCollection } from 'astro:content';
+import Docs from '../../layouts/Docs.astro';
+import { buildDocsNav } from '../../lib/docs-nav';
+
+const allDocs = await getCollection('docs');
+const { sections } = buildDocsNav(allDocs);
+const coreSections = sections.filter((section) => section.label !== 'Specs');
+const specsSection = sections.find((section) => section.label === 'Specs');
 ---
+
+<Docs
+  title="Documentation"
+  description="Everything you need to install, operate, and extend Signet."
+>
+  <section class="docs-hub">
+    <p>
+      Pick a track below or use search. If you are new, start with
+      <a href="/docs/quickstart"> Quickstart</a>.
+    </p>
+
+    <div class="docs-hub-grid">
+      {coreSections.map((section) => (
+        <section class="docs-hub-card">
+          <h2>{section.label}</h2>
+          <ul>
+            {section.items.slice(0, 5).map((item) => (
+              <li>
+                <a href={item.url}>{item.title}</a>
+                {item.description ? <p>{item.description}</p> : null}
+              </li>
+            ))}
+          </ul>
+          {section.items.length > 5 ? (
+            <p class="docs-hub-more">+ {section.items.length - 5} more pages</p>
+          ) : null}
+        </section>
+      ))}
+    </div>
+
+    {specsSection ? (
+      <section class="docs-hub-specs">
+        <h2>Engineering Specs</h2>
+        <p>
+          Deep planning and implementation specs live here.
+          <a href={specsSection.items[0]?.url ?? '/docs'}> Open specs</a>.
+        </p>
+      </section>
+    ) : null}
+  </section>
+</Docs>

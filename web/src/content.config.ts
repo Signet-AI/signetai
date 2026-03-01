@@ -11,4 +11,12 @@ const docs = defineCollection({
   }),
 });
 
-export const collections = { docs };
+const testimonials = defineCollection({
+  loader: glob({ pattern: '**/*.mdx', base: './src/content/testimonials' }),
+  schema: z.object({
+    author: z.string(),
+    role: z.string().optional(),
+  }),
+});
+
+export const collections = { docs, testimonials };

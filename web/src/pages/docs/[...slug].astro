@@ -1,6 +1,7 @@
 ---
 import { getCollection, render } from 'astro:content';
 import Docs from '../../layouts/Docs.astro';
+import { buildDocsNav, getDocNeighbors } from '../../lib/docs-nav';
 
 export async function getStaticPaths() {
   const docs = await getCollection('docs');
@@ -11,14 +12,24 @@ export async function getStaticPaths() {
 }
 
 const { doc } = Astro.props;
-const { Content } = await render(doc);
+const { Content, headings } = await render(doc);
 const currentSlug = doc.id.replace(/\.md$/, '').toLowerCase();
+const allDocs = await getCollection('docs');
+const { flat } = buildDocsNav(allDocs);
+const { previous, next } = getDocNeighbors(flat, currentSlug);
+const toc = headings
+  .filter((heading) => heading.depth === 2 || heading.depth === 3)
+  .slice(0, 24);
 ---
 
 <Docs
   title={doc.data.title}
   description={doc.data.description}
   currentSlug={currentSlug}
+  currentSection={doc.data.section}
+  toc={toc}
+  previousDoc={previous}
+  nextDoc={next}
 >
   <Content />
 </Docs>

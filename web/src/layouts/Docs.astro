@@ -9,9 +9,31 @@ interface Props {
   title: string;
   description?: string;
   currentSlug?: string;
+  currentSection?: string;
+  toc?: {
+    depth: number;
+    slug: string;
+    text: string;
+  }[];
+  previousDoc?: {
+    title: string;
+    url: string;
+  };
+  nextDoc?: {
+    title: string;
+    url: string;
+  };
 }
 
-const { title, description, currentSlug } = Astro.props;
+const {
+  title,
+  description,
+  currentSlug,
+  currentSection,
+  toc,
+  previousDoc,
+  nextDoc,
+} = Astro.props;
 ---
 
 <Base title={`${title} — Signet Docs`} description={description}>
@@ -21,11 +43,53 @@ const { title, description, currentSlug } = Astro.props;
     <Sidebar currentSlug={currentSlug} />
 
     <main class="docs-main">
+      <header class="docs-article-header">
+        <p class="docs-kicker">
+          <a href="/docs">Docs</a>
+          {currentSection ? <span>/ {currentSection}</span> : null}
+        </p>
+        <h1>{title}</h1>
+        {description ? <p class="docs-description">{description}</p> : null}
+      </header>
+
+      {toc && toc.length > 0 ? (
+        <nav class="docs-inpage" aria-label="On this page">
+          <p>On this page</p>
+          <ol>
+            {toc.map((item) => (
+              <li class={item.depth >= 3 ? 'toc-subitem' : undefined}>
+                <a href={`#${item.slug}`}>{item.text}</a>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      ) : null}
+
       <article class="prose">
         <slot />
       </article>
 
+      {(previousDoc || nextDoc) ? (
+        <nav class="docs-pager" aria-label="Page navigation">
+          {previousDoc ? (
+            <a class="docs-pager-link" href={previousDoc.url} rel="prev">
+              <span class="docs-pager-label">Previous</span>
+              <span class="docs-pager-title">{previousDoc.title}</span>
+            </a>
+          ) : <span class="docs-pager-spacer"></span>}
+
+          {nextDoc ? (
+            <a class="docs-pager-link" href={nextDoc.url} rel="next">
+              <span class="docs-pager-label">Next</span>
+              <span class="docs-pager-title">{nextDoc.title}</span>
+            </a>
+          ) : <span class="docs-pager-spacer"></span>}
+        </nav>
+      ) : null}
+
       <Footer />
     </main>
   </div>
+
+  <script src="../scripts/docs-toc.ts"></script>
 </Base>

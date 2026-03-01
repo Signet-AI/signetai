@@ -4,39 +4,61 @@
 <section class="container landing-cta">
   <div class="cta-panel reveal">
     <div class="cta-content">
-      <h2 class="cta-title">Your Agent Should Outlive the Platform.</h2>
-      <p class="cta-desc">Platforms will pivot. APIs will break. But the agent you've built -- the memory, the personality -- that's yours.</p>
+      <h2 class="cta-title">Join the Waitlist</h2>
+      <p class="cta-desc">Get early access, release updates, and product notes from the Signet team.</p>
     </div>
 
-    <div class="cta-actions">
-      <div class="install-tabs">
-        <button class="install-tab active" data-install="terminal">Terminal</button>
-        <button class="install-tab" data-install="agent">Tell Your Agent</button>
+    <form id="waitlist-form" class="cta-waitlist">
+      <div class="cta-waitlist-row">
+        <input
+          id="waitlist-email"
+          name="email"
+          type="email"
+          class="cta-email-input"
+          placeholder="you@company.com"
+          required
+          autocomplete="email"
+        />
+        <button type="submit" class="btn btn-primary cta-submit-btn">Join Waitlist</button>
       </div>
-      <div class="install-panels">
-        <div class="install-panel active" id="cta-install-terminal">
-          <div class="install-box">
-            <span class="install-prompt">&gt;</span>
-            <code class="install-cmd">bun add -g signetai</code>
-            <button class="copy-btn push-right" aria-label="Copy install command">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            </button>
-          </div>
-        </div>
-        <div class="install-panel" id="cta-install-agent">
-          <div class="install-box install-box--agent">
-            <code class="install-cmd">Install and fully configure Signet AI by following this guide exactly: https://signetai.sh/skill.md</code>
-            <button class="copy-btn push-right" aria-label="Copy agent prompt">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-            </button>
-          </div>
-          <p class="install-hint">Copy and paste this to Claude Code, OpenClaw, or any AI agent</p>
-        </div>
-      </div>
-      <div class="cta-buttons">
-        <a href="/docs" class="btn btn-primary">Read Docs</a>
-        <a href="https://github.com/Signet-AI/signetai" class="btn btn-ghost">GitHub</a>
-      </div>
+      <p class="cta-email-note">No spam. Unsubscribe anytime.</p>
+    </form>
+
+    <div id="waitlist-success" class="cta-success" hidden>
+      <p class="cta-success-msg">You're on the list. We'll be in touch.</p>
     </div>
   </div>
 </section>
+
+<script>
+  const form = document.getElementById('waitlist-form') as HTMLFormElement | null;
+  const success = document.getElementById('waitlist-success');
+
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = new FormData(form).get('email');
+    const btn = form.querySelector('.cta-submit-btn') as HTMLButtonElement;
+
+    btn.textContent = 'Submitting...';
+    btn.disabled = true;
+
+    try {
+      const res = await fetch('/api/waitlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+
+      if (res.ok) {
+        form.hidden = true;
+        if (success) success.hidden = false;
+      } else {
+        btn.textContent = 'Try Again';
+        btn.disabled = false;
+      }
+    } catch {
+      btn.textContent = 'Try Again';
+      btn.disabled = false;
+    }
+  });
+</script>

@@ -1,6 +1,7 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "signetweb",
+	"account_id": "a19f770b9be1b20e78b8d25bdcfd3bbd",
 	"compatibility_date": "2026-02-19",
 	"assets": { "directory": "./dist" },
 	"observability": { "enabled": true }
