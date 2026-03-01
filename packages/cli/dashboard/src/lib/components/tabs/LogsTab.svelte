@@ -120,9 +120,10 @@ function startLogStream() {
 		clearTimeout(reconnectTimer);
 		reconnectTimer = null;
 	}
-	reconnectAttempt = 0;
-	logsReconnecting = false;
-	streamError = "";
+	// NOTE: do NOT reset reconnectAttempt here — this function is called
+	// recursively by the retry timer and must preserve the counter so that
+	// exponential backoff progresses and the give-up limit is respected.
+	// Reset only happens in manualStartLogStream() (user-initiated start).
 
 	if (logEventSource) logEventSource.close();
 	logsStreaming = true;
@@ -179,6 +180,14 @@ function startLogStream() {
 	};
 }
 
+// User-initiated start: reset retry state before opening the stream
+function manualStartLogStream() {
+	reconnectAttempt = 0;
+	logsReconnecting = false;
+	streamError = "";
+	startLogStream();
+}
+
 function stopLogStream() {
 	logsStreaming = false;
 	logsReconnecting = false;
@@ -195,7 +204,7 @@ function stopLogStream() {
 function toggleLogStream() {
 	// Treat reconnecting state as "active" — clicking cancels and stops cleanly
 	if (logsStreaming || logsReconnecting) stopLogStream();
-	else startLogStream();
+	else manualStartLogStream();
 }
 
 function formatLogTime(timestamp: string): string {
