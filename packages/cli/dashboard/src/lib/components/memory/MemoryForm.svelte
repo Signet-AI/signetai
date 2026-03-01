@@ -123,7 +123,13 @@ async function handleEdit() {
 	error = "";
 
 	const parsedImportance = parseFloat(importance);
-	const updates: Record<string, unknown> = {};
+	const updates: {
+		content?: string;
+		type?: string;
+		importance?: number;
+		tags?: string;
+		pinned?: boolean;
+	} = {};
 
 	if (trimmedContent !== (editing.content ?? "")) {
 		updates.content = trimmedContent;
@@ -153,17 +159,7 @@ async function handleEdit() {
 		return;
 	}
 
-	const result = await doUpdateMemory(
-		editingId,
-		updates as {
-			content?: string;
-			type?: string;
-			importance?: number;
-			tags?: string;
-			pinned?: boolean;
-		},
-		trimmedReason,
-	);
+	const result = await doUpdateMemory(editingId, updates, trimmedReason);
 	submitting = false;
 
 	if (result.success) {
