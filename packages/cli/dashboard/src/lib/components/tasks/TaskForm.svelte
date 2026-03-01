@@ -52,7 +52,7 @@ $effect(() => {
 	// Only initialize when:
 	// 1. Form just opened (open is true)
 	// 2. editingId changed (different task being edited)
-	if (open && editingId !== lastInitializedId) {
+	if (open && (lastInitializedId === undefined || editingId !== lastInitializedId)) {
 		if (editing) {
 			name = editing.name;
 			prompt = editing.prompt;
