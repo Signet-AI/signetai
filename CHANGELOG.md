@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.14.4] - 2026-03-01
+
+### Bug Fixes
+
+- **dashboard{logs**: preserve reconnect counter across retries for correct exponential backoff (#68)
+
+
 ## [0.14.3] - 2026-03-01
 
 ### Bug Fixes
