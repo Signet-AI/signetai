@@ -1435,7 +1435,32 @@
 	gap: 16px;
 	padding: 20px 24px;
 	border-right: 1px solid var(--color-border);
-	transition: background-color 0.3s ease;
+	transition: background-color var(--dur) var(--ease), transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+	position: relative;
+}
+.harness-item::before,
+.harness-item::after {
+	content: "";
+	position: absolute;
+	width: 8px;
+	height: 8px;
+	border-color: var(--color-text-bright);
+	border-style: solid;
+	opacity: 0;
+	transition: opacity 0.2s ease, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+	pointer-events: none;
+}
+.harness-item::before {
+	top: 0;
+	left: 0;
+	border-width: 2px 0 0 2px;
+	transform: translate(6px, 6px);
+}
+.harness-item::after {
+	bottom: 0;
+	right: 0;
+	border-width: 0 2px 2px 0;
+	transform: translate(-6px, -6px);
 }
 
 .harness-item:last-child {
@@ -1444,6 +1469,15 @@
 
 .harness-item:hover {
 	background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+	transform: translateY(-4px);
+}
+.harness-item:hover::before {
+	opacity: 1;
+	transform: translate(-2px, -2px);
+}
+.harness-item:hover::after {
+	opacity: 1;
+	transform: translate(2px, 2px);
 }
 
 .harness-logo {
@@ -1454,12 +1488,11 @@
 	align-items: center;
 	justify-content: center;
 	color: var(--color-text-muted);
-	transition: color 0.3s ease, transform 0.3s ease;
+	transition: color 0.3s ease;
 }
 
 .harness-item:hover .harness-logo {
 	color: var(--color-text-bright);
-	transform: translateY(-2px);
 }
 
 .harness-logo svg {
@@ -1724,10 +1757,6 @@
 .landing-page .section-label {
 	font-size: 0.625rem;
 	letter-spacing: 0.14em;
-}
-.landing-page .section-label::before {
-	content: "> ";
-	color: var(--color-accent);
 }
 
 .landing-page .section-index {
@@ -2202,6 +2231,45 @@
 .landing-page .harness-item {
 	padding: 16px 20px;
 	gap: 14px;
+	transition: background-color var(--dur) var(--ease), transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+	position: relative;
+}
+.landing-page .harness-item::before,
+.landing-page .harness-item::after {
+	content: "";
+	position: absolute;
+	width: 8px;
+	height: 8px;
+	border-color: var(--color-text-bright);
+	border-style: solid;
+	opacity: 0;
+	transition: opacity 0.2s ease, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+	pointer-events: none;
+}
+.landing-page .harness-item::before {
+	top: 0;
+	left: 0;
+	border-width: 2px 0 0 2px;
+	transform: translate(6px, 6px);
+}
+.landing-page .harness-item::after {
+	bottom: 0;
+	right: 0;
+	border-width: 0 2px 2px 0;
+	transform: translate(-6px, -6px);
+}
+
+.landing-page .harness-item:hover {
+	background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+	transform: translateY(-4px);
+}
+.landing-page .harness-item:hover::before {
+	opacity: 1;
+	transform: translate(-2px, -2px);
+}
+.landing-page .harness-item:hover::after {
+	opacity: 1;
+	transform: translate(2px, 2px);
 }
 
 .landing-page .harness-logo {
@@ -2259,7 +2327,32 @@
 	border: none;
 	border-right: 1px solid var(--color-border);
 	background: transparent;
-	transition: background-color var(--dur) var(--ease);
+	transition: background-color var(--dur) var(--ease), transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+	position: relative;
+}
+.landing-page .quick-link-card::before,
+.landing-page .quick-link-card::after {
+	content: "";
+	position: absolute;
+	width: 8px;
+	height: 8px;
+	border-color: var(--color-text-bright);
+	border-style: solid;
+	opacity: 0;
+	transition: opacity 0.2s ease, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+	pointer-events: none;
+}
+.landing-page .quick-link-card::before {
+	top: 0;
+	left: 0;
+	border-width: 2px 0 0 2px;
+	transform: translate(6px, 6px);
+}
+.landing-page .quick-link-card::after {
+	bottom: 0;
+	right: 0;
+	border-width: 0 2px 2px 0;
+	transform: translate(-6px, -6px);
 }
 .landing-page .quick-link-card:last-child {
 	border-right: none;
@@ -2267,8 +2360,15 @@
 
 .landing-page .quick-link-card:hover {
 	background: color-mix(in srgb, var(--color-surface) 60%, transparent);
-	transform: none;
-	border-color: var(--color-border);
+	transform: translateY(-4px);
+}
+.landing-page .quick-link-card:hover::before {
+	opacity: 1;
+	transform: translate(-2px, -2px);
+}
+.landing-page .quick-link-card:hover::after {
+	opacity: 1;
+	transform: translate(2px, 2px);
 }
 
 .landing-page .quick-link-card {
