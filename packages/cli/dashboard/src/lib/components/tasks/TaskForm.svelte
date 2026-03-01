@@ -45,7 +45,8 @@ function presetLabel(expr: string): string {
 }
 
 // Track the last initialized task to prevent re-initialization on auto-refresh
-let lastInitializedId = $state<string | null>(null);
+// Use undefined as sentinel to distinguish from null (new task)
+let lastInitializedId = $state<string | null | undefined>(undefined);
 
 // Initialize form state only when opening or switching tasks
 $effect(() => {
@@ -74,7 +75,7 @@ $effect(() => {
 	
 	// Reset tracking when form closes
 	if (!open) {
-		lastInitializedId = null;
+		lastInitializedId = undefined;
 	}
 });
 
