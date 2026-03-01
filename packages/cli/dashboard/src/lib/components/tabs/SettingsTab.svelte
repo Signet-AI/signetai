@@ -30,6 +30,13 @@ async function saveSettings() {
 	await st.save();
 }
 
+function handleGlobalKey(e: KeyboardEvent) {
+	if (e.key === "s" && (e.metaKey || e.ctrlKey)) {
+		e.preventDefault();
+		if (st.isDirty && !st.saving) saveSettings();
+	}
+}
+
 function formatSavedAt(raw: string | null): string {
 	if (!raw) return "";
 	try {
@@ -46,6 +53,8 @@ $effect(() => {
 	};
 });
 </script>
+
+<svelte:window onkeydown={handleGlobalKey} />
 
 <div class="settings-tab">
 	{#if !st.hasFiles}
@@ -74,7 +83,7 @@ $effect(() => {
 					<span>{st.lastSaveFeedback}</span>
 				{/if}
 			</div>
-			<button class="save-btn" onclick={saveSettings} disabled={st.saving || !st.isDirty}>
+			<button class="save-btn" onclick={saveSettings} disabled={st.saving || !st.isDirty} title="Save (⌘S / Ctrl+S)">
 				{st.saving ? "Saving…" : "Save"}
 			</button>
 		</div>
