@@ -49,6 +49,9 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, '') ?? 'https://www.signet
           });
           return (
             <a class="blog-card" href={`/blog/${post.id}/`}>
+              {post.data.image ? (
+                <img class="blog-card-image" src={post.data.image} alt="" width="780" height="400" loading="lazy" />
+              ) : null}
               <p class="blog-card-date">{formattedDate}</p>
               <h2>{post.data.title}</h2>
               <p>{post.data.description}</p>

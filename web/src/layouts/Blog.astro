@@ -12,6 +12,7 @@ interface Props {
   author: string;
   tags?: string[];
   image?: string;
+  headings?: Array<{ depth: number; slug: string; text: string }>;
   previousPost?: {
     title: string;
     url: string;
@@ -29,6 +30,7 @@ const {
   author,
   tags = [],
   image,
+  headings = [],
   previousPost,
   nextPost,
 } = Astro.props;
@@ -38,6 +40,8 @@ const formattedDate = date.toLocaleDateString('en-US', {
   month: 'long',
   day: 'numeric',
 });
+
+const tocHeadings = headings.filter((h) => h.depth === 2);
 ---
 
 <Base title={`${title} — SignetAI Blog`} description={description} image={image} type="article">
@@ -45,9 +49,13 @@ const formattedDate = date.toLocaleDateString('en-US', {
 
   <div class="blog-shell">
     <main class="blog-main">
+      {image ? (
+        <img class="blog-hero-image" src={image} alt="" width="1408" height="768" loading="eager" />
+      ) : null}
+
       <header class="blog-article-header">
         <p class="blog-kicker">
-          <a href="/blog">Blog</a>
+          <a href="/blog">&larr; Blog</a>
         </p>
         <h1>{title}</h1>
         <div class="blog-meta">
@@ -65,7 +73,18 @@ const formattedDate = date.toLocaleDateString('en-US', {
         ) : null}
       </header>
 
-      <article class="prose">
+      {tocHeadings.length > 2 ? (
+        <nav class="blog-toc" aria-label="Table of contents">
+          <p class="blog-toc-label">In this article</p>
+          <ol>
+            {tocHeadings.map((h) => (
+              <li><a href={`#${h.slug}`}>{h.text}</a></li>
+            ))}
+          </ol>
+        </nav>
+      ) : null}
+
+      <article class="prose blog-prose">
         <slot />
       </article>
 

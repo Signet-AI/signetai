@@ -14,7 +14,7 @@ export async function getStaticPaths() {
 }
 
 const { post } = Astro.props;
-const { Content } = await render(post);
+const { Content, headings } = await render(post);
 
 // Build chronological neighbors for prev/next
 const allPosts = (await getCollection('blog'))
@@ -40,6 +40,7 @@ const pageUrl = `${siteUrl}/blog/${post.id}/`;
   author={post.data.author}
   tags={post.data.tags}
   image={post.data.image}
+  headings={headings}
   previousPost={previousPost}
   nextPost={nextPost}
 >

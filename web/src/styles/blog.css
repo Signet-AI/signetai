@@ -13,21 +13,31 @@
    ========================================================================== */
 .blog-main {
 	min-width: 0;
-	padding: var(--space-2xl) clamp(var(--space-xl), 5vw, 80px);
-	max-width: 920px;
+	padding: var(--space-xl) clamp(var(--space-xl), 5vw, 80px) var(--space-2xl);
+	max-width: 780px;
 	width: 100%;
 	margin: 0 auto;
 }
 
+.blog-hero-image {
+	width: 100%;
+	height: auto;
+	aspect-ratio: 16 / 9;
+	object-fit: cover;
+	border: 1px solid var(--color-border);
+	margin-bottom: var(--space-lg);
+}
+
 .blog-article-header {
 	margin-bottom: var(--space-xl);
-	padding: var(--space-lg);
-	border: 1px solid var(--color-border-strong);
-	background: var(--color-surface);
+	padding: 0 0 var(--space-lg);
+	border: none;
+	border-bottom: 1px solid var(--color-border);
+	background: none;
 }
 
 .blog-kicker {
-	margin: 0 0 var(--space-sm);
+	margin: 0 0 var(--space-md);
 	font-family: var(--font-mono);
 	font-size: 0.6875rem;
 	color: var(--color-text-muted);
@@ -36,16 +46,22 @@
 }
 
 .blog-kicker a {
-	color: var(--color-text-bright);
+	color: var(--color-text-muted);
 	text-decoration: none;
+	transition: color var(--dur) var(--ease);
+}
+
+.blog-kicker a:hover {
+	color: var(--color-text-bright);
 }
 
 .blog-article-header h1 {
 	margin: 0;
 	font-family: var(--font-display);
-	text-transform: uppercase;
-	font-size: clamp(1.5rem, 3vw, 2.2rem);
-	letter-spacing: 0.05em;
+	text-transform: none;
+	font-size: clamp(1.5rem, 3.5vw, 2rem);
+	letter-spacing: 0.01em;
+	line-height: 1.25;
 	color: var(--color-text-bright);
 }
 
@@ -53,7 +69,7 @@
 	display: flex;
 	align-items: center;
 	gap: var(--space-md);
-	margin-top: var(--space-sm);
+	margin-top: var(--space-md);
 	font-family: var(--font-mono);
 	font-size: 0.75rem;
 	color: var(--color-text-muted);
@@ -64,10 +80,10 @@
 }
 
 .blog-description {
-	margin: var(--space-sm) 0 0;
-	max-width: 70ch;
+	margin: var(--space-md) 0 0;
+	max-width: 65ch;
 	font-family: var(--font-mono);
-	font-size: 0.8125rem;
+	font-size: 0.875rem;
 	color: var(--color-text-muted);
 	line-height: 1.7;
 }
@@ -101,6 +117,124 @@
 }
 
 /* ==========================================================================
+   BLOG TABLE OF CONTENTS
+   ========================================================================== */
+.blog-toc {
+	margin-bottom: var(--space-xl);
+	padding: var(--space-md) var(--space-lg);
+	border: 1px solid var(--color-border);
+	background: var(--color-surface);
+}
+
+.blog-toc-label {
+	margin: 0 0 var(--space-sm);
+	font-family: var(--font-display);
+	font-size: 0.625rem;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--color-text-muted);
+}
+
+.blog-toc ol {
+	margin: 0;
+	padding-left: 18px;
+	list-style: decimal;
+}
+
+.blog-toc li {
+	margin: 0;
+	padding: 3px 0;
+	line-height: 1.4;
+}
+
+.blog-toc a {
+	font-family: var(--font-mono);
+	font-size: 0.8125rem;
+	color: var(--color-text);
+	text-decoration: none;
+	transition: color var(--dur) var(--ease);
+}
+
+.blog-toc a:hover {
+	color: var(--color-text-bright);
+}
+
+/* ==========================================================================
+   BLOG PROSE OVERRIDES
+   Softer, more readable styling for long-form blog content.
+   These override the docs .prose defaults without touching them.
+   ========================================================================== */
+.blog-prose p {
+	font-family: var(--font-mono);
+	font-size: 0.9375rem;
+	line-height: 1.85;
+	color: var(--color-text);
+	margin-bottom: var(--space-lg);
+}
+
+.blog-prose h2 {
+	font-size: 1.125rem;
+	text-transform: none;
+	letter-spacing: 0.02em;
+	margin-top: var(--space-2xl);
+	margin-bottom: var(--space-md);
+	padding: 0 0 var(--space-sm);
+	border-bottom: 1px solid var(--color-border);
+}
+
+.blog-prose h2::before {
+	display: none;
+}
+
+.blog-prose h3 {
+	font-size: 0.9375rem;
+	text-transform: none;
+	letter-spacing: 0.02em;
+	margin-top: var(--space-xl);
+	border-left: none;
+	padding-left: 0;
+}
+
+.blog-prose h4 {
+	font-size: 0.9375rem;
+}
+
+.blog-prose li {
+	font-size: 0.9375rem;
+	line-height: 1.85;
+	margin-bottom: 6px;
+}
+
+.blog-prose strong {
+	color: var(--color-text-bright);
+	font-weight: 600;
+}
+
+.blog-prose a {
+	color: var(--color-text-bright);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+	text-decoration-color: var(--color-border-strong);
+	transition: text-decoration-color var(--dur) var(--ease);
+}
+
+.blog-prose a:hover {
+	text-decoration-color: var(--color-text-bright);
+}
+
+.blog-prose code {
+	font-size: 0.875rem;
+}
+
+.blog-prose pre code {
+	font-size: 0.875rem;
+}
+
+.blog-prose blockquote p {
+	font-size: 0.9375rem;
+}
+
+/* ==========================================================================
    BLOG PAGER (prev/next)
    ========================================================================== */
 .blog-pager {
@@ -114,8 +248,8 @@
 .blog-pager-link,
 .blog-pager-spacer {
 	min-height: 74px;
-	border: 1px solid var(--color-border-strong);
-	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	background: none;
 }
 
 .blog-pager-link {
@@ -143,10 +277,10 @@
 
 .blog-pager-title {
 	font-family: var(--font-display);
-	font-size: 0.75rem;
-	letter-spacing: 0.04em;
+	font-size: 0.8125rem;
+	letter-spacing: 0.02em;
 	color: var(--color-text-bright);
-	text-transform: uppercase;
+	text-transform: none;
 }
 
 /* ==========================================================================
@@ -154,9 +288,10 @@
    ========================================================================== */
 .blog-index-header {
 	margin-bottom: var(--space-xl);
-	padding: var(--space-lg);
-	border: 1px solid var(--color-border-strong);
-	background: var(--color-surface);
+	padding: 0 0 var(--space-lg);
+	border: none;
+	border-bottom: 1px solid var(--color-border);
+	background: none;
 }
 
 .blog-index-header h1 {
@@ -171,7 +306,7 @@
 .blog-index-header p {
 	margin: var(--space-sm) 0 0;
 	font-family: var(--font-mono);
-	font-size: 0.8125rem;
+	font-size: 0.875rem;
 	color: var(--color-text-muted);
 	line-height: 1.7;
 }
@@ -179,22 +314,42 @@
 .blog-index {
 	display: grid;
 	grid-template-columns: 1fr;
-	gap: var(--space-lg);
+	gap: 0;
 }
 
 .blog-card {
 	display: block;
-	border: 1px solid var(--color-border-strong);
-	background: var(--color-surface);
-	padding: var(--space-lg);
+	border: none;
+	border-bottom: 1px solid var(--color-border);
+	background: none;
+	padding: var(--space-lg) 0;
 	text-decoration: none;
-	transition: border-color var(--dur) var(--ease),
-		background-color var(--dur) var(--ease);
+	transition: background-color var(--dur) var(--ease);
+}
+
+.blog-card:first-child {
+	padding-top: 0;
+}
+
+.blog-card:last-child {
+	border-bottom: none;
 }
 
 .blog-card:hover {
-	border-color: var(--color-text-muted);
-	background: var(--color-surface-raised);
+	background: var(--color-glow);
+	padding-left: var(--space-md);
+	padding-right: var(--space-md);
+	margin-left: calc(-1 * var(--space-md));
+	margin-right: calc(-1 * var(--space-md));
+}
+
+.blog-card-image {
+	width: 100%;
+	height: auto;
+	aspect-ratio: 2 / 1;
+	object-fit: cover;
+	border: 1px solid var(--color-border);
+	margin-bottom: var(--space-sm);
 }
 
 .blog-card-date {
@@ -210,15 +365,15 @@
 	font-family: var(--font-display);
 	font-size: 1.125rem;
 	font-weight: 600;
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
+	letter-spacing: 0.02em;
+	text-transform: none;
 	color: var(--color-text-bright);
 }
 
 .blog-card p {
 	margin: 0 0 var(--space-sm);
 	font-family: var(--font-mono);
-	font-size: 0.8125rem;
+	font-size: 0.875rem;
 	line-height: 1.7;
 	color: var(--color-text);
 }
@@ -239,5 +394,9 @@
 
 	.blog-pager {
 		grid-template-columns: 1fr;
+	}
+
+	.blog-toc {
+		padding: var(--space-sm) var(--space-md);
 	}
 }
