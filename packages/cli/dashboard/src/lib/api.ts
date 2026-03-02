@@ -336,6 +336,86 @@ export async function setMemoryPinned(
 	}
 }
 
+export async function updateMemory(
+	id: string,
+	updates: {
+		content?: string;
+		type?: string;
+		importance?: number;
+		tags?: string;
+		pinned?: boolean;
+	},
+	reason: string,
+): Promise<{ success: boolean; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/memory/${encodeURIComponent(id)}`,
+			{
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					...updates,
+					reason,
+					changed_by: "dashboard",
+				}),
+			},
+		);
+		if (!response.ok) {
+			const body = (await response.json().catch(() => ({}))) as Record<
+				string,
+				unknown
+			>;
+			const error =
+				typeof body.error === "string"
+					? body.error
+					: `Request failed (${response.status})`;
+			return { success: false, error };
+		}
+		return { success: true };
+	} catch (error) {
+		return { success: false, error: String(error) };
+	}
+}
+
+export async function deleteMemory(
+	id: string,
+	reason: string,
+	force = false,
+): Promise<{ success: boolean; error?: string }> {
+	try {
+		const response = await fetch(
+			`${API_BASE}/api/memory/${encodeURIComponent(id)}`,
+			{
+				method: "DELETE",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					reason,
+					force,
+				}),
+			},
+		);
+		if (!response.ok) {
+			const body = (await response.json().catch(() => ({}))) as Record<
+				string,
+				unknown
+			>;
+			const rawError =
+				typeof body.error === "string"
+					? body.error
+					: `Request failed (${response.status})`;
+			// Handle 409 "already deleted" as success (memory is already gone)
+			const status = typeof body.status === "string" ? body.status : "";
+			if (response.status === 409 && status === "already_deleted") {
+				return { success: true };
+			}
+			return { success: false, error: rawError };
+		}
+		return { success: true };
+	} catch (error) {
+		return { success: false, error: String(error) };
+	}
+}
+
 export async function getEmbeddings(
 	withVectors = false,
 	options: { limit?: number; offset?: number } = {},
