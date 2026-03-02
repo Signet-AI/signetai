@@ -19,6 +19,10 @@
 	margin: 0 auto;
 }
 
+.has-toc .blog-main {
+	margin: 0;
+}
+
 .blog-hero-image {
 	width: 100%;
 	height: auto;
@@ -117,17 +121,39 @@
 }
 
 /* ==========================================================================
-   BLOG TABLE OF CONTENTS
+   BLOG CONTENT GRID (two-column with TOC rail)
    ========================================================================== */
-.blog-toc {
-	margin-bottom: var(--space-xl);
-	padding: var(--space-md) var(--space-lg);
-	border: 1px solid var(--color-border);
-	background: var(--color-surface);
+.blog-content-grid {
+	max-width: 1100px;
+	width: 100%;
+	margin: 0 auto;
+}
+
+.blog-content-grid.has-toc {
+	display: grid;
+	grid-template-columns: 220px 1fr;
+	gap: 0 var(--space-xl);
+}
+
+/* ==========================================================================
+   BLOG TOC RAIL (sticky left column on desktop)
+   ========================================================================== */
+.blog-toc-rail {
+	display: none;
+}
+
+.blog-toc-sticky {
+	position: sticky;
+	top: 80px;
+	padding: var(--space-xl) 0 var(--space-xl) var(--space-lg);
+	max-height: calc(100vh - 96px);
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-border-strong) transparent;
 }
 
 .blog-toc-label {
-	margin: 0 0 var(--space-sm);
+	margin: 0 0 var(--space-md);
 	font-family: var(--font-display);
 	font-size: 0.625rem;
 	letter-spacing: 0.12em;
@@ -135,28 +161,50 @@
 	color: var(--color-text-muted);
 }
 
-.blog-toc ol {
+.blog-toc-list {
+	list-style: none;
+	padding: 0;
 	margin: 0;
-	padding-left: 18px;
-	list-style: decimal;
 }
 
-.blog-toc li {
+.blog-toc-list li {
 	margin: 0;
-	padding: 3px 0;
-	line-height: 1.4;
 }
 
-.blog-toc a {
+.blog-toc-list a {
+	display: block;
+	padding: 4px 0 4px var(--space-sm);
 	font-family: var(--font-mono);
-	font-size: 0.8125rem;
-	color: var(--color-text);
+	font-size: 0.6875rem;
+	line-height: 1.5;
+	color: var(--color-text-muted);
 	text-decoration: none;
-	transition: color var(--dur) var(--ease);
+	border-left: 1px solid transparent;
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 
-.blog-toc a:hover {
+.blog-toc-list a:hover {
 	color: var(--color-text-bright);
+}
+
+.blog-toc-list a[data-active] {
+	color: var(--color-text-bright);
+	border-left-color: var(--color-text-bright);
+}
+
+.blog-toc-sub a {
+	padding-left: calc(var(--space-sm) + var(--space-sm));
+	font-size: 0.625rem;
+}
+
+/* ==========================================================================
+   BLOG TOC INLINE (mobile fallback)
+   ========================================================================== */
+.blog-toc-inline {
+	margin-bottom: var(--space-xl);
+	padding: var(--space-md) var(--space-lg);
+	border: 1px solid var(--color-border);
+	background: var(--color-surface);
 }
 
 /* ==========================================================================
@@ -387,6 +435,33 @@
 /* ==========================================================================
    RESPONSIVE
    ========================================================================== */
+
+/* Desktop: show TOC rail, hide inline TOC */
+@media (min-width: 1025px) {
+	.blog-toc-rail {
+		display: block;
+	}
+
+	.blog-toc-inline {
+		display: none;
+	}
+}
+
+/* Tablet and below: collapse to single column */
+@media (max-width: 1024px) {
+	.blog-content-grid.has-toc {
+		display: block;
+	}
+
+	.blog-toc-rail {
+		display: none;
+	}
+
+	.has-toc .blog-main {
+		margin: 0 auto;
+	}
+}
+
 @media (max-width: 900px) {
 	.blog-main {
 		padding: var(--space-xl) var(--space-lg);
@@ -394,9 +469,5 @@
 
 	.blog-pager {
 		grid-template-columns: 1fr;
-	}
-
-	.blog-toc {
-		padding: var(--space-sm) var(--space-md);
 	}
 }

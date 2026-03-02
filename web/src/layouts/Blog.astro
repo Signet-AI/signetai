@@ -41,73 +41,142 @@ const formattedDate = date.toLocaleDateString('en-US', {
   day: 'numeric',
 });
 
-const tocHeadings = headings.filter((h) => h.depth === 2);
+const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
+const hasToc = tocHeadings.length > 2;
 ---
 
 <Base title={`${title} — SignetAI Blog`} description={description} image={image} type="article">
   <Nav />
 
   <div class="blog-shell">
-    <main class="blog-main">
-      {image ? (
-        <img class="blog-hero-image" src={image} alt="" width="1408" height="768" loading="eager" />
+    <div class:list={["blog-content-grid", { "has-toc": hasToc }]}>
+      {hasToc ? (
+        <aside class="blog-toc-rail">
+          <nav class="blog-toc-sticky" aria-label="Table of contents">
+            <p class="blog-toc-label">On this page</p>
+            <ul class="blog-toc-list">
+              {tocHeadings.map((h) => (
+                <li class:list={[{ "blog-toc-sub": h.depth === 3 }]}>
+                  <a href={`#${h.slug}`} data-toc-link>{h.text}</a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        </aside>
       ) : null}
 
-      <header class="blog-article-header">
-        <p class="blog-kicker">
-          <a href="/blog">&larr; Blog</a>
-        </p>
-        <h1>{title}</h1>
-        <div class="blog-meta">
-          <time datetime={date.toISOString().slice(0, 10)}>{formattedDate}</time>
-          <span class="blog-meta-separator">/</span>
-          <span>{author}</span>
-        </div>
-        {description ? <p class="blog-description">{description}</p> : null}
-        {tags.length > 0 ? (
-          <div class="blog-tags">
-            {tags.map((tag) => (
-              <span class="blog-tag">{tag}</span>
-            ))}
-          </div>
+      <main class="blog-main">
+        {image ? (
+          <img class="blog-hero-image" src={image} alt="" width="1408" height="768" loading="eager" />
         ) : null}
-      </header>
 
-      {tocHeadings.length > 2 ? (
-        <nav class="blog-toc" aria-label="Table of contents">
-          <p class="blog-toc-label">In this article</p>
-          <ol>
-            {tocHeadings.map((h) => (
-              <li><a href={`#${h.slug}`}>{h.text}</a></li>
-            ))}
-          </ol>
-        </nav>
-      ) : null}
+        <header class="blog-article-header">
+          <p class="blog-kicker">
+            <a href="/blog">&larr; Blog</a>
+          </p>
+          <h1>{title}</h1>
+          <div class="blog-meta">
+            <time datetime={date.toISOString().slice(0, 10)}>{formattedDate}</time>
+            <span class="blog-meta-separator">/</span>
+            <span>{author}</span>
+          </div>
+          {description ? <p class="blog-description">{description}</p> : null}
+          {tags.length > 0 ? (
+            <div class="blog-tags">
+              {tags.map((tag) => (
+                <span class="blog-tag">{tag}</span>
+              ))}
+            </div>
+          ) : null}
+        </header>
 
-      <article class="prose blog-prose">
-        <slot />
-      </article>
+        {hasToc ? (
+          <nav class="blog-toc-inline" aria-label="Table of contents">
+            <p class="blog-toc-label">On this page</p>
+            <ul class="blog-toc-list">
+              {tocHeadings.filter((h) => h.depth === 2).map((h) => (
+                <li><a href={`#${h.slug}`}>{h.text}</a></li>
+              ))}
+            </ul>
+          </nav>
+        ) : null}
 
-      {(previousPost || nextPost) ? (
-        <nav class="blog-pager" aria-label="Post navigation">
-          {previousPost ? (
-            <a class="blog-pager-link" href={previousPost.url} rel="prev">
-              <span class="blog-pager-label">Previous</span>
-              <span class="blog-pager-title">{previousPost.title}</span>
-            </a>
-          ) : <span class="blog-pager-spacer"></span>}
+        <article class="prose blog-prose">
+          <slot />
+        </article>
 
-          {nextPost ? (
-            <a class="blog-pager-link" href={nextPost.url} rel="next">
-              <span class="blog-pager-label">Next</span>
-              <span class="blog-pager-title">{nextPost.title}</span>
-            </a>
-          ) : <span class="blog-pager-spacer"></span>}
-        </nav>
-      ) : null}
+        {(previousPost || nextPost) ? (
+          <nav class="blog-pager" aria-label="Post navigation">
+            {previousPost ? (
+              <a class="blog-pager-link" href={previousPost.url} rel="prev">
+                <span class="blog-pager-label">Previous</span>
+                <span class="blog-pager-title">{previousPost.title}</span>
+              </a>
+            ) : <span class="blog-pager-spacer"></span>}
 
-    </main>
+            {nextPost ? (
+              <a class="blog-pager-link" href={nextPost.url} rel="next">
+                <span class="blog-pager-label">Next</span>
+                <span class="blog-pager-title">{nextPost.title}</span>
+              </a>
+            ) : <span class="blog-pager-spacer"></span>}
+          </nav>
+        ) : null}
+      </main>
+    </div>
   </div>
 
   <Footer />
 </Base>
+
+<script>
+  function initScrollSpy() {
+    const links = document.querySelectorAll<HTMLAnchorElement>('[data-toc-link]');
+    if (!links.length) return;
+
+    const headingIds = Array.from(links).map((a) => a.getAttribute('href')?.slice(1)).filter(Boolean) as string[];
+    const headings = headingIds.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[];
+
+    if (!headings.length) return;
+
+    let active: HTMLAnchorElement | null = null;
+
+    function update() {
+      const scrollY = window.scrollY + 100;
+      let current: string | null = null;
+
+      for (let i = headings.length - 1; i >= 0; i--) {
+        if (headings[i].offsetTop <= scrollY) {
+          current = headings[i].id;
+          break;
+        }
+      }
+
+      if (!current && headings.length) {
+        current = headings[0].id;
+      }
+
+      if (active) active.removeAttribute('data-active');
+      if (current) {
+        const next = document.querySelector<HTMLAnchorElement>(`[data-toc-link][href="#${current}"]`);
+        if (next) {
+          next.setAttribute('data-active', '');
+          active = next;
+        }
+      }
+    }
+
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+      if (!ticking) {
+        requestAnimationFrame(() => { update(); ticking = false; });
+        ticking = true;
+      }
+    }, { passive: true });
+
+    update();
+  }
+
+  initScrollSpy();
+  document.addEventListener('astro:after-swap', initScrollSpy);
+</script>
