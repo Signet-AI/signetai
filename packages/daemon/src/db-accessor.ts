@@ -8,6 +8,31 @@
 
 import { Database, type Statement } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+
+// ---------------------------------------------------------------------------
+// macOS SQLite extension loading fix
+// ---------------------------------------------------------------------------
+// Apple's system SQLite is compiled with SQLITE_OMIT_LOAD_EXTENSION for
+// security reasons. Bun's bun:sqlite uses the system SQLite by default,
+// which prevents loading sqlite-vec and silently degrades to keyword-only
+// search. Use Homebrew's SQLite if available (supports extension loading).
+// ---------------------------------------------------------------------------
+
+const HOMEBREW_SQLITE_PATHS = [
+	"/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib", // Apple Silicon
+	"/usr/local/opt/sqlite/lib/libsqlite3.dylib", // Intel
+];
+
+for (const sqlitePath of HOMEBREW_SQLITE_PATHS) {
+	if (existsSync(sqlitePath)) {
+		try {
+			Database.setCustomSQLite(sqlitePath);
+		} catch {
+			// SQLite already loaded (e.g., in test environment) — skip
+		}
+		break;
+	}
+}
 import { basename, dirname, join } from "node:path";
 import {
 	runMigrations,
