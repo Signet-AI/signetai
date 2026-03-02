@@ -2,6 +2,18 @@
 
 All notable changes to Signet are documented here.
 
+## [0.18.0] - 2026-03-02
+
+### Features
+
+- **dashboard**: add edit and delete actions to memory cards
+
+### Bug Fixes
+
+- **dashboard**: close handleEdit brace and add error handling for edit failure
+- **dashboard**: remove as cast, properly type updates object in MemoryForm
+
+
 ## [0.17.0] - 2026-03-02
 
 ### Features
