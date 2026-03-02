@@ -1,51 +1,44 @@
 <script lang="ts">
-	import type { DaemonStatus, Identity, Harness } from "$lib/api";
-	import { nav, setTab, type TabId } from "$lib/stores/navigation.svelte";
-	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-	import FileText from "@lucide/svelte/icons/file-text";
-	import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
-	import Database from "@lucide/svelte/icons/database";
-	import Network from "@lucide/svelte/icons/network";
-	import ScrollText from "@lucide/svelte/icons/scroll-text";
-	import KeyRound from "@lucide/svelte/icons/key-round";
-	import Zap from "@lucide/svelte/icons/zap";
-	import CalendarClock from "@lucide/svelte/icons/calendar-clock";
-	import Activity from "@lucide/svelte/icons/activity";
-	import Plug from "@lucide/svelte/icons/plug";
-	import Sun from "@lucide/svelte/icons/sun";
-	import Moon from "@lucide/svelte/icons/moon";
-	import Github from "@lucide/svelte/icons/github";
+import type { DaemonStatus, Harness, Identity } from "$lib/api";
+import * as Sidebar from "$lib/components/ui/sidebar/index.js";
+import { type TabId, nav, setTab } from "$lib/stores/navigation.svelte";
+import Activity from "@lucide/svelte/icons/activity";
+import CalendarClock from "@lucide/svelte/icons/calendar-clock";
+import Database from "@lucide/svelte/icons/database";
+import FileText from "@lucide/svelte/icons/file-text";
+import Github from "@lucide/svelte/icons/github";
+import KeyRound from "@lucide/svelte/icons/key-round";
+import Moon from "@lucide/svelte/icons/moon";
+import Network from "@lucide/svelte/icons/network";
+import Plug from "@lucide/svelte/icons/plug";
+import ScrollText from "@lucide/svelte/icons/scroll-text";
+import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+import Sun from "@lucide/svelte/icons/sun";
+import Zap from "@lucide/svelte/icons/zap";
 
-	interface Props {
-		identity: Identity;
-		harnesses: Harness[];
-		memCount: number;
-		daemonStatus: DaemonStatus | null;
-		theme: "dark" | "light";
-		onthemetoggle: () => void;
-	}
+interface Props {
+	identity: Identity;
+	harnesses: Harness[];
+	memCount: number;
+	daemonStatus: DaemonStatus | null;
+	theme: "dark" | "light";
+	onthemetoggle: () => void;
+}
 
-	let {
-		identity,
-		harnesses,
-		memCount,
-		daemonStatus,
-		theme,
-		onthemetoggle,
-	}: Props = $props();
+const { identity, harnesses, memCount, daemonStatus, theme, onthemetoggle }: Props = $props();
 
-	const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
-		{ id: "config", label: "Config", icon: FileText },
-		{ id: "settings", label: "Settings", icon: SlidersHorizontal },
-		{ id: "memory", label: "Memory", icon: Database },
-		{ id: "embeddings", label: "Constellation", icon: Network },
-		{ id: "pipeline", label: "Pipeline", icon: Activity },
-		{ id: "logs", label: "Logs", icon: ScrollText },
-		{ id: "secrets", label: "Secrets", icon: KeyRound },
-		{ id: "skills", label: "Skills", icon: Zap },
-		{ id: "tasks", label: "Tasks", icon: CalendarClock },
-		{ id: "connectors", label: "Connectors", icon: Plug },
-	];
+const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
+	{ id: "config", label: "Config", icon: FileText },
+	{ id: "settings", label: "Settings", icon: SlidersHorizontal },
+	{ id: "memory", label: "Memory", icon: Database },
+	{ id: "embeddings", label: "Constellation", icon: Network },
+	{ id: "pipeline", label: "Pipeline", icon: Activity },
+	{ id: "logs", label: "Logs", icon: ScrollText },
+	{ id: "secrets", label: "Secrets", icon: KeyRound },
+	{ id: "skills", label: "Marketplace", icon: Zap },
+	{ id: "tasks", label: "Tasks", icon: CalendarClock },
+	{ id: "connectors", label: "Connectors", icon: Plug },
+];
 </script>
 
 <Sidebar.Root variant="sidebar" collapsible="icon">

@@ -33,8 +33,8 @@ export const PAGE_HEADERS = {
 		eyebrow: "Secure secret vault",
 	},
 	skills: {
-		title: "Skills",
-		eyebrow: "Open agent skill ecosystem",
+		title: "Marketplace",
+		eyebrow: "Skills and Tool Servers",
 	},
 	tasks: {
 		title: "Tasks",

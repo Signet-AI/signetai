@@ -1,99 +1,96 @@
 <script lang="ts">
-	import { onMount } from "svelte";
-	import { browser } from "$app/environment";
-	import { getStatus, type DaemonStatus, type Memory } from "$lib/api";
+import { browser } from "$app/environment";
+import { type DaemonStatus, type Memory, getStatus } from "$lib/api";
+import AppSidebar from "$lib/components/app-sidebar.svelte";
+import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.svelte";
+import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Sidebar from "$lib/components/ui/sidebar/index.js";
+import { Toaster } from "$lib/components/ui/sonner/index.js";
+import { mcpMarket } from "$lib/stores/marketplace-mcp.svelte";
 import {
+	clearAll,
+	clearSearchTimer,
+	hasActiveFilters,
+	loadWhoOptions,
 	mem,
-		hasActiveFilters,
-		clearAll,
-		clearSearchTimer,
-		queueMemorySearch,
-		loadWhoOptions,
+	queueMemorySearch,
 } from "$lib/stores/memory.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
+import { sk } from "$lib/stores/skills.svelte";
+import { openForm, ts } from "$lib/stores/tasks.svelte";
 import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
-	import { sk } from "$lib/stores/skills.svelte";
-	import { ts, openForm } from "$lib/stores/tasks.svelte";
-	import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
-	import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import Plus from "@lucide/svelte/icons/plus";
-	import AppSidebar from "$lib/components/app-sidebar.svelte";
-	import { Toaster } from "$lib/components/ui/sonner/index.js";
-	import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.svelte";
+import Plus from "@lucide/svelte/icons/plus";
+import { onMount } from "svelte";
 
-	let activeTab = $derived(nav.activeTab);
+const activeTab = $derived(nav.activeTab);
 
-	let { data } = $props();
-	let daemonStatus = $state<DaemonStatus | null>(null);
+const { data } = $props();
+let daemonStatus = $state<DaemonStatus | null>(null);
 
-	// --- Theme ---
-	let theme = $state<"dark" | "light">("dark");
+// --- Theme ---
+let theme = $state<"dark" | "light">("dark");
 
-	if (browser) {
-		const stored = document.documentElement.dataset.theme;
-		theme = stored === "light" || stored === "dark" ? stored : "dark";
+if (browser) {
+	const stored = document.documentElement.dataset.theme;
+	theme = stored === "light" || stored === "dark" ? stored : "dark";
+}
+
+function toggleTheme() {
+	theme = theme === "dark" ? "light" : "dark";
+	document.documentElement.dataset.theme = theme;
+	localStorage.setItem("signet-theme", theme);
+}
+
+// --- Config file selection ---
+let selectedFile = $state("");
+
+$effect(() => {
+	if (!selectedFile && data.configFiles?.length) {
+		selectedFile = data.configFiles[0].name;
 	}
+});
 
-	function toggleTheme() {
-		theme = theme === "dark" ? "light" : "dark";
-		document.documentElement.dataset.theme = theme;
-		localStorage.setItem("signet-theme", theme);
-	}
+function selectFile(name: string) {
+	selectedFile = name;
+	nav.activeTab = "config";
+}
 
-	// --- Config file selection ---
-	let selectedFile = $state("");
+// --- Memory display ---
+const memoryDocs = $derived(data.memories ?? []);
 
-	$effect(() => {
-		if (!selectedFile && data.configFiles?.length) {
-			selectedFile = data.configFiles[0].name;
-		}
-	});
+const displayMemories = $derived(
+	mem.similarSourceId ? mem.similarResults : mem.searched || hasActiveFilters() ? mem.results : memoryDocs,
+);
 
-	function selectFile(name: string) {
-		selectedFile = name;
-		nav.activeTab = "config";
-	}
-
-	// --- Memory display ---
-	let memoryDocs = $derived(data.memories ?? []);
-
-	let displayMemories = $derived(
-		mem.similarSourceId
-			? mem.similarResults
-			: mem.searched || hasActiveFilters()
-				? mem.results
-				: memoryDocs,
-	);
-
-	// --- Filter reactivity ---
-	$effect(() => {
-		const _ = mem.filterType,
-			__ = mem.filterTags,
-			___ = mem.filterWho,
-			____ = mem.filterPinned,
-			_____ = mem.filterImportanceMin,
-			______ = mem.filterSince;
-		if (hasActiveFilters() || mem.searched) {
-			queueMemorySearch();
-		}
-	});
-
-	// --- Embeddings bridge ---
-	function openGlobalSimilar(memory: Memory) {
-		mem.query = memory.content;
-		nav.activeTab = "memory";
+// --- Filter reactivity ---
+$effect(() => {
+	const _ = mem.filterType,
+		__ = mem.filterTags,
+		___ = mem.filterWho,
+		____ = mem.filterPinned,
+		_____ = mem.filterImportanceMin,
+		______ = mem.filterSince;
+	if (hasActiveFilters() || mem.searched) {
 		queueMemorySearch();
 	}
+});
 
-	// --- Cleanup ---
-	$effect(() => {
-		return () => {
-			clearSearchTimer();
-		};
-	});
+// --- Embeddings bridge ---
+function openGlobalSimilar(memory: Memory) {
+	mem.query = memory.content;
+	nav.activeTab = "memory";
+	queueMemorySearch();
+}
 
-	// --- Init ---
+// --- Cleanup ---
+$effect(() => {
+	return () => {
+		clearSearchTimer();
+	};
+});
+
+// --- Init ---
 onMount(() => {
 	getStatus().then((s) => {
 		daemonStatus = s;
@@ -183,11 +180,11 @@ onMount(() => {
 				{:else if activeTab === "skills"}
 					<span class="text-[10px] text-[var(--sig-text-muted)]
 						font-[family-name:var(--font-mono)]">
-						{#if sk.catalogTotal}
-							{sk.catalogTotal.toLocaleString()} available
+						{#if sk.catalogTotal || mcpMarket.catalogTotal}
+							{(sk.catalogTotal + mcpMarket.catalogTotal).toLocaleString()} listed
 							<span class="text-[var(--sig-border-strong)]">&middot;</span>
 						{/if}
-						{sk.installed.length} installed
+						{sk.installed.length} skills &middot; {mcpMarket.installed.length} tool servers
 					</span>
 				{:else if activeTab === "tasks"}
 					<Button
@@ -265,7 +262,7 @@ onMount(() => {
 					</div>
 				{/await}
 			{:else if activeTab === "skills"}
-				{#await import("$lib/components/tabs/SkillsTab.svelte") then module}
+				{#await import("$lib/components/tabs/MarketplaceTab.svelte") then module}
 					<module.default />
 				{:catch error}
 					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
@@ -332,8 +329,8 @@ onMount(() => {
 				<span>Secrets</span>
 				<span>libsodium</span>
 			{:else if activeTab === "skills"}
-				<span>{sk.installed.length} installed</span>
-				<span>{sk.searching ? "searching..." : "skills.sh"}</span>
+				<span>{sk.installed.length} skills · {mcpMarket.installed.length} tool servers</span>
+				<span>{mcpMarket.tools.length} routed tools</span>
 			{:else if activeTab === "tasks"}
 				<span>{ts.tasks.length} scheduled tasks</span>
 				<span>cron scheduler</span>

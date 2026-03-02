@@ -4,21 +4,22 @@
  */
 
 import {
-	getSkills,
-	getSkill,
-	searchSkills,
-	browseSkills,
-	installSkill,
-	uninstallSkill,
 	type Skill,
-	type SkillSearchResult,
 	type SkillDetail,
+	type SkillSearchResult,
+	browseSkills,
+	getSkill,
+	getSkills,
+	installSkill,
+	searchSkills,
+	uninstallSkill,
 } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 
 export type SkillsView = "browse" | "installed";
-export type SortBy = "installs" | "stars" | "name" | "newest";
+export type SortBy = "popularity" | "installs" | "stars" | "name" | "newest";
 export type ProviderFilter = "all" | "skills.sh" | "clawhub";
+export type CategoryFilter = "all" | string;
 
 // Cache the browse catalog in localStorage so the grid renders instantly on
 // repeat loads. Background-refresh if the entry is older than CATALOG_CACHE_TTL.
@@ -36,11 +37,7 @@ function loadCatalogCache(): CatalogCache | null {
 		const raw = localStorage.getItem(CATALOG_CACHE_KEY);
 		if (!raw) return null;
 		const cache = JSON.parse(raw) as CatalogCache;
-		if (
-			typeof cache.ts !== "number" ||
-			!Array.isArray(cache.results) ||
-			typeof cache.total !== "number"
-		) {
+		if (typeof cache.ts !== "number" || !Array.isArray(cache.results) || typeof cache.total !== "number") {
 			return null;
 		}
 		return cache;
@@ -87,8 +84,9 @@ export const sk = $state({
 	searching: false,
 
 	// Sort & filter
-	sortBy: "installs" as SortBy,
+	sortBy: "popularity" as SortBy,
 	providerFilter: "all" as ProviderFilter,
+	categoryFilter: "all" as CategoryFilter,
 
 	// Compare mode
 	compareSelected: [] as string[],
@@ -111,6 +109,10 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null;
 function sortItems(items: readonly SkillSearchResult[], sortBy: SortBy): SkillSearchResult[] {
 	const sorted = [...items];
 	switch (sortBy) {
+		case "popularity":
+			return sorted.sort(
+				(a, b) => (b.popularityScore ?? b.installsRaw ?? 0) - (a.popularityScore ?? a.installsRaw ?? 0),
+			);
 		case "installs":
 			return sorted.sort((a, b) => (b.installsRaw ?? 0) - (a.installsRaw ?? 0));
 		case "stars":
@@ -125,27 +127,40 @@ function sortItems(items: readonly SkillSearchResult[], sortBy: SortBy): SkillSe
 	}
 }
 
-function filterByProvider(
-	items: readonly SkillSearchResult[],
-	provider: ProviderFilter,
-): SkillSearchResult[] {
+function filterByProvider(items: readonly SkillSearchResult[], provider: ProviderFilter): SkillSearchResult[] {
 	if (provider === "all") return [...items];
 	return items.filter((s) => s.provider === provider);
 }
 
+function filterByCategory(items: readonly SkillSearchResult[], category: CategoryFilter): SkillSearchResult[] {
+	if (category === "all") return [...items];
+	return items.filter((s) => (s.category ?? "Other") === category);
+}
+
+export function getCategoryOptions(): string[] {
+	const values = new Set<string>(["all"]);
+	for (const item of [...sk.catalog, ...sk.results]) {
+		values.add(item.category ?? "Other");
+	}
+	return Array.from(values);
+}
+
 export function getFilteredCatalog(): SkillSearchResult[] {
-	const filtered = filterByProvider(sk.catalog, sk.providerFilter);
+	const filteredByProvider = filterByProvider(sk.catalog, sk.providerFilter);
+	const filtered = filterByCategory(filteredByProvider, sk.categoryFilter);
 	return sortItems(filtered, sk.sortBy);
 }
 
 export function getFilteredResults(): SkillSearchResult[] {
-	const filtered = filterByProvider(sk.results, sk.providerFilter);
+	const filteredByProvider = filterByProvider(sk.results, sk.providerFilter);
+	const filtered = filterByCategory(filteredByProvider, sk.categoryFilter);
 	return sortItems(filtered, sk.sortBy);
 }
 
 export function resetFilters(): void {
-	sk.sortBy = "installs";
+	sk.sortBy = "popularity";
 	sk.providerFilter = "all";
+	sk.categoryFilter = "all";
 }
 
 export function clearCompare(): void {
@@ -227,9 +242,7 @@ export async function openDetail(name: string): Promise<void> {
 	sk.detailMeta = null;
 
 	// Find source from search results or catalog for remote fetch
-	const match =
-		sk.results.find((s) => s.name === name) ||
-		sk.catalog.find((s) => s.name === name);
+	const match = sk.results.find((s) => s.name === name) || sk.catalog.find((s) => s.name === name);
 	sk.detailSource = match ?? null;
 	const source = match?.fullName || undefined;
 
@@ -252,17 +265,14 @@ export function closeDetail(): void {
 export async function doInstall(name: string): Promise<void> {
 	sk.installing = name;
 	// Look up fullName from search results or catalog
-	const match =
-		sk.results.find((s) => s.name === name) ||
-		sk.catalog.find((s) => s.name === name);
+	const match = sk.results.find((s) => s.name === name) || sk.catalog.find((s) => s.name === name);
 	const source = match?.fullName || undefined;
 	const result = await installSkill(name, source);
 	if (result.success) {
 		toast(`Skill ${name} installed`, "success");
 		await fetchInstalled();
 		// Update installed flag in results and catalog
-		const markInstalled = (s: SkillSearchResult) =>
-			s.name === name ? { ...s, installed: true } : s;
+		const markInstalled = (s: SkillSearchResult) => (s.name === name ? { ...s, installed: true } : s);
 		sk.results = sk.results.map(markInstalled);
 		sk.catalog = sk.catalog.map(markInstalled);
 	} else {
@@ -277,8 +287,7 @@ export async function doUninstall(name: string): Promise<void> {
 	if (result.success) {
 		toast(`Skill ${name} uninstalled`, "success");
 		await fetchInstalled();
-		const markUninstalled = (s: SkillSearchResult) =>
-			s.name === name ? { ...s, installed: false } : s;
+		const markUninstalled = (s: SkillSearchResult) => (s.name === name ? { ...s, installed: false } : s);
 		sk.results = sk.results.map(markUninstalled);
 		sk.catalog = sk.catalog.map(markUninstalled);
 		if (sk.selectedName === name) closeDetail();

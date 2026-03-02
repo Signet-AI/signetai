@@ -71,9 +71,11 @@ type SkillBrowseResult = {
 	fullName: string;
 	installs: string;
 	installsRaw: number;
+	popularityScore: number;
 	description: string;
 	installed: boolean;
 	provider: "skills.sh" | "clawhub";
+	category: string;
 	stars?: number;
 	downloads?: number;
 	versions?: number;
@@ -133,11 +135,7 @@ export function parseSkillFrontmatter(content: string): SkillMeta {
 		license: get("license") || undefined,
 		user_invocable: /^user_invocable:\s*true$/m.test(fm),
 		arg_hint: get("arg_hint") || undefined,
-		verified: /^verified:\s*true$/m.test(fm)
-			? true
-			: /^verified:\s*false$/m.test(fm)
-				? false
-				: undefined,
+		verified: /^verified:\s*true$/m.test(fm) ? true : /^verified:\s*false$/m.test(fm) ? false : undefined,
 		permissions: getList("permissions"),
 	};
 }
@@ -164,6 +162,32 @@ export function formatInstalls(n: number): string {
 	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
 	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
 	return String(n);
+}
+
+function inferSkillCategory(input: string): string {
+	const value = input.toLowerCase();
+	if (/ui|design|css|react|svelte|frontend/.test(value)) return "UI";
+	if (/security|auth|token|secret|vault/.test(value)) return "Security";
+	if (/database|sql|sqlite|postgres|mongo|vector/.test(value)) {
+		return "Data";
+	}
+	if (/memory|rag|search|docs|knowledge/.test(value)) return "Knowledge";
+	if (/web|browser|crawl|scrap|http/.test(value)) return "Web";
+	if (/git|ci|build|deploy|test|debug|lint/.test(value)) {
+		return "Development";
+	}
+	if (/agent|automation|workflow|task/.test(value)) return "Automation";
+	return "Other";
+}
+
+function calculateSkillPopularity(input: {
+	installsRaw: number;
+	stars?: number;
+	verified?: boolean;
+}): number {
+	const stars = input.stars ?? 0;
+	const verifiedBoost = input.verified ? 5_000 : 0;
+	return input.installsRaw + stars * 200 + verifiedBoost;
 }
 
 async function fetchCatalog(): Promise<CatalogEntry[]> {
@@ -274,9 +298,11 @@ export function mountSkillsRoutes(app: Hono): void {
 			fullName: `${s.source}@${s.skillId}`,
 			installs: formatInstalls(s.installs),
 			installsRaw: s.installs,
+			popularityScore: calculateSkillPopularity({ installsRaw: s.installs }),
 			description: "",
 			installed: installed.includes(s.name),
 			provider: "skills.sh" as const,
+			category: inferSkillCategory(`${s.name} ${s.skillId} ${s.source}`),
 			downloads: s.installs,
 			maintainer: s.source.split("/")[0] || undefined,
 		}));
@@ -286,9 +312,14 @@ export function mountSkillsRoutes(app: Hono): void {
 			fullName: `clawhub@${s.slug}`,
 			installs: formatInstalls(s.stats.installsAllTime),
 			installsRaw: s.stats.installsAllTime,
+			popularityScore: calculateSkillPopularity({
+				installsRaw: s.stats.installsAllTime,
+				stars: s.stats.stars,
+			}),
 			description: s.summary,
 			installed: installed.includes(s.slug),
 			provider: "clawhub" as const,
+			category: inferSkillCategory(`${s.slug} ${s.summary} ${s.tags.latest}`),
 			stars: s.stats.stars,
 			downloads: s.stats.downloads,
 			versions: s.stats.versions,
@@ -296,7 +327,7 @@ export function mountSkillsRoutes(app: Hono): void {
 			maintainer: s.displayName,
 		}));
 
-		const results = [...skillsShResults, ...clawhubResults].sort((a, b) => b.installsRaw - a.installsRaw);
+		const results = [...skillsShResults, ...clawhubResults].sort((a, b) => b.popularityScore - a.popularityScore);
 		return c.json({ results, total: results.length });
 	});
 
@@ -333,9 +364,11 @@ export function mountSkillsRoutes(app: Hono): void {
 						fullName: `${s.source}@${s.skillId}`,
 						installs: formatInstalls(s.installs),
 						installsRaw: s.installs,
+						popularityScore: calculateSkillPopularity({ installsRaw: s.installs }),
 						description: "",
 						installed: installed.includes(s.name),
 						provider: "skills.sh" as const,
+						category: inferSkillCategory(`${s.name} ${s.skillId} ${s.source}`),
 						downloads: s.installs,
 						maintainer: s.source.split("/")[0] || undefined,
 					}));
@@ -358,9 +391,14 @@ export function mountSkillsRoutes(app: Hono): void {
 						fullName: `clawhub@${s.slug}`,
 						installs: formatInstalls(s.stats.installsAllTime),
 						installsRaw: s.stats.installsAllTime,
+						popularityScore: calculateSkillPopularity({
+							installsRaw: s.stats.installsAllTime,
+							stars: s.stats.stars,
+						}),
 						description: s.summary,
 						installed: installed.includes(s.slug),
 						provider: "clawhub" as const,
+						category: inferSkillCategory(`${s.slug} ${s.summary} ${s.tags.latest}`),
 						stars: s.stats.stars,
 						downloads: s.stats.downloads,
 						versions: s.stats.versions,
@@ -370,7 +408,7 @@ export function mountSkillsRoutes(app: Hono): void {
 			})(),
 		]);
 
-		const results = [...skillsShResults, ...clawhubFiltered].sort((a, b) => b.installsRaw - a.installsRaw);
+		const results = [...skillsShResults, ...clawhubFiltered].sort((a, b) => b.popularityScore - a.popularityScore);
 		return c.json({ results });
 	});
 
