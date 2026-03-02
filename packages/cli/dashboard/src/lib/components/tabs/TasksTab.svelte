@@ -97,7 +97,9 @@ onMount(() => {
 			flex items-center gap-4 text-[10px] text-[var(--sig-text-muted)]
 			font-[family-name:var(--font-mono)]"
 	>
-		<span><kbd class="px-1 py-px bg-[var(--sig-surface-raised)] border border-[var(--sig-border)]">N</kbd> New</span>
+		{#if !ts.formOpen}
+			<span><kbd class="px-1 py-px bg-[var(--sig-surface-raised)] border border-[var(--sig-border)]">N</kbd> New</span>
+		{/if}
 		{#if ts.detailOpen}
 			<span><kbd class="px-1 py-px bg-[var(--sig-surface-raised)] border border-[var(--sig-border)]">R</kbd> Run</span>
 			<span><kbd class="px-1 py-px bg-[var(--sig-surface-raised)] border border-[var(--sig-border)]">D</kbd> Delete</span>
