@@ -70,8 +70,23 @@ let lastFrameTime = 0;
 let needsRedraw = true;
 let lastHoveredId: string | null = null;
 
+// Minimap state
+const MINIMAP_WIDTH = 160;
+const MINIMAP_HEIGHT = 120;
+const MINIMAP_NODE_THRESHOLD = 50;
+
+let minimapEl = $state<HTMLCanvasElement | null>(null);
+let minimapNeedsRedraw = true;
+let minimapFrameCount = 0;
+const MINIMAP_FRAME_SKIP = 4;
+
+let worldBounds = $state({ minX: -100, maxX: 100, minY: -100, maxY: 100 });
+let showMinimap = $derived(nodes.length > MINIMAP_NODE_THRESHOLD);
+let minimapDragging = false;
+
 function requestRedraw(): void {
 	needsRedraw = true;
+	minimapNeedsRedraw = true;
 	if (!animFrame) {
 		const ctx = canvas?.getContext("2d");
 		if (ctx) {
@@ -199,6 +214,164 @@ function findNodeAt(wx: number, wy: number): GraphNode | null {
 }
 
 // ---------------------------------------------------------------------------
+// World bounds (for minimap)
+// ---------------------------------------------------------------------------
+
+function computeWorldBounds(): { minX: number; maxX: number; minY: number; maxY: number } {
+	if (nodes.length === 0) {
+		return { minX: -100, maxX: 100, minY: -100, maxY: 100 };
+	}
+
+	let minX = Infinity;
+	let maxX = -Infinity;
+	let minY = Infinity;
+	let maxY = -Infinity;
+
+	for (const node of nodes) {
+		if (node.x < minX) minX = node.x;
+		if (node.x > maxX) maxX = node.x;
+		if (node.y < minY) minY = node.y;
+		if (node.y > maxY) maxY = node.y;
+	}
+
+	const rangeX = Math.max(maxX - minX, 20);
+	const rangeY = Math.max(maxY - minY, 20);
+	const padX = rangeX * 0.1;
+	const padY = rangeY * 0.1;
+
+	return {
+		minX: minX - padX,
+		maxX: maxX + padX,
+		minY: minY - padY,
+		maxY: maxY + padY,
+	};
+}
+
+$effect(() => {
+	if (nodes.length > 0) {
+		worldBounds = computeWorldBounds();
+		minimapNeedsRedraw = true;
+	}
+});
+
+// ---------------------------------------------------------------------------
+// Minimap rendering
+// ---------------------------------------------------------------------------
+
+function drawMinimap(): void {
+	if (!minimapEl || !canvas) return;
+
+	const ctx = minimapEl.getContext("2d");
+	if (!ctx) return;
+
+	const { minX, maxX, minY, maxY } = worldBounds;
+	const worldW = maxX - minX;
+	const worldH = maxY - minY;
+
+	ctx.fillStyle = "#050505";
+	ctx.fillRect(0, 0, MINIMAP_WIDTH, MINIMAP_HEIGHT);
+
+	const scaleX = (MINIMAP_WIDTH - 8) / worldW;
+	const scaleY = (MINIMAP_HEIGHT - 8) / worldH;
+	const scale = Math.min(scaleX, scaleY);
+
+	const offsetX = (MINIMAP_WIDTH - worldW * scale) / 2;
+	const offsetY = (MINIMAP_HEIGHT - worldH * scale) / 2;
+
+	ctx.fillStyle = "rgba(140, 140, 150, 0.5)";
+	for (const node of nodes) {
+		const mx = offsetX + (node.x - minX) * scale;
+		const my = offsetY + (node.y - minY) * scale;
+		ctx.fillRect(mx - 0.5, my - 0.5, 1, 1);
+	}
+
+	const vw = canvas.width / camZoom;
+	const vh = canvas.height / camZoom;
+	const vx = camX - vw / 2;
+	const vy = camY - vh / 2;
+
+	let mvx = offsetX + (vx - minX) * scale;
+	let mvy = offsetY + (vy - minY) * scale;
+	let mvw = vw * scale;
+	let mvh = vh * scale;
+
+	const margin = 2;
+	mvx = Math.max(margin, Math.min(MINIMAP_WIDTH - margin - 1, mvx));
+	mvy = Math.max(margin, Math.min(MINIMAP_HEIGHT - margin - 1, mvy));
+	mvw = Math.max(2, Math.min(MINIMAP_WIDTH - mvx - margin, mvw));
+	mvh = Math.max(2, Math.min(MINIMAP_HEIGHT - mvy - margin, mvh));
+
+	ctx.strokeStyle = "rgba(255, 255, 255, 0.75)";
+	ctx.lineWidth = 1.5;
+	ctx.strokeRect(mvx, mvy, mvw, mvh);
+
+	ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
+	ctx.fillRect(mvx, mvy, mvw, mvh);
+}
+
+// ---------------------------------------------------------------------------
+// Minimap interaction
+// ---------------------------------------------------------------------------
+
+function getMinimapClickWorldCoords(event: MouseEvent): [number, number] | null {
+	if (!minimapEl) return null;
+
+	const rect = minimapEl.getBoundingClientRect();
+	const mx = event.clientX - rect.left;
+	const my = event.clientY - rect.top;
+
+	const { minX, maxX, minY, maxY } = worldBounds;
+	const worldW = maxX - minX;
+	const worldH = maxY - minY;
+
+	const scaleX = (MINIMAP_WIDTH - 8) / worldW;
+	const scaleY = (MINIMAP_HEIGHT - 8) / worldH;
+	const scale = Math.min(scaleX, scaleY);
+
+	const offsetX = (MINIMAP_WIDTH - worldW * scale) / 2;
+	const offsetY = (MINIMAP_HEIGHT - worldH * scale) / 2;
+
+	const wx = minX + (mx - offsetX) / scale;
+	const wy = minY + (my - offsetY) / scale;
+
+	return [wx, wy];
+}
+
+function handleMinimapMouseDown(event: MouseEvent): void {
+	event.preventDefault();
+	event.stopPropagation();
+	minimapDragging = true;
+	handleMinimapNavigate(event);
+}
+
+function handleMinimapMouseMove(event: MouseEvent): void {
+	if (!minimapDragging) return;
+	handleMinimapNavigate(event);
+}
+
+function handleMinimapNavigate(event: MouseEvent): void {
+	const coords = getMinimapClickWorldCoords(event);
+	if (!coords) return;
+
+	const [wx, wy] = coords;
+	camX = wx;
+	camY = wy;
+	minimapNeedsRedraw = true;
+	needsRedraw = true;
+
+	if (!animFrame) {
+		const ctx = canvas?.getContext("2d");
+		if (ctx) {
+			animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
+		}
+	}
+}
+
+function handleMinimapMouseUp(): void {
+	minimapDragging = false;
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
@@ -296,6 +469,16 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 	}
 
 	ctx.restore();
+
+	// Draw minimap (throttled)
+	if (showMinimap) {
+		minimapFrameCount++;
+		if (minimapNeedsRedraw || minimapFrameCount >= MINIMAP_FRAME_SKIP) {
+			drawMinimap();
+			minimapNeedsRedraw = false;
+			minimapFrameCount = 0;
+		}
+	}
 
 	animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
 }
@@ -462,12 +645,47 @@ $effect(() => {
 });
 </script>
 
-<canvas bind:this={canvas} class="canvas"></canvas>
+<div class="canvas-wrapper">
+	<canvas bind:this={canvas} class="main-canvas"></canvas>
+	{#if showMinimap}
+		<canvas
+			bind:this={minimapEl}
+			width={MINIMAP_WIDTH}
+			height={MINIMAP_HEIGHT}
+			class="minimap"
+			role="img"
+			aria-label="Graph navigation minimap"
+			onmousedown={handleMinimapMouseDown}
+			onmousemove={handleMinimapMouseMove}
+			onmouseup={handleMinimapMouseUp}
+			onmouseleave={handleMinimapMouseUp}
+		></canvas>
+	{/if}
+</div>
 
 <style>
-	.canvas {
+	.canvas-wrapper {
+		position: relative;
+		width: 100%;
+		height: 100%;
+	}
+
+	.main-canvas {
+		position: absolute;
+		inset: 0;
 		width: 100%;
 		height: 100%;
 		cursor: grab;
+	}
+
+	.minimap {
+		position: absolute;
+		bottom: 12px;
+		right: 12px;
+		width: 160px;
+		height: 120px;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		cursor: crosshair;
+		z-index: 10;
 	}
 </style>
