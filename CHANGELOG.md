@@ -2,6 +2,18 @@
 
 All notable changes to Signet are documented here.
 
+## [0.16.0] - 2026-03-02
+
+### Features
+
+- **web**: add blog, architecture page, and expanded navigation
+
+### Docs
+
+- update AGENTS.md
+- comprehensive audit and update for v0.14.5 codebase
+
+
 ## [0.15.1] - 2026-03-02
 
 ### Features
