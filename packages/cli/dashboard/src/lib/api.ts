@@ -140,10 +140,7 @@ export async function getConfigFiles(): Promise<ConfigFile[]> {
 	}
 }
 
-export async function saveConfigFile(
-	file: string,
-	content: string,
-): Promise<boolean> {
+export async function saveConfigFile(file: string, content: string): Promise<boolean> {
 	const result = await saveConfigFileResult(file, content);
 	return result.ok;
 }
@@ -154,10 +151,7 @@ export interface SaveConfigResult {
 	readonly error?: string;
 }
 
-export async function saveConfigFileResult(
-	file: string,
-	content: string,
-): Promise<SaveConfigResult> {
+export async function saveConfigFileResult(file: string, content: string): Promise<SaveConfigResult> {
 	try {
 		const response = await fetch(`${API_BASE}/api/config`, {
 			method: "POST",
@@ -169,13 +163,8 @@ export async function saveConfigFileResult(
 			return { ok: true, status: response.status };
 		}
 
-		const payload = (await response.json().catch(() => null)) as
-			| { error?: unknown }
-			| null;
-		const message =
-			typeof payload?.error === "string"
-				? payload.error
-				: `HTTP ${response.status}`;
+		const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+		const message = typeof payload?.error === "string" ? payload.error : `HTTP ${response.status}`;
 		return { ok: false, status: response.status, error: message };
 	} catch (error) {
 		return {
@@ -186,14 +175,9 @@ export async function saveConfigFileResult(
 	}
 }
 
-export async function getMemories(
-	limit = 100,
-	offset = 0,
-): Promise<{ memories: Memory[]; stats: MemoryStats }> {
+export async function getMemories(limit = 100, offset = 0): Promise<{ memories: Memory[]; stats: MemoryStats }> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/memories?limit=${limit}&offset=${offset}`,
-		);
+		const response = await fetch(`${API_BASE}/api/memories?limit=${limit}&offset=${offset}`);
 		if (!response.ok) throw new Error("Failed to fetch memories");
 		return await response.json();
 	} catch {
@@ -223,8 +207,7 @@ export async function searchMemories(
 		if (filters.tags) params.set("tags", filters.tags);
 		if (filters.who) params.set("who", filters.who);
 		if (filters.pinned) params.set("pinned", "1");
-		if (filters.importance_min !== undefined)
-			params.set("importance_min", filters.importance_min.toString());
+		if (filters.importance_min !== undefined) params.set("importance_min", filters.importance_min.toString());
 		if (filters.since) params.set("since", filters.since);
 		if (filters.limit) params.set("limit", filters.limit.toString());
 
@@ -284,11 +267,7 @@ export async function getDistinctWho(): Promise<string[]> {
 	}
 }
 
-export async function getSimilarMemories(
-	id: string,
-	k = 10,
-	type?: string,
-): Promise<Memory[]> {
+export async function getSimilarMemories(id: string, k = 10, type?: string): Promise<Memory[]> {
 	try {
 		const params = new URLSearchParams({ id, k: k.toString() });
 		if (type) params.set("type", type);
@@ -302,32 +281,20 @@ export async function getSimilarMemories(
 	}
 }
 
-export async function setMemoryPinned(
-	id: string,
-	pinned: boolean,
-): Promise<{ success: boolean; error?: string }> {
+export async function setMemoryPinned(id: string, pinned: boolean): Promise<{ success: boolean; error?: string }> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/memory/${encodeURIComponent(id)}`,
-			{
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					pinned,
-					reason: "dashboard: embeddings pin toggle",
-					changed_by: "dashboard",
-				}),
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/memory/${encodeURIComponent(id)}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				pinned,
+				reason: "dashboard: embeddings pin toggle",
+				changed_by: "dashboard",
+			}),
+		});
 		if (!response.ok) {
-			const body = (await response.json().catch(() => ({}))) as Record<
-				string,
-				unknown
-			>;
-			const error =
-				typeof body.error === "string"
-					? body.error
-					: `Request failed (${response.status})`;
+			const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+			const error = typeof body.error === "string" ? body.error : `Request failed (${response.status})`;
 			return { success: false, error };
 		}
 		return { success: true };
@@ -348,27 +315,18 @@ export async function updateMemory(
 	reason: string,
 ): Promise<{ success: boolean; error?: string }> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/memory/${encodeURIComponent(id)}`,
-			{
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					...updates,
-					reason,
-					changed_by: "dashboard",
-				}),
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/memory/${encodeURIComponent(id)}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				...updates,
+				reason,
+				changed_by: "dashboard",
+			}),
+		});
 		if (!response.ok) {
-			const body = (await response.json().catch(() => ({}))) as Record<
-				string,
-				unknown
-			>;
-			const error =
-				typeof body.error === "string"
-					? body.error
-					: `Request failed (${response.status})`;
+			const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+			const error = typeof body.error === "string" ? body.error : `Request failed (${response.status})`;
 			return { success: false, error };
 		}
 		return { success: true };
@@ -383,26 +341,17 @@ export async function deleteMemory(
 	force = false,
 ): Promise<{ success: boolean; error?: string }> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/memory/${encodeURIComponent(id)}`,
-			{
-				method: "DELETE",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					reason,
-					force,
-				}),
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/memory/${encodeURIComponent(id)}`, {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				reason,
+				force,
+			}),
+		});
 		if (!response.ok) {
-			const body = (await response.json().catch(() => ({}))) as Record<
-				string,
-				unknown
-			>;
-			const rawError =
-				typeof body.error === "string"
-					? body.error
-					: `Request failed (${response.status})`;
+			const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+			const rawError = typeof body.error === "string" ? body.error : `Request failed (${response.status})`;
 			// Handle 409 "already deleted" as success (memory is already gone)
 			const status = typeof body.status === "string" ? body.status : "";
 			if (response.status === 409 && status === "already_deleted") {
@@ -441,12 +390,8 @@ export async function getEmbeddings(
 			embeddings,
 			count: typeof data.count === "number" ? data.count : embeddings.length,
 			total: typeof data.total === "number" ? data.total : embeddings.length,
-			limit:
-				typeof data.limit === "number"
-					? data.limit
-					: (options.limit ?? embeddings.length),
-			offset:
-				typeof data.offset === "number" ? data.offset : (options.offset ?? 0),
+			limit: typeof data.limit === "number" ? data.limit : (options.limit ?? embeddings.length),
+			offset: typeof data.offset === "number" ? data.offset : (options.offset ?? 0),
 			hasMore: Boolean(data.hasMore),
 			error: typeof data.error === "string" ? data.error : undefined,
 		};
@@ -514,43 +459,26 @@ export async function getProjection(
 ): Promise<ProjectionResponse> {
 	try {
 		const params = new URLSearchParams({ dimensions: String(dimensions) });
-		if (typeof options.limit === "number")
-			params.set("limit", String(options.limit));
-		if (typeof options.offset === "number")
-			params.set("offset", String(options.offset));
-		if (typeof options.q === "string" && options.q.trim().length > 0)
-			params.set("q", options.q.trim());
-		if (Array.isArray(options.who) && options.who.length > 0)
-			params.set("who", options.who.join(","));
-		if (Array.isArray(options.types) && options.types.length > 0)
-			params.set("types", options.types.join(","));
-		if (
-			Array.isArray(options.sourceTypes) &&
-			options.sourceTypes.length > 0
-		) {
+		if (typeof options.limit === "number") params.set("limit", String(options.limit));
+		if (typeof options.offset === "number") params.set("offset", String(options.offset));
+		if (typeof options.q === "string" && options.q.trim().length > 0) params.set("q", options.q.trim());
+		if (Array.isArray(options.who) && options.who.length > 0) params.set("who", options.who.join(","));
+		if (Array.isArray(options.types) && options.types.length > 0) params.set("types", options.types.join(","));
+		if (Array.isArray(options.sourceTypes) && options.sourceTypes.length > 0) {
 			params.set("sourceTypes", options.sourceTypes.join(","));
 		}
-		if (Array.isArray(options.tags) && options.tags.length > 0)
-			params.set("tags", options.tags.join(","));
-		if (typeof options.pinned === "boolean")
-			params.set("pinned", options.pinned ? "1" : "0");
-		if (typeof options.since === "string" && options.since.length > 0)
-			params.set("since", options.since);
-		if (typeof options.until === "string" && options.until.length > 0)
-			params.set("until", options.until);
-		if (typeof options.importanceMin === "number")
-			params.set("importanceMin", String(options.importanceMin));
-		if (typeof options.importanceMax === "number")
-			params.set("importanceMax", String(options.importanceMax));
+		if (Array.isArray(options.tags) && options.tags.length > 0) params.set("tags", options.tags.join(","));
+		if (typeof options.pinned === "boolean") params.set("pinned", options.pinned ? "1" : "0");
+		if (typeof options.since === "string" && options.since.length > 0) params.set("since", options.since);
+		if (typeof options.until === "string" && options.until.length > 0) params.set("until", options.until);
+		if (typeof options.importanceMin === "number") params.set("importanceMin", String(options.importanceMin));
+		if (typeof options.importanceMax === "number") params.set("importanceMax", String(options.importanceMax));
 
-		const response = await fetch(
-			`${API_BASE}/api/embeddings/projection?${params}`,
-		);
+		const response = await fetch(`${API_BASE}/api/embeddings/projection?${params}`);
 		if (response.status === 202) return { status: "computing" };
 		if (!response.ok) {
 			const body = await response.json().catch(() => ({}));
-			const msg =
-				(body as Record<string, unknown>).message ?? `HTTP ${response.status}`;
+			const msg = (body as Record<string, unknown>).message ?? `HTTP ${response.status}`;
 			return { status: "error", message: String(msg) };
 		}
 		return await response.json();
@@ -684,14 +612,11 @@ export async function getSecrets(): Promise<string[]> {
 
 export async function putSecret(name: string, value: string): Promise<boolean> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/secrets/${encodeURIComponent(name)}`,
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ value }),
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/secrets/${encodeURIComponent(name)}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ value }),
+		});
 		return response.ok;
 	} catch {
 		return false;
@@ -700,12 +625,9 @@ export async function putSecret(name: string, value: string): Promise<boolean> {
 
 export async function deleteSecret(name: string): Promise<boolean> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/secrets/${encodeURIComponent(name)}`,
-			{
-				method: "DELETE",
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/secrets/${encodeURIComponent(name)}`, {
+			method: "DELETE",
+		});
 		return response.ok;
 	} catch {
 		return false;
@@ -734,9 +656,11 @@ export interface SkillSearchResult {
 	fullName: string;
 	installs: string;
 	installsRaw?: number;
+	popularityScore?: number;
 	description: string;
 	installed: boolean;
 	provider?: "skills.sh" | "clawhub";
+	category?: string;
 	stars?: number;
 	downloads?: number;
 	versions?: number;
@@ -761,15 +685,10 @@ export async function getSkills(): Promise<Skill[]> {
 	}
 }
 
-export async function getSkill(
-	name: string,
-	source?: string,
-): Promise<Skill | null> {
+export async function getSkill(name: string, source?: string): Promise<Skill | null> {
 	try {
 		const params = source ? `?source=${encodeURIComponent(source)}` : "";
-		const response = await fetch(
-			`${API_BASE}/api/skills/${encodeURIComponent(name)}${params}`,
-		);
+		const response = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}${params}`);
 		if (!response.ok) return null;
 		return await response.json();
 	} catch {
@@ -777,13 +696,9 @@ export async function getSkill(
 	}
 }
 
-export async function searchSkills(
-	query: string,
-): Promise<SkillSearchResult[]> {
+export async function searchSkills(query: string): Promise<SkillSearchResult[]> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/skills/search?q=${encodeURIComponent(query)}`,
-		);
+		const response = await fetch(`${API_BASE}/api/skills/search?q=${encodeURIComponent(query)}`);
 		if (!response.ok) throw new Error("Search failed");
 		const data = await response.json();
 		return data.results || [];
@@ -805,10 +720,7 @@ export async function browseSkills(): Promise<{
 	}
 }
 
-export async function installSkill(
-	name: string,
-	source?: string,
-): Promise<{ success: boolean; error?: string }> {
+export async function installSkill(name: string, source?: string): Promise<{ success: boolean; error?: string }> {
 	try {
 		const response = await fetch(`${API_BASE}/api/skills/install`, {
 			method: "POST",
@@ -821,16 +733,237 @@ export async function installSkill(
 	}
 }
 
-export async function uninstallSkill(
-	name: string,
-): Promise<{ success: boolean; error?: string }> {
+export async function uninstallSkill(name: string): Promise<{ success: boolean; error?: string }> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/skills/${encodeURIComponent(name)}`,
-			{
-				method: "DELETE",
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/skills/${encodeURIComponent(name)}`, {
+			method: "DELETE",
+		});
+		return await response.json();
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
+// ============================================================================
+// Marketplace MCP API
+// ============================================================================
+
+export type MarketplaceMcpTransport = "stdio" | "http";
+
+export interface MarketplaceMcpConfigStdio {
+	transport: "stdio";
+	command: string;
+	args: string[];
+	env: Record<string, string>;
+	cwd?: string;
+	timeoutMs: number;
+}
+
+export interface MarketplaceMcpConfigHttp {
+	transport: "http";
+	url: string;
+	headers: Record<string, string>;
+	timeoutMs: number;
+}
+
+export type MarketplaceMcpConfig = MarketplaceMcpConfigStdio | MarketplaceMcpConfigHttp;
+
+export interface MarketplaceMcpServer {
+	id: string;
+	source: "mcpservers.org" | "modelcontextprotocol/servers" | "manual";
+	catalogId?: string;
+	name: string;
+	description: string;
+	category: string;
+	homepage?: string;
+	official: boolean;
+	enabled: boolean;
+	config: MarketplaceMcpConfig;
+	installedAt: string;
+	updatedAt: string;
+}
+
+export interface MarketplaceMcpCatalogEntry {
+	id: string;
+	source: "mcpservers.org" | "modelcontextprotocol/servers";
+	catalogId: string;
+	name: string;
+	description: string;
+	category: string;
+	official: boolean;
+	sponsor: boolean;
+	popularityRank: number;
+	sourceUrl: string;
+	installed: boolean;
+}
+
+export interface MarketplaceMcpTool {
+	id: string;
+	serverId: string;
+	serverName: string;
+	toolName: string;
+	description: string;
+	readOnly: boolean;
+	inputSchema: unknown;
+}
+
+export interface MarketplaceMcpServerHealth {
+	serverId: string;
+	serverName: string;
+	ok: boolean;
+	toolCount: number;
+	error?: string;
+}
+
+export async function getMarketplaceMcpServers(): Promise<{
+	servers: MarketplaceMcpServer[];
+	count: number;
+}> {
+	try {
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp`);
+		if (!response.ok) throw new Error("Failed to fetch MCP servers");
+		return await response.json();
+	} catch {
+		return { servers: [], count: 0 };
+	}
+}
+
+export async function browseMarketplaceMcpServers(pages = 5): Promise<{
+	total: number;
+	shown: number;
+	pageSize: number;
+	pages: number;
+	results: MarketplaceMcpCatalogEntry[];
+}> {
+	try {
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/browse?pages=${encodeURIComponent(String(pages))}`);
+		if (!response.ok) throw new Error("Failed to browse MCP catalog");
+		return await response.json();
+	} catch {
+		return { total: 0, shown: 0, pageSize: 30, pages: 0, results: [] };
+	}
+}
+
+export async function getMarketplaceMcpDetail(
+	id: string,
+	source?: "mcpservers.org" | "modelcontextprotocol/servers",
+): Promise<{
+	id: string;
+	source: "mcpservers.org" | "modelcontextprotocol/servers";
+	name: string;
+	description: string;
+	githubUrl?: string;
+	defaultConfig: MarketplaceMcpConfig | null;
+} | null> {
+	try {
+		const params = new URLSearchParams({ id });
+		if (source) params.set("source", source);
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/detail?${params}`);
+		if (!response.ok) return null;
+		return await response.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function installMarketplaceMcpServer(input: {
+	id: string;
+	source?: "mcpservers.org" | "modelcontextprotocol/servers";
+	alias?: string;
+	config?: MarketplaceMcpConfig;
+}): Promise<{ success: boolean; server?: MarketplaceMcpServer; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/install`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(input),
+		});
+		return await response.json();
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
+export async function registerMarketplaceMcpServer(input: {
+	name: string;
+	description?: string;
+	category?: string;
+	config: MarketplaceMcpConfig;
+}): Promise<{ success: boolean; server?: MarketplaceMcpServer; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/register`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(input),
+		});
+		return await response.json();
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
+export async function updateMarketplaceMcpServer(
+	id: string,
+	input: Partial<{
+		enabled: boolean;
+		name: string;
+		description: string;
+		config: MarketplaceMcpConfig;
+	}>,
+): Promise<{ success: boolean; server?: MarketplaceMcpServer; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/${encodeURIComponent(id)}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(input),
+		});
+		return await response.json();
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
+export async function deleteMarketplaceMcpServer(
+	id: string,
+): Promise<{ success: boolean; id?: string; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/${encodeURIComponent(id)}`, { method: "DELETE" });
+		return await response.json();
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
+export async function getMarketplaceMcpTools(refresh = false): Promise<{
+	count: number;
+	tools: MarketplaceMcpTool[];
+	servers: MarketplaceMcpServerHealth[];
+}> {
+	try {
+		const qs = refresh ? "?refresh=1" : "";
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/tools${qs}`);
+		if (!response.ok) throw new Error("Failed to fetch tool catalog");
+		return await response.json();
+	} catch {
+		return { count: 0, tools: [], servers: [] };
+	}
+}
+
+export async function testMarketplaceMcpConfig(input: {
+	config: MarketplaceMcpConfig;
+}): Promise<{
+	success: boolean;
+	toolCount?: number;
+	tools?: string[];
+	latencyMs?: number;
+	error?: string;
+}> {
+	try {
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/test`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(input),
+		});
 		return await response.json();
 	} catch (e) {
 		return { success: false, error: String(e) };
@@ -887,13 +1020,9 @@ export async function getTasks(): Promise<{
 	}
 }
 
-export async function getTask(
-	id: string,
-): Promise<{ task: ScheduledTask; runs: TaskRun[] } | null> {
+export async function getTask(id: string): Promise<{ task: ScheduledTask; runs: TaskRun[] } | null> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
-		);
+		const response = await fetch(`${API_BASE}/api/tasks/${encodeURIComponent(id)}`);
 		if (!response.ok) return null;
 		return await response.json();
 	} catch {
@@ -932,46 +1061,33 @@ export async function updateTask(
 	}>,
 ): Promise<{ success?: boolean; error?: string }> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
-			{
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(data),
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/tasks/${encodeURIComponent(id)}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(data),
+		});
 		return await response.json();
 	} catch (e) {
 		return { error: String(e) };
 	}
 }
 
-export async function deleteTask(
-	id: string,
-): Promise<{ success?: boolean; error?: string }> {
+export async function deleteTask(id: string): Promise<{ success?: boolean; error?: string }> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/tasks/${encodeURIComponent(id)}`,
-			{
-				method: "DELETE",
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/tasks/${encodeURIComponent(id)}`, {
+			method: "DELETE",
+		});
 		return await response.json();
 	} catch (e) {
 		return { error: String(e) };
 	}
 }
 
-export async function triggerTaskRun(
-	id: string,
-): Promise<{ runId?: string; error?: string }> {
+export async function triggerTaskRun(id: string): Promise<{ runId?: string; error?: string }> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/tasks/${encodeURIComponent(id)}/run`,
-			{
-				method: "POST",
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/tasks/${encodeURIComponent(id)}/run`, {
+			method: "POST",
+		});
 		return await response.json();
 	} catch (e) {
 		return { error: String(e) };

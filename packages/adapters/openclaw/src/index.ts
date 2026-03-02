@@ -10,10 +10,7 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type {
-	OpenClawPluginApi,
-	OpenClawToolResult,
-} from "./openclaw-types.js";
+import type { OpenClawPluginApi, OpenClawToolResult } from "./openclaw-types.js";
 
 const DEFAULT_DAEMON_URL = "http://localhost:3850";
 const RUNTIME_PATH = "plugin" as const;
@@ -109,6 +106,28 @@ interface RecallResult {
 	created_at: string;
 }
 
+interface MarketplaceToolEntry {
+	id: string;
+	serverId: string;
+	serverName: string;
+	toolName: string;
+	description: string;
+	readOnly: boolean;
+	inputSchema: unknown;
+}
+
+interface MarketplaceToolCatalog {
+	count: number;
+	tools: MarketplaceToolEntry[];
+	servers: Array<{
+		serverId: string;
+		serverName: string;
+		ok: boolean;
+		toolCount: number;
+		error?: string;
+	}>;
+}
+
 // ============================================================================
 // Shared fetch helper
 // ============================================================================
@@ -162,9 +181,7 @@ async function daemonFetch<T>(
 // Health check
 // ============================================================================
 
-export async function isDaemonRunning(
-	daemonUrl = DEFAULT_DAEMON_URL,
-): Promise<boolean> {
+export async function isDaemonRunning(daemonUrl = DEFAULT_DAEMON_URL): Promise<boolean> {
 	try {
 		const res = await fetch(`${daemonUrl}/health`, {
 			signal: AbortSignal.timeout(1000),
@@ -188,21 +205,17 @@ export async function onSessionStart(
 		sessionKey?: string;
 	} = {},
 ): Promise<SessionStartResult | null> {
-	return daemonFetch(
-		options.daemonUrl || DEFAULT_DAEMON_URL,
-		"/api/hooks/session-start",
-		{
-			method: "POST",
-			body: {
-				harness,
-				agentId: options.agentId,
-				context: options.context,
-				sessionKey: options.sessionKey,
-				runtimePath: RUNTIME_PATH,
-			},
-			timeout: READ_TIMEOUT,
+	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-start", {
+		method: "POST",
+		body: {
+			harness,
+			agentId: options.agentId,
+			context: options.context,
+			sessionKey: options.sessionKey,
+			runtimePath: RUNTIME_PATH,
 		},
-	);
+		timeout: READ_TIMEOUT,
+	});
 }
 
 export async function onUserPromptSubmit(
@@ -214,21 +227,17 @@ export async function onUserPromptSubmit(
 		project?: string;
 	},
 ): Promise<UserPromptSubmitResult | null> {
-	return daemonFetch(
-		options.daemonUrl || DEFAULT_DAEMON_URL,
-		"/api/hooks/user-prompt-submit",
-		{
-			method: "POST",
-			body: {
-				harness,
-				userPrompt: options.userPrompt,
-				sessionKey: options.sessionKey,
-				project: options.project,
-				runtimePath: RUNTIME_PATH,
-			},
-			timeout: READ_TIMEOUT,
+	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/user-prompt-submit", {
+		method: "POST",
+		body: {
+			harness,
+			userPrompt: options.userPrompt,
+			sessionKey: options.sessionKey,
+			project: options.project,
+			runtimePath: RUNTIME_PATH,
 		},
-	);
+		timeout: READ_TIMEOUT,
+	});
 }
 
 export async function onPreCompaction(
@@ -240,21 +249,17 @@ export async function onPreCompaction(
 		sessionKey?: string;
 	} = {},
 ): Promise<PreCompactionResult | null> {
-	return daemonFetch(
-		options.daemonUrl || DEFAULT_DAEMON_URL,
-		"/api/hooks/pre-compaction",
-		{
-			method: "POST",
-			body: {
-				harness,
-				sessionContext: options.sessionContext,
-				messageCount: options.messageCount,
-				sessionKey: options.sessionKey,
-				runtimePath: RUNTIME_PATH,
-			},
-			timeout: READ_TIMEOUT,
+	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/pre-compaction", {
+		method: "POST",
+		body: {
+			harness,
+			sessionContext: options.sessionContext,
+			messageCount: options.messageCount,
+			sessionKey: options.sessionKey,
+			runtimePath: RUNTIME_PATH,
 		},
-	);
+		timeout: READ_TIMEOUT,
+	});
 }
 
 export async function onCompactionComplete(
@@ -293,23 +298,19 @@ export async function onSessionEnd(
 		reason?: string;
 	} = {},
 ): Promise<SessionEndResult | null> {
-	return daemonFetch(
-		options.daemonUrl || DEFAULT_DAEMON_URL,
-		"/api/hooks/session-end",
-		{
-			method: "POST",
-			body: {
-				harness,
-				transcriptPath: options.transcriptPath,
-				sessionKey: options.sessionKey,
-				sessionId: options.sessionId,
-				cwd: options.cwd,
-				reason: options.reason,
-				runtimePath: RUNTIME_PATH,
-			},
-			timeout: WRITE_TIMEOUT,
+	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-end", {
+		method: "POST",
+		body: {
+			harness,
+			transcriptPath: options.transcriptPath,
+			sessionKey: options.sessionKey,
+			sessionId: options.sessionId,
+			cwd: options.cwd,
+			reason: options.reason,
+			runtimePath: RUNTIME_PATH,
 		},
-	);
+		timeout: WRITE_TIMEOUT,
+	});
 }
 
 // ============================================================================
@@ -326,20 +327,16 @@ export async function memorySearch(
 	} = {},
 ): Promise<RecallResult[]> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<{ results: RecallResult[] }>(
-		daemonUrl,
-		"/api/memory/recall",
-		{
-			method: "POST",
-			body: {
-				query,
-				limit: options.limit || 10,
-				type: options.type,
-				min_score: options.minScore,
-			},
-			timeout: READ_TIMEOUT,
+	const result = await daemonFetch<{ results: RecallResult[] }>(daemonUrl, "/api/memory/recall", {
+		method: "POST",
+		body: {
+			query,
+			limit: options.limit || 10,
+			type: options.type,
+			min_score: options.minScore,
 		},
-	);
+		timeout: READ_TIMEOUT,
+	});
 	return result?.results || [];
 }
 
@@ -354,34 +351,23 @@ export async function memoryStore(
 	} = {},
 ): Promise<string | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<{ id?: string; memoryId?: string }>(
-		daemonUrl,
-		"/api/memory/remember",
-		{
-			method: "POST",
-			body: {
-				content,
-				type: options.type,
-				importance: options.importance,
-				tags: options.tags,
-				who: options.who || "openclaw",
-			},
-			timeout: WRITE_TIMEOUT,
+	const result = await daemonFetch<{ id?: string; memoryId?: string }>(daemonUrl, "/api/memory/remember", {
+		method: "POST",
+		body: {
+			content,
+			type: options.type,
+			importance: options.importance,
+			tags: options.tags,
+			who: options.who || "openclaw",
 		},
-	);
+		timeout: WRITE_TIMEOUT,
+	});
 	return result?.id || result?.memoryId || null;
 }
 
-export async function memoryGet(
-	id: string,
-	options: { daemonUrl?: string } = {},
-): Promise<MemoryRecord | null> {
+export async function memoryGet(id: string, options: { daemonUrl?: string } = {}): Promise<MemoryRecord | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	return daemonFetch<MemoryRecord>(
-		daemonUrl,
-		`/api/memory/${encodeURIComponent(id)}`,
-		{ timeout: READ_TIMEOUT },
-	);
+	return daemonFetch<MemoryRecord>(daemonUrl, `/api/memory/${encodeURIComponent(id)}`, { timeout: READ_TIMEOUT });
 }
 
 export async function memoryList(
@@ -422,15 +408,11 @@ export async function memoryModify(
 	options: { daemonUrl?: string } = {},
 ): Promise<boolean> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<{ success?: boolean }>(
-		daemonUrl,
-		`/api/memory/${encodeURIComponent(id)}`,
-		{
-			method: "PATCH",
-			body: patch,
-			timeout: WRITE_TIMEOUT,
-		},
-	);
+	const result = await daemonFetch<{ success?: boolean }>(daemonUrl, `/api/memory/${encodeURIComponent(id)}`, {
+		method: "PATCH",
+		body: patch,
+		timeout: WRITE_TIMEOUT,
+	});
 	return result?.success === true;
 }
 
@@ -456,6 +438,39 @@ export async function memoryForget(
 		},
 	);
 	return result?.success === true;
+}
+
+export async function marketplaceToolList(
+	options: {
+		daemonUrl?: string;
+		refresh?: boolean;
+	} = {},
+): Promise<MarketplaceToolCatalog | null> {
+	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
+	const path = options.refresh ? "/api/marketplace/mcp/tools?refresh=1" : "/api/marketplace/mcp/tools";
+	return daemonFetch<MarketplaceToolCatalog>(daemonUrl, path, {
+		timeout: READ_TIMEOUT,
+	});
+}
+
+export async function marketplaceToolCall(
+	serverId: string,
+	toolName: string,
+	args: Record<string, unknown>,
+	options: {
+		daemonUrl?: string;
+	} = {},
+): Promise<{ success: boolean; result?: unknown; error?: string } | null> {
+	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
+	return daemonFetch<{ success: boolean; result?: unknown; error?: string }>(daemonUrl, "/api/marketplace/mcp/call", {
+		method: "POST",
+		body: {
+			serverId,
+			toolName,
+			args,
+		},
+		timeout: WRITE_TIMEOUT,
+	});
 }
 
 // ============================================================================
@@ -499,10 +514,7 @@ const signetConfigSchema = {
 		const cfg = value as Record<string, unknown>;
 		return {
 			enabled: cfg.enabled !== false,
-			daemonUrl:
-				typeof cfg.daemonUrl === "string"
-					? cfg.daemonUrl
-					: DEFAULT_DAEMON_URL,
+			daemonUrl: typeof cfg.daemonUrl === "string" ? cfg.daemonUrl : DEFAULT_DAEMON_URL,
 		};
 	},
 };
@@ -511,10 +523,7 @@ const signetConfigSchema = {
 // Tool result helpers
 // ============================================================================
 
-function textResult(
-	text: string,
-	details?: Record<string, unknown>,
-): OpenClawToolResult {
+function textResult(text: string, details?: Record<string, unknown>): OpenClawToolResult {
 	return {
 		content: [{ type: "text", text }],
 		...(details ? { details } : {}),
@@ -528,8 +537,7 @@ function textResult(
 const signetPlugin = {
 	id: "signet-memory-openclaw",
 	name: "Signet Memory",
-	description:
-		"Signet agent memory — persistent, searchable, identity-aware memory for AI agents",
+	description: "Signet agent memory — persistent, searchable, identity-aware memory for AI agents",
 	kind: "memory" as const,
 	configSchema: signetConfigSchema,
 
@@ -549,8 +557,7 @@ const signetPlugin = {
 			daemonReachable = ok;
 			if (!ok) {
 				api.logger.warn(
-					`signet-memory: daemon unreachable at ${daemonUrl}. ` +
-						`Memory tools will silently no-op until daemon is running.`,
+					`signet-memory: daemon unreachable at ${daemonUrl}. Memory tools will silently no-op until daemon is running.`,
 				);
 			}
 		});
@@ -563,8 +570,7 @@ const signetPlugin = {
 			{
 				name: "memory_search",
 				label: "Memory Search",
-				description:
-					"Search memories using hybrid vector + keyword search",
+				description: "Search memories using hybrid vector + keyword search",
 				parameters: Type.Object({
 					query: Type.String({ description: "Search query text" }),
 					limit: Type.Optional(
@@ -603,20 +609,14 @@ const signetPlugin = {
 							});
 						}
 						const text = results
-							.map(
-								(r, i) =>
-									`${i + 1}. ${r.content} (score: ${((r.score ?? 0) * 100).toFixed(0)}%, id: ${r.id})`,
-							)
+							.map((r, i) => `${i + 1}. ${r.content} (score: ${((r.score ?? 0) * 100).toFixed(0)}%, id: ${r.id})`)
 							.join("\n");
-						return textResult(
-							`Found ${results.length} memories:\n\n${text}`,
-							{ count: results.length, memories: results },
-						);
+						return textResult(`Found ${results.length} memories:\n\n${text}`, {
+							count: results.length,
+							memories: results,
+						});
 					} catch (err) {
-						return textResult(
-							`Memory search failed: ${String(err)}`,
-							{ error: String(err) },
-						);
+						return textResult(`Memory search failed: ${String(err)}`, { error: String(err) });
 					}
 				},
 			},
@@ -634,8 +634,7 @@ const signetPlugin = {
 					}),
 					type: Type.Optional(
 						Type.String({
-							description:
-								"Memory type (fact, preference, decision, etc.)",
+							description: "Memory type (fact, preference, decision, etc.)",
 						}),
 					),
 					importance: Type.Optional(
@@ -645,8 +644,7 @@ const signetPlugin = {
 					),
 					tags: Type.Optional(
 						Type.String({
-							description:
-								"Comma-separated tags for categorization",
+							description: "Comma-separated tags for categorization",
 						}),
 					),
 				}),
@@ -662,24 +660,16 @@ const signetPlugin = {
 							...opts,
 							type,
 							importance,
-							tags: tags
-								? tags.split(",").map((t) => t.trim())
-								: undefined,
+							tags: tags ? tags.split(",").map((t) => t.trim()) : undefined,
 						});
 						if (id) {
-							return textResult(
-								`Memory saved successfully (id: ${id})`,
-								{ id },
-							);
+							return textResult(`Memory saved successfully (id: ${id})`, { id });
 						}
 						return textResult("Failed to save memory.", {
 							error: "no id returned",
 						});
 					} catch (err) {
-						return textResult(
-							`Memory store failed: ${String(err)}`,
-							{ error: String(err) },
-						);
+						return textResult(`Memory store failed: ${String(err)}`, { error: String(err) });
 					}
 				},
 			},
@@ -709,10 +699,7 @@ const signetPlugin = {
 							error: "not found",
 						});
 					} catch (err) {
-						return textResult(
-							`Memory get failed: ${String(err)}`,
-							{ error: String(err) },
-						);
+						return textResult(`Memory get failed: ${String(err)}`, { error: String(err) });
 					}
 				},
 			},
@@ -730,9 +717,7 @@ const signetPlugin = {
 							description: "Max results (default 50, max 50)",
 						}),
 					),
-					offset: Type.Optional(
-						Type.Number({ description: "Pagination offset" }),
-					),
+					offset: Type.Optional(Type.Number({ description: "Pagination offset" })),
 					type: Type.Optional(
 						Type.String({
 							description: "Filter by memory type",
@@ -758,27 +743,19 @@ const signetPlugin = {
 						let totalChars = 0;
 						for (const m of result.memories) {
 							const content =
-								m.content.length > ITEM_CHAR_LIMIT
-									? `${m.content.slice(0, ITEM_CHAR_LIMIT)}[truncated]`
-									: m.content;
+								m.content.length > ITEM_CHAR_LIMIT ? `${m.content.slice(0, ITEM_CHAR_LIMIT)}[truncated]` : m.content;
 							const line = `- [${m.type}] ${content} (id: ${m.id})`;
 							if (totalChars + line.length > TOTAL_CHAR_BUDGET) break;
 							lines.push(line);
 							totalChars += line.length;
 						}
-						return textResult(
-							`${lines.length} of ${result.memories.length} memories:\n\n${lines.join("\n")}`,
-							{
-								count: result.memories.length,
-								shown: lines.length,
-								stats: result.stats,
-							},
-						);
+						return textResult(`${lines.length} of ${result.memories.length} memories:\n\n${lines.join("\n")}`, {
+							count: result.memories.length,
+							shown: lines.length,
+							stats: result.stats,
+						});
 					} catch (err) {
-						return textResult(
-							`Memory list failed: ${String(err)}`,
-							{ error: String(err) },
-						);
+						return textResult(`Memory list failed: ${String(err)}`, { error: String(err) });
 					}
 				},
 			},
@@ -797,15 +774,9 @@ const signetPlugin = {
 					reason: Type.String({
 						description: "Why this edit is being made",
 					}),
-					content: Type.Optional(
-						Type.String({ description: "New content" }),
-					),
-					type: Type.Optional(
-						Type.String({ description: "New type" }),
-					),
-					importance: Type.Optional(
-						Type.Number({ description: "New importance" }),
-					),
+					content: Type.Optional(Type.String({ description: "New content" })),
+					type: Type.Optional(Type.String({ description: "New type" })),
+					importance: Type.Optional(Type.Number({ description: "New importance" })),
 					tags: Type.Optional(
 						Type.String({
 							description: "New tags (comma-separated)",
@@ -813,32 +784,19 @@ const signetPlugin = {
 					),
 				}),
 				async execute(_toolCallId, params) {
-					const { id, reason, content, type, importance, tags } =
-						params as {
-							id: string;
-							reason: string;
-							content?: string;
-							type?: string;
-							importance?: number;
-							tags?: string;
-						};
+					const { id, reason, content, type, importance, tags } = params as {
+						id: string;
+						reason: string;
+						content?: string;
+						type?: string;
+						importance?: number;
+						tags?: string;
+					};
 					try {
-						const ok = await memoryModify(
-							id,
-							{ content, type, importance, tags, reason },
-							opts,
-						);
-						return textResult(
-							ok
-								? `Memory ${id} updated.`
-								: `Failed to update memory ${id}.`,
-							{ success: ok },
-						);
+						const ok = await memoryModify(id, { content, type, importance, tags, reason }, opts);
+						return textResult(ok ? `Memory ${id} updated.` : `Failed to update memory ${id}.`, { success: ok });
 					} catch (err) {
-						return textResult(
-							`Memory modify failed: ${String(err)}`,
-							{ error: String(err) },
-						);
+						return textResult(`Memory modify failed: ${String(err)}`, { error: String(err) });
 					}
 				},
 			},
@@ -868,82 +826,145 @@ const signetPlugin = {
 							...opts,
 							reason,
 						});
-						return textResult(
-							ok
-								? `Memory ${id} forgotten.`
-								: `Failed to forget memory ${id}.`,
-							{ success: ok },
-						);
+						return textResult(ok ? `Memory ${id} forgotten.` : `Failed to forget memory ${id}.`, { success: ok });
 					} catch (err) {
-						return textResult(
-							`Memory forget failed: ${String(err)}`,
-							{ error: String(err) },
-						);
+						return textResult(`Memory forget failed: ${String(err)}`, { error: String(err) });
 					}
 				},
 			},
 			{ name: "memory_forget" },
 		);
 
+		api.registerTool(
+			{
+				name: "mcp_server_list",
+				label: "Tool Server List",
+				description: "List installed external Tool Servers (MCP) and discover routed tools.",
+				parameters: Type.Object({
+					refresh: Type.Optional(
+						Type.Boolean({
+							description: "Refresh live tool catalogs",
+						}),
+					),
+				}),
+				async execute(_toolCallId, params) {
+					const refresh = (params as { refresh?: boolean }).refresh;
+					try {
+						const result = await marketplaceToolList({
+							...opts,
+							refresh,
+						});
+						if (!result) {
+							return textResult("Failed to load Tool Server catalog.", {
+								error: "daemon unavailable",
+							});
+						}
+
+						const lines = result.tools
+							.slice(0, 30)
+							.map((tool) => `${tool.serverId}:${tool.toolName} - ${tool.description}`);
+
+						return textResult(
+							result.tools.length > 0
+								? `Available routed tools (${result.tools.length}):\n\n${lines.join("\n")}`
+								: "No routed tool server tools are currently available.",
+							{
+								count: result.count,
+								servers: result.servers,
+								tools: result.tools,
+							},
+						);
+					} catch (err) {
+						return textResult(`Tool server list failed: ${String(err)}`, {
+							error: String(err),
+						});
+					}
+				},
+			},
+			{ name: "mcp_server_list" },
+		);
+
+		api.registerTool(
+			{
+				name: "mcp_server_call",
+				label: "Tool Server Call",
+				description: "Invoke a routed tool from an installed external Tool Server (MCP).",
+				parameters: Type.Object({
+					server_id: Type.String({
+						description: "Installed Tool Server id",
+					}),
+					tool: Type.String({
+						description: "Tool name exposed by that server",
+					}),
+					args: Type.Optional(Type.Object({}, { additionalProperties: true })),
+				}),
+				async execute(_toolCallId, params) {
+					const payload = params as {
+						server_id: string;
+						tool: string;
+						args?: Record<string, unknown>;
+					};
+					try {
+						const result = await marketplaceToolCall(payload.server_id, payload.tool, payload.args ?? {}, opts);
+						if (!result?.success) {
+							return textResult(`Tool server call failed: ${result?.error ?? "unknown error"}`, {
+								error: result?.error ?? "unknown",
+							});
+						}
+
+						const text = typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2);
+						return textResult(text, { result: result.result });
+					} catch (err) {
+						return textResult(`Tool server call failed: ${String(err)}`, {
+							error: String(err),
+						});
+					}
+				},
+			},
+			{ name: "mcp_server_call" },
+		);
+
 		// ==================================================================
 		// Lifecycle hooks
 		// ==================================================================
 
-		api.on(
-			"before_agent_start",
-			async (
-				event: Record<string, unknown>,
-				ctx: unknown,
-			): Promise<unknown> => {
-				if (!cfg.enabled) return undefined;
+		api.on("before_agent_start", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+			if (!cfg.enabled) return undefined;
 
-				const sessionKey = (
-					ctx as Record<string, unknown> | undefined
-				)?.sessionKey as string | undefined;
+			const sessionKey = (ctx as Record<string, unknown> | undefined)?.sessionKey as string | undefined;
 
-				// Session start — claim session with daemon
-				await onSessionStart("openclaw", { ...opts, sessionKey });
+			// Session start — claim session with daemon
+			await onSessionStart("openclaw", { ...opts, sessionKey });
 
-				// If there's a prompt, do memory injection
-				const rawPrompt = event.prompt as string | undefined;
-				const prompt = rawPrompt ? extractUserMessage(rawPrompt) : undefined;
-				if (prompt && prompt.length > 3) {
-					const result = await onUserPromptSubmit("openclaw", {
-						...opts,
-						userPrompt: prompt,
-						sessionKey,
-					});
-					if (result?.inject) {
-						const queryAttr = result.queryTerms
-							? ` query="${result.queryTerms.replace(/"/g, "'").slice(0, 100)}"`
-							: "";
-						const attrs = `source="auto-recall"${queryAttr} results="${result.memoryCount}" engine="${result.engine ?? "fts+decay"}"`;
-						return {
-							prependContext: `<signet-memory ${attrs}>\n${result.inject}\n</signet-memory>`,
-						};
-					}
+			// If there's a prompt, do memory injection
+			const rawPrompt = event.prompt as string | undefined;
+			const prompt = rawPrompt ? extractUserMessage(rawPrompt) : undefined;
+			if (prompt && prompt.length > 3) {
+				const result = await onUserPromptSubmit("openclaw", {
+					...opts,
+					userPrompt: prompt,
+					sessionKey,
+				});
+				if (result?.inject) {
+					const queryAttr = result.queryTerms ? ` query="${result.queryTerms.replace(/"/g, "'").slice(0, 100)}"` : "";
+					const attrs = `source="auto-recall"${queryAttr} results="${result.memoryCount}" engine="${result.engine ?? "fts+decay"}"`;
+					return {
+						prependContext: `<signet-memory ${attrs}>\n${result.inject}\n</signet-memory>`,
+					};
 				}
+			}
 
-				return undefined;
-			},
-		);
+			return undefined;
+		});
 
-		api.on(
-			"agent_end",
-			async (
-				_event: Record<string, unknown>,
-				ctx: unknown,
-			): Promise<unknown> => {
-				if (!cfg.enabled) return undefined;
+		api.on("agent_end", async (_event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+			if (!cfg.enabled) return undefined;
 
-				const sessionKey = (
-					ctx as Record<string, unknown> | undefined
-				)?.sessionKey as string | undefined;
+			const sessionKey = (ctx as Record<string, unknown> | undefined)?.sessionKey as string | undefined;
 
-				await onSessionEnd("openclaw", { ...opts, sessionKey });
-				return undefined;
-			},
-		);
+			await onSessionEnd("openclaw", { ...opts, sessionKey });
+			return undefined;
+		});
 
 		// ==================================================================
 		// Service
@@ -952,21 +973,15 @@ const signetPlugin = {
 		api.registerService({
 			id: "signet-memory-openclaw",
 			start() {
-				api.logger.info(
-					`signet-memory: service started (daemon: ${daemonUrl})`,
-				);
+				api.logger.info(`signet-memory: service started (daemon: ${daemonUrl})`);
 				healthTimer = setInterval(async () => {
 					const ok = await isDaemonRunning(daemonUrl);
 					if (ok !== daemonReachable) {
 						daemonReachable = ok;
 						if (ok) {
-							api.logger.info(
-								"signet-memory: daemon reconnected",
-							);
+							api.logger.info("signet-memory: daemon reconnected");
 						} else {
-							api.logger.warn(
-								"signet-memory: daemon became unreachable",
-							);
+							api.logger.warn("signet-memory: daemon became unreachable");
 						}
 					}
 				}, 60_000);

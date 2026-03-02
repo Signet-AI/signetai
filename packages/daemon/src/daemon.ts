@@ -4,176 +4,139 @@
  * Background service for memory, API, and dashboard hosting
  */
 
-import { serve } from "@hono/node-server";
-import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono, type Context } from "hono";
-import { cors } from "hono/cors";
-import { logger as honoLogger } from "hono/logger";
-import { watch } from "chokidar";
-import { logger, LogEntry } from "./logger";
-import { loadMemoryConfig, type EmbeddingConfig } from "./memory-config";
-import { join, dirname, basename } from "path";
-import { homedir } from "os";
-import {
-	writeFileSync,
-	readFileSync,
-	existsSync,
-	mkdirSync,
-	unlinkSync,
-	readdirSync,
-	statSync,
-	appendFileSync,
-	realpathSync,
-} from "fs";
 import { spawn } from "child_process";
 import { createHash } from "crypto";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "fs";
+import { homedir } from "os";
+import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { initDbAccessor, getDbAccessor, closeDbAccessor } from "./db-accessor";
-import { startEmbeddingTracker, type EmbeddingTrackerHandle } from "./embedding-tracker";
-import { initLlmProvider, closeLlmProvider } from "./llm";
+import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import {
-	syncVecInsert,
-	syncVecDeleteBySourceId,
-	vectorToBlob,
-} from "./db-helpers";
-import {
-	putSecret,
-	getSecret,
-	hasSecret,
-	listSecrets,
-	deleteSecret,
-	execWithSecrets,
-} from "./secrets.js";
-import {
-	parseSimpleYaml,
-	buildSignetBlock,
 	buildArchitectureDoc,
+	buildSignetBlock,
+	keywordSearch,
+	parseSimpleYaml,
 	stripSignetBlock,
 	vectorSearch,
-	keywordSearch,
 } from "@signet/core";
+import { watch } from "chokidar";
+import { type Context, Hono } from "hono";
+import { cors } from "hono/cors";
+import { logger as honoLogger } from "hono/logger";
+import { type AnalyticsCollector, type ErrorStage, createAnalyticsCollector } from "./analytics";
 import {
-	initUpdateSystem,
-	getUpdateState,
-	checkForUpdates as checkForUpdatesImpl,
-	runUpdate as runUpdateImpl,
-	parseBooleanFlag,
-	parseUpdateInterval,
-	setUpdateConfig,
-	startUpdateTimer,
-	stopUpdateTimer,
-	MIN_UPDATE_INTERVAL_SECONDS,
-	MAX_UPDATE_INTERVAL_SECONDS,
-	type UpdateConfig,
-} from "./update-system";
+	type AuthConfig,
+	AuthRateLimiter,
+	type TokenRole,
+	type TokenScope,
+	checkScope,
+	createAuthMiddleware,
+	createToken,
+	loadOrCreateSecret,
+	parseAuthConfig,
+	requirePermission,
+	requireRateLimit,
+	requireScope,
+} from "./auth";
+import { createFilesystemConnector } from "./connectors/filesystem";
 import {
-	initFeatureFlags,
-	getAllFeatureFlags,
-} from "./feature-flags";
+	getConnector,
+	listConnectors,
+	registerConnector,
+	removeConnector,
+	updateConnectorStatus,
+	updateCursor,
+} from "./connectors/registry";
+import { normalizeAndHashContent } from "./content-normalization";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { createProviderTracker, getDiagnostics } from "./diagnostics";
+import { buildEmbeddingHealth } from "./embedding-health";
+import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
+import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
+import { closeLlmProvider, initLlmProvider } from "./llm";
+import { type LogEntry, logger } from "./logger";
+import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
+import { type RecallParams, hybridRecall } from "./memory-search";
 import {
-	txIngestEnvelope,
-	txFinalizeAccessAndHistory,
-	txForgetMemory,
-	txModifyMemory,
-	txRecoverMemory,
-	type MutationContext,
-} from "./transactions";
-import {
-	startPipeline,
-	stopPipeline,
-	startRetentionWorker,
 	DEFAULT_RETENTION,
-	enqueueExtractionJob,
 	enqueueDocumentIngestJob,
+	enqueueExtractionJob,
 	getPipelineWorkerStatus,
+	startPipeline,
+	startRetentionWorker,
+	stopPipeline,
 } from "./pipeline";
+import { getGraphBoostIds } from "./pipeline/graph-search";
 import {
-	startSchedulerWorker,
-	validateCron,
-	computeNextRun,
-	isHarnessAvailable,
-	CRON_PRESETS,
-} from "./scheduler";
-import {
-	emitTaskStream,
-	getTaskStreamSnapshot,
-	subscribeTaskStream,
-} from "./scheduler/task-stream";
-import {
-	createOllamaProvider,
 	createClaudeCodeProvider,
+	createOllamaProvider,
 	createOpenCodeProvider,
 	ensureOpenCodeServer,
 	stopOpenCodeServer,
 } from "./pipeline/provider";
-import {
-	registerConnector,
-	getConnector,
-	listConnectors,
-	updateConnectorStatus,
-	updateCursor,
-	removeConnector,
-} from "./connectors/registry";
-import { createFilesystemConnector } from "./connectors/filesystem";
-import { normalizeAndHashContent } from "./content-normalization";
-import { getGraphBoostIds } from "./pipeline/graph-search";
-import { rerank, noopReranker, type RerankCandidate } from "./pipeline/reranker";
+import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
-import { hybridRecall, type RecallParams } from "./memory-search";
-import { createProviderTracker, getDiagnostics } from "./diagnostics";
-import { buildEmbeddingHealth } from "./embedding-health";
 import {
-	createAnalyticsCollector,
-	type AnalyticsCollector,
-	type ErrorStage,
-} from "./analytics";
+	type RepairContext,
+	checkFtsConsistency,
+	cleanOrphanedEmbeddings,
+	createRateLimiter,
+	deduplicateMemories,
+	getDedupStats,
+	getEmbeddingGapStats,
+	reembedMissingMemories,
+	releaseStaleLeases,
+	requeueDeadJobs,
+	triggerRetentionSweep,
+} from "./repair-actions";
+import { CRON_PRESETS, computeNextRun, isHarnessAvailable, startSchedulerWorker, validateCron } from "./scheduler";
+import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "./scheduler/task-stream";
+import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "./secrets.js";
 import {
-	createTelemetryCollector,
-	type TelemetryCollector,
-	type TelemetryEventType,
-} from "./telemetry";
-import { buildTimeline, type TimelineSources } from "./timeline";
-import {
+	flushPendingCheckpoints,
 	getCheckpointsByProject,
 	getCheckpointsBySession,
 	initCheckpointFlush,
-	flushPendingCheckpoints,
 	pruneCheckpoints,
 	redactCheckpointRow,
 } from "./session-checkpoints";
+import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
+import { type TimelineSources, buildTimeline } from "./timeline";
 import {
-	createRateLimiter,
-	requeueDeadJobs,
-	releaseStaleLeases,
-	checkFtsConsistency,
-	triggerRetentionSweep,
-	reembedMissingMemories,
-	getEmbeddingGapStats,
-	cleanOrphanedEmbeddings,
-	getDedupStats,
-	deduplicateMemories,
-	type RepairContext,
-} from "./repair-actions";
+	type MutationContext,
+	txFinalizeAccessAndHistory,
+	txForgetMemory,
+	txIngestEnvelope,
+	txModifyMemory,
+	txRecoverMemory,
+} from "./transactions";
+import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "./umap-projection";
 import {
-	createAuthMiddleware,
-	requirePermission,
-	requireScope,
-	requireRateLimit,
-	checkScope,
-	loadOrCreateSecret,
-	createToken,
-	parseAuthConfig,
-	AuthRateLimiter,
-	type AuthConfig,
-	type TokenRole,
-	type TokenScope,
-} from "./auth";
-import {
-	getCachedProjection,
-	computeProjection,
-	computeProjectionForQuery,
-	cacheProjection,
-} from "./umap-projection";
+	MAX_UPDATE_INTERVAL_SECONDS,
+	MIN_UPDATE_INTERVAL_SECONDS,
+	type UpdateConfig,
+	checkForUpdates as checkForUpdatesImpl,
+	getUpdateState,
+	initUpdateSystem,
+	parseBooleanFlag,
+	parseUpdateInterval,
+	runUpdate as runUpdateImpl,
+	setUpdateConfig,
+	startUpdateTimer,
+	stopUpdateTimer,
+} from "./update-system";
 
 // Paths
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -184,7 +147,7 @@ const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
 
 // Config
-const PORT = parseInt(process.env.SIGNET_PORT || "3850", 10);
+const PORT = Number.parseInt(process.env.SIGNET_PORT || "3850", 10);
 const HOST = process.env.SIGNET_HOST || "localhost";
 
 // Autonomous maintenance singletons
@@ -261,22 +224,16 @@ interface EmbeddingStatus {
 	checkedAt: string;
 }
 
-async function fetchEmbedding(
-	text: string,
-	cfg: EmbeddingConfig,
-): Promise<number[] | null> {
+async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promise<number[] | null> {
 	if (cfg.provider === "none") return null;
 	try {
 		if (cfg.provider === "ollama") {
-			const res = await fetch(
-				`${cfg.base_url.replace(/\/$/, "")}/api/embeddings`,
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ model: cfg.model, prompt: text }),
-					signal: AbortSignal.timeout(30000),
-				},
-			);
+			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/api/embeddings`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ model: cfg.model, prompt: text }),
+				signal: AbortSignal.timeout(30000),
+			});
 			if (!res.ok) return null;
 			const data = (await res.json()) as { embedding: number[] };
 			return data.embedding ?? null;
@@ -303,19 +260,11 @@ async function fetchEmbedding(
 	}
 }
 
-
 function blobToVector(blob: Buffer, dimensions: number | null): number[] {
-	const raw = blob.buffer.slice(
-		blob.byteOffset,
-		blob.byteOffset + blob.byteLength,
-	);
+	const raw = blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength);
 	const vector = new Float32Array(raw);
 	const size =
-		typeof dimensions === "number" &&
-		dimensions > 0 &&
-		dimensions <= vector.length
-			? dimensions
-			: vector.length;
+		typeof dimensions === "number" && dimensions > 0 && dimensions <= vector.length ? dimensions : vector.length;
 	return Array.from(vector.slice(0, size));
 }
 
@@ -364,9 +313,7 @@ function parseTagsField(raw: string | null): string[] {
 	try {
 		const parsed: unknown = JSON.parse(raw);
 		if (Array.isArray(parsed)) {
-			return parsed.filter(
-				(value): value is string => typeof value === "string",
-			);
+			return parsed.filter((value): value is string => typeof value === "string");
 		}
 	} catch {
 		// Fallback to comma-separated tags.
@@ -378,34 +325,21 @@ function parseTagsField(raw: string | null): string[] {
 		.filter((tag) => tag.length > 0);
 }
 
-function parseBoundedInt(
-	raw: string | undefined,
-	fallback: number,
-	min: number,
-	max: number,
-): number {
+function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
 	if (!raw) return fallback;
 	const parsed = Number.parseInt(raw, 10);
 	if (!Number.isFinite(parsed)) return fallback;
 	return Math.min(max, Math.max(min, parsed));
 }
 
-function parseOptionalBoundedInt(
-	raw: string | undefined,
-	min: number,
-	max: number,
-): number | undefined {
+function parseOptionalBoundedInt(raw: string | undefined, min: number, max: number): number | undefined {
 	if (!raw) return undefined;
 	const parsed = Number.parseInt(raw, 10);
 	if (!Number.isFinite(parsed)) return undefined;
 	return Math.min(max, Math.max(min, parsed));
 }
 
-function parseOptionalBoundedFloat(
-	raw: string | undefined,
-	min: number,
-	max: number,
-): number | undefined {
+function parseOptionalBoundedFloat(raw: string | undefined, min: number, max: number): number | undefined {
 	if (!raw) return undefined;
 	const parsed = Number.parseFloat(raw);
 	if (!Number.isFinite(parsed)) return undefined;
@@ -414,12 +348,14 @@ function parseOptionalBoundedFloat(
 
 function parseCsvQuery(raw: string | undefined): string[] {
 	if (!raw) return [];
-	return [...new Set(
-		raw
-			.split(",")
-			.map((entry) => entry.trim())
-			.filter((entry) => entry.length > 0),
-	)];
+	return [
+		...new Set(
+			raw
+				.split(",")
+				.map((entry) => entry.trim())
+				.filter((entry) => entry.length > 0),
+		),
+	];
 }
 
 function parseIsoDateQuery(raw: string | undefined): string | undefined {
@@ -441,11 +377,7 @@ interface LegacyEmbeddingsResponse {
 	error?: string;
 }
 
-function defaultLegacyEmbeddingsResponse(
-	limit: number,
-	offset: number,
-	error?: string,
-): LegacyEmbeddingsResponse {
+function defaultLegacyEmbeddingsResponse(limit: number, offset: number, error?: string): LegacyEmbeddingsResponse {
 	return {
 		embeddings: [],
 		count: 0,
@@ -459,10 +391,7 @@ function defaultLegacyEmbeddingsResponse(
 
 function parseLegacyTagsField(raw: unknown): string[] {
 	if (Array.isArray(raw)) {
-		return raw.filter(
-			(value): value is string =>
-				typeof value === "string" && value.trim().length > 0,
-		);
+		return raw.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 	}
 
 	if (typeof raw === "string") {
@@ -474,10 +403,7 @@ function parseLegacyTagsField(raw: unknown): string[] {
 
 function parseLegacyVector(raw: unknown): number[] | undefined {
 	if (Array.isArray(raw)) {
-		const values = raw.filter(
-			(value): value is number =>
-				typeof value === "number" && Number.isFinite(value),
-		);
+		const values = raw.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
 		return values.length > 0 ? values : undefined;
 	}
 
@@ -485,10 +411,7 @@ function parseLegacyVector(raw: unknown): number[] | undefined {
 		try {
 			const parsed: unknown = JSON.parse(raw);
 			if (Array.isArray(parsed)) {
-				const values = parsed.filter(
-					(value): value is number =>
-						typeof value === "number" && Number.isFinite(value),
-				);
+				const values = parsed.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
 				return values.length > 0 ? values : undefined;
 			}
 		} catch {
@@ -499,10 +422,7 @@ function parseLegacyVector(raw: unknown): number[] | undefined {
 	return undefined;
 }
 
-function normalizeLegacyEmbeddingRow(
-	raw: unknown,
-	withVectors: boolean,
-): Record<string, unknown> | null {
+function normalizeLegacyEmbeddingRow(raw: unknown, withVectors: boolean): Record<string, unknown> | null {
 	if (typeof raw !== "object" || raw === null) {
 		return null;
 	}
@@ -515,10 +435,8 @@ function normalizeLegacyEmbeddingRow(
 
 	const id = String(rawId);
 	const rawContent = row.content ?? row.text ?? "";
-	const content =
-		typeof rawContent === "string" ? rawContent : String(rawContent);
-	const who =
-		typeof row.who === "string" && row.who.length > 0 ? row.who : "unknown";
+	const content = typeof rawContent === "string" ? rawContent : String(rawContent);
+	const who = typeof row.who === "string" && row.who.length > 0 ? row.who : "unknown";
 
 	const sourceType =
 		typeof row.sourceType === "string"
@@ -528,19 +446,13 @@ function normalizeLegacyEmbeddingRow(
 				: "memory";
 
 	const sourceIdRaw = row.sourceId ?? row.source_id ?? id;
-	const sourceId =
-		typeof sourceIdRaw === "string" || typeof sourceIdRaw === "number"
-			? String(sourceIdRaw)
-			: id;
+	const sourceId = typeof sourceIdRaw === "string" || typeof sourceIdRaw === "number" ? String(sourceIdRaw) : id;
 
 	const createdAtRaw = row.createdAt ?? row.created_at;
 	const createdAt = typeof createdAtRaw === "string" ? createdAtRaw : undefined;
 
 	const typeValue = typeof row.type === "string" ? row.type : null;
-	const importance =
-		typeof row.importance === "number" && Number.isFinite(row.importance)
-			? row.importance
-			: 0.5;
+	const importance = typeof row.importance === "number" && Number.isFinite(row.importance) ? row.importance : 0.5;
 
 	const normalized: Record<string, unknown> = {
 		id,
@@ -572,11 +484,7 @@ function normalizeLegacyEmbeddingsPayload(
 	offset: number,
 ): LegacyEmbeddingsResponse {
 	if (typeof payload !== "object" || payload === null) {
-		return defaultLegacyEmbeddingsResponse(
-			limit,
-			offset,
-			"Legacy export returned invalid payload",
-		);
+		return defaultLegacyEmbeddingsResponse(limit, offset, "Legacy export returned invalid payload");
 	}
 
 	const data = payload as Record<string, unknown>;
@@ -592,20 +500,11 @@ function normalizeLegacyEmbeddingsPayload(
 				? data.count
 				: embeddings.length;
 
-	const resolvedLimit =
-		typeof data.limit === "number" && Number.isFinite(data.limit)
-			? data.limit
-			: limit;
+	const resolvedLimit = typeof data.limit === "number" && Number.isFinite(data.limit) ? data.limit : limit;
 
-	const resolvedOffset =
-		typeof data.offset === "number" && Number.isFinite(data.offset)
-			? data.offset
-			: offset;
+	const resolvedOffset = typeof data.offset === "number" && Number.isFinite(data.offset) ? data.offset : offset;
 
-	const hasMore =
-		typeof data.hasMore === "boolean"
-			? data.hasMore
-			: resolvedOffset + resolvedLimit < total;
+	const hasMore = typeof data.hasMore === "boolean" ? data.hasMore : resolvedOffset + resolvedLimit < total;
 
 	const error = typeof data.error === "string" ? data.error : undefined;
 
@@ -630,23 +529,12 @@ async function runLegacyEmbeddingsExport(
 	limit: number,
 	offset: number,
 ): Promise<LegacyEmbeddingsResponse | null> {
-	const scriptPath = join(
-		AGENTS_DIR,
-		"memory",
-		"scripts",
-		"export_embeddings.py",
-	);
+	const scriptPath = join(AGENTS_DIR, "memory", "scripts", "export_embeddings.py");
 	if (!existsSync(scriptPath)) {
 		return null;
 	}
 
-	const args = [
-		scriptPath,
-		"--limit",
-		String(limit),
-		"--offset",
-		String(offset),
-	];
+	const args = [scriptPath, "--limit", String(limit), "--offset", String(offset)];
 	if (withVectors) {
 		args.push("--with-vectors");
 	}
@@ -682,21 +570,13 @@ async function runLegacyEmbeddingsExport(
 			}
 
 			if (!stdout.trim()) {
-				resolve(
-					defaultLegacyEmbeddingsResponse(
-						limit,
-						offset,
-						"Legacy embeddings export returned empty output",
-					),
-				);
+				resolve(defaultLegacyEmbeddingsResponse(limit, offset, "Legacy embeddings export returned empty output"));
 				return;
 			}
 
 			try {
 				const parsed: unknown = JSON.parse(stdout);
-				resolve(
-					normalizeLegacyEmbeddingsPayload(parsed, withVectors, limit, offset),
-				);
+				resolve(normalizeLegacyEmbeddingsPayload(parsed, withVectors, limit, offset));
 			} catch (error) {
 				resolve(
 					defaultLegacyEmbeddingsResponse(
@@ -719,9 +599,7 @@ let cachedEmbeddingStatus: EmbeddingStatus | null = null;
 let statusCacheTime = 0;
 const STATUS_CACHE_TTL = 30000; // 30 seconds
 
-async function checkEmbeddingProvider(
-	cfg: EmbeddingConfig,
-): Promise<EmbeddingStatus> {
+async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingStatus> {
 	const now = Date.now();
 
 	// Return cached status if fresh
@@ -890,13 +768,7 @@ app.use("*", async (c, next) => {
 	const duration = Date.now() - start;
 	logger.api.request(c.req.method, c.req.path, c.res.status, duration);
 	const actor = c.req.header("x-signet-actor");
-	analyticsCollector.recordRequest(
-		c.req.method,
-		c.req.path,
-		c.res.status,
-		duration,
-		actor ?? undefined,
-	);
+	analyticsCollector.recordRequest(c.req.method, c.req.path, c.res.status, duration, actor ?? undefined);
 	// Record latency histograms for key operations
 	const p = c.req.path;
 	if (p.includes("/remember") || p.includes("/save")) {
@@ -962,21 +834,17 @@ app.get("/api/auth/whoami", (c) => {
 app.use("/api/auth/token", async (c, next) => {
 	const perm = requirePermission("admin", authConfig);
 	const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
-	await perm(c, async () => { await rate(c, next); });
+	await perm(c, async () => {
+		await rate(c, next);
+	});
 });
 
 app.post("/api/auth/token", async (c) => {
 	if (!authSecret) {
-		return c.json(
-			{ error: "auth secret not available (local mode?)" },
-			400,
-		);
+		return c.json({ error: "auth secret not available (local mode?)" }, 400);
 	}
 
-	const payload = (await c.req.json().catch(() => null)) as Record<
-		string,
-		unknown
-	> | null;
+	const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
 	if (!payload) {
 		return c.json({ error: "invalid request body" }, 400);
 	}
@@ -984,10 +852,7 @@ app.post("/api/auth/token", async (c) => {
 	const role = payload.role as string | undefined;
 	const validRoles = ["admin", "operator", "agent", "readonly"];
 	if (!role || !validRoles.includes(role)) {
-		return c.json(
-			{ error: `role must be one of: ${validRoles.join(", ")}` },
-			400,
-		);
+		return c.json({ error: `role must be one of: ${validRoles.join(", ")}` }, 400);
 	}
 
 	const scope = (payload.scope ?? {}) as TokenScope;
@@ -996,11 +861,7 @@ app.post("/api/auth/token", async (c) => {
 			? payload.ttlSeconds
 			: authConfig.defaultTokenTtlSeconds;
 
-	const token = createToken(
-		authSecret,
-		{ sub: `token:${role}`, scope, role: role as TokenRole },
-		ttl,
-	);
+	const token = createToken(authSecret, { sub: `token:${role}`, scope, role: role as TokenRole }, ttl);
 
 	const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
 	return c.json({ token, expiresAt });
@@ -1044,14 +905,18 @@ app.use("/memory/similar", async (c, next) => {
 app.use("/api/memory/modify", async (c, next) => {
 	const perm = requirePermission("modify", authConfig);
 	const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
-	await perm(c, async () => { await rate(c, next); });
+	await perm(c, async () => {
+		await rate(c, next);
+	});
 });
 
 // Forget — with rate limiting
 app.use("/api/memory/forget", async (c, next) => {
 	const perm = requirePermission("forget", authConfig);
 	const rate = requireRateLimit("batchForget", authBatchForgetLimiter, authConfig);
-	await perm(c, async () => { await rate(c, next); });
+	await perm(c, async () => {
+		await rate(c, next);
+	});
 });
 
 // Recover
@@ -1107,24 +972,18 @@ app.use("/api/repair/*", async (c, next) => {
 app.use("/api/memory/:id", async (c, next) => {
 	// Scope enforcement on mutations: if token has project scope, verify
 	// the target memory belongs to that project.
-	if (
-		authConfig.mode !== "local" &&
-		(c.req.method === "PATCH" || c.req.method === "DELETE")
-	) {
+	if (authConfig.mode !== "local" && (c.req.method === "PATCH" || c.req.method === "DELETE")) {
 		const auth = c.get("auth");
 		if (auth?.claims?.scope?.project) {
 			const memoryId = c.req.param("id");
-			const row = getDbAccessor().withReadDb((db) =>
-				db
-					.prepare("SELECT project FROM memories WHERE id = ?")
-					.get(memoryId) as { project: string | null } | undefined,
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT project FROM memories WHERE id = ?").get(memoryId) as
+						| { project: string | null }
+						| undefined,
 			);
 			if (row) {
-				const decision = checkScope(
-					auth.claims,
-					{ project: row.project ?? undefined },
-					authConfig.mode,
-				);
+				const decision = checkScope(auth.claims, { project: row.project ?? undefined }, authConfig.mode);
 				if (!decision.allowed) {
 					return c.json({ error: decision.reason ?? "scope violation" }, 403);
 				}
@@ -1135,12 +994,16 @@ app.use("/api/memory/:id", async (c, next) => {
 	if (c.req.method === "PATCH") {
 		const perm = requirePermission("modify", authConfig);
 		const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
-		return perm(c, async () => { await rate(c, next); });
+		return perm(c, async () => {
+			await rate(c, next);
+		});
 	}
 	if (c.req.method === "DELETE") {
 		const perm = requirePermission("forget", authConfig);
 		const rate = requireRateLimit("forget", authForgetLimiter, authConfig);
-		return perm(c, async () => { await rate(c, next); });
+		return perm(c, async () => {
+			await rate(c, next);
+		});
 	}
 	// GET for memory detail + history — recall permission
 	if (c.req.method === "GET") {
@@ -1155,17 +1018,10 @@ app.use("/api/memory/:id", async (c, next) => {
 
 // Get recent logs
 app.get("/api/logs", (c) => {
-	const limit = parseInt(c.req.query("limit") || "100", 10);
-	const level = c.req.query("level") as
-		| "debug"
-		| "info"
-		| "warn"
-		| "error"
-		| undefined;
+	const limit = Number.parseInt(c.req.query("limit") || "100", 10);
+	const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
 	const category = c.req.query("category") as any;
-	const since = c.req.query("since")
-		? new Date(c.req.query("since")!)
-		: undefined;
+	const since = c.req.query("since") ? new Date(c.req.query("since")!) : undefined;
 
 	const logs = logger.getRecent({ limit, level, category, since });
 	return c.json({ logs, count: logs.length });
@@ -1211,9 +1067,7 @@ app.get("/api/config", async (c) => {
 	try {
 		const files: Array<{ name: string; content: string; size: number }> = [];
 		const dirFiles = readdirSync(AGENTS_DIR);
-		const configFiles = dirFiles.filter(
-			(f) => f.endsWith(".md") || f.endsWith(".yaml"),
-		);
+		const configFiles = dirFiles.filter((f) => f.endsWith(".md") || f.endsWith(".yaml"));
 
 		for (const fileName of configFiles) {
 			const filePath = join(AGENTS_DIR, fileName);
@@ -1225,13 +1079,7 @@ app.get("/api/config", async (c) => {
 		}
 
 		// Sort by priority
-		const priority = [
-			"agent.yaml",
-			"AGENTS.md",
-			"SOUL.md",
-			"IDENTITY.md",
-			"USER.md",
-		];
+		const priority = ["agent.yaml", "AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
 		files.sort((a, b) => {
 			const aIdx = priority.indexOf(a.name);
 			const bIdx = priority.indexOf(b.name);
@@ -1288,12 +1136,9 @@ app.get("/api/identity", (c) => {
 		};
 
 		for (const line of lines) {
-			if (line.startsWith("- name:"))
-				identity.name = line.replace("- name:", "").trim();
-			if (line.startsWith("- creature:"))
-				identity.creature = line.replace("- creature:", "").trim();
-			if (line.startsWith("- vibe:"))
-				identity.vibe = line.replace("- vibe:", "").trim();
+			if (line.startsWith("- name:")) identity.name = line.replace("- name:", "").trim();
+			if (line.startsWith("- creature:")) identity.creature = line.replace("- creature:", "").trim();
+			if (line.startsWith("- vibe:")) identity.vibe = line.replace("- vibe:", "").trim();
 		}
 
 		return c.json(identity);
@@ -1308,8 +1153,8 @@ app.get("/api/identity", (c) => {
 
 app.get("/api/memories", (c) => {
 	try {
-		const limit = parseInt(c.req.query("limit") || "100", 10);
-		const offset = parseInt(c.req.query("offset") || "0", 10);
+		const limit = Number.parseInt(c.req.query("limit") || "100", 10);
+		const offset = Number.parseInt(c.req.query("offset") || "0", 10);
 
 		const result = getDbAccessor().withReadDb((db) => {
 			const memories = db
@@ -1321,23 +1166,17 @@ app.get("/api/memories", (c) => {
     `)
 				.all(limit, offset);
 
-			const totalResult = db
-				.prepare("SELECT COUNT(*) as count FROM memories")
-				.get() as { count: number };
+			const totalResult = db.prepare("SELECT COUNT(*) as count FROM memories").get() as { count: number };
 			let embeddingsCount = 0;
 			try {
-				const embResult = db
-					.prepare("SELECT COUNT(*) as count FROM embeddings")
-					.get() as { count: number };
+				const embResult = db.prepare("SELECT COUNT(*) as count FROM embeddings").get() as { count: number };
 				embeddingsCount = embResult?.count ?? 0;
 			} catch {
 				// embeddings table might not exist
 			}
-			const critResult = db
-				.prepare(
-					"SELECT COUNT(*) as count FROM memories WHERE importance >= 0.9",
-				)
-				.get() as { count: number };
+			const critResult = db.prepare("SELECT COUNT(*) as count FROM memories WHERE importance >= 0.9").get() as {
+				count: number;
+			};
 
 			return {
 				memories,
@@ -1453,17 +1292,15 @@ app.get("/memory/search", (c) => {
 	const query = c.req.query("q") ?? "";
 	const distinct = c.req.query("distinct");
 	const limitParam = c.req.query("limit");
-	const limit = limitParam ? parseInt(limitParam, 10) : null;
+	const limit = limitParam ? Number.parseInt(limitParam, 10) : null;
 
 	// Shortcut: return distinct values for a column
 	if (distinct === "who") {
 		try {
 			const values = getDbAccessor().withReadDb((db) => {
-				const rows = db
-					.prepare(
-						"SELECT DISTINCT who FROM memories WHERE who IS NOT NULL ORDER BY who",
-					)
-					.all() as { who: string }[];
+				const rows = db.prepare("SELECT DISTINCT who FROM memories WHERE who IS NOT NULL ORDER BY who").all() as {
+					who: string;
+				}[];
 				return rows.map((r) => r.who);
 			});
 			return c.json({ values });
@@ -1477,15 +1314,11 @@ app.get("/memory/search", (c) => {
 		tags: c.req.query("tags") ?? "",
 		who: c.req.query("who") ?? "",
 		pinned: c.req.query("pinned") === "1" || c.req.query("pinned") === "true",
-		importance_min: c.req.query("importance_min")
-			? parseFloat(c.req.query("importance_min")!)
-			: null,
+		importance_min: c.req.query("importance_min") ? Number.parseFloat(c.req.query("importance_min")!) : null,
 		since: c.req.query("since") ?? "",
 	};
 
-	const hasFilters = Object.values(filterParams).some(
-		(v) => v !== "" && v !== false && v !== null,
-	);
+	const hasFilters = Object.values(filterParams).some((v) => v !== "" && v !== false && v !== null);
 
 	try {
 		const results = getDbAccessor().withReadDb((db) => {
@@ -1554,8 +1387,7 @@ app.get("/memory/search", (c) => {
 const MAX_MUTATION_BATCH = 200;
 const FORGET_CONFIRM_THRESHOLD = 25;
 const SOFT_DELETE_RETENTION_DAYS = 30;
-const SOFT_DELETE_RETENTION_MS =
-	SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const SOFT_DELETE_RETENTION_MS = SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 interface ForgetCandidatesRequest {
 	query: string;
@@ -1582,9 +1414,7 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 	return value;
 }
 
-async function readOptionalJsonObject(
-	c: Context,
-): Promise<Record<string, unknown> | null> {
+async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
 	const raw = await c.req.raw.text();
 	if (!raw.trim()) return {};
 	try {
@@ -1660,13 +1490,7 @@ interface MutationActor {
 	requestId: string | undefined;
 }
 
-const ACTOR_TYPES = new Set([
-	"operator",
-	"pipeline",
-	"harness",
-	"sdk",
-	"daemon",
-]);
+const ACTOR_TYPES = new Set(["operator", "pipeline", "harness", "sdk", "daemon"]);
 
 function resolveMutationActor(c: Context, fallback?: string): MutationActor {
 	// Prefer token claims for identity when available
@@ -1681,9 +1505,7 @@ function resolveMutationActor(c: Context, fallback?: string): MutationActor {
 	}
 
 	const headerActor = parseOptionalString(c.req.header("x-signet-actor"));
-	const changedBy =
-		headerActor ??
-		(fallback && fallback.trim().length > 0 ? fallback.trim() : "daemon");
+	const changedBy = headerActor ?? (fallback && fallback.trim().length > 0 ? fallback.trim() : "daemon");
 
 	const rawType = parseOptionalString(c.req.header("x-signet-actor-type"));
 	const actorType = rawType && ACTOR_TYPES.has(rawType) ? rawType : "operator";
@@ -1696,10 +1518,7 @@ function resolveMutationActor(c: Context, fallback?: string): MutationActor {
 	};
 }
 
-function buildForgetCandidatesWhere(
-	req: ForgetCandidatesRequest,
-	alias: string,
-): { clause: string; args: unknown[] } {
+function buildForgetCandidatesWhere(req: ForgetCandidatesRequest, alias: string): { clause: string; args: unknown[] } {
 	const parts: string[] = [];
 	const args: unknown[] = [];
 	const prefix = alias.length > 0 ? `${alias}.` : "";
@@ -1743,10 +1562,7 @@ function loadForgetCandidates(req: ForgetCandidatesRequest): ForgetCandidate[] {
 	return getDbAccessor().withReadDb((db) => {
 		const limit = Math.max(1, Math.min(req.limit, MAX_MUTATION_BATCH));
 		const withQuery = req.query.trim().length > 0;
-		const { clause, args } = buildForgetCandidatesWhere(
-			req,
-			withQuery ? "m" : "",
-		);
+		const { clause, args } = buildForgetCandidatesWhere(req, withQuery ? "m" : "");
 
 		if (withQuery) {
 			try {
@@ -1819,10 +1635,7 @@ function loadForgetCandidates(req: ForgetCandidatesRequest): ForgetCandidate[] {
 	});
 }
 
-function loadForgetCandidatesByIds(
-	requestedIds: readonly string[],
-	limit: number,
-): ForgetCandidate[] {
+function loadForgetCandidatesByIds(requestedIds: readonly string[], limit: number): ForgetCandidate[] {
 	const dedupedIds = [...new Set(requestedIds)]
 		.map((id) => id.trim())
 		.filter((id) => id.length > 0)
@@ -1845,9 +1658,7 @@ function loadForgetCandidatesByIds(
 		const rowById = new Map(rows.map((row) => [row.id, row]));
 		return dedupedIds
 			.map((id) => rowById.get(id))
-			.filter((row): row is { id: string; pinned: number; version: number } =>
-				Boolean(row),
-			)
+			.filter((row): row is { id: string; pinned: number; version: number } => Boolean(row))
 			.map((row) => ({
 				id: row.id,
 				pinned: row.pinned,
@@ -1882,8 +1693,7 @@ function parseModifyPatch(
 	let changed = false;
 	let contentForEmbedding: string | null = null;
 
-	const hasField = (field: string): boolean =>
-		Object.prototype.hasOwnProperty.call(payload, field);
+	const hasField = (field: string): boolean => Object.prototype.hasOwnProperty.call(payload, field);
 
 	if (hasField("content")) {
 		if (typeof payload.content !== "string") {
@@ -1895,9 +1705,7 @@ function parseModifyPatch(
 		}
 		patch.content = normalized.storageContent;
 		patch.normalizedContent =
-			normalized.normalizedContent.length > 0
-				? normalized.normalizedContent
-				: normalized.hashBasis;
+			normalized.normalizedContent.length > 0 ? normalized.normalizedContent : normalized.hashBasis;
 		patch.contentHash = normalized.contentHash;
 		contentForEmbedding = normalized.storageContent;
 		changed = true;
@@ -1926,12 +1734,7 @@ function parseModifyPatch(
 
 	if (hasField("importance")) {
 		const importance = parseOptionalNumber(payload.importance);
-		if (
-			importance === undefined ||
-			importance < 0 ||
-			importance > 1 ||
-			!Number.isFinite(importance)
-		) {
+		if (importance === undefined || importance < 0 || importance > 1 || !Number.isFinite(importance)) {
 			return {
 				ok: false,
 				error: "importance must be a finite number between 0 and 1",
@@ -1953,8 +1756,7 @@ function parseModifyPatch(
 	if (!changed) {
 		return {
 			ok: false,
-			error:
-				"at least one of content, type, tags, importance, pinned is required",
+			error: "at least one of content, type, tags, importance, pinned is required",
 		};
 	}
 
@@ -2031,18 +1833,14 @@ app.post("/api/memory/remember", async (c) => {
 
 			const chunkId = crypto.randomUUID();
 			const chunkContentForInsert =
-				chunkNormalized.normalizedContent.length > 0
-					? chunkNormalized.normalizedContent
-					: chunkNormalized.hashBasis;
+				chunkNormalized.normalizedContent.length > 0 ? chunkNormalized.normalizedContent : chunkNormalized.hashBasis;
 			const memType = inferType(chunk);
 
 			try {
 				// Dedup check + insert
 				const inserted = getDbAccessor().withWriteTx((db) => {
 					const byHash = db
-						.prepare(
-							`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
-						)
+						.prepare(`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`)
 						.get(chunkNormalized.contentHash) as { id: string } | undefined;
 					if (byHash) return false;
 
@@ -2061,9 +1859,7 @@ app.post("/api/memory/remember", async (c) => {
 						isDeleted: 0,
 						extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
 						embeddingModel: null,
-						extractionModel: pipelineEnqueueEnabled
-							? pipelineCfg.extractionModel
-							: null,
+						extractionModel: pipelineEnqueueEnabled ? pipelineCfg.extractionModel : null,
 						updatedBy: who,
 						sourceType: "chunk",
 						sourceId: groupId,
@@ -2085,10 +1881,7 @@ app.post("/api/memory/remember", async (c) => {
 
 				// Generate embedding async
 				try {
-					const vec = await fetchEmbedding(
-						chunkNormalized.storageContent,
-						fullCfg.embedding,
-					);
+					const vec = await fetchEmbedding(chunkNormalized.storageContent, fullCfg.embedding);
 					if (vec) {
 						if (vec.length !== fullCfg.embedding.dimensions) {
 							logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
@@ -2101,14 +1894,20 @@ app.post("/api/memory/remember", async (c) => {
 							const blob = vectorToBlob(vec);
 							getDbAccessor().withWriteTx((db) => {
 								syncVecDeleteBySourceId(db, "memory", chunkId);
-								db.prepare(
-									`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
-								).run(chunkId);
+								db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
 								db.prepare(`
 									INSERT INTO embeddings
 									  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 									VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-								`).run(embId, chunkNormalized.contentHash, blob, vec.length, chunkId, chunkNormalized.storageContent, now);
+								`).run(
+									embId,
+									chunkNormalized.contentHash,
+									blob,
+									vec.length,
+									chunkId,
+									chunkNormalized.storageContent,
+									now,
+								);
 								syncVecInsert(db, embId, vec);
 								db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
 									fullCfg.embedding.model,
@@ -2177,9 +1976,7 @@ app.post("/api/memory/remember", async (c) => {
 		return c.json({ error: "content is required" }, 400);
 	}
 	const normalizedContentForInsert =
-		normalizedContent.normalizedContent.length > 0
-			? normalizedContent.normalizedContent
-			: normalizedContent.hashBasis;
+		normalizedContent.normalizedContent.length > 0 ? normalizedContent.normalizedContent : normalizedContent.hashBasis;
 	const contentHash = normalizedContent.contentHash;
 	const pipelineEnqueueEnabled = pipelineCfg.enabled || pipelineCfg.shadowMode;
 
@@ -2234,9 +2031,7 @@ app.post("/api/memory/remember", async (c) => {
 				isDeleted: 0,
 				extractionStatus: pipelineEnqueueEnabled ? "pending" : "none",
 				embeddingModel: null,
-				extractionModel: pipelineEnqueueEnabled
-					? pipelineCfg.extractionModel
-					: null,
+				extractionModel: pipelineEnqueueEnabled ? pipelineCfg.extractionModel : null,
 				updatedBy: who,
 				sourceType,
 				sourceId,
@@ -2294,10 +2089,7 @@ app.post("/api/memory/remember", async (c) => {
 	let embedded = false;
 	try {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const vec = await fetchEmbedding(
-			normalizedContent.storageContent,
-			cfg.embedding,
-		);
+		const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding);
 		if (vec) {
 			if (vec.length !== cfg.embedding.dimensions) {
 				logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
@@ -2312,27 +2104,14 @@ app.post("/api/memory/remember", async (c) => {
 
 				getDbAccessor().withWriteTx((db) => {
 					syncVecDeleteBySourceId(db, "memory", id);
-					db.prepare(
-						`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`,
-					).run(id);
+					db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(id);
 					db.prepare(`
 						INSERT INTO embeddings
 						  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 						VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-					`).run(
-						embId,
-						hash,
-						blob,
-						vec.length,
-						id,
-						normalizedContent.storageContent,
-						now,
-					);
+					`).run(embId, hash, blob, vec.length, id, normalizedContent.storageContent, now);
 					syncVecInsert(db, embId, vec);
-					db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(
-						cfg.embedding.model,
-						id,
-					);
+					db.prepare(`UPDATE memories SET embedding_model = ? WHERE id = ?`).run(cfg.embedding.model, id);
 				});
 				embedded = true;
 			}
@@ -2441,9 +2220,7 @@ app.get("/api/memory/:id/history", (c) => {
 	const limit = Math.min(parseOptionalInt(c.req.query("limit")) ?? 200, 1000);
 
 	const exists = getDbAccessor().withReadDb((db) => {
-		return db.prepare(`SELECT id FROM memories WHERE id = ?`).get(memoryId) as
-			| { id: string }
-			| undefined;
+		return db.prepare(`SELECT id FROM memories WHERE id = ?`).get(memoryId) as { id: string } | undefined;
 	});
 	if (!exists) {
 		return c.json({ error: "Not found", memoryId }, 404);
@@ -2514,17 +2291,12 @@ app.post("/api/memory/:id/recover", async (c) => {
 		return c.json({ error: "memory id is required" }, 400);
 	}
 
-	const reason =
-		parseOptionalString(payload.reason) ??
-		parseOptionalString(c.req.query("reason"));
+	const reason = parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason"));
 	if (!reason) {
 		return c.json({ error: "reason is required" }, 400);
 	}
 
-	const hasIfVersionInBody = Object.prototype.hasOwnProperty.call(
-		payload,
-		"if_version",
-	);
+	const hasIfVersionInBody = Object.prototype.hasOwnProperty.call(payload, "if_version");
 	const ifVersionBody = parseOptionalInt(payload.if_version);
 	if (hasIfVersionInBody && ifVersionBody === undefined) {
 		return c.json({ error: "if_version must be a positive integer" }, 400);
@@ -2543,10 +2315,7 @@ app.post("/api/memory/:id/recover", async (c) => {
 	}
 
 	const now = new Date().toISOString();
-	const actor = resolveMutationActor(
-		c,
-		parseOptionalString(payload.changed_by),
-	);
+	const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
 	const txResult = getDbAccessor().withWriteTx((db) =>
 		txRecoverMemory(db, {
 			memoryId,
@@ -2569,10 +2338,7 @@ app.post("/api/memory/:id/recover", async (c) => {
 				retentionDays: SOFT_DELETE_RETENTION_DAYS,
 			});
 		case "not_found":
-			return c.json(
-				{ id: txResult.memoryId, status: txResult.status, error: "Not found" },
-				404,
-			);
+			return c.json({ id: txResult.memoryId, status: txResult.status, error: "Not found" }, 404);
 		case "not_deleted":
 			return c.json(
 				{
@@ -2624,10 +2390,7 @@ app.patch("/api/memory/:id", async (c) => {
 		return c.json({ error: "reason is required" }, 400);
 	}
 
-	const hasIfVersion = Object.prototype.hasOwnProperty.call(
-		payload,
-		"if_version",
-	);
+	const hasIfVersion = Object.prototype.hasOwnProperty.call(payload, "if_version");
 	const ifVersion = parseOptionalInt(payload.if_version);
 	if (hasIfVersion && ifVersion === undefined) {
 		return c.json({ error: "if_version must be a positive integer" }, 400);
@@ -2645,17 +2408,11 @@ app.patch("/api/memory/:id", async (c) => {
 
 	let embeddingVector: number[] | null = null;
 	if (parsedPatch.value.contentForEmbedding !== null) {
-		embeddingVector = await fetchEmbedding(
-			parsedPatch.value.contentForEmbedding,
-			cfg.embedding,
-		);
+		embeddingVector = await fetchEmbedding(parsedPatch.value.contentForEmbedding, cfg.embedding);
 	}
 
 	const now = new Date().toISOString();
-	const actor = resolveMutationActor(
-		c,
-		parseOptionalString(payload.changed_by),
-	);
+	const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
 	const txResult = getDbAccessor().withWriteTx((db) =>
 		txModifyMemory(db, {
 			memoryId,
@@ -2680,10 +2437,7 @@ app.patch("/api/memory/:id", async (c) => {
 				currentVersion: txResult.currentVersion,
 				newVersion: txResult.newVersion,
 				contentChanged: txResult.contentChanged ?? false,
-				embedded:
-					txResult.contentChanged === true && embeddingVector !== null
-						? true
-						: undefined,
+				embedded: txResult.contentChanged === true && embeddingVector !== null ? true : undefined,
 			});
 		case "no_changes":
 			return c.json({
@@ -2692,10 +2446,7 @@ app.patch("/api/memory/:id", async (c) => {
 				currentVersion: txResult.currentVersion,
 			});
 		case "not_found":
-			return c.json(
-				{ id: txResult.memoryId, status: txResult.status, error: "Not found" },
-				404,
-			);
+			return c.json({ id: txResult.memoryId, status: txResult.status, error: "Not found" }, 404);
 		case "deleted":
 			return c.json(
 				{
@@ -2743,9 +2494,7 @@ app.delete("/api/memory/:id", async (c) => {
 		return c.json({ error: "memory id is required" }, 400);
 	}
 
-	const reason =
-		parseOptionalString(payload.reason) ??
-		parseOptionalString(c.req.query("reason"));
+	const reason = parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason"));
 	if (!reason) {
 		return c.json({ error: "reason is required" }, 400);
 	}
@@ -2758,10 +2507,7 @@ app.delete("/api/memory/:id", async (c) => {
 	const forceFromQuery = parseOptionalBoolean(c.req.query("force"));
 	const force = forceFromBody ?? forceFromQuery ?? false;
 
-	const hasIfVersionInBody = Object.prototype.hasOwnProperty.call(
-		payload,
-		"if_version",
-	);
+	const hasIfVersionInBody = Object.prototype.hasOwnProperty.call(payload, "if_version");
 	const ifVersionBody = parseOptionalInt(payload.if_version);
 	if (hasIfVersionInBody && ifVersionBody === undefined) {
 		return c.json({ error: "if_version must be a positive integer" }, 400);
@@ -2780,10 +2526,7 @@ app.delete("/api/memory/:id", async (c) => {
 	}
 
 	const now = new Date().toISOString();
-	const actor = resolveMutationActor(
-		c,
-		parseOptionalString(payload.changed_by),
-	);
+	const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
 	const txResult = getDbAccessor().withWriteTx((db) =>
 		txForgetMemory(db, {
 			memoryId,
@@ -2805,10 +2548,7 @@ app.delete("/api/memory/:id", async (c) => {
 				newVersion: txResult.newVersion,
 			});
 		case "not_found":
-			return c.json(
-				{ id: txResult.memoryId, status: txResult.status, error: "Not found" },
-				404,
-			);
+			return c.json({ id: txResult.memoryId, status: txResult.status, error: "Not found" }, 404);
 		case "already_deleted":
 			return c.json(
 				{
@@ -2908,17 +2648,13 @@ app.post("/api/memory/forget", async (c) => {
 	if (ids.length === 0 && !hasQueryScope) {
 		return c.json(
 			{
-				error:
-					"query, ids, or at least one filter (type/tags/who/source_type/since/until) is required",
+				error: "query, ids, or at least one filter (type/tags/who/source_type/since/until) is required",
 			},
 			400,
 		);
 	}
 
-	const candidates =
-		ids.length > 0
-			? loadForgetCandidatesByIds(ids, limit)
-			: loadForgetCandidates(request);
+	const candidates = ids.length > 0 ? loadForgetCandidatesByIds(ids, limit) : loadForgetCandidates(request);
 	const candidateIds = candidates.map((candidate) => candidate.id);
 	const confirmToken = buildForgetConfirmToken(candidateIds);
 	const requiresConfirm = candidateIds.length > FORGET_CONFIRM_THRESHOLD;
@@ -2952,8 +2688,7 @@ app.post("/api/memory/forget", async (c) => {
 	if (Object.prototype.hasOwnProperty.call(payload, "if_version")) {
 		return c.json(
 			{
-				error:
-					"if_version is not supported for batch forget; use DELETE /api/memory/:id for version-guarded deletes",
+				error: "if_version is not supported for batch forget; use DELETE /api/memory/:id for version-guarded deletes",
 			},
 			400,
 		);
@@ -2964,8 +2699,7 @@ app.post("/api/memory/forget", async (c) => {
 		if (!providedToken || providedToken !== confirmToken) {
 			return c.json(
 				{
-					error:
-						"confirm_token is required for large forget operations; run preview first",
+					error: "confirm_token is required for large forget operations; run preview first",
 					requiresConfirm: true,
 					confirmToken,
 					count: candidates.length,
@@ -2980,10 +2714,7 @@ app.post("/api/memory/forget", async (c) => {
 		return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 	}
 
-	const actor = resolveMutationActor(
-		c,
-		parseOptionalString(payload.changed_by),
-	);
+	const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
 	const changedAt = new Date().toISOString();
 
 	const results: Array<{
@@ -3043,10 +2774,7 @@ app.post("/api/memory/modify", async (c) => {
 	}
 
 	const defaultReason = parseOptionalString(payload.reason);
-	const actor = resolveMutationActor(
-		c,
-		parseOptionalString(payload.changed_by),
-	);
+	const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
 	const changedAt = new Date().toISOString();
 
 	const results: Array<{
@@ -3091,10 +2819,7 @@ app.post("/api/memory/modify", async (c) => {
 			continue;
 		}
 
-		const hasIfVersion = Object.prototype.hasOwnProperty.call(
-			patchPayload,
-			"if_version",
-		);
+		const hasIfVersion = Object.prototype.hasOwnProperty.call(patchPayload, "if_version");
 		const ifVersion = parseOptionalInt(patchPayload.if_version);
 		if (hasIfVersion && ifVersion === undefined) {
 			results.push({
@@ -3117,10 +2842,7 @@ app.post("/api/memory/modify", async (c) => {
 
 		let embeddingVector: number[] | null = null;
 		if (parsedPatch.value.contentForEmbedding !== null) {
-			embeddingVector = await fetchEmbedding(
-				parsedPatch.value.contentForEmbedding,
-				cfg.embedding,
-			);
+			embeddingVector = await fetchEmbedding(parsedPatch.value.contentForEmbedding, cfg.embedding);
 		}
 
 		const txResult = getDbAccessor().withWriteTx((db) =>
@@ -3146,10 +2868,7 @@ app.post("/api/memory/modify", async (c) => {
 			newVersion: txResult.newVersion,
 			duplicateMemoryId: txResult.duplicateMemoryId,
 			contentChanged: txResult.contentChanged,
-			embedded:
-				txResult.contentChanged === true && embeddingVector !== null
-					? true
-					: undefined,
+			embedded: txResult.contentChanged === true && embeddingVector !== null ? true : undefined,
 		});
 	}
 
@@ -3184,7 +2903,7 @@ app.post("/api/memory/recall", async (c) => {
 // Alias: GET /api/memory/search?q=... (spec-compatible)
 app.get("/api/memory/search", async (c) => {
 	const q = c.req.query("q") ?? "";
-	const limit = parseInt(c.req.query("limit") ?? "10", 10);
+	const limit = Number.parseInt(c.req.query("limit") ?? "10", 10);
 	const type = c.req.query("type");
 	const tags = c.req.query("tags");
 	const who = c.req.query("who");
@@ -3202,7 +2921,7 @@ app.get("/api/memory/search", async (c) => {
 			tags,
 			who,
 			pinned: pinned === "1" || pinned === "true",
-			importance_min: importanceMin ? parseFloat(importanceMin) : undefined,
+			importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
 			since,
 		}),
 	});
@@ -3218,7 +2937,7 @@ app.get("/memory/similar", async (c) => {
 		return c.json({ error: "id is required", results: [] }, 400);
 	}
 
-	const k = parseInt(c.req.query("k") ?? "10", 10);
+	const k = Number.parseInt(c.req.query("k") ?? "10", 10);
 	const type = c.req.query("type");
 
 	try {
@@ -3251,10 +2970,7 @@ app.get("/memory/similar", async (c) => {
 		});
 
 		if (!searchData) {
-			return c.json(
-				{ error: "No embedding found for this memory", results: [] },
-				404,
-			);
+			return c.json({ error: "No embedding found for this memory", results: [] }, 404);
 		}
 
 		const filteredResults = searchData.filter((r) => r.id !== id).slice(0, k);
@@ -3384,10 +3100,7 @@ app.get("/api/embeddings", async (c) => {
 			sourceType: row.source_type ?? "memory",
 			sourceId: row.source_id ?? row.id,
 			createdAt: row.created_at,
-			vector:
-				withVectors && row.vector
-					? blobToVector(row.vector, row.dimensions ?? null)
-					: undefined,
+			vector: withVectors && row.vector ? blobToVector(row.vector, row.dimensions ?? null) : undefined,
 		}));
 
 		return c.json({
@@ -3400,11 +3113,7 @@ app.get("/api/embeddings", async (c) => {
 		});
 	} catch (e) {
 		if (isMissingEmbeddingsTableError(e)) {
-			const legacy = await runLegacyEmbeddingsExport(
-				withVectors,
-				limit,
-				offset,
-			);
+			const legacy = await runLegacyEmbeddingsExport(withVectors, limit, offset);
 			if (legacy) {
 				if (legacy.error) {
 					logger.warn("memory", "Legacy embeddings export failed", {
@@ -3438,9 +3147,7 @@ app.get("/api/embeddings/status", async (c) => {
 app.get("/api/embeddings/health", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const providerStatus = await checkEmbeddingProvider(cfg.embedding);
-	const report = getDbAccessor().withReadDb((db) =>
-		buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-	);
+	const report = getDbAccessor().withReadDb((db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus));
 	return c.json(report);
 });
 
@@ -3451,12 +3158,7 @@ app.get("/api/embeddings/projection", async (c) => {
 	const offset = parseOptionalBoundedInt(c.req.query("offset"), 0, 100000) ?? 0;
 
 	const query = parseOptionalString(c.req.query("q"));
-	const whoFilters = [
-		...new Set([
-			...parseCsvQuery(c.req.query("who")),
-			...parseCsvQuery(c.req.query("harness")),
-		]),
-	];
+	const whoFilters = [...new Set([...parseCsvQuery(c.req.query("who")), ...parseCsvQuery(c.req.query("harness"))])];
 	const typeFilters = (() => {
 		const list = parseCsvQuery(c.req.query("types"));
 		if (list.length > 0) return list;
@@ -3481,11 +3183,7 @@ app.get("/api/embeddings/projection", async (c) => {
 	let importanceMax =
 		parseOptionalBoundedFloat(c.req.query("importanceMax"), 0, 1) ??
 		parseOptionalBoundedFloat(c.req.query("importance_max"), 0, 1);
-	if (
-		typeof importanceMin === "number" &&
-		typeof importanceMax === "number" &&
-		importanceMin > importanceMax
-	) {
+	if (typeof importanceMin === "number" && typeof importanceMax === "number" && importanceMin > importanceMax) {
 		const swap = importanceMin;
 		importanceMin = importanceMax;
 		importanceMax = swap;
@@ -3502,8 +3200,7 @@ app.get("/api/embeddings/projection", async (c) => {
 		until !== undefined ||
 		importanceMin !== undefined ||
 		importanceMax !== undefined;
-	const useCachedProjection =
-		!hasFilters && limit === undefined && offset === 0;
+	const useCachedProjection = !hasFilters && limit === undefined && offset === 0;
 
 	if (!useCachedProjection) {
 		try {
@@ -3513,17 +3210,17 @@ app.get("/api/embeddings/projection", async (c) => {
 					offset,
 					filters: hasFilters
 						? {
-							query,
-							who: whoFilters,
-							types: typeFilters,
-							sourceTypes: sourceTypeFilters,
-							tags: tagFilters,
-							pinned,
-							since,
-							until,
-							importanceMin,
-							importanceMax,
-						}
+								query,
+								who: whoFilters,
+								types: typeFilters,
+								sourceTypes: sourceTypeFilters,
+								tags: tagFilters,
+								pinned,
+								since,
+								until,
+								importanceMin,
+								importanceMax,
+							}
 						: undefined,
 				}),
 			);
@@ -3547,15 +3244,8 @@ app.get("/api/embeddings/projection", async (c) => {
 
 	const { cached, total } = getDbAccessor().withReadDb((db) => {
 		const cachedResult = getCachedProjection(db, nComponents);
-		const countRow = db
-			.prepare(
-				"SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'",
-			)
-			.get();
-		const count =
-			countRow !== undefined && typeof countRow.count === "number"
-				? countRow.count
-				: 0;
+		const countRow = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
+		const count = countRow !== undefined && typeof countRow.count === "number" ? countRow.count : 0;
 		return { cached: cachedResult, total: count };
 	});
 
@@ -3581,10 +3271,7 @@ app.get("/api/embeddings/projection", async (c) => {
 		if (Date.now() > recentError.expires) {
 			projectionErrors.delete(nComponents);
 		} else {
-			return c.json(
-				{ status: "error", message: recentError.message },
-				500,
-			);
+			return c.json({ status: "error", message: recentError.message }, 500);
 		}
 	}
 
@@ -3593,29 +3280,15 @@ app.get("/api/embeddings/projection", async (c) => {
 		projectionErrors.delete(nComponents);
 		const computation = (async () => {
 			try {
-				const result = getDbAccessor().withReadDb((db) =>
-					computeProjection(db, nComponents),
-				);
+				const result = getDbAccessor().withReadDb((db) => computeProjection(db, nComponents));
 				const count = getDbAccessor().withReadDb((db) => {
-					const row = db
-						.prepare(
-							"SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'",
-						)
-						.get();
-					return row !== undefined && typeof row.count === "number"
-						? row.count
-						: 0;
+					const row = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
+					return row !== undefined && typeof row.count === "number" ? row.count : 0;
 				});
-				getDbAccessor().withWriteTx((db) =>
-					cacheProjection(db, nComponents, result, count),
-				);
+				getDbAccessor().withWriteTx((db) => cacheProjection(db, nComponents, result, count));
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				logger.error(
-					"projection",
-					"UMAP computation failed",
-					err instanceof Error ? err : new Error(msg),
-				);
+				logger.error("projection", "UMAP computation failed", err instanceof Error ? err : new Error(msg));
 				projectionErrors.set(nComponents, {
 					message: msg,
 					expires: Date.now() + PROJECTION_ERROR_TTL_MS,
@@ -3659,7 +3332,7 @@ app.post("/api/documents", async (c) => {
 		sourceType === "url"
 			? (body.url as string)
 			: sourceType === "file"
-				? (body.url as string | undefined) ?? null
+				? ((body.url as string | undefined) ?? null)
 				: null;
 
 	const accessor = getDbAccessor();
@@ -3678,9 +3351,7 @@ app.post("/api/documents", async (c) => {
 						   AND status NOT IN ('failed', 'deleted')
 						 LIMIT 1`,
 					)
-					.get(sourceUrl) as
-					| { id: string; status: string }
-					| undefined;
+					.get(sourceUrl) as { id: string; status: string } | undefined;
 				if (existing) {
 					return { deduplicated: true as const, existing };
 				}
@@ -3698,9 +3369,7 @@ app.post("/api/documents", async (c) => {
 				sourceType,
 				(body.content_type as string | undefined) ?? null,
 				(body.title as string | undefined) ?? null,
-				sourceType === "text"
-					? (body.content as string)
-					: null,
+				sourceType === "text" ? (body.content as string) : null,
 				(body.connector_id as string | undefined) ?? null,
 				body.metadata ? JSON.stringify(body.metadata) : null,
 				now,
@@ -3730,14 +3399,8 @@ app.post("/api/documents", async (c) => {
 // GET /api/documents — list documents
 app.get("/api/documents", (c) => {
 	const status = c.req.query("status");
-	const limit = Math.min(
-		Math.max(1, Number.parseInt(c.req.query("limit") ?? "50", 10) || 50),
-		500,
-	);
-	const offset = Math.max(
-		0,
-		Number.parseInt(c.req.query("offset") ?? "0", 10) || 0,
-	);
+	const limit = Math.min(Math.max(1, Number.parseInt(c.req.query("limit") ?? "50", 10) || 50), 500);
+	const offset = Math.max(0, Number.parseInt(c.req.query("offset") ?? "0", 10) || 0);
 
 	try {
 		const accessor = getDbAccessor();
@@ -3745,11 +3408,9 @@ app.get("/api/documents", (c) => {
 			const countSql = status
 				? "SELECT COUNT(*) AS cnt FROM documents WHERE status = ?"
 				: "SELECT COUNT(*) AS cnt FROM documents";
-			const countRow = (
-				status
-					? db.prepare(countSql).get(status)
-					: db.prepare(countSql).get()
-			) as { cnt: number } | undefined;
+			const countRow = (status ? db.prepare(countSql).get(status) : db.prepare(countSql).get()) as
+				| { cnt: number }
+				| undefined;
 			const total = countRow?.cnt ?? 0;
 
 			const listSql = status
@@ -3777,9 +3438,7 @@ app.get("/api/documents/:id", (c) => {
 	try {
 		const accessor = getDbAccessor();
 		const doc = accessor.withReadDb((db) => {
-			return db
-				.prepare("SELECT * FROM documents WHERE id = ?")
-				.get(id);
+			return db.prepare("SELECT * FROM documents WHERE id = ?").get(id);
 		});
 		if (!doc) return c.json({ error: "Document not found" }, 404);
 		return c.json(doc);
@@ -3823,9 +3482,7 @@ app.delete("/api/documents/:id", async (c) => {
 
 	const accessor = getDbAccessor();
 	const doc = accessor.withReadDb((db) => {
-		return db
-			.prepare("SELECT id FROM documents WHERE id = ?")
-			.get(id) as { id: string } | undefined;
+		return db.prepare("SELECT id FROM documents WHERE id = ?").get(id) as { id: string } | undefined;
 	});
 	if (!doc) return c.json({ error: "Document not found" }, 404);
 
@@ -3847,11 +3504,7 @@ app.delete("/api/documents/:id", async (c) => {
 		let memoriesRemoved = 0;
 		for (const link of linkedMemories) {
 			accessor.withWriteTx((db) => {
-				const mem = db
-					.prepare(
-						"SELECT is_deleted FROM memories WHERE id = ?",
-					)
-					.get(link.memory_id) as
+				const mem = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get(link.memory_id) as
 					| { is_deleted: number }
 					| undefined;
 				if (!mem || mem.is_deleted === 1) return;
@@ -3869,13 +3522,7 @@ app.delete("/api/documents/:id", async (c) => {
 					 (id, memory_id, event, old_content, new_content,
 					  changed_by, reason, metadata, created_at)
 					 VALUES (?, ?, 'deleted', NULL, NULL, ?, ?, NULL, ?)`,
-				).run(
-					histId,
-					link.memory_id,
-					actor.changedBy,
-					`Document deleted: ${reason}`,
-					now,
-				);
+				).run(histId, link.memory_id, actor.changedBy, `Document deleted: ${reason}`, now);
 
 				memoriesRemoved++;
 			});
@@ -3924,18 +3571,12 @@ app.post("/api/connectors", async (c) => {
 
 	const provider = body.provider as string | undefined;
 	if (!provider || !["filesystem", "github-docs", "gdrive"].includes(provider)) {
-		return c.json(
-			{ error: "provider must be filesystem, github-docs, or gdrive" },
-			400,
-		);
+		return c.json({ error: "provider must be filesystem, github-docs, or gdrive" }, 400);
 	}
 
-	const displayName =
-		typeof body.displayName === "string" ? body.displayName : provider;
+	const displayName = typeof body.displayName === "string" ? body.displayName : provider;
 	const settings =
-		typeof body.settings === "object" && body.settings !== null
-			? (body.settings as Record<string, unknown>)
-			: {};
+		typeof body.settings === "object" && body.settings !== null ? (body.settings as Record<string, unknown>) : {};
 
 	try {
 		const accessor = getDbAccessor();
@@ -3991,10 +3632,7 @@ app.post("/api/connectors/:id/sync", async (c) => {
 
 	// Only filesystem is supported for now
 	if (config.provider !== "filesystem") {
-		return c.json(
-			{ error: `Provider ${config.provider} not yet supported` },
-			501,
-		);
+		return c.json({ error: `Provider ${config.provider} not yet supported` }, 501);
 	}
 
 	updateConnectorStatus(accessor, id, "syncing");
@@ -4034,10 +3672,7 @@ app.post("/api/connectors/:id/sync/full", async (c) => {
 	const id = c.req.param("id");
 	const confirm = c.req.query("confirm");
 	if (confirm !== "true") {
-		return c.json(
-			{ error: "Full resync requires ?confirm=true" },
-			400,
-		);
+		return c.json({ error: "Full resync requires ?confirm=true" }, 400);
 	}
 
 	const accessor = getDbAccessor();
@@ -4053,10 +3688,7 @@ app.post("/api/connectors/:id/sync/full", async (c) => {
 	};
 
 	if (config.provider !== "filesystem") {
-		return c.json(
-			{ error: `Provider ${config.provider} not yet supported` },
-			501,
-		);
+		return c.json({ error: `Provider ${config.provider} not yet supported` }, 501);
 	}
 
 	updateConnectorStatus(accessor, id, "syncing");
@@ -4179,6 +3811,10 @@ app.get("/api/connectors/:id/health", (c) => {
 import { mountSkillsRoutes } from "./routes/skills.js";
 mountSkillsRoutes(app);
 
+// Marketplace routes (MCP servers catalog + routing)
+import { mountMarketplaceRoutes } from "./routes/marketplace.js";
+mountMarketplaceRoutes(app);
+
 // ============================================================================
 // Harnesses API
 // ============================================================================
@@ -4210,9 +3846,7 @@ app.post("/api/harnesses/regenerate", async (c) => {
 		const script = join(SCRIPTS_DIR, "generate-harness-configs.py");
 
 		if (!existsSync(script)) {
-			resolve(
-				c.json({ success: false, error: "Regeneration script not found" }, 404),
-			);
+			resolve(c.json({ success: false, error: "Regeneration script not found" }, 404));
 			return;
 		}
 
@@ -4377,29 +4011,29 @@ app.delete("/api/secrets/:name", (c) => {
 // ============================================================================
 
 import {
-	handleSessionStart,
-	handlePreCompaction,
-	handleSynthesisRequest,
-	getSynthesisConfig,
-	handleUserPromptSubmit,
-	handleSessionEnd,
-	handleRemember,
-	handleRecall,
-	type SessionStartRequest,
 	type PreCompactionRequest,
+	type RecallRequest,
+	type RememberRequest,
+	type SessionEndRequest,
+	type SessionStartRequest,
 	type SynthesisRequest,
 	type UserPromptSubmitRequest,
-	type SessionEndRequest,
-	type RememberRequest,
-	type RecallRequest,
+	getSynthesisConfig,
+	handlePreCompaction,
+	handleRecall,
+	handleRemember,
+	handleSessionEnd,
+	handleSessionStart,
+	handleSynthesisRequest,
+	handleUserPromptSubmit,
 } from "./hooks.js";
 
 import {
+	type RuntimePath,
 	claimSession,
 	getSessionPath,
 	releaseSession,
 	startSessionCleanup,
-	type RuntimePath,
 } from "./session-tracker.js";
 
 /** Read the runtime path from header or body, preferring header. */
@@ -4423,10 +4057,7 @@ function checkSessionClaim(
 
 	const owner = getSessionPath(sessionKey);
 	if (owner && owner !== runtimePath) {
-		return c.json(
-			{ error: `session claimed by ${owner} path` },
-			409,
-		) as unknown as Response;
+		return c.json({ error: `session claimed by ${owner} path` }, 409) as unknown as Response;
 	}
 	return null;
 }
@@ -4467,9 +4098,12 @@ app.post("/api/hooks/session-start", async (c) => {
 		if (body.sessionKey && runtimePath) {
 			const claim = claimSession(body.sessionKey, runtimePath);
 			if (!claim.ok) {
-				return c.json({
-					error: `session claimed by ${claim.claimedBy} path`,
-				}, 409);
+				return c.json(
+					{
+						error: `session claimed by ${claim.claimedBy} path`,
+					},
+					409,
+				);
 			}
 		}
 
@@ -4705,15 +4339,8 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 
 		// Backup existing
 		if (existsSync(memoryMdPath)) {
-			const timestamp = new Date()
-				.toISOString()
-				.replace(/[:.]/g, "-")
-				.slice(0, 19);
-			const backupPath = join(
-				AGENTS_DIR,
-				"memory",
-				`MEMORY.backup-${timestamp}.md`,
-			);
+			const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+			const backupPath = join(AGENTS_DIR, "memory", `MEMORY.backup-${timestamp}.md`);
 			mkdirSync(join(AGENTS_DIR, "memory"), { recursive: true });
 			writeFileSync(backupPath, readFileSync(memoryMdPath, "utf-8"));
 		}
@@ -4769,8 +4396,7 @@ app.post("/api/git/config", async (c) => {
 
 	// Update in-memory config
 	if (body.autoSync !== undefined) gitConfig.autoSync = body.autoSync;
-	if (body.syncInterval !== undefined)
-		gitConfig.syncInterval = body.syncInterval;
+	if (body.syncInterval !== undefined) gitConfig.syncInterval = body.syncInterval;
 	if (body.remote) gitConfig.remote = body.remote;
 	if (body.branch) gitConfig.branch = body.branch;
 
@@ -4846,10 +4472,7 @@ app.post("/api/update/config", async (c) => {
 	if (autoInstallRaw !== undefined) {
 		const parsed = parseBooleanFlag(autoInstallRaw);
 		if (parsed === null) {
-			return c.json(
-				{ success: false, error: "autoInstall must be true or false" },
-				400,
-			);
+			return c.json({ success: false, error: "autoInstall must be true or false" }, 400);
 		}
 		autoInstall = parsed;
 	}
@@ -5057,10 +4680,13 @@ app.post("/api/tasks", async (c) => {
 	}
 
 	if (!isHarnessAvailable(harness)) {
-		return c.json({
-			error: `CLI for ${harness} not found on PATH`,
-			warning: true,
-		}, 400);
+		return c.json(
+			{
+				error: `CLI for ${harness} not found on PATH`,
+				warning: true,
+			},
+			400,
+		);
 	}
 
 	const id = crypto.randomUUID();
@@ -5084,9 +4710,7 @@ app.post("/api/tasks", async (c) => {
 app.get("/api/tasks/:id", (c) => {
 	const taskId = c.req.param("id");
 
-	const task = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
-	);
+	const task = getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId));
 
 	if (!task) {
 		return c.json({ error: "Task not found" }, 404);
@@ -5126,9 +4750,12 @@ app.patch("/api/tasks/:id", async (c) => {
 	const now = new Date().toISOString();
 	const cronExpr = body.cronExpression ?? existing.cron_expression;
 	const enabled = body.enabled !== undefined ? (body.enabled ? 1 : 0) : existing.enabled;
-	const nextRunAt = body.cronExpression !== undefined || body.enabled !== undefined
-		? (enabled ? computeNextRun(cronExpr as string) : existing.next_run_at)
-		: existing.next_run_at;
+	const nextRunAt =
+		body.cronExpression !== undefined || body.enabled !== undefined
+			? enabled
+				? computeNextRun(cronExpr as string)
+				: existing.next_run_at
+			: existing.next_run_at;
 
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
@@ -5178,11 +4805,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 
 	// Check if already running
 	const running = getDbAccessor().withReadDb((db) =>
-		db
-			.prepare(
-				"SELECT 1 FROM task_runs WHERE task_id = ? AND status = 'running' LIMIT 1",
-			)
-			.get(taskId),
+		db.prepare("SELECT 1 FROM task_runs WHERE task_id = ? AND status = 'running' LIMIT 1").get(taskId),
 	);
 
 	if (running) {
@@ -5198,9 +4821,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 			 VALUES (?, ?, 'running', ?)`,
 		).run(runId, taskId, now);
 
-		db.prepare(
-			"UPDATE scheduled_tasks SET last_run_at = ?, updated_at = ? WHERE id = ?",
-		).run(now, now, taskId);
+		db.prepare("UPDATE scheduled_tasks SET last_run_at = ?, updated_at = ? WHERE id = ?").run(now, now, taskId);
 	});
 
 	emitTaskStream({
@@ -5213,60 +4834,60 @@ app.post("/api/tasks/:id/run", async (c) => {
 
 	// Spawn in background (don't await)
 	import("./scheduler/spawn").then((mod) => {
-		mod.spawnTask(
-			task.harness as "claude-code" | "opencode",
-			task.prompt as string,
-			task.working_directory as string | null,
-			undefined,
-			{
-				onStdoutChunk: (chunk) => {
-					emitTaskStream({
-						type: "run-output",
-						taskId,
-						runId,
-						stream: "stdout",
-						chunk,
-						timestamp: new Date().toISOString(),
-					});
+		mod
+			.spawnTask(
+				task.harness as "claude-code" | "opencode",
+				task.prompt as string,
+				task.working_directory as string | null,
+				undefined,
+				{
+					onStdoutChunk: (chunk) => {
+						emitTaskStream({
+							type: "run-output",
+							taskId,
+							runId,
+							stream: "stdout",
+							chunk,
+							timestamp: new Date().toISOString(),
+						});
+					},
+					onStderrChunk: (chunk) => {
+						emitTaskStream({
+							type: "run-output",
+							taskId,
+							runId,
+							stream: "stderr",
+							chunk,
+							timestamp: new Date().toISOString(),
+						});
+					},
 				},
-				onStderrChunk: (chunk) => {
-					emitTaskStream({
-						type: "run-output",
-						taskId,
-						runId,
-						stream: "stderr",
-						chunk,
-						timestamp: new Date().toISOString(),
-					});
-				},
-			},
-		).then((result) => {
-			const completedAt = new Date().toISOString();
-			const status =
-				result.error !== null || (result.exitCode !== null && result.exitCode !== 0)
-					? "failed"
-					: "completed";
+			)
+			.then((result) => {
+				const completedAt = new Date().toISOString();
+				const status =
+					result.error !== null || (result.exitCode !== null && result.exitCode !== 0) ? "failed" : "completed";
 
-			getDbAccessor().withWriteTx((db) => {
-				db.prepare(
-					`UPDATE task_runs
+				getDbAccessor().withWriteTx((db) => {
+					db.prepare(
+						`UPDATE task_runs
 					 SET status = ?, completed_at = ?, exit_code = ?,
 					     stdout = ?, stderr = ?, error = ?
 					 WHERE id = ?`,
-				).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
-			});
+					).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
+				});
 
-			emitTaskStream({
-				type: "run-completed",
-				taskId,
-				runId,
-				status,
-				completedAt,
-				exitCode: result.exitCode,
-				error: result.error,
-				timestamp: new Date().toISOString(),
+				emitTaskStream({
+					type: "run-completed",
+					taskId,
+					runId,
+					status,
+					completedAt,
+					exitCode: result.exitCode,
+					error: result.error,
+					timestamp: new Date().toISOString(),
+				});
 			});
-		});
 	});
 
 	return c.json({ runId, status: "running" }, 202);
@@ -5290,9 +4911,9 @@ app.get("/api/tasks/:id/runs", (c) => {
 	);
 
 	const total = getDbAccessor().withReadDb((db) => {
-		const row = db
-			.prepare("SELECT COUNT(*) as count FROM task_runs WHERE task_id = ?")
-			.get(taskId) as { count: number };
+		const row = db.prepare("SELECT COUNT(*) as count FROM task_runs WHERE task_id = ?").get(taskId) as {
+			count: number;
+		};
 		return row.count;
 	});
 
@@ -5308,9 +4929,7 @@ app.get("/api/status", (c) => {
 
 	let health: { score: number; status: string } | undefined;
 	try {
-		const report = getDbAccessor().withReadDb((db) =>
-			getDiagnostics(db, providerTracker, getUpdateState()),
-		);
+		const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
 		health = report.composite;
 	} catch {
 		// DB not ready yet — omit health
@@ -5344,8 +4963,7 @@ app.get("/api/status", (c) => {
 			provider: config.embedding.provider,
 			model: config.embedding.model,
 			// Don't block on status check for /api/status - use cached if available
-			...(cachedEmbeddingStatus &&
-			Date.now() - statusCacheTime < STATUS_CACHE_TTL
+			...(cachedEmbeddingStatus && Date.now() - statusCacheTime < STATUS_CACHE_TTL
 				? { available: cachedEmbeddingStatus.available }
 				: {}),
 		},
@@ -5357,17 +4975,13 @@ app.get("/api/status", (c) => {
 // ============================================================================
 
 app.get("/api/diagnostics", (c) => {
-	const report = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker, getUpdateState()),
-	);
+	const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
 	return c.json(report);
 });
 
 app.get("/api/diagnostics/:domain", (c) => {
 	const domain = c.req.param("domain");
-	const report = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker, getUpdateState()),
-	);
+	const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
 
 	const domainData = report[domain as keyof typeof report];
 	if (!domainData || typeof domainData === "string") {
@@ -5385,20 +4999,15 @@ app.get("/api/pipeline/status", (c) => {
 	const accessor = getDbAccessor();
 
 	const dbData = accessor.withReadDb((db) => {
-		const memoryRows = db
-			.prepare(
-				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
-			)
-			.all() as Array<{ status: string; count: number }>;
+		const memoryRows = db.prepare("SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status").all() as Array<{
+			status: string;
+			count: number;
+		}>;
 		const summaryRows = db
-			.prepare(
-				"SELECT status, COUNT(*) as count FROM summary_jobs GROUP BY status",
-			)
+			.prepare("SELECT status, COUNT(*) as count FROM summary_jobs GROUP BY status")
 			.all() as Array<{ status: string; count: number }>;
 
-		const toCountMap = (
-			rows: Array<{ status: string; count: number }>,
-		): Record<string, number> => {
+		const toCountMap = (rows: Array<{ status: string; count: number }>): Record<string, number> => {
 			const out: Record<string, number> = {
 				pending: 0,
 				leased: 0,
@@ -5422,14 +5031,13 @@ app.get("/api/pipeline/status", (c) => {
 	});
 
 	const pipelineV2 = cfg.pipelineV2;
-	const mode =
-		!pipelineV2.enabled
-			? "disabled"
-			: pipelineV2.mutationsFrozen
-				? "frozen"
-				: pipelineV2.shadowMode
-					? "shadow"
-					: "controlled-write";
+	const mode = !pipelineV2.enabled
+		? "disabled"
+		: pipelineV2.mutationsFrozen
+			? "frozen"
+			: pipelineV2.shadowMode
+				? "shadow"
+				: "controlled-write";
 
 	return c.json({
 		workers: getPipelineWorkerStatus(),
@@ -5444,10 +5052,7 @@ app.get("/api/pipeline/status", (c) => {
 function resolveRepairContext(c: Context): RepairContext {
 	const reason = c.req.header("x-signet-reason") ?? "manual repair";
 	const actor = c.req.header("x-signet-actor") ?? "operator";
-	const actorType = (c.req.header("x-signet-actor-type") ?? "operator") as
-		| "operator"
-		| "agent"
-		| "daemon";
+	const actorType = (c.req.header("x-signet-actor-type") ?? "operator") as "operator" | "agent" | "daemon";
 	const requestId = c.req.header("x-signet-request-id") ?? crypto.randomUUID();
 	return { reason, actor, actorType, requestId };
 }
@@ -5455,24 +5060,14 @@ function resolveRepairContext(c: Context): RepairContext {
 app.post("/api/repair/requeue-dead", (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const ctx = resolveRepairContext(c);
-	const result = requeueDeadJobs(
-		getDbAccessor(),
-		cfg.pipelineV2,
-		ctx,
-		repairLimiter,
-	);
+	const result = requeueDeadJobs(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
 	return c.json(result, result.success ? 200 : 429);
 });
 
 app.post("/api/repair/release-leases", (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const ctx = resolveRepairContext(c);
-	const result = releaseStaleLeases(
-		getDbAccessor(),
-		cfg.pipelineV2,
-		ctx,
-		repairLimiter,
-	);
+	const result = releaseStaleLeases(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
 	return c.json(result, result.success ? 200 : 429);
 });
 
@@ -5486,13 +5081,7 @@ app.post("/api/repair/check-fts", async (c) => {
 	} catch {
 		// no body or invalid JSON — default repair=false
 	}
-	const result = checkFtsConsistency(
-		getDbAccessor(),
-		cfg.pipelineV2,
-		ctx,
-		repairLimiter,
-		repair,
-	);
+	const result = checkFtsConsistency(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, repair);
 	return c.json(result, result.success ? 200 : 429);
 });
 
@@ -5503,12 +5092,15 @@ app.post("/api/repair/retention-sweep", (c) => {
 	// we can call the repair action with a minimal sweep handle via
 	// the retention worker's public API. For now, return 501 if the
 	// retention worker isn't running (pipeline not started).
-	return c.json({
-		action: "triggerRetentionSweep",
-		success: false,
-		affected: 0,
-		message: "Use the maintenance worker for automated sweeps; manual sweep via this endpoint is not yet wired",
-	}, 501);
+	return c.json(
+		{
+			action: "triggerRetentionSweep",
+			success: false,
+			affected: 0,
+			message: "Use the maintenance worker for automated sweeps; manual sweep via this endpoint is not yet wired",
+		},
+		501,
+	);
 });
 
 app.get("/api/repair/embedding-gaps", (c) => {
@@ -5547,12 +5139,7 @@ app.post("/api/repair/re-embed", async (c) => {
 app.post("/api/repair/clean-orphans", (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const ctx = resolveRepairContext(c);
-	const result = cleanOrphanedEmbeddings(
-		getDbAccessor(),
-		cfg.pipelineV2,
-		ctx,
-		repairLimiter,
-	);
+	const result = cleanOrphanedEmbeddings(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter);
 	return c.json(result, result.success ? 200 : 429);
 });
 
@@ -5564,7 +5151,7 @@ app.get("/api/repair/dedup-stats", (c) => {
 app.post("/api/repair/deduplicate", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const ctx = resolveRepairContext(c);
-	let options: {
+	const options: {
 		batchSize?: number;
 		dryRun?: boolean;
 		semanticThreshold?: number;
@@ -5574,20 +5161,12 @@ app.post("/api/repair/deduplicate", async (c) => {
 		const body = await c.req.json();
 		if (typeof body?.batchSize === "number") options.batchSize = body.batchSize;
 		if (typeof body?.dryRun === "boolean") options.dryRun = body.dryRun;
-		if (typeof body?.semanticThreshold === "number")
-			options.semanticThreshold = body.semanticThreshold;
-		if (typeof body?.semanticEnabled === "boolean")
-			options.semanticEnabled = body.semanticEnabled;
+		if (typeof body?.semanticThreshold === "number") options.semanticThreshold = body.semanticThreshold;
+		if (typeof body?.semanticEnabled === "boolean") options.semanticEnabled = body.semanticEnabled;
 	} catch {
 		// no body or invalid JSON — use defaults
 	}
-	const result = await deduplicateMemories(
-		getDbAccessor(),
-		cfg.pipelineV2,
-		ctx,
-		repairLimiter,
-		options,
-	);
+	const result = await deduplicateMemories(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, options);
 	return c.json(result, result.success ? 200 : 429);
 });
 
@@ -5597,7 +5176,7 @@ app.post("/api/repair/deduplicate", async (c) => {
 
 app.get("/api/checkpoints", (c) => {
 	const project = c.req.query("project");
-	const limit = parseInt(c.req.query("limit") ?? "10", 10);
+	const limit = Number.parseInt(c.req.query("limit") ?? "10", 10);
 
 	if (!project) {
 		return c.json({ error: "project query parameter required" }, 400);
@@ -5611,11 +5190,7 @@ app.get("/api/checkpoints", (c) => {
 		// Use raw path if realpath fails
 	}
 
-	const rows = getCheckpointsByProject(
-		getDbAccessor(),
-		projectNormalized,
-		Math.min(limit, 100),
-	);
+	const rows = getCheckpointsByProject(getDbAccessor(), projectNormalized, Math.min(limit, 100));
 	const redacted = rows.map(redactCheckpointRow);
 	return c.json({ checkpoints: redacted, count: redacted.length });
 });
@@ -5638,9 +5213,7 @@ app.get("/api/analytics/usage", (c) => {
 app.get("/api/analytics/errors", (c) => {
 	const stage = c.req.query("stage") as ErrorStage | undefined;
 	const since = c.req.query("since") ?? undefined;
-	const limit = c.req.query("limit")
-		? parseInt(c.req.query("limit")!, 10)
-		: undefined;
+	const limit = c.req.query("limit") ? Number.parseInt(c.req.query("limit")!, 10) : undefined;
 	return c.json({
 		errors: analyticsCollector.getErrors({ stage, since, limit }),
 		summary: analyticsCollector.getErrorSummary(),
@@ -5652,21 +5225,16 @@ app.get("/api/analytics/latency", (c) => {
 });
 
 app.get("/api/analytics/logs", (c) => {
-	const limit = parseInt(c.req.query("limit") || "100", 10);
-	const level = c.req.query("level") as
-		| "debug" | "info" | "warn" | "error" | undefined;
+	const limit = Number.parseInt(c.req.query("limit") || "100", 10);
+	const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
 	const category = c.req.query("category") as any;
-	const since = c.req.query("since")
-		? new Date(c.req.query("since")!)
-		: undefined;
+	const since = c.req.query("since") ? new Date(c.req.query("since")!) : undefined;
 	const logs = logger.getRecent({ limit, level, category, since });
 	return c.json({ logs, count: logs.length });
 });
 
 app.get("/api/analytics/memory-safety", (c) => {
-	const mutationHealth = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker, getUpdateState()),
-	);
+	const mutationHealth = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
 	const recentMutationErrors = analyticsCollector.getErrors({
 		stage: "mutation",
 		limit: 50,
@@ -5680,7 +5248,7 @@ app.get("/api/analytics/memory-safety", (c) => {
 
 app.get("/api/analytics/continuity", (c) => {
 	const project = c.req.query("project");
-	const limit = parseInt(c.req.query("limit") ?? "50", 10);
+	const limit = Number.parseInt(c.req.query("limit") ?? "50", 10);
 
 	const scores = getDbAccessor().withReadDb((db) => {
 		if (project) {
@@ -5710,14 +5278,8 @@ app.get("/api/analytics/continuity", (c) => {
 
 	// Compute trend
 	const scoreValues = scores.map((s) => s.score as number).reverse();
-	const trend =
-		scoreValues.length >= 2
-			? scoreValues[scoreValues.length - 1] - scoreValues[0]
-			: 0;
-	const avg =
-		scoreValues.length > 0
-			? scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length
-			: 0;
+	const trend = scoreValues.length >= 2 ? scoreValues[scoreValues.length - 1] - scoreValues[0] : 0;
+	const avg = scoreValues.length > 0 ? scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length : 0;
 
 	return c.json({
 		scores,
@@ -5766,7 +5328,7 @@ app.get("/api/telemetry/events", (c) => {
 	const event = c.req.query("event") as TelemetryEventType | undefined;
 	const since = c.req.query("since");
 	const until = c.req.query("until");
-	const limit = parseInt(c.req.query("limit") ?? "100", 10);
+	const limit = Number.parseInt(c.req.query("limit") ?? "100", 10);
 	const events = telemetryRef.query({ event, since, until, limit });
 	return c.json({ events, enabled: true });
 });
@@ -5815,7 +5377,7 @@ app.get("/api/telemetry/export", (c) => {
 		return c.text("telemetry not enabled", 404);
 	}
 	const since = c.req.query("since");
-	const limit = parseInt(c.req.query("limit") ?? "10000", 10);
+	const limit = Number.parseInt(c.req.query("limit") ?? "10000", 10);
 	const events = telemetryRef.query({ since, limit });
 
 	const lines = events.map((e) => JSON.stringify(e)).join("\n");
@@ -5829,8 +5391,7 @@ app.get("/api/timeline/:id", (c) => {
 			{
 				db,
 				getRecentLogs: (opts) => logger.getRecent({ limit: opts.limit }),
-				getRecentErrors: (opts) =>
-					analyticsCollector.getErrors({ limit: opts?.limit }),
+				getRecentErrors: (opts) => analyticsCollector.getErrors({ limit: opts?.limit }),
 			},
 			entityId,
 		),
@@ -5844,8 +5405,7 @@ app.get("/api/timeline/:id/export", (c) => {
 		const sources: TimelineSources = {
 			db,
 			getRecentLogs: (opts) => logger.getRecent({ limit: opts.limit }),
-			getRecentErrors: (opts) =>
-				analyticsCollector.getErrors({ limit: opts?.limit }),
+			getRecentErrors: (opts) => analyticsCollector.getErrors({ limit: opts?.limit }),
 		};
 		return buildTimeline(sources, entityId);
 	});
@@ -5943,10 +5503,7 @@ function loadGitConfig(): GitConfig {
 		branch: "main",
 	};
 
-	const paths = [
-		join(AGENTS_DIR, "agent.yaml"),
-		join(AGENTS_DIR, "AGENT.yaml"),
-	];
+	const paths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
 
 	for (const p of paths) {
 		if (!existsSync(p)) continue;
@@ -5954,15 +5511,10 @@ function loadGitConfig(): GitConfig {
 			const yaml = parseSimpleYaml(readFileSync(p, "utf-8"));
 			const git = yaml.git as Record<string, any> | undefined;
 			if (git) {
-				if (git.enabled !== undefined)
-					defaults.enabled = git.enabled === "true" || git.enabled === true;
-				if (git.autoCommit !== undefined)
-					defaults.autoCommit =
-						git.autoCommit === "true" || git.autoCommit === true;
-				if (git.autoSync !== undefined)
-					defaults.autoSync = git.autoSync === "true" || git.autoSync === true;
-				if (git.syncInterval !== undefined)
-					defaults.syncInterval = parseInt(git.syncInterval, 10);
+				if (git.enabled !== undefined) defaults.enabled = git.enabled === "true" || git.enabled === true;
+				if (git.autoCommit !== undefined) defaults.autoCommit = git.autoCommit === "true" || git.autoCommit === true;
+				if (git.autoSync !== undefined) defaults.autoSync = git.autoSync === "true" || git.autoSync === true;
+				if (git.syncInterval !== undefined) defaults.syncInterval = Number.parseInt(git.syncInterval, 10);
 				if (git.remote) defaults.remote = git.remote;
 				if (git.branch) defaults.branch = git.branch;
 			}
@@ -5975,7 +5527,7 @@ function loadGitConfig(): GitConfig {
 	return defaults;
 }
 
-let gitConfig = loadGitConfig();
+const gitConfig = loadGitConfig();
 let gitSyncTimer: ReturnType<typeof setInterval> | null = null;
 let lastGitSync: Date | null = null;
 let gitSyncInProgress = false;
@@ -6023,10 +5575,7 @@ async function runCommand(
 }
 
 // Get remote URL for a given remote
-async function getRemoteUrl(
-	dir: string,
-	remote: string,
-): Promise<string | null> {
+async function getRemoteUrl(dir: string, remote: string): Promise<string | null> {
 	const result = await runCommand("git", ["remote", "get-url", remote], {
 		cwd: dir,
 	});
@@ -6050,10 +5599,7 @@ function buildAuthUrlFromToken(baseUrl: string, token: string): string {
 }
 
 // Build authenticated URL from username/password
-function buildAuthUrlFromCreds(
-	baseUrl: string,
-	creds: { username: string; password: string },
-): string {
+function buildAuthUrlFromCreds(baseUrl: string, creds: { username: string; password: string }): string {
 	let url = baseUrl;
 	// Convert SSH to HTTPS if needed (github-specific shorthand)
 	if (url.startsWith("git@github.com:")) {
@@ -6132,16 +5678,10 @@ async function hasAnyGitCredentials(): Promise<boolean> {
 }
 
 // Resolve git credentials using multiple methods
-async function resolveGitCredentials(
-	dir: string,
-	remote: string,
-): Promise<GitCredentials> {
+async function resolveGitCredentials(dir: string, remote: string): Promise<GitCredentials> {
 	const remoteUrl = await getRemoteUrl(dir, remote);
 	if (!remoteUrl) {
-		logger.debug(
-			"git",
-			`No remote '${remote}' configured in ${dir} — skipping push/pull`,
-		);
+		logger.debug("git", `No remote '${remote}' configured in ${dir} — skipping push/pull`);
 		return { method: "no-remote" };
 	}
 
@@ -6168,8 +5708,7 @@ async function resolveGitCredentials(
 	}
 
 	// 3. GitHub-specific token methods — only for github.com remotes
-	const isGitHub =
-		remoteUrl.includes("github.com") || remoteUrl.includes("github.com:");
+	const isGitHub = remoteUrl.includes("github.com") || remoteUrl.includes("github.com:");
 
 	if (isGitHub) {
 		// 3a. Stored GITHUB_TOKEN
@@ -6205,10 +5744,7 @@ async function resolveGitCredentials(
 }
 
 // Run a git command with optional authenticated remote
-function runGitCommand(
-	args: string[],
-	cwd: string,
-): Promise<{ code: number; stdout: string; stderr: string }> {
+function runGitCommand(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
 	return new Promise((resolve) => {
 		const proc = spawn("git", args, { cwd, stdio: "pipe" });
 		let stdout = "";
@@ -6252,21 +5788,14 @@ async function gitPull(): Promise<{
 
 	if (creds.usePlainGit) {
 		// SSH: use plain git pull
-		fetchResult = await runGitCommand(
-			["fetch", gitConfig.remote, gitConfig.branch],
-			AGENTS_DIR,
-		);
+		fetchResult = await runGitCommand(["fetch", gitConfig.remote, gitConfig.branch], AGENTS_DIR);
 	} else if (creds.authUrl) {
 		// HTTPS with auth: use authenticated URL
-		fetchResult = await runGitCommand(
-			["fetch", creds.authUrl, gitConfig.branch],
-			AGENTS_DIR,
-		);
+		fetchResult = await runGitCommand(["fetch", creds.authUrl, gitConfig.branch], AGENTS_DIR);
 	} else {
 		return {
 			success: false,
-			message:
-				"No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.",
+			message: "No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.",
 		};
 	}
 
@@ -6281,25 +5810,19 @@ async function gitPull(): Promise<{
 		AGENTS_DIR,
 	);
 
-	const incomingChanges = parseInt(diffResult.stdout.trim(), 10) || 0;
+	const incomingChanges = Number.parseInt(diffResult.stdout.trim(), 10) || 0;
 
 	if (incomingChanges === 0) {
 		return { success: true, message: "Already up to date", changes: 0 };
 	}
 
 	// Stash local changes if any
-	const statusResult = await runGitCommand(
-		["status", "--porcelain"],
-		AGENTS_DIR,
-	);
+	const statusResult = await runGitCommand(["status", "--porcelain"], AGENTS_DIR);
 	const hasLocalChanges = statusResult.stdout.trim().length > 0;
 
 	let stashed = false;
 	if (hasLocalChanges) {
-		const stashResult = await runGitCommand(
-			["stash", "push", "-m", "signet-auto-stash"],
-			AGENTS_DIR,
-		);
+		const stashResult = await runGitCommand(["stash", "push", "-m", "signet-auto-stash"], AGENTS_DIR);
 		if (stashResult.code !== 0) {
 			logger.warn("git", `Stash failed: ${stashResult.stderr}`);
 			return {
@@ -6311,19 +5834,13 @@ async function gitPull(): Promise<{
 	}
 
 	// Pull (merge)
-	const pullResult = await runGitCommand(
-		["merge", `${gitConfig.remote}/${gitConfig.branch}`, "--ff-only"],
-		AGENTS_DIR,
-	);
+	const pullResult = await runGitCommand(["merge", `${gitConfig.remote}/${gitConfig.branch}`, "--ff-only"], AGENTS_DIR);
 
 	// Restore stashed changes if any
 	if (stashed) {
 		const popResult = await runGitCommand(["stash", "pop"], AGENTS_DIR);
 		if (popResult.code !== 0) {
-			logger.warn(
-				"git",
-				`Stash pop failed — local changes preserved in git stash: ${popResult.stderr}`,
-			);
+			logger.warn("git", `Stash pop failed — local changes preserved in git stash: ${popResult.stderr}`);
 		}
 	}
 
@@ -6366,7 +5883,7 @@ async function gitPush(): Promise<{
 		AGENTS_DIR,
 	);
 
-	const outgoingChanges = parseInt(diffResult.stdout.trim(), 10) || 0;
+	const outgoingChanges = Number.parseInt(diffResult.stdout.trim(), 10) || 0;
 
 	if (outgoingChanges === 0) {
 		return { success: true, message: "Nothing to push", changes: 0 };
@@ -6376,21 +5893,14 @@ async function gitPush(): Promise<{
 
 	if (creds.usePlainGit) {
 		// SSH: use plain git push
-		pushResult = await runGitCommand(
-			["push", gitConfig.remote, `HEAD:${gitConfig.branch}`],
-			AGENTS_DIR,
-		);
+		pushResult = await runGitCommand(["push", gitConfig.remote, `HEAD:${gitConfig.branch}`], AGENTS_DIR);
 	} else if (creds.authUrl) {
 		// HTTPS with auth: use authenticated URL
-		pushResult = await runGitCommand(
-			["push", creds.authUrl, `HEAD:${gitConfig.branch}`],
-			AGENTS_DIR,
-		);
+		pushResult = await runGitCommand(["push", creds.authUrl, `HEAD:${gitConfig.branch}`], AGENTS_DIR);
 	} else {
 		return {
 			success: false,
-			message:
-				"No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.",
+			message: "No git credentials found. Run `gh auth login` or set GITHUB_TOKEN secret.",
 		};
 	}
 
@@ -6509,15 +6019,11 @@ async function getGitStatus(): Promise<{
 
 	// Check credentials and auth method
 	const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
-	status.hasCredentials =
-		creds.method !== "none" && creds.method !== "no-remote";
+	status.hasCredentials = creds.method !== "none" && creds.method !== "no-remote";
 	status.authMethod = creds.method;
 
 	// Get current branch
-	const branchResult = await runGitCommand(
-		["rev-parse", "--abbrev-ref", "HEAD"],
-		AGENTS_DIR,
-	);
+	const branchResult = await runGitCommand(["rev-parse", "--abbrev-ref", "HEAD"], AGENTS_DIR);
 	if (branchResult.code === 0) {
 		status.branch = branchResult.stdout.trim();
 	}
@@ -6531,10 +6037,7 @@ async function getGitStatus(): Promise<{
 	}
 
 	// Uncommitted changes
-	const statusResult = await runGitCommand(
-		["status", "--porcelain"],
-		AGENTS_DIR,
-	);
+	const statusResult = await runGitCommand(["status", "--porcelain"], AGENTS_DIR);
 	if (statusResult.code === 0) {
 		status.uncommittedChanges = statusResult.stdout
 			.trim()
@@ -6549,7 +6052,7 @@ async function getGitStatus(): Promise<{
 			AGENTS_DIR,
 		);
 		if (unpushedResult.code === 0) {
-			status.unpushedCommits = parseInt(unpushedResult.stdout.trim(), 10) || 0;
+			status.unpushedCommits = Number.parseInt(unpushedResult.stdout.trim(), 10) || 0;
 		}
 
 		const unpulledResult = await runGitCommand(
@@ -6557,8 +6060,7 @@ async function getGitStatus(): Promise<{
 			AGENTS_DIR,
 		);
 		if (unpulledResult.code === 0) {
-			status.unpulledCommits =
-				parseInt(unpulledResult.stdout.trim(), 10) || 0;
+			status.unpulledCommits = Number.parseInt(unpulledResult.stdout.trim(), 10) || 0;
 		}
 	}
 
@@ -6569,10 +6071,7 @@ let commitPending = false;
 let commitTimer: ReturnType<typeof setTimeout> | null = null;
 const COMMIT_DEBOUNCE_MS = 5000; // Wait 5 seconds after last change before committing
 
-async function gitAutoCommit(
-	dir: string,
-	changedFiles: string[],
-): Promise<void> {
+async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void> {
 	if (!isGitRepo(dir)) return;
 
 	const fileList = changedFiles.map((f) => f.replace(dir + "/", "")).join(", ");
@@ -6662,12 +6161,8 @@ async function syncHarnessConfigs() {
 			{ name: "agent.yaml", desc: "Configuration & settings" },
 		];
 
-		const existingFiles = files.filter((f) =>
-			existsSync(join(AGENTS_DIR, f.name)),
-		);
-		const fileList = existingFiles
-			.map((f) => `#   - ~/.agents/${f.name} (${f.desc})`)
-			.join("\n");
+		const existingFiles = files.filter((f) => existsSync(join(AGENTS_DIR, f.name)));
+		const fileList = existingFiles.map((f) => `#   - ~/.agents/${f.name} (${f.desc})`).join("\n");
 
 		return `# ${targetName}
 # ============================================================================
@@ -6713,10 +6208,7 @@ ${fileList}
 	const claudeDir = join(homedir(), ".claude");
 	if (existsSync(claudeDir)) {
 		try {
-			writeFileSync(
-				join(claudeDir, "CLAUDE.md"),
-				buildHeader("CLAUDE.md") + composed,
-			);
+			writeFileSync(join(claudeDir, "CLAUDE.md"), buildHeader("CLAUDE.md") + composed);
 			logger.sync.harness("claude-code", "~/.claude/CLAUDE.md");
 		} catch (e) {
 			logger.sync.failed("claude-code", e as Error);
@@ -6727,10 +6219,7 @@ ${fileList}
 	const opencodeDir = join(homedir(), ".config", "opencode");
 	if (existsSync(opencodeDir)) {
 		try {
-			writeFileSync(
-				join(opencodeDir, "AGENTS.md"),
-				buildHeader("AGENTS.md") + composed,
-			);
+			writeFileSync(join(opencodeDir, "AGENTS.md"), buildHeader("AGENTS.md") + composed);
 			logger.sync.harness("opencode", "~/.config/opencode/AGENTS.md");
 		} catch (e) {
 			logger.sync.failed("opencode", e as Error);
@@ -6741,9 +6230,7 @@ ${fileList}
 	const archPath = join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md");
 	try {
 		const archContent = buildArchitectureDoc();
-		const existing = existsSync(archPath)
-			? readFileSync(archPath, "utf-8")
-			: "";
+		const existing = existsSync(archPath) ? readFileSync(archPath, "utf-8") : "";
 		if (existing !== archContent) {
 			writeFileSync(archPath, archContent);
 			logger.info("sync", "SIGNET-ARCHITECTURE.md updated");
@@ -6792,23 +6279,13 @@ function startFileWatcher() {
 		scheduleAutoCommit(path);
 
 		// If any identity file changed, sync to harness configs
-		const SYNC_TRIGGER_FILES = [
-			"AGENTS.md",
-			"SOUL.md",
-			"IDENTITY.md",
-			"USER.md",
-			"MEMORY.md",
-		];
+		const SYNC_TRIGGER_FILES = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
 		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f))) {
 			scheduleSyncHarnessConfigs();
 		}
 
 		// Ingest memory markdown files (excluding MEMORY.md index)
-		if (
-			path.includes("/memory/") &&
-			path.endsWith(".md") &&
-			!path.endsWith("MEMORY.md")
-		) {
+		if (path.includes("/memory/") && path.endsWith(".md") && !path.endsWith("MEMORY.md")) {
 			ingestMemoryMarkdown(path).catch((e) =>
 				logger.error("watcher", "Ingestion failed", undefined, {
 					path,
@@ -6823,11 +6300,7 @@ function startFileWatcher() {
 		scheduleAutoCommit(path);
 
 		// Ingest new memory markdown files
-		if (
-			path.includes("/memory/") &&
-			path.endsWith(".md") &&
-			!path.endsWith("MEMORY.md")
-		) {
+		if (path.includes("/memory/") && path.endsWith(".md") && !path.endsWith("MEMORY.md")) {
 			ingestMemoryMarkdown(path).catch((e) =>
 				logger.error("watcher", "Ingestion failed", undefined, {
 					path,
@@ -6851,10 +6324,10 @@ function startClaudeMemoryWatcher() {
 	// NOTE: initial sync of existing files is deferred to the server listen
 	// callback so the HTTP API is available. Only the watcher starts here.
 
-	const claudeWatcher = watch(
-		join(claudeProjectsDir, "**", "memory", "MEMORY.md"),
-		{ persistent: true, ignoreInitial: true },
-	);
+	const claudeWatcher = watch(join(claudeProjectsDir, "**", "memory", "MEMORY.md"), {
+		persistent: true,
+		ignoreInitial: true,
+	});
 
 	claudeWatcher.on("change", async (filePath) => {
 		logger.info("watcher", "Claude memory changed", { path: filePath });
@@ -6873,12 +6346,7 @@ async function syncExistingClaudeMemories(claudeProjectsDir: string) {
 		let totalSynced = 0;
 
 		for (const project of projects) {
-			const memoryFile = join(
-				claudeProjectsDir,
-				project,
-				"memory",
-				"MEMORY.md",
-			);
+			const memoryFile = join(claudeProjectsDir, project, "memory", "MEMORY.md");
 			if (existsSync(memoryFile)) {
 				const count = await syncClaudeMemoryFile(memoryFile);
 				totalSynced += count;
@@ -6891,12 +6359,7 @@ async function syncExistingClaudeMemories(claudeProjectsDir: string) {
 			});
 		}
 	} catch (e) {
-		logger.error(
-			"watcher",
-			"Failed to sync existing Claude memories",
-			undefined,
-			{ error: String(e) },
-		);
+		logger.error("watcher", "Failed to sync existing Claude memories", undefined, { error: String(e) });
 	}
 }
 
@@ -6911,10 +6374,7 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 		const projectId = match ? match[1] : "unknown";
 
 		// Compute hash for deduplication
-		const contentHash = createHash("sha256")
-			.update(content)
-			.digest("hex")
-			.slice(0, 16);
+		const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16);
 		const existingHash = ingestedMemoryFiles.get(filePath);
 		if (existingHash === contentHash) {
 			logger.debug("watcher", "Claude memory file unchanged, skipping", {
@@ -6941,31 +6401,26 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 			syncedClaudeMemories.add(chunkKey);
 
 			try {
-				const response = await fetch(
-					`http://${HOST}:${PORT}/api/memory/remember`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							content: chunk.text,
-							who: "claude-code",
-							importance: chunk.level === "section" ? 0.65 : 0.55,
-							sourceType: "claude-project-memory",
-							sourceId: chunkKey,
-							tags: [
-								"claude-code",
-								"claude-project-memory",
-								sectionName,
-								`project:${projectId}`,
-								chunk.level === "section"
-									? "hierarchical-section"
-									: "hierarchical-paragraph",
-							]
-								.filter(Boolean)
-								.join(","),
-						}),
-					},
-				);
+				const response = await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						content: chunk.text,
+						who: "claude-code",
+						importance: chunk.level === "section" ? 0.65 : 0.55,
+						sourceType: "claude-project-memory",
+						sourceId: chunkKey,
+						tags: [
+							"claude-code",
+							"claude-project-memory",
+							sectionName,
+							`project:${projectId}`,
+							chunk.level === "section" ? "hierarchical-section" : "hierarchical-paragraph",
+						]
+							.filter(Boolean)
+							.join(","),
+					}),
+				});
 
 				if (response.ok) {
 					inserted++;
@@ -6976,18 +6431,12 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 					});
 				}
 			} catch (e) {
-				const errDetails =
-					e instanceof Error ? { message: e.message } : { error: String(e) };
-				logger.error(
-					"watcher",
-					"Failed to sync Claude memory chunk",
-					undefined,
-					{
-						path: filePath,
-						chunkIndex: i,
-						...errDetails,
-					},
-				);
+				const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
+				logger.error("watcher", "Failed to sync Claude memory chunk", undefined, {
+					path: filePath,
+					chunkIndex: i,
+					...errDetails,
+				});
 			}
 		}
 
@@ -7001,8 +6450,7 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 		}
 		return inserted;
 	} catch (e) {
-		const errDetails =
-			e instanceof Error ? { message: e.message } : { error: String(e) };
+		const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
 		logger.error("watcher", "Failed to read Claude memory file", undefined, {
 			path: filePath,
 			...errDetails,
@@ -7032,7 +6480,7 @@ function estimateTokens(text: string): number {
  */
 function chunkMarkdownHierarchically(
 	content: string,
-	maxTokens: number = 512,
+	maxTokens = 512,
 ): {
 	text: string;
 	tokenCount: number;
@@ -7063,9 +6511,7 @@ function chunkMarkdownHierarchically(
 
 		if (sectionTokens <= maxTokens) {
 			// Section fits in one chunk - include header for context
-			const textWithHeader = currentHeader
-				? `${currentHeader}\n\n${sectionText}`
-				: sectionText;
+			const textWithHeader = currentHeader ? `${currentHeader}\n\n${sectionText}` : sectionText;
 			results.push({
 				text: textWithHeader,
 				tokenCount: estimateTokens(textWithHeader),
@@ -7085,9 +6531,7 @@ function chunkMarkdownHierarchically(
 				if (paraTokens > maxTokens) {
 					// Flush current chunk first
 					if (chunkParas.length > 0) {
-						const text = currentHeader
-							? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
-							: chunkParas.join("\n\n");
+						const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
 						results.push({
 							text,
 							tokenCount: chunkTokens,
@@ -7111,9 +6555,7 @@ function chunkMarkdownHierarchically(
 
 				if (chunkTokens + paraTokens + 2 > maxTokens && chunkParas.length > 0) {
 					// Flush current chunk
-					const text = currentHeader
-						? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
-						: chunkParas.join("\n\n");
+					const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
 					results.push({
 						text,
 						tokenCount: chunkTokens,
@@ -7130,9 +6572,7 @@ function chunkMarkdownHierarchically(
 
 			// Final chunk for this section
 			if (chunkParas.length > 0) {
-				const text = currentHeader
-					? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
-					: chunkParas.join("\n\n");
+				const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
 				results.push({
 					text,
 					tokenCount: chunkTokens,
@@ -7219,31 +6659,26 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 		const chunk = chunks[i];
 		const chunkKey = `openclaw:${filename}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;
 		try {
-			const response = await fetch(
-				`http://${HOST}:${PORT}/api/memory/remember`,
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						content: chunk.text,
-						who: "openclaw-memory",
-						importance: chunk.level === "section" ? 0.65 : 0.55, // Slightly higher for sections
-						sourceType: "openclaw-memory-log",
-						sourceId: chunkKey,
-						tags: [
-							"openclaw",
-							"memory-log",
-							date || "named",
-							filename,
-							chunk.level === "section"
-								? "hierarchical-section"
-								: "hierarchical-paragraph",
-						]
-							.filter(Boolean)
-							.join(","),
-					}),
-				},
-			);
+			const response = await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					content: chunk.text,
+					who: "openclaw-memory",
+					importance: chunk.level === "section" ? 0.65 : 0.55, // Slightly higher for sections
+					sourceType: "openclaw-memory-log",
+					sourceId: chunkKey,
+					tags: [
+						"openclaw",
+						"memory-log",
+						date || "named",
+						filename,
+						chunk.level === "section" ? "hierarchical-section" : "hierarchical-paragraph",
+					]
+						.filter(Boolean)
+						.join(","),
+				}),
+			});
 
 			if (response.ok) {
 				inserted++;
@@ -7255,8 +6690,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 				});
 			}
 		} catch (e) {
-			const errDetails =
-				e instanceof Error ? { message: e.message } : { error: String(e) };
+			const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
 			logger.error("watcher", "Failed to ingest memory chunk", undefined, {
 				path: filePath,
 				chunkIndex: i,
@@ -7285,27 +6719,16 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 async function importExistingMemoryFiles(): Promise<number> {
 	const memoryDir = join(AGENTS_DIR, "memory");
 	if (!existsSync(memoryDir)) {
-		logger.debug(
-			"daemon",
-			"Memory directory does not exist, skipping initial import",
-		);
+		logger.debug("daemon", "Memory directory does not exist, skipping initial import");
 		return 0;
 	}
 
 	let files: string[];
 	try {
-		files = readdirSync(memoryDir).filter(
-			(f) => f.endsWith(".md") && f !== "MEMORY.md",
-		);
+		files = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md");
 	} catch (e) {
-		const errDetails =
-			e instanceof Error ? { message: e.message } : { error: String(e) };
-		logger.error(
-			"daemon",
-			"Failed to read memory directory",
-			undefined,
-			errDetails,
-		);
+		const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
+		logger.error("daemon", "Failed to read memory directory", undefined, errDetails);
 		return 0;
 	}
 
@@ -7490,19 +6913,16 @@ async function main() {
 		effectiveExtractionProvider === "opencode"
 			? createOpenCodeProvider({
 					model: memoryCfg.pipelineV2.extraction.model || "anthropic/claude-haiku-4-5-20251001",
-					defaultTimeoutMs:
-						memoryCfg.pipelineV2.extraction.timeout || 60000,
+					defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout || 60000,
 				})
 			: effectiveExtractionProvider === "claude-code"
 				? createClaudeCodeProvider({
 						model: memoryCfg.pipelineV2.extraction.model || "haiku",
-						defaultTimeoutMs:
-							memoryCfg.pipelineV2.extraction.timeout || 60000,
+						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout || 60000,
 					})
 				: createOllamaProvider({
 						model: memoryCfg.pipelineV2.extraction.model || "qwen3:4b",
-						defaultTimeoutMs:
-							memoryCfg.pipelineV2.extraction.timeout || 90000,
+						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout || 90000,
 					});
 	initLlmProvider(llmProvider);
 
@@ -7511,46 +6931,47 @@ async function main() {
 	if (memoryCfg.pipelineV2.telemetryEnabled) {
 		// Resolve PostHog API key: secrets first, then inline config
 		const secretKey = !memoryCfg.pipelineV2.telemetry.posthogApiKey
-			? getSecret("POSTHOG_API_KEY") ?? ""
+			? (getSecret("POSTHOG_API_KEY") ?? "")
 			: memoryCfg.pipelineV2.telemetry.posthogApiKey;
 		const resolvedTelemetryCfg = {
 			...memoryCfg.pipelineV2.telemetry,
 			posthogApiKey: secretKey,
 		};
-		telemetryCollector = createTelemetryCollector(
-			getDbAccessor(),
-			resolvedTelemetryCfg,
-			CURRENT_VERSION,
-		);
+		telemetryCollector = createTelemetryCollector(getDbAccessor(), resolvedTelemetryCfg, CURRENT_VERSION);
 		telemetryCollector.start();
 		telemetryRef = telemetryCollector;
 
 		// Heartbeat: record daemon stats every 5 minutes
 		const daemonStartTime = Date.now();
-		heartbeatTimer = setInterval(() => {
-			if (!telemetryRef) return;
-			try {
-				const memoryCount = getDbAccessor().withReadDb((db) => {
-					const row = db
-						.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
-						.get() as { cnt: number } | undefined;
-					return row?.cnt ?? 0;
-				});
-				const connectors = listConnectors();
-				telemetryRef.record("daemon.heartbeat", {
-					uptimeMs: Date.now() - daemonStartTime,
-					memoryCount,
-					connectorsActive: connectors.filter((cn) => cn.status === "active").length,
-					pipelineMode: memoryCfg.pipelineV2.enabled
-						? memoryCfg.pipelineV2.shadowMode ? "shadow" : "controlled-write"
-						: "disabled",
-					extractionProvider: memoryCfg.pipelineV2.extraction.provider,
-					embeddingProvider: memoryCfg.embedding.provider,
-				});
-			} catch {
-				// best effort
-			}
-		}, 5 * 60 * 1000);
+		heartbeatTimer = setInterval(
+			() => {
+				if (!telemetryRef) return;
+				try {
+					const memoryCount = getDbAccessor().withReadDb((db) => {
+						const row = db
+							.prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL")
+							.get() as { cnt: number } | undefined;
+						return row?.cnt ?? 0;
+					});
+					const connectors = listConnectors();
+					telemetryRef.record("daemon.heartbeat", {
+						uptimeMs: Date.now() - daemonStartTime,
+						memoryCount,
+						connectorsActive: connectors.filter((cn) => cn.status === "active").length,
+						pipelineMode: memoryCfg.pipelineV2.enabled
+							? memoryCfg.pipelineV2.shadowMode
+								? "shadow"
+								: "controlled-write"
+							: "disabled",
+						extractionProvider: memoryCfg.pipelineV2.extraction.provider,
+						embeddingProvider: memoryCfg.embedding.provider,
+					});
+				} catch {
+					// best effort
+				}
+			},
+			5 * 60 * 1000,
+		);
 	}
 
 	// Start extraction pipeline if enabled
@@ -7572,10 +6993,7 @@ async function main() {
 	}
 
 	// Start embedding tracker if provider is configured and tracker enabled
-	if (
-		memoryCfg.embedding.provider !== "none" &&
-		memoryCfg.pipelineV2.embeddingTracker.enabled
-	) {
+	if (memoryCfg.embedding.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled) {
 		embeddingTrackerHandle = startEmbeddingTracker(
 			getDbAccessor(),
 			memoryCfg.embedding,
@@ -7627,11 +7045,14 @@ async function main() {
 
 			// Write health stamp for CLI verification
 			try {
-				writeFileSync(join(DAEMON_DIR, "last-healthy-start"), JSON.stringify({
-					version: CURRENT_VERSION,
-					startedAt: new Date().toISOString(),
-					pid: process.pid,
-				}));
+				writeFileSync(
+					join(DAEMON_DIR, "last-healthy-start"),
+					JSON.stringify({
+						version: CURRENT_VERSION,
+						startedAt: new Date().toISOString(),
+						pid: process.pid,
+					}),
+				);
 			} catch {
 				// Best effort — DAEMON_DIR might not exist yet in edge cases
 			}
@@ -7639,16 +7060,8 @@ async function main() {
 			// Import existing memory markdown files (OpenClaw memory logs)
 			// Do this after server starts so the HTTP API is available for ingestion
 			importExistingMemoryFiles().catch((e) => {
-				const errDetails =
-					e instanceof Error
-						? { message: e.message, stack: e.stack }
-						: { error: String(e) };
-				logger.error(
-					"daemon",
-					"Failed to import existing memory files",
-					undefined,
-					errDetails,
-				);
+				const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+				logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
 			});
 
 			// Sync existing Claude Code project memories (also needs HTTP API)

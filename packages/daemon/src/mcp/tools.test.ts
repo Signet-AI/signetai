@@ -5,8 +5,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { createMcpServer } from "./tools.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createMcpServer } from "./tools.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -42,24 +42,18 @@ function getToolNames(server: McpServer): string[] {
 	return Object.keys(internal._registeredTools);
 }
 
-function mockFetch(
-	status: number,
-	body: unknown,
-	capture?: { url?: string; method?: string; body?: string },
-): void {
-	globalThis.fetch = mock(
-		async (input: string | URL | Request, init?: RequestInit) => {
-			if (capture) {
-				capture.url = typeof input === "string" ? input : input.toString();
-				capture.method = init?.method ?? "GET";
-				capture.body = init?.body as string;
-			}
-			return new Response(JSON.stringify(body), {
-				status,
-				headers: { "Content-Type": "application/json" },
-			});
-		},
-	) as typeof fetch;
+function mockFetch(status: number, body: unknown, capture?: { url?: string; method?: string; body?: string }): void {
+	globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+		if (capture) {
+			capture.url = typeof input === "string" ? input : input.toString();
+			capture.method = init?.method ?? "GET";
+			capture.body = init?.body as string;
+		}
+		return new Response(JSON.stringify(body), {
+			status,
+			headers: { "Content-Type": "application/json" },
+		});
+	}) as typeof fetch;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +80,7 @@ describe("createMcpServer", () => {
 		expect(server.server).toBeDefined();
 	});
 
-	it("registers all 8 tools", () => {
+	it("registers all MCP tools", () => {
 		const names = getToolNames(server);
 		expect(names).toContain("memory_search");
 		expect(names).toContain("memory_store");
@@ -94,9 +88,11 @@ describe("createMcpServer", () => {
 		expect(names).toContain("memory_list");
 		expect(names).toContain("memory_modify");
 		expect(names).toContain("memory_forget");
+		expect(names).toContain("mcp_server_list");
+		expect(names).toContain("mcp_server_call");
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
-		expect(names.length).toBe(8);
+		expect(names.length).toBe(10);
 	});
 
 	describe("memory_search", () => {
@@ -223,6 +219,35 @@ describe("createMcpServer", () => {
 
 			expect(result.isError).toBe(true);
 			expect(result.content[0].text).toContain("Forget failed");
+		});
+	});
+
+	describe("mcp_server_list", () => {
+		it("calls marketplace tools endpoint", async () => {
+			const cap: { url?: string } = {};
+			mockFetch(200, { count: 0, tools: [], servers: [] }, cap);
+
+			await callTool(server, "mcp_server_list", { refresh: true });
+			expect(cap.url).toBe("http://localhost:3850/api/marketplace/mcp/tools?refresh=1");
+		});
+	});
+
+	describe("mcp_server_call", () => {
+		it("calls routed tool endpoint with mapped payload", async () => {
+			const cap: { method?: string; body?: string } = {};
+			mockFetch(200, { success: true, result: { ok: true } }, cap);
+
+			await callTool(server, "mcp_server_call", {
+				server_id: "playwright",
+				tool: "navigate",
+				args: { url: "https://example.com" },
+			});
+
+			expect(cap.method).toBe("POST");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.serverId).toBe("playwright");
+			expect(body.toolName).toBe("navigate");
+			expect(body.args.url).toBe("https://example.com");
 		});
 	});
 });

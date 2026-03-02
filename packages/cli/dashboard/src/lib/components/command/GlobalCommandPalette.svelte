@@ -1,43 +1,41 @@
 <script lang="ts">
-	import { Dialog as CommandPrimitive } from "bits-ui";
-	import { nav, type TabId } from "$lib/stores/navigation.svelte";
-	import { ActionLabels } from "$lib/ui/action-labels";
-	import Search from "@lucide/svelte/icons/search";
+import { type TabId, nav } from "$lib/stores/navigation.svelte";
+import { ActionLabels } from "$lib/ui/action-labels";
+import Search from "@lucide/svelte/icons/search";
+import { Dialog as CommandPrimitive } from "bits-ui";
 
-	interface CommandItem {
-		id: string;
-		label: string;
-		shortcut?: string;
-		action: () => void;
-	}
+interface CommandItem {
+	id: string;
+	label: string;
+	shortcut?: string;
+	action: () => void;
+}
 
-	let open = $state(false);
-	let query = $state("");
-	let selectedIndex = $state(0);
+let open = $state(false);
+let query = $state("");
+let selectedIndex = $state(0);
 
-	const tabItems: CommandItem[] = [
-		{ id: "config", label: "Identity Files", shortcut: "1", action: () => setTabAndClose("config") },
-		{ id: "settings", label: "Settings", shortcut: "2", action: () => setTabAndClose("settings") },
-		{ id: "memory", label: "Memory", shortcut: "3", action: () => setTabAndClose("memory") },
-		{ id: "embeddings", label: "Embeddings", shortcut: "4", action: () => setTabAndClose("embeddings") },
-		{ id: "pipeline", label: "Pipeline", shortcut: "5", action: () => setTabAndClose("pipeline") },
-		{ id: "logs", label: "Logs", shortcut: "6", action: () => setTabAndClose("logs") },
-		{ id: "secrets", label: "Secrets", shortcut: "7", action: () => setTabAndClose("secrets") },
-		{ id: "skills", label: "Skills", shortcut: "8", action: () => setTabAndClose("skills") },
-		{ id: "tasks", label: "Tasks", shortcut: "9", action: () => setTabAndClose("tasks") },
-	];
+const tabItems: CommandItem[] = [
+	{ id: "config", label: "Identity Files", shortcut: "1", action: () => setTabAndClose("config") },
+	{ id: "settings", label: "Settings", shortcut: "2", action: () => setTabAndClose("settings") },
+	{ id: "memory", label: "Memory", shortcut: "3", action: () => setTabAndClose("memory") },
+	{ id: "embeddings", label: "Embeddings", shortcut: "4", action: () => setTabAndClose("embeddings") },
+	{ id: "pipeline", label: "Pipeline", shortcut: "5", action: () => setTabAndClose("pipeline") },
+	{ id: "logs", label: "Logs", shortcut: "6", action: () => setTabAndClose("logs") },
+	{ id: "secrets", label: "Secrets", shortcut: "7", action: () => setTabAndClose("secrets") },
+	{ id: "skills", label: "Marketplace", shortcut: "8", action: () => setTabAndClose("skills") },
+	{ id: "tasks", label: "Tasks", shortcut: "9", action: () => setTabAndClose("tasks") },
+];
 
-	const actionItems: CommandItem[] = [
-		{ id: "toggle-theme", label: "Toggle Theme", action: () => {} },
-		{ id: "refresh", label: ActionLabels.Refresh, action: () => window.location.reload() },
-	];
+const actionItems: CommandItem[] = [
+	{ id: "toggle-theme", label: "Toggle Theme", action: () => {} },
+	{ id: "refresh", label: ActionLabels.Refresh, action: () => window.location.reload() },
+];
 
 const filteredItems = $derived.by(() => {
 	const q = query.toLowerCase().trim();
 	if (!q) return [...tabItems, ...actionItems];
-	return [...tabItems, ...actionItems].filter(item => 
-		item.label.toLowerCase().includes(q)
-	);
+	return [...tabItems, ...actionItems].filter((item) => item.label.toLowerCase().includes(q));
 });
 
 $effect(() => {
@@ -47,41 +45,41 @@ $effect(() => {
 	}
 });
 
-	function setTabAndClose(tab: TabId) {
-		nav.activeTab = tab;
+function setTabAndClose(tab: TabId) {
+	nav.activeTab = tab;
+	open = false;
+	query = "";
+	selectedIndex = 0;
+}
+
+function handleKeydown(e: KeyboardEvent) {
+	if (e.key === "ArrowDown") {
+		e.preventDefault();
+		selectedIndex = (selectedIndex + 1) % filteredItems.length;
+	} else if (e.key === "ArrowUp") {
+		e.preventDefault();
+		selectedIndex = (selectedIndex - 1 + filteredItems.length) % filteredItems.length;
+	} else if (e.key === "Enter") {
+		e.preventDefault();
+		const item = filteredItems[selectedIndex];
+		if (item) item.action();
+	} else if (e.key === "Escape") {
 		open = false;
-		query = "";
+	}
+}
+
+$effect(() => {
+	if (open) {
 		selectedIndex = 0;
 	}
+});
 
-	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === "ArrowDown") {
-			e.preventDefault();
-			selectedIndex = (selectedIndex + 1) % filteredItems.length;
-		} else if (e.key === "ArrowUp") {
-			e.preventDefault();
-			selectedIndex = (selectedIndex - 1 + filteredItems.length) % filteredItems.length;
-		} else if (e.key === "Enter") {
-			e.preventDefault();
-			const item = filteredItems[selectedIndex];
-			if (item) item.action();
-		} else if (e.key === "Escape") {
-			open = false;
-		}
+function handleGlobalKeydown(e: KeyboardEvent) {
+	if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+		e.preventDefault();
+		open = !open;
 	}
-
-	$effect(() => {
-		if (open) {
-			selectedIndex = 0;
-		}
-	});
-
-	function handleGlobalKeydown(e: KeyboardEvent) {
-		if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-			e.preventDefault();
-			open = !open;
-		}
-	}
+}
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} />

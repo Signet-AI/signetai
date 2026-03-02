@@ -77,9 +77,7 @@ async function daemonFetch<T>(
 	}
 }
 
-function textResult(
-	value: unknown,
-): { content: ReadonlyArray<{ readonly type: "text"; readonly text: string }> } {
+function textResult(value: unknown): { content: ReadonlyArray<{ readonly type: "text"; readonly text: string }> } {
 	return {
 		content: [
 			{
@@ -90,9 +88,7 @@ function textResult(
 	};
 }
 
-function errorResult(
-	msg: string,
-): {
+function errorResult(msg: string): {
 	content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
 	isError: true;
 } {
@@ -118,131 +114,147 @@ export function createMcpServer(opts?: McpServerOptions): McpServer {
 	// ------------------------------------------------------------------
 	// memory_search — hybrid vector + keyword search
 	// ------------------------------------------------------------------
-	server.registerTool("memory_search", {
-		title: "Search Memories",
-		description: "Search memories using hybrid vector + keyword search",
-		inputSchema: z.object({
-			query: z.string().describe("Search query text"),
-			limit: z.number().optional().describe("Max results to return (default 10)"),
-			type: z.string().optional().describe("Filter by memory type"),
-			min_score: z.number().optional().describe("Minimum relevance score threshold"),
-		}),
-	}, async ({ query, limit, type, min_score }) => {
-		const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
-			method: "POST",
-			body: {
-				query,
-				limit: limit ?? 10,
-				type,
-				importance_min: min_score,
-			},
-		});
+	server.registerTool(
+		"memory_search",
+		{
+			title: "Search Memories",
+			description: "Search memories using hybrid vector + keyword search",
+			inputSchema: z.object({
+				query: z.string().describe("Search query text"),
+				limit: z.number().optional().describe("Max results to return (default 10)"),
+				type: z.string().optional().describe("Filter by memory type"),
+				min_score: z.number().optional().describe("Minimum relevance score threshold"),
+			}),
+		},
+		async ({ query, limit, type, min_score }) => {
+			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
+				method: "POST",
+				body: {
+					query,
+					limit: limit ?? 10,
+					type,
+					importance_min: min_score,
+				},
+			});
 
-		if (!result.ok) {
-			return errorResult(`Search failed: ${result.error}`);
-		}
-		return textResult(result.data);
-	});
+			if (!result.ok) {
+				return errorResult(`Search failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
 
 	// ------------------------------------------------------------------
 	// memory_store — save a new memory
 	// ------------------------------------------------------------------
-	server.registerTool("memory_store", {
-		title: "Store Memory",
-		description: "Save a new memory",
-		inputSchema: z.object({
-			content: z.string().describe("Memory content to save"),
-			type: z.string().optional().describe("Memory type (fact, preference, decision, etc.)"),
-			importance: z.number().optional().describe("Importance score 0-1"),
-			tags: z.string().optional().describe("Comma-separated tags for categorization"),
-		}),
-		annotations: { readOnlyHint: false },
-	}, async ({ content, type, importance, tags }) => {
-		// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
-		let body = content;
-		if (tags) {
-			body = `[${tags}]: ${content}`;
-		}
+	server.registerTool(
+		"memory_store",
+		{
+			title: "Store Memory",
+			description: "Save a new memory",
+			inputSchema: z.object({
+				content: z.string().describe("Memory content to save"),
+				type: z.string().optional().describe("Memory type (fact, preference, decision, etc.)"),
+				importance: z.number().optional().describe("Importance score 0-1"),
+				tags: z.string().optional().describe("Comma-separated tags for categorization"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ content, type, importance, tags }) => {
+			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
+			let body = content;
+			if (tags) {
+				body = `[${tags}]: ${content}`;
+			}
 
-		const result = await daemonFetch<unknown>(baseUrl, "/api/memory/remember", {
-			method: "POST",
-			body: {
-				content: body,
-				importance,
-			},
-		});
+			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/remember", {
+				method: "POST",
+				body: {
+					content: body,
+					importance,
+				},
+			});
 
-		if (!result.ok) {
-			return errorResult(`Store failed: ${result.error}`);
-		}
-		return textResult(result.data);
-	});
+			if (!result.ok) {
+				return errorResult(`Store failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
 
 	// ------------------------------------------------------------------
 	// memory_get — retrieve a memory by ID
 	// ------------------------------------------------------------------
-	server.registerTool("memory_get", {
-		title: "Get Memory",
-		description: "Get a single memory by its ID",
-		inputSchema: z.object({
-			id: z.string().describe("Memory ID to retrieve"),
-		}),
-	}, async ({ id }) => {
-		const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`);
+	server.registerTool(
+		"memory_get",
+		{
+			title: "Get Memory",
+			description: "Get a single memory by its ID",
+			inputSchema: z.object({
+				id: z.string().describe("Memory ID to retrieve"),
+			}),
+		},
+		async ({ id }) => {
+			const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`);
 
-		if (!result.ok) {
-			return errorResult(`Get failed: ${result.error}`);
-		}
-		return textResult(result.data);
-	});
+			if (!result.ok) {
+				return errorResult(`Get failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
 
 	// ------------------------------------------------------------------
 	// memory_list — list memories with optional filters
 	// ------------------------------------------------------------------
-	server.registerTool("memory_list", {
-		title: "List Memories",
-		description: "List memories with optional filters",
-		inputSchema: z.object({
-			limit: z.number().optional().describe("Max results (default 100)"),
-			offset: z.number().optional().describe("Pagination offset"),
-			type: z.string().optional().describe("Filter by memory type"),
-		}),
-	}, async ({ limit, offset, type }) => {
-		const params = new URLSearchParams();
-		if (limit !== undefined) params.set("limit", String(limit));
-		if (offset !== undefined) params.set("offset", String(offset));
-		if (type !== undefined) params.set("type", type);
+	server.registerTool(
+		"memory_list",
+		{
+			title: "List Memories",
+			description: "List memories with optional filters",
+			inputSchema: z.object({
+				limit: z.number().optional().describe("Max results (default 100)"),
+				offset: z.number().optional().describe("Pagination offset"),
+				type: z.string().optional().describe("Filter by memory type"),
+			}),
+		},
+		async ({ limit, offset, type }) => {
+			const params = new URLSearchParams();
+			if (limit !== undefined) params.set("limit", String(limit));
+			if (offset !== undefined) params.set("offset", String(offset));
+			if (type !== undefined) params.set("type", type);
 
-		const qs = params.toString();
-		const path = `/api/memories${qs ? `?${qs}` : ""}`;
-		const result = await daemonFetch<unknown>(baseUrl, path);
+			const qs = params.toString();
+			const path = `/api/memories${qs ? `?${qs}` : ""}`;
+			const result = await daemonFetch<unknown>(baseUrl, path);
 
-		if (!result.ok) {
-			return errorResult(`List failed: ${result.error}`);
-		}
-		return textResult(result.data);
-	});
+			if (!result.ok) {
+				return errorResult(`List failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
 
 	// ------------------------------------------------------------------
 	// memory_modify — edit an existing memory
 	// ------------------------------------------------------------------
-	server.registerTool("memory_modify", {
-		title: "Modify Memory",
-		description: "Edit an existing memory by ID",
-		inputSchema: z.object({
-			id: z.string().describe("Memory ID to modify"),
-			content: z.string().optional().describe("New content"),
-			type: z.string().optional().describe("New type"),
-			importance: z.number().optional().describe("New importance"),
-			tags: z.string().optional().describe("New tags (comma-separated)"),
-			reason: z.string().describe("Why this edit is being made"),
-		}),
-		annotations: { readOnlyHint: false },
-	}, async ({ id, content, type, importance, tags, reason }) => {
-		const result = await daemonFetch<unknown>(
-			baseUrl,
-			`/api/memory/${encodeURIComponent(id)}`,
-			{
+	server.registerTool(
+		"memory_modify",
+		{
+			title: "Modify Memory",
+			description: "Edit an existing memory by ID",
+			inputSchema: z.object({
+				id: z.string().describe("Memory ID to modify"),
+				content: z.string().optional().describe("New content"),
+				type: z.string().optional().describe("New type"),
+				importance: z.number().optional().describe("New importance"),
+				tags: z.string().optional().describe("New tags (comma-separated)"),
+				reason: z.string().describe("Why this edit is being made"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ id, content, type, importance, tags, reason }) => {
+			const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
 				method: "PATCH",
 				body: {
 					content,
@@ -251,100 +263,174 @@ export function createMcpServer(opts?: McpServerOptions): McpServer {
 					tags,
 					reason,
 				},
-			},
-		);
+			});
 
-		if (!result.ok) {
-			return errorResult(`Modify failed: ${result.error}`);
-		}
-		return textResult(result.data);
-	});
+			if (!result.ok) {
+				return errorResult(`Modify failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
 
 	// ------------------------------------------------------------------
 	// memory_forget — soft-delete a memory
 	// ------------------------------------------------------------------
-	server.registerTool("memory_forget", {
-		title: "Forget Memory",
-		description: "Soft-delete a memory by ID",
-		inputSchema: z.object({
-			id: z.string().describe("Memory ID to forget"),
-			reason: z.string().describe("Why this memory should be forgotten"),
-		}),
-		annotations: { readOnlyHint: false },
-	}, async ({ id, reason }) => {
-		const result = await daemonFetch<unknown>(
-			baseUrl,
-			`/api/memory/${encodeURIComponent(id)}`,
-			{
+	server.registerTool(
+		"memory_forget",
+		{
+			title: "Forget Memory",
+			description: "Soft-delete a memory by ID",
+			inputSchema: z.object({
+				id: z.string().describe("Memory ID to forget"),
+				reason: z.string().describe("Why this memory should be forgotten"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ id, reason }) => {
+			const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
 				method: "DELETE",
 				body: { reason },
-			},
-		);
+			});
 
-		if (!result.ok) {
-			return errorResult(`Forget failed: ${result.error}`);
-		}
-		return textResult(result.data);
-	});
+			if (!result.ok) {
+				return errorResult(`Forget failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
 
 	// ------------------------------------------------------------------
 	// secret_list — list available secret names
 	// ------------------------------------------------------------------
-	server.registerTool("secret_list", {
-		title: "List Secrets",
-		description:
-			"List available secret names. Returns names only — raw values are never exposed to agents.",
-		inputSchema: z.object({}),
-	}, async () => {
-		const result = await daemonFetch<{ secrets: ReadonlyArray<string> }>(
-			baseUrl,
-			"/api/secrets",
-		);
+	server.registerTool(
+		"secret_list",
+		{
+			title: "List Secrets",
+			description: "List available secret names. Returns names only — raw values are never exposed to agents.",
+			inputSchema: z.object({}),
+		},
+		async () => {
+			const result = await daemonFetch<{ secrets: ReadonlyArray<string> }>(baseUrl, "/api/secrets");
 
-		if (!result.ok) {
-			return errorResult(`Failed to list secrets: ${result.error}`);
-		}
-		return textResult(result.data);
-	});
+			if (!result.ok) {
+				return errorResult(`Failed to list secrets: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
 
 	// ------------------------------------------------------------------
 	// secret_exec — run a command with secrets injected as env vars
 	// ------------------------------------------------------------------
-	server.registerTool("secret_exec", {
-		title: "Execute with Secrets",
-		description:
-			"Run a shell command with secrets injected as environment variables. " +
-			"Provide a secrets map where keys are env var names and values are secret names. " +
-			"Output is automatically redacted — secret values never appear in results.",
-		inputSchema: z.object({
-			command: z.string().describe("Shell command to execute"),
-			secrets: z
-				.record(z.string(), z.string())
-				.describe(
-					'Map of env var name → secret name, e.g. { "OPENAI_API_KEY": "OPENAI_API_KEY" }',
-				),
-		}),
-		annotations: { readOnlyHint: false },
-	}, async ({ command, secrets }) => {
-		if (Object.keys(secrets).length === 0) {
-			return errorResult("secrets map must contain at least one entry");
-		}
+	server.registerTool(
+		"secret_exec",
+		{
+			title: "Execute with Secrets",
+			description:
+				"Run a shell command with secrets injected as environment variables. " +
+				"Provide a secrets map where keys are env var names and values are secret names. " +
+				"Output is automatically redacted — secret values never appear in results.",
+			inputSchema: z.object({
+				command: z.string().describe("Shell command to execute"),
+				secrets: z
+					.record(z.string(), z.string())
+					.describe('Map of env var name → secret name, e.g. { "OPENAI_API_KEY": "OPENAI_API_KEY" }'),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ command, secrets }) => {
+			if (Object.keys(secrets).length === 0) {
+				return errorResult("secrets map must contain at least one entry");
+			}
 
-		const result = await daemonFetch<{
-			stdout: string;
-			stderr: string;
-			code: number;
-		}>(baseUrl, "/api/secrets/exec", {
-			method: "POST",
-			body: { command, secrets },
-			timeout: 30_000,
-		});
+			const result = await daemonFetch<{
+				stdout: string;
+				stderr: string;
+				code: number;
+			}>(baseUrl, "/api/secrets/exec", {
+				method: "POST",
+				body: { command, secrets },
+				timeout: 30_000,
+			});
 
-		if (!result.ok) {
-			return errorResult(`Exec failed: ${result.error}`);
-		}
-		return textResult(result.data);
-	});
+			if (!result.ok) {
+				return errorResult(`Exec failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
+
+	// ------------------------------------------------------------------
+	// mcp_server_list — list routed marketplace MCP tools
+	// ------------------------------------------------------------------
+	server.registerTool(
+		"mcp_server_list",
+		{
+			title: "List Tool Servers",
+			description: "List installed external Tool Servers (MCP) and discover their routed tools.",
+			inputSchema: z.object({
+				refresh: z.boolean().optional().describe("Bypass cache and refresh live tool catalogs"),
+			}),
+		},
+		async ({ refresh }) => {
+			const path = refresh ? "/api/marketplace/mcp/tools?refresh=1" : "/api/marketplace/mcp/tools";
+			const result = await daemonFetch<{
+				count: number;
+				tools: unknown[];
+				servers: unknown[];
+			}>(baseUrl, path);
+
+			if (!result.ok) {
+				return errorResult(`Tool server list failed: ${result.error}`);
+			}
+
+			return textResult(result.data);
+		},
+	);
+
+	// ------------------------------------------------------------------
+	// mcp_server_call — call a routed marketplace MCP tool
+	// ------------------------------------------------------------------
+	server.registerTool(
+		"mcp_server_call",
+		{
+			title: "Call Tool Server",
+			description:
+				"Invoke a routed tool from an installed external Tool Server (MCP). " +
+				"Use mcp_server_list first to discover server_id and tool names.",
+			inputSchema: z.object({
+				server_id: z.string().describe("Installed Tool Server id"),
+				tool: z.string().describe("Tool name exposed by that server"),
+				args: z.record(z.string(), z.unknown()).optional().describe("Tool argument object"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ server_id, tool, args }) => {
+			const result = await daemonFetch<{
+				success: boolean;
+				result?: unknown;
+				error?: string;
+			}>(baseUrl, "/api/marketplace/mcp/call", {
+				method: "POST",
+				body: {
+					serverId: server_id,
+					toolName: tool,
+					args: args ?? {},
+				},
+				timeout: 60_000,
+			});
+
+			if (!result.ok) {
+				return errorResult(`Tool server call failed: ${result.error}`);
+			}
+
+			if (!result.data.success) {
+				return errorResult(`Tool server call failed: ${result.data.error ?? "unknown error"}`);
+			}
+
+			return textResult(result.data.result ?? { success: true });
+		},
+	);
 
 	return server;
 }

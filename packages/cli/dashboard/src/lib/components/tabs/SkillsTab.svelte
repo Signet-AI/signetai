@@ -1,33 +1,41 @@
 <script lang="ts">
-import { onMount } from "svelte";
+import type { SkillSearchResult } from "$lib/api";
+import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
+import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
+import SkillsComparePanel from "$lib/components/skills/SkillsComparePanel.svelte";
+import * as Select from "$lib/components/ui/select/index.js";
+import * as Tabs from "$lib/components/ui/tabs/index.js";
 import {
-	sk,
-	fetchInstalled,
-	fetchCatalog,
-	setQuery,
-	resetFilters,
+	type ProviderFilter,
+	type SkillsView,
 	clearCompare,
-	toggleCompare,
-	openDetail,
+	closeDetail,
 	doInstall,
 	doUninstall,
-	closeDetail,
+	fetchCatalog,
+	fetchInstalled,
 	getFilteredCatalog,
 	getFilteredResults,
-	type SkillsView,
-	type SortBy,
-	type ProviderFilter,
+	openDetail,
+	resetFilters,
+	setQuery,
+	sk,
+	toggleCompare,
 } from "$lib/stores/skills.svelte";
-import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
-import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
-import SkillsComparePanel from "$lib/components/skills/SkillsComparePanel.svelte";
-import * as Tabs from "$lib/components/ui/tabs/index.js";
-import type { SkillSearchResult } from "$lib/api";
+import { onMount } from "svelte";
 
+interface Props {
+	embedded?: boolean;
+}
 
-let searchInput = $state<HTMLInputElement | null>(null);
+const { embedded = false }: Props = $props();
 
-const sortOptions: { value: SortBy; label: string }[] = [
+const searchInputId = "skills-search-input";
+
+type SkillsSort = typeof sk.sortBy;
+
+const sortOptions: { value: SkillsSort; label: string }[] = [
+	{ value: "popularity", label: "Popularity" },
 	{ value: "installs", label: "Downloads" },
 	{ value: "stars", label: "Stars" },
 	{ value: "name", label: "Name" },
@@ -40,6 +48,18 @@ const providerOptions: { value: ProviderFilter; label: string }[] = [
 	{ value: "clawhub", label: "ClawHub" },
 ];
 
+function parseSort(value: string): SkillsSort {
+	if (value === "popularity" || value === "installs" || value === "stars" || value === "name" || value === "newest") {
+		return value;
+	}
+	return "popularity";
+}
+
+const activeSortLabel = $derived.by(() => {
+	const match = sortOptions.find((option) => option.value === sk.sortBy);
+	return match?.label ?? "Popularity";
+});
+
 function switchView(v: SkillsView) {
 	sk.view = v;
 	if (v === "browse") fetchCatalog();
@@ -47,14 +67,14 @@ function switchView(v: SkillsView) {
 
 function handleGlobalKey(e: KeyboardEvent) {
 	const target = e.target as HTMLElement;
-	const isInput =
-		target.tagName === "INPUT" ||
-		target.tagName === "TEXTAREA" ||
-		target.isContentEditable;
+	const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
 	if (e.key === "/" && !isInput) {
 		e.preventDefault();
-		searchInput?.focus();
+		const searchInput = document.getElementById(searchInputId);
+		if (searchInput instanceof HTMLInputElement) {
+			searchInput.focus();
+		}
 		return;
 	}
 	if (e.key === "Escape") {
@@ -67,7 +87,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 }
 
 // Derived items based on current view + filters
-let displayItems = $derived.by(() => {
+const displayItems = $derived.by(() => {
 	if (sk.query.trim()) {
 		return getFilteredResults();
 	}
@@ -77,11 +97,11 @@ let displayItems = $derived.by(() => {
 	return getFilteredCatalog();
 });
 
-let displayMode = $derived<"installed" | "browse">(
+const displayMode = $derived<"installed" | "browse">(
 	sk.view === "installed" && !sk.query.trim() ? "installed" : "browse",
 );
 
-let emptyState = $derived<"installed" | "browse" | "search" | null>(
+const emptyState = $derived<"installed" | "browse" | "search" | null>(
 	sk.query.trim() && displayItems.length === 0
 		? "search"
 		: sk.view === "installed" && !sk.query.trim() && displayItems.length === 0
@@ -91,7 +111,7 @@ let emptyState = $derived<"installed" | "browse" | "search" | null>(
 				: null,
 );
 
-let compareItems = $derived.by(() => {
+const compareItems = $derived.by(() => {
 	const available = displayItems.filter((item): item is SkillSearchResult => "fullName" in item);
 	return available.filter((item) => sk.compareSelected.includes(item.fullName));
 });
@@ -136,78 +156,80 @@ onMount(() => {
 <svelte:window onkeydown={handleGlobalKey} />
 
 <div class="h-full flex flex-col overflow-hidden">
-	<div
-		class="shrink-0 px-[var(--space-md)] py-[var(--space-sm)]
-			border-b border-[var(--sig-border)] flex flex-col gap-2"
-	>
-		<div class="relative">
-			<input
-				bind:this={searchInput}
-				type="text"
-				class="w-full px-3 py-[6px]
-					border border-[var(--sig-border-strong)]
-					bg-[var(--sig-surface-raised)]
-					text-[var(--sig-text-bright)] text-[11px]
-					font-[family-name:var(--font-mono)]
-					outline-none focus:border-[var(--sig-accent)]
-					pr-8"
-				value={sk.query}
-				oninput={(e) => setQuery(e.currentTarget.value)}
-				placeholder="Search skills..."
-			/>
-			<kbd
-				class="absolute right-2 top-1/2 -translate-y-1/2
-					px-[5px] py-px text-[9px]
-					text-[var(--sig-text-muted)]
-					bg-[var(--sig-bg)]
-					border border-[var(--sig-border)]
-					pointer-events-none"
-			>/</kbd>
-		</div>
-		<div class="flex items-center gap-3 flex-wrap">
-			<a
-				href="https://skills.sh"
-				target="_blank"
-				rel="noopener"
-				class="font-[family-name:var(--font-mono)] text-[10px]
-					text-[var(--sig-text-muted)]
-					hover:text-[var(--sig-accent)] no-underline"
-			>
-				skills.sh
-			</a>
-			<span class="text-[var(--sig-border-strong)]">|</span>
-			<a
-				href="https://clawhub.ai"
-				target="_blank"
-				rel="noopener"
-				class="font-[family-name:var(--font-mono)] text-[10px]
-					text-[var(--sig-text-muted)]
-					hover:text-[var(--sig-accent)] no-underline"
-			>
-				clawhub.ai
-			</a>
-			<span class="text-[var(--sig-border-strong)]">|</span>
-			<a
-				href="https://socket.dev/blog/socket-brings-supply-chain-security-to-skills"
-				target="_blank"
-				rel="noopener"
-				class="inline-flex items-center gap-[5px]
-					font-[family-name:var(--font-mono)] text-[10px]
-					text-[var(--sig-success)] no-underline
-					hover:underline"
-			>
-				<svg width="10" height="10" viewBox="0 0 16 16" fill="none"
-					class="shrink-0"
+	{#if !embedded}
+		<div
+			class="shrink-0 px-[var(--space-md)] py-[var(--space-sm)]
+				border-b border-[var(--sig-border)] flex flex-col gap-2"
+		>
+			<div class="relative">
+				<input
+					id={searchInputId}
+					type="text"
+					class="w-full px-3 py-[6px]
+						border border-[var(--sig-border-strong)]
+						bg-[var(--sig-surface-raised)]
+						text-[var(--sig-text-bright)] text-[11px]
+						font-[family-name:var(--font-mono)]
+						outline-none focus:border-[var(--sig-accent)]
+						pr-8"
+					value={sk.query}
+					oninput={(e) => setQuery(e.currentTarget.value)}
+					placeholder="Search skills..."
+				/>
+				<kbd
+					class="absolute right-2 top-1/2 -translate-y-1/2
+						px-[5px] py-px text-[9px]
+						text-[var(--sig-text-muted)]
+						bg-[var(--sig-bg)]
+						border border-[var(--sig-border)]
+						pointer-events-none"
+				>/</kbd>
+			</div>
+			<div class="flex items-center gap-3 flex-wrap">
+				<a
+					href="https://skills.sh"
+					target="_blank"
+					rel="noopener"
+					class="font-[family-name:var(--font-mono)] text-[10px]
+						text-[var(--sig-text-muted)]
+						hover:text-[var(--sig-accent)] no-underline"
 				>
-					<path
-						d="M8 0L10 5.5L16 6L11.5 10L13 16L8 12.5L3 16L4.5 10L0 6L6 5.5L8 0Z"
-						fill="currentColor"
-					/>
-				</svg>
-				Verified by Socket.dev
-			</a>
+					skills.sh
+				</a>
+				<span class="text-[var(--sig-border-strong)]">|</span>
+				<a
+					href="https://clawhub.ai"
+					target="_blank"
+					rel="noopener"
+					class="font-[family-name:var(--font-mono)] text-[10px]
+						text-[var(--sig-text-muted)]
+						hover:text-[var(--sig-accent)] no-underline"
+				>
+					clawhub.ai
+				</a>
+				<span class="text-[var(--sig-border-strong)]">|</span>
+				<a
+					href="https://socket.dev/blog/socket-brings-supply-chain-security-to-skills"
+					target="_blank"
+					rel="noopener"
+					class="inline-flex items-center gap-[5px]
+						font-[family-name:var(--font-mono)] text-[10px]
+						text-[var(--sig-success)] no-underline
+						hover:underline"
+				>
+					<svg width="10" height="10" viewBox="0 0 16 16" fill="none"
+						class="shrink-0"
+					>
+						<path
+							d="M8 0L10 5.5L16 6L11.5 10L13 16L8 12.5L3 16L4.5 10L0 6L6 5.5L8 0Z"
+							fill="currentColor"
+						/>
+					</svg>
+					Verified by Socket.dev
+				</a>
+			</div>
 		</div>
-	</div>
+	{/if}
 
 	<!-- Tabs bar + controls -->
 	<Tabs.Root value={sk.view} onValueChange={(v) => switchView(v as SkillsView)}>
@@ -232,15 +254,14 @@ onMount(() => {
 				<!-- Sort dropdown -->
 				<div class="flex items-center gap-1">
 					<span class="text-[9px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)] uppercase tracking-wider">Sort</span>
-					<select
-						class="sort-select"
-						value={sk.sortBy}
-						onchange={(e) => { sk.sortBy = e.currentTarget.value as SortBy; }}
-					>
-						{#each sortOptions as opt}
-							<option value={opt.value}>{opt.label}</option>
-						{/each}
-					</select>
+					<Select.Root type="single" value={sk.sortBy} onValueChange={(v) => { sk.sortBy = parseSort(v ?? "installs"); }}>
+						<Select.Trigger class="sort-select">{activeSortLabel}</Select.Trigger>
+						<Select.Content class="sort-select-content">
+							{#each sortOptions as opt}
+								<Select.Item value={opt.value} label={opt.label} class="sort-select-item" />
+							{/each}
+						</Select.Content>
+					</Select.Root>
 				</div>
 
 				<!-- Provider filter chips -->
@@ -298,18 +319,32 @@ onMount(() => {
 <SkillDetail />
 
 <style>
-	.sort-select {
+	:global(.sort-select) {
 		font-family: var(--font-mono);
 		font-size: 10px;
 		color: var(--sig-text-bright);
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
-		padding: 2px 6px;
+		padding: 2px 8px;
+		height: auto;
+		min-height: 28px;
 		outline: none;
 		cursor: pointer;
+		border-radius: 0;
 	}
-	.sort-select:focus {
+	:global(.sort-select:focus) {
 		border-color: var(--sig-accent);
+	}
+
+	:global(.sort-select-content) {
+		background: var(--sig-surface-raised);
+		border: 1px solid var(--sig-border-strong);
+		border-radius: 0;
+	}
+
+	:global(.sort-select-item) {
+		font-family: var(--font-mono);
+		font-size: 10px;
 	}
 
 	.filter-chip {
