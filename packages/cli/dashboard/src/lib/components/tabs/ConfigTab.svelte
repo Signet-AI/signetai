@@ -397,8 +397,9 @@
 	.file-selector {
 		display: flex;
 		align-items: center;
+		justify-content: space-between;
 		gap: 8px;
-		min-width: 160px;
+		width: 180px;
 		padding: 6px 12px;
 		font-family: var(--font-display);
 		font-size: 13px;
@@ -419,6 +420,9 @@
 	.file-name {
 		flex: 1;
 		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.file-budget {
