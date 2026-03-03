@@ -236,7 +236,7 @@ function applySpotlight(item: SpotlightItem): void {
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
 		outline: none;
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	:global(.market-select) {
@@ -248,7 +248,7 @@ function applySpotlight(item: SpotlightItem): void {
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
 		outline: none;
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	.market-search:focus,
@@ -259,7 +259,7 @@ function applySpotlight(item: SpotlightItem): void {
 	:global(.market-select-content) {
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	:global(.market-select-item) {

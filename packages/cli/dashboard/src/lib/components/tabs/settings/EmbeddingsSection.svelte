@@ -6,10 +6,10 @@
 	import { st } from "$lib/stores/settings.svelte";
 
 	const selectTriggerClass =
-		"font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-none w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
+		"font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
 	const selectContentClass =
-		"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-none";
-	const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-none";
+		"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
+	const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
 
 	function handleProviderChange(v: string | undefined) {
 		st.sSetStr([...st.embPath(), "provider"], v ?? "");

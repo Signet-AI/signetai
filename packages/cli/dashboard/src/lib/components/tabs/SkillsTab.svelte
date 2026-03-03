@@ -330,7 +330,7 @@ onMount(() => {
 		min-height: 28px;
 		outline: none;
 		cursor: pointer;
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 	:global(.sort-select:focus) {
 		border-color: var(--sig-accent);
@@ -339,7 +339,7 @@ onMount(() => {
 	:global(.sort-select-content) {
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	:global(.sort-select-item) {

@@ -476,7 +476,7 @@
 		padding: 0;
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	.jump-filter {

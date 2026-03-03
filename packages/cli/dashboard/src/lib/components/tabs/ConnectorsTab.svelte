@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { Badge } from "$lib/components/ui/badge/index.js";
+	import { Button } from "$lib/components/ui/button/index.js";
 	import * as Popover from "$lib/components/ui/popover/index.js";
 	import {
 		getHarnesses,
@@ -99,19 +100,13 @@
 
 <div class="flex flex-1 flex-col gap-6 p-4 overflow-y-auto">
 	{#if loading}
-		<div
-			class="flex flex-1 items-center justify-center text-[12px]
-				text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]"
-		>
+		<div class="flex flex-1 items-center justify-center sig-label">
 			Loading connectors...
 		</div>
 	{:else}
 		<!-- Platform Harnesses -->
 		<section>
-			<h3
-				class="text-[11px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)]
-					font-[family-name:var(--font-mono)] mb-3"
-			>
+			<h3 class="sig-label uppercase tracking-[0.1em] mb-3">
 				Platform Harnesses
 			</h3>
 			<div class="grid gap-2">
@@ -128,31 +123,23 @@
 							class:border-[var(--sig-text-muted)]={!h.exists}
 						></span>
 						<div class="flex flex-col gap-0.5 min-w-0 flex-1">
-							<span
-								class="text-[12px] font-medium text-[var(--sig-text-bright)]
-									font-[family-name:var(--font-display)] tracking-[0.04em]"
-							>
+							<span class="text-[12px] font-medium text-[var(--sig-text-bright)]
+								font-[family-name:var(--font-display)] tracking-[0.04em]">
 								{h.name}
 							</span>
-							<span
-								class="text-[10px] text-[var(--sig-text-muted)]
-									font-[family-name:var(--font-mono)] truncate"
-							>
+							<span class="sig-eyebrow truncate">
 								{h.path}
 							</span>
 						</div>
 						<div class="flex flex-col items-end gap-0.5 shrink-0">
 							<span
-								class="text-[10px] font-[family-name:var(--font-mono)]"
+								class="sig-eyebrow"
 								class:text-[var(--sig-text-bright)]={h.exists}
 								class:text-[var(--sig-text-muted)]={!h.exists}
 							>
 								{h.exists ? "installed" : "not found"}
 							</span>
-							<span
-								class="text-[10px] text-[var(--sig-text-muted)]
-									font-[family-name:var(--font-mono)]"
-							>
+							<span class="sig-eyebrow">
 								{#if h.lastSeen}
 									seen {relativeTime(h.lastSeen)}
 								{:else}
@@ -167,19 +154,12 @@
 
 		<!-- Document Connectors -->
 		<section>
-			<h3
-				class="text-[11px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)]
-					font-[family-name:var(--font-mono)] mb-3"
-			>
+			<h3 class="sig-label uppercase tracking-[0.1em] mb-3">
 				Document Connectors
 			</h3>
 			{#if connectors.length === 0}
-				<div
-					class="flex items-center justify-center py-8
-						text-[12px] text-[var(--sig-text-muted)]
-						font-[family-name:var(--font-mono)]
-						border border-dashed border-[var(--sig-border)]"
-				>
+				<div class="flex items-center justify-center py-8
+					sig-label border border-dashed border-[var(--sig-border)]">
 					No document connectors configured
 				</div>
 			{:else}
@@ -194,25 +174,17 @@
 								{conn.status}
 							</Badge>
 							<div class="flex flex-col gap-0.5 min-w-0 flex-1">
-								<span
-									class="text-[12px] font-medium text-[var(--sig-text-bright)]
-										font-[family-name:var(--font-display)] tracking-[0.04em]"
-								>
+								<span class="text-[12px] font-medium text-[var(--sig-text-bright)]
+									font-[family-name:var(--font-display)] tracking-[0.04em]">
 									{conn.display_name ?? conn.id}
 								</span>
-								<span
-									class="text-[10px] text-[var(--sig-text-muted)]
-										font-[family-name:var(--font-mono)]"
-								>
+								<span class="sig-eyebrow">
 									{conn.provider}
 								</span>
 							</div>
 							<div class="flex flex-col items-end gap-0.5 shrink-0">
 								<div class="flex items-center gap-2">
-									<span
-										class="text-[10px] text-[var(--sig-text-muted)]
-											font-[family-name:var(--font-mono)]"
-									>
+									<span class="sig-eyebrow">
 										{#if conn.status === "syncing" || syncingId === conn.id}
 											syncing...
 										{:else if conn.last_sync_at}
@@ -224,57 +196,52 @@
 									<Popover.Root open={syncMenuOpen === conn.id} onOpenChange={(open) => { syncMenuOpen = open ? conn.id : null; }}>
 										<Popover.Trigger>
 											{#snippet child({ props })}
-												<button
+												<Button
 													{...props}
-													type="button"
+													variant="outline"
+													size="sm"
 													disabled={conn.status === "syncing" || syncingId === conn.id}
-													class="px-2 py-0.5 text-[9px] uppercase tracking-[0.08em]
-														font-[family-name:var(--font-mono)] border
-														border-[var(--sig-border)] text-[var(--sig-text-muted)]
+													class="sig-meta uppercase tracking-[0.08em] px-2 py-0.5 h-auto
 														hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]
 														disabled:opacity-50 disabled:cursor-not-allowed"
 												>
 													Sync ▾
-												</button>
+												</Button>
 											{/snippet}
 										</Popover.Trigger>
 										<Popover.Content
 											align="end"
 											side="bottom"
 											class="w-[140px] p-1 bg-[var(--sig-surface-raised)]
-												border-[var(--sig-border-strong)] rounded-none"
+												border-[var(--sig-border-strong)] rounded-lg"
 										>
 											<div class="flex flex-col gap-1">
-												<button
-													type="button"
-													class="w-full text-left px-2 py-1 text-[10px]
-														uppercase tracking-[0.08em]
-														font-[family-name:var(--font-mono)] border
-														border-[var(--sig-border)] text-[var(--sig-text-muted)]
+												<Button
+													variant="outline"
+													size="sm"
+													class="w-full justify-start sig-eyebrow tracking-[0.08em] px-2 py-1 h-auto
 														hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
 													onclick={() => triggerSync(conn)}
 												>
 													Sync
-												</button>
-												<button
-													type="button"
-													class="w-full text-left px-2 py-1 text-[10px]
-														uppercase tracking-[0.08em]
-														font-[family-name:var(--font-mono)] border
-														border-[var(--sig-border)] text-[var(--sig-danger)]
+												</Button>
+												<Button
+													variant="outline"
+													size="sm"
+													class="w-full justify-start sig-eyebrow tracking-[0.08em] px-2 py-1 h-auto
+														text-[var(--sig-danger)]
 														hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)]"
 													onclick={() => triggerFullSync(conn)}
 												>
 													Full Resync
-												</button>
+												</Button>
 											</div>
 										</Popover.Content>
 									</Popover.Root>
 								</div>
 								{#if conn.last_error}
 									<span
-										class="text-[10px] text-[var(--sig-danger)]
-											font-[family-name:var(--font-mono)] truncate max-w-[200px]"
+										class="sig-eyebrow text-[var(--sig-danger)] truncate max-w-[200px]"
 										title={conn.last_error}
 									>
 										{conn.last_error}

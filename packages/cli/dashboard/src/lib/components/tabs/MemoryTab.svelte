@@ -12,6 +12,8 @@ import {
 } from "$lib/stores/memory.svelte";
 import MemoryForm from "$lib/components/memory/MemoryForm.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
+import { Input } from "$lib/components/ui/input/index.js";
 import { ActionLabels } from "$lib/ui/action-labels";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Popover from "$lib/components/ui/popover/index.js";
@@ -96,13 +98,14 @@ function formatDate(dateStr: string): string {
 	}
 }
 
-const pillBase = "text-[10px] font-[family-name:var(--font-mono)] uppercase tracking-[0.08em] px-2 py-0.5 border cursor-pointer transition-colors duration-150";
+const pillBase = "sig-eyebrow tracking-[0.08em] px-2 py-0.5 border cursor-pointer transition-colors duration-150";
 const pillActive = `${pillBase} text-[var(--sig-accent)] border-[var(--sig-accent)] bg-[rgba(138,138,150,0.1)]`;
 const pillInactive = `${pillBase} text-[var(--sig-text-muted)] border-[var(--sig-border-strong)] bg-transparent hover:text-[var(--sig-text)]`;
 
-const inputClass = "text-[11px] font-[family-name:var(--font-mono)] text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)] border border-[var(--sig-border-strong)] rounded-none px-2 py-1 outline-none placeholder:text-[var(--sig-text-muted)]";
-const dateTriggerClass = `${inputClass} w-[130px] inline-flex items-center justify-between gap-2 cursor-pointer`;
-const dateClearClass = "text-[9px] px-1.5 py-1 border border-[var(--sig-border-strong)] rounded-none text-[var(--sig-text-muted)] bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]";
+const dateTriggerClass = "sig-label text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)] border border-[var(--sig-border-strong)] rounded-lg px-2 py-1 w-[130px] inline-flex items-center justify-between gap-2 cursor-pointer";
+
+const badgeBase = "sig-badge border-[var(--sig-border-strong)] text-[var(--sig-text)]";
+const badgeAccent = "sig-badge border-[var(--sig-accent)] text-[var(--sig-accent)]";
 
 let sincePickerOpen = $state(false);
 
@@ -145,38 +148,37 @@ function formatIsoDate(value: string): string {
 		border border-[var(--sig-border-strong)]
 		bg-[var(--sig-surface-raised)]">
 		{#if mem.debouncing || mem.searching}
-			<span class="text-[var(--sig-accent)] text-[11px] animate-pulse">◐</span>
+			<span class="text-[var(--sig-accent)] sig-label animate-pulse">◐</span>
 		{:else}
-			<span class="text-[var(--sig-accent)] text-[11px]">◇</span>
+			<span class="text-[var(--sig-accent)] sig-label">◇</span>
 		{/if}
-		<input
+		<Input
 			type="text"
-			class="flex-1 text-[12px] font-[family-name:var(--font-mono)]
-				text-[var(--sig-text-bright)] bg-transparent
-				border-none outline-none
-				placeholder:text-[var(--sig-text-muted)]"
+			class="flex-1 text-[12px] text-[var(--sig-text-bright)] bg-transparent
+				border-none shadow-none outline-none focus-visible:ring-0
+				placeholder:text-[var(--sig-text-muted)] h-auto py-0 px-0"
 			bind:value={mem.query}
 			oninput={queueMemorySearch}
 			onkeydown={(e) => e.key === 'Enter' && doSearch()}
 			placeholder="Search across memories..."
 		/>
 		{#if mem.searched || hasActiveFilters() || mem.similarSourceId}
-			<button
-				class="text-[10px] text-[var(--sig-accent)]
-					bg-transparent border-none cursor-pointer
-					hover:underline whitespace-nowrap"
+			<Button
+				variant="ghost"
+				size="sm"
+				class="sig-eyebrow text-[var(--sig-accent)] hover:underline whitespace-nowrap h-auto py-0 px-1"
 				onclick={clearAll}
-			>{ActionLabels.Clear}</button>
+			>{ActionLabels.Clear}</Button>
 		{/if}
 	</label>
 
 	<!-- Filter row -->
 	<div class="flex flex-wrap items-center gap-2">
 		<Select.Root type="single" value={mem.filterWho} onValueChange={(v) => { mem.filterWho = v ?? ""; }}>
-			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-none h-auto py-1 px-2 min-w-[120px] max-w-[180px]">
+			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[120px] max-w-[180px]">
 				{mem.filterWho || "Any source"}
 			</Select.Trigger>
-			<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-none">
+			<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg">
 				<Select.Item value="" label="Any source" />
 				{#each mem.whoOptions as w}
 					<Select.Item value={w} label={w} />
@@ -184,15 +186,17 @@ function formatIsoDate(value: string): string {
 			</Select.Content>
 		</Select.Root>
 
-		<input
-			class="{inputClass} min-w-[120px] flex-1 max-w-[200px]"
+		<Input
+			class="sig-label min-w-[120px] flex-1 max-w-[200px] text-[var(--sig-text-bright)]
+				bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg h-auto py-1 px-2"
 			placeholder="Tags"
 			bind:value={mem.filterTags}
 		/>
 
-		<input
+		<Input
 			type="number"
-			class="{inputClass} w-[70px]"
+			class="sig-label w-[70px] text-[var(--sig-text-bright)]
+				bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg h-auto py-1 px-2"
 			min="0" max="1" step="0.1"
 			bind:value={mem.filterImportanceMin}
 			placeholder="imp"
@@ -208,7 +212,7 @@ function formatIsoDate(value: string): string {
 				{/snippet}
 			</Popover.Trigger>
 			<Popover.Content
-				class="w-auto overflow-hidden p-0 bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-none"
+				class="w-auto overflow-hidden p-0 bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg"
 				align="start"
 			>
 				<Calendar
@@ -219,14 +223,19 @@ function formatIsoDate(value: string): string {
 						mem.filterSince = toIsoDate(v);
 						sincePickerOpen = false;
 					}}
-					class="bg-[var(--sig-surface-raised)] text-[var(--sig-text)] rounded-none border-0 p-2"
+					class="bg-[var(--sig-surface-raised)] text-[var(--sig-text)] rounded-lg border-0 p-2"
 				/>
 			</Popover.Content>
 		</Popover.Root>
 		{#if mem.filterSince}
-			<button class={dateClearClass} onclick={() => { mem.filterSince = ""; }}>
+			<Button
+				variant="outline"
+				size="sm"
+				class="sig-meta px-1.5 py-1 rounded-lg h-auto border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]"
+				onclick={() => { mem.filterSince = ""; }}
+			>
 				{ActionLabels.Clear}
-			</button>
+			</Button>
 		{/if}
 
 		<button
@@ -244,7 +253,7 @@ function formatIsoDate(value: string): string {
 	</div>
 
 	<!-- Count bar -->
-	<div class="flex items-center text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+	<div class="flex items-center sig-eyebrow">
 		{#if mem.similarSourceId}
 			Showing {displayCount} similar {displayCount === 1 ? 'memory' : 'memories'}
 		{:else if mem.searched || hasActiveFilters()}
@@ -259,22 +268,21 @@ function formatIsoDate(value: string): string {
 		<div class="flex items-center justify-between gap-3
 			px-3 py-1.5 border border-dashed
 			border-[var(--sig-border-strong)]
-			text-[11px] font-[family-name:var(--font-mono)]
-			text-[var(--sig-text)] bg-[var(--sig-surface)]">
+			sig-label text-[var(--sig-text)] bg-[var(--sig-surface)]">
 			<span class="truncate">
 				Similar to: {(mem.similarSource.content ?? '').slice(0, 100)}
 				{(mem.similarSource.content ?? '').length > 100 ? '...' : ''}
 			</span>
-			<button
-				class="text-[11px] text-[var(--sig-accent)]
-					bg-transparent border-none cursor-pointer
-					hover:underline shrink-0"
+			<Button
+				variant="ghost"
+				size="sm"
+				class="sig-label text-[var(--sig-accent)] hover:underline shrink-0 h-auto py-0 px-1"
 				onclick={() => {
 					mem.similarSourceId = null;
 					mem.similarSource = null;
 					mem.similarResults = [];
 				}}
-			>Back</button>
+			>Back</Button>
 		</div>
 	{/if}
 
@@ -339,17 +347,15 @@ function formatIsoDate(value: string): string {
 
 					<header class="flex justify-between items-start gap-1.5">
 						<div class="flex items-center flex-wrap gap-1">
-							<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-accent)] text-[var(--sig-accent)]">{memory.who || 'unknown'}</Badge>
+							<Badge variant="outline" class={badgeAccent}>{memory.who || 'unknown'}</Badge>
 							{#if memory.type}
-								<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-text)]">{memory.type}</Badge>
+								<Badge variant="outline" class={badgeBase}>{memory.type}</Badge>
 							{/if}
 							{#if memory.pinned}
-								<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.06)]">pinned</Badge>
+								<Badge variant="outline" class="{badgeBase} text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.06)]">pinned</Badge>
 							{/if}
 						</div>
-						<span class="font-[family-name:var(--font-mono)]
-							text-[9px] text-[var(--sig-text-muted)]
-							whitespace-nowrap shrink-0">
+						<span class="sig-meta shrink-0">
 							{formatDate(memory.created_at)}
 						</span>
 					</header>
@@ -363,48 +369,58 @@ function formatIsoDate(value: string): string {
 					{#if tags.length > 0}
 						<div class="flex flex-wrap gap-1">
 							{#each tags.slice(0, 5) as tag}
-								<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-text)]">#{tag}</Badge>
+								<Badge variant="outline" class={badgeBase}>#{tag}</Badge>
 							{/each}
 						</div>
 					{/if}
 
 					<footer class="flex items-center gap-1.5 mt-auto pt-1">
-						<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-text)]">imp {Math.round((memory.importance ?? 0) * 100)}%</Badge>
+						<Badge variant="outline" class={badgeBase}>imp {Math.round((memory.importance ?? 0) * 100)}%</Badge>
 
 						{#if scoreLabel}
-							<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border-[var(--sig-border-strong)] text-[var(--sig-accent)]">{scoreLabel}</Badge>
+							<Badge variant="outline" class="{badgeBase} text-[var(--sig-accent)]">{scoreLabel}</Badge>
 						{/if}
 
 					{#if memory.id}
-						<button
-							class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-accent)] transition-colors duration-100 bg-transparent"
+						<Button
+							variant="outline"
+							size="sm"
+							class="sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-accent)]"
 							onclick={() => openEditForm(memory.id, "edit")}
 							title="Edit memory"
-						>edit</button>
+						>edit</Button>
 						{#if deleteConfirmId === memory.id}
 							<!-- Inline delete confirmation -->
-							<button
-								class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-red-500 text-red-400 cursor-pointer hover:bg-red-500 hover:text-white transition-colors duration-100 bg-transparent"
+							<Button
+								variant="outline"
+								size="sm"
+								class="sig-badge py-px px-[5px] h-auto border-red-500 text-red-400 hover:bg-red-500 hover:text-white"
 								onclick={() => { openEditForm(memory.id, "delete"); deleteConfirmId = null; }}
 								title="Confirm delete"
-							>confirm</button>
-							<button
-								class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-text-bright)] transition-colors duration-100 bg-transparent"
+							>confirm</Button>
+							<Button
+								variant="outline"
+								size="sm"
+								class="sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
 								onclick={() => deleteConfirmId = null}
 								title="Cancel delete"
-							>cancel</button>
+							>cancel</Button>
 						{:else}
-							<button
-								class="rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-red-400 transition-colors duration-100 bg-transparent"
+							<Button
+								variant="outline"
+								size="sm"
+								class="sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-red-400"
 								onclick={() => deleteConfirmId = memory.id}
 								title="Delete memory"
-							>delete</button>
+							>delete</Button>
 						{/if}
-						<button
-							class="ml-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] py-px px-[5px] border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] cursor-pointer hover:text-[var(--sig-accent)] transition-colors duration-100 bg-transparent"
+						<Button
+							variant="outline"
+							size="sm"
+							class="ml-auto sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-accent)]"
 							onclick={() => findSimilar(memory.id, memory)}
 							title="Find similar"
-						>similar</button>
+						>similar</Button>
 					{/if}
 					</footer>
 				</article>

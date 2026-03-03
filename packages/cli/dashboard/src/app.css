@@ -6,7 +6,7 @@
 
 /* === Dark theme (default) === */
 :root {
-	--radius: 0px;
+	--radius: 0.5rem;
 
 	/* shadcn semantic tokens */
 	--background: #08080a;
@@ -56,8 +56,8 @@
 	--sig-grain-opacity: 0.04;
 
 	/* Typography & spacing */
-	--font-display: "Chakra Petch", sans-serif;
-	--font-mono: "IBM Plex Mono", monospace;
+	--font-display: "Diamond Grotesk", "Chakra Petch", sans-serif;
+	--font-mono: "Geist Mono", "IBM Plex Mono", monospace;
 	--font-sans: var(--font-display);
 
 	--space-xs: 4px;
@@ -395,6 +395,59 @@ h3 {
 	text-transform: uppercase;
 	font-size: 10px;
 	letter-spacing: 0.04em;
+}
+
+/* === Component utilities === */
+
+/* Small monospace label (11px, muted) */
+.sig-label {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--sig-text-muted);
+}
+
+/* Tiny uppercase monospace (eyebrows, metadata, counters) */
+.sig-eyebrow {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--sig-text-muted);
+}
+
+/* Display heading used in section headers */
+.sig-heading {
+	font-family: var(--font-display);
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--sig-text-bright);
+}
+
+/* Tiny monospace for badge-like metadata (9px) */
+.sig-meta {
+	font-family: var(--font-mono);
+	font-size: 9px;
+	color: var(--sig-text-muted);
+	white-space: nowrap;
+}
+
+/* Standard badge styling used across memory cards, pipeline, etc. */
+.sig-badge {
+	font-family: var(--font-mono);
+	font-size: 9px;
+	border-radius: 0.5rem;
+	padding: 1px 5px;
+}
+
+/* Feed/log tiny text (8-9px monospace) */
+.sig-micro {
+	font-family: var(--font-mono);
+	font-size: 8px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--sig-text-muted);
 }
 
 /* Reduced motion */

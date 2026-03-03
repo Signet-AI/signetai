@@ -683,13 +683,13 @@ async function installWithConfig(): Promise<void> {
 	:global(.field-select) {
 		height: 32px;
 		padding: 0 8px;
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	:global(.field-select-content) {
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	:global(.field-select-item) {

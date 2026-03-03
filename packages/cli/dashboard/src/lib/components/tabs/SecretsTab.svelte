@@ -176,7 +176,7 @@ onMount(() => {
 			<div class="flex shrink-0 gap-[var(--space-sm)]">
 				<Input
 					type="text"
-					class="flex-1 rounded-none border-[var(--sig-border-strong)]
+					class="flex-1 rounded-lg border-[var(--sig-border-strong)]
 						bg-[var(--sig-surface-raised)] font-[family-name:var(--font-mono)]
 						text-[13px] text-[var(--sig-text-bright)]
 						focus:border-[var(--sig-accent)]"
@@ -185,7 +185,7 @@ onMount(() => {
 				/>
 				<Input
 					type="password"
-					class="flex-1 rounded-none border-[var(--sig-border-strong)]
+					class="flex-1 rounded-lg border-[var(--sig-border-strong)]
 						bg-[var(--sig-surface-raised)] font-[family-name:var(--font-mono)]
 						text-[13px] text-[var(--sig-text-bright)]
 						focus:border-[var(--sig-accent)]"
@@ -193,7 +193,7 @@ onMount(() => {
 					placeholder="Secret value"
 				/>
 				<Button
-					class="rounded-none bg-[var(--sig-text-bright)] text-[var(--sig-bg)]
+					class="rounded-lg bg-[var(--sig-text-bright)] text-[var(--sig-bg)]
 						hover:bg-[var(--sig-text)] text-[11px] font-medium"
 					size="sm"
 					onclick={addSecret}
@@ -216,7 +216,7 @@ onMount(() => {
 					{#each secrets as name}
 						<div
 							class="flex items-center gap-3 border border-[var(--sig-border-strong)]
-								bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3"
+								bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3 rounded-lg"
 						>
 							<span class="flex-1 font-[family-name:var(--font-mono)] text-[13px] text-[var(--sig-text-bright)]"
 								>{name}</span
@@ -227,7 +227,7 @@ onMount(() => {
 							<Button
 								variant="outline"
 								size="sm"
-								class="rounded-none border-[var(--sig-danger)] text-[var(--sig-danger)]
+								class="rounded-lg border-[var(--sig-danger)] text-[var(--sig-danger)]
 									text-[11px] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
 								onclick={() => removeSecret(name)}
 								disabled={secretDeleting === name}
@@ -244,16 +244,16 @@ onMount(() => {
 			<div
 				class="flex min-h-0 flex-1 flex-col gap-[var(--space-sm)] overflow-hidden
 					border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)]
-					p-[var(--space-md)]"
+					p-[var(--space-md)] rounded-lg"
 			>
 				<div class="flex items-center justify-between gap-3">
-					<div class="font-[family-name:var(--font-mono)] text-[12px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">
+					<div class="sig-label uppercase tracking-[0.08em]">
 						1Password
 					</div>
 					<Button
 						variant="outline"
 						size="sm"
-						class="rounded-none text-[11px]"
+						class="rounded-lg text-[11px]"
 						onclick={refreshOnePasswordStatus}
 						disabled={onePasswordLoading}
 					>
@@ -284,7 +284,7 @@ onMount(() => {
 				<div class="flex gap-[var(--space-sm)]">
 					<Input
 						type="password"
-						class="rounded-none border-[var(--sig-border-strong)]
+						class="rounded-lg border-[var(--sig-border-strong)]
 							bg-[var(--sig-surface)] font-[family-name:var(--font-mono)]
 							text-[13px] text-[var(--sig-text-bright)]"
 						bind:value={onePasswordToken}
@@ -294,7 +294,7 @@ onMount(() => {
 					/>
 					<Button
 						size="sm"
-						class="rounded-none bg-[var(--sig-text-bright)] text-[var(--sig-bg)] text-[11px] hover:bg-[var(--sig-text)]"
+						class="rounded-lg bg-[var(--sig-text-bright)] text-[var(--sig-bg)] text-[11px] hover:bg-[var(--sig-text)]"
 						onclick={connectOnePasswordAccount}
 						disabled={onePasswordConnecting || !onePasswordToken.trim()}
 					>
@@ -313,7 +313,7 @@ onMount(() => {
 					<Input
 						id="op-prefix"
 						type="text"
-						class="h-8 rounded-none border-[var(--sig-border-strong)]
+						class="h-8 rounded-lg border-[var(--sig-border-strong)]
 							bg-[var(--sig-surface)] font-[family-name:var(--font-mono)]
 							text-[12px] text-[var(--sig-text-bright)]"
 						bind:value={onePasswordImportOptions.prefix}
@@ -331,7 +331,7 @@ onMount(() => {
 					</label>
 				</div>
 
-				<div class="min-h-0 flex-1 overflow-y-auto border border-[var(--sig-border)] p-2">
+				<div class="min-h-0 flex-1 overflow-y-auto border border-[var(--sig-border)] p-2 rounded-lg">
 					{#if !onePasswordStatus.connected}
 						<div class="px-2 py-3 text-[12px] text-[var(--sig-text-muted)]">
 							Connect first, then choose vaults to import. Leave all unchecked to import from every vault.
@@ -361,7 +361,7 @@ onMount(() => {
 				<div class="flex flex-wrap gap-[var(--space-sm)]">
 					<Button
 						size="sm"
-						class="rounded-none bg-[var(--sig-text-bright)] text-[var(--sig-bg)] text-[11px] hover:bg-[var(--sig-text)]"
+						class="rounded-lg bg-[var(--sig-text-bright)] text-[var(--sig-bg)] text-[11px] hover:bg-[var(--sig-text)]"
 						onclick={importFromOnePassword}
 						disabled={onePasswordImporting || !onePasswordStatus.connected}
 					>
@@ -370,7 +370,7 @@ onMount(() => {
 					<Button
 						variant="outline"
 						size="sm"
-						class="rounded-none border-[var(--sig-danger)] text-[var(--sig-danger)]
+						class="rounded-lg border-[var(--sig-danger)] text-[var(--sig-danger)]
 							text-[11px] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
 						onclick={disconnectOnePasswordAccount}
 						disabled={onePasswordDisconnecting || !onePasswordStatus.configured}

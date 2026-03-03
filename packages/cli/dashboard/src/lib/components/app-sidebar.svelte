@@ -1,20 +1,23 @@
 <script lang="ts">
 import type { DaemonStatus, Harness, Identity } from "$lib/api";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-import { type TabId, nav, setTab } from "$lib/stores/navigation.svelte";
-import Activity from "@lucide/svelte/icons/activity";
-import CalendarClock from "@lucide/svelte/icons/calendar-clock";
-import Database from "@lucide/svelte/icons/database";
-import FileText from "@lucide/svelte/icons/file-text";
+import {
+	type TabId,
+	isEngineGroup,
+	isMemoryGroup,
+	nav,
+	navigateToGroup,
+	setTab,
+} from "$lib/stores/navigation.svelte";
+import Brain from "@lucide/svelte/icons/brain";
+import Cog from "@lucide/svelte/icons/cog";
 import Github from "@lucide/svelte/icons/github";
-import KeyRound from "@lucide/svelte/icons/key-round";
+import ListChecks from "@lucide/svelte/icons/list-checks";
 import Moon from "@lucide/svelte/icons/moon";
-import Network from "@lucide/svelte/icons/network";
-import Plug from "@lucide/svelte/icons/plug";
-import ScrollText from "@lucide/svelte/icons/scroll-text";
-import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+import Pencil from "@lucide/svelte/icons/pencil";
+import ShieldCheck from "@lucide/svelte/icons/shield-check";
+import Store from "@lucide/svelte/icons/store";
 import Sun from "@lucide/svelte/icons/sun";
-import Zap from "@lucide/svelte/icons/zap";
 
 interface Props {
 	identity: Identity;
@@ -36,23 +39,37 @@ const {
 	onprefetchembeddings,
 }: Props = $props();
 
-function maybePrefetchEmbeddings(id: TabId): void {
-	if (id !== "embeddings") return;
+function maybePrefetchEmbeddings(id: string): void {
+	if (id !== "memory") return;
 	onprefetchembeddings?.();
 }
 
-const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
-	{ id: "config", label: "Config", icon: FileText },
-	{ id: "settings", label: "Settings", icon: SlidersHorizontal },
-	{ id: "memory", label: "Memory", icon: Database },
-	{ id: "embeddings", label: "Constellation", icon: Network },
-	{ id: "pipeline", label: "Pipeline", icon: Activity },
-	{ id: "logs", label: "Logs", icon: ScrollText },
-	{ id: "secrets", label: "Secrets", icon: KeyRound },
-	{ id: "skills", label: "Marketplace", icon: Zap },
-	{ id: "tasks", label: "Tasks", icon: CalendarClock },
-	{ id: "connectors", label: "Connectors", icon: Plug },
+type NavItem =
+	| { id: TabId; label: string; icon: typeof Pencil; group?: undefined }
+	| { id: string; label: string; icon: typeof Pencil; group: "memory" | "engine" };
+
+const navItems: NavItem[] = [
+	{ id: "config", label: "Config", icon: Pencil },
+	{ id: "memory-group", label: "Memory", icon: Brain, group: "memory" },
+	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
+	{ id: "skills", label: "Marketplace", icon: Store },
+	{ id: "tasks", label: "Tasks", icon: ListChecks },
+	{ id: "engine-group", label: "Engine", icon: Cog, group: "engine" },
 ];
+
+function isActive(item: NavItem): boolean {
+	if (item.group === "memory") return isMemoryGroup(nav.activeTab);
+	if (item.group === "engine") return isEngineGroup(nav.activeTab);
+	return nav.activeTab === item.id;
+}
+
+function handleClick(item: NavItem): void {
+	if (item.group) {
+		navigateToGroup(item.group);
+	} else {
+		setTab(item.id as TabId);
+	}
+}
 </script>
 
 <Sidebar.Root variant="sidebar" collapsible="icon">
@@ -101,8 +118,8 @@ const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
 					{#each navItems as item (item.id)}
 						<Sidebar.MenuItem>
 							<Sidebar.MenuButton
-								isActive={nav.activeTab === item.id}
-								onclick={() => setTab(item.id)}
+								isActive={isActive(item)}
+								onclick={() => handleClick(item)}
 								onmouseenter={() => maybePrefetchEmbeddings(item.id)}
 								onfocus={() => maybePrefetchEmbeddings(item.id)}
 								tooltipContent={item.label}

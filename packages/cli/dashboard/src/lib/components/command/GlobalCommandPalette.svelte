@@ -87,7 +87,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 <CommandPrimitive.Root bind:open>
 	<CommandPrimitive.Portal>
 		<CommandPrimitive.Overlay class="fixed inset-0 z-50 bg-black/60" />
-		<CommandPrimitive.Content class="fixed left-1/2 top-[20%] z-50 w-full max-w-[480px] -translate-x-1/2 rounded-none border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] shadow-xl">
+		<CommandPrimitive.Content class="fixed left-1/2 top-[20%] z-50 w-full max-w-[480px] -translate-x-1/2 rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] shadow-xl">
 			<div class="flex items-center border-b border-[var(--sig-border)] px-3">
 				<Search class="size-4 shrink-0 text-[var(--sig-text-muted)]" />
 				<input

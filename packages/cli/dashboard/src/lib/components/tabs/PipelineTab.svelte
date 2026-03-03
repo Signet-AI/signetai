@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { Badge } from "$lib/components/ui/badge/index.js";
+	import { Button } from "$lib/components/ui/button/index.js";
 	import * as Switch from "$lib/components/ui/switch/index.js";
 	import * as Popover from "$lib/components/ui/popover/index.js";
 	import PipelineGraph from "$lib/components/pipeline/PipelineGraph.svelte";
@@ -340,7 +341,7 @@
 					class:bg-[#f87171]={!pipeline.connected}
 					class:animate-pulse={pipeline.connected}
 				></span>
-				<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">
+				<span class="sig-eyebrow">
 					{pipeline.connected ? "LIVE" : "DISCONNECTED"}
 				</span>
 			</div>
@@ -348,14 +349,14 @@
 			<!-- Pipeline mode -->
 			<Badge
 				variant="outline"
-				class="text-[9px] px-1.5 py-0 font-[family-name:var(--font-mono)] {modeClass}"
+				class="sig-badge px-1.5 py-0 {modeClass}"
 			>
 				{pipeline.mode}
 			</Badge>
 
 			<!-- Active nodes count -->
 			{#if activeCount > 0}
-				<span class="text-[10px] text-[#4ade80] font-[family-name:var(--font-mono)]">
+				<span class="sig-eyebrow text-[#4ade80]">
 					{activeCount} active
 				</span>
 			{/if}
@@ -363,7 +364,7 @@
 
 		<div class="flex items-center gap-3">
 			{#if pipeline.lastPoll}
-				<span class="text-[9px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">
+				<span class="sig-meta">
 					polled {formatTime(pipeline.lastPoll)}
 				</span>
 			{/if}
@@ -384,15 +385,15 @@
 			<!-- Feed header -->
 			<div class="px-3 py-2 border-b border-[var(--sig-border)] space-y-2">
 				<div class="flex items-center justify-between gap-2">
-					<span class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] font-[family-name:var(--font-display)]">
+					<span class="sig-heading text-[10px]">
 						Live Feed
 					</span>
 					<div class="flex items-center gap-2">
-						<span class="text-[9px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">
+						<span class="sig-meta">
 							{pipeline.feed.length} events
 						</span>
 						<span
-							class="text-[9px] font-[family-name:var(--font-mono)]"
+							class="sig-meta"
 							class:text-[#4ade80]={autoScroll && feedFollow}
 							class:text-[var(--sig-text-muted)]={!autoScroll || !feedFollow}
 						>
@@ -401,7 +402,7 @@
 					</div>
 				</div>
 				<div class="flex items-center justify-between gap-2 min-w-0">
-					<label class="inline-flex items-center gap-1.5 text-[10px] text-[var(--sig-text)] font-[family-name:var(--font-mono)] cursor-pointer min-w-0">
+					<label class="inline-flex items-center gap-1.5 sig-eyebrow text-[var(--sig-text)] cursor-pointer min-w-0">
 						<Switch.Root
 							checked={autoScroll}
 							onCheckedChange={(value: boolean) => handleAutoScrollChange(value)}
@@ -410,54 +411,59 @@
 						<span>Auto-scroll</span>
 					</label>
 					<div class="hidden lg:flex items-center gap-1.5 shrink-0">
-						<button
-							type="button"
-							class="px-2 py-[3px] text-[9px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
+						<Button
+							variant="outline"
+							size="sm"
+							class="sig-meta uppercase tracking-[0.08em] px-2 py-[3px] h-auto hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
 							onclick={(event: MouseEvent) => handleFeedJumpClick(event)}
 						>
 							{feedPositionLabel}
-						</button>
-						<button
-							type="button"
-							class="px-2 py-[3px] text-[9px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							class="sig-meta uppercase tracking-[0.08em] px-2 py-[3px] h-auto hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
 							onclick={(event: MouseEvent) => handleFeedWidthToggle(event)}
 						>
 							{feedDensityLabel}
-						</button>
+						</Button>
 					</div>
 					<div class="lg:hidden shrink-0">
 						<Popover.Root bind:open={mobileFeedActionsOpen}>
 							<Popover.Trigger>
 								{#snippet child({ props })}
-									<button
+									<Button
 										{...props}
-										type="button"
-										class="px-2 py-[3px] text-[9px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
+										variant="outline"
+										size="sm"
+										class="sig-meta uppercase tracking-[0.08em] px-2 py-[3px] h-auto hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
 									>
 										Feed actions
-									</button>
+									</Button>
 								{/snippet}
 							</Popover.Trigger>
 							<Popover.Content
 								align="end"
 								side="bottom"
-								class="w-[170px] p-1 bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-none"
+								class="w-[170px] p-1 bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg"
 							>
 								<div class="flex flex-col gap-1">
-									<button
-										type="button"
-										class="w-full text-left px-2 py-1 text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
+									<Button
+										variant="outline"
+										size="sm"
+										class="w-full justify-start sig-eyebrow tracking-[0.08em] px-2 py-1 h-auto hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
 										onclick={(event: MouseEvent) => handleFeedJumpClick(event)}
 									>
 										{feedPositionLabel}
-									</button>
-									<button
-										type="button"
-										class="w-full text-left px-2 py-1 text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
+									</Button>
+									<Button
+										variant="outline"
+										size="sm"
+										class="w-full justify-start sig-eyebrow tracking-[0.08em] px-2 py-1 h-auto hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
 										onclick={(event: MouseEvent) => handleFeedWidthToggle(event)}
 									>
 										{feedDensityLabel}
-									</button>
+									</Button>
 								</div>
 							</Popover.Content>
 						</Popover.Root>
@@ -482,7 +488,7 @@
 					<div class="feed-entry px-2 py-1.5 rounded hover:bg-[var(--sig-surface-raised)] transition-colors">
 						<div class="flex items-center gap-1.5">
 							<!-- Time -->
-							<span class="text-[9px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)] shrink-0 w-[48px]">
+							<span class="sig-meta shrink-0 w-[48px]">
 								{formatTime(entry.timestamp)}
 							</span>
 							<!-- Level dot -->
@@ -492,7 +498,7 @@
 							></span>
 							<!-- Category -->
 							<span
-								class="text-[9px] font-[family-name:var(--font-mono)] shrink-0"
+								class="sig-meta shrink-0"
 								style="color: {catColor}"
 							>
 								{entry.category}
@@ -500,58 +506,58 @@
 						</div>
 						<!-- Message -->
 						{#if feedExpanded}
-							<div class="mt-1 pl-[56px] inline-flex items-center gap-2 text-[8px] uppercase tracking-[0.06em] font-[family-name:var(--font-mono)]">
-								<span class="px-1 py-[1px] border border-[var(--sig-border)] text-[var(--sig-text-muted)]">
+							<div class="mt-1 pl-[56px] inline-flex items-center gap-2 sig-micro">
+								<span class="px-1 py-[1px] border border-[var(--sig-border)]">
 									{processSummary}
 								</span>
-								<span class="text-[var(--sig-text-muted)]">{formatRelativeTime(entry.timestamp)}</span>
+								<span>{formatRelativeTime(entry.timestamp)}</span>
 							</div>
-							<div class="text-[10px] text-[var(--sig-text)] font-[family-name:var(--font-mono)] mt-0.5 pl-[56px] whitespace-pre-wrap break-words">
+							<div class="sig-eyebrow text-[var(--sig-text)] mt-0.5 pl-[56px] whitespace-pre-wrap break-words normal-case tracking-normal">
 								{entry.message}
 							</div>
-							<div class="mt-1 pl-[56px] grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-1 text-[8px] font-[family-name:var(--font-mono)]">
+							<div class="mt-1 pl-[56px] grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-1 sig-micro">
 								{#each metaRows as row}
 									<div class="flex items-start justify-between gap-2 border-b border-[var(--sig-border)]/30 pb-[1px]">
-										<span class="text-[var(--sig-text-muted)] uppercase tracking-[0.05em]">{row.label}</span>
-										<span class="text-[var(--sig-text)] break-all text-right">{row.value}</span>
+										<span class="text-[var(--sig-text-muted)]">{row.label}</span>
+										<span class="text-[var(--sig-text)] break-all text-right normal-case">{row.value}</span>
 									</div>
 								{/each}
 							</div>
 							{#if dataKeySummary}
-								<div class="mt-1 pl-[56px] text-[8px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)] uppercase tracking-[0.05em]">
+								<div class="mt-1 pl-[56px] sig-micro">
 									Data keys: {dataKeySummary}
 								</div>
 							{/if}
 							{#if entry.error}
-								<div class="mt-1 pl-[56px] text-[9px] text-[#f87171] font-[family-name:var(--font-mono)] whitespace-pre-wrap break-words">
+								<div class="mt-1 pl-[56px] sig-meta text-[#f87171] whitespace-pre-wrap break-words">
 									{entry.error.name}: {entry.error.message}
 								</div>
 							{/if}
 							{#if rawPayload}
 								<details class="mt-1 pl-[56px]">
-									<summary class="cursor-pointer text-[8px] text-[var(--sig-text-muted)] uppercase tracking-[0.05em] font-[family-name:var(--font-mono)]">
+									<summary class="cursor-pointer sig-micro">
 										Raw payload
 									</summary>
-									<pre class="mt-1 p-2 border border-[var(--sig-border)] bg-[var(--sig-surface)] text-[8px] text-[var(--sig-text)] whitespace-pre-wrap break-words font-[family-name:var(--font-mono)]">{rawPayload}</pre>
+									<pre class="mt-1 p-2 border border-[var(--sig-border)] bg-[var(--sig-surface)] sig-micro text-[var(--sig-text)] whitespace-pre-wrap break-words normal-case">{rawPayload}</pre>
 								</details>
 							{/if}
 						{:else}
 							{#if canExpand}
 								<details class="mt-0.5 pl-[56px] group">
-									<summary class="list-none cursor-pointer text-[10px] text-[var(--sig-text)] font-[family-name:var(--font-mono)] line-clamp-2 break-words [&::-webkit-details-marker]:hidden">
+									<summary class="list-none cursor-pointer sig-eyebrow text-[var(--sig-text)] normal-case tracking-normal line-clamp-2 break-words [&::-webkit-details-marker]:hidden">
 										{entry.message}
 									</summary>
-									<div class="mt-1 text-[10px] text-[var(--sig-text)] font-[family-name:var(--font-mono)] whitespace-pre-wrap break-words">
+									<div class="mt-1 sig-eyebrow text-[var(--sig-text)] normal-case tracking-normal whitespace-pre-wrap break-words">
 										{entry.message}
 									</div>
 								</details>
 							{:else}
-								<div class="text-[10px] text-[var(--sig-text)] font-[family-name:var(--font-mono)] mt-0.5 pl-[56px] whitespace-pre-wrap break-words">
+								<div class="sig-eyebrow text-[var(--sig-text)] normal-case tracking-normal mt-0.5 pl-[56px] whitespace-pre-wrap break-words">
 									{entry.message}
 								</div>
 							{/if}
 							{#if entry.duration}
-								<span class="text-[8px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)] pl-[56px]">
+								<span class="sig-micro pl-[56px]">
 									{entry.duration}ms
 								</span>
 							{/if}
@@ -559,7 +565,7 @@
 					</div>
 				{/each}
 				{#if pipeline.feed.length === 0}
-					<div class="flex items-center justify-center h-full text-[11px] text-[var(--sig-text-muted)] italic">
+					<div class="flex items-center justify-center h-full sig-label italic">
 						Waiting for events...
 					</div>
 				{/if}

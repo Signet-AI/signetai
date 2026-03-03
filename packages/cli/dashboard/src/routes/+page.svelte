@@ -17,14 +17,25 @@ import {
 	mem,
 	queueMemorySearch,
 } from "$lib/stores/memory.svelte";
-import { initNavFromHash, nav, setTab } from "$lib/stores/navigation.svelte";
+import {
+	initNavFromHash,
+	isEngineGroup,
+	isMemoryGroup,
+	nav,
+	setTab,
+} from "$lib/stores/navigation.svelte";
 import { sk } from "$lib/stores/skills.svelte";
 import { openForm, ts } from "$lib/stores/tasks.svelte";
 import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
+import { Skeleton } from "$lib/components/ui/skeleton/index.js";
 import Plus from "@lucide/svelte/icons/plus";
 import { onMount } from "svelte";
 
 const activeTab = $derived(nav.activeTab);
+
+const tabBtn = "px-2.5 py-0.5 sig-label uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer";
+const tabActive = `${tabBtn} bg-[var(--sig-accent)] text-[var(--sig-bg)]`;
+const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]`;
 
 const { data } = $props();
 let daemonStatus = $state<DaemonStatus | null>(null);
@@ -149,53 +160,82 @@ onMount(() => {
 		>
 			<div class="flex items-center gap-2">
 				<Sidebar.Trigger class="-ml-1" />
-				<span
-					class="text-[11px] font-bold uppercase tracking-[0.1em]
-						text-[var(--sig-text-bright)]
-						font-[family-name:var(--font-display)]"
-				>
+				<span class="sig-heading">
 					{PAGE_HEADERS[activeTab].title}
 				</span>
-				<span class="text-[10px] text-[var(--sig-text-muted)]">&middot;</span>
-				<span
-					class="text-[10px] uppercase tracking-[0.1em]
-						text-[var(--sig-text-muted)]
-						font-[family-name:var(--font-mono)]"
-				>
-					{PAGE_HEADERS[activeTab].eyebrow}
-				</span>
+				{#if !isMemoryGroup(activeTab) && !isEngineGroup(activeTab)}
+					<span class="sig-eyebrow tracking-[0.1em]">&middot;</span>
+					<span class="sig-eyebrow tracking-[0.1em]">
+						{PAGE_HEADERS[activeTab].eyebrow}
+					</span>
+				{/if}
+
+				{#if isMemoryGroup(activeTab)}
+					<span class="ml-1 w-px h-4 bg-[var(--sig-border)]"></span>
+					<div class="flex items-center gap-px
+						border border-[var(--sig-border)] rounded-lg p-px">
+						<button
+							class={activeTab === 'memory' ? tabActive : tabInactive}
+							onclick={() => setTab("memory")}
+						>Index</button>
+						<button
+							class={activeTab === 'embeddings' ? tabActive : tabInactive}
+							onclick={() => setTab("embeddings")}
+						>Constellation</button>
+					</div>
+				{:else if isEngineGroup(activeTab)}
+					<span class="ml-1 w-px h-4 bg-[var(--sig-border)]"></span>
+					<div class="flex items-center gap-px
+						border border-[var(--sig-border)] rounded-lg p-px">
+						<button
+							class={activeTab === 'settings' ? tabActive : tabInactive}
+							onclick={() => setTab("settings")}
+						>Settings</button>
+						<button
+							class={activeTab === 'pipeline' ? tabActive : tabInactive}
+							onclick={() => setTab("pipeline")}
+						>Pipeline</button>
+						<button
+							class={activeTab === 'connectors' ? tabActive : tabInactive}
+							onclick={() => setTab("connectors")}
+						>Connectors</button>
+						<button
+							class={activeTab === 'logs' ? tabActive : tabInactive}
+							onclick={() => setTab("logs")}
+						>Logs</button>
+					</div>
+				{/if}
 			</div>
 			<div class="flex items-center gap-3">
 				{#if activeTab === "memory"}
-					<span class="text-[11px] text-[var(--sig-text-muted)]">
+					<span class="sig-label">
 						{displayMemories.length} documents
 					</span>
 					{#if mem.searching}
-						<span class="text-[11px] text-[var(--sig-text-muted)]">
+						<span class="sig-label">
 							searching...
 						</span>
 					{/if}
 					{#if mem.searched || hasActiveFilters() || mem.similarSourceId}
-						<button
-							class="text-[11px] text-[var(--sig-accent)]
-								bg-transparent border-none cursor-pointer
-								hover:underline p-0"
+						<Button
+							variant="ghost"
+							size="sm"
+							class="sig-label text-[var(--sig-accent)] hover:underline p-0 h-auto"
 							onclick={clearAll}
 						>
 							Reset
-						</button>
+						</Button>
 					{/if}
 				{:else if activeTab === "pipeline"}
-					<span class="text-[11px] text-[var(--sig-text-muted)]">
+					<span class="sig-label">
 						Memory loop
 					</span>
 				{:else if activeTab === "embeddings"}
-					<span class="text-[11px] text-[var(--sig-text-muted)]">
+					<span class="sig-label">
 						Constellation
 					</span>
 				{:else if activeTab === "skills"}
-					<span class="text-[10px] text-[var(--sig-text-muted)]
-						font-[family-name:var(--font-mono)]">
+					<span class="sig-eyebrow">
 						{#if sk.catalogTotal || mcpMarket.catalogTotal}
 							{(sk.catalogTotal + mcpMarket.catalogTotal).toLocaleString()} listed
 							<span class="text-[var(--sig-border-strong)]">&middot;</span>
@@ -219,89 +259,153 @@ onMount(() => {
 		<ExtensionBanner />
 
 		<div class="flex flex-1 flex-col min-h-0 relative">
+			{#snippet skeletonError(error: unknown)}
+				<div class="flex flex-1 items-center justify-center sig-label text-[var(--sig-danger)]">
+					Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
+				</div>
+			{/snippet}
+
+			{#snippet skeletonEditor()}
+				<div class="flex flex-1 min-h-0">
+					<div class="w-48 border-r border-[var(--sig-border)] p-3 space-y-2">
+						<Skeleton class="h-4 w-full" />
+						<Skeleton class="h-4 w-3/4" />
+						<Skeleton class="h-4 w-5/6" />
+						<Skeleton class="h-4 w-2/3" />
+					</div>
+					<div class="flex-1 p-4 space-y-2">
+						{#each Array(12) as _}
+							<Skeleton class="h-3.5 w-full" />
+						{/each}
+						<Skeleton class="h-3.5 w-2/3" />
+					</div>
+				</div>
+			{/snippet}
+
+			{#snippet skeletonCards()}
+				<div class="p-4 space-y-3">
+					<Skeleton class="h-9 w-full" />
+					<div class="flex gap-2">
+						<Skeleton class="h-7 w-24" />
+						<Skeleton class="h-7 w-20" />
+						<Skeleton class="h-7 w-16" />
+					</div>
+					<div class="grid grid-cols-3 gap-3">
+						{#each Array(6) as _}
+							<Skeleton class="h-36 w-full" />
+						{/each}
+					</div>
+				</div>
+			{/snippet}
+
+			{#snippet skeletonList()}
+				<div class="p-4 space-y-2">
+					<div class="flex gap-2 mb-3">
+						<Skeleton class="h-8 w-28" />
+						<Skeleton class="h-8 w-28" />
+					</div>
+					{#each Array(8) as _}
+						<Skeleton class="h-8 w-full" />
+					{/each}
+				</div>
+			{/snippet}
+
+			{#snippet skeletonForm()}
+				<div class="p-4 space-y-4 max-w-2xl">
+					{#each Array(5) as _}
+						<div class="space-y-1.5">
+							<Skeleton class="h-3 w-24" />
+							<Skeleton class="h-9 w-full" />
+						</div>
+					{/each}
+				</div>
+			{/snippet}
+
 			{#if activeTab === "config"}
-				{#await import("$lib/components/tabs/ConfigTab.svelte") then module}
+				{#await import("$lib/components/tabs/ConfigTab.svelte")}
+					{@render skeletonEditor()}
+				{:then module}
 					<module.default
 						configFiles={data.configFiles}
 						{selectedFile}
 						onselectfile={selectFile}
 					/>
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "settings"}
-				{#await import("$lib/components/tabs/SettingsTab.svelte") then module}
+				{#await import("$lib/components/tabs/SettingsTab.svelte")}
+					{@render skeletonForm()}
+				{:then module}
 					<module.default configFiles={data.configFiles} />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "memory"}
-				{#await import("$lib/components/tabs/MemoryTab.svelte") then module}
+				{#await import("$lib/components/tabs/MemoryTab.svelte")}
+					{@render skeletonCards()}
+				{:then module}
 					<module.default memories={memoryDocs} />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "embeddings"}
-				{#await import("$lib/components/tabs/EmbeddingsTab.svelte") then module}
+				{#await import("$lib/components/tabs/EmbeddingsTab.svelte")}
+					<div class="flex flex-1 items-center justify-center">
+						<Skeleton class="h-64 w-64 rounded-full" />
+					</div>
+				{:then module}
 					<module.default onopenglobalsimilar={openGlobalSimilar} />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "pipeline"}
-				{#await import("$lib/components/tabs/PipelineTab.svelte") then module}
+				{#await import("$lib/components/tabs/PipelineTab.svelte")}
+					{@render skeletonList()}
+				{:then module}
 					<module.default />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "logs"}
-				{#await import("$lib/components/tabs/LogsTab.svelte") then module}
+				{#await import("$lib/components/tabs/LogsTab.svelte")}
+					{@render skeletonList()}
+				{:then module}
 					<module.default />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "secrets"}
-				{#await import("$lib/components/tabs/SecretsTab.svelte") then module}
+				{#await import("$lib/components/tabs/SecretsTab.svelte")}
+					{@render skeletonList()}
+				{:then module}
 					<module.default />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "skills"}
-				{#await import("$lib/components/tabs/MarketplaceTab.svelte") then module}
+				{#await import("$lib/components/tabs/MarketplaceTab.svelte")}
+					{@render skeletonCards()}
+				{:then module}
 					<module.default />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "tasks"}
-				{#await import("$lib/components/tabs/TasksTab.svelte") then module}
+				{#await import("$lib/components/tabs/TasksTab.svelte")}
+					{@render skeletonList()}
+				{:then module}
 					<module.default />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{:else if activeTab === "connectors"}
-				{#await import("$lib/components/tabs/ConnectorsTab.svelte") then module}
+				{#await import("$lib/components/tabs/ConnectorsTab.svelte")}
+					{@render skeletonList()}
+				{:then module}
 					<module.default />
 				{:catch error}
-					<div class="flex flex-1 items-center justify-center text-[12px] text-[var(--sig-danger)] font-[family-name:var(--font-mono)]">
-						Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-					</div>
+					{@render skeletonError(error)}
 				{/await}
 			{/if}
 		</div>
@@ -310,8 +414,7 @@ onMount(() => {
 			class="flex items-center justify-between h-[26px] px-4
 				border-t border-[var(--sig-border)]
 				bg-[var(--sig-surface)]
-				text-[10px] text-[var(--sig-text-muted)]
-				font-[family-name:var(--font-mono)] shrink-0"
+				sig-eyebrow shrink-0"
 		>
 			{#if activeTab === "config"}
 				<span>{selectedFile}</span>

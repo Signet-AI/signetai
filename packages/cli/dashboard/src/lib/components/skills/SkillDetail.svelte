@@ -90,15 +90,15 @@ let trustProfile = $derived.by(() => {
 							{/if}
 							{#if sk.detailMeta}
 								{#if sk.detailMeta.user_invocable}
-									<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">
+									<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">
 										/{sk.detailMeta.name}
 									</Badge>
 								{/if}
 								{#if sk.detailMeta.builtin}
-									<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
+									<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
 								{/if}
 								{#if sk.detailMeta.arg_hint}
-									<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">
+									<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">
 										{sk.detailMeta.arg_hint}
 									</Badge>
 								{/if}
@@ -109,12 +109,12 @@ let trustProfile = $derived.by(() => {
 					<!-- Action button -->
 					<div class="shrink-0">
 						{#if sk.detailMeta?.builtin}
-							<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">System</Badge>
+							<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">System</Badge>
 						{:else if isInstalled}
 							<Button
 								variant="outline"
 								size="sm"
-								class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+								class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
 								onclick={() => sk.detailMeta && doUninstall(sk.detailMeta.name)}
 								disabled={sk.uninstalling === sk.detailMeta?.name}
 							>
@@ -124,7 +124,7 @@ let trustProfile = $derived.by(() => {
 							<Button
 								variant="outline"
 								size="sm"
-								class="rounded-none font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+								class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
 								onclick={() => sk.selectedName && doInstall(sk.selectedName)}
 								disabled={sk.installing === sk.selectedName}
 							>

@@ -72,12 +72,12 @@ function isSkill(item: Skill | SkillSearchResult): item is Skill {
 				{#if mode === "search" && isSearchResult(item)}
 					<span class="skill-count">{item.installs}</span>
 					{#if item.installed}
-						<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-success)] text-[var(--sig-success)]">Installed</Badge>
+						<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-success)] text-[var(--sig-success)]">Installed</Badge>
 					{:else}
 						<Button
 							variant="outline"
 							size="sm"
-							class="h-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-0.5 border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+							class="h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-0.5 border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
 							onclick={(e: MouseEvent) => { e.stopPropagation(); oninstall?.(item.name); }}
 							disabled={installing === item.name}
 						>
@@ -86,16 +86,16 @@ function isSkill(item: Skill | SkillSearchResult): item is Skill {
 					{/if}
 				{:else if mode === "installed" && isSkill(item)}
 					{#if item.builtin}
-						<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
+						<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
 					{/if}
 					{#if item.user_invocable}
-						<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">/{item.name}</Badge>
+						<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">/{item.name}</Badge>
 					{/if}
 					{#if !item.builtin}
 						<Button
 							variant="outline"
 							size="sm"
-							class="h-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-0.5 border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+							class="h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-0.5 border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
 							onclick={(e: MouseEvent) => { e.stopPropagation(); onuninstall?.(item.name); }}
 							disabled={uninstalling === item.name}
 						>

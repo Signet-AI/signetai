@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount } from "svelte";
 import * as Select from "$lib/components/ui/select/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
 import { ActionLabels } from "$lib/ui/action-labels";
@@ -334,10 +335,10 @@ $effect(() => {
 <div class="flex flex-col flex-1 min-h-0">
 	<div class="flex items-center gap-[var(--space-sm)] px-[var(--space-md)] py-[var(--space-sm)] border-b border-[var(--sig-border)] shrink-0">
 		<Select.Root type="single" value={logLevelFilter} onValueChange={(v) => { logLevelFilter = v ?? ""; fetchLogs(); }}>
-			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-none h-auto py-1 px-2 min-w-[100px]">
+			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[100px]">
 				{logLevelFilter || "All levels"}
 			</Select.Trigger>
-			<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-none">
+			<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg">
 				<Select.Item value="" label="All levels" />
 				{#each logLevels as level}
 					<Select.Item value={level} label={level} />
@@ -345,49 +346,53 @@ $effect(() => {
 			</Select.Content>
 		</Select.Root>
 		<Select.Root type="single" value={logCategoryFilter} onValueChange={(v) => { logCategoryFilter = v ?? ""; fetchLogs(); }}>
-			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-none h-auto py-1 px-2 min-w-[100px]">
+			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[100px]">
 				{logCategoryFilter || "All categories"}
 			</Select.Trigger>
-			<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-none">
+			<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg">
 				<Select.Item value="" label="All categories" />
 				{#each logCategories as cat}
 					<Select.Item value={cat} label={cat} />
 				{/each}
 			</Select.Content>
 		</Select.Root>
-		<label class="flex items-center gap-1.5 text-[length:var(--font-size-sm)] text-[var(--sig-text)] cursor-pointer">
-			<Checkbox checked={logAutoScroll} onCheckedChange={(value: unknown) => { logAutoScroll = value === true; }} class="rounded-none" />
+		<label class="flex items-center gap-1.5 sig-label text-[var(--sig-text)] cursor-pointer">
+			<Checkbox checked={logAutoScroll} onCheckedChange={(value: unknown) => { logAutoScroll = value === true; }} class="rounded-lg" />
 			Auto-scroll
 		</label>
 		<span
-			class="text-[10px] font-[family-name:var(--font-mono)]"
+			class="sig-eyebrow"
 			class:text-[#4ade80]={logAutoScroll && logFollow}
 			class:text-[var(--sig-text-muted)]={!logAutoScroll || !logFollow}
 		>
 			{logAutoScroll && logFollow ? "following" : "paused"}
 		</span>
-		<button
-			class="text-[11px] px-2 py-1 border border-[var(--sig-border)] text-[var(--sig-text)] hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
+		<Button
+			variant="outline"
+			size="sm"
+			class="sig-label px-2 py-1 h-auto hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
 			onclick={fetchLogs}
 			title="Reload logs"
 		>
 			{ActionLabels.Refresh}
-		</button>
-		<button
-			class={`flex items-center justify-center w-7 h-7 bg-transparent border border-transparent cursor-pointer hover:text-[var(--sig-text)] hover:border-[var(--sig-border)] ${logsStreaming ? 'text-[var(--sig-success)]' : 'text-[var(--sig-text-muted)]'}`}
+		</Button>
+		<Button
+			variant="ghost"
+			size="sm"
+			class={`flex items-center justify-center w-7 h-7 p-0 hover:text-[var(--sig-text)] hover:border-[var(--sig-border)] ${logsStreaming ? 'text-[var(--sig-success)]' : 'text-[var(--sig-text-muted)]'}`}
 			onclick={toggleLogStream}
 			title={logsStreaming ? 'Stop stream' : logsReconnecting ? 'Cancel reconnect' : 'Start stream'}
 		>
 			{#if logsStreaming}
-				<span class="text-[var(--sig-success)] text-[length:var(--font-size-sm)] font-medium [animation:pulse_2s_infinite]">● Live</span>
+				<span class="text-[var(--sig-success)] sig-label font-medium [animation:pulse_2s_infinite]">● Live</span>
 			{:else if logsReconnecting}
-				<span class="text-[var(--sig-text-muted)] text-[length:var(--font-size-sm)] [animation:pulse_2s_infinite]">↺</span>
+				<span class="text-[var(--sig-text-muted)] sig-label [animation:pulse_2s_infinite]">↺</span>
 			{:else}
 				▶
 			{/if}
-		</button>
+		</Button>
 		{#if streamError}
-			<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)] truncate max-w-[220px]">
+			<span class="sig-eyebrow truncate max-w-[220px]">
 				{streamError}
 			</span>
 		{/if}
@@ -433,12 +438,13 @@ $effect(() => {
 		<div class="min-h-0 overflow-auto p-[var(--space-md)] font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)]">
 			{#if selectedLog}
 				<div class="flex items-center justify-between gap-2 mb-[var(--space-sm)]">
-					<div class="text-[var(--sig-text-muted)] text-[length:var(--font-size-xs)] uppercase tracking-[0.08em]">Log details</div>
-					<button
-						type="button"
-						class="text-[10px] px-2 py-1 border border-[var(--sig-border)] text-[var(--sig-text)] hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
+					<div class="sig-eyebrow tracking-[0.08em]">Log details</div>
+					<Button
+						variant="outline"
+						size="sm"
+						class="sig-eyebrow px-2 py-1 h-auto hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
 						onclick={copySelectedLog}
-					>{copied ? "Copied" : ActionLabels.CopyJson}</button>
+					>{copied ? "Copied" : ActionLabels.CopyJson}</Button>
 				</div>
 				<div class="grid grid-cols-[80px_1fr] gap-y-1 gap-x-2 mb-[var(--space-sm)]">
 					<div class="text-[var(--sig-text-muted)]">Time</div>

@@ -307,13 +307,13 @@ function closeInstallSheet(): void {
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
 		color: var(--sig-text-bright);
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	:global(.select-content) {
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
-		border-radius: 0;
+		border-radius: 0.5rem;
 	}
 
 	:global(.select-item) {

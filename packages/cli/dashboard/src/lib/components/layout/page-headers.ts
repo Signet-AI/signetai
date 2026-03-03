@@ -9,7 +9,7 @@ export const PAGE_HEADERS = {
 		eyebrow: "Identity markdown workspace",
 	},
 	settings: {
-		title: "Settings",
+		title: "Engine",
 		eyebrow: "Runtime and harness controls",
 	},
 	memory: {
@@ -17,15 +17,15 @@ export const PAGE_HEADERS = {
 		eyebrow: "Persistent memory index",
 	},
 	embeddings: {
-		title: "Constellation",
+		title: "Memory",
 		eyebrow: "Semantic projection workspace",
 	},
 	pipeline: {
-		title: "Pipeline",
+		title: "Engine",
 		eyebrow: "Live memory loop telemetry",
 	},
 	logs: {
-		title: "Logs",
+		title: "Engine",
 		eyebrow: "Daemon event stream",
 	},
 	secrets: {
@@ -41,7 +41,7 @@ export const PAGE_HEADERS = {
 		eyebrow: "Scheduled agent prompts",
 	},
 	connectors: {
-		title: "Connectors",
+		title: "Engine",
 		eyebrow: "Harness and data source health",
 	},
 } as const satisfies Record<string, PageHeaderDefinition>;

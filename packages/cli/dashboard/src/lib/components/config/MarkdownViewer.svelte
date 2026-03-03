@@ -103,7 +103,7 @@ let rendered = $derived.by(() => {
 				<Button
 					variant="outline"
 					size="sm"
-					class="h-auto rounded-none gap-1 font-[family-name:var(--font-mono)] text-[10px]
+					class="h-auto rounded-lg gap-1 font-[family-name:var(--font-mono)] text-[10px]
 						font-medium uppercase tracking-[0.1em] px-2 py-[3px]
 						text-[var(--sig-text-muted)] border-[var(--sig-border)]
 						hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
@@ -116,7 +116,7 @@ let rendered = $derived.by(() => {
 				<Button
 					variant="outline"
 					size="sm"
-					class="h-auto rounded-none gap-1 font-[family-name:var(--font-mono)] text-[10px]
+					class="h-auto rounded-lg gap-1 font-[family-name:var(--font-mono)] text-[10px]
 						font-medium uppercase tracking-[0.1em] px-2 py-[3px]
 						border-[var(--sig-accent)] text-[var(--sig-text-bright)]
 						hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]
@@ -130,7 +130,7 @@ let rendered = $derived.by(() => {
 			<Button
 				variant="outline"
 				size="sm"
-				class="h-auto rounded-none gap-1 font-[family-name:var(--font-mono)] text-[10px]
+				class="h-auto rounded-lg gap-1 font-[family-name:var(--font-mono)] text-[10px]
 					font-medium uppercase tracking-[0.1em] px-2 py-[3px]
 					text-[var(--sig-text)] border-[var(--sig-border-strong)]
 					hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-text-muted)]"

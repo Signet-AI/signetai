@@ -172,7 +172,7 @@ let isInstalled = $derived(
 					<span class="stat">/{item.name}</span>
 				{/if}
 				{#if item.builtin}
-					<Badge variant="outline" class="rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
+					<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
 				{/if}
 			{/if}
 		</div>
@@ -184,7 +184,7 @@ let isInstalled = $derived(
 					<Button
 						variant="outline"
 						size="sm"
-						class="w-full h-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+						class="w-full h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
 						onclick={(e: MouseEvent) => { e.stopPropagation(); onuninstall?.(); }}
 						disabled={uninstalling}
 					>
@@ -194,7 +194,7 @@ let isInstalled = $derived(
 					<Button
 						variant="outline"
 						size="sm"
-						class="w-full h-auto rounded-none font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 bg-[var(--sig-accent)] border-[var(--sig-accent)] text-[var(--sig-bg)] hover:bg-[var(--sig-accent-hover,var(--sig-accent))] hover:border-[var(--sig-accent)]"
+						class="w-full h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 bg-[var(--sig-accent)] border-[var(--sig-accent)] text-[var(--sig-bg)] hover:bg-[var(--sig-accent-hover,var(--sig-accent))] hover:border-[var(--sig-accent)]"
 						onclick={(e: MouseEvent) => { e.stopPropagation(); oninstall?.(); }}
 						disabled={installing}
 					>
