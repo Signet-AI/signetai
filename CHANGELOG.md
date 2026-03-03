@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.25.1] - 2026-03-03
+
+### Bug Fixes
+
+- use directory junctions on Windows for skill symlinks
+
+
 ## [0.25.0] - 2026-03-03
 
 ### Bug Fixes
