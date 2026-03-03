@@ -8,7 +8,8 @@
 
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { logger } from "./logger";
 
 // ---------------------------------------------------------------------------
@@ -83,23 +84,67 @@ function readTransformersBindings(value: unknown): TransformersBindings | null {
 }
 
 async function loadTransformersBindings(): Promise<TransformersBindings> {
-	let mod: unknown;
-	try {
-		mod = await import("@huggingface/transformers");
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to load @huggingface/transformers: ${message}`);
+	const importBySpecifier = (specifier: string): Promise<unknown> => {
+		return import(specifier);
+	};
+
+	const resolveImportMetaSpecifier = (specifier: string): string => {
+		const resolver = Reflect.get(import.meta, "resolve");
+		if (typeof resolver !== "function") {
+			throw new Error("import.meta.resolve is not available");
+		}
+		return String(Reflect.apply(resolver, import.meta, [specifier]));
+	};
+
+	const loadTransformersWebRuntime = async (): Promise<unknown> => {
+		const packageJsonUrl = resolveImportMetaSpecifier("@huggingface/transformers/package.json");
+		const packageJsonPath = fileURLToPath(packageJsonUrl);
+		const webRuntimePath = join(dirname(packageJsonPath), "dist", "transformers.web.js");
+		return import(pathToFileURL(webRuntimePath).href);
+	};
+
+	const importCandidates: ReadonlyArray<{
+		readonly source: string;
+		readonly load: () => Promise<unknown>;
+	}> = [
+		{
+			source: "bundled runtime",
+			load: () => import("./transformers-runtime"),
+		},
+		{
+			source: "@huggingface/transformers",
+			load: () => importBySpecifier("@huggingface/transformers"),
+		},
+		{
+			source: "@huggingface/transformers dist web runtime",
+			load: () => loadTransformersWebRuntime(),
+		},
+	];
+
+	const failures: string[] = [];
+
+	for (const candidate of importCandidates) {
+		let mod: unknown;
+		try {
+			mod = await candidate.load();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			failures.push(`${candidate.source}: ${message}`);
+			continue;
+		}
+
+		const direct = readTransformersBindings(mod);
+		if (direct !== null) return direct;
+
+		if (isRecord(mod) && "default" in mod) {
+			const fromDefault = readTransformersBindings(mod.default);
+			if (fromDefault !== null) return fromDefault;
+		}
+
+		failures.push(`${candidate.source}: unsupported export shape (missing env/pipeline)`);
 	}
 
-	const direct = readTransformersBindings(mod);
-	if (direct !== null) return direct;
-
-	if (isRecord(mod) && "default" in mod) {
-		const fromDefault = readTransformersBindings(mod.default);
-		if (fromDefault !== null) return fromDefault;
-	}
-
-	throw new Error("Unsupported @huggingface/transformers export shape (missing env/pipeline)");
+	throw new Error(`Failed to load @huggingface/transformers: ${failures.join("; ")}`);
 }
 
 function toEmbedFn(value: unknown): EmbedFn {

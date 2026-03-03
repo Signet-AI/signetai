@@ -346,8 +346,8 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	// Find daemon script (check multiple locations for dev vs published package)
 	const daemonLocations = [
 		join(__dirname, "daemon.js"), // published: dist/daemon.js (same dir as cli.js)
-		join(__dirname, "..", "..", "daemon", "src", "daemon.ts"), // dev: packages/daemon/src/daemon.ts
 		join(__dirname, "..", "..", "daemon", "dist", "daemon.js"), // dev built: packages/daemon/dist/daemon.js
+		join(__dirname, "..", "..", "daemon", "src", "daemon.ts"), // dev source fallback: packages/daemon/src/daemon.ts
 	];
 
 	let daemonPath: string | null = null;
