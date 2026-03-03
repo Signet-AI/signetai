@@ -238,3 +238,83 @@ For extraction pipeline behavior, see [Memory Pipeline](./PIPELINE.md).*
 
 *Written by Nicholai and Mr. Claude, the first Signet agent.*
 *March 3, 2026*
+
+
+---
+*Addendum — March 3, 2026*
+
+---
+
+
+Constraint Confidence
+---------------------
+
+Constraints don't just gate action — they tell the agent how much it
+knows about an entity.
+
+An entity with a rich constraint set is one the agent understands well.
+It knows what's allowed, what's forbidden, what requires care. It can
+move confidently. An entity with no constraints is one the agent has
+barely met — it should slow down, assume less, and verify more.
+
+This is an internal signal, not a user-facing one. The agent uses
+constraint density to calibrate how autonomously it acts on a given
+entity. The user never manages it, configures it, or even sees it
+directly. It's just behavior: the agent is more cautious around
+unfamiliar entities, more decisive around well-mapped ones.
+
+In the constellation view, this manifests as node brightness. Entities
+with dense constraint graphs are luminous. New entities are dim. The
+visual tells you, at a glance, where the agent is operating on solid
+ground.
+
+
+Context Is Bounded by Design
+-----------------------------
+
+One of the structural advantages of this architecture is that context
+loading is deterministic.
+
+When the agent identifies which entities are active in a session, it
+loads their graphs: aspects, attributes, constraints, and first-degree
+dependencies. The cost is known before it starts. The result is
+bounded. There are no threshold knobs to tune, no candidate pools to
+score — just a walk through a finite, pre-organized structure.
+
+This is the practical case for the entity graph over pure embedding
+search. Embedding search scales with database size. It's probabilistic.
+It can miss structurally critical facts that don't happen to *sound*
+similar to the query. The graph walk finds everything that is
+structurally required, deterministically, every time.
+
+Embedding search still has a role — it's how the agent discovers things
+the graph hasn't connected yet. But it's the fallback, not the primary
+path. The graph walk loads the known context. Search fills the gaps.
+
+
+Constraints Evolve Without Your Help
+--------------------------------------
+
+Constraints are the most stable part of the knowledge graph, but they
+aren't frozen.
+
+The system observes how constraints interact with reality over time.
+If a constraint is consistently relevant — the agent encounters it,
+respects it, acts accordingly — it stays exactly as it is. If a
+constraint is consistently contradicted by the user's actual behavior,
+its effective weight decays. Not to zero. Constraints have a floor.
+But a constraint that no longer reflects how someone actually works
+gradually loses the urgency it once had.
+
+The user doesn't manage this. There are no review prompts, no
+"this constraint hasn't been used in 30 days" notifications, no
+settings panel for constraint lifecycle. The system observes. The
+system adapts. If the user says something that explicitly supersedes
+a constraint, the agent updates it in the moment — as a natural part
+of the conversation, not as a maintenance task.
+
+This is the broader principle: the memory system is set and forget.
+The user talks to the agent. The agent handles everything else.
+Constraints, weights, entity graphs, decay rates — none of that is
+the user's job. The user's job is to work. The system's job is to
+remember, organize, and get out of the way.
