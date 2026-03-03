@@ -21,7 +21,7 @@
     "dashboard"
   ],
   "scripts": {
-    "build": "bun build ./src/daemon.ts --outfile ./dist/daemon.js --target bun --external @1password/sdk --external onnxruntime-node --external sharp && bun build ./src/mcp-stdio.ts --outfile ./dist/mcp-stdio.js --target bun --external @1password/sdk --external onnxruntime-node --external sharp && bun build ./src/index.ts --outfile ./dist/index.js --target bun --external @1password/sdk --external onnxruntime-node --external sharp",
+    "build": "bun run build.ts",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "dev": "bun --watch src/daemon.ts",
     "start": "bun src/daemon.ts",
