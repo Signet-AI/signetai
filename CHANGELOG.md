@@ -2,6 +2,27 @@
 
 All notable changes to Signet are documented here.
 
+## [0.25.2] - 2026-03-03
+
+### Features
+
+- **dashboard**: add constellation newness heatmap
+
+### Bug Fixes
+
+- **dashboard**: tighten newness palette and source gating
+- **dashboard**: update newness palette buckets
+- **dashboard**: refine constellation newness color buckets
+- **dashboard**: address all Greptile review feedback
+- **dashboard**: address Greptile review feedback
+- **dashboard**: consistent nav button position in ConfigTab
+- **dashboard**: restore provider dropdown, fix indentation, add ConfigTab polish
+
+### Refactoring
+
+- **dashboard**: polish settings page with single-section view
+
+
 ## [0.25.1] - 2026-03-03
 
 ### Bug Fixes
