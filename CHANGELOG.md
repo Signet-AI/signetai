@@ -2,6 +2,24 @@
 
 All notable changes to Signet are documented here.
 
+## [0.27.1] - 2026-03-03
+
+### Features
+
+- **web**: add knowledge architecture blog og image
+- **web**: knowledge architecture blog post
+
+### Bug Fixes
+
+- **dashboard**: auto-fit constellation camera on vertical viewports
+- **dashboard**: restore feed follow behavior on latest main
+- **repo**: resolve test and typecheck regressions
+
+### Docs
+
+- the database knows what you did last summer
+
+
 ## [0.27.0] - 2026-03-03
 
 ### Bug Fixes
