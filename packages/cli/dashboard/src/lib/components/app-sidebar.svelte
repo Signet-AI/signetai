@@ -23,9 +23,23 @@ interface Props {
 	daemonStatus: DaemonStatus | null;
 	theme: "dark" | "light";
 	onthemetoggle: () => void;
+	onprefetchembeddings?: () => void;
 }
 
-const { identity, harnesses, memCount, daemonStatus, theme, onthemetoggle }: Props = $props();
+const {
+	identity,
+	harnesses,
+	memCount,
+	daemonStatus,
+	theme,
+	onthemetoggle,
+	onprefetchembeddings,
+}: Props = $props();
+
+function maybePrefetchEmbeddings(id: TabId): void {
+	if (id !== "embeddings") return;
+	onprefetchembeddings?.();
+}
 
 const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
 	{ id: "config", label: "Config", icon: FileText },
@@ -89,6 +103,8 @@ const navItems: { id: TabId; label: string; icon: typeof FileText }[] = [
 							<Sidebar.MenuButton
 								isActive={nav.activeTab === item.id}
 								onclick={() => setTab(item.id)}
+								onmouseenter={() => maybePrefetchEmbeddings(item.id)}
+								onfocus={() => maybePrefetchEmbeddings(item.id)}
 								tooltipContent={item.label}
 							>
 								<item.icon class="size-4" />

@@ -35,6 +35,8 @@ let logAutoScroll = $state(true);
 let logViewport = $state<HTMLElement | null>(null);
 let selectedLogKey = $state<string | null>(null);
 let copied = $state(false);
+let logFollow = $state(true);
+const BOTTOM_THRESHOLD_PX = 24;
 
 const logCategories = [
 	"daemon", "api", "memory", "sync", "git",
@@ -95,6 +97,11 @@ function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
 	});
 }
 
+function isNearBottom(viewport: HTMLElement | null): boolean {
+	if (!viewport) return true;
+	return viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - BOTTOM_THRESHOLD_PX;
+}
+
 async function fetchLogs() {
 	logsLoading = true;
 	logsError = "";
@@ -106,7 +113,10 @@ async function fetchLogs() {
 		const data = await res.json();
 		logs = data.logs || [];
 		selectLatestLog();
-		setTimeout(() => scrollToBottom("auto"), 0);
+		setTimeout(() => {
+			scrollToBottom("auto");
+			logFollow = true;
+		}, 0);
 	} catch {
 		logsError = "Failed to fetch logs";
 	} finally {
@@ -141,10 +151,17 @@ function startLogStream() {
 			}
 			if (logLevelFilter && entry.level !== logLevelFilter) return;
 			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
+			const wasNearBottom = isNearBottom(logViewport);
+			const shouldAutoFollow = logAutoScroll && (logFollow || wasNearBottom);
 			const wasViewingLatest = isViewingLatest();
 			logs = [...logs.slice(-499), entry];
 			if (wasViewingLatest) selectLatestLog();
-			if (logAutoScroll && wasViewingLatest) setTimeout(() => scrollToBottom(), 0);
+			if (shouldAutoFollow) {
+				setTimeout(() => {
+					scrollToBottom("auto");
+					logFollow = true;
+				}, 0);
+			}
 		} catch {
 			// ignore parse errors
 		}
@@ -296,6 +313,22 @@ onMount(() => {
 		if (logEventSource) logEventSource.close();
 	};
 });
+
+$effect(() => {
+	const viewport = logViewport;
+	if (!viewport) return;
+
+	const onScroll = () => {
+		logFollow = isNearBottom(viewport);
+	};
+
+	viewport.addEventListener("scroll", onScroll, { passive: true });
+	onScroll();
+
+	return () => {
+		viewport.removeEventListener("scroll", onScroll);
+	};
+});
 </script>
 
 <div class="flex flex-col flex-1 min-h-0">
@@ -326,6 +359,13 @@ onMount(() => {
 			<Checkbox checked={logAutoScroll} onCheckedChange={(value: unknown) => { logAutoScroll = value === true; }} class="rounded-none" />
 			Auto-scroll
 		</label>
+		<span
+			class="text-[10px] font-[family-name:var(--font-mono)]"
+			class:text-[#4ade80]={logAutoScroll && logFollow}
+			class:text-[var(--sig-text-muted)]={!logAutoScroll || !logFollow}
+		>
+			{logAutoScroll && logFollow ? "following" : "paused"}
+		</span>
 		<button
 			class="text-[11px] px-2 py-1 border border-[var(--sig-border)] text-[var(--sig-text)] hover:border-[var(--sig-border-strong)] hover:text-[var(--sig-text-bright)]"
 			onclick={fetchLogs}

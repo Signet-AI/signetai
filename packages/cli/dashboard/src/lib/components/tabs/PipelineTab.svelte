@@ -27,6 +27,7 @@
 	let mobileFeedActionsOpen = $state(false);
 	const AUTO_SCROLL_THRESHOLD_PX = 24;
 	let feedAtLatest = $state(true);
+	let feedFollow = $state(true);
 	let feedWidthClass = $derived(feedExpanded ? "lg:w-[420px]" : "lg:w-[320px]");
 	let feedPositionLabel = $derived(feedAtLatest ? "Latest" : "Oldest");
 	let feedDensityLabel = $derived(feedExpanded ? "Expanded" : "Compact");
@@ -46,12 +47,13 @@
 
 	function updateFeedPositionFlags(): void {
 		if (!feedViewport) return;
+		feedFollow = isFeedNearBottom();
 		const overflow =
 			feedViewport.scrollHeight - feedViewport.clientHeight >
 			AUTO_SCROLL_THRESHOLD_PX;
 		if (!overflow) return;
 
-		if (isFeedNearBottom()) {
+		if (feedFollow) {
 			feedAtLatest = true;
 			return;
 		}
@@ -66,10 +68,12 @@
 
 		if (feedAtLatest) {
 			autoScroll = false;
+			feedFollow = false;
 			feedAtLatest = false;
 			feedViewport.scrollTo({ top: 0, behavior: "smooth" });
 		} else {
 			autoScroll = true;
+			feedFollow = true;
 			feedAtLatest = true;
 			scrollFeedToBottom("auto");
 		}
@@ -85,6 +89,7 @@
 		workspaceLayout.pipeline.autoScroll = checked;
 		syncLayoutToStorage();
 		if (checked) {
+			feedFollow = true;
 			feedAtLatest = true;
 			requestAnimationFrame(() => {
 				scrollFeedToBottom("auto");
@@ -116,9 +121,11 @@
 		const _ = pipeline.feed.length;
 		updateFeedPositionFlags();
 		if (autoScroll && feedViewport) {
-			if (!isFeedNearBottom()) return;
+			if (!feedFollow) return;
 			requestAnimationFrame(() => {
-				scrollFeedToBottom("smooth");
+				scrollFeedToBottom("auto");
+				feedFollow = true;
+				feedAtLatest = true;
 				updateFeedPositionFlags();
 			});
 		}
@@ -380,9 +387,18 @@
 					<span class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] font-[family-name:var(--font-display)]">
 						Live Feed
 					</span>
-					<span class="text-[9px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">
-						{pipeline.feed.length} events
-					</span>
+					<div class="flex items-center gap-2">
+						<span class="text-[9px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">
+							{pipeline.feed.length} events
+						</span>
+						<span
+							class="text-[9px] font-[family-name:var(--font-mono)]"
+							class:text-[#4ade80]={autoScroll && feedFollow}
+							class:text-[var(--sig-text-muted)]={!autoScroll || !feedFollow}
+						>
+							{autoScroll && feedFollow ? "following" : "paused"}
+						</span>
+					</div>
 				</div>
 				<div class="flex items-center justify-between gap-2 min-w-0">
 					<label class="inline-flex items-center gap-1.5 text-[10px] text-[var(--sig-text)] font-[family-name:var(--font-mono)] cursor-pointer min-w-0">
@@ -397,14 +413,14 @@
 						<button
 							type="button"
 							class="px-2 py-[3px] text-[9px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
-							onclick={(event) => handleFeedJumpClick(event)}
+							onclick={(event: MouseEvent) => handleFeedJumpClick(event)}
 						>
 							{feedPositionLabel}
 						</button>
 						<button
 							type="button"
 							class="px-2 py-[3px] text-[9px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
-							onclick={(event) => handleFeedWidthToggle(event)}
+							onclick={(event: MouseEvent) => handleFeedWidthToggle(event)}
 						>
 							{feedDensityLabel}
 						</button>
@@ -431,14 +447,14 @@
 									<button
 										type="button"
 										class="w-full text-left px-2 py-1 text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
-										onclick={(event) => handleFeedJumpClick(event)}
+										onclick={(event: MouseEvent) => handleFeedJumpClick(event)}
 									>
 										{feedPositionLabel}
 									</button>
 									<button
 										type="button"
 										class="w-full text-left px-2 py-1 text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] border border-[var(--sig-border)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
-										onclick={(event) => handleFeedWidthToggle(event)}
+										onclick={(event: MouseEvent) => handleFeedWidthToggle(event)}
 									>
 										{feedDensityLabel}
 									</button>
