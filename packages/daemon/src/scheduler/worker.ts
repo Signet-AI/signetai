@@ -8,6 +8,7 @@
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import type { WorkerHandle } from "../pipeline/worker";
 import { computeNextRun } from "./cron";
+import { resolveSkillPrompt } from "./skill-resolver";
 import { spawnTask, type SpawnResult } from "./spawn";
 import { emitTaskStream } from "./task-stream";
 import { logger } from "../logger";
@@ -22,6 +23,8 @@ export interface DueTaskRow {
 	readonly cron_expression: string;
 	readonly harness: string;
 	readonly working_directory: string | null;
+	readonly skill_name: string | null;
+	readonly skill_mode: string | null;
 }
 
 export function selectDueTasks(
@@ -34,7 +37,8 @@ export function selectDueTasks(
 	return db
 		.prepare(
 			`SELECT t.id, t.name, t.prompt, t.cron_expression,
-			        t.harness, t.working_directory
+			        t.harness, t.working_directory,
+			        t.skill_name, t.skill_mode
 			 FROM scheduled_tasks t
 			 WHERE t.enabled = 1
 			   AND t.next_run_at IS NOT NULL
@@ -170,12 +174,19 @@ async function executeTask(
 		harness: task.harness,
 	});
 
+	// Resolve skill content into prompt
+	const effectivePrompt = resolveSkillPrompt(
+		task.prompt,
+		task.skill_name,
+		task.skill_mode,
+	);
+
 	// Spawn the process
 	let result: SpawnResult;
 	try {
 		result = await spawnTask(
 			task.harness as "claude-code" | "opencode",
-			task.prompt,
+			effectivePrompt,
 			task.working_directory,
 			undefined,
 			{

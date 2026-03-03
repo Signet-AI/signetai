@@ -374,6 +374,8 @@ export async function doCreate(data: {
 	cronExpression: string;
 	harness: string;
 	workingDirectory?: string;
+	skillName?: string;
+	skillMode?: string;
 }): Promise<boolean> {
 	ts.creating = true;
 	const result = await createTask(data);
@@ -398,6 +400,8 @@ export async function doUpdate(
 		harness: string;
 		workingDirectory: string | null;
 		enabled: boolean;
+		skillName: string | null;
+		skillMode: string | null;
 	}>,
 ): Promise<boolean> {
 	const result = await updateTask(id, data);

@@ -22,6 +22,7 @@ import { up as ingestionTracking } from "./013-ingestion-tracking";
 import { up as telemetry } from "./014-telemetry";
 import { up as sessionMemories } from "./015-session-memories";
 import { up as sessionCheckpoints } from "./016-session-checkpoints";
+import { up as taskSkills } from "./017-task-skills";
 
 // -- Public interface consumed by Database.init() --
 
@@ -101,6 +102,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 16,
 		name: "session-checkpoints",
 		up: sessionCheckpoints,
+	},
+	{
+		version: 17,
+		name: "task-skills",
+		up: taskSkills,
 	},
 ];
 

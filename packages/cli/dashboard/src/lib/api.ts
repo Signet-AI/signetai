@@ -1217,6 +1217,8 @@ export interface ScheduledTask {
 	updated_at: string;
 	last_run_status?: string | null;
 	last_run_exit_code?: number | null;
+	skill_name: string | null;
+	skill_mode: "inject" | "slash" | null;
 }
 
 export interface TaskRun {
@@ -1265,6 +1267,8 @@ export async function createTask(data: {
 	cronExpression: string;
 	harness: string;
 	workingDirectory?: string;
+	skillName?: string;
+	skillMode?: string;
 }): Promise<{ id?: string; error?: string }> {
 	try {
 		const response = await fetch(`${API_BASE}/api/tasks`, {
@@ -1287,6 +1291,8 @@ export async function updateTask(
 		harness: string;
 		workingDirectory: string | null;
 		enabled: boolean;
+		skillName: string | null;
+		skillMode: string | null;
 	}>,
 ): Promise<{ success?: boolean; error?: string }> {
 	try {

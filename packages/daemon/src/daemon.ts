@@ -103,7 +103,7 @@ import {
 	resyncVectorIndex,
 	triggerRetentionSweep,
 } from "./repair-actions";
-import { CRON_PRESETS, computeNextRun, isHarnessAvailable, startSchedulerWorker, validateCron } from "./scheduler";
+import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, startSchedulerWorker, validateCron } from "./scheduler";
 import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "./scheduler/task-stream";
 import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "./secrets.js";
 import {
@@ -4807,7 +4807,7 @@ app.get("/api/tasks", (c) => {
 // Create a new task
 app.post("/api/tasks", async (c) => {
 	const body = await c.req.json();
-	const { name, prompt, cronExpression, harness, workingDirectory } = body;
+	const { name, prompt, cronExpression, harness, workingDirectory, skillName, skillMode } = body;
 
 	if (!name || !prompt || !cronExpression || !harness) {
 		return c.json({ error: "name, prompt, cronExpression, and harness are required" }, 400);
@@ -4819,6 +4819,14 @@ app.post("/api/tasks", async (c) => {
 
 	if (harness !== "claude-code" && harness !== "opencode") {
 		return c.json({ error: "harness must be 'claude-code' or 'opencode'" }, 400);
+	}
+
+	if (skillName && (skillName.includes("/") || skillName.includes(".."))) {
+		return c.json({ error: "Invalid skill name" }, 400);
+	}
+
+	if (skillName && skillMode !== "inject" && skillMode !== "slash") {
+		return c.json({ error: "skillMode must be 'inject' or 'slash' when skillName is set" }, 400);
 	}
 
 	if (!isHarnessAvailable(harness)) {
@@ -4839,9 +4847,9 @@ app.post("/api/tasks", async (c) => {
 		db.prepare(
 			`INSERT INTO scheduled_tasks
 			 (id, name, prompt, cron_expression, harness, working_directory,
-			  enabled, next_run_at, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-		).run(id, name, prompt, cronExpression, harness, workingDirectory || null, nextRunAt, now, now);
+			  enabled, next_run_at, skill_name, skill_mode, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+		).run(id, name, prompt, cronExpression, harness, workingDirectory || null, nextRunAt, skillName || null, skillMode || null, now, now);
 	});
 
 	logger.info("scheduler", `Task created: ${name}`, { taskId: id });
@@ -4899,11 +4907,23 @@ app.patch("/api/tasks/:id", async (c) => {
 				: existing.next_run_at
 			: existing.next_run_at;
 
+	const skillName = body.skillName !== undefined ? (body.skillName || null) : existing.skill_name;
+	const skillMode = body.skillMode !== undefined ? (body.skillMode || null) : existing.skill_mode;
+
+	if (skillName && (skillName.includes("/") || skillName.includes(".."))) {
+		return c.json({ error: "Invalid skill name" }, 400);
+	}
+
+	if (skillName && skillMode !== null && skillMode !== "inject" && skillMode !== "slash") {
+		return c.json({ error: "skillMode must be 'inject' or 'slash' when skillName is set" }, 400);
+	}
+
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`UPDATE scheduled_tasks SET
 			 name = ?, prompt = ?, cron_expression = ?, harness = ?,
-			 working_directory = ?, enabled = ?, next_run_at = ?, updated_at = ?
+			 working_directory = ?, enabled = ?, next_run_at = ?,
+			 skill_name = ?, skill_mode = ?, updated_at = ?
 			 WHERE id = ?`,
 		).run(
 			body.name ?? existing.name,
@@ -4913,6 +4933,8 @@ app.patch("/api/tasks/:id", async (c) => {
 			body.workingDirectory !== undefined ? body.workingDirectory : existing.working_directory,
 			enabled,
 			nextRunAt,
+			skillName,
+			skillMode,
 			now,
 			taskId,
 		);
@@ -4974,13 +4996,27 @@ app.post("/api/tasks/:id/run", async (c) => {
 		timestamp: new Date().toISOString(),
 	});
 
+	// Narrow task fields from raw SQL result
+	const taskPrompt = typeof task.prompt === "string" ? task.prompt : null;
+	const taskHarness = task.harness === "claude-code" || task.harness === "opencode"
+		? task.harness : null;
+	if (!taskPrompt || !taskHarness) {
+		return c.json({ error: "Task has invalid prompt or harness" }, 500);
+	}
+	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
+	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
+	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
+
+	// Resolve skill content into prompt
+	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
+
 	// Spawn in background (don't await)
 	import("./scheduler/spawn").then((mod) => {
 		mod
 			.spawnTask(
-				task.harness as "claude-code" | "opencode",
-				task.prompt as string,
-				task.working_directory as string | null,
+				taskHarness,
+				effectivePrompt,
+				taskWorkingDir,
 				undefined,
 				{
 					onStdoutChunk: (chunk) => {

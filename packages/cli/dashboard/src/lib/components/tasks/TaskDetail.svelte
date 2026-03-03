@@ -86,6 +86,11 @@ function handleDelete() {
 						<Badge variant="outline" class="text-[9px]">
 							{task.harness}
 						</Badge>
+						{#if task.skill_name}
+							<Badge variant="outline" class="text-[9px]">
+								{task.skill_name} ({task.skill_mode ?? "inject"})
+							</Badge>
+						{/if}
 					</div>
 
 					<div class="text-[11px] text-[var(--sig-text)] leading-[1.6]
