@@ -1298,69 +1298,6 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		return c.json({ success: true, server });
 	});
 
-	app.get("/api/marketplace/mcp/:id", (c) => {
-		const id = c.req.param("id");
-		const installed = readInstalledServers();
-		const server = installed.find((item) => item.id === id);
-		if (!server) {
-			return c.json({ error: "Server not found" }, 404);
-		}
-
-		const context = extractContextFromRequest(c);
-		if (hasScopeContext(context) && !scopeMatches(server.scope, context)) {
-			return c.json({ error: "Server is out of scope for current context" }, 403);
-		}
-
-		return c.json({ server, context });
-	});
-
-	app.patch("/api/marketplace/mcp/:id", async (c) => {
-		const id = c.req.param("id");
-		let body: { enabled?: boolean; config?: unknown; name?: string; description?: string; scope?: unknown } = {};
-		try {
-			body = await c.req.json();
-		} catch {
-			return c.json({ error: "Invalid JSON body" }, 400);
-		}
-
-		const installed = readInstalledServers();
-		const existing = installed.find((s) => s.id === id);
-		if (!existing) return c.json({ error: "Server not found" }, 404);
-
-		const normalized = body.config ? normalizeMcpConfig(body.config) : null;
-		if (body.config && !normalized) {
-			return c.json({ error: "Invalid config" }, 400);
-		}
-
-		const updated: InstalledMarketplaceMcpServer = {
-			...existing,
-			enabled: typeof body.enabled === "boolean" ? body.enabled : existing.enabled,
-			scope: body.scope === undefined ? existing.scope : normalizeScope(body.scope),
-			config: normalized ?? existing.config,
-			name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : existing.name,
-			description:
-				typeof body.description === "string" && body.description.trim().length > 0
-					? body.description.trim()
-					: existing.description,
-			updatedAt: new Date().toISOString(),
-		};
-
-		writeInstalledServers(installed.map((s) => (s.id === id ? updated : s)));
-		invalidateMarketplaceToolsCache();
-		return c.json({ success: true, server: updated });
-	});
-
-	app.delete("/api/marketplace/mcp/:id", (c) => {
-		const id = c.req.param("id");
-		const installed = readInstalledServers();
-		if (!installed.some((s) => s.id === id)) {
-			return c.json({ error: "Server not found" }, 404);
-		}
-		writeInstalledServers(installed.filter((s) => s.id !== id));
-		invalidateMarketplaceToolsCache();
-		return c.json({ success: true, id });
-	});
-
 	app.get("/api/marketplace/mcp/tools", async (c) => {
 		const installed = readInstalledServers();
 		const context = extractContextFromRequest(c);
@@ -1446,5 +1383,68 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			const msg = error instanceof Error ? error.message : String(error);
 			return c.json({ success: false, error: msg }, 500);
 		}
+	});
+
+	app.get("/api/marketplace/mcp/:id", (c) => {
+		const id = c.req.param("id");
+		const installed = readInstalledServers();
+		const server = installed.find((item) => item.id === id);
+		if (!server) {
+			return c.json({ error: "Server not found" }, 404);
+		}
+
+		const context = extractContextFromRequest(c);
+		if (hasScopeContext(context) && !scopeMatches(server.scope, context)) {
+			return c.json({ error: "Server is out of scope for current context" }, 403);
+		}
+
+		return c.json({ server, context });
+	});
+
+	app.patch("/api/marketplace/mcp/:id", async (c) => {
+		const id = c.req.param("id");
+		let body: { enabled?: boolean; config?: unknown; name?: string; description?: string; scope?: unknown } = {};
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const installed = readInstalledServers();
+		const existing = installed.find((s) => s.id === id);
+		if (!existing) return c.json({ error: "Server not found" }, 404);
+
+		const normalized = body.config ? normalizeMcpConfig(body.config) : null;
+		if (body.config && !normalized) {
+			return c.json({ error: "Invalid config" }, 400);
+		}
+
+		const updated: InstalledMarketplaceMcpServer = {
+			...existing,
+			enabled: typeof body.enabled === "boolean" ? body.enabled : existing.enabled,
+			scope: body.scope === undefined ? existing.scope : normalizeScope(body.scope),
+			config: normalized ?? existing.config,
+			name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : existing.name,
+			description:
+				typeof body.description === "string" && body.description.trim().length > 0
+					? body.description.trim()
+					: existing.description,
+			updatedAt: new Date().toISOString(),
+		};
+
+		writeInstalledServers(installed.map((s) => (s.id === id ? updated : s)));
+		invalidateMarketplaceToolsCache();
+		return c.json({ success: true, server: updated });
+	});
+
+	app.delete("/api/marketplace/mcp/:id", (c) => {
+		const id = c.req.param("id");
+		const installed = readInstalledServers();
+		if (!installed.some((s) => s.id === id)) {
+			return c.json({ error: "Server not found" }, 404);
+		}
+		writeInstalledServers(installed.filter((s) => s.id !== id));
+		invalidateMarketplaceToolsCache();
+		return c.json({ success: true, id });
 	});
 }

@@ -25,7 +25,7 @@ function makeTempAgentsDir(): string {
 }
 
 describe("loadMemoryConfig", () => {
-	it("prefers agent.yaml embedding settings over legacy files", () => {
+	it("prefers agent.yaml embedding settings over config.yaml fallback", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),

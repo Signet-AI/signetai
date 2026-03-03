@@ -50,6 +50,9 @@ let {
 
 let container = $state<HTMLDivElement | null>(null);
 let graph3d: any = null;
+let graphResizeObserver: ResizeObserver | null = null;
+let controlsCleanup: (() => void) | null = null;
+let userAdjustedCamera = false;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -63,6 +66,7 @@ export function focusNode(id: string): void {
 		(entry: any) => String(entry.id) === id,
 	);
 	if (!node) return;
+	userAdjustedCamera = true;
 	const distance = 120;
 	const len =
 		Math.hypot(node.x ?? 0, node.y ?? 0, node.z ?? 0) || 1;
@@ -76,6 +80,48 @@ export function focusNode(id: string): void {
 		node,
 		900,
 	);
+}
+
+function sizeGraphToContainer(): void {
+	if (!graph3d || !container) return;
+	const rect = container.getBoundingClientRect();
+	const width = Math.max(1, Math.round(rect.width || container.offsetWidth));
+	const height = Math.max(1, Math.round(rect.height || container.offsetHeight));
+	graph3d.width(width);
+	graph3d.height(height);
+}
+
+function fitGraphCamera(durationMs = 0): void {
+	if (!graph3d) return;
+	const graphData = graph3d.graphData?.();
+	if (!graphData?.nodes?.length) return;
+	graph3d.zoomToFit?.(durationMs, 44);
+}
+
+function setupInteractionTracking(): void {
+	if (!graph3d) return;
+	const controls = graph3d.controls?.();
+	if (!controls?.addEventListener || !controls?.removeEventListener) return;
+	const onStart = () => {
+		userAdjustedCamera = true;
+	};
+	controls.addEventListener("start", onStart);
+	controlsCleanup = () => {
+		controls.removeEventListener("start", onStart);
+	};
+}
+
+function setupResizeHandling(): void {
+	if (!container || !graph3d) return;
+	graphResizeObserver?.disconnect();
+	graphResizeObserver = new ResizeObserver(() => {
+		sizeGraphToContainer();
+		if (!userAdjustedCamera) {
+			fitGraphCamera(0);
+		}
+		graph3d.refresh?.();
+	});
+	graphResizeObserver.observe(container);
 }
 
 export function refreshAppearance(): void {
@@ -121,6 +167,7 @@ export function refreshAppearance(): void {
 export async function init(): Promise<void> {
 	if (!container) return;
 	destroy();
+	userAdjustedCamera = false;
 
 	const { default: ForceGraph3D } = await import("3d-force-graph");
 
@@ -200,9 +247,23 @@ export async function init(): Promise<void> {
 				node ? (embeddingById.get(String(node.id)) ?? null) : null,
 			);
 		});
+
+	sizeGraphToContainer();
+	setupInteractionTracking();
+	setupResizeHandling();
+
+	requestAnimationFrame(() => {
+		if (!userAdjustedCamera) {
+			fitGraphCamera(0);
+		}
+	});
 }
 
 export function destroy(): void {
+	graphResizeObserver?.disconnect();
+	graphResizeObserver = null;
+	controlsCleanup?.();
+	controlsCleanup = null;
 	if (graph3d) {
 		graph3d._destructor?.();
 		graph3d = null;

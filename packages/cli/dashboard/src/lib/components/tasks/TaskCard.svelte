@@ -90,16 +90,16 @@ let lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 			<div class="flex items-center justify-between pt-1">
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<div onclick={(e) => e.stopPropagation()}>
+				<div onclick={(e: MouseEvent) => e.stopPropagation()}>
 					<Switch
 						checked={!!task.enabled}
-						onCheckedChange={(v) => ontoggle(v)}
+						onCheckedChange={(v: unknown) => ontoggle(v === true)}
 						class="scale-75 origin-left"
 					/>
 				</div>
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<div onclick={(e) => e.stopPropagation()}>
+				<div onclick={(e: MouseEvent) => e.stopPropagation()}>
 					<Button
 						variant="ghost"
 						size="sm"

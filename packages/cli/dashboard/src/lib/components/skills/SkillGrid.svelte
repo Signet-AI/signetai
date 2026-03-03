@@ -105,7 +105,7 @@ let showFeatured = $derived(mode === "browse" && featuredItems.length > 0);
 
 		<!-- Main grid -->
 		<div class="grid">
-			{#each items as item (`${'fullName' in item ? item.fullName : item.name}`)}
+			{#each items as item (item.name)}
 				<SkillCard
 					{item}
 					{mode}

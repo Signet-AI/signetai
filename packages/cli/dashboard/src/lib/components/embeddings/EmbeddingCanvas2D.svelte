@@ -81,6 +81,7 @@ let resizeListenerAttached = false;
 let lastFrameTime = 0;
 let needsRedraw = true;
 let lastHoveredId: string | null = null;
+let userAdjustedCamera = false;
 
 // Minimap state
 const MINIMAP_WIDTH = 160;
@@ -119,6 +120,7 @@ export function resetCamera(): void {
 	camX = 0;
 	camY = 0;
 	camZoom = 1;
+	userAdjustedCamera = false;
 }
 
 export function focusNode(id: string): void {
@@ -127,6 +129,7 @@ export function focusNode(id: string): void {
 	camX = node.x;
 	camY = node.y;
 	camZoom = Math.max(camZoom, 1.6);
+	userAdjustedCamera = true;
 }
 
 export function startSimulation(
@@ -161,6 +164,7 @@ export function stopSimulation(): void {
 }
 
 export function startRendering(): void {
+	userAdjustedCamera = false;
 	resizeCanvas();
 	if (!resizeListenerAttached) {
 		window.addEventListener("resize", resizeCanvas);
@@ -203,7 +207,31 @@ function resizeCanvas(): void {
 	if (!rect || rect.width === 0) return;
 	canvas.width = rect.width;
 	canvas.height = rect.height;
+	if (!userAdjustedCamera) {
+		fitCameraToBounds();
+	}
 	requestRedraw();
+}
+
+function fitCameraToBounds(): void {
+	if (!canvas) return;
+	if (nodes.length === 0) {
+		camX = 0;
+		camY = 0;
+		camZoom = 1;
+		return;
+	}
+
+	const bounds = computeWorldBounds();
+	const worldWidth = Math.max(bounds.maxX - bounds.minX, 1);
+	const worldHeight = Math.max(bounds.maxY - bounds.minY, 1);
+	const viewWidth = Math.max(canvas.width, 1);
+	const viewHeight = Math.max(canvas.height, 1);
+	const fitZoom = Math.min(viewWidth / worldWidth, viewHeight / worldHeight) * 0.92;
+
+	camX = (bounds.minX + bounds.maxX) / 2;
+	camY = (bounds.minY + bounds.maxY) / 2;
+	camZoom = Math.max(0.08, Math.min(1, fitZoom));
 }
 
 function screenToWorld(sx: number, sy: number): [number, number] {
@@ -548,6 +576,7 @@ function setupInteractions(): void {
 			}
 			if (!didDrag) {
 				didDrag = true;
+				userAdjustedCamera = true;
 				dragNode.fx = dragNode.x;
 				dragNode.fy = dragNode.y;
 				(simulation as any)?.alphaTarget(0.3).restart();
@@ -559,6 +588,7 @@ function setupInteractions(): void {
 			return;
 		}
 		if (isPanning) {
+			userAdjustedCamera = true;
 			camX = panCamStartX - (event.clientX - panStartX) / camZoom;
 			camY = panCamStartY - (event.clientY - panStartY) / camZoom;
 			requestRedraw();
@@ -606,6 +636,7 @@ function setupInteractions(): void {
 
 	const onWheel = (event: WheelEvent) => {
 		event.preventDefault();
+		userAdjustedCamera = true;
 		const factor = event.deltaY > 0 ? 0.9 : 1.1;
 		const newZoom = Math.max(0.1, Math.min(5, camZoom * factor));
 		const rect = target.getBoundingClientRect();
