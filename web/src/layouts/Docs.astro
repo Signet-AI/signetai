@@ -3,7 +3,9 @@ import Base from './Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import Sidebar from '../components/docs/Sidebar.astro';
+import GraphViewer from '../components/GraphViewer';
 import '../styles/docs.css';
+import '../styles/graph.css';
 
 interface Props {
   title: string;
@@ -34,75 +36,141 @@ const {
   previousDoc,
   nextDoc,
 } = Astro.props;
+
+const tocHeadings = toc?.filter((h) => h.depth === 2 || h.depth === 3) ?? [];
+const hasToc = tocHeadings.length > 2;
 ---
 
 <Base title={`${title} — Signet Docs`} description={description}>
   <Nav />
 
-  <div class="docs-shell" data-has-toc={toc && toc.length > 0 ? "true" : undefined}>
-    <Sidebar currentSlug={currentSlug} />
+  <div class="docs-shell">
+    <div class="docs-content-grid">
+      <!-- Left rail: docs nav + TOC + graph -->
+      <aside class="docs-rail">
+        <div class="docs-rail-sticky">
+          <!-- Docs navigation (collapsible sections) -->
+          <Sidebar currentSlug={currentSlug} />
 
-    <main class="docs-main">
-      <header class="docs-article-header">
-        <p class="docs-kicker">
-          <a href="/docs">Docs</a>
-          {currentSection ? <span>/ {currentSection}</span> : null}
-        </p>
-        <h1>{title}</h1>
-        {description ? <p class="docs-description">{description}</p> : null}
-      </header>
+          <!-- On this page TOC -->
+          {hasToc ? (
+            <nav class="docs-rail-toc" aria-label="Table of contents">
+              <p class="docs-rail-label">On this page</p>
+              <ul class="docs-rail-toc-list">
+                {tocHeadings.map((h) => (
+                  <li class:list={[{ "docs-rail-toc-sub": h.depth === 3 }]}>
+                    <a href={`#${h.slug}`} data-toc-link>{h.text}</a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          ) : null}
 
-      {toc && toc.length > 0 ? (
-        <nav class="docs-inpage" aria-label="On this page">
-          <p>On this page</p>
-          <ol>
-            {toc.map((item) => (
-              <li class={item.depth >= 3 ? 'toc-subitem' : undefined}>
-                <a href={`#${item.slug}`}>{item.text}</a>
-              </li>
-            ))}
-          </ol>
-        </nav>
-      ) : null}
-
-      <article class="prose">
-        <slot />
-      </article>
-
-      {(previousDoc || nextDoc) ? (
-        <nav class="docs-pager" aria-label="Page navigation">
-          {previousDoc ? (
-            <a class="docs-pager-link" href={previousDoc.url} rel="prev">
-              <span class="docs-pager-label">Previous</span>
-              <span class="docs-pager-title">{previousDoc.title}</span>
-            </a>
-          ) : <span class="docs-pager-spacer"></span>}
-
-          {nextDoc ? (
-            <a class="docs-pager-link" href={nextDoc.url} rel="next">
-              <span class="docs-pager-label">Next</span>
-              <span class="docs-pager-title">{nextDoc.title}</span>
-            </a>
-          ) : <span class="docs-pager-spacer"></span>}
-        </nav>
-      ) : null}
-
-      <Footer />
-    </main>
-
-    {toc && toc.length > 0 ? (
-      <aside class="docs-toc-rail" aria-label="Table of contents">
-        <p class="docs-toc-rail-heading">On this page</p>
-        <ol class="docs-toc-rail-list">
-          {toc.map((item) => (
-            <li class={item.depth >= 3 ? 'toc-rail-subitem' : undefined}>
-              <a href={`#${item.slug}`}>{item.text}</a>
-            </li>
-          ))}
-        </ol>
+          <!-- Graph viewer -->
+          {currentSlug ? (
+            <GraphViewer client:idle currentSlug={currentSlug} collection="docs" mode="local" />
+          ) : null}
+        </div>
       </aside>
-    ) : null}
+
+      <!-- Main content -->
+      <main class="docs-main">
+        <header class="docs-article-header">
+          <p class="docs-kicker">
+            <a href="/docs">Docs</a>
+            {currentSection ? <span>/ {currentSection}</span> : null}
+          </p>
+          <h1>{title}</h1>
+          {description ? <p class="docs-description">{description}</p> : null}
+        </header>
+
+        {hasToc ? (
+          <nav class="docs-toc-inline" aria-label="Table of contents">
+            <p class="docs-rail-label">On this page</p>
+            <ul class="docs-rail-toc-list">
+              {tocHeadings.filter((h) => h.depth === 2).map((h) => (
+                <li><a href={`#${h.slug}`}>{h.text}</a></li>
+              ))}
+            </ul>
+          </nav>
+        ) : null}
+
+        <article class="prose">
+          <slot />
+        </article>
+
+        {(previousDoc || nextDoc) ? (
+          <nav class="docs-pager" aria-label="Page navigation">
+            {previousDoc ? (
+              <a class="docs-pager-link" href={previousDoc.url} rel="prev">
+                <span class="docs-pager-label">Previous</span>
+                <span class="docs-pager-title">{previousDoc.title}</span>
+              </a>
+            ) : <span class="docs-pager-spacer"></span>}
+
+            {nextDoc ? (
+              <a class="docs-pager-link" href={nextDoc.url} rel="next">
+                <span class="docs-pager-label">Next</span>
+                <span class="docs-pager-title">{nextDoc.title}</span>
+              </a>
+            ) : <span class="docs-pager-spacer"></span>}
+          </nav>
+        ) : null}
+
+        <Footer />
+      </main>
+    </div>
   </div>
 
-  <script src="../scripts/docs-toc.ts"></script>
+  <script>
+    function initDocsScrollSpy() {
+      const links = document.querySelectorAll<HTMLAnchorElement>('[data-toc-link]');
+      if (!links.length) return;
+
+      const headingIds = Array.from(links).map((a) => a.getAttribute('href')?.slice(1)).filter(Boolean) as string[];
+      const headings = headingIds.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[];
+
+      if (!headings.length) return;
+
+      let active: HTMLAnchorElement | null = null;
+
+      function update() {
+        const scrollY = window.scrollY + 100;
+        let current: string | null = null;
+
+        for (let i = headings.length - 1; i >= 0; i--) {
+          if (headings[i].offsetTop <= scrollY) {
+            current = headings[i].id;
+            break;
+          }
+        }
+
+        if (!current && headings.length) {
+          current = headings[0].id;
+        }
+
+        if (active) active.removeAttribute('data-active');
+        if (current) {
+          const next = document.querySelector<HTMLAnchorElement>(`[data-toc-link][href="#${current}"]`);
+          if (next) {
+            next.setAttribute('data-active', '');
+            active = next;
+          }
+        }
+      }
+
+      let ticking = false;
+      window.addEventListener('scroll', () => {
+        if (!ticking) {
+          requestAnimationFrame(() => { update(); ticking = false; });
+          ticking = true;
+        }
+      }, { passive: true });
+
+      update();
+    }
+
+    initDocsScrollSpy();
+    document.addEventListener('astro:after-swap', initDocsScrollSpy);
+  </script>
 </Base>

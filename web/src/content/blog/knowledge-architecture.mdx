@@ -29,7 +29,7 @@ Knowledge doesn't arrive structured. It arrives messy.
 
 A session produces hundreds of observations. A document produces thousands of sentences. The agent encounters facts in passing, half-formed, buried in context. None of it is immediately useful in the form it arrives.
 
-The extraction pipeline is the refinery. Over time, continuously and in the background, it takes raw material and distills it:
+The extraction [[pipeline]] is the refinery. Over time, continuously and in the background, it takes raw material and distills it:
 
 ```
 sparse facts
@@ -108,7 +108,7 @@ The goal of this architecture is not to build the most complete knowledge graph.
 
 A database full of atomic facts, organized under entities, structured by aspects, connected through explicit dependencies, with constraints that always surface — that database needs almost no search to be useful. The structure does the work. The agent walks to what it needs.
 
-Everything else — the predictive scorer, the hybrid search, the reranker — is enhancement. They make a good system better. But the foundation is the structure itself.
+Everything else — the predictive scorer, the hybrid search, the reranker — is enhancement. They make a good system better. But the foundation is the structure itself. For technical implementation details, see the [[docs/knowledge-architecture|knowledge architecture docs]].
 
 ## Constraint Confidence
 
@@ -118,7 +118,7 @@ An entity with a rich constraint set is one the agent understands well. It knows
 
 This is an internal signal, not a user-facing one. The agent uses constraint density to calibrate how autonomously it acts on a given entity. The user never manages it, configures it, or even sees it directly. It's just behavior: the agent is more cautious around unfamiliar entities, more decisive around well-mapped ones.
 
-In the constellation view, this manifests as node brightness. Entities with dense constraint graphs are luminous. New entities are dim. The visual tells you, at a glance, where the agent is operating on solid ground.
+In the [[dashboard|constellation view]], this manifests as node brightness. Entities with dense constraint graphs are luminous. New entities are dim. The visual tells you, at a glance, where the agent is operating on solid ground.
 
 ## Context Is Bounded by Design
 

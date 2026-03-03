@@ -21,9 +21,9 @@ This isn't hypothetical. We've watched it happen. Platforms deprecate features, 
 
 ## SQLite is the Source of Truth
 
-In Signet, a SQLite database on your machine is the source of truth for everything. Your memories, your agent's identity, its skills — all stored locally in a format you can inspect, back up, and version control.
+In Signet, a SQLite database on your machine is the source of truth for everything. Your memories, your agent's identity, its [[skills]] — all stored locally in a format you can inspect, back up, and version control.
 
-Markdown files like `AGENTS.md` and `MEMORY.md` are generated *outputs* from that database. The daemon watches for changes and regenerates harness-specific configs for whatever platforms you use — Claude Code, OpenCode, Cursor, whatever comes next. The database is canonical. Everything else is a view.
+Markdown files like `AGENTS.md` and `MEMORY.md` are generated *outputs* from that database. The [[daemon]] watches for changes and regenerates [[harnesses|harness-specific configs]] for whatever platforms you use — Claude Code, OpenCode, Cursor, whatever comes next. The database is canonical. Everything else is a view.
 
 This means you can open your agent's memory in any SQLite browser and see exactly what it knows. No mystery. No black box. No "we process your data to improve our services" buried in a terms of service update.
 
@@ -47,7 +47,7 @@ Local-first isn't just about philosophy. It's practical.
 
 **Private** — Your memories never leave your machine unless you explicitly set up git sync to your own remote. Even then, it's your repo, your server, your encryption.
 
-**Verifiable** — You can read every memory your agent has stored. You can see its reasoning, its confidence scores, its decision to keep or discard a piece of information. Full observability into the pipeline that shapes your agent's understanding of you.
+**Verifiable** — You can read every memory your agent has stored. You can see its reasoning, its confidence scores, its decision to keep or discard a piece of information. Full observability into the [[pipeline]] that shapes your agent's understanding of you.
 
 ## The Path Forward
 

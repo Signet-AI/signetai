@@ -3,8 +3,10 @@ import Base from './Base.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import ShareButtons from '../components/ShareButtons.astro';
+import GraphViewer from '../components/GraphViewer';
 import '../styles/blog.css';
 import '../styles/docs.css';
+import '../styles/graph.css';
 
 interface Props {
   title: string;
@@ -23,6 +25,7 @@ interface Props {
     url: string;
   };
   pageUrl?: string;
+  currentSlug?: string;
   recommendedPosts?: Array<{
     title: string;
     url: string;
@@ -41,6 +44,7 @@ const {
   previousPost,
   nextPost,
   pageUrl,
+  currentSlug = '',
   recommendedPosts = [],
 } = Astro.props;
 
@@ -95,6 +99,9 @@ const hasToc = tocHeadings.length > 2;
                   ))}
                 </ul>
               </div>
+            ) : null}
+            {currentSlug ? (
+              <GraphViewer client:idle currentSlug={currentSlug} collection="blog" mode="local" />
             ) : null}
           </div>
         </aside>

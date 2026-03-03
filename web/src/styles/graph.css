@@ -1,0 +1,149 @@
+/* ==========================================================================
+   GRAPH VIEWER
+   ========================================================================== */
+
+.graph-viewer {
+	position: relative;
+	border: 1px solid var(--color-border);
+	background: var(--color-surface);
+	margin-top: var(--space-md);
+	overflow: hidden;
+}
+
+.graph-header {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	padding: 6px var(--space-md);
+	border-bottom: 1px solid var(--color-border);
+}
+
+.graph-title {
+	font-family: var(--font-display);
+	font-size: 0.5625rem;
+	font-weight: 600;
+	color: var(--color-text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+}
+
+.graph-count {
+	font-family: var(--font-mono);
+	font-size: 0.5625rem;
+	color: var(--color-text-muted);
+	opacity: 0.6;
+	margin-left: auto;
+}
+
+.graph-toggle {
+	font-family: var(--font-mono);
+	font-size: 0.5625rem;
+	color: var(--color-text-muted);
+	background: transparent;
+	border: 1px solid var(--color-border);
+	padding: 2px 8px;
+	cursor: pointer;
+	letter-spacing: 0.04em;
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+		background-color var(--dur) var(--ease);
+}
+
+.graph-toggle:hover {
+	color: var(--color-text-bright);
+	border-color: var(--color-border-strong);
+	background: var(--color-glow);
+}
+
+.graph-canvas {
+	display: block;
+	width: 100%;
+	height: 280px;
+}
+
+.graph-tooltip {
+	position: absolute;
+	bottom: 6px;
+	left: 6px;
+	font-family: var(--font-mono);
+	font-size: 0.625rem;
+	color: var(--color-text-bright);
+	background: var(--color-surface-raised);
+	border: 1px solid var(--color-border);
+	padding: 2px 8px;
+	pointer-events: none;
+	max-width: 180px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* ─── global graph modal ──────────────────────────────────────── */
+
+.graph-modal-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+	background: rgba(0, 0, 0, 0.75);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--space-lg);
+	backdrop-filter: blur(4px);
+	-webkit-backdrop-filter: blur(4px);
+}
+
+.graph-modal {
+	width: 100%;
+	max-width: 960px;
+	background: var(--color-bg);
+	border: 1px solid var(--color-border-strong);
+}
+
+.graph-modal-header {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	padding: var(--space-sm) var(--space-md);
+	border-bottom: 1px solid var(--color-border);
+}
+
+.graph-modal .graph-viewer {
+	border: none;
+	margin-top: 0;
+}
+
+.graph-modal .graph-header {
+	display: none;
+}
+
+.graph-modal .graph-canvas {
+	height: 500px;
+}
+
+/* ─── wikilink styles ─────────────────────────────────────────── */
+
+a.wikilink {
+	color: var(--color-text-bright);
+	text-decoration: underline;
+	text-decoration-color: var(--color-border-strong);
+	text-underline-offset: 2px;
+	transition: text-decoration-color var(--dur) var(--ease);
+}
+
+a.wikilink:hover {
+	text-decoration-color: var(--color-text-bright);
+}
+
+a.wikilink.broken {
+	color: var(--color-text-muted);
+	text-decoration-style: dashed;
+	cursor: help;
+}
+
+a.wikilink[data-collection="blog"]::before {
+	content: "";
+}
+
+a.wikilink[data-collection="docs"]::before {
+	content: "";
+}

@@ -123,7 +123,7 @@ If you're a developer using AI as a coding assistant, the web-based migration co
 
 This is where the ChatGPT-to-Claude migration intersects with a deeper problem: **AI memory isn't portable.** ChatGPT memories live on OpenAI's servers. Claude memories live on Anthropic's servers. Neither gives you a local, inspectable copy. Neither lets you use the same context across multiple platforms.
 
-[Signet](/) solves this by storing your agent's memory locally in a SQLite database on your machine. The same memory, identity, and preferences power your agent across Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), OpenCode, Cursor — whatever you use. No cloud dependency, no vendor lock-in, no starting over when you switch tools.
+[Signet](/) solves this by storing your agent's [[memory]] locally in a SQLite database on your machine. The same memory, identity, and preferences power your agent across Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), OpenCode, Cursor — whatever you use. No cloud dependency, no vendor lock-in, no starting over when you switch tools.
 
 For a ChatGPT-to-Claude migration specifically, Signet means:
 
@@ -132,7 +132,7 @@ For a ChatGPT-to-Claude migration specifically, Signet means:
 - **Memory survives platform changes** — if you switch assistants again in six months, you don't repeat this process
 - **You can inspect, edit, and version-control your memories** like any other configuration
 
-If you're already using Claude Code, getting started with Signet takes about two minutes. The [quickstart guide](/docs) walks you through installation and setup — it detects your existing Claude Code installation and wires everything together. Your agent gains persistent memory, encrypted secrets management, and cross-platform identity — things the web interface can't provide.
+If you're already using Claude Code, getting started with Signet takes about two minutes. The [quickstart guide](/docs) walks you through installation and setup — it detects your existing Claude Code installation and wires everything together. Your agent gains persistent memory, encrypted [[secrets]] management, and cross-platform identity — things the web interface can't provide.
 
 Read more about [why local-first memory matters](/blog/why-local-first-memory/) or check the [documentation](/docs) for the full setup guide.
 
@@ -140,7 +140,7 @@ Read more about [why local-first memory matters](/blog/why-local-first-memory/) 
 
 If you're using — or considering — [OpenClaw](https://github.com/openclaw/openclaw) as your coding agent, Signet provides a runtime plugin that gives your OpenClaw agent access to the same memory and secrets as your Claude Code agent. Same identity, same context, different platform.
 
-This matters for the ChatGPT migration story because it means the context you import into Claude isn't trapped there. Signet's [connector system](/docs) synchronizes your agent's identity files across every supported platform automatically. Change a preference in Claude Code, and it's reflected in OpenClaw. Add a memory through the web dashboard, and every connected tool picks it up.
+This matters for the ChatGPT migration story because it means the context you import into Claude isn't trapped there. Signet's [[connectors|connector system]] synchronizes your agent's identity files across every supported [[harnesses|platform]] automatically. Change a preference in Claude Code, and it's reflected in OpenClaw. Add a memory through the web dashboard, and every connected tool picks it up.
 
 The agent isn't the platform. The agent is the identity layer that travels across platforms. That's the actual solution to the portability problem that makes migrations like this necessary in the first place.
 

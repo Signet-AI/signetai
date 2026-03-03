@@ -39,9 +39,7 @@ function shouldDefaultOpen(
 	index: number,
 	currentSlug?: string,
 ): boolean {
-	// Always open the active section
 	if (sectionContainsSlug(section, currentSlug)) return true;
-	// On the docs index (no currentSlug), open "Getting Started"
 	if (!currentSlug && index === 0) return true;
 	return false;
 }
@@ -69,7 +67,7 @@ function SidebarSections({
 					>
 						<CollapsibleTrigger className="sidebar-section-trigger">
 							<ChevronRight
-								size={14}
+								size={12}
 								className="sidebar-chevron"
 								aria-hidden="true"
 							/>
@@ -113,22 +111,13 @@ export default function DocsSidebar({
 
 	return (
 		<>
-			{/* Desktop sidebar */}
-			<aside className="docs-sidebar docs-sidebar-desktop">
-				<a
-					href="/docs"
-					className="docs-home-link"
-					aria-current={!currentSlug ? "page" : undefined}
-				>
-					Docs Home
-				</a>
-
+			{/* Desktop: inline in the rail */}
+			<nav className="docs-rail-nav" aria-label="Documentation">
 				<DocSearch />
-
 				<SidebarSections sections={sections} currentSlug={currentSlug} />
-			</aside>
+			</nav>
 
-			{/* Mobile trigger + sheet */}
+			{/* Mobile: sheet trigger */}
 			<div className="docs-mobile-nav">
 				<Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
 					<SheetTrigger className="docs-mobile-trigger" aria-label="Open navigation">
@@ -141,15 +130,6 @@ export default function DocsSidebar({
 						showCloseButton={true}
 					>
 						<SheetTitle className="sr-only">Documentation navigation</SheetTitle>
-						<a
-							href="/docs"
-							className="docs-home-link"
-							aria-current={!currentSlug ? "page" : undefined}
-							onClick={() => setSheetOpen(false)}
-						>
-							Docs Home
-						</a>
-
 						<SidebarSections
 							sections={sections}
 							currentSlug={currentSlug}
