@@ -11,6 +11,7 @@ interface Props {
 	charBudget?: number;
 	onchange?: (value: string) => void;
 	onsave?: () => void;
+	ondiscard?: () => void;
 	dirty?: boolean;
 	saving?: boolean;
 	saveDisabled?: boolean;
@@ -24,6 +25,7 @@ let {
 	charBudget,
 	onchange,
 	onsave,
+	ondiscard,
 	dirty = false,
 	saving = false,
 	saveDisabled = false,
@@ -97,6 +99,19 @@ let rendered = $derived.by(() => {
 			<span class="md-viewer-save-state" class:dirty={dirty}>
 				{dirty ? "Unsaved changes" : "All changes saved"}
 			</span>
+			{#if editing && dirty && ondiscard}
+				<Button
+					variant="outline"
+					size="sm"
+					class="h-auto rounded-none gap-1 font-[family-name:var(--font-mono)] text-[10px]
+						font-medium uppercase tracking-[0.1em] px-2 py-[3px]
+						text-[var(--sig-text-muted)] border-[var(--sig-border)]
+						hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
+					onclick={ondiscard}
+				>
+					DISCARD
+				</Button>
+			{/if}
 			{#if editing && onsave}
 				<Button
 					variant="outline"

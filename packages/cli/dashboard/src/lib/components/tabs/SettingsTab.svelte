@@ -273,8 +273,8 @@
 					class="nav-btn"
 					onclick={() => {
 						const nextIdx = currentSectionIndex >= sections.length ? 0 : currentSectionIndex;
-                        switchSection(sections[nextIdx].id);
-                    }}
+						switchSection(sections[nextIdx].id);
+					}}
 					title="Next section (→)"
 				>
 					→
