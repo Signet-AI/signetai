@@ -4,22 +4,15 @@ import FormSection from "$lib/components/config/FormSection.svelte";
 import { Input } from "$lib/components/ui/input/index.js";
 import { st } from "$lib/stores/settings.svelte";
 
-const PATHS_PATHS: string[][] = [
-	["paths", "database"],
-	["paths", "current_md"],
-];
-
 function setStr(path: string[]) {
 	return (e: Event) => {
 		st.sSetStr(path, (e.currentTarget as HTMLInputElement).value);
 	};
 }
-
-let isDirty = $derived(st.isAnyPathDirty(st.settingsIsSameAsAgent ? "agent" : "config", PATHS_PATHS));
 </script>
 
 {#if st.settingsFileName}
-	<FormSection title="Paths" defaultOpen={false} description="File paths for memory storage. All paths are relative to ~/.agents/ (or $SIGNET_PATH)." dirty={isDirty}>
+	<FormSection description="File paths for memory storage. All paths are relative to ~/.agents/ (or $SIGNET_PATH).">
 		<FormField label="Database" description="SQLite database file for structured memory storage.">
 			<Input value={st.sStr(["paths", "database"])} oninput={setStr(["paths", "database"])} />
 		</FormField>

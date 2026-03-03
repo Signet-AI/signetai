@@ -3,18 +3,10 @@ import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
 import { Input } from "$lib/components/ui/input/index.js";
 import { st } from "$lib/stores/settings.svelte";
-
-const MEMORY_PATHS: string[][] = [
-	["memory", "session_budget"],
-	["memory", "current_md_budget"],
-	["memory", "decay_rate"],
-];
-
-let isDirty = $derived(st.isAnyPathDirty(st.settingsIsSameAsAgent ? "agent" : "config", MEMORY_PATHS));
 </script>
 
 {#if st.settingsFileName}
-	<FormSection title="Memory" defaultOpen={false} description="Memory system settings. Controls how much context is injected into sessions and how memories age over time." dirty={isDirty}>
+	<FormSection description="Memory system settings. Controls how much context is injected into sessions and how memories age over time.">
 		<FormField label="Session budget" description="Character limit for context injected at session start via hooks. Default: 2000.">
 			<Input type="number" value={st.sNum(["memory", "session_budget"])} oninput={(e) => st.sSetNum(["memory", "session_budget"], e.currentTarget.value)} />
 		</FormField>

@@ -5,15 +5,6 @@ import { Input } from "$lib/components/ui/input/index.js";
 import { Switch } from "$lib/components/ui/switch/index.js";
 import { st } from "$lib/stores/settings.svelte";
 
-const SEARCH_PATHS: string[][] = [
-	["search", "alpha"],
-	["search", "top_k"],
-	["search", "min_score"],
-	["search", "rehearsal_enabled"],
-	["search", "rehearsal_weight"],
-	["search", "rehearsal_half_life_days"],
-];
-
 function setNum(path: string[]) {
 	return (e: Event) => {
 		st.sSetNum(path, (e.currentTarget as HTMLInputElement).value);
@@ -25,12 +16,10 @@ function setBool(path: string[]) {
 		st.sSetBool(path, !!v);
 	};
 }
-
-let isDirty = $derived(st.isAnyPathDirty(st.settingsIsSameAsAgent ? "agent" : "config", SEARCH_PATHS));
 </script>
 
 {#if st.settingsFileName}
-	<FormSection title="Search" defaultOpen={false} description="Hybrid search tuning. Controls the blend between semantic (vector) and keyword (BM25) retrieval." dirty={isDirty}>
+	<FormSection description="Hybrid search tuning. Controls the blend between semantic (vector) and keyword (BM25) retrieval.">
 		<FormField label="Alpha" description="Vector weight (0–1). At 0.9 results are heavily semantic; at 0.3 they skew toward keyword matching. Default 0.7 works well generally.">
 			<Input type="number" min="0" max="1" step="0.1" value={st.sNum(["search", "alpha"])} oninput={setNum(["search", "alpha"])} />
 		</FormField>

@@ -283,6 +283,20 @@ class SettingsStore {
 		return paths.some((p) => this.isPathDirty(obj, p));
 	}
 
+	reset(): void {
+		try {
+			this.agent = JSON.parse(this.agentSnapshot);
+		} catch {
+			this.agent = {};
+		}
+		try {
+			this.config = JSON.parse(this.configSnapshot);
+		} catch {
+			this.config = {};
+		}
+		this.lastSaveFeedback = "Changes discarded";
+	}
+
 	async save(): Promise<void> {
 		if (!this.isDirty) {
 			this.lastSaveFeedback = "No changes to save";

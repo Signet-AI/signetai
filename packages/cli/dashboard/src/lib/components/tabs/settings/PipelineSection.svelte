@@ -43,24 +43,10 @@ function setSelect(path: string[]) {
 		st.aSetStr(path, v ?? "");
 	};
 }
-
-let pipelinePaths = $derived([
-	...PIPELINE_CORE_BOOLS.map((b) => ["memory", "pipelineV2", b.key] as string[]),
-	...PIPELINE_FEATURE_BOOLS.map((b) => ["memory", "pipelineV2", b.key] as string[]),
-	...PIPELINE_RERANKER_BOOLS.map((b) => ["memory", "pipelineV2", b.key] as string[]),
-	...PIPELINE_EXTRACTION_NUMS.map((n) => ["memory", "pipelineV2", n.key] as string[]),
-	...PIPELINE_SEARCH_NUMS.map((n) => ["memory", "pipelineV2", n.key] as string[]),
-	...PIPELINE_WORKER_NUMS.map((n) => ["memory", "pipelineV2", n.key] as string[]),
-	["memory", "pipelineV2", "extractionProvider"],
-	["memory", "pipelineV2", "extractionModel"],
-	["memory", "pipelineV2", "maintenanceMode"],
-]);
-
-let isDirty = $derived(st.isAnyPathDirty("agent", pipelinePaths));
 </script>
 
 {#if st.agentFile}
-	<FormSection title="Pipeline" defaultOpen={false} description="V2 memory pipeline. Runs LLM-based fact extraction on incoming memories, then decides whether to write, update, or skip. Lives under memory.pipelineV2 in agent.yaml." dirty={isDirty}>
+	<FormSection description="V2 memory pipeline. Runs LLM-based fact extraction on incoming memories, then decides whether to write, update, or skip. Lives under memory.pipelineV2 in agent.yaml.">
 		<div class="font-[family-name:var(--font-mono)] text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
 			Core
 		</div>

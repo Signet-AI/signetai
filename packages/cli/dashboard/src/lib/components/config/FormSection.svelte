@@ -1,41 +1,45 @@
 <script lang="ts">
-import * as Collapsible from "$lib/components/ui/collapsible/index.js";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
-import type { Snippet } from "svelte";
+	import type { Snippet } from "svelte";
 
-interface Props {
-	title: string;
-	description?: string;
-	children: Snippet;
-	defaultOpen?: boolean;
-	dirty?: boolean;
-}
+	interface Props {
+		description?: string;
+		children: Snippet;
+	}
 
-const { title, description, children, defaultOpen = true, dirty = false }: Props = $props();
-let open = $state(defaultOpen);
+	const { description, children }: Props = $props();
 </script>
 
-<Collapsible.Root bind:open class="border-b border-[var(--sig-border)]">
-	<Collapsible.Trigger
-		class="flex w-full items-center justify-between px-[var(--space-md)] py-3
-			bg-transparent border-none cursor-pointer
-			text-[var(--sig-text-bright)] font-[family-name:var(--font-display)]
-			text-[11px] font-semibold uppercase tracking-[0.1em]
-			hover:bg-[var(--sig-surface-raised)]"
-	>
-		<span>{title}{#if dirty}<span class="text-[var(--sig-accent)] ml-1">•</span>{/if}</span>
-		<ChevronDown
-			class="text-[var(--sig-text-muted)] transition-transform duration-200
-				{open ? 'rotate-180' : ''}"
-			size={14}
-		/>
-	</Collapsible.Trigger>
-	<Collapsible.Content>
-		<div class="flex flex-col gap-3.5 px-[var(--space-md)] pt-1 pb-[var(--space-md)]">
-			{#if description}
-				<p class="font-[family-name:var(--font-mono)] text-[11px] leading-relaxed text-[var(--sig-text-muted)] m-0">{description}</p>
-			{/if}
-			{@render children()}
-		</div>
-	</Collapsible.Content>
-</Collapsible.Root>
+<div class="form-section">
+	{#if description}
+		<p class="section-description">{description}</p>
+	{/if}
+	<div class="fields-container">
+		{@render children()}
+	</div>
+</div>
+
+<style>
+	.form-section {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-lg);
+		padding: var(--space-lg);
+		min-height: 100%;
+	}
+
+	.section-description {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		line-height: 1.6;
+		color: var(--sig-text-muted);
+		margin: 0;
+		padding-bottom: var(--space-md);
+		border-bottom: 1px solid var(--sig-border);
+	}
+
+	.fields-container {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-lg);
+	}
+</style>

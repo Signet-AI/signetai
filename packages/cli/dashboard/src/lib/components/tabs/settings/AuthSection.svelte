@@ -11,12 +11,6 @@ const selectContentClass =
 	"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-none";
 const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-none";
 
-const AUTH_PATHS: string[][] = [
-	["auth", "method"],
-	["auth", "mode"],
-	["auth", "chainId"],
-];
-
 function setSelect(path: string[]) {
 	return (v: string | undefined) => {
 		st.aSetStr(path, v ?? "");
@@ -28,12 +22,10 @@ function setNum(path: string[]) {
 		st.aSetNum(path, (e.currentTarget as HTMLInputElement).value);
 	};
 }
-
-let isDirty = $derived(st.isAnyPathDirty("agent", AUTH_PATHS));
 </script>
 
 {#if st.agentFile}
-	<FormSection title="Auth" defaultOpen={false} description="Authentication for the daemon API. Optional — disabled in local mode. Uses HMAC-SHA256 signed tokens." dirty={isDirty}>
+	<FormSection description="Authentication for the daemon API. Optional — disabled in local mode. Uses HMAC-SHA256 signed tokens.">
 		<FormField label="Method" description="Signing method for auth tokens. erc8128 uses wallet signatures, gpg/did use alternative signing.">
 			<Select.Root
 				type="single"
