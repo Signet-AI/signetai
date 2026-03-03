@@ -21,6 +21,26 @@ const TOOLS_TTL_MS = 30 * 1000;
 
 export type MarketplaceMcpTransport = "stdio" | "http";
 export type MarketplaceMcpCatalogSource = "mcpservers.org" | "modelcontextprotocol/servers";
+export type MarketplaceMcpExposureMode = "compact" | "hybrid" | "expanded";
+
+export interface MarketplaceMcpScope {
+	readonly harnesses: readonly string[];
+	readonly workspaces: readonly string[];
+	readonly channels: readonly string[];
+}
+
+export interface MarketplaceMcpExposurePolicy {
+	readonly mode: MarketplaceMcpExposureMode;
+	readonly maxExpandedTools: number;
+	readonly maxSearchResults: number;
+	readonly updatedAt: string;
+}
+
+export interface MarketplaceMcpScopeContext {
+	readonly harness?: string;
+	readonly workspace?: string;
+	readonly channel?: string;
+}
 
 export interface MarketplaceMcpConfigStdio {
 	readonly transport: "stdio";
@@ -50,6 +70,7 @@ export interface InstalledMarketplaceMcpServer {
 	readonly homepage?: string;
 	readonly official: boolean;
 	readonly enabled: boolean;
+	readonly scope: MarketplaceMcpScope;
 	readonly config: MarketplaceMcpConfig;
 	readonly installedAt: string;
 	readonly updatedAt: string;
@@ -106,13 +127,19 @@ interface DetailConfig {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const SECRET_REF_PREFIX = "secret://";
+const DEFAULT_EXPOSURE_POLICY: MarketplaceMcpExposurePolicy = {
+	mode: "hybrid",
+	maxExpandedTools: 12,
+	maxSearchResults: 8,
+	updatedAt: new Date(0).toISOString(),
+};
 
 const catalogCache = new Map<number, { fetchedAt: number; page: ParsedCatalogPage }>();
 let referenceCatalogCache: {
 	readonly fetchedAt: number;
 	readonly entries: readonly MarketplaceMcpCatalogEntry[];
 } | null = null;
-let toolsCache: MarketplaceToolsCache | null = null;
+const toolsCache = new Map<string, MarketplaceToolsCache>();
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -124,6 +151,10 @@ function getMarketplaceDir(): string {
 
 function getInstalledMcpPath(): string {
 	return join(getMarketplaceDir(), "mcp-servers.json");
+}
+
+function getExposurePolicyPath(): string {
+	return join(getMarketplaceDir(), "mcp-policy.json");
 }
 
 function ensureMarketplaceDir(): void {
@@ -149,6 +180,173 @@ function toStringRecord(value: unknown): Record<string, string> {
 function toStringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
 	return value.filter((v): v is string => typeof v === "string");
+}
+
+function normalizeScopeValues(values: unknown): string[] {
+	const seen = new Set<string>();
+	const normalized: string[] = [];
+	for (const value of toStringArray(values)) {
+		const item = value.trim();
+		if (item.length === 0) continue;
+		const key = item.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		normalized.push(item);
+	}
+	return normalized;
+}
+
+function normalizeScope(value: unknown): MarketplaceMcpScope {
+	if (!isRecord(value)) {
+		return {
+			harnesses: [],
+			workspaces: [],
+			channels: [],
+		};
+	}
+
+	return {
+		harnesses: normalizeScopeValues(value.harnesses),
+		workspaces: normalizeScopeValues(value.workspaces),
+		channels: normalizeScopeValues(value.channels),
+	};
+}
+
+function normalizeScopeContextValue(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const trimmed = value.trim();
+	if (trimmed.length === 0) return undefined;
+	return trimmed;
+}
+
+function extractScopeContext(input: {
+	harness?: string;
+	workspace?: string;
+	channel?: string;
+}): MarketplaceMcpScopeContext {
+	return {
+		harness: normalizeScopeContextValue(input.harness),
+		workspace: normalizeScopeContextValue(input.workspace),
+		channel: normalizeScopeContextValue(input.channel),
+	};
+}
+
+function normalizeWorkspaceScopeEntry(value: string): string {
+	const trimmed = value.trim();
+	return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+}
+
+function dimensionMatches(
+	allowed: readonly string[],
+	current: string | undefined,
+	kind: "default" | "workspace",
+): boolean {
+	if (allowed.length === 0) return true;
+	if (!current) return false;
+
+	const currentLower = current.toLowerCase();
+	for (const rawEntry of allowed) {
+		const entry = rawEntry.toLowerCase();
+		if (kind === "workspace") {
+			const normalized = normalizeWorkspaceScopeEntry(entry);
+			const wildcard = normalized.endsWith("*") ? normalizeWorkspaceScopeEntry(normalized.slice(0, -1)) : null;
+			if (wildcard && (currentLower === wildcard || currentLower.startsWith(`${wildcard}/`))) {
+				return true;
+			}
+			if (currentLower === normalized || currentLower.startsWith(`${normalized}/`)) {
+				return true;
+			}
+			continue;
+		}
+
+		if (currentLower === entry) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function scopeMatches(scope: MarketplaceMcpScope, context: MarketplaceMcpScopeContext): boolean {
+	return (
+		dimensionMatches(scope.harnesses, context.harness, "default") &&
+		dimensionMatches(scope.channels, context.channel, "default") &&
+		dimensionMatches(scope.workspaces, context.workspace, "workspace")
+	);
+}
+
+function parseExposureMode(value: unknown): MarketplaceMcpExposureMode | null {
+	if (value === "compact" || value === "hybrid" || value === "expanded") {
+		return value;
+	}
+	return null;
+}
+
+function parsePositiveInt(value: unknown, fallback: number, min: number, max: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return fallback;
+	}
+	return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function parseExposurePolicy(value: unknown): MarketplaceMcpExposurePolicy | null {
+	if (!isRecord(value)) return null;
+	const mode = parseExposureMode(value.mode);
+	if (!mode) return null;
+
+	const maxExpandedTools = parsePositiveInt(value.maxExpandedTools, DEFAULT_EXPOSURE_POLICY.maxExpandedTools, 0, 100);
+	const maxSearchResults = parsePositiveInt(value.maxSearchResults, DEFAULT_EXPOSURE_POLICY.maxSearchResults, 1, 50);
+	const updatedAt = typeof value.updatedAt === "string" ? value.updatedAt : new Date().toISOString();
+
+	return {
+		mode,
+		maxExpandedTools,
+		maxSearchResults,
+		updatedAt,
+	};
+}
+
+function readExposurePolicy(): MarketplaceMcpExposurePolicy {
+	const path = getExposurePolicyPath();
+	if (!existsSync(path)) {
+		return DEFAULT_EXPOSURE_POLICY;
+	}
+
+	try {
+		const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+		return parseExposurePolicy(raw) ?? DEFAULT_EXPOSURE_POLICY;
+	} catch {
+		return DEFAULT_EXPOSURE_POLICY;
+	}
+}
+
+function writeExposurePolicy(policy: MarketplaceMcpExposurePolicy): void {
+	ensureMarketplaceDir();
+	writeFileSync(getExposurePolicyPath(), JSON.stringify(policy, null, 2));
+}
+
+function extractContextFromRequest(c: {
+	req: {
+		query: (key: string) => string | undefined;
+		header: (key: string) => string | undefined;
+	};
+}): MarketplaceMcpScopeContext {
+	return extractScopeContext({
+		harness: c.req.query("harness") ?? c.req.header("x-signet-harness") ?? undefined,
+		workspace: c.req.query("workspace") ?? c.req.header("x-signet-workspace") ?? undefined,
+		channel: c.req.query("channel") ?? c.req.header("x-signet-channel") ?? undefined,
+	});
+}
+
+function filterServersByScope(
+	servers: readonly InstalledMarketplaceMcpServer[],
+	context: MarketplaceMcpScopeContext,
+): InstalledMarketplaceMcpServer[] {
+	return servers.filter((server) => scopeMatches(server.scope, context));
+}
+
+function hasScopeContext(context: MarketplaceMcpScopeContext): boolean {
+	return Boolean(context.harness || context.workspace || context.channel);
 }
 
 function parseSecretReference(value: string): string | null {
@@ -537,6 +735,7 @@ function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | n
 		homepage: typeof value.homepage === "string" ? value.homepage : undefined,
 		official: value.official,
 		enabled: value.enabled,
+		scope: normalizeScope(value.scope),
 		config,
 		installedAt: value.installedAt,
 		updatedAt: value.updatedAt,
@@ -652,7 +851,13 @@ function sanitizeToolName(name: string): string {
 async function loadMarketplaceTools(
 	installed: readonly InstalledMarketplaceMcpServer[],
 ): Promise<MarketplaceToolsCache> {
-	const cached = toolsCache;
+	const cacheKey = installed
+		.filter((server) => server.enabled)
+		.map((server) => `${server.id}:${server.updatedAt}`)
+		.sort()
+		.join("|");
+
+	const cached = toolsCache.get(cacheKey);
 	const now = Date.now();
 	if (cached && now - cached.fetchedAt < TOOLS_TTL_MS) {
 		return cached;
@@ -724,18 +929,97 @@ async function loadMarketplaceTools(
 		serverHealth: toolBuckets.map((b) => b.health),
 	};
 
-	toolsCache = nextCache;
+	toolsCache.set(cacheKey, nextCache);
 	return nextCache;
 }
 
 function invalidateMarketplaceToolsCache(): void {
-	toolsCache = null;
+	toolsCache.clear();
+}
+
+function tokenizeQuery(value: string): string[] {
+	return value
+		.toLowerCase()
+		.split(/\s+/g)
+		.map((token) => token.trim())
+		.filter((token) => token.length > 1);
+}
+
+function rankMarketplaceTools(tools: readonly MarketplaceMcpTool[], query: string): MarketplaceMcpTool[] {
+	const tokens = tokenizeQuery(query);
+	if (tokens.length === 0) {
+		return [...tools];
+	}
+
+	const scored = tools
+		.map((tool) => {
+			const haystack = `${tool.serverId} ${tool.serverName} ${tool.toolName} ${tool.description}`.toLowerCase();
+			let score = 0;
+			for (const token of tokens) {
+				if (tool.toolName.toLowerCase() === token) score += 6;
+				if (tool.toolName.toLowerCase().includes(token)) score += 4;
+				if (tool.serverName.toLowerCase().includes(token)) score += 3;
+				if (tool.description.toLowerCase().includes(token)) score += 2;
+				if (haystack.includes(token)) score += 1;
+			}
+			return { tool, score };
+		})
+		.filter((entry) => entry.score > 0)
+		.sort((a, b) => {
+			if (b.score !== a.score) return b.score - a.score;
+			return `${a.tool.serverId}:${a.tool.toolName}`.localeCompare(`${b.tool.serverId}:${b.tool.toolName}`);
+		});
+
+	return scored.map((entry) => entry.tool);
 }
 
 export function mountMarketplaceRoutes(app: Hono): void {
 	app.get("/api/marketplace/mcp", (c) => {
 		const servers = readInstalledServers();
-		return c.json({ servers, count: servers.length });
+		const context = extractContextFromRequest(c);
+		const scopedQuery = c.req.query("scoped");
+		const scoped = scopedQuery === "1" ? true : scopedQuery === "0" ? false : hasScopeContext(context);
+		const visible = scoped ? filterServersByScope(servers, context) : servers;
+		return c.json({
+			servers: visible,
+			count: visible.length,
+			scoped,
+			context,
+		});
+	});
+
+	app.get("/api/marketplace/mcp/policy", (c) => {
+		const policy = readExposurePolicy();
+		return c.json({ policy });
+	});
+
+	app.patch("/api/marketplace/mcp/policy", async (c) => {
+		let body: {
+			mode?: MarketplaceMcpExposureMode;
+			maxExpandedTools?: number;
+			maxSearchResults?: number;
+		} = {};
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const current = readExposurePolicy();
+		const mode = body.mode ?? current.mode;
+		if (!parseExposureMode(mode)) {
+			return c.json({ error: "mode must be compact, hybrid, or expanded" }, 400);
+		}
+
+		const next: MarketplaceMcpExposurePolicy = {
+			mode,
+			maxExpandedTools: parsePositiveInt(body.maxExpandedTools, current.maxExpandedTools, 0, 100),
+			maxSearchResults: parsePositiveInt(body.maxSearchResults, current.maxSearchResults, 1, 50),
+			updatedAt: new Date().toISOString(),
+		};
+
+		writeExposurePolicy(next);
+		return c.json({ success: true, policy: next });
 	});
 
 	app.get("/api/marketplace/mcp/browse", async (c) => {
@@ -849,6 +1133,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			category: "Other",
 			official: false,
 			enabled: true,
+			scope: normalizeScope(undefined),
 			config,
 			installedAt: new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
@@ -883,6 +1168,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			source?: MarketplaceMcpCatalogSource;
 			alias?: string;
 			config?: unknown;
+			scope?: unknown;
 		} = {};
 		try {
 			body = await c.req.json();
@@ -902,6 +1188,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		let normalized = normalizeMcpConfig(body.config);
 		let detail: DetailConfig | undefined;
+		const scope = normalizeScope(body.scope);
 
 		if (!normalized) {
 			try {
@@ -932,6 +1219,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			const updated: InstalledMarketplaceMcpServer = {
 				...existing,
 				enabled: true,
+				scope: body.scope === undefined ? existing.scope : scope,
 				config: normalized,
 				updatedAt: now,
 			};
@@ -959,6 +1247,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			homepage,
 			official: selection.source === "modelcontextprotocol/servers",
 			enabled: true,
+			scope,
 			config: normalized,
 			installedAt: now,
 			updatedAt: now,
@@ -970,7 +1259,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 	});
 
 	app.post("/api/marketplace/mcp/register", async (c) => {
-		let body: { name?: string; description?: string; category?: string; config?: unknown } = {};
+		let body: { name?: string; description?: string; category?: string; config?: unknown; scope?: unknown } = {};
 		try {
 			body = await c.req.json();
 		} catch {
@@ -998,6 +1287,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			category: body.category?.trim() || inferCategory(body.name),
 			official: false,
 			enabled: true,
+			scope: normalizeScope(body.scope),
 			config: normalized,
 			installedAt: now,
 			updatedAt: now,
@@ -1008,9 +1298,25 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		return c.json({ success: true, server });
 	});
 
+	app.get("/api/marketplace/mcp/:id", (c) => {
+		const id = c.req.param("id");
+		const installed = readInstalledServers();
+		const server = installed.find((item) => item.id === id);
+		if (!server) {
+			return c.json({ error: "Server not found" }, 404);
+		}
+
+		const context = extractContextFromRequest(c);
+		if (hasScopeContext(context) && !scopeMatches(server.scope, context)) {
+			return c.json({ error: "Server is out of scope for current context" }, 403);
+		}
+
+		return c.json({ server, context });
+	});
+
 	app.patch("/api/marketplace/mcp/:id", async (c) => {
 		const id = c.req.param("id");
-		let body: { enabled?: boolean; config?: unknown; name?: string; description?: string } = {};
+		let body: { enabled?: boolean; config?: unknown; name?: string; description?: string; scope?: unknown } = {};
 		try {
 			body = await c.req.json();
 		} catch {
@@ -1029,6 +1335,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		const updated: InstalledMarketplaceMcpServer = {
 			...existing,
 			enabled: typeof body.enabled === "boolean" ? body.enabled : existing.enabled,
+			scope: body.scope === undefined ? existing.scope : normalizeScope(body.scope),
 			config: normalized ?? existing.config,
 			name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : existing.name,
 			description:
@@ -1056,21 +1363,57 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 	app.get("/api/marketplace/mcp/tools", async (c) => {
 		const installed = readInstalledServers();
+		const context = extractContextFromRequest(c);
+		const scopedInstalled = filterServersByScope(installed, context);
 		const refresh = c.req.query("refresh") === "1";
 		if (refresh) {
 			invalidateMarketplaceToolsCache();
 		}
 
 		try {
-			const cached = await loadMarketplaceTools(installed);
+			const cached = await loadMarketplaceTools(scopedInstalled);
 			return c.json({
 				tools: cached.tools,
 				servers: cached.serverHealth,
 				count: cached.tools.length,
+				context,
+				policy: readExposurePolicy(),
 			});
 		} catch (error) {
 			logger.error("skills", "Failed to load marketplace MCP tools", error as Error);
-			return c.json({ tools: [], servers: [], count: 0, error: "Failed to load tools" }, 500);
+			return c.json({ tools: [], servers: [], count: 0, error: "Failed to load tools", context }, 500);
+		}
+	});
+
+	app.get("/api/marketplace/mcp/search", async (c) => {
+		const query = (c.req.query("q") ?? "").trim();
+		const refresh = c.req.query("refresh") === "1";
+		const policy = readExposurePolicy();
+		const rawLimit = Number(c.req.query("limit") ?? String(policy.maxSearchResults));
+		const limit = parsePositiveInt(rawLimit, policy.maxSearchResults, 1, 50);
+
+		if (query.length < 2) {
+			return c.json({ query, count: 0, results: [], error: "query must be at least 2 characters" }, 400);
+		}
+
+		const context = extractContextFromRequest(c);
+		const installed = filterServersByScope(readInstalledServers(), context);
+		if (refresh) {
+			invalidateMarketplaceToolsCache();
+		}
+
+		try {
+			const cached = await loadMarketplaceTools(installed);
+			const ranked = rankMarketplaceTools(cached.tools, query).slice(0, limit);
+			return c.json({
+				query,
+				count: ranked.length,
+				results: ranked,
+				context,
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return c.json({ query, count: 0, results: [], error: message, context }, 500);
 		}
 	});
 
@@ -1086,10 +1429,11 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			return c.json({ error: "serverId and toolName are required" }, 400);
 		}
 
+		const context = extractContextFromRequest(c);
 		const installed = readInstalledServers();
-		const server = installed.find((s) => s.id === body.serverId && s.enabled);
+		const server = installed.find((s) => s.id === body.serverId && s.enabled && scopeMatches(s.scope, context));
 		if (!server) {
-			return c.json({ error: "Server not found or disabled" }, 404);
+			return c.json({ error: "Server not found, disabled, or out of scope" }, 404);
 		}
 
 		try {

@@ -94,10 +94,17 @@ describe("createMcpServer", () => {
 		expect(names).toContain("memory_modify");
 		expect(names).toContain("memory_forget");
 		expect(names).toContain("mcp_server_list");
+		expect(names).toContain("mcp_server_search");
 		expect(names).toContain("mcp_server_call");
+		expect(names).toContain("mcp_server_enable");
+		expect(names).toContain("mcp_server_disable");
+		expect(names).toContain("mcp_server_scope_get");
+		expect(names).toContain("mcp_server_scope_set");
+		expect(names).toContain("mcp_server_policy_get");
+		expect(names).toContain("mcp_server_policy_set");
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
-		expect(names.length).toBe(10);
+		expect(names.length).toBe(17);
 	});
 
 	describe("memory_search", () => {
@@ -253,6 +260,56 @@ describe("createMcpServer", () => {
 			expect(body.serverId).toBe("playwright");
 			expect(body.toolName).toBe("navigate");
 			expect(body.args.url).toBe("https://example.com");
+		});
+	});
+
+	describe("mcp management tools", () => {
+		it("mcp_server_search calls search endpoint", async () => {
+			const cap: { url?: string } = {};
+			mockFetch(200, { query: "sum", count: 1, results: [] }, cap);
+
+			await callTool(server, "mcp_server_search", {
+				query: "sum",
+				limit: 3,
+				refresh: true,
+				promote: false,
+			});
+
+			expect(cap.url).toContain("/api/marketplace/mcp/search?");
+			expect(cap.url).toContain("q=sum");
+			expect(cap.url).toContain("limit=3");
+			expect(cap.url).toContain("refresh=1");
+		});
+
+		it("mcp_server_enable patches enabled=true", async () => {
+			const cap: { method?: string; body?: string; url?: string } = {};
+			mockFetch(200, { success: true }, cap);
+
+			await callTool(server, "mcp_server_enable", {
+				server_id: "dogfood-everything",
+			});
+
+			expect(cap.method).toBe("PATCH");
+			expect(cap.url).toContain("/api/marketplace/mcp/dogfood-everything");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.enabled).toBe(true);
+		});
+
+		it("mcp_server_policy_set maps policy fields", async () => {
+			const cap: { method?: string; body?: string } = {};
+			mockFetch(200, { success: true, policy: { mode: "compact" } }, cap);
+
+			await callTool(server, "mcp_server_policy_set", {
+				mode: "compact",
+				max_expanded_tools: 5,
+				max_search_results: 4,
+			});
+
+			expect(cap.method).toBe("PATCH");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.mode).toBe("compact");
+			expect(body.maxExpandedTools).toBe(5);
+			expect(body.maxSearchResults).toBe(4);
 		});
 	});
 

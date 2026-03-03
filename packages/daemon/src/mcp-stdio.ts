@@ -18,6 +18,11 @@ const DAEMON_URL =
 const server = await createMcpServer({
 	daemonUrl: DAEMON_URL,
 	version: "0.1.0",
+	context: {
+		harness: process.env.SIGNET_HARNESS,
+		workspace: process.env.SIGNET_WORKSPACE ?? process.cwd(),
+		channel: process.env.SIGNET_CHANNEL,
+	},
 });
 
 const transport = new StdioServerTransport();

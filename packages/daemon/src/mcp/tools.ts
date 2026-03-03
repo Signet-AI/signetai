@@ -20,6 +20,12 @@ interface McpServerOptions {
 	readonly version?: string;
 	/** Register installed marketplace MCP tools as first-class MCP tools */
 	readonly enableMarketplaceProxyTools?: boolean;
+	/** Optional scope context used for marketplace filtering */
+	readonly context?: {
+		readonly harness?: string;
+		readonly workspace?: string;
+		readonly channel?: string;
+	};
 }
 
 interface MarketplaceRoutedTool {
@@ -38,11 +44,52 @@ interface MarketplaceToolsResponse {
 	readonly count: number;
 }
 
+interface MarketplaceServerRecord {
+	readonly id: string;
+	readonly name: string;
+	readonly enabled: boolean;
+	readonly source: string;
+	readonly scope: {
+		readonly harnesses: readonly string[];
+		readonly workspaces: readonly string[];
+		readonly channels: readonly string[];
+	};
+}
+
+interface MarketplaceServersResponse {
+	readonly servers: ReadonlyArray<MarketplaceServerRecord>;
+	readonly count: number;
+}
+
+interface MarketplaceSearchResponse {
+	readonly query: string;
+	readonly count: number;
+	readonly results: ReadonlyArray<MarketplaceRoutedTool>;
+}
+
+interface MarketplacePolicy {
+	readonly mode: "compact" | "hybrid" | "expanded";
+	readonly maxExpandedTools: number;
+	readonly maxSearchResults: number;
+	readonly updatedAt: string;
+}
+
+interface MarketplacePolicyResponse {
+	readonly policy: MarketplacePolicy;
+}
+
 interface MarketplaceProxyState {
 	baseUrl: string;
 	enabled: boolean;
 	names: Set<string>;
 	signature: string;
+	context: {
+		readonly harness?: string;
+		readonly workspace?: string;
+		readonly channel?: string;
+	};
+	policy: MarketplacePolicy;
+	contextKey: string;
 }
 
 interface DaemonResponse<T> {
@@ -69,9 +116,19 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"secret_exec",
 	"mcp_server_list",
 	"mcp_server_call",
+	"mcp_server_search",
+	"mcp_server_enable",
+	"mcp_server_disable",
+	"mcp_server_scope_get",
+	"mcp_server_scope_set",
+	"mcp_server_policy_get",
+	"mcp_server_policy_set",
 ]);
 
 const marketplaceProxyState = new WeakMap<McpServer, MarketplaceProxyState>();
+const hotToolIdsByContext = new Map<string, Set<string>>();
+const hotToolTouchedAt = new Map<string, number>();
+const HOT_CONTEXT_TTL_MS = 30 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Internal HTTP helper
@@ -177,6 +234,128 @@ function buildToolsSignature(tools: ReadonlyArray<MarketplaceRoutedTool>): strin
 		.join("|");
 }
 
+function normalizeContextValue(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeContext(context: McpServerOptions["context"]): {
+	harness?: string;
+	workspace?: string;
+	channel?: string;
+} {
+	return {
+		harness: normalizeContextValue(context?.harness),
+		workspace: normalizeContextValue(context?.workspace),
+		channel: normalizeContextValue(context?.channel),
+	};
+}
+
+function buildContextKey(context: { harness?: string; workspace?: string; channel?: string }): string {
+	return `${context.harness ?? "*"}|${context.workspace ?? "*"}|${context.channel ?? "*"}`;
+}
+
+function appendMarketplaceContext(
+	path: string,
+	context: { harness?: string; workspace?: string; channel?: string },
+): string {
+	const params = new URLSearchParams();
+	if (context.harness) params.set("harness", context.harness);
+	if (context.workspace) params.set("workspace", context.workspace);
+	if (context.channel) params.set("channel", context.channel);
+
+	if (params.size === 0) {
+		return path;
+	}
+	const separator = path.includes("?") ? "&" : "?";
+	return `${path}${separator}${params.toString()}`;
+}
+
+function cleanupHotContextCache(): void {
+	const now = Date.now();
+	for (const [key, touchedAt] of hotToolTouchedAt.entries()) {
+		if (now - touchedAt <= HOT_CONTEXT_TTL_MS) continue;
+		hotToolTouchedAt.delete(key);
+		hotToolIdsByContext.delete(key);
+	}
+}
+
+function getHotToolSet(contextKey: string): Set<string> {
+	cleanupHotContextCache();
+	const existing = hotToolIdsByContext.get(contextKey);
+	if (existing) {
+		hotToolTouchedAt.set(contextKey, Date.now());
+		return existing;
+	}
+	const created = new Set<string>();
+	hotToolIdsByContext.set(contextKey, created);
+	hotToolTouchedAt.set(contextKey, Date.now());
+	return created;
+}
+
+function trimHotToolSet(hotSet: Set<string>, max = 500): void {
+	if (hotSet.size <= max) return;
+	for (const value of hotSet) {
+		hotSet.delete(value);
+		if (hotSet.size <= max) break;
+	}
+}
+
+function selectToolsByPolicy(
+	tools: readonly MarketplaceRoutedTool[],
+	state: MarketplaceProxyState,
+): MarketplaceRoutedTool[] {
+	if (state.policy.mode === "expanded") {
+		return [...tools];
+	}
+
+	const hot = getHotToolSet(state.contextKey);
+	const ordered = [...tools].sort((a, b) => `${a.serverId}:${a.toolName}`.localeCompare(`${b.serverId}:${b.toolName}`));
+	const hotFirst = ordered.filter((tool) => hot.has(tool.id));
+
+	if (state.policy.mode === "compact") {
+		return hotFirst.slice(0, state.policy.maxSearchResults);
+	}
+
+	const max = Math.max(0, state.policy.maxExpandedTools);
+	if (max === 0) {
+		return [];
+	}
+
+	const selected: MarketplaceRoutedTool[] = [];
+	const seen = new Set<string>();
+	for (const tool of hotFirst) {
+		if (seen.has(tool.id)) continue;
+		selected.push(tool);
+		seen.add(tool.id);
+		if (selected.length >= max) {
+			return selected;
+		}
+	}
+
+	for (const tool of ordered) {
+		if (seen.has(tool.id)) continue;
+		selected.push(tool);
+		seen.add(tool.id);
+		if (selected.length >= max) {
+			break;
+		}
+	}
+
+	return selected;
+}
+
+async function fetchMarketplacePolicy(baseUrl: string): Promise<MarketplacePolicy | null> {
+	const result = await daemonFetch<MarketplacePolicyResponse>(baseUrl, "/api/marketplace/mcp/policy", {
+		timeout: 3_000,
+	});
+	if (!result.ok) {
+		return null;
+	}
+	return result.data.policy;
+}
+
 export async function refreshMarketplaceProxyTools(
 	server: McpServer,
 	options?: {
@@ -190,18 +369,24 @@ export async function refreshMarketplaceProxyTools(
 
 	const notify = options?.notify ?? true;
 	const registeredTools = getRegisteredToolsMap(server);
+	const policy = await fetchMarketplacePolicy(state.baseUrl);
+	if (policy) {
+		state.policy = policy;
+	}
 
-	const routed = await daemonFetch<MarketplaceToolsResponse>(state.baseUrl, "/api/marketplace/mcp/tools?refresh=1", {
-		timeout: 3_000,
-	});
+	const routed = await daemonFetch<MarketplaceToolsResponse>(
+		state.baseUrl,
+		appendMarketplaceContext("/api/marketplace/mcp/tools?refresh=1", state.context),
+		{
+			timeout: 3_000,
+		},
+	);
 
 	if (!routed.ok) {
 		return { changed: false, count: state.names.size, error: routed.error };
 	}
 
-	const tools = [...routed.data.tools].sort((a, b) =>
-		`${a.serverId}:${a.toolName}`.localeCompare(`${b.serverId}:${b.toolName}`),
-	);
+	const tools = selectToolsByPolicy(routed.data.tools, state);
 	const signature = buildToolsSignature(tools);
 	if (signature === state.signature) {
 		return { changed: false, count: tools.length };
@@ -249,7 +434,7 @@ export async function refreshMarketplaceProxyTools(
 					success: boolean;
 					result?: unknown;
 					error?: string;
-				}>(state.baseUrl, "/api/marketplace/mcp/call", {
+				}>(state.baseUrl, appendMarketplaceContext("/api/marketplace/mcp/call", state.context), {
 					method: "POST",
 					body: {
 						serverId: tool.serverId,
@@ -283,7 +468,7 @@ export async function refreshMarketplaceProxyTools(
 		}
 	}
 
-	return { changed: true, count: tools.length };
+	return { changed: true, count: routed.data.tools.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +479,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	const baseUrl = opts?.daemonUrl ?? "http://localhost:3850";
 	const version = opts?.version ?? "0.1.0";
 	const enableMarketplaceProxyTools = opts?.enableMarketplaceProxyTools ?? true;
+	const context = normalizeContext(opts?.context);
+	const contextKey = buildContextKey(context);
 
 	const server = new McpServer({
 		name: "signet",
@@ -305,6 +492,14 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		enabled: enableMarketplaceProxyTools,
 		names: new Set<string>(),
 		signature: "",
+		context,
+		contextKey,
+		policy: {
+			mode: "hybrid",
+			maxExpandedTools: 12,
+			maxSearchResults: 8,
+			updatedAt: new Date(0).toISOString(),
+		},
 	});
 
 	// ------------------------------------------------------------------
@@ -559,6 +754,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	// ------------------------------------------------------------------
 	// mcp_server_list — list routed marketplace MCP tools
 	// ------------------------------------------------------------------
+	const proxyState = marketplaceProxyState.get(server);
+	if (!proxyState) {
+		throw new Error("marketplace proxy state not initialized");
+	}
+
+	const contextPath = (path: string): string => appendMarketplaceContext(path, proxyState.context);
+
 	server.registerTool(
 		"mcp_server_list",
 		{
@@ -578,12 +780,252 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				count: number;
 				tools: unknown[];
 				servers: unknown[];
-			}>(baseUrl, path);
+				policy?: MarketplacePolicy;
+			}>(baseUrl, contextPath(path));
 
 			if (!result.ok) {
 				return errorResult(`Tool server list failed: ${result.error}`);
 			}
 
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"mcp_server_search",
+		{
+			title: "Search Tool Servers",
+			description:
+				"Search routed MCP tools with lightweight matching and optionally promote matches into first-class tools.",
+			inputSchema: z.object({
+				query: z.string().min(2).describe("Search query text"),
+				limit: z.number().optional().describe("Max results to return"),
+				refresh: z.boolean().optional().describe("Refresh tool catalog before searching"),
+				promote: z
+					.boolean()
+					.optional()
+					.describe("Promote matches into expanded tool list (default true)")
+					.default(true),
+			}),
+		},
+		async ({ query, limit, refresh, promote }) => {
+			const searchPath = new URLSearchParams();
+			searchPath.set("q", query);
+			if (typeof limit === "number" && Number.isFinite(limit)) {
+				searchPath.set("limit", String(Math.max(1, Math.min(50, Math.round(limit)))));
+			}
+			if (refresh) {
+				searchPath.set("refresh", "1");
+			}
+
+			const result = await daemonFetch<MarketplaceSearchResponse>(
+				baseUrl,
+				contextPath(`/api/marketplace/mcp/search?${searchPath.toString()}`),
+			);
+
+			if (!result.ok) {
+				return errorResult(`Tool server search failed: ${result.error}`);
+			}
+
+			const shouldPromote = promote !== false;
+			if (shouldPromote && enableMarketplaceProxyTools) {
+				const hotSet = getHotToolSet(proxyState.contextKey);
+				for (const tool of result.data.results) {
+					hotSet.add(tool.id);
+				}
+				trimHotToolSet(hotSet);
+				hotToolTouchedAt.set(proxyState.contextKey, Date.now());
+				await refreshMarketplaceProxyTools(server, { notify: true });
+			}
+
+			return textResult({
+				query: result.data.query,
+				count: result.data.count,
+				results: result.data.results,
+				promoted: shouldPromote,
+				mode: proxyState.policy.mode,
+				maxExpandedTools: proxyState.policy.maxExpandedTools,
+			});
+		},
+	);
+
+	server.registerTool(
+		"mcp_server_enable",
+		{
+			title: "Enable Tool Server",
+			description: "Enable an installed MCP server for the current scope context.",
+			inputSchema: z.object({
+				server_id: z.string().describe("Installed Tool Server id"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ server_id }) => {
+			const result = await daemonFetch<{ success: boolean; server?: unknown; error?: string }>(
+				baseUrl,
+				contextPath(`/api/marketplace/mcp/${encodeURIComponent(server_id)}`),
+				{
+					method: "PATCH",
+					body: { enabled: true },
+				},
+			);
+
+			if (!result.ok) {
+				return errorResult(`Enable failed: ${result.error}`);
+			}
+			if (enableMarketplaceProxyTools) {
+				await refreshMarketplaceProxyTools(server, { notify: true });
+			}
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"mcp_server_disable",
+		{
+			title: "Disable Tool Server",
+			description: "Disable an installed MCP server for the current scope context.",
+			inputSchema: z.object({
+				server_id: z.string().describe("Installed Tool Server id"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ server_id }) => {
+			const result = await daemonFetch<{ success: boolean; server?: unknown; error?: string }>(
+				baseUrl,
+				contextPath(`/api/marketplace/mcp/${encodeURIComponent(server_id)}`),
+				{
+					method: "PATCH",
+					body: { enabled: false },
+				},
+			);
+
+			if (!result.ok) {
+				return errorResult(`Disable failed: ${result.error}`);
+			}
+			if (enableMarketplaceProxyTools) {
+				await refreshMarketplaceProxyTools(server, { notify: true });
+			}
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"mcp_server_scope_get",
+		{
+			title: "Get Tool Server Scope",
+			description: "Inspect scope rules for one server or all installed servers.",
+			inputSchema: z.object({
+				server_id: z.string().optional().describe("Optional server id"),
+			}),
+		},
+		async ({ server_id }) => {
+			if (server_id) {
+				const result = await daemonFetch<{ server: MarketplaceServerRecord }>(
+					baseUrl,
+					contextPath(`/api/marketplace/mcp/${encodeURIComponent(server_id)}`),
+				);
+				if (!result.ok) {
+					return errorResult(`Scope get failed: ${result.error}`);
+				}
+				return textResult(result.data);
+			}
+
+			const result = await daemonFetch<MarketplaceServersResponse>(
+				baseUrl,
+				contextPath("/api/marketplace/mcp?scoped=0"),
+			);
+			if (!result.ok) {
+				return errorResult(`Scope list failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"mcp_server_scope_set",
+		{
+			title: "Set Tool Server Scope",
+			description: "Set harness/workspace/channel scope for an installed MCP server.",
+			inputSchema: z.object({
+				server_id: z.string().describe("Installed Tool Server id"),
+				harnesses: z.array(z.string()).optional().describe("Allowed harness names"),
+				workspaces: z.array(z.string()).optional().describe("Allowed workspace paths"),
+				channels: z.array(z.string()).optional().describe("Allowed channel ids"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ server_id, harnesses, workspaces, channels }) => {
+			const result = await daemonFetch<{ success: boolean; server?: unknown; error?: string }>(
+				baseUrl,
+				contextPath(`/api/marketplace/mcp/${encodeURIComponent(server_id)}`),
+				{
+					method: "PATCH",
+					body: {
+						scope: {
+							harnesses: harnesses ?? [],
+							workspaces: workspaces ?? [],
+							channels: channels ?? [],
+						},
+					},
+				},
+			);
+			if (!result.ok) {
+				return errorResult(`Scope set failed: ${result.error}`);
+			}
+			if (enableMarketplaceProxyTools) {
+				await refreshMarketplaceProxyTools(server, { notify: true });
+			}
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"mcp_server_policy_get",
+		{
+			title: "Get MCP Exposure Policy",
+			description: "Get compact/hybrid/expanded exposure policy for dynamic tool expansion.",
+			inputSchema: z.object({}),
+		},
+		async () => {
+			const result = await daemonFetch<MarketplacePolicyResponse>(baseUrl, "/api/marketplace/mcp/policy");
+			if (!result.ok) {
+				return errorResult(`Policy get failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"mcp_server_policy_set",
+		{
+			title: "Set MCP Exposure Policy",
+			description: "Update compact/hybrid/expanded policy and expansion limits.",
+			inputSchema: z.object({
+				mode: z.enum(["compact", "hybrid", "expanded"]).optional(),
+				max_expanded_tools: z.number().optional(),
+				max_search_results: z.number().optional(),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ mode, max_expanded_tools, max_search_results }) => {
+			const result = await daemonFetch<{ success: boolean; policy?: MarketplacePolicy; error?: string }>(
+				baseUrl,
+				"/api/marketplace/mcp/policy",
+				{
+					method: "PATCH",
+					body: {
+						mode,
+						maxExpandedTools: max_expanded_tools,
+						maxSearchResults: max_search_results,
+					},
+				},
+			);
+			if (!result.ok) {
+				return errorResult(`Policy set failed: ${result.error}`);
+			}
+			if (enableMarketplaceProxyTools) {
+				await refreshMarketplaceProxyTools(server, { notify: true });
+			}
 			return textResult(result.data);
 		},
 	);
@@ -610,7 +1052,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				success: boolean;
 				result?: unknown;
 				error?: string;
-			}>(baseUrl, "/api/marketplace/mcp/call", {
+			}>(baseUrl, contextPath("/api/marketplace/mcp/call"), {
 				method: "POST",
 				body: {
 					serverId: server_id,

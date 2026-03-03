@@ -192,6 +192,20 @@ interface MarketplaceToolCatalog {
 	}>;
 }
 
+interface MarketplaceContextOptions {
+	readonly daemonUrl?: string;
+	readonly harness?: string;
+	readonly workspace?: string;
+	readonly channel?: string;
+}
+
+interface MarketplaceExposurePolicy {
+	readonly mode: "compact" | "hybrid" | "expanded";
+	readonly maxExpandedTools: number;
+	readonly maxSearchResults: number;
+	readonly updatedAt: string;
+}
+
 function sanitizeToolSegment(value: string): string {
 	const normalized = value
 		.trim()
@@ -532,13 +546,16 @@ export async function memoryForget(
 }
 
 export async function marketplaceToolList(
-	options: {
-		daemonUrl?: string;
-		refresh?: boolean;
-	} = {},
+	options: MarketplaceContextOptions & { refresh?: boolean } = {},
 ): Promise<MarketplaceToolCatalog | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const path = options.refresh ? "/api/marketplace/mcp/tools?refresh=1" : "/api/marketplace/mcp/tools";
+	const params = new URLSearchParams();
+	if (options.refresh) params.set("refresh", "1");
+	if (options.harness) params.set("harness", options.harness);
+	if (options.workspace) params.set("workspace", options.workspace);
+	if (options.channel) params.set("channel", options.channel);
+	const query = params.toString();
+	const path = `/api/marketplace/mcp/tools${query.length > 0 ? `?${query}` : ""}`;
 	return daemonFetch<MarketplaceToolCatalog>(daemonUrl, path, {
 		timeout: READ_TIMEOUT,
 	});
@@ -548,12 +565,16 @@ export async function marketplaceToolCall(
 	serverId: string,
 	toolName: string,
 	args: Record<string, unknown>,
-	options: {
-		daemonUrl?: string;
-	} = {},
+	options: MarketplaceContextOptions = {},
 ): Promise<{ success: boolean; result?: unknown; error?: string } | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	return daemonFetch<{ success: boolean; result?: unknown; error?: string }>(daemonUrl, "/api/marketplace/mcp/call", {
+	const params = new URLSearchParams();
+	if (options.harness) params.set("harness", options.harness);
+	if (options.workspace) params.set("workspace", options.workspace);
+	if (options.channel) params.set("channel", options.channel);
+	const query = params.toString();
+	const path = `/api/marketplace/mcp/call${query.length > 0 ? `?${query}` : ""}`;
+	return daemonFetch<{ success: boolean; result?: unknown; error?: string }>(daemonUrl, path, {
 		method: "POST",
 		body: {
 			serverId,
@@ -562,6 +583,19 @@ export async function marketplaceToolCall(
 		},
 		timeout: WRITE_TIMEOUT,
 	});
+}
+
+async function getMarketplaceExposurePolicy(
+	options: MarketplaceContextOptions = {},
+): Promise<MarketplaceExposurePolicy | null> {
+	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
+	const result = await daemonFetch<{ policy?: MarketplaceExposurePolicy }>(daemonUrl, "/api/marketplace/mcp/policy", {
+		timeout: READ_TIMEOUT,
+	});
+	if (!result?.policy) {
+		return null;
+	}
+	return result.policy;
 }
 
 // ============================================================================
@@ -623,13 +657,29 @@ function textResult(text: string, details?: Record<string, unknown>): OpenClawTo
 
 async function registerMarketplaceProxyTools(
 	api: OpenClawPluginApi,
-	options: { daemonUrl?: string },
+	options: MarketplaceContextOptions,
 	knownNames: Set<string>,
 ): Promise<{ registeredNow: number; total: number }> {
-	const catalog = await marketplaceToolList({ ...options, refresh: true });
+	const [catalog, policy] = await Promise.all([
+		marketplaceToolList({ ...options, refresh: true }),
+		getMarketplaceExposurePolicy(options),
+	]);
 	if (!catalog || catalog.tools.length === 0) {
 		return { registeredNow: 0, total: knownNames.size };
 	}
+
+	const mode = policy?.mode ?? "hybrid";
+	const maxExpandedTools =
+		typeof policy?.maxExpandedTools === "number" && Number.isFinite(policy.maxExpandedTools)
+			? Math.max(0, Math.min(100, Math.round(policy.maxExpandedTools)))
+			: 12;
+
+	const sortedTools = [...catalog.tools].sort((a, b) =>
+		`${a.serverId}:${a.toolName}`.localeCompare(`${b.serverId}:${b.toolName}`),
+	);
+
+	const candidates =
+		mode === "expanded" ? sortedTools : mode === "hybrid" ? sortedTools.slice(0, maxExpandedTools) : [];
 
 	const usedNames = new Set<string>([
 		"memory_search",
@@ -646,9 +696,7 @@ async function registerMarketplaceProxyTools(
 	}
 
 	let registeredNow = 0;
-	for (const tool of [...catalog.tools].sort((a, b) =>
-		`${a.serverId}:${a.toolName}`.localeCompare(`${b.serverId}:${b.toolName}`),
-	)) {
+	for (const tool of candidates) {
 		const proxyName = buildProxyToolName(usedNames, tool.serverId, tool.toolName);
 		if (knownNames.has(proxyName)) {
 			continue;
@@ -706,7 +754,12 @@ const signetPlugin = {
 	register(api: OpenClawPluginApi): void {
 		const cfg = signetConfigSchema.parse(api.pluginConfig);
 		const daemonUrl = cfg.daemonUrl || DEFAULT_DAEMON_URL;
-		const opts = { daemonUrl };
+		const opts = {
+			daemonUrl,
+			harness: "openclaw",
+			workspace: process.env.SIGNET_WORKSPACE ?? process.cwd(),
+			channel: process.env.SIGNET_CHANNEL,
+		};
 
 		// Instance-scoped health state (safe for multi-register)
 		let daemonReachable = true;
