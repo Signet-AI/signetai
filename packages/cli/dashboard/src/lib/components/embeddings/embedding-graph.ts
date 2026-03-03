@@ -48,7 +48,10 @@ export const sourceColors: Record<string, string> = {
 const NEWNESS_HOUR_MS = 60 * 60 * 1000;
 const NEWNESS_DAY_MS = 24 * NEWNESS_HOUR_MS;
 const NEWNESS_WEEK_MS = 7 * NEWNESS_DAY_MS;
-const NEWNESS_MONTH_MS = 30 * NEWNESS_DAY_MS;
+const NEWNESS_MINUTES_MS = 15 * 60 * 1000;
+const NEWNESS_HOURS_MS = 6 * NEWNESS_HOUR_MS;
+
+type NewnessBucket = "minutes" | "hours" | "week" | "older";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -149,28 +152,27 @@ function parseCreatedAtMs(createdAt: string | undefined): number | null {
 
 export function newnessIntensity(createdAt: string | undefined, nowMs: number): number {
 	const createdMs = parseCreatedAtMs(createdAt);
-	if (createdMs === null) return 0.35;
+	if (createdMs === null) return 0.22;
 	const ageMs = Math.max(0, nowMs - createdMs);
-	if (ageMs <= NEWNESS_HOUR_MS) return 1;
-	if (ageMs <= NEWNESS_DAY_MS) {
-		const t = (ageMs - NEWNESS_HOUR_MS) / (NEWNESS_DAY_MS - NEWNESS_HOUR_MS);
-		return 0.85 - t * 0.25;
-	}
-	if (ageMs <= NEWNESS_WEEK_MS) {
-		const t = (ageMs - NEWNESS_DAY_MS) / (NEWNESS_WEEK_MS - NEWNESS_DAY_MS);
-		return 0.6 - t * 0.35;
-	}
-	if (ageMs <= NEWNESS_MONTH_MS) {
-		const t = (ageMs - NEWNESS_WEEK_MS) / (NEWNESS_MONTH_MS - NEWNESS_WEEK_MS);
-		return 0.25 - t * 0.13;
-	}
-	return 0.12;
+	if (ageMs <= NEWNESS_MINUTES_MS) return 1;
+	if (ageMs <= NEWNESS_HOURS_MS) return 0.76;
+	if (ageMs <= NEWNESS_WEEK_MS) return 0.52;
+	return 0.22;
+}
+
+function newnessBucketFromIntensity(intensity: number): NewnessBucket {
+	if (intensity >= 0.95) return "minutes";
+	if (intensity >= 0.7) return "hours";
+	if (intensity >= 0.45) return "week";
+	return "older";
 }
 
 export function newnessFillStyle(intensity: number, alpha: number): string {
-	const normalized = Math.min(1, Math.max(0.08, intensity));
-	const lightness = Math.round(26 + normalized * 56);
-	return `hsla(38, 70%, ${lightness}%, ${alpha})`;
+	const bucket = newnessBucketFromIntensity(intensity);
+	if (bucket === "minutes") return `rgba(255, 246, 150, ${alpha})`;
+	if (bucket === "hours") return `rgba(255, 198, 96, ${alpha})`;
+	if (bucket === "week") return `rgba(244, 146, 78, ${alpha})`;
+	return `rgba(118, 111, 102, ${alpha})`;
 }
 
 export function isNewSinceLastSeen(createdAt: string | undefined, lastSeenMs: number | null): boolean {

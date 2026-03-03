@@ -1406,11 +1406,11 @@ $effect(() => {
 						<span class="text-[var(--sig-text)]">Color</span> = {nodeColorMode === "newness" ? "newness" : "source"}
 					</div>
 					{#if nodeColorMode === "newness"}
-						<div class="flex items-center gap-2 text-[10px] text-[var(--sig-text-muted)] mb-1.5">
-							<span class="inline-block w-[7px] h-[7px] rounded-full" style={`background:${newnessLegendColor(30 * 60 * 1000, 0.95)}`}></span>
-							<span class="inline-block w-[7px] h-[7px] rounded-full" style={`background:${newnessLegendColor(12 * 60 * 60 * 1000, 0.85)}`}></span>
-							<span class="inline-block w-[7px] h-[7px] rounded-full" style={`background:${newnessLegendColor(7 * 24 * 60 * 60 * 1000, 0.75)}`}></span>
-							<span>last hour → week+</span>
+						<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[var(--sig-text-muted)] mb-1.5">
+							<span class="inline-flex items-center gap-1"><span class="inline-block w-[8px] h-[8px] rounded-full" style={`background:${newnessLegendColor(5 * 60 * 1000, 0.95)}`}></span>last few minutes</span>
+							<span class="inline-flex items-center gap-1"><span class="inline-block w-[8px] h-[8px] rounded-full" style={`background:${newnessLegendColor(3 * 60 * 60 * 1000, 0.9)}`}></span>last few hours</span>
+							<span class="inline-flex items-center gap-1"><span class="inline-block w-[8px] h-[8px] rounded-full" style={`background:${newnessLegendColor(3 * 24 * 60 * 60 * 1000, 0.85)}`}></span>last week</span>
+							<span class="inline-flex items-center gap-1"><span class="inline-block w-[8px] h-[8px] rounded-full" style={`background:${newnessLegendColor(30 * 24 * 60 * 60 * 1000, 0.8)}`}></span>older</span>
 						</div>
 						<div class="flex flex-wrap gap-1 mb-1.5">
 							{#each legendSourceCounts as source}
