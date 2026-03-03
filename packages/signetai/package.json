@@ -18,7 +18,7 @@
   "scripts": {
     "build": "bun run build:cli && bun run build:daemon && bun run build:dashboard",
     "build:cli": "bun build ../cli/src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
-    "build:daemon": "bun build ../daemon/src/daemon.ts --outfile ./dist/daemon.js --target bun --external @1password/sdk --external onnxruntime-node && bun build ../daemon/src/mcp-stdio.ts --outfile ./dist/mcp-stdio.js --target bun --external @1password/sdk --external onnxruntime-node",
+    "build:daemon": "bun build ../daemon/src/daemon.ts --outfile ./dist/daemon.js --target bun --external @1password/sdk --external onnxruntime-node --external sharp && bun build ../daemon/src/mcp-stdio.ts --outfile ./dist/mcp-stdio.js --target bun --external @1password/sdk --external onnxruntime-node --external sharp",
     "build:dashboard": "rm -rf ./dashboard && cp -r ../cli/dashboard/build ./dashboard 2>/dev/null || echo 'Dashboard not built yet'",
     "prepublishOnly": "bun run build",
     "postinstall": "node ./bin/postinstall.cjs || true"
