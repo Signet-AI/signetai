@@ -9,7 +9,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -54,7 +54,7 @@ if (!existsSync(cliPath)) {
 }
 
 // Import and run CLI
-import(cliPath).catch((err) => {
+import(pathToFileURL(cliPath).href).catch((err) => {
 	console.error("Failed to start Signet:", err.message);
 	process.exit(1);
 });
