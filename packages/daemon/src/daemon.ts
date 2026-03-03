@@ -29,6 +29,9 @@ import {
 	parseSimpleYaml,
 	stripSignetBlock,
 	vectorSearch,
+	CONNECTOR_PROVIDERS,
+	type ConnectorConfig,
+	type SyncCursor,
 } from "@signet/core";
 import { watch } from "chokidar";
 import { type Context, Hono } from "hono";
@@ -3644,24 +3647,25 @@ function startConnectorSync(
 		return { status: "already-syncing" };
 	}
 
-	let config: {
-		id: string;
-		provider: "filesystem" | "github-docs" | "gdrive";
-		displayName: string;
-		settings: Record<string, unknown>;
-		enabled: boolean;
-	};
+	let parsed: unknown;
 	try {
-		config = JSON.parse(connectorRow.config_json) as {
-			id: string;
-			provider: "filesystem" | "github-docs" | "gdrive";
-			displayName: string;
-			settings: Record<string, unknown>;
-			enabled: boolean;
-		};
+		parsed = JSON.parse(connectorRow.config_json);
 	} catch {
 		return { status: "error", error: "Connector config is invalid JSON" };
 	}
+	if (
+		typeof parsed !== "object" ||
+		parsed === null ||
+		!("provider" in parsed) ||
+		typeof (parsed as Record<string, unknown>).provider !== "string" ||
+		!(CONNECTOR_PROVIDERS as readonly string[]).includes(
+			(parsed as Record<string, unknown>).provider as string,
+		)
+	) {
+		return { status: "error", error: "Invalid connector config" };
+	}
+	// provider validated above — safe to treat as ConnectorConfig
+	const config = parsed as ConnectorConfig;
 
 	if (config.provider !== "filesystem") {
 		return { status: "unsupported", provider: config.provider };
@@ -3670,23 +3674,23 @@ function startConnectorSync(
 	updateConnectorStatus(accessor, connectorId, "syncing");
 	const connector = createFilesystemConnector(config, accessor);
 
-	let incrementalCursor:
-		| {
-				lastSyncAt: string;
-				checkpoint?: string;
-				version?: number;
-		  }
-		| null = null;
+	let incrementalCursor: SyncCursor | null = null;
 	if (mode === "incremental") {
 		if (!connectorRow.cursor_json) {
 			incrementalCursor = { lastSyncAt: new Date(0).toISOString() };
 		} else {
 			try {
-				incrementalCursor = JSON.parse(connectorRow.cursor_json) as {
-					lastSyncAt: string;
-					checkpoint?: string;
-					version?: number;
-				};
+				const cursorParsed: unknown = JSON.parse(connectorRow.cursor_json);
+				if (
+					typeof cursorParsed === "object" &&
+					cursorParsed !== null &&
+					"lastSyncAt" in cursorParsed &&
+					typeof (cursorParsed as Record<string, unknown>).lastSyncAt === "string"
+				) {
+					incrementalCursor = cursorParsed as SyncCursor;
+				} else {
+					incrementalCursor = { lastSyncAt: new Date(0).toISOString() };
+				}
 			} catch {
 				incrementalCursor = { lastSyncAt: new Date(0).toISOString() };
 			}
@@ -3821,7 +3825,7 @@ app.post("/api/connectors/resync", async (c) => {
 			failed,
 		});
 	} catch (e) {
-		logger.error("connectors", "Failed to trigger bulk resync", e as Error);
+		logger.error("connectors", "Failed to trigger bulk resync", e instanceof Error ? e : new Error(String(e)));
 		return c.json({
 			status: "error",
 			error: "Failed to trigger connector re-sync",
