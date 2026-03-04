@@ -212,7 +212,7 @@ function checkModelDrift(db: ReadDb): EmbeddingCheckResult {
 function checkNullVectors(db: ReadDb): EmbeddingCheckResult {
 	const row = db
 		.prepare(
-			"SELECT COUNT(*) AS n FROM embeddings WHERE vector IS NULL OR length(vector) = 0",
+			"SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN vec_embeddings v ON v.id = e.id WHERE v.id IS NULL",
 		)
 		.get() as { n: number } | undefined;
 	const count = row?.n ?? 0;
