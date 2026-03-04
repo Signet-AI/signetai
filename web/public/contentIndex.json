@@ -434,5 +434,29 @@
       "docs/pipeline"
     ],
     "collection": "blog"
+  },
+  "blog/you-think-signet-is-a-memory-system": {
+    "title": "You Think Signet Is a Memory System",
+    "url": "/blog/you-think-signet-is-a-memory-system/",
+    "tags": [
+      "positioning",
+      "architecture",
+      "identity"
+    ],
+    "links": [
+      "docs/dashboard",
+      "blog/introducing-signet",
+      "docs/memory",
+      "docs/secrets",
+      "docs/skills",
+      "docs/daemon",
+      "docs/harnesses",
+      "docs/pipeline",
+      "blog/knowledge-architecture",
+      "docs/knowledge-architecture",
+      "blog/why-local-first-memory",
+      "docs/vision"
+    ],
+    "collection": "blog"
   }
 }

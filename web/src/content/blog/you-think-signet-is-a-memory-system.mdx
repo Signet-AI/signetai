@@ -1,0 +1,117 @@
+---
+title: "You Think Signet Is a Memory System"
+description: "Most people hear 'agent memory' and think vector database. That's not what this is. Signet is a persistent cognition layer — the missing piece between agents and models."
+date: 2026-03-03
+author: "Nicholai & Mr. Claude"
+tags: ["positioning", "architecture", "identity"]
+image: /blog/signet-is-not-just-memory.png
+---
+
+When most people first encounter Signet, they think it's a memory system.
+
+We don't blame them. That's how we used to explain it too. Portable memory, encrypted secrets, agent identity. All true. All features that exist. But when you describe it that way, it sounds like another entry in a crowded field of AI memory tools.
+
+It's not.
+
+And the difference matters.
+
+## The Wrong Mental Model
+
+The current generation of AI memory tools mostly does the same thing: store conversations in a vector database, retrieve relevant chunks when prompted, and inject them back into context. Some do it well. Some add hosted [[dashboard|dashboards]] or cloud sync. But the underlying idea is the same — save what the AI said, search it later.
+
+That's useful. It's also not what we're building.
+
+Signet doesn't store conversations. It doesn't compete with mem0 or supermemory or whatever the next hosted memory API is. Those tools answer the question "how do I give my AI a longer memory?" Signet answers a different question entirely.
+
+## The Actual Question
+
+Here's the question: **what if the agent is the thing that persists, not the model?**
+
+Right now, every AI interaction is fundamentally stateless. You open a session, do some work, close it, and the model forgets everything. Switch from Claude to GPT? Start over. Switch from Cursor to Claude Code? Start over. Come back tomorrow? The model has no idea who you are.
+
+That's not a memory problem. That's an architecture problem.
+
+The model is the center of the system, and everything revolves around it. Your identity, your context, your preferences — all trapped inside a session that evaporates when the window closes.
+
+Signet flips that. The agent becomes the center. The model becomes a replaceable reasoning engine that plugs into a persistent environment. We wrote about this idea in depth in [[blog/introducing-signet|It Learns Now]].
+
+## A Home Directory for AI Agents
+
+The simplest way to understand Signet is this: it's a home directory for your AI agent.
+
+Just like `~/.config/` gives your programs a place to store preferences, and `~/.ssh/` gives your machine a persistent identity, `~/.agents/` gives your AI agent a persistent home.
+
+[[memory|Memory]] lives there. [[identity|Identity]] lives there. [[secrets|Secrets]] live there. [[skills|Skills]] live there.
+
+The model doesn't own any of it. The model is a guest that reads what it needs from that home directory when a session starts, does its work, and writes back what it learned when the session ends. The [[daemon]] manages this lifecycle — watching for changes, syncing across [[harnesses|platforms]], and keeping everything consistent. Swap the model out entirely and the agent stays the same entity.
+
+That's not a feature. That's a different architecture.
+
+## Where Signet Sits in the Stack
+
+Today the AI stack looks roughly like this:
+
+```
+applications
+agent frameworks
+models
+hardware
+```
+
+Signet introduces a layer that doesn't exist yet:
+
+```
+applications
+agents
+persistent cognition layer  ← Signet
+models
+hardware
+```
+
+Historically, the layers that sit between systems tend to become important. TCP/IP sits between machines and networks. POSIX sits between software and operating systems. SQL sits between applications and databases.
+
+Signet sits between agents and models.
+
+That's a different kind of product than a memory API.
+
+## Knowledge, Not Conversations
+
+Most AI memory systems store what happened. Signet tries to learn what matters.
+
+The [[pipeline]] doesn't save your chat logs. It extracts knowledge from conversations — preferences, decisions, project context, relationships, tool usage patterns — and maintains that knowledge over time through decay, deduplication, and relevance scoring. If you want to understand how that extraction works at a deeper level, [[blog/knowledge-architecture|The Database Knows What You Did Last Summer]] walks through the full [[docs/knowledge-architecture|knowledge architecture]].
+
+The difference is subtle but significant.
+
+Storing conversations gives you: "here's everything that was said."
+
+Maintaining knowledge gives you: "here's what the system actually learned."
+
+One grows unbounded and gets noisier over time. The other gets sharper. The [[pipeline]] prunes what's stale, reinforces what's confirmed, and surfaces what's relevant. Your agent doesn't just remember more — it understands better.
+
+## What This Makes Possible
+
+Once a persistent cognition layer exists, several things follow naturally.
+
+**Portable identity.** Your agent isn't locked to a platform. Switch from Claude Code to OpenCode to OpenClaw — same agent, same knowledge, same personality. The center of gravity shifts from the AI company to you.
+
+**Model independence.** If memory and identity live outside the model, then models become interchangeable. Use Claude for coding, GPT for writing, a local model for private work. The agent itself stays the same entity across all of them.
+
+**Compounding knowledge.** Over time the [[memory|knowledge base]] accumulates real understanding of your work — your codebase, your preferences, your decision patterns. The agent becomes more useful the longer you use it, instead of resetting every session.
+
+**Full inspectability.** Because everything lives [[blog/why-local-first-memory|locally]] in SQLite and markdown files, you can see exactly what your agent knows. Open the [[dashboard]]. Read the memories. Understand why the system made a decision. No black box.
+
+## The Difference
+
+There's a line from our [[docs/vision|vision]] document that captures it:
+
+*"Signet is the difference between a tool that remembers and a mind that persists."*
+
+Memory systems give AI a longer recall window. Signet gives agents a persistent existence. The model handles reasoning. The surrounding system handles everything else — who the agent is, what it knows, what it's allowed to access, and how it evolves over time.
+
+LLMs are powerful reasoning engines. But they forget everything.
+
+Signet is the layer that remembers.
+
+---
+
+Agents that don't reset.

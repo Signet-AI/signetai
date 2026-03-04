@@ -54,6 +54,7 @@ coverage/
 # Local references
 references/
 dogfood-output/
+email*
 
 # Web (Cloudflare Worker)
 web/.wrangler/
