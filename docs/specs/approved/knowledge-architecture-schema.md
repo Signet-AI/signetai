@@ -221,35 +221,94 @@ Tasks share entity structure but use separate lifecycle rules.
 
 ---
 
-## 6) Extraction and Backfill Contracts
+## 6) Structural Assignment (Two-Pass Architecture)
 
-### 6.1 New structural assignment stage
+Structural assignment uses a two-pass architecture to balance speed and
+accuracy. Pass 1 runs synchronously on the hot path with no LLM call.
+Pass 2 runs in the background as separate pipeline jobs.
 
-After fact extraction and decision, pipeline runs structural assignment per
-fact memory:
+### 6.1 Pass 1: Heuristic entity linking (synchronous, no LLM)
 
-1. resolve primary entity (existing or new)
-2. resolve/create aspect under that entity
-3. classify fact as `attribute` or `constraint`
-4. optionally emit dependency edges
-5. for task-like facts, assign/maintain `entity_type='task'` and `task_meta`
+After fact extraction and entity persistence, the pipeline links each
+written fact memory to its primary entity:
 
-### 6.2 Assignment invariants
+1. Resolve primary entity from the extraction triple's `source` field
+   (already persisted by `txPersistEntities`)
+2. Create a stub `entity_attributes` row with `aspect_id = NULL` and
+   `kind = 'attribute'` (default)
+3. Enqueue two background jobs: `structural_classify` and
+   `structural_dependency`
+
+Pass 1 does NOT attempt aspect classification or constraint detection.
+It only establishes the fact → entity link. This is cheap and reliable —
+the extraction already identifies entities.
+
+### 6.2 Pass 2a: Structural classification (background, LLM)
+
+A dedicated LLM prompt classifies each unassigned fact into an aspect
+and determines whether it is an attribute or constraint.
+
+Input per batch (max 8-10 facts):
+- The parent entity (name, type, existing aspects)
+- Suggested aspect patterns for the entity type
+- The fact content
+
+Output per fact:
+- `aspect` — existing or new aspect name
+- `kind` — `'attribute'` or `'constraint'`
+- `new` — whether this creates a new aspect
+
+Job type: `structural_classify`. Same lease/retry/dead-letter mechanics
+as extraction jobs. Batched by entity to provide aspect context.
+
+### 6.3 Pass 2b: Dependency extraction (background, LLM)
+
+A separate LLM prompt identifies structural dependencies between
+entities implied by fact content.
+
+Input per batch (max 5 facts):
+- The source entity
+- The fact content
+- Known entities in the graph (for target resolution)
+
+Output per fact:
+- `dep_target` — target entity name (or null)
+- `dep_type` — `'uses'` | `'requires'` | `'owned_by'` | `'blocks'` |
+  `'informs'` (or null)
+
+Pre-filter: only facts whose extraction triples reference other entities
+are sent to this pass. Pure self-referential facts skip it entirely.
+
+Job type: `structural_dependency`. Independent queue from classification.
+
+### 6.4 Assignment invariants
 
 1. Every active atomic fact memory should map to exactly one primary
    `entity_attributes` row.
 2. Constraints always map to `kind='constraint'`.
 3. Dependency edges are additive and idempotent.
 4. `superseded` attributes remain auditable; they do not vanish.
+5. Pass 2a and 2b are isolated — errors in one do not affect the other.
+6. Facts with `aspect_id = NULL` are valid (awaiting classification).
 
-### 6.3 Backfill behavior
+### 6.5 Backfill behavior
 
 Maintenance worker backfills unassigned legacy memories incrementally:
 
-1. scan unassigned memories in batches
-2. assign entity/aspect/attribute with confidence
+1. scan memories with no `entity_attributes` row in batches
+2. run pass 1 (entity linking) then enqueue pass 2 jobs
 3. skip low-confidence rows and record telemetry
 4. never block foreground hooks
+
+### 6.6 Model constraints (tested against qwen3:4b)
+
+- Classification prompt handles 8-10 facts per batch reliably
+- Dependency prompt handles 5 facts per batch reliably
+- Beyond these limits, the model drops facts or loses format discipline
+- Prompt must use short JSON field names and minimal boilerplate
+- `/no_think` flag suppresses chain-of-thought for structured output
+- `temperature: 0.1` for deterministic classification
+- Prompt specifications are documented in the KA-2 sprint brief
 
 ---
 
