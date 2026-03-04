@@ -263,8 +263,10 @@ Run these checks:
 
 ```bash
 # Find all OpenClaw config files
-find ~/.openclaw ~/.clawdbot ~/.moltbot ~/.config/openclaw \
-  ~/.config/clawdbot ~/.config/moltbot ~/.local/state/openclaw \
+find ~/.openclaw ~/.clawdbot ~/.moltbot \
+  ~/.config/openclaw ~/.config/clawdbot ~/.config/moltbot \
+  ~/.local/state/openclaw ~/.local/state/clawdbot ~/.local/state/moltbot \
+  -name "*.json" -o -name "*.json5" 2>/dev/null
   -name "*.json" -o -name "*.json5" 2>/dev/null
 
 # For each config found, check these fields:
