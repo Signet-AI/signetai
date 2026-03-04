@@ -27,8 +27,13 @@ for (const sqlitePath of HOMEBREW_SQLITE_PATHS) {
 	if (existsSync(sqlitePath)) {
 		try {
 			Database.setCustomSQLite(sqlitePath);
-		} catch {
-			// SQLite already loaded (e.g., in test environment) — skip
+		} catch (e) {
+			// SQLite already loaded (e.g., in test environment) — skip.
+			// Log so users can diagnose extension-loading failures.
+			console.warn(
+				`[db-accessor] setCustomSQLite(${sqlitePath}) skipped:`,
+				(e as Error).message ?? e,
+			);
 		}
 		break;
 	}
@@ -96,8 +101,11 @@ function loadVecExtension(db: Database): void {
 	if (vecExtPath) {
 		try {
 			db.loadExtension(vecExtPath);
-		} catch {
-			// Extension may already be loaded or unavailable
+		} catch (e) {
+			console.warn(
+				"[db-accessor] loadExtension failed:",
+				(e as Error).message ?? e,
+			);
 		}
 	}
 }

@@ -2980,8 +2980,12 @@ app.post("/api/memory/recall", async (c) => {
 });
 
 // Alias: GET /api/memory/search?q=... (spec-compatible)
+// Calls hybridRecall directly instead of self-fetching to avoid potential
+// issues with loopback fetch in single-threaded runtimes.
 app.get("/api/memory/search", async (c) => {
-	const q = c.req.query("q") ?? "";
+	const q = (c.req.query("q") ?? "").trim();
+	if (!q) return c.json({ error: "query is required" }, 400);
+
 	const limit = Number.parseInt(c.req.query("limit") ?? "10", 10);
 	const type = c.req.query("type");
 	const tags = c.req.query("tags");
@@ -2990,20 +2994,27 @@ app.get("/api/memory/search", async (c) => {
 	const importanceMin = c.req.query("importance_min");
 	const since = c.req.query("since");
 
-	return fetch(`http://${HOST}:${PORT}/api/memory/recall`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			query: q,
-			limit,
-			type,
-			tags,
-			who,
-			pinned: pinned === "1" || pinned === "true",
-			importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
-			since,
-		}),
-	});
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	try {
+		const result = await hybridRecall(
+			{
+				query: q,
+				limit,
+				type,
+				tags,
+				who,
+				pinned: pinned === "1" || pinned === "true",
+				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
+				since,
+			},
+			cfg,
+			fetchEmbedding,
+		);
+		return c.json(result);
+	} catch (e) {
+		logger.error("memory", "Search (recall alias) failed", e as Error);
+		return c.json({ error: "Recall failed", results: [] }, 500);
+	}
 });
 
 // ============================================================================
