@@ -4,13 +4,13 @@ title: "Knowledge Architecture Schema and Traversal Spec"
 
 # Knowledge Architecture Schema and Traversal Spec
 
-Status: Planning (v0)
+Status: Approved (v1)
 
 Audience: Core + Daemon maintainers
 
 Spec metadata:
 - ID: `knowledge-architecture-schema`
-- Status: `planning`
+- Status: `approved`
 - Hard depends on: `memory-pipeline-v2`, `session-continuity-protocol`,
   `procedural-memory-plan`
 - Blocks: `predictive-memory-scorer`
@@ -113,12 +113,28 @@ Extend `entities.entity_type` usage to the canonical set:
 - `task`
 - `unknown` (fallback)
 
-### 5.2 New table: `entity_aspects`
+### 5.2 Backfill: `agent_id` on `entities`
+
+The `entities` table (migration 002) predates the multi-agent scoping
+invariant. Add `agent_id` with a default and index:
+
+```sql
+ALTER TABLE entities ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX idx_entities_agent ON entities(agent_id);
+```
+
+All new KA tables include `agent_id` for database-level tenant isolation.
+This is not a KA concern — it is the multi-agent invariant applied
+uniformly. Queries filter by `agent_id` unless explicitly requesting
+cross-agent results.
+
+### 5.3 New table: `entity_aspects`
 
 ```sql
 CREATE TABLE entity_aspects (
   id TEXT PRIMARY KEY,
   entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL DEFAULT 'default',
   name TEXT NOT NULL,
   canonical_name TEXT NOT NULL,
   weight REAL NOT NULL DEFAULT 0.5,
@@ -128,17 +144,19 @@ CREATE TABLE entity_aspects (
 );
 
 CREATE INDEX idx_entity_aspects_entity ON entity_aspects(entity_id);
+CREATE INDEX idx_entity_aspects_agent ON entity_aspects(agent_id);
 CREATE INDEX idx_entity_aspects_weight ON entity_aspects(weight DESC);
 ```
 
 `weight` is structural centrality + learned utility. It is not pure frequency.
 
-### 5.3 New table: `entity_attributes`
+### 5.4 New table: `entity_attributes`
 
 ```sql
 CREATE TABLE entity_attributes (
   id TEXT PRIMARY KEY,
   aspect_id TEXT NOT NULL REFERENCES entity_aspects(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL DEFAULT 'default',
   memory_id TEXT REFERENCES memories(id) ON DELETE SET NULL,
   kind TEXT NOT NULL,                 -- 'attribute' | 'constraint'
   content TEXT NOT NULL,
@@ -152,19 +170,21 @@ CREATE TABLE entity_attributes (
 );
 
 CREATE INDEX idx_entity_attributes_aspect ON entity_attributes(aspect_id);
+CREATE INDEX idx_entity_attributes_agent ON entity_attributes(agent_id);
 CREATE INDEX idx_entity_attributes_kind ON entity_attributes(kind);
 CREATE INDEX idx_entity_attributes_status ON entity_attributes(status);
 ```
 
 Constraints are first-class rows (`kind='constraint'`), not inferred tags.
 
-### 5.4 New table: `entity_dependencies`
+### 5.5 New table: `entity_dependencies`
 
 ```sql
 CREATE TABLE entity_dependencies (
   id TEXT PRIMARY KEY,
   source_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
   target_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL DEFAULT 'default',
   aspect_id TEXT REFERENCES entity_aspects(id) ON DELETE SET NULL,
   dependency_type TEXT NOT NULL,      -- 'uses' | 'requires' | 'owned_by' | 'blocks' | 'informs'
   strength REAL NOT NULL DEFAULT 0.5,
@@ -174,15 +194,17 @@ CREATE TABLE entity_dependencies (
 
 CREATE INDEX idx_entity_dependencies_source ON entity_dependencies(source_entity_id);
 CREATE INDEX idx_entity_dependencies_target ON entity_dependencies(target_entity_id);
+CREATE INDEX idx_entity_dependencies_agent ON entity_dependencies(agent_id);
 ```
 
 These are explicit traversal edges. They are not similarity artifacts.
 
-### 5.5 New table: `task_meta`
+### 5.6 New table: `task_meta`
 
 ```sql
 CREATE TABLE task_meta (
   entity_id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL DEFAULT 'default',
   status TEXT NOT NULL,                -- 'open' | 'in_progress' | 'blocked' | 'done' | 'cancelled'
   expires_at TEXT,
   retention_until TEXT,
@@ -190,6 +212,7 @@ CREATE TABLE task_meta (
   updated_at TEXT NOT NULL
 );
 
+CREATE INDEX idx_task_meta_agent ON task_meta(agent_id);
 CREATE INDEX idx_task_meta_status ON task_meta(status);
 CREATE INDEX idx_task_meta_retention ON task_meta(retention_until);
 ```
@@ -317,8 +340,10 @@ This keeps one graph with type-specific lifecycle rules.
 
 ### KA-1 Schema and types
 
-1. Add migration `017-knowledge-structure.ts` (`entity_aspects`,
-   `entity_attributes`, `entity_dependencies`, `task_meta`)
+1. Add migration `019-knowledge-structure.ts`:
+   - Backfill `agent_id` on `entities` table
+   - Create `entity_aspects`, `entity_attributes`, `entity_dependencies`,
+     `task_meta` — all with `agent_id` column
 2. Add core types and read/write helpers
 
 ### KA-2 Structural assignment in pipeline
