@@ -64,8 +64,17 @@ Tables affected: `memories`, `entities`, `entity_aspects`,
 `entity_attributes`, `entity_dependencies`, `skill_meta`, `task_meta`,
 `session_checkpoints`, `session_memories`, `predictor_comparisons`.
 
+Note: `entities` (migration 002) predates this invariant and does not
+yet have `agent_id`. Migration 019 (KA-1) backfills it. `skill_meta`
+(migration 018) already has `agent_id`.
+
 Scoping rule: queries filter by `agent_id` unless explicitly requesting
 cross-agent results (e.g., shared skill lookup with allowlist).
+
+The `agent_id` column is infrastructure for database-level tenant
+isolation, not a knowledge architecture concern. It exists on every
+table for the same reason: so multiple agents sharing the same SQLite
+file don't step on each other's data.
 
 Skills are scoped to `agent_id` in the graph. The filesystem pool
 (`~/.agents/skills/`) is shared, but graph nodes (entity + skill_meta +

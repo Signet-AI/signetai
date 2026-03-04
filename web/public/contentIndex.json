@@ -193,6 +193,13 @@
     ],
     "collection": "docs"
   },
+  "docs/ideal-signet": {
+    "title": "Ideal Signet",
+    "url": "/docs/ideal-signet/",
+    "tags": [],
+    "links": [],
+    "collection": "docs"
+  },
   "docs/knowledge-architecture": {
     "title": "Knowledge Architecture",
     "url": "/docs/knowledge-architecture/",
