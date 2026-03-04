@@ -2,6 +2,23 @@
 
 All notable changes to Signet are documented here.
 
+## [0.36.2] - 2026-03-04
+
+### Features
+
+- **marketplace**: unify app detail sheets and scoped reviews
+
+### Bug Fixes
+
+- **dashboard**: clear remaining svelte warnings
+- **dashboard**: reduce marketplace warning noise
+
+### Docs
+
+- **web**: replace introducing signet blog post with architectural explainer
+- **web**: add positioning blog post and update hero copy
+
+
 ## [0.36.0] - 2026-03-03
 
 ### Docs
