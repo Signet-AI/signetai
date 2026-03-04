@@ -103,8 +103,9 @@ function insertNearestNeighbor(neighbors: ScoredNeighbor[], next: ScoredNeighbor
 // Vector helpers
 // ---------------------------------------------------------------------------
 
-function blobToVector(buf: Uint8Array, dimensions: number | null): number[] {
-	const raw = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+function blobToVector(buf: Uint8Array | ArrayBuffer, dimensions: number | null): number[] {
+	const raw =
+		buf instanceof ArrayBuffer ? buf : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 	const f32 = new Float32Array(raw);
 	const size = typeof dimensions === "number" && dimensions > 0 && dimensions <= f32.length ? dimensions : f32.length;
 	return Array.from(f32.slice(0, size));
@@ -238,12 +239,12 @@ interface EmbeddingRow {
 	source_type: string | null;
 	source_id: string | null;
 	created_at: string;
-	vector: Uint8Array;
+	vector: Uint8Array | ArrayBuffer;
 	dimensions: number | null;
 }
 
-function isBlob(v: unknown): v is Uint8Array {
-	return v instanceof Uint8Array || Buffer.isBuffer(v);
+function isBlob(v: unknown): v is Uint8Array | ArrayBuffer {
+	return v instanceof Uint8Array || Buffer.isBuffer(v) || v instanceof ArrayBuffer;
 }
 
 function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
@@ -274,12 +275,13 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 const EMBEDDINGS_SELECT_SQL = `
 	SELECT m.id, m.content, m.who, m.importance, m.type, m.tags, m.pinned,
 	       m.source_type, m.source_id, m.created_at,
-	       e.vector, e.dimensions
+	       v.embedding AS vector, e.dimensions
 `;
 
 const EMBEDDINGS_FROM_SQL = `
 	FROM embeddings e
 	INNER JOIN memories m ON m.id = e.source_id
+	INNER JOIN vec_embeddings v ON v.id = e.id
 	WHERE e.source_type = 'memory'
 `;
 
