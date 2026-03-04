@@ -870,8 +870,7 @@ body {
   // Radius from CSS custom property
   function getRadius() {
     const style = getComputedStyle(document.documentElement);
-    const raw = style.getPropertyValue('--radius-orbit').trim();
-    // Parse min(42vw, 42vh)
+    // Parse min(42vw, 42vh) from CSS custom property
     const vw = window.innerWidth * 0.42;
     const vh = window.innerHeight * 0.42;
     return Math.min(vw, vh);
