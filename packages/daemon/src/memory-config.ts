@@ -28,7 +28,9 @@ export interface MemorySearchConfig {
 export { PIPELINE_FLAGS };
 export type { PipelineFlag, PipelineV2Config };
 
-export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
+const MAC_OLLAMA_DEFAULTS = process.platform === "darwin" && process.arch === "arm64";
+
+const BASE_PIPELINE_V2_DEFAULTS: PipelineV2Config = {
 	enabled: true,
 	shadowMode: false,
 	mutationsFrozen: false,
@@ -105,6 +107,22 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		batchSize: 8,
 	},
 };
+
+export const DEFAULT_PIPELINE_V2: PipelineV2Config = MAC_OLLAMA_DEFAULTS
+	? {
+			...BASE_PIPELINE_V2_DEFAULTS,
+			extraction: {
+				...BASE_PIPELINE_V2_DEFAULTS.extraction,
+				provider: "ollama",
+				model: "qwen2.5:7b-instruct",
+				timeout: 300000,
+			},
+			worker: {
+				...BASE_PIPELINE_V2_DEFAULTS.worker,
+				leaseTimeoutMs: 420000,
+			},
+		}
+	: BASE_PIPELINE_V2_DEFAULTS;
 
 export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
