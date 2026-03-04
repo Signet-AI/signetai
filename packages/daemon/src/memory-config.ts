@@ -185,7 +185,7 @@ export function loadPipelineConfig(
 	const embeddingTrackerRaw = raw.embeddingTracker as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
-	const d = DEFAULT_PIPELINE_V2;
+	const baseDefaults = BASE_PIPELINE_V2_DEFAULTS;
 
 	function resolveBool(nested: unknown, flat: unknown, fallback: boolean): boolean {
 		if (typeof nested === "boolean") return nested;
@@ -209,7 +209,12 @@ export function loadPipelineConfig(
 						  nestedProvider === undefined &&
 						  flatProvider === undefined
 						? "ollama"
-						: d.extraction.provider;
+						: DEFAULT_PIPELINE_V2.extraction.provider;
+
+	const d =
+		MAC_OLLAMA_PROFILE && resolvedProvider === "ollama"
+			? DEFAULT_PIPELINE_V2
+			: BASE_PIPELINE_V2_DEFAULTS;
 
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : d.enabled,

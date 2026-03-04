@@ -147,14 +147,26 @@ describe("loadMemoryConfig", () => {
 			expect(DEFAULT_PIPELINE_V2.extraction.provider).toBe("ollama");
 			expect(DEFAULT_PIPELINE_V2.extraction.model).toBe("qwen2.5:7b-instruct");
 			expect(DEFAULT_PIPELINE_V2.extraction.timeout).toBe(180000);
+			expect(DEFAULT_PIPELINE_V2.extraction.minConfidence).toBe(0.6);
+			expect(DEFAULT_PIPELINE_V2.worker.pollMs).toBe(1000);
 			expect(DEFAULT_PIPELINE_V2.worker.leaseTimeoutMs).toBe(420000);
+			expect(DEFAULT_PIPELINE_V2.graph.enabled).toBe(false);
+			expect(DEFAULT_PIPELINE_V2.reranker.topN).toBe(25);
+			expect(DEFAULT_PIPELINE_V2.reranker.timeoutMs).toBe(2500);
+			expect(DEFAULT_PIPELINE_V2.autonomous.maintenanceIntervalMs).toBe(600000);
 			return;
 		}
 
 		expect(DEFAULT_PIPELINE_V2.extraction.provider).toBe("claude-code");
 		expect(DEFAULT_PIPELINE_V2.extraction.model).toBe("haiku");
 		expect(DEFAULT_PIPELINE_V2.extraction.timeout).toBe(90000);
+		expect(DEFAULT_PIPELINE_V2.extraction.minConfidence).toBe(0.7);
+		expect(DEFAULT_PIPELINE_V2.worker.pollMs).toBe(2000);
 		expect(DEFAULT_PIPELINE_V2.worker.leaseTimeoutMs).toBe(300000);
+		expect(DEFAULT_PIPELINE_V2.graph.enabled).toBe(true);
+		expect(DEFAULT_PIPELINE_V2.reranker.topN).toBe(20);
+		expect(DEFAULT_PIPELINE_V2.reranker.timeoutMs).toBe(2000);
+		expect(DEFAULT_PIPELINE_V2.autonomous.maintenanceIntervalMs).toBe(1800000);
 	});
 
 	it("loads pipelineV2 flags from agent.yaml (flat keys, backward compat)", () => {
@@ -468,6 +480,26 @@ describe("loadPipelineConfig", () => {
 		expect(result.autonomous.allowUpdateDelete).toBe(true);
 		expect(result.autonomous.maintenanceIntervalMs).toBe(60000);
 		expect(result.autonomous.maintenanceMode).toBe("execute");
+	});
+
+	it("uses base extraction defaults for non-ollama providers on Apple Silicon", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						provider: "claude-code",
+						model: "haiku",
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.provider).toBe("claude-code");
+		expect(result.extraction.model).toBe("haiku");
+		expect(result.extraction.timeout).toBe(90000);
+		expect(result.extraction.minConfidence).toBe(0.7);
+		expect(result.worker.pollMs).toBe(2000);
+		expect(result.worker.leaseTimeoutMs).toBe(300000);
 	});
 
 	it("nested keys take precedence over flat keys", () => {
