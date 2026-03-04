@@ -110,39 +110,18 @@ export function upsertAspect(
 ): EntityAspect {
 	const canonical = toCanonicalName(params.name);
 	const ts = now();
+	const id = crypto.randomUUID();
 
 	return accessor.withWriteTx((db) => {
-		const existing = db
-			.prepare(
-				`SELECT * FROM entity_aspects
-				 WHERE entity_id = ? AND canonical_name = ? AND agent_id = ?`,
-			)
-			.get(params.entityId, canonical, params.agentId) as Record<string, unknown> | undefined;
-
-		if (existing) {
-			db.prepare(
-				`UPDATE entity_aspects
-				 SET name = ?, weight = ?, updated_at = ?
-				 WHERE id = ?`,
-			).run(
-				params.name,
-				params.weight ?? (existing.weight as number),
-				ts,
-				existing.id as string,
-			);
-			return rowToAspect({
-				...existing,
-				name: params.name,
-				weight: params.weight ?? (existing.weight as number),
-				updated_at: ts,
-			});
-		}
-
-		const id = crypto.randomUUID();
+		// Uses ON CONFLICT on the UNIQUE(entity_id, canonical_name) constraint
 		db.prepare(
 			`INSERT INTO entity_aspects
 			 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(entity_id, canonical_name) DO UPDATE SET
+			   name = excluded.name,
+			   weight = COALESCE(excluded.weight, entity_aspects.weight),
+			   updated_at = excluded.updated_at`,
 		).run(
 			id,
 			params.entityId,
@@ -154,16 +133,14 @@ export function upsertAspect(
 			ts,
 		);
 
-		return {
-			id,
-			entityId: params.entityId,
-			agentId: params.agentId,
-			name: params.name,
-			canonicalName: canonical,
-			weight: params.weight ?? 0.5,
-			createdAt: ts,
-			updatedAt: ts,
-		};
+		// Read back the actual row (may have kept old id on conflict)
+		const row = db
+			.prepare(
+				`SELECT * FROM entity_aspects
+				 WHERE entity_id = ? AND canonical_name = ? AND agent_id = ?`,
+			)
+			.get(params.entityId, canonical, params.agentId) as Record<string, unknown>;
+		return rowToAspect(row);
 	});
 }
 
@@ -212,7 +189,7 @@ export function createAttribute(
 	const ts = now();
 	const normalized = params.content.trim().toLowerCase().replace(/\s+/g, " ");
 
-	accessor.withWriteTx((db) => {
+	return accessor.withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO entity_attributes
 			 (id, aspect_id, agent_id, memory_id, kind, content,
@@ -232,23 +209,23 @@ export function createAttribute(
 			ts,
 			ts,
 		);
-	});
 
-	return {
-		id,
-		aspectId: params.aspectId,
-		agentId: params.agentId,
-		memoryId: params.memoryId ?? null,
-		kind: params.kind,
-		content: params.content,
-		normalizedContent: normalized,
-		confidence: params.confidence ?? 0.0,
-		importance: params.importance ?? 0.5,
-		status: "active",
-		supersededBy: null,
-		createdAt: ts,
-		updatedAt: ts,
-	};
+		return {
+			id,
+			aspectId: params.aspectId,
+			agentId: params.agentId,
+			memoryId: params.memoryId ?? null,
+			kind: params.kind,
+			content: params.content,
+			normalizedContent: normalized,
+			confidence: params.confidence ?? 0.0,
+			importance: params.importance ?? 0.5,
+			status: "active" as const,
+			supersededBy: null,
+			createdAt: ts,
+			updatedAt: ts,
+		};
+	});
 }
 
 export function getAttributesForAspect(
@@ -283,12 +260,13 @@ export function getConstraintsForEntity(
 			.prepare(
 				`SELECT ea.* FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
-				 WHERE asp.entity_id = ? AND ea.agent_id = ?
+				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				   AND ea.agent_id = ?
 				   AND ea.kind = 'constraint'
 				   AND ea.status = 'active'
 				 ORDER BY ea.importance DESC`,
 			)
-			.all(entityId, agentId) as Array<Record<string, unknown>>;
+			.all(entityId, agentId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToAttribute);
 	});
 }
@@ -459,42 +437,31 @@ export function upsertTaskMeta(
 ): TaskMeta {
 	const ts = now();
 
-	return accessor.withWriteTx((db) => {
-		const existing = db
-			.prepare("SELECT * FROM task_meta WHERE entity_id = ? AND agent_id = ?")
-			.get(params.entityId, params.agentId) as Record<string, unknown> | undefined;
+	const completedAt =
+		params.status === "done" || params.status === "cancelled" ? ts : null;
 
-		if (existing) {
-			db.prepare(
-				`UPDATE task_meta
-				 SET status = ?, expires_at = ?, retention_until = ?,
-				     completed_at = ?, updated_at = ?
-				 WHERE entity_id = ? AND agent_id = ?`,
-			).run(
-				params.status,
-				params.expiresAt ?? null,
-				params.retentionUntil ?? null,
-				params.status === "done" || params.status === "cancelled" ? ts : null,
-				ts,
-				params.entityId,
-				params.agentId,
-			);
-		} else {
-			db.prepare(
-				`INSERT INTO task_meta
-				 (entity_id, agent_id, status, expires_at, retention_until,
-				  completed_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				params.entityId,
-				params.agentId,
-				params.status,
-				params.expiresAt ?? null,
-				params.retentionUntil ?? null,
-				params.status === "done" || params.status === "cancelled" ? ts : null,
-				ts,
-			);
-		}
+	return accessor.withWriteTx((db) => {
+		// entity_id is PRIMARY KEY, so ON CONFLICT handles the upsert
+		db.prepare(
+			`INSERT INTO task_meta
+			 (entity_id, agent_id, status, expires_at, retention_until,
+			  completed_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(entity_id) DO UPDATE SET
+			   status = excluded.status,
+			   expires_at = excluded.expires_at,
+			   retention_until = excluded.retention_until,
+			   completed_at = excluded.completed_at,
+			   updated_at = excluded.updated_at`,
+		).run(
+			params.entityId,
+			params.agentId,
+			params.status,
+			params.expiresAt ?? null,
+			params.retentionUntil ?? null,
+			completedAt,
+			ts,
+		);
 
 		return {
 			entityId: params.entityId,
@@ -502,8 +469,7 @@ export function upsertTaskMeta(
 			status: params.status,
 			expiresAt: params.expiresAt ?? null,
 			retentionUntil: params.retentionUntil ?? null,
-			completedAt:
-				params.status === "done" || params.status === "cancelled" ? ts : null,
+			completedAt,
 			updatedAt: ts,
 		};
 	});
@@ -572,19 +538,21 @@ export function getStructuralDensity(
 			.prepare(
 				`SELECT COUNT(*) as n FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
-				 WHERE asp.entity_id = ? AND ea.agent_id = ?
+				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				   AND ea.agent_id = ?
 				   AND ea.kind = 'attribute' AND ea.status = 'active'`,
 			)
-			.get(entityId, agentId) as { n: number };
+			.get(entityId, agentId, agentId) as { n: number };
 
 		const constraints = db
 			.prepare(
 				`SELECT COUNT(*) as n FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
-				 WHERE asp.entity_id = ? AND ea.agent_id = ?
+				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				   AND ea.agent_id = ?
 				   AND ea.kind = 'constraint' AND ea.status = 'active'`,
 			)
-			.get(entityId, agentId) as { n: number };
+			.get(entityId, agentId, agentId) as { n: number };
 
 		const dependencies = db
 			.prepare(

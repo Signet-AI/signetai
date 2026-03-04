@@ -174,9 +174,9 @@ export async function installSkillNode(
 			// Insert new entity
 			db.prepare(
 				`INSERT INTO entities
-				 (id, name, canonical_name, entity_type, description, mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, 'skill', ?, 0, ?, ?)`,
-			).run(entityId, fm.name, fm.name.toLowerCase(), fm.description, now, now);
+				 (id, name, canonical_name, entity_type, agent_id, description, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'skill', ?, ?, 0, ?, ?)`,
+			).run(entityId, fm.name, fm.name.toLowerCase(), agentId, fm.description, now, now);
 
 			// Insert skill_meta
 			db.prepare(

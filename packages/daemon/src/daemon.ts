@@ -1881,8 +1881,8 @@ app.post("/api/memory/remember", async (c) => {
 			getDbAccessor().withWriteTx((db) => {
 				db.prepare(
 					`INSERT INTO entities
-					 (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
-					 VALUES (?, ?, ?, 'chunk_group', 0, ?, ?)`,
+					 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+					 VALUES (?, ?, ?, 'chunk_group', 'default', 0, ?, ?)`,
 				).run(groupId, `chunk-group:${groupId}`, `chunk-group:${groupId}`, now, now);
 			});
 		} catch (e) {

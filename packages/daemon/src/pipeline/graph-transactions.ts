@@ -87,8 +87,8 @@ function upsertEntity(
 	try {
 		db.prepare(
 			`INSERT INTO entities
-			 (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, 1, ?, ?)`,
+			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 'default', 1, ?, ?)`,
 		).run(id, rawName, canonical, entityType, now, now);
 		return { id, inserted: true };
 	} catch (e) {

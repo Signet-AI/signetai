@@ -443,6 +443,7 @@ export interface Entity {
 	name: string;
 	canonicalName?: string;
 	entityType: string;
+	agentId: string;
 	description?: string;
 	mentions?: number;
 	createdAt: string;
@@ -501,4 +502,77 @@ export interface DecisionProposal {
 export interface DecisionResult {
 	readonly proposals: readonly DecisionProposal[];
 	readonly warnings: readonly string[];
+}
+
+// -- Knowledge Architecture types --
+
+export const ENTITY_TYPES = [
+	"person", "project", "system", "tool",
+	"concept", "skill", "task", "unknown",
+] as const;
+export type EntityType = (typeof ENTITY_TYPES)[number];
+
+export const ATTRIBUTE_KINDS = ["attribute", "constraint"] as const;
+export type AttributeKind = (typeof ATTRIBUTE_KINDS)[number];
+
+export const ATTRIBUTE_STATUSES = ["active", "superseded", "deleted"] as const;
+export type AttributeStatus = (typeof ATTRIBUTE_STATUSES)[number];
+
+export const DEPENDENCY_TYPES = [
+	"uses", "requires", "owned_by", "blocks", "informs",
+] as const;
+export type DependencyType = (typeof DEPENDENCY_TYPES)[number];
+
+export const TASK_STATUSES = [
+	"open", "in_progress", "blocked", "done", "cancelled",
+] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export interface EntityAspect {
+	readonly id: string;
+	readonly entityId: string;
+	readonly agentId: string;
+	readonly name: string;
+	readonly canonicalName: string;
+	readonly weight: number;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface EntityAttribute {
+	readonly id: string;
+	readonly aspectId: string;
+	readonly agentId: string;
+	readonly memoryId: string | null;
+	readonly kind: AttributeKind;
+	readonly content: string;
+	readonly normalizedContent: string;
+	readonly confidence: number;
+	readonly importance: number;
+	readonly status: AttributeStatus;
+	readonly supersededBy: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface EntityDependency {
+	readonly id: string;
+	readonly sourceEntityId: string;
+	readonly targetEntityId: string;
+	readonly agentId: string;
+	readonly aspectId: string | null;
+	readonly dependencyType: DependencyType;
+	readonly strength: number;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface TaskMeta {
+	readonly entityId: string;
+	readonly agentId: string;
+	readonly status: TaskStatus;
+	readonly expiresAt: string | null;
+	readonly retentionUntil: string | null;
+	readonly completedAt: string | null;
+	readonly updatedAt: string;
 }

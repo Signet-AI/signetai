@@ -24,6 +24,7 @@ import { up as sessionMemories } from "./015-session-memories";
 import { up as sessionCheckpoints } from "./016-session-checkpoints";
 import { up as taskSkills } from "./017-task-skills";
 import { up as skillMeta } from "./018-skill-meta";
+import { up as knowledgeStructure } from "./019-knowledge-structure";
 
 // -- Public interface consumed by Database.init() --
 
@@ -113,6 +114,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 18,
 		name: "skill-meta",
 		up: skillMeta,
+	},
+	{
+		version: 19,
+		name: "knowledge-structure",
+		up: knowledgeStructure,
 	},
 ];
 
