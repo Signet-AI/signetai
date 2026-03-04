@@ -2493,11 +2493,6 @@ ${agentName} is a helpful assistant.
 					...(useMacOllamaProfile ? { maintenanceIntervalMs: 10 * 60 * 1000 } : {}),
 					maintenanceMode: "execute",
 				},
-				...(useMacOllamaProfile
-					? {
-						semanticContradictionEnabled: false,
-					}
-					: {}),
 			};
 			(config.memory as Record<string, unknown>).pipelineV2 = pipelineV2Config;
 		}
