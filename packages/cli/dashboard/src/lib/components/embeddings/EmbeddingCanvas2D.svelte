@@ -707,7 +707,6 @@ $effect(() => {
 			width={MINIMAP_WIDTH}
 			height={MINIMAP_HEIGHT}
 			class="minimap"
-			role="img"
 			aria-label="Graph navigation minimap"
 			onmousedown={handleMinimapMouseDown}
 			onmousemove={handleMinimapMouseMove}

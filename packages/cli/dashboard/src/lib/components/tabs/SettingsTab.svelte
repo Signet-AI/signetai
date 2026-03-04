@@ -338,9 +338,24 @@
 
 		<!-- Discard confirmation dialog -->
 		{#if discardDialogOpen}
-			<div class="dialog-overlay" onclick={() => discardDialogOpen = false}>
-				<div class="dialog" onclick={(e) => e.stopPropagation()}>
-					<div class="dialog-title">Discard changes?</div>
+			<div
+				class="dialog-overlay"
+				role="button"
+				tabindex="0"
+				aria-label="Close discard dialog"
+				onclick={(e) => {
+					if (e.currentTarget !== e.target) return;
+					discardDialogOpen = false;
+				}}
+				onkeydown={(e) => {
+					if (e.key === "Escape" || e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						discardDialogOpen = false;
+					}
+				}}
+			>
+				<div class="dialog" role="dialog" aria-modal="true" aria-labelledby="discard-dialog-title">
+					<div class="dialog-title" id="discard-dialog-title">Discard changes?</div>
 					<div class="dialog-body">
 						This will revert all unsaved changes in {dirtyCount} section{dirtyCount !== 1 ? "s" : ""}.
 						This cannot be undone.

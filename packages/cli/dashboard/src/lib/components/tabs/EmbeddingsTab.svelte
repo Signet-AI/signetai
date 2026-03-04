@@ -1765,8 +1765,7 @@ $effect(() => {
 		</div>
 		<div style:display={graphMode === "3d" ? "contents" : "none"}>
 			{#if Canvas3D && !canvas3dLoading}
-				<svelte:component
-					this={Canvas3D}
+				<Canvas3D
 					bind:this={canvas3d}
 					{embeddings}
 					projected3d={projected3dCoords}
@@ -1786,7 +1785,7 @@ $effect(() => {
 						if (e) selectEmbeddingById(e.id);
 						else graphSelected = null;
 					}}
-					onhovernode={updateGraphHover}
+						onhovernode={updateGraphHover}
 				/>
 			{:else if canvas3dLoading}
 				<div class="absolute inset-0 flex items-center justify-center bg-[#050505]">
