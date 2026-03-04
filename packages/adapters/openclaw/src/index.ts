@@ -252,32 +252,44 @@ async function daemonFetch<T>(
 		body?: unknown;
 		timeout?: number;
 	} = {},
-): Promise<T | null> {
+): Promise<T> {
 	const { method = "GET", body, timeout = READ_TIMEOUT } = options;
 
-	try {
-		const init: RequestInit = {
-			method,
-			headers: pluginHeaders(),
-			signal: AbortSignal.timeout(timeout),
-		};
+	const init: RequestInit = {
+		method,
+		headers: pluginHeaders(),
+		signal: AbortSignal.timeout(timeout),
+	};
 
-		if (body !== undefined) {
-			init.body = JSON.stringify(body);
-		}
-
-		const res = await fetch(`${daemonUrl}${path}`, init);
-
-		if (!res.ok) {
-			console.warn(`[signet] ${method} ${path} failed:`, res.status);
-			return null;
-		}
-
-		return (await res.json()) as T;
-	} catch (e) {
-		console.warn(`[signet] ${method} ${path} error:`, e);
-		return null;
+	if (body !== undefined) {
+		init.body = JSON.stringify(body);
 	}
+
+	let res: Response;
+	try {
+		res = await fetch(`${daemonUrl}${path}`, init);
+	} catch (e) {
+		const message = e instanceof Error ? e.message : String(e);
+		throw new Error(`Daemon request failed: ${method} ${path} — ${message}`);
+	}
+
+	if (!res.ok) {
+		let detail = "";
+		try {
+			const body = await res.text();
+			if (body.length > 0) {
+				const parsed = JSON.parse(body);
+				detail = parsed.error || parsed.message || body.slice(0, 200);
+			}
+		} catch {
+			// ignore body parse errors
+		}
+		throw new Error(
+			`Daemon returned HTTP ${res.status}${detail ? `: ${detail}` : ""} (${method} ${path})`,
+		);
+	}
+
+	return (await res.json()) as T;
 }
 
 // ============================================================================
@@ -308,17 +320,22 @@ export async function onSessionStart(
 		sessionKey?: string;
 	} = {},
 ): Promise<SessionStartResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-start", {
-		method: "POST",
-		body: {
-			harness,
-			agentId: options.agentId,
-			context: options.context,
-			sessionKey: options.sessionKey,
-			runtimePath: RUNTIME_PATH,
-		},
-		timeout: READ_TIMEOUT,
-	});
+	try {
+		return await daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-start", {
+			method: "POST",
+			body: {
+				harness,
+				agentId: options.agentId,
+				context: options.context,
+				sessionKey: options.sessionKey,
+				runtimePath: RUNTIME_PATH,
+			},
+			timeout: READ_TIMEOUT,
+		});
+	} catch (e) {
+		console.warn(`[signet] session-start failed:`, e instanceof Error ? e.message : e);
+		return null;
+	}
 }
 
 export async function onUserPromptSubmit(
@@ -331,18 +348,23 @@ export async function onUserPromptSubmit(
 		project?: string;
 	},
 ): Promise<UserPromptSubmitResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/user-prompt-submit", {
-		method: "POST",
-		body: {
-			harness,
-			userPrompt: options.userPrompt,
-			lastAssistantMessage: options.lastAssistantMessage,
-			sessionKey: options.sessionKey,
-			project: options.project,
-			runtimePath: RUNTIME_PATH,
-		},
-		timeout: READ_TIMEOUT,
-	});
+	try {
+		return await daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/user-prompt-submit", {
+			method: "POST",
+			body: {
+				harness,
+				userPrompt: options.userPrompt,
+				lastAssistantMessage: options.lastAssistantMessage,
+				sessionKey: options.sessionKey,
+				project: options.project,
+				runtimePath: RUNTIME_PATH,
+			},
+			timeout: READ_TIMEOUT,
+		});
+	} catch (e) {
+		console.warn(`[signet] user-prompt-submit failed:`, e instanceof Error ? e.message : e);
+		return null;
+	}
 }
 
 export async function onPreCompaction(
@@ -354,17 +376,22 @@ export async function onPreCompaction(
 		sessionKey?: string;
 	} = {},
 ): Promise<PreCompactionResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/pre-compaction", {
-		method: "POST",
-		body: {
-			harness,
-			sessionContext: options.sessionContext,
-			messageCount: options.messageCount,
-			sessionKey: options.sessionKey,
-			runtimePath: RUNTIME_PATH,
-		},
-		timeout: READ_TIMEOUT,
-	});
+	try {
+		return await daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/pre-compaction", {
+			method: "POST",
+			body: {
+				harness,
+				sessionContext: options.sessionContext,
+				messageCount: options.messageCount,
+				sessionKey: options.sessionKey,
+				runtimePath: RUNTIME_PATH,
+			},
+			timeout: READ_TIMEOUT,
+		});
+	} catch (e) {
+		console.warn(`[signet] pre-compaction failed:`, e instanceof Error ? e.message : e);
+		return null;
+	}
 }
 
 export async function onCompactionComplete(
@@ -375,21 +402,26 @@ export async function onCompactionComplete(
 		sessionKey?: string;
 	} = {},
 ): Promise<boolean> {
-	const result = await daemonFetch<{ success: boolean }>(
-		options.daemonUrl || DEFAULT_DAEMON_URL,
-		"/api/hooks/compaction-complete",
-		{
-			method: "POST",
-			body: {
-				harness,
-				summary,
-				sessionKey: options.sessionKey,
-				runtimePath: RUNTIME_PATH,
+	try {
+		const result = await daemonFetch<{ success: boolean }>(
+			options.daemonUrl || DEFAULT_DAEMON_URL,
+			"/api/hooks/compaction-complete",
+			{
+				method: "POST",
+				body: {
+					harness,
+					summary,
+					sessionKey: options.sessionKey,
+					runtimePath: RUNTIME_PATH,
+				},
+				timeout: WRITE_TIMEOUT,
 			},
-			timeout: WRITE_TIMEOUT,
-		},
-	);
-	return result?.success === true;
+		);
+		return result?.success === true;
+	} catch (e) {
+		console.warn(`[signet] compaction-complete failed:`, e instanceof Error ? e.message : e);
+		return false;
+	}
 }
 
 export async function onSessionEnd(
@@ -403,19 +435,24 @@ export async function onSessionEnd(
 		reason?: string;
 	} = {},
 ): Promise<SessionEndResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-end", {
-		method: "POST",
-		body: {
-			harness,
-			transcriptPath: options.transcriptPath,
-			sessionKey: options.sessionKey,
-			sessionId: options.sessionId,
-			cwd: options.cwd,
-			reason: options.reason,
-			runtimePath: RUNTIME_PATH,
-		},
-		timeout: WRITE_TIMEOUT,
-	});
+	try {
+		return await daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-end", {
+			method: "POST",
+			body: {
+				harness,
+				transcriptPath: options.transcriptPath,
+				sessionKey: options.sessionKey,
+				sessionId: options.sessionId,
+				cwd: options.cwd,
+				reason: options.reason,
+				runtimePath: RUNTIME_PATH,
+			},
+			timeout: WRITE_TIMEOUT,
+		});
+	} catch (e) {
+		console.warn(`[signet] session-end failed:`, e instanceof Error ? e.message : e);
+		return null;
+	}
 }
 
 // ============================================================================
@@ -442,7 +479,7 @@ export async function memorySearch(
 		},
 		timeout: READ_TIMEOUT,
 	});
-	return result?.results || [];
+	return result.results || [];
 }
 
 export async function memoryStore(
@@ -454,7 +491,7 @@ export async function memoryStore(
 		tags?: string[];
 		who?: string;
 	} = {},
-): Promise<string | null> {
+): Promise<string> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
 	const result = await daemonFetch<{ id?: string; memoryId?: string }>(daemonUrl, "/api/memory/remember", {
 		method: "POST",
@@ -467,10 +504,14 @@ export async function memoryStore(
 		},
 		timeout: WRITE_TIMEOUT,
 	});
-	return result?.id || result?.memoryId || null;
+	const id = result.id || result.memoryId;
+	if (!id) {
+		throw new Error("Daemon returned success but no memory ID");
+	}
+	return id;
 }
 
-export async function memoryGet(id: string, options: { daemonUrl?: string } = {}): Promise<MemoryRecord | null> {
+export async function memoryGet(id: string, options: { daemonUrl?: string } = {}): Promise<MemoryRecord> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
 	return daemonFetch<MemoryRecord>(daemonUrl, `/api/memory/${encodeURIComponent(id)}`, { timeout: READ_TIMEOUT });
 }
@@ -492,12 +533,10 @@ export async function memoryList(
 	const qs = params.toString();
 	const path = `/api/memories${qs ? `?${qs}` : ""}`;
 
-	const result = await daemonFetch<{
+	return daemonFetch<{
 		memories: MemoryRecord[];
 		stats: Record<string, number>;
 	}>(daemonUrl, path, { timeout: READ_TIMEOUT });
-
-	return result || { memories: [], stats: {} };
 }
 
 export async function memoryModify(
@@ -518,7 +557,7 @@ export async function memoryModify(
 		body: patch,
 		timeout: WRITE_TIMEOUT,
 	});
-	return result?.success === true;
+	return result.success === true;
 }
 
 export async function memoryForget(
@@ -542,7 +581,7 @@ export async function memoryForget(
 			timeout: WRITE_TIMEOUT,
 		},
 	);
-	return result?.success === true;
+	return result.success === true;
 }
 
 export async function marketplaceToolList(
@@ -556,9 +595,13 @@ export async function marketplaceToolList(
 	if (options.channel) params.set("channel", options.channel);
 	const query = params.toString();
 	const path = `/api/marketplace/mcp/tools${query.length > 0 ? `?${query}` : ""}`;
-	return daemonFetch<MarketplaceToolCatalog>(daemonUrl, path, {
-		timeout: READ_TIMEOUT,
-	});
+	try {
+		return await daemonFetch<MarketplaceToolCatalog>(daemonUrl, path, {
+			timeout: READ_TIMEOUT,
+		});
+	} catch {
+		return null;
+	}
 }
 
 export async function marketplaceToolCall(
@@ -566,7 +609,7 @@ export async function marketplaceToolCall(
 	toolName: string,
 	args: Record<string, unknown>,
 	options: MarketplaceContextOptions = {},
-): Promise<{ success: boolean; result?: unknown; error?: string } | null> {
+): Promise<{ success: boolean; result?: unknown; error?: string }> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
 	const params = new URLSearchParams();
 	if (options.harness) params.set("harness", options.harness);
@@ -589,13 +632,14 @@ async function getMarketplaceExposurePolicy(
 	options: MarketplaceContextOptions = {},
 ): Promise<MarketplaceExposurePolicy | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<{ policy?: MarketplaceExposurePolicy }>(daemonUrl, "/api/marketplace/mcp/policy", {
-		timeout: READ_TIMEOUT,
-	});
-	if (!result?.policy) {
+	try {
+		const result = await daemonFetch<{ policy?: MarketplaceExposurePolicy }>(daemonUrl, "/api/marketplace/mcp/policy", {
+			timeout: READ_TIMEOUT,
+		});
+		return result.policy ?? null;
+	} catch {
 		return null;
 	}
-	return result.policy;
 }
 
 // ============================================================================
@@ -611,7 +655,7 @@ export async function remember(
 		tags?: string[];
 		who?: string;
 	} = {},
-): Promise<string | null> {
+): Promise<string> {
 	return memoryStore(content, options);
 }
 
@@ -879,12 +923,7 @@ const signetPlugin = {
 							importance,
 							tags: tags ? tags.split(",").map((t) => t.trim()) : undefined,
 						});
-						if (id) {
-							return textResult(`Memory saved successfully (id: ${id})`, { id });
-						}
-						return textResult("Failed to save memory.", {
-							error: "no id returned",
-						});
+						return textResult(`Memory saved successfully (id: ${id})`, { id });
 					} catch (err) {
 						return textResult(`Memory store failed: ${String(err)}`, { error: String(err) });
 					}
@@ -907,13 +946,8 @@ const signetPlugin = {
 					const { id } = params as { id: string };
 					try {
 						const memory = await memoryGet(id, opts);
-						if (memory) {
-							return textResult(JSON.stringify(memory, null, 2), {
-								memory,
-							});
-						}
-						return textResult(`Memory ${id} not found.`, {
-							error: "not found",
+						return textResult(JSON.stringify(memory, null, 2), {
+							memory,
 						});
 					} catch (err) {
 						return textResult(`Memory get failed: ${String(err)}`, { error: String(err) });
