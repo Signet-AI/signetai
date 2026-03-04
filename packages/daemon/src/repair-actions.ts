@@ -552,12 +552,12 @@ async function reembedMissingMemoriesBatch(
 					   created_at = excluded.created_at`,
 				)
 				.run(embId, contentHash, blob, vector.length, memory.id, memory.content, now);
-			if (countChanges(result) > 0) {
-				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-					| { id: string }
-					| undefined;
-				const actualEmbeddingId = actualRow?.id ?? embId;
-				syncVecInsert(db, actualEmbeddingId, vector);
+			// Resolve actual embedding ID (may differ from embId on conflict)
+			const actualRow = db
+				.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
+				.get(contentHash) as { id: string } | undefined;
+			if (actualRow) {
+				syncVecInsert(db, actualRow.id, vector);
 				count++;
 			}
 		}

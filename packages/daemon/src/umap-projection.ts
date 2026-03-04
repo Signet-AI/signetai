@@ -281,6 +281,7 @@ const EMBEDDINGS_FROM_SQL = `
 	FROM embeddings e
 	INNER JOIN memories m ON m.id = e.source_id
 	WHERE e.source_type = 'memory'
+	  AND e.vector IS NOT NULL AND length(e.vector) > 0
 `;
 
 function normalizeFilterValues(values: readonly string[] | undefined): string[] {

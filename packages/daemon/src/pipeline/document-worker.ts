@@ -385,7 +385,13 @@ async function processDocument(
 						chunkText,
 						now,
 					);
-					syncVecInsert(db, embId, vector);
+					// Resolve actual embedding ID (may differ from embId on conflict)
+					const actualEmbRow = db
+						.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
+						.get(normalized.contentHash) as { id: string } | undefined;
+					if (actualEmbRow) {
+						syncVecInsert(db, actualEmbRow.id, vector);
+					}
 				}
 			}
 

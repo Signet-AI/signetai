@@ -416,11 +416,14 @@ function insertMemoryEmbedding(
 		content,
 		now,
 	);
-	if (countChanges(result) > 0) {
-		syncVecInsert(db, embId, vector);
-		return true;
+	// Resolve actual embedding ID (may differ from embId on conflict)
+	const actualRow = db
+		.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
+		.get(contentHash) as { id: string } | undefined;
+	if (actualRow) {
+		syncVecInsert(db, actualRow.id, vector);
 	}
-	return false;
+	return actualRow !== undefined;
 }
 
 function applyPhaseCWrites(

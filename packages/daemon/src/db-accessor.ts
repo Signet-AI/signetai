@@ -350,6 +350,29 @@ function backfillVecEmbeddings(db: Database): void {
 			`[db-accessor] Backfilled ${migrated}/${rows.length} missing embeddings into vec_embeddings`,
 		);
 	}
+
+	// Clean orphaned vec_embeddings rows (phantom IDs from prior sync bugs)
+	try {
+		const orphanRow = db
+			.prepare(
+				`SELECT COUNT(*) AS n FROM vec_embeddings v
+				 LEFT JOIN embeddings e ON e.id = v.id
+				 WHERE e.id IS NULL`,
+			)
+			.get() as { n: number } | undefined;
+		const orphanCount = orphanRow?.n ?? 0;
+		if (orphanCount > 0) {
+			db.prepare(
+				"DELETE FROM vec_embeddings WHERE id NOT IN (SELECT id FROM embeddings)",
+			).run();
+			// eslint-disable-next-line no-console
+			console.log(
+				`[db-accessor] Cleaned ${orphanCount} orphaned vec_embeddings rows`,
+			);
+		}
+	} catch {
+		// vec_embeddings may not exist — non-fatal
+	}
 }
 
 // ---------------------------------------------------------------------------
