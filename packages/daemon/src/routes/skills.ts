@@ -2,16 +2,22 @@
  * Skills API routes — extracted from daemon.ts
  *
  * Handles skill listing, browsing, searching, installing, and uninstalling.
- * All filesystem-based, no database dependencies.
+ * Integrates with the procedural memory graph for skill discovery.
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
+import { parseSkillFile, patchSkillFrontmatter } from "../pipeline/skill-frontmatter.js";
+import { installSkillNode, uninstallSkillNode } from "../pipeline/skill-graph.js";
+import { getDbAccessor, type DbAccessor } from "../db-accessor.js";
+import { loadMemoryConfig, type EmbeddingConfig, type PipelineV2Config } from "../memory-config.js";
+import { getLlmProvider } from "../llm.js";
+import type { LlmProvider } from "../pipeline/provider.js";
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -272,6 +278,162 @@ async function fetchClawhubCatalog(): Promise<ClawhubItem[]> {
 // Route mount
 // ---------------------------------------------------------------------------
 
+// Lazy dependency accessors — singletons are initialised at daemon startup
+// before any route handler runs. These callsites are safe.
+let fetchEmbeddingFn: ((text: string, cfg: EmbeddingConfig) => Promise<number[] | null>) | null = null;
+
+export function setFetchEmbedding(fn: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>): void {
+	fetchEmbeddingFn = fn;
+}
+
+function getAccessorSafe(): DbAccessor | null {
+	try { return getDbAccessor(); } catch { return null; }
+}
+
+function getProviderSafe(): LlmProvider | null {
+	try { return getLlmProvider(); } catch { return null; }
+}
+
+// Per-skill lock to prevent concurrent enrichment writes to SKILL.md
+const skillLocks = new Map<string, Promise<void>>();
+
+function withSkillLock(skillName: string, fn: () => Promise<void>): Promise<void> {
+	const prev = skillLocks.get(skillName) ?? Promise.resolve();
+	const next = prev.then(fn, fn).finally(() => {
+		if (skillLocks.get(skillName) === next) {
+			skillLocks.delete(skillName);
+		}
+	});
+	skillLocks.set(skillName, next);
+	return next;
+}
+
+/**
+ * After a successful skill install, create the graph node.
+ * Runs async — does not block the install response.
+ * Serialized per skill name to prevent concurrent SKILL.md writes.
+ */
+async function onSkillInstalled(skillName: string): Promise<void> {
+	return withSkillLock(skillName, () => onSkillInstalledInner(skillName));
+}
+
+async function onSkillInstalledInner(skillName: string): Promise<void> {
+	const accessor = getAccessorSafe();
+	if (!accessor) return;
+
+	const skillMdPath = join(getSkillsDir(), skillName, "SKILL.md");
+	if (!existsSync(skillMdPath)) return;
+
+	try {
+		const content = readFileSync(skillMdPath, "utf-8");
+		const parsed = parseSkillFile(content);
+		if (!parsed) {
+			logger.warn("skills", "Failed to parse SKILL.md frontmatter for graph", { skill: skillName });
+			return;
+		}
+
+		const memoryCfg = loadMemoryConfig(getAgentsDir());
+		if (!memoryCfg.pipelineV2.procedural.enabled) return;
+		if (!fetchEmbeddingFn) return;
+
+		const result = await installSkillNode(
+			{
+				frontmatter: parsed.frontmatter,
+				body: parsed.body,
+				source: "installed",
+				fsPath: skillMdPath,
+			},
+			accessor,
+			memoryCfg.pipelineV2,
+			memoryCfg.embedding,
+			fetchEmbeddingFn,
+			getProviderSafe(),
+		);
+
+		// Write enrichment back to SKILL.md if enriched
+		if (result.enriched) {
+			const freshContent = readFileSync(skillMdPath, "utf-8");
+			const freshParsed = parseSkillFile(freshContent);
+			if (freshParsed) {
+				// Get the enriched frontmatter from the installed node
+				const enrichedFm = accessor.withReadDb((db) =>
+					db.prepare(
+						"SELECT triggers, tags FROM skill_meta WHERE entity_id = ?",
+					).get(result.entityId) as { triggers: string | null; tags: string | null } | undefined,
+				);
+
+				if (enrichedFm) {
+					// Build a properly typed patch from DB values
+					let patchDescription: string | undefined;
+					let patchTriggers: readonly string[] | undefined;
+					let patchTags: readonly string[] | undefined;
+
+					const entity = accessor.withReadDb((db) =>
+						db.prepare("SELECT description FROM entities WHERE id = ?")
+							.get(result.entityId) as { description: string | null } | undefined,
+					);
+					if (entity?.description) patchDescription = entity.description;
+					if (enrichedFm.triggers) {
+						try {
+							const parsed: unknown = JSON.parse(enrichedFm.triggers);
+							if (Array.isArray(parsed)) patchTriggers = parsed.filter((v): v is string => typeof v === "string");
+						} catch { /* skip */ }
+					}
+					if (enrichedFm.tags) {
+						try {
+							const parsed: unknown = JSON.parse(enrichedFm.tags);
+							if (Array.isArray(parsed)) patchTags = parsed.filter((v): v is string => typeof v === "string");
+						} catch { /* skip */ }
+					}
+
+					const patched = patchSkillFrontmatter(freshContent, {
+						description: patchDescription,
+						triggers: patchTriggers,
+						tags: patchTags,
+					});
+					if (patched) {
+						writeFileSync(skillMdPath, patched, "utf-8");
+						logger.info("skills", "Wrote enrichment back to SKILL.md", { skill: skillName });
+					}
+				}
+			}
+		}
+
+		logger.info("skills", "Graph node created for skill", {
+			skill: skillName,
+			entityId: result.entityId,
+			enriched: result.enriched,
+			embeddingCreated: result.embeddingCreated,
+		});
+	} catch (e) {
+		logger.error("skills", "Failed to create graph node for skill", e as Error, {
+			skill: skillName,
+		});
+	}
+}
+
+/**
+ * Before a skill is uninstalled from the filesystem, remove its graph node.
+ */
+function onSkillUninstalling(skillName: string): void {
+	const accessor = getAccessorSafe();
+	if (!accessor) return;
+
+	try {
+		const result = uninstallSkillNode({ skillName }, accessor);
+		if (result.removed) {
+			logger.info("skills", "Graph node removed for skill", {
+				skill: skillName,
+				entityId: result.entityId,
+			});
+		}
+	} catch (e) {
+		logger.error("skills", "Failed to remove graph node for skill", e as Error, {
+			skill: skillName,
+		});
+	}
+}
+
 export function mountSkillsRoutes(app: Hono): void {
 	// GET /api/skills - list installed skills
 	app.get("/api/skills", (c) => {
@@ -525,6 +687,10 @@ export function mountSkillsRoutes(app: Hono): void {
 			proc.on("close", (code) => {
 				if (code === 0) {
 					logger.info("skills", "Skill installed", { name });
+					// Fire-and-forget graph node creation
+					onSkillInstalled(name).catch((e) => {
+						logger.error("skills", "Post-install graph hook failed", e as Error);
+					});
 					resolve(c.json({ success: true, name, output: stdout }));
 				} else {
 					const errMsg = stderr || stdout || `Install exited with code ${code}`;
@@ -554,6 +720,8 @@ export function mountSkillsRoutes(app: Hono): void {
 		}
 
 		try {
+			// Remove graph node before filesystem cleanup
+			onSkillUninstalling(name);
 			rmSync(skillDir, { recursive: true, force: true });
 			logger.info("skills", "Skill removed", { name });
 			return c.json({ success: true, name, message: `Removed ${name}` });

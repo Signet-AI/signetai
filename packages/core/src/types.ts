@@ -232,6 +232,7 @@ export interface PipelineV2Config {
 	readonly continuity: PipelineContinuityConfig;
 	readonly embeddingTracker: PipelineEmbeddingTrackerConfig;
 	readonly synthesis: PipelineSynthesisConfig;
+	readonly procedural: PipelineProceduralConfig;
 }
 
 export interface PipelineEmbeddingTrackerConfig {
@@ -247,6 +248,16 @@ export interface PipelineSynthesisConfig {
 	readonly timeout: number;
 	readonly maxTokens: number;
 	readonly idleGapMinutes: number;
+}
+
+export interface PipelineProceduralConfig {
+	readonly enabled: boolean;
+	readonly decayRate: number;
+	readonly minImportance: number;
+	readonly importanceOnInstall: number;
+	readonly enrichOnInstall: boolean;
+	readonly enrichMinDescription: number;
+	readonly reconcileIntervalMs: number;
 }
 
 // -- Status/union constants --
