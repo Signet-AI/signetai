@@ -109,11 +109,7 @@ It should report no drift (exit 0). If drift remains, fix it and re-check.
 git add CLAUDE.md README.md docs/
 git commit -m "docs: fix documentation drift
 
-Sync CLAUDE.md and README.md with current source:
-- Add missing API route documentation
-- Update migration range to match actual files
-- Fix package table entries
-- Remove stale file references"
+Sync CLAUDE.md and README.md with current source truth."
 
 gh pr create \
   --title "docs: fix documentation drift" \

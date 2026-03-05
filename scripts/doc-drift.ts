@@ -276,9 +276,13 @@ function getActualPackages(): PackageInfo[] {
 			const rel = relPrefix ? `${relPrefix}/${entry}` : entry;
 			const pkgJson = join(full, "package.json");
 			if (existsSync(pkgJson)) {
-				const pkg = JSON.parse(readFileSync(pkgJson, "utf8"));
-				if (pkg.name) {
-					packages.push({ name: pkg.name, dir: `packages/${rel}` });
+				try {
+					const pkg = JSON.parse(readFileSync(pkgJson, "utf8"));
+					if (pkg.name) {
+						packages.push({ name: pkg.name, dir: `packages/${rel}` });
+					}
+				} catch {
+					// Skip malformed package manifests.
 				}
 			} else if (statSync(full).isDirectory() && entry !== "node_modules") {
 				scan(full, rel);
@@ -292,9 +296,13 @@ function getActualPackages(): PackageInfo[] {
 	for (const extra of ["web", "predictor"]) {
 		const pkgJson = join(ROOT, extra, "package.json");
 		if (existsSync(pkgJson)) {
-			const pkg = JSON.parse(readFileSync(pkgJson, "utf8"));
-			if (pkg.name) {
-				packages.push({ name: pkg.name, dir: extra });
+			try {
+				const pkg = JSON.parse(readFileSync(pkgJson, "utf8"));
+				if (pkg.name) {
+					packages.push({ name: pkg.name, dir: extra });
+				}
+			} catch {
+				// Skip malformed package manifests.
 			}
 		}
 	}
