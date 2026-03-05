@@ -45,6 +45,7 @@ const logCategories = [
 	"git",
 	"watcher",
 	"embedding",
+	"embedding-tracker",
 	"harness",
 	"system",
 	"hooks",
@@ -56,6 +57,7 @@ const logCategories = [
 	"summary-worker",
 	"document-worker",
 	"maintenance",
+	"scheduler",
 	"retention",
 	"llm",
 ];
@@ -155,6 +157,7 @@ function enforceAutoScrollAtBottom(): void {
 	if (autoScrollSnapFrame !== null) return;
 	autoScrollSnapFrame = requestAnimationFrame(() => {
 		autoScrollSnapFrame = null;
+		if (!logAutoScroll) return;
 		scrollToBottom("auto");
 	});
 }

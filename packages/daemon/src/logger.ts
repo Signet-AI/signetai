@@ -373,14 +373,19 @@ class Logger extends EventEmitter {
 			// Get all log files sorted by modification time (newest first)
 			const logFiles = readdirSync(this.config.logDir)
 				.filter((f) => f.startsWith("signet-") && f.endsWith(".log"))
-				.map((f) => {
+				.reduce<{ name: string; path: string; mtime: number }[]>((acc, f) => {
 					const path = join(this.config.logDir, f);
-					return {
-						name: f,
-						path,
-						mtime: statSync(path).mtime.getTime(),
-					};
-				})
+					try {
+						acc.push({
+							name: f,
+							path,
+							mtime: statSync(path).mtime.getTime(),
+						});
+					} catch {
+						// Skip files removed between readdir and stat
+					}
+					return acc;
+				}, [])
 				.sort((a, b) => b.mtime - a.mtime);
 
 			// Read files until we have enough entries
