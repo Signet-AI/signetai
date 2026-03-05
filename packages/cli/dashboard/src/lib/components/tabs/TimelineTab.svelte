@@ -59,7 +59,7 @@ function hasMcpSignal(raw: string): boolean {
 	if (key.includes("model context protocol")) return true;
 	if (key.includes("model-context-protocol")) return true;
 	if (key.includes("modelcontextprotocol")) return true;
-	return key.includes("openclaw-memory");
+	return false;
 }
 
 const activeMcpServersUsed = $derived(
@@ -92,7 +92,7 @@ function parseTags(tags: Memory["tags"]): string[] {
 						.filter((tag) => tag.length > 0);
 				}
 			} catch {
-				return [];
+				// fall through to csv parsing
 			}
 		}
 		return trimmed

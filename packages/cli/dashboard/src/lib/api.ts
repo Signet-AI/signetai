@@ -305,9 +305,10 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 							.filter((tag) => tag.length > 0);
 					}
 				} catch {
-					tags = [];
+					// fall through to csv parsing
 				}
-			} else {
+			}
+			if (tags.length === 0) {
 				tags = trimmed
 					.split(",")
 					.map((tag) => tag.trim())
@@ -330,11 +331,15 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 			.slice(0, 5)
 			.map(([key, count]) => ({ key, count }));
 
+	// Use the widest bucket (one_month / 30 days) count to match daemon semantics
+	const widestBucket = buckets.find((b) => b.range.rangeKey === "one_month");
+	const windowMemoryCount = widestBucket?.memoriesAdded ?? 0;
+
 	return {
 		generatedAt: new Date().toISOString(),
 		generatedFor: new Date(nowStart).toISOString(),
 		rangePreset: "today-last_week-one_month",
-		totalMemories: memories.length,
+		totalMemories: windowMemoryCount,
 		totalHistoryEvents: 0,
 		invalidMemoryTimestamps,
 		invalidHistoryTimestamps: 0,
