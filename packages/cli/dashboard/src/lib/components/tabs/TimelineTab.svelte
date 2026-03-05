@@ -649,12 +649,9 @@ onMount(() => {
 	.timeline-hero-grid {
 		display: grid;
 		gap: 0.6rem;
-		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.timeline-hero-title {
-		margin: 0;
-		font-family: var(--font-display);
+	if (!(active instanceof Element)) return false;
+	if (!refs.rootEl) return active === document.body;
+	return active === document.body || refs.rootEl.contains(active);
 		font-size: clamp(1.05rem, 1.65vw, 1.35rem);
 		line-height: 1.2;
 		letter-spacing: 0.04em;
