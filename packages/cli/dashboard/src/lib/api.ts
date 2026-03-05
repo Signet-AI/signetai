@@ -237,39 +237,19 @@ export async function getMemories(limit = 100, offset = 0): Promise<{ memories: 
 
 function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineResponse {
 	const now = new Date();
-	const nowStart = Date.UTC(
-		now.getUTCFullYear(),
-		now.getUTCMonth(),
-		now.getUTCDate(),
-	);
+	const nowStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+	const dayMs = 24 * 60 * 60 * 1000;
+	const endOfToday = nowStart + dayMs - 1;
 
 	const ranges = [
-		{ eraIndex: 0 as const, rangeKey: "today" as const, label: "Today" as const, startDaysAgo: 0, endDaysAgo: 0 },
-		{
-			eraIndex: 1 as const,
-			rangeKey: "last_week" as const,
-			label: "Last week" as const,
-			startDaysAgo: 0,
-			endDaysAgo: 6,
-		},
-		{
-			eraIndex: 2 as const,
-			rangeKey: "one_month" as const,
-			label: "One month" as const,
-			startDaysAgo: 0,
-			endDaysAgo: 29,
-		},
+		{ eraIndex: 0 as const, rangeKey: "today" as const, label: "Today" as const, lookbackDays: 1 },
+		{ eraIndex: 1 as const, rangeKey: "last_week" as const, label: "Last week" as const, lookbackDays: 7 },
+		{ eraIndex: 2 as const, rangeKey: "one_month" as const, label: "One month" as const, lookbackDays: 30 },
 	];
 
 	const buckets = ranges.map((range) => {
-		const start =
-			range.startDaysAgo === 0
-				? nowStart
-				: nowStart - range.endDaysAgo * 24 * 60 * 60 * 1000;
-		const end =
-			range.startDaysAgo === 0
-				? nowStart + 24 * 60 * 60 * 1000 - 1
-				: nowStart - (range.startDaysAgo - 1) * 24 * 60 * 60 * 1000 - 1;
+		const start = nowStart - (range.lookbackDays - 1) * dayMs;
+		const end = endOfToday;
 		return {
 			range,
 			start,
@@ -284,21 +264,21 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 		};
 	});
 
+	let invalidMemoryTimestamps = 0;
+
 	for (const memory of memories) {
 		const ts = Date.parse(memory.created_at);
-		if (!Number.isFinite(ts)) continue;
-		const matchingBuckets = buckets.filter(
-			(entry) => ts >= entry.start && ts <= entry.end,
-		);
+		if (!Number.isFinite(ts)) {
+			invalidMemoryTimestamps += 1;
+			continue;
+		}
+		const matchingBuckets = buckets.filter((entry) => ts >= entry.start && ts <= entry.end);
 		if (matchingBuckets.length === 0) continue;
 
 		for (const bucket of matchingBuckets) {
 			bucket.memoriesAdded += 1;
 			if (memory.pinned) bucket.pinned += 1;
-			if (
-				typeof memory.importance === "number" &&
-				Number.isFinite(memory.importance)
-			) {
+			if (typeof memory.importance === "number" && Number.isFinite(memory.importance)) {
 				bucket.importanceSum += memory.importance;
 				bucket.importanceCount += 1;
 			}
@@ -356,7 +336,7 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 		rangePreset: "today-last_week-one_month",
 		totalMemories: memories.length,
 		totalHistoryEvents: 0,
-		invalidMemoryTimestamps: 0,
+		invalidMemoryTimestamps,
 		invalidHistoryTimestamps: 0,
 		buckets: buckets.map((bucket) => ({
 			eraIndex: bucket.range.eraIndex,
@@ -370,15 +350,12 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 			strengthened: 0,
 			recovered: 0,
 			avgImportance:
-				bucket.importanceCount > 0
-					? Number((bucket.importanceSum / bucket.importanceCount).toFixed(3))
-					: 0,
+				bucket.importanceCount > 0 ? Number((bucket.importanceSum / bucket.importanceCount).toFixed(3)) : 0,
 			pinned: bucket.pinned,
 			typeBreakdown: toMetrics(bucket.typeMap),
 			sourceBreakdown: toMetrics(bucket.sourceMap),
 			topTags: toMetrics(bucket.tagMap),
-			summary:
-				`${bucket.memoriesAdded} added. Fallback timeline from memory index only.`,
+			summary: `${bucket.memoriesAdded} added. Fallback timeline from memory index only.`,
 		})),
 	};
 }
@@ -899,17 +876,15 @@ export async function syncConnectorFull(id: string): Promise<SyncResult> {
 export async function resyncConnectors(): Promise<BulkConnectorSyncResult> {
 	try {
 		const response = await fetch(`${API_BASE}/api/connectors/resync`, { method: "POST" });
-		const body = (await response.json().catch(() => null)) as
-			| {
-					status?: unknown;
-					total?: unknown;
-					started?: unknown;
-					alreadySyncing?: unknown;
-					unsupported?: unknown;
-					failed?: unknown;
-					error?: unknown;
-			  }
-			| null;
+		const body = (await response.json().catch(() => null)) as {
+			status?: unknown;
+			total?: unknown;
+			started?: unknown;
+			alreadySyncing?: unknown;
+			unsupported?: unknown;
+			failed?: unknown;
+			error?: unknown;
+		} | null;
 
 		const status = typeof body?.status === "string" ? body.status : response.ok ? "ok" : "error";
 		const total = typeof body?.total === "number" ? body.total : 0;
@@ -917,12 +892,7 @@ export async function resyncConnectors(): Promise<BulkConnectorSyncResult> {
 		const alreadySyncing = typeof body?.alreadySyncing === "number" ? body.alreadySyncing : 0;
 		const unsupported = typeof body?.unsupported === "number" ? body.unsupported : 0;
 		const failed = typeof body?.failed === "number" ? body.failed : 0;
-		const error =
-			typeof body?.error === "string"
-				? body.error
-				: response.ok
-					? undefined
-					: `HTTP ${response.status}`;
+		const error = typeof body?.error === "string" ? body.error : response.ok ? undefined : `HTTP ${response.status}`;
 
 		return {
 			status,

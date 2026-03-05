@@ -1,13 +1,13 @@
 <script lang="ts">
 import {
-	getMarketplaceMcpServers,
-	getMemories,
-	getMemoryTimeline,
-	getSkills,
 	type MarketplaceMcpServer,
 	type Memory,
 	type MemoryTimelineBucket,
 	type Skill,
+	getMarketplaceMcpServers,
+	getMemories,
+	getMemoryTimeline,
+	getSkills,
 } from "$lib/api";
 import { Button } from "$lib/components/ui/button/index.js";
 import ChevronLeft from "@lucide/svelte/icons/chevron-left";
@@ -40,39 +40,33 @@ let activeIndex = $state(0);
 let bucketSkillUsage = $state<Record<string, number>>({});
 let bucketMcpUsage = $state<Record<string, number>>({});
 let bucketTopMemories = $state<Record<string, Memory[]>>({});
-let rootEl = $state<HTMLDivElement | null>(null);
+const refs: { rootEl: HTMLDivElement | null } = { rootEl: null };
 
 const activeBucket = $derived(buckets[activeIndex] ?? null);
-const activeSkillsUsed = $derived(
-	activeBucket ? (bucketSkillUsage[activeBucket.rangeKey] ?? 0) : 0,
-);
+const activeSkillsUsed = $derived(activeBucket ? (bucketSkillUsage[activeBucket.rangeKey] ?? 0) : 0);
 
 function inferMcpUsageFromBucket(bucket: MemoryTimelineBucket): number {
-	const sourceSignals = bucket.sourceBreakdown.filter(
-		(metric: { key: string }) =>
-		/\bmcp\b|openclaw-memory|tool server|modelcontextprotocol/i.test(
-			metric.key,
-		),
-	).length;
-	const tagSignals = bucket.topTags.filter(
-		(metric: { key: string }) =>
-		/\bmcp\b|tool-server|model-context-protocol/i.test(metric.key),
-	).length;
+	const sourceSignals = bucket.sourceBreakdown.filter((metric: { key: string }) => hasMcpSignal(metric.key)).length;
+	const tagSignals = bucket.topTags.filter((metric: { key: string }) => hasMcpSignal(metric.key)).length;
 	return sourceSignals + tagSignals;
 }
 
+function hasMcpSignal(raw: string): boolean {
+	const key = raw.trim().toLowerCase();
+	if (!key) return false;
+	if (/\bmcp\b/.test(key)) return true;
+	if (/\btool[-\s]?servers?\b/.test(key)) return true;
+	if (key.includes("model context protocol")) return true;
+	if (key.includes("model-context-protocol")) return true;
+	if (key.includes("modelcontextprotocol")) return true;
+	return key.includes("openclaw-memory");
+}
+
 const activeMcpServersUsed = $derived(
-	activeBucket
-		? Math.max(
-				bucketMcpUsage[activeBucket.rangeKey] ?? 0,
-				inferMcpUsageFromBucket(activeBucket),
-			)
-		: 0,
+	activeBucket ? Math.max(bucketMcpUsage[activeBucket.rangeKey] ?? 0, inferMcpUsageFromBucket(activeBucket)) : 0,
 );
 
-const activeTopMemories = $derived(
-	activeBucket ? (bucketTopMemories[activeBucket.rangeKey] ?? []) : [],
-);
+const activeTopMemories = $derived(activeBucket ? (bucketTopMemories[activeBucket.rangeKey] ?? []) : []);
 
 function escapeRegex(raw: string): string {
 	return raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -171,7 +165,7 @@ function buildBucketUsageMaps(
 				}
 			}
 
-			if (!matchedMcp && /\bmcp\b|model context protocol|tool server/i.test(memoryText)) {
+			if (!matchedMcp && hasMcpSignal(memoryText)) {
 				entry.mcpMentionIds.add(memory.id);
 			}
 		}
@@ -181,8 +175,7 @@ function buildBucketUsageMaps(
 	const mcpUsage: Record<string, number> = {};
 	for (const entry of storage) {
 		skillUsage[entry.bucket.rangeKey] = entry.skillSet.size;
-		mcpUsage[entry.bucket.rangeKey] =
-			entry.mcpSet.size > 0 ? entry.mcpSet.size : entry.mcpMentionIds.size;
+		mcpUsage[entry.bucket.rangeKey] = entry.mcpSet.size > 0 ? entry.mcpSet.size : entry.mcpMentionIds.size;
 	}
 
 	return { skillUsage, mcpUsage };
@@ -219,14 +212,8 @@ function buildBucketTopMemories(
 			if (createdAt < entry.startMs || createdAt > entry.endMs) continue;
 
 			const rangeSpan = Math.max(1, entry.endMs - entry.startMs);
-			const recency = Math.max(
-				0,
-				Math.min(1, (createdAt - entry.startMs) / rangeSpan),
-			);
-			const score =
-				normalizeImportance(memory.importance) * 100 +
-				(memory.pinned ? 24 : 0) +
-				recency * 8;
+			const recency = Math.max(0, Math.min(1, (createdAt - entry.startMs) / rangeSpan));
+			const score = normalizeImportance(memory.importance) * 100 + (memory.pinned ? 24 : 0) + recency * 8;
 
 			entry.candidates.push({ memory, score, createdAt });
 		}
@@ -247,9 +234,7 @@ function buildBucketTopMemories(
 			return left.memory.id.localeCompare(right.memory.id);
 		});
 
-		result[entry.bucket.rangeKey] = entry.candidates
-			.slice(0, 3)
-			.map((candidate) => candidate.memory);
+		result[entry.bucket.rangeKey] = entry.candidates.slice(0, 3).map((candidate) => candidate.memory);
 	}
 
 	return result;
@@ -282,18 +267,10 @@ async function loadTimeline(): Promise<void> {
 		]);
 		buckets = response.buckets;
 		emitGeneratedFor(response.generatedFor);
-		const usage = buildBucketUsageMaps(
-			response.buckets,
-			memoryResult.memories,
-			skills,
-			mcp.servers,
-		);
+		const usage = buildBucketUsageMaps(response.buckets, memoryResult.memories, skills, mcp.servers);
 		bucketSkillUsage = usage.skillUsage;
 		bucketMcpUsage = usage.mcpUsage;
-		bucketTopMemories = buildBucketTopMemories(
-			response.buckets,
-			memoryResult.memories,
-		);
+		bucketTopMemories = buildBucketTopMemories(response.buckets, memoryResult.memories);
 		activeIndex = 0;
 		if (response.error) {
 			error = response.error;
@@ -322,10 +299,7 @@ function formatDateRange(startIso: string, endIso: string): string {
 	})}`;
 }
 
-function formatMemoryMoment(
-	value: string,
-	rangeKey: MemoryTimelineBucket["rangeKey"],
-): string {
+function formatMemoryMoment(value: string, rangeKey: MemoryTimelineBucket["rangeKey"]): string {
 	const parsed = Date.parse(value);
 	if (!Number.isFinite(parsed)) return "Unknown";
 	const date = new Date(parsed);
@@ -375,6 +349,8 @@ function getRangeChipLabel(bucket: MemoryTimelineBucket): string {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
+	if (!shouldHandleTimelineNavigation(event)) return;
+
 	if (event.key === "ArrowRight") {
 		event.preventDefault();
 		moveOlder(event.shiftKey ? 3 : 1);
@@ -396,6 +372,28 @@ function handleKeydown(event: KeyboardEvent): void {
 	}
 }
 
+function isEditableElement(target: EventTarget | null): boolean {
+	if (!(target instanceof HTMLElement)) return false;
+	const tag = target.tagName;
+	if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+	return target.isContentEditable;
+}
+
+function shouldHandleTimelineNavigation(event: KeyboardEvent): boolean {
+	if (event.defaultPrevented) return false;
+	if (event.altKey || event.ctrlKey || event.metaKey) return false;
+	if (event.key !== "ArrowRight" && event.key !== "ArrowLeft" && event.key !== "PageDown" && event.key !== "PageUp") {
+		return false;
+	}
+	if (isEditableElement(event.target)) return false;
+
+	const active = document.activeElement;
+	if (isEditableElement(active)) return false;
+	if (!(active instanceof HTMLElement)) return false;
+	if (!refs.rootEl) return active === document.body;
+	return active === document.body || refs.rootEl.contains(active);
+}
+
 onMount(() => {
 	loadTimeline();
 	return () => {
@@ -407,7 +405,7 @@ onMount(() => {
 <svelte:window onkeydown={handleKeydown} />
 
 <div
-	bind:this={rootEl}
+	bind:this={refs.rootEl}
 	class="timeline-shell flex flex-1 min-h-0 flex-col gap-3 bg-[var(--sig-bg)] p-3"
 	role="region"
 	aria-label="Memory timeline. Use left and right arrows to move through eras."
