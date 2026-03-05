@@ -144,6 +144,7 @@ function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
 function scrollToBottomNextFrame(behavior: ScrollBehavior = "auto"): void {
 	void tick().then(() => {
 		requestAnimationFrame(() => {
+			if (!logAutoScroll) return;
 			scrollToBottom(behavior);
 		});
 	});
