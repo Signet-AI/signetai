@@ -46,6 +46,7 @@ function listTsFilesRecursive(dir: string): string[] {
 			if (entry === "node_modules" || entry.startsWith(".")) continue;
 			const nextAbs = join(currentAbs, entry);
 			const nextRel = relPrefix ? `${relPrefix}/${entry}` : entry;
+			if (!existsSync(nextAbs)) continue; // skip broken symlinks
 			const nextStat = statSync(nextAbs);
 			if (nextStat.isDirectory()) {
 				walk(nextAbs, nextRel);
@@ -169,11 +170,16 @@ function checkRouteDrift(claudeMd: string): {
 		? parseClaudeMdRoutes(endpointSection)
 		: [];
 
-	// Build a set of documented route keys
+	// Build a set of documented route keys; expand ALL to specific HTTP methods
+	// to mirror source-side expansion so comparison is symmetric.
 	const docKeys = new Set<string>();
 	for (const dr of docRoutes) {
 		for (const m of dr.methods) {
-			docKeys.add(routeKey(m, dr.endpoint));
+			if (m === "ALL") {
+				for (const hm of HTTP_METHODS) docKeys.add(routeKey(hm, dr.endpoint));
+			} else {
+				docKeys.add(routeKey(m, dr.endpoint));
+			}
 		}
 	}
 
