@@ -92,6 +92,12 @@ const BASE_CFG: PipelineV2Config = {
 		chunkTargetChars: 300,
 		recallTruncateChars: 500,
 	},
+	structural: {
+		enabled: false,
+		classifyBatchSize: 8,
+		dependencyBatchSize: 5,
+		pollIntervalMs: 10000,
+	},
 };
 
 const now = new Date().toISOString();

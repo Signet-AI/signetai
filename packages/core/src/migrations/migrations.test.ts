@@ -115,6 +115,12 @@ describe("migration framework", () => {
 
 		// v14 tables
 		expect(tableNames).toContain("telemetry_events");
+
+		// v19 tables (knowledge architecture)
+		expect(tableNames).toContain("entity_aspects");
+		expect(tableNames).toContain("entity_attributes");
+		expect(tableNames).toContain("entity_dependencies");
+		expect(tableNames).toContain("task_meta");
 	});
 
 	test("memories table has expected v2 columns", () => {

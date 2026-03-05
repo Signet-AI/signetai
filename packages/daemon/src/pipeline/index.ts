@@ -14,6 +14,8 @@ import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worke
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { DEFAULT_RETENTION, type RetentionHandle, startRetentionWorker } from "./retention-worker";
 import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
+import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./structural-classify";
+import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, startWorker } from "./worker";
 
@@ -49,6 +51,8 @@ let maintenanceHandle: MaintenanceHandle | null = null;
 let documentWorkerHandle: DocumentWorkerHandle | null = null;
 let summaryWorkerHandle: SummaryWorkerHandle | null = null;
 let synthesisWorkerHandle: SynthesisWorkerHandle | null = null;
+let structuralClassifyHandle: StructuralClassifyHandle | null = null;
+let structuralDependencyHandle: StructuralDependencyHandle | null = null;
 
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
 export function getPipelineWorkerStatus(): Record<string, { running: boolean }> {
@@ -59,6 +63,8 @@ export function getPipelineWorkerStatus(): Record<string, { running: boolean }> 
 		retention: { running: retentionHandle !== null },
 		maintenance: { running: maintenanceHandle !== null },
 		synthesis: { running: synthesisWorkerHandle !== null },
+		structuralClassify: { running: structuralClassifyHandle !== null },
+		structuralDependency: { running: structuralDependencyHandle !== null },
 	};
 }
 
@@ -122,6 +128,30 @@ export function startPipeline(
 		synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
 	}
 
+	// Structural assignment workers (KA-2) — classify aspects and extract
+	// dependencies from entity-linked facts. Gate on both structural.enabled
+	// and graph.enabled since they depend on the entity graph.
+	if (
+		pipelineCfg.structural.enabled &&
+		pipelineCfg.graph.enabled &&
+		!pipelineCfg.mutationsFrozen
+	) {
+		if (!structuralClassifyHandle) {
+			structuralClassifyHandle = startStructuralClassifyWorker({
+				accessor,
+				provider,
+				pipelineCfg,
+			});
+		}
+		if (!structuralDependencyHandle) {
+			structuralDependencyHandle = startStructuralDependencyWorker({
+				accessor,
+				provider,
+				pipelineCfg,
+			});
+		}
+	}
+
 	logger.info("pipeline", "Pipeline started", {
 		mode:
 			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen ? "controlled-write" : "shadow",
@@ -136,6 +166,14 @@ export async function stopPipeline(): Promise<void> {
 			logger.warn("pipeline", "Synthesis worker drain timed out during shutdown");
 		}
 		synthesisWorkerHandle = null;
+	}
+	if (structuralDependencyHandle) {
+		await structuralDependencyHandle.stop();
+		structuralDependencyHandle = null;
+	}
+	if (structuralClassifyHandle) {
+		await structuralClassifyHandle.stop();
+		structuralClassifyHandle = null;
 	}
 	if (summaryWorkerHandle) {
 		summaryWorkerHandle.stop();

@@ -51,7 +51,7 @@ export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_attributes (
 			id                 TEXT PRIMARY KEY,
-			aspect_id          TEXT NOT NULL REFERENCES entity_aspects(id) ON DELETE CASCADE,
+			aspect_id          TEXT REFERENCES entity_aspects(id) ON DELETE SET NULL,
 			agent_id           TEXT NOT NULL DEFAULT 'default',
 			memory_id          TEXT REFERENCES memories(id) ON DELETE SET NULL,
 			kind               TEXT NOT NULL,

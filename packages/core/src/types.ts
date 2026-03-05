@@ -233,6 +233,7 @@ export interface PipelineV2Config {
 	readonly embeddingTracker: PipelineEmbeddingTrackerConfig;
 	readonly synthesis: PipelineSynthesisConfig;
 	readonly procedural: PipelineProceduralConfig;
+	readonly structural: PipelineStructuralConfig;
 }
 
 export interface PipelineEmbeddingTrackerConfig {
@@ -258,6 +259,13 @@ export interface PipelineProceduralConfig {
 	readonly enrichOnInstall: boolean;
 	readonly enrichMinDescription: number;
 	readonly reconcileIntervalMs: number;
+}
+
+export interface PipelineStructuralConfig {
+	readonly enabled: boolean;
+	readonly classifyBatchSize: number;
+	readonly dependencyBatchSize: number;
+	readonly pollIntervalMs: number;
 }
 
 // -- Status/union constants --

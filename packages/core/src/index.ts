@@ -67,6 +67,7 @@ export type {
 	EntityAttribute,
 	EntityDependency,
 	TaskMeta,
+	PipelineStructuralConfig,
 } from "./types";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";

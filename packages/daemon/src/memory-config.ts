@@ -121,6 +121,12 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		enrichMinDescription: 30,
 		reconcileIntervalMs: 60000,
 	},
+	structural: {
+		enabled: true,
+		classifyBatchSize: 8,
+		dependencyBatchSize: 5,
+		pollIntervalMs: 10000,
+	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -173,6 +179,7 @@ export function loadPipelineConfig(
 	const embeddingTrackerRaw = raw.embeddingTracker as Record<string, unknown> | undefined;
 	const synthesisRaw = raw.synthesis as Record<string, unknown> | undefined;
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
+	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -555,6 +562,30 @@ export function loadPipelineConfig(
 				10000,
 				600000,
 				d.procedural.reconcileIntervalMs,
+			),
+		},
+
+		structural: {
+			enabled: resolveBool(
+				structuralRaw?.enabled, undefined, d.structural.enabled,
+			),
+			classifyBatchSize: clampPositive(
+				structuralRaw?.classifyBatchSize,
+				1,
+				20,
+				d.structural.classifyBatchSize,
+			),
+			dependencyBatchSize: clampPositive(
+				structuralRaw?.dependencyBatchSize,
+				1,
+				10,
+				d.structural.dependencyBatchSize,
+			),
+			pollIntervalMs: clampPositive(
+				structuralRaw?.pollIntervalMs,
+				2000,
+				120000,
+				d.structural.pollIntervalMs,
 			),
 		},
 	};
