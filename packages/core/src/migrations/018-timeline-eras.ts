@@ -30,11 +30,19 @@ export function up(db: MigrationDb): void {
 			ON timeline_eras(era_type);
 	`);
 
-	// Add emergence tracking columns to entities table
-	db.exec(`
-		ALTER TABLE entities ADD COLUMN first_seen_at TEXT;
-		ALTER TABLE entities ADD COLUMN peak_mentions_at TEXT;
-	`);
+	// Add emergence tracking columns to entities table (idempotent check)
+	// SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we check pragma
+	const columns = db
+		.prepare("PRAGMA table_info(entities)")
+		.all() as Array<{ name: string }>;
+	const columnNames = columns.map((c) => c.name);
+
+	if (!columnNames.includes("first_seen_at")) {
+		db.exec(`ALTER TABLE entities ADD COLUMN first_seen_at TEXT`);
+	}
+	if (!columnNames.includes("peak_mentions_at")) {
+		db.exec(`ALTER TABLE entities ADD COLUMN peak_mentions_at TEXT`);
+	}
 
 	// Create index for emergence queries
 	db.exec(`

@@ -47,6 +47,9 @@ function jensenShannonDivergence(p: Map<string, number>, q: Map<string, number>)
 	// Get all unique keys
 	const keys = new Set([...p.keys(), ...q.keys()]);
 
+	// If both distributions are empty, they're identical
+	if (keys.size === 0) return 0;
+
 	// Normalize distributions
 	const pTotal = Array.from(p.values()).reduce((sum, v) => sum + v, 0) || 1;
 	const qTotal = Array.from(q.values()).reduce((sum, v) => sum + v, 0) || 1;
@@ -102,7 +105,7 @@ function getMemoryCount(db: ReadDb, startDate: string, endDate: string): number 
 			`SELECT COUNT(*) as count FROM memories
 			 WHERE created_at >= ? AND created_at < ? AND is_deleted = 0`,
 		)
-		.get(startDate, endDate) as { count: number };
+		.get(startDate, endDate) as { count: number } | undefined;
 	return row?.count ?? 0;
 }
 
@@ -114,10 +117,21 @@ function getMemoryCount(db: ReadDb, startDate: string, endDate: string): number 
  * Generate time buckets for analysis.
  */
 function generateBuckets(startDate: Date, endDate: Date, granularityDays: number): TimeBucket[] {
+	// Validate date range
+	if (startDate >= endDate) {
+		return [];
+	}
+
+	// Validate granularity
+	const validatedGranularity = granularityDays > 0 ? granularityDays : 7;
+	if (granularityDays <= 0) {
+		logger.warn("timeline", "Invalid granularity, defaulting to 7 days", { granularityDays });
+	}
+
 	const buckets: TimeBucket[] = [];
 	const current = new Date(startDate);
 	const msPerDay = 24 * 60 * 60 * 1000;
-	const bucketMs = granularityDays * msPerDay;
+	const bucketMs = validatedGranularity * msPerDay;
 
 	while (current < endDate) {
 		const bucketStart = current.toISOString();
@@ -283,7 +297,8 @@ export function detectTimelineEras(
 					.map(([name]) => name);
 
 				const eraName = generateEraName(topEntities);
-				const eraType = classifyEraType(topEntities, memoryCount / eraBuckets.length);
+				const avgDensity = eraBuckets.length > 0 ? memoryCount / eraBuckets.length : 0;
+				const eraType = classifyEraType(topEntities, avgDensity);
 
 				const eraId = crypto.randomUUID();
 				eraIds.push(eraId);
@@ -362,7 +377,7 @@ export function backfillEntityEmergence(db: DbAccessor): number {
 			WHERE peak_mentions_at IS NULL
 		`).run();
 
-		const changes = ((result1 as any).changes || 0) + ((result2 as any).changes || 0);
+		const changes = (result1 as { changes: number }).changes + (result2 as { changes: number }).changes;
 
 		if (changes > 0) {
 			logger.info("timeline", "Entity emergence backfilled", { changes });

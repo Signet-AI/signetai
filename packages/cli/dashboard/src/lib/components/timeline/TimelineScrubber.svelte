@@ -43,8 +43,9 @@ function setAllTime(): void {
 
 <div class="flex items-center gap-3 flex-wrap">
 	<div class="flex items-center gap-2">
-		<label class="text-[10px] uppercase tracking-[0.06em] text-[var(--sig-text-muted)]">From</label>
+		<label for="timeline-start" class="text-[10px] uppercase tracking-[0.06em] text-[var(--sig-text-muted)]">From</label>
 		<Input
+			id="timeline-start"
 			type="date"
 			bind:value={tempStart}
 			class="h-7 w-32 text-xs font-[family-name:var(--font-mono)]"
@@ -52,8 +53,9 @@ function setAllTime(): void {
 	</div>
 
 	<div class="flex items-center gap-2">
-		<label class="text-[10px] uppercase tracking-[0.06em] text-[var(--sig-text-muted)]">To</label>
+		<label for="timeline-end" class="text-[10px] uppercase tracking-[0.06em] text-[var(--sig-text-muted)]">To</label>
 		<Input
+			id="timeline-end"
 			type="date"
 			bind:value={tempEnd}
 			class="h-7 w-32 text-xs font-[family-name:var(--font-mono)]"

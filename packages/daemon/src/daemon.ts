@@ -5753,6 +5753,20 @@ app.get("/api/timeline/range", (c) => {
 		return c.json({ error: "start and end query params required" }, 400);
 	}
 
+	// Validate granularity
+	const validGranularities = ["day", "week", "month"];
+	if (granularity && !validGranularities.includes(granularity)) {
+		return c.json(
+			{ error: `granularity must be one of: ${validGranularities.join(", ")}` },
+			400,
+		);
+	}
+
+	// Validate date format (basic ISO check)
+	if (!/^\d{4}-\d{2}-\d{2}/.test(start) || !/^\d{4}-\d{2}-\d{2}/.test(end)) {
+		return c.json({ error: "start and end must be ISO date format (YYYY-MM-DD)" }, 400);
+	}
+
 	const buckets = getDbAccessor().withReadDb((db) => {
 		// Determine date format based on granularity
 		let dateFormat: string;
@@ -5782,31 +5796,49 @@ app.get("/api/timeline/range", (c) => {
 			)
 			.all(dateFormat, start, end) as Array<{ bucket: string; memory_count: number }>;
 
-		// For each bucket, get top 5 entities
-		return memoryBuckets.map((bucket) => {
-			const topEntities = db
-				.prepare(
-					`SELECT e.name, COUNT(*) as mention_count
-					 FROM memory_entity_mentions mem
-					 JOIN entities e ON e.id = mem.entity_id
-					 JOIN memories m ON m.id = mem.memory_id
-					 WHERE m.is_deleted = 0
-					 AND strftime(?, m.created_at) = ?
-					 GROUP BY e.id
-					 ORDER BY mention_count DESC
-					 LIMIT 5`,
-				)
-				.all(dateFormat, bucket.bucket) as Array<{ name: string; mention_count: number }>;
+		// Single query to fetch all entity mentions for the date range, grouped by bucket
+		const entityRows = db
+			.prepare(
+				`SELECT
+					strftime(?, m.created_at) as bucket,
+					e.name,
+					COUNT(*) as mention_count
+				 FROM memory_entity_mentions mem
+				 JOIN entities e ON e.id = mem.entity_id
+				 JOIN memories m ON m.id = mem.memory_id
+				 WHERE m.is_deleted = 0
+				 AND m.created_at >= ?
+				 AND m.created_at <= ?
+				 GROUP BY bucket, e.id
+				 ORDER BY bucket ASC, mention_count DESC`,
+			)
+			.all(dateFormat, start, end) as Array<{
+			bucket: string;
+			name: string;
+			mention_count: number;
+		}>;
 
-			return {
-				bucket: bucket.bucket,
-				memory_count: bucket.memory_count,
-				top_entities: topEntities,
-			};
-		});
+		// Group entities by bucket in memory (top 5 per bucket)
+		const entitiesByBucket = new Map<string, Array<{ name: string; mention_count: number }>>();
+		for (const row of entityRows) {
+			if (!entitiesByBucket.has(row.bucket)) {
+				entitiesByBucket.set(row.bucket, []);
+			}
+			const entities = entitiesByBucket.get(row.bucket)!;
+			if (entities.length < 5) {
+				entities.push({ name: row.name, mention_count: row.mention_count });
+			}
+		}
+
+		// Combine bucket data with entities
+		return memoryBuckets.map((bucket) => ({
+			bucket: bucket.bucket,
+			memory_count: bucket.memory_count,
+			top_entities: entitiesByBucket.get(bucket.bucket) || [],
+		}));
 	});
 
-	return c.json(buckets);
+	return c.json({ buckets });
 });
 
 // Timeline Eras API - Get all timeline eras
@@ -5820,7 +5852,7 @@ app.get("/api/timeline/eras", (c) => {
 			.all(),
 	);
 
-	return c.json(eras);
+	return c.json({ eras });
 });
 
 // Timeline Era Detection API - Trigger era detection

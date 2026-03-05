@@ -52,14 +52,20 @@ const COLORS = {
 	grid: "rgba(255, 255, 255, 0.05)",
 };
 
+function parseDate(dateStr: string): Date | null {
+	const date = new Date(dateStr);
+	return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function requestRedraw(): void {
 	needsRedraw = true;
-	if (!animFrame && canvas) {
-		const ctx = canvas.getContext("2d");
-		if (ctx) {
-			animFrame = requestAnimationFrame(() => draw(ctx));
-		}
-	}
+	if (animFrame) return; // Already have a pending frame
+	if (!canvas) return;
+
+	const ctx = canvas.getContext("2d");
+	if (!ctx) return;
+
+	animFrame = requestAnimationFrame(() => draw(ctx));
 }
 
 function resizeCanvas(): void {
@@ -68,6 +74,10 @@ function resizeCanvas(): void {
 	if (!parent) return;
 
 	const rect = parent.getBoundingClientRect();
+
+	// Guard against zero dimensions
+	if (rect.width === 0 || rect.height === 0) return;
+
 	const dpr = window.devicePixelRatio || 1;
 
 	canvas.width = rect.width * dpr;
@@ -76,10 +86,9 @@ function resizeCanvas(): void {
 	canvas.style.height = `${rect.height}px`;
 
 	const ctx = canvas.getContext("2d");
-	if (ctx) {
-		ctx.scale(dpr, dpr);
-	}
+	if (!ctx) return;
 
+	ctx.scale(dpr, dpr);
 	requestRedraw();
 }
 
@@ -105,10 +114,13 @@ function draw(ctx: CanvasRenderingContext2D): void {
 
 	// Calculate bar width
 	const totalBars = buckets.length;
+	if (totalBars === 0) return;
+
 	const barWidth = Math.max(4, (plotWidth / totalBars) * camZoom - BAR_GAP);
 
 	// Calculate max count for scaling
-	const maxCount = Math.max(...buckets.map((b) => b.count), 1);
+	const counts = buckets.map((b) => b.memory_count);
+	const maxCount = counts.length > 0 ? Math.max(...counts, 1) : 1;
 
 	// Draw eras
 	drawEras(ctx, plotWidth, plotHeight);
@@ -194,7 +206,7 @@ function drawBars(
 		const x = PADDING_LEFT + i * (barWidth + BAR_GAP) + camX;
 		if (x < PADDING_LEFT - barWidth || x > PADDING_LEFT + plotWidth) return;
 
-		const barHeight = (bucket.count / maxCount) * barAreaHeight;
+		const barHeight = (bucket.memory_count / maxCount) * barAreaHeight;
 		const y = barAreaTop + barAreaHeight - barHeight;
 
 		const isHovered = hoveredBucket === bucket;
@@ -230,7 +242,9 @@ function drawAxis(
 		const x = PADDING_LEFT + i * ((plotWidth / buckets.length) * camZoom) + camX;
 		if (x < PADDING_LEFT || x > PADDING_LEFT + plotWidth) return;
 
-		const date = new Date(bucket.date);
+		const date = parseDate(bucket.bucket);
+		if (!date) return;
+
 		const label = `${date.getMonth() + 1}/${date.getDate()}`;
 
 		ctx.fillText(label, x, axisY + 16);
@@ -240,21 +254,32 @@ function drawAxis(
 function dateToX(date: string, plotWidth: number): number {
 	if (buckets.length === 0) return 0;
 
-	const targetDate = new Date(date).getTime();
-	const firstDate = new Date(buckets[0].date).getTime();
-	const lastDate = new Date(buckets[buckets.length - 1].date).getTime();
-	const totalDays = (lastDate - firstDate) / (1000 * 60 * 60 * 24);
+	const firstBucket = buckets[0];
+	const lastBucket = buckets[buckets.length - 1];
+
+	if (!firstBucket || !lastBucket) return PADDING_LEFT;
+
+	const targetDate = parseDate(date);
+	const firstDate = parseDate(firstBucket.bucket);
+	const lastDate = parseDate(lastBucket.bucket);
+
+	if (!targetDate || !firstDate || !lastDate) return PADDING_LEFT;
+
+	const targetTime = targetDate.getTime();
+	const firstTime = firstDate.getTime();
+	const lastTime = lastDate.getTime();
+	const totalDays = (lastTime - firstTime) / (1000 * 60 * 60 * 24);
 
 	if (totalDays === 0) return PADDING_LEFT;
 
-	const daysDiff = (targetDate - firstDate) / (1000 * 60 * 60 * 24);
+	const daysDiff = (targetTime - firstTime) / (1000 * 60 * 60 * 24);
 	const x = PADDING_LEFT + (daysDiff / totalDays) * plotWidth * camZoom + camX;
 
 	return x;
 }
 
 function handleMouseMove(event: MouseEvent): void {
-	if (!canvas) return;
+	if (!canvas || buckets.length === 0) return;
 
 	const rect = canvas.getBoundingClientRect();
 	const x = event.clientX - rect.left;
@@ -310,6 +335,43 @@ function handleMouseUp(): void {
 	isPanning = false;
 }
 
+function handleKeyDown(event: KeyboardEvent): void {
+	if (!canvas) return;
+
+	const panAmount = 50;
+	const zoomAmount = 0.1;
+
+	switch (event.key) {
+		case "ArrowLeft":
+			event.preventDefault();
+			camX -= panAmount;
+			requestRedraw();
+			break;
+		case "ArrowRight":
+			event.preventDefault();
+			camX += panAmount;
+			requestRedraw();
+			break;
+		case "+":
+		case "=":
+			event.preventDefault();
+			camZoom = Math.min(5, camZoom * (1 + zoomAmount));
+			requestRedraw();
+			break;
+		case "-":
+			event.preventDefault();
+			camZoom = Math.max(0.5, camZoom * (1 - zoomAmount));
+			requestRedraw();
+			break;
+		case "0":
+			event.preventDefault();
+			camX = 0;
+			camZoom = 1;
+			requestRedraw();
+			break;
+	}
+}
+
 function setupInteractions(): void {
 	if (!canvas) return;
 
@@ -317,6 +379,7 @@ function setupInteractions(): void {
 	canvas.addEventListener("click", handleClick);
 	canvas.addEventListener("wheel", handleWheel, { passive: false });
 	canvas.addEventListener("mousedown", handleMouseDown);
+	canvas.addEventListener("keydown", handleKeyDown);
 	window.addEventListener("mousemove", handleMouseMovePan);
 	window.addEventListener("mouseup", handleMouseUp);
 }
@@ -328,6 +391,7 @@ function cleanupInteractions(): void {
 	canvas.removeEventListener("click", handleClick);
 	canvas.removeEventListener("wheel", handleWheel);
 	canvas.removeEventListener("mousedown", handleMouseDown);
+	canvas.removeEventListener("keydown", handleKeyDown);
 	window.removeEventListener("mousemove", handleMouseMovePan);
 	window.removeEventListener("mouseup", handleMouseUp);
 }
@@ -345,9 +409,10 @@ onMount(() => {
 });
 
 $effect(() => {
-	if (buckets || eras) {
-		requestRedraw();
-	}
+	// Track bucket and era changes
+	buckets;
+	eras;
+	requestRedraw();
 });
 </script>
 
@@ -355,4 +420,7 @@ $effect(() => {
 	bind:this={canvas}
 	class="w-full h-full"
 	style="display: block;"
+	tabindex="0"
+	role="img"
+	aria-label="Timeline visualization showing memory activity over time. Use arrow keys to pan, plus/minus to zoom, and 0 to reset."
 ></canvas>

@@ -47,7 +47,7 @@ function handleEraClick(era: EraMarker): void {
 }
 
 const totalMemories = $derived(
-	timeline.buckets.reduce((sum, bucket) => sum + bucket.count, 0)
+	timeline.buckets.reduce((sum, bucket) => sum + bucket.memory_count, 0)
 );
 </script>
 

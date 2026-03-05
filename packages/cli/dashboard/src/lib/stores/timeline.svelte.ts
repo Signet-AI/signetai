@@ -3,9 +3,9 @@
  */
 
 export interface TimeBucket {
-	date: string;
-	count: number;
-	entities: Map<string, number>;
+	bucket: string;
+	memory_count: number;
+	top_entities: Array<{ name: string; mention_count: number }>;
 }
 
 export interface EraMarker {
@@ -48,8 +48,17 @@ function getDefaultEnd(): string {
 function getDefaultStart(): string {
 	const date = new Date();
 	date.setDate(date.getDate() - 90);
-	return date.toISOString().split("T")[0];
+	const isoString = date.toISOString();
+	return isoString.split("T")[0] || new Date().toISOString().split("T")[0];
 }
+
+// Color palette for era types
+const ERA_COLORS: Record<string, string> = {
+	project: "#3b82f6",
+	topic: "#10b981",
+	workflow: "#f59e0b",
+	transition: "#6366f1",
+};
 
 export async function loadTimeline(): Promise<void> {
 	timeline.loading = true;
@@ -79,7 +88,17 @@ export async function loadEras(): Promise<void> {
 		if (!response.ok) throw new Error("Failed to load eras");
 
 		const data = await response.json();
-		timeline.eras = data.eras || [];
+		// Transform backend format to frontend format
+		timeline.eras = (data.eras || []).map((era: any) => ({
+			id: era.id,
+			label: era.name,
+			startDate: era.start_date,
+			endDate: era.end_date,
+			color: ERA_COLORS[era.era_type] || "#6b7280",
+			description: era.top_entities
+				? `Top entities: ${JSON.parse(era.top_entities).join(", ")}`
+				: undefined,
+		}));
 	} catch (error) {
 		console.error("Failed to load eras:", error);
 		timeline.eras = [];
