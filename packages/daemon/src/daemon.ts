@@ -3992,6 +3992,28 @@ app.get("/api/harnesses", async (c) => {
 	const readHarnessesFromYaml = (
 		content: string,
 	): { found: boolean; values: string[] } => {
+		const stripInlineComment = (value: string): string => {
+			let inSingleQuote = false;
+			let inDoubleQuote = false;
+			for (let idx = 0; idx < value.length; idx++) {
+				const ch = value[idx];
+				if (ch === "'" && !inDoubleQuote) {
+					inSingleQuote = !inSingleQuote;
+					continue;
+				}
+				if (ch === '"' && !inSingleQuote) {
+					inDoubleQuote = !inDoubleQuote;
+					continue;
+				}
+				if (ch === "#" && !inSingleQuote && !inDoubleQuote) {
+					if (idx === 0 || value[idx - 1] === " " || value[idx - 1] === "\t") {
+						return value.slice(0, idx).trim();
+					}
+				}
+			}
+			return value.trim();
+		};
+
 		const lines = content.split("\n");
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
@@ -3999,7 +4021,7 @@ app.get("/api/harnesses", async (c) => {
 			if (!match) continue;
 
 			const baseIndent = match[1].length;
-			const inlineValue = match[2].trim();
+			const inlineValue = stripInlineComment(match[2]);
 
 			if (inlineValue.startsWith("[") && inlineValue.endsWith("]")) {
 				const values = inlineValue
@@ -4020,14 +4042,17 @@ app.get("/api/harnesses", async (c) => {
 				const trimmed = nextLine.trim();
 				if (!trimmed || trimmed.startsWith("#")) continue;
 
+				const itemMatch = nextLine.match(/^(\s*)-\s*(.+?)\s*(?:#.*)?$/);
+				if (itemMatch) {
+					const itemIndent = itemMatch[1].length;
+					if (itemIndent < baseIndent) break;
+					const value = itemMatch[2].trim().replace(/^["']|["']$/g, "");
+					if (value.length > 0) values.push(value);
+					continue;
+				}
+
 				const indent = nextLine.search(/\S/);
 				if (indent <= baseIndent) break;
-
-				const itemMatch = nextLine.match(/^\s*-\s*(.+?)\s*(?:#.*)?$/);
-				if (!itemMatch) continue;
-
-				const value = itemMatch[1].trim().replace(/^["']|["']$/g, "");
-				if (value.length > 0) values.push(value);
 			}
 
 			return { found: true, values };
