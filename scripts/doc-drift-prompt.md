@@ -118,9 +118,9 @@ cat > "${PR_BODY_FILE}" <<'PREOF'
 Automated documentation drift fix. Changes detected by `scripts/doc-drift.ts`:
 
 PREOF
-# Strip the "# Doc Drift Report" title line to avoid an h1 nested under the
-# PR body's h2, and a duplicate ## Summary section.
-printf '%s\n' "${DRIFT_REPORT}" | tail -n +2 >> "${PR_BODY_FILE}"
+# Skip the first 4 lines of the report (title, blank, ## Summary, blank)
+# to avoid an h1 nested under the PR body's h2 and a duplicate ## Summary.
+printf '%s\n' "${DRIFT_REPORT}" | tail -n +5 >> "${PR_BODY_FILE}"
 cat >> "${PR_BODY_FILE}" <<'PREOF'
 
 ---
