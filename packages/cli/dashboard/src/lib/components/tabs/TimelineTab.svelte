@@ -120,14 +120,19 @@ function buildBucketUsageMaps(
 			pattern: new RegExp(`\\b${escapeRegex(name)}\\b`, "i"),
 		}));
 
-	const mcpMatchers = mcpServers
-		.flatMap((server) => [server.name, server.id])
-		.map((value) => value.trim().toLowerCase())
-		.filter((value) => value.length > 0)
-		.map((value) => ({
-			value,
-			pattern: new RegExp(`\\b${escapeRegex(value)}\\b`, "i"),
-		}));
+	const mcpMatchers = mcpServers.flatMap((server) => {
+		const entries: Array<{ serverId: string; pattern: RegExp }> = [];
+		for (const raw of [server.name, server.id]) {
+			const value = raw.trim().toLowerCase();
+			if (value.length > 0) {
+				entries.push({
+					serverId: server.id,
+					pattern: new RegExp(`\\b${escapeRegex(value)}\\b`, "i"),
+				});
+			}
+		}
+		return entries;
+	});
 
 	const storage = bucketsInput.map((bucket) => ({
 		bucket,
@@ -166,7 +171,7 @@ function buildBucketUsageMaps(
 			let matchedMcp = false;
 			for (const matcher of mcpMatchers) {
 				if (matcher.pattern.test(memoryText)) {
-					entry.mcpSet.add(matcher.value);
+					entry.mcpSet.add(matcher.serverId);
 					matchedMcp = true;
 				}
 			}
@@ -297,16 +302,16 @@ async function loadTimeline(): Promise<void> {
 }
 
 function formatDateRange(startIso: string, endIso: string): string {
-	const start = new Date(startIso);
-	const end = new Date(endIso);
-	return `${start.toLocaleDateString("en-US", {
+	// Format in UTC to avoid timezone offset issues where UTC midnight
+	// appears as the previous local day in negative-UTC-offset timezones
+	const opts: Intl.DateTimeFormatOptions = {
 		month: "short",
 		day: "numeric",
-	})} - ${end.toLocaleDateString("en-US", {
-		month: "short",
-		day: "numeric",
-		year: "numeric",
-	})}`;
+		timeZone: "UTC",
+	};
+	const start = new Date(startIso).toLocaleDateString("en-US", opts);
+	const end = new Date(endIso).toLocaleDateString("en-US", { ...opts, year: "numeric" });
+	return `${start} - ${end}`;
 }
 
 function formatMemoryMoment(value: string, rangeKey: MemoryTimelineBucket["rangeKey"]): string {

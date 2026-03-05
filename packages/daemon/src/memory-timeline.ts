@@ -347,7 +347,9 @@ export function buildMemoryTimeline(
 		generatedAt: new Date().toISOString(),
 		generatedFor: new Date(nowStartMs).toISOString(),
 		rangePreset: "today-last_week-one_month",
+		// Count of non-deleted memories within the 30-day query window, not the full DB total
 		totalMemories: memoryRows.length,
+		// Count of history events within the 30-day window for non-deleted memories
 		totalHistoryEvents: historyRows.length,
 		invalidMemoryTimestamps,
 		invalidHistoryTimestamps,
