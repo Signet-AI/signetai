@@ -1,12 +1,13 @@
 <script lang="ts">
 import { browser } from "$app/environment";
 import { type DaemonStatus, type Memory, getStatus } from "$lib/api";
-import AppSidebar from "$lib/components/app-sidebar.svelte";
 import ExtensionBanner from "$lib/components/ExtensionBanner.svelte";
+import AppSidebar from "$lib/components/app-sidebar.svelte";
 import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.svelte";
 import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
+import { Skeleton } from "$lib/components/ui/skeleton/index.js";
 import { Toaster } from "$lib/components/ui/sonner/index.js";
 import {
 	clearAll,
@@ -16,24 +17,22 @@ import {
 	mem,
 	queueMemorySearch,
 } from "$lib/stores/memory.svelte";
-import {
-	initNavFromHash,
-	isEngineGroup,
-	isMemoryGroup,
-	nav,
-	setTab,
-} from "$lib/stores/navigation.svelte";
+import { initNavFromHash, isEngineGroup, isMemoryGroup, nav, setTab } from "$lib/stores/navigation.svelte";
 import { openForm, ts } from "$lib/stores/tasks.svelte";
 import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
-import { Skeleton } from "$lib/components/ui/skeleton/index.js";
 import Plus from "@lucide/svelte/icons/plus";
 import { onMount } from "svelte";
 
 const activeTab = $derived(nav.activeTab);
 
-const tabBtn = "px-2.5 py-0.5 sig-label uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer";
+const tabBtn =
+	"px-2.5 py-0.5 sig-label uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer";
 const tabActive = `${tabBtn} bg-[var(--sig-accent)] text-[var(--sig-bg)]`;
 const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]`;
+const engineTabBtn =
+	"px-3 py-1 text-[12px] sig-label uppercase tracking-[0.08em] rounded-md transition-colors duration-150 border-none cursor-pointer";
+const engineTabActive = `${engineTabBtn} bg-[var(--sig-accent)] text-[var(--sig-bg)]`;
+const engineTabInactive = `${engineTabBtn} bg-transparent text-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]`;
 
 const { data } = $props();
 let daemonStatus = $state<DaemonStatus | null>(null);
@@ -76,12 +75,12 @@ const displayMemories = $derived(
 
 // --- Filter reactivity ---
 $effect(() => {
-	const _ = mem.filterType,
-		__ = mem.filterTags,
-		___ = mem.filterWho,
-		____ = mem.filterPinned,
-		_____ = mem.filterImportanceMin,
-		______ = mem.filterSince;
+	const _ = mem.filterType;
+	const __ = mem.filterTags;
+	const ___ = mem.filterWho;
+	const ____ = mem.filterPinned;
+	const _____ = mem.filterImportanceMin;
+	const ______ = mem.filterSince;
 	if (hasActiveFilters() || mem.searched) {
 		queueMemorySearch();
 	}
@@ -153,7 +152,7 @@ onMount(() => {
 		m-2 ml-0 rounded-lg border border-[var(--sig-border)] md:border-l-0
 		bg-[var(--sig-surface)]">
 		<header
-			class="flex h-10 shrink-0 items-center justify-between
+			class="flex h-12 shrink-0 items-center justify-between
 				border-b border-[var(--sig-border)] px-4"
 		>
 			<div class="flex items-center gap-2">
@@ -183,22 +182,21 @@ onMount(() => {
 					</div>
 				{:else if isEngineGroup(activeTab)}
 					<span class="ml-1 w-px h-4 bg-[var(--sig-border)]"></span>
-					<div class="flex items-center gap-px
-						border border-[var(--sig-border)] rounded-lg p-px">
+					<div class="flex items-center gap-px rounded-lg">
 						<button
-							class={activeTab === 'settings' ? tabActive : tabInactive}
+							class={activeTab === 'settings' ? engineTabActive : engineTabInactive}
 							onclick={() => setTab("settings")}
 						>Settings</button>
 						<button
-							class={activeTab === 'pipeline' ? tabActive : tabInactive}
+							class={activeTab === 'pipeline' ? engineTabActive : engineTabInactive}
 							onclick={() => setTab("pipeline")}
 						>Pipeline</button>
 						<button
-							class={activeTab === 'connectors' ? tabActive : tabInactive}
+							class={activeTab === 'connectors' ? engineTabActive : engineTabInactive}
 							onclick={() => setTab("connectors")}
 						>Connectors</button>
 						<button
-							class={activeTab === 'logs' ? tabActive : tabInactive}
+							class={activeTab === 'logs' ? engineTabActive : engineTabInactive}
 							onclick={() => setTab("logs")}
 						>Logs</button>
 					</div>

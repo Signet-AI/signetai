@@ -52,6 +52,16 @@
 	--sig-accent-hover: #c0c0c8;
 	--sig-danger: #8a4a48;
 	--sig-success: #4a7a5e;
+	--sig-log-category-watcher: #a28f61;
+	--sig-log-category-daemon: #9f9fac;
+	--sig-log-category-pipeline: #7c96a6;
+	--sig-log-category-system: #8a8d98;
+	--sig-log-category-embedding-tracker: #7f9b90;
+	--sig-log-category-document-worker: #8c8ab3;
+	--sig-log-category-maintenance: #88a07a;
+	--sig-log-category-git: #6f9fa0;
+	--sig-log-category-scheduler: #b07a9d;
+	--sig-log-category-retention: #a08a60;
 	--sig-dither: #f0f0f2;
 	--sig-grain-opacity: 0.04;
 	--sig-icon-fg: #f8fafc;
@@ -127,6 +137,16 @@
 	--sig-accent-hover: #3a3832;
 	--sig-danger: #8a4a48;
 	--sig-success: #4a7a5e;
+	--sig-log-category-watcher: #7f6e44;
+	--sig-log-category-daemon: #57534d;
+	--sig-log-category-pipeline: #3f5e6f;
+	--sig-log-category-system: #63605a;
+	--sig-log-category-embedding-tracker: #4f6b61;
+	--sig-log-category-document-worker: #565479;
+	--sig-log-category-maintenance: #4f6643;
+	--sig-log-category-git: #365f66;
+	--sig-log-category-scheduler: #73465f;
+	--sig-log-category-retention: #6d5836;
 	--sig-dither: #0a0a0c;
 	--sig-grain-opacity: 0.06;
 	--sig-icon-fg: #111827;
@@ -258,8 +278,7 @@ a,
 input,
 select,
 textarea {
-	transition: background-color var(--dur) var(--ease), border-color var(--dur)
-		var(--ease), color var(--dur) var(--ease);
+	transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
 /* Typography */

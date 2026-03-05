@@ -9,10 +9,19 @@
  * - Real-time streaming for dashboard
  */
 
-import { EventEmitter } from "events";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { EventEmitter } from "node:events";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // Types
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -159,10 +168,10 @@ class Logger extends EventEmitter {
 	private flush() {
 		if (this.buffer.length === 0) return;
 
-		const lines =
-			this.buffer
-				.map((entry) => (this.config.jsonFormat ? this.formatJson(entry) : this.formatConsole(entry)))
-				.join("\n") + "\n";
+		const lines = `${this.buffer
+			.map((entry) => (this.config.jsonFormat ? this.formatJson(entry) : this.formatConsole(entry)))
+			.join("\n")}
+`;
 
 		try {
 			// Check if date changed (new log file)
@@ -202,7 +211,6 @@ class Logger extends EventEmitter {
 
 		try {
 			// Rename current to rotated
-			const { renameSync } = require("fs");
 			renameSync(this.currentLogFile, rotatedName);
 
 			// Clean up old files
@@ -370,22 +378,28 @@ class Logger extends EventEmitter {
 		const results: LogEntry[] = [];
 
 		try {
-			// Read from current log file
-			if (existsSync(this.currentLogFile)) {
-				const content = readFileSync(this.currentLogFile, "utf-8");
+			const files = readdirSync(this.config.logDir)
+				.filter((fileName) => fileName.startsWith("signet-") && fileName.endsWith(".log"))
+				.map((fileName) => ({
+					path: join(this.config.logDir, fileName),
+					mtime: statSync(join(this.config.logDir, fileName)).mtime.getTime(),
+				}))
+				.sort((a, b) => b.mtime - a.mtime);
+
+			for (const file of files) {
+				if (!existsSync(file.path)) continue;
+				const content = readFileSync(file.path, "utf-8");
 				const lines = content.trim().split("\n").filter(Boolean);
 
-				for (const line of lines.slice(-limit * 2)) {
-					// Read extra for filtering
+				for (let i = lines.length - 1; i >= 0; i -= 1) {
 					try {
-						const entry = JSON.parse(line) as LogEntry;
-
-						// Apply filters
+						const entry = JSON.parse(lines[i]) as LogEntry;
 						if (level && LOG_LEVELS[entry.level] < LOG_LEVELS[level]) continue;
 						if (category && entry.category !== category) continue;
 						if (since && new Date(entry.timestamp) < since) continue;
 
 						results.push(entry);
+						if (results.length >= limit) return results.reverse();
 					} catch {
 						// Skip non-JSON lines
 					}
@@ -395,7 +409,7 @@ class Logger extends EventEmitter {
 			// Return empty on read error
 		}
 
-		return results.slice(-limit);
+		return results.reverse().slice(-limit);
 	}
 
 	// Cleanup
