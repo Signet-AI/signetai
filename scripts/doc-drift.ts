@@ -343,7 +343,7 @@ function getActualPackages(): PackageInfo[] {
 			}
 			// Always recurse — a workspace root may have an unnamed package.json
 			// but still contain named sub-packages underneath it.
-			if (existsSync(full) && statSync(full).isDirectory() && entry !== "node_modules") {
+			if (existsSync(full) && statSync(full).isDirectory() && entry !== "node_modules" && !entry.startsWith(".")) {
 				scan(full, rel);
 			}
 		}
@@ -357,7 +357,7 @@ function getActualPackages(): PackageInfo[] {
 		if (existsSync(pkgJson)) {
 			try {
 				const pkg = JSON.parse(readFileSync(pkgJson, "utf8"));
-				if (pkg.name) {
+				if (pkg.name && !pkg.private) {
 					packages.push({ name: pkg.name, dir: extra });
 				}
 			} catch {
