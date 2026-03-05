@@ -47,8 +47,8 @@ const activeSkillsUsed = $derived(activeBucket ? (bucketSkillUsage[activeBucket.
 
 function inferMcpUsageFromBucket(bucket: MemoryTimelineBucket): number {
 	const sourceSignals = bucket.sourceBreakdown.filter((metric: { key: string }) => hasMcpSignal(metric.key)).length;
-	const tagSignals = bucket.topTags.filter((metric: { key: string }) => hasMcpSignal(metric.key)).length;
-	return sourceSignals + tagSignals;
+	// Use source breakdown only; tags are a weaker signal and can double-count with sources
+	return sourceSignals;
 }
 
 function hasMcpSignal(raw: string): boolean {
