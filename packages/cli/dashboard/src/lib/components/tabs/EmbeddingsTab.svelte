@@ -1634,7 +1634,7 @@ $effect(() => {
 				<div class="pointer-events-auto border border-[rgba(255,255,255,0.2)] bg-[rgba(5,5,5,0.72)] px-2 py-1.5">
 					<div class="text-[10px] font-[family-name:var(--font-mono)] uppercase tracking-[0.06em] text-[var(--sig-text-muted)] mb-1">Legend</div>
 					<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1">
-						<span class="text-[var(--sig-text)]">Color</span> = {nodeColorMode}
+						<span class="text-[var(--sig-text)]">Color</span> = {nodeColorMode === "none" ? "off" : nodeColorMode === "newness" ? "by recency" : "by source"}
 					</div>
 					{#if nodeColorMode === "newness"}
 						<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[var(--sig-text-muted)] mb-1.5">
