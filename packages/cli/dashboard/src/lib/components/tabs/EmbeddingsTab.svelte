@@ -103,6 +103,7 @@ const LEGEND_PRIORITY_SOURCES = ["daemon", "user", "opencode"] as const;
 const LEGEND_PRIORITY_SOURCE_SET = new Set<string>(LEGEND_PRIORITY_SOURCES);
 
 const NODE_COLOR_MODE_SESSION_STORAGE_KEY = "signet-constellation-color-mode-session";
+const NEW_SINCE_SESSION_STORAGE_KEY = "signet-constellation-new-since-session";
 const LEGACY_NODE_COLOR_MODE_STORAGE_KEY = "signet-constellation-color-mode";
 const LEGACY_NEW_SINCE_STORAGE_KEY = "signet-constellation-new-since";
 const LAST_SEEN_STORAGE_KEY = "signet-constellation-last-seen";
@@ -1255,6 +1256,10 @@ $effect(() => {
 	try {
 		const rawMode = window.sessionStorage.getItem(NODE_COLOR_MODE_SESSION_STORAGE_KEY);
 		if (rawMode === "source" || rawMode === "newness" || rawMode === "none") nodeColorMode = rawMode;
+		const rawNewSince = window.sessionStorage.getItem(NEW_SINCE_SESSION_STORAGE_KEY);
+		if (rawNewSince === "true" || rawNewSince === "false") {
+			showNewSinceLastSeen = rawNewSince === "true";
+		}
 		const rawLastSeen = window.localStorage.getItem(LAST_SEEN_STORAGE_KEY);
 		if (rawLastSeen) {
 			const parsed = Number.parseInt(rawLastSeen, 10);
@@ -1279,6 +1284,15 @@ $effect(() => {
 			window.sessionStorage.removeItem(NODE_COLOR_MODE_SESSION_STORAGE_KEY);
 		} else {
 			window.sessionStorage.setItem(NODE_COLOR_MODE_SESSION_STORAGE_KEY, nodeColorMode);
+		}
+	} catch {
+		// Ignore sessionStorage write failures and keep in-memory state.
+	}
+	try {
+		if (showNewSinceLastSeen) {
+			window.sessionStorage.setItem(NEW_SINCE_SESSION_STORAGE_KEY, "true");
+		} else {
+			window.sessionStorage.removeItem(NEW_SINCE_SESSION_STORAGE_KEY);
 		}
 	} catch {
 		// Ignore sessionStorage write failures and keep in-memory state.

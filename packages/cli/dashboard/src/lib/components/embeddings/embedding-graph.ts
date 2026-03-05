@@ -39,8 +39,10 @@ export const sourceColors: Record<string, string> = {
 	clawdbot: "#a78bfa",
 	daemon: "#22c55e",
 	"signet-daemon": "#22c55e",
-	openclaw: "#4ade80",
+	openclaw: "#facc15",
+	"openclaw-memory": "#facc15",
 	opencode: "#60a5fa",
+	user: "#ef4444",
 	manual: "#f472b6",
 	unknown: "#737373",
 };
