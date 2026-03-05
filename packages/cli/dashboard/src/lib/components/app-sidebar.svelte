@@ -10,6 +10,7 @@ import {
 	setTab,
 } from "$lib/stores/navigation.svelte";
 import Brain from "@lucide/svelte/icons/brain";
+import Calendar from "@lucide/svelte/icons/calendar";
 import Cog from "@lucide/svelte/icons/cog";
 import Github from "@lucide/svelte/icons/github";
 import ListChecks from "@lucide/svelte/icons/list-checks";

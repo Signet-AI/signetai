@@ -23,6 +23,7 @@ import {
 	type RepairContext,
 	type RepairResult,
 } from "../repair-actions";
+import { detectTimelineEras, backfillEntityEmergence } from "../timeline-clustering";
 import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
@@ -195,6 +196,7 @@ export function startMaintenanceWorker(
 ): MaintenanceHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
+	let eraTimer: ReturnType<typeof setInterval> | null = null;
 	const limiter = createRateLimiter();
 	const haltTracker = createHaltTracker();
 
@@ -274,6 +276,24 @@ export function startMaintenanceWorker(
 		return { report, recommendations, executed };
 	}
 
+	async function doEraDetection(): Promise<void> {
+		if (!running) return;
+
+		try {
+			const eraCount = detectTimelineEras(accessor);
+			const emergenceChanges = backfillEntityEmergence(accessor);
+
+			logger.info("maintenance", "Era detection complete", {
+				eraCount,
+				emergenceChanges,
+			});
+		} catch (e) {
+			logger.warn("maintenance", "Era detection error", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
 	// Only start the interval if autonomous maintenance is allowed
 	if (cfg.autonomous.enabled && !cfg.autonomous.frozen) {
 		timer = setInterval(() => {
@@ -285,9 +305,21 @@ export function startMaintenanceWorker(
 			});
 		}, cfg.autonomous.maintenanceIntervalMs);
 
+		// Era detection runs every 6 hours
+		const eraIntervalMs = 6 * 60 * 60 * 1000;
+		eraTimer = setInterval(() => {
+			if (!running) return;
+			doEraDetection().catch((e) => {
+				logger.warn("maintenance", "Era detection error", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			});
+		}, eraIntervalMs);
+
 		logger.info("maintenance", "Worker started", {
 			mode: cfg.autonomous.maintenanceMode,
 			intervalMs: cfg.autonomous.maintenanceIntervalMs,
+			eraIntervalMs,
 		});
 	} else {
 		logger.info("maintenance", "Worker skipped (disabled or frozen)");
@@ -300,6 +332,7 @@ export function startMaintenanceWorker(
 		stop() {
 			running = false;
 			if (timer) clearInterval(timer);
+			if (eraTimer) clearInterval(eraTimer);
 			logger.info("maintenance", "Worker stopped");
 		},
 		tick: doTick,

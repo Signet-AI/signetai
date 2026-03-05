@@ -177,6 +177,10 @@ onMount(() => {
 							onclick={() => setTab("memory")}
 						>Index</button>
 						<button
+							class={activeTab === 'timeline' ? tabActive : tabInactive}
+							onclick={() => setTab("timeline")}
+						>Timeline</button>
+						<button
 							class={activeTab === 'embeddings' ? tabActive : tabInactive}
 							onclick={() => setTab("embeddings")}
 						>Constellation</button>
@@ -339,6 +343,16 @@ onMount(() => {
 				{:catch error}
 					{@render skeletonError(error)}
 				{/await}
+			{:else if activeTab === "timeline"}
+				{#await import("$lib/components/tabs/TimelineTab.svelte")}
+					<div class="flex flex-1 items-center justify-center">
+						<Skeleton class="h-96 w-full" />
+					</div>
+				{:then module}
+					<module.default />
+				{:catch error}
+					{@render skeletonError(error)}
+				{/await}
 			{:else if activeTab === "embeddings"}
 				{#await import("$lib/components/tabs/EmbeddingsTab.svelte")}
 					<div class="flex flex-1 items-center justify-center">
@@ -428,6 +442,9 @@ onMount(() => {
 						hybrid search index
 					{/if}
 				</span>
+			{:else if activeTab === "timeline"}
+				<span>Timeline</span>
+				<span>temporal density</span>
 			{:else if activeTab === "pipeline"}
 				<span>Pipeline</span>
 				<span>memory loop v2</span>

@@ -23,6 +23,7 @@ import { up as telemetry } from "./014-telemetry";
 import { up as sessionMemories } from "./015-session-memories";
 import { up as sessionCheckpoints } from "./016-session-checkpoints";
 import { up as taskSkills } from "./017-task-skills";
+import { up as timelineEras } from "./018-timeline-eras";
 
 // -- Public interface consumed by Database.init() --
 
@@ -107,6 +108,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 17,
 		name: "task-skills",
 		up: taskSkills,
+	},
+	{
+		version: 18,
+		name: "timeline-eras",
+		up: timelineEras,
 	},
 ];
 

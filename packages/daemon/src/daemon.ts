@@ -120,6 +120,7 @@ import {
 } from "./session-checkpoints";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { type TimelineSources, buildTimeline } from "./timeline";
+import { detectTimelineEras, backfillEntityEmergence } from "./timeline-clustering";
 import {
 	type MutationContext,
 	txFinalizeAccessAndHistory,
@@ -5740,6 +5741,98 @@ app.get("/api/telemetry/export", (c) => {
 
 	const lines = events.map((e) => JSON.stringify(e)).join("\n");
 	return c.text(lines, 200, { "Content-Type": "application/x-ndjson" });
+});
+
+// Timeline Range API - Get time buckets for date range
+app.get("/api/timeline/range", (c) => {
+	const start = c.req.query("start");
+	const end = c.req.query("end");
+	const granularity = c.req.query("granularity") || "week";
+
+	if (!start || !end) {
+		return c.json({ error: "start and end query params required" }, 400);
+	}
+
+	const buckets = getDbAccessor().withReadDb((db) => {
+		// Determine date format based on granularity
+		let dateFormat: string;
+		switch (granularity) {
+			case "day":
+				dateFormat = "%Y-%m-%d";
+				break;
+			case "month":
+				dateFormat = "%Y-%m";
+				break;
+			default: // week
+				dateFormat = "%Y-%W";
+		}
+
+		// Query memories grouped by time bucket
+		const memoryBuckets = db
+			.prepare(
+				`SELECT
+					strftime(?, created_at) as bucket,
+					COUNT(*) as memory_count
+				 FROM memories
+				 WHERE is_deleted = 0
+				 AND created_at >= ?
+				 AND created_at <= ?
+				 GROUP BY bucket
+				 ORDER BY bucket ASC`,
+			)
+			.all(dateFormat, start, end) as Array<{ bucket: string; memory_count: number }>;
+
+		// For each bucket, get top 5 entities
+		return memoryBuckets.map((bucket) => {
+			const topEntities = db
+				.prepare(
+					`SELECT e.name, COUNT(*) as mention_count
+					 FROM memory_entity_mentions mem
+					 JOIN entities e ON e.id = mem.entity_id
+					 JOIN memories m ON m.id = mem.memory_id
+					 WHERE m.is_deleted = 0
+					 AND strftime(?, m.created_at) = ?
+					 GROUP BY e.id
+					 ORDER BY mention_count DESC
+					 LIMIT 5`,
+				)
+				.all(dateFormat, bucket.bucket) as Array<{ name: string; mention_count: number }>;
+
+			return {
+				bucket: bucket.bucket,
+				memory_count: bucket.memory_count,
+				top_entities: topEntities,
+			};
+		});
+	});
+
+	return c.json(buckets);
+});
+
+// Timeline Eras API - Get all timeline eras
+app.get("/api/timeline/eras", (c) => {
+	const eras = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare(
+				`SELECT * FROM timeline_eras
+				 ORDER BY start_date DESC`,
+			)
+			.all(),
+	);
+
+	return c.json(eras);
+});
+
+// Timeline Era Detection API - Trigger era detection
+app.post("/api/timeline/eras/detect", (c) => {
+	try {
+		const eraCount = detectTimelineEras(getDbAccessor());
+		backfillEntityEmergence(getDbAccessor());
+		return c.json({ eraCount });
+	} catch (e) {
+		logger.error("timeline", "Era detection failed", { error: (e as Error).message });
+		return c.json({ error: (e as Error).message }, 500);
+	}
 });
 
 app.get("/api/timeline/:id", (c) => {

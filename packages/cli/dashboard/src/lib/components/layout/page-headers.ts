@@ -16,6 +16,10 @@ export const PAGE_HEADERS = {
 		title: "Memory",
 		eyebrow: "Persistent memory index",
 	},
+	timeline: {
+		title: "Memory",
+		eyebrow: "Temporal density visualization",
+	},
 	embeddings: {
 		title: "Memory",
 		eyebrow: "Semantic projection workspace",
