@@ -492,22 +492,32 @@ onMount(() => {
 									<ChevronLeft class="size-3.5" />
 								</Button>
 
-								<div role="tablist" aria-orientation="horizontal" class="contents">
-									{#each buckets as bucket, index (bucket.eraIndex)}
-										<button
-											class={`${railButtonBase} ${index === activeIndex
-												? 'border-[var(--sig-accent)] bg-[color-mix(in_srgb,var(--sig-surface-raised)_76%,transparent)] text-[var(--sig-text-bright)]'
-												: 'border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]'}`}
-											onclick={() => {
-												activeIndex = index;
-											}}
-											role="tab"
-											aria-selected={index === activeIndex}
-										>
-											{getRangeChipLabel(bucket)}
-										</button>
-									{/each}
-								</div>
+<!-- Add IDs and aria-controls to tab buttons -->
+<div role="tablist" aria-orientation="horizontal" class="contents">
+  {#each buckets as bucket, index (bucket.eraIndex)}
+    <button
+      id={`era-tab-${bucket.rangeKey}`}
+      role="tab"
+      aria-selected={index === activeIndex}
+      aria-controls={`era-panel-${bucket.rangeKey}`}
+      ...
+    >
+      {getRangeChipLabel(bucket)}
+    </button>
+  {/each}
+</div>
+
+<!-- Wrap content with tabpanel and link back to active tab -->
+{#if activeBucket}
+  <div
+    id={`era-panel-${activeBucket.rangeKey}`}
+    role="tabpanel"
+    aria-labelledby={`era-tab-${activeBucket.rangeKey}`}
+    tabindex="0"
+  >
+    <!-- timeline summary grid, memory cards, etc. -->
+  </div>
+{/if}
 
 								<Button
 									variant="outline"
