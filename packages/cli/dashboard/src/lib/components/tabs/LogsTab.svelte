@@ -242,8 +242,7 @@ function startLogStream() {
 
 		if (reconnectTimer !== null) return;
 
-		const delay = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
-		reconnectAttempt++;
+		const delay = Math.min(RECONNECT_BASE_MS * 2 ** Math.min(reconnectAttempt, 10), RECONNECT_MAX_MS);
 		logsReconnecting = true;
 		streamError = `Stream lost — reconnecting in ${delay / 1000}s`;
 
