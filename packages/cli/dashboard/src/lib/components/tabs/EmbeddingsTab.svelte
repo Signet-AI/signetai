@@ -1661,7 +1661,7 @@ $effect(() => {
 						</div>
 					{:else}
 						<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1.5">
-							No source colors in none mode.
+							No color applied - all nodes are shown in gray.
 						</div>
 					{/if}
 					<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1">
