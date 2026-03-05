@@ -369,7 +369,16 @@ export async function getMemoryTimeline(options?: {
 	readonly fallbackMemories?: readonly Memory[] | Promise<readonly Memory[]>;
 }): Promise<MemoryTimelineResponse> {
 	try {
-		const response = await fetch(`${API_BASE}/api/memory/timeline`);
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 10_000);
+		let response: Response;
+		try {
+			response = await fetch(`${API_BASE}/api/memory/timeline`, {
+				signal: controller.signal,
+			});
+		} finally {
+			clearTimeout(timeoutId);
+		}
 		if (!response.ok) throw new Error("Failed to fetch memory timeline");
 		return await response.json();
 	} catch {

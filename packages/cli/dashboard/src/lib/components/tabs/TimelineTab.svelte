@@ -285,8 +285,9 @@ async function loadTimeline(): Promise<void> {
 		bucketSkillUsage = {};
 		bucketMcpUsage = {};
 		bucketTopMemories = {};
+	} finally {
+		loading = false;
 	}
-	loading = false;
 }
 
 function formatDateRange(startIso: string, endIso: string): string {
