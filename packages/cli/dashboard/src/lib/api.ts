@@ -39,6 +39,7 @@ export interface Harness {
 	id: string;
 	path: string;
 	exists: boolean;
+	enabled: boolean;
 	lastSeen: string | null;
 }
 
