@@ -49,6 +49,16 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		boostWeight: 0.15,
 		boostTimeoutMs: 500,
 	},
+	traversal: {
+		enabled: true,
+		maxAspectsPerEntity: 10,
+		maxAttributesPerAspect: 20,
+		maxDependencyHops: 30,
+		minDependencyStrength: 0.3,
+		timeoutMs: 500,
+		boostWeight: 0.2,
+		constraintBudgetChars: 1000,
+	},
 	reranker: {
 		enabled: true,
 		model: "",
@@ -169,6 +179,7 @@ export function loadPipelineConfig(
 	const extractionRaw = raw.extraction as Record<string, unknown> | undefined;
 	const workerRaw = raw.worker as Record<string, unknown> | undefined;
 	const graphRaw = raw.graph as Record<string, unknown> | undefined;
+	const traversalRaw = raw.traversal as Record<string, unknown> | undefined;
 	const rerankerRaw = raw.reranker as Record<string, unknown> | undefined;
 	const autonomousRaw = raw.autonomous as Record<string, unknown> | undefined;
 	const repairRaw = raw.repair as Record<string, unknown> | undefined;
@@ -272,6 +283,50 @@ export function loadPipelineConfig(
 				50,
 				5000,
 				d.graph.boostTimeoutMs,
+			),
+		},
+
+		traversal: {
+			enabled: resolveBool(
+				traversalRaw?.enabled, undefined, d.traversal?.enabled ?? true,
+			),
+			maxAspectsPerEntity: clampPositive(
+				traversalRaw?.maxAspectsPerEntity,
+				1,
+				100,
+				d.traversal?.maxAspectsPerEntity ?? 10,
+			),
+			maxAttributesPerAspect: clampPositive(
+				traversalRaw?.maxAttributesPerAspect,
+				1,
+				200,
+				d.traversal?.maxAttributesPerAspect ?? 20,
+			),
+			maxDependencyHops: clampPositive(
+				traversalRaw?.maxDependencyHops,
+				1,
+				200,
+				d.traversal?.maxDependencyHops ?? 30,
+			),
+			minDependencyStrength: clampFraction(
+				traversalRaw?.minDependencyStrength,
+				d.traversal?.minDependencyStrength ?? 0.3,
+			),
+			timeoutMs: clampPositive(
+				traversalRaw?.timeoutMs,
+				50,
+				5000,
+				d.traversal?.timeoutMs ?? 500,
+			),
+			boostWeight: clampFraction(
+				traversalRaw?.boostWeight,
+				d.traversal?.boostWeight ?? 0.2,
+			),
+			constraintBudgetChars: clampPositive(
+				traversalRaw?.constraintBudgetChars,
+				200,
+				10000,
+				d.traversal?.constraintBudgetChars ?? 1000,
 			),
 		},
 

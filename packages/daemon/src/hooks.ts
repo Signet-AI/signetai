@@ -25,6 +25,11 @@ import { loadMemoryConfig } from "./memory-config";
 import { recordSessionCandidates, trackFtsHits } from "./session-memories";
 import { listSecrets } from "./secrets";
 import {
+	resolveFocalEntities,
+	setTraversalStatus,
+	traverseKnowledgeGraph,
+} from "./pipeline/graph-traversal";
+import {
 	initContinuity,
 	recordPrompt,
 	recordRemember,
@@ -58,6 +63,7 @@ function formatMemoryDate(isoDate: string): string {
 export interface HooksConfig {
 	sessionStart?: {
 		recallLimit?: number;
+		candidatePoolLimit?: number;
 		includeIdentity?: boolean;
 		includeRecentContext?: boolean;
 		recencyBias?: number;
@@ -382,6 +388,108 @@ export interface ScoredMemory {
 	effScore: number;
 }
 
+function clampScore01(value: number): number {
+	if (!Number.isFinite(value)) return 0.5;
+	return Math.max(0, Math.min(1, value));
+}
+
+function fetchTraversalCandidates(
+	memoryIds: ReadonlyArray<string>,
+	agentId: string,
+): ScoredMemory[] {
+	if (memoryIds.length === 0 || !existsSync(MEMORY_DB)) return [];
+
+	try {
+		const placeholders = memoryIds.map(() => "?").join(", ");
+		return getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT
+							 m.id,
+							 m.content,
+							 m.type,
+							 m.importance,
+							 m.tags,
+							 m.pinned,
+							 m.project,
+							 m.created_at,
+							 COALESCE(MAX(ea.importance), m.importance, 0.5) AS effScore
+						 FROM memories m
+						 LEFT JOIN entity_attributes ea
+						   ON ea.memory_id = m.id
+						  AND ea.agent_id = ?
+						  AND ea.status = 'active'
+						 WHERE m.id IN (${placeholders})
+						   AND m.is_deleted = 0
+						 GROUP BY
+							 m.id,
+							 m.content,
+							 m.type,
+							 m.importance,
+							 m.tags,
+							 m.pinned,
+							 m.project,
+							 m.created_at`,
+					)
+					.all(agentId, ...memoryIds) as ScoredMemory[],
+		).map((row) => ({
+			...row,
+			effScore: clampScore01(row.effScore),
+		}));
+	} catch {
+		return [];
+	}
+}
+
+function buildActiveConstraintsSection(
+	constraints: ReadonlyArray<{
+		readonly entityName: string;
+		readonly content: string;
+		readonly importance: number;
+	}>,
+	charBudget: number,
+): string {
+	if (constraints.length === 0) return "";
+
+	const header =
+		"\n## Active Constraints\n\nConstraints for entities in scope. These always apply.\n";
+	const fullLines = constraints.map(
+		(item) => `- [${item.entityName}] ${item.content}\n`,
+	);
+	const fullSection = `${header}${fullLines.join("")}`.trimEnd();
+	if (charBudget <= 0 || fullSection.length <= charBudget) return fullSection;
+
+	const fixedOverhead = constraints.reduce(
+		(acc, item) => acc + `- [${item.entityName}] \n`.length,
+		header.length,
+	);
+	const availableForContent = Math.max(0, charBudget - fixedOverhead);
+	const perConstraintBudget = Math.max(
+		24,
+		Math.floor(availableForContent / constraints.length),
+	);
+	const compressedLines = constraints.map((item) => {
+		const content =
+			item.content.length <= perConstraintBudget
+				? item.content
+				: `${item.content.slice(0, Math.max(1, perConstraintBudget - 3))}...`;
+		return `- [${item.entityName}] ${content}\n`;
+	});
+	const compressedSection = `${header}${compressedLines.join("")}`.trimEnd();
+
+	logger.warn("hooks", "Constraint section exceeded budget; preserving all constraints", {
+		constraintBudgetChars: charBudget,
+		constraintCount: constraints.length,
+		fullChars: fullSection.length,
+		injectChars: compressedSection.length,
+	});
+
+	// Hard invariant: constraints for in-scope entities always surface.
+	// We allow this section to exceed its soft budget rather than dropping rows.
+	return compressedSection;
+}
+
 /**
  * Return all memories that pass the 0.2 effective score threshold,
  * sorted by project match + score. No budget applied — caller
@@ -602,7 +710,8 @@ function loadHooksConfig(): HooksConfig {
 function getDefaultConfig(): HooksConfig {
 	return {
 		sessionStart: {
-			recallLimit: 10,
+			recallLimit: 50,
+			candidatePoolLimit: 100,
 			includeIdentity: true,
 			includeRecentContext: true,
 			recencyBias: 0.7,
@@ -800,12 +909,123 @@ export function handleSessionStart(
 	// Read MEMORY.md with 10k char budget
 	const memoryMdContent = readMemoryMd(10000);
 
-	// Get all scored candidates (no budget yet — need full pool for recording)
-	const recallLimit = config.recallLimit ?? 30;
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const traversalCfg = memoryCfg.pipelineV2.traversal;
+	const traversalEnabled =
+		memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
+	const traversalRuntimeCfg = {
+		maxAspectsPerEntity: traversalCfg?.maxAspectsPerEntity ?? 10,
+		maxAttributesPerAspect: traversalCfg?.maxAttributesPerAspect ?? 20,
+		maxDependencyHops: traversalCfg?.maxDependencyHops ?? 30,
+		minDependencyStrength: traversalCfg?.minDependencyStrength ?? 0.3,
+		timeoutMs: traversalCfg?.timeoutMs ?? 500,
+		boostWeight: traversalCfg?.boostWeight ?? 0.2,
+		constraintBudgetChars: traversalCfg?.constraintBudgetChars ?? 1000,
+	};
+
+	// Candidate pool fusion: traversal U effective (capped before budget truncation)
+	const recallLimit = Math.max(1, config.recallLimit ?? 50);
+	const candidatePoolLimit = Math.max(1, config.candidatePoolLimit ?? 100);
 	const allCandidates = getAllScoredCandidates(req.project, recallLimit);
+	const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
+	const candidateSourceById = new Map(
+		allCandidates.map((candidate) => [candidate.id, "effective" as const]),
+	);
+
+	const traversalAgentId = req.agentId ?? "default";
+	let traversalFocalSource:
+		| "project"
+		| "checkpoint"
+		| "query"
+		| "session_key"
+		| null = null;
+	let traversalEntities = 0;
+	let traversalTraversedEntities = 0;
+	let traversalMemories = 0;
+	let traversalConstraints = 0;
+	let traversalTimedOut = false;
+	let constraintsForInject: ReadonlyArray<{
+		readonly entityName: string;
+		readonly content: string;
+		readonly importance: number;
+	}> = [];
+
+	if (traversalEnabled) {
+		try {
+			const focal = getDbAccessor().withReadDb((db) =>
+				resolveFocalEntities(db, traversalAgentId, {
+					project: req.project,
+					sessionKey: req.sessionKey,
+				}),
+			);
+			traversalFocalSource = focal.source;
+			traversalEntities = focal.entityIds.length;
+
+			if (focal.entityIds.length > 0) {
+				const traversalResult = getDbAccessor().withReadDb((db) =>
+					traverseKnowledgeGraph(
+						focal.entityIds,
+						db,
+						traversalAgentId,
+						traversalRuntimeCfg,
+					),
+				);
+				traversalTimedOut = traversalResult.timedOut;
+				traversalTraversedEntities = traversalResult.entityCount;
+				traversalMemories = traversalResult.memoryIds.size;
+				constraintsForInject = traversalResult.constraints;
+				traversalConstraints = traversalResult.constraints.length;
+
+				for (const memoryId of traversalResult.memoryIds) {
+					if (!candidateById.has(memoryId)) {
+						candidateSourceById.set(memoryId, "ka_traversal");
+					}
+				}
+
+				const traversalRows = fetchTraversalCandidates(
+					[...traversalResult.memoryIds],
+					traversalAgentId,
+				);
+				for (const row of traversalRows) {
+					const existing = candidateById.get(row.id);
+					if (existing) {
+						existing.effScore = Math.max(existing.effScore, row.effScore);
+						continue;
+					}
+					allCandidates.push(row);
+					candidateById.set(row.id, row);
+					candidateSourceById.set(row.id, "ka_traversal");
+				}
+
+				allCandidates.sort((a, b) => {
+					if (req.project) {
+						const aMatch = a.project === req.project ? 1 : 0;
+						const bMatch = b.project === req.project ? 1 : 0;
+						if (aMatch !== bMatch) return bMatch - aMatch;
+					}
+					return b.effScore - a.effScore;
+				});
+			}
+
+			setTraversalStatus({
+				phase: "session_start",
+				at: new Date().toISOString(),
+				source: traversalFocalSource,
+				focalEntities: traversalEntities,
+				traversedEntities: traversalTraversedEntities,
+				memoryCount: traversalMemories,
+				constraintCount: traversalConstraints,
+				timedOut: traversalTimedOut,
+			});
+		} catch {
+			// Traversal is best-effort; fall back silently
+		}
+	}
+
+	const mergedCandidates = allCandidates.slice(0, candidatePoolLimit);
 
 	// Apply budget to select what we actually inject
-	const memories = selectWithBudget(allCandidates.slice(0, recallLimit), 2000);
+	const memories = selectWithBudget(mergedCandidates, 2000);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -826,13 +1046,13 @@ export function handleSessionStart(
 	// Record all candidates + which were injected for predictive scorer
 	const injectedSet = new Set(memories.map((m) => m.id));
 	const candidatesForRecording = [
-		...allCandidates.map((c) => ({
+		...mergedCandidates.map((c) => ({
 			id: c.id,
 			effScore: c.effScore,
-			source: "effective" as const,
+			source: candidateSourceById.get(c.id) ?? ("effective" as const),
 		})),
 		...predictedMemories
-			.filter((m) => !allCandidates.some((c) => c.id === m.id))
+			.filter((m) => !mergedCandidates.some((c) => c.id === m.id))
 			.map((m) => ({
 				id: m.id,
 				effScore: m.effScore,
@@ -911,8 +1131,12 @@ export function handleSessionStart(
 		}
 	}
 
+	const constraintsSection = buildActiveConstraintsSection(
+		constraintsForInject,
+		traversalRuntimeCfg.constraintBudgetChars,
+	);
+
 	// Inject session recovery context from recent checkpoints
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const continuityCfg = memoryCfg.pipelineV2.continuity;
 	if (continuityCfg.enabled) {
 		try {
@@ -978,12 +1202,15 @@ export function handleSessionStart(
 
 	const duration = Date.now() - start;
 	const maxInject = config.maxInjectChars ?? 24000;
-	// Pre-reserve space for recovery context so it's never truncated
-	const reservedChars = recoverySection.length;
-	const mainBudget = maxInject - reservedChars;
+	// Pre-reserve space for constraints + recovery so they are never truncated
+	const reservedChars = recoverySection.length + constraintsSection.length;
+	const mainBudget = Math.max(0, maxInject - reservedChars);
 	let inject = injectParts.join("\n");
 	if (inject.length > mainBudget) {
 		inject = inject.slice(0, mainBudget) + "\n[context truncated]";
+	}
+	if (constraintsSection) {
+		inject += constraintsSection;
 	}
 	if (recoverySection) {
 		inject += recoverySection;
@@ -994,6 +1221,10 @@ export function handleSessionStart(
 		sessionKey: req.sessionKey,
 		runtimePath: req.runtimePath,
 		memoryCount: memories.length,
+		traversalEntities,
+		traversalMemories,
+		traversalConstraints,
+		traversalTimedOut,
 		injectChars: inject.length,
 		inject,
 		durationMs: duration,

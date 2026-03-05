@@ -23,7 +23,7 @@ export interface GraphBoostResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function tokenizeQuery(query: string): string[] {
+export function tokenizeGraphQuery(query: string): string[] {
 	return query
 		.toLowerCase()
 		.replace(/[^a-z0-9\s]/g, " ")
@@ -52,7 +52,7 @@ export function getGraphBoostIds(
 
 	try {
 		const deadline = Date.now() + timeoutMs;
-		const tokens = tokenizeQuery(query);
+		const tokens = tokenizeGraphQuery(query);
 		if (tokens.length === 0) return empty;
 
 		// Step 1: Resolve entities matching query tokens

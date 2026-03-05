@@ -125,6 +125,7 @@ export const PIPELINE_FLAGS = [
 	"shadowMode",
 	"mutationsFrozen",
 	"graph.enabled",
+	"traversal.enabled",
 	"reranker.enabled",
 	"autonomous.enabled",
 	"autonomous.frozen",
@@ -153,6 +154,17 @@ export interface PipelineGraphConfig {
 	readonly enabled: boolean;
 	readonly boostWeight: number;
 	readonly boostTimeoutMs: number;
+}
+
+export interface PipelineTraversalConfig {
+	readonly enabled: boolean;
+	readonly maxAspectsPerEntity: number;
+	readonly maxAttributesPerAspect: number;
+	readonly maxDependencyHops: number;
+	readonly minDependencyStrength: number;
+	readonly timeoutMs: number;
+	readonly boostWeight: number;
+	readonly constraintBudgetChars: number;
 }
 
 export interface PipelineRerankerConfig {
@@ -223,6 +235,7 @@ export interface PipelineV2Config {
 	readonly extraction: PipelineExtractionConfig;
 	readonly worker: PipelineWorkerConfig;
 	readonly graph: PipelineGraphConfig;
+	readonly traversal?: PipelineTraversalConfig;
 	readonly reranker: PipelineRerankerConfig;
 	readonly autonomous: PipelineAutonomousConfig;
 	readonly repair: PipelineRepairConfig;

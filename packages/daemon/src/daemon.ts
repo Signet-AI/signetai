@@ -92,6 +92,7 @@ import {
 	stopPipeline,
 } from "./pipeline";
 import { getGraphBoostIds } from "./pipeline/graph-search";
+import { getTraversalStatus } from "./pipeline/graph-traversal";
 import {
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -2971,7 +2972,8 @@ app.post("/api/memory/recall", async (c) => {
 
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	try {
-		const result = await hybridRecall({ ...body, query }, cfg, fetchEmbedding);
+		const agentId = body.agentId ?? c.req.header("x-signet-agent-id") ?? "default";
+		const result = await hybridRecall({ ...body, query, agentId }, cfg, fetchEmbedding);
 		return c.json(result);
 	} catch (e) {
 		logger.error("memory", "Recall failed", e as Error);
@@ -5402,6 +5404,12 @@ app.get("/api/pipeline/status", (c) => {
 		latency: analyticsCollector.getLatency(),
 		errorSummary: analyticsCollector.getErrorSummary(),
 		mode,
+		traversal: {
+			enabled:
+				pipelineV2.graph.enabled &&
+				(pipelineV2.traversal?.enabled ?? true),
+			lastRun: getTraversalStatus(),
+		},
 	});
 });
 

@@ -24,7 +24,7 @@ function getMemoryDbPath(): string {
 export interface SessionMemoryCandidate {
 	readonly id: string;
 	readonly effScore: number;
-	readonly source: "effective" | "fts_only";
+	readonly source: "effective" | "fts_only" | "ka_traversal";
 }
 
 // ---------------------------------------------------------------------------
