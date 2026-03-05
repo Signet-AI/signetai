@@ -4023,31 +4023,64 @@ app.get("/api/harnesses", async (c) => {
 			const baseIndent = match[1].length;
 			const inlineValue = stripInlineComment(match[2]);
 
-			if (inlineValue.startsWith("[") && inlineValue.endsWith("]")) {
-				const values = inlineValue
-					.slice(1, -1)
+			if (inlineValue.length > 0) {
+				if (!inlineValue.startsWith("[")) {
+					return { found: false, values: [] };
+				}
+
+				const flowLines: string[] = [inlineValue];
+				let closed = inlineValue.includes("]");
+				for (let j = i + 1; !closed && j < lines.length; j++) {
+					const nextLine = lines[j];
+					const trimmed = nextLine.trim();
+					if (!trimmed || trimmed.startsWith("#")) continue;
+
+					const indent = nextLine.search(/\S/);
+					if (indent <= baseIndent) break;
+
+					const cleaned = stripInlineComment(trimmed);
+					if (!cleaned) continue;
+					flowLines.push(cleaned);
+					if (cleaned.includes("]")) {
+						closed = true;
+					}
+				}
+
+				if (!closed) {
+					return { found: false, values: [] };
+				}
+
+				const flowText = flowLines.join(" ");
+				const openIndex = flowText.indexOf("[");
+				const closeIndex = flowText.indexOf("]", openIndex + 1);
+				if (openIndex === -1 || closeIndex === -1) {
+					return { found: false, values: [] };
+				}
+
+				const values = flowText
+					.slice(openIndex + 1, closeIndex)
 					.split(",")
 					.map((item) => item.trim().replace(/^["']|["']$/g, ""))
-					.filter((item) => item.length > 0);
+					.filter((item) => item.length > 0 && item !== "null" && item !== "~");
 				return { found: true, values };
 			}
 
-			if (inlineValue.length > 0) {
-				return { found: true, values: [] };
-			}
-
 			const values: string[] = [];
+			let sawListItem = false;
 			for (let j = i + 1; j < lines.length; j++) {
 				const nextLine = lines[j];
 				const trimmed = nextLine.trim();
 				if (!trimmed || trimmed.startsWith("#")) continue;
 
-				const itemMatch = nextLine.match(/^(\s*)-\s*(.+?)\s*(?:#.*)?$/);
+				const itemMatch = nextLine.match(/^(\s*)-\s*(.*?)\s*(?:#.*)?$/);
 				if (itemMatch) {
 					const itemIndent = itemMatch[1].length;
 					if (itemIndent < baseIndent) break;
+					sawListItem = true;
 					const value = itemMatch[2].trim().replace(/^["']|["']$/g, "");
-					if (value.length > 0) values.push(value);
+					if (value.length > 0 && value !== "null" && value !== "~") {
+						values.push(value);
+					}
 					continue;
 				}
 
@@ -4055,7 +4088,10 @@ app.get("/api/harnesses", async (c) => {
 				if (indent <= baseIndent) break;
 			}
 
-			return { found: true, values };
+			if (sawListItem) {
+				return { found: true, values };
+			}
+			return { found: false, values: [] };
 		}
 
 		return { found: false, values: [] };
