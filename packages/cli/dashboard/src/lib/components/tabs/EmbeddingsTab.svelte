@@ -1660,13 +1660,8 @@ $effect(() => {
 							{/each}
 						</div>
 					{:else}
-						<div class="flex flex-wrap gap-1 mb-1.5">
-							{#each legendSourceCounts as source}
-								<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.14)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'bg-[rgba(255,255,255,0.08)] text-[var(--sig-text-bright)]' : 'bg-transparent text-[var(--sig-text-muted)]'}">
-									<span class="inline-block w-[6px] h-[6px] rounded-full bg-[rgba(210,210,210,0.85)]"></span>
-									{source.who} {source.count}
-								</span>
-							{/each}
+						<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1.5">
+							No source colors in none mode.
 						</div>
 					{/if}
 					<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] mb-1">
