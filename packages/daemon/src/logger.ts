@@ -219,9 +219,8 @@ class Logger extends EventEmitter {
 				.map((f) => ({
 					name: f,
 					path: join(this.config.logDir, f),
-					mtime: statSync(join(this.config.logDir, f)).mtime.getTime(),
 				}))
-				.sort((a, b) => b.mtime - a.mtime);
+				.sort((a, b) => b.name.localeCompare(a.name));
 
 			// Keep only maxFiles
 			for (let i = this.config.maxFiles; i < files.length; i++) {
@@ -370,23 +369,14 @@ class Logger extends EventEmitter {
 		const results: LogEntry[] = [];
 
 		try {
-			// Get all log files sorted by modification time (newest first)
+			// Get all log files sorted by date in filename (newest first)
 			const logFiles = readdirSync(this.config.logDir)
 				.filter((f) => f.startsWith("signet-") && f.endsWith(".log"))
-				.reduce<{ name: string; path: string; mtime: number }[]>((acc, f) => {
-					const path = join(this.config.logDir, f);
-					try {
-						acc.push({
-							name: f,
-							path,
-							mtime: statSync(path).mtime.getTime(),
-						});
-					} catch {
-						// Skip files removed between readdir and stat
-					}
-					return acc;
-				}, [])
-				.sort((a, b) => b.mtime - a.mtime);
+				.map((f) => ({
+					name: f,
+					path: join(this.config.logDir, f),
+				}))
+				.sort((a, b) => b.name.localeCompare(a.name));
 
 			// Read files until we have enough entries
 			for (const file of logFiles) {

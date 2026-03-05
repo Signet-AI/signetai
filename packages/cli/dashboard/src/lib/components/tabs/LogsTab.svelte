@@ -30,6 +30,7 @@ let logsLoading = $state(false);
 let logsError = $state("");
 let logsStreaming = $state(false);
 let logsReconnecting = $state(false);
+let logsConnecting = $state(false);
 let streamError = $state("");
 let logEventSource: EventSource | null = null;
 let reconnectAttempt = 0;
@@ -92,6 +93,7 @@ function getLogCategoryClass(category: string): string {
 			return "log-category--pipeline";
 		case "system":
 			return "log-category--system";
+		// Backwards compatibility for historical typo in old log emitters.
 		case "embeding-tracker":
 		case "embedding-tracker":
 			return "log-category--embedding-tracker";
@@ -101,6 +103,7 @@ function getLogCategoryClass(category: string): string {
 			return "log-category--maintenance";
 		case "git":
 			return "log-category--git";
+		// Backwards compatibility for historical typo in old log emitters.
 		case "schedular":
 		case "scheduler":
 			return "log-category--scheduler";
@@ -159,19 +162,6 @@ function scrollToBottomNextFrame(behavior: ScrollBehavior = "auto"): void {
 	});
 }
 
-function enforceAutoScrollAtBottom(): void {
-	if (!logViewport) return;
-	if (isNearBottom(logViewport)) {
-		return;
-	}
-	if (autoScrollSnapFrame !== null) return;
-	autoScrollSnapFrame = requestAnimationFrame(() => {
-		autoScrollSnapFrame = null;
-		if (!logAutoScroll) return;
-		scrollToBottom("auto");
-	});
-}
-
 function isNearBottom(viewport: HTMLElement | null): boolean {
 	if (!viewport) return true;
 	return viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - BOTTOM_THRESHOLD_PX;
@@ -204,6 +194,7 @@ function startLogStream() {
 		reconnectTimer = null;
 	}
 	if (logEventSource) logEventSource.close();
+	logsConnecting = true;
 	logEventSource = new EventSource("/api/logs/stream");
 
 	logEventSource.onmessage = (event) => {
@@ -212,6 +203,7 @@ function startLogStream() {
 			if (entry.type === "connected") {
 				reconnectAttempt = 0;
 				logsReconnecting = false;
+				logsConnecting = false;
 				logsStreaming = true;
 				streamError = "";
 				return;
@@ -237,6 +229,7 @@ function startLogStream() {
 
 	logEventSource.onerror = () => {
 		logsStreaming = false;
+		logsConnecting = false;
 		logEventSource?.close();
 		logEventSource = null;
 
@@ -353,9 +346,13 @@ $effect(() => {
 	if (!viewport) return;
 
 	const onScroll = () => {
-		if (logAutoScroll) {
-			enforceAutoScrollAtBottom();
+		const nearBottom = isNearBottom(viewport);
+		if (logAutoScroll && !nearBottom) {
+			logAutoScroll = false;
 			return;
+		}
+		if (!logAutoScroll && nearBottom) {
+			logAutoScroll = true;
 		}
 	};
 
@@ -409,11 +406,13 @@ $effect(() => {
 							{streamError}
 						</span>
 					{/if}
-					<span class={`sig-label font-medium ${logsStreaming ? "text-[var(--sig-success)] [animation:pulse_2s_infinite]" : logsReconnecting ? "text-[var(--sig-accent)] [animation:pulse_2s_infinite]" : "text-[var(--sig-danger)]"}`}>
+					<span class={`sig-label font-medium ${logsStreaming ? "text-[var(--sig-success)] [animation:pulse_2s_infinite]" : logsReconnecting || logsConnecting ? "text-[var(--sig-accent)] [animation:pulse_2s_infinite]" : "text-[var(--sig-danger)]"}`}>
 						{#if logsStreaming}
 							● Live
 						{:else if logsReconnecting}
 							↺ Reconnecting
+						{:else if logsConnecting}
+							◌ Connecting
 						{:else}
 							● Offline
 						{/if}
