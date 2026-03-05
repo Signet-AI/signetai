@@ -232,14 +232,19 @@ export function buildMemoryTimeline(
 	const nowStartMs = startOfUtcDay(now.getTime());
 	const buckets = createBuckets(nowStartMs);
 
+	// Widest bucket is 30 days — filter SQL to avoid full table scan
+	const cutoffMs = nowStartMs - 29 * MS_PER_DAY;
+	const cutoffIso = new Date(cutoffMs).toISOString();
+
 	const memoryRows = db
 		.prepare(
 			`SELECT id, created_at, type, who, tags, importance, pinned
 			 FROM memories
 			 WHERE is_deleted = 0
+			   AND created_at >= ?
 			 ORDER BY created_at DESC`,
 		)
-		.all() as MemoryRow[];
+		.all(cutoffIso) as MemoryRow[];
 
 	const historyRows = db
 		.prepare(
@@ -247,9 +252,10 @@ export function buildMemoryTimeline(
 			 FROM memory_history h
 			 INNER JOIN memories m ON m.id = h.memory_id
 			 WHERE m.is_deleted = 0
+			   AND h.created_at >= ?
 			 ORDER BY h.created_at DESC`,
 		)
-		.all() as HistoryRow[];
+		.all(cutoffIso) as HistoryRow[];
 
 	let invalidMemoryTimestamps = 0;
 	let invalidHistoryTimestamps = 0;
@@ -294,14 +300,16 @@ export function buildMemoryTimeline(
 			bucket.trackedEvents += 1;
 			if (EVOLVED_EVENTS.has(row.event)) {
 				bucket.evolved += 1;
+				// Only count strengthened for events that also count as evolved
+				// (updated/merged imply strength; recovered with strengthening reason also counts)
+				if (row.event === "updated" || row.event === "merged") {
+					bucket.strengthened += 1;
+				} else if (row.reason && STRENGTHENED_REASON_PATTERN.test(row.reason)) {
+					bucket.strengthened += 1;
+				}
 			}
 			if (row.event === "recovered") {
 				bucket.recovered += 1;
-			}
-			if (row.event === "updated" || row.event === "merged") {
-				bucket.strengthened += 1;
-			} else if (row.reason && STRENGTHENED_REASON_PATTERN.test(row.reason)) {
-				bucket.strengthened += 1;
 			}
 		});
 	}
