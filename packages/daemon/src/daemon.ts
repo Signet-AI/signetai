@@ -4035,11 +4035,17 @@ app.get("/api/harnesses", async (c) => {
 					const trimmed = nextLine.trim();
 					if (!trimmed || trimmed.startsWith("#")) continue;
 
+					const cleaned = stripInlineComment(trimmed);
+					if (!cleaned) continue;
+					if (cleaned === "]") {
+						flowLines.push(cleaned);
+						closed = true;
+						break;
+					}
+
 					const indent = nextLine.search(/\S/);
 					if (indent <= baseIndent) break;
 
-					const cleaned = stripInlineComment(trimmed);
-					if (!cleaned) continue;
 					flowLines.push(cleaned);
 					if (cleaned.includes("]")) {
 						closed = true;
