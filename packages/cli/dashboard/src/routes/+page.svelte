@@ -31,7 +31,7 @@ import { onMount } from "svelte";
 
 const activeTab = $derived(nav.activeTab);
 
-const tabBtn = "px-2.5 py-0.5 sig-label uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer";
+const tabBtn = "px-3 py-1 text-[11px] font-medium uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer";
 const tabActive = `${tabBtn} bg-[var(--sig-accent)] text-[var(--sig-bg)]`;
 const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]`;
 
@@ -153,7 +153,7 @@ onMount(() => {
 		m-2 ml-0 rounded-lg border border-[var(--sig-border)] md:border-l-0
 		bg-[var(--sig-surface)]">
 		<header
-			class="flex h-10 shrink-0 items-center justify-between
+			class="flex h-12 shrink-0 items-center justify-between
 				border-b border-[var(--sig-border)] px-4"
 		>
 			<div class="flex items-center gap-2">
