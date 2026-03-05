@@ -134,52 +134,13 @@ describe("buildMemoryTimeline", () => {
 		}
 	});
 
-	test("handles invalid timestamps safely", () => {
-		const db = makeDb();
-		try {
-			insertMemory(db, {
-				id: "mem-valid",
-				createdAt: "2026-03-04T09:00:00.000Z",
-			});
-
-			// Invalid date starting with letter - passes SQL filter (lexicographically 'n' > '2')
-			// and gets counted by parseTimestamp
-			db.prepare(
-				`INSERT INTO memories
-				 (id, content, type, source_type, is_deleted, created_at, updated_at)
-				 VALUES ('mem-invalid', 'oops', 'fact', 'test', 0, 'not-a-date', 'not-a-date')`,
-			).run();
-
-			// Invalid date starting with digit - filtered out by SQL WHERE clause
-			// (lexicographically '0' < '2'), so it's never seen by parseTimestamp.
-			// This is a known limitation: such rows are silently excluded, not counted
-			// as invalid timestamps.
-			db.prepare(
-				`INSERT INTO memories
-				 (id, content, type, source_type, is_deleted, created_at, updated_at)
-				 VALUES ('mem-digit-invalid', 'oops', 'fact', 'test', 0, '0000-99-99', '0000-99-99')`,
-			).run();
-
-			insertHistory(db, {
-				id: "hist-invalid",
-				memoryId: "mem-valid",
-				event: "updated",
-				createdAt: "nope-date",
-			});
-
-			const timeline = buildMemoryTimeline(db as unknown as ReadDb, {
-				now: new Date("2026-03-04T16:00:00.000Z"),
-			});
-
-			// Only 1 invalid memory timestamp counted (the letter-starting one);
-			// the digit-starting one is excluded by SQL and never reaches parseTimestamp
-			expect(timeline.invalidMemoryTimestamps).toBe(1);
-			expect(timeline.invalidHistoryTimestamps).toBe(1);
-			expect(timeline.buckets[0]?.memoriesAdded).toBe(1);
-		} finally {
-			db.close();
-		}
-	});
+expect(timeline.invalidMemoryTimestamps).toBe(1);
+expect(timeline.invalidHistoryTimestamps).toBe(1);
+expect(timeline.buckets[0]?.memoriesAdded).toBe(1);
+// SQL returns both the valid row and the letter-initial invalid row (lexicographic 'n' > '2')
+// but the digit-initial row is filtered out. Document this in assertions:
+expect(timeline.totalMemories).toBe(2);  // mem-valid + mem-invalid
+expect(timeline.totalHistoryEvents).toBe(1);  // hist-invalid
 
 	test("ignores soft-deleted memories and their history", () => {
 		const db = makeDb();
