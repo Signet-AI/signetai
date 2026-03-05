@@ -26,7 +26,7 @@ interface ConnectorHealth {
 let harnesses = $state<Harness[]>([]);
 let connectors = $state<DocumentConnector[]>([]);
 let connectorHealthMap = $state<Map<string, ConnectorHealth>>(new Map());
-let enabledHarnessIds = $state<Set<string>>(new Set());
+let enabledHarnessIds = $state<Set<string> | null>(null);
 let loading = $state(true);
 let syncingId = $state<string | null>(null);
 let syncMenuOpen = $state<string | null>(null);
@@ -54,44 +54,48 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
 
 async function load() {
 	let loadedConnectors: DocumentConnector[] = [];
+	let loadedPrimary = false;
 	try {
 		const [h, c] = await Promise.all([getHarnesses(), getConnectors()]);
 		harnesses = h;
 		connectors = c;
 		loadedConnectors = c;
+		loadedPrimary = true;
 
 		if (h.some((harness) => harness.enabled === undefined)) {
 			const configFiles = await getConfigFiles();
 			enabledHarnessIds = readEnabledHarnesses(configFiles);
 		} else {
-			enabledHarnessIds = new Set();
+			enabledHarnessIds = null;
 		}
 	} catch {
 		// Keep previously rendered data if this refresh fails
 	} finally {
 		loading = false;
-		void fetchConnectorHealth(loadedConnectors);
+		if (loadedPrimary) {
+			void fetchConnectorHealth(loadedConnectors);
+		}
 	}
 }
 
 function readEnabledHarnesses(
 	files: Array<{ name: string; content: string }>,
-): Set<string> {
+): Set<string> | null {
 	const file =
 		files.find((f) => f.name === "agent.yaml") ??
 		files.find((f) => f.name === "AGENT.yaml");
-	if (!file) return new Set();
+	if (!file) return null;
 
 	try {
 		const data = parse(file.content) as { harnesses?: unknown };
-		if (!Array.isArray(data.harnesses)) return new Set();
+		if (!Array.isArray(data.harnesses)) return null;
 		const ids = data.harnesses
 			.filter((item): item is string => typeof item === "string")
 			.map((item) => item.trim())
 			.filter((item) => item.length > 0);
 		return new Set(ids);
 	} catch {
-		return new Set();
+		return null;
 	}
 }
 
@@ -255,7 +259,7 @@ onMount(() => {
 			</div>
 			<div class="grid gap-[var(--space-sm)] p-[var(--space-md)] sm:grid-cols-2 lg:grid-cols-3">
 				{#each harnesses as h (h.id)}
-					{@const isEnabled = h.enabled ?? enabledHarnessIds.has(h.id)}
+					{@const isEnabled = h.enabled ?? (enabledHarnessIds ? enabledHarnessIds.has(h.id) : undefined)}
 					<div class="harness-card flex flex-col gap-[var(--space-sm)] p-[var(--space-md)] rounded-lg border border-[var(--sig-border)] bg-[var(--sig-surface)] transition-colors hover:border-[var(--sig-border-strong)]">
 						<span class="text-[13px] font-semibold text-[var(--sig-text-bright)] font-[family-name:var(--font-display)] tracking-[0.04em]">
 							{h.name}
@@ -275,9 +279,9 @@ onMount(() => {
 						<div class="flex items-center justify-between gap-3 sig-eyebrow">
 							<span>{h.exists ? "Config found" : "Config not found"}</span>
 							<span
-								class={`harness-state ${isEnabled ? "harness-state--enabled" : "harness-state--disabled"}`}
+								class={`harness-state ${isEnabled === true ? "harness-state--enabled" : isEnabled === false ? "harness-state--disabled" : "harness-state--unknown"}`}
 							>
-								{isEnabled ? "Enabled" : "Disabled"}
+								{isEnabled === true ? "Enabled" : isEnabled === false ? "Disabled" : "Unknown"}
 							</span>
 						</div>
 					</div>
@@ -457,5 +461,11 @@ onMount(() => {
 	color: var(--sig-danger);
 	border-color: color-mix(in srgb, var(--sig-danger) 45%, transparent);
 	background: color-mix(in srgb, var(--sig-danger) 12%, transparent);
+}
+
+.harness-state--unknown {
+	color: var(--sig-text-muted);
+	border-color: var(--sig-border);
+	background: color-mix(in srgb, var(--sig-text-muted) 10%, transparent);
 }
 </style>

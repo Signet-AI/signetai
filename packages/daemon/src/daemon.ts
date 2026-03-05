@@ -3990,16 +3990,14 @@ function parseHarnessList(value: unknown): string[] | null {
 function readHarnessesFromConfigContent(content: string): string[] | null {
 	try {
 		const parsed = parseYaml(content) as { harnesses?: unknown };
-		const harnesses = parseHarnessList(parsed.harnesses);
-		if (harnesses) return harnesses;
+		return parseHarnessList(parsed.harnesses);
 	} catch {
 		// Fall through to compatibility parser
 	}
 
 	try {
 		const parsed = parseSimpleYaml(content) as { harnesses?: unknown };
-		const harnesses = parseHarnessList(parsed.harnesses);
-		if (harnesses) return harnesses;
+		return parseHarnessList(parsed.harnesses);
 	} catch {
 		// Ignore parse errors
 	}
