@@ -66,11 +66,12 @@ async function load() {
 		} else {
 			enabledHarnessIds = new Set();
 		}
+	} catch {
+		// Keep previously rendered data if this refresh fails
 	} finally {
 		loading = false;
+		void fetchConnectorHealth(loadedConnectors);
 	}
-
-	void fetchConnectorHealth(loadedConnectors);
 }
 
 function readEnabledHarnesses(

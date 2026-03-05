@@ -4007,8 +4007,7 @@ function readHarnessesFromConfigContent(content: string): string[] | null {
 	return null;
 }
 
-function readEnabledHarnessesFromConfigFiles(): Set<string> {
-	const enabledHarnesses = new Set<string>();
+function readEnabledHarnessesFromConfigFiles(): Set<string> | null {
 	const harnessConfigPaths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
 
 	for (const filePath of harnessConfigPaths) {
@@ -4017,16 +4016,18 @@ function readEnabledHarnessesFromConfigFiles(): Set<string> {
 			const fileContent = readFileSync(filePath, "utf-8");
 			const harnesses = readHarnessesFromConfigContent(fileContent);
 			if (!harnesses) continue;
+
+			const enabledHarnesses = new Set<string>();
 			for (const harnessName of harnesses) {
 				enabledHarnesses.add(harnessName);
 			}
-			break;
+			return enabledHarnesses;
 		} catch {
 			// ignore read errors and continue to fallback path
 		}
 	}
 
-	return enabledHarnesses;
+	return null;
 }
 
 app.get("/api/harnesses", async (c) => {
@@ -4047,7 +4048,7 @@ app.get("/api/harnesses", async (c) => {
 		id: config.id,
 		path: config.path,
 		exists: existsSync(config.path),
-		enabled: enabledHarnesses.has(config.id),
+		enabled: enabledHarnesses ? enabledHarnesses.has(config.id) : undefined,
 		lastSeen: harnessLastSeen.get(config.id) ?? null,
 	}));
 
