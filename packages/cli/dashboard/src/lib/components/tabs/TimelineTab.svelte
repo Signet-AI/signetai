@@ -147,6 +147,12 @@ function buildBucketUsageMaps(
 			.filter((value): value is string => typeof value === "string")
 			.join(" ")
 			.toLowerCase();
+		// For MCP signal detection fallback, exclude content to avoid false positives
+		// from memories that merely mention "MCP" conversationally
+		const signalText = [memory.who, memory.type, tags]
+			.filter((value): value is string => typeof value === "string")
+			.join(" ")
+			.toLowerCase();
 
 		for (const entry of storage) {
 			if (createdAt < entry.startMs || createdAt > entry.endMs) continue;
@@ -165,7 +171,7 @@ function buildBucketUsageMaps(
 				}
 			}
 
-			if (!matchedMcp && hasMcpSignal(memoryText)) {
+			if (!matchedMcp && hasMcpSignal(signalText)) {
 				entry.mcpMentionIds.add(memory.id);
 			}
 		}
@@ -470,7 +476,7 @@ onMount(() => {
 							<p class="sig-heading timeline-era-title">
 								{activeBucket.label}: <span class="timeline-era-title-range">{formatDateRange(activeBucket.start, activeBucket.end)}</span>
 							</p>
-							<div class="timeline-era-controls" role="tablist" aria-orientation="horizontal">
+							<div class="timeline-era-controls">
 								<Button
 									variant="outline"
 									size="sm"
@@ -482,20 +488,22 @@ onMount(() => {
 									<ChevronLeft class="size-3.5" />
 								</Button>
 
-								{#each buckets as bucket, index (bucket.eraIndex)}
-									<button
-										class={`${railButtonBase} ${index === activeIndex
-											? 'border-[var(--sig-accent)] bg-[color-mix(in_srgb,var(--sig-surface-raised)_76%,transparent)] text-[var(--sig-text-bright)]'
-											: 'border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]'}`}
-										onclick={() => {
-											activeIndex = index;
-										}}
-										role="tab"
-										aria-selected={index === activeIndex}
-									>
-										{getRangeChipLabel(bucket)}
-									</button>
-								{/each}
+								<div role="tablist" aria-orientation="horizontal" class="contents">
+									{#each buckets as bucket, index (bucket.eraIndex)}
+										<button
+											class={`${railButtonBase} ${index === activeIndex
+												? 'border-[var(--sig-accent)] bg-[color-mix(in_srgb,var(--sig-surface-raised)_76%,transparent)] text-[var(--sig-text-bright)]'
+												: 'border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]'}`}
+											onclick={() => {
+												activeIndex = index;
+											}}
+											role="tab"
+											aria-selected={index === activeIndex}
+										>
+											{getRangeChipLabel(bucket)}
+										</button>
+									{/each}
+								</div>
 
 								<Button
 									variant="outline"
