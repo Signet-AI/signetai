@@ -18,6 +18,12 @@ interface LogEntry {
 
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
+const LOG_LEVEL_ORDER: Record<LogEntry["level"], number> = {
+	debug: 0,
+	info: 1,
+	warn: 2,
+	error: 3,
+};
 
 let logs = $state<LogEntry[]>([]);
 let logsLoading = $state(false);
@@ -207,7 +213,13 @@ function startLogStream() {
 				streamError = "";
 				return;
 			}
-			if (logLevelFilter && entry.level !== logLevelFilter) return;
+			const entryLevelValue =
+				typeof entry.level === "string"
+					? LOG_LEVEL_ORDER[entry.level as LogEntry["level"]]
+					: undefined;
+			const filterLevelValue =
+				LOG_LEVEL_ORDER[logLevelFilter as LogEntry["level"]];
+			if (logLevelFilter && (entryLevelValue ?? -1) < (filterLevelValue ?? -1)) return;
 			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
 			const wasViewingLatest = isViewingLatest();
 			logs = [...logs.slice(-499), entry];
