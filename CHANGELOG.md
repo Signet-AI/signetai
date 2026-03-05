@@ -2,6 +2,15 @@
 
 All notable changes to Signet are documented here.
 
+## [0.38.3] - 2026-03-05
+
+### Bug Fixes
+
+- treat empty ollama base_url as missing
+- handle ollama base_url nullish defaulting consistently
+- default ollama embedding base_url to localhost:11434
+
+
 ## [0.38.2] - 2026-03-04
 
 ### Bug Fixes
