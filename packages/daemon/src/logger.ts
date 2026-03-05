@@ -395,6 +395,8 @@ class Logger extends EventEmitter {
 				try {
 					const content = readFileSync(file.path, "utf-8");
 					const lines = content.trim().split("\n").filter(Boolean);
+					// Assumption: entries in each file are append-only in timestamp order.
+					// Cross-file timestamp interleaving is not supported by this tail read.
 					const recentLines = lines.slice(-(limit * 2));
 
 					for (const line of recentLines) {

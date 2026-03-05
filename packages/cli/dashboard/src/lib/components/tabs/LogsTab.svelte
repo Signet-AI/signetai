@@ -204,7 +204,6 @@ function startLogStream() {
 		reconnectTimer = null;
 	}
 	if (logEventSource) logEventSource.close();
-	logsStreaming = true;
 	logEventSource = new EventSource("/api/logs/stream");
 
 	logEventSource.onmessage = (event) => {
@@ -213,6 +212,7 @@ function startLogStream() {
 			if (entry.type === "connected") {
 				reconnectAttempt = 0;
 				logsReconnecting = false;
+				logsStreaming = true;
 				streamError = "";
 				return;
 			}
