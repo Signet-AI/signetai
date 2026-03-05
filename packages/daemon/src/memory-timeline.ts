@@ -319,10 +319,11 @@ export function buildMemoryTimeline(
 	for (const spec of RANGE_SPECS) {
 		const bucket = buckets.get(spec.eraIndex);
 		if (!bucket) continue;
-		const avgImportance =
+		const rawAvg =
 			bucket.importanceSamples > 0
-				? Number((bucket.totalImportance / bucket.importanceSamples).toFixed(3))
+				? bucket.totalImportance / bucket.importanceSamples
 				: 0;
+		const avgImportance = Number(Math.min(1, Math.max(0, rawAvg)).toFixed(3));
 
 		responseBuckets.push({
 			eraIndex: spec.eraIndex,

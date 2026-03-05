@@ -474,7 +474,7 @@ onMount(() => {
 						<div class="timeline-hero-metric">
 							<span class="timeline-hero-metric-label">Average importance</span>
 							<strong class="timeline-hero-metric-display">
-								{Math.round(activeBucket.avgImportance * 100)}% avg
+								{Math.round(normalizeImportance(activeBucket.avgImportance) * 100)}% avg
 							</strong>
 						</div>
 						<div class="timeline-hero-metric">
