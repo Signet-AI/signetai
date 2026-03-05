@@ -473,6 +473,9 @@ export function loadPipelineConfig(
 	};
 }
 
+/** Default Ollama API base URL (standard local installation) */
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+
 export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 	const defaults: ResolvedMemoryConfig = {
 		embedding: {
@@ -522,8 +525,16 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 					String(emb.dimensions ?? "768"),
 					10,
 				);
-				defaults.embedding.base_url =
-					(emb.base_url as string | undefined) ?? defaults.embedding.base_url;
+				// For ollama provider, default to standard local URL only when base_url is omitted.
+				const explicitBaseUrl = emb.base_url as string | undefined;
+				if (defaults.embedding.provider === "ollama") {
+					defaults.embedding.base_url =
+						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
+							? explicitBaseUrl
+							: DEFAULT_OLLAMA_BASE_URL;
+				} else {
+					defaults.embedding.base_url = explicitBaseUrl ?? defaults.embedding.base_url;
+				}
 				defaults.embedding.api_key = emb.api_key as string | undefined;
 			}
 
