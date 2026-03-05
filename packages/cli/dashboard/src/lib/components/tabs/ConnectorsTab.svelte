@@ -8,6 +8,7 @@ import {
 	getHarnesses,
 	getConnectors,
 	getConfigFiles,
+	API_BASE,
 	regenerateHarnesses,
 	resyncConnectors,
 	syncConnector,
@@ -77,8 +78,7 @@ function readEnabledHarnesses(
 ): Set<string> {
 	const file =
 		files.find((f) => f.name === "agent.yaml") ??
-		files.find((f) => f.name === "AGENT.yaml") ??
-		files.find((f) => f.name === "AGENT.YAML");
+		files.find((f) => f.name === "AGENT.yaml");
 	if (!file) return new Set();
 
 	try {
@@ -97,7 +97,7 @@ function readEnabledHarnesses(
 async function fetchConnectorHealth(conns: DocumentConnector[]): Promise<void> {
 	const healthPromises = conns.map(async (conn) => {
 		try {
-			const res = await fetch(`/api/connectors/${conn.id}/health`);
+			const res = await fetch(`${API_BASE}/api/connectors/${conn.id}/health`);
 			if (res.ok) {
 				const data = await res.json() as ConnectorHealth;
 				return { id: conn.id, health: data };
