@@ -28,10 +28,20 @@ let connectors = $state<DocumentConnector[]>([]);
 let connectorHealthMap = $state<Map<string, ConnectorHealth>>(new Map());
 let enabledHarnessIds = $state<Set<string> | null>(null);
 let loading = $state(true);
+let didInitialLoadErrorToast = $state(false);
 let syncingId = $state<string | null>(null);
 let syncMenuOpen = $state<string | null>(null);
 let harnessResyncing = $state(false);
 let connectorsResyncing = $state(false);
+
+type HarnessEnabledState = "enabled" | "disabled" | "unknown";
+
+function resolveHarnessState(harness: Harness): HarnessEnabledState {
+	if (harness.enabled === true) return "enabled";
+	if (harness.enabled === false) return "disabled";
+	if (!enabledHarnessIds) return "unknown";
+	return enabledHarnessIds.has(harness.id) ? "enabled" : "disabled";
+}
 
 function relativeTime(iso: string | null): string {
 	if (!iso) return "never";
@@ -70,6 +80,10 @@ async function load() {
 		}
 	} catch {
 		// Keep previously rendered data if this refresh fails
+		if (loading && !didInitialLoadErrorToast) {
+			toast("Failed to load connectors. Check daemon status and retry.", "error");
+			didInitialLoadErrorToast = true;
+		}
 	} finally {
 		loading = false;
 		if (loadedPrimary) {
@@ -112,12 +126,19 @@ async function fetchConnectorHealth(conns: DocumentConnector[]): Promise<void> {
 		}
 		return null;
 	});
-	
+
 	const results = await Promise.all(healthPromises);
+	const previousMap = connectorHealthMap;
 	const newMap = new Map<string, ConnectorHealth>();
-	for (const result of results) {
+	for (let index = 0; index < results.length; index++) {
+		const result = results[index];
 		if (result) {
 			newMap.set(result.id, result.health);
+			continue;
+		}
+		const previous = previousMap.get(conns[index].id);
+		if (previous) {
+			newMap.set(conns[index].id, previous);
 		}
 	}
 	connectorHealthMap = newMap;
@@ -259,7 +280,7 @@ onMount(() => {
 			</div>
 			<div class="grid gap-[var(--space-sm)] p-[var(--space-md)] sm:grid-cols-2 lg:grid-cols-3">
 				{#each harnesses as h (h.id)}
-					{@const isEnabled = h.enabled ?? (enabledHarnessIds ? enabledHarnessIds.has(h.id) : undefined)}
+					{@const harnessState = resolveHarnessState(h)}
 					<div class="harness-card flex flex-col gap-[var(--space-sm)] p-[var(--space-md)] rounded-lg border border-[var(--sig-border)] bg-[var(--sig-surface)] transition-colors hover:border-[var(--sig-border-strong)]">
 						<span class="text-[13px] font-semibold text-[var(--sig-text-bright)] font-[family-name:var(--font-display)] tracking-[0.04em]">
 							{h.name}
@@ -279,9 +300,9 @@ onMount(() => {
 						<div class="flex items-center justify-between gap-3 sig-eyebrow">
 							<span>{h.exists ? "Config found" : "Config not found"}</span>
 							<span
-								class={`harness-state ${isEnabled === true ? "harness-state--enabled" : isEnabled === false ? "harness-state--disabled" : "harness-state--unknown"}`}
+								class={`harness-state ${harnessState === "enabled" ? "harness-state--enabled" : harnessState === "disabled" ? "harness-state--disabled" : "harness-state--unknown"}`}
 							>
-								{isEnabled === true ? "Enabled" : isEnabled === false ? "Disabled" : "Unknown"}
+								{harnessState === "enabled" ? "Enabled" : harnessState === "disabled" ? "Disabled" : "Unknown"}
 							</span>
 						</div>
 					</div>
