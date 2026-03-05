@@ -390,8 +390,9 @@ class Logger extends EventEmitter {
 				try {
 					const content = readFileSync(file.path, "utf-8");
 					const lines = content.trim().split("\n").filter(Boolean);
+					const recentLines = lines.slice(-(limit * 2));
 
-					for (const line of lines) {
+					for (const line of recentLines) {
 						if (results.length >= limit * 2) break;
 
 						try {

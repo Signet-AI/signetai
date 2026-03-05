@@ -34,7 +34,6 @@ let logAutoScroll = $state(false);
 let logViewport = $state<HTMLElement | null>(null);
 let selectedLogKey = $state<string | null>(null);
 let copied = $state(false);
-let logFollow = $state(true);
 let autoScrollSnapFrame: number | null = null;
 const BOTTOM_THRESHOLD_PX = 24;
 
@@ -151,14 +150,12 @@ function scrollToBottomNextFrame(behavior: ScrollBehavior = "auto"): void {
 function enforceAutoScrollAtBottom(): void {
 	if (!logViewport) return;
 	if (isNearBottom(logViewport)) {
-		logFollow = true;
 		return;
 	}
 	if (autoScrollSnapFrame !== null) return;
 	autoScrollSnapFrame = requestAnimationFrame(() => {
 		autoScrollSnapFrame = null;
 		scrollToBottom("auto");
-		logFollow = true;
 	});
 }
 
@@ -180,7 +177,6 @@ async function fetchLogs() {
 		selectLatestLog();
 		if (logAutoScroll) {
 			scrollToBottomNextFrame("auto");
-			logFollow = true;
 		}
 	} catch {
 		logsError = "Failed to fetch logs";
@@ -213,7 +209,6 @@ function startLogStream() {
 			logs = [...logs.slice(-499), entry];
 			if (wasViewingLatest) selectLatestLog();
 			if (logAutoScroll) {
-				logFollow = true;
 				scrollToBottomNextFrame("auto");
 			}
 		} catch {
@@ -343,7 +338,6 @@ $effect(() => {
 			enforceAutoScrollAtBottom();
 			return;
 		}
-		logFollow = isNearBottom(viewport);
 	};
 
 	viewport.addEventListener("scroll", onScroll, { passive: true });
@@ -385,7 +379,6 @@ $effect(() => {
 					<Checkbox checked={logAutoScroll} onCheckedChange={(value: unknown) => {
 						logAutoScroll = value === true;
 						if (logAutoScroll) {
-							logFollow = true;
 							scrollToBottomNextFrame("auto");
 						}
 					}} class="rounded-lg" />
