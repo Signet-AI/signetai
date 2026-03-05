@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signet — Own Your AI Identity</title>
+<meta name="description" content="Encrypted secrets your agent can use but never read. Portable memory it builds but you always own. One ~/.agents/ directory. Every platform.">
+<meta property="og:title" content="Signet — Own Your AI Identity">
+<meta property="og:description" content="Portable agent identity. Encrypted secrets. Local-first memory. Take your AI everywhere.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://signetai.sh/marketing/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Signet — Own Your AI Identity">
+<meta name="twitter:description" content="Portable agent identity. Encrypted secrets. Local-first memory. Take your AI everywhere.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================
+   DESIGN TOKENS
+   ============================ */
+:root {
+  --color-bg: #08080a;
+  --color-text: #d4d4d8;
+  --color-text-bright: #f0f0f2;
+  --color-danger: #c45a57;
+  --color-warn: #c09060;
+  --color-accent: #8a8a96;
+  --color-ring: rgba(138,138,150,0.12);
+  --color-ring-active: rgba(138,138,150,0.35);
+  --font-display: 'Chakra Petch', sans-serif;
+  --font-body: 'IBM Plex Mono', monospace;
+  --radius-orbit: min(42vw, 42vh);
+}
+
+/* ============================
+   RESET & BASE
+   ============================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  scroll-behavior: auto;
+  overflow-x: hidden;
+  background: var(--color-bg);
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================
+   SCROLL SPACER
+   ============================ */
+.scroll-spacer {
+  height: 1000vh;
+  pointer-events: none;
+}
+
+/* ============================
+   CRT GRAIN OVERLAY
+   ============================ */
+.crt-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.035;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255,255,255,0.03) 2px,
+    rgba(255,255,255,0.03) 4px
+  );
+}
+
+/* ============================
+   BACKGROUND GRID
+   ============================ */
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(138,138,150,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(138,138,150,0.04) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+/* ============================
+   CORNER MARKS
+   ============================ */
+.corner-marks {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+.corner-marks::before,
+.corner-marks::after {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-color: var(--color-accent);
+  border-style: solid;
+  border-width: 0;
+  opacity: 0.25;
+}
+.corner-marks::before {
+  top: 16px; left: 16px;
+  border-top-width: 1px;
+  border-left-width: 1px;
+}
+.corner-marks::after {
+  bottom: 16px; right: 16px;
+  border-bottom-width: 1px;
+  border-right-width: 1px;
+}
+
+/* ============================
+   FIXED VIEWPORT LAYER
+   ============================ */
+.viewport-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
+  clip-path: inset(0);
+}
+
+/* ============================
+   ORBIT TRACK (visual ring)
+   ============================ */
+.orbit-track {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(var(--radius-orbit) * 2);
+  height: calc(var(--radius-orbit) * 2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid var(--color-ring);
+  transition: border-color 0.8s ease;
+}
+
+/* ============================
+   ORBIT PROGRESS DOT
+   ============================ */
+.orbit-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  background: var(--color-accent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 12px rgba(138,138,150,0.6);
+  transition: opacity 0.3s;
+  z-index: 20;
+}
+
+/* ============================
+   FORM — always center
+   ============================ */
+.form-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 50;
+  pointer-events: auto;
+  width: min(300px, 75vw);
+}
+
+.form-wrap {
+  background: rgba(8,8,10,0.92);
+  border: 1px solid rgba(138,138,150,0.18);
+  border-radius: 6px;
+  padding: 28px 24px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.form-logo {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.form-logo .signet-mark {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-text-bright);
+  letter-spacing: 4px;
+  text-transform: uppercase;
+}
+
+.form-logo .signet-sub {
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--color-accent);
+  letter-spacing: 2px;
+  margin-top: 4px;
+  text-transform: uppercase;
+}
+
+.form-wrap .field {
+  margin-bottom: 14px;
+}
+
+.form-wrap label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  margin-bottom: 5px;
+}
+
+.form-wrap input {
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(138,138,150,0.2);
+  border-radius: 4px;
+  color: var(--color-text-bright);
+  font-family: var(--font-body);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.3s;
+}
+
+.form-wrap input:focus {
+  border-color: var(--color-accent);
+}
+
+.form-wrap input::placeholder {
+  color: rgba(138,138,150,0.4);
+}
+
+.form-wrap button {
+  width: 100%;
+  padding: 12px;
+  margin-top: 6px;
+  background: var(--color-text-bright);
+  color: var(--color-bg);
+  border: none;
+  border-radius: 4px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.3s, transform 0.2s;
+}
+
+.form-wrap button:hover {
+  background: #fff;
+  transform: scale(1.02);
+}
+
+.form-cta-label {
+  text-align: center;
+  font-size: 10px;
+  color: var(--color-accent);
+  margin-top: 10px;
+  letter-spacing: 1px;
+  opacity: 0.6;
+}
+
+/* ============================
+   STORY BEATS — orbital cards
+   ============================ */
+.beat {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(280px, 60vw);
+  transform: translate(-50%, -50%);
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.05s;
+  pointer-events: none;
+  z-index: 15;
+  max-width: calc(100vw - 40px);
+}
+
+.beat.active {
+  opacity: 1;
+}
+
+.beat .beat-label {
+  font-family: var(--font-body);
+  font-size: 9px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  margin-bottom: 10px;
+  opacity: 0.6;
+}
+
+.beat h2 {
+  font-family: var(--font-display);
+  font-size: clamp(18px, 3vw, 24px);
+  font-weight: 700;
+  color: var(--color-text-bright);
+  line-height: 1.3;
+  margin-bottom: 10px;
+}
+
+.beat p {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+.beat .beat-svg {
+  margin: 14px auto 0;
+  width: 100px;
+  height: 100px;
+}
+
+.beat .beat-svg svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Danger tint for beat 7 */
+.beat[data-beat="6"] h2 {
+  color: var(--color-danger);
+}
+
+/* Warn tint for beats 4,5 */
+.beat[data-beat="3"] h2,
+.beat[data-beat="4"] h2 {
+  color: var(--color-warn);
+}
+
+/* ============================
+   FINAL CTA SPOTLIGHT
+   ============================ */
+.spotlight-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  background: radial-gradient(
+    ellipse 340px 340px at 50% 50%,
+    transparent 0%,
+    rgba(8,8,10,0.85) 100%
+  );
+}
+
+.spotlight-overlay.active {
+  opacity: 1;
+}
+
+/* ============================
+   SCROLL HINT (top)
+   ============================ */
+.scroll-hint {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  text-align: center;
+  opacity: 0.5;
+  transition: opacity 0.4s;
+  pointer-events: none;
+}
+
+.scroll-hint.hidden {
+  opacity: 0;
+}
+
+.scroll-hint span {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--color-accent);
+  margin-bottom: 6px;
+}
+
+.scroll-hint .arrow {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-right: 1px solid var(--color-accent);
+  border-bottom: 1px solid var(--color-accent);
+  transform: rotate(45deg);
+  animation: scrollBounce 2s ease-in-out infinite;
+}
+
+@keyframes scrollBounce {
+  0%, 100% { transform: rotate(45deg) translateY(0); }
+  50% { transform: rotate(45deg) translateY(5px); }
+}
+
+/* ============================
+   AMBIENT FRAGMENTS
+   ============================ */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ambient .frag {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  background: var(--color-accent);
+  opacity: 0;
+  animation: fragFloat linear infinite;
+}
+
+@keyframes fragFloat {
+  0% { opacity: 0; transform: translateY(0) scale(1); }
+  10% { opacity: 0.3; }
+  90% { opacity: 0.3; }
+  100% { opacity: 0; transform: translateY(-100vh) scale(0.5); }
+}
+
+/* ============================
+   MOBILE — form center, fear above, timeline below
+   ============================ */
+@media (max-width: 700px) {
+  .viewport-layer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* Form raised to center — POPS */
+  .form-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(320px, 88vw);
+    z-index: 50;
+  }
+
+  .form-wrap {
+    padding: 22px 20px;
+    border-radius: 10px;
+    border: 1.5px solid rgba(138,138,150,0.35);
+    box-shadow:
+      0 0 30px rgba(138,138,150,0.12),
+      0 0 60px rgba(138,138,150,0.06),
+      0 8px 32px rgba(0,0,0,0.5);
+    background: rgba(14,14,18,0.96);
+  }
+
+  .form-logo .signet-mark {
+    font-size: 24px;
+    letter-spacing: 4px;
+  }
+
+  .form-logo .signet-sub {
+    font-size: 9px;
+  }
+
+  .form-wrap .field {
+    margin-bottom: 12px;
+  }
+
+  .form-wrap label {
+    font-size: 9px;
+    margin-bottom: 4px;
+  }
+
+  .form-wrap input {
+    padding: 10px 12px;
+    font-size: 14px;
+    border: 1px solid rgba(138,138,150,0.25);
+  }
+
+  .form-wrap button {
+    padding: 13px;
+    font-size: 13px;
+    letter-spacing: 2.5px;
+    box-shadow: 0 0 20px rgba(240,240,242,0.1);
+  }
+
+  .form-cta-label {
+    font-size: 10px;
+  }
+
+  /* Orbit ring hidden on mobile */
+  .orbit-track { display: none; }
+  .orbit-dot { display: none; }
+
+  /* ALL beats: centered horizontally, full width */
+  .beat {
+    width: min(300px, 85vw);
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    text-align: center;
+  }
+
+  /* Fear beats — ABOVE the form */
+  .beat[data-zone="top"] {
+    top: 4% !important;
+    bottom: auto !important;
+  }
+
+  /* Timeline/evidence beats — BELOW the form */
+  .beat[data-zone="bottom"] {
+    top: auto !important;
+    bottom: 3% !important;
+  }
+
+  .beat h2 {
+    font-size: clamp(19px, 5.5vw, 26px);
+    line-height: 1.25;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+
+  .beat[data-zone="top"] h2 {
+    color: var(--color-text-bright);
+  }
+
+  .beat[data-zone="bottom"] h2 {
+    font-size: clamp(15px, 4vw, 20px);
+    color: var(--color-accent);
+    font-weight: 600;
+  }
+
+  .beat[data-zone="bottom"] .beat-label {
+    color: var(--color-warn);
+  }
+
+  .beat p {
+    font-size: 12px;
+    line-height: 1.5;
+    opacity: 0.8;
+  }
+
+  .beat .beat-label {
+    font-size: 8px;
+    letter-spacing: 2.5px;
+    font-weight: 600;
+  }
+
+  .beat .beat-svg {
+    width: 50px;
+    height: 50px;
+    margin-top: 8px;
+  }
+
+  /* Spotlight centers on form */
+  .spotlight-overlay {
+    background: radial-gradient(
+      ellipse 320px 280px at 50% 50%,
+      transparent 0%,
+      rgba(8,8,10,0.92) 100%
+    );
+  }
+
+  .scroll-hint {
+    bottom: 12px;
+  }
+
+  .scroll-hint span {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 480px) {
+  .form-container {
+    width: min(295px, 90vw);
+  }
+
+  .form-wrap {
+    padding: 18px 16px;
+  }
+
+  .beat {
+    width: min(270px, 88vw);
+  }
+
+  .beat[data-zone="top"] {
+    top: 2% !important;
+  }
+
+  .beat[data-zone="bottom"] {
+    bottom: 2% !important;
+  }
+
+  .beat h2 {
+    font-size: clamp(17px, 5vw, 23px);
+  }
+}
+
+</style>
+</head>
+<body>
+
+<!-- CRT grain overlay -->
+<div class="crt-grain"></div>
+
+<!-- Background grid -->
+<div class="bg-grid"></div>
+
+<!-- Corner marks -->
+<div class="corner-marks"></div>
+
+<!-- Ambient floating fragments -->
+<div class="ambient" id="ambient"></div>
+
+<!-- Fixed viewport layer -->
+<div class="viewport-layer" id="viewportLayer">
+
+  <!-- Orbit track ring -->
+  <div class="orbit-track" id="orbitTrack"></div>
+
+  <!-- Moving dot on the orbit -->
+  <div class="orbit-dot" id="orbitDot"></div>
+
+  <!-- FORM — always center -->
+  <div class="form-container">
+    <form class="form-wrap" id="leadForm" action="https://hooks.mcpengage.com/signet-leads" method="POST">
+      <div class="form-logo">
+        <div class="signet-mark">Signet</div>
+        <div class="signet-sub">Agent Identity Protocol</div>
+      </div>
+      <div class="field">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" placeholder="Your name" required>
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" placeholder="you@example.com" required>
+      </div>
+      <div class="field">
+        <label for="phone">Phone</label>
+        <input type="tel" id="phone" name="phone" placeholder="+1 (555) 000-0000">
+      </div>
+      <button type="submit">Take Ownership</button>
+      <div class="form-cta-label">Early access — no cost, no spam</div>
+    </form>
+  </div>
+
+  <!-- STORY BEATS -->
+
+  <!-- Beat 0: 12:00 (top) — 270deg in math coords = top in CSS -->
+  <div class="beat" data-beat="0" data-angle="270" data-zone="top">
+    <div class="beat-label">Signal Detected</div>
+    <h2>Are you prepared for losing access to your AI's memories?</h2>
+    <p>What happens when the tools you depend on vanish overnight.</p>
+  </div>
+
+  <!-- Beat 1: 1:30 (top-right) — 315deg -->
+  <div class="beat" data-beat="1" data-angle="315" data-zone="bottom">
+    <div class="beat-label">Intimacy</div>
+    <h2>Your AI knows your goals. Your health. Your dreams.</h2>
+    <p>Years of conversations. Patterns only it can see.</p>
+    <div class="beat-svg">
+      <!-- SVG: Neural Network -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <style>
+          .nn-link{stroke:#333;stroke-width:1;fill:none}
+          .nn-pulse{stroke:#fff;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 62}
+          .nn-node{fill:#111;stroke-width:1.5;animation:nnPulse 3s ease-in-out infinite alternate}
+          .nn-fwd{animation:nnFwd linear infinite}
+          .nn-rev{animation:nnRev linear infinite}
+          @keyframes nnFwd{from{stroke-dashoffset:64}to{stroke-dashoffset:0}}
+          @keyframes nnRev{from{stroke-dashoffset:0}to{stroke-dashoffset:64}}
+          @keyframes nnPulse{0%{stroke:#555}100%{stroke:#ddd}}
+        </style>
+        <g class="nn-link"><path d="M30,80 L90,50"/><path d="M30,80 L90,100"/><path d="M30,80 L90,150"/><path d="M30,120 L90,50"/><path d="M30,120 L90,100"/><path d="M30,120 L90,150"/><path d="M90,50 L150,75"/><path d="M90,50 L150,125"/><path d="M90,100 L150,75"/><path d="M90,100 L150,125"/><path d="M90,150 L150,75"/><path d="M90,150 L150,125"/><path d="M150,75 L180,100"/><path d="M150,125 L180,100"/></g>
+        <g><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:2.1s;animation-delay:.2s" d="M30,80 L90,50"/><path class="nn-pulse nn-rev" pathLength="100" style="animation-duration:1.8s;animation-delay:.5s" d="M30,80 L90,100"/><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:2.5s;animation-delay:.1s" d="M30,80 L90,150"/><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:1.9s;animation-delay:.8s" d="M30,120 L90,50"/><path class="nn-pulse nn-rev" pathLength="100" style="animation-duration:2.8s;animation-delay:.3s" d="M30,120 L90,100"/><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:2.2s;animation-delay:1.1s" d="M30,120 L90,150"/><path class="nn-pulse nn-rev" pathLength="100" style="animation-duration:2s;animation-delay:.4s" d="M90,50 L150,75"/><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:2.6s;animation-delay:.9s" d="M90,50 L150,125"/><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:1.7s;animation-delay:.2s" d="M90,100 L150,75"/><path class="nn-pulse nn-rev" pathLength="100" style="animation-duration:2.3s;animation-delay:.7s" d="M90,100 L150,125"/><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:2.4s;animation-delay:.6s" d="M90,150 L150,75"/><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:3s;animation-delay:1.5s" d="M90,150 L150,125"/><path class="nn-pulse nn-fwd" pathLength="100" style="animation-duration:1.6s;animation-delay:.3s" d="M150,75 L180,100"/><path class="nn-pulse nn-rev" pathLength="100" style="animation-duration:1.9s;animation-delay:.8s" d="M150,125 L180,100"/></g>
+        <g><circle cx="30" cy="80" r="4.5" class="nn-node" style="animation-delay:0s"/><circle cx="30" cy="120" r="4.5" class="nn-node" style="animation-delay:-.5s"/><circle cx="90" cy="50" r="4.5" class="nn-node" style="animation-delay:-1s"/><circle cx="90" cy="100" r="4.5" class="nn-node" style="animation-delay:-1.5s"/><circle cx="90" cy="150" r="4.5" class="nn-node" style="animation-delay:-2s"/><circle cx="150" cy="75" r="4.5" class="nn-node" style="animation-delay:-2.5s"/><circle cx="150" cy="125" r="4.5" class="nn-node" style="animation-delay:-3s"/><circle cx="180" cy="100" r="4.5" class="nn-node" style="animation-delay:-3.5s"/></g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Beat 2: 3:00 (right) — 0deg -->
+  <div class="beat" data-beat="2" data-angle="0" data-zone="top">
+    <div class="beat-label">Deep Integration</div>
+    <h2>It knows you better than you know yourself.</h2>
+    <p>Your thinking patterns, your blind spots, your potential — all mapped.</p>
+  </div>
+
+  <!-- Beat 3: 4:30 (bottom-right) — 45deg -->
+  <div class="beat" data-beat="3" data-angle="45" data-zone="top">
+    <div class="beat-label">Breach Alert</div>
+    <h2>AI-generated phishing attacks surge 4,000%</h2>
+    <p>The tools you trust are under siege. Your data is the prize.</p>
+    <div class="beat-svg">
+      <!-- SVG: Cracking Shield -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <style>
+          .sh-outline{fill:none;stroke:#888;stroke-width:2;stroke-linejoin:round}
+          .sh-crack{fill:none;stroke:#fff;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:80;stroke-dashoffset:80;animation:shCrack 3s ease forwards infinite}
+          .sh-crack2{animation-delay:.8s}
+          .sh-crack3{animation-delay:1.5s}
+          .sh-frag{fill:#fff;opacity:0;animation:shFrag 3s ease infinite}
+          .sh-frag2{animation-delay:1.2s}
+          .sh-frag3{animation-delay:2s}
+          @keyframes shCrack{0%{stroke-dashoffset:80}40%{stroke-dashoffset:0}100%{stroke-dashoffset:0;opacity:.3}}
+          @keyframes shFrag{0%,30%{opacity:0;transform:translate(0,0)}50%{opacity:.6}100%{opacity:0;transform:translate(var(--fx),var(--fy))}}
+        </style>
+        <path class="sh-outline" d="M100,30 L150,55 L150,110 Q150,155 100,175 Q50,155 50,110 L50,55 Z"/>
+        <path class="sh-crack" d="M100,60 L108,85 L95,100 L110,125 L100,145"/>
+        <path class="sh-crack sh-crack2" d="M85,75 L100,85 L120,80"/>
+        <path class="sh-crack sh-crack3" d="M90,115 L105,110 L115,120"/>
+        <rect class="sh-frag" x="112" y="82" width="5" height="5" rx="1" style="--fx:12px;--fy:-8px" transform="rotate(15,114,84)"/>
+        <rect class="sh-frag sh-frag2" x="96" y="100" width="4" height="4" rx="1" style="--fx:-10px;--fy:6px" transform="rotate(-10,98,102)"/>
+        <rect class="sh-frag sh-frag3" x="106" y="118" width="3" height="3" rx="1" style="--fx:8px;--fy:10px"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Beat 4: 6:00 (bottom) — 90deg -->
+  <div class="beat" data-beat="4" data-angle="90" data-zone="bottom">
+    <div class="beat-label">Government Action</div>
+    <h2>Emergency AI regulation bill fast-tracked. Mandatory 90-day memory purge.</h2>
+    <p>Regulators aren't waiting. Your AI's memory is on the chopping block.</p>
+    <div class="beat-svg">
+      <!-- SVG: Pulsing Alert Rings -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <style>
+          .ar-ring{fill:none;stroke:#fff;transform-origin:100px 100px;animation:arPulse 4s cubic-bezier(.165,.84,.44,1) infinite}
+          .ar-ring:nth-child(1){animation-delay:0s}
+          .ar-ring:nth-child(2){animation-delay:1s}
+          .ar-ring:nth-child(3){animation-delay:2s}
+          .ar-ring:nth-child(4){animation-delay:3s}
+          @keyframes arPulse{0%{transform:scale(.8);opacity:1;stroke-width:4px}100%{transform:scale(3.2);opacity:0;stroke-width:.5px}}
+          .ar-warn{transform-origin:100px 100px;animation:arWarnPulse 1s ease-in-out infinite alternate}
+          @keyframes arWarnPulse{0%{transform:scale(1);filter:drop-shadow(0 0 2px rgba(255,255,255,.4))}100%{transform:scale(1.05);filter:drop-shadow(0 0 10px rgba(255,255,255,.9))}}
+        </style>
+        <circle class="ar-ring" cx="100" cy="100" r="30"/>
+        <circle class="ar-ring" cx="100" cy="100" r="30"/>
+        <circle class="ar-ring" cx="100" cy="100" r="30"/>
+        <circle class="ar-ring" cx="100" cy="100" r="30"/>
+        <g class="ar-warn"><path d="M100,55 L140,125 L60,125 Z" fill="none" stroke="#fff" stroke-width="6" stroke-linejoin="round"/><line x1="100" y1="75" x2="100" y2="105" stroke="#fff" stroke-width="6" stroke-linecap="round"/><circle cx="100" cy="116" r="3.5" fill="#fff"/></g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Beat 5: 7:30 (bottom-left) — 135deg -->
+  <div class="beat" data-beat="5" data-angle="135" data-zone="top">
+    <div class="beat-label">Consequence</div>
+    <h2>No migration path. No backup. No way out.</h2>
+    <p>When the switch flips, there's no undo button. Years of context — gone.</p>
+    <div class="beat-svg">
+      <!-- SVG: Dissolving Identity Grid -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <style>
+          .dg-cell{fill:none;stroke:#aaa;stroke-width:.8;animation:dgDissolve 4s ease-in-out infinite}
+          @keyframes dgDissolve{
+            0%,15%{opacity:1;transform:translate(0,0) scale(1)}
+            60%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(0.3)}
+            80%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(0.3)}
+            100%{opacity:1;transform:translate(0,0) scale(1)}
+          }
+        </style>
+        <rect class="dg-cell" x="60" y="60" width="16" height="16" rx="2" style="--dx:-25px;--dy:-20px;animation-delay:0s"/>
+        <rect class="dg-cell" x="80" y="60" width="16" height="16" rx="2" style="--dx:5px;--dy:-30px;animation-delay:.15s"/>
+        <rect class="dg-cell" x="100" y="60" width="16" height="16" rx="2" style="--dx:20px;--dy:-15px;animation-delay:.3s"/>
+        <rect class="dg-cell" x="120" y="60" width="16" height="16" rx="2" style="--dx:30px;--dy:-25px;animation-delay:.1s"/>
+        <rect class="dg-cell" x="60" y="80" width="16" height="16" rx="2" style="--dx:-30px;--dy:-5px;animation-delay:.25s"/>
+        <rect class="dg-cell" x="80" y="80" width="16" height="16" rx="2" style="--dx:-10px;--dy:-20px;animation-delay:.4s"/>
+        <rect class="dg-cell" x="100" y="80" width="16" height="16" rx="2" style="--dx:15px;--dy:-10px;animation-delay:.2s"/>
+        <rect class="dg-cell" x="120" y="80" width="16" height="16" rx="2" style="--dx:35px;--dy:5px;animation-delay:.35s"/>
+        <rect class="dg-cell" x="60" y="100" width="16" height="16" rx="2" style="--dx:-35px;--dy:10px;animation-delay:.45s"/>
+        <rect class="dg-cell" x="80" y="100" width="16" height="16" rx="2" style="--dx:-5px;--dy:25px;animation-delay:.1s"/>
+        <rect class="dg-cell" x="100" y="100" width="16" height="16" rx="2" style="--dx:10px;--dy:30px;animation-delay:.5s"/>
+        <rect class="dg-cell" x="120" y="100" width="16" height="16" rx="2" style="--dx:25px;--dy:15px;animation-delay:.2s"/>
+        <rect class="dg-cell" x="60" y="120" width="16" height="16" rx="2" style="--dx:-20px;--dy:25px;animation-delay:.35s"/>
+        <rect class="dg-cell" x="80" y="120" width="16" height="16" rx="2" style="--dx:10px;--dy:35px;animation-delay:.5s"/>
+        <rect class="dg-cell" x="100" y="120" width="16" height="16" rx="2" style="--dx:-5px;--dy:30px;animation-delay:.15s"/>
+        <rect class="dg-cell" x="120" y="120" width="16" height="16" rx="2" style="--dx:30px;--dy:20px;animation-delay:.4s"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Beat 6: 9:00 (left) — 180deg -->
+  <div class="beat" data-beat="6" data-angle="180" data-zone="top">
+    <div class="beat-label">Terminal</div>
+    <h2>Your AI doesn't remember you anymore.</h2>
+    <p>Every conversation. Every preference. Every breakthrough — erased. You're starting from zero.</p>
+  </div>
+
+  <!-- Beat 7: 10:30 (top-left) — 225deg -->
+  <div class="beat" data-beat="7" data-angle="225" data-zone="bottom">
+    <div class="beat-label">Resolution</div>
+    <h2>Unless you own it.<br>Signet: Your agent identity.</h2>
+    <p>Portable. Sovereign. Yours. Take your AI memory everywhere.</p>
+    <div class="beat-svg">
+      <!-- SVG: Convergence -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <style>
+          .cv-dot{fill:#fff;animation:cvConverge 3.5s ease-in-out infinite}
+          .cv-ring{fill:none;stroke:#fff;stroke-width:2;cx:100;cy:100;r:28;opacity:0;animation:cvRing 3.5s ease-in-out infinite}
+          @keyframes cvConverge{
+            0%{opacity:0.7;transform:translate(var(--sx),var(--sy)) scale(1)}
+            45%,55%{opacity:1;transform:translate(0,0) scale(0.6)}
+            100%{opacity:0.7;transform:translate(var(--sx),var(--sy)) scale(1)}
+          }
+          @keyframes cvRing{
+            0%,30%{opacity:0;stroke-width:0}
+            45%,55%{opacity:0.9;stroke-width:2.5}
+            70%,100%{opacity:0;stroke-width:0}
+          }
+        </style>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:-55px;--sy:-40px;animation-delay:0s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:50px;--sy:-35px;animation-delay:.1s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:60px;--sy:10px;animation-delay:.2s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:40px;--sy:50px;animation-delay:.15s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:-10px;--sy:55px;animation-delay:.25s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:-50px;--sy:30px;animation-delay:.05s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:-60px;--sy:-5px;animation-delay:.3s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:10px;--sy:-55px;animation-delay:.2s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:-30px;--sy:50px;animation-delay:.35s"/>
+        <circle class="cv-dot" cx="100" cy="100" r="3" style="--sx:55px;--sy:-15px;animation-delay:.12s"/>
+        <circle class="cv-ring" cx="100" cy="100" r="28"/>
+      </svg>
+    </div>
+  </div>
+
+</div><!-- /viewport-layer -->
+
+<!-- Spotlight overlay for final CTA -->
+<div class="spotlight-overlay" id="spotlightOverlay"></div>
+
+<!-- Scroll hint -->
+<div class="scroll-hint" id="scrollHint">
+  <span>Scroll to begin</span>
+  <div class="arrow"></div>
+</div>
+
+<!-- Scroll spacer -->
+<div class="scroll-spacer"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ===== CONFIG =====
+  const BEATS = document.querySelectorAll('.beat');
+  const NUM_BEATS = BEATS.length; // 8 story beats (0-7)
+  const TOTAL_POSITIONS = NUM_BEATS + 1; // +1 for final CTA (return to form)
+  
+  // Scroll zones: each beat gets an equal slice of scroll
+  // Total scroll height = 1000vh, so about 111vh per beat  
+  const orbitDot = document.getElementById('orbitDot');
+  const orbitTrack = document.getElementById('orbitTrack');
+  const spotlight = document.getElementById('spotlightOverlay');
+  const scrollHint = document.getElementById('scrollHint');
+  const viewportLayer = document.getElementById('viewportLayer');
+
+  // Radius from CSS custom property
+  function getRadius() {
+    const style = getComputedStyle(document.documentElement);
+    // Parse min(42vw, 42vh) from CSS custom property
+    const vw = window.innerWidth * 0.42;
+    const vh = window.innerHeight * 0.42;
+    return Math.min(vw, vh);
+  }
+
+  // ===== AMBIENT FRAGMENTS =====
+  const ambient = document.getElementById('ambient');
+  for (let i = 0; i < 20; i++) {
+    const frag = document.createElement('div');
+    frag.className = 'frag';
+    frag.style.left = Math.random() * 100 + '%';
+    frag.style.top = (100 + Math.random() * 20) + '%';
+    frag.style.animationDuration = (8 + Math.random() * 12) + 's';
+    frag.style.animationDelay = Math.random() * 10 + 's';
+    frag.style.width = (0.5 + Math.random() * 1.5) + 'px';
+    frag.style.height = frag.style.width;
+    ambient.appendChild(frag);
+  }
+
+  // ===== SCROLL HANDLER =====
+  let ticking = false;
+  let lastScrollY = 0;
+
+  function getScrollProgress() {
+    const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+    return Math.max(0, Math.min(1, window.scrollY / maxScroll));
+  }
+
+  function positionOnCircle(angleDeg, radius) {
+    const rad = angleDeg * Math.PI / 180;
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    return {
+      x: cx + Math.cos(rad) * radius,
+      y: cy + Math.sin(rad) * radius
+    };
+  }
+
+  // Angles for each beat (in standard math degrees, clockwise from top)
+  // Beat 0: 270° (top/12:00)
+  // Beat 1: 315° (1:30)
+  // Beat 2: 0°/360° (3:00)
+  // Beat 3: 45° (4:30)
+  // Beat 4: 90° (6:00)
+  // Beat 5: 135° (7:30)
+  // Beat 6: 180° (9:00)
+  // Beat 7: 225° (10:30)
+  // Final: 270° (back to top/12:00)
+  const beatAngles = [270, 315, 0, 45, 90, 135, 180, 225, 270];
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  function update() {
+    const progress = getScrollProgress();
+    const radius = getRadius();
+
+    // Hide scroll hint after 5% scroll
+    if (progress > 0.03) {
+      scrollHint.classList.add('hidden');
+    } else {
+      scrollHint.classList.remove('hidden');
+    }
+
+    // Map progress to beat index (0 to 8, where 8 = final CTA)
+    // Reserve first 2% and last 5% for intro/outro
+    const introEnd = 0.03;
+    const outroStart = 0.88;
+    const contentProgress = Math.max(0, Math.min(1, (progress - introEnd) / (outroStart - introEnd)));
+    
+    const floatIndex = contentProgress * NUM_BEATS; // 0 to 8
+    const currentBeat = Math.min(Math.floor(floatIndex), NUM_BEATS - 1);
+    const beatProgress = floatIndex - Math.floor(floatIndex); // 0 to 1 within beat
+
+    // Calculate current angle on the orbit (interpolate between beat angles)
+    let currentAngle;
+    if (floatIndex >= NUM_BEATS) {
+      currentAngle = beatAngles[NUM_BEATS]; // final position
+    } else {
+      const fromAngle = beatAngles[currentBeat];
+      let toAngle = beatAngles[currentBeat + 1];
+      // Handle wrap: going from 225 to 270 is fine
+      // Going from 0 to 45 is fine
+      // But from 270 to 315: fine. From 225 to 270: fine.
+      // Edge: from beat 1 (315) to beat 2 (360/0): need to go 315 → 360
+      if (currentBeat === 1) toAngle = 360; 
+      currentAngle = lerp(fromAngle, toAngle, easeInOutCubic(beatProgress));
+      if (currentAngle >= 360) currentAngle -= 360;
+    }
+
+    // Position the orbit dot
+    const dotPos = positionOnCircle(currentAngle, radius);
+    orbitDot.style.left = dotPos.x + 'px';
+    orbitDot.style.top = dotPos.y + 'px';
+
+    // Show/hide orbit dot
+    const inContent = progress > introEnd && progress < 0.93;
+    orbitDot.style.opacity = inContent ? '1' : '0';
+
+    // Detect mobile
+    const isMobile = window.innerWidth <= 700;
+
+    // Position and fade beats
+    BEATS.forEach((beat, i) => {
+      if (!isMobile) {
+        const beatAngle = beatAngles[i];
+        const pos = positionOnCircle(beatAngle, radius);
+        // Clamp position so beat card stays within viewport
+        const beatHalfW = 160; // half of beat width + padding
+        const beatHalfH = 100;
+        const clampedX = Math.max(beatHalfW, Math.min(window.innerWidth - beatHalfW, pos.x));
+        const clampedY = Math.max(beatHalfH, Math.min(window.innerHeight - beatHalfH, pos.y));
+        beat.style.left = clampedX + 'px';
+        beat.style.top = clampedY + 'px';
+      }
+      // On mobile, CSS handles positioning via data-zone (top/bottom)
+
+      // Determine opacity based on distance from current focus
+      let opacity = 0;
+      if (contentProgress <= 0 && i === 0) {
+        // Before content starts, first beat faintly visible
+        opacity = 0.3;
+      } else if (floatIndex >= NUM_BEATS) {
+        // Past all beats — fade everything
+        opacity = 0;
+      } else if (i === currentBeat) {
+        // Current beat: fade in, hold, fade out
+        if (beatProgress < 0.15) {
+          opacity = beatProgress / 0.15;
+        } else if (beatProgress > 0.85) {
+          opacity = (1 - beatProgress) / 0.15;
+        } else {
+          opacity = 1;
+        }
+      }
+
+      // On mobile, also show the paired beat (if current is top, show its bottom pair and vice versa)
+      // Pairs: 0(top)->1(bottom), 2(top)->1(bottom fading), 3(top)->4(bottom), 5(top)->4(bottom fading), 6(top)->7(bottom)
+      if (isMobile && opacity === 0) {
+        const zone = beat.dataset.zone;
+        const currentZone = BEATS[currentBeat] ? BEATS[currentBeat].dataset.zone : '';
+        // Show the previous beat from the opposite zone as it fades
+        if (i === currentBeat - 1 && zone !== currentZone) {
+          // Previous beat from opposite zone — fade it out slower
+          if (beatProgress < 0.4) {
+            opacity = 1 - (beatProgress / 0.4) * 0.7; // slow fade from 1 to 0.3
+          }
+        }
+      }
+
+      beat.style.opacity = opacity;
+      if (opacity > 0) {
+        beat.classList.add('active');
+      } else {
+        beat.classList.remove('active');
+      }
+    });
+
+    // Final CTA spotlight
+    const isFinal = progress > outroStart;
+    if (isFinal) {
+      const finalProgress = (progress - outroStart) / (1 - outroStart);
+      spotlight.style.opacity = Math.min(1, finalProgress * 2);
+      spotlight.classList.add('active');
+      orbitTrack.style.borderColor = 'rgba(138,138,150,' + (0.12 * (1 - finalProgress)) + ')';
+    } else {
+      spotlight.classList.remove('active');
+      spotlight.style.opacity = 0;
+      // Pulse orbit track subtly when near content
+      const trackOpacity = inContent ? 0.18 : 0.12;
+      orbitTrack.style.borderColor = 'rgba(138,138,150,' + trackOpacity + ')';
+    }
+
+    ticking = false;
+  }
+
+  function onScroll() {
+    lastScrollY = window.scrollY;
+    if (!ticking) {
+      requestAnimationFrame(update);
+      ticking = true;
+    }
+  }
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', update);
+
+  // Initial position
+  update();
+
+  // ===== FORM SUBMISSION =====
+  document.getElementById('leadForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const form = e.target;
+    const btn = form.querySelector('button');
+    const originalText = btn.textContent;
+    btn.textContent = 'SUBMITTING...';
+    btn.disabled = true;
+
+    const data = new FormData(form);
+    const body = {};
+    data.forEach((v, k) => body[k] = v);
+
+    fetch(form.action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    .then(r => {
+      if (r.ok) {
+        btn.textContent = '✓ YOU\'RE IN';
+        btn.style.background = '#4a9';
+        form.reset();
+      } else {
+        throw new Error('Submit failed');
+      }
+    })
+    .catch(() => {
+      btn.textContent = 'ERROR — TRY AGAIN';
+      btn.style.background = 'var(--color-danger)';
+      btn.disabled = false;
+      setTimeout(() => {
+        btn.textContent = originalText;
+        btn.style.background = '';
+      }, 3000);
+    });
+  });
+
+})();
+</script>
+
+</body>
+</html>
