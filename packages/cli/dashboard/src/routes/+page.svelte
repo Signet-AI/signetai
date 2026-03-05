@@ -38,6 +38,7 @@ const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover
 const { data } = $props();
 let daemonStatus = $state<DaemonStatus | null>(null);
 let embeddingsPrefetchPromise: Promise<unknown[]> | null = null;
+let timelineGeneratedFor = $state("");
 
 // --- Theme ---
 let theme = $state<"dark" | "light">("dark");
@@ -102,6 +103,23 @@ function prefetchEmbeddingsTab(): void {
 		import("$lib/components/tabs/EmbeddingsTab.svelte"),
 		import("3d-force-graph"),
 	]);
+}
+
+function handleTimelineGeneratedForChange(value: string): void {
+	timelineGeneratedFor = value;
+}
+
+function formatTimelineGeneratedFor(value: string): string {
+	if (!value) return "";
+	const parsed = Date.parse(value);
+	if (!Number.isFinite(parsed)) return "";
+	return new Date(parsed).toLocaleString("en-US", {
+		month: "short",
+		day: "numeric",
+		year: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+	});
 }
 
 // --- Cleanup ---
@@ -177,6 +195,10 @@ onMount(() => {
 							onclick={() => setTab("memory")}
 						>Index</button>
 						<button
+							class={activeTab === 'timeline' ? tabActive : tabInactive}
+							onclick={() => setTab("timeline")}
+						>Timeline</button>
+						<button
 							class={activeTab === 'embeddings' ? tabActive : tabInactive}
 							onclick={() => setTab("embeddings")}
 						>Constellation</button>
@@ -224,6 +246,10 @@ onMount(() => {
 							Reset
 						</Button>
 					{/if}
+				{:else if activeTab === "timeline"}
+					<span class="sig-label">
+						Era timeline
+					</span>
 				{:else if activeTab === "pipeline"}
 					<span class="sig-label">
 						Memory loop
@@ -339,6 +365,14 @@ onMount(() => {
 				{:catch error}
 					{@render skeletonError(error)}
 				{/await}
+			{:else if activeTab === "timeline"}
+				{#await import("$lib/components/tabs/TimelineTab.svelte")}
+					{@render skeletonCards()}
+				{:then module}
+					<module.default ontimelinegeneratedforchange={handleTimelineGeneratedForChange} />
+				{:catch error}
+					{@render skeletonError(error)}
+				{/await}
 			{:else if activeTab === "embeddings"}
 				{#await import("$lib/components/tabs/EmbeddingsTab.svelte")}
 					<div class="flex flex-1 items-center justify-center">
@@ -426,6 +460,15 @@ onMount(() => {
 						similarity mode
 					{:else}
 						hybrid search index
+					{/if}
+				</span>
+			{:else if activeTab === "timeline"}
+				<span>timeline eras</span>
+				<span>
+					{#if timelineGeneratedFor}
+						As of {formatTimelineGeneratedFor(timelineGeneratedFor)}
+					{:else}
+						memory evolution view
 					{/if}
 				</span>
 			{:else if activeTab === "pipeline"}

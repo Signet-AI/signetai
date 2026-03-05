@@ -11,6 +11,7 @@ export type TabId =
 	| "config"
 	| "settings"
 	| "memory"
+	| "timeline"
 	| "embeddings"
 	| "pipeline"
 	| "logs"
@@ -23,6 +24,7 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"config",
 	"settings",
 	"memory",
+	"timeline",
 	"embeddings",
 	"pipeline",
 	"logs",
@@ -44,7 +46,11 @@ export const nav = $state({
 
 /* ── Tab groups (display-layer only) ── */
 
-const MEMORY_TABS: ReadonlySet<TabId> = new Set(["memory", "embeddings"]);
+const MEMORY_TABS: ReadonlySet<TabId> = new Set([
+	"memory",
+	"timeline",
+	"embeddings",
+]);
 const ENGINE_TABS: ReadonlySet<TabId> = new Set([
 	"settings",
 	"pipeline",
