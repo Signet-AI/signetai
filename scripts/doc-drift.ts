@@ -62,7 +62,7 @@ function sliceSection(content: string, heading: string): string {
 
 	const afterStart = content.slice(start + heading.length);
 	const nextH2 = afterStart.search(/\n##\s+/);
-	const nextSetext = afterStart.search(/\n[^\n]+\n---/);
+	const nextSetext = afterStart.search(/\n[^\n]+\n(?:={3,}|-{3,})/);
 	const boundaries = [nextH2, nextSetext].filter((offset) => offset >= 0);
 	const end =
 		boundaries.length > 0
@@ -241,21 +241,8 @@ interface KeyFilesDrift {
 
 function checkKeyFilesDrift(): KeyFilesDrift {
 	const claudeMd = read("CLAUDE.md");
-
-	const keyFilesStart = claudeMd.indexOf("## Key Files");
-	// Find the next section boundary — either `## Heading` or `Heading\n---`
-	const afterStart = claudeMd.slice(keyFilesStart + 1);
-	const nextH2 = afterStart.search(/\n## /);
-	const nextDash = afterStart.search(/\n[^\n]+\n---/);
-	const candidates = [nextH2, nextDash].filter((i) => i >= 0);
-	const keyFilesEnd =
-		candidates.length > 0
-			? keyFilesStart + 1 + Math.min(...candidates)
-			: -1;
-	const section = claudeMd.slice(
-		keyFilesStart,
-		keyFilesEnd === -1 ? undefined : keyFilesEnd,
-	);
+	const section = sliceSection(claudeMd, "## Key Files");
+	if (!section) return { missing: [], total: 0 };
 
 	const pathPattern = /^- `([^`]+)`/gm;
 	const paths: string[] = [];
@@ -325,12 +312,8 @@ function parsePackageTable(
 	content: string,
 	sectionHeader: string,
 ): Map<string, string> {
-	const start = content.indexOf(sectionHeader);
-	if (start === -1) return new Map();
-
-	const section = content.slice(start);
-	const endIdx = section.indexOf("\n## ", 1);
-	const tableContent = endIdx === -1 ? section : section.slice(0, endIdx);
+	const tableContent = sliceSection(content, sectionHeader);
+	if (!tableContent) return new Map();
 
 	const pkgPattern = /`([^`]+)`/;
 	const result = new Map<string, string>();
