@@ -148,8 +148,11 @@ function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
 }
 
 function scrollToBottomNextFrame(behavior: ScrollBehavior = "auto"): void {
+	if (autoScrollSnapFrame !== null) return;
 	void tick().then(() => {
-		requestAnimationFrame(() => {
+		if (autoScrollSnapFrame !== null) return;
+		autoScrollSnapFrame = requestAnimationFrame(() => {
+			autoScrollSnapFrame = null;
 			if (!logAutoScroll) return;
 			scrollToBottom(behavior);
 		});
