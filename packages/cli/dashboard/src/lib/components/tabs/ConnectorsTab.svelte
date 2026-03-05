@@ -58,14 +58,15 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
 
 async function load() {
 	try {
-		const [h, c, configFiles] = await Promise.all([
-			getHarnesses(),
-			getConnectors(),
-			getConfigFiles(),
-		]);
+		const [h, c] = await Promise.all([getHarnesses(), getConnectors()]);
 		harnesses = h;
 		connectors = c;
-		enabledHarnessIds = readEnabledHarnesses(configFiles);
+		if (h.some((harness) => harness.enabled === undefined)) {
+			const configFiles = await getConfigFiles();
+			enabledHarnessIds = readEnabledHarnesses(configFiles);
+		} else {
+			enabledHarnessIds = new Set();
+		}
 		// Fetch health for each connector
 		await fetchConnectorHealth(c);
 	} finally {

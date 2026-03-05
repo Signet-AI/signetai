@@ -4058,8 +4058,8 @@ app.get("/api/harnesses", async (c) => {
 
 				const flowText = flowLines.join(" ");
 				const openIndex = flowText.indexOf("[");
-				const closeIndex = flowText.indexOf("]", openIndex + 1);
-				if (openIndex === -1 || closeIndex === -1) {
+				const closeIndex = flowText.lastIndexOf("]");
+				if (openIndex === -1 || closeIndex === -1 || closeIndex <= openIndex) {
 					return { found: false, values: [] };
 				}
 
