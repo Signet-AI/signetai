@@ -20,10 +20,6 @@ import { toast } from "$lib/stores/toast.svelte";
 import { parse } from "yaml";
 
 interface ConnectorHealth {
-	id: string;
-	status: string;
-	lastSyncAt: string | null;
-	lastError: string | null;
 	documentCount: number;
 }
 
@@ -57,20 +53,24 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
 }
 
 async function load() {
+	let loadedConnectors: DocumentConnector[] = [];
 	try {
-		const [h, c, configFiles] = await Promise.all([
-			getHarnesses(),
-			getConnectors(),
-			getConfigFiles(),
-		]);
+		const [h, c] = await Promise.all([getHarnesses(), getConnectors()]);
 		harnesses = h;
 		connectors = c;
-		enabledHarnessIds = readEnabledHarnesses(configFiles);
-		// Fetch health for each connector
-		await fetchConnectorHealth(c);
+		loadedConnectors = c;
+
+		if (h.some((harness) => harness.enabled === undefined)) {
+			const configFiles = await getConfigFiles();
+			enabledHarnessIds = readEnabledHarnesses(configFiles);
+		} else {
+			enabledHarnessIds = new Set();
+		}
 	} finally {
 		loading = false;
 	}
+
+	void fetchConnectorHealth(loadedConnectors);
 }
 
 function readEnabledHarnesses(
@@ -97,7 +97,7 @@ function readEnabledHarnesses(
 async function fetchConnectorHealth(conns: DocumentConnector[]): Promise<void> {
 	const healthPromises = conns.map(async (conn) => {
 		try {
-			const res = await fetch(`${API_BASE}/api/connectors/${conn.id}/health`);
+			const res = await fetch(`${API_BASE}/api/connectors/${encodeURIComponent(conn.id)}/health`);
 			if (res.ok) {
 				const data = await res.json() as ConnectorHealth;
 				return { id: conn.id, health: data };

@@ -42,6 +42,7 @@
     "onnxruntime-node": "1.21.0",
     "sharp": "^0.34.1",
     "umap-js": "^1.4.0",
+    "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {

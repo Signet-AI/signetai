@@ -37,6 +37,7 @@ import { watch } from "chokidar";
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger as honoLogger } from "hono/logger";
+import { parse as parseYaml } from "yaml";
 import { type AnalyticsCollector, type ErrorStage, createAnalyticsCollector } from "./analytics";
 import {
 	type AuthConfig,
@@ -3978,6 +3979,56 @@ mountMarketplaceReviewsRoutes(app);
 // Harnesses API
 // ============================================================================
 
+function parseHarnessList(value: unknown): string[] | null {
+	if (!Array.isArray(value)) return null;
+	return value
+		.filter((item): item is string => typeof item === "string")
+		.map((item) => item.trim())
+		.filter((item) => item.length > 0);
+}
+
+function readHarnessesFromConfigContent(content: string): string[] | null {
+	try {
+		const parsed = parseYaml(content) as { harnesses?: unknown };
+		const harnesses = parseHarnessList(parsed.harnesses);
+		if (harnesses) return harnesses;
+	} catch {
+		// Fall through to compatibility parser
+	}
+
+	try {
+		const parsed = parseSimpleYaml(content) as { harnesses?: unknown };
+		const harnesses = parseHarnessList(parsed.harnesses);
+		if (harnesses) return harnesses;
+	} catch {
+		// Ignore parse errors
+	}
+
+	return null;
+}
+
+function readEnabledHarnessesFromConfigFiles(): Set<string> {
+	const enabledHarnesses = new Set<string>();
+	const harnessConfigPaths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
+
+	for (const filePath of harnessConfigPaths) {
+		if (!existsSync(filePath)) continue;
+		try {
+			const fileContent = readFileSync(filePath, "utf-8");
+			const harnesses = readHarnessesFromConfigContent(fileContent);
+			if (!harnesses) continue;
+			for (const harnessName of harnesses) {
+				enabledHarnesses.add(harnessName);
+			}
+			break;
+		} catch {
+			// ignore read errors and continue to fallback path
+		}
+	}
+
+	return enabledHarnesses;
+}
+
 app.get("/api/harnesses", async (c) => {
 	const configs = [
 		{ name: "Claude Code", id: "claude-code", path: join(homedir(), ".claude", "CLAUDE.md") },
@@ -3989,82 +4040,7 @@ app.get("/api/harnesses", async (c) => {
 		{ name: "OpenClaw", id: "openclaw", path: join(AGENTS_DIR, "AGENTS.md") },
 	];
 
-	const readHarnessesFromYaml = (
-		content: string,
-	): { found: boolean; values: string[] } => {
-		const lines = content.split("\n");
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			const match = line.match(/^(\s*)harnesses:\s*(.*)$/);
-			if (!match) continue;
-
-			const baseIndent = match[1].length;
-			const inlineValue = match[2].trim();
-
-			if (inlineValue.startsWith("[") && inlineValue.endsWith("]")) {
-				const values = inlineValue
-					.slice(1, -1)
-					.split(",")
-					.map((item) => item.trim().replace(/^["']|["']$/g, ""))
-					.filter((item) => item.length > 0);
-				return { found: true, values };
-			}
-
-			if (inlineValue.length > 0) {
-				return { found: true, values: [] };
-			}
-
-			const values: string[] = [];
-			for (let j = i + 1; j < lines.length; j++) {
-				const nextLine = lines[j];
-				const trimmed = nextLine.trim();
-				if (!trimmed || trimmed.startsWith("#")) continue;
-
-				const indent = nextLine.search(/\S/);
-				if (indent <= baseIndent) break;
-
-				const itemMatch = nextLine.match(/^\s*-\s*(.+?)\s*(?:#.*)?$/);
-				if (!itemMatch) continue;
-
-				const value = itemMatch[1].trim().replace(/^["']|["']$/g, "");
-				if (value.length > 0) values.push(value);
-			}
-
-			return { found: true, values };
-		}
-
-		return { found: false, values: [] };
-	};
-
-	const enabledHarnesses = new Set<string>();
-	const harnessConfigPaths = [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")];
-	for (const filePath of harnessConfigPaths) {
-		if (!existsSync(filePath)) continue;
-		try {
-			const fileContent = readFileSync(filePath, "utf-8");
-			const parsedHarnesses = readHarnessesFromYaml(fileContent);
-			if (parsedHarnesses.found) {
-				for (const harnessName of parsedHarnesses.values) {
-					enabledHarnesses.add(harnessName);
-				}
-				break;
-			}
-
-			const yaml = parseSimpleYaml(fileContent) as {
-				harnesses?: unknown;
-			};
-			if (Array.isArray(yaml.harnesses)) {
-				for (const harnessName of yaml.harnesses) {
-					if (typeof harnessName === "string") {
-						enabledHarnesses.add(harnessName);
-					}
-				}
-				break;
-			}
-		} catch {
-			// ignore parse errors and continue to fallback path
-		}
-	}
+	const enabledHarnesses = readEnabledHarnessesFromConfigFiles();
 
 	const harnesses = configs.map((config) => ({
 		name: config.name,
