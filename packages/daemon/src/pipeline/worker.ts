@@ -45,6 +45,13 @@ interface MemoryContentRow {
 	content: string;
 }
 
+interface WrittenFact {
+	readonly memoryId: string;
+	readonly content: string;
+	readonly normalizedContent: string;
+	readonly confidence: number;
+}
+
 interface AppliedWriteStats {
 	added: number;
 	updated: number;
@@ -54,6 +61,7 @@ interface AppliedWriteStats {
 	blockedDestructive: number;
 	reviewNeeded: number;
 	embeddingsAdded: number;
+	writtenFacts: WrittenFact[];
 }
 
 const NEGATION_TOKENS = new Set([
@@ -157,6 +165,7 @@ function zeroWriteStats(): AppliedWriteStats {
 		blockedDestructive: 0,
 		reviewNeeded: 0,
 		embeddingsAdded: 0,
+		writtenFacts: [],
 	};
 }
 
@@ -547,6 +556,12 @@ function applyPhaseCWrites(
 			}
 
 			stats.added++;
+			stats.writtenFacts.push({
+				memoryId: newMemoryId,
+				content: storageContent,
+				normalizedContent,
+				confidence: proposal.fact.confidence,
+			});
 			recordCreatedMemoryHistory(
 				db,
 				newMemoryId,
@@ -777,6 +792,123 @@ function reapStaleLeases(accessor: DbAccessor, timeoutMs: number): number {
 			.run(now, cutoff);
 		return countChanges(result);
 	});
+}
+
+// ---------------------------------------------------------------------------
+// Pass 1: Structural assignment (no LLM)
+// ---------------------------------------------------------------------------
+
+interface StructuralPass1Stats {
+	attributesCreated: number;
+	classifyEnqueued: number;
+	dependencyEnqueued: number;
+}
+
+/**
+ * Heuristic entity linking for written facts. For each fact, find
+ * matching entity triples, resolve entity IDs, create stub
+ * entity_attributes rows (aspect_id=NULL), and enqueue classification
+ * and dependency jobs. Runs synchronously, no LLM calls.
+ */
+function runStructuralPass1(
+	accessor: DbAccessor,
+	writtenFacts: readonly WrittenFact[],
+	extractionTriples: readonly import("@signet/core").ExtractedEntity[],
+): StructuralPass1Stats {
+	const stats: StructuralPass1Stats = {
+		attributesCreated: 0,
+		classifyEnqueued: 0,
+		dependencyEnqueued: 0,
+	};
+
+	return accessor.withWriteTx((db) => {
+		for (const fact of writtenFacts) {
+			const lowerContent = fact.content.toLowerCase();
+
+			// Find matching entity triple — heuristic: fact content contains
+			// the source entity name (case-insensitive)
+			let matchedTriple: import("@signet/core").ExtractedEntity | null = null;
+			for (const triple of extractionTriples) {
+				if (lowerContent.includes(triple.source.toLowerCase())) {
+					matchedTriple = triple;
+					break;
+				}
+			}
+			if (!matchedTriple) continue;
+
+			// Resolve source entity ID from the entities table
+			const canonical = matchedTriple.source.trim().toLowerCase().replace(/\s+/g, " ");
+			const entityRow = db
+				.prepare("SELECT id, entity_type FROM entities WHERE canonical_name = ? LIMIT 1")
+				.get(canonical) as { id: string; entity_type: string } | undefined;
+			if (!entityRow) continue;
+
+			// Create stub entity_attributes row (aspect_id=NULL, awaiting classification)
+			const attrId = crypto.randomUUID();
+			const now = new Date().toISOString();
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES (?, NULL, 'default', ?, 'attribute', ?, ?, ?, 0.5, 'active', ?, ?)`,
+			).run(
+				attrId, fact.memoryId, fact.content, fact.normalizedContent,
+				fact.confidence, now, now,
+			);
+			stats.attributesCreated++;
+
+			// Enqueue structural_classify job
+			const classifyPayload = JSON.stringify({
+				memory_id: fact.memoryId,
+				entity_id: entityRow.id,
+				entity_name: matchedTriple.source,
+				entity_type: entityRow.entity_type,
+				fact_content: fact.content,
+				attribute_id: attrId,
+			});
+			enqueueStructuralJob(db, fact.memoryId, "structural_classify", classifyPayload);
+			stats.classifyEnqueued++;
+
+			// If target entity exists in graph, enqueue structural_dependency job
+			if (matchedTriple.target) {
+				const targetCanonical = matchedTriple.target.trim().toLowerCase().replace(/\s+/g, " ");
+				if (targetCanonical !== canonical) {
+					const targetRow = db
+						.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1")
+						.get(targetCanonical) as { id: string } | undefined;
+					if (targetRow) {
+						const depPayload = JSON.stringify({
+							memory_id: fact.memoryId,
+							entity_id: entityRow.id,
+							entity_name: matchedTriple.source,
+							fact_content: fact.content,
+							target_entity_name: matchedTriple.target,
+						});
+						enqueueStructuralJob(db, fact.memoryId, "structural_dependency", depPayload);
+						stats.dependencyEnqueued++;
+					}
+				}
+			}
+		}
+
+		return stats;
+	});
+}
+
+function enqueueStructuralJob(
+	db: WriteDb,
+	memoryId: string,
+	jobType: string,
+	payload: string,
+): void {
+	const id = crypto.randomUUID();
+	const now = new Date().toISOString();
+	db.prepare(
+		`INSERT INTO memory_jobs
+		 (id, memory_id, job_type, status, payload, attempts, max_attempts,
+		  created_at, updated_at)
+		 VALUES (?, ?, ?, 'pending', ?, 0, 3, ?, ?)`,
+	).run(id, memoryId, jobType, payload, now, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,6 +1182,30 @@ export function startWorker(
 			}
 		}
 
+		// Pass 1: structural assignment — link written facts to entities,
+		// create stub entity_attributes, enqueue classification jobs.
+		// No LLM calls. Non-fatal on error.
+		let structuralStats = { attributesCreated: 0, classifyEnqueued: 0, dependencyEnqueued: 0 };
+		if (
+			pipelineCfg.structural.enabled &&
+			pipelineCfg.graph.enabled &&
+			writeStats.writtenFacts.length > 0 &&
+			extraction.entities.length > 0
+		) {
+			try {
+				structuralStats = runStructuralPass1(
+					accessor,
+					writeStats.writtenFacts,
+					extraction.entities,
+				);
+			} catch (e) {
+				logger.warn("pipeline", "Structural pass 1 failed (non-fatal)", {
+					jobId: job.id,
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
+
 		logger.info("pipeline", "Extraction job completed", {
 			jobId: job.id,
 			memoryId: job.memory_id,
@@ -1068,6 +1224,9 @@ export function startWorker(
 			relationsInserted: graphStats.relationsInserted,
 			relationsUpdated: graphStats.relationsUpdated,
 			mentionsLinked: graphStats.mentionsLinked,
+			structuralAttributesCreated: structuralStats.attributesCreated,
+			structuralClassifyEnqueued: structuralStats.classifyEnqueued,
+			structuralDependencyEnqueued: structuralStats.dependencyEnqueued,
 		});
 	}
 

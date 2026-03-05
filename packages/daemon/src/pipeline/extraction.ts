@@ -89,14 +89,14 @@ const FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/;
 const THINK_RE = /<think>[\s\S]*?<\/think>\s*/g;
 const TRAILING_COMMA_RE = /,\s*([}\]])/g;
 
-function stripFences(raw: string): string {
+export function stripFences(raw: string): string {
 	// Strip <think> blocks from models that use chain-of-thought (qwen3, etc.)
 	const stripped = raw.replace(THINK_RE, "");
 	const match = stripped.match(FENCE_RE);
 	return match ? match[1].trim() : stripped.trim();
 }
 
-function tryParseJson(candidate: string): unknown | null {
+export function tryParseJson(candidate: string): unknown | null {
 	const trimmed = candidate.trim();
 	if (!trimmed) return null;
 

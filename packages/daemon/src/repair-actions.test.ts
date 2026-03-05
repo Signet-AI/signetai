@@ -109,6 +109,12 @@ const TEST_CFG: PipelineV2Config = {
 		flushBatchSize: 50,
 		retentionDays: 90,
 	},
+	structural: {
+		enabled: false,
+		classifyBatchSize: 8,
+		dependencyBatchSize: 5,
+		pollIntervalMs: 10000,
+	},
 };
 
 const TEST_EMBEDDING_CFG: EmbeddingConfig = {
