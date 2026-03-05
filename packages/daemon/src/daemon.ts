@@ -6659,6 +6659,15 @@ function startFileWatcher() {
 		}
 	});
 
+	watcher.on("unlink", (path) => {
+		logger.info("watcher", "File removed", { path });
+		// Recreate the architecture doc immediately if deleted at runtime
+		if (path.endsWith("SIGNET-ARCHITECTURE.md")) {
+			ensureArchitectureDoc();
+		}
+		scheduleAutoCommit(path);
+	});
+
 	watcher.on("add", (path) => {
 		logger.info("watcher", "File added", { path });
 		scheduleAutoCommit(path);
