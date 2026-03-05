@@ -153,7 +153,7 @@ interface DocRoute {
 function parseClaudeMdRoutes(content: string): DocRoute[] {
 	const routes: DocRoute[] = [];
 	const tablePattern =
-		/^\|\s*`([^`]+)`\s*\|\s*([A-Z/]+)\s*\|\s*(.*?)\s*\|$/gm;
+		/^\|\s*`([^`]+)`\s*\|\s*([A-Z/]+)\s*\|\s*(.*?)\s*\|\s*$/gm;
 
 	let match: RegExpExecArray | null = null;
 	while ((match = tablePattern.exec(content)) !== null) {
@@ -325,8 +325,9 @@ function getActualPackages(): PackageInfo[] {
 		const realDir = realpathSync(dir);
 		if (visitedDirs.has(realDir)) return; // guard against circular symlinks
 		visitedDirs.add(realDir);
+		const BUILD_DIRS = new Set(["dist", "build", "out", "lib"]);
 		for (const entry of readdirSync(dir)) {
-			if (entry === "node_modules" || entry.startsWith(".")) continue;
+			if (entry === "node_modules" || entry.startsWith(".") || BUILD_DIRS.has(entry)) continue;
 			const full = join(dir, entry);
 			const rel = relPrefix ? `${relPrefix}/${entry}` : entry;
 			const pkgJson = join(full, "package.json");

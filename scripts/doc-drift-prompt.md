@@ -111,9 +111,10 @@ It should report no drift (exit 0). If drift remains, fix it and re-check.
 
 ```bash
 git add CLAUDE.md README.md docs/**/*.md 2>/dev/null || git add CLAUDE.md README.md docs/
-git commit -m "docs: fix documentation drift
-
-${DRIFT_BULLETS}"
+COMMIT_MSG_FILE="$(mktemp)"
+printf 'docs: fix documentation drift\n\n%s\n' "${DRIFT_BULLETS}" > "${COMMIT_MSG_FILE}"
+git commit -F "${COMMIT_MSG_FILE}"
+rm -f "${COMMIT_MSG_FILE}"
 
 PR_BODY_FILE="$(mktemp)"
 cat > "${PR_BODY_FILE}" <<'PREOF'
