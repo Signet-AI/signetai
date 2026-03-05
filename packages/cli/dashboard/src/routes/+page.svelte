@@ -119,6 +119,7 @@ function formatTimelineGeneratedFor(value: string): string {
 		year: "numeric",
 		hour: "numeric",
 		minute: "2-digit",
+		timeZone: "UTC",
 	});
 }
 
