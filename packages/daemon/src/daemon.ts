@@ -70,6 +70,7 @@ import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
 import { closeLlmProvider, initLlmProvider } from "./llm";
 import { type LogEntry, logger } from "./logger";
+import { readEnabledHarnessesFromConfigFiles } from "./harness-config";
 import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
@@ -3989,11 +3990,14 @@ app.get("/api/harnesses", async (c) => {
 		{ name: "OpenClaw", id: "openclaw", path: join(AGENTS_DIR, "AGENTS.md") },
 	];
 
+	const enabledHarnesses = readEnabledHarnessesFromConfigFiles(AGENTS_DIR);
+
 	const harnesses = configs.map((config) => ({
 		name: config.name,
 		id: config.id,
 		path: config.path,
 		exists: existsSync(config.path),
+		enabled: enabledHarnesses ? enabledHarnesses.has(config.id) : undefined,
 		lastSeen: harnessLastSeen.get(config.id) ?? null,
 	}));
 

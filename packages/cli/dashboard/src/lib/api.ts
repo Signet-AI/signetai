@@ -6,7 +6,7 @@
 // In production, the dashboard is served by the daemon, so use relative URLs
 // In development, point to the daemon on port 3850
 const isDev = import.meta.env.DEV;
-const API_BASE = isDev ? "http://localhost:3850" : "";
+export const API_BASE = isDev ? "http://localhost:3850" : "";
 
 export interface Memory {
 	id: string;
@@ -39,6 +39,7 @@ export interface Harness {
 	id: string;
 	path: string;
 	exists: boolean;
+	enabled?: boolean;
 	lastSeen: string | null;
 }
 
