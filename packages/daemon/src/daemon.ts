@@ -974,6 +974,9 @@ app.use("/api/memory/recall", async (c, next) => {
 app.use("/api/memory/search", async (c, next) => {
 	return requirePermission("recall", authConfig)(c, next);
 });
+app.use("/api/memory/timeline", async (c, next) => {
+	return requirePermission("recall", authConfig)(c, next);
+});
 app.use("/memory/search", async (c, next) => {
 	return requirePermission("recall", authConfig)(c, next);
 });

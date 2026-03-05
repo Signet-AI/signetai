@@ -259,11 +259,14 @@ async function loadTimeline(): Promise<void> {
 	loading = true;
 	error = null;
 	try {
+		const memoryResultPromise = getMemories(5000, 0);
 		const [response, skills, mcp, memoryResult] = await Promise.all([
-			getMemoryTimeline(),
+			getMemoryTimeline({
+				fallbackMemories: memoryResultPromise.then((result) => result.memories),
+			}),
 			getSkills(),
 			getMarketplaceMcpServers(),
-			getMemories(5000, 0),
+			memoryResultPromise,
 		]);
 		buckets = response.buckets;
 		emitGeneratedFor(response.generatedFor);

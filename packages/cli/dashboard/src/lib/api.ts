@@ -360,15 +360,19 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 	};
 }
 
-export async function getMemoryTimeline(): Promise<MemoryTimelineResponse> {
+export async function getMemoryTimeline(options?: {
+	readonly fallbackMemories?: readonly Memory[] | Promise<readonly Memory[]>;
+}): Promise<MemoryTimelineResponse> {
 	try {
 		const response = await fetch(`${API_BASE}/api/memory/timeline`);
 		if (!response.ok) throw new Error("Failed to fetch memory timeline");
 		return await response.json();
 	} catch {
-		const fallback = await getMemories(5000, 0);
+		const fallbackMemories = options?.fallbackMemories
+			? await options.fallbackMemories
+			: (await getMemories(5000, 0)).memories;
 		return {
-			...buildTimelineFallback(fallback.memories),
+			...buildTimelineFallback(fallbackMemories),
 			error: "Timeline API unavailable. Showing memory-index fallback.",
 		};
 	}

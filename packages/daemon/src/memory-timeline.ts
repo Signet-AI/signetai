@@ -27,8 +27,7 @@ interface RangeSpec {
 	readonly eraIndex: number;
 	readonly key: "today" | "last_week" | "one_month";
 	readonly label: "Today" | "Last week" | "One month";
-	readonly startDaysAgo: number;
-	readonly endDaysAgo: number;
+	readonly lookbackDays: number;
 }
 
 const RANGE_SPECS: readonly RangeSpec[] = [
@@ -36,22 +35,19 @@ const RANGE_SPECS: readonly RangeSpec[] = [
 		eraIndex: 0,
 		key: "today",
 		label: "Today",
-		startDaysAgo: 0,
-		endDaysAgo: 0,
+		lookbackDays: 1,
 	},
 	{
 		eraIndex: 1,
 		key: "last_week",
 		label: "Last week",
-		startDaysAgo: 0,
-		endDaysAgo: 6,
+		lookbackDays: 7,
 	},
 	{
 		eraIndex: 2,
 		key: "one_month",
 		label: "One month",
-		startDaysAgo: 0,
-		endDaysAgo: 29,
+		lookbackDays: 30,
 	},
 ] as const;
 
@@ -122,15 +118,8 @@ function rangeBounds(spec: RangeSpec, nowStartMs: number): {
 	startMs: number;
 	endMs: number;
 } {
-	if (spec.startDaysAgo === 0 && spec.endDaysAgo === 0) {
-		return {
-			startMs: nowStartMs,
-			endMs: nowStartMs + MS_PER_DAY - 1,
-		};
-	}
-
-	const startMs = nowStartMs - spec.endDaysAgo * MS_PER_DAY;
-	const endMs = nowStartMs - (spec.startDaysAgo - 1) * MS_PER_DAY - 1;
+	const startMs = nowStartMs - (spec.lookbackDays - 1) * MS_PER_DAY;
+	const endMs = nowStartMs + MS_PER_DAY - 1;
 	return { startMs, endMs };
 }
 
