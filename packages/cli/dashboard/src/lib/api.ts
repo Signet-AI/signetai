@@ -28,6 +28,42 @@ export interface MemoryStats {
 	critical: number;
 }
 
+export interface TimelineMetric {
+	key: string;
+	count: number;
+}
+
+export interface MemoryTimelineBucket {
+	eraIndex: number;
+	rangeKey: "today" | "last_week" | "one_month";
+	label: string;
+	start: string;
+	end: string;
+	memoriesAdded: number;
+	trackedEvents: number;
+	evolved: number;
+	strengthened: number;
+	recovered: number;
+	avgImportance: number;
+	pinned: number;
+	typeBreakdown: TimelineMetric[];
+	sourceBreakdown: TimelineMetric[];
+	topTags: TimelineMetric[];
+	summary: string;
+}
+
+export interface MemoryTimelineResponse {
+	generatedAt: string;
+	generatedFor: string;
+	rangePreset: "today-last_week-one_month";
+	totalMemories: number;
+	totalHistoryEvents: number;
+	invalidMemoryTimestamps: number;
+	invalidHistoryTimestamps: number;
+	buckets: MemoryTimelineBucket[];
+	error?: string;
+}
+
 export interface ConfigFile {
 	name: string;
 	content: string;
@@ -195,6 +231,168 @@ export async function getMemories(limit = 100, offset = 0): Promise<{ memories: 
 		return {
 			memories: [],
 			stats: { total: 0, withEmbeddings: 0, critical: 0 },
+		};
+	}
+}
+
+function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineResponse {
+	const now = new Date();
+	const nowStart = Date.UTC(
+		now.getUTCFullYear(),
+		now.getUTCMonth(),
+		now.getUTCDate(),
+	);
+
+	const ranges = [
+		{ eraIndex: 0 as const, rangeKey: "today" as const, label: "Today" as const, startDaysAgo: 0, endDaysAgo: 0 },
+		{
+			eraIndex: 1 as const,
+			rangeKey: "last_week" as const,
+			label: "Last week" as const,
+			startDaysAgo: 0,
+			endDaysAgo: 6,
+		},
+		{
+			eraIndex: 2 as const,
+			rangeKey: "one_month" as const,
+			label: "One month" as const,
+			startDaysAgo: 0,
+			endDaysAgo: 29,
+		},
+	];
+
+	const buckets = ranges.map((range) => {
+		const start =
+			range.startDaysAgo === 0
+				? nowStart
+				: nowStart - range.endDaysAgo * 24 * 60 * 60 * 1000;
+		const end =
+			range.startDaysAgo === 0
+				? nowStart + 24 * 60 * 60 * 1000 - 1
+				: nowStart - (range.startDaysAgo - 1) * 24 * 60 * 60 * 1000 - 1;
+		return {
+			range,
+			start,
+			end,
+			memoriesAdded: 0,
+			importanceSum: 0,
+			importanceCount: 0,
+			pinned: 0,
+			typeMap: new Map<string, number>(),
+			sourceMap: new Map<string, number>(),
+			tagMap: new Map<string, number>(),
+		};
+	});
+
+	for (const memory of memories) {
+		const ts = Date.parse(memory.created_at);
+		if (!Number.isFinite(ts)) continue;
+		const matchingBuckets = buckets.filter(
+			(entry) => ts >= entry.start && ts <= entry.end,
+		);
+		if (matchingBuckets.length === 0) continue;
+
+		for (const bucket of matchingBuckets) {
+			bucket.memoriesAdded += 1;
+			if (memory.pinned) bucket.pinned += 1;
+			if (
+				typeof memory.importance === "number" &&
+				Number.isFinite(memory.importance)
+			) {
+				bucket.importanceSum += memory.importance;
+				bucket.importanceCount += 1;
+			}
+
+			const typeKey = memory.type?.trim() || "unknown";
+			bucket.typeMap.set(typeKey, (bucket.typeMap.get(typeKey) ?? 0) + 1);
+
+			const whoKey = memory.who?.trim() || "unknown";
+			bucket.sourceMap.set(whoKey, (bucket.sourceMap.get(whoKey) ?? 0) + 1);
+		}
+
+		let tags: string[] = [];
+		if (Array.isArray(memory.tags)) {
+			tags = memory.tags;
+		} else if (typeof memory.tags === "string") {
+			const trimmed = memory.tags.trim();
+			if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+				try {
+					const parsed = JSON.parse(trimmed);
+					if (Array.isArray(parsed)) {
+						tags = parsed
+							.filter((tag) => typeof tag === "string")
+							.map((tag) => tag.trim())
+							.filter((tag) => tag.length > 0);
+					}
+				} catch {
+					tags = [];
+				}
+			} else {
+				tags = trimmed
+					.split(",")
+					.map((tag) => tag.trim())
+					.filter((tag) => tag.length > 0);
+			}
+		}
+		for (const bucket of matchingBuckets) {
+			for (const tag of tags) {
+				bucket.tagMap.set(tag, (bucket.tagMap.get(tag) ?? 0) + 1);
+			}
+		}
+	}
+
+	const toMetrics = (map: Map<string, number>): TimelineMetric[] =>
+		[...map.entries()]
+			.sort((a, b) => {
+				if (b[1] !== a[1]) return b[1] - a[1];
+				return a[0].localeCompare(b[0]);
+			})
+			.slice(0, 5)
+			.map(([key, count]) => ({ key, count }));
+
+	return {
+		generatedAt: new Date().toISOString(),
+		generatedFor: new Date(nowStart).toISOString(),
+		rangePreset: "today-last_week-one_month",
+		totalMemories: memories.length,
+		totalHistoryEvents: 0,
+		invalidMemoryTimestamps: 0,
+		invalidHistoryTimestamps: 0,
+		buckets: buckets.map((bucket) => ({
+			eraIndex: bucket.range.eraIndex,
+			rangeKey: bucket.range.rangeKey,
+			label: bucket.range.label,
+			start: new Date(bucket.start).toISOString(),
+			end: new Date(bucket.end).toISOString(),
+			memoriesAdded: bucket.memoriesAdded,
+			trackedEvents: 0,
+			evolved: 0,
+			strengthened: 0,
+			recovered: 0,
+			avgImportance:
+				bucket.importanceCount > 0
+					? Number((bucket.importanceSum / bucket.importanceCount).toFixed(3))
+					: 0,
+			pinned: bucket.pinned,
+			typeBreakdown: toMetrics(bucket.typeMap),
+			sourceBreakdown: toMetrics(bucket.sourceMap),
+			topTags: toMetrics(bucket.tagMap),
+			summary:
+				`${bucket.memoriesAdded} added. Fallback timeline from memory index only.`,
+		})),
+	};
+}
+
+export async function getMemoryTimeline(): Promise<MemoryTimelineResponse> {
+	try {
+		const response = await fetch(`${API_BASE}/api/memory/timeline`);
+		if (!response.ok) throw new Error("Failed to fetch memory timeline");
+		return await response.json();
+	} catch {
+		const fallback = await getMemories(5000, 0);
+		return {
+			...buildTimelineFallback(fallback.memories),
+			error: "Timeline API unavailable. Showing memory-index fallback.",
 		};
 	}
 }

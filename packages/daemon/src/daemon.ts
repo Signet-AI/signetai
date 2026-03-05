@@ -71,6 +71,7 @@ import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
 import { closeLlmProvider, initLlmProvider } from "./llm";
 import { type LogEntry, logger } from "./logger";
 import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
+import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import {
@@ -1275,6 +1276,29 @@ app.get("/api/memories", (c) => {
 			stats: { total: 0, withEmbeddings: 0, critical: 0 },
 			error: "Failed to load memories",
 		});
+	}
+});
+
+app.get("/api/memory/timeline", (c) => {
+	try {
+		const timeline = getDbAccessor().withReadDb((db) => buildMemoryTimeline(db));
+		return c.json(timeline);
+	} catch (e) {
+		logger.error("memory", "Error building memory timeline", e as Error);
+		return c.json(
+			{
+				error: "Failed to build memory timeline",
+				generatedAt: new Date().toISOString(),
+				generatedFor: new Date().toISOString(),
+				rangePreset: "today-last_week-one_month",
+				totalMemories: 0,
+				totalHistoryEvents: 0,
+				invalidMemoryTimestamps: 0,
+				invalidHistoryTimestamps: 0,
+				buckets: [],
+			},
+			500,
+		);
 	}
 });
 
