@@ -382,9 +382,15 @@ export async function getMemoryTimeline(options?: {
 		if (!response.ok) throw new Error("Failed to fetch memory timeline");
 		return await response.json();
 	} catch {
-		const fallbackMemories = options?.fallbackMemories
-			? await options.fallbackMemories
-			: (await getMemories(5000, 0)).memories;
+		let fallbackMemories: readonly Memory[];
+		try {
+			fallbackMemories = options?.fallbackMemories
+				? await options.fallbackMemories
+				: (await getMemories(5000, 0)).memories;
+		} catch {
+			// If fallback also fails, return an empty timeline
+			fallbackMemories = [];
+		}
 		return {
 			...buildTimelineFallback(fallbackMemories),
 			error: "Timeline API unavailable. Showing memory-index fallback.",
