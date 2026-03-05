@@ -184,12 +184,11 @@ function buildBucketUsageMaps(
 
 	const skillUsage: Record<string, number> = {};
 	const mcpUsage: Record<string, number> = {};
-	for (const entry of storage) {
-		skillUsage[entry.bucket.rangeKey] = entry.skillSet.size;
-		mcpUsage[entry.bucket.rangeKey] = entry.mcpSet.size > 0 ? entry.mcpSet.size : entry.mcpMentionIds.size;
-	}
+// Current (incorrect): uses memory-ID count as server count
+// mcpUsage[entry.bucket.rangeKey] = entry.mcpSet.size > 0 ? entry.mcpSet.size : entry.mcpMentionIds.size;
 
-	return { skillUsage, mcpUsage };
+// Suggested fix: use a bounded heuristic or distinct signal sources
+mcpUsage[entry.bucket.rangeKey] = entry.mcpSet.size > 0 ? entry.mcpSet.size : 1; // or entry.mcpSignalSources.size
 }
 
 function normalizeImportance(value: number | undefined): number {
