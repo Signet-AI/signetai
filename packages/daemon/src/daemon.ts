@@ -133,11 +133,14 @@ import {
 	deduplicateMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
+	pruneChunkGroupEntities,
+	pruneSingletonExtractedEntities,
 	reclassifyEntities,
 	reembedMissingMemories,
 	releaseStaleLeases,
 	requeueDeadJobs,
 	resyncVectorIndex,
+	structuralBackfill,
 	triggerRetentionSweep,
 } from "./repair-actions";
 import {
@@ -5774,6 +5777,68 @@ app.post("/api/repair/reclassify-entities", async (c) => {
 		provider,
 		{ batchSize, dryRun },
 	);
+	return c.json(result, repairHttpStatus(result));
+});
+
+app.post("/api/repair/prune-chunk-groups", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	let batchSize = 500;
+	let dryRun = false;
+	try {
+		const body = await c.req.json();
+		if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+		if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
+	} catch {
+		// no body or invalid JSON — use defaults
+	}
+	const result = pruneChunkGroupEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+		batchSize,
+		dryRun,
+	});
+	return c.json(result, repairHttpStatus(result));
+});
+
+app.post("/api/repair/prune-singleton-entities", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	let batchSize = 200;
+	let dryRun = false;
+	let maxMentions = 1;
+	try {
+		const body = await c.req.json();
+		if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+		if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
+		if (typeof body?.maxMentions === "number") maxMentions = body.maxMentions;
+	} catch {
+		// no body or invalid JSON — use defaults
+	}
+	const result = pruneSingletonExtractedEntities(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+		{ batchSize, dryRun, maxMentions },
+	);
+	return c.json(result, repairHttpStatus(result));
+});
+
+app.post("/api/repair/structural-backfill", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	let batchSize = 100;
+	let dryRun = false;
+	try {
+		const body = await c.req.json();
+		if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+		if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
+	} catch {
+		// no body or invalid JSON — use defaults
+	}
+	const result = structuralBackfill(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+		batchSize,
+		dryRun,
+	});
 	return c.json(result, repairHttpStatus(result));
 });
 
