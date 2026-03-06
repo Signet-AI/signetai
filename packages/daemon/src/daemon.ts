@@ -106,6 +106,7 @@ import {
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import { getTraversalStatus } from "./pipeline/graph-traversal";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
+import { type PredictorClient, createPredictorClient } from "./predictor-client";
 import {
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -194,6 +195,7 @@ const repairLimiter = createRateLimiter();
 // Telemetry — assigned in main(), read by cleanup()
 let telemetryRef: TelemetryCollector | undefined;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
+let predictorClientRef: PredictorClient | null = null;
 let skillReconcilerHandle: ReconcilerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -223,6 +225,11 @@ function hasMemoriesSessionIdColumn(db: Database): boolean {
 		}>
 	).some((column) => column.name === "session_id");
 	return hasMemoriesSessionIdColumnCache;
+}
+
+/** Public accessor for the predictor client singleton (used by hooks). */
+export function getPredictorClient(): PredictorClient | null {
+	return predictorClientRef;
 }
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
@@ -4435,7 +4442,7 @@ app.post("/api/hooks/session-start", async (c) => {
 		}
 
 		stampHarness(body.harness);
-		const result = handleSessionStart(body);
+		const result = await handleSessionStart(body);
 		return c.json(result);
 	} catch (e) {
 		logger.error("hooks", "Session start hook failed", e as Error);
@@ -5435,6 +5442,35 @@ app.get("/api/pipeline/status", (c) => {
 				(pipelineV2.traversal?.enabled ?? true),
 			lastRun: getTraversalStatus(),
 		},
+	});
+});
+
+app.get("/api/predictor/status", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const predictorCfg = cfg.pipelineV2.predictor;
+
+	if (!predictorCfg?.enabled) {
+		return c.json({ enabled: false, status: null });
+	}
+
+	const client = getPredictorClient();
+	if (client === null) {
+		return c.json({
+			enabled: true,
+			alive: false,
+			crashCount: 0,
+			crashDisabled: false,
+			status: null,
+		});
+	}
+
+	const status = await client.status();
+	return c.json({
+		enabled: true,
+		alive: client.isAlive(),
+		crashCount: client.crashCount,
+		crashDisabled: client.crashDisabled,
+		status,
 	});
 });
 
@@ -7414,6 +7450,16 @@ async function cleanup() {
 		skillReconcilerHandle = null;
 	}
 
+	// Stop predictor sidecar before pipeline/DB teardown
+	if (predictorClientRef) {
+		try {
+			await predictorClientRef.stop();
+		} catch {
+			// best-effort
+		}
+		predictorClientRef = null;
+	}
+
 	// Stop embedding tracker before pipeline/DB teardown
 	if (embeddingTrackerHandle) {
 		try {
@@ -7724,6 +7770,22 @@ async function main() {
 			fetchEmbedding,
 			checkEmbeddingProvider,
 		);
+	}
+
+	// Spawn predictor sidecar if enabled
+	if (memoryCfg.pipelineV2.predictor?.enabled) {
+		const predictorCfg = memoryCfg.pipelineV2.predictor;
+		try {
+			const client = createPredictorClient(predictorCfg);
+			await client.start();
+			predictorClientRef = client;
+			logger.info("predictor", "Predictor sidecar started");
+		} catch (err) {
+			// Fail open: predictor is optional
+			logger.warn("predictor", "Failed to start predictor sidecar (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
 
 	// Start skill reconciler if procedural memory is enabled

@@ -98,20 +98,20 @@ interface BenchResult {
 	p99Ms: number;
 }
 
-function bench(
+async function bench(
 	name: string,
-	fn: () => void,
+	fn: () => void | Promise<void>,
 	iterations: number,
 	warmup = 10,
-): BenchResult {
-	for (let i = 0; i < warmup; i++) fn();
+): Promise<BenchResult> {
+	for (let i = 0; i < warmup; i++) await fn();
 
 	const times: number[] = [];
 	const start = performance.now();
 
 	for (let i = 0; i < iterations; i++) {
 		const t0 = performance.now();
-		fn();
+		await fn();
 		times.push(performance.now() - t0);
 	}
 
@@ -157,7 +157,7 @@ const ITERS = 200;
 setupDb(100);
 let sessionCounter = 0;
 
-const r30 = bench(
+const r30 = await bench(
 	"recordSessionCandidates (30 candidates, typical)",
 	() => {
 		const key = `bench-session-${sessionCounter++}`;
@@ -175,7 +175,7 @@ closeDbAccessor();
 setupDb(200);
 sessionCounter = 0;
 
-const r100 = bench(
+const r100 = await bench(
 	"recordSessionCandidates (100 candidates, heavy)",
 	() => {
 		const key = `bench-heavy-${sessionCounter++}`;
@@ -200,7 +200,7 @@ recordSessionCandidates(
 	new Set(preCandidates.slice(0, 15).map((c) => c.id)),
 );
 
-const rFts = bench(
+const rFts = await bench(
 	"trackFtsHits (10 mixed: 5 existing + 5 new)",
 	() => {
 		const existing = preCandidates.slice(0, 5).map((c) => c.id);
@@ -220,20 +220,20 @@ closeDbAccessor();
 setupDb(50);
 writeFileSync(join(TEST_DIR, "agent.yaml"), "version: 1\n");
 
-const rBaseline = bench(
+const rBaseline = await bench(
 	"handleSessionStart (no sessionKey -- baseline)",
-	() => {
-		handleSessionStart({ harness: "bench" });
+	async () => {
+		await handleSessionStart({ harness: "bench" });
 	},
 	ITERS,
 );
 printResult(rBaseline);
 
 sessionCounter = 0;
-const rWithRecording = bench(
+const rWithRecording = await bench(
 	"handleSessionStart (with sessionKey -- recording active)",
-	() => {
-		handleSessionStart({
+	async () => {
+		await handleSessionStart({
 			harness: "bench",
 			sessionKey: `bench-full-${sessionCounter++}`,
 		});
@@ -254,11 +254,11 @@ sessionCounter = 0;
 
 for (let i = 0; i < 100; i++) {
 	const t0 = performance.now();
-	handleSessionStart({ harness: "bench" });
+	await handleSessionStart({ harness: "bench" });
 	baselineTimes.push(performance.now() - t0);
 
 	const t1 = performance.now();
-	handleSessionStart({
+	await handleSessionStart({
 		harness: "bench",
 		sessionKey: `bench-overhead-${sessionCounter++}`,
 	});

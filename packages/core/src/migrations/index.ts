@@ -28,6 +28,7 @@ import { up as knowledgeStructure } from "./019-knowledge-structure";
 import { up as predictorComparisons } from "./020-predictor-comparisons";
 import { up as checkpointStructural } from "./021-checkpoint-structural";
 import { up as entityPinning } from "./022-entity-pinning";
+import { up as predictorColumns } from "./023-predictor-columns";
 
 // -- Public interface consumed by Database.init() --
 
@@ -137,6 +138,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 22,
 		name: "entity-pinning",
 		up: entityPinning,
+	},
+	{
+		version: 23,
+		name: "predictor-columns",
+		up: predictorColumns,
 	},
 ];
 

@@ -24,7 +24,10 @@ function getMemoryDbPath(): string {
 export interface SessionMemoryCandidate {
 	readonly id: string;
 	readonly effScore: number;
-	readonly source: "effective" | "fts_only" | "ka_traversal";
+	readonly source: "effective" | "fts_only" | "ka_traversal" | "ka_traversal_pinned" | "exploration";
+	readonly predictorScore?: number | null;
+	readonly predictorRank?: number | null;
+	readonly finalScore?: number;
 	readonly entitySlot?: number;
 	readonly aspectSlot?: number;
 	readonly isConstraint?: number;
@@ -55,11 +58,13 @@ export function recordSessionCandidates(
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
-			const ROW = "(?,?,?,?,?,?,?,?,0,?,?,?,?,?)";
+			const ROW = "(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)";
 			const BASE_SQL = `INSERT OR IGNORE INTO session_memories
 					 (id, session_key, memory_id, source, effective_score,
-					  final_score, rank, was_injected, fts_hit_count, created_at,
-					  entity_slot, aspect_slot, is_constraint, structural_density)
+					  predictor_score, final_score, rank, was_injected,
+					  fts_hit_count, created_at,
+					  entity_slot, aspect_slot, is_constraint, structural_density,
+					  predictor_rank)
 					 VALUES `;
 
 			// Pre-compile the full-chunk statement once to avoid recompiling
@@ -83,13 +88,15 @@ export function recordSessionCandidates(
 				const values: unknown[] = [];
 				for (const c of chunk) {
 					const wasInjected = injectedIds.has(c.id) ? 1 : 0;
+					const finalScore = c.finalScore ?? c.effScore;
 					values.push(
 						crypto.randomUUID(),
 						sessionKey,
 						c.id,
 						c.source,
 						c.effScore,
-						c.effScore, // final_score = effective_score until predictor exists
+						c.predictorScore ?? null,
+						finalScore,
 						rank++,
 						wasInjected,
 						now,
@@ -97,6 +104,7 @@ export function recordSessionCandidates(
 						c.aspectSlot ?? null,
 						c.isConstraint ?? 0,
 						c.structuralDensity ?? null,
+						c.predictorRank ?? null,
 					);
 				}
 
@@ -112,7 +120,7 @@ export function recordSessionCandidates(
 	} catch (e) {
 		// Non-fatal — don't break session start for recording failures
 		logger.warn("session-memories", "Failed to record candidates", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }
@@ -179,7 +187,7 @@ export function trackFtsHits(sessionKey: string | undefined, matchedIds: Readonl
 		});
 	} catch (e) {
 		logger.warn("session-memories", "Failed to track FTS hits", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }

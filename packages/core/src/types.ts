@@ -248,6 +248,21 @@ export interface PipelineV2Config {
 	readonly procedural: PipelineProceduralConfig;
 	readonly structural: PipelineStructuralConfig;
 	readonly feedback: PipelineFeedbackConfig;
+	readonly predictor?: PredictorConfig;
+}
+
+export interface PredictorConfig {
+	readonly enabled: boolean;
+	readonly trainIntervalSessions: number;
+	readonly minTrainingSessions: number;
+	readonly scoreTimeoutMs: number;
+	readonly trainTimeoutMs: number;
+	readonly crashDisableThreshold: number;
+	readonly rrfK: number;
+	readonly explorationRate: number;
+	readonly driftResetWindow: number;
+	readonly binaryPath?: string;
+	readonly checkpointPath?: string;
 }
 
 export interface PipelineEmbeddingTrackerConfig {

@@ -34,6 +34,7 @@ export type LogCategory =
 	| "summary-worker" // Session summary worker
 	| "synthesis" // MEMORY.md synthesis worker
 	| "session-memories" // Session memory tracking
+	| "predictor" // Predictive memory scorer
 	| "system" // System events
 	| "update"; // Auto-update cycle
 

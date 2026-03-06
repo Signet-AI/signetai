@@ -147,6 +147,17 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		staleDays: 14,
 		decayIntervalSessions: 10,
 	},
+	predictor: {
+		enabled: false,
+		trainIntervalSessions: 10,
+		minTrainingSessions: 10,
+		scoreTimeoutMs: 120,
+		trainTimeoutMs: 30000,
+		crashDisableThreshold: 3,
+		rrfK: 12,
+		explorationRate: 0.05,
+		driftResetWindow: 10,
+	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -202,6 +213,7 @@ export function loadPipelineConfig(
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
+	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -690,6 +702,66 @@ export function loadPipelineConfig(
 				1000,
 				d.feedback.decayIntervalSessions,
 			),
+		},
+
+		predictor: {
+			enabled: resolveBool(
+				predictorRaw?.enabled, undefined, d.predictor?.enabled ?? false,
+			),
+			trainIntervalSessions: clampPositive(
+				predictorRaw?.trainIntervalSessions,
+				1,
+				1000,
+				d.predictor?.trainIntervalSessions ?? 10,
+			),
+			minTrainingSessions: clampPositive(
+				predictorRaw?.minTrainingSessions,
+				1,
+				1000,
+				d.predictor?.minTrainingSessions ?? 10,
+			),
+			scoreTimeoutMs: clampPositive(
+				predictorRaw?.scoreTimeoutMs,
+				10,
+				10000,
+				d.predictor?.scoreTimeoutMs ?? 120,
+			),
+			trainTimeoutMs: clampPositive(
+				predictorRaw?.trainTimeoutMs,
+				1000,
+				120000,
+				d.predictor?.trainTimeoutMs ?? 30000,
+			),
+			crashDisableThreshold: clampPositive(
+				predictorRaw?.crashDisableThreshold,
+				1,
+				20,
+				d.predictor?.crashDisableThreshold ?? 3,
+			),
+			rrfK: clampPositive(
+				predictorRaw?.rrfK,
+				1,
+				100,
+				d.predictor?.rrfK ?? 12,
+			),
+			explorationRate: clampFraction(
+				predictorRaw?.explorationRate,
+				d.predictor?.explorationRate ?? 0.05,
+			),
+			driftResetWindow: clampPositive(
+				predictorRaw?.driftResetWindow,
+				1,
+				100,
+				d.predictor?.driftResetWindow ?? 10,
+			),
+			binaryPath:
+				typeof predictorRaw?.binaryPath === "string"
+					? predictorRaw.binaryPath
+					: d.predictor?.binaryPath,
+			checkpointPath:
+				typeof predictorRaw?.checkpointPath === "string"
+					? predictorRaw.checkpointPath
+					: d.predictor?.checkpointPath,
 		},
 	};
 }

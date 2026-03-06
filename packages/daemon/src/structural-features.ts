@@ -4,7 +4,8 @@ import { getStructuralDensity } from "./knowledge-graph";
 export type StructuralCandidateSource =
 	| "effective"
 	| "fts_only"
-	| "ka_traversal";
+	| "ka_traversal"
+	| "ka_traversal_pinned";
 
 export interface StructuralFeatures {
 	/** Hashed entity ID (0-255, for embedding table lookup) */

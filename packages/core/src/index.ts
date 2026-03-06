@@ -54,6 +54,7 @@ export type {
 	PipelineContinuityConfig,
 	PipelineSynthesisConfig,
 	PipelineProceduralConfig,
+	PredictorConfig,
 	ExtractedFact,
 	ExtractedEntity,
 	ExtractionResult,

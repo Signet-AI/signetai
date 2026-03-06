@@ -25,6 +25,17 @@ import { loadMemoryConfig } from "./memory-config";
 import { recordSessionCandidates, trackFtsHits } from "./session-memories";
 import { listSecrets } from "./secrets";
 import { getStructuralFeatures } from "./structural-features";
+import { getPredictorClient } from "./daemon";
+import { getPredictorState, updatePredictorState } from "./predictor-state";
+import {
+	type CandidateInput,
+	type CandidateSource,
+	type RankedCandidate,
+	buildPredictorStatusLine,
+	evaluateColdStartExit,
+	maybeExplore,
+	runPredictorScoring,
+} from "./predictor-scoring";
 import { propagateMemoryStatus } from "./knowledge-graph";
 import {
 	resolveFocalEntities,
@@ -895,9 +906,9 @@ function getMemoriesSince(
 // Hook Handlers
 // ============================================================================
 
-export function handleSessionStart(
+export async function handleSessionStart(
 	req: SessionStartRequest,
-): SessionStartResponse {
+): Promise<SessionStartResponse> {
 	const start = Date.now();
 	const config = loadHooksConfig().sessionStart || {};
 	const includeIdentity = config.includeIdentity !== false;
@@ -939,11 +950,8 @@ export function handleSessionStart(
 	const candidatePoolLimit = Math.max(1, config.candidatePoolLimit ?? 100);
 	const allCandidates = getAllScoredCandidates(req.project, recallLimit);
 	const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
-	const candidateSourceById = new Map<
-		string,
-		"effective" | "ka_traversal"
-	>(
-		allCandidates.map((candidate) => [candidate.id, "effective"]),
+	const candidateSourceById = new Map<string, CandidateSource>(
+		allCandidates.map((candidate) => [candidate.id, "effective" as const]),
 	);
 
 	const traversalAgentId = req.agentId ?? "default";
@@ -1053,8 +1061,71 @@ export function handleSessionStart(
 
 	const mergedCandidates = allCandidates.slice(0, candidatePoolLimit);
 
-	// Apply budget to select what we actually inject
-	const memories = selectWithBudget(mergedCandidates, 2000);
+	// ---------------------------------------------------------------
+	// Predictor scoring integration (Sprint 2)
+	// ---------------------------------------------------------------
+	const predictorClient = getPredictorClient();
+	const predictorConfig = memoryCfg.pipelineV2.predictor;
+	const agentId = traversalAgentId;
+	const predictorState = getPredictorState(agentId);
+
+	// Build CandidateInput array from merged candidates
+	const candidateInputs: ReadonlyArray<CandidateInput> = mergedCandidates.map((c) => ({
+		id: c.id,
+		effScore: c.effScore,
+		source: candidateSourceById.get(c.id) ?? ("effective" as const),
+	}));
+
+	// Get structural features for candidate feature vectors
+	const candidateIdsForFeatures = mergedCandidates.map((c) => c.id);
+	const structuralById = getStructuralFeatures(
+		getDbAccessor(),
+		candidateIdsForFeatures,
+		agentId,
+		candidateSourceById,
+	);
+
+	// Build candidate feature vectors for predictor input
+	const candidateFeatures: ReadonlyArray<ReadonlyArray<number>> | null =
+		predictorConfig?.enabled
+			? candidateIdsForFeatures.map((id) => {
+					const sf = structuralById.get(id);
+					if (sf === null || sf === undefined) return [0, 0, 0, 0];
+					return [
+						sf.entitySlot ?? 0,
+						sf.aspectSlot ?? 0,
+						sf.isConstraint ?? 0,
+						sf.structuralDensity ?? 0,
+					];
+				})
+			: null;
+
+	// Run predictor scoring (async — calls sidecar if available)
+	const scoringResult = await runPredictorScoring({
+		candidates: candidateInputs,
+		accessor: getDbAccessor(),
+		agentId,
+		predictorClient,
+		config: predictorConfig,
+		state: predictorState,
+		candidateFeatures,
+		project: req.project,
+	});
+
+	// Build ranked-candidate lookup for fused scores
+	const rankedById = new Map<string, RankedCandidate>(
+		scoringResult.candidates.map((rc) => [rc.id, rc]),
+	);
+
+	// Re-sort merged candidates by fused score from predictor pipeline
+	const sortedCandidates = [...mergedCandidates].sort((a, b) => {
+		const aFused = rankedById.get(a.id)?.fusedScore ?? 0;
+		const bFused = rankedById.get(b.id)?.fusedScore ?? 0;
+		return bFused - aFused;
+	});
+
+	// Apply budget to select what we actually inject (on re-ranked order)
+	const memories = selectWithBudget(sortedCandidates, 2000);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -1068,45 +1139,108 @@ export function handleSessionStart(
 		memories.push(...predictedMemories);
 	}
 
+	// Exploration: if predictor was used and cold start exited, try exploration
+	let exploredId: string | null = null;
+	if (scoringResult.predictorUsed && predictorState.coldStartExited) {
+		const injectedIds = new Set(memories.map((m) => m.id));
+		exploredId = maybeExplore(
+			scoringResult.candidates,
+			injectedIds,
+			predictorConfig?.explorationRate ?? 0.05,
+		);
+		if (exploredId !== null) {
+			// Find the explored memory in our candidate pool and add it
+			const exploredCandidate = mergedCandidates.find((c) => c.id === exploredId);
+			if (exploredCandidate && !memories.some((m) => m.id === exploredId)) {
+				memories.push(exploredCandidate);
+			}
+		}
+	}
+
 	// Update access tracking for served memories
 	const servedIds = memories.map((m) => m.id);
 	updateAccessTracking(servedIds);
 
+	// Cold start evaluation — reuse status from scoring pipeline (no second RPC)
+	let predictorStatusLine = "";
+	if (predictorConfig?.enabled) {
+		const predictorStatus = scoringResult.predictorStatus;
+		if (predictorStatus !== null) {
+			const exited = evaluateColdStartExit(
+				predictorStatus,
+				predictorConfig.minTrainingSessions,
+				predictorState,
+			);
+			if (exited && !predictorState.coldStartExited) {
+				updatePredictorState(agentId, { coldStartExited: true });
+			}
+			// Increment sessionsAfterColdStart if cold start exited
+			if (exited || predictorState.coldStartExited) {
+				updatePredictorState(agentId, {
+					sessionsAfterColdStart: predictorState.sessionsAfterColdStart + 1,
+				});
+			}
+			// Build status line using the cached status
+			predictorStatusLine = buildPredictorStatusLine(
+				predictorStatus,
+				getPredictorState(agentId), // re-read after possible update
+				predictorConfig,
+			);
+		} else {
+			predictorStatusLine = buildPredictorStatusLine(null, predictorState, predictorConfig);
+		}
+	}
+
 	// Record all candidates + which were injected for predictive scorer
 	const injectedSet = new Set(memories.map((m) => m.id));
-	const candidateIdsForRecording = [
-		...mergedCandidates.map((candidate) => candidate.id),
-		...predictedMemories
-			.filter((memory) => !mergedCandidates.some((candidate) => candidate.id === memory.id))
-			.map((memory) => memory.id),
-	];
-	const structuralById = getStructuralFeatures(
-		getDbAccessor(),
-		candidateIdsForRecording,
-		traversalAgentId,
-		candidateSourceById,
-	);
-	const candidatesForRecording = [
-		...mergedCandidates.map((c) => ({
-			id: c.id,
-			effScore: c.effScore,
-			source: candidateSourceById.get(c.id) ?? ("effective" as const),
-			entitySlot: structuralById.get(c.id)?.entitySlot ?? 0,
-			aspectSlot: structuralById.get(c.id)?.aspectSlot ?? 0,
-			isConstraint: structuralById.get(c.id)?.isConstraint ?? 0,
-			structuralDensity: structuralById.get(c.id)?.structuralDensity ?? 0,
-		})),
+	const allCandidateIdsForRecording = [
+		...mergedCandidates.map((c) => c.id),
 		...predictedMemories
 			.filter((m) => !mergedCandidates.some((c) => c.id === m.id))
-			.map((m) => ({
-				id: m.id,
-				effScore: m.effScore,
-				source: "effective" as const,
-				entitySlot: structuralById.get(m.id)?.entitySlot ?? 0,
-				aspectSlot: structuralById.get(m.id)?.aspectSlot ?? 0,
-				isConstraint: structuralById.get(m.id)?.isConstraint ?? 0,
-				structuralDensity: structuralById.get(m.id)?.structuralDensity ?? 0,
-			})),
+			.map((m) => m.id),
+	];
+	// Re-fetch structural features for any predicted memories not in the first batch
+	const fullStructuralById = allCandidateIdsForRecording.length > candidateIdsForFeatures.length
+		? getStructuralFeatures(getDbAccessor(), allCandidateIdsForRecording, agentId, candidateSourceById)
+		: structuralById;
+
+	const candidatesForRecording = [
+		...mergedCandidates.map((c) => {
+			const ranked = rankedById.get(c.id);
+			const sf = fullStructuralById.get(c.id);
+			const source = exploredId === c.id
+				? ("exploration" as const)
+				: (candidateSourceById.get(c.id) ?? ("effective" as const));
+			return {
+				id: c.id,
+				effScore: c.effScore,
+				source,
+				predictorScore: ranked?.predictorScore ?? null,
+				predictorRank: ranked?.predictorRank ?? null,
+				finalScore: ranked?.fusedScore ?? c.effScore,
+				entitySlot: sf?.entitySlot ?? 0,
+				aspectSlot: sf?.aspectSlot ?? 0,
+				isConstraint: sf?.isConstraint ?? 0,
+				structuralDensity: sf?.structuralDensity ?? 0,
+			};
+		}),
+		...predictedMemories
+			.filter((m) => !mergedCandidates.some((c) => c.id === m.id))
+			.map((m) => {
+				const sf = fullStructuralById.get(m.id);
+				return {
+					id: m.id,
+					effScore: m.effScore,
+					source: "effective" as const,
+					predictorScore: null,
+					predictorRank: null,
+					finalScore: m.effScore,
+					entitySlot: sf?.entitySlot ?? 0,
+					aspectSlot: sf?.aspectSlot ?? 0,
+					isConstraint: sf?.isConstraint ?? 0,
+					structuralDensity: sf?.structuralDensity ?? 0,
+				};
+			}),
 	];
 	recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet);
 
@@ -1115,6 +1249,9 @@ export function handleSessionStart(
 	let recoverySection = "";
 
 	injectParts.push("[memory active | /remember | /recall]");
+	if (predictorStatusLine) {
+		injectParts.push(predictorStatusLine);
+	}
 
 	// Inject session gap summary for temporal awareness
 	const gapSummary = getSessionGapSummary();
