@@ -228,22 +228,22 @@ async function processJob(
 	// --- Predictor comparison (Sprint 3) ---
 	// Runs after continuity scoring has written per-memory relevance scores
 	// and session_scores. Uses dynamic imports to avoid circular deps.
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	// Agent ID is hardcoded because summary_jobs and session_scores tables
+	// lack an agent_id column (pre-existing schema limitation). In a
+	// multi-agent deployment, all predictor comparisons route to the
+	// "default" bucket. Adding agent_id to these tables requires a schema
+	// migration and is tracked as future work.
+	const agentId = "default";
 	try {
-		const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
 			const {
 				runSessionComparison,
 				saveComparison,
 				updateSuccessRate,
 				shouldTriggerTraining,
+				detectDrift,
 			} = await import("../predictor-comparison");
-
-			// Agent ID is hardcoded because summary_jobs and session_scores tables
-			// lack an agent_id column (pre-existing schema limitation). In a
-			// multi-agent deployment, all predictor comparisons route to the
-			// "default" bucket. Adding agent_id to these tables requires a schema
-			// migration and is tracked as future work.
-			const agentId = "default";
 			const comparison = runSessionComparison(
 				job.session_key,
 				agentId,
@@ -259,7 +259,6 @@ async function processJob(
 				);
 
 				// Drift detection
-				const { detectDrift } = await import("../predictor-comparison");
 				const driftResult = detectDrift(agentId, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
 				if (driftResult.drifting) {
 					logger.warn("predictor", "Drift detected — predictor win rate declining", {

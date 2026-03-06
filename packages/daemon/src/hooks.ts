@@ -1147,12 +1147,20 @@ export async function handleSessionStart(
 	let exploredId: string | null = null;
 	if (scoringResult.predictorUsed && predictorState.coldStartExited) {
 		const injectedIds = new Set(memories.map((m) => m.id));
-		exploredId = maybeExplore(
+		const exploration = maybeExplore(
 			scoringResult.candidates,
 			injectedIds,
 			predictorConfig?.explorationRate ?? 0.05,
 		);
+		exploredId = exploration.exploredId;
 		if (exploredId !== null) {
+			// Remove the displaced memory from the array to maintain budget
+			if (exploration.displacedId !== null) {
+				const displacedIdx = memories.findIndex((m) => m.id === exploration.displacedId);
+				if (displacedIdx !== -1) {
+					memories.splice(displacedIdx, 1);
+				}
+			}
 			// Find the explored memory in our candidate pool and add it
 			const exploredCandidate = mergedCandidates.find((c) => c.id === exploredId);
 			if (exploredCandidate && !memories.some((m) => m.id === exploredId)) {

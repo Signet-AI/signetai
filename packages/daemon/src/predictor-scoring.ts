@@ -260,20 +260,25 @@ export function applyTopicDiversity(
 // Exploration Sampling
 // ---------------------------------------------------------------------------
 
+export interface ExplorationResult {
+	readonly exploredId: string | null;
+	readonly displacedId: string | null;
+}
+
 /**
  * With probability `explorationRate`, replace the lowest-ranked injected
  * memory with the candidate where predictor and baseline disagree most.
  *
- * Returns the explored memory ID if exploration occurred, null otherwise.
+ * Returns the explored and displaced memory IDs if exploration occurred.
  * Mutates the injected set in-place.
  */
 export function maybeExplore(
 	candidates: ReadonlyArray<RankedCandidate>,
 	injectedIds: Set<string>,
 	explorationRate: number,
-): string | null {
-	if (injectedIds.size === 0) return null;
-	if (Math.random() > explorationRate) return null;
+): ExplorationResult {
+	if (injectedIds.size === 0) return { exploredId: null, displacedId: null };
+	if (Math.random() > explorationRate) return { exploredId: null, displacedId: null };
 
 	// Find candidate with largest rank disagreement that isn't already injected
 	let bestDisagreementId: string | null = null;
@@ -289,7 +294,7 @@ export function maybeExplore(
 		}
 	}
 
-	if (bestDisagreementId === null) return null;
+	if (bestDisagreementId === null) return { exploredId: null, displacedId: null };
 
 	// Find lowest-ranked injected memory
 	let lowestId: string | null = null;
@@ -302,12 +307,12 @@ export function maybeExplore(
 		}
 	}
 
-	if (lowestId === null) return null;
+	if (lowestId === null) return { exploredId: null, displacedId: null };
 
 	// Swap
 	injectedIds.delete(lowestId);
 	injectedIds.add(bestDisagreementId);
-	return bestDisagreementId;
+	return { exploredId: bestDisagreementId, displacedId: lowestId };
 }
 
 // ---------------------------------------------------------------------------

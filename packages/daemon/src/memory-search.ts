@@ -330,9 +330,10 @@ export async function hybridRecall(
 										  AND ea.status = 'active'
 										 WHERE m.id IN (${placeholders})
 										   AND m.is_deleted = 0
+										 ${filter.sql}
 										 GROUP BY m.id, m.importance`,
 									)
-									.all(agentId, ...missingIds) as Array<{
+									.all(agentId, ...missingIds, ...filter.args) as Array<{
 									id: string;
 									traversal_score: number;
 								}>,

@@ -270,7 +270,7 @@ export function recordAgentFeedback(
 		});
 	} catch (e) {
 		logger.warn("session-memories", "Failed to record agent feedback", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }

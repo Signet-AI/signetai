@@ -143,6 +143,7 @@ interface SessionMemoryRow {
 	readonly relevance_score: number | null;
 	readonly fts_hit_count: number;
 	readonly source: string;
+	readonly predictor_rank: number | null;
 }
 
 interface MemoryRow {
@@ -188,7 +189,7 @@ function collectTrainingPairsFromDb(
 	const sessionMemories = db
 		.prepare(
 			`SELECT memory_id, effective_score, predictor_score, rank,
-			        was_injected, relevance_score, fts_hit_count, source
+			        was_injected, relevance_score, fts_hit_count, source, predictor_rank
 			 FROM session_memories
 			 WHERE session_key = ?
 			 ORDER BY rank ASC`,
@@ -319,7 +320,7 @@ function collectTrainingPairsFromDb(
 			features,
 			label,
 			wasInjected: sm.was_injected === 1,
-			predictorRank: sm.predictor_score !== null ? sm.rank : null,
+			predictorRank: sm.predictor_rank ?? null,
 			baselineRank: sm.predictor_score === null ? sm.rank : null,
 		});
 	}

@@ -5773,24 +5773,28 @@ app.get("/api/knowledge/entities", (c) => {
 	});
 });
 
-app.post("/api/knowledge/entities/:id/pin", (c) => {
-	const agentId = c.req.query("agent_id") ?? "default";
-	pinEntity(getDbAccessor(), c.req.param("id"), agentId);
-	const entity = getKnowledgeEntityDetail(
-		getDbAccessor(),
-		c.req.param("id"),
-		agentId,
-	);
-	if (!entity?.entity.pinnedAt) {
-		return c.json({ error: "Entity not found" }, 404);
-	}
-	return c.json({ pinned: true, pinnedAt: entity.entity.pinnedAt });
+app.post("/api/knowledge/entities/:id/pin", async (c) => {
+	return requirePermission("modify", authConfig)(c, async () => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		pinEntity(getDbAccessor(), c.req.param("id"), agentId);
+		const entity = getKnowledgeEntityDetail(
+			getDbAccessor(),
+			c.req.param("id"),
+			agentId,
+		);
+		if (!entity?.entity.pinnedAt) {
+			return c.json({ error: "Entity not found" }, 404);
+		}
+		return c.json({ pinned: true, pinnedAt: entity.entity.pinnedAt });
+	});
 });
 
-app.delete("/api/knowledge/entities/:id/pin", (c) => {
-	const agentId = c.req.query("agent_id") ?? "default";
-	unpinEntity(getDbAccessor(), c.req.param("id"), agentId);
-	return c.json({ pinned: false });
+app.delete("/api/knowledge/entities/:id/pin", async (c) => {
+	return requirePermission("modify", authConfig)(c, async () => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		unpinEntity(getDbAccessor(), c.req.param("id"), agentId);
+		return c.json({ pinned: false });
+	});
 });
 
 app.get("/api/knowledge/entities/pinned", (c) => {
