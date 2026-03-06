@@ -736,10 +736,14 @@ Location: `~/.claude/`
 
 ### OpenCode
 
-Location: `~/.config/opencode/`
+Location: `~/.config/opencode/plugins/`
 
-`memory.mjs` is an OpenCode plugin that exposes `/remember` and `/recall`
+`signet.mjs` is a bundled OpenCode plugin installed by
+`@signet/connector-opencode` that exposes `/remember` and `/recall`
 as native tools within the harness.
+
+> **Note:** Legacy `memory.mjs` installations are automatically migrated
+> to `~/.config/opencode/plugins/signet.mjs` on reconnect.
 
 ### OpenClaw
 

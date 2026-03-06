@@ -4,6 +4,7 @@ description: "Project overview and getting started."
 order: 23
 section: "Project"
 ---
+<!-- Source of truth: /README.md — do not edit manually -->
 
 # Signet
 
@@ -182,11 +183,17 @@ Operations
 - Autonomous maintenance: scheduled repair actions with dry-run support
 - Timeline: incident reconstruction by replaying events across a window
 - Repair actions: targeted fixes for detected issues, audit-logged
+- Tasks: scheduled task runner with cron, on-demand execution, and SSE
+  streaming output
+- Telemetry: optional local telemetry (disabled by default, no outbound
+  data) with queryable event log and NDJSON export
+- MCP server: Streamable HTTP MCP server on `/mcp` exposing memory and
+  secret tools natively
 
 Integrations
 ---
 
-- Connectors: Claude Code, OpenCode, OpenClaw, filesystem (built-in)
+- Connectors: Claude Code, OpenCode, OpenClaw, Codex, filesystem (built-in)
 - SDK (`@signet/sdk`): typed API client, React hooks, Vercel AI SDK
   middleware, OpenAI helper wrappers
 - Dashboard at `http://localhost:3850`: config editor, memory browser,
@@ -257,8 +264,9 @@ Harness support
 | Harness | Status | Integration |
 |---|---|---|
 | Claude Code | Supported | Connector writes `~/.claude/CLAUDE.md` + hook config |
-| OpenCode | Supported | Connector writes `~/.config/opencode/AGENTS.md` + plugin |
-| OpenClaw | Supported | Connector bootstrap + `@signetai/adapter-openclaw` runtime |
+| OpenCode | Supported | Connector writes `~/.config/opencode/AGENTS.md` + bundled plugin |
+| OpenClaw | Supported | Connector bootstrap + `@signetai/signet-memory-openclaw` runtime |
+| Codex | Supported | Wrapper at `~/.config/signet/bin/codex` + session hooks |
 | Cursor | Planned | File-based identity sync |
 | Windsurf | Planned | File/plugin integration |
 
@@ -270,7 +278,7 @@ CLI (signet)
   setup, memory, secrets, skills, hooks, git sync, updates, service mgmt
 
 Daemon (@signet/daemon, localhost:3850)
-  ├── HTTP API (83+ endpoints across 18 domains)
+  ├── HTTP API (memory, skills, secrets, hooks, auth, tasks, telemetry, MCP, and more)
   ├── Memory Pipeline
   │     extraction → decision → graph → retention
   ├── Document Worker
@@ -348,15 +356,21 @@ Packages
 |---|---|
 | [`@signet/core`](./packages/core) | Types, identity, SQLite, hybrid + graph search, shared utils |
 | [`@signet/cli`](./packages/cli) | CLI entrypoint, setup wizard, config workflows, dashboard |
-| [`@signet/daemon`](./packages/daemon) | API server, pipeline workers, auth, analytics, diagnostics, watcher |
+| [`@signet/daemon`](./packages/daemon) | API server, MCP server, pipeline workers, auth, analytics, diagnostics, watcher |
 | [`@signet/sdk`](./packages/sdk) | Typed client, React hooks, Vercel AI SDK middleware, OpenAI helpers |
 | [`@signet/connector-base`](./packages/connector-base) | Shared connector primitives |
 | [`@signet/connector-claude-code`](./packages/connector-claude-code) | Claude Code integration |
+| [`@signet/connector-codex`](./packages/connector-codex) | Codex wrapper install, config patching, session hooks |
 | [`@signet/connector-opencode`](./packages/connector-opencode) | OpenCode integration |
 | [`@signet/connector-openclaw`](./packages/connector-openclaw) | OpenClaw bootstrap integration |
-| [`@signetai/adapter-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
-| [`@signet/web`](./web) | Marketing website (Cloudflare Worker) |
+| [`@signet/opencode-plugin`](./packages/opencode-plugin) | OpenCode runtime plugin (bundled into connector) |
+| [`@signetai/signet-memory-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
+| [`@signet/extension`](./packages/extension) | Browser extension: popup dashboard, highlight-to-remember |
+| [`@signet/native`](./packages/native) | Native embedding accelerators (Rust) |
+| [`@signet/tray`](./packages/tray) | Tauri system tray application |
+| [`@signet/web`](./web) | Marketing website (Astro static, Cloudflare Pages) |
 | [`signetai`](./packages/signetai) | Meta-package bundling CLI + daemon (`signet` binary) |
+| `predictor` | Predictive memory scorer sidecar (WIP, Rust) |
 
 Documentation
 ===

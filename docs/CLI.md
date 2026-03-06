@@ -114,10 +114,10 @@ Options:
 | `--non-interactive` | Run setup without prompts |
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
-| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`) |
-| `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `none`) — required in non-interactive setup |
+| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `codex`) |
+| `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) — required in non-interactive setup |
 | `--embedding-model <model>` | Non-interactive embedding model |
-| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `ollama`, `none`) — required in non-interactive setup |
+| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `ollama`, `codex`, `native`, `none`) — required in non-interactive setup |
 | `--extraction-model <model>` | Non-interactive extraction model |
 | `--search-balance <alpha>` | Non-interactive search alpha (`0-1`) |
 | `--openclaw-runtime-path <mode>` | Non-interactive OpenClaw mode (`plugin`, `legacy`) |
@@ -186,8 +186,9 @@ What gets created:
 If harnesses are selected, their configs are also created:
 
 - **Claude Code**: `~/.claude/settings.json` with hooks, `~/.claude/CLAUDE.md`
-- **OpenCode**: `~/.config/opencode/memory.mjs` plugin, `~/.config/opencode/AGENTS.md`
+- **OpenCode**: `~/.config/opencode/plugins/signet.mjs` plugin, `~/.config/opencode/AGENTS.md`
 - **OpenClaw**: `~/.agents/hooks/agent-memory/` hook directory
+- **Codex**: wrapper installed at `~/.config/signet/bin/codex` with session hooks
 
 ---
 

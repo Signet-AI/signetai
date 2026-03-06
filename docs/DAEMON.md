@@ -195,9 +195,12 @@ for the full report schema and repair action catalog.
 HTTP API
 --------
 
-The daemon exposes 83+ endpoints across 17 domains. The table below
-lists the major groups. See [docs/API.md](./API.md) for the full
-reference including request/response schemas.
+The daemon exposes endpoints across these domains: memory, skills,
+secrets, hooks, harnesses, auth, documents, connectors, diagnostics,
+pipeline, repair, analytics, telemetry, timeline, git sync, update,
+tasks, and logs. The table below lists the major groups. See
+[docs/API.md](./API.md) for the full reference including
+request/response schemas.
 
 | Group | Base path | Description |
 |-------|-----------|-------------|

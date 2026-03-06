@@ -4,6 +4,7 @@ description: "Agent identity and configuration format."
 order: 26
 section: "Project"
 ---
+<!-- Source of truth: /CLAUDE.md (AGENTS.md) — do not edit manually -->
 
 ---
 Repo: github.com/signetai/signetai 
@@ -31,7 +32,8 @@ What is Signetai?
 
 Signetai is the reference implementation of Signet, an open standard
 for portable AI agent identity. It includes a [[cli|CLI tool]], background
-[[daemon]] with [[api|HTTP API]], and web [[dashboard]].
+[[daemon]] with [[api|HTTP API]] and MCP server, static [[dashboard]],
+harness connectors, [[sdk|SDK]], website, and supporting runtime packages.
 
 **Always read `VISION.md` at the start of every session.** It describes
 what Signet is building toward and should anchor development decisions.
@@ -57,7 +59,7 @@ bun run deploy:web       # Shortcut for web wrangler deploy
 order will cause dependency errors:
 
 ```
-build:core → build:connector-base → build:deps (parallel) → build:signetai
+build:core → build:connector-base → build:opencode-plugin → build:native → build:deps → build:signetai
 ```
 
 ### Testing
@@ -116,14 +118,20 @@ bun run test     # Tests (vitest + workers pool)
 | `@signet/core` | Core library: types, database, search, manifest, identity | node |
 | `@signet/connector-base` | Shared connector primitives/utilities | node |
 | `@signet/cli` | CLI tool: setup wizard, daemon management | node |
-| `@signet/daemon` | Background service: HTTP API, file watching | bun |
+| `@signet/daemon` | Background service: HTTP API, MCP server, file watching | bun |
+| `@signet/extension` | Browser extension: popup dashboard, highlight-to-remember | browser |
 | `@signet/sdk` | Integration SDK for third-party apps | node |
 | `@signet/connector-claude-code` | Claude Code connector: hooks, CLAUDE.md generation | node |
+| `@signet/connector-codex` | Codex connector: wrapper install, config patching, session hooks | node |
 | `@signet/connector-opencode` | OpenCode connector: plugin, AGENTS.md sync | node |
 | `@signet/connector-openclaw` | OpenClaw connector: config patching, hook handlers | node |
-| `@signetai/adapter-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
+| `@signet/opencode-plugin` | OpenCode runtime plugin: memory tools and session hooks | node |
+| `@signetai/signet-memory-openclaw` | OpenClaw runtime plugin for calling Signet daemon | node |
+| `@signet/native` | Native accelerators for built-in embeddings and future local fast paths | native |
+| `@signet/tray` | Tauri-based system tray application | desktop |
 | `signetai` | Meta-package bundling CLI + daemon | - |
-| `@signet/web` | Marketing website (Cloudflare Worker) | cloudflare |
+| `@signet/web` | Marketing website (Astro static, Cloudflare Pages) | cloudflare |
+| `predictor` | Predictive memory scorer sidecar (WIP) | rust |
 
 ### Package Responsibilities
 
@@ -147,11 +155,14 @@ bun run test     # Tests (vitest + workers pool)
 
 **@signet/daemon** - Background service
 - Hono HTTP server on port 3850
+- Streamable HTTP MCP server plus stdio MCP entrypoint
 - File watching with debounced sync
 - Auto-commit on config changes
 - System service (launchd/systemd)
 - Pipeline V2 (`src/pipeline/`) — LLM-based memory extraction
 - Session tracker — plugin vs legacy runtime path mutex
+- Update system (`update-system.ts`) — extracted singleton module
+  with `getUpdateState()` / `getUpdateSummary()` accessors
 
 **@signet/sdk** - Third-party integration
 - SignetSDK class for embedding Signet in apps
@@ -180,7 +191,7 @@ bun run test     # Tests (vitest + workers pool)
 │                     Signet Daemon                       │
 ├─────────────────────────────────────────────────────────┤
 │  HTTP Server (port 3850)                                │
-│    /              Dashboard (SvelteKit static)          │
+│    /              Dashboard (Svelte 5 + Tailwind v4 + bits-ui) │
 │    /api/*         Config, memory, skills, hooks, update │
 │    /memory/*      Search and similarity aliases          │
 │    /health        Health check                          │
@@ -223,9 +234,9 @@ Notable pipeline files beyond the main worker:
 ### Database Migrations
 
 `packages/core/src/migrations/` contains numbered migrations
-(001-baseline through 010-umap-cache). These run automatically on
-daemon startup. Add new migrations as sequential `.ts` files and
-register them in the migrations index.
+(currently `001-baseline.ts` through `017-task-skills.ts`). These run
+automatically on daemon startup. Add new migrations as sequential `.ts`
+files and register them in the migrations index.
 
 ### Auth Middleware
 
@@ -261,7 +272,7 @@ All user data lives at `~/.agents/`:
 - `packages/core/src/identity.ts` - Identity file detection/loading
 - `packages/core/src/database.ts` - SQLite wrapper
 - `packages/core/src/search.ts` - Hybrid search
-- `packages/core/src/migrations/` - Database migrations (001 through 010)
+- `packages/core/src/migrations/` - Database migrations (001 through 017)
 - `packages/core/src/skills.ts` - Skills unification across harnesses
 - `packages/cli/src/cli.ts` - Main CLI entrypoint (~4600 LOC)
 - `packages/daemon/src/daemon.ts` - HTTP server + watcher
@@ -280,14 +291,24 @@ All user data lives at `~/.agents/`:
 - `packages/daemon/src/repair-actions.ts` - Repair actions for broken state
 - `packages/daemon/src/connectors/` - Connector framework
 - `packages/daemon/src/content-normalization.ts` - Content normalization
+- `packages/daemon/src/scheduler/` - Scheduled task worker (cron, spawn, polling)
+- `packages/daemon/src/embedding-tracker.ts` - Incremental embedding refresh tracker
+- `packages/daemon/src/embedding-health.ts` - Embedding health metrics
+- `packages/daemon/src/session-checkpoints.ts` - Session checkpoint persistence
+- `packages/daemon/src/continuity-state.ts` - Continuity state for compaction boundaries
+- `packages/daemon/src/telemetry.ts` - Telemetry event collection
+- `packages/daemon/src/feature-flags.ts` - Runtime feature flags
+- `packages/daemon/src/update-system.ts` - Update checker singleton
 - `packages/sdk/src/index.ts` - SDK client
 - `packages/connector-claude-code/src/index.ts` - Claude Code connector
+- `packages/connector-codex/src/index.ts` - Codex connector
 - `packages/connector-opencode/src/index.ts` - OpenCode connector
 - `packages/connector-openclaw/src/index.ts` - OpenClaw connector
 - `packages/adapters/openclaw/src/index.ts` - OpenClaw runtime adapter
-- `web/src/index.ts` - Website Worker fetch handler
-- `web/public/index.html` - Landing page (single-file, no build step)
-- `docs/ARCHITECTURE.md` - Full technical documentation (see [[architecture]])
+- `packages/native/` - Native embedding accelerator package
+- `packages/tray/` - Tauri tray application
+- `web/src/pages/` - Astro page routes
+- `docs/` - Full documentation suite (architecture, API, CLI, etc.)
 
 Style & Conventions
 ---
@@ -357,36 +378,96 @@ bun src/cli.ts status    # Check status
 |----------|--------|-------------|
 | `/health` | GET | Health check |
 | `/api/status` | GET | Full daemon status |
+| `/api/features` | GET | Feature flags |
 | `/api/config` | GET/POST | Config files CRUD |
+| `/api/identity` | GET | Identity file read |
 | `/api/memories` | GET | List memories |
 | `/api/memory/remember` | POST | Save a memory |
 | `/api/memory/recall` | POST | Hybrid search |
+| `/api/memory/forget` | POST | Batch forget memories |
+| `/api/memory/modify` | POST | Modify a memory |
+| `/api/memory/search` | GET | Search memories |
+| `/api/memory/:id` | GET/PATCH/DELETE | Get, update, or delete a memory |
+| `/api/memory/:id/history` | GET | Memory version history |
+| `/api/memory/:id/recover` | POST | Recover a deleted memory |
 | `/memory/search` | GET | Legacy keyword search |
+| `/memory/similar` | GET | Vector similarity search |
 | `/api/embeddings` | GET | Export embeddings |
 | `/api/embeddings/status` | GET | Embedding processing status |
+| `/api/embeddings/health` | GET | Embedding health metrics |
 | `/api/embeddings/projection` | GET | UMAP 2D/3D projection (server-side) |
-| `/api/memory/:id/history` | GET | Memory version history |
-| `/api/memory/:id` | PATCH | Update a memory |
 | `/api/skills` | GET | List installed skills |
 | `/api/skills/browse` | GET | Browse available skills |
 | `/api/skills/search` | GET | Search skills |
 | `/api/skills/:name` | GET/DELETE | Get or uninstall a skill |
 | `/api/skills/install` | POST | Install a skill |
 | `/api/secrets` | GET | List secret names |
-| `/api/hooks/*` | POST/GET | Session + synthesis hooks |
+| `/api/secrets/:name` | POST/DELETE | Store or delete a secret |
+| `/api/secrets/exec` | POST | Execute command with multiple secrets as env vars |
+| `/api/hooks/session-start` | POST | Inject context into session |
+| `/api/hooks/user-prompt-submit` | POST | Per-prompt context load |
+| `/api/hooks/session-end` | POST | Extract session memories |
+| `/api/hooks/remember` | POST | Save a memory via hook |
+| `/api/hooks/recall` | POST | Search via hook |
+| `/api/hooks/pre-compaction` | POST | Pre-compaction summary instructions |
+| `/api/hooks/compaction-complete` | POST | Save compaction summary |
+| `/api/hooks/synthesis/config` | GET | Synthesis configuration |
+| `/api/hooks/synthesis` | POST | Request MEMORY.md synthesis |
+| `/api/hooks/synthesis/complete` | POST | Save synthesized MEMORY.md |
 | `/api/harnesses` | GET | List harnesses |
-| `/api/auth/*` | POST/GET | Auth token management |
-| `/api/documents/*` | GET/POST/DELETE | Document ingest and retrieval |
-| `/api/connectors/*` | GET/POST | Connector status and management |
-| `/api/diagnostics/*` | GET | Health scoring and system diagnostics |
-| `/api/repair/*` | POST | Repair actions for broken state |
-| `/api/analytics/*` | GET | Usage analytics and metrics |
-| `/api/timeline/*` | GET | Event timeline |
-| `/api/git/*` | GET/POST | Git sync status and operations |
-| `/api/update/*` | GET/POST | Update check and apply |
-| `/api/logs/*` | GET | Daemon log access |
+| `/api/harnesses/regenerate` | POST | Regenerate harness configs |
+| `/api/auth/whoami` | GET | Current auth identity |
+| `/api/auth/token` | POST | Issue auth token |
+| `/api/documents` | GET/POST | List or enqueue documents |
+| `/api/documents/:id` | GET/DELETE | Get or delete a document |
+| `/api/documents/:id/chunks` | GET | Get document chunks |
+| `/api/connectors` | GET/POST | List or register connectors |
+| `/api/connectors/:id` | GET/DELETE | Get or delete a connector |
+| `/api/connectors/:id/sync` | POST | Trigger incremental sync |
+| `/api/connectors/:id/sync/full` | POST | Trigger full re-sync |
+| `/api/connectors/:id/health` | GET | Connector health |
+| `/api/diagnostics` | GET | Full health report |
+| `/api/diagnostics/:domain` | GET | Per-domain health score |
+| `/api/pipeline/status` | GET | Pipeline status snapshot |
+| `/api/repair/requeue-dead` | POST | Requeue dead-letter jobs |
+| `/api/repair/release-leases` | POST | Release stale job leases |
+| `/api/repair/check-fts` | POST | Check/repair FTS consistency |
+| `/api/repair/retention-sweep` | POST | Trigger retention sweep |
+| `/api/repair/embedding-gaps` | GET | Count unembedded memories |
+| `/api/repair/re-embed` | POST | Batch re-embed missing vectors |
+| `/api/repair/clean-orphans` | POST | Remove orphaned embeddings |
+| `/api/repair/dedup-stats` | GET | Deduplication statistics |
+| `/api/repair/deduplicate` | POST | Deduplicate memories |
+| `/api/checkpoints` | GET | List session checkpoints |
+| `/api/checkpoints/:sessionKey` | GET | Checkpoints for a session |
+| `/api/analytics/usage` | GET | Usage counters |
+| `/api/analytics/errors` | GET | Recent error events |
+| `/api/analytics/latency` | GET | Latency histograms |
+| `/api/analytics/logs` | GET | Structured log entries |
+| `/api/analytics/memory-safety` | GET | Mutation diagnostics |
+| `/api/analytics/continuity` | GET | Session continuity scores over time |
+| `/api/analytics/continuity/latest` | GET | Latest continuity score per project |
+| `/api/telemetry/events` | GET | Query telemetry events |
+| `/api/telemetry/stats` | GET | Aggregated telemetry statistics |
+| `/api/telemetry/export` | GET | Export telemetry as NDJSON |
+| `/api/timeline/:id` | GET | Entity event timeline |
+| `/api/timeline/:id/export` | GET | Export timeline with metadata |
+| `/api/git/status` | GET | Git sync status |
+| `/api/git/pull` | POST | Pull from remote |
+| `/api/git/push` | POST | Push to remote |
+| `/api/git/sync` | POST | Pull then push |
+| `/api/git/config` | GET/POST | Git sync configuration |
+| `/api/update/check` | GET | Check for updates |
+| `/api/update/config` | GET/POST | Update configuration |
+| `/api/update/run` | POST | Apply pending update |
+| `/api/tasks` | GET/POST | List/create scheduled tasks |
+| `/api/tasks/:id` | GET/PATCH/DELETE | Get/update/delete task |
+| `/api/tasks/:id/run` | POST | Trigger immediate run |
+| `/api/tasks/:id/runs` | GET | Paginated run history |
+| `/api/tasks/:id/stream` | GET | SSE stream of task output |
+| `/api/logs` | GET | Daemon log access |
 | `/api/logs/stream` | GET | SSE log streaming |
-| `/api/identity` | GET/POST | Identity file read/write |
+| `/mcp` | ALL | MCP server (Streamable HTTP, memory + secret tools) |
 
 
 ## Identity Files

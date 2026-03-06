@@ -693,7 +693,11 @@ All agent data lives at `~/.agents/`:
 ```
 
 The daemon binds to localhost only. All data stays local by design.
-There is no telemetry.
+Telemetry is optional and local. It is disabled by default unless
+explicitly configured in `agent.yaml` (`telemetryEnabled: true`). No
+data is sent outbound. The daemon exposes local telemetry endpoints at
+`/api/telemetry/events`, `/api/telemetry/stats`, and
+`/api/telemetry/export` for querying and exporting local event data.
 
 ---
 

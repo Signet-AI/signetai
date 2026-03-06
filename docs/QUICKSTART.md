@@ -75,6 +75,7 @@ for each:
 - Claude Code — hooks + CLAUDE.md sync
 - OpenCode — plugin + AGENTS.md sync
 - OpenClaw — adapter-openclaw hooks
+- Codex — wrapper install + session hooks
 - Cursor (planned)
 - Windsurf (planned)
 
@@ -137,7 +138,7 @@ If you selected Claude Code:
 
 If you selected OpenCode:
 - `~/.config/opencode/AGENTS.md` — auto-synced
-- `~/.config/opencode/memory.mjs` — plugin with remember/recall tools
+- `~/.config/opencode/plugins/signet.mjs` — bundled plugin with remember/recall tools
 
 ---
 

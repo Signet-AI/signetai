@@ -46,10 +46,17 @@ packages/
 ├── connector-claude-code/ # @signet/connector-claude-code — Claude Code integration
 ├── connector-opencode/    # @signet/connector-opencode — OpenCode integration
 ├── connector-openclaw/    # @signet/connector-openclaw — OpenClaw integration
-├── adapters/openclaw/     # @signetai/adapter-openclaw — OpenClaw runtime plugin
+├── connector-codex/       # @signet/connector-codex — Codex wrapper + session hooks
+├── opencode-plugin/       # @signet/opencode-plugin — OpenCode runtime plugin (bundled)
+├── adapters/openclaw/     # @signetai/signet-memory-openclaw — OpenClaw runtime adapter
+├── native/                # @signet/native — native embedding accelerators (Rust)
+├── tray/                  # @signet/tray — Tauri system tray application
+├── extension/             # @signet/extension — browser extension (popup, highlight-to-remember)
 ├── signetai/              # signetai — meta-package bundling CLI + daemon
-└── web/                   # @signet/web — marketing site (Cloudflare Worker)
+└── web/                   # @signet/web — marketing site (Cloudflare Pages)
 ```
+
+> Note: `predictor/` is a Rust sidecar (predictive memory scorer, WIP) at the monorepo root.
 
 Key Modules
 ---

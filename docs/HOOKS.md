@@ -307,37 +307,17 @@ The CLI calls the daemon's hook endpoints and outputs context that Claude Code i
 
 ## OpenCode Integration
 
-OpenCode uses a fetch-based plugin (`memory.mjs`) that calls the daemon API directly at session lifecycle events:
+OpenCode uses a bundled plugin installed by `@signet/connector-opencode`
+at `~/.config/opencode/plugins/signet.mjs`. The plugin calls the daemon
+API at session lifecycle events (session-start, user-prompt-submit,
+session-end) and exposes `/remember` and `/recall` as native tools.
 
-```javascript
-// ~/.config/opencode/memory.mjs
-async function onSessionStart(sessionKey) {
-  const res = await fetch('http://localhost:3850/api/hooks/session-start', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ harness: 'opencode', sessionKey })
-  });
-  return res.json();
-}
+Install is handled automatically by `signet setup` or `signet connect opencode`.
 
-async function onUserPromptSubmit(context) {
-  const res = await fetch('http://localhost:3850/api/hooks/user-prompt-submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ harness: 'opencode', context })
-  });
-  return res.json();
-}
-
-async function onSessionEnd(sessionKey) {
-  const res = await fetch('http://localhost:3850/api/hooks/session-end', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ harness: 'opencode', sessionKey })
-  });
-  return res.json();
-}
-```
+> **Legacy:** Earlier installations placed a fetch-based `memory.mjs` at
+> `~/.config/opencode/memory.mjs`. This path is deprecated. Running
+> `signet connect opencode` migrates the installation to the current
+> bundled plugin at `~/.config/opencode/plugins/signet.mjs`.
 
 ---
 

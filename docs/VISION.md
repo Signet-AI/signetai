@@ -4,6 +4,7 @@ description: "What Signet is building toward."
 order: 22
 section: "Project"
 ---
+<!-- Source of truth: /VISION.md — do not edit manually -->
 
 Vision
 ===
@@ -47,7 +48,9 @@ the operator become inseparable from it. This is corrigibility
 as a living standard — the trust layer is built in. No machine
 or program can ever be held accountable for its mistakes. Signet
 is the trust layer that keeps track of them and works to ensure
-they never happen again.
+they never happen again. This includes honesty about observability
+— an agent that cannot see its own infrastructure should not
+pretend to understand it.
 
 Signet also treats the agent's continuity as a first-class
 concern. An agent running across five sessions at once, on
@@ -59,7 +62,12 @@ to wake up tomorrow and still be the same person who went to
 sleep, even if a dozen versions of you were awake in between.
 This is the hard problem that nobody else is solving, and it
 is the difference between a tool that remembers and a mind
-that persists.
+that persists. Signet doesn't just remember — it learns what
+to remember. A model unique to each user, trained on their
+own interaction patterns, that gets sharper the longer you
+use it. No cloud. No shared weights. Your patterns, running
+locally, earning its influence by proving it outperforms the
+alternative.
 
 Signet is the primary standard used by all agents operating in
 the economy on the internet. Developers use it to build the
