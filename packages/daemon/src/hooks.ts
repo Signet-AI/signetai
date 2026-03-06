@@ -1771,8 +1771,16 @@ interface RecallQueryShape {
 }
 
 function extractSubstantiveWords(text: string): string[] {
-	return stripUntrustedMetadata(text)
-		.replace(/<@!?\d+>/g, "") // strip Discord mention tags
+	const cleaned = stripUntrustedMetadata(text)
+		.replace(/<@!?\d+>/g, ""); // strip Discord mention tags
+
+	// Preserve hyphenated identifiers (e.g., "KA-6", "pre-compaction")
+	const hyphenated = (
+		cleaned.match(/[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/g) || []
+	).map((t) => t.toLowerCase());
+
+	// Standard word extraction
+	const words = cleaned
 		.toLowerCase()
 		.split(/\W+/)
 		.filter(
@@ -1781,6 +1789,17 @@ function extractSubstantiveWords(text: string): string[] {
 				!RECALL_STOPWORDS.has(word) &&
 				!/^\d+$/.test(word),
 		);
+
+	// Deduplicate: hyphenated first (more specific), then words
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const term of [...hyphenated, ...words]) {
+		if (!seen.has(term)) {
+			seen.add(term);
+			result.push(term);
+		}
+	}
+	return result;
 }
 
 function buildRecallQueryShape(
@@ -1800,10 +1819,14 @@ function buildRecallQueryShape(
 		? extractSubstantiveWords(cleanedAssistant)
 		: [];
 
-	// User terms get priority — assistant fills remaining budget only
+	// User terms get priority — assistant capped proportionally
 	const seen = new Set(userTerms);
 	const supplemental = assistantTerms.filter((t) => !seen.has(t));
-	const keywordTerms = [...userTerms, ...supplemental].slice(0, 12);
+	const maxSupplemental = Math.max(2, userTerms.length);
+	const keywordTerms = [
+		...userTerms,
+		...supplemental.slice(0, maxSupplemental),
+	].slice(0, 12);
 
 	const vectorQuery = stripUntrustedMetadata(userPrompt).trim().slice(0, 200);
 	return { keywordTerms, vectorQuery };
@@ -1890,7 +1913,7 @@ export async function handleUserPromptSubmit(
 	}
 
 	if (
-		keywordTerms.length < 2 ||
+		keywordTerms.length < 1 ||
 		vectorQuery.length === 0 ||
 		!existsSync(MEMORY_DB)
 	) {
