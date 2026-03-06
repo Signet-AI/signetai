@@ -247,6 +247,7 @@ export interface PipelineV2Config {
 	readonly synthesis: PipelineSynthesisConfig;
 	readonly procedural: PipelineProceduralConfig;
 	readonly structural: PipelineStructuralConfig;
+	readonly feedback: PipelineFeedbackConfig;
 }
 
 export interface PipelineEmbeddingTrackerConfig {
@@ -279,6 +280,17 @@ export interface PipelineStructuralConfig {
 	readonly classifyBatchSize: number;
 	readonly dependencyBatchSize: number;
 	readonly pollIntervalMs: number;
+}
+
+export interface PipelineFeedbackConfig {
+	readonly enabled: boolean;
+	readonly ftsWeightDelta: number;
+	readonly maxAspectWeight: number;
+	readonly minAspectWeight: number;
+	readonly decayEnabled: boolean;
+	readonly decayRate: number;
+	readonly staleDays: number;
+	readonly decayIntervalSessions: number;
 }
 
 // -- Status/union constants --
@@ -467,6 +479,8 @@ export interface Entity {
 	agentId: string;
 	description?: string;
 	mentions?: number;
+	pinned?: boolean;
+	pinnedAt?: string | null;
 	createdAt: string;
 	updatedAt: string;
 }

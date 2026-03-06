@@ -44,6 +44,8 @@ function rowToEntity(r: Record<string, unknown>): Entity {
 		description:
 			typeof r.description === "string" ? r.description : undefined,
 		mentions: typeof r.mentions === "number" ? r.mentions : undefined,
+		pinned: r.pinned === 1,
+		pinnedAt: typeof r.pinned_at === "string" ? r.pinned_at : null,
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -437,6 +439,75 @@ export function deleteDependency(accessor: DbAccessor, id: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Entity pinning
+// ---------------------------------------------------------------------------
+
+export function pinEntity(
+	accessor: DbAccessor,
+	entityId: string,
+	agentId: string,
+): void {
+	const ts = now();
+	accessor.withWriteTx((db) => {
+		db.prepare(
+			`UPDATE entities
+			 SET pinned = 1, pinned_at = ?, updated_at = ?
+			 WHERE id = ? AND agent_id = ?`,
+		).run(ts, ts, entityId, agentId);
+	});
+}
+
+export function unpinEntity(
+	accessor: DbAccessor,
+	entityId: string,
+	agentId: string,
+): void {
+	const ts = now();
+	accessor.withWriteTx((db) => {
+		db.prepare(
+			`UPDATE entities
+			 SET pinned = 0, pinned_at = NULL, updated_at = ?
+			 WHERE id = ? AND agent_id = ?`,
+		).run(ts, entityId, agentId);
+	});
+}
+
+export function getPinnedEntities(
+	accessor: DbAccessor,
+	agentId: string,
+): ReadonlyArray<PinnedEntitySummary> {
+	return accessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT id, name, pinned_at
+				 FROM entities
+				 WHERE agent_id = ?
+				   AND pinned = 1
+				 ORDER BY pinned_at DESC, updated_at DESC, name ASC`,
+			)
+			.all(agentId) as Array<Record<string, unknown>>;
+		return rows.flatMap((row) => {
+			if (
+				typeof row.id !== "string" ||
+				typeof row.name !== "string"
+			) {
+				return [];
+			}
+			return [
+				{
+					id: row.id,
+					name: row.name,
+					pinnedAt:
+						typeof row.pinned_at === "string"
+							? row.pinned_at
+							: "",
+				},
+			];
+		});
+	});
+}
+
+// ---------------------------------------------------------------------------
 // Task meta
 // ---------------------------------------------------------------------------
 
@@ -585,6 +656,25 @@ export interface KnowledgeStats {
 	readonly dependencyCount: number;
 	readonly unassignedMemoryCount: number;
 	readonly coveragePercent: number;
+	readonly feedbackUpdatedAspectCount: number;
+	readonly averageAspectWeight: number;
+	readonly maxWeightAspectCount: number;
+	readonly minWeightAspectCount: number;
+}
+
+export interface PinnedEntitySummary {
+	readonly id: string;
+	readonly name: string;
+	readonly pinnedAt: string;
+}
+
+export interface EntityHealth {
+	readonly entityId: string;
+	readonly entityName: string;
+	readonly comparisonCount: number;
+	readonly winRate: number;
+	readonly avgMargin: number;
+	readonly trend: "improving" | "stable" | "declining";
 }
 
 export function listKnowledgeEntities(
@@ -631,7 +721,7 @@ export function listKnowledgeEntities(
 				  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
 				 WHERE ${conditions.join(" AND ")}
 				 GROUP BY e.id
-				 ORDER BY e.mentions DESC, e.updated_at DESC, e.name ASC
+				 ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC
 				 LIMIT ? OFFSET ?`,
 			)
 			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
@@ -886,6 +976,26 @@ export function getKnowledgeStats(
 				   AND memory_id IS NOT NULL`,
 			)
 			.get(agentId) as { n: number };
+		const feedbackStats = db
+			.prepare(
+				`SELECT
+					COUNT(*) AS aspect_count,
+					COALESCE(AVG(weight), 0) AS avg_weight,
+					COUNT(CASE WHEN weight >= 1.0 THEN 1 END) AS max_weight_count,
+					COUNT(CASE WHEN weight <= 0.1 THEN 1 END) AS min_weight_count,
+					COUNT(CASE
+						WHEN updated_at >= datetime('now', '-7 days') THEN 1
+					END) AS updated_last_7_days
+				 FROM entity_aspects
+				 WHERE agent_id = ?`,
+			)
+			.get(agentId) as {
+			aspect_count: number;
+			avg_weight: number;
+			max_weight_count: number;
+			min_weight_count: number;
+			updated_last_7_days: number;
+		};
 
 		const coveragePercent =
 			scopedMemoryRows.n > 0
@@ -903,7 +1013,152 @@ export function getKnowledgeStats(
 				0,
 			),
 			coveragePercent,
+			feedbackUpdatedAspectCount: Number(
+				feedbackStats.updated_last_7_days ?? 0,
+			),
+			averageAspectWeight:
+				Math.round(Number(feedbackStats.avg_weight ?? 0) * 1000) / 1000,
+			maxWeightAspectCount: Number(feedbackStats.max_weight_count ?? 0),
+			minWeightAspectCount: Number(feedbackStats.min_weight_count ?? 0),
 		};
+	});
+}
+
+export function getEntityHealth(
+	accessor: DbAccessor,
+	agentId: string,
+	since?: string,
+	minComparisons = 3,
+): ReadonlyArray<EntityHealth> {
+	return accessor.withReadDb((db) => {
+		const args: Array<string | number> = [agentId];
+		const sinceClause =
+			typeof since === "string" && since.length > 0
+				? " AND created_at >= ?"
+				: "";
+		if (sinceClause) {
+			args.push(since);
+		}
+
+		const rows = db
+			.prepare(
+				`SELECT
+					focal_entity_id,
+					COALESCE(focal_entity_name, '') AS focal_entity_name,
+					predictor_won,
+					margin,
+					created_at
+				 FROM predictor_comparisons
+				 WHERE agent_id = ?
+				   AND focal_entity_id IS NOT NULL
+				   ${sinceClause}
+				 ORDER BY focal_entity_id ASC, created_at ASC`,
+			)
+			.all(...args) as Array<Record<string, unknown>>;
+
+		const grouped = new Map<
+			string,
+			Array<{
+				readonly entityName: string;
+				readonly predictorWon: number;
+				readonly margin: number;
+			}>
+		>();
+		for (const row of rows) {
+			if (typeof row.focal_entity_id !== "string") continue;
+			const bucket = grouped.get(row.focal_entity_id) ?? [];
+			bucket.push({
+				entityName:
+					typeof row.focal_entity_name === "string" &&
+					row.focal_entity_name.length > 0
+						? row.focal_entity_name
+						: row.focal_entity_id,
+				predictorWon: Number(row.predictor_won ?? 0),
+				margin: Number(row.margin ?? 0),
+			});
+			grouped.set(row.focal_entity_id, bucket);
+		}
+
+		const health: EntityHealth[] = [];
+		for (const [entityId, comparisons] of grouped) {
+			if (comparisons.length < minComparisons) continue;
+
+			const wins = comparisons.reduce(
+				(total, row) => total + (row.predictorWon > 0 ? 1 : 0),
+				0,
+			);
+			const avgMargin =
+				comparisons.reduce((total, row) => total + row.margin, 0) /
+				comparisons.length;
+			const midpoint = Math.max(1, Math.floor(comparisons.length / 2));
+			const firstHalf = comparisons.slice(0, midpoint);
+			const secondHalf = comparisons.slice(midpoint);
+			const firstHalfRate =
+				firstHalf.reduce(
+					(total, row) => total + (row.predictorWon > 0 ? 1 : 0),
+					0,
+				) / firstHalf.length;
+			const secondHalfRate =
+				secondHalf.length > 0
+					? secondHalf.reduce(
+							(total, row) => total + (row.predictorWon > 0 ? 1 : 0),
+							0,
+						) / secondHalf.length
+					: firstHalfRate;
+			const rateDelta = secondHalfRate - firstHalfRate;
+			health.push({
+				entityId,
+				entityName: comparisons[0]?.entityName ?? entityId,
+				comparisonCount: comparisons.length,
+				winRate: wins / comparisons.length,
+				avgMargin,
+				trend:
+					rateDelta > 0.1
+						? "improving"
+						: rateDelta < -0.1
+							? "declining"
+							: "stable",
+			});
+		}
+
+		health.sort((a, b) => {
+			if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+			return b.comparisonCount - a.comparisonCount;
+		});
+		return health;
+	});
+}
+
+export function propagateMemoryStatus(
+	accessor: DbAccessor,
+	agentId: string,
+): number {
+	return accessor.withWriteTx((db) => {
+		const stale = db
+			.prepare(
+				`SELECT id
+				 FROM entity_attributes
+				 WHERE agent_id = ?
+				   AND status = 'active'
+				   AND memory_id IS NOT NULL
+				   AND memory_id NOT IN (
+				     SELECT id FROM memories WHERE is_deleted = 0
+				   )`,
+			)
+			.all(agentId) as Array<Record<string, unknown>>;
+		if (stale.length === 0) return 0;
+
+		const ids = stale
+			.flatMap((row) => (typeof row.id === "string" ? [row.id] : []));
+		if (ids.length === 0) return 0;
+
+		const placeholders = ids.map(() => "?").join(", ");
+		db.prepare(
+			`UPDATE entity_attributes
+			 SET status = 'superseded', updated_at = ?
+			 WHERE id IN (${placeholders})`,
+		).run(now(), ...ids);
+		return ids.length;
 	});
 }
 

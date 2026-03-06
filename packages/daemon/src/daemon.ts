@@ -81,9 +81,13 @@ import {
 	getAttributesForAspectFiltered,
 	getEntityAspectsWithCounts,
 	getEntityDependenciesDetailed,
+	getEntityHealth,
+	getPinnedEntities,
 	getKnowledgeEntityDetail,
 	getKnowledgeStats,
+	pinEntity,
 	listKnowledgeEntities,
+	unpinEntity,
 } from "./knowledge-graph";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
@@ -101,6 +105,7 @@ import {
 } from "./pipeline";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import { getTraversalStatus } from "./pipeline/graph-traversal";
+import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import {
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -5423,6 +5428,7 @@ app.get("/api/pipeline/status", (c) => {
 		latency: analyticsCollector.getLatency(),
 		errorSummary: analyticsCollector.getErrorSummary(),
 		mode,
+		feedback: getFeedbackTelemetry(),
 		traversal: {
 			enabled:
 				pipelineV2.graph.enabled &&
@@ -5632,6 +5638,49 @@ app.get("/api/knowledge/entities", (c) => {
 		limit,
 		offset,
 	});
+});
+
+app.post("/api/knowledge/entities/:id/pin", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	pinEntity(getDbAccessor(), c.req.param("id"), agentId);
+	const entity = getKnowledgeEntityDetail(
+		getDbAccessor(),
+		c.req.param("id"),
+		agentId,
+	);
+	if (!entity?.entity.pinnedAt) {
+		return c.json({ error: "Entity not found" }, 404);
+	}
+	return c.json({ pinned: true, pinnedAt: entity.entity.pinnedAt });
+});
+
+app.delete("/api/knowledge/entities/:id/pin", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	unpinEntity(getDbAccessor(), c.req.param("id"), agentId);
+	return c.json({ pinned: false });
+});
+
+app.get("/api/knowledge/entities/pinned", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	return c.json(getPinnedEntities(getDbAccessor(), agentId));
+});
+
+app.get("/api/knowledge/entities/health", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const minComparisonsParam = Number.parseInt(
+		c.req.query("min_comparisons") ?? "3",
+		10,
+	);
+	return c.json(
+		getEntityHealth(
+			getDbAccessor(),
+			agentId,
+			c.req.query("since") ?? undefined,
+			Number.isFinite(minComparisonsParam)
+				? Math.max(minComparisonsParam, 1)
+				: 3,
+		),
+	);
 });
 
 app.get("/api/knowledge/entities/:id", (c) => {

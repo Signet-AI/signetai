@@ -12,6 +12,7 @@ import type { DbAccessor } from "../db-accessor";
 import type { PipelineV2Config } from "../memory-config";
 import type { ProviderTracker, DiagnosticsReport } from "../diagnostics";
 import { getDiagnostics } from "../diagnostics";
+import { propagateMemoryStatus } from "../knowledge-graph";
 import {
 	createRateLimiter,
 	requeueDeadJobs,
@@ -24,6 +25,7 @@ import {
 	type RepairResult,
 } from "../repair-actions";
 import { logger } from "../logger";
+import { decayAspectWeights, recordFeedbackTelemetry } from "./aspect-feedback";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +42,8 @@ export interface MaintenanceCycleResult {
 	readonly report: DiagnosticsReport;
 	readonly recommendations: readonly RepairRecommendation[];
 	readonly executed: readonly RepairResult[];
+	readonly feedbackDecayedAspects: number;
+	readonly feedbackPropagatedAttributes: number;
 }
 
 export interface RepairRecommendation {
@@ -100,6 +104,26 @@ function buildRecommendations(
 	}
 
 	return recs;
+}
+
+function getGraphAgentIds(accessor: DbAccessor): readonly string[] {
+	return accessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT agent_id FROM entity_aspects
+				 UNION
+				 SELECT agent_id FROM entity_attributes
+				 UNION
+				 SELECT agent_id FROM entities`,
+			)
+			.all() as Array<Record<string, unknown>>;
+		const ids = rows.flatMap((row) =>
+			typeof row.agent_id === "string" && row.agent_id.length > 0
+				? [row.agent_id]
+				: [],
+		);
+		return ids.length > 0 ? ids : ["default"];
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -215,10 +239,37 @@ export function startMaintenanceWorker(
 
 		const recommendations = buildRecommendations(report);
 		const executed: RepairResult[] = [];
+		let feedbackDecayedAspects = 0;
+		let feedbackPropagatedAttributes = 0;
 
 		if (recommendations.length === 0) {
 			haltTracker.reset();
-			return { report, recommendations, executed };
+			if (cfg.graph.enabled && cfg.feedback.enabled) {
+				for (const agentId of getGraphAgentIds(accessor)) {
+					if (cfg.feedback.decayEnabled) {
+						feedbackDecayedAspects += decayAspectWeights(accessor, agentId, {
+							decayRate: cfg.feedback.decayRate,
+							minWeight: cfg.feedback.minAspectWeight,
+							staleDays: cfg.feedback.staleDays,
+						});
+					}
+					feedbackPropagatedAttributes += propagateMemoryStatus(
+						accessor,
+						agentId,
+					);
+				}
+				recordFeedbackTelemetry({
+					feedbackDecayedAspects,
+					feedbackPropagatedAttributes,
+				});
+			}
+			return {
+				report,
+				recommendations,
+				executed,
+				feedbackDecayedAspects,
+				feedbackPropagatedAttributes,
+			};
 		}
 
 		if (cfg.autonomous.maintenanceMode === "observe") {
@@ -226,7 +277,13 @@ export function startMaintenanceWorker(
 				composite: report.composite.score.toFixed(2),
 				recommendations: recommendations.map((r) => r.action),
 			});
-			return { report, recommendations, executed };
+			return {
+				report,
+				recommendations,
+				executed,
+				feedbackDecayedAspects,
+				feedbackPropagatedAttributes,
+			};
 		}
 
 		// Execute mode
@@ -271,7 +328,33 @@ export function startMaintenanceWorker(
 			});
 		}
 
-		return { report, recommendations, executed };
+		if (cfg.graph.enabled && cfg.feedback.enabled) {
+			for (const agentId of getGraphAgentIds(accessor)) {
+				if (cfg.feedback.decayEnabled) {
+					feedbackDecayedAspects += decayAspectWeights(accessor, agentId, {
+						decayRate: cfg.feedback.decayRate,
+						minWeight: cfg.feedback.minAspectWeight,
+						staleDays: cfg.feedback.staleDays,
+					});
+				}
+				feedbackPropagatedAttributes += propagateMemoryStatus(
+					accessor,
+					agentId,
+				);
+			}
+			recordFeedbackTelemetry({
+				feedbackDecayedAspects,
+				feedbackPropagatedAttributes,
+			});
+		}
+
+		return {
+			report,
+			recommendations,
+			executed,
+			feedbackDecayedAspects,
+			feedbackPropagatedAttributes,
+		};
 	}
 
 	// Only start the interval if autonomous maintenance is allowed

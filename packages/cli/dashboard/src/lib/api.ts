@@ -1818,6 +1818,13 @@ export interface PipelineStatus {
 	latency: Record<string, unknown>;
 	errorSummary: Record<string, number>;
 	mode: string;
+	feedback?: {
+		lastRunAt: string | null;
+		feedbackAspectsUpdated: number;
+		feedbackFtsConfirmations: number;
+		feedbackDecayedAspects: number;
+		feedbackPropagatedAttributes: number;
+	};
 }
 
 export async function getPipelineStatus(): Promise<PipelineStatus | null> {
@@ -1838,6 +1845,8 @@ export interface KnowledgeEntityListItem {
 		entityType: string;
 		description?: string;
 		mentions?: number;
+		pinned?: boolean;
+		pinnedAt?: string | null;
 		createdAt: string;
 		updatedAt: string;
 	};
@@ -1911,6 +1920,10 @@ export interface KnowledgeStats {
 	dependencyCount: number;
 	unassignedMemoryCount: number;
 	coveragePercent: number;
+	feedbackUpdatedAspectCount: number;
+	averageAspectWeight: number;
+	maxWeightAspectCount: number;
+	minWeightAspectCount: number;
 }
 
 export interface TraversalStatusSnapshot {
@@ -1954,6 +1967,21 @@ export interface PredictorTrainingRun {
 	canaryScoreVariance: number | null;
 	canaryTopkChurn: number | null;
 	createdAt: string;
+}
+
+export interface PinnedEntity {
+	id: string;
+	name: string;
+	pinnedAt: string;
+}
+
+export interface EntityHealth {
+	entityId: string;
+	entityName: string;
+	comparisonCount: number;
+	winRate: number;
+	avgMargin: number;
+	trend: "improving" | "stable" | "declining";
 }
 
 export async function getKnowledgeEntities(filters: {
@@ -2070,6 +2098,75 @@ export async function getKnowledgeTraversalStatus(): Promise<TraversalStatusSnap
 		return data.status ?? null;
 	} catch {
 		return null;
+	}
+}
+
+export async function getPinnedKnowledgeEntities(
+	agentId = "default",
+): Promise<PinnedEntity[]> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/pinned?agent_id=${encodeURIComponent(agentId)}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch pinned entities");
+		return await res.json();
+	} catch {
+		return [];
+	}
+}
+
+export async function pinKnowledgeEntity(
+	id: string,
+	agentId = "default",
+): Promise<{ pinned: true; pinnedAt: string } | null> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(id)}/pin?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "POST" },
+		);
+		if (!res.ok) return null;
+		return await res.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function unpinKnowledgeEntity(
+	id: string,
+	agentId = "default",
+): Promise<boolean> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(id)}/pin?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "DELETE" },
+		);
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
+export async function getKnowledgeEntityHealth(
+	filters: {
+		agentId?: string;
+		since?: string;
+		minComparisons?: number;
+	} = {},
+): Promise<EntityHealth[]> {
+	try {
+		const params = new URLSearchParams();
+		if (filters.agentId) params.set("agent_id", filters.agentId);
+		if (filters.since) params.set("since", filters.since);
+		if (typeof filters.minComparisons === "number") {
+			params.set("min_comparisons", String(filters.minComparisons));
+		}
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/health?${params.toString()}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch entity health");
+		return await res.json();
+	} catch {
+		return [];
 	}
 }
 

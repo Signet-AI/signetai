@@ -32,7 +32,7 @@ describe("migration framework", () => {
 			version: number;
 			applied_at: string;
 		}>;
-		expect(migrations.length).toBe(20);
+		expect(migrations.length).toBe(22);
 		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
@@ -52,7 +52,7 @@ describe("migration framework", () => {
 		expect(migrations[16].version).toBe(17);
 		expect(migrations[17].version).toBe(18);
 		expect(migrations[18].version).toBe(19);
-		expect(migrations[19].version).toBe(20);
+		expect(migrations[21].version).toBe(22);
 	});
 
 	test("re-running migrations is idempotent", () => {
@@ -171,7 +171,7 @@ describe("migration framework", () => {
 			version: number;
 			applied_at: string;
 		}>;
-		expect(audits.length).toBe(20);
+		expect(audits.length).toBe(22);
 		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}
@@ -202,6 +202,18 @@ describe("migration framework", () => {
 		expect(colNames).toContain("aspect_slot");
 		expect(colNames).toContain("is_constraint");
 		expect(colNames).toContain("structural_density");
+	});
+
+	test("entities table has pinning columns after migration 022", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(entities)").all() as Array<{
+			name: string;
+		}>;
+		const colNames = cols.map((c) => c.name);
+		expect(colNames).toContain("pinned");
+		expect(colNames).toContain("pinned_at");
 	});
 
 	test("unique partial index on content_hash rejects duplicates", () => {
@@ -379,7 +391,7 @@ describe("migration framework", () => {
 		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 		}>;
-		expect(migrations.length).toBe(20);
+		expect(migrations.length).toBe(22);
 	});
 
 	test("version 1 stamped by old inline migrate upgrades cleanly", () => {
@@ -420,7 +432,7 @@ describe("migration framework", () => {
 		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 		}>;
-		expect(migrations.length).toBe(20);
+		expect(migrations.length).toBe(22);
 	});
 
 	test("DB with existing v1 schema only gets v2 migration", () => {

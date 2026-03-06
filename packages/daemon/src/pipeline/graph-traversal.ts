@@ -33,6 +33,7 @@ export interface TraversalConfig {
 export interface FocalEntityResult {
 	readonly entityIds: string[];
 	readonly entityNames: string[];
+	readonly pinnedEntityIds: string[];
 	readonly source: "project" | "checkpoint" | "query" | "session_key";
 }
 
@@ -87,6 +88,18 @@ function getEntityNames(db: ReadDb, ids: ReadonlyArray<string>): string[] {
 		const name = nameById.get(id);
 		return typeof name === "string" && name.length > 0 ? [name] : [];
 	});
+}
+
+function getPinnedEntityIds(db: ReadDb, agentId: string): string[] {
+	const rows = db
+		.prepare(
+			`SELECT id FROM entities
+			 WHERE agent_id = ?
+			   AND pinned = 1
+			 ORDER BY pinned_at DESC, updated_at DESC`,
+		)
+		.all(agentId) as Array<{ id: string }>;
+	return sanitizeEntityIds(rows.map((row) => row.id));
 }
 
 function extractProjectTokens(projectPath: string): string[] {
@@ -194,51 +207,67 @@ export function resolveFocalEntities(
 ): FocalEntityResult {
 	try {
 		if (!hasTraversalTables(db)) {
-			return { entityIds: [], entityNames: [], source: "query" };
-		}
-
-		if (signals.checkpointEntityIds && signals.checkpointEntityIds.length > 0) {
-			const entityIds = sanitizeEntityIds(signals.checkpointEntityIds);
 			return {
-				entityIds,
-				entityNames: getEntityNames(db, entityIds),
-				source: "checkpoint",
+				entityIds: [],
+				entityNames: [],
+				pinnedEntityIds: [],
+				source: "query",
 			};
 		}
 
-		if (signals.project) {
+		const pinnedEntityIds = getPinnedEntityIds(db, agentId);
+		let resolvedEntityIds: string[] = [];
+		let source: FocalEntityResult["source"] = signals.project
+			? "project"
+			: "query";
+
+		if (signals.checkpointEntityIds && signals.checkpointEntityIds.length > 0) {
+			resolvedEntityIds = sanitizeEntityIds(signals.checkpointEntityIds);
+			source = "checkpoint";
+		} else if (signals.project) {
 			const projectIds = resolveByProject(db, agentId, signals.project);
 			if (projectIds.length > 0) {
-				return {
-					entityIds: projectIds,
-					entityNames: getEntityNames(db, projectIds),
-					source: "project",
-				};
+				resolvedEntityIds = projectIds;
+				source = "project";
 			}
 		}
 
-		if (signals.queryTokens && signals.queryTokens.length > 0) {
+		if (
+			resolvedEntityIds.length === 0 &&
+			signals.queryTokens &&
+			signals.queryTokens.length > 0
+		) {
 			const queryIds = resolveByQueryTokens(db, agentId, signals.queryTokens);
 			if (queryIds.length > 0) {
-				return {
-					entityIds: queryIds,
-					entityNames: getEntityNames(db, queryIds),
-					source: "query",
-				};
+				resolvedEntityIds = queryIds;
+				source = "query";
 			}
 		}
 
-		if (signals.sessionKey) {
-			return { entityIds: [], entityNames: [], source: "session_key" };
+		if (
+			resolvedEntityIds.length === 0 &&
+			signals.sessionKey
+		) {
+			source = "session_key";
 		}
 
+		const entityIds = sanitizeEntityIds([
+			...pinnedEntityIds,
+			...resolvedEntityIds,
+		]);
+		return {
+			entityIds,
+			entityNames: getEntityNames(db, entityIds),
+			pinnedEntityIds,
+			source,
+		};
+	} catch {
 		return {
 			entityIds: [],
 			entityNames: [],
-			source: signals.project ? "project" : "query",
+			pinnedEntityIds: [],
+			source: "query",
 		};
-	} catch {
-		return { entityIds: [], entityNames: [], source: "query" };
 	}
 }
 

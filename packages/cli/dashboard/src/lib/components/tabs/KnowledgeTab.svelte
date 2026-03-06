@@ -11,6 +11,7 @@ import {
 	type KnowledgeEntityDetail,
 	type KnowledgeEntityListItem,
 	type KnowledgeStats,
+	type EntityHealth,
 	type PredictorEntitySlice,
 	type PredictorProjectSlice,
 	type PredictorTrainingRun,
@@ -20,11 +21,14 @@ import {
 	getKnowledgeAttributes,
 	getKnowledgeDependencies,
 	getKnowledgeEntities,
+	getKnowledgeEntityHealth,
 	getKnowledgeEntity,
 	getKnowledgeStats,
 	getKnowledgeTraversalStatus,
+	pinKnowledgeEntity,
 	getPredictorEntitySlices,
 	getPredictorProjectSlices,
+	unpinKnowledgeEntity,
 } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -37,6 +41,7 @@ import * as Table from "$lib/components/ui/table/index.js";
 import { Calendar } from "$lib/components/ui/calendar/index.js";
 import CalendarIcon from "@lucide/svelte/icons/calendar";
 import Network from "@lucide/svelte/icons/network";
+import Pin from "@lucide/svelte/icons/pin";
 import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 
 const ENTITY_TYPES = [
@@ -63,6 +68,8 @@ let traversal = $state<TraversalStatusSnapshot | null>(null);
 let predictorByEntity = $state<PredictorEntitySlice[]>([]);
 let predictorByProject = $state<PredictorProjectSlice[]>([]);
 let trainingRuns = $state<PredictorTrainingRun[]>([]);
+let entityHealth = $state<EntityHealth[]>([]);
+let pinBusyEntityId = $state<string | null>(null);
 
 let selectedEntityId = $state<string | null>(null);
 let selectedAspectId = $state<string | null>(null);
@@ -108,6 +115,22 @@ function formatDuration(ms: number): string {
 	const minutes = Math.floor(ms / 60_000);
 	const seconds = Math.round((ms % 60_000) / 1000);
 	return `${minutes}m ${seconds}s`;
+}
+
+function healthForEntity(entityId: string): EntityHealth | null {
+	return entityHealth.find((item) => item.entityId === entityId) ?? null;
+}
+
+function healthToneClass(entityId: string): string {
+	const health = healthForEntity(entityId);
+	if (!health) return "bg-[var(--sig-border-strong)]";
+	if (health.trend === "declining" || health.winRate < 0.4) {
+		return "bg-[var(--sig-warning)]";
+	}
+	if (health.trend === "improving" || health.winRate >= 0.65) {
+		return "bg-[var(--sig-accent)]";
+	}
+	return "bg-[var(--sig-text-muted)]";
 }
 
 function toCalendarDate(value: string): DateValue | undefined {
@@ -187,8 +210,17 @@ async function loadAspect(aspectId: string): Promise<void> {
 
 async function loadStats(): Promise<void> {
 	loadingStats = true;
-	const nextStats = await getKnowledgeStats();
+	const [nextStats, nextHealth] = await Promise.all([
+		getKnowledgeStats(),
+		getKnowledgeEntityHealth({
+			since: predictorSince
+				? new Date(`${predictorSince}T00:00:00.000Z`).toISOString()
+				: undefined,
+			minComparisons: 3,
+		}),
+	]);
 	stats = nextStats;
+	entityHealth = nextHealth;
 	loadingStats = false;
 }
 
@@ -206,6 +238,23 @@ async function loadPredictor(): Promise<void> {
 	predictorByProject = byProject;
 	trainingRuns = runs;
 	loadingPredictor = false;
+}
+
+async function togglePin(entityId: string, pinned: boolean): Promise<void> {
+	pinBusyEntityId = entityId;
+	try {
+		if (pinned) {
+			await unpinKnowledgeEntity(entityId);
+		} else {
+			await pinKnowledgeEntity(entityId);
+		}
+		await loadEntities();
+		if (selectedEntityId === entityId) {
+			await loadEntityDetail(entityId);
+		}
+	} finally {
+		pinBusyEntityId = null;
+	}
 }
 
 async function loadTraversal(): Promise<void> {
@@ -297,8 +346,16 @@ onMount(() => {
 								>
 									<div class="flex items-start justify-between gap-3">
 										<div class="space-y-1">
-											<div class="sig-heading text-[13px] uppercase tracking-[0.08em]">
-												{item.entity.name}
+											<div class="flex items-center gap-2">
+												<span class={`size-2 rounded-full ${healthToneClass(item.entity.id)}`}></span>
+												<div class="sig-heading text-[13px] uppercase tracking-[0.08em]">
+													{item.entity.name}
+												</div>
+												{#if item.entity.pinned}
+													<Badge variant="outline" class={metricClass("accent")}>
+														pinned
+													</Badge>
+												{/if}
 											</div>
 											<div class="sig-label text-[var(--sig-text-muted)]">
 												{item.entity.canonicalName ?? item.entity.name}
@@ -344,16 +401,40 @@ onMount(() => {
 									<div class="space-y-2 border-b border-[var(--sig-border)] pb-3">
 										<div class="flex items-start justify-between gap-3">
 											<div>
-												<h3 class="sig-heading text-[14px] uppercase tracking-[0.08em]">
-													{entityDetail.entity.name}
-												</h3>
+												<div class="flex items-center gap-2">
+													<span class={`size-2 rounded-full ${healthToneClass(entityDetail.entity.id)}`}></span>
+													<h3 class="sig-heading text-[14px] uppercase tracking-[0.08em]">
+														{entityDetail.entity.name}
+													</h3>
+													{#if entityDetail.entity.pinned}
+														<Badge variant="outline" class={metricClass("accent")}>
+															pinned
+														</Badge>
+													{/if}
+												</div>
 												<p class="sig-label text-[var(--sig-text-muted)]">
 													{entityDetail.entity.canonicalName ?? entityDetail.entity.name}
 												</p>
 											</div>
-											<Badge variant="outline" class={metricClass("accent")}>
-												{entityDetail.entity.entityType}
-											</Badge>
+											<div class="flex items-center gap-2">
+												<Badge variant="outline" class={metricClass("accent")}>
+													{entityDetail.entity.entityType}
+												</Badge>
+												<Button
+													variant="outline"
+													size="sm"
+													class="h-8 px-2"
+													disabled={pinBusyEntityId === entityDetail.entity.id}
+													onclick={() =>
+														void togglePin(
+															entityDetail.entity.id,
+															entityDetail.entity.pinned ?? false,
+														)}
+												>
+													<Pin class="mr-1 size-3.5" />
+													{entityDetail.entity.pinned ? "Unpin" : "Pin"}
+												</Button>
+											</div>
 										</div>
 										<div class="flex flex-wrap gap-1.5">
 											<Badge variant="outline" class={metricClass()}>
@@ -593,6 +674,18 @@ onMount(() => {
 							<Badge variant="outline" class={metricClass()}>
 								unassigned {stats.unassignedMemoryCount}
 							</Badge>
+							<Badge variant="outline" class={metricClass()}>
+								feedback 7d {stats.feedbackUpdatedAspectCount}
+							</Badge>
+							<Badge variant="outline" class={metricClass()}>
+								avg weight {stats.averageAspectWeight.toFixed(2)}
+							</Badge>
+							<Badge variant="outline" class={metricClass()}>
+								maxed {stats.maxWeightAspectCount}
+							</Badge>
+							<Badge variant="outline" class={metricClass()}>
+								min floor {stats.minWeightAspectCount}
+							</Badge>
 						</div>
 
 						<div class="space-y-2">
@@ -648,13 +741,18 @@ onMount(() => {
 									onValueChange={(value: DateValue | undefined) => {
 										predictorSince = toIsoDate(value);
 										sincePickerOpen = false;
-										void loadPredictor();
+										void Promise.all([loadPredictor(), loadStats()]);
 									}}
 									class="bg-[var(--sig-surface-raised)] p-2 text-[var(--sig-text)]"
 								/>
 							</Popover.Content>
 						</Popover.Root>
-						<Button variant="outline" size="sm" class="h-8 px-2" onclick={() => void loadPredictor()}>
+						<Button
+							variant="outline"
+							size="sm"
+							class="h-8 px-2"
+							onclick={() => void Promise.all([loadPredictor(), loadStats()])}
+						>
 							<RefreshCw class="size-3.5" />
 						</Button>
 					</div>

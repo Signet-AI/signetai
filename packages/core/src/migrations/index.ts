@@ -27,6 +27,7 @@ import { up as skillMeta } from "./018-skill-meta";
 import { up as knowledgeStructure } from "./019-knowledge-structure";
 import { up as predictorComparisons } from "./020-predictor-comparisons";
 import { up as checkpointStructural } from "./021-checkpoint-structural";
+import { up as entityPinning } from "./022-entity-pinning";
 
 // -- Public interface consumed by Database.init() --
 
@@ -131,6 +132,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 21,
 		name: "checkpoint-structural",
 		up: checkpointStructural,
+	},
+	{
+		version: 22,
+		name: "entity-pinning",
+		up: entityPinning,
 	},
 ];
 

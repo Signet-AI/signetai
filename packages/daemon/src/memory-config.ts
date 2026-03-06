@@ -137,6 +137,16 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		dependencyBatchSize: 5,
 		pollIntervalMs: 10000,
 	},
+	feedback: {
+		enabled: true,
+		ftsWeightDelta: 0.02,
+		maxAspectWeight: 1.0,
+		minAspectWeight: 0.1,
+		decayEnabled: true,
+		decayRate: 0.005,
+		staleDays: 14,
+		decayIntervalSessions: 10,
+	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -191,6 +201,7 @@ export function loadPipelineConfig(
 	const synthesisRaw = raw.synthesis as Record<string, unknown> | undefined;
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
+	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -641,6 +652,43 @@ export function loadPipelineConfig(
 				2000,
 				120000,
 				d.structural.pollIntervalMs,
+			),
+		},
+
+		feedback: {
+			enabled: resolveBool(
+				feedbackRaw?.enabled, undefined, d.feedback.enabled,
+			),
+			ftsWeightDelta: clampFraction(
+				feedbackRaw?.ftsWeightDelta,
+				d.feedback.ftsWeightDelta,
+			),
+			maxAspectWeight: clampFraction(
+				feedbackRaw?.maxAspectWeight,
+				d.feedback.maxAspectWeight,
+			),
+			minAspectWeight: clampFraction(
+				feedbackRaw?.minAspectWeight,
+				d.feedback.minAspectWeight,
+			),
+			decayEnabled: resolveBool(
+				feedbackRaw?.decayEnabled, undefined, d.feedback.decayEnabled,
+			),
+			decayRate: clampFraction(
+				feedbackRaw?.decayRate,
+				d.feedback.decayRate,
+			),
+			staleDays: clampPositive(
+				feedbackRaw?.staleDays,
+				1,
+				365,
+				d.feedback.staleDays,
+			),
+			decayIntervalSessions: clampPositive(
+				feedbackRaw?.decayIntervalSessions,
+				1,
+				1000,
+				d.feedback.decayIntervalSessions,
 			),
 		},
 	};

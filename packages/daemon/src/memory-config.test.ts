@@ -310,6 +310,34 @@ describe("loadPipelineConfig", () => {
 		expect(result.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
 	});
 
+	it("loads feedback config and clamps weights", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					feedback: {
+						enabled: true,
+						ftsWeightDelta: 0.04,
+						maxAspectWeight: 2,
+						minAspectWeight: -1,
+						decayEnabled: false,
+						decayRate: 0.02,
+						staleDays: 30,
+						decayIntervalSessions: 25,
+					},
+				},
+			},
+		});
+
+		expect(result.feedback.enabled).toBe(true);
+		expect(result.feedback.ftsWeightDelta).toBe(0.04);
+		expect(result.feedback.maxAspectWeight).toBe(1);
+		expect(result.feedback.minAspectWeight).toBe(0);
+		expect(result.feedback.decayEnabled).toBe(false);
+		expect(result.feedback.decayRate).toBe(0.02);
+		expect(result.feedback.staleDays).toBe(30);
+		expect(result.feedback.decayIntervalSessions).toBe(25);
+	});
+
 	it("treats non-boolean truthy values as defaults (not coerced)", () => {
 		const result = loadPipelineConfig({
 			memory: {
