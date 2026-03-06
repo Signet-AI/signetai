@@ -173,6 +173,19 @@ cannot suppress them. This is a hard retrieval invariant.
   entity).
 - Scorer evaluation reports include per-entity and per-project slices,
   not only global EMA.
+- **Feedback direction (KA-6):** Behavioral signals flow BACK to the
+  graph. FTS overlap (memories the user searched for during a session)
+  feeds back to aspect weights, confirming which structural bets paid
+  off. Per-entity predictor win rates surface as graph health signals.
+  Superseded memory labels propagate to entity_attributes status.
+  Without this feedback loop, structural weights stagnate and the
+  graph diverges from what the user actually needs.
+- **Entity pinning (KA-6):** Users can pin entities as always-focal,
+  front-loading importance before behavioral evidence accumulates.
+  Pinned entities are training data for the predictor — the manual
+  exploration mechanism that the predictor eventually learns to
+  replicate autonomously. See `docs/KNOWLEDGE-ARCHITECTURE.md`
+  section "Love, Hate, and the Exploration Problem" for rationale.
 
 ### Knowledge Architecture <-> Session Continuity
 
@@ -262,11 +275,15 @@ Phase ordering based on hard dependencies and integration contracts.
 - **Procedural Memory P4**: retrieval and suggestion endpoints
 - **Signet Runtime Phase 2**: built-in tools + pre-generation phase
 
-### Wave 5 (polish)
+### Wave 5 (polish + feedback)
 
 - **Procedural Memory P5**: dashboard visualization
 - **Predictive Scorer Phase 4**: observability + dashboard
 - **Knowledge Architecture KA-5**: continuity + dashboard
+- **Knowledge Architecture KA-6**: entity pinning + behavioral feedback
+  loop (FTS overlap → aspect weight, aspect decay, per-entity health,
+  superseded propagation). See `docs/KNOWLEDGE-ARCHITECTURE.md` section
+  "Love, Hate, and the Exploration Problem" for rationale.
 - **Signet Runtime Phase 3**: HTTP channel + adapter retrofit
 - **Multi-Agent Phase 4+**: daemon API, harness sync, CLI, dashboard
 

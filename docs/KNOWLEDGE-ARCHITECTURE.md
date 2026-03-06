@@ -284,6 +284,88 @@ aspect of a person. The difference between an attribute and a constraint.
 The actual shape of what the agent knows.
 
 
+Love, Hate, and the Exploration Problem
+-----------------------------------------
+
+Everything described above is exploitation. The system refines what it
+already knows. It walks known structure, surfaces known constraints,
+decays what isn't confirmed. It gets better at navigating a map it has
+already drawn.
+
+But maps go stale. The world moves. New entities appear that deserve
+attention before the evidence accumulates. The system needs a mechanism
+to bet on something mattering before it can prove it — to front-load
+importance on an entity and then watch whether that bet pays off.
+
+That mechanism is weight override. A user (or eventually, the predictor
+itself) can pin an entity as focal, ensuring it is always traversed
+regardless of project path or query matching. This is a pre-commitment:
+"this matters to me, explore it." In graph terms, it creates an entity
+with high starting weight before the density, the behavioral signals,
+or the structural assignment has any reason to justify it.
+
+This is the exploration mechanism. Without it, the system only maps
+what it has evidence is worth mapping. With it, the system maps the
+unknown because something in there matters to the user even before
+they know what they will find.
+
+The dangerous side is real. Weight override at maximum is love — an
+unconditional bet that can build enormous infrastructure around an
+entity that turns out to be wrong. The most catastrophic load-bearing
+failures in any knowledge system come from betting too hard on the
+wrong entity. Weight override at minimum is hate — "stop surfacing
+this, it is wrong, it does not serve me." Both forces reshape the
+graph. Both are necessary. Love creates new territory. Hate prunes
+what doesn't belong.
+
+In many ways, the predictive memory scorer is the automated form of
+this same force. The heuristic pipeline (effective scores, structural
+density, traversal) seeds the database and provides baseline
+performance. The predictor learns patterns the heuristics can't see —
+it assigns weight to memories before the pipeline can justify it.
+When the predictor outperforms the baseline, it is making the same
+bet that weight override makes manually: "this matters, even though
+the evidence isn't there yet."
+
+The manual pin and the learned prediction are the same mechanism at
+different scales. The pin is training data for the predictor. The
+user pins entity X, the predictor watches whether that bet pays off
+through the normal comparison pipeline, learns the pattern, and
+starts making those bets itself.
+
+A healthy system needs both exploitation and exploration. The current
+architecture (traversal, structural features, decay) is exploitation.
+Weight override and the predictor's learned intuition are exploration.
+The ratio matters — too much exploitation and the system becomes a
+fossil, perfectly optimized for a reality that no longer exists. Too
+much exploration and the system never builds the infrastructure
+needed to survive the unknown.
+
+Like a colony of bees: most of the colony works to keep it fed and
+organized, maintaining the known structure. But a significant portion
+goes out and explores, finding new opportunities, mapping new
+territory. The explorers need the infrastructure to survive. The
+infrastructure needs the explorers to stay relevant. Neither works
+alone.
+
+The feedback loop closes this: FTS overlap (memories the user
+actually searched for) feeds back to aspect weights, confirming which
+bets paid off. Per-entity predictor win rates surface which entities
+the system understands well and which it doesn't. Superseded memories
+propagate to entity attributes, pruning what's no longer true. The
+graph reshapes itself based on outcomes, not just structure.
+
+If we only build the technical pipeline without understanding why,
+we build a system that optimizes metrics without serving the user.
+The technical architecture exists to answer one question: what does
+the user need to know right now? Weight override exists to answer a
+different question: what does the user need to *explore* right now?
+Both questions require the same infrastructure. Both require the
+same graph. But they pull in opposite directions — and the tension
+between them is what makes the system alive rather than merely
+efficient.
+
+
 The Goal
 --------
 
@@ -304,9 +386,10 @@ Small. Dense. Connected. Correct.
 ---
 
 *This document describes the architectural concepts. For the implementation
-contract, see [Knowledge Architecture Schema and Traversal Spec](./specs/planning/knowledge-architecture-schema.md).
-For predictive ranking integration, see [Signet Predictive Memory Scorer](./specs/planning/predictive-memory-scorer.md).
-For extraction pipeline behavior, see [Memory Pipeline](./PIPELINE.md).*
+contract, see [Knowledge Architecture Schema and Traversal Spec](./specs/approved/knowledge-architecture-schema.md).
+For predictive ranking integration, see [Signet Predictive Memory Scorer](./specs/approved/predictive-memory-scorer.md).
+For extraction pipeline behavior, see [Memory Pipeline](./PIPELINE.md).
+For the behavioral feedback loop, see [KA-6 Sprint Brief](./specs/SPRINT-BRIEF-KA6.md).*
 
 ---
 
