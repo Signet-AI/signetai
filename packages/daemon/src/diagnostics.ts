@@ -104,6 +104,9 @@ export interface PredictorHealthParams {
 	readonly alpha: number;
 	readonly coldStartExited: boolean;
 	readonly lastTrainedAt: string | null;
+	readonly avgScoreLatencyMs?: number;
+	readonly scoreTimeoutMs?: number;
+	readonly driftDetected?: boolean;
 }
 
 export interface DiagnosticsReport {
@@ -594,6 +597,20 @@ export function getPredictorHealth(
 
 	// Crash penalty
 	if (params.crashCount > 0 && score > 0) {
+		score -= 0.1;
+	}
+
+	// Latency penalty: if avg scoring latency exceeds 80% of timeout
+	if (
+		params.avgScoreLatencyMs !== undefined &&
+		params.scoreTimeoutMs !== undefined &&
+		params.avgScoreLatencyMs > params.scoreTimeoutMs * 0.8
+	) {
+		score -= 0.2;
+	}
+
+	// Drift penalty
+	if (params.driftDetected) {
 		score -= 0.1;
 	}
 

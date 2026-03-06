@@ -72,6 +72,7 @@ import {
 	getPredictorHealth,
 } from "./diagnostics";
 import { fetchEmbedding, resolveEmbeddingBaseUrl, resolveEmbeddingApiKey, setNativeFallbackToOllama } from "./embedding-fetch";
+import { detectDrift } from "./predictor-comparison";
 import { getPredictorState } from "./predictor-state";
 import { buildEmbeddingHealth } from "./embedding-health";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
@@ -283,6 +284,23 @@ function buildPredictorHealthParams(): PredictorHealthParams {
 		// table may not exist
 	}
 
+	// Latency from analytics collector
+	const latencySnapshot = analyticsCollector.getLatency();
+	const avgScoreLatencyMs = latencySnapshot.predictor_score.p50 > 0
+		? latencySnapshot.predictor_score.p50
+		: undefined;
+
+	// Drift detection (fail-open: false on error)
+	let driftDetected = false;
+	try {
+		const accessor = getDbAccessor();
+		const driftWindow = predictorCfg.driftResetWindow ?? 20;
+		const driftResult = detectDrift(agentId, accessor, driftWindow);
+		driftDetected = driftResult.drifting;
+	} catch {
+		// table may not exist or accessor not ready
+	}
+
 	return {
 		enabled: true,
 		sidecarAlive: client !== null && client.isAlive(),
@@ -294,6 +312,9 @@ function buildPredictorHealthParams(): PredictorHealthParams {
 		alpha: state.alpha,
 		coldStartExited: state.coldStartExited,
 		lastTrainedAt: state.lastTrainingAt,
+		avgScoreLatencyMs,
+		scoreTimeoutMs: predictorCfg.scoreTimeoutMs,
+		driftDetected,
 	};
 }
 

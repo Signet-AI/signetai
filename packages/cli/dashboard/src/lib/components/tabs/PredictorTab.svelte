@@ -110,8 +110,9 @@
 		return wins / comparisons.length;
 	});
 
-	// Cold start progress: training pairs needed
-	const coldStartTarget = 15; // default trainIntervalSessions
+	// Default minTrainingSessions from memory-config.ts
+	// TODO: expose minTrainingSessions in /api/predictor/status for accuracy
+	const coldStartTarget = 10;
 	const coldStartProgress = $derived(
 		Math.min(1, comparisons.length / coldStartTarget),
 	);
