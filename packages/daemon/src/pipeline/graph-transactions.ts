@@ -65,8 +65,11 @@ function upsertEntity(
 	entityType: string,
 	agentId: string,
 	now: string,
-): UpsertEntityResult {
+): UpsertEntityResult | null {
 	const canonical = toCanonicalName(rawName);
+
+	// Skip trivially short names like "50", "0", "cli", "npm"
+	if (canonical.length < 4) return null;
 
 	const existing = db
 		.prepare(
@@ -198,10 +201,13 @@ export function txPersistEntities(
 
 	for (const triple of input.entities) {
 		const source = upsertEntity(db, triple.source, triple.sourceType ?? "extracted", input.agentId, now);
+		// null = name too short, skip the whole triple
+		if (source === null) continue;
 		if (source.inserted) entitiesInserted++;
 		else entitiesUpdated++;
 
 		const target = upsertEntity(db, triple.target, triple.targetType ?? "extracted", input.agentId, now);
+		if (target === null) continue;
 		if (target.inserted) entitiesInserted++;
 		else entitiesUpdated++;
 

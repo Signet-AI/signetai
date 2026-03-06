@@ -20,7 +20,7 @@ import { logger } from "../logger";
 // ---------------------------------------------------------------------------
 
 const MAX_FACTS = 20;
-const MAX_ENTITIES = 50;
+const MAX_ENTITIES = 15;
 const MAX_FACT_LENGTH = 2000;
 const MIN_FACT_LENGTH = 20;
 const MAX_INPUT_CHARS = 12000;
