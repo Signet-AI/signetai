@@ -43,7 +43,7 @@ function setNum(path: string[]) {
 				</Select.Content>
 			</Select.Root>
 		</FormField>
-		<FormField label="Mode" description="local = no auth required (localhost only). team = tokens required for all requests. hybrid = localhost skips auth, remote requires tokens.">
+		<FormField label="Mode" description="local = no seal required (trusted realm). team = sigils required for all requests. hybrid = trusted realm skips, remote requires sigil.">
 			<Select.Root
 				type="single"
 				value={st.aStr(["auth", "mode"])}

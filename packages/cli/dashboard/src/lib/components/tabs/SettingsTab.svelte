@@ -30,7 +30,7 @@
 	const sectionDefs: SectionDef[] = [
 		{
 			id: "agent",
-			title: "Agent",
+			title: "Agent Identity",
 			source: "agent",
 			paths: [["agent", "name"], ["agent", "description"]],
 		},
@@ -54,7 +54,7 @@
 		},
 		{
 			id: "memory",
-			title: "Memory",
+			title: "Memory Matrix",
 			source: "config",
 			paths: [["memory", "session_budget"], ["memory", "current_md_budget"], ["memory", "decay_rate"]],
 		},
@@ -66,19 +66,19 @@
 		},
 		{
 			id: "pipeline",
-			title: "Pipeline",
+			title: "The Forge Setup",
 			source: "agent",
 			paths: [["memory", "pipelineV2"]],
 		},
 		{
 			id: "trust",
-			title: "Trust",
+			title: "Trust Protocol",
 			source: "agent",
 			paths: [["trust"]],
 		},
 		{
 			id: "auth",
-			title: "Auth",
+			title: "Auth Sigils",
 			source: "config",
 			paths: [["auth"]],
 		},
@@ -641,7 +641,8 @@
 	}
 
 	.save-state.dirty {
-		color: var(--sig-warning, #d4a017);
+		color: var(--rpg-gold);
+		text-shadow: 0 0 8px rgba(245,158,11,0.4);
 	}
 
 	.discard-btn {
@@ -665,14 +666,15 @@
 	.save-btn {
 		font-family: var(--font-mono);
 		font-size: 11px;
-		letter-spacing: 0.06em;
+		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: var(--sig-bg);
-		background: var(--sig-text-bright);
+		color: black;
+		background: var(--rpg-gold);
 		border: none;
+		font-weight: 700;
 		padding: 6px 20px;
 		cursor: pointer;
-		transition: opacity 0.15s ease;
+		transition: all 0.15s ease;
 	}
 
 	.save-btn:disabled,
@@ -682,7 +684,8 @@
 	}
 
 	.save-btn:not(:disabled):hover {
-		opacity: 0.85;
+		background: #fbbf24;
+		box-shadow: var(--rpg-gold-glow);
 	}
 
 	.dialog-overlay {

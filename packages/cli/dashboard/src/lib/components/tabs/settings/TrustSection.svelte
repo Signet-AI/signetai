@@ -26,7 +26,7 @@ function setStr(path: string[]) {
 
 {#if st.agentFile}
 	<FormSection description="Identity verification method. Controls how the agent proves its identity to peers and registries.">
-		<FormField label="Verification" description="none = local only. erc8128 = wallet-based (recommended). gpg/did = alternative signing. registry = contract-based lookup.">
+		<FormField label="Verification" description="Identity sigil verification. none = local oath. erc8128 = wallet-bound (recommended). gpg/did = alternative seals. registry = contract-based lookup.">
 			<Select.Root
 				type="single"
 				value={st.aStr(["trust", "verification"])}
