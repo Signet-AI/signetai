@@ -84,6 +84,15 @@ function memoryScoreLabel(memory: Memory): string | null {
 	return `${source} ${score}%`;
 }
 
+function getMemoryRarityClass(importance: number | undefined): string {
+	const imp = importance ?? 0;
+	if (imp >= 0.9) return 'rarity-legendary';
+	if (imp >= 0.75) return 'rarity-epic';
+	if (imp >= 0.5) return 'rarity-rare';
+	if (imp >= 0.25) return 'rarity-uncommon';
+	return 'rarity-common';
+}
+
 function formatDate(dateStr: string): string {
 	try {
 		const date = new Date(dateStr);
@@ -150,7 +159,7 @@ function formatIsoDate(value: string): string {
 		{#if mem.debouncing || mem.searching}
 			<span class="text-[var(--sig-accent)] sig-label animate-pulse">◐</span>
 		{:else}
-			<span class="text-[var(--sig-accent)] sig-label">◇</span>
+			<span class="sig-label" style="color: var(--rpg-gold)">&#x2B21;</span>
 		{/if}
 		<Input
 			type="text"
@@ -244,11 +253,17 @@ function formatIsoDate(value: string): string {
 		>pinned</button>
 
 		<!-- Type filters -->
-		{#each ['fact', 'decision', 'preference', 'issue', 'learning'] as t}
+		{#each [
+			{ id: 'fact',       label: 'Lore'       },
+			{ id: 'decision',   label: 'Decree'     },
+			{ id: 'preference', label: 'Preference' },
+			{ id: 'issue',      label: 'Curse'      },
+			{ id: 'learning',   label: 'Insight'    },
+		] as t}
 			<button
-				class={mem.filterType === t ? pillActive : pillInactive}
-				onclick={() => mem.filterType = mem.filterType === t ? '' : t}
-			>{t}</button>
+				class={mem.filterType === t.id ? pillActive : pillInactive}
+				onclick={() => mem.filterType = mem.filterType === t.id ? '' : t.id}
+			>{t.label}</button>
 		{/each}
 	</div>
 
@@ -257,9 +272,9 @@ function formatIsoDate(value: string): string {
 		{#if mem.similarSourceId}
 			Showing {displayCount} similar {displayCount === 1 ? 'memory' : 'memories'}
 		{:else if mem.searched || hasActiveFilters()}
-			Showing {displayCount} of {totalCount} {totalCount === 1 ? 'memory' : 'memories'}
+			Showing {displayCount} of {totalCount} {totalCount === 1 ? 'memory scroll' : 'memory scrolls'}
 		{:else}
-			{totalCount} {totalCount === 1 ? 'memory' : 'memories'}
+			{totalCount} {totalCount === 1 ? 'memory scroll' : 'memory scrolls'}
 		{/if}
 	</div>
 
@@ -304,10 +319,11 @@ function formatIsoDate(value: string): string {
 			<article
 				class="doc-card relative flex flex-col
 				gap-1.5 p-3 border border-[var(--sig-border-strong)]
-				border-t-2 border-t-[var(--sig-text-muted)]
+				border-t-2
 				bg-[var(--sig-surface)] overflow-hidden
 				transition-colors duration-150
-				hover:border-[var(--sig-text-muted)]"
+				hover:border-[var(--sig-text-muted)]
+				{getMemoryRarityClass(memory.importance)}"
 			>
 
 					<header class="flex justify-between items-start gap-1.5">
@@ -385,7 +401,7 @@ function formatIsoDate(value: string): string {
 							class="ml-auto sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-accent)]"
 							onclick={() => findSimilar(memory.id, memory)}
 							title="Find similar"
-						>similar</Button>
+						>&#x27F3; Echoes</Button>
 					{/if}
 					</footer>
 				</article>
@@ -397,7 +413,7 @@ function formatIsoDate(value: string): string {
 						? 'No similar memories found.'
 						: mem.searched || hasActiveFilters()
 							? 'No memories matched your search.'
-							: 'No memories available yet.'}
+							: 'The Adventure Log is empty. Begin your journey to record memories.'}
 				</div>
 			{/each}
 		{/if}

@@ -207,7 +207,10 @@
 
 <div class="config-tab">
 	{#if mdFiles.length === 0}
-		<div class="config-empty">No markdown files found</div>
+		<div class="config-empty">
+			<span class="rpg-text-gold sig-eyebrow">No lore files found</span>
+			<span class="sig-label mt-1">Character sheet is empty</span>
+		</div>
 	{:else}
 		<!-- File header with navigation -->
 		<header class="file-header">
@@ -351,6 +354,26 @@
 		background: var(--sig-surface);
 		border-bottom: 1px solid var(--sig-border);
 		flex-shrink: 0;
+		position: relative;
+	}
+
+	.file-header::before {
+		content: '';
+		position: absolute;
+		top: 4px; left: 4px;
+		width: 8px; height: 8px;
+		border-top: 1.5px solid var(--rpg-gold);
+		border-left: 1.5px solid var(--rpg-gold);
+		pointer-events: none;
+	}
+	.file-header::after {
+		content: '';
+		position: absolute;
+		bottom: 4px; right: 4px;
+		width: 8px; height: 8px;
+		border-bottom: 1.5px solid var(--rpg-gold);
+		border-right: 1.5px solid var(--rpg-gold);
+		pointer-events: none;
 	}
 
 	.header-left {
@@ -381,8 +404,9 @@
 	}
 
 	.nav-btn:hover:not(:disabled) {
-		color: var(--sig-text);
-		border-color: var(--sig-border-strong);
+		color: var(--rpg-gold);
+		border-color: var(--rpg-gold);
+		box-shadow: 0 0 6px rgba(245,158,11,0.3);
 	}
 
 	.nav-btn:disabled {
@@ -410,7 +434,10 @@
 	}
 
 	.file-selector:hover {
-		border-color: var(--sig-accent);
+		border-color: var(--rpg-gold);
+	}
+	.file-selector:hover .file-name {
+		color: var(--rpg-gold);
 	}
 
 	.file-name {
@@ -465,10 +492,12 @@
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
-		color: var(--sig-warning, #d4a017);
+		color: var(--rpg-gold);
 		padding: 3px 8px;
-		background: color-mix(in srgb, var(--sig-warning, #d4a017) 15%, transparent);
-		border: 1px solid var(--sig-warning, #d4a017);
+		background: var(--rpg-gold-dim);
+		border: 1px solid var(--rpg-gold);
+		box-shadow: 0 0 6px rgba(245,158,11,0.25);
+		animation: rpg-pulse-gold 2s ease-in-out infinite;
 	}
 
 	:global(.jump-menu) {
