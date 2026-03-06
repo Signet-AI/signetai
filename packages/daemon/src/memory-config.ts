@@ -158,6 +158,10 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		explorationRate: 0.05,
 		driftResetWindow: 10,
 	},
+	predictorPipeline: {
+		agentFeedback: true,
+		trainingTelemetry: true,
+	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -214,6 +218,7 @@ export function loadPipelineConfig(
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
+	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -762,6 +767,15 @@ export function loadPipelineConfig(
 				typeof predictorRaw?.checkpointPath === "string"
 					? predictorRaw.checkpointPath
 					: d.predictor?.checkpointPath,
+		},
+
+		predictorPipeline: {
+			agentFeedback: resolveBool(
+				predictorPipelineRaw?.agentFeedback, undefined, d.predictorPipeline.agentFeedback,
+			),
+			trainingTelemetry: resolveBool(
+				predictorPipelineRaw?.trainingTelemetry, undefined, d.predictorPipeline.trainingTelemetry,
+			),
 		},
 	};
 }

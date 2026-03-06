@@ -22,7 +22,7 @@ import { hybridRecall } from "./memory-search";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { getUpdateSummary } from "./update-system";
 import { loadMemoryConfig } from "./memory-config";
-import { recordSessionCandidates, trackFtsHits } from "./session-memories";
+import { recordSessionCandidates, trackFtsHits, parseFeedback, recordAgentFeedback } from "./session-memories";
 import { listSecrets } from "./secrets";
 import { getStructuralFeatures } from "./structural-features";
 import { getPredictorClient, recordPredictorLatency } from "./daemon";
@@ -158,6 +158,7 @@ export interface UserPromptSubmitRequest {
 	lastAssistantMessage?: string;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
+	memory_feedback?: unknown;
 }
 
 export interface UserPromptSubmitResponse {
@@ -1745,6 +1746,27 @@ export async function handleUserPromptSubmit(
 		req.lastAssistantMessage,
 	);
 
+	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const feedbackEnabled = memoryCfg.pipelineV2.predictorPipeline.agentFeedback;
+	if (feedbackEnabled && req.memory_feedback !== undefined && req.sessionKey) {
+		try {
+			const parsed = parseFeedback(req.memory_feedback);
+			if (parsed) {
+				recordAgentFeedback(req.sessionKey, parsed);
+			} else {
+				logger.warn("hooks", "Invalid memory_feedback format, skipping", {
+					sessionKey: req.sessionKey,
+				});
+			}
+		} catch (e) {
+			// Fail-open: never break the hook for feedback errors
+			logger.warn("hooks", "Failed to process memory_feedback", {
+				error: (e instanceof Error) ? e.message : String(e),
+			});
+		}
+	}
+
 	// Always record the prompt for continuity tracking, even if no FTS query
 	const snippet = userMessage.slice(0, 200).trim();
 	recordPrompt(
@@ -1832,7 +1854,12 @@ export async function handleUserPromptSubmit(
 			const dateStr = formatMemoryDate(s.created_at);
 			return `- ${s.content} (${dateStr})`;
 		});
-		const inject = `[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
+		let inject = `[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
+
+		// Append agent feedback request if enabled and there are injected memories
+		if (feedbackEnabled && ids.length > 0) {
+			inject += `\n<memory-feedback>\nRate injected memories for your last response. JSON map of ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.\nIDs: ${ids.join(", ")}\nExample: {"${ids[0]}": 0.8, "${ids.length > 1 ? ids[1] : ids[0]}": 0}\n</memory-feedback>`;
+		}
 
 		const duration = Date.now() - start;
 		logger.info("hooks", "User prompt submit", {

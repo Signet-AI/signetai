@@ -30,6 +30,8 @@ import { up as checkpointStructural } from "./021-checkpoint-structural";
 import { up as entityPinning } from "./022-entity-pinning";
 import { up as predictorColumns } from "./023-predictor-columns";
 import { up as predictorComparisonColumns } from "./024-predictor-comparison-columns";
+import { up as agentFeedback } from "./025-agent-feedback";
+import { up as predictorTrainingPairs } from "./026-predictor-training-pairs";
 
 // -- Public interface consumed by Database.init() --
 
@@ -149,6 +151,16 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 24,
 		name: "predictor-comparison-columns",
 		up: predictorComparisonColumns,
+	},
+	{
+		version: 25,
+		name: "agent-feedback",
+		up: agentFeedback,
+	},
+	{
+		version: 26,
+		name: "predictor-training-pairs",
+		up: predictorTrainingPairs,
 	},
 ];
 

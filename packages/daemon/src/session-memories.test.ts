@@ -7,7 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "../../core/src/migrations";
+import { runMigrations } from "@signet/core";
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,9 +17,12 @@ const TEST_DIR = join(tmpdir(), `signet-session-mem-test-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
 
 const { initDbAccessor, closeDbAccessor } = await import("./db-accessor");
-const { recordSessionCandidates, trackFtsHits } = await import(
-	"./session-memories"
-);
+const {
+	recordSessionCandidates,
+	trackFtsHits,
+	parseFeedback,
+	recordAgentFeedbackInner,
+} = await import("./session-memories");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,16 +76,11 @@ function getSessionMemoryRows(
 	was_injected: number;
 	relevance_score: number | null;
 	fts_hit_count: number;
-	entity_slot: number | null;
-	aspect_slot: number | null;
-	is_constraint: number;
-	structural_density: number | null;
 }> {
 	return db
 		.prepare(
 			`SELECT id, session_key, memory_id, source, effective_score,
-			        final_score, rank, was_injected, relevance_score, fts_hit_count,
-			        entity_slot, aspect_slot, is_constraint, structural_density
+			        final_score, rank, was_injected, relevance_score, fts_hit_count
 			 FROM session_memories WHERE session_key = ? ORDER BY rank ASC`,
 		)
 		.all(sessionKey) as Array<{
@@ -96,10 +94,6 @@ function getSessionMemoryRows(
 		was_injected: number;
 		relevance_score: number | null;
 		fts_hit_count: number;
-		entity_slot: number | null;
-		aspect_slot: number | null;
-		is_constraint: number;
-		structural_density: number | null;
 	}>;
 }
 
@@ -256,35 +250,6 @@ describe("recordSessionCandidates", () => {
 
 		expect(rows[0].source).toBe("effective");
 	});
-
-	it("stores structural feature columns", () => {
-		const candidates = [
-			{
-				id: "mem-aaa-111",
-				effScore: 0.9,
-				source: "ka_traversal" as const,
-				entitySlot: 11,
-				aspectSlot: 22,
-				isConstraint: 1,
-				structuralDensity: 7,
-			},
-		];
-
-		recordSessionCandidates(
-			"session-007",
-			candidates,
-			new Set(["mem-aaa-111"]),
-		);
-
-		const testDb = openTestDb();
-		const rows = getSessionMemoryRows(testDb, "session-007");
-		testDb.close();
-
-		expect(rows[0].entity_slot).toBe(11);
-		expect(rows[0].aspect_slot).toBe(22);
-		expect(rows[0].is_constraint).toBe(1);
-		expect(rows[0].structural_density).toBe(7);
-	});
 });
 
 // ============================================================================
@@ -391,5 +356,244 @@ describe("trackFtsHits", () => {
 		expect(newRow).toBeDefined();
 		expect(newRow!.fts_hit_count).toBe(1);
 		expect(newRow!.source).toBe("fts_only");
+	});
+});
+
+// ============================================================================
+// parseFeedback
+// ============================================================================
+
+describe("parseFeedback", () => {
+	it("returns null for null/undefined input", () => {
+		expect(parseFeedback(null)).toBeNull();
+		expect(parseFeedback(undefined)).toBeNull();
+	});
+
+	it("returns null for non-object input", () => {
+		expect(parseFeedback("string")).toBeNull();
+		expect(parseFeedback(42)).toBeNull();
+		expect(parseFeedback(true)).toBeNull();
+		expect(parseFeedback([])).toBeNull();
+	});
+
+	it("returns null for empty object", () => {
+		expect(parseFeedback({})).toBeNull();
+	});
+
+	it("returns null when all values are invalid types", () => {
+		expect(parseFeedback({ mem1: "high", mem2: true })).toBeNull();
+	});
+
+	it("parses valid feedback", () => {
+		const result = parseFeedback({ mem1: 0.8, mem2: -0.5, mem3: 0 });
+		expect(result).toEqual({ mem1: 0.8, mem2: -0.5, mem3: 0 });
+	});
+
+	it("clamps scores to [-1, 1]", () => {
+		const result = parseFeedback({ mem1: 5.0, mem2: -3.0 });
+		expect(result).toEqual({ mem1: 1.0, mem2: -1.0 });
+	});
+
+	it("skips entries with invalid values but keeps valid ones", () => {
+		const result = parseFeedback({
+			good: 0.5,
+			bad_string: "nope",
+			bad_bool: true,
+			bad_nan: NaN,
+			bad_inf: Infinity,
+			also_good: -0.3,
+		});
+		expect(result).toEqual({ good: 0.5, also_good: -0.3 });
+	});
+
+	it("skips empty string keys", () => {
+		const result = parseFeedback({ "": 0.5, valid: 0.8 });
+		expect(result).toEqual({ valid: 0.8 });
+	});
+});
+
+// ============================================================================
+// recordAgentFeedbackInner (running mean accumulation)
+// ============================================================================
+
+/** Read feedback columns for a session memory. */
+function getFeedbackColumns(
+	testDb: Database,
+	sessionKey: string,
+	memoryId: string,
+): { agent_relevance_score: number | null; agent_feedback_count: number } | undefined {
+	return testDb
+		.prepare(
+			`SELECT agent_relevance_score, agent_feedback_count
+			 FROM session_memories
+			 WHERE session_key = ? AND memory_id = ?`,
+		)
+		.get(sessionKey, memoryId) as
+		| { agent_relevance_score: number | null; agent_feedback_count: number }
+		| undefined;
+}
+
+describe("recordAgentFeedbackInner", () => {
+	it("sets score on first feedback (NULL -> score)", () => {
+		recordSessionCandidates(
+			"session-fb-1",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+		);
+
+		const testDb = openTestDb();
+		recordAgentFeedbackInner(testDb, "session-fb-1", { "mem-aaa-111": 0.8 });
+
+		const result = getFeedbackColumns(testDb, "session-fb-1", "mem-aaa-111");
+		testDb.close();
+
+		expect(result).toBeDefined();
+		expect(result!.agent_relevance_score).toBeCloseTo(0.8, 6);
+		expect(result!.agent_feedback_count).toBe(1);
+	});
+
+	it("computes running mean on second feedback", () => {
+		recordSessionCandidates(
+			"session-fb-2",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+		);
+
+		const testDb = openTestDb();
+		recordAgentFeedbackInner(testDb, "session-fb-2", { "mem-aaa-111": 0.8 });
+		recordAgentFeedbackInner(testDb, "session-fb-2", { "mem-aaa-111": 0.4 });
+
+		const result = getFeedbackColumns(testDb, "session-fb-2", "mem-aaa-111");
+		testDb.close();
+
+		// mean = (0.8 * 1 + 0.4) / 2 = 0.6
+		expect(result!.agent_relevance_score).toBeCloseTo(0.6, 6);
+		expect(result!.agent_feedback_count).toBe(2);
+	});
+
+	it("multiple feedbacks converge to the mean", () => {
+		recordSessionCandidates(
+			"session-fb-3",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+		);
+
+		const testDb = openTestDb();
+		const scores = [0.9, 0.7, 0.5, 0.3, 0.1];
+		for (const s of scores) {
+			recordAgentFeedbackInner(testDb, "session-fb-3", { "mem-aaa-111": s });
+		}
+
+		const result = getFeedbackColumns(testDb, "session-fb-3", "mem-aaa-111");
+		testDb.close();
+
+		const expectedMean = scores.reduce((a, b) => a + b, 0) / scores.length;
+		expect(result!.agent_relevance_score).toBeCloseTo(expectedMean, 4);
+		expect(result!.agent_feedback_count).toBe(5);
+	});
+
+	it("handles multiple memories in one feedback call", () => {
+		recordSessionCandidates(
+			"session-fb-4",
+			[
+				{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const },
+				{ id: "mem-bbb-222", effScore: 0.7, source: "effective" as const },
+			],
+			new Set(["mem-aaa-111", "mem-bbb-222"]),
+		);
+
+		const testDb = openTestDb();
+		recordAgentFeedbackInner(testDb, "session-fb-4", {
+			"mem-aaa-111": 0.9,
+			"mem-bbb-222": -0.5,
+		});
+
+		const a = getFeedbackColumns(testDb, "session-fb-4", "mem-aaa-111");
+		const b = getFeedbackColumns(testDb, "session-fb-4", "mem-bbb-222");
+		testDb.close();
+
+		expect(a!.agent_relevance_score).toBeCloseTo(0.9, 6);
+		expect(b!.agent_relevance_score).toBeCloseTo(-0.5, 6);
+	});
+
+	it("ignores feedback for non-existent session memories", () => {
+		recordSessionCandidates(
+			"session-fb-5",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+		);
+
+		const testDb = openTestDb();
+		// mem-ghost doesn't exist — UPDATE matches 0 rows, no crash
+		recordAgentFeedbackInner(testDb, "session-fb-5", {
+			"mem-aaa-111": 0.5,
+			"mem-ghost": 0.9,
+		});
+
+		const real = getFeedbackColumns(testDb, "session-fb-5", "mem-aaa-111");
+		const ghost = getFeedbackColumns(testDb, "session-fb-5", "mem-ghost");
+		testDb.close();
+
+		expect(real!.agent_relevance_score).toBeCloseTo(0.5, 6);
+		expect(ghost).toBeFalsy();
+	});
+
+	it("feedback for wrong session does not affect other sessions", () => {
+		recordSessionCandidates(
+			"session-fb-6a",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+		);
+		recordSessionCandidates(
+			"session-fb-6b",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+		);
+
+		const testDb = openTestDb();
+		recordAgentFeedbackInner(testDb, "session-fb-6a", { "mem-aaa-111": 0.7 });
+
+		const a = getFeedbackColumns(testDb, "session-fb-6a", "mem-aaa-111");
+		const b = getFeedbackColumns(testDb, "session-fb-6b", "mem-aaa-111");
+		testDb.close();
+
+		expect(a!.agent_relevance_score).toBeCloseTo(0.7, 6);
+		expect(b!.agent_relevance_score).toBeNull();
+	});
+
+	it("handles negative scores correctly", () => {
+		recordSessionCandidates(
+			"session-fb-7",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+		);
+
+		const testDb = openTestDb();
+		recordAgentFeedbackInner(testDb, "session-fb-7", { "mem-aaa-111": -0.8 });
+		recordAgentFeedbackInner(testDb, "session-fb-7", { "mem-aaa-111": -0.4 });
+
+		const result = getFeedbackColumns(testDb, "session-fb-7", "mem-aaa-111");
+		testDb.close();
+
+		// mean = (-0.8 * 1 + (-0.4)) / 2 = -0.6
+		expect(result!.agent_relevance_score).toBeCloseTo(-0.6, 6);
+		expect(result!.agent_feedback_count).toBe(2);
+	});
+
+	it("empty feedback object is a no-op", () => {
+		recordSessionCandidates(
+			"session-fb-8",
+			[{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }],
+			new Set(["mem-aaa-111"]),
+		);
+
+		const testDb = openTestDb();
+		recordAgentFeedbackInner(testDb, "session-fb-8", {});
+
+		const result = getFeedbackColumns(testDb, "session-fb-8", "mem-aaa-111");
+		testDb.close();
+
+		expect(result!.agent_relevance_score).toBeNull();
+		expect(result!.agent_feedback_count).toBe(0);
 	});
 });

@@ -249,6 +249,12 @@ export interface PipelineV2Config {
 	readonly structural: PipelineStructuralConfig;
 	readonly feedback: PipelineFeedbackConfig;
 	readonly predictor?: PredictorConfig;
+	readonly predictorPipeline: PipelinePredictorConfig;
+}
+
+export interface PipelinePredictorConfig {
+	readonly agentFeedback: boolean;
+	readonly trainingTelemetry: boolean;
 }
 
 export interface PredictorConfig {

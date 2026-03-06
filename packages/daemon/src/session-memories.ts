@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getDbAccessor } from "./db-accessor";
+import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 
 function getMemoryDbPath(): string {
@@ -188,6 +188,89 @@ export function trackFtsHits(sessionKey: string | undefined, matchedIds: Readonl
 	} catch (e) {
 		logger.warn("session-memories", "Failed to track FTS hits", {
 			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Agent relevance feedback
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate and clamp a raw feedback object. Returns a clean map of
+ * memory IDs to scores in [-1, 1], or null if the input is invalid.
+ */
+export function parseFeedback(
+	raw: unknown,
+): Record<string, number> | null {
+	if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) {
+		return null;
+	}
+	const result: Record<string, number> = {};
+	let count = 0;
+	for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+		if (typeof key !== "string" || key.length === 0) continue;
+		if (typeof val !== "number" || !Number.isFinite(val)) continue;
+		result[key] = Math.max(-1, Math.min(1, val));
+		count++;
+	}
+	return count > 0 ? result : null;
+}
+
+/**
+ * Accumulate agent relevance feedback for session memories.
+ *
+ * Uses a running mean: for each memory_id in the feedback map,
+ * new_score = (old_score * old_count + score) / (old_count + 1).
+ * When old_score is NULL (first feedback), the score is used directly.
+ *
+ * Operates on the inner WriteDb so callers can integrate into an
+ * existing transaction. For standalone use, wrap with withWriteTx.
+ */
+export function recordAgentFeedbackInner(
+	db: WriteDb,
+	sessionKey: string,
+	feedback: Readonly<Record<string, number>>,
+): void {
+	// Single-row UPDATE with running mean calculation.
+	// CASE handles NULL (first feedback) vs existing score.
+	const stmt = db.prepare(`
+		UPDATE session_memories
+		SET agent_relevance_score = CASE
+				WHEN agent_relevance_score IS NULL THEN ?
+				ELSE (agent_relevance_score * agent_feedback_count + ?) / (agent_feedback_count + 1)
+			END,
+			agent_feedback_count = COALESCE(agent_feedback_count, 0) + 1
+		WHERE session_key = ? AND memory_id = ?
+	`);
+
+	for (const [memoryId, score] of Object.entries(feedback)) {
+		stmt.run(score, score, sessionKey, memoryId);
+	}
+}
+
+/**
+ * Public entry point: accumulate agent relevance feedback for a session.
+ * Fail-open — logs warnings but never throws.
+ */
+export function recordAgentFeedback(
+	sessionKey: string | undefined,
+	feedback: Readonly<Record<string, number>>,
+): void {
+	if (!sessionKey || Object.keys(feedback).length === 0 || !existsSync(getMemoryDbPath())) return;
+
+	try {
+		getDbAccessor().withWriteTx((db) => {
+			recordAgentFeedbackInner(db, sessionKey, feedback);
+		});
+
+		logger.debug("session-memories", "Recorded agent feedback", {
+			sessionKey,
+			memoryCount: Object.keys(feedback).length,
+		});
+	} catch (e) {
+		logger.warn("session-memories", "Failed to record agent feedback", {
+			error: (e as Error).message,
 		});
 	}
 }

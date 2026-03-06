@@ -17,6 +17,7 @@
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
 import { txDecrementEntityMentions } from "./graph-transactions";
+import { purgeOldTrainingPairs } from "../predictor-training-pairs";
 import { logger } from "../logger";
 
 export interface RetentionConfig {
@@ -58,6 +59,7 @@ export interface RetentionSweepResult {
 	historyPurged: number;
 	completedJobsPurged: number;
 	deadJobsPurged: number;
+	trainingPairsPurged: number;
 }
 
 function purgeGraphLinks(
@@ -240,6 +242,9 @@ function runSweep(
 		purgeDeadJobs(db, deadJobCutoff, cfg.batchLimit),
 	);
 
+	// Step 7: old predictor training pairs (90-day retention)
+	const trainingPairsPurged = purgeOldTrainingPairs(accessor, 90);
+
 	return {
 		graphLinksPurged,
 		entitiesOrphaned,
@@ -248,6 +253,7 @@ function runSweep(
 		historyPurged,
 		completedJobsPurged,
 		deadJobsPurged,
+		trainingPairsPurged,
 	};
 }
 
@@ -267,7 +273,8 @@ export function startRetentionWorker(
 			result.tombstonesPurged +
 			result.historyPurged +
 			result.completedJobsPurged +
-			result.deadJobsPurged;
+			result.deadJobsPurged +
+			result.trainingPairsPurged;
 
 		if (total > 0) {
 			logger.info("retention", "Sweep completed", result);

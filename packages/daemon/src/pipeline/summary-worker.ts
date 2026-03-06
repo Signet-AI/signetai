@@ -296,6 +296,25 @@ async function processJob(
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
+
+	// --- Training pair collection for predictor federated learning ---
+	if (job.session_key) {
+		try {
+			if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
+				const { collectTrainingPairs, saveTrainingPairs } = await import(
+					"../predictor-training-pairs"
+				);
+				const pairs = collectTrainingPairs(accessor, job.session_key, agentId);
+				if (pairs.length > 0) {
+					saveTrainingPairs(accessor, agentId, job.session_key, pairs);
+				}
+			}
+		} catch (e) {
+			logger.warn("summary-worker", "Training pair collection failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

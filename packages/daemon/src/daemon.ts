@@ -6138,6 +6138,57 @@ app.get("/api/telemetry/export", (c) => {
 	return c.text(lines, 200, { "Content-Type": "application/x-ndjson" });
 });
 
+app.get("/api/telemetry/training-export", async (c) => {
+	const { exportTrainingPairs } = await import("./predictor-training-pairs");
+	const agentId = c.req.query("agent_id") ?? "default";
+	const since = c.req.query("since");
+	const rawLimit = Number.parseInt(c.req.query("limit") ?? "1000", 10);
+	const limit = Math.min(Math.max(1, rawLimit), 10000);
+	const format = c.req.query("format") ?? "ndjson";
+
+	const pairs = exportTrainingPairs(getDbAccessor(), agentId, { since, limit });
+
+	if (format === "csv") {
+		const header = [
+			"id", "agent_id", "session_key", "memory_id",
+			"recency_days", "access_count", "importance", "decay_factor",
+			"embedding_similarity", "entity_slot", "aspect_slot",
+			"is_constraint", "structural_density", "fts_hit_count",
+			"agent_relevance_score", "continuity_score", "fts_overlap_score",
+			"combined_label", "was_injected", "predictor_rank", "baseline_rank",
+			"created_at",
+		].join(",");
+
+		const rows = pairs.map((p) => [
+			p.id, p.agentId, p.sessionKey, p.memoryId,
+			p.features.recencyDays, p.features.accessCount,
+			p.features.importance, p.features.decayFactor,
+			p.features.embeddingSimilarity ?? "",
+			p.features.entitySlot ?? "",
+			p.features.aspectSlot ?? "",
+			p.features.isConstraint ? 1 : 0,
+			p.features.structuralDensity ?? "",
+			p.features.ftsHitCount,
+			p.label.agentRelevanceScore ?? "",
+			p.label.continuityScore ?? "",
+			p.label.ftsOverlapScore ?? "",
+			p.label.combined,
+			p.wasInjected ? 1 : 0,
+			p.predictorRank ?? "",
+			p.baselineRank ?? "",
+			p.createdAt,
+		].join(","));
+
+		return c.text([header, ...rows].join("\n"), 200, {
+			"Content-Type": "text/csv",
+		});
+	}
+
+	// Default: NDJSON
+	const ndjsonLines = pairs.map((p) => JSON.stringify(p)).join("\n");
+	return c.text(ndjsonLines, 200, { "Content-Type": "application/x-ndjson" });
+});
+
 app.get("/api/timeline/:id", (c) => {
 	const entityId = c.req.param("id");
 	const timeline = getDbAccessor().withReadDb((db) =>
