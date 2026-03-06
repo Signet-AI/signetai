@@ -1,0 +1,27 @@
+{
+  "name": "@signet/insight-engine",
+  "version": "0.1.0",
+  "description": "Companion service for Signet: InsightSynthesizer, File Inbox Watcher, and Insights Dashboard. PR-ready additions to signetai.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "migrate": "node scripts/migrate.js",
+    "register-task": "node scripts/register-scheduled-task.js",
+    "dev": "node --watch index.js",
+    "test": "node test/smoke-test.js"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "express": "^4.18.2",
+    "js-yaml": "^4.1.0",
+    "node-cron": "^3.0.3",
+    "uuid": "^9.0.1"
+  },
+  "notes": {
+    "sqlite": "Uses built-in node:sqlite (Node >= v22.5) — no native build required"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

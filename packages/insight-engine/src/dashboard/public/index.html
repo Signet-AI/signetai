@@ -1,0 +1,1584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>✦ Insight Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0a0a0a;
+      --surface:  #111111;
+      --surface2: #181818;
+      --surface3: #1e1e1e;
+      --border:   #222222;
+      --accent:   #00ff88;
+      --accent2:  #00cc6a;
+      --accent-dim: rgba(0,255,136,0.12);
+      --accent-glow: rgba(0,255,136,0.25);
+      --text:     #e8e8e8;
+      --text-muted: #666;
+      --text-dim: #888;
+      --person:   #4fc3f7;
+      --org:      #ff8a65;
+      --other:    #90a4ae;
+      --error:    #ef5350;
+      --warning:  #ffd54f;
+      --info:     #4fc3f7;
+      --success:  #00ff88;
+      --radius:   10px;
+      --radius-sm: 6px;
+      --transition: 0.2s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ─── Layout ─────────────────────────────────────────────── */
+    #app { display: flex; flex-direction: column; min-height: 100vh; }
+
+    /* ─── Header ─────────────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      height: 56px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+    .header-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+    }
+    .header-logo .star {
+      color: var(--accent);
+      font-size: 18px;
+      line-height: 1;
+    }
+    .header-logo .brand { color: var(--text); }
+    .header-logo .brand span { color: var(--accent); }
+
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent);
+      animation: pulse-dot 2.5s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%,100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    /* ─── Tabs ────────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      padding: 0 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .tab-btn {
+      position: relative;
+      padding: 12px 20px;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font: 500 13px 'Inter', sans-serif;
+      cursor: pointer;
+      transition: color var(--transition);
+      letter-spacing: 0.02em;
+    }
+    .tab-btn::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 2px 2px 0 0;
+      transform: scaleX(0);
+      transition: transform var(--transition);
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); }
+    .tab-btn.active::after { transform: scaleX(1); }
+    .tab-btn svg { vertical-align: middle; margin-right: 6px; }
+
+    /* ─── Content ─────────────────────────────────────────────── */
+    .content { flex: 1; overflow: hidden; }
+    .tab-pane {
+      display: none;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    .tab-pane.active {
+      display: block;
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .tab-pane.animate-in {
+      animation: fadeSlideIn 0.25s ease forwards;
+    }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ─── Insights ─────────────────────────────────────────────── */
+    #pane-insights { padding: 0; }
+
+    .insights-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 20px 24px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stats-bar {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .stat-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--accent);
+      line-height: 1;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 18px;
+      border: none;
+      border-radius: var(--radius-sm);
+      font: 500 13px 'Inter', sans-serif;
+      cursor: pointer;
+      transition: all var(--transition);
+      white-space: nowrap;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+      box-shadow: 0 0 0 0 var(--accent-glow);
+    }
+    .btn-primary:hover {
+      background: var(--accent2);
+      box-shadow: 0 0 20px var(--accent-glow);
+      transform: translateY(-1px);
+    }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    .btn-secondary {
+      background: var(--surface3);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+      padding: 20px 24px;
+    }
+    @media (max-width: 768px) {
+      .card-grid { grid-template-columns: 1fr; }
+      .insights-toolbar { padding: 16px; }
+      .card-grid { padding: 12px 16px; }
+      .stats-bar { gap: 16px; }
+    }
+
+    .insight-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+      cursor: default;
+    }
+    .insight-card:hover {
+      border-color: rgba(0,255,136,0.3);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,255,136,0.08);
+      transform: translateY(-2px);
+    }
+    .insight-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .cluster-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .insight-time {
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .insight-text {
+      font-size: 14px;
+      line-height: 1.65;
+      color: var(--text);
+    }
+    .tags-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .tag-chip {
+      padding: 3px 10px;
+      border-radius: 100px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(0,255,136,0.3);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+    }
+    .sources-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: 100px;
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+    .sources-badge svg { color: var(--accent); flex-shrink: 0; }
+
+    details.connections-detail {
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+    }
+    details.connections-detail summary {
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text-dim);
+      user-select: none;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: color var(--transition);
+    }
+    details.connections-detail summary::-webkit-details-marker { display: none; }
+    details.connections-detail summary:hover { color: var(--accent); }
+    details.connections-detail summary .chevron {
+      transition: transform 0.2s ease;
+    }
+    details.connections-detail[open] summary .chevron {
+      transform: rotate(90deg);
+    }
+    .connections-list {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .connection-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      background: var(--surface2);
+      font-size: 12px;
+    }
+    .connection-item .conn-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      flex-shrink: 0;
+    }
+    .connection-item .conn-label { color: var(--text-dim); }
+
+    /* ─── Empty State ─────────────────────────────────────────── */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 80px 24px;
+      text-align: center;
+    }
+    .empty-icon {
+      width: 56px; height: 56px;
+      border-radius: 14px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+    }
+    .empty-state h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .empty-state p {
+      font-size: 13px;
+      color: var(--text-muted);
+      max-width: 300px;
+      line-height: 1.6;
+    }
+
+    /* ─── Spinner ─────────────────────────────────────────────── */
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid rgba(0,0,0,0.3);
+      border-top-color: #000;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    .spinner-lg {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      padding: 80px 24px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* ─── Graph ───────────────────────────────────────────────── */
+    #pane-graph {
+      position: relative;
+      height: calc(100vh - 105px);
+      display: flex;
+      overflow: hidden;
+    }
+    #graph-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    #graph-svg {
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      display: block;
+    }
+    .graph-controls {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 10;
+    }
+    .graph-legend {
+      position: absolute;
+      bottom: 16px;
+      left: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      z-index: 10;
+      min-width: 140px;
+    }
+    .legend-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+    .legend-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* Node sidebar */
+    #node-sidebar {
+      width: 280px;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+      position: absolute;
+      right: 0; top: 0; bottom: 0;
+      z-index: 20;
+      overflow-y: auto;
+    }
+    #node-sidebar.open { transform: translateX(0); }
+    .sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+      z-index: 1;
+    }
+    .sidebar-header h3 {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .btn-icon {
+      width: 28px; height: 28px;
+      border-radius: var(--radius-sm);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: all var(--transition);
+    }
+    .btn-icon:hover { border-color: var(--accent); color: var(--accent); }
+    .sidebar-body { padding: 16px; flex: 1; }
+    .entity-name {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+    .entity-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .entity-badge {
+      padding: 3px 9px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .entity-badge.extracted { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(0,255,136,0.3); }
+    .entity-badge.person { background: rgba(79,195,247,0.15); color: var(--person); border: 1px solid rgba(79,195,247,0.3); }
+    .entity-badge.organization { background: rgba(255,138,101,0.15); color: var(--org); border: 1px solid rgba(255,138,101,0.3); }
+    .entity-badge.other { background: rgba(144,164,174,0.15); color: var(--other); border: 1px solid rgba(144,164,174,0.3); }
+    .sidebar-section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      margin-top: 20px;
+    }
+    .memory-item {
+      padding: 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      margin-bottom: 8px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-dim);
+      transition: border-color var(--transition);
+    }
+    .memory-item:hover { border-color: rgba(0,255,136,0.2); color: var(--text); }
+
+    /* ─── Inbox ───────────────────────────────────────────────── */
+    #pane-inbox { padding: 20px 24px; }
+    @media (max-width: 768px) { #pane-inbox { padding: 12px 16px; } }
+
+    .status-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 14px 18px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 20px;
+    }
+    .status-banner.enabled {
+      border-color: rgba(0,255,136,0.3);
+      background: rgba(0,255,136,0.04);
+    }
+    .status-banner.disabled {
+      border-color: rgba(255,211,79,0.3);
+      background: rgba(255,211,79,0.04);
+    }
+    .status-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .status-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .status-pill {
+      padding: 2px 8px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .status-pill.enabled { background: var(--accent-dim); color: var(--accent); }
+    .status-pill.disabled { background: rgba(255,211,79,0.15); color: var(--warning); }
+    .status-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .file-types-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    @media (max-width: 480px) {
+      .file-types-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+    .file-type-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      transition: border-color var(--transition), transform var(--transition);
+    }
+    .file-type-card:hover {
+      border-color: rgba(0,255,136,0.3);
+      transform: translateY(-2px);
+    }
+    .file-type-icon {
+      width: 32px; height: 32px;
+      color: var(--accent);
+    }
+    .file-type-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .auto-refresh-badge {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .refresh-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+
+    .jobs-table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    thead tr {
+      background: var(--surface2);
+    }
+    th {
+      padding: 10px 14px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    td {
+      padding: 11px 14px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+    .filename-cell {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .status-badge.completed { background: rgba(0,255,136,0.12); color: var(--success); }
+    .status-badge.pending   { background: rgba(255,213,79,0.12); color: var(--warning); }
+    .status-badge.processing{ background: rgba(79,195,247,0.12); color: var(--info); }
+    .status-badge.error     { background: rgba(239,83,80,0.12);  color: var(--error); }
+    .status-badge .badge-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* ─── Graph node tooltips ─────────────────────────────────── */
+    .graph-tooltip {
+      position: absolute;
+      pointer-events: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 7px 10px;
+      font-size: 12px;
+      color: var(--text);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      z-index: 100;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+      max-width: 200px;
+    }
+    .graph-tooltip.visible { opacity: 1; }
+    .graph-tooltip strong { color: var(--accent); }
+
+    /* ─── Misc ─────────────────────────────────────────────────── */
+    .section-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 20px 0;
+    }
+
+    .mono { font-family: 'JetBrains Mono', monospace; }
+
+    /* scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #333; }
+
+    /* graph grid bg */
+    #graph-svg .grid-line { stroke: #1a1a1a; stroke-width: 1; }
+
+    /* edge lines */
+    .graph-link { stroke: #444; stroke-width: 1.5; }
+    .graph-node circle { cursor: pointer; transition: r 0.15s ease; }
+    .graph-node:hover circle { filter: brightness(1.3); }
+    .graph-node.selected circle { stroke: #fff; stroke-width: 2; }
+    .graph-label {
+      fill: var(--text-dim);
+      font-size: 10px;
+      font-family: 'Inter', sans-serif;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    /* toast */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 18px;
+      font-size: 13px;
+      color: var(--text);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      z-index: 999;
+      transform: translateY(80px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
+      max-width: 300px;
+    }
+    #toast.show { transform: translateY(0); opacity: 1; }
+    #toast.success { border-color: rgba(0,255,136,0.4); }
+    #toast.error   { border-color: rgba(239,83,80,0.4); }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ─── Header ─────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-logo">
+      <span class="star">✦</span>
+      <span class="brand">Insight <span>Engine</span></span>
+      <div class="status-dot" id="status-dot" title="System online"></div>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;">
+      localhost:3851
+    </div>
+  </header>
+
+  <!-- ─── Tabs ───────────────────────────────────────────────── -->
+  <nav class="tabs" role="tablist">
+    <button class="tab-btn active" data-tab="insights" role="tab" onclick="switchTab('insights')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      Insights
+    </button>
+    <button class="tab-btn" data-tab="graph" role="tab" onclick="switchTab('graph')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      Graph
+    </button>
+    <button class="tab-btn" data-tab="inbox" role="tab" onclick="switchTab('inbox')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+      Inbox
+    </button>
+  </nav>
+
+  <!-- ─── Content ────────────────────────────────────────────── -->
+  <main class="content">
+
+    <!-- ── Insights Pane ──────────────────────────────────────── -->
+    <div class="tab-pane active" id="pane-insights">
+      <div class="insights-toolbar">
+        <div class="stats-bar" id="insights-stats">
+          <div class="stat-item">
+            <div class="stat-value" id="stat-insights">—</div>
+            <div class="stat-label">Insights</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-clusters">—</div>
+            <div class="stat-label">Clusters</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-memories">—</div>
+            <div class="stat-label">Memories</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-last-run">—</div>
+            <div class="stat-label">Last Run</div>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="run-btn" onclick="runSynthesis()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+          Run Synthesis
+        </button>
+      </div>
+      <div id="insights-body">
+        <div class="loading-state">
+          <div class="spinner-lg"></div>
+          <span>Loading insights…</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Graph Pane ─────────────────────────────────────────── -->
+    <div class="tab-pane" id="pane-graph">
+      <div id="graph-container">
+        <svg id="graph-svg"></svg>
+
+        <div class="graph-controls">
+          <button class="btn btn-secondary" onclick="resetZoom()" style="padding:7px 14px;font-size:12px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            Reset Zoom
+          </button>
+        </div>
+
+        <div class="graph-legend">
+          <div class="legend-title">Entity Type</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#00ff88"></div> Extracted</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#4fc3f7"></div> Person</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#ff8a65"></div> Organization</div>
+          <div class="legend-item"><div class="legend-dot" style="background:#90a4ae"></div> Other</div>
+        </div>
+
+        <div id="graph-tooltip" class="graph-tooltip"></div>
+
+        <div id="graph-loading" class="loading-state" style="position:absolute;inset:0;background:var(--bg);z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+          <div class="spinner-lg"></div>
+          <span style="color:var(--text-muted);font-size:13px;margin-top:14px;">Loading graph…</span>
+        </div>
+      </div>
+
+      <!-- Node Sidebar -->
+      <div id="node-sidebar">
+        <div class="sidebar-header">
+          <h3>Entity Details</h3>
+          <button class="btn-icon" onclick="closeSidebar()" title="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="sidebar-body" id="sidebar-body">
+          <p style="color:var(--text-muted);font-size:13px;">Click a node to explore</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Inbox Pane ─────────────────────────────────────────── -->
+    <div class="tab-pane" id="pane-inbox">
+      <!-- Status Banner -->
+      <div class="status-banner" id="inbox-banner">
+        <div class="status-info">
+          <div class="status-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            File Inbox
+            <span class="status-pill" id="inbox-status-pill">—</span>
+          </div>
+          <div class="status-sub" id="inbox-status-sub">Checking status…</div>
+        </div>
+        <button class="btn btn-secondary" id="inbox-toggle-btn" onclick="toggleInbox()">
+          Enable Inbox
+        </button>
+      </div>
+
+      <!-- Supported Types -->
+      <div style="margin-bottom:20px;">
+        <div class="section-header">
+          <span class="section-title">Supported File Types</span>
+        </div>
+        <div class="file-types-grid">
+          <div class="file-type-card">
+            <svg class="file-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+            <span class="file-type-label">Text / Markdown</span>
+          </div>
+          <div class="file-type-card">
+            <svg class="file-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <rect x="8" y="12" width="8" height="6" rx="1"/>
+            </svg>
+            <span class="file-type-label">PDF</span>
+          </div>
+          <div class="file-type-card">
+            <svg class="file-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <circle cx="8.5" cy="8.5" r="1.5"/>
+              <polyline points="21 15 16 10 5 21"/>
+            </svg>
+            <span class="file-type-label">Image</span>
+          </div>
+          <div class="file-type-card">
+            <svg class="file-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 18V5l12-2v13"/>
+              <circle cx="6" cy="18" r="3"/>
+              <circle cx="18" cy="16" r="3"/>
+            </svg>
+            <span class="file-type-label">Audio</span>
+          </div>
+          <div class="file-type-card">
+            <svg class="file-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="23 7 16 12 23 17 23 7"/>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            <span class="file-type-label">Video</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Jobs Table -->
+      <div class="section-header">
+        <span class="section-title">Recent Jobs</span>
+        <div class="auto-refresh-badge">
+          <div class="refresh-dot"></div>
+          Auto-refresh 10s
+        </div>
+      </div>
+      <div id="jobs-container">
+        <div class="loading-state">
+          <div class="spinner-lg"></div>
+          <span>Loading jobs…</span>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   CONFIG & STATE
+═══════════════════════════════════════════════════════════════ */
+const API = 'http://localhost:3851';
+let currentTab = 'insights';
+let graphSimulation = null;
+let graphZoom = null;
+let graphSvg = null;
+let inboxRefreshTimer = null;
+
+/* ═══════════════════════════════════════════════════════════════
+   UTILITIES
+═══════════════════════════════════════════════════════════════ */
+function relativeTime(ts) {
+  if (!ts) return '—';
+  const diff = Date.now() - new Date(ts).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+function showToast(msg, type = 'info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `show ${type}`;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.className = ''; }, 3500);
+}
+
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(API + path, opts);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TAB SWITCHING
+═══════════════════════════════════════════════════════════════ */
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  document.querySelectorAll('.tab-pane').forEach(p => {
+    const isActive = p.id === `pane-${tab}`;
+    if (isActive && !p.classList.contains('active')) {
+      p.classList.add('active', 'animate-in');
+      setTimeout(() => p.classList.remove('animate-in'), 300);
+    } else if (!isActive) {
+      p.classList.remove('active');
+    }
+  });
+  currentTab = tab;
+
+  if (tab === 'graph' && !graphSimulation) loadGraph();
+  if (tab === 'inbox') {
+    loadInbox();
+    startInboxRefresh();
+  } else {
+    stopInboxRefresh();
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TAB 1: INSIGHTS
+═══════════════════════════════════════════════════════════════ */
+async function loadInsights() {
+  try {
+    const [stats, data] = await Promise.all([
+      apiFetch('/api/insights/stats').catch(() => null),
+      apiFetch('/api/insights?limit=20').catch(() => ({ insights: [] }))
+    ]);
+
+    if (stats) {
+      setStatValue('stat-insights',  stats.totalInsights  ?? stats.insights  ?? '0');
+      setStatValue('stat-clusters',  stats.totalClusters  ?? stats.clusters  ?? '0');
+      setStatValue('stat-memories',  stats.totalMemories  ?? stats.memories  ?? '0');
+      setStatValue('stat-last-run',  relativeTime(stats.lastRun ?? stats.last_run));
+    }
+
+    const insights = data.insights ?? data ?? [];
+    renderInsights(insights);
+  } catch (e) {
+    renderInsights([]);
+  }
+}
+
+function setStatValue(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  animateCounter(el, val);
+}
+
+function animateCounter(el, target) {
+  const num = parseInt(target);
+  if (isNaN(num)) { el.textContent = target; return; }
+  const start = 0;
+  const duration = 600;
+  const startTime = performance.now();
+  function tick(now) {
+    const p = Math.min((now - startTime) / duration, 1);
+    const ease = 1 - Math.pow(1 - p, 3);
+    el.textContent = Math.round(start + (num - start) * ease);
+    if (p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function renderInsights(insights) {
+  const body = document.getElementById('insights-body');
+  if (!insights.length) {
+    body.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>
+          </svg>
+        </div>
+        <h3>No insights yet</h3>
+        <p>Click <strong style="color:var(--accent)">▶ Run Synthesis</strong> to generate insights from your memory clusters.</p>
+      </div>`;
+    return;
+  }
+
+  body.innerHTML = `<div class="card-grid" id="insight-grid"></div>`;
+  const grid = document.getElementById('insight-grid');
+
+  insights.forEach((ins, i) => {
+    const card = document.createElement('div');
+    card.className = 'insight-card';
+    card.style.animationDelay = `${i * 40}ms`;
+
+    const tags = (ins.themes ?? ins.tags ?? []).slice(0, 6);
+    const connections = ins.connections ?? ins.related_memories ?? [];
+    const sourceCount = ins.memory_count ?? ins.sources ?? connections.length ?? 0;
+
+    card.innerHTML = `
+      <div class="insight-card-header">
+        <div class="cluster-label">${escHtml(ins.cluster ?? ins.label ?? `Cluster ${i+1}`)}</div>
+        <div class="insight-time">${relativeTime(ins.created_at ?? ins.timestamp)}</div>
+      </div>
+      <div class="insight-text">${escHtml(ins.insight ?? ins.text ?? ins.observation ?? '')}</div>
+      ${tags.length ? `<div class="tags-row">${tags.map(t=>`<span class="tag-chip">${escHtml(t)}</span>`).join('')}</div>` : ''}
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span class="sources-badge">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Sources: ${sourceCount} memories
+        </span>
+      </div>
+      ${connections.length ? `
+      <details class="connections-detail">
+        <summary>
+          <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          ${connections.length} connected memories
+        </summary>
+        <div class="connections-list">
+          ${connections.slice(0,8).map(c=>`
+            <div class="connection-item">
+              <div class="conn-dot"></div>
+              <span class="conn-label">${escHtml(typeof c === 'string' ? c : c.content ?? c.id ?? JSON.stringify(c)).substring(0, 80)}${(typeof c === 'string' ? c : c.content ?? '').length > 80 ? '…' : ''}</span>
+            </div>`).join('')}
+        </div>
+      </details>` : ''}
+    `;
+    grid.appendChild(card);
+  });
+}
+
+async function runSynthesis() {
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  btn.innerHTML = `<div class="spinner"></div> Running…`;
+
+  try {
+    await apiFetch('/api/insights/run', { method: 'POST' });
+    showToast('Synthesis complete!', 'success');
+    await loadInsights();
+  } catch(e) {
+    showToast('Synthesis failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg> Run Synthesis`;
+  }
+}
+
+function escHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TAB 2: GRAPH
+═══════════════════════════════════════════════════════════════ */
+async function loadGraph() {
+  try {
+    const [entData, relData] = await Promise.all([
+      apiFetch('/api/graph/entities?limit=150').catch(() => ({ entities: [] })),
+      apiFetch('/api/graph/relations?limit=400').catch(() => ({ relations: [] }))
+    ]);
+
+    const nodes = (entData.entities ?? entData ?? []).map(e => ({
+      id: e.id ?? e.name,
+      name: e.name,
+      type: e.entity_type ?? e.type ?? 'extracted',
+      mentions: e.mention_count ?? e.mentions ?? 1
+    }));
+
+    const nodeIds = new Set(nodes.map(n => n.id));
+    const links = (relData.relations ?? relData ?? [])
+      .filter(r => nodeIds.has(r.source_id ?? r.source) && nodeIds.has(r.target_id ?? r.target))
+      .map(r => ({
+        source: r.source_id ?? r.source,
+        target: r.target_id ?? r.target,
+        strength: r.strength ?? r.weight ?? 0.5
+      }));
+
+    hideGraphLoading();
+    renderGraph(nodes, links);
+  } catch(e) {
+    hideGraphLoading();
+    renderGraphEmpty(e.message);
+  }
+}
+
+function hideGraphLoading() {
+  const el = document.getElementById('graph-loading');
+  if (el) el.style.display = 'none';
+}
+
+function renderGraphEmpty(msg) {
+  const cont = document.getElementById('graph-container');
+  cont.innerHTML = `
+    <div class="empty-state" style="height:100%;">
+      <div class="empty-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      </div>
+      <h3>Graph unavailable</h3>
+      <p>${escHtml(msg || 'Could not load graph data.')}</p>
+    </div>`;
+}
+
+const NODE_COLORS = {
+  extracted:    '#00ff88',
+  person:       '#4fc3f7',
+  organization: '#ff8a65',
+};
+function nodeColor(type) {
+  return NODE_COLORS[type] ?? '#90a4ae';
+}
+function nodeRadius(mentions) {
+  return Math.min(Math.sqrt(mentions || 1) * 3, 20);
+}
+
+let currentZoomScale = 1;
+
+function renderGraph(nodes, links) {
+  const svg = d3.select('#graph-svg');
+  svg.selectAll('*').remove();
+  const W = document.getElementById('graph-svg').clientWidth || 800;
+  const H = document.getElementById('graph-svg').clientHeight || 600;
+
+  // Grid background
+  const defs = svg.append('defs');
+  const pattern = defs.append('pattern')
+    .attr('id', 'grid')
+    .attr('width', 40).attr('height', 40)
+    .attr('patternUnits', 'userSpaceOnUse');
+  pattern.append('path')
+    .attr('d', 'M 40 0 L 0 0 0 40')
+    .attr('fill', 'none')
+    .attr('stroke', '#151515')
+    .attr('stroke-width', 1);
+  svg.append('rect').attr('width','100%').attr('height','100%').attr('fill','url(#grid)');
+
+  // Arrow marker
+  defs.append('marker')
+    .attr('id', 'arrow')
+    .attr('viewBox', '0 -4 8 8')
+    .attr('refX', 14).attr('refY', 0)
+    .attr('markerWidth', 4).attr('markerHeight', 4)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-4L8,0L0,4')
+    .attr('fill', '#444');
+
+  const g = svg.append('g').attr('class', 'graph-root');
+
+  // Zoom
+  graphZoom = d3.zoom()
+    .scaleExtent([0.1, 8])
+    .on('zoom', (event) => {
+      g.attr('transform', event.transform);
+      currentZoomScale = event.transform.k;
+      // Toggle labels based on zoom
+      g.selectAll('.graph-label')
+        .style('display', currentZoomScale > 1.2 ? 'block' : 'none');
+    });
+  svg.call(graphZoom);
+  graphSvg = svg;
+
+  // Links
+  const link = g.append('g').attr('class', 'links')
+    .selectAll('line')
+    .data(links)
+    .join('line')
+    .attr('class', 'graph-link')
+    .attr('stroke', '#333')
+    .attr('stroke-width', d => Math.max(0.5, (d.strength ?? 0.5) * 2))
+    .attr('stroke-opacity', d => (d.strength ?? 0.5) * 0.6);
+
+  // Nodes
+  const node = g.append('g').attr('class', 'nodes')
+    .selectAll('g')
+    .data(nodes)
+    .join('g')
+    .attr('class', 'graph-node')
+    .call(
+      d3.drag()
+        .on('start', (event, d) => {
+          if (!event.active) graphSimulation.alphaTarget(0.3).restart();
+          d.fx = d.x; d.fy = d.y;
+        })
+        .on('drag', (event, d) => {
+          d.fx = event.x; d.fy = event.y;
+        })
+        .on('end', (event, d) => {
+          if (!event.active) graphSimulation.alphaTarget(0);
+          d.fx = null; d.fy = null;
+        })
+    )
+    .on('click', (event, d) => {
+      event.stopPropagation();
+      openSidebar(d);
+      // Highlight selected
+      g.selectAll('.graph-node').classed('selected', n => n === d);
+    })
+    .on('mouseover', (event, d) => {
+      const tip = document.getElementById('graph-tooltip');
+      tip.innerHTML = `<strong>${escHtml(d.name)}</strong><br><span style="color:var(--text-muted)">${d.type} · ${d.mentions} mentions</span>`;
+      tip.classList.add('visible');
+    })
+    .on('mousemove', (event) => {
+      const tip = document.getElementById('graph-tooltip');
+      const rect = document.getElementById('graph-container').getBoundingClientRect();
+      tip.style.left = (event.clientX - rect.left + 12) + 'px';
+      tip.style.top  = (event.clientY - rect.top  - 10) + 'px';
+    })
+    .on('mouseout', () => {
+      document.getElementById('graph-tooltip').classList.remove('visible');
+    });
+
+  node.append('circle')
+    .attr('r', d => nodeRadius(d.mentions))
+    .attr('fill', d => nodeColor(d.type))
+    .attr('fill-opacity', 0.85)
+    .attr('stroke', d => nodeColor(d.type))
+    .attr('stroke-width', 1.5)
+    .attr('stroke-opacity', 0.4);
+
+  // Glow filter
+  const blur = defs.append('filter').attr('id', 'glow');
+  blur.append('feGaussianBlur').attr('stdDeviation', '2').attr('result', 'coloredBlur');
+  const feMerge = blur.append('feMerge');
+  feMerge.append('feMergeNode').attr('in', 'coloredBlur');
+  feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  node.select('circle').attr('filter', d => d.type === 'extracted' ? 'url(#glow)' : null);
+
+  // Labels (hidden by default until zoom > 1.2)
+  node.append('text')
+    .attr('class', 'graph-label')
+    .attr('dx', d => nodeRadius(d.mentions) + 4)
+    .attr('dy', '0.35em')
+    .text(d => d.name)
+    .style('display', 'none');
+
+  // Click backdrop to deselect
+  svg.on('click', () => {
+    g.selectAll('.graph-node').classed('selected', false);
+    closeSidebar();
+  });
+
+  // Simulation
+  graphSimulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(80).strength(0.4))
+    .force('charge', d3.forceManyBody().strength(-200).distanceMax(300))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collide', d3.forceCollide(d => nodeRadius(d.mentions) + 6))
+    .on('tick', () => {
+      link
+        .attr('x1', d => d.source.x)
+        .attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x)
+        .attr('y2', d => d.target.y);
+      node.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+}
+
+function resetZoom() {
+  if (!graphSvg || !graphZoom) return;
+  graphSvg.transition().duration(500).call(
+    graphZoom.transform,
+    d3.zoomIdentity
+  );
+}
+
+async function openSidebar(entity) {
+  const sidebar = document.getElementById('node-sidebar');
+  const body    = document.getElementById('sidebar-body');
+  sidebar.classList.add('open');
+
+  const badgeClass = ['extracted','person','organization'].includes(entity.type) ? entity.type : 'other';
+  body.innerHTML = `
+    <div class="entity-name">${escHtml(entity.name)}</div>
+    <div class="entity-meta">
+      <span class="entity-badge ${badgeClass}">${entity.type}</span>
+      <span class="entity-badge other" style="background:var(--surface3);color:var(--text-dim);border-color:var(--border);">
+        ${entity.mentions} mentions
+      </span>
+    </div>
+    <div class="sidebar-section-title">Related Memories</div>
+    <div id="sidebar-memories">
+      <div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px;">
+        <div class="spinner" style="border-top-color:var(--accent);border-color:var(--border);"></div> Loading…
+      </div>
+    </div>`;
+
+  try {
+    const data = await apiFetch(`/api/memory/search?q=${encodeURIComponent(entity.name)}&limit=5`);
+    const mems = data.memories ?? data.results ?? data ?? [];
+    const memDiv = document.getElementById('sidebar-memories');
+    if (!mems.length) {
+      memDiv.innerHTML = `<p style="color:var(--text-muted);font-size:12px;">No memories found</p>`;
+    } else {
+      memDiv.innerHTML = mems.map(m => `
+        <div class="memory-item">${escHtml((m.content ?? m.text ?? JSON.stringify(m)).substring(0, 140))}${(m.content ?? m.text ?? '').length > 140 ? '…' : ''}</div>
+      `).join('');
+    }
+  } catch(e) {
+    const memDiv = document.getElementById('sidebar-memories');
+    if (memDiv) memDiv.innerHTML = `<p style="color:var(--error);font-size:12px;">${escHtml(e.message)}</p>`;
+  }
+}
+
+function closeSidebar() {
+  document.getElementById('node-sidebar').classList.remove('open');
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TAB 3: INBOX
+═══════════════════════════════════════════════════════════════ */
+async function loadInbox() {
+  await Promise.all([loadInboxStatus(), loadInboxJobs()]);
+}
+
+async function loadInboxStatus() {
+  try {
+    const s = await apiFetch('/api/inbox/status');
+    const enabled = s.enabled ?? false;
+    const banner = document.getElementById('inbox-banner');
+    const pill   = document.getElementById('inbox-status-pill');
+    const sub    = document.getElementById('inbox-status-sub');
+    const btn    = document.getElementById('inbox-toggle-btn');
+
+    banner.className = `status-banner ${enabled ? 'enabled' : 'disabled'}`;
+    pill.className = `status-pill ${enabled ? 'enabled' : 'disabled'}`;
+    pill.textContent = enabled ? 'Active' : 'Disabled';
+
+    const watchPath = s.watchPath ?? s.watch_path ?? '~/inbox';
+    const ingested  = s.totalIngested ?? s.total_ingested ?? 0;
+    sub.textContent = `${watchPath}  ·  ${ingested} files ingested`;
+
+    btn.textContent = enabled ? 'Disable Inbox' : 'Enable Inbox';
+    btn.dataset.enabled = enabled ? '1' : '0';
+  } catch(e) {
+    document.getElementById('inbox-status-sub').textContent = 'Could not reach inbox API';
+  }
+}
+
+async function loadInboxJobs() {
+  const cont = document.getElementById('jobs-container');
+  try {
+    const data = await apiFetch('/api/inbox/jobs?limit=20');
+    const jobs = data.jobs ?? data ?? [];
+    if (!jobs.length) {
+      cont.innerHTML = `
+        <div class="empty-state" style="padding:48px 24px;">
+          <div class="empty-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            </svg>
+          </div>
+          <h3>No jobs yet</h3>
+          <p>Drop files in <code class="mono" style="color:var(--accent)">~/inbox</code> to get started</p>
+        </div>`;
+      return;
+    }
+    cont.innerHTML = `
+      <div class="jobs-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Filename</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Memories</th>
+              <th>Time</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-tbody"></tbody>
+        </table>
+      </div>`;
+    const tbody = document.getElementById('jobs-tbody');
+    jobs.forEach(j => {
+      const status = (j.status ?? 'pending').toLowerCase();
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="filename-cell" title="${escHtml(j.filename ?? j.file ?? '')}">${escHtml((j.filename ?? j.file ?? 'unknown').split('/').pop())}</td>
+        <td style="color:var(--text-muted);font-size:12px;">${escHtml(j.type ?? j.file_type ?? '—')}</td>
+        <td>
+          <span class="status-badge ${status}">
+            <div class="badge-dot"></div>
+            ${status}
+          </span>
+        </td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:12px;">${j.memories_created ?? j.memories ?? '—'}</td>
+        <td style="color:var(--text-muted);">${relativeTime(j.created_at ?? j.timestamp)}</td>`;
+      tbody.appendChild(tr);
+    });
+  } catch(e) {
+    cont.innerHTML = `
+      <div class="jobs-table-wrap" style="padding:24px;text-align:center;">
+        <p style="color:var(--text-muted);font-size:13px;">Could not load jobs: ${escHtml(e.message)}</p>
+      </div>`;
+  }
+}
+
+async function toggleInbox() {
+  const btn = document.getElementById('inbox-toggle-btn');
+  const enabled = btn.dataset.enabled === '1';
+  try {
+    await apiFetch('/api/inbox/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !enabled })
+    });
+    showToast(enabled ? 'Inbox disabled' : 'Inbox enabled', 'success');
+    await loadInboxStatus();
+  } catch(e) {
+    showToast(
+      enabled
+        ? 'Could not disable inbox. Check server config.'
+        : 'Could not enable inbox. Add watchPath to config.',
+      'error'
+    );
+  }
+}
+
+function startInboxRefresh() {
+  stopInboxRefresh();
+  inboxRefreshTimer = setInterval(loadInboxJobs, 10000);
+}
+function stopInboxRefresh() {
+  if (inboxRefreshTimer) { clearInterval(inboxRefreshTimer); inboxRefreshTimer = null; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+  switchTab('insights');
+  loadInsights();
+});
+</script>
+</body>
+</html>
