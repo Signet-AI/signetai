@@ -27,6 +27,7 @@
     "yaml": "^2.6.0"
   },
   "optionalDependencies": {
+    "@signet/native": "workspace:*",
     "better-sqlite3": "^11.0.0",
     "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
     "sqlite-vec-darwin-x64": "^0.1.7-alpha.2",

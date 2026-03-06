@@ -80,6 +80,8 @@ interface ScoredNeighbor {
 	readonly distance: number;
 }
 
+// Kept as pure TS — projected vectors are 2-3 dimensions, so FFI overhead
+// and typed array allocation would outweigh any native compute benefit.
 function squaredDistance(left: readonly number[], right: readonly number[]): number {
 	let distance = 0;
 	for (let index = 0; index < left.length; index += 1) {

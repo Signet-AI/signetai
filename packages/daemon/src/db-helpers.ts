@@ -2,10 +2,23 @@
  * Shared low-level DB helpers used across transaction and pipeline code.
  */
 
+import { createRequire } from "node:module";
 import type { WriteDb } from "./db-accessor";
+
+// Try to load native Rust implementation, fall back to pure TS
+let native: typeof import("@signet/native") | null = null;
+try {
+	const esmRequire = createRequire(import.meta.url);
+	native = esmRequire("@signet/native");
+} catch {
+	// Native addon not available — using TypeScript fallback
+}
 
 /** Serialize a numeric vector to a SQLite BLOB via Float32Array. */
 export function vectorToBlob(vec: readonly number[]): Buffer {
+	if (native !== null) {
+		return native.vectorToBlob(vec as number[]);
+	}
 	const f32 = new Float32Array(vec);
 	return Buffer.from(f32.buffer.slice(0));
 }

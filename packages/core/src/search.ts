@@ -1,8 +1,18 @@
+import { createRequire } from "node:module";
 import {
 	DEFAULT_EMBEDDING_DIMENSIONS,
 	DEFAULT_HYBRID_ALPHA,
 } from "./constants";
 import type { Memory } from "./types";
+
+// Try to load native Rust implementation, fall back to pure TS
+let native: typeof import("@signet/native") | null = null;
+try {
+	const esmRequire = createRequire(import.meta.url);
+	native = esmRequire("@signet/native");
+} catch {
+	// Native addon not available — using TypeScript fallback
+}
 
 export interface SearchOptions {
 	query: string;
@@ -56,7 +66,8 @@ interface DatabaseWrapper {
 }
 
 /**
- * Convert a Blob/Buffer to Float32Array for vector operations
+ * Convert a Blob/Buffer to Float32Array for vector operations.
+ * Uses zero-copy typed array view — no FFI needed here.
  */
 function blobToVector(blob: Buffer | ArrayBuffer): Float32Array {
 	if (blob instanceof ArrayBuffer) {
@@ -68,7 +79,7 @@ function blobToVector(blob: Buffer | ArrayBuffer): Float32Array {
 /**
  * Compute cosine similarity between two vectors
  */
-export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+function tsCosineSimilarity(a: Float32Array, b: Float32Array): number {
 	let dot = 0;
 	let normA = 0;
 	let normB = 0;
@@ -82,6 +93,13 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
 
 	const denom = Math.sqrt(normA) * Math.sqrt(normB);
 	return denom > 0 ? dot / denom : 0;
+}
+
+export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+	if (native !== null) {
+		return native.cosineSimilarity(a, b);
+	}
+	return tsCosineSimilarity(a, b);
 }
 
 /**
