@@ -8,6 +8,7 @@ type Props = {
 	mode: "installed" | "browse";
 	featured?: boolean;
 	selected?: boolean;
+	rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 	compareSelected?: boolean;
 	installing?: boolean;
 	uninstalling?: boolean;
@@ -22,6 +23,7 @@ let {
 	mode,
 	featured = false,
 	selected = false,
+	rarity = 'common',
 	compareSelected = false,
 	installing = false,
 	uninstalling = false,
@@ -75,6 +77,17 @@ function getMonogram(name: string): string {
 let monogram = $derived(getMonogram(item.name));
 let monogramBg = $derived(getMonogramBg(item.name));
 
+let derivedRarity = $derived((): 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' => {
+	if (rarity !== 'common') return rarity;
+	if (!isSearchResult(item)) return 'uncommon';
+	const installs = item.installs ?? 0;
+	if (installs >= 100000) return 'legendary';
+	if (installs >= 10000)  return 'epic';
+	if (installs >= 1000)   return 'rare';
+	if (installs >= 100)    return 'uncommon';
+	return 'common';
+});
+
 let isInstalled = $derived(
 	isSkill(item) ? true : isSearchResult(item) ? item.installed : false
 );
@@ -83,7 +96,7 @@ let isInstalled = $derived(
 <div class="card-wrap" class:selected class:featured>
 	<button
 		type="button"
-		class="card"
+		class="card rarity-{derivedRarity()}"
 		onclick={() => onclick?.()}
 	>
 		<!-- Header: monogram + name/badges row -->
@@ -99,6 +112,9 @@ let isInstalled = $derived(
 				<div class="card-header">
 					<span class="card-name" class:card-name-featured={featured}>{item.name}</span>
 					<div class="badge-row">
+						<span class="rarity-badge-sm rarity-badge-{derivedRarity()}" aria-label="Rarity: {derivedRarity()}">
+							{derivedRarity().toUpperCase().slice(0,3)}
+						</span>
 						{#if mode === "browse" && isSearchResult(item)}
 							<span
 								class="compare-toggle"
@@ -191,7 +207,7 @@ let isInstalled = $derived(
 						onclick={(e: MouseEvent) => { e.stopPropagation(); onuninstall?.(); }}
 						disabled={uninstalling}
 					>
-						{uninstalling ? "..." : "REMOVE"}
+						{uninstalling ? "Removing..." : "\u2715 UNEQUIP"}
 					</Button>
 				{:else}
 					<Button
@@ -201,7 +217,7 @@ let isInstalled = $derived(
 						onclick={(e: MouseEvent) => { e.stopPropagation(); oninstall?.(); }}
 						disabled={installing}
 					>
-						{installing ? "..." : "INSTALL"}
+						{installing ? "Equipping..." : "\u2694 EQUIP"}
 					</Button>
 				{/if}
 				</div>
@@ -435,4 +451,37 @@ let isInstalled = $derived(
 		background: var(--sig-accent);
 		border-color: var(--sig-accent);
 	}
+
+	/* Rarity borders override */
+	.card.rarity-legendary {
+		border-color: var(--rarity-legendary);
+		box-shadow: var(--rarity-legendary-glow);
+	}
+	.card.rarity-epic {
+		border-color: var(--rarity-epic);
+		box-shadow: var(--rarity-epic-glow);
+	}
+	.card.rarity-rare {
+		border-color: var(--rarity-rare);
+		box-shadow: var(--rarity-rare-glow);
+	}
+	.card.rarity-uncommon {
+		border-color: var(--rarity-uncommon);
+		box-shadow: var(--rarity-uncommon-glow);
+	}
+
+	.rarity-badge-sm {
+		font-family: var(--font-mono);
+		font-size: 8px;
+		padding: 1px 4px;
+		border: 1px solid currentColor;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		border-radius: 2px;
+	}
+	.rarity-badge-legendary { color: var(--rarity-legendary); }
+	.rarity-badge-epic       { color: var(--rarity-epic); }
+	.rarity-badge-rare       { color: var(--rarity-rare); }
+	.rarity-badge-uncommon   { color: var(--rarity-uncommon); }
+	.rarity-badge-common     { color: var(--rarity-common); }
 </style>

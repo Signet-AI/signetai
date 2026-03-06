@@ -379,9 +379,9 @@ async function runFix(check: EmbeddingCheckResult): Promise<void> {
 }
 
 function healthDotColor(status: "healthy" | "degraded" | "unhealthy"): string {
-	if (status === "healthy") return "#4a7a5e";
-	if (status === "degraded") return "#c4a24a";
-	return "#8a4a48";
+	if (status === "healthy") return "#14b8a6";
+	if (status === "degraded") return "#f59e0b";
+	return "#ef4444";
 }
 
 function checkDotColor(status: "ok" | "warn" | "fail"): string {
@@ -1547,10 +1547,14 @@ $effect(() => {
 			>
 				<button
 					type="button"
-					class="pointer-events-auto px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.74)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+					class="pointer-events-auto px-2 py-[2px]
+						font-[family-name:var(--font-mono)] text-[10px] uppercase
+						border border-[var(--rpg-gold)] text-[var(--rpg-gold)]
+						bg-[rgba(5,5,5,0.8)] hover:bg-[var(--rpg-gold)] hover:text-black
+						transition-colors"
 					onclick={unlockHoverPreview}
 				>
-					{ActionLabels.Unlock} preview
+					&#x27F3; Unlock Vision
 				</button>
 			</div>
 		{/if}
@@ -1576,7 +1580,7 @@ $effect(() => {
 					{#if healthExpanded}
 						<div class="mt-1 border border-[rgba(255,255,255,0.22)] bg-[rgba(5,5,5,0.92)] px-2 py-2 w-[320px]">
 							<div class="flex items-center justify-between mb-2">
-								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em]">Constellation Health</span>
+								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em]">Memory Map Health</span>
 								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)]">{healthReport.config.provider}/{healthReport.config.model}</span>
 							</div>
 							{#if healthFixStatus}

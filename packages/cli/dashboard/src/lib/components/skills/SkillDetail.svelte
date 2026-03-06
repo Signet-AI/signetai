@@ -249,7 +249,7 @@ async function submitReviewForDetail(): Promise<void> {
 								onclick={() => sk.detailMeta && doUninstall(sk.detailMeta.name)}
 								disabled={sk.uninstalling === sk.detailMeta?.name}
 							>
-								{sk.uninstalling === sk.detailMeta?.name ? "..." : "Uninstall"}
+								{sk.uninstalling === sk.detailMeta?.name ? "Removing..." : "\u2715 UNEQUIP"}
 							</Button>
 						{:else}
 							<Button
@@ -259,7 +259,7 @@ async function submitReviewForDetail(): Promise<void> {
 								onclick={() => sk.selectedName && doInstall(sk.selectedName)}
 								disabled={sk.installing === sk.selectedName}
 							>
-								{sk.installing === sk.selectedName ? "..." : "Install"}
+								{sk.installing === sk.selectedName ? "Equipping..." : "\u2694 EQUIP"}
 							</Button>
 						{/if}
 					</div>

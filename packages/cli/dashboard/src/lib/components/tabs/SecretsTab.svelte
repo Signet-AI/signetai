@@ -193,13 +193,14 @@ onMount(() => {
 					placeholder="Secret value"
 				/>
 				<Button
-					class="rounded-lg bg-[var(--sig-text-bright)] text-[var(--sig-bg)]
-						hover:bg-[var(--sig-text)] text-[11px] font-medium"
+					class="bg-[var(--rpg-gold)] text-black hover:bg-[#fbbf24]
+						text-[11px] font-bold tracking-[0.06em] uppercase font-[family-name:var(--font-mono)]
+						border-none transition-all rounded-lg"
 					size="sm"
 					onclick={addSecret}
 					disabled={secretAdding || !newSecretName.trim() || !newSecretValue.trim()}
 				>
-					{secretAdding ? "Adding..." : ActionLabels.Add}
+					{secretAdding ? "Forging..." : "Store Secret"}
 				</Button>
 			</div>
 
@@ -210,19 +211,20 @@ onMount(() => {
 					</div>
 				{:else if secrets.length === 0}
 					<div class="p-8 text-center text-[var(--sig-text-muted)]">
-						No secrets stored. Add one above.
+						<div class="rpg-text-teal sig-heading mb-1">The Vault Is Empty</div>
+						<div class="sig-label">Add a secret key to begin</div>
 					</div>
 				{:else}
 					{#each secrets as name}
 						<div
-							class="flex items-center gap-3 border border-[var(--sig-border-strong)]
-								bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3 rounded-lg"
+							class="hud-panel flex items-center gap-3 border border-[var(--sig-border-strong)]
+								bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3"
 						>
 							<span class="flex-1 font-[family-name:var(--font-mono)] text-[13px] text-[var(--sig-text-bright)]"
 								>{name}</span
 							>
-							<span class="font-[family-name:var(--font-mono)] text-[12px] text-[var(--sig-text-muted)]"
-								>••••••••</span
+							<span class="font-[family-name:var(--font-mono)] text-[12px]" style="color:var(--rpg-gold);opacity:0.4;letter-spacing:0.15em"
+								>&#x2217;&#x2217;&#x2217;&#x2217;&#x2217;&#x2217;&#x2217;&#x2217;</span
 							>
 							<Button
 								variant="outline"
@@ -247,8 +249,8 @@ onMount(() => {
 					p-[var(--space-md)] rounded-lg"
 			>
 				<div class="flex items-center justify-between gap-3">
-					<div class="sig-label uppercase tracking-[0.08em]">
-						1Password
+					<div class="sig-label uppercase tracking-[0.08em] rpg-text-teal">
+						1Password Relay
 					</div>
 					<Button
 						variant="outline"

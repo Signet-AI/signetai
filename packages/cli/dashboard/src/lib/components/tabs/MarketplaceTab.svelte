@@ -283,13 +283,13 @@ $effect(() => {
 		<div class="hero-main">
 			<h2>
 				{section === "skills"
-					? "Discover skill packs that level up your agent workflow"
-					: "Browse MCP servers and route production tools with confidence"}
+					? "Equip your agent with legendary skill packs"
+					: "Connect relay servers and wield production tools"}
 			</h2>
 			<p>
 				{section === "skills"
-					? "Install trusted skills, compare options, and rate what actually delivers results."
-					: "Connect tool servers, monitor routed tools, and leave Signet Reviews for your stack."}
+					? "Install trusted abilities, compare loadouts, and forge your optimal build."
+					: "Bind relay servers, monitor active channels, and rate your arsenal."}
 			</p>
 			<div class="hero-actions">
 				<Button
@@ -298,7 +298,7 @@ $effect(() => {
 					class={`hero-switch ${section === "skills" ? "hero-switch-active" : ""}`}
 					onclick={() => handleSectionChange("skills")}
 				>
-					Agent Skills
+					&#x2694; Skill Packs
 				</Button>
 				<Button
 					variant="outline"
@@ -306,14 +306,14 @@ $effect(() => {
 					class={`hero-switch ${section === "mcp" ? "hero-switch-active" : ""}`}
 					onclick={() => handleSectionChange("mcp")}
 				>
-					MCP Servers
+					&#x27F3; Relay Servers
 				</Button>
 			</div>
 		</div>
 		<div class="hero-aside">
-			<div class="hero-metric"><span>Active section</span><strong>{activeSectionLabel} · {activeInstalledCount} installed</strong></div>
-			<div class="hero-metric"><span>Catalog size</span><strong>{sectionCatalogCount.toLocaleString()}</strong></div>
-			<div class="hero-metric"><span>Signet Reviews</span><strong>{reviewsMarket.summary.count} reviews</strong></div>
+			<div class="hero-metric"><span>Arsenal Section</span><strong>{activeSectionLabel} · {activeInstalledCount} installed</strong></div>
+			<div class="hero-metric"><span>Items in Catalog</span><strong>{sectionCatalogCount.toLocaleString()}</strong></div>
+			<div class="hero-metric"><span>Battle Reviews</span><strong>{reviewsMarket.summary.count} reviews</strong></div>
 		</div>
 	</section>
 

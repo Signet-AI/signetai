@@ -256,13 +256,13 @@ onMount(() => {
 					value="browse"
 					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
 				>
-					Browse{sk.catalogTotal ? ` (${sk.catalogTotal.toLocaleString()})` : ""}
+					&#x2694; Armory{sk.catalogTotal ? ` (${sk.catalogTotal.toLocaleString()})` : ""}
 				</Tabs.Trigger>
 				<Tabs.Trigger
 					value="installed"
 					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
 				>
-					Installed ({sk.installed.length})
+					Equipped ({sk.installed.length})
 				</Tabs.Trigger>
 			</Tabs.List>
 
