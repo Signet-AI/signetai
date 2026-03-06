@@ -1,10 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 
-const agentsDir = mkdtempSync(join(tmpdir(), "signet-synthesis-worker-"));
-process.env.SIGNET_PATH = agentsDir;
+let agentsDir = "";
+let previousSignetPath: string | undefined;
 
 const mockHandleSynthesisRequest = mock(() => ({
 	harness: "daemon",
@@ -56,9 +56,16 @@ mock.module("../db-accessor", () => ({
 	}),
 }));
 
-const { startSynthesisWorker } = await import("./synthesis-worker");
+let startSynthesisWorker: typeof import("./synthesis-worker").startSynthesisWorker;
 
 describe("synthesis-worker", () => {
+	beforeAll(async () => {
+		previousSignetPath = process.env.SIGNET_PATH;
+		agentsDir = mkdtempSync(join(tmpdir(), "signet-synthesis-worker-"));
+		process.env.SIGNET_PATH = agentsDir;
+		({ startSynthesisWorker } = await import("./synthesis-worker"));
+	});
+
 	beforeEach(() => {
 		rmSync(agentsDir, { recursive: true, force: true });
 		mkdirSync(agentsDir, { recursive: true });
@@ -80,7 +87,11 @@ describe("synthesis-worker", () => {
 
 	afterAll(() => {
 		rmSync(agentsDir, { recursive: true, force: true });
-		delete process.env.SIGNET_PATH;
+		if (previousSignetPath === undefined) {
+			delete process.env.SIGNET_PATH;
+		} else {
+			process.env.SIGNET_PATH = previousSignetPath;
+		}
 	});
 
 	it("skips manual synthesis while the shared write lock is held", async () => {
@@ -93,25 +104,27 @@ describe("synthesis-worker", () => {
 			idleGapMinutes: 15,
 		});
 
-		expect(worker.acquireWriteLock()).toBe(true);
-		expect(worker.isSynthesizing).toBe(true);
+		try {
+			expect(worker.acquireWriteLock()).toBe(true);
+			expect(worker.isSynthesizing).toBe(true);
 
-		const result = await worker.triggerNow();
+			const result = await worker.triggerNow();
 
-		expect(result).toEqual({
-			success: false,
-			skipped: true,
-			reason: "Synthesis already in progress",
-		});
-		expect(mockGenerateWithTracking).not.toHaveBeenCalled();
-
-		worker.releaseWriteLock();
-		worker.stop();
-		await worker.drain();
+			expect(result).toEqual({
+				success: false,
+				skipped: true,
+				reason: "Synthesis already in progress",
+			});
+			expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+			worker.releaseWriteLock();
+		} finally {
+			worker.stop();
+			await worker.drain();
+		}
 	});
 
 	it("drain waits for an in-flight synthesis to finish after stop", async () => {
-		let resolveRun!: (value: { text: string; usage: null }) => void;
+		let resolveRun: ((value: { text: string; usage: null }) => void) | null = null;
 		mockGenerateWithTracking.mockImplementationOnce(
 			() =>
 				new Promise((resolve) => {
@@ -142,6 +155,9 @@ describe("synthesis-worker", () => {
 		await Promise.resolve();
 		expect(drained).toBe(false);
 
+		if (resolveRun === null) {
+			throw new Error("run resolver not initialized");
+		}
 		resolveRun({ text: "# Updated memory\n", usage: null });
 
 		const result = await runPromise;
@@ -155,5 +171,55 @@ describe("synthesis-worker", () => {
 		expect(drained).toBe(true);
 		expect(worker.isSynthesizing).toBe(false);
 		expect(mockWriteMemoryMd).toHaveBeenCalledWith("# Updated memory\n");
+	});
+
+	it("skips manual synthesis after the worker has been stopped", async () => {
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		worker.stop();
+		const result = await worker.triggerNow();
+		await worker.drain();
+
+		expect(result).toEqual({
+			success: false,
+			skipped: true,
+			reason: "Synthesis worker stopped",
+		});
+		expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+	});
+
+	it("drain times out if an in-flight synthesis never resolves", async () => {
+		mockGenerateWithTracking.mockImplementationOnce(
+			() => new Promise(() => {}),
+		);
+
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 10,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		const runPromise = worker.triggerNow();
+		await Promise.resolve();
+		worker.stop();
+
+		const drainStart = Date.now();
+		await worker.drain();
+		const drainElapsed = Date.now() - drainStart;
+
+		expect(drainElapsed).toBeGreaterThanOrEqual(10);
+		expect(drainElapsed).toBeLessThan(6000);
+		expect(worker.isSynthesizing).toBe(true);
+		void runPromise;
 	});
 });

@@ -21,7 +21,9 @@ import { getDbAccessor } from "../db-accessor";
 import { activeSessionCount } from "../session-tracker";
 import { generateWithTracking } from "./provider";
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,13 +37,14 @@ const MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 /** Initial delay after daemon start before first check (60s). */
 const STARTUP_DELAY_MS = 60_000;
+const DRAIN_TIMEOUT_BUFFER_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Timestamp persistence
 // ---------------------------------------------------------------------------
 
 function getLastSynthesisPath(): string {
-	return join(AGENTS_DIR, ".daemon", "last-synthesis.json");
+	return join(getAgentsDir(), ".daemon", "last-synthesis.json");
 }
 
 export function readLastSynthesisTime(): number {
@@ -58,11 +61,11 @@ export function readLastSynthesisTime(): number {
 function writeLastSynthesisTime(timestamp: number): void {
 	try {
 		const path = getLastSynthesisPath();
-		mkdirSync(join(AGENTS_DIR, ".daemon"), { recursive: true });
+		mkdirSync(join(getAgentsDir(), ".daemon"), { recursive: true });
 		writeFileSync(path, JSON.stringify({ lastRunAt: timestamp }));
 	} catch (e) {
 		logger.warn("synthesis", "Failed to persist synthesis timestamp", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }
@@ -109,7 +112,7 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 		// Only use incremental merge when MEMORY.md exists to merge into;
 		// if the file was deleted, fall back to full regeneration so no
 		// memories older than lastRun are silently omitted.
-		const memoryMdExists = existsSync(join(AGENTS_DIR, "MEMORY.md"));
+		const memoryMdExists = existsSync(join(getAgentsDir(), "MEMORY.md"));
 		const synthesisData = handleSynthesisRequest(
 			{ trigger: "scheduled" },
 			{
@@ -164,7 +167,7 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 
 		return "ok";
 	} catch (e) {
-		logger.error("synthesis", "Synthesis failed", e as Error);
+		logger.error("synthesis", "Synthesis failed", e instanceof Error ? e : new Error(String(e)));
 		return "failed";
 	}
 }
@@ -196,6 +199,7 @@ export function startSynthesisWorker(
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
 	function acquireWriteLock(): boolean {
+		if (stopped) return false;
 		if (isSynthesizing) return false;
 		isSynthesizing = true;
 		return true;
@@ -266,7 +270,7 @@ export function startSynthesisWorker(
 				releaseWriteLock();
 			}
 		} catch (e) {
-			logger.error("synthesis", "Unhandled tick error", e as Error);
+			logger.error("synthesis", "Unhandled tick error", e instanceof Error ? e : new Error(String(e)));
 		}
 
 		scheduleTick(CHECK_INTERVAL_MS);
@@ -276,7 +280,7 @@ export function startSynthesisWorker(
 		if (stopped) return;
 		timer = setTimeout(() => {
 			tick().catch((err) => {
-				logger.error("synthesis", "Unhandled tick error", err as Error);
+				logger.error("synthesis", "Unhandled tick error", err instanceof Error ? err : new Error(String(err)));
 			});
 		}, delay);
 	}
@@ -297,7 +301,21 @@ export function startSynthesisWorker(
 			logger.info("synthesis", "Synthesis worker stopped");
 		},
 		async drain() {
-			await (currentRunPromise ?? Promise.resolve());
+			if (!currentRunPromise) return;
+			let timeoutId: ReturnType<typeof setTimeout> | null = null;
+			try {
+				await Promise.race([
+					currentRunPromise.then(() => undefined),
+					new Promise<void>((resolve) => {
+						timeoutId = setTimeout(() => {
+							logger.warn("synthesis", "drain() timed out waiting for in-flight synthesis");
+							resolve();
+						}, config.timeout + DRAIN_TIMEOUT_BUFFER_MS);
+					}),
+				]);
+			} finally {
+				if (timeoutId !== null) clearTimeout(timeoutId);
+			}
 		},
 		acquireWriteLock,
 		releaseWriteLock,
@@ -311,8 +329,15 @@ export function startSynthesisWorker(
 			return readLastSynthesisTime();
 		},
 		async triggerNow() {
+			if (stopped) {
+				return { success: false, skipped: true, reason: "Synthesis worker stopped" };
+			}
 			if (!acquireWriteLock()) {
-				return { success: false, skipped: true, reason: "Synthesis already in progress" };
+				return {
+					success: false,
+					skipped: true,
+					reason: stopped ? "Synthesis worker stopped" : "Synthesis already in progress",
+				};
 			}
 
 			const lastRun = readLastSynthesisTime();
