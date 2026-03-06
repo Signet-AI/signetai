@@ -1586,7 +1586,7 @@ ${guidelines}
 // ============================================================================
 
 const UNTRUSTED_METADATA_HEADER =
-	/conversation info \(untrusted metadata\)\s*:/i;
+	/conversation info \(untrusted metadata\)\s*:|sender \(untrusted[^)]*\)\s*:|chat history since last reply\s*:|<<<EXTERNAL_UNTRUSTED_CONTENT|END_EXTERNAL_UNTRUSTED_CONTENT|untrusted context\s*:/i;
 
 function findJsonObjectEnd(text: string, startIndex: number): number {
 	let depth = 0;
@@ -1772,6 +1772,7 @@ interface RecallQueryShape {
 
 function extractSubstantiveWords(text: string): string[] {
 	return stripUntrustedMetadata(text)
+		.replace(/<@!?\d+>/g, "") // strip Discord mention tags
 		.toLowerCase()
 		.split(/\W+/)
 		.filter(
@@ -1787,10 +1788,23 @@ function buildRecallQueryShape(
 	lastAssistantMessage?: string,
 ): RecallQueryShape {
 	const userTerms = extractSubstantiveWords(userPrompt);
-	const assistantTerms = lastAssistantMessage
-		? extractSubstantiveWords(lastAssistantMessage)
+
+	// Pre-clean assistant message: strip metadata, mentions, signet blocks
+	const cleanedAssistant = lastAssistantMessage
+		? stripUntrustedMetadata(lastAssistantMessage)
+				.replace(/<@!?\d+>/g, "")
+				.replace(/\[signet:recall[^\]]*\]/g, "")
+				.replace(/<memory-feedback>[\s\S]*?<\/memory-feedback>/g, "")
+		: undefined;
+	const assistantTerms = cleanedAssistant
+		? extractSubstantiveWords(cleanedAssistant)
 		: [];
-	const keywordTerms = [...new Set([...userTerms, ...assistantTerms])].slice(0, 12);
+
+	// User terms get priority — assistant fills remaining budget only
+	const seen = new Set(userTerms);
+	const supplemental = assistantTerms.filter((t) => !seen.has(t));
+	const keywordTerms = [...userTerms, ...supplemental].slice(0, 12);
+
 	const vectorQuery = stripUntrustedMetadata(userPrompt).trim().slice(0, 200);
 	return { keywordTerms, vectorQuery };
 }
