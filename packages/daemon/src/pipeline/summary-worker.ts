@@ -258,6 +258,17 @@ async function processJob(
 					comparison.scorerConfidence,
 				);
 
+				// Drift detection
+				const { detectDrift } = await import("../predictor-comparison");
+				const driftResult = detectDrift(agentId, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
+				if (driftResult.drifting) {
+					logger.warn("predictor", "Drift detected — predictor win rate declining", {
+						recentWinRate: driftResult.recentWinRate,
+						windowSize: memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20,
+						agentId,
+					});
+				}
+
 				// Check training trigger
 				if (shouldTriggerTraining(agentId, memoryCfg.pipelineV2.predictor, accessor)) {
 					try {
@@ -666,8 +677,8 @@ export function startSummaryWorker(
 			// Check for more jobs immediately
 			scheduleTick(500);
 		} catch (e) {
-			const err = e as Error;
-			logger.error("summary-worker", "Job failed", err);
+			const errorMessage = e instanceof Error ? e.message : String(e);
+			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
 			// Try to mark the job as failed/pending for retry
 			try {
@@ -690,7 +701,7 @@ export function startSummaryWorker(
 							`UPDATE summary_jobs
 							 SET status = ?, error = ?
 							 WHERE id = ? AND status = 'processing'`,
-						).run(status, err.message, jobId);
+						).run(status, errorMessage, jobId);
 					});
 				}
 			} catch {
@@ -706,7 +717,7 @@ export function startSummaryWorker(
 		if (stopped) return;
 		timer = setTimeout(() => {
 			tick().catch((err) => {
-				logger.error("summary-worker", "Unhandled tick error", err as Error);
+				logger.error("summary-worker", "Unhandled tick error", err instanceof Error ? err : undefined, { error: err instanceof Error ? err.message : String(err) });
 			});
 		}, delay);
 	}
