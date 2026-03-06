@@ -2,6 +2,27 @@
 
 All notable changes to Signet are documented here.
 
+## [0.39.0] - 2026-03-06
+
+### Features
+
+- add @signet/native Rust crate with napi-rs bindings
+- session-activity-based synthesis with dedicated provider
+- daemon-driven MEMORY.md synthesis on schedule
+
+### Bug Fixes
+
+- use command -v for cargo detection in build:native
+- address greptile round 4 — gate provider init, tri-state result
+- address greptile round 2 feedback
+- align @signet/native version with workspace (0.39.0)
+- address review feedback on native addon
+- address greptile round 3 — duplicate import, enabled flag, cleanup
+- address greptile round 2 — triggerNow retry, deleted MEMORY.md, log category
+- prevent rapid retry on synthesis failure, export PipelineSynthesisConfig
+- address greptile review — race guard and maxTokens in prompt
+
+
 ## [0.38.6] - 2026-03-06
 
 ### Features
