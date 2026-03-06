@@ -11,6 +11,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PipelineSynthesisConfig } from "../memory-config";
@@ -104,12 +105,15 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<boolean> {
 	try {
 		const lastRun = readLastSynthesisTime();
 
-		// Build prompt — pass sinceTimestamp for incremental merge
+		// Only use incremental merge when MEMORY.md exists to merge into;
+		// if the file was deleted, fall back to full regeneration so no
+		// memories older than lastRun are silently omitted.
+		const memoryMdExists = existsSync(join(AGENTS_DIR, "MEMORY.md"));
 		const synthesisData = handleSynthesisRequest(
 			{ trigger: "scheduled" },
 			{
 				maxTokens: config.maxTokens,
-				sinceTimestamp: lastRun > 0 ? lastRun : undefined,
+				sinceTimestamp: lastRun > 0 && memoryMdExists ? lastRun : undefined,
 			},
 		);
 
@@ -219,7 +223,7 @@ export function startSynthesisWorker(
 
 			isSynthesizing = true;
 			try {
-				const success = await runSynthesis(config);
+				await runSynthesis(config);
 				// Write timestamp on both success and failure to prevent
 				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
 				writeLastSynthesisTime(Date.now());
@@ -280,9 +284,9 @@ export function startSynthesisWorker(
 			isSynthesizing = true;
 			try {
 				const success = await runSynthesis(config);
-				if (success) {
-					writeLastSynthesisTime(Date.now());
-				}
+				// Write timestamp on both success and failure to prevent
+				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
+				writeLastSynthesisTime(Date.now());
 				return { success, skipped: false };
 			} finally {
 				isSynthesizing = false;

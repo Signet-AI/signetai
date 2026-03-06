@@ -4657,7 +4657,7 @@ app.post("/api/synthesis/trigger", async (c) => {
 		const result = await worker.triggerNow();
 		return c.json(result);
 	} catch (e) {
-		logger.error("hooks", "Synthesis trigger failed", e as Error);
+		logger.error("synthesis", "Synthesis trigger failed", e as Error);
 		return c.json({ error: "Synthesis trigger failed" }, 500);
 	}
 });
