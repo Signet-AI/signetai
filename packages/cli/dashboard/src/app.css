@@ -48,12 +48,55 @@
 	--sig-text: #d4d4d8;
 	--sig-text-bright: #f0f0f2;
 	--sig-text-muted: #6b6b76;
-	--sig-accent: #8a8a96;
-	--sig-accent-hover: #c0c0c8;
+	--sig-accent: #f59e0b;
+	--sig-accent-hover: #fbbf24;
+	--sig-warning: #f59e0b;
+	--sig-error: #ef4444;
 	--sig-danger: #8a4a48;
 	--sig-success: #4a7a5e;
 	--sig-dither: #f0f0f2;
 	--sig-grain-opacity: 0.04;
+
+	/* === UXGameV3 RPG tokens === */
+
+	/* Warm accent palette */
+	--rpg-gold:     #f59e0b;
+	--rpg-gold-dim: rgba(245, 158, 11, 0.18);
+	--rpg-gold-glow: 0 0 12px rgba(245,158,11,0.45), 0 0 24px rgba(245,158,11,0.2);
+
+	--rpg-teal:     #14b8a6;
+	--rpg-teal-dim: rgba(20, 184, 166, 0.15);
+	--rpg-teal-glow: 0 0 12px rgba(20,184,166,0.4), 0 0 24px rgba(20,184,166,0.15);
+
+	--rpg-purple:   #a855f7;
+	--rpg-purple-dim: rgba(168, 85, 247, 0.15);
+	--rpg-purple-glow: 0 0 12px rgba(168,85,247,0.4), 0 0 24px rgba(168,85,247,0.15);
+
+	/* 5-tier rarity system */
+	--rarity-common:    #6b6b76;
+	--rarity-uncommon:  #22c55e;
+	--rarity-rare:      #3b82f6;
+	--rarity-epic:      #a855f7;
+	--rarity-legendary: #f59e0b;
+
+	--rarity-common-glow:    0 0 8px rgba(107,107,118,0.4);
+	--rarity-uncommon-glow:  0 0 8px rgba(34,197,94,0.5);
+	--rarity-rare-glow:      0 0 8px rgba(59,130,246,0.5);
+	--rarity-epic-glow:      0 0 8px rgba(168,85,247,0.5);
+	--rarity-legendary-glow: 0 0 12px rgba(245,158,11,0.6);
+
+	/* HUD bracket sizing */
+	--hud-bracket-size: 10px;
+	--hud-bracket-weight: 1.5px;
+
+	/* XP bar */
+	--xp-bar-height: 3px;
+	--xp-bar-bg: rgba(245, 158, 11, 0.15);
+	--xp-bar-fill: #f59e0b;
+
+	/* Hexagon avatar */
+	--hex-avatar-size: 48px;
+
 	--sig-icon-fg: #f8fafc;
 	--sig-icon-border: rgba(255, 255, 255, 0.26);
 	--sig-icon-bg-1: #2563eb;
@@ -509,4 +552,108 @@ h3 {
 	50% {
 		opacity: 0.5;
 	}
+}
+
+/* === UXGameV3 RPG Keyframes === */
+@keyframes rpg-pulse-gold {
+	0%, 100% { box-shadow: 0 0 6px rgba(245,158,11,0.3); }
+	50%       { box-shadow: 0 0 16px rgba(245,158,11,0.7); }
+}
+@keyframes rpg-slide-in {
+	from { opacity: 0; transform: translateY(4px); }
+	to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes xp-fill {
+	from { width: 0%; }
+	to   { width: var(--xp-pct, 60%); }
+}
+
+/* === UXGameV3 Utilities === */
+
+/* HUD corner bracket overlay (use on relative-positioned parent) */
+.hud-panel {
+	position: relative;
+}
+.hud-panel::before,
+.hud-panel::after {
+	content: '';
+	position: absolute;
+	width: var(--hud-bracket-size);
+	height: var(--hud-bracket-size);
+	pointer-events: none;
+	z-index: 1;
+}
+.hud-panel::before {
+	top: -1px; left: -1px;
+	border-top: var(--hud-bracket-weight) solid var(--rpg-gold);
+	border-left: var(--hud-bracket-weight) solid var(--rpg-gold);
+}
+.hud-panel::after {
+	bottom: -1px; right: -1px;
+	border-bottom: var(--hud-bracket-weight) solid var(--rpg-gold);
+	border-right: var(--hud-bracket-weight) solid var(--rpg-gold);
+}
+
+/* Gold text glow */
+.rpg-text-gold {
+	color: var(--rpg-gold);
+	text-shadow: 0 0 10px rgba(245,158,11,0.5);
+}
+.rpg-text-teal  { color: var(--rpg-teal); }
+.rpg-text-purple { color: var(--rpg-purple); }
+
+/* Rarity border helpers */
+.rarity-common    { border-color: var(--rarity-common)!important; }
+.rarity-uncommon  { border-color: var(--rarity-uncommon)!important; }
+.rarity-rare      { border-color: var(--rarity-rare)!important; }
+.rarity-epic      { border-color: var(--rarity-epic)!important; }
+.rarity-legendary {
+	border-color: var(--rarity-legendary)!important;
+	box-shadow: var(--rarity-legendary-glow);
+}
+
+/* Scanline overlay (subtle, optional on hero panels) */
+.rpg-scanlines::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: repeating-linear-gradient(
+		0deg,
+		transparent,
+		transparent 2px,
+		rgba(0,0,0,0.04) 2px,
+		rgba(0,0,0,0.04) 4px
+	);
+	pointer-events: none;
+	z-index: 2;
+}
+
+/* Hex avatar */
+.hex-avatar {
+	width: var(--hex-avatar-size, 40px);
+	height: calc(var(--hex-avatar-size, 40px) * 1.15);
+	position: relative;
+	clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+	background: linear-gradient(135deg,
+		color-mix(in srgb, var(--rpg-gold) 30%, var(--sig-surface-raised)),
+		var(--sig-surface-raised)
+	);
+	border: none;
+	animation: rpg-pulse-gold 4s ease-in-out infinite;
+	flex-shrink: 0;
+}
+.hex-inner {
+	position: absolute;
+	inset: 2px;
+	clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+	background: var(--sig-surface);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-family: var(--font-display);
+	font-size: 11px;
+	font-weight: 700;
+	color: var(--rpg-gold);
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
 }
