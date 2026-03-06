@@ -537,8 +537,10 @@ export interface ExtractedFact {
 
 export interface ExtractedEntity {
 	readonly source: string;
+	readonly sourceType?: string;
 	readonly relationship: string;
 	readonly target: string;
+	readonly targetType?: string;
 	readonly confidence: number;
 }
 

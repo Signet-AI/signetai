@@ -57,14 +57,14 @@ is the difference between a tool that remembers and a mind
 that persists. Signet doesn't just remember — it learns what
 to remember. A neural network unique to each user, trained on
 their own interaction patterns, that gets sharper the longer
-you use it. No cloud. No shared weights. Your patterns,
-running locally, earning its influence by proving it
-outperforms the alternative.
+you use it. No cloud. Your personal weights never leave your
+machine — running locally, earning their influence by proving
+they outperform the alternative.
 
 But it goes further. With consent, anonymized training signals
-from across the Signet community feed a shared base model — a
-pre-trained memory relevance network that ships with every new
-install. Your agent starts smart on day one, then gets smarter
+from across the Signet community feed a separate shared base
+model — a pre-trained memory relevance network that ships with
+every new install. Your agent starts smart on day one, then gets smarter
 for you specifically. It's federated learning applied to agent
 memory: the community makes the base model better, your local
 data makes it yours. Cold start disappears. The predictor

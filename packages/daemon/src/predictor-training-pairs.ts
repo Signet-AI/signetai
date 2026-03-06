@@ -101,7 +101,8 @@ export function computeCombinedLabel(
 
 	let combined: number;
 	if (agentRelevanceScore !== null) {
-		const agentClamped = Math.max(0, Math.min(1, agentRelevanceScore));
+		// Spec allows negative labels (e.g. -0.3 for superseded memories)
+		const agentClamped = Math.max(-1, Math.min(1, agentRelevanceScore));
 		const continuityMod = continuityNormalized ?? 0;
 		combined = agentClamped * 0.7 + ftsAdj * 0.2 + continuityMod * 0.1;
 	} else {
@@ -113,7 +114,7 @@ export function computeCombinedLabel(
 		agentRelevanceScore,
 		continuityScore: continuityNormalized,
 		ftsOverlapScore: ftsOverlap,
-		combined: Math.max(0, Math.min(1, combined)),
+		combined: Math.max(-1, Math.min(1, combined)),
 	};
 }
 

@@ -200,26 +200,44 @@ async function processDependencyBatch(
 ): Promise<void> {
 	if (jobs.length === 0) return;
 
-	// Parse payloads
-	const payloads: DependencyPayload[] = [];
+	// Parse payloads — keep arrays parallel with jobs so indices stay aligned.
+	// Invalid payloads get null; their jobs are failed after the batch.
+	const payloads: Array<DependencyPayload | null> = [];
 	for (const job of jobs) {
 		try {
 			payloads.push(JSON.parse(job.payload) as DependencyPayload);
 		} catch {
-			deps.accessor.withWriteTx((db) =>
-				failJob(db, job.id, "invalid_payload", job.attempts + 1, job.max_attempts),
-			);
+			payloads.push(null);
 		}
 	}
-	if (payloads.length === 0) return;
 
-	const entityName = payloads[0].entity_name;
+	// Fail jobs with invalid payloads upfront
+	deps.accessor.withWriteTx((db) => {
+		for (let i = 0; i < jobs.length; i++) {
+			if (payloads[i] === null) {
+				failJob(db, jobs[i].id, "invalid_payload", jobs[i].attempts + 1, jobs[i].max_attempts);
+			}
+		}
+	});
+
+	// Build the valid subset for LLM processing (preserving original indices)
+	const validIndices: number[] = [];
+	const validPayloads: DependencyPayload[] = [];
+	for (let i = 0; i < payloads.length; i++) {
+		if (payloads[i] !== null) {
+			validIndices.push(i);
+			validPayloads.push(payloads[i]);
+		}
+	}
+	if (validPayloads.length === 0) return;
+
+	const entityName = validPayloads[0].entity_name;
 
 	// Load entity type for prompt context
 	const entityRow = deps.accessor.withReadDb((db) =>
 		db
 			.prepare("SELECT entity_type FROM entities WHERE id = ? LIMIT 1")
-			.get(payloads[0].entity_id) as { entity_type: string } | undefined,
+			.get(validPayloads[0].entity_id) as { entity_type: string } | undefined,
 	);
 	const entityType = entityRow?.entity_type ?? "unknown";
 
@@ -230,12 +248,12 @@ async function processDependencyBatch(
 				`SELECT name FROM entity_aspects
 				 WHERE entity_id = ? AND agent_id = 'default'`,
 			)
-			.all(payloads[0].entity_id) as readonly { name: string }[];
+			.all(validPayloads[0].entity_id) as readonly { name: string }[];
 		return rows.map((r) => r.name);
 	});
 
 	// Build prompt
-	const factContents = payloads.map((p) => p.fact_content);
+	const factContents = validPayloads.map((p) => p.fact_content);
 	const prompt = buildDependencyPrompt(
 		entityName,
 		entityType,
@@ -251,8 +269,8 @@ async function processDependencyBatch(
 		const msg = e instanceof Error ? e.message : String(e);
 		logger.warn("structural-dependency", "LLM call failed", { error: msg });
 		deps.accessor.withWriteTx((db) => {
-			for (const job of jobs) {
-				failJob(db, job.id, msg, job.attempts + 1, job.max_attempts);
+			for (const idx of validIndices) {
+				failJob(db, jobs[idx].id, msg, jobs[idx].attempts + 1, jobs[idx].max_attempts);
 			}
 		});
 		return;
@@ -261,16 +279,18 @@ async function processDependencyBatch(
 	// Parse response
 	const stripped = stripFences(raw);
 	const parsed = tryParseJson(stripped);
-	const results = validateDependencyResults(parsed, payloads.length);
+	const results = validateDependencyResults(parsed, validPayloads.length);
 
-	// Apply results
-	const processedIndices = new Set<number>();
+	// Apply results — LLM indices (1-based) map into validPayloads,
+	// which maps back to jobs via validIndices.
+	const processedJobIndices = new Set<number>();
 	let depsCreated = 0;
 
 	for (const result of results) {
-		const idx = result.i - 1;
-		if (idx < 0 || idx >= payloads.length) continue;
-		const payload = payloads[idx];
+		const vpIdx = result.i - 1;
+		if (vpIdx < 0 || vpIdx >= validPayloads.length) continue;
+		const payload = validPayloads[vpIdx];
+		const jobIdx = validIndices[vpIdx];
 
 		// If dependency detected, resolve target entity and create it
 		if (result.dep_target !== null && result.dep_type !== null) {
@@ -293,21 +313,21 @@ async function processDependencyBatch(
 			}
 		}
 
-		processedIndices.add(idx);
+		processedJobIndices.add(jobIdx);
 	}
 
-	// Complete processed jobs, fail unprocessed ones
+	// Complete processed jobs, fail unprocessed valid ones
 	deps.accessor.withWriteTx((db) => {
-		for (let i = 0; i < jobs.length; i++) {
-			if (processedIndices.has(i)) {
-				completeJob(db, jobs[i].id);
+		for (const idx of validIndices) {
+			if (processedJobIndices.has(idx)) {
+				completeJob(db, jobs[idx].id);
 			} else {
 				failJob(
 					db,
-					jobs[i].id,
+					jobs[idx].id,
 					"dropped_from_llm_output",
-					jobs[i].attempts + 1,
-					jobs[i].max_attempts,
+					jobs[idx].attempts + 1,
+					jobs[idx].max_attempts,
 				);
 			}
 		}
@@ -316,7 +336,8 @@ async function processDependencyBatch(
 	logger.info("structural-dependency", "Batch processed", {
 		entityName,
 		total: jobs.length,
-		processed: processedIndices.size,
+		valid: validPayloads.length,
+		processed: processedJobIndices.size,
 		dependenciesCreated: depsCreated,
 	});
 }

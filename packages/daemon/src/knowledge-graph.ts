@@ -180,9 +180,9 @@ export function getAspectsForEntity(
 	});
 }
 
-export function deleteAspect(accessor: DbAccessor, aspectId: string): void {
+export function deleteAspect(accessor: DbAccessor, aspectId: string, agentId: string): void {
 	accessor.withWriteTx((db) => {
-		db.prepare("DELETE FROM entity_aspects WHERE id = ?").run(aspectId);
+		db.prepare("DELETE FROM entity_aspects WHERE id = ? AND agent_id = ?").run(aspectId, agentId);
 	});
 }
 
@@ -294,25 +294,26 @@ export function supersedeAttribute(
 	accessor: DbAccessor,
 	id: string,
 	supersededById: string,
+	agentId: string,
 ): void {
 	const ts = now();
 	accessor.withWriteTx((db) => {
 		db.prepare(
 			`UPDATE entity_attributes
 			 SET status = 'superseded', superseded_by = ?, updated_at = ?
-			 WHERE id = ?`,
-		).run(supersededById, ts, id);
+			 WHERE id = ? AND agent_id = ?`,
+		).run(supersededById, ts, id, agentId);
 	});
 }
 
-export function deleteAttribute(accessor: DbAccessor, id: string): void {
+export function deleteAttribute(accessor: DbAccessor, id: string, agentId: string): void {
 	const ts = now();
 	accessor.withWriteTx((db) => {
 		db.prepare(
 			`UPDATE entity_attributes
 			 SET status = 'deleted', updated_at = ?
-			 WHERE id = ?`,
-		).run(ts, id);
+			 WHERE id = ? AND agent_id = ?`,
+		).run(ts, id, agentId);
 	});
 }
 
@@ -353,12 +354,13 @@ export function upsertDependency(
 			db.prepare(
 				`UPDATE entity_dependencies
 				 SET strength = ?, aspect_id = ?, updated_at = ?
-				 WHERE id = ?`,
+				 WHERE id = ? AND agent_id = ?`,
 			).run(
 				params.strength ?? (existing.strength as number),
 				params.aspectId ?? (existing.aspect_id as string | null),
 				ts,
 				existing.id as string,
+				params.agentId,
 			);
 			return rowToDependency({
 				...existing,
@@ -432,9 +434,9 @@ export function getDependenciesTo(
 	});
 }
 
-export function deleteDependency(accessor: DbAccessor, id: string): void {
+export function deleteDependency(accessor: DbAccessor, id: string, agentId: string): void {
 	accessor.withWriteTx((db) => {
-		db.prepare("DELETE FROM entity_dependencies WHERE id = ?").run(id);
+		db.prepare("DELETE FROM entity_dependencies WHERE id = ? AND agent_id = ?").run(id, agentId);
 	});
 }
 
@@ -1156,8 +1158,8 @@ export function propagateMemoryStatus(
 		db.prepare(
 			`UPDATE entity_attributes
 			 SET status = 'superseded', updated_at = ?
-			 WHERE id IN (${placeholders})`,
-		).run(now(), ...ids);
+			 WHERE id IN (${placeholders}) AND agent_id = ?`,
+		).run(now(), ...ids, agentId);
 		return ids.length;
 	});
 }

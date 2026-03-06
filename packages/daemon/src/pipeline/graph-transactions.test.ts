@@ -36,6 +36,7 @@ describe("graph-transactions", () => {
 				],
 				sourceMemoryId: "mem-1",
 				extractedAt: new Date().toISOString(),
+				agentId: "default",
 			});
 
 			expect(result.entitiesInserted).toBe(2);
@@ -81,6 +82,7 @@ describe("graph-transactions", () => {
 				],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
+				agentId: "default",
 			});
 			expect(first.entitiesInserted).toBe(2);
 			expect(first.entitiesUpdated).toBe(0);
@@ -91,6 +93,7 @@ describe("graph-transactions", () => {
 				],
 				sourceMemoryId: "mem-2",
 				extractedAt: now,
+				agentId: "default",
 			});
 			// Same canonical names — updates, not inserts
 			expect(second.entitiesInserted).toBe(0);
@@ -117,6 +120,7 @@ describe("graph-transactions", () => {
 				],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
+				agentId: "default",
 			});
 
 			txPersistEntities(asWriteDb(db), {
@@ -125,6 +129,7 @@ describe("graph-transactions", () => {
 				],
 				sourceMemoryId: "mem-2",
 				extractedAt: now,
+				agentId: "default",
 			});
 
 			const relations = db
@@ -145,6 +150,7 @@ describe("graph-transactions", () => {
 				],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
+				agentId: "default",
 			});
 
 			// Same triple, same memory — mention links should not duplicate
@@ -154,6 +160,7 @@ describe("graph-transactions", () => {
 				],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
+				agentId: "default",
 			});
 
 			// Mentions were ignored (INSERT OR IGNORE)

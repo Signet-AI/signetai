@@ -6,6 +6,7 @@
  * All actions respect autonomousFrozen regardless of actor type.
  */
 
+import type { LlmProvider } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import {

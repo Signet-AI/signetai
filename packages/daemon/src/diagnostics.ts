@@ -648,7 +648,9 @@ export function getPredictorHealth(
 // Composite report
 // ---------------------------------------------------------------------------
 
-const WEIGHTS = {
+// Base weights sum to 1.0; when predictor is enabled we carve out
+// 0.05 for it and scale the rest down proportionally (×0.95).
+const BASE_WEIGHTS = {
 	queue: 0.25,
 	storage: 0.10,
 	index: 0.15,
@@ -657,7 +659,10 @@ const WEIGHTS = {
 	duplicate: 0.04,
 	connector: 0.05,
 	update: 0.11,
+	predictor: 0.05,
 } as const;
+
+const PREDICTOR_SCALE = 1 - BASE_WEIGHTS.predictor; // 0.95
 
 export function getDiagnostics(
 	db: ReadDb,
@@ -677,17 +682,22 @@ export function getDiagnostics(
 		predictorParams ?? DISABLED_PREDICTOR,
 	);
 
-	// Predictor excluded from composite when disabled — don't
-	// drag down overall score for an optional subsystem.
+	// When predictor is enabled, include it in the composite and
+	// scale base weights down to keep the total at 1.0.
+	const predictorEnabled = predictor.status !== "disabled";
+	const s = predictorEnabled ? PREDICTOR_SCALE : 1;
 	const compositeScore = clamp(
-		queue.score * WEIGHTS.queue +
-			storage.score * WEIGHTS.storage +
-			index.score * WEIGHTS.index +
-			provider.score * WEIGHTS.provider +
-			mutation.score * WEIGHTS.mutation +
-			duplicate.score * WEIGHTS.duplicate +
-			connector.score * WEIGHTS.connector +
-			update.score * WEIGHTS.update,
+		queue.score * BASE_WEIGHTS.queue * s +
+			storage.score * BASE_WEIGHTS.storage * s +
+			index.score * BASE_WEIGHTS.index * s +
+			provider.score * BASE_WEIGHTS.provider * s +
+			mutation.score * BASE_WEIGHTS.mutation * s +
+			duplicate.score * BASE_WEIGHTS.duplicate * s +
+			connector.score * BASE_WEIGHTS.connector * s +
+			update.score * BASE_WEIGHTS.update * s +
+			(predictorEnabled
+				? predictor.score * BASE_WEIGHTS.predictor
+				: 0),
 	);
 
 	const composite: HealthScore = {

@@ -228,7 +228,7 @@ export async function installSkillNode(
 				).run(entityId);
 			}
 
-			// Insert new embedding
+			// Insert new embedding (ON CONFLICT may keep the existing row id)
 			db.prepare(
 				`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
@@ -240,7 +240,12 @@ export async function installSkillNode(
 				   chunk_text = excluded.chunk_text`,
 			).run(embId, hash, blob, embVec.length, entityId, embeddingText, now);
 
-			syncVecInsert(db, embId, embVec);
+			// Query back the actual row id — on conflict SQLite keeps the
+			// existing id, not the one we generated above.
+			const actualRow = db
+				.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
+				.get(hash) as { id: string };
+			syncVecInsert(db, actualRow.id, embVec);
 		});
 
 		embeddingCreated = true;
@@ -257,6 +262,7 @@ export async function installSkillNode(
 						entities: extraction.entities,
 						sourceMemoryId: entityId,
 						extractedAt: now,
+						agentId,
 					});
 					entitiesExtracted = result.entitiesInserted + result.entitiesUpdated;
 				});
