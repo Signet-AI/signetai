@@ -220,9 +220,9 @@ export function startSynthesisWorker(
 			isSynthesizing = true;
 			try {
 				const success = await runSynthesis(config);
-				if (success) {
-					writeLastSynthesisTime(Date.now());
-				}
+				// Write timestamp on both success and failure to prevent
+				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
+				writeLastSynthesisTime(Date.now());
 			} finally {
 				isSynthesizing = false;
 			}
