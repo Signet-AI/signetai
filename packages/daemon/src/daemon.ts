@@ -4639,7 +4639,12 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 		}
 
 		const worker = getSynthesisWorker();
-		if (worker && !worker.acquireWriteLock()) {
+		if (worker && !worker.running) {
+			return c.json({ error: "Synthesis worker is shutting down" }, 503);
+		}
+
+		const lockToken = worker?.acquireWriteLock() ?? null;
+		if (worker && lockToken === null) {
 			return c.json({ error: "Synthesis already in progress" }, 409);
 		}
 
@@ -4647,7 +4652,9 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 			writeMemoryMd(body.content);
 			logger.info("hooks", "MEMORY.md synthesized");
 		} finally {
-			worker?.releaseWriteLock();
+			if (worker && lockToken !== null) {
+				worker.releaseWriteLock(lockToken);
+			}
 		}
 
 		return c.json({ success: true });

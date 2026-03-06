@@ -179,8 +179,8 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 export interface SynthesisWorkerHandle {
 	stop(): void;
 	drain(): Promise<void>;
-	acquireWriteLock(): boolean;
-	releaseWriteLock(): void;
+	acquireWriteLock(): number | null;
+	releaseWriteLock(token: number): void;
 	readonly running: boolean;
 	readonly isSynthesizing: boolean;
 	/** Trigger an immediate synthesis (e.g. from API). */
@@ -196,17 +196,28 @@ export function startSynthesisWorker(
 	let stopped = false;
 	let isSynthesizing = false;
 	let currentRunPromise: Promise<SynthesisResult> | null = null;
+	let nextLockToken = 1;
+	let activeLockToken: number | null = null;
+	let lockReleasedResolver: (() => void) | null = null;
+	let lockReleasedPromise: Promise<void> = Promise.resolve();
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
-	function acquireWriteLock(): boolean {
-		if (stopped) return false;
-		if (isSynthesizing) return false;
+	function acquireWriteLock(): number | null {
+		if (stopped || isSynthesizing) return null;
 		isSynthesizing = true;
-		return true;
+		activeLockToken = nextLockToken++;
+		lockReleasedPromise = new Promise<void>((resolve) => {
+			lockReleasedResolver = resolve;
+		});
+		return activeLockToken;
 	}
 
-	function releaseWriteLock(): void {
+	function releaseWriteLock(token: number): void {
+		if (activeLockToken !== token) return;
+		activeLockToken = null;
 		isSynthesizing = false;
+		lockReleasedResolver?.();
+		lockReleasedResolver = null;
 	}
 
 	async function tick(): Promise<void> {
@@ -254,7 +265,8 @@ export function startSynthesisWorker(
 				return;
 			}
 
-			if (!acquireWriteLock()) {
+			const lockToken = acquireWriteLock();
+			if (lockToken === null) {
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
 			}
@@ -267,7 +279,7 @@ export function startSynthesisWorker(
 				writeLastSynthesisTime(Date.now());
 			} finally {
 				currentRunPromise = null;
-				releaseWriteLock();
+				releaseWriteLock(lockToken);
 			}
 		} catch (e) {
 			logger.error("synthesis", "Unhandled tick error", e instanceof Error ? e : new Error(String(e)));
@@ -301,11 +313,14 @@ export function startSynthesisWorker(
 			logger.info("synthesis", "Synthesis worker stopped");
 		},
 		async drain() {
-			if (!currentRunPromise) return;
+			if (!isSynthesizing) return;
 			let timeoutId: ReturnType<typeof setTimeout> | null = null;
 			try {
 				await Promise.race([
-					currentRunPromise.then(() => undefined),
+					Promise.all([
+						currentRunPromise ?? Promise.resolve(),
+						lockReleasedPromise,
+					]).then(() => undefined),
 					new Promise<void>((resolve) => {
 						timeoutId = setTimeout(() => {
 							logger.warn("synthesis", "drain() timed out waiting for in-flight synthesis");
@@ -332,11 +347,12 @@ export function startSynthesisWorker(
 			if (stopped) {
 				return { success: false, skipped: true, reason: "Synthesis worker stopped" };
 			}
-			if (!acquireWriteLock()) {
+			const lockToken = acquireWriteLock();
+			if (lockToken === null) {
 				return {
 					success: false,
 					skipped: true,
-					reason: stopped ? "Synthesis worker stopped" : "Synthesis already in progress",
+					reason: "Synthesis already in progress",
 				};
 			}
 
@@ -346,7 +362,7 @@ export function startSynthesisWorker(
 			if (elapsed < MIN_INTERVAL_MS) {
 				const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
 				logger.info("synthesis", "Skipping manual trigger", { reason });
-				releaseWriteLock();
+				releaseWriteLock(lockToken);
 				return { success: false, skipped: true, reason };
 			}
 
@@ -363,7 +379,7 @@ export function startSynthesisWorker(
 				};
 			} finally {
 				currentRunPromise = null;
-				releaseWriteLock();
+				releaseWriteLock(lockToken);
 			}
 		},
 	};

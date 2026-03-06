@@ -105,7 +105,8 @@ describe("synthesis-worker", () => {
 		});
 
 		try {
-			expect(worker.acquireWriteLock()).toBe(true);
+			const lockToken = worker.acquireWriteLock();
+			expect(lockToken).not.toBeNull();
 			expect(worker.isSynthesizing).toBe(true);
 
 			const result = await worker.triggerNow();
@@ -116,7 +117,10 @@ describe("synthesis-worker", () => {
 				reason: "Synthesis already in progress",
 			});
 			expect(mockGenerateWithTracking).not.toHaveBeenCalled();
-			worker.releaseWriteLock();
+			if (lockToken === null) {
+				throw new Error("expected write lock token");
+			}
+			worker.releaseWriteLock(lockToken);
 		} finally {
 			worker.stop();
 			await worker.drain();
@@ -196,8 +200,15 @@ describe("synthesis-worker", () => {
 	});
 
 	it("drain times out if an in-flight synthesis never resolves", async () => {
+		let releaseRun: (() => void) | null = null;
 		mockGenerateWithTracking.mockImplementationOnce(
-			() => new Promise(() => {}),
+			() =>
+				new Promise<void>((resolve) => {
+					releaseRun = resolve;
+				}).then(() => ({
+					text: "# MEMORY\n",
+					usage: null,
+				})),
 		);
 
 		const worker = startSynthesisWorker({
@@ -220,6 +231,11 @@ describe("synthesis-worker", () => {
 		expect(drainElapsed).toBeGreaterThanOrEqual(10);
 		expect(drainElapsed).toBeLessThan(6000);
 		expect(worker.isSynthesizing).toBe(true);
-		void runPromise;
-	});
+		expect(releaseRun).not.toBeNull();
+		if (releaseRun === null) {
+			throw new Error("expected release function");
+		}
+		releaseRun();
+		await runPromise;
+	}, 10_000);
 });
