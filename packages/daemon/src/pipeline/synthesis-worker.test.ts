@@ -146,36 +146,45 @@ describe("synthesis-worker", () => {
 		});
 
 		const runPromise = worker.triggerNow();
-		await Promise.resolve();
+		try {
+			await Promise.resolve();
 
-		expect(worker.isSynthesizing).toBe(true);
+			expect(worker.isSynthesizing).toBe(true);
 
-		let drained = false;
-		const drainPromise = worker.drain().then((result) => {
-			expect(result).toBe("completed");
-			drained = true;
-		});
+			let drained = false;
+			const drainPromise = worker.drain().then((result) => {
+				expect(result).toBe("completed");
+				drained = true;
+			});
 
-		worker.stop();
-		await Promise.resolve();
-		expect(drained).toBe(false);
+			worker.stop();
+			await Promise.resolve();
+			expect(drained).toBe(false);
 
-		if (resolveRun === null) {
-			throw new Error("run resolver not initialized");
+			if (resolveRun === null) {
+				throw new Error("run resolver not initialized");
+			}
+			resolveRun({ text: "# Updated memory\n", usage: null });
+
+			const result = await runPromise;
+			await drainPromise;
+
+			expect(result).toEqual({
+				success: true,
+				skipped: false,
+				reason: undefined,
+			});
+			expect(drained).toBe(true);
+			expect(worker.isSynthesizing).toBe(false);
+			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# Updated memory\n");
+		} finally {
+			worker.stop();
+			if (resolveRun !== null) {
+				resolveRun({ text: "# Updated memory\n", usage: null });
+			}
+			await runPromise.catch(() => undefined);
+			await worker.drain();
 		}
-		resolveRun({ text: "# Updated memory\n", usage: null });
-
-		const result = await runPromise;
-		await drainPromise;
-
-		expect(result).toEqual({
-			success: true,
-			skipped: false,
-			reason: undefined,
-		});
-		expect(drained).toBe(true);
-		expect(worker.isSynthesizing).toBe(false);
-		expect(mockWriteMemoryMd).toHaveBeenCalledWith("# Updated memory\n");
 	});
 
 	it("skips manual synthesis after the worker has been stopped", async () => {

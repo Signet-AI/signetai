@@ -4639,13 +4639,18 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 		}
 
 		const worker = getSynthesisWorker();
-		if (worker && !worker.running) {
-			return c.json({ error: "Synthesis worker is shutting down" }, 503);
-		}
+		let lockToken: number | null = null;
+		if (worker) {
+			if (!worker.running) {
+				return c.json({ error: "Synthesis worker is shutting down" }, 503);
+			}
 
-		const lockToken = worker?.acquireWriteLock() ?? null;
-		if (worker && lockToken === null) {
-			return c.json({ error: "Synthesis already in progress" }, 409);
+			lockToken = worker.acquireWriteLock();
+			if (lockToken === null) {
+				return worker.running
+					? c.json({ error: "Synthesis already in progress" }, 409)
+					: c.json({ error: "Synthesis worker is shutting down" }, 503);
+			}
 		}
 
 		try {

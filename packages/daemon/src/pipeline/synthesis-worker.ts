@@ -369,17 +369,16 @@ export function startSynthesisWorker(
 				};
 			}
 
-			const lastRun = readLastSynthesisTime();
-			const elapsed = Date.now() - lastRun;
-
-			if (elapsed < MIN_INTERVAL_MS) {
-				const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
-				logger.info("synthesis", "Skipping manual trigger", { reason });
-				releaseWriteLock(lockToken);
-				return { success: false, skipped: true, reason };
-			}
-
 			try {
+				const lastRun = readLastSynthesisTime();
+				const elapsed = Date.now() - lastRun;
+
+				if (elapsed < MIN_INTERVAL_MS) {
+					const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
+					logger.info("synthesis", "Skipping manual trigger", { reason });
+					return { success: false, skipped: true, reason };
+				}
+
 				currentRunPromise = runSynthesis(config);
 				const result = await currentRunPromise;
 				// Write timestamp on both success and failure to prevent
