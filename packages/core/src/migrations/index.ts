@@ -29,6 +29,7 @@ import { up as predictorComparisons } from "./020-predictor-comparisons";
 import { up as checkpointStructural } from "./021-checkpoint-structural";
 import { up as entityPinning } from "./022-entity-pinning";
 import { up as predictorColumns } from "./023-predictor-columns";
+import { up as predictorComparisonColumns } from "./024-predictor-comparison-columns";
 
 // -- Public interface consumed by Database.init() --
 
@@ -143,6 +144,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 23,
 		name: "predictor-columns",
 		up: predictorColumns,
+	},
+	{
+		version: 24,
+		name: "predictor-comparison-columns",
+		up: predictorComparisonColumns,
 	},
 ];
 

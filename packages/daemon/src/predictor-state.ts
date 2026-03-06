@@ -21,6 +21,7 @@ export interface PredictorState {
 	readonly sessionsAfterColdStart: number;
 	readonly coldStartExited: boolean;
 	readonly lastComparisonAt: string | null;
+	readonly lastTrainingAt: string | null;
 }
 
 const DEFAULT_STATE: PredictorState = {
@@ -29,6 +30,7 @@ const DEFAULT_STATE: PredictorState = {
 	sessionsAfterColdStart: 0,
 	coldStartExited: false,
 	lastComparisonAt: null,
+	lastTrainingAt: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -72,6 +74,10 @@ function parseState(raw: unknown): PredictorState {
 			typeof raw.lastComparisonAt === "string"
 				? raw.lastComparisonAt
 				: DEFAULT_STATE.lastComparisonAt,
+		lastTrainingAt:
+			typeof raw.lastTrainingAt === "string"
+				? raw.lastTrainingAt
+				: DEFAULT_STATE.lastTrainingAt,
 	};
 }
 
@@ -106,6 +112,8 @@ export function updatePredictorState(
 		coldStartExited: update.coldStartExited ?? current.coldStartExited,
 		lastComparisonAt:
 			update.lastComparisonAt ?? current.lastComparisonAt,
+		lastTrainingAt:
+			update.lastTrainingAt ?? current.lastTrainingAt,
 	};
 
 	const path = statePath(agentId);

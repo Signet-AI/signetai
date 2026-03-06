@@ -356,9 +356,9 @@ function getSessionCount(status: PredictorStatus): number {
  * Conditions (all must be met):
  * 1. Predictor has been trained at least once (trained === true)
  * 2. Session count >= minTrainingSessions
- *
- * Condition 3 (success_rate > 0.4 over last 10 comparisons) is deferred
- * to Sprint 3 when session-end comparison logic is implemented.
+ * 3. Success rate > 0.4 (only enforced once EMA has started updating,
+ *    i.e. after at least one high-confidence comparison. During early
+ *    data collection, successRate stays at the default 0.5 which passes.)
  */
 export function evaluateColdStartExit(
 	predictorStatus: PredictorStatus,
@@ -368,6 +368,8 @@ export function evaluateColdStartExit(
 	if (currentState.coldStartExited) return true;
 	if (!predictorStatus.trained) return false;
 	if (predictorStatus.training_pairs < minTrainingSessions) return false;
+	// Condition 3: success rate must be above 0.4
+	if (currentState.successRate <= 0.4) return false;
 	return true;
 }
 
