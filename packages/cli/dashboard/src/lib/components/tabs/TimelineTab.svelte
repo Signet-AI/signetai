@@ -442,9 +442,9 @@ function getMemoryMonogramBg(seed: string): string {
 }
 
 function getRangeChipLabel(bucket: MemoryTimelineBucket): string {
-	if (bucket.rangeKey === "last_week") return "Week";
-	if (bucket.rangeKey === "one_month") return "Month";
-	return "Today";
+	if (bucket.rangeKey === "last_week") return "The Week";
+	if (bucket.rangeKey === "one_month") return "The Month";
+	return "This Era";
 }
 
 function handleKeydown(event: KeyboardEvent): void {
@@ -511,34 +511,34 @@ onMount(() => {
 			>
 				<div class="timeline-hero-grid">
 					<div class="min-w-0">
-						<h2 class="timeline-hero-title">
-							Signet Evolution Timeline
+						<h2 class="timeline-hero-title rpg-text-gold">
+							The Chronicles
 						</h2>
 						<p class="timeline-hero-subtitle">
-							Track added, evolved, and pinned memories across recap eras.
+							Witness the unfolding saga. Each era holds the memories that shaped your agent's soul.
 						</p>
 					</div>
 					<div class="timeline-hero-metrics">
 						<div class="timeline-hero-metric">
-							<span class="timeline-hero-metric-label">Agent skills used</span>
+							<span class="timeline-hero-metric-label">Skills Equipped</span>
 							<strong class="timeline-hero-metric-display">
 								{activeSkillsUsed} {formatCountUnit(activeSkillsUsed, "skill", "skills")}
 							</strong>
 						</div>
 						<div class="timeline-hero-metric">
-							<span class="timeline-hero-metric-label">MCP servers used</span>
+							<span class="timeline-hero-metric-label">Relays Active</span>
 							<strong class="timeline-hero-metric-display">
 								{activeMcpServersUsed} {formatCountUnit(activeMcpServersUsed, "server", "servers")}
 							</strong>
 						</div>
 						<div class="timeline-hero-metric">
-							<span class="timeline-hero-metric-label">Average importance</span>
+							<span class="timeline-hero-metric-label">Avg. Power Level</span>
 							<strong class="timeline-hero-metric-display">
 								{Math.round(normalizeImportance(activeBucket.avgImportance) * 100)}% avg
 							</strong>
 						</div>
 						<div class="timeline-hero-metric">
-							<span class="timeline-hero-metric-label">Pinned</span>
+							<span class="timeline-hero-metric-label">Pinned Scrolls</span>
 							<strong class="timeline-hero-metric-display">
 								{activeBucket.pinned} {formatCountUnit(activeBucket.pinned, "card", "cards")}
 							</strong>
@@ -613,25 +613,25 @@ onMount(() => {
 						<div class="flex min-h-[56px] items-center justify-center rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
 							<p class="timeline-summary-line">
 								<span class="sig-heading leading-none">{activeBucket.memoriesAdded}</span>
-								<span class="timeline-summary-copy">- Added</span>
+								<span class="timeline-summary-copy">&#x2014; Forged</span>
 							</p>
 						</div>
 						<div class="flex min-h-[56px] items-center justify-center rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
 							<p class="timeline-summary-line">
 								<span class="sig-heading leading-none">{activeBucket.trackedEvents}</span>
-								<span class="timeline-summary-copy">- Tracked events captured</span>
+								<span class="timeline-summary-copy">&#x2014; Events Witnessed</span>
 							</p>
 						</div>
 						<div class="flex min-h-[56px] items-center justify-center rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
 							<p class="timeline-summary-line">
 								<span class="sig-heading leading-none">{activeBucket.evolved}</span>
-								<span class="timeline-summary-copy">- Evolved</span>
+								<span class="timeline-summary-copy">&#x2014; Evolved</span>
 							</p>
 						</div>
 						<div class="flex min-h-[56px] items-center justify-center rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
 							<p class="timeline-summary-line">
 								<span class="sig-heading leading-none">{activeBucket.strengthened}</span>
-								<span class="timeline-summary-copy">- Strengthened</span>
+								<span class="timeline-summary-copy">&#x2014; Strengthened</span>
 							</p>
 						</div>
 					</div>
@@ -683,7 +683,7 @@ onMount(() => {
 
 				<section class="timeline-top-panel rounded-xl border border-[var(--sig-border)] bg-[var(--sig-surface)] p-3">
 					<div class="flex items-center justify-between gap-2">
-						<p class="sig-label">Top Three Memories</p>
+						<p class="sig-label rpg-text-gold">&#x2694; Most Powerful Memories</p>
 						<p class="text-[11px] text-[var(--sig-text-muted)]">{activeBucket.label}</p>
 					</div>
 					{#if activeTopMemories.length === 0}
@@ -727,10 +727,30 @@ onMount(() => {
 <style>
 	.timeline-hero {
 		border-radius: 1rem;
+		position: relative;
 		background:
 			radial-gradient(circle at 85% -20%, color-mix(in srgb, var(--sig-accent) 16%, transparent), transparent 45%),
 			linear-gradient(140deg, color-mix(in srgb, var(--sig-surface-raised) 88%, black) 0%, var(--sig-surface) 68%);
 		padding: 1.05rem 1.15rem;
+	}
+
+	.timeline-hero::before {
+		content: '';
+		position: absolute;
+		top: 6px; left: 6px;
+		width: 12px; height: 12px;
+		border-top: 2px solid var(--rpg-gold);
+		border-left: 2px solid var(--rpg-gold);
+		pointer-events: none;
+	}
+	.timeline-hero::after {
+		content: '';
+		position: absolute;
+		bottom: 6px; right: 6px;
+		width: 12px; height: 12px;
+		border-bottom: 2px solid var(--rpg-gold);
+		border-right: 2px solid var(--rpg-gold);
+		pointer-events: none;
 	}
 
 	.timeline-hero-grid {
