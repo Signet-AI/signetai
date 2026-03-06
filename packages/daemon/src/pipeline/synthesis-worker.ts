@@ -317,6 +317,9 @@ export function startSynthesisWorker(
 			let timeoutId: ReturnType<typeof setTimeout> | null = null;
 			try {
 				await Promise.race([
+					// External callers can hold the write lock without setting
+					// currentRunPromise, so drain must wait for both the active run
+					// and the shared lock release before shutdown continues.
 					Promise.all([
 						currentRunPromise ?? Promise.resolve(),
 						lockReleasedPromise,

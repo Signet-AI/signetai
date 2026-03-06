@@ -228,7 +228,7 @@ describe("synthesis-worker", () => {
 		await worker.drain();
 		const drainElapsed = Date.now() - drainStart;
 
-		expect(drainElapsed).toBeGreaterThanOrEqual(10);
+		expect(drainElapsed).toBeGreaterThanOrEqual(10 + 1000);
 		expect(drainElapsed).toBeLessThan(6000);
 		expect(worker.isSynthesizing).toBe(true);
 		expect(releaseRun).not.toBeNull();
