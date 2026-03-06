@@ -67,7 +67,8 @@ session_start() {
 	: > "$START_MARKER"
 	SESSION_KEY="$(uuidgen 2>/dev/null || printf "codex-%s-%s" "$(date +%s)" "$$")"
 
-	payload="$(node -e 'const [sessionId, cwd] = process.argv.slice(1); process.stdout.write(JSON.stringify({ session_id: sessionId, cwd }));' "$SESSION_KEY" "$PWD")"
+	payload=""
+	payload="$(node -e 'const [sessionId, cwd] = process.argv.slice(1); process.stdout.write(JSON.stringify({ session_id: sessionId, cwd }));' "$SESSION_KEY" "$PWD" 2>/dev/null)" || payload=""
 	if printf "%s" "$payload" | "$SIGNET_BIN" hook session-start -H codex --project "$PWD" > "$INSTRUCTIONS_FILE" 2>/dev/null; then
 		if [ ! -s "$INSTRUCTIONS_FILE" ]; then
 			rm -f "$INSTRUCTIONS_FILE"
@@ -93,7 +94,8 @@ session_end() {
 	fi
 
 	TRANSCRIPT_PATH="$(find_session_file)"
-	payload="$(node -e 'const [sessionId, transcriptPath, cwd] = process.argv.slice(1); process.stdout.write(JSON.stringify({ session_id: sessionId, transcript_path: transcriptPath, cwd }));' "$SESSION_KEY" "$TRANSCRIPT_PATH" "$PWD")"
+	payload=""
+	payload="$(node -e 'const [sessionId, transcriptPath, cwd] = process.argv.slice(1); process.stdout.write(JSON.stringify({ session_id: sessionId, transcript_path: transcriptPath, cwd }));' "$SESSION_KEY" "$TRANSCRIPT_PATH" "$PWD" 2>/dev/null)" || payload=""
 	printf "%s" "$payload" | "$SIGNET_BIN" hook session-end -H codex >/dev/null 2>&1 || true
 }
 

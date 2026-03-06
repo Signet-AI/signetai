@@ -27,7 +27,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
@@ -228,7 +228,7 @@ export class OpenCodeConnector extends BaseConnector {
 	}
 
 	private getPluginConfigEntry(opencodePath: string): string {
-		return `./${this.getPluginFilePath(opencodePath).replace(`${opencodePath}/`, "")}`;
+		return `./${relative(opencodePath, this.getPluginFilePath(opencodePath))}`;
 	}
 
 	/**
