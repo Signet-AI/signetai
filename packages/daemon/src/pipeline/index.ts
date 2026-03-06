@@ -131,6 +131,10 @@ export function startPipeline(
 export async function stopPipeline(): Promise<void> {
 	if (synthesisWorkerHandle) {
 		synthesisWorkerHandle.stop();
+		const drainResult = await synthesisWorkerHandle.drain();
+		if (drainResult === "timeout") {
+			logger.warn("pipeline", "Synthesis worker drain timed out during shutdown");
+		}
 		synthesisWorkerHandle = null;
 	}
 	if (summaryWorkerHandle) {

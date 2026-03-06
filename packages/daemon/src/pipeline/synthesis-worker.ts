@@ -21,7 +21,9 @@ import { getDbAccessor } from "../db-accessor";
 import { activeSessionCount } from "../session-tracker";
 import { generateWithTracking } from "./provider";
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,13 +37,14 @@ const MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 /** Initial delay after daemon start before first check (60s). */
 const STARTUP_DELAY_MS = 60_000;
+const DRAIN_TIMEOUT_BUFFER_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Timestamp persistence
 // ---------------------------------------------------------------------------
 
 function getLastSynthesisPath(): string {
-	return join(AGENTS_DIR, ".daemon", "last-synthesis.json");
+	return join(getAgentsDir(), ".daemon", "last-synthesis.json");
 }
 
 export function readLastSynthesisTime(): number {
@@ -58,11 +61,11 @@ export function readLastSynthesisTime(): number {
 function writeLastSynthesisTime(timestamp: number): void {
 	try {
 		const path = getLastSynthesisPath();
-		mkdirSync(join(AGENTS_DIR, ".daemon"), { recursive: true });
+		mkdirSync(join(getAgentsDir(), ".daemon"), { recursive: true });
 		writeFileSync(path, JSON.stringify({ lastRunAt: timestamp }));
 	} catch (e) {
 		logger.warn("synthesis", "Failed to persist synthesis timestamp", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }
@@ -96,6 +99,7 @@ function getLastSessionEndTime(): number {
 // ---------------------------------------------------------------------------
 
 type SynthesisResult = "ok" | "empty" | "failed";
+export type SynthesisDrainResult = "completed" | "timeout";
 
 async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisResult> {
 	logger.info("synthesis", "Starting scheduled synthesis", {
@@ -109,7 +113,7 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 		// Only use incremental merge when MEMORY.md exists to merge into;
 		// if the file was deleted, fall back to full regeneration so no
 		// memories older than lastRun are silently omitted.
-		const memoryMdExists = existsSync(join(AGENTS_DIR, "MEMORY.md"));
+		const memoryMdExists = existsSync(join(getAgentsDir(), "MEMORY.md"));
 		const synthesisData = handleSynthesisRequest(
 			{ trigger: "scheduled" },
 			{
@@ -164,7 +168,7 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 
 		return "ok";
 	} catch (e) {
-		logger.error("synthesis", "Synthesis failed", e as Error);
+		logger.error("synthesis", "Synthesis failed", e instanceof Error ? e : new Error(String(e)));
 		return "failed";
 	}
 }
@@ -175,7 +179,17 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 
 export interface SynthesisWorkerHandle {
 	stop(): void;
+	/** Drain in-flight synthesis work before shutdown. */
+	drain(): Promise<SynthesisDrainResult>;
+	/**
+	 * Acquire the shared write lock for manual/legacy synthesis paths.
+	 * The returned token is single-use and must always be released in a finally block.
+	 */
+	acquireWriteLock(): number | null;
+	/** Release a token previously returned by acquireWriteLock(). */
+	releaseWriteLock(token: number): void;
 	readonly running: boolean;
+	readonly isSynthesizing: boolean;
 	/** Trigger an immediate synthesis (e.g. from API). */
 	triggerNow(): Promise<{ success: boolean; skipped: boolean; reason?: string }>;
 	/** Last synthesis timestamp. */
@@ -188,7 +202,30 @@ export function startSynthesisWorker(
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 	let isSynthesizing = false;
+	let currentRunPromise: Promise<SynthesisResult> | null = null;
+	let nextLockToken = 1;
+	let activeLockToken: number | null = null;
+	let lockReleasedResolver: (() => void) | null = null;
+	let lockReleasedPromise: Promise<void> = Promise.resolve();
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
+
+	function acquireWriteLock(): number | null {
+		if (stopped || isSynthesizing) return null;
+		isSynthesizing = true;
+		activeLockToken = nextLockToken++;
+		lockReleasedPromise = new Promise<void>((resolve) => {
+			lockReleasedResolver = resolve;
+		});
+		return activeLockToken;
+	}
+
+	function releaseWriteLock(token: number): void {
+		if (activeLockToken !== token) return;
+		activeLockToken = null;
+		isSynthesizing = false;
+		lockReleasedResolver?.();
+		lockReleasedResolver = null;
+	}
 
 	async function tick(): Promise<void> {
 		if (stopped) return;
@@ -235,17 +272,24 @@ export function startSynthesisWorker(
 				return;
 			}
 
-			isSynthesizing = true;
+			const lockToken = acquireWriteLock();
+			if (lockToken === null) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+
 			try {
-				await runSynthesis(config);
+				currentRunPromise = runSynthesis(config);
+				await currentRunPromise;
 				// Write timestamp on both success and failure to prevent
 				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
 				writeLastSynthesisTime(Date.now());
 			} finally {
-				isSynthesizing = false;
+				currentRunPromise = null;
+				releaseWriteLock(lockToken);
 			}
 		} catch (e) {
-			logger.error("synthesis", "Unhandled tick error", e as Error);
+			logger.error("synthesis", "Unhandled tick error", e instanceof Error ? e : new Error(String(e)));
 		}
 
 		scheduleTick(CHECK_INTERVAL_MS);
@@ -255,7 +299,7 @@ export function startSynthesisWorker(
 		if (stopped) return;
 		timer = setTimeout(() => {
 			tick().catch((err) => {
-				logger.error("synthesis", "Unhandled tick error", err as Error);
+				logger.error("synthesis", "Unhandled tick error", err instanceof Error ? err : new Error(String(err)));
 			});
 		}, delay);
 	}
@@ -275,29 +319,68 @@ export function startSynthesisWorker(
 			if (timer) clearTimeout(timer);
 			logger.info("synthesis", "Synthesis worker stopped");
 		},
+		async drain() {
+			if (!isSynthesizing) return "completed";
+			let timeoutId: ReturnType<typeof setTimeout> | null = null;
+			let timedOut = false;
+			try {
+				await Promise.race([
+					// External callers can hold the write lock without setting
+					// currentRunPromise, so drain must wait for both the active run
+					// and the shared lock release before shutdown continues.
+					Promise.all([
+						currentRunPromise ?? Promise.resolve(),
+						lockReleasedPromise,
+					]).then(() => undefined),
+					new Promise<void>((resolve) => {
+						timeoutId = setTimeout(() => {
+							timedOut = true;
+							logger.warn("synthesis", "drain() timed out waiting for in-flight synthesis");
+							resolve();
+						}, config.timeout + DRAIN_TIMEOUT_BUFFER_MS);
+					}),
+				]);
+				return timedOut ? "timeout" : "completed";
+			} finally {
+				if (timeoutId !== null) clearTimeout(timeoutId);
+			}
+		},
+		acquireWriteLock,
+		releaseWriteLock,
 		get running() {
 			return !stopped;
+		},
+		get isSynthesizing() {
+			return isSynthesizing;
 		},
 		get lastRunAt() {
 			return readLastSynthesisTime();
 		},
 		async triggerNow() {
-			if (isSynthesizing) {
-				return { success: false, skipped: true, reason: "Synthesis already in progress" };
+			if (stopped) {
+				return { success: false, skipped: true, reason: "Synthesis worker stopped" };
+			}
+			const lockToken = acquireWriteLock();
+			if (lockToken === null) {
+				return {
+					success: false,
+					skipped: true,
+					reason: "Synthesis already in progress",
+				};
 			}
 
-			const lastRun = readLastSynthesisTime();
-			const elapsed = Date.now() - lastRun;
-
-			if (elapsed < MIN_INTERVAL_MS) {
-				const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
-				logger.info("synthesis", "Skipping manual trigger", { reason });
-				return { success: false, skipped: true, reason };
-			}
-
-			isSynthesizing = true;
 			try {
-				const result = await runSynthesis(config);
+				const lastRun = readLastSynthesisTime();
+				const elapsed = Date.now() - lastRun;
+
+				if (elapsed < MIN_INTERVAL_MS) {
+					const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
+					logger.info("synthesis", "Skipping manual trigger", { reason });
+					return { success: false, skipped: true, reason };
+				}
+
+				currentRunPromise = runSynthesis(config);
+				const result = await currentRunPromise;
 				// Write timestamp on both success and failure to prevent
 				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
 				writeLastSynthesisTime(Date.now());
@@ -307,7 +390,8 @@ export function startSynthesisWorker(
 					reason: result === "empty" ? "No session summaries to synthesize" : undefined,
 				};
 			} finally {
-				isSynthesizing = false;
+				currentRunPromise = null;
+				releaseWriteLock(lockToken);
 			}
 		},
 	};

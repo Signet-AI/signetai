@@ -4638,8 +4638,29 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 			return c.json({ error: "content is required" }, 400);
 		}
 
-		writeMemoryMd(body.content);
-		logger.info("hooks", "MEMORY.md synthesized");
+		const worker = getSynthesisWorker();
+		let lockToken: number | null = null;
+		if (worker) {
+			if (!worker.running) {
+				return c.json({ error: "Synthesis worker is shutting down" }, 503);
+			}
+
+			lockToken = worker.acquireWriteLock();
+			if (lockToken === null) {
+				return worker.running
+					? c.json({ error: "Synthesis already in progress" }, 409)
+					: c.json({ error: "Synthesis worker is shutting down" }, 503);
+			}
+		}
+
+		try {
+			writeMemoryMd(body.content);
+			logger.info("hooks", "MEMORY.md synthesized");
+		} finally {
+			if (worker && lockToken !== null) {
+				worker.releaseWriteLock(lockToken);
+			}
+		}
 
 		return c.json({ success: true });
 	} catch (e) {
