@@ -2,6 +2,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 /// Cosine similarity between two f32 slices.
+/// Truncates to the shorter length if mismatched.
 /// Returns f64 for JS number precision.
 #[napi]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
