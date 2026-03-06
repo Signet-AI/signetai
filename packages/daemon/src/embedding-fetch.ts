@@ -6,6 +6,10 @@ import { getSecret } from "./secrets.js";
 let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
 let nativeFallbackToOllama = false;
 
+export function setNativeFallbackToOllama(value: boolean): void {
+	nativeFallbackToOllama = value;
+}
+
 async function fetchOllamaEmbedding(
 	text: string,
 	baseUrl: string,
@@ -22,14 +26,14 @@ async function fetchOllamaEmbedding(
 	return data.embedding ?? null;
 }
 
-function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
+export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 	if (cfg.provider === "openai") {
 		return cfg.base_url.trim() || DEFAULT_OPENAI_BASE_URL;
 	}
 	return cfg.base_url;
 }
 
-async function resolveEmbeddingApiKey(
+export async function resolveEmbeddingApiKey(
 	rawApiKey: string | undefined,
 ): Promise<string> {
 	const configured = rawApiKey?.trim() ?? "";

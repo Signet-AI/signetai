@@ -66,7 +66,7 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { createProviderTracker, getDiagnostics } from "./diagnostics";
-import { fetchEmbedding } from "./embedding-fetch";
+import { fetchEmbedding, resolveEmbeddingBaseUrl, resolveEmbeddingApiKey, setNativeFallbackToOllama } from "./embedding-fetch";
 import { buildEmbeddingHealth } from "./embedding-health";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
@@ -119,7 +119,7 @@ import {
 } from "./repair-actions";
 import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, startSchedulerWorker, validateCron } from "./scheduler";
 import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "./scheduler/task-stream";
-import { deleteSecret, execWithSecrets, hasSecret, listSecrets, putSecret } from "./secrets.js";
+import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "./secrets.js";
 import {
 	flushPendingCheckpoints,
 	getCheckpointsByProject,
@@ -641,7 +641,7 @@ async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingSt
 							status.available = true;
 							status.dimensions = 768;
 							status.error = "Native unavailable — using ollama fallback";
-							nativeFallbackToOllama = true;
+							setNativeFallbackToOllama(true);
 							logger.info("embedding", "Ollama fallback available — will use ollama for embeddings");
 						} else {
 							status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama available but nomic-embed-text not found.`;
