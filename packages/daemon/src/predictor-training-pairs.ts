@@ -144,6 +144,7 @@ interface SessionMemoryRow {
 	readonly fts_hit_count: number;
 	readonly source: string;
 	readonly predictor_rank: number | null;
+	readonly agent_relevance_score: number | null;
 }
 
 interface MemoryRow {
@@ -189,7 +190,8 @@ function collectTrainingPairsFromDb(
 	const sessionMemories = db
 		.prepare(
 			`SELECT memory_id, effective_score, predictor_score, rank,
-			        was_injected, relevance_score, fts_hit_count, source, predictor_rank
+			        was_injected, relevance_score, fts_hit_count, source, predictor_rank,
+			        agent_relevance_score
 			 FROM session_memories
 			 WHERE session_key = ?
 			 ORDER BY rank ASC`,
@@ -291,10 +293,10 @@ function collectTrainingPairsFromDb(
 		const entitySlot = entitySlots.get(sm.memory_id) ?? null;
 		const structuralDensity = entityCounts.get(sm.memory_id) ?? null;
 
-		// Use per-memory relevance_score as agent feedback when available
-		const agentRelevance = sm.relevance_score;
-		// Use session-level continuity score as fallback continuity signal
-		const continuity = sessionContinuityScore;
+		// Use inline agent feedback (running mean from per-prompt scoring) as primary signal
+		const agentRelevance = sm.agent_relevance_score;
+		// Use LLM continuity score or session-level fallback
+		const continuity = sm.relevance_score ?? sessionContinuityScore;
 
 		const label = computeCombinedLabel(
 			agentRelevance,

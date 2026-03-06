@@ -91,6 +91,7 @@ function insertSessionMemory(
 		rank?: number;
 		wasInjected?: number;
 		relevanceScore?: number | null;
+		agentRelevanceScore?: number | null;
 		ftsHitCount?: number;
 		effectiveScore?: number | null;
 		predictorScore?: number | null;
@@ -100,8 +101,8 @@ function insertSessionMemory(
 	db.prepare(
 		`INSERT INTO session_memories
 		 (id, session_key, memory_id, source, effective_score, predictor_score,
-		  final_score, rank, was_injected, relevance_score, fts_hit_count, created_at)
-		 VALUES (?, ?, ?, 'hybrid', ?, ?, 0.5, ?, ?, ?, ?, ?)`,
+		  final_score, rank, was_injected, relevance_score, agent_relevance_score, fts_hit_count, created_at)
+		 VALUES (?, ?, ?, 'hybrid', ?, ?, 0.5, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		sessionKey,
@@ -111,6 +112,7 @@ function insertSessionMemory(
 		opts.rank ?? 1,
 		opts.wasInjected ?? 1,
 		opts.relevanceScore ?? null,
+		opts.agentRelevanceScore ?? null,
 		opts.ftsHitCount ?? 0,
 		new Date().toISOString(),
 	);
@@ -208,7 +210,8 @@ describe("collectTrainingPairs", () => {
 		insertSessionMemory(db, sessionKey, memId, {
 			rank: 1,
 			wasInjected: 1,
-			relevanceScore: 0.85,
+			relevanceScore: 0.65,
+			agentRelevanceScore: 0.85,
 			ftsHitCount: 2,
 			effectiveScore: 0.9,
 		});
@@ -229,9 +232,10 @@ describe("collectTrainingPairs", () => {
 		expect(pair.features.embeddingSimilarity).toBe(0.9);
 		expect(pair.features.ftsHitCount).toBe(2);
 
-		// Label checks
+		// Label checks — agentRelevanceScore comes from agent_relevance_score (inline feedback),
+		// continuityScore comes from relevance_score (LLM continuity) with session_scores fallback
 		expect(pair.label.agentRelevanceScore).toBe(0.85);
-		expect(pair.label.continuityScore).toBe(0.75);
+		expect(pair.label.continuityScore).toBe(0.65);
 		expect(pair.label.combined).toBeGreaterThan(0);
 
 		// Metadata
