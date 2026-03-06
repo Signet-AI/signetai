@@ -14,10 +14,11 @@ import Cog from "@lucide/svelte/icons/cog";
 import Github from "@lucide/svelte/icons/github";
 import ListChecks from "@lucide/svelte/icons/list-checks";
 import Moon from "@lucide/svelte/icons/moon";
-import Pencil from "@lucide/svelte/icons/pencil";
-import ShieldCheck from "@lucide/svelte/icons/shield-check";
-import Store from "@lucide/svelte/icons/store";
 import Sun from "@lucide/svelte/icons/sun";
+import Sword from "@lucide/svelte/icons/sword";
+import Shield from "@lucide/svelte/icons/shield";
+import Scroll from "@lucide/svelte/icons/scroll";
+import Zap from "@lucide/svelte/icons/zap";
 
 interface Props {
 	identity: Identity;
@@ -39,21 +40,23 @@ const {
 	onprefetchembeddings,
 }: Props = $props();
 
+let xpPercent = $derived(Math.min(100, Math.round((memCount / 500) * 100)));
+
 function maybePrefetchEmbeddings(id: string): void {
 	if (id !== "memory") return;
 	onprefetchembeddings?.();
 }
 
 type NavItem =
-	| { id: TabId; label: string; icon: typeof Pencil; group?: undefined }
-	| { id: string; label: string; icon: typeof Pencil; group: "memory" | "engine" };
+	| { id: TabId; label: string; icon: typeof Sword; group?: undefined }
+	| { id: string; label: string; icon: typeof Sword; group: "memory" | "engine" };
 
 const navItems: NavItem[] = [
-	{ id: "config", label: "Config", icon: Pencil },
-	{ id: "memory-group", label: "Memory", icon: Brain, group: "memory" },
-	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
-	{ id: "skills", label: "Marketplace", icon: Store },
-	{ id: "tasks", label: "Tasks", icon: ListChecks },
+	{ id: "config", label: "Character Sheet", icon: Sword },
+	{ id: "memory-group", label: "Memory", icon: Scroll, group: "memory" },
+	{ id: "secrets", label: "The Vault", icon: Shield },
+	{ id: "skills", label: "The Armory", icon: Zap },
+	{ id: "tasks", label: "Quest Board", icon: ListChecks },
 	{ id: "engine-group", label: "Engine", icon: Cog, group: "engine" },
 ];
 
@@ -76,33 +79,34 @@ function handleClick(item: NavItem): void {
 	<Sidebar.Header>
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
-				<Sidebar.MenuButton class="h-auto py-2.5 font-[family-name:var(--font-display)]">
+				<Sidebar.MenuButton class="h-auto py-2 font-[family-name:var(--font-display)]">
 					{#snippet child({ props })}
-						<div {...props}>
-							<span
-								class="inline-block h-2.5 w-2.5 shrink-0 relative
-									before:absolute before:w-px before:h-full before:left-1/2
-									before:bg-[var(--sig-accent)]
-									after:absolute after:w-full after:h-px after:top-1/2
-									after:bg-[var(--sig-accent)]"
-								aria-hidden="true"
-							></span>
+						<div {...props} class="flex items-center gap-3">
+							<!-- Hexagonal avatar -->
+							<div class="hex-avatar shrink-0" aria-hidden="true">
+								<div class="hex-inner">
+									{identity?.name?.slice(0,2)?.toUpperCase() ?? 'SG'}
+								</div>
+							</div>
+							<!-- Identity text -->
 							<div class="flex flex-col gap-0.5 leading-none overflow-hidden
 								transition-[opacity,width] duration-200 ease-out
 								group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:w-0">
-								<span
-									class="text-[13px] font-bold tracking-[0.12em]
-										uppercase text-[var(--sig-text-bright)]"
-								>
+								<span class="text-[11px] font-bold tracking-[0.12em] uppercase
+									text-[var(--sig-text-bright)]">
 									SIGNET
 								</span>
-								<span
-									class="text-[10px] tracking-[0.04em]
-										text-[var(--sig-text-muted)]
-										font-[family-name:var(--font-mono)]"
-								>
+								<span class="text-[10px] tracking-[0.04em] text-[var(--sig-text-muted)]
+									font-[family-name:var(--font-mono)]">
 									{identity?.name ?? "Agent"}
 								</span>
+								<!-- XP bar -->
+								<div class="mt-1 h-[var(--xp-bar-height)] w-full
+									bg-[var(--xp-bar-bg)] rounded-full overflow-hidden">
+									<div class="h-full bg-[var(--xp-bar-fill)] rounded-full
+										transition-[width] duration-700 ease-out"
+										style="width: {xpPercent}%"></div>
+								</div>
 							</div>
 						</div>
 					{/snippet}
@@ -146,8 +150,9 @@ function handleClick(item: NavItem): void {
 			<Sidebar.MenuItem>
 				<div class="flex items-center gap-1.5 px-2 py-1">
 					<span
-						class="inline-block h-1.5 w-1.5 shrink-0"
-						class:bg-[var(--sig-success)]={!!daemonStatus}
+						class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+						class:bg-[var(--rpg-teal)]={!!daemonStatus}
+						class:animate-pulse={!!daemonStatus}
 						class:border={!daemonStatus}
 						class:border-[var(--sig-text-muted)]={!daemonStatus}
 					></span>
@@ -159,7 +164,7 @@ function handleClick(item: NavItem): void {
 							transition-opacity duration-200 ease-out
 							group-data-[collapsible=icon]:opacity-0"
 					>
-						{daemonStatus ? "ONLINE" : "OFFLINE"}
+						{daemonStatus ? "DAEMON ACTIVE" : "DAEMON OFFLINE"}
 					</span>
 				</div>
 			</Sidebar.MenuItem>
@@ -209,7 +214,7 @@ function handleClick(item: NavItem): void {
 							transition-opacity duration-200 ease-out
 							group-data-[collapsible=icon]:opacity-0
 							{daemonStatus.update?.pendingRestart
-								? 'text-[var(--sig-warning)]'
+								? 'text-[var(--rpg-gold)]'
 								: 'text-[var(--sig-text-muted)]'}"
 					>
 						{#if daemonStatus.update?.pendingRestart}

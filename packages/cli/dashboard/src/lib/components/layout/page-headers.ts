@@ -5,47 +5,47 @@ export interface PageHeaderDefinition {
 
 export const PAGE_HEADERS = {
 	config: {
-		title: "Config",
-		eyebrow: "Identity markdown workspace",
+		title: "Character Sheet",
+		eyebrow: "agent identity & lore files",
 	},
 	settings: {
-		title: "Engine",
-		eyebrow: "Runtime and harness controls",
+		title: "The Sanctum",
+		eyebrow: "agent configuration matrix",
 	},
 	memory: {
-		title: "Memory",
-		eyebrow: "Persistent memory index",
+		title: "Adventure Log",
+		eyebrow: "persistent memory index",
 	},
 	timeline: {
-		title: "Memory",
-		eyebrow: "Era evolution timeline",
+		title: "Chronicles",
+		eyebrow: "memory evolution timeline",
 	},
 	embeddings: {
-		title: "Memory",
-		eyebrow: "Semantic projection workspace",
+		title: "Memory Map",
+		eyebrow: "UMAP constellation",
 	},
 	pipeline: {
-		title: "Engine",
-		eyebrow: "Live memory loop telemetry",
+		title: "The Forge",
+		eyebrow: "memory processing pipeline",
 	},
 	logs: {
-		title: "Engine",
-		eyebrow: "Daemon event stream",
+		title: "Activity Feed",
+		eyebrow: "daemon event stream",
 	},
 	secrets: {
-		title: "Secrets",
-		eyebrow: "Secure secret vault",
+		title: "The Vault",
+		eyebrow: "encrypted secret storage",
 	},
 	skills: {
-		title: "Marketplace",
-		eyebrow: "Skills and Tool Servers",
+		title: "The Armory",
+		eyebrow: "skill packs & MCP tool servers",
 	},
 	tasks: {
-		title: "Tasks",
-		eyebrow: "Scheduled agent prompts",
+		title: "Quest Board",
+		eyebrow: "scheduled agent quests",
 	},
 	connectors: {
-		title: "Engine",
-		eyebrow: "Harness and data source health",
+		title: "Relays",
+		eyebrow: "platform harnesses & data sources",
 	},
 } as const satisfies Record<string, PageHeaderDefinition>;
