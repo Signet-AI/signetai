@@ -252,11 +252,16 @@ async function processJob(
 
 			if (comparison !== null) {
 				saveComparison(comparison, agentId, accessor);
-				updateSuccessRate(
-					agentId,
-					comparison.predictorWon,
-					comparison.scorerConfidence,
-				);
+				// Only update EMA when the predictor actually produced scores —
+				// otherwise predictorWon is deterministically false and the EMA
+				// accrues phantom losses during cold start or sidecar downtime.
+				if (comparison.hasPredictorScores) {
+					updateSuccessRate(
+						agentId,
+						comparison.predictorWon,
+						comparison.scorerConfidence,
+					);
+				}
 
 				// Drift detection
 				const driftResult = detectDrift(agentId, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
