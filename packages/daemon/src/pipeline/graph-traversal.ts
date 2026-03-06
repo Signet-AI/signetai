@@ -13,6 +13,8 @@ export interface TraversalResult {
 	readonly entityCount: number;
 	/** Whether traversal hit the timeout */
 	readonly timedOut: boolean;
+	/** Aspect IDs walked during traversal */
+	readonly activeAspectIds: ReadonlyArray<string>;
 }
 
 export interface TraversalConfig {
@@ -30,6 +32,7 @@ export interface TraversalConfig {
 
 export interface FocalEntityResult {
 	readonly entityIds: string[];
+	readonly entityNames: string[];
 	readonly source: "project" | "checkpoint" | "query" | "session_key";
 }
 
@@ -37,6 +40,7 @@ export interface TraversalStatusSnapshot {
 	readonly phase: "session_start" | "recall";
 	readonly at: string;
 	readonly source: FocalEntityResult["source"] | null;
+	readonly focalEntityNames: ReadonlyArray<string>;
 	readonly focalEntities: number;
 	readonly traversedEntities: number;
 	readonly memoryCount: number;
@@ -65,6 +69,24 @@ function sanitizeEntityIds(ids: ReadonlyArray<string>): string[] {
 		if (typeof id === "string" && id.length > 0) unique.add(id);
 	}
 	return [...unique];
+}
+
+function getEntityNames(db: ReadDb, ids: ReadonlyArray<string>): string[] {
+	const entityIds = sanitizeEntityIds(ids);
+	if (entityIds.length === 0) return [];
+	const placeholders = entityIds.map(() => "?").join(", ");
+	const rows = db
+		.prepare(
+			`SELECT id, name
+			 FROM entities
+			 WHERE id IN (${placeholders})`,
+		)
+		.all(...entityIds) as Array<{ id: string; name: string }>;
+	const nameById = new Map(rows.map((row) => [row.id, row.name]));
+	return entityIds.flatMap((id) => {
+		const name = nameById.get(id);
+		return typeof name === "string" && name.length > 0 ? [name] : [];
+	});
 }
 
 function extractProjectTokens(projectPath: string): string[] {
@@ -172,33 +194,51 @@ export function resolveFocalEntities(
 ): FocalEntityResult {
 	try {
 		if (!hasTraversalTables(db)) {
-			return { entityIds: [], source: "query" };
+			return { entityIds: [], entityNames: [], source: "query" };
 		}
 
 		if (signals.checkpointEntityIds && signals.checkpointEntityIds.length > 0) {
+			const entityIds = sanitizeEntityIds(signals.checkpointEntityIds);
 			return {
-				entityIds: sanitizeEntityIds(signals.checkpointEntityIds),
+				entityIds,
+				entityNames: getEntityNames(db, entityIds),
 				source: "checkpoint",
 			};
 		}
 
 		if (signals.project) {
 			const projectIds = resolveByProject(db, agentId, signals.project);
-			if (projectIds.length > 0) return { entityIds: projectIds, source: "project" };
+			if (projectIds.length > 0) {
+				return {
+					entityIds: projectIds,
+					entityNames: getEntityNames(db, projectIds),
+					source: "project",
+				};
+			}
 		}
 
 		if (signals.queryTokens && signals.queryTokens.length > 0) {
 			const queryIds = resolveByQueryTokens(db, agentId, signals.queryTokens);
-			if (queryIds.length > 0) return { entityIds: queryIds, source: "query" };
+			if (queryIds.length > 0) {
+				return {
+					entityIds: queryIds,
+					entityNames: getEntityNames(db, queryIds),
+					source: "query",
+				};
+			}
 		}
 
 		if (signals.sessionKey) {
-			return { entityIds: [], source: "session_key" };
+			return { entityIds: [], entityNames: [], source: "session_key" };
 		}
 
-		return { entityIds: [], source: signals.project ? "project" : "query" };
+		return {
+			entityIds: [],
+			entityNames: [],
+			source: signals.project ? "project" : "query",
+		};
 	} catch {
-		return { entityIds: [], source: "query" };
+		return { entityIds: [], entityNames: [], source: "query" };
 	}
 }
 
@@ -213,6 +253,7 @@ export function traverseKnowledgeGraph(
 		constraints: [],
 		entityCount: 0,
 		timedOut: false,
+		activeAspectIds: [],
 	};
 
 	try {
@@ -227,6 +268,7 @@ export function traverseKnowledgeGraph(
 			content: string;
 			importance: number;
 		}> = [];
+		const activeAspectIds = new Set<string>();
 		const constraintKeys = new Set<string>();
 		const visitedEntities = new Set<string>();
 		const deadline = Date.now() + config.timeoutMs;
@@ -289,6 +331,7 @@ export function traverseKnowledgeGraph(
 
 			for (const aspect of aspectRows) {
 				if (checkDeadline()) break;
+				activeAspectIds.add(aspect.id);
 				const attributeRows = db
 					.prepare(
 						`SELECT memory_id FROM entity_attributes
@@ -347,6 +390,7 @@ export function traverseKnowledgeGraph(
 			constraints,
 			entityCount: visitedEntities.size,
 			timedOut,
+			activeAspectIds: [...activeAspectIds],
 		};
 	} catch {
 		return empty;

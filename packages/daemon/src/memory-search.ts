@@ -353,6 +353,7 @@ export async function hybridRecall(
 						phase: "recall",
 						at: new Date().toISOString(),
 						source: focal.source,
+						focalEntityNames: focal.entityNames,
 						focalEntities: focal.entityIds.length,
 						traversedEntities: traversal.entityCount,
 						memoryCount: traversal.memoryIds.size,

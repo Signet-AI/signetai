@@ -1829,3 +1829,283 @@ export async function getPipelineStatus(): Promise<PipelineStatus | null> {
 		return null;
 	}
 }
+
+export interface KnowledgeEntityListItem {
+	entity: {
+		id: string;
+		name: string;
+		canonicalName?: string;
+		entityType: string;
+		description?: string;
+		mentions?: number;
+		createdAt: string;
+		updatedAt: string;
+	};
+	aspectCount: number;
+	attributeCount: number;
+	constraintCount: number;
+	dependencyCount: number;
+}
+
+export interface KnowledgeEntityDetail extends KnowledgeEntityListItem {
+	structuralDensity: {
+		aspectCount: number;
+		attributeCount: number;
+		constraintCount: number;
+		dependencyCount: number;
+	};
+	incomingDependencyCount: number;
+	outgoingDependencyCount: number;
+}
+
+export interface KnowledgeAspectWithCounts {
+	aspect: {
+		id: string;
+		entityId: string;
+		agentId: string;
+		name: string;
+		canonicalName: string;
+		weight: number;
+		createdAt: string;
+		updatedAt: string;
+	};
+	attributeCount: number;
+	constraintCount: number;
+}
+
+export interface KnowledgeAttribute {
+	id: string;
+	aspectId: string;
+	agentId: string;
+	memoryId: string | null;
+	kind: "attribute" | "constraint";
+	content: string;
+	normalizedContent: string;
+	confidence: number;
+	importance: number;
+	status: "active" | "superseded" | "deleted";
+	supersededBy: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface KnowledgeDependencyEdge {
+	id: string;
+	direction: "incoming" | "outgoing";
+	dependencyType: string;
+	strength: number;
+	aspectId: string | null;
+	sourceEntityId: string;
+	sourceEntityName: string;
+	targetEntityId: string;
+	targetEntityName: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface KnowledgeStats {
+	entityCount: number;
+	aspectCount: number;
+	attributeCount: number;
+	constraintCount: number;
+	dependencyCount: number;
+	unassignedMemoryCount: number;
+	coveragePercent: number;
+}
+
+export interface TraversalStatusSnapshot {
+	phase: "session_start" | "recall";
+	at: string;
+	source: "project" | "checkpoint" | "query" | "session_key" | null;
+	focalEntityNames: string[];
+	focalEntities: number;
+	traversedEntities: number;
+	memoryCount: number;
+	constraintCount: number;
+	timedOut: boolean;
+}
+
+export interface PredictorEntitySlice {
+	entityId: string;
+	entityName: string;
+	wins: number;
+	losses: number;
+	winRate: number;
+	avgMargin: number;
+}
+
+export interface PredictorProjectSlice {
+	project: string;
+	wins: number;
+	losses: number;
+	winRate: number;
+	avgMargin: number;
+}
+
+export interface PredictorTrainingRun {
+	id: string;
+	agentId: string;
+	modelVersion: number;
+	loss: number;
+	sampleCount: number;
+	durationMs: number;
+	canaryNdcg: number | null;
+	canaryNdcgDelta: number | null;
+	canaryScoreVariance: number | null;
+	canaryTopkChurn: number | null;
+	createdAt: string;
+}
+
+export async function getKnowledgeEntities(filters: {
+	type?: string;
+	query?: string;
+	limit?: number;
+	offset?: number;
+	agentId?: string;
+} = {}): Promise<{ items: KnowledgeEntityListItem[]; limit: number; offset: number }> {
+	try {
+		const params = new URLSearchParams();
+		if (filters.type) params.set("type", filters.type);
+		if (filters.query) params.set("q", filters.query);
+		if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
+		if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
+		if (filters.agentId) params.set("agent_id", filters.agentId);
+		const res = await fetch(`${API_BASE}/api/knowledge/entities?${params.toString()}`);
+		if (!res.ok) throw new Error("Failed to fetch knowledge entities");
+		return await res.json();
+	} catch {
+		return { items: [], limit: filters.limit ?? 50, offset: filters.offset ?? 0 };
+	}
+}
+
+export async function getKnowledgeEntity(id: string, agentId = "default"): Promise<KnowledgeEntityDetail | null> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(id)}?agent_id=${encodeURIComponent(agentId)}`,
+		);
+		if (!res.ok) return null;
+		return await res.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function getKnowledgeAspects(
+	entityId: string,
+	agentId = "default",
+): Promise<KnowledgeAspectWithCounts[]> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/aspects?agent_id=${encodeURIComponent(agentId)}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch aspects");
+		const data = (await res.json()) as { items?: KnowledgeAspectWithCounts[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getKnowledgeAttributes(
+	entityId: string,
+	aspectId: string,
+	filters: {
+		kind?: string;
+		status?: string;
+		limit?: number;
+		offset?: number;
+		agentId?: string;
+	} = {},
+): Promise<KnowledgeAttribute[]> {
+	try {
+		const params = new URLSearchParams();
+		if (filters.kind) params.set("kind", filters.kind);
+		if (filters.status) params.set("status", filters.status);
+		if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
+		if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
+		params.set("agent_id", filters.agentId ?? "default");
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/aspects/${encodeURIComponent(aspectId)}/attributes?${params.toString()}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch attributes");
+		const data = (await res.json()) as { items?: KnowledgeAttribute[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getKnowledgeDependencies(
+	entityId: string,
+	direction = "both",
+	agentId = "default",
+): Promise<KnowledgeDependencyEdge[]> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/dependencies?direction=${encodeURIComponent(direction)}&agent_id=${encodeURIComponent(agentId)}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch dependencies");
+		const data = (await res.json()) as { items?: KnowledgeDependencyEdge[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getKnowledgeStats(): Promise<KnowledgeStats | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/knowledge/stats`);
+		if (!res.ok) return null;
+		return await res.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function getKnowledgeTraversalStatus(): Promise<TraversalStatusSnapshot | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/knowledge/traversal/status`);
+		if (!res.ok) return null;
+		const data = (await res.json()) as { status?: TraversalStatusSnapshot | null };
+		return data.status ?? null;
+	} catch {
+		return null;
+	}
+}
+
+export async function getPredictorEntitySlices(since?: string): Promise<PredictorEntitySlice[]> {
+	try {
+		const params = new URLSearchParams();
+		if (since) params.set("since", since);
+		const res = await fetch(`${API_BASE}/api/predictor/comparisons/by-entity?${params.toString()}`);
+		if (!res.ok) throw new Error("Failed to fetch predictor entity slices");
+		const data = (await res.json()) as { items?: PredictorEntitySlice[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getPredictorProjectSlices(since?: string): Promise<PredictorProjectSlice[]> {
+	try {
+		const params = new URLSearchParams();
+		if (since) params.set("since", since);
+		const res = await fetch(`${API_BASE}/api/predictor/comparisons/by-project?${params.toString()}`);
+		if (!res.ok) throw new Error("Failed to fetch predictor project slices");
+		const data = (await res.json()) as { items?: PredictorProjectSlice[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getPredictorTrainingRuns(limit = 20): Promise<PredictorTrainingRun[]> {
+	try {
+		const res = await fetch(`${API_BASE}/api/predictor/training?limit=${limit}`);
+		if (!res.ok) throw new Error("Failed to fetch predictor training runs");
+		const data = (await res.json()) as { items?: PredictorTrainingRun[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}

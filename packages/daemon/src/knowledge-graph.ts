@@ -10,6 +10,7 @@
 
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type {
+	Entity,
 	EntityAspect,
 	EntityAttribute,
 	EntityDependency,
@@ -30,6 +31,22 @@ function toCanonicalName(raw: string): string {
 
 function now(): string {
 	return new Date().toISOString();
+}
+
+function rowToEntity(r: Record<string, unknown>): Entity {
+	return {
+		id: r.id as string,
+		name: r.name as string,
+		canonicalName:
+			typeof r.canonical_name === "string" ? r.canonical_name : undefined,
+		entityType: r.entity_type as string,
+		agentId: r.agent_id as string,
+		description:
+			typeof r.description === "string" ? r.description : undefined,
+		mentions: typeof r.mentions === "number" ? r.mentions : undefined,
+		createdAt: r.created_at as string,
+		updatedAt: r.updated_at as string,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +536,375 @@ export interface StructuralDensity {
 	readonly attributeCount: number;
 	readonly constraintCount: number;
 	readonly dependencyCount: number;
+}
+
+export interface KnowledgeEntityListItem {
+	readonly entity: Entity;
+	readonly aspectCount: number;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+	readonly dependencyCount: number;
+}
+
+export interface KnowledgeEntityDetail {
+	readonly entity: Entity;
+	readonly aspectCount: number;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+	readonly dependencyCount: number;
+	readonly structuralDensity: StructuralDensity;
+	readonly incomingDependencyCount: number;
+	readonly outgoingDependencyCount: number;
+}
+
+export interface AspectWithCounts {
+	readonly aspect: EntityAspect;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+}
+
+export interface KnowledgeDependencyEdge {
+	readonly id: string;
+	readonly direction: "incoming" | "outgoing";
+	readonly dependencyType: string;
+	readonly strength: number;
+	readonly aspectId: string | null;
+	readonly sourceEntityId: string;
+	readonly sourceEntityName: string;
+	readonly targetEntityId: string;
+	readonly targetEntityName: string;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface KnowledgeStats {
+	readonly entityCount: number;
+	readonly aspectCount: number;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+	readonly dependencyCount: number;
+	readonly unassignedMemoryCount: number;
+	readonly coveragePercent: number;
+}
+
+export function listKnowledgeEntities(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly type?: string;
+		readonly query?: string;
+		readonly limit: number;
+		readonly offset: number;
+	},
+): readonly KnowledgeEntityListItem[] {
+	return accessor.withReadDb((db) => {
+		const conditions = ["e.agent_id = ?"];
+		const args: Array<string | number> = [params.agentId];
+		if (params.type) {
+			conditions.push("e.entity_type = ?");
+			args.push(params.type);
+		}
+		if (params.query) {
+			conditions.push("e.canonical_name LIKE ?");
+			args.push(`%${params.query.trim().toLowerCase()}%`);
+		}
+
+		const rows = db
+			.prepare(
+				`SELECT
+					e.*,
+					COUNT(DISTINCT asp.id) AS aspect_count,
+					COUNT(DISTINCT CASE
+						WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
+					END) AS attribute_count,
+					COUNT(DISTINCT CASE
+						WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
+					END) AS constraint_count,
+					COUNT(DISTINCT dep.id) AS dependency_count
+				 FROM entities e
+				 LEFT JOIN entity_aspects asp
+				   ON asp.entity_id = e.id AND asp.agent_id = e.agent_id
+				 LEFT JOIN entity_attributes attr
+				   ON attr.aspect_id = asp.id AND attr.agent_id = e.agent_id
+				 LEFT JOIN entity_dependencies dep
+				   ON dep.agent_id = e.agent_id
+				  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
+				 WHERE ${conditions.join(" AND ")}
+				 GROUP BY e.id
+				 ORDER BY e.mentions DESC, e.updated_at DESC, e.name ASC
+				 LIMIT ? OFFSET ?`,
+			)
+			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
+
+		return rows.map((row) => ({
+			entity: rowToEntity(row),
+			aspectCount: Number(row.aspect_count ?? 0),
+			attributeCount: Number(row.attribute_count ?? 0),
+			constraintCount: Number(row.constraint_count ?? 0),
+			dependencyCount: Number(row.dependency_count ?? 0),
+		}));
+	});
+}
+
+export function getKnowledgeEntityDetail(
+	accessor: DbAccessor,
+	entityId: string,
+	agentId: string,
+): KnowledgeEntityDetail | null {
+	return accessor.withReadDb((db) => {
+		const row = db
+			.prepare(
+				`SELECT
+					e.*,
+					COUNT(DISTINCT asp.id) AS aspect_count,
+					COUNT(DISTINCT CASE
+						WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
+					END) AS attribute_count,
+					COUNT(DISTINCT CASE
+						WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
+					END) AS constraint_count,
+					COUNT(DISTINCT CASE
+						WHEN dep.source_entity_id = e.id THEN dep.id
+					END) AS outgoing_dependency_count,
+					COUNT(DISTINCT CASE
+						WHEN dep.target_entity_id = e.id THEN dep.id
+					END) AS incoming_dependency_count
+				 FROM entities e
+				 LEFT JOIN entity_aspects asp
+				   ON asp.entity_id = e.id AND asp.agent_id = e.agent_id
+				 LEFT JOIN entity_attributes attr
+				   ON attr.aspect_id = asp.id AND attr.agent_id = e.agent_id
+				 LEFT JOIN entity_dependencies dep
+				   ON dep.agent_id = e.agent_id
+				  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
+				 WHERE e.id = ? AND e.agent_id = ?
+				 GROUP BY e.id`,
+			)
+			.get(entityId, agentId) as Record<string, unknown> | undefined;
+
+		if (!row) return null;
+		const structuralDensity = getStructuralDensity(accessor, entityId, agentId);
+		const incomingDependencyCount = Number(row.incoming_dependency_count ?? 0);
+		const outgoingDependencyCount = Number(row.outgoing_dependency_count ?? 0);
+
+		return {
+			entity: rowToEntity(row),
+			aspectCount: Number(row.aspect_count ?? 0),
+			attributeCount: Number(row.attribute_count ?? 0),
+			constraintCount: Number(row.constraint_count ?? 0),
+			dependencyCount: incomingDependencyCount + outgoingDependencyCount,
+			structuralDensity,
+			incomingDependencyCount,
+			outgoingDependencyCount,
+		};
+	});
+}
+
+export function getEntityAspectsWithCounts(
+	accessor: DbAccessor,
+	entityId: string,
+	agentId: string,
+): readonly AspectWithCounts[] {
+	return accessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT
+					asp.*,
+					COUNT(DISTINCT CASE
+						WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
+					END) AS attribute_count,
+					COUNT(DISTINCT CASE
+						WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
+					END) AS constraint_count
+				 FROM entity_aspects asp
+				 LEFT JOIN entity_attributes attr
+				   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
+				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				 GROUP BY asp.id
+				 ORDER BY asp.weight DESC, asp.name ASC`,
+			)
+			.all(entityId, agentId) as Array<Record<string, unknown>>;
+
+		return rows.map((row) => ({
+			aspect: rowToAspect(row),
+			attributeCount: Number(row.attribute_count ?? 0),
+			constraintCount: Number(row.constraint_count ?? 0),
+		}));
+	});
+}
+
+export function getAttributesForAspectFiltered(
+	accessor: DbAccessor,
+	params: {
+		readonly entityId: string;
+		readonly aspectId: string;
+		readonly agentId: string;
+		readonly kind?: AttributeKind;
+		readonly status?: AttributeStatus;
+		readonly limit: number;
+		readonly offset: number;
+	},
+): readonly EntityAttribute[] {
+	return accessor.withReadDb((db) => {
+		const conditions = [
+			"asp.entity_id = ?",
+			"asp.id = ?",
+			"asp.agent_id = ?",
+			"ea.agent_id = ?",
+		];
+		const args: Array<string | number> = [
+			params.entityId,
+			params.aspectId,
+			params.agentId,
+			params.agentId,
+		];
+		if (params.kind) {
+			conditions.push("ea.kind = ?");
+			args.push(params.kind);
+		}
+		if (params.status) {
+			conditions.push("ea.status = ?");
+			args.push(params.status);
+		}
+
+		const rows = db
+			.prepare(
+				`SELECT ea.*
+				 FROM entity_attributes ea
+				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
+				 WHERE ${conditions.join(" AND ")}
+				 ORDER BY ea.importance DESC, ea.created_at DESC
+				 LIMIT ? OFFSET ?`,
+			)
+			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
+		return rows.map(rowToAttribute);
+	});
+}
+
+export function getEntityDependenciesDetailed(
+	accessor: DbAccessor,
+	params: {
+		readonly entityId: string;
+		readonly agentId: string;
+		readonly direction: "incoming" | "outgoing" | "both";
+	},
+): readonly KnowledgeDependencyEdge[] {
+	return accessor.withReadDb((db) => {
+		const directionClauses: string[] = [];
+		if (params.direction === "incoming" || params.direction === "both") {
+			directionClauses.push("dep.target_entity_id = ?");
+		}
+		if (params.direction === "outgoing" || params.direction === "both") {
+			directionClauses.push("dep.source_entity_id = ?");
+		}
+		const rows = db
+			.prepare(
+				`SELECT
+					dep.*,
+					src.name AS source_entity_name,
+					dst.name AS target_entity_name
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id
+				 WHERE dep.agent_id = ?
+				   AND (${directionClauses.join(" OR ")})
+				 ORDER BY dep.strength DESC, dep.updated_at DESC`,
+			)
+			.all(
+				params.agentId,
+				...(params.direction === "incoming" || params.direction === "both"
+					? [params.entityId]
+					: []),
+				...(params.direction === "outgoing" || params.direction === "both"
+					? [params.entityId]
+					: []),
+			) as Array<Record<string, unknown>>;
+
+		return rows.map((row) => ({
+			id: row.id as string,
+			direction:
+				row.source_entity_id === params.entityId ? "outgoing" : "incoming",
+			dependencyType: row.dependency_type as string,
+			strength: Number(row.strength ?? 0),
+			aspectId: (row.aspect_id as string) ?? null,
+			sourceEntityId: row.source_entity_id as string,
+			sourceEntityName: row.source_entity_name as string,
+			targetEntityId: row.target_entity_id as string,
+			targetEntityName: row.target_entity_name as string,
+			createdAt: row.created_at as string,
+			updatedAt: row.updated_at as string,
+		}));
+	});
+}
+
+export function getKnowledgeStats(
+	accessor: DbAccessor,
+	agentId: string,
+): KnowledgeStats {
+	return accessor.withReadDb((db) => {
+		const scopedMemoryRows = db
+			.prepare(
+				`SELECT COUNT(DISTINCT m.id) as n
+				 FROM memories m
+				 WHERE m.is_deleted = 0
+				   AND EXISTS (
+				     SELECT 1
+				     FROM memory_entity_mentions mem
+				     JOIN entities e ON e.id = mem.entity_id
+				     WHERE mem.memory_id = m.id
+				       AND e.agent_id = ?
+				   )`,
+			)
+			.get(agentId) as { n: number };
+		const entityCount = db
+			.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ?")
+			.get(agentId) as { n: number };
+		const aspectCount = db
+			.prepare("SELECT COUNT(*) as n FROM entity_aspects WHERE agent_id = ?")
+			.get(agentId) as { n: number };
+		const attributeCount = db
+			.prepare(
+				`SELECT COUNT(*) as n FROM entity_attributes
+				 WHERE agent_id = ? AND kind = 'attribute' AND status = 'active'`,
+			)
+			.get(agentId) as { n: number };
+		const constraintCount = db
+			.prepare(
+				`SELECT COUNT(*) as n FROM entity_attributes
+				 WHERE agent_id = ? AND kind = 'constraint' AND status = 'active'`,
+			)
+			.get(agentId) as { n: number };
+		const dependencyCount = db
+			.prepare("SELECT COUNT(*) as n FROM entity_dependencies WHERE agent_id = ?")
+			.get(agentId) as { n: number };
+		const assignedMemoryCount = db
+			.prepare(
+				`SELECT COUNT(DISTINCT memory_id) as n
+				 FROM entity_attributes
+				 WHERE agent_id = ?
+				   AND status = 'active'
+				   AND memory_id IS NOT NULL`,
+			)
+			.get(agentId) as { n: number };
+
+		const coveragePercent =
+			scopedMemoryRows.n > 0
+				? Math.round((assignedMemoryCount.n / scopedMemoryRows.n) * 1000) / 10
+				: 0;
+
+		return {
+			entityCount: entityCount.n,
+			aspectCount: aspectCount.n,
+			attributeCount: attributeCount.n,
+			constraintCount: constraintCount.n,
+			dependencyCount: dependencyCount.n,
+			unassignedMemoryCount: Math.max(
+				scopedMemoryRows.n - assignedMemoryCount.n,
+				0,
+			),
+			coveragePercent,
+		};
+	});
 }
 
 export function getStructuralDensity(

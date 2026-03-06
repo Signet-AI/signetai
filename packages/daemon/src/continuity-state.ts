@@ -23,6 +23,15 @@ export interface ContinuityState {
 	pendingRemembers: string[];
 	pendingPromptSnippets: string[];
 	startedAt: number;
+	structuralSnapshot?: StructuralSnapshot;
+}
+
+export interface StructuralSnapshot {
+	readonly focalEntityIds: ReadonlyArray<string>;
+	readonly focalEntityNames: ReadonlyArray<string>;
+	readonly activeAspectIds: ReadonlyArray<string>;
+	readonly surfacedConstraintCount: number;
+	readonly traversalMemoryCount: number;
 }
 
 const MAX_PENDING_QUERIES = 20;
@@ -63,6 +72,16 @@ export function initContinuity(
 		pendingPromptSnippets: [],
 		startedAt: now,
 	});
+}
+
+export function setStructuralSnapshot(
+	sessionKey: string | undefined,
+	snapshot: StructuralSnapshot,
+): void {
+	if (!sessionKey) return;
+	const s = state.get(sessionKey);
+	if (!s) return;
+	s.structuralSnapshot = snapshot;
 }
 
 /** Record a user prompt, its search terms, and a truncated snippet. */

@@ -12,6 +12,7 @@ export type TabId =
 	| "settings"
 	| "memory"
 	| "timeline"
+	| "knowledge"
 	| "embeddings"
 	| "pipeline"
 	| "logs"
@@ -25,6 +26,7 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"settings",
 	"memory",
 	"timeline",
+	"knowledge",
 	"embeddings",
 	"pipeline",
 	"logs",
@@ -49,6 +51,7 @@ export const nav = $state({
 const MEMORY_TABS: ReadonlySet<TabId> = new Set([
 	"memory",
 	"timeline",
+	"knowledge",
 	"embeddings",
 ]);
 const ENGINE_TABS: ReadonlySet<TabId> = new Set([

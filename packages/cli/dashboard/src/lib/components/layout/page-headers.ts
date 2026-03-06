@@ -20,6 +20,10 @@ export const PAGE_HEADERS = {
 		title: "Memory",
 		eyebrow: "Era evolution timeline",
 	},
+	knowledge: {
+		title: "Memory",
+		eyebrow: "Knowledge graph and traversal view",
+	},
 	embeddings: {
 		title: "Memory",
 		eyebrow: "Semantic projection workspace",

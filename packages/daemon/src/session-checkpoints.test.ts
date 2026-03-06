@@ -5,9 +5,11 @@
 import { describe, expect, it } from "bun:test";
 import type { ContinuityState } from "./continuity-state";
 import {
+	formatRecoveryDigest,
 	formatPeriodicDigest,
 	formatPreCompactionDigest,
 	formatSessionEndDigest,
+	type CheckpointRow,
 } from "./session-checkpoints";
 
 function makeState(overrides: Partial<ContinuityState> = {}): ContinuityState {
@@ -23,6 +25,7 @@ function makeState(overrides: Partial<ContinuityState> = {}): ContinuityState {
 		pendingRemembers: [],
 		pendingPromptSnippets: [],
 		startedAt: Date.now() - 300_000,
+		structuralSnapshot: undefined,
 		...overrides,
 	};
 }
@@ -52,6 +55,27 @@ describe("formatPeriodicDigest", () => {
 		const digest = formatPeriodicDigest(state);
 		expect(digest).toContain("Queries: auth, login");
 		expect(digest).toContain("Remembered: user prefers dark mode");
+	});
+
+	it("includes structural context ahead of prompts when present", () => {
+		const state = makeState({
+			structuralSnapshot: {
+				focalEntityIds: ["entity-1"],
+				focalEntityNames: ["signetai"],
+				activeAspectIds: ["aspect-1", "aspect-2"],
+				surfacedConstraintCount: 3,
+				traversalMemoryCount: 24,
+			},
+			pendingPromptSnippets: ["fix the daemon build"],
+		});
+		const digest = formatPeriodicDigest(state);
+		expect(digest).toContain("### Structural Context");
+		expect(digest.indexOf("### Structural Context")).toBeLessThan(
+			digest.indexOf("### Recent Prompts"),
+		);
+		expect(digest).toContain("Focal entities: signetai");
+		expect(digest).toContain("Active constraints: 3");
+		expect(digest).toContain("Traversal memories: 24");
 	});
 });
 
@@ -120,5 +144,46 @@ describe("formatSessionEndDigest", () => {
 		expect(digest).toContain("Total Prompts: 1");
 		expect(digest).not.toContain("### Recent Prompts");
 		expect(digest).not.toContain("### Memory Activity");
+	});
+});
+
+describe("formatRecoveryDigest", () => {
+	it("preserves structural context when truncating long prompt sections", () => {
+		const row: CheckpointRow = {
+			id: "cp-1",
+			session_key: "session-1",
+			harness: "claude-code",
+			project: "/tmp/project",
+			project_normalized: "/tmp/project",
+			trigger: "periodic",
+			digest: [
+				"## Session Checkpoint",
+				"Project: /tmp/project",
+				"Prompts: 12 | Duration: 45m",
+				"",
+				"### Structural Context",
+				"Focal entities: signetai",
+				"Active constraints: 3",
+				"Traversal memories: 24",
+				"",
+				"### Recent Prompts",
+				"- " + "x".repeat(400),
+			].join("\n"),
+			prompt_count: 12,
+			memory_queries: null,
+			recent_remembers: null,
+			focal_entity_ids: JSON.stringify(["entity-1"]),
+			focal_entity_names: JSON.stringify(["signetai"]),
+			active_aspect_ids: JSON.stringify(["aspect-1"]),
+			surfaced_constraint_count: 3,
+			traversal_memory_count: 24,
+			created_at: new Date().toISOString(),
+		};
+
+		const digest = formatRecoveryDigest(row, 160);
+		expect(digest).toContain("### Structural Context");
+		expect(digest).toContain("Focal entities: signetai");
+		expect(digest).toContain("Active constraints: 3");
+		expect(digest).toContain("[truncated]");
 	});
 });

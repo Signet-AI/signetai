@@ -14,6 +14,7 @@ import Cog from "@lucide/svelte/icons/cog";
 import Github from "@lucide/svelte/icons/github";
 import ListChecks from "@lucide/svelte/icons/list-checks";
 import Moon from "@lucide/svelte/icons/moon";
+import Network from "@lucide/svelte/icons/network";
 import Pencil from "@lucide/svelte/icons/pencil";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Store from "@lucide/svelte/icons/store";
@@ -51,6 +52,7 @@ type NavItem =
 const navItems: NavItem[] = [
 	{ id: "config", label: "Config", icon: Pencil },
 	{ id: "memory-group", label: "Memory", icon: Brain, group: "memory" },
+	{ id: "knowledge", label: "Knowledge", icon: Network },
 	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
 	{ id: "skills", label: "Marketplace", icon: Store },
 	{ id: "tasks", label: "Tasks", icon: ListChecks },
@@ -58,7 +60,9 @@ const navItems: NavItem[] = [
 ];
 
 function isActive(item: NavItem): boolean {
-	if (item.group === "memory") return isMemoryGroup(nav.activeTab);
+	if (item.group === "memory") {
+		return nav.activeTab === "memory" || nav.activeTab === "embeddings";
+	}
 	if (item.group === "engine") return isEngineGroup(nav.activeTab);
 	return nav.activeTab === item.id;
 }

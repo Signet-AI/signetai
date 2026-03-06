@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../core/src/migrations/index";
 import {
 	writeCheckpoint,
 	getLatestCheckpoint,
@@ -76,6 +76,11 @@ describe("session-checkpoints", () => {
 			promptCount: 5,
 			memoryQueries: ["typescript", "database"],
 			recentRemembers: ["User prefers dark mode"],
+			focalEntityIds: ["entity-1"],
+			focalEntityNames: ["signetai"],
+			activeAspectIds: ["aspect-1"],
+			surfacedConstraintCount: 2,
+			traversalMemoryCount: 8,
 			...overrides,
 		};
 	}
@@ -88,6 +93,7 @@ describe("session-checkpoints", () => {
 		expect(rows[0].harness).toBe("claude-code");
 		expect(rows[0].prompt_count).toBe(5);
 		expect(JSON.parse(rows[0].memory_queries!)).toEqual(["typescript", "database"]);
+		expect(JSON.parse(rows[0].focal_entity_names!)).toEqual(["signetai"]);
 	});
 
 	test("writeCheckpoint enforces maxPerSession", () => {
@@ -134,6 +140,47 @@ describe("session-checkpoints", () => {
 
 		const rows = getCheckpointsByProject(dbAcc, "/tmp/project", 10);
 		expect(rows.length).toBe(2);
+	});
+
+	test("queueCheckpointWrite merges structural snapshots explicitly", () => {
+		initCheckpointFlush(dbAcc);
+		queueCheckpointWrite(
+			makeParams({
+				sessionKey: "structural-merge",
+				focalEntityIds: ["entity-1"],
+				focalEntityNames: ["signetai"],
+				activeAspectIds: ["aspect-1"],
+				surfacedConstraintCount: 2,
+				traversalMemoryCount: 8,
+			}),
+			50,
+		);
+		queueCheckpointWrite(
+			makeParams({
+				sessionKey: "structural-merge",
+				focalEntityIds: ["entity-2"],
+				focalEntityNames: ["signet-core"],
+				activeAspectIds: ["aspect-2"],
+				surfacedConstraintCount: 3,
+				traversalMemoryCount: 24,
+			}),
+			50,
+		);
+
+		flushPendingCheckpoints();
+		const row = getLatestCheckpointBySession(dbAcc, "structural-merge");
+		expect(row).toBeDefined();
+		expect(JSON.parse(row!.focal_entity_ids!)).toEqual(["entity-1", "entity-2"]);
+		expect(JSON.parse(row!.focal_entity_names!)).toEqual([
+			"signetai",
+			"signet-core",
+		]);
+		expect(JSON.parse(row!.active_aspect_ids!)).toEqual([
+			"aspect-1",
+			"aspect-2",
+		]);
+		expect(row!.surfaced_constraint_count).toBe(3);
+		expect(row!.traversal_memory_count).toBe(24);
 	});
 
 	test("pruneCheckpoints deletes all old rows strictly", () => {
@@ -195,6 +242,11 @@ describe("redaction", () => {
 			prompt_count: 5,
 			memory_queries: null,
 			recent_remembers: JSON.stringify(["api_key=sk-secret1234567890"]),
+			focal_entity_ids: null,
+			focal_entity_names: null,
+			active_aspect_ids: null,
+			surfaced_constraint_count: null,
+			traversal_memory_count: null,
 			created_at: new Date().toISOString(),
 		};
 
@@ -220,6 +272,7 @@ describe("formatPeriodicDigest", () => {
 			pendingRemembers: ["User likes dark mode"],
 			pendingPromptSnippets: [],
 			startedAt: Date.now() - 600_000, // 10 min ago
+			structuralSnapshot: undefined,
 		};
 
 		const digest = formatPeriodicDigest(state);
@@ -244,6 +297,7 @@ describe("formatPeriodicDigest", () => {
 			pendingRemembers: [],
 			pendingPromptSnippets: [],
 			startedAt: Date.now() - 120_000,
+			structuralSnapshot: undefined,
 		};
 
 		const digest = formatPeriodicDigest(state);

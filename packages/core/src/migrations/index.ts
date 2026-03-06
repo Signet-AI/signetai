@@ -26,6 +26,7 @@ import { up as taskSkills } from "./017-task-skills";
 import { up as skillMeta } from "./018-skill-meta";
 import { up as knowledgeStructure } from "./019-knowledge-structure";
 import { up as predictorComparisons } from "./020-predictor-comparisons";
+import { up as checkpointStructural } from "./021-checkpoint-structural";
 
 // -- Public interface consumed by Database.init() --
 
@@ -125,6 +126,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 20,
 		name: "predictor-comparisons",
 		up: predictorComparisons,
+	},
+	{
+		version: 21,
+		name: "checkpoint-structural",
+		up: checkpointStructural,
 	},
 ];
 

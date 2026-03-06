@@ -5,7 +5,10 @@
  */
 
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import type { ContinuityState } from "./continuity-state";
+import type {
+	ContinuityState,
+	StructuralSnapshot,
+} from "./continuity-state";
 import { logger } from "./logger";
 
 // ============================================================================
@@ -30,6 +33,11 @@ export interface CheckpointRow {
 	readonly prompt_count: number;
 	readonly memory_queries: string | null;
 	readonly recent_remembers: string | null;
+	readonly focal_entity_ids: string | null;
+	readonly focal_entity_names: string | null;
+	readonly active_aspect_ids: string | null;
+	readonly surfaced_constraint_count: number | null;
+	readonly traversal_memory_count: number | null;
 	readonly created_at: string;
 }
 
@@ -43,6 +51,11 @@ export interface WriteCheckpointParams {
 	readonly promptCount: number;
 	readonly memoryQueries: ReadonlyArray<string>;
 	readonly recentRemembers: ReadonlyArray<string>;
+	readonly focalEntityIds?: ReadonlyArray<string>;
+	readonly focalEntityNames?: ReadonlyArray<string>;
+	readonly activeAspectIds?: ReadonlyArray<string>;
+	readonly surfacedConstraintCount?: number;
+	readonly traversalMemoryCount?: number;
 }
 
 // ============================================================================
@@ -104,8 +117,10 @@ export function writeCheckpoint(
 			`INSERT INTO session_checkpoints
 			 (id, session_key, harness, project, project_normalized,
 			  trigger, digest, prompt_count, memory_queries,
-			  recent_remembers, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  recent_remembers, focal_entity_ids, focal_entity_names,
+			  active_aspect_ids, surfaced_constraint_count,
+			  traversal_memory_count, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			id,
 			params.sessionKey,
@@ -120,6 +135,21 @@ export function writeCheckpoint(
 				: null,
 			params.recentRemembers.length > 0
 				? JSON.stringify(params.recentRemembers.map(redactSecrets))
+				: null,
+			params.focalEntityIds && params.focalEntityIds.length > 0
+				? JSON.stringify(params.focalEntityIds)
+				: null,
+			params.focalEntityNames && params.focalEntityNames.length > 0
+				? JSON.stringify(params.focalEntityNames)
+				: null,
+			params.activeAspectIds && params.activeAspectIds.length > 0
+				? JSON.stringify(params.activeAspectIds)
+				: null,
+			typeof params.surfacedConstraintCount === "number"
+				? params.surfacedConstraintCount
+				: null,
+			typeof params.traversalMemoryCount === "number"
+				? params.traversalMemoryCount
 				: null,
 			now,
 		);
@@ -151,6 +181,50 @@ export function writeCheckpoint(
 		trigger: params.trigger,
 		promptCount: params.promptCount,
 	});
+}
+
+function parseJsonArray(raw: string | null): string[] {
+	if (!raw) return [];
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter(
+			(value): value is string =>
+				typeof value === "string" && value.trim().length > 0,
+		);
+	} catch {
+		return [];
+	}
+}
+
+function buildStructuralSection(snapshot?: StructuralSnapshot): string[] {
+	if (!snapshot) return [];
+	const lines: string[] = [];
+	const focalNames = snapshot.focalEntityNames.join(", ");
+	const activeAspectCount = snapshot.activeAspectIds.length;
+	if (
+		focalNames.length === 0 &&
+		activeAspectCount === 0 &&
+		snapshot.surfacedConstraintCount === 0 &&
+		snapshot.traversalMemoryCount === 0
+	) {
+		return [];
+	}
+
+	lines.push("", "### Structural Context");
+	if (focalNames.length > 0) {
+		lines.push(`Focal entities: ${focalNames}`);
+	}
+	if (activeAspectCount > 0) {
+		lines.push(`Active aspects: ${activeAspectCount}`);
+	}
+	if (snapshot.surfacedConstraintCount > 0) {
+		lines.push(`Active constraints: ${snapshot.surfacedConstraintCount}`);
+	}
+	if (snapshot.traversalMemoryCount > 0) {
+		lines.push(`Traversal memories: ${snapshot.traversalMemoryCount}`);
+	}
+	return lines;
 }
 
 // ============================================================================
@@ -271,7 +345,10 @@ export function pruneCheckpoints(
 // Digest formatting (passive channel)
 // ============================================================================
 
-export function formatPeriodicDigest(state: ContinuityState): string {
+export function formatPeriodicDigest(
+	state: ContinuityState,
+	structuralSnapshot?: StructuralSnapshot,
+): string {
 	const elapsed = Date.now() - state.startedAt;
 	const elapsedStr = formatDuration(elapsed);
 
@@ -280,6 +357,8 @@ export function formatPeriodicDigest(state: ContinuityState): string {
 		`Project: ${state.project ?? "unknown"}`,
 		`Prompts: ${state.promptCount} | Duration: ${elapsedStr}`,
 	];
+
+	parts.push(...buildStructuralSection(structuralSnapshot ?? state.structuralSnapshot));
 
 	if (state.pendingPromptSnippets.length > 0) {
 		parts.push("", "### Recent Prompts");
@@ -306,6 +385,7 @@ export function formatPeriodicDigest(state: ContinuityState): string {
 export function formatPreCompactionDigest(
 	state: ContinuityState,
 	sessionContext?: string,
+	structuralSnapshot?: StructuralSnapshot,
 ): string {
 	const elapsed = Date.now() - state.startedAt;
 	const elapsedStr = formatDuration(elapsed);
@@ -319,6 +399,8 @@ export function formatPreCompactionDigest(
 	if (sessionContext) {
 		parts.push("", "### Session Context", sessionContext);
 	}
+
+	parts.push(...buildStructuralSection(structuralSnapshot ?? state.structuralSnapshot));
 
 	if (state.pendingPromptSnippets.length > 0) {
 		parts.push("", "### Recent Prompts");
@@ -342,7 +424,10 @@ export function formatPreCompactionDigest(
 	return parts.join("\n");
 }
 
-export function formatSessionEndDigest(state: ContinuityState): string {
+export function formatSessionEndDigest(
+	state: ContinuityState,
+	structuralSnapshot?: StructuralSnapshot,
+): string {
 	const elapsed = Date.now() - state.startedAt;
 	const elapsedStr = formatDuration(elapsed);
 
@@ -351,6 +436,8 @@ export function formatSessionEndDigest(state: ContinuityState): string {
 		`Project: ${state.project ?? "unknown"}`,
 		`Duration: ${elapsedStr} | Total Prompts: ${state.totalPromptCount}`,
 	];
+
+	parts.push(...buildStructuralSection(structuralSnapshot ?? state.structuralSnapshot));
 
 	if (state.pendingPromptSnippets.length > 0) {
 		parts.push("", "### Recent Prompts");
@@ -372,6 +459,71 @@ export function formatSessionEndDigest(state: ContinuityState): string {
 	}
 
 	return parts.join("\n");
+}
+
+export function getCheckpointStructuralSnapshot(
+	row: CheckpointRow | undefined,
+): StructuralSnapshot | undefined {
+	if (!row) return undefined;
+	const focalEntityIds = parseJsonArray(row.focal_entity_ids);
+	const focalEntityNames = parseJsonArray(row.focal_entity_names);
+	const activeAspectIds = parseJsonArray(row.active_aspect_ids);
+	const surfacedConstraintCount = row.surfaced_constraint_count ?? 0;
+	const traversalMemoryCount = row.traversal_memory_count ?? 0;
+	if (
+		focalEntityIds.length === 0 &&
+		focalEntityNames.length === 0 &&
+		activeAspectIds.length === 0 &&
+		surfacedConstraintCount === 0 &&
+		traversalMemoryCount === 0
+	) {
+		return undefined;
+	}
+	return {
+		focalEntityIds,
+		focalEntityNames,
+		activeAspectIds,
+		surfacedConstraintCount,
+		traversalMemoryCount,
+	};
+}
+
+export function formatRecoveryDigest(
+	row: CheckpointRow,
+	budgetChars: number,
+): string {
+	const digest = row.digest;
+	if (budgetChars <= 0) return "";
+
+	const structuralSnapshot = getCheckpointStructuralSnapshot(row);
+	if (!structuralSnapshot) {
+		return digest.length > budgetChars
+			? `${digest.slice(0, budgetChars)}\n[truncated]`
+			: digest;
+	}
+
+	const recentPromptIndex = digest.indexOf("\n### Recent Prompts");
+	const memoryActivityIndex = digest.indexOf("\n### Memory Activity");
+	const splitIndices = [recentPromptIndex, memoryActivityIndex].filter(
+		(index) => index >= 0,
+	);
+	const splitIndex =
+		splitIndices.length > 0 ? Math.min(...splitIndices) : digest.length;
+	const structuralPriority = digest.slice(0, splitIndex);
+	const remainder = digest.slice(splitIndex);
+
+	if (structuralPriority.length >= budgetChars) {
+		return `${structuralPriority.slice(0, budgetChars)}\n[truncated]`;
+	}
+
+	const remainingBudget = budgetChars - structuralPriority.length;
+	if (remainder.length === 0) return structuralPriority;
+	if (remainingBudget <= 0) return `${structuralPriority}\n[truncated]`;
+	if (remainder.length <= remainingBudget) {
+		return structuralPriority + remainder;
+	}
+
+	return `${structuralPriority}${remainder.slice(0, remainingBudget)}\n[truncated]`;
 }
 
 function formatDuration(ms: number): string {
@@ -422,12 +574,44 @@ export function queueCheckpointWrite(
 			...existing.params.recentRemembers,
 			...params.recentRemembers,
 		].slice(-10);
+		const mergedFocalEntityIds = [
+			...(existing.params.focalEntityIds ?? []),
+			...(params.focalEntityIds ?? []),
+		].filter((value, index, array) => array.indexOf(value) === index);
+		const mergedFocalEntityNames = [
+			...(existing.params.focalEntityNames ?? []),
+			...(params.focalEntityNames ?? []),
+		].filter((value, index, array) => array.indexOf(value) === index);
+		const mergedActiveAspectIds = [
+			...(existing.params.activeAspectIds ?? []),
+			...(params.activeAspectIds ?? []),
+		].filter((value, index, array) => array.indexOf(value) === index);
 		pendingWrites.set(params.sessionKey, {
 			params: {
 				...params,
 				promptCount: existing.params.promptCount + params.promptCount,
 				memoryQueries: mergedQueries,
 				recentRemembers: mergedRemembers,
+				focalEntityIds:
+					mergedFocalEntityIds.length > 0
+						? mergedFocalEntityIds
+						: undefined,
+				focalEntityNames:
+					mergedFocalEntityNames.length > 0
+						? mergedFocalEntityNames
+						: undefined,
+				activeAspectIds:
+					mergedActiveAspectIds.length > 0
+						? mergedActiveAspectIds
+						: undefined,
+				surfacedConstraintCount: Math.max(
+					existing.params.surfacedConstraintCount ?? 0,
+					params.surfacedConstraintCount ?? 0,
+				),
+				traversalMemoryCount: Math.max(
+					existing.params.traversalMemoryCount ?? 0,
+					params.traversalMemoryCount ?? 0,
+				),
 			},
 			maxPerSession,
 		});

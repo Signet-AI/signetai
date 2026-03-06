@@ -77,6 +77,14 @@ import {
 	type EmbeddingConfig,
 	loadMemoryConfig,
 } from "./memory-config";
+import {
+	getAttributesForAspectFiltered,
+	getEntityAspectsWithCounts,
+	getEntityDependenciesDetailed,
+	getKnowledgeEntityDetail,
+	getKnowledgeStats,
+	listKnowledgeEntities,
+} from "./knowledge-graph";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
@@ -5598,6 +5606,117 @@ app.get("/api/checkpoints/:sessionKey", (c) => {
 	const rows = getCheckpointsBySession(getDbAccessor(), sessionKey);
 	const redacted = rows.map(redactCheckpointRow);
 	return c.json({ checkpoints: redacted, count: redacted.length });
+});
+
+// ============================================================================
+// Knowledge Graph
+// ============================================================================
+
+app.get("/api/knowledge/entities", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
+	const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
+	const limit = Number.isFinite(limitParam)
+		? Math.min(Math.max(limitParam, 1), 200)
+		: 50;
+	const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
+
+	return c.json({
+		items: listKnowledgeEntities(getDbAccessor(), {
+			agentId,
+			type: c.req.query("type") ?? undefined,
+			query: c.req.query("q") ?? undefined,
+			limit,
+			offset,
+		}),
+		limit,
+		offset,
+	});
+});
+
+app.get("/api/knowledge/entities/:id", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const entity = getKnowledgeEntityDetail(
+		getDbAccessor(),
+		c.req.param("id"),
+		agentId,
+	);
+	if (!entity) {
+		return c.json({ error: "Entity not found" }, 404);
+	}
+	return c.json(entity);
+});
+
+app.get("/api/knowledge/entities/:id/aspects", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	return c.json({
+		items: getEntityAspectsWithCounts(
+			getDbAccessor(),
+			c.req.param("id"),
+			agentId,
+		),
+	});
+});
+
+app.get("/api/knowledge/entities/:id/aspects/:aspectId/attributes", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
+	const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
+	const limit = Number.isFinite(limitParam)
+		? Math.min(Math.max(limitParam, 1), 200)
+		: 50;
+	const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
+	const kind = c.req.query("kind");
+	const status = c.req.query("status");
+
+	return c.json({
+		items: getAttributesForAspectFiltered(getDbAccessor(), {
+			entityId: c.req.param("id"),
+			aspectId: c.req.param("aspectId"),
+			agentId,
+			kind:
+				kind === "attribute" || kind === "constraint" ? kind : undefined,
+			status:
+				status === "active" ||
+				status === "superseded" ||
+				status === "deleted"
+					? status
+					: undefined,
+			limit,
+			offset,
+		}),
+		limit,
+		offset,
+	});
+});
+
+app.get("/api/knowledge/entities/:id/dependencies", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const directionQuery = c.req.query("direction");
+	const direction =
+		directionQuery === "incoming" ||
+		directionQuery === "outgoing" ||
+		directionQuery === "both"
+			? directionQuery
+			: "both";
+	return c.json({
+		items: getEntityDependenciesDetailed(getDbAccessor(), {
+			entityId: c.req.param("id"),
+			agentId,
+			direction,
+		}),
+	});
+});
+
+app.get("/api/knowledge/stats", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	return c.json(getKnowledgeStats(getDbAccessor(), agentId));
+});
+
+app.get("/api/knowledge/traversal/status", (c) => {
+	return c.json({
+		status: getTraversalStatus(),
+	});
 });
 
 // ============================================================================

@@ -200,6 +200,10 @@ onMount(() => {
 							onclick={() => setTab("timeline")}
 						>Timeline</button>
 						<button
+							class={activeTab === 'knowledge' ? tabActive : tabInactive}
+							onclick={() => setTab("knowledge")}
+						>Knowledge</button>
+						<button
 							class={activeTab === 'embeddings' ? tabActive : tabInactive}
 							onclick={() => setTab("embeddings")}
 						>Constellation</button>
@@ -258,6 +262,10 @@ onMount(() => {
 				{:else if activeTab === "embeddings"}
 					<span class="sig-label">
 						Constellation
+					</span>
+				{:else if activeTab === "knowledge"}
+					<span class="sig-label">
+						Knowledge graph
 					</span>
 				{:else if activeTab === "tasks"}
 					<Button
@@ -384,6 +392,14 @@ onMount(() => {
 				{:catch error}
 					{@render skeletonError(error)}
 				{/await}
+			{:else if activeTab === "knowledge"}
+				{#await import("$lib/components/tabs/KnowledgeTab.svelte")}
+					{@render skeletonCards()}
+				{:then module}
+					<module.default />
+				{:catch error}
+					{@render skeletonError(error)}
+				{/await}
 			{:else if activeTab === "pipeline"}
 				{#await import("$lib/components/tabs/PipelineTab.svelte")}
 					{@render skeletonList()}
@@ -478,6 +494,9 @@ onMount(() => {
 			{:else if activeTab === "embeddings"}
 				<span>Constellation</span>
 				<span>UMAP</span>
+			{:else if activeTab === "knowledge"}
+				<span>structural graph browser</span>
+				<span>entities, traversal, predictor slices</span>
 			{:else if activeTab === "logs"}
 				<span>Log viewer</span>
 				<span>daemon logs</span>
