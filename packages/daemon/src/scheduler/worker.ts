@@ -19,6 +19,14 @@ import { logger } from "../logger";
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+const TASK_MODEL_CACHE_TTL_MS = 5_000;
+
+interface TaskModelCacheEntry {
+	readonly model: string | undefined;
+	readonly expiresAt: number;
+}
+
+const taskModelCache = new Map<string, TaskModelCacheEntry>();
 
 export interface DueTaskRow {
 	readonly id: string;
@@ -63,10 +71,25 @@ export function resolveTaskModel(
 ): string | undefined {
 	if (harness !== "codex") return undefined;
 
+	const now = Date.now();
+	const cached = taskModelCache.get(agentsDir);
+	if (cached && cached.expiresAt > now) {
+		return cached.model;
+	}
+
 	const cfg = loadMemoryConfig(agentsDir);
-	return cfg.pipelineV2.extraction.provider === "codex"
+	const model = cfg.pipelineV2.extraction.provider === "codex"
 		? cfg.pipelineV2.extraction.model
 		: undefined;
+	taskModelCache.set(agentsDir, {
+		model,
+		expiresAt: now + TASK_MODEL_CACHE_TTL_MS,
+	});
+	return model;
+}
+
+export function clearTaskModelCache(): void {
+	taskModelCache.clear();
 }
 
 /** Start the scheduler worker. Returns a handle to stop it. */

@@ -34,7 +34,15 @@ export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 }
 
 export function requiresOpenAiApiKey(baseUrl: string): boolean {
-	return /(^https?:\/\/)?api\.openai\.com(\/|$)/i.test(baseUrl.trim());
+	try {
+		const parsed = new URL(baseUrl.trim());
+		return (
+			(parsed.protocol === "https:" || parsed.protocol === "http:") &&
+			parsed.hostname === "api.openai.com"
+		);
+	} catch {
+		return false;
+	}
 }
 
 export async function resolveEmbeddingApiKey(

@@ -434,9 +434,6 @@ export function createCodexProvider(
 			}
 			return parseCodexJsonl(stdout);
 		} catch (e) {
-			if (timedOut) {
-				throw new Error(`codex timeout after ${timeoutMs}ms`);
-			}
 			throw e;
 		} finally {
 			clearTimeout(timer);

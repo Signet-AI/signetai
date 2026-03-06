@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
 import type { ReadDb } from "../db-accessor";
-import { resolveTaskModel, selectDueTasks } from "./worker";
+import { clearTaskModelCache, resolveTaskModel, selectDueTasks } from "./worker";
 
 interface TaskInsert {
 	readonly id: string;
@@ -52,6 +52,7 @@ describe("scheduler due task selection", () => {
 
 	afterEach(() => {
 		db.close();
+		clearTaskModelCache();
 	});
 
 	it("selects tasks that are overdue when next_run_at is ISO timestamp", () => {
@@ -91,6 +92,10 @@ describe("scheduler due task selection", () => {
 });
 
 describe("resolveTaskModel", () => {
+	afterEach(() => {
+		clearTaskModelCache();
+	});
+
 	it("returns the configured codex extraction model for codex tasks", () => {
 		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
 		try {
@@ -107,6 +112,42 @@ describe("resolveTaskModel", () => {
 
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
 			expect(resolveTaskModel("opencode", agentsDir)).toBeUndefined();
+		} finally {
+			rmSync(agentsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("caches the resolved model for repeated codex task lookups", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
+		try {
+			const configPath = join(agentsDir, "agent.yaml");
+			writeFileSync(
+				configPath,
+				[
+					"memory:",
+					"  pipelineV2:",
+					"    extraction:",
+					"      provider: codex",
+					"      model: gpt-5.3-codex",
+				].join("\n"),
+			);
+
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
+
+			writeFileSync(
+				configPath,
+				[
+					"memory:",
+					"  pipelineV2:",
+					"    extraction:",
+					"      provider: codex",
+					"      model: gpt-5.4-codex",
+				].join("\n"),
+			);
+
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
+			clearTaskModelCache();
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.4-codex");
 		} finally {
 			rmSync(agentsDir, { recursive: true, force: true });
 		}

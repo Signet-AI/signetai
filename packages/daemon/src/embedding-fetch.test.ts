@@ -15,6 +15,10 @@ describe("requiresOpenAiApiKey", () => {
 	it("does not require a key for custom OpenAI-compatible endpoints", () => {
 		expect(requiresOpenAiApiKey("http://localhost:1234/v1")).toBe(false);
 	});
+
+	it("does not treat proxy paths containing api.openai.com as official", () => {
+		expect(requiresOpenAiApiKey("http://proxy.example.com/api.openai.com/v1")).toBe(false);
+	});
 });
 
 describe("fetchEmbedding", () => {
