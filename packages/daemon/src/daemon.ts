@@ -118,6 +118,12 @@ import {
 	resyncVectorIndex,
 	triggerRetentionSweep,
 } from "./repair-actions";
+import {
+	getComparisonsByEntity,
+	getComparisonsByProject,
+	listComparisons,
+	listTrainingRuns,
+} from "./predictor-comparisons";
 import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, startSchedulerWorker, validateCron } from "./scheduler";
 import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "./scheduler/task-stream";
 import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "./secrets.js";
@@ -996,6 +1002,11 @@ app.use("/api/analytics", async (c, next) => {
 	return requirePermission("analytics", authConfig)(c, next);
 });
 app.use("/api/analytics/*", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
+
+// Predictor reporting — read-only (uses analytics permission)
+app.use("/api/predictor/*", async (c, next) => {
 	return requirePermission("analytics", authConfig)(c, next);
 });
 
@@ -5702,6 +5713,61 @@ app.get("/api/analytics/continuity/latest", (c) => {
 	);
 
 	return c.json({ scores });
+});
+
+app.get("/api/predictor/comparisons/by-project", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const since = c.req.query("since") ?? undefined;
+	return c.json({
+		items: getComparisonsByProject(getDbAccessor(), agentId, since),
+	});
+});
+
+app.get("/api/predictor/comparisons/by-entity", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const since = c.req.query("since") ?? undefined;
+	return c.json({
+		items: getComparisonsByEntity(getDbAccessor(), agentId, since),
+	});
+});
+
+app.get("/api/predictor/comparisons", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
+	const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
+	const limit = Number.isFinite(limitParam)
+		? Math.min(Math.max(limitParam, 1), 200)
+		: 50;
+	const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
+
+	const result = listComparisons(getDbAccessor(), {
+		agentId,
+		project: c.req.query("project") ?? undefined,
+		entityId: c.req.query("entity_id") ?? undefined,
+		since: c.req.query("since") ?? undefined,
+		until: c.req.query("until") ?? undefined,
+		limit,
+		offset,
+	});
+
+	return c.json({
+		total: result.total,
+		limit,
+		offset,
+		items: result.rows,
+	});
+});
+
+app.get("/api/predictor/training", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	const limitParam = Number.parseInt(c.req.query("limit") ?? "20", 10);
+	const limit = Number.isFinite(limitParam)
+		? Math.min(Math.max(limitParam, 1), 100)
+		: 20;
+
+	return c.json({
+		items: listTrainingRuns(getDbAccessor(), agentId, limit),
+	});
 });
 
 // ---------------------------------------------------------------------------

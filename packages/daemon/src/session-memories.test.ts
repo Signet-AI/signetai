@@ -7,7 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../core/src/migrations";
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -73,11 +73,16 @@ function getSessionMemoryRows(
 	was_injected: number;
 	relevance_score: number | null;
 	fts_hit_count: number;
+	entity_slot: number | null;
+	aspect_slot: number | null;
+	is_constraint: number;
+	structural_density: number | null;
 }> {
 	return db
 		.prepare(
 			`SELECT id, session_key, memory_id, source, effective_score,
-			        final_score, rank, was_injected, relevance_score, fts_hit_count
+			        final_score, rank, was_injected, relevance_score, fts_hit_count,
+			        entity_slot, aspect_slot, is_constraint, structural_density
 			 FROM session_memories WHERE session_key = ? ORDER BY rank ASC`,
 		)
 		.all(sessionKey) as Array<{
@@ -91,6 +96,10 @@ function getSessionMemoryRows(
 		was_injected: number;
 		relevance_score: number | null;
 		fts_hit_count: number;
+		entity_slot: number | null;
+		aspect_slot: number | null;
+		is_constraint: number;
+		structural_density: number | null;
 	}>;
 }
 
@@ -246,6 +255,35 @@ describe("recordSessionCandidates", () => {
 		testDb.close();
 
 		expect(rows[0].source).toBe("effective");
+	});
+
+	it("stores structural feature columns", () => {
+		const candidates = [
+			{
+				id: "mem-aaa-111",
+				effScore: 0.9,
+				source: "ka_traversal" as const,
+				entitySlot: 11,
+				aspectSlot: 22,
+				isConstraint: 1,
+				structuralDensity: 7,
+			},
+		];
+
+		recordSessionCandidates(
+			"session-007",
+			candidates,
+			new Set(["mem-aaa-111"]),
+		);
+
+		const testDb = openTestDb();
+		const rows = getSessionMemoryRows(testDb, "session-007");
+		testDb.close();
+
+		expect(rows[0].entity_slot).toBe(11);
+		expect(rows[0].aspect_slot).toBe(22);
+		expect(rows[0].is_constraint).toBe(1);
+		expect(rows[0].structural_density).toBe(7);
 	});
 });
 

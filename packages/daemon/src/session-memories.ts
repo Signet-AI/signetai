@@ -25,6 +25,10 @@ export interface SessionMemoryCandidate {
 	readonly id: string;
 	readonly effScore: number;
 	readonly source: "effective" | "fts_only" | "ka_traversal";
+	readonly entitySlot?: number;
+	readonly aspectSlot?: number;
+	readonly isConstraint?: number;
+	readonly structuralDensity?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,10 +55,11 @@ export function recordSessionCandidates(
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
-			const ROW = "(?,?,?,?,?,?,?,?,0,?)";
+			const ROW = "(?,?,?,?,?,?,?,?,0,?,?,?,?,?)";
 			const BASE_SQL = `INSERT OR IGNORE INTO session_memories
 					 (id, session_key, memory_id, source, effective_score,
-					  final_score, rank, was_injected, fts_hit_count, created_at)
+					  final_score, rank, was_injected, fts_hit_count, created_at,
+					  entity_slot, aspect_slot, is_constraint, structural_density)
 					 VALUES `;
 
 			// Pre-compile the full-chunk statement once to avoid recompiling
@@ -88,6 +93,10 @@ export function recordSessionCandidates(
 						rank++,
 						wasInjected,
 						now,
+						c.entitySlot ?? null,
+						c.aspectSlot ?? null,
+						c.isConstraint ?? 0,
+						c.structuralDensity ?? null,
 					);
 				}
 

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     autograd::{Act, Param, Rng, Tape},
+    protocol::FEATURE_DIM,
     tokenizer::HashTrickTokenizer,
 };
 
@@ -21,7 +22,7 @@ impl Default for ScorerConfig {
             native_dim: 768,
             internal_dim: 64,
             value_dim: 32,
-            extra_features: 12,
+            extra_features: FEATURE_DIM,
             hash_buckets: 16_384,
             project_slots: 32,
         }
@@ -97,6 +98,8 @@ impl CrossAttentionScorer {
             config.internal_dim,
             h_std,
         ));
+        // Gate input = value projection + 17 structured/behavioral features
+        // + project embedding + bias.
         let gate_width = config.value_dim + config.extra_features + config.internal_dim + 1;
         let gate_proj = tape.add_param(Param::matrix(rng, 1, gate_width, h_std));
 

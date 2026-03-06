@@ -24,6 +24,7 @@ import { getUpdateSummary } from "./update-system";
 import { loadMemoryConfig } from "./memory-config";
 import { recordSessionCandidates, trackFtsHits } from "./session-memories";
 import { listSecrets } from "./secrets";
+import { getStructuralFeatures } from "./structural-features";
 import {
 	resolveFocalEntities,
 	setTraversalStatus,
@@ -1045,11 +1046,27 @@ export function handleSessionStart(
 
 	// Record all candidates + which were injected for predictive scorer
 	const injectedSet = new Set(memories.map((m) => m.id));
+	const candidateIdsForRecording = [
+		...mergedCandidates.map((candidate) => candidate.id),
+		...predictedMemories
+			.filter((memory) => !mergedCandidates.some((candidate) => candidate.id === memory.id))
+			.map((memory) => memory.id),
+	];
+	const structuralById = getStructuralFeatures(
+		getDbAccessor(),
+		candidateIdsForRecording,
+		traversalAgentId,
+		candidateSourceById,
+	);
 	const candidatesForRecording = [
 		...mergedCandidates.map((c) => ({
 			id: c.id,
 			effScore: c.effScore,
 			source: candidateSourceById.get(c.id) ?? ("effective" as const),
+			entitySlot: structuralById.get(c.id)?.entitySlot ?? 0,
+			aspectSlot: structuralById.get(c.id)?.aspectSlot ?? 0,
+			isConstraint: structuralById.get(c.id)?.isConstraint ?? 0,
+			structuralDensity: structuralById.get(c.id)?.structuralDensity ?? 0,
 		})),
 		...predictedMemories
 			.filter((m) => !mergedCandidates.some((c) => c.id === m.id))
@@ -1057,6 +1074,10 @@ export function handleSessionStart(
 				id: m.id,
 				effScore: m.effScore,
 				source: "effective" as const,
+				entitySlot: structuralById.get(m.id)?.entitySlot ?? 0,
+				aspectSlot: structuralById.get(m.id)?.aspectSlot ?? 0,
+				isConstraint: structuralById.get(m.id)?.isConstraint ?? 0,
+				structuralDensity: structuralById.get(m.id)?.structuralDensity ?? 0,
 			})),
 	];
 	recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet);
