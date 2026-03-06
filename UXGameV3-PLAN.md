@@ -50,18 +50,46 @@ Already partially implemented. Increase `--sig-grain-opacity` to `0.06` and ensu
 
 ---
 
-## Navigation Vocabulary (Sidebar Rename)
+## Complete Dashboard Section Map
 
-| Current Label | v3 RPG Label | Icon suggestion |
+The Signet dashboard has the following sections (confirmed from source). All must be covered.
+
+### Primary Navigation (sidebar)
+
+| Tab ID | Current Label | v3 RPG Label |
 |---|---|---|
-| Config | **Character Sheet** | `user-cog` or `scroll` |
-| Memory | **Adventure Log** | `book-open` |
-| Secrets | **The Vault** | `shield` (already ShieldCheck) |
-| Marketplace/Skills | **Skill Armory** | `sword` or `package` |
-| Tasks | **Quest Board** | `list-checks` (already) → `clipboard-list` |
-| Engine | **Engine** | keep (it's technical infra) |
+| `config` | Config | **CHARACTER SHEET** |
+| `memory` (group) | Memory | **ADVENTURE LOG** (group) |
+| `secrets` | Secrets | **THE VAULT** |
+| `skills` | Marketplace | **THE ARMORY** (dual: Skills + MCP) |
+| `tasks` | Tasks | **QUEST BOARD** |
+| `engine` (group) | Engine | **ENGINE** (group — kept, it's infra) |
 
-**Implementation:** `app-sidebar.svelte` — update `navItems` labels.
+### Memory Group (sub-tabs, collapsible)
+
+| Tab ID | Current Label | v3 RPG Label |
+|---|---|---|
+| `memory` | Memory | **ADVENTURE LOG** |
+| `timeline` | Timeline | **CHRONICLES** |
+| `embeddings` | Embeddings | **MEMORY MAP** |
+
+### Engine Group (sub-tabs, collapsible)
+
+| Tab ID | Current Label | v3 RPG Label |
+|---|---|---|
+| `settings` | Settings | **SETTINGS** (kept) |
+| `pipeline` | Pipeline | **THE FORGE** |
+| `connectors` | Connectors | **RELAYS** |
+| `logs` | Logs | **ACTIVITY FEED** |
+
+### The Armory (internal sections, toggle inside tab)
+
+| Section | Current Label | v3 RPG Label |
+|---|---|---|
+| `skills` | Agent Skills | **SKILL ARMORY** |
+| `mcp` | MCP Tool Servers | **SERVER MAP** |
+
+**Implementation:** `app-sidebar.svelte` — update `navItems` labels for all groups.
 
 ### Avatar/Identity Header
 - Replace the current logo/name header with a **hexagonal avatar frame** using CSS clip-path  
@@ -145,15 +173,20 @@ This is the most visual change.
 
 ---
 
-### Screen 8: Server Map — `MarketplaceTab.svelte` / `McpServersTab.svelte`
+### Screen 6b: The Armory — MCP Toggle — `McpServersTab.svelte`
+
+The Marketplace tab has an internal toggle: **Agent Skills ↔ MCP Tool Servers**.
+The MCP section is `McpServersTab.svelte` rendered inside `MarketplaceTab.svelte` when `section === "mcp"`.
 
 **Changes:**
-- Section header: "**SERVER MAP**" / "**NETWORK TOPOLOGY**"  
-- Each MCP server card has a connection status indicator (pulse animation for active, dim for inactive = "fog of war" feeling)  
-- Connected servers: bright teal glow dot  
-- Disconnected: muted gray dot  
-- Add subtle grid background pattern to the section (CSS radial dots)  
-- Arrange in a visual grid vs pure list where possible  
+- Toggle buttons: "SKILL ARMORY" ↔ "SERVER MAP" (styled as dual HUD panel tabs)  
+- **SERVER MAP section header** with teal glow + network icon  
+- Each MCP server card: connection status pulse dot (teal = connected, gray = disconnected)  
+- Disconnected servers get reduced opacity ("fog of war")  
+- `McpDetailSheet.svelte`: server detail panel — name, tools count, status, install/remove CTA  
+- `McpInstallSheet.svelte`: install flow — name, transport type, config fields, teal "CONNECT" CTA  
+- Subtle CSS dot-grid background behind the server cards (pure CSS `radial-gradient`)  
+- Cards arranged in grid layout (currently may be list-only)  
 
 ---
 
@@ -196,6 +229,89 @@ This is the most visual change.
   - Metadata row: source, created, duration  
 - Active tasks: pulsing left border in teal  
 - Completed tasks: muted with strikethrough effect  
+
+---
+
+### Memory Group Sub-Screens (screens 9b, 9c)
+
+**Screen 9b — CHRONICLES (Timeline)** — `TimelineTab.svelte`
+
+The memory timeline shows buckets of memories over time.
+
+**Changes:**
+- Section header: "**CHRONICLES**" with a clock icon  
+- Timeline buckets styled as "chapter markers" with date/count  
+- Bucket cards: left accent bar in teal, memory count badge  
+- Active/selected bucket: teal glow border  
+- Prev/Next navigation buttons styled as `< PREV CHAPTER` / `NEXT CHAPTER >`  
+- Empty state: "**NO CHRONICLES YET** — memories accumulate here over time"  
+
+**Screen 9c — MEMORY MAP (Embeddings)** — `EmbeddingsTab.svelte`
+
+The 2D/3D UMAP visualization of memory embeddings.
+
+**Changes:**
+- Section header: "**MEMORY MAP · CONSTELLATION VIEW**"  
+- Panel toggle: 2D / 3D styled as HUD view-mode buttons  
+- Inspector panel: "SIGNAL DETECTED" header when a point is selected  
+- Repair actions section: "SYSTEM DIAGNOSTICS" — error states get red glow, healthy states get teal  
+- The canvas itself is mostly left alone — it's already visually compelling  
+- Loading state: "**MAPPING CONSTELLATION...**" with rpg-pulse animation  
+
+---
+
+### Engine Group Sub-Screens
+
+**Screen E1 — SETTINGS** — `SettingsTab.svelte`
+
+Has 9 sub-sections: Agent, Auth, Embeddings, Harnesses, Memory, Paths, Pipeline, Search, Trust.
+
+**Changes:**
+- Section header: "**SETTINGS · SYSTEM CONFIG**"  
+- Each settings section gets `.hud-panel` corner brackets  
+- Section labels (`AgentSection`, `HarnessesSection`, etc.) styled with `.rpg-section-label`  
+- Harnesses section → "**EQUIPPED HARNESSES**" sub-header  
+- Trust section → "**TRUST PROTOCOLS**" — shield icon, warning states in gold  
+- Auth section → "**AUTHENTICATION**" — lock icon  
+- No functional changes — purely label/style updates  
+
+**Screen E2 — THE FORGE (Pipeline)** — `PipelineTab.svelte`
+
+The pipeline graph showing the Signet processing flow (watcher → pipeline nodes → embeddings → storage).
+
+**Changes:**
+- Section header: "**THE FORGE · PIPELINE ENGINE**"  
+- `PipelineNode.svelte`: nodes styled as HUD cards — active nodes get teal glow pulse, error nodes get red glow  
+- `PipelineEdge.svelte`: connecting lines use accent color matching source node state  
+- `PipelineDetailSheet.svelte`: detail slide-in — "FORGE NODE DETAILS" header  
+- Running/processing state: animated gold shimmer on active node border  
+- Stopped/idle: muted dim state  
+- Layout toggle (split/graph view) styled as HUD mode buttons  
+
+**Screen E3 — RELAYS (Connectors)** — `ConnectorsTab.svelte`
+
+Document connectors (harnesses) and their sync status.
+
+**Changes:**
+- Section header: "**RELAYS · DOCUMENT CONNECTORS**"  
+- Each harness card: status badge uses RPG colors (active=teal glow, error=red, syncing=gold pulse)  
+- Connector rows: left accent bar matching status color  
+- Sync button: "SYNC RELAY" with teal border  
+- Full sync button: "FULL RESYNC" with gold glow (caution action)  
+- Last synced time: styled as monospace "LAST PING: 5m ago"  
+
+**Screen E4 — ACTIVITY FEED (Logs)** — `LogsTab.svelte`
+
+Real-time log stream with categories and levels.
+
+**Changes:**
+- Section header: "**ACTIVITY FEED · SYSTEM LOGS**"  
+- Log levels: debug=muted, info=default, warn=gold, error=red — reuse existing `--sig-log-category-*` tokens  
+- Category filter pills styled as RPG badge filters  
+- Each log row: left-side `2px` category color bar (already using category colors in CSS vars)  
+- Monospace font for all log content (already uses `--font-mono`)  
+- Real-time indicator: "**● LIVE**" in teal with `.rpg-pulse` when stream is connected  
+- Disconnected: "**○ OFFLINE**" in muted  
 
 ---
 
@@ -307,32 +423,67 @@ For character sheet and dashboard stats grid.
 10. Update `MemoryTab.svelte` (section header, category glows, pinned memories)  
 11. Update `SecretsTab.svelte` (vault header, shield bar, lock icons)  
 
-### Phase 5 — Quest Board + Server Map (1-2 hours)  
+### Phase 5 — Quest Board + The Armory MCP (1-2 hours)  
 12. Update `TaskBoard.svelte` with kanban columns + difficulty stars  
-13. Update `McpServersTab.svelte` with topology grid + fog-of-war states  
+13. Update `McpServersTab.svelte` with SERVER MAP grid + fog-of-war states  
+14. Update `MarketplaceTab.svelte` toggle → "SKILL ARMORY" ↔ "SERVER MAP"  
 
-### Phase 6 — Onboarding Flow (3-4 hours) 
-14. Build `AgentForge.svelte`, `ArchetypeSelect.svelte`, `StartingLoadout.svelte`  
-15. Add onboarding store + trigger logic  
+### Phase 6 — Memory Sub-Tabs: Chronicles + Memory Map (1-2 hours)
+15. Update `TimelineTab.svelte` — CHRONICLES chapter markers  
+16. Update `EmbeddingsTab.svelte` — MEMORY MAP section header + HUD panels
+
+### Phase 7 — Engine Group (2-3 hours)
+17. Update `PipelineTab.svelte` + `PipelineNode.svelte` — THE FORGE with node glows
+18. Update `ConnectorsTab.svelte` — RELAYS with status colors  
+19. Update `LogsTab.svelte` — ACTIVITY FEED with LIVE indicator  
+20. Update `SettingsTab.svelte` — section headers + HUD brackets  
+
+### Phase 8 — Onboarding Flow (3-4 hours) 
+21. Build `AgentForge.svelte`, `ArchetypeSelect.svelte`, `StartingLoadout.svelte`  
+22. Add onboarding store + trigger logic  
 
 ---
 
 ## Files to Modify
 
 ```
-packages/cli/dashboard/src/app.css                          ← design tokens + utilities
-packages/cli/dashboard/src/lib/components/app-sidebar.svelte ← nav labels, avatar, XP bar
-packages/cli/dashboard/src/lib/components/skills/SkillCard.svelte
-packages/cli/dashboard/src/lib/components/skills/SkillGrid.svelte
-packages/cli/dashboard/src/lib/components/skills/SkillDetail.svelte
-packages/cli/dashboard/src/lib/components/tabs/ConfigTab.svelte
-packages/cli/dashboard/src/lib/components/tabs/MemoryTab.svelte
-packages/cli/dashboard/src/lib/components/tabs/SecretsTab.svelte
-packages/cli/dashboard/src/lib/components/tabs/SkillsTab.svelte
-packages/cli/dashboard/src/lib/components/tabs/TasksTab.svelte
-packages/cli/dashboard/src/lib/components/tabs/MarketplaceTab.svelte
-packages/cli/dashboard/src/lib/components/tasks/TaskBoard.svelte
-packages/cli/dashboard/src/lib/components/marketplace/McpServersTab.svelte
+packages/cli/dashboard/src/app.css                                        ← design tokens + utilities
+packages/cli/dashboard/src/lib/components/app-sidebar.svelte              ← nav labels, avatar, XP bar, group labels
+
+# Core tabs
+packages/cli/dashboard/src/lib/components/tabs/ConfigTab.svelte           ← CHARACTER SHEET
+packages/cli/dashboard/src/lib/components/tabs/MemoryTab.svelte           ← ADVENTURE LOG
+packages/cli/dashboard/src/lib/components/tabs/SecretsTab.svelte          ← THE VAULT
+packages/cli/dashboard/src/lib/components/tabs/MarketplaceTab.svelte      ← THE ARMORY toggle + layout
+packages/cli/dashboard/src/lib/components/tabs/SkillsTab.svelte           ← SKILL ARMORY (inside Armory)
+packages/cli/dashboard/src/lib/components/tabs/TasksTab.svelte            ← QUEST BOARD wrapper
+
+# Memory group sub-tabs
+packages/cli/dashboard/src/lib/components/tabs/TimelineTab.svelte         ← CHRONICLES
+packages/cli/dashboard/src/lib/components/tabs/EmbeddingsTab.svelte       ← MEMORY MAP
+
+# Engine group sub-tabs
+packages/cli/dashboard/src/lib/components/tabs/SettingsTab.svelte         ← SETTINGS (style updates)
+packages/cli/dashboard/src/lib/components/tabs/PipelineTab.svelte         ← THE FORGE
+packages/cli/dashboard/src/lib/components/tabs/ConnectorsTab.svelte       ← RELAYS
+packages/cli/dashboard/src/lib/components/tabs/LogsTab.svelte             ← ACTIVITY FEED
+
+# Skills/MCP components
+packages/cli/dashboard/src/lib/components/skills/SkillCard.svelte         ← rarity glow borders
+packages/cli/dashboard/src/lib/components/skills/SkillGrid.svelte         ← filter bar
+packages/cli/dashboard/src/lib/components/skills/SkillDetail.svelte       ← epic item card
+packages/cli/dashboard/src/lib/components/marketplace/McpServersTab.svelte← SERVER MAP grid
+packages/cli/dashboard/src/lib/components/marketplace/McpDetailSheet.svelte← server detail
+packages/cli/dashboard/src/lib/components/marketplace/McpInstallSheet.svelte← install flow
+
+# Task components
+packages/cli/dashboard/src/lib/components/tasks/TaskBoard.svelte          ← kanban columns
+packages/cli/dashboard/src/lib/components/tasks/TaskCard.svelte           ← difficulty stars, status pill
+
+# Pipeline components
+packages/cli/dashboard/src/lib/components/pipeline/PipelineNode.svelte    ← node glow states
+packages/cli/dashboard/src/lib/components/pipeline/PipelineEdge.svelte    ← edge accent colors
+packages/cli/dashboard/src/lib/components/pipeline/PipelineDetailSheet.svelte← FORGE NODE DETAILS
 ```
 
 ## Files to Create
