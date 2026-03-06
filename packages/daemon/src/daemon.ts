@@ -157,6 +157,7 @@ import {
 	pruneCheckpoints,
 	redactCheckpointRow,
 } from "./session-checkpoints";
+import { parseFeedback, recordAgentFeedback } from "./session-memories";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { type TimelineSources, buildTimeline } from "./timeline";
 import {
@@ -2791,6 +2792,30 @@ app.delete("/api/memory/:id", async (c) => {
 	return c.json({ error: "Unknown mutation result" }, 500);
 });
 
+// -----------------------------------------------------------------------
+// POST /api/memory/feedback — record agent relevance feedback for memories
+// -----------------------------------------------------------------------
+app.post("/api/memory/feedback", async (c) => {
+	const payload = toRecord(await c.req.json().catch(() => null));
+	if (!payload) {
+		return c.json({ error: "Invalid JSON body" }, 400);
+	}
+
+	const sessionKey = parseOptionalString(payload.sessionKey);
+	const feedback = payload.feedback;
+	if (!sessionKey || !feedback) {
+		return c.json({ error: "sessionKey and feedback required" }, 400);
+	}
+
+	const parsed = parseFeedback(feedback);
+	if (!parsed) {
+		return c.json({ error: "Invalid feedback format — expected map of ID to number (-1 to 1)" }, 400);
+	}
+
+	recordAgentFeedback(sessionKey, parsed);
+	return c.json({ ok: true, recorded: Object.keys(parsed).length });
+});
+
 app.post("/api/memory/forget", async (c) => {
 	const payload = toRecord(await c.req.json().catch(() => null));
 	if (!payload) {
@@ -4446,6 +4471,7 @@ import {
 	handleSessionStart,
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
+	resetPromptDedup,
 	writeMemoryMd,
 } from "./hooks.js";
 
@@ -4723,6 +4749,12 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			harness: body.harness,
 			memoryId: summaryId,
 		});
+
+		// Compaction wipes conversation context — reset prompt-submit dedup
+		// so previously-injected memories are eligible for re-injection.
+		if (body.sessionKey) {
+			resetPromptDedup(body.sessionKey);
+		}
 
 		return c.json({
 			success: true,

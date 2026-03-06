@@ -73,6 +73,22 @@ import {
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 
+// ---------------------------------------------------------------------------
+// Hook dedup state (in-memory, fail-open on restart)
+// ---------------------------------------------------------------------------
+
+/** Tracks which sessions have already received a full session-start inject. */
+const sessionStartSeen = new Map<string, number>();
+
+/** Sliding window of recently-injected memory IDs per session (prompt-submit). */
+const PROMPT_DEDUP_WINDOW = 5;
+const promptDedupRecent = new Map<string, Array<Set<string>>>();
+
+/** Reset prompt-submit dedup for a session (call after compaction). */
+export function resetPromptDedup(sessionKey: string): void {
+	promptDedupRecent.delete(sessionKey);
+}
+
 function formatMemoryDate(isoDate: string): string {
 	const d = new Date(isoDate);
 	return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -926,7 +942,28 @@ export async function handleSessionStart(
 		project: req.project,
 	});
 
-	// Initialize continuity state for checkpoint accumulation
+	// Dedup guard: if we already sent a full inject for this session, return
+	// a minimal stub. Identity files / MEMORY.md are already in the context.
+	// Must fire BEFORE initContinuity to avoid resetting accumulated state.
+	if (req.sessionKey && sessionStartSeen.has(req.sessionKey)) {
+		logger.info("hooks", "Session start dedup — returning minimal stub", {
+			harness: req.harness,
+			sessionKey: req.sessionKey,
+		});
+		const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+		const now = new Date().toLocaleString("en-US", {
+			timeZone: tz,
+			dateStyle: "full",
+			timeStyle: "short",
+		});
+		return {
+			identity: { name: "Agent" },
+			memories: [],
+			inject: `[memory active | /remember | /recall]\n# Current Date & Time\n${now} (${tz})`,
+		};
+	}
+
+	// Initialize continuity state for checkpoint accumulation (first call only)
 	if (req.sessionKey) {
 		initContinuity(req.sessionKey, req.harness, req.project);
 	}
@@ -1447,6 +1484,11 @@ export async function handleSessionStart(
 		durationMs: duration,
 	});
 
+	// Mark this session as having received the full inject
+	if (req.sessionKey) {
+		sessionStartSeen.set(req.sessionKey, Date.now());
+	}
+
 	return {
 		identity,
 		memories: memories.map((m) => ({
@@ -1862,7 +1904,7 @@ export async function handleUserPromptSubmit(
 			return { inject: "", memoryCount: 0 };
 		}
 
-		const selected = selectWithBudget(
+		const budgetSelected = selectWithBudget(
 			recall.results.map((result) => ({
 				...result,
 				pinned: result.pinned ? 1 : 0,
@@ -1870,13 +1912,26 @@ export async function handleUserPromptSubmit(
 			500,
 		).slice(0, 5);
 
+		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
+		const allMatchedIds = recall.results.map((result) => result.id);
+		trackFtsHits(req.sessionKey, allMatchedIds);
+
+		// Filter out memories already injected within the sliding window
+		let selected = budgetSelected;
+		if (req.sessionKey) {
+			const recentTurns = promptDedupRecent.get(req.sessionKey);
+			if (recentTurns && recentTurns.length > 0) {
+				const recentIds = new Set<string>();
+				for (const turnSet of recentTurns) {
+					for (const id of turnSet) recentIds.add(id);
+				}
+				selected = budgetSelected.filter((s) => !recentIds.has(s.id));
+			}
+		}
+
 		if (selected.length === 0) {
 			return { inject: "", memoryCount: 0 };
 		}
-
-		// Track FTS hits for predictive scorer data collection
-		const allMatchedIds = recall.results.map((result) => result.id);
-		trackFtsHits(req.sessionKey, allMatchedIds);
 
 		const queryTerms = keywordTerms.join(" ");
 		const lines = selected.map((s) => {
@@ -1886,8 +1941,22 @@ export async function handleUserPromptSubmit(
 		let inject = `[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
 
 		// Append agent feedback request if enabled and there are injected memories
-		if (feedbackEnabled && ids.length > 0) {
-			inject += `\n<memory-feedback>\nRate injected memories for your last response. JSON map of ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.\nIDs: ${ids.join(", ")}\nExample: {"${ids[0]}": 0.8, "${ids.length > 1 ? ids[1] : ids[0]}": 0}\n</memory-feedback>`;
+		const selectedIds = selected.map((s) => s.id);
+		if (feedbackEnabled && selectedIds.length > 0) {
+			inject += `\n<memory-feedback>\nRate injected memories using the mcp__signet__memory_feedback tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
+		}
+
+		// Record injected IDs into sliding window for dedup
+		if (req.sessionKey && selectedIds.length > 0) {
+			let recentTurns = promptDedupRecent.get(req.sessionKey);
+			if (!recentTurns) {
+				recentTurns = [];
+				promptDedupRecent.set(req.sessionKey, recentTurns);
+			}
+			recentTurns.unshift(new Set(selectedIds));
+			if (recentTurns.length > PROMPT_DEDUP_WINDOW) {
+				recentTurns.pop();
+			}
 		}
 
 		const duration = Date.now() - start;
@@ -1923,6 +1992,12 @@ export function handleSessionEnd(
 ): SessionEndResponse {
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = "default";
+
+	// Clear hook dedup state for this session
+	if (sessionKey) {
+		sessionStartSeen.delete(sessionKey);
+		promptDedupRecent.delete(sessionKey);
+	}
 
 	// Flush pending periodic checkpoints
 	try {
