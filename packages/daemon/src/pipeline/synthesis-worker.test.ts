@@ -123,7 +123,7 @@ describe("synthesis-worker", () => {
 			worker.releaseWriteLock(lockToken);
 		} finally {
 			worker.stop();
-			await worker.drain();
+			expect(await worker.drain()).toBe("completed");
 		}
 	});
 
@@ -151,7 +151,8 @@ describe("synthesis-worker", () => {
 		expect(worker.isSynthesizing).toBe(true);
 
 		let drained = false;
-		const drainPromise = worker.drain().then(() => {
+		const drainPromise = worker.drain().then((result) => {
+			expect(result).toBe("completed");
 			drained = true;
 		});
 
@@ -189,7 +190,7 @@ describe("synthesis-worker", () => {
 
 		worker.stop();
 		const result = await worker.triggerNow();
-		await worker.drain();
+		expect(await worker.drain()).toBe("completed");
 
 		expect(result).toEqual({
 			success: false,
@@ -225,9 +226,10 @@ describe("synthesis-worker", () => {
 		worker.stop();
 
 		const drainStart = Date.now();
-		await worker.drain();
+		const drainResult = await worker.drain();
 		const drainElapsed = Date.now() - drainStart;
 
+		expect(drainResult).toBe("timeout");
 		expect(drainElapsed).toBeGreaterThanOrEqual(10 + 1000);
 		expect(drainElapsed).toBeLessThan(6000);
 		expect(worker.isSynthesizing).toBe(true);

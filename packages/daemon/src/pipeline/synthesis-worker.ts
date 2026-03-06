@@ -99,6 +99,7 @@ function getLastSessionEndTime(): number {
 // ---------------------------------------------------------------------------
 
 type SynthesisResult = "ok" | "empty" | "failed";
+export type SynthesisDrainResult = "completed" | "timeout";
 
 async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisResult> {
 	logger.info("synthesis", "Starting scheduled synthesis", {
@@ -178,8 +179,14 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 
 export interface SynthesisWorkerHandle {
 	stop(): void;
-	drain(): Promise<void>;
+	/** Drain in-flight synthesis work before shutdown. */
+	drain(): Promise<SynthesisDrainResult>;
+	/**
+	 * Acquire the shared write lock for manual/legacy synthesis paths.
+	 * The returned token is single-use and must always be released in a finally block.
+	 */
 	acquireWriteLock(): number | null;
+	/** Release a token previously returned by acquireWriteLock(). */
 	releaseWriteLock(token: number): void;
 	readonly running: boolean;
 	readonly isSynthesizing: boolean;
@@ -313,8 +320,9 @@ export function startSynthesisWorker(
 			logger.info("synthesis", "Synthesis worker stopped");
 		},
 		async drain() {
-			if (!isSynthesizing) return;
+			if (!isSynthesizing) return "completed";
 			let timeoutId: ReturnType<typeof setTimeout> | null = null;
+			let timedOut = false;
 			try {
 				await Promise.race([
 					// External callers can hold the write lock without setting
@@ -326,11 +334,13 @@ export function startSynthesisWorker(
 					]).then(() => undefined),
 					new Promise<void>((resolve) => {
 						timeoutId = setTimeout(() => {
+							timedOut = true;
 							logger.warn("synthesis", "drain() timed out waiting for in-flight synthesis");
 							resolve();
 						}, config.timeout + DRAIN_TIMEOUT_BUFFER_MS);
 					}),
 				]);
+				return timedOut ? "timeout" : "completed";
 			} finally {
 				if (timeoutId !== null) clearTimeout(timeoutId);
 			}
