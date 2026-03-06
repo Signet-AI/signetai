@@ -52,4 +52,8 @@ export const PAGE_HEADERS = {
 		title: "Engine",
 		eyebrow: "Harness and data source health",
 	},
+	predictor: {
+		title: "Engine",
+		eyebrow: "Predictive memory scorer",
+	},
 } as const satisfies Record<string, PageHeaderDefinition>;

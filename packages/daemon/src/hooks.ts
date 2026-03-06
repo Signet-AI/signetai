@@ -25,7 +25,7 @@ import { loadMemoryConfig } from "./memory-config";
 import { recordSessionCandidates, trackFtsHits } from "./session-memories";
 import { listSecrets } from "./secrets";
 import { getStructuralFeatures } from "./structural-features";
-import { getPredictorClient } from "./daemon";
+import { getPredictorClient, recordPredictorLatency } from "./daemon";
 import { getPredictorState, updatePredictorState } from "./predictor-state";
 import {
 	type CandidateInput,
@@ -1101,6 +1101,7 @@ export async function handleSessionStart(
 			: null;
 
 	// Run predictor scoring (async — calls sidecar if available)
+	const predictorScoreStart = Date.now();
 	const scoringResult = await runPredictorScoring({
 		candidates: candidateInputs,
 		accessor: getDbAccessor(),
@@ -1111,6 +1112,8 @@ export async function handleSessionStart(
 		candidateFeatures,
 		project: req.project,
 	});
+	const predictorScoreMs = Date.now() - predictorScoreStart;
+	recordPredictorLatency("predictor_score", predictorScoreMs);
 
 	// Build ranked-candidate lookup for fused scores
 	const rankedById = new Map<string, RankedCandidate>(

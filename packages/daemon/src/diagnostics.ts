@@ -72,6 +72,40 @@ export interface UpdateHealth extends HealthScore {
 	readonly lastError: string | null;
 }
 
+export type PredictorHealthStatus =
+	| "healthy"
+	| "degraded"
+	| "unhealthy"
+	| "cold_start"
+	| "disabled";
+
+export interface PredictorHealth {
+	readonly score: number;
+	readonly status: PredictorHealthStatus;
+	readonly sidecarAlive: boolean;
+	readonly modelVersion: number;
+	readonly trainingSessions: number;
+	readonly successRate: number;
+	readonly alpha: number;
+	readonly coldStartExited: boolean;
+	readonly lastTrainedAt: string | null;
+	readonly crashCount: number;
+	readonly crashDisabled: boolean;
+}
+
+export interface PredictorHealthParams {
+	readonly enabled: boolean;
+	readonly sidecarAlive: boolean;
+	readonly crashCount: number;
+	readonly crashDisabled: boolean;
+	readonly modelVersion: number;
+	readonly trainingSessions: number;
+	readonly successRate: number;
+	readonly alpha: number;
+	readonly coldStartExited: boolean;
+	readonly lastTrainedAt: string | null;
+}
+
 export interface DiagnosticsReport {
 	readonly timestamp: string;
 	readonly composite: HealthScore;
@@ -83,6 +117,7 @@ export interface DiagnosticsReport {
 	readonly duplicate: DuplicateHealth;
 	readonly connector: ConnectorHealth;
 	readonly update: UpdateHealth;
+	readonly predictor: PredictorHealth;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +545,89 @@ export function getUpdateHealth(state?: UpdateState): UpdateHealth {
 }
 
 // ---------------------------------------------------------------------------
+// Predictor health
+// ---------------------------------------------------------------------------
+
+const DISABLED_PREDICTOR: PredictorHealthParams = {
+	enabled: false,
+	sidecarAlive: false,
+	crashCount: 0,
+	crashDisabled: false,
+	modelVersion: 0,
+	trainingSessions: 0,
+	successRate: 0,
+	alpha: 1.0,
+	coldStartExited: false,
+	lastTrainedAt: null,
+};
+
+export function getPredictorHealth(
+	params: PredictorHealthParams,
+): PredictorHealth {
+	if (!params.enabled) {
+		return {
+			score: 0,
+			status: "disabled",
+			sidecarAlive: false,
+			modelVersion: 0,
+			trainingSessions: 0,
+			successRate: 0,
+			alpha: 1.0,
+			coldStartExited: false,
+			lastTrainedAt: null,
+			crashCount: 0,
+			crashDisabled: false,
+		};
+	}
+
+	let score: number;
+
+	if (!params.sidecarAlive || params.crashDisabled) {
+		score = 0;
+	} else if (!params.coldStartExited) {
+		score = 0.6;
+	} else if (params.successRate > 0.4) {
+		score = 0.8 + Math.min(0.2, params.successRate * 0.2);
+	} else {
+		score = 0.5 + params.successRate * 0.5;
+	}
+
+	// Crash penalty
+	if (params.crashCount > 0 && score > 0) {
+		score -= 0.1;
+	}
+
+	score = clamp(score);
+
+	let status: PredictorHealthStatus;
+	if (!params.sidecarAlive || params.crashDisabled) {
+		status = "unhealthy";
+	} else if (!params.coldStartExited) {
+		status = "cold_start";
+	} else if (score >= 0.8) {
+		status = "healthy";
+	} else if (score >= 0.5) {
+		status = "degraded";
+	} else {
+		status = "unhealthy";
+	}
+
+	return {
+		score,
+		status,
+		sidecarAlive: params.sidecarAlive,
+		modelVersion: params.modelVersion,
+		trainingSessions: params.trainingSessions,
+		successRate: params.successRate,
+		alpha: params.alpha,
+		coldStartExited: params.coldStartExited,
+		lastTrainedAt: params.lastTrainedAt,
+		crashCount: params.crashCount,
+		crashDisabled: params.crashDisabled,
+	};
+}
+
+// ---------------------------------------------------------------------------
 // Composite report
 // ---------------------------------------------------------------------------
 
@@ -528,6 +646,7 @@ export function getDiagnostics(
 	db: ReadDb,
 	tracker: ProviderTracker,
 	updateState?: UpdateState,
+	predictorParams?: PredictorHealthParams,
 ): DiagnosticsReport {
 	const queue = getQueueHealth(db);
 	const storage = getStorageHealth(db);
@@ -537,7 +656,12 @@ export function getDiagnostics(
 	const duplicate = getDuplicateHealth(db);
 	const connector = getConnectorHealth(db);
 	const update = getUpdateHealth(updateState);
+	const predictor = getPredictorHealth(
+		predictorParams ?? DISABLED_PREDICTOR,
+	);
 
+	// Predictor excluded from composite when disabled — don't
+	// drag down overall score for an optional subsystem.
 	const compositeScore = clamp(
 		queue.score * WEIGHTS.queue +
 			storage.score * WEIGHTS.storage +
@@ -565,5 +689,6 @@ export function getDiagnostics(
 		duplicate,
 		connector,
 		update,
+		predictor,
 	};
 }

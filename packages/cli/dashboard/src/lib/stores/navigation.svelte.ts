@@ -19,7 +19,8 @@ export type TabId =
 	| "secrets"
 	| "skills"
 	| "tasks"
-	| "connectors";
+	| "connectors"
+	| "predictor";
 
 const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"config",
@@ -34,6 +35,7 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"skills",
 	"tasks",
 	"connectors",
+	"predictor",
 ]);
 
 function readTabFromHash(): TabId | null {
@@ -57,6 +59,7 @@ const MEMORY_TABS: ReadonlySet<TabId> = new Set([
 const ENGINE_TABS: ReadonlySet<TabId> = new Set([
 	"settings",
 	"pipeline",
+	"predictor",
 	"connectors",
 	"logs",
 ]);

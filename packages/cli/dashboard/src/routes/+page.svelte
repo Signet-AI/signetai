@@ -221,6 +221,10 @@ onMount(() => {
 							onclick={() => setTab("pipeline")}
 						>Pipeline</button>
 						<button
+							class={activeTab === 'predictor' ? tabActive : tabInactive}
+							onclick={() => setTab("predictor")}
+						>Predictor</button>
+						<button
 							class={activeTab === 'connectors' ? tabActive : tabInactive}
 							onclick={() => setTab("connectors")}
 						>Connectors</button>
@@ -435,6 +439,14 @@ onMount(() => {
 			{:else if activeTab === "tasks"}
 				{#await import("$lib/components/tabs/TasksTab.svelte")}
 					{@render skeletonList()}
+				{:then module}
+					<module.default />
+				{:catch error}
+					{@render skeletonError(error)}
+				{/await}
+			{:else if activeTab === "predictor"}
+				{#await import("$lib/components/tabs/PredictorTab.svelte")}
+					{@render skeletonCards()}
 				{:then module}
 					<module.default />
 				{:catch error}

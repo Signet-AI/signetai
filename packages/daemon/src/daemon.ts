@@ -65,8 +65,14 @@ import {
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
-import { createProviderTracker, getDiagnostics } from "./diagnostics";
+import {
+	type PredictorHealthParams,
+	createProviderTracker,
+	getDiagnostics,
+	getPredictorHealth,
+} from "./diagnostics";
 import { fetchEmbedding, resolveEmbeddingBaseUrl, resolveEmbeddingApiKey, setNativeFallbackToOllama } from "./embedding-fetch";
+import { getPredictorState } from "./predictor-state";
 import { buildEmbeddingHealth } from "./embedding-health";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
@@ -230,6 +236,65 @@ function hasMemoriesSessionIdColumn(db: Database): boolean {
 /** Public accessor for the predictor client singleton (used by hooks). */
 export function getPredictorClient(): PredictorClient | null {
 	return predictorClientRef;
+}
+
+/** Record predictor latency from hooks (exposed for cross-module use). */
+export function recordPredictorLatency(
+	operation: "predictor_score" | "predictor_train",
+	ms: number,
+): void {
+	analyticsCollector.recordLatency(operation, ms);
+}
+
+/**
+ * Build predictor health params from current runtime state.
+ * Fail-open: if anything goes wrong reading state, returns disabled.
+ */
+function buildPredictorHealthParams(): PredictorHealthParams {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const predictorCfg = cfg.pipelineV2.predictor;
+	if (!predictorCfg?.enabled) {
+		return {
+			enabled: false, sidecarAlive: false, crashCount: 0,
+			crashDisabled: false, modelVersion: 0, trainingSessions: 0,
+			successRate: 0, alpha: 1.0, coldStartExited: false,
+			lastTrainedAt: null,
+		};
+	}
+
+	const client = getPredictorClient();
+	const agentId = "default";
+	const state = getPredictorState(agentId);
+
+	// Training session count from DB
+	let trainingSessions = 0;
+	let modelVersion = 0;
+	try {
+		const row = getDbAccessor().withReadDb((db) =>
+			db.prepare(
+				`SELECT COUNT(*) as cnt, MAX(model_version) as ver
+				 FROM predictor_training_log
+				 WHERE agent_id = ?`,
+			).get(agentId) as { cnt: number; ver: number | null } | undefined,
+		);
+		trainingSessions = row?.cnt ?? 0;
+		modelVersion = row?.ver ?? 0;
+	} catch {
+		// table may not exist
+	}
+
+	return {
+		enabled: true,
+		sidecarAlive: client !== null && client.isAlive(),
+		crashCount: client?.crashCount ?? 0,
+		crashDisabled: client?.crashDisabled ?? false,
+		modelVersion,
+		trainingSessions,
+		successRate: state.successRate,
+		alpha: state.alpha,
+		coldStartExited: state.coldStartExited,
+		lastTrainedAt: state.lastTrainingAt,
+	};
 }
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
@@ -5318,7 +5383,7 @@ app.get("/api/status", (c) => {
 
 	let health: { score: number; status: string } | undefined;
 	try {
-		const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
+		const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()));
 		health = report.composite;
 	} catch {
 		// DB not ready yet — omit health
@@ -5364,13 +5429,13 @@ app.get("/api/status", (c) => {
 // ============================================================================
 
 app.get("/api/diagnostics", (c) => {
-	const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
+	const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()));
 	return c.json(report);
 });
 
 app.get("/api/diagnostics/:domain", (c) => {
 	const domain = c.req.param("domain");
-	const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
+	const report = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()));
 
 	const domainData = report[domain as keyof typeof report];
 	if (!domainData || typeof domainData === "string") {
@@ -5408,7 +5473,7 @@ app.get("/api/pipeline/status", (c) => {
 			return out;
 		};
 
-		const diagnostics = getDiagnostics(db, providerTracker, getUpdateState());
+		const diagnostics = getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams());
 
 		return {
 			queues: {
@@ -5428,6 +5493,16 @@ app.get("/api/pipeline/status", (c) => {
 				? "shadow"
 				: "controlled-write";
 
+	// Predictor sidecar snapshot for pipeline overview
+	const predictorHealth = buildPredictorHealthParams();
+	const predictorSnapshot = {
+		running: predictorHealth.enabled && predictorHealth.sidecarAlive,
+		modelReady: predictorHealth.coldStartExited,
+		coldStartExited: predictorHealth.coldStartExited,
+		successRate: predictorHealth.successRate,
+		alpha: predictorHealth.alpha,
+	};
+
 	return c.json({
 		workers: getPipelineWorkerStatus(),
 		queues: dbData.queues,
@@ -5442,6 +5517,7 @@ app.get("/api/pipeline/status", (c) => {
 				(pipelineV2.traversal?.enabled ?? true),
 			lastRun: getTraversalStatus(),
 		},
+		predictor: predictorSnapshot,
 	});
 });
 
@@ -5836,7 +5912,7 @@ app.get("/api/analytics/logs", (c) => {
 });
 
 app.get("/api/analytics/memory-safety", (c) => {
-	const mutationHealth = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
+	const mutationHealth = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()));
 	const recentMutationErrors = analyticsCollector.getErrors({
 		stage: "mutation",
 		limit: 50,
