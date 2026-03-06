@@ -133,6 +133,7 @@ import {
 	deduplicateMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
+	reclassifyEntities,
 	reembedMissingMemories,
 	releaseStaleLeases,
 	requeueDeadJobs,
@@ -4101,7 +4102,7 @@ mountMarketplaceReviewsRoutes(app);
 
 app.get("/api/harnesses", async (c) => {
 	const configs = [
-		{ name: "Claude Code", id: "claude-code", path: join(homedir(), ".claude", "CLAUDE.md") },
+		{ name: "Claude Code", id: "claude-code", path: join(homedir(), ".claude", "settings.json") },
 		{
 			name: "OpenCode",
 			id: "opencode",
@@ -5715,6 +5716,35 @@ app.post("/api/repair/deduplicate", async (c) => {
 	return c.json(result, repairHttpStatus(result));
 });
 
+app.post("/api/repair/reclassify-entities", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	let batchSize = 50;
+	let dryRun = false;
+	try {
+		const body = await c.req.json();
+		if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+		if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
+	} catch {
+		// no body or invalid JSON — use defaults
+	}
+	let provider: import("@signet/core").LlmProvider | null = null;
+	try {
+		provider = getLlmProvider();
+	} catch {
+		// provider not initialized
+	}
+	const result = await reclassifyEntities(
+		getDbAccessor(),
+		cfg.pipelineV2,
+		ctx,
+		repairLimiter,
+		provider,
+		{ batchSize, dryRun },
+	);
+	return c.json(result, repairHttpStatus(result));
+});
+
 // ============================================================================
 // Session Checkpoints (Continuity Protocol)
 // ============================================================================
@@ -7012,17 +7042,6 @@ ${fileList}
 		.join("\n");
 
 	const composed = withBlock + identityExtras;
-
-	// Sync to Claude Code (~/.claude/CLAUDE.md)
-	const claudeDir = join(homedir(), ".claude");
-	if (existsSync(claudeDir)) {
-		try {
-			writeFileSync(join(claudeDir, "CLAUDE.md"), buildHeader("CLAUDE.md") + composed);
-			logger.sync.harness("claude-code", "~/.claude/CLAUDE.md");
-		} catch (e) {
-			logger.sync.failed("claude-code", e as Error);
-		}
-	}
 
 	// Sync to OpenCode (~/.config/opencode/AGENTS.md)
 	const opencodeDir = join(homedir(), ".config", "opencode");
