@@ -1,56 +1,62 @@
-# Theory Tests
+# Integration Tests
 
-This directory contains **theory-based behavioral tests** -- tests that
-validate the design contracts from specs, not the implementation details.
+## LLM Pipeline Tests
 
-## Philosophy
+`tests/integration/pipeline-llm.test.ts`
 
-These tests encode "what must be true" according to the spec. They are
-the rewrite contract: a correct reimplementation in Rust, Go, or any
-other language must satisfy the same behavioral assertions.
+Validates that local LLM prompts (targeting qwen3:4b via Ollama) produce
+structurally valid and semantically reasonable output across every pipeline
+stage: extraction, decision, summary, and contradiction detection.
 
-Rules:
+### Requirements
 
-- Test the contract, not the implementation
-- No mocking of internal functions -- mock only at boundaries
-- Deterministic: no randomness, no LLM calls, no network I/O
-- Each test cites the spec section it validates
-- Tests should survive a language rewrite unchanged in logic
+- Ollama running locally on port 11434
+- qwen3:4b model pulled (`ollama pull qwen3:4b`)
 
-## Running
+### Running
 
 ```bash
-# Run all theory tests
-bun test ./tests/theory/
-
-# Run a specific test file
-bun test ./tests/theory/predictor-theory.test.ts
+bun test ./tests/integration/pipeline-llm.test.ts
 ```
 
-Note: the `bunfig.toml` root is scoped to `packages/`, so you must
-use the `./` path prefix when running tests from the `tests/` directory.
+Note: these tests are NOT discovered by the default `bun test` command
+because `bunfig.toml` scopes test discovery to `packages/`. Run them
+with an explicit `./` path prefix.
 
-## Test Suites
+### Design
 
-### predictor-theory.test.ts
+- **Non-deterministic**: Each LLM prompt runs 3 times with statistical
+  assertions (at least 2/3 must produce valid output).
+- **Graceful skip**: If Ollama is unavailable, the suite skips with a
+  message instead of failing.
+- **Performance tracking**: Response times are logged for each test.
+- **Schema compliance tests**: Parsing and validation logic is also
+  tested without LLM calls (pure unit tests).
 
-Validates the predictive memory scorer design from
-`docs/specs/approved/predictive-memory-scorer.md`.
+### Key Insight: JSON Mode
 
-Sections covered:
+The tests use Ollama's `format: "json"` and `think: false` options.
+Without these, qwen3:4b generates massive chain-of-thought preambles
+(100+ seconds per call). With them, responses drop to 0.5-9 seconds.
 
-- **RRF Fusion** -- Reciprocal Rank Fusion formula, alpha extremes,
-  monotonicity, tie preservation, fallback ranks
-- **Cold Start** -- alpha locked at 1.0 until exit, one-way door
-- **Alpha Ramp** -- early active phase floors (0.8, 0.6, 0) by session count
-- **Topic Diversity** -- cosine threshold, exponential decay, floor,
-  unaffected dissimilar candidates
-- **Exploration Sampling** -- rank disagreement selection, lowest-slot
-  replacement, disabled during cold start
-- **NDCG Comparison** -- log2-discounted gains, perfect vs degraded
-  rankings, zero relevance, boundedness
-- **EMA Success Rate** -- formula correctness, convergence, boundedness
-- **Confidence Gating** -- 0.6 threshold contract
-- **Alpha Computation** -- comprehensive bounds checking
-- **Fail-Open Design** -- baseline-only fallback, graceful empty inputs
-- **Mathematical Invariants** -- positivity, symmetry, non-negativity
+The production pipeline does NOT use `format: "json"` -- it strips
+`<think>` blocks and uses balanced-brace extraction post-hoc. This
+means a prompt regression that breaks JSON output could pass these
+tests but fail in production. Future work: add a test mode that
+exercises the production path (no JSON mode, with think block stripping).
+
+### Fixtures
+
+`tests/integration/fixtures/transcripts.ts` contains realistic sample
+conversation transcripts at varying sizes (small, medium, large) plus
+edge cases (unicode-heavy, minimal).
+
+### Typical Performance (qwen3:4b, JSON mode, desktop hardware)
+
+| Stage | Avg Response Time |
+|-------|------------------|
+| Extraction (small) | ~3s |
+| Extraction (medium/large) | ~8s |
+| Decision | ~0.6s |
+| Summary | ~3-8s |
+| Contradiction | ~0.6s |
