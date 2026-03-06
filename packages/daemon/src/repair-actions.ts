@@ -1623,9 +1623,19 @@ export function pruneSingletonExtractedEntities(
 				   AND e.mentions <= ?
 				   AND NOT EXISTS (SELECT 1 FROM entity_aspects WHERE entity_id = e.id LIMIT 1)
 				   AND NOT EXISTS (
+				     -- Entity has no attributes connected via aspects (non-null aspect_id path)
 				     SELECT 1 FROM entity_attributes ea
 				     JOIN entity_aspects asp ON asp.id = ea.aspect_id
 				     WHERE asp.entity_id = e.id LIMIT 1
+				   )
+				   AND NOT EXISTS (
+				     -- Entity has no stub attributes (aspect_id IS NULL) written by structuralBackfill
+				     SELECT 1 FROM entity_attributes ea
+				     WHERE ea.aspect_id IS NULL
+				       AND ea.memory_id IN (
+				         SELECT memory_id FROM memory_entity_mentions WHERE entity_id = e.id
+				       )
+				     LIMIT 1
 				   )
 				 LIMIT ?`,
 			)
@@ -1707,7 +1717,7 @@ export function structuralBackfill(
 		db
 			.prepare(
 				`SELECT m.id as memory_id, m.content,
-				        e.id as entity_id, e.entity_type, e.canonical_name
+				        e.id as entity_id, e.entity_type, e.canonical_name, e.agent_id
 				 FROM memories m
 				 JOIN memory_entity_mentions mem ON mem.memory_id = m.id
 				 JOIN entities e ON e.id = mem.entity_id
@@ -1723,6 +1733,7 @@ export function structuralBackfill(
 			entity_id: string;
 			entity_type: string;
 			canonical_name: string;
+		agent_id: string;
 		}>,
 	);
 
@@ -1748,8 +1759,8 @@ export function structuralBackfill(
 				`INSERT INTO entity_attributes
 				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
 				  confidence, importance, status, created_at, updated_at)
-				 VALUES (?, NULL, 'default', ?, 'attribute', ?, ?, 0.5, 0.5, 'active', ?, ?)`,
-			).run(attrId, row.memory_id, row.content, row.content, now, now);
+				 VALUES (?, NULL, ?, ?, 'attribute', ?, ?, 0.5, 0.5, 'active', ?, ?)`,
+			).run(attrId, row.agent_id, row.memory_id, row.content, row.content, now, now);
 			attributesCreated++;
 
 			const payload = JSON.stringify({

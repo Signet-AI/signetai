@@ -200,8 +200,14 @@ export function txPersistEntities(
 	const now = input.extractedAt;
 
 	for (const triple of input.entities) {
+		// Pre-validate both names before any DB writes — prevents phantom mention
+		// increments on the source when the target would be filtered by upsertEntity.
+		const srcCanon = triple.source.trim().toLowerCase().replace(/\s+/g, " ");
+		const tgtCanon = triple.target.trim().toLowerCase().replace(/\s+/g, " ");
+		if (srcCanon.length < 4 || tgtCanon.length < 4) continue;
+
 		const source = upsertEntity(db, triple.source, triple.sourceType ?? "extracted", input.agentId, now);
-		// null = name too short, skip the whole triple
+		// Defensive — pre-check above should prevent null, but guard anyway
 		if (source === null) continue;
 		if (source.inserted) entitiesInserted++;
 		else entitiesUpdated++;
