@@ -194,15 +194,15 @@ onMount(() => {
 						<button
 							class={activeTab === 'memory' ? tabActive : tabInactive}
 							onclick={() => setTab("memory")}
-						>Index</button>
+						>Adventure Log</button>
 						<button
 							class={activeTab === 'timeline' ? tabActive : tabInactive}
 							onclick={() => setTab("timeline")}
-						>Timeline</button>
+						>Chronicles</button>
 						<button
 							class={activeTab === 'embeddings' ? tabActive : tabInactive}
 							onclick={() => setTab("embeddings")}
-						>Constellation</button>
+						>Memory Map</button>
 					</div>
 				{:else if isEngineGroup(activeTab)}
 					<span class="ml-1 w-px h-4 bg-[var(--sig-border)]"></span>
@@ -211,19 +211,19 @@ onMount(() => {
 						<button
 							class={activeTab === 'settings' ? tabActive : tabInactive}
 							onclick={() => setTab("settings")}
-						>Settings</button>
+						>The Sanctum</button>
 						<button
 							class={activeTab === 'pipeline' ? tabActive : tabInactive}
 							onclick={() => setTab("pipeline")}
-						>Pipeline</button>
+						>The Forge</button>
 						<button
 							class={activeTab === 'connectors' ? tabActive : tabInactive}
 							onclick={() => setTab("connectors")}
-						>Connectors</button>
+						>Relays</button>
 						<button
 							class={activeTab === 'logs' ? tabActive : tabInactive}
 							onclick={() => setTab("logs")}
-						>Logs</button>
+						>Activity Feed</button>
 					</div>
 				{/if}
 			</div>
@@ -248,9 +248,7 @@ onMount(() => {
 						</Button>
 					{/if}
 				{:else if activeTab === "timeline"}
-					<span class="sig-label">
-						Era timeline
-					</span>
+					<span class="sig-label rpg-text-gold">&#x231B; Chronicle Eras</span>
 				{:else if activeTab === "pipeline"}
 					<span class="sig-label">
 						Memory loop
@@ -454,7 +452,7 @@ onMount(() => {
 				<span>YAML settings</span>
 				<span>agent.yaml</span>
 			{:else if activeTab === "memory"}
-				<span>{displayMemories.length} memory documents</span>
+				<span>{displayMemories.length} memory scrolls</span>
 				<span>
 					{#if mem.searching}
 						semantic search in progress
@@ -465,7 +463,7 @@ onMount(() => {
 					{/if}
 				</span>
 			{:else if activeTab === "timeline"}
-				<span>timeline eras</span>
+				<span>chronicle eras</span>
 				<span>
 					{#if timelineGeneratedFor}
 						As of {formatTimelineGeneratedFor(timelineGeneratedFor)}
@@ -474,23 +472,23 @@ onMount(() => {
 					{/if}
 				</span>
 			{:else if activeTab === "pipeline"}
-				<span>Pipeline</span>
+				<span>The Forge</span>
 				<span>memory loop v2</span>
 			{:else if activeTab === "embeddings"}
-				<span>Constellation</span>
-				<span>UMAP</span>
+				<span>Memory Map</span>
+				<span>UMAP constellation</span>
 			{:else if activeTab === "logs"}
-				<span>Log viewer</span>
+				<span>Activity Feed</span>
 				<span>daemon logs</span>
 			{:else if activeTab === "secrets"}
-				<span>Secrets</span>
-				<span>libsodium</span>
+				<span>The Vault</span>
+				<span>libsodium encrypted</span>
 			{:else if activeTab === "tasks"}
-				<span>{ts.tasks.length} scheduled tasks</span>
+				<span>{ts.tasks.length} active quests</span>
 				<span>cron scheduler</span>
 			{:else if activeTab === "connectors"}
-				<span>platform harnesses + data sources</span>
-				<span>connector health</span>
+				<span>combat harnesses + data relays</span>
+				<span>relay health</span>
 			{/if}
 		</div>
 		{/if}

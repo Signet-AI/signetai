@@ -203,12 +203,12 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 	>
 		<Sheet.Header class="pb-2">
 			<Sheet.Title class="text-[var(--sig-text-bright)] text-[14px]">
-				{mode === "delete" ? "Delete Memory" : "Edit Memory"}
+				{mode === "delete" ? "\u26A0 Erase Memory Scroll" : "\u270F Edit Memory Scroll"}
 			</Sheet.Title>
 			<Sheet.Description class="text-[var(--sig-text-muted)] text-[11px]">
 				{mode === "delete"
-					? "This will soft-delete the memory. It can be recovered later."
-					: "Update this memory's content or metadata."}
+					? "This scroll will be soft-erased. Recovery is possible from the archives."
+					: "Alter the content and metadata of this memory scroll."}
 			</Sheet.Description>
 		</Sheet.Header>
 
@@ -438,7 +438,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 					{#if submitting}
 						{mode === "delete" ? "Deleting..." : "Saving..."}
 					{:else}
-						{mode === "delete" ? "Delete Memory" : "Save Changes"}
+						{mode === "delete" ? "\u26A0 Erase Scroll" : "\u2694 Inscribe Changes"}
 					{/if}
 				</Button>
 			</form>
