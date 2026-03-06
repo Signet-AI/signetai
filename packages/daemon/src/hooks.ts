@@ -130,7 +130,7 @@ export interface UserPromptSubmitRequest {
 	harness: string;
 	project?: string;
 	userMessage?: string;
-	userPrompt: string;
+	userPrompt?: string;
 	rawPrompt?: string;
 	lastAssistantMessage?: string;
 	sessionKey?: string;
@@ -1311,7 +1311,8 @@ function resolveRecallUserMessage(req: UserPromptSubmitRequest): string {
 		}
 	}
 
-	return stripUntrustedMetadata(req.userPrompt).trim();
+	const raw = typeof req.userPrompt === "string" ? req.userPrompt : "";
+	return stripUntrustedMetadata(raw).trim();
 }
 
 export async function handleUserPromptSubmit(

@@ -5006,7 +5006,6 @@ hookCmd
 			body: JSON.stringify({
 				harness: options.harness,
 				project: options.project || stdinProject,
-				userMessage: userPrompt,
 				userPrompt,
 				sessionKey,
 				lastAssistantMessage: lastAssistantMessage || undefined,
