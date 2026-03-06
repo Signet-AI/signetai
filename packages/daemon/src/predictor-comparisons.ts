@@ -15,6 +15,12 @@ export interface RecordComparisonParams {
 	readonly candidateCount: number;
 	readonly traversalCount: number;
 	readonly constraintCount: number;
+	readonly scorerConfidence?: number;
+	readonly successRate?: number;
+	readonly predictorTopIds?: ReadonlyArray<string>;
+	readonly baselineTopIds?: ReadonlyArray<string>;
+	readonly relevanceScores?: Readonly<Record<string, number>>;
+	readonly ftsOverlapScore?: number;
 }
 
 export interface PredictorComparisonRow {
@@ -33,6 +39,12 @@ export interface PredictorComparisonRow {
 	readonly candidateCount: number;
 	readonly traversalCount: number;
 	readonly constraintCount: number;
+	readonly scorerConfidence: number;
+	readonly successRate: number;
+	readonly predictorTopIds: ReadonlyArray<string>;
+	readonly baselineTopIds: ReadonlyArray<string>;
+	readonly relevanceScores: Readonly<Record<string, number>>;
+	readonly ftsOverlapScore: number | null;
 	readonly createdAt: string;
 }
 
@@ -48,6 +60,31 @@ export interface PredictorTrainingRunRow {
 	readonly canaryScoreVariance: number | null;
 	readonly canaryTopkChurn: number | null;
 	readonly createdAt: string;
+}
+
+function safeParseJsonArray(val: unknown): ReadonlyArray<string> {
+	if (typeof val !== "string") return [];
+	try {
+		const parsed: unknown = JSON.parse(val);
+		return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+	} catch {
+		return [];
+	}
+}
+
+function safeParseJsonRecord(val: unknown): Readonly<Record<string, number>> {
+	if (typeof val !== "string") return {};
+	try {
+		const parsed: unknown = JSON.parse(val);
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+		const result: Record<string, number> = {};
+		for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+			if (typeof v === "number") result[k] = v;
+		}
+		return result;
+	} catch {
+		return {};
+	}
 }
 
 function mapComparisonRow(row: Record<string, unknown>): PredictorComparisonRow {
@@ -67,6 +104,12 @@ function mapComparisonRow(row: Record<string, unknown>): PredictorComparisonRow 
 		candidateCount: Number(row.candidate_count),
 		traversalCount: Number(row.traversal_count),
 		constraintCount: Number(row.constraint_count),
+		scorerConfidence: Number(row.scorer_confidence ?? 0),
+		successRate: Number(row.success_rate ?? 0.5),
+		predictorTopIds: safeParseJsonArray(row.predictor_top_ids),
+		baselineTopIds: safeParseJsonArray(row.baseline_top_ids),
+		relevanceScores: safeParseJsonRecord(row.relevance_scores),
+		ftsOverlapScore: typeof row.fts_overlap_score === "number" ? row.fts_overlap_score : null,
 		createdAt: String(row.created_at),
 	};
 }
@@ -94,8 +137,10 @@ export function recordComparison(accessor: DbAccessor, params: RecordComparisonP
 			 (id, session_key, agent_id, predictor_ndcg, baseline_ndcg,
 			  predictor_won, margin, alpha, ema_updated, focal_entity_id,
 			  focal_entity_name, project, candidate_count, traversal_count,
-			  constraint_count, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  constraint_count, scorer_confidence, success_rate,
+			  predictor_top_ids, baseline_top_ids, relevance_scores,
+			  fts_overlap_score, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			crypto.randomUUID(),
 			params.sessionKey,
@@ -112,6 +157,12 @@ export function recordComparison(accessor: DbAccessor, params: RecordComparisonP
 			params.candidateCount,
 			params.traversalCount,
 			params.constraintCount,
+			params.scorerConfidence ?? 0,
+			params.successRate ?? 0.5,
+			JSON.stringify(params.predictorTopIds ?? []),
+			JSON.stringify(params.baselineTopIds ?? []),
+			JSON.stringify(params.relevanceScores ?? {}),
+			params.ftsOverlapScore ?? null,
 			new Date().toISOString(),
 		);
 	});
@@ -253,6 +304,39 @@ export function getComparisonsByEntity(
 			winRate: Number(row.win_rate ?? 0),
 			avgMargin: Number(row.avg_margin ?? 0),
 		}));
+	});
+}
+
+export function countComparisonsSince(accessor: DbAccessor, agentId: string, since: string | null): number {
+	return accessor.withReadDb((db) => {
+		if (since === null) {
+			const row = db.prepare("SELECT COUNT(*) as n FROM predictor_comparisons WHERE agent_id = ?").get(agentId) as {
+				n: number;
+			};
+			return row.n;
+		}
+		const row = db
+			.prepare("SELECT COUNT(*) as n FROM predictor_comparisons WHERE agent_id = ? AND created_at > ?")
+			.get(agentId, since) as { n: number };
+		return row.n;
+	});
+}
+
+export function getRecentComparisons(
+	accessor: DbAccessor,
+	agentId: string,
+	limit: number,
+): ReadonlyArray<PredictorComparisonRow> {
+	return accessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT * FROM predictor_comparisons
+				 WHERE agent_id = ?
+				 ORDER BY created_at DESC
+				 LIMIT ?`,
+			)
+			.all(agentId, limit) as ReadonlyArray<Record<string, unknown>>;
+		return rows.map(mapComparisonRow);
 	});
 }
 

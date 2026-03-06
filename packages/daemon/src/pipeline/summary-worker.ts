@@ -221,7 +221,68 @@ async function processJob(
 		await scoreContinuity(accessor, provider, job, result.summary);
 	} catch (e) {
 		logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+
+	// --- Predictor comparison (Sprint 3) ---
+	// Runs after continuity scoring has written per-memory relevance scores
+	// and session_scores. Uses dynamic imports to avoid circular deps.
+	try {
+		const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
+			const {
+				runSessionComparison,
+				saveComparison,
+				updateSuccessRate,
+				shouldTriggerTraining,
+			} = await import("../predictor-comparison");
+
+			// Agent ID is hardcoded because summary_jobs and session_scores tables
+			// lack an agent_id column (pre-existing schema limitation). In a
+			// multi-agent deployment, all predictor comparisons route to the
+			// "default" bucket. Adding agent_id to these tables requires a schema
+			// migration and is tracked as future work.
+			const agentId = "default";
+			const comparison = runSessionComparison(
+				job.session_key,
+				agentId,
+				accessor,
+			);
+
+			if (comparison !== null) {
+				saveComparison(comparison, agentId, accessor);
+				updateSuccessRate(
+					agentId,
+					comparison.predictorWon,
+					comparison.scorerConfidence,
+				);
+
+				// Check training trigger
+				if (shouldTriggerTraining(agentId, memoryCfg.pipelineV2.predictor, accessor)) {
+					try {
+						const { getPredictorClient } = await import("../daemon");
+						const predictorClient = getPredictorClient();
+						if (predictorClient) {
+							const dbPath = join(AGENTS_DIR, "memory", "memories.db");
+							await predictorClient.trainFromDb({ db_path: dbPath });
+
+							const { updatePredictorState } = await import("../predictor-state");
+							updatePredictorState(agentId, { lastTrainingAt: new Date().toISOString() });
+
+							logger.info("predictor", "Training triggered after session comparison");
+						}
+					} catch (trainErr) {
+						logger.warn("predictor", "Training trigger failed (non-fatal)", {
+							error: trainErr instanceof Error ? trainErr.message : String(trainErr),
+						});
+					}
+				}
+			}
+		}
+	} catch (err) {
+		logger.warn("predictor", "Session comparison failed (non-fatal)", {
+			error: err instanceof Error ? err.message : String(err),
 		});
 	}
 }
@@ -310,7 +371,7 @@ function writePerMemoryRelevance(
 		});
 	} catch (e) {
 		logger.warn("summary-worker", "Failed to write per-memory relevance", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }
