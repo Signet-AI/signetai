@@ -327,6 +327,7 @@ export function buildPredictorStatusLine(
 	predictorStatus: PredictorStatus | null,
 	state: PredictorState,
 	config: PredictorConfig | undefined,
+	accessor?: DbAccessor | null,
 ): string {
 	if (!config?.enabled) {
 		return "[predictor: disabled | baseline only]";
@@ -337,7 +338,8 @@ export function buildPredictorStatusLine(
 	}
 
 	if (!state.coldStartExited) {
-		const sessionCount = getSessionCount(predictorStatus);
+		// Prefer distinct session count from DB; fall back to training_pairs from sidecar
+		const sessionCount = getDistinctSessionCount(accessor ?? null) ?? predictorStatus.training_pairs;
 		const minSessions = config.minTrainingSessions;
 		return `[predictor: collecting | ${sessionCount}/${minSessions} sessions | baseline only]`;
 	}
@@ -347,8 +349,22 @@ export function buildPredictorStatusLine(
 	return `[predictor: active | α=${alpha.toFixed(2)} | ${modelLabel}]`;
 }
 
-function getSessionCount(status: PredictorStatus): number {
-	return status.training_pairs;
+/**
+ * Count distinct training sessions from predictor_training_pairs.
+ * Returns null if accessor is unavailable or table doesn't exist.
+ */
+function getDistinctSessionCount(accessor: DbAccessor | null): number | null {
+	if (accessor === null) return null;
+	try {
+		return accessor.withReadDb((db) => {
+			const row = db
+				.prepare("SELECT COUNT(DISTINCT session_key) AS cnt FROM predictor_training_pairs")
+				.get() as { cnt: number } | undefined;
+			return row?.cnt ?? 0;
+		});
+	} catch {
+		return null;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +376,7 @@ function getSessionCount(status: PredictorStatus): number {
  *
  * Conditions (all must be met):
  * 1. Predictor has been trained at least once (trained === true)
- * 2. Session count >= minTrainingSessions
+ * 2. Distinct session count >= minTrainingSessions
  * 3. Success rate > 0.4 (only enforced once EMA has started updating,
  *    i.e. after at least one high-confidence comparison. During early
  *    data collection, successRate stays at the default 0.5 which passes.)
@@ -369,10 +385,13 @@ export function evaluateColdStartExit(
 	predictorStatus: PredictorStatus,
 	minTrainingSessions: number,
 	currentState: PredictorState,
+	accessor?: DbAccessor | null,
 ): boolean {
 	if (currentState.coldStartExited) return true;
 	if (!predictorStatus.trained) return false;
-	if (predictorStatus.training_pairs < minTrainingSessions) return false;
+	// Prefer distinct session count from DB; fall back to training_pairs from sidecar
+	const sessionCount = getDistinctSessionCount(accessor ?? null) ?? predictorStatus.training_pairs;
+	if (sessionCount < minTrainingSessions) return false;
 	// Condition 3: success rate must be above 0.4
 	if (currentState.successRate <= 0.4) return false;
 	return true;

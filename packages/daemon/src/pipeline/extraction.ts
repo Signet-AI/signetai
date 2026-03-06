@@ -37,7 +37,7 @@ function buildExtractionPrompt(content: string): string {
 Return JSON with two arrays: "facts" and "entities".
 
 Each fact: {"content": "...", "type": "fact|preference|decision|rationale|procedural|semantic", "confidence": 0.0-1.0}
-Each entity: {"source": "...", "relationship": "...", "target": "...", "confidence": 0.0-1.0}
+Each entity: {"source": "...", "source_type": "person|project|system|tool|concept|skill|task|unknown", "relationship": "...", "target": "...", "target_type": "person|project|system|tool|concept|skill|task|unknown", "confidence": 0.0-1.0}
 
 IMPORTANT — Atomic facts:
 Each fact must be fully understandable WITHOUT the original conversation. Include the specific subject (package name, file path, component, tool) and enough context that a reader seeing only this fact knows exactly what it refers to.
@@ -60,8 +60,8 @@ Output:
   {"content": "User prefers dark mode for all editor and terminal interfaces", "type": "preference", "confidence": 0.9},
   {"content": "User uses vim keybindings in VS Code as their primary editing mode", "type": "preference", "confidence": 0.9}
 ], "entities": [
-  {"source": "User", "relationship": "prefers", "target": "dark mode", "confidence": 0.9},
-  {"source": "User", "relationship": "uses", "target": "vim keybindings", "confidence": 0.9}
+  {"source": "User", "source_type": "person", "relationship": "prefers", "target": "dark mode", "target_type": "concept", "confidence": 0.9},
+  {"source": "User", "source_type": "person", "relationship": "uses", "target": "vim keybindings", "target_type": "tool", "confidence": 0.9}
 ]}
 
 Input: "Decided to use PostgreSQL instead of MongoDB for the auth service because relational queries suit the access-control schema better and we need ACID transactions"
@@ -70,8 +70,8 @@ Output:
   {"content": "The auth service uses PostgreSQL instead of MongoDB for its database", "type": "decision", "confidence": 0.85},
   {"content": "PostgreSQL was chosen over MongoDB for the auth service because: (1) relational queries suit the access-control schema, (2) ACID transactions needed for auth state changes. MongoDB was rejected due to lack of native join support.", "type": "rationale", "confidence": 0.85}
 ], "entities": [
-  {"source": "auth service", "relationship": "uses", "target": "PostgreSQL", "confidence": 0.85},
-  {"source": "auth service", "relationship": "rejected", "target": "MongoDB", "confidence": 0.8}
+  {"source": "auth service", "source_type": "system", "relationship": "uses", "target": "PostgreSQL", "target_type": "tool", "confidence": 0.85},
+  {"source": "auth service", "source_type": "system", "relationship": "rejected", "target": "MongoDB", "target_type": "tool", "confidence": 0.8}
 ]}
 
 Only extract durable, reusable knowledge. Skip ephemeral details.
@@ -257,7 +257,17 @@ function validateEntity(
 	const rawConf = typeof obj.confidence === "number" ? obj.confidence : 0.5;
 	const confidence = Math.max(0, Math.min(1, rawConf));
 
-	return { source, relationship, target, confidence };
+	const sourceType = typeof obj.source_type === "string" ? obj.source_type.trim() : undefined;
+	const targetType = typeof obj.target_type === "string" ? obj.target_type.trim() : undefined;
+
+	return {
+		source,
+		sourceType: sourceType || undefined,
+		relationship,
+		target,
+		targetType: targetType || undefined,
+		confidence,
+	};
 }
 
 // ---------------------------------------------------------------------------

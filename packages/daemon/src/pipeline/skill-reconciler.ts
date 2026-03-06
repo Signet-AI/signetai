@@ -206,6 +206,7 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 	const intervalMs = deps.pipelineConfig.procedural.reconcileIntervalMs;
 	const dir = skillsDir(deps.agentsDir);
+	let reconciling = false;
 
 	// Immediate backfill (async, doesn't block startup)
 	reconcileOnce(deps).catch((e) => {
@@ -214,13 +215,19 @@ export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 		});
 	});
 
-	// Periodic reconciliation
+	// Periodic reconciliation (guarded against overlapping runs)
 	const timer = setInterval(() => {
-		reconcileOnce(deps).catch((e) => {
-			logger.error("reconciler", "Periodic reconciliation failed", e instanceof Error ? e : undefined, {
-				error: String(e),
+		if (reconciling) return;
+		reconciling = true;
+		reconcileOnce(deps)
+			.catch((e) => {
+				logger.error("reconciler", "Periodic reconciliation failed", e instanceof Error ? e : undefined, {
+					error: String(e),
+				});
+			})
+			.finally(() => {
+				reconciling = false;
 			});
-		});
 	}, intervalMs);
 
 	// File watcher for low-latency reconciliation

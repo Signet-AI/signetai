@@ -38,8 +38,9 @@ const DEFAULT_STATE: PredictorState = {
 // ---------------------------------------------------------------------------
 
 function statePath(agentId: string): string {
+	const safeId = agentId.replace(/[/\\]/g, "_").replace(/\.\./g, "_");
 	const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
-	return join(agentsDir, "memory", "predictor", `state-${agentId}.json`);
+	return join(agentsDir, "memory", "predictor", `state-${safeId}.json`);
 }
 
 // ---------------------------------------------------------------------------

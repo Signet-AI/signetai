@@ -19,6 +19,7 @@ export interface PersistEntitiesInput {
 	readonly entities: readonly ExtractedEntity[];
 	readonly sourceMemoryId: string;
 	readonly extractedAt: string;
+	readonly agentId: string;
 }
 
 export interface PersistEntitiesResult {
@@ -62,17 +63,20 @@ function upsertEntity(
 	db: WriteDb,
 	rawName: string,
 	entityType: string,
+	agentId: string,
 	now: string,
 ): UpsertEntityResult {
 	const canonical = toCanonicalName(rawName);
 
 	const existing = db
 		.prepare(
-			`SELECT id, mentions FROM entities
-			 WHERE canonical_name = ?
+			`SELECT id, mentions, entity_type FROM entities
+			 WHERE canonical_name = ? AND agent_id = ?
 			 LIMIT 1`,
 		)
-		.get(canonical) as { id: string; mentions: number } | undefined;
+		.get(canonical, agentId) as
+		| { id: string; mentions: number; entity_type: string }
+		| undefined;
 
 	if (existing) {
 		db.prepare(
@@ -80,6 +84,12 @@ function upsertEntity(
 			 SET mentions = mentions + 1, updated_at = ?
 			 WHERE id = ?`,
 		).run(now, existing.id);
+		// Upgrade entity_type if currently "extracted" and we have a real type
+		if (entityType !== "extracted" && existing.entity_type === "extracted") {
+			db.prepare(
+				`UPDATE entities SET entity_type = ? WHERE id = ? AND entity_type = 'extracted'`,
+			).run(entityType, existing.id);
+		}
 		return { id: existing.id, inserted: false };
 	}
 
@@ -88,8 +98,8 @@ function upsertEntity(
 		db.prepare(
 			`INSERT INTO entities
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, 'default', 1, ?, ?)`,
-		).run(id, rawName, canonical, entityType, now, now);
+			 VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+		).run(id, rawName, canonical, entityType, agentId, now, now);
 		return { id, inserted: true };
 	} catch (e) {
 		// name UNIQUE constraint collision — fall back to existing row
@@ -97,8 +107,8 @@ function upsertEntity(
 		if (!msg.includes("UNIQUE constraint")) throw e;
 
 		const fallback = db
-			.prepare("SELECT id FROM entities WHERE name = ? LIMIT 1")
-			.get(rawName) as { id: string } | undefined;
+			.prepare("SELECT id FROM entities WHERE name = ? AND agent_id = ? LIMIT 1")
+			.get(rawName, agentId) as { id: string } | undefined;
 
 		if (fallback) {
 			db.prepare(
@@ -187,11 +197,11 @@ export function txPersistEntities(
 	const now = input.extractedAt;
 
 	for (const triple of input.entities) {
-		const source = upsertEntity(db, triple.source, "extracted", now);
+		const source = upsertEntity(db, triple.source, triple.sourceType ?? "extracted", input.agentId, now);
 		if (source.inserted) entitiesInserted++;
 		else entitiesUpdated++;
 
-		const target = upsertEntity(db, triple.target, "extracted", now);
+		const target = upsertEntity(db, triple.target, triple.targetType ?? "extracted", input.agentId, now);
 		if (target.inserted) entitiesInserted++;
 		else entitiesUpdated++;
 

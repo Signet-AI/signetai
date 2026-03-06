@@ -1172,6 +1172,7 @@ export function startWorker(
 						entities: extraction.entities,
 						sourceMemoryId: job.memory_id,
 						extractedAt: new Date().toISOString(),
+							agentId: "default",
 					}),
 				);
 			} catch (e) {

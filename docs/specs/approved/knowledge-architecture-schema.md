@@ -456,7 +456,7 @@ This keeps one graph with type-specific lifecycle rules.
 
 1. Approve this spec as the implementation contract for structural retrieval.
 2. Update predictive scorer Phase 3 tasks to include traversal pool fusion.
-3. Draft migration `017-knowledge-structure.ts` with exact indexes and
+3. Draft migration `019-knowledge-structure.ts` with exact indexes and
    idempotency behavior.
 4. Add a small offline benchmark set comparing traversal-first candidate
    generation vs current heuristic pre-filter.

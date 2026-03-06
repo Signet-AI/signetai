@@ -577,7 +577,7 @@ export function mountSkillsRoutes(app: Hono): void {
 	// GET /api/skills/:name - get skill details and SKILL.md content
 	app.get("/api/skills/:name", async (c) => {
 		const name = c.req.param("name");
-		if (!name || name.includes("/") || name.includes("..")) {
+		if (!name || name.includes("..") || name.includes("/") || name.includes("\\")) {
 			return c.json({ error: "Invalid skill name" }, 400);
 		}
 
@@ -710,7 +710,7 @@ export function mountSkillsRoutes(app: Hono): void {
 	// DELETE /api/skills/:name - uninstall a skill
 	app.delete("/api/skills/:name", (c) => {
 		const name = c.req.param("name");
-		if (!name || name.includes("/") || name.includes("..")) {
+		if (!name || name.includes("..") || name.includes("/") || name.includes("\\")) {
 			return c.json({ error: "Invalid skill name" }, 400);
 		}
 

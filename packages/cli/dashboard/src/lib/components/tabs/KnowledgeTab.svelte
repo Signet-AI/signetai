@@ -133,6 +133,25 @@ function healthToneClass(entityId: string): string {
 	return "bg-[var(--sig-text-muted)]";
 }
 
+function entityDensityOpacity(item: KnowledgeEntityListItem): number {
+	const score =
+		item.aspectCount +
+		item.attributeCount +
+		item.constraintCount * 2 +
+		item.dependencyCount;
+	const maxScore = Math.max(
+		1,
+		...entities.map(
+			(e) =>
+				e.aspectCount +
+				e.attributeCount +
+				e.constraintCount * 2 +
+				e.dependencyCount,
+		),
+	);
+	return 0.08 + (score / maxScore) * 0.92;
+}
+
 function toCalendarDate(value: string): DateValue | undefined {
 	if (!value) return undefined;
 	const parts = value.split("-");
@@ -326,59 +345,43 @@ onMount(() => {
 				</div>
 
 				<div class="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-					<div class="grid gap-2">
+					<div class="max-h-[520px] overflow-y-auto border border-[var(--sig-border)] bg-[var(--sig-surface)]">
 						{#if loadingEntities}
-							{#each Array(6) as _}
-								<Skeleton class="h-28 w-full" />
+							{#each Array(10) as _}
+								<Skeleton class="h-9 w-full" />
 							{/each}
 						{:else if entities.length === 0}
-							<div class="border border-dashed border-[var(--sig-border-strong)] p-6 sig-label text-[var(--sig-text-muted)]">
+							<div class="p-6 sig-label text-[var(--sig-text-muted)]">
 								No entities match the current filters.
 							</div>
 						{:else}
 							{#each entities as item (item.entity.id)}
 								<button
-									class="w-full cursor-pointer border p-3 text-left transition-colors
+									class="w-full cursor-pointer flex items-center gap-2.5 border-b border-b-[var(--sig-border)] px-2.5 py-2 text-left transition-colors
 										{selectedEntityId === item.entity.id
-											? 'border-[var(--sig-accent)] bg-[var(--sig-surface-raised)]'
-											: 'border-[var(--sig-border)] bg-[var(--sig-surface)] hover:border-[var(--sig-border-strong)]'}"
+											? 'bg-[var(--sig-surface-raised)]'
+											: 'hover:bg-[var(--sig-surface-raised)]'}"
+									style="border-left: 2px solid {selectedEntityId === item.entity.id
+										? 'var(--sig-accent)'
+										: `rgba(240, 240, 242, ${entityDensityOpacity(item)})`}"
 									onclick={() => void loadEntityDetail(item.entity.id)}
 								>
-									<div class="flex items-start justify-between gap-3">
-										<div class="space-y-1">
-											<div class="flex items-center gap-2">
-												<span class={`size-2 rounded-full ${healthToneClass(item.entity.id)}`}></span>
-												<div class="sig-heading text-[13px] uppercase tracking-[0.08em]">
-													{item.entity.name}
-												</div>
-												{#if item.entity.pinned}
-													<Badge variant="outline" class={metricClass("accent")}>
-														pinned
-													</Badge>
-												{/if}
-											</div>
-											<div class="sig-label text-[var(--sig-text-muted)]">
-												{item.entity.canonicalName ?? item.entity.name}
-											</div>
-										</div>
-										<Badge variant="outline" class={metricClass("accent")}>
-											{item.entity.entityType}
-										</Badge>
-									</div>
-									<div class="mt-3 flex flex-wrap gap-1.5">
-										<Badge variant="outline" class={metricClass()}>
-											aspects {item.aspectCount}
-										</Badge>
-										<Badge variant="outline" class={metricClass()}>
-											attributes {item.attributeCount}
-										</Badge>
-										<Badge variant="outline" class={metricClass("warning")}>
-											constraints {item.constraintCount}
-										</Badge>
-										<Badge variant="outline" class={metricClass()}>
-											dependencies {item.dependencyCount}
-										</Badge>
-									</div>
+									<span class={`size-1.5 shrink-0 rounded-full ${healthToneClass(item.entity.id)}`}></span>
+									<span class="sig-heading text-[11px] tracking-[0.08em] truncate min-w-0 flex-1">
+										{item.entity.name}
+									</span>
+									{#if item.entity.pinned}
+										<Pin class="size-3 shrink-0 text-[var(--sig-accent)]" />
+									{/if}
+									<span class="sig-meta shrink-0 text-[var(--sig-text-muted)]">
+										{item.entity.entityType}
+									</span>
+									<span class="sig-meta shrink-0 flex items-center gap-1 tabular-nums text-[var(--sig-text-muted)]">
+										<span title="aspects">{item.aspectCount}<span class="opacity-50">a</span></span>
+										<span title="attributes">{item.attributeCount}<span class="opacity-50">t</span></span>
+										<span class="text-[var(--sig-danger)]" title="constraints">{item.constraintCount}<span class="opacity-50">c</span></span>
+										<span title="dependencies">{item.dependencyCount}<span class="opacity-50">d</span></span>
+									</span>
 								</button>
 							{/each}
 						{/if}

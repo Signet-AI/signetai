@@ -60,6 +60,11 @@ export function getTraversalStatus(): TraversalStatusSnapshot | null {
 	return lastTraversalStatus;
 }
 
+/** Reset the traversal table availability cache (call after migrations). */
+export function invalidateTraversalCache(): void {
+	traversalTablesAvailableCache = null;
+}
+
 function normalizeToken(value: string): string {
 	return value.toLowerCase().replace(/[^a-z0-9_-]/g, "").trim();
 }

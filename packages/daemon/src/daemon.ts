@@ -111,7 +111,7 @@ import {
 	stopPipeline,
 } from "./pipeline";
 import { getGraphBoostIds } from "./pipeline/graph-search";
-import { getTraversalStatus } from "./pipeline/graph-traversal";
+import { getTraversalStatus, invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { type PredictorClient, createPredictorClient } from "./predictor-client";
 import {
@@ -7699,6 +7699,9 @@ async function main() {
 	// Initialise singleton DB accessor (opens write connection, sets pragmas,
 	// runs migrations). This is the sole schema authority.
 	initDbAccessor(MEMORY_DB);
+
+	// Migrations may have created traversal tables — clear the cache
+	invalidateTraversalCache();
 
 	// Write PID file
 	writeFileSync(PID_FILE, process.pid.toString());

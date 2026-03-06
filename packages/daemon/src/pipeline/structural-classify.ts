@@ -10,10 +10,13 @@
 import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
 import type { PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
+import { ENTITY_TYPES } from "@signet/core";
 import { stripFences, tryParseJson } from "./extraction";
 import { getAspectsForEntity } from "../knowledge-graph";
 import { ASPECT_SUGGESTIONS } from "./aspect-suggestions";
 import { logger } from "../logger";
+
+const VALID_ENTITY_TYPES = new Set<string>(ENTITY_TYPES);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -166,6 +169,10 @@ function buildClassifyPrompt(
 		.map((f, i) => `${i + 1}. ${f}`)
 		.join("\n");
 
+	const entityTypeInstruction = entityType === "extracted"
+		? `\nAlso determine the entity type. Add to your response object: "entity_type": "person"|"project"|"system"|"tool"|"concept"|"skill"|"task"`
+		: "";
+
 	return `Classify each fact into an aspect and kind for the given entity.
 
 Entity: ${entityName} (${entityType})
@@ -174,8 +181,8 @@ Suggested: ${suggestions.join(", ")}
 
 Facts:
 ${factList}
-
-JSON array, each: {"i": number, "aspect": string, "kind": "attribute"|"constraint", "new": boolean}
+${entityTypeInstruction}
+Return a JSON object: {"results": [{"i": number, "aspect": string, "kind": "attribute"|"constraint", "new": boolean}, ...]${entityType === "extracted" ? ', "entity_type": string' : ""}}
 /no_think`;
 }
 
@@ -268,16 +275,37 @@ async function processClassifyBatch(
 		return;
 	}
 
-	// Parse response
+	// Parse response — supports both array and {results, entity_type} object
 	const stripped = stripFences(raw);
 	const parsed = tryParseJson(stripped);
-	const results = validateClassifyResults(parsed, payloads.length);
+
+	let resultsSource: unknown = parsed;
+	let inferredEntityType: string | undefined;
+
+	if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+		const obj = parsed as Record<string, unknown>;
+		if (Array.isArray(obj.results)) {
+			resultsSource = obj.results;
+		}
+		if (typeof obj.entity_type === "string" && VALID_ENTITY_TYPES.has(obj.entity_type)) {
+			inferredEntityType = obj.entity_type;
+		}
+	}
+
+	const results = validateClassifyResults(resultsSource, payloads.length);
 
 	// Apply all results + complete/fail jobs in a single transaction
 	const processedIndices = new Set<number>();
 
 	deps.accessor.withWriteTx((db) => {
 		const now = new Date().toISOString();
+
+		// Upgrade entity_type if currently "extracted" and the LLM inferred a real type
+		if (inferredEntityType && entityType === "extracted") {
+			db.prepare(
+				`UPDATE entities SET entity_type = ? WHERE id = ? AND entity_type = 'extracted'`,
+			).run(inferredEntityType, entityId);
+		}
 
 		for (const result of results) {
 			const idx = result.i - 1; // 1-indexed to 0-indexed
