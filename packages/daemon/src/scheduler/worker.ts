@@ -167,7 +167,7 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 }
 
 /** Lease and execute a single task. */
-async function executeTask(
+export async function executeTask(
 	db: DbAccessor,
 	task: DueTaskRow,
 ): Promise<void> {
@@ -219,11 +219,11 @@ async function executeTask(
 		task.skill_name,
 		task.skill_mode,
 	);
-	const model = resolveTaskModel(task.harness);
 
 	// Spawn the process
 	let result: SpawnResult;
 	try {
+		const model = resolveTaskModel(task.harness);
 		result = await spawnTask(
 			task.harness as "claude-code" | "opencode" | "codex",
 			effectivePrompt,
