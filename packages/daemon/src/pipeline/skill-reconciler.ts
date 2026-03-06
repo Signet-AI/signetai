@@ -90,11 +90,6 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 			if (!parsed) continue;
 
 			const entityId = `skill:default:${name}`;
-			const fingerprint = buildFrontmatterFingerprint(
-				parsed.frontmatter.name,
-				parsed.frontmatter.description,
-				parsed.frontmatter.triggers,
-			);
 
 			// Check if entity already exists
 			const existing = deps.accessor.withReadDb((db) =>
