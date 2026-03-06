@@ -131,6 +131,7 @@ export function startPipeline(
 export async function stopPipeline(): Promise<void> {
 	if (synthesisWorkerHandle) {
 		synthesisWorkerHandle.stop();
+		await synthesisWorkerHandle.drain();
 		synthesisWorkerHandle = null;
 	}
 	if (summaryWorkerHandle) {

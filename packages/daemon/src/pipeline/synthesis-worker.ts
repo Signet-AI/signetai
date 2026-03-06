@@ -175,7 +175,11 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 
 export interface SynthesisWorkerHandle {
 	stop(): void;
+	drain(): Promise<void>;
+	acquireWriteLock(): boolean;
+	releaseWriteLock(): void;
 	readonly running: boolean;
+	readonly isSynthesizing: boolean;
 	/** Trigger an immediate synthesis (e.g. from API). */
 	triggerNow(): Promise<{ success: boolean; skipped: boolean; reason?: string }>;
 	/** Last synthesis timestamp. */
@@ -188,7 +192,18 @@ export function startSynthesisWorker(
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 	let isSynthesizing = false;
+	let currentRunPromise: Promise<SynthesisResult> | null = null;
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
+
+	function acquireWriteLock(): boolean {
+		if (isSynthesizing) return false;
+		isSynthesizing = true;
+		return true;
+	}
+
+	function releaseWriteLock(): void {
+		isSynthesizing = false;
+	}
 
 	async function tick(): Promise<void> {
 		if (stopped) return;
@@ -235,14 +250,20 @@ export function startSynthesisWorker(
 				return;
 			}
 
-			isSynthesizing = true;
+			if (!acquireWriteLock()) {
+				scheduleTick(CHECK_INTERVAL_MS);
+				return;
+			}
+
 			try {
-				await runSynthesis(config);
+				currentRunPromise = runSynthesis(config);
+				await currentRunPromise;
 				// Write timestamp on both success and failure to prevent
 				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
 				writeLastSynthesisTime(Date.now());
 			} finally {
-				isSynthesizing = false;
+				currentRunPromise = null;
+				releaseWriteLock();
 			}
 		} catch (e) {
 			logger.error("synthesis", "Unhandled tick error", e as Error);
@@ -275,14 +296,22 @@ export function startSynthesisWorker(
 			if (timer) clearTimeout(timer);
 			logger.info("synthesis", "Synthesis worker stopped");
 		},
+		async drain() {
+			await (currentRunPromise ?? Promise.resolve());
+		},
+		acquireWriteLock,
+		releaseWriteLock,
 		get running() {
 			return !stopped;
+		},
+		get isSynthesizing() {
+			return isSynthesizing;
 		},
 		get lastRunAt() {
 			return readLastSynthesisTime();
 		},
 		async triggerNow() {
-			if (isSynthesizing) {
+			if (!acquireWriteLock()) {
 				return { success: false, skipped: true, reason: "Synthesis already in progress" };
 			}
 
@@ -292,12 +321,13 @@ export function startSynthesisWorker(
 			if (elapsed < MIN_INTERVAL_MS) {
 				const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
 				logger.info("synthesis", "Skipping manual trigger", { reason });
+				releaseWriteLock();
 				return { success: false, skipped: true, reason };
 			}
 
-			isSynthesizing = true;
 			try {
-				const result = await runSynthesis(config);
+				currentRunPromise = runSynthesis(config);
+				const result = await currentRunPromise;
 				// Write timestamp on both success and failure to prevent
 				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
 				writeLastSynthesisTime(Date.now());
@@ -307,7 +337,8 @@ export function startSynthesisWorker(
 					reason: result === "empty" ? "No session summaries to synthesize" : undefined,
 				};
 			} finally {
-				isSynthesizing = false;
+				currentRunPromise = null;
+				releaseWriteLock();
 			}
 		},
 	};
