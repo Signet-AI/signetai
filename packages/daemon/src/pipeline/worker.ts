@@ -62,6 +62,7 @@ interface AppliedWriteStats {
 	reviewNeeded: number;
 	embeddingsAdded: number;
 	writtenFacts: WrittenFact[];
+	dedupedFacts: WrittenFact[];
 }
 
 const NEGATION_TOKENS = new Set([
@@ -166,6 +167,7 @@ function zeroWriteStats(): AppliedWriteStats {
 		reviewNeeded: 0,
 		embeddingsAdded: 0,
 		writtenFacts: [],
+		dedupedFacts: [],
 	};
 }
 
@@ -492,6 +494,12 @@ function applyPhaseCWrites(
 
 			if (existing) {
 				stats.deduped++;
+				stats.dedupedFacts.push({
+					memoryId: existing.id,
+					content: storageContent,
+					normalizedContent,
+					confidence: proposal.fact.confidence,
+				});
 				recordDecisionHistory(db, sourceMemoryId, proposal, {
 					shadow: false,
 					extractionModel: meta.extractionModel,
@@ -545,6 +553,14 @@ function applyPhaseCWrites(
 					)
 					.get(contentHash) as { id: string } | undefined;
 				stats.deduped++;
+				if (collided) {
+					stats.dedupedFacts.push({
+						memoryId: collided.id,
+						content: storageContent,
+						normalizedContent,
+						confidence: proposal.fact.confidence,
+					});
+				}
 				recordDecisionHistory(db, sourceMemoryId, proposal, {
 					shadow: false,
 					extractionModel: meta.extractionModel,
@@ -842,6 +858,12 @@ function runStructuralPass1(
 				.prepare("SELECT id, entity_type FROM entities WHERE canonical_name = ? LIMIT 1")
 				.get(canonical) as { id: string; entity_type: string } | undefined;
 			if (!entityRow) continue;
+
+			// Skip if this memory already has a structural attribute row (classified or stub)
+			const existingAttr = db.prepare(
+				`SELECT 1 FROM entity_attributes WHERE memory_id = ? LIMIT 1`,
+			).get(fact.memoryId) as unknown | undefined;
+			if (existingAttr) continue;
 
 			// Create stub entity_attributes row (aspect_id=NULL, awaiting classification)
 			const attrId = crypto.randomUUID();
@@ -1183,6 +1205,46 @@ export function startWorker(
 			}
 		}
 
+		// Build broader structural facts from all sources:
+		// newly written + deduped + "none" proposals resolved by hash + successful updates
+		const structuralFacts: WrittenFact[] = [
+			...writeStats.writtenFacts,
+			...writeStats.dedupedFacts,
+		];
+
+		if (controlledWritesEnabled) {
+			for (const proposal of decisions.proposals) {
+				if (proposal.action !== "none") continue;
+				const normalized = normalizeAndHashContent(proposal.fact.content);
+				if (normalized.normalizedContent.length === 0) continue;
+				const existing = accessor.withReadDb((db) =>
+					db.prepare(
+						`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
+					).get(normalized.contentHash) as { id: string } | undefined,
+				);
+				if (existing) {
+					structuralFacts.push({
+						memoryId: existing.id,
+						content: normalized.storageContent,
+						normalizedContent: normalized.normalizedContent,
+						confidence: proposal.fact.confidence,
+					});
+				}
+			}
+			// Also collect successful updates
+			for (const proposal of decisions.proposals) {
+				if (proposal.action !== "update" || !proposal.targetMemoryId) continue;
+				const normalized = normalizeAndHashContent(proposal.fact.content);
+				if (normalized.normalizedContent.length === 0) continue;
+				structuralFacts.push({
+					memoryId: proposal.targetMemoryId,
+					content: normalized.storageContent,
+					normalizedContent: normalized.normalizedContent,
+					confidence: proposal.fact.confidence,
+				});
+			}
+		}
+
 		// Pass 1: structural assignment — link written facts to entities,
 		// create stub entity_attributes, enqueue classification jobs.
 		// No LLM calls. Non-fatal on error.
@@ -1190,13 +1252,13 @@ export function startWorker(
 		if (
 			pipelineCfg.structural.enabled &&
 			pipelineCfg.graph.enabled &&
-			writeStats.writtenFacts.length > 0 &&
+			structuralFacts.length > 0 &&
 			extraction.entities.length > 0
 		) {
 			try {
 				structuralStats = runStructuralPass1(
 					accessor,
-					writeStats.writtenFacts,
+					structuralFacts,
 					extraction.entities,
 				);
 			} catch (e) {
