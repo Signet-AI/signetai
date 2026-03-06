@@ -350,6 +350,28 @@ These rules are enforced by convention, not tooling.
 - result types over exceptions
 - effect-free module scope
 
+Testing Philosophy
+---
+
+Tests are the rewrite contract. Every test should encode *what must
+be true* (the behavioral contract), not *how it's currently done*
+(the implementation). A test that would break if you rewrote the
+module in Rust with the same interface is testing plumbing, not theory.
+
+This matters because the codebase is expected to be rewritten in a
+systems language (Rust, Go, or Zig). The test suite — along with the
+specs in `docs/specs/` and the architecture in
+`docs/KNOWLEDGE-ARCHITECTURE.md` — is what the rewrite targets. If the
+tests are tightly coupled to TypeScript internals, they can't serve
+that purpose.
+
+Rules:
+- Test the contract, not the implementation
+- Tests should survive a language rewrite unchanged in logic
+- Prefer integration-style tests over unit tests of private helpers
+- Every new feature ships with tests that describe the behavior
+- The specs define what's correct; the tests enforce it
+
 ## Development Workflow
 
 Typecheck and build don't prove behavior. Always test changes against
