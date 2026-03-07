@@ -324,6 +324,11 @@ export function startSynthesisWorker(
 			logger.info("synthesis", "Synthesis worker stopped");
 		},
 		async drain() {
+			// Cancel any pending tick to prevent new synthesis starting
+			if (timer) {
+				clearTimeout(timer);
+				timer = null;
+			}
 			if (!isSynthesizing) return "completed";
 			let timeoutId: ReturnType<typeof setTimeout> | null = null;
 			let timedOut = false;

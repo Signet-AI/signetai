@@ -16,6 +16,7 @@ import { Input } from "$lib/components/ui/input/index.js";
 import { toast } from "$lib/stores/toast.svelte";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
+import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { ActionLabels } from "$lib/ui/action-labels";
 import { onMount } from "svelte";
 
@@ -327,6 +328,14 @@ function handleOnePasswordPanelKeydown(e: KeyboardEvent): void {
 			focusedSecretIndex = secrets.length - 1;
 			focusedOnePasswordInput = -1;
 			focusSecretItem(focusedSecretIndex);
+		} else if (focusedOnePasswordInput === 0 && secrets.length === 0) {
+			// No secrets — exit panel and return to sidebar
+			if (document.activeElement instanceof HTMLElement) {
+				document.activeElement.blur();
+			}
+			focusArea = "list";
+			focusedOnePasswordInput = -1;
+			returnToSidebar();
 		}
 	}
 	// Arrow Down navigates within 1Password inputs
@@ -607,15 +616,10 @@ onMount(() => {
 					<label class="text-[12px] text-[var(--sig-text-muted)]"
 						for="op-overwrite">Overwrite</label
 					>
-					<label id="op-overwrite" class="flex items-center gap-2 text-[12px] text-[var(--sig-text-muted)]">
-						<input
-							type="checkbox"
-
-							class="cursor-pointer accent-[var(--sig-accent)]
-								hover:ring-2 hover:ring-[var(--sig-accent)]
-								focus-visible:outline focus-visible:outline-2
-								focus-visible:outline-[var(--sig-accent)]"
+					<label id="op-overwrite" class="flex items-center gap-2 text-[12px] text-[var(--sig-text-muted)] cursor-pointer">
+						<Checkbox
 							bind:checked={onePasswordImportOptions.overwrite}
+							class="border-[var(--sig-border-strong)] data-[state=checked]:bg-[var(--sig-accent)] data-[state=checked]:border-[var(--sig-accent)]"
 						/>
 						Overwrite existing secret names
 					</label>
@@ -637,15 +641,10 @@ onMount(() => {
 									text-[var(--sig-text)] hover:bg-[var(--sig-surface)]
 									focus-within:bg-[var(--sig-surface)] rounded transition-colors"
 							>
-								<input
-									type="checkbox"
-
-									class="cursor-pointer accent-[var(--sig-accent)]
-										hover:ring-2 hover:ring-[var(--sig-accent)]
-										focus-visible:outline focus-visible:outline-2
-										focus-visible:outline-[var(--sig-accent)]"
+								<Checkbox
 									checked={selectedVaultIds.includes(vault.id)}
-									onchange={() => toggleVaultSelection(vault.id)}
+									onCheckedChange={() => toggleVaultSelection(vault.id)}
+									class="border-[var(--sig-border-strong)] data-[state=checked]:bg-[var(--sig-accent)] data-[state=checked]:border-[var(--sig-accent)]"
 								/>
 								<span class="font-[family-name:var(--font-mono)]">{vault.name}</span>
 								<span class="text-[var(--sig-text-dim)]">({vault.id})</span>

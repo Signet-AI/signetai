@@ -12,7 +12,7 @@ const mockHandleSynthesisRequest = mock(() => ({
 	prompt: "synthesize memory",
 	fileCount: 1,
 }));
-const mockWriteMemoryMd = mock((_content: string) => {});
+const mockWriteMemoryMd = mock((_content: string) => ({ ok: true as const }));
 const mockGetSynthesisProvider = mock(() => ({ name: "mock-synthesis-provider" }));
 const mockGenerateWithTracking = mock(async () => ({
 	text: "# MEMORY\n",
