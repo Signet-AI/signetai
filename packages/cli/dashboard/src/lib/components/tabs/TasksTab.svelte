@@ -113,6 +113,9 @@ function handleGlobalKey(e: KeyboardEvent) {
 					selectedColumn = newCol;
 					selectedTaskInColumn = Math.min(selectedTaskInColumn, prevColTasks.length - 1);
 					focusTaskCard(selectedColumn, selectedTaskInColumn);
+				} else {
+					// No non-empty column found to the left, return to sidebar
+					returnToSidebar();
 				}
 			}
 			return;
@@ -236,17 +239,9 @@ onMount(() => {
 			loading={ts.loading}
 			selectedColumn={selectedColumn}
 			selectedTaskInColumn={selectedTaskInColumn}
-			onopendetail={(id) => {
-				// Find and update the position when clicking a task
-				for (let colIdx = 0; colIdx < columnKeys.length; colIdx++) {
-					const colTasks = getColumnTasks(columnKeys[colIdx]);
-					const taskIdx = colTasks.findIndex(t => t.id === id);
-					if (taskIdx !== -1) {
-						selectedColumn = colIdx;
-						selectedTaskInColumn = taskIdx;
-						break;
-					}
-				}
+			onopendetail={(id, colIdx, taskIdx) => {
+				selectedColumn = colIdx;
+				selectedTaskInColumn = taskIdx;
 				openDetail(id);
 			}}
 			ontrigger={doTrigger}

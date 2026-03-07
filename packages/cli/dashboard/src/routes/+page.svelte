@@ -212,8 +212,6 @@ function focusMemoryContent(): void {
 }
 
 function handleGlobalKey(e: KeyboardEvent) {
-	keyboardNavActive = true;
-
 	const target = e.target as HTMLElement;
 	const isInputFocused =
 		target.tagName === "INPUT" ||
@@ -222,6 +220,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 
 	// Don't interfere with input fields when page has focus
 	if (isInputFocused && focus.zone === "page-content") return;
+
+	keyboardNavActive = true;
 
 	// Handle Escape from page content to return to sidebar
 	if (focus.zone === "page-content" && e.key === "Escape") {

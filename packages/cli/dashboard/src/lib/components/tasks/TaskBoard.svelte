@@ -7,7 +7,7 @@ interface Props {
 	loading: boolean;
 	selectedColumn?: number;
 	selectedTaskInColumn?: number;
-	onopendetail: (id: string) => void;
+	onopendetail: (id: string, columnIndex: number, taskIndex: number) => void;
 	ontrigger: (id: string) => void;
 	ontoggle: (id: string, enabled: boolean) => void;
 }
@@ -111,7 +111,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 							{task}
 							columnKey={col.key}
 							isSelected={colIndex === selectedColumn && taskIndex === selectedTaskInColumn}
-							onclick={() => onopendetail(task.id)}
+							onclick={() => onopendetail(task.id, colIndex, taskIndex)}
 							ontrigger={() => ontrigger(task.id)}
 							ontoggle={(enabled) => ontoggle(task.id, enabled)}
 						/>
@@ -143,7 +143,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 					<TaskCard
 						{task}
 						columnKey="disabled"
-						onclick={() => onopendetail(task.id)}
+						onclick={() => onopendetail(task.id, -1, -1)}
 						ontrigger={() => ontrigger(task.id)}
 						ontoggle={(enabled) => ontoggle(task.id, enabled)}
 					/>
