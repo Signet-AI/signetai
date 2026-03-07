@@ -58,6 +58,11 @@ $effect(() => {
 });
 
 function handleGlobalKey(e: KeyboardEvent) {
+	// Only handle events when Tasks tab is active
+	if (nav.activeTab !== "tasks") return;
+
+	if (e.defaultPrevented) return;
+
 	const target = e.target as HTMLElement;
 	const isInput =
 		target.tagName === "INPUT" ||

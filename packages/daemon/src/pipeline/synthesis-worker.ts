@@ -153,7 +153,11 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 		}
 
 		// Write MEMORY.md via shared helper (handles backup)
-		writeMemoryMd(result.text);
+		const writeResult = writeMemoryMd(result.text);
+		if (!writeResult.ok) {
+			logger.error("synthesis", `MEMORY.md write refused: ${writeResult.error}`);
+			return;
+		}
 
 		logger.info("synthesis", "MEMORY.md synthesized", {
 			sessionFiles: synthesisData.fileCount,

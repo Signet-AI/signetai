@@ -16,7 +16,7 @@
 	} from "$lib/components/pipeline/pipeline-store.svelte";
 	import { PIPELINE_NODES } from "$lib/components/pipeline/pipeline-types";
 	import { workspaceLayout, syncLayoutToStorage } from "$lib/stores/workspace-layout.svelte";
-	import { returnToSidebar } from "$lib/stores/focus.svelte";
+	import { nav } from "$lib/stores/navigation.svelte";
 
 
 	function handleSelectNode(id: string) {
@@ -47,8 +47,13 @@
 		return distance <= AUTO_SCROLL_THRESHOLD_PX;
 	}
 
-	// Keyboard navigation - let parent handle tab bar navigation
+	// Keyboard navigation - let parent handle tab bar navigation and Escape
 	function handleGlobalKey(e: KeyboardEvent) {
+		// Only handle events when Pipeline tab is active
+		if (nav.activeTab !== "pipeline") return;
+
+		if (e.defaultPrevented) return;
+
 		const target = e.target as HTMLElement;
 		const isInputFocused =
 			target.tagName === "INPUT" ||
@@ -57,12 +62,8 @@
 
 		if (isInputFocused) return;
 
-		// Arrow keys are handled by parent for tab bar navigation
-		// Escape returns to sidebar
-		if (e.key === "Escape") {
-			e.preventDefault();
-			returnToSidebar();
-		}
+		// Escape is handled by parent (+page.svelte) for engine group content→tabs flow
+		// No additional key handling needed here — parent owns tab bar and Escape
 	}
 
 	function updateFeedPositionFlags(): void {

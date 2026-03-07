@@ -168,6 +168,7 @@ onMount(() => {
 });
 
 // --- Global keyboard navigation ---
+let keyboardNavActive = $state(false);
 let engineTabFocus = $state<"tabs" | "content">("tabs");
 let engineTabIndex = $state(0);
 const ENGINE_TABS = ["settings", "pipeline", "connectors", "logs"] as const;
@@ -211,6 +212,8 @@ function focusMemoryContent(): void {
 }
 
 function handleGlobalKey(e: KeyboardEvent) {
+	keyboardNavActive = true;
+
 	const target = e.target as HTMLElement;
 	const isInputFocused =
 		target.tagName === "INPUT" ||
@@ -222,6 +225,9 @@ function handleGlobalKey(e: KeyboardEvent) {
 
 	// Handle Escape from page content to return to sidebar
 	if (focus.zone === "page-content" && e.key === "Escape") {
+		// If a child tab already handled Escape, don't double-handle
+		if (e.defaultPrevented) return;
+
 		// Check for open modals/dialogs first
 		const modalOpen =
 			ts.formOpen ||
@@ -300,14 +306,13 @@ function handleGlobalKey(e: KeyboardEvent) {
 	}
 }
 
-// Initialize engine tab focus when navigating to engine group
+// Initialize engine tab focus when navigating to engine group via keyboard
 $effect(() => {
-	if (isEngineGroup(activeTab) && focus.zone === "page-content") {
+	if (isEngineGroup(activeTab) && focus.zone === "page-content" && keyboardNavActive) {
 		const index = ENGINE_TABS.indexOf(activeTab as typeof ENGINE_TABS[number]);
 		if (index !== -1) {
 			engineTabIndex = index;
-			engineTabFocus = "tabs"; // Start at tab bar level
-			// Focus the tab button
+			engineTabFocus = "tabs";
 			const tabButton = document.querySelector(`[data-engine-tab="${ENGINE_TABS[index]}"]`);
 			if (tabButton instanceof HTMLElement) {
 				tabButton.focus();
@@ -316,14 +321,13 @@ $effect(() => {
 	}
 });
 
-// Initialize memory tab focus when navigating to memory group
+// Initialize memory tab focus when navigating to memory group via keyboard
 $effect(() => {
-	if (isMemoryGroup(activeTab) && focus.zone === "page-content") {
+	if (isMemoryGroup(activeTab) && focus.zone === "page-content" && keyboardNavActive) {
 		const index = MEMORY_TABS.indexOf(activeTab as typeof MEMORY_TABS[number]);
 		if (index !== -1) {
 			memoryTabIndex = index;
-			memoryTabFocus = "tabs"; // Start at tab bar level
-			// Focus the tab button
+			memoryTabFocus = "tabs";
 			const tabButton = document.querySelector(`[data-memory-tab="${MEMORY_TABS[index]}"]`);
 			if (tabButton instanceof HTMLElement) {
 				tabButton.focus();
@@ -381,18 +385,21 @@ function handleFocusIn(e: FocusEvent) {
 	if (pageContent && focus.zone !== 'page-content') {
 		setFocusZone('page-content');
 
-		// Reset keyboard navigation state to match current page
+		// Sync keyboard navigation state — set "content" if focus is on
+		// a non-tab-button element (e.g. an input inside the page)
 		if (isEngineGroup(activeTab)) {
 			const index = ENGINE_TABS.indexOf(activeTab as typeof ENGINE_TABS[number]);
 			if (index !== -1) {
 				engineTabIndex = index;
-				engineTabFocus = "tabs";
+				const isOnTabButton = !!target.closest('[data-engine-tab]');
+				engineTabFocus = isOnTabButton ? "tabs" : "content";
 			}
 		} else if (isMemoryGroup(activeTab)) {
 			const index = MEMORY_TABS.indexOf(activeTab as typeof MEMORY_TABS[number]);
 			if (index !== -1) {
 				memoryTabIndex = index;
-				memoryTabFocus = "tabs";
+				const isOnTabButton = !!target.closest('[data-memory-tab]');
+				memoryTabFocus = isOnTabButton ? "tabs" : "content";
 			}
 		}
 		return;
@@ -401,6 +408,8 @@ function handleFocusIn(e: FocusEvent) {
 
 // Handle mouse clicks to sync keyboard navigation state
 function handlePageClick(e: MouseEvent) {
+	keyboardNavActive = false;
+
 	// Only handle clicks in page content area
 	const pageContent = (e.target as HTMLElement).closest('[data-page-content="true"]');
 	if (!pageContent) return;
@@ -410,18 +419,21 @@ function handlePageClick(e: MouseEvent) {
 		setFocusZone('page-content');
 	}
 
-	// Reset keyboard navigation state to current page's tab bar
+	// Check if click landed on a tab button — set tabs mode; otherwise content mode
+	const clickedEngineTab = (e.target as HTMLElement).closest('[data-engine-tab]');
+	const clickedMemoryTab = (e.target as HTMLElement).closest('[data-memory-tab]');
+
 	if (isEngineGroup(activeTab)) {
 		const index = ENGINE_TABS.indexOf(activeTab as typeof ENGINE_TABS[number]);
 		if (index !== -1) {
 			engineTabIndex = index;
-			engineTabFocus = "tabs";
+			engineTabFocus = clickedEngineTab ? "tabs" : "content";
 		}
 	} else if (isMemoryGroup(activeTab)) {
 		const index = MEMORY_TABS.indexOf(activeTab as typeof MEMORY_TABS[number]);
 		if (index !== -1) {
 			memoryTabIndex = index;
-			memoryTabFocus = "tabs";
+			memoryTabFocus = clickedMemoryTab ? "tabs" : "content";
 		}
 	}
 }

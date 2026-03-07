@@ -204,6 +204,8 @@ function handleKeydown(event: KeyboardEvent): void {
 	// Only handle events when Embeddings tab is active
 	if (nav.activeTab !== "embeddings") return;
 
+	if (event.defaultPrevented) return;
+
 	const target = event.target;
 	const isInput = target instanceof HTMLElement && (
 		target.tagName === "INPUT" ||
@@ -212,8 +214,10 @@ function handleKeydown(event: KeyboardEvent): void {
 		target.isContentEditable
 	);
 
-	// Arrow Down from tab level to focus search input
-	if (event.key === "ArrowDown" && !isInput) {
+	// Arrow Down from the embeddings tab trigger button to focus search input
+	const isTabButton = target instanceof HTMLElement &&
+		target.getAttribute("data-memory-tab") === "embeddings";
+	if (event.key === "ArrowDown" && isTabButton) {
 		event.preventDefault();
 		searchInputEl?.focus();
 		return;
@@ -222,7 +226,6 @@ function handleKeydown(event: KeyboardEvent): void {
 	// Arrow Up from search input to return to tab bar
 	if (event.key === "ArrowUp" && target === searchInputEl) {
 		event.preventDefault();
-		// Focus the embeddings tab button explicitly
 		const embeddingsTabButton = document.querySelector('[data-memory-tab="embeddings"]') as HTMLElement;
 		if (embeddingsTabButton) {
 			embeddingsTabButton.focus();
