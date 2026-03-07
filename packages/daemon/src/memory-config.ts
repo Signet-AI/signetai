@@ -249,6 +249,11 @@ export function loadPipelineConfig(
 						? "ollama"
 						: d.extraction.provider;
 
+	// Normalize aspect weights: clamp independently, then enforce min <= max
+	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
+	const minAW = clampFraction(feedbackRaw?.minAspectWeight, d.feedback.minAspectWeight);
+	const validatedMinAW = minAW > maxAW ? maxAW : minAW;
+
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : d.enabled,
 		shadowMode: typeof raw.shadowMode === "boolean" ? raw.shadowMode : d.shadowMode,
@@ -680,14 +685,8 @@ export function loadPipelineConfig(
 				feedbackRaw?.ftsWeightDelta,
 				d.feedback.ftsWeightDelta,
 			),
-			maxAspectWeight: clampFraction(
-				feedbackRaw?.maxAspectWeight,
-				d.feedback.maxAspectWeight,
-			),
-			minAspectWeight: clampFraction(
-				feedbackRaw?.minAspectWeight,
-				d.feedback.minAspectWeight,
-			),
+			maxAspectWeight: maxAW,
+			minAspectWeight: validatedMinAW,
 			decayEnabled: resolveBool(
 				feedbackRaw?.decayEnabled, undefined, d.feedback.decayEnabled,
 			),
