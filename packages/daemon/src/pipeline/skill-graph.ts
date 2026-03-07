@@ -95,7 +95,7 @@ export async function installSkillNode(
 	provider: LlmProvider | null,
 ): Promise<SkillInstallResult> {
 	const agentId = input.agentId ?? "default";
-	const entityId = skillEntityId(agentId, input.frontmatter.name);
+	let entityId = skillEntityId(agentId, input.frontmatter.name);
 	const now = new Date().toISOString();
 	const procCfg = config.procedural;
 
@@ -137,26 +137,38 @@ export async function installSkillNode(
 
 	// Step 2: Create entity + skill_meta in a write transaction
 	accessor.withWriteTx((db) => {
-		// Check if entity already exists (idempotent)
+		// Check if entity already exists by id or name (idempotent)
 		const existing = db.prepare(
-			"SELECT id FROM entities WHERE id = ?",
-		).get(entityId) as { id: string } | undefined;
+			"SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = ?)",
+		).get(entityId, fm.name, agentId) as { id: string } | undefined;
 
 		if (existing) {
+			// If matched by name (collision), adopt that entity's id
+			if (existing.id !== entityId) {
+				entityId = existing.id;
+			}
 			// Update existing entity
 			db.prepare(
-				`UPDATE entities SET description = ?, updated_at = ? WHERE id = ?`,
+				`UPDATE entities SET entity_type = 'skill', description = ?, updated_at = ? WHERE id = ?`,
 			).run(fm.description, now, entityId);
 
-			// Update skill_meta
+			// Upsert skill_meta (may not exist if entity was from extraction)
 			db.prepare(
-				`UPDATE skill_meta SET
-					version = ?, author = ?, license = ?, source = ?,
-					role = ?, triggers = ?, tags = ?, permissions = ?,
-					enriched = ?, fs_path = ?, uninstalled_at = NULL,
-					updated_at = ?
-				 WHERE entity_id = ?`,
+				`INSERT INTO skill_meta
+				 (entity_id, agent_id, version, author, license, source,
+				  role, triggers, tags, permissions, enriched,
+				  installed_at, importance, decay_rate, fs_path)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(entity_id) DO UPDATE SET
+					version = excluded.version, author = excluded.author,
+					license = excluded.license, source = excluded.source,
+					role = excluded.role, triggers = excluded.triggers,
+					tags = excluded.tags, permissions = excluded.permissions,
+					enriched = excluded.enriched, fs_path = excluded.fs_path,
+					uninstalled_at = NULL, updated_at = ?`,
 			).run(
+				entityId,
+				agentId,
 				fm.version ?? null,
 				fm.author ?? null,
 				fm.license ?? null,
@@ -166,17 +178,37 @@ export async function installSkillNode(
 				fm.tags ? JSON.stringify(fm.tags) : null,
 				fm.permissions ? JSON.stringify(fm.permissions) : null,
 				enriched ? 1 : 0,
+				now,
+				procCfg.importanceOnInstall,
+				procCfg.decayRate,
 				input.fsPath,
 				now,
-				entityId,
 			);
 		} else {
-			// Insert new entity
-			db.prepare(
-				`INSERT INTO entities
-				 (id, name, canonical_name, entity_type, agent_id, description, mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, 'skill', ?, ?, 0, ?, ?)`,
-			).run(entityId, fm.name, fm.name.toLowerCase(), agentId, fm.description, now, now);
+			// Insert new entity (catch name UNIQUE collision from extraction pipeline)
+			try {
+				db.prepare(
+					`INSERT INTO entities
+					 (id, name, canonical_name, entity_type, agent_id, description, mentions, created_at, updated_at)
+					 VALUES (?, ?, ?, 'skill', ?, ?, 0, ?, ?)`,
+				).run(entityId, fm.name, fm.name.toLowerCase(), agentId, fm.description, now, now);
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				if (!msg.includes("UNIQUE constraint")) throw e;
+
+				// Name collision — an extracted entity already owns this name.
+				// Claim it as a skill entity and reuse its id.
+				const collision = db.prepare(
+					"SELECT id FROM entities WHERE name = ? LIMIT 1",
+				).get(fm.name) as { id: string } | undefined;
+
+				if (!collision) throw e;
+
+				db.prepare(
+					`UPDATE entities SET entity_type = 'skill', description = ?, updated_at = ? WHERE id = ?`,
+				).run(fm.description, now, collision.id);
+				entityId = collision.id;
+			}
 
 			// Insert skill_meta
 			db.prepare(

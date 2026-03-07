@@ -91,10 +91,10 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 
 			const entityId = `skill:default:${name}`;
 
-			// Check if entity already exists
+			// Check if entity already exists (by id or name collision)
 			const existing = deps.accessor.withReadDb((db) =>
-				db.prepare("SELECT id FROM entities WHERE id = ?")
-					.get(entityId) as { id: string } | undefined,
+				db.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
+					.get(entityId, name) as { id: string } | undefined,
 			);
 
 			if (!existing) {
@@ -116,10 +116,12 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 				logger.info("reconciler", "Backfilled skill node", { skill: name });
 			} else {
 				// Entity exists — check if frontmatter changed
+				// Use actual entity id (may differ from skill:default:... if adopted)
+				const actualId = existing.id;
 				const storedEmb = deps.accessor.withReadDb((db) =>
 					db.prepare(
 						"SELECT chunk_text FROM embeddings WHERE source_type = 'skill' AND source_id = ?",
-					).get(entityId) as { chunk_text: string } | undefined,
+					).get(actualId) as { chunk_text: string } | undefined,
 				);
 
 				// Compare fingerprints: if the embedding text would be different,
@@ -304,10 +306,17 @@ async function reconcileSkill(
 				: []),
 		].join(" — ");
 
+		// Look up by id or name (entity may have been adopted from extraction)
+		const existingEntity = deps.accessor.withReadDb((db) =>
+			db.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
+				.get(entityId, skillName) as { id: string } | undefined,
+		);
+		const lookupId = existingEntity?.id ?? entityId;
+
 		const storedEmb = deps.accessor.withReadDb((db) =>
 			db.prepare(
 				"SELECT chunk_text FROM embeddings WHERE source_type = 'skill' AND source_id = ?",
-			).get(entityId) as { chunk_text: string } | undefined,
+			).get(lookupId) as { chunk_text: string } | undefined,
 		);
 
 		if (storedEmb && storedEmb.chunk_text === currentEmbText) {
