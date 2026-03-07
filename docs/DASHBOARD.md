@@ -8,7 +8,7 @@ section: "Infrastructure"
 Dashboard
 =========
 
-The Signet dashboard is a SvelteKit static app served by the [[daemon]] at
+The Signet dashboard is a Svelte 5 + Vite static app served by the [[daemon]] at
 `http://localhost:3850`. It is a supplementary visual interface — useful
 for browsing [[memory]], editing config files, and inspecting daemon state,
 but not the primary way to interact with Signet. The [[cli|CLI]] and
@@ -117,6 +117,40 @@ Pinned memories are visually distinguished.
 The `EmbeddingCanvas3D` component exposes `focusNode(id)` to animate
 the camera toward a specific node, and `refreshAppearance()` to
 re-apply color/opacity changes without rebuilding the graph.
+
+**Constellation View — Entity Overlay**
+
+The Embeddings tab's constellation view renders a 4-tier D3 force
+simulation that layers the knowledge graph on top of the memory space:
+
+- **Entities** (hexagons, 10–22px) — gravitational centers, sized by
+  mention density
+- **Aspects** (circles, 5–8px) — orbit their parent entity
+- **Attributes** (small circles, 3–4px) — orbit their parent aspect
+- **Memories** (dots, 2px) — leaf nodes, orbit their parent attribute
+
+Performance caps keep the simulation responsive:
+- Zero-mention entities are excluded unless pinned by the user
+- Maximum 500 entities, ordered by pinned status then mention count
+- Memory leaf nodes are dropped entirely if total node count exceeds 3,000
+
+Clicking an entity node opens an inspector panel showing the entity type,
+aspects list, dependency edges, and memory count. Clicking a memory node
+opens the existing memory detail panel.
+
+**Predictor Metrics Tab**
+
+When the predictive memory scorer is enabled, a Predictor tab surfaces
+scorer health metrics:
+
+- NDCG@10 score from the most recent continuity evaluation
+- EMA-smoothed model health signal (rolling quality indicator)
+- Drift detection status (flags when model performance has degraded)
+- Training pair count (total comparison pairs accumulated)
+
+The predictor is disabled by default; the tab shows a "not enabled"
+placeholder until `predictor.enabled: true` is set in `agent.yaml`.
+
 
 **Logs** — Real-time daemon log stream via Server-Sent Events
 (`/api/logs/stream`). A Live/Stop toggle controls the stream.

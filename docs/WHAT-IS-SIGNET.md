@@ -197,7 +197,11 @@ Local-First, Open Standard
 --------------------------
 
 Everything lives on your machine. SQLite database, markdown files, YAML
-configuration. No cloud dependency, no telemetry, no vendor lock-in.
+configuration. No cloud dependency, no vendor lock-in.
+
+Signet collects local-only operational telemetry — latency, usage counts,
+and error events. This data stays on your machine and is never sent
+externally.
 
 Signet is an open specification. The format is documented, the
 implementation is open source, and anyone can build tools that read and

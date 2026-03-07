@@ -385,11 +385,80 @@ Small. Dense. Connected. Correct.
 
 ---
 
+Entity Pinning
+--------------
+
+Pinning is the implementation of weight override. A pinned entity carries
+`pinned = 1` and a `pinned_at` timestamp on the `entities` row.
+
+During traversal, pinned entities are resolved unconditionally — before
+project path matching, before query token matching — and merged into the
+focal entity set. This means a pinned entity is always walked at session
+start, regardless of what the session appears to be about.
+
+The effect is that pinning bypasses the normal relevance heuristics entirely.
+It is a manual declaration that this entity belongs in every context load.
+Use it for entities that are structurally universal to the agent's work: the
+primary project, a key collaborator, a central tool or system.
+
+Pinned entities sort to the top of all list views and are marked visually
+in the constellation. `pinned_at` records when the pin was set; entities
+pinned more recently appear above those pinned earlier in tied cases.
+
+Unpinning restores normal traversal behavior immediately — the entity remains
+in the graph with all its aspects and attributes intact; it just stops being
+injected unconditionally.
+
+
+Behavioral Feedback Loop
+------------------------
+
+The behavioral feedback loop closes the gap between structural importance
+(how well-organized an entity is) and empirical importance (how useful it
+actually proves to be during sessions).
+
+Two mechanisms run at session end:
+
+**FTS overlap feedback** — memories that were injected at session start and
+later retrieved via full-text search (`fts_hit_count > 0` in `session_memories`)
+are treated as behavioral confirmation that the injection was correct. Each
+confirmed memory traces back to its source aspect via `entity_attributes`, and
+that aspect's weight is incremented by a configured delta. Aspects that produce
+memories the user actually searches for accumulate higher weight over time;
+aspects that produce injections the user ignores do not.
+
+**Aspect decay** — aspects that have not received an FTS confirmation within a
+configurable number of days have their weight decremented by a fixed decay
+amount (floor: `minWeight`). Decay runs on a per-session throttle (every N
+sessions per agent) to avoid running every session when idle. Without decay,
+weights only accumulate; decay ensures the graph reflects current relevance
+rather than historical importance that no longer applies.
+
+Together, these mechanisms form a signal pathway from session outcomes back to
+graph structure: confirmed injections raise weights, stale aspects lose weight,
+and the graph continuously reshapes itself based on what actually serves the
+agent rather than what was important when the aspect was first created.
+
+The implementation lives in `packages/daemon/src/pipeline/aspect-feedback.ts`.
+Telemetry is tracked via `getFeedbackTelemetry()` and exposed in the pipeline
+status endpoint.
+
+
+---
+
 *This document describes the architectural concepts. For the implementation
 contract, see [Knowledge Architecture Schema and Traversal Spec](./specs/approved/knowledge-architecture-schema.md).
 For predictive ranking integration, see [Signet Predictive Memory Scorer](./specs/approved/predictive-memory-scorer.md).
 For extraction pipeline behavior, see [Memory Pipeline](./PIPELINE.md).
 For the behavioral feedback loop, see [KA-6 Sprint Brief](./specs/SPRINT-BRIEF-KA6.md).*
+
+## See Also
+
+- [KNOWLEDGE-GRAPH.md](./KNOWLEDGE-GRAPH.md) — implementation reference: tables,
+  traversal algorithm, API endpoints, and graph persistence
+- [PROCEDURAL-MEMORY.md](./PROCEDURAL-MEMORY.md) — skills as first-class graph
+  nodes; the procedural memory tier
+- [PIPELINE.md](./PIPELINE.md) — how the extraction pipeline populates the graph
 
 ---
 

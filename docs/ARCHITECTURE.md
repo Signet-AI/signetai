@@ -64,6 +64,14 @@ desktop UI for daemon status, quick actions, and notifications.
 It implements autograd, checkpointing, and data loading for real-time
 preference scoring. (WIP)
 
+`@signet/native` provides Rust/NAPI bindings for SIMD vector operations
+(cosine similarity, normalization) used by the daemon for fast
+embedding math. Targets bun/node.
+
+`@signet/connector-codex` is the Codex harness connector. It handles
+hook installation and config patching for the Codex harness. Targets
+node.
+
 ---
 
 End-to-End Data Flow
@@ -569,6 +577,64 @@ changes.
 Currently tokens are issued and verified against the in-memory secret;
 revocation requires a daemon restart to rotate the secret.
 
+**skill_meta** (migration 018)
+
+Procedural memory metadata for installed skills. Fields: `skill_name`,
+`decay_rate`, `use_count`, `role_classification`, `filesystem_path`.
+Supports retention decay and role-based skill prioritization.
+
+**entity_aspects** (migration 019)
+
+Knowledge architecture: conceptual domains per entity. Fields:
+`entity_id`, `aspect_name`, `description`, `confidence`. Organizes
+entity knowledge into thematic clusters for structured retrieval.
+
+**predictor_comparisons** (migration 020)
+
+Predictive scorer: session comparison pairs used for preference
+learning. Fields: `session_id`, `memory_a_id`, `memory_b_id`,
+`preferred`, `confidence`, `created_at`.
+
+**entity_attributes** (migration 021)
+
+Knowledge architecture: facts and constraints under aspects. Fields:
+`aspect_id`, `entity_id`, `attribute_key`, `attribute_value`,
+`confidence`, `source_memory_id`. Stores structured facts about entity
+aspects.
+
+**entity_dependencies** (migration 022)
+
+Knowledge architecture: structural edges between entities distinct from
+semantic `relations`. Fields: `source_entity_id`, `target_entity_id`,
+`dependency_type`, `strength`, `metadata`. Models build-time or
+logical dependency graphs.
+
+**predictor_training_pairs** (migration 023)
+
+Predictive scorer: labeled training data for the preference model.
+Fields: `session_id`, `memory_id`, `feature_vector` (BLOB), `label`,
+`created_at`. Used for incremental model updates.
+
+**agent_feedback** (migration 024)
+
+Storage for the `memory_feedback` MCP tool. Fields: `memory_id`,
+`session_id`, `feedback_type` (`positive`, `negative`, `correction`),
+`correction_text`, `actor`, `created_at`. Records agent-provided
+feedback for memory quality improvement.
+
+**task_meta** (migration 025)
+
+Knowledge architecture: task-specific entity metadata. Fields:
+`entity_id`, `task_type`, `priority`, `status`, `due_at`,
+`context_json`. Extends entities with actionable task properties.
+
+**entity_pinning** (migration 026)
+
+KA-6: user-driven entity weight overrides. Fields: `entity_id`,
+`pin_type` (`pin` or `suppress`), `weight_override`, `reason`,
+`created_at`. Allows users to amplify or suppress specific entities
+in graph-augmented search results.
+
 ---
 
 Content Normalization
@@ -693,11 +759,9 @@ All agent data lives at `~/.agents/`:
 ```
 
 The daemon binds to localhost only. All data stays local by design.
-Telemetry is optional and local. It is disabled by default unless
-explicitly configured in `agent.yaml` (`telemetryEnabled: true`). No
-data is sent outbound. The daemon exposes local telemetry endpoints at
-`/api/telemetry/events`, `/api/telemetry/stats`, and
-`/api/telemetry/export` for querying and exporting local event data.
+The daemon collects local-only operational telemetry (latency
+histograms, usage counters, error ring buffer) accessible at
+`/api/telemetry/*`. No data is sent externally.
 
 ---
 

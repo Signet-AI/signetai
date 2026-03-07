@@ -207,6 +207,38 @@ the unique key, and memory inserts check it to avoid exact-content
 duplicates.
 
 
+Structural Classification
+---
+
+After extraction writes facts to the database, the structural classification
+worker (`structural-classify.ts`) runs a second LLM pass to assign each
+extracted fact to its entity's aspect hierarchy. Jobs are enqueued as
+`structural_classify` entries in `memory_jobs` and processed by a separate
+polling worker that batches by `entity_id` — all facts for the same entity
+in one LLM call.
+
+The prompt presents the entity name, type, existing aspects, and suggested
+aspect names (from `ASPECT_SUGGESTIONS` keyed by entity type). The LLM
+returns a JSON array of `{i, aspect, kind, new}` objects. Each fact is
+assigned to a named aspect and classified as either `attribute` or
+`constraint`. Aspects are upserted into `entity_aspects` on
+`(entity_id, canonical_name)` conflict. The `entity_attributes` row written
+during extraction has its `aspect_id` and `kind` filled in.
+
+When an entity's type was not determinable during extraction (stored as
+`"extracted"`), the classify prompt also asks the LLM to infer the type.
+If a valid canonical type is returned (`person`, `project`, `system`,
+`tool`, `concept`, `skill`, `task`, or `unknown`), the `entities` row is
+updated in the same transaction.
+
+The worker configuration lives under `structural` in the pipeline config:
+`pollIntervalMs` (how often to check for pending jobs) and
+`classifyBatchSize` (max facts per entity per LLM call).
+
+For details on the knowledge graph persistence stage, see
+[KNOWLEDGE-GRAPH.md](./KNOWLEDGE-GRAPH.md).
+
+
 Knowledge Graph
 ---
 
@@ -234,6 +266,35 @@ Every source and target entity is linked back to the originating memory row
 via `memory_entity_mentions`. The link stores `mention_text` (the raw
 string before canonicalization) and `confidence`. Inserts use
 `INSERT OR IGNORE` so re-processing the same memory is idempotent.
+
+
+Aspect Feedback
+---
+
+After recall, `aspect-feedback.ts` feeds behavioral signals back to the
+knowledge graph by measuring FTS overlap between retrieved content and
+entity aspects. The function `applyFtsOverlapFeedback` is called at
+session end with the session key and agent ID.
+
+The feedback loop operates as follows. Memories that received at least one
+FTS hit during the session (tracked in `session_memories.fts_hit_count`) are
+looked up. For each confirmed memory, the `entity_attributes` table is
+queried to find its parent `aspect_id`. Confirmation counts are summed per
+aspect, and each aspect's `weight` column is incremented by
+`delta × confirmations`, clamped to `[minWeight, maxWeight]`. This updates
+which aspects were structurally "correct" for the session — aspects whose
+memories were actively searched for gain weight, aspects whose memories were
+ignored do not.
+
+A separate `decayAspectWeights` function handles time-based decay. Aspects
+that have not been updated in more than `staleDays` days have their weight
+reduced by `decayRate`, floored at `minWeight`. Session decay is governed
+by a counter so it runs every N sessions rather than on every call.
+
+Telemetry is accumulated in an in-process snapshot (`getFeedbackTelemetry`)
+and exposed on the pipeline status endpoint: `feedbackAspectsUpdated`,
+`feedbackFtsConfirmations`, `feedbackDecayedAspects`, and
+`feedbackPropagatedAttributes`.
 
 
 Graph-Augmented Search
@@ -448,6 +509,32 @@ Claude Code CLI is present on PATH.
 The interface is intentionally minimal — no streaming, no chat history, no
 tool use. Future providers can be added by implementing `LlmProvider` and
 passing the instance to `startWorker`.
+
+
+Predictor Scorer Integration
+---
+
+The predictive memory scorer hooks into the pipeline at two lifecycle
+points.
+
+**Session-start (scoring):** During `session-start` hook processing, after
+the baseline candidate pool is assembled via hybrid search and graph
+traversal, `runPredictorScoring` is called with the candidate set and their
+feature vectors. The sidecar (Rust predictor process) re-ranks candidates
+using its trained model. If the predictor is unavailable or in cold-start,
+baseline ordering is used unchanged. The fused scores are used to re-sort
+the final injection list. A predictor status line is appended to the
+injected context when the predictor is active.
+
+**Session-end (training pairs):** After the continuity scoring pass writes
+per-memory relevance scores to `session_memories`, `runSessionComparison`
+is called in the summary worker. It builds comparison pairs from the session
+— injected memories with their final relevance scores — and writes them to
+`predictor_comparisons`. The EMA health signal and drift detector are updated
+based on the session's NDCG@10 score.
+
+The predictor is disabled by default (`predictor.enabled: false`). When
+disabled, both hooks are no-ops and the baseline pipeline is unchanged.
 
 
 Optional Reranking

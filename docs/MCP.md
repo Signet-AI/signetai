@@ -213,6 +213,44 @@ as forgotten with a reason for auditability.
 
 **Daemon endpoint:** `DELETE /api/memory/:id`
 
+### memory_feedback
+
+Rate how relevant injected memories were to the current conversation.
+Scores update `session_memories.relevance_score` immediately, feeding the
+predictor scorer's training pipeline and the aspect feedback loop.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `session_key` | string | yes | Current session key |
+| `ratings` | object | yes | Map of memory ID to relevance score (−1 to 1) |
+
+Score interpretation: `1` = directly helpful, `0` = unused/neutral,
+`−1` = harmful or misleading.
+
+**Returns:** Object with `ok: true` and `recorded` count.
+
+**Example:**
+
+```json
+{
+  "session_key": "abc123",
+  "ratings": {
+    "a1b2c3d4-e5f6-...": 0.9,
+    "b2c3d4e5-f6a7-...": 0.0,
+    "c3d4e5f6-a7b8-...": -0.5
+  }
+}
+```
+
+**Daemon endpoint:** `POST /api/memory/feedback`
+
+**Note:** Prefer this tool over embedding feedback as raw JSON text. Both
+are supported for backward compatibility, but the MCP tool is recorded
+immediately on the current turn.
+
+
 ### secret_list
 
 List available secret names. Returns names only — raw secret values are
