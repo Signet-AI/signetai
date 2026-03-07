@@ -335,7 +335,7 @@ Search for: `INSERT INTO entities` and `INSERT OR REPLACE INTO entities`
 ## Verification
 
 1. `bun run build` — no type errors
-2. `bun test` — existing tests pass (616+)
+2. `bun test` — existing tests pass (713+)
 3. `bun run typecheck` — clean
 4. Daemon startup creates all four new tables + entities.agent_id
 5. Verify indexes exist: `PRAGMA index_list(entity_aspects)` etc.

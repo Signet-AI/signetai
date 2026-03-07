@@ -160,16 +160,14 @@
 	}
 
 	function formatDate(iso: string): string {
-		try {
-			return new Date(iso).toLocaleString(undefined, {
-				month: "short",
-				day: "numeric",
-				hour: "2-digit",
-				minute: "2-digit",
-			});
-		} catch {
-			return iso;
-		}
+		const d = new Date(iso);
+		if (Number.isNaN(d.getTime())) return iso;
+		return d.toLocaleString(undefined, {
+			month: "short",
+			day: "numeric",
+			hour: "2-digit",
+			minute: "2-digit",
+		});
 	}
 
 	function formatPct(n: number): string {

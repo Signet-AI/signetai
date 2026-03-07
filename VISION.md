@@ -57,7 +57,7 @@ is the difference between a tool that remembers and a mind
 that persists. Signet doesn't just remember — it learns what
 to remember. A neural network unique to each user, trained on
 their own interaction patterns, that gets sharper the longer
-you use it. No cloud. Your personal weights never leave your
+you use it. No shared personal weights. Your weights never leave your
 machine — running locally, earning their influence by proving
 they outperform the alternative.
 

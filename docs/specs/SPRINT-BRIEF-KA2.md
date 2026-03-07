@@ -232,7 +232,7 @@ Results documented below each prompt.
 
 ### Classification Prompt (Pass 2a)
 
-```
+```text
 Classify each fact into an aspect and kind for the given entity.
 
 Entity: {entityName} ({entityType})
@@ -299,7 +299,7 @@ JSON array, each: {"i": number, "aspect": string, "kind": "attribute"|"constrain
 
 ### Dependency Prompt (Pass 2b)
 
-```
+```text
 Classify each fact. Also identify if the fact implies a dependency between entities.
 
 Entity: {entityName} ({entityType})
