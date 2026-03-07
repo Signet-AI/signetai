@@ -501,17 +501,24 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 	const edgeBudget = camZoom >= 1.4 ? MAX_EDGES_NEAR : camZoom >= 0.8 ? MAX_EDGES_MID : MAX_EDGES_FAR;
 	const edgeStep = Math.max(1, Math.ceil(edges.length / edgeBudget));
 
-	// Hierarchy edges (parent-child structure): very faint
-	for (const edge of edges) {
-		if (edge.edgeType !== "hierarchy") continue;
-		const s = edge.source as GraphNode;
-		const t = edge.target as GraphNode;
-		ctx.beginPath();
-		ctx.moveTo(s.x, s.y);
-		ctx.lineTo(t.x, t.y);
-		ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-		ctx.lineWidth = 0.4 / camZoom;
-		ctx.stroke();
+	// Hierarchy edges (parent-child structure): very faint, budgeted
+	{
+		const hierEdges: typeof edges = [];
+		for (const edge of edges) {
+			if (edge.edgeType === "hierarchy") hierEdges.push(edge);
+		}
+		const hierStep = Math.max(1, Math.ceil(hierEdges.length / edgeBudget));
+		for (let i = 0; i < hierEdges.length; i += hierStep) {
+			const edge = hierEdges[i];
+			const s = edge.source as GraphNode;
+			const t = edge.target as GraphNode;
+			ctx.beginPath();
+			ctx.moveTo(s.x, s.y);
+			ctx.lineTo(t.x, t.y);
+			ctx.strokeStyle = "rgba(255, 255, 255, 0.03)";
+			ctx.lineWidth = 0.4 / camZoom;
+			ctx.stroke();
+		}
 	}
 
 	// KNN edges (normal memory-to-memory)
@@ -535,23 +542,31 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		ctx.stroke();
 	}
 
-	// Dependency edges (entity-to-entity): styled by type
-	for (const edge of edges) {
-		if (edge.edgeType !== "dependency") continue;
-		const s = edge.source as GraphNode;
-		const t = edge.target as GraphNode;
-		const style = dependencyEdgeStyle(edge.dependencyType ?? "", edge.strength ?? 0.5);
-		ctx.beginPath();
-		if (style.dash.length > 0) {
-			ctx.setLineDash(style.dash.map((d) => d / camZoom));
+	// Dependency edges (entity-to-entity): styled by type, budgeted
+	{
+		const depEdges: typeof edges = [];
+		for (const edge of edges) {
+			if (edge.edgeType === "dependency") depEdges.push(edge);
 		}
-		ctx.moveTo(s.x, s.y);
-		ctx.lineTo(t.x, t.y);
-		ctx.strokeStyle = style.color;
-		ctx.lineWidth = style.width / camZoom;
-		ctx.stroke();
-		if (style.dash.length > 0) {
-			ctx.setLineDash([]);
+		const depBudget = Math.max(1, Math.floor(edgeBudget / 4));
+		const depStep = Math.max(1, Math.ceil(depEdges.length / depBudget));
+		for (let i = 0; i < depEdges.length; i += depStep) {
+			const edge = depEdges[i];
+			const s = edge.source as GraphNode;
+			const t = edge.target as GraphNode;
+			const style = dependencyEdgeStyle(edge.dependencyType ?? "", edge.strength ?? 0.5);
+			ctx.beginPath();
+			if (style.dash.length > 0) {
+				ctx.setLineDash(style.dash.map((d) => d / camZoom));
+			}
+			ctx.moveTo(s.x, s.y);
+			ctx.lineTo(t.x, t.y);
+			ctx.strokeStyle = style.color;
+			ctx.lineWidth = style.width / camZoom;
+			ctx.stroke();
+			if (style.dash.length > 0) {
+				ctx.setLineDash([]);
+			}
 		}
 	}
 
