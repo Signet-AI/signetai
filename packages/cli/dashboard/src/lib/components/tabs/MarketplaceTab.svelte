@@ -463,11 +463,13 @@ function handleGlobalKey(e: KeyboardEvent) {
 			if (cards.length === 0) return;
 
 			// If no card focused or on first card of row
-			if (focusedCardIndex <= 0) {
-				// Return to tabs mode and handle section switch
-				navMode = "tabs";
-				focusedCardIndex = -1;
-				cards.forEach(c => c.blur());
+function handleGlobalKey(e: KeyboardEvent) {
+	// Only handle events when Marketplace (skills) tab is active
+	if (nav.activeTab !== "skills") return;
+
+	if (e.defaultPrevented) return;
+
+	const target = e.target as HTMLElement;
 
 				if (section === "skills") {
 					returnToSidebar();
