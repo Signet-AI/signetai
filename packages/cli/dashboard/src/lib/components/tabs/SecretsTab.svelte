@@ -298,11 +298,15 @@ function focusSecretItem(index: number): void {
 function getOnePasswordFocusTargets(): HTMLElement[] {
 	const panel = document.querySelector('.onepassword-panel');
 	if (!panel) return [];
-	// Get all focusable elements in order, filtering out disabled ones
+	// Get all focusable elements sorted by data-focus-index, filtering out disabled ones
 	const all = panel.querySelectorAll('[data-focus-index]');
-	return (Array.from(all) as HTMLElement[]).filter(
-		(el) => !(el as HTMLButtonElement).disabled
-	);
+	return (Array.from(all) as HTMLElement[])
+		.filter((el) => !(el as HTMLButtonElement).disabled)
+		.sort((a, b) => {
+			const ai = parseInt(a.getAttribute('data-focus-index') ?? '0', 10);
+			const bi = parseInt(b.getAttribute('data-focus-index') ?? '0', 10);
+			return ai - bi;
+		});
 }
 
 function focusOnePasswordInputField(index: number): void {
