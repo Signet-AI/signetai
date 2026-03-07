@@ -24,7 +24,7 @@ import { getUpdateSummary } from "./update-system";
 import { loadMemoryConfig } from "./memory-config";
 import { recordSessionCandidates, trackFtsHits, parseFeedback, recordAgentFeedback } from "./session-memories";
 import { listSecrets } from "./secrets";
-import { getStructuralFeatures } from "./structural-features";
+import { buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
 import { getPredictorClient, recordPredictorLatency } from "./daemon";
 import { getPredictorState, updatePredictorState } from "./predictor-state";
 import {
@@ -1130,31 +1130,51 @@ export async function handleSessionStart(
 		candidateSourceById,
 	);
 
-	// Build candidate feature vectors matching FeatureVector shape (10D):
-	// [recencyDays, accessCount, importance, decayFactor, embeddingSimilarity,
-	//  entitySlot, aspectSlot, isConstraint, structuralDensity, ftsHitCount]
-	const nowMs = Date.now();
-	const DECAY_HALF_LIFE_DAYS = 30;
+	// Build candidate feature vectors using the canonical 17-element FeatureVector shape
+	// (same contract as buildCandidateFeatures / structural-features.ts).
+	// The inline 10-element version was wrong — the Rust sidecar expects 17D.
+	const featureNow = new Date();
+	const sessionGapDays = (() => {
+		try {
+			const row = getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						`SELECT MAX(created_at) AS last_end
+						 FROM session_checkpoints
+						 WHERE trigger = 'session_end'`,
+					)
+					.get() as { last_end: string | null } | undefined,
+			);
+			return row?.last_end
+				? Math.max(0, (Date.now() - new Date(row.last_end).getTime()) / 86_400_000)
+				: 0;
+		} catch {
+			return 0;
+		}
+	})();
 	const candidateFeatures: ReadonlyArray<ReadonlyArray<number>> | null =
 		predictorConfig?.enabled
-			? mergedCandidates.map((c) => {
-					const sf = structuralById.get(c.id);
-					const createdMs = new Date(c.created_at).getTime();
-					const recencyDays = Math.max(0, (nowMs - createdMs) / 86_400_000);
-					const decayFactor = Math.exp((-Math.LN2 * recencyDays) / DECAY_HALF_LIFE_DAYS);
-					return [
-						recencyDays,
-						c.access_count,
-						c.importance,
-						decayFactor,
-						c.effScore, // embedding similarity proxy
-						sf?.entitySlot ?? 0,
-						sf?.aspectSlot ?? 0,
-						sf?.isConstraint ?? 0,
-						sf?.structuralDensity ?? 0,
-						0, // ftsHitCount: not available at session-start
-					];
-				})
+			? buildCandidateFeatures(
+					getDbAccessor(),
+					mergedCandidates.map((c) => ({
+						id: c.id,
+						importance: c.importance,
+						createdAt: c.created_at,
+						accessCount: c.access_count,
+						lastAccessed: null,
+						pinned: c.pinned === 1,
+						isSuperseded: false,
+						source: candidateSourceById.get(c.id),
+					})),
+					agentId,
+					{
+						projectSlot: 0,
+						timeOfDay: featureNow.getHours() + featureNow.getMinutes() / 60,
+						dayOfWeek: featureNow.getDay(),
+						monthOfYear: featureNow.getMonth(),
+						sessionGapDays,
+					},
+				)
 			: null;
 
 	// Run predictor scoring (async — calls sidecar if available)
