@@ -156,7 +156,7 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 		const writeResult = writeMemoryMd(result.text);
 		if (!writeResult.ok) {
 			logger.error("synthesis", `MEMORY.md write refused: ${writeResult.error}`);
-			return;
+			return "failed";
 		}
 
 		logger.info("synthesis", "MEMORY.md synthesized", {

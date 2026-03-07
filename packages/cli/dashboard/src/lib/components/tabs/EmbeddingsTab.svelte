@@ -219,7 +219,12 @@ function handleKeydown(event: KeyboardEvent): void {
 		target.getAttribute("data-memory-tab") === "embeddings";
 	if (event.key === "ArrowDown" && isTabButton) {
 		event.preventDefault();
-		searchInputEl?.focus();
+		if (!controlsMenuOpen) {
+			controlsMenuOpen = true;
+			void tick().then(() => searchInputEl?.focus());
+		} else {
+			searchInputEl?.focus();
+		}
 		return;
 	}
 

@@ -32,9 +32,9 @@ function getColumnTasks(columnKey: string) {
 		case "running":
 			return ts.tasks.filter(t => t.last_run_status === "running");
 		case "completed":
-			return ts.tasks.filter(t => t.last_run_status === "completed" && !ts.tasks.some(r => r.id === t.id && r.last_run_status === "running"));
+			return ts.tasks.filter(t => t.last_run_status === "completed");
 		case "failed":
-			return ts.tasks.filter(t => t.last_run_status === "failed" && !ts.tasks.some(r => r.id === t.id && r.last_run_status === "running"));
+			return ts.tasks.filter(t => t.last_run_status === "failed");
 		default:
 			return [];
 	}
@@ -147,7 +147,6 @@ function handleGlobalKey(e: KeyboardEvent) {
 
 		if (e.key === "ArrowUp" && isBoardFocused) {
 			e.preventDefault();
-			const colTasks = getColumnTasks(columnKeys[selectedColumn]);
 			if (selectedTaskInColumn > 0) {
 				selectedTaskInColumn--;
 				focusTaskCard(selectedColumn, selectedTaskInColumn);

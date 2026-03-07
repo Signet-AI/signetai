@@ -230,7 +230,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 		}
 	}
 
-	// Arrow Up from 1Password panel - ALWAYS return to last secret
+	// Arrow Up from 1Password panel - return to last secret or exit panel
 	if (e.key === "ArrowUp" && focusArea === "1password") {
 		e.preventDefault();
 		if (focusedOnePasswordInput > 0) {
@@ -246,6 +246,14 @@ function handleGlobalKey(e: KeyboardEvent) {
 			focusedSecretIndex = secrets.length - 1;
 			focusedOnePasswordInput = -1;
 			focusSecretItem(focusedSecretIndex);
+		} else if (focusedOnePasswordInput === 0 && secrets.length === 0) {
+			// No secrets — exit panel and return to sidebar
+			if (document.activeElement instanceof HTMLElement) {
+				document.activeElement.blur();
+			}
+			focusArea = "list";
+			focusedOnePasswordInput = -1;
+			returnToSidebar();
 		}
 	}
 
