@@ -23,6 +23,7 @@ import { up as telemetry } from "./014-telemetry";
 import { up as sessionMemories } from "./015-session-memories";
 import { up as sessionCheckpoints } from "./016-session-checkpoints";
 import { up as taskSkills } from "./017-task-skills";
+import { up as optimizeSessionMemoriesIndices } from "./018-optimize-session-memories-indices";
 
 // -- Public interface consumed by Database.init() --
 
@@ -108,6 +109,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "task-skills",
 		up: taskSkills,
 	},
+	{
+		version: 18,
+		name: "optimize-session-memories-indices",
+		up: optimizeSessionMemoriesIndices,
+	},
 ];
 
 /** Simple checksum for audit trail (hash of migration name + version). */
@@ -144,9 +150,7 @@ function ensureMetaTables(db: MigrationDb): void {
 
 /** Read the highest applied version, or 0 if none. */
 function currentVersion(db: MigrationDb): number {
-	const row = db
-		.prepare("SELECT MAX(version) as version FROM schema_migrations")
-		.get();
+	const row = db.prepare("SELECT MAX(version) as version FROM schema_migrations").get();
 	if (row === undefined) return 0;
 	const v = row.version;
 	return typeof v === "number" ? v : 0;
@@ -163,9 +167,7 @@ function currentVersion(db: MigrationDb): number {
  */
 function repairBogusVersion(db: MigrationDb, current: number): number {
 	if (current < 2) return current;
-	const cols = db.prepare("PRAGMA table_info(memories)").all() as ReadonlyArray<
-		Record<string, unknown>
-	>;
+	const cols = db.prepare("PRAGMA table_info(memories)").all() as ReadonlyArray<Record<string, unknown>>;
 	const hasContentHash = cols.some((r) => r.name === "content_hash");
 	if (hasContentHash) return current;
 	// Version was stamped by old CLI without running actual migrations
@@ -184,8 +186,7 @@ export function hasPendingMigrations(db: MigrationDb): boolean {
 }
 
 /** The highest migration version defined. */
-export const LATEST_SCHEMA_VERSION =
-	MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
 
 /**
  * Run all pending migrations against `db`.
@@ -221,12 +222,7 @@ export function runMigrations(db: MigrationDb): void {
 				`INSERT INTO schema_migrations_audit
 				 (version, applied_at, duration_ms, checksum)
 				 VALUES (?, ?, ?, ?)`,
-			).run(
-				migration.version,
-				new Date().toISOString(),
-				Date.now() - start,
-				cs,
-			);
+			).run(migration.version, new Date().toISOString(), Date.now() - start, cs);
 
 			db.exec(`RELEASE migration_${migration.version}`);
 		} catch (err) {
