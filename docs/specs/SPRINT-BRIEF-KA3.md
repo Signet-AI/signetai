@@ -235,7 +235,7 @@ After `getAllScoredCandidates()` and before `selectWithBudget()`:
    AFTER the "Relevant Memories" section but BEFORE recovery context
 
 **Constraint injection format:**
-```
+```text
 ## Active Constraints
 
 Constraints for entities in scope. These always apply.
@@ -287,7 +287,7 @@ as existing graph boost).
 
 The KA spec defines the new candidate pool as:
 
-```
+```text
 traversal pool ∪ effective top-50 ∪ embedding top-50
 ```
 

@@ -1,7 +1,7 @@
 # Agent Relevance Feedback -- Spec Addendum
 
 **Parent spec**: `predictive-memory-scorer.md`
-**Status**: Draft
+**Status**: Approved (v1)
 **Priority**: P0 (training signal quality)
 
 ## Problem
@@ -39,7 +39,7 @@ a structured feedback request.
 
 **Request** (appended to hook inject string):
 
-```
+```text
 <memory-feedback>
 Rate how useful each injected memory was for your last response.
 Respond with ONLY a JSON object mapping memory IDs to scores.
@@ -119,7 +119,7 @@ The hierarchy:
 
 **Combined label**:
 
-```
+```text
 if agent_relevance_score is not null:
   label = agent_relevance_score * 0.7
         + fts_adjustment * 0.2
@@ -200,7 +200,7 @@ base model. Opt-in is handled conversationally by the agent:
 - After 7 days with no answer, defaults to `false` silently
 
 **Agent prompt** (injected into session start):
-```
+```text
 <signet-telemetry-prompt>
 At a natural moment early in this session, ask the user if they'd
 like to opt in to anonymous training telemetry. Signet collects
