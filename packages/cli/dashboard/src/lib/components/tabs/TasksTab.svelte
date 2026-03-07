@@ -99,8 +99,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 	if (!ts.detailOpen) {
 		if (e.key === "ArrowLeft" && isBoardFocused) {
 			e.preventDefault();
-			if (selectedColumn === 0 && selectedTaskInColumn === 0) {
-				// At first task of first column, return to sidebar
+			if (selectedColumn === 0) {
+				// At first column, return to sidebar
 				returnToSidebar();
 			} else if (selectedColumn > 0) {
 				// Move to previous column (skip empty columns)
