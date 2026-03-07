@@ -115,6 +115,35 @@ function buildFilterClause(params: RecallParams): FilterClause {
 }
 
 // ---------------------------------------------------------------------------
+// FTS5 query sanitization
+// ---------------------------------------------------------------------------
+
+/**
+ * Sanitize a query string for FTS5 MATCH.
+ *
+ * FTS5 interprets colons as column prefixes (`col:term`), and other
+ * characters as operators. Since our table only has a `content` column,
+ * any colon-prefixed term that isn't `content:` will throw
+ * "no such column". Strip colons and quote terms that contain special
+ * characters to prevent syntax errors.
+ */
+function sanitizeFtsQuery(raw: string): string {
+	// Split on OR (preserved as FTS5 operator) and whitespace
+	return raw
+		.split(/\s+/)
+		.map((token) => {
+			if (token === "OR" || token === "AND" || token === "NOT") return token;
+			// Strip characters that are FTS5 syntax: colons, quotes, parens, asterisks, carets
+			const cleaned = token.replace(/[":()^*]/g, "").trim();
+			if (!cleaned) return null;
+			// Double-quote the term to treat it as a literal phrase token
+			return `"${cleaned}"`;
+		})
+		.filter(Boolean)
+		.join(" ");
+}
+
+// ---------------------------------------------------------------------------
 // Main search orchestration
 // ---------------------------------------------------------------------------
 
@@ -124,7 +153,7 @@ export async function hybridRecall(
 	embedFn: EmbedFn,
 ): Promise<RecallResponse> {
 	const query = params.query;
-	const keywordQuery = (params.keywordQuery ?? params.query).trim();
+	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? params.query).trim());
 	const limit = params.limit ?? 10;
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
