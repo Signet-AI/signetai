@@ -4658,7 +4658,10 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 		}
 
 		try {
-			writeMemoryMd(body.content);
+			const result = writeMemoryMd(body.content);
+			if (!result.ok) {
+				return c.json({ error: result.error }, 400);
+			}
 			logger.info("hooks", "MEMORY.md synthesized");
 		} finally {
 			if (worker && lockToken !== null) {

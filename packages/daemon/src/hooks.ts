@@ -1809,12 +1809,12 @@ export function handleRecall(req: RecallRequest): RecallResponse {
  * Write MEMORY.md with backup of previous version.
  * Shared by the synthesis-complete endpoint and the synthesis worker.
  */
-export function writeMemoryMd(content: string): void {
+export function writeMemoryMd(content: string): { ok: true } | { ok: false; error: string } {
 	// Last-resort guard: refuse to overwrite MEMORY.md with JSON blobs
 	const trimmed = content.trim();
 	if (!trimmed) {
 		logger.error("hooks", "Refusing to write empty content to MEMORY.md");
-		return;
+		return { ok: false, error: "Refusing to write empty content to MEMORY.md" };
 	}
 	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
 		try {
@@ -1822,7 +1822,7 @@ export function writeMemoryMd(content: string): void {
 			// Parsed successfully — it's JSON, not markdown
 			logger.error("hooks", "Refusing to write JSON to MEMORY.md",
 				undefined, { preview: trimmed.slice(0, 200) });
-			return;
+			return { ok: false, error: "Refusing to write JSON to MEMORY.md" };
 		} catch {
 			// Not valid JSON — markdown that starts with [ or { is fine
 		}
@@ -1837,6 +1837,7 @@ export function writeMemoryMd(content: string): void {
 	}
 	const header = `<!-- generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} -->\n\n`;
 	writeFileSync(memoryMdPath, header + content);
+	return { ok: true };
 }
 
 /**

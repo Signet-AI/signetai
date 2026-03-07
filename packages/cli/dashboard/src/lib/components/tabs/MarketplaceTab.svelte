@@ -31,6 +31,7 @@ import {
 	sk,
 } from "$lib/stores/skills.svelte";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
+import { nav } from "$lib/stores/navigation.svelte";
 import { onMount } from "svelte";
 
 let section = $state<"skills" | "mcp">("skills");
@@ -266,7 +267,9 @@ function getFilterElements(): HTMLElement[] {
 	const allFocusable = rail.querySelectorAll(
 		'.rail-select, .rail-btn, .sync-actions button, .hero-switch, .toggle-row input, .input'
 	);
-	return Array.from(allFocusable) as HTMLElement[];
+	return (Array.from(allFocusable) as HTMLElement[]).filter(
+		(el) => !(el as HTMLButtonElement).disabled
+	);
 }
 
 // Calculate grid dimensions for 2D navigation
@@ -295,6 +298,11 @@ function getGridInfo(): { columns: number; cards: HTMLElement[] } {
 
 // Keyboard navigation
 function handleGlobalKey(e: KeyboardEvent) {
+	// Only handle events when Marketplace (skills) tab is active
+	if (nav.activeTab !== "skills") return;
+
+	if (e.defaultPrevented) return;
+
 	const target = e.target as HTMLElement;
 	const isInputFocused =
 		target.tagName === "INPUT" ||

@@ -252,8 +252,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 	// Arrow Down in 1Password panel (when panel itself or inputs focused)
 	if (e.key === "ArrowDown" && focusArea === "1password") {
 		e.preventDefault();
-		// Total inputs: token (0), prefix (1), 3 buttons (2-4)
-		const maxInputIndex = 4;
+		const targets = getOnePasswordFocusTargets();
+		const maxInputIndex = Math.max(0, targets.length - 1);
 		if (focusedOnePasswordInput < maxInputIndex) {
 			focusedOnePasswordInput++;
 			focusOnePasswordInputField(focusedOnePasswordInput);
@@ -286,16 +286,21 @@ function focusSecretItem(index: number): void {
 	}
 }
 
-function focusOnePasswordInputField(index: number): void {
-	// Input indices: 0=token, 1=prefix, 2=connect button, 3=import button, 4=disconnect button
+function getOnePasswordFocusTargets(): HTMLElement[] {
 	const panel = document.querySelector('.onepassword-panel');
-	if (!panel) return;
+	if (!panel) return [];
+	// Get all focusable elements in order, filtering out disabled ones
+	const all = panel.querySelectorAll('[data-focus-index]');
+	return (Array.from(all) as HTMLElement[]).filter(
+		(el) => !(el as HTMLButtonElement).disabled
+	);
+}
 
-	// Use data-focus-index to find the correct element
-	const targetElement = panel.querySelector(`[data-focus-index="${index}"]`) as HTMLElement;
-	if (targetElement) {
-		targetElement.focus();
-	}
+function focusOnePasswordInputField(index: number): void {
+	const targets = getOnePasswordFocusTargets();
+	if (targets.length === 0) return;
+	const clamped = Math.min(index, targets.length - 1);
+	targets[clamped]?.focus();
 }
 
 function handleOnePasswordPanelKeydown(e: KeyboardEvent): void {
@@ -319,7 +324,8 @@ function handleOnePasswordPanelKeydown(e: KeyboardEvent): void {
 	// Arrow Down navigates within 1Password inputs
 	if (e.key === "ArrowDown") {
 		e.preventDefault();
-		const maxInputIndex = 4;
+		const targets = getOnePasswordFocusTargets();
+		const maxInputIndex = Math.max(0, targets.length - 1);
 		if (focusedOnePasswordInput < maxInputIndex) {
 			focusedOnePasswordInput++;
 			focusOnePasswordInputField(focusedOnePasswordInput);

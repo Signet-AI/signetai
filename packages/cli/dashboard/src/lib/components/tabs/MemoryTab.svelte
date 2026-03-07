@@ -160,8 +160,9 @@ function handleGlobalKey(e: KeyboardEvent) {
 		return;
 	}
 
-	// ArrowDown from tab level should go to search input
-	if (e.key === "ArrowDown" && !isInputFocused) {
+	// ArrowDown from the memory tab trigger button to focus search input
+	const isTabButton = target.getAttribute?.("data-memory-tab") === "memory";
+	if (e.key === "ArrowDown" && isTabButton) {
 		e.preventDefault();
 		const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
 		if (searchInput) {
@@ -340,8 +341,9 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 			memoryTabButton.focus();
 		}
 	} else if (e.key === "Escape") {
-		// Clear search but stay in input
+		// Clear search and refresh results
 		mem.query = "";
+		queueMemorySearch();
 	} else if (e.key === 'Enter') {
 		doSearch();
 	}

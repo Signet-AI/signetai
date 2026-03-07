@@ -37,13 +37,24 @@ export const SIDEBAR_ORDER: readonly SidebarFocusItem[] = [
  * Map active tab to corresponding sidebar item
  */
 function tabToSidebarItem(tab: string): SidebarFocusItem {
-	if (tab === "settings" || tab === "pipeline" || tab === "connectors" || tab === "logs") {
-		return "engine-group";
+	switch (tab) {
+		case "settings":
+		case "pipeline":
+		case "connectors":
+		case "logs":
+			return "engine-group";
+		case "memory":
+		case "timeline":
+		case "embeddings":
+			return "memory-group";
+		case "config":
+		case "secrets":
+		case "skills":
+		case "tasks":
+			return tab;
+		default:
+			return "config";
 	}
-	if (tab === "memory" || tab === "timeline" || tab === "embeddings") {
-		return "memory-group";
-	}
-	return tab as SidebarFocusItem;
 }
 
 /**
@@ -65,10 +76,20 @@ export function setFocusZone(zone: FocusZone): void {
  * Map sidebar item to corresponding tab for preview
  */
 function sidebarItemToTab(item: SidebarFocusItem): TabId | null {
-	if (item === "memory-group") return "memory";
-	if (item === "engine-group") return "settings";
-	if (item === "theme-toggle" || item === "github-link") return null;
-	return item as TabId;
+	switch (item) {
+		case "memory-group":
+			return "memory";
+		case "engine-group":
+			return "settings";
+		case "theme-toggle":
+		case "github-link":
+			return null;
+		case "config":
+		case "secrets":
+		case "skills":
+		case "tasks":
+			return item;
+	}
 }
 
 /**
