@@ -440,21 +440,13 @@ function handlePageClick(e: MouseEvent) {
 	}
 }
 
-// Track when focus leaves the window
-function handleFocusOut(e: FocusEvent) {
-	// Only update if focus is actually leaving the document
-	if (!e.relatedTarget) {
-		// Focus left the window - keep current state
-		return;
-	}
-}
 </script>
 
 <svelte:head>
 	<title>Signet</title>
 </svelte:head>
 
-<svelte:window onkeydown={handleGlobalKey} onfocusin={handleFocusIn} onfocusout={handleFocusOut} onclick={handlePageClick} />
+<svelte:window onkeydown={handleGlobalKey} onfocusin={handleFocusIn} onclick={handlePageClick} />
 
 <Sidebar.Provider>
 	<AppSidebar

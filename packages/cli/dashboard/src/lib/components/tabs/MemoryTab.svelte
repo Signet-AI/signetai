@@ -313,10 +313,13 @@ function handleFilterKeydown(e: KeyboardEvent): void {
 		// For toggle buttons, allow space to work
 		// Don't prevent default
 	} else if (e.key === "Escape") {
-		// Close any open dropdown and return focus to filter button
-		// This is handled by the component itself, but we can ensure focus stays
 		e.preventDefault();
-		(document.activeElement as HTMLElement)?.focus();
+		e.stopPropagation();
+		// Return focus to the search input
+		const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+		if (searchInput) {
+			searchInput.focus();
+		}
 	}
 }
 

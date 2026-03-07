@@ -301,8 +301,6 @@ function handleGlobalKey(e: KeyboardEvent) {
 	// Only handle events when Marketplace (skills) tab is active
 	if (nav.activeTab !== "skills") return;
 
-	if (e.defaultPrevented) return;
-
 	const target = e.target as HTMLElement;
 	const isInputFocused =
 		target.tagName === "INPUT" ||
