@@ -512,6 +512,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 			const edge = hierEdges[i];
 			const s = edge.source as GraphNode;
 			const t = edge.target as GraphNode;
+			if (typeof s === "number" || typeof t === "number" || !s || !t) continue;
 			ctx.beginPath();
 			ctx.moveTo(s.x, s.y);
 			ctx.lineTo(t.x, t.y);
@@ -527,6 +528,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		if (edge.edgeType && edge.edgeType !== "knn") continue;
 		const s = edge.source as GraphNode;
 		const t = edge.target as GraphNode;
+		if (typeof s === "number" || typeof t === "number" || !s || !t) continue;
 		ctx.beginPath();
 		ctx.moveTo(s.x, s.y);
 		ctx.lineTo(t.x, t.y);
@@ -554,6 +556,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 			const edge = depEdges[i];
 			const s = edge.source as GraphNode;
 			const t = edge.target as GraphNode;
+			if (typeof s === "number" || typeof t === "number" || !s || !t) continue;
 			const style = dependencyEdgeStyle(edge.dependencyType ?? "", edge.strength ?? 0.5);
 			ctx.beginPath();
 			if (style.dash.length > 0) {

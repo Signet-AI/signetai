@@ -38,10 +38,24 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"predictor",
 ]);
 
+// Alias map for path-style hashes (e.g. #memory/constellation -> embeddings)
+const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
+	["memory/constellation", "embeddings"],
+	["memory/timeline", "timeline"],
+	["memory/knowledge", "knowledge"],
+	["memory/memories", "memory"],
+	["engine/settings", "settings"],
+	["engine/pipeline", "pipeline"],
+	["engine/predictor", "predictor"],
+	["engine/connectors", "connectors"],
+	["engine/logs", "logs"],
+]);
+
 function readTabFromHash(): TabId | null {
 	if (typeof window === "undefined") return null;
 	const hash = window.location.hash.slice(1);
-	return VALID_TABS.has(hash) ? (hash as TabId) : null;
+	if (VALID_TABS.has(hash)) return hash as TabId;
+	return HASH_ALIASES.get(hash) ?? null;
 }
 
 export const nav = $state({

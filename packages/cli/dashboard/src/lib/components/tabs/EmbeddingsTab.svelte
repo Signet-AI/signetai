@@ -1417,6 +1417,18 @@ $effect(() => {
 		}
 	}
 
+	// When entity overlay is active, also search KG nodes (entity:/aspect:/attr: IDs)
+	if (showEntityOverlay) {
+		for (const [id, point] of embeddingById) {
+			if (ids.has(id)) continue;
+			const haystack = [point.content, point.who ?? "", ...(point.tags ?? [])].join(" ").toLowerCase();
+			if (haystack.includes(query)) {
+				ids.add(id);
+				matches.push(point);
+			}
+		}
+	}
+
 	searchFilterIds = ids;
 	embeddingSearchMatches = matches.slice(0, 50);
 });
@@ -2246,7 +2258,7 @@ $effect(() => {
 									class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
 									onclick={() => updateGraphPhysics(DEFAULT_GRAPH_PHYSICS)}
 								>
-									physics reset
+									Physics Reset
 								</button>
 							</div>
 						</div>
