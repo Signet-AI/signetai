@@ -154,16 +154,21 @@ onMount(() => {
 
 	window.addEventListener("beforeunload", handleBeforeUnload);
 
-	// Listen for custom event from MemoryTab to focus tab bar
+	// Listen for custom events from child tabs to focus tab bars
 	const handleMemoryFocusTabs = () => {
 		focusMemoryTab(memoryTabIndex);
 	};
+	const handleEngineFocusTabs = () => {
+		focusEngineTab(engineTabIndex);
+	};
 	window.addEventListener("memory-focus-tabs", handleMemoryFocusTabs);
+	window.addEventListener("engine-focus-tabs", handleEngineFocusTabs);
 
 	return () => {
 		cleanupNav();
 		window.removeEventListener("beforeunload", handleBeforeUnload);
 		window.removeEventListener("memory-focus-tabs", handleMemoryFocusTabs);
+		window.removeEventListener("engine-focus-tabs", handleEngineFocusTabs);
 	};
 });
 
@@ -249,7 +254,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 	}
 
 	// Handle Engine tab group navigation
-	if (isEngineGroup(activeTab) && focus.zone === "page-content" && !isInputFocused) {
+	if (isEngineGroup(activeTab) && focus.zone === "page-content" && !isInputFocused && !e.defaultPrevented) {
 		if (engineTabFocus === "tabs") {
 			// Navigate between tabs
 			if (e.key === "ArrowLeft") {
@@ -279,7 +284,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 	}
 
 	// Handle Memory tab group navigation
-	if (isMemoryGroup(activeTab) && focus.zone === "page-content" && !isInputFocused) {
+	if (isMemoryGroup(activeTab) && focus.zone === "page-content" && !isInputFocused && !e.defaultPrevented) {
 		if (memoryTabFocus === "tabs") {
 			// Navigate between tabs
 			if (e.key === "ArrowLeft") {

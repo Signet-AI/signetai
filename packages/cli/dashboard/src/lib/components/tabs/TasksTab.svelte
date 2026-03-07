@@ -94,7 +94,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 
 	// Arrow navigation between columns and tasks (only when detail is closed and board is focused)
 	const isBoardFocused = document.activeElement?.classList.contains('task-card') ||
-		document.activeElement?.closest('.tasks-board') !== null;
+		document.activeElement?.closest('[data-column-idx]') !== null;
 
 	if (!ts.detailOpen) {
 		if (e.key === "ArrowLeft" && isBoardFocused) {
@@ -130,8 +130,11 @@ function handleGlobalKey(e: KeyboardEvent) {
 			if (!isTaskFocused && ts.tasks.length > 0) {
 				// First arrow right from sidebar - focus first task
 				selectedColumn = findFirstColumnWithTasks();
-				selectedTaskInColumn = 0;
-				focusTaskCard(selectedColumn, selectedTaskInColumn);
+				const colTasks = getColumnTasks(columnKeys[selectedColumn]);
+				if (colTasks.length > 0) {
+					selectedTaskInColumn = 0;
+					focusTaskCard(selectedColumn, selectedTaskInColumn);
+				}
 			} else if (selectedColumn < columnKeys.length - 1) {
 				// Move to next column (skip empty columns)
 				let newCol = selectedColumn + 1;

@@ -161,7 +161,9 @@
 				if (e.key === "ArrowLeft") {
 					const currentIdx = currentSectionIndex - 1;
 					if (currentIdx === 0) {
-						// At first section - let parent handle tab navigation (don't preventDefault)
+						// At first section - navigate back to engine tab bar
+						e.preventDefault();
+						window.dispatchEvent(new CustomEvent("engine-focus-tabs"));
 						return;
 					}
 					e.preventDefault();

@@ -365,10 +365,11 @@ function handleOnePasswordPanelKeydown(e: KeyboardEvent): void {
 	}
 	// Tab navigation within 1Password (let browser handle naturally but track state)
 	if (e.key === "Tab") {
-		// Update focusedOnePasswordInput based on shift key
+		const targets = getOnePasswordFocusTargets();
+		const maxIdx = Math.max(0, targets.length - 1);
 		if (e.shiftKey && focusedOnePasswordInput > 0) {
 			focusedOnePasswordInput--;
-		} else if (!e.shiftKey && focusedOnePasswordInput < 4) {
+		} else if (!e.shiftKey && focusedOnePasswordInput < maxIdx) {
 			focusedOnePasswordInput++;
 		}
 		// Don't prevent default - let browser handle tab navigation

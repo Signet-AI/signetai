@@ -301,6 +301,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 	// Only handle events when Marketplace (skills) tab is active
 	if (nav.activeTab !== "skills") return;
 
+	if (e.defaultPrevented) return;
+
 	const target = e.target as HTMLElement;
 	const isInputFocused =
 		target.tagName === "INPUT" ||
@@ -689,9 +691,9 @@ $effect(() => {
 					onclick={() => handleSectionChange("skills")}
 					onkeydown={(e) => {
 						if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-							e.preventDefault();
 							e.stopPropagation();
 							handleGlobalKey(e);
+							e.preventDefault();
 						}
 					}}
 				>
@@ -704,9 +706,9 @@ $effect(() => {
 					onclick={() => handleSectionChange("mcp")}
 					onkeydown={(e) => {
 						if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-							e.preventDefault();
 							e.stopPropagation();
 							handleGlobalKey(e);
+							e.preventDefault();
 						}
 					}}
 				>
@@ -794,10 +796,9 @@ $effect(() => {
 								onkeydown={(e) => {
 									// Prevent arrow keys from opening dropdown - only Enter should open
 									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-										e.preventDefault();
 										e.stopPropagation();
-										// Let global handler navigate between filters
 										handleGlobalKey(e);
+										e.preventDefault();
 									}
 									// Let Enter open the dropdown naturally
 								}}
@@ -832,10 +833,9 @@ $effect(() => {
 								onkeydown={(e) => {
 									// Prevent arrow keys from opening dropdown - only Enter should open
 									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-										e.preventDefault();
 										e.stopPropagation();
-										// Let global handler navigate between filters
 										handleGlobalKey(e);
+										e.preventDefault();
 									}
 									// Let Enter open the dropdown naturally
 								}}
@@ -868,10 +868,9 @@ $effect(() => {
 								onkeydown={(e) => {
 									// Prevent arrow keys from opening dropdown - only Enter should open
 									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-										e.preventDefault();
 										e.stopPropagation();
-										// Let global handler navigate between filters
 										handleGlobalKey(e);
+										e.preventDefault();
 									}
 									// Let Enter open the dropdown naturally
 								}}
@@ -902,9 +901,9 @@ $effect(() => {
 								onclick={refreshSkills}
 								onkeydown={(e) => {
 									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-										e.preventDefault();
 										e.stopPropagation();
 										handleGlobalKey(e);
+										e.preventDefault();
 									}
 								}}
 							>
@@ -918,9 +917,9 @@ $effect(() => {
 								onclick={refreshMcpServers}
 								onkeydown={(e) => {
 									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-										e.preventDefault();
 										e.stopPropagation();
 										handleGlobalKey(e);
+										e.preventDefault();
 									}
 								}}
 							>
@@ -934,9 +933,9 @@ $effect(() => {
 								onclick={refreshRoutedToolsNow}
 								onkeydown={(e) => {
 									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-										e.preventDefault();
 										e.stopPropagation();
 										handleGlobalKey(e);
+										e.preventDefault();
 									}
 								}}
 							>
@@ -965,9 +964,9 @@ $effect(() => {
 						onclick={saveMarketplaceReviewConfig}
 						onkeydown={(e) => {
 							if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-								e.preventDefault();
 								e.stopPropagation();
 								handleGlobalKey(e);
+								e.preventDefault();
 							}
 						}}
 					>
@@ -980,9 +979,9 @@ $effect(() => {
 						onclick={syncMarketplaceReviewsNow}
 						onkeydown={(e) => {
 							if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-								e.preventDefault();
 								e.stopPropagation();
 								handleGlobalKey(e);
+								e.preventDefault();
 							}
 						}}
 					>
