@@ -248,7 +248,14 @@ let isInstalled = $derived(
 		min-height: 140px;
 		width: 100%;
 	}
+
 	.card:hover {
+		border-color: var(--sig-accent);
+	}
+
+	.card:focus-visible {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 		border-color: var(--sig-accent);
 	}
 

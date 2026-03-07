@@ -25,6 +25,7 @@ export const mcpMarket = $state({
 	catalogTotal: 0,
 	catalogLoaded: false,
 	catalogLoading: false,
+	catalogDetail: false,
 
 	query: "",
 	view: "browse" as McpMarketView,

@@ -150,16 +150,30 @@
 			}
 		}
 
-		if (!isInputFocused && !jumpMenuOpen) {
-			if (e.key === "ArrowLeft") {
-				e.preventDefault();
-				const prevIdx = currentSectionIndex <= 1 ? sections.length - 1 : currentSectionIndex - 2;
-				switchSection(sections[prevIdx].id);
-			}
-			if (e.key === "ArrowRight") {
-				e.preventDefault();
-				const nextIdx = currentSectionIndex >= sections.length ? 0 : currentSectionIndex;
-				switchSection(sections[nextIdx].id);
+		// Don't interfere with input fields
+		if (isInputFocused) return;
+
+		// Only handle section navigation when not in jump menu
+		if (!jumpMenuOpen) {
+			// Arrow Up from content returns focus to parent tab bar (handled by parent)
+			// Arrow Left/Right cycle through sections within Settings tab
+			if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+				if (e.key === "ArrowLeft") {
+					const currentIdx = currentSectionIndex - 1;
+					if (currentIdx === 0) {
+						// At first section - navigate back to engine tab bar
+						e.preventDefault();
+						window.dispatchEvent(new CustomEvent("engine-focus-tabs"));
+						return;
+					}
+					e.preventDefault();
+					const prevIdx = currentIdx - 1;
+					switchSection(sections[prevIdx].id);
+				} else {
+					e.preventDefault();
+					const nextIdx = currentSectionIndex >= sections.length ? 0 : currentSectionIndex;
+					switchSection(sections[nextIdx].id);
+				}
 			}
 		}
 	}

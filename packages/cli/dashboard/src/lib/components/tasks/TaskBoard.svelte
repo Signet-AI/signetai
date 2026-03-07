@@ -5,12 +5,14 @@ import TaskCard from "./TaskCard.svelte";
 interface Props {
 	tasks: ScheduledTask[];
 	loading: boolean;
-	onopendetail: (id: string) => void;
+	selectedColumn?: number;
+	selectedTaskInColumn?: number;
+	onopendetail: (id: string, columnIndex: number, taskIndex: number) => void;
 	ontrigger: (id: string) => void;
 	ontoggle: (id: string, enabled: boolean) => void;
 }
 
-let { tasks, loading, onopendetail, ontrigger, ontoggle }: Props = $props();
+let { tasks, loading, selectedColumn = 0, selectedTaskInColumn = 0, onopendetail, ontrigger, ontoggle }: Props = $props();
 
 // Derive columns from task + run state
 let scheduled = $derived(
@@ -81,9 +83,9 @@ function getColumnTasks(key: string): ScheduledTask[] {
 	</div>
 {:else}
 	<div class="grid grid-cols-4 gap-3 p-[var(--space-md)] h-full min-h-0">
-		{#each columns as col (col.key)}
+		{#each columns as col, colIndex (col.key)}
 			{@const colTasks = getColumnTasks(col.key)}
-			<div class="flex flex-col gap-2 min-h-0">
+			<div class="flex flex-col gap-2 min-h-0" data-column-idx={colIndex}>
 				<div class="flex items-center gap-2 shrink-0 px-1">
 					<span
 						class="inline-block w-2 h-2 shrink-0"
@@ -104,11 +106,12 @@ function getColumnTasks(key: string): ScheduledTask[] {
 					</span>
 				</div>
 				<div class="flex flex-col gap-2 overflow-y-auto min-h-0 flex-1">
-					{#each colTasks as task (task.id)}
+					{#each colTasks as task, taskIndex (task.id)}
 						<TaskCard
 							{task}
 							columnKey={col.key}
-							onclick={() => onopendetail(task.id)}
+							isSelected={colIndex === selectedColumn && taskIndex === selectedTaskInColumn}
+							onclick={() => onopendetail(task.id, colIndex, taskIndex)}
 							ontrigger={() => ontrigger(task.id)}
 							ontoggle={(enabled) => ontoggle(task.id, enabled)}
 						/>
@@ -140,7 +143,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 					<TaskCard
 						{task}
 						columnKey="disabled"
-						onclick={() => onopendetail(task.id)}
+						onclick={() => onopendetail(task.id, -1, -1)}
 						ontrigger={() => ontrigger(task.id)}
 						ontoggle={(enabled) => ontoggle(task.id, enabled)}
 					/>

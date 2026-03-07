@@ -18,6 +18,7 @@ import {
 	setMemoryPinned,
 } from "$lib/api";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
+import { nav, setTab } from "$lib/stores/navigation.svelte";
 import { mem } from "$lib/stores/memory.svelte";
 import { toast } from "$lib/stores/toast.svelte";
 import { syncLayoutToStorage, workspaceLayout } from "$lib/stores/workspace-layout.svelte";
@@ -78,6 +79,7 @@ let embeddingSearch = $state("");
 let debouncedSearch = $state("");
 let searchDebounceTimer = 0;
 let embeddingSearchMatches = $state<EmbeddingPoint[]>([]);
+let searchInputEl: HTMLInputElement | undefined;
 let embeddingFilterIds = $state<Set<string> | null>(null);
 let searchFilterIds = $state<Set<string> | null>(null);
 let sourceFilterIds = $state<Set<string> | null>(null);
@@ -196,6 +198,51 @@ onMount(() => {
 	presetsMenuOpen = workspaceLayout.embeddings.presetsOpen;
 	sourcesMenuOpen = workspaceLayout.embeddings.sourcesOpen;
 });
+
+// Keyboard navigation for sub-tabs
+function handleKeydown(event: KeyboardEvent): void {
+	// Only handle events when Embeddings tab is active
+	if (nav.activeTab !== "embeddings") return;
+
+	if (event.defaultPrevented) return;
+
+	const target = event.target;
+	const isInput = target instanceof HTMLElement && (
+		target.tagName === "INPUT" ||
+		target.tagName === "TEXTAREA" ||
+		target.tagName === "SELECT" ||
+		target.isContentEditable
+	);
+
+	// Arrow Down from the embeddings tab trigger button to focus search input
+	const isTabButton = target instanceof HTMLElement &&
+		target.getAttribute("data-memory-tab") === "embeddings";
+	if (event.key === "ArrowDown" && isTabButton) {
+		event.preventDefault();
+		if (!controlsMenuOpen) {
+			controlsMenuOpen = true;
+			void tick().then(() => searchInputEl?.focus());
+		} else {
+			searchInputEl?.focus();
+		}
+		return;
+	}
+
+	// Arrow Up from search input to return to tab bar
+	if (event.key === "ArrowUp" && target === searchInputEl) {
+		event.preventDefault();
+		const embeddingsTabButton = document.querySelector('[data-memory-tab="embeddings"]') as HTMLElement;
+		if (embeddingsTabButton) {
+			embeddingsTabButton.focus();
+		} else {
+			searchInputEl?.blur();
+		}
+		return;
+	}
+
+	// Don't process other keys when in input
+	if (isInput) return;
+}
 
 async function fetchHealth(): Promise<void> {
 	healthReport = await getEmbeddingHealth();
@@ -1846,6 +1893,7 @@ $effect(() => {
 									type="text"
 									class="flex-1 font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-bright)] bg-[var(--sig-surface)] border border-[var(--sig-border-strong)] px-[9px] py-[6px] outline-none"
 									bind:value={embeddingSearch}
+									bind:this={searchInputEl}
 									oninput={() => (activePresetId = "custom-live")}
 									placeholder="Search constellation"
 								/>
@@ -2086,3 +2134,5 @@ $effect(() => {
 		</div>
 	</div>
 </div>
+
+<svelte:window onkeydown={handleKeydown} />

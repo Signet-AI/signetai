@@ -30,6 +30,8 @@ import {
 	setQuery,
 	sk,
 } from "$lib/stores/skills.svelte";
+import { returnToSidebar } from "$lib/stores/focus.svelte";
+import { nav } from "$lib/stores/navigation.svelte";
 import { onMount } from "svelte";
 
 let section = $state<"skills" | "mcp">("skills");
@@ -38,6 +40,10 @@ let reviewSyncOpen = $state(false);
 let refreshingSkills = $state(false);
 let refreshingMcp = $state(false);
 let refreshingTools = $state(false);
+let dropdownOpen = $state(false);
+let sortSelectOpen = $state(false);
+let secondarySortSelectOpen = $state(false);
+let categorySelectOpen = $state(false);
 const MOBILE_RAIL_QUERY = "(max-width: 1120px)";
 
 type SpotlightItem = {
@@ -236,6 +242,363 @@ async function refreshRoutedToolsNow(): Promise<void> {
 	}
 }
 
+// Navigation mode: "tabs" (Agent Skills/MCP Servers), "cards" (app drawer), or "filters" (rail panel)
+type NavMode = "tabs" | "cards" | "filters";
+let navMode = $state<NavMode>("tabs");
+let focusedCardIndex = $state(-1);
+let focusedFilterIndex = $state(0);
+
+// Get all focusable cards in current section
+function getCards(): HTMLElement[] {
+	return Array.from(
+		section === "skills"
+			? document.querySelectorAll('.card-wrap .card')
+			: document.querySelectorAll('.catalog-card')
+	) as HTMLElement[];
+}
+
+// Get all focusable filter elements in the rail in DOM order
+function getFilterElements(): HTMLElement[] {
+	const rail = document.querySelector('.store-rail');
+	if (!rail) return [];
+
+	// Get all interactive elements in DOM order for sequential navigation
+	// This matches how they appear visually so Arrow Down goes through each one
+	const allFocusable = rail.querySelectorAll(
+		'.rail-select, .rail-btn, .sync-actions button, .hero-switch, .toggle-row input, .input'
+	);
+	return (Array.from(allFocusable) as HTMLElement[]).filter(
+		(el) => !(el as HTMLButtonElement).disabled
+	);
+}
+
+// Calculate grid dimensions for 2D navigation
+function getGridInfo(): { columns: number; cards: HTMLElement[] } {
+	const cards = getCards();
+	if (cards.length === 0) return { columns: 1, cards };
+
+	// Find the grid container
+	const gridContainer = cards[0]?.parentElement;
+	if (!gridContainer) return { columns: 1, cards };
+
+	// Calculate columns by checking card positions
+	const firstCardRect = cards[0].getBoundingClientRect();
+	let columns = 1;
+	for (let i = 1; i < cards.length; i++) {
+		const cardRect = cards[i].getBoundingClientRect();
+		if (Math.abs(cardRect.top - firstCardRect.top) < 2) {
+			columns++;
+		} else {
+			break;
+		}
+	}
+
+	return { columns, cards };
+}
+
+// Keyboard navigation
+function handleGlobalKey(e: KeyboardEvent) {
+	// Only handle events when Marketplace (skills) tab is active
+	if (nav.activeTab !== "skills") return;
+
+	if (e.defaultPrevented) return;
+
+	const target = e.target as HTMLElement;
+	const isInputFocused =
+		target.tagName === "INPUT" ||
+		target.tagName === "TEXTAREA" ||
+		target.isContentEditable;
+
+	if (isInputFocused) return;
+
+	// If a dropdown is open, let it handle its own navigation
+	// Only intercept Escape and ArrowLeft to close the dropdown
+	if (dropdownOpen) {
+		if (e.key === "Escape" || e.key === "ArrowLeft") {
+			// Close dropdown and return to filter navigation
+			e.preventDefault();
+			e.stopPropagation();
+			dropdownOpen = false;
+			sortSelectOpen = false;
+			secondarySortSelectOpen = false;
+			categorySelectOpen = false;
+			// Re-focus the current filter button
+			const filters = getFilterElements();
+			if (filters[focusedFilterIndex]) {
+				filters[focusedFilterIndex].focus();
+			}
+			return;
+		}
+		// Let the dropdown handle Arrow Up/Down for option navigation
+		return;
+	}
+
+	// Escape handling - check detail views first
+	if (e.key === "Escape") {
+		const detailOpen = sk.detailOpen || mcpMarket.catalogDetail;
+		if (detailOpen) {
+			// Let child components handle closing their detail views
+			return;
+		}
+
+		// In cards mode, return to tabs mode
+		if (navMode === "cards") {
+			e.preventDefault();
+			navMode = "tabs";
+			focusedCardIndex = -1;
+			// Blur any focused card
+			const cards = getCards();
+			cards.forEach(c => c.blur());
+			return;
+		}
+
+		// In filters mode, return to cards mode
+		if (navMode === "filters") {
+			e.preventDefault();
+			navMode = "cards";
+			focusedFilterIndex = 0;
+			// Blur any focused filter
+			const filters = getFilterElements();
+			filters.forEach(f => f.blur());
+			// Focus the last card in the visible row
+			const { columns, cards } = getGridInfo();
+			if (cards.length > 0) {
+				const lastIndex = Math.min(columns - 1, cards.length - 1);
+				focusedCardIndex = lastIndex;
+				cards[lastIndex]?.focus();
+			}
+			return;
+		}
+
+		// No detail open and in tabs mode, return to sidebar
+		e.preventDefault();
+		returnToSidebar();
+		return;
+	}
+
+	// Tab navigation mode (Agent Skills / MCP Servers switching)
+	if (navMode === "tabs") {
+		// Arrow Down - enter cards mode
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			navMode = "cards";
+			const cards = getCards();
+			if (cards.length > 0) {
+				focusedCardIndex = 0;
+				cards[0]?.focus();
+			}
+			return;
+		}
+
+		// Arrow Left - switch sections or return to sidebar
+		if (e.key === "ArrowLeft") {
+			if (section === "skills") {
+				e.preventDefault();
+				returnToSidebar();
+				return;
+			}
+
+			if (section === "mcp") {
+				e.preventDefault();
+				handleSectionChange("skills");
+			}
+			return;
+		}
+
+		// Arrow Right - switch to MCP Servers from Agent Skills
+		if (e.key === "ArrowRight" && section === "skills") {
+			e.preventDefault();
+			handleSectionChange("mcp");
+			return;
+		}
+
+		return;
+	}
+
+	// Cards navigation mode (2D grid navigation)
+	if (navMode === "cards") {
+		const { columns, cards } = getGridInfo();
+
+		// Arrow Down - navigate down in grid
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			if (cards.length === 0) return;
+
+			// If no card focused, focus first
+			if (focusedCardIndex === -1) {
+				focusedCardIndex = 0;
+				cards[0]?.focus();
+				return;
+			}
+
+			// Navigate down (add columns to index)
+			const newIndex = focusedCardIndex + columns;
+			if (newIndex < cards.length) {
+				focusedCardIndex = newIndex;
+				cards[newIndex]?.focus();
+			}
+			return;
+		}
+
+		// Arrow Up - navigate up in grid
+		if (e.key === "ArrowUp") {
+			e.preventDefault();
+			if (cards.length === 0 || focusedCardIndex === -1) return;
+
+			// Navigate up (subtract columns from index)
+			const newIndex = focusedCardIndex - columns;
+			if (newIndex >= 0) {
+				focusedCardIndex = newIndex;
+				cards[newIndex]?.focus();
+			} else if (focusedCardIndex < columns) {
+				// On first row, return to tabs mode
+				navMode = "tabs";
+				cards[focusedCardIndex]?.blur();
+				focusedCardIndex = -1;
+			}
+			return;
+		}
+
+		// Arrow Left - navigate left in grid, or to previous section
+		if (e.key === "ArrowLeft") {
+			e.preventDefault();
+			if (cards.length === 0) return;
+
+			// If no card focused or on first card of row
+function handleGlobalKey(e: KeyboardEvent) {
+	// Only handle events when Marketplace (skills) tab is active
+	if (nav.activeTab !== "skills") return;
+
+	if (e.defaultPrevented) return;
+
+	const target = e.target as HTMLElement;
+
+				if (section === "skills") {
+					returnToSidebar();
+				} else if (section === "mcp") {
+					handleSectionChange("skills");
+				}
+				return;
+			}
+
+			// Check if we're at the start of a row
+			if (focusedCardIndex % columns === 0) {
+				// At start of row, return to tabs mode
+				navMode = "tabs";
+				focusedCardIndex = -1;
+				cards.forEach(c => c.blur());
+				return;
+			}
+
+			// Navigate left
+			focusedCardIndex--;
+			cards[focusedCardIndex]?.focus();
+			return;
+		}
+
+		// Arrow Right - navigate right in grid, or to filters
+		if (e.key === "ArrowRight") {
+			e.preventDefault();
+			if (cards.length === 0) return;
+
+			// If no card focused, focus first
+			if (focusedCardIndex === -1) {
+				focusedCardIndex = 0;
+				cards[0]?.focus();
+				return;
+			}
+
+			// Check if we're at the end of a row (or last card)
+			const isAtEndOfRow = (focusedCardIndex + 1) % columns === 0;
+			const isLastCard = focusedCardIndex === cards.length - 1;
+
+			if (isAtEndOfRow || isLastCard) {
+				// Move to filters panel
+				navMode = "filters";
+				focusedFilterIndex = 0;
+				cards.forEach(c => c.blur());
+
+				const filters = getFilterElements();
+				if (filters.length > 0) {
+					filters[0]?.focus();
+				}
+				return;
+			}
+
+			// Navigate right
+			focusedCardIndex++;
+			cards[focusedCardIndex]?.focus();
+			return;
+		}
+
+		return;
+	}
+
+	// Filters navigation mode
+	if (navMode === "filters") {
+		const filters = getFilterElements();
+
+		// Arrow Up - navigate up in filters (don't open)
+		if (e.key === "ArrowUp") {
+			e.preventDefault();
+			e.stopPropagation();
+			if (filters.length === 0) return;
+
+			if (focusedFilterIndex > 0) {
+				focusedFilterIndex--;
+				filters[focusedFilterIndex]?.focus();
+			}
+			return;
+		}
+
+		// Arrow Down - navigate down in filters (don't open)
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			e.stopPropagation();
+			if (filters.length === 0) return;
+
+			if (focusedFilterIndex < filters.length - 1) {
+				focusedFilterIndex++;
+				filters[focusedFilterIndex]?.focus();
+			}
+			return;
+		}
+
+		// Arrow Left or Escape - return to cards mode
+		if (e.key === "ArrowLeft" || e.key === "Escape") {
+			e.preventDefault();
+			navMode = "cards";
+			focusedFilterIndex = 0;
+			filters.forEach(f => f.blur());
+
+			const { columns, cards } = getGridInfo();
+			if (cards.length > 0) {
+				// Focus the last card in the first visible row
+				const lastIndex = Math.min(columns - 1, cards.length - 1);
+				focusedCardIndex = lastIndex;
+				cards[lastIndex]?.focus();
+			}
+			return;
+		}
+
+		// Arrow Right - move to next section (already at filters, so exit right)
+		if (e.key === "ArrowRight") {
+			// If on a filter button, let it handle opening via Enter
+			// If the filter is already open, this moves to next section (no action needed)
+			// The select components will handle their own dropdown navigation
+			return;
+		}
+
+		// Enter - open the focused filter element
+		if (e.key === "Enter") {
+			// Let the select/button handle Enter naturally to open
+			return;
+		}
+
+		return;
+	}
+}
+
 onMount(() => {
 	const media = window.matchMedia(MOBILE_RAIL_QUERY);
 	const applyRailLayoutState = (): void => {
@@ -258,8 +621,35 @@ onMount(() => {
 	void refreshMarketplaceMcpTools();
 	void loadMarketplaceReviewConfig();
 
+	// Focus tracking for cards - use event delegation on document
+	function handleCardFocus(e: FocusEvent): void {
+		const target = e.target as HTMLElement;
+		if (!target) return;
+
+		// Check if focus landed on a card
+		const cards = getCards();
+		const cardIndex = cards.indexOf(target);
+		if (cardIndex !== -1) {
+			navMode = "cards";
+			focusedCardIndex = cardIndex;
+			return;
+		}
+
+		// Check if focus landed on a filter element
+		const filters = getFilterElements();
+		const filterIndex = filters.indexOf(target);
+		if (filterIndex !== -1) {
+			navMode = "filters";
+			focusedFilterIndex = filterIndex;
+			return;
+		}
+	}
+
+	document.addEventListener("focusin", handleCardFocus);
+
 	return () => {
 		media.removeEventListener("change", applyRailLayoutState);
+		document.removeEventListener("focusin", handleCardFocus);
 	};
 });
 
@@ -277,6 +667,8 @@ $effect(() => {
 	void fetchTargetReviews();
 });
 </script>
+
+<svelte:window onkeydown={handleGlobalKey} />
 
 <div class="store-shell">
 	<section class="hero">
@@ -297,6 +689,13 @@ $effect(() => {
 					size="sm"
 					class={`hero-switch ${section === "skills" ? "hero-switch-active" : ""}`}
 					onclick={() => handleSectionChange("skills")}
+					onkeydown={(e) => {
+						if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+							e.stopPropagation();
+							handleGlobalKey(e);
+							e.preventDefault();
+						}
+					}}
 				>
 					Agent Skills
 				</Button>
@@ -305,6 +704,13 @@ $effect(() => {
 					size="sm"
 					class={`hero-switch ${section === "mcp" ? "hero-switch-active" : ""}`}
 					onclick={() => handleSectionChange("mcp")}
+					onkeydown={(e) => {
+						if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+							e.stopPropagation();
+							handleGlobalKey(e);
+							e.preventDefault();
+						}
+					}}
 				>
 					MCP Servers
 				</Button>
@@ -379,8 +785,24 @@ $effect(() => {
 							type="single"
 							value={section === "skills" ? sk.sortBy : mcpMarket.sortBy}
 							onValueChange={(v) => applySort(v ?? "popularity")}
+							open={sortSelectOpen}
+							onOpenChange={(open) => {
+								sortSelectOpen = open;
+								dropdownOpen = open;
+							}}
 						>
-							<Select.Trigger class="rail-select">{activeSortLabel}</Select.Trigger>
+							<Select.Trigger
+								class="rail-select"
+								onkeydown={(e) => {
+									// Prevent arrow keys from opening dropdown - only Enter should open
+									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+										e.stopPropagation();
+										handleGlobalKey(e);
+										e.preventDefault();
+									}
+									// Let Enter open the dropdown naturally
+								}}
+							>{activeSortLabel}</Select.Trigger>
 							<Select.Content class="section-select-content">
 								{#if section === "skills"}
 									<Select.Item value="popularity" label="Popularity" class="section-select-item" />
@@ -400,8 +822,24 @@ $effect(() => {
 							type="single"
 							value={section === "skills" ? sk.providerFilter : mcpMarket.source}
 							onValueChange={(v) => applySecondarySort(v ?? "all")}
+							open={secondarySortSelectOpen}
+							onOpenChange={(open) => {
+								secondarySortSelectOpen = open;
+								dropdownOpen = open;
+							}}
 						>
-							<Select.Trigger class="rail-select">{activeSecondarySortLabel}</Select.Trigger>
+							<Select.Trigger
+								class="rail-select"
+								onkeydown={(e) => {
+									// Prevent arrow keys from opening dropdown - only Enter should open
+									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+										e.stopPropagation();
+										handleGlobalKey(e);
+										e.preventDefault();
+									}
+									// Let Enter open the dropdown naturally
+								}}
+							>{activeSecondarySortLabel}</Select.Trigger>
 							<Select.Content class="section-select-content">
 								{#if section === "skills"}
 									<Select.Item value="all" label="All providers" class="section-select-item" />
@@ -415,8 +853,28 @@ $effect(() => {
 							</Select.Content>
 						</Select.Root>
 
-						<Select.Root type="single" value={activeCategory} onValueChange={(v) => applyCategory(v ?? "all")}>
-							<Select.Trigger class="rail-select">{activeCategoryLabel}</Select.Trigger>
+						<Select.Root
+							type="single"
+							value={activeCategory}
+							onValueChange={(v) => applyCategory(v ?? "all")}
+							open={categorySelectOpen}
+							onOpenChange={(open) => {
+								categorySelectOpen = open;
+								dropdownOpen = open;
+							}}
+						>
+							<Select.Trigger
+								class="rail-select"
+								onkeydown={(e) => {
+									// Prevent arrow keys from opening dropdown - only Enter should open
+									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+										e.stopPropagation();
+										handleGlobalKey(e);
+										e.preventDefault();
+									}
+									// Let Enter open the dropdown naturally
+								}}
+							>{activeCategoryLabel}</Select.Trigger>
 							<Select.Content class="section-select-content">
 								{#each categoryOptions as category (category)}
 									<Select.Item value={category} label={category} class="section-select-item" />
@@ -435,19 +893,61 @@ $effect(() => {
 				<Collapsible.Content>
 					<div class="rail-content">
 						<div class="rail-refresh">
-							<Button variant="outline" size="sm" class="rail-btn" disabled={refreshingSkills} onclick={refreshSkills}>
+							<Button
+								variant="outline"
+								size="sm"
+								class="rail-btn"
+								disabled={refreshingSkills}
+								onclick={refreshSkills}
+								onkeydown={(e) => {
+									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+										e.stopPropagation();
+										handleGlobalKey(e);
+										e.preventDefault();
+									}
+								}}
+							>
 								{refreshingSkills ? "Refreshing Skills..." : "Refresh Skills"}
 							</Button>
-							<Button variant="outline" size="sm" class="rail-btn" disabled={refreshingMcp} onclick={refreshMcpServers}>
+							<Button
+								variant="outline"
+								size="sm"
+								class="rail-btn"
+								disabled={refreshingMcp}
+								onclick={refreshMcpServers}
+								onkeydown={(e) => {
+									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+										e.stopPropagation();
+										handleGlobalKey(e);
+										e.preventDefault();
+									}
+								}}
+							>
 								{refreshingMcp ? "Refreshing MCP Servers..." : "Refresh MCP Servers"}
 							</Button>
-							<Button variant="outline" size="sm" class="rail-btn" disabled={refreshingTools} onclick={refreshRoutedToolsNow}>
+							<Button
+								variant="outline"
+								size="sm"
+								class="rail-btn"
+								disabled={refreshingTools}
+								onclick={refreshRoutedToolsNow}
+								onkeydown={(e) => {
+									if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+										e.stopPropagation();
+										handleGlobalKey(e);
+										e.preventDefault();
+									}
+								}}
+							>
 								{refreshingTools ? "Refreshing Routed Tools..." : "Refresh Routed Tools"}
 							</Button>
 						</div>
 
 				<label class="toggle-row">
-					<input type="checkbox" bind:checked={reviewsMarket.configEnabled} />
+					<input
+						type="checkbox"
+						bind:checked={reviewsMarket.configEnabled}
+					/>
 					<span>Enable endpoint sync</span>
 				</label>
 				<input
@@ -457,10 +957,34 @@ $effect(() => {
 					bind:value={reviewsMarket.configEndpointUrl}
 				/>
 				<div class="sync-actions">
-					<Button variant="outline" size="sm" disabled={reviewsMarket.configSaving} onclick={saveMarketplaceReviewConfig}>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={reviewsMarket.configSaving}
+						onclick={saveMarketplaceReviewConfig}
+						onkeydown={(e) => {
+							if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+								e.stopPropagation();
+								handleGlobalKey(e);
+								e.preventDefault();
+							}
+						}}
+					>
 						{reviewsMarket.configSaving ? "Saving..." : "Save Sync Config"}
 					</Button>
-					<Button variant="outline" size="sm" disabled={reviewsMarket.syncing} onclick={syncMarketplaceReviewsNow}>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={reviewsMarket.syncing}
+						onclick={syncMarketplaceReviewsNow}
+						onkeydown={(e) => {
+							if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+								e.stopPropagation();
+								handleGlobalKey(e);
+								e.preventDefault();
+							}
+						}}
+					>
 						{reviewsMarket.syncing ? "Syncing..." : `Sync Now (${reviewsMarket.pendingSync})`}
 					</Button>
 				</div>
@@ -561,6 +1085,19 @@ $effect(() => {
 		border: 1px solid var(--sig-border-strong);
 		outline: none;
 		border-radius: 0.5rem;
+		transition: border-color 0.15s;
+	}
+
+	.module-search:hover,
+	.input:hover {
+		border-color: var(--sig-accent);
+	}
+
+	.module-search:focus,
+	.input:focus {
+		border-color: var(--sig-accent);
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	:global(.section-select-content) {
@@ -639,6 +1176,16 @@ $effect(() => {
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
+		transition: border-color 0.15s;
+	}
+
+	:global(.view-tab:hover) {
+		border-color: var(--sig-accent);
+	}
+
+	:global(.view-tab:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	:global(.view-tab.view-tab-active) {
@@ -657,6 +1204,16 @@ $effect(() => {
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
+		transition: border-color 0.15s, background-color 0.15s;
+	}
+
+	:global(.hero-switch:hover) {
+		border-color: var(--sig-accent);
+	}
+
+	:global(.hero-switch:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	:global(.hero-switch.hero-switch-active) {
@@ -705,6 +1262,16 @@ $effect(() => {
 		letter-spacing: 0.05em;
 		color: var(--sig-text-bright);
 		cursor: pointer;
+		transition: color 0.15s;
+	}
+
+	:global(.rail-trigger:hover) {
+		color: var(--sig-accent);
+	}
+
+	:global(.rail-trigger:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 2px;
 	}
 
 	:global(.rail-content) {
@@ -725,6 +1292,16 @@ $effect(() => {
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border-strong);
 		border-radius: 0.5rem;
+		transition: border-color 0.15s, outline-color 0.15s;
+	}
+
+	:global(.rail-select:hover) {
+		border-color: var(--sig-accent);
+	}
+
+	:global(.rail-select:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	.rail-refresh {
@@ -739,6 +1316,16 @@ $effect(() => {
 		font-family: var(--font-mono);
 		font-size: 10px;
 		height: 30px;
+		transition: border-color 0.15s, outline-color 0.15s;
+	}
+
+	:global(.rail-btn:hover) {
+		border-color: var(--sig-accent);
+	}
+
+	:global(.rail-btn:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	.muted {
@@ -763,10 +1350,35 @@ $effect(() => {
 		gap: 6px;
 	}
 
+	.toggle-row input[type="checkbox"] {
+		width: 16px;
+		height: 16px;
+		cursor: pointer;
+		accent-color: var(--sig-accent);
+	}
+
+	.toggle-row input[type="checkbox"]:focus-visible {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
+	}
+
 	.sync-actions {
 		display: flex;
 		gap: 6px;
 		flex-wrap: wrap;
+	}
+
+	.sync-actions :global(button) {
+		transition: border-color 0.15s;
+	}
+
+	.sync-actions :global(button:hover) {
+		border-color: var(--sig-accent);
+	}
+
+	.sync-actions :global(button:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	.error {

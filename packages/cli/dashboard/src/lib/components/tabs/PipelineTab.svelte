@@ -16,6 +16,7 @@
 	} from "$lib/components/pipeline/pipeline-store.svelte";
 	import { PIPELINE_NODES } from "$lib/components/pipeline/pipeline-types";
 	import { workspaceLayout, syncLayoutToStorage } from "$lib/stores/workspace-layout.svelte";
+	import { nav } from "$lib/stores/navigation.svelte";
 
 
 	function handleSelectNode(id: string) {
@@ -44,6 +45,25 @@
 			feedViewport.scrollHeight - feedViewport.scrollTop -
 			feedViewport.clientHeight;
 		return distance <= AUTO_SCROLL_THRESHOLD_PX;
+	}
+
+	// Keyboard navigation - let parent handle tab bar navigation and Escape
+	function handleGlobalKey(e: KeyboardEvent) {
+		// Only handle events when Pipeline tab is active
+		if (nav.activeTab !== "pipeline") return;
+
+		if (e.defaultPrevented) return;
+
+		const target = e.target as HTMLElement;
+		const isInputFocused =
+			target.tagName === "INPUT" ||
+			target.tagName === "TEXTAREA" ||
+			target.isContentEditable;
+
+		if (isInputFocused) return;
+
+		// Escape is handled by parent (+page.svelte) for engine group content→tabs flow
+		// No additional key handling needed here — parent owns tab bar and Escape
 	}
 
 	function updateFeedPositionFlags(): void {
@@ -328,6 +348,8 @@
 		return `${raw.slice(0, MAX_CHARS)}\n...truncated`;
 	}
 </script>
+
+<svelte:window onkeydown={handleGlobalKey} />
 
 <div class="flex flex-col h-full overflow-hidden">
 	<!-- Toolbar -->

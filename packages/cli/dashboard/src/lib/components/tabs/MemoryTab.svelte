@@ -10,6 +10,8 @@ import {
 	openEditForm,
 	closeEditForm,
 } from "$lib/stores/memory.svelte";
+import { setTab, nav, isMemoryGroup } from "$lib/stores/navigation.svelte";
+import { returnToSidebar } from "$lib/stores/focus.svelte";
 import MemoryForm from "$lib/components/memory/MemoryForm.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -139,7 +141,220 @@ function formatIsoDate(value: string): string {
 		day: "numeric",
 	});
 }
+
+// Keyboard navigation for sub-tabs and memory cards
+function handleGlobalKey(e: KeyboardEvent) {
+	// Only handle events when any Memory group tab is active
+	if (!isMemoryGroup(nav.activeTab)) return;
+
+	const target = e.target as HTMLElement;
+	const isInputFocused =
+		target.tagName === "INPUT" ||
+		target.tagName === "TEXTAREA" ||
+		target.isContentEditable;
+
+	if (isInputFocused) return;
+
+	// Don't intercept arrow keys if focus is on a card (or descendant) or filter - let those handlers work
+	if (target.closest('.doc-card') || target.closest('.filter-row')) {
+		return;
+	}
+
+	// ArrowDown from the memory tab trigger button to focus search input
+	const isTabButton = target.getAttribute?.("data-memory-tab") === "memory";
+	if (e.key === "ArrowDown" && isTabButton) {
+		e.preventDefault();
+		const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+		if (searchInput) {
+			searchInput.focus();
+		}
+		return;
+	}
+}
+
+// Track current filter element focus for left/right navigation
+function getFilterElements(): HTMLElement[] {
+	const row = document.querySelector('.filter-row');
+	if (!row) return [];
+
+	// Get all interactive elements in order they appear in DOM
+	return Array.from(row.querySelectorAll('button, [role="button"], input, select, [data-radix-collection-item]')) as HTMLElement[];
+}
+
+function getCurrentFilterIndex(): number {
+	const elements = getFilterElements();
+	const activeElement = document.activeElement as HTMLElement;
+	return elements.indexOf(activeElement);
+}
+
+// Handle keyboard navigation within memory cards (2D grid)
+function handleCardKeydown(e: KeyboardEvent): void {
+	const cards = Array.from(document.querySelectorAll('.doc-card')) as HTMLElement[];
+	const currentIndex = cards.indexOf(e.currentTarget as HTMLElement);
+
+	if (currentIndex === -1) return; // Card not found in array
+
+	// Get grid layout info
+	const grid = document.querySelector('.memory-cards-grid');
+	if (!grid) return;
+
+	// Detect number of columns in the grid
+	let columns = 1;
+	const computedStyle = window.getComputedStyle(grid);
+	const gridColumns = computedStyle.gridTemplateColumns;
+	if (gridColumns && gridColumns !== 'none') {
+		columns = gridColumns.split(' ').length;
+	}
+
+	// Calculate current row and column position
+	const currentRow = Math.floor(currentIndex / columns);
+	const currentCol = currentIndex % columns;
+	const totalRows = Math.ceil(cards.length / columns);
+
+	if (e.key === "ArrowDown") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Move to next row (same column position)
+		const nextRow = currentRow + 1;
+		const nextIndex = nextRow * columns + currentCol;
+
+		// Only move if there's a card in that position
+		if (nextIndex < cards.length) {
+			cards[nextIndex].focus();
+			cards[nextIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+		}
+	} else if (e.key === "ArrowUp") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Move to previous row (same column position)
+		if (currentRow > 0) {
+			// Not in top row, move to card above
+			const prevIndex = (currentRow - 1) * columns + currentCol;
+			if (prevIndex >= 0 && prevIndex < cards.length) {
+				cards[prevIndex].focus();
+			}
+		} else {
+			// At top row, go to last filter element
+			const filterElements = getFilterElements();
+			if (filterElements.length > 0) {
+				const lastFilter = filterElements[filterElements.length - 1];
+				lastFilter.focus();
+				lastFilter.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+			} else {
+				// No filters, go to search
+				const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+				if (searchInput) {
+					searchInput.focus();
+				}
+			}
+		}
+	} else if (e.key === "ArrowRight") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Move to next card
+		if (currentIndex < cards.length - 1) {
+			cards[currentIndex + 1].focus();
+		}
+	} else if (e.key === "ArrowLeft") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Move to previous card
+		if (currentIndex > 0) {
+			cards[currentIndex - 1].focus();
+		}
+	} else if (e.key === "Escape") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Return focus to search input
+		const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+		if (searchInput) searchInput.focus();
+	}
+}
+
+// Handle keyboard navigation for filter row
+function handleFilterKeydown(e: KeyboardEvent): void {
+	const elements = getFilterElements();
+	const currentIndex = getCurrentFilterIndex();
+
+	if (e.key === "ArrowRight") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Move to next filter element
+		if (currentIndex < elements.length - 1) {
+			elements[currentIndex + 1].focus();
+		}
+	} else if (e.key === "ArrowLeft") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Move to previous filter element
+		if (currentIndex > 0) {
+			elements[currentIndex - 1].focus();
+		}
+		// If at first filter, stay there (don't return to sidebar)
+	} else if (e.key === "ArrowDown") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Go to first memory card
+		const cards = document.querySelectorAll('.doc-card');
+		if (cards.length > 0 && cards[0] instanceof HTMLElement) {
+			cards[0].focus();
+			// Scroll card into view if needed
+			cards[0].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+		}
+	} else if (e.key === "ArrowUp") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Dispatch custom event to go to tab bar (sets memoryTabFocus = "tabs")
+		window.dispatchEvent(new CustomEvent('memory-focus-tabs'));
+	} else if (e.key === "Enter") {
+		// Allow Enter to proceed with default behavior (opening filter)
+		// Don't prevent default
+	} else if (e.key === " ") {
+		// For toggle buttons, allow space to work
+		// Don't prevent default
+	} else if (e.key === "Escape") {
+		e.preventDefault();
+		e.stopPropagation();
+		// Return focus to the search input
+		const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+		if (searchInput) {
+			searchInput.focus();
+		}
+	}
+}
+
+// Handle keyboard navigation for search input
+function handleSearchKeydown(e: KeyboardEvent): void {
+	if (e.key === "ArrowDown") {
+		e.preventDefault();
+		// Go to filter row (first interactive element)
+		const filterElements = getFilterElements();
+		if (filterElements.length > 0) {
+			filterElements[0].focus();
+		} else {
+			// No filters, go to first card
+			const firstCard = document.querySelector('.doc-card') as HTMLElement;
+			if (firstCard) firstCard.focus();
+		}
+	} else if (e.key === "ArrowUp") {
+		e.preventDefault();
+		// Return to tab bar by focusing the currently active memory tab button
+		const memoryTabButton = document.querySelector(`[data-memory-tab="${nav.activeTab}"]`) as HTMLElement;
+		if (memoryTabButton) {
+			memoryTabButton.focus();
+		}
+	} else if (e.key === "Escape") {
+		// Clear search and refresh results
+		mem.query = "";
+		queueMemorySearch();
+	} else if (e.key === 'Enter') {
+		doSearch();
+	}
+}
+
 </script>
+
+<svelte:window onkeydown={handleGlobalKey} />
 
 <div class="flex flex-col flex-1 min-h-0 overflow-hidden">
 	<section class="flex flex-col flex-1 min-h-0 gap-2.5 p-3 bg-[var(--sig-bg)]">
@@ -154,12 +369,12 @@ function formatIsoDate(value: string): string {
 		{/if}
 		<Input
 			type="text"
-			class="flex-1 text-[12px] text-[var(--sig-text-bright)] bg-transparent
+			class="memory-search-input flex-1 text-[12px] text-[var(--sig-text-bright)] bg-transparent
 				border-none shadow-none outline-none focus-visible:ring-0
 				placeholder:text-[var(--sig-text-muted)] h-auto py-0 px-0"
 			bind:value={mem.query}
 			oninput={queueMemorySearch}
-			onkeydown={(e) => e.key === 'Enter' && doSearch()}
+			onkeydown={handleSearchKeydown}
 			placeholder="Search across memories..."
 		/>
 		{#if mem.searched || hasActiveFilters() || mem.similarSourceId}
@@ -173,9 +388,22 @@ function formatIsoDate(value: string): string {
 	</label>
 
 	<!-- Filter row -->
-	<div class="flex flex-wrap items-center gap-2">
+	<div class="filter-row flex flex-wrap items-center gap-2">
 		<Select.Root type="single" value={mem.filterWho} onValueChange={(v) => { mem.filterWho = v ?? ""; }}>
-			<Select.Trigger class="font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[120px] max-w-[180px]">
+			<Select.Trigger
+				class="font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[120px] max-w-[180px]"
+				onkeydown={(e) => {
+					// Let navigation keys work even when select is focused
+					if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "ArrowRight") {
+						e.stopPropagation(); // Prevent Select from handling navigation keys
+						handleFilterKeydown(e);
+					} else if (e.key === "Enter") {
+						e.preventDefault();
+						// Toggle the select dropdown
+						(e.currentTarget as HTMLElement).click();
+					}
+				}}
+			>
 				{mem.filterWho || "Any source"}
 			</Select.Trigger>
 			<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg">
@@ -191,6 +419,15 @@ function formatIsoDate(value: string): string {
 				bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg h-auto py-1 px-2"
 			placeholder="Tags"
 			bind:value={mem.filterTags}
+			onkeydown={(e) => {
+				if (e.key === "Escape") {
+					e.preventDefault();
+					(e.currentTarget as HTMLElement).blur();
+				} else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+					// Only intercept vertical navigation, let Left/Right move caret
+					handleFilterKeydown(e);
+				}
+			}}
 		/>
 
 		<Input
@@ -200,12 +437,33 @@ function formatIsoDate(value: string): string {
 			min="0" max="1" step="0.1"
 			bind:value={mem.filterImportanceMin}
 			placeholder="imp"
+			onkeydown={(e) => {
+				if (e.key === "Escape") {
+					e.preventDefault();
+					(e.currentTarget as HTMLElement).blur();
+				}
+				// Don't intercept arrow keys — let native number input stepping and caret work
+			}}
 		/>
 
 		<Popover.Root bind:open={sincePickerOpen}>
 			<Popover.Trigger>
 				{#snippet child({ props })}
-					<button {...props} class={dateTriggerClass}>
+					<button
+						{...props}
+						class={dateTriggerClass}
+						onkeydown={(e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								sincePickerOpen = !sincePickerOpen;
+							} else if (e.key === "Escape" && sincePickerOpen) {
+								e.preventDefault();
+								sincePickerOpen = false;
+							} else {
+								handleFilterKeydown(e);
+							}
+						}}
+					>
 						<span class="truncate">{formatIsoDate(mem.filterSince)}</span>
 						<CalendarIcon class="size-3 shrink-0 opacity-70" />
 					</button>
@@ -233,6 +491,14 @@ function formatIsoDate(value: string): string {
 				size="sm"
 				class="sig-meta px-1.5 py-1 rounded-lg h-auto border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]"
 				onclick={() => { mem.filterSince = ""; }}
+				onkeydown={(e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						mem.filterSince = "";
+					} else {
+						handleFilterKeydown(e);
+					}
+				}}
 			>
 				{ActionLabels.Clear}
 			</Button>
@@ -241,6 +507,14 @@ function formatIsoDate(value: string): string {
 		<button
 			class={mem.filterPinned ? pillActive : pillInactive}
 			onclick={() => mem.filterPinned = !mem.filterPinned}
+			onkeydown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					mem.filterPinned = !mem.filterPinned;
+				} else {
+					handleFilterKeydown(e);
+				}
+			}}
 		>pinned</button>
 
 		<!-- Type filters -->
@@ -248,6 +522,14 @@ function formatIsoDate(value: string): string {
 			<button
 				class={mem.filterType === t ? pillActive : pillInactive}
 				onclick={() => mem.filterType = mem.filterType === t ? '' : t}
+				onkeydown={(e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						mem.filterType = mem.filterType === t ? '' : t;
+					} else {
+						handleFilterKeydown(e);
+					}
+				}}
 			>{t}</button>
 		{/each}
 	</div>
@@ -287,7 +569,7 @@ function formatIsoDate(value: string): string {
 	{/if}
 
 	<!-- Memory cards grid -->
-	<div class="flex-1 min-h-0 overflow-y-auto
+	<div class="memory-cards-grid flex-1 min-h-0 overflow-y-auto
 		grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))]
 		auto-rows-min gap-2.5 content-start">
 		{#if mem.loadingSimilar}
@@ -301,13 +583,19 @@ function formatIsoDate(value: string): string {
 				{@const tags = parseMemoryTags(memory.tags)}
 				{@const scoreLabel = memoryScoreLabel(memory)}
 
-			<article
+			<div
+				role="group"
+				tabindex="0"
+				onkeydown={handleCardKeydown}
 				class="doc-card relative flex flex-col
 				gap-1.5 p-3 border border-[var(--sig-border-strong)]
 				border-t-2 border-t-[var(--sig-text-muted)]
 				bg-[var(--sig-surface)] overflow-hidden
 				transition-colors duration-150
-				hover:border-[var(--sig-text-muted)]"
+				hover:border-[var(--sig-text-muted)]
+				focus-visible:outline focus-visible:outline-2
+				focus-visible:outline-[var(--sig-accent)]
+				focus-visible:outline-offset-2"
 			>
 
 					<header class="flex justify-between items-start gap-1.5">
@@ -388,7 +676,7 @@ function formatIsoDate(value: string): string {
 						>similar</Button>
 					{/if}
 					</footer>
-				</article>
+				</div>
 			{:else}
 				<div class="col-span-full py-8 text-center text-[12px]
 					text-[var(--sig-text-muted)]

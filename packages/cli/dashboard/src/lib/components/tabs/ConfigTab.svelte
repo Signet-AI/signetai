@@ -2,6 +2,7 @@
 	import { saveConfigFileResult, type ConfigFile } from "$lib/api";
 	import { toast } from "$lib/stores/toast.svelte";
 	import { confirmDiscardChanges, setConfigDirty } from "$lib/stores/unsaved-changes.svelte";
+	import { returnToSidebar } from "$lib/stores/focus.svelte";
 	import MarkdownViewer from "$lib/components/config/MarkdownViewer.svelte";
 	import * as Popover from "$lib/components/ui/popover/index.js";
 
@@ -136,14 +137,28 @@
 			if (e.key === "ArrowLeft") {
 				e.preventDefault();
 				const currentIdx = mdFiles.findIndex((f) => f.name === selectedFile);
-				const prevIdx = currentIdx <= 0 ? mdFiles.length - 1 : currentIdx - 1;
-				if (mdFiles[prevIdx]) selectFileWithGuard(mdFiles[prevIdx].name);
+				if (currentIdx === 0) {
+					// At first file, return to sidebar
+					returnToSidebar();
+				} else {
+					// Navigate to previous file
+					const prevIdx = currentIdx <= 0 ? mdFiles.length - 1 : currentIdx - 1;
+					if (mdFiles[prevIdx]) selectFileWithGuard(mdFiles[prevIdx].name);
+				}
 			}
 			if (e.key === "ArrowRight") {
 				e.preventDefault();
 				const currentIdx = mdFiles.findIndex((f) => f.name === selectedFile);
 				const nextIdx = currentIdx >= mdFiles.length - 1 ? 0 : currentIdx + 1;
 				if (mdFiles[nextIdx]) selectFileWithGuard(mdFiles[nextIdx].name);
+			}
+			if (e.key === "ArrowDown") {
+				// Focus the CodeMirror editor
+				e.preventDefault();
+				const editorElement = document.querySelector('.cm-editor');
+				if (editorElement instanceof HTMLElement) {
+					editorElement.focus();
+				}
 			}
 		}
 	}

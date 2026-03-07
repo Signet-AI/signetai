@@ -180,6 +180,7 @@ function openCatalogDetail(entry: MarketplaceMcpCatalogEntry): void {
 		serverId: installedServerByCatalogId.get(entry.id) ?? null,
 	};
 	detailOpen = true;
+	mcpMarket.catalogDetail = true;
 }
 
 function openInstalledDetail(server: MarketplaceMcpServer): void {
@@ -198,10 +199,12 @@ function openInstalledDetail(server: MarketplaceMcpServer): void {
 		serverId: server.id,
 	};
 	detailOpen = true;
+	mcpMarket.catalogDetail = true;
 }
 
 function closeDetailSheet(): void {
 	detailOpen = false;
+	mcpMarket.catalogDetail = false;
 }
 
 function onCatalogCardKeydown(event: KeyboardEvent, entry: MarketplaceMcpCatalogEntry): void {
@@ -218,6 +221,7 @@ function onInstalledCardKeydown(event: KeyboardEvent, server: MarketplaceMcpServ
 
 function openInstallFromDetail(entry: MarketplaceMcpCatalogEntry): void {
 	detailOpen = false;
+	mcpMarket.catalogDetail = false;
 	openInstallSheet(entry);
 }
 
@@ -462,9 +466,17 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		border: 1px solid var(--sig-border-strong);
 		color: var(--sig-text-bright);
 		outline: none;
+		transition: border-color 0.15s;
 	}
+
+	.search-input:hover {
+		border-color: var(--sig-accent);
+	}
+
 	.search-input:focus {
 		border-color: var(--sig-accent);
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	:global(.select-trigger) {
@@ -477,6 +489,16 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		border: 1px solid var(--sig-border-strong);
 		color: var(--sig-text-bright);
 		border-radius: 0.5rem;
+		transition: border-color 0.15s;
+	}
+
+	:global(.select-trigger:hover) {
+		border-color: var(--sig-accent);
+	}
+
+	:global(.select-trigger:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	:global(.select-content) {
@@ -620,8 +642,13 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		border-color: var(--sig-accent);
 	}
 
+	.catalog-card:focus {
+		border-color: var(--sig-accent);
+	}
+
 	.catalog-card:focus-visible {
-		outline: none;
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 		border-color: var(--sig-accent);
 	}
 
