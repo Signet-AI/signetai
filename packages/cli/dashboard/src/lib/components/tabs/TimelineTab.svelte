@@ -447,7 +447,12 @@ function getRangeChipLabel(bucket: MemoryTimelineBucket): string {
 	return "Today";
 }
 
+import { nav, setTab } from "$lib/stores/navigation.svelte";
+
 function handleKeydown(event: KeyboardEvent): void {
+	// Only handle events when Timeline tab is active
+	if (nav.activeTab !== "timeline") return;
+
 	const target = event.target;
 	if (target instanceof HTMLElement) {
 		const tag = target.tagName;
@@ -461,6 +466,69 @@ function handleKeydown(event: KeyboardEvent): void {
 		}
 	}
 
+	// If focus is on a tab button, only handle Arrow Down to drop into scroller
+	if (target instanceof HTMLElement && target.hasAttribute('data-memory-tab')) {
+		if (event.key === "ArrowDown") {
+			event.preventDefault();
+			// Focus the era scroller - find currently active era button
+			const activeEraButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			if (activeEraButton instanceof HTMLElement) {
+				activeEraButton.focus();
+			}
+		}
+		return;
+	}
+
+	// Check if focus is within the era scroller (role="tablist" inside timeline era controls)
+	const isInEraScroller = target instanceof HTMLElement && target.closest('.timeline-era-controls [role="tablist"]');
+
+	if (isInEraScroller) {
+		// Era scroller navigation
+		if (event.key === "ArrowUp") {
+			event.preventDefault();
+			// Move to newer era and update focus
+			moveNewer(event.shiftKey ? 3 : 1);
+			const newActiveButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			if (newActiveButton instanceof HTMLElement) {
+				newActiveButton.focus();
+			}
+			return;
+		}
+		if (event.key === "ArrowDown") {
+			event.preventDefault();
+			// Move to older era and update focus
+			moveOlder(event.shiftKey ? 3 : 1);
+			const newActiveButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			if (newActiveButton instanceof HTMLElement) {
+				newActiveButton.focus();
+			}
+			return;
+		}
+		if (event.key === "ArrowRight") {
+			event.preventDefault();
+			// Move to older era and update focus
+			moveOlder(event.shiftKey ? 3 : 1);
+			const newActiveButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			if (newActiveButton instanceof HTMLElement) {
+				newActiveButton.focus();
+			}
+			return;
+		}
+		if (event.key === "ArrowLeft") {
+			event.preventDefault();
+			// Move to newer era and update focus
+			moveNewer(event.shiftKey ? 3 : 1);
+			const newActiveButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			if (newActiveButton instanceof HTMLElement) {
+				newActiveButton.focus();
+			}
+			return;
+		}
+		// Let other keys pass through
+		return;
+	}
+
+	// Default scroller navigation (when not in era scroller)
 	if (event.key === "ArrowRight") {
 		event.preventDefault();
 		moveOlder(event.shiftKey ? 3 : 1);
@@ -479,6 +547,7 @@ function handleKeydown(event: KeyboardEvent): void {
 	if (event.key === "PageUp") {
 		event.preventDefault();
 		moveNewer(3);
+		return;
 	}
 }
 
@@ -577,6 +646,7 @@ onMount(() => {
 											}}
 											role="tab"
 											aria-selected={index === activeIndex}
+											tabindex={index === activeIndex ? 0 : -1}
 										>
 											{getRangeChipLabel(bucket)}
 										</button>

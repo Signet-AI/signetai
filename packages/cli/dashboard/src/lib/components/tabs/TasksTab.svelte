@@ -11,10 +11,51 @@ import {
 	doTrigger,
 	doUpdate,
 } from "$lib/stores/tasks.svelte";
+import { returnToSidebar, setFocusZone } from "$lib/stores/focus.svelte";
+import { nav } from "$lib/stores/navigation.svelte";
 import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
 import TaskForm from "$lib/components/tasks/TaskForm.svelte";
 import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
 
+// Track position as [columnIndex, taskIndex]
+let selectedColumn = $state(0);
+let selectedTaskInColumn = $state(0);
+
+// Column order matches TaskBoard columns
+const columnKeys = ["scheduled", "running", "completed", "failed"] as const;
+
+// Get tasks for a specific column
+function getColumnTasks(columnKey: string) {
+	switch (columnKey) {
+		case "scheduled":
+			return ts.tasks.filter(t => t.enabled && t.last_run_status !== "running");
+		case "running":
+			return ts.tasks.filter(t => t.last_run_status === "running");
+		case "completed":
+			return ts.tasks.filter(t => t.last_run_status === "completed" && !ts.tasks.some(r => r.id === t.id && r.last_run_status === "running"));
+		case "failed":
+			return ts.tasks.filter(t => t.last_run_status === "failed" && !ts.tasks.some(r => r.id === t.id && r.last_run_status === "running"));
+		default:
+			return [];
+	}
+}
+
+// Find the first column with tasks
+function findFirstColumnWithTasks(): number {
+	for (let i = 0; i < columnKeys.length; i++) {
+		if (getColumnTasks(columnKeys[i]).length > 0) {
+			return i;
+		}
+	}
+	return 0;
+}
+
+// Set focus zone when entering tasks tab (but don't auto-select)
+$effect(() => {
+	if (nav.activeTab === 'tasks') {
+		setFocusZone("page-content");
+	}
+});
 
 function handleGlobalKey(e: KeyboardEvent) {
 	const target = e.target as HTMLElement;
@@ -23,7 +64,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 		target.tagName === "TEXTAREA" ||
 		target.isContentEditable;
 
-	// Escape: Close modals
+	// Escape: Close modals first, then return to sidebar
 	if (e.key === "Escape") {
 		if (ts.formOpen) {
 			e.preventDefault();
@@ -33,14 +74,102 @@ function handleGlobalKey(e: KeyboardEvent) {
 		if (ts.detailOpen) {
 			e.preventDefault();
 			closeDetail();
+			// Refocus the task card after closing detail
+			setTimeout(() => focusTaskCard(selectedColumn, selectedTaskInColumn), 50);
 			return;
 		}
+		// No modal open, return to sidebar
+		e.preventDefault();
+		returnToSidebar();
+		return;
 	}
 
 	// Don't process other shortcuts when typing in inputs or form is open
 	if (isInput || ts.formOpen) return;
 
-	// N: Create new task
+	// Arrow navigation between columns and tasks (only when detail is closed)
+	if (!ts.detailOpen) {
+		if (e.key === "ArrowLeft") {
+			e.preventDefault();
+			if (selectedColumn === 0 && selectedTaskInColumn === 0) {
+				// At first task of first column, return to sidebar
+				returnToSidebar();
+			} else if (selectedColumn > 0) {
+				// Move to previous column (skip empty columns)
+				let newCol = selectedColumn - 1;
+				while (newCol > 0 && getColumnTasks(columnKeys[newCol]).length === 0) {
+					newCol--;
+				}
+				const prevColTasks = getColumnTasks(columnKeys[newCol]);
+				if (prevColTasks.length > 0) {
+					selectedColumn = newCol;
+					selectedTaskInColumn = Math.min(selectedTaskInColumn, prevColTasks.length - 1);
+					focusTaskCard(selectedColumn, selectedTaskInColumn);
+				}
+			}
+			return;
+		}
+
+		if (e.key === "ArrowRight") {
+			e.preventDefault();
+			// If coming from sidebar (no task focused yet), select first task
+			const currentFocus = document.activeElement;
+			const isTaskFocused = currentFocus?.classList.contains('task-card');
+
+			if (!isTaskFocused && ts.tasks.length > 0) {
+				// First arrow right from sidebar - focus first task
+				selectedColumn = findFirstColumnWithTasks();
+				selectedTaskInColumn = 0;
+				focusTaskCard(selectedColumn, selectedTaskInColumn);
+			} else if (selectedColumn < columnKeys.length - 1) {
+				// Move to next column (skip empty columns)
+				let newCol = selectedColumn + 1;
+				while (newCol < columnKeys.length - 1 && getColumnTasks(columnKeys[newCol]).length === 0) {
+					newCol++;
+				}
+				const nextColTasks = getColumnTasks(columnKeys[newCol]);
+				if (nextColTasks.length > 0) {
+					selectedColumn = newCol;
+					selectedTaskInColumn = Math.min(selectedTaskInColumn, nextColTasks.length - 1);
+					focusTaskCard(selectedColumn, selectedTaskInColumn);
+				}
+			}
+			return;
+		}
+
+		if (e.key === "ArrowUp") {
+			e.preventDefault();
+			const colTasks = getColumnTasks(columnKeys[selectedColumn]);
+			if (selectedTaskInColumn > 0) {
+				selectedTaskInColumn--;
+				focusTaskCard(selectedColumn, selectedTaskInColumn);
+			}
+			return;
+		}
+
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			const colTasks = getColumnTasks(columnKeys[selectedColumn]);
+			if (selectedTaskInColumn < colTasks.length - 1) {
+				selectedTaskInColumn++;
+				focusTaskCard(selectedColumn, selectedTaskInColumn);
+			}
+			return;
+		}
+	}
+
+	// Enter to view task detail
+	if (e.key === "Enter" && !ts.detailOpen) {
+		const colTasks = getColumnTasks(columnKeys[selectedColumn]);
+		const task = colTasks[selectedTaskInColumn];
+		if (task) {
+			e.preventDefault();
+			openDetail(task.id);
+		}
+		return;
+	}
+
+	// N: Create new task (works even when detail is open)
 	if (e.key === "n" || e.key === "N") {
 		e.preventDefault();
 		openForm();
@@ -65,6 +194,19 @@ function handleGlobalKey(e: KeyboardEvent) {
 	}
 }
 
+function focusTaskCard(columnIndex: number, taskIndex: number): void {
+	// Find the column container and get only the cards within that column
+	const columns = document.querySelectorAll('[data-column-idx]');
+	const column = columns[columnIndex];
+	if (!column) return;
+
+	const cards = column.querySelectorAll('.task-card');
+	if (cards[taskIndex] instanceof HTMLElement) {
+		(cards[taskIndex] as HTMLElement).focus({ preventScroll: false });
+		(cards[taskIndex] as HTMLElement).scrollIntoView({ behavior: "smooth", block: "nearest" });
+	}
+}
+
 // Auto-refresh every 15s while tab is visible
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -85,7 +227,21 @@ onMount(() => {
 		<TaskBoard
 			tasks={ts.tasks}
 			loading={ts.loading}
-			onopendetail={openDetail}
+			selectedColumn={selectedColumn}
+			selectedTaskInColumn={selectedTaskInColumn}
+			onopendetail={(id) => {
+				// Find and update the position when clicking a task
+				for (let colIdx = 0; colIdx < columnKeys.length; colIdx++) {
+					const colTasks = getColumnTasks(columnKeys[colIdx]);
+					const taskIdx = colTasks.findIndex(t => t.id === id);
+					if (taskIdx !== -1) {
+						selectedColumn = colIdx;
+						selectedTaskInColumn = taskIdx;
+						break;
+					}
+				}
+				openDetail(id);
+			}}
 			ontrigger={doTrigger}
 			ontoggle={(id, enabled) => doUpdate(id, { enabled })}
 		/>

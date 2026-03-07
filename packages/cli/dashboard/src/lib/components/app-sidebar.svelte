@@ -9,6 +9,15 @@ import {
 	navigateToGroup,
 	setTab,
 } from "$lib/stores/navigation.svelte";
+import {
+	type SidebarFocusItem,
+	focus,
+	navigateSidebarNext,
+	navigateSidebarPrev,
+	setFocusZone,
+	setSidebarItem,
+	focusFirstPageElement,
+} from "$lib/stores/focus.svelte";
 import Brain from "@lucide/svelte/icons/brain";
 import Cog from "@lucide/svelte/icons/cog";
 import Github from "@lucide/svelte/icons/github";
@@ -18,6 +27,7 @@ import Pencil from "@lucide/svelte/icons/pencil";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Store from "@lucide/svelte/icons/store";
 import Sun from "@lucide/svelte/icons/sun";
+import { onMount } from "svelte";
 
 interface Props {
 	identity: Identity;
@@ -70,6 +80,61 @@ function handleClick(item: NavItem): void {
 		setTab(item.id as TabId);
 	}
 }
+
+// Initialize sidebar focus on mount
+onMount(() => {
+	if (!focus.sidebarItem) {
+		setSidebarItem("config");
+	}
+});
+
+// Get tabindex for roving tabindex pattern
+function getTabIndex(itemId: SidebarFocusItem): number {
+	return focus.sidebarItem === itemId ? 0 : -1;
+}
+
+// Handle keyboard navigation within sidebar
+function handleSidebarKeydown(e: KeyboardEvent, item: NavItem): void {
+	if (e.key === "ArrowDown") {
+		e.preventDefault();
+		navigateSidebarNext();
+	} else if (e.key === "ArrowUp") {
+		e.preventDefault();
+		navigateSidebarPrev();
+	} else if (e.key === "ArrowRight" || e.key === "Enter") {
+		e.preventDefault();
+		activateItem(item);
+	} else if (e.key === " ") {
+		// Space should also activate for accessibility
+		e.preventDefault();
+		activateItem(item);
+	}
+}
+
+// Handle footer element keyboard navigation
+function handleFooterKeydown(e: KeyboardEvent, item: SidebarFocusItem): void {
+	if (e.key === "ArrowDown") {
+		e.preventDefault();
+		navigateSidebarNext();
+	} else if (e.key === "ArrowUp") {
+		e.preventDefault();
+		navigateSidebarPrev();
+	} else if (e.key === "Enter" || e.key === " ") {
+		e.preventDefault();
+		if (item === "theme-toggle") {
+			onthemetoggle();
+		} else if (item === "github-link") {
+			window.open("https://github.com/Signet-AI/signetai", "_blank");
+		}
+	}
+}
+
+// Activate a sidebar item (navigate or toggle)
+function activateItem(item: NavItem): void {
+	handleClick(item);
+	setFocusZone("page-content");
+	focusFirstPageElement();
+}
 </script>
 
 <Sidebar.Root variant="sidebar" collapsible="icon">
@@ -118,8 +183,11 @@ function handleClick(item: NavItem): void {
 					{#each navItems as item (item.id)}
 						<Sidebar.MenuItem>
 							<Sidebar.MenuButton
+								data-sidebar-item={item.id}
+								tabindex={getTabIndex(item.id as SidebarFocusItem)}
 								isActive={isActive(item)}
-								onclick={() => handleClick(item)}
+								onclick={() => activateItem(item)}
+								onkeydown={(e) => handleSidebarKeydown(e, item)}
 								onmouseenter={() => maybePrefetchEmbeddings(item.id)}
 								onfocus={() => maybePrefetchEmbeddings(item.id)}
 								tooltipContent={item.label}
@@ -166,7 +234,10 @@ function handleClick(item: NavItem): void {
 
 			<Sidebar.MenuItem>
 			<Sidebar.MenuButton
+				data-sidebar-item="theme-toggle"
+				tabindex={getTabIndex("theme-toggle")}
 				onclick={onthemetoggle}
+				onkeydown={(e) => handleFooterKeydown(e, "theme-toggle")}
 				tooltipContent={theme === "dark" ? "Light mode" : "Dark mode"}
 			>
 					{#if theme === "dark"}
@@ -186,7 +257,10 @@ function handleClick(item: NavItem): void {
 
 			<Sidebar.MenuItem>
 			<Sidebar.MenuButton
+				data-sidebar-item="github-link"
+				tabindex={getTabIndex("github-link")}
 				onclick={() => window.open("https://github.com/Signet-AI/signetai", "_blank")}
+				onkeydown={(e) => handleFooterKeydown(e, "github-link")}
 				tooltipContent="GitHub"
 			>
 					<Github class="size-4" />

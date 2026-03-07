@@ -23,6 +23,13 @@ import {
 	nav,
 	setTab,
 } from "$lib/stores/navigation.svelte";
+import {
+	focus,
+	returnToSidebar,
+	setFocusZone,
+	focusFirstPageElement,
+	type SidebarFocusItem,
+} from "$lib/stores/focus.svelte";
 import { openForm, ts } from "$lib/stores/tasks.svelte";
 import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
 import { Skeleton } from "$lib/components/ui/skeleton/index.js";
@@ -147,16 +154,289 @@ onMount(() => {
 
 	window.addEventListener("beforeunload", handleBeforeUnload);
 
+	// Listen for custom event from MemoryTab to focus tab bar
+	const handleMemoryFocusTabs = () => {
+		focusMemoryTab(memoryTabIndex);
+	};
+	window.addEventListener("memory-focus-tabs", handleMemoryFocusTabs);
+
 	return () => {
 		cleanupNav();
 		window.removeEventListener("beforeunload", handleBeforeUnload);
+		window.removeEventListener("memory-focus-tabs", handleMemoryFocusTabs);
 	};
 });
+
+// --- Global keyboard navigation ---
+let engineTabFocus = $state<"tabs" | "content">("tabs");
+let engineTabIndex = $state(0);
+const ENGINE_TABS = ["settings", "pipeline", "connectors", "logs"] as const;
+
+let memoryTabFocus = $state<"tabs" | "content">("tabs");
+let memoryTabIndex = $state(0);
+const MEMORY_TABS = ["memory", "timeline", "embeddings"] as const;
+
+function focusEngineTab(index: number): void {
+	engineTabIndex = index;
+	engineTabFocus = "tabs";
+	setTab(ENGINE_TABS[index]);
+
+	// Focus the tab button
+	const tabButton = document.querySelector(`[data-engine-tab="${ENGINE_TABS[index]}"]`);
+	if (tabButton instanceof HTMLElement) {
+		tabButton.focus();
+	}
+}
+
+function focusEngineContent(): void {
+	engineTabFocus = "content";
+	focusFirstPageElement();
+}
+
+function focusMemoryTab(index: number): void {
+	memoryTabIndex = index;
+	memoryTabFocus = "tabs";
+	setTab(MEMORY_TABS[index]);
+
+	// Focus the tab button
+	const tabButton = document.querySelector(`[data-memory-tab="${MEMORY_TABS[index]}"]`);
+	if (tabButton instanceof HTMLElement) {
+		tabButton.focus();
+	}
+}
+
+function focusMemoryContent(): void {
+	memoryTabFocus = "content";
+	(window as any).focus(); // Clear focus - stay at tab level
+}
+
+function handleGlobalKey(e: KeyboardEvent) {
+	const target = e.target as HTMLElement;
+	const isInputFocused =
+		target.tagName === "INPUT" ||
+		target.tagName === "TEXTAREA" ||
+		target.isContentEditable;
+
+	// Don't interfere with input fields when page has focus
+	if (isInputFocused && focus.zone === "page-content") return;
+
+	// Handle Escape from page content to return to sidebar
+	if (focus.zone === "page-content" && e.key === "Escape") {
+		// Check for open modals/dialogs first
+		const modalOpen =
+			ts.formOpen ||
+			ts.detailOpen ||
+			mem.formOpen ||
+			document.querySelector('[role="dialog"][data-state="open"]');
+
+		if (!modalOpen) {
+			e.preventDefault();
+			// If in Engine group and focused on content, return to tabs first
+			if (isEngineGroup(activeTab) && engineTabFocus === "content") {
+				focusEngineTab(engineTabIndex);
+			} else {
+				returnToSidebar();
+			}
+		}
+	}
+
+	// Handle Engine tab group navigation
+	if (isEngineGroup(activeTab) && focus.zone === "page-content" && !isInputFocused) {
+		if (engineTabFocus === "tabs") {
+			// Navigate between tabs
+			if (e.key === "ArrowLeft") {
+				e.preventDefault();
+				if (engineTabIndex === 0) {
+					// At first tab, return to sidebar
+					returnToSidebar();
+				} else {
+					focusEngineTab(engineTabIndex - 1);
+				}
+			} else if (e.key === "ArrowRight") {
+				e.preventDefault();
+				focusEngineTab((engineTabIndex + 1) % ENGINE_TABS.length);
+			} else if (e.key === "ArrowDown") {
+				e.preventDefault();
+				focusEngineContent();
+			}
+		} else if (engineTabFocus === "content") {
+			// Navigate from content back to tabs
+			if (e.key === "ArrowUp") {
+				e.preventDefault();
+				focusEngineTab(engineTabIndex);
+			}
+			// ArrowLeft is handled by individual tabs for internal navigation
+			// but if they don't consume it, it bubbles up - we should ignore it
+		}
+	}
+
+	// Handle Memory tab group navigation
+	if (isMemoryGroup(activeTab) && focus.zone === "page-content" && !isInputFocused) {
+		if (memoryTabFocus === "tabs") {
+			// Navigate between tabs
+			if (e.key === "ArrowLeft") {
+				e.preventDefault();
+				if (memoryTabIndex === 0) {
+					// At first tab, return to sidebar
+					returnToSidebar();
+				} else {
+					focusMemoryTab(memoryTabIndex - 1);
+				}
+			} else if (e.key === "ArrowRight") {
+				e.preventDefault();
+				focusMemoryTab((memoryTabIndex + 1) % MEMORY_TABS.length);
+			} else if (e.key === "ArrowDown") {
+				e.preventDefault();
+				focusMemoryContent();
+			}
+		} else if (memoryTabFocus === "content") {
+			// Navigate from content back to tabs
+			if (e.key === "ArrowUp") {
+				e.preventDefault();
+				focusMemoryTab(memoryTabIndex);
+			}
+			// ArrowRight/Left at content level are handled by individual tabs
+		}
+	}
+}
+
+// Initialize engine tab focus when navigating to engine group
+$effect(() => {
+	if (isEngineGroup(activeTab) && focus.zone === "page-content") {
+		const index = ENGINE_TABS.indexOf(activeTab as typeof ENGINE_TABS[number]);
+		if (index !== -1) {
+			engineTabIndex = index;
+			engineTabFocus = "tabs"; // Start at tab bar level
+			// Focus the tab button
+			const tabButton = document.querySelector(`[data-engine-tab="${ENGINE_TABS[index]}"]`);
+			if (tabButton instanceof HTMLElement) {
+				tabButton.focus();
+			}
+		}
+	}
+});
+
+// Initialize memory tab focus when navigating to memory group
+$effect(() => {
+	if (isMemoryGroup(activeTab) && focus.zone === "page-content") {
+		const index = MEMORY_TABS.indexOf(activeTab as typeof MEMORY_TABS[number]);
+		if (index !== -1) {
+			memoryTabIndex = index;
+			memoryTabFocus = "tabs"; // Start at tab bar level
+			// Focus the tab button
+			const tabButton = document.querySelector(`[data-memory-tab="${MEMORY_TABS[index]}"]`);
+			if (tabButton instanceof HTMLElement) {
+				tabButton.focus();
+			}
+		}
+	}
+});
+
+// Sync focus state when focus changes via mouse
+function handleFocusIn(e: FocusEvent) {
+	const target = e.target as HTMLElement;
+
+	// Check if focus moved to sidebar
+	const sidebarItem = target.closest('[data-sidebar-item]');
+	if (sidebarItem) {
+		const item = sidebarItem.getAttribute('data-sidebar-item') as SidebarFocusItem;
+		if (item && focus.sidebarItem !== item) {
+			focus.zone = 'sidebar-menu';
+			focus.sidebarItem = item;
+		}
+		return;
+	}
+
+	// Check if focus moved to a tab button
+	const engineTab = target.closest('[data-engine-tab]');
+	if (engineTab && focus.zone !== 'page-content') {
+		setFocusZone('page-content');
+		const tabName = engineTab.getAttribute('data-engine-tab') as typeof ENGINE_TABS[number];
+		const index = ENGINE_TABS.indexOf(tabName);
+		if (index !== -1) {
+			engineTabIndex = index;
+			engineTabFocus = "tabs";
+		}
+		return;
+	}
+
+	const memoryTab = target.closest('[data-memory-tab]');
+	if (memoryTab && focus.zone !== 'page-content') {
+		setFocusZone('page-content');
+		const tabName = memoryTab.getAttribute('data-memory-tab') as typeof MEMORY_TABS[number];
+		const index = MEMORY_TABS.indexOf(tabName);
+		if (index !== -1) {
+			memoryTabIndex = index;
+			memoryTabFocus = "tabs";
+		}
+		return;
+	}
+
+	// Check if focus is in page content
+	const pageContent = target.closest('[data-page-content="true"]');
+	if (pageContent && focus.zone !== 'page-content') {
+		setFocusZone('page-content');
+
+		// Reset keyboard navigation state to match current page
+		if (isEngineGroup(activeTab)) {
+			const index = ENGINE_TABS.indexOf(activeTab as typeof ENGINE_TABS[number]);
+			if (index !== -1) {
+				engineTabIndex = index;
+				engineTabFocus = "tabs";
+			}
+		} else if (isMemoryGroup(activeTab)) {
+			const index = MEMORY_TABS.indexOf(activeTab as typeof MEMORY_TABS[number]);
+			if (index !== -1) {
+				memoryTabIndex = index;
+				memoryTabFocus = "tabs";
+			}
+		}
+		return;
+	}
+}
+
+// Handle mouse clicks to sync keyboard navigation state
+function handlePageClick(e: MouseEvent) {
+	// Only handle clicks in page content area
+	const pageContent = (e.target as HTMLElement).closest('[data-page-content="true"]');
+	if (!pageContent) return;
+
+	// Ensure focus zone is set to page-content
+	if (focus.zone !== 'page-content') {
+		setFocusZone('page-content');
+	}
+
+	// Reset keyboard navigation state to current page's tab bar
+	if (isEngineGroup(activeTab)) {
+		const index = ENGINE_TABS.indexOf(activeTab as typeof ENGINE_TABS[number]);
+		if (index !== -1) {
+			engineTabIndex = index;
+			engineTabFocus = "tabs";
+		}
+	} else if (isMemoryGroup(activeTab)) {
+		const index = MEMORY_TABS.indexOf(activeTab as typeof MEMORY_TABS[number]);
+		if (index !== -1) {
+			memoryTabIndex = index;
+			memoryTabFocus = "tabs";
+		}
+	}
+}
+
+// Track when focus leaves the window
+function handleFocusOut(e: FocusEvent) {
+	// Only update if focus is actually leaving the document
+	if (!e.relatedTarget) {
+		// Focus left the window - keep current state
+		return;
+	}
+}
 </script>
 
 <svelte:head>
 	<title>Signet</title>
 </svelte:head>
+
+<svelte:window onkeydown={handleGlobalKey} onfocusin={handleFocusIn} onfocusout={handleFocusOut} onclick={handlePageClick} />
 
 <Sidebar.Provider>
 	<AppSidebar
@@ -168,7 +448,7 @@ onMount(() => {
 		onthemetoggle={toggleTheme}
 		onprefetchembeddings={prefetchEmbeddingsTab}
 	/>
-	<main class="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden
+	<main data-page-content="true" class="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden
 		m-2 ml-0 rounded-lg border border-[var(--sig-border)] md:border-l-0
 		bg-[var(--sig-surface)]">
 		<header
@@ -192,16 +472,46 @@ onMount(() => {
 					<div class="flex items-center gap-px
 						border border-[var(--sig-border)] rounded-lg p-px">
 						<button
+							data-memory-tab="memory"
 							class={activeTab === 'memory' ? tabActive : tabInactive}
-							onclick={() => setTab("memory")}
+							onclick={() => {
+								memoryTabIndex = 0;
+								memoryTabFocus = "tabs";
+								setTab("memory");
+								// Focus the clicked tab button
+								const tabButton = document.querySelector('[data-memory-tab="memory"]');
+								if (tabButton instanceof HTMLElement) {
+									tabButton.focus();
+								}
+							}}
 						>Index</button>
 						<button
+							data-memory-tab="timeline"
 							class={activeTab === 'timeline' ? tabActive : tabInactive}
-							onclick={() => setTab("timeline")}
+							onclick={() => {
+								memoryTabIndex = 1;
+								memoryTabFocus = "tabs";
+								setTab("timeline");
+								// Focus the clicked tab button
+								const tabButton = document.querySelector('[data-memory-tab="timeline"]');
+								if (tabButton instanceof HTMLElement) {
+									tabButton.focus();
+								}
+							}}
 						>Timeline</button>
 						<button
+							data-memory-tab="embeddings"
 							class={activeTab === 'embeddings' ? tabActive : tabInactive}
-							onclick={() => setTab("embeddings")}
+							onclick={() => {
+								memoryTabIndex = 2;
+								memoryTabFocus = "tabs";
+								setTab("embeddings");
+								// Focus the clicked tab button
+								const tabButton = document.querySelector('[data-memory-tab="embeddings"]');
+								if (tabButton instanceof HTMLElement) {
+									tabButton.focus();
+								}
+							}}
 						>Constellation</button>
 					</div>
 				{:else if isEngineGroup(activeTab)}
@@ -209,20 +519,60 @@ onMount(() => {
 					<div class="flex items-center gap-px
 						border border-[var(--sig-border)] rounded-lg p-px">
 						<button
+							data-engine-tab="settings"
 							class={activeTab === 'settings' ? tabActive : tabInactive}
-							onclick={() => setTab("settings")}
+							onclick={() => {
+								engineTabIndex = 0;
+								engineTabFocus = "tabs";
+								setTab("settings");
+								// Focus the clicked tab button
+								const tabButton = document.querySelector('[data-engine-tab="settings"]');
+								if (tabButton instanceof HTMLElement) {
+									tabButton.focus();
+								}
+							}}
 						>Settings</button>
 						<button
+							data-engine-tab="pipeline"
 							class={activeTab === 'pipeline' ? tabActive : tabInactive}
-							onclick={() => setTab("pipeline")}
+							onclick={() => {
+								engineTabIndex = 1;
+								engineTabFocus = "tabs";
+								setTab("pipeline");
+								// Focus the clicked tab button
+								const tabButton = document.querySelector('[data-engine-tab="pipeline"]');
+								if (tabButton instanceof HTMLElement) {
+									tabButton.focus();
+								}
+							}}
 						>Pipeline</button>
 						<button
+							data-engine-tab="connectors"
 							class={activeTab === 'connectors' ? tabActive : tabInactive}
-							onclick={() => setTab("connectors")}
+							onclick={() => {
+								engineTabIndex = 2;
+								engineTabFocus = "tabs";
+								setTab("connectors");
+								// Focus the clicked tab button
+								const tabButton = document.querySelector('[data-engine-tab="connectors"]');
+								if (tabButton instanceof HTMLElement) {
+									tabButton.focus();
+								}
+							}}
 						>Connectors</button>
 						<button
+							data-engine-tab="logs"
 							class={activeTab === 'logs' ? tabActive : tabInactive}
-							onclick={() => setTab("logs")}
+							onclick={() => {
+								engineTabIndex = 3;
+								engineTabFocus = "tabs";
+								setTab("logs");
+								// Focus the clicked tab button
+								const tabButton = document.querySelector('[data-engine-tab="logs"]');
+								if (tabButton instanceof HTMLElement) {
+									tabButton.focus();
+								}
+							}}
 						>Logs</button>
 					</div>
 				{/if}

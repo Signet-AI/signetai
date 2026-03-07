@@ -14,6 +14,7 @@ import {
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
 import { toast } from "$lib/stores/toast.svelte";
+import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
 import { onMount } from "svelte";
 
@@ -40,6 +41,9 @@ let onePasswordConnecting = $state(false);
 let onePasswordDisconnecting = $state(false);
 let onePasswordImporting = $state(false);
 let selectedVaultIds = $state<string[]>([]);
+let focusedSecretIndex = $state(-1); // -1 means no secret focused
+let focusArea = $state<'list' | '1password'>('list'); // Track which area has focus
+let focusedOnePasswordInput = $state(-1); // -1 means panel itself, 0+ = input index
 
 async function fetchSecrets() {
 	secretsLoading = true;
@@ -161,11 +165,232 @@ async function importFromOnePassword(): Promise<void> {
 	toast(`Imported ${importedCount} secrets (skipped ${skippedCount}, errors ${errorCount})`, "success");
 }
 
+// Keyboard navigation
+function handleGlobalKey(e: KeyboardEvent) {
+	const target = e.target as HTMLElement;
+	const isInputFocused =
+		target.tagName === "INPUT" ||
+		target.tagName === "TEXTAREA" ||
+		target.isContentEditable;
+
+	if (isInputFocused) return;
+
+	// Right Arrow to focus first secret (only when at page level)
+	if (e.key === "ArrowRight" && focusArea === "list" && focusedSecretIndex === -1) {
+		e.preventDefault();
+		if (secrets.length > 0) {
+			focusedSecretIndex = 0;
+			focusSecretItem(0);
+		}
+	}
+
+	// Arrow Up/Down to navigate secrets when in list area
+	if (e.key === "ArrowUp" && focusArea === "list" && focusedSecretIndex >= 0) {
+		e.preventDefault();
+		if (focusedSecretIndex > 0) {
+			focusedSecretIndex--;
+			focusSecretItem(focusedSecretIndex);
+		} else {
+			// At first secret, blur and return to page level
+			const items = document.querySelectorAll('.secret-item');
+			if (items[focusedSecretIndex] instanceof HTMLElement) {
+				(items[focusedSecretIndex] as HTMLElement).blur();
+			}
+			focusedSecretIndex = -1;
+		}
+	}
+
+	if (e.key === "ArrowDown" && focusArea === "list") {
+		e.preventDefault();
+		if (focusedSecretIndex < secrets.length - 1) {
+			focusedSecretIndex++;
+			focusSecretItem(focusedSecretIndex);
+		} else if (focusedSecretIndex === secrets.length - 1) {
+			// At last secret, blur then move to 1Password panel
+			const items = document.querySelectorAll('.secret-item');
+			if (items[focusedSecretIndex] instanceof HTMLElement) {
+				(items[focusedSecretIndex] as HTMLElement).blur();
+			}
+			focusArea = "1password";
+			focusedSecretIndex = -1;
+			focusedOnePasswordInput = 0;
+			focusOnePasswordInputField(0);
+		}
+	}
+
+	// Arrow Up from 1Password panel - ALWAYS return to last secret
+	if (e.key === "ArrowUp" && focusArea === "1password") {
+		e.preventDefault();
+		if (focusedOnePasswordInput > 0) {
+			// Navigate to previous input in 1Password panel
+			focusedOnePasswordInput--;
+			focusOnePasswordInputField(focusedOnePasswordInput);
+		} else if (focusedOnePasswordInput === 0 && secrets.length > 0) {
+			// At first input, blur then return to last secret
+			if (document.activeElement instanceof HTMLElement) {
+				document.activeElement.blur();
+			}
+			focusArea = "list";
+			focusedSecretIndex = secrets.length - 1;
+			focusedOnePasswordInput = -1;
+			focusSecretItem(focusedSecretIndex);
+		}
+	}
+
+	// Arrow Down in 1Password panel (when panel itself or inputs focused)
+	if (e.key === "ArrowDown" && focusArea === "1password") {
+		e.preventDefault();
+		// Total inputs: token (0), prefix (1), 3 buttons (2-4)
+		const maxInputIndex = 4;
+		if (focusedOnePasswordInput < maxInputIndex) {
+			focusedOnePasswordInput++;
+			focusOnePasswordInputField(focusedOnePasswordInput);
+		}
+	}
+
+	// Escape from 1Password panel returns to secrets list (not sidebar)
+	if (e.key === "Escape" && focusArea === "1password") {
+		e.preventDefault();
+		// Blur current element first
+		if (document.activeElement instanceof HTMLElement) {
+			document.activeElement.blur();
+		}
+		focusArea = "list";
+		focusedSecretIndex = -1;
+		focusedOnePasswordInput = -1;
+	}
+
+	// Left Arrow returns to sidebar (only when at page level in list area)
+	if (e.key === "ArrowLeft" && focusArea === "list" && focusedSecretIndex === -1) {
+		e.preventDefault();
+		returnToSidebar();
+	}
+}
+
+function focusSecretItem(index: number): void {
+	const items = document.querySelectorAll('.secret-item');
+	if (items[index] instanceof HTMLElement) {
+		(items[index] as HTMLElement).focus();
+	}
+}
+
+function focusOnePasswordPanel(): void {
+	const panel = document.querySelector('.onepassword-panel');
+	if (panel instanceof HTMLElement) {
+		panel.focus();
+	}
+}
+
+function focusOnePasswordInputField(index: number): void {
+	// Input indices: 0=token, 1=prefix, 2=connect button, 3=import button, 4=disconnect button
+	const panel = document.querySelector('.onepassword-panel');
+	if (!panel) return;
+
+	// Use data-focus-index to find the correct element
+	const targetElement = panel.querySelector(`[data-focus-index="${index}"]`) as HTMLElement;
+	if (targetElement) {
+		targetElement.focus();
+	}
+}
+
+function handleOnePasswordPanelKeydown(e: KeyboardEvent): void {
+	// Arrow Up navigates within 1Password or returns to secrets
+	if (e.key === "ArrowUp") {
+		e.preventDefault();
+		if (focusedOnePasswordInput > 0) {
+			focusedOnePasswordInput--;
+			focusOnePasswordInputField(focusedOnePasswordInput);
+		} else if (focusedOnePasswordInput === 0 && secrets.length > 0) {
+			// At any input/button, blur then return to last secret
+			if (document.activeElement instanceof HTMLElement) {
+				document.activeElement.blur();
+			}
+			focusArea = "list";
+			focusedSecretIndex = secrets.length - 1;
+			focusedOnePasswordInput = -1;
+			focusSecretItem(focusedSecretIndex);
+		}
+	}
+	// Arrow Down navigates within 1Password inputs
+	if (e.key === "ArrowDown") {
+		e.preventDefault();
+		const maxInputIndex = 4;
+		if (focusedOnePasswordInput < maxInputIndex) {
+			focusedOnePasswordInput++;
+			focusOnePasswordInputField(focusedOnePasswordInput);
+		}
+	}
+	// Escape returns to secrets list (not sidebar)
+	if (e.key === "Escape") {
+		e.preventDefault();
+		// Blur current element first
+		if (document.activeElement instanceof HTMLElement) {
+			document.activeElement.blur();
+		}
+		focusArea = "list";
+		focusedSecretIndex = -1;
+		focusedOnePasswordInput = -1;
+	}
+	// Tab navigation within 1Password (let browser handle naturally but track state)
+	if (e.key === "Tab") {
+		// Update focusedOnePasswordInput based on shift key
+		if (e.shiftKey && focusedOnePasswordInput > 0) {
+			focusedOnePasswordInput--;
+		} else if (!e.shiftKey && focusedOnePasswordInput < 4) {
+			focusedOnePasswordInput++;
+		}
+		// Don't prevent default - let browser handle tab navigation
+	}
+}
+
+function handleOnePasswordInputFocus(index: number): void {
+	focusedOnePasswordInput = index;
+	focusArea = "1password";
+}
+
+function handleSecretItemFocus(index: number): void {
+	focusedSecretIndex = index;
+	focusArea = "list";
+}
+
+function handleSecretItemKeydown(e: KeyboardEvent, index: number): void {
+	if (e.key === "ArrowDown") {
+		e.preventDefault();
+		if (index < secrets.length - 1) {
+			focusedSecretIndex = index + 1;
+			focusSecretItem(focusedSecretIndex);
+		} else {
+			// Move to 1Password panel - blur current then focus first input
+			(e.target as HTMLElement).blur();
+			focusArea = "1password";
+			focusedSecretIndex = -1;
+			focusedOnePasswordInput = 0;
+			focusOnePasswordInputField(0);
+		}
+	} else if (e.key === "ArrowUp") {
+		e.preventDefault();
+		if (index > 0) {
+			focusedSecretIndex = index - 1;
+			focusSecretItem(focusedSecretIndex);
+		} else if (index === 0) {
+			// At first secret, return to page level
+			focusedSecretIndex = -1;
+			(e.target as HTMLElement).blur();
+		}
+	} else if (e.key === "ArrowLeft") {
+		e.preventDefault();
+		focusedSecretIndex = -1;
+		(e.target as HTMLElement).blur();
+	}
+}
+
 onMount(() => {
 	fetchSecrets();
 	refreshOnePasswordStatus();
 });
 </script>
+
+<svelte:window onkeydown={handleGlobalKey} />
 
 <div class="flex h-full flex-col overflow-hidden">
 	<div
@@ -213,10 +438,19 @@ onMount(() => {
 						No secrets stored. Add one above.
 					</div>
 				{:else}
-					{#each secrets as name}
+					{#each secrets as name, index}
 						<div
-							class="flex items-center gap-3 border border-[var(--sig-border-strong)]
-								bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3 rounded-lg"
+							role="button"
+							tabindex={0}
+							class="secret-item flex items-center gap-3 border border-[var(--sig-border-strong)]
+								bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3 rounded-lg
+								hover:bg-[var(--sig-surface)] hover:border-[var(--sig-accent)]
+								focus-visible:outline focus-visible:outline-2
+								focus-visible:outline-[var(--sig-accent)]
+								focus-visible:outline-offset-2
+								transition-colors cursor-pointer"
+							onkeydown={(e) => handleSecretItemKeydown(e, index)}
+							onfocus={() => handleSecretItemFocus(index)}
 						>
 							<span class="flex-1 font-[family-name:var(--font-mono)] text-[13px] text-[var(--sig-text-bright)]"
 								>{name}</span
@@ -242,9 +476,14 @@ onMount(() => {
 
 		<div class="flex min-h-0 flex-col gap-[var(--space-sm)] overflow-hidden">
 			<div
-				class="flex min-h-0 flex-1 flex-col gap-[var(--space-sm)] overflow-hidden
+				role="group"
+				aria-label="1Password settings"
+				class="onepassword-panel flex min-h-0 flex-1 flex-col gap-[var(--space-sm)] overflow-hidden
 					border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)]
-					p-[var(--space-md)] rounded-lg"
+					p-[var(--space-md)] rounded-lg
+					hover:bg-[var(--sig-surface)] hover:border-[var(--sig-accent)]
+					transition-colors"
+				onkeydown={handleOnePasswordPanelKeydown}
 			>
 				<div class="flex items-center justify-between gap-3">
 					<div class="sig-label uppercase tracking-[0.08em]">
@@ -253,7 +492,11 @@ onMount(() => {
 					<Button
 						variant="outline"
 						size="sm"
-						class="rounded-lg text-[11px]"
+						class="rounded-lg text-[11px]
+							hover:bg-[var(--sig-surface)]
+							focus-visible:outline focus-visible:outline-2
+							focus-visible:outline-[var(--sig-accent)]
+							focus-visible:outline-offset-2"
 						onclick={refreshOnePasswordStatus}
 						disabled={onePasswordLoading}
 					>
@@ -284,19 +527,32 @@ onMount(() => {
 				<div class="flex gap-[var(--space-sm)]">
 					<Input
 						type="password"
+						data-focus-index="0"
 						class="rounded-lg border-[var(--sig-border-strong)]
 							bg-[var(--sig-surface)] font-[family-name:var(--font-mono)]
-							text-[13px] text-[var(--sig-text-bright)]"
+							text-[13px] text-[var(--sig-text-bright)]
+							hover:border-[var(--sig-accent)]
+							focus-visible:outline focus-visible:outline-2
+							focus-visible:outline-[var(--sig-accent)]
+							focus-visible:outline-offset-2"
 						bind:value={onePasswordToken}
 						placeholder={onePasswordStatus.connected
 							? "Replace service account token"
 							: "1Password service account token"}
+						onfocus={() => handleOnePasswordInputFocus(0)}
 					/>
 					<Button
 						size="sm"
-						class="rounded-lg bg-[var(--sig-text-bright)] text-[var(--sig-bg)] text-[11px] hover:bg-[var(--sig-text)]"
+						data-focus-index="2"
+
+						class="rounded-lg bg-[var(--sig-text-bright)] text-[var(--sig-bg)] text-[11px]
+							hover:bg-[var(--sig-text)]
+							focus-visible:outline focus-visible:outline-2
+							focus-visible:outline-[var(--sig-accent)]
+							focus-visible:outline-offset-2"
 						onclick={connectOnePasswordAccount}
 						disabled={onePasswordConnecting || !onePasswordToken.trim()}
+						onfocus={() => handleOnePasswordInputFocus(2)}
 					>
 						{onePasswordConnecting
 							? "Connecting..."
@@ -313,11 +569,18 @@ onMount(() => {
 					<Input
 						id="op-prefix"
 						type="text"
+						data-focus-index="1"
+
 						class="h-8 rounded-lg border-[var(--sig-border-strong)]
 							bg-[var(--sig-surface)] font-[family-name:var(--font-mono)]
-							text-[12px] text-[var(--sig-text-bright)]"
+							text-[12px] text-[var(--sig-text-bright)]
+							hover:border-[var(--sig-accent)]
+							focus-visible:outline focus-visible:outline-2
+							focus-visible:outline-[var(--sig-accent)]
+							focus-visible:outline-offset-2"
 						bind:value={onePasswordImportOptions.prefix}
 						placeholder="OP"
+						onfocus={() => handleOnePasswordInputFocus(1)}
 					/>
 					<label class="text-[12px] text-[var(--sig-text-muted)]"
 						for="op-overwrite">Overwrite</label
@@ -325,6 +588,11 @@ onMount(() => {
 					<label id="op-overwrite" class="flex items-center gap-2 text-[12px] text-[var(--sig-text-muted)]">
 						<input
 							type="checkbox"
+
+							class="cursor-pointer accent-[var(--sig-accent)]
+								hover:ring-2 hover:ring-[var(--sig-accent)]
+								focus-visible:outline focus-visible:outline-2
+								focus-visible:outline-[var(--sig-accent)]"
 							bind:checked={onePasswordImportOptions.overwrite}
 						/>
 						Overwrite existing secret names
@@ -344,10 +612,16 @@ onMount(() => {
 						{#each onePasswordVaults as vault}
 							<label
 								class="flex cursor-pointer items-center gap-2 px-2 py-1 text-[12px]
-									text-[var(--sig-text)] hover:bg-[var(--sig-surface)]"
+									text-[var(--sig-text)] hover:bg-[var(--sig-surface)]
+									focus-within:bg-[var(--sig-surface)] rounded transition-colors"
 							>
 								<input
 									type="checkbox"
+
+									class="cursor-pointer accent-[var(--sig-accent)]
+										hover:ring-2 hover:ring-[var(--sig-accent)]
+										focus-visible:outline focus-visible:outline-2
+										focus-visible:outline-[var(--sig-accent)]"
 									checked={selectedVaultIds.includes(vault.id)}
 									onchange={() => toggleVaultSelection(vault.id)}
 								/>
@@ -361,19 +635,32 @@ onMount(() => {
 				<div class="flex flex-wrap gap-[var(--space-sm)]">
 					<Button
 						size="sm"
-						class="rounded-lg bg-[var(--sig-text-bright)] text-[var(--sig-bg)] text-[11px] hover:bg-[var(--sig-text)]"
+						data-focus-index="3"
+
+						class="rounded-lg bg-[var(--sig-text-bright)] text-[var(--sig-bg)] text-[11px]
+							hover:bg-[var(--sig-text)]
+							focus-visible:outline focus-visible:outline-2
+							focus-visible:outline-[var(--sig-accent)]
+							focus-visible:outline-offset-2"
 						onclick={importFromOnePassword}
 						disabled={onePasswordImporting || !onePasswordStatus.connected}
+						onfocus={() => handleOnePasswordInputFocus(3)}
 					>
 						{onePasswordImporting ? "Importing..." : "Import Into Signet"}
 					</Button>
 					<Button
 						variant="outline"
 						size="sm"
+						data-focus-index="4"
+
 						class="rounded-lg border-[var(--sig-danger)] text-[var(--sig-danger)]
-							text-[11px] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+							text-[11px] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]
+							focus-visible:outline focus-visible:outline-2
+							focus-visible:outline-[var(--sig-accent)]
+							focus-visible:outline-offset-2"
 						onclick={disconnectOnePasswordAccount}
 						disabled={onePasswordDisconnecting || !onePasswordStatus.configured}
+						onfocus={() => handleOnePasswordInputFocus(4)}
 					>
 						{onePasswordDisconnecting ? "Disconnecting..." : "Disconnect"}
 					</Button>
