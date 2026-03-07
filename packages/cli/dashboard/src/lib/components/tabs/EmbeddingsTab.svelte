@@ -220,11 +220,14 @@ function handleKeydown(event: KeyboardEvent): void {
 	}
 
 	// Arrow Up from search input to return to tab bar
-	if (event.key === "ArrowUp" && isInput) {
+	if (event.key === "ArrowUp" && target === searchInputEl) {
 		event.preventDefault();
-		// Blur the search input to return focus to page level
-		if (target instanceof HTMLElement) {
-			target.blur();
+		// Focus the embeddings tab button explicitly
+		const embeddingsTabButton = document.querySelector('[data-memory-tab="embeddings"]') as HTMLElement;
+		if (embeddingsTabButton) {
+			embeddingsTabButton.focus();
+		} else {
+			searchInputEl?.blur();
 		}
 		return;
 	}

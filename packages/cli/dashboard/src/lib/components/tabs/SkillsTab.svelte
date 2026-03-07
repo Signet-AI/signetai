@@ -350,9 +350,20 @@ onMount(() => {
 		outline: none;
 		cursor: pointer;
 		border-radius: 0.5rem;
+		transition: border-color 0.15s;
 	}
+
+	:global(.sort-select:hover) {
+		border-color: var(--sig-accent);
+	}
+
 	:global(.sort-select:focus) {
 		border-color: var(--sig-accent);
+	}
+
+	:global(.sort-select:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 
 	:global(.sort-select-content) {
@@ -378,8 +389,19 @@ onMount(() => {
 		outline: none;
 		cursor: pointer;
 		border-radius: 0.5rem;
+		transition: border-color 0.15s;
 	}
+
+	:global(.provider-select:hover) {
+		border-color: var(--sig-accent);
+	}
+
 	:global(.provider-select:focus) {
 		border-color: var(--sig-accent);
+	}
+
+	:global(.provider-select:focus-visible) {
+		outline: 2px solid var(--sig-accent);
+		outline-offset: 1px;
 	}
 </style>

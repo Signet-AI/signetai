@@ -81,10 +81,12 @@ function handleClick(item: NavItem): void {
 	}
 }
 
-// Initialize sidebar focus on mount
+// Initialize sidebar focus on mount — derive from current active tab
 onMount(() => {
 	if (!focus.sidebarItem) {
-		setSidebarItem("config");
+		// Sync to whichever tab is actually active
+		const item = navItems.find(n => isActive(n));
+		setSidebarItem((item?.id ?? "config") as SidebarFocusItem);
 	}
 });
 
@@ -189,7 +191,10 @@ function activateItem(item: NavItem): void {
 								onclick={() => activateItem(item)}
 								onkeydown={(e) => handleSidebarKeydown(e, item)}
 								onmouseenter={() => maybePrefetchEmbeddings(item.id)}
-								onfocus={() => maybePrefetchEmbeddings(item.id)}
+								onfocus={() => {
+									maybePrefetchEmbeddings(item.id);
+									focus.sidebarItem = item.id as SidebarFocusItem;
+								}}
 								tooltipContent={item.label}
 							>
 								<item.icon class="size-4" />
@@ -238,6 +243,7 @@ function activateItem(item: NavItem): void {
 				tabindex={getTabIndex("theme-toggle")}
 				onclick={onthemetoggle}
 				onkeydown={(e) => handleFooterKeydown(e, "theme-toggle")}
+				onfocus={() => { focus.sidebarItem = "theme-toggle"; }}
 				tooltipContent={theme === "dark" ? "Light mode" : "Dark mode"}
 			>
 					{#if theme === "dark"}
@@ -261,6 +267,7 @@ function activateItem(item: NavItem): void {
 				tabindex={getTabIndex("github-link")}
 				onclick={() => window.open("https://github.com/Signet-AI/signetai", "_blank")}
 				onkeydown={(e) => handleFooterKeydown(e, "github-link")}
+				onfocus={() => { focus.sidebarItem = "github-link"; }}
 				tooltipContent="GitHub"
 			>
 					<Github class="size-4" />

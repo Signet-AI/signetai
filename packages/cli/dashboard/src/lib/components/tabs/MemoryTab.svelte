@@ -10,7 +10,7 @@ import {
 	openEditForm,
 	closeEditForm,
 } from "$lib/stores/memory.svelte";
-import { setTab, nav } from "$lib/stores/navigation.svelte";
+import { setTab, nav, isMemoryGroup } from "$lib/stores/navigation.svelte";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import MemoryForm from "$lib/components/memory/MemoryForm.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
@@ -144,8 +144,8 @@ function formatIsoDate(value: string): string {
 
 // Keyboard navigation for sub-tabs and memory cards
 function handleGlobalKey(e: KeyboardEvent) {
-	// Only handle events when Memory tab is active
-	if (nav.activeTab !== "memory") return;
+	// Only handle events when any Memory group tab is active
+	if (!isMemoryGroup(nav.activeTab)) return;
 
 	const target = e.target as HTMLElement;
 	const isInputFocused =
@@ -334,8 +334,8 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 		}
 	} else if (e.key === "ArrowUp") {
 		e.preventDefault();
-		// Return to tab bar by focusing the memory tab button
-		const memoryTabButton = document.querySelector('[data-memory-tab="memory"]') as HTMLElement;
+		// Return to tab bar by focusing the currently active memory tab button
+		const memoryTabButton = document.querySelector(`[data-memory-tab="${nav.activeTab}"]`) as HTMLElement;
 		if (memoryTabButton) {
 			memoryTabButton.focus();
 		}
@@ -418,7 +418,8 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 				if (e.key === "Escape") {
 					e.preventDefault();
 					(e.currentTarget as HTMLElement).blur();
-				} else if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
+				} else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+					// Only intercept vertical navigation, let Left/Right move caret
 					handleFilterKeydown(e);
 				}
 			}}
@@ -435,9 +436,8 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 				if (e.key === "Escape") {
 					e.preventDefault();
 					(e.currentTarget as HTMLElement).blur();
-				} else if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
-					handleFilterKeydown(e);
 				}
+				// Don't intercept arrow keys — let native number input stepping and caret work
 			}}
 		/>
 
@@ -579,7 +579,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 				{@const scoreLabel = memoryScoreLabel(memory)}
 
 			<div
-				role="button"
+				role="group"
 				tabindex="0"
 				onkeydown={handleCardKeydown}
 				class="doc-card relative flex flex-col

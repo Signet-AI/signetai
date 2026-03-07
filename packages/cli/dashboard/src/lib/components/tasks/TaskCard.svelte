@@ -9,12 +9,13 @@ import Play from "@lucide/svelte/icons/play";
 interface Props {
 	task: ScheduledTask;
 	columnKey: string;
+	isSelected?: boolean;
 	onclick: () => void;
 	ontrigger: () => void;
 	ontoggle: (enabled: boolean) => void;
 }
 
-let { task, columnKey, onclick, ontrigger, ontoggle }: Props = $props();
+let { task, columnKey, isSelected = false, onclick, ontrigger, ontoggle }: Props = $props();
 
 function formatRelativeTime(iso: string | null): string {
 	if (!iso) return "—";
@@ -42,12 +43,16 @@ let lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 </script>
 
 <button
-	class="w-full text-left cursor-pointer bg-transparent border-none p-0"
+	class="w-full text-left cursor-pointer bg-transparent border-none p-0 task-card"
+	class:selected={isSelected}
 	onclick={onclick}
+	tabindex="0"
+	data-task-id={task.id}
+	data-column={columnKey}
 >
 	<Card.Root
 		class="bg-[var(--sig-surface-raised)] border-[var(--sig-border)]
-			hover:border-[var(--sig-border-strong)] transition-colors
+			transition-all duration-150
 			{!task.enabled ? 'opacity-50' : ''}"
 	>
 		<Card.Content class="p-3 space-y-2">
@@ -113,3 +118,54 @@ let lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 		</Card.Content>
 	</Card.Root>
 </button>
+
+<style>
+	.task-card {
+		outline: none;
+	}
+
+	/* Hover state - prominent mouse indication with lift effect */
+	.task-card:hover :global(.card-root) {
+		border-color: var(--sig-border-strong);
+		background: color-mix(in srgb, var(--sig-surface-raised) 95%, var(--sig-accent) 5%);
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.3);
+	}
+
+	/* Keyboard focus-visible state - clear, distinct visual indication */
+	.task-card:focus-visible :global(.card-root) {
+		border-color: var(--sig-accent);
+		box-shadow:
+			0 0 0 2px var(--sig-accent),
+			0 0 0 4px color-mix(in srgb, var(--sig-accent) 30%, transparent);
+		background: color-mix(in srgb, var(--sig-surface-raised) 92%, var(--sig-accent) 8%);
+	}
+
+	/* Focus state (non-visible) - same as hover for consistency */
+	.task-card:focus:not(:focus-visible) :global(.card-root) {
+		border-color: var(--sig-border-strong);
+	}
+
+	/* Selected state (clicked/active) - strong accent indication */
+	.task-card.selected :global(.card-root) {
+		border-color: var(--sig-accent);
+		box-shadow: 0 0 0 2px var(--sig-accent);
+		background: color-mix(in srgb, var(--sig-surface-raised) 90%, var(--sig-accent) 10%);
+	}
+
+	/* Combine hover + focus-visible - focus takes precedence */
+	.task-card:focus-visible:hover :global(.card-root) {
+		border-color: var(--sig-accent);
+		box-shadow:
+			0 0 0 2px var(--sig-accent),
+			0 0 0 4px color-mix(in srgb, var(--sig-accent) 30%, transparent);
+		transform: none;
+	}
+
+	/* Selected + hover - keep selected styling */
+	.task-card.selected:hover :global(.card-root) {
+		border-color: var(--sig-accent);
+		box-shadow: 0 0 0 2px var(--sig-accent);
+		transform: none;
+	}
+</style>

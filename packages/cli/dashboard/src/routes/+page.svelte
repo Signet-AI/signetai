@@ -207,7 +207,7 @@ function focusMemoryTab(index: number): void {
 
 function focusMemoryContent(): void {
 	memoryTabFocus = "content";
-	(window as any).focus(); // Clear focus - stay at tab level
+	focusFirstPageElement();
 }
 
 function handleGlobalKey(e: KeyboardEvent) {
@@ -347,10 +347,12 @@ function handleFocusIn(e: FocusEvent) {
 		return;
 	}
 
-	// Check if focus moved to a tab button
+	// Check if focus moved to a tab button — always sync state
 	const engineTab = target.closest('[data-engine-tab]');
-	if (engineTab && focus.zone !== 'page-content') {
-		setFocusZone('page-content');
+	if (engineTab) {
+		if (focus.zone !== 'page-content') {
+			setFocusZone('page-content');
+		}
 		const tabName = engineTab.getAttribute('data-engine-tab') as typeof ENGINE_TABS[number];
 		const index = ENGINE_TABS.indexOf(tabName);
 		if (index !== -1) {
@@ -361,8 +363,10 @@ function handleFocusIn(e: FocusEvent) {
 	}
 
 	const memoryTab = target.closest('[data-memory-tab]');
-	if (memoryTab && focus.zone !== 'page-content') {
-		setFocusZone('page-content');
+	if (memoryTab) {
+		if (focus.zone !== 'page-content') {
+			setFocusZone('page-content');
+		}
 		const tabName = memoryTab.getAttribute('data-memory-tab') as typeof MEMORY_TABS[number];
 		const index = MEMORY_TABS.indexOf(tabName);
 		if (index !== -1) {
@@ -625,7 +629,7 @@ function handleFocusOut(e: FocusEvent) {
 
 		<ExtensionBanner />
 
-		<div class="flex flex-1 flex-col min-h-0 relative">
+		<div class="flex flex-1 flex-col min-h-0 relative" data-tab-panel-active="true">
 			{#snippet skeletonError(error: unknown)}
 				<div class="flex flex-1 items-center justify-center sig-label text-[var(--sig-danger)]">
 					Failed to load tab: {error instanceof Error ? error.message : "unknown error"}

@@ -40,6 +40,9 @@ let refreshingSkills = $state(false);
 let refreshingMcp = $state(false);
 let refreshingTools = $state(false);
 let dropdownOpen = $state(false);
+let sortSelectOpen = $state(false);
+let secondarySortSelectOpen = $state(false);
+let categorySelectOpen = $state(false);
 const MOBILE_RAIL_QUERY = "(max-width: 1120px)";
 
 type SpotlightItem = {
@@ -280,7 +283,7 @@ function getGridInfo(): { columns: number; cards: HTMLElement[] } {
 	let columns = 1;
 	for (let i = 1; i < cards.length; i++) {
 		const cardRect = cards[i].getBoundingClientRect();
-		if (cardRect.top === firstCardRect.top) {
+		if (Math.abs(cardRect.top - firstCardRect.top) < 2) {
 			columns++;
 		} else {
 			break;
@@ -308,6 +311,9 @@ function handleGlobalKey(e: KeyboardEvent) {
 			e.preventDefault();
 			e.stopPropagation();
 			dropdownOpen = false;
+			sortSelectOpen = false;
+			secondarySortSelectOpen = false;
+			categorySelectOpen = false;
 			// Re-focus the current filter button
 			const filters = getFilterElements();
 			if (filters[focusedFilterIndex]) {
@@ -769,7 +775,9 @@ $effect(() => {
 							type="single"
 							value={section === "skills" ? sk.sortBy : mcpMarket.sortBy}
 							onValueChange={(v) => applySort(v ?? "popularity")}
+							open={sortSelectOpen}
 							onOpenChange={(open) => {
+								sortSelectOpen = open;
 								dropdownOpen = open;
 							}}
 						>
@@ -805,7 +813,9 @@ $effect(() => {
 							type="single"
 							value={section === "skills" ? sk.providerFilter : mcpMarket.source}
 							onValueChange={(v) => applySecondarySort(v ?? "all")}
+							open={secondarySortSelectOpen}
 							onOpenChange={(open) => {
+								secondarySortSelectOpen = open;
 								dropdownOpen = open;
 							}}
 						>
@@ -839,7 +849,9 @@ $effect(() => {
 							type="single"
 							value={activeCategory}
 							onValueChange={(v) => applyCategory(v ?? "all")}
+							open={categorySelectOpen}
 							onOpenChange={(open) => {
+								categorySelectOpen = open;
 								dropdownOpen = open;
 							}}
 						>
@@ -928,13 +940,6 @@ $effect(() => {
 					<input
 						type="checkbox"
 						bind:checked={reviewsMarket.configEnabled}
-						onkeydown={(e) => {
-							if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-								e.preventDefault();
-								e.stopPropagation();
-								handleGlobalKey(e);
-							}
-						}}
 					/>
 					<span>Enable endpoint sync</span>
 				</label>
@@ -943,13 +948,6 @@ $effect(() => {
 					class="input"
 					placeholder="https://example.com/signet-reviews"
 					bind:value={reviewsMarket.configEndpointUrl}
-					onkeydown={(e) => {
-						if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-							e.preventDefault();
-							e.stopPropagation();
-							handleGlobalKey(e);
-						}
-					}}
 				/>
 				<div class="sync-actions">
 					<Button

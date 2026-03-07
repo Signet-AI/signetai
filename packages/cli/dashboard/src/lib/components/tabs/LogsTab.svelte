@@ -2,6 +2,7 @@
 import { Button } from "$lib/components/ui/button/index.js";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+import { browser } from "$app/environment";
 import * as Select from "$lib/components/ui/select/index.js";
 import { ActionLabels } from "$lib/ui/action-labels";
 import { onMount, tick } from "svelte";

@@ -16,6 +16,7 @@
 	} from "$lib/components/pipeline/pipeline-store.svelte";
 	import { PIPELINE_NODES } from "$lib/components/pipeline/pipeline-types";
 	import { workspaceLayout, syncLayoutToStorage } from "$lib/stores/workspace-layout.svelte";
+	import { returnToSidebar } from "$lib/stores/focus.svelte";
 
 
 	function handleSelectNode(id: string) {
@@ -44,6 +45,24 @@
 			feedViewport.scrollHeight - feedViewport.scrollTop -
 			feedViewport.clientHeight;
 		return distance <= AUTO_SCROLL_THRESHOLD_PX;
+	}
+
+	// Keyboard navigation - let parent handle tab bar navigation
+	function handleGlobalKey(e: KeyboardEvent) {
+		const target = e.target as HTMLElement;
+		const isInputFocused =
+			target.tagName === "INPUT" ||
+			target.tagName === "TEXTAREA" ||
+			target.isContentEditable;
+
+		if (isInputFocused) return;
+
+		// Arrow keys are handled by parent for tab bar navigation
+		// Escape returns to sidebar
+		if (e.key === "Escape") {
+			e.preventDefault();
+			returnToSidebar();
+		}
 	}
 
 	function updateFeedPositionFlags(): void {
@@ -328,6 +347,8 @@
 		return `${raw.slice(0, MAX_CHARS)}\n...truncated`;
 	}
 </script>
+
+<svelte:window onkeydown={handleGlobalKey} />
 
 <div class="flex flex-col h-full overflow-hidden">
 	<!-- Toolbar -->

@@ -87,9 +87,12 @@ function handleGlobalKey(e: KeyboardEvent) {
 	// Don't process other shortcuts when typing in inputs or form is open
 	if (isInput || ts.formOpen) return;
 
-	// Arrow navigation between columns and tasks (only when detail is closed)
+	// Arrow navigation between columns and tasks (only when detail is closed and board is focused)
+	const isBoardFocused = document.activeElement?.classList.contains('task-card') ||
+		document.activeElement?.closest('.tasks-board') !== null;
+
 	if (!ts.detailOpen) {
-		if (e.key === "ArrowLeft") {
+		if (e.key === "ArrowLeft" && isBoardFocused) {
 			e.preventDefault();
 			if (selectedColumn === 0 && selectedTaskInColumn === 0) {
 				// At first task of first column, return to sidebar
@@ -137,7 +140,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			return;
 		}
 
-		if (e.key === "ArrowUp") {
+		if (e.key === "ArrowUp" && isBoardFocused) {
 			e.preventDefault();
 			const colTasks = getColumnTasks(columnKeys[selectedColumn]);
 			if (selectedTaskInColumn > 0) {
@@ -147,7 +150,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			return;
 		}
 
-		if (e.key === "ArrowDown") {
+		if (e.key === "ArrowDown" && isBoardFocused) {
 			e.preventDefault();
 			const colTasks = getColumnTasks(columnKeys[selectedColumn]);
 			if (selectedTaskInColumn < colTasks.length - 1) {
@@ -158,8 +161,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 		}
 	}
 
-	// Enter to view task detail
-	if (e.key === "Enter" && !ts.detailOpen) {
+	// Enter to view task detail (only when board is focused)
+	if (e.key === "Enter" && !ts.detailOpen && isBoardFocused) {
 		const colTasks = getColumnTasks(columnKeys[selectedColumn]);
 		const task = colTasks[selectedTaskInColumn];
 		if (task) {

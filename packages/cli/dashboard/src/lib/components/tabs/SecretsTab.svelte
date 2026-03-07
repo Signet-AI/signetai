@@ -15,6 +15,7 @@ import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
 import { toast } from "$lib/stores/toast.svelte";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
+import { nav } from "$lib/stores/navigation.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
 import { onMount } from "svelte";
 
@@ -167,6 +168,12 @@ async function importFromOnePassword(): Promise<void> {
 
 // Keyboard navigation
 function handleGlobalKey(e: KeyboardEvent) {
+	// Only handle events when Secrets tab is active
+	if (nav.activeTab !== "secrets") return;
+
+	// Skip events already handled by local handlers
+	if (e.defaultPrevented) return;
+
 	const target = e.target as HTMLElement;
 	const isInputFocused =
 		target.tagName === "INPUT" ||
@@ -175,12 +182,17 @@ function handleGlobalKey(e: KeyboardEvent) {
 
 	if (isInputFocused) return;
 
-	// Right Arrow to focus first secret (only when at page level)
+	// Right Arrow to focus first secret or 1Password panel (only when at page level)
 	if (e.key === "ArrowRight" && focusArea === "list" && focusedSecretIndex === -1) {
 		e.preventDefault();
 		if (secrets.length > 0) {
 			focusedSecretIndex = 0;
 			focusSecretItem(0);
+		} else {
+			// No secrets — jump to 1Password panel
+			focusArea = "1password";
+			focusedOnePasswordInput = 0;
+			focusOnePasswordInputField(0);
 		}
 	}
 
@@ -274,13 +286,6 @@ function focusSecretItem(index: number): void {
 	}
 }
 
-function focusOnePasswordPanel(): void {
-	const panel = document.querySelector('.onepassword-panel');
-	if (panel instanceof HTMLElement) {
-		panel.focus();
-	}
-}
-
 function focusOnePasswordInputField(index: number): void {
 	// Input indices: 0=token, 1=prefix, 2=connect button, 3=import button, 4=disconnect button
 	const panel = document.querySelector('.onepassword-panel');
@@ -356,6 +361,7 @@ function handleSecretItemFocus(index: number): void {
 function handleSecretItemKeydown(e: KeyboardEvent, index: number): void {
 	if (e.key === "ArrowDown") {
 		e.preventDefault();
+		e.stopPropagation();
 		if (index < secrets.length - 1) {
 			focusedSecretIndex = index + 1;
 			focusSecretItem(focusedSecretIndex);
@@ -369,6 +375,7 @@ function handleSecretItemKeydown(e: KeyboardEvent, index: number): void {
 		}
 	} else if (e.key === "ArrowUp") {
 		e.preventDefault();
+		e.stopPropagation();
 		if (index > 0) {
 			focusedSecretIndex = index - 1;
 			focusSecretItem(focusedSecretIndex);
@@ -379,6 +386,7 @@ function handleSecretItemKeydown(e: KeyboardEvent, index: number): void {
 		}
 	} else if (e.key === "ArrowLeft") {
 		e.preventDefault();
+		e.stopPropagation();
 		focusedSecretIndex = -1;
 		(e.target as HTMLElement).blur();
 	}

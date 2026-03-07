@@ -165,7 +165,7 @@
 						return;
 					}
 					e.preventDefault();
-					const prevIdx = currentIdx <= 1 ? sections.length - 1 : currentIdx - 2;
+					const prevIdx = currentIdx - 1;
 					switchSection(sections[prevIdx].id);
 				} else {
 					e.preventDefault();

@@ -110,8 +110,9 @@ export function focusFirstPageElement(): void {
 
 	// Use setTimeout to ensure DOM is ready after navigation
 	setTimeout(() => {
-		// Try to find the first focusable element in the page content
-		const pageContent = document.querySelector('[data-page-content="true"]');
+		// Try to scope to the active tab panel first, fall back to page content
+		const activePanel = document.querySelector('[data-tab-panel-active="true"]');
+		const pageContent = activePanel ?? document.querySelector('[data-page-content="true"]');
 		if (!pageContent) return;
 
 		const focusableSelectors = [
