@@ -2206,3 +2206,53 @@ export async function getPredictorTrainingRuns(limit = 20): Promise<PredictorTra
 		return [];
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge Graph Constellation Overlay
+// ---------------------------------------------------------------------------
+
+export interface ConstellationAttribute {
+	id: string;
+	content: string;
+	kind: "attribute" | "constraint";
+	importance: number;
+	memoryId: string | null;
+}
+
+export interface ConstellationAspect {
+	id: string;
+	name: string;
+	weight: number;
+	attributes: ConstellationAttribute[];
+}
+
+export interface ConstellationEntity {
+	id: string;
+	name: string;
+	entityType: string;
+	mentions: number;
+	pinned: boolean;
+	aspects: ConstellationAspect[];
+}
+
+export interface ConstellationDependency {
+	sourceEntityId: string;
+	targetEntityId: string;
+	dependencyType: string;
+	strength: number;
+}
+
+export interface ConstellationGraph {
+	entities: ConstellationEntity[];
+	dependencies: ConstellationDependency[];
+}
+
+export async function getConstellationOverlay(agentId = "default"): Promise<ConstellationGraph | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}`);
+		if (!res.ok) return null;
+		return (await res.json()) as ConstellationGraph;
+	} catch {
+		return null;
+	}
+}

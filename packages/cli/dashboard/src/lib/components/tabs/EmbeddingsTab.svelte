@@ -1,5 +1,6 @@
 <script lang="ts">
 import {
+	type ConstellationGraph,
 	type EmbeddingCheckResult,
 	type EmbeddingHealthReport,
 	type EmbeddingPoint,
@@ -7,6 +8,7 @@ import {
 	type ProjectionNode,
 	type ProjectionQueryOptions,
 	type RepairActionResult,
+	getConstellationOverlay,
 	getDistinctWho,
 	getEmbeddingGapStats,
 	getEmbeddingHealth,
@@ -39,11 +41,17 @@ import {
 	MAX_EMBEDDING_LIMIT,
 	type NodeColorMode,
 	type RelationKind,
+	aspectRadius,
+	attributeRadius,
 	clampGraphPhysics,
 	embeddingLabel,
+	entityFillStyle,
+	entityRadius,
+	entityTypeColors,
 	newnessFillStyle,
 	newnessIntensity,
 	sourceColorRgba,
+	tierChargeStrength,
 } from "../embeddings/embedding-graph";
 
 interface Props {
@@ -148,6 +156,12 @@ let newnessNowMs = $state(Date.now());
 let nodes = $state<GraphNode[]>([]);
 let edges = $state<GraphEdge[]>([]);
 let nodeIdsByIndex = $state<string[]>([]);
+
+let showEntityOverlay = $state(false);
+let constellationOverlay = $state<ConstellationGraph | null>(null);
+let entityOverlayLoading = $state(false);
+
+const ENTITY_OVERLAY_STORAGE_KEY = "signet-constellation-entity-overlay";
 
 let graphMode: "2d" | "3d" = $state("2d");
 let projected3dCoords = $state<number[][]>([]);
@@ -881,18 +895,246 @@ async function initGraph(): Promise<void> {
 		edges = (projection.edges ?? []).map(([source, target]) => ({
 			source,
 			target,
+			edgeType: "knn" as const,
 		}));
+
+		// When entity overlay is ON, build knowledge graph (replaces nodes/edges)
+		if (showEntityOverlay) {
+			await buildKnowledgeGraph();
+		}
 
 		graphStatus = "";
 		await tick();
 		if (loadId !== graphLoadId) return;
 
-		canvas2d?.startSimulation(nodes, edges, graphPhysics);
+		if (showEntityOverlay) {
+			// Tier-aware force simulation for hierarchical layout
+			canvas2d?.startKnowledgeGraphSimulation(nodes, edges);
+		} else {
+			canvas2d?.startSimulation(nodes, edges, graphPhysics);
+		}
 		canvas2d?.startRendering();
 	} catch (error) {
 		graphError = (error as Error).message || "Failed to load projection";
 		graphStatus = "";
 		lastAppliedProjectionKey = requestKey;
+	}
+}
+
+// -----------------------------------------------------------------------
+// Knowledge graph builder (entity-first hierarchical view)
+// -----------------------------------------------------------------------
+
+async function buildKnowledgeGraph(): Promise<void> {
+	entityOverlayLoading = true;
+	try {
+		const graph = await getConstellationOverlay();
+		if (!graph) {
+			constellationOverlay = null;
+			return;
+		}
+		constellationOverlay = graph;
+
+		// Build the existing memory node lookup for leaf linking
+		const memoryNodeMap = new Map<string, GraphNode>();
+		for (const node of nodes) {
+			memoryNodeMap.set(node.data.id, node);
+		}
+
+		const kgNodes: GraphNode[] = [];
+		const kgEdges: GraphEdge[] = [];
+		const kgNodeIds: string[] = [];
+		const kgEmbeddingById = new Map<string, EmbeddingPoint>();
+		const entityNodeIndices = new Map<string, number>();
+
+		const spread = 400;
+
+		for (const entity of graph.entities) {
+			// Create entity node
+			const eId = `entity:${entity.id}`;
+			const eRadius = entityRadius(entity);
+			const ex = (Math.random() - 0.5) * spread;
+			const ey = (Math.random() - 0.5) * spread;
+			const eData: EmbeddingPoint = {
+				id: eId,
+				content: entity.name,
+				who: entity.entityType,
+				importance: 0.9,
+				pinned: entity.pinned,
+				tags: [],
+				createdAt: undefined,
+			};
+			const entityIdx = kgNodes.length;
+			entityNodeIndices.set(entity.id, entityIdx);
+			kgNodes.push({
+				x: ex, y: ey,
+				radius: eRadius,
+				color: entityFillStyle(entity.entityType, 0.7),
+				data: eData,
+				nodeType: "entity",
+				entityData: entity,
+			});
+			kgNodeIds.push(eId);
+			kgEmbeddingById.set(eId, eData);
+
+			// Create aspect nodes orbiting entity
+			for (const aspect of entity.aspects) {
+				const aId = `aspect:${aspect.id}`;
+				const aRadius = aspectRadius(aspect.weight);
+				const aData: EmbeddingPoint = {
+					id: aId,
+					content: aspect.name,
+					who: entity.entityType,
+					importance: aspect.weight,
+					pinned: false,
+					tags: [],
+					createdAt: undefined,
+				};
+				const aspectIdx = kgNodes.length;
+				kgNodes.push({
+					x: ex + (Math.random() - 0.5) * 80,
+					y: ey + (Math.random() - 0.5) * 80,
+					radius: aRadius,
+					color: entityFillStyle(entity.entityType, 0.5),
+					data: aData,
+					nodeType: "aspect",
+					aspectData: aspect,
+					parentEntityId: entity.id,
+				});
+				kgNodeIds.push(aId);
+				kgEmbeddingById.set(aId, aData);
+
+				// Hierarchy edge: entity -> aspect
+				kgEdges.push({
+					source: entityIdx,
+					target: aspectIdx,
+					edgeType: "hierarchy",
+				});
+
+				// Create attribute nodes orbiting aspect
+				for (const attr of aspect.attributes) {
+					const atId = `attr:${attr.id}`;
+					const atRadius = attributeRadius(attr.importance);
+					const atData: EmbeddingPoint = {
+						id: atId,
+						content: attr.content,
+						who: entity.entityType,
+						importance: attr.importance,
+						pinned: false,
+						tags: [],
+						createdAt: undefined,
+					};
+					const attrIdx = kgNodes.length;
+					kgNodes.push({
+						x: kgNodes[aspectIdx].x + (Math.random() - 0.5) * 40,
+						y: kgNodes[aspectIdx].y + (Math.random() - 0.5) * 40,
+						radius: atRadius,
+						color: entityFillStyle(entity.entityType, 0.3),
+						data: atData,
+						nodeType: "attribute",
+						attributeData: attr,
+						parentEntityId: entity.id,
+						parentAspectId: aspect.id,
+					});
+					kgNodeIds.push(atId);
+					kgEmbeddingById.set(atId, atData);
+
+					// Hierarchy edge: aspect -> attribute
+					kgEdges.push({
+						source: aspectIdx,
+						target: attrIdx,
+						edgeType: "hierarchy",
+					});
+
+					// If attribute has a memoryId in the current projection, add memory leaf
+					if (attr.memoryId) {
+						const memNode = memoryNodeMap.get(attr.memoryId);
+						if (memNode) {
+							const memIdx = kgNodes.length;
+							kgNodes.push({
+								x: kgNodes[attrIdx].x + (Math.random() - 0.5) * 25,
+								y: kgNodes[attrIdx].y + (Math.random() - 0.5) * 25,
+								radius: 2,
+								color: memNode.color,
+								data: memNode.data,
+								nodeType: "memory",
+							});
+							kgNodeIds.push(memNode.data.id);
+							kgEmbeddingById.set(memNode.data.id, memNode.data);
+
+							// Hierarchy edge: attribute -> memory
+							kgEdges.push({
+								source: attrIdx,
+								target: memIdx,
+								edgeType: "hierarchy",
+							});
+						}
+					}
+				}
+			}
+		}
+
+		// Performance cap: drop memory leaf nodes if > 3000 total
+		if (kgNodes.length > 3000) {
+			const memoryIndices = new Set<number>();
+			for (let i = 0; i < kgNodes.length; i++) {
+				if (kgNodes[i].nodeType === "memory") memoryIndices.add(i);
+			}
+			// Rebuild without memory nodes (filter edges too)
+			const indexMap = new Map<number, number>();
+			const filtered: GraphNode[] = [];
+			const filteredIds: string[] = [];
+			for (let i = 0; i < kgNodes.length; i++) {
+				if (memoryIndices.has(i)) continue;
+				indexMap.set(i, filtered.length);
+				filtered.push(kgNodes[i]);
+				filteredIds.push(kgNodeIds[i]);
+			}
+			const filteredEdges: GraphEdge[] = [];
+			for (const edge of kgEdges) {
+				const si = edge.source as number;
+				const ti = edge.target as number;
+				const ms = indexMap.get(si);
+				const mt = indexMap.get(ti);
+				if (ms !== undefined && mt !== undefined) {
+					filteredEdges.push({ ...edge, source: ms, target: mt });
+				}
+			}
+			kgNodes.length = 0;
+			kgNodes.push(...filtered);
+			kgNodeIds.length = 0;
+			kgNodeIds.push(...filteredIds);
+			kgEdges.length = 0;
+			kgEdges.push(...filteredEdges);
+			// Rebuild embeddingById
+			kgEmbeddingById.clear();
+			for (const n of kgNodes) {
+				kgEmbeddingById.set(n.data.id, n.data);
+			}
+		}
+
+		// Dependency edges between entity nodes
+		for (const dep of graph.dependencies) {
+			const si = entityNodeIndices.get(dep.sourceEntityId);
+			const ti = entityNodeIndices.get(dep.targetEntityId);
+			if (si !== undefined && ti !== undefined) {
+				kgEdges.push({
+					source: si,
+					target: ti,
+					edgeType: "dependency",
+					dependencyType: dep.dependencyType,
+					strength: dep.strength,
+				});
+			}
+		}
+
+		// Replace graph state entirely
+		nodes = kgNodes;
+		nodeIdsByIndex = kgNodeIds;
+		edges = kgEdges;
+		embeddingById = kgEmbeddingById;
+	} finally {
+		entityOverlayLoading = false;
 	}
 }
 
@@ -1310,6 +1552,30 @@ $effect(() => {
 	}
 });
 
+// Entity overlay persistence
+$effect(() => {
+	if (typeof window === "undefined") return;
+	try {
+		const raw = window.sessionStorage.getItem(ENTITY_OVERLAY_STORAGE_KEY);
+		if (raw === "true") showEntityOverlay = true;
+	} catch {
+		// Ignore read failures.
+	}
+});
+
+$effect(() => {
+	if (typeof window === "undefined") return;
+	try {
+		if (showEntityOverlay) {
+			window.sessionStorage.setItem(ENTITY_OVERLAY_STORAGE_KEY, "true");
+		} else {
+			window.sessionStorage.removeItem(ENTITY_OVERLAY_STORAGE_KEY);
+		}
+	} catch {
+		// Ignore write failures.
+	}
+});
+
 $effect(() => {
 	if (typeof window === "undefined") return;
 	const timer = window.setInterval(() => {
@@ -1443,6 +1709,12 @@ const hoverNeighbors: EmbeddingRelation[] = $derived.by(() => {
 const hoverRelationLookup = $derived(new Map(hoverNeighbors.map((n) => [n.id, "similar" as const])));
 
 const effectiveRelationLookup = $derived(graphSelected ? relationLookup : hoverRelationLookup);
+
+const selectedNode = $derived.by(() => {
+	const sel = graphSelected;
+	if (!sel) return null;
+	return nodes.find((n) => n.data.id === sel.id) ?? null;
+});
 
 const effectiveHoverNeighbors = $derived(graphSelected ? [] : hoverNeighbors);
 
@@ -1685,6 +1957,29 @@ $effect(() => {
 					<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35]">
 						<span class="text-[var(--sig-text)]">Relation highlight</span> = selected node neighborhood emphasis
 					</div>
+					{#if showEntityOverlay}
+						<div class="mt-2 pt-2 border-t border-[var(--sig-border)]">
+							<div class="text-[10px] font-[family-name:var(--font-mono)] uppercase tracking-[0.06em] text-[var(--sig-text-muted)] mb-1">Knowledge Graph</div>
+							<div class="flex flex-wrap gap-1 mb-1.5">
+								{#each Object.entries(entityTypeColors) as [type, color]}
+									{#if type !== "unknown"}
+										<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] border border-[rgba(255,255,255,0.14)] bg-transparent">
+											<span class="inline-block w-[8px] h-[8px]" style={`background:${color}; clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);`}></span>
+											{type}
+										</span>
+									{/if}
+								{/each}
+							</div>
+							<div class="text-[10px] text-[var(--sig-text-muted)] leading-[1.35] space-y-0.5">
+								<div><span class="text-[var(--sig-text)]">Hexagon</span> = entity (large, labeled)</div>
+								<div><span class="text-[var(--sig-text)]">Circle</span> = aspect (medium, orbits entity)</div>
+								<div><span class="text-[var(--sig-text)]">Small dot</span> = attribute (orbits aspect)</div>
+								<div><span class="text-[var(--sig-text)]">Tiny dot</span> = linked memory (leaf node)</div>
+								<div><span class="text-[var(--sig-text)]">Faint lines</span> = parent-child hierarchy</div>
+								<div><span class="text-[var(--sig-text)]">Styled line</span> = entity dependency</div>
+							</div>
+						</div>
+					{/if}
 				</div>
 			</div>
 
@@ -1880,6 +2175,12 @@ $effect(() => {
 								<div class="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Overlays</div>
 								<div class="flex flex-wrap gap-1">
 									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showNewSinceLastSeen && nodeColorMode !== 'none' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'} {nodeColorMode === 'none' ? 'opacity-60 cursor-not-allowed' : ''}" onclick={() => (showNewSinceLastSeen = !showNewSinceLastSeen)} disabled={nodeColorMode === "none"}>New since last seen</button>
+									<button
+										class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showEntityOverlay ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+										onclick={() => { showEntityOverlay = !showEntityOverlay; if (graphInitialized) reloadEmbeddingsGraph(); }}
+									>
+										{entityOverlayLoading ? 'Loading...' : 'Entities'}
+									</button>
 								</div>
 							</div>
 							<div class="border border-[var(--sig-border)] px-2 py-2 space-y-1.5">
@@ -2075,6 +2376,13 @@ $effect(() => {
 				{embeddingSearch}
 				{pinBusy}
 				{pinError}
+				selectedNodeType={selectedNode?.nodeType ?? undefined}
+				selectedEntityData={selectedNode?.entityData ?? null}
+				selectedAspectData={selectedNode?.aspectData ?? null}
+				selectedAttributeData={selectedNode?.attributeData ?? null}
+				parentEntityId={selectedNode?.parentEntityId ?? null}
+				parentAspectId={selectedNode?.parentAspectId ?? null}
+				{constellationOverlay}
 				onselectembedding={selectEmbeddingById}
 				onclearselection={clearEmbeddingSelection}
 				onloadglobalsimilar={loadGlobalSimilarForSelected}

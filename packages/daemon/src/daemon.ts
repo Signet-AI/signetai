@@ -86,6 +86,7 @@ import {
 } from "./memory-config";
 import {
 	getAttributesForAspectFiltered,
+	getKnowledgeGraphForConstellation,
 	getEntityAspectsWithCounts,
 	getEntityDependenciesDetailed,
 	getEntityHealth,
@@ -6030,6 +6031,11 @@ app.get("/api/knowledge/traversal/status", (c) => {
 	return c.json({
 		status: getTraversalStatus(),
 	});
+});
+
+app.get("/api/knowledge/constellation", (c) => {
+	const agentId = c.req.query("agent_id") ?? "default";
+	return c.json(getKnowledgeGraphForConstellation(getDbAccessor(), agentId));
 });
 
 // ============================================================================

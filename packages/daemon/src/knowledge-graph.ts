@@ -1164,6 +1164,179 @@ export function propagateMemoryStatus(
 	});
 }
 
+// ---------------------------------------------------------------------------
+// Constellation overlay — hierarchical graph
+// ---------------------------------------------------------------------------
+
+export interface ConstellationAttribute {
+	readonly id: string;
+	readonly content: string;
+	readonly kind: "attribute" | "constraint";
+	readonly importance: number;
+	readonly memoryId: string | null;
+}
+
+export interface ConstellationAspect {
+	readonly id: string;
+	readonly name: string;
+	readonly weight: number;
+	readonly attributes: readonly ConstellationAttribute[];
+}
+
+export interface ConstellationEntity {
+	readonly id: string;
+	readonly name: string;
+	readonly entityType: string;
+	readonly mentions: number;
+	readonly pinned: boolean;
+	readonly aspects: readonly ConstellationAspect[];
+}
+
+export interface ConstellationDependency {
+	readonly sourceEntityId: string;
+	readonly targetEntityId: string;
+	readonly dependencyType: string;
+	readonly strength: number;
+}
+
+export interface ConstellationGraph {
+	readonly entities: readonly ConstellationEntity[];
+	readonly dependencies: readonly ConstellationDependency[];
+}
+
+export function getKnowledgeGraphForConstellation(
+	accessor: DbAccessor,
+	agentId: string,
+): ConstellationGraph {
+	return accessor.withReadDb((db) => {
+		// 1. Fetch filtered entities: mentions > 0 OR pinned OR has aspects, LIMIT 500
+		const entityRows = db
+			.prepare(
+				`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned
+				 FROM entities e
+				 WHERE e.agent_id = ?
+				   AND (
+				     e.mentions > 0
+				     OR e.pinned = 1
+				     OR EXISTS (
+				       SELECT 1 FROM entity_aspects asp
+				       WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+				     )
+				   )
+				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC
+				 LIMIT 500`,
+			)
+			.all(agentId) as Array<Record<string, unknown>>;
+
+		const entityIds = entityRows
+			.map((r) => r.id as string)
+			.filter((id) => typeof id === "string");
+
+		if (entityIds.length === 0) {
+			return { entities: [], dependencies: [] };
+		}
+
+		// 2. Batch-fetch aspects for those entity IDs
+		const entityIdSet = new Set(entityIds);
+		const aspectRows = db
+			.prepare(
+				`SELECT id, entity_id, name, weight
+				 FROM entity_aspects
+				 WHERE agent_id = ?
+				 ORDER BY weight DESC, name ASC`,
+			)
+			.all(agentId) as Array<Record<string, unknown>>;
+
+		const aspectsByEntity = new Map<string, Array<{
+			id: string;
+			name: string;
+			weight: number;
+		}>>();
+		const aspectIdSet = new Set<string>();
+
+		for (const row of aspectRows) {
+			const entityId = row.entity_id as string;
+			if (!entityIdSet.has(entityId)) continue;
+			const aspectId = row.id as string;
+			aspectIdSet.add(aspectId);
+			const bucket = aspectsByEntity.get(entityId) ?? [];
+			bucket.push({
+				id: aspectId,
+				name: row.name as string,
+				weight: Number(row.weight ?? 0.5),
+			});
+			aspectsByEntity.set(entityId, bucket);
+		}
+
+		// 3. Batch-fetch active attributes for those aspect IDs
+		const attrRows = db
+			.prepare(
+				`SELECT id, aspect_id, content, kind, importance, memory_id
+				 FROM entity_attributes
+				 WHERE agent_id = ? AND status = 'active'
+				 ORDER BY importance DESC`,
+			)
+			.all(agentId) as Array<Record<string, unknown>>;
+
+		const attrsByAspect = new Map<string, ConstellationAttribute[]>();
+		for (const row of attrRows) {
+			const aspectId = row.aspect_id as string;
+			if (!aspectIdSet.has(aspectId)) continue;
+			const bucket = attrsByAspect.get(aspectId) ?? [];
+			bucket.push({
+				id: row.id as string,
+				content: row.content as string,
+				kind: row.kind as "attribute" | "constraint",
+				importance: Number(row.importance ?? 0.5),
+				memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
+			});
+			attrsByAspect.set(aspectId, bucket);
+		}
+
+		// Assemble entities with nested aspects and attributes
+		const entities: ConstellationEntity[] = entityRows.map((row) => {
+			const eid = row.id as string;
+			const aspects: ConstellationAspect[] = (aspectsByEntity.get(eid) ?? []).map((asp) => ({
+				id: asp.id,
+				name: asp.name,
+				weight: asp.weight,
+				attributes: attrsByAspect.get(asp.id) ?? [],
+			}));
+			return {
+				id: eid,
+				name: row.name as string,
+				entityType: row.entity_type as string,
+				mentions: typeof row.mentions === "number" ? row.mentions : 0,
+				pinned: row.pinned === 1,
+				aspects,
+			};
+		});
+
+		// 4. Fetch dependencies where both source and target are in the entity set
+		const depRows = db
+			.prepare(
+				`SELECT source_entity_id, target_entity_id, dependency_type, strength
+				 FROM entity_dependencies
+				 WHERE agent_id = ?`,
+			)
+			.all(agentId) as Array<Record<string, unknown>>;
+
+		const dependencies: ConstellationDependency[] = depRows
+			.filter((row) =>
+				entityIdSet.has(row.source_entity_id as string) &&
+				entityIdSet.has(row.target_entity_id as string),
+			)
+			.map((row) => ({
+				sourceEntityId: row.source_entity_id as string,
+				targetEntityId: row.target_entity_id as string,
+				dependencyType: row.dependency_type as string,
+				strength: Number(row.strength ?? 0.5),
+			}));
+
+		return { entities, dependencies };
+	});
+}
+
 export function getStructuralDensity(
 	accessor: DbAccessor,
 	entityId: string,

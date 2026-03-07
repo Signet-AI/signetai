@@ -8,10 +8,14 @@ import {
 	type NodeColorMode,
 	type RelationKind,
 	clampGraphPhysics,
+	dependencyEdgeStyle,
 	edgeStrokeStyle,
 	embeddingLabel,
+	entityFillStyle,
+	hexPath,
 	isNewSinceLastSeen,
 	nodeFillStyle,
+	tierChargeStrength,
 } from "./embedding-graph";
 
 interface Props {
@@ -152,6 +156,50 @@ export function startSimulation(
 		.on("tick", requestRedraw);
 }
 
+export function startKnowledgeGraphSimulation(
+	graphNodes: GraphNode[],
+	graphEdges: GraphEdge[],
+): void {
+	simulation?.stop();
+
+	// Tier-aware link distances and strengths
+	const linkForce = forceLink(graphEdges)
+		.distance((d: any) => {
+			const s = d.source as GraphNode;
+			const t = d.target as GraphNode;
+			if (d.edgeType === "dependency") return 120;
+			// hierarchy edges: distance by tier pair
+			if (s.nodeType === "entity" && t.nodeType === "aspect") return 50;
+			if (s.nodeType === "aspect" && t.nodeType === "attribute") return 30;
+			if (s.nodeType === "attribute" && t.nodeType === "memory") return 20;
+			return 50;
+		})
+		.strength((d: any) => {
+			if (d.edgeType === "dependency") return 0.05;
+			const s = d.source as GraphNode;
+			const t = d.target as GraphNode;
+			if (s.nodeType === "entity" && t.nodeType === "aspect") return 0.3;
+			if (s.nodeType === "aspect" && t.nodeType === "attribute") return 0.4;
+			if (s.nodeType === "attribute" && t.nodeType === "memory") return 0.5;
+			return 0.3;
+		});
+
+	// Tier-aware charge
+	const charge = forceManyBody().strength((d: any) => tierChargeStrength(d.nodeType));
+
+	simulation = forceSimulation(graphNodes as any)
+		.force("link", linkForce)
+		.force("charge", charge)
+		.force("x", forceX(0).strength(0.03))
+		.force("y", forceY(0).strength(0.03))
+		.force(
+			"collide",
+			forceCollide().radius((entry: any) => entry.radius + 2),
+		)
+		.alphaDecay(0.03)
+		.on("tick", requestRedraw);
+}
+
 export function updatePhysics(nextPhysics: GraphPhysicsConfig): void {
 	if (!simulation) return;
 	startSimulation(nodes, edges, nextPhysics);
@@ -243,12 +291,17 @@ function screenToWorld(sx: number, sy: number): [number, number] {
 }
 
 function findNodeAt(wx: number, wy: number): GraphNode | null {
-	for (let i = nodes.length - 1; i >= 0; i--) {
-		const n = nodes[i];
-		const dx = n.x - wx;
-		const dy = n.y - wy;
-		const hitR = n.radius + 4;
-		if (dx * dx + dy * dy <= hitR * hitR) return n;
+	// Hit detection in priority order: entity > aspect > attribute > memory
+	const hitOrder: Array<GraphNode["nodeType"]> = ["entity", "aspect", "attribute", "memory", undefined];
+	for (const tier of hitOrder) {
+		for (let i = nodes.length - 1; i >= 0; i--) {
+			const n = nodes[i];
+			if (n.nodeType !== tier) continue;
+			const dx = n.x - wx;
+			const dy = n.y - wy;
+			const hitR = n.radius + (tier === "entity" ? 6 : tier === "aspect" ? 5 : 4);
+			if (dx * dx + dy * dy <= hitR * hitR) return n;
+		}
 	}
 	return null;
 }
@@ -444,10 +497,27 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 
 	const selectedId = graphSelected?.id ?? null;
 
+	// --- Draw edges by type: hierarchy first (faintest), then KNN, then dependency ---
 	const edgeBudget = camZoom >= 1.4 ? MAX_EDGES_NEAR : camZoom >= 0.8 ? MAX_EDGES_MID : MAX_EDGES_FAR;
 	const edgeStep = Math.max(1, Math.ceil(edges.length / edgeBudget));
+
+	// Hierarchy edges (parent-child structure): very faint
+	for (const edge of edges) {
+		if (edge.edgeType !== "hierarchy") continue;
+		const s = edge.source as GraphNode;
+		const t = edge.target as GraphNode;
+		ctx.beginPath();
+		ctx.moveTo(s.x, s.y);
+		ctx.lineTo(t.x, t.y);
+		ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+		ctx.lineWidth = 0.4 / camZoom;
+		ctx.stroke();
+	}
+
+	// KNN edges (normal memory-to-memory)
 	for (let i = 0; i < edges.length; i += edgeStep) {
 		const edge = edges[i];
+		if (edge.edgeType && edge.edgeType !== "knn") continue;
 		const s = edge.source as GraphNode;
 		const t = edge.target as GraphNode;
 		ctx.beginPath();
@@ -465,7 +535,31 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		ctx.stroke();
 	}
 
+	// Dependency edges (entity-to-entity): styled by type
+	for (const edge of edges) {
+		if (edge.edgeType !== "dependency") continue;
+		const s = edge.source as GraphNode;
+		const t = edge.target as GraphNode;
+		const style = dependencyEdgeStyle(edge.dependencyType ?? "", edge.strength ?? 0.5);
+		ctx.beginPath();
+		if (style.dash.length > 0) {
+			ctx.setLineDash(style.dash.map((d) => d / camZoom));
+		}
+		ctx.moveTo(s.x, s.y);
+		ctx.lineTo(t.x, t.y);
+		ctx.strokeStyle = style.color;
+		ctx.lineWidth = style.width / camZoom;
+		ctx.stroke();
+		if (style.dash.length > 0) {
+			ctx.setLineDash([]);
+		}
+	}
+
+	// --- Draw nodes in back-to-front order: memory, attribute, aspect, entity ---
+
+	// Memory nodes (smallest, drawn first / behind everything)
 	for (const node of nodes) {
+		if (node.nodeType !== "memory" && node.nodeType !== undefined) continue;
 		ctx.beginPath();
 		ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
 		ctx.fillStyle = nodeFillStyle(
@@ -506,15 +600,115 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		}
 	}
 
+	// Attribute nodes (small circles)
+	for (const node of nodes) {
+		if (node.nodeType !== "attribute") continue;
+		const entityType = node.data.who ?? "unknown";
+		ctx.beginPath();
+		ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+		ctx.fillStyle = entityFillStyle(entityType, 0.3);
+		ctx.fill();
+		ctx.strokeStyle = entityFillStyle(entityType, 0.5);
+		ctx.lineWidth = 0.6 / camZoom;
+		ctx.stroke();
+
+		if (graphSelected && node.data.id === graphSelected.id) {
+			ctx.beginPath();
+			ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
+			ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+			ctx.lineWidth = 1.5 / camZoom;
+			ctx.stroke();
+		}
+	}
+
+	// Aspect nodes (medium circles)
+	for (const node of nodes) {
+		if (node.nodeType !== "aspect") continue;
+		const entityType = node.data.who ?? "unknown";
+		ctx.beginPath();
+		ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+		ctx.fillStyle = entityFillStyle(entityType, 0.5);
+		ctx.fill();
+		ctx.strokeStyle = entityFillStyle(entityType, 0.75);
+		ctx.lineWidth = 0.8 / camZoom;
+		ctx.stroke();
+
+		if (graphSelected && node.data.id === graphSelected.id) {
+			ctx.beginPath();
+			ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
+			ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+			ctx.lineWidth = 1.5 / camZoom;
+			ctx.stroke();
+		}
+
+		// Show label on hover/select
+		if ((graphHovered && node.data.id === graphHovered.id) ||
+			(graphSelected && node.data.id === graphSelected.id)) {
+			const fs = Math.max(7, 9 / camZoom);
+			ctx.font = `${fs}px var(--font-mono)`;
+			ctx.fillStyle = "rgba(210, 210, 210, 0.85)";
+			ctx.textAlign = "center";
+			ctx.fillText(node.aspectData?.name ?? "", node.x, node.y + node.radius + fs + 1 / camZoom);
+			ctx.textAlign = "start";
+		}
+	}
+
+	// Entity nodes (largest, drawn on top)
+	for (const node of nodes) {
+		if (node.nodeType !== "entity") continue;
+		const entityType = node.entityData?.entityType ?? "unknown";
+
+		// Glow effect
+		ctx.save();
+		ctx.shadowColor = entityFillStyle(entityType, 0.5);
+		ctx.shadowBlur = 12 / camZoom;
+
+		// Hexagonal shape
+		hexPath(ctx, node.x, node.y, node.radius);
+		ctx.fillStyle = entityFillStyle(entityType, 0.7);
+		ctx.fill();
+		ctx.restore();
+
+		// Border
+		hexPath(ctx, node.x, node.y, node.radius);
+		ctx.strokeStyle = entityFillStyle(entityType, 0.9);
+		ctx.lineWidth = 1.2 / camZoom;
+		ctx.stroke();
+
+		// Selection ring
+		if (graphSelected && node.data.id === graphSelected.id) {
+			hexPath(ctx, node.x, node.y, node.radius + 4);
+			ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+			ctx.lineWidth = 1.5 / camZoom;
+			ctx.stroke();
+		}
+
+		// Always-visible name label
+		const fs = Math.max(8, 10 / camZoom);
+		ctx.font = `bold ${fs}px var(--font-mono)`;
+		ctx.fillStyle = "rgba(230, 230, 230, 0.9)";
+		ctx.textAlign = "center";
+		ctx.fillText(node.entityData?.name ?? "", node.x, node.y + node.radius + fs + 2 / camZoom);
+		ctx.textAlign = "start";
+	}
+
+	// --- Hover label ---
 	if (graphHovered) {
 		const node = nodes.find((entry) => entry.data.id === graphHovered?.id);
-		if (node) {
-			const text = embeddingLabel(graphHovered);
+		if (node && node.nodeType !== "entity" && node.nodeType !== "aspect") {
+			const text = node.nodeType === "attribute"
+				? (node.attributeData?.content ?? embeddingLabel(graphHovered))
+				: embeddingLabel(graphHovered);
 			const fs = 9 / camZoom;
 			ctx.font = `${fs}px var(--font-mono)`;
 			ctx.fillStyle = "rgba(220, 220, 220, 0.9)";
 			ctx.textAlign = "left";
-			ctx.fillText(text, node.x + node.radius + 5 / camZoom, node.y + fs * 0.35);
+			const maxLen = 80;
+			ctx.fillText(
+				text.length > maxLen ? `${text.slice(0, maxLen)}...` : text,
+				node.x + node.radius + 5 / camZoom,
+				node.y + fs * 0.35,
+			);
 			ctx.textAlign = "start";
 		}
 	}
