@@ -155,8 +155,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 
 	if (isInputFocused) return;
 
-	// Don't intercept arrow keys if focus is on a card or filter - let those handlers work
-	if (target.classList.contains('doc-card') || target.closest('.filter-row')) {
+	// Don't intercept arrow keys if focus is on a card (or descendant) or filter - let those handlers work
+	if (target.closest('.doc-card') || target.closest('.filter-row')) {
 		return;
 	}
 

@@ -454,7 +454,7 @@ onMount(() => {
 				{:else}
 					{#each secrets as name, index}
 						<div
-							role="button"
+							role="listitem"
 							tabindex={0}
 							class="secret-item flex items-center gap-3 border border-[var(--sig-border-strong)]
 								bg-[var(--sig-surface-raised)] px-[var(--space-md)] py-3 rounded-lg
