@@ -240,6 +240,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 			// If in Engine group and focused on content, return to tabs first
 			if (isEngineGroup(activeTab) && engineTabFocus === "content") {
 				focusEngineTab(engineTabIndex);
+			} else if (isMemoryGroup(activeTab) && memoryTabFocus === "content") {
+				focusMemoryTab(memoryTabIndex);
 			} else {
 				returnToSidebar();
 			}
