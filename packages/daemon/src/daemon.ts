@@ -6296,6 +6296,15 @@ app.get("/api/telemetry/training-export", async (c) => {
 			"created_at",
 		].join(",");
 
+		// RFC 4180: escape fields containing commas, quotes, or newlines
+		function csvEscape(value: unknown): string {
+			const str = value === null || value === undefined ? "" : String(value);
+			if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+				return `"${str.replace(/"/g, '""')}"`;
+			}
+			return str;
+		}
+
 		const rows = pairs.map((p) => [
 			p.id, p.agentId, p.sessionKey, p.memoryId,
 			p.features.recencyDays, p.features.accessCount,
@@ -6314,7 +6323,7 @@ app.get("/api/telemetry/training-export", async (c) => {
 			p.predictorRank ?? "",
 			p.baselineRank ?? "",
 			p.createdAt,
-		].join(","));
+		].map(csvEscape).join(","));
 
 		return c.text([header, ...rows].join("\n"), 200, {
 			"Content-Type": "text/csv",

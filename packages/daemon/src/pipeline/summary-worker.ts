@@ -266,11 +266,33 @@ async function processJob(
 				// Drift detection
 				const driftResult = detectDrift(agentId, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
 				if (driftResult.drifting) {
-					logger.warn("predictor", "Drift detected — predictor win rate declining", {
+					logger.warn("predictor", "Drift detected — resetting predictor state", {
 						recentWinRate: driftResult.recentWinRate,
-						windowSize: memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20,
+						windowSize: driftResult.windowSize,
 						agentId,
 					});
+
+					// Reset alpha to 1.0 (full baseline weight) and EMA to neutral
+					const { updatePredictorState: resetState } = await import("../predictor-state");
+					resetState(agentId, {
+						alpha: 1.0,
+						successRate: 0.5,
+					});
+
+					// Trigger retraining (non-fatal if it fails)
+					try {
+						const { getPredictorClient } = await import("../daemon");
+						const predictorClient = getPredictorClient();
+						if (predictorClient) {
+							const dbPath = join(AGENTS_DIR, "memory", "memories.db");
+							await predictorClient.trainFromDb({ db_path: dbPath });
+							logger.info("predictor", "Drift-triggered retraining complete");
+						}
+					} catch (trainErr) {
+						logger.warn("predictor", "Drift-triggered retraining failed", {
+							error: trainErr instanceof Error ? trainErr.message : String(trainErr),
+						});
+					}
 				}
 
 				// Check training trigger
