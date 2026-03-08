@@ -22,10 +22,22 @@ function hasBun() {
 	}
 }
 
+function getVersion() {
+	try {
+		const pkg = require("../package.json");
+		return pkg.version || null;
+	} catch {
+		return null;
+	}
+}
+
+const version = getVersion();
+const versionLabel = version ? ` v${version}` : "";
+
 console.log();
 console.log("━".repeat(50));
 console.log();
-console.log(`  ${CYAN}${BOLD}◈ Signet${RESET} installed!`);
+console.log(`  ${CYAN}${BOLD}◈ Signet${RESET}${versionLabel} installed!`);
 console.log(`  ${DIM}Portable AI agent identity${RESET}`);
 console.log();
 
@@ -39,10 +51,17 @@ if (!hasBun()) {
 	console.log();
 }
 
+console.log(`  ${GREEN}What's new:${RESET}`);
+console.log(`  ${DIM}- Knowledge graph: memories build structured understanding${RESET}`);
+console.log(`  ${DIM}- Session continuity: seamless context across compactions${RESET}`);
+console.log(`  ${DIM}- Constellation: entity overlay in the dashboard${RESET}`);
+console.log(`  ${DIM}- Predictive scorer: opt-in ML-based memory ranking${RESET}`);
+console.log();
 console.log(`  ${GREEN}Get started:${RESET}`);
 console.log(`    ${CYAN}signet${RESET}        Interactive setup`);
 console.log(`    ${CYAN}signet sync${RESET}   Fix missing files`);
 console.log(`    ${CYAN}signet status${RESET} Check daemon`);
+console.log(`    ${CYAN}signet dashboard${RESET}  Explore your agent`);
 console.log();
 console.log("━".repeat(50));
 console.log();

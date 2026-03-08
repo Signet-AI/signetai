@@ -1,3 +1,10 @@
+---
+title: "Ideal Signet"
+description: "End-to-end engineering specification for the ideal Signet system."
+order: 51
+section: "Project"
+---
+
 # Signet (Ideal): Monolithic Engineering Spec
 
 This document is a single, end-to-end specification for the *ideal* Signet

@@ -31,15 +31,55 @@ const METADATA_LINE_PREFIXES = [
 	"END_EXTERNAL_UNTRUSTED_CONTENT",
 ] as const;
 
+/**
+ * Check if content looks like metadata JSON (sender info, usernames, tags)
+ */
+function looksLikeMetadataJson(content: string): boolean {
+	// Must be in a code fence with json
+	if (!content.includes("```json")) return false;
+
+	// Check for metadata field patterns
+	const metadataFields = ["label", "username", "tag", "sender", "conversation"];
+	const hasMultipleMetadataFields = metadataFields.filter(f =>
+		content.includes(`"${f}"`) || content.includes(`'${f}'`)
+	).length >= 2;
+
+	return hasMultipleMetadataFields;
+}
+
 function extractUserMessage(rawPrompt: string): string {
 	const lines = rawPrompt.split("\n");
 	let lastContentStart = 0;
+
+	// Track when we're inside a code fence
+	let inCodeFence = false;
+	let codeFenceStart = 0;
+
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
+
+		// Detect code fence start/end
+		if (line.startsWith("```")) {
+			if (!inCodeFence) {
+				inCodeFence = true;
+				codeFenceStart = i;
+			} else {
+				// End of code fence - check if it was metadata JSON
+				const fenceContent = lines.slice(codeFenceStart, i + 1).join("\n");
+				if (looksLikeMetadataJson(fenceContent)) {
+					lastContentStart = i + 1;
+				}
+				inCodeFence = false;
+			}
+			continue;
+		}
+
+		// Existing line-prefix check
 		if (METADATA_LINE_PREFIXES.some((p) => line.startsWith(p) || line.includes(p))) {
 			lastContentStart = i + 1;
 		}
 	}
+
 	const extracted = lines.slice(lastContentStart).join("\n").trim();
 	return extracted.length > 0 ? extracted : rawPrompt;
 }
@@ -326,7 +366,6 @@ export async function onUserPromptSubmit(
 	options: {
 		daemonUrl?: string;
 		userMessage: string;
-		rawPrompt?: string;
 		lastAssistantMessage?: string;
 		sessionKey?: string;
 		project?: string;
@@ -338,7 +377,6 @@ export async function onUserPromptSubmit(
 			harness,
 			userMessage: options.userMessage,
 			userPrompt: options.userMessage,
-			rawPrompt: options.rawPrompt,
 			lastAssistantMessage: options.lastAssistantMessage,
 			sessionKey: options.sessionKey,
 			project: options.project,
@@ -1182,7 +1220,6 @@ const signetPlugin = {
 				const result = await onUserPromptSubmit("openclaw", {
 					...opts,
 					userMessage: prompt,
-					rawPrompt,
 					lastAssistantMessage,
 					sessionKey,
 				});

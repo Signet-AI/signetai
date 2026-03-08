@@ -72,6 +72,43 @@ export interface UpdateHealth extends HealthScore {
 	readonly lastError: string | null;
 }
 
+export type PredictorHealthStatus =
+	| "healthy"
+	| "degraded"
+	| "unhealthy"
+	| "cold_start"
+	| "disabled";
+
+export interface PredictorHealth {
+	readonly score: number;
+	readonly status: PredictorHealthStatus;
+	readonly sidecarAlive: boolean;
+	readonly modelVersion: number;
+	readonly trainingSessions: number;
+	readonly successRate: number;
+	readonly alpha: number;
+	readonly coldStartExited: boolean;
+	readonly lastTrainedAt: string | null;
+	readonly crashCount: number;
+	readonly crashDisabled: boolean;
+}
+
+export interface PredictorHealthParams {
+	readonly enabled: boolean;
+	readonly sidecarAlive: boolean;
+	readonly crashCount: number;
+	readonly crashDisabled: boolean;
+	readonly modelVersion: number;
+	readonly trainingSessions: number;
+	readonly successRate: number;
+	readonly alpha: number;
+	readonly coldStartExited: boolean;
+	readonly lastTrainedAt: string | null;
+	readonly avgScoreLatencyMs?: number;
+	readonly scoreTimeoutMs?: number;
+	readonly driftDetected?: boolean;
+}
+
 export interface DiagnosticsReport {
 	readonly timestamp: string;
 	readonly composite: HealthScore;
@@ -83,6 +120,7 @@ export interface DiagnosticsReport {
 	readonly duplicate: DuplicateHealth;
 	readonly connector: ConnectorHealth;
 	readonly update: UpdateHealth;
+	readonly predictor: PredictorHealth;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,10 +548,109 @@ export function getUpdateHealth(state?: UpdateState): UpdateHealth {
 }
 
 // ---------------------------------------------------------------------------
+// Predictor health
+// ---------------------------------------------------------------------------
+
+const DISABLED_PREDICTOR: PredictorHealthParams = {
+	enabled: false,
+	sidecarAlive: false,
+	crashCount: 0,
+	crashDisabled: false,
+	modelVersion: 0,
+	trainingSessions: 0,
+	successRate: 0,
+	alpha: 1.0,
+	coldStartExited: false,
+	lastTrainedAt: null,
+};
+
+export function getPredictorHealth(
+	params: PredictorHealthParams,
+): PredictorHealth {
+	if (!params.enabled) {
+		return {
+			score: 0,
+			status: "disabled",
+			sidecarAlive: false,
+			modelVersion: 0,
+			trainingSessions: 0,
+			successRate: 0,
+			alpha: 1.0,
+			coldStartExited: false,
+			lastTrainedAt: null,
+			crashCount: 0,
+			crashDisabled: false,
+		};
+	}
+
+	let score: number;
+
+	if (!params.sidecarAlive || params.crashDisabled) {
+		score = 0;
+	} else if (!params.coldStartExited) {
+		score = 0.6;
+	} else if (params.successRate > 0.4) {
+		score = 0.8 + Math.min(0.2, params.successRate * 0.2);
+	} else {
+		score = 0.5 + params.successRate * 0.5;
+	}
+
+	// Crash penalty
+	if (params.crashCount > 0 && score > 0) {
+		score -= 0.1;
+	}
+
+	// Latency penalty: if avg scoring latency exceeds 80% of timeout
+	if (
+		params.avgScoreLatencyMs !== undefined &&
+		params.scoreTimeoutMs !== undefined &&
+		params.avgScoreLatencyMs > params.scoreTimeoutMs * 0.8
+	) {
+		score -= 0.2;
+	}
+
+	// Drift penalty
+	if (params.driftDetected) {
+		score -= 0.1;
+	}
+
+	score = clamp(score);
+
+	let status: PredictorHealthStatus;
+	if (!params.sidecarAlive || params.crashDisabled) {
+		status = "unhealthy";
+	} else if (!params.coldStartExited) {
+		status = "cold_start";
+	} else if (score >= 0.8) {
+		status = "healthy";
+	} else if (score >= 0.5) {
+		status = "degraded";
+	} else {
+		status = "unhealthy";
+	}
+
+	return {
+		score,
+		status,
+		sidecarAlive: params.sidecarAlive,
+		modelVersion: params.modelVersion,
+		trainingSessions: params.trainingSessions,
+		successRate: params.successRate,
+		alpha: params.alpha,
+		coldStartExited: params.coldStartExited,
+		lastTrainedAt: params.lastTrainedAt,
+		crashCount: params.crashCount,
+		crashDisabled: params.crashDisabled,
+	};
+}
+
+// ---------------------------------------------------------------------------
 // Composite report
 // ---------------------------------------------------------------------------
 
-const WEIGHTS = {
+// Base weights sum to 1.0; when predictor is enabled we carve out
+// 0.05 for it and scale the rest down proportionally (×0.95).
+const BASE_WEIGHTS = {
 	queue: 0.25,
 	storage: 0.10,
 	index: 0.15,
@@ -522,12 +659,16 @@ const WEIGHTS = {
 	duplicate: 0.04,
 	connector: 0.05,
 	update: 0.11,
+	predictor: 0.05,
 } as const;
+
+const PREDICTOR_SCALE = 1 - BASE_WEIGHTS.predictor; // 0.95
 
 export function getDiagnostics(
 	db: ReadDb,
 	tracker: ProviderTracker,
 	updateState?: UpdateState,
+	predictorParams?: PredictorHealthParams,
 ): DiagnosticsReport {
 	const queue = getQueueHealth(db);
 	const storage = getStorageHealth(db);
@@ -537,16 +678,26 @@ export function getDiagnostics(
 	const duplicate = getDuplicateHealth(db);
 	const connector = getConnectorHealth(db);
 	const update = getUpdateHealth(updateState);
+	const predictor = getPredictorHealth(
+		predictorParams ?? DISABLED_PREDICTOR,
+	);
 
+	// When predictor is enabled, include it in the composite and
+	// scale base weights down to keep the total at 1.0.
+	const predictorEnabled = predictor.status !== "disabled";
+	const s = predictorEnabled ? PREDICTOR_SCALE : 1;
 	const compositeScore = clamp(
-		queue.score * WEIGHTS.queue +
-			storage.score * WEIGHTS.storage +
-			index.score * WEIGHTS.index +
-			provider.score * WEIGHTS.provider +
-			mutation.score * WEIGHTS.mutation +
-			duplicate.score * WEIGHTS.duplicate +
-			connector.score * WEIGHTS.connector +
-			update.score * WEIGHTS.update,
+		queue.score * BASE_WEIGHTS.queue * s +
+			storage.score * BASE_WEIGHTS.storage * s +
+			index.score * BASE_WEIGHTS.index * s +
+			provider.score * BASE_WEIGHTS.provider * s +
+			mutation.score * BASE_WEIGHTS.mutation * s +
+			duplicate.score * BASE_WEIGHTS.duplicate * s +
+			connector.score * BASE_WEIGHTS.connector * s +
+			update.score * BASE_WEIGHTS.update * s +
+			(predictorEnabled
+				? predictor.score * BASE_WEIGHTS.predictor
+				: 0),
 	);
 
 	const composite: HealthScore = {
@@ -565,5 +716,6 @@ export function getDiagnostics(
 		duplicate,
 		connector,
 		update,
+		predictor,
 	};
 }

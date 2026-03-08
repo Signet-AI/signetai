@@ -64,8 +64,17 @@ Tables affected: `memories`, `entities`, `entity_aspects`,
 `entity_attributes`, `entity_dependencies`, `skill_meta`, `task_meta`,
 `session_checkpoints`, `session_memories`, `predictor_comparisons`.
 
+Note: `entities` (migration 002) predates this invariant and does not
+yet have `agent_id`. Migration 019 (KA-1) backfills it. `skill_meta`
+(migration 018) already has `agent_id`.
+
 Scoping rule: queries filter by `agent_id` unless explicitly requesting
 cross-agent results (e.g., shared skill lookup with allowlist).
+
+The `agent_id` column is infrastructure for database-level tenant
+isolation, not a knowledge architecture concern. It exists on every
+table for the same reason: so multiple agents sharing the same SQLite
+file don't step on each other's data.
 
 Skills are scoped to `agent_id` in the graph. The filesystem pool
 (`~/.agents/skills/`) is shared, but graph nodes (entity + skill_meta +
@@ -164,6 +173,19 @@ cannot suppress them. This is a hard retrieval invariant.
   entity).
 - Scorer evaluation reports include per-entity and per-project slices,
   not only global EMA.
+- **Feedback direction (KA-6):** Behavioral signals flow BACK to the
+  graph. FTS overlap (memories the user searched for during a session)
+  feeds back to aspect weights, confirming which structural bets paid
+  off. Per-entity predictor win rates surface as graph health signals.
+  Superseded memory labels propagate to entity_attributes status.
+  Without this feedback loop, structural weights stagnate and the
+  graph diverges from what the user actually needs.
+- **Entity pinning (KA-6):** Users can pin entities as always-focal,
+  front-loading importance before behavioral evidence accumulates.
+  Pinned entities are training data for the predictor — the manual
+  exploration mechanism that the predictor eventually learns to
+  replicate autonomously. See `docs/KNOWLEDGE-ARCHITECTURE.md`
+  section "Love, Hate, and the Exploration Problem" for rationale.
 
 ### Knowledge Architecture <-> Session Continuity
 
@@ -223,7 +245,7 @@ Phase ordering based on hard dependencies and integration contracts.
 
 ### Wave 2 (depends on Wave 1)
 
-- **Knowledge Architecture KA-1 + KA-2**: schema + structural assignment
+- **Knowledge Architecture KA-1 + KA-2**: schema + structural assignment — COMPLETE
   - Requires skill entities from procedural memory P1
   - Adds `entity_aspects`, `entity_attributes`, `entity_dependencies`,
     `task_meta`
@@ -236,7 +258,7 @@ Phase ordering based on hard dependencies and integration contracts.
 
 ### Wave 3 (depends on Wave 2)
 
-- **Knowledge Architecture KA-3**: traversal retrieval path
+- **Knowledge Architecture KA-3**: traversal retrieval path — COMPLETE
   - Wires session-start and recall to include traversal candidates
   - Enforces constraint surfacing invariant
 - **Predictive Scorer Phase 1**: Rust crate scaffold + autograd
@@ -246,18 +268,22 @@ Phase ordering based on hard dependencies and integration contracts.
 
 ### Wave 4 (depends on Wave 3)
 
-- **Knowledge Architecture KA-4**: predictor coupling
+- **Knowledge Architecture KA-4**: predictor coupling — COMPLETE
   - Structural features in scorer payload
 - **Predictive Scorer Phase 2-3**: training pipeline + daemon integration
   - Requires KA structural features
 - **Procedural Memory P4**: retrieval and suggestion endpoints
 - **Signet Runtime Phase 2**: built-in tools + pre-generation phase
 
-### Wave 5 (polish)
+### Wave 5 (polish + feedback)
 
 - **Procedural Memory P5**: dashboard visualization
 - **Predictive Scorer Phase 4**: observability + dashboard
-- **Knowledge Architecture KA-5**: continuity + dashboard
+- **Knowledge Architecture KA-5**: continuity + dashboard — COMPLETE
+- **Knowledge Architecture KA-6**: entity pinning + behavioral feedback loop — COMPLETE
+  loop (FTS overlap → aspect weight, aspect decay, per-entity health,
+  superseded propagation). See `docs/KNOWLEDGE-ARCHITECTURE.md` section
+  "Love, Hate, and the Exploration Problem" for rationale.
 - **Signet Runtime Phase 3**: HTTP channel + adapter retrofit
 - **Multi-Agent Phase 4+**: daemon API, harness sync, CLI, dashboard
 
@@ -271,22 +297,22 @@ Legend:
 - `complete`: delivered baseline or merged strategy
 - `reference`: directional or notebook artifact, not an implementation contract
 
-| ID | Status | Path | Hard Depends On | Blocks |
-|---|---|---|---|---|
-| `memory-pipeline-v2` | complete | `docs/specs/complete/memory-pipeline-plan.md` | - | `session-continuity-protocol`, `procedural-memory-plan`, `knowledge-architecture-schema`, `predictive-memory-scorer`, `signet-runtime` |
-| `session-continuity-protocol` | complete | `docs/specs/complete/session-continuity-protocol.md` | `memory-pipeline-v2` | `knowledge-architecture-schema`, `predictive-memory-scorer` |
-| `procedural-memory-plan` | approved | `docs/specs/approved/procedural-memory-plan.md` | `memory-pipeline-v2` | `knowledge-architecture-schema` |
-| `knowledge-architecture-schema` | approved | `docs/specs/approved/knowledge-architecture-schema.md` | `memory-pipeline-v2`, `session-continuity-protocol`, `procedural-memory-plan` | `predictive-memory-scorer` |
-| `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - |
-| `multi-agent-support` | approved | `docs/specs/approved/multi-agent-support.md` | `memory-pipeline-v2` | - |
-| `signet-runtime` | approved | `docs/specs/approved/signet-runtime.md` | `memory-pipeline-v2` | - |
-| `daemon-refactor` | planning | `docs/specs/planning/daemon-refactor.md` | - | `daemon-refactor-plan` |
-| `daemon-refactor-plan` | planning | `docs/specs/planning/daemon-refactor-plan.md` | `daemon-refactor` | - |
-| `daemon-rust-rewrite` | planning | `docs/specs/planning/daemon-rust-rewrite.md` | `memory-pipeline-v2` | - |
-| `signet-roadmap-spec` | planning | `docs/specs/planning/signet-roadmap-spec.md` | - | - |
-| `openclaw-integration-strategy` | complete | `docs/specs/complete/openclaw-integration-strategy.md` | - | `openclaw-importance-scoring-pr` |
-| `openclaw-importance-scoring-pr` | complete | `docs/specs/complete/openclaw-importance-scoring-pr.md` | `openclaw-integration-strategy` | - |
-| `notebook-dump-2026-02-25` | reference | `docs/specs/planning/notebook-dump-2026-02-25.md` | - | - |
+| ID | Status | Path | Hard Depends On | Blocks | Notes |
+|---|---|---|---|---|---|
+| `memory-pipeline-v2` | complete | `docs/specs/complete/memory-pipeline-plan.md` | - | `session-continuity-protocol`, `procedural-memory-plan`, `knowledge-architecture-schema`, `predictive-memory-scorer`, `signet-runtime` | |
+| `session-continuity-protocol` | complete | `docs/specs/complete/session-continuity-protocol.md` | `memory-pipeline-v2` | `knowledge-architecture-schema`, `predictive-memory-scorer` | |
+| `procedural-memory-plan` | approved | `docs/specs/approved/procedural-memory-plan.md` | `memory-pipeline-v2` | `knowledge-architecture-schema` | P1 complete (skill_meta, enrichment, reconciler, graph nodes); P2–P5 remaining |
+| `knowledge-architecture-schema` | complete | `docs/specs/approved/knowledge-architecture-schema.md` | `memory-pipeline-v2`, `session-continuity-protocol`, `procedural-memory-plan` | `predictive-memory-scorer` | KA-1 through KA-6 fully implemented |
+| `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - | |
+| `multi-agent-support` | approved | `docs/specs/approved/multi-agent-support.md` | `memory-pipeline-v2` | - | |
+| `signet-runtime` | approved | `docs/specs/approved/signet-runtime.md` | `memory-pipeline-v2` | - | |
+| `daemon-refactor` | planning | `docs/specs/planning/daemon-refactor.md` | - | `daemon-refactor-plan` | |
+| `daemon-refactor-plan` | planning | `docs/specs/planning/daemon-refactor-plan.md` | `daemon-refactor` | - | |
+| `daemon-rust-rewrite` | planning | `docs/specs/planning/daemon-rust-rewrite.md` | `memory-pipeline-v2` | - | |
+| `signet-roadmap-spec` | planning | `docs/specs/planning/signet-roadmap-spec.md` | - | - | |
+| `openclaw-integration-strategy` | complete | `docs/specs/complete/openclaw-integration-strategy.md` | - | `openclaw-importance-scoring-pr` | |
+| `openclaw-importance-scoring-pr` | complete | `docs/specs/complete/openclaw-importance-scoring-pr.md` | `openclaw-integration-strategy` | - | |
+| `notebook-dump-2026-02-25` | reference | `docs/specs/planning/notebook-dump-2026-02-25.md` | - | - | |
 
 ---
 

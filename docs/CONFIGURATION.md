@@ -274,15 +274,17 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `provider` | `"claude-code"` | — | `"ollama"`, `"claude-code"`, or `"opencode"` |
+| `provider` | `"claude-code"` | — | `"ollama"`, `"openai"`, `"claude-code"`, `"opencode"`, `"codex"`, or `"native"` |
 | `model` | `"haiku"` | — | Model name for the configured provider |
 | `timeout` | `45000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
 
 When using `ollama`, the model must be available locally. When using
-`claude-code`, the Claude Code CLI must be on PATH. Lower `minConfidence`
-to capture more facts at the cost of noise; raise it to write only
-high-confidence facts.
+`claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
+Codex harness as the extraction provider. `native` uses the
+`@signet/native` Rust/NAPI module for local vector operations. Lower
+`minConfidence` to capture more facts at the cost of noise; raise it
+to write only high-confidence facts.
 
 
 ### Worker (`worker`)

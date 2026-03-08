@@ -112,6 +112,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"memory_list",
 	"memory_modify",
 	"memory_forget",
+	"memory_feedback",
 	"secret_list",
 	"secret_exec",
 	"mcp_server_list",
@@ -685,6 +686,40 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 
 			if (!result.ok) {
 				return errorResult(`Forget failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
+
+	// ------------------------------------------------------------------
+	// memory_feedback — rate relevance of injected memories
+	// ------------------------------------------------------------------
+	server.registerTool(
+		"memory_feedback",
+		{
+			title: "Rate Memory Relevance",
+			description:
+				"Rate how relevant injected memories were to the conversation. " +
+				"Scores from -1 (harmful) to 1 (directly helpful). 0 = unused.",
+			inputSchema: z.object({
+				session_key: z.string().describe("Current session key"),
+				ratings: z
+					.record(z.string(), z.number())
+					.describe("Map of memory ID to relevance score (-1 to 1)"),
+			}),
+			annotations: { readOnlyHint: false },
+		},
+		async ({ session_key, ratings }) => {
+			const result = await daemonFetch<{ ok: boolean; recorded: number }>(
+				baseUrl,
+				"/api/memory/feedback",
+				{
+					method: "POST",
+					body: { sessionKey: session_key, feedback: ratings },
+				},
+			);
+			if (!result.ok) {
+				return errorResult(`Feedback failed: ${result.error}`);
 			}
 			return textResult(result.data);
 		},

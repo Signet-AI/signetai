@@ -10,7 +10,12 @@ import { vectorSearch } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
-import { getGraphBoostIds } from "./pipeline/graph-search";
+import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
+import {
+	resolveFocalEntities,
+	setTraversalStatus,
+	traverseKnowledgeGraph,
+} from "./pipeline/graph-traversal";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 
@@ -22,6 +27,7 @@ export interface RecallParams {
 	query: string;
 	keywordQuery?: string;
 	limit?: number;
+	agentId?: string;
 	type?: string;
 	tags?: string;
 	who?: string;
@@ -109,6 +115,35 @@ function buildFilterClause(params: RecallParams): FilterClause {
 }
 
 // ---------------------------------------------------------------------------
+// FTS5 query sanitization
+// ---------------------------------------------------------------------------
+
+/**
+ * Sanitize a query string for FTS5 MATCH.
+ *
+ * FTS5 interprets colons as column prefixes (`col:term`), and other
+ * characters as operators. Since our table only has a `content` column,
+ * any colon-prefixed term that isn't `content:` will throw
+ * "no such column". Strip colons and quote terms that contain special
+ * characters to prevent syntax errors.
+ */
+function sanitizeFtsQuery(raw: string): string {
+	// Split on OR (preserved as FTS5 operator) and whitespace
+	return raw
+		.split(/\s+/)
+		.map((token) => {
+			if (token === "OR" || token === "AND" || token === "NOT") return token;
+			// Strip characters that are FTS5 syntax: colons, quotes, parens, asterisks, carets
+			const cleaned = token.replace(/[":()^*]/g, "").trim();
+			if (!cleaned) return null;
+			// Double-quote the term to treat it as a literal phrase token
+			return `"${cleaned}"`;
+		})
+		.filter(Boolean)
+		.join(" ");
+}
+
+// ---------------------------------------------------------------------------
 // Main search orchestration
 // ---------------------------------------------------------------------------
 
@@ -118,7 +153,7 @@ export async function hybridRecall(
 	embedFn: EmbedFn,
 ): Promise<RecallResponse> {
 	const query = params.query;
-	const keywordQuery = (params.keywordQuery ?? params.query).trim();
+	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? params.query).trim());
 	const limit = params.limit ?? 10;
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
@@ -268,6 +303,97 @@ export async function hybridRecall(
 			}
 		} catch (e) {
 			logger.warn("memory", "Graph boost failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
+	// --- KA traversal boost: structural one-hop retrieval via KA tables ---
+	if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
+		try {
+			const traversalCfg = cfg.pipelineV2.traversal;
+			const queryTokens = tokenizeGraphQuery(query);
+			if (queryTokens.length > 0) {
+				const agentId = params.agentId ?? "default";
+				const focal = getDbAccessor().withReadDb((db) =>
+					resolveFocalEntities(db, agentId, { queryTokens }),
+				);
+
+				if (focal.entityIds.length > 0) {
+					const traversal = getDbAccessor().withReadDb((db) =>
+						traverseKnowledgeGraph(focal.entityIds, db, agentId, {
+							maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
+							maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
+							maxDependencyHops: traversalCfg.maxDependencyHops,
+							minDependencyStrength: traversalCfg.minDependencyStrength,
+							timeoutMs: traversalCfg.timeoutMs,
+						}),
+					);
+
+					const tw = traversalCfg.boostWeight;
+					const scoredById = new Map(scored.map((row) => [row.id, row]));
+					const missingIds: string[] = [];
+
+					for (const memoryId of traversal.memoryIds) {
+						const existing = scoredById.get(memoryId);
+						if (existing) {
+							existing.score = (1 - tw) * existing.score + tw;
+						} else {
+							missingIds.push(memoryId);
+						}
+					}
+
+					if (missingIds.length > 0) {
+						const placeholders = missingIds.map(() => "?").join(", ");
+						const baseRows = getDbAccessor().withReadDb(
+							(db) =>
+								db
+									.prepare(
+										`SELECT
+											 m.id,
+											 COALESCE(MAX(ea.importance), m.importance, 0.5) AS traversal_score
+										 FROM memories m
+										 LEFT JOIN entity_attributes ea
+										   ON ea.memory_id = m.id
+										  AND ea.agent_id = ?
+										  AND ea.status = 'active'
+										 WHERE m.id IN (${placeholders})
+										   AND m.is_deleted = 0
+										 ${filter.sql}
+										 GROUP BY m.id, m.importance`,
+									)
+									.all(agentId, ...missingIds, ...filter.args) as Array<{
+									id: string;
+									traversal_score: number;
+								}>,
+						);
+
+						for (const row of baseRows) {
+							scored.push({
+								id: row.id,
+								score: Math.max(minScore, Math.min(1, row.traversal_score)),
+								source: "ka_traversal",
+							});
+						}
+					}
+
+					scored.sort((a, b) => b.score - a.score);
+
+					setTraversalStatus({
+						phase: "recall",
+						at: new Date().toISOString(),
+						source: focal.source,
+						focalEntityNames: focal.entityNames,
+						focalEntities: focal.entityIds.length,
+						traversedEntities: traversal.entityCount,
+						memoryCount: traversal.memoryIds.size,
+						constraintCount: traversal.constraints.length,
+						timedOut: traversal.timedOut,
+					});
+				}
+			}
+		} catch (e) {
+			logger.warn("memory", "KA traversal boost failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}

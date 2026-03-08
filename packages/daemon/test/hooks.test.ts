@@ -135,6 +135,10 @@ function createMemoryDb(
 			fts_hit_count INTEGER NOT NULL DEFAULT 0,
 			agent_preference TEXT,
 			created_at TEXT NOT NULL,
+			entity_slot INTEGER,
+			aspect_slot INTEGER,
+			is_constraint INTEGER NOT NULL DEFAULT 0,
+			structural_density INTEGER,
 			UNIQUE(session_key, memory_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_session_memories_session
@@ -672,8 +676,6 @@ describe("handleUserPromptSubmit", () => {
 			harness: "openclaw",
 			userMessage: "Can you reiterate the release checklist?",
 			userPrompt:
-				'Conversation info (untrusted metadata):\n{"agent_path":"/home/user/.agents","channel":"discord"}\n\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSender (untrusted): discord\nEND_EXTERNAL_UNTRUSTED_CONTENT',
-			rawPrompt:
 				'Conversation info (untrusted metadata):\n{"agent_path":"/home/user/.agents","channel":"discord"}\n\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSender (untrusted): discord\nEND_EXTERNAL_UNTRUSTED_CONTENT',
 		});
 

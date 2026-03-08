@@ -21,7 +21,13 @@ async function fetchOllamaEmbedding(
 		body: JSON.stringify({ model, prompt: text }),
 		signal: AbortSignal.timeout(30000),
 	});
-	if (!res.ok) return null;
+	if (!res.ok) {
+		logger.warn("embedding", "Ollama embedding request failed", {
+			status: res.status,
+			model,
+		});
+		return null;
+	}
 	const data = (await res.json()) as { embedding: number[] };
 	return data.embedding ?? null;
 }
@@ -131,12 +137,24 @@ export async function fetchEmbedding(
 			body: JSON.stringify({ model: cfg.model, input: text }),
 			signal: AbortSignal.timeout(30000),
 		});
-		if (!res.ok) return null;
+		if (!res.ok) {
+			logger.warn("embedding", "Embedding API request failed", {
+				status: res.status,
+				provider: cfg.provider,
+				model: cfg.model,
+			});
+			return null;
+		}
 		const data = (await res.json()) as {
 			data: Array<{ embedding: number[] }>;
 		};
 		return data.data?.[0]?.embedding ?? null;
-	} catch {
+	} catch (e) {
+		logger.warn("embedding", "Embedding fetch error", {
+			provider: cfg.provider,
+			model: cfg.model,
+			error: e instanceof Error ? e.message : String(e),
+		});
 		return null;
 	}
 }

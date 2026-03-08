@@ -350,6 +350,28 @@ These rules are enforced by convention, not tooling.
 - result types over exceptions
 - effect-free module scope
 
+Testing Philosophy
+---
+
+Tests are the rewrite contract. Every test should encode *what must
+be true* (the behavioral contract), not *how it's currently done*
+(the implementation). A test that would break if you rewrote the
+module in Rust with the same interface is testing plumbing, not theory.
+
+This matters because the codebase is expected to be rewritten in a
+systems language (Rust, Go, or Zig). The test suite — along with the
+specs in `docs/specs/` and the architecture in
+`docs/KNOWLEDGE-ARCHITECTURE.md` — is what the rewrite targets. If the
+tests are tightly coupled to TypeScript internals, they can't serve
+that purpose.
+
+Rules:
+- Test the contract, not the implementation
+- Tests should survive a language rewrite unchanged in logic
+- Prefer integration-style tests over unit tests of private helpers
+- Every new feature ships with tests that describe the behavior
+- The specs define what's correct; the tests enforce it
+
 ## Development Workflow
 
 Typecheck and build don't prove behavior. Always test changes against
@@ -533,3 +555,147 @@ to npm" step in `release.yml`.
 - SQLite uses runtime detection: `bun:sqlite` under Bun, `better-sqlite3` under Node.js
 - Daemon is the primary memory pipeline; Python scripts are optional batch tools
 - Connectors are idempotent - safe to run install multiple times
+
+## Figma MCP Integration Rules
+
+These rules define how to translate Figma inputs into code for the
+Signet dashboard and must be followed for every Figma-driven change.
+
+### Stack
+
+- **Framework**: Svelte 5 (runes: `$props`, `$state`, `$derived`, `$effect`)
+- **Styling**: Tailwind CSS v4 (via `@tailwindcss/vite` plugin, no `tailwind.config`)
+- **UI primitives**: shadcn-svelte (https://www.shadcn-svelte.com)
+- **Icons**: Lucide (`@lucide/svelte/icons/<name>`)
+- **Visualization**: 3d-force-graph, D3, CodeMirror 6
+- **Build**: Vite + SvelteKit static adapter
+
+### Required Workflow (do not skip)
+
+1. Run `get_design_context` first to fetch the structured representation
+   for the exact Figma node(s)
+2. If the response is too large or truncated, run `get_metadata` to get
+   the high-level node map, then re-fetch only the required node(s)
+3. Run `get_screenshot` for a visual reference of the node variant
+4. Only after you have both `get_design_context` and `get_screenshot`,
+   download any assets needed and start implementation
+5. Translate the output (React + Tailwind) into **Svelte 5 + Tailwind v4**
+   using this project's conventions
+6. Validate against Figma for 1:1 look and behavior before marking complete
+
+### Component Organization
+
+```
+packages/cli/dashboard/src/lib/
+  components/
+    ui/           # shadcn-svelte primitives (button, card, tabs, etc.)
+    memory/       # Memory feature components
+    embeddings/   # Constellation / canvas views
+    config/       # Config editor components (FormField, FormSection)
+    skills/       # Skills marketplace components
+    tasks/        # Task scheduler components
+    app-sidebar.svelte   # Main navigation sidebar
+    CodeEditor.svelte    # CodeMirror wrapper
+    ToastContainer.svelte
+  stores/         # Svelte 5 rune stores (*.svelte.ts)
+  api.ts          # Daemon API client
+```
+
+- IMPORTANT: Always use existing shadcn-svelte components from
+  `$lib/components/ui/` when possible. Do not recreate primitives.
+- Feature components go in their domain subdirectory (e.g. `memory/`,
+  `skills/`, `tasks/`).
+- Component naming: PascalCase for feature components (`SkillCard.svelte`),
+  kebab-case for shadcn primitives (`button.svelte`).
+- Props use Svelte 5 `$props()` with explicit TypeScript interfaces.
+- Import shadcn components via barrel: `$lib/components/ui/card/index.js`
+
+### Design Tokens
+
+Tokens are CSS custom properties defined in
+`packages/cli/dashboard/src/app.css`. Dark theme is the default;
+light activates via `data-theme="light"` on `<html>`.
+
+**IMPORTANT: Never hardcode hex colors.** Always use token variables:
+
+| Purpose | Token |
+|---------|-------|
+| Page background | `var(--sig-bg)` / `bg-background` |
+| Card surface | `var(--sig-surface)` / `bg-card` |
+| Raised surface | `var(--sig-surface-raised)` / `bg-secondary` |
+| Primary text | `var(--sig-text)` / `text-foreground` |
+| Bright text | `var(--sig-text-bright)` / `text-primary` |
+| Muted text | `var(--sig-text-muted)` / `text-muted-foreground` |
+| Border | `var(--sig-border)` / `border-border` |
+| Strong border | `var(--sig-border-strong)` / `border-input` |
+| Accent | `var(--sig-accent)` |
+| Danger | `var(--sig-danger)` / `bg-destructive` |
+| Success | `var(--sig-success)` |
+
+**Spacing scale**: `--space-xs` (4px), `--space-sm` (8px),
+`--space-md` (16px), `--space-lg` (24px), `--space-xl` (48px),
+`--space-2xl` (80px).
+
+**Typography**: Display font `var(--font-display)` (Diamond Grotesk /
+Chakra Petch) for headings. Monospace `var(--font-mono)` (Geist Mono /
+IBM Plex Mono) for body text and UI. Base font size is 13px.
+
+**Font sizes**: `--font-size-xs` (10px), `--font-size-sm` (11px),
+`--font-size-base` (13px), `--font-size-lg` (15px).
+
+**Utility classes**: `sig-label` (11px muted), `sig-eyebrow` (10px
+uppercase), `sig-heading` (11px bold uppercase), `sig-meta` (9px),
+`sig-badge` (9px rounded), `sig-micro` (8px uppercase).
+
+### Styling Rules
+
+- Use Tailwind utility classes mapped through the `@theme inline`
+  block in `app.css` (e.g. `bg-card`, `text-muted-foreground`,
+  `border-border`).
+- For Signet-specific tokens not in the Tailwind theme, use
+  `style="color: var(--sig-accent)"` or arbitrary values
+  `text-[var(--sig-accent)]`.
+- Transitions use `var(--dur)` (0.2s) and `var(--ease)`
+  (cubic-bezier). The grain overlay and scrollbar styles are global.
+- Headings are uppercase with letter-spacing. Use `sig-heading` class
+  or match the pattern: `font-display font-bold uppercase tracking-wider`.
+- Respect `prefers-reduced-motion` — the global CSS disables
+  animations when active.
+
+### Icon System
+
+- IMPORTANT: All icons come from `@lucide/svelte/icons/<icon-name>`.
+  Import individually, not from the barrel.
+  ```svelte
+  import Brain from "@lucide/svelte/icons/brain";
+  ```
+- IMPORTANT: DO NOT import or add new icon packages. If a design
+  requires an icon not in Lucide, flag it.
+- Icon color backgrounds use `--sig-icon-bg-1` through `--sig-icon-bg-6`
+  with `--sig-icon-fg` foreground and `--sig-icon-border` stroke.
+
+### Asset Handling
+
+- IMPORTANT: If the Figma MCP server returns a localhost source for
+  an image or SVG, use that source directly.
+- IMPORTANT: DO NOT use or create placeholders if a localhost source
+  is provided.
+- Store downloaded assets in `packages/cli/dashboard/static/`.
+- No CDN — the dashboard is served locally by the daemon.
+
+### State Management
+
+- Stores are Svelte 5 rune-based files at `$lib/stores/*.svelte.ts`.
+- Navigation uses `$lib/stores/navigation.svelte.ts` (hash-based tabs).
+- API calls go through `$lib/api.ts` which talks to the daemon at
+  `localhost:3850`.
+- Use `$state()`, `$derived()`, `$effect()` — not legacy stores.
+
+### Svelte 5 Conventions
+
+- Use `$props()` with destructured interface, not `export let`.
+- Use `{@render children()}` for slot content, not `<slot>`.
+- Event handlers: `onclick`, `onkeydown` (lowercase), not `on:click`.
+- Use `$effect()` for side effects, not `afterUpdate`.
+- Wrap mutable external references in `$state.raw()` or
+  `untrack()` where needed to prevent infinite reactivity loops.

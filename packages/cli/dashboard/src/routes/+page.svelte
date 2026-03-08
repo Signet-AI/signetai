@@ -3,6 +3,7 @@ import { browser } from "$app/environment";
 import { type DaemonStatus, type Memory, getStatus } from "$lib/api";
 import AppSidebar from "$lib/components/app-sidebar.svelte";
 import ExtensionBanner from "$lib/components/ExtensionBanner.svelte";
+import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
 import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.svelte";
 import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -52,20 +53,6 @@ function toggleTheme() {
 	theme = theme === "dark" ? "light" : "dark";
 	document.documentElement.dataset.theme = theme;
 	localStorage.setItem("signet-theme", theme);
-}
-
-// --- Config file selection ---
-let selectedFile = $state("");
-
-$effect(() => {
-	if (!selectedFile && data.configFiles?.length) {
-		selectedFile = data.configFiles[0].name;
-	}
-});
-
-function selectFile(name: string) {
-	selectedFile = name;
-	setTab("config");
 }
 
 // --- Memory display ---
@@ -200,6 +187,10 @@ onMount(() => {
 							onclick={() => setTab("timeline")}
 						>Timeline</button>
 						<button
+							class={activeTab === 'knowledge' ? tabActive : tabInactive}
+							onclick={() => setTab("knowledge")}
+						>Knowledge</button>
+						<button
 							class={activeTab === 'embeddings' ? tabActive : tabInactive}
 							onclick={() => setTab("embeddings")}
 						>Constellation</button>
@@ -216,6 +207,10 @@ onMount(() => {
 							class={activeTab === 'pipeline' ? tabActive : tabInactive}
 							onclick={() => setTab("pipeline")}
 						>Pipeline</button>
+						<button
+							class={activeTab === 'predictor' ? tabActive : tabInactive}
+							onclick={() => setTab("predictor")}
+						>Predictor</button>
 						<button
 							class={activeTab === 'connectors' ? tabActive : tabInactive}
 							onclick={() => setTab("connectors")}
@@ -259,6 +254,10 @@ onMount(() => {
 					<span class="sig-label">
 						Constellation
 					</span>
+				{:else if activeTab === "knowledge"}
+					<span class="sig-label">
+						Knowledge graph
+					</span>
 				{:else if activeTab === "tasks"}
 					<Button
 						variant="outline"
@@ -273,29 +272,13 @@ onMount(() => {
 			</div>
 		</header>
 
+		<UpgradeBanner {daemonStatus} />
 		<ExtensionBanner />
 
 		<div class="flex flex-1 flex-col min-h-0 relative">
 			{#snippet skeletonError(error: unknown)}
 				<div class="flex flex-1 items-center justify-center sig-label text-[var(--sig-danger)]">
 					Failed to load tab: {error instanceof Error ? error.message : "unknown error"}
-				</div>
-			{/snippet}
-
-			{#snippet skeletonEditor()}
-				<div class="flex flex-1 min-h-0">
-					<div class="w-48 border-r border-[var(--sig-border)] p-3 space-y-2">
-						<Skeleton class="h-4 w-full" />
-						<Skeleton class="h-4 w-3/4" />
-						<Skeleton class="h-4 w-5/6" />
-						<Skeleton class="h-4 w-2/3" />
-					</div>
-					<div class="flex-1 p-4 space-y-2">
-						{#each Array(12) as _}
-							<Skeleton class="h-3.5 w-full" />
-						{/each}
-						<Skeleton class="h-3.5 w-2/3" />
-					</div>
 				</div>
 			{/snippet}
 
@@ -338,19 +321,7 @@ onMount(() => {
 				</div>
 			{/snippet}
 
-			{#if activeTab === "config"}
-				{#await import("$lib/components/tabs/ConfigTab.svelte")}
-					{@render skeletonEditor()}
-				{:then module}
-					<module.default
-						configFiles={data.configFiles}
-						{selectedFile}
-						onselectfile={selectFile}
-					/>
-				{:catch error}
-					{@render skeletonError(error)}
-				{/await}
-			{:else if activeTab === "settings"}
+			{#if activeTab === "settings"}
 				{#await import("$lib/components/tabs/SettingsTab.svelte")}
 					{@render skeletonForm()}
 				{:then module}
@@ -381,6 +352,14 @@ onMount(() => {
 					</div>
 				{:then module}
 					<module.default onopenglobalsimilar={openGlobalSimilar} />
+				{:catch error}
+					{@render skeletonError(error)}
+				{/await}
+			{:else if activeTab === "knowledge"}
+				{#await import("$lib/components/tabs/KnowledgeTab.svelte")}
+					{@render skeletonCards()}
+				{:then module}
+					<module.default />
 				{:catch error}
 					{@render skeletonError(error)}
 				{/await}
@@ -424,6 +403,14 @@ onMount(() => {
 				{:catch error}
 					{@render skeletonError(error)}
 				{/await}
+			{:else if activeTab === "predictor"}
+				{#await import("$lib/components/tabs/PredictorTab.svelte")}
+					{@render skeletonCards()}
+				{:then module}
+					<module.default />
+				{:catch error}
+					{@render skeletonError(error)}
+				{/await}
 			{:else if activeTab === "connectors"}
 				{#await import("$lib/components/tabs/ConnectorsTab.svelte")}
 					{@render skeletonList()}
@@ -442,16 +429,13 @@ onMount(() => {
 				bg-[var(--sig-surface)]
 				sig-eyebrow shrink-0"
 		>
-			{#if activeTab === "config"}
-				<span>{selectedFile}</span>
+			{#if activeTab === "settings"}
+				<span>Settings</span>
 				<span class="flex items-center gap-2">
 					<kbd class="px-1 py-px text-[10px] text-[var(--sig-text-muted)]
 						bg-[var(--sig-surface-raised)]"
-					>Cmd+S</kbd> save
+					>Ctrl+S</kbd> save
 				</span>
-			{:else if activeTab === "settings"}
-				<span>YAML settings</span>
-				<span>agent.yaml</span>
 			{:else if activeTab === "memory"}
 				<span>{displayMemories.length} memory documents</span>
 				<span>
@@ -478,6 +462,9 @@ onMount(() => {
 			{:else if activeTab === "embeddings"}
 				<span>Constellation</span>
 				<span>UMAP</span>
+			{:else if activeTab === "knowledge"}
+				<span>structural graph browser</span>
+				<span>entities, traversal, predictor slices</span>
 			{:else if activeTab === "logs"}
 				<span>Log viewer</span>
 				<span>daemon logs</span>

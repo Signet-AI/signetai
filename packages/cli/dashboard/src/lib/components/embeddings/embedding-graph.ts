@@ -3,7 +3,13 @@
  * No Svelte runtime dependencies -- safe to import anywhere.
  */
 
-import type { EmbeddingPoint, EmbeddingsResponse } from "../../api";
+import type {
+	ConstellationAspect,
+	ConstellationAttribute,
+	ConstellationEntity,
+	EmbeddingPoint,
+	EmbeddingsResponse,
+} from "../../api";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -63,6 +69,9 @@ export type RelationKind = "similar" | "dissimilar";
 
 export type NodeColorMode = "source" | "newness" | "none";
 
+export type NodeType = "memory" | "entity" | "aspect" | "attribute";
+export type EdgeType = "knn" | "hierarchy" | "dependency";
+
 export interface EmbeddingRelation {
 	id: string;
 	score: number;
@@ -90,11 +99,20 @@ export interface GraphNode {
 	radius: number;
 	color: string;
 	data: EmbeddingPoint;
+	nodeType?: NodeType;
+	entityData?: ConstellationEntity;
+	aspectData?: ConstellationAspect;
+	attributeData?: ConstellationAttribute;
+	parentEntityId?: string;
+	parentAspectId?: string;
 }
 
 export interface GraphEdge {
 	source: GraphNode | number;
 	target: GraphNode | number;
+	edgeType?: EdgeType;
+	dependencyType?: string;
+	strength?: number;
 }
 
 export function clampGraphPhysics(value: GraphPhysicsConfig): GraphPhysicsConfig {
@@ -522,4 +540,99 @@ export function edgeColor3D(
 		return "rgba(85,85,85,0.08)";
 	}
 	return "rgba(160,160,160,0.5)";
+}
+
+// ---------------------------------------------------------------------------
+// Entity overlay helpers
+// ---------------------------------------------------------------------------
+
+export const entityTypeColors: Record<string, string> = {
+	person: "#eab308",
+	project: "#06b6d4",
+	system: "#a855f7",
+	tool: "#10b981",
+	concept: "#f43f5e",
+	skill: "#f59e0b",
+	task: "#64748b",
+	unknown: "#737373",
+};
+
+export function entityTypeColor(entityType: string): string {
+	return entityTypeColors[entityType.toLowerCase()] ?? entityTypeColors["unknown"];
+}
+
+export function entityMass(entity: ConstellationEntity): number {
+	const density = Math.min(
+		entity.aspects.length + entity.aspects.reduce((sum, a) => sum + a.attributes.length * 0.5, 0),
+		40,
+	);
+	return 6 + density * 0.35;
+}
+
+export function entityFillStyle(entityType: string, alpha: number): string {
+	const hex = entityTypeColor(entityType);
+	const [r, g, b] = hexToRgb(hex);
+	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export function dependencyEdgeStyle(depType: string, strength: number): {
+	color: string;
+	width: number;
+	dash: number[];
+} {
+	const w = 0.8 + strength * 1.2;
+	switch (depType) {
+		case "uses":
+		case "requires":
+			return { color: "rgba(180, 180, 200, 0.35)", width: w, dash: [] };
+		case "owned_by":
+			return { color: "rgba(160, 160, 180, 0.25)", width: w + 0.4, dash: [] };
+		case "blocks":
+			return { color: "rgba(220, 100, 100, 0.4)", width: w, dash: [4, 3] };
+		case "informs":
+			return { color: "rgba(100, 160, 220, 0.35)", width: w, dash: [2, 3] };
+		default:
+			return { color: "rgba(150, 150, 160, 0.3)", width: w, dash: [] };
+	}
+}
+
+/** Compute aspect node radius from weight (5-8px range). */
+export function aspectRadius(weight: number): number {
+	return 5 + Math.min(weight, 1) * 3;
+}
+
+/** Compute attribute node radius from importance (3-4px range). */
+export function attributeRadius(importance: number): number {
+	return 3 + Math.min(importance, 1);
+}
+
+/** Compute entity node radius from density (10-22px range). */
+export function entityRadius(entity: ConstellationEntity): number {
+	const density = entity.aspects.length +
+		entity.aspects.reduce((sum, a) => sum + a.attributes.length * 0.5, 0);
+	return 10 + Math.min(density, 24) * 0.5;
+}
+
+/** Charge strength per node type for force simulation. */
+export function tierChargeStrength(nodeType: NodeType | undefined): number {
+	switch (nodeType) {
+		case "entity": return -200;
+		case "aspect": return -40;
+		case "attribute": return -15;
+		case "memory": return -5;
+		default: return -5;
+	}
+}
+
+/** Draw a hexagonal path centered at (x, y) with given radius. */
+export function hexPath(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+	ctx.beginPath();
+	for (let i = 0; i < 6; i++) {
+		const angle = (Math.PI / 3) * i - Math.PI / 6;
+		const px = x + r * Math.cos(angle);
+		const py = y + r * Math.sin(angle);
+		if (i === 0) ctx.moveTo(px, py);
+		else ctx.lineTo(px, py);
+	}
+	ctx.closePath();
 }

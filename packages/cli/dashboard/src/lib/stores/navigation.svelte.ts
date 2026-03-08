@@ -8,23 +8,24 @@
 import { confirmDiscardChanges } from "$lib/stores/unsaved-changes.svelte";
 
 export type TabId =
-	| "config"
 	| "settings"
 	| "memory"
 	| "timeline"
+	| "knowledge"
 	| "embeddings"
 	| "pipeline"
 	| "logs"
 	| "secrets"
 	| "skills"
 	| "tasks"
-	| "connectors";
+	| "connectors"
+	| "predictor";
 
 const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
-	"config",
 	"settings",
 	"memory",
 	"timeline",
+	"knowledge",
 	"embeddings",
 	"pipeline",
 	"logs",
@@ -32,16 +33,32 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"skills",
 	"tasks",
 	"connectors",
+	"predictor",
+]);
+
+// Alias map for path-style hashes (e.g. #memory/constellation -> embeddings)
+const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
+	["memory/constellation", "embeddings"],
+	["memory/timeline", "timeline"],
+	["memory/knowledge", "knowledge"],
+	["memory/memories", "memory"],
+	["engine/settings", "settings"],
+	["engine/pipeline", "pipeline"],
+	["engine/predictor", "predictor"],
+	["engine/connectors", "connectors"],
+	["engine/logs", "logs"],
+	["config", "settings"],
 ]);
 
 function readTabFromHash(): TabId | null {
 	if (typeof window === "undefined") return null;
 	const hash = window.location.hash.slice(1);
-	return VALID_TABS.has(hash) ? (hash as TabId) : null;
+	if (VALID_TABS.has(hash)) return hash as TabId;
+	return HASH_ALIASES.get(hash) ?? null;
 }
 
 export const nav = $state({
-	activeTab: "config" as TabId,
+	activeTab: "settings" as TabId,
 });
 
 /* ── Tab groups (display-layer only) ── */
@@ -49,11 +66,13 @@ export const nav = $state({
 const MEMORY_TABS: ReadonlySet<TabId> = new Set([
 	"memory",
 	"timeline",
+	"knowledge",
 	"embeddings",
 ]);
 const ENGINE_TABS: ReadonlySet<TabId> = new Set([
 	"settings",
 	"pipeline",
+	"predictor",
 	"connectors",
 	"logs",
 ]);

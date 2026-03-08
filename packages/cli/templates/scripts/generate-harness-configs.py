@@ -4,7 +4,6 @@ Generate harness-specific config files from identity files
 
 Source of truth: ~/.agents/ (AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md)
 Generates:
-  - ~/.claude/CLAUDE.md (Claude Code)
   - ~/.config/opencode/AGENTS.md (OpenCode)
 
 Run manually or via systemd timer after identity file changes.
@@ -21,7 +20,6 @@ AGENTS_MD = AGENTS_DIR / "AGENTS.md"
 IDENTITY_FILES = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"]
 
 TARGETS = {
-    "claude-code": Path.home() / ".claude/CLAUDE.md",
     "opencode": Path.home() / ".config/opencode/AGENTS.md",
 }
 

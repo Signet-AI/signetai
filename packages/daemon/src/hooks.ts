@@ -22,8 +22,33 @@ import { hybridRecall } from "./memory-search";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { getUpdateSummary } from "./update-system";
 import { loadMemoryConfig } from "./memory-config";
-import { recordSessionCandidates, trackFtsHits } from "./session-memories";
+import { recordSessionCandidates, trackFtsHits, parseFeedback, recordAgentFeedback } from "./session-memories";
 import { listSecrets } from "./secrets";
+import { buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { getPredictorClient, recordPredictorLatency } from "./daemon";
+import { getPredictorState, updatePredictorState } from "./predictor-state";
+import {
+	type CandidateInput,
+	type CandidateSource,
+	type RankedCandidate,
+	buildPredictorStatusLine,
+	evaluateColdStartExit,
+	maybeExplore,
+	runPredictorScoring,
+} from "./predictor-scoring";
+import { propagateMemoryStatus } from "./knowledge-graph";
+import {
+	resolveFocalEntities,
+	setTraversalStatus,
+	traverseKnowledgeGraph,
+} from "./pipeline/graph-traversal";
+import {
+	applyFtsOverlapFeedback,
+	decayAspectWeights,
+	getFeedbackTelemetry,
+	recordFeedbackTelemetry,
+	shouldRunSessionDecay,
+} from "./pipeline/aspect-feedback";
 import {
 	initContinuity,
 	recordPrompt,
@@ -31,10 +56,12 @@ import {
 	shouldCheckpoint,
 	consumeState,
 	clearContinuity,
+	setStructuralSnapshot,
 } from "./continuity-state";
 import {
 	getLatestCheckpoint,
 	getLatestCheckpointBySession,
+	formatRecoveryDigest,
 	formatPeriodicDigest,
 	formatPreCompactionDigest,
 	formatSessionEndDigest,
@@ -45,6 +72,22 @@ import {
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
+
+// ---------------------------------------------------------------------------
+// Hook dedup state (in-memory, fail-open on restart)
+// ---------------------------------------------------------------------------
+
+/** Tracks which sessions have already received a full session-start inject. */
+const sessionStartSeen = new Map<string, number>();
+
+/** Sliding window of recently-injected memory IDs per session (prompt-submit). */
+const PROMPT_DEDUP_WINDOW = 5;
+const promptDedupRecent = new Map<string, Array<Set<string>>>();
+
+/** Reset prompt-submit dedup for a session (call after compaction). */
+export function resetPromptDedup(sessionKey: string): void {
+	promptDedupRecent.delete(sessionKey);
+}
 
 function formatMemoryDate(isoDate: string): string {
 	const d = new Date(isoDate);
@@ -58,6 +101,7 @@ function formatMemoryDate(isoDate: string): string {
 export interface HooksConfig {
 	sessionStart?: {
 		recallLimit?: number;
+		candidatePoolLimit?: number;
 		includeIdentity?: boolean;
 		includeRecentContext?: boolean;
 		recencyBias?: number;
@@ -124,12 +168,14 @@ export interface PreCompactionResponse {
 export interface UserPromptSubmitRequest {
 	harness: string;
 	project?: string;
+	/** Pre-cleaned user message (preferred — used as-is after metadata strip). */
 	userMessage?: string;
+	/** Raw user prompt (legacy — metadata stripped before use). */
 	userPrompt?: string;
-	rawPrompt?: string;
 	lastAssistantMessage?: string;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
+	memory_feedback?: unknown;
 }
 
 export interface UserPromptSubmitResponse {
@@ -379,7 +425,112 @@ export interface ScoredMemory {
 	pinned: number;
 	project: string | null;
 	created_at: string;
+	access_count: number;
 	effScore: number;
+}
+
+function clampScore01(value: number): number {
+	if (!Number.isFinite(value)) return 0.5;
+	return Math.max(0, Math.min(1, value));
+}
+
+function fetchTraversalCandidates(
+	memoryIds: ReadonlyArray<string>,
+	agentId: string,
+): ScoredMemory[] {
+	if (memoryIds.length === 0 || !existsSync(MEMORY_DB)) return [];
+
+	try {
+		const placeholders = memoryIds.map(() => "?").join(", ");
+		return getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT
+							 m.id,
+							 m.content,
+							 m.type,
+							 m.importance,
+							 m.tags,
+							 m.pinned,
+							 m.project,
+							 m.created_at,
+							 COALESCE(m.access_count, 0) AS access_count,
+							 COALESCE(MAX(ea.importance), m.importance, 0.5) AS effScore
+						 FROM memories m
+						 LEFT JOIN entity_attributes ea
+						   ON ea.memory_id = m.id
+						  AND ea.agent_id = ?
+						  AND ea.status = 'active'
+						 WHERE m.id IN (${placeholders})
+						   AND m.is_deleted = 0
+						 GROUP BY
+							 m.id,
+							 m.content,
+							 m.type,
+							 m.importance,
+							 m.tags,
+							 m.pinned,
+							 m.project,
+							 m.created_at,
+							 m.access_count`,
+					)
+					.all(agentId, ...memoryIds) as ScoredMemory[],
+		).map((row) => ({
+			...row,
+			effScore: clampScore01(row.effScore),
+		}));
+	} catch {
+		return [];
+	}
+}
+
+function buildActiveConstraintsSection(
+	constraints: ReadonlyArray<{
+		readonly entityName: string;
+		readonly content: string;
+		readonly importance: number;
+	}>,
+	charBudget: number,
+): string {
+	if (constraints.length === 0) return "";
+
+	const header =
+		"\n## Active Constraints\n\nConstraints for entities in scope. These always apply.\n";
+	const fullLines = constraints.map(
+		(item) => `- [${item.entityName}] ${item.content}\n`,
+	);
+	const fullSection = `${header}${fullLines.join("")}`.trimEnd();
+	if (charBudget <= 0 || fullSection.length <= charBudget) return fullSection;
+
+	const fixedOverhead = constraints.reduce(
+		(acc, item) => acc + `- [${item.entityName}] \n`.length,
+		header.length,
+	);
+	const availableForContent = Math.max(0, charBudget - fixedOverhead);
+	const perConstraintBudget = Math.max(
+		24,
+		Math.floor(availableForContent / constraints.length),
+	);
+	const compressedLines = constraints.map((item) => {
+		const content =
+			item.content.length <= perConstraintBudget
+				? item.content
+				: `${item.content.slice(0, Math.max(1, perConstraintBudget - 3))}...`;
+		return `- [${item.entityName}] ${content}\n`;
+	});
+	const compressedSection = `${header}${compressedLines.join("")}`.trimEnd();
+
+	logger.warn("hooks", "Constraint section exceeded budget; preserving all constraints", {
+		constraintBudgetChars: charBudget,
+		constraintCount: constraints.length,
+		fullChars: fullSection.length,
+		injectChars: compressedSection.length,
+	});
+
+	// Hard invariant: constraints for in-scope entities always surface.
+	// We allow this section to exceed its soft budget rather than dropping rows.
+	return compressedSection;
 }
 
 /**
@@ -398,7 +549,8 @@ export function getAllScoredCandidates(
 			(db) =>
 				db
 					.prepare(
-						`SELECT id, content, type, importance, tags, pinned, project, created_at
+						`SELECT id, content, type, importance, tags, pinned, project, created_at,
+						        COALESCE(access_count, 0) AS access_count
 					 FROM memories WHERE is_deleted = 0 ORDER BY created_at DESC LIMIT ?`,
 					)
 					.all(limit * 3) as Array<{
@@ -410,6 +562,7 @@ export function getAllScoredCandidates(
 					pinned: number;
 					project: string | null;
 					created_at: string;
+					access_count: number;
 				}>,
 		);
 
@@ -517,7 +670,8 @@ function getPredictedContextMemories(
 				db
 					.prepare(
 						`SELECT m.id, m.content, m.type, m.importance, m.tags,
-						        m.pinned, m.project, m.created_at
+						        m.pinned, m.project, m.created_at,
+						        COALESCE(m.access_count, 0) AS access_count
 						 FROM memories_fts
 						 JOIN memories m ON memories_fts.rowid = m.rowid
 						 WHERE memories_fts MATCH ?
@@ -534,6 +688,7 @@ function getPredictedContextMemories(
 					pinned: number;
 					project: string | null;
 					created_at: string;
+					access_count: number;
 				}>,
 		);
 
@@ -602,7 +757,8 @@ function loadHooksConfig(): HooksConfig {
 function getDefaultConfig(): HooksConfig {
 	return {
 		sessionStart: {
-			recallLimit: 10,
+			recallLimit: 50,
+			candidatePoolLimit: 100,
 			includeIdentity: true,
 			includeRecentContext: true,
 			recencyBias: 0.7,
@@ -775,9 +931,9 @@ function getMemoriesSince(
 // Hook Handlers
 // ============================================================================
 
-export function handleSessionStart(
+export async function handleSessionStart(
 	req: SessionStartRequest,
-): SessionStartResponse {
+): Promise<SessionStartResponse> {
 	const start = Date.now();
 	const config = loadHooksConfig().sessionStart || {};
 	const includeIdentity = config.includeIdentity !== false;
@@ -787,7 +943,28 @@ export function handleSessionStart(
 		project: req.project,
 	});
 
-	// Initialize continuity state for checkpoint accumulation
+	// Dedup guard: if we already sent a full inject for this session, return
+	// a minimal stub. Identity files / MEMORY.md are already in the context.
+	// Must fire BEFORE initContinuity to avoid resetting accumulated state.
+	if (req.sessionKey && sessionStartSeen.has(req.sessionKey)) {
+		logger.info("hooks", "Session start dedup — returning minimal stub", {
+			harness: req.harness,
+			sessionKey: req.sessionKey,
+		});
+		const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+		const now = new Date().toLocaleString("en-US", {
+			timeZone: tz,
+			dateStyle: "full",
+			timeStyle: "short",
+		});
+		return {
+			identity: { name: "Agent" },
+			memories: [],
+			inject: `[memory active | /remember | /recall]\n# Current Date & Time\n${now} (${tz})`,
+		};
+	}
+
+	// Initialize continuity state for checkpoint accumulation (first call only)
 	if (req.sessionKey) {
 		initContinuity(req.sessionKey, req.harness, req.project);
 	}
@@ -800,12 +977,236 @@ export function handleSessionStart(
 	// Read MEMORY.md with 10k char budget
 	const memoryMdContent = readMemoryMd(10000);
 
-	// Get all scored candidates (no budget yet — need full pool for recording)
-	const recallLimit = config.recallLimit ?? 30;
-	const allCandidates = getAllScoredCandidates(req.project, recallLimit);
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const traversalCfg = memoryCfg.pipelineV2.traversal;
+	const traversalEnabled =
+		memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
+	const traversalRuntimeCfg = {
+		maxAspectsPerEntity: traversalCfg?.maxAspectsPerEntity ?? 10,
+		maxAttributesPerAspect: traversalCfg?.maxAttributesPerAspect ?? 20,
+		maxDependencyHops: traversalCfg?.maxDependencyHops ?? 30,
+		minDependencyStrength: traversalCfg?.minDependencyStrength ?? 0.3,
+		timeoutMs: traversalCfg?.timeoutMs ?? 500,
+		boostWeight: traversalCfg?.boostWeight ?? 0.2,
+		constraintBudgetChars: traversalCfg?.constraintBudgetChars ?? 1000,
+	};
 
-	// Apply budget to select what we actually inject
-	const memories = selectWithBudget(allCandidates.slice(0, recallLimit), 2000);
+	// Candidate pool fusion: traversal U effective (capped before budget truncation)
+	const recallLimit = Math.max(1, config.recallLimit ?? 50);
+	const candidatePoolLimit = Math.max(1, config.candidatePoolLimit ?? 100);
+	const allCandidates = getAllScoredCandidates(req.project, recallLimit);
+	const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
+	const candidateSourceById = new Map<string, CandidateSource>(
+		allCandidates.map((candidate) => [candidate.id, "effective" as const]),
+	);
+
+	const traversalAgentId = req.agentId ?? "default";
+	let traversalFocalSource:
+		| "project"
+		| "checkpoint"
+		| "query"
+		| "session_key"
+		| null = null;
+	let traversalEntities = 0;
+	let traversalEntityNames: ReadonlyArray<string> = [];
+	let traversalTraversedEntities = 0;
+	let traversalMemories = 0;
+	let traversalConstraints = 0;
+	let traversalTimedOut = false;
+	let traversalActiveAspectIds: ReadonlyArray<string> = [];
+	let constraintsForInject: ReadonlyArray<{
+		readonly entityName: string;
+		readonly content: string;
+		readonly importance: number;
+	}> = [];
+
+	if (traversalEnabled) {
+		try {
+			const focal = getDbAccessor().withReadDb((db) =>
+				resolveFocalEntities(db, traversalAgentId, {
+					project: req.project,
+					sessionKey: req.sessionKey,
+				}),
+			);
+			traversalFocalSource = focal.source;
+			traversalEntities = focal.entityIds.length;
+			traversalEntityNames = focal.entityNames;
+
+			if (focal.entityIds.length > 0) {
+				const traversalResult = getDbAccessor().withReadDb((db) =>
+					traverseKnowledgeGraph(
+						focal.entityIds,
+						db,
+						traversalAgentId,
+						traversalRuntimeCfg,
+					),
+				);
+				traversalTimedOut = traversalResult.timedOut;
+				traversalTraversedEntities = traversalResult.entityCount;
+				traversalMemories = traversalResult.memoryIds.size;
+				constraintsForInject = traversalResult.constraints;
+				traversalConstraints = traversalResult.constraints.length;
+				traversalActiveAspectIds = traversalResult.activeAspectIds;
+
+				for (const memoryId of traversalResult.memoryIds) {
+					if (!candidateById.has(memoryId)) {
+						candidateSourceById.set(memoryId, "ka_traversal");
+					}
+				}
+
+				const traversalRows = fetchTraversalCandidates(
+					[...traversalResult.memoryIds],
+					traversalAgentId,
+				);
+				for (const row of traversalRows) {
+					const existing = candidateById.get(row.id);
+					if (existing) {
+						existing.effScore = Math.max(existing.effScore, row.effScore);
+						continue;
+					}
+					allCandidates.push(row);
+					candidateById.set(row.id, row);
+					candidateSourceById.set(row.id, "ka_traversal");
+				}
+
+				allCandidates.sort((a, b) => {
+					if (req.project) {
+						const aMatch = a.project === req.project ? 1 : 0;
+						const bMatch = b.project === req.project ? 1 : 0;
+						if (aMatch !== bMatch) return bMatch - aMatch;
+					}
+					return b.effScore - a.effScore;
+				});
+			}
+
+			setTraversalStatus({
+				phase: "session_start",
+				at: new Date().toISOString(),
+				source: traversalFocalSource,
+				focalEntityNames: traversalEntityNames,
+				focalEntities: traversalEntities,
+				traversedEntities: traversalTraversedEntities,
+				memoryCount: traversalMemories,
+				constraintCount: traversalConstraints,
+				timedOut: traversalTimedOut,
+			});
+
+			if (req.sessionKey) {
+				setStructuralSnapshot(req.sessionKey, {
+					focalEntityIds: focal.entityIds,
+					focalEntityNames: traversalEntityNames,
+					activeAspectIds: traversalActiveAspectIds,
+					surfacedConstraintCount: traversalConstraints,
+					traversalMemoryCount: traversalMemories,
+				});
+			}
+		} catch {
+			// Traversal is best-effort; fall back silently
+		}
+	}
+
+	const mergedCandidates = allCandidates.slice(0, candidatePoolLimit);
+
+	// ---------------------------------------------------------------
+	// Predictor scoring integration (Sprint 2)
+	// ---------------------------------------------------------------
+	const predictorClient = getPredictorClient();
+	const predictorConfig = memoryCfg.pipelineV2.predictor;
+	const agentId = traversalAgentId;
+	const predictorState = getPredictorState(agentId);
+
+	// Build CandidateInput array from merged candidates
+	const candidateInputs: ReadonlyArray<CandidateInput> = mergedCandidates.map((c) => ({
+		id: c.id,
+		effScore: c.effScore,
+		source: candidateSourceById.get(c.id) ?? ("effective" as const),
+	}));
+
+	// Get structural features for candidate feature vectors
+	const candidateIdsForFeatures = mergedCandidates.map((c) => c.id);
+	const structuralById = getStructuralFeatures(
+		getDbAccessor(),
+		candidateIdsForFeatures,
+		agentId,
+		candidateSourceById,
+	);
+
+	// Build candidate feature vectors using the canonical 17-element FeatureVector shape
+	// (same contract as buildCandidateFeatures / structural-features.ts).
+	// The inline 10-element version was wrong — the Rust sidecar expects 17D.
+	const featureNow = new Date();
+	const sessionGapDays = (() => {
+		try {
+			const row = getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						`SELECT MAX(created_at) AS last_end
+						 FROM session_checkpoints
+						 WHERE trigger = 'session_end'`,
+					)
+					.get() as { last_end: string | null } | undefined,
+			);
+			return row?.last_end
+				? Math.max(0, (Date.now() - new Date(row.last_end).getTime()) / 86_400_000)
+				: 0;
+		} catch {
+			return 0;
+		}
+	})();
+	const candidateFeatures: ReadonlyArray<ReadonlyArray<number>> | null =
+		predictorConfig?.enabled
+			? buildCandidateFeatures(
+					getDbAccessor(),
+					mergedCandidates.map((c) => ({
+						id: c.id,
+						importance: c.importance,
+						createdAt: c.created_at,
+						accessCount: c.access_count,
+						lastAccessed: null,
+						pinned: c.pinned === 1,
+						isSuperseded: false,
+						source: candidateSourceById.get(c.id),
+					})),
+					agentId,
+					{
+						projectSlot: 0,
+						timeOfDay: featureNow.getHours() + featureNow.getMinutes() / 60,
+						dayOfWeek: featureNow.getDay(),
+						monthOfYear: featureNow.getMonth(),
+						sessionGapDays,
+					},
+				)
+			: null;
+
+	// Run predictor scoring (async — calls sidecar if available)
+	const predictorScoreStart = Date.now();
+	const scoringResult = await runPredictorScoring({
+		candidates: candidateInputs,
+		accessor: getDbAccessor(),
+		agentId,
+		predictorClient,
+		config: predictorConfig,
+		state: predictorState,
+		candidateFeatures,
+		project: req.project,
+	});
+	const predictorScoreMs = Date.now() - predictorScoreStart;
+	recordPredictorLatency("predictor_score", predictorScoreMs);
+
+	// Build ranked-candidate lookup for fused scores
+	const rankedById = new Map<string, RankedCandidate>(
+		scoringResult.candidates.map((rc) => [rc.id, rc]),
+	);
+
+	// Re-sort merged candidates by fused score from predictor pipeline
+	const sortedCandidates = [...mergedCandidates].sort((a, b) => {
+		const aFused = rankedById.get(a.id)?.fusedScore ?? 0;
+		const bFused = rankedById.get(b.id)?.fusedScore ?? 0;
+		return bFused - aFused;
+	});
+
+	// Apply budget to select what we actually inject (on re-ranked order)
+	const memories = selectWithBudget(sortedCandidates, 2000);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -819,25 +1220,118 @@ export function handleSessionStart(
 		memories.push(...predictedMemories);
 	}
 
+	// Exploration: if predictor was used and cold start exited, try exploration
+	let exploredId: string | null = null;
+	if (scoringResult.predictorUsed && predictorState.coldStartExited) {
+		const injectedIds = new Set(memories.map((m) => m.id));
+		const exploration = maybeExplore(
+			scoringResult.candidates,
+			injectedIds,
+			predictorConfig?.explorationRate ?? 0.05,
+		);
+		exploredId = exploration.exploredId;
+		if (exploredId !== null) {
+			// Remove the displaced memory from the array to maintain budget
+			if (exploration.displacedId !== null) {
+				const displacedIdx = memories.findIndex((m) => m.id === exploration.displacedId);
+				if (displacedIdx !== -1) {
+					memories.splice(displacedIdx, 1);
+				}
+			}
+			// Find the explored memory in our candidate pool and add it
+			const exploredCandidate = mergedCandidates.find((c) => c.id === exploredId);
+			if (exploredCandidate && !memories.some((m) => m.id === exploredId)) {
+				memories.push(exploredCandidate);
+			}
+		}
+	}
+
 	// Update access tracking for served memories
 	const servedIds = memories.map((m) => m.id);
 	updateAccessTracking(servedIds);
 
+	// Cold start evaluation — reuse status from scoring pipeline (no second RPC)
+	let predictorStatusLine = "";
+	if (predictorConfig?.enabled) {
+		const predictorStatus = scoringResult.predictorStatus;
+		if (predictorStatus !== null) {
+			const exited = evaluateColdStartExit(
+				predictorStatus,
+				predictorConfig.minTrainingSessions,
+				predictorState,
+				getDbAccessor(),
+			);
+			if (exited && !predictorState.coldStartExited) {
+				updatePredictorState(agentId, { coldStartExited: true });
+			}
+			// Increment sessionsAfterColdStart if cold start exited
+			if (exited || predictorState.coldStartExited) {
+				updatePredictorState(agentId, {
+					sessionsAfterColdStart: predictorState.sessionsAfterColdStart + 1,
+				});
+			}
+			// Build status line using the cached status
+			predictorStatusLine = buildPredictorStatusLine(
+				predictorStatus,
+				getPredictorState(agentId), // re-read after possible update
+				predictorConfig,
+				getDbAccessor(),
+			);
+		} else {
+			predictorStatusLine = buildPredictorStatusLine(null, predictorState, predictorConfig, null);
+		}
+	}
+
 	// Record all candidates + which were injected for predictive scorer
 	const injectedSet = new Set(memories.map((m) => m.id));
-	const candidatesForRecording = [
-		...allCandidates.map((c) => ({
-			id: c.id,
-			effScore: c.effScore,
-			source: "effective" as const,
-		})),
+	const allCandidateIdsForRecording = [
+		...mergedCandidates.map((c) => c.id),
 		...predictedMemories
-			.filter((m) => !allCandidates.some((c) => c.id === m.id))
-			.map((m) => ({
-				id: m.id,
-				effScore: m.effScore,
-				source: "effective" as const,
-			})),
+			.filter((m) => !mergedCandidates.some((c) => c.id === m.id))
+			.map((m) => m.id),
+	];
+	// Re-fetch structural features for any predicted memories not in the first batch
+	const fullStructuralById = allCandidateIdsForRecording.length > candidateIdsForFeatures.length
+		? getStructuralFeatures(getDbAccessor(), allCandidateIdsForRecording, agentId, candidateSourceById)
+		: structuralById;
+
+	const candidatesForRecording = [
+		...mergedCandidates.map((c) => {
+			const ranked = rankedById.get(c.id);
+			const sf = fullStructuralById.get(c.id);
+			const source = exploredId === c.id
+				? ("exploration" as const)
+				: (candidateSourceById.get(c.id) ?? ("effective" as const));
+			return {
+				id: c.id,
+				effScore: c.effScore,
+				source,
+				predictorScore: ranked?.predictorScore ?? null,
+				predictorRank: ranked?.predictorRank ?? null,
+				finalScore: ranked?.fusedScore ?? c.effScore,
+				entitySlot: sf?.entitySlot ?? 0,
+				aspectSlot: sf?.aspectSlot ?? 0,
+				isConstraint: sf?.isConstraint ?? 0,
+				structuralDensity: sf?.structuralDensity ?? 0,
+			};
+		}),
+		...predictedMemories
+			.filter((m) => !mergedCandidates.some((c) => c.id === m.id))
+			.map((m) => {
+				const sf = fullStructuralById.get(m.id);
+				return {
+					id: m.id,
+					effScore: m.effScore,
+					source: "effective" as const,
+					predictorScore: null,
+					predictorRank: null,
+					finalScore: m.effScore,
+					entitySlot: sf?.entitySlot ?? 0,
+					aspectSlot: sf?.aspectSlot ?? 0,
+					isConstraint: sf?.isConstraint ?? 0,
+					structuralDensity: sf?.structuralDensity ?? 0,
+				};
+			}),
 	];
 	recordSessionCandidates(req.sessionKey, candidatesForRecording, injectedSet);
 
@@ -846,6 +1340,9 @@ export function handleSessionStart(
 	let recoverySection = "";
 
 	injectParts.push("[memory active | /remember | /recall]");
+	if (predictorStatusLine) {
+		injectParts.push(predictorStatusLine);
+	}
 
 	// Inject session gap summary for temporal awareness
 	const gapSummary = getSessionGapSummary();
@@ -911,8 +1408,12 @@ export function handleSessionStart(
 		}
 	}
 
+	const constraintsSection = buildActiveConstraintsSection(
+		constraintsForInject,
+		traversalRuntimeCfg.constraintBudgetChars,
+	);
+
 	// Inject session recovery context from recent checkpoints
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const continuityCfg = memoryCfg.pipelineV2.continuity;
 	if (continuityCfg.enabled) {
 		try {
@@ -938,12 +1439,10 @@ export function handleSessionStart(
 			}
 
 			if (checkpoint) {
-				let recoveryText = checkpoint.digest;
-				if (recoveryText.length > continuityCfg.recoveryBudgetChars) {
-					recoveryText =
-						recoveryText.slice(0, continuityCfg.recoveryBudgetChars) +
-						"\n[truncated]";
-				}
+				const recoveryText = formatRecoveryDigest(
+					checkpoint,
+					continuityCfg.recoveryBudgetChars,
+				);
 				// Store separately — appended after budget truncation to guarantee space
 				recoverySection = `\n## Session Recovery Context\n${recoveryText}`;
 			}
@@ -978,12 +1477,15 @@ export function handleSessionStart(
 
 	const duration = Date.now() - start;
 	const maxInject = config.maxInjectChars ?? 24000;
-	// Pre-reserve space for recovery context so it's never truncated
-	const reservedChars = recoverySection.length;
-	const mainBudget = maxInject - reservedChars;
+	// Pre-reserve space for constraints + recovery so they are never truncated
+	const reservedChars = recoverySection.length + constraintsSection.length;
+	const mainBudget = Math.max(0, maxInject - reservedChars);
 	let inject = injectParts.join("\n");
 	if (inject.length > mainBudget) {
 		inject = inject.slice(0, mainBudget) + "\n[context truncated]";
+	}
+	if (constraintsSection) {
+		inject += constraintsSection;
 	}
 	if (recoverySection) {
 		inject += recoverySection;
@@ -994,10 +1496,19 @@ export function handleSessionStart(
 		sessionKey: req.sessionKey,
 		runtimePath: req.runtimePath,
 		memoryCount: memories.length,
+		traversalEntities,
+		traversalMemories,
+		traversalConstraints,
+		traversalTimedOut,
 		injectChars: inject.length,
 		inject,
 		durationMs: duration,
 	});
+
+	// Mark this session as having received the full inject
+	if (req.sessionKey) {
+		sessionStartSeen.set(req.sessionKey, Date.now());
+	}
 
 	return {
 		identity,
@@ -1070,6 +1581,13 @@ ${guidelines}
 				promptCount: snap.promptCount,
 				memoryQueries: snap.pendingQueries,
 				recentRemembers: snap.pendingRemembers,
+				focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
+				focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
+				activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
+				surfacedConstraintCount:
+					snap.structuralSnapshot?.surfacedConstraintCount,
+				traversalMemoryCount:
+					snap.structuralSnapshot?.traversalMemoryCount,
 			}, cfg.maxCheckpointsPerSession);
 		} catch (err) {
 			logger.warn("hooks", "Pre-compaction checkpoint write failed", {
@@ -1089,7 +1607,7 @@ ${guidelines}
 // ============================================================================
 
 const UNTRUSTED_METADATA_HEADER =
-	/conversation info \(untrusted metadata\)\s*:/i;
+	/conversation info \(untrusted metadata\)\s*:|sender \(untrusted[^)]*\)\s*:|chat history since last reply\s*:|<<<EXTERNAL_UNTRUSTED_CONTENT|END_EXTERNAL_UNTRUSTED_CONTENT|untrusted context\s*:/i;
 
 function findJsonObjectEnd(text: string, startIndex: number): number {
 	let depth = 0;
@@ -1274,7 +1792,16 @@ interface RecallQueryShape {
 }
 
 function extractSubstantiveWords(text: string): string[] {
-	return stripUntrustedMetadata(text)
+	const cleaned = stripUntrustedMetadata(text)
+		.replace(/<@!?\d+>/g, ""); // strip Discord mention tags
+
+	// Preserve hyphenated identifiers (e.g., "KA-6", "pre-compaction")
+	const hyphenated = (
+		cleaned.match(/[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/g) || []
+	).map((t) => t.toLowerCase());
+
+	// Standard word extraction
+	const words = cleaned
 		.toLowerCase()
 		.split(/\W+/)
 		.filter(
@@ -1283,6 +1810,17 @@ function extractSubstantiveWords(text: string): string[] {
 				!RECALL_STOPWORDS.has(word) &&
 				!/^\d+$/.test(word),
 		);
+
+	// Deduplicate: hyphenated first (more specific), then words
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const term of [...hyphenated, ...words]) {
+		if (!seen.has(term)) {
+			seen.add(term);
+			result.push(term);
+		}
+	}
+	return result;
 }
 
 function buildRecallQueryShape(
@@ -1290,17 +1828,34 @@ function buildRecallQueryShape(
 	lastAssistantMessage?: string,
 ): RecallQueryShape {
 	const userTerms = extractSubstantiveWords(userPrompt);
-	const assistantTerms = lastAssistantMessage
-		? extractSubstantiveWords(lastAssistantMessage)
+
+	// Pre-clean assistant message: strip metadata, mentions, signet blocks
+	const cleanedAssistant = lastAssistantMessage
+		? stripUntrustedMetadata(lastAssistantMessage)
+				.replace(/<@!?\d+>/g, "")
+				.replace(/\[signet:recall[^\]]*\]/g, "")
+				.replace(/<memory-feedback>[\s\S]*?<\/memory-feedback>/g, "")
+		: undefined;
+	const assistantTerms = cleanedAssistant
+		? extractSubstantiveWords(cleanedAssistant)
 		: [];
-	const keywordTerms = [...new Set([...userTerms, ...assistantTerms])].slice(0, 12);
+
+	// User terms get priority — assistant capped proportionally
+	const seen = new Set(userTerms);
+	const supplemental = assistantTerms.filter((t) => !seen.has(t));
+	const maxSupplemental = Math.max(2, userTerms.length);
+	const keywordTerms = [
+		...userTerms,
+		...supplemental.slice(0, maxSupplemental),
+	].slice(0, 12);
+
 	const vectorQuery = stripUntrustedMetadata(userPrompt).trim().slice(0, 200);
 	return { keywordTerms, vectorQuery };
 }
 
 function resolveRecallUserMessage(req: UserPromptSubmitRequest): string {
 	if (typeof req.userMessage === "string") {
-		const cleaned = req.userMessage.trim();
+		const cleaned = stripUntrustedMetadata(req.userMessage).trim();
 		if (cleaned.length > 0) {
 			return cleaned;
 		}
@@ -1319,6 +1874,27 @@ export async function handleUserPromptSubmit(
 		userMessage,
 		req.lastAssistantMessage,
 	);
+
+	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const feedbackEnabled = memoryCfg.pipelineV2.predictorPipeline.agentFeedback;
+	if (feedbackEnabled && req.memory_feedback !== undefined && req.sessionKey) {
+		try {
+			const parsed = parseFeedback(req.memory_feedback);
+			if (parsed) {
+				recordAgentFeedback(req.sessionKey, parsed);
+			} else {
+				logger.warn("hooks", "Invalid memory_feedback format, skipping", {
+					sessionKey: req.sessionKey,
+				});
+			}
+		} catch (e) {
+			// Fail-open: never break the hook for feedback errors
+			logger.warn("hooks", "Failed to process memory_feedback", {
+				error: (e instanceof Error) ? e.message : String(e),
+			});
+		}
+	}
 
 	// Always record the prompt for continuity tracking, even if no FTS query
 	const snippet = userMessage.slice(0, 200).trim();
@@ -1343,6 +1919,13 @@ export async function handleUserPromptSubmit(
 						promptCount: snap.promptCount,
 						memoryQueries: snap.pendingQueries,
 						recentRemembers: snap.pendingRemembers,
+						focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
+						focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
+						activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
+						surfacedConstraintCount:
+							snap.structuralSnapshot?.surfacedConstraintCount,
+						traversalMemoryCount:
+							snap.structuralSnapshot?.traversalMemoryCount,
 					},
 					cfg.maxCheckpointsPerSession,
 				);
@@ -1351,7 +1934,7 @@ export async function handleUserPromptSubmit(
 	}
 
 	if (
-		keywordTerms.length < 2 ||
+		keywordTerms.length < 1 ||
 		vectorQuery.length === 0 ||
 		!existsSync(MEMORY_DB)
 	) {
@@ -1379,7 +1962,7 @@ export async function handleUserPromptSubmit(
 			return { inject: "", memoryCount: 0 };
 		}
 
-		const selected = selectWithBudget(
+		const budgetSelected = selectWithBudget(
 			recall.results.map((result) => ({
 				...result,
 				pinned: result.pinned ? 1 : 0,
@@ -1387,20 +1970,52 @@ export async function handleUserPromptSubmit(
 			500,
 		).slice(0, 5);
 
+		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
+		const allMatchedIds = recall.results.map((result) => result.id);
+		trackFtsHits(req.sessionKey, allMatchedIds);
+
+		// Filter out memories already injected within the sliding window
+		let selected = budgetSelected;
+		if (req.sessionKey) {
+			const recentTurns = promptDedupRecent.get(req.sessionKey);
+			if (recentTurns && recentTurns.length > 0) {
+				const recentIds = new Set<string>();
+				for (const turnSet of recentTurns) {
+					for (const id of turnSet) recentIds.add(id);
+				}
+				selected = budgetSelected.filter((s) => !recentIds.has(s.id));
+			}
+		}
+
 		if (selected.length === 0) {
 			return { inject: "", memoryCount: 0 };
 		}
-
-		// Track FTS hits for predictive scorer data collection
-		const allMatchedIds = recall.results.map((result) => result.id);
-		trackFtsHits(req.sessionKey, allMatchedIds);
 
 		const queryTerms = keywordTerms.join(" ");
 		const lines = selected.map((s) => {
 			const dateStr = formatMemoryDate(s.created_at);
 			return `- ${s.content} (${dateStr})`;
 		});
-		const inject = `[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
+		let inject = `[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
+
+		// Append agent feedback request if enabled and there are injected memories
+		const selectedIds = selected.map((s) => s.id);
+		if (feedbackEnabled && selectedIds.length > 0) {
+			inject += `\n<memory-feedback>\nRate injected memories using the mcp__signet__memory_feedback tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
+		}
+
+		// Record injected IDs into sliding window for dedup
+		if (req.sessionKey && selectedIds.length > 0) {
+			let recentTurns = promptDedupRecent.get(req.sessionKey);
+			if (!recentTurns) {
+				recentTurns = [];
+				promptDedupRecent.set(req.sessionKey, recentTurns);
+			}
+			recentTurns.unshift(new Set(selectedIds));
+			if (recentTurns.length > PROMPT_DEDUP_WINDOW) {
+				recentTurns.pop();
+			}
+		}
 
 		const duration = Date.now() - start;
 		logger.info("hooks", "User prompt submit", {
@@ -1434,6 +2049,13 @@ export function handleSessionEnd(
 	req: SessionEndRequest,
 ): SessionEndResponse {
 	const sessionKey = req.sessionKey || req.sessionId;
+	const agentId = "default";
+
+	// Clear hook dedup state for this session
+	if (sessionKey) {
+		sessionStartSeen.delete(sessionKey);
+		promptDedupRecent.delete(sessionKey);
+	}
 
 	// Flush pending periodic checkpoints
 	try {
@@ -1467,6 +2089,13 @@ export function handleSessionEnd(
 				promptCount: snap.totalPromptCount,
 				memoryQueries: snap.pendingQueries,
 				recentRemembers: snap.pendingRemembers,
+				focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
+				focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
+				activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
+				surfacedConstraintCount:
+					snap.structuralSnapshot?.surfacedConstraintCount,
+				traversalMemoryCount:
+					snap.structuralSnapshot?.traversalMemoryCount,
 			}, cfg.maxCheckpointsPerSession);
 		} catch (err) {
 			logger.warn("hooks", "Session-end checkpoint write failed", {
@@ -1499,6 +2128,63 @@ export function handleSessionEnd(
 		}
 	}
 
+	let feedbackAspectsUpdated = 0;
+	let feedbackFtsConfirmations = 0;
+	let feedbackDecayedAspects = 0;
+	let feedbackPropagatedAttributes = 0;
+	if (
+		sessionKey &&
+		memoryCfg.pipelineV2.graph.enabled &&
+		memoryCfg.pipelineV2.feedback.enabled
+	) {
+		try {
+			const feedback = applyFtsOverlapFeedback(
+				getDbAccessor(),
+				sessionKey,
+				agentId,
+				{
+					delta: memoryCfg.pipelineV2.feedback.ftsWeightDelta,
+					maxWeight: memoryCfg.pipelineV2.feedback.maxAspectWeight,
+					minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
+				},
+			);
+			feedbackAspectsUpdated = feedback.aspectsUpdated;
+			feedbackFtsConfirmations = feedback.totalFtsConfirmations;
+
+			if (
+				memoryCfg.pipelineV2.feedback.decayEnabled &&
+				shouldRunSessionDecay(
+					agentId,
+					memoryCfg.pipelineV2.feedback.decayIntervalSessions,
+				)
+			) {
+				feedbackDecayedAspects = decayAspectWeights(
+					getDbAccessor(),
+					agentId,
+					{
+						decayRate: memoryCfg.pipelineV2.feedback.decayRate,
+						minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
+						staleDays: memoryCfg.pipelineV2.feedback.staleDays,
+					},
+				);
+			}
+
+			feedbackPropagatedAttributes = propagateMemoryStatus(
+				getDbAccessor(),
+				agentId,
+			);
+			recordFeedbackTelemetry({
+				feedbackDecayedAspects,
+				feedbackPropagatedAttributes,
+			});
+		} catch (err) {
+			logger.warn("hooks", "Aspect feedback failed", {
+				error: err instanceof Error ? err.message : String(err),
+				sessionKey,
+			});
+		}
+	}
+
 	if (transcript.length < 500) {
 		return { memoriesSaved: 0 };
 	}
@@ -1520,7 +2206,14 @@ export function handleSessionEnd(
 		project: req.cwd,
 	});
 
-	logger.info("hooks", "Session end queued for summary", { jobId });
+	logger.info("hooks", "Session end queued for summary", {
+		jobId,
+		feedbackAspectsUpdated,
+		feedbackFtsConfirmations,
+		feedbackDecayedAspects,
+		feedbackPropagatedAttributes,
+		feedbackTelemetry: getFeedbackTelemetry(),
+	});
 	logger.info("hooks", "Session end transcript queued", {
 		harness: req.harness,
 		project: req.cwd,

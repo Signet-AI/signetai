@@ -129,6 +129,10 @@ describe("session_memories table", () => {
 		expect(colNames).toContain("fts_hit_count");
 		expect(colNames).toContain("agent_preference");
 		expect(colNames).toContain("created_at");
+		expect(colNames).toContain("entity_slot");
+		expect(colNames).toContain("aspect_slot");
+		expect(colNames).toContain("is_constraint");
+		expect(colNames).toContain("structural_density");
 	});
 
 	it("enforces UNIQUE(session_key, memory_id)", () => {

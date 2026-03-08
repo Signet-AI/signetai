@@ -21,6 +21,11 @@ export const ERROR_CODES = {
 	MUTATION_SCOPE_DENIED: "mutation",
 	CONNECTOR_SYNC_FAIL: "connector",
 	CONNECTOR_AUTH_FAIL: "connector",
+	PREDICTOR_TIMEOUT: "predictor",
+	PREDICTOR_CRASH: "predictor",
+	PREDICTOR_PARSE_ERROR: "predictor",
+	PREDICTOR_TRAIN_FAILURE: "predictor",
+	PREDICTOR_CHECKPOINT_ERROR: "predictor",
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_CODES;
@@ -80,7 +85,13 @@ export interface ErrorEntry {
 // Latency histogram
 // ---------------------------------------------------------------------------
 
-export type LatencyOperation = "remember" | "recall" | "mutate" | "jobs";
+export type LatencyOperation =
+	| "remember"
+	| "recall"
+	| "mutate"
+	| "jobs"
+	| "predictor_score"
+	| "predictor_train";
 
 export interface LatencySnapshot {
 	readonly p50: number;
@@ -203,6 +214,8 @@ export function createAnalyticsCollector(
 		recall: createLatencyHistogram(),
 		mutate: createLatencyHistogram(),
 		jobs: createLatencyHistogram(),
+		predictor_score: createLatencyHistogram(),
+		predictor_train: createLatencyHistogram(),
 	};
 
 	// Detect operation type from request path
@@ -324,6 +337,8 @@ export function createAnalyticsCollector(
 				recall: histograms.recall.snapshot(),
 				mutate: histograms.mutate.snapshot(),
 				jobs: histograms.jobs.snapshot(),
+				predictor_score: histograms.predictor_score.snapshot(),
+				predictor_train: histograms.predictor_train.snapshot(),
 			};
 		},
 

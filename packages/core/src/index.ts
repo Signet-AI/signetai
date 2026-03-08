@@ -15,6 +15,11 @@ export {
 	HISTORY_EVENTS,
 	DECISION_ACTIONS,
 	PIPELINE_FLAGS,
+	ENTITY_TYPES,
+	ATTRIBUTE_KINDS,
+	ATTRIBUTE_STATUSES,
+	DEPENDENCY_TYPES,
+	TASK_STATUSES,
 } from "./types";
 export type {
 	LlmProvider,
@@ -38,6 +43,7 @@ export type {
 	PipelineExtractionConfig,
 	PipelineWorkerConfig,
 	PipelineGraphConfig,
+	PipelineTraversalConfig,
 	PipelineRerankerConfig,
 	PipelineAutonomousConfig,
 	PipelineRepairConfig,
@@ -47,11 +53,23 @@ export type {
 	PipelineEmbeddingTrackerConfig,
 	PipelineContinuityConfig,
 	PipelineSynthesisConfig,
+	PipelineProceduralConfig,
+	PredictorConfig,
 	ExtractedFact,
 	ExtractedEntity,
 	ExtractionResult,
 	DecisionProposal,
 	DecisionResult,
+	EntityType,
+	AttributeKind,
+	AttributeStatus,
+	DependencyType,
+	TaskStatus,
+	EntityAspect,
+	EntityAttribute,
+	EntityDependency,
+	TaskMeta,
+	PipelineStructuralConfig,
 } from "./types";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";

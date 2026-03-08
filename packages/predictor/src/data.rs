@@ -40,6 +40,10 @@ struct CandidateRow {
     mem_content: String,
     embedding_blob: Option<Vec<u8>>,
     embedding_dims: Option<i64>,
+    entity_slot: Option<i64>,
+    aspect_slot: Option<i64>,
+    is_constraint: bool,
+    structural_density: Option<i64>,
 }
 
 /// Raw row from session_scores
@@ -194,10 +198,10 @@ fn parse_month(s: &str) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// Feature vector construction (12 dimensions)
+// Feature vector construction (17 dimensions)
 // ---------------------------------------------------------------------------
 
-fn build_features(row: &CandidateRow, session: &SessionRow, session_gap_hours: f64) -> Vec<f64> {
+fn build_features(row: &CandidateRow, session: &SessionRow, session_gap_days: f64) -> Vec<f64> {
     let age_days = days_between(&row.mem_created_at, &session.created_at);
     let hour = parse_hour(&session.created_at);
     let dow = parse_day_of_week(&session.created_at);
@@ -208,7 +212,15 @@ fn build_features(row: &CandidateRow, session: &SessionRow, session_gap_hours: f
     } else {
         0.0
     };
-    let deleted = if row.is_deleted { 1.0 } else { 0.0 };
+    // We still use deletion state as the negative "superseded" proxy until
+    // the main memories table grows an explicit superseded marker.
+    let superseded = if row.is_deleted { 1.0 } else { 0.0 };
+    let entity_slot = row.entity_slot.unwrap_or(0) as f64 / 255.0;
+    let aspect_slot = row.aspect_slot.unwrap_or(0) as f64 / 255.0;
+    let is_constraint = if row.is_constraint { 1.0 } else { 0.0 };
+    let structural_density = (row.structural_density.unwrap_or(0) as f64 + 1.0).ln();
+    let is_ka_traversal = if row.source == "ka_traversal" { 1.0 } else { 0.0 };
+    let safe_session_gap_days = session_gap_days.max(0.0);
 
     vec![
         (age_days + 1.0).ln(),                // [0] recency
@@ -220,9 +232,14 @@ fn build_features(row: &CandidateRow, session: &SessionRow, session_gap_hours: f
         (2.0 * PI * dow / 7.0).cos(),         // [6] day of week cos
         (2.0 * PI * month / 12.0).sin(),      // [7] month sin
         (2.0 * PI * month / 12.0).cos(),      // [8] month cos
-        (session_gap_hours + 1.0).ln(),       // [9] session gap
+        (safe_session_gap_days + 1.0).ln(),   // [9] session gap
         has_embedding,                        // [10] embedding flag
-        deleted,                              // [11] deletion status
+        superseded,                           // [11] superseded proxy
+        entity_slot,                          // [12] entity slot
+        aspect_slot,                          // [13] aspect slot
+        is_constraint,                        // [14] constraint marker
+        structural_density,                   // [15] log structural density
+        is_ka_traversal,                      // [16] traversal source marker
     ]
 }
 
@@ -372,7 +389,9 @@ pub fn load_training_samples(
                 m.importance, m.created_at AS mem_created_at,
                 m.access_count, m.is_deleted, m.project AS mem_project,
                 m.pinned, m.content AS mem_content,
-                e.vector AS embedding_blob, e.dimensions AS embedding_dims
+                e.vector AS embedding_blob, e.dimensions AS embedding_dims,
+                sm.entity_slot, sm.aspect_slot, sm.is_constraint,
+                sm.structural_density
          FROM session_memories sm
          JOIN memories m ON sm.memory_id = m.id
          LEFT JOIN embeddings e
@@ -412,6 +431,10 @@ pub fn load_training_samples(
                     mem_content: row.get(12)?,
                     embedding_blob: row.get(13)?,
                     embedding_dims: row.get(14)?,
+                    entity_slot: row.get(15)?,
+                    aspect_slot: row.get(16)?,
+                    is_constraint: row.get::<_, Option<i64>>(17)?.unwrap_or(0) != 0,
+                    structural_density: row.get(18)?,
                 });
             }
             out
@@ -422,13 +445,13 @@ pub fn load_training_samples(
         }
 
         // Session gap (query 3)
-        let session_gap_hours = if let Some(ref proj) = session.project {
+        let session_gap_days = if let Some(ref proj) = session.project {
             let prev: Option<String> = gap_stmt
                 .query_row(rusqlite::params![proj, &session.created_at], |row| {
                     row.get(0)
                 })?;
             match prev {
-                Some(prev_ts) => days_between(&prev_ts, &session.created_at) * 24.0,
+                Some(prev_ts) => days_between(&prev_ts, &session.created_at),
                 None => 0.0,
             }
         } else {
@@ -460,7 +483,7 @@ pub fn load_training_samples(
                     candidate_texts.push(Some(cand.mem_content.clone()));
                 }
             }
-            candidate_features.push(build_features(cand, session, session_gap_hours));
+            candidate_features.push(build_features(cand, session, session_gap_days));
             labels.push(compute_label(cand, session));
         }
 
@@ -523,6 +546,9 @@ mod tests {
                 was_injected INTEGER NOT NULL, relevance_score REAL,
                 fts_hit_count INTEGER NOT NULL DEFAULT 0,
                 agent_preference TEXT, created_at TEXT NOT NULL,
+                entity_slot INTEGER, aspect_slot INTEGER,
+                is_constraint INTEGER NOT NULL DEFAULT 0,
+                structural_density INTEGER,
                 UNIQUE(session_key, memory_id)
             );
             CREATE TABLE embeddings (
@@ -564,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn build_features_produces_12_dims() {
+    fn build_features_produces_17_dims() {
         let row = CandidateRow {
             memory_id: "m1".into(),
             effective_score: 0.8,
@@ -581,6 +607,10 @@ mod tests {
             mem_content: "test content".into(),
             embedding_blob: None,
             embedding_dims: None,
+            entity_slot: Some(64),
+            aspect_slot: Some(32),
+            is_constraint: false,
+            structural_density: Some(5),
         };
         let session = SessionRow {
             session_key: "s1".into(),
@@ -591,7 +621,7 @@ mod tests {
             created_at: "2026-02-20T14:30:00Z".into(),
         };
         let features = build_features(&row, &session, 24.0);
-        assert_eq!(features.len(), 12);
+        assert_eq!(features.len(), 17);
         // [0] = ln(age_days + 1) > 0
         assert!(features[0] > 0.0);
         // [1] = importance = 0.6
@@ -602,8 +632,54 @@ mod tests {
         assert!((features[9] - (25.0_f64).ln()).abs() < 1e-9);
         // [10] = 0 (no embedding)
         assert!((features[10] - 0.0).abs() < 1e-9);
-        // [11] = 0 (not deleted)
+        // [11] = 0 (not superseded/deleted)
         assert!((features[11] - 0.0).abs() < 1e-9);
+        // [12] and [13] are normalized hash slots
+        assert!((features[12] - (64.0 / 255.0)).abs() < 1e-9);
+        assert!((features[13] - (32.0 / 255.0)).abs() < 1e-9);
+        // [14] = 0 (not a constraint)
+        assert!((features[14] - 0.0).abs() < 1e-9);
+        // [15] = ln(5 + 1)
+        assert!((features[15] - (6.0_f64).ln()).abs() < 1e-9);
+        // [16] = 0 (not a traversal candidate)
+        assert!((features[16] - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn build_features_clamps_negative_session_gap() {
+        let row = CandidateRow {
+            memory_id: "m1".into(),
+            effective_score: 0.8,
+            was_injected: true,
+            relevance_score: Some(0.7),
+            fts_hit_count: 2,
+            source: "ka_traversal".into(),
+            importance: 0.6,
+            mem_created_at: "2026-01-15T10:00:00Z".into(),
+            access_count: 5,
+            is_deleted: false,
+            mem_project: Some("proj".into()),
+            pinned: false,
+            mem_content: "test content".into(),
+            embedding_blob: None,
+            embedding_dims: None,
+            entity_slot: Some(64),
+            aspect_slot: Some(32),
+            is_constraint: false,
+            structural_density: Some(5),
+        };
+        let session = SessionRow {
+            session_key: "s1".into(),
+            project: Some("proj".into()),
+            score: 0.8,
+            confidence: Some(0.9),
+            novel_context_count: Some(3),
+            created_at: "2026-02-20T14:30:00Z".into(),
+        };
+
+        let features = build_features(&row, &session, -4.0);
+        assert!((features[9] - 0.0).abs() < 1e-9);
+        assert!((features[16] - 1.0).abs() < 1e-9);
     }
 
     #[test]
@@ -624,6 +700,10 @@ mod tests {
             mem_content: "deleted".into(),
             embedding_blob: None,
             embedding_dims: None,
+            entity_slot: None,
+            aspect_slot: None,
+            is_constraint: false,
+            structural_density: None,
         };
         let session = SessionRow {
             session_key: "s1".into(),
@@ -654,6 +734,10 @@ mod tests {
             mem_content: "important".into(),
             embedding_blob: None,
             embedding_dims: None,
+            entity_slot: None,
+            aspect_slot: None,
+            is_constraint: false,
+            structural_density: None,
         };
         let session = SessionRow {
             session_key: "s1".into(),
@@ -686,6 +770,10 @@ mod tests {
             mem_content: "test".into(),
             embedding_blob: None,
             embedding_dims: None,
+            entity_slot: None,
+            aspect_slot: None,
+            is_constraint: false,
+            structural_density: None,
         };
         let session = SessionRow {
             session_key: "s1".into(),
@@ -718,6 +806,10 @@ mod tests {
             mem_content: "test".into(),
             embedding_blob: None,
             embedding_dims: None,
+            entity_slot: None,
+            aspect_slot: None,
+            is_constraint: false,
+            structural_density: None,
         };
         let session = SessionRow {
             session_key: "s1".into(),
@@ -748,6 +840,10 @@ mod tests {
             mem_content: "test".into(),
             embedding_blob: None,
             embedding_dims: None,
+            entity_slot: None,
+            aspect_slot: None,
+            is_constraint: false,
+            structural_density: None,
         };
         let session = SessionRow {
             session_key: "s1".into(),
@@ -796,6 +892,10 @@ mod tests {
                 mem_content: "a".into(),
                 embedding_blob: Some(blob1),
                 embedding_dims: Some(dims as i64),
+                entity_slot: None,
+                aspect_slot: None,
+                is_constraint: false,
+                structural_density: None,
             },
             CandidateRow {
                 memory_id: "m2".into(),
@@ -813,6 +913,10 @@ mod tests {
                 mem_content: "b".into(),
                 embedding_blob: Some(blob2),
                 embedding_dims: Some(dims as i64),
+                entity_slot: None,
+                aspect_slot: None,
+                is_constraint: false,
+                structural_density: None,
             },
         ];
         let result = compute_query_embedding(&candidates, dims);
@@ -840,6 +944,10 @@ mod tests {
             mem_content: "x".into(),
             embedding_blob: None,
             embedding_dims: None,
+            entity_slot: None,
+            aspect_slot: None,
+            is_constraint: false,
+            structural_density: None,
         }];
         let result = compute_query_embedding(&candidates, 4);
         assert_eq!(result, vec![0.0; 4]);
@@ -959,8 +1067,8 @@ mod tests {
         assert!(sample.candidate_texts[1].is_some());
 
         // Feature dims = 12
-        assert_eq!(sample.candidate_features[0].len(), 12);
-        assert_eq!(sample.candidate_features[1].len(), 12);
+        assert_eq!(sample.candidate_features[0].len(), 17);
+        assert_eq!(sample.candidate_features[1].len(), 17);
 
         // Labels in reasonable range
         for label in &sample.labels {

@@ -198,16 +198,24 @@ export function createClaudeCodeProvider(
 			env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
 		});
 
+		let timedOut = false;
 		const timer = setTimeout(() => {
+			timedOut = true;
 			proc.kill();
 		}, timeoutMs);
 
 		try {
-			const stdout = await new Response(proc.stdout).text();
-			const exitCode = await proc.exited;
+			const [stdout, stderr, exitCode] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+				proc.exited,
+			]);
+
+			if (timedOut) {
+				throw new Error(`claude-code timeout after ${timeoutMs}ms`);
+			}
 
 			if (exitCode !== 0) {
-				const stderr = await new Response(proc.stderr).text();
 				throw new Error(
 					`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`,
 				);
@@ -220,16 +228,8 @@ export function createClaudeCodeProvider(
 
 			return result;
 		} catch (e) {
-			if (
-				e instanceof Error &&
-				e.message.includes("claude-code exit")
-			) {
-				throw e;
-			}
-			if (e instanceof Error && e.message.includes("SIGTERM")) {
-				throw new Error(
-					`claude-code timeout after ${timeoutMs}ms`,
-				);
+			if (timedOut) {
+				throw new Error(`claude-code timeout after ${timeoutMs}ms`);
 			}
 			throw e;
 		} finally {

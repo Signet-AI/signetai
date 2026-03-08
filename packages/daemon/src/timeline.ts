@@ -16,7 +16,7 @@ import type { ErrorEntry } from "./analytics";
 
 export interface TimelineEvent {
 	readonly timestamp: string;
-	readonly source: "history" | "job" | "log" | "error";
+	readonly source: "history" | "job" | "log" | "error" | "predictor";
 	readonly event: string;
 	readonly details: Readonly<Record<string, unknown>>;
 }
@@ -182,6 +182,57 @@ function detectEntityType(
 }
 
 // ---------------------------------------------------------------------------
+// Predictor comparison events
+// ---------------------------------------------------------------------------
+
+interface ComparisonRow {
+	session_key: string;
+	predictor_ndcg: number;
+	baseline_ndcg: number;
+	predictor_won: number;
+	margin: number;
+	alpha: number;
+	candidate_count: number;
+	created_at: string;
+}
+
+function predictorToEvents(
+	sessionKey: string,
+	db: ReadDb,
+): TimelineEvent[] {
+	try {
+		const rows = db
+			.prepare(
+				`SELECT session_key, predictor_ndcg, baseline_ndcg,
+				        predictor_won, margin, alpha, candidate_count,
+				        created_at
+				 FROM predictor_comparisons
+				 WHERE session_key = ?
+				 ORDER BY created_at ASC`,
+			)
+			.all(sessionKey) as ComparisonRow[];
+
+		return rows.map((r) => ({
+			timestamp: r.created_at,
+			source: "predictor" as const,
+			event: r.predictor_won === 1
+				? "predictor:comparison:won"
+				: "predictor:comparison:lost",
+			details: {
+				predictorNdcg: r.predictor_ndcg,
+				baselineNdcg: r.baseline_ndcg,
+				margin: r.margin,
+				alpha: r.alpha,
+				candidateCount: r.candidate_count,
+			},
+		}));
+	} catch {
+		// predictor_comparisons table may not exist on older databases
+		return [];
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Builder
 // ---------------------------------------------------------------------------
 
@@ -252,6 +303,10 @@ export function buildTimeline(
 			e.message.includes(entityId),
 	);
 	allEvents.push(...errorToEvents(matchingErrors));
+
+	// Gather predictor comparison events for this entity (works
+	// when entityId is a session_key — returns empty otherwise)
+	allEvents.push(...predictorToEvents(entityId, db));
 
 	// Sort chronologically
 	allEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp));

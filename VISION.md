@@ -55,11 +55,25 @@ sleep, even if a dozen versions of you were awake in between.
 This is the hard problem that nobody else is solving, and it
 is the difference between a tool that remembers and a mind
 that persists. Signet doesn't just remember — it learns what
-to remember. A model unique to each user, trained on their
-own interaction patterns, that gets sharper the longer you
-use it. No cloud. No shared weights. Your patterns, running
-locally, earning its influence by proving it outperforms the
-alternative.
+to remember. A neural network unique to each user, trained on
+their own interaction patterns, that gets sharper the longer
+you use it. No shared personal weights. Your weights never leave your
+machine — running locally, earning their influence by proving
+they outperform the alternative.
+
+But it goes further. With consent, anonymized training signals
+from across the Signet community feed a separate shared base
+model — a pre-trained memory relevance network that ships with
+every new install. Your agent starts smart on day one, then gets smarter
+for you specifically. It's federated learning applied to agent
+memory: the community makes the base model better, your local
+data makes it yours. Cold start disappears. The predictor
+arrives already knowing what good memory injection looks like,
+then fine-tunes to your patterns in a handful of sessions. The
+training signal isn't synthetic — it's the agent itself telling
+us what helped, on every prompt, accumulated across thousands
+of sessions from real users solving real problems. First-order
+ground truth at scale. Nobody else has this data.
 
 Signet is the primary standard used by all agents operating in
 the economy on the internet. Developers use it to build the

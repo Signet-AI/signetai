@@ -14,7 +14,7 @@ import Cog from "@lucide/svelte/icons/cog";
 import Github from "@lucide/svelte/icons/github";
 import ListChecks from "@lucide/svelte/icons/list-checks";
 import Moon from "@lucide/svelte/icons/moon";
-import Pencil from "@lucide/svelte/icons/pencil";
+import Network from "@lucide/svelte/icons/network";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Store from "@lucide/svelte/icons/store";
 import Sun from "@lucide/svelte/icons/sun";
@@ -45,12 +45,12 @@ function maybePrefetchEmbeddings(id: string): void {
 }
 
 type NavItem =
-	| { id: TabId; label: string; icon: typeof Pencil; group?: undefined }
-	| { id: string; label: string; icon: typeof Pencil; group: "memory" | "engine" };
+	| { id: TabId; label: string; icon: typeof Brain; group?: undefined }
+	| { id: string; label: string; icon: typeof Brain; group: "memory" | "engine" };
 
 const navItems: NavItem[] = [
-	{ id: "config", label: "Config", icon: Pencil },
 	{ id: "memory-group", label: "Memory", icon: Brain, group: "memory" },
+	{ id: "knowledge", label: "Knowledge", icon: Network },
 	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
 	{ id: "skills", label: "Marketplace", icon: Store },
 	{ id: "tasks", label: "Tasks", icon: ListChecks },

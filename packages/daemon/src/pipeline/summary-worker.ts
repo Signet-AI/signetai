@@ -221,8 +221,125 @@ async function processJob(
 		await scoreContinuity(accessor, provider, job, result.summary);
 	} catch (e) {
 		logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
+	}
+
+	// --- Predictor comparison (Sprint 3) ---
+	// Runs after continuity scoring has written per-memory relevance scores
+	// and session_scores. Uses dynamic imports to avoid circular deps.
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	// Agent ID is hardcoded because summary_jobs and session_scores tables
+	// lack an agent_id column (pre-existing schema limitation). In a
+	// multi-agent deployment, all predictor comparisons route to the
+	// "default" bucket. Adding agent_id to these tables requires a schema
+	// migration and is tracked as future work.
+	const agentId = "default";
+	try {
+		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
+			const {
+				runSessionComparison,
+				saveComparison,
+				updateSuccessRate,
+				shouldTriggerTraining,
+				detectDrift,
+			} = await import("../predictor-comparison");
+			const comparison = runSessionComparison(
+				job.session_key,
+				agentId,
+				accessor,
+			);
+
+			if (comparison !== null) {
+				saveComparison(comparison, agentId, accessor);
+				// Only update EMA when the predictor actually produced scores —
+				// otherwise predictorWon is deterministically false and the EMA
+				// accrues phantom losses during cold start or sidecar downtime.
+				if (comparison.hasPredictorScores) {
+					updateSuccessRate(
+						agentId,
+						comparison.predictorWon,
+						comparison.scorerConfidence,
+					);
+				}
+
+				// Drift detection
+				const driftResult = detectDrift(agentId, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
+				if (driftResult.drifting) {
+					logger.warn("predictor", "Drift detected — resetting predictor state", {
+						recentWinRate: driftResult.recentWinRate,
+						windowSize: driftResult.windowSize,
+						agentId,
+					});
+
+					// Reset alpha to 1.0 (full baseline weight) and EMA to neutral
+					const { updatePredictorState: resetState } = await import("../predictor-state");
+					resetState(agentId, {
+						alpha: 1.0,
+						successRate: 0.5,
+					});
+
+					// Trigger retraining (non-fatal if it fails)
+					try {
+						const { getPredictorClient } = await import("../daemon");
+						const predictorClient = getPredictorClient();
+						if (predictorClient) {
+							const dbPath = join(AGENTS_DIR, "memory", "memories.db");
+							await predictorClient.trainFromDb({ db_path: dbPath });
+							logger.info("predictor", "Drift-triggered retraining complete");
+						}
+					} catch (trainErr) {
+						logger.warn("predictor", "Drift-triggered retraining failed", {
+							error: trainErr instanceof Error ? trainErr.message : String(trainErr),
+						});
+					}
+				}
+
+				// Check training trigger
+				if (shouldTriggerTraining(agentId, memoryCfg.pipelineV2.predictor, accessor)) {
+					try {
+						const { getPredictorClient } = await import("../daemon");
+						const predictorClient = getPredictorClient();
+						if (predictorClient) {
+							const dbPath = join(AGENTS_DIR, "memory", "memories.db");
+							await predictorClient.trainFromDb({ db_path: dbPath });
+
+							const { updatePredictorState } = await import("../predictor-state");
+							updatePredictorState(agentId, { lastTrainingAt: new Date().toISOString() });
+
+							logger.info("predictor", "Training triggered after session comparison");
+						}
+					} catch (trainErr) {
+						logger.warn("predictor", "Training trigger failed (non-fatal)", {
+							error: trainErr instanceof Error ? trainErr.message : String(trainErr),
+						});
+					}
+				}
+			}
+		}
+	} catch (err) {
+		logger.warn("predictor", "Session comparison failed (non-fatal)", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+
+	// --- Training pair collection for predictor federated learning ---
+	if (job.session_key) {
+		try {
+			if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
+				const { collectTrainingPairs, saveTrainingPairs } = await import(
+					"../predictor-training-pairs"
+				);
+				const pairs = collectTrainingPairs(accessor, job.session_key, agentId);
+				if (pairs.length > 0) {
+					saveTrainingPairs(accessor, agentId, job.session_key, pairs);
+				}
+			}
+		} catch (e) {
+			logger.warn("summary-worker", "Training pair collection failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
 	}
 }
 
@@ -310,7 +427,7 @@ function writePerMemoryRelevance(
 		});
 	} catch (e) {
 		logger.warn("summary-worker", "Failed to write per-memory relevance", {
-			error: (e as Error).message,
+			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }
@@ -605,8 +722,8 @@ export function startSummaryWorker(
 			// Check for more jobs immediately
 			scheduleTick(500);
 		} catch (e) {
-			const err = e as Error;
-			logger.error("summary-worker", "Job failed", err);
+			const errorMessage = e instanceof Error ? e.message : String(e);
+			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
 			// Try to mark the job as failed/pending for retry
 			try {
@@ -629,7 +746,7 @@ export function startSummaryWorker(
 							`UPDATE summary_jobs
 							 SET status = ?, error = ?
 							 WHERE id = ? AND status = 'processing'`,
-						).run(status, err.message, jobId);
+						).run(status, errorMessage, jobId);
 					});
 				}
 			} catch {
@@ -645,7 +762,7 @@ export function startSummaryWorker(
 		if (stopped) return;
 		timer = setTimeout(() => {
 			tick().catch((err) => {
-				logger.error("summary-worker", "Unhandled tick error", err as Error);
+				logger.error("summary-worker", "Unhandled tick error", err instanceof Error ? err : undefined, { error: err instanceof Error ? err.message : String(err) });
 			});
 		}, delay);
 	}

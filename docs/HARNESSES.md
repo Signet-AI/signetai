@@ -158,6 +158,21 @@ installing a shell wrapper that fires Signet lifecycle hooks around local
 This gives Codex the same durable memory lifecycle as Claude Code without
 requiring Codex-specific database or schema changes.
 
+### Supported hooks
+
+| Hook | Supported |
+|------|-----------|
+| session-start | yes — context injected via `model_instructions_file` |
+| user-prompt-submit | no |
+| session-end | yes — transcript path passed to daemon for memory extraction |
+
+### Extraction provider
+
+Codex can be selected as the extraction provider in `agent.yaml`. When set,
+the pipeline uses the Codex CLI (similar to the `claude-code` provider) to
+run extraction and decision passes against Codex's configured model rather
+than a local Ollama instance.
+
 ### Prerequisites
 
 - Codex installed and in `PATH`

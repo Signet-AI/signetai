@@ -4,13 +4,9 @@ export interface PageHeaderDefinition {
 }
 
 export const PAGE_HEADERS = {
-	config: {
-		title: "Config",
-		eyebrow: "Identity markdown workspace",
-	},
 	settings: {
-		title: "Engine",
-		eyebrow: "Runtime and harness controls",
+		title: "Settings",
+		eyebrow: "Configuration and identity",
 	},
 	memory: {
 		title: "Memory",
@@ -19,6 +15,10 @@ export const PAGE_HEADERS = {
 	timeline: {
 		title: "Memory",
 		eyebrow: "Era evolution timeline",
+	},
+	knowledge: {
+		title: "Memory",
+		eyebrow: "Knowledge graph and traversal view",
 	},
 	embeddings: {
 		title: "Memory",
@@ -47,5 +47,9 @@ export const PAGE_HEADERS = {
 	connectors: {
 		title: "Engine",
 		eyebrow: "Harness and data source health",
+	},
+	predictor: {
+		title: "Engine",
+		eyebrow: "Predictive memory scorer",
 	},
 } as const satisfies Record<string, PageHeaderDefinition>;

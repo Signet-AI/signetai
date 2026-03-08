@@ -1818,6 +1818,13 @@ export interface PipelineStatus {
 	latency: Record<string, unknown>;
 	errorSummary: Record<string, number>;
 	mode: string;
+	feedback?: {
+		lastRunAt: string | null;
+		feedbackAspectsUpdated: number;
+		feedbackFtsConfirmations: number;
+		feedbackDecayedAspects: number;
+		feedbackPropagatedAttributes: number;
+	};
 }
 
 export async function getPipelineStatus(): Promise<PipelineStatus | null> {
@@ -1825,6 +1832,426 @@ export async function getPipelineStatus(): Promise<PipelineStatus | null> {
 		const res = await fetch(`${API_BASE}/api/pipeline/status`);
 		if (!res.ok) return null;
 		return await res.json();
+	} catch {
+		return null;
+	}
+}
+
+export interface KnowledgeEntityListItem {
+	entity: {
+		id: string;
+		name: string;
+		canonicalName?: string;
+		entityType: string;
+		description?: string;
+		mentions?: number;
+		pinned?: boolean;
+		pinnedAt?: string | null;
+		createdAt: string;
+		updatedAt: string;
+	};
+	aspectCount: number;
+	attributeCount: number;
+	constraintCount: number;
+	dependencyCount: number;
+}
+
+export interface KnowledgeEntityDetail extends KnowledgeEntityListItem {
+	structuralDensity: {
+		aspectCount: number;
+		attributeCount: number;
+		constraintCount: number;
+		dependencyCount: number;
+	};
+	incomingDependencyCount: number;
+	outgoingDependencyCount: number;
+}
+
+export interface KnowledgeAspectWithCounts {
+	aspect: {
+		id: string;
+		entityId: string;
+		agentId: string;
+		name: string;
+		canonicalName: string;
+		weight: number;
+		createdAt: string;
+		updatedAt: string;
+	};
+	attributeCount: number;
+	constraintCount: number;
+}
+
+export interface KnowledgeAttribute {
+	id: string;
+	aspectId: string;
+	agentId: string;
+	memoryId: string | null;
+	kind: "attribute" | "constraint";
+	content: string;
+	normalizedContent: string;
+	confidence: number;
+	importance: number;
+	status: "active" | "superseded" | "deleted";
+	supersededBy: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface KnowledgeDependencyEdge {
+	id: string;
+	direction: "incoming" | "outgoing";
+	dependencyType: string;
+	strength: number;
+	aspectId: string | null;
+	sourceEntityId: string;
+	sourceEntityName: string;
+	targetEntityId: string;
+	targetEntityName: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface KnowledgeStats {
+	entityCount: number;
+	aspectCount: number;
+	attributeCount: number;
+	constraintCount: number;
+	dependencyCount: number;
+	unassignedMemoryCount: number;
+	coveragePercent: number;
+	feedbackUpdatedAspectCount: number;
+	averageAspectWeight: number;
+	maxWeightAspectCount: number;
+	minWeightAspectCount: number;
+}
+
+export interface TraversalStatusSnapshot {
+	phase: "session_start" | "recall";
+	at: string;
+	source: "project" | "checkpoint" | "query" | "session_key" | null;
+	focalEntityNames: string[];
+	focalEntities: number;
+	traversedEntities: number;
+	memoryCount: number;
+	constraintCount: number;
+	timedOut: boolean;
+}
+
+export interface PredictorEntitySlice {
+	entityId: string;
+	entityName: string;
+	wins: number;
+	losses: number;
+	winRate: number;
+	avgMargin: number;
+}
+
+export interface PredictorProjectSlice {
+	project: string;
+	wins: number;
+	losses: number;
+	winRate: number;
+	avgMargin: number;
+}
+
+export interface PredictorTrainingRun {
+	id: string;
+	agentId: string;
+	modelVersion: number;
+	loss: number;
+	sampleCount: number;
+	durationMs: number;
+	canaryNdcg: number | null;
+	canaryNdcgDelta: number | null;
+	canaryScoreVariance: number | null;
+	canaryTopkChurn: number | null;
+	createdAt: string;
+}
+
+export interface PinnedEntity {
+	id: string;
+	name: string;
+	pinnedAt: string;
+}
+
+export interface EntityHealth {
+	entityId: string;
+	entityName: string;
+	comparisonCount: number;
+	winRate: number;
+	avgMargin: number;
+	trend: "improving" | "stable" | "declining";
+}
+
+export async function getKnowledgeEntities(filters: {
+	type?: string;
+	query?: string;
+	limit?: number;
+	offset?: number;
+	agentId?: string;
+} = {}): Promise<{ items: KnowledgeEntityListItem[]; limit: number; offset: number }> {
+	try {
+		const params = new URLSearchParams();
+		if (filters.type) params.set("type", filters.type);
+		if (filters.query) params.set("q", filters.query);
+		if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
+		if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
+		if (filters.agentId) params.set("agent_id", filters.agentId);
+		const res = await fetch(`${API_BASE}/api/knowledge/entities?${params.toString()}`);
+		if (!res.ok) throw new Error("Failed to fetch knowledge entities");
+		return await res.json();
+	} catch {
+		return { items: [], limit: filters.limit ?? 50, offset: filters.offset ?? 0 };
+	}
+}
+
+export async function getKnowledgeEntity(id: string, agentId = "default"): Promise<KnowledgeEntityDetail | null> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(id)}?agent_id=${encodeURIComponent(agentId)}`,
+		);
+		if (!res.ok) return null;
+		return await res.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function getKnowledgeAspects(
+	entityId: string,
+	agentId = "default",
+): Promise<KnowledgeAspectWithCounts[]> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/aspects?agent_id=${encodeURIComponent(agentId)}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch aspects");
+		const data = (await res.json()) as { items?: KnowledgeAspectWithCounts[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getKnowledgeAttributes(
+	entityId: string,
+	aspectId: string,
+	filters: {
+		kind?: string;
+		status?: string;
+		limit?: number;
+		offset?: number;
+		agentId?: string;
+	} = {},
+): Promise<KnowledgeAttribute[]> {
+	try {
+		const params = new URLSearchParams();
+		if (filters.kind) params.set("kind", filters.kind);
+		if (filters.status) params.set("status", filters.status);
+		if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
+		if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
+		params.set("agent_id", filters.agentId ?? "default");
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/aspects/${encodeURIComponent(aspectId)}/attributes?${params.toString()}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch attributes");
+		const data = (await res.json()) as { items?: KnowledgeAttribute[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getKnowledgeDependencies(
+	entityId: string,
+	direction = "both",
+	agentId = "default",
+): Promise<KnowledgeDependencyEdge[]> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/dependencies?direction=${encodeURIComponent(direction)}&agent_id=${encodeURIComponent(agentId)}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch dependencies");
+		const data = (await res.json()) as { items?: KnowledgeDependencyEdge[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getKnowledgeStats(): Promise<KnowledgeStats | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/knowledge/stats`);
+		if (!res.ok) return null;
+		return await res.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function getKnowledgeTraversalStatus(): Promise<TraversalStatusSnapshot | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/knowledge/traversal/status`);
+		if (!res.ok) return null;
+		const data = (await res.json()) as { status?: TraversalStatusSnapshot | null };
+		return data.status ?? null;
+	} catch {
+		return null;
+	}
+}
+
+export async function getPinnedKnowledgeEntities(
+	agentId = "default",
+): Promise<PinnedEntity[]> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/pinned?agent_id=${encodeURIComponent(agentId)}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch pinned entities");
+		return await res.json();
+	} catch {
+		return [];
+	}
+}
+
+export async function pinKnowledgeEntity(
+	id: string,
+	agentId = "default",
+): Promise<{ pinned: true; pinnedAt: string } | null> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(id)}/pin?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "POST" },
+		);
+		if (!res.ok) return null;
+		return await res.json();
+	} catch {
+		return null;
+	}
+}
+
+export async function unpinKnowledgeEntity(
+	id: string,
+	agentId = "default",
+): Promise<boolean> {
+	try {
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(id)}/pin?agent_id=${encodeURIComponent(agentId)}`,
+			{ method: "DELETE" },
+		);
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
+export async function getKnowledgeEntityHealth(
+	filters: {
+		agentId?: string;
+		since?: string;
+		minComparisons?: number;
+	} = {},
+): Promise<EntityHealth[]> {
+	try {
+		const params = new URLSearchParams();
+		if (filters.agentId) params.set("agent_id", filters.agentId);
+		if (filters.since) params.set("since", filters.since);
+		if (typeof filters.minComparisons === "number") {
+			params.set("min_comparisons", String(filters.minComparisons));
+		}
+		const res = await fetch(
+			`${API_BASE}/api/knowledge/entities/health?${params.toString()}`,
+		);
+		if (!res.ok) throw new Error("Failed to fetch entity health");
+		return await res.json();
+	} catch {
+		return [];
+	}
+}
+
+export async function getPredictorEntitySlices(since?: string): Promise<PredictorEntitySlice[]> {
+	try {
+		const params = new URLSearchParams();
+		if (since) params.set("since", since);
+		const res = await fetch(`${API_BASE}/api/predictor/comparisons/by-entity?${params.toString()}`);
+		if (!res.ok) throw new Error("Failed to fetch predictor entity slices");
+		const data = (await res.json()) as { items?: PredictorEntitySlice[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getPredictorProjectSlices(since?: string): Promise<PredictorProjectSlice[]> {
+	try {
+		const params = new URLSearchParams();
+		if (since) params.set("since", since);
+		const res = await fetch(`${API_BASE}/api/predictor/comparisons/by-project?${params.toString()}`);
+		if (!res.ok) throw new Error("Failed to fetch predictor project slices");
+		const data = (await res.json()) as { items?: PredictorProjectSlice[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function getPredictorTrainingRuns(limit = 20): Promise<PredictorTrainingRun[]> {
+	try {
+		const res = await fetch(`${API_BASE}/api/predictor/training?limit=${limit}`);
+		if (!res.ok) throw new Error("Failed to fetch predictor training runs");
+		const data = (await res.json()) as { items?: PredictorTrainingRun[] };
+		return data.items ?? [];
+	} catch {
+		return [];
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Graph Constellation Overlay
+// ---------------------------------------------------------------------------
+
+export interface ConstellationAttribute {
+	id: string;
+	content: string;
+	kind: "attribute" | "constraint";
+	importance: number;
+	memoryId: string | null;
+}
+
+export interface ConstellationAspect {
+	id: string;
+	name: string;
+	weight: number;
+	attributes: ConstellationAttribute[];
+}
+
+export interface ConstellationEntity {
+	id: string;
+	name: string;
+	entityType: string;
+	mentions: number;
+	pinned: boolean;
+	aspects: ConstellationAspect[];
+}
+
+export interface ConstellationDependency {
+	sourceEntityId: string;
+	targetEntityId: string;
+	dependencyType: string;
+	strength: number;
+}
+
+export interface ConstellationGraph {
+	entities: ConstellationEntity[];
+	dependencies: ConstellationDependency[];
+}
+
+export async function getConstellationOverlay(agentId = "default"): Promise<ConstellationGraph | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}`);
+		if (!res.ok) return null;
+		return (await res.json()) as ConstellationGraph;
 	} catch {
 		return null;
 	}

@@ -49,6 +49,16 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		boostWeight: 0.15,
 		boostTimeoutMs: 500,
 	},
+	traversal: {
+		enabled: true,
+		maxAspectsPerEntity: 10,
+		maxAttributesPerAspect: 20,
+		maxDependencyHops: 30,
+		minDependencyStrength: 0.3,
+		timeoutMs: 500,
+		boostWeight: 0.2,
+		constraintBudgetChars: 1000,
+	},
 	reranker: {
 		enabled: true,
 		model: "",
@@ -112,6 +122,46 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		maxTokens: 8000,
 		idleGapMinutes: 15,
 	},
+	procedural: {
+		enabled: true,
+		decayRate: 0.99,
+		minImportance: 0.3,
+		importanceOnInstall: 0.7,
+		enrichOnInstall: true,
+		enrichMinDescription: 30,
+		reconcileIntervalMs: 60000,
+	},
+	structural: {
+		enabled: true,
+		classifyBatchSize: 8,
+		dependencyBatchSize: 5,
+		pollIntervalMs: 10000,
+	},
+	feedback: {
+		enabled: true,
+		ftsWeightDelta: 0.02,
+		maxAspectWeight: 1.0,
+		minAspectWeight: 0.1,
+		decayEnabled: true,
+		decayRate: 0.005,
+		staleDays: 14,
+		decayIntervalSessions: 10,
+	},
+	predictor: {
+		enabled: false,
+		trainIntervalSessions: 10,
+		minTrainingSessions: 10,
+		scoreTimeoutMs: 120,
+		trainTimeoutMs: 30000,
+		crashDisableThreshold: 3,
+		rrfK: 12,
+		explorationRate: 0.05,
+		driftResetWindow: 10,
+	},
+	predictorPipeline: {
+		agentFeedback: true,
+		trainingTelemetry: true,
+	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -154,6 +204,7 @@ export function loadPipelineConfig(
 	const extractionRaw = raw.extraction as Record<string, unknown> | undefined;
 	const workerRaw = raw.worker as Record<string, unknown> | undefined;
 	const graphRaw = raw.graph as Record<string, unknown> | undefined;
+	const traversalRaw = raw.traversal as Record<string, unknown> | undefined;
 	const rerankerRaw = raw.reranker as Record<string, unknown> | undefined;
 	const autonomousRaw = raw.autonomous as Record<string, unknown> | undefined;
 	const repairRaw = raw.repair as Record<string, unknown> | undefined;
@@ -163,6 +214,11 @@ export function loadPipelineConfig(
 	const continuityRaw = raw.continuity as Record<string, unknown> | undefined;
 	const embeddingTrackerRaw = raw.embeddingTracker as Record<string, unknown> | undefined;
 	const synthesisRaw = raw.synthesis as Record<string, unknown> | undefined;
+	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
+	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
+	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
+	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
+	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
 
 	// Helper: resolve nested-first, flat-fallback
 	const d = DEFAULT_PIPELINE_V2;
@@ -192,6 +248,11 @@ export function loadPipelineConfig(
 						  flatProvider === undefined
 						? "ollama"
 						: d.extraction.provider;
+
+	// Normalize aspect weights: clamp independently, then enforce min <= max
+	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
+	const minAW = clampFraction(feedbackRaw?.minAspectWeight, d.feedback.minAspectWeight);
+	const validatedMinAW = minAW > maxAW ? maxAW : minAW;
 
 	return {
 		enabled: typeof raw.enabled === "boolean" ? raw.enabled : d.enabled,
@@ -255,6 +316,50 @@ export function loadPipelineConfig(
 				50,
 				5000,
 				d.graph.boostTimeoutMs,
+			),
+		},
+
+		traversal: {
+			enabled: resolveBool(
+				traversalRaw?.enabled, undefined, d.traversal?.enabled ?? true,
+			),
+			maxAspectsPerEntity: clampPositive(
+				traversalRaw?.maxAspectsPerEntity,
+				1,
+				100,
+				d.traversal?.maxAspectsPerEntity ?? 10,
+			),
+			maxAttributesPerAspect: clampPositive(
+				traversalRaw?.maxAttributesPerAspect,
+				1,
+				200,
+				d.traversal?.maxAttributesPerAspect ?? 20,
+			),
+			maxDependencyHops: clampPositive(
+				traversalRaw?.maxDependencyHops,
+				1,
+				200,
+				d.traversal?.maxDependencyHops ?? 30,
+			),
+			minDependencyStrength: clampFraction(
+				traversalRaw?.minDependencyStrength,
+				d.traversal?.minDependencyStrength ?? 0.3,
+			),
+			timeoutMs: clampPositive(
+				traversalRaw?.timeoutMs,
+				50,
+				5000,
+				d.traversal?.timeoutMs ?? 500,
+			),
+			boostWeight: clampFraction(
+				traversalRaw?.boostWeight,
+				d.traversal?.boostWeight ?? 0.2,
+			),
+			constraintBudgetChars: clampPositive(
+				traversalRaw?.constraintBudgetChars,
+				200,
+				10000,
+				d.traversal?.constraintBudgetChars ?? 1000,
 			),
 		},
 
@@ -513,6 +618,162 @@ export function loadPipelineConfig(
 				1,
 				1440,
 				d.synthesis.idleGapMinutes,
+			),
+		},
+		procedural: {
+			enabled: resolveBool(
+				proceduralRaw?.enabled, undefined, d.procedural.enabled,
+			),
+			decayRate: clampFraction(
+				proceduralRaw?.decayRate,
+				d.procedural.decayRate,
+			),
+			minImportance: clampFraction(
+				proceduralRaw?.minImportance,
+				d.procedural.minImportance,
+			),
+			importanceOnInstall: clampFraction(
+				proceduralRaw?.importanceOnInstall,
+				d.procedural.importanceOnInstall,
+			),
+			enrichOnInstall: resolveBool(
+				proceduralRaw?.enrichOnInstall, undefined, d.procedural.enrichOnInstall,
+			),
+			enrichMinDescription: clampPositive(
+				proceduralRaw?.enrichMinDescription,
+				10,
+				500,
+				d.procedural.enrichMinDescription,
+			),
+			reconcileIntervalMs: clampPositive(
+				proceduralRaw?.reconcileIntervalMs,
+				10000,
+				600000,
+				d.procedural.reconcileIntervalMs,
+			),
+		},
+
+		structural: {
+			enabled: resolveBool(
+				structuralRaw?.enabled, undefined, d.structural.enabled,
+			),
+			classifyBatchSize: clampPositive(
+				structuralRaw?.classifyBatchSize,
+				1,
+				20,
+				d.structural.classifyBatchSize,
+			),
+			dependencyBatchSize: clampPositive(
+				structuralRaw?.dependencyBatchSize,
+				1,
+				10,
+				d.structural.dependencyBatchSize,
+			),
+			pollIntervalMs: clampPositive(
+				structuralRaw?.pollIntervalMs,
+				2000,
+				120000,
+				d.structural.pollIntervalMs,
+			),
+		},
+
+		feedback: {
+			enabled: resolveBool(
+				feedbackRaw?.enabled, undefined, d.feedback.enabled,
+			),
+			ftsWeightDelta: clampFraction(
+				feedbackRaw?.ftsWeightDelta,
+				d.feedback.ftsWeightDelta,
+			),
+			maxAspectWeight: maxAW,
+			minAspectWeight: validatedMinAW,
+			decayEnabled: resolveBool(
+				feedbackRaw?.decayEnabled, undefined, d.feedback.decayEnabled,
+			),
+			decayRate: clampFraction(
+				feedbackRaw?.decayRate,
+				d.feedback.decayRate,
+			),
+			staleDays: clampPositive(
+				feedbackRaw?.staleDays,
+				1,
+				365,
+				d.feedback.staleDays,
+			),
+			decayIntervalSessions: clampPositive(
+				feedbackRaw?.decayIntervalSessions,
+				1,
+				1000,
+				d.feedback.decayIntervalSessions,
+			),
+		},
+
+		predictor: {
+			enabled: resolveBool(
+				predictorRaw?.enabled, undefined, d.predictor?.enabled ?? false,
+			),
+			trainIntervalSessions: clampPositive(
+				predictorRaw?.trainIntervalSessions,
+				1,
+				1000,
+				d.predictor?.trainIntervalSessions ?? 10,
+			),
+			minTrainingSessions: clampPositive(
+				predictorRaw?.minTrainingSessions,
+				1,
+				1000,
+				d.predictor?.minTrainingSessions ?? 10,
+			),
+			scoreTimeoutMs: clampPositive(
+				predictorRaw?.scoreTimeoutMs,
+				10,
+				10000,
+				d.predictor?.scoreTimeoutMs ?? 120,
+			),
+			trainTimeoutMs: clampPositive(
+				predictorRaw?.trainTimeoutMs,
+				1000,
+				120000,
+				d.predictor?.trainTimeoutMs ?? 30000,
+			),
+			crashDisableThreshold: clampPositive(
+				predictorRaw?.crashDisableThreshold,
+				1,
+				20,
+				d.predictor?.crashDisableThreshold ?? 3,
+			),
+			rrfK: clampPositive(
+				predictorRaw?.rrfK,
+				1,
+				100,
+				d.predictor?.rrfK ?? 12,
+			),
+			explorationRate: clampFraction(
+				predictorRaw?.explorationRate,
+				d.predictor?.explorationRate ?? 0.05,
+			),
+			driftResetWindow: clampPositive(
+				predictorRaw?.driftResetWindow,
+				1,
+				100,
+				d.predictor?.driftResetWindow ?? 10,
+			),
+			binaryPath:
+				typeof predictorRaw?.binaryPath === "string"
+					? predictorRaw.binaryPath
+					: d.predictor?.binaryPath,
+			checkpointPath:
+				typeof predictorRaw?.checkpointPath === "string"
+					? predictorRaw.checkpointPath
+					: d.predictor?.checkpointPath,
+		},
+
+		predictorPipeline: {
+			agentFeedback: resolveBool(
+				predictorPipelineRaw?.agentFeedback, undefined, d.predictorPipeline.agentFeedback,
+			),
+			trainingTelemetry: resolveBool(
+				predictorPipelineRaw?.trainingTelemetry, undefined, d.predictorPipeline.trainingTelemetry,
 			),
 		},
 	};

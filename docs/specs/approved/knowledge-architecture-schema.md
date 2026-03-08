@@ -4,13 +4,13 @@ title: "Knowledge Architecture Schema and Traversal Spec"
 
 # Knowledge Architecture Schema and Traversal Spec
 
-Status: Planning (v0)
+Status: Approved (v1)
 
 Audience: Core + Daemon maintainers
 
 Spec metadata:
 - ID: `knowledge-architecture-schema`
-- Status: `planning`
+- Status: `approved`
 - Hard depends on: `memory-pipeline-v2`, `session-continuity-protocol`,
   `procedural-memory-plan`
 - Blocks: `predictive-memory-scorer`
@@ -113,12 +113,28 @@ Extend `entities.entity_type` usage to the canonical set:
 - `task`
 - `unknown` (fallback)
 
-### 5.2 New table: `entity_aspects`
+### 5.2 Backfill: `agent_id` on `entities`
+
+The `entities` table (migration 002) predates the multi-agent scoping
+invariant. Add `agent_id` with a default and index:
+
+```sql
+ALTER TABLE entities ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX idx_entities_agent ON entities(agent_id);
+```
+
+All new KA tables include `agent_id` for database-level tenant isolation.
+This is not a KA concern — it is the multi-agent invariant applied
+uniformly. Queries filter by `agent_id` unless explicitly requesting
+cross-agent results.
+
+### 5.3 New table: `entity_aspects`
 
 ```sql
 CREATE TABLE entity_aspects (
   id TEXT PRIMARY KEY,
   entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL DEFAULT 'default',
   name TEXT NOT NULL,
   canonical_name TEXT NOT NULL,
   weight REAL NOT NULL DEFAULT 0.5,
@@ -128,17 +144,19 @@ CREATE TABLE entity_aspects (
 );
 
 CREATE INDEX idx_entity_aspects_entity ON entity_aspects(entity_id);
+CREATE INDEX idx_entity_aspects_agent ON entity_aspects(agent_id);
 CREATE INDEX idx_entity_aspects_weight ON entity_aspects(weight DESC);
 ```
 
 `weight` is structural centrality + learned utility. It is not pure frequency.
 
-### 5.3 New table: `entity_attributes`
+### 5.4 New table: `entity_attributes`
 
 ```sql
 CREATE TABLE entity_attributes (
   id TEXT PRIMARY KEY,
   aspect_id TEXT NOT NULL REFERENCES entity_aspects(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL DEFAULT 'default',
   memory_id TEXT REFERENCES memories(id) ON DELETE SET NULL,
   kind TEXT NOT NULL,                 -- 'attribute' | 'constraint'
   content TEXT NOT NULL,
@@ -152,19 +170,21 @@ CREATE TABLE entity_attributes (
 );
 
 CREATE INDEX idx_entity_attributes_aspect ON entity_attributes(aspect_id);
+CREATE INDEX idx_entity_attributes_agent ON entity_attributes(agent_id);
 CREATE INDEX idx_entity_attributes_kind ON entity_attributes(kind);
 CREATE INDEX idx_entity_attributes_status ON entity_attributes(status);
 ```
 
 Constraints are first-class rows (`kind='constraint'`), not inferred tags.
 
-### 5.4 New table: `entity_dependencies`
+### 5.5 New table: `entity_dependencies`
 
 ```sql
 CREATE TABLE entity_dependencies (
   id TEXT PRIMARY KEY,
   source_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
   target_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL DEFAULT 'default',
   aspect_id TEXT REFERENCES entity_aspects(id) ON DELETE SET NULL,
   dependency_type TEXT NOT NULL,      -- 'uses' | 'requires' | 'owned_by' | 'blocks' | 'informs'
   strength REAL NOT NULL DEFAULT 0.5,
@@ -174,15 +194,17 @@ CREATE TABLE entity_dependencies (
 
 CREATE INDEX idx_entity_dependencies_source ON entity_dependencies(source_entity_id);
 CREATE INDEX idx_entity_dependencies_target ON entity_dependencies(target_entity_id);
+CREATE INDEX idx_entity_dependencies_agent ON entity_dependencies(agent_id);
 ```
 
 These are explicit traversal edges. They are not similarity artifacts.
 
-### 5.5 New table: `task_meta`
+### 5.6 New table: `task_meta`
 
 ```sql
 CREATE TABLE task_meta (
   entity_id TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL DEFAULT 'default',
   status TEXT NOT NULL,                -- 'open' | 'in_progress' | 'blocked' | 'done' | 'cancelled'
   expires_at TEXT,
   retention_until TEXT,
@@ -190,6 +212,7 @@ CREATE TABLE task_meta (
   updated_at TEXT NOT NULL
 );
 
+CREATE INDEX idx_task_meta_agent ON task_meta(agent_id);
 CREATE INDEX idx_task_meta_status ON task_meta(status);
 CREATE INDEX idx_task_meta_retention ON task_meta(retention_until);
 ```
@@ -198,35 +221,94 @@ Tasks share entity structure but use separate lifecycle rules.
 
 ---
 
-## 6) Extraction and Backfill Contracts
+## 6) Structural Assignment (Two-Pass Architecture)
 
-### 6.1 New structural assignment stage
+Structural assignment uses a two-pass architecture to balance speed and
+accuracy. Pass 1 runs synchronously on the hot path with no LLM call.
+Pass 2 runs in the background as separate pipeline jobs.
 
-After fact extraction and decision, pipeline runs structural assignment per
-fact memory:
+### 6.1 Pass 1: Heuristic entity linking (synchronous, no LLM)
 
-1. resolve primary entity (existing or new)
-2. resolve/create aspect under that entity
-3. classify fact as `attribute` or `constraint`
-4. optionally emit dependency edges
-5. for task-like facts, assign/maintain `entity_type='task'` and `task_meta`
+After fact extraction and entity persistence, the pipeline links each
+written fact memory to its primary entity:
 
-### 6.2 Assignment invariants
+1. Resolve primary entity from the extraction triple's `source` field
+   (already persisted by `txPersistEntities`)
+2. Create a stub `entity_attributes` row with `aspect_id = NULL` and
+   `kind = 'attribute'` (default)
+3. Enqueue two background jobs: `structural_classify` and
+   `structural_dependency`
+
+Pass 1 does NOT attempt aspect classification or constraint detection.
+It only establishes the fact → entity link. This is cheap and reliable —
+the extraction already identifies entities.
+
+### 6.2 Pass 2a: Structural classification (background, LLM)
+
+A dedicated LLM prompt classifies each unassigned fact into an aspect
+and determines whether it is an attribute or constraint.
+
+Input per batch (max 8-10 facts):
+- The parent entity (name, type, existing aspects)
+- Suggested aspect patterns for the entity type
+- The fact content
+
+Output per fact:
+- `aspect` — existing or new aspect name
+- `kind` — `'attribute'` or `'constraint'`
+- `new` — whether this creates a new aspect
+
+Job type: `structural_classify`. Same lease/retry/dead-letter mechanics
+as extraction jobs. Batched by entity to provide aspect context.
+
+### 6.3 Pass 2b: Dependency extraction (background, LLM)
+
+A separate LLM prompt identifies structural dependencies between
+entities implied by fact content.
+
+Input per batch (max 5 facts):
+- The source entity
+- The fact content
+- Known entities in the graph (for target resolution)
+
+Output per fact:
+- `dep_target` — target entity name (or null)
+- `dep_type` — `'uses'` | `'requires'` | `'owned_by'` | `'blocks'` |
+  `'informs'` (or null)
+
+Pre-filter: only facts whose extraction triples reference other entities
+are sent to this pass. Pure self-referential facts skip it entirely.
+
+Job type: `structural_dependency`. Independent queue from classification.
+
+### 6.4 Assignment invariants
 
 1. Every active atomic fact memory should map to exactly one primary
    `entity_attributes` row.
 2. Constraints always map to `kind='constraint'`.
 3. Dependency edges are additive and idempotent.
 4. `superseded` attributes remain auditable; they do not vanish.
+5. Pass 2a and 2b are isolated — errors in one do not affect the other.
+6. Facts with `aspect_id = NULL` are valid (awaiting classification).
 
-### 6.3 Backfill behavior
+### 6.5 Backfill behavior
 
 Maintenance worker backfills unassigned legacy memories incrementally:
 
-1. scan unassigned memories in batches
-2. assign entity/aspect/attribute with confidence
+1. scan memories with no `entity_attributes` row in batches
+2. run pass 1 (entity linking) then enqueue pass 2 jobs
 3. skip low-confidence rows and record telemetry
 4. never block foreground hooks
+
+### 6.6 Model constraints (tested against qwen3:4b)
+
+- Classification prompt handles 8-10 facts per batch reliably
+- Dependency prompt handles 5 facts per batch reliably
+- Beyond these limits, the model drops facts or loses format discipline
+- Prompt must use short JSON field names and minimal boilerplate
+- `/no_think` flag suppresses chain-of-thought for structured output
+- `temperature: 0.1` for deterministic classification
+- Prompt specifications are documented in the KA-2 sprint brief
 
 ---
 
@@ -317,8 +399,10 @@ This keeps one graph with type-specific lifecycle rules.
 
 ### KA-1 Schema and types
 
-1. Add migration `017-knowledge-structure.ts` (`entity_aspects`,
-   `entity_attributes`, `entity_dependencies`, `task_meta`)
+1. Add migration `019-knowledge-structure.ts`:
+   - Backfill `agent_id` on `entities` table
+   - Create `entity_aspects`, `entity_attributes`, `entity_dependencies`,
+     `task_meta` — all with `agent_id` column
 2. Add core types and read/write helpers
 
 ### KA-2 Structural assignment in pipeline
@@ -372,7 +456,7 @@ This keeps one graph with type-specific lifecycle rules.
 
 1. Approve this spec as the implementation contract for structural retrieval.
 2. Update predictive scorer Phase 3 tasks to include traversal pool fusion.
-3. Draft migration `017-knowledge-structure.ts` with exact indexes and
+3. Draft migration `019-knowledge-structure.ts` with exact indexes and
    idempotency behavior.
 4. Add a small offline benchmark set comparing traversal-first candidate
    generation vs current heuristic pre-filter.

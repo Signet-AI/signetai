@@ -28,12 +28,11 @@ describe("migration framework", () => {
 		runMigrations(db);
 
 		// schema_migrations table should exist with version as PK
-		const migrations = db
-			.query(
-				"SELECT version, applied_at FROM schema_migrations ORDER BY version",
-			)
-			.all() as Array<{ version: number; applied_at: string }>;
-		expect(migrations.length).toBe(17);
+		const migrations = db.query("SELECT version, applied_at FROM schema_migrations ORDER BY version").all() as Array<{
+			version: number;
+			applied_at: string;
+		}>;
+		expect(migrations.length).toBe(26);
 		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
@@ -51,6 +50,10 @@ describe("migration framework", () => {
 		expect(migrations[14].version).toBe(15);
 		expect(migrations[15].version).toBe(16);
 		expect(migrations[16].version).toBe(17);
+		expect(migrations[17].version).toBe(18);
+		expect(migrations[18].version).toBe(19);
+		expect(migrations[21].version).toBe(22);
+		expect(migrations[23].version).toBe(24);
 	});
 
 	test("re-running migrations is idempotent", () => {
@@ -59,9 +62,9 @@ describe("migration framework", () => {
 		// running again should not throw
 		runMigrations(db);
 
-		const migrations = db
-			.query("SELECT version FROM schema_migrations ORDER BY version")
-			.all() as Array<{ version: number }>;
+		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
+			version: number;
+		}>;
 		// same number of migration records (no duplicates)
 		const uniqueVersions = new Set(migrations.map((m) => m.version));
 		expect(uniqueVersions.size).toBe(migrations.length);
@@ -71,9 +74,9 @@ describe("migration framework", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
-		const tables = db
-			.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-			.all() as Array<{ name: string }>;
+		const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as Array<{
+			name: string;
+		}>;
 		const tableNames = tables.map((t) => t.name);
 
 		// v1 tables
@@ -113,6 +116,16 @@ describe("migration framework", () => {
 
 		// v14 tables
 		expect(tableNames).toContain("telemetry_events");
+
+		// v19 tables (knowledge architecture)
+		expect(tableNames).toContain("entity_aspects");
+		expect(tableNames).toContain("entity_attributes");
+		expect(tableNames).toContain("entity_dependencies");
+		expect(tableNames).toContain("task_meta");
+
+		// v20 tables (predictor reporting)
+		expect(tableNames).toContain("predictor_comparisons");
+		expect(tableNames).toContain("predictor_training_log");
 	});
 
 	test("memories table has expected v2 columns", () => {
@@ -145,11 +158,9 @@ describe("migration framework", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
-		const fts = db
-			.query(
-				"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%fts%'",
-			)
-			.all() as Array<{ name: string }>;
+		const fts = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%fts%'").all() as Array<{
+			name: string;
+		}>;
 		expect(fts.length).toBeGreaterThanOrEqual(1);
 	});
 
@@ -157,10 +168,11 @@ describe("migration framework", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
-		const audits = db
-			.query("SELECT version, applied_at FROM schema_migrations_audit")
-			.all() as Array<{ version: number; applied_at: string }>;
-		expect(audits.length).toBe(17);
+		const audits = db.query("SELECT version, applied_at FROM schema_migrations_audit").all() as Array<{
+			version: number;
+			applied_at: string;
+		}>;
+		expect(audits.length).toBe(26);
 		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}
@@ -177,6 +189,32 @@ describe("migration framework", () => {
 
 		expect(colNames).toContain("why");
 		expect(colNames).toContain("project");
+	});
+
+	test("session_memories has structural feature columns after migration 020", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(session_memories)").all() as Array<{
+			name: string;
+		}>;
+		const colNames = cols.map((c) => c.name);
+		expect(colNames).toContain("entity_slot");
+		expect(colNames).toContain("aspect_slot");
+		expect(colNames).toContain("is_constraint");
+		expect(colNames).toContain("structural_density");
+	});
+
+	test("entities table has pinning columns after migration 022", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(entities)").all() as Array<{
+			name: string;
+		}>;
+		const colNames = cols.map((c) => c.name);
+		expect(colNames).toContain("pinned");
+		expect(colNames).toContain("pinned_at");
 	});
 
 	test("unique partial index on content_hash rejects duplicates", () => {
@@ -221,9 +259,7 @@ describe("migration framework", () => {
 		// Simulate pre-v3 state: remove v3+, drop unique index, add non-unique
 		db.prepare("DELETE FROM schema_migrations WHERE version >= 3").run();
 		db.run("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
-		db.run(
-			"CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)",
-		);
+		db.run("CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)");
 
 		const now = new Date().toISOString();
 		const older = "2020-01-01T00:00:00.000Z";
@@ -241,9 +277,7 @@ describe("migration framework", () => {
 
 		// The newer row should keep its hash, the older one should be nulled
 		const rows = db
-			.query(
-				"SELECT id, content_hash FROM memories WHERE id IN ('old1', 'new1') ORDER BY id",
-			)
+			.query("SELECT id, content_hash FROM memories WHERE id IN ('old1', 'new1') ORDER BY id")
 			.all() as Array<{ id: string; content_hash: string | null }>;
 
 		const newRow = rows.find((r) => r.id === "new1");
@@ -342,27 +376,23 @@ describe("migration framework", () => {
 		runMigrations(db);
 
 		// Verify v2 columns exist on memories
-		const cols = db
-			.query("PRAGMA table_info(memories)")
-			.all() as Array<{ name: string }>;
+		const cols = db.query("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
 		const colNames = cols.map((c) => c.name);
 		expect(colNames).toContain("content_hash");
 		expect(colNames).toContain("is_deleted");
 
 		// Verify v2 tables exist
-		const tables = db
-			.query("SELECT name FROM sqlite_master WHERE type='table'")
-			.all() as Array<{ name: string }>;
+		const tables = db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
 		const tableNames = tables.map((t) => t.name);
 		expect(tableNames).toContain("memory_history");
 		expect(tableNames).toContain("memory_jobs");
 		expect(tableNames).toContain("entities");
 
 		// All migrations should now be recorded
-		const migrations = db
-			.query("SELECT version FROM schema_migrations ORDER BY version")
-			.all() as Array<{ version: number }>;
-		expect(migrations.length).toBe(17);
+		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
+			version: number;
+		}>;
+		expect(migrations.length).toBe(26);
 	});
 
 	test("version 1 stamped by old inline migrate upgrades cleanly", () => {
@@ -395,17 +425,15 @@ describe("migration framework", () => {
 		// Should not crash — v1 is legitimate, runs 002+
 		runMigrations(db);
 
-		const cols = db
-			.query("PRAGMA table_info(memories)")
-			.all() as Array<{ name: string }>;
+		const cols = db.query("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
 		const colNames = cols.map((c) => c.name);
 		expect(colNames).toContain("content_hash");
 		expect(colNames).toContain("is_deleted");
 
-		const migrations = db
-			.query("SELECT version FROM schema_migrations ORDER BY version")
-			.all() as Array<{ version: number }>;
-		expect(migrations.length).toBe(17);
+		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
+			version: number;
+		}>;
+		expect(migrations.length).toBe(26);
 	});
 
 	test("DB with existing v1 schema only gets v2 migration", () => {
@@ -414,20 +442,14 @@ describe("migration framework", () => {
 		// Apply migrations once to get full schema
 		runMigrations(db);
 
-		const countBefore = (
-			db
-				.query("SELECT COUNT(*) as count FROM schema_migrations_audit")
-				.get() as { count: number }
-		).count;
+		const countBefore = (db.query("SELECT COUNT(*) as count FROM schema_migrations_audit").get() as { count: number })
+			.count;
 
 		// Run again — should not add new audit records
 		runMigrations(db);
 
-		const countAfter = (
-			db
-				.query("SELECT COUNT(*) as count FROM schema_migrations_audit")
-				.get() as { count: number }
-		).count;
+		const countAfter = (db.query("SELECT COUNT(*) as count FROM schema_migrations_audit").get() as { count: number })
+			.count;
 
 		expect(countAfter).toBe(countBefore);
 	});
