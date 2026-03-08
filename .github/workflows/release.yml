@@ -60,6 +60,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Sync with remote main
+        if: steps.changes.outputs.skip != 'true'
+        run: |
+          # Rebase onto the latest remote main before bumping so the version
+          # commit and tag land on top of the final tree — not a stale snapshot
+          # that would get rewritten later, leaving build-predictor and publish
+          # checking out the wrong commit.
+          git reset --hard HEAD
+          git clean -fd
+          git pull --rebase origin main
+
       - name: Bump version
         id: bump_version
         if: steps.changes.outputs.skip != 'true'
@@ -104,10 +115,6 @@ jobs:
       - name: Push version bump
         if: steps.changes.outputs.skip != 'true'
         run: |
-          # Ensure transient build/publish files never block rebase.
-          git reset --hard HEAD
-          git clean -fd
-          git pull --rebase origin main
           git push origin HEAD:main
           git push origin "v$NEW_VERSION"
 
@@ -201,6 +208,13 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Publish release
+        # Undraft first so predictor assets are publicly accessible before
+        # any npm install can trigger the postinstall downloader.
+        run: gh release edit "v${NEW_VERSION}" --draft=false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish to npm
         run: |
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
@@ -224,8 +238,3 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
-
-      - name: Publish release
-        run: gh release edit "v${NEW_VERSION}" --draft=false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
