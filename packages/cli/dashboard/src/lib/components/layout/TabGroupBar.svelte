@@ -28,6 +28,7 @@ function dataAttrs(tabId: TabId): Record<string, string> {
 <div class="flex items-center gap-px border border-[var(--sig-border)] rounded-lg p-px">
 	{#each tabs as tab, index}
 		<button
+			type="button"
 			{...dataAttrs(tab.id)}
 			class={activeTab === tab.id ? tabActive : tabInactive}
 			onclick={() => onselect(tab.id, index)}

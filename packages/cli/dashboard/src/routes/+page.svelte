@@ -36,6 +36,7 @@ import {
 	tabFocus,
 	focusEngineTab,
 	focusMemoryTab,
+	indexOfString,
 	ENGINE_TABS,
 	MEMORY_TABS,
 } from "$lib/stores/tab-group-focus.svelte";
@@ -166,7 +167,7 @@ onMount(() => {
 // --- Sync $effects for tab group focus ---
 $effect(() => {
 	if (isEngineGroup(activeTab) && focus.zone === "page-content" && tabFocus.keyboardNavActive) {
-		const index = ENGINE_TABS.indexOf(activeTab as typeof ENGINE_TABS[number]);
+		const index = indexOfString(ENGINE_TABS, activeTab);
 		if (index !== -1) {
 			tabFocus.engineIndex = index;
 			tabFocus.engineFocus = "tabs";
@@ -180,7 +181,7 @@ $effect(() => {
 
 $effect(() => {
 	if (isMemoryGroup(activeTab) && focus.zone === "page-content" && tabFocus.keyboardNavActive) {
-		const index = MEMORY_TABS.indexOf(activeTab as typeof MEMORY_TABS[number]);
+		const index = indexOfString(MEMORY_TABS, activeTab);
 		if (index !== -1) {
 			tabFocus.memoryIndex = index;
 			tabFocus.memoryFocus = "tabs";

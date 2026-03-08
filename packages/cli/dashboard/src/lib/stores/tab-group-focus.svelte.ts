@@ -22,10 +22,18 @@ import {
 import { ts } from "$lib/stores/tasks.svelte";
 import { mem } from "$lib/stores/memory.svelte";
 
-// --- Type guards ---
+// --- Type-safe helpers (avoids `as` casts on readonly tuples) ---
+
+function includesString<T extends readonly string[]>(arr: T, value: string): value is T[number] {
+	return arr.includes(value as T[number]);
+}
+
+export function indexOfString(arr: readonly string[], value: string): number {
+	return arr.indexOf(value);
+}
 
 function isSidebarItem(value: string): value is SidebarFocusItem {
-	return (SIDEBAR_ORDER as readonly string[]).includes(value);
+	return includesString(SIDEBAR_ORDER, value);
 }
 
 // --- Tab group arrays (ordered for arrow-key cycling) ---
@@ -89,7 +97,8 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 		target.tagName === "TEXTAREA" ||
 		target.isContentEditable;
 
-	if (isInputFocused && focus.zone === "page-content") return;
+	// Don't interfere with any focused input, regardless of zone
+	if (isInputFocused) return;
 
 	if (focus.zone === "page-content" &&
 		((isEngineGroup(activeTab) && tabFocus.engineFocus === "content") ||
@@ -97,6 +106,15 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 		// Already in content mode -- keep keyboardNavActive as-is
 	} else {
 		tabFocus.keyboardNavActive = true;
+	}
+
+	// Sync index from activeTab to prevent stale-index navigation
+	if (isEngineGroup(activeTab)) {
+		const liveIndex = indexOfString(ENGINE_TABS, activeTab);
+		if (liveIndex !== -1) tabFocus.engineIndex = liveIndex;
+	} else if (isMemoryGroup(activeTab)) {
+		const liveIndex = indexOfString(MEMORY_TABS, activeTab);
+		if (liveIndex !== -1) tabFocus.memoryIndex = liveIndex;
 	}
 
 	// Escape from page content
@@ -122,7 +140,7 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 	}
 
 	// Engine tab group navigation
-	if (isEngineGroup(activeTab) && focus.zone === "page-content" && !isInputFocused && !e.defaultPrevented) {
+	if (isEngineGroup(activeTab) && focus.zone === "page-content" && !e.defaultPrevented) {
 		if (tabFocus.engineFocus === "tabs") {
 			if (e.key === "ArrowLeft") {
 				e.preventDefault();
@@ -147,7 +165,7 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 	}
 
 	// Memory tab group navigation
-	if (isMemoryGroup(activeTab) && focus.zone === "page-content" && !isInputFocused && !e.defaultPrevented) {
+	if (isMemoryGroup(activeTab) && focus.zone === "page-content" && !e.defaultPrevented) {
 		if (tabFocus.memoryFocus === "tabs") {
 			if (e.key === "ArrowLeft") {
 				e.preventDefault();
@@ -194,7 +212,7 @@ export function handleFocusIn(e: FocusEvent): void {
 		}
 		const rawTabName = engineTab.getAttribute('data-engine-tab');
 		if (rawTabName === null) return;
-		const index = (ENGINE_TABS as readonly string[]).indexOf(rawTabName);
+		const index = indexOfString(ENGINE_TABS, rawTabName);
 		if (index !== -1) {
 			tabFocus.engineIndex = index;
 			tabFocus.engineFocus = "tabs";
@@ -209,7 +227,7 @@ export function handleFocusIn(e: FocusEvent): void {
 		}
 		const rawTabName = memoryTab.getAttribute('data-memory-tab');
 		if (rawTabName === null) return;
-		const index = (MEMORY_TABS as readonly string[]).indexOf(rawTabName);
+		const index = indexOfString(MEMORY_TABS, rawTabName);
 		if (index !== -1) {
 			tabFocus.memoryIndex = index;
 			tabFocus.memoryFocus = "tabs";
@@ -221,19 +239,18 @@ export function handleFocusIn(e: FocusEvent): void {
 	if (pageContent && focus.zone !== 'page-content') {
 		setFocusZone('page-content');
 
+		// Tab-button targets already returned above, so focus is in content area
 		if (isEngineGroup(activeTab)) {
-			const index = (ENGINE_TABS as readonly string[]).indexOf(activeTab);
+			const index = indexOfString(ENGINE_TABS, activeTab);
 			if (index !== -1) {
 				tabFocus.engineIndex = index;
-				const isOnTabButton = !!target.closest('[data-engine-tab]');
-				tabFocus.engineFocus = isOnTabButton ? "tabs" : "content";
+				tabFocus.engineFocus = "content";
 			}
 		} else if (isMemoryGroup(activeTab)) {
-			const index = (MEMORY_TABS as readonly string[]).indexOf(activeTab);
+			const index = indexOfString(MEMORY_TABS, activeTab);
 			if (index !== -1) {
 				tabFocus.memoryIndex = index;
-				const isOnTabButton = !!target.closest('[data-memory-tab]');
-				tabFocus.memoryFocus = isOnTabButton ? "tabs" : "content";
+				tabFocus.memoryFocus = "content";
 			}
 		}
 		return;
@@ -258,13 +275,13 @@ export function handlePageClick(e: MouseEvent): void {
 	const clickedMemoryTab = target.closest('[data-memory-tab]');
 
 	if (isEngineGroup(activeTab)) {
-		const index = (ENGINE_TABS as readonly string[]).indexOf(activeTab);
+		const index = indexOfString(ENGINE_TABS, activeTab);
 		if (index !== -1) {
 			tabFocus.engineIndex = index;
 			tabFocus.engineFocus = clickedEngineTab ? "tabs" : "content";
 		}
 	} else if (isMemoryGroup(activeTab)) {
-		const index = (MEMORY_TABS as readonly string[]).indexOf(activeTab);
+		const index = indexOfString(MEMORY_TABS, activeTab);
 		if (index !== -1) {
 			tabFocus.memoryIndex = index;
 			tabFocus.memoryFocus = clickedMemoryTab ? "tabs" : "content";
