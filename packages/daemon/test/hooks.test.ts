@@ -677,8 +677,6 @@ describe("handleUserPromptSubmit", () => {
 			userMessage: "Can you reiterate the release checklist?",
 			userPrompt:
 				'Conversation info (untrusted metadata):\n{"agent_path":"/home/user/.agents","channel":"discord"}\n\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSender (untrusted): discord\nEND_EXTERNAL_UNTRUSTED_CONTENT',
-			rawPrompt:
-				'Conversation info (untrusted metadata):\n{"agent_path":"/home/user/.agents","channel":"discord"}\n\n<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nSender (untrusted): discord\nEND_EXTERNAL_UNTRUSTED_CONTENT',
 		});
 
 		expect(result.memoryCount).toBeGreaterThan(0);

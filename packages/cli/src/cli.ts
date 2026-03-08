@@ -3013,7 +3013,8 @@ async function showStatus(options: { path?: string }) {
 	// Daemon status
 	const status = await getDaemonStatus();
 	if (status.running) {
-		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}`);
+		const versionLabel = status.version && status.version !== "0.0.0" ? ` v${status.version}` : "";
+		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(versionLabel)}`);
 		console.log(chalk.dim(`    PID: ${status.pid}`));
 		console.log(chalk.dim(`    Uptime: ${formatUptime(status.uptime || 0)}`));
 		console.log(chalk.dim(`    Dashboard: http://localhost:${DEFAULT_PORT}`));

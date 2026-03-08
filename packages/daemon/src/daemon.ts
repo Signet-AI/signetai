@@ -8058,6 +8058,38 @@ async function main() {
 		);
 	}
 
+	// One-time structural backfill: populate entity_aspects/attributes for
+	// existing entities that predate the knowledge architecture migrations.
+	// Runs in the background, rate-limited, so it doesn't block startup.
+	if (memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.structural.enabled) {
+		const backfillCtx: RepairContext = {
+			reason: "post-upgrade structural backfill",
+			actor: "daemon",
+			actorType: "daemon",
+		};
+		setTimeout(() => {
+			try {
+				const result = structuralBackfill(
+					getDbAccessor(),
+					memoryCfg.pipelineV2,
+					backfillCtx,
+					repairLimiter,
+					{ batchSize: 50 },
+				);
+				if (result.affected > 0) {
+					logger.info("pipeline", "Structural backfill completed", {
+						affected: result.affected,
+						message: result.message,
+					});
+				}
+			} catch (err) {
+				logger.warn("pipeline", "Structural backfill failed (non-fatal)", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}, 10_000); // 10s delay — let the pipeline warm up first
+	}
+
 	// Spawn predictor sidecar if enabled
 	if (memoryCfg.pipelineV2.predictor?.enabled) {
 		const predictorCfg = memoryCfg.pipelineV2.predictor;
@@ -8156,16 +8188,29 @@ async function main() {
 			});
 			logger.info("daemon", "Daemon ready");
 
-			// Write health stamp for CLI verification
+			// Detect version upgrade and log what's new
+			const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
 			try {
+				let previousVersion: string | null = null;
+				if (existsSync(healthStampPath)) {
+					const prev = JSON.parse(readFileSync(healthStampPath, "utf-8"));
+					previousVersion = typeof prev.version === "string" ? prev.version : null;
+				}
 				writeFileSync(
-					join(DAEMON_DIR, "last-healthy-start"),
+					healthStampPath,
 					JSON.stringify({
 						version: CURRENT_VERSION,
 						startedAt: new Date().toISOString(),
 						pid: process.pid,
 					}),
 				);
+				if (previousVersion && previousVersion !== CURRENT_VERSION && CURRENT_VERSION !== "0.0.0") {
+					logger.info("daemon", `Upgraded from ${previousVersion} to ${CURRENT_VERSION}`, {
+						previousVersion,
+						currentVersion: CURRENT_VERSION,
+					});
+					logger.info("daemon", "What's new: knowledge graph, session continuity, constellation entity overlay, predictive scorer (opt-in)");
+				}
 			} catch {
 				// Best effort — DAEMON_DIR might not exist yet in edge cases
 			}

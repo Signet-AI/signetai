@@ -200,6 +200,28 @@ describe("evaluateColdStartExit condition 3", () => {
 	});
 
 	it("allows exit when successRate > 0.4 and other conditions met", () => {
+		// Seed 10 distinct sessions so getDistinctSessionCount returns >= minTrainingSessions
+		const accessor = getDbAccessor();
+		const now = new Date().toISOString();
+		accessor.withWriteTx((wdb) => {
+			for (let i = 0; i < 10; i++) {
+				wdb.prepare(
+					`INSERT INTO predictor_training_pairs
+					 (id, agent_id, session_key, memory_id,
+					  recency_days, access_count, importance, decay_factor,
+					  embedding_similarity, entity_slot, aspect_slot,
+					  is_constraint, structural_density, fts_hit_count,
+					  combined_label, was_injected, created_at)
+					 VALUES (?, 'test-agent', ?, ?, 1, 1, 0.5, 0.9, 0.5, 0, 0, 0, 0, 1, 0.5, 0, ?)`,
+				).run(
+					crypto.randomUUID(),
+					`session-${i}`,
+					crypto.randomUUID(),
+					now,
+				);
+			}
+		});
+
 		const status = { trained: true, training_pairs: 100, model_version: 1, last_trained: null };
 		const state = {
 			successRate: 0.5,
@@ -209,7 +231,7 @@ describe("evaluateColdStartExit condition 3", () => {
 			lastComparisonAt: null,
 			lastTrainingAt: null,
 		};
-		expect(evaluateColdStartExit(status, 10, state)).toBe(true);
+		expect(evaluateColdStartExit(status, 10, state, accessor)).toBe(true);
 	});
 
 	it("always returns true if already exited", () => {

@@ -338,10 +338,10 @@ export function buildPredictorStatusLine(
 	}
 
 	if (!state.coldStartExited) {
-		// Prefer distinct session count from DB; fall back to training_pairs from sidecar
-		const sessionCount = getDistinctSessionCount(accessor ?? null) ?? predictorStatus.training_pairs;
+		const sessionCount = getDistinctSessionCount(accessor ?? null);
 		const minSessions = config.minTrainingSessions;
-		return `[predictor: collecting | ${sessionCount}/${minSessions} sessions | baseline only]`;
+		const label = sessionCount !== null ? `${sessionCount}/${minSessions} sessions` : "collecting";
+		return `[predictor: collecting | ${label} | baseline only]`;
 	}
 
 	const alpha = computeEffectiveAlpha(state);
@@ -389,9 +389,10 @@ export function evaluateColdStartExit(
 ): boolean {
 	if (currentState.coldStartExited) return true;
 	if (!predictorStatus.trained) return false;
-	// Prefer distinct session count from DB; fall back to training_pairs from sidecar
-	const sessionCount = getDistinctSessionCount(accessor ?? null) ?? predictorStatus.training_pairs;
-	if (sessionCount < minTrainingSessions) return false;
+	// Require distinct session count from DB — never use training_pairs as
+	// a proxy since one session can produce many pairs, causing early exit.
+	const sessionCount = getDistinctSessionCount(accessor ?? null);
+	if (sessionCount === null || sessionCount < minTrainingSessions) return false;
 	// Condition 3: success rate must be above 0.4
 	if (currentState.successRate <= 0.4) return false;
 	return true;
