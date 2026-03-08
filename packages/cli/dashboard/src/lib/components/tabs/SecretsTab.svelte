@@ -204,12 +204,9 @@ function handleGlobalKey(e: KeyboardEvent) {
 			focusedSecretIndex--;
 			focusSecretItem(focusedSecretIndex);
 		} else {
-			// At first secret, blur and return to page level
-			const items = document.querySelectorAll('.secret-item');
-			if (items[focusedSecretIndex] instanceof HTMLElement) {
-				(items[focusedSecretIndex] as HTMLElement).blur();
-			}
+			// At first secret — return to sidebar
 			focusedSecretIndex = -1;
+			returnToSidebar();
 		}
 	}
 

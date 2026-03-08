@@ -226,7 +226,15 @@ function handleGlobalKey(e: KeyboardEvent) {
 	// Don't interfere with input fields when page has focus
 	if (isInputFocused && focus.zone === "page-content") return;
 
-	keyboardNavActive = true;
+	// Don't re-enable keyboard nav mode while already navigating within content
+	// (prevents $effect from stealing focus on first keypress after mouse click)
+	if (focus.zone === "page-content" &&
+		((isEngineGroup(activeTab) && engineTabFocus === "content") ||
+		 (isMemoryGroup(activeTab) && memoryTabFocus === "content"))) {
+		// Already in content mode — keep keyboardNavActive as-is
+	} else {
+		keyboardNavActive = true;
+	}
 
 	// Handle Escape from page content to return to sidebar
 	if (focus.zone === "page-content" && e.key === "Escape") {
