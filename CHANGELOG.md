@@ -2,6 +2,15 @@
 
 All notable changes to Signet are documented here.
 
+## [0.43.0] - 2026-03-08
+
+### Bug Fixes
+
+- use %CD% instead of $(pwd) for Windows hook commands
+- address review feedback on windows-spawn-hide PR
+- **windows**: prevent console window flashing from spawn calls
+
+
 ## [0.42.3] - 2026-03-08
 
 ### Features
