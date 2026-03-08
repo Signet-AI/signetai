@@ -132,6 +132,10 @@
 		</FormField>
 
 		{#if embeddingProvider() && embeddingProvider() !== "none"}
+			<div class="flex items-center gap-2 px-3 py-2 text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-warning,#d4a017)] bg-[color-mix(in_srgb,var(--sig-warning,#d4a017)_10%,transparent)] border border-[var(--sig-warning,#d4a017)]">
+				(!) Changing provider or model will re-embed your entire memory database
+			</div>
+
 			<FormField label="Model" description="Choose a recommended default or switch to custom for a specific embedding model. OpenAI's closest general-purpose replacement for the built-in nomic default is text-embedding-3-small.">
 				<div class="flex flex-col gap-2">
 					<Select.Root
@@ -160,14 +164,6 @@
 						/>
 					{/if}
 				</div>
-			</FormField>
-
-			<FormField label="Dimensions" description="Must match the model output size. Preset selections auto-fill this; custom models must be set manually.">
-				<Input
-					type="number"
-					value={st.sNum([...embPath(), "dimensions"])}
-					oninput={(e) => st.sSetNum([...embPath(), "dimensions"], e.currentTarget.value)}
-				/>
 			</FormField>
 
 			{#if embeddingProvider() === "ollama" || embeddingProvider() === "openai"}

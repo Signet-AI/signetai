@@ -54,20 +54,6 @@ function toggleTheme() {
 	localStorage.setItem("signet-theme", theme);
 }
 
-// --- Config file selection ---
-let selectedFile = $state("");
-
-$effect(() => {
-	if (!selectedFile && data.configFiles?.length) {
-		selectedFile = data.configFiles[0].name;
-	}
-});
-
-function selectFile(name: string) {
-	selectedFile = name;
-	setTab("config");
-}
-
 // --- Memory display ---
 const memoryDocs = $derived(data.memories ?? []);
 
@@ -294,23 +280,6 @@ onMount(() => {
 				</div>
 			{/snippet}
 
-			{#snippet skeletonEditor()}
-				<div class="flex flex-1 min-h-0">
-					<div class="w-48 border-r border-[var(--sig-border)] p-3 space-y-2">
-						<Skeleton class="h-4 w-full" />
-						<Skeleton class="h-4 w-3/4" />
-						<Skeleton class="h-4 w-5/6" />
-						<Skeleton class="h-4 w-2/3" />
-					</div>
-					<div class="flex-1 p-4 space-y-2">
-						{#each Array(12) as _}
-							<Skeleton class="h-3.5 w-full" />
-						{/each}
-						<Skeleton class="h-3.5 w-2/3" />
-					</div>
-				</div>
-			{/snippet}
-
 			{#snippet skeletonCards()}
 				<div class="p-4 space-y-3">
 					<Skeleton class="h-9 w-full" />
@@ -350,19 +319,7 @@ onMount(() => {
 				</div>
 			{/snippet}
 
-			{#if activeTab === "config"}
-				{#await import("$lib/components/tabs/ConfigTab.svelte")}
-					{@render skeletonEditor()}
-				{:then module}
-					<module.default
-						configFiles={data.configFiles}
-						{selectedFile}
-						onselectfile={selectFile}
-					/>
-				{:catch error}
-					{@render skeletonError(error)}
-				{/await}
-			{:else if activeTab === "settings"}
+			{#if activeTab === "settings"}
 				{#await import("$lib/components/tabs/SettingsTab.svelte")}
 					{@render skeletonForm()}
 				{:then module}
@@ -470,16 +427,13 @@ onMount(() => {
 				bg-[var(--sig-surface)]
 				sig-eyebrow shrink-0"
 		>
-			{#if activeTab === "config"}
-				<span>{selectedFile}</span>
+			{#if activeTab === "settings"}
+				<span>Settings</span>
 				<span class="flex items-center gap-2">
 					<kbd class="px-1 py-px text-[10px] text-[var(--sig-text-muted)]
 						bg-[var(--sig-surface-raised)]"
-					>Cmd+S</kbd> save
+					>Ctrl+S</kbd> save
 				</span>
-			{:else if activeTab === "settings"}
-				<span>YAML settings</span>
-				<span>agent.yaml</span>
 			{:else if activeTab === "memory"}
 				<span>{displayMemories.length} memory documents</span>
 				<span>

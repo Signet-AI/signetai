@@ -4,13 +4,9 @@ export interface PageHeaderDefinition {
 }
 
 export const PAGE_HEADERS = {
-	config: {
-		title: "Config",
-		eyebrow: "Identity markdown workspace",
-	},
 	settings: {
-		title: "Engine",
-		eyebrow: "Runtime and harness controls",
+		title: "Settings",
+		eyebrow: "Configuration and identity",
 	},
 	memory: {
 		title: "Memory",

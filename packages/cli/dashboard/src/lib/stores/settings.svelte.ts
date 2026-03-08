@@ -140,7 +140,15 @@ class SettingsStore {
 				this.configSnapshot !== JSON.stringify(this.config)),
 	);
 
+	/** Track the configFiles reference that last initialized the store. */
+	private lastInitSource: ConfigFile[] | null = null;
+
 	init(configFiles: ConfigFile[]) {
+		// Skip re-init when remounting with the same stale data —
+		// the singleton already holds the (possibly saved) state.
+		if (this.lastInitSource === configFiles && this.hasFiles) return;
+		this.lastInitSource = configFiles;
+
 		this.agentFile = configFiles.find((f) => f.name === "agent.yaml" || f.name === "AGENT.yaml") ?? null;
 		this.configFile = configFiles.find((f) => f.name === "config.yaml") ?? null;
 

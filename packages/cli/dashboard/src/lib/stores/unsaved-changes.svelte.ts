@@ -1,10 +1,10 @@
 export const unsaved = $state({
-	configDirty: false,
 	settingsDirty: false,
 });
 
-export function setConfigDirty(value: boolean): void {
-	unsaved.configDirty = value;
+export function setConfigDirty(_value: boolean): void {
+	// No-op: identity file dirty state is now tracked within IdentityPanel
+	// and rolled up into settingsDirty via the unified SettingsTab.
 }
 
 export function setSettingsDirty(value: boolean): void {
@@ -12,22 +12,14 @@ export function setSettingsDirty(value: boolean): void {
 }
 
 export function hasUnsavedChanges(): boolean {
-	return unsaved.configDirty || unsaved.settingsDirty;
-}
-
-function changedAreas(): string {
-	const areas: string[] = [];
-	if (unsaved.configDirty) areas.push("Config");
-	if (unsaved.settingsDirty) areas.push("Settings");
-	return areas.join(" and ");
+	return unsaved.settingsDirty;
 }
 
 export function confirmDiscardChanges(action: string): boolean {
 	if (!hasUnsavedChanges()) return true;
 	if (typeof window === "undefined") return true;
 
-	const areaLabel = changedAreas();
 	return window.confirm(
-		`You have unsaved changes in ${areaLabel}. Leave anyway to ${action}?`,
+		`You have unsaved changes in Settings. Leave anyway to ${action}?`,
 	);
 }

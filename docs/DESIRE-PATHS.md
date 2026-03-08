@@ -11,6 +11,15 @@ Desire Paths
 *On reinforced traversal, constructed memory, and the topology of
 how you actually think.*
 
+> *Simple systems. Emergent behaviors. Don't build the brain —
+> build the conditions.*
+
+Signet is a zibaldone — prediction market algorithms next to birthday
+plans, a prayer next to an architecture diagram. No artificial
+separation between domains. The connections emerge from use, not from
+taxonomy imposed at write time. Desire paths are how those connections
+are discovered, reinforced, and navigated.
+
 ---
 
 > **Why this matters — a real example.**
@@ -39,7 +48,7 @@ Signet's memory retrieval should work the same way.
 The Problem with Flat Retrieval
 -------------------------------
 
-Current memory systems — including Signet's existing hybrid search —
+Current [[memory]] systems — including Signet's existing [[memory|hybrid search]] —
 treat retrieval as a selection problem. A query comes in. The system
 scores every candidate memory by some combination of vector similarity,
 keyword overlap, and recency. The top N get injected. The agent reads
@@ -58,7 +67,7 @@ surrounding context of training pair requirements, session thresholds,
 and the specific bug in early exit logic, it's a fragment. Useful
 fragments are still fragments.
 
-The knowledge graph exists precisely to solve this — entities organize
+The [[knowledge-graph|knowledge graph]] exists precisely to solve this — entities organize
 facts into navigable structure. But so far, the graph is used for
 injection (walk the entity, load its aspects) and the flat search runs
 alongside it as a separate path. The two systems don't talk to each
@@ -72,7 +81,7 @@ Desire Paths as Architecture
 The core insight is that retrieval should not select memories. It
 should traverse the graph and construct them.
 
-A desire path is a traversal route through the knowledge graph that
+A desire path is a traversal route through the [[knowledge-graph|knowledge graph]] that
 has been reinforced by use. Every time the agent walks from entity A
 through aspect B to attribute C, and that path produces context the
 agent (or user) confirms as useful, the path gets stronger. The
@@ -84,7 +93,7 @@ where paths go cold. This isn't metadata bolted onto the graph — it
 *is* the graph's learned topology. The shape of how you actually
 think, encoded in edge weights.
 
-The constellation visualization makes this literal. You can see the
+The [[dashboard|constellation visualization]] makes this literal. You can see the
 desire paths: the hot lines where the graph is alive, the cold edges
 that are going stale. The topology of cognition, made visible.
 
@@ -94,7 +103,7 @@ How It Works
 
 ### 1. Entry: Hybrid Search Lands on Entities
 
-A query arrives. Hybrid search (vector + keyword) runs — but instead
+A query arrives. [[memory|Hybrid search]] (vector + keyword) runs — but instead
 of scoring individual memories, it identifies *entities*. The search
 answers: "What is this query about?" not "Which memories match?"
 
@@ -128,9 +137,9 @@ than a "how" question. A comparison walks differently than a lookup.
 
 ### 3. The Predictor Scores Paths, Not Memories
 
-This is the fundamental shift in the predictive scorer's role.
+This is the fundamental shift in the [[pipeline|predictive scorer]]'s role.
 
-Instead of ranking individual memories by predicted relevance, the
+Instead of ranking individual [[memory|memories]] by predicted relevance, the
 scorer ranks *traversal paths* through entity-aspect-attribute-
 dependency chains. For a given query and entry entity, there are
 multiple possible paths through the graph. The scorer's job is to
@@ -200,6 +209,47 @@ that signal, propagated through explicit graph structure, reshapes
 how the entire system navigates knowledge.
 
 
+User Role: Correct, Confirm, Reject
+------------------------------------
+
+The user's relationship to the system is observability without
+control. They can see the constellation, see the desire paths
+forming, see the discovered principles. Full transparency. But
+seeing is not the same as steering.
+
+The user can:
+
+- **Correct** — "that's not what I meant, here's what I actually
+  mean." Natural language refinement that the system interprets
+  and propagates.
+- **Confirm** — "yes, that's accurate." Positive signal that
+  reinforces the path.
+- **Reject** — "no, that's wrong." Negative signal that weakens
+  the path.
+
+That's it. Users never touch weights, scores, edge strengths, or
+graph topology directly. There is no weight override. There is no
+manual importance slider.
+
+This is a deliberate design constraint. Users who can manually set
+weights will set everything to maximum because everything feels
+important in the moment. The system becomes useless because the
+human optimized for their feelings instead of for retrieval quality.
+Users will happily take on the role of maintenance simply because
+the system allowed them to — commandeering the system and exercising
+opinions formed with a limited understanding of what the system is
+actually doing. That's how you end up with a poisoned, useless
+memory.
+
+The observability and trust layer exists so the user and the agent
+can understand that there is a process and that this process is
+there to help them. It is to build trust. It is not for them to
+maintain. Some aspects should not be customizable because it is
+that customization that will cause the system to not work.
+
+Trust through transparency, not through control.
+
+
 Temporal Reinforcement
 ----------------------
 
@@ -212,7 +262,7 @@ matters." It can begin synthesizing context from those nodes before
 the query even arrives — predictive traversal based on temporal
 patterns.
 
-This connects directly to the predictive scorer's existing temporal
+This connects directly to the [[pipeline|predictive scorer]]'s existing temporal
 features (session time, day of week, recency). But instead of using
 those features to rank flat memories, they inform which traversal
 paths to pre-warm. The daily rhythm of work becomes a traversal
@@ -222,6 +272,121 @@ The morning path is different from the late-night path. The Monday
 path is different from the Friday path. The graph doesn't just
 encode what you know — it encodes *when* different parts of what
 you know become relevant.
+
+
+Cross-Entity Boundary Traversal
+-------------------------------
+
+Entities are not islands. An attribute belonging to one entity can
+also belong to an aspect of an entirely separate entity. This is
+cumulative knowledge.
+
+Consider: `nicholai` has an attribute `prefers-minimal-ui` under a
+`design_preferences` aspect. `signet_dashboard` has an aspect
+`ui_patterns`. These should find each other — not because someone
+explicitly linked them, but because the attribute is semantically
+the same knowledge serving two different entities.
+
+This cross-entity traversal isn't a separate feature bolted onto
+the system. It's already a requirement for deduplication. When the
+extraction pipeline stores a new fact and checks for contradictions
+and duplicates, it already asks "does this fact exist elsewhere?"
+Adding one more step — "does this fact bridge to an entity it isn't
+currently linked to?" — is a natural extension of what's already
+running. No new infrastructure, just a wider lens on the same
+process.
+
+The same mechanism that deduplicates can ideate. The pipeline that
+prevents redundancy is the pipeline that discovers connections.
+
+The behaviors that emerge from this are significant: style
+preferences surfacing across unrelated projects. Skills from one
+domain being recognized as applicable to a task in another. The
+system doesn't just remember what you know — it discovers that
+things you know in different contexts are the same thing.
+
+
+Explorer Bees: Insurance Against Local Optima
+---------------------------------------------
+
+Desire paths solve the common case beautifully. But they have a
+failure mode: everyone walks the same worn trail and nobody
+discovers the shortcut through the woods.
+
+There's a pattern in bee colonies: 70% of foragers follow the
+waggle dance to known flower patches. 30% ignore the dance and
+explore on their own. The colony calls them scout bees. They're
+the reason the colony doesn't starve when the known flowers die.
+
+The exploration layer is the 30%. It deliberately walks unfamiliar
+paths through the graph — crosses entity boundaries that haven't
+been linked before, surfaces connections that the scorer would
+normally deprioritize, and presents the collision to the agent.
+
+This isn't random. It's serendipity with structure. The system
+finds entities that are semantically adjacent (close in embedding
+space) but graph-distant (no dependency edges between them), walks
+between them, and asks: "is this useful?"
+
+If the feedback says yes — congratulations, a new desire path was
+discovered that nobody explicitly created. If the feedback says
+no, the path fades. No harm done.
+
+The implementation is simple: one explorer traversal per session,
+maybe two. Tagged so the agent knows it's speculative. If a
+particular cross-domain bridge consistently produces positive
+feedback, promote it to a real dependency edge in the graph.
+
+The exploration layer isn't ideation. It isn't a feature. It's
+insurance against local optima — the system's way of making sure
+the desire paths it paved are actually the best routes, not just
+the first ones it found.
+
+If the system can detect staleness — same paths every session, no
+new entities being created, no new connections forming — it can
+respond by increasing exploration. A self-regulating mechanism:
+when the graph gets too comfortable, the scout bees wake up.
+
+
+Discovered Principles
+---------------------
+
+When the system detects a pattern that spans multiple unrelated
+entities, it has discovered something that isn't a memory, isn't
+an attribute, and isn't an aspect. It's a *principle*.
+
+"Sovereignty over convenience" isn't stored in any single memory.
+It emerges from decisions across `signet` (local-first architecture),
+`infrastructure` (self-hosted servers), `data_storage` (plain text
+over databases), and `identity` (portable, user-owned). No single
+entity contains it. The pattern lives in the space between them.
+
+A discovered principle is a new entity — type `principle` — that
+gets auto-created when the system detects this kind of cross-entity
+pattern. It appears in the constellation as a distinct shape, with
+dependency edges reaching down to the entities it was extracted from.
+
+The user sees the discovery through a notification: "Signet noticed
+something." The principle is presented with its evidence trail —
+the specific decisions across specific projects that led to the
+conclusion. Trust comes from showing your work.
+
+The user can then:
+
+- **Correct** it — "it's not sovereignty, it's control over my own
+  data specifically." The system refines the principle, adjusts the
+  entity, and the corrected version influences future retrieval.
+- **Confirm** it — the principle becomes a first-class entity that
+  influences path scoring. Traversals that touch this principle get
+  boosted.
+- **Reject** it — the principle entity fades. The pattern was
+  coincidental, not meaningful.
+
+Discovered principles are how the system moves from remembering
+facts to understanding values. From "what happened" to "what
+matters." The desire paths that cross entity boundaries aren't just
+finding duplicate attributes — they're finding the shape of how
+you think.
 
 
 Entity Health Through Feedback
@@ -255,28 +420,32 @@ Relationship to Existing Architecture
 This concept builds on — not replaces — the existing knowledge
 architecture:
 
-- **Entity/aspect/attribute structure** remains the foundation. Desire
+- **[[knowledge-graph|Entity/aspect/attribute structure]]** remains the foundation. Desire
   paths traverse the structure that already exists.
 - **Constraints** still surface unconditionally. A constraint is a
   path that is always walked, regardless of scorer recommendation.
-- **The extraction pipeline** still populates the graph. Desire paths
+- **The [[pipeline|extraction pipeline]]** still populates the graph. Desire paths
   don't change how knowledge enters the system — they change how it's
-  retrieved.
-- **Hybrid search** becomes the entry mechanism rather than the
+  retrieved. Cross-entity boundary detection is a natural extension
+  of the existing deduplication step.
+- **[[memory|Hybrid search]]** becomes the entry mechanism rather than the
   retrieval mechanism. It finds the door; the graph walk goes through it.
-- **The predictive scorer** evolves from a memory ranker to a path
+- **The [[pipeline|predictive scorer]]** evolves from a memory ranker to a path
   scorer. Its training signal changes from "was this memory useful?"
   to "was this traversal path useful?"
 - **The behavioral feedback loop** (FTS overlap, aspect decay) feeds
   into path reinforcement. These are compatible signals — FTS overlap
   confirms that a path's output was actively searched for, which is
   strong positive signal.
+- **The exploration layer** extends the [[pipeline|extraction pipeline]] with one
+  additional step: checking whether new facts bridge to unlinked
+  entities. No new infrastructure required.
 
 
 The Convergence
 ---------------
 
-The predictive scorer and the knowledge graph were designed as
+The [[pipeline|predictive scorer]] and the [[knowledge-graph|knowledge graph]] were designed as
 separate systems that operate on the same data. Desire paths are the
 point where they converge.
 
@@ -293,6 +462,8 @@ system that doesn't just store what you know, but learns how to
 navigate it. A system that maps the desire paths — the routes
 through knowledge that you actually walk — and paves them.
 
+The system doesn't just remember better. It thinks laterally.
+
 Small. Dense. Connected. Correct. And now: *learned*.
 
 ---
@@ -303,4 +474,5 @@ specification once the concept is validated.*
 
 ---
 
-*Written by Nicholai and Mr. Claude. March 7, 2026.*
+*Written by Nicholai, Mr. Claude, PatchyToes, and Jake. March 7, 2026.*
+
