@@ -8,7 +8,6 @@
 import { confirmDiscardChanges } from "$lib/stores/unsaved-changes.svelte";
 
 export type TabId =
-	| "config"
 	| "settings"
 	| "memory"
 	| "timeline"
@@ -23,7 +22,6 @@ export type TabId =
 	| "predictor";
 
 const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
-	"config",
 	"settings",
 	"memory",
 	"timeline",
@@ -49,6 +47,7 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["engine/predictor", "predictor"],
 	["engine/connectors", "connectors"],
 	["engine/logs", "logs"],
+	["config", "settings"],
 ]);
 
 function readTabFromHash(): TabId | null {
@@ -59,7 +58,7 @@ function readTabFromHash(): TabId | null {
 }
 
 export const nav = $state({
-	activeTab: "config" as TabId,
+	activeTab: "settings" as TabId,
 });
 
 /* ── Tab groups (display-layer only) ── */

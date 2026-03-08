@@ -210,13 +210,16 @@ function resolveBinaryPath(configured: string | undefined): string | null {
 
 	// Check PATH via Bun.which (available in Bun runtime)
 	if (typeof globalThis.Bun !== "undefined") {
-		const found = Bun.which("signet-predictor");
-		if (found !== null) return found;
+		for (const name of ["signet-predictor", "predictor"]) {
+			const found = Bun.which(name);
+			if (found !== null) return found;
+		}
 	}
 
 	// Fallback: check common relative locations from project root
 	const candidates = [
 		join(process.cwd(), "packages", "predictor", "target", "release", "signet-predictor"),
+		join(process.cwd(), "packages", "predictor", "target", "release", "predictor"),
 	];
 	for (const candidate of candidates) {
 		try {

@@ -1,4 +1,5 @@
 <script lang="ts">
+import AdvancedSection from "$lib/components/config/AdvancedSection.svelte";
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
 import { Input } from "$lib/components/ui/input/index.js";
@@ -117,19 +118,19 @@ function setExtractionModelPreset(v: string | undefined): void {
 	if (!v || v === "__custom__") return;
 	st.aSetStr(["memory", "pipelineV2", "extractionModel"], v);
 }
+
+const TOP_LEVEL_FEATURE_KEYS = ["allowUpdateDelete", "graphEnabled", "autonomousEnabled", "semanticContradictionEnabled"] as const;
+const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 </script>
 
 {#if st.agentFile}
 	<FormSection description="V2 memory pipeline. Runs LLM-based fact extraction on incoming memories, then decides whether to write, update, or skip. Lives under memory.pipelineV2 in agent.yaml.">
-		<div class="font-[family-name:var(--font-mono)] text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
-			Core
-		</div>
-		{#each PIPELINE_CORE_BOOLS as { key, desc } (key)}
-			<FormField label={key} description={desc}>
-				<Switch checked={st.aBool(["memory", "pipelineV2", key])} onCheckedChange={setBool(["memory", "pipelineV2", key])} />
-			</FormField>
-		{/each}
+		<!-- enabled toggle -->
+		<FormField label={PIPELINE_CORE_BOOLS[0].key} description={PIPELINE_CORE_BOOLS[0].desc}>
+			<Switch checked={st.aBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[0].key])} onCheckedChange={setBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[0].key])} />
+		</FormField>
 
+		<!-- Extraction provider -->
 		<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses Claude Code CLI; codex uses the local Codex CLI; opencode uses the OpenCode server.">
 			<Select.Root
 				type="single"
@@ -147,6 +148,8 @@ function setExtractionModelPreset(v: string | undefined): void {
 				</Select.Content>
 			</Select.Root>
 		</FormField>
+
+		<!-- Extraction model -->
 		<FormField label="Extraction model" description="Choose a provider default or switch to custom for any supported model string. Existing custom values are preserved.">
 			<div class="flex flex-col gap-2">
 				<Select.Root
@@ -172,61 +175,84 @@ function setExtractionModelPreset(v: string | undefined): void {
 				{/if}
 			</div>
 		</FormField>
-		<FormField label="Maintenance mode" description="'observe' logs diagnostics without changes. 'execute' attempts repairs. Only works when autonomousEnabled is true.">
-			<Select.Root
-				type="single"
-				value={st.aStr(["memory", "pipelineV2", "maintenanceMode"])}
-				onValueChange={setSelect(["memory", "pipelineV2", "maintenanceMode"])}
-			>
-				<Select.Trigger class={selectTriggerClass}>
-					{st.aStr(["memory", "pipelineV2", "maintenanceMode"]) || "\u2014 select \u2014"}
-				</Select.Trigger>
-				<Select.Content class={selectContentClass}>
-					<Select.Item class={selectItemClass} value="" label="\u2014 select \u2014" />
-					<Select.Item class={selectItemClass} value="observe" label="observe" />
-					<Select.Item class={selectItemClass} value="execute" label="execute" />
-				</Select.Content>
-			</Select.Root>
-		</FormField>
 
-		{#each PIPELINE_EXTRACTION_NUMS as { key, label, desc, min, max, step } (key)}
-			<FormField {label} description={desc}>
-				<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
-			</FormField>
-		{/each}
-
-		<div class="font-[family-name:var(--font-mono)] text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
-			Features
-		</div>
-		{#each PIPELINE_FEATURE_BOOLS as { key, desc } (key)}
+		<!-- Top-level feature toggles -->
+		{#each PIPELINE_FEATURE_BOOLS.filter(b => TOP_LEVEL_FEATURE_KEYS.includes(b.key as typeof TOP_LEVEL_FEATURE_KEYS[number])) as { key, desc } (key)}
 			<FormField label={key} description={desc}>
 				<Switch checked={st.aBool(["memory", "pipelineV2", key])} onCheckedChange={setBool(["memory", "pipelineV2", key])} />
 			</FormField>
 		{/each}
 
-		<div class="font-[family-name:var(--font-mono)] text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
-			Reranker
-		</div>
+		<!-- Reranker -->
 		{#each PIPELINE_RERANKER_BOOLS as { key, desc } (key)}
 			<FormField label={key} description={desc}>
 				<Switch checked={st.aBool(["memory", "pipelineV2", key])} onCheckedChange={setBool(["memory", "pipelineV2", key])} />
 			</FormField>
 		{/each}
 
-		{#each PIPELINE_SEARCH_NUMS as { key, label, desc, min, max, step } (key)}
-			<FormField {label} description={desc}>
-				<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
-			</FormField>
-		{/each}
-
+		<!-- Predictor subsection -->
 		<div class="font-[family-name:var(--font-mono)] text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
-			Worker
+			Predictor
 		</div>
-		{#each PIPELINE_WORKER_NUMS as { key, label, desc, min, max, step } (key)}
-			<FormField {label} description={desc}>
-				<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
+		<FormField label="enabled" description="Enable the predictive memory scorer. Learns which memories are most useful based on agent feedback.">
+			<Switch checked={st.aBool(["memory", "pipelineV2", "predictor", "enabled"])} onCheckedChange={setBool(["memory", "pipelineV2", "predictor", "enabled"])} />
+		</FormField>
+		<FormField label="agentFeedback" description="Allow the agent to provide relevance feedback on recalled memories.">
+			<Switch checked={st.aBool(["memory", "pipelineV2", "predictorPipeline", "agentFeedback"])} onCheckedChange={setBool(["memory", "pipelineV2", "predictorPipeline", "agentFeedback"])} />
+		</FormField>
+		<FormField label="trainingTelemetry" description="Contribute anonymized training signals to improve the shared base model.">
+			<Switch checked={st.aBool(["memory", "pipelineV2", "predictorPipeline", "trainingTelemetry"])} onCheckedChange={setBool(["memory", "pipelineV2", "predictorPipeline", "trainingTelemetry"])} />
+		</FormField>
+
+		<!-- Advanced collapsible -->
+		<AdvancedSection>
+			<FormField label={PIPELINE_CORE_BOOLS[1].key} description={PIPELINE_CORE_BOOLS[1].desc}>
+				<Switch checked={st.aBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[1].key])} onCheckedChange={setBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[1].key])} />
 			</FormField>
-		{/each}
+			<FormField label={PIPELINE_CORE_BOOLS[2].key} description={PIPELINE_CORE_BOOLS[2].desc}>
+				<Switch checked={st.aBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[2].key])} onCheckedChange={setBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[2].key])} />
+			</FormField>
+			{#each PIPELINE_FEATURE_BOOLS.filter(b => ADVANCED_FEATURE_KEYS.includes(b.key as typeof ADVANCED_FEATURE_KEYS[number])) as { key, desc } (key)}
+				<FormField label={key} description={desc}>
+					<Switch checked={st.aBool(["memory", "pipelineV2", key])} onCheckedChange={setBool(["memory", "pipelineV2", key])} />
+				</FormField>
+			{/each}
+
+			<FormField label="Maintenance mode" description="'observe' logs diagnostics without changes. 'execute' attempts repairs. Only works when autonomousEnabled is true.">
+				<Select.Root
+					type="single"
+					value={st.aStr(["memory", "pipelineV2", "maintenanceMode"])}
+					onValueChange={setSelect(["memory", "pipelineV2", "maintenanceMode"])}
+				>
+					<Select.Trigger class={selectTriggerClass}>
+						{st.aStr(["memory", "pipelineV2", "maintenanceMode"]) || "\u2014 select \u2014"}
+					</Select.Trigger>
+					<Select.Content class={selectContentClass}>
+						<Select.Item class={selectItemClass} value="" label="\u2014 select \u2014" />
+						<Select.Item class={selectItemClass} value="observe" label="observe" />
+						<Select.Item class={selectItemClass} value="execute" label="execute" />
+					</Select.Content>
+				</Select.Root>
+			</FormField>
+
+			{#each PIPELINE_EXTRACTION_NUMS as { key, label, desc, min, max, step } (key)}
+				<FormField {label} description={desc}>
+					<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
+				</FormField>
+			{/each}
+
+			{#each PIPELINE_SEARCH_NUMS as { key, label, desc, min, max, step } (key)}
+				<FormField {label} description={desc}>
+					<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
+				</FormField>
+			{/each}
+
+			{#each PIPELINE_WORKER_NUMS as { key, label, desc, min, max, step } (key)}
+				<FormField {label} description={desc}>
+					<Input type="number" {min} {max} {step} value={st.aNum(["memory", "pipelineV2", key])} oninput={setNum(["memory", "pipelineV2", key])} />
+				</FormField>
+			{/each}
+		</AdvancedSection>
 
 	</FormSection>
 {/if}
