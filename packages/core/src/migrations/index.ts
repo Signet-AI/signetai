@@ -276,10 +276,12 @@ export function runMigrations(db: MigrationDb): void {
 		} catch (err) {
 			db.exec(`ROLLBACK TO SAVEPOINT migration_${migration.version}`);
 			db.exec(`RELEASE migration_${migration.version}`);
+			const detail = err instanceof Error ? err.message : String(err);
 			throw new Error(
-				`Migration ${migration.version} (${migration.name}) failed: ${
-					err instanceof Error ? err.message : String(err)
-				}`,
+				`Migration ${migration.version} (${migration.name}) failed: ${detail}\n\n` +
+				"Your data is safe — the failed migration was rolled back.\n" +
+				"Please report this at https://github.com/Signet-AI/signetai/issues\n" +
+				"with the error message above and your signetai version.",
 			);
 		}
 	}

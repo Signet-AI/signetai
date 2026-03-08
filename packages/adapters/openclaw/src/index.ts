@@ -366,7 +366,6 @@ export async function onUserPromptSubmit(
 	options: {
 		daemonUrl?: string;
 		userMessage: string;
-		rawPrompt?: string;
 		lastAssistantMessage?: string;
 		sessionKey?: string;
 		project?: string;
@@ -378,7 +377,6 @@ export async function onUserPromptSubmit(
 			harness,
 			userMessage: options.userMessage,
 			userPrompt: options.userMessage,
-			rawPrompt: options.rawPrompt,
 			lastAssistantMessage: options.lastAssistantMessage,
 			sessionKey: options.sessionKey,
 			project: options.project,
@@ -1222,7 +1220,6 @@ const signetPlugin = {
 				const result = await onUserPromptSubmit("openclaw", {
 					...opts,
 					userMessage: prompt,
-					rawPrompt,
 					lastAssistantMessage,
 					sessionKey,
 				});

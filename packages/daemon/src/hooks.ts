@@ -168,9 +168,10 @@ export interface PreCompactionResponse {
 export interface UserPromptSubmitRequest {
 	harness: string;
 	project?: string;
+	/** Pre-cleaned user message (preferred — used as-is after metadata strip). */
 	userMessage?: string;
+	/** Raw user prompt (legacy — metadata stripped before use). */
 	userPrompt?: string;
-	rawPrompt?: string;
 	lastAssistantMessage?: string;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
@@ -1854,7 +1855,7 @@ function buildRecallQueryShape(
 
 function resolveRecallUserMessage(req: UserPromptSubmitRequest): string {
 	if (typeof req.userMessage === "string") {
-		const cleaned = req.userMessage.trim();
+		const cleaned = stripUntrustedMetadata(req.userMessage).trim();
 		if (cleaned.length > 0) {
 			return cleaned;
 		}

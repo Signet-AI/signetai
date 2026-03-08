@@ -3,6 +3,7 @@ import { browser } from "$app/environment";
 import { type DaemonStatus, type Memory, getStatus } from "$lib/api";
 import AppSidebar from "$lib/components/app-sidebar.svelte";
 import ExtensionBanner from "$lib/components/ExtensionBanner.svelte";
+import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
 import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.svelte";
 import { PAGE_HEADERS } from "$lib/components/layout/page-headers";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -660,6 +661,7 @@ function handlePageClick(e: MouseEvent) {
 			</div>
 		</header>
 
+		<UpgradeBanner {daemonStatus} />
 		<ExtensionBanner />
 
 		<div class="flex flex-1 flex-col min-h-0 relative" data-tab-panel-active="true">
