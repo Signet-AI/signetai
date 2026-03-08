@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.47.0] - 2026-03-08
+
+### Bug Fixes
+
+- **mcp**: flatten agent_message_send schema and clarify agent_peers description
+
+
 ## [0.46.0] - 2026-03-08
 
 ### Features
