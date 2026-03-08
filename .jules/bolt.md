@@ -1,0 +1,3 @@
+## 2025-03-08 - [Bottleneck] Session Memory Recording Overhead
+**Learning:** `recordSessionCandidates` in `packages/daemon/src/session-memories.ts` is a major bottleneck in the session start hot path. Measured `p95` was ~10.0ms (limit: 5ms), contributing to an overall `handleSessionStart` overhead of ~6.1ms (limit: 5ms). The primary causes are redundant `existsSync()` calls, `crypto.randomUUID()` generation, and the lack of statement caching between calls, which forces SQLite to re-parse multi-row `INSERT` statements repeatedly.
+**Action:** Implement module-level path caching, switch to deterministic string-based primary keys (`${sessionKey}:${memoryId}`), and implement a `WeakMap`-based statement cache to reuse prepared statements across calls.
