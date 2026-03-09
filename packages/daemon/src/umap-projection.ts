@@ -4,8 +4,18 @@
  * to [-210, 210], and caches the result in the umap_cache table.
  */
 
+import { createRequire } from "node:module";
 import { UMAP } from "umap-js";
 import type { ReadDb, WriteDb } from "./db-accessor";
+
+// Try to load native Rust accelerators, fall back to pure TS
+let nativeKnn: typeof import("@signet/native") | null = null;
+try {
+	const esmRequire = createRequire(import.meta.url);
+	nativeKnn = esmRequire("@signet/native");
+} catch {
+	// Native addon not available — using TypeScript fallback
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -225,6 +235,11 @@ function buildApproximateKnnEdges(projected: readonly number[][], k: number): [n
 }
 
 function buildKnnEdges(projected: readonly number[][], k: number): [number, number][] {
+	if (nativeKnn !== null) {
+		const mutableCoords: number[][] = projected.map((p) => [...p]);
+		const edges = nativeKnn.buildKnnEdges(mutableCoords, k, KNN_EXACT_THRESHOLD);
+		return edges.map((e): [number, number] => [e[0], e[1]]);
+	}
 	if (projected.length <= KNN_EXACT_THRESHOLD) return buildExactKnnEdges(projected, k);
 	return buildApproximateKnnEdges(projected, k);
 }
@@ -459,9 +474,22 @@ function computeProjectionFromRows(rows: readonly EmbeddingRow[], nComponents: 2
 	const umap = new UMAP({ nComponents, nNeighbors, minDist: 0.1, spread: 1.0 });
 	const projected: number[][] = umap.fit(vectors);
 
-	const xs = normaliseAxis(projected.map((point) => point[0]));
-	const ys = normaliseAxis(projected.map((point) => point[1]));
-	const zs: number[] | null = nComponents === 3 ? normaliseAxis(projected.map((point) => point[2] ?? 0)) : null;
+	let xs: number[];
+	let ys: number[];
+	let zs: number[] | null;
+	if (nativeKnn !== null) {
+		const rawXs = projected.map((point) => point[0]);
+		const rawYs = projected.map((point) => point[1]);
+		const rawZs = nComponents === 3 ? projected.map((point) => point[2] ?? 0) : null;
+		const norm = nativeKnn.normaliseAxes(rawXs, rawYs, rawZs, SCALE);
+		xs = norm.xs;
+		ys = norm.ys;
+		zs = norm.zs ?? null;
+	} else {
+		xs = normaliseAxis(projected.map((point) => point[0]));
+		ys = normaliseAxis(projected.map((point) => point[1]));
+		zs = nComponents === 3 ? normaliseAxis(projected.map((point) => point[2] ?? 0)) : null;
+	}
 	const nodes = buildNodesFromRows(rows, xs, ys, zs);
 	const edges = buildKnnEdges(projected, KNN_K);
 
