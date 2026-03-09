@@ -8684,12 +8684,15 @@ async function main() {
 		}
 	} else if (effectiveExtractionProvider === "claude-code") {
 		try {
-			const proc = Bun.spawn(["claude", "--version"], {
-				stdout: "pipe",
-				stderr: "pipe",
-				env: { ...process.env, SIGNET_NO_HOOKS: "1" },
+			const exitCode = await new Promise<number>((resolve) => {
+				const proc = spawn("claude", ["--version"], {
+					stdio: "pipe",
+					windowsHide: true,
+					env: { ...process.env, SIGNET_NO_HOOKS: "1" },
+				});
+				proc.on("close", (code) => resolve(code ?? 1));
+				proc.on("error", () => resolve(1));
 			});
-			const exitCode = await proc.exited;
 			if (exitCode !== 0) throw new Error("non-zero exit");
 		} catch {
 			logger.warn("config", "Claude Code CLI not found, falling back to ollama for extraction");
@@ -8697,16 +8700,19 @@ async function main() {
 		}
 	} else if (effectiveExtractionProvider === "codex") {
 		try {
-			const proc = Bun.spawn(["codex", "--version"], {
-				stdout: "pipe",
-				stderr: "pipe",
-				env: {
-					...process.env,
-					SIGNET_NO_HOOKS: "1",
-					SIGNET_CODEX_BYPASS_WRAPPER: "1",
-				},
+			const exitCode = await new Promise<number>((resolve) => {
+				const proc = spawn("codex", ["--version"], {
+					stdio: "pipe",
+					windowsHide: true,
+					env: {
+						...process.env,
+						SIGNET_NO_HOOKS: "1",
+						SIGNET_CODEX_BYPASS_WRAPPER: "1",
+					},
+				});
+				proc.on("close", (code) => resolve(code ?? 1));
+				proc.on("error", () => resolve(1));
 			});
-			const exitCode = await proc.exited;
 			if (exitCode !== 0) throw new Error("non-zero exit");
 		} catch {
 			logger.warn("config", "Codex CLI not found, falling back to ollama for extraction");
@@ -8750,12 +8756,15 @@ async function main() {
 			}
 		} else if (effectiveSynthesisProvider === "claude-code") {
 			try {
-				const proc = Bun.spawn(["claude", "--version"], {
-					stdout: "pipe",
-					stderr: "pipe",
-					env: { ...process.env, SIGNET_NO_HOOKS: "1" },
+				const exitCode = await new Promise<number>((resolve) => {
+					const proc = spawn("claude", ["--version"], {
+						stdio: "pipe",
+						windowsHide: true,
+						env: { ...process.env, SIGNET_NO_HOOKS: "1" },
+					});
+					proc.on("close", (code) => resolve(code ?? 1));
+					proc.on("error", () => resolve(1));
 				});
-				const exitCode = await proc.exited;
 				if (exitCode !== 0) throw new Error("non-zero exit");
 			} catch {
 				logger.warn("config", "Claude Code CLI not found, falling back to ollama for synthesis");

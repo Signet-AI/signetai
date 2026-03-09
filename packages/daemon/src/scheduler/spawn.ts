@@ -4,6 +4,7 @@
  */
 
 import type { TaskHarness } from "@signet/core";
+import { spawn as nodeSpawn } from "node:child_process";
 import { logger } from "../logger";
 
 const MAX_OUTPUT_CHARS = 1_048_576;
@@ -80,21 +81,40 @@ export async function spawnTask(
 	// SIGNET_NO_HOOKS sentinel before re-injecting to prevent hook loops
 	const { CLAUDECODE: _cc, SIGNET_NO_HOOKS: _, ...baseEnv } = process.env;
 
-	const proc = Bun.spawn([resolvedBin, ...args], {
+	const child = nodeSpawn(resolvedBin, args, {
 		cwd: workingDirectory ?? undefined,
-		stdout: "pipe",
-		stderr: "pipe",
-		env: { ...baseEnv, SIGNET_NO_HOOKS: "1" },
+		stdio: "pipe",
+		windowsHide: true,
+		env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
+	});
+
+	const procStdout = new ReadableStream<Uint8Array>({
+		start(controller) {
+			child.stdout?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
+			child.stdout?.on("end", () => { try { controller.close(); } catch {} });
+			child.stdout?.on("error", (err) => { try { controller.error(err); } catch {} });
+		},
+	});
+	const procStderr = new ReadableStream<Uint8Array>({
+		start(controller) {
+			child.stderr?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
+			child.stderr?.on("end", () => { try { controller.close(); } catch {} });
+			child.stderr?.on("error", (err) => { try { controller.error(err); } catch {} });
+		},
+	});
+	const procExited = new Promise<number>((resolve) => {
+		child.on("close", (code) => resolve(code ?? 1));
+		child.on("error", () => resolve(1));
 	});
 
 	let timedOut = false;
 	const timer = setTimeout(() => {
 		timedOut = true;
-		proc.kill("SIGTERM");
+		child.kill("SIGTERM");
 		// Force kill after 5s if still alive
 		setTimeout(() => {
 			try {
-				proc.kill("SIGKILL");
+				child.kill("SIGKILL");
 			} catch {
 				// already dead
 			}
@@ -103,9 +123,9 @@ export async function spawnTask(
 
 	try {
 		const [stdout, stderr, exitCode] = await Promise.all([
-			readProcessStream(proc.stdout, hooks?.onStdoutChunk),
-			readProcessStream(proc.stderr, hooks?.onStderrChunk),
-			proc.exited,
+			readProcessStream(procStdout, hooks?.onStdoutChunk),
+			readProcessStream(procStderr, hooks?.onStderrChunk),
+			procExited,
 		]);
 
 		clearTimeout(timer);

@@ -9,7 +9,58 @@
 import type { LlmProvider, LlmGenerateResult } from "@signet/core";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { spawn as nodeSpawn } from "node:child_process";
 import { logger } from "../logger";
+
+// ---------------------------------------------------------------------------
+// Windows-safe spawn helper
+// ---------------------------------------------------------------------------
+// Bun.spawn does not support windowsHide, so CLI subprocesses flash a
+// console window on Windows. This helper wraps Node's child_process.spawn
+// (which does support windowsHide) with a Bun.spawn-compatible interface.
+
+interface SpawnResult {
+	readonly stdout: ReadableStream<Uint8Array>;
+	readonly stderr: ReadableStream<Uint8Array>;
+	readonly exited: Promise<number>;
+	kill(signal?: string): void;
+}
+
+function spawnHidden(cmd: string[], options?: { env?: Record<string, string | undefined> }): SpawnResult {
+	const proc = nodeSpawn(cmd[0], cmd.slice(1), {
+		stdio: "pipe",
+		windowsHide: true,
+		env: options?.env as NodeJS.ProcessEnv,
+	});
+
+	const stdout = new ReadableStream<Uint8Array>({
+		start(controller) {
+			proc.stdout?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
+			proc.stdout?.on("end", () => { try { controller.close(); } catch {} });
+			proc.stdout?.on("error", (err) => { try { controller.error(err); } catch {} });
+		},
+	});
+
+	const stderr = new ReadableStream<Uint8Array>({
+		start(controller) {
+			proc.stderr?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
+			proc.stderr?.on("end", () => { try { controller.close(); } catch {} });
+			proc.stderr?.on("error", (err) => { try { controller.error(err); } catch {} });
+		},
+	});
+
+	const exited = new Promise<number>((resolve) => {
+		proc.on("close", (code) => resolve(code ?? 1));
+		proc.on("error", () => resolve(1));
+	});
+
+	return {
+		stdout,
+		stderr,
+		exited,
+		kill(signal?: string) { proc.kill(signal as NodeJS.Signals); },
+	};
+}
 
 export type { LlmProvider, LlmGenerateResult } from "@signet/core";
 
@@ -192,9 +243,7 @@ export function createClaudeCodeProvider(
 		// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
 		const { CLAUDECODE: _, SIGNET_NO_HOOKS: __, ...cleanEnv } = process.env;
 
-		const proc = Bun.spawn(["claude", ...args], {
-			stdout: "pipe",
-			stderr: "pipe",
+		const proc = spawnHidden(["claude", ...args], {
 			env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
 		});
 
@@ -281,9 +330,7 @@ export function createClaudeCodeProvider(
 
 		async available(): Promise<boolean> {
 			try {
-				const proc = Bun.spawn(["claude", "--version"], {
-					stdout: "pipe",
-					stderr: "pipe",
+				const proc = spawnHidden(["claude", "--version"], {
 					env: { ...process.env, SIGNET_NO_HOOKS: "1" },
 				});
 				const exitCode = await proc.exited;
@@ -403,9 +450,7 @@ export function createCodexProvider(
 		];
 
 		const { SIGNET_NO_HOOKS: _, SIGNET_CODEX_BYPASS_WRAPPER: __, ...cleanEnv } = process.env;
-		const proc = Bun.spawn(["codex", ...args], {
-			stdout: "pipe",
-			stderr: "pipe",
+		const proc = spawnHidden(["codex", ...args], {
 			env: {
 				...cleanEnv,
 				NO_COLOR: "1",
@@ -452,9 +497,7 @@ export function createCodexProvider(
 
 		async available(): Promise<boolean> {
 			try {
-				const proc = Bun.spawn(["codex", "--version"], {
-					stdout: "pipe",
-					stderr: "pipe",
+				const proc = spawnHidden(["codex", "--version"], {
 					env: {
 						...process.env,
 						SIGNET_NO_HOOKS: "1",
