@@ -1883,7 +1883,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		dateStyle: "full",
 		timeStyle: "short",
 	});
-	const metadataHeader = `\n# Current Date & Time\n${now} (${tz})\n`;
+	const metadataHeader = `# Current Date & Time\n${now} (${tz})\n`;
 
 	if (keywordTerms.length < 1 || vectorQuery.length === 0 || !existsSync(MEMORY_DB)) {
 		return { inject: metadataHeader, memoryCount: 0 };
