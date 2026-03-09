@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.50.0] - 2026-03-09
+
+### Bug Fixes
+
+- match toCanonicalName() whitespace collapse in migration 027
+- resolve UNIQUE constraint crash in skill reconciler
+
+
 ## [0.49.0] - 2026-03-09
 
 ### Features
