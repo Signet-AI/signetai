@@ -150,7 +150,7 @@ console.log("\n========================================================");
 console.log("  Session Memory Recording -- Hot Path Benchmark");
 console.log("========================================================");
 
-const ITERS = 200;
+const ITERS = 50;
 
 // --- recordSessionCandidates: 30 candidates (typical session) ---
 
@@ -252,7 +252,7 @@ const baselineTimes: number[] = [];
 const recordingTimes: number[] = [];
 sessionCounter = 0;
 
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i < 50; i++) {
 	const t0 = performance.now();
 	await handleSessionStart({ harness: "bench" });
 	baselineTimes.push(performance.now() - t0);

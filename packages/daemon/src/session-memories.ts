@@ -6,15 +6,51 @@
  * the continuity scorer and (eventually) the predictive memory scorer.
  */
 
+import type { Statement } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getDbAccessor, type WriteDb } from "./db-accessor";
+import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 
+// --- Optimization: Cache the DB path and existence check to avoid redundant syscalls ---
+let cachedDbPath: string | null = null;
+let cachedDbExists = false;
+let lastCheckTime = 0;
+const CHECK_INTERVAL_MS = 10000; // Only re-check existence every 10s
+
 function getMemoryDbPath(): string {
+	if (cachedDbPath) return cachedDbPath;
 	const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
-	return join(agentsDir, "memory", "memories.db");
+	cachedDbPath = join(agentsDir, "memory", "memories.db");
+	return cachedDbPath;
+}
+
+function checkDbExists(): boolean {
+	const now = Date.now();
+	if (cachedDbExists && now - lastCheckTime < CHECK_INTERVAL_MS) {
+		return true;
+	}
+	cachedDbExists = existsSync(getMemoryDbPath());
+	lastCheckTime = now;
+	return cachedDbExists;
+}
+
+// --- Optimization: Use a WeakMap to cache prepared statements by DB instance ---
+const statementCache = new WeakMap<WriteDb, Map<string, Statement>>();
+
+function getCachedStatement(db: WriteDb, sql: string): Statement {
+	let dbCache = statementCache.get(db);
+	if (!dbCache) {
+		dbCache = new Map();
+		statementCache.set(db, dbCache);
+	}
+	let stmt = dbCache.get(sql);
+	if (!stmt) {
+		stmt = db.prepare(sql);
+		dbCache.set(sql, stmt);
+	}
+	return stmt;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +88,7 @@ export function recordSessionCandidates(
 	candidates: ReadonlyArray<SessionMemoryCandidate>,
 	injectedIds: ReadonlySet<string>,
 ): void {
-	if (!sessionKey || candidates.length === 0 || !existsSync(getMemoryDbPath())) return;
+	if (!sessionKey || candidates.length === 0 || !checkDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
@@ -67,30 +103,23 @@ export function recordSessionCandidates(
 					  predictor_rank)
 					 VALUES `;
 
-			// Pre-compile the full-chunk statement once to avoid recompiling
-			// identical SQL on every iteration of the loop.
-			const fullChunkStmt =
-				candidates.length >= CHUNK_SIZE
-					? db.prepare(BASE_SQL + Array.from({ length: CHUNK_SIZE }, () => ROW).join(","))
-					: null;
-
 			let rank = 0;
 			for (let i = 0; i < candidates.length; i += CHUNK_SIZE) {
 				const chunk = candidates.slice(i, i + CHUNK_SIZE);
 
-				// Reuse pre-compiled statement for full chunks; compile once for
-				// the remainder chunk (different SQL, can't reuse).
-				const stmt =
-					chunk.length === CHUNK_SIZE
-						? fullChunkStmt!
-						: db.prepare(BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(","));
+				// Optimization: Use statement cache. SQL string depends on chunk size.
+				const sql = BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(",");
+				const stmt = getCachedStatement(db, sql);
 
 				const values: unknown[] = [];
 				for (const c of chunk) {
 					const wasInjected = injectedIds.has(c.id) ? 1 : 0;
 					const finalScore = c.finalScore ?? c.effScore;
+					// Optimization: Deterministic ID is faster than crypto.randomUUID()
+					// Since (session_key, memory_id) is UNIQUE, this is safe and useful.
+					const id = `${sessionKey}:${c.id}`;
 					values.push(
-						crypto.randomUUID(),
+						id,
 						sessionKey,
 						c.id,
 						c.source,
@@ -138,7 +167,7 @@ export function recordSessionCandidates(
  * collapse two queries into one, reducing roundtrips.
  */
 export function trackFtsHits(sessionKey: string | undefined, matchedIds: ReadonlyArray<string>): void {
-	if (!sessionKey || matchedIds.length === 0 || !existsSync(getMemoryDbPath())) return;
+	if (!sessionKey || matchedIds.length === 0 || !checkDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
@@ -154,32 +183,18 @@ export function trackFtsHits(sessionKey: string | undefined, matchedIds: Readonl
 				 ON CONFLICT(session_key, memory_id) DO UPDATE SET
 				  fts_hit_count = fts_hit_count + 1`;
 
-			// Pre-compile the full-chunk UPSERT statement once to avoid
-			// recompiling identical SQL for every batch of 50.
-			const fullChunkStmt =
-				matchedIds.length >= CHUNK_SIZE
-					? db.prepare(
-							BASE_SQL +
-								Array.from({ length: CHUNK_SIZE }, () => ROW).join(",") +
-								CONFLICT_CLAUSE,
-						)
-					: null;
-
 			for (let i = 0; i < matchedIds.length; i += CHUNK_SIZE) {
 				const chunk = matchedIds.slice(i, i + CHUNK_SIZE);
 
-				const stmt =
-					chunk.length === CHUNK_SIZE
-						? fullChunkStmt!
-						: db.prepare(
-								BASE_SQL +
-									Array.from({ length: chunk.length }, () => ROW).join(",") +
-									CONFLICT_CLAUSE,
-							);
+				// Optimization: Use statement cache.
+				const sql = BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(",") + CONFLICT_CLAUSE;
+				const stmt = getCachedStatement(db, sql);
 
 				const values: unknown[] = [];
 				for (const id of chunk) {
-					values.push(crypto.randomUUID(), sessionKey, id, now);
+					// Optimization: Deterministic ID.
+					const rowId = `fts:${sessionKey}:${id}`;
+					values.push(rowId, sessionKey, id, now);
 				}
 
 				stmt.run(...values);
@@ -200,9 +215,7 @@ export function trackFtsHits(sessionKey: string | undefined, matchedIds: Readonl
  * Validate and clamp a raw feedback object. Returns a clean map of
  * memory IDs to scores in [-1, 1], or null if the input is invalid.
  */
-export function parseFeedback(
-	raw: unknown,
-): Record<string, number> | null {
+export function parseFeedback(raw: unknown): Record<string, number> | null {
 	if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) {
 		return null;
 	}
@@ -234,7 +247,7 @@ export function recordAgentFeedbackInner(
 ): void {
 	// Single-row UPDATE with running mean calculation.
 	// CASE handles NULL (first feedback) vs existing score.
-	const stmt = db.prepare(`
+	const sql = `
 		UPDATE session_memories
 		SET agent_relevance_score = CASE
 				WHEN agent_relevance_score IS NULL THEN ?
@@ -242,7 +255,9 @@ export function recordAgentFeedbackInner(
 			END,
 			agent_feedback_count = COALESCE(agent_feedback_count, 0) + 1
 		WHERE session_key = ? AND memory_id = ?
-	`);
+	`;
+	// Optimization: Statement cache
+	const stmt = getCachedStatement(db, sql);
 
 	for (const [memoryId, score] of Object.entries(feedback)) {
 		stmt.run(score, score, sessionKey, memoryId);
@@ -253,11 +268,8 @@ export function recordAgentFeedbackInner(
  * Public entry point: accumulate agent relevance feedback for a session.
  * Fail-open — logs warnings but never throws.
  */
-export function recordAgentFeedback(
-	sessionKey: string | undefined,
-	feedback: Readonly<Record<string, number>>,
-): void {
-	if (!sessionKey || Object.keys(feedback).length === 0 || !existsSync(getMemoryDbPath())) return;
+export function recordAgentFeedback(sessionKey: string | undefined, feedback: Readonly<Record<string, number>>): void {
+	if (!sessionKey || Object.keys(feedback).length === 0 || !checkDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
