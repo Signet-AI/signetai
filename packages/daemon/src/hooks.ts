@@ -1876,8 +1876,17 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		}
 	}
 
+	// Build lightweight metadata header (injected on every prompt)
+	const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+	const now = new Date().toLocaleString("en-US", {
+		timeZone: tz,
+		dateStyle: "full",
+		timeStyle: "short",
+	});
+	const metadataHeader = `# Current Date & Time\n${now} (${tz})\n`;
+
 	if (keywordTerms.length < 1 || vectorQuery.length === 0 || !existsSync(MEMORY_DB)) {
-		return { inject: "", memoryCount: 0 };
+		return { inject: metadataHeader, memoryCount: 0 };
 	}
 
 	try {
@@ -1894,7 +1903,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		);
 
 		if (recall.results.length === 0 || typeof recall.results[0]?.score !== "number" || recall.results[0].score < 0.4) {
-			return { inject: "", memoryCount: 0 };
+			return { inject: metadataHeader, memoryCount: 0 };
 		}
 
 		const budgetSelected = selectWithBudget(
@@ -1923,7 +1932,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		}
 
 		if (selected.length === 0) {
-			return { inject: "", memoryCount: 0 };
+			return { inject: metadataHeader, memoryCount: 0 };
 		}
 
 		const queryTerms = keywordTerms.join(" ");
@@ -1931,7 +1940,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			const dateStr = formatMemoryDate(s.created_at);
 			return `- ${s.content} (${dateStr})`;
 		});
-		let inject = `[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
+		let inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
 
 		// Append agent feedback request if enabled and there are injected memories
 		const selectedIds = selected.map((s) => s.id);

@@ -1,7 +1,6 @@
 pub trait DaemonManager {
     fn start(&self) -> Result<(), Box<dyn std::error::Error>>;
     fn stop(&self) -> Result<(), Box<dyn std::error::Error>>;
-    #[allow(dead_code)]
     fn is_running(&self) -> bool;
 }
 
@@ -9,10 +8,15 @@ pub trait DaemonManager {
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(target_os = "macos")]
-pub mod autostart;
 #[cfg(target_os = "windows")]
 mod windows;
+
+#[cfg(target_os = "macos")]
+pub mod autostart;
+
+#[cfg(target_os = "windows")]
+#[path = "autostart_windows.rs"]
+pub mod autostart;
 
 pub fn create_manager() -> Box<dyn DaemonManager> {
     #[cfg(target_os = "linux")]

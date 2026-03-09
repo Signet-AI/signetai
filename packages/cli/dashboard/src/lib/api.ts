@@ -5,10 +5,12 @@
 
 import { marked } from "marked";
 
-// In production, the dashboard is served by the daemon, so use relative URLs
-// In development, point to the daemon on port 3850
+// When served by the daemon, use relative URLs.
+// When served by Tauri (frontendDist) or Vite dev server, use absolute URL.
 const isDev = import.meta.env.DEV;
-const API_BASE = isDev ? "http://localhost:3850" : "";
+const isTauri =
+	typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
 
 export interface Memory {
 	id: string;

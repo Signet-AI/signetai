@@ -71,13 +71,15 @@ function upsertEntity(
 	// Skip trivially short names like "50", "0", "cli", "npm"
 	if (canonical.length < 4) return null;
 
+	// Look up by canonical_name first, then fall back to name (handles
+	// rows where canonical_name was never backfilled and is still NULL).
 	const existing = db
 		.prepare(
 			`SELECT id, mentions, entity_type FROM entities
-			 WHERE canonical_name = ? AND agent_id = ?
+			 WHERE (canonical_name = ? AND agent_id = ?) OR name = ?
 			 LIMIT 1`,
 		)
-		.get(canonical, agentId) as
+		.get(canonical, agentId, rawName) as
 		| { id: string; mentions: number; entity_type: string }
 		| undefined;
 
@@ -105,13 +107,14 @@ function upsertEntity(
 		).run(id, rawName, canonical, entityType, agentId, now, now);
 		return { id, inserted: true };
 	} catch (e) {
-		// name UNIQUE constraint collision — fall back to existing row
+		// name UNIQUE constraint collision — fall back to existing row.
+		// Don't scope by agent_id here: the UNIQUE is on name alone.
 		const msg = e instanceof Error ? e.message : String(e);
 		if (!msg.includes("UNIQUE constraint")) throw e;
 
 		const fallback = db
-			.prepare("SELECT id FROM entities WHERE name = ? AND agent_id = ? LIMIT 1")
-			.get(rawName, agentId) as { id: string } | undefined;
+			.prepare("SELECT id FROM entities WHERE name = ? LIMIT 1")
+			.get(rawName) as { id: string } | undefined;
 
 		if (fallback) {
 			db.prepare(

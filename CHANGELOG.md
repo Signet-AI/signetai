@@ -2,6 +2,57 @@
 
 All notable changes to Signet are documented here.
 
+## [0.51.0] - 2026-03-09
+
+### Features
+
+- add user-prompt-submit hook to OpenCode plugin
+
+### Bug Fixes
+
+- address review feedback on prompt-submit hook
+- cap pendingInject map to prevent unbounded growth
+
+
+## [0.50.1] - 2026-03-09
+
+### Features
+
+- **tray**: embed dashboard via frontendDist, complete Phase 1
+- **tray**: evolve system tray into full desktop application
+
+### Bug Fixes
+
+- **tray**: address PR #172 round 2 feedback
+- **tray**: address PR #172 review feedback
+
+
+## [0.50.0] - 2026-03-09
+
+### Bug Fixes
+
+- match toCanonicalName() whitespace collapse in migration 027
+- resolve UNIQUE constraint crash in skill reconciler
+
+
+## [0.49.0] - 2026-03-09
+
+### Features
+
+- **native**: add batch cosine similarity, KNN edges, axis normalization, and hybrid score merging
+
+### Bug Fixes
+
+- **native**: address Greptile review — epsilon parity and dead export TODO
+
+
+## [0.48.2] - 2026-03-09
+
+### Features
+
+- inject date/time metadata on every user-prompt-submit hook
+
+
 ## [0.48.1] - 2026-03-09
 
 ### Bug Fixes

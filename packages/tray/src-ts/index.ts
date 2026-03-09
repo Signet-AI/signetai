@@ -10,6 +10,8 @@ import {
 } from "./state";
 import { buildTrayUpdate, type TrayUpdate } from "./menu";
 
+// Port is hardcoded here because browser context can't read env vars.
+// The Rust side reads SIGNET_PORT for its own daemon probes.
 const DAEMON_URL = "http://localhost:3850";
 
 // Poll intervals (ms)
@@ -18,6 +20,11 @@ const HEALTH_STOPPED_MS = 2_000;
 const MEMORIES_MS = 15_000;
 const DIAGNOSTICS_MS = 30_000;
 const EMBEDDINGS_MS = 60_000;
+
+// If daemon doesn't come alive within 15s of app launch, show error
+const AUTO_START_TIMEOUT_MS = 15_000;
+const appStartTime = Date.now();
+let everSeenRunning = false;
 
 let lastUpdateJson = "";
 let isRunning = false;
@@ -38,18 +45,36 @@ async function pollHealth(): Promise<void> {
   const alive = await fetchHealth(DAEMON_URL);
 
   if (alive && !isRunning) {
-    // Just came online – kick off all secondary polls immediately
+    // Just came online — kick off secondary polls
     isRunning = true;
     fetchMemories(DAEMON_URL);
     fetchDiagnostics(DAEMON_URL);
     fetchEmbeddings(DAEMON_URL);
+    // Auto-show dashboard only on first discovery, not on reconnects
+    if (!everSeenRunning) {
+      invoke("open_dashboard").catch((e) => console.error("open_dashboard:", e));
+    }
+    everSeenRunning = true;
   } else if (!alive && isRunning) {
     isRunning = false;
     resetState();
   }
 
-  const state = buildCurrentState();
-  await updateTray(state);
+  // Check auto-start timeout: if daemon never came alive within 15s
+  if (
+    !alive &&
+    !everSeenRunning &&
+    Date.now() - appStartTime > AUTO_START_TIMEOUT_MS
+  ) {
+    const errorState: DaemonState = {
+      kind: "error",
+      message: "Daemon failed to start within 15 seconds",
+    };
+    await updateTray(errorState);
+  } else {
+    const state = buildCurrentState();
+    await updateTray(state);
+  }
 
   const interval = isRunning ? HEALTH_RUNNING_MS : HEALTH_STOPPED_MS;
   setTimeout(pollHealth, interval);

@@ -86,7 +86,7 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
 
     match id_str {
         "open-dashboard" => {
-            let _ = open::that("http://localhost:3850");
+            let _ = commands::open_dashboard_inner(app);
         }
         "start-daemon" => {
             let handle = app.clone();
@@ -112,8 +112,14 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
         "search-memories" => {
             open_search_window(app);
         }
+        "check-for-update" => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = commands::check_for_update(handle).await;
+            });
+        }
         "toggle-autostart" => {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
                 use crate::platform::autostart;
                 if autostart::is_autostart_enabled() {
@@ -123,9 +129,6 @@ fn handle_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent) {
                 }
                 // Rebuild the current menu to reflect the new state
                 if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                    // Rebuild whichever menu is currently showing
-                    // Use stopped menu as a simple refresh — the poll loop
-                    // will replace it with the correct state on next tick
                     if let Ok(menu) = build_stopped_menu(app) {
                         let _ = tray.set_menu(Some(menu));
                     }
@@ -180,7 +183,7 @@ fn open_search_window(app: &tauri::AppHandle) {
         .build();
 }
 
-/// Format a number with thousands separators (e.g. 4605 → "4,605")
+/// Format a number with thousands separators (e.g. 4605 -> "4,605")
 fn format_number(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::with_capacity(s.len() + s.len() / 3);
@@ -380,8 +383,8 @@ pub fn build_running_menu(
             .build(app)?,
     );
 
-    // Autostart toggle (macOS only)
-    #[cfg(target_os = "macos")]
+    // Autostart toggle (macOS and Windows)
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         let autostart_label = if crate::platform::autostart::is_autostart_enabled() {
             "Start at Login ✓"
@@ -396,7 +399,11 @@ pub fn build_running_menu(
 
     builder = builder.item(&PredefinedMenuItem::separator(app)?);
     builder = builder.item(
-        &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
+        &MenuItemBuilder::with_id("check-for-update", "Check for Updates...")
+            .build(app)?,
+    );
+    builder = builder.item(
+        &MenuItemBuilder::with_id("quit", "Quit Signet")
             .build(app)?,
     );
 
@@ -417,10 +424,14 @@ pub fn build_stopped_menu(
             &MenuItemBuilder::with_id("start-daemon", "Start Daemon")
                 .build(app)?,
         )
+        .item(
+            &MenuItemBuilder::with_id("open-dashboard", "Open Dashboard")
+                .build(app)?,
+        )
         .item(&PredefinedMenuItem::separator(app)?);
 
-    // Autostart toggle (macOS only)
-    #[cfg(target_os = "macos")]
+    // Autostart toggle (macOS and Windows)
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let menu = {
         let autostart_label = if crate::platform::autostart::is_autostart_enabled() {
             "Start at Login ✓"
@@ -433,16 +444,16 @@ pub fn build_stopped_menu(
         )
         .item(&PredefinedMenuItem::separator(app)?)
         .item(
-            &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
+            &MenuItemBuilder::with_id("quit", "Quit Signet")
                 .build(app)?,
         )
         .build()?
     };
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let menu = menu
         .item(
-            &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
+            &MenuItemBuilder::with_id("quit", "Quit Signet")
                 .build(app)?,
         )
         .build()?;
@@ -472,10 +483,14 @@ pub fn build_error_menu(
             &MenuItemBuilder::with_id("restart-daemon", "Restart Daemon")
                 .build(app)?,
         )
+        .item(
+            &MenuItemBuilder::with_id("open-dashboard", "Open Dashboard")
+                .build(app)?,
+        )
         .item(&PredefinedMenuItem::separator(app)?);
 
-    // Autostart toggle (macOS only)
-    #[cfg(target_os = "macos")]
+    // Autostart toggle (macOS and Windows)
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let menu = {
         let autostart_label = if crate::platform::autostart::is_autostart_enabled() {
             "Start at Login ✓"
@@ -488,16 +503,16 @@ pub fn build_error_menu(
         )
         .item(&PredefinedMenuItem::separator(app)?)
         .item(
-            &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
+            &MenuItemBuilder::with_id("quit", "Quit Signet")
                 .build(app)?,
         )
         .build()?
     };
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let menu = menu
         .item(
-            &MenuItemBuilder::with_id("quit", "Quit Signet Tray")
+            &MenuItemBuilder::with_id("quit", "Quit Signet")
                 .build(app)?,
         )
         .build()?;

@@ -715,7 +715,8 @@ describe("handleUserPromptSubmit", () => {
 		});
 
 		expect(result.memoryCount).toBe(0);
-		expect(result.inject).toBe("");
+		expect(result.inject).toContain("Current Date & Time");
+		expect(result.inject).not.toContain("[signet:recall");
 	});
 
 	test("skips very short prompts with no words >= 3 chars", async () => {
@@ -727,7 +728,8 @@ describe("handleUserPromptSubmit", () => {
 		});
 
 		expect(result.memoryCount).toBe(0);
-		expect(result.inject).toBe("");
+		expect(result.inject).toContain("Current Date & Time");
+		expect(result.inject).not.toContain("[signet:recall");
 	});
 
 	test("handles missing database gracefully", async () => {
@@ -737,7 +739,8 @@ describe("handleUserPromptSubmit", () => {
 		});
 
 		expect(result.memoryCount).toBe(0);
-		expect(result.inject).toBe("");
+		expect(result.inject).toContain("Current Date & Time");
+		expect(result.inject).not.toContain("[signet:recall");
 	});
 
 	test("applies character budget", async () => {
@@ -755,9 +758,9 @@ describe("handleUserPromptSubmit", () => {
 
 		// Should be capped by budget, not return all 20
 		if (result.memoryCount > 0) {
-			const totalChars = result.inject.length;
-			// Inject includes "[relevant memories]\n" prefix
-			expect(totalChars).toBeLessThan(700);
+			// Memory budget is 500 chars, but inject also includes metadata header,
+			// recall status line, and optional feedback block
+			expect(result.memoryCount).toBeLessThan(20);
 		}
 	});
 
@@ -775,7 +778,8 @@ describe("handleUserPromptSubmit", () => {
 		});
 
 		expect(result.memoryCount).toBe(0);
-		expect(result.inject).toBe("");
+		expect(result.inject).toContain("Current Date & Time");
+		expect(result.inject).not.toContain("[signet:recall");
 	});
 
 });

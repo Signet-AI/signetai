@@ -216,44 +216,61 @@ export function hybridSearch(
 		: [];
 	const keywordResults = keywordSearch(db, queryText, topK);
 
-	// Build score maps for efficient lookup
-	const vectorMap = new Map(vectorResults.map((r) => [r.id, r.score]));
-	const keywordMap = new Map(keywordResults.map((r) => [r.id, r.score]));
-
 	// Merge scores from both sources
-	const allIds = new Set([...vectorMap.keys(), ...keywordMap.keys()]);
-	const scored: Array<{
+	let scored: Array<{
 		id: string;
 		score: number;
 		source: "vector" | "keyword" | "hybrid";
-	}> = [];
+	}>;
 
-	for (const id of allIds) {
-		const vectorScore = vectorMap.get(id) ?? 0;
-		const keywordScore = keywordMap.get(id) ?? 0;
+	if (native !== null) {
+		const narrowSource = (s: string): "vector" | "keyword" | "hybrid" => {
+			if (s === "vector" || s === "keyword" || s === "hybrid") return s;
+			return "keyword";
+		};
+		scored = native.mergeHybridScores(
+			vectorResults.map((r) => r.id),
+			vectorResults.map((r) => r.score),
+			keywordResults.map((r) => r.id),
+			keywordResults.map((r) => r.score),
+			alpha,
+			minScore,
+		).map((r) => ({
+			id: r.id,
+			score: r.score,
+			source: narrowSource(r.source),
+		}));
+	} else {
+		const vectorMap = new Map(vectorResults.map((r) => [r.id, r.score]));
+		const keywordMap = new Map(keywordResults.map((r) => [r.id, r.score]));
+		const allIds = new Set([...vectorMap.keys(), ...keywordMap.keys()]);
+		scored = [];
 
-		let score: number;
-		let source: "vector" | "keyword" | "hybrid";
+		for (const id of allIds) {
+			const vectorScore = vectorMap.get(id) ?? 0;
+			const keywordScore = keywordMap.get(id) ?? 0;
 
-		if (vectorScore > 0 && keywordScore > 0) {
-			// Blend scores using alpha weight
-			score = alpha * vectorScore + (1 - alpha) * keywordScore;
-			source = "hybrid";
-		} else if (vectorScore > 0) {
-			score = vectorScore;
-			source = "vector";
-		} else {
-			score = keywordScore;
-			source = "keyword";
+			let score: number;
+			let source: "vector" | "keyword" | "hybrid";
+
+			if (vectorScore > 0 && keywordScore > 0) {
+				score = alpha * vectorScore + (1 - alpha) * keywordScore;
+				source = "hybrid";
+			} else if (vectorScore > 0) {
+				score = vectorScore;
+				source = "vector";
+			} else {
+				score = keywordScore;
+				source = "keyword";
+			}
+
+			if (score >= minScore) {
+				scored.push({ id, score, source });
+			}
 		}
 
-		if (score >= minScore) {
-			scored.push({ id, score, source });
-		}
+		scored.sort((a, b) => b.score - a.score);
 	}
-
-	// Sort by score descending
-	scored.sort((a, b) => b.score - a.score);
 
 	// Fetch full memory rows for top results
 	const topIds = scored.slice(0, limit).map((s) => s.id);

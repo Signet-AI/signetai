@@ -1,11 +1,24 @@
 use serde::Deserialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, PhysicalSize, Size, WebviewWindowBuilder};
 
 use crate::daemon;
 use crate::tray;
 
 const TRAY_ID: &str = "signet-tray";
-const DAEMON_URL: &str = "http://localhost:3850";
+const DEFAULT_PORT: u16 = 3850;
+
+/// Get the configured daemon port, respecting SIGNET_PORT env var.
+pub(crate) fn daemon_port() -> u16 {
+    std::env::var("SIGNET_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_PORT)
+}
+
+/// Get the daemon URL, respecting SIGNET_PORT env var.
+pub(crate) fn daemon_url() -> String {
+    format!("http://localhost:{}", daemon_port())
+}
 
 #[derive(Deserialize, Clone)]
 #[allow(dead_code)]
@@ -55,7 +68,13 @@ pub(crate) async fn restart_daemon_inner(
     _app: &AppHandle,
 ) -> Result<(), String> {
     daemon::stop().map_err(|e| e.to_string())?;
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Brief pause between stop/start. Uses spawn_blocking to avoid
+    // holding the async runtime thread during the wait.
+    tauri::async_runtime::spawn_blocking(|| {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     daemon::start().map_err(|e| e.to_string())
 }
 
@@ -79,9 +98,52 @@ pub async fn get_daemon_pid() -> Result<Option<u32>, String> {
     daemon::read_pid().map_err(|e| e.to_string())
 }
 
+/// Show or create the main dashboard window.
+pub(crate) fn open_dashboard_inner(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.show().map_err(|e| e.to_string())?;
+        win.set_focus().map_err(|e| e.to_string())?;
+        // Wayland workaround: WebKit2GTK doesn't recalculate input hit-test
+        // regions after showing a hidden window. Force a resize to fix it.
+        #[cfg(target_os = "linux")]
+        {
+            let w = win.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                if let Ok(size) = w.inner_size() {
+                    let _ = w.set_size(Size::Physical(PhysicalSize {
+                        width: size.width + 1,
+                        height: size.height,
+                    }));
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    let _ = w.set_size(Size::Physical(PhysicalSize {
+                        width: size.width,
+                        height: size.height,
+                    }));
+                }
+            });
+        }
+    } else {
+        WebviewWindowBuilder::new(
+            app,
+            "main",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("Signet")
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(800.0, 600.0)
+        .center()
+        .decorations(false)
+        .zoom_hotkeys_enabled(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub async fn open_dashboard() -> Result<(), String> {
-    open::that("http://localhost:3850").map_err(|e| e.to_string())
+pub async fn open_dashboard(app: AppHandle) -> Result<(), String> {
+    open_dashboard_inner(&app)
 }
 
 /// Format a number with comma separators
@@ -183,6 +245,7 @@ pub async fn update_tray(
 #[tauri::command]
 pub async fn quick_capture(content: String) -> Result<(), String> {
     let client = reqwest::Client::new();
+    let base = daemon_url();
     let body = serde_json::json!({
         "content": content,
         "who": "tray-capture",
@@ -190,7 +253,7 @@ pub async fn quick_capture(content: String) -> Result<(), String> {
     });
 
     let res = client
-        .post(format!("{}/api/memory/remember", DAEMON_URL))
+        .post(format!("{}/api/memory/remember", base))
         .json(&body)
         .timeout(std::time::Duration::from_secs(5))
         .send()
@@ -212,13 +275,14 @@ pub async fn search_memories(
     limit: Option<u32>,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
+    let base = daemon_url();
     let body = serde_json::json!({
         "query": query,
         "limit": limit.unwrap_or(10)
     });
 
     let res = client
-        .post(format!("{}/api/memory/recall", DAEMON_URL))
+        .post(format!("{}/api/memory/recall", base))
         .json(&body)
         .timeout(std::time::Duration::from_secs(10))
         .send()
@@ -249,6 +313,13 @@ pub async fn quit_search_window(app: AppHandle) -> Result<(), String> {
         win.close().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Check for app updates. Currently stubbed — requires
+/// tauri-plugin-updater and a signing keypair (Phase 4).
+#[tauri::command]
+pub async fn check_for_update(_app: AppHandle) -> Result<Option<String>, String> {
+    Ok(None) // No updater configured yet
 }
 
 #[tauri::command]
