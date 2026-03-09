@@ -5498,7 +5498,7 @@ app.get("/api/sessions/summaries", (c) => {
 	const project = c.req.query("project");
 	const depthRaw = c.req.query("depth");
 	const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
-	if (depthNum !== undefined && (Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0)) {
+	if (depthNum !== undefined && (Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0 || depthRaw?.trim() === "")) {
 		return c.json({ error: "depth must be a non-negative integer" }, 400);
 	}
 	const limitParsed = Number.parseInt(c.req.query("limit") ?? "50", 10);
@@ -6666,7 +6666,7 @@ app.get("/api/repair/cold-stats", (c) => {
 				COUNT(*) as total,
 				MIN(archived_at) as oldest,
 				MAX(archived_at) as newest,
-				SUM(LENGTH(CAST(content AS BLOB))) as total_bytes
+				SUM(LENGTH(CAST(content AS BLOB)) + LENGTH(CAST(COALESCE(original_row_json, '') AS BLOB))) as total_bytes
 			FROM memories_cold
 		`).get() as { total: number; oldest: string | null; newest: string | null; total_bytes: number | null } | undefined;
 

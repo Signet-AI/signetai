@@ -15,6 +15,31 @@
  */
 
 import type { DbAccessor, WriteDb } from "../db-accessor";
+
+/** Typed shape of a row fetched from the memories table for cold archival. */
+interface MemoryRow {
+	readonly id: unknown;
+	readonly type: unknown;
+	readonly category: unknown;
+	readonly content: unknown;
+	readonly confidence: unknown;
+	readonly importance: unknown;
+	readonly source_id: unknown;
+	readonly source_type: unknown;
+	readonly tags: unknown;
+	readonly who: unknown;
+	readonly why: unknown;
+	readonly project: unknown;
+	readonly content_hash: unknown;
+	readonly normalized_content: unknown;
+	readonly extraction_status: unknown;
+	readonly embedding_model: unknown;
+	readonly extraction_model: unknown;
+	readonly update_count: unknown;
+	readonly created_at: unknown;
+	readonly agent_id: unknown;
+	readonly [key: string]: unknown;
+}
 import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
 import { txDecrementEntityMentions } from "./graph-transactions";
 import { purgeOldTrainingPairs } from "../predictor-training-pairs";
@@ -173,22 +198,25 @@ export function archiveToCold(
 	// captures all columns regardless of future schema additions).
 	const rows = db
 		.prepare(`SELECT * FROM memories WHERE id IN (${placeholders})`)
-		.all(...memoryIds) as Array<Record<string, unknown>>;
+		.all(...memoryIds) as MemoryRow[];
 
+	// Each archival event gets a fresh archive_id so multiple snapshots for the
+	// same memory (e.g. supersession then purge) are preserved independently.
 	const stmt = db.prepare(`
-		INSERT OR IGNORE INTO memories_cold (
-			id, type, category, content, confidence, importance,
+		INSERT INTO memories_cold (
+			archive_id, memory_id, type, category, content, confidence, importance,
 			source_id, source_type, tags, who, why, project,
 			content_hash, normalized_content, extraction_status,
 			embedding_model, extraction_model, update_count,
 			original_created_at, archived_at, archived_reason,
 			cold_source_id, agent_id, original_row_json
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`);
 
 	for (const row of rows) {
 		stmt.run(
+			crypto.randomUUID(),
 			row.id,
 			row.type,
 			row.category,

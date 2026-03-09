@@ -11,7 +11,8 @@ import type { MigrationDb } from "./index";
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memories_cold (
-			id TEXT PRIMARY KEY,
+			archive_id TEXT PRIMARY KEY,
+			memory_id TEXT NOT NULL,
 			type TEXT DEFAULT 'fact',
 			category TEXT,
 			content TEXT NOT NULL,
@@ -37,6 +38,7 @@ export function up(db: MigrationDb): void {
 			original_row_json TEXT
 		);
 
+		CREATE INDEX IF NOT EXISTS idx_cold_memory_id ON memories_cold(memory_id);
 		CREATE INDEX IF NOT EXISTS idx_cold_agent ON memories_cold(agent_id);
 		CREATE INDEX IF NOT EXISTS idx_cold_project ON memories_cold(project);
 		CREATE INDEX IF NOT EXISTS idx_cold_archived_at ON memories_cold(archived_at);
