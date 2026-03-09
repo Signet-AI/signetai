@@ -1,18 +1,32 @@
 {
   "$schema": "./gen/schemas/desktop-schema.json",
-  "productName": "Signet Tray",
+  "productName": "Signet",
   "version": "0.1.84",
-  "identifier": "ai.signet.tray",
+  "identifier": "ai.signet.app",
   "build": {
     "beforeDevCommand": "bun run build:ts",
     "beforeBuildCommand": "bun run build:ts",
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Signet",
+        "url": "http://localhost:3850",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "visible": false,
+        "decorations": false,
+        "center": true,
+        "zoomHotkeysEnabled": true
+      }
+    ],
     "security": {
       "capabilities": ["default"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost http://localhost:*"
+      "csp": "default-src 'self' ipc: http://ipc.localhost http://localhost:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:*; style-src 'self' 'unsafe-inline' http://localhost:*; img-src 'self' http://localhost:* data: blob:; font-src 'self' http://localhost:* data:; connect-src ipc: http://ipc.localhost http://localhost:*; frame-src http://localhost:*"
     },
     "trayIcon": {
       "iconPath": "icons/signet-stopped.png",

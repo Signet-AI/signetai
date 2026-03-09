@@ -1,8 +1,8 @@
 [package]
-name = "signet-tray"
+name = "signet-app"
 version = "0.1.84"
 edition = "2021"
-description = "Signet system tray application"
+description = "Signet desktop application"
 
 [lib]
 name = "signet_tray_lib"
@@ -14,11 +14,17 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
-open = "5"
-libc = "0.2"
+url = "2"
 png = "0.17"
 reqwest = { version = "0.12", features = ["json"] }
 chrono = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_System_Threading", "Win32_Foundation"] }

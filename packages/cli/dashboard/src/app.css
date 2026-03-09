@@ -646,6 +646,13 @@ h3 {
 	font-variant-numeric: tabular-nums;
 }
 
+/* Keep Lucide icon stroke weight consistent across zoom levels.
+   WebKit page zoom scales via transforms; non-scaling-stroke
+   prevents strokes from thickening at higher zoom. */
+svg.lucide [stroke] {
+	vector-effect: non-scaling-stroke;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
 	*,
