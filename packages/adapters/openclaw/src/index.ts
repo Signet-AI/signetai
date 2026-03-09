@@ -129,6 +129,10 @@ function firstNonEmptyString(...values: readonly unknown[]): string | undefined 
 	return undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
 function isAssistantMessage(message: Record<string, unknown>): boolean {
 	const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
 	const sender = typeof message.sender === "string" ? message.sender.toLowerCase() : "";
@@ -144,8 +148,8 @@ function getMessageText(message: Record<string, unknown>): string | undefined {
 
 	const textParts: string[] = [];
 	for (const chunk of message.content) {
-		if (typeof chunk !== "object" || chunk === null) continue;
-		const part = chunk as Record<string, unknown>;
+		if (!isRecord(chunk)) continue;
+		const part = chunk;
 		if (part.type !== "text") continue;
 		if (typeof part.text === "string" && part.text.trim().length > 0) {
 			textParts.push(part.text);
@@ -172,9 +176,8 @@ function extractLastAssistantMessage(event: Record<string, unknown>): string | u
 
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const raw = messages[i];
-		if (typeof raw !== "object" || raw === null) continue;
-
-		const message = raw as Record<string, unknown>;
+		if (!isRecord(raw)) continue;
+		const message = raw;
 		if (!isAssistantMessage(message)) continue;
 
 		const text = getMessageText(message);
@@ -1253,7 +1256,10 @@ const signetPlugin = {
 			sessionKey?: string;
 			agentId?: string;
 		} => {
-			const sessionContext = ctx as Record<string, unknown> | undefined;
+			if (!isRecord(ctx)) {
+				return {};
+			}
+			const sessionContext = ctx;
 			return {
 				sessionKey: typeof sessionContext?.sessionKey === "string" ? sessionContext.sessionKey : undefined,
 				agentId: typeof sessionContext?.agentId === "string" ? sessionContext.agentId : undefined,
@@ -1280,7 +1286,7 @@ const signetPlugin = {
 					agentId,
 				});
 				if (startResult) {
-					sessionlessSessionStarts.set(sessionlessKey, now);
+					sessionlessSessionStarts.set(sessionlessKey, Date.now());
 				}
 				return;
 			}
@@ -1304,7 +1310,7 @@ const signetPlugin = {
 			sessionKey: string | undefined,
 			agentId: string | undefined,
 		): Promise<unknown> => {
-			const rawPrompt = event.prompt as string | undefined;
+			const rawPrompt = typeof event.prompt === "string" ? event.prompt : undefined;
 			const prompt = rawPrompt ? extractUserMessage(rawPrompt) : undefined;
 			if (!prompt || prompt.length <= 3) {
 				return undefined;
@@ -1335,7 +1341,7 @@ const signetPlugin = {
 			if (!result) {
 				return undefined;
 			}
-			recentPromptTurns.set(promptTurnKey, now);
+			recentPromptTurns.set(promptTurnKey, Date.now());
 			return buildInjectionResult(result);
 		};
 
@@ -1364,7 +1370,7 @@ const signetPlugin = {
 		api.on("agent_end", async (_event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
 			if (!cfg.enabled) return undefined;
 
-			const sessionKey = (ctx as Record<string, unknown> | undefined)?.sessionKey as string | undefined;
+			const { sessionKey } = resolveHookContext(ctx);
 
 			await onSessionEnd("openclaw", { ...opts, sessionKey });
 			if (sessionKey) {

@@ -24,14 +24,18 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { runInNewContext } from "node:vm";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
+import { parse as parseJson5 } from "json5";
 
 // ============================================================================
 // Deep merge helper
 // ============================================================================
 
 type JsonObject = Record<string, unknown>;
+
+function isJsonObject(value: unknown): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 interface OpenClawConfigShape {
 	hooks?: {
@@ -196,14 +200,16 @@ function stripTrailingCommas(source: string): string {
 
 function parseJsonOrJson5(raw: string): JsonObject {
 	const content = raw.replace(/^\uFEFF/, "");
+	let lastError: Error | null = null;
 
 	try {
-		const parsed = JSON.parse(content);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		const parsed: unknown = JSON.parse(content);
+		if (!isJsonObject(parsed)) {
 			throw new Error("Top-level config must be an object");
 		}
-		return parsed as JsonObject;
-	} catch {
+		return parsed;
+	} catch (error) {
+		lastError = error instanceof Error ? error : new Error(String(error));
 		// Fallback to JSON5-like parsing.
 	}
 
@@ -211,21 +217,26 @@ function parseJsonOrJson5(raw: string): JsonObject {
 	const withoutTrailingCommas = stripTrailingCommas(withoutComments);
 
 	try {
-		const parsed = JSON.parse(withoutTrailingCommas);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		const parsed: unknown = JSON.parse(withoutTrailingCommas);
+		if (!isJsonObject(parsed)) {
 			throw new Error("Top-level config must be an object");
 		}
-		return parsed as JsonObject;
-	} catch {
-		// Fall through to the isolated expression parser.
+		return parsed;
+	} catch (error) {
+		lastError = error instanceof Error ? error : new Error(String(error));
 	}
 
-	const evaluated = runInNewContext(`(${withoutComments})`, {}, { timeout: 250 });
-	if (!evaluated || typeof evaluated !== "object" || Array.isArray(evaluated)) {
-		throw new Error("Top-level config must be an object");
+	try {
+		const parsed: unknown = parseJson5(withoutComments);
+		if (!isJsonObject(parsed)) {
+			throw new Error("Top-level config must be an object");
+		}
+		return parsed;
+	} catch (error) {
+		const json5Error = error instanceof Error ? error : new Error(String(error));
+		const priorError = lastError ? `; prior parse error: ${lastError.message}` : "";
+		throw new Error(`could not parse JSON/JSON5 config (${json5Error.message}${priorError})`);
 	}
-
-	return evaluated as JsonObject;
 }
 
 // ============================================================================
@@ -565,6 +576,12 @@ export class OpenClawConnector extends BaseConnector {
 		const seen = new Set<string>();
 		const candidates: string[] = [];
 		const configFileNames = ["openclaw.json", "clawdbot.json", "moldbot.json", "moltbot.json"] as const;
+		const namedConfigPairs = [
+			{ dirName: "openclaw", fileName: "openclaw.json" },
+			{ dirName: "clawdbot", fileName: "clawdbot.json" },
+			{ dirName: "moldbot", fileName: "moldbot.json" },
+			{ dirName: "moltbot", fileName: "moltbot.json" },
+		] as const;
 
 		const push = (rawPath: string | undefined) => {
 			if (!rawPath) return;
@@ -618,16 +635,8 @@ export class OpenClawConnector extends BaseConnector {
 		push(process.env.MOLDBOT_HOME ? join(this.expandPath(process.env.MOLDBOT_HOME), "moldbot.json") : undefined);
 		push(process.env.MOLTBOT_HOME ? join(this.expandPath(process.env.MOLTBOT_HOME), "moltbot.json") : undefined);
 
-		const defaultStateDirs = [
-			join(home, ".openclaw"),
-			join(home, ".clawdbot"),
-			join(home, ".moldbot"),
-			join(home, ".moltbot"),
-		];
-		for (const stateDir of defaultStateDirs) {
-			for (const filename of configFileNames) {
-				push(join(stateDir, filename));
-			}
+		for (const pair of namedConfigPairs) {
+			push(join(home, `.${pair.dirName}`, pair.fileName));
 		}
 
 		const xdgConfigHome = process.env.XDG_CONFIG_HOME
@@ -638,11 +647,9 @@ export class OpenClawConnector extends BaseConnector {
 			: join(home, ".local", "state");
 
 		// XDG fallbacks for older non-default installs.
-		for (const dirName of ["openclaw", "clawdbot", "moldbot", "moltbot"]) {
-			for (const filename of configFileNames) {
-				push(join(xdgConfigHome, dirName, filename));
-				push(join(xdgStateHome, dirName, filename));
-			}
+		for (const pair of namedConfigPairs) {
+			push(join(xdgConfigHome, pair.dirName, pair.fileName));
+			push(join(xdgStateHome, pair.dirName, pair.fileName));
 		}
 
 		return candidates;
