@@ -180,6 +180,7 @@ export interface DocumentCreateResult {
   readonly id: string;
   readonly status: string;
   readonly deduplicated?: boolean;
+  readonly jobId?: string;
 }
 
 export interface DocumentListResponse {
@@ -210,16 +211,29 @@ export interface DocumentDeleteResult {
 
 export interface JobStatus {
   readonly id: string;
-  readonly memory_id: string;
+  readonly memory_id: string | null;
+  readonly document_id?: string | null;
   readonly job_type: string;
-  readonly status: "pending" | "leased" | "retry_scheduled" | "done" | "dead";
-  readonly attempt_count: number;
+  readonly status:
+    | "pending"
+    | "leased"
+    | "retry_scheduled"
+    | "failed"
+    | "completed"
+    | "done"
+    | "dead";
+  readonly attempt_count?: number;
+  readonly attempts?: number;
   readonly max_attempts: number;
   readonly next_attempt_at: string | null;
-  readonly last_error: string | null;
-  readonly last_error_code: string | null;
+  readonly last_error?: string | null;
+  readonly last_error_code?: string | null;
+  readonly error?: string | null;
   readonly created_at: string;
   readonly updated_at: string;
+  readonly leased_at?: string | null;
+  readonly completed_at?: string | null;
+  readonly failed_at?: string | null;
 }
 
 // Health / status types
@@ -261,3 +275,538 @@ export interface StatusResponse {
     readonly status: string;
   };
 }
+
+// Timeline types
+
+export interface TimelineEvent {
+  readonly id: string;
+  readonly entityType: string;
+  readonly entityId: string;
+  readonly event: string;
+  readonly timestamp: string;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface TimelineResponse {
+  readonly events: readonly TimelineEvent[];
+}
+
+export interface TimelineExportResponse {
+  readonly meta: {
+    readonly version: string;
+    readonly exportedAt: string;
+    readonly entityId: string;
+  };
+  readonly timeline: TimelineResponse;
+}
+
+// Pipeline types
+
+export interface PipelineStatusResponse {
+  readonly workers: Record<string, unknown>;
+  readonly queues: {
+    readonly memory: Record<string, number>;
+    readonly summary: Record<string, number>;
+  };
+  readonly diagnostics: Record<string, unknown>;
+  readonly latency: Record<string, unknown>;
+  readonly errorSummary: Record<string, unknown>;
+  readonly mode: "disabled" | "frozen" | "shadow" | "controlled-write";
+  readonly feedback: Record<string, unknown>;
+  readonly traversal: {
+    readonly enabled: boolean;
+    readonly lastRun: string | null;
+  };
+  readonly predictor: {
+    readonly running: boolean;
+    readonly modelReady: boolean;
+    readonly coldStartExited: boolean;
+    readonly successRate: number;
+    readonly alpha: number;
+  };
+}
+
+// Telemetry types
+
+export interface TelemetryEvent {
+  readonly id: string;
+  readonly event: string;
+  readonly timestamp: string;
+  readonly properties: Record<string, unknown>;
+}
+
+export interface TelemetryEventsResponse {
+  readonly events: readonly TelemetryEvent[];
+  readonly enabled: boolean;
+}
+
+export interface TelemetryStatsDisabledResponse {
+  readonly enabled: false;
+}
+
+export interface TelemetryStatsEnabledResponse {
+  readonly enabled: true;
+  readonly totalEvents: number;
+  readonly llm: {
+    readonly calls: number;
+    readonly errors: number;
+    readonly totalInputTokens: number;
+    readonly totalOutputTokens: number;
+    readonly totalCost: number;
+    readonly p50: number;
+    readonly p95: number;
+  };
+  readonly pipelineErrors: number;
+}
+
+export type TelemetryStatsResponse =
+  | TelemetryStatsDisabledResponse
+  | TelemetryStatsEnabledResponse;
+
+// Config types
+
+export interface ConfigFile {
+  readonly name: string;
+  readonly content: string;
+  readonly size: number;
+}
+
+export interface ConfigListResponse {
+  readonly files: readonly ConfigFile[];
+  readonly error?: string;
+}
+
+export interface ConfigWriteResponse {
+  readonly success: boolean;
+  readonly error?: string;
+}
+
+// Identity types
+
+export interface IdentityResponse {
+  readonly name: string;
+  readonly creature: string;
+  readonly vibe: string;
+}
+
+// Embeddings types
+
+export interface EmbeddingStatusResponse {
+  readonly provider: "native" | "ollama" | "openai" | "none";
+  readonly model: string;
+  readonly available: boolean;
+  readonly dimensions?: number;
+  readonly base_url: string;
+  readonly error?: string;
+  readonly checkedAt: string;
+}
+
+export interface EmbeddingHealthResponse {
+  readonly healthy: boolean;
+  readonly totalMemories: number;
+  readonly embeddedCount: number;
+  readonly unembeddedCount: number;
+  readonly coveragePercent: number;
+}
+
+export interface EmbeddingProjectionNode {
+  readonly id: string;
+  readonly x: number;
+  readonly y: number;
+  readonly z?: number;
+  readonly [key: string]: unknown;
+}
+
+export interface EmbeddingProjectionEdge {
+  readonly source: string;
+  readonly target: string;
+  readonly [key: string]: unknown;
+}
+
+export interface EmbeddingProjectionReadyResponse {
+  readonly status: "ready";
+  readonly dimensions: 2 | 3;
+  readonly count: number;
+  readonly total: number;
+  readonly limit: number;
+  readonly offset: number;
+  readonly hasMore: boolean;
+  readonly nodes: readonly EmbeddingProjectionNode[];
+  readonly edges: readonly EmbeddingProjectionEdge[];
+  readonly cachedAt?: string;
+}
+
+export interface EmbeddingProjectionComputingResponse {
+  readonly status: "computing";
+  readonly dimensions: 2 | 3;
+}
+
+export interface EmbeddingProjectionErrorResponse {
+  readonly status: "error";
+  readonly message: string;
+}
+
+export type EmbeddingProjectionResponse =
+  | EmbeddingProjectionReadyResponse
+  | EmbeddingProjectionComputingResponse
+  | EmbeddingProjectionErrorResponse;
+
+// Harness types
+
+export interface Harness {
+  readonly name: string;
+  readonly id: string;
+  readonly path: string;
+  readonly exists: boolean;
+  readonly lastSeen: string | null;
+}
+
+export interface HarnessListResponse {
+  readonly harnesses: readonly Harness[];
+}
+
+export interface HarnessRegenerateResponse {
+  readonly success: boolean;
+  readonly message?: string;
+  readonly output?: string;
+  readonly error?: string;
+}
+
+// Checkpoint types
+
+export interface Checkpoint {
+  readonly id: string;
+  readonly sessionKey: string;
+  readonly project: string;
+  readonly checkpointType: string;
+  readonly createdAt: string;
+  readonly data: Record<string, unknown>;
+}
+
+export interface CheckpointListResponse {
+  readonly checkpoints: readonly Checkpoint[];
+  readonly count: number;
+}
+
+// Features types
+
+export interface FeaturesResponse {
+  readonly [key: string]: boolean | string | number;
+}
+
+// Greeting types
+
+export interface GreetingResponse {
+  readonly greeting: string;
+  readonly cachedAt: string;
+}
+
+// Session types
+
+export interface SessionInfo {
+  readonly key: string;
+  readonly runtimePath: "plugin" | "legacy";
+  readonly claimedAt: string;
+  readonly bypassed: boolean;
+}
+
+export interface SessionListResponse {
+  readonly sessions: readonly SessionInfo[];
+  readonly count: number;
+}
+
+// Git sync types
+
+export interface GitStatus {
+  readonly isRepo: boolean;
+  readonly branch?: string;
+  readonly remote?: string;
+  readonly hasCredentials: boolean;
+  readonly authMethod?: string;
+  readonly autoSync: boolean;
+  readonly lastSync?: string;
+  readonly uncommittedChanges?: number;
+  readonly unpushedCommits?: number;
+  readonly unpulledCommits?: number;
+}
+
+export interface GitPullResult {
+  readonly success: boolean;
+  readonly message: string;
+  readonly changes?: number;
+}
+
+export interface GitPushResult {
+  readonly success: boolean;
+  readonly message: string;
+  readonly changes?: number;
+}
+
+export interface GitSyncResult {
+  readonly success: boolean;
+  readonly message: string;
+  readonly pulled?: number;
+  readonly pushed?: number;
+}
+
+export interface GitConfig {
+  readonly autoSync: boolean;
+  readonly syncInterval: number;
+  readonly remote: string;
+  readonly branch: string;
+}
+
+// Task/scheduler types
+
+export interface TaskRecord {
+  readonly id: string;
+  readonly name: string;
+  readonly prompt: string;
+  readonly cron_expression: string;
+  readonly harness: string;
+  readonly working_directory: string | null;
+  readonly enabled: boolean;
+  readonly next_run_at: string | null;
+  readonly skill_name: string | null;
+  readonly skill_mode: string | null;
+  readonly last_run_at: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly last_run_status?: string;
+  readonly last_run_exit_code?: number | null;
+}
+
+export interface TaskRun {
+  readonly id: string;
+  readonly task_id: string;
+  readonly status: string;
+  readonly exit_code: number | null;
+  readonly started_at: string;
+  readonly completed_at: string | null;
+  readonly error: string | null;
+}
+
+export interface TaskCreateResult {
+  readonly id: string;
+  readonly nextRunAt: string;
+}
+
+export interface TaskListResponse {
+  readonly tasks: readonly TaskRecord[];
+  readonly presets: Record<string, string>;
+}
+
+export interface TaskGetResponse {
+  readonly task: TaskRecord;
+  readonly runs: readonly TaskRun[];
+}
+
+export interface TaskRunListResponse {
+  readonly runs: readonly TaskRun[];
+  readonly total: number;
+  readonly hasMore: boolean;
+}
+
+export interface TaskUpdatePayload {
+  readonly name?: string;
+  readonly prompt?: string;
+  readonly cronExpression?: string;
+  readonly harness?: string;
+  readonly workingDirectory?: string;
+  readonly enabled?: boolean;
+  readonly skillName?: string;
+  readonly skillMode?: string;
+}
+
+export interface TaskCreatePayload {
+  readonly name: string;
+  readonly prompt: string;
+  readonly cronExpression: string;
+  readonly harness: string;
+  readonly workingDirectory?: string;
+  readonly skillName?: string;
+  readonly skillMode?: string;
+}
+
+// Secret types
+
+export interface SecretListResponse {
+  readonly secrets: readonly string[];
+}
+
+export interface SecretExecResult {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly code: number;
+}
+
+export interface OnePasswordStatus {
+  readonly configured: boolean;
+  readonly connected: boolean;
+  readonly vaultCount?: number;
+  readonly vaults: readonly { readonly id: string; readonly name: string }[];
+  readonly error?: string;
+}
+
+export interface OnePasswordConnectResult {
+  readonly success: boolean;
+  readonly connected: boolean;
+  readonly vaultCount: number;
+  readonly vaults: readonly { readonly id: string; readonly name: string }[];
+}
+
+export interface OnePasswordImportResult {
+  readonly success: boolean;
+  readonly vaultsScanned: number;
+  readonly itemsScanned: number;
+  readonly importedCount: number;
+  readonly errorCount: number;
+}
+
+// Skill types
+
+export interface SkillMeta {
+  readonly description: string;
+  readonly version?: string;
+  readonly author?: string;
+  readonly maintainer?: string;
+  readonly license?: string;
+  readonly user_invocable?: boolean;
+  readonly arg_hint?: string;
+  readonly verified?: boolean;
+  readonly permissions?: readonly string[];
+}
+
+export interface InstalledSkill {
+  readonly name: string;
+  readonly path: string;
+  readonly meta: SkillMeta;
+}
+
+export interface SkillListResponse {
+  readonly skills: readonly InstalledSkill[];
+  readonly count: number;
+}
+
+export interface SkillBrowseResult {
+  readonly name: string;
+  readonly fullName: string;
+  readonly installs: string;
+  readonly installsRaw: number;
+  readonly popularityScore: number;
+  readonly description: string;
+  readonly installed: boolean;
+  readonly provider: "skills.sh" | "clawhub";
+  readonly category: string;
+  readonly downloads?: number;
+  readonly maintainer?: string;
+  readonly stars?: number;
+  readonly versions?: number;
+  readonly author?: string;
+}
+
+export interface SkillBrowseResponse {
+  readonly results: readonly SkillBrowseResult[];
+  readonly total: number;
+}
+
+export interface SkillSearchResponse {
+  readonly results: readonly SkillBrowseResult[];
+}
+
+export interface SkillGetResponse extends SkillMeta {
+  readonly name: string;
+  readonly path?: string;
+  readonly content: string;
+}
+
+export interface SkillInstallResult {
+  readonly success: boolean;
+  readonly name: string;
+  readonly output?: string;
+  readonly error?: string;
+}
+
+export interface SkillDeleteResult {
+  readonly success: boolean;
+  readonly name: string;
+  readonly message: string;
+}
+
+// Re-export P2 domain types
+export type {
+  // Hooks
+  SessionStartResponse,
+  UserPromptSubmitResponse,
+  SessionEndResponse,
+  PreCompactionResponse,
+  CompactionCompleteResponse,
+  SynthesisConfigResponse,
+  SynthesisRequestResponse,
+  SynthesisCompleteResponse,
+
+  // Connectors
+  ConnectorRecord,
+  ConnectorListResponse,
+  ConnectorCreateResponse,
+  ConnectorSyncResponse,
+  ConnectorResyncResponse,
+  ConnectorDeleteResponse,
+  ConnectorHealthResponse,
+
+  // Analytics
+  UsageCountersResponse,
+  ErrorEvent,
+  ErrorsResponse,
+  LatencyHistogram,
+  LatencyResponse,
+  LogEntry,
+  LogsResponse,
+  MemorySafetyResponse,
+  ContinuityScore,
+  ContinuityResponse,
+  ContinuityLatestResponse,
+
+  // Knowledge Graph
+  KnowledgeEntity,
+  KnowledgeEntityDetail,
+  KnowledgeEntityListResponse,
+  PinEntityResponse,
+  UnpinEntityResponse,
+  EntityAspect,
+  EntityAspectsResponse,
+  AspectAttribute,
+  AspectAttributesResponse,
+  EntityDependency,
+  EntityDependenciesResponse,
+  KnowledgeStatsResponse,
+  TraversalStatusResponse,
+  ConstellationNode,
+  ConstellationEdge,
+  ConstellationResponse,
+
+  // Repair
+  RepairActionResponse,
+  EmbeddingGapsResponse,
+  DedupStatsResponse,
+  DeduplicateResponse,
+
+  // Cross-Agent
+  AgentPresence,
+  AgentPresenceListResponse,
+  AgentPresenceUpdateResponse,
+  AgentMessage,
+  AgentMessageListResponse,
+  AgentMessageSendResponse,
+
+  // Predictor
+  PredictorStatusResponse,
+  PredictorComparison,
+  ComparisonsByProjectResponse,
+  ComparisonsByEntityResponse,
+  ComparisonsListResponse,
+  TrainingRun,
+  TrainingRunsResponse,
+  TrainingPairsCountResponse,
+  TrainPredictorResponse,
+} from "./types-p2.js";

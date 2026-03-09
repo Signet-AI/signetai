@@ -2613,6 +2613,66 @@ app.get("/api/memory/:id/history", (c) => {
 	});
 });
 
+app.get("/api/memory/jobs/:id", (c) => {
+	const jobId = c.req.param("id")?.trim();
+	if (!jobId) {
+		return c.json({ error: "job id is required" }, 400);
+	}
+
+	const row = getDbAccessor().withReadDb((db) => {
+		return db
+			.prepare(
+				`SELECT id, memory_id, document_id, job_type, status,
+				        attempts, max_attempts, leased_at, completed_at,
+				        failed_at, error, created_at, updated_at
+				 FROM memory_jobs
+				 WHERE id = ?
+				 LIMIT 1`,
+			)
+			.get(jobId) as
+			| {
+					id: string;
+					memory_id: string | null;
+					document_id: string | null;
+					job_type: string;
+					status: string;
+					attempts: number;
+					max_attempts: number;
+					leased_at: string | null;
+					completed_at: string | null;
+					failed_at: string | null;
+					error: string | null;
+					created_at: string;
+					updated_at: string;
+			  }
+			| undefined;
+	});
+
+	if (!row) {
+		return c.json({ error: "Job not found" }, 404);
+	}
+
+	return c.json({
+		id: row.id,
+		memory_id: row.memory_id,
+		document_id: row.document_id,
+		job_type: row.job_type,
+		status: row.status,
+		attempt_count: row.attempts,
+		attempts: row.attempts,
+		max_attempts: row.max_attempts,
+		next_attempt_at: null,
+		last_error: row.error,
+		last_error_code: null,
+		error: row.error,
+		leased_at: row.leased_at,
+		completed_at: row.completed_at,
+		failed_at: row.failed_at,
+		created_at: row.created_at,
+		updated_at: row.updated_at,
+	});
+});
+
 app.post("/api/memory/:id/recover", async (c) => {
 	const payload = await readOptionalJsonObject(c);
 	if (payload === null) {
@@ -3756,9 +3816,8 @@ app.post("/api/documents", async (c) => {
 			});
 		}
 
-		enqueueDocumentIngestJob(accessor, id);
-
-		return c.json({ id, status: "queued" }, 201);
+		const jobId = enqueueDocumentIngestJob(accessor, id);
+		return c.json({ id, status: "queued", jobId: jobId ?? undefined }, 201);
 	} catch (e) {
 		logger.error("documents", "Failed to create document", e as Error);
 		return c.json({ error: "Failed to create document" }, 500);

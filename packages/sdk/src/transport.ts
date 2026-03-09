@@ -69,16 +69,11 @@ export class SignetTransport {
         });
 
         if (!response.ok) {
-          let body: unknown;
-          try {
-            body = await response.json();
-          } catch {
-            body = await response.text().catch(() => null);
-          }
+          const body = await parseResponseBody(response);
           throw new SignetApiError(response.status, body);
         }
 
-        return (await response.json()) as T;
+        return await parseResponseBody<T>(response);
       } catch (error) {
         if (error instanceof SignetApiError) {
           // API errors are not retryable
@@ -144,4 +139,35 @@ export class SignetTransport {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isJsonContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+  const normalized = contentType.toLowerCase();
+  return (
+    normalized.includes("application/json")
+    || normalized.includes("+json")
+  );
+}
+
+async function parseResponseBody<T = unknown>(response: Response): Promise<T> {
+  if (response.status === 204 || response.status === 205) {
+    return undefined as T;
+  }
+
+  const text = await response.text();
+  if (text.length === 0) {
+    return undefined as T;
+  }
+
+  if (isJsonContentType(response.headers.get("content-type"))) {
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      // Some endpoints mislabel text as JSON; return raw to avoid masking payloads.
+      return text as T;
+    }
+  }
+
+  return text as T;
 }

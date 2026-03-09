@@ -41,6 +41,20 @@ describe("SignetTransport", () => {
     expect(result).toEqual(payload);
   });
 
+  test("successful GET returns text for non-JSON content types", async () => {
+    const server = mockServer(() =>
+      new Response('{"id":"1"}\n{"id":"2"}', {
+        headers: { "content-type": "application/x-ndjson" },
+      }),
+    );
+
+    const transport = new SignetTransport({
+      baseUrl: `http://localhost:${server.port}`,
+    });
+    const result = await transport.get<string>("/export");
+    expect(result).toContain('{"id":"1"}');
+  });
+
   test("successful POST sends body and returns parsed JSON", async () => {
     let receivedBody: unknown;
     let receivedContentType: string | null = null;

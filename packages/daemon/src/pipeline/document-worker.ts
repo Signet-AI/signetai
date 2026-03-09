@@ -191,8 +191,8 @@ function completeDocument(
 export function enqueueDocumentIngestJob(
 	accessor: DbAccessor,
 	documentId: string,
-): void {
-	accessor.withWriteTx((db) => {
+): string | null {
+	return accessor.withWriteTx((db) => {
 		const existing = db
 			.prepare(
 				`SELECT 1 FROM memory_jobs
@@ -201,7 +201,7 @@ export function enqueueDocumentIngestJob(
 				 LIMIT 1`,
 			)
 			.get(documentId);
-		if (existing) return;
+		if (existing) return null;
 
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
@@ -211,6 +211,8 @@ export function enqueueDocumentIngestJob(
 			  attempts, max_attempts, created_at, updated_at)
 			 VALUES (?, NULL, ?, 'document_ingest', 'pending', 0, ?, ?, ?)`,
 		).run(id, documentId, 3, now, now);
+
+		return id;
 	});
 }
 
