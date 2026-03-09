@@ -74,6 +74,10 @@ const SCALE = 420;
 const KNN_K = 4;
 const KNN_EXACT_THRESHOLD = 450;
 const KNN_APPROX_WINDOW_MULTIPLIER = 6;
+// Truncate high-dimensional vectors before UMAP to avoid stack overflow.
+// OpenAI embeddings support Matryoshka truncation — lower dims preserve
+// relative distances well enough for 2D/3D visualization.
+const UMAP_MAX_DIMENSIONS = 64;
 
 interface ScoredNeighbor {
 	readonly index: number;
@@ -447,7 +451,10 @@ function computeProjectionFromRows(rows: readonly EmbeddingRow[], nComponents: 2
 		};
 	}
 
-	const vectors = rows.map((row) => blobToVector(row.vector, row.dimensions));
+	const vectors = rows.map((row) => {
+		const full = blobToVector(row.vector, row.dimensions);
+		return full.length > UMAP_MAX_DIMENSIONS ? full.slice(0, UMAP_MAX_DIMENSIONS) : full;
+	});
 	const nNeighbors = Math.min(15, Math.max(2, vectors.length - 1));
 	const umap = new UMAP({ nComponents, nNeighbors, minDist: 0.1, spread: 1.0 });
 	const projected: number[][] = umap.fit(vectors);
