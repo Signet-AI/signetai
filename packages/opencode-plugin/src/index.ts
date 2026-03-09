@@ -36,6 +36,14 @@ interface PreCompactionResult {
 	readonly summaryPrompt?: string;
 }
 
+interface UserPromptSubmitResult {
+	readonly inject?: string;
+	readonly memoryCount?: number;
+}
+
+// Per-prompt inject cache: consumed once by system.transform after chat.message populates it
+const pendingInject = new Map<string, string>();
+
 function readRuntimeEnv(name: string): string | undefined {
 	const runtimeProcess = Reflect.get(globalThis, "process");
 	if (!runtimeProcess || typeof runtimeProcess !== "object") {
@@ -83,6 +91,58 @@ export const SignetPlugin: Plugin = async ({ directory }) => {
 	}
 
 	return {
+		// ------------------------------------------------------------------
+		// Per-prompt memory recall — extract user text and call daemon
+		// ------------------------------------------------------------------
+		"chat.message": async (
+			input: { sessionID: string },
+			output: { parts: ReadonlyArray<{ type: string; text?: string }> },
+		): Promise<void> => {
+			const userText = output.parts
+				.filter(
+					(p): p is { type: "text"; text: string } =>
+						p.type === "text" && typeof p.text === "string",
+				)
+				.map((p) => p.text)
+				.join("\n")
+				.trim();
+			if (!userText) return;
+
+			try {
+				const result = await client.post<UserPromptSubmitResult>(
+					"/api/hooks/user-prompt-submit",
+					{
+						harness: HARNESS,
+						project: directory,
+						agentId,
+						sessionKey: input.sessionID,
+						userMessage: userText,
+						runtimePath: RUNTIME_PATH,
+					},
+					READ_TIMEOUT,
+				);
+				if (result?.inject) {
+					pendingInject.set(input.sessionID, result.inject);
+				}
+			} catch {
+				// never block the user's message
+			}
+		},
+
+		// ------------------------------------------------------------------
+		// Inject per-prompt context into the system prompt
+		// ------------------------------------------------------------------
+		"experimental.chat.system.transform": async (
+			input: { sessionID: string },
+			output: { system: string[] },
+		): Promise<void> => {
+			const inject = pendingInject.get(input.sessionID);
+			if (inject) {
+				pendingInject.delete(input.sessionID);
+				output.system.push(inject);
+			}
+		},
+
 		// ------------------------------------------------------------------
 		// Inject memory context before context compaction
 		// ------------------------------------------------------------------
