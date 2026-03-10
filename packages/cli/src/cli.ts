@@ -3954,9 +3954,9 @@ secretCmd
 			const exists = secrets.includes(name);
 
 			if (!exists) {
-				console.log(chalk.red(`\n  Secret "${chalk.bold(name)}" not found.\n`));
-				console.log(chalk.dim("  Store it with:"));
-				console.log(`    signet secret put ${name}\n`);
+				console.error(chalk.red(`\n  Secret "${chalk.bold(name)}" not found.\n`));
+				console.error(chalk.dim("  Store it with:"));
+				console.error(`    signet secret put ${name}\n`);
 				process.exit(1);
 			}
 
