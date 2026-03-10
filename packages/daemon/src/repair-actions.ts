@@ -222,15 +222,17 @@ export function requeueDeadJobs(
 		}
 
 		// --- summary_jobs (issue #181) ---
+		// Share the maxBatch budget: only requeue up to the remaining capacity
+		const summaryBudget = maxBatch - memoryCount;
 		let summaryCount = 0;
 		const tableExists = db
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'")
 			.get();
 
-		if (tableExists) {
+		if (tableExists && summaryBudget > 0) {
 			const deadSummary = db
 				.prepare("SELECT id FROM summary_jobs WHERE status = 'dead' LIMIT ?")
-				.all(maxBatch) as Array<{ id: string }>;
+				.all(summaryBudget) as Array<{ id: string }>;
 
 			if (deadSummary.length > 0) {
 				const placeholders = deadSummary.map(() => "?").join(", ");

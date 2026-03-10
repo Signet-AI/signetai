@@ -183,9 +183,9 @@ async function processJob(
 	accessor: DbAccessor,
 	provider: LlmProvider,
 	job: SummaryJobRow,
+	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
 	// --- Significance gate ---
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const significanceCfg: SignificanceConfig =
 		memoryCfg.pipelineV2.significance ?? {
 			enabled: true,
@@ -865,7 +865,7 @@ export function startSummaryWorker(
 			});
 
 			const provider = resolveProvider(cfg);
-			await processJob(accessor, provider, job);
+			await processJob(accessor, provider, job, cfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {
