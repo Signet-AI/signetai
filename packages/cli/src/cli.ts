@@ -3999,14 +3999,21 @@ secretCmd
 		}
 
 		// Double-quote each part so arguments with embedded spaces survive
-		// the daemon's `sh -c` invocation. Double quotes (not single quotes)
-		// are used deliberately: they allow $VAR expansion in the daemon's
-		// shell, which is what makes `signet secret exec -s KEY echo $KEY` work.
-		// Backslash, double-quote, and backtick are escaped to prevent
-		// unintended interpretation; dollar signs are left unescaped.
+		// the daemon's `sh -c` invocation. Backslash, double-quote, backtick,
+		// and dollar sign are all escaped. Escaping $ blocks both $VAR expansion
+		// and $(...) command substitution — the latter is a shell injection risk
+		// for a secrets tool and cannot be left open. Secrets are already
+		// injected directly into the subprocess environment; programs access
+		// them via process.env / os.environ, not via in-string shell expansion.
 		// e.g. ["python", "-c", "import os; print(1)"] → "python" "-c" "import os; print(1)"
 		const command = commandParts
-			.map((arg) => `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/`/g, "\\`")}"`)
+			.map((arg) =>
+				`"${arg
+					.replace(/\\/g, "\\\\")
+					.replace(/"/g, '\\"')
+					.replace(/`/g, "\\`")
+					.replace(/\$/g, "\\$")}"`,
+			)
 			.join(" ");
 
 		try {
