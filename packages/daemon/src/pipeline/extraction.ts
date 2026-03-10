@@ -318,7 +318,11 @@ export function parseRawExtractionOutput(rawOutput: string): ExtractionResult {
 // Main extraction function
 // ---------------------------------------------------------------------------
 
-export async function extractFactsAndEntities(input: string, provider: LlmProvider): Promise<ExtractionResult> {
+export async function extractFactsAndEntities(
+	input: string,
+	provider: LlmProvider,
+	opts?: { timeoutMs?: number },
+): Promise<ExtractionResult> {
 	const trimmed = input.trim().replace(/\s+/g, " ");
 	if (trimmed.length < 20) {
 		return {
@@ -334,7 +338,9 @@ export async function extractFactsAndEntities(input: string, provider: LlmProvid
 
 	let rawOutput: string;
 	try {
-		rawOutput = await provider.generate(prompt);
+		rawOutput = await provider.generate(prompt, {
+			timeoutMs: opts?.timeoutMs,
+		});
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		logger.warn("pipeline", "Extraction LLM call failed", { error: msg });

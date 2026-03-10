@@ -126,6 +126,17 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.embedding.base_url).toBe("http://192.168.1.100:11434");
 	});
 
+	it("accepts embedding.endpoint as an alias for embedding.base_url", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n  endpoint: http://172.17.0.1:11434\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.base_url).toBe("http://172.17.0.1:11434");
+	});
+
 	it("defaults ollama base_url when explicitly empty", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
@@ -266,6 +277,36 @@ describe("loadPipelineConfig", () => {
 		// Flat keys win as a pair — dashboard writes flat, so they must take priority
 		expect(result.extraction.provider).toBe("ollama");
 		expect(result.extraction.model).toBe("qwen3:4b");
+	});
+
+	it("parses extraction endpoint aliases", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						provider: "ollama",
+						model: "qwen3:1.7b",
+						endpoint: "http://172.17.0.1:11434",
+					},
+				},
+			},
+		});
+		expect(result.extraction.endpoint).toBe("http://172.17.0.1:11434");
+	});
+
+	it("parses synthesis base_url as endpoint alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					synthesis: {
+						provider: "ollama",
+						model: "qwen3:4b",
+						base_url: "http://172.17.0.1:11434",
+					},
+				},
+			},
+		});
+		expect(result.synthesis.endpoint).toBe("http://172.17.0.1:11434");
 	});
 
 	it("flat provider without flat model uses provider default", () => {

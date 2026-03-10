@@ -230,8 +230,103 @@ const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
 
 // Config
-const PORT = Number.parseInt(process.env.SIGNET_PORT || "3850", 10);
-const HOST = process.env.SIGNET_HOST || "localhost";
+function readEnvTrimmed(key: string): string | undefined {
+	const raw = process.env[key];
+	if (typeof raw !== "string") return undefined;
+	const trimmed = raw.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeBaseUrl(url: string | undefined): string | undefined {
+	if (!url) return undefined;
+	return url.endsWith("/") ? url.slice(0, -1) : url;
+}
+
+function normalizeLoopbackHost(host: string): string {
+	return host === "localhost" || host === "::1" ? "127.0.0.1" : host;
+}
+
+function parsePort(raw: string | undefined, fallback: number): number {
+	const parsed = Number.parseInt(raw ?? "", 10);
+	return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : fallback;
+}
+
+function normalizeRuntimeBaseUrl(url: string | undefined, fallback: string): string {
+	const base = normalizeBaseUrl(url) ?? fallback;
+	try {
+		const parsed = new URL(base);
+		if (parsed.hostname === "localhost" || parsed.hostname === "::1") {
+			parsed.hostname = "127.0.0.1";
+		}
+		return normalizeBaseUrl(parsed.toString()) ?? fallback;
+	} catch {
+		return base;
+	}
+}
+
+function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
+	try {
+		const parsed = new URL(baseUrl);
+		const isLoopbackHost =
+			parsed.hostname === "127.0.0.1" ||
+			parsed.hostname === "localhost" ||
+			parsed.hostname === "::1";
+		if (!isLoopbackHost) return false;
+		if (parsed.protocol !== "http:") return false;
+		const port = parsed.port.length > 0 ? Number.parseInt(parsed.port, 10) : 80;
+		return port === 4096;
+	} catch {
+		return false;
+	}
+}
+
+function redactUrlForLogs(url: string | undefined): string | undefined {
+	if (!url) return undefined;
+	try {
+		const parsed = new URL(url);
+		parsed.username = "";
+		parsed.password = "";
+		parsed.search = "";
+		parsed.hash = "";
+		return normalizeBaseUrl(parsed.toString()) ?? url;
+	} catch {
+		return url;
+	}
+}
+
+const PORT = parsePort(readEnvTrimmed("SIGNET_PORT"), 3850);
+const HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_HOST") ?? "127.0.0.1");
+const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? HOST);
+const INTERNAL_SELF_HOST =
+	BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
+
+type RuntimeProviderName = "ollama" | "claude-code" | "opencode" | "codex" | "anthropic";
+
+interface ProviderRuntimeResolution {
+	extraction: {
+		configured: string | null;
+		resolved: RuntimeProviderName;
+		effective: RuntimeProviderName;
+	};
+	synthesis: {
+		configured: string | null;
+		resolved: "ollama" | "claude-code" | "opencode" | "anthropic" | null;
+		effective: "ollama" | "claude-code" | "opencode" | "anthropic" | null;
+	};
+}
+
+const providerRuntimeResolution: ProviderRuntimeResolution = {
+	extraction: {
+		configured: null,
+		resolved: "claude-code",
+		effective: "claude-code",
+	},
+	synthesis: {
+		configured: null,
+		resolved: null,
+		effective: null,
+	},
+};
 
 // Autonomous maintenance singletons
 const providerTracker = createProviderTracker();
@@ -546,6 +641,53 @@ function parseIsoDateQuery(raw: string | undefined): string | undefined {
 	return date.toISOString();
 }
 
+function getConfiguredProviderHints(agentsDir: string): {
+	readonly extraction: string | null;
+	readonly synthesis: string | null;
+} {
+	const paths = [
+		join(agentsDir, "agent.yaml"),
+		join(agentsDir, "AGENT.yaml"),
+		join(agentsDir, "config.yaml"),
+	];
+	let extraction: string | null = null;
+	let synthesis: string | null = null;
+
+	for (const path of paths) {
+		if (!existsSync(path)) continue;
+		try {
+			const yaml = toRecord(parseSimpleYaml(readFileSync(path, "utf-8")));
+			const mem = toRecord(yaml?.memory);
+			const pipeline = toRecord(mem?.pipelineV2);
+			const extractionObj = toRecord(pipeline?.extraction);
+			const synthesisObj = toRecord(pipeline?.synthesis);
+			const extractionInFile =
+				typeof pipeline?.extractionProvider === "string"
+					? pipeline.extractionProvider
+					: typeof extractionObj?.provider === "string"
+						? extractionObj.provider
+						: null;
+			const synthesisInFile =
+				typeof synthesisObj?.provider === "string"
+					? synthesisObj.provider
+					: null;
+			if (extraction === null && extractionInFile !== null) {
+				extraction = extractionInFile;
+			}
+			if (synthesis === null && synthesisInFile !== null) {
+				synthesis = synthesisInFile;
+			}
+			if (extraction !== null && synthesis !== null) {
+				break;
+			}
+		} catch {
+			continue;
+		}
+	}
+
+	return { extraction, synthesis };
+}
+
 interface LegacyEmbeddingsResponse {
 	embeddings: Array<Record<string, unknown>>;
 	count: number;
@@ -815,7 +957,7 @@ async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingSt
 				// Native unavailable — check if ollama is available as fallback
 				logger.warn("embedding", `Native provider unavailable: ${nativeStatus.error ?? "unknown"}`);
 				try {
-					const ollamaRes = await fetch("http://localhost:11434/api/tags", {
+					const ollamaRes = await fetch("http://127.0.0.1:11434/api/tags", {
 						method: "GET",
 						signal: AbortSignal.timeout(3000),
 					});
@@ -2138,7 +2280,7 @@ app.post("/api/memory/remember", async (c) => {
 		const importance = body.importance ?? parsedPrefixes.importance;
 		const pinned = (body.pinned ?? parsedPrefixes.pinned) ? 1 : 0;
 		const tags = body.tags ?? parsedPrefixes.tags;
-		const pipelineEnqueueEnabled = pipelineCfg.enabled || pipelineCfg.shadowMode;
+		const pipelineEnqueueEnabled = pipelineCfg.enabled;
 
 		const groupId = crypto.randomUUID();
 		const now = new Date().toISOString();
@@ -2309,7 +2451,7 @@ app.post("/api/memory/remember", async (c) => {
 	const normalizedContentForInsert =
 		normalizedContent.normalizedContent.length > 0 ? normalizedContent.normalizedContent : normalizedContent.hashBasis;
 	const contentHash = normalizedContent.contentHash;
-	const pipelineEnqueueEnabled = pipelineCfg.enabled || pipelineCfg.shadowMode;
+	const pipelineEnqueueEnabled = pipelineCfg.enabled;
 
 	type DedupeRow = {
 		id: string;
@@ -2495,7 +2637,7 @@ app.post("/api/memory/remember", async (c) => {
 app.post("/api/memory/save", async (c) => {
 	// Re-use the same handler by forwarding to the internal fetch
 	const body = await c.req.json().catch(() => ({}));
-	return fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+	return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
@@ -2505,7 +2647,7 @@ app.post("/api/memory/save", async (c) => {
 // Alias for Claude Code skill compatibility
 app.post("/api/hook/remember", async (c) => {
 	const body = await c.req.json().catch(() => ({}));
-	return fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+	return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
@@ -6257,6 +6399,12 @@ app.get("/api/tasks/:id/runs", (c) => {
 
 app.get("/api/status", (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
+	const configuredLogFile = readEnvTrimmed("SIGNET_LOG_FILE");
+	const configuredLogDir = readEnvTrimmed("SIGNET_LOG_DIR") ?? LOG_DIR;
+	const datedLogFile = join(
+		configuredLogDir,
+		`signet-${new Date().toISOString().slice(0, 10)}.log`,
+	);
 
 	let health: { score: number; status: string } | undefined;
 	try {
@@ -6293,9 +6441,15 @@ app.get("/api/status", (c) => {
 		startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
 		port: PORT,
 		host: HOST,
+		bindHost: BIND_HOST,
 		agentsDir: AGENTS_DIR,
 		memoryDb: existsSync(MEMORY_DB),
 		pipelineV2: config.pipelineV2,
+		providerResolution: providerRuntimeResolution,
+		logging: {
+			logDir: configuredLogFile ? dirname(configuredLogFile) : configuredLogDir,
+			logFile: configuredLogFile ?? datedLogFile,
+		},
 		activeSessions: activeSessionCount(),
 		bypassedSessions: getBypassedSessionKeys().size,
 		agentCreatedAt,
@@ -8550,7 +8704,7 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 			syncedClaudeMemories.add(chunkKey);
 
 			try {
-				const response = await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+				const response = await fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify({
@@ -8808,7 +8962,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 		const chunk = chunks[i];
 		const chunkKey = `openclaw:${filename}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;
 		try {
-			const response = await fetch(`http://${HOST}:${PORT}/api/memory/remember`, {
+			const response = await fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -9015,7 +9169,7 @@ process.on("uncaughtException", (err) => {
 async function main() {
 	logger.info("daemon", "Signet Daemon starting");
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
-	logger.info("daemon", "Port configured", { port: PORT });
+	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
 
 	// Ensure daemon directory exists
 	mkdirSync(DAEMON_DIR, { recursive: true });
@@ -9064,14 +9218,77 @@ async function main() {
 	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
 	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
 
+	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
+	const validExtractionProviders = new Set([
+		"ollama",
+		"claude-code",
+		"opencode",
+		"codex",
+		"anthropic",
+	]);
+	const validSynthesisProviders = new Set([
+		"ollama",
+		"claude-code",
+		"opencode",
+		"anthropic",
+	]);
+
+	providerRuntimeResolution.extraction = {
+		configured: providerHints.extraction,
+		resolved: memoryCfg.pipelineV2.extraction.provider,
+		effective: memoryCfg.pipelineV2.extraction.provider,
+	};
+	providerRuntimeResolution.synthesis = {
+		configured: providerHints.synthesis,
+		resolved: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
+		effective: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
+	};
+	if (providerHints.extraction && !validExtractionProviders.has(providerHints.extraction)) {
+		logger.warn("config", "Unsupported extraction provider configured, using resolved fallback", {
+			configured: providerHints.extraction,
+			resolved: memoryCfg.pipelineV2.extraction.provider,
+		});
+	}
+	if (
+		providerHints.synthesis &&
+		memoryCfg.pipelineV2.synthesis.enabled &&
+		!validSynthesisProviders.has(providerHints.synthesis)
+	) {
+		logger.warn("config", "Unsupported synthesis provider configured, using resolved fallback", {
+			configured: providerHints.synthesis,
+			resolved: memoryCfg.pipelineV2.synthesis.provider,
+		});
+	}
+
 	// Auto-detect extraction provider: verify the configured provider is
 	// available, falling back to ollama with a warning if not.
 	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
+	const extractionOllamaBaseUrl = normalizeRuntimeBaseUrl(
+		memoryCfg.pipelineV2.extraction.endpoint,
+		"http://127.0.0.1:11434",
+	);
+	const extractionOllamaFallbackBaseUrl =
+		memoryCfg.pipelineV2.extraction.provider === "opencode"
+			? "http://127.0.0.1:11434"
+			: extractionOllamaBaseUrl;
+	const extractionOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
+		memoryCfg.pipelineV2.extraction.endpoint,
+		"http://127.0.0.1:4096",
+	);
+	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(
+		extractionOpenCodeBaseUrl,
+	);
 	if (effectiveExtractionProvider === "opencode") {
-		const serverReady = await ensureOpenCodeServer(4096);
-		if (!serverReady) {
-			logger.warn("config", "OpenCode server not available, falling back to ollama for extraction");
-			effectiveExtractionProvider = "ollama";
+		if (extractionOpenCodeShouldManage) {
+			const serverReady = await ensureOpenCodeServer(4096);
+			if (!serverReady) {
+				logger.warn("config", "OpenCode server not available, falling back to ollama for extraction");
+				effectiveExtractionProvider = "ollama";
+			}
+		} else {
+			logger.info("config", "Using external OpenCode endpoint for extraction", {
+				baseUrl: redactUrlForLogs(extractionOpenCodeBaseUrl),
+			});
 		}
 	} else if (effectiveExtractionProvider === "claude-code") {
 		try {
@@ -9110,8 +9327,6 @@ async function main() {
 			effectiveExtractionProvider = "ollama";
 		}
 	}
-	logger.info("config", "Extraction provider", { provider: effectiveExtractionProvider });
-
 	// Resolve Anthropic API key once — shared by extraction and synthesis
 	let anthropicApiKey: string | undefined;
 	const needsAnthropicForSynthesis =
@@ -9140,6 +9355,30 @@ async function main() {
 	if (effectiveExtractionProvider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama") {
 		effectiveExtractionModel = undefined;
 	}
+	providerRuntimeResolution.extraction = {
+		configured: providerHints.extraction,
+		resolved: memoryCfg.pipelineV2.extraction.provider,
+		effective: effectiveExtractionProvider,
+	};
+	if (providerHints.extraction && providerHints.extraction !== effectiveExtractionProvider) {
+		logger.warn("config", "Extraction provider resolved differently than configured", {
+			configured: providerHints.extraction,
+			resolved: memoryCfg.pipelineV2.extraction.provider,
+			effective: effectiveExtractionProvider,
+		});
+	}
+	logger.info("config", "Extraction provider", {
+		configured: providerHints.extraction,
+		resolved: memoryCfg.pipelineV2.extraction.provider,
+		effective: effectiveExtractionProvider,
+		endpoint: redactUrlForLogs(
+			effectiveExtractionProvider === "ollama"
+				? extractionOllamaFallbackBaseUrl
+				: effectiveExtractionProvider === "opencode"
+					? extractionOpenCodeBaseUrl
+					: undefined,
+		),
+	});
 
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider =
@@ -9152,6 +9391,8 @@ async function main() {
 			: effectiveExtractionProvider === "opencode"
 				? createOpenCodeProvider({
 						model: effectiveExtractionModel || "anthropic/claude-haiku-4-5-20251001",
+						baseUrl: extractionOpenCodeBaseUrl,
+						ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 					})
 				: effectiveExtractionProvider === "claude-code"
@@ -9166,6 +9407,7 @@ async function main() {
 							})
 						: createOllamaProvider({
 								model: effectiveExtractionModel || "qwen3:4b",
+								baseUrl: extractionOllamaFallbackBaseUrl,
 								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 							});
 	initLlmProvider(llmProvider);
@@ -9174,11 +9416,32 @@ async function main() {
 	// needs a smarter model that can reason across long context
 	if (memoryCfg.pipelineV2.synthesis.enabled) {
 		let effectiveSynthesisProvider = memoryCfg.pipelineV2.synthesis.provider;
+		const synthesisOllamaBaseUrl = normalizeRuntimeBaseUrl(
+			memoryCfg.pipelineV2.synthesis.endpoint,
+			"http://127.0.0.1:11434",
+		);
+		const synthesisOllamaFallbackBaseUrl =
+			memoryCfg.pipelineV2.synthesis.provider === "opencode"
+				? "http://127.0.0.1:11434"
+				: synthesisOllamaBaseUrl;
+		const synthesisOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
+			memoryCfg.pipelineV2.synthesis.endpoint,
+			"http://127.0.0.1:4096",
+		);
+		const synthesisOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(
+			synthesisOpenCodeBaseUrl,
+		);
 		if (effectiveSynthesisProvider === "opencode") {
-			const serverReady = await ensureOpenCodeServer(4096);
-			if (!serverReady) {
-				logger.warn("config", "OpenCode server not available for synthesis, falling back to ollama");
-				effectiveSynthesisProvider = "ollama";
+			if (synthesisOpenCodeShouldManage) {
+				const serverReady = await ensureOpenCodeServer(4096);
+				if (!serverReady) {
+					logger.warn("config", "OpenCode server not available for synthesis, falling back to ollama");
+					effectiveSynthesisProvider = "ollama";
+				}
+			} else {
+				logger.info("config", "Using external OpenCode endpoint for synthesis", {
+					baseUrl: redactUrlForLogs(synthesisOpenCodeBaseUrl),
+				});
 			}
 		} else if (effectiveSynthesisProvider === "anthropic") {
 			if (!anthropicApiKey) {
@@ -9202,7 +9465,30 @@ async function main() {
 				effectiveSynthesisProvider = "ollama";
 			}
 		}
-		logger.info("config", "Synthesis provider", { provider: effectiveSynthesisProvider });
+		providerRuntimeResolution.synthesis = {
+			configured: providerHints.synthesis,
+			resolved: memoryCfg.pipelineV2.synthesis.provider,
+			effective: effectiveSynthesisProvider,
+		};
+		if (providerHints.synthesis && providerHints.synthesis !== effectiveSynthesisProvider) {
+			logger.warn("config", "Synthesis provider resolved differently than configured", {
+				configured: providerHints.synthesis,
+				resolved: memoryCfg.pipelineV2.synthesis.provider,
+				effective: effectiveSynthesisProvider,
+			});
+		}
+		logger.info("config", "Synthesis provider", {
+			configured: providerHints.synthesis,
+			resolved: memoryCfg.pipelineV2.synthesis.provider,
+			effective: effectiveSynthesisProvider,
+			endpoint: redactUrlForLogs(
+				effectiveSynthesisProvider === "ollama"
+					? synthesisOllamaFallbackBaseUrl
+					: effectiveSynthesisProvider === "opencode"
+						? synthesisOpenCodeBaseUrl
+						: undefined,
+			),
+		});
 
 		// When falling back to ollama, reset model so ollama uses its own default
 		let effectiveSynthesisModel: string | undefined = memoryCfg.pipelineV2.synthesis.model;
@@ -9220,6 +9506,8 @@ async function main() {
 				: effectiveSynthesisProvider === "opencode"
 					? createOpenCodeProvider({
 							model: effectiveSynthesisModel || "anthropic/claude-haiku-4-5-20251001",
+							baseUrl: synthesisOpenCodeBaseUrl,
+							ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 						})
 					: effectiveSynthesisProvider === "claude-code"
@@ -9227,12 +9515,18 @@ async function main() {
 								model: effectiveSynthesisModel || "haiku",
 								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 							})
-						: createOllamaProvider({
-								model: effectiveSynthesisModel || "qwen3:4b",
-								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-							});
+					: createOllamaProvider({
+							model: effectiveSynthesisModel || "qwen3:4b",
+							baseUrl: synthesisOllamaFallbackBaseUrl,
+							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+						});
 		initSynthesisProvider(synthesisProvider);
 	} else {
+		providerRuntimeResolution.synthesis = {
+			configured: providerHints.synthesis,
+			resolved: null,
+			effective: null,
+		};
 		logger.info("config", "Synthesis disabled");
 	}
 
@@ -9284,8 +9578,9 @@ async function main() {
 		);
 	}
 
-	// Start extraction pipeline if enabled
-	if (memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode) {
+	// Start extraction pipeline only when explicitly enabled.
+	// shadowMode controls behavior inside the enabled pipeline.
+	if (memoryCfg.pipelineV2.enabled) {
 		startPipeline(
 			getDbAccessor(),
 			memoryCfg.pipelineV2,
@@ -9421,6 +9716,8 @@ async function main() {
 			env: {
 				...process.env,
 				SIGNET_PORT: String(PORT),
+				SIGNET_HOST: HOST,
+				SIGNET_BIND: BIND_HOST,
 				SIGNET_PATH: AGENTS_DIR,
 			},
 		});
@@ -9439,7 +9736,7 @@ async function main() {
 		{
 			fetch: app.fetch,
 			port: PORT,
-			hostname: HOST,
+			hostname: BIND_HOST,
 		},
 		(info) => {
 			logger.info("daemon", "Server listening", {

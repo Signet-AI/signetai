@@ -797,6 +797,7 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 	const p = cfg.pipelineV2.synthesis.provider;
 	const model = cfg.pipelineV2.synthesis.model;
 	const timeout = cfg.pipelineV2.synthesis.timeout;
+	const endpoint = cfg.pipelineV2.synthesis.endpoint;
 	switch (p) {
 		case "anthropic": {
 			let apiKey = process.env.ANTHROPIC_API_KEY;
@@ -816,9 +817,18 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 		case "claude-code":
 			return createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
 		case "opencode":
-			return createOpenCodeProvider({ model: model || "anthropic/claude-haiku-4-5-20251001", defaultTimeoutMs: timeout });
+			return createOpenCodeProvider({
+				model: model || "anthropic/claude-haiku-4-5-20251001",
+				baseUrl: endpoint ?? "http://127.0.0.1:4096",
+				ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
+				defaultTimeoutMs: timeout,
+			});
 		default:
-			return createOllamaProvider({ model: model || "qwen3:4b", defaultTimeoutMs: timeout });
+			return createOllamaProvider({
+				model: model || "qwen3:4b",
+				...(endpoint ? { baseUrl: endpoint } : {}),
+				defaultTimeoutMs: timeout,
+			});
 	}
 }
 
@@ -841,7 +851,7 @@ export function startSummaryWorker(
 
 		// Re-check config each tick — respect runtime config changes
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		if (!cfg.pipelineV2.enabled && !cfg.pipelineV2.shadowMode) {
+		if (!cfg.pipelineV2.enabled || cfg.pipelineV2.shadowMode) {
 			scheduleTick(POLL_INTERVAL_MS);
 			return;
 		}

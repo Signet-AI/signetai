@@ -76,20 +76,74 @@ function writeLastSynthesisTime(timestamp: number): void {
 
 /**
  * Get the timestamp of the most recent session end from checkpoints.
- * Returns 0 if no session-end checkpoints exist.
+ * Falls back to the latest completed summary job when no checkpoint exists.
  */
+function parseLastEndTimestamp(row: unknown): number {
+	if (typeof row !== "object" || row === null || !("last_end" in row)) {
+		return 0;
+	}
+	const value = row.last_end;
+	if (typeof value !== "string" || value.length === 0) {
+		return 0;
+	}
+	const ts = Date.parse(value);
+	return Number.isNaN(ts) ? 0 : ts;
+}
+
+function isExpectedSessionActivityLookupError(error: unknown, table: string): boolean {
+	if (!(error instanceof Error)) return false;
+	const message = error.message.toLowerCase();
+	return (
+		message.includes(`no such table: ${table}`) ||
+		message.includes("dbaccessor not initialised") ||
+		message.includes("dbaccessor is closed")
+	);
+}
+
 function getLastSessionEndTime(): number {
 	try {
-		const row = getDbAccessor().withReadDb((db) => {
+		const checkpointRow = getDbAccessor().withReadDb((db) => {
 			return db.prepare(`
 				SELECT MAX(created_at) as last_end
 				FROM session_checkpoints
 				WHERE trigger = 'session_end'
-			`).get() as { last_end: string | null } | undefined;
+			`).get();
 		});
-		if (!row?.last_end) return 0;
-		return new Date(row.last_end).getTime();
-	} catch {
+		const checkpointTs = parseLastEndTimestamp(checkpointRow);
+		if (checkpointTs > 0) {
+			return checkpointTs;
+		}
+	} catch (error) {
+		if (!isExpectedSessionActivityLookupError(error, "session_checkpoints")) {
+			logger.error(
+				"synthesis",
+				"Failed to query session_checkpoints for synthesis scheduling",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			throw error;
+		}
+	}
+
+	try {
+		const summaryRow = getDbAccessor().withReadDb((db) => {
+			return db
+				.prepare(`
+					SELECT MAX(completed_at) as last_end
+					FROM summary_jobs
+					WHERE status = 'completed'
+				`)
+				.get();
+		});
+		return parseLastEndTimestamp(summaryRow);
+	} catch (error) {
+		if (!isExpectedSessionActivityLookupError(error, "summary_jobs")) {
+			logger.error(
+				"synthesis",
+				"Failed to query summary_jobs for synthesis scheduling",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			throw error;
+		}
 		return 0;
 	}
 }

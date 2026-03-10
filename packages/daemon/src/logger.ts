@@ -21,7 +21,7 @@ import {
 	unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 // Types
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -66,6 +66,7 @@ export interface LogEntry {
 
 export interface LoggerConfig {
 	logDir: string;
+	logFilePath?: string;
 	level: LogLevel;
 	maxFileSize: number; // bytes
 	maxFiles: number; // number of rotated files to keep
@@ -83,6 +84,7 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 // Default configuration
 const DEFAULT_CONFIG: LoggerConfig = {
 	logDir: join(homedir(), ".agents", ".daemon", "logs"),
+	logFilePath: undefined,
 	level: "info",
 	maxFileSize: 10 * 1024 * 1024, // 10MB
 	maxFiles: 5,
@@ -108,8 +110,11 @@ class Logger extends EventEmitter {
 
 	private ensureLogDir() {
 		try {
-			if (!existsSync(this.config.logDir)) {
-				mkdirSync(this.config.logDir, { recursive: true });
+			const dir = this.config.logFilePath
+				? dirname(this.config.logFilePath)
+				: this.config.logDir;
+			if (!existsSync(dir)) {
+				mkdirSync(dir, { recursive: true });
 			}
 		} catch (e) {
 			this.fileOutputEnabled = false;
@@ -118,6 +123,9 @@ class Logger extends EventEmitter {
 	}
 
 	private getLogFileName(): string {
+		if (this.config.logFilePath) {
+			return this.config.logFilePath;
+		}
 		const date = new Date().toISOString().split("T")[0];
 		return join(this.config.logDir, `signet-${date}.log`);
 	}
@@ -156,9 +164,19 @@ class Logger extends EventEmitter {
 	}
 
 	private listLogFilesNewestFirst(): Array<{ name: string; path: string }> {
-		if (!this.fileOutputEnabled || !existsSync(this.config.logDir)) {
+		if (!this.fileOutputEnabled) {
 			return [];
 		}
+		if (this.config.logFilePath) {
+			if (!existsSync(this.config.logFilePath)) return [];
+			return [
+				{
+					name: basename(this.config.logFilePath),
+					path: this.config.logFilePath,
+				},
+			];
+		}
+		if (!existsSync(this.config.logDir)) return [];
 		return readdirSync(this.config.logDir)
 			.filter((f) => this.parseLogFileName(f) !== null)
 			.map((f) => ({
@@ -254,6 +272,7 @@ class Logger extends EventEmitter {
 
 	private checkRotation() {
 		if (!this.fileOutputEnabled) return;
+		if (this.config.logFilePath) return;
 		try {
 			if (!existsSync(this.currentLogFile)) return;
 
@@ -485,6 +504,15 @@ class Logger extends EventEmitter {
 }
 
 // Singleton instance
-export const logger = new Logger();
+const envLogFile = process.env.SIGNET_LOG_FILE?.trim();
+const envLogDir = process.env.SIGNET_LOG_DIR?.trim();
+const loggerConfig: Partial<LoggerConfig> = {
+	...(envLogFile
+		? { logFilePath: envLogFile, logDir: dirname(envLogFile) }
+		: envLogDir
+			? { logDir: envLogDir }
+			: {}),
+};
+export const logger = new Logger(loggerConfig);
 
 export default logger;

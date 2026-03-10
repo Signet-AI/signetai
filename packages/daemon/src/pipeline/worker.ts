@@ -1026,7 +1026,11 @@ export function startWorker(
 
 		// Run extraction
 		const extractionStart = Date.now();
-		const rawExtraction = await extractFactsAndEntities(row.content, instrumentedProvider);
+		const rawExtraction = await extractFactsAndEntities(
+			row.content,
+			instrumentedProvider,
+			{ timeoutMs: pipelineCfg.extraction.timeout },
+		);
 		const extractionMs = Date.now() - extractionStart;
 
 		// Escalation: check output volume and re-run or filter if noisy
@@ -1043,6 +1047,7 @@ export function startWorker(
 			accessor,
 			"default",
 			escalationThresholds,
+			{ timeoutMs: pipelineCfg.extraction.timeout },
 		);
 
 		const extraction = escalated.result;

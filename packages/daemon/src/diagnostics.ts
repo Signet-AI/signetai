@@ -193,6 +193,8 @@ function clamp(n: number): number {
 	return Math.max(0, Math.min(1, n));
 }
 
+const QUEUE_RECENT_WINDOW_MS = 60 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Domain health functions
 // ---------------------------------------------------------------------------
@@ -211,7 +213,7 @@ export function getQueueHealth(db: ReadDb): QueueHealth {
 		? Math.max(0, (Date.now() - new Date(oldestAt).getTime()) / 1000)
 		: 0;
 
-	const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+	const windowStart = new Date(Date.now() - QUEUE_RECENT_WINDOW_MS).toISOString();
 	const deadRow = db
 		.prepare(
 			`SELECT
@@ -220,7 +222,7 @@ export function getQueueHealth(db: ReadDb): QueueHealth {
 			 FROM memory_jobs
 			 WHERE updated_at >= ?`,
 		)
-		.get(oneDayAgo) as { dead: number; total: number } | undefined;
+		.get(windowStart) as { dead: number; total: number } | undefined;
 
 	const dead = deadRow?.dead ?? 0;
 	const completedAndDead = deadRow?.total ?? 0;

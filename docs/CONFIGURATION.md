@@ -577,7 +577,10 @@ editing the config file is impractical.
 |----------|---------|-------------|
 | `SIGNET_PATH` | `~/.agents` | Base agents directory |
 | `SIGNET_PORT` | `3850` | Daemon HTTP port |
-| `SIGNET_HOST` | `localhost` | Daemon bind address |
+| `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls and default bind address |
+| `SIGNET_BIND` | `SIGNET_HOST` | Explicit bind address override (`0.0.0.0`, etc.) |
+| `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
+| `SIGNET_LOG_DIR` | `~/.agents/.daemon/logs` | Optional daemon log directory override |
 | `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
 
 `SIGNET_PATH` changes where Signet reads and writes all agent data,

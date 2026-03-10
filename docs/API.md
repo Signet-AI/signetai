@@ -15,7 +15,8 @@ port are configurable via environment variables (see [[configuration]]).
 ```
 Base URL: http://localhost:3850
 SIGNET_PORT  — override port (default: 3850)
-SIGNET_HOST  — override bind host (default: localhost)
+SIGNET_HOST  — daemon host for local calls (default: 127.0.0.1)
+SIGNET_BIND  — bind host override (default: SIGNET_HOST)
 ```
 
 Authentication

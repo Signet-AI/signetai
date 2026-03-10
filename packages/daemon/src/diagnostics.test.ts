@@ -80,6 +80,7 @@ function insertJob(
 	memId: string,
 	status: string,
 	createdAt = now,
+	updatedAt = now,
 ): void {
 	raw
 		.prepare(
@@ -88,7 +89,7 @@ function insertJob(
 				 created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
-		.run(id, memId, "extract", status, 0, 3, createdAt, now);
+		.run(id, memId, "extract", status, 0, 3, createdAt, updatedAt);
 }
 
 function insertHistory(
@@ -146,6 +147,19 @@ describe("getQueueHealth", () => {
 		const result = getQueueHealth(asReadDb(db));
 		expect(result.deadRate).toBeGreaterThan(0.01);
 		expect(result.score).toBeLessThan(1);
+	});
+
+	test("old dead jobs outside the recent window do not degrade queue health", () => {
+		const oldTs = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+		for (let i = 0; i < 20; i++) {
+			const memId = `mem-old-dead-${i}`;
+			insertMemory(db, memId);
+			insertJob(db, `job-old-dead-${i}`, memId, "dead", oldTs, oldTs);
+		}
+
+		const result = getQueueHealth(asReadDb(db));
+		expect(result.deadRate).toBe(0);
+		expect(result.status).toBe("healthy");
 	});
 });
 

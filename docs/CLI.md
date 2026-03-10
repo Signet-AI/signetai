@@ -755,7 +755,10 @@ Environment Variables
 |----------|-------------|---------|
 | `SIGNET_PORT` | Daemon HTTP port | `3850` |
 | `SIGNET_PATH` | Base agents directory | `~/.agents` |
-| `SIGNET_HOST` | Daemon bind address | `localhost` |
+| `SIGNET_HOST` | Daemon host for local calls and default bind address | `127.0.0.1` |
+| `SIGNET_BIND` | Explicit daemon bind address override | `SIGNET_HOST` |
+| `SIGNET_LOG_FILE` | Explicit daemon log file path | unset |
+| `SIGNET_LOG_DIR` | Daemon log directory override | `~/.agents/.daemon/logs` |
 | `SIGNET_BYPASS` | Skip all hook processing (exit immediately) | unset |
 
 ---

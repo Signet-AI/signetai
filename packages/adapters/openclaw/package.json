@@ -18,12 +18,12 @@
   ],
   "openclaw": {
     "extensions": [
-      "./dist/index.js"
+      "dist/index.js"
     ]
   },
   "clawdbot": {
     "extensions": [
-      "./dist/index.js"
+      "dist/index.js"
     ]
   },
   "scripts": {

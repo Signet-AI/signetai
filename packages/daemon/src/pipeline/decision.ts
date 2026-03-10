@@ -32,6 +32,7 @@ interface CandidateMemory {
 export interface DecisionConfig {
 	readonly embedding: EmbeddingConfig;
 	readonly search: MemorySearchConfig;
+	readonly timeoutMs?: number;
 	readonly fetchEmbedding: (
 		text: string,
 		cfg: EmbeddingConfig,
@@ -309,7 +310,9 @@ export async function runShadowDecisions(
 		const prompt = buildDecisionPrompt(fact, candidates);
 
 		try {
-			const output = await provider.generate(prompt);
+			const output = await provider.generate(prompt, {
+				timeoutMs: cfg.timeoutMs,
+			});
 			const proposal = parseDecision(output, candidateIds, warnings);
 			if (proposal) {
 				const targetContent =

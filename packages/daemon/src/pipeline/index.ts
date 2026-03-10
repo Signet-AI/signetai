@@ -86,12 +86,17 @@ export function startPipeline(
 		logger.warn("pipeline", "Pipeline already running, skipping start");
 		return;
 	}
+	if (!pipelineCfg.enabled) {
+		logger.info("pipeline", "Pipeline disabled; worker start skipped");
+		return;
+	}
 
 	const provider = getLlmProvider();
 
 	const decisionCfg: DecisionConfig = {
 		embedding: embeddingCfg,
 		search: searchCfg,
+		timeoutMs: pipelineCfg.extraction.timeout,
 		fetchEmbedding,
 	};
 

@@ -26,9 +26,11 @@ runs inside that one process.
 
 Environment variables control the network address:
 
-- `SIGNET_HOST` — interface to bind (default: `localhost`)
+- `SIGNET_HOST` — daemon host for local calls and default bind address (default: `127.0.0.1`)
+- `SIGNET_BIND` — explicit bind address override (default: `SIGNET_HOST`)
 - `SIGNET_PORT` — port to listen on (default: `3850`)
 - `SIGNET_PATH` — override the data directory (default: `~/.agents/`)
+- `SIGNET_LOG_FILE` — optional explicit daemon log file path
 
 Bun is a hard requirement. The daemon uses `bun:sqlite` directly and will
 refuse to start under Node.

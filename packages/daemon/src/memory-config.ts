@@ -36,6 +36,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	extraction: {
 		provider: "claude-code",
 		model: "haiku",
+		endpoint: undefined,
 		timeout: 90000,
 		minConfidence: 0.7,
 		escalation: {
@@ -123,6 +124,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		enabled: true,
 		provider: "claude-code",
 		model: "haiku",
+		endpoint: undefined,
 		timeout: 120000,
 		maxTokens: 8000,
 		idleGapMinutes: 15,
@@ -198,6 +200,12 @@ function clampPositive(
 function clampFraction(raw: unknown, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
 	return Math.max(0, Math.min(1, raw));
+}
+
+function parseOptionalUrl(raw: unknown): string | undefined {
+	if (typeof raw !== "string") return undefined;
+	const trimmed = raw.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /**
@@ -299,6 +307,11 @@ export function loadPipelineConfig(
 					: flatModelOnly
 						? flatModel
 						: d.extraction.model,
+			endpoint:
+				parseOptionalUrl(extractionRaw?.endpoint) ??
+				parseOptionalUrl(extractionRaw?.base_url) ??
+				parseOptionalUrl(raw.extractionEndpoint) ??
+				parseOptionalUrl(raw.extractionBaseUrl),
 			timeout: clampPositive(
 				extractionRaw?.timeout ?? raw.extractionTimeout,
 				5000,
@@ -648,6 +661,9 @@ export function loadPipelineConfig(
 				typeof synthesisRaw?.model === "string"
 					? synthesisRaw.model
 					: d.synthesis.model,
+			endpoint:
+				parseOptionalUrl(synthesisRaw?.endpoint) ??
+				parseOptionalUrl(synthesisRaw?.base_url),
 			timeout: clampPositive(
 				synthesisRaw?.timeout,
 				5000,
@@ -897,7 +913,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 					String(emb.dimensions ?? "768"),
 					10,
 				);
-				const explicitBaseUrl = emb.base_url as string | undefined;
+				const explicitBaseUrl =
+					(typeof emb.base_url === "string" ? emb.base_url : undefined) ??
+					(typeof emb.endpoint === "string" ? emb.endpoint : undefined);
 				if (defaults.embedding.provider === "ollama") {
 					defaults.embedding.base_url =
 						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0

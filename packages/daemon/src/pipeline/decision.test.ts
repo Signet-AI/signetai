@@ -193,6 +193,40 @@ describe("runShadowDecisions", () => {
 		expect(result.warnings).toHaveLength(0);
 	});
 
+	it("passes timeout options through to decision provider calls", async () => {
+		insertMemory(db, "mem-timeout", MATCHING_MEMORY_CONTENT);
+
+		let seenTimeout: number | undefined;
+		const provider: LlmProvider = {
+			name: "mock-timeout",
+			async generate(_prompt, opts) {
+				seenTimeout = opts?.timeoutMs;
+				return JSON.stringify({
+					action: "none",
+					confidence: 0.8,
+					reason: "already covered",
+				});
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		const timeoutCfg: DecisionConfig = {
+			...cfg,
+			timeoutMs: 54321,
+		};
+		const result = await runShadowDecisions(
+			[MATCHING_FACT],
+			accessor,
+			provider,
+			timeoutCfg,
+		);
+
+		expect(result.proposals).toHaveLength(1);
+		expect(seenTimeout).toBe(54321);
+	});
+
 	it("rejects an invalid action with a warning", async () => {
 		insertMemory(db, "mem-002", MATCHING_MEMORY_CONTENT);
 

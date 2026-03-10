@@ -505,4 +505,52 @@ describe("createOpenCodeProvider", () => {
 		expect(result).toBe('{"facts":[],"entities":[]}');
 		expect(getCalls).toBeGreaterThan(0);
 	});
+
+	it("uses configured ollama fallback base URL for OpenCode fallback", async () => {
+		const seenUrls: string[] = [];
+		mockFetch(async (url, init) => {
+			seenUrls.push(url);
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_fallback",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			if (url.includes("/session/ses_fallback/message")) {
+				if (init?.method === "POST") {
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return Response.json([
+					{
+						info: { role: "user" },
+						parts: [{ type: "text", text: "still pending" }],
+					},
+				]);
+			}
+			if (url === "http://172.17.0.1:11434/api/tags") {
+				return Response.json({ models: [] });
+			}
+			if (url === "http://172.17.0.1:11434/api/generate") {
+				return Response.json({ response: '{"facts":[],"entities":[]}' });
+			}
+			return new Response("unexpected url", { status: 500 });
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			enableOllamaFallback: true,
+			ollamaFallbackBaseUrl: "http://172.17.0.1:11434",
+		});
+		const result = await provider.generate("test", { timeoutMs: 250 });
+		expect(result).toBe('{"facts":[],"entities":[]}');
+		expect(seenUrls).toContain("http://172.17.0.1:11434/api/tags");
+		expect(seenUrls).toContain("http://172.17.0.1:11434/api/generate");
+	});
 });

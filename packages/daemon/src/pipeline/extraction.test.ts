@@ -47,6 +47,28 @@ const VALID_RESPONSE = JSON.stringify({
 // ---------------------------------------------------------------------------
 
 describe("extractFactsAndEntities", () => {
+	it("passes timeout options through to the provider", async () => {
+		let seenTimeout: number | undefined;
+		const provider: LlmProvider = {
+			name: "timeout-probe",
+			async generate(_prompt, opts) {
+				seenTimeout = opts?.timeoutMs;
+				return VALID_RESPONSE;
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		await extractFactsAndEntities(
+			"User prefers dark mode and uses vim keybindings",
+			provider,
+			{ timeoutMs: 12345 },
+		);
+
+		expect(seenTimeout).toBe(12345);
+	});
+
 	it("parses valid JSON response correctly", async () => {
 		const provider = mockProvider([VALID_RESPONSE]);
 		const result = await extractFactsAndEntities(

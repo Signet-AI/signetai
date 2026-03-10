@@ -13,7 +13,7 @@ import { createMcpServer, refreshMarketplaceProxyTools } from "./mcp/tools.js";
 
 const DAEMON_URL =
 	process.env.SIGNET_DAEMON_URL ??
-	`http://${process.env.SIGNET_HOST ?? "localhost"}:${process.env.SIGNET_PORT ?? "3850"}`;
+	`http://${process.env.SIGNET_HOST ?? "127.0.0.1"}:${process.env.SIGNET_PORT ?? "3850"}`;
 
 const server = await createMcpServer({
 	daemonUrl: DAEMON_URL,
