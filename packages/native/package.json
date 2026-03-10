@@ -1,24 +1,20 @@
 {
-  "name": "@signet/native",
-  "version": "0.53.2",
-  "private": true,
-  "description": "Signet native accelerators",
-  "main": "index.js",
-  "types": "index.d.ts",
-  "files": [
-    "index.js",
-    "index.d.ts",
-    "*.node"
-  ],
-  "napi": {
-    "binaryName": "signet-native",
-    "triples": {}
-  },
-  "scripts": {
-    "build": "napi build --release --platform --dts generated.d.ts && rm -f generated.d.ts",
-    "build:debug": "napi build --platform --dts generated.d.ts && rm -f generated.d.ts"
-  },
-  "devDependencies": {
-    "@napi-rs/cli": "^3.5.1"
-  }
+	"name": "@signet/native",
+	"version": "0.53.2",
+	"private": true,
+	"description": "Signet native accelerators",
+	"main": "index.js",
+	"types": "index.d.ts",
+	"files": ["index.js", "index.d.ts", "*.node"],
+	"napi": {
+		"binaryName": "signet-native",
+		"triples": {}
+	},
+	"scripts": {
+		"build": "napi build --release --platform --dts generated.d.ts && rm -f generated.d.ts",
+		"build:debug": "napi build --platform --dts generated.d.ts && rm -f generated.d.ts"
+	},
+	"devDependencies": {
+		"@napi-rs/cli": "^3.5.1"
+	}
 }

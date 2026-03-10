@@ -1,10 +1,6 @@
 <script lang="ts">
-import {
-	fetchChangelog,
-	fetchReadme,
-	fetchRoadmap,
-	type MarkdownDoc,
-} from "$lib/api";
+import { type MarkdownDoc, fetchChangelog, fetchReadme, fetchRoadmap } from "$lib/api";
+import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import {
 	Card,
 	CardAction,
@@ -18,7 +14,6 @@ import ExternalLink from "@lucide/svelte/icons/external-link";
 import Github from "@lucide/svelte/icons/github";
 import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import { onMount } from "svelte";
-import PageBanner from "$lib/components/layout/PageBanner.svelte";
 
 type ViewId = "readme" | "roadmap" | "changelog";
 

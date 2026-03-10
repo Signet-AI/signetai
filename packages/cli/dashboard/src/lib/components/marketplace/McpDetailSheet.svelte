@@ -55,10 +55,10 @@ const {
 let reviewFilter = $state<ReviewFilter>("top");
 let reviewLoading = $state(false);
 let reviewItems = $state<MarketplaceReview[]>([]);
-let reviewsOpen = $state(true);
+const reviewsOpen = $state(true);
 
-let displayName = $state(loadDisplayName());
-let rating = $state<RatingValue>(5);
+const displayName = $state(loadDisplayName());
+const rating = $state<RatingValue>(5);
 let title = $state("");
 let body = $state("");
 let submitting = $state(false);
@@ -68,21 +68,13 @@ const activeRatingLabel = $derived(`${rating}/5`);
 const visibleReviews = $derived.by(() => {
 	const items = [...reviewItems];
 	if (reviewFilter === "top") {
-		return items.sort((a, b) =>
-			b.rating === a.rating
-				? b.updatedAt.localeCompare(a.updatedAt)
-				: b.rating - a.rating,
-		);
+		return items.sort((a, b) => (b.rating === a.rating ? b.updatedAt.localeCompare(a.updatedAt) : b.rating - a.rating));
 	}
 	if (reviewFilter === "good") {
-		return items
-			.filter((r) => r.rating >= 4)
-			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		return items.filter((r) => r.rating >= 4).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	}
 	if (reviewFilter === "bad") {
-		return items
-			.filter((r) => r.rating <= 2)
-			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		return items.filter((r) => r.rating <= 2).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	}
 	return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 });

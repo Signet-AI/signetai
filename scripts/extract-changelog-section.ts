@@ -7,7 +7,7 @@
  * Prints the matching section to stdout (used by CI for GitHub release body).
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
 
@@ -24,10 +24,7 @@ function extractSection(version: string): string {
 	if (afterHeader < 0) return content.slice(startIdx);
 
 	const nextSection = content.indexOf("\n## ", afterHeader);
-	const section =
-		nextSection >= 0
-			? content.slice(startIdx, nextSection)
-			: content.slice(startIdx);
+	const section = nextSection >= 0 ? content.slice(startIdx, nextSection) : content.slice(startIdx);
 
 	return section.trim();
 }

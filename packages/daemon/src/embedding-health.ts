@@ -61,9 +61,7 @@ function clamp(n: number): number {
 // Individual checks
 // ---------------------------------------------------------------------------
 
-function checkProviderAvailable(
-	providerStatus: EmbeddingStatus,
-): EmbeddingCheckResult {
+function checkProviderAvailable(providerStatus: EmbeddingStatus): EmbeddingCheckResult {
 	if (providerStatus.available) {
 		return {
 			name: "provider-available",
@@ -80,18 +78,19 @@ function checkProviderAvailable(
 			base_url: providerStatus.base_url,
 			error: providerStatus.error,
 		},
-		fix: providerStatus.provider === "native"
-			? "Check disk space and network connectivity for initial model download"
-			: providerStatus.provider === "ollama"
-				? "Start ollama with `ollama serve` or check that the model is pulled"
-				: "Verify your OpenAI API key and network connectivity",
+		fix:
+			providerStatus.provider === "native"
+				? "Check disk space and network connectivity for initial model download"
+				: providerStatus.provider === "ollama"
+					? "Start ollama with `ollama serve` or check that the model is pulled"
+					: "Verify your OpenAI API key and network connectivity",
 	};
 }
 
 function checkCoverage(db: ReadDb): EmbeddingCheckResult {
-	const totalRow = db
-		.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
-		.get() as { n: number } | undefined;
+	const totalRow = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as
+		| { n: number }
+		| undefined;
 	const total = totalRow?.n ?? 0;
 
 	if (total === 0) {
@@ -147,13 +146,8 @@ function checkCoverage(db: ReadDb): EmbeddingCheckResult {
 	};
 }
 
-function checkDimensionMismatch(
-	db: ReadDb,
-	expectedDimensions: number,
-): EmbeddingCheckResult {
-	const rows = db
-		.prepare("SELECT DISTINCT dimensions FROM embeddings")
-		.all() as Array<{ dimensions: number }>;
+function checkDimensionMismatch(db: ReadDb, expectedDimensions: number): EmbeddingCheckResult {
+	const rows = db.prepare("SELECT DISTINCT dimensions FROM embeddings").all() as Array<{ dimensions: number }>;
 
 	if (rows.length === 0) {
 		return {
@@ -184,9 +178,7 @@ function checkDimensionMismatch(
 
 function checkModelDrift(db: ReadDb): EmbeddingCheckResult {
 	const rows = db
-		.prepare(
-			"SELECT DISTINCT embedding_model FROM memories WHERE embedding_model IS NOT NULL",
-		)
+		.prepare("SELECT DISTINCT embedding_model FROM memories WHERE embedding_model IS NOT NULL")
 		.all() as Array<{ embedding_model: string }>;
 
 	const models = rows.map((r) => r.embedding_model);
@@ -195,9 +187,7 @@ function checkModelDrift(db: ReadDb): EmbeddingCheckResult {
 		return {
 			name: "model-drift",
 			status: "ok",
-			message: models.length === 0
-				? "No embedding models recorded"
-				: `All memories use ${models[0]}`,
+			message: models.length === 0 ? "No embedding models recorded" : `All memories use ${models[0]}`,
 		};
 	}
 	return {
@@ -211,9 +201,7 @@ function checkModelDrift(db: ReadDb): EmbeddingCheckResult {
 
 function checkNullVectors(db: ReadDb): EmbeddingCheckResult {
 	const row = db
-		.prepare(
-			"SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN vec_embeddings v ON v.id = e.id WHERE v.id IS NULL",
-		)
+		.prepare("SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN vec_embeddings v ON v.id = e.id WHERE v.id IS NULL")
 		.get() as { n: number } | undefined;
 	const count = row?.n ?? 0;
 
@@ -234,16 +222,12 @@ function checkNullVectors(db: ReadDb): EmbeddingCheckResult {
 }
 
 function checkVecTableSync(db: ReadDb): EmbeddingCheckResult {
-	const embRow = db
-		.prepare("SELECT COUNT(*) AS n FROM embeddings")
-		.get() as { n: number } | undefined;
+	const embRow = db.prepare("SELECT COUNT(*) AS n FROM embeddings").get() as { n: number } | undefined;
 	const embCount = embRow?.n ?? 0;
 
 	let vecCount = 0;
 	try {
-		const vecRow = db
-			.prepare("SELECT COUNT(*) AS n FROM vec_embeddings")
-			.get() as { n: number } | undefined;
+		const vecRow = db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get() as { n: number } | undefined;
 		vecCount = vecRow?.n ?? 0;
 	} catch {
 		// vec_embeddings may not exist
@@ -303,10 +287,10 @@ function checkOrphanedEmbeddings(db: ReadDb): EmbeddingCheckResult {
 // ---------------------------------------------------------------------------
 
 const WEIGHTS: Record<string, number> = {
-	"provider-available": 0.30,
+	"provider-available": 0.3,
 	coverage: 0.25,
 	"dimension-mismatch": 0.15,
-	"model-drift": 0.10,
+	"model-drift": 0.1,
 	"null-vectors": 0.08,
 	"vec-table-sync": 0.07,
 	"orphaned-embeddings": 0.05,

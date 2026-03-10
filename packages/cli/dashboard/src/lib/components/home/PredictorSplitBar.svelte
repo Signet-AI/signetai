@@ -1,119 +1,106 @@
 <script lang="ts">
-	import {
-		Card,
-		CardContent,
-		CardHeader,
-		CardTitle,
-	} from "$lib/components/ui/card/index.js";
-	import { Badge } from "$lib/components/ui/badge/index.js";
-	import { setTab } from "$lib/stores/navigation.svelte";
-	import type { DaemonStatus } from "$lib/api";
-	import Gauge from "@lucide/svelte/icons/gauge";
+import type { DaemonStatus } from "$lib/api";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { Card, CardContent, CardHeader, CardTitle } from "$lib/components/ui/card/index.js";
+import { setTab } from "$lib/stores/navigation.svelte";
+import Gauge from "@lucide/svelte/icons/gauge";
 
-	const isDev = import.meta.env.DEV;
-	const API_BASE = isDev ? "http://localhost:3850" : "";
+const isDev = import.meta.env.DEV;
+const API_BASE = isDev ? "http://localhost:3850" : "";
 
-	interface PredictorHealth {
-		score: number;
-		status: string;
-		sidecarAlive: boolean;
-		successRate: number;
-		alpha: number;
-		coldStartExited: boolean;
-		modelVersion: number;
-		trainingSessions: number;
+interface PredictorHealth {
+	score: number;
+	status: string;
+	sidecarAlive: boolean;
+	successRate: number;
+	alpha: number;
+	coldStartExited: boolean;
+	modelVersion: number;
+	trainingSessions: number;
+}
+
+interface DiagnosticsPredictor {
+	score: number;
+	status: string;
+}
+
+interface DiagnosticsIndex {
+	embeddingCoverage: number;
+}
+
+interface DiagnosticsStorage {
+	totalMemories: number;
+}
+
+interface DiagnosticsComposite {
+	score: number;
+}
+
+interface DiagnosticsData {
+	predictor?: DiagnosticsPredictor;
+	index?: DiagnosticsIndex;
+	storage?: DiagnosticsStorage;
+	composite?: DiagnosticsComposite;
+}
+
+interface Props {
+	daemonStatus: DaemonStatus | null;
+}
+
+const { daemonStatus }: Props = $props();
+
+let health = $state<PredictorHealth | null>(null);
+let diagnostics = $state<DiagnosticsData | null>(null);
+let loaded = $state(false);
+
+const predictorAvailable = $derived(health !== null && health.sidecarAlive);
+
+const alpha = $derived(health?.alpha ?? 0.6);
+const successRate = $derived(health?.successRate ?? 0);
+const healthStatus = $derived(health?.status ?? "unknown");
+
+const embeddingCoverage = $derived(diagnostics?.index?.embeddingCoverage ?? 0);
+const totalMemories = $derived(diagnostics?.storage?.totalMemories ?? 0);
+const compositeScore = $derived(diagnostics?.composite?.score ?? 0);
+
+const healthBadgeVariant = $derived.by(() => {
+	switch (healthStatus) {
+		case "healthy":
+			return "default" as const;
+		case "degraded":
+		case "cold_start":
+			return "secondary" as const;
+		case "unhealthy":
+			return "destructive" as const;
+		default:
+			return "outline" as const;
 	}
+});
 
-	interface DiagnosticsPredictor {
-		score: number;
-		status: string;
-	}
+async function fetchData(): Promise<void> {
+	try {
+		const [healthRes, diagRes] = await Promise.allSettled([
+			fetch(`${API_BASE}/api/diagnostics/predictor`),
+			fetch(`${API_BASE}/api/diagnostics`),
+		]);
 
-	interface DiagnosticsIndex {
-		embeddingCoverage: number;
-	}
-
-	interface DiagnosticsStorage {
-		totalMemories: number;
-	}
-
-	interface DiagnosticsComposite {
-		score: number;
-	}
-
-	interface DiagnosticsData {
-		predictor?: DiagnosticsPredictor;
-		index?: DiagnosticsIndex;
-		storage?: DiagnosticsStorage;
-		composite?: DiagnosticsComposite;
-	}
-
-	interface Props {
-		daemonStatus: DaemonStatus | null;
-	}
-
-	const { daemonStatus }: Props = $props();
-
-	let health = $state<PredictorHealth | null>(null);
-	let diagnostics = $state<DiagnosticsData | null>(null);
-	let loaded = $state(false);
-
-	const predictorAvailable = $derived(
-		health !== null && health.sidecarAlive,
-	);
-
-	const alpha = $derived(health?.alpha ?? 0.6);
-	const successRate = $derived(health?.successRate ?? 0);
-	const healthStatus = $derived(health?.status ?? "unknown");
-
-	const embeddingCoverage = $derived(
-		diagnostics?.index?.embeddingCoverage ?? 0,
-	);
-	const totalMemories = $derived(
-		diagnostics?.storage?.totalMemories ?? 0,
-	);
-	const compositeScore = $derived(
-		diagnostics?.composite?.score ?? 0,
-	);
-
-	const healthBadgeVariant = $derived.by(() => {
-		switch (healthStatus) {
-			case "healthy":
-				return "default" as const;
-			case "degraded":
-			case "cold_start":
-				return "secondary" as const;
-			case "unhealthy":
-				return "destructive" as const;
-			default:
-				return "outline" as const;
+		if (healthRes.status === "fulfilled" && healthRes.value.ok) {
+			health = await healthRes.value.json();
 		}
-	});
-
-	async function fetchData(): Promise<void> {
-		try {
-			const [healthRes, diagRes] = await Promise.allSettled([
-				fetch(`${API_BASE}/api/diagnostics/predictor`),
-				fetch(`${API_BASE}/api/diagnostics`),
-			]);
-
-			if (healthRes.status === "fulfilled" && healthRes.value.ok) {
-				health = await healthRes.value.json();
-			}
-			if (diagRes.status === "fulfilled" && diagRes.value.ok) {
-				diagnostics = await diagRes.value.json();
-			}
-		} catch {
-			// fail open
+		if (diagRes.status === "fulfilled" && diagRes.value.ok) {
+			diagnostics = await diagRes.value.json();
 		}
-		loaded = true;
+	} catch {
+		// fail open
 	}
+	loaded = true;
+}
 
-	$effect(() => {
-		if (daemonStatus) {
-			fetchData();
-		}
-	});
+$effect(() => {
+	if (daemonStatus) {
+		fetchData();
+	}
+});
 </script>
 
 <Card

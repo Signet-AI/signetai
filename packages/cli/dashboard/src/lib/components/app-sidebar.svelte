@@ -2,22 +2,15 @@
 import type { DaemonStatus, Harness, Identity } from "$lib/api";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 import {
-	type TabId,
-	isEngineGroup,
-	isMemoryGroup,
-	nav,
-	navigateToGroup,
-	setTab,
-} from "$lib/stores/navigation.svelte";
-import {
 	type SidebarFocusItem,
 	focus,
+	focusFirstPageElement,
 	navigateSidebarNext,
 	navigateSidebarPrev,
 	setFocusZone,
 	setSidebarItem,
-	focusFirstPageElement,
 } from "$lib/stores/focus.svelte";
+import { type TabId, isEngineGroup, isMemoryGroup, nav, navigateToGroup, setTab } from "$lib/stores/navigation.svelte";
 import BookOpen from "@lucide/svelte/icons/book-open";
 import Brain from "@lucide/svelte/icons/brain";
 import Cog from "@lucide/svelte/icons/cog";
@@ -43,15 +36,7 @@ interface Props {
 	onprefetchembeddings?: () => void;
 }
 
-const {
-	identity,
-	harnesses,
-	memCount,
-	daemonStatus,
-	theme,
-	onthemetoggle,
-	onprefetchembeddings,
-}: Props = $props();
+const { identity, harnesses, memCount, daemonStatus, theme, onthemetoggle, onprefetchembeddings }: Props = $props();
 
 const sidebar = useSidebar();
 
@@ -98,7 +83,7 @@ function handleClick(item: NavItem): void {
 // Initialize sidebar focus on mount — derive from current active tab
 onMount(() => {
 	if (!focus.sidebarItem) {
-		const item = navItems.find(n => isActive(n));
+		const item = navItems.find((n) => isActive(n));
 		setSidebarItem((item?.id ?? "home") as SidebarFocusItem);
 	}
 });

@@ -1,17 +1,7 @@
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-	BaseConnector,
-	type InstallResult,
-	type UninstallResult,
-} from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
 
 const SHELL_BLOCK_START = "# >>> signet codex >>>";
 const SHELL_BLOCK_END = "# <<< signet codex <<<";
@@ -146,11 +136,7 @@ export class CodexConnector extends BaseConnector {
 	}
 
 	private getShellConfigPaths(): string[] {
-		return [
-			join(homedir(), ".zshrc"),
-			join(homedir(), ".bashrc"),
-			join(homedir(), ".bash_profile"),
-		];
+		return [join(homedir(), ".zshrc"), join(homedir(), ".bashrc"), join(homedir(), ".bash_profile")];
 	}
 
 	getConfigPath(): string {

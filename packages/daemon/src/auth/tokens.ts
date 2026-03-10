@@ -5,17 +5,13 @@
  * Token format: {base64url(payload)}.{base64url(hmac)}
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { AuthResult, TokenClaims, TokenRole, TokenScope } from "./types";
 
 function base64urlEncode(data: Buffer | Uint8Array): string {
-	return Buffer.from(data)
-		.toString("base64")
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
+	return Buffer.from(data).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function base64urlDecode(str: string): Buffer {
@@ -79,10 +75,7 @@ export function verifyToken(secret: Buffer, token: string): AuthResult {
 	const expectedSig = sign(secret, payloadB64);
 	const actualSig = base64urlDecode(sigB64);
 
-	if (
-		expectedSig.length !== actualSig.length ||
-		!expectedSig.equals(actualSig)
-	) {
+	if (expectedSig.length !== actualSig.length || !expectedSig.equals(actualSig)) {
 		return { authenticated: false, claims: null, error: "invalid signature" };
 	}
 

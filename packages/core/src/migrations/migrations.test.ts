@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 /**
  * Tests for the migration framework.
  *
@@ -6,7 +7,6 @@
  * module hasn't been created yet — the integration pass will finalize.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 
 // The migration runner should be importable from the migrations index
 // If this import fails, the module hasn't been created yet

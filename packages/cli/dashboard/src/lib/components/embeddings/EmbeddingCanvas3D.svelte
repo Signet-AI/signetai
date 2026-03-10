@@ -1,13 +1,13 @@
 <script lang="ts">
 import type { EmbeddingPoint } from "../../api";
 import {
-	type RelationKind,
-	buildKnnEdges,
-	nodeColor3D,
-	edgeColor3D,
-	embeddingLabel,
 	GRAPH_K,
 	type NodeColorMode,
+	type RelationKind,
+	buildKnnEdges,
+	edgeColor3D,
+	embeddingLabel,
+	nodeColor3D,
 } from "./embedding-graph";
 
 interface Props {
@@ -29,7 +29,7 @@ interface Props {
 	embeddingById: Map<string, EmbeddingPoint>;
 }
 
-let {
+const {
 	embeddings,
 	projected3d,
 	graphSelected,
@@ -48,7 +48,7 @@ let {
 	embeddingById,
 }: Props = $props();
 
-let container = $state<HTMLDivElement | null>(null);
+const container = $state<HTMLDivElement | null>(null);
 let graph3d: any = null;
 let graphResizeObserver: ResizeObserver | null = null;
 let controlsCleanup: (() => void) | null = null;
@@ -62,14 +62,11 @@ export function focusNode(id: string): void {
 	if (!graph3d) return;
 	const graphData = graph3d.graphData?.();
 	if (!graphData?.nodes) return;
-	const node = graphData.nodes.find(
-		(entry: any) => String(entry.id) === id,
-	);
+	const node = graphData.nodes.find((entry: any) => String(entry.id) === id);
 	if (!node) return;
 	userAdjustedCamera = true;
 	const distance = 120;
-	const len =
-		Math.hypot(node.x ?? 0, node.y ?? 0, node.z ?? 0) || 1;
+	const len = Math.hypot(node.x ?? 0, node.y ?? 0, node.z ?? 0) || 1;
 	const ratio = 1 + distance / len;
 	graph3d.cameraPosition(
 		{
@@ -145,21 +142,9 @@ export function refreshAppearance(): void {
 		),
 	);
 	graph3d.linkColor((link: any) => {
-		const sourceId =
-			typeof link.source === "object"
-				? String(link.source.id)
-				: String(link.source);
-		const targetId =
-			typeof link.target === "object"
-				? String(link.target.id)
-				: String(link.target);
-		return edgeColor3D(
-			sourceId,
-			targetId,
-			embeddingFilterIds,
-			lensIds,
-			clusterLensMode,
-		);
+		const sourceId = typeof link.source === "object" ? String(link.source.id) : String(link.source);
+		const targetId = typeof link.target === "object" ? String(link.target.id) : String(link.target);
+		return edgeColor3D(sourceId, targetId, embeddingFilterIds, lensIds, clusterLensMode);
 	});
 	graph3d.refresh?.();
 }
@@ -216,25 +201,11 @@ export async function init(): Promise<void> {
 				sourceFocusSources,
 			),
 		)
-		.nodeVal(
-			(node: any) => 0.6 + (node.importance ?? 0.5) * 1.4,
-		)
+		.nodeVal((node: any) => 0.6 + (node.importance ?? 0.5) * 1.4)
 		.linkColor((link: any) => {
-			const sourceId =
-				typeof link.source === "object"
-					? String(link.source.id)
-					: String(link.source);
-			const targetId =
-				typeof link.target === "object"
-					? String(link.target.id)
-					: String(link.target);
-			return edgeColor3D(
-				sourceId,
-				targetId,
-				embeddingFilterIds,
-				lensIds,
-				clusterLensMode,
-			);
+			const sourceId = typeof link.source === "object" ? String(link.source.id) : String(link.source);
+			const targetId = typeof link.target === "object" ? String(link.target.id) : String(link.target);
+			return edgeColor3D(sourceId, targetId, embeddingFilterIds, lensIds, clusterLensMode);
 		})
 		.linkWidth(0.45)
 		.backgroundColor("#050505")
@@ -243,9 +214,7 @@ export async function init(): Promise<void> {
 			onselectnode(item ?? null);
 		})
 		.onNodeHover((node: any) => {
-			onhovernode(
-				node ? (embeddingById.get(String(node.id)) ?? null) : null,
-			);
+			onhovernode(node ? (embeddingById.get(String(node.id)) ?? null) : null);
 		});
 
 	sizeGraphToContainer();

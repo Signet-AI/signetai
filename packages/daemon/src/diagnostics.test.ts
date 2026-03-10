@@ -5,9 +5,10 @@
  * schema without hitting disk.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { runMigrations } from "@signet/core";
+import type { ReadDb } from "./db-accessor";
 import {
 	createProviderTracker,
 	getDiagnostics,
@@ -17,7 +18,6 @@ import {
 	getQueueHealth,
 	getStorageHealth,
 } from "./diagnostics";
-import type { ReadDb } from "./db-accessor";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,13 +74,7 @@ function insertMemory(
 		);
 }
 
-function insertJob(
-	raw: Database,
-	id: string,
-	memId: string,
-	status: string,
-	createdAt = now,
-): void {
+function insertJob(raw: Database, id: string, memId: string, status: string, createdAt = now): void {
 	raw
 		.prepare(
 			`INSERT INTO memory_jobs
@@ -91,13 +85,7 @@ function insertJob(
 		.run(id, memId, "extract", status, 0, 3, createdAt, now);
 }
 
-function insertHistory(
-	raw: Database,
-	id: string,
-	memId: string,
-	event: string,
-	createdAt = now,
-): void {
+function insertHistory(raw: Database, id: string, memId: string, event: string, createdAt = now): void {
 	raw
 		.prepare(
 			`INSERT INTO memory_history

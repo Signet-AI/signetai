@@ -1,7 +1,7 @@
 <script lang="ts">
+import { type SessionInfo, fetchSessions, toggleSessionBypass } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import * as Switch from "$lib/components/ui/switch/index.js";
-import { fetchSessions, toggleSessionBypass, type SessionInfo } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 
 let sessions: SessionInfo[] = $state([]);

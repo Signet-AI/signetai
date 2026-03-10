@@ -1,61 +1,61 @@
 <script lang="ts">
-	import { Badge } from "$lib/components/ui/badge/index.js";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-	import * as Popover from "$lib/components/ui/popover/index.js";
-	import Settings2 from "@lucide/svelte/icons/settings-2";
-	import Zap from "@lucide/svelte/icons/zap";
-	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Popover from "$lib/components/ui/popover/index.js";
+import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import Settings2 from "@lucide/svelte/icons/settings-2";
+import Zap from "@lucide/svelte/icons/zap";
 
-	interface Props {
-		healthStatus: string;
-		alpha: number;
-		winRate: number;
-		sidecarAlive: boolean;
-		training: boolean;
-		loading: boolean;
-		trainingPairs: number;
-		trainEpochs: number;
-		trainLimit: number;
-		trainInterval: number;
-		onTrain: () => void;
-		onRefresh: () => void;
-		onEpochsChange: (v: number) => void;
-		onLimitChange: (v: number) => void;
+interface Props {
+	healthStatus: string;
+	alpha: number;
+	winRate: number;
+	sidecarAlive: boolean;
+	training: boolean;
+	loading: boolean;
+	trainingPairs: number;
+	trainEpochs: number;
+	trainLimit: number;
+	trainInterval: number;
+	onTrain: () => void;
+	onRefresh: () => void;
+	onEpochsChange: (v: number) => void;
+	onLimitChange: (v: number) => void;
+}
+
+const {
+	healthStatus,
+	alpha,
+	winRate,
+	sidecarAlive,
+	training,
+	loading,
+	trainingPairs,
+	trainEpochs,
+	trainLimit,
+	trainInterval,
+	onTrain,
+	onRefresh,
+	onEpochsChange,
+	onLimitChange,
+}: Props = $props();
+
+const healthBadgeVariant = $derived.by(() => {
+	switch (healthStatus) {
+		case "healthy":
+			return "default" as const;
+		case "degraded":
+		case "cold_start":
+			return "secondary" as const;
+		case "unhealthy":
+			return "destructive" as const;
+		default:
+			return "outline" as const;
 	}
+});
 
-	const {
-		healthStatus,
-		alpha,
-		winRate,
-		sidecarAlive,
-		training,
-		loading,
-		trainingPairs,
-		trainEpochs,
-		trainLimit,
-		trainInterval,
-		onTrain,
-		onRefresh,
-		onEpochsChange,
-		onLimitChange,
-	}: Props = $props();
-
-	const healthBadgeVariant = $derived.by(() => {
-		switch (healthStatus) {
-			case "healthy":
-				return "default" as const;
-			case "degraded":
-			case "cold_start":
-				return "secondary" as const;
-			case "unhealthy":
-				return "destructive" as const;
-			default:
-				return "outline" as const;
-		}
-	});
-
-	let configOpen = $state(false);
+const configOpen = $state(false);
 </script>
 
 <div class="flex items-center gap-3 px-3 py-2 bg-card rounded-lg border border-border">

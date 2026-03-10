@@ -1,9 +1,9 @@
 <script lang="ts">
 import type { ScheduledTask } from "$lib/api";
-import * as Card from "$lib/components/ui/card/index.js";
 import { Badge } from "$lib/components/ui/badge/index.js";
-import { Switch } from "$lib/components/ui/switch/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
+import * as Card from "$lib/components/ui/card/index.js";
+import { Switch } from "$lib/components/ui/switch/index.js";
 import Play from "@lucide/svelte/icons/play";
 
 interface Props {
@@ -15,7 +15,7 @@ interface Props {
 	ontoggle: (enabled: boolean) => void;
 }
 
-let { task, columnKey, isSelected = false, onclick, ontrigger, ontoggle }: Props = $props();
+const { task, columnKey, isSelected = false, onclick, ontrigger, ontoggle }: Props = $props();
 
 function formatRelativeTime(iso: string | null): string {
 	if (!iso) return "—";
@@ -34,12 +34,12 @@ function formatRelativeTime(iso: string | null): string {
 	return diff > 0 ? `${d}d` : `${d}d ago`;
 }
 
-let harnessLabel = $derived(
+const harnessLabel = $derived(
 	task.harness === "claude-code" ? "claude" : task.harness === "codex" ? "codex" : "opencode",
 );
 
-let nextRunLabel = $derived(formatRelativeTime(task.next_run_at));
-let lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
+const nextRunLabel = $derived(formatRelativeTime(task.next_run_at));
+const lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 </script>
 
 <button

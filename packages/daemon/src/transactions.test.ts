@@ -2,13 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
-import {
-	txApplyDecision,
-	txForgetMemory,
-	txIngestEnvelope,
-	txModifyMemory,
-	txRecoverMemory,
-} from "./transactions";
+import { txApplyDecision, txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "./transactions";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -69,22 +63,12 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 			contentHash: "hash-old-1",
 		});
 
-		const oldVector = Buffer.from(
-			new Float32Array([0.01, 0.02]).buffer.slice(0),
-		);
+		const oldVector = Buffer.from(new Float32Array([0.01, 0.02]).buffer.slice(0));
 		db.prepare(
 			`INSERT INTO embeddings
 			 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 			 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)`,
-		).run(
-			"emb-old",
-			"hash-old-1",
-			oldVector,
-			2,
-			"mem-1",
-			"User prefers light theme",
-			new Date().toISOString(),
-		);
+		).run("emb-old", "hash-old-1", oldVector, 2, "mem-1", "User prefers light theme", new Date().toISOString());
 
 		const changedAt = new Date().toISOString();
 		const result = txModifyMemory(asWriteDb(db), {
@@ -153,9 +137,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		expect(embeddings[0]?.dimensions).toBe(3);
 		expect(embeddings[0]?.source_id).toBe("mem-1");
 
-		const oldEmbedding = db
-			.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
-			.get("hash-old-1");
+		const oldEmbedding = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get("hash-old-1");
 		expect(oldEmbedding).toBeNull();
 
 		const history = db
@@ -197,9 +179,10 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		expect(result.status).toBe("duplicate_content_hash");
 		expect(result.duplicateMemoryId).toBe("mem-a");
 
-		const memB = db
-			.prepare("SELECT content, content_hash FROM memories WHERE id = ?")
-			.get("mem-b") as { content: string; content_hash: string };
+		const memB = db.prepare("SELECT content, content_hash FROM memories WHERE id = ?").get("mem-b") as {
+			content: string;
+			content_hash: string;
+		};
 		expect(memB.content).toBe("Fact B");
 		expect(memB.content_hash).toBe("hash-b");
 	});
@@ -260,9 +243,9 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		});
 		expect(blocked.status).toBe("pinned_requires_force");
 
-		const rowAfterBlocked = db
-			.prepare("SELECT is_deleted FROM memories WHERE id = ?")
-			.get("mem-pinned") as { is_deleted: number };
+		const rowAfterBlocked = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get("mem-pinned") as {
+			is_deleted: number;
+		};
 		expect(rowAfterBlocked.is_deleted).toBe(0);
 
 		const allowed = txForgetMemory(asWriteDb(db), {
@@ -363,9 +346,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 			contentHash: "hash-expired",
 		});
 
-		const oldDeletedAt = new Date(
-			Date.now() - 31 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const oldDeletedAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
 		db.prepare(
 			`UPDATE memories
 			 SET is_deleted = 1, deleted_at = ?, version = version + 1
@@ -381,9 +362,7 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		});
 		expect(recovered.status).toBe("retention_expired");
 
-		const row = db
-			.prepare("SELECT is_deleted FROM memories WHERE id = ?")
-			.get("mem-expired") as { is_deleted: number };
+		const row = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get("mem-expired") as { is_deleted: number };
 		expect(row.is_deleted).toBe(1);
 	});
 });
@@ -459,9 +438,9 @@ describe("transactions: txApplyDecision soft-delete behavior", () => {
 			updatedAt: now,
 		});
 
-		const row = db
-			.prepare("SELECT is_deleted FROM memories WHERE id = ?")
-			.get("mem-pinned-del") as { is_deleted: number };
+		const row = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get("mem-pinned-del") as {
+			is_deleted: number;
+		};
 		expect(row.is_deleted).toBe(0);
 	});
 
@@ -502,9 +481,10 @@ describe("transactions: txApplyDecision soft-delete behavior", () => {
 		expect(source.deleted_at).toBeTruthy();
 
 		// Target has merged content
-		const target = db
-			.prepare("SELECT content, version FROM memories WHERE id = ?")
-			.get("mem-merge-tgt") as { content: string; version: number };
+		const target = db.prepare("SELECT content, version FROM memories WHERE id = ?").get("mem-merge-tgt") as {
+			content: string;
+			version: number;
+		};
 		expect(target.content).toBe("Merged content");
 		expect(target.version).toBe(2);
 
@@ -543,9 +523,7 @@ describe("transactions: txApplyDecision soft-delete behavior", () => {
 			updatedAt: now,
 		});
 
-		const row = db
-			.prepare("SELECT content, importance, version FROM memories WHERE id = ?")
-			.get("mem-upd") as {
+		const row = db.prepare("SELECT content, importance, version FROM memories WHERE id = ?").get("mem-upd") as {
 			content: string;
 			importance: number;
 			version: number;
@@ -596,9 +574,7 @@ describe("transactions: autonomous force-delete policy gate", () => {
 
 		expect(result.status).toBe("autonomous_force_denied");
 
-		const row = db
-			.prepare("SELECT is_deleted FROM memories WHERE id = ?")
-			.get("mem-policy") as { is_deleted: number };
+		const row = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get("mem-policy") as { is_deleted: number };
 		expect(row.is_deleted).toBe(0);
 	});
 
@@ -621,9 +597,9 @@ describe("transactions: autonomous force-delete policy gate", () => {
 
 		expect(result.status).toBe("deleted");
 
-		const row = db
-			.prepare("SELECT is_deleted FROM memories WHERE id = ?")
-			.get("mem-operator") as { is_deleted: number };
+		const row = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get("mem-operator") as {
+			is_deleted: number;
+		};
 		expect(row.is_deleted).toBe(1);
 	});
 

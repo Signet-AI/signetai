@@ -29,7 +29,7 @@ const EXTRACTION_PROVIDER_OPTIONS = [
 ] as const;
 
 const EXTRACTION_MODEL_PRESETS = {
-	"ollama": [
+	ollama: [
 		{ value: "glm-4.7-flash", label: "glm-4.7-flash" },
 		{ value: "qwen3:4b", label: "qwen3:4b" },
 		{ value: "llama3", label: "llama3" },
@@ -38,12 +38,12 @@ const EXTRACTION_MODEL_PRESETS = {
 		{ value: "haiku", label: "haiku" },
 		{ value: "sonnet", label: "sonnet" },
 	],
-	"codex": [
+	codex: [
 		{ value: "gpt-5.3-codex", label: "gpt-5.3-codex" },
 		{ value: "gpt-5-codex", label: "gpt-5-codex" },
 		{ value: "gpt-5-codex-mini", label: "gpt-5-codex-mini" },
 	],
-	"opencode": [
+	opencode: [
 		{ value: "anthropic/claude-haiku-4-5-20251001", label: "anthropic/claude-haiku-4-5-20251001" },
 		{ value: "anthropic/claude-sonnet-4-5-20250514", label: "anthropic/claude-sonnet-4-5-20250514" },
 		{ value: "google/gemini-2.5-flash", label: "google/gemini-2.5-flash" },
@@ -65,15 +65,11 @@ function extractionModelPresets() {
 function extractionModelSelectValue(): string {
 	const model = st.aStr(["memory", "pipelineV2", "extractionModel"]);
 	if (!model) return "";
-	return extractionModelPresets().some((preset) => preset.value === model)
-		? model
-		: "__custom__";
+	return extractionModelPresets().some((preset) => preset.value === model) ? model : "__custom__";
 }
 
 function isKnownPreset(model: string): boolean {
-	return Object.values(EXTRACTION_MODEL_PRESETS).some((presets) =>
-		presets.some((preset) => preset.value === model),
-	);
+	return Object.values(EXTRACTION_MODEL_PRESETS).some((presets) => presets.some((preset) => preset.value === model));
 }
 
 function defaultModelForProvider(provider: ExtractionProvider): string {
@@ -119,7 +115,12 @@ function setExtractionModelPreset(v: string | undefined): void {
 	st.aSetStr(["memory", "pipelineV2", "extractionModel"], v);
 }
 
-const TOP_LEVEL_FEATURE_KEYS = ["allowUpdateDelete", "graphEnabled", "autonomousEnabled", "semanticContradictionEnabled"] as const;
+const TOP_LEVEL_FEATURE_KEYS = [
+	"allowUpdateDelete",
+	"graphEnabled",
+	"autonomousEnabled",
+	"semanticContradictionEnabled",
+] as const;
 const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 </script>
 

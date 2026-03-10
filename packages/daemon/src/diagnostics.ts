@@ -72,12 +72,7 @@ export interface UpdateHealth extends HealthScore {
 	readonly lastError: string | null;
 }
 
-export type PredictorHealthStatus =
-	| "healthy"
-	| "degraded"
-	| "unhealthy"
-	| "cold_start"
-	| "disabled";
+export type PredictorHealthStatus = "healthy" | "degraded" | "unhealthy" | "cold_start" | "disabled";
 
 export interface PredictorHealth {
 	readonly score: number;
@@ -207,9 +202,7 @@ export function getQueueHealth(db: ReadDb): QueueHealth {
 
 	const depth = pendingRow?.cnt ?? 0;
 	const oldestAt = pendingRow?.oldest;
-	const oldestAgeSec = oldestAt
-		? Math.max(0, (Date.now() - new Date(oldestAt).getTime()) / 1000)
-		: 0;
+	const oldestAgeSec = oldestAt ? Math.max(0, (Date.now() - new Date(oldestAt).getTime()) / 1000) : 0;
 
 	const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 	const deadRow = db
@@ -268,8 +261,7 @@ export function getStorageHealth(db: ReadDb): StorageHealth {
 	const totalMemories = row?.total ?? 0;
 	const deletedTombstones = row?.deleted ?? 0;
 
-	const tombstoneRatio =
-		totalMemories > 0 ? deletedTombstones / totalMemories : 0;
+	const tombstoneRatio = totalMemories > 0 ? deletedTombstones / totalMemories : 0;
 
 	let score = 1.0;
 	if (tombstoneRatio > 0.3) score -= 0.3;
@@ -287,9 +279,9 @@ export function getStorageHealth(db: ReadDb): StorageHealth {
 
 export function getIndexHealth(db: ReadDb): IndexHealth {
 	// Active (non-deleted) memories are what should be searchable
-	const memRow = db
-		.prepare(`SELECT COUNT(*) AS cnt FROM memories WHERE is_deleted = 0`)
-		.get() as { cnt: number } | undefined;
+	const memRow = db.prepare(`SELECT COUNT(*) AS cnt FROM memories WHERE is_deleted = 0`).get() as
+		| { cnt: number }
+		| undefined;
 
 	const memoriesRowCount = memRow?.cnt ?? 0;
 
@@ -299,9 +291,7 @@ export function getIndexHealth(db: ReadDb): IndexHealth {
 	// Guard against missing table (can happen on upgrades before self-heal).
 	let ftsRowCount = 0;
 	try {
-		const ftsRow = db
-			.prepare("SELECT COUNT(*) AS cnt FROM memories_fts")
-			.get() as { cnt: number } | undefined;
+		const ftsRow = db.prepare("SELECT COUNT(*) AS cnt FROM memories_fts").get() as { cnt: number } | undefined;
 		ftsRowCount = ftsRow?.cnt ?? 0;
 	} catch {
 		// FTS table missing — report as full mismatch
@@ -311,8 +301,7 @@ export function getIndexHealth(db: ReadDb): IndexHealth {
 	// i.e., tombstones are included in the FTS index. Detect when the gap
 	// exceeds 10% of the active count (a content table will always show
 	// at least the active rows, so ftsRowCount >= memoriesRowCount).
-	const ftsMismatch =
-		memoriesRowCount > 0 && ftsRowCount > memoriesRowCount * 1.1;
+	const ftsMismatch = memoriesRowCount > 0 && ftsRowCount > memoriesRowCount * 1.1;
 
 	const embRow = db
 		.prepare(
@@ -322,8 +311,7 @@ export function getIndexHealth(db: ReadDb): IndexHealth {
 		.get() as { cnt: number } | undefined;
 
 	const withEmbeddings = embRow?.cnt ?? 0;
-	const embeddingCoverage =
-		memoriesRowCount > 0 ? withEmbeddings / memoriesRowCount : 1;
+	const embeddingCoverage = memoriesRowCount > 0 ? withEmbeddings / memoriesRowCount : 1;
 
 	let score = 1.0;
 	if (ftsMismatch) score -= 0.5;
@@ -342,8 +330,7 @@ export function getIndexHealth(db: ReadDb): IndexHealth {
 
 export function getProviderHealth(tracker: ProviderTracker): ProviderHealth {
 	const { total, successes, failures, timeouts } = tracker.stats;
-	const availabilityRate =
-		total > 0 ? successes / total : 1; // no data → assume healthy
+	const availabilityRate = total > 0 ? successes / total : 1; // no data → assume healthy
 
 	const score = clamp(availabilityRate);
 	return {
@@ -358,9 +345,7 @@ export function getProviderHealth(tracker: ProviderTracker): ProviderHealth {
 }
 
 export function getMutationHealth(db: ReadDb): MutationHealth {
-	const sevenDaysAgo = new Date(
-		Date.now() - 7 * 24 * 60 * 60 * 1000,
-	).toISOString();
+	const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 	const row = db
 		.prepare(
 			`SELECT
@@ -404,15 +389,12 @@ export function getDuplicateHealth(db: ReadDb): DuplicateHealth {
 		)
 		.get() as { exact_dupes: number; exact_clusters: number } | undefined;
 
-	const totalRow = db
-		.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
-		.get() as { n: number };
+	const totalRow = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as { n: number };
 
 	const totalActive = totalRow.n;
 	const exactDuplicates = dupRow?.exact_dupes ?? 0;
 	const exactClusters = dupRow?.exact_clusters ?? 0;
-	const duplicateRatio =
-		totalActive > 0 ? exactDuplicates / totalActive : 0;
+	const duplicateRatio = totalActive > 0 ? exactDuplicates / totalActive : 0;
 
 	let score = 1.0;
 	if (duplicateRatio > 0.1) score -= 0.5;
@@ -448,11 +430,13 @@ export function getConnectorHealth(db: ReadDb): ConnectorHealth {
 					SUM(CASE WHEN last_error IS NOT NULL THEN 1 ELSE 0 END) AS errors
 				 FROM connectors`,
 			)
-			.get() as {
-			total: number;
-			syncing: number;
-			errors: number;
-		} | undefined;
+			.get() as
+			| {
+					total: number;
+					syncing: number;
+					errors: number;
+			  }
+			| undefined;
 
 		const connectorCount = totalRow?.total ?? 0;
 		const syncingCount = totalRow?.syncing ?? 0;
@@ -468,9 +452,7 @@ export function getConnectorHealth(db: ReadDb): ConnectorHealth {
 			.get() as { oldest: string | null } | undefined;
 
 		const oldestAt = oldestErrorRow?.oldest;
-		const oldestErrorAge = oldestAt
-			? Math.max(0, Date.now() - new Date(oldestAt).getTime())
-			: 0;
+		const oldestErrorAge = oldestAt ? Math.max(0, Date.now() - new Date(oldestAt).getTime()) : 0;
 
 		let score = 1.0;
 		if (errorCount > 0) score -= 0.3;
@@ -504,13 +486,9 @@ export function getUpdateHealth(state?: UpdateState): UpdateHealth {
 		};
 	}
 
-	const lastCheckAgeHours = state.lastCheckTime
-		? (Date.now() - state.lastCheckTime.getTime()) / 3_600_000
-		: 0;
+	const lastCheckAgeHours = state.lastCheckTime ? (Date.now() - state.lastCheckTime.getTime()) / 3_600_000 : 0;
 
-	const lastCheckSucceeded = state.lastCheck
-		? !state.lastCheck.checkError
-		: true;
+	const lastCheckSucceeded = state.lastCheck ? !state.lastCheck.checkError : true;
 
 	let score = 1.0;
 
@@ -528,10 +506,7 @@ export function getUpdateHealth(state?: UpdateState): UpdateHealth {
 		score -= 0.2;
 	}
 
-	if (
-		!state.config.autoInstall &&
-		state.lastCheck?.updateAvailable
-	) {
+	if (!state.config.autoInstall && state.lastCheck?.updateAvailable) {
 		score -= 0.1;
 	}
 
@@ -564,9 +539,7 @@ const DISABLED_PREDICTOR: PredictorHealthParams = {
 	lastTrainedAt: null,
 };
 
-export function getPredictorHealth(
-	params: PredictorHealthParams,
-): PredictorHealth {
+export function getPredictorHealth(params: PredictorHealthParams): PredictorHealth {
 	if (!params.enabled) {
 		return {
 			score: 0,
@@ -652,7 +625,7 @@ export function getPredictorHealth(
 // 0.05 for it and scale the rest down proportionally (×0.95).
 const BASE_WEIGHTS = {
 	queue: 0.25,
-	storage: 0.10,
+	storage: 0.1,
 	index: 0.15,
 	provider: 0.22,
 	mutation: 0.08,
@@ -678,9 +651,7 @@ export function getDiagnostics(
 	const duplicate = getDuplicateHealth(db);
 	const connector = getConnectorHealth(db);
 	const update = getUpdateHealth(updateState);
-	const predictor = getPredictorHealth(
-		predictorParams ?? DISABLED_PREDICTOR,
-	);
+	const predictor = getPredictorHealth(predictorParams ?? DISABLED_PREDICTOR);
 
 	// When predictor is enabled, include it in the composite and
 	// scale base weights down to keep the total at 1.0.
@@ -695,9 +666,7 @@ export function getDiagnostics(
 			duplicate.score * BASE_WEIGHTS.duplicate * s +
 			connector.score * BASE_WEIGHTS.connector * s +
 			update.score * BASE_WEIGHTS.update * s +
-			(predictorEnabled
-				? predictor.score * BASE_WEIGHTS.predictor
-				: 0),
+			(predictorEnabled ? predictor.score * BASE_WEIGHTS.predictor : 0),
 	);
 
 	const composite: HealthScore = {

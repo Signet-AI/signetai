@@ -37,10 +37,7 @@ const defaultLayout: WorkspaceLayout = {
 	density: "default",
 };
 
-function mergeLayoutWithDefaults(
-	defaults: WorkspaceLayout,
-	partial: Partial<WorkspaceLayout>,
-): WorkspaceLayout {
+function mergeLayoutWithDefaults(defaults: WorkspaceLayout, partial: Partial<WorkspaceLayout>): WorkspaceLayout {
 	return {
 		pipeline: { ...defaults.pipeline, ...partial.pipeline },
 		embeddings: { ...defaults.embeddings, ...partial.embeddings },

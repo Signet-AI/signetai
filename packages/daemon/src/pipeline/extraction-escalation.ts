@@ -162,9 +162,7 @@ export function applyLevel3Filter(
 				const batch = hashes.slice(start, start + BATCH);
 				const placeholders = batch.map(() => "?").join(",");
 				const rows = db
-					.prepare(
-						`SELECT content_hash FROM memories WHERE content_hash IN (${placeholders}) AND agent_id = ?`,
-					)
+					.prepare(`SELECT content_hash FROM memories WHERE content_hash IN (${placeholders}) AND agent_id = ?`)
 					.all(...batch, agentId) as ReadonlyArray<{ content_hash: string }>;
 				for (const row of rows) {
 					existingHashes.add(row.content_hash);

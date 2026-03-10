@@ -13,12 +13,10 @@ const args = process.argv.slice(2);
 const hang = args.includes("--hang");
 const crash = args.includes("--crash");
 const slowArg = args.find((a) => a.startsWith("--slow="));
-const slowMs = slowArg ? parseInt(slowArg.split("=")[1], 10) : 0;
+const slowMs = slowArg ? Number.parseInt(slowArg.split("=")[1], 10) : 0;
 const nativeDimIndex = args.indexOf("--native-dim");
 const nativeDim =
-	nativeDimIndex >= 0 && nativeDimIndex + 1 < args.length
-		? parseInt(args[nativeDimIndex + 1], 10)
-		: 768;
+	nativeDimIndex >= 0 && nativeDimIndex + 1 < args.length ? Number.parseInt(args[nativeDimIndex + 1], 10) : 768;
 
 let requestCount = 0;
 

@@ -13,9 +13,9 @@ import type { DecisionConfig } from "./decision";
 import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worker";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { DEFAULT_RETENTION, type RetentionHandle, startRetentionWorker } from "./retention-worker";
-import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./structural-classify";
 import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
+import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, startWorker } from "./worker";
 
@@ -131,11 +131,7 @@ export function startPipeline(
 	// Structural assignment workers (KA-2) — classify aspects and extract
 	// dependencies from entity-linked facts. Gate on both structural.enabled
 	// and graph.enabled since they depend on the entity graph.
-	if (
-		pipelineCfg.structural.enabled &&
-		pipelineCfg.graph.enabled &&
-		!pipelineCfg.mutationsFrozen
-	) {
+	if (pipelineCfg.structural.enabled && pipelineCfg.graph.enabled && !pipelineCfg.mutationsFrozen) {
 		if (!structuralClassifyHandle) {
 			structuralClassifyHandle = startStructuralClassifyWorker({
 				accessor,

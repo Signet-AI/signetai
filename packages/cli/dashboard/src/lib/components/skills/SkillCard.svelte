@@ -17,7 +17,7 @@ type Props = {
 	oncomparetoggle?: () => void;
 };
 
-let {
+const {
 	item,
 	mode,
 	featured = false,
@@ -31,9 +31,7 @@ let {
 	oncomparetoggle,
 }: Props = $props();
 
-function isSearchResult(
-	i: Skill | SkillSearchResult,
-): i is SkillSearchResult {
+function isSearchResult(i: Skill | SkillSearchResult): i is SkillSearchResult {
 	return "installed" in i && "fullName" in i;
 }
 
@@ -72,12 +70,10 @@ function getMonogram(name: string): string {
 	return name.slice(0, 2).toUpperCase();
 }
 
-let monogram = $derived(getMonogram(item.name));
-let monogramBg = $derived(getMonogramBg(item.name));
+const monogram = $derived(getMonogram(item.name));
+const monogramBg = $derived(getMonogramBg(item.name));
 
-let isInstalled = $derived(
-	isSkill(item) ? true : isSearchResult(item) ? item.installed : false
-);
+const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.installed : false);
 </script>
 
 <div class="card-wrap" class:selected class:featured>

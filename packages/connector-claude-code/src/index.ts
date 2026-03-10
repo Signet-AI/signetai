@@ -12,15 +12,10 @@
  * ```
  */
 
-import {
-	BaseConnector,
-	type InstallResult,
-	type UninstallResult,
-} from "@signet/connector-base";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
+import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
 
 // ============================================================================
 // Types
@@ -184,8 +179,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 
 			// Check if Signet hooks are present (matches both Unix "signet hook ..."
 			// and Windows 'node "...signet.js" hook ...' command formats)
-			const cmd =
-				settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command ?? "";
+			const cmd = settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command ?? "";
 			return cmd.includes("hook session-start");
 		} catch {
 			return false;
@@ -206,9 +200,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 	/**
 	 * Called when a session starts
 	 */
-	async onSessionStart(
-		ctx: SessionContext,
-	): Promise<SessionStartResult | null> {
+	async onSessionStart(ctx: SessionContext): Promise<SessionStartResult | null> {
 		try {
 			const res = await fetch(`${this.daemonUrl}/api/hooks/session-start`, {
 				method: "POST",
@@ -302,7 +294,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			const cliEntry = process.argv[1] || "";
 			const signetJs = join(cliEntry, "..", "..", "bin", "signet.js");
 			if (existsSync(signetJs)) {
-			signetCmd = `"${process.execPath}" "${signetJs}"`;
+				signetCmd = `"${process.execPath}" "${signetJs}"`;
 			}
 		}
 
@@ -317,8 +309,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 					hooks: [
 						{
 							type: "command",
-							command:
-								`${signetCmd} hook session-start -H claude-code --project "${pwdExpr}"`,
+							command: `${signetCmd} hook session-start -H claude-code --project "${pwdExpr}"`,
 							timeout: 3000,
 						},
 					],
@@ -332,8 +323,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 					hooks: [
 						{
 							type: "command",
-							command:
-								`${signetCmd} hook user-prompt-submit -H claude-code --project "${pwdExpr}"`,
+							command: `${signetCmd} hook user-prompt-submit -H claude-code --project "${pwdExpr}"`,
 							timeout: 2000,
 						},
 					],
@@ -347,8 +337,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 					hooks: [
 						{
 							type: "command",
-							command:
-								`${signetCmd} hook pre-compaction -H claude-code --project "${pwdExpr}"`,
+							command: `${signetCmd} hook pre-compaction -H claude-code --project "${pwdExpr}"`,
 							timeout: 3000,
 						},
 					],
@@ -402,8 +391,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			}
 		}
 
-		const existingMcp =
-			(config.mcpServers as Record<string, unknown> | undefined) ?? {};
+		const existingMcp = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
 		config.mcpServers = {
 			...existingMcp,
 			signet: {
@@ -432,11 +420,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			return;
 		}
 
-		if (
-			config.mcpServers &&
-			typeof config.mcpServers === "object" &&
-			!Array.isArray(config.mcpServers)
-		) {
+		if (config.mcpServers && typeof config.mcpServers === "object" && !Array.isArray(config.mcpServers)) {
 			const mcp = config.mcpServers as Record<string, unknown>;
 			delete mcp.signet;
 			if (Object.keys(mcp).length === 0) {

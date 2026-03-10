@@ -149,9 +149,7 @@ export interface SetupDetection {
  * Detect existing identity setup at a given path
  */
 export function detectExistingSetup(basePath: string): SetupDetection {
-	const identityFileNames = Object.values(IDENTITY_FILES).map(
-		(spec) => spec.path,
-	);
+	const identityFileNames = Object.values(IDENTITY_FILES).map((spec) => spec.path);
 
 	// Check for identity files
 	const foundFiles: string[] = [];
@@ -168,9 +166,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		try {
 			const { readdirSync } = require("node:fs");
 			const files = readdirSync(memoryDir);
-			memoryLogCount = files.filter(
-				(f: string) => f.endsWith(".md") && !f.startsWith("TEMPLATE"),
-			).length;
+			memoryLogCount = files.filter((f: string) => f.endsWith(".md") && !f.startsWith("TEMPLATE")).length;
 		} catch {
 			// Ignore errors
 		}
@@ -194,12 +190,10 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		harnesses: {
 			claudeCode: existsSync(join(home, ".claude", "settings.json")),
 			openclaw:
-				existsSync(join(home, ".openclaw", "openclaw.json")) ||
-				existsSync(join(home, ".clawdbot", "clawdbot.json")),
+				existsSync(join(home, ".openclaw", "openclaw.json")) || existsSync(join(home, ".clawdbot", "clawdbot.json")),
 			opencode: existsSync(join(home, ".config", "opencode", "config.json")),
 			codex:
-				existsSync(join(home, ".codex", "config.toml")) ||
-				existsSync(join(home, ".config", "signet", "bin", "codex")),
+				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
 		},
 	};
 }
@@ -207,9 +201,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 /**
  * Load all identity files from a directory
  */
-export async function loadIdentityFiles(
-	basePath: string,
-): Promise<IdentityMap> {
+export async function loadIdentityFiles(basePath: string): Promise<IdentityMap> {
 	const result: IdentityMap = {};
 
 	for (const [key, spec] of Object.entries(IDENTITY_FILES)) {
@@ -318,10 +310,7 @@ export function summarizeIdentity(identity: IdentityMap): string {
 	const fileCount = Object.keys(identity).length;
 	parts.push(`Files: ${fileCount} identity files loaded`);
 
-	const totalSize = Object.values(identity).reduce(
-		(sum, file) => sum + (file?.size || 0),
-		0,
-	);
+	const totalSize = Object.values(identity).reduce((sum, file) => sum + (file?.size || 0), 0);
 	parts.push(`Size: ${totalSize} bytes`);
 
 	return parts.join("\n");

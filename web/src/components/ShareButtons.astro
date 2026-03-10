@@ -1,7 +1,7 @@
 ---
 interface Props {
-  url: string;
-  title: string;
+	url: string;
+	title: string;
 }
 
 const { url, title } = Astro.props;
@@ -10,21 +10,21 @@ const encodedUrl = encodeURIComponent(url);
 const encodedTitle = encodeURIComponent(title);
 
 const links = [
-  {
-    label: 'Share on X',
-    href: `https://x.com/intent/tweet?url=${encodedUrl}&text=${encodedTitle}`,
-    icon: 'x',
-  },
-  {
-    label: 'Share on LinkedIn',
-    href: `https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`,
-    icon: 'linkedin',
-  },
-  {
-    label: 'Share on Reddit',
-    href: `https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedTitle}`,
-    icon: 'reddit',
-  },
+	{
+		label: "Share on X",
+		href: `https://x.com/intent/tweet?url=${encodedUrl}&text=${encodedTitle}`,
+		icon: "x",
+	},
+	{
+		label: "Share on LinkedIn",
+		href: `https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`,
+		icon: "linkedin",
+	},
+	{
+		label: "Share on Reddit",
+		href: `https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedTitle}`,
+		icon: "reddit",
+	},
 ];
 ---
 

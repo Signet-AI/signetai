@@ -28,8 +28,8 @@ import {
 	IDENTITY_FILES,
 	type ImportResult,
 	type MigrationResult,
-	type SchemaInfo,
 	SIGNET_GIT_PROTECTED_PATHS,
+	type SchemaInfo,
 	type SetupDetection,
 	type SkillsResult,
 	detectExistingSetup as detectExistingSetupCore,
@@ -193,9 +193,7 @@ async function gitInit(dir: string): Promise<boolean> {
 
 function ensureProtectedGitignore(dir: string): void {
 	const gitignorePath = join(dir, ".gitignore");
-	const existingContent = existsSync(gitignorePath)
-		? readFileSync(gitignorePath, "utf-8")
-		: "";
+	const existingContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
 	const nextContent = mergeSignetGitignoreEntries(existingContent);
 	if (nextContent !== existingContent) {
 		writeFileSync(gitignorePath, nextContent, "utf-8");
@@ -204,18 +202,11 @@ function ensureProtectedGitignore(dir: string): void {
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
 	return new Promise((resolve) => {
-		const proc = spawn(
-			"git",
-			[
-				"rm",
-				"--cached",
-				"--ignore-unmatch",
-				"--quiet",
-				"--",
-				...SIGNET_GIT_PROTECTED_PATHS,
-			],
-			{ cwd: dir, stdio: "pipe", windowsHide: true },
-		);
+		const proc = spawn("git", ["rm", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], {
+			cwd: dir,
+			stdio: "pipe",
+			windowsHide: true,
+		});
 		proc.on("close", () => resolve());
 		proc.on("error", () => resolve());
 	});
@@ -540,10 +531,7 @@ async function configureHarnessHooks(
 		}
 		case "openclaw": {
 			const connector = new OpenClawConnector();
-			const runtimePath =
-				options?.openclawRuntimePath ??
-				connector.getConfiguredRuntimePath() ??
-				"plugin";
+			const runtimePath = options?.openclawRuntimePath ?? connector.getConfiguredRuntimePath() ?? "plugin";
 			await connector.install(basePath, {
 				configureWorkspace: options?.configureOpenClawWorkspace ?? false,
 				runtimePath,
@@ -651,10 +639,7 @@ async function ensureOpenClawPluginPackage(
 		agentsDir: basePath,
 		env: process.env,
 	});
-	const installCommand = getGlobalInstallCommand(
-		packageManager.family,
-		`${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`,
-	);
+	const installCommand = getGlobalInstallCommand(packageManager.family, `${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`);
 
 	const result = spawnSync(installCommand.command, installCommand.args, {
 		stdio: options.silent ? "pipe" : "inherit",
@@ -665,20 +650,14 @@ async function ensureOpenClawPluginPackage(
 
 	if (result.status !== 0) {
 		if (!options.silent) {
-			console.log(
-				chalk.yellow(
-					`  Warning: failed to refresh ${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`,
-				),
-			);
+			console.log(chalk.yellow(`  Warning: failed to refresh ${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`));
 		}
 		return false;
 	}
 
 	writeOpenClawPluginSyncVersion(basePath, VERSION);
 	if (!options.silent) {
-		console.log(
-			chalk.green(`  ✓ OpenClaw plugin refreshed (${OPENCLAW_PLUGIN_PACKAGE}@${VERSION})`),
-		);
+		console.log(chalk.green(`  ✓ OpenClaw plugin refreshed (${OPENCLAW_PLUGIN_PACKAGE}@${VERSION})`));
 	}
 
 	return true;
@@ -756,7 +735,13 @@ interface SetupWizardOptions {
 
 const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = ["claude-code", "opencode", "openclaw", "codex"];
 const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "ollama", "openai", "none"];
-const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = ["claude-code", "ollama", "opencode", "codex", "none"];
+const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
+	"claude-code",
+	"ollama",
+	"opencode",
+	"codex",
+	"none",
+];
 const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 
 function collectListOption(value: string, previous: string[]): string[] {
@@ -1648,9 +1633,9 @@ async function existingSetupWizard(
 						? "haiku"
 						: options.extractionProvider === "codex"
 							? "gpt-5.3-codex"
-						: options.extractionProvider === "opencode"
-							? "anthropic/claude-haiku-4-5-20251001"
-							: "glm-4.7-flash"),
+							: options.extractionProvider === "opencode"
+								? "anthropic/claude-haiku-4-5-20251001"
+								: "glm-4.7-flash"),
 			};
 		}
 
@@ -2008,7 +1993,9 @@ async function setupWizard(options: SetupWizardOptions) {
 				);
 			}
 			if (!migrationExtractionProvider) {
-				failNonInteractiveSetup("Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, or none).");
+				failNonInteractiveSetup(
+					"Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, or none).",
+				);
 			}
 
 			await existingSetupWizard(basePath, existing, existingConfig, {
@@ -2199,7 +2186,9 @@ async function setupWizard(options: SetupWizardOptions) {
 	}
 
 	if (nonInteractive && !requestedExtractionProvider) {
-		failNonInteractiveSetup("Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, or none).");
+		failNonInteractiveSetup(
+			"Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, or none).",
+		);
 	}
 
 	let embeddingProvider: EmbeddingProviderChoice;
@@ -3305,7 +3294,10 @@ program
 	)
 	.option("--embedding-provider <provider>", "Embedding provider in non-interactive mode (ollama, openai, none)")
 	.option("--embedding-model <model>", "Embedding model in non-interactive mode")
-	.option("--extraction-provider <provider>", "Extraction provider in non-interactive mode (claude-code, codex, ollama, opencode, none)")
+	.option(
+		"--extraction-provider <provider>",
+		"Extraction provider in non-interactive mode (claude-code, codex, ollama, opencode, none)",
+	)
 	.option("--extraction-model <model>", "Extraction model in non-interactive mode")
 	.option("--search-balance <alpha>", "Search balance alpha in non-interactive mode (0-1)")
 	.option("--openclaw-runtime-path <mode>", "OpenClaw runtime path in non-interactive mode (plugin, legacy)")
@@ -3561,7 +3553,10 @@ program
 		if (existsSync(join(homedir(), ".claude", "settings.json"))) {
 			detectedHarnesses.push("claude-code");
 		}
-		if (existsSync(join(homedir(), ".config", "signet", "bin", "codex")) || existsSync(join(homedir(), ".codex", "config.toml"))) {
+		if (
+			existsSync(join(homedir(), ".config", "signet", "bin", "codex")) ||
+			existsSync(join(homedir(), ".codex", "config.toml"))
+		) {
 			detectedHarnesses.push("codex");
 		}
 		if (existsSync(join(homedir(), ".config", "opencode"))) {
@@ -5401,7 +5396,10 @@ updateCmd
 			if (existsSync(join(homedir(), ".claude", "settings.json"))) {
 				harnesses.push("claude-code");
 			}
-			if (existsSync(join(homedir(), ".config", "signet", "bin", "codex")) || existsSync(join(homedir(), ".codex", "config.toml"))) {
+			if (
+				existsSync(join(homedir(), ".config", "signet", "bin", "codex")) ||
+				existsSync(join(homedir(), ".codex", "config.toml"))
+			) {
 				harnesses.push("codex");
 			}
 			if (existsSync(join(homedir(), ".config", "opencode"))) {

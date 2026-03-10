@@ -4,8 +4,13 @@
  * OllamaProvider uses the Ollama HTTP API, so we mock global fetch.
  */
 
-import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
-import { createOllamaProvider, createClaudeCodeProvider, createCodexProvider, createOpenCodeProvider } from "./provider";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import {
+	createClaudeCodeProvider,
+	createCodexProvider,
+	createOllamaProvider,
+	createOpenCodeProvider,
+} from "./provider";
 
 // ---------------------------------------------------------------------------
 // Fetch mock helpers
@@ -54,9 +59,7 @@ describe("createOllamaProvider", () => {
 	});
 
 	it("generate() returns trimmed response on success", async () => {
-		mockFetch(() =>
-			Response.json({ response: "  hello world  \n" }),
-		);
+		mockFetch(() => Response.json({ response: "  hello world  \n" }));
 
 		const provider = createOllamaProvider({ model: "test-model" });
 		const result = await provider.generate("test prompt");
@@ -67,18 +70,14 @@ describe("createOllamaProvider", () => {
 		mockFetch(() => new Response("model not found", { status: 404 }));
 
 		const provider = createOllamaProvider({ model: "test-model" });
-		await expect(provider.generate("test prompt")).rejects.toThrow(
-			/Ollama HTTP 404/,
-		);
+		await expect(provider.generate("test prompt")).rejects.toThrow(/Ollama HTTP 404/);
 	});
 
 	it("generate() throws on missing response field", async () => {
 		mockFetch(() => Response.json({ done: true }));
 
 		const provider = createOllamaProvider({ model: "test-model" });
-		await expect(provider.generate("test prompt")).rejects.toThrow(
-			/no response field/,
-		);
+		await expect(provider.generate("test prompt")).rejects.toThrow(/no response field/);
 	});
 
 	it("generate() throws a timeout error on slow responses", async () => {
@@ -86,9 +85,7 @@ describe("createOllamaProvider", () => {
 			return new Promise((_resolve, reject) => {
 				const signal = init?.signal;
 				if (signal) {
-					signal.addEventListener("abort", () =>
-						reject(new DOMException("aborted", "AbortError")),
-					);
+					signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
 				}
 			});
 		});
@@ -98,9 +95,7 @@ describe("createOllamaProvider", () => {
 			defaultTimeoutMs: 50,
 		});
 
-		await expect(
-			provider.generate("test prompt", { timeoutMs: 50 }),
-		).rejects.toThrow(/timeout/i);
+		await expect(provider.generate("test prompt", { timeoutMs: 50 })).rejects.toThrow(/timeout/i);
 	});
 
 	it("generate() sends maxTokens as num_predict", async () => {
@@ -281,7 +276,14 @@ describe("createOpenCodeProvider", () => {
 			callCount++;
 			if (url.includes("/session") && !url.includes("/message")) {
 				// Session creation
-				return Response.json({ id: "ses_test", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_test",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			// Message
 			return Response.json(openCodeResponse("  extracted fact  "));
@@ -298,7 +300,14 @@ describe("createOpenCodeProvider", () => {
 		mockFetch(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				sessionCreations++;
-				return Response.json({ id: "ses_reuse", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_reuse",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			return Response.json(openCodeResponse("ok"));
 		});
@@ -315,7 +324,14 @@ describe("createOpenCodeProvider", () => {
 		mockFetch(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				sessionCreations++;
-				return Response.json({ id: `ses_${sessionCreations}`, slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: `ses_${sessionCreations}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			messageAttempts++;
 			if (messageAttempts === 1) {
@@ -333,7 +349,14 @@ describe("createOpenCodeProvider", () => {
 	it("generateWithUsage() maps tokens and cost from response", async () => {
 		mockFetch(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({ id: "ses_usage", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_usage",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			return Response.json(openCodeResponse("result", { input: 100, output: 25 }, 0.0042));
 		});
@@ -350,7 +373,14 @@ describe("createOpenCodeProvider", () => {
 	it("generate() throws on non-200 non-retryable status", async () => {
 		mockFetch(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({ id: "ses_err", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_err",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			return new Response("internal server error", { status: 500 });
 		});
@@ -362,14 +392,19 @@ describe("createOpenCodeProvider", () => {
 	it("generate() throws a timeout error on slow responses", async () => {
 		mockFetch(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({ id: "ses_slow", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_slow",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			return new Promise((_resolve, reject) => {
 				const signal = init?.signal;
 				if (signal) {
-					signal.addEventListener("abort", () =>
-						reject(new DOMException("aborted", "AbortError")),
-					);
+					signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
 				}
 			});
 		});
@@ -378,9 +413,7 @@ describe("createOpenCodeProvider", () => {
 			baseUrl: "http://localhost:9999",
 			defaultTimeoutMs: 50,
 		});
-		await expect(
-			provider.generate("test", { timeoutMs: 50 }),
-		).rejects.toThrow(/timeout/i);
+		await expect(provider.generate("test", { timeoutMs: 50 })).rejects.toThrow(/timeout/i);
 	});
 
 	it("available() returns true when /global/health responds 200", async () => {
@@ -405,7 +438,14 @@ describe("createOpenCodeProvider", () => {
 		let capturedBody: Record<string, unknown> = {};
 		mockFetch(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({ id: "ses_body", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_body",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			capturedBody = JSON.parse(init?.body as string);
 			return Response.json(openCodeResponse("ok"));
@@ -424,7 +464,14 @@ describe("createOpenCodeProvider", () => {
 	it("generate() joins multiple text parts", async () => {
 		mockFetch(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({ id: "ses_multi", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_multi",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			return Response.json({
 				info: { role: "assistant", id: "msg_test", sessionID: "ses_multi", cost: 0, tokens: { input: 0, output: 0 } },
@@ -446,7 +493,14 @@ describe("createOpenCodeProvider", () => {
 		let getCalls = 0;
 		mockFetch(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({ id: "ses_poll", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_poll",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			if (init?.method === "POST") {
 				postCalls++;
@@ -483,7 +537,14 @@ describe("createOpenCodeProvider", () => {
 		let getCalls = 0;
 		mockFetch(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({ id: "ses_bad", slug: "test", projectID: "p", directory: "/tmp", title: "test", version: "1" });
+				return Response.json({
+					id: "ses_bad",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
 			}
 			if (init?.method === "POST") {
 				return new Response("", {

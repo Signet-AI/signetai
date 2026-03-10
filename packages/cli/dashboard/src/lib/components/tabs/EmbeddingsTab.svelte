@@ -1,5 +1,4 @@
 <script lang="ts">
-import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import {
 	type ConstellationGraph,
 	type EmbeddingCheckResult,
@@ -20,12 +19,13 @@ import {
 	repairResyncVectorIndex,
 	setMemoryPinned,
 } from "$lib/api";
-import * as Collapsible from "$lib/components/ui/collapsible/index.js";
-import { nav, setTab } from "$lib/stores/navigation.svelte";
+import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
-import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
+import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import { mem } from "$lib/stores/memory.svelte";
+import { nav, setTab } from "$lib/stores/navigation.svelte";
+import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
 import { toast } from "$lib/stores/toast.svelte";
 import { syncLayoutToStorage, workspaceLayout } from "$lib/stores/workspace-layout.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
@@ -79,7 +79,7 @@ const { onopenglobalsimilar }: Props = $props();
 // State
 // -----------------------------------------------------------------------
 
-let legendOpen = $state(false);
+const legendOpen = $state(false);
 let graphSelected = $state<EmbeddingPoint | null>(null);
 let graphHovered = $state<EmbeddingPoint | null>(null);
 let graphStatus = $state("");
@@ -226,16 +226,15 @@ function handleKeydown(event: KeyboardEvent): void {
 	if (event.defaultPrevented) return;
 
 	const target = event.target;
-	const isInput = target instanceof HTMLElement && (
-		target.tagName === "INPUT" ||
-		target.tagName === "TEXTAREA" ||
-		target.tagName === "SELECT" ||
-		target.isContentEditable
-	);
+	const isInput =
+		target instanceof HTMLElement &&
+		(target.tagName === "INPUT" ||
+			target.tagName === "TEXTAREA" ||
+			target.tagName === "SELECT" ||
+			target.isContentEditable);
 
 	// Arrow Down from the embeddings tab trigger button to focus search input
-	const isTabButton = target instanceof HTMLElement &&
-		target.getAttribute("data-memory-tab") === "embeddings";
+	const isTabButton = target instanceof HTMLElement && target.getAttribute("data-memory-tab") === "embeddings";
 	if (event.key === "ArrowDown" && isTabButton) {
 		event.preventDefault();
 		if (!controlsMenuOpen) {
@@ -1019,7 +1018,8 @@ async function buildKnowledgeGraph(): Promise<void> {
 			const entityIdx = kgNodes.length;
 			entityNodeIndices.set(entity.id, entityIdx);
 			kgNodes.push({
-				x: ex, y: ey,
+				x: ex,
+				y: ey,
 				radius: eRadius,
 				color: entityFillStyle(entity.entityType, 0.7),
 				data: eData,

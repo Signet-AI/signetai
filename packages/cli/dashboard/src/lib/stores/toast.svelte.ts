@@ -7,11 +7,7 @@ import { toast as sonnerToast } from "svelte-sonner";
 
 export type ToastLevel = "info" | "success" | "error" | "warning";
 
-export function toast(
-	message: string,
-	level: ToastLevel = "info",
-	duration = 3000,
-): void {
+export function toast(message: string, level: ToastLevel = "info", duration = 3000): void {
 	const opts = { duration };
 	switch (level) {
 		case "success":

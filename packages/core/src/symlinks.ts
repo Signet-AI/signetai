@@ -5,15 +5,7 @@
  * that need to be shared across different harness installations.
  */
 
-import {
-	existsSync,
-	lstatSync,
-	mkdirSync,
-	readdirSync,
-	statSync,
-	symlinkSync,
-	unlinkSync,
-} from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 /** Create a directory symlink, using junctions on Windows (no admin required) */
@@ -50,11 +42,7 @@ export interface SymlinkResult {
  * - Real directories at target are skipped to avoid data loss
  * - Gracefully handles errors (continues with other items)
  */
-export function symlinkSkills(
-	sourceDir: string,
-	targetDir: string,
-	options: SymlinkOptions = {},
-): SymlinkResult {
+export function symlinkSkills(sourceDir: string, targetDir: string, options: SymlinkOptions = {}): SymlinkResult {
 	const result: SymlinkResult = {
 		created: [],
 		skipped: [],
@@ -150,11 +138,7 @@ export function symlinkSkills(
  * If dest exists and is a symlink, it's replaced.
  * If dest exists and is real, the operation fails unless force is true.
  */
-export function symlinkDir(
-	src: string,
-	dest: string,
-	options: SymlinkOptions = {},
-): boolean {
+export function symlinkDir(src: string, dest: string, options: SymlinkOptions = {}): boolean {
 	// Check source exists
 	if (!existsSync(src)) {
 		return false;

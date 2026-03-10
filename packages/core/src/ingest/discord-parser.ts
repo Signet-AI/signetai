@@ -12,9 +12,9 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, basename, extname } from "path";
-import type { ParsedDocument, ParsedSection } from "./types";
+import { basename, extname, join } from "path";
 import { batchByTimeGap } from "./chat-utils";
+import type { ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // DiscordChatExporter JSON types
@@ -247,11 +247,7 @@ function loadExportFile(filePath: string): DiscordExport | null {
 	try {
 		const raw = JSON.parse(readFileSync(filePath, "utf-8"));
 		// Validate it looks like a DiscordChatExporter export
-		if (
-			raw &&
-			Array.isArray(raw.messages) &&
-			(raw.messages.length === 0 || isDiscordMessageShape(raw.messages[0]))
-		) {
+		if (raw && Array.isArray(raw.messages) && (raw.messages.length === 0 || isDiscordMessageShape(raw.messages[0]))) {
 			return raw as DiscordExport;
 		}
 		// Some exports have the messages at the top level as an array
@@ -305,11 +301,14 @@ function filterMessages(
 		// Speaker filter
 		if (options?.speakers) {
 			const authorName = msg.author.nickname || msg.author.name;
-			if (!options.speakers.some((s) =>
-				s.toLowerCase() === authorName.toLowerCase() ||
-				s.toLowerCase() === msg.author.name.toLowerCase() ||
-				s === msg.author.id
-			)) {
+			if (
+				!options.speakers.some(
+					(s) =>
+						s.toLowerCase() === authorName.toLowerCase() ||
+						s.toLowerCase() === msg.author.name.toLowerCase() ||
+						s === msg.author.id,
+				)
+			) {
 				return false;
 			}
 		}
@@ -331,9 +330,7 @@ interface ConversationThread {
 
 function groupIntoThreads(messages: DiscordMessage[]): ConversationThread[] {
 	// Sort by timestamp
-	const sorted = [...messages].sort(
-		(a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp),
-	);
+	const sorted = [...messages].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
 
 	// Group by reply chains
 	const replyChains = new Map<string, DiscordMessage[]>();
@@ -391,25 +388,20 @@ function groupIntoThreads(messages: DiscordMessage[]): ConversationThread[] {
 	}
 
 	// Sort threads chronologically
-	return threads.sort(
-		(a, b) => Date.parse(a.startTimestamp) - Date.parse(b.startTimestamp),
-	);
+	return threads.sort((a, b) => Date.parse(a.startTimestamp) - Date.parse(b.startTimestamp));
 }
 
 // ---------------------------------------------------------------------------
 // Convert thread to section
 // ---------------------------------------------------------------------------
 
-function threadToSection(
-	thread: ConversationThread,
-	channelName: string,
-): ParsedSection | null {
+function threadToSection(thread: ConversationThread, channelName: string): ParsedSection | null {
 	const lines: string[] = [];
 
 	for (const msg of thread.messages) {
 		const speaker = msg.author.nickname || msg.author.name;
 		const timestamp = msg.timestamp.slice(0, 16).replace("T", " ");
-		let text = msg.content;
+		const text = msg.content;
 
 		// Include reply context
 		if (msg.reference?.messageId) {

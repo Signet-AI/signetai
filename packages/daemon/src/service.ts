@@ -3,17 +3,10 @@
  * Handles systemd (Linux) and launchd (macOS) service management
  */
 
+import { execSync, spawn } from "child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { homedir, platform } from "os";
 import { join } from "path";
-import {
-	existsSync,
-	mkdirSync,
-	writeFileSync,
-	readFileSync,
-	unlinkSync,
-	chmodSync,
-} from "fs";
-import { execSync, spawn } from "child_process";
 
 const AGENTS_DIR = join(homedir(), ".agents");
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
@@ -21,19 +14,8 @@ const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 
 // Platform-specific paths
-const LAUNCHD_PLIST = join(
-	homedir(),
-	"Library",
-	"LaunchAgents",
-	"ai.signet.daemon.plist",
-);
-const SYSTEMD_UNIT = join(
-	homedir(),
-	".config",
-	"systemd",
-	"user",
-	"signet.service",
-);
+const LAUNCHD_PLIST = join(homedir(), "Library", "LaunchAgents", "ai.signet.daemon.plist");
+const SYSTEMD_UNIT = join(homedir(), ".config", "systemd", "user", "signet.service");
 
 export interface ServiceStatus {
 	installed: boolean;
@@ -72,9 +54,7 @@ function getRuntime(): string {
 		execSync("which bun", { encoding: "utf-8" });
 		return "bun";
 	} catch {
-		console.error(
-			"Error: Bun is required to run Signet daemon (uses bun:sqlite)",
-		);
+		console.error("Error: Bun is required to run Signet daemon (uses bun:sqlite)");
 		console.error("Install Bun: curl -fsSL https://bun.sh/install | bash");
 		process.exit(1);
 	}
@@ -84,7 +64,7 @@ function getRuntime(): string {
 // macOS (launchd)
 // ============================================================================
 
-function generateLaunchdPlist(port: number = 3850): string {
+function generateLaunchdPlist(port = 3850): string {
 	const runtime = getRuntime();
 	const daemonPath = getDaemonPath();
 
@@ -129,7 +109,7 @@ function generateLaunchdPlist(port: number = 3850): string {
 </plist>`;
 }
 
-async function installLaunchd(port: number = 3850): Promise<void> {
+async function installLaunchd(port = 3850): Promise<void> {
 	const plistDir = join(homedir(), "Library", "LaunchAgents");
 	mkdirSync(plistDir, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
@@ -195,7 +175,7 @@ function resolveRuntimePath(): string {
 	}
 }
 
-function generateSystemdUnit(port: number = 3850): string {
+function generateSystemdUnit(port = 3850): string {
 	const runtime = getRuntime();
 	const daemonPath = getDaemonPath();
 	const runtimePath = resolveRuntimePath();
@@ -221,7 +201,7 @@ WantedBy=default.target
 `;
 }
 
-async function installSystemd(port: number = 3850): Promise<void> {
+async function installSystemd(port = 3850): Promise<void> {
 	const unitDir = join(homedir(), ".config", "systemd", "user");
 	mkdirSync(unitDir, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
@@ -265,10 +245,7 @@ async function uninstallSystemd(): Promise<void> {
 
 function isSystemdRunning(): boolean {
 	try {
-		const output = execSync(
-			"systemctl --user is-active signet.service 2>/dev/null",
-			{ encoding: "utf-8" },
-		);
+		const output = execSync("systemctl --user is-active signet.service 2>/dev/null", { encoding: "utf-8" });
 		return output.trim() === "active";
 	} catch {
 		return false;
@@ -279,7 +256,7 @@ function isSystemdRunning(): boolean {
 // Direct Process Management (fallback)
 // ============================================================================
 
-async function startDirect(port: number = 3850): Promise<number> {
+async function startDirect(port = 3850): Promise<number> {
 	mkdirSync(DAEMON_DIR, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
 
@@ -310,7 +287,7 @@ async function stopDirect(): Promise<void> {
 		return;
 	}
 
-	const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
+	const pid = Number.parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
 
 	try {
 		process.kill(pid, "SIGTERM");
@@ -331,7 +308,7 @@ function isDirectRunning(): boolean {
 		return false;
 	}
 
-	const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
+	const pid = Number.parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
 
 	try {
 		process.kill(pid, 0);
@@ -354,7 +331,7 @@ function isDirectRunning(): boolean {
 /**
  * Install the daemon as a system service
  */
-export async function installService(port: number = 3850): Promise<void> {
+export async function installService(port = 3850): Promise<void> {
 	const os = platform();
 
 	if (os === "darwin") {
@@ -386,7 +363,7 @@ export async function uninstallService(): Promise<void> {
 /**
  * Start the daemon
  */
-export async function startDaemon(port: number = 3850): Promise<void> {
+export async function startDaemon(port = 3850): Promise<void> {
 	const os = platform();
 
 	if (os === "darwin" && existsSync(LAUNCHD_PLIST)) {
@@ -424,7 +401,7 @@ export async function stopDaemon(): Promise<void> {
 /**
  * Restart the daemon
  */
-export async function restartDaemon(port: number = 3850): Promise<void> {
+export async function restartDaemon(port = 3850): Promise<void> {
 	await stopDaemon();
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	await startDaemon(port);
@@ -470,7 +447,7 @@ export async function getDaemonStatus(): Promise<ServiceStatus> {
 
 	if (running && existsSync(PID_FILE)) {
 		try {
-			pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
+			pid = Number.parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
 		} catch {
 			// Ignore
 		}
@@ -507,11 +484,8 @@ export async function getDaemonStatus(): Promise<ServiceStatus> {
 /**
  * Get daemon logs
  */
-export function getDaemonLogs(lines: number = 50): string[] {
-	const logFile = join(
-		LOG_DIR,
-		`daemon-${new Date().toISOString().split("T")[0]}.log`,
-	);
+export function getDaemonLogs(lines = 50): string[] {
+	const logFile = join(LOG_DIR, `daemon-${new Date().toISOString().split("T")[0]}.log`);
 
 	if (!existsSync(logFile)) {
 		// Try stdout log

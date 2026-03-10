@@ -26,7 +26,7 @@
 	--destructive: #8a4a48;
 	--destructive-foreground: #f0f0f2;
 	--border: rgba(255, 255, 255, 0.05);
-	--input: rgba(255, 255, 255, 0.10);
+	--input: rgba(255, 255, 255, 0.1);
 	--ring: #5a5a66;
 
 	/* shadcn sidebar tokens */
@@ -163,11 +163,11 @@
 
 	/* Pinterest accent system — deeper/saturated for light backgrounds */
 	--sig-highlight: #6b8f00;
-	--sig-highlight-muted: rgba(107, 143, 0, 0.10);
+	--sig-highlight-muted: rgba(107, 143, 0, 0.1);
 	--sig-highlight-dim: rgba(107, 143, 0, 0.05);
 	--sig-highlight-text: #4a6600;
 	--sig-electric: #2563eb;
-	--sig-electric-muted: rgba(37, 99, 235, 0.10);
+	--sig-electric-muted: rgba(37, 99, 235, 0.1);
 	--sig-electric-dim: rgba(37, 99, 235, 0.05);
 	--sig-blueprint: rgba(37, 99, 235, 0.03);
 	--sig-grid-line: rgba(0, 0, 0, 0.03);
@@ -334,8 +334,7 @@ a,
 input,
 select,
 textarea {
-	transition: background-color var(--dur) var(--ease), border-color var(--dur)
-		var(--ease), color var(--dur) var(--ease);
+	transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
 /* Typography */
@@ -676,7 +675,9 @@ svg.lucide [stroke] {
 
 /* Neon flicker — subtle CRT-style flicker for accent elements */
 @keyframes sig-flicker {
-	0%, 97%, 100% {
+	0%,
+	97%,
+	100% {
 		opacity: 1;
 	}
 	98% {
@@ -689,7 +690,8 @@ svg.lucide [stroke] {
 
 /* Slow glow pulse — for constellation nodes and status indicators */
 @keyframes sig-glow-pulse {
-	0%, 100% {
+	0%,
+	100% {
 		box-shadow: 0 0 4px var(--sig-highlight);
 	}
 	50% {

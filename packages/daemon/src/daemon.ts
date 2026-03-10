@@ -24,17 +24,17 @@ import { fileURLToPath } from "url";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
+	CONNECTOR_PROVIDERS,
+	type ConnectorConfig,
+	SIGNET_GIT_PROTECTED_PATHS,
+	type SyncCursor,
 	buildArchitectureDoc,
 	buildSignetBlock,
 	keywordSearch,
-	parseSimpleYaml,
-	SIGNET_GIT_PROTECTED_PATHS,
-	stripSignetBlock,
 	mergeSignetGitignoreEntries,
+	parseSimpleYaml,
+	stripSignetBlock,
 	vectorSearch,
-	CONNECTOR_PROVIDERS,
-	type ConnectorConfig,
-	type SyncCursor,
 } from "@signet/core";
 import { watch } from "chokidar";
 import { type Context, Hono } from "hono";
@@ -90,34 +90,31 @@ import {
 } from "./diagnostics";
 import {
 	fetchEmbedding,
-	resolveEmbeddingBaseUrl,
 	resolveEmbeddingApiKey,
+	resolveEmbeddingBaseUrl,
 	setNativeFallbackToOllama,
 } from "./embedding-fetch";
-import { detectDrift } from "./predictor-comparison";
-import { getPredictorState } from "./predictor-state";
 import { buildEmbeddingHealth } from "./embedding-health";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
-import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
-import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
-import { type LogEntry, logger } from "./logger";
-import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import {
 	getAttributesForAspectFiltered,
-	getKnowledgeGraphForConstellation,
 	getEntityAspectsWithCounts,
 	getEntityDependenciesDetailed,
 	getEntityHealth,
-	getPinnedEntities,
 	getKnowledgeEntityDetail,
+	getKnowledgeGraphForConstellation,
 	getKnowledgeStats,
-	pinEntity,
+	getPinnedEntities,
 	listKnowledgeEntities,
+	pinEntity,
 	unpinEntity,
 } from "./knowledge-graph";
-import { buildMemoryTimeline } from "./memory-timeline";
+import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
+import { type LogEntry, logger } from "./logger";
+import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import { type RecallParams, hybridRecall } from "./memory-search";
+import { buildMemoryTimeline } from "./memory-timeline";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import {
 	DEFAULT_RETENTION,
@@ -130,6 +127,7 @@ import {
 	startRetentionWorker,
 	stopPipeline,
 } from "./pipeline";
+import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import {
 	getTraversalStatus,
@@ -137,8 +135,6 @@ import {
 	resolveFocalEntities,
 	traverseKnowledgeGraph,
 } from "./pipeline/graph-traversal";
-import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
-import { type PredictorClient, createPredictorClient, resolvePredictorCheckpointPath } from "./predictor-client";
 import {
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -149,6 +145,15 @@ import {
 } from "./pipeline/provider";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
+import { type PredictorClient, createPredictorClient, resolvePredictorCheckpointPath } from "./predictor-client";
+import { detectDrift } from "./predictor-comparison";
+import {
+	getComparisonsByEntity,
+	getComparisonsByProject,
+	listComparisons,
+	listTrainingRuns,
+} from "./predictor-comparisons";
+import { getPredictorState } from "./predictor-state";
 import {
 	type RepairContext,
 	type RepairResult,
@@ -169,12 +174,6 @@ import {
 	triggerRetentionSweep,
 } from "./repair-actions";
 import {
-	getComparisonsByEntity,
-	getComparisonsByProject,
-	listComparisons,
-	listTrainingRuns,
-} from "./predictor-comparisons";
-import {
 	CRON_PRESETS,
 	computeNextRun,
 	isHarnessAvailable,
@@ -193,6 +192,7 @@ import {
 	redactCheckpointRow,
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback } from "./session-memories";
+import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { type TimelineSources, buildTimeline } from "./timeline";
 import {
@@ -244,12 +244,10 @@ let predictorClientRef: PredictorClient | null = null;
 let skillReconcilerHandle: ReconcilerHandle | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
-let diagnosticsCache:
-	| {
-			readonly report: DiagnosticsReport;
-			readonly expiresAt: number;
-	  }
-	| null = null;
+let diagnosticsCache: {
+	readonly report: DiagnosticsReport;
+	readonly expiresAt: number;
+} | null = null;
 const DIAGNOSTICS_CACHE_TTL_MS = 2000;
 
 // Prevents concurrent UMAP computations for the same dimension count
@@ -265,7 +263,7 @@ let authForgetLimiter = new AuthRateLimiter(60_000, 30);
 let authModifyLimiter = new AuthRateLimiter(60_000, 60);
 let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
 let authAdminLimiter = new AuthRateLimiter(60_000, 10);
-let authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
+const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
 
 function hasMemoriesSessionIdColumn(db: Database): boolean {
 	if (hasMemoriesSessionIdColumnCache !== null) {
@@ -4330,9 +4328,9 @@ app.get("/api/connectors/:id/health", (c) => {
 	}
 });
 
+import { type ReconcilerHandle, startReconciler } from "./pipeline/skill-reconciler.js";
 // Skills routes (extracted to routes/skills.ts)
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
-import { startReconciler, type ReconcilerHandle } from "./pipeline/skill-reconciler.js";
 mountSkillsRoutes(app);
 setFetchEmbedding(fetchEmbedding);
 
@@ -4903,16 +4901,16 @@ app.post("/api/hooks/session-end", async (c) => {
 			return c.json({ memoriesSaved: 0, bypassed: true });
 		}
 
-	try {
-		const result = await handleSessionEnd(body);
-		return c.json(result);
-	} finally {
-		// Always release session claim and agent presence, even if extraction throws
-		if (sessionKey) {
-			releaseSession(sessionKey);
-			removeAgentPresence(sessionKey);
+		try {
+			const result = await handleSessionEnd(body);
+			return c.json(result);
+		} finally {
+			// Always release session claim and agent presence, even if extraction throws
+			if (sessionKey) {
+				releaseSession(sessionKey);
+				removeAgentPresence(sessionKey);
+			}
 		}
-	}
 	} catch (e) {
 		logger.error("hooks", "Session end hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);
@@ -5578,7 +5576,10 @@ app.get("/api/sessions/summaries", (c) => {
 	const project = c.req.query("project");
 	const depthRaw = c.req.query("depth");
 	const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
-	if (depthNum !== undefined && (Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0 || depthRaw?.trim() === "")) {
+	if (
+		depthNum !== undefined &&
+		(Number.isNaN(depthNum) || !Number.isInteger(depthNum) || depthNum < 0 || depthRaw?.trim() === "")
+	) {
 		return c.json({ error: "depth must be a non-negative integer" }, 400);
 	}
 	const limitParsed = Number.parseInt(c.req.query("limit") ?? "50", 10);
@@ -5588,11 +5589,7 @@ app.get("/api/sessions/summaries", (c) => {
 
 	// Check table exists
 	const tableExists = accessor.withReadDb((db) =>
-		db
-			.prepare(
-				`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`,
-			)
-			.get(),
+		db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
 	);
 	if (!tableExists) {
 		return c.json({ summaries: [], total: 0 });
@@ -5611,11 +5608,9 @@ app.get("/api/sessions/summaries", (c) => {
 			params.push(depthNum);
 		}
 
-		const countRow = db
-			.prepare(
-				`SELECT COUNT(*) as cnt FROM session_summaries ${where}`,
-			)
-			.get(...params) as { cnt: number } | undefined;
+		const countRow = db.prepare(`SELECT COUNT(*) as cnt FROM session_summaries ${where}`).get(...params) as
+			| { cnt: number }
+			| undefined;
 
 		const summaries = db
 			.prepare(
@@ -5628,14 +5623,10 @@ app.get("/api/sessions/summaries", (c) => {
 			)
 			.all(...params, limit, offset) as Array<Record<string, unknown>>;
 
-		const childCountStmt = db.prepare(
-			`SELECT COUNT(*) as cnt FROM session_summary_children WHERE parent_id = ?`,
-		);
+		const childCountStmt = db.prepare(`SELECT COUNT(*) as cnt FROM session_summary_children WHERE parent_id = ?`);
 
 		const enriched = summaries.map((s) => {
-			const childRow = childCountStmt.get(s.id) as
-				| { cnt: number }
-				| undefined;
+			const childRow = childCountStmt.get(s.id) as { cnt: number } | undefined;
 			return { ...s, childCount: childRow?.cnt ?? 0 };
 		});
 
@@ -6635,8 +6626,7 @@ app.post("/api/repair/backfill-skipped", (c) => {
 	return c.json(
 		{
 			error: "not_implemented",
-			message:
-				"Backfill-skipped re-enqueue logic is pending. This endpoint is reserved for future implementation.",
+			message: "Backfill-skipped re-enqueue logic is pending. This endpoint is reserved for future implementation.",
 		},
 		501,
 	);
@@ -6729,43 +6719,47 @@ app.post("/api/repair/structural-backfill", async (c) => {
 
 app.get("/api/repair/cold-stats", (c) => {
 	const accessor = getDbAccessor();
-	return c.json(accessor.withReadDb((db) => {
-		// Check if table exists
-		const tableExists = db
-			.prepare(
-				`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_cold'`,
-			)
-			.get();
+	return c.json(
+		accessor.withReadDb((db) => {
+			// Check if table exists
+			const tableExists = db
+				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories_cold'`)
+				.get();
 
-		if (!tableExists) {
-			return { count: 0, message: "Cold tier not yet initialized (migration pending)" };
-		}
+			if (!tableExists) {
+				return { count: 0, message: "Cold tier not yet initialized (migration pending)" };
+			}
 
-		const stats = db.prepare(`
+			const stats = db
+				.prepare(`
 			SELECT
 				COUNT(*) as total,
 				MIN(archived_at) as oldest,
 				MAX(archived_at) as newest,
 				SUM(LENGTH(CAST(content AS BLOB)) + LENGTH(CAST(COALESCE(original_row_json, '') AS BLOB))) as total_bytes
 			FROM memories_cold
-		`).get() as { total: number; oldest: string | null; newest: string | null; total_bytes: number | null } | undefined;
+		`)
+				.get() as
+				| { total: number; oldest: string | null; newest: string | null; total_bytes: number | null }
+				| undefined;
 
-		const byReason = db.prepare(`
+			const byReason = db
+				.prepare(`
 			SELECT archived_reason, COUNT(*) as count
 			FROM memories_cold
 			GROUP BY archived_reason
-		`).all() as Array<{ archived_reason: string | null; count: number }>;
+		`)
+				.all() as Array<{ archived_reason: string | null; count: number }>;
 
-		return {
-			count: stats?.total ?? 0,
-			oldest: stats?.oldest ?? null,
-			newest: stats?.newest ?? null,
-			totalBytes: stats?.total_bytes ?? 0,
-			byReason: Object.fromEntries(
-				byReason.map((r) => [r.archived_reason ?? "unknown", r.count]),
-			),
-		};
-	}));
+			return {
+				count: stats?.total ?? 0,
+				oldest: stats?.oldest ?? null,
+				newest: stats?.newest ?? null,
+				totalBytes: stats?.total_bytes ?? 0,
+				byReason: Object.fromEntries(byReason.map((r) => [r.archived_reason ?? "unknown", r.count])),
+			};
+		}),
+	);
 });
 
 // ============================================================================
@@ -8179,9 +8173,7 @@ const COMMIT_DEBOUNCE_MS = 5000; // Wait 5 seconds after last change before comm
 
 function ensureProtectedGitignore(dir: string): void {
 	const gitignorePath = join(dir, ".gitignore");
-	const existingContent = existsSync(gitignorePath)
-		? readFileSync(gitignorePath, "utf-8")
-		: "";
+	const existingContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
 	const nextContent = mergeSignetGitignoreEntries(existingContent);
 	if (nextContent !== existingContent) {
 		writeFileSync(gitignorePath, nextContent, "utf-8");
@@ -8190,18 +8182,11 @@ function ensureProtectedGitignore(dir: string): void {
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
 	return new Promise((resolve) => {
-		const proc = spawn(
-			"git",
-			[
-				"rm",
-				"--cached",
-				"--ignore-unmatch",
-				"--quiet",
-				"--",
-				...SIGNET_GIT_PROTECTED_PATHS,
-			],
-			{ cwd: dir, stdio: "pipe", windowsHide: true },
-		);
+		const proc = spawn("git", ["rm", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], {
+			cwd: dir,
+			stdio: "pipe",
+			windowsHide: true,
+		});
 		proc.on("close", () => resolve());
 		proc.on("error", () => resolve());
 	});
@@ -8422,7 +8407,11 @@ function startFileWatcher() {
 		// Ingest memory markdown files (excluding MEMORY.md index)
 		// Normalize path separators for Windows compatibility (watcher returns backslashes on Windows)
 		const normalizedPath = path.replace(/\\/g, "/");
-		if (normalizedPath.includes("/memory/") && normalizedPath.endsWith(".md") && !normalizedPath.endsWith("MEMORY.md")) {
+		if (
+			normalizedPath.includes("/memory/") &&
+			normalizedPath.endsWith(".md") &&
+			!normalizedPath.endsWith("MEMORY.md")
+		) {
 			ingestMemoryMarkdown(path).catch((e) =>
 				logger.error("watcher", "Ingestion failed", undefined, {
 					path,
@@ -8448,7 +8437,11 @@ function startFileWatcher() {
 		// Ingest new memory markdown files
 		// Normalize path separators for Windows compatibility
 		const normalizedAddPath = path.replace(/\\/g, "/");
-		if (normalizedAddPath.includes("/memory/") && normalizedAddPath.endsWith(".md") && !normalizedAddPath.endsWith("MEMORY.md")) {
+		if (
+			normalizedAddPath.includes("/memory/") &&
+			normalizedAddPath.endsWith(".md") &&
+			!normalizedAddPath.endsWith("MEMORY.md")
+		) {
 			ingestMemoryMarkdown(path).catch((e) =>
 				logger.error("watcher", "Ingestion failed", undefined, {
 					path,

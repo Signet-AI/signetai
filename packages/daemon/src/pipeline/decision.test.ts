@@ -9,14 +9,14 @@
  * fact content for BM25 to return candidates.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
-import { runShadowDecisions } from "./decision";
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
-import type { LlmProvider } from "./provider";
 import type { ExtractedFact } from "@signet/core";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { runShadowDecisions } from "./decision";
 import type { DecisionConfig } from "./decision";
+import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,13 +59,7 @@ function makeAccessor(db: Database): DbAccessor {
 }
 
 /** Insert a memory row into the DB. */
-function insertMemory(
-	db: Database,
-	id: string,
-	content: string,
-	type = "fact",
-	importance = 0.5,
-): void {
+function insertMemory(db: Database, id: string, content: string, type = "fact", importance = 0.5): void {
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO memories
@@ -103,8 +97,7 @@ const MATCHING_FACT: ExtractedFact = {
 };
 
 // Content that shares all words with MATCHING_FACT so FTS5 returns it
-const MATCHING_MEMORY_CONTENT =
-	"User prefers dark mode in their editor settings";
+const MATCHING_MEMORY_CONTENT = "User prefers dark mode in their editor settings";
 
 /** A fact for no-candidate tests (content that won't match any stored memory). */
 const UNMATCHED_FACT: ExtractedFact = {
@@ -136,12 +129,7 @@ describe("runShadowDecisions", () => {
 	it("proposes ADD when there are no candidates", async () => {
 		// Empty DB - no memories to match against
 		const provider = mockProvider([]);
-		const result = await runShadowDecisions(
-			[UNMATCHED_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([UNMATCHED_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0].action).toBe("add");
@@ -155,12 +143,7 @@ describe("runShadowDecisions", () => {
 		insertMemory(db, "mem-unrelated", "User enjoys coffee in the morning");
 		const provider = mockProvider([]);
 
-		const result = await runShadowDecisions(
-			[UNMATCHED_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([UNMATCHED_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0].action).toBe("add");
@@ -178,12 +161,7 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([decision]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0].action).toBe("update");
@@ -203,17 +181,10 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([badDecision]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(result.warnings.some((w) => w.includes("Invalid action"))).toBe(
-			true,
-		);
+		expect(result.warnings.some((w) => w.includes("Invalid action"))).toBe(true);
 	});
 
 	it("rejects UPDATE referencing a non-candidate ID", async () => {
@@ -227,12 +198,7 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([badDecision]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(0);
 		expect(result.warnings.some((w) => w.includes("non-candidate"))).toBe(true);
@@ -248,17 +214,10 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([noReason]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(result.warnings.some((w) => w.includes("missing reason"))).toBe(
-			true,
-		);
+		expect(result.warnings.some((w) => w.includes("missing reason"))).toBe(true);
 	});
 
 	it("clamps confidence on decisions to [0, 1]", async () => {
@@ -271,12 +230,7 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([outOfRange]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0].confidence).toBe(1);
@@ -292,12 +246,7 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([negative]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0].confidence).toBe(0);
@@ -316,17 +265,10 @@ describe("runShadowDecisions", () => {
 			},
 		};
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			errorProvider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, errorProvider, cfg);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(result.warnings.some((w) => w.includes("Decision LLM error"))).toBe(
-			true,
-		);
+		expect(result.warnings.some((w) => w.includes("Decision LLM error"))).toBe(true);
 	});
 
 	it("returns one ADD proposal per fact when no candidates match", async () => {
@@ -357,17 +299,10 @@ describe("runShadowDecisions", () => {
 
 		const provider = mockProvider(["this is not json"]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.includes("Failed to parse decision JSON")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Failed to parse decision JSON"))).toBe(true);
 	});
 
 	it("accepts 'delete' action referencing a valid candidate", async () => {
@@ -381,12 +316,7 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([deleteDecision]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0].action).toBe("delete");
@@ -403,12 +333,7 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([noneDecision]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0].action).toBe("none");
@@ -425,17 +350,10 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([bad]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(result.warnings.some((w) => w.includes("missing targetId"))).toBe(
-			true,
-		);
+		expect(result.warnings.some((w) => w.includes("missing targetId"))).toBe(true);
 	});
 
 	it("rejects 'delete' without targetId", async () => {
@@ -448,17 +366,10 @@ describe("runShadowDecisions", () => {
 		});
 		const provider = mockProvider([bad]);
 
-		const result = await runShadowDecisions(
-			[MATCHING_FACT],
-			accessor,
-			provider,
-			cfg,
-		);
+		const result = await runShadowDecisions([MATCHING_FACT], accessor, provider, cfg);
 
 		expect(result.proposals).toHaveLength(0);
-		expect(result.warnings.some((w) => w.includes("missing targetId"))).toBe(
-			true,
-		);
+		expect(result.warnings.some((w) => w.includes("missing targetId"))).toBe(true);
 	});
 
 	it("processes multiple facts independently", async () => {

@@ -2,14 +2,14 @@
  * Main Signet class - entry point for the library
  */
 
-import { Database } from "./database";
-import { Agent, AgentConfig, AgentManifest } from "./types";
-import { parseManifest, generateManifest } from "./manifest";
-import { parseSoul, generateSoul } from "./soul";
-import { parseMemory, generateMemory } from "./memory";
-import { DEFAULT_BASE_PATH } from "./constants";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { DEFAULT_BASE_PATH } from "./constants";
+import { Database } from "./database";
+import { generateManifest, parseManifest } from "./manifest";
+import { generateMemory, parseMemory } from "./memory";
+import { generateSoul, parseSoul } from "./soul";
+import type { Agent, AgentConfig, AgentManifest } from "./types";
 
 export class Signet {
 	private config: AgentConfig;
@@ -73,9 +73,7 @@ export class Signet {
 		const basePath = this.config.basePath!;
 
 		if (!existsSync(join(basePath, "agent.yaml"))) {
-			throw new Error(
-				`No agent found at ${basePath}. Run 'signet init' first.`,
-			);
+			throw new Error(`No agent found at ${basePath}. Run 'signet init' first.`);
 		}
 
 		const manifestYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");

@@ -259,7 +259,12 @@ export function mountMarketplaceReviewsRoutes(app: Hono): void {
 		const current = readConfig();
 		const next: ReviewsSyncConfig = {
 			enabled: typeof body.enabled === "boolean" ? body.enabled : current.enabled,
-			endpointUrl: body.endpointUrl === undefined ? current.endpointUrl : typeof body.endpointUrl === "string" ? body.endpointUrl.trim() : current.endpointUrl,
+			endpointUrl:
+				body.endpointUrl === undefined
+					? current.endpointUrl
+					: typeof body.endpointUrl === "string"
+						? body.endpointUrl.trim()
+						: current.endpointUrl,
 			lastSyncAt: current.lastSyncAt,
 			lastSyncError: current.lastSyncError,
 		};

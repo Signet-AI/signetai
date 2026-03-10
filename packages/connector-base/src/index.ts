@@ -35,11 +35,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	type SymlinkOptions,
+	type SymlinkResult,
 	buildSignetBlock,
 	stripSignetBlock,
 	symlinkSkills,
-	type SymlinkOptions,
-	type SymlinkResult,
 } from "@signet/core";
 
 // ============================================================================
@@ -123,11 +123,7 @@ export abstract class BaseConnector {
 	 * Each subdirectory in sourceDir becomes a symlink in targetDir.
 	 * Existing symlinks are replaced; real directories are skipped.
 	 */
-	protected symlinkSkills(
-		sourceDir: string,
-		targetDir: string,
-		options?: SymlinkOptions,
-	): SymlinkResult {
+	protected symlinkSkills(sourceDir: string, targetDir: string, options?: SymlinkOptions): SymlinkResult {
 		return symlinkSkills(sourceDir, targetDir, options);
 	}
 
@@ -215,4 +211,4 @@ export abstract class BaseConnector {
 // Re-exports
 // ============================================================================
 
-export { type SymlinkOptions, type SymlinkResult };
+export type { SymlinkOptions, SymlinkResult };

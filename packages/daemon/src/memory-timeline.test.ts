@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
 import { runMigrations } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import { buildMemoryTimeline } from "./memory-timeline";

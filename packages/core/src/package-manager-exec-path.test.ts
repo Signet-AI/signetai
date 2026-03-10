@@ -38,10 +38,7 @@ describe("Bug 2: exec path detection", () => {
 
 	it("config takes priority over exec path", () => {
 		const dir = makeTempDir();
-		writeFileSync(
-			join(dir, "agent.yaml"),
-			"install:\n  primary_package_manager: npm\n",
-		);
+		writeFileSync(join(dir, "agent.yaml"), "install:\n  primary_package_manager: npm\n");
 
 		const result = resolvePrimaryPackageManager({
 			agentsDir: dir,
@@ -88,10 +85,7 @@ describe("Bug 2: exec path detection", () => {
 describe("Bug 2: source: fallback in config is not authoritative", () => {
 	it("ignores config with source: fallback and uses exec path instead", () => {
 		const dir = makeTempDir();
-		writeFileSync(
-			join(dir, "agent.yaml"),
-			"install:\n  primary_package_manager: npm\n  source: fallback\n",
-		);
+		writeFileSync(join(dir, "agent.yaml"), "install:\n  primary_package_manager: npm\n  source: fallback\n");
 
 		const result = resolvePrimaryPackageManager({
 			agentsDir: dir,
@@ -109,10 +103,7 @@ describe("Bug 2: source: fallback in config is not authoritative", () => {
 
 	it("respects config when source is not fallback", () => {
 		const dir = makeTempDir();
-		writeFileSync(
-			join(dir, "agent.yaml"),
-			"install:\n  primary_package_manager: npm\n  source: config\n",
-		);
+		writeFileSync(join(dir, "agent.yaml"), "install:\n  primary_package_manager: npm\n  source: config\n");
 
 		const result = resolvePrimaryPackageManager({
 			agentsDir: dir,
@@ -129,10 +120,7 @@ describe("Bug 2: source: fallback in config is not authoritative", () => {
 
 	it("respects config when no source field exists", () => {
 		const dir = makeTempDir();
-		writeFileSync(
-			join(dir, "agent.yaml"),
-			"install:\n  primary_package_manager: npm\n",
-		);
+		writeFileSync(join(dir, "agent.yaml"), "install:\n  primary_package_manager: npm\n");
 
 		const result = resolvePrimaryPackageManager({
 			agentsDir: dir,

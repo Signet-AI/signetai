@@ -3,11 +3,8 @@
  */
 
 import { join } from "node:path";
+import { DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./rate-limiter";
 import type { AuthMode } from "./types";
-import {
-	DEFAULT_RATE_LIMITS,
-	type RateLimitConfig,
-} from "./rate-limiter";
 
 export interface AuthConfig {
 	readonly mode: AuthMode;
@@ -29,28 +26,16 @@ function isValidMode(val: unknown): val is AuthMode {
 	return val === "local" || val === "team" || val === "hybrid";
 }
 
-function parseRateLimit(
-	raw: unknown,
-	fallback: RateLimitConfig,
-): RateLimitConfig {
+function parseRateLimit(raw: unknown, fallback: RateLimitConfig): RateLimitConfig {
 	if (!raw || typeof raw !== "object") return fallback;
 	const obj = raw as Record<string, unknown>;
 	return {
-		windowMs:
-			typeof obj.windowMs === "number" && obj.windowMs > 0
-				? obj.windowMs
-				: fallback.windowMs,
-		max:
-			typeof obj.max === "number" && obj.max > 0
-				? obj.max
-				: fallback.max,
+		windowMs: typeof obj.windowMs === "number" && obj.windowMs > 0 ? obj.windowMs : fallback.windowMs,
+		max: typeof obj.max === "number" && obj.max > 0 ? obj.max : fallback.max,
 	};
 }
 
-export function parseAuthConfig(
-	raw: unknown,
-	agentsDir: string,
-): AuthConfig {
+export function parseAuthConfig(raw: unknown, agentsDir: string): AuthConfig {
 	if (!raw || typeof raw !== "object") {
 		return {
 			...DEFAULT_AUTH_CONFIG,
@@ -69,14 +54,12 @@ export function parseAuthConfig(
 	}
 
 	const defaultTtl =
-		typeof obj.defaultTokenTtlSeconds === "number" &&
-		obj.defaultTokenTtlSeconds > 0
+		typeof obj.defaultTokenTtlSeconds === "number" && obj.defaultTokenTtlSeconds > 0
 			? obj.defaultTokenTtlSeconds
 			: DEFAULT_AUTH_CONFIG.defaultTokenTtlSeconds;
 
 	const sessionTtl =
-		typeof obj.sessionTokenTtlSeconds === "number" &&
-		obj.sessionTokenTtlSeconds > 0
+		typeof obj.sessionTokenTtlSeconds === "number" && obj.sessionTokenTtlSeconds > 0
 			? obj.sessionTokenTtlSeconds
 			: DEFAULT_AUTH_CONFIG.sessionTokenTtlSeconds;
 

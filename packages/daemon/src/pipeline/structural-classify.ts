@@ -7,14 +7,14 @@
  * write locks.
  */
 
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
 import { ENTITY_TYPES } from "@signet/core";
-import { stripFences, tryParseJson } from "./extraction";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { getAspectsForEntity } from "../knowledge-graph";
-import { ASPECT_SUGGESTIONS } from "./aspect-suggestions";
 import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
+import { ASPECT_SUGGESTIONS } from "./aspect-suggestions";
+import { stripFences, tryParseJson } from "./extraction";
+import type { LlmProvider } from "./provider";
 
 const VALID_ENTITY_TYPES = new Set<string>(ENTITY_TYPES);
 
@@ -134,13 +134,7 @@ function completeJob(db: WriteDb, jobId: string): void {
 	).run(now, now, jobId);
 }
 
-function failJob(
-	db: WriteDb,
-	jobId: string,
-	error: string,
-	attempts: number,
-	maxAttempts: number,
-): void {
+function failJob(db: WriteDb, jobId: string, error: string, attempts: number, maxAttempts: number): void {
 	const now = new Date().toISOString();
 	const status = attempts >= maxAttempts ? "dead" : "pending";
 	db.prepare(
@@ -161,17 +155,14 @@ function buildClassifyPrompt(
 	facts: readonly string[],
 ): string {
 	const suggestions = ASPECT_SUGGESTIONS[entityType] ?? ASPECT_SUGGESTIONS.unknown;
-	const aspectList = existingAspects.length > 0
-		? existingAspects.join(", ")
-		: "[none yet]";
+	const aspectList = existingAspects.length > 0 ? existingAspects.join(", ") : "[none yet]";
 
-	const factList = facts
-		.map((f, i) => `${i + 1}. ${f}`)
-		.join("\n");
+	const factList = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
 
-	const entityTypeInstruction = entityType === "extracted"
-		? `\nAlso determine the entity type. Add to your response object: "entity_type": "person"|"project"|"system"|"tool"|"concept"|"skill"|"task"`
-		: "";
+	const entityTypeInstruction =
+		entityType === "extracted"
+			? `\nAlso determine the entity type. Add to your response object: "entity_type": "person"|"project"|"system"|"tool"|"concept"|"skill"|"task"`
+			: "";
 
 	return `Classify each fact into an aspect and kind for the given entity.
 
@@ -190,10 +181,7 @@ Return a JSON object: {"results": [{"i": number, "aspect": string, "kind": "attr
 // Response validation
 // ---------------------------------------------------------------------------
 
-function validateClassifyResults(
-	parsed: unknown,
-	factCount: number,
-): readonly ClassifyResult[] {
+function validateClassifyResults(parsed: unknown, factCount: number): readonly ClassifyResult[] {
 	if (!Array.isArray(parsed)) return [];
 
 	const valid: ClassifyResult[] = [];
@@ -207,7 +195,7 @@ function validateClassifyResults(
 		const aspect = typeof obj.aspect === "string" ? obj.aspect.trim() : "";
 		if (aspect.length === 0) continue;
 
-		const kind = obj.kind === "constraint" ? "constraint" as const : "attribute" as const;
+		const kind = obj.kind === "constraint" ? ("constraint" as const) : ("attribute" as const);
 		const isNew = typeof obj.new === "boolean" ? obj.new : true;
 
 		valid.push({ i, aspect, kind, new: isNew });
@@ -220,10 +208,7 @@ function validateClassifyResults(
 // Core processing
 // ---------------------------------------------------------------------------
 
-async function processClassifyBatch(
-	deps: StructuralClassifyDeps,
-	jobs: readonly ClassifyJobRow[],
-): Promise<void> {
+async function processClassifyBatch(deps: StructuralClassifyDeps, jobs: readonly ClassifyJobRow[]): Promise<void> {
 	if (jobs.length === 0) return;
 
 	// Parse payloads
@@ -232,9 +217,7 @@ async function processClassifyBatch(
 		try {
 			payloads.push(JSON.parse(job.payload) as ClassifyPayload);
 		} catch {
-			deps.accessor.withWriteTx((db) =>
-				failJob(db, job.id, "invalid_payload", job.attempts + 1, job.max_attempts),
-			);
+			deps.accessor.withWriteTx((db) => failJob(db, job.id, "invalid_payload", job.attempts + 1, job.max_attempts));
 		}
 	}
 	if (payloads.length === 0) return;
@@ -244,21 +227,12 @@ async function processClassifyBatch(
 	const entityType = payloads[0].entity_type;
 
 	// Load existing aspects
-	const existingAspects = getAspectsForEntity(
-		deps.accessor,
-		entityId,
-		"default",
-	);
+	const existingAspects = getAspectsForEntity(deps.accessor, entityId, "default");
 	const existingAspectNames = existingAspects.map((a) => a.name);
 
 	// Build prompt
 	const factContents = payloads.map((p) => p.fact_content);
-	const prompt = buildClassifyPrompt(
-		entityName,
-		entityType,
-		existingAspectNames,
-		factContents,
-	);
+	const prompt = buildClassifyPrompt(entityName, entityType, existingAspectNames, factContents);
 
 	// Call LLM
 	let raw: string;
@@ -302,9 +276,10 @@ async function processClassifyBatch(
 
 		// Upgrade entity_type if currently "extracted" and the LLM inferred a real type
 		if (inferredEntityType && entityType === "extracted") {
-			db.prepare(
-				`UPDATE entities SET entity_type = ? WHERE id = ? AND entity_type = 'extracted'`,
-			).run(inferredEntityType, entityId);
+			db.prepare(`UPDATE entities SET entity_type = ? WHERE id = ? AND entity_type = 'extracted'`).run(
+				inferredEntityType,
+				entityId,
+			);
 		}
 
 		for (const result of results) {
@@ -347,13 +322,7 @@ async function processClassifyBatch(
 			if (processedIndices.has(i)) {
 				completeJob(db, jobs[i].id);
 			} else {
-				failJob(
-					db,
-					jobs[i].id,
-					"dropped_from_llm_output",
-					jobs[i].attempts + 1,
-					jobs[i].max_attempts,
-				);
+				failJob(db, jobs[i].id, "dropped_from_llm_output", jobs[i].attempts + 1, jobs[i].max_attempts);
 			}
 		}
 	});
@@ -371,9 +340,7 @@ async function processClassifyBatch(
 // Worker lifecycle
 // ---------------------------------------------------------------------------
 
-export function startStructuralClassifyWorker(
-	deps: StructuralClassifyDeps,
-): StructuralClassifyHandle {
+export function startStructuralClassifyWorker(deps: StructuralClassifyDeps): StructuralClassifyHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -381,9 +348,7 @@ export function startStructuralClassifyWorker(
 		if (!running) return;
 
 		// Find the next entity with pending jobs
-		const entityId = deps.accessor.withReadDb((db) =>
-			findNextEntity(db, deps.pipelineCfg.worker.maxRetries),
-		);
+		const entityId = deps.accessor.withReadDb((db) => findNextEntity(db, deps.pipelineCfg.worker.maxRetries));
 		if (!entityId) return;
 
 		// Lease a batch for that entity

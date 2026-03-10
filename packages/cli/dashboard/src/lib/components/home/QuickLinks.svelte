@@ -1,29 +1,29 @@
 <script lang="ts">
-	import { setTab, type TabId } from "$lib/stores/navigation.svelte";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import Brain from "@lucide/svelte/icons/brain";
-	import Network from "@lucide/svelte/icons/network";
-	import Orbit from "@lucide/svelte/icons/orbit";
-	import Activity from "@lucide/svelte/icons/activity";
-	import Cog from "@lucide/svelte/icons/cog";
-	import Store from "@lucide/svelte/icons/store";
-	import ListChecks from "@lucide/svelte/icons/list-checks";
+import { Button } from "$lib/components/ui/button/index.js";
+import { type TabId, setTab } from "$lib/stores/navigation.svelte";
+import Activity from "@lucide/svelte/icons/activity";
+import Brain from "@lucide/svelte/icons/brain";
+import Cog from "@lucide/svelte/icons/cog";
+import ListChecks from "@lucide/svelte/icons/list-checks";
+import Network from "@lucide/svelte/icons/network";
+import Orbit from "@lucide/svelte/icons/orbit";
+import Store from "@lucide/svelte/icons/store";
 
-	interface QuickLink {
-		label: string;
-		tab: TabId;
-		icon: typeof Brain;
-	}
+interface QuickLink {
+	label: string;
+	tab: TabId;
+	icon: typeof Brain;
+}
 
-	const links: QuickLink[] = [
-		{ label: "Memory", tab: "memory", icon: Brain },
-		{ label: "Knowledge", tab: "knowledge", icon: Network },
-		{ label: "Constellation", tab: "embeddings", icon: Orbit },
-		{ label: "Pipeline", tab: "pipeline", icon: Activity },
-		{ label: "Settings", tab: "settings", icon: Cog },
-		{ label: "Marketplace", tab: "skills", icon: Store },
-		{ label: "Tasks", tab: "tasks", icon: ListChecks },
-	];
+const links: QuickLink[] = [
+	{ label: "Memory", tab: "memory", icon: Brain },
+	{ label: "Knowledge", tab: "knowledge", icon: Network },
+	{ label: "Constellation", tab: "embeddings", icon: Orbit },
+	{ label: "Pipeline", tab: "pipeline", icon: Activity },
+	{ label: "Settings", tab: "settings", icon: Cog },
+	{ label: "Marketplace", tab: "skills", icon: Store },
+	{ label: "Tasks", tab: "tasks", icon: ListChecks },
+];
 </script>
 
 <div class="quick-links">

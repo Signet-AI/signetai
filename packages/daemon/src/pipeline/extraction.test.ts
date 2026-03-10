@@ -2,7 +2,7 @@
  * Tests for the extraction pipeline module.
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { extractFactsAndEntities } from "./extraction";
 import type { LlmProvider } from "./provider";
 
@@ -49,10 +49,7 @@ const VALID_RESPONSE = JSON.stringify({
 describe("extractFactsAndEntities", () => {
 	it("parses valid JSON response correctly", async () => {
 		const provider = mockProvider([VALID_RESPONSE]);
-		const result = await extractFactsAndEntities(
-			"User prefers dark mode and uses vim keybindings",
-			provider,
-		);
+		const result = await extractFactsAndEntities("User prefers dark mode and uses vim keybindings", provider);
 
 		expect(result.facts).toHaveLength(2);
 		expect(result.facts[0].content).toBe("User prefers dark mode");
@@ -70,10 +67,7 @@ describe("extractFactsAndEntities", () => {
 ${VALID_RESPONSE}
 \`\`\``;
 		const provider = mockProvider([fenced]);
-		const result = await extractFactsAndEntities(
-			"User prefers dark mode and uses vim keybindings",
-			provider,
-		);
+		const result = await extractFactsAndEntities("User prefers dark mode and uses vim keybindings", provider);
 
 		expect(result.facts).toHaveLength(2);
 		expect(result.entities).toHaveLength(1);
@@ -85,10 +79,7 @@ ${VALID_RESPONSE}
 ${VALID_RESPONSE}
 \`\`\``;
 		const provider = mockProvider([fenced]);
-		const result = await extractFactsAndEntities(
-			"User prefers dark mode and uses vim keybindings",
-			provider,
-		);
+		const result = await extractFactsAndEntities("User prefers dark mode and uses vim keybindings", provider);
 
 		expect(result.facts).toHaveLength(2);
 	});
@@ -96,10 +87,7 @@ ${VALID_RESPONSE}
 	it("parses JSON when model adds prose before and after", async () => {
 		const wrapped = `Here is the extracted data:\n\n${VALID_RESPONSE}\n\nDone.`;
 		const provider = mockProvider([wrapped]);
-		const result = await extractFactsAndEntities(
-			"User prefers dark mode and uses vim keybindings",
-			provider,
-		);
+		const result = await extractFactsAndEntities("User prefers dark mode and uses vim keybindings", provider);
 
 		expect(result.facts).toHaveLength(2);
 		expect(result.entities).toHaveLength(1);
@@ -116,10 +104,7 @@ ${VALID_RESPONSE}
 		  ],
 		}`;
 		const provider = mockProvider([trailingCommaResponse]);
-		const result = await extractFactsAndEntities(
-			"User prefers dark mode and uses vim keybindings",
-			provider,
-		);
+		const result = await extractFactsAndEntities("User prefers dark mode and uses vim keybindings", provider);
 
 		expect(result.facts).toHaveLength(1);
 		expect(result.entities).toHaveLength(1);
@@ -135,15 +120,10 @@ ${VALID_RESPONSE}
 		}));
 		const response = JSON.stringify({ facts: manyFacts, entities: [] });
 		const provider = mockProvider([response]);
-		const result = await extractFactsAndEntities(
-			"Some long enough input text for extraction",
-			provider,
-		);
+		const result = await extractFactsAndEntities("Some long enough input text for extraction", provider);
 
 		expect(result.facts).toHaveLength(20);
-		expect(result.warnings.some((w) => w.includes("Truncated facts"))).toBe(
-			true,
-		);
+		expect(result.warnings.some((w) => w.includes("Truncated facts"))).toBe(true);
 	});
 
 	it("rejects trivial facts (< 10 chars) with a warning", async () => {
@@ -159,10 +139,7 @@ ${VALID_RESPONSE}
 			entities: [],
 		});
 		const provider = mockProvider([response]);
-		const result = await extractFactsAndEntities(
-			"Some content that is long enough",
-			provider,
-		);
+		const result = await extractFactsAndEntities("Some content that is long enough", provider);
 
 		// Only the long fact should survive
 		expect(result.facts).toHaveLength(1);
@@ -182,32 +159,20 @@ ${VALID_RESPONSE}
 			entities: [],
 		});
 		const provider = mockProvider([response]);
-		const result = await extractFactsAndEntities(
-			"Some content that is long enough",
-			provider,
-		);
+		const result = await extractFactsAndEntities("Some content that is long enough", provider);
 
 		expect(result.facts).toHaveLength(1);
 		expect(result.facts[0].type).toBe("fact");
-		expect(
-			result.warnings.some(
-				(w) => w.includes("Invalid type") && w.includes("bogustype"),
-			),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Invalid type") && w.includes("bogustype"))).toBe(true);
 	});
 
 	it("returns empty with warning on total parse failure", async () => {
 		const provider = mockProvider(["this is not valid json at all"]);
-		const result = await extractFactsAndEntities(
-			"Some content that is long enough to process",
-			provider,
-		);
+		const result = await extractFactsAndEntities("Some content that is long enough to process", provider);
 
 		expect(result.facts).toHaveLength(0);
 		expect(result.entities).toHaveLength(0);
-		expect(
-			result.warnings.some((w) => w.toLowerCase().includes("failed to parse")),
-		).toBe(true);
+		expect(result.warnings.some((w) => w.toLowerCase().includes("failed to parse"))).toBe(true);
 	});
 
 	it("clamps confidence to [0, 1]", async () => {
@@ -234,10 +199,7 @@ ${VALID_RESPONSE}
 			],
 		});
 		const provider = mockProvider([response]);
-		const result = await extractFactsAndEntities(
-			"Some content that is long enough to process",
-			provider,
-		);
+		const result = await extractFactsAndEntities("Some content that is long enough to process", provider);
 
 		expect(result.facts[0].confidence).toBe(1);
 		expect(result.facts[1].confidence).toBe(0);
@@ -290,19 +252,12 @@ ${VALID_RESPONSE}
 			],
 		});
 		const provider = mockProvider([response]);
-		const result = await extractFactsAndEntities(
-			"Some content that is long enough to process",
-			provider,
-		);
+		const result = await extractFactsAndEntities("Some content that is long enough to process", provider);
 
 		// Only the valid entity passes
 		expect(result.entities).toHaveLength(1);
 		expect(result.entities[0].target).toBe("coffee");
-		expect(
-			result.warnings.filter((w) =>
-				w.includes("Entity missing source or target"),
-			),
-		).toHaveLength(2);
+		expect(result.warnings.filter((w) => w.includes("Entity missing source or target"))).toHaveLength(2);
 	});
 
 	it("throws on provider error so job goes through failJob retry", async () => {
@@ -316,22 +271,13 @@ ${VALID_RESPONSE}
 			},
 		};
 
-		await expect(
-			extractFactsAndEntities(
-				"Some content that is long enough to process",
-				errorProvider,
-			),
-		).rejects.toThrow("LLM extraction failed: connection refused");
+		await expect(extractFactsAndEntities("Some content that is long enough to process", errorProvider)).rejects.toThrow(
+			"LLM extraction failed: connection refused",
+		);
 	});
 
 	it("accepts all valid memory types", async () => {
-		const validTypes = [
-			"fact",
-			"preference",
-			"decision",
-			"procedural",
-			"semantic",
-		];
+		const validTypes = ["fact", "preference", "decision", "procedural", "semantic"];
 		const facts = validTypes.map((type) => ({
 			content: `A fact of type ${type} that is long enough`,
 			type,
@@ -339,28 +285,20 @@ ${VALID_RESPONSE}
 		}));
 		const response = JSON.stringify({ facts, entities: [] });
 		const provider = mockProvider([response]);
-		const result = await extractFactsAndEntities(
-			"Some content that is long enough to process",
-			provider,
-		);
+		const result = await extractFactsAndEntities("Some content that is long enough to process", provider);
 
 		expect(result.facts).toHaveLength(validTypes.length);
 		for (let i = 0; i < validTypes.length; i++) {
 			expect(result.facts[i].type).toBe(validTypes[i]);
 		}
 		// No type-related warnings
-		expect(
-			result.warnings.filter((w) => w.includes("Invalid type")),
-		).toHaveLength(0);
+		expect(result.warnings.filter((w) => w.includes("Invalid type"))).toHaveLength(0);
 	});
 
 	it("handles non-array facts/entities gracefully", async () => {
 		const response = JSON.stringify({ facts: "not an array", entities: null });
 		const provider = mockProvider([response]);
-		const result = await extractFactsAndEntities(
-			"Some content that is long enough to process",
-			provider,
-		);
+		const result = await extractFactsAndEntities("Some content that is long enough to process", provider);
 
 		expect(result.facts).toHaveLength(0);
 		expect(result.entities).toHaveLength(0);

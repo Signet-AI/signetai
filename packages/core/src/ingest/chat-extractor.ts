@@ -12,12 +12,9 @@
  */
 
 import type { LlmProvider } from "../types";
-import type { ChunkResult, ExtractionResult } from "./types";
 import type { ExtractionOptions } from "./extractor";
-import {
-	parseExtractionResponse as sharedParseExtractionResponse,
-	type ParseOptions,
-} from "./response-parser";
+import { type ParseOptions, parseExtractionResponse as sharedParseExtractionResponse } from "./response-parser";
+import type { ChunkResult, ExtractionResult } from "./types";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -42,9 +39,7 @@ function buildConversationExtractionPrompt(
 	const contextParts: string[] = [];
 	if (channelName) contextParts.push(`Channel: #${channelName}`);
 	if (participants.length > 0) contextParts.push(`Participants: ${participants.join(", ")}`);
-	const contextBlock = contextParts.length > 0
-		? `${contextParts.join("\n")}\n\n`
-		: "";
+	const contextBlock = contextParts.length > 0 ? `${contextParts.join("\n")}\n\n` : "";
 
 	return `You are a precision knowledge extraction engine analyzing a conversation transcript.
 
@@ -135,10 +130,7 @@ ${conversationText}
 // Code Context Extraction Prompt (for code discussions in chat)
 // ---------------------------------------------------------------------------
 
-function buildCodeDiscussionPrompt(
-	conversationText: string,
-	channelName: string | null,
-): string {
+function buildCodeDiscussionPrompt(conversationText: string, channelName: string | null): string {
 	const channelStr = channelName ? `Channel: #${channelName}\n\n` : "";
 
 	return `You are a knowledge extraction engine analyzing a technical discussion about code and architecture.
@@ -226,13 +218,7 @@ export async function extractFromConversations(
 	const results: ExtractionResult[] = [];
 
 	for (const chunk of chunks) {
-		const result = await extractFromConversation(
-			chunk,
-			channelName,
-			participants,
-			provider,
-			opts,
-		);
+		const result = await extractFromConversation(chunk, channelName, participants, provider, opts);
 		results.push(result);
 		if (onChunkDone) {
 			onChunkDone(chunk.index, result.items.length);
@@ -266,8 +252,8 @@ export function extractParticipants(chunkText: string): string[] {
 
 function detectCodeDiscussion(text: string): boolean {
 	const codeIndicators = [
-		/```[\s\S]*?```/,          // Code blocks
-		/`[^`]+`/,                 // Inline code
+		/```[\s\S]*?```/, // Code blocks
+		/`[^`]+`/, // Inline code
 		/\b(?:function|class|const|let|var|def|import|export)\b/,
 		/\b(?:API|endpoint|database|schema|migration|deploy)\b/i,
 		/\b(?:localhost|port \d+|https?:\/\/)\b/,
@@ -287,10 +273,7 @@ function detectCodeDiscussion(text: string): boolean {
 // ---------------------------------------------------------------------------
 
 /** Valid types for chat extraction */
-const CHAT_VALID_TYPES = new Set([
-	"fact", "decision", "rationale", "preference",
-	"procedural", "semantic", "system",
-]);
+const CHAT_VALID_TYPES = new Set(["fact", "decision", "rationale", "preference", "procedural", "semantic", "system"]);
 
 /** Map alternative type names to valid ones */
 const CHAT_TYPE_MAP: Record<string, string> = {
@@ -299,13 +282,10 @@ const CHAT_TYPE_MAP: Record<string, string> = {
 	relationship: "fact",
 	commitment: "decision",
 	"action-item": "decision",
-	"action_item": "decision",
+	action_item: "decision",
 };
 
-function parseExtractionResponse(
-	raw: string,
-	minConfidence: number,
-) {
+function parseExtractionResponse(raw: string, minConfidence: number) {
 	const opts: ParseOptions = {
 		minConfidence,
 		validTypes: CHAT_VALID_TYPES,

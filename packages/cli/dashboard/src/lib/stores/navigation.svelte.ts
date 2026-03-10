@@ -67,19 +67,8 @@ export const nav = $state({
 
 /* ── Tab groups (display-layer only) ── */
 
-const MEMORY_TABS: ReadonlySet<TabId> = new Set([
-	"memory",
-	"timeline",
-	"knowledge",
-	"embeddings",
-]);
-const ENGINE_TABS: ReadonlySet<TabId> = new Set([
-	"settings",
-	"pipeline",
-	"predictor",
-	"connectors",
-	"logs",
-]);
+const MEMORY_TABS: ReadonlySet<TabId> = new Set(["memory", "timeline", "knowledge", "embeddings"]);
+const ENGINE_TABS: ReadonlySet<TabId> = new Set(["settings", "pipeline", "predictor", "connectors", "logs"]);
 
 export type NavGroup = "memory" | "engine";
 
@@ -106,8 +95,7 @@ export function setTab(tab: TabId): boolean {
 }
 
 export function navigateToGroup(group: NavGroup): boolean {
-	const tab =
-		group === "memory" ? lastMemoryTab.value : lastEngineTab.value;
+	const tab = group === "memory" ? lastMemoryTab.value : lastEngineTab.value;
 	return setTab(tab);
 }
 

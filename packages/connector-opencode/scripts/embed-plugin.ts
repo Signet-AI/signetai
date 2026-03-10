@@ -18,29 +18,18 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const packageRoot = join(__dirname, "..");
-const pluginDistPath = join(
-	packageRoot,
-	"..",
-	"opencode-plugin",
-	"dist",
-	"signet.mjs",
-);
+const pluginDistPath = join(packageRoot, "..", "opencode-plugin", "dist", "signet.mjs");
 const bundleSourcePath = join(packageRoot, "src", "plugin-bundle.ts");
 
 if (!existsSync(pluginDistPath)) {
-	console.warn(
-		`[embed-plugin] Plugin bundle not found at ${pluginDistPath} — skipping embed`,
-	);
+	console.warn(`[embed-plugin] Plugin bundle not found at ${pluginDistPath} — skipping embed`);
 	process.exit(0);
 }
 
 const pluginSource = readFileSync(pluginDistPath, "utf-8");
 
 // Escape backticks and template literal markers in the plugin source
-const escaped = pluginSource
-	.replace(/\\/g, "\\\\")
-	.replace(/`/g, "\\`")
-	.replace(/\$\{/g, "\\${");
+const escaped = pluginSource.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
 
 const output = `/**
  * Bundled OpenCode plugin content

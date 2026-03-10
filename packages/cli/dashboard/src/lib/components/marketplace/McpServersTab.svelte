@@ -1,8 +1,5 @@
 <script lang="ts">
-import {
-	type MarketplaceMcpCatalogEntry,
-	type MarketplaceMcpServer,
-} from "$lib/api";
+import type { MarketplaceMcpCatalogEntry, MarketplaceMcpServer } from "$lib/api";
 import McpDetailSheet from "$lib/components/marketplace/McpDetailSheet.svelte";
 import McpInstallSheet from "$lib/components/marketplace/McpInstallSheet.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -33,12 +30,7 @@ interface Props {
 	}) => void | Promise<void>;
 }
 
-const {
-	embedded = false,
-	showViewTabs = true,
-	currentView = "browse",
-	onviewchange,
-}: Props = $props();
+const { embedded = false, showViewTabs = true, currentView = "browse", onviewchange }: Props = $props();
 
 interface McpDetailItem {
 	targetId: string;
@@ -60,15 +52,11 @@ const installedCatalogIds = $derived(
 );
 const installedServerByCatalogId = $derived(
 	new Map<string, string>(
-		mcpMarket.installed.flatMap((s) =>
-			s.catalogId ? [[`${s.source}:${s.catalogId}`, s.id] as [string, string]] : [],
-		),
+		mcpMarket.installed.flatMap((s) => (s.catalogId ? [[`${s.source}:${s.catalogId}`, s.id] as [string, string]] : [])),
 	),
 );
 const catalogById = $derived(
-	new Map<string, MarketplaceMcpCatalogEntry>(
-		mcpMarket.catalog.map((entry) => [entry.id, entry]),
-	),
+	new Map<string, MarketplaceMcpCatalogEntry>(mcpMarket.catalog.map((entry) => [entry.id, entry])),
 );
 let installSheetOpen = $state(false);
 let selectedCatalogEntry = $state<MarketplaceMcpCatalogEntry | null>(null);
@@ -230,7 +218,6 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	if (!detailItem || detailItem.serverId !== serverId) return;
 	detailItem = { ...detailItem, serverId: null };
 }
-
 </script>
 
 <div class="h-full flex flex-col overflow-hidden">

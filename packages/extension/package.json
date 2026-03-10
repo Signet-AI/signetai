@@ -1,17 +1,17 @@
 {
-  "name": "@signet/extension",
-  "version": "0.53.2",
-  "private": true,
-  "description": "Signet browser extension for Chrome and Firefox",
-  "scripts": {
-    "build": "bun build.ts",
-    "build:chrome": "bun build.ts --target chrome",
-    "build:firefox": "bun build.ts --target firefox",
-    "dev": "bun build.ts --watch",
-    "typecheck": "tsc --noEmit"
-  },
-  "devDependencies": {
-    "@types/chrome": "^0.0.287",
-    "typescript": "^5.7.0"
-  }
+	"name": "@signet/extension",
+	"version": "0.53.2",
+	"private": true,
+	"description": "Signet browser extension for Chrome and Firefox",
+	"scripts": {
+		"build": "bun build.ts",
+		"build:chrome": "bun build.ts --target chrome",
+		"build:firefox": "bun build.ts --target firefox",
+		"dev": "bun build.ts --watch",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/chrome": "^0.0.287",
+		"typescript": "^5.7.0"
+	}
 }

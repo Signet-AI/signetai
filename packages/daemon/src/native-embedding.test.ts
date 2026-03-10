@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
 // Mock @huggingface/transformers to avoid real model downloads
 const mockEmbedFn = mock(async (text: string, _opts: unknown) => ({
@@ -13,12 +13,9 @@ mock.module("@huggingface/transformers", () => ({
 }));
 
 // Must import after mocking
-const {
-	nativeEmbed,
-	checkNativeProvider,
-	shutdownNativeProvider,
-	getNativeProviderStatus,
-} = await import("./native-embedding");
+const { nativeEmbed, checkNativeProvider, shutdownNativeProvider, getNativeProviderStatus } = await import(
+	"./native-embedding"
+);
 
 describe("native-embedding", () => {
 	afterEach(async () => {
@@ -49,11 +46,7 @@ describe("native-embedding", () => {
 	});
 
 	it("concurrent init calls share the same promise", async () => {
-		const results = await Promise.all([
-			nativeEmbed("a"),
-			nativeEmbed("b"),
-			nativeEmbed("c"),
-		]);
+		const results = await Promise.all([nativeEmbed("a"), nativeEmbed("b"), nativeEmbed("c")]);
 		expect(results).toHaveLength(3);
 		for (const vec of results) {
 			expect(vec).toHaveLength(768);

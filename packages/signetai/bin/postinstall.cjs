@@ -97,12 +97,19 @@ async function downloadPredictor() {
 		process.stdout.write(`  Downloading predictor sidecar...`);
 
 		function get(targetUrl, redirects) {
-			if (redirects > 5) { process.stdout.write(` skipped (too many redirects)\n`); resolve(); return; }
+			if (redirects > 5) {
+				process.stdout.write(` skipped (too many redirects)\n`);
+				resolve();
+				return;
+			}
 			const req = https.get(targetUrl, (res) => {
 				if (res.statusCode === 301 || res.statusCode === 302) {
 					res.resume();
 					const location = res.headers.location;
-					if (typeof location !== "string") { resolve(); return; }
+					if (typeof location !== "string") {
+						resolve();
+						return;
+					}
 					get(location, redirects + 1);
 					return;
 				}

@@ -1,29 +1,27 @@
 <script lang="ts">
-	import * as Tooltip from "$lib/components/ui/tooltip/index.js";
-	import { Badge } from "$lib/components/ui/badge/index.js";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 
-	interface TopPick {
-		id: string;
-		content: string;
-	}
+interface TopPick {
+	id: string;
+	content: string;
+}
 
-	interface Props {
-		side: "baseline" | "predictor";
-		ndcg: number;
-		topPicks: TopPick[];
-		/** Extra stats displayed as label/value pairs */
-		stats: Array<{ label: string; value: string; tooltip?: string }>;
-		/** Whether sidecar is offline (predictor column only) */
-		offline?: boolean;
-	}
+interface Props {
+	side: "baseline" | "predictor";
+	ndcg: number;
+	topPicks: TopPick[];
+	/** Extra stats displayed as label/value pairs */
+	stats: Array<{ label: string; value: string; tooltip?: string }>;
+	/** Whether sidecar is offline (predictor column only) */
+	offline?: boolean;
+}
 
-	const { side, ndcg, topPicks, stats, offline = false }: Props = $props();
+const { side, ndcg, topPicks, stats, offline = false }: Props = $props();
 
-	const qualityPct = $derived(Math.round(ndcg * 100));
-	const label = $derived(side === "baseline" ? "Heuristic Baseline" : "Predictor Model");
-	const ndcgTooltip = $derived(
-		`How well this system ranks memories. NDCG@10 = ${ndcg.toFixed(3)}`,
-	);
+const qualityPct = $derived(Math.round(ndcg * 100));
+const label = $derived(side === "baseline" ? "Heuristic Baseline" : "Predictor Model");
+const ndcgTooltip = $derived(`How well this system ranks memories. NDCG@10 = ${ndcg.toFixed(3)}`);
 </script>
 
 <div class="flex flex-col gap-2 p-3 bg-card rounded-lg border border-border min-w-0">

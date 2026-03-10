@@ -1,16 +1,16 @@
 <script lang="ts">
-	import { Checkbox as CheckboxPrimitive } from "bits-ui";
-	import CheckIcon from "@lucide/svelte/icons/check";
-	import MinusIcon from "@lucide/svelte/icons/minus";
-	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
+import { type WithoutChildrenOrChild, cn } from "$lib/utils.js";
+import CheckIcon from "@lucide/svelte/icons/check";
+import MinusIcon from "@lucide/svelte/icons/minus";
+import type { Checkbox as CheckboxPrimitive } from "bits-ui";
 
-	let {
-		ref = $bindable(null),
-		checked = $bindable(false),
-		indeterminate = $bindable(false),
-		class: className,
-		...restProps
-	}: WithoutChildrenOrChild<CheckboxPrimitive.RootProps> = $props();
+const {
+	ref = $bindable(null),
+	checked = $bindable(false),
+	indeterminate = $bindable(false),
+	class: className,
+	...restProps
+}: WithoutChildrenOrChild<CheckboxPrimitive.RootProps> = $props();
 </script>
 
 <CheckboxPrimitive.Root

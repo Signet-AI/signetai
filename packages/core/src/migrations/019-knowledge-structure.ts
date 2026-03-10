@@ -12,21 +12,13 @@ import type { MigrationDb } from "./index";
 
 export function up(db: MigrationDb): void {
 	// -- 1a. Backfill agent_id on entities (idempotent) --
-	const entityCols = db.prepare("PRAGMA table_info(entities)").all() as ReadonlyArray<
-		Record<string, unknown>
-	>;
-	const entityColNames = new Set(
-		entityCols.flatMap((c) => (typeof c.name === "string" ? [c.name] : [])),
-	);
+	const entityCols = db.prepare("PRAGMA table_info(entities)").all() as ReadonlyArray<Record<string, unknown>>;
+	const entityColNames = new Set(entityCols.flatMap((c) => (typeof c.name === "string" ? [c.name] : [])));
 
 	if (!entityColNames.has("agent_id")) {
-		db.exec(
-			"ALTER TABLE entities ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'",
-		);
+		db.exec("ALTER TABLE entities ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'");
 	}
-	db.exec(
-		"CREATE INDEX IF NOT EXISTS idx_entities_agent ON entities(agent_id)",
-	);
+	db.exec("CREATE INDEX IF NOT EXISTS idx_entities_agent ON entities(agent_id)");
 
 	// -- 1b. entity_aspects --
 	db.exec(`

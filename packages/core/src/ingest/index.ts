@@ -10,36 +10,36 @@
  *   const result = await ingestPath("~/Documents/notes/", { db, verbose: true });
  */
 
-import { existsSync, statSync, readdirSync } from "fs";
-import { join, extname, resolve, basename } from "path";
-import type { LlmProvider } from "../types";
-import type {
-	DatabaseLike,
-	IngestOptions,
-	IngestResult,
-	FileIngestResult,
-	ParsedDocument,
-	ChunkResult,
-	ExtractionResult,
-	ProgressCallback,
-} from "./types";
+import { existsSync, readdirSync, statSync } from "fs";
 import { readFileSync } from "fs";
-import { parseMarkdown, parseTxt, parseCode } from "./markdown-parser";
-import { parsePdf } from "./pdf-parser";
-import { parseSlackExport } from "./slack-parser";
-import { parseDiscordExport } from "./discord-parser";
+import { basename, extname, join, resolve } from "path";
+import type { LlmProvider } from "../types";
+import { DEFAULT_CHUNKER_CONFIG, chunkDocument } from "./chunker";
 import { parseCodeRepository } from "./code-parser";
-import { parseEntireRepo, hasEntireBranch } from "./entire-parser";
-import { chunkDocument, DEFAULT_CHUNKER_CONFIG } from "./chunker";
-import { extractFromChunks, DEFAULT_EXTRACTOR_CONFIG } from "./extractor";
+import { parseDiscordExport } from "./discord-parser";
+import { hasEntireBranch, parseEntireRepo } from "./entire-parser";
+import { DEFAULT_EXTRACTOR_CONFIG, extractFromChunks } from "./extractor";
 import type { ExtractionOptions } from "./extractor";
+import { parseCode, parseMarkdown, parseTxt } from "./markdown-parser";
+import { parsePdf } from "./pdf-parser";
 import {
-	computeFileHash,
+	buildProvenance,
 	checkAlreadyIngested,
+	computeFileHash,
 	createIngestionJob,
 	updateIngestionJob,
-	buildProvenance,
 } from "./provenance";
+import { parseSlackExport } from "./slack-parser";
+import type {
+	ChunkResult,
+	DatabaseLike,
+	ExtractionResult,
+	FileIngestResult,
+	IngestOptions,
+	IngestResult,
+	ParsedDocument,
+	ProgressCallback,
+} from "./types";
 
 // Re-export all types
 export type {
@@ -85,15 +85,38 @@ const MARKDOWN_EXTS = new Set([".md", ".mdx", ".markdown"]);
 const TXT_EXTS = new Set([".txt", ".text", ".log", ".rst"]);
 const PDF_EXTS = new Set([".pdf"]);
 const CODE_EXTS = new Set([
-	".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".go", ".java",
-	".rb", ".php", ".swift", ".kt", ".scala", ".c", ".cpp", ".h",
-	".hpp", ".sh", ".bash", ".zsh", ".sql", ".yaml", ".yml",
-	".toml", ".json", ".xml", ".css", ".scss", ".html", ".htm",
+	".ts",
+	".tsx",
+	".js",
+	".jsx",
+	".py",
+	".rs",
+	".go",
+	".java",
+	".rb",
+	".php",
+	".swift",
+	".kt",
+	".scala",
+	".c",
+	".cpp",
+	".h",
+	".hpp",
+	".sh",
+	".bash",
+	".zsh",
+	".sql",
+	".yaml",
+	".yml",
+	".toml",
+	".json",
+	".xml",
+	".css",
+	".scss",
+	".html",
+	".htm",
 ]);
-const SKIP_FILES = new Set([
-	".DS_Store", "Thumbs.db", ".gitkeep", "node_modules",
-	".git", ".env", ".env.local",
-]);
+const SKIP_FILES = new Set([".DS_Store", "Thumbs.db", ".gitkeep", "node_modules", ".git", ".env", ".env.local"]);
 
 type FileType = "markdown" | "pdf" | "txt" | "code" | "slack" | "discord" | "repo" | "entire" | "skip";
 
@@ -138,7 +161,9 @@ function isSlackExport(dirPath: string): boolean {
 					const subFiles = readdirSync(fullPath);
 					if (subFiles.some((f) => f.endsWith(".json"))) return true;
 				}
-			} catch { /* skip */ }
+			} catch {
+				/* skip */
+			}
 		}
 		return false;
 	} catch {
@@ -189,10 +214,7 @@ function isGitRepo(dirPath: string): boolean {
 // Collect files from path (file or directory)
 // ---------------------------------------------------------------------------
 
-function collectFiles(
-	inputPath: string,
-	forcedType?: string,
-): Array<{ path: string; type: FileType }> {
+function collectFiles(inputPath: string, forcedType?: string): Array<{ path: string; type: FileType }> {
 	const absPath = resolve(inputPath);
 
 	if (!existsSync(absPath)) {
@@ -240,10 +262,7 @@ function collectFiles(
 	return [];
 }
 
-function collectDirectory(
-	dirPath: string,
-	forcedType?: string,
-): Array<{ path: string; type: FileType }> {
+function collectDirectory(dirPath: string, forcedType?: string): Array<{ path: string; type: FileType }> {
 	const files: Array<{ path: string; type: FileType }> = [];
 
 	const entries = readdirSync(dirPath, { withFileTypes: true });
@@ -273,10 +292,7 @@ function collectDirectory(
 // Parse a file based on its detected type
 // ---------------------------------------------------------------------------
 
-async function parseFile(
-	filePath: string,
-	fileType: FileType,
-): Promise<ParsedDocument> {
+async function parseFile(filePath: string, fileType: FileType): Promise<ParsedDocument> {
 	switch (fileType) {
 		case "markdown":
 			return parseMarkdown(filePath);
@@ -320,42 +336,38 @@ function storeMemories(
 			const id = crypto.randomUUID();
 			const now = new Date().toISOString();
 
-			db
-				.prepare(
-					`INSERT INTO memories
+			db.prepare(
+				`INSERT INTO memories
 					 (id, type, content, confidence, source_id, source_type, tags,
 					  created_at, updated_at, updated_by, vector_clock, manual_override,
 					  who, source_path, source_section)
 					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				)
-				.run(
-					id,
-					item.type,
-					item.content,
-					item.confidence,
-					fileHash,
-					"ingestion",
-					JSON.stringify([`ingest:${basename(filePath)}`]),
-					now,
-					now,
-					options.workspace || "ingestion-engine",
-					JSON.stringify({}),
-					0,
-					options.workspace || "ingestion-engine",
-					filePath,
-					chunk.sourceSection,
-				);
+			).run(
+				id,
+				item.type,
+				item.content,
+				item.confidence,
+				fileHash,
+				"ingestion",
+				JSON.stringify([`ingest:${basename(filePath)}`]),
+				now,
+				now,
+				options.workspace || "ingestion-engine",
+				JSON.stringify({}),
+				0,
+				options.workspace || "ingestion-engine",
+				filePath,
+				chunk.sourceSection,
+			);
 
 			// Enqueue embedding job
 			try {
 				const jobId = crypto.randomUUID();
-				db
-					.prepare(
-						`INSERT INTO memory_jobs
+				db.prepare(
+					`INSERT INTO memory_jobs
 						 (id, memory_id, job_type, status, max_attempts, created_at, updated_at)
 						 VALUES (?, ?, 'embed', 'pending', 3, ?, ?)`,
-					)
-					.run(jobId, id, now, now);
+				).run(jobId, id, now, now);
 			} catch {
 				// Embedding job queue might fail — not fatal
 			}
@@ -363,7 +375,10 @@ function storeMemories(
 			created++;
 		} catch (insertErr) {
 			if (options.verbose) {
-				console.warn(`[ingest] memory insert failed:`, insertErr instanceof Error ? insertErr.message : String(insertErr));
+				console.warn(
+					`[ingest] memory insert failed:`,
+					insertErr instanceof Error ? insertErr.message : String(insertErr),
+				);
 			}
 		}
 	}
@@ -422,9 +437,7 @@ export async function ingestPath(
 		});
 		// Log detection message — CLI can display this to the user
 		if (options.verbose) {
-			console.log(
-				"Detected Entire.io sessions — extracting developer skill signals from AI coding transcripts...",
-			);
+			console.log("Detected Entire.io sessions — extracting developer skill signals from AI coding transcripts...");
 		}
 	}
 
@@ -449,14 +462,7 @@ export async function ingestPath(
 		});
 
 		try {
-			const result = await ingestSingleFile(
-				file.path,
-				file.type,
-				provider,
-				extractionOpts,
-				options,
-				onProgress,
-			);
+			const result = await ingestSingleFile(file.path, file.type, provider, extractionOpts, options, onProgress);
 
 			fileResults.push(result);
 			totalChunks += result.chunks;
@@ -649,14 +655,7 @@ async function ingestSingleFile(
 			const chunk = chunks[i];
 
 			if (!options.dryRun && options.db) {
-				const stored = storeMemories(
-					options.db,
-					extraction.items,
-					chunk,
-					filePath,
-					fileHash,
-					options,
-				);
+				const stored = storeMemories(options.db, extraction.items, chunk, filePath, fileHash, options);
 				memoriesCreated += stored;
 			} else {
 				// Dry run: just count

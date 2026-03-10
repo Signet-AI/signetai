@@ -1,126 +1,111 @@
 <script lang="ts">
-	import type { Memory } from "$lib/api";
-	import { setMemoryPinned, updateMemory } from "$lib/api";
-	import { toast } from "$lib/stores/toast.svelte";
-	import * as Card from "$lib/components/ui/card/index.js";
-	import * as Popover from "$lib/components/ui/popover/index.js";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import { Textarea } from "$lib/components/ui/textarea/index.js";
-	import Check from "@lucide/svelte/icons/check";
-	import X from "@lucide/svelte/icons/x";
-	import Pencil from "@lucide/svelte/icons/pencil";
-	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import type { Memory } from "$lib/api";
+import { setMemoryPinned, updateMemory } from "$lib/api";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Card from "$lib/components/ui/card/index.js";
+import * as Popover from "$lib/components/ui/popover/index.js";
+import { Textarea } from "$lib/components/ui/textarea/index.js";
+import { toast } from "$lib/stores/toast.svelte";
+import Check from "@lucide/svelte/icons/check";
+import Pencil from "@lucide/svelte/icons/pencil";
+import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import X from "@lucide/svelte/icons/x";
 
-	interface Props {
-		memories: Memory[];
+interface Props {
+	memories: Memory[];
+}
+
+const { memories }: Props = $props();
+
+let actedIds = $state<Set<string>>(new Set());
+let refreshKey = $state(0);
+
+function scoreMemory(m: Memory): number {
+	const now = Date.now();
+	const age = now - new Date(m.created_at).getTime();
+	const dayMs = 86_400_000;
+	const recency = age < 7 * dayMs ? 1 : age < 30 * dayMs ? 0.5 : 0.2;
+	const tags = parseTags(m.tags);
+	const curationNeed = tags.length === 0 ? 1 : tags.length < 3 ? 0.6 : 0.2;
+	const imp = m.importance ?? 0.5;
+	const importanceMid = imp >= 0.3 && imp <= 0.7 ? 1 : 0.3;
+	return recency + curationNeed + importanceMid;
+}
+
+function parseTags(raw: string | string[] | null | undefined): string[] {
+	if (!raw) return [];
+	if (Array.isArray(raw)) return raw.filter(Boolean);
+	return raw
+		.split(",")
+		.map((t) => t.trim())
+		.filter(Boolean);
+}
+
+const scoredPool = $derived.by(() => {
+	void refreshKey;
+	return memories
+		.filter((m) => {
+			if (actedIds.has(m.id)) return false;
+			if (m.pinned) return false;
+			const tags = parseTags(m.tags);
+			if (tags.includes("rejected-insight")) return false;
+			return true;
+		})
+		.map((m) => ({ memory: m, score: scoreMemory(m) }))
+		.sort((a, b) => b.score - a.score);
+});
+
+const displayCards = $derived(scoredPool.slice(0, 3).map((s) => s.memory));
+
+function importanceColor(imp: number): string {
+	if (imp >= 0.8) return "var(--sig-danger)";
+	if (imp >= 0.5) return "var(--sig-warning, #d4a017)";
+	return "var(--sig-success)";
+}
+
+async function acceptMemory(m: Memory): Promise<void> {
+	const result = await setMemoryPinned(m.id, true);
+	if (result.success) {
+		actedIds = new Set([...actedIds, m.id]);
+		toast("Memory pinned", "success");
+	} else {
+		toast(result.error ?? "Failed to pin", "error");
 	}
+}
 
-	const { memories }: Props = $props();
-
-	let actedIds = $state<Set<string>>(new Set());
-	let refreshKey = $state(0);
-
-	function scoreMemory(m: Memory): number {
-		const now = Date.now();
-		const age = now - new Date(m.created_at).getTime();
-		const dayMs = 86_400_000;
-		const recency =
-			age < 7 * dayMs ? 1 : age < 30 * dayMs ? 0.5 : 0.2;
-		const tags = parseTags(m.tags);
-		const curationNeed =
-			tags.length === 0 ? 1 : tags.length < 3 ? 0.6 : 0.2;
-		const imp = m.importance ?? 0.5;
-		const importanceMid =
-			imp >= 0.3 && imp <= 0.7 ? 1 : 0.3;
-		return recency + curationNeed + importanceMid;
+async function rejectMemory(m: Memory): Promise<void> {
+	const existing = parseTags(m.tags);
+	existing.push("rejected-insight");
+	const result = await updateMemory(m.id, { tags: existing.join(",") }, "dashboard: rejected insight");
+	if (result.success) {
+		actedIds = new Set([...actedIds, m.id]);
+		toast("Memory dismissed", "success");
+	} else {
+		toast(result.error ?? "Failed to dismiss", "error");
 	}
+}
 
-	function parseTags(
-		raw: string | string[] | null | undefined,
-	): string[] {
-		if (!raw) return [];
-		if (Array.isArray(raw)) return raw.filter(Boolean);
-		return raw
-			.split(",")
-			.map((t) => t.trim())
-			.filter(Boolean);
+const editContent = $state<Record<string, string>>({});
+
+function initEdit(m: Memory): void {
+	editContent[m.id] = m.content;
+}
+
+async function saveCorrection(m: Memory): Promise<void> {
+	const newContent = editContent[m.id];
+	if (!newContent || newContent === m.content) return;
+	const result = await updateMemory(m.id, { content: newContent }, "dashboard: corrected insight");
+	if (result.success) {
+		actedIds = new Set([...actedIds, m.id]);
+		toast("Memory corrected", "success");
+	} else {
+		toast(result.error ?? "Failed to save", "error");
 	}
+}
 
-	const scoredPool = $derived.by(() => {
-		void refreshKey;
-		return memories
-			.filter((m) => {
-				if (actedIds.has(m.id)) return false;
-				if (m.pinned) return false;
-				const tags = parseTags(m.tags);
-				if (tags.includes("rejected-insight")) return false;
-				return true;
-			})
-			.map((m) => ({ memory: m, score: scoreMemory(m) }))
-			.sort((a, b) => b.score - a.score);
-	});
-
-	const displayCards = $derived(
-		scoredPool.slice(0, 3).map((s) => s.memory),
-	);
-
-	function importanceColor(imp: number): string {
-		if (imp >= 0.8) return "var(--sig-danger)";
-		if (imp >= 0.5) return "var(--sig-warning, #d4a017)";
-		return "var(--sig-success)";
-	}
-
-	async function acceptMemory(m: Memory): Promise<void> {
-		const result = await setMemoryPinned(m.id, true);
-		if (result.success) {
-			actedIds = new Set([...actedIds, m.id]);
-			toast("Memory pinned", "success");
-		} else {
-			toast(result.error ?? "Failed to pin", "error");
-		}
-	}
-
-	async function rejectMemory(m: Memory): Promise<void> {
-		const existing = parseTags(m.tags);
-		existing.push("rejected-insight");
-		const result = await updateMemory(
-			m.id,
-			{ tags: existing.join(",") },
-			"dashboard: rejected insight",
-		);
-		if (result.success) {
-			actedIds = new Set([...actedIds, m.id]);
-			toast("Memory dismissed", "success");
-		} else {
-			toast(result.error ?? "Failed to dismiss", "error");
-		}
-	}
-
-	let editContent = $state<Record<string, string>>({});
-
-	function initEdit(m: Memory): void {
-		editContent[m.id] = m.content;
-	}
-
-	async function saveCorrection(m: Memory): Promise<void> {
-		const newContent = editContent[m.id];
-		if (!newContent || newContent === m.content) return;
-		const result = await updateMemory(
-			m.id,
-			{ content: newContent },
-			"dashboard: corrected insight",
-		);
-		if (result.success) {
-			actedIds = new Set([...actedIds, m.id]);
-			toast("Memory corrected", "success");
-		} else {
-			toast(result.error ?? "Failed to save", "error");
-		}
-	}
-
-	function handleRefresh(): void {
-		refreshKey += 1;
-	}
+function handleRefresh(): void {
+	refreshKey += 1;
+}
 </script>
 
 <Card.Root class="flex flex-col h-full overflow-hidden">

@@ -252,9 +252,7 @@ describe("effectiveScore", () => {
 	});
 
 	test("30-day-old memory decays", () => {
-		const thirtyDaysAgo = new Date(
-			Date.now() - 30 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 		const score = effectiveScore(1.0, thirtyDaysAgo, false);
 		// 1.0 * 0.95^30 ≈ 0.214
 		expect(score).toBeGreaterThan(0.1);
@@ -310,10 +308,7 @@ describe("isDuplicate", () => {
 		]);
 
 		const db = openTestDb();
-		const result = isDuplicate(
-			db,
-			"The user prefers dark mode and vim keybindings",
-		);
+		const result = isDuplicate(db, "The user prefers dark mode and vim keybindings");
 		db.close();
 
 		expect(result).toBe(true);
@@ -442,9 +437,7 @@ creature: digital assistant
 		const result = handleSessionStart({ harness: "claude-code" });
 
 		expect(result.memories.length).toBe(2);
-		expect(
-			result.memories.some((m) => m.content === "User prefers dark mode"),
-		).toBe(true);
+		expect(result.memories.some((m) => m.content === "User prefers dark mode")).toBe(true);
 		expect(result.inject).toContain("Relevant Memories");
 	});
 
@@ -463,9 +456,7 @@ creature: digital assistant
 
 		const result = handleSessionStart({ harness: "claude-code" });
 
-		const agentsIndex = result.inject.indexOf(
-			"Follow AGENTS instructions first.",
-		);
+		const agentsIndex = result.inject.indexOf("Follow AGENTS instructions first.");
 		const workingMemoryIndex = result.inject.indexOf("## Working Memory");
 
 		expect(result.inject).toContain("## Agent Instructions");
@@ -509,9 +500,7 @@ hooks:
 
 	test("filters out low-score memories", () => {
 		// Very old, low importance memory should be filtered by effectiveScore > 0.2
-		const veryOld = new Date(
-			Date.now() - 365 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const veryOld = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
 		createMemoryDb([
 			{
 				content: "Ancient low-importance fact",
@@ -527,9 +516,7 @@ hooks:
 	});
 
 	test("pinned memories are always included", () => {
-		const veryOld = new Date(
-			Date.now() - 365 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const veryOld = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
 		createMemoryDb([
 			{
 				content: "Critical pinned memory",
@@ -598,9 +585,7 @@ hooks:
 	});
 
 	test("includes recent memories in summary prompt", () => {
-		createMemoryDb([
-			{ content: "Important decision about auth", importance: 0.9 },
-		]);
+		createMemoryDb([{ content: "Important decision about auth", importance: 0.9 }]);
 
 		const result = handlePreCompaction({ harness: "test" });
 
@@ -656,7 +641,7 @@ describe("handleUserPromptSubmit", () => {
 		const result = await handleUserPromptSubmit({
 			harness: "test",
 			userPrompt:
-				"Conversation info (untrusted metadata):\n{\"conversation_label\":\"OpenClaw Session\",\"message_id\":\"msg_123\",\"sender_id\":\"user_456\"}\n\nCan you reiterate the release checklist?",
+				'Conversation info (untrusted metadata):\n{"conversation_label":"OpenClaw Session","message_id":"msg_123","sender_id":"user_456"}\n\nCan you reiterate the release checklist?',
 		});
 
 		expect(result.memoryCount).toBeGreaterThan(0);
@@ -705,9 +690,7 @@ describe("handleUserPromptSubmit", () => {
 	});
 
 	test("returns empty for no-match prompt", async () => {
-		createMemoryDb([
-			{ content: "PostgreSQL replication setup guide", importance: 0.8 },
-		]);
+		createMemoryDb([{ content: "PostgreSQL replication setup guide", importance: 0.8 }]);
 
 		const result = await handleUserPromptSubmit({
 			harness: "test",
@@ -781,7 +764,6 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).toContain("Current Date & Time");
 		expect(result.inject).not.toContain("[signet:recall");
 	});
-
 });
 
 // ============================================================================
@@ -814,9 +796,7 @@ describe("handleRemember", () => {
 
 		// Verify pinned in DB
 		const db = openTestDb();
-		const row = db
-			.prepare("SELECT * FROM memories WHERE id = ?")
-			.get(result.id) as {
+		const row = db.prepare("SELECT * FROM memories WHERE id = ?").get(result.id) as {
 			pinned: number;
 			importance: number;
 			content: string;
@@ -839,9 +819,7 @@ describe("handleRemember", () => {
 		expect(result.saved).toBe(true);
 
 		const db = openTestDb();
-		const row = db
-			.prepare("SELECT * FROM memories WHERE id = ?")
-			.get(result.id) as {
+		const row = db.prepare("SELECT * FROM memories WHERE id = ?").get(result.id) as {
 			tags: string;
 			content: string;
 		};
@@ -886,15 +864,11 @@ describe("handleRecall", () => {
 		});
 
 		expect(result.count).toBeGreaterThan(0);
-		expect(result.results.some((r) => r.content.includes("TypeScript"))).toBe(
-			true,
-		);
+		expect(result.results.some((r) => r.content.includes("TypeScript"))).toBe(true);
 	});
 
 	test("returns empty for no-match query", () => {
-		createMemoryDb([
-			{ content: "The database uses PostgreSQL", importance: 0.8 },
-		]);
+		createMemoryDb([{ content: "The database uses PostgreSQL", importance: 0.8 }]);
 
 		const result = handleRecall({
 			harness: "test",
@@ -1023,10 +997,7 @@ describe("handleSynthesisRequest", () => {
 
 	test("generates fresh prompt when no existing MEMORY.md", () => {
 		ensureDir(join(TEST_DIR, "memory"));
-		writeFileSync(
-			join(TEST_DIR, "memory", "2026-03-04-session-def.md"),
-			"Test session summary content",
-		);
+		writeFileSync(join(TEST_DIR, "memory", "2026-03-04-session-def.md"), "Test session summary content");
 
 		const result = handleSynthesisRequest({ trigger: "scheduled" });
 
@@ -1061,10 +1032,7 @@ describe("error handling", () => {
 
 	test("handles corrupt memory database gracefully", () => {
 		ensureDir(join(TEST_DIR, "memory"));
-		writeFileSync(
-			join(TEST_DIR, "memory", "memories.db"),
-			"not a sqlite database",
-		);
+		writeFileSync(join(TEST_DIR, "memory", "memories.db"), "not a sqlite database");
 
 		const result = handleSessionStart({ harness: "test" });
 		expect(result.memories).toEqual([]);
@@ -1085,9 +1053,9 @@ describe("schema", () => {
 		createMemoryDb([{ content: "FTS test memory about TypeScript" }]);
 
 		const db = openTestDb();
-		const rows = db
-			.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ?")
-			.all("TypeScript") as Array<{ content: string }>;
+		const rows = db.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ?").all("TypeScript") as Array<{
+			content: string;
+		}>;
 		db.close();
 
 		expect(rows.length).toBe(1);
@@ -1098,9 +1066,7 @@ describe("schema", () => {
 		createMemoryDb([]);
 		const db = openTestDb();
 
-		db.prepare(
-			"INSERT INTO memories (id, content, who, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		).run(
+		db.prepare("INSERT INTO memories (id, content, who, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
 			crypto.randomUUID(),
 			"Trigger test content",
 			"test",
@@ -1108,9 +1074,9 @@ describe("schema", () => {
 			new Date().toISOString(),
 		);
 
-		const rows = db
-			.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ?")
-			.all("trigger") as Array<{ content: string }>;
+		const rows = db.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ?").all("trigger") as Array<{
+			content: string;
+		}>;
 		db.close();
 
 		expect(rows.length).toBe(1);
@@ -1213,9 +1179,7 @@ describe("getAllScoredCandidates", () => {
 	});
 
 	test("filters out low-score memories below 0.2 threshold", () => {
-		const veryOld = new Date(
-			Date.now() - 365 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const veryOld = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
 		createMemoryDb([
 			{
 				content: "Ancient low-importance fact",
@@ -1304,9 +1268,7 @@ describe("session memory recording integration", () => {
 	});
 
 	test("handleSessionStart does not record when sessionKey is missing", () => {
-		createMemoryDb([
-			{ content: "Some memory", importance: 0.9 },
-		]);
+		createMemoryDb([{ content: "Some memory", importance: 0.9 }]);
 
 		handleSessionStart({
 			harness: "test",
@@ -1314,9 +1276,7 @@ describe("session memory recording integration", () => {
 		});
 
 		const db = openTestDb();
-		const count = db
-			.prepare("SELECT COUNT(*) as cnt FROM session_memories")
-			.get() as { cnt: number };
+		const count = db.prepare("SELECT COUNT(*) as cnt FROM session_memories").get() as { cnt: number };
 		db.close();
 
 		expect(count.cnt).toBe(0);
@@ -1345,9 +1305,7 @@ describe("session memory recording integration", () => {
 
 		const db = openTestDb();
 		const rows = db
-			.prepare(
-				"SELECT memory_id, fts_hit_count, source FROM session_memories WHERE session_key = ?",
-			)
+			.prepare("SELECT memory_id, fts_hit_count, source FROM session_memories WHERE session_key = ?")
 			.all("fts-tracking-session") as Array<{
 			memory_id: string;
 			fts_hit_count: number;

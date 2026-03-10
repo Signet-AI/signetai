@@ -1,12 +1,12 @@
 import {
+	type MarketplaceReview,
+	type MarketplaceReviewTargetType,
 	createMarketplaceReview,
 	deleteMarketplaceReview,
 	getMarketplaceReviewConfig,
 	getMarketplaceReviews,
 	syncMarketplaceReviews,
 	updateMarketplaceReviewConfig,
-	type MarketplaceReview,
-	type MarketplaceReviewTargetType,
 } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 
@@ -75,8 +75,7 @@ export async function setReviewTarget(
 	reviewsMarket.targetId = targetId;
 	reviewsMarket.targetLabel = targetLabel;
 	reviewsMarket.canReview = options?.canReview ?? false;
-	reviewsMarket.reviewEligibilityReason =
-		options?.reason ?? "Install or use this app before leaving a review.";
+	reviewsMarket.reviewEligibilityReason = options?.reason ?? "Install or use this app before leaving a review.";
 	await fetchTargetReviews();
 }
 

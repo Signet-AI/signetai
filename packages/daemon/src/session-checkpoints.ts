@@ -4,23 +4,15 @@
  * user-prompt-submit hot path.
  */
 
+import type { ContinuityState, StructuralSnapshot } from "./continuity-state";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import type {
-	ContinuityState,
-	StructuralSnapshot,
-} from "./continuity-state";
 import { logger } from "./logger";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type CheckpointTrigger =
-	| "periodic"
-	| "pre_compaction"
-	| "session_end"
-	| "agent"
-	| "explicit";
+export type CheckpointTrigger = "periodic" | "pre_compaction" | "session_end" | "agent" | "explicit";
 
 export interface CheckpointRow {
 	readonly id: string;
@@ -92,9 +84,7 @@ export function redactCheckpointRow(row: CheckpointRow): CheckpointRow {
 		...row,
 		digest: redactSecrets(row.digest),
 		recent_remembers: row.recent_remembers
-			? JSON.stringify(
-					(JSON.parse(row.recent_remembers) as string[]).map(redactSecrets),
-				)
+			? JSON.stringify((JSON.parse(row.recent_remembers) as string[]).map(redactSecrets))
 			: null,
 	};
 }
@@ -103,75 +93,59 @@ export function redactCheckpointRow(row: CheckpointRow): CheckpointRow {
 // Write
 // ============================================================================
 
-export function writeCheckpoint(
-	db: DbAccessor,
-	params: WriteCheckpointParams,
-	maxPerSession: number,
-): void {
+export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, maxPerSession: number): void {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 	const digest = redactSecrets(params.digest);
 
 	db.withWriteTx((wdb: WriteDb) => {
-		wdb.prepare(
-			`INSERT INTO session_checkpoints
+		wdb
+			.prepare(
+				`INSERT INTO session_checkpoints
 			 (id, session_key, harness, project, project_normalized,
 			  trigger, digest, prompt_count, memory_queries,
 			  recent_remembers, focal_entity_ids, focal_entity_names,
 			  active_aspect_ids, surfaced_constraint_count,
 			  traversal_memory_count, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			id,
-			params.sessionKey,
-			params.harness,
-			params.project ?? null,
-			params.projectNormalized ?? null,
-			params.trigger,
-			digest,
-			params.promptCount,
-			params.memoryQueries.length > 0
-				? JSON.stringify(params.memoryQueries)
-				: null,
-			params.recentRemembers.length > 0
-				? JSON.stringify(params.recentRemembers.map(redactSecrets))
-				: null,
-			params.focalEntityIds && params.focalEntityIds.length > 0
-				? JSON.stringify(params.focalEntityIds)
-				: null,
-			params.focalEntityNames && params.focalEntityNames.length > 0
-				? JSON.stringify(params.focalEntityNames)
-				: null,
-			params.activeAspectIds && params.activeAspectIds.length > 0
-				? JSON.stringify(params.activeAspectIds)
-				: null,
-			typeof params.surfacedConstraintCount === "number"
-				? params.surfacedConstraintCount
-				: null,
-			typeof params.traversalMemoryCount === "number"
-				? params.traversalMemoryCount
-				: null,
-			now,
-		);
+			)
+			.run(
+				id,
+				params.sessionKey,
+				params.harness,
+				params.project ?? null,
+				params.projectNormalized ?? null,
+				params.trigger,
+				digest,
+				params.promptCount,
+				params.memoryQueries.length > 0 ? JSON.stringify(params.memoryQueries) : null,
+				params.recentRemembers.length > 0 ? JSON.stringify(params.recentRemembers.map(redactSecrets)) : null,
+				params.focalEntityIds && params.focalEntityIds.length > 0 ? JSON.stringify(params.focalEntityIds) : null,
+				params.focalEntityNames && params.focalEntityNames.length > 0 ? JSON.stringify(params.focalEntityNames) : null,
+				params.activeAspectIds && params.activeAspectIds.length > 0 ? JSON.stringify(params.activeAspectIds) : null,
+				typeof params.surfacedConstraintCount === "number" ? params.surfacedConstraintCount : null,
+				typeof params.traversalMemoryCount === "number" ? params.traversalMemoryCount : null,
+				now,
+			);
 
 		// Enforce per-session cap by deleting oldest beyond limit
 		const count = wdb
-			.prepare(
-				"SELECT COUNT(*) as cnt FROM session_checkpoints WHERE session_key = ?",
-			)
+			.prepare("SELECT COUNT(*) as cnt FROM session_checkpoints WHERE session_key = ?")
 			.get(params.sessionKey) as { cnt: number };
 
 		if (count.cnt > maxPerSession) {
 			const excess = count.cnt - maxPerSession;
-			wdb.prepare(
-				`DELETE FROM session_checkpoints
+			wdb
+				.prepare(
+					`DELETE FROM session_checkpoints
 				 WHERE id IN (
 					 SELECT id FROM session_checkpoints
 					 WHERE session_key = ?
 					 ORDER BY created_at ASC, rowid ASC
 					 LIMIT ?
 				 )`,
-			).run(params.sessionKey, excess);
+				)
+				.run(params.sessionKey, excess);
 		}
 	});
 
@@ -188,10 +162,7 @@ function parseJsonArray(raw: string | null): string[] {
 	try {
 		const parsed = JSON.parse(raw) as unknown;
 		if (!Array.isArray(parsed)) return [];
-		return parsed.filter(
-			(value): value is string =>
-				typeof value === "string" && value.trim().length > 0,
-		);
+		return parsed.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 	} catch {
 		return [];
 	}
@@ -258,10 +229,7 @@ export function getLatestCheckpoint(
 }
 
 /** Get the most recent checkpoint for a specific session key. */
-export function getLatestCheckpointBySession(
-	db: DbAccessor,
-	sessionKey: string,
-): CheckpointRow | undefined {
+export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string): CheckpointRow | undefined {
 	return db.withReadDb((rdb: ReadDb) => {
 		const row = rdb
 			.prepare(
@@ -276,10 +244,7 @@ export function getLatestCheckpointBySession(
 }
 
 /** Get all checkpoints for a session, newest first. */
-export function getCheckpointsBySession(
-	db: DbAccessor,
-	sessionKey: string,
-): ReadonlyArray<CheckpointRow> {
+export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): ReadonlyArray<CheckpointRow> {
 	return db.withReadDb((rdb: ReadDb) => {
 		return rdb
 			.prepare(
@@ -317,18 +282,11 @@ export function getCheckpointsByProject(
  * Delete all checkpoints older than retentionDays. Strict retention —
  * checkpoints are ephemeral session state, not forensic data.
  */
-export function pruneCheckpoints(
-	db: DbAccessor,
-	retentionDays: number,
-): number {
-	const cutoff = new Date(
-		Date.now() - retentionDays * 24 * 60 * 60 * 1000,
-	).toISOString();
+export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number {
+	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
 
 	return db.withWriteTx((wdb: WriteDb) => {
-		const result = wdb
-			.prepare("DELETE FROM session_checkpoints WHERE created_at < ?")
-			.run(cutoff);
+		const result = wdb.prepare("DELETE FROM session_checkpoints WHERE created_at < ?").run(cutoff);
 
 		const deleted = (result as unknown as { changes: number }).changes ?? 0;
 		if (deleted > 0) {
@@ -345,10 +303,7 @@ export function pruneCheckpoints(
 // Digest formatting (passive channel)
 // ============================================================================
 
-export function formatPeriodicDigest(
-	state: ContinuityState,
-	structuralSnapshot?: StructuralSnapshot,
-): string {
+export function formatPeriodicDigest(state: ContinuityState, structuralSnapshot?: StructuralSnapshot): string {
 	const elapsed = Date.now() - state.startedAt;
 	const elapsedStr = formatDuration(elapsed);
 
@@ -373,9 +328,7 @@ export function formatPeriodicDigest(
 			parts.push(`Queries: ${state.pendingQueries.join(", ")}`);
 		}
 		if (state.pendingRemembers.length > 0) {
-			parts.push(
-				`Remembered: ${state.pendingRemembers.map((r) => r.slice(0, 120)).join("; ")}`,
-			);
+			parts.push(`Remembered: ${state.pendingRemembers.map((r) => r.slice(0, 120)).join("; ")}`);
 		}
 	}
 
@@ -415,19 +368,14 @@ export function formatPreCompactionDigest(
 			parts.push(`Queries: ${state.pendingQueries.join(", ")}`);
 		}
 		if (state.pendingRemembers.length > 0) {
-			parts.push(
-				`Remembered: ${state.pendingRemembers.map((r) => r.slice(0, 120)).join("; ")}`,
-			);
+			parts.push(`Remembered: ${state.pendingRemembers.map((r) => r.slice(0, 120)).join("; ")}`);
 		}
 	}
 
 	return parts.join("\n");
 }
 
-export function formatSessionEndDigest(
-	state: ContinuityState,
-	structuralSnapshot?: StructuralSnapshot,
-): string {
+export function formatSessionEndDigest(state: ContinuityState, structuralSnapshot?: StructuralSnapshot): string {
 	const elapsed = Date.now() - state.startedAt;
 	const elapsedStr = formatDuration(elapsed);
 
@@ -452,18 +400,14 @@ export function formatSessionEndDigest(
 			parts.push(`Queries: ${state.pendingQueries.join(", ")}`);
 		}
 		if (state.pendingRemembers.length > 0) {
-			parts.push(
-				`Remembered: ${state.pendingRemembers.map((r) => r.slice(0, 120)).join("; ")}`,
-			);
+			parts.push(`Remembered: ${state.pendingRemembers.map((r) => r.slice(0, 120)).join("; ")}`);
 		}
 	}
 
 	return parts.join("\n");
 }
 
-export function getCheckpointStructuralSnapshot(
-	row: CheckpointRow | undefined,
-): StructuralSnapshot | undefined {
+export function getCheckpointStructuralSnapshot(row: CheckpointRow | undefined): StructuralSnapshot | undefined {
 	if (!row) return undefined;
 	const focalEntityIds = parseJsonArray(row.focal_entity_ids);
 	const focalEntityNames = parseJsonArray(row.focal_entity_names);
@@ -488,27 +432,19 @@ export function getCheckpointStructuralSnapshot(
 	};
 }
 
-export function formatRecoveryDigest(
-	row: CheckpointRow,
-	budgetChars: number,
-): string {
+export function formatRecoveryDigest(row: CheckpointRow, budgetChars: number): string {
 	const digest = row.digest;
 	if (budgetChars <= 0) return "";
 
 	const structuralSnapshot = getCheckpointStructuralSnapshot(row);
 	if (!structuralSnapshot) {
-		return digest.length > budgetChars
-			? `${digest.slice(0, budgetChars)}\n[truncated]`
-			: digest;
+		return digest.length > budgetChars ? `${digest.slice(0, budgetChars)}\n[truncated]` : digest;
 	}
 
 	const recentPromptIndex = digest.indexOf("\n### Recent Prompts");
 	const memoryActivityIndex = digest.indexOf("\n### Memory Activity");
-	const splitIndices = [recentPromptIndex, memoryActivityIndex].filter(
-		(index) => index >= 0,
-	);
-	const splitIndex =
-		splitIndices.length > 0 ? Math.min(...splitIndices) : digest.length;
+	const splitIndices = [recentPromptIndex, memoryActivityIndex].filter((index) => index >= 0);
+	const splitIndex = splitIndices.length > 0 ? Math.min(...splitIndices) : digest.length;
 	const structuralPriority = digest.slice(0, splitIndex);
 	const remainder = digest.slice(splitIndex);
 
@@ -559,25 +495,15 @@ export function initCheckpointFlush(db: DbAccessor): void {
  * session, merge the queries and remembers so data isn't lost when
  * two triggers fire within the flush window.
  */
-export function queueCheckpointWrite(
-	params: WriteCheckpointParams,
-	maxPerSession: number,
-): void {
+export function queueCheckpointWrite(params: WriteCheckpointParams, maxPerSession: number): void {
 	const existing = pendingWrites.get(params.sessionKey);
 	if (existing) {
 		// Merge: keep latest prompt count + digest, union queries/remembers
-		const mergedQueries = [
-			...existing.params.memoryQueries,
-			...params.memoryQueries,
-		].slice(-20);
-		const mergedRemembers = [
-			...existing.params.recentRemembers,
-			...params.recentRemembers,
-		].slice(-10);
-		const mergedFocalEntityIds = [
-			...(existing.params.focalEntityIds ?? []),
-			...(params.focalEntityIds ?? []),
-		].filter((value, index, array) => array.indexOf(value) === index);
+		const mergedQueries = [...existing.params.memoryQueries, ...params.memoryQueries].slice(-20);
+		const mergedRemembers = [...existing.params.recentRemembers, ...params.recentRemembers].slice(-10);
+		const mergedFocalEntityIds = [...(existing.params.focalEntityIds ?? []), ...(params.focalEntityIds ?? [])].filter(
+			(value, index, array) => array.indexOf(value) === index,
+		);
 		const mergedFocalEntityNames = [
 			...(existing.params.focalEntityNames ?? []),
 			...(params.focalEntityNames ?? []),
@@ -592,26 +518,14 @@ export function queueCheckpointWrite(
 				promptCount: existing.params.promptCount + params.promptCount,
 				memoryQueries: mergedQueries,
 				recentRemembers: mergedRemembers,
-				focalEntityIds:
-					mergedFocalEntityIds.length > 0
-						? mergedFocalEntityIds
-						: undefined,
-				focalEntityNames:
-					mergedFocalEntityNames.length > 0
-						? mergedFocalEntityNames
-						: undefined,
-				activeAspectIds:
-					mergedActiveAspectIds.length > 0
-						? mergedActiveAspectIds
-						: undefined,
+				focalEntityIds: mergedFocalEntityIds.length > 0 ? mergedFocalEntityIds : undefined,
+				focalEntityNames: mergedFocalEntityNames.length > 0 ? mergedFocalEntityNames : undefined,
+				activeAspectIds: mergedActiveAspectIds.length > 0 ? mergedActiveAspectIds : undefined,
 				surfacedConstraintCount: Math.max(
 					existing.params.surfacedConstraintCount ?? 0,
 					params.surfacedConstraintCount ?? 0,
 				),
-				traversalMemoryCount: Math.max(
-					existing.params.traversalMemoryCount ?? 0,
-					params.traversalMemoryCount ?? 0,
-				),
+				traversalMemoryCount: Math.max(existing.params.traversalMemoryCount ?? 0, params.traversalMemoryCount ?? 0),
 			},
 			maxPerSession,
 		});

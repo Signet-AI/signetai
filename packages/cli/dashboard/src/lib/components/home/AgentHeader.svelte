@@ -1,64 +1,53 @@
 <script lang="ts">
-	import type { Identity, DaemonStatus, ContinuityEntry } from "$lib/api";
-	import Database from "@lucide/svelte/icons/database";
-	import Cable from "@lucide/svelte/icons/cable";
-	import Cpu from "@lucide/svelte/icons/cpu";
+import type { ContinuityEntry, DaemonStatus, Identity } from "$lib/api";
+import Cable from "@lucide/svelte/icons/cable";
+import Cpu from "@lucide/svelte/icons/cpu";
+import Database from "@lucide/svelte/icons/database";
 
-	interface Props {
-		identity: Identity;
-		greeting: string;
-		daemonStatus: DaemonStatus | null;
-		connectorCount: number;
-		continuity: ContinuityEntry[];
-		memoryCount: number;
-	}
+interface Props {
+	identity: Identity;
+	greeting: string;
+	daemonStatus: DaemonStatus | null;
+	connectorCount: number;
+	continuity: ContinuityEntry[];
+	memoryCount: number;
+}
 
-	const {
-		identity,
-		greeting,
-		daemonStatus,
-		connectorCount,
-		continuity,
-		memoryCount,
-	}: Props = $props();
+const { identity, greeting, daemonStatus, connectorCount, continuity, memoryCount }: Props = $props();
 
-	const ageDays = $derived.by(() => {
-		const created = daemonStatus?.agentCreatedAt;
-		if (!created) return null;
-		const ts = new Date(created).getTime();
-		if (Number.isNaN(ts)) return null;
-		return Math.max(0, Math.floor((Date.now() - ts) / 86_400_000));
-	});
+const ageDays = $derived.by(() => {
+	const created = daemonStatus?.agentCreatedAt;
+	if (!created) return null;
+	const ts = new Date(created).getTime();
+	if (Number.isNaN(ts)) return null;
+	return Math.max(0, Math.floor((Date.now() - ts) / 86_400_000));
+});
 
-	const ageLabel = $derived.by(() => {
-		if (ageDays === null) return null;
-		if (ageDays === 0) return "today";
-		if (ageDays === 1) return "1 day";
-		return `${ageDays} days`;
-	});
+const ageLabel = $derived.by(() => {
+	if (ageDays === null) return null;
+	if (ageDays === 0) return "today";
+	if (ageDays === 1) return "1 day";
+	return `${ageDays} days`;
+});
 
-	const activeSessions = $derived(daemonStatus?.activeSessions ?? 0);
+const activeSessions = $derived(daemonStatus?.activeSessions ?? 0);
 
-	const latestProject = $derived.by(() => {
-		if (continuity.length === 0) return null;
-		const sorted = [...continuity].sort(
-			(a, b) =>
-				new Date(b.created_at).getTime() -
-				new Date(a.created_at).getTime(),
-		);
-		return sorted[0];
-	});
+const latestProject = $derived.by(() => {
+	if (continuity.length === 0) return null;
+	const sorted = [...continuity].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+	return sorted[0];
+});
 
-	function formatRecency(dateStr: string): string {
-		const diff = Date.now() - new Date(dateStr).getTime();
-		const mins = Math.floor(diff / 60_000);
-		if (mins < 1) return "just now";
-		if (mins < 60) return `${mins}m ago`;
-		const hours = Math.floor(mins / 60);
-		if (hours < 24) return `${hours}h ago`;
-		const days = Math.floor(hours / 24);
-		return `${days}d ago`;
-	}
+function formatRecency(dateStr: string): string {
+	const diff = Date.now() - new Date(dateStr).getTime();
+	const mins = Math.floor(diff / 60_000);
+	if (mins < 1) return "just now";
+	if (mins < 60) return `${mins}m ago`;
+	const hours = Math.floor(mins / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	return `${days}d ago`;
+}
 </script>
 
 <div class="agent-header">

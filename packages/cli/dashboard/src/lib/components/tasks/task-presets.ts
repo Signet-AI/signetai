@@ -18,7 +18,8 @@ export const TASK_PRESETS: readonly TaskPreset[] = [
 		label: "PR Review",
 		description: "Review open pull requests daily",
 		name: "Review open PRs",
-		prompt: "Review all open pull requests. Summarize changes, flag potential issues, and note any that need urgent attention.",
+		prompt:
+			"Review all open pull requests. Summarize changes, flag potential issues, and note any that need urgent attention.",
 		harness: "claude-code",
 		cronExpression: "0 9 * * *",
 	},
@@ -34,7 +35,8 @@ export const TASK_PRESETS: readonly TaskPreset[] = [
 		label: "Memory Maintenance",
 		description: "Clean up and deduplicate memories",
 		name: "Memory maintenance",
-		prompt: "Review recent memories for duplicates, outdated information, and low-quality entries. Suggest cleanup actions.",
+		prompt:
+			"Review recent memories for duplicates, outdated information, and low-quality entries. Suggest cleanup actions.",
 		harness: "claude-code",
 		cronExpression: "0 9 * * 0",
 		skillName: "memory-debug",
@@ -52,7 +54,8 @@ export const TASK_PRESETS: readonly TaskPreset[] = [
 		label: "Docs Audit",
 		description: "Check documentation is up to date",
 		name: "Documentation audit",
-		prompt: "Audit the project documentation. Check for outdated references, missing docs for new features, and broken links.",
+		prompt:
+			"Audit the project documentation. Check for outdated references, missing docs for new features, and broken links.",
 		harness: "claude-code",
 		cronExpression: "0 9 * * 1",
 	},

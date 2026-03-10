@@ -12,15 +12,8 @@
 import type { MigrationDb } from "./index";
 
 /** Conditionally add a column if it doesn't exist yet. */
-function addColumnIfMissing(
-	db: MigrationDb,
-	table: string,
-	column: string,
-	definition: string,
-): boolean {
-	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<
-		Record<string, unknown>
-	>;
+function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): boolean {
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	if (rows.some((r) => r.name === column)) return false;
 	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 	return true;

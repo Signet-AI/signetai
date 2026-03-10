@@ -1,28 +1,29 @@
 ---
-import '../styles/global.css';
-import '../styles/tailwind.css';
+import "../styles/global.css";
+import "../styles/tailwind.css";
 
 interface Props {
-  title?: string;
-  description?: string;
-  image?: string;
-  type?: string;
+	title?: string;
+	description?: string;
+	image?: string;
+	type?: string;
 }
 
-const SITE_NAME = 'SignetAI';
+const SITE_NAME = "SignetAI";
 const DEFAULT_TITLE = "SignetAI — Your Agent's Memory. Your Machine. Every Platform.";
-const DEFAULT_DESCRIPTION = "Signet is local-first agent infrastructure. Portable memory and identity that lives on your machine — not locked inside someone else's API. Encrypted secrets your agent can use but never read.";
-const DEFAULT_IMAGE = '/signetposter-01.jpg';
+const DEFAULT_DESCRIPTION =
+	"Signet is local-first agent infrastructure. Portable memory and identity that lives on your machine — not locked inside someone else's API. Encrypted secrets your agent can use but never read.";
+const DEFAULT_IMAGE = "/signetposter-01.jpg";
 
 const {
-  title = DEFAULT_TITLE,
-  description = DEFAULT_DESCRIPTION,
-  image = DEFAULT_IMAGE,
-  type = 'website',
+	title = DEFAULT_TITLE,
+	description = DEFAULT_DESCRIPTION,
+	image = DEFAULT_IMAGE,
+	type = "website",
 } = Astro.props;
 
-const canonicalUrl = new URL(Astro.url.pathname, Astro.site ?? 'https://signetai.sh');
-const imageUrl = new URL(image, Astro.site ?? 'https://signetai.sh');
+const canonicalUrl = new URL(Astro.url.pathname, Astro.site ?? "https://signetai.sh");
+const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
 ---
 
 <!doctype html>

@@ -1,15 +1,15 @@
 <script lang="ts">
-import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import {
-	getMarketplaceMcpServers,
-	getMemories,
-	getMemoryTimeline,
-	getSkills,
 	type MarketplaceMcpServer,
 	type Memory,
 	type MemoryTimelineBucket,
 	type Skill,
+	getMarketplaceMcpServers,
+	getMemories,
+	getMemoryTimeline,
+	getSkills,
 } from "$lib/api";
+import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import ChevronLeft from "@lucide/svelte/icons/chevron-left";
 import ChevronRight from "@lucide/svelte/icons/chevron-right";
@@ -41,18 +41,14 @@ let activeIndex = $state(0);
 let bucketSkillUsage = $state<Record<string, number>>({});
 let bucketMcpUsage = $state<Record<string, number>>({});
 let bucketTopMemories = $state<Record<string, Memory[]>>({});
-let rootEl = $state<HTMLDivElement | null>(null);
+const rootEl = $state<HTMLDivElement | null>(null);
 
 const activeBucket = $derived(buckets[activeIndex] ?? null);
-const activeSkillsUsed = $derived(
-	activeBucket ? (bucketSkillUsage[activeBucket.rangeKey] ?? 0) : 0,
-);
+const activeSkillsUsed = $derived(activeBucket ? (bucketSkillUsage[activeBucket.rangeKey] ?? 0) : 0);
 
 function inferMcpUsageFromBucket(bucket: MemoryTimelineBucket): number {
 	// Use source breakdown only; tags are a weaker signal and can double-count with sources
-	const sourceSignals = bucket.sourceBreakdown.filter((metric: { key: string }) =>
-		hasMcpSignal(metric.key),
-	).length;
+	const sourceSignals = bucket.sourceBreakdown.filter((metric: { key: string }) => hasMcpSignal(metric.key)).length;
 	return sourceSignals;
 }
 
@@ -68,17 +64,10 @@ function hasMcpSignal(raw: string): boolean {
 }
 
 const activeMcpServersUsed = $derived(
-	activeBucket
-		? Math.max(
-				bucketMcpUsage[activeBucket.rangeKey] ?? 0,
-				inferMcpUsageFromBucket(activeBucket),
-			)
-		: 0,
+	activeBucket ? Math.max(bucketMcpUsage[activeBucket.rangeKey] ?? 0, inferMcpUsageFromBucket(activeBucket)) : 0,
 );
 
-const activeTopMemories = $derived(
-	activeBucket ? (bucketTopMemories[activeBucket.rangeKey] ?? []) : [],
-);
+const activeTopMemories = $derived(activeBucket ? (bucketTopMemories[activeBucket.rangeKey] ?? []) : []);
 
 function escapeRegex(raw: string): string {
 	return raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -201,8 +190,7 @@ function buildBucketUsageMaps(
 	for (const entry of storage) {
 		skillUsage[entry.bucket.rangeKey] = entry.skillSet.size;
 		// If we matched named servers, use that count; otherwise cap at 1 if signal detected
-		mcpUsage[entry.bucket.rangeKey] =
-			entry.mcpSet.size > 0 ? entry.mcpSet.size : (entry.hasMcpSignal ? 1 : 0);
+		mcpUsage[entry.bucket.rangeKey] = entry.mcpSet.size > 0 ? entry.mcpSet.size : entry.hasMcpSignal ? 1 : 0;
 	}
 
 	return { skillUsage, mcpUsage };
@@ -219,10 +207,7 @@ function buildBucketTopMemories(
 	bucketsInput: readonly MemoryTimelineBucket[],
 	memories: readonly Memory[],
 ): Record<string, Memory[]> {
-	const parsedRangeBounds = new Map<
-		MemoryTimelineBucket["rangeKey"],
-		{ startMs: number; endMs: number }
-	>();
+	const parsedRangeBounds = new Map<MemoryTimelineBucket["rangeKey"], { startMs: number; endMs: number }>();
 	for (const bucket of bucketsInput) {
 		const startMs = Date.parse(bucket.start);
 		const endMs = Date.parse(bucket.end);
@@ -233,9 +218,7 @@ function buildBucketTopMemories(
 	const todayRange = parsedRangeBounds.get("today") ?? null;
 	const lastWeekRange = parsedRangeBounds.get("last_week") ?? null;
 
-	function getSelectionWindow(
-		bucket: MemoryTimelineBucket,
-	): { startMs: number; endMs: number } {
+	function getSelectionWindow(bucket: MemoryTimelineBucket): { startMs: number; endMs: number } {
 		const parsed = parsedRangeBounds.get(bucket.rangeKey);
 		const fallbackStartMs = Date.parse(bucket.start);
 		const fallbackEndMs = Date.parse(bucket.end);
@@ -245,7 +228,7 @@ function buildBucketTopMemories(
 		};
 		if (!parsed) return fallback;
 
-		let startMs = parsed.startMs;
+		const startMs = parsed.startMs;
 		let endMs = parsed.endMs;
 		if (bucket.rangeKey === "last_week" && todayRange) {
 			endMs = Math.min(endMs, todayRange.startMs - 1);
@@ -284,14 +267,8 @@ function buildBucketTopMemories(
 			if (createdAt < entry.startMs || createdAt > entry.endMs) continue;
 
 			const rangeSpan = Math.max(1, entry.endMs - entry.startMs);
-			const recency = Math.max(
-				0,
-				Math.min(1, (createdAt - entry.startMs) / rangeSpan),
-			);
-			const score =
-				normalizeImportance(memory.importance) * 100 +
-				(memory.pinned ? 24 : 0) +
-				recency * 8;
+			const recency = Math.max(0, Math.min(1, (createdAt - entry.startMs) / rangeSpan));
+			const score = normalizeImportance(memory.importance) * 100 + (memory.pinned ? 24 : 0) + recency * 8;
 
 			entry.candidates.push({ memory, score, createdAt });
 		}
@@ -312,9 +289,7 @@ function buildBucketTopMemories(
 			return left.memory.id.localeCompare(right.memory.id);
 		});
 
-		result[entry.bucket.rangeKey] = entry.candidates
-			.slice(0, 3)
-			.map((candidate) => candidate.memory);
+		result[entry.bucket.rangeKey] = entry.candidates.slice(0, 3).map((candidate) => candidate.memory);
 	}
 
 	return result;
@@ -351,18 +326,10 @@ async function loadTimeline(): Promise<void> {
 		]);
 		buckets = response.buckets;
 		emitGeneratedFor(response.generatedFor);
-		const usage = buildBucketUsageMaps(
-			response.buckets,
-			memoryResult.memories,
-			skills,
-			mcp.servers,
-		);
+		const usage = buildBucketUsageMaps(response.buckets, memoryResult.memories, skills, mcp.servers);
 		bucketSkillUsage = usage.skillUsage;
 		bucketMcpUsage = usage.mcpUsage;
-		bucketTopMemories = buildBucketTopMemories(
-			response.buckets,
-			memoryResult.memories,
-		);
+		bucketTopMemories = buildBucketTopMemories(response.buckets, memoryResult.memories);
 		activeIndex = 0;
 		if (response.error) {
 			error = response.error;
@@ -392,10 +359,7 @@ function formatDateRange(startIso: string, endIso: string): string {
 	return `${start} - ${end}`;
 }
 
-function formatMemoryMoment(
-	value: string,
-	rangeKey: MemoryTimelineBucket["rangeKey"],
-): string {
+function formatMemoryMoment(value: string, rangeKey: MemoryTimelineBucket["rangeKey"]): string {
 	const parsed = Date.parse(value);
 	if (!Number.isFinite(parsed)) return "Unknown";
 	const date = new Date(parsed);
@@ -448,9 +412,9 @@ function getRangeChipLabel(bucket: MemoryTimelineBucket): string {
 	return "Today";
 }
 
-import { nav, setTab } from "$lib/stores/navigation.svelte";
 import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import { nav, setTab } from "$lib/stores/navigation.svelte";
 import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
 
 function handleKeydown(event: KeyboardEvent): void {
@@ -460,22 +424,19 @@ function handleKeydown(event: KeyboardEvent): void {
 	const target = event.target;
 	if (target instanceof HTMLElement) {
 		const tag = target.tagName;
-		if (
-			tag === "INPUT" ||
-			tag === "TEXTAREA" ||
-			tag === "SELECT" ||
-			target.isContentEditable
-		) {
+		if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) {
 			return;
 		}
 	}
 
 	// If focus is on a tab button, only handle Arrow Down to drop into scroller
-	if (target instanceof HTMLElement && target.hasAttribute('data-memory-tab')) {
+	if (target instanceof HTMLElement && target.hasAttribute("data-memory-tab")) {
 		if (event.key === "ArrowDown") {
 			event.preventDefault();
 			// Focus the era scroller - find currently active era button
-			const activeEraButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			const activeEraButton = rootEl?.querySelector(
+				'.timeline-era-controls [role="tablist"] button[aria-selected="true"]',
+			);
 			if (activeEraButton instanceof HTMLElement) {
 				activeEraButton.focus();
 			}
@@ -492,7 +453,9 @@ function handleKeydown(event: KeyboardEvent): void {
 			event.preventDefault();
 			// Move to newer era and update focus
 			moveNewer(event.shiftKey ? 3 : 1);
-			const newActiveButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			const newActiveButton = rootEl?.querySelector(
+				'.timeline-era-controls [role="tablist"] button[aria-selected="true"]',
+			);
 			if (newActiveButton instanceof HTMLElement) {
 				newActiveButton.focus();
 			}
@@ -502,7 +465,9 @@ function handleKeydown(event: KeyboardEvent): void {
 			event.preventDefault();
 			// Move to older era and update focus
 			moveOlder(event.shiftKey ? 3 : 1);
-			const newActiveButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			const newActiveButton = rootEl?.querySelector(
+				'.timeline-era-controls [role="tablist"] button[aria-selected="true"]',
+			);
 			if (newActiveButton instanceof HTMLElement) {
 				newActiveButton.focus();
 			}
@@ -512,7 +477,9 @@ function handleKeydown(event: KeyboardEvent): void {
 			event.preventDefault();
 			// Move to older era and update focus
 			moveOlder(event.shiftKey ? 3 : 1);
-			const newActiveButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			const newActiveButton = rootEl?.querySelector(
+				'.timeline-era-controls [role="tablist"] button[aria-selected="true"]',
+			);
 			if (newActiveButton instanceof HTMLElement) {
 				newActiveButton.focus();
 			}
@@ -522,7 +489,9 @@ function handleKeydown(event: KeyboardEvent): void {
 			event.preventDefault();
 			// Move to newer era and update focus
 			moveNewer(event.shiftKey ? 3 : 1);
-			const newActiveButton = rootEl?.querySelector('.timeline-era-controls [role="tablist"] button[aria-selected="true"]');
+			const newActiveButton = rootEl?.querySelector(
+				'.timeline-era-controls [role="tablist"] button[aria-selected="true"]',
+			);
 			if (newActiveButton instanceof HTMLElement) {
 				newActiveButton.focus();
 			}

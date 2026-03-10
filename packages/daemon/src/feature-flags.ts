@@ -30,10 +30,7 @@ function parseBooleanFlag(value: unknown): boolean | null {
 }
 
 function loadFlags(agentsDir: string): Record<string, boolean> {
-	const paths = [
-		join(agentsDir, "agent.yaml"),
-		join(agentsDir, "AGENT.yaml"),
-	];
+	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
 
 	for (const p of paths) {
 		if (!existsSync(p)) continue;

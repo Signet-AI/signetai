@@ -53,11 +53,7 @@ const runningByTaskId = new Map<string, RunningTaskStreamState>();
 
 const MAX_BUFFER_CHARS_PER_STREAM = 200_000;
 
-function appendChunk(
-	chunks: string[],
-	currentChars: number,
-	chunk: string,
-): number {
+function appendChunk(chunks: string[], currentChars: number, chunk: string): number {
 	if (chunk.length === 0) return currentChars;
 
 	chunks.push(chunk);
@@ -82,10 +78,7 @@ function appendChunk(
 	return nextChars;
 }
 
-export function subscribeTaskStream(
-	taskId: string,
-	listener: TaskStreamListener,
-): () => void {
+export function subscribeTaskStream(taskId: string, listener: TaskStreamListener): () => void {
 	const existing = listenersByTaskId.get(taskId);
 	if (existing) {
 		existing.add(listener);
@@ -103,9 +96,7 @@ export function subscribeTaskStream(
 	};
 }
 
-export function getTaskStreamSnapshot(
-	taskId: string,
-): TaskStreamReplaySnapshot | null {
+export function getTaskStreamSnapshot(taskId: string): TaskStreamReplaySnapshot | null {
 	const running = runningByTaskId.get(taskId);
 	if (!running) return null;
 
@@ -131,17 +122,9 @@ export function emitTaskStream(event: TaskStreamEvent): void {
 		const running = runningByTaskId.get(event.taskId);
 		if (running && running.runId === event.runId) {
 			if (event.stream === "stdout") {
-				running.stdoutChars = appendChunk(
-					running.stdoutChunks,
-					running.stdoutChars,
-					event.chunk,
-				);
+				running.stdoutChars = appendChunk(running.stdoutChunks, running.stdoutChars, event.chunk);
 			} else {
-				running.stderrChars = appendChunk(
-					running.stderrChunks,
-					running.stderrChars,
-					event.chunk,
-				);
+				running.stderrChars = appendChunk(running.stderrChunks, running.stderrChars, event.chunk);
 			}
 		}
 	} else if (event.type === "run-completed") {

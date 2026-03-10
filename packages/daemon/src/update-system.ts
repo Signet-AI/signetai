@@ -8,13 +8,9 @@
 import { spawn } from "child_process";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import {
-	parseSimpleYaml,
-	resolvePrimaryPackageManager,
-	getGlobalInstallCommand,
-} from "@signet/core";
+import { getGlobalInstallCommand, parseSimpleYaml, resolvePrimaryPackageManager } from "@signet/core";
 import { logger } from "./logger";
-import { compareVersions, isVersionNewer, isMajorUpgrade } from "./version";
+import { compareVersions, isMajorUpgrade, isVersionNewer } from "./version";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,11 +101,7 @@ let restartCallback: (() => void) | null = null;
 // Init / accessors
 // ---------------------------------------------------------------------------
 
-export function initUpdateSystem(
-	version: string,
-	dir: string,
-	onRestartNeeded?: () => void,
-): void {
+export function initUpdateSystem(version: string, dir: string, onRestartNeeded?: () => void): void {
 	currentVersion = version;
 	agentsDir = dir;
 	updateConfig = loadUpdateConfig();
@@ -174,10 +166,7 @@ export function categorizeUpdateError(raw: string): string {
 
 export function getUpdateSummary(): string | null {
 	if (currentVersion === "0.0.0") {
-		return (
-			"Warning: could not detect Signet version. " +
-			"The daemon may have been built incorrectly."
-		);
+		return "Warning: could not detect Signet version. " + "The daemon may have been built incorrectly.";
 	}
 
 	if (pendingRestartVersion) {
@@ -192,22 +181,15 @@ export function getUpdateSummary(): string | null {
 
 	if (lastAutoUpdateError && updateConfig.autoInstall) {
 		const categorized = categorizeUpdateError(lastAutoUpdateError);
-		return (
-			`Auto-updates are enabled but failing: ${categorized} ` +
-			"Run `signet update status` for details."
-		);
+		return `Auto-updates are enabled but failing: ${categorized} ` + "Run `signet update status` for details.";
 	}
 
 	const latest = lastUpdateCheck?.latestVersion;
 	if (lastUpdateCheck?.updateAvailable && latest) {
-		const notes = lastUpdateCheck.releaseNotes
-			? `\n\nWhat's new:\n${lastUpdateCheck.releaseNotes}`
-			: "";
+		const notes = lastUpdateCheck.releaseNotes ? `\n\nWhat's new:\n${lastUpdateCheck.releaseNotes}` : "";
 
 		if (updateConfig.autoInstall) {
-			const autoInfo = lastAutoUpdateAt
-				? ` Last auto-update: ${lastAutoUpdateAt.toISOString()}.`
-				: "";
+			const autoInfo = lastAutoUpdateAt ? ` Last auto-update: ${lastAutoUpdateAt.toISOString()}.` : "";
 			return (
 				`Signet v${latest} is available (current: v${currentVersion}). ` +
 				"Auto-update will install it on the next check cycle." +
@@ -220,10 +202,7 @@ export function getUpdateSummary(): string | null {
 			agentsDir,
 			env: process.env,
 		});
-		const installCmd = getGlobalInstallCommand(
-			packageManager.family,
-			NPM_PACKAGE,
-		);
+		const installCmd = getGlobalInstallCommand(packageManager.family, NPM_PACKAGE);
 		const fullInstallCmd = `${installCmd.command} ${installCmd.args.join(" ")}`;
 
 		return (
@@ -261,10 +240,7 @@ export function parseBooleanFlag(value: unknown): boolean | null {
 export function parseUpdateInterval(value: unknown): number | null {
 	const parsed = Number.parseInt(String(value), 10);
 	if (!Number.isFinite(parsed)) return null;
-	if (
-		parsed < MIN_UPDATE_INTERVAL_SECONDS ||
-		parsed > MAX_UPDATE_INTERVAL_SECONDS
-	) {
+	if (parsed < MIN_UPDATE_INTERVAL_SECONDS || parsed > MAX_UPDATE_INTERVAL_SECONDS) {
 		return null;
 	}
 	return parsed;
@@ -277,22 +253,17 @@ function loadUpdateConfig(): UpdateConfig {
 		channel: "latest" as const,
 	};
 
-	const paths = [
-		join(agentsDir, "agent.yaml"),
-		join(agentsDir, "AGENT.yaml"),
-	];
+	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
 
 	for (const p of paths) {
 		if (!existsSync(p)) continue;
 		try {
 			const yaml = parseSimpleYaml(readFileSync(p, "utf-8"));
 			const updates =
-				(yaml.updates as Record<string, unknown> | undefined) ||
-				(yaml.update as Record<string, unknown> | undefined);
+				(yaml.updates as Record<string, unknown> | undefined) || (yaml.update as Record<string, unknown> | undefined);
 
 			if (updates) {
-				const autoInstallRaw =
-					updates.autoInstall ?? updates.auto_install;
+				const autoInstallRaw = updates.autoInstall ?? updates.auto_install;
 				if (autoInstallRaw !== undefined) {
 					const flag = parseBooleanFlag(autoInstallRaw);
 					if (flag !== null) {
@@ -300,8 +271,7 @@ function loadUpdateConfig(): UpdateConfig {
 					}
 				}
 
-				const checkIntervalRaw =
-					updates.checkInterval ?? updates.check_interval;
+				const checkIntervalRaw = updates.checkInterval ?? updates.check_interval;
 				if (checkIntervalRaw !== undefined) {
 					const interval = parseUpdateInterval(checkIntervalRaw);
 					if (interval !== null) {
@@ -334,10 +304,7 @@ function formatUpdatesSection(config: UpdateConfig): string {
 }
 
 export function persistUpdateConfig(config: UpdateConfig): boolean {
-	const paths = [
-		join(agentsDir, "agent.yaml"),
-		join(agentsDir, "AGENT.yaml"),
-	];
+	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
 
 	for (const p of paths) {
 		if (!existsSync(p)) continue;
@@ -381,16 +348,13 @@ async function fetchLatestFromGitHub(): Promise<{
 	releaseNotes?: string;
 	publishedAt?: string;
 }> {
-	const res = await fetch(
-		`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-		{
-			headers: {
-				Accept: "application/vnd.github.v3+json",
-				"User-Agent": "signet-daemon",
-			},
-			signal: AbortSignal.timeout(10000),
+	const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+		headers: {
+			Accept: "application/vnd.github.v3+json",
+			"User-Agent": "signet-daemon",
 		},
-	);
+		signal: AbortSignal.timeout(10000),
+	});
 
 	if (!res.ok) {
 		throw new Error(`GitHub releases lookup failed (${res.status})`);
@@ -408,12 +372,9 @@ async function fetchLatestFromGitHub(): Promise<{
 }
 
 async function fetchLatestFromNpm(channel: "latest" | "next" = "latest"): Promise<string> {
-	const npmRes = await fetch(
-		`https://registry.npmjs.org/${NPM_PACKAGE}/${channel}`,
-		{
-			signal: AbortSignal.timeout(10000),
-		},
-	);
+	const npmRes = await fetch(`https://registry.npmjs.org/${NPM_PACKAGE}/${channel}`, {
+		signal: AbortSignal.timeout(10000),
+	});
 
 	if (!npmRes.ok) {
 		throw new Error(`npm registry lookup failed (${npmRes.status})`);
@@ -461,10 +422,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 	}
 
 	if (result.latestVersion) {
-		result.updateAvailable = isVersionNewer(
-			result.latestVersion,
-			currentVersion,
-		);
+		result.updateAvailable = isVersionNewer(result.latestVersion, currentVersion);
 		result.isMajorUpgrade = isMajorUpgrade(currentVersion, result.latestVersion);
 	}
 
@@ -472,10 +430,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 		result.restartRequired = true;
 		result.pendingVersion = pendingRestartVersion;
 
-		if (
-			result.latestVersion &&
-			compareVersions(result.latestVersion, pendingRestartVersion) === 0
-		) {
+		if (result.latestVersion && compareVersions(result.latestVersion, pendingRestartVersion) === 0) {
 			result.updateAvailable = false;
 		}
 	}
@@ -497,9 +452,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 	return result;
 }
 
-export async function runUpdate(
-	targetVersion?: string,
-): Promise<UpdateRunResult> {
+export async function runUpdate(targetVersion?: string): Promise<UpdateRunResult> {
 	assertInitialized();
 
 	if (updateInstallInProgress) {
@@ -517,10 +470,7 @@ export async function runUpdate(
 				agentsDir,
 				env: process.env,
 			});
-			const installCommand = getGlobalInstallCommand(
-				packageManager.family,
-				NPM_PACKAGE,
-			);
+			const installCommand = getGlobalInstallCommand(packageManager.family, NPM_PACKAGE);
 
 			logger.info("system", "Running update command", {
 				command: `${installCommand.command} ${installCommand.args.join(" ")}`,
@@ -631,19 +581,13 @@ async function runAutoUpdateCycle(): Promise<void> {
 			return;
 		}
 
-		logger.info(
-			"update",
-			`Auto-installing update v${checkResult.latestVersion}`,
-		);
+		logger.info("update", `Auto-installing update v${checkResult.latestVersion}`);
 		const installResult = await runUpdate(checkResult.latestVersion);
 
 		if (installResult.success) {
 			lastAutoUpdateAt = new Date();
 			lastAutoUpdateError = null;
-			logger.info(
-				"update",
-				`Auto-update installed v${checkResult.latestVersion}. Triggering daemon restart.`,
-			);
+			logger.info("update", `Auto-update installed v${checkResult.latestVersion}. Triggering daemon restart.`);
 
 			stopUpdateTimer();
 
@@ -687,10 +631,7 @@ export function startUpdateTimer(): void {
 	}
 
 	if (!updateConfig.autoInstall || updateConfig.checkInterval <= 0) {
-		logger.info(
-			"system",
-			"Auto-updates not enabled. Run `signet update enable` to enable.",
-		);
+		logger.info("system", "Auto-updates not enabled. Run `signet update enable` to enable.");
 		return;
 	}
 

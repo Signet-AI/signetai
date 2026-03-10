@@ -44,8 +44,7 @@
 	padding: 2px 8px;
 	cursor: pointer;
 	letter-spacing: 0.04em;
-	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
-		background-color var(--dur) var(--ease);
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
 }
 
 .graph-toggle:hover {

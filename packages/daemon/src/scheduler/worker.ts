@@ -5,17 +5,17 @@
  * Polls every 15 seconds (cron granularity is minutes).
  */
 
-import type { TaskHarness } from "@signet/core";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { TaskHarness } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
+import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import type { WorkerHandle } from "../pipeline/worker";
 import { computeNextRun } from "./cron";
 import { resolveSkillPrompt } from "./skill-resolver";
-import { spawnTask, type SpawnResult } from "./spawn";
+import { type SpawnResult, spawnTask } from "./spawn";
 import { emitTaskStream } from "./task-stream";
-import { logger } from "../logger";
 
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
@@ -44,11 +44,7 @@ export interface DueTaskRow {
 	readonly skill_mode: string | null;
 }
 
-export function selectDueTasks(
-	db: ReadDb,
-	nowIso: string,
-	limit: number,
-): ReadonlyArray<DueTaskRow> {
+export function selectDueTasks(db: ReadDb, nowIso: string, limit: number): ReadonlyArray<DueTaskRow> {
 	if (limit <= 0) return [];
 
 	return db
@@ -70,10 +66,7 @@ export function selectDueTasks(
 		.all(nowIso, limit) as ReadonlyArray<DueTaskRow>;
 }
 
-export function resolveTaskModel(
-	harness: DueTaskRow["harness"],
-	agentsDir: string = AGENTS_DIR,
-): string | undefined {
+export function resolveTaskModel(harness: DueTaskRow["harness"], agentsDir: string = AGENTS_DIR): string | undefined {
 	if (harness !== "codex") return undefined;
 
 	const now = Date.now();
@@ -83,9 +76,7 @@ export function resolveTaskModel(
 	}
 
 	const cfg = loadMemoryConfig(agentsDir);
-	const model = cfg.pipelineV2.extraction.provider === "codex"
-		? cfg.pipelineV2.extraction.model
-		: undefined;
+	const model = cfg.pipelineV2.extraction.provider === "codex" ? cfg.pipelineV2.extraction.model : undefined;
 	taskModelCache.set(agentsDir, {
 		model,
 		expiresAt: now + TASK_MODEL_CACHE_TTL_MS,
@@ -105,12 +96,14 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 
 	// On startup, mark any leftover "running" runs as failed (daemon restart)
 	db.withWriteTx((wdb) => {
-		wdb.prepare(
-			`UPDATE task_runs
+		wdb
+			.prepare(
+				`UPDATE task_runs
 			 SET status = 'failed', error = 'daemon_restart',
 			     completed_at = datetime('now')
 			 WHERE status IN ('pending', 'running')`,
-		).run();
+			)
+			.run();
 	});
 
 	async function poll(): Promise<void> {
@@ -119,9 +112,7 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 		try {
 			// Find due tasks (enabled, next_run_at <= now, not already running)
 			const nowIso = new Date().toISOString();
-			const dueTasks = db.withReadDb((rdb) =>
-				selectDueTasks(rdb, nowIso, MAX_CONCURRENT - activeProcesses.size),
-			);
+			const dueTasks = db.withReadDb((rdb) => selectDueTasks(rdb, nowIso, MAX_CONCURRENT - activeProcesses.size));
 
 			for (const task of dueTasks) {
 				if (activeProcesses.size >= MAX_CONCURRENT) break;
@@ -160,10 +151,7 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 			}
 			// Wait for active processes to finish
 			if (activeProcesses.size > 0) {
-				logger.info(
-					"scheduler",
-					`Waiting for ${activeProcesses.size} active tasks to finish`,
-				);
+				logger.info("scheduler", `Waiting for ${activeProcesses.size} active tasks to finish`);
 				await Promise.allSettled([...activeProcesses]);
 			}
 			logger.info("scheduler", "Scheduler worker stopped");
@@ -172,10 +160,7 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 }
 
 /** Lease and execute a single task. */
-export async function executeTask(
-	db: DbAccessor,
-	task: DueTaskRow,
-): Promise<void> {
+export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<void> {
 	const runId = crypto.randomUUID();
 	const now = new Date().toISOString();
 
@@ -192,16 +177,20 @@ export async function executeTask(
 	}
 
 	db.withWriteTx((wdb) => {
-		wdb.prepare(
-			`INSERT INTO task_runs (id, task_id, status, started_at)
+		wdb
+			.prepare(
+				`INSERT INTO task_runs (id, task_id, status, started_at)
 			 VALUES (?, ?, 'running', ?)`,
-		).run(runId, task.id, now);
+			)
+			.run(runId, task.id, now);
 
-		wdb.prepare(
-			`UPDATE scheduled_tasks
+		wdb
+			.prepare(
+				`UPDATE scheduled_tasks
 			 SET next_run_at = ?, last_run_at = ?, updated_at = ?
 			 WHERE id = ?`,
-		).run(nextRun, now, now, task.id);
+			)
+			.run(nextRun, now, now, task.id);
 	});
 
 	emitTaskStream({
@@ -219,11 +208,7 @@ export async function executeTask(
 	});
 
 	// Resolve skill content into prompt
-	const effectivePrompt = resolveSkillPrompt(
-		task.prompt,
-		task.skill_name,
-		task.skill_mode,
-	);
+	const effectivePrompt = resolveSkillPrompt(task.prompt, task.skill_name, task.skill_mode);
 
 	// Spawn the process
 	let result: SpawnResult;
@@ -273,25 +258,17 @@ export async function executeTask(
 
 	// Record result
 	const completedAt = new Date().toISOString();
-	const status = result.error !== null || (result.exitCode !== null && result.exitCode !== 0)
-		? "failed"
-		: "completed";
+	const status = result.error !== null || (result.exitCode !== null && result.exitCode !== 0) ? "failed" : "completed";
 
 	db.withWriteTx((wdb) => {
-		wdb.prepare(
-			`UPDATE task_runs
+		wdb
+			.prepare(
+				`UPDATE task_runs
 			 SET status = ?, completed_at = ?, exit_code = ?,
 			     stdout = ?, stderr = ?, error = ?
 			 WHERE id = ?`,
-		).run(
-			status,
-			completedAt,
-			result.exitCode,
-			result.stdout,
-			result.stderr,
-			result.error,
-			runId,
-		);
+			)
+			.run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
 	});
 
 	emitTaskStream({

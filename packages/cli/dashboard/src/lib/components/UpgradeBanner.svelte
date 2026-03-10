@@ -1,38 +1,36 @@
 <script lang="ts">
-	import { browser } from "$app/environment";
-	import type { DaemonStatus } from "$lib/api";
-	import Sparkles from "@lucide/svelte/icons/sparkles";
-	import X from "@lucide/svelte/icons/x";
+import { browser } from "$app/environment";
+import type { DaemonStatus } from "$lib/api";
+import Sparkles from "@lucide/svelte/icons/sparkles";
+import X from "@lucide/svelte/icons/x";
 
-	const STORAGE_KEY_PREFIX = "signet-upgrade-banner-dismissed-";
+const STORAGE_KEY_PREFIX = "signet-upgrade-banner-dismissed-";
 
-	interface Props {
-		daemonStatus: DaemonStatus | null;
-	}
+interface Props {
+	daemonStatus: DaemonStatus | null;
+}
 
-	let { daemonStatus }: Props = $props();
+const { daemonStatus }: Props = $props();
 
-	let dismissed = $state(false);
+let dismissed = $state(false);
 
-	const version = $derived(daemonStatus?.version ?? null);
-	const storageKey = $derived(version ? `${STORAGE_KEY_PREFIX}${version}` : null);
+const version = $derived(daemonStatus?.version ?? null);
+const storageKey = $derived(version ? `${STORAGE_KEY_PREFIX}${version}` : null);
 
-	// Check if this version's banner was already dismissed
+// Check if this version's banner was already dismissed
+if (browser && storageKey) {
+	dismissed = localStorage.getItem(storageKey) === "true";
+}
+
+// Show banner when version is known and not dismissed for this version
+const visible = $derived(!!version && version !== "0.0.0" && !dismissed);
+
+function dismiss() {
+	dismissed = true;
 	if (browser && storageKey) {
-		dismissed = localStorage.getItem(storageKey) === "true";
+		localStorage.setItem(storageKey, "true");
 	}
-
-	// Show banner when version is known and not dismissed for this version
-	const visible = $derived(
-		!!version && version !== "0.0.0" && !dismissed,
-	);
-
-	function dismiss() {
-		dismissed = true;
-		if (browser && storageKey) {
-			localStorage.setItem(storageKey, "true");
-		}
-	}
+}
 </script>
 
 {#if visible}

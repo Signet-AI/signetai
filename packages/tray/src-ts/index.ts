@@ -1,14 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
+import { type TrayUpdate, buildTrayUpdate } from "./menu";
 import {
-  fetchHealth,
-  fetchMemories,
-  fetchDiagnostics,
-  fetchEmbeddings,
-  buildCurrentState,
-  resetState,
-  type DaemonState,
+	type DaemonState,
+	buildCurrentState,
+	fetchDiagnostics,
+	fetchEmbeddings,
+	fetchHealth,
+	fetchMemories,
+	resetState,
 } from "./state";
-import { buildTrayUpdate, type TrayUpdate } from "./menu";
 
 // Port is hardcoded here because browser context can't read env vars.
 // The Rust side reads SIGNET_PORT for its own daemon probes.
@@ -30,82 +30,78 @@ let lastUpdateJson = "";
 let isRunning = false;
 
 async function updateTray(state: DaemonState): Promise<void> {
-  const update = buildTrayUpdate(state);
-  const json = JSON.stringify(update);
+	const update = buildTrayUpdate(state);
+	const json = JSON.stringify(update);
 
-  // Only invoke Rust when something actually changed
-  if (json === lastUpdateJson) return;
-  lastUpdateJson = json;
+	// Only invoke Rust when something actually changed
+	if (json === lastUpdateJson) return;
+	lastUpdateJson = json;
 
-  await invoke("update_tray", { state: update });
+	await invoke("update_tray", { state: update });
 }
 
 // --- Health polling (primary; determines running vs stopped) ---
 async function pollHealth(): Promise<void> {
-  const alive = await fetchHealth(DAEMON_URL);
+	const alive = await fetchHealth(DAEMON_URL);
 
-  if (alive && !isRunning) {
-    // Just came online — kick off secondary polls
-    isRunning = true;
-    fetchMemories(DAEMON_URL);
-    fetchDiagnostics(DAEMON_URL);
-    fetchEmbeddings(DAEMON_URL);
-    // Auto-show dashboard only on first discovery, not on reconnects
-    if (!everSeenRunning) {
-      invoke("open_dashboard").catch((e) => console.error("open_dashboard:", e));
-    }
-    everSeenRunning = true;
-  } else if (!alive && isRunning) {
-    isRunning = false;
-    resetState();
-  }
+	if (alive && !isRunning) {
+		// Just came online — kick off secondary polls
+		isRunning = true;
+		fetchMemories(DAEMON_URL);
+		fetchDiagnostics(DAEMON_URL);
+		fetchEmbeddings(DAEMON_URL);
+		// Auto-show dashboard only on first discovery, not on reconnects
+		if (!everSeenRunning) {
+			invoke("open_dashboard").catch((e) => console.error("open_dashboard:", e));
+		}
+		everSeenRunning = true;
+	} else if (!alive && isRunning) {
+		isRunning = false;
+		resetState();
+	}
 
-  // Check auto-start timeout: if daemon never came alive within 15s
-  if (
-    !alive &&
-    !everSeenRunning &&
-    Date.now() - appStartTime > AUTO_START_TIMEOUT_MS
-  ) {
-    const errorState: DaemonState = {
-      kind: "error",
-      message: "Daemon failed to start within 15 seconds",
-    };
-    await updateTray(errorState);
-  } else {
-    const state = buildCurrentState();
-    await updateTray(state);
-  }
+	// Check auto-start timeout: if daemon never came alive within 15s
+	if (!alive && !everSeenRunning && Date.now() - appStartTime > AUTO_START_TIMEOUT_MS) {
+		const errorState: DaemonState = {
+			kind: "error",
+			message: "Daemon failed to start within 15 seconds",
+		};
+		await updateTray(errorState);
+	} else {
+		const state = buildCurrentState();
+		await updateTray(state);
+	}
 
-  const interval = isRunning ? HEALTH_RUNNING_MS : HEALTH_STOPPED_MS;
-  setTimeout(pollHealth, interval);
+	const interval = isRunning ? HEALTH_RUNNING_MS : HEALTH_STOPPED_MS;
+	setTimeout(pollHealth, interval);
 }
 
 // --- Secondary pollers (only run while daemon is alive) ---
 async function pollMemories(): Promise<void> {
-  if (isRunning) {
-    await fetchMemories(DAEMON_URL);
-    const state = buildCurrentState();
-    await updateTray(state);
-  }
-  setTimeout(pollMemories, MEMORIES_MS);
+	if (isRunning) {
+		await fetchMemories(DAEMON_URL);
+		const state = buildCurrentState();
+		await updateTray(state);
+	}
+	setTimeout(pollMemories, MEMORIES_MS);
 }
 
 async function pollDiagnostics(): Promise<void> {
-  if (isRunning) {
-    await fetchDiagnostics(DAEMON_URL);
-    const state = buildCurrentState();
-    await updateTray(state);
-  }
-  setTimeout(pollDiagnostics, DIAGNOSTICS_MS);
+	if (isRunning) {
+		await fetchDiagnostics(DAEMON_URL);
+		const state = buildCurrentState();
+		await updateTray(state);
+	}
+	setTimeout(pollDiagnostics, DIAGNOSTICS_MS);
 }
 
 async function pollEmbeddings(): Promise<void> {
-  if (isRunning) {
-    await fetchEmbeddings(DAEMON_URL);
-    const state = buildCurrentState();
-    await updateTray(state);
-  }
-  setTimeout(pollEmbeddings, EMBEDDINGS_MS);
+	if (isRunning) {
+		await fetchEmbeddings(DAEMON_URL);
+		const state = buildCurrentState();
+		await updateTray(state);
+	}
+	setTimeout(pollEmbeddings, EMBEDDINGS_MS);
 }
 
 // Start all pollers

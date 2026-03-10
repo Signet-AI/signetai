@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseSimpleYaml } from "./yaml";
 
@@ -28,12 +28,7 @@ interface ResolvePackageManagerOptions {
 	execPath?: string;
 }
 
-const DEFAULT_FALLBACK_ORDER: PackageManagerFamily[] = [
-	"npm",
-	"pnpm",
-	"bun",
-	"yarn",
-];
+const DEFAULT_FALLBACK_ORDER: PackageManagerFamily[] = ["npm", "pnpm", "bun", "yarn"];
 
 function normalizePackageManager(value: unknown): PackageManagerFamily | null {
 	if (typeof value !== "string") return null;
@@ -55,9 +50,7 @@ function normalizePackageManager(value: unknown): PackageManagerFamily | null {
 	return null;
 }
 
-export function parsePackageManagerUserAgent(
-	userAgent: string | undefined,
-): PackageManagerFamily | null {
+export function parsePackageManagerUserAgent(userAgent: string | undefined): PackageManagerFamily | null {
 	if (!userAgent) return null;
 	const firstToken = userAgent.trim().split(/\s+/)[0] || "";
 	const familyToken = firstToken.split("/")[0] || firstToken;
@@ -109,16 +102,10 @@ function detectFromExecPath(execPath: string | undefined): PackageManagerFamily 
 	return null;
 }
 
-function readConfiguredPackageManager(
-	agentsDir: string | undefined,
-): PackageManagerFamily | null {
+function readConfiguredPackageManager(agentsDir: string | undefined): PackageManagerFamily | null {
 	if (!agentsDir) return null;
 
-	const configPaths = [
-		join(agentsDir, "agent.yaml"),
-		join(agentsDir, "AGENT.yaml"),
-		join(agentsDir, "config.yaml"),
-	];
+	const configPaths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
 
 	for (const path of configPaths) {
 		if (!existsSync(path)) continue;
@@ -146,18 +133,13 @@ function readConfiguredPackageManager(
 	return null;
 }
 
-export function resolvePrimaryPackageManager(
-	options: ResolvePackageManagerOptions = {},
-): PackageManagerResolution {
+export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptions = {}): PackageManagerResolution {
 	const available = detectAvailablePackageManagers(options.commandExists);
 	const fallbackOrder = options.fallbackOrder ?? DEFAULT_FALLBACK_ORDER;
 	const configuredFamily = readConfiguredPackageManager(options.agentsDir);
-	const userAgentFamily = parsePackageManagerUserAgent(
-		options.userAgent ?? options.env?.npm_config_user_agent,
-	);
+	const userAgentFamily = parsePackageManagerUserAgent(options.userAgent ?? options.env?.npm_config_user_agent);
 	// Try the provided exec path, then process.argv[0], then `which signet`
-	let execPathForDetection =
-		options.execPath ?? (typeof process !== "undefined" ? process.argv[0] : undefined);
+	let execPathForDetection = options.execPath ?? (typeof process !== "undefined" ? process.argv[0] : undefined);
 	if (!detectFromExecPath(execPathForDetection)) {
 		try {
 			const locator = process.platform === "win32" ? "where" : "which";
@@ -171,8 +153,7 @@ export function resolvePrimaryPackageManager(
 	}
 	const execPathFamily = detectFromExecPath(execPathForDetection);
 
-	const fallbackFamily =
-		pickFirstAvailable(available, fallbackOrder) ?? fallbackOrder[0] ?? "npm";
+	const fallbackFamily = pickFirstAvailable(available, fallbackOrder) ?? fallbackOrder[0] ?? "npm";
 
 	if (configuredFamily && available[configuredFamily]) {
 		return {
@@ -240,10 +221,7 @@ export function resolvePrimaryPackageManager(
 	};
 }
 
-export function getSkillsRunnerCommand(
-	family: PackageManagerFamily,
-	skillsArgs: string[],
-): PackageManagerCommand {
+export function getSkillsRunnerCommand(family: PackageManagerFamily, skillsArgs: string[]): PackageManagerCommand {
 	switch (family) {
 		case "bun":
 			return { command: "bunx", args: ["skills", ...skillsArgs] };
@@ -259,10 +237,7 @@ export function getSkillsRunnerCommand(
 	}
 }
 
-export function getGlobalInstallCommand(
-	family: PackageManagerFamily,
-	packageName: string,
-): PackageManagerCommand {
+export function getGlobalInstallCommand(family: PackageManagerFamily, packageName: string): PackageManagerCommand {
 	switch (family) {
 		case "bun":
 			return { command: "bun", args: ["add", "-g", packageName] };

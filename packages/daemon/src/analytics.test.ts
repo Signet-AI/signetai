@@ -2,17 +2,13 @@
  * Tests for the analytics collector and timeline builder.
  */
 
-import { describe, it, expect, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
-import {
-	createAnalyticsCollector,
-	type AnalyticsCollector,
-	type ErrorEntry,
-} from "./analytics";
-import { buildTimeline, type TimelineSources } from "./timeline";
+import { type AnalyticsCollector, type ErrorEntry, createAnalyticsCollector } from "./analytics";
 import type { ReadDb } from "./db-accessor";
 import type { LogEntry } from "./logger";
+import { type TimelineSources, buildTimeline } from "./timeline";
 
 // ---------------------------------------------------------------------------
 // Analytics Collector Tests
@@ -248,10 +244,7 @@ describe("buildTimeline", () => {
 		runMigrations(db as any);
 	});
 
-	function makeSources(
-		logs: LogEntry[] = [],
-		errors: ErrorEntry[] = [],
-	): TimelineSources {
+	function makeSources(logs: LogEntry[] = [], errors: ErrorEntry[] = []): TimelineSources {
 		return {
 			db: db as unknown as ReadDb,
 			getRecentLogs: () => logs,
@@ -268,10 +261,14 @@ describe("buildTimeline", () => {
 	});
 
 	it("builds timeline from memory_history events", () => {
-		db.run(
-			"INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-			["mem-1", "test content", "fact", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
-		);
+		db.run("INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [
+			"mem-1",
+			"test content",
+			"fact",
+			"test",
+			"2026-01-01T00:00:00Z",
+			"2026-01-01T00:00:00Z",
+		]);
 		db.run(
 			"INSERT INTO memory_history (id, memory_id, event, changed_by, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
 			["h-1", "mem-1", "ADD", "agent", "initial save", "2026-01-01T00:00:00Z"],
@@ -291,10 +288,14 @@ describe("buildTimeline", () => {
 	});
 
 	it("includes job events in timeline", () => {
-		db.run(
-			"INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-			["mem-2", "test", "fact", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
-		);
+		db.run("INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [
+			"mem-2",
+			"test",
+			"fact",
+			"test",
+			"2026-01-01T00:00:00Z",
+			"2026-01-01T00:00:00Z",
+		]);
 		db.run(
 			"INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
 			["j-1", "mem-2", "extract", "done", "2026-01-01T00:00:00Z", "2026-01-01T00:00:05Z", "2026-01-01T00:00:05Z"],
@@ -308,10 +309,14 @@ describe("buildTimeline", () => {
 	});
 
 	it("includes matching log entries", () => {
-		db.run(
-			"INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-			["mem-3", "test", "fact", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
-		);
+		db.run("INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [
+			"mem-3",
+			"test",
+			"fact",
+			"test",
+			"2026-01-01T00:00:00Z",
+			"2026-01-01T00:00:00Z",
+		]);
 
 		const logs: LogEntry[] = [
 			{
@@ -336,10 +341,14 @@ describe("buildTimeline", () => {
 	});
 
 	it("includes matching error entries", () => {
-		db.run(
-			"INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-			["mem-4", "test", "fact", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
-		);
+		db.run("INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [
+			"mem-4",
+			"test",
+			"fact",
+			"test",
+			"2026-01-01T00:00:00Z",
+			"2026-01-01T00:00:00Z",
+		]);
 
 		const errors: ErrorEntry[] = [
 			{
@@ -365,14 +374,21 @@ describe("buildTimeline", () => {
 	});
 
 	it("sorts events chronologically across sources", () => {
-		db.run(
-			"INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-			["mem-5", "test", "fact", "test", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
-		);
-		db.run(
-			"INSERT INTO memory_history (id, memory_id, event, changed_by, created_at) VALUES (?, ?, ?, ?, ?)",
-			["h-5", "mem-5", "ADD", "agent", "2026-01-01T00:00:02Z"],
-		);
+		db.run("INSERT INTO memories (id, content, type, source_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", [
+			"mem-5",
+			"test",
+			"fact",
+			"test",
+			"2026-01-01T00:00:00Z",
+			"2026-01-01T00:00:00Z",
+		]);
+		db.run("INSERT INTO memory_history (id, memory_id, event, changed_by, created_at) VALUES (?, ?, ?, ?, ?)", [
+			"h-5",
+			"mem-5",
+			"ADD",
+			"agent",
+			"2026-01-01T00:00:02Z",
+		]);
 
 		const logs: LogEntry[] = [
 			{

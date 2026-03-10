@@ -104,13 +104,13 @@ const MINIMAP_WIDTH = 160;
 const MINIMAP_HEIGHT = 120;
 const MINIMAP_NODE_THRESHOLD = 50;
 
-let minimapEl = $state<HTMLCanvasElement | null>(null);
+const minimapEl = $state<HTMLCanvasElement | null>(null);
 let minimapNeedsRedraw = true;
 let minimapFrameCount = 0;
 const MINIMAP_FRAME_SKIP = 4;
 
 let worldBounds = $state({ minX: -100, maxX: 100, minY: -100, maxY: 100 });
-let showMinimap = $derived(nodes.length > MINIMAP_NODE_THRESHOLD);
+const showMinimap = $derived(nodes.length > MINIMAP_NODE_THRESHOLD);
 let minimapDragging = false;
 
 function requestRedraw(): void {
@@ -176,10 +176,7 @@ export function startSimulation(
 	if (!userAdjustedCamera) fitCameraToBounds();
 }
 
-export function startKnowledgeGraphSimulation(
-	graphNodes: GraphNode[],
-	graphEdges: GraphEdge[],
-): void {
+export function startKnowledgeGraphSimulation(graphNodes: GraphNode[], graphEdges: GraphEdge[]): void {
 	simulation?.stop();
 
 	// Tier-aware link distances and strengths
@@ -342,10 +339,10 @@ function computeWorldBounds(): { minX: number; maxX: number; minY: number; maxY:
 		return { minX: -100, maxX: 100, minY: -100, maxY: 100 };
 	}
 
-	let minX = Infinity;
-	let maxX = -Infinity;
-	let minY = Infinity;
-	let maxY = -Infinity;
+	let minX = Number.POSITIVE_INFINITY;
+	let maxX = Number.NEGATIVE_INFINITY;
+	let minY = Number.POSITIVE_INFINITY;
+	let maxY = Number.NEGATIVE_INFINITY;
 
 	for (const node of nodes) {
 		if (node.x < minX) minX = node.x;
@@ -687,8 +684,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		}
 
 		// Show label on hover/select
-		if ((graphHovered && node.data.id === graphHovered.id) ||
-			(graphSelected && node.data.id === graphSelected.id)) {
+		if ((graphHovered && node.data.id === graphHovered.id) || (graphSelected && node.data.id === graphSelected.id)) {
 			const fs = Math.max(7, 9 / camZoom);
 			ctx.font = `${fs}px var(--font-mono)`;
 			ctx.fillStyle = "rgba(210, 210, 210, 0.85)";
@@ -741,9 +737,10 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 	if (graphHovered) {
 		const node = nodes.find((entry) => entry.data.id === graphHovered?.id);
 		if (node && node.nodeType !== "entity" && node.nodeType !== "aspect") {
-			const text = node.nodeType === "attribute"
-				? (node.attributeData?.content ?? embeddingLabel(graphHovered))
-				: embeddingLabel(graphHovered);
+			const text =
+				node.nodeType === "attribute"
+					? (node.attributeData?.content ?? embeddingLabel(graphHovered))
+					: embeddingLabel(graphHovered);
 			const fs = 9 / camZoom;
 			ctx.font = `${fs}px var(--font-mono)`;
 			ctx.fillStyle = "rgba(220, 220, 220, 0.9)";

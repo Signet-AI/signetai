@@ -30,20 +30,17 @@ for (const sqlitePath of HOMEBREW_SQLITE_PATHS) {
 		} catch (e) {
 			// SQLite already loaded (e.g., in test environment) — skip.
 			// Log so users can diagnose extension-loading failures.
-			console.warn(
-				`[db-accessor] setCustomSQLite(${sqlitePath}) skipped:`,
-				e instanceof Error ? e.message : String(e),
-			);
+			console.warn(`[db-accessor] setCustomSQLite(${sqlitePath}) skipped:`, e instanceof Error ? e.message : String(e));
 		}
 		break;
 	}
 }
 import { basename, dirname, join } from "node:path";
 import {
-	runMigrations,
-	hasPendingMigrations,
-	findSqliteVecExtension,
 	DEFAULT_EMBEDDING_DIMENSIONS,
+	findSqliteVecExtension,
+	hasPendingMigrations,
+	runMigrations,
 } from "@signet/core";
 
 // ---------------------------------------------------------------------------
@@ -102,10 +99,7 @@ function loadVecExtension(db: Database): void {
 		try {
 			db.loadExtension(vecExtPath);
 		} catch (e) {
-			console.warn(
-				"[db-accessor] loadExtension failed:",
-				e instanceof Error ? e.message : String(e),
-			);
+			console.warn("[db-accessor] loadExtension failed:", e instanceof Error ? e.message : String(e));
 		}
 	}
 }
@@ -171,11 +165,10 @@ export function initDbAccessor(path: string): void {
 
 	// Back up before migrations if there are pending changes
 	if (existsSync(path) && hasPendingMigrations(writeConn)) {
-		const row = writeConn.prepare(
-			"SELECT MAX(version) as version FROM schema_migrations",
-		).get() as { version: number } | undefined;
-		const currentSchemaVersion =
-			row && typeof row.version === "number" ? row.version : 0;
+		const row = writeConn.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
+			| { version: number }
+			| undefined;
+		const currentSchemaVersion = row && typeof row.version === "number" ? row.version : 0;
 		backupBeforeMigration(writeConn, path, currentSchemaVersion);
 	}
 
@@ -212,11 +205,9 @@ export function initDbAccessor(path: string): void {
  * from existing memories rows.
  */
 export function ensureFtsTable(db: Database): void {
-	const existing = db
-		.prepare(
-			"SELECT name FROM sqlite_master WHERE name = 'memories_fts' AND type = 'table'",
-		)
-		.get() as { name: string } | undefined;
+	const existing = db.prepare("SELECT name FROM sqlite_master WHERE name = 'memories_fts' AND type = 'table'").get() as
+		| { name: string }
+		| undefined;
 
 	if (existing) return;
 
@@ -249,17 +240,11 @@ export function ensureFtsTable(db: Database): void {
 	`);
 
 	// Backfill existing rows
-	const backfilled = db
-		.prepare("SELECT COUNT(*) as n FROM memories")
-		.get() as { n: number };
+	const backfilled = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
 
 	if (backfilled.n > 0) {
-		db.exec(
-			"INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories",
-		);
-		console.log(
-			`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`,
-		);
+		db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
+		console.log(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
 	}
 }
 
@@ -270,11 +255,9 @@ export function ensureFtsTable(db: Database): void {
 function ensureVecTable(db: Database): void {
 	// Check if vec_embeddings exists and has the correct schema (TEXT id).
 	// If it exists without an id column, drop and recreate.
-	const existing = db
-		.prepare(
-			"SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'",
-		)
-		.get() as { sql: string } | undefined;
+	const existing = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
+		| { sql: string }
+		| undefined;
 
 	if (existing) {
 		if (existing.sql.includes("id TEXT")) return;
@@ -283,9 +266,7 @@ function ensureVecTable(db: Database): void {
 	}
 
 	// Detect actual embedding dimensions from existing data
-	const dimRow = db
-		.prepare("SELECT dimensions FROM embeddings LIMIT 1")
-		.get() as { dimensions: number } | undefined;
+	const dimRow = db.prepare("SELECT dimensions FROM embeddings LIMIT 1").get() as { dimensions: number } | undefined;
 	const dims = dimRow?.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
 
 	db.exec(`
@@ -321,9 +302,7 @@ function backfillVecEmbeddings(db: Database): void {
 		)
 		.all() as Array<{ id: string; vector: Buffer }>;
 
-	const insert = db.prepare(
-		"INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)",
-	);
+	const insert = db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
 
 	let migrated = 0;
 	try {
@@ -331,10 +310,7 @@ function backfillVecEmbeddings(db: Database): void {
 		for (const row of rows) {
 			try {
 				const vec = new Float32Array(
-					row.vector.buffer.slice(
-						row.vector.byteOffset,
-						row.vector.byteOffset + row.vector.byteLength,
-					),
+					row.vector.buffer.slice(row.vector.byteOffset, row.vector.byteOffset + row.vector.byteLength),
 				);
 				insert.run(row.id, vec);
 				migrated++;
@@ -354,9 +330,7 @@ function backfillVecEmbeddings(db: Database): void {
 
 	if (migrated > 0) {
 		// eslint-disable-next-line no-console
-		console.log(
-			`[db-accessor] Backfilled ${migrated}/${rows.length} missing embeddings into vec_embeddings`,
-		);
+		console.log(`[db-accessor] Backfilled ${migrated}/${rows.length} missing embeddings into vec_embeddings`);
 	}
 
 	// Clean orphaned vec_embeddings rows (phantom IDs from prior sync bugs)
@@ -370,13 +344,9 @@ function backfillVecEmbeddings(db: Database): void {
 			.get() as { n: number } | undefined;
 		const orphanCount = orphanRow?.n ?? 0;
 		if (orphanCount > 0) {
-			db.prepare(
-				"DELETE FROM vec_embeddings WHERE id NOT IN (SELECT id FROM embeddings)",
-			).run();
+			db.prepare("DELETE FROM vec_embeddings WHERE id NOT IN (SELECT id FROM embeddings)").run();
 			// eslint-disable-next-line no-console
-			console.log(
-				`[db-accessor] Cleaned ${orphanCount} orphaned vec_embeddings rows`,
-			);
+			console.log(`[db-accessor] Cleaned ${orphanCount} orphaned vec_embeddings rows`);
 		}
 	} catch {
 		// vec_embeddings may not exist — non-fatal

@@ -1,6 +1,6 @@
 import { parse, stringify } from "yaml";
+import { SCHEMA_ID, SPEC_VERSION } from "./constants";
 import type { AgentManifest } from "./types";
-import { SPEC_VERSION, SCHEMA_ID } from "./constants";
 
 export function parseManifest(yaml: string): AgentManifest {
 	return parse(yaml) as AgentManifest;

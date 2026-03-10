@@ -1,8 +1,8 @@
-import { describe, expect, it, afterEach } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { PredictorConfig } from "@signet/core";
-import { createPredictorClient, type PredictorClient, type PredictorSpawn } from "./predictor-client";
+import { type PredictorClient, type PredictorSpawn, createPredictorClient } from "./predictor-client";
 
 function makeConfig(overrides: Partial<PredictorConfig> = {}): PredictorConfig {
 	return {

@@ -1,14 +1,14 @@
 <script lang="ts">
-	import type { Snippet } from "svelte";
-	import ChevronRight from "@lucide/svelte/icons/chevron-right";
+import ChevronRight from "@lucide/svelte/icons/chevron-right";
+import type { Snippet } from "svelte";
 
-	interface Props {
-		title?: string;
-		children: Snippet;
-	}
+interface Props {
+	title?: string;
+	children: Snippet;
+}
 
-	let { title = "Advanced", children }: Props = $props();
-	let open = $state(false);
+const { title = "Advanced", children }: Props = $props();
+const open = $state(false);
 </script>
 
 <div class="advanced-section">

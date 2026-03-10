@@ -8,8 +8,7 @@ import { marked } from "marked";
 // When served by the daemon, use relative URLs.
 // When served by Tauri (frontendDist) or Vite dev server, use absolute URL.
 const isDev = import.meta.env.DEV;
-const isTauri =
-	typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
 
 export interface Memory {
@@ -202,19 +201,13 @@ export async function fetchSessions(): Promise<SessionListResponse> {
 	}
 }
 
-export async function toggleSessionBypass(
-	key: string,
-	enabled: boolean,
-): Promise<SessionBypassResponse | null> {
+export async function toggleSessionBypass(key: string, enabled: boolean): Promise<SessionBypassResponse | null> {
 	try {
-		const response = await fetch(
-			`${API_BASE}/api/sessions/${encodeURIComponent(key)}/bypass`,
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ enabled }),
-			},
-		);
+		const response = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(key)}/bypass`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ enabled }),
+		});
 		if (!response.ok) return null;
 		return await response.json();
 	} catch {
@@ -294,11 +287,7 @@ export async function getMemories(limit = 100, offset = 0): Promise<{ memories: 
 function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineResponse {
 	const MS_PER_DAY = 24 * 60 * 60 * 1000;
 	const now = new Date();
-	const nowStart = Date.UTC(
-		now.getUTCFullYear(),
-		now.getUTCMonth(),
-		now.getUTCDate(),
-	);
+	const nowStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 
 	const ranges = [
 		{ eraIndex: 0 as const, rangeKey: "today" as const, label: "Today" as const, lookbackDays: 1 },
@@ -326,18 +315,13 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 	for (const memory of memories) {
 		const ts = Date.parse(memory.created_at);
 		if (!Number.isFinite(ts)) continue;
-		const matchingBuckets = buckets.filter(
-			(entry) => ts >= entry.start && ts <= entry.end,
-		);
+		const matchingBuckets = buckets.filter((entry) => ts >= entry.start && ts <= entry.end);
 		if (matchingBuckets.length === 0) continue;
 
 		for (const bucket of matchingBuckets) {
 			bucket.memoriesAdded += 1;
 			if (memory.pinned) bucket.pinned += 1;
-			if (
-				typeof memory.importance === "number" &&
-				Number.isFinite(memory.importance)
-			) {
+			if (typeof memory.importance === "number" && Number.isFinite(memory.importance)) {
 				bucket.importanceSum += memory.importance;
 				bucket.importanceCount += 1;
 			}
@@ -427,9 +411,7 @@ function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineRespo
 			recovered: 0,
 			avgImportance:
 				bucket.importanceCount > 0
-					? Number(
-							Math.min(1, Math.max(0, bucket.importanceSum / bucket.importanceCount)).toFixed(3),
-						)
+					? Number(Math.min(1, Math.max(0, bucket.importanceSum / bucket.importanceCount)).toFixed(3))
 					: 0,
 			pinned: bucket.pinned,
 			typeBreakdown: toMetrics(bucket.typeMap),
@@ -974,17 +956,15 @@ export async function syncConnectorFull(id: string): Promise<SyncResult> {
 export async function resyncConnectors(): Promise<BulkConnectorSyncResult> {
 	try {
 		const response = await fetch(`${API_BASE}/api/connectors/resync`, { method: "POST" });
-		const body = (await response.json().catch(() => null)) as
-			| {
-					status?: unknown;
-					total?: unknown;
-					started?: unknown;
-					alreadySyncing?: unknown;
-					unsupported?: unknown;
-					failed?: unknown;
-					error?: unknown;
-			  }
-			| null;
+		const body = (await response.json().catch(() => null)) as {
+			status?: unknown;
+			total?: unknown;
+			started?: unknown;
+			alreadySyncing?: unknown;
+			unsupported?: unknown;
+			failed?: unknown;
+			error?: unknown;
+		} | null;
 
 		const status = typeof body?.status === "string" ? body.status : response.ok ? "ok" : "error";
 		const total = typeof body?.total === "number" ? body.total : 0;
@@ -992,12 +972,7 @@ export async function resyncConnectors(): Promise<BulkConnectorSyncResult> {
 		const alreadySyncing = typeof body?.alreadySyncing === "number" ? body.alreadySyncing : 0;
 		const unsupported = typeof body?.unsupported === "number" ? body.unsupported : 0;
 		const failed = typeof body?.failed === "number" ? body.failed : 0;
-		const error =
-			typeof body?.error === "string"
-				? body.error
-				: response.ok
-					? undefined
-					: `HTTP ${response.status}`;
+		const error = typeof body?.error === "string" ? body.error : response.ok ? undefined : `HTTP ${response.status}`;
 
 		return {
 			status,
@@ -2041,13 +2016,15 @@ export interface EntityHealth {
 	trend: "improving" | "stable" | "declining";
 }
 
-export async function getKnowledgeEntities(filters: {
-	type?: string;
-	query?: string;
-	limit?: number;
-	offset?: number;
-	agentId?: string;
-} = {}): Promise<{ items: KnowledgeEntityListItem[]; limit: number; offset: number }> {
+export async function getKnowledgeEntities(
+	filters: {
+		type?: string;
+		query?: string;
+		limit?: number;
+		offset?: number;
+		agentId?: string;
+	} = {},
+): Promise<{ items: KnowledgeEntityListItem[]; limit: number; offset: number }> {
 	try {
 		const params = new URLSearchParams();
 		if (filters.type) params.set("type", filters.type);
@@ -2075,10 +2052,7 @@ export async function getKnowledgeEntity(id: string, agentId = "default"): Promi
 	}
 }
 
-export async function getKnowledgeAspects(
-	entityId: string,
-	agentId = "default",
-): Promise<KnowledgeAspectWithCounts[]> {
+export async function getKnowledgeAspects(entityId: string, agentId = "default"): Promise<KnowledgeAspectWithCounts[]> {
 	try {
 		const res = await fetch(
 			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/aspects?agent_id=${encodeURIComponent(agentId)}`,
@@ -2158,13 +2132,9 @@ export async function getKnowledgeTraversalStatus(): Promise<TraversalStatusSnap
 	}
 }
 
-export async function getPinnedKnowledgeEntities(
-	agentId = "default",
-): Promise<PinnedEntity[]> {
+export async function getPinnedKnowledgeEntities(agentId = "default"): Promise<PinnedEntity[]> {
 	try {
-		const res = await fetch(
-			`${API_BASE}/api/knowledge/entities/pinned?agent_id=${encodeURIComponent(agentId)}`,
-		);
+		const res = await fetch(`${API_BASE}/api/knowledge/entities/pinned?agent_id=${encodeURIComponent(agentId)}`);
 		if (!res.ok) throw new Error("Failed to fetch pinned entities");
 		return await res.json();
 	} catch {
@@ -2188,10 +2158,7 @@ export async function pinKnowledgeEntity(
 	}
 }
 
-export async function unpinKnowledgeEntity(
-	id: string,
-	agentId = "default",
-): Promise<boolean> {
+export async function unpinKnowledgeEntity(id: string, agentId = "default"): Promise<boolean> {
 	try {
 		const res = await fetch(
 			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(id)}/pin?agent_id=${encodeURIComponent(agentId)}`,
@@ -2217,9 +2184,7 @@ export async function getKnowledgeEntityHealth(
 		if (typeof filters.minComparisons === "number") {
 			params.set("min_comparisons", String(filters.minComparisons));
 		}
-		const res = await fetch(
-			`${API_BASE}/api/knowledge/entities/health?${params.toString()}`,
-		);
+		const res = await fetch(`${API_BASE}/api/knowledge/entities/health?${params.toString()}`);
 		if (!res.ok) throw new Error("Failed to fetch entity health");
 		return await res.json();
 	} catch {
@@ -2321,12 +2286,8 @@ export interface MarkdownDoc {
 }
 
 function extractReadmeOverview(content: string): string {
-	const localFirstMatch = content.match(
-		/Signet is a local-first[\s\S]*?without ever reading their values\./,
-	);
-	const whyMatch = content.match(
-		/Most AI tools build memory silos\.[\s\S]*?unless you configure it to\./,
-	);
+	const localFirstMatch = content.match(/Signet is a local-first[\s\S]*?without ever reading their values\./);
+	const whyMatch = content.match(/Most AI tools build memory silos\.[\s\S]*?unless you configure it to\./);
 
 	const normalizeParagraph = (text: string): string =>
 		text
@@ -2352,9 +2313,7 @@ async function fetchRawGithubMarkdown(
 	transform?: (content: string) => string,
 ): Promise<MarkdownDoc | null> {
 	try {
-		const res = await fetch(
-			`https://raw.githubusercontent.com/Signet-AI/signetai/main/${filename}`,
-		);
+		const res = await fetch(`https://raw.githubusercontent.com/Signet-AI/signetai/main/${filename}`);
 		if (!res.ok) return null;
 		const raw = await res.text();
 		const content = transform ? transform(raw) : raw;

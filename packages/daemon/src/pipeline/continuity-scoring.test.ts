@@ -15,7 +15,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -111,9 +111,7 @@ afterEach(() => {
 
 describe("session_memories table", () => {
 	it("has all required columns", () => {
-		const cols = db
-			.prepare("PRAGMA table_info(session_memories)")
-			.all() as Array<{ name: string; type: string }>;
+		const cols = db.prepare("PRAGMA table_info(session_memories)").all() as Array<{ name: string; type: string }>;
 		const colNames = cols.map((c) => c.name);
 
 		expect(colNames).toContain("id");
@@ -149,11 +147,9 @@ describe("session_memories table", () => {
 		insertSessionMemory(db, "session-1", "mem-1");
 		insertSessionMemory(db, "session-2", "mem-1");
 
-		const count = db
-			.prepare(
-				"SELECT COUNT(*) as cnt FROM session_memories WHERE memory_id = ?",
-			)
-			.get("mem-1") as { cnt: number };
+		const count = db.prepare("SELECT COUNT(*) as cnt FROM session_memories WHERE memory_id = ?").get("mem-1") as {
+			cnt: number;
+		};
 
 		expect(count.cnt).toBe(2);
 	});
@@ -165,9 +161,7 @@ describe("session_memories table", () => {
 
 describe("session_scores extensions", () => {
 	it("has confidence and continuity_reasoning columns", () => {
-		const cols = db
-			.prepare("PRAGMA table_info(session_scores)")
-			.all() as Array<{ name: string }>;
+		const cols = db.prepare("PRAGMA table_info(session_scores)").all() as Array<{ name: string }>;
 		const colNames = cols.map((c) => c.name);
 
 		expect(colNames).toContain("confidence");
@@ -198,15 +192,11 @@ describe("session_scores extensions", () => {
 		);
 
 		const row = db
-			.prepare(
-				"SELECT confidence, continuity_reasoning FROM session_scores WHERE id = ?",
-			)
+			.prepare("SELECT confidence, continuity_reasoning FROM session_scores WHERE id = ?")
 			.get("score-1") as { confidence: number; continuity_reasoning: string };
 
 		expect(row.confidence).toBeCloseTo(0.92, 2);
-		expect(row.continuity_reasoning).toBe(
-			"Detailed reasoning about memory quality",
-		);
+		expect(row.continuity_reasoning).toBe("Detailed reasoning about memory quality");
 	});
 
 	it("allows null confidence for backward compatibility", () => {
@@ -219,9 +209,7 @@ describe("session_scores extensions", () => {
 		).run("score-2", "session-2", null, "test", 0.7, 0, 2, 0, "OK", now);
 
 		const row = db
-			.prepare(
-				"SELECT confidence, continuity_reasoning FROM session_scores WHERE id = ?",
-			)
+			.prepare("SELECT confidence, continuity_reasoning FROM session_scores WHERE id = ?")
 			.get("score-2") as {
 			confidence: number | null;
 			continuity_reasoning: string | null;
@@ -332,18 +320,12 @@ describe("per-memory relevance writing", () => {
 			for (const entry of perMemory) {
 				const fullId = prefixMap.get(entry.id);
 				if (!fullId) continue;
-				stmt.run(
-					Math.max(0, Math.min(1, entry.relevance)),
-					"session-1",
-					fullId,
-				);
+				stmt.run(Math.max(0, Math.min(1, entry.relevance)), "session-1", fullId);
 			}
 		});
 
 		const row = db
-			.prepare(
-				"SELECT relevance_score FROM session_memories WHERE memory_id = ?",
-			)
+			.prepare("SELECT relevance_score FROM session_memories WHERE memory_id = ?")
 			.get("abcd1234-full-uuid-here") as { relevance_score: number | null };
 
 		expect(row.relevance_score).toBeCloseTo(0.85, 2);
@@ -375,11 +357,9 @@ describe("per-memory relevance writing", () => {
 			}
 		});
 
-		const row = db
-			.prepare(
-				"SELECT relevance_score FROM session_memories WHERE memory_id = ?",
-			)
-			.get("known-id-1234") as { relevance_score: number };
+		const row = db.prepare("SELECT relevance_score FROM session_memories WHERE memory_id = ?").get("known-id-1234") as {
+			relevance_score: number;
+		};
 
 		expect(row.relevance_score).toBeCloseTo(0.9, 2);
 	});
@@ -400,9 +380,7 @@ describe("per-memory relevance writing", () => {
 		});
 
 		const row = db
-			.prepare(
-				"SELECT relevance_score FROM session_memories WHERE memory_id = ?",
-			)
+			.prepare("SELECT relevance_score FROM session_memories WHERE memory_id = ?")
 			.get("mem-clamp-test") as { relevance_score: number };
 
 		expect(row.relevance_score).toBe(1.0);
@@ -444,32 +422,32 @@ describe("continuity scoring round-trip", () => {
 
 		const now = new Date().toISOString();
 		accessor.withWriteTx((wdb) => {
-			wdb.prepare(
-				`INSERT INTO session_scores
+			wdb
+				.prepare(
+					`INSERT INTO session_scores
 				 (id, session_key, project, harness, score, memories_recalled,
 				  memories_used, novel_context_count, reasoning,
 				  confidence, continuity_reasoning, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				"score-rt-1",
-				"session-rt-1",
-				null,
-				"test",
-				0.85,
-				injected.cnt,
-				2,
-				0,
-				"Good session",
-				0.9,
-				"Both memories were used effectively",
-				now,
-			);
+				)
+				.run(
+					"score-rt-1",
+					"session-rt-1",
+					null,
+					"test",
+					0.85,
+					injected.cnt,
+					2,
+					0,
+					"Good session",
+					0.9,
+					"Both memories were used effectively",
+					now,
+				);
 		});
 
 		const score = db
-			.prepare(
-				"SELECT memories_recalled, confidence, continuity_reasoning FROM session_scores WHERE id = ?",
-			)
+			.prepare("SELECT memories_recalled, confidence, continuity_reasoning FROM session_scores WHERE id = ?")
 			.get("score-rt-1") as {
 			memories_recalled: number;
 			confidence: number;
@@ -478,9 +456,7 @@ describe("continuity scoring round-trip", () => {
 
 		expect(score.memories_recalled).toBe(2);
 		expect(score.confidence).toBeCloseTo(0.9, 2);
-		expect(score.continuity_reasoning).toBe(
-			"Both memories were used effectively",
-		);
+		expect(score.continuity_reasoning).toBe("Both memories were used effectively");
 	});
 
 	it("handles sessions with no session_memories gracefully", () => {
@@ -498,30 +474,19 @@ describe("continuity scoring round-trip", () => {
 
 		const now = new Date().toISOString();
 		accessor.withWriteTx((wdb) => {
-			wdb.prepare(
-				`INSERT INTO session_scores
+			wdb
+				.prepare(
+					`INSERT INTO session_scores
 				 (id, session_key, project, harness, score, memories_recalled,
 				  memories_used, novel_context_count, reasoning, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				"score-old-1",
-				"old-session-no-data",
-				null,
-				"test",
-				0.5,
-				0,
-				0,
-				3,
-				"No memory data available",
-				now,
-			);
+				)
+				.run("score-old-1", "old-session-no-data", null, "test", 0.5, 0, 0, 3, "No memory data available", now);
 		});
 
-		const score = db
-			.prepare(
-				"SELECT memories_recalled FROM session_scores WHERE id = ?",
-			)
-			.get("score-old-1") as { memories_recalled: number };
+		const score = db.prepare("SELECT memories_recalled FROM session_scores WHERE id = ?").get("score-old-1") as {
+			memories_recalled: number;
+		};
 
 		expect(score.memories_recalled).toBe(0);
 	});
@@ -537,15 +502,11 @@ describe("continuity scoring round-trip", () => {
 		}
 
 		const plan = db
-			.prepare(
-				"EXPLAIN QUERY PLAN SELECT * FROM session_memories WHERE session_key = ?",
-			)
+			.prepare("EXPLAIN QUERY PLAN SELECT * FROM session_memories WHERE session_key = ?")
 			.all("session-a") as Array<{ detail: string }>;
 
 		const usesIndex = plan.some(
-			(r) =>
-				r.detail.includes("idx_session_memories_session") ||
-				r.detail.includes("USING INDEX"),
+			(r) => r.detail.includes("idx_session_memories_session") || r.detail.includes("USING INDEX"),
 		);
 		expect(usesIndex).toBe(true);
 	});
@@ -554,11 +515,9 @@ describe("continuity scoring round-trip", () => {
 		insertMemory(db, "mem-fts-default", "FTS default test");
 		insertSessionMemory(db, "session-fts-default", "mem-fts-default");
 
-		const row = db
-			.prepare(
-				"SELECT fts_hit_count FROM session_memories WHERE memory_id = ?",
-			)
-			.get("mem-fts-default") as { fts_hit_count: number };
+		const row = db.prepare("SELECT fts_hit_count FROM session_memories WHERE memory_id = ?").get("mem-fts-default") as {
+			fts_hit_count: number;
+		};
 
 		expect(row.fts_hit_count).toBe(0);
 	});
@@ -585,7 +544,7 @@ describe("scoreContinuity full simulation", () => {
 		insertSessionMemory(db, "sim-session", memIds[0], { wasInjected: 1, rank: 0, effectiveScore: 0.95 });
 		insertSessionMemory(db, "sim-session", memIds[1], { wasInjected: 1, rank: 1, effectiveScore: 0.82 });
 		insertSessionMemory(db, "sim-session", memIds[2], { wasInjected: 1, rank: 2, effectiveScore: 0.71 });
-		insertSessionMemory(db, "sim-session", memIds[3], { wasInjected: 0, rank: 3, effectiveScore: 0.40 });
+		insertSessionMemory(db, "sim-session", memIds[3], { wasInjected: 0, rank: 3, effectiveScore: 0.4 });
 
 		// --- Step 1: loadInjectedMemories ---
 		const injectedMemories = accessor.withReadDb((rdb) =>
@@ -645,9 +604,7 @@ describe("scoreContinuity full simulation", () => {
 
 		const result = {
 			score: Math.max(0, Math.min(1, parsed.score as number)),
-			confidence: typeof parsed.confidence === "number"
-				? Math.max(0, Math.min(1, parsed.confidence))
-				: 0,
+			confidence: typeof parsed.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0,
 			memories_used: typeof parsed.memories_used === "number" ? parsed.memories_used : 0,
 			novel_context_count: typeof parsed.novel_context_count === "number" ? parsed.novel_context_count : 0,
 			reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
@@ -675,34 +632,37 @@ describe("scoreContinuity full simulation", () => {
 		// --- Step 5: Write session_scores ---
 		const now = new Date().toISOString();
 		accessor.withWriteTx((wdb) => {
-			wdb.prepare(
-				`INSERT INTO session_scores
+			wdb
+				.prepare(
+					`INSERT INTO session_scores
 				 (id, session_key, project, harness, score, memories_recalled,
 				  memories_used, novel_context_count, reasoning,
 				  confidence, continuity_reasoning, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				"score-sim-1",
-				"sim-session",
-				null,
-				"test",
-				result.score,
-				injectedMemories.length,
-				result.memories_used,
-				result.novel_context_count,
-				result.reasoning,
-				result.confidence,
-				result.reasoning,
-				now,
-			);
+				)
+				.run(
+					"score-sim-1",
+					"sim-session",
+					null,
+					"test",
+					result.score,
+					injectedMemories.length,
+					result.memories_used,
+					result.novel_context_count,
+					result.reasoning,
+					result.confidence,
+					result.reasoning,
+					now,
+				);
 		});
 
 		// --- Verify all outputs ---
 
 		// 1. session_scores row
-		const scoreRow = db
-			.prepare("SELECT * FROM session_scores WHERE id = ?")
-			.get("score-sim-1") as Record<string, unknown>;
+		const scoreRow = db.prepare("SELECT * FROM session_scores WHERE id = ?").get("score-sim-1") as Record<
+			string,
+			unknown
+		>;
 
 		expect(scoreRow.score).toBeCloseTo(0.78, 2);
 		expect(scoreRow.confidence).toBeCloseTo(0.85, 2);
@@ -735,7 +695,8 @@ describe("scoreContinuity full simulation", () => {
 	});
 
 	it("handles LLM response wrapped in markdown fences", () => {
-		const fencedResponse = '```json\n{"score": 0.6, "confidence": 0.7, "memories_used": 1, "novel_context_count": 2, "reasoning": "ok", "per_memory": []}\n```';
+		const fencedResponse =
+			'```json\n{"score": 0.6, "confidence": 0.7, "memories_used": 1, "novel_context_count": 2, "reasoning": "ok", "per_memory": []}\n```';
 
 		let jsonStr = fencedResponse.trim();
 		const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -747,7 +708,8 @@ describe("scoreContinuity full simulation", () => {
 	});
 
 	it("handles LLM response with <think> blocks", () => {
-		const thinkResponse = '<think>Let me analyze...</think>\n{"score": 0.5, "confidence": 0.9, "memories_used": 0, "novel_context_count": 3, "reasoning": "poor", "per_memory": []}';
+		const thinkResponse =
+			'<think>Let me analyze...</think>\n{"score": 0.5, "confidence": 0.9, "memories_used": 0, "novel_context_count": 3, "reasoning": "poor", "per_memory": []}';
 
 		let jsonStr = thinkResponse.trim();
 		jsonStr = jsonStr.replace(/<think>[\s\S]*?<\/think>/g, "").trim();

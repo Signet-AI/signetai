@@ -1,7 +1,7 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 
 let agentsDir = "";
 let previousSignetPath: string | undefined;
@@ -211,14 +211,13 @@ describe("synthesis-worker", () => {
 
 	it("drain times out if an in-flight synthesis never resolves", async () => {
 		let releaseRun: (() => void) | null = null;
-		mockGenerateWithTracking.mockImplementationOnce(
-			() =>
-				new Promise<void>((resolve) => {
-					releaseRun = resolve;
-				}).then(() => ({
-					text: "# MEMORY\n",
-					usage: null,
-				})),
+		mockGenerateWithTracking.mockImplementationOnce(() =>
+			new Promise<void>((resolve) => {
+				releaseRun = resolve;
+			}).then(() => ({
+				text: "# MEMORY\n",
+				usage: null,
+			})),
 		);
 
 		const worker = startSynthesisWorker({

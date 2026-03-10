@@ -6,21 +6,16 @@
  */
 
 import {
-	nav,
-	isEngineGroup,
-	isMemoryGroup,
-	setTab,
-} from "$lib/stores/navigation.svelte";
-import {
-	focus,
-	returnToSidebar,
-	setFocusZone,
-	focusFirstPageElement,
 	SIDEBAR_ORDER,
 	type SidebarFocusItem,
+	focus,
+	focusFirstPageElement,
+	returnToSidebar,
+	setFocusZone,
 } from "$lib/stores/focus.svelte";
-import { ts } from "$lib/stores/tasks.svelte";
 import { mem } from "$lib/stores/memory.svelte";
+import { isEngineGroup, isMemoryGroup, nav, setTab } from "$lib/stores/navigation.svelte";
+import { ts } from "$lib/stores/tasks.svelte";
 
 // --- Type-safe helpers (avoids `as` casts on readonly tuples) ---
 
@@ -92,17 +87,16 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 	const target = e.target;
 	if (!(target instanceof HTMLElement)) return;
 
-	const isInputFocused =
-		target.tagName === "INPUT" ||
-		target.tagName === "TEXTAREA" ||
-		target.isContentEditable;
+	const isInputFocused = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
 	// Don't interfere with any focused input, regardless of zone
 	if (isInputFocused) return;
 
-	if (focus.zone === "page-content" &&
+	if (
+		focus.zone === "page-content" &&
 		((isEngineGroup(activeTab) && tabFocus.engineFocus === "content") ||
-		 (isMemoryGroup(activeTab) && tabFocus.memoryFocus === "content"))) {
+			(isMemoryGroup(activeTab) && tabFocus.memoryFocus === "content"))
+	) {
 		// Already in content mode -- keep keyboardNavActive as-is
 	} else {
 		tabFocus.keyboardNavActive = true;
@@ -122,10 +116,7 @@ export function handleGlobalKey(e: KeyboardEvent): void {
 		if (e.defaultPrevented) return;
 
 		const modalOpen =
-			ts.formOpen ||
-			ts.detailOpen ||
-			mem.formOpen ||
-			document.querySelector('[role="dialog"][data-state="open"]');
+			ts.formOpen || ts.detailOpen || mem.formOpen || document.querySelector('[role="dialog"][data-state="open"]');
 
 		if (!modalOpen) {
 			e.preventDefault();
@@ -195,22 +186,22 @@ export function handleFocusIn(e: FocusEvent): void {
 	const target = e.target;
 	if (!(target instanceof HTMLElement)) return;
 
-	const sidebarItem = target.closest('[data-sidebar-item]');
+	const sidebarItem = target.closest("[data-sidebar-item]");
 	if (sidebarItem) {
-		const rawItem = sidebarItem.getAttribute('data-sidebar-item');
+		const rawItem = sidebarItem.getAttribute("data-sidebar-item");
 		if (rawItem && isSidebarItem(rawItem) && focus.sidebarItem !== rawItem) {
-			focus.zone = 'sidebar-menu';
+			focus.zone = "sidebar-menu";
 			focus.sidebarItem = rawItem;
 		}
 		return;
 	}
 
-	const engineTab = target.closest('[data-engine-tab]');
+	const engineTab = target.closest("[data-engine-tab]");
 	if (engineTab) {
-		if (focus.zone !== 'page-content') {
-			setFocusZone('page-content');
+		if (focus.zone !== "page-content") {
+			setFocusZone("page-content");
 		}
-		const rawTabName = engineTab.getAttribute('data-engine-tab');
+		const rawTabName = engineTab.getAttribute("data-engine-tab");
 		if (rawTabName === null) return;
 		const index = indexOfString(ENGINE_TABS, rawTabName);
 		if (index !== -1) {
@@ -220,12 +211,12 @@ export function handleFocusIn(e: FocusEvent): void {
 		return;
 	}
 
-	const memoryTab = target.closest('[data-memory-tab]');
+	const memoryTab = target.closest("[data-memory-tab]");
 	if (memoryTab) {
-		if (focus.zone !== 'page-content') {
-			setFocusZone('page-content');
+		if (focus.zone !== "page-content") {
+			setFocusZone("page-content");
 		}
-		const rawTabName = memoryTab.getAttribute('data-memory-tab');
+		const rawTabName = memoryTab.getAttribute("data-memory-tab");
 		if (rawTabName === null) return;
 		const index = indexOfString(MEMORY_TABS, rawTabName);
 		if (index !== -1) {
@@ -236,8 +227,8 @@ export function handleFocusIn(e: FocusEvent): void {
 	}
 
 	const pageContent = target.closest('[data-page-content="true"]');
-	if (pageContent && focus.zone !== 'page-content') {
-		setFocusZone('page-content');
+	if (pageContent && focus.zone !== "page-content") {
+		setFocusZone("page-content");
 
 		// Tab-button targets already returned above, so focus is in content area
 		if (isEngineGroup(activeTab)) {
@@ -267,12 +258,12 @@ export function handlePageClick(e: MouseEvent): void {
 	const pageContent = target.closest('[data-page-content="true"]');
 	if (!pageContent) return;
 
-	if (focus.zone !== 'page-content') {
-		setFocusZone('page-content');
+	if (focus.zone !== "page-content") {
+		setFocusZone("page-content");
 	}
 
-	const clickedEngineTab = target.closest('[data-engine-tab]');
-	const clickedMemoryTab = target.closest('[data-memory-tab]');
+	const clickedEngineTab = target.closest("[data-engine-tab]");
+	const clickedMemoryTab = target.closest("[data-memory-tab]");
 
 	if (isEngineGroup(activeTab)) {
 		const index = indexOfString(ENGINE_TABS, activeTab);

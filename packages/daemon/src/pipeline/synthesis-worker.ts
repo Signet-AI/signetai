@@ -13,12 +13,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { PipelineSynthesisConfig } from "../memory-config";
-import { handleSynthesisRequest, writeMemoryMd } from "../hooks";
-import { getSynthesisProvider } from "../synthesis-llm";
-import { logger } from "../logger";
 import { getDbAccessor } from "../db-accessor";
+import { handleSynthesisRequest, writeMemoryMd } from "../hooks";
+import { logger } from "../logger";
+import type { PipelineSynthesisConfig } from "../memory-config";
 import { activeSessionCount } from "../session-tracker";
+import { getSynthesisProvider } from "../synthesis-llm";
 import { generateWithTracking } from "./provider";
 
 function getAgentsDir(): string {
@@ -81,11 +81,13 @@ function writeLastSynthesisTime(timestamp: number): void {
 function getLastSessionEndTime(): number {
 	try {
 		const row = getDbAccessor().withReadDb((db) => {
-			return db.prepare(`
+			return db
+				.prepare(`
 				SELECT MAX(created_at) as last_end
 				FROM session_checkpoints
 				WHERE trigger = 'session_end'
-			`).get() as { last_end: string | null } | undefined;
+			`)
+				.get() as { last_end: string | null } | undefined;
 		});
 		if (!row?.last_end) return 0;
 		return new Date(row.last_end).getTime();
@@ -144,8 +146,9 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 		if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
 			try {
 				JSON.parse(trimmed);
-				logger.error("synthesis", "LLM returned JSON instead of markdown, skipping write",
-					undefined, { preview: trimmed.slice(0, 200) });
+				logger.error("synthesis", "LLM returned JSON instead of markdown, skipping write", undefined, {
+					preview: trimmed.slice(0, 200),
+				});
 				return "failed";
 			} catch {
 				// Not valid JSON — markdown starting with [ or { is fine
@@ -200,9 +203,7 @@ export interface SynthesisWorkerHandle {
 	readonly lastRunAt: number;
 }
 
-export function startSynthesisWorker(
-	config: PipelineSynthesisConfig,
-): SynthesisWorkerHandle {
+export function startSynthesisWorker(config: PipelineSynthesisConfig): SynthesisWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 	let isSynthesizing = false;
@@ -337,10 +338,7 @@ export function startSynthesisWorker(
 					// External callers can hold the write lock without setting
 					// currentRunPromise, so drain must wait for both the active run
 					// and the shared lock release before shutdown continues.
-					Promise.all([
-						currentRunPromise ?? Promise.resolve(),
-						lockReleasedPromise,
-					]).then(() => undefined),
+					Promise.all([currentRunPromise ?? Promise.resolve(), lockReleasedPromise]).then(() => undefined),
 					new Promise<void>((resolve) => {
 						timeoutId = setTimeout(() => {
 							timedOut = true;

@@ -84,9 +84,7 @@ export function parseExtractionResponse(
 	} catch {
 		// Try to repair common JSON issues
 		try {
-			const cleaned = jsonStr
-				.replace(/,\s*([}\]])/g, "$1")
-				.replace(/\n/g, " ");
+			const cleaned = jsonStr.replace(/,\s*([}\]])/g, "$1").replace(/\n/g, " ");
 			parsed = JSON.parse(cleaned);
 		} catch {
 			warnings.push(`Failed to parse LLM response as JSON: ${raw.slice(0, 100)}...`);
@@ -95,11 +93,7 @@ export function parseExtractionResponse(
 	}
 
 	// Normalize — handle both "items" and "facts" keys
-	const rawItems = Array.isArray(parsed.items)
-		? parsed.items
-		: Array.isArray(parsed.facts)
-			? parsed.facts
-			: [];
+	const rawItems = Array.isArray(parsed.items) ? parsed.items : Array.isArray(parsed.facts) ? parsed.facts : [];
 
 	const rawRelations = Array.isArray(parsed.relations)
 		? parsed.relations
@@ -128,16 +122,12 @@ export function parseExtractionResponse(
 		if (options.typeMap[type]) type = options.typeMap[type];
 		if (!options.validTypes.has(type)) type = options.defaultType;
 
-		const confidence = typeof obj.confidence === "number"
-			? Math.max(0, Math.min(1, obj.confidence))
-			: 0.7;
+		const confidence = typeof obj.confidence === "number" ? Math.max(0, Math.min(1, obj.confidence)) : 0.7;
 
 		if (confidence < options.minConfidence) continue;
 
 		// Preserve speaker metadata if present (for chat extraction)
-		const speaker = typeof obj.speaker === "string" && obj.speaker.trim()
-			? obj.speaker.trim()
-			: undefined;
+		const speaker = typeof obj.speaker === "string" && obj.speaker.trim() ? obj.speaker.trim() : undefined;
 
 		const metadata: Record<string, unknown> = {};
 		if (speaker) metadata.speaker = speaker;
@@ -156,17 +146,11 @@ export function parseExtractionResponse(
 		if (typeof rel !== "object" || rel === null) continue;
 		const obj = rel as Record<string, unknown>;
 
-		if (
-			typeof obj.source !== "string" ||
-			typeof obj.relationship !== "string" ||
-			typeof obj.target !== "string"
-		) {
+		if (typeof obj.source !== "string" || typeof obj.relationship !== "string" || typeof obj.target !== "string") {
 			continue;
 		}
 
-		const confidence = typeof obj.confidence === "number"
-			? Math.max(0, Math.min(1, obj.confidence))
-			: 0.7;
+		const confidence = typeof obj.confidence === "number" ? Math.max(0, Math.min(1, obj.confidence)) : 0.7;
 
 		if (confidence < options.minConfidence) continue;
 

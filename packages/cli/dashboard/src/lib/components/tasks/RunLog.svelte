@@ -1,15 +1,15 @@
 <script lang="ts">
 import type { TaskRun } from "$lib/api";
-import * as Card from "$lib/components/ui/card/index.js";
 import { Badge } from "$lib/components/ui/badge/index.js";
+import * as Card from "$lib/components/ui/card/index.js";
 
 interface Props {
 	run: TaskRun;
 }
 
-let { run }: Props = $props();
+const { run }: Props = $props();
 
-let expanded = $state(false);
+const expanded = $state(false);
 
 function formatDate(iso: string | null): string {
 	if (!iso) return "—";

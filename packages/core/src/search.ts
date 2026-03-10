@@ -1,8 +1,5 @@
 import { createRequire } from "node:module";
-import {
-	DEFAULT_EMBEDDING_DIMENSIONS,
-	DEFAULT_HYBRID_ALPHA,
-} from "./constants";
+import { DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_HYBRID_ALPHA } from "./constants";
 import type { Memory } from "./types";
 
 // Try to load native Rust implementation, fall back to pure TS
@@ -161,11 +158,7 @@ export function vectorSearch(
 /**
  * Pure BM25 keyword search using FTS5
  */
-export function keywordSearch(
-	db: SQLiteDatabase,
-	query: string,
-	limit?: number,
-): Array<{ id: string; score: number }> {
+export function keywordSearch(db: SQLiteDatabase, query: string, limit?: number): Array<{ id: string; score: number }> {
 	const effectiveLimit = limit ?? 20;
 	const results: Array<{ id: string; score: number }> = [];
 
@@ -211,9 +204,7 @@ export function hybridSearch(
 	const minScore = options?.minScore ?? 0.1;
 
 	// Run both searches in parallel (conceptually)
-	const vectorResults = queryVector
-		? vectorSearch(db, queryVector, { limit: topK, type: options?.type })
-		: [];
+	const vectorResults = queryVector ? vectorSearch(db, queryVector, { limit: topK, type: options?.type }) : [];
 	const keywordResults = keywordSearch(db, queryText, topK);
 
 	// Merge scores from both sources
@@ -228,18 +219,20 @@ export function hybridSearch(
 			if (s === "vector" || s === "keyword" || s === "hybrid") return s;
 			return "keyword";
 		};
-		scored = native.mergeHybridScores(
-			vectorResults.map((r) => r.id),
-			vectorResults.map((r) => r.score),
-			keywordResults.map((r) => r.id),
-			keywordResults.map((r) => r.score),
-			alpha,
-			minScore,
-		).map((r) => ({
-			id: r.id,
-			score: r.score,
-			source: narrowSource(r.source),
-		}));
+		scored = native
+			.mergeHybridScores(
+				vectorResults.map((r) => r.id),
+				vectorResults.map((r) => r.score),
+				keywordResults.map((r) => r.id),
+				keywordResults.map((r) => r.score),
+				alpha,
+				minScore,
+			)
+			.map((r) => ({
+				id: r.id,
+				score: r.score,
+				source: narrowSource(r.source),
+			}));
 	} else {
 		const vectorMap = new Map(vectorResults.map((r) => [r.id, r.score]));
 		const keywordMap = new Map(keywordResults.map((r) => [r.id, r.score]));
@@ -331,10 +324,7 @@ export function hybridSearch(
  */
 function hasPrepareMethod(db: unknown): db is SQLiteDatabase {
 	return (
-		typeof db === "object" &&
-		db !== null &&
-		"prepare" in db &&
-		typeof (db as SQLiteDatabase).prepare === "function"
+		typeof db === "object" && db !== null && "prepare" in db && typeof (db as SQLiteDatabase).prepare === "function"
 	);
 }
 
@@ -343,13 +333,7 @@ function hasPrepareMethod(db: unknown): db is SQLiteDatabase {
  */
 function getRawDb(db: SQLiteDatabase | DatabaseWrapper): SQLiteDatabase | null {
 	// Check if it's a DatabaseWrapper with a db property
-	if (
-		typeof db === "object" &&
-		db !== null &&
-		"db" in db &&
-		db.db !== null &&
-		hasPrepareMethod(db.db)
-	) {
+	if (typeof db === "object" && db !== null && "db" in db && db.db !== null && hasPrepareMethod(db.db)) {
 		return db.db;
 	}
 	// Check if it's already a raw SQLiteDatabase
@@ -363,17 +347,8 @@ function getRawDb(db: SQLiteDatabase | DatabaseWrapper): SQLiteDatabase | null {
  * Main search entry point
  * Falls back to simple text matching if hybrid search components unavailable
  */
-export async function search(
-	db: SQLiteDatabase | DatabaseWrapper,
-	options: SearchOptions,
-): Promise<SearchResult[]> {
-	const {
-		query,
-		limit = 10,
-		alpha = DEFAULT_HYBRID_ALPHA,
-		minScore = 0.1,
-		topK = 50,
-	} = options;
+export async function search(db: SQLiteDatabase | DatabaseWrapper, options: SearchOptions): Promise<SearchResult[]> {
+	const { query, limit = 10, alpha = DEFAULT_HYBRID_ALPHA, minScore = 0.1, topK = 50 } = options;
 
 	// Get raw SQLite db from Database wrapper if available
 	const rawDb = getRawDb(db);
@@ -400,15 +375,10 @@ export async function search(
 	// This handles cases where FTS5 table doesn't exist yet
 	try {
 		const wrapper = db as DatabaseWrapper;
-		const memories =
-			typeof wrapper.getMemories === "function"
-				? wrapper.getMemories(options.type)
-				: [];
+		const memories = typeof wrapper.getMemories === "function" ? wrapper.getMemories(options.type) : [];
 
 		return memories
-			.filter((m: Memory) =>
-				m.content.toLowerCase().includes(query.toLowerCase()),
-			)
+			.filter((m: Memory) => m.content.toLowerCase().includes(query.toLowerCase()))
 			.slice(0, limit)
 			.map((m: Memory) => ({
 				id: m.id,

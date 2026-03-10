@@ -1,43 +1,38 @@
 <script lang="ts">
-	import {
-		Card,
-		CardContent,
-		CardHeader,
-		CardTitle,
-	} from "$lib/components/ui/card/index.js";
-	import { setTab } from "$lib/stores/navigation.svelte";
-	import Network from "@lucide/svelte/icons/network";
-	import { onMount } from "svelte";
+import { Card, CardContent, CardHeader, CardTitle } from "$lib/components/ui/card/index.js";
+import { setTab } from "$lib/stores/navigation.svelte";
+import Network from "@lucide/svelte/icons/network";
+import { onMount } from "svelte";
 
-	const isDev = import.meta.env.DEV;
-	const API_BASE = isDev ? "http://localhost:3850" : "";
+const isDev = import.meta.env.DEV;
+const API_BASE = isDev ? "http://localhost:3850" : "";
 
-	interface PinnedEntity {
-		id: string;
-		name: string;
-		type?: string;
-		mentionCount?: number;
-	}
+interface PinnedEntity {
+	id: string;
+	name: string;
+	type?: string;
+	mentionCount?: number;
+}
 
-	let entities = $state<PinnedEntity[]>([]);
-	let loaded = $state(false);
+let entities = $state<PinnedEntity[]>([]);
+let loaded = $state(false);
 
-	async function fetchPinned(): Promise<void> {
-		try {
-			const res = await fetch(`${API_BASE}/api/knowledge/entities?pinned=true&limit=6`);
-			if (res.ok) {
-				const data = await res.json();
-				entities = data.entities ?? data.items ?? [];
-			}
-		} catch {
-			// endpoint may not exist yet — show empty state
+async function fetchPinned(): Promise<void> {
+	try {
+		const res = await fetch(`${API_BASE}/api/knowledge/entities?pinned=true&limit=6`);
+		if (res.ok) {
+			const data = await res.json();
+			entities = data.entities ?? data.items ?? [];
 		}
-		loaded = true;
+	} catch {
+		// endpoint may not exist yet — show empty state
 	}
+	loaded = true;
+}
 
-	onMount(() => {
-		fetchPinned();
-	});
+onMount(() => {
+	fetchPinned();
+});
 </script>
 
 <Card

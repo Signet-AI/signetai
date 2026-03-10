@@ -1,75 +1,69 @@
 <script lang="ts">
-	import type {
-		DiagnosticsReport,
-		PipelineStatus,
-		MemoryStats,
-	} from "$lib/api";
-	import * as Card from "$lib/components/ui/card/index.js";
-	import Activity from "@lucide/svelte/icons/activity";
+import type { DiagnosticsReport, MemoryStats, PipelineStatus } from "$lib/api";
+import * as Card from "$lib/components/ui/card/index.js";
+import Activity from "@lucide/svelte/icons/activity";
 
-	interface Props {
-		diagnostics: DiagnosticsReport | null;
-		pipelineStatus: PipelineStatus | null;
-		memoryStats: MemoryStats | null;
+interface Props {
+	diagnostics: DiagnosticsReport | null;
+	pipelineStatus: PipelineStatus | null;
+	memoryStats: MemoryStats | null;
+}
+
+const { diagnostics, pipelineStatus, memoryStats }: Props = $props();
+
+const healthScore = $derived(diagnostics?.composite?.score ?? null);
+const healthStatus = $derived(diagnostics?.composite?.status ?? "unknown");
+
+function scoreColor(score: number): string {
+	if (score >= 0.8) return "var(--sig-success)";
+	if (score >= 0.5) return "var(--sig-warning, #d4a017)";
+	return "var(--sig-danger)";
+}
+
+function healthHue(score: number | null): string {
+	if (score === null) return "color-mix(in srgb, var(--sig-surface) 2%, transparent)";
+	if (score >= 0.8) return "color-mix(in srgb, var(--sig-success) 8%, transparent)";
+	if (score >= 0.6) return "color-mix(in srgb, var(--sig-warning, #d4a017) 8%, transparent)";
+	if (score >= 0.4) return "color-mix(in srgb, var(--sig-warning, #d4a017) 10%, transparent)";
+	return "color-mix(in srgb, var(--sig-danger) 10%, transparent)";
+}
+
+function healthBorder(score: number | null): string {
+	if (score === null) return "var(--sig-border)";
+	if (score >= 0.8) return "color-mix(in srgb, var(--sig-success) 25%, var(--sig-border))";
+	if (score >= 0.6) return "color-mix(in srgb, var(--sig-warning, #d4a017) 25%, var(--sig-border))";
+	if (score >= 0.4) return "color-mix(in srgb, var(--sig-warning, #d4a017) 25%, var(--sig-border))";
+	return "color-mix(in srgb, var(--sig-danger) 25%, var(--sig-border))";
+}
+
+const pipelineMode = $derived.by(() => {
+	if (!pipelineStatus) return "unknown";
+	const mode = (pipelineStatus as Record<string, unknown>).mode;
+	if (typeof mode === "string") return mode;
+	return "active";
+});
+
+const embeddingCoverage = $derived.by(() => {
+	if (diagnostics?.index?.embeddingCoverage !== undefined) {
+		return Math.round(diagnostics.index.embeddingCoverage * 100);
 	}
+	if (!memoryStats || memoryStats.total === 0) return null;
+	return Math.round((memoryStats.withEmbeddings / memoryStats.total) * 100);
+});
 
-	const { diagnostics, pipelineStatus, memoryStats }: Props = $props();
-
-	const healthScore = $derived(diagnostics?.composite?.score ?? null);
-	const healthStatus = $derived(diagnostics?.composite?.status ?? "unknown");
-
-	function scoreColor(score: number): string {
-		if (score >= 0.8) return "var(--sig-success)";
-		if (score >= 0.5) return "var(--sig-warning, #d4a017)";
-		return "var(--sig-danger)";
-	}
-
-	function healthHue(score: number | null): string {
-		if (score === null) return "color-mix(in srgb, var(--sig-surface) 2%, transparent)";
-		if (score >= 0.8) return "color-mix(in srgb, var(--sig-success) 8%, transparent)";
-		if (score >= 0.6) return "color-mix(in srgb, var(--sig-warning, #d4a017) 8%, transparent)";
-		if (score >= 0.4) return "color-mix(in srgb, var(--sig-warning, #d4a017) 10%, transparent)";
-		return "color-mix(in srgb, var(--sig-danger) 10%, transparent)";
-	}
-
-	function healthBorder(score: number | null): string {
-		if (score === null) return "var(--sig-border)";
-		if (score >= 0.8) return "color-mix(in srgb, var(--sig-success) 25%, var(--sig-border))";
-		if (score >= 0.6) return "color-mix(in srgb, var(--sig-warning, #d4a017) 25%, var(--sig-border))";
-		if (score >= 0.4) return "color-mix(in srgb, var(--sig-warning, #d4a017) 25%, var(--sig-border))";
-		return "color-mix(in srgb, var(--sig-danger) 25%, var(--sig-border))";
-	}
-
-	const pipelineMode = $derived.by(() => {
-		if (!pipelineStatus) return "unknown";
-		const mode = (pipelineStatus as Record<string, unknown>).mode;
-		if (typeof mode === "string") return mode;
-		return "active";
-	});
-
-	const embeddingCoverage = $derived.by(() => {
-		if (diagnostics?.index?.embeddingCoverage !== undefined) {
-			return Math.round(diagnostics.index.embeddingCoverage * 100);
+const warningCount = $derived.by(() => {
+	if (!diagnostics) return 0;
+	let count = 0;
+	const domains = ["queue", "storage", "index", "provider", "connector", "predictor"] as const;
+	for (const d of domains) {
+		const domain = diagnostics[d];
+		if (domain && typeof domain === "object" && "status" in domain) {
+			const status = (domain as { status: string }).status;
+			if (status === "degraded" || status === "unhealthy") count++;
 		}
-		if (!memoryStats || memoryStats.total === 0) return null;
-		return Math.round(
-			(memoryStats.withEmbeddings / memoryStats.total) * 100,
-		);
-	});
-
-	const warningCount = $derived.by(() => {
-		if (!diagnostics) return 0;
-		let count = 0;
-		const domains = ["queue", "storage", "index", "provider", "connector", "predictor"] as const;
-		for (const d of domains) {
-			const domain = diagnostics[d];
-			if (domain && typeof domain === "object" && "status" in domain) {
-				const status = (domain as { status: string }).status;
-				if (status === "degraded" || status === "unhealthy") count++;
-			}
-		}
-		return count;
-	});
+	}
+	return count;
+});
 </script>
 
 <Card.Root class="h-full transition-colors duration-500" style="background: {healthHue(healthScore)}; border-color: {healthBorder(healthScore)};">

@@ -68,12 +68,8 @@ export async function detectSemanticContradiction(
 		const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
 
 		const detected = parsed.contradicts === true;
-		const confidence =
-			typeof parsed.confidence === "number"
-				? Math.max(0, Math.min(1, parsed.confidence))
-				: 0.5;
-		const reasoning =
-			typeof parsed.reasoning === "string" ? parsed.reasoning : "";
+		const confidence = typeof parsed.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5;
+		const reasoning = typeof parsed.reasoning === "string" ? parsed.reasoning : "";
 
 		return { detected, confidence, reasoning };
 	} catch (e) {

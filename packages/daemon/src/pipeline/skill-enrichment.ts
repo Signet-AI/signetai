@@ -8,8 +8,8 @@
  * Lives alongside the other extraction/decision prompts in pipeline/.
  */
 
-import type { LlmProvider } from "./provider";
 import { logger } from "../logger";
+import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,9 +32,7 @@ export interface SkillEnrichmentResult {
 // ---------------------------------------------------------------------------
 
 function buildEnrichmentPrompt(input: SkillEnrichmentInput): string {
-	const bodyPreview = input.body.length > 3000
-		? `${input.body.slice(0, 3000)}\n[truncated]`
-		: input.body;
+	const bodyPreview = input.body.length > 3000 ? `${input.body.slice(0, 3000)}\n[truncated]` : input.body;
 
 	return `You are analyzing an AI agent skill to generate discovery metadata.
 
@@ -75,9 +73,7 @@ function parseEnrichmentOutput(raw: string): SkillEnrichmentResult | null {
 	if (typeof parsed !== "object" || parsed === null) return null;
 	const obj = parsed as Record<string, unknown>;
 
-	const description = typeof obj.description === "string"
-		? obj.description.trim()
-		: "";
+	const description = typeof obj.description === "string" ? obj.description.trim() : "";
 
 	const triggers = Array.isArray(obj.triggers)
 		? obj.triggers.filter((t): t is string => typeof t === "string" && t.trim().length > 0)

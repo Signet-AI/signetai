@@ -1,62 +1,64 @@
 <script lang="ts">
-	import { GROUP_COLORS, type PipelineNodeDef, type PipelineNodeState, type HealthStatus } from "./pipeline-types";
+import { GROUP_COLORS, type HealthStatus, type PipelineNodeDef, type PipelineNodeState } from "./pipeline-types";
 
-	interface Props {
-		def: PipelineNodeDef;
-		nodeState: PipelineNodeState;
-		selected: boolean;
-		onselectnode: (id: string) => void;
-	}
+interface Props {
+	def: PipelineNodeDef;
+	nodeState: PipelineNodeState;
+	selected: boolean;
+	onselectnode: (id: string) => void;
+}
 
-	let { def, nodeState, selected, onselectnode }: Props = $props();
+const { def, nodeState, selected, onselectnode }: Props = $props();
 
-	let groupColor = $derived(GROUP_COLORS[def.group]);
+const groupColor = $derived(GROUP_COLORS[def.group]);
 
-	const HEALTH_COLORS: Record<HealthStatus, string> = {
-		healthy: "#4ade80",
-		degraded: "#fbbf24",
-		unhealthy: "#f87171",
-		unknown: "#6b6b76",
-	};
+const HEALTH_COLORS: Record<HealthStatus, string> = {
+	healthy: "#4ade80",
+	degraded: "#fbbf24",
+	unhealthy: "#f87171",
+	unknown: "#6b6b76",
+};
 
-	let healthColor = $derived(HEALTH_COLORS[nodeState.health]);
+const healthColor = $derived(HEALTH_COLORS[nodeState.health]);
 
-	// Use group color as the primary visual, health as secondary
-	let strokeColor = $derived(
-		nodeState.health === "unknown" ? groupColor + "88" : healthColor,
-	);
+// Use group color as the primary visual, health as secondary
+const strokeColor = $derived(nodeState.health === "unknown" ? groupColor + "88" : healthColor);
 
-	// Pulse animation — increments trigger re-animation
-	let lastPulse = $state(0);
-	let pulsing = $state(false);
+// Pulse animation — increments trigger re-animation
+let lastPulse = $state(0);
+let pulsing = $state(false);
 
-	// Track "recently active" for sustained glow (fades after 3s)
-	let active = $state(false);
-	let activeTimeout: ReturnType<typeof setTimeout> | null = null;
+// Track "recently active" for sustained glow (fades after 3s)
+let active = $state(false);
+let activeTimeout: ReturnType<typeof setTimeout> | null = null;
 
-	$effect(() => {
-		if (nodeState.pulseCount > lastPulse) {
-			lastPulse = nodeState.pulseCount;
+$effect(() => {
+	if (nodeState.pulseCount > lastPulse) {
+		lastPulse = nodeState.pulseCount;
 
-			// Fire pulse
-			pulsing = true;
-			const pulseTimer = setTimeout(() => { pulsing = false; }, 1200);
+		// Fire pulse
+		pulsing = true;
+		const pulseTimer = setTimeout(() => {
+			pulsing = false;
+		}, 1200);
 
-			// Sustain active glow
-			active = true;
+		// Sustain active glow
+		active = true;
+		if (activeTimeout) clearTimeout(activeTimeout);
+		activeTimeout = setTimeout(() => {
+			active = false;
+		}, 3000);
+
+		return () => {
+			clearTimeout(pulseTimer);
 			if (activeTimeout) clearTimeout(activeTimeout);
-			activeTimeout = setTimeout(() => { active = false; }, 3000);
-
-			return () => {
-				clearTimeout(pulseTimer);
-				if (activeTimeout) clearTimeout(activeTimeout);
-			};
-		}
-	});
-
-	function handleClick() {
-		onselectnode(def.id);
+		};
 	}
+});
+
+function handleClick() {
+	onselectnode(def.id);
+}
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->

@@ -1,67 +1,55 @@
 <script lang="ts">
-import PageBanner from "$lib/components/layout/PageBanner.svelte";
-import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
-import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
-import { nav } from "$lib/stores/navigation.svelte";
-import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
-import { onMount } from "svelte";
 import {
-	CalendarDate,
-	type DateValue,
-} from "@internationalized/date";
-import {
+	type EntityHealth,
 	type KnowledgeAspectWithCounts,
 	type KnowledgeAttribute,
 	type KnowledgeDependencyEdge,
 	type KnowledgeEntityDetail,
 	type KnowledgeEntityListItem,
 	type KnowledgeStats,
-	type EntityHealth,
 	type PredictorEntitySlice,
 	type PredictorProjectSlice,
 	type PredictorTrainingRun,
 	type TraversalStatusSnapshot,
-	getPredictorTrainingRuns,
 	getKnowledgeAspects,
 	getKnowledgeAttributes,
 	getKnowledgeDependencies,
 	getKnowledgeEntities,
-	getKnowledgeEntityHealth,
 	getKnowledgeEntity,
+	getKnowledgeEntityHealth,
 	getKnowledgeStats,
 	getKnowledgeTraversalStatus,
-	pinKnowledgeEntity,
 	getPredictorEntitySlices,
 	getPredictorProjectSlices,
+	getPredictorTrainingRuns,
+	pinKnowledgeEntity,
 	unpinKnowledgeEntity,
 } from "$lib/api";
+import PageBanner from "$lib/components/layout/PageBanner.svelte";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
+import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
+import { Calendar } from "$lib/components/ui/calendar/index.js";
 import * as Card from "$lib/components/ui/card/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
 import * as Popover from "$lib/components/ui/popover/index.js";
-import { Skeleton } from "$lib/components/ui/skeleton/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
+import { Skeleton } from "$lib/components/ui/skeleton/index.js";
 import * as Table from "$lib/components/ui/table/index.js";
-import { Calendar } from "$lib/components/ui/calendar/index.js";
+import { nav } from "$lib/stores/navigation.svelte";
+import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
+import { CalendarDate, type DateValue } from "@internationalized/date";
 import CalendarIcon from "@lucide/svelte/icons/calendar";
 import Network from "@lucide/svelte/icons/network";
 import Pin from "@lucide/svelte/icons/pin";
 import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import { onMount } from "svelte";
 
-const ENTITY_TYPES = [
-	"all",
-	"project",
-	"person",
-	"system",
-	"tool",
-	"concept",
-	"skill",
-	"task",
-] as const;
+const ENTITY_TYPES = ["all", "project", "person", "system", "tool", "concept", "skill", "task"] as const;
 
-let query = $state("");
-let typeFilter = $state("all");
+const query = $state("");
+const typeFilter = $state("all");
 let loadingEntities = $state(true);
 let loadingDetail = $state(false);
 let loadingStats = $state(true);
@@ -84,9 +72,9 @@ let attributes = $state<KnowledgeAttribute[]>([]);
 let dependencies = $state<KnowledgeDependencyEdge[]>([]);
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
-let sincePickerOpen = $state(false);
+const sincePickerOpen = $state(false);
 const defaultSinceDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-let predictorSince = $state(defaultSinceDate.toISOString().slice(0, 10));
+const predictorSince = $state(defaultSinceDate.toISOString().slice(0, 10));
 
 function metricClass(kind: "default" | "warning" | "accent" = "default"): string {
 	if (kind === "warning") {
@@ -139,20 +127,10 @@ function healthToneClass(entityId: string): string {
 }
 
 function entityDensityOpacity(item: KnowledgeEntityListItem): number {
-	const score =
-		item.aspectCount +
-		item.attributeCount +
-		item.constraintCount * 2 +
-		item.dependencyCount;
+	const score = item.aspectCount + item.attributeCount + item.constraintCount * 2 + item.dependencyCount;
 	const maxScore = Math.max(
 		1,
-		...entities.map(
-			(e) =>
-				e.aspectCount +
-				e.attributeCount +
-				e.constraintCount * 2 +
-				e.dependencyCount,
-		),
+		...entities.map((e) => e.aspectCount + e.attributeCount + e.constraintCount * 2 + e.dependencyCount),
 	);
 	return 0.08 + (score / maxScore) * 0.92;
 }
@@ -187,10 +165,7 @@ async function loadEntities(): Promise<void> {
 	});
 	entities = result.items;
 	loadingEntities = false;
-	if (
-		selectedEntityId &&
-		!entities.some((item) => item.entity.id === selectedEntityId)
-	) {
+	if (selectedEntityId && !entities.some((item) => item.entity.id === selectedEntityId)) {
 		selectedEntityId = null;
 		selectedAspectId = null;
 		entityDetail = null;
@@ -237,9 +212,7 @@ async function loadStats(): Promise<void> {
 	const [nextStats, nextHealth] = await Promise.all([
 		getKnowledgeStats(),
 		getKnowledgeEntityHealth({
-			since: predictorSince
-				? new Date(`${predictorSince}T00:00:00.000Z`).toISOString()
-				: undefined,
+			since: predictorSince ? new Date(`${predictorSince}T00:00:00.000Z`).toISOString() : undefined,
 			minComparisons: 3,
 		}),
 	]);
@@ -250,9 +223,7 @@ async function loadStats(): Promise<void> {
 
 async function loadPredictor(): Promise<void> {
 	loadingPredictor = true;
-	const sinceIso = predictorSince
-		? new Date(`${predictorSince}T00:00:00.000Z`).toISOString()
-		: undefined;
+	const sinceIso = predictorSince ? new Date(`${predictorSince}T00:00:00.000Z`).toISOString() : undefined;
 	const [byEntity, byProject, runs] = await Promise.all([
 		getPredictorEntitySlices(sinceIso),
 		getPredictorProjectSlices(sinceIso),

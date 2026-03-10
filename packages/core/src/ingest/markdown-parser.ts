@@ -24,10 +24,7 @@ export function parseMarkdown(filePath: string): ParsedDocument {
 /**
  * Parse markdown content string directly (for testing / reuse).
  */
-export function parseMarkdownContent(
-	content: string,
-	title: string | null = null,
-): ParsedDocument {
+export function parseMarkdownContent(content: string, title: string | null = null): ParsedDocument {
 	const lines = content.split("\n");
 	const sections: ParsedSection[] = [];
 	let lineIndex = 0;
@@ -143,7 +140,10 @@ export function parseMarkdownContent(
 			if (currentContentType !== "list" && currentLines.length > 0) {
 				// Only flush if we're switching from non-list to list
 				// and we have substantial text content
-				if (currentContentType !== "text" || currentLines.some(l => l.trim().length > 0 && !l.match(/^\s*[-*+]\s/) && !l.match(/^\s*\d+\.\s/))) {
+				if (
+					currentContentType !== "text" ||
+					currentLines.some((l) => l.trim().length > 0 && !l.match(/^\s*[-*+]\s/) && !l.match(/^\s*\d+\.\s/))
+				) {
 					flushSection();
 				}
 			}
@@ -218,26 +218,44 @@ export function parseCode(filePath: string): ParsedDocument {
 
 	// Map file extensions to language names
 	const langMap: Record<string, string> = {
-		ts: "typescript", tsx: "typescript",
-		js: "javascript", jsx: "javascript",
-		py: "python", rs: "rust", go: "go",
-		java: "java", rb: "ruby", php: "php",
-		swift: "swift", kt: "kotlin", scala: "scala",
-		c: "c", cpp: "cpp", h: "c", hpp: "cpp",
-		sh: "bash", bash: "bash", zsh: "zsh",
-		sql: "sql", yaml: "yaml", yml: "yaml",
-		toml: "toml", json: "json",
+		ts: "typescript",
+		tsx: "typescript",
+		js: "javascript",
+		jsx: "javascript",
+		py: "python",
+		rs: "rust",
+		go: "go",
+		java: "java",
+		rb: "ruby",
+		php: "php",
+		swift: "swift",
+		kt: "kotlin",
+		scala: "scala",
+		c: "c",
+		cpp: "cpp",
+		h: "c",
+		hpp: "cpp",
+		sh: "bash",
+		bash: "bash",
+		zsh: "zsh",
+		sql: "sql",
+		yaml: "yaml",
+		yml: "yaml",
+		toml: "toml",
+		json: "json",
 	};
 
-	const sections: ParsedSection[] = [{
-		heading: basename(filePath),
-		depth: 1,
-		content: raw,
-		contentType: "code",
-		language: langMap[ext] || ext,
-		lineStart: 1,
-		lineEnd: raw.split("\n").length,
-	}];
+	const sections: ParsedSection[] = [
+		{
+			heading: basename(filePath),
+			depth: 1,
+			content: raw,
+			contentType: "code",
+			language: langMap[ext] || ext,
+			lineStart: 1,
+			lineEnd: raw.split("\n").length,
+		},
+	];
 
 	return {
 		format: "code",

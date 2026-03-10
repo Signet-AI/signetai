@@ -3,8 +3,8 @@
  * Uses Bun.spawn to run Claude Code or OpenCode CLI processes.
  */
 
-import type { TaskHarness } from "@signet/core";
 import { spawn as nodeSpawn } from "node:child_process";
+import type { TaskHarness } from "@signet/core";
 import { logger } from "../logger";
 
 const MAX_OUTPUT_CHARS = 1_048_576;
@@ -23,11 +23,7 @@ export interface SpawnResult {
 	readonly timedOut: boolean;
 }
 
-function buildCommand(
-	harness: TaskHarness,
-	prompt: string,
-	model?: string,
-): readonly [string, ReadonlyArray<string>] {
+function buildCommand(harness: TaskHarness, prompt: string, model?: string): readonly [string, ReadonlyArray<string>] {
 	switch (harness) {
 		case "claude-code":
 			return ["claude", ["--dangerously-skip-permissions", "-p", prompt]];
@@ -91,15 +87,31 @@ export async function spawnTask(
 	const procStdout = new ReadableStream<Uint8Array>({
 		start(controller) {
 			child.stdout?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-			child.stdout?.on("end", () => { try { controller.close(); } catch {} });
-			child.stdout?.on("error", (err) => { try { controller.error(err); } catch {} });
+			child.stdout?.on("end", () => {
+				try {
+					controller.close();
+				} catch {}
+			});
+			child.stdout?.on("error", (err) => {
+				try {
+					controller.error(err);
+				} catch {}
+			});
 		},
 	});
 	const procStderr = new ReadableStream<Uint8Array>({
 		start(controller) {
 			child.stderr?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-			child.stderr?.on("end", () => { try { controller.close(); } catch {} });
-			child.stderr?.on("error", (err) => { try { controller.error(err); } catch {} });
+			child.stderr?.on("end", () => {
+				try {
+					controller.close();
+				} catch {}
+			});
+			child.stderr?.on("error", (err) => {
+				try {
+					controller.error(err);
+				} catch {}
+			});
 		},
 	});
 	const procExited = new Promise<number>((resolve) => {

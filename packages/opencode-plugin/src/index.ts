@@ -14,13 +14,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { createDaemonClient } from "./daemon-client.js";
 import { createTools } from "./tools.js";
-import {
-	DAEMON_URL_DEFAULT,
-	HARNESS,
-	READ_TIMEOUT,
-	RUNTIME_PATH,
-	WRITE_TIMEOUT,
-} from "./types.js";
+import { DAEMON_URL_DEFAULT, HARNESS, READ_TIMEOUT, RUNTIME_PATH, WRITE_TIMEOUT } from "./types.js";
 
 // ============================================================================
 // Session context carried between hooks
@@ -113,10 +107,7 @@ export const SignetPlugin: Plugin = async ({ directory }) => {
 			output: { parts: ReadonlyArray<{ type: string; text?: string }> },
 		): Promise<void> => {
 			const userText = output.parts
-				.filter(
-					(p): p is { type: "text"; text: string } =>
-						p.type === "text" && typeof p.text === "string",
-				)
+				.filter((p): p is { type: "text"; text: string } => p.type === "text" && typeof p.text === "string")
 				.map((p) => p.text)
 				.join("\n")
 				.trim();
@@ -163,10 +154,7 @@ export const SignetPlugin: Plugin = async ({ directory }) => {
 		// ------------------------------------------------------------------
 		// Inject memory context before context compaction
 		// ------------------------------------------------------------------
-		"experimental.session.compacting": async (
-			_input: unknown,
-			output: { context: string[] },
-		): Promise<void> => {
+		"experimental.session.compacting": async (_input: unknown, output: { context: string[] }): Promise<void> => {
 			try {
 				const result = await client.post<PreCompactionResult>(
 					"/api/hooks/pre-compaction",
@@ -190,9 +178,7 @@ export const SignetPlugin: Plugin = async ({ directory }) => {
 		// Event hook — session idle / deleted → session end
 		//             session.compacted → compaction-complete
 		// ------------------------------------------------------------------
-		event: async ({
-			event,
-		}: { event: { type: string; summary?: string } }): Promise<void> => {
+		event: async ({ event }: { event: { type: string; summary?: string } }): Promise<void> => {
 			try {
 				if (event.type === "session.idle" || event.type === "session.deleted") {
 					await client.post(

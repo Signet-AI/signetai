@@ -41,9 +41,9 @@ interface MemoryRow {
 	readonly [key: string]: unknown;
 }
 import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
-import { txDecrementEntityMentions } from "./graph-transactions";
-import { purgeOldTrainingPairs } from "../predictor-training-pairs";
 import { logger } from "../logger";
+import { purgeOldTrainingPairs } from "../predictor-training-pairs";
+import { txDecrementEntityMentions } from "./graph-transactions";
 
 export interface RetentionConfig {
 	/** How often to run the retention sweep (ms) */
@@ -196,9 +196,7 @@ export function archiveToCold(
 
 	// Fetch full rows so we can store a complete JSON snapshot (truly lossless —
 	// captures all columns regardless of future schema additions).
-	const rows = db
-		.prepare(`SELECT * FROM memories WHERE id IN (${placeholders})`)
-		.all(...memoryIds) as MemoryRow[];
+	const rows = db.prepare(`SELECT * FROM memories WHERE id IN (${placeholders})`).all(...memoryIds) as MemoryRow[];
 
 	// Each archival event gets a fresh archive_id so multiple snapshots for the
 	// same memory (e.g. supersession then purge) are preserved independently.

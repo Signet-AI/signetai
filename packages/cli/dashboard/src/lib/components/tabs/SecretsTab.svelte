@@ -11,15 +11,15 @@ import {
 	listOnePasswordVaults,
 	putSecret,
 } from "$lib/api";
+import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
+import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
-import { toast } from "$lib/stores/toast.svelte";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
-import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+import { toast } from "$lib/stores/toast.svelte";
 import { ActionLabels } from "$lib/ui/action-labels";
 import { onMount } from "svelte";
-import PageBanner from "$lib/components/layout/PageBanner.svelte";
 
 let secrets = $state<string[]>([]);
 let secretsLoading = $state(false);
@@ -45,7 +45,7 @@ let onePasswordDisconnecting = $state(false);
 let onePasswordImporting = $state(false);
 let selectedVaultIds = $state<string[]>([]);
 let focusedSecretIndex = $state(-1); // -1 means no secret focused
-let focusArea = $state<'list' | '1password'>('list'); // Track which area has focus
+let focusArea = $state<"list" | "1password">("list"); // Track which area has focus
 let focusedOnePasswordInput = $state(-1); // -1 means panel itself, 0+ = input index
 
 async function fetchSecrets() {
@@ -177,10 +177,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 	if (e.defaultPrevented) return;
 
 	const target = e.target as HTMLElement;
-	const isInputFocused =
-		target.tagName === "INPUT" ||
-		target.tagName === "TEXTAREA" ||
-		target.isContentEditable;
+	const isInputFocused = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
 	if (isInputFocused) return;
 
@@ -218,7 +215,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			focusSecretItem(focusedSecretIndex);
 		} else if (focusedSecretIndex === secrets.length - 1) {
 			// At last secret, blur then move to 1Password panel
-			const items = document.querySelectorAll('.secret-item');
+			const items = document.querySelectorAll(".secret-item");
 			if (items[focusedSecretIndex] instanceof HTMLElement) {
 				(items[focusedSecretIndex] as HTMLElement).blur();
 			}
@@ -287,22 +284,22 @@ function handleGlobalKey(e: KeyboardEvent) {
 }
 
 function focusSecretItem(index: number): void {
-	const items = document.querySelectorAll('.secret-item');
+	const items = document.querySelectorAll(".secret-item");
 	if (items[index] instanceof HTMLElement) {
 		(items[index] as HTMLElement).focus();
 	}
 }
 
 function getOnePasswordFocusTargets(): HTMLElement[] {
-	const panel = document.querySelector('.onepassword-panel');
+	const panel = document.querySelector(".onepassword-panel");
 	if (!panel) return [];
 	// Get all focusable elements sorted by data-focus-index, filtering out disabled ones
-	const all = panel.querySelectorAll('[data-focus-index]');
+	const all = panel.querySelectorAll("[data-focus-index]");
 	return (Array.from(all) as HTMLElement[])
 		.filter((el) => !(el as HTMLButtonElement).disabled)
 		.sort((a, b) => {
-			const ai = parseInt(a.getAttribute('data-focus-index') ?? '0', 10);
-			const bi = parseInt(b.getAttribute('data-focus-index') ?? '0', 10);
+			const ai = Number.parseInt(a.getAttribute("data-focus-index") ?? "0", 10);
+			const bi = Number.parseInt(b.getAttribute("data-focus-index") ?? "0", 10);
 			return ai - bi;
 		});
 }

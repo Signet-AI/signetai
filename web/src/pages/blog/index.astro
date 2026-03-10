@@ -1,16 +1,16 @@
 ---
-import { getCollection } from 'astro:content';
-import Base from '../../layouts/Base.astro';
-import Nav from '../../components/Nav.astro';
-import Footer from '../../components/Footer.astro';
-import StructuredData from '../../components/StructuredData.astro';
-import '../../styles/blog.css';
+import { getCollection } from "astro:content";
+import Footer from "../../components/Footer.astro";
+import Nav from "../../components/Nav.astro";
+import StructuredData from "../../components/StructuredData.astro";
+import Base from "../../layouts/Base.astro";
+import "../../styles/blog.css";
 
-const posts = (await getCollection('blog'))
-  .filter((post) => !post.data.draft)
-  .sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+const posts = (await getCollection("blog"))
+	.filter((post) => !post.data.draft)
+	.sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
 
-const siteUrl = Astro.site?.toString().replace(/\/$/, '') ?? 'https://signetai.sh';
+const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
 ---
 
 <Base title="Blog — SignetAI" description="Updates, ideas, and technical writing from the Signet team.">

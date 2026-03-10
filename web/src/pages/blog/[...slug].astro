@@ -1,53 +1,55 @@
 ---
-import { getCollection, render } from 'astro:content';
-import Blog from '../../layouts/Blog.astro';
-import StructuredData from '../../components/StructuredData.astro';
+import { getCollection, render } from "astro:content";
+import StructuredData from "../../components/StructuredData.astro";
+import Blog from "../../layouts/Blog.astro";
 
 export async function getStaticPaths() {
-  const posts = await getCollection('blog');
-  return posts
-    .filter((post) => !post.data.draft)
-    .map((post) => ({
-      params: { slug: post.id },
-      props: { post },
-    }));
+	const posts = await getCollection("blog");
+	return posts
+		.filter((post) => !post.data.draft)
+		.map((post) => ({
+			params: { slug: post.id },
+			props: { post },
+		}));
 }
 
 const { post } = Astro.props;
 const { Content, headings } = await render(post);
 
 // Build chronological neighbors for prev/next
-const allPosts = (await getCollection('blog'))
-  .filter((p) => !p.data.draft)
-  .sort((a, b) => a.data.date.getTime() - b.data.date.getTime());
+const allPosts = (await getCollection("blog"))
+	.filter((p) => !p.data.draft)
+	.sort((a, b) => a.data.date.getTime() - b.data.date.getTime());
 
 const currentIndex = allPosts.findIndex((p) => p.id === post.id);
-const previousPost = currentIndex > 0
-  ? { title: allPosts[currentIndex - 1].data.title, url: `/blog/${allPosts[currentIndex - 1].id}/` }
-  : undefined;
-const nextPost = currentIndex < allPosts.length - 1
-  ? { title: allPosts[currentIndex + 1].data.title, url: `/blog/${allPosts[currentIndex + 1].id}/` }
-  : undefined;
+const previousPost =
+	currentIndex > 0
+		? { title: allPosts[currentIndex - 1].data.title, url: `/blog/${allPosts[currentIndex - 1].id}/` }
+		: undefined;
+const nextPost =
+	currentIndex < allPosts.length - 1
+		? { title: allPosts[currentIndex + 1].data.title, url: `/blog/${allPosts[currentIndex + 1].id}/` }
+		: undefined;
 
-const siteUrl = Astro.site?.toString().replace(/\/$/, '') ?? 'https://signetai.sh';
+const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
 const pageUrl = `${siteUrl}/blog/${post.id}/`;
 
 // Recommended posts: score by shared tags, sort by score then date
 const currentTags = new Set(post.data.tags);
 const recommended = allPosts
-  .filter((p) => p.id !== post.id)
-  .map((p) => ({
-    post: p,
-    score: p.data.tags.filter((t: string) => currentTags.has(t)).length,
-  }))
-  .filter((r) => r.score > 0)
-  .sort((a, b) => b.score - a.score || b.post.data.date.getTime() - a.post.data.date.getTime())
-  .slice(0, 3)
-  .map((r) => ({
-    title: r.post.data.title,
-    url: `/blog/${r.post.id}/`,
-    image: r.post.data.image,
-  }));
+	.filter((p) => p.id !== post.id)
+	.map((p) => ({
+		post: p,
+		score: p.data.tags.filter((t: string) => currentTags.has(t)).length,
+	}))
+	.filter((r) => r.score > 0)
+	.sort((a, b) => b.score - a.score || b.post.data.date.getTime() - a.post.data.date.getTime())
+	.slice(0, 3)
+	.map((r) => ({
+		title: r.post.data.title,
+		url: `/blog/${r.post.id}/`,
+		image: r.post.data.image,
+	}));
 ---
 
 <Blog

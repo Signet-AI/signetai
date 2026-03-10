@@ -9,31 +9,25 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	MAX_UPDATE_INTERVAL_SECONDS,
+	MIN_UPDATE_INTERVAL_SECONDS,
+	categorizeUpdateError,
 	parseBooleanFlag,
 	parseUpdateInterval,
-	MIN_UPDATE_INTERVAL_SECONDS,
-	MAX_UPDATE_INTERVAL_SECONDS,
-	categorizeUpdateError,
 } from "./update-system";
 
-const UPDATE_SYSTEM_SRC = readFileSync(
-	join(__dirname, "update-system.ts"),
-	"utf-8",
-);
+const UPDATE_SYSTEM_SRC = readFileSync(join(__dirname, "update-system.ts"), "utf-8");
 const SERVICE_SRC = readFileSync(join(__dirname, "service.ts"), "utf-8");
 
 describe("Bug 5: pendingRestartVersion always set on success", () => {
 	it("sets pendingRestartVersion unconditionally (no targetVersion guard)", () => {
 		// The old code: `if (targetVersion) { pendingRestartVersion = targetVersion; }`
 		// The fix: `pendingRestartVersion = targetVersion ?? "unknown";`
-		const hasOldGuard = /if\s*\(\s*targetVersion\s*\)\s*\{?\s*\n?\s*pendingRestartVersion\s*=/.test(
-			UPDATE_SYSTEM_SRC,
-		);
+		const hasOldGuard = /if\s*\(\s*targetVersion\s*\)\s*\{?\s*\n?\s*pendingRestartVersion\s*=/.test(UPDATE_SYSTEM_SRC);
 		expect(hasOldGuard).toBe(false);
 
 		// Verify the new unconditional assignment exists
-		const hasUnconditionalSet =
-			UPDATE_SYSTEM_SRC.includes('pendingRestartVersion = targetVersion ?? "unknown"');
+		const hasUnconditionalSet = UPDATE_SYSTEM_SRC.includes('pendingRestartVersion = targetVersion ?? "unknown"');
 		expect(hasUnconditionalSet).toBe(true);
 	});
 });
@@ -41,9 +35,7 @@ describe("Bug 5: pendingRestartVersion always set on success", () => {
 describe("Bug 3: auto-restart after successful install", () => {
 	it("calls process.exit(0) in runAutoUpdateCycle after success", () => {
 		// Extract the runAutoUpdateCycle function body
-		const cycleMatch = UPDATE_SYSTEM_SRC.match(
-			/async function runAutoUpdateCycle[\s\S]*?^}/m,
-		);
+		const cycleMatch = UPDATE_SYSTEM_SRC.match(/async function runAutoUpdateCycle[\s\S]*?^}/m);
 		expect(cycleMatch).not.toBeNull();
 
 		const cycleBody = cycleMatch![0];
@@ -53,18 +45,14 @@ describe("Bug 3: auto-restart after successful install", () => {
 		// Must stop the timer before exiting
 		expect(cycleBody).toContain("stopUpdateTimer()");
 		// Exit should come after successful install check
-		expect(cycleBody.indexOf("installResult.success")).toBeLessThan(
-			cycleBody.indexOf("process.exit(0)"),
-		);
+		expect(cycleBody.indexOf("installResult.success")).toBeLessThan(cycleBody.indexOf("process.exit(0)"));
 	});
 });
 
 describe("Bug 4: log level for disabled auto-updates", () => {
 	it("uses logger.info (not debug) when auto-updates disabled", () => {
 		// Find the startUpdateTimer function
-		const timerMatch = UPDATE_SYSTEM_SRC.match(
-			/export function startUpdateTimer[\s\S]*?^}/m,
-		);
+		const timerMatch = UPDATE_SYSTEM_SRC.match(/export function startUpdateTimer[\s\S]*?^}/m);
 		expect(timerMatch).not.toBeNull();
 
 		const timerBody = timerMatch![0];
@@ -79,9 +67,7 @@ describe("Bug 4: log level for disabled auto-updates", () => {
 describe("Bug 6: systemd unit uses dynamic runtime path", () => {
 	it("does not hardcode /usr/bin/bun in systemd unit", () => {
 		// The function generateSystemdUnit should NOT have a hardcoded path
-		const hasHardcoded = SERVICE_SRC.includes(
-			'runtime === "bun" ? "/usr/bin/bun" : "/usr/bin/node"',
-		);
+		const hasHardcoded = SERVICE_SRC.includes('runtime === "bun" ? "/usr/bin/bun" : "/usr/bin/node"');
 		expect(hasHardcoded).toBe(false);
 	});
 
@@ -99,9 +85,7 @@ describe("Bug 6: systemd unit uses dynamic runtime path", () => {
 	});
 
 	it("resolveRuntimePath tries process.execPath first", () => {
-		const fnMatch = SERVICE_SRC.match(
-			/function resolveRuntimePath[\s\S]*?^}/m,
-		);
+		const fnMatch = SERVICE_SRC.match(/function resolveRuntimePath[\s\S]*?^}/m);
 		expect(fnMatch).not.toBeNull();
 
 		const fnBody = fnMatch![0];
@@ -111,9 +95,7 @@ describe("Bug 6: systemd unit uses dynamic runtime path", () => {
 	});
 
 	it("uses Restart=always instead of Restart=on-failure", () => {
-		const unitMatch = SERVICE_SRC.match(
-			/function generateSystemdUnit[\s\S]*?^}/m,
-		);
+		const unitMatch = SERVICE_SRC.match(/function generateSystemdUnit[\s\S]*?^}/m);
 		expect(unitMatch).not.toBeNull();
 
 		const unitBody = unitMatch![0];
@@ -133,12 +115,8 @@ describe("config helpers", () => {
 	});
 
 	it("parseUpdateInterval enforces bounds", () => {
-		expect(parseUpdateInterval(MIN_UPDATE_INTERVAL_SECONDS)).toBe(
-			MIN_UPDATE_INTERVAL_SECONDS,
-		);
-		expect(parseUpdateInterval(MAX_UPDATE_INTERVAL_SECONDS)).toBe(
-			MAX_UPDATE_INTERVAL_SECONDS,
-		);
+		expect(parseUpdateInterval(MIN_UPDATE_INTERVAL_SECONDS)).toBe(MIN_UPDATE_INTERVAL_SECONDS);
+		expect(parseUpdateInterval(MAX_UPDATE_INTERVAL_SECONDS)).toBe(MAX_UPDATE_INTERVAL_SECONDS);
 		expect(parseUpdateInterval(100)).toBeNull(); // Below min
 		expect(parseUpdateInterval(999999999)).toBeNull(); // Above max
 		expect(parseUpdateInterval("not a number")).toBeNull();

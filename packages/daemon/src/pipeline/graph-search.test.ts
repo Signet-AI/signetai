@@ -20,12 +20,7 @@ describe("graph-search", () => {
 		db.close();
 	});
 
-	function seedEntityWithMemory(
-		entityId: string,
-		name: string,
-		memoryId: string,
-		mentions = 1,
-	): void {
+	function seedEntityWithMemory(entityId: string, name: string, memoryId: string, mentions = 1): void {
 		const now = new Date().toISOString();
 		db.prepare(
 			`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)

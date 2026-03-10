@@ -4,7 +4,7 @@ import FormSection from "$lib/components/config/FormSection.svelte";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
 import { Textarea } from "$lib/components/ui/textarea/index.js";
-import { st, KNOWN_HARNESSES } from "$lib/stores/settings.svelte";
+import { KNOWN_HARNESSES, st } from "$lib/stores/settings.svelte";
 
 let customHarnessInput = $state("");
 

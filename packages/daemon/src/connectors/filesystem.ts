@@ -7,9 +7,8 @@
  */
 
 import { readFileSync } from "node:fs";
-import { access, stat, constants } from "node:fs/promises";
-import { join, basename, resolve } from "node:path";
-import { Glob } from "bun";
+import { constants, access, stat } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import type {
 	ConnectorConfig,
 	ConnectorResource,
@@ -18,9 +17,10 @@ import type {
 	SyncError,
 	SyncResult,
 } from "@signet/core";
+import { Glob } from "bun";
 import type { DbAccessor } from "../db-accessor";
-import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 import { logger } from "../logger";
+import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -38,25 +38,20 @@ interface FilesystemSettings {
 }
 
 function parseSettings(raw: Readonly<Record<string, unknown>>): FilesystemSettings {
-	const rootPath =
-		typeof raw.rootPath === "string" ? raw.rootPath : "";
+	const rootPath = typeof raw.rootPath === "string" ? raw.rootPath : "";
 
 	const patterns =
-		Array.isArray(raw.patterns) &&
-		raw.patterns.every((p) => typeof p === "string")
+		Array.isArray(raw.patterns) && raw.patterns.every((p) => typeof p === "string")
 			? (raw.patterns as string[])
 			: DEFAULT_PATTERNS;
 
 	const ignorePatterns =
-		Array.isArray(raw.ignorePatterns) &&
-		raw.ignorePatterns.every((p) => typeof p === "string")
+		Array.isArray(raw.ignorePatterns) && raw.ignorePatterns.every((p) => typeof p === "string")
 			? (raw.ignorePatterns as string[])
 			: DEFAULT_IGNORE;
 
 	const maxFileSize =
-		typeof raw.maxFileSize === "number" && raw.maxFileSize > 0
-			? raw.maxFileSize
-			: DEFAULT_MAX_FILE_SIZE;
+		typeof raw.maxFileSize === "number" && raw.maxFileSize > 0 ? raw.maxFileSize : DEFAULT_MAX_FILE_SIZE;
 
 	return { rootPath, patterns, ignorePatterns, maxFileSize };
 }
@@ -73,9 +68,7 @@ interface DiscoveredFile {
 	readonly size: number;
 }
 
-async function discoverFiles(
-	settings: FilesystemSettings,
-): Promise<readonly DiscoveredFile[]> {
+async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
 	const { rootPath, patterns, ignorePatterns, maxFileSize } = settings;
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
@@ -88,10 +81,7 @@ async function discoverFiles(
 			// Check against ignore patterns — skip if any segment matches
 			const segments = rel.split("/");
 			const ignored = ignorePatterns.some(
-				(ig) =>
-					segments.some((seg) => seg === ig) ||
-					rel.startsWith(ig + "/") ||
-					rel === ig,
+				(ig) => segments.some((seg) => seg === ig) || rel.startsWith(ig + "/") || rel === ig,
 			);
 			if (ignored) continue;
 
@@ -137,23 +127,15 @@ interface ExistingDocRow {
 	readonly updated_at: string;
 }
 
-function findDocBySourceUrl(
-	accessor: DbAccessor,
-	sourceUrl: string,
-): ExistingDocRow | undefined {
+function findDocBySourceUrl(accessor: DbAccessor, sourceUrl: string): ExistingDocRow | undefined {
 	return accessor.withReadDb((db) => {
-		return db
-			.prepare(
-				"SELECT id, updated_at FROM documents WHERE source_url = ? LIMIT 1",
-			)
-			.get(sourceUrl) as ExistingDocRow | undefined;
+		return db.prepare("SELECT id, updated_at FROM documents WHERE source_url = ? LIMIT 1").get(sourceUrl) as
+			| ExistingDocRow
+			| undefined;
 	});
 }
 
-function readFileContent(
-	absolutePath: string,
-	maxFileSize: number,
-): string | null {
+function readFileContent(absolutePath: string, maxFileSize: number): string | null {
 	try {
 		const buf = readFileSync(absolutePath);
 		if (buf.length > maxFileSize) return null;
@@ -195,11 +177,7 @@ function insertDocument(
 /**
  * Update an existing document row with fresh content and reset to queued.
  */
-function updateDocument(
-	accessor: DbAccessor,
-	docId: string,
-	rawContent: string,
-): void {
+function updateDocument(accessor: DbAccessor, docId: string, rawContent: string): void {
 	const now = new Date().toISOString();
 
 	accessor.withWriteTx((db) => {
@@ -242,9 +220,7 @@ async function processFile(
 	const existing = findDocBySourceUrl(accessor, sourceUrl);
 
 	if (existing === undefined) {
-		const docId = insertDocument(
-			accessor, connectorId, sourceUrl, file.name, content,
-		);
+		const docId = insertDocument(accessor, connectorId, sourceUrl, file.name, content);
 		enqueueDocumentIngestJob(accessor, docId);
 		return { added: 1, updated: 0, error: null };
 	}
@@ -297,9 +273,7 @@ class FilesystemConnector implements ConnectorRuntime {
 		}
 	}
 
-	async listResources(
-		_cursor?: string,
-	): Promise<{
+	async listResources(_cursor?: string): Promise<{
 		readonly resources: readonly ConnectorResource[];
 		readonly nextCursor?: string;
 	}> {
@@ -325,13 +299,7 @@ class FilesystemConnector implements ConnectorRuntime {
 		const errors: SyncError[] = [];
 
 		for (const file of changed) {
-			const result = await processFile(
-				this.accessor,
-				this.id,
-				file,
-				this.settings.maxFileSize,
-				false,
-			);
+			const result = await processFile(this.accessor, this.id, file, this.settings.maxFileSize, false);
 			added += result.added;
 			updated += result.updated;
 			if (result.error !== null) errors.push(result.error);
@@ -363,13 +331,7 @@ class FilesystemConnector implements ConnectorRuntime {
 		const errors: SyncError[] = [];
 
 		for (const file of files) {
-			const result = await processFile(
-				this.accessor,
-				this.id,
-				file,
-				this.settings.maxFileSize,
-				true,
-			);
+			const result = await processFile(this.accessor, this.id, file, this.settings.maxFileSize, true);
 			added += result.added;
 			updated += result.updated;
 			if (result.error !== null) errors.push(result.error);
@@ -395,10 +357,7 @@ class FilesystemConnector implements ConnectorRuntime {
 
 	async replay(resourceId: string): Promise<SyncResult> {
 		// resourceId is the relative path from listResources
-		const absolutePath = join(
-			resolve(this.settings.rootPath),
-			resourceId,
-		);
+		const absolutePath = join(resolve(this.settings.rootPath), resourceId);
 
 		let fileStat: Awaited<ReturnType<typeof stat>>;
 		try {
@@ -427,13 +386,7 @@ class FilesystemConnector implements ConnectorRuntime {
 			size: fileStat.size,
 		};
 
-		const result = await processFile(
-			this.accessor,
-			this.id,
-			file,
-			this.settings.maxFileSize,
-			true,
-		);
+		const result = await processFile(this.accessor, this.id, file, this.settings.maxFileSize, true);
 
 		logger.info("pipeline", "Filesystem replay complete", {
 			connectorId: this.id,
@@ -454,9 +407,6 @@ class FilesystemConnector implements ConnectorRuntime {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createFilesystemConnector(
-	config: ConnectorConfig,
-	accessor: DbAccessor,
-): ConnectorRuntime {
+export function createFilesystemConnector(config: ConnectorConfig, accessor: DbAccessor): ConnectorRuntime {
 	return new FilesystemConnector(config, accessor);
 }

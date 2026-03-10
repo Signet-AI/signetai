@@ -2,14 +2,7 @@
  * Permission matrix and scope enforcement.
  */
 
-import type {
-	AuthMode,
-	Permission,
-	PolicyDecision,
-	TokenClaims,
-	TokenRole,
-	TokenScope,
-} from "./types";
+import type { AuthMode, Permission, PolicyDecision, TokenClaims, TokenRole, TokenScope } from "./types";
 
 const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {
 	admin: [
@@ -40,10 +33,7 @@ const PERMISSION_MATRIX: Readonly<Record<TokenRole, readonly Permission[]>> = {
 };
 
 const permissionSets = new Map<TokenRole, ReadonlySet<Permission>>(
-	Object.entries(PERMISSION_MATRIX).map(([role, perms]) => [
-		role as TokenRole,
-		new Set(perms),
-	]),
+	Object.entries(PERMISSION_MATRIX).map(([role, perms]) => [role as TokenRole, new Set(perms)]),
 );
 
 export function checkPermission(
@@ -70,11 +60,7 @@ export function checkPermission(
 	return { allowed: true };
 }
 
-export function checkScope(
-	claims: TokenClaims | null,
-	target: TokenScope,
-	authMode: AuthMode,
-): PolicyDecision {
+export function checkScope(claims: TokenClaims | null, target: TokenScope, authMode: AuthMode): PolicyDecision {
 	if (authMode === "local") {
 		return { allowed: true };
 	}

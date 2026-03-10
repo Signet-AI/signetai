@@ -65,19 +65,7 @@ describe("executeTask", () => {
 			 (id, name, prompt, cron_expression, harness, working_directory,
 			  enabled, last_run_at, next_run_at, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"task-1",
-			"task-task-1",
-			"test prompt",
-			"*/15 * * * *",
-			"codex",
-			null,
-			1,
-			null,
-			now,
-			now,
-			now,
-		);
+		).run("task-1", "task-task-1", "test prompt", "*/15 * * * *", "codex", null, 1, null, now, now, now);
 
 		const accessor: DbAccessor = {
 			withReadDb<T>(fn: (rdb: unknown) => T): T {
@@ -100,9 +88,9 @@ describe("executeTask", () => {
 			skill_mode: null,
 		});
 
-		const run = db.prepare(
-			`SELECT status, error FROM task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1`,
-		).get("task-1");
+		const run = db
+			.prepare(`SELECT status, error FROM task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1`)
+			.get("task-1");
 
 		expect(isTaskRunRow(run)).toBe(true);
 		if (!isTaskRunRow(run)) {

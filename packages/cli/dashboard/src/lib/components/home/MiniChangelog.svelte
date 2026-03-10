@@ -1,34 +1,29 @@
 <script lang="ts">
-	import {
-		Card,
-		CardContent,
-		CardHeader,
-		CardTitle,
-	} from "$lib/components/ui/card/index.js";
-	import { setTab } from "$lib/stores/navigation.svelte";
-	import FileText from "@lucide/svelte/icons/file-text";
+import { Card, CardContent, CardHeader, CardTitle } from "$lib/components/ui/card/index.js";
+import { setTab } from "$lib/stores/navigation.svelte";
+import FileText from "@lucide/svelte/icons/file-text";
 
-	interface Props {
-		html: string | null;
-	}
+interface Props {
+	html: string | null;
+}
 
-	const { html }: Props = $props();
+const { html }: Props = $props();
 
-	const items = $derived.by(() => {
-		if (!html) return [];
-		const listMatch = html.match(/<li[^>]*>([\s\S]*?)<\/li>/gi);
-		if (!listMatch) return [];
-		return listMatch.slice(0, 5).map((li) => {
-			return li.replace(/<[^>]+>/g, "").trim();
-		});
+const items = $derived.by(() => {
+	if (!html) return [];
+	const listMatch = html.match(/<li[^>]*>([\s\S]*?)<\/li>/gi);
+	if (!listMatch) return [];
+	return listMatch.slice(0, 5).map((li) => {
+		return li.replace(/<[^>]+>/g, "").trim();
 	});
+});
 
-	const versionLabel = $derived.by(() => {
-		if (!html) return null;
-		const match = html.match(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/i);
-		if (!match) return null;
-		return match[1].replace(/<[^>]+>/g, "").trim();
-	});
+const versionLabel = $derived.by(() => {
+	if (!html) return null;
+	const match = html.match(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/i);
+	if (!match) return null;
+	return match[1].replace(/<[^>]+>/g, "").trim();
+});
 </script>
 
 <Card

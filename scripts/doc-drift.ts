@@ -74,10 +74,7 @@ function sliceSection(content: string, heading: string): string {
 	const nextH2 = afterStart.search(/\n##\s+/);
 	const nextSetext = afterStart.search(/\n[^\n]+\n(?:={3,}|-{3,})[ \t]*(?:\n|$)/);
 	const boundaries = [nextH2, nextSetext].filter((offset) => offset >= 0);
-	const end =
-		boundaries.length > 0
-			? start + heading.length + Math.min(...boundaries)
-			: content.length;
+	const end = boundaries.length > 0 ? start + heading.length + Math.min(...boundaries) : content.length;
 
 	return content.slice(start, end);
 }
@@ -113,8 +110,7 @@ function extractRoutesFromSource(): RouteEntry[] {
 	// NOTE: Only matches routes registered directly on `app`. Sub-router patterns
 	// like `const router = new Hono(); router.get(...)` are not detected.
 	// Keep all daemon routes registered on the top-level `app` variable.
-	const routePattern =
-		/app\.(get|post|put|patch|delete|all)\(\s*["'`]([^"'`]+)["'`]/g;
+	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*["'`]([^"'`]+)["'`]/g;
 
 	const routes: RouteEntry[] = [];
 
@@ -127,8 +123,7 @@ function extractRoutesFromSource(): RouteEntry[] {
 			const method = match[1].toUpperCase();
 			const path = match[2];
 			// Skip wildcard middleware paths and static root
-			if (path === "*" || path === "/*" || path === "/**" || path === "/")
-				continue;
+			if (path === "*" || path === "/*" || path === "/**" || path === "/") continue;
 			routes.push({ method, path, source: file });
 		}
 	}
@@ -152,8 +147,7 @@ interface DocRoute {
 
 function parseClaudeMdRoutes(content: string): DocRoute[] {
 	const routes: DocRoute[] = [];
-	const tablePattern =
-		/^\|\s*`([^`]+)`\s*\|\s*([A-Z/]+)\s*\|\s*(.*?)\s*\|\s*$/gm;
+	const tablePattern = /^\|\s*`([^`]+)`\s*\|\s*([A-Z/]+)\s*\|\s*(.*?)\s*\|\s*$/gm;
 
 	let match: RegExpExecArray | null = null;
 	while ((match = tablePattern.exec(content)) !== null) {
@@ -173,9 +167,7 @@ function checkRouteDrift(claudeMd: string): {
 } {
 	const sourceRoutes = extractRoutesFromSource();
 	const endpointSection = sliceSection(claudeMd, "## HTTP API Endpoints");
-	const docRoutes = endpointSection
-		? parseClaudeMdRoutes(endpointSection)
-		: [];
+	const docRoutes = endpointSection ? parseClaudeMdRoutes(endpointSection) : [];
 
 	// Build a set of documented route keys; expand ALL to specific HTTP methods
 	// to mirror source-side expansion so comparison is symmetric.
@@ -254,8 +246,7 @@ function checkMigrationDrift(claudeMd: string): MigrationDrift {
 	// and the hasDrift ternary correctly signals drift when migration files exist.
 	const migSection = sliceSection(claudeMd, sectionHeader);
 	// Compute line offset so reported locations point to the correct file line.
-	const lineOffset =
-		sectionStart === -1 ? 0 : claudeMd.slice(0, sectionStart).split("\n").length - 1;
+	const lineOffset = sectionStart === -1 ? 0 : claudeMd.slice(0, sectionStart).split("\n").length - 1;
 	const lines = migSection.split("\n");
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
@@ -377,10 +368,7 @@ interface PackageTableDrift {
 	extraInTable: string[];
 }
 
-function parsePackageTable(
-	content: string,
-	sectionHeader: string,
-): Map<string, string> {
+function parsePackageTable(content: string, sectionHeader: string): Map<string, string> {
 	const tableContent = sliceSection(content, sectionHeader);
 	if (!tableContent) return new Map();
 
@@ -414,9 +402,7 @@ function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 	results.push({
 		file: "CLAUDE.md",
 		missingFromTable: actual.filter((p) => !claudeTable.has(p.name)),
-		extraInTable: [...claudeTable.keys()].filter(
-			(name) => !actualNames.has(name),
-		),
+		extraInTable: [...claudeTable.keys()].filter((name) => !actualNames.has(name)),
 	});
 
 	// README.md
@@ -426,9 +412,7 @@ function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 		results.push({
 			file: "README.md",
 			missingFromTable: actual.filter((p) => !readmeTable.has(p.name)),
-			extraInTable: [...readmeTable.keys()].filter(
-				(name) => !actualNames.has(name),
-			),
+			extraInTable: [...readmeTable.keys()].filter((name) => !actualNames.has(name)),
 		});
 	}
 
@@ -461,14 +445,10 @@ function generateReport(): DriftReport {
 	const summary: string[] = [];
 
 	if (routes.missingFromDocs.length > 0) {
-		summary.push(
-			`${routes.missingFromDocs.length} route(s) in source but missing from CLAUDE.md`,
-		);
+		summary.push(`${routes.missingFromDocs.length} route(s) in source but missing from CLAUDE.md`);
 	}
 	if (routes.extraInDocs.length > 0) {
-		summary.push(
-			`${routes.extraInDocs.length} route(s) in CLAUDE.md but not found in source`,
-		);
+		summary.push(`${routes.extraInDocs.length} route(s) in CLAUDE.md but not found in source`);
 	}
 	if (migrations.hasDrift) {
 		const migSummary =
@@ -478,20 +458,14 @@ function generateReport(): DriftReport {
 		summary.push(migSummary);
 	}
 	if (keyFiles.missing.length > 0) {
-		summary.push(
-			`${keyFiles.missing.length} key file path(s) in CLAUDE.md don't exist on disk`,
-		);
+		summary.push(`${keyFiles.missing.length} key file path(s) in CLAUDE.md don't exist on disk`);
 	}
 	for (const pkg of packages) {
 		if (pkg.missingFromTable.length > 0) {
-			summary.push(
-				`${pkg.missingFromTable.length} package(s) missing from ${pkg.file} table`,
-			);
+			summary.push(`${pkg.missingFromTable.length} package(s) missing from ${pkg.file} table`);
 		}
 		if (pkg.extraInTable.length > 0) {
-			summary.push(
-				`${pkg.extraInTable.length} package(s) in ${pkg.file} table but not on disk`,
-			);
+			summary.push(`${pkg.extraInTable.length} package(s) in ${pkg.file} table but not on disk`);
 		}
 	}
 
@@ -519,10 +493,7 @@ function formatMarkdown(report: DriftReport): string {
 	}
 	lines.push("");
 
-	if (
-		report.routes.missingFromDocs.length > 0 ||
-		report.routes.extraInDocs.length > 0
-	) {
+	if (report.routes.missingFromDocs.length > 0 || report.routes.extraInDocs.length > 0) {
 		lines.push("## Route Drift", "");
 
 		if (report.routes.missingFromDocs.length > 0) {
@@ -549,10 +520,7 @@ function formatMarkdown(report: DriftReport): string {
 	if (report.migrations.hasDrift) {
 		lines.push("## Migration Drift", "");
 		if (report.migrations.actualMax === "") {
-			lines.push(
-				"_No migration files found on disk. Remove or comment out the documented range._",
-				"",
-			);
+			lines.push("_No migration files found on disk. Remove or comment out the documented range._", "");
 		} else {
 			lines.push(`Actual latest: \`${report.migrations.actualMax}\``, "");
 		}
@@ -606,7 +574,9 @@ function formatMarkdown(report: DriftReport): string {
 const args = process.argv.slice(2);
 const format = args.includes("--markdown") ? "markdown" : "json";
 if (args.some((a) => a.startsWith("--") && a !== "--markdown" && a !== "--json")) {
-	console.error(`Unknown flag(s): ${args.filter((a) => a.startsWith("--") && a !== "--markdown" && a !== "--json").join(", ")}`);
+	console.error(
+		`Unknown flag(s): ${args.filter((a) => a.startsWith("--") && a !== "--markdown" && a !== "--json").join(", ")}`,
+	);
 	process.exit(2);
 }
 const report = generateReport();

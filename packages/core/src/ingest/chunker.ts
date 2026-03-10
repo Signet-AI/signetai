@@ -11,7 +11,7 @@
  * Config: max ~2000 tokens (~8000 chars), min ~100 tokens, overlap ~200 tokens
  */
 
-import type { ParsedDocument, ParsedSection, ChunkResult } from "./types";
+import type { ChunkResult, ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -48,10 +48,7 @@ function estimateTokens(text: string): number {
 /**
  * Chunk a parsed document into overlapping, structure-aware chunks.
  */
-export function chunkDocument(
-	doc: ParsedDocument,
-	config: ChunkerConfig = DEFAULT_CHUNKER_CONFIG,
-): ChunkResult[] {
+export function chunkDocument(doc: ParsedDocument, config: ChunkerConfig = DEFAULT_CHUNKER_CONFIG): ChunkResult[] {
 	if (doc.sections.length === 0) return [];
 
 	const chunks: ChunkResult[] = [];
@@ -94,10 +91,7 @@ export function chunkDocument(
 		}
 
 		// If adding this section would exceed max, flush
-		if (
-			currentText.length > 0 &&
-			estimateTokens(currentText) + sectionTokens > config.maxTokens
-		) {
+		if (currentText.length > 0 && estimateTokens(currentText) + sectionTokens > config.maxTokens) {
 			flush();
 
 			// Carry overlap text forward
@@ -115,11 +109,7 @@ export function chunkDocument(
 				currentText = "";
 			}
 
-			const subChunks = splitLargeSection(
-				section,
-				config,
-				chunkIndex,
-			);
+			const subChunks = splitLargeSection(section, config, chunkIndex);
 			for (const sub of subChunks) {
 				chunks.push(sub);
 				chunkIndex = sub.index + 1;
@@ -159,11 +149,7 @@ export function chunkDocument(
 // Split oversized sections
 // ---------------------------------------------------------------------------
 
-function splitLargeSection(
-	section: ParsedSection,
-	config: ChunkerConfig,
-	startIndex: number,
-): ChunkResult[] {
+function splitLargeSection(section: ParsedSection, config: ChunkerConfig, startIndex: number): ChunkResult[] {
 	const chunks: ChunkResult[] = [];
 	const maxChars = config.maxTokens * 4;
 	const overlapChars = config.overlapTokens * 4;
@@ -177,9 +163,7 @@ function splitLargeSection(
 			if (estimateTokens(text) >= config.minTokens) {
 				chunks.push({
 					index: startIndex + i,
-					text: section.heading
-						? `## ${section.heading} (part ${i + 1})\n\n${text}`
-						: text,
+					text: section.heading ? `## ${section.heading} (part ${i + 1})\n\n${text}` : text,
 					chunkType: "code",
 					tokenCount: estimateTokens(text),
 					sourceSection: section.heading ?? null,
@@ -199,9 +183,7 @@ function splitLargeSection(
 		if (estimateTokens(text) >= config.minTokens) {
 			chunks.push({
 				index: startIndex + i,
-				text: section.heading
-					? `## ${section.heading} (part ${i + 1})\n\n${text}`
-					: text,
+				text: section.heading ? `## ${section.heading} (part ${i + 1})\n\n${text}` : text,
 				chunkType: sectionType,
 				tokenCount: estimateTokens(text),
 				sourceSection: section.heading ?? null,
@@ -358,9 +340,7 @@ function getOverlapText(text: string, overlapTokens: number): string {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function mapContentType(
-	contentType: ParsedSection["contentType"],
-): ChunkResult["chunkType"] {
+function mapContentType(contentType: ParsedSection["contentType"]): ChunkResult["chunkType"] {
 	switch (contentType) {
 		case "code":
 			return "code";

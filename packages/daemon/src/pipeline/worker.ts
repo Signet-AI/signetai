@@ -7,23 +7,23 @@
  * controlled-write mode it applies ADD/NONE decisions with safety gates.
  */
 
+import type { AnalyticsCollector } from "../analytics";
+import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, WriteDb } from "../db-accessor";
+import { countChanges, syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { logger } from "../logger";
 import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
+import type { TelemetryCollector } from "../telemetry";
+import { txForgetMemory, txIngestEnvelope, txModifyMemory } from "../transactions";
+import { detectSemanticContradiction } from "./contradiction";
 import type { DecisionConfig, FactDecisionProposal } from "./decision";
+import { runShadowDecisions } from "./decision";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
-import { detectSemanticContradiction } from "./contradiction";
-import { runShadowDecisions } from "./decision";
-import { logger } from "../logger";
-import { txIngestEnvelope, txModifyMemory, txForgetMemory } from "../transactions";
-import { archiveToCold } from "./retention-worker";
-import { normalizeAndHashContent } from "../content-normalization";
-import { vectorToBlob, countChanges, syncVecInsert, syncVecDeleteBySourceExceptHash } from "../db-helpers";
 import { txPersistEntities } from "./graph-transactions";
-import type { AnalyticsCollector } from "../analytics";
-import type { TelemetryCollector } from "../telemetry";
+import type { LlmProvider } from "./provider";
 import { generateWithTracking } from "./provider";
+import { archiveToCold } from "./retention-worker";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -102,10 +102,7 @@ function hasNegation(tokens: readonly string[]): boolean {
 	return tokens.some((token) => NEGATION_TOKENS.has(token));
 }
 
-function overlapCount(
-	left: readonly string[],
-	right: readonly string[],
-): number {
+function overlapCount(left: readonly string[], right: readonly string[]): number {
 	const rightSet = new Set(right);
 	let overlap = 0;
 	for (const token of left) {
@@ -114,10 +111,7 @@ function overlapCount(
 	return overlap;
 }
 
-function hasAntonymConflict(
-	leftTokens: ReadonlySet<string>,
-	rightTokens: ReadonlySet<string>,
-): boolean {
+function hasAntonymConflict(leftTokens: ReadonlySet<string>, rightTokens: ReadonlySet<string>): boolean {
 	for (const [leftWord, rightWord] of CONTRADICTION_ANTONYM_PAIRS) {
 		const leftHasLeft = leftTokens.has(leftWord);
 		const leftHasRight = leftTokens.has(rightWord);
@@ -126,8 +120,7 @@ function hasAntonymConflict(
 
 		const leftExclusive = leftHasLeft !== leftHasRight;
 		const rightExclusive = rightHasLeft !== rightHasRight;
-		const oppositePolarity =
-			(leftHasLeft && rightHasRight) || (leftHasRight && rightHasLeft);
+		const oppositePolarity = (leftHasLeft && rightHasRight) || (leftHasRight && rightHasLeft);
 
 		if (leftExclusive && rightExclusive && oppositePolarity) {
 			return true;
@@ -136,10 +129,7 @@ function hasAntonymConflict(
 	return false;
 }
 
-function detectContradictionRisk(
-	factContent: string,
-	targetContent: string | undefined,
-): boolean {
+function detectContradictionRisk(factContent: string, targetContent: string | undefined): boolean {
 	if (!targetContent) return false;
 
 	const factTokens = tokenize(factContent);
@@ -177,10 +167,7 @@ function zeroWriteStats(): AppliedWriteStats {
 // Job enqueue (called by daemon remember endpoint)
 // ---------------------------------------------------------------------------
 
-export function enqueueExtractionJob(
-	accessor: DbAccessor,
-	memoryId: string,
-): void {
+export function enqueueExtractionJob(accessor: DbAccessor, memoryId: string): void {
 	accessor.withWriteTx((db) => {
 		// Dedup: skip if a pending/leased job already exists
 		const existing = db
@@ -208,11 +195,7 @@ export function enqueueExtractionJob(
 // Lease a job atomically
 // ---------------------------------------------------------------------------
 
-function leaseJob(
-	db: WriteDb,
-	jobType: string,
-	maxAttempts: number,
-): JobRow | null {
+function leaseJob(db: WriteDb, jobType: string, maxAttempts: number): JobRow | null {
 	const now = new Date().toISOString();
 	const nowEpoch = Math.floor(Date.now() / 1000);
 
@@ -258,13 +241,7 @@ function completeJob(db: WriteDb, jobId: string, result: string | null): void {
 	).run(result, now, now, jobId);
 }
 
-function failJob(
-	db: WriteDb,
-	jobId: string,
-	error: string,
-	attempts: number,
-	maxAttempts: number,
-): void {
+function failJob(db: WriteDb, jobId: string, error: string, attempts: number, maxAttempts: number): void {
 	const now = new Date().toISOString();
 	const status = attempts >= maxAttempts ? "dead" : "failed";
 
@@ -278,17 +255,9 @@ function failJob(
 	).run(nextStatus, error, now, now, jobId);
 }
 
-function updateExtractionStatus(
-	db: WriteDb,
-	memoryId: string,
-	status: string,
-	extractionModel?: string,
-): void {
+function updateExtractionStatus(db: WriteDb, memoryId: string, status: string, extractionModel?: string): void {
 	if (extractionModel === undefined) {
-		db.prepare("UPDATE memories SET extraction_status = ? WHERE id = ?").run(
-			status,
-			memoryId,
-		);
+		db.prepare("UPDATE memories SET extraction_status = ? WHERE id = ?").run(status, memoryId);
 		return;
 	}
 	db.prepare(
@@ -349,14 +318,7 @@ function recordDecisionHistory(
 		`INSERT INTO memory_history
 		 (id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at)
 		 VALUES (?, ?, 'none', NULL, NULL, ?, ?, ?, ?)`,
-	).run(
-		id,
-		memoryId,
-		meta.shadow ? "pipeline-shadow" : "pipeline-v2",
-		proposal.reason,
-		metadata,
-		now,
-	);
+	).run(id, memoryId, meta.shadow ? "pipeline-shadow" : "pipeline-v2", proposal.reason, metadata, now);
 }
 
 function recordCreatedMemoryHistory(
@@ -420,19 +382,11 @@ function insertMemoryEmbedding(
 		   chunk_text = excluded.chunk_text,
 		   created_at = excluded.created_at`,
 	);
-	const result = insert.run(
-		embId,
-		contentHash,
-		blob,
-		vector.length,
-		memoryId,
-		content,
-		now,
-	);
+	const result = insert.run(embId, contentHash, blob, vector.length, memoryId, content, now);
 	// Resolve actual embedding ID (may differ from embId on conflict)
-	const actualRow = db
-		.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
-		.get(contentHash) as { id: string } | undefined;
+	const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+		| { id: string }
+		| undefined;
 	if (actualRow) {
 		syncVecInsert(db, actualRow.id, vector);
 	}
@@ -580,14 +534,7 @@ function applyPhaseCWrites(
 				normalizedContent,
 				confidence: proposal.fact.confidence,
 			});
-			recordCreatedMemoryHistory(
-				db,
-				newMemoryId,
-				storageContent,
-				proposal,
-				sourceMemoryId,
-				meta.extractionModel,
-			);
+			recordCreatedMemoryHistory(db, newMemoryId, storageContent, proposal, sourceMemoryId, meta.extractionModel);
 			recordDecisionHistory(db, sourceMemoryId, proposal, {
 				shadow: false,
 				extractionModel: meta.extractionModel,
@@ -699,9 +646,7 @@ function applyPhaseCWrites(
 					changedAt: now,
 					extractionStatusOnContentChange: "completed",
 					extractionModelOnContentChange: meta.extractionModel,
-					embeddingModelOnContentChange: vector
-						? meta.embeddingModel
-						: null,
+					embeddingModelOnContentChange: vector ? meta.embeddingModel : null,
 					embeddingVector: vector,
 					ctx: { actorType: "pipeline" },
 				});
@@ -776,10 +721,7 @@ function applyPhaseCWrites(
 		}
 
 		// Blocked: allowUpdateDelete is false or unknown action
-		const contradictionRisk = detectContradictionRisk(
-			proposal.fact.content,
-			proposal.targetContent,
-		);
+		const contradictionRisk = detectContradictionRisk(proposal.fact.content, proposal.targetContent);
 		stats.blockedDestructive++;
 		if (contradictionRisk) {
 			stats.reviewNeeded++;
@@ -868,9 +810,9 @@ function runStructuralPass1(
 			if (!entityRow) continue;
 
 			// Skip if this memory already has a structural attribute row (classified or stub)
-			const existingAttr = db.prepare(
-				`SELECT 1 FROM entity_attributes WHERE memory_id = ? LIMIT 1`,
-			).get(fact.memoryId) as unknown | undefined;
+			const existingAttr = db
+				.prepare(`SELECT 1 FROM entity_attributes WHERE memory_id = ? LIMIT 1`)
+				.get(fact.memoryId) as unknown | undefined;
 			if (existingAttr) continue;
 
 			// Create stub entity_attributes row (aspect_id=NULL, awaiting classification)
@@ -881,10 +823,7 @@ function runStructuralPass1(
 				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
 				  confidence, importance, status, created_at, updated_at)
 				 VALUES (?, NULL, 'default', ?, 'attribute', ?, ?, ?, 0.5, 'active', ?, ?)`,
-			).run(
-				attrId, fact.memoryId, fact.content, fact.normalizedContent,
-				fact.confidence, now, now,
-			);
+			).run(attrId, fact.memoryId, fact.content, fact.normalizedContent, fact.confidence, now, now);
 			stats.attributesCreated++;
 
 			// Enqueue structural_classify job
@@ -925,12 +864,7 @@ function runStructuralPass1(
 	});
 }
 
-function enqueueStructuralJob(
-	db: WriteDb,
-	memoryId: string,
-	jobType: string,
-	payload: string,
-): void {
+function enqueueStructuralJob(db: WriteDb, memoryId: string, jobType: string, payload: string): void {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 	db.prepare(
@@ -968,18 +902,12 @@ export function startWorker(
 		// Fetch memory content
 		const row = accessor.withReadDb(
 			(db) =>
-				db
-					.prepare("SELECT content FROM memories WHERE id = ?")
-					.get(job.memory_id) as MemoryContentRow | undefined,
+				db.prepare("SELECT content FROM memories WHERE id = ?").get(job.memory_id) as MemoryContentRow | undefined,
 		);
 
 		if (!row) {
 			accessor.withWriteTx((db) => {
-				completeJob(
-					db,
-					job.id,
-					JSON.stringify({ skipped: "memory_not_found" }),
-				);
+				completeJob(db, job.id, JSON.stringify({ skipped: "memory_not_found" }));
 			});
 			return;
 		}
@@ -1061,18 +989,10 @@ export function startWorker(
 		// Run shadow decisions on extracted facts
 		const decisions =
 			extraction.facts.length > 0
-				? await runShadowDecisions(
-						extraction.facts,
-						accessor,
-						instrumentedProvider,
-						decisionCfg,
-					)
+				? await runShadowDecisions(extraction.facts, accessor, instrumentedProvider, decisionCfg)
 				: { proposals: [], warnings: [] };
 
-		const controlledWritesEnabled =
-			pipelineCfg.enabled &&
-			!pipelineCfg.shadowMode &&
-			!pipelineCfg.mutationsFrozen;
+		const controlledWritesEnabled = pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen;
 
 		// Convenience aliases for nested config
 		const { extraction: extractionCfg, autonomous: autonomousCfg } = pipelineCfg;
@@ -1082,7 +1002,7 @@ export function startWorker(
 		if (controlledWritesEnabled) {
 			for (const proposal of decisions.proposals) {
 				if (proposal.action !== "add" && proposal.action !== "update") continue;
-			if (proposal.action === "update" && !autonomousCfg.allowUpdateDelete) continue;
+				if (proposal.action === "update" && !autonomousCfg.allowUpdateDelete) continue;
 				if (proposal.fact.confidence < extractionCfg.minConfidence) {
 					continue;
 				}
@@ -1094,10 +1014,7 @@ export function startWorker(
 				if (embeddingByHash.has(contentHash)) continue;
 
 				try {
-					const vector = await decisionCfg.fetchEmbedding(
-						storageContent,
-						decisionCfg.embedding,
-					);
+					const vector = await decisionCfg.fetchEmbedding(storageContent, decisionCfg.embedding);
 					if (vector && vector.length > 0) {
 						if (vector.length !== decisionCfg.embedding.dimensions) {
 							prefetchWarnings.push(
@@ -1123,11 +1040,7 @@ export function startWorker(
 
 		// --- Semantic contradiction check (pre-tx, async) ---
 		const contradictionFlags = new Map<number, { detected: boolean; confidence: number; reasoning: string }>();
-		if (
-			controlledWritesEnabled &&
-			pipelineCfg.semanticContradictionEnabled &&
-			autonomousCfg.allowUpdateDelete
-		) {
+		if (controlledWritesEnabled && pipelineCfg.semanticContradictionEnabled && autonomousCfg.allowUpdateDelete) {
 			for (let i = 0; i < decisions.proposals.length; i++) {
 				const proposal = decisions.proposals[i];
 				if (proposal.action !== "update" || !proposal.targetContent) continue;
@@ -1197,25 +1110,22 @@ export function startWorker(
 				proposals: decisions.proposals,
 				writeMode: controlledWritesEnabled ? "phase-c" : "shadow",
 				writeStats,
-				warnings: [
-					...extraction.warnings,
-					...decisions.warnings,
-					...prefetchWarnings,
-				],
+				warnings: [...extraction.warnings, ...decisions.warnings, ...prefetchWarnings],
 			});
 
 			completeJob(db, job.id, resultPayload);
-			updateExtractionStatus(
-				db,
-				job.memory_id,
-				"completed",
-				extractionCfg.model,
-			);
+			updateExtractionStatus(db, job.memory_id, "completed", extractionCfg.model);
 		});
 
 		// Persist graph entities in a separate transaction so failure
 		// never reverts fact extraction. Non-fatal on error.
-		let graphStats = { entitiesInserted: 0, entitiesUpdated: 0, relationsInserted: 0, relationsUpdated: 0, mentionsLinked: 0 };
+		let graphStats = {
+			entitiesInserted: 0,
+			entitiesUpdated: 0,
+			relationsInserted: 0,
+			relationsUpdated: 0,
+			mentionsLinked: 0,
+		};
 		if (pipelineCfg.graph.enabled && extraction.entities.length > 0) {
 			try {
 				graphStats = accessor.withWriteTx((db) =>
@@ -1223,7 +1133,7 @@ export function startWorker(
 						entities: extraction.entities,
 						sourceMemoryId: job.memory_id,
 						extractedAt: new Date().toISOString(),
-							agentId: "default",
+						agentId: "default",
 					}),
 				);
 			} catch (e) {
@@ -1236,20 +1146,18 @@ export function startWorker(
 
 		// Build broader structural facts from all sources:
 		// newly written + deduped + "none" proposals resolved by hash + successful updates
-		const structuralFacts: WrittenFact[] = [
-			...writeStats.writtenFacts,
-			...writeStats.dedupedFacts,
-		];
+		const structuralFacts: WrittenFact[] = [...writeStats.writtenFacts, ...writeStats.dedupedFacts];
 
 		if (controlledWritesEnabled) {
 			for (const proposal of decisions.proposals) {
 				if (proposal.action !== "none") continue;
 				const normalized = normalizeAndHashContent(proposal.fact.content);
 				if (normalized.normalizedContent.length === 0) continue;
-				const existing = accessor.withReadDb((db) =>
-					db.prepare(
-						`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
-					).get(normalized.contentHash) as { id: string } | undefined,
+				const existing = accessor.withReadDb(
+					(db) =>
+						db
+							.prepare(`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`)
+							.get(normalized.contentHash) as { id: string } | undefined,
 				);
 				if (existing) {
 					structuralFacts.push({
@@ -1285,11 +1193,7 @@ export function startWorker(
 			extraction.entities.length > 0
 		) {
 			try {
-				structuralStats = runStructuralPass1(
-					accessor,
-					structuralFacts,
-					extraction.entities,
-				);
+				structuralStats = runStructuralPass1(accessor, structuralFacts, extraction.entities);
 			} catch (e) {
 				logger.warn("pipeline", "Structural pass 1 failed (non-fatal)", {
 					jobId: job.id,
@@ -1327,9 +1231,7 @@ export function startWorker(
 
 		try {
 			// Lease a job inside write tx
-			const job = accessor.withWriteTx((db) =>
-				leaseJob(db, "extract", pipelineCfg.worker.maxRetries),
-			);
+			const job = accessor.withWriteTx((db) => leaseJob(db, "extract", pipelineCfg.worker.maxRetries));
 
 			if (!job) return; // Nothing to do
 
@@ -1361,22 +1263,13 @@ export function startWorker(
 				accessor.withWriteTx((db) => {
 					failJob(db, job.id, msg, job.attempts, job.max_attempts);
 					if (job.attempts >= job.max_attempts) {
-						updateExtractionStatus(
-							db,
-							job.memory_id,
-							"failed",
-							pipelineCfg.extraction.model,
-						);
+						updateExtractionStatus(db, job.memory_id, "failed", pipelineCfg.extraction.model);
 					}
 				});
 				consecutiveFailures++;
 			}
 		} catch (e) {
-			logger.error(
-				"pipeline",
-				"Worker tick error",
-				e instanceof Error ? e : new Error(String(e)),
-			);
+			logger.error("pipeline", "Worker tick error", e instanceof Error ? e : new Error(String(e)));
 			consecutiveFailures++;
 		}
 	}
@@ -1421,11 +1314,7 @@ export function startWorker(
 		maxRetries: pipelineCfg.worker.maxRetries,
 		model: pipelineCfg.extraction.model,
 		mode:
-			pipelineCfg.enabled &&
-			!pipelineCfg.shadowMode &&
-			!pipelineCfg.mutationsFrozen
-				? "controlled-write"
-				: "shadow",
+			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen ? "controlled-write" : "shadow",
 	});
 
 	return {

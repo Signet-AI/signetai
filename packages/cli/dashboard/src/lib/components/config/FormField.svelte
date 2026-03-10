@@ -1,15 +1,15 @@
 <script lang="ts">
-	import type { Snippet } from "svelte";
-	import { Label } from "$lib/components/ui/label/index.js";
+import { Label } from "$lib/components/ui/label/index.js";
+import type { Snippet } from "svelte";
 
-	interface Props {
-		label: string;
-		description?: string;
-		children: Snippet;
-		layout?: "vertical" | "horizontal";
-	}
+interface Props {
+	label: string;
+	description?: string;
+	children: Snippet;
+	layout?: "vertical" | "horizontal";
+}
 
-	let { label, description, children, layout = "horizontal" }: Props = $props();
+const { label, description, children, layout = "horizontal" }: Props = $props();
 </script>
 
 {#if layout === "vertical"}

@@ -8,7 +8,7 @@ type Props = {
 	onClear: () => void;
 };
 
-let { items, onRemove, onClear }: Props = $props();
+const { items, onRemove, onClear }: Props = $props();
 
 function itemKey(item: SkillSearchResult): string {
 	return item.fullName;

@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
-import { startRetentionWorker, type RetentionConfig } from "./retention-worker";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { type RetentionConfig, startRetentionWorker } from "./retention-worker";
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
@@ -28,9 +28,7 @@ function makeAccessor(db: Database): DbAccessor {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-function testRetentionConfig(
-	overrides: Partial<RetentionConfig> = {},
-): RetentionConfig {
+function testRetentionConfig(overrides: Partial<RetentionConfig> = {}): RetentionConfig {
 	return {
 		intervalMs: 999999, // won't fire during tests
 		tombstoneRetentionMs: 30 * ONE_DAY_MS,
@@ -81,15 +79,11 @@ describe("retention worker", () => {
 		expect(result.tombstonesPurged).toBe(1);
 
 		// Recent deletion still exists
-		const recent = db
-			.prepare("SELECT id FROM memories WHERE id = ?")
-			.get("recent-del");
+		const recent = db.prepare("SELECT id FROM memories WHERE id = ?").get("recent-del");
 		expect(recent).toBeTruthy();
 
 		// Old deletion was hard-purged
-		const old = db
-			.prepare("SELECT id FROM memories WHERE id = ?")
-			.get("old-del");
+		const old = db.prepare("SELECT id FROM memories WHERE id = ?").get("old-del");
 		expect(old).toBeNull();
 	});
 
@@ -118,14 +112,8 @@ describe("retention worker", () => {
 		handle.stop();
 
 		expect(result.historyPurged).toBe(1);
-		expect(
-			db
-				.prepare("SELECT id FROM memory_history WHERE id = ?")
-				.get("hist-recent"),
-		).toBeTruthy();
-		expect(
-			db.prepare("SELECT id FROM memory_history WHERE id = ?").get("hist-old"),
-		).toBeNull();
+		expect(db.prepare("SELECT id FROM memory_history WHERE id = ?").get("hist-recent")).toBeTruthy();
+		expect(db.prepare("SELECT id FROM memory_history WHERE id = ?").get("hist-old")).toBeNull();
 	});
 
 	it("purges completed and dead jobs past retention windows", () => {
@@ -139,15 +127,7 @@ describe("retention worker", () => {
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, completed_at, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"job-recent",
-			"mem-jobs",
-			"extract",
-			"completed",
-			daysAgo(5),
-			now,
-			now,
-		);
+		).run("job-recent", "mem-jobs", "extract", "completed", daysAgo(5), now, now);
 
 		// Old completed job (past 14 days)
 		db.prepare(
@@ -165,15 +145,7 @@ describe("retention worker", () => {
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, failed_at, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			"job-dead-recent",
-			"mem-jobs",
-			"extract",
-			"dead",
-			daysAgo(10),
-			now,
-			now,
-		);
+		).run("job-dead-recent", "mem-jobs", "extract", "dead", daysAgo(10), now, now);
 
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
 		const result = handle.sweep();
@@ -182,20 +154,10 @@ describe("retention worker", () => {
 		expect(result.completedJobsPurged).toBe(1);
 		expect(result.deadJobsPurged).toBe(1);
 
-		expect(
-			db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-recent"),
-		).toBeTruthy();
-		expect(
-			db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-old"),
-		).toBeNull();
-		expect(
-			db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-dead"),
-		).toBeNull();
-		expect(
-			db
-				.prepare("SELECT id FROM memory_jobs WHERE id = ?")
-				.get("job-dead-recent"),
-		).toBeTruthy();
+		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-recent")).toBeTruthy();
+		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-old")).toBeNull();
+		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-dead")).toBeNull();
+		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-dead-recent")).toBeTruthy();
 	});
 
 	it("purges graph links before tombstones and cleans orphaned entities", () => {
@@ -225,19 +187,11 @@ describe("retention worker", () => {
 		expect(result.tombstonesPurged).toBe(1);
 
 		// Graph link removed
-		expect(
-			db
-				.prepare("SELECT * FROM memory_entity_mentions WHERE memory_id = ?")
-				.get("mem-graph"),
-		).toBeNull();
+		expect(db.prepare("SELECT * FROM memory_entity_mentions WHERE memory_id = ?").get("mem-graph")).toBeNull();
 		// Entity orphaned and cleaned up
-		expect(
-			db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-1"),
-		).toBeNull();
+		expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-1")).toBeNull();
 		// Memory row hard-purged
-		expect(
-			db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-graph"),
-		).toBeNull();
+		expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-graph")).toBeNull();
 	});
 
 	it("decrements entity mentions and orphans during graph link purge", () => {
@@ -278,13 +232,11 @@ describe("retention worker", () => {
 		expect(result.entitiesOrphaned).toBe(1);
 
 		// Orphan entity deleted
-		expect(
-			db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-orphan"),
-		).toBeNull();
+		expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-orphan")).toBeNull();
 		// Survivor still exists with decremented mentions
-		const survivor = db
-			.prepare("SELECT mentions FROM entities WHERE id = ?")
-			.get("ent-survive") as { mentions: number };
+		const survivor = db.prepare("SELECT mentions FROM entities WHERE id = ?").get("ent-survive") as {
+			mentions: number;
+		};
 		expect(survivor.mentions).toBe(2);
 	});
 

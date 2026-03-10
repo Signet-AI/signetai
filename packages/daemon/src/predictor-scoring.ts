@@ -11,10 +11,10 @@
 
 import type { PredictorConfig } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
+import { logger } from "./logger";
 import type { PredictorClient, PredictorStatus, ScoreParams } from "./predictor-client";
 import type { PredictorState } from "./predictor-state";
 import { computeEffectiveAlpha } from "./predictor-state";
-import { logger } from "./logger";
 import { PREDICTOR_FEATURE_DIMENSIONS } from "./structural-features";
 
 // ---------------------------------------------------------------------------

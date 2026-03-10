@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "../../core/src/migrations";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runMigrations } from "../../core/src/migrations";
 
 const TEST_DIR = join(tmpdir(), `signet-predictor-comparison-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
@@ -127,9 +127,39 @@ describe("computeNdcg", () => {
 describe("computeFtsOverlapScore", () => {
 	it("computes the fraction of injected memories with FTS hits", () => {
 		const mems = [
-			{ memory_id: "a", source: "effective", effective_score: 1, predictor_score: null, was_injected: 1, relevance_score: null, fts_hit_count: 3, entity_slot: null, is_constraint: 0 },
-			{ memory_id: "b", source: "effective", effective_score: 0.5, predictor_score: null, was_injected: 1, relevance_score: null, fts_hit_count: 0, entity_slot: null, is_constraint: 0 },
-			{ memory_id: "c", source: "effective", effective_score: 0.3, predictor_score: null, was_injected: 0, relevance_score: null, fts_hit_count: 5, entity_slot: null, is_constraint: 0 },
+			{
+				memory_id: "a",
+				source: "effective",
+				effective_score: 1,
+				predictor_score: null,
+				was_injected: 1,
+				relevance_score: null,
+				fts_hit_count: 3,
+				entity_slot: null,
+				is_constraint: 0,
+			},
+			{
+				memory_id: "b",
+				source: "effective",
+				effective_score: 0.5,
+				predictor_score: null,
+				was_injected: 1,
+				relevance_score: null,
+				fts_hit_count: 0,
+				entity_slot: null,
+				is_constraint: 0,
+			},
+			{
+				memory_id: "c",
+				source: "effective",
+				effective_score: 0.3,
+				predictor_score: null,
+				was_injected: 0,
+				relevance_score: null,
+				fts_hit_count: 5,
+				entity_slot: null,
+				is_constraint: 0,
+			},
 		] as const;
 		const injected = new Set(["a", "b"]);
 		const score = computeFtsOverlapScore(mems, injected);
@@ -205,20 +235,17 @@ describe("evaluateColdStartExit condition 3", () => {
 		const now = new Date().toISOString();
 		accessor.withWriteTx((wdb) => {
 			for (let i = 0; i < 10; i++) {
-				wdb.prepare(
-					`INSERT INTO predictor_training_pairs
+				wdb
+					.prepare(
+						`INSERT INTO predictor_training_pairs
 					 (id, agent_id, session_key, memory_id,
 					  recency_days, access_count, importance, decay_factor,
 					  embedding_similarity, entity_slot, aspect_slot,
 					  is_constraint, structural_density, fts_hit_count,
 					  combined_label, was_injected, created_at)
 					 VALUES (?, 'test-agent', ?, ?, 1, 1, 0.5, 0.9, 0.5, 0, 0, 0, 0, 1, 0.5, 0, ?)`,
-				).run(
-					crypto.randomUUID(),
-					`session-${i}`,
-					crypto.randomUUID(),
-					now,
-				);
+					)
+					.run(crypto.randomUUID(), `session-${i}`, crypto.randomUUID(), now);
 			}
 		});
 
@@ -419,11 +446,13 @@ describe("runSessionComparison", () => {
 
 		// Insert session_scores
 		accessor.withWriteTx((wdb) => {
-			wdb.prepare(
-				`INSERT INTO session_scores
+			wdb
+				.prepare(
+					`INSERT INTO session_scores
 				 (id, session_key, score, confidence, project, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
-			).run("score-1", sessionKey, 0.8, 0.9, "signetai", new Date().toISOString());
+				)
+				.run("score-1", sessionKey, 0.8, 0.9, "signetai", new Date().toISOString());
 		});
 
 		// Insert session_memories with relevance scores
@@ -466,22 +495,26 @@ describe("runSessionComparison", () => {
 		const sessionKey = "cold-session";
 
 		accessor.withWriteTx((wdb) => {
-			wdb.prepare(
-				`INSERT INTO session_scores
+			wdb
+				.prepare(
+					`INSERT INTO session_scores
 				 (id, session_key, score, confidence, created_at)
 				 VALUES (?, ?, ?, ?, ?)`,
-			).run("score-cold", sessionKey, 0.7, 0.8, new Date().toISOString());
+				)
+				.run("score-cold", sessionKey, 0.7, 0.8, new Date().toISOString());
 		});
 
 		accessor.withWriteTx((wdb) => {
 			const now = new Date().toISOString();
-			wdb.prepare(
-				`INSERT INTO session_memories
+			wdb
+				.prepare(
+					`INSERT INTO session_memories
 				 (id, session_key, memory_id, source, effective_score,
 				  final_score, rank, was_injected, relevance_score,
 				  fts_hit_count, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run("sm-cold-1", sessionKey, "mem-x", "effective", 0.8, 0.8, 0, 1, 0.7, 0, now);
+				)
+				.run("sm-cold-1", sessionKey, "mem-x", "effective", 0.8, 0.8, 0, 1, 0.7, 0, now);
 		});
 
 		const result = runSessionComparison(sessionKey, "default", accessor);

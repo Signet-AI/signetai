@@ -1,16 +1,16 @@
 <script lang="ts">
-import { Button } from "$lib/components/ui/button/index.js";
-import { Checkbox } from "$lib/components/ui/checkbox/index.js";
-import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
 import { browser } from "$app/environment";
-import * as Select from "$lib/components/ui/select/index.js";
-import { ActionLabels } from "$lib/ui/action-labels";
-import { onMount, tick } from "svelte";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import { Button } from "$lib/components/ui/button/index.js";
+import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+import * as Select from "$lib/components/ui/select/index.js";
 import { nav } from "$lib/stores/navigation.svelte";
 import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
+import { ActionLabels } from "$lib/ui/action-labels";
+import { onMount, tick } from "svelte";
 
 interface LogEntry {
 	timestamp: string;
@@ -42,12 +42,12 @@ let logEventSource: EventSource | null = null;
 let streamEnabled = $state(true);
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let logLevelFilter = $state<string>("");
-let logCategoryFilter = $state<string>("");
+const logLevelFilter = $state<string>("");
+const logCategoryFilter = $state<string>("");
 let logAutoScroll = $state(false);
 let logAutoScrollPausedByScroll = $state(false);
 let initialLoadDone = $state(false);
-let logViewport = $state<HTMLElement | null>(null);
+const logViewport = $state<HTMLElement | null>(null);
 let selectedLogKey = $state<string | null>(null);
 let copied = $state(false);
 let autoScrollSnapFrame: number | null = null;
@@ -231,11 +231,8 @@ function startLogStream() {
 				logsStreaming = true;
 			}
 			const entryLevelValue =
-				typeof entry.level === "string"
-					? LOG_LEVEL_ORDER[entry.level as LogEntry["level"]]
-					: undefined;
-			const filterLevelValue =
-				LOG_LEVEL_ORDER[logLevelFilter as LogEntry["level"]];
+				typeof entry.level === "string" ? LOG_LEVEL_ORDER[entry.level as LogEntry["level"]] : undefined;
+			const filterLevelValue = LOG_LEVEL_ORDER[logLevelFilter as LogEntry["level"]];
 			if (logLevelFilter && (entryLevelValue ?? -1) < (filterLevelValue ?? -1)) return;
 			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
 			const wasViewingLatest = isViewingLatest();

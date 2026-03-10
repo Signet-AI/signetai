@@ -1,21 +1,21 @@
 {
-  "name": "@signet/tray",
-  "version": "0.53.2",
-  "private": true,
-  "description": "Signet desktop application",
-  "scripts": {
-    "build:dashboard": "cd ../cli/dashboard && bun run build",
-    "build:ts": "rm -rf dist && bun build src-ts/index.ts --outfile dist/tray.js --target browser --minify && bun run build:dashboard && cp -r ../cli/dashboard/build/* dist/ && cp tray.html dist/tray.html && cp capture.html dist/capture.html && cp search.html dist/search.html",
-    "dev": "cargo tauri dev",
-    "build": "cargo tauri build",
-    "tauri": "cargo tauri"
-  },
-  "dependencies": {
-    "@signet/sdk": "workspace:*",
-    "@tauri-apps/api": "^2.5.0"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2.5.0",
-    "typescript": "^5.7.0"
-  }
+	"name": "@signet/tray",
+	"version": "0.53.2",
+	"private": true,
+	"description": "Signet desktop application",
+	"scripts": {
+		"build:dashboard": "cd ../cli/dashboard && bun run build",
+		"build:ts": "rm -rf dist && bun build src-ts/index.ts --outfile dist/tray.js --target browser --minify && bun run build:dashboard && cp -r ../cli/dashboard/build/* dist/ && cp tray.html dist/tray.html && cp capture.html dist/capture.html && cp search.html dist/search.html",
+		"dev": "cargo tauri dev",
+		"build": "cargo tauri build",
+		"tauri": "cargo tauri"
+	},
+	"dependencies": {
+		"@signet/sdk": "workspace:*",
+		"@tauri-apps/api": "^2.5.0"
+	},
+	"devDependencies": {
+		"@tauri-apps/cli": "^2.5.0",
+		"typescript": "^5.7.0"
+	}
 }

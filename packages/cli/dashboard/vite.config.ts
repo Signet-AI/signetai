@@ -1,5 +1,5 @@
-import tailwindcss from "@tailwindcss/vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -11,10 +11,7 @@ export default defineConfig({
 				manualChunks(id) {
 					if (!id.includes("node_modules")) return;
 
-					if (
-						id.includes("/three-forcegraph/") ||
-						id.includes("/three-spritetext/")
-					) {
+					if (id.includes("/three-forcegraph/") || id.includes("/three-spritetext/")) {
 						return "vendor-forcegraph3d";
 					}
 

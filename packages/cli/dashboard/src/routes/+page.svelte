@@ -1,14 +1,15 @@
 <script lang="ts">
 import { browser } from "$app/environment";
 import { type DaemonStatus, type Memory, getStatus } from "$lib/api";
-import AppSidebar from "$lib/components/app-sidebar.svelte";
 import ExtensionBanner from "$lib/components/ExtensionBanner.svelte";
 import UpgradeBanner from "$lib/components/UpgradeBanner.svelte";
+import AppSidebar from "$lib/components/app-sidebar.svelte";
 import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.svelte";
 import PageFooter from "$lib/components/layout/PageFooter.svelte";
 import TabContentLoader from "$lib/components/layout/TabContentLoader.svelte";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 import { Toaster } from "$lib/components/ui/sonner/index.js";
+import { focus } from "$lib/stores/focus.svelte";
 import {
 	clearAll,
 	clearSearchTimer,
@@ -17,29 +18,21 @@ import {
 	mem,
 	queueMemorySearch,
 } from "$lib/stores/memory.svelte";
+import { type TabId, initNavFromHash, isEngineGroup, isMemoryGroup, nav, setTab } from "$lib/stores/navigation.svelte";
 import {
-	initNavFromHash,
-	isEngineGroup,
-	isMemoryGroup,
-	nav,
-	setTab,
-	type TabId,
-} from "$lib/stores/navigation.svelte";
-import { openForm, ts } from "$lib/stores/tasks.svelte";
-import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
-import {
-	handleGlobalKey,
-	handleFocusIn,
-	handlePageClick,
-	initTabGroupEffects,
-	tabFocus,
-	focusEngineTab,
-	focusMemoryTab,
-	indexOfString,
 	ENGINE_TABS,
 	MEMORY_TABS,
+	focusEngineTab,
+	focusMemoryTab,
+	handleFocusIn,
+	handleGlobalKey,
+	handlePageClick,
+	indexOfString,
+	initTabGroupEffects,
+	tabFocus,
 } from "$lib/stores/tab-group-focus.svelte";
-import { focus } from "$lib/stores/focus.svelte";
+import { openForm, ts } from "$lib/stores/tasks.svelte";
+import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
 import { onMount } from "svelte";
 
 const activeTab = $derived(nav.activeTab);

@@ -10,15 +10,15 @@
  * Idempotent — matched by canonical name + frontmatter content hash.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, basename, dirname } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { watch } from "chokidar";
 import type { DbAccessor } from "../db-accessor.js";
+import { logger } from "../logger.js";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config.js";
 import type { LlmProvider } from "./provider.js";
 import { parseSkillFile } from "./skill-frontmatter.js";
 import { installSkillNode, uninstallSkillNode } from "./skill-graph.js";
-import { logger } from "../logger.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -92,9 +92,11 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 			const entityId = `skill:default:${name}`;
 
 			// Check if entity already exists (by id or name collision)
-			const existing = deps.accessor.withReadDb((db) =>
-				db.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
-					.get(entityId, name) as { id: string } | undefined,
+			const existing = deps.accessor.withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
+						.get(entityId, name) as { id: string } | undefined,
 			);
 
 			if (!existing) {
@@ -118,10 +120,11 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 				// Entity exists — check if frontmatter changed
 				// Use actual entity id (may differ from skill:default:... if adopted)
 				const actualId = existing.id;
-				const storedEmb = deps.accessor.withReadDb((db) =>
-					db.prepare(
-						"SELECT chunk_text FROM embeddings WHERE source_type = 'skill' AND source_id = ?",
-					).get(actualId) as { chunk_text: string } | undefined,
+				const storedEmb = deps.accessor.withReadDb(
+					(db) =>
+						db
+							.prepare("SELECT chunk_text FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
+							.get(actualId) as { chunk_text: string } | undefined,
 				);
 
 				// Compare fingerprints: if the embedding text would be different,
@@ -162,10 +165,11 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 	}
 
 	// 3. Check for orphaned graph nodes (file removed from disk)
-	const graphSkills = deps.accessor.withReadDb((db) =>
-		db.prepare(
-			"SELECT entity_id, fs_path FROM skill_meta WHERE agent_id = 'default' AND uninstalled_at IS NULL",
-		).all() as Array<{ entity_id: string; fs_path: string }>,
+	const graphSkills = deps.accessor.withReadDb(
+		(db) =>
+			db
+				.prepare("SELECT entity_id, fs_path FROM skill_meta WHERE agent_id = 'default' AND uninstalled_at IS NULL")
+				.all() as Array<{ entity_id: string; fs_path: string }>,
 	);
 
 	for (const row of graphSkills) {
@@ -281,11 +285,7 @@ export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 /**
  * Reconcile a single skill by name (triggered by file watcher).
  */
-async function reconcileSkill(
-	skillName: string,
-	mdPath: string,
-	deps: ReconcilerDeps,
-): Promise<void> {
+async function reconcileSkill(skillName: string, mdPath: string, deps: ReconcilerDeps): Promise<void> {
 	try {
 		if (!existsSync(mdPath)) {
 			uninstallSkillNode({ skillName }, deps.accessor);
@@ -307,16 +307,19 @@ async function reconcileSkill(
 		].join(" — ");
 
 		// Look up by id or name (entity may have been adopted from extraction)
-		const existingEntity = deps.accessor.withReadDb((db) =>
-			db.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
-				.get(entityId, skillName) as { id: string } | undefined,
+		const existingEntity = deps.accessor.withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
+					.get(entityId, skillName) as { id: string } | undefined,
 		);
 		const lookupId = existingEntity?.id ?? entityId;
 
-		const storedEmb = deps.accessor.withReadDb((db) =>
-			db.prepare(
-				"SELECT chunk_text FROM embeddings WHERE source_type = 'skill' AND source_id = ?",
-			).get(lookupId) as { chunk_text: string } | undefined,
+		const storedEmb = deps.accessor.withReadDb(
+			(db) =>
+				db.prepare("SELECT chunk_text FROM embeddings WHERE source_type = 'skill' AND source_id = ?").get(lookupId) as
+					| { chunk_text: string }
+					| undefined,
 		);
 
 		if (storedEmb && storedEmb.chunk_text === currentEmbText) {

@@ -12,12 +12,9 @@ type Props = {
 	actions: Action[];
 };
 
-let { kind, actions }: Props = $props();
+const { kind, actions }: Props = $props();
 
-const contentByKind: Record<
-	EmptyStateKind,
-	{ title: string; description: string }
-> = {
+const contentByKind: Record<EmptyStateKind, { title: string; description: string }> = {
 	installed: {
 		title: "No installed skills yet",
 		description: "Browse the catalog and install your first skill.",

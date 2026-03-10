@@ -4,34 +4,28 @@ import SkillsTab from "$lib/components/tabs/SkillsTab.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { returnToSidebar } from "$lib/stores/focus.svelte";
+import {
+	fetchMarketplaceMcpCatalog,
+	fetchMarketplaceMcpInstalled,
+	getMarketplaceMcpCategoryOptions,
+	mcpMarket,
+	refreshMarketplaceMcpTools,
+} from "$lib/stores/marketplace-mcp.svelte";
 import {
 	fetchTargetReviews,
 	loadMarketplaceReviewConfig,
-	reviewsMarket,
 	removeMarketplaceReview,
+	reviewsMarket,
 	saveMarketplaceReviewConfig,
 	setReviewTarget,
 	submitMarketplaceReview,
 	syncMarketplaceReviewsNow,
 } from "$lib/stores/marketplace-reviews.svelte";
-import { toast } from "$lib/stores/toast.svelte";
-import {
-	fetchMarketplaceMcpCatalog,
-	fetchMarketplaceMcpInstalled,
-	refreshMarketplaceMcpTools,
-	getMarketplaceMcpCategoryOptions,
-	mcpMarket,
-} from "$lib/stores/marketplace-mcp.svelte";
-import {
-	fetchCatalog,
-	fetchInstalled,
-	getCategoryOptions,
-	setQuery,
-	sk,
-} from "$lib/stores/skills.svelte";
-import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
+import { fetchCatalog, fetchInstalled, getCategoryOptions, setQuery, sk } from "$lib/stores/skills.svelte";
+import { toast } from "$lib/stores/toast.svelte";
+import ChevronDown from "@lucide/svelte/icons/chevron-down";
 import { onMount } from "svelte";
 
 let section = $state<"skills" | "mcp">("skills");
@@ -61,20 +55,20 @@ const activeInstalledCount = $derived(section === "skills" ? sk.installed.length
 const skillsFirst = $derived(
 	sk.catalog[0]
 		? {
-			title: sk.catalog[0].name,
-			targetType: "skill" as const,
-			targetId: sk.catalog[0].name,
-		}
+				title: sk.catalog[0].name,
+				targetType: "skill" as const,
+				targetId: sk.catalog[0].name,
+			}
 		: null,
 );
 
 const mcpFirst = $derived(
 	mcpMarket.catalog[0]
 		? {
-			title: mcpMarket.catalog[0].name,
-			targetType: "mcp" as const,
-			targetId: mcpMarket.catalog[0].id,
-		}
+				title: mcpMarket.catalog[0].name,
+				targetType: "mcp" as const,
+				targetId: mcpMarket.catalog[0].id,
+			}
 		: null,
 );
 
@@ -251,25 +245,21 @@ let focusedFilterIndex = $state(0);
 // Get all focusable cards in current section
 function getCards(): HTMLElement[] {
 	return Array.from(
-		section === "skills"
-			? document.querySelectorAll('.card-wrap .card')
-			: document.querySelectorAll('.catalog-card')
+		section === "skills" ? document.querySelectorAll(".card-wrap .card") : document.querySelectorAll(".catalog-card"),
 	) as HTMLElement[];
 }
 
 // Get all focusable filter elements in the rail in DOM order
 function getFilterElements(): HTMLElement[] {
-	const rail = document.querySelector('.store-rail');
+	const rail = document.querySelector(".store-rail");
 	if (!rail) return [];
 
 	// Get all interactive elements in DOM order for sequential navigation
 	// This matches how they appear visually so Arrow Down goes through each one
 	const allFocusable = rail.querySelectorAll(
-		'.rail-select, .rail-btn, .sync-actions button, .hero-switch, .toggle-row input, .input'
+		".rail-select, .rail-btn, .sync-actions button, .hero-switch, .toggle-row input, .input",
 	);
-	return (Array.from(allFocusable) as HTMLElement[]).filter(
-		(el) => !(el as HTMLButtonElement).disabled
-	);
+	return (Array.from(allFocusable) as HTMLElement[]).filter((el) => !(el as HTMLButtonElement).disabled);
 }
 
 // Calculate grid dimensions for 2D navigation
@@ -304,10 +294,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 	if (e.defaultPrevented) return;
 
 	const target = e.target as HTMLElement;
-	const isInputFocused =
-		target.tagName === "INPUT" ||
-		target.tagName === "TEXTAREA" ||
-		target.isContentEditable;
+	const isInputFocused = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
 	if (isInputFocused) return;
 
@@ -348,7 +335,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			focusedCardIndex = -1;
 			// Blur any focused card
 			const cards = getCards();
-			cards.forEach(c => c.blur());
+			cards.forEach((c) => c.blur());
 			return;
 		}
 
@@ -359,7 +346,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			focusedFilterIndex = 0;
 			// Blur any focused filter
 			const filters = getFilterElements();
-			filters.forEach(f => f.blur());
+			filters.forEach((f) => f.blur());
 			// Focus the last card in the visible row
 			const { columns, cards } = getGridInfo();
 			if (cards.length > 0) {
@@ -479,7 +466,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 				// At start of row, return to tabs mode
 				navMode = "tabs";
 				focusedCardIndex = -1;
-				cards.forEach(c => c.blur());
+				cards.forEach((c) => c.blur());
 				return;
 			}
 
@@ -509,7 +496,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 				// Move to filters panel
 				navMode = "filters";
 				focusedFilterIndex = 0;
-				cards.forEach(c => c.blur());
+				cards.forEach((c) => c.blur());
 
 				const filters = getFilterElements();
 				if (filters.length > 0) {
@@ -562,7 +549,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			e.preventDefault();
 			navMode = "cards";
 			focusedFilterIndex = 0;
-			filters.forEach(f => f.blur());
+			filters.forEach((f) => f.blur());
 
 			const { columns, cards } = getGridInfo();
 			if (cards.length > 0) {

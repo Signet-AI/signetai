@@ -11,13 +11,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
 import type { Hono } from "hono";
+import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
+import { getLlmProvider } from "../llm.js";
 import { logger } from "../logger.js";
+import { type EmbeddingConfig, type PipelineV2Config, loadMemoryConfig } from "../memory-config.js";
+import type { LlmProvider } from "../pipeline/provider.js";
 import { parseSkillFile, patchSkillFrontmatter } from "../pipeline/skill-frontmatter.js";
 import { installSkillNode, uninstallSkillNode } from "../pipeline/skill-graph.js";
-import { getDbAccessor, type DbAccessor } from "../db-accessor.js";
-import { loadMemoryConfig, type EmbeddingConfig, type PipelineV2Config } from "../memory-config.js";
-import { getLlmProvider } from "../llm.js";
-import type { LlmProvider } from "../pipeline/provider.js";
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -287,11 +287,19 @@ export function setFetchEmbedding(fn: (text: string, cfg: EmbeddingConfig) => Pr
 }
 
 function getAccessorSafe(): DbAccessor | null {
-	try { return getDbAccessor(); } catch { return null; }
+	try {
+		return getDbAccessor();
+	} catch {
+		return null;
+	}
 }
 
 function getProviderSafe(): LlmProvider | null {
-	try { return getLlmProvider(); } catch { return null; }
+	try {
+		return getLlmProvider();
+	} catch {
+		return null;
+	}
 }
 
 // Per-skill lock to prevent concurrent enrichment writes to SKILL.md
@@ -356,10 +364,11 @@ async function onSkillInstalledInner(skillName: string): Promise<void> {
 			const freshParsed = parseSkillFile(freshContent);
 			if (freshParsed) {
 				// Get the enriched frontmatter from the installed node
-				const enrichedFm = accessor.withReadDb((db) =>
-					db.prepare(
-						"SELECT triggers, tags FROM skill_meta WHERE entity_id = ?",
-					).get(result.entityId) as { triggers: string | null; tags: string | null } | undefined,
+				const enrichedFm = accessor.withReadDb(
+					(db) =>
+						db.prepare("SELECT triggers, tags FROM skill_meta WHERE entity_id = ?").get(result.entityId) as
+							| { triggers: string | null; tags: string | null }
+							| undefined,
 				);
 
 				if (enrichedFm) {
@@ -368,22 +377,28 @@ async function onSkillInstalledInner(skillName: string): Promise<void> {
 					let patchTriggers: readonly string[] | undefined;
 					let patchTags: readonly string[] | undefined;
 
-					const entity = accessor.withReadDb((db) =>
-						db.prepare("SELECT description FROM entities WHERE id = ?")
-							.get(result.entityId) as { description: string | null } | undefined,
+					const entity = accessor.withReadDb(
+						(db) =>
+							db.prepare("SELECT description FROM entities WHERE id = ?").get(result.entityId) as
+								| { description: string | null }
+								| undefined,
 					);
 					if (entity?.description) patchDescription = entity.description;
 					if (enrichedFm.triggers) {
 						try {
 							const parsed: unknown = JSON.parse(enrichedFm.triggers);
 							if (Array.isArray(parsed)) patchTriggers = parsed.filter((v): v is string => typeof v === "string");
-						} catch { /* skip */ }
+						} catch {
+							/* skip */
+						}
 					}
 					if (enrichedFm.tags) {
 						try {
 							const parsed: unknown = JSON.parse(enrichedFm.tags);
 							if (Array.isArray(parsed)) patchTags = parsed.filter((v): v is string => typeof v === "string");
-						} catch { /* skip */ }
+						} catch {
+							/* skip */
+						}
 					}
 
 					const patched = patchSkillFrontmatter(freshContent, {

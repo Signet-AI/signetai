@@ -3,13 +3,7 @@
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
-import {
-	initContinuity,
-	recordPrompt,
-	consumeState,
-	clearContinuity,
-	getState,
-} from "./continuity-state";
+import { clearContinuity, consumeState, getState, initContinuity, recordPrompt } from "./continuity-state";
 
 const SESSION = "test-session-snippets";
 
@@ -61,10 +55,7 @@ describe("consumeState snapshots and resets snippets", () => {
 		recordPrompt(SESSION, "q2", "second prompt");
 
 		const snap = consumeState(SESSION);
-		expect(snap?.pendingPromptSnippets).toEqual([
-			"first prompt",
-			"second prompt",
-		]);
+		expect(snap?.pendingPromptSnippets).toEqual(["first prompt", "second prompt"]);
 		expect(snap?.promptCount).toBe(2);
 
 		// After consume, state should be reset

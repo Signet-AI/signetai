@@ -30,16 +30,9 @@ export function computeFileHash(filePath: string): string {
  * Check if a file has already been ingested (by hash).
  * Returns the existing job ID if found, null otherwise.
  */
-export function checkAlreadyIngested(
-	db: DatabaseLike,
-	fileHash: string,
-): string | null {
+export function checkAlreadyIngested(db: DatabaseLike, fileHash: string): string | null {
 	try {
-		const row = db
-			.prepare(
-				"SELECT id FROM ingestion_jobs WHERE file_hash = ? AND status = 'completed'",
-			)
-			.get(fileHash);
+		const row = db.prepare("SELECT id FROM ingestion_jobs WHERE file_hash = ? AND status = 'completed'").get(fileHash);
 
 		return row ? (row.id as string) : null;
 	} catch {
@@ -117,13 +110,11 @@ export function createIngestionJob(
 	fileHash: string,
 ): void {
 	try {
-		db
-			.prepare(
-				`INSERT INTO ingestion_jobs
+		db.prepare(
+			`INSERT INTO ingestion_jobs
 				 (id, source_path, source_type, file_hash, status, chunks_total, chunks_processed, memories_created, started_at)
 				 VALUES (?, ?, ?, ?, 'processing', 0, 0, 0, ?)`,
-			)
-			.run(jobId, sourcePath, sourceType, fileHash, new Date().toISOString());
+		).run(jobId, sourcePath, sourceType, fileHash, new Date().toISOString());
 	} catch {
 		// Migration may not have run yet — not a fatal error
 	}
@@ -176,9 +167,7 @@ export function updateIngestionJob(
 		if (sets.length === 0) return;
 
 		values.push(jobId);
-		db
-			.prepare(`UPDATE ingestion_jobs SET ${sets.join(", ")} WHERE id = ?`)
-			.run(...values);
+		db.prepare(`UPDATE ingestion_jobs SET ${sets.join(", ")} WHERE id = ?`).run(...values);
 	} catch {
 		// Not fatal
 	}

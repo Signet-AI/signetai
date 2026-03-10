@@ -7,16 +7,11 @@
  * never mutating memory content.
  */
 
-import {
-	DECISION_ACTIONS,
-	vectorSearch,
-	type DecisionAction,
-	type ExtractedFact,
-} from "@signet/core";
+import { DECISION_ACTIONS, type DecisionAction, type ExtractedFact, vectorSearch } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
+import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig } from "../memory-config";
 import type { LlmProvider } from "./provider";
-import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,10 +27,7 @@ interface CandidateMemory {
 export interface DecisionConfig {
 	readonly embedding: EmbeddingConfig;
 	readonly search: MemorySearchConfig;
-	readonly fetchEmbedding: (
-		text: string,
-		cfg: EmbeddingConfig,
-	) => Promise<number[] | null>;
+	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
 }
 
 export interface FactDecisionProposal {
@@ -62,11 +54,7 @@ interface AllQuery<T> {
 	all(...args: readonly unknown[]): T;
 }
 
-function findCandidatesBm25(
-	accessor: DbAccessor,
-	query: string,
-	limit: number,
-): Map<string, number> {
+function findCandidatesBm25(accessor: DbAccessor, query: string, limit: number): Map<string, number> {
 	const bm25Map = new Map<string, number>();
 	try {
 		accessor.withReadDb((db) => {
@@ -116,10 +104,7 @@ async function findCandidatesVector(
 	return vectorMap;
 }
 
-function fetchMemoryRows(
-	accessor: DbAccessor,
-	ids: readonly string[],
-): CandidateMemory[] {
+function fetchMemoryRows(accessor: DbAccessor, ids: readonly string[]): CandidateMemory[] {
 	if (ids.length === 0) return [];
 	const placeholders = ids.map(() => "?").join(", ");
 	return accessor.withReadDb(
@@ -134,21 +119,12 @@ function fetchMemoryRows(
 	);
 }
 
-async function findCandidates(
-	accessor: DbAccessor,
-	query: string,
-	cfg: DecisionConfig,
-): Promise<CandidateMemory[]> {
+async function findCandidates(accessor: DbAccessor, query: string, cfg: DecisionConfig): Promise<CandidateMemory[]> {
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
 
 	const bm25Map = findCandidatesBm25(accessor, query, CANDIDATE_LIMIT * 2);
-	const vectorMap = await findCandidatesVector(
-		accessor,
-		query,
-		cfg,
-		CANDIDATE_LIMIT * 2,
-	);
+	const vectorMap = await findCandidatesVector(accessor, query, cfg, CANDIDATE_LIMIT * 2);
 
 	const allIds = new Set([...bm25Map.keys(), ...vectorMap.keys()]);
 	const scored: Array<{ id: string; score: number }> = [];
@@ -177,15 +153,9 @@ async function findCandidates(
 // Decision prompt
 // ---------------------------------------------------------------------------
 
-function buildDecisionPrompt(
-	fact: ExtractedFact,
-	candidates: readonly CandidateMemory[],
-): string {
+function buildDecisionPrompt(fact: ExtractedFact, candidates: readonly CandidateMemory[]): string {
 	const candidateBlock = candidates
-		.map(
-			(c, i) =>
-				`[${i + 1}] ID: ${c.id}\n    Type: ${c.type}\n    Content: ${c.content}`,
-		)
+		.map((c, i) => `[${i + 1}] ID: ${c.id}\n    Type: ${c.type}\n    Content: ${c.content}`)
 		.join("\n\n");
 
 	return `You are a memory management system. Given a new fact and existing memory candidates, decide the best action.
@@ -315,9 +285,7 @@ export async function runShadowDecisions(
 				const targetContent =
 					proposal.targetMemoryId === undefined
 						? undefined
-						: candidates.find(
-								(candidate) => candidate.id === proposal.targetMemoryId,
-							)?.content;
+						: candidates.find((candidate) => candidate.id === proposal.targetMemoryId)?.content;
 				proposals.push({
 					...proposal,
 					fact,

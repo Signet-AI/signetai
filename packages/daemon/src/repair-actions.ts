@@ -597,9 +597,9 @@ async function reembedMissingMemoriesBatch(
 				)
 				.run(embId, contentHash, blob, vector.length, memory.id, memory.content, now);
 			// Resolve actual embedding ID (may differ from embId on conflict)
-			const actualRow = db
-				.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
-				.get(contentHash) as { id: string } | undefined;
+			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+				| { id: string }
+				| undefined;
 			if (actualRow) {
 				syncVecInsert(db, actualRow.id, vector);
 				count++;
@@ -1357,15 +1357,7 @@ async function findSemanticDuplicates(
 // Reclassify extracted entities via LLM
 // ---------------------------------------------------------------------------
 
-const VALID_ENTITY_TYPES = new Set([
-	"person",
-	"project",
-	"system",
-	"tool",
-	"concept",
-	"skill",
-	"task",
-]);
+const VALID_ENTITY_TYPES = new Set(["person", "project", "system", "tool", "concept", "skill", "task"]);
 
 const DEFAULT_RECLASSIFY_BATCH = 20;
 const MIN_RECLASSIFY_BATCH = 5;
@@ -1384,7 +1376,10 @@ interface ReclassifyEntry {
 
 function tryParseJsonArray(raw: string): unknown {
 	// Strip markdown fences if present
-	const stripped = raw.replace(/^```(?:json)?\s*/m, "").replace(/```\s*$/m, "").trim();
+	const stripped = raw
+		.replace(/^```(?:json)?\s*/m, "")
+		.replace(/```\s*$/m, "")
+		.trim();
 	try {
 		return JSON.parse(stripped);
 	} catch {
@@ -1453,9 +1448,7 @@ export async function reclassifyEntities(
 		};
 	}
 
-	const entityList = entities
-		.map((e, idx) => `${idx + 1}. ${e.canonical_name ?? e.name}`)
-		.join("\n");
+	const entityList = entities.map((e, idx) => `${idx + 1}. ${e.canonical_name ?? e.name}`).join("\n");
 
 	const prompt = `Classify each entity into one of these types: person, project, system, tool, concept, skill, task
 
@@ -1500,12 +1493,7 @@ Respond with ONLY a JSON array, no other text:
 	// Build a map of 1-based index -> validated type
 	const classifications = new Map<number, string>();
 	for (const entry of parsed) {
-		if (
-			typeof entry === "object" &&
-			entry !== null &&
-			"i" in entry &&
-			"type" in entry
-		) {
+		if (typeof entry === "object" && entry !== null && "i" in entry && "type" in entry) {
 			const rec = entry as Record<string, unknown>;
 			const idx = typeof rec.i === "number" ? rec.i : -1;
 			const entityType = typeof rec.type === "string" ? rec.type.toLowerCase().trim() : "";
@@ -1594,12 +1582,9 @@ export function pruneChunkGroupEntities(
 
 	const batchSize = options?.batchSize ?? 500;
 
-	const total = accessor.withReadDb((db) =>
-		(
-			db
-				.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'")
-				.get() as { n: number }
-		).n,
+	const total = accessor.withReadDb(
+		(db) =>
+			(db.prepare("SELECT COUNT(*) as n FROM entities WHERE entity_type = 'chunk_group'").get() as { n: number }).n,
 	);
 
 	if (options?.dryRun) {
@@ -1612,9 +1597,9 @@ export function pruneChunkGroupEntities(
 	}
 
 	const affected = accessor.withWriteTx((db) => {
-		const ids = db
-			.prepare("SELECT id FROM entities WHERE entity_type = 'chunk_group' LIMIT ?")
-			.all(batchSize) as { id: string }[];
+		const ids = db.prepare("SELECT id FROM entities WHERE entity_type = 'chunk_group' LIMIT ?").all(batchSize) as {
+			id: string;
+		}[];
 		if (ids.length === 0) return 0;
 		const placeholders = ids.map(() => "?").join(",");
 		db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids.map((r) => r.id));
@@ -1653,10 +1638,11 @@ export function pruneSingletonExtractedEntities(
 	const batchSize = options?.batchSize ?? 200;
 	const maxMentions = options?.maxMentions ?? 1;
 
-	const candidates = accessor.withReadDb((db) =>
-		db
-			.prepare(
-				`SELECT e.id FROM entities e
+	const candidates = accessor.withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT e.id FROM entities e
 				 WHERE e.entity_type = 'extracted'
 				   AND e.mentions <= ?
 				   AND NOT EXISTS (SELECT 1 FROM entity_aspects WHERE entity_id = e.id LIMIT 1)
@@ -1676,8 +1662,8 @@ export function pruneSingletonExtractedEntities(
 				     LIMIT 1
 				   )
 				 LIMIT ?`,
-			)
-			.all(maxMentions, batchSize) as { id: string }[],
+				)
+				.all(maxMentions, batchSize) as { id: string }[],
 	);
 
 	if (options?.dryRun) {
@@ -1704,13 +1690,7 @@ export function pruneSingletonExtractedEntities(
 		).run(...ids, ...ids);
 		// Delete entities — cascades entity_aspects and entity_dependencies
 		db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
-		writeRepairAudit(
-			db,
-			action,
-			ctx,
-			ids.length,
-			`deleted ${ids.length} singleton extracted entities`,
-		);
+		writeRepairAudit(db, action, ctx, ids.length, `deleted ${ids.length} singleton extracted entities`);
 		return ids.length;
 	});
 
@@ -1751,10 +1731,11 @@ export function structuralBackfill(
 
 	const batchSize = options?.batchSize ?? 100;
 
-	const rows = accessor.withReadDb((db) =>
-		db
-			.prepare(
-				`SELECT m.id as memory_id, m.content,
+	const rows = accessor.withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT m.id as memory_id, m.content,
 				        e.id as entity_id, e.entity_type, e.canonical_name, e.agent_id
 				 FROM memories m
 				 JOIN memory_entity_mentions mem ON mem.memory_id = m.id
@@ -1764,15 +1745,15 @@ export function structuralBackfill(
 				   AND NOT EXISTS (SELECT 1 FROM entity_attributes WHERE memory_id = m.id LIMIT 1)
 				 GROUP BY m.id
 				 LIMIT ?`,
-			)
-			.all(batchSize) as Array<{
-			memory_id: string;
-			content: string;
-			entity_id: string;
-			entity_type: string;
-			canonical_name: string;
-		agent_id: string;
-		}>,
+				)
+				.all(batchSize) as Array<{
+				memory_id: string;
+				content: string;
+				entity_id: string;
+				entity_type: string;
+				canonical_name: string;
+				agent_id: string;
+			}>,
 	);
 
 	if (rows.length === 0 || options?.dryRun) {

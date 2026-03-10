@@ -1,16 +1,7 @@
-import { useState } from "react";
 import { ChevronRight, Menu } from "lucide-react";
-import {
-	Collapsible,
-	CollapsibleContent,
-	CollapsibleTrigger,
-} from "../ui/collapsible";
-import {
-	Sheet,
-	SheetContent,
-	SheetTitle,
-	SheetTrigger,
-} from "../ui/sheet";
+import { useState } from "react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
 import DocSearch from "./DocSearch";
 
 interface NavItem {
@@ -34,11 +25,7 @@ function sectionContainsSlug(section: NavSection, slug?: string): boolean {
 	return section.items.some((item) => item.slug === slug);
 }
 
-function shouldDefaultOpen(
-	section: NavSection,
-	index: number,
-	currentSlug?: string,
-): boolean {
+function shouldDefaultOpen(section: NavSection, index: number, currentSlug?: string): boolean {
 	if (sectionContainsSlug(section, currentSlug)) return true;
 	if (!currentSlug && index === 0) return true;
 	return false;
@@ -60,21 +47,10 @@ function SidebarSections({
 				const isOpen = shouldDefaultOpen(section, index, currentSlug);
 
 				return (
-					<Collapsible
-						key={section.label}
-						defaultOpen={isOpen}
-						className="sidebar-collapsible-section"
-					>
+					<Collapsible key={section.label} defaultOpen={isOpen} className="sidebar-collapsible-section">
 						<CollapsibleTrigger className="sidebar-section-trigger">
-							<ChevronRight
-								size={12}
-								className="sidebar-chevron"
-								aria-hidden="true"
-							/>
-							<span
-								className="sidebar-section-label"
-								data-active={isActiveSection || undefined}
-							>
+							<ChevronRight size={12} className="sidebar-chevron" aria-hidden="true" />
+							<span className="sidebar-section-label" data-active={isActiveSection || undefined}>
 								{section.label}
 							</span>
 						</CollapsibleTrigger>
@@ -84,11 +60,7 @@ function SidebarSections({
 									const isCurrent = item.slug === currentSlug;
 									return (
 										<li key={item.slug}>
-											<a
-												href={item.url}
-												aria-current={isCurrent ? "page" : undefined}
-												onClick={onNavigate}
-											>
+											<a href={item.url} aria-current={isCurrent ? "page" : undefined} onClick={onNavigate}>
 												{item.title}
 											</a>
 										</li>
@@ -103,10 +75,7 @@ function SidebarSections({
 	);
 }
 
-export default function DocsSidebar({
-	sections,
-	currentSlug,
-}: DocsSidebarProps) {
+export default function DocsSidebar({ sections, currentSlug }: DocsSidebarProps) {
 	const [sheetOpen, setSheetOpen] = useState(false);
 
 	return (
@@ -124,17 +93,9 @@ export default function DocsSidebar({
 						<Menu size={20} />
 						<span>Menu</span>
 					</SheetTrigger>
-					<SheetContent
-						side="left"
-						className="docs-sheet-content"
-						showCloseButton={true}
-					>
+					<SheetContent side="left" className="docs-sheet-content" showCloseButton={true}>
 						<SheetTitle className="sr-only">Documentation navigation</SheetTitle>
-						<SidebarSections
-							sections={sections}
-							currentSlug={currentSlug}
-							onNavigate={() => setSheetOpen(false)}
-						/>
+						<SidebarSections sections={sections} currentSlug={currentSlug} onNavigate={() => setSheetOpen(false)} />
 					</SheetContent>
 				</Sheet>
 			</div>

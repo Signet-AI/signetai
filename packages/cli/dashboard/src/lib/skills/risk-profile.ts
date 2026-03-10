@@ -23,9 +23,7 @@ function clamp(value: number): number {
 	return Math.round(value);
 }
 
-export function computePermissionFootprint(
-	permissions: readonly string[] | undefined,
-): PermissionFootprint {
+export function computePermissionFootprint(permissions: readonly string[] | undefined): PermissionFootprint {
 	if (!permissions || permissions.length === 0) return "unknown";
 	const lowered = permissions.map((p) => p.toLowerCase());
 	const hasHigh = lowered.some((p) => HIGH_RISK_PERMS.some((k) => p.includes(k)));
@@ -35,18 +33,12 @@ export function computePermissionFootprint(
 	return "low";
 }
 
-export function computeTrustProfile(
-	skill: SkillLike,
-	installedNames: readonly string[],
-): TrustProfile {
+export function computeTrustProfile(skill: SkillLike, installedNames: readonly string[]): TrustProfile {
 	const permissions = skill.permissions;
 	const footprint = computePermissionFootprint(permissions);
 	const installed = !!skill.name && installedNames.includes(skill.name);
 
-	const maintainer =
-		skill.maintainer ||
-		skill.author ||
-		(skill.fullName ? skill.fullName.split("@")[0] : "unknown");
+	const maintainer = skill.maintainer || skill.author || (skill.fullName ? skill.fullName.split("@")[0] : "unknown");
 
 	let compatibility = 40;
 	if (skill.provider) compatibility += 15;

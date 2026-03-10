@@ -7,9 +7,7 @@ export interface NormalizedMemoryContent {
 
 export function normalizeContentForStorage(content: string): string;
 export function deriveNormalizedContent(storageContent: string): string;
-export function normalizeAndHashContent(
-	content: string,
-): NormalizedMemoryContent;
+export function normalizeAndHashContent(content: string): NormalizedMemoryContent;
 
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number;
 export function squaredDistance(a: Float64Array, b: Float64Array): number;
@@ -18,11 +16,7 @@ export function blobToVector(buf: Buffer): number[];
 // TODO: wire into reranker or bulk search path — currently tested but
 // not called from TS. Requires callers to pre-concatenate vectors into
 // a flat buffer, which needs a fetch-path change to be worthwhile.
-export function batchCosineSimilarity(
-	query: Float32Array,
-	matrix: Buffer,
-	dim: number,
-): number[];
+export function batchCosineSimilarity(query: Float32Array, matrix: Buffer, dim: number): number[];
 
 export interface NormalisedAxes {
 	xs: number[];
@@ -30,18 +24,9 @@ export interface NormalisedAxes {
 	zs: number[] | null;
 }
 
-export function normaliseAxes(
-	xs: number[],
-	ys: number[],
-	zs: number[] | null,
-	scale: number,
-): NormalisedAxes;
+export function normaliseAxes(xs: number[], ys: number[], zs: number[] | null, scale: number): NormalisedAxes;
 
-export function buildKnnEdges(
-	coords: number[][],
-	k: number,
-	exactThreshold: number,
-): number[][];
+export function buildKnnEdges(coords: number[][], k: number, exactThreshold: number): number[][];
 
 export interface ScoredId {
 	id: string;

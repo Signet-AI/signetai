@@ -24,10 +24,7 @@ const isBun = typeof (globalThis as any).Bun !== "undefined";
  * Create a SQLite database connection
  * Compatible with better-sqlite3 API for drop-in replacement
  */
-export function createDatabase(
-	dbPath: string,
-	options?: { readonly?: boolean },
-): SQLiteDatabase {
+export function createDatabase(dbPath: string, options?: { readonly?: boolean }): SQLiteDatabase {
 	if (isBun) {
 		// Bun runtime - use built-in bun:sqlite
 		// We need to use require-style for bun:sqlite to work with bundlers

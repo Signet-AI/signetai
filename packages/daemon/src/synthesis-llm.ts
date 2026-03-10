@@ -6,8 +6,8 @@
  * uses tiny local models for simple tagging work.
  */
 
-import type { LlmProvider } from "./pipeline/provider";
 import { logger } from "./logger";
+import type { LlmProvider } from "./pipeline/provider";
 
 let provider: LlmProvider | null = null;
 
@@ -21,9 +21,7 @@ export function initSynthesisProvider(instance: LlmProvider): void {
 
 export function getSynthesisProvider(): LlmProvider {
 	if (!provider) {
-		throw new Error(
-			"Synthesis LlmProvider not initialised — call initSynthesisProvider() first",
-		);
+		throw new Error("Synthesis LlmProvider not initialised — call initSynthesisProvider() first");
 	}
 	return provider;
 }

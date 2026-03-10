@@ -11,11 +11,7 @@ import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
 import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
-import {
-	resolveFocalEntities,
-	setTraversalStatus,
-	traverseKnowledgeGraph,
-} from "./pipeline/graph-traversal";
+import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from "./pipeline/graph-traversal";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 
@@ -180,8 +176,7 @@ export async function hybridRecall(
 
 			// Min-max normalize BM25 scores to [0,1] within the batch
 			const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
-			const maxRaw =
-				rawScores.length > 0 ? Math.max(...rawScores) : 1;
+			const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
 			const normalizer = maxRaw > 0 ? maxRaw : 1;
 			for (const row of ftsRows) {
 				const normalised = Math.abs(row.raw_score) / normalizer;
@@ -315,9 +310,7 @@ export async function hybridRecall(
 			const queryTokens = tokenizeGraphQuery(query);
 			if (queryTokens.length > 0) {
 				const agentId = params.agentId ?? "default";
-				const focal = getDbAccessor().withReadDb((db) =>
-					resolveFocalEntities(db, agentId, { queryTokens }),
-				);
+				const focal = getDbAccessor().withReadDb((db) => resolveFocalEntities(db, agentId, { queryTokens }));
 
 				if (focal.entityIds.length > 0) {
 					const traversal = getDbAccessor().withReadDb((db) =>

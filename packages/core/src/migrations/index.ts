@@ -297,9 +297,9 @@ export function runMigrations(db: MigrationDb): void {
 			const detail = err instanceof Error ? err.message : String(err);
 			throw new Error(
 				`Migration ${migration.version} (${migration.name}) failed: ${detail}\n\n` +
-				"Your data is safe — the failed migration was rolled back.\n" +
-				"Please report this at https://github.com/Signet-AI/signetai/issues\n" +
-				"with the error message above and your signetai version.",
+					"Your data is safe — the failed migration was rolled back.\n" +
+					"Please report this at https://github.com/Signet-AI/signetai/issues\n" +
+					"with the error message above and your signetai version.",
 			);
 		}
 	}

@@ -6,10 +6,10 @@
  * ingestion pipeline and other consumers can accept any provider.
  */
 
-import type { LlmProvider, LlmGenerateResult } from "@signet/core";
+import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { spawn as nodeSpawn } from "node:child_process";
+import type { LlmGenerateResult, LlmProvider } from "@signet/core";
 import { logger } from "../logger";
 
 // ---------------------------------------------------------------------------
@@ -111,16 +111,32 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 	const stdout = new ReadableStream<Uint8Array>({
 		start(controller) {
 			proc.stdout?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-			proc.stdout?.on("end", () => { try { controller.close(); } catch {} });
-			proc.stdout?.on("error", (err) => { try { controller.error(err); } catch {} });
+			proc.stdout?.on("end", () => {
+				try {
+					controller.close();
+				} catch {}
+			});
+			proc.stdout?.on("error", (err) => {
+				try {
+					controller.error(err);
+				} catch {}
+			});
 		},
 	});
 
 	const stderr = new ReadableStream<Uint8Array>({
 		start(controller) {
 			proc.stderr?.on("data", (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
-			proc.stderr?.on("end", () => { try { controller.close(); } catch {} });
-			proc.stderr?.on("error", (err) => { try { controller.error(err); } catch {} });
+			proc.stderr?.on("end", () => {
+				try {
+					controller.close();
+				} catch {}
+			});
+			proc.stderr?.on("error", (err) => {
+				try {
+					controller.error(err);
+				} catch {}
+			});
 		},
 	});
 
@@ -133,7 +149,9 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		stdout,
 		stderr,
 		exited,
-		kill(signal?: string) { proc.kill(signal as NodeJS.Signals); },
+		kill(signal?: string) {
+			proc.kill(signal as NodeJS.Signals);
+		},
 	};
 }
 
@@ -179,9 +197,7 @@ interface OllamaGenerateResponse {
 	readonly eval_duration?: number;
 }
 
-export function createOllamaProvider(
-	config?: Partial<OllamaProviderConfig>,
-): LlmProvider {
+export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): LlmProvider {
 	const cfg = { ...DEFAULT_OLLAMA_CONFIG, ...config };
 
 	async function callOllama(
@@ -208,9 +224,7 @@ export function createOllamaProvider(
 
 			if (!res.ok) {
 				const body = await res.text().catch(() => "");
-				throw new Error(
-					`Ollama HTTP ${res.status}: ${body.slice(0, 200)}`,
-				);
+				throw new Error(`Ollama HTTP ${res.status}: ${body.slice(0, 200)}`);
 			}
 
 			const data = (await res.json()) as OllamaGenerateResponse;
@@ -294,9 +308,7 @@ interface ClaudeCodeJsonResponse {
 	readonly cost_usd?: number;
 }
 
-export function createClaudeCodeProvider(
-	config?: Partial<ClaudeCodeProviderConfig>,
-): LlmProvider {
+export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConfig>): LlmProvider {
 	const cfg = { ...DEFAULT_CLAUDE_CODE_CONFIG, ...config };
 
 	async function callClaude(
@@ -307,12 +319,7 @@ export function createClaudeCodeProvider(
 		return withSemaphore(async () => {
 			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 
-			const args = [
-				"-p", prompt,
-				"--model", cfg.model,
-				"--no-session-persistence",
-				"--output-format", outputFormat,
-			];
+			const args = ["-p", prompt, "--model", cfg.model, "--no-session-persistence", "--output-format", outputFormat];
 
 			// Unset CLAUDECODE to avoid nested-session detection when the
 			// daemon itself is launched from within a Claude Code session.
@@ -341,9 +348,7 @@ export function createClaudeCodeProvider(
 				}
 
 				if (exitCode !== 0) {
-					throw new Error(
-						`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`,
-					);
+					throw new Error(`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`);
 				}
 
 				const result = stdout.trim();
@@ -389,14 +394,16 @@ export function createClaudeCodeProvider(
 			const u = parsed.usage;
 			return {
 				text,
-				usage: u ? {
-					inputTokens: u.input_tokens ?? null,
-					outputTokens: u.output_tokens ?? null,
-					cacheReadTokens: u.cache_read_input_tokens ?? null,
-					cacheCreationTokens: u.cache_creation_input_tokens ?? null,
-					totalCost: parsed.cost_usd ?? null,
-					totalDurationMs: null,
-				} : null,
+				usage: u
+					? {
+							inputTokens: u.input_tokens ?? null,
+							outputTokens: u.output_tokens ?? null,
+							cacheReadTokens: u.cache_read_input_tokens ?? null,
+							cacheCreationTokens: u.cache_creation_input_tokens ?? null,
+							totalCost: parsed.cost_usd ?? null,
+							totalDurationMs: null,
+						}
+					: null,
 			};
 		},
 
@@ -470,18 +477,9 @@ function parseCodexJsonl(raw: string): LlmGenerateResult {
 			if (typeof rawUsage === "object" && rawUsage !== null) {
 				const turnUsage = rawUsage as CodexTurnUsage;
 				usage = {
-					inputTokens:
-						typeof turnUsage.input_tokens === "number"
-							? turnUsage.input_tokens
-							: null,
-					outputTokens:
-						typeof turnUsage.output_tokens === "number"
-							? turnUsage.output_tokens
-							: null,
-					cacheReadTokens:
-						typeof turnUsage.cached_input_tokens === "number"
-							? turnUsage.cached_input_tokens
-							: null,
+					inputTokens: typeof turnUsage.input_tokens === "number" ? turnUsage.input_tokens : null,
+					outputTokens: typeof turnUsage.output_tokens === "number" ? turnUsage.output_tokens : null,
+					cacheReadTokens: typeof turnUsage.cached_input_tokens === "number" ? turnUsage.cached_input_tokens : null,
 					cacheCreationTokens: null,
 					totalCost: null,
 					totalDurationMs: null,
@@ -498,9 +496,7 @@ function parseCodexJsonl(raw: string): LlmGenerateResult {
 	return { text, usage };
 }
 
-export function createCodexProvider(
-	config?: Partial<CodexProviderConfig>,
-): LlmProvider {
+export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmProvider {
 	const cfg = { ...DEFAULT_CODEX_CONFIG, ...config };
 
 	async function callCodex(
@@ -757,21 +753,15 @@ function parseOpenCodeTokens(value: unknown): OpenCodeTokens | undefined {
 	const cacheValue = value.cache;
 	const cache = isRecord(cacheValue)
 		? {
-				...(typeof cacheValue.read === "number"
-					? { read: cacheValue.read }
-					: {}),
-				...(typeof cacheValue.write === "number"
-					? { write: cacheValue.write }
-					: {}),
+				...(typeof cacheValue.read === "number" ? { read: cacheValue.read } : {}),
+				...(typeof cacheValue.write === "number" ? { write: cacheValue.write } : {}),
 			}
 		: undefined;
 
 	return {
 		...(typeof value.input === "number" ? { input: value.input } : {}),
 		...(typeof value.output === "number" ? { output: value.output } : {}),
-		...(typeof value.reasoning === "number"
-			? { reasoning: value.reasoning }
-			: {}),
+		...(typeof value.reasoning === "number" ? { reasoning: value.reasoning } : {}),
 		...(cache ? { cache } : {}),
 	};
 }
@@ -793,9 +783,7 @@ function parseOpenCodeMessageResponse(value: unknown): OpenCodeMessageResponse |
 	const info: OpenCodeAssistantMessage = {
 		...(typeof infoRecord.role === "string" ? { role: infoRecord.role } : {}),
 		...(typeof infoRecord.cost === "number" ? { cost: infoRecord.cost } : {}),
-		...(parseOpenCodeTokens(infoRecord.tokens)
-			? { tokens: parseOpenCodeTokens(infoRecord.tokens) }
-			: {}),
+		...(parseOpenCodeTokens(infoRecord.tokens) ? { tokens: parseOpenCodeTokens(infoRecord.tokens) } : {}),
 	};
 
 	return { info, parts };
@@ -811,9 +799,7 @@ function parseOpenCodeMessageList(value: unknown): readonly OpenCodeMessageRespo
 	return messages;
 }
 
-function selectLatestAssistantMessage(
-	messages: readonly OpenCodeMessageResponse[],
-): OpenCodeMessageResponse | null {
+function selectLatestAssistantMessage(messages: readonly OpenCodeMessageResponse[]): OpenCodeMessageResponse | null {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
 		const info = isRecord(message.info) ? message.info : null;
@@ -862,9 +848,7 @@ function extractOpenCodeText(data: OpenCodeMessageResponse): string {
 	return textParts.join("\n").trim();
 }
 
-export function createOpenCodeProvider(
-	config?: Partial<OpenCodeProviderConfig>,
-): LlmProvider {
+export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>): LlmProvider {
 	const cfg = { ...DEFAULT_OPENCODE_CONFIG, ...config };
 
 	// Parse "provider/model" format (e.g. "anthropic/claude-haiku-4-5-20251001")
@@ -932,12 +916,8 @@ export function createOpenCodeProvider(
 
 				const data = (await res.json()) as OllamaGenerateResponse;
 				resultText = typeof data.response === "string" ? data.response.trim() : "";
-				inputTokens =
-					typeof data.prompt_eval_count === "number"
-						? data.prompt_eval_count
-						: null;
-				outputTokens =
-					typeof data.eval_count === "number" ? data.eval_count : null;
+				inputTokens = typeof data.prompt_eval_count === "number" ? data.prompt_eval_count : null;
+				outputTokens = typeof data.eval_count === "number" ? data.eval_count : null;
 			} finally {
 				clearTimeout(timer);
 			}
@@ -950,12 +930,8 @@ export function createOpenCodeProvider(
 			return {
 				info: {
 					tokens: {
-						...(inputTokens !== null
-							? { input: inputTokens }
-							: {}),
-						...(outputTokens !== null
-							? { output: outputTokens }
-							: {}),
+						...(inputTokens !== null ? { input: inputTokens } : {}),
+						...(outputTokens !== null ? { output: outputTokens } : {}),
 					},
 				},
 				parts: [{ type: "text", text: resultText }],
@@ -982,9 +958,7 @@ export function createOpenCodeProvider(
 
 		if (!res.ok) {
 			const body = await res.text().catch(() => "");
-			throw new Error(
-				`OpenCode create session failed (${res.status}): ${body.slice(0, 200)}`,
-			);
+			throw new Error(`OpenCode create session failed (${res.status}): ${body.slice(0, 200)}`);
 		}
 
 		const data = (await res.json()) as Record<string, unknown>;
@@ -1016,24 +990,18 @@ export function createOpenCodeProvider(
 
 		try {
 			const postMessage = async (sid: string): Promise<Response> =>
-				fetch(
-					`${cfg.baseUrl}/session/${sid}/message`,
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: buildMessageBody(prompt),
-						signal: controller.signal,
-					},
-				);
+				fetch(`${cfg.baseUrl}/session/${sid}/message`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: buildMessageBody(prompt),
+					signal: controller.signal,
+				});
 
 			const listMessages = async (sid: string): Promise<Response> =>
-				fetch(
-					`${cfg.baseUrl}/session/${sid}/message`,
-					{
-						method: "GET",
-						signal: controller.signal,
-					},
-				);
+				fetch(`${cfg.baseUrl}/session/${sid}/message`, {
+					method: "GET",
+					signal: controller.signal,
+				});
 
 			const parseResponsePayload = async (res: Response): Promise<unknown> => {
 				const text = await res.text().catch(() => "");
@@ -1080,9 +1048,7 @@ export function createOpenCodeProvider(
 				return null;
 			};
 
-			const pollForAssistantMessage = async (
-				forSessionId: string,
-			): Promise<OpenCodeMessageResponse | null> => {
+			const pollForAssistantMessage = async (forSessionId: string): Promise<OpenCodeMessageResponse | null> => {
 				const deadline = Date.now() + Math.max(1000, Math.min(timeoutMs, 20000));
 				while (Date.now() < deadline) {
 					const res = await listMessages(forSessionId);
@@ -1117,26 +1083,18 @@ export function createOpenCodeProvider(
 					const retryRes = await postMessage(retrySid);
 					if (!retryRes.ok) {
 						const retryBody = await retryRes.text().catch(() => "");
-						throw new Error(
-							`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`,
-						);
+						throw new Error(`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`);
 					}
 					const retryParsed = await parsePostResponse(retryRes, retrySid);
 					if (retryParsed) return retryParsed;
 					logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
 						sessionId: retrySid,
 					});
-					const ollamaFallback = await tryOllamaFallback(
-						prompt,
-						opts,
-						"post-response-malformed-after-http-retry",
-					);
+					const ollamaFallback = await tryOllamaFallback(prompt, opts, "post-response-malformed-after-http-retry");
 					if (ollamaFallback) return ollamaFallback;
 					return buildOpenCodeFallbackResponse();
 				}
-				throw new Error(
-					`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`,
-				);
+				throw new Error(`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`);
 			}
 
 			const parsed = await parsePostResponse(res, sid);
@@ -1148,9 +1106,7 @@ export function createOpenCodeProvider(
 			const retryRes = await postMessage(retrySid);
 			if (!retryRes.ok) {
 				const retryBody = await retryRes.text().catch(() => "");
-				throw new Error(
-					`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`,
-				);
+				throw new Error(`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`);
 			}
 			const retryParsed = await parsePostResponse(retryRes, retrySid);
 			if (retryParsed) return retryParsed;
@@ -1158,11 +1114,7 @@ export function createOpenCodeProvider(
 			logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
 				sessionId: retrySid,
 			});
-			const ollamaFallback = await tryOllamaFallback(
-				prompt,
-				opts,
-				"post-response-malformed-after-session-reset",
-			);
+			const ollamaFallback = await tryOllamaFallback(prompt, opts, "post-response-malformed-after-session-reset");
 			if (ollamaFallback) return ollamaFallback;
 			return buildOpenCodeFallbackResponse();
 		} catch (e) {

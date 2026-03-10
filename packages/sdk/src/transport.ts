@@ -1,173 +1,148 @@
-import {
-  SignetApiError,
-  SignetNetworkError,
-  SignetTimeoutError,
-} from "./errors.js";
+import { SignetApiError, SignetNetworkError, SignetTimeoutError } from "./errors.js";
 
 export interface TransportConfig {
-  readonly baseUrl: string;
-  readonly timeoutMs: number;
-  readonly retries: number;
-  readonly retryDelayMs: number;
-  readonly headers?: Readonly<Record<string, string>>;
+	readonly baseUrl: string;
+	readonly timeoutMs: number;
+	readonly retries: number;
+	readonly retryDelayMs: number;
+	readonly headers?: Readonly<Record<string, string>>;
 }
 
 const DEFAULT_CONFIG: TransportConfig = {
-  baseUrl: "http://localhost:3850",
-  timeoutMs: 10_000,
-  retries: 2,
-  retryDelayMs: 500,
+	baseUrl: "http://localhost:3850",
+	timeoutMs: 10_000,
+	retries: 2,
+	retryDelayMs: 500,
 };
 
 const IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 interface RequestOptions {
-  readonly body?: unknown;
-  readonly query?: Record<string, string | number | boolean | undefined>;
-  readonly signal?: AbortSignal;
+	readonly body?: unknown;
+	readonly query?: Record<string, string | number | boolean | undefined>;
+	readonly signal?: AbortSignal;
 }
 
 export class SignetTransport {
-  private readonly config: TransportConfig;
+	private readonly config: TransportConfig;
 
-  constructor(config?: Partial<TransportConfig>) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
-  }
+	constructor(config?: Partial<TransportConfig>) {
+		this.config = { ...DEFAULT_CONFIG, ...config };
+	}
 
-  async request<T>(
-    method: string,
-    path: string,
-    opts?: RequestOptions,
-  ): Promise<T> {
-    const url = this.buildUrl(path, opts?.query);
-    const headers: Record<string, string> = {
-      ...this.config.headers,
-    };
+	async request<T>(method: string, path: string, opts?: RequestOptions): Promise<T> {
+		const url = this.buildUrl(path, opts?.query);
+		const headers: Record<string, string> = {
+			...this.config.headers,
+		};
 
-    if (opts?.body !== undefined) {
-      headers["Content-Type"] = "application/json";
-    }
+		if (opts?.body !== undefined) {
+			headers["Content-Type"] = "application/json";
+		}
 
-    const canRetry = IDEMPOTENT_METHODS.has(method.toUpperCase());
-    const maxAttempts = canRetry ? this.config.retries + 1 : 1;
+		const canRetry = IDEMPOTENT_METHODS.has(method.toUpperCase());
+		const maxAttempts = canRetry ? this.config.retries + 1 : 1;
 
-    let lastError: Error | undefined;
+		let lastError: Error | undefined;
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (attempt > 0) {
-        await sleep(this.config.retryDelayMs * attempt);
-      }
+		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			if (attempt > 0) {
+				await sleep(this.config.retryDelayMs * attempt);
+			}
 
-      try {
-        const response = await fetch(url, {
-          method,
-          headers,
-          body: opts?.body !== undefined
-            ? JSON.stringify(opts.body)
-            : undefined,
-          signal: opts?.signal ?? AbortSignal.timeout(this.config.timeoutMs),
-        });
+			try {
+				const response = await fetch(url, {
+					method,
+					headers,
+					body: opts?.body !== undefined ? JSON.stringify(opts.body) : undefined,
+					signal: opts?.signal ?? AbortSignal.timeout(this.config.timeoutMs),
+				});
 
-        if (!response.ok) {
-          const body = await parseResponseBody(response);
-          throw new SignetApiError(response.status, body);
-        }
+				if (!response.ok) {
+					const body = await parseResponseBody(response);
+					throw new SignetApiError(response.status, body);
+				}
 
-        return await parseResponseBody<T>(response);
-      } catch (error) {
-        if (error instanceof SignetApiError) {
-          // API errors are not retryable
-          throw error;
-        }
+				return await parseResponseBody<T>(response);
+			} catch (error) {
+				if (error instanceof SignetApiError) {
+					// API errors are not retryable
+					throw error;
+				}
 
-        if (error instanceof DOMException && error.name === "TimeoutError") {
-          lastError = new SignetTimeoutError(this.config.timeoutMs);
-        } else if (error instanceof Error) {
-          lastError = new SignetNetworkError(error.message, error);
-        } else {
-          lastError = new SignetNetworkError(
-            "Unknown network error",
-            new Error(String(error)),
-          );
-        }
-      }
-    }
+				if (error instanceof DOMException && error.name === "TimeoutError") {
+					lastError = new SignetTimeoutError(this.config.timeoutMs);
+				} else if (error instanceof Error) {
+					lastError = new SignetNetworkError(error.message, error);
+				} else {
+					lastError = new SignetNetworkError("Unknown network error", new Error(String(error)));
+				}
+			}
+		}
 
-    throw lastError;
-  }
+		throw lastError;
+	}
 
-  async get<T>(
-    path: string,
-    query?: Record<string, string | number | boolean | undefined>,
-  ): Promise<T> {
-    return this.request<T>("GET", path, { query });
-  }
+	async get<T>(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<T> {
+		return this.request<T>("GET", path, { query });
+	}
 
-  async post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>("POST", path, { body });
-  }
+	async post<T>(path: string, body?: unknown): Promise<T> {
+		return this.request<T>("POST", path, { body });
+	}
 
-  async patch<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>("PATCH", path, { body });
-  }
+	async patch<T>(path: string, body?: unknown): Promise<T> {
+		return this.request<T>("PATCH", path, { body });
+	}
 
-  async del<T>(
-    path: string,
-    query?: Record<string, string | number | boolean | undefined>,
-  ): Promise<T> {
-    return this.request<T>("DELETE", path, { query });
-  }
+	async del<T>(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<T> {
+		return this.request<T>("DELETE", path, { query });
+	}
 
-  private buildUrl(
-    path: string,
-    query?: Record<string, string | number | boolean | undefined>,
-  ): string {
-    const base = this.config.baseUrl.replace(/\/+$/, "");
-    const url = new URL(`${base}${path}`);
+	private buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>): string {
+		const base = this.config.baseUrl.replace(/\/+$/, "");
+		const url = new URL(`${base}${path}`);
 
-    if (query) {
-      for (const [key, value] of Object.entries(query)) {
-        if (value !== undefined) {
-          url.searchParams.set(key, String(value));
-        }
-      }
-    }
+		if (query) {
+			for (const [key, value] of Object.entries(query)) {
+				if (value !== undefined) {
+					url.searchParams.set(key, String(value));
+				}
+			}
+		}
 
-    return url.toString();
-  }
+		return url.toString();
+	}
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isJsonContentType(contentType: string | null): boolean {
-  if (!contentType) return false;
-  const normalized = contentType.toLowerCase();
-  return (
-    normalized.includes("application/json")
-    || normalized.includes("+json")
-  );
+	if (!contentType) return false;
+	const normalized = contentType.toLowerCase();
+	return normalized.includes("application/json") || normalized.includes("+json");
 }
 
 async function parseResponseBody<T = unknown>(response: Response): Promise<T> {
-  if (response.status === 204 || response.status === 205) {
-    return undefined as T;
-  }
+	if (response.status === 204 || response.status === 205) {
+		return undefined as T;
+	}
 
-  const text = await response.text();
-  if (text.length === 0) {
-    return undefined as T;
-  }
+	const text = await response.text();
+	if (text.length === 0) {
+		return undefined as T;
+	}
 
-  if (isJsonContentType(response.headers.get("content-type"))) {
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      // Some endpoints mislabel text as JSON; return raw to avoid masking payloads.
-      return text as T;
-    }
-  }
+	if (isJsonContentType(response.headers.get("content-type"))) {
+		try {
+			return JSON.parse(text) as T;
+		} catch {
+			// Some endpoints mislabel text as JSON; return raw to avoid masking payloads.
+			return text as T;
+		}
+	}
 
-  return text as T;
+	return text as T;
 }

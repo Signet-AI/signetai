@@ -2,11 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	DEFAULT_PIPELINE_V2,
-	loadMemoryConfig,
-	loadPipelineConfig,
-} from "./memory-config";
+import { DEFAULT_PIPELINE_V2, loadMemoryConfig, loadPipelineConfig } from "./memory-config";
 
 const tmpDirs: string[] = [];
 
@@ -106,10 +102,7 @@ describe("loadMemoryConfig", () => {
 
 	it("defaults ollama base_url to localhost:11434 when not specified", () => {
 		const agentsDir = makeTempAgentsDir();
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n",
-		);
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: ollama\n  model: nomic-embed-text\n");
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.provider).toBe("ollama");
 		expect(cfg.embedding.base_url).toBe("http://localhost:11434");
@@ -130,7 +123,7 @@ describe("loadMemoryConfig", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),
-			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: \"\"\n",
+			'embedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: ""\n',
 		);
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.provider).toBe("ollama");
@@ -139,10 +132,7 @@ describe("loadMemoryConfig", () => {
 
 	it("defaults openai base_url to the official API endpoint when not specified", () => {
 		const agentsDir = makeTempAgentsDir();
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			"embedding:\n  provider: openai\n  model: text-embedding-3-small\n",
-		);
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: openai\n  model: text-embedding-3-small\n");
 		const cfg = loadMemoryConfig(agentsDir);
 		expect(cfg.embedding.provider).toBe("openai");
 		expect(cfg.embedding.base_url).toBe("https://api.openai.com/v1");
@@ -445,13 +435,9 @@ describe("loadPipelineConfig", () => {
 
 		expect(result.worker.pollMs).toBe(DEFAULT_PIPELINE_V2.worker.pollMs);
 		expect(result.worker.maxRetries).toBe(DEFAULT_PIPELINE_V2.worker.maxRetries);
-		expect(result.extraction.timeout).toBe(
-			DEFAULT_PIPELINE_V2.extraction.timeout,
-		);
+		expect(result.extraction.timeout).toBe(DEFAULT_PIPELINE_V2.extraction.timeout);
 		expect(result.worker.leaseTimeoutMs).toBe(DEFAULT_PIPELINE_V2.worker.leaseTimeoutMs);
-		expect(result.extraction.minConfidence).toBe(
-			DEFAULT_PIPELINE_V2.extraction.minConfidence,
-		);
+		expect(result.extraction.minConfidence).toBe(DEFAULT_PIPELINE_V2.extraction.minConfidence);
 	});
 
 	it("accepts valid numeric values within range (flat keys)", () => {

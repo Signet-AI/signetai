@@ -8,10 +8,10 @@ import type {
 	Memory,
 } from "../../api";
 import {
-	type RelationKind,
 	type EmbeddingRelation,
 	type GraphNode,
 	type NodeType,
+	type RelationKind,
 	embeddingLabel,
 	embeddingSourceLabel,
 	entityFillStyle,
@@ -47,7 +47,7 @@ interface Props {
 	constellationOverlay?: ConstellationGraph | null;
 }
 
-let {
+const {
 	containerClass = "",
 	graphSelected,
 	embeddings,
@@ -83,9 +83,7 @@ const isAttributeSelected = $derived(selectedNodeType === "attribute" && selecte
 const entityDependencies = $derived.by(() => {
 	if (!selectedEntityData || !constellationOverlay) return [];
 	const id = selectedEntityData.id;
-	return constellationOverlay.dependencies.filter(
-		(d) => d.sourceEntityId === id || d.targetEntityId === id,
-	);
+	return constellationOverlay.dependencies.filter((d) => d.sourceEntityId === id || d.targetEntityId === id);
 });
 
 const parentEntity = $derived.by(() => {

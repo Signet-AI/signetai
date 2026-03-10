@@ -7,8 +7,8 @@
  * inject mocks without touching global state.
  */
 
-import type { LlmProvider } from "./pipeline/provider";
 import { logger } from "./logger";
+import type { LlmProvider } from "./pipeline/provider";
 
 let provider: LlmProvider | null = null;
 
@@ -22,9 +22,7 @@ export function initLlmProvider(instance: LlmProvider): void {
 
 export function getLlmProvider(): LlmProvider {
 	if (!provider) {
-		throw new Error(
-			"LlmProvider not initialised — call initLlmProvider() first",
-		);
+		throw new Error("LlmProvider not initialised — call initLlmProvider() first");
 	}
 	return provider;
 }

@@ -1,144 +1,145 @@
 <script lang="ts">
-	import type { ConfigFile } from "$lib/api";
-	import { st } from "$lib/stores/settings.svelte";
-	import { setSettingsDirty } from "$lib/stores/unsaved-changes.svelte";
-	import { untrack } from "svelte";
-	import AgentSection from "./settings/AgentSection.svelte";
-	import AuthSection from "./settings/AuthSection.svelte";
-	import EmbeddingsSection from "./settings/EmbeddingsSection.svelte";
-	import MemorySection from "./settings/MemorySection.svelte";
-	import PipelineSection from "./settings/PipelineSection.svelte";
-	import SearchSection from "./settings/SearchSection.svelte";
-	import TrustSection from "./settings/TrustSection.svelte";
-	import IdentityPanel from "$lib/components/config/IdentityPanel.svelte";
-	import PageBanner from "$lib/components/layout/PageBanner.svelte";
-	import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
-	import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
-	import { nav } from "$lib/stores/navigation.svelte";
-	import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
+import type { ConfigFile } from "$lib/api";
+import type IdentityPanel from "$lib/components/config/IdentityPanel.svelte";
+import PageBanner from "$lib/components/layout/PageBanner.svelte";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
+import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import { nav } from "$lib/stores/navigation.svelte";
+import { st } from "$lib/stores/settings.svelte";
+import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
+import { setSettingsDirty } from "$lib/stores/unsaved-changes.svelte";
+import { untrack } from "svelte";
+import AgentSection from "./settings/AgentSection.svelte";
+import AuthSection from "./settings/AuthSection.svelte";
+import EmbeddingsSection from "./settings/EmbeddingsSection.svelte";
+import MemorySection from "./settings/MemorySection.svelte";
+import PipelineSection from "./settings/PipelineSection.svelte";
+import SearchSection from "./settings/SearchSection.svelte";
+import TrustSection from "./settings/TrustSection.svelte";
 
-	interface Props {
-		configFiles: ConfigFile[];
+interface Props {
+	configFiles: ConfigFile[];
+}
+
+const { configFiles }: Props = $props();
+
+interface SectionDef {
+	id: string;
+	title: string;
+	paths: string[][];
+	source: "agent" | "config";
+}
+
+const sectionDefs: SectionDef[] = [
+	{
+		id: "agent",
+		title: "Agent",
+		source: "agent",
+		paths: [["agent", "name"], ["agent", "description"], ["harnesses"]],
+	},
+	{
+		id: "embeddings",
+		title: "Embeddings",
+		source: "config",
+		paths: [["embedding"], ["memory", "embeddings"], ["embeddings"]],
+	},
+	{
+		id: "memory",
+		title: "Memory",
+		source: "config",
+		paths: [["memory", "session_budget"], ["memory", "current_md_budget"], ["memory", "decay_rate"], ["paths"]],
+	},
+	{
+		id: "search",
+		title: "Search",
+		source: "config",
+		paths: [["search"]],
+	},
+	{
+		id: "pipeline",
+		title: "Pipeline",
+		source: "agent",
+		paths: [["memory", "pipelineV2"]],
+	},
+	{
+		id: "trust",
+		title: "Trust",
+		source: "agent",
+		paths: [["trust"]],
+	},
+	{
+		id: "auth",
+		title: "Auth",
+		source: "config",
+		paths: [["auth"]],
+	},
+];
+
+const tabBtn =
+	"px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer whitespace-nowrap";
+const tabActive = `${tabBtn} text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)] border border-[color-mix(in_srgb,var(--sig-highlight),transparent_85%)]`;
+const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var(--sig-highlight)] hover:bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_94%)]`;
+
+const activeSection = $state("agent");
+let discardDialogOpen = $state(false);
+const identityPanel = $state<IdentityPanel | null>(null);
+const identityDirty = $state(false);
+
+const sections = $derived(
+	sectionDefs.map((def) => ({
+		id: def.id,
+		title: def.title,
+		dirty: st.isAnyPathDirty(def.source, def.paths),
+	})),
+);
+
+const combinedDirty = $derived(st.isDirty || identityDirty);
+
+$effect(() => {
+	const files = configFiles;
+	untrack(() => st.init(files));
+});
+
+$effect(() => {
+	setSettingsDirty(combinedDirty);
+	return () => {
+		setSettingsDirty(false);
+	};
+});
+
+async function saveAll(): Promise<void> {
+	const promises: Promise<void>[] = [];
+	if (st.isDirty) promises.push(st.save());
+	if (identityDirty && identityPanel) promises.push(identityPanel.save());
+	await Promise.all(promises);
+}
+
+function handleDiscard(): void {
+	discardDialogOpen = true;
+}
+
+function confirmDiscard(): void {
+	st.reset();
+	identityPanel?.discard();
+	discardDialogOpen = false;
+}
+
+function handleGlobalKey(e: KeyboardEvent): void {
+	if (e.key === "s" && (e.metaKey || e.ctrlKey)) {
+		e.preventDefault();
+		if (combinedDirty && !st.saving) saveAll();
+		return;
 	}
+}
 
-	const { configFiles }: Props = $props();
-
-	interface SectionDef {
-		id: string;
-		title: string;
-		paths: string[][];
-		source: "agent" | "config";
+function formatSavedAt(raw: string | null): string {
+	if (!raw) return "";
+	try {
+		return `Last saved ${new Date(raw).toLocaleTimeString()}`;
+	} catch {
+		return "";
 	}
-
-	const sectionDefs: SectionDef[] = [
-		{
-			id: "agent",
-			title: "Agent",
-			source: "agent",
-			paths: [["agent", "name"], ["agent", "description"], ["harnesses"]],
-		},
-		{
-			id: "embeddings",
-			title: "Embeddings",
-			source: "config",
-			paths: [["embedding"], ["memory", "embeddings"], ["embeddings"]],
-		},
-		{
-			id: "memory",
-			title: "Memory",
-			source: "config",
-			paths: [["memory", "session_budget"], ["memory", "current_md_budget"], ["memory", "decay_rate"], ["paths"]],
-		},
-		{
-			id: "search",
-			title: "Search",
-			source: "config",
-			paths: [["search"]],
-		},
-		{
-			id: "pipeline",
-			title: "Pipeline",
-			source: "agent",
-			paths: [["memory", "pipelineV2"]],
-		},
-		{
-			id: "trust",
-			title: "Trust",
-			source: "agent",
-			paths: [["trust"]],
-		},
-		{
-			id: "auth",
-			title: "Auth",
-			source: "config",
-			paths: [["auth"]],
-		},
-	];
-
-	const tabBtn = "px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer whitespace-nowrap";
-	const tabActive = `${tabBtn} text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)] border border-[color-mix(in_srgb,var(--sig-highlight),transparent_85%)]`;
-	const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var(--sig-highlight)] hover:bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_94%)]`;
-
-	let activeSection = $state("agent");
-	let discardDialogOpen = $state(false);
-	let identityPanel = $state<IdentityPanel | null>(null);
-	let identityDirty = $state(false);
-
-	let sections = $derived(
-		sectionDefs.map((def) => ({
-			id: def.id,
-			title: def.title,
-			dirty: st.isAnyPathDirty(def.source, def.paths),
-		})),
-	);
-
-	let combinedDirty = $derived(st.isDirty || identityDirty);
-
-	$effect(() => {
-		const files = configFiles;
-		untrack(() => st.init(files));
-	});
-
-	$effect(() => {
-		setSettingsDirty(combinedDirty);
-		return () => {
-			setSettingsDirty(false);
-		};
-	});
-
-	async function saveAll(): Promise<void> {
-		const promises: Promise<void>[] = [];
-		if (st.isDirty) promises.push(st.save());
-		if (identityDirty && identityPanel) promises.push(identityPanel.save());
-		await Promise.all(promises);
-	}
-
-	function handleDiscard(): void {
-		discardDialogOpen = true;
-	}
-
-	function confirmDiscard(): void {
-		st.reset();
-		identityPanel?.discard();
-		discardDialogOpen = false;
-	}
-
-	function handleGlobalKey(e: KeyboardEvent): void {
-		if (e.key === "s" && (e.metaKey || e.ctrlKey)) {
-			e.preventDefault();
-			if (combinedDirty && !st.saving) saveAll();
-			return;
-		}
-	}
-
-	function formatSavedAt(raw: string | null): string {
-		if (!raw) return "";
-		try {
-			return `Last saved ${new Date(raw).toLocaleTimeString()}`;
-		} catch {
-			return "";
-		}
-	}
+}
 </script>
 
 <svelte:window onkeydown={handleGlobalKey} />

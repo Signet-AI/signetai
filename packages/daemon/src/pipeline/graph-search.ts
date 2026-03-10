@@ -39,11 +39,7 @@ export function tokenizeGraphQuery(query: string): string[] {
  * Find memory IDs linked to entities matching the query via the
  * knowledge graph. Returns an empty set on any error (no degradation).
  */
-export function getGraphBoostIds(
-	query: string,
-	db: ReadDb,
-	timeoutMs: number,
-): GraphBoostResult {
+export function getGraphBoostIds(query: string, db: ReadDb, timeoutMs: number): GraphBoostResult {
 	const empty: GraphBoostResult = {
 		graphLinkedIds: new Set(),
 		entityHits: 0,

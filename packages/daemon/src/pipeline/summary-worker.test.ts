@@ -2,10 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
-import {
-	insertSummaryFacts,
-	SUMMARY_WORKER_UPDATED_BY,
-} from "./summary-worker";
+import { SUMMARY_WORKER_UPDATED_BY, insertSummaryFacts } from "./summary-worker";
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
@@ -63,11 +60,7 @@ describe("insertSummaryFacts", () => {
 
 		expect(saved).toBe(1);
 
-		const row = db
-			.prepare(
-				"SELECT who, source_id, source_type, project, updated_by FROM memories",
-			)
-			.get() as
+		const row = db.prepare("SELECT who, source_id, source_type, project, updated_by FROM memories").get() as
 			| {
 					who: string;
 					source_id: string | null;

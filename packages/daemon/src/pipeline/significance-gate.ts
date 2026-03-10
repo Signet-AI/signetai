@@ -55,8 +55,8 @@ function countSubstantiveTurns(transcript: string): number {
 
 	let currentRole: "user" | "assistant" | null = null;
 	let currentBlock = "";
-	let userBlocks: string[] = [];
-	let assistantBlocks: string[] = [];
+	const userBlocks: string[] = [];
+	const assistantBlocks: string[] = [];
 
 	for (const line of lines) {
 		const lower = line.trimStart().toLowerCase();

@@ -11,9 +11,9 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, basename } from "path";
-import type { ParsedDocument, ParsedSection } from "./types";
+import { basename, join } from "path";
 import { batchByTimeGap } from "./chat-utils";
+import type { ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // Slack JSON types (subset of the export schema)
@@ -191,16 +191,11 @@ function loadUsers(dirPath: string): Map<string, string> {
 		const raw = JSON.parse(readFileSync(usersPath, "utf-8"));
 		if (!Array.isArray(raw)) return usersMap;
 		const users_arr = raw.filter(
-			(u: unknown): u is SlackUser =>
-				typeof u === "object" && u !== null && "id" in u && "name" in u,
+			(u: unknown): u is SlackUser => typeof u === "object" && u !== null && "id" in u && "name" in u,
 		);
 		for (const user of users_arr) {
 			const displayName =
-				user.profile?.display_name ||
-				user.profile?.real_name ||
-				user.real_name ||
-				user.name ||
-				user.id;
+				user.profile?.display_name || user.profile?.real_name || user.real_name || user.name || user.id;
 			usersMap.set(user.id, displayName);
 		}
 	} catch {
@@ -224,8 +219,7 @@ function loadChannels(dirPath: string): Map<string, SlackChannel> {
 		const raw = JSON.parse(readFileSync(channelsPath, "utf-8"));
 		if (!Array.isArray(raw)) return channelsMap;
 		const channels_arr = raw.filter(
-			(c: unknown): c is SlackChannel =>
-				typeof c === "object" && c !== null && "id" in c && "name" in c,
+			(c: unknown): c is SlackChannel => typeof c === "object" && c !== null && "id" in c && "name" in c,
 		);
 		for (const ch of channels_arr) {
 			channelsMap.set(ch.name, ch);
@@ -324,10 +318,11 @@ function filterMessages(
 		if (options?.speakers && msg.user) {
 			const userName = users.get(msg.user) || msg.user;
 			const userId = msg.user; // guarded by `&& msg.user` above
-			if (!options.speakers.some((s) =>
-				s.toLowerCase() === userName.toLowerCase() ||
-				s.toLowerCase() === userId.toLowerCase()
-			)) {
+			if (
+				!options.speakers.some(
+					(s) => s.toLowerCase() === userName.toLowerCase() || s.toLowerCase() === userId.toLowerCase(),
+				)
+			) {
 				return false;
 			}
 		}
@@ -349,9 +344,7 @@ interface ConversationThread {
 
 function groupIntoThreads(messages: SlackMessage[]): ConversationThread[] {
 	// Sort by timestamp
-	const sorted = [...messages].sort((a, b) =>
-		parseFloat(a.ts) - parseFloat(b.ts)
-	);
+	const sorted = [...messages].sort((a, b) => Number.parseFloat(a.ts) - Number.parseFloat(b.ts));
 
 	// Group by explicit thread_ts first
 	const threadMap = new Map<string, SlackMessage[]>();
@@ -387,7 +380,7 @@ function groupIntoThreads(messages: SlackMessage[]): ConversationThread[] {
 	}
 
 	// Group unthreaded messages by time proximity
-	const batches = batchByTimeGap(unthreaded, (msg) => parseFloat(msg.ts) * 1000);
+	const batches = batchByTimeGap(unthreaded, (msg) => Number.parseFloat(msg.ts) * 1000);
 	for (const batch of batches) {
 		threads.push({
 			threadId: `conv-${batch[0].ts}`,
@@ -398,7 +391,7 @@ function groupIntoThreads(messages: SlackMessage[]): ConversationThread[] {
 	}
 
 	// Sort threads chronologically
-	return threads.sort((a, b) => parseFloat(a.startTs) - parseFloat(b.startTs));
+	return threads.sort((a, b) => Number.parseFloat(a.startTs) - Number.parseFloat(b.startTs));
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +406,7 @@ function threadToSection(
 	const lines: string[] = [];
 
 	for (const msg of thread.messages) {
-		const speaker = msg.user ? (users.get(msg.user) || msg.user) : "Unknown";
+		const speaker = msg.user ? users.get(msg.user) || msg.user : "Unknown";
 		const timestamp = tsToIsoShort(msg.ts);
 		const text = resolveUserMentions(msg.text, users);
 
@@ -421,9 +414,7 @@ function threadToSection(
 
 		// Include file attachments as context
 		if (msg.files && msg.files.length > 0) {
-			const fileNames = msg.files
-				.map((f) => f.title || f.name || "attachment")
-				.join(", ");
+			const fileNames = msg.files.map((f) => f.title || f.name || "attachment").join(", ");
 			lines.push(`  📎 Attachments: ${fileNames}`);
 		}
 
@@ -457,13 +448,13 @@ function threadToSection(
 
 /** Convert Slack ts (e.g. "1708012345.678900") to ISO date string */
 function tsToDate(ts: string): string {
-	const seconds = parseFloat(ts);
+	const seconds = Number.parseFloat(ts);
 	return new Date(seconds * 1000).toISOString().slice(0, 10);
 }
 
 /** Convert Slack ts to short ISO timestamp (YYYY-MM-DD HH:mm) */
 function tsToIsoShort(ts: string): string {
-	const seconds = parseFloat(ts);
+	const seconds = Number.parseFloat(ts);
 	return new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ");
 }
 

@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "../../core/src/migrations";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runMigrations } from "../../core/src/migrations";
 
 const TEST_DIR = join(tmpdir(), `signet-predictor-comparisons-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;

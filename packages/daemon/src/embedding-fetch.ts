@@ -1,6 +1,6 @@
+import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { DEFAULT_OPENAI_BASE_URL } from "./memory-config";
-import { logger } from "./logger";
 import { getSecret } from "./secrets.js";
 
 let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
@@ -10,11 +10,7 @@ export function setNativeFallbackToOllama(value: boolean): void {
 	nativeFallbackToOllama = value;
 }
 
-async function fetchOllamaEmbedding(
-	text: string,
-	baseUrl: string,
-	model: string,
-): Promise<number[] | null> {
+async function fetchOllamaEmbedding(text: string, baseUrl: string, model: string): Promise<number[] | null> {
 	const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/embeddings`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
@@ -42,18 +38,13 @@ export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 export function requiresOpenAiApiKey(baseUrl: string): boolean {
 	try {
 		const parsed = new URL(baseUrl.trim());
-		return (
-			(parsed.protocol === "https:" || parsed.protocol === "http:") &&
-			parsed.hostname === "api.openai.com"
-		);
+		return (parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.hostname === "api.openai.com";
 	} catch {
 		return false;
 	}
 }
 
-export async function resolveEmbeddingApiKey(
-	rawApiKey: string | undefined,
-): Promise<string> {
+export async function resolveEmbeddingApiKey(rawApiKey: string | undefined): Promise<string> {
 	const configured = rawApiKey?.trim() ?? "";
 	if (configured.startsWith("$secret:")) {
 		const secretName = configured.slice("$secret:".length).trim();
@@ -65,19 +56,12 @@ export async function resolveEmbeddingApiKey(
 	return configured || process.env.OPENAI_API_KEY || "";
 }
 
-export async function fetchEmbedding(
-	text: string,
-	cfg: EmbeddingConfig,
-): Promise<number[] | null> {
+export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promise<number[] | null> {
 	if (cfg.provider === "none") return null;
 	try {
 		if (cfg.provider === "native") {
 			if (nativeFallbackToOllama) {
-				return await fetchOllamaEmbedding(
-					text,
-					"http://localhost:11434",
-					"nomic-embed-text",
-				);
+				return await fetchOllamaEmbedding(text, "http://localhost:11434", "nomic-embed-text");
 			}
 			try {
 				if (!cachedNativeEmbed) {
@@ -89,17 +73,11 @@ export async function fetchEmbedding(
 				logger.warn(
 					"embedding",
 					`Native embedding failed, attempting ollama fallback: ${
-						nativeErr instanceof Error
-							? nativeErr.message
-							: String(nativeErr)
+						nativeErr instanceof Error ? nativeErr.message : String(nativeErr)
 					}`,
 				);
 				try {
-					const result = await fetchOllamaEmbedding(
-						text,
-						"http://localhost:11434",
-						"nomic-embed-text",
-					);
+					const result = await fetchOllamaEmbedding(text, "http://localhost:11434", "nomic-embed-text");
 					if (result !== null) {
 						nativeFallbackToOllama = true;
 						logger.info(
@@ -122,10 +100,7 @@ export async function fetchEmbedding(
 		const apiKey = await resolveEmbeddingApiKey(cfg.api_key);
 		const baseUrl = resolveEmbeddingBaseUrl(cfg);
 		if (!apiKey && requiresOpenAiApiKey(baseUrl)) {
-			logger.warn(
-				"embedding",
-				"No API key configured for OpenAI embeddings, skipping request to api.openai.com",
-			);
+			logger.warn("embedding", "No API key configured for OpenAI embeddings, skipping request to api.openai.com");
 			return null;
 		}
 		const res = await fetch(`${baseUrl.replace(/\/$/, "")}/embeddings`, {

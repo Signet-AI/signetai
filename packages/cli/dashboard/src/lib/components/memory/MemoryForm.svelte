@@ -1,17 +1,13 @@
 <script lang="ts">
 import type { Memory } from "$lib/api";
-import {
-	doUpdateMemory,
-	doDeleteMemory,
-	closeEditForm,
-} from "$lib/stores/memory.svelte";
-import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
 import { Label } from "$lib/components/ui/label/index.js";
-import { Textarea } from "$lib/components/ui/textarea/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
+import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Switch } from "$lib/components/ui/switch/index.js";
+import { Textarea } from "$lib/components/ui/textarea/index.js";
+import { closeEditForm, doDeleteMemory, doUpdateMemory } from "$lib/stores/memory.svelte";
 import AlertTriangle from "@lucide/svelte/icons/alert-triangle";
 
 interface Props {
@@ -22,11 +18,9 @@ interface Props {
 	onclose: () => void;
 }
 
-let { open, editingId, mode, memories, onclose }: Props = $props();
+const { open, editingId, mode, memories, onclose }: Props = $props();
 
-let editing = $derived(
-	editingId ? memories.find((m) => m.id === editingId) ?? null : null,
-);
+const editing = $derived(editingId ? (memories.find((m) => m.id === editingId) ?? null) : null);
 
 // Form state
 let content = $state("");
@@ -122,7 +116,7 @@ async function handleEdit() {
 	submitting = true;
 	error = "";
 
-	const parsedImportance = parseFloat(importance);
+	const parsedImportance = Number.parseFloat(importance);
 	const updates: {
 		content?: string;
 		type?: string;
@@ -138,10 +132,7 @@ async function handleEdit() {
 	if (newType !== (editing.type ?? "")) {
 		updates.type = newType;
 	}
-	if (
-		Number.isFinite(parsedImportance) &&
-		parsedImportance !== (editing.importance ?? 0.5)
-	) {
+	if (Number.isFinite(parsedImportance) && parsedImportance !== (editing.importance ?? 0.5)) {
 		updates.importance = parsedImportance;
 	}
 	const newTags = tags.trim();
@@ -191,8 +182,7 @@ async function handleDelete() {
 
 const inputClass =
 	"bg-[var(--sig-surface-raised)] border-[var(--sig-border)] text-[var(--sig-text-bright)] text-[12px] h-8";
-const selectContentClass =
-	"bg-[var(--sig-surface-raised)] border-[var(--sig-border)]";
+const selectContentClass = "bg-[var(--sig-surface-raised)] border-[var(--sig-border)]";
 const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 </script>
 

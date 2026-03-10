@@ -5,13 +5,13 @@
  */
 
 import {
-	searchMemories,
-	recallMemories,
-	getSimilarMemories,
-	getDistinctWho,
-	updateMemory,
-	deleteMemory,
 	type Memory,
+	deleteMemory,
+	getDistinctWho,
+	getSimilarMemories,
+	recallMemories,
+	searchMemories,
+	updateMemory,
 } from "$lib/api";
 
 export const mem = $state({
@@ -92,9 +92,7 @@ export async function doSearch(): Promise<void> {
 	mem.similarResults = [];
 	mem.searching = true;
 
-	const parsedImportance = mem.filterImportanceMin
-		? parseFloat(mem.filterImportanceMin)
-		: undefined;
+	const parsedImportance = mem.filterImportanceMin ? Number.parseFloat(mem.filterImportanceMin) : undefined;
 
 	const filters = {
 		type: mem.filterType || undefined,
@@ -117,20 +115,13 @@ export async function doSearch(): Promise<void> {
 	}
 }
 
-export async function findSimilar(
-	id: string,
-	sourceMemory: Memory,
-): Promise<void> {
+export async function findSimilar(id: string, sourceMemory: Memory): Promise<void> {
 	mem.similarSourceId = id;
 	mem.similarSource = sourceMemory;
 	mem.loadingSimilar = true;
 	mem.similarResults = [];
 	try {
-		mem.similarResults = await getSimilarMemories(
-			id,
-			10,
-			mem.filterType || undefined,
-		);
+		mem.similarResults = await getSimilarMemories(id, 10, mem.filterType || undefined);
 	} finally {
 		mem.loadingSimilar = false;
 	}

@@ -27,10 +27,7 @@ const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10MB
  * For plain text, returns content directly.
  * Rejects unsupported content types (binary, PDF, etc.).
  */
-export async function fetchUrlContent(
-	url: string,
-	opts?: FetchOptions,
-): Promise<FetchResult> {
+export async function fetchUrlContent(url: string, opts?: FetchOptions): Promise<FetchResult> {
 	const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_BYTES;
 
@@ -44,9 +41,7 @@ export async function fetchUrlContent(
 	});
 
 	if (!response.ok) {
-		throw new Error(
-			`Fetch failed: ${response.status} ${response.statusText}`,
-		);
+		throw new Error(`Fetch failed: ${response.status} ${response.statusText}`);
 	}
 
 	const contentType = response.headers.get("content-type") ?? "text/plain";
@@ -56,9 +51,7 @@ export async function fetchUrlContent(
 	if (contentLength) {
 		const declared = Number.parseInt(contentLength, 10);
 		if (Number.isFinite(declared) && declared > maxBytes) {
-			throw new Error(
-				`Content too large: ${declared} bytes exceeds ${maxBytes} limit`,
-			);
+			throw new Error(`Content too large: ${declared} bytes exceeds ${maxBytes} limit`);
 		}
 	}
 
@@ -70,9 +63,7 @@ export async function fetchUrlContent(
 		contentType.includes("application/xml");
 
 	if (!isText) {
-		throw new Error(
-			`Unsupported content type: ${contentType}. Only text-based content is supported.`,
-		);
+		throw new Error(`Unsupported content type: ${contentType}. Only text-based content is supported.`);
 	}
 
 	// Stream-read with size guard
@@ -90,9 +81,7 @@ export async function fetchUrlContent(
 			if (done) break;
 			totalBytes += value.byteLength;
 			if (totalBytes > maxBytes) {
-				throw new Error(
-					`Content too large: exceeded ${maxBytes} byte limit during streaming`,
-				);
+				throw new Error(`Content too large: exceeded ${maxBytes} byte limit during streaming`);
 			}
 			chunks.push(value);
 		}

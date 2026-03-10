@@ -1,114 +1,108 @@
 <script lang="ts">
-	import FormField from "$lib/components/config/FormField.svelte";
-	import FormSection from "$lib/components/config/FormSection.svelte";
-	import { Input } from "$lib/components/ui/input/index.js";
-	import * as Select from "$lib/components/ui/select/index.js";
-	import { st } from "$lib/stores/settings.svelte";
+import FormField from "$lib/components/config/FormField.svelte";
+import FormSection from "$lib/components/config/FormSection.svelte";
+import { Input } from "$lib/components/ui/input/index.js";
+import * as Select from "$lib/components/ui/select/index.js";
+import { st } from "$lib/stores/settings.svelte";
 
-	const selectTriggerClass =
-		"font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
-	const selectContentClass =
-		"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
-	const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
+const selectTriggerClass =
+	"font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
+const selectContentClass =
+	"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
+const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
 
-	const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
-	const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
-	const EMBEDDING_PROVIDER_OPTIONS = [
-		{ value: "native", label: "native (built-in)" },
-		{ value: "ollama", label: "ollama" },
-		{ value: "openai", label: "openai" },
-		{ value: "none", label: "none (disable vectors)" },
-	] as const;
+const EMBEDDING_PROVIDER_OPTIONS = [
+	{ value: "native", label: "native (built-in)" },
+	{ value: "ollama", label: "ollama" },
+	{ value: "openai", label: "openai" },
+	{ value: "none", label: "none (disable vectors)" },
+] as const;
 
-	const EMBEDDING_MODEL_PRESETS = {
-		native: [
-			{ value: "nomic-embed-text-v1.5", label: "nomic-embed-text-v1.5", dimensions: 768 },
-		],
-		ollama: [
-			{ value: "nomic-embed-text", label: "nomic-embed-text (recommended)", dimensions: 768 },
-			{ value: "all-minilm", label: "all-minilm", dimensions: 384 },
-			{ value: "mxbai-embed-large", label: "mxbai-embed-large", dimensions: 1024 },
-		],
-		openai: [
-			{ value: "text-embedding-3-small", label: "text-embedding-3-small (recommended)", dimensions: 1536 },
-			{ value: "text-embedding-3-large", label: "text-embedding-3-large", dimensions: 3072 },
-		],
-		none: [],
-	} as const;
+const EMBEDDING_MODEL_PRESETS = {
+	native: [{ value: "nomic-embed-text-v1.5", label: "nomic-embed-text-v1.5", dimensions: 768 }],
+	ollama: [
+		{ value: "nomic-embed-text", label: "nomic-embed-text (recommended)", dimensions: 768 },
+		{ value: "all-minilm", label: "all-minilm", dimensions: 384 },
+		{ value: "mxbai-embed-large", label: "mxbai-embed-large", dimensions: 1024 },
+	],
+	openai: [
+		{ value: "text-embedding-3-small", label: "text-embedding-3-small (recommended)", dimensions: 1536 },
+		{ value: "text-embedding-3-large", label: "text-embedding-3-large", dimensions: 3072 },
+	],
+	none: [],
+} as const;
 
-	type EmbeddingProvider = keyof typeof EMBEDDING_MODEL_PRESETS;
+type EmbeddingProvider = keyof typeof EMBEDDING_MODEL_PRESETS;
 
-	function embPath(): string[] {
-		return st.embPath();
+function embPath(): string[] {
+	return st.embPath();
+}
+
+function embeddingProvider(): EmbeddingProvider | "" {
+	const provider = st.sStr([...embPath(), "provider"]);
+	return provider in EMBEDDING_MODEL_PRESETS ? (provider as EmbeddingProvider) : "";
+}
+
+function embeddingModelPresets() {
+	const provider = embeddingProvider();
+	return provider ? EMBEDDING_MODEL_PRESETS[provider] : [];
+}
+
+function embeddingModelSelectValue(): string {
+	const model = st.sStr([...embPath(), "model"]);
+	if (!model) return "";
+	return embeddingModelPresets().some((preset) => preset.value === model) ? model : "__custom__";
+}
+
+function isKnownPreset(model: string): boolean {
+	return Object.values(EMBEDDING_MODEL_PRESETS).some((presets) => presets.some((preset) => preset.value === model));
+}
+
+function defaultBaseUrlForProvider(provider: EmbeddingProvider): string {
+	if (provider === "ollama") return DEFAULT_OLLAMA_BASE_URL;
+	if (provider === "openai") return DEFAULT_OPENAI_BASE_URL;
+	return "";
+}
+
+function setProviderDefaults(provider: EmbeddingProvider): void {
+	const currentModel = st.sStr([...embPath(), "model"]);
+	const currentBaseUrl = st.sStr([...embPath(), "base_url"]);
+	const presets = EMBEDDING_MODEL_PRESETS[provider];
+	const defaultPreset = presets[0];
+
+	if ((!currentModel || isKnownPreset(currentModel)) && defaultPreset) {
+		st.sSetStr([...embPath(), "model"], defaultPreset.value);
+		st.sSetNum([...embPath(), "dimensions"], defaultPreset.dimensions);
 	}
 
-	function embeddingProvider(): EmbeddingProvider | "" {
-		const provider = st.sStr([...embPath(), "provider"]);
-		return provider in EMBEDDING_MODEL_PRESETS ? (provider as EmbeddingProvider) : "";
+	const nextBaseUrl = defaultBaseUrlForProvider(provider);
+	if (
+		currentBaseUrl === "" ||
+		currentBaseUrl === DEFAULT_OLLAMA_BASE_URL ||
+		currentBaseUrl === DEFAULT_OPENAI_BASE_URL
+	) {
+		st.sSetStr([...embPath(), "base_url"], nextBaseUrl);
 	}
+}
 
-	function embeddingModelPresets() {
-		const provider = embeddingProvider();
-		return provider ? EMBEDDING_MODEL_PRESETS[provider] : [];
-	}
+function handleProviderChange(v: string | undefined): void {
+	const nextProvider = (v ?? "") as EmbeddingProvider | "";
+	st.sSetStr([...embPath(), "provider"], nextProvider);
+	if (!nextProvider) return;
+	if (nextProvider === "none") return;
+	setProviderDefaults(nextProvider);
+}
 
-	function embeddingModelSelectValue(): string {
-		const model = st.sStr([...embPath(), "model"]);
-		if (!model) return "";
-		return embeddingModelPresets().some((preset) => preset.value === model)
-			? model
-			: "__custom__";
-	}
-
-	function isKnownPreset(model: string): boolean {
-		return Object.values(EMBEDDING_MODEL_PRESETS).some((presets) =>
-			presets.some((preset) => preset.value === model),
-		);
-	}
-
-	function defaultBaseUrlForProvider(provider: EmbeddingProvider): string {
-		if (provider === "ollama") return DEFAULT_OLLAMA_BASE_URL;
-		if (provider === "openai") return DEFAULT_OPENAI_BASE_URL;
-		return "";
-	}
-
-	function setProviderDefaults(provider: EmbeddingProvider): void {
-		const currentModel = st.sStr([...embPath(), "model"]);
-		const currentBaseUrl = st.sStr([...embPath(), "base_url"]);
-		const presets = EMBEDDING_MODEL_PRESETS[provider];
-		const defaultPreset = presets[0];
-
-		if ((!currentModel || isKnownPreset(currentModel)) && defaultPreset) {
-			st.sSetStr([...embPath(), "model"], defaultPreset.value);
-			st.sSetNum([...embPath(), "dimensions"], defaultPreset.dimensions);
-		}
-
-		const nextBaseUrl = defaultBaseUrlForProvider(provider);
-		if (
-			currentBaseUrl === "" ||
-			currentBaseUrl === DEFAULT_OLLAMA_BASE_URL ||
-			currentBaseUrl === DEFAULT_OPENAI_BASE_URL
-		) {
-			st.sSetStr([...embPath(), "base_url"], nextBaseUrl);
-		}
-	}
-
-	function handleProviderChange(v: string | undefined): void {
-		const nextProvider = (v ?? "") as EmbeddingProvider | "";
-		st.sSetStr([...embPath(), "provider"], nextProvider);
-		if (!nextProvider) return;
-		if (nextProvider === "none") return;
-		setProviderDefaults(nextProvider);
-	}
-
-	function handleModelPresetChange(v: string | undefined): void {
-		if (!v || v === "__custom__") return;
-		const preset = embeddingModelPresets().find((candidate) => candidate.value === v);
-		if (!preset) return;
-		st.sSetStr([...embPath(), "model"], preset.value);
-		st.sSetNum([...embPath(), "dimensions"], preset.dimensions);
-	}
+function handleModelPresetChange(v: string | undefined): void {
+	if (!v || v === "__custom__") return;
+	const preset = embeddingModelPresets().find((candidate) => candidate.value === v);
+	if (!preset) return;
+	st.sSetStr([...embPath(), "model"], preset.value);
+	st.sSetNum([...embPath(), "dimensions"], preset.dimensions);
+}
 </script>
 
 {#if st.settingsFileName}

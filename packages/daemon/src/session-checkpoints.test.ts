@@ -5,11 +5,11 @@
 import { describe, expect, it } from "bun:test";
 import type { ContinuityState } from "./continuity-state";
 import {
-	formatRecoveryDigest,
+	type CheckpointRow,
 	formatPeriodicDigest,
 	formatPreCompactionDigest,
+	formatRecoveryDigest,
 	formatSessionEndDigest,
-	type CheckpointRow,
 } from "./session-checkpoints";
 
 function makeState(overrides: Partial<ContinuityState> = {}): ContinuityState {
@@ -70,9 +70,7 @@ describe("formatPeriodicDigest", () => {
 		});
 		const digest = formatPeriodicDigest(state);
 		expect(digest).toContain("### Structural Context");
-		expect(digest.indexOf("### Structural Context")).toBeLessThan(
-			digest.indexOf("### Recent Prompts"),
-		);
+		expect(digest.indexOf("### Structural Context")).toBeLessThan(digest.indexOf("### Recent Prompts"));
 		expect(digest).toContain("Focal entities: signetai");
 		expect(digest).toContain("Active constraints: 3");
 		expect(digest).toContain("Traversal memories: 24");
@@ -82,10 +80,7 @@ describe("formatPeriodicDigest", () => {
 describe("formatPreCompactionDigest", () => {
 	it("includes session context when provided", () => {
 		const state = makeState();
-		const digest = formatPreCompactionDigest(
-			state,
-			"Working on authentication refactor",
-		);
+		const digest = formatPreCompactionDigest(state, "Working on authentication refactor");
 		expect(digest).toContain("## Pre-Compaction Checkpoint");
 		expect(digest).toContain("### Session Context");
 		expect(digest).toContain("Working on authentication refactor");

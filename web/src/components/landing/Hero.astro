@@ -8,9 +8,9 @@ const rawAscii = `
  ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝`.trimStart();
 
 const animatedAscii = rawAscii.replace(/█/g, () => {
-  const d = (Math.random() * 2).toFixed(2);
-  const t = (0.5 + Math.random() * 1.5).toFixed(2);
-  return `<span class="ascii-block" style="--d: ${d}s; --t: ${t}s">█</span>`;
+	const d = (Math.random() * 2).toFixed(2);
+	const t = (0.5 + Math.random() * 1.5).toFixed(2);
+	return `<span class="ascii-block" style="--d: ${d}s; --t: ${t}s">█</span>`;
 });
 ---
 

@@ -5,15 +5,15 @@
  * and polls /api/pipeline/status every 5s for health + queue data.
  */
 
+import { getPipelineStatus } from "$lib/api";
 import {
+	type HealthStatus,
+	type LogEntry,
 	PIPELINE_NODES,
-	createDefaultNodeState,
 	type PipelineNodeState,
 	type PipelineStatusResponse,
-	type LogEntry,
-	type HealthStatus,
+	createDefaultNodeState,
 } from "./pipeline-types";
-import { getPipelineStatus } from "$lib/api";
 
 // ---------------------------------------------------------------------------
 // Category -> node ID mapping (built once from topology)
@@ -85,9 +85,7 @@ export function connectSSE(): void {
 
 			// Push ALL pipeline-relevant events to the global feed
 			const feed = [...pipeline.feed, entry];
-			pipeline.feed = feed.length > MAX_FEED_ENTRIES
-				? feed.slice(-MAX_FEED_ENTRIES)
-				: feed;
+			pipeline.feed = feed.length > MAX_FEED_ENTRIES ? feed.slice(-MAX_FEED_ENTRIES) : feed;
 
 			// Route to matching nodes (if any)
 			const nodeIds = categoryToNodeIds.get(entry.category);
@@ -102,9 +100,7 @@ export function connectSSE(): void {
 
 				// Append to recent logs (capped)
 				const logs = [...node.recentLogs, entry];
-				node.recentLogs = logs.length > MAX_RECENT_LOGS
-					? logs.slice(-MAX_RECENT_LOGS)
-					: logs;
+				node.recentLogs = logs.length > MAX_RECENT_LOGS ? logs.slice(-MAX_RECENT_LOGS) : logs;
 
 				// Track errors from log level
 				if (entry.level === "error") {
@@ -149,9 +145,7 @@ function mapHealthStatus(score: number): HealthStatus {
 function applyDiagnostics(diagnostics: Record<string, unknown>): void {
 	for (const node of PIPELINE_NODES) {
 		if (!node.diagnosticDomain) continue;
-		const domain = diagnostics[node.diagnosticDomain] as
-			| { score?: number; status?: string }
-			| undefined;
+		const domain = diagnostics[node.diagnosticDomain] as { score?: number; status?: string } | undefined;
 		if (!domain) continue;
 
 		const state = pipeline.nodes[node.id];
@@ -164,9 +158,7 @@ function applyDiagnostics(diagnostics: Record<string, unknown>): void {
 	}
 }
 
-function applyQueueCounts(
-	queues: PipelineStatusResponse["queues"],
-): void {
+function applyQueueCounts(queues: PipelineStatusResponse["queues"]): void {
 	const queueNode = pipeline.nodes.queue;
 	if (queueNode) {
 		const mem = queues.memory;
@@ -223,12 +215,17 @@ export async function pollStatus(): Promise<void> {
 			for (const [stage, count] of Object.entries(status.errorSummary)) {
 				// Map error stages to node IDs
 				const nodeId =
-					stage === "extraction" ? "extraction" :
-					stage === "decision" ? "extraction" :
-					stage === "embedding" ? "database" :
-					stage === "mutation" ? "database" :
-					stage === "connector" ? "sync" :
-					null;
+					stage === "extraction"
+						? "extraction"
+						: stage === "decision"
+							? "extraction"
+							: stage === "embedding"
+								? "database"
+								: stage === "mutation"
+									? "database"
+									: stage === "connector"
+										? "sync"
+										: null;
 				if (nodeId) {
 					const node = pipeline.nodes[nodeId];
 					if (node) node.errorCount = count;

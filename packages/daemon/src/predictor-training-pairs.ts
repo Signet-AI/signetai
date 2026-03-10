@@ -96,8 +96,7 @@ export function computeCombinedLabel(
 	const ftsAdj = ftsAdjustment(ftsHitCount);
 	const ftsOverlap = ftsAdj;
 	// Normalize continuity to [0, 1]
-	const continuityNormalized =
-		continuityScore !== null ? Math.max(0, Math.min(1, continuityScore)) : null;
+	const continuityNormalized = continuityScore !== null ? Math.max(0, Math.min(1, continuityScore)) : null;
 
 	let combined: number;
 	if (agentRelevanceScore !== null) {
@@ -182,11 +181,7 @@ export function collectTrainingPairs(
 	}
 }
 
-function collectTrainingPairsFromDb(
-	db: ReadDb,
-	sessionKey: string,
-	_agentId: string,
-): ReadonlyArray<TrainingPair> {
+function collectTrainingPairsFromDb(db: ReadDb, sessionKey: string, _agentId: string): ReadonlyArray<TrainingPair> {
 	// Load session memories for this session
 	const sessionMemories = db
 		.prepare(
@@ -299,11 +294,7 @@ function collectTrainingPairsFromDb(
 		// Use LLM continuity score or session-level fallback
 		const continuity = sm.relevance_score ?? sessionContinuityScore;
 
-		const label = computeCombinedLabel(
-			agentRelevance,
-			continuity,
-			sm.fts_hit_count,
-		);
+		const label = computeCombinedLabel(agentRelevance, continuity, sm.fts_hit_count);
 
 		const features: FeatureVector = {
 			recencyDays,
@@ -475,10 +466,7 @@ export function exportTrainingPairs(
  * Purge training pairs older than the retention period (default 90 days).
  * Returns the number of rows deleted.
  */
-export function purgeOldTrainingPairs(
-	accessor: DbAccessor,
-	retentionDays: number = 90,
-): number {
+export function purgeOldTrainingPairs(accessor: DbAccessor, retentionDays = 90): number {
 	try {
 		return accessor.withWriteTx((db) => {
 			const result = db
@@ -489,9 +477,8 @@ export function purgeOldTrainingPairs(
 				.run(`-${retentionDays}`);
 
 			// bun:sqlite .run() returns the statement; use changes property
-			const changes = typeof result === "object" && result !== null
-				? (result as { changes?: number }).changes ?? 0
-				: 0;
+			const changes =
+				typeof result === "object" && result !== null ? ((result as { changes?: number }).changes ?? 0) : 0;
 
 			if (changes > 0) {
 				logger.info("training-pairs", "Purged old training pairs", {

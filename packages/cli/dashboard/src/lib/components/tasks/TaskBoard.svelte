@@ -12,34 +12,26 @@ interface Props {
 	ontoggle: (id: string, enabled: boolean) => void;
 }
 
-let { tasks, loading, selectedColumn = 0, selectedTaskInColumn = 0, onopendetail, ontrigger, ontoggle }: Props = $props();
+const {
+	tasks,
+	loading,
+	selectedColumn = 0,
+	selectedTaskInColumn = 0,
+	onopendetail,
+	ontrigger,
+	ontoggle,
+}: Props = $props();
 
 // Derive columns from task + run state
-let scheduled = $derived(
-	tasks.filter((t) => t.enabled && t.last_run_status !== "running"),
-);
-let running = $derived(
-	tasks.filter(
-		(t) => t.last_run_status === "running",
-	),
-);
+const scheduled = $derived(tasks.filter((t) => t.enabled && t.last_run_status !== "running"));
+const running = $derived(tasks.filter((t) => t.last_run_status === "running"));
 
 // For completed/failed, show recent tasks that had runs with that status
-let completed = $derived(
-	tasks.filter(
-		(t) =>
-			t.last_run_status === "completed" &&
-			!running.some((r) => r.id === t.id),
-	),
+const completed = $derived(
+	tasks.filter((t) => t.last_run_status === "completed" && !running.some((r) => r.id === t.id)),
 );
-let failed = $derived(
-	tasks.filter(
-		(t) =>
-			t.last_run_status === "failed" &&
-			!running.some((r) => r.id === t.id),
-	),
-);
-let disabled = $derived(tasks.filter((t) => !t.enabled));
+const failed = $derived(tasks.filter((t) => t.last_run_status === "failed" && !running.some((r) => r.id === t.id)));
+const disabled = $derived(tasks.filter((t) => !t.enabled));
 
 const columns = [
 	{ key: "scheduled", label: "Scheduled", color: "var(--sig-accent)" },

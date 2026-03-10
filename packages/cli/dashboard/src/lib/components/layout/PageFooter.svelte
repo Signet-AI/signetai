@@ -11,14 +11,8 @@ interface Props {
 	taskCount: number;
 }
 
-const {
-	activeTab,
-	memoryFooterLabel,
-	memorySearching,
-	memorySimilarActive,
-	timelineGeneratedFor,
-	taskCount,
-}: Props = $props();
+const { activeTab, memoryFooterLabel, memorySearching, memorySimilarActive, timelineGeneratedFor, taskCount }: Props =
+	$props();
 
 function formatTimelineGeneratedFor(value: string): string {
 	if (!value) return "";

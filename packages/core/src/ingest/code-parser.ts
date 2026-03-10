@@ -13,11 +13,11 @@
  * patterns, and recent development activity.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, basename, extname, relative } from "path";
 import { execFileSync } from "child_process";
-import type { ParsedDocument, ParsedSection } from "./types";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { basename, extname, join, relative } from "path";
 import { findGit } from "./git-utils";
+import type { ParsedDocument, ParsedSection } from "./types";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -225,11 +225,7 @@ function detectLanguages(repoPath: string): LanguageStats[] {
 		.sort((a, b) => b.fileCount - a.fileCount);
 }
 
-function countExtensions(
-	dirPath: string,
-	counts: Map<string, number>,
-	depth: number,
-): void {
+function countExtensions(dirPath: string, counts: Map<string, number>, depth: number): void {
 	if (depth > 6) return; // Don't recurse too deep
 
 	let entries: string[];
@@ -296,7 +292,11 @@ function parseImportantFiles(repoPath: string): ParsedSection[] {
 			if (lowerName.endsWith(".json")) {
 				const section = parseJsonConfig(fileName, content);
 				if (section) sections.push(section);
-			} else if (lowerName === "dockerfile" || lowerName === "docker-compose.yml" || lowerName === "docker-compose.yaml") {
+			} else if (
+				lowerName === "dockerfile" ||
+				lowerName === "docker-compose.yml" ||
+				lowerName === "docker-compose.yaml"
+			) {
 				sections.push({
 					heading: `Infrastructure: ${fileName}`,
 					depth: 2,
@@ -442,18 +442,17 @@ function parseGitLog(repoPath: string, maxCommits: number): ParsedSection[] {
 		if (!gitPath) return sections;
 
 		// Get recent commit log with a useful format
-		const logOutput = execFileSync(gitPath, [
-			"log",
-			`--max-count=${maxCommits}`,
-			"--pretty=format:%H|%an|%ad|%s",
-			"--date=short",
-		], {
-			cwd: repoPath,
-			encoding: "utf-8",
-			timeout: 15_000,
-			maxBuffer: 1024 * 1024,
-			windowsHide: true,
-		});
+		const logOutput = execFileSync(
+			gitPath,
+			["log", `--max-count=${maxCommits}`, "--pretty=format:%H|%an|%ad|%s", "--date=short"],
+			{
+				cwd: repoPath,
+				encoding: "utf-8",
+				timeout: 15_000,
+				maxBuffer: 1024 * 1024,
+				windowsHide: true,
+			},
+		);
 
 		if (logOutput.trim()) {
 			const commits = logOutput.trim().split("\n");
@@ -481,12 +480,7 @@ function parseGitLog(repoPath: string, maxCommits: number): ParsedSection[] {
 		}
 
 		// Get contributor summary
-		const shortlogOutput = execFileSync(gitPath, [
-			"shortlog",
-			"-sn",
-			"--no-merges",
-			"HEAD",
-		], {
+		const shortlogOutput = execFileSync(gitPath, ["shortlog", "-sn", "--no-merges", "HEAD"], {
 			cwd: repoPath,
 			encoding: "utf-8",
 			timeout: 10_000,
@@ -504,18 +498,17 @@ function parseGitLog(repoPath: string, maxCommits: number): ParsedSection[] {
 		}
 
 		// Get recent branch names (architecture signals)
-		const branchOutput = execFileSync(gitPath, [
-			"branch",
-			"-a",
-			"--sort=-committerdate",
-			"--format=%(refname:short) (%(committerdate:short))",
-		], {
-			cwd: repoPath,
-			encoding: "utf-8",
-			timeout: 10_000,
-			maxBuffer: 1024 * 1024,
-			windowsHide: true,
-		});
+		const branchOutput = execFileSync(
+			gitPath,
+			["branch", "-a", "--sort=-committerdate", "--format=%(refname:short) (%(committerdate:short))"],
+			{
+				cwd: repoPath,
+				encoding: "utf-8",
+				timeout: 10_000,
+				maxBuffer: 1024 * 1024,
+				windowsHide: true,
+			},
+		);
 
 		if (branchOutput.trim()) {
 			const branches = branchOutput.trim().split("\n").slice(0, 20);
@@ -557,10 +550,7 @@ function isTrivialCommit(subject: string): boolean {
 // Code structure extraction (functions/classes)
 // ---------------------------------------------------------------------------
 
-function extractCodeStructure(
-	repoPath: string,
-	languages: LanguageStats[],
-): ParsedSection[] {
+function extractCodeStructure(repoPath: string, languages: LanguageStats[]): ParsedSection[] {
 	const sections: ParsedSection[] = [];
 
 	// Only extract from top languages (limit work)
@@ -603,11 +593,7 @@ interface CodeDefinition {
 	readonly line: number;
 }
 
-function scanDefinitions(
-	dirPath: string,
-	extensions: Set<string>,
-	depth: number,
-): CodeDefinition[] {
+function scanDefinitions(dirPath: string, extensions: Set<string>, depth: number): CodeDefinition[] {
 	if (depth > 5) return [];
 
 	const definitions: CodeDefinition[] = [];
@@ -646,11 +632,7 @@ function scanDefinitions(
 	return definitions;
 }
 
-function extractDefinitions(
-	filePath: string,
-	content: string,
-	ext: string,
-): CodeDefinition[] {
+function extractDefinitions(filePath: string, content: string, ext: string): CodeDefinition[] {
 	const defs: CodeDefinition[] = [];
 	const lines = content.split("\n");
 
@@ -819,7 +801,5 @@ function groupDefinitionsByFile(
 		grouped.set(relPath, list);
 	}
 
-	return [...grouped.entries()]
-		.map(([file, defs]) => ({ file, defs }))
-		.sort((a, b) => a.file.localeCompare(b.file));
+	return [...grouped.entries()].map(([file, defs]) => ({ file, defs })).sort((a, b) => a.file.localeCompare(b.file));
 }

@@ -1,9 +1,9 @@
 <script lang="ts">
-import { marked } from "marked";
 import CodeEditor from "$lib/components/CodeEditor.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
-import Pencil from "@lucide/svelte/icons/pencil";
 import Eye from "@lucide/svelte/icons/eye";
+import Pencil from "@lucide/svelte/icons/pencil";
+import { marked } from "marked";
 
 interface Props {
 	content: string;
@@ -19,7 +19,7 @@ interface Props {
 	saveFeedback?: string;
 }
 
-let {
+const {
 	content,
 	filename,
 	charBudget,
@@ -40,34 +40,26 @@ function addBoxedHeadingClass(attrs: string): string {
 	}
 
 	const quote = classMatch[1];
-	const classes = classMatch[2]
-		.split(/\s+/)
-		.filter(Boolean);
+	const classes = classMatch[2].split(/\s+/).filter(Boolean);
 	if (!classes.includes("md-boxed-heading")) {
 		classes.push("md-boxed-heading");
 	}
 
-	return attrs.replace(
-		/\sclass=(['"])(.*?)\1/i,
-		` class=${quote}${classes.join(" ")}${quote}`,
-	);
+	return attrs.replace(/\sclass=(['"])(.*?)\1/i, ` class=${quote}${classes.join(" ")}${quote}`);
 }
 
 function addSectionHeadingBoxes(markdownHtml: string): string {
-	return markdownHtml.replace(
-		/<h([1-6])(\s[^>]*)?>([\s\S]*?)<\/h\1>/gi,
-		(full, level, attrs = "", inner = "") => {
-			const attrsWithClass = addBoxedHeadingClass(attrs);
-			return `<h${level}${attrsWithClass}>${inner}</h${level}>`;
-		},
-	);
+	return markdownHtml.replace(/<h([1-6])(\s[^>]*)?>([\s\S]*?)<\/h\1>/gi, (full, level, attrs = "", inner = "") => {
+		const attrsWithClass = addBoxedHeadingClass(attrs);
+		return `<h${level}${attrsWithClass}>${inner}</h${level}>`;
+	});
 }
 
-let charCount = $derived(content?.length ?? 0);
-let budgetPct = $derived(charBudget ? Math.round((charCount / charBudget) * 100) : 0);
-let editing = $state(false);
+const charCount = $derived(content?.length ?? 0);
+const budgetPct = $derived(charBudget ? Math.round((charCount / charBudget) * 100) : 0);
+const editing = $state(false);
 
-let rendered = $derived.by(() => {
+const rendered = $derived.by(() => {
 	if (!content) return "";
 	const html = marked.parse(content, { async: false }) as string;
 	return addSectionHeadingBoxes(html);

@@ -11,23 +11,36 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
-import { logger } from "./logger";
-import { getDbAccessor } from "./db-accessor";
+import {
+	clearContinuity,
+	consumeState,
+	initContinuity,
+	recordPrompt,
+	recordRemember,
+	setStructuralSnapshot,
+	shouldCheckpoint,
+} from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
-import { fetchEmbedding } from "./embedding-fetch";
-import { hybridRecall } from "./memory-search";
-import { enqueueSummaryJob } from "./pipeline/summary-worker";
-import { getUpdateSummary } from "./update-system";
-import { loadMemoryConfig } from "./memory-config";
-import { recordSessionCandidates, trackFtsHits, parseFeedback, recordAgentFeedback } from "./session-memories";
-import { listSecrets } from "./secrets";
-import { buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
 import { getPredictorClient, recordPredictorLatency } from "./daemon";
-import { getPredictorState, updatePredictorState } from "./predictor-state";
+import { getDbAccessor } from "./db-accessor";
+import { fetchEmbedding } from "./embedding-fetch";
+import { propagateMemoryStatus } from "./knowledge-graph";
+import { logger } from "./logger";
+import { loadMemoryConfig } from "./memory-config";
+import { hybridRecall } from "./memory-search";
+import {
+	applyFtsOverlapFeedback,
+	decayAspectWeights,
+	getFeedbackTelemetry,
+	recordFeedbackTelemetry,
+	shouldRunSessionDecay,
+} from "./pipeline/aspect-feedback";
+import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from "./pipeline/graph-traversal";
+import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import {
 	type CandidateInput,
 	type CandidateSource,
@@ -37,35 +50,22 @@ import {
 	maybeExplore,
 	runPredictorScoring,
 } from "./predictor-scoring";
-import { propagateMemoryStatus } from "./knowledge-graph";
-import { resolveFocalEntities, setTraversalStatus, traverseKnowledgeGraph } from "./pipeline/graph-traversal";
+import { getPredictorState, updatePredictorState } from "./predictor-state";
+import { listSecrets } from "./secrets";
 import {
-	applyFtsOverlapFeedback,
-	decayAspectWeights,
-	getFeedbackTelemetry,
-	recordFeedbackTelemetry,
-	shouldRunSessionDecay,
-} from "./pipeline/aspect-feedback";
-import {
-	initContinuity,
-	recordPrompt,
-	recordRemember,
-	shouldCheckpoint,
-	consumeState,
-	clearContinuity,
-	setStructuralSnapshot,
-} from "./continuity-state";
-import {
-	getLatestCheckpoint,
-	getLatestCheckpointBySession,
-	formatRecoveryDigest,
+	flushPendingCheckpoints,
 	formatPeriodicDigest,
 	formatPreCompactionDigest,
+	formatRecoveryDigest,
 	formatSessionEndDigest,
-	writeCheckpoint,
+	getLatestCheckpoint,
+	getLatestCheckpointBySession,
 	queueCheckpointWrite,
-	flushPendingCheckpoints,
+	writeCheckpoint,
 } from "./session-checkpoints";
+import { parseFeedback, recordAgentFeedback, recordSessionCandidates, trackFtsHits } from "./session-memories";
+import { buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { getUpdateSummary } from "./update-system";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");

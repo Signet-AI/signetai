@@ -1,57 +1,42 @@
 {
-  "name": "@signetai/signet-memory-openclaw",
-  "version": "0.53.2",
-  "description": "Signet adapter for OpenClaw — runtime plugin for AI agent memory",
-  "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
-  "files": [
-    "dist",
-    "openclaw.plugin.json",
-    "clawdbot.plugin.json"
-  ],
-  "openclaw": {
-    "extensions": [
-      "./dist/index.js"
-    ]
-  },
-  "clawdbot": {
-    "extensions": [
-      "./dist/index.js"
-    ]
-  },
-  "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node && tsc --emitDeclarationOnly --declaration --outDir dist",
-    "dev": "bun --watch src/index.ts",
-    "test": "bun test"
-  },
-  "dependencies": {
-    "@sinclair/typebox": "0.34.47"
-  },
-  "peerDependencies": {
-    "openclaw": ">=0.1.0"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "keywords": [
-    "signet",
-    "openclaw",
-    "clawdbot",
-    "adapter",
-    "ai-memory",
-    "agent-identity"
-  ],
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Signet-AI/signetai.git",
-    "directory": "packages/adapters/openclaw"
-  }
+	"name": "@signetai/signet-memory-openclaw",
+	"version": "0.53.2",
+	"description": "Signet adapter for OpenClaw — runtime plugin for AI agent memory",
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": ["dist", "openclaw.plugin.json", "clawdbot.plugin.json"],
+	"openclaw": {
+		"extensions": ["./dist/index.js"]
+	},
+	"clawdbot": {
+		"extensions": ["./dist/index.js"]
+	},
+	"scripts": {
+		"build": "bun build src/index.ts --outdir dist --target node && tsc --emitDeclarationOnly --declaration --outDir dist",
+		"dev": "bun --watch src/index.ts",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@sinclair/typebox": "0.34.47"
+	},
+	"peerDependencies": {
+		"openclaw": ">=0.1.0"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"keywords": ["signet", "openclaw", "clawdbot", "adapter", "ai-memory", "agent-identity"],
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Signet-AI/signetai.git",
+		"directory": "packages/adapters/openclaw"
+	}
 }

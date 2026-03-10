@@ -5,20 +5,20 @@
  * Two modes: local (sidebar, depth-1 neighbors) and global (modal, all nodes).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { drag as d3drag } from "d3-drag";
 import {
+	type Simulation,
+	type SimulationLinkDatum,
+	type SimulationNodeDatum,
 	forceCenter,
 	forceCollide,
 	forceLink,
 	forceManyBody,
 	forceSimulation,
-	type Simulation,
-	type SimulationLinkDatum,
-	type SimulationNodeDatum,
 } from "d3-force";
 import { select } from "d3-selection";
-import { zoom as d3zoom, type ZoomBehavior } from "d3-zoom";
-import { drag as d3drag } from "d3-drag";
+import { type ZoomBehavior, zoom as d3zoom } from "d3-zoom";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // ─── types ───────────────────────────────────────────────────────────
 
@@ -109,9 +109,7 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 
 				const filteredNodes = [...allNodes.values()].filter((n) => neighbors.has(n.id));
 				const nodeSet = new Set(filteredNodes.map((n) => n.id));
-				const filteredLinks = allLinks.filter(
-					(l) => nodeSet.has(l.source.id) && nodeSet.has(l.target.id),
-				);
+				const filteredLinks = allLinks.filter((l) => nodeSet.has(l.source.id) && nodeSet.has(l.target.id));
 
 				return { nodes: filteredNodes, links: filteredLinks };
 			}
@@ -212,8 +210,7 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 				const t = link.target;
 				if (s.x == null || s.y == null || t.x == null || t.y == null) continue;
 
-				const highlighted =
-					!hoveredNode || (isHighlighted(s.id) && isHighlighted(t.id));
+				const highlighted = !hoveredNode || (isHighlighted(s.id) && isHighlighted(t.id));
 
 				ctx.strokeStyle = highlighted ? COL_LINK_HIGHLIGHT : COL_LINK;
 				ctx.lineWidth = highlighted ? 1.2 : 0.5;
@@ -281,22 +278,20 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 				if (node.x == null || node.y == null) continue;
 
 				// In local mode: show labels for current + hovered + hovered neighbors only
-				const showLabel = node.isCurrent ||
-					node.id === hoveredNode ||
-					(hoveredNode && adjacency.get(hoveredNode)?.has(node.id));
+				const showLabel =
+					node.isCurrent || node.id === hoveredNode || (hoveredNode && adjacency.get(hoveredNode)?.has(node.id));
 
 				if (!showLabel && isLocal) continue;
 				if (!isHighlighted(node.id) && !node.isCurrent && !isLocal) continue;
 
 				const maxLen = isLocal ? 16 : 14;
-				const label =
-					node.title.length > maxLen ? `${node.title.slice(0, maxLen - 1)}..` : node.title;
+				const label = node.title.length > maxLen ? `${node.title.slice(0, maxLen - 1)}..` : node.title;
 
 				const r = node.isCurrent ? baseRadius + 3 : baseRadius;
 				const y = node.y + r + 4;
 
-				ctx.fillStyle = node.isCurrent ? COL_CURRENT : (node.id === hoveredNode ? COL_LABEL : COL_LABEL_MUTED);
-				ctx.globalAlpha = node.isCurrent ? 1 : (node.id === hoveredNode ? 0.9 : 0.6);
+				ctx.fillStyle = node.isCurrent ? COL_CURRENT : node.id === hoveredNode ? COL_LABEL : COL_LABEL_MUTED;
+				ctx.globalAlpha = node.isCurrent ? 1 : node.id === hoveredNode ? 0.9 : 0.6;
 				ctx.fillText(label, node.x, y);
 				ctx.globalAlpha = 1;
 			}
@@ -430,9 +425,7 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 			<div className="graph-viewer" ref={containerRef}>
 				<div className="graph-header">
 					<span className="graph-title">Graph</span>
-					{connectionCount > 0 && (
-						<span className="graph-count">{connectionCount}</span>
-					)}
+					{connectionCount > 0 && <span className="graph-count">{connectionCount}</span>}
 					<button
 						type="button"
 						className="graph-toggle"
@@ -443,9 +436,7 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 					</button>
 				</div>
 				<canvas ref={canvasRef} className="graph-canvas" />
-				{hovered && data[hovered] && (
-					<div className="graph-tooltip">{data[hovered].title}</div>
-				)}
+				{hovered && data[hovered] && <div className="graph-tooltip">{data[hovered].title}</div>}
 			</div>
 
 			{globalOpen && (
@@ -453,22 +444,12 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 					<div className="graph-modal" onClick={(e) => e.stopPropagation()}>
 						<div className="graph-modal-header">
 							<span className="graph-title">Knowledge Graph</span>
-							<span className="graph-count">
-								{Object.keys(data).length} pages
-							</span>
-							<button
-								type="button"
-								className="graph-toggle"
-								onClick={() => setGlobalOpen(false)}
-							>
+							<span className="graph-count">{Object.keys(data).length} pages</span>
+							<button type="button" className="graph-toggle" onClick={() => setGlobalOpen(false)}>
 								Close
 							</button>
 						</div>
-						<GraphViewer
-							currentSlug={currentSlug}
-							collection={collection}
-							mode="global"
-						/>
+						<GraphViewer currentSlug={currentSlug} collection={collection} mode="global" />
 					</div>
 				</div>
 			)}

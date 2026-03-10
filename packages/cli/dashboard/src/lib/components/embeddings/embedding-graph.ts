@@ -575,7 +575,10 @@ export function entityFillStyle(entityType: string, alpha: number): string {
 	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-export function dependencyEdgeStyle(depType: string, strength: number): {
+export function dependencyEdgeStyle(
+	depType: string,
+	strength: number,
+): {
 	color: string;
 	width: number;
 	dash: number[];
@@ -608,19 +611,23 @@ export function attributeRadius(importance: number): number {
 
 /** Compute entity node radius from density (10-22px range). */
 export function entityRadius(entity: ConstellationEntity): number {
-	const density = entity.aspects.length +
-		entity.aspects.reduce((sum, a) => sum + a.attributes.length * 0.5, 0);
+	const density = entity.aspects.length + entity.aspects.reduce((sum, a) => sum + a.attributes.length * 0.5, 0);
 	return 10 + Math.min(density, 24) * 0.5;
 }
 
 /** Charge strength per node type for force simulation. */
 export function tierChargeStrength(nodeType: NodeType | undefined): number {
 	switch (nodeType) {
-		case "entity": return -200;
-		case "aspect": return -40;
-		case "attribute": return -15;
-		case "memory": return -5;
-		default: return -5;
+		case "entity":
+			return -200;
+		case "aspect":
+			return -40;
+		case "attribute":
+			return -15;
+		case "memory":
+			return -5;
+		default:
+			return -5;
 	}
 }
 

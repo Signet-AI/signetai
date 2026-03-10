@@ -1,13 +1,7 @@
 import type { MigrationDb } from "./index";
 
-function hasColumn(
-	db: MigrationDb,
-	table: string,
-	column: string,
-): boolean {
-	const rows = db
-		.prepare(`PRAGMA table_info(${table})`)
-		.all() as ReadonlyArray<Record<string, unknown>>;
+function hasColumn(db: MigrationDb, table: string, column: string): boolean {
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	return rows.some((r) => r.name === column);
 }
 
@@ -84,8 +78,6 @@ export function up(db: MigrationDb): void {
 
 	// -- add document_id to memory_jobs for document ingest jobs --
 	if (!hasColumn(db, "memory_jobs", "document_id")) {
-		db.exec(
-			"ALTER TABLE memory_jobs ADD COLUMN document_id TEXT",
-		);
+		db.exec("ALTER TABLE memory_jobs ADD COLUMN document_id TEXT");
 	}
 }

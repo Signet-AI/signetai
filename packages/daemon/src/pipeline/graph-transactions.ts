@@ -7,8 +7,8 @@
  * All functions expect to run inside a withWriteTx closure.
  */
 
-import type { WriteDb } from "../db-accessor";
 import type { ExtractedEntity } from "@signet/core";
+import type { WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
 
 // ---------------------------------------------------------------------------
@@ -79,9 +79,7 @@ function upsertEntity(
 			 WHERE (canonical_name = ? AND agent_id = ?) OR name = ?
 			 LIMIT 1`,
 		)
-		.get(canonical, agentId, rawName) as
-		| { id: string; mentions: number; entity_type: string }
-		| undefined;
+		.get(canonical, agentId, rawName) as { id: string; mentions: number; entity_type: string } | undefined;
 
 	if (existing) {
 		db.prepare(
@@ -91,9 +89,10 @@ function upsertEntity(
 		).run(now, existing.id);
 		// Upgrade entity_type if currently "extracted" and we have a real type
 		if (entityType !== "extracted" && existing.entity_type === "extracted") {
-			db.prepare(
-				`UPDATE entities SET entity_type = ? WHERE id = ? AND entity_type = 'extracted'`,
-			).run(entityType, existing.id);
+			db.prepare(`UPDATE entities SET entity_type = ? WHERE id = ? AND entity_type = 'extracted'`).run(
+				entityType,
+				existing.id,
+			);
 		}
 		return { id: existing.id, inserted: false };
 	}
@@ -112,9 +111,9 @@ function upsertEntity(
 		const msg = e instanceof Error ? e.message : String(e);
 		if (!msg.includes("UNIQUE constraint")) throw e;
 
-		const fallback = db
-			.prepare("SELECT id FROM entities WHERE name = ? LIMIT 1")
-			.get(rawName) as { id: string } | undefined;
+		const fallback = db.prepare("SELECT id FROM entities WHERE name = ? LIMIT 1").get(rawName) as
+			| { id: string }
+			| undefined;
 
 		if (fallback) {
 			db.prepare(
@@ -156,8 +155,7 @@ function upsertRelation(
 	if (existing) {
 		// Running average: new_avg = (old_avg * n + new_val) / (n + 1)
 		const newMentions = existing.mentions + 1;
-		const newConfidence =
-			(existing.confidence * existing.mentions + confidence) / newMentions;
+		const newConfidence = (existing.confidence * existing.mentions + confidence) / newMentions;
 
 		db.prepare(
 			`UPDATE relations
@@ -190,10 +188,7 @@ function upsertRelation(
  *
  * Call inside `accessor.withWriteTx(db => txPersistEntities(db, input))`.
  */
-export function txPersistEntities(
-	db: WriteDb,
-	input: PersistEntitiesInput,
-): PersistEntitiesResult {
+export function txPersistEntities(db: WriteDb, input: PersistEntitiesInput): PersistEntitiesResult {
 	let entitiesInserted = 0;
 	let entitiesUpdated = 0;
 	let relationsInserted = 0;
@@ -220,14 +215,7 @@ export function txPersistEntities(
 		if (target.inserted) entitiesInserted++;
 		else entitiesUpdated++;
 
-		const isNewRelation = upsertRelation(
-			db,
-			source.id,
-			target.id,
-			triple.relationship,
-			triple.confidence,
-			now,
-		);
+		const isNewRelation = upsertRelation(db, source.id, target.id, triple.relationship, triple.confidence, now);
 		if (isNewRelation) relationsInserted++;
 		else relationsUpdated++;
 
@@ -257,10 +245,7 @@ export function txPersistEntities(
  *
  * Call inside `accessor.withWriteTx(db => txDecrementEntityMentions(db, input))`.
  */
-export function txDecrementEntityMentions(
-	db: WriteDb,
-	input: DecrementInput,
-): DecrementResult {
+export function txDecrementEntityMentions(db: WriteDb, input: DecrementInput): DecrementResult {
 	if (input.entityIds.length === 0) return { entitiesOrphaned: 0 };
 
 	// Decrement mentions (floor at 0)
@@ -273,11 +258,7 @@ export function txDecrementEntityMentions(
 	}
 
 	// Delete orphaned entities (mentions = 0)
-	const orphaned = db
-		.prepare(
-			"SELECT id FROM entities WHERE mentions = 0",
-		)
-		.all() as Array<{ id: string }>;
+	const orphaned = db.prepare("SELECT id FROM entities WHERE mentions = 0").all() as Array<{ id: string }>;
 
 	if (orphaned.length > 0) {
 		const placeholders = orphaned.map(() => "?").join(", ");
@@ -297,9 +278,7 @@ export function txDecrementEntityMentions(
 		).run(...ids);
 
 		// Delete the entities themselves
-		db.prepare(
-			`DELETE FROM entities WHERE id IN (${placeholders})`,
-		).run(...ids);
+		db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
 	}
 
 	return { entitiesOrphaned: orphaned.length };

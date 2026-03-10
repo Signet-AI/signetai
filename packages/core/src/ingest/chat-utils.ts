@@ -16,10 +16,7 @@ export const TIME_GAP_MS = 30 * 60 * 1000;
  * @param getTimestamp - Extract ms-epoch timestamp from an item
  * @returns Array of batches (each batch is a non-empty array of items)
  */
-export function batchByTimeGap<T>(
-	items: readonly T[],
-	getTimestamp: (item: T) => number,
-): T[][] {
+export function batchByTimeGap<T>(items: readonly T[], getTimestamp: (item: T) => number): T[][] {
 	if (items.length === 0) return [];
 
 	const batches: T[][] = [];

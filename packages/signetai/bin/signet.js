@@ -8,9 +8,9 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { existsSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const distDir = join(__dirname, "..", "dist");
@@ -23,8 +23,7 @@ const subCommand = args[1];
 // Note: 'daemon status', 'daemon stop', 'daemon logs' just query HTTP - no bun needed
 const needsBun =
 	command === "start" || // alias for daemon start
-	(command === "daemon" &&
-		(subCommand === "start" || subCommand === "restart"));
+	(command === "daemon" && (subCommand === "start" || subCommand === "restart"));
 const isDaemonCommand = needsBun;
 
 // Check if Bun is available

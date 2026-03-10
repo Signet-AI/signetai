@@ -13,7 +13,8 @@ interface Props {
 	onselect: (tab: TabId, index: number) => void;
 }
 
-const tabBtn = "px-3 py-1 text-[11px] font-medium uppercase tracking-[0.06em] rounded-md transition-all duration-150 border-none cursor-pointer";
+const tabBtn =
+	"px-3 py-1 text-[11px] font-medium uppercase tracking-[0.06em] rounded-md transition-all duration-150 border-none cursor-pointer";
 const tabActive = `${tabBtn} bg-[var(--sig-highlight-muted)] text-[var(--sig-highlight-text)] shadow-[inset_0_0_0_1px_var(--sig-highlight-dim)]`;
 const tabInactive = `${tabBtn} bg-transparent text-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)]`;
 

@@ -53,7 +53,7 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 		if (colonIdx === -1) continue;
 
 		const key = trimmedLine.slice(0, colonIdx).trim();
-		let value = trimmedLine.slice(colonIdx + 1).trim();
+		const value = trimmedLine.slice(colonIdx + 1).trim();
 
 		const parent = stack[stack.length - 1].obj;
 
@@ -106,12 +106,7 @@ export function formatYaml(obj: Record<string, unknown>, indent = 0): string {
 			result += `${pad}${key}: null\n`;
 		} else if (typeof value === "string") {
 			// Quote strings that need it (contain special chars or start with number)
-			if (
-				value.includes(":") ||
-				value.includes("#") ||
-				value.includes("\n") ||
-				/^\d/.test(value)
-			) {
+			if (value.includes(":") || value.includes("#") || value.includes("\n") || /^\d/.test(value)) {
 				result += `${pad}${key}: "${value}"\n`;
 			} else {
 				result += `${pad}${key}: ${value}\n`;
@@ -139,10 +134,10 @@ function coerceYamlValue(value: string): unknown {
 	if (unquoted === "null" || unquoted === "~") return null;
 
 	// Integer
-	if (/^-?\d+$/.test(unquoted)) return parseInt(unquoted, 10);
+	if (/^-?\d+$/.test(unquoted)) return Number.parseInt(unquoted, 10);
 
 	// Float
-	if (/^-?\d+\.\d+$/.test(unquoted)) return parseFloat(unquoted);
+	if (/^-?\d+\.\d+$/.test(unquoted)) return Number.parseFloat(unquoted);
 
 	// String (return unquoted version)
 	return unquoted;

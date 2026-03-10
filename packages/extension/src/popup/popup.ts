@@ -66,7 +66,7 @@ async function init(): Promise<void> {
 	}
 
 	// Load data
-	let recentMemories = (await getMemories(10, 0)).memories;
+	const recentMemories = (await getMemories(10, 0)).memories;
 	const { stats } = await getMemories(1, 0);
 
 	// Update stats

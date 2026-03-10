@@ -32,14 +32,16 @@ export function parseSkillFile(content: string): ParsedSkillFile | null {
 	const data = doc.toJSON() as Record<string, unknown> | null;
 	if (!data) return null;
 
-	const getString = (key: string): string =>
-		typeof data[key] === "string" ? (data[key] as string) : "";
+	const getString = (key: string): string => (typeof data[key] === "string" ? (data[key] as string) : "");
 
 	const getStringArray = (key: string): string[] => {
 		const val = data[key];
 		if (Array.isArray(val)) return val.filter((v): v is string => typeof v === "string");
 		if (typeof val === "string") {
-			return val.split(",").map((s) => s.trim()).filter(Boolean);
+			return val
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
 		}
 		return [];
 	};
@@ -51,15 +53,9 @@ export function parseSkillFile(content: string): ParsedSkillFile | null {
 			version: getString("version") || undefined,
 			author: getString("author") || undefined,
 			license: getString("license") || undefined,
-			triggers: getStringArray("triggers").length > 0
-				? getStringArray("triggers")
-				: undefined,
-			tags: getStringArray("tags").length > 0
-				? getStringArray("tags")
-				: undefined,
-			permissions: getStringArray("permissions").length > 0
-				? getStringArray("permissions")
-				: undefined,
+			triggers: getStringArray("triggers").length > 0 ? getStringArray("triggers") : undefined,
+			tags: getStringArray("tags").length > 0 ? getStringArray("tags") : undefined,
+			permissions: getStringArray("permissions").length > 0 ? getStringArray("permissions") : undefined,
 			role: getString("role") || undefined,
 		},
 		body,
@@ -83,10 +79,7 @@ export interface FrontmatterPatch {
  *
  * Returns the full rewritten file content, or null if parsing fails.
  */
-export function patchSkillFrontmatter(
-	fileContent: string,
-	patch: FrontmatterPatch,
-): string | null {
+export function patchSkillFrontmatter(fileContent: string, patch: FrontmatterPatch): string | null {
 	const match = fileContent.match(FRONTMATTER_RE);
 	if (!match) return null;
 
