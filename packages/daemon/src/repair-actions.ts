@@ -234,7 +234,6 @@ export function requeueDeadJobs(
 
 		const placeholders = deadSummary.map(() => "?").join(", ");
 		const ids = deadSummary.map((r) => r.id);
-		const now = new Date().toISOString();
 		const result = db
 			.prepare(
 				`UPDATE summary_jobs
