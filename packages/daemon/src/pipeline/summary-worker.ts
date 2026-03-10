@@ -892,7 +892,7 @@ export function startSummaryWorker(
 			// key rotation, or TTL expiry. Env-var key changes invalidate
 			// immediately; secrets-store-only rotations rely on the 5-min TTL.
 			const envKey = process.env.ANTHROPIC_API_KEY ?? "";
-			const keyFingerprint = envKey ? `len${envKey.length}` : "";
+			const keyFingerprint = envKey ? new Bun.CryptoHasher("sha256").update(envKey).digest("hex").slice(0, 8) : "";
 			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
 			const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
 			if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
