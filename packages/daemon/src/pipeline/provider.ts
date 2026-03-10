@@ -632,11 +632,14 @@ export function createAnthropicProvider(
 						throw new Error(`Anthropic timeout after ${timeoutMs}ms`);
 					}
 
-					// Don't retry non-retryable errors
+					// Don't retry non-retryable errors — auth failures,
+					// timeouts, empty responses, and 4xx client errors
+					// (bad model, invalid request) won't succeed on retry.
 					if (e instanceof Error && (
 						e.message.includes("auth failed") ||
 						e.message.includes("timeout after") ||
-						e.message.includes("empty response")
+						e.message.includes("empty response") ||
+						e.message.includes("Anthropic HTTP 4")
 					)) {
 						throw e;
 					}
