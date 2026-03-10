@@ -16,11 +16,12 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { DbAccessor } from "../db-accessor";
 import type { LlmProvider } from "@signet/core";
-import { createOllamaProvider, createClaudeCodeProvider, createOpenCodeProvider } from "./provider";
+import { createAnthropicProvider, createOllamaProvider, createClaudeCodeProvider, createOpenCodeProvider } from "./provider";
 
 import { isDuplicate, inferType } from "../hooks";
 import { loadMemoryConfig } from "../memory-config";
 import { logger } from "../logger";
+import { getSecret } from "../secrets";
 import {
 	assessSignificance,
 	type SignificanceConfig,
@@ -792,11 +793,26 @@ function writeSummaryToDAG(
 
 /** Resolve from synthesis config — distinct from extraction so users can
  *  decouple the summary provider/model/timeout from the extraction pipeline. */
-function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): LlmProvider {
+async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promise<LlmProvider> {
 	const p = cfg.pipelineV2.synthesis.provider;
 	const model = cfg.pipelineV2.synthesis.model;
 	const timeout = cfg.pipelineV2.synthesis.timeout;
 	switch (p) {
+		case "anthropic": {
+			let apiKey = process.env.ANTHROPIC_API_KEY;
+			if (!apiKey) {
+				try {
+					apiKey = await getSecret("ANTHROPIC_API_KEY") ?? undefined;
+				} catch {
+					// secrets store unavailable
+				}
+			}
+			if (!apiKey) {
+				logger.error("summary-worker", "ANTHROPIC_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`");
+				return createOllamaProvider({ model: "qwen3:4b", defaultTimeoutMs: timeout });
+			}
+			return createAnthropicProvider({ model: model || "haiku", apiKey, defaultTimeoutMs: timeout });
+		}
 		case "claude-code":
 			return createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
 		case "opencode":
@@ -811,6 +827,14 @@ export function startSummaryWorker(
 ): SummaryWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
+
+	// Cache the LLM provider to avoid per-job getSecret calls.
+	// Re-resolve when config changes or after a TTL expires (so a
+	// newly added API key gets picked up without a restart).
+	let cachedProvider: LlmProvider | null = null;
+	let cachedProviderKey = "";
+	let cachedProviderAt = 0;
+	const PROVIDER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 	async function tick(): Promise<void> {
 		if (stopped) return;
@@ -864,8 +888,19 @@ export function startSummaryWorker(
 				project: job.project,
 			});
 
-			const provider = resolveProvider(cfg);
-			await processJob(accessor, provider, job, cfg);
+			// Cache provider across jobs — re-resolve on config change, env
+			// key rotation, or TTL expiry. Env-var key changes invalidate
+			// immediately; secrets-store-only rotations rely on the 5-min TTL.
+			const envKey = process.env.ANTHROPIC_API_KEY ?? "";
+			const keyFingerprint = envKey ? new Bun.CryptoHasher("sha256").update(envKey).digest("hex").slice(0, 8) : "";
+			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
+			const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
+			if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
+				cachedProvider = await resolveProvider(cfg);
+				cachedProviderKey = providerKey;
+				cachedProviderAt = Date.now();
+			}
+			await processJob(accessor, cachedProvider, job, cfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {

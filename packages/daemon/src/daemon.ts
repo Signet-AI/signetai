@@ -140,6 +140,7 @@ import {
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { type PredictorClient, createPredictorClient, resolvePredictorCheckpointPath } from "./predictor-client";
 import {
+	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
 	createOllamaProvider,
@@ -9111,27 +9112,62 @@ async function main() {
 	}
 	logger.info("config", "Extraction provider", { provider: effectiveExtractionProvider });
 
+	// Resolve Anthropic API key once — shared by extraction and synthesis
+	let anthropicApiKey: string | undefined;
+	const needsAnthropicForSynthesis =
+		memoryCfg.pipelineV2.synthesis.enabled &&
+		memoryCfg.pipelineV2.synthesis.provider === "anthropic";
+	if (effectiveExtractionProvider === "anthropic" || needsAnthropicForSynthesis) {
+		anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+		if (!anthropicApiKey) {
+			try {
+				anthropicApiKey = await getSecret("ANTHROPIC_API_KEY") ?? undefined;
+			} catch {
+				logger.warn("config", "Failed to resolve ANTHROPIC_API_KEY from secrets store");
+			}
+		}
+		if (!anthropicApiKey) {
+			logger.error("config", "ANTHROPIC_API_KEY not found — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`");
+			if (effectiveExtractionProvider === "anthropic") {
+				effectiveExtractionProvider = "ollama";
+			}
+		}
+	}
+
+	// When falling back to ollama, reset model so ollama uses its own default
+	// instead of inheriting an anthropic-specific alias like "haiku".
+	let effectiveExtractionModel: string | undefined = memoryCfg.pipelineV2.extraction.model;
+	if (effectiveExtractionProvider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama") {
+		effectiveExtractionModel = undefined;
+	}
+
 	// Create LLM provider once, register as daemon-wide singleton
 	const llmProvider =
-		effectiveExtractionProvider === "opencode"
-			? createOpenCodeProvider({
-					model: memoryCfg.pipelineV2.extraction.model || "anthropic/claude-haiku-4-5-20251001",
+		effectiveExtractionProvider === "anthropic" && anthropicApiKey
+			? createAnthropicProvider({
+					model: effectiveExtractionModel || "haiku",
+					apiKey: anthropicApiKey,
 					defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 				})
-			: effectiveExtractionProvider === "claude-code"
-				? createClaudeCodeProvider({
-						model: memoryCfg.pipelineV2.extraction.model || "haiku",
+			: effectiveExtractionProvider === "opencode"
+				? createOpenCodeProvider({
+						model: effectiveExtractionModel || "anthropic/claude-haiku-4-5-20251001",
 						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 					})
-				: effectiveExtractionProvider === "codex"
-					? createCodexProvider({
-							model: memoryCfg.pipelineV2.extraction.model || "gpt-5.3-codex",
+				: effectiveExtractionProvider === "claude-code"
+					? createClaudeCodeProvider({
+							model: effectiveExtractionModel || "haiku",
 							defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 						})
-					: createOllamaProvider({
-							model: memoryCfg.pipelineV2.extraction.model || "qwen3:4b",
-							defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-						});
+					: effectiveExtractionProvider === "codex"
+						? createCodexProvider({
+								model: effectiveExtractionModel || "gpt-5.3-codex",
+								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+							})
+						: createOllamaProvider({
+								model: effectiveExtractionModel || "qwen3:4b",
+								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+							});
 	initLlmProvider(llmProvider);
 
 	// Create synthesis provider — separate from extraction because synthesis
@@ -9142,6 +9178,11 @@ async function main() {
 			const serverReady = await ensureOpenCodeServer(4096);
 			if (!serverReady) {
 				logger.warn("config", "OpenCode server not available for synthesis, falling back to ollama");
+				effectiveSynthesisProvider = "ollama";
+			}
+		} else if (effectiveSynthesisProvider === "anthropic") {
+			if (!anthropicApiKey) {
+				logger.warn("config", "ANTHROPIC_API_KEY not found for synthesis, falling back to ollama");
 				effectiveSynthesisProvider = "ollama";
 			}
 		} else if (effectiveSynthesisProvider === "claude-code") {
@@ -9163,21 +9204,33 @@ async function main() {
 		}
 		logger.info("config", "Synthesis provider", { provider: effectiveSynthesisProvider });
 
+		// When falling back to ollama, reset model so ollama uses its own default
+		let effectiveSynthesisModel: string | undefined = memoryCfg.pipelineV2.synthesis.model;
+		if (effectiveSynthesisProvider === "ollama" && memoryCfg.pipelineV2.synthesis.provider !== "ollama") {
+			effectiveSynthesisModel = undefined;
+		}
+
 		const synthesisProvider =
-			effectiveSynthesisProvider === "opencode"
-				? createOpenCodeProvider({
-						model: memoryCfg.pipelineV2.synthesis.model || "anthropic/claude-haiku-4-5-20251001",
+			effectiveSynthesisProvider === "anthropic" && anthropicApiKey
+				? createAnthropicProvider({
+						model: effectiveSynthesisModel || "haiku",
+						apiKey: anthropicApiKey,
 						defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 					})
-				: effectiveSynthesisProvider === "claude-code"
-					? createClaudeCodeProvider({
-							model: memoryCfg.pipelineV2.synthesis.model || "haiku",
+				: effectiveSynthesisProvider === "opencode"
+					? createOpenCodeProvider({
+							model: effectiveSynthesisModel || "anthropic/claude-haiku-4-5-20251001",
 							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 						})
-					: createOllamaProvider({
-							model: memoryCfg.pipelineV2.synthesis.model || "qwen3:4b",
-							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-						});
+					: effectiveSynthesisProvider === "claude-code"
+						? createClaudeCodeProvider({
+								model: effectiveSynthesisModel || "haiku",
+								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+							})
+						: createOllamaProvider({
+								model: effectiveSynthesisModel || "qwen3:4b",
+								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+							});
 		initSynthesisProvider(synthesisProvider);
 	} else {
 		logger.info("config", "Synthesis disabled");
