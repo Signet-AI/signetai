@@ -148,6 +148,23 @@ import {
 	ensureOpenCodeServer,
 	stopOpenCodeServer,
 } from "./pipeline/provider";
+import {
+	initUsageWatcher,
+	wrapProviderWithWatcher,
+	getUsageWatcherStatus,
+	resetUsageWatcher,
+	persistModelDowngrade,
+	writeRestartBreadcrumb,
+	consumeRestartBreadcrumb,
+} from "./pipeline/usage-watcher";
+import {
+	initModelRegistry,
+	getAvailableModels,
+	getModelsByProvider,
+	getRegistryStatus,
+	refreshRegistry,
+	stopModelRegistry,
+} from "./pipeline/model-registry";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import {
@@ -6459,6 +6476,54 @@ app.get("/api/pipeline/status", (c) => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// Usage Watcher endpoints
+// ---------------------------------------------------------------------------
+
+app.get("/api/pipeline/usage-watcher", (c) => {
+	return c.json(getUsageWatcherStatus());
+});
+
+app.post("/api/pipeline/usage-watcher/reset", (c) => {
+	resetUsageWatcher();
+	return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Model Registry endpoints
+// ---------------------------------------------------------------------------
+
+app.get("/api/pipeline/models", (c) => {
+	const provider = c.req.query("provider");
+	const includeDeprecated = c.req.query("deprecated") === "true";
+	return c.json({
+		models: getAvailableModels(provider ?? undefined, includeDeprecated),
+		registry: getRegistryStatus(),
+	});
+});
+
+app.get("/api/pipeline/models/by-provider", (c) => {
+	return c.json(getModelsByProvider());
+});
+
+app.post("/api/pipeline/models/refresh", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	let anthropicKey: string | undefined = process.env.ANTHROPIC_API_KEY;
+	if (!anthropicKey) {
+		try {
+			anthropicKey = await getSecret("ANTHROPIC_API_KEY") ?? undefined;
+		} catch { /* ignore */ }
+	}
+	await refreshRegistry(
+		cfg.pipelineV2.extraction.provider === "ollama" ? "http://localhost:11434" : undefined,
+		anthropicKey,
+	);
+	return c.json({
+		models: getModelsByProvider(),
+		registry: getRegistryStatus(),
+	});
+});
+
 app.get("/api/predictor/status", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const predictorCfg = cfg.pipelineV2.predictor;
@@ -8972,6 +9037,7 @@ async function cleanup() {
 	closeLlmProvider();
 	closeSynthesisProvider();
 	stopOpenCodeServer();
+	stopModelRegistry();
 
 	// Stop git sync timer
 	stopGitSyncTimer();
@@ -9027,6 +9093,40 @@ async function main() {
 
 	// Migrations may have created traversal tables — clear the cache
 	invalidateTraversalCache();
+
+	// Check if this startup is a post-downgrade resumption. If so,
+	// force-release all leased jobs from the previous process so the
+	// pipeline can resume immediately instead of waiting for the
+	// 5-minute lease timeout to expire.
+	const restartBreadcrumb = consumeRestartBreadcrumb(AGENTS_DIR);
+	if (restartBreadcrumb) {
+		logger.info("daemon", "Post-downgrade resumption detected", {
+			previousModel: restartBreadcrumb.previousModel,
+			downgradedModel: restartBreadcrumb.downgradedModel,
+			provider: restartBreadcrumb.provider,
+			previousPid: restartBreadcrumb.pid,
+			restartedAt: restartBreadcrumb.restartedAt,
+		});
+		// Force-release any jobs the previous process left in 'leased' state
+		const released = getDbAccessor().withWriteTx((db) => {
+			const now = new Date().toISOString();
+			const result = db
+				.prepare(
+					`UPDATE memory_jobs
+					 SET status = 'pending', leased_at = NULL, updated_at = ?
+					 WHERE status = 'leased'`,
+				)
+				.run(now);
+			return typeof result === "object" && result !== null
+				? (result as { changes?: number }).changes ?? 0
+				: 0;
+		});
+		if (released > 0) {
+			logger.info("daemon", "Resumed pipeline: released stale leases from previous process", {
+				released,
+			});
+		}
+	}
 
 	// Write PID file
 	writeFileSync(PID_FILE, process.pid.toString());
@@ -9168,7 +9268,51 @@ async function main() {
 								model: effectiveExtractionModel || "qwen3:4b",
 								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 							});
-	initLlmProvider(llmProvider);
+	// Wrap provider with usage-limit watcher if enabled
+	if (memoryCfg.pipelineV2.usageWatcher.enabled) {
+		const wrappedProvider = wrapProviderWithWatcher(llmProvider);
+		initUsageWatcher(
+			memoryCfg.pipelineV2.usageWatcher,
+			effectiveExtractionProvider,
+			effectiveExtractionModel ?? "unknown",
+			() => {
+				const status = getUsageWatcherStatus();
+				if (status.state?.downgradedModel) {
+					const previousModel = status.state.downgradedProvider ?? status.state.currentModel;
+					persistModelDowngrade(AGENTS_DIR, status.state.currentProvider, status.state.downgradedModel);
+					writeRestartBreadcrumb(
+						AGENTS_DIR,
+						previousModel,
+						status.state.downgradedModel,
+						status.state.currentProvider,
+					);
+				}
+				logger.info("usage-watcher", "Initiating daemon restart for model downgrade");
+				cleanup().finally(() => {
+					const daemonScript = process.argv[1] ?? "";
+					if (!daemonScript) { process.exit(0); return; }
+					const replacement = spawn(process.execPath, [daemonScript], {
+						detached: true, stdio: "ignore", windowsHide: true,
+						env: { ...process.env, SIGNET_PORT: String(PORT), SIGNET_PATH: AGENTS_DIR },
+					});
+					replacement.unref();
+					process.exit(0);
+				});
+			},
+		);
+		initLlmProvider(wrappedProvider);
+	} else {
+		initLlmProvider(llmProvider);
+	}
+
+	// Initialize model registry for dynamic model discovery
+	if (memoryCfg.pipelineV2.modelRegistry.enabled) {
+		initModelRegistry(
+			memoryCfg.pipelineV2.modelRegistry,
+			effectiveExtractionProvider === "ollama" ? "http://localhost:11434" : undefined,
+			anthropicApiKey,
+		);
+	}
 
 	// Create synthesis provider — separate from extraction because synthesis
 	// needs a smarter model that can reason across long context

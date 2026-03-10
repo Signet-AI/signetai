@@ -173,6 +173,17 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		agentFeedback: true,
 		trainingTelemetry: true,
 	},
+	usageWatcher: {
+		enabled: true,
+		checkIntervalMs: 0,
+		triggerThreshold: 2,
+		cooldownMs: 300_000,
+		restartOnDowngrade: true,
+	},
+	modelRegistry: {
+		enabled: true,
+		refreshIntervalMs: 3600_000,
+	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -233,6 +244,8 @@ export function loadPipelineConfig(
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
 	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
 	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
+	const usageWatcherRaw = raw.usageWatcher as Record<string, unknown> | undefined;
+	const modelRegistryRaw = raw.modelRegistry as Record<string, unknown> | undefined;
 
 	// Helper: resolve with flat-fallback (non-extraction fields still nested-first)
 	const d = DEFAULT_PIPELINE_V2;
@@ -843,6 +856,45 @@ export function loadPipelineConfig(
 			),
 			trainingTelemetry: resolveBool(
 				predictorPipelineRaw?.trainingTelemetry, undefined, d.predictorPipeline.trainingTelemetry,
+			),
+		},
+
+		usageWatcher: {
+			enabled: resolveBool(
+				usageWatcherRaw?.enabled, undefined, d.usageWatcher.enabled,
+			),
+			checkIntervalMs: clampPositive(
+				usageWatcherRaw?.checkIntervalMs,
+				0,
+				3600000,
+				d.usageWatcher.checkIntervalMs,
+			),
+			triggerThreshold: clampPositive(
+				usageWatcherRaw?.triggerThreshold,
+				1,
+				20,
+				d.usageWatcher.triggerThreshold,
+			),
+			cooldownMs: clampPositive(
+				usageWatcherRaw?.cooldownMs,
+				10000,
+				3600000,
+				d.usageWatcher.cooldownMs,
+			),
+			restartOnDowngrade: resolveBool(
+				usageWatcherRaw?.restartOnDowngrade, undefined, d.usageWatcher.restartOnDowngrade,
+			),
+		},
+
+		modelRegistry: {
+			enabled: resolveBool(
+				modelRegistryRaw?.enabled, undefined, d.modelRegistry.enabled,
+			),
+			refreshIntervalMs: clampPositive(
+				modelRegistryRaw?.refreshIntervalMs,
+				60000,
+				86400000,
+				d.modelRegistry.refreshIntervalMs,
 			),
 		},
 	};

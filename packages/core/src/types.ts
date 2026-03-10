@@ -263,6 +263,29 @@ export interface PipelineV2Config {
 	readonly significance?: PipelineSignificanceConfig;
 	readonly predictor?: PredictorConfig;
 	readonly predictorPipeline: PipelinePredictorConfig;
+	readonly usageWatcher: PipelineUsageWatcherConfig;
+	readonly modelRegistry: PipelineModelRegistryConfig;
+}
+
+export interface PipelineUsageWatcherConfig {
+	readonly enabled: boolean;
+	readonly checkIntervalMs: number;
+	readonly triggerThreshold: number;
+	readonly cooldownMs: number;
+	readonly restartOnDowngrade: boolean;
+}
+
+export interface ModelRegistryEntry {
+	readonly id: string;
+	readonly provider: string;
+	readonly label: string;
+	readonly tier: "high" | "mid" | "low";
+	readonly deprecated: boolean;
+}
+
+export interface PipelineModelRegistryConfig {
+	readonly enabled: boolean;
+	readonly refreshIntervalMs: number;
 }
 
 export interface PipelinePredictorConfig {

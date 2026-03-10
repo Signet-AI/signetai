@@ -2467,3 +2467,73 @@ export async function getContinuityLatest(): Promise<ContinuityEntry[]> {
 		return [];
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Model Registry
+// ---------------------------------------------------------------------------
+
+export interface ModelRegistryEntry {
+	id: string;
+	provider: string;
+	label: string;
+	tier: "high" | "mid" | "low";
+	deprecated: boolean;
+}
+
+export async function getModelsByProvider(): Promise<Record<string, ModelRegistryEntry[]>> {
+	try {
+		const res = await fetch(`${API_BASE}/api/pipeline/models/by-provider`);
+		if (!res.ok) return {};
+		return (await res.json()) as Record<string, ModelRegistryEntry[]>;
+	} catch {
+		return {};
+	}
+}
+
+export async function refreshModelRegistry(): Promise<Record<string, ModelRegistryEntry[]>> {
+	try {
+		const res = await fetch(`${API_BASE}/api/pipeline/models/refresh`, { method: "POST" });
+		if (!res.ok) return {};
+		const body = (await res.json()) as { models: Record<string, ModelRegistryEntry[]> };
+		return body.models ?? {};
+	} catch {
+		return {};
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Usage Watcher
+// ---------------------------------------------------------------------------
+
+export interface UsageWatcherStatus {
+	enabled: boolean;
+	state: {
+		consecutiveSignals: number;
+		lastDowngradeAt: number;
+		currentProvider: string;
+		currentModel: string;
+		downgradedProvider: string | null;
+		downgradedModel: string | null;
+		totalDowngrades: number;
+		totalSignalsDetected: number;
+	} | null;
+}
+
+export async function getUsageWatcherStatus(): Promise<UsageWatcherStatus | null> {
+	try {
+		const res = await fetch(`${API_BASE}/api/pipeline/usage-watcher`);
+		if (!res.ok) return null;
+		return (await res.json()) as UsageWatcherStatus;
+	} catch {
+		return null;
+	}
+}
+
+export async function resetUsageWatcher(): Promise<boolean> {
+	try {
+		const res = await fetch(`${API_BASE}/api/pipeline/usage-watcher/reset`, { method: "POST" });
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
