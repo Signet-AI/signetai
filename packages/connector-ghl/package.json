@@ -1,0 +1,28 @@
+{
+  "name": "@signet/connector-ghl",
+  "version": "0.1.0",
+  "description": "Signet connector for GoHighLevel — OAuth bootstrap, entity discovery, memory ingestion, gap analysis, and account management",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "dev": "tsc --project tsconfig.json --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@signet/core": "workspace:*",
+    "@signet/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  },
+  "keywords": ["signet", "gohighlevel", "ghl", "crm", "oauth", "agent"],
+  "license": "MIT"
+}

@@ -4348,6 +4348,10 @@ mountMarketplaceReviewsRoutes(app);
 import { mountChangelogRoutes } from "./routes/changelog.js";
 mountChangelogRoutes(app);
 
+// GHL (GoHighLevel) OAuth connect + account management routes
+import { mountGHLRoutes } from "./routes/ghl.js";
+mountGHLRoutes(app, PORT);
+
 // ============================================================================
 // Harnesses API
 // ============================================================================

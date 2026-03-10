@@ -34,6 +34,7 @@
     "@hono/node-server": "^1.14.0",
     "@huggingface/transformers": "^3.4.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "@signet/connector-ghl": "workspace:*",
     "@signet/core": "workspace:*",
     "chokidar": "^4.0.0",
     "cron-parser": "^5.5.0",
