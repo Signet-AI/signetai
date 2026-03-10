@@ -9114,7 +9114,10 @@ async function main() {
 
 	// Resolve Anthropic API key once — shared by extraction and synthesis
 	let anthropicApiKey: string | undefined;
-	if (effectiveExtractionProvider === "anthropic" || memoryCfg.pipelineV2.synthesis.provider === "anthropic") {
+	const needsAnthropicForSynthesis =
+		memoryCfg.pipelineV2.synthesis.enabled &&
+		memoryCfg.pipelineV2.synthesis.provider === "anthropic";
+	if (effectiveExtractionProvider === "anthropic" || needsAnthropicForSynthesis) {
 		anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 		if (!anthropicApiKey) {
 			try {

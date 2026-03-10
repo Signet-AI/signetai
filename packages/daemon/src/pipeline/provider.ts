@@ -519,6 +519,7 @@ export function createAnthropicProvider(
 		prompt: string,
 		opts?: { timeoutMs?: number; maxTokens?: number },
 	): Promise<{ text: string; usage: AnthropicUsage | null }> {
+		return withSemaphore(async () => {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const maxTokens = opts?.maxTokens ?? 4096;
 		const url = `${cfg.baseUrl}/v1/messages`;
@@ -654,6 +655,7 @@ export function createAnthropicProvider(
 		}
 
 		throw lastError ?? new Error("Anthropic call failed after retries");
+		});
 	}
 
 	return {
@@ -683,19 +685,12 @@ export function createAnthropicProvider(
 
 		async available(): Promise<boolean> {
 			try {
-				const res = await fetch(`${cfg.baseUrl}/v1/messages`, {
-					method: "POST",
+				const res = await fetch(`${cfg.baseUrl}/v1/models`, {
 					headers: {
-						"Content-Type": "application/json",
 						"x-api-key": cfg.apiKey,
 						"anthropic-version": ANTHROPIC_API_VERSION,
 					},
-					body: JSON.stringify({
-						model: resolvedModel,
-						max_tokens: 1,
-						messages: [{ role: "user", content: "ping" }],
-					}),
-					signal: AbortSignal.timeout(5000),
+					signal: AbortSignal.timeout(10_000),
 				});
 				// 200 = works; 401 = bad key means provider is NOT usable
 				if (res.status === 401) {
