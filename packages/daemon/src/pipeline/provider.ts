@@ -839,29 +839,41 @@ export function createCodexProvider(
 				},
 			});
 
-			let timedOut = false;
-			const timer = setTimeout(() => {
-				timedOut = true;
-				proc.kill();
-			}, timeoutMs);
+			// Race the subprocess against a timeout. On timeout we kill the
+			// process and reject immediately instead of waiting for streams
+			// to drain — a hanging subprocess may never close its stdio.
+			const SIGKILL_GRACE_MS = 2000;
 
-			try {
+			const timeoutPromise = new Promise<never>((_resolve, reject) => {
+				const timer = setTimeout(() => {
+					proc.kill("SIGTERM");
+					setTimeout(() => {
+						try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+					}, SIGKILL_GRACE_MS);
+					reject(new Error(`codex timeout after ${timeoutMs}ms`));
+				}, timeoutMs);
+				proc.exited.then(() => clearTimeout(timer)).catch(() => clearTimeout(timer));
+			});
+
+			const resultPromise = (async (): Promise<LlmGenerateResult> => {
 				const [stdout, stderr, exitCode] = await Promise.all([
 					new Response(proc.stdout).text().catch(() => ""),
 					new Response(proc.stderr).text().catch(() => ""),
 					proc.exited.catch(() => -1),
 				]);
-				if (timedOut) {
-					throw new Error(`codex timeout after ${timeoutMs}ms`);
-				}
+
 				if (exitCode !== 0) {
 					const detail = stderr.trim() || stdout.trim();
 					throw new Error(`codex exit ${exitCode}: ${detail.slice(0, 500)}`);
 				}
 				return parseCodexJsonl(stdout);
-			} finally {
-				clearTimeout(timer);
-			}
+			})();
+
+			// Guard against unhandled rejection if resultPromise rejects
+			// after the timeout wins the race.
+			resultPromise.catch(() => {});
+
+			return Promise.race([resultPromise, timeoutPromise]);
 		});
 	}
 
