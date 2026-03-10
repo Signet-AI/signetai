@@ -3978,6 +3978,7 @@ secretCmd
 secretCmd
 	.command("exec <command...>")
 	.description("Run a command with secrets injected as environment variables")
+	.passThroughOptions()
 	.option("-s, --secret <name>", "Secret to inject (repeatable)", appendCliString, [] as string[])
 	.action(async (commandParts: string[], opts: { secret: string[] }) => {
 		if (!(await ensureDaemonForSecrets())) return;
@@ -4000,6 +4001,10 @@ secretCmd
 		const command = commandParts.join(" ");
 
 		try {
+			// TODO: stream output once the daemon exposes a SSE endpoint for
+			// exec (e.g. POST /api/secrets/exec/stream). Currently the daemon
+			// buffers all output before responding, so long-running commands
+			// produce no output until they complete or the 60 s timeout fires.
 			const { ok, data } = await secretApiCall("POST", "/api/secrets/exec", {
 				command,
 				secrets,
