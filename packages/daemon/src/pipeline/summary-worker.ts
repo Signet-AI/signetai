@@ -249,8 +249,7 @@ async function processJob(
 		summaryChars: result.summary.length,
 	});
 
-	let saved = 0;
-	saved = insertSummaryFacts(accessor, job, result.facts);
+	const saved = insertSummaryFacts(accessor, job, result.facts);
 
 	logger.info("summary-worker", "Inserted session facts", {
 		total: result.facts.length,
