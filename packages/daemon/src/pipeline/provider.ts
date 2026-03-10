@@ -500,6 +500,15 @@ interface AnthropicResponse {
 	readonly stop_reason?: string;
 }
 
+/** Sentinel error type for failures that should never be retried
+ *  (auth errors, timeouts, empty responses, non-transient HTTP 4xx). */
+class NonRetryableError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "NonRetryableError";
+	}
+}
+
 function isRetryableStatus(status: number): boolean {
 	// 429 = rate limited, 500 = internal error, 502/503 = transient,
 	// 529 = overloaded. Don't retry 501 (not implemented) or other 5xx.
@@ -594,7 +603,7 @@ export function createAnthropicProvider(
 						}
 
 						if (res.status === 401) {
-							throw new Error(
+							throw new NonRetryableError(
 								`Anthropic auth failed (401): ${errorDetail}. Check your ANTHROPIC_API_KEY.`,
 							);
 						}
@@ -611,7 +620,7 @@ export function createAnthropicProvider(
 							return { retry: true } as const;
 						}
 
-						throw new Error(
+						throw new NonRetryableError(
 							`Anthropic HTTP ${res.status}: ${errorDetail}`,
 						);
 					}
@@ -638,18 +647,12 @@ export function createAnthropicProvider(
 					return { retry: false, text, usage: data.usage ?? null } as const;
 				} catch (e) {
 					if (e instanceof DOMException && e.name === "AbortError") {
-						throw new Error(`Anthropic timeout after ${timeoutMs}ms`);
+						throw new NonRetryableError(`Anthropic timeout after ${timeoutMs}ms`);
 					}
 
-					// Don't retry non-retryable errors — auth failures,
-					// timeouts, empty responses, and 4xx client errors
-					// (bad model, invalid request) won't succeed on retry.
-					if (e instanceof Error && (
-						e.message.includes("auth failed") ||
-						e.message.includes("timeout after") ||
-						e.message.includes("empty response") ||
-						e.message.includes("Anthropic HTTP 4")
-					)) {
+					// Non-retryable errors use the typed sentinel —
+					// no substring matching needed.
+					if (e instanceof NonRetryableError) {
 						throw e;
 					}
 

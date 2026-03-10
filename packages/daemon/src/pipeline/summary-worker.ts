@@ -888,8 +888,12 @@ export function startSummaryWorker(
 				project: job.project,
 			});
 
-			// Cache provider across jobs — re-resolve on config change or TTL expiry
-			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}`;
+			// Cache provider across jobs — re-resolve on config change, key
+			// rotation, or TTL expiry. Include a fingerprint of the current
+			// API key so rotations take effect immediately.
+			const envKey = process.env.ANTHROPIC_API_KEY ?? "";
+			const keyFingerprint = envKey.length > 8 ? envKey.slice(-8) : envKey;
+			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
 			const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
 			if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
 				cachedProvider = await resolveProvider(cfg);
