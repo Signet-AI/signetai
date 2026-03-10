@@ -149,7 +149,7 @@ export interface PipelineEscalationConfig {
 }
 
 export interface PipelineExtractionConfig {
-	readonly provider: "ollama" | "claude-code" | "opencode" | "codex";
+	readonly provider: "ollama" | "claude-code" | "opencode" | "codex" | "anthropic";
 	readonly model: string;
 	readonly timeout: number;
 	readonly minConfidence: number;
@@ -293,7 +293,7 @@ export interface PipelineEmbeddingTrackerConfig {
 
 export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
-	readonly provider: "ollama" | "claude-code" | "opencode";
+	readonly provider: "ollama" | "claude-code" | "opencode" | "anthropic";
 	readonly model: string;
 	readonly timeout: number;
 	readonly maxTokens: number;

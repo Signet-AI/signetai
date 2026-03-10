@@ -9124,7 +9124,10 @@ async function main() {
 			}
 		}
 		if (!anthropicApiKey) {
-			logger.error("config", "ANTHROPIC_API_KEY not found — anthropic provider will fail. Set via env or `signet secrets set ANTHROPIC_API_KEY`");
+			logger.error("config", "ANTHROPIC_API_KEY not found — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`");
+			if (effectiveExtractionProvider === "anthropic") {
+				effectiveExtractionProvider = "ollama";
+			}
 		}
 	}
 
@@ -9165,6 +9168,11 @@ async function main() {
 			const serverReady = await ensureOpenCodeServer(4096);
 			if (!serverReady) {
 				logger.warn("config", "OpenCode server not available for synthesis, falling back to ollama");
+				effectiveSynthesisProvider = "ollama";
+			}
+		} else if (effectiveSynthesisProvider === "anthropic") {
+			if (!anthropicApiKey) {
+				logger.warn("config", "ANTHROPIC_API_KEY not found for synthesis, falling back to ollama");
 				effectiveSynthesisProvider = "ollama";
 			}
 		} else if (effectiveSynthesisProvider === "claude-code") {

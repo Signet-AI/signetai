@@ -88,11 +88,11 @@ async function withSemaphore<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Windows-safe spawn helper
+// Subprocess spawn helper
 // ---------------------------------------------------------------------------
-// Bun.spawn does not support windowsHide, so CLI subprocesses flash a
-// console window on Windows. This helper wraps Node's child_process.spawn
-// (which does support windowsHide) with a Bun.spawn-compatible interface.
+// Wraps Bun.spawn with a simplified interface for CLI subprocess calls.
+// Note: Bun.spawn does not support windowsHide, so CLI subprocesses may
+// flash a console window on Windows.
 
 interface SpawnResult {
 	readonly stdout: ReadableStream<Uint8Array>;
@@ -105,15 +105,27 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 	// Use Bun.spawn directly — it natively returns ReadableStreams and
 	// handles subprocess I/O correctly. The previous node:child_process
 	// wrapper had stream-closing issues that caused hangs.
+	const sanitizedEnv: Record<string, string> = {};
+	if (options?.env) {
+		for (const [k, v] of Object.entries(options.env)) {
+			if (v !== undefined) sanitizedEnv[k] = v;
+		}
+	}
 	const proc = Bun.spawn(cmd, {
 		stdout: "pipe",
 		stderr: "pipe",
-		env: options?.env as Record<string, string>,
+		env: options?.env ? sanitizedEnv : undefined,
 	});
 
+	// Bun.spawn with stdout:"pipe" guarantees ReadableStream, but the
+	// type is nullable in the general case. Guard at runtime.
+	if (!proc.stdout || !proc.stderr) {
+		throw new Error("spawnHidden: stdout/stderr unexpectedly null despite pipe mode");
+	}
+
 	return {
-		stdout: proc.stdout as ReadableStream<Uint8Array>,
-		stderr: proc.stderr as ReadableStream<Uint8Array>,
+		stdout: proc.stdout,
+		stderr: proc.stderr,
 		exited: proc.exited,
 		kill(signal?: string) {
 			const sigNum = signal === "SIGKILL" ? 9 : signal === "SIGTERM" ? 15 : undefined;
@@ -359,6 +371,11 @@ export function createClaudeCodeProvider(
 				return result;
 			})();
 
+			// Guard against unhandled rejection if resultPromise rejects
+			// after the timeout wins the race (e.g. subprocess exit error
+			// after SIGKILL). The no-op catch prevents crashing the process.
+			resultPromise.catch(() => {});
+
 			return Promise.race([resultPromise, timeoutPromise]);
 		});
 	}
@@ -512,6 +529,9 @@ export function createAnthropicProvider(
 		});
 
 		let lastError: Error | null = null;
+		// Use a single absolute deadline so retries cannot exceed the
+		// configured timeout.
+		const deadline = Date.now() + timeoutMs;
 
 		for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
 			if (attempt > 0) {
@@ -526,8 +546,13 @@ export function createAnthropicProvider(
 				});
 			}
 
+			const remainingMs = deadline - Date.now();
+			if (remainingMs <= 0) {
+				throw lastError ?? new Error(`Anthropic timeout after ${timeoutMs}ms (deadline exceeded before attempt ${attempt})`);
+			}
+
 			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), timeoutMs);
+			const timer = setTimeout(() => controller.abort(), remainingMs);
 
 			try {
 				const res = await fetch(url, {

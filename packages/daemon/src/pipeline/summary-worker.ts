@@ -21,6 +21,7 @@ import { createAnthropicProvider, createOllamaProvider, createClaudeCodeProvider
 import { isDuplicate, inferType } from "../hooks";
 import { loadMemoryConfig } from "../memory-config";
 import { logger } from "../logger";
+import { getSecret } from "../secrets";
 import {
 	assessSignificance,
 	type SignificanceConfig,
@@ -792,13 +793,24 @@ function writeSummaryToDAG(
 
 /** Resolve from synthesis config — distinct from extraction so users can
  *  decouple the summary provider/model/timeout from the extraction pipeline. */
-function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): LlmProvider {
+async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promise<LlmProvider> {
 	const p = cfg.pipelineV2.synthesis.provider;
 	const model = cfg.pipelineV2.synthesis.model;
 	const timeout = cfg.pipelineV2.synthesis.timeout;
 	switch (p) {
 		case "anthropic": {
-			const apiKey = process.env.ANTHROPIC_API_KEY ?? "";
+			let apiKey = process.env.ANTHROPIC_API_KEY;
+			if (!apiKey) {
+				try {
+					apiKey = await getSecret("ANTHROPIC_API_KEY") ?? undefined;
+				} catch {
+					// secrets store unavailable
+				}
+			}
+			if (!apiKey) {
+				logger.error("summary-worker", "ANTHROPIC_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`");
+				return createOllamaProvider({ model: model || "qwen3:4b", defaultTimeoutMs: timeout });
+			}
 			return createAnthropicProvider({ model: model || "haiku", apiKey, defaultTimeoutMs: timeout });
 		}
 		case "claude-code":
@@ -868,7 +880,7 @@ export function startSummaryWorker(
 				project: job.project,
 			});
 
-			const provider = resolveProvider(cfg);
+			const provider = await resolveProvider(cfg);
 			await processJob(accessor, provider, job, cfg);
 
 			// Mark complete
