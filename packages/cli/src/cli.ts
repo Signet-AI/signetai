@@ -3828,12 +3828,12 @@ program
 
 const DAEMON_URL = `http://localhost:${DEFAULT_PORT}`;
 
-async function secretApiCall(method: string, path: string, body?: unknown): Promise<{ ok: boolean; data: unknown }> {
+async function secretApiCall(method: string, path: string, body?: unknown, timeoutMs = 5_000): Promise<{ ok: boolean; data: unknown }> {
 	const res = await fetch(`${DAEMON_URL}${path}`, {
 		method,
 		headers: body ? { "Content-Type": "application/json" } : {},
 		body: body ? JSON.stringify(body) : undefined,
-		signal: AbortSignal.timeout(5000),
+		signal: AbortSignal.timeout(timeoutMs),
 	});
 	const data = await res.json();
 	return { ok: res.ok, data };
@@ -3935,6 +3935,138 @@ secretCmd
 		} catch (e) {
 			spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
 			process.exit(1);
+		}
+	});
+
+secretCmd
+	.command("get <name>")
+	.description("Explain how to use a secret (values are never exposed)")
+	.action(async (name: string) => {
+		if (!(await ensureDaemonForSecrets())) return;
+
+		try {
+			const { ok, data } = await secretApiCall("GET", "/api/secrets");
+			if (!ok) {
+				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
+				process.exit(1);
+			}
+			const secrets = (data as { secrets: string[] }).secrets ?? [];
+			const exists = secrets.includes(name);
+
+			if (!exists) {
+				console.error(chalk.red(`\n  Secret "${chalk.bold(name)}" not found.\n`));
+				console.error(chalk.dim("  Store it with:"));
+				console.error(`    signet secret put ${name}\n`);
+				process.exit(1);
+			}
+
+			console.log(
+				chalk.yellow(`\n  Secret "${chalk.bold(name)}" exists, but values are never exposed directly.`)
+			);
+			console.log(chalk.dim("\n  Signet secrets are injected at runtime, not read from disk."));
+			console.log(chalk.dim("  Use one of the following:\n"));
+			console.log(chalk.dim("  In a command (injected as env var):"));
+			console.log(`    signet secret exec --secret ${name} "your-command-here"\n`);
+			console.log(chalk.dim("  In agent.yaml (resolved by the daemon):"));
+			console.log(`    api_key: $secret:${name}\n`);
+		} catch (e) {
+			console.error(chalk.red(`  Error: ${(e as Error).message}`));
+			process.exit(1);
+		}
+	});
+
+secretCmd
+	.command("exec <command...>")
+	.description(
+		"Run a command with secrets injected as environment variables\n" +
+			"  NOTE: --secret flags must appear before the command token.\n" +
+			"  Secrets are available via process.env / os.environ in the subprocess;\n" +
+			"  shell-level $VAR expansion is intentionally disabled for security.",
+	)
+	.passThroughOptions()
+	.option("-s, --secret <name>", "Secret to inject (repeatable, must precede command)", appendCliString, [] as string[])
+	.action(async (commandParts: string[], opts: { secret: string[] }) => {
+		if (!(await ensureDaemonForSecrets())) return;
+
+		if (opts.secret.length === 0) {
+			console.error(chalk.red("  At least one --secret is required."));
+			console.log(chalk.dim("  NOTE: --secret flags must come before the command token."));
+			console.log(chalk.dim("\n  Example:"));
+			console.log(`    signet secret exec --secret OPENAI_API_KEY curl https://api.openai.com/v1/models\n`);
+			process.exit(1);
+		}
+
+		// Validate that each name is a legal POSIX env var identifier.
+		// Secret names that contain hyphens or start with a digit are valid
+		// Signet identifiers but cannot be injected as env vars.
+		const VALID_ENV_VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
+		for (const name of opts.secret) {
+			if (!VALID_ENV_VAR.test(name)) {
+				console.error(chalk.red(`  Invalid secret name for env injection: "${name}"`));
+				console.log(chalk.dim("  Names must be valid env var identifiers: letters, digits, underscore; no leading digit or hyphens."));
+				process.exitCode = 1;
+				return;
+			}
+		}
+
+		// Map each name to itself — env var name and secret name are the same.
+		// The daemon API accepts Record<envVarName, secretName> for future
+		// "ENV=SECRET" remapping support.
+		const secrets: Record<string, string> = {};
+		for (const name of opts.secret) {
+			secrets[name] = name;
+		}
+
+		// Double-quote each part so arguments with embedded spaces survive
+		// the daemon's `sh -c` invocation. Backslash, double-quote, backtick,
+		// and dollar sign are all escaped. Escaping $ blocks both $VAR expansion
+		// and $(...) command substitution — the latter is a shell injection risk
+		// for a secrets tool and cannot be left open. Secrets are already
+		// injected directly into the subprocess environment; programs access
+		// them via process.env / os.environ, not via in-string shell expansion.
+		// e.g. ["python", "-c", "import os; print(1)"] → "python" "-c" "import os; print(1)"
+		const command = commandParts
+			.map((arg) =>
+				`"${arg
+					.replace(/\\/g, "\\\\")
+					.replace(/"/g, '\\"')
+					.replace(/`/g, "\\`")
+					.replace(/\$/g, "\\$")}"`,
+			)
+			.join(" ");
+
+		try {
+			// TODO: stream output once the daemon exposes a SSE endpoint for
+			// exec (e.g. POST /api/secrets/exec/stream). Currently the daemon
+			// buffers all output before responding, so long-running commands
+			// produce no output until they complete or the 60 s timeout fires.
+			const { ok, data } = await secretApiCall("POST", "/api/secrets/exec", {
+				command,
+				secrets,
+			}, 60_000);
+
+			if (!ok) {
+				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
+				process.exitCode = 1;
+				return;
+			}
+
+			const result = data as { stdout: string; stderr: string; code: number | null };
+			if (result.stdout) process.stdout.write(result.stdout);
+			if (result.stderr) process.stderr.write(result.stderr);
+			// Use exitCode + return so Node flushes stdout/stderr buffers before
+			// the process actually exits. process.exit() can truncate buffered output.
+			// code is null when the child was killed by a signal — treat as failure.
+			process.exitCode = result.code ?? 1;
+		} catch (e) {
+			if (e instanceof Error && e.name === "TimeoutError") {
+				console.error(chalk.red("  Error: command timed out after 60 seconds."));
+				console.error(chalk.dim("  The subprocess may still be running on the daemon."));
+				console.error(chalk.dim("  Streaming support is planned — see TODO in source."));
+			} else {
+				console.error(chalk.red(`  Error: ${(e as Error).message}`));
+			}
+			process.exitCode = 1;
 		}
 	});
 
