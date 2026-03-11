@@ -9,12 +9,47 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { type Statement } from "bun:sqlite";
 import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 
+let cachedMemoryDbPath: string | null = null;
+let lastSignetPath: string | undefined = undefined;
+let dbExists: boolean | null = null;
+
 function getMemoryDbPath(): string {
-	const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
-	return join(agentsDir, "memory", "memories.db");
+	const signetPath = process.env.SIGNET_PATH;
+	if (cachedMemoryDbPath && signetPath === lastSignetPath) {
+		return cachedMemoryDbPath;
+	}
+	const agentsDir = signetPath || join(homedir(), ".agents");
+	lastSignetPath = signetPath;
+	cachedMemoryDbPath = join(agentsDir, "memory", "memories.db");
+	dbExists = null;
+	return cachedMemoryDbPath;
+}
+
+function memoryDbExists(): boolean {
+	if (dbExists) return true;
+	dbExists = existsSync(getMemoryDbPath());
+	return dbExists;
+}
+
+const STMT_CACHE = new WeakMap<WriteDb, Map<string, Statement>>();
+const SQL_PART_CACHE = new Map<string, string>();
+
+function getCachedStmt(db: WriteDb, sql: string): Statement {
+	let cache = STMT_CACHE.get(db);
+	if (!cache) {
+		cache = new Map();
+		STMT_CACHE.set(db, cache);
+	}
+	let stmt = cache.get(sql);
+	if (!stmt) {
+		stmt = db.prepare(sql);
+		cache.set(sql, stmt);
+	}
+	return stmt;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +87,7 @@ export function recordSessionCandidates(
 	candidates: ReadonlyArray<SessionMemoryCandidate>,
 	injectedIds: ReadonlySet<string>,
 ): void {
-	if (!sessionKey || candidates.length === 0 || !existsSync(getMemoryDbPath())) return;
+	if (!sessionKey || candidates.length === 0 || !memoryDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
@@ -67,23 +102,18 @@ export function recordSessionCandidates(
 					  predictor_rank)
 					 VALUES `;
 
-			// Pre-compile the full-chunk statement once to avoid recompiling
-			// identical SQL on every iteration of the loop.
-			const fullChunkStmt =
-				candidates.length >= CHUNK_SIZE
-					? db.prepare(BASE_SQL + Array.from({ length: CHUNK_SIZE }, () => ROW).join(","))
-					: null;
-
 			let rank = 0;
 			for (let i = 0; i < candidates.length; i += CHUNK_SIZE) {
 				const chunk = candidates.slice(i, i + CHUNK_SIZE);
 
-				// Reuse pre-compiled statement for full chunks; compile once for
-				// the remainder chunk (different SQL, can't reuse).
-				const stmt =
-					chunk.length === CHUNK_SIZE
-						? fullChunkStmt!
-						: db.prepare(BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(","));
+				const cacheKey = `rc:${chunk.length}`;
+				let sqlPart = SQL_PART_CACHE.get(cacheKey);
+				if (!sqlPart) {
+					sqlPart = Array.from({ length: chunk.length }, () => ROW).join(",");
+					SQL_PART_CACHE.set(cacheKey, sqlPart);
+				}
+				const sql = BASE_SQL + sqlPart;
+				const stmt = getCachedStmt(db, sql);
 
 				const values: unknown[] = [];
 				for (const c of chunk) {
@@ -138,7 +168,7 @@ export function recordSessionCandidates(
  * collapse two queries into one, reducing roundtrips.
  */
 export function trackFtsHits(sessionKey: string | undefined, matchedIds: ReadonlyArray<string>): void {
-	if (!sessionKey || matchedIds.length === 0 || !existsSync(getMemoryDbPath())) return;
+	if (!sessionKey || matchedIds.length === 0 || !memoryDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
@@ -154,28 +184,17 @@ export function trackFtsHits(sessionKey: string | undefined, matchedIds: Readonl
 				 ON CONFLICT(session_key, memory_id) DO UPDATE SET
 				  fts_hit_count = fts_hit_count + 1`;
 
-			// Pre-compile the full-chunk UPSERT statement once to avoid
-			// recompiling identical SQL for every batch of 50.
-			const fullChunkStmt =
-				matchedIds.length >= CHUNK_SIZE
-					? db.prepare(
-							BASE_SQL +
-								Array.from({ length: CHUNK_SIZE }, () => ROW).join(",") +
-								CONFLICT_CLAUSE,
-						)
-					: null;
-
 			for (let i = 0; i < matchedIds.length; i += CHUNK_SIZE) {
 				const chunk = matchedIds.slice(i, i + CHUNK_SIZE);
 
-				const stmt =
-					chunk.length === CHUNK_SIZE
-						? fullChunkStmt!
-						: db.prepare(
-								BASE_SQL +
-									Array.from({ length: chunk.length }, () => ROW).join(",") +
-									CONFLICT_CLAUSE,
-							);
+				const cacheKey = `fts:${chunk.length}`;
+				let sqlPart = SQL_PART_CACHE.get(cacheKey);
+				if (!sqlPart) {
+					sqlPart = Array.from({ length: chunk.length }, () => ROW).join(",");
+					SQL_PART_CACHE.set(cacheKey, sqlPart);
+				}
+				const sql = BASE_SQL + sqlPart + CONFLICT_CLAUSE;
+				const stmt = getCachedStmt(db, sql);
 
 				const values: unknown[] = [];
 				for (const id of chunk) {
@@ -234,7 +253,7 @@ export function recordAgentFeedbackInner(
 ): void {
 	// Single-row UPDATE with running mean calculation.
 	// CASE handles NULL (first feedback) vs existing score.
-	const stmt = db.prepare(`
+	const stmt = getCachedStmt(db, `
 		UPDATE session_memories
 		SET agent_relevance_score = CASE
 				WHEN agent_relevance_score IS NULL THEN ?
@@ -257,7 +276,7 @@ export function recordAgentFeedback(
 	sessionKey: string | undefined,
 	feedback: Readonly<Record<string, number>>,
 ): void {
-	if (!sessionKey || Object.keys(feedback).length === 0 || !existsSync(getMemoryDbPath())) return;
+	if (!sessionKey || Object.keys(feedback).length === 0 || !memoryDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
