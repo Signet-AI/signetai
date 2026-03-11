@@ -496,6 +496,86 @@ architecture:
   guarantees.
 
 
+Bootstrapping Topology: Making the Warehouse Into a Map
+---------------------------------------------------------
+
+Desire paths assumes the entity graph already has navigable structure — clusters of related entities, well-worn paths between them, quality signals that distinguish strong connections from weak ones. The patterns above describe how that structure *evolves*. But what provides the initial topology before any feedback accumulates?
+
+The current entity graph is more like a warehouse than a map: 43,520 entities connected by typed dependencies, but without clustering, without confidence signals, without boundaries on how far a traversal can reach. Everything exists, but nothing is organized. The predictor can't learn efficient routes because the graph lacks the density gradient that makes some routes naturally faster than others.
+
+Three infrastructure components bootstrap the structure desire paths needs to learn from:
+
+### 1. Leiden Community Detection
+
+The Leiden algorithm (Traag et al., 2019) clusters the entity graph into functional areas before any behavioral feedback exists. It runs on the co-mention graph (entities that appear together in memories) and dependency edges (explicit structural relationships).
+
+**What it produces:**
+- **Community nodes** — named clusters like "auth system", "dashboard ui", "client work"
+- **Cohesion scores** — how tightly connected a community's members are (0-1)
+- **Modularity** — global health metric (< 0.3 = fragmented, > 0.6 = strong structure)
+- **MEMBER_OF edges** — linking entities to their communities
+
+**What this gives desire paths:**
+- Initial routing landmarks: the scorer can route to "auth system community" before it knows which specific entities matter
+- Pruning signal: low-cohesion communities (< 0.4) are structurally weak, members are candidates for removal
+- Explorer bee targets: communities with unusual cohesion patterns are exactly where exploration should probe
+
+**Implementation:** Port GitNexus's vendored Leiden (MIT-licensed), build graphology graph from `entity_dependencies` + `memory_entity_mentions` tables, add as `/api/repair/cluster-entities` endpoint. Store communities in `entity_communities` table with membership edges. Surface in constellation view as labeled clusters. ~2-3 days.
+
+### 2. Confidence + Reason on Every Dependency Edge
+
+Not all dependencies are equal. Some the user explicitly stated. Some were extracted once by an LLM from an ambiguous mention. Some were inferred from co-occurrence. Currently, all of these have the same structural weight. The scorer can't distinguish trustworthy edges from speculative ones.
+
+**What this adds:**
+- **`confidence`** (0-1) — how certain the dependency is
+- **`reason`** (enum) — how it was discovered:
+  - `user-asserted` (1.0) — explicitly created or confirmed
+  - `multi-memory` (0.9) — extracted from 2+ independent memories
+  - `single-memory` (0.7) — extracted once (default)
+  - `pattern-matched` (0.5) — heuristic detection
+  - `inferred` (0.4) — transitive closure or clustering
+  - `llm-uncertain` (0.3) — LLM hedged or low-signal
+
+**What this gives desire paths:**
+- Prior weights for the scorer: high-confidence edges are preferred traversal candidates before any feedback accumulates
+- Explorer bee territory: low-confidence edges are exactly where speculative traversals should probe — they might pay off
+- Feedback upgrade path: positive feedback can upgrade `pattern-matched` → `multi-memory`; negative feedback can downgrade `single-memory` → `llm-uncertain`
+- Blast radius filtering: impact analysis at `confidence >= 0.7` removes speculative edges, making predictions more reliable
+
+**Implementation:** Add `confidence REAL DEFAULT 0.7` and `reason TEXT DEFAULT 'single-memory'` to `entity_dependencies` table (migration 031). Update extraction pipeline to assign confidence based on discovery method. Update graph traversal to weight edges by `confidence * strength`. Add `/api/graph/impact` endpoint for blast radius analysis with confidence filtering. ~1-2 days.
+
+### 3. Bounded Traversal Parameters
+
+Unbounded graph traversal is a performance and quality disaster. From a well-connected entity in a 43k-node graph, a naive traversal could walk thousands of paths. The scorer would drown in noise trying to rank them all.
+
+**What this adds:**
+- `maxBranching: 4` — at each entity, follow at most 4 edges (sorted by confidence * strength)
+- `maxTraversalPaths: 50` — total paths to score before stopping
+- `minPathLength: 2` — don't score trivial single-hop paths
+- `minConfidence: 0.5` — filter edges below this confidence before traversal starts
+
+**What this gives desire paths:**
+- Bounded candidate paths for the scorer to rank efficiently
+- Predictable performance: traversal cost is bounded by `O(maxBranching ^ maxDepth * maxPaths)`
+- Room for explorer bees: branching limits on main traversal ensure speculative paths aren't drowned out
+
+**Implementation:** Add constants to `TraversalConfig` interface, enforce in `graph-traversal.ts`. ~half day.
+
+### How These Fit Together
+
+The three components form a stack:
+
+1. **Leiden clustering** creates the neighborhoods — broad regions of the graph that belong together
+2. **Confidence scoring** creates the street quality — which roads are paved, which are dirt paths, which are overgrown trails
+3. **Bounded traversal** creates the search budget — how far to walk, how many paths to explore
+
+Before any feedback accumulates, the scorer can already route intelligently: start in the right community (Leiden), prefer high-confidence edges (confidence scoring), explore bounded paths (traversal limits). The feedback loop then refines this bootstrap — reinforcing paths that work, deprioritizing paths that don't, discovering new connections through explorer bees.
+
+The warehouse becomes a map because it was built with structure from day one, not just storage.
+
+**Reference:** Full implementation details in [GitNexus Pattern Analysis](./RESEARCH-GITNEXUS-PATTERNS.md). Original techniques from GitNexus codebase (v1.3.10).
+
+
 The Convergence
 ---------------
 
@@ -522,6 +602,14 @@ Small. Dense. Connected. Correct. And now: *learned*.
 
 ---
 
+## See Also
+
+- [LCM-PATTERNS.md](./LCM-PATTERNS.md) — deterministic foundation patterns for lossless context management
+- [KNOWLEDGE-ARCHITECTURE.md](./KNOWLEDGE-ARCHITECTURE.md) — entity/aspect/attribute structure
+- [RESEARCH-GITNEXUS-PATTERNS.md](./RESEARCH-GITNEXUS-PATTERNS.md) — engineering patterns for bootstrapping topology (Leiden clustering, confidence scoring, bounded traversal)
+
+---
+
 *This document describes the concept. The deterministic foundation
 is specified in [[LCM-PATTERNS|Lossless Context Patterns]].
 Implementation details, data structures, and integration points
@@ -531,5 +619,6 @@ once the foundation is in place.*
 ---
 
 *Written by Nicholai, Mr. Claude, PatchyToes, and Jake. March 7, 2026.
-Updated March 8, 2026: added LCM foundation section and cross-references.*
+Updated March 8, 2026: added LCM foundation section and cross-references.
+Updated March 11, 2026: added bootstrapping topology section.*
 

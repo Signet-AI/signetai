@@ -95,6 +95,25 @@ Both signals matter. Frequency is real signal. But frequency alone misses
 the contextual dimension: some entities are universally important, others
 only matter for certain kinds of work.
 
+**Entity dependencies carry confidence signals:**
+
+Every dependency edge (`uses`, `requires`, `owned_by`, `blocks`, `informs`) carries two
+quality signals:
+
+- **Strength** (0-1): How *important* is this dependency? Higher = more structurally critical.
+- **Confidence** (0-1): How *certain* are we that this dependency exists? Higher = more trustworthy.
+
+A dependency extracted once by an LLM from an ambiguous mention might have
+`strength: 0.8` (important if real) but `confidence: 0.3` (uncertain extraction).
+A dependency explicitly stated by the user has `confidence: 1.0`.
+
+This separation matters for traversal. The predictor can route along high-confidence
+edges immediately, while low-confidence edges become exploration targets — speculative
+paths that might pay off but need validation. Feedback from sessions upgrades or
+downgrades confidence over time, reshaping which edges the system trusts.
+
+See [GitNexus Pattern Analysis](./RESEARCH-GITNEXUS-PATTERNS.md#pattern-2-confidence--reason-on-every-dependency-edge) for implementation details.
+
 
 Aspects, Attributes, and Constraints
 -------------------------------------
@@ -459,6 +478,9 @@ For the behavioral feedback loop, see [KA-6 Sprint Brief](./specs/SPRINT-BRIEF-K
 - [PROCEDURAL-MEMORY.md](./PROCEDURAL-MEMORY.md) — skills as first-class graph
   nodes; the procedural memory tier
 - [PIPELINE.md](./PIPELINE.md) — how the extraction pipeline populates the graph
+- [RESEARCH-GITNEXUS-PATTERNS.md](./RESEARCH-GITNEXUS-PATTERNS.md) — engineering
+  patterns from GitNexus applicable to Signet's architecture: Leiden clustering,
+  confidence scoring, bounded traversal, and evaluation methodology
 
 ---
 

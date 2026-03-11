@@ -178,6 +178,18 @@ attributes in a single session is suspicious.
   observe how often escalation triggers
 - Dashboard: surface escalation frequency in pipeline status
 
+**Confidence scoring integration:**
+
+Each escalation level assigns a confidence score to extracted dependencies:
+
+- **Level 1 (Normal):** `confidence: 0.7`, `reason: 'single-memory'` — standard extraction
+- **Level 2 (Aggressive):** `confidence: 0.5`, `reason: 'pattern-matched'` — stricter prompt means lower certainty
+- **Level 3 (Deterministic):** `confidence: 0.3`, `reason: 'llm-uncertain'` — no LLM involved, minimal certainty
+
+This ensures the escalation pattern feeds directly into the confidence-weighted graph that desire paths traverses. Higher escalation → lower confidence → less influence on traversal until confirmed by feedback.
+
+See [GitNexus Pattern Analysis](./RESEARCH-GITNEXUS-PATTERNS.md#pattern-2-confidence--reason-on-every-dependency-edge) for full confidence scoring implementation.
+
 ### What This Enables
 
 The entity bloat problem becomes structurally impossible. The
@@ -439,6 +451,29 @@ controls when and how much to expand.
   directly
 - Add to hook-generated CLAUDE.md/AGENTS.md as an available tool
 - Token budget on the response prevents unbounded expansion
+
+**Blast radius analysis (variant expansion):**
+
+A specialized expansion pattern answers: "what would break if I changed this entity?" This is impact analysis — traversing upstream dependencies to find entities that depend on the focal entity.
+
+```
+POST /api/graph/impact
+{
+  "entityId": "signet",
+  "direction": "upstream",
+  "minConfidence": 0.7,
+  "maxDepth": 3
+}
+```
+
+Response groups by depth:
+- **Depth 1 (WILL BREAK):** Direct dependents that will definitely break
+- **Depth 2 (LIKELY AFFECTED):** Entities depending on depth-1 entities
+- **Depth 3 (MAY NEED TESTING):** Transitive dependencies, lower certainty
+
+Confidence filtering (`minConfidence: 0.7`) removes speculative edges from impact analysis, making predictions more reliable. Only edges the system is confident about contribute to the blast radius.
+
+This pattern is adapted from GitNexus's impact analysis tool, where it answers "what functions call this function?" for code change planning. In Signet's domain, it answers "what entities rely on this entity?" for knowledge modification decisions.
 
 ### What This Enables
 
