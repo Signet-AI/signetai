@@ -64,3 +64,4 @@ web/.dev.vars*
 # Rust sidecar build artifacts
 packages/predictor/target/
 
+marketing/
