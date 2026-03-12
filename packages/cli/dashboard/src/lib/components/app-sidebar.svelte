@@ -414,7 +414,7 @@ function activateItem(item: NavItem): void {
 	}
 
 	.sidebar-signet-icon {
-		transition: filter 0.2s ease, transform 0.2s ease;
+		transition: filter var(--dur) var(--ease), transform var(--dur) var(--ease);
 	}
 
 	:global([data-sidebar="menu-button"]):hover .sidebar-signet-icon {

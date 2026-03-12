@@ -25,14 +25,6 @@ const { ontimelinegeneratedforchange }: Props = $props();
 const railButtonBase =
 	"h-8 px-3 rounded-lg border text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] transition-colors";
 
-const memoryCardIconColors = [
-	"var(--sig-icon-bg-1)",
-	"var(--sig-icon-bg-2)",
-	"var(--sig-icon-bg-3)",
-	"var(--sig-icon-bg-4)",
-	"var(--sig-icon-bg-5)",
-	"var(--sig-icon-bg-6)",
-] as const;
 
 let loading = $state(false);
 let error = $state<string | null>(null);
@@ -434,13 +426,6 @@ function getMemoryMonogram(value: string): string {
 	return value.slice(0, 2).toUpperCase() || "M";
 }
 
-function getMemoryMonogramBg(seed: string): string {
-	let hash = 0;
-	for (const char of seed) {
-		hash = (hash * 31 + char.charCodeAt(0)) & 0xffff;
-	}
-	return memoryCardIconColors[Math.abs(hash) % memoryCardIconColors.length] ?? memoryCardIconColors[0];
-}
 
 function getRangeChipLabel(bucket: MemoryTimelineBucket): string {
 	if (bucket.rangeKey === "last_week") return "Week";
@@ -719,7 +704,7 @@ onMount(() => {
 						</div>
 					</div>
 
-						<div class="timeline-mix-grid">
+					<div class="timeline-mix-grid">
 						<div class="timeline-mix-card timeline-mix-card--type rounded-lg p-2">
 							<p class="timeline-mix-header mb-1">Type mix</p>
 							{#if activeBucket.typeBreakdown.length === 0}
@@ -1211,8 +1196,16 @@ onMount(() => {
 		background: var(--sig-bg);
 	}
 
-	/* Hide the banner title when tabs are present — the tab bar provides enough context */
+	/* Hide the banner title visually when tabs are present — kept in a11y tree */
 	.timeline-shell :global(.banner-title) {
-		display: none;
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border-width: 0;
 	}
 </style>
