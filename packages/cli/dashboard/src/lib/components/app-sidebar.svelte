@@ -163,7 +163,6 @@ function activateItem(item: NavItem): void {
 									before:bg-[var(--sig-highlight)]
 									after:absolute after:w-full after:h-px after:top-1/2
 									after:bg-[var(--sig-highlight)]"
-								style="filter: drop-shadow(0 0 3px var(--sig-highlight-dim));"
 								aria-hidden="true"
 							></span>
 							<div class="flex flex-col gap-0.5 leading-none overflow-hidden
@@ -414,6 +413,7 @@ function activateItem(item: NavItem): void {
 	}
 
 	.sidebar-signet-icon {
+		filter: drop-shadow(0 0 3px var(--sig-highlight-dim));
 		transition: filter var(--dur) var(--ease), transform var(--dur) var(--ease);
 	}
 

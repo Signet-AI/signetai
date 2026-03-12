@@ -966,7 +966,7 @@ onMount(() => {
 		flex-direction: column;
 		gap: 0.45rem;
 		background: var(--sig-surface-raised);
-		transition: border-color 0.15s;
+		transition: border-color var(--dur) var(--ease);
 	}
 
 	.timeline-top-card:hover {
