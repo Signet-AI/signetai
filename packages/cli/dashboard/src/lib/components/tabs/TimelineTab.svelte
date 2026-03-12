@@ -313,7 +313,7 @@ function buildBucketTopMemories(
 		});
 
 		result[entry.bucket.rangeKey] = entry.candidates
-			.slice(0, 3)
+			.slice(0, 4)
 			.map((candidate) => candidate.memory);
 	}
 
@@ -567,7 +567,7 @@ onMount(() => {
 
 <div
 	bind:this={rootEl}
-	class="timeline-shell flex flex-col flex-1 min-h-0 overflow-hidden"
+	class="timeline-shell flex flex-col flex-1 min-h-0 overflow-hidden bg-[var(--sig-bg)]"
 	role="region"
 	aria-label="Memory timeline. Use left and right arrows to move through eras."
 >
@@ -629,8 +629,8 @@ onMount(() => {
 				</div>
 			</section>
 
-			<div class="timeline-content-split min-h-0 gap-3">
-				<section class="timeline-detail-panel flex min-h-0 flex-col gap-3 overflow-auto rounded-xl border border-[var(--sig-border)] bg-[var(--sig-surface)] p-3">
+			<div class="timeline-content-split flex-1 min-h-0 gap-3">
+				<section class="timeline-detail-panel flex min-h-0 flex-col gap-3 overflow-hidden rounded-[10.5px] bg-[var(--sig-surface)] p-3" style="border: 2px solid var(--sig-border-strong);">
 					<div class="timeline-era-head">
 						<div class="timeline-era-title-row">
 							<p class="sig-heading timeline-era-title">
@@ -693,25 +693,25 @@ onMount(() => {
 					</div>
 
 					<div class="timeline-summary-grid">
-						<div class="flex min-h-[56px] items-center justify-center rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
+						<div class="flex min-h-[56px] items-center justify-center rounded-[6.5px] p-2" style="border: 0.87px solid var(--sig-border-strong); background: var(--sig-surface)">
 							<p class="timeline-summary-line">
 								<span class="sig-heading leading-none">{activeBucket.memoriesAdded}</span>
 								<span class="timeline-summary-copy">- Added</span>
 							</p>
 						</div>
-						<div class="flex min-h-[56px] items-center justify-center rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
+						<div class="flex min-h-[56px] items-center justify-center rounded-[6.5px] p-2" style="border: 0.87px solid var(--sig-border-strong); background: var(--sig-surface)">
 							<p class="timeline-summary-line">
 								<span class="sig-heading leading-none">{activeBucket.trackedEvents}</span>
 								<span class="timeline-summary-copy">- Tracked events captured</span>
 							</p>
 						</div>
-						<div class="flex min-h-[56px] items-center justify-center rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
+						<div class="flex min-h-[56px] items-center justify-center rounded-[6.5px] p-2" style="border: 0.87px solid var(--sig-border-strong); background: var(--sig-surface)">
 							<p class="timeline-summary-line">
 								<span class="sig-heading leading-none">{activeBucket.evolved}</span>
 								<span class="timeline-summary-copy">- Evolved</span>
 							</p>
 						</div>
-						<div class="flex min-h-[56px] items-center justify-center rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
+						<div class="flex min-h-[56px] items-center justify-center rounded-[6.5px] p-2" style="border: 0.87px solid var(--sig-border-strong); background: var(--sig-surface)">
 							<p class="timeline-summary-line">
 								<span class="sig-heading leading-none">{activeBucket.strengthened}</span>
 								<span class="timeline-summary-copy">- Strengthened</span>
@@ -719,14 +719,14 @@ onMount(() => {
 						</div>
 					</div>
 
-					<div class="timeline-mix-grid">
+						<div class="timeline-mix-grid">
 						<div class="timeline-mix-card timeline-mix-card--type rounded-lg p-2">
-							<p class="sig-label mb-1">Type mix</p>
+							<p class="timeline-mix-header mb-1">Type mix</p>
 							{#if activeBucket.typeBreakdown.length === 0}
 								<p class="sig-label text-[var(--sig-text-muted)]">No type signals</p>
 							{:else}
 								{#each activeBucket.typeBreakdown as metric}
-									<div class="flex items-center justify-between text-[11px]">
+									<div class="flex w-full items-center justify-between text-[11px] text-[var(--sig-text)]">
 										<span>{metric.key}</span>
 										<span class="text-[var(--sig-text-muted)]">{metric.count}</span>
 									</div>
@@ -735,12 +735,12 @@ onMount(() => {
 						</div>
 
 						<div class="timeline-mix-card timeline-mix-card--source rounded-lg p-2">
-							<p class="sig-label mb-1">Source mix</p>
+							<p class="timeline-mix-header mb-1">Source mix</p>
 							{#if activeBucket.sourceBreakdown.length === 0}
 								<p class="sig-label text-[var(--sig-text-muted)]">No source signals</p>
 							{:else}
 								{#each activeBucket.sourceBreakdown as metric}
-									<div class="flex items-center justify-between text-[11px]">
+									<div class="flex w-full items-center justify-between text-[11px] text-[var(--sig-text)]">
 										<span>{metric.key}</span>
 										<span class="text-[var(--sig-text-muted)]">{metric.count}</span>
 									</div>
@@ -749,12 +749,12 @@ onMount(() => {
 						</div>
 
 						<div class="timeline-mix-card timeline-mix-card--tags rounded-lg p-2">
-							<p class="sig-label mb-1">Top tags</p>
+							<p class="timeline-mix-header mb-1">Top tags</p>
 							{#if activeBucket.topTags.length === 0}
 								<p class="sig-label text-[var(--sig-text-muted)]">No tags this era</p>
 							{:else}
 								{#each activeBucket.topTags as metric}
-									<div class="flex items-center justify-between text-[11px]">
+									<div class="flex w-full items-center justify-between text-[11px] text-[var(--sig-text)]">
 										<span>{metric.key}</span>
 										<span class="text-[var(--sig-text-muted)]">{metric.count}</span>
 									</div>
@@ -764,10 +764,10 @@ onMount(() => {
 					</div>
 				</section>
 
-				<section class="timeline-top-panel rounded-xl border border-[var(--sig-border)] bg-[var(--sig-surface)] p-3">
+				<section class="timeline-top-panel rounded-[10.5px] bg-[var(--sig-surface)] p-3" style="border: 0.87px solid var(--sig-border);">
 					<div class="flex items-center justify-between gap-2">
-						<p class="sig-label">Top Three Memories</p>
-						<p class="text-[11px] text-[var(--sig-text-muted)]">{activeBucket.label}</p>
+						<p class="sig-label text-[var(--sig-text-bright)]">Top Four Memories</p>
+						<p class="text-[11px] text-[var(--sig-text-bright)]">{activeBucket.label}</p>
 					</div>
 					{#if activeTopMemories.length === 0}
 						<p class="mt-2 sig-label text-[var(--sig-text-muted)]">
@@ -778,7 +778,7 @@ onMount(() => {
 							{#each activeTopMemories as memory (memory.id)}
 								<article class="timeline-top-card rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] p-2">
 									<div class="timeline-top-card-head">
-										<div class="timeline-top-card-icon" style={`background: ${getMemoryMonogramBg(memory.id)};`}>
+										<div class="timeline-top-card-icon">
 											{getMemoryMonogram(memory.who || memory.type || "memory")}
 										</div>
 										<div class="timeline-top-card-title-wrap">
@@ -810,10 +810,8 @@ onMount(() => {
 
 <style>
 	.timeline-hero {
-		border-radius: 1rem;
-		background:
-			radial-gradient(circle at 85% -20%, color-mix(in srgb, var(--sig-accent) 16%, transparent), transparent 45%),
-			linear-gradient(140deg, color-mix(in srgb, var(--sig-surface-raised) 88%, black) 0%, var(--sig-surface) 68%);
+		border-radius: 13px;
+		background: var(--sig-surface);
 		padding: 1.05rem 1.15rem;
 	}
 
@@ -826,9 +824,9 @@ onMount(() => {
 	.timeline-hero-title {
 		margin: 0;
 		font-family: var(--font-display);
-		font-size: clamp(1.05rem, 1.65vw, 1.35rem);
-		line-height: 1.2;
-		letter-spacing: 0.04em;
+		font-size: 40px;
+		line-height: 1.05;
+		letter-spacing: 0.018em;
 		text-transform: uppercase;
 		color: var(--sig-text-bright);
 	}
@@ -855,9 +853,9 @@ onMount(() => {
 		justify-content: flex-start;
 		gap: 0.2rem;
 		padding: 0.45rem 0.55rem;
-		border: 1px solid var(--sig-border-strong);
-		border-radius: 0.4rem;
-		background: color-mix(in srgb, var(--sig-surface-raised) 55%, transparent);
+		border: 0.87px solid var(--sig-border-strong);
+		border-radius: 5.2px;
+		background: transparent;
 	}
 
 	.timeline-hero-metric-label {
@@ -880,36 +878,64 @@ onMount(() => {
 		background:
 			linear-gradient(135deg, color-mix(in srgb, var(--sig-surface-raised) 92%, transparent), var(--sig-surface-raised));
 		border-color: var(--sig-border-strong);
-		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+		box-shadow: none;
 	}
 
 	.timeline-mix-grid {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 0.5rem;
+		gap: 0;
+		margin-bottom: -3rem;
+		margin-left: -0.75rem;
+		margin-right: -0.75rem;
+		padding-bottom: 2rem;
+		flex: 1;
+		min-height: 0;
 	}
 
 	.timeline-mix-card {
-		border: 1px solid var(--sig-border);
-		background: color-mix(in srgb, var(--sig-surface-raised) 58%, transparent);
+		border: 1px solid var(--sig-highlight-text);
+		border-bottom: none;
+		background: transparent;
+		text-align: center;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
 	}
 
 	.timeline-mix-card--type {
-		border-color: color-mix(in srgb, var(--sig-log-category-watcher) 58%, var(--sig-border-strong));
+		border-color: var(--sig-highlight-text);
 	}
 
 	.timeline-mix-card--source {
-		border-color: color-mix(in srgb, var(--sig-log-category-daemon) 58%, var(--sig-border-strong));
+		border-color: var(--sig-highlight-text);
 	}
 
 	.timeline-mix-card--tags {
-		border-color: color-mix(in srgb, var(--sig-log-category-pipeline) 58%, var(--sig-border-strong));
+		border-color: var(--sig-highlight-text);
+	}
+
+	.timeline-mix-header {
+		font-family: var(--font-display);
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--sig-highlight-text);
+		padding: 2px 6px;
+		background: var(--sig-surface-raised);
+		border-radius: 3px;
+		display: inline-block;
 	}
 
 	.timeline-summary-grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 0.5rem;
+		margin-left: -1rem;
+		margin-right: -1rem;
+		flex: 1;
+		min-height: 0;
 	}
 
 	.timeline-summary-line {
@@ -924,7 +950,7 @@ onMount(() => {
 	}
 
 	.timeline-summary-copy {
-		color: var(--sig-text-muted);
+		color: var(--sig-highlight);
 	}
 
 	.timeline-content-split {
@@ -954,9 +980,7 @@ onMount(() => {
 		min-height: 8.2rem;
 		flex-direction: column;
 		gap: 0.45rem;
-		background:
-			radial-gradient(circle at 12% -24%, color-mix(in srgb, var(--sig-accent) 8%, transparent), transparent 52%),
-			linear-gradient(220deg, color-mix(in srgb, var(--sig-surface-raised) 92%, black) 0%, var(--sig-surface-raised) 72%);
+		background: var(--sig-surface-raised);
 		transition: border-color 0.15s;
 	}
 
@@ -976,14 +1000,15 @@ onMount(() => {
 		width: 1.65rem;
 		align-items: center;
 		justify-content: center;
-		border-radius: 0.35rem;
+		border-radius: 4.55px;
 		font-family: var(--font-display);
 		font-size: 0.62rem;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: var(--sig-icon-fg);
-		border: 1px solid var(--sig-icon-border);
-		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+		color: var(--sig-bg);
+		background: var(--sig-highlight-text);
+		border: 0.87px solid var(--sig-border);
+		box-shadow: none;
 	}
 
 	.timeline-top-card-title-wrap {
@@ -1035,10 +1060,17 @@ onMount(() => {
 		.timeline-hero {
 			border-radius: 1rem;
 			padding: 0.95rem;
+			flex-shrink: 0;
+		}
+
+		.timeline-hero-title {
+			font-size: 24px;
 		}
 
 		.timeline-content-split {
 			grid-template-columns: minmax(0, 1fr);
+			flex: 1;
+			min-height: 0;
 		}
 
 		.timeline-summary-grid {
@@ -1078,17 +1110,43 @@ onMount(() => {
 			font-size: 0.68rem;
 		}
 
-		.timeline-shell {
-			overflow-y: auto;
-		}
-
 		.timeline-stack {
-			min-height: auto;
+			min-height: 0;
 		}
 
 		.timeline-detail-panel {
-			overflow: visible;
-			min-height: auto;
+			overflow-y: auto;
+			min-height: 0;
+			max-height: 55vh;
+		}
+
+		.timeline-summary-grid {
+			flex: none;
+			margin-left: 0;
+			margin-right: 0;
+		}
+
+		.timeline-mix-grid {
+			flex: none;
+			margin-bottom: 0;
+			margin-left: 0;
+			margin-right: 0;
+			padding-bottom: 0;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 0;
+		}
+
+		.timeline-mix-card {
+			max-height: 150px;
+			overflow-y: auto;
+			border-bottom: 1px solid var(--sig-highlight-text);
+			font-size: 9px;
+		}
+
+		.timeline-top-panel {
+			min-height: 0;
+			max-height: 45vh;
+			overflow-y: auto;
 		}
 
 		.timeline-top-card-grid {
@@ -1147,5 +1205,14 @@ onMount(() => {
 		.timeline-era-controls {
 			flex-wrap: nowrap;
 		}
+	}
+
+	.timeline-shell :global(.banner) {
+		background: var(--sig-bg);
+	}
+
+	/* Hide the banner title when tabs are present — the tab bar provides enough context */
+	.timeline-shell :global(.banner-title) {
+		display: none;
 	}
 </style>

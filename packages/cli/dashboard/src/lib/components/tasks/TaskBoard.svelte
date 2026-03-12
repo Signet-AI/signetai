@@ -155,19 +155,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: 8px;
 		overflow: hidden;
-		background:
-			repeating-conic-gradient(
-				color-mix(in srgb, var(--sig-text) 1%, transparent) 0% 25%,
-				transparent 0% 50%
-			) 0 0 / 10px 10px,
-			repeating-conic-gradient(
-				transparent 0% 25%,
-				color-mix(in srgb, var(--sig-text) 1.5%, transparent) 0% 50%
-			) 5px 5px / 10px 10px,
-			repeating-conic-gradient(
-				var(--sig-surface) 0% 25%,
-				color-mix(in srgb, var(--sig-surface) 98%, var(--sig-bg)) 0% 50%
-			) 0 0 / 10px 10px;
+		background: var(--sig-surface);
 	}
 
 	.column-header {

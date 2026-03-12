@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from "svelte";
+	import { useSidebar } from "$lib/components/ui/sidebar/context.svelte.js";
 
 	interface Props {
 		title: string;
@@ -8,11 +9,22 @@
 	}
 
 	const { title, children, right }: Props = $props();
+	const sidebar = useSidebar();
 </script>
 
 <div class="banner">
 	<div class="banner-content">
 		<div class="banner-left">
+			<button
+				class="sidebar-toggle"
+				onclick={() => sidebar.toggle()}
+				aria-label="Toggle sidebar"
+			>
+				<span
+					class="sidebar-toggle-icon"
+					aria-hidden="true"
+				></span>
+			</button>
 			{#if children}
 				{@render children()}
 			{/if}
@@ -108,5 +120,89 @@
 	.banner-coord--br {
 		bottom: 4px;
 		right: 8px;
+	}
+
+	.sidebar-toggle {
+		display: none;
+		align-items: center;
+		justify-content: center;
+		height: 26px;
+		width: 26px;
+		border: 1px solid var(--sig-border-strong);
+		border-radius: 4px;
+		background: transparent;
+		cursor: pointer;
+		flex-shrink: 0;
+		transition: border-color var(--dur) var(--ease);
+	}
+
+	@media (max-width: 1023px) {
+		.sidebar-toggle {
+			display: flex;
+			position: fixed;
+			top: 6px;
+			left: var(--space-sm, 8px);
+			z-index: 50;
+		}
+	}
+
+	.sidebar-toggle:hover {
+		border-color: var(--sig-accent);
+	}
+
+	.sidebar-toggle-icon {
+		position: relative;
+		display: inline-block;
+		height: 10px;
+		width: 10px;
+	}
+
+	.sidebar-toggle-icon::before {
+		content: "";
+		position: absolute;
+		width: 1px;
+		height: 100%;
+		left: 50%;
+		background: var(--sig-highlight);
+	}
+
+	.sidebar-toggle-icon::after {
+		content: "";
+		position: absolute;
+		width: 100%;
+		height: 1px;
+		top: 50%;
+		background: var(--sig-highlight);
+	}
+
+	@media (max-width: 1023px) {
+		.banner {
+			padding: 6px var(--space-sm);
+			margin-bottom: 0.75rem;
+		}
+
+		.banner-content {
+			grid-template-columns: 1fr;
+			justify-items: center;
+			gap: 0.25rem;
+		}
+
+		.banner-text {
+			margin-top: 2rem;
+		}
+
+		.banner-left {
+			justify-self: center;
+			flex-wrap: wrap;
+			justify-content: center;
+		}
+
+		.banner-right {
+			justify-self: center;
+		}
+
+		.banner-title {
+			font-size: 12px;
+		}
 	}
 </style>

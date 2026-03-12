@@ -158,7 +158,7 @@ function activateItem(item: NavItem): void {
 					{#snippet child({ props })}
 						<div {...props}>
 							<span
-								class="inline-block h-2.5 w-2.5 shrink-0 relative
+								class="sidebar-signet-icon inline-block h-2.5 w-2.5 shrink-0 relative
 									before:absolute before:w-px before:h-full before:left-1/2
 									before:bg-[var(--sig-highlight)]
 									after:absolute after:w-full after:h-px after:top-1/2
@@ -408,55 +408,17 @@ function activateItem(item: NavItem): void {
 		display: none;
 	}
 
-	/* Carbon fiber texture on sidebar footer */
 	:global(.sidebar-carbon-footer) {
-		position: relative;
+		background: var(--sig-surface);
 		border-top: none;
 	}
-	:global(.sidebar-carbon-footer)::before {
-		content: "";
-		position: absolute;
-		inset: 0;
-		pointer-events: none;
-		border-radius: inherit;
-		background:
-			repeating-conic-gradient(
-				rgba(255, 255, 255, 0.02) 0% 25%,
-				transparent 0% 50%
-			) 0 0 / 10px 10px,
-			repeating-conic-gradient(
-				transparent 0% 25%,
-				rgba(0, 0, 0, 0.03) 0% 50%
-			) 5px 5px / 10px 10px,
-			repeating-conic-gradient(
-				var(--sig-surface) 0% 25%,
-				color-mix(in srgb, var(--sig-surface) 96%, black) 0% 50%
-			) 0 0 / 10px 10px;
-		-webkit-mask-image: linear-gradient(to bottom, transparent, black 12px), linear-gradient(to right, black 50%, transparent 100%);
-		-webkit-mask-composite: source-in;
-		mask-image: linear-gradient(to bottom, transparent, black 12px), linear-gradient(to right, black 50%, transparent 100%);
-		mask-composite: intersect;
-		z-index: 0;
-	}
-	:global(.sidebar-carbon-footer > *) {
-		position: relative;
-		z-index: 1;
+
+	.sidebar-signet-icon {
+		transition: filter 0.2s ease, transform 0.2s ease;
 	}
 
-	/* Light theme — darken the weave instead */
-	:global([data-theme="light"] .sidebar-carbon-footer)::before {
-		background:
-			repeating-conic-gradient(
-				rgba(0, 0, 0, 0.02) 0% 25%,
-				transparent 0% 50%
-			) 0 0 / 10px 10px,
-			repeating-conic-gradient(
-				transparent 0% 25%,
-				rgba(0, 0, 0, 0.03) 0% 50%
-			) 5px 5px / 10px 10px,
-			repeating-conic-gradient(
-				var(--sig-surface) 0% 25%,
-				color-mix(in srgb, var(--sig-surface) 96%, black) 0% 50%
-			) 0 0 / 10px 10px;
+	:global([data-sidebar="menu-button"]):hover .sidebar-signet-icon {
+		filter: drop-shadow(0 0 6px var(--sig-highlight)) drop-shadow(0 0 12px var(--sig-highlight));
+		transform: scale(1.15);
 	}
 </style>
