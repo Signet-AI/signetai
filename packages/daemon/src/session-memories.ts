@@ -4,6 +4,12 @@
  * Records which memories were considered and injected at session start,
  * and tracks FTS hits during user prompt handling. This data feeds
  * the continuity scorer and (eventually) the predictive memory scorer.
+ *
+ * Performance optimizations:
+ * - Statement caching via WeakMap (reduces SQL re-parsing by SQLite)
+ * - SQL fragment memoization (avoids redundant string builds)
+ * - Path and existence caching (skips redundant homedir/existsSync syscalls)
+ * - Parameter pre-allocation (minimizes array resizing in hot loops)
  */
 
 import { existsSync } from "node:fs";
@@ -12,9 +18,78 @@ import { join } from "node:path";
 import { getDbAccessor, type WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 
+/** Cache for prepared SQLite statements keyed by the database instance. */
+const STMT_CACHE = new WeakMap<object, Map<string, any>>();
+
+/** Cache for repetitive SQL fragments (e.g. multi-row VALUES clauses). */
+const SQL_PART_CACHE = new Map<string, string>();
+
+const CHUNK_SIZE = 50;
+
+const CANDIDATE_ROW_TEMPLATE = "(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)";
+const CANDIDATE_BASE_SQL =
+	"INSERT OR IGNORE INTO session_memories (id, session_key, memory_id, source, effective_score, predictor_score, final_score, rank, was_injected, fts_hit_count, created_at, entity_slot, aspect_slot, is_constraint, structural_density, predictor_rank) VALUES ";
+
+const FTS_ROW_TEMPLATE = "(?, ?, ?, 'fts_only', 0, 0, 0, 0, 1, ?)";
+const FTS_BASE_SQL =
+	"INSERT INTO session_memories (id, session_key, memory_id, source, effective_score, final_score, rank, was_injected, fts_hit_count, created_at) VALUES ";
+const FTS_CONFLICT_CLAUSE =
+	" ON CONFLICT(session_key, memory_id) DO UPDATE SET fts_hit_count = fts_hit_count + 1";
+
+let lastSignetPath: string | undefined = undefined;
+let cachedMemoryDbPath: string | undefined = undefined;
+let cachedDbExists = false;
+
 function getMemoryDbPath(): string {
-	const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
-	return join(agentsDir, "memory", "memories.db");
+	const currentPath = process.env.SIGNET_PATH;
+	if (currentPath !== lastSignetPath || !cachedMemoryDbPath) {
+		lastSignetPath = currentPath;
+		const agentsDir = currentPath || join(homedir(), ".agents");
+		cachedMemoryDbPath = join(agentsDir, "memory", "memories.db");
+		cachedDbExists = false;
+	}
+	return cachedMemoryDbPath;
+}
+
+/**
+ * Get a prepared statement from the cache or compile a new one.
+ */
+function getCachedStmt(db: WriteDb, sql: string): any {
+	let dbCache = STMT_CACHE.get(db);
+	if (!dbCache) {
+		dbCache = new Map();
+		STMT_CACHE.set(db, dbCache);
+	}
+
+	let stmt = dbCache.get(sql);
+	if (!stmt) {
+		stmt = db.prepare(sql);
+		dbCache.set(sql, stmt);
+	}
+	return stmt;
+}
+
+/**
+ * Get a multi-row VALUES fragment from the cache or build a new one.
+ */
+function getValuesFragment(rowTemplate: string, count: number): string {
+	const key = `${rowTemplate}:${count}`;
+	let fragment = SQL_PART_CACHE.get(key);
+	if (!fragment) {
+		fragment = Array.from({ length: count }, () => rowTemplate).join(",");
+		SQL_PART_CACHE.set(key, fragment);
+	}
+	return fragment;
+}
+
+/**
+ * Check if the memory database exists. Caches the positive result to
+ * avoid redundant filesystem syscalls on hot paths.
+ */
+function checkDbExists(): boolean {
+	if (cachedDbExists) return true;
+	cachedDbExists = existsSync(getMemoryDbPath());
+	return cachedDbExists;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,60 +127,40 @@ export function recordSessionCandidates(
 	candidates: ReadonlyArray<SessionMemoryCandidate>,
 	injectedIds: ReadonlySet<string>,
 ): void {
-	if (!sessionKey || candidates.length === 0 || !existsSync(getMemoryDbPath())) return;
+	if (!sessionKey || candidates.length === 0 || !checkDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
-			const CHUNK_SIZE = 50;
-			const ROW = "(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)";
-			const BASE_SQL = `INSERT OR IGNORE INTO session_memories
-					 (id, session_key, memory_id, source, effective_score,
-					  predictor_score, final_score, rank, was_injected,
-					  fts_hit_count, created_at,
-					  entity_slot, aspect_slot, is_constraint, structural_density,
-					  predictor_rank)
-					 VALUES `;
-
-			// Pre-compile the full-chunk statement once to avoid recompiling
-			// identical SQL on every iteration of the loop.
-			const fullChunkStmt =
-				candidates.length >= CHUNK_SIZE
-					? db.prepare(BASE_SQL + Array.from({ length: CHUNK_SIZE }, () => ROW).join(","))
-					: null;
-
 			let rank = 0;
+
 			for (let i = 0; i < candidates.length; i += CHUNK_SIZE) {
 				const chunk = candidates.slice(i, i + CHUNK_SIZE);
+				const sql = CANDIDATE_BASE_SQL + getValuesFragment(CANDIDATE_ROW_TEMPLATE, chunk.length);
+				const stmt = getCachedStmt(db, sql);
 
-				// Reuse pre-compiled statement for full chunks; compile once for
-				// the remainder chunk (different SQL, can't reuse).
-				const stmt =
-					chunk.length === CHUNK_SIZE
-						? fullChunkStmt!
-						: db.prepare(BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(","));
-
-				const values: unknown[] = [];
-				for (const c of chunk) {
+				const values: any[] = new Array(chunk.length * 15);
+				for (let j = 0; j < chunk.length; j++) {
+					const c = chunk[j];
 					const wasInjected = injectedIds.has(c.id) ? 1 : 0;
 					const finalScore = c.finalScore ?? c.effScore;
-					values.push(
-						crypto.randomUUID(),
-						sessionKey,
-						c.id,
-						c.source,
-						c.effScore,
-						c.predictorScore ?? null,
-						finalScore,
-						rank++,
-						wasInjected,
-						now,
-						c.entitySlot ?? null,
-						c.aspectSlot ?? null,
-						c.isConstraint ?? 0,
-						c.structuralDensity ?? null,
-						c.predictorRank ?? null,
-					);
+					const offset = j * 15;
+
+					values[offset] = crypto.randomUUID();
+					values[offset + 1] = sessionKey;
+					values[offset + 2] = c.id;
+					values[offset + 3] = c.source;
+					values[offset + 4] = c.effScore;
+					values[offset + 5] = c.predictorScore ?? null;
+					values[offset + 6] = finalScore;
+					values[offset + 7] = rank++;
+					values[offset + 8] = wasInjected;
+					values[offset + 9] = now;
+					values[offset + 10] = c.entitySlot ?? null;
+					values[offset + 11] = c.aspectSlot ?? null;
+					values[offset + 12] = c.isConstraint ?? 0;
+					values[offset + 13] = c.structuralDensity ?? null;
+					values[offset + 14] = c.predictorRank ?? null;
 				}
 
 				stmt.run(...values);
@@ -138,48 +193,24 @@ export function recordSessionCandidates(
  * collapse two queries into one, reducing roundtrips.
  */
 export function trackFtsHits(sessionKey: string | undefined, matchedIds: ReadonlyArray<string>): void {
-	if (!sessionKey || matchedIds.length === 0 || !existsSync(getMemoryDbPath())) return;
+	if (!sessionKey || matchedIds.length === 0 || !checkDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
-			const CHUNK_SIZE = 50;
-			// Each row contributes 4 params: id, session_key, memory_id, created_at
-			const ROW = "(?, ?, ?, 'fts_only', 0, 0, 0, 0, 1, ?)";
-			const BASE_SQL = `INSERT INTO session_memories
-				 (id, session_key, memory_id, source, effective_score,
-				  final_score, rank, was_injected, fts_hit_count, created_at)
-				 VALUES `;
-			const CONFLICT_CLAUSE = `
-				 ON CONFLICT(session_key, memory_id) DO UPDATE SET
-				  fts_hit_count = fts_hit_count + 1`;
-
-			// Pre-compile the full-chunk UPSERT statement once to avoid
-			// recompiling identical SQL for every batch of 50.
-			const fullChunkStmt =
-				matchedIds.length >= CHUNK_SIZE
-					? db.prepare(
-							BASE_SQL +
-								Array.from({ length: CHUNK_SIZE }, () => ROW).join(",") +
-								CONFLICT_CLAUSE,
-						)
-					: null;
 
 			for (let i = 0; i < matchedIds.length; i += CHUNK_SIZE) {
 				const chunk = matchedIds.slice(i, i + CHUNK_SIZE);
+				const sql = FTS_BASE_SQL + getValuesFragment(FTS_ROW_TEMPLATE, chunk.length) + FTS_CONFLICT_CLAUSE;
+				const stmt = getCachedStmt(db, sql);
 
-				const stmt =
-					chunk.length === CHUNK_SIZE
-						? fullChunkStmt!
-						: db.prepare(
-								BASE_SQL +
-									Array.from({ length: chunk.length }, () => ROW).join(",") +
-									CONFLICT_CLAUSE,
-							);
-
-				const values: unknown[] = [];
-				for (const id of chunk) {
-					values.push(crypto.randomUUID(), sessionKey, id, now);
+				const values: any[] = new Array(chunk.length * 4);
+				for (let j = 0; j < chunk.length; j++) {
+					const offset = j * 4;
+					values[offset] = crypto.randomUUID();
+					values[offset + 1] = sessionKey;
+					values[offset + 2] = chunk[j];
+					values[offset + 3] = now;
 				}
 
 				stmt.run(...values);
@@ -257,7 +288,7 @@ export function recordAgentFeedback(
 	sessionKey: string | undefined,
 	feedback: Readonly<Record<string, number>>,
 ): void {
-	if (!sessionKey || Object.keys(feedback).length === 0 || !existsSync(getMemoryDbPath())) return;
+	if (!sessionKey || Object.keys(feedback).length === 0 || !checkDbExists()) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
