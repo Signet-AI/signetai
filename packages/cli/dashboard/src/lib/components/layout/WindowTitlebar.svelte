@@ -118,6 +118,7 @@
 					class="traffic-light traffic-light--close"
 					onclick={close}
 					title="Close"
+					aria-label="Close"
 				>
 					<span class="traffic-light__icon">
 						<X size={8} strokeWidth={2.5} />
@@ -127,6 +128,7 @@
 					class="traffic-light traffic-light--minimize"
 					onclick={minimize}
 					title="Minimize"
+					aria-label="Minimize"
 				>
 					<span class="traffic-light__icon">
 						<Minus size={8} strokeWidth={2.5} />
@@ -136,6 +138,7 @@
 					class="traffic-light traffic-light--maximize"
 					onclick={toggleMaximize}
 					title={maximized ? "Restore" : "Maximize"}
+					aria-label={maximized ? "Restore" : "Maximize"}
 				>
 					<span class="traffic-light__icon">
 						{#if maximized}
@@ -154,6 +157,7 @@
 					class="titlebar__mode-btn"
 					onclick={cycleMode}
 					title="Window style: {modeLabel[titlebar.mode]}"
+					aria-label="Toggle window style"
 				>
 					<ModeIcon size={12} />
 				</button>
@@ -165,6 +169,7 @@
 					class="titlebar__mode-btn"
 					onclick={cycleMode}
 					title="Window style: {modeLabel[titlebar.mode]}"
+					aria-label="Toggle window style"
 				>
 					<ModeIcon size={12} />
 				</button>
@@ -176,6 +181,7 @@
 					class="win-btn win-btn--minimize"
 					onclick={minimize}
 					title="Minimize"
+					aria-label="Minimize"
 				>
 					<Minus size={14} strokeWidth={1.5} />
 				</button>
@@ -183,6 +189,7 @@
 					class="win-btn win-btn--maximize"
 					onclick={toggleMaximize}
 					title={maximized ? "Restore" : "Maximize"}
+					aria-label={maximized ? "Restore" : "Maximize"}
 				>
 					{#if maximized}
 						<Copy size={12} strokeWidth={1.5} />
@@ -194,6 +201,7 @@
 					class="win-btn win-btn--close"
 					onclick={close}
 					title="Close"
+					aria-label="Close"
 				>
 					<X size={14} strokeWidth={1.5} />
 				</button>
@@ -238,7 +246,7 @@
 		color: var(--sig-text-muted);
 		border-radius: 4px;
 		cursor: pointer;
-		transition: background 0.15s, color 0.15s;
+		transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 	}
 
 	.titlebar__mode-btn:hover {
@@ -280,7 +288,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: filter 0.15s;
+		transition: filter var(--dur) var(--ease);
 		position: relative;
 	}
 
@@ -290,7 +298,7 @@
 		justify-content: center;
 		opacity: 0;
 		color: rgba(0, 0, 0, 0.6);
-		transition: opacity 0.15s;
+		transition: opacity var(--dur) var(--ease);
 	}
 
 	.titlebar:hover .traffic-light__icon {
@@ -354,7 +362,7 @@
 		background: transparent;
 		color: var(--sig-text-muted);
 		cursor: pointer;
-		transition: background 0.1s, color 0.1s;
+		transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 	}
 
 	.win-btn:hover {

@@ -159,15 +159,20 @@ onMount(() => {
 	};
 	window.addEventListener("beforeunload", handleBeforeUnload);
 
-	// Ctrl+scroll wheel zoom — needs {passive: false} to allow preventDefault
+	// Ctrl+scroll wheel zoom — only in Tauri (web build preserves native browser zoom)
+	const isTauri = "__TAURI_INTERNALS__" in window;
 	const handleWheel = (e: WheelEvent) => uiScale.handleZoomWheel(e);
-	window.addEventListener("wheel", handleWheel, { passive: false });
+	if (isTauri) {
+		window.addEventListener("wheel", handleWheel, { passive: false });
+	}
 
 	return () => {
 		cleanupNav();
 		cleanupTabGroups();
 		window.removeEventListener("beforeunload", handleBeforeUnload);
-		window.removeEventListener("wheel", handleWheel);
+		if (isTauri) {
+			window.removeEventListener("wheel", handleWheel);
+		}
 	};
 });
 
@@ -205,7 +210,15 @@ $effect(() => {
 	<title>Signet</title>
 </svelte:head>
 
-<svelte:window onkeydown={(e) => { if (!uiScale.handleZoomKey(e)) handleGlobalKey(e); }} onfocusin={handleFocusIn} onclick={handlePageClick} />
+<svelte:window
+	onkeydown={(e) => {
+		const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+		if (isTauri && uiScale.handleZoomKey(e)) return;
+		handleGlobalKey(e);
+	}}
+	onfocusin={handleFocusIn}
+	onclick={handlePageClick}
+/>
 
 <div class="flex flex-col h-screen overflow-hidden" style="--titlebar-h: {titlebar.visible ? titlebar.height : 0}px;">
 <WindowTitlebar />

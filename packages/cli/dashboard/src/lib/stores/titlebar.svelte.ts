@@ -6,12 +6,18 @@
  *   "windows" — minimize/maximize/close on the right, left-aligned title
  *   "none"    — no titlebar, pure content (chromeless)
  *
- * Auto-detects OS on first load, persists override in localStorage.
+ * Only active inside the Tauri desktop shell. In a normal browser session
+ * this store always resolves to "none" so the web dashboard never renders
+ * a phantom titlebar offset.
  */
 
 export type DecorationMode = "macos" | "windows" | "none";
 
 const STORAGE_KEY = "signet-decoration-mode";
+
+function isTauriShell(): boolean {
+	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
 
 function detectOS(): DecorationMode {
 	if (typeof navigator === "undefined") return "none";
@@ -23,6 +29,7 @@ function detectOS(): DecorationMode {
 }
 
 function loadMode(): DecorationMode {
+	if (!isTauriShell()) return "none";
 	if (typeof localStorage === "undefined") return detectOS();
 	const stored = localStorage.getItem(STORAGE_KEY);
 	if (stored === "macos" || stored === "windows" || stored === "none") {

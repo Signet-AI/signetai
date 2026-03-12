@@ -26,8 +26,10 @@
 			<div class="mode-grid">
 				{#each modes as mode (mode.id)}
 					<button
+						type="button"
 						class="mode-card"
 						class:mode-card--active={titlebar.mode === mode.id}
+						aria-pressed={titlebar.mode === mode.id}
 						onclick={() => (titlebar.mode = mode.id)}
 					>
 						<div class="mode-icon">

@@ -18,7 +18,7 @@ function loadIndex(): number {
 	const stored = localStorage.getItem(STORAGE_KEY);
 	if (stored !== null) {
 		const n = Number(stored);
-		if (Number.isFinite(n) && n >= 0 && n < STEPS.length) return n;
+		if (Number.isInteger(n) && n >= 0 && n < STEPS.length) return n;
 	}
 	return DEFAULT_INDEX;
 }
