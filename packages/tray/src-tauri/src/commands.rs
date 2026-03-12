@@ -134,7 +134,7 @@ pub(crate) fn open_dashboard_inner(app: &AppHandle) -> Result<(), String> {
         .min_inner_size(800.0, 600.0)
         .center()
         .decorations(false)
-        .zoom_hotkeys_enabled(true)
+        .zoom_hotkeys_enabled(false)
         .build()
         .map_err(|e| e.to_string())?;
     }

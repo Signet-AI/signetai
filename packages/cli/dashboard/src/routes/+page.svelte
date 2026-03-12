@@ -40,6 +40,9 @@ import {
 	MEMORY_TABS,
 } from "$lib/stores/tab-group-focus.svelte";
 import { focus } from "$lib/stores/focus.svelte";
+import WindowTitlebar from "$lib/components/layout/WindowTitlebar.svelte";
+import { titlebar } from "$lib/stores/titlebar.svelte";
+import { uiScale } from "$lib/stores/ui-scale.svelte";
 import { onMount } from "svelte";
 
 const activeTab = $derived(nav.activeTab);
@@ -156,10 +159,27 @@ onMount(() => {
 	};
 	window.addEventListener("beforeunload", handleBeforeUnload);
 
+	// Ctrl+scroll wheel zoom — only in Tauri (web build preserves native browser zoom).
+	// Modifier check is inlined so non-ctrl scrolls exit immediately, minimising the
+	// cost of the { passive: false } constraint on ordinary scrolling.
+	const isTauri = "__TAURI_INTERNALS__" in window;
+	const handleWheel = (e: WheelEvent) => {
+		if (!(e.ctrlKey || e.metaKey)) return;
+		e.preventDefault();
+		if (e.deltaY < 0) uiScale.zoomIn();
+		else if (e.deltaY > 0) uiScale.zoomOut();
+	};
+	if (isTauri) {
+		window.addEventListener("wheel", handleWheel, { passive: false });
+	}
+
 	return () => {
 		cleanupNav();
 		cleanupTabGroups();
 		window.removeEventListener("beforeunload", handleBeforeUnload);
+		if (isTauri) {
+			window.removeEventListener("wheel", handleWheel);
+		}
 	};
 });
 
@@ -197,9 +217,20 @@ $effect(() => {
 	<title>Signet</title>
 </svelte:head>
 
-<svelte:window onkeydown={handleGlobalKey} onfocusin={handleFocusIn} onclick={handlePageClick} />
+<svelte:window
+	onkeydown={(e) => {
+		const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+		if (isTauri && uiScale.handleZoomKey(e)) return;
+		handleGlobalKey(e);
+	}}
+	onfocusin={handleFocusIn}
+	onclick={handlePageClick}
+/>
 
-<Sidebar.Provider>
+<div class="flex flex-col h-screen overflow-hidden" style="--titlebar-h: {titlebar.visible ? titlebar.height : 0}px;">
+<WindowTitlebar />
+
+<Sidebar.Provider class="!h-full flex-1 min-h-0">
 	<AppSidebar
 		identity={data.identity}
 		harnesses={data.harnesses}
@@ -239,6 +270,7 @@ $effect(() => {
 		/>
 	</main>
 </Sidebar.Provider>
+</div>
 
 <GlobalCommandPalette />
 

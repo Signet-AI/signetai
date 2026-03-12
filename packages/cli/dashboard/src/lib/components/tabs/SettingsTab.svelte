@@ -10,6 +10,7 @@
 	import PipelineSection from "./settings/PipelineSection.svelte";
 	import SearchSection from "./settings/SearchSection.svelte";
 	import TrustSection from "./settings/TrustSection.svelte";
+	import AppearanceSection from "./settings/AppearanceSection.svelte";
 	import IdentityPanel from "$lib/components/config/IdentityPanel.svelte";
 	import PageBanner from "$lib/components/layout/PageBanner.svelte";
 	import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
@@ -72,6 +73,12 @@
 			title: "Auth",
 			source: "config",
 			paths: [["auth"]],
+		},
+		{
+			id: "appearance",
+			title: "Appearance",
+			source: "config",
+			paths: [],
 		},
 	];
 
@@ -189,6 +196,8 @@
 					<TrustSection />
 				{:else if activeSection === "auth"}
 					<AuthSection />
+				{:else if activeSection === "appearance"}
+					<AppearanceSection />
 				{/if}
 			</div>
 

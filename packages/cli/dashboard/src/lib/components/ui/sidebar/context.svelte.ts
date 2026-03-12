@@ -30,7 +30,13 @@ class SidebarState {
 
 	constructor(props: SidebarStateProps) {
 		this.setOpen = props.setOpen;
-		this.#isMobile = new IsMobile();
+		// In the Tauri desktop shell, the app has a minimum window width of 800px
+		// and a min zoom level of 50%, so at 200% DPI the logical width can be as
+		// low as ~400px. Use 200px to prevent the sidebar collapsing to a sheet in
+		// the desktop app. On the web (browser), use the standard 768px breakpoint.
+		const isTauri =
+			typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+		this.#isMobile = new IsMobile(isTauri ? 200 : undefined);
 		this.props = props;
 	}
 

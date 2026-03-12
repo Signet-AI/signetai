@@ -21,7 +21,7 @@
         "visible": false,
         "decorations": false,
         "center": true,
-        "zoomHotkeysEnabled": true
+        "zoomHotkeysEnabled": false
       }
     ],
     "security": {
