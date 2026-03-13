@@ -8,9 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-// The migration runner should be importable from the migrations index
-// If this import fails, the module hasn't been created yet
-import { runMigrations } from "./index";
+import { MIGRATIONS, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
@@ -452,5 +450,99 @@ describe("migration framework", () => {
 			.count;
 
 		expect(countAfter).toBe(countBefore);
+	});
+
+	test("phantom migration repair: dropped table triggers re-run", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		// Drop a table that v14 created, simulating a phantom migration
+		db.run("DROP TABLE telemetry_events");
+
+		// Verify it's gone
+		const before = db
+			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'")
+			.all();
+		expect(before.length).toBe(0);
+
+		// Re-run — phantom repair should detect the missing table,
+		// remove the v14 record, and re-run it
+		runMigrations(db);
+
+		// Table should be recreated
+		const after = db
+			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'")
+			.all();
+		expect(after.length).toBe(1);
+
+		// All 26 versions should be recorded
+		const migrations = db
+			.query("SELECT version FROM schema_migrations ORDER BY version")
+			.all() as Array<{ version: number }>;
+		expect(migrations.length).toBe(26);
+	});
+
+	test("set-based skip handles gaps from phantom repair", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		// Simulate phantom state for versions 14-16: delete their
+		// schema_migrations rows and drop their tables
+		for (const v of [14, 15, 16]) {
+			db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(v);
+		}
+		db.run("DROP TABLE IF EXISTS telemetry_events");
+		db.run("DROP TABLE IF EXISTS session_memories");
+		db.run("DROP TABLE IF EXISTS session_checkpoints");
+
+		// Re-run — should fill the gaps without touching other migrations
+		runMigrations(db);
+
+		// All tables restored
+		const tables = db
+			.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+			.all() as Array<{ name: string }>;
+		const tableNames = tables.map((t) => t.name);
+		expect(tableNames).toContain("telemetry_events");
+		expect(tableNames).toContain("session_memories");
+		expect(tableNames).toContain("session_checkpoints");
+
+		// All versions present
+		const migrations = db
+			.query("SELECT version FROM schema_migrations ORDER BY version")
+			.all() as Array<{ version: number }>;
+		expect(migrations.length).toBe(26);
+	});
+
+	test("post-DDL verification catches missing artifacts", () => {
+		db = createFreshDb();
+
+		// We can't easily inject a broken migration into the real list,
+		// so we verify the mechanism by checking that after a successful
+		// run, all declared artifacts actually exist
+		runMigrations(db);
+
+		const tables = db
+			.query("SELECT name FROM sqlite_master WHERE type='table'")
+			.all() as Array<{ name: string }>;
+		const tableNames = new Set(tables.map((t) => t.name));
+
+		for (const m of MIGRATIONS) {
+			if (!m.artifacts) continue;
+			if (m.artifacts.tables) {
+				for (const t of m.artifacts.tables) {
+					expect(tableNames.has(t)).toBe(true);
+				}
+			}
+			if (m.artifacts.columns) {
+				for (const col of m.artifacts.columns) {
+					const cols = db
+						.query(`PRAGMA table_info("${col.table}")`)
+						.all() as Array<{ name: string }>;
+					const colNames = cols.map((c) => c.name);
+					expect(colNames).toContain(col.column);
+				}
+			}
+		}
 	});
 });

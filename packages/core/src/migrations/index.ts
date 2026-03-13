@@ -47,16 +47,40 @@ export interface MigrationDb {
 	};
 }
 
+export interface MigrationArtifacts {
+	readonly tables?: readonly string[];
+	readonly columns?: readonly { readonly table: string; readonly column: string }[];
+}
+
 export interface Migration {
 	readonly version: number;
 	readonly name: string;
 	readonly up: (db: MigrationDb) => void;
+	readonly artifacts?: MigrationArtifacts;
 }
 
 /** Ordered list of all migrations. New migrations go at the end. */
 export const MIGRATIONS: readonly Migration[] = [
-	{ version: 1, name: "baseline", up: baseline },
-	{ version: 2, name: "pipeline-v2", up: pipelineV2 },
+	{
+		version: 1,
+		name: "baseline",
+		up: baseline,
+		artifacts: { tables: ["memories", "conversations", "embeddings"] },
+	},
+	{
+		version: 2,
+		name: "pipeline-v2",
+		up: pipelineV2,
+		artifacts: {
+			tables: [
+				"memory_history",
+				"memory_jobs",
+				"entities",
+				"relations",
+				"memory_entity_mentions",
+			],
+		},
+	},
 	{ version: 3, name: "unique-content-hash", up: uniqueContentHash },
 	{
 		version: 4,
@@ -69,6 +93,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 7,
 		name: "documents-and-connectors",
 		up: documentsAndConnectors,
+		artifacts: { tables: ["documents", "document_memories", "connectors"] },
 	},
 	{
 		version: 8,
@@ -79,76 +104,111 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 9,
 		name: "summary-jobs",
 		up: summaryJobs,
+		artifacts: { tables: ["summary_jobs"] },
 	},
 	{
 		version: 10,
 		name: "umap-cache",
 		up: umapCache,
+		artifacts: { tables: ["umap_cache"] },
 	},
 	{
 		version: 11,
 		name: "session-scores",
 		up: sessionScores,
+		artifacts: { tables: ["session_scores"] },
 	},
 	{
 		version: 12,
 		name: "scheduled-tasks",
 		up: scheduledTasks,
+		artifacts: { tables: ["scheduled_tasks", "task_runs"] },
 	},
 	{
 		version: 13,
 		name: "ingestion-tracking",
 		up: ingestionTracking,
+		artifacts: { tables: ["ingestion_jobs"] },
 	},
 	{
 		version: 14,
 		name: "telemetry",
 		up: telemetry,
+		artifacts: { tables: ["telemetry_events"] },
 	},
 	{
 		version: 15,
 		name: "session-memories",
 		up: sessionMemories,
+		artifacts: { tables: ["session_memories"] },
 	},
 	{
 		version: 16,
 		name: "session-checkpoints",
 		up: sessionCheckpoints,
+		artifacts: { tables: ["session_checkpoints"] },
 	},
 	{
 		version: 17,
 		name: "task-skills",
 		up: taskSkills,
+		artifacts: {
+			columns: [{ table: "scheduled_tasks", column: "skill_name" }],
+		},
 	},
 	{
 		version: 18,
 		name: "skill-meta",
 		up: skillMeta,
+		artifacts: { tables: ["skill_meta"] },
 	},
 	{
 		version: 19,
 		name: "knowledge-structure",
 		up: knowledgeStructure,
+		artifacts: {
+			tables: [
+				"entity_aspects",
+				"entity_attributes",
+				"entity_dependencies",
+				"task_meta",
+			],
+			columns: [{ table: "entities", column: "agent_id" }],
+		},
 	},
 	{
 		version: 20,
 		name: "predictor-comparisons",
 		up: predictorComparisons,
+		artifacts: {
+			tables: ["predictor_comparisons", "predictor_training_log"],
+		},
 	},
 	{
 		version: 21,
 		name: "checkpoint-structural",
 		up: checkpointStructural,
+		artifacts: {
+			columns: [
+				{ table: "session_checkpoints", column: "focal_entity_ids" },
+			],
+		},
 	},
 	{
 		version: 22,
 		name: "entity-pinning",
 		up: entityPinning,
+		artifacts: {
+			columns: [{ table: "entities", column: "pinned" }],
+		},
 	},
 	{
 		version: 23,
 		name: "predictor-columns",
 		up: predictorColumns,
+		artifacts: {
+			columns: [{ table: "session_memories", column: "predictor_rank" }],
+		},
 	},
 	{
 		version: 24,
@@ -164,6 +224,7 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 26,
 		name: "predictor-training-pairs",
 		up: predictorTrainingPairs,
+		artifacts: { tables: ["predictor_training_pairs"] },
 	},
 	{
 		version: 27,
@@ -228,17 +289,158 @@ function currentVersion(db: MigrationDb): number {
  *
  * If version >= 2 but the memories table lacks the `content_hash`
  * column (added by 002), the version rows are bogus. Delete them
- * and return 0 so all migrations re-run. This is safe because every
- * migration uses CREATE IF NOT EXISTS / addColumnIfMissing.
+ * so all migrations re-run. This is safe because every migration
+ * uses CREATE IF NOT EXISTS / addColumnIfMissing.
  */
-function repairBogusVersion(db: MigrationDb, current: number): number {
-	if (current < 2) return current;
-	const cols = db.prepare("PRAGMA table_info(memories)").all() as ReadonlyArray<Record<string, unknown>>;
+function repairBogusVersion(db: MigrationDb): void {
+	const current = currentVersion(db);
+	if (current < 2) return;
+	const cols = db
+		.prepare("PRAGMA table_info(memories)")
+		.all() as ReadonlyArray<Record<string, unknown>>;
 	const hasContentHash = cols.some((r) => r.name === "content_hash");
-	if (hasContentHash) return current;
-	// Version was stamped by old CLI without running actual migrations
+	if (hasContentHash) return;
 	db.exec("DELETE FROM schema_migrations WHERE version > 0");
-	return 0;
+}
+
+/** Get the set of table names in the database (single query). */
+function existingTables(db: MigrationDb): Set<string> {
+	const rows = db
+		.prepare("SELECT name FROM sqlite_master WHERE type='table'")
+		.all() as unknown as ReadonlyArray<{ name: string }>;
+	return new Set(rows.map((r) => r.name));
+}
+
+/** Get column names for a table, with per-call caching. */
+function tableColumns(
+	db: MigrationDb,
+	table: string,
+	cache: Map<string, Set<string>>,
+): Set<string> {
+	let cols = cache.get(table);
+	if (cols) return cols;
+	const rows = db
+		.prepare(`PRAGMA table_info("${table}")`)
+		.all() as unknown as ReadonlyArray<{ name: string }>;
+	cols = new Set(rows.map((r) => r.name));
+	cache.set(table, cols);
+	return cols;
+}
+
+/**
+ * Detect "phantom" migrations — recorded as applied in schema_migrations
+ * but whose expected artifacts (tables/columns) don't actually exist.
+ * Deletes the phantom rows so the migration re-runs on the next pass.
+ */
+function repairPhantomMigrations(db: MigrationDb): void {
+	const tables = existingTables(db);
+	const colCache = new Map<string, Set<string>>();
+
+	for (const migration of MIGRATIONS) {
+		if (!migration.artifacts) continue;
+
+		// Skip v1/v2 — legacy CLI partial schemas are handled by
+		// repairBogusVersion, not phantom repair
+		if (migration.version <= 2) continue;
+
+		const row = db
+			.prepare("SELECT version FROM schema_migrations WHERE version = ?")
+			.get(migration.version);
+		if (!row) continue;
+
+		let missing = false;
+
+		if (migration.artifacts.tables) {
+			for (const t of migration.artifacts.tables) {
+				if (!tables.has(t)) {
+					console.log(
+						`[signet] phantom migration v${migration.version} (${migration.name}): table "${t}" missing — will re-run`,
+					);
+					missing = true;
+					break;
+				}
+			}
+		}
+
+		if (!missing && migration.artifacts.columns) {
+			for (const col of migration.artifacts.columns) {
+				if (!tables.has(col.table)) {
+					console.log(
+						`[signet] phantom migration v${migration.version} (${migration.name}): table "${col.table}" missing — will re-run`,
+					);
+					missing = true;
+					break;
+				}
+				const cols = tableColumns(db, col.table, colCache);
+				if (!cols.has(col.column)) {
+					console.log(
+						`[signet] phantom migration v${migration.version} (${migration.name}): column "${col.table}.${col.column}" missing — will re-run`,
+					);
+					missing = true;
+					break;
+				}
+			}
+		}
+
+		if (missing) {
+			db.prepare(
+				"DELETE FROM schema_migrations WHERE version = ?",
+			).run(migration.version);
+			db.prepare(
+				"DELETE FROM schema_migrations_audit WHERE version = ?",
+			).run(migration.version);
+		}
+	}
+}
+
+/** Get the set of applied migration versions. */
+function appliedVersions(db: MigrationDb): Set<number> {
+	const rows = db
+		.prepare("SELECT version FROM schema_migrations")
+		.all() as unknown as ReadonlyArray<{ version: number }>;
+	return new Set(rows.map((r) => r.version));
+}
+
+/**
+ * Verify that a migration's declared artifacts exist after running.
+ * Throws if any artifact is missing (SAVEPOINT catches it).
+ */
+function verifyArtifacts(db: MigrationDb, migration: Migration): void {
+	if (!migration.artifacts) return;
+
+	const tables = existingTables(db);
+
+	if (migration.artifacts.tables) {
+		for (const t of migration.artifacts.tables) {
+			if (!tables.has(t)) {
+				throw new Error(
+					`Post-DDL verification failed: migration ${migration.version} (${migration.name}) ` +
+						`declares table "${t}" but it was not created`,
+				);
+			}
+		}
+	}
+
+	if (migration.artifacts.columns) {
+		for (const col of migration.artifacts.columns) {
+			if (!tables.has(col.table)) {
+				throw new Error(
+					`Post-DDL verification failed: migration ${migration.version} (${migration.name}) ` +
+						`declares column "${col.table}.${col.column}" but table does not exist`,
+				);
+			}
+			const rows = db
+				.prepare(`PRAGMA table_info("${col.table}")`)
+				.all() as unknown as ReadonlyArray<{ name: string }>;
+			const colNames = new Set(rows.map((r) => r.name));
+			if (!colNames.has(col.column)) {
+				throw new Error(
+					`Post-DDL verification failed: migration ${migration.version} (${migration.name}) ` +
+						`declares column "${col.table}.${col.column}" but it was not created`,
+				);
+			}
+		}
+	}
 }
 
 /**
@@ -247,28 +449,39 @@ function repairBogusVersion(db: MigrationDb, current: number): number {
  */
 export function hasPendingMigrations(db: MigrationDb): boolean {
 	ensureMetaTables(db);
-	const current = repairBogusVersion(db, currentVersion(db));
-	return MIGRATIONS.some((m) => m.version > current);
+	repairBogusVersion(db);
+	repairPhantomMigrations(db);
+	const applied = appliedVersions(db);
+	return MIGRATIONS.some((m) => !applied.has(m.version));
 }
 
 /** The highest migration version defined. */
-export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+export const LATEST_SCHEMA_VERSION =
+	MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
 
 /**
  * Run all pending migrations against `db`.
  *
  * Idempotent — safe to call on every startup. Migrations that have
  * already been applied (tracked in `schema_migrations`) are skipped.
+ * Set-based skip logic handles gaps from phantom repair correctly.
  * Each migration runs inside a SAVEPOINT so a failure rolls back
  * only that migration.
  */
 export function runMigrations(db: MigrationDb): void {
 	ensureMetaTables(db);
 
-	const current = repairBogusVersion(db, currentVersion(db));
+	// Repair v0.1.65 CLI bug (stamps version without running migrations)
+	repairBogusVersion(db);
+
+	// Repair phantom migrations (recorded but artifacts missing)
+	repairPhantomMigrations(db);
+
+	// Set-based: handles gaps from phantom repair (MAX-based would skip them)
+	const applied = appliedVersions(db);
 
 	for (const migration of MIGRATIONS) {
-		if (migration.version <= current) continue;
+		if (applied.has(migration.version)) continue;
 
 		const start = Date.now();
 		const cs = checksum(migration);
@@ -277,6 +490,9 @@ export function runMigrations(db: MigrationDb): void {
 		db.exec(`SAVEPOINT migration_${migration.version}`);
 		try {
 			migration.up(db);
+
+			// Post-DDL verification: confirm declared artifacts were created
+			verifyArtifacts(db, migration);
 
 			db.prepare(
 				`INSERT OR REPLACE INTO schema_migrations
@@ -288,7 +504,12 @@ export function runMigrations(db: MigrationDb): void {
 				`INSERT INTO schema_migrations_audit
 				 (version, applied_at, duration_ms, checksum)
 				 VALUES (?, ?, ?, ?)`,
-			).run(migration.version, new Date().toISOString(), Date.now() - start, cs);
+			).run(
+				migration.version,
+				new Date().toISOString(),
+				Date.now() - start,
+				cs,
+			);
 
 			db.exec(`RELEASE migration_${migration.version}`);
 		} catch (err) {
@@ -297,9 +518,9 @@ export function runMigrations(db: MigrationDb): void {
 			const detail = err instanceof Error ? err.message : String(err);
 			throw new Error(
 				`Migration ${migration.version} (${migration.name}) failed: ${detail}\n\n` +
-				"Your data is safe — the failed migration was rolled back.\n" +
-				"Please report this at https://github.com/Signet-AI/signetai/issues\n" +
-				"with the error message above and your signetai version.",
+					"Your data is safe — the failed migration was rolled back.\n" +
+					"Please report this at https://github.com/Signet-AI/signetai/issues\n" +
+					"with the error message above and your signetai version.",
 			);
 		}
 	}

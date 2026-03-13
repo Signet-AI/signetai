@@ -6,10 +6,12 @@
 
 import { spawn, spawnSync } from "child_process";
 import {
+	closeSync,
 	copyFileSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	readdirSync,
 	readlinkSync,
@@ -407,9 +409,13 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	// Always use bun for better native module support
 	const runtime = "bun";
 
+	// Capture stderr to file so we can surface migration/startup errors
+	const startupLogPath = join(logDir, "startup.log");
+	const stderrFd = openSync(startupLogPath, "w");
+
 	const proc = spawn(runtime, [daemonPath], {
 		detached: true,
-		stdio: "ignore",
+		stdio: ["ignore", "ignore", stderrFd],
 		windowsHide: true,
 		env: {
 			...process.env,
@@ -420,6 +426,7 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	});
 
 	proc.unref();
+	closeSync(stderrFd);
 
 	// Wait for daemon to be ready
 	for (let i = 0; i < 20; i++) {
@@ -427,6 +434,23 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 		if (await isDaemonRunning()) {
 			return true;
 		}
+	}
+
+	// Daemon failed to start — show stderr output if available
+	try {
+		if (existsSync(startupLogPath)) {
+			const stderr = readFileSync(startupLogPath, "utf-8").trim();
+			if (stderr) {
+				const lines = stderr.split("\n");
+				const tail = lines.slice(-20);
+				console.error(chalk.red("\nDaemon failed to start. stderr output:"));
+				for (const line of tail) {
+					console.error(chalk.dim(line));
+				}
+			}
+		}
+	} catch {
+		// Best-effort — don't mask the startup failure
 	}
 
 	return false;
