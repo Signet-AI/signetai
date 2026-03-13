@@ -383,10 +383,16 @@ function tableColumns(
  * Used by both hasPendingMigrations (detection only) and
  * repairPhantomMigrations (detection + deletion).
  */
-function findPhantomVersions(db: MigrationDb): Set<number> {
+function findPhantomVersions(
+	db: MigrationDb,
+	// Accepts a pre-fetched applied set to avoid a redundant query when
+	// the caller already has one (e.g. hasPendingMigrations).
+	precomputedApplied?: Set<number>,
+): Set<number> {
 	const tables = existingTables(db);
 	const colCache = new Map<string, Set<string>>();
 	const phantoms = new Set<number>();
+	const applied = precomputedApplied ?? appliedVersions(db);
 
 	for (const migration of MIGRATIONS) {
 		if (!migration.artifacts) continue;
@@ -394,10 +400,8 @@ function findPhantomVersions(db: MigrationDb): Set<number> {
 		// Skip v1/v2 — legacy CLI partial schemas handled by repairBogusVersion
 		if (migration.version <= 2) continue;
 
-		const row = db
-			.prepare("SELECT version FROM schema_migrations WHERE version = ?")
-			.get(migration.version);
-		if (!row) continue;
+		// Not recorded as applied — not a phantom
+		if (!applied.has(migration.version)) continue;
 
 		let missing = false;
 
@@ -433,6 +437,10 @@ function findPhantomVersions(db: MigrationDb): Set<number> {
 /**
  * Detect phantom migrations and delete their schema_migrations records so
  * they re-run on the next pass. Logs each repair to stderr.
+ *
+ * schema_migrations_audit rows are intentionally preserved — they are a
+ * durable history record that helps diagnose why the phantom occurred.
+ * A fresh audit row will be inserted when the migration re-runs.
  */
 function repairPhantomMigrations(db: MigrationDb): void {
 	const phantoms = findPhantomVersions(db);
@@ -444,8 +452,8 @@ function repairPhantomMigrations(db: MigrationDb): void {
 				`[signet] phantom migration v${migration.version} (${migration.name}): artifact missing — will re-run`,
 			);
 		}
+		// Only remove from schema_migrations (re-run tracker); audit stays intact
 		db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(version);
-		db.prepare("DELETE FROM schema_migrations_audit WHERE version = ?").run(version);
 	}
 }
 
@@ -505,9 +513,12 @@ function verifyArtifacts(db: MigrationDb, migration: Migration): void {
  */
 export function hasPendingMigrations(db: MigrationDb): boolean {
 	ensureMetaTables(db);
+	// Fetch applied versions once and pass to findPhantomVersions to avoid
+	// a redundant second query inside it.
 	const applied = appliedVersions(db);
 	const hasNew = MIGRATIONS.some((m) => !applied.has(m.version));
-	return hasBogusVersion(db) || hasNew || findPhantomVersions(db).size > 0;
+	const phantoms = findPhantomVersions(db, applied);
+	return hasBogusVersion(db) || hasNew || phantoms.size > 0;
 }
 
 /** The highest migration version defined. */
