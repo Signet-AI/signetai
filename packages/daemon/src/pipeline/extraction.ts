@@ -321,7 +321,7 @@ export function parseRawExtractionOutput(rawOutput: string): ExtractionResult {
 export async function extractFactsAndEntities(
 	input: string,
 	provider: LlmProvider,
-	opts?: { timeoutMs?: number },
+	opts?: { timeoutMs?: number; maxTokens?: number },
 ): Promise<ExtractionResult> {
 	const trimmed = input.trim().replace(/\s+/g, " ");
 	if (trimmed.length < 20) {
@@ -340,6 +340,7 @@ export async function extractFactsAndEntities(
 	try {
 		rawOutput = await provider.generate(prompt, {
 			timeoutMs: opts?.timeoutMs,
+			maxTokens: opts?.maxTokens,
 		});
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);

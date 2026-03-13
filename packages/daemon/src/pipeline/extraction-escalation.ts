@@ -231,7 +231,7 @@ export async function escalate(
 	accessor: DbAccessor,
 	agentId: string,
 	thresholds: PipelineEscalationConfig,
-	opts?: { timeoutMs?: number },
+	opts?: { timeoutMs?: number; maxTokens?: number },
 ): Promise<EscalatedExtraction> {
 	const originalEntityCount = extraction.entities.length;
 	const originalFactCount = extraction.facts.length;

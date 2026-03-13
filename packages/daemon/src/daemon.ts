@@ -148,6 +148,14 @@ import {
 	ensureOpenCodeServer,
 	stopOpenCodeServer,
 } from "./pipeline/provider";
+import {
+	initModelRegistry,
+	getAvailableModels,
+	getModelsByProvider,
+	getRegistryStatus,
+	refreshRegistry,
+	stopModelRegistry,
+} from "./pipeline/model-registry";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import {
@@ -6613,6 +6621,41 @@ app.get("/api/pipeline/status", (c) => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// Model Registry endpoints
+// ---------------------------------------------------------------------------
+
+app.get("/api/pipeline/models", (c) => {
+	const provider = c.req.query("provider");
+	const includeDeprecated = c.req.query("deprecated") === "true";
+	return c.json({
+		models: getAvailableModels(provider ?? undefined, includeDeprecated),
+		registry: getRegistryStatus(),
+	});
+});
+
+app.get("/api/pipeline/models/by-provider", (c) => {
+	return c.json(getModelsByProvider());
+});
+
+app.post("/api/pipeline/models/refresh", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	let anthropicKey: string | undefined = process.env.ANTHROPIC_API_KEY;
+	if (!anthropicKey) {
+		try {
+			anthropicKey = await getSecret("ANTHROPIC_API_KEY") ?? undefined;
+		} catch { /* ignore */ }
+	}
+	await refreshRegistry(
+		cfg.pipelineV2.extraction.provider === "ollama" ? "http://localhost:11434" : undefined,
+		anthropicKey,
+	);
+	return c.json({
+		models: getModelsByProvider(),
+		registry: getRegistryStatus(),
+	});
+});
+
 app.get("/api/predictor/status", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	const predictorCfg = cfg.pipelineV2.predictor;
@@ -9126,6 +9169,7 @@ async function cleanup() {
 	closeLlmProvider();
 	closeSynthesisProvider();
 	stopOpenCodeServer();
+	stopModelRegistry();
 
 	// Stop git sync timer
 	stopGitSyncTimer();
@@ -9181,6 +9225,7 @@ async function main() {
 
 	// Migrations may have created traversal tables — clear the cache
 	invalidateTraversalCache();
+
 
 	// Write PID file
 	writeFileSync(PID_FILE, process.pid.toString());
@@ -9411,6 +9456,15 @@ async function main() {
 								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 							});
 	initLlmProvider(llmProvider);
+
+	// Initialize model registry for dynamic model discovery
+	if (memoryCfg.pipelineV2.modelRegistry.enabled) {
+		initModelRegistry(
+			memoryCfg.pipelineV2.modelRegistry,
+			effectiveExtractionProvider === "ollama" ? "http://localhost:11434" : undefined,
+			anthropicApiKey,
+		);
+	}
 
 	// Create synthesis provider — separate from extraction because synthesis
 	// needs a smarter model that can reason across long context

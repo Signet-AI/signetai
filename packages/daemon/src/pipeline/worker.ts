@@ -1024,12 +1024,18 @@ export function startWorker(
 				}
 			: provider;
 
-		// Run extraction
+		// Run extraction — strength controls max tokens and timeout scaling
+		const strengthMaxTokens: Record<string, number> = { low: 1024, medium: 2048, high: 4096 };
+		const strengthTimeoutMultiplier: Record<string, number> = { low: 1, medium: 1.5, high: 2.5 };
+		const extractionMaxTokens = strengthMaxTokens[pipelineCfg.extraction.strength] ?? 1024;
+		const extractionTimeout = Math.round(
+			pipelineCfg.extraction.timeout * (strengthTimeoutMultiplier[pipelineCfg.extraction.strength] ?? 1),
+		);
 		const extractionStart = Date.now();
 		const rawExtraction = await extractFactsAndEntities(
 			row.content,
 			instrumentedProvider,
-			{ timeoutMs: pipelineCfg.extraction.timeout },
+			{ timeoutMs: extractionTimeout, maxTokens: extractionMaxTokens },
 		);
 		const extractionMs = Date.now() - extractionStart;
 
@@ -1047,7 +1053,7 @@ export function startWorker(
 			accessor,
 			"default",
 			escalationThresholds,
-			{ timeoutMs: pipelineCfg.extraction.timeout },
+			{ timeoutMs: extractionTimeout, maxTokens: extractionMaxTokens },
 		);
 
 		const extraction = escalated.result;

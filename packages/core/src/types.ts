@@ -151,6 +151,7 @@ export interface PipelineEscalationConfig {
 export interface PipelineExtractionConfig {
 	readonly provider: "ollama" | "claude-code" | "opencode" | "codex" | "anthropic";
 	readonly model: string;
+	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;
 	readonly timeout: number;
 	readonly minConfidence: number;
@@ -265,6 +266,20 @@ export interface PipelineV2Config {
 	readonly significance?: PipelineSignificanceConfig;
 	readonly predictor?: PredictorConfig;
 	readonly predictorPipeline: PipelinePredictorConfig;
+	readonly modelRegistry: PipelineModelRegistryConfig;
+}
+
+export interface ModelRegistryEntry {
+	readonly id: string;
+	readonly provider: string;
+	readonly label: string;
+	readonly tier: "high" | "mid" | "low";
+	readonly deprecated: boolean;
+}
+
+export interface PipelineModelRegistryConfig {
+	readonly enabled: boolean;
+	readonly refreshIntervalMs: number;
 }
 
 export interface PipelinePredictorConfig {

@@ -2467,3 +2467,37 @@ export async function getContinuityLatest(): Promise<ContinuityEntry[]> {
 		return [];
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Model Registry
+// ---------------------------------------------------------------------------
+
+export interface ModelRegistryEntry {
+	id: string;
+	provider: string;
+	label: string;
+	tier: "high" | "mid" | "low";
+	deprecated: boolean;
+}
+
+export async function getModelsByProvider(): Promise<Record<string, ModelRegistryEntry[]>> {
+	try {
+		const res = await fetch(`${API_BASE}/api/pipeline/models/by-provider`);
+		if (!res.ok) return {};
+		return (await res.json()) as Record<string, ModelRegistryEntry[]>;
+	} catch {
+		return {};
+	}
+}
+
+export async function refreshModelRegistry(): Promise<Record<string, ModelRegistryEntry[]>> {
+	try {
+		const res = await fetch(`${API_BASE}/api/pipeline/models/refresh`, { method: "POST" });
+		if (!res.ok) return {};
+		const body = (await res.json()) as { models: Record<string, ModelRegistryEntry[]> };
+		return body.models ?? {};
+	} catch {
+		return {};
+	}
+}
+
