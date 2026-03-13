@@ -574,7 +574,7 @@ onMount(() => {
 	{:else if activeBucket}
 		<div class="timeline-stack flex flex-1 min-h-0 flex-col gap-3">
 			<section
-				class="timeline-hero rounded-xl border border-[var(--sig-border)] p-3"
+				class="timeline-hero rounded-xl border border-[var(--sig-border)] p-3 overflow-hidden"
 			>
 				<div class="timeline-hero-grid">
 					<div class="min-w-0">
