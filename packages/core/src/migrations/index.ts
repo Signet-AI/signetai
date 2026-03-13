@@ -81,14 +81,41 @@ export const MIGRATIONS: readonly Migration[] = [
 			],
 		},
 	},
-	{ version: 3, name: "unique-content-hash", up: uniqueContentHash },
+	{
+		version: 3,
+		name: "unique-content-hash",
+		up: uniqueContentHash,
+		artifacts: {
+			columns: [
+				{ table: "memories", column: "why" },
+				{ table: "memories", column: "project" },
+			],
+		},
+	},
 	{
 		version: 4,
 		name: "history-actor-and-retention",
 		up: historyActorAndRetention,
+		artifacts: {
+			columns: [{ table: "memory_history", column: "actor_type" }],
+		},
 	},
-	{ version: 5, name: "graph-extended", up: graphExtended },
-	{ version: 6, name: "idempotency-key", up: idempotencyKey },
+	{
+		version: 5,
+		name: "graph-extended",
+		up: graphExtended,
+		artifacts: {
+			columns: [{ table: "entities", column: "canonical_name" }],
+		},
+	},
+	{
+		version: 6,
+		name: "idempotency-key",
+		up: idempotencyKey,
+		artifacts: {
+			columns: [{ table: "memories", column: "idempotency_key" }],
+		},
+	},
 	{
 		version: 7,
 		name: "documents-and-connectors",
@@ -214,11 +241,21 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 24,
 		name: "predictor-comparison-columns",
 		up: predictorComparisonColumns,
+		artifacts: {
+			columns: [
+				{ table: "predictor_comparisons", column: "scorer_confidence" },
+			],
+		},
 	},
 	{
 		version: 25,
 		name: "agent-feedback",
 		up: agentFeedback,
+		artifacts: {
+			columns: [
+				{ table: "session_memories", column: "agent_relevance_score" },
+			],
+		},
 	},
 	{
 		version: 26,
@@ -303,12 +340,24 @@ function repairBogusVersion(db: MigrationDb): void {
 	db.exec("DELETE FROM schema_migrations WHERE version > 0");
 }
 
+/** Type guard: narrows a query row to one with a string `name` field. */
+function hasStringName(row: Record<string, unknown>): row is { name: string } {
+	return typeof row.name === "string";
+}
+
+/** Type guard: narrows a query row to one with a numeric `version` field. */
+function hasNumericVersion(
+	row: Record<string, unknown>,
+): row is { version: number } {
+	return typeof row.version === "number";
+}
+
 /** Get the set of table names in the database (single query). */
 function existingTables(db: MigrationDb): Set<string> {
 	const rows = db
 		.prepare("SELECT name FROM sqlite_master WHERE type='table'")
-		.all() as unknown as ReadonlyArray<{ name: string }>;
-	return new Set(rows.map((r) => r.name));
+		.all();
+	return new Set(rows.filter(hasStringName).map((r) => r.name));
 }
 
 /** Get column names for a table, with per-call caching. */
@@ -319,10 +368,8 @@ function tableColumns(
 ): Set<string> {
 	let cols = cache.get(table);
 	if (cols) return cols;
-	const rows = db
-		.prepare(`PRAGMA table_info("${table}")`)
-		.all() as unknown as ReadonlyArray<{ name: string }>;
-	cols = new Set(rows.map((r) => r.name));
+	const rows = db.prepare(`PRAGMA table_info("${table}")`).all();
+	cols = new Set(rows.filter(hasStringName).map((r) => r.name));
 	cache.set(table, cols);
 	return cols;
 }
@@ -353,7 +400,7 @@ function repairPhantomMigrations(db: MigrationDb): void {
 		if (migration.artifacts.tables) {
 			for (const t of migration.artifacts.tables) {
 				if (!tables.has(t)) {
-					console.log(
+					console.error(
 						`[signet] phantom migration v${migration.version} (${migration.name}): table "${t}" missing — will re-run`,
 					);
 					missing = true;
@@ -365,7 +412,7 @@ function repairPhantomMigrations(db: MigrationDb): void {
 		if (!missing && migration.artifacts.columns) {
 			for (const col of migration.artifacts.columns) {
 				if (!tables.has(col.table)) {
-					console.log(
+					console.error(
 						`[signet] phantom migration v${migration.version} (${migration.name}): table "${col.table}" missing — will re-run`,
 					);
 					missing = true;
@@ -373,7 +420,7 @@ function repairPhantomMigrations(db: MigrationDb): void {
 				}
 				const cols = tableColumns(db, col.table, colCache);
 				if (!cols.has(col.column)) {
-					console.log(
+					console.error(
 						`[signet] phantom migration v${migration.version} (${migration.name}): column "${col.table}.${col.column}" missing — will re-run`,
 					);
 					missing = true;
@@ -395,10 +442,8 @@ function repairPhantomMigrations(db: MigrationDb): void {
 
 /** Get the set of applied migration versions. */
 function appliedVersions(db: MigrationDb): Set<number> {
-	const rows = db
-		.prepare("SELECT version FROM schema_migrations")
-		.all() as unknown as ReadonlyArray<{ version: number }>;
-	return new Set(rows.map((r) => r.version));
+	const rows = db.prepare("SELECT version FROM schema_migrations").all();
+	return new Set(rows.filter(hasNumericVersion).map((r) => r.version));
 }
 
 /**
@@ -422,6 +467,7 @@ function verifyArtifacts(db: MigrationDb, migration: Migration): void {
 	}
 
 	if (migration.artifacts.columns) {
+		const colCache = new Map<string, Set<string>>();
 		for (const col of migration.artifacts.columns) {
 			if (!tables.has(col.table)) {
 				throw new Error(
@@ -429,10 +475,7 @@ function verifyArtifacts(db: MigrationDb, migration: Migration): void {
 						`declares column "${col.table}.${col.column}" but table does not exist`,
 				);
 			}
-			const rows = db
-				.prepare(`PRAGMA table_info("${col.table}")`)
-				.all() as unknown as ReadonlyArray<{ name: string }>;
-			const colNames = new Set(rows.map((r) => r.name));
+			const colNames = tableColumns(db, col.table, colCache);
 			if (!colNames.has(col.column)) {
 				throw new Error(
 					`Post-DDL verification failed: migration ${migration.version} (${migration.name}) ` +

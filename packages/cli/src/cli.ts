@@ -409,13 +409,22 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	// Always use bun for better native module support
 	const runtime = "bun";
 
-	// Capture stderr to file so we can surface migration/startup errors
+	// Capture stderr to file so we can surface migration/startup errors.
+	// Best-effort: if the log file can't be opened, fall back to "ignore"
+	// so the daemon still spawns in restricted/read-only environments.
 	const startupLogPath = join(logDir, "startup.log");
-	const stderrFd = openSync(startupLogPath, "w");
+	let stderrFd: number | null = null;
+	let stderrTarget: "ignore" | number = "ignore";
+	try {
+		stderrFd = openSync(startupLogPath, "w");
+		stderrTarget = stderrFd;
+	} catch {
+		// Non-fatal — startup proceeds without stderr capture
+	}
 
 	const proc = spawn(runtime, [daemonPath], {
 		detached: true,
-		stdio: ["ignore", "ignore", stderrFd],
+		stdio: ["ignore", "ignore", stderrTarget],
 		windowsHide: true,
 		env: {
 			...process.env,
@@ -426,7 +435,7 @@ async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	});
 
 	proc.unref();
-	closeSync(stderrFd);
+	if (stderrFd !== null) closeSync(stderrFd);
 
 	// Wait for daemon to be ready
 	for (let i = 0; i < 20; i++) {

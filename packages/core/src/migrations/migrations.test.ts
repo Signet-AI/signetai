@@ -475,11 +475,11 @@ describe("migration framework", () => {
 			.all();
 		expect(after.length).toBe(1);
 
-		// All 26 versions should be recorded
+		// All versions should be recorded
 		const migrations = db
 			.query("SELECT version FROM schema_migrations ORDER BY version")
 			.all() as Array<{ version: number }>;
-		expect(migrations.length).toBe(26);
+		expect(migrations.length).toBe(MIGRATIONS.length);
 	});
 
 	test("set-based skip handles gaps from phantom repair", () => {
@@ -511,7 +511,7 @@ describe("migration framework", () => {
 		const migrations = db
 			.query("SELECT version FROM schema_migrations ORDER BY version")
 			.all() as Array<{ version: number }>;
-		expect(migrations.length).toBe(26);
+		expect(migrations.length).toBe(MIGRATIONS.length);
 	});
 
 	test("post-DDL verification catches missing artifacts", () => {
