@@ -452,6 +452,14 @@ describe("migration framework", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
+		// Record audit count before repair (v14 should have 1 entry)
+		const auditBefore = db
+			.query<{ count: number }, []>(
+				"SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14",
+			)
+			.get();
+		expect(auditBefore?.count).toBe(1);
+
 		// Drop a table that v14 created, simulating a phantom migration
 		db.run("DROP TABLE telemetry_events");
 
@@ -473,9 +481,19 @@ describe("migration framework", () => {
 
 		// All versions should be recorded
 		const migrations = db
-			.query("SELECT version FROM schema_migrations ORDER BY version")
-			.all() as Array<{ version: number }>;
+			.query<{ version: number }, []>(
+				"SELECT version FROM schema_migrations ORDER BY version",
+			)
+			.all();
 		expect(migrations.length).toBe(MIGRATIONS.length);
+
+		// Audit history preserved: original entry plus new re-run entry
+		const auditAfter = db
+			.query<{ count: number }, []>(
+				"SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14",
+			)
+			.get();
+		expect(auditAfter?.count).toBe((auditBefore?.count ?? 0) + 1);
 	});
 
 	test("set-based skip handles gaps from phantom repair", () => {
@@ -496,8 +514,10 @@ describe("migration framework", () => {
 
 		// All tables restored
 		const tables = db
-			.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-			.all() as Array<{ name: string }>;
+			.query<{ name: string }, []>(
+				"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+			)
+			.all();
 		const tableNames = tables.map((t) => t.name);
 		expect(tableNames).toContain("telemetry_events");
 		expect(tableNames).toContain("session_memories");
@@ -505,8 +525,10 @@ describe("migration framework", () => {
 
 		// All versions present
 		const migrations = db
-			.query("SELECT version FROM schema_migrations ORDER BY version")
-			.all() as Array<{ version: number }>;
+			.query<{ version: number }, []>(
+				"SELECT version FROM schema_migrations ORDER BY version",
+			)
+			.all();
 		expect(migrations.length).toBe(MIGRATIONS.length);
 	});
 
@@ -519,8 +541,8 @@ describe("migration framework", () => {
 		runMigrations(db);
 
 		const tables = db
-			.query("SELECT name FROM sqlite_master WHERE type='table'")
-			.all() as Array<{ name: string }>;
+			.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
+			.all();
 		const tableNames = new Set(tables.map((t) => t.name));
 
 		for (const m of MIGRATIONS) {
@@ -533,8 +555,8 @@ describe("migration framework", () => {
 			if (m.artifacts.columns) {
 				for (const col of m.artifacts.columns) {
 					const cols = db
-						.query(`PRAGMA table_info("${col.table}")`)
-						.all() as Array<{ name: string }>;
+						.query<{ name: string }, []>(`PRAGMA table_info("${col.table}")`)
+						.all();
 					const colNames = cols.map((c) => c.name);
 					expect(colNames).toContain(col.column);
 				}

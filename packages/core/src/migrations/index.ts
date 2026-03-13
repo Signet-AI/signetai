@@ -155,7 +155,13 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 13,
 		name: "ingestion-tracking",
 		up: ingestionTracking,
-		artifacts: { tables: ["ingestion_jobs"] },
+		artifacts: {
+			tables: ["ingestion_jobs"],
+			columns: [
+				{ table: "memories", column: "source_path" },
+				{ table: "memories", column: "source_section" },
+			],
+		},
 	},
 	{
 		version: 14,
@@ -167,7 +173,13 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 15,
 		name: "session-memories",
 		up: sessionMemories,
-		artifacts: { tables: ["session_memories"] },
+		artifacts: {
+			tables: ["session_memories"],
+			columns: [
+				{ table: "session_scores", column: "confidence" },
+				{ table: "session_scores", column: "continuity_reasoning" },
+			],
+		},
 	},
 	{
 		version: 16,
@@ -209,6 +221,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: predictorComparisons,
 		artifacts: {
 			tables: ["predictor_comparisons", "predictor_training_log"],
+			columns: [
+				{ table: "session_memories", column: "entity_slot" },
+				{ table: "session_memories", column: "aspect_slot" },
+				{ table: "session_memories", column: "is_constraint" },
+				{ table: "session_memories", column: "structural_density" },
+			],
 		},
 	},
 	{
@@ -397,8 +415,8 @@ function findPhantomVersions(
 	for (const migration of MIGRATIONS) {
 		if (!migration.artifacts) continue;
 
-		// Skip v1/v2 — legacy CLI partial schemas handled by repairBogusVersion
-		if (migration.version <= 2) continue;
+		// Skip v1 — legacy CLI partial schemas handled by repairBogusVersion
+		if (migration.version === 1) continue;
 
 		// Not recorded as applied — not a phantom
 		if (!applied.has(migration.version)) continue;
@@ -438,12 +456,16 @@ function findPhantomVersions(
  * Detect phantom migrations and delete their schema_migrations records so
  * they re-run on the next pass. Logs each repair to stderr.
  *
+ * Returns the post-repair applied set so the caller (runMigrations) can
+ * use it directly without issuing a redundant appliedVersions() query.
+ *
  * schema_migrations_audit rows are intentionally preserved — they are a
  * durable history record that helps diagnose why the phantom occurred.
  * A fresh audit row will be inserted when the migration re-runs.
  */
-function repairPhantomMigrations(db: MigrationDb): void {
-	const phantoms = findPhantomVersions(db);
+function repairPhantomMigrations(db: MigrationDb): Set<number> {
+	const applied = appliedVersions(db);
+	const phantoms = findPhantomVersions(db, applied);
 
 	for (const version of phantoms) {
 		const migration = MIGRATIONS.find((m) => m.version === version);
@@ -454,7 +476,10 @@ function repairPhantomMigrations(db: MigrationDb): void {
 		}
 		// Only remove from schema_migrations (re-run tracker); audit stays intact
 		db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(version);
+		applied.delete(version);
 	}
+
+	return applied;
 }
 
 /** Get the set of applied migration versions. */
@@ -563,11 +588,9 @@ export function runMigrations(db: MigrationDb): void {
 	// Repair v0.1.65 CLI bug (stamps version without running migrations)
 	repairBogusVersion(db);
 
-	// Repair phantom migrations (recorded but artifacts missing)
-	repairPhantomMigrations(db);
-
-	// Set-based: handles gaps from phantom repair (MAX-based would skip them)
-	const applied = appliedVersions(db);
+	// Repair phantom migrations (recorded but artifacts missing).
+	// Returns the post-repair applied set to avoid a redundant query.
+	const applied = repairPhantomMigrations(db);
 
 	for (const migration of MIGRATIONS) {
 		if (applied.has(migration.version)) continue;
