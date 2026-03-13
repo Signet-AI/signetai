@@ -615,7 +615,7 @@ onMount(() => {
 			</section>
 
 			<div class="timeline-content-split flex-1 min-h-0 gap-3">
-				<section class="timeline-detail-panel flex min-h-0 flex-col gap-3 overflow-auto rounded-[10.5px] bg-[var(--sig-surface)] p-3" style="border: 2px solid var(--sig-border-strong);">
+				<section class="timeline-detail-panel flex min-h-0 flex-col gap-3 overflow-auto rounded-[10.5px] border-2 border-[var(--sig-border-strong)] bg-[var(--sig-surface)] p-3">
 					<div class="timeline-era-head">
 						<div class="timeline-era-title-row">
 							<p class="sig-heading timeline-era-title">
@@ -859,18 +859,10 @@ onMount(() => {
 		color: var(--sig-text-bright);
 	}
 
-	.timeline-summary-panel {
-		background:
-			linear-gradient(135deg, color-mix(in srgb, var(--sig-surface-raised) 92%, transparent), var(--sig-surface-raised));
-		border-color: var(--sig-border-strong);
-		box-shadow: none;
-	}
-
 	.timeline-mix-grid {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 0;
-		margin-bottom: -3rem;
 		margin-left: -0.75rem;
 		margin-right: -0.75rem;
 		padding-bottom: 2rem;
@@ -881,11 +873,16 @@ onMount(() => {
 	.timeline-mix-card {
 		border: 1px solid var(--sig-highlight-text);
 		border-bottom: none;
+		border-left: none;
 		background: transparent;
 		text-align: center;
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
+	}
+
+	.timeline-mix-grid > .timeline-mix-card:nth-child(3n + 1) {
+		border-left: 1px solid var(--sig-highlight-text);
 	}
 
 	.timeline-mix-card--type {
@@ -917,10 +914,8 @@ onMount(() => {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 0.5rem;
-		margin-left: -1rem;
-		margin-right: -1rem;
-		flex: 1;
-		min-height: 0;
+		margin-left: -0.75rem;
+		margin-right: -0.75rem;
 	}
 
 	.timeline-summary-line {
@@ -1047,7 +1042,7 @@ onMount(() => {
 		background: color-mix(in srgb, var(--sig-surface-raised) 62%, transparent);
 	}
 
-	@media (max-width: 900px) and (orientation: portrait) {
+	@media (max-width: 900px) {
 		.timeline-hero {
 			border-radius: 1rem;
 			padding: 0.95rem;
