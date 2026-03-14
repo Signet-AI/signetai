@@ -883,8 +883,8 @@ onMount(() => {
 		border-left: 1px solid var(--sig-highlight-text);
 	}
 
-	/* Bottom border on last row of 3-column grid */
-	.timeline-mix-grid > .timeline-mix-card:nth-last-child(-n + 3) {
+	/* Bottom border closes the grid regardless of card count */
+	.timeline-mix-grid {
 		border-bottom: 1px solid var(--sig-highlight-text);
 	}
 
