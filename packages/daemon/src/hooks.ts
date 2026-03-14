@@ -2115,12 +2115,14 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	// The summary worker handles long transcripts via chunked
 	// map-reduce summarization, so this is a last-resort guard.
 	const MAX_TRANSCRIPT_CHARS = 100_000;
+	let truncated = false;
 	if (transcript.length > MAX_TRANSCRIPT_CHARS) {
 		logger.warn("hooks", "Transcript exceeds safety cap, truncating", {
 			original: transcript.length,
 			cap: MAX_TRANSCRIPT_CHARS,
 		});
 		transcript = `${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]`;
+		truncated = true;
 	}
 
 	// Queue for async processing by the summary worker instead of
@@ -2147,6 +2149,7 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 		sessionKey,
 		transcriptPath: req.transcriptPath,
 		transcriptChars: transcript.length,
+		truncated,
 		preview: transcript.slice(0, 500),
 	});
 
@@ -2296,7 +2299,7 @@ export function normalizeCodexTranscript(raw: string): string {
 				// item.completed which is authoritative and avoids duplicating
 				// content that Codex emits in both streaming and completion events.
 				if (msg.type === "user_message" && typeof msg.message === "string") {
-					lines.push(`User: ${msg.message.trim()}`);
+					lines.push(`User: ${msg.message.trim().replace(/[\r\n]+/g, " ")}`);
 				}
 			}
 			continue;
@@ -2307,7 +2310,7 @@ export function normalizeCodexTranscript(raw: string): string {
 			if (typeof item === "object" && item !== null) {
 				const record = item as Record<string, unknown>;
 				if (record.type === "agent_message" && typeof record.text === "string") {
-					lines.push(`Assistant: ${record.text.trim()}`);
+					lines.push(`Assistant: ${record.text.trim().replace(/[\r\n]+/g, " ")}`);
 				}
 			}
 			continue;

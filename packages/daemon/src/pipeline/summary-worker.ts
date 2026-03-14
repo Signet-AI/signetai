@@ -550,21 +550,28 @@ async function processChunked(
 
 	if (chunkSummaries.length === 0) return null;
 
-	// Reduce: combine chunk summaries into unified result.
-	// Even a single surviving chunk goes through combine to get the
-	// standard "# Date Session Notes" header format.
+	// Single chunk — run through processSingle for the standard header
+	// format without paying for a combine call
+	if (chunkSummaries.length === 1) {
+		const formatted = await processSingle(
+			provider, chunkSummaries[0], date, opts,
+		);
+		return formatted ?? { summary: chunkSummaries[0], facts: allFacts };
+	}
+
+	// Reduce: combine chunk summaries into unified result
 	const combinePrompt = buildCombinePrompt(chunkSummaries, allFacts, date);
 	const combineRaw = await provider.generate(combinePrompt, opts);
 	const combined = parseLlmResponse(combineRaw);
 
 	if (combined) return combined;
 
-	// Combine failed — preserve partial work rather than discarding
-	logger.warn("summary-worker", "Combine step failed, falling back to first chunk", {
+	// Combine failed — join all summaries as degraded fallback
+	logger.warn("summary-worker", "Combine step failed, joining chunks as fallback", {
 		chunks: chunkSummaries.length,
 		facts: allFacts.length,
 	});
-	return { summary: chunkSummaries[0], facts: allFacts };
+	return { summary: chunkSummaries.join("\n\n---\n\n"), facts: allFacts };
 }
 
 // ---------------------------------------------------------------------------
