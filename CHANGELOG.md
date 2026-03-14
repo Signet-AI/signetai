@@ -2,6 +2,43 @@
 
 All notable changes to Signet are documented here.
 
+## [0.57.1] - 2026-03-14
+
+### Features
+
+- pipeline defaults everything ON by default
+- dynamic model registry and extraction strength controls
+
+### Bug Fixes
+
+- **daemon**: add session_summaries table guard to backfillSkippedSessions
+- resolve two CI build failures on main
+- **daemon**: address round 4 review feedback
+- **daemon**: address round 3 review feedback
+- **daemon**: harden chunked summarization edge cases
+- address pr-reviewer round-7 — effect cleanup, refresh throttle, dead export
+- **daemon**: chunked map-reduce summarization for long transcripts
+- add 3s timeout to execFileSync calls in detectGitBranch
+- **daemon**: address review feedback on transcript sanitization
+- use execFileSync to prevent shell injection in detectGitBranch
+- address round 3 review feedback on config migration
+- address round 2 review feedback
+- **cli**: surface spawn errors in startup.log diagnostic output
+- address code review feedback on pipeline defaults
+- integer version comparison, correct label generation order
+- reactive registry fetch, clarify strength token label
+- skip Ollama discovery when provider is not Ollama
+- apply markDeprecatedVersions to merged Ollama discovery results
+- address round-6 review — seed deprecation, clear model on provider reset
+- address round-5 review — epoch guard, deprecation on fallback paths
+- address round-4 review — catch handler, strength priority, timeout floor
+- address round-3 review — refresh serialization, lease safety, deprecation
+- address round-2 review — registry key resolution, null guard, error logging
+- address PR review feedback — maxTokens forwarding, Ollama URL, type safety
+- auto-detect git sync branch instead of hardcoding "main"
+- **daemon**: sanitize session transcripts and remove truncation
+
+
 ## [0.57.0] - 2026-03-14
 
 ### Bug Fixes
