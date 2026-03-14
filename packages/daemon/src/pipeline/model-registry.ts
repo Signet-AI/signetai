@@ -64,14 +64,15 @@ const KNOWN_MODELS: Record<string, ModelRegistryEntry[]> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a version number from a model ID for comparison.
- * Examples: "claude-opus-4-6" → 4.6, "gpt-5.3-codex" → 5.3
+ * Parse a version from a model ID as a comparable integer.
+ * Uses major * 1000 + minor to avoid float comparison bugs with
+ * double-digit minor versions (e.g. 4.12 vs 4.6).
+ * Examples: "claude-opus-4-6" → 4006, "gpt-5.3-codex" → 5003
  */
 function parseModelVersion(modelId: string): number | null {
-	// Match patterns like 4.6, 4-6, 5.3
 	const match = modelId.match(/(\d+)[.\-](\d+)/);
 	if (!match) return null;
-	return Number.parseFloat(`${match[1]}.${match[2]}`);
+	return Number.parseInt(match[1], 10) * 1000 + Number.parseInt(match[2], 10);
 }
 
 /**
@@ -96,8 +97,8 @@ function cleanModelLabel(raw: string): string {
 	// If the label is still a raw model ID, humanise it
 	if (/^claude-/.test(label)) {
 		label = label
+			.replace(/-(\d+)-(\d+)/, " $1.$2") // version before prefix strip
 			.replace(/^claude-/, "Claude ")
-			.replace(/-(\d+)-(\d+)/, " $1.$2")
 			.replace(/-/g, " ")
 			.replace(/\b\w/g, (c) => c.toUpperCase());
 	}
