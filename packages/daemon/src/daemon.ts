@@ -160,6 +160,7 @@ import {
 	createRateLimiter,
 	deduplicateMemories,
 	getDedupStats,
+	backfillSkippedSessions,
 	getEmbeddingGapStats,
 	pruneChunkGroupEntities,
 	pruneSingletonExtractedEntities,
@@ -6788,15 +6789,23 @@ app.post("/api/repair/deduplicate", async (c) => {
 	return c.json(result, repairHttpStatus(result));
 });
 
-app.post("/api/repair/backfill-skipped", (c) => {
-	return c.json(
-		{
-			error: "not_implemented",
-			message:
-				"Backfill-skipped re-enqueue logic is pending. This endpoint is reserved for future implementation.",
-		},
-		501,
-	);
+app.post("/api/repair/backfill-skipped", async (c) => {
+	const cfg = loadMemoryConfig(AGENTS_DIR);
+	const ctx = resolveRepairContext(c);
+	let limit = 50;
+	let dryRun = false;
+	try {
+		const body = await c.req.json();
+		if (typeof body?.limit === "number") limit = body.limit;
+		if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
+	} catch {
+		// no body or invalid JSON — use defaults
+	}
+	const result = backfillSkippedSessions(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+		limit,
+		dryRun,
+	});
+	return c.json(result, repairHttpStatus(result));
 });
 
 app.post("/api/repair/reclassify-entities", async (c) => {
@@ -9189,7 +9198,13 @@ async function main() {
 	logger.info("daemon", "Process ID", { pid: process.pid });
 
 	// Migrate config defaults before watcher starts (one-time, guarded by configVersion)
-	migrateConfig(AGENTS_DIR);
+	try {
+		migrateConfig(AGENTS_DIR);
+	} catch (err) {
+		logger.warn("config-migration", "Config migration failed; continuing startup", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
 
 	// Start file watcher
 	startFileWatcher();

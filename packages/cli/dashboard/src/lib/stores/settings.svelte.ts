@@ -221,9 +221,21 @@ class SettingsStore {
 		const v = this.get(this.agent, ...path);
 		return typeof v === "number" ? v : v ? Number(v) : "";
 	}
+	private toBool(val: YamlValue): boolean | null {
+		if (typeof val === "boolean") return val;
+		if (typeof val === "string") {
+			const s = val.trim().toLowerCase();
+			if (s === "true") return true;
+			if (s === "false") return false;
+		}
+		if (val === 1) return true;
+		if (val === 0) return false;
+		return null;
+	}
+
 	aBool(path: string[]) {
-		const val = this.get(this.agent, ...path);
-		if (val != null) return Boolean(val);
+		const parsed = this.toBool(this.get(this.agent, ...path));
+		if (parsed !== null) return parsed;
 		return this.pipelineDefault(path) ?? false;
 	}
 
@@ -286,8 +298,8 @@ class SettingsStore {
 		return typeof v === "number" ? v : v ? Number(v) : "";
 	}
 	sBool(path: string[]) {
-		const val = this.get(this.sObj(), ...path);
-		if (val != null) return Boolean(val);
+		const parsed = this.toBool(this.get(this.sObj(), ...path));
+		if (parsed !== null) return parsed;
 		return this.pipelineDefault(path) ?? false;
 	}
 	sSetStr(path: string[], val: string) {
