@@ -57,7 +57,6 @@
 		flex-direction: column;
 		align-items: center;
 		gap: 2px;
-		margin: 0.75rem 0 0;
 	}
 
 	.banner-title {
@@ -120,12 +119,19 @@
 			justify-self: center;
 			flex-wrap: wrap;
 			justify-content: center;
+		}
+
+		:global(:has(.mobile-sidebar-trigger)) .banner-left {
 			padding-left: 4.5rem; /* clear fixed sidebar trigger */
 			padding-right: 4.5rem; /* symmetric balance */
 		}
 
 		.banner-right {
 			justify-self: center;
+		}
+
+		.banner-text {
+			margin: 0.75rem 0 0;
 		}
 
 		.banner-title {

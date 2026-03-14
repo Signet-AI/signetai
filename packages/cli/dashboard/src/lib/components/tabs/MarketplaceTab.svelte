@@ -1381,10 +1381,13 @@ $effect(() => {
 	}
 
 	@media (max-width: 1023px) {
+		:global(:has(.mobile-sidebar-trigger)) .tab-header {
+			padding-left: 6.5rem;
+		}
+
 		.tab-header {
 			flex-wrap: wrap;
 			gap: var(--space-sm);
-			padding-left: 6.5rem;
 		}
 
 		.module-head {

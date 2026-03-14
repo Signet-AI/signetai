@@ -381,7 +381,7 @@ const taskCount = $derived(ts.tasks.length);
 	}
 
 	@media (max-width: 1023px) {
-		.tab-header {
+		:global(:has(.mobile-sidebar-trigger)) .tab-header {
 			padding-left: 6.5rem;
 		}
 	}
