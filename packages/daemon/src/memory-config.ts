@@ -325,7 +325,8 @@ export function loadPipelineConfig(
 						? flatModel
 						: d.extraction.model,
 			strength: (() => {
-				const candidate = extractionRaw?.strength ?? raw.extractionStrength;
+				// Flat keys win when set (dashboard writes these); nested is fallback
+				const candidate = raw.extractionStrength ?? extractionRaw?.strength;
 				return isExtractionStrength(candidate) ? candidate : d.extraction.strength;
 			})(),
 			endpoint:

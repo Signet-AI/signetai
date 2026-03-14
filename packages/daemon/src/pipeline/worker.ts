@@ -1034,7 +1034,7 @@ export function startWorker(
 		);
 		// Cap timeout to half the lease timeout to prevent duplicate job processing
 		// when escalation triggers two sequential LLM calls
-		const leaseLimit = Math.floor(pipelineCfg.worker.leaseTimeoutMs / 2);
+		const leaseLimit = Math.max(Math.floor(pipelineCfg.worker.leaseTimeoutMs / 2), 30_000);
 		const extractionTimeout = Math.min(rawExtractionTimeout, leaseLimit);
 		const extractionStart = Date.now();
 		const rawExtraction = await extractFactsAndEntities(

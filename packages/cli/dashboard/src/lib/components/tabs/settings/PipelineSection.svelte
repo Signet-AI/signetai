@@ -78,6 +78,8 @@ $effect(() => {
 			dynamicModels = models;
 			registryLoaded = true;
 		}
+	}).catch(() => {
+		// Registry unavailable — fall back to static presets
 	});
 });
 
