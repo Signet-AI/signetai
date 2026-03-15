@@ -2516,6 +2516,13 @@ export async function installMcp(options: InstallMcpOptions): Promise<InstallMcp
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(options),
 		});
+		if (!response.ok) {
+			const body = await response.json().catch(() => ({}));
+			const error = typeof (body as Record<string, unknown>).error === "string"
+				? (body as Record<string, unknown>).error as string
+				: `Install failed (HTTP ${response.status})`;
+			return { ok: false, widgetId: "", manifest: null, error };
+		}
 		return await response.json();
 	} catch (e) {
 		return {

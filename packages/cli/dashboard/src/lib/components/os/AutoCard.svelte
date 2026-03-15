@@ -15,7 +15,7 @@
 <div class="auto-card">
 	<div class="auto-card-header">
 		{#if icon}
-			<img src={icon} alt={name} class="auto-card-icon" />
+			<img src={icon} alt={name} class="auto-card-icon" referrerpolicy="no-referrer" />
 		{:else}
 			<div class="auto-card-icon-placeholder">
 				<Box class="size-4" />

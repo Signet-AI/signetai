@@ -196,11 +196,25 @@ export function parseManifest(
 			? signetBlock.name.trim()
 			: serverName;
 
+	// Validate icon URL scheme (only allow http/https to prevent data exfiltration)
+	let validatedIcon: string | undefined;
+	if (typeof signetBlock.icon === "string" && signetBlock.icon.trim().length > 0) {
+		try {
+			const iconUrl = new URL(signetBlock.icon.trim());
+			if (iconUrl.protocol === "https:" || iconUrl.protocol === "http:") {
+				validatedIcon = signetBlock.icon.trim();
+			} else {
+				logger.warn("probe", `Rejected icon URL with non-HTTP scheme: ${iconUrl.protocol}`);
+			}
+		} catch {
+			// Not a valid URL — could be a relative path, skip it
+			logger.warn("probe", `Rejected invalid icon URL: ${signetBlock.icon}`);
+		}
+	}
+
 	const manifest: SignetAppManifest = {
 		name,
-		...(typeof signetBlock.icon === "string" && signetBlock.icon.trim().length > 0
-			? { icon: signetBlock.icon.trim() }
-			: {}),
+		...(validatedIcon ? { icon: validatedIcon } : {}),
 		...(typeof signetBlock.ui === "string" && signetBlock.ui.trim().length > 0
 			? { ui: signetBlock.ui.trim() }
 			: {}),

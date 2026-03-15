@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from "svelte";
 	import type { AppTrayEntry, GridPosition } from "$lib/stores/os.svelte";
 	import { updateGridPosition, moveToTray } from "$lib/stores/os.svelte";
 	import WidgetCard from "./WidgetCard.svelte";
@@ -6,9 +7,11 @@
 	interface Props {
 		apps: AppTrayEntry[];
 		ongriddrop: (appId: string, x: number, y: number) => void;
+		/** Resolve the default widget size for a given appId (used for collision detection on drop) */
+		resolveDefaultSize?: (appId: string) => { w: number; h: number };
 	}
 
-	const { apps, ongriddrop }: Props = $props();
+	const { apps, ongriddrop, resolveDefaultSize }: Props = $props();
 
 	// Grid config: 12 columns, each row = 80px
 	const GRID_COLS = 12;
@@ -22,6 +25,25 @@
 	let dragOffsetX = $state(0);
 	let dragOffsetY = $state(0);
 	let gridEl = $state<HTMLDivElement | null>(null);
+
+	// Track active drag listeners for cleanup
+	let activeMoveListener: ((e: PointerEvent) => void) | null = null;
+	let activeUpListener: (() => void) | null = null;
+
+	function cleanupDragListeners(): void {
+		if (activeMoveListener) {
+			window.removeEventListener("pointermove", activeMoveListener);
+			activeMoveListener = null;
+		}
+		if (activeUpListener) {
+			window.removeEventListener("pointerup", activeUpListener);
+			activeUpListener = null;
+		}
+	}
+
+	onDestroy(() => {
+		cleanupDragListeners();
+	});
 
 	// Compute max rows needed
 	const maxRow = $derived.by(() => {
@@ -41,6 +63,9 @@
 	}
 
 	function handleDragStart(id: string, e: PointerEvent): void {
+		// Clean up any lingering listeners from a previous drag
+		cleanupDragListeners();
+
 		dragId = id;
 		dragStartX = e.clientX;
 		dragStartY = e.clientY;
@@ -53,11 +78,12 @@
 		};
 
 		const onUp = () => {
-			window.removeEventListener("pointermove", onMove);
-			window.removeEventListener("pointerup", onUp);
+			cleanupDragListeners();
 			commitDrag();
 		};
 
+		activeMoveListener = onMove;
+		activeUpListener = onUp;
 		window.addEventListener("pointermove", onMove);
 		window.addEventListener("pointerup", onUp);
 	}
@@ -167,8 +193,9 @@
 		const rawX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor((e.clientX - rect.left) / cellWidth)));
 		const rawY = Math.max(0, Math.floor((e.clientY - rect.top) / ROW_HEIGHT));
 
-		// Default size for new drops — collision check will adjust if needed
-		const desired: GridPosition = { x: rawX, y: rawY, w: 4, h: 3 };
+		// Use manifest size if available, otherwise fall back to default
+		const size = resolveDefaultSize ? resolveDefaultSize(appId) : { w: 4, h: 3 };
+		const desired: GridPosition = { x: rawX, y: rawY, ...size };
 		const resolved = findFreePosition(desired, appId);
 
 		ongriddrop(appId, resolved.x, resolved.y);
