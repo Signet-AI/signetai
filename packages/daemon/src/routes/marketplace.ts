@@ -743,6 +743,8 @@ function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | n
 	};
 }
 
+/** NOTE: marketplace-helpers.ts has a public copy of this function to avoid circular imports.
+ *  If you change the path or format here, update marketplace-helpers.ts to match. */
 function readInstalledServers(): InstalledMarketplaceMcpServer[] {
 	const path = getInstalledMcpPath();
 	if (!existsSync(path)) return [];

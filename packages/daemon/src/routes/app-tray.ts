@@ -6,6 +6,9 @@
  */
 
 import type { Hono } from "hono";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import {
 	loadAppTray,
 	loadProbeResult,
@@ -119,9 +122,6 @@ export function mountAppTrayRoutes(app: Hono): void {
 
 		tray[index] = updated;
 
-		const { writeFileSync } = await import("node:fs");
-		const { join } = await import("node:path");
-		const { homedir } = await import("node:os");
 		const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
 		const trayPath = join(agentsDir, "marketplace", "app-tray.json");
 		writeFileSync(trayPath, JSON.stringify(tray, null, 2));
