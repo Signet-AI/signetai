@@ -62,6 +62,53 @@
 		window.addEventListener("pointerup", onUp);
 	}
 
+	/** Check if two grid positions overlap */
+	function collides(a: GridPosition, b: GridPosition): boolean {
+		return !(
+			a.x + a.w <= b.x ||
+			b.x + b.w <= a.x ||
+			a.y + a.h <= b.y ||
+			b.y + b.h <= a.y
+		);
+	}
+
+	/** Check if a position collides with any placed widget (excluding a given id) */
+	function hasCollision(pos: GridPosition, excludeId: string): boolean {
+		return apps.some(
+			(a) => a.id !== excludeId && a.gridPosition && collides(pos, a.gridPosition),
+		);
+	}
+
+	/** Find the nearest non-colliding position by spiraling outward */
+	function findFreePosition(desired: GridPosition, excludeId: string): GridPosition {
+		if (!hasCollision(desired, excludeId)) return desired;
+
+		// Try positions in expanding rings around the desired spot
+		for (let radius = 1; radius <= 20; radius++) {
+			for (let dy = -radius; dy <= radius; dy++) {
+				for (let dx = -radius; dx <= radius; dx++) {
+					if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue; // Only ring edges
+					const candidate: GridPosition = {
+						x: Math.max(0, Math.min(GRID_COLS - desired.w, desired.x + dx)),
+						y: Math.max(0, desired.y + dy),
+						w: desired.w,
+						h: desired.h,
+					};
+					if (!hasCollision(candidate, excludeId)) return candidate;
+				}
+			}
+		}
+
+		// Fallback: push below all existing widgets
+		let maxBottom = 0;
+		for (const a of apps) {
+			if (a.id !== excludeId && a.gridPosition) {
+				maxBottom = Math.max(maxBottom, a.gridPosition.y + a.gridPosition.h);
+			}
+		}
+		return { x: desired.x, y: maxBottom, w: desired.w, h: desired.h };
+	}
+
 	function commitDrag(): void {
 		if (!dragId || !gridEl) {
 			dragId = null;
@@ -84,12 +131,15 @@
 			return;
 		}
 
-		const newPos: GridPosition = {
+		const desired: GridPosition = {
 			x: Math.max(0, Math.min(GRID_COLS - app.gridPosition.w, app.gridPosition.x + dx)),
 			y: Math.max(0, app.gridPosition.y + dy),
 			w: app.gridPosition.w,
 			h: app.gridPosition.h,
 		};
+
+		// Resolve collisions — find nearest free spot
+		const newPos = findFreePosition(desired, app.id);
 
 		updateGridPosition(app.id, newPos);
 		dragId = null;
@@ -114,10 +164,14 @@
 
 		const rect = gridEl.getBoundingClientRect();
 		const cellWidth = rect.width / GRID_COLS;
-		const x = Math.max(0, Math.min(GRID_COLS - 1, Math.floor((e.clientX - rect.left) / cellWidth)));
-		const y = Math.max(0, Math.floor((e.clientY - rect.top) / ROW_HEIGHT));
+		const rawX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor((e.clientX - rect.left) / cellWidth)));
+		const rawY = Math.max(0, Math.floor((e.clientY - rect.top) / ROW_HEIGHT));
 
-		ongriddrop(appId, x, y);
+		// Default size for new drops — collision check will adjust if needed
+		const desired: GridPosition = { x: rawX, y: rawY, w: 4, h: 3 };
+		const resolved = findFreePosition(desired, appId);
+
+		ongriddrop(appId, resolved.x, resolved.y);
 	}
 </script>
 
