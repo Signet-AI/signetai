@@ -35,7 +35,9 @@ import type {
 import { DEFAULT_APP_SIZE } from "@signet/core";
 import { logger } from "./logger.js";
 import { getSecret } from "./secrets.js";
-import { validatePublicHttpUrl } from "./url-validation.js";
+// Note: validatePublicHttpUrl from url-validation.ts is used by the install
+// endpoint (server-side fetch = real SSRF risk). Manifest ui/icon fields are
+// client-side (iframe/img) so they only need scheme validation, not address blocking.
 import type {
 	InstalledMarketplaceMcpServer,
 	MarketplaceMcpConfigHttp,
@@ -197,28 +199,40 @@ export function parseManifest(
 			? signetBlock.name.trim()
 			: serverName;
 
-	// Validate icon URL — must be http/https and not point to private addresses
+	// Validate icon URL scheme (http/https only).
+	// Icon loads client-side (<img src>), so private addresses are fine — MCP servers are typically local.
 	let validatedIcon: string | undefined;
 	if (typeof signetBlock.icon === "string" && signetBlock.icon.trim().length > 0) {
-		const iconError = validatePublicHttpUrl(signetBlock.icon.trim());
-		if (!iconError) {
-			validatedIcon = signetBlock.icon.trim();
-		} else {
-			logger.warn("probe", `Rejected icon URL (${iconError}): ${signetBlock.icon}`);
+		try {
+			const iconUrl = new URL(signetBlock.icon.trim());
+			if (iconUrl.protocol === "https:" || iconUrl.protocol === "http:") {
+				validatedIcon = signetBlock.icon.trim();
+			} else {
+				logger.warn("probe", `Rejected icon URL with non-HTTP scheme: ${iconUrl.protocol}`);
+			}
+		} catch {
+			logger.warn("probe", `Rejected invalid icon URL: ${signetBlock.icon}`);
 		}
 	}
 
 	const manifest: SignetAppManifest = {
 		name,
 		...(validatedIcon ? { icon: validatedIcon } : {}),
+		// Validate ui URL scheme (http/https only).
+		// The ui field loads client-side (iframe src), so localhost/private addresses are
+		// expected and correct — MCP servers typically run locally (e.g. http://localhost:3461).
+		// Only block non-HTTP schemes (javascript:, data:, etc.) which are XSS vectors.
 		...(() => {
 			if (typeof signetBlock.ui === "string" && signetBlock.ui.trim().length > 0) {
-				const uiError = validatePublicHttpUrl(signetBlock.ui.trim());
-				if (uiError) {
-					logger.warn("probe", `Rejected ui URL (${uiError}): ${signetBlock.ui}`);
-					return {};
+				try {
+					const uiUrl = new URL(signetBlock.ui.trim());
+					if (uiUrl.protocol === "https:" || uiUrl.protocol === "http:") {
+						return { ui: signetBlock.ui.trim() };
+					}
+					logger.warn("probe", `Rejected ui URL with non-HTTP scheme: ${uiUrl.protocol}`);
+				} catch {
+					logger.warn("probe", `Rejected invalid ui URL: ${signetBlock.ui}`);
 				}
-				return { ui: signetBlock.ui.trim() };
 			}
 			return {};
 		})(),

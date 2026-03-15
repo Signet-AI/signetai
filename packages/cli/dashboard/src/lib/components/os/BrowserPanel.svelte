@@ -55,7 +55,7 @@
 
 	function handleBrowse(): void {
 		// Placeholder — would launch `signet browse` in Phase 9
-		console.log("[BrowserPanel] Browse action triggered — placeholder for signet browse");
+		// TODO: Phase 9 — wire to signet browse CLI launch
 	}
 
 	function getDomain(url: string): string {
