@@ -13,11 +13,17 @@
 	import WidgetGrid from "$lib/components/os/WidgetGrid.svelte";
 	import AppDock from "$lib/components/os/AppDock.svelte";
 	import SidebarGroups from "$lib/components/os/SidebarGroups.svelte";
+	import MenuBar from "$lib/components/os/MenuBar.svelte";
+	import BrowserPanel from "$lib/components/os/BrowserPanel.svelte";
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+	import Monitor from "@lucide/svelte/icons/monitor";
 
 	const trayApps = $derived(getTrayApps());
 	const gridApps = $derived(getGridApps());
 	const dockApps = $derived(getDockApps());
+
+	// Browser panel toggle (collapsed by default)
+	let showBrowserPanel = $state(false);
 
 	onMount(() => {
 		fetchTrayEntries();
@@ -44,6 +50,9 @@
 
 	<!-- Main content area -->
 	<div class="os-main">
+		<!-- Menu bar (from MCP menuItems) -->
+		<MenuBar />
+
 		<!-- Top bar -->
 		<div class="os-topbar">
 			<div class="os-topbar-left">
@@ -51,6 +60,14 @@
 				<span class="sig-eyebrow">{os.entries.length} apps</span>
 			</div>
 			<div class="os-topbar-right">
+				<button
+					class="sig-switch os-browser-toggle"
+					class:os-browser-toggle--active={showBrowserPanel}
+					title={showBrowserPanel ? "Hide browser panel" : "Show browser panel"}
+					onclick={() => showBrowserPanel = !showBrowserPanel}
+				>
+					<Monitor class="size-3.5" />
+				</button>
 				<button
 					class="sig-switch os-refresh-btn"
 					title="Refresh app tray"
@@ -65,6 +82,13 @@
 		{#if os.error}
 			<div class="os-error">
 				<span class="sig-label text-[var(--sig-danger)]">{os.error}</span>
+			</div>
+		{/if}
+
+		<!-- Browser panel (collapsible) -->
+		{#if showBrowserPanel}
+			<div class="os-browser-panel-wrapper">
+				<BrowserPanel />
 			</div>
 		{/if}
 
@@ -133,6 +157,25 @@
 		width: 28px;
 		height: 28px;
 		padding: 0;
+	}
+
+	.os-browser-toggle {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		padding: 0;
+	}
+
+	.os-browser-toggle--active {
+		background: var(--sig-border-strong);
+		color: var(--sig-text-bright);
+	}
+
+	.os-browser-panel-wrapper {
+		padding: 8px var(--space-md) 0;
+		flex-shrink: 0;
 	}
 
 	.os-error {
