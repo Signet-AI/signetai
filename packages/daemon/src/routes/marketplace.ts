@@ -587,7 +587,8 @@ export function parseReferenceServersMarkdown(markdown: string): MarketplaceMcpC
 			const desc = m[3].replace(/<[^>]*>/g, "").trim();
 			if (!name || !url) continue;
 			const ghMatch = url.match(/github\.com\/([^/]+\/[^/]+)/);
-			const slug = ghMatch ? ghMatch[1].replace(/\/$/, "") : (url.replace(/\/$/, "").split("/").at(-1) ?? name);
+			if (!ghMatch) continue;
+			const slug = ghMatch[1].replace(/\/$/, "");
 			const id = makeCatalogEntryId("github", slug);
 			if (seen.has(id)) continue;
 			seen.add(id);

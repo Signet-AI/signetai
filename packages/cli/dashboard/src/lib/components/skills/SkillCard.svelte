@@ -101,6 +101,7 @@ let avatarUrl = $derived.by(() => {
 	return getAvatarUrl();
 });
 let avatarFailed = $state(false);
+$effect(() => { avatarUrl; avatarFailed = false; });
 
 let isInstalled = $derived(
 	isSkill(item) ? true : isSearchResult(item) ? item.installed : false
