@@ -1,9 +1,11 @@
 <script lang="ts">
 	import type { AppTrayEntry } from "$lib/stores/os.svelte";
 	import { moveToTray, moveToDock } from "$lib/stores/os.svelte";
+	import AddMcpDialog from "./AddMcpDialog.svelte";
 	import Box from "@lucide/svelte/icons/box";
 	import Pin from "@lucide/svelte/icons/pin";
 	import PinOff from "@lucide/svelte/icons/pin-off";
+	import Plus from "@lucide/svelte/icons/plus";
 
 	interface Props {
 		trayApps: AppTrayEntry[];
@@ -12,6 +14,8 @@
 	}
 
 	const { trayApps, dockApps, ondragtoboard }: Props = $props();
+
+	let showAddDialog = $state(false);
 
 	function handleDragStart(e: DragEvent, id: string): void {
 		if (!e.dataTransfer) return;
@@ -33,7 +37,10 @@
 <div class="app-dock">
 	{#if allApps.length === 0}
 		<div class="dock-empty">
-			<span class="sig-label">No apps installed — add MCP servers in the Marketplace</span>
+			<button class="dock-add-btn" title="Add MCP Server" onclick={() => showAddDialog = true}>
+				<Plus class="size-4" />
+				<span class="dock-add-label">Add MCP Server</span>
+			</button>
 		</div>
 	{:else}
 		<div class="dock-items">
@@ -92,9 +99,22 @@
 					</button>
 				</div>
 			{/each}
+			<div class="dock-separator"></div>
+			<button
+				class="dock-item dock-item--add"
+				title="Add MCP Server"
+				onclick={() => showAddDialog = true}
+			>
+				<div class="dock-icon-placeholder dock-icon-add">
+					<Plus class="size-4" />
+				</div>
+				<span class="dock-label">Add New</span>
+			</button>
 		</div>
 	{/if}
 </div>
+
+<AddMcpDialog open={showAddDialog} onclose={() => showAddDialog = false} />
 
 <style>
 	.app-dock {
@@ -213,5 +233,57 @@
 		background: var(--sig-border-strong);
 		margin: 0 4px;
 		flex-shrink: 0;
+	}
+
+	.dock-item--add {
+		cursor: pointer;
+		border: 1px dashed var(--sig-border);
+		opacity: 0.7;
+		transition: opacity var(--dur) var(--ease), border-color var(--dur) var(--ease);
+	}
+
+	.dock-item--add:hover {
+		opacity: 1;
+		border-color: var(--sig-highlight-dim);
+		background: var(--sig-surface-raised);
+	}
+
+	.dock-icon-add {
+		background: transparent;
+		border: 1px dashed var(--sig-border);
+		color: var(--sig-highlight-dim);
+	}
+
+	.dock-item--add:hover .dock-icon-add {
+		border-color: var(--sig-highlight-dim);
+		color: var(--sig-highlight-text);
+	}
+
+	.dock-add-btn {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 6px 14px;
+		border: 1px dashed var(--sig-border);
+		border-radius: 6px;
+		background: transparent;
+		color: var(--sig-text-muted);
+		cursor: pointer;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		transition: all var(--dur) var(--ease);
+	}
+
+	.dock-add-btn:hover {
+		border-color: var(--sig-highlight-dim);
+		color: var(--sig-highlight-text);
+		background: var(--sig-surface-raised);
+	}
+
+	.dock-add-label {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
 </style>
