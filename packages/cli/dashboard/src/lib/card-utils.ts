@@ -41,7 +41,7 @@ export function getHueRotate(name: string): number {
  */
 export function getAvatarUrl(sourceUrl: string | undefined): string | null {
 	if (!sourceUrl) return null;
-	const match = sourceUrl.match(/github\.com\/([^/]+)/);
+	const match = sourceUrl.match(/^https?:\/\/(?:www\.)?github\.com\/([a-zA-Z0-9._-]+)/);
 	if (match?.[1]) return `https://github.com/${match[1]}.png?size=40`;
 	return null;
 }

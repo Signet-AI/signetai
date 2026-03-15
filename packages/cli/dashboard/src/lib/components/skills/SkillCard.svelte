@@ -3,7 +3,7 @@ import type { Skill, SkillSearchResult } from "$lib/api";
 import { getMonogram, getMonogramBg, getHueRotate } from "$lib/card-utils";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
-import { sk } from "$lib/stores/skills.svelte";
+import { getCatalogByName } from "$lib/stores/skills.svelte";
 
 type Props = {
 	item: Skill | SkillSearchResult;
@@ -54,15 +54,12 @@ function formatStat(n: number | undefined): string {
 let monogram = $derived(getMonogram(item.name));
 let monogramBg = $derived(getMonogramBg(item.name));
 
-// Pre-built catalog lookup avoids O(n) scan per render
-const catalogByName = $derived(new Map(sk.catalog.map((c) => [c.name, c])));
-
 function getSkillAvatarUrl(): string | null {
 	let maintainer: string | undefined;
 	if (isSearchResult(item)) {
 		maintainer = item.maintainer;
 	} else {
-		maintainer = catalogByName.get(item.name)?.maintainer;
+		maintainer = getCatalogByName().get(item.name)?.maintainer;
 	}
 	if (maintainer) return `https://github.com/${maintainer.split("/")[0]}.png?size=40`;
 	return null;
