@@ -5,6 +5,7 @@
 		deleteGroup,
 		renameGroup,
 		setActiveGroup,
+		addToGroup,
 		type SidebarGroup,
 	} from "$lib/stores/os.svelte";
 	import Folder from "@lucide/svelte/icons/folder";
@@ -48,10 +49,7 @@
 		e.preventDefault();
 		const appId = e.dataTransfer?.getData("text/plain");
 		if (appId) {
-			// Import at call site to avoid circular dependency
-			import("$lib/stores/os.svelte").then(({ addToGroup }) => {
-				addToGroup(groupId, appId);
-			});
+			addToGroup(groupId, appId);
 		}
 	}
 </script>
