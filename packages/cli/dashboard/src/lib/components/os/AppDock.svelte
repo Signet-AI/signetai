@@ -53,7 +53,7 @@
 					role="listitem"
 				>
 					{#if app.icon}
-						<img src={app.icon} alt={app.name} class="dock-icon" />
+						<img src={app.icon} alt={app.name} class="dock-icon" referrerpolicy="no-referrer" />
 					{:else}
 						<div class="dock-icon-placeholder">
 							<Box class="size-4" />
@@ -83,7 +83,7 @@
 					role="listitem"
 				>
 					{#if app.icon}
-						<img src={app.icon} alt={app.name} class="dock-icon" />
+						<img src={app.icon} alt={app.name} class="dock-icon" referrerpolicy="no-referrer" />
 					{:else}
 						<div class="dock-icon-placeholder">
 							<Box class="size-4" />

@@ -54,6 +54,18 @@
 			return;
 		}
 
+		// Validate URL scheme to prevent SSRF (file://, ftp://, etc.)
+		try {
+			const parsed = new URL(trimmedUrl);
+			if (!['https:', 'http:'].includes(parsed.protocol)) {
+				error = 'Only HTTP/HTTPS URLs are supported';
+				return;
+			}
+		} catch {
+			error = 'Invalid URL format';
+			return;
+		}
+
 		loading = true;
 		error = null;
 		success = null;

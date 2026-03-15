@@ -214,6 +214,22 @@ export function mountAppTrayRoutes(app: Hono): void {
 			return c.json({ ok: false, widgetId: "", manifest: null, error: "url is required" }, 400);
 		}
 
+		// Validate URL scheme to prevent SSRF (file://, ftp://, RFC-1918, etc.)
+		try {
+			const parsed = new URL(url);
+			if (!["https:", "http:"].includes(parsed.protocol)) {
+				return c.json(
+					{ ok: false, widgetId: "", manifest: null, error: "Only HTTP/HTTPS URLs are supported" },
+					400,
+				);
+			}
+		} catch {
+			return c.json(
+				{ ok: false, widgetId: "", manifest: null, error: "Invalid URL format" },
+				400,
+			);
+		}
+
 		const nameOverride = body.name?.trim() || undefined;
 		const autoPlace = body.autoPlace === true;
 

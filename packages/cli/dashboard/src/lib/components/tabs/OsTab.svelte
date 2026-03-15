@@ -18,6 +18,30 @@
 	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 	import Monitor from "@lucide/svelte/icons/monitor";
 
+	const GRID_COLS = 12;
+
+	/** Find the first free grid position that can fit a widget of the given size. */
+	function findFreeGridPosition(
+		occupied: Array<{ x: number; y: number; w: number; h: number }>,
+		size: { w: number; h: number },
+	): GridPosition {
+		const collides = (x: number, y: number, w: number, h: number): boolean => {
+			for (const o of occupied) {
+				if (x < o.x + o.w && x + w > o.x && y < o.y + o.h && y + h > o.y) return true;
+			}
+			return false;
+		};
+		for (let y = 0; y < 50; y++) {
+			for (let x = 0; x <= GRID_COLS - size.w; x++) {
+				if (!collides(x, y, size.w, size.h)) {
+					return { x, y, w: size.w, h: size.h };
+				}
+			}
+		}
+		const maxY = occupied.reduce((max, o) => Math.max(max, o.y + o.h), 0);
+		return { x: 0, y: maxY, w: size.w, h: size.h };
+	}
+
 	const trayApps = $derived(getTrayApps());
 	const gridApps = $derived(getGridApps());
 	const dockApps = $derived(getDockApps());
@@ -31,7 +55,17 @@
 	});
 
 	async function handleDragToBoard(id: string): Promise<void> {
-		await moveToGrid(id);
+		const entry = os.entries.find((a) => a.id === id);
+		if (!entry) return;
+		const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
+
+		// Compute a free grid position to avoid overlapping at (0,0)
+		const occupied = gridApps
+			.filter((a) => a.id !== id && a.gridPosition)
+			.map((a) => a.gridPosition!);
+		const pos = findFreeGridPosition(occupied, size);
+
+		await moveToGrid(id, pos);
 	}
 
 	function handleGridDrop(appId: string, x: number, y: number): void {
@@ -39,6 +73,12 @@
 		if (!entry) return;
 		const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
 		moveToGrid(appId, { x, y, ...size });
+	}
+
+	/** Resolve the default widget size for a given appId (for WidgetGrid collision detection) */
+	function resolveDefaultSize(appId: string): { w: number; h: number } {
+		const entry = os.entries.find((a) => a.id === appId);
+		return entry?.manifest?.defaultSize ?? { w: 4, h: 3 };
 	}
 </script>
 
@@ -93,7 +133,7 @@
 		{/if}
 
 		<!-- Widget grid -->
-		<WidgetGrid apps={gridApps} ongriddrop={handleGridDrop} />
+		<WidgetGrid apps={gridApps} ongriddrop={handleGridDrop} {resolveDefaultSize} />
 
 		<!-- Bottom dock / tray -->
 		<AppDock

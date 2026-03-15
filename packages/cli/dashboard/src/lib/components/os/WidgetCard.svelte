@@ -45,7 +45,7 @@
 				src={app.manifest.ui}
 				title={app.name}
 				class="widget-iframe"
-				sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+				sandbox="allow-scripts allow-forms allow-popups"
 			></iframe>
 		{:else}
 			<AutoCard

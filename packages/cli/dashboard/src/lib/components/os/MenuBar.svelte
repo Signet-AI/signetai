@@ -16,8 +16,8 @@
 		openMenuId = openMenuId === appId ? null : appId;
 	}
 
-	function handleMenuItemClick(appId: string, item: string): void {
-		console.log(`[MenuBar] ${appId} → ${item}`);
+	function handleMenuItemClick(_appId: string, _item: string): void {
+		// Menu actions are not yet implemented — items are rendered disabled
 		openMenuId = null;
 	}
 
@@ -50,10 +50,12 @@
 					<div class="menu-dropdown" onclick={(e) => e.stopPropagation()}>
 						{#each app.manifest.menuItems as item}
 							<button
-								class="menu-dropdown-item"
-								onclick={() => handleMenuItemClick(app.id, item)}
+								class="menu-dropdown-item menu-dropdown-item--disabled"
+								disabled
+								title="Coming soon"
 							>
 								{item}
+								<span class="menu-coming-soon">Coming soon</span>
 							</button>
 						{/each}
 					</div>
@@ -150,8 +152,23 @@
 		white-space: nowrap;
 	}
 
-	.menu-dropdown-item:hover {
+	.menu-dropdown-item:hover:not(:disabled) {
 		background: var(--sig-border);
 		color: var(--sig-text-bright);
+	}
+
+	.menu-dropdown-item--disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.menu-coming-soon {
+		font-size: 9px;
+		opacity: 0.6;
+		font-style: italic;
 	}
 </style>
