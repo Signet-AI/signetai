@@ -581,6 +581,197 @@ function detectLogin(url: string, title: string, body: string): boolean {
 	);
 }
 
+// ── Form detection JS expression (injected into pages) ──────────────────────
+const FORM_DETECT_EXPRESSION = `(() => {
+	const forms = [];
+	document.querySelectorAll("form").forEach(form => {
+		const fields = [];
+		form.querySelectorAll("input,select,textarea").forEach(inp => {
+			const name = inp.getAttribute("name") || inp.getAttribute("id") || "unknown";
+			const type = inp.tagName.toLowerCase() === "select" ? "select"
+				: inp.tagName.toLowerCase() === "textarea" ? "textarea"
+				: (inp.getAttribute("type") || "text");
+			const label = inp.getAttribute("aria-label")
+				|| inp.getAttribute("placeholder")
+				|| (() => {
+					const id = inp.getAttribute("id");
+					if (id) {
+						const lbl = document.querySelector("label[for='" + id + "']");
+						if (lbl) return lbl.textContent?.trim();
+					}
+					return undefined;
+				})()
+				|| undefined;
+			fields.push({ name, type, ...(label ? { label } : {}) });
+		});
+		if (fields.length > 0) forms.push({ fields, action: form.action || location.href });
+	});
+	return forms;
+})()`;
+
+// ── Checkout extraction JS expression ────────────────────────────────────────
+const CHECKOUT_EXTRACT_EXPRESSION = `(() => {
+	const items = [];
+	document.querySelectorAll("[class*=item],[class*=product],[class*=cart-line]").forEach(el => {
+		const t = (el.textContent ?? "").trim().replace(/\\s+/g, " ");
+		if (t && t.length < 200) items.push(t);
+	});
+	const totalEl = document.querySelector("[class*=total],[class*=grand-total],[data-total]");
+	const totalText = totalEl?.textContent?.trim() ?? null;
+	const totalMatch = totalText?.match(/[€$£¥][\\d,]+\\.?\\d*/);
+	return { items: [...new Set(items)].slice(0, 20), total: totalMatch ? parseFloat(totalMatch[0].replace(/[^\\d.]/g, "")) : null };
+})()`;
+
+// ── Tab state type ───────────────────────────────────────────────────────────
+interface TabWatchState {
+	lastDomChangeAt: number;
+	lastBodyText: string;
+	title: string;
+	url: string;
+}
+
+/**
+ * Wire all event handlers for a watched tab.
+ * Single source of truth — used for both initial tabs and dynamically discovered ones.
+ */
+function wireTabEventHandlers(
+	client: CDPClient,
+	tabId: string,
+	tabState: Map<string, TabWatchState>,
+): void {
+	// ── browser.navigate ────────────────────────────────────────────────
+	client.on("Page.frameNavigated", async (params) => {
+		const frame = params.frame as Record<string, unknown> | undefined;
+		if (!frame || frame.parentId) return; // Only top-level frame
+
+		const url = (frame.url as string) ?? "";
+		const state = tabState.get(tabId);
+		if (state) state.url = url;
+
+		// Resolve title via Runtime.evaluate — frame.name is almost always empty
+		let title = "";
+		try {
+			const { result: titleResult } = (await client.send("Runtime.evaluate", {
+				expression: "document.title",
+				returnByValue: true,
+			})) as { result: { value: string } };
+			title = titleResult?.value ?? "";
+			if (state) state.title = title;
+		} catch {
+			// Page might not be ready yet — title will be updated on loadEventFired
+		}
+
+		emitEvent("browser.navigate", { url, title, tabId, timestamp: Date.now() });
+	});
+
+	// ── Page load: title update + form/checkout/login detection ──────────
+	client.on("Page.loadEventFired", async () => {
+		const state = tabState.get(tabId);
+		if (!state) return;
+
+		try {
+			// Update title
+			const { result: titleResult } = (await client.send("Runtime.evaluate", {
+				expression: "document.title",
+				returnByValue: true,
+			})) as { result: { value: string } };
+			if (titleResult?.value) state.title = titleResult.value;
+
+			// Detect forms — emit rich field objects per spec
+			const { result: formsResult } = (await client.send("Runtime.evaluate", {
+				expression: FORM_DETECT_EXPRESSION,
+				returnByValue: true,
+			})) as { result: { value: Array<{ fields: BrowserFormField[]; action: string }> } };
+
+			for (const form of formsResult?.value ?? []) {
+				emitEvent("browser.form", {
+					fields: form.fields,
+					action: form.action,
+					tabId,
+					timestamp: Date.now(),
+				});
+			}
+
+			// Detect checkout / login pages
+			const body = ((
+				await client.send("Runtime.evaluate", {
+					expression: "document.body?.innerText?.slice(0, 1000) ?? ''",
+					returnByValue: true,
+				}).catch(() => ({ result: { value: "" } }))
+			) as { result: { value: string } }).result?.value ?? "";
+
+			if (detectCheckout(state.url, state.title, body)) {
+				const { result: checkoutResult } = (await client.send("Runtime.evaluate", {
+					expression: CHECKOUT_EXTRACT_EXPRESSION,
+					returnByValue: true,
+				}).catch(() => ({ result: { value: { items: [], total: null } } }))) as {
+					result: { value: { items: string[]; total: number | null } };
+				};
+
+				emitEvent("browser.checkout", {
+					items: checkoutResult?.value?.items,
+					total: checkoutResult?.value?.total ?? undefined,
+					tabId,
+					timestamp: Date.now(),
+				});
+			}
+
+			if (detectLogin(state.url, state.title, body)) {
+				emitEvent("browser.login", {
+					domain: getDomain(state.url),
+					tabId,
+					timestamp: Date.now(),
+				});
+			}
+		} catch {
+			// Best-effort
+		}
+	});
+
+	// ── browser.dom.change (throttled) ───────────────────────────────────
+	client.on("DOM.documentUpdated", async () => {
+		const state = tabState.get(tabId);
+		if (!state) return;
+
+		const now = Date.now();
+		if (now - state.lastDomChangeAt < DOM_CHANGE_THROTTLE_MS) return;
+
+		try {
+			const { result: bodyResult } = (await client.send("Runtime.evaluate", {
+				expression: "document.body?.innerText?.slice(0, 5000) ?? ''",
+				returnByValue: true,
+			})) as { result: { value: string } };
+
+			const newBody = bodyResult?.value ?? "";
+			const diff = simpleTextDiff(state.lastBodyText, newBody);
+			if (!diff) return;
+
+			state.lastBodyText = newBody;
+			state.lastDomChangeAt = now;
+
+			emitEvent("browser.dom.change", { diff, tabId, timestamp: now });
+		} catch {
+			// Best-effort
+		}
+	});
+}
+
+/** Enable CDP domains on a client and set up reconnect handler */
+async function enableCDPDomains(client: CDPClient): Promise<void> {
+	await Promise.all([
+		client.send("Page.enable").catch(() => {}),
+		client.send("DOM.enable").catch(() => {}),
+		client.send("Runtime.enable").catch(() => {}),
+	]);
+	client.setOnReconnect(async () => {
+		await Promise.all([
+			client.send("Page.enable").catch(() => {}),
+			client.send("DOM.enable").catch(() => {}),
+			client.send("Runtime.enable").catch(() => {}),
+		]);
+	});
+}
+
 async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void> {
 	console.error(
 		chalk.dim(
@@ -597,19 +788,11 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 		process.exit(1);
 	}
 
-	// Track per-tab state for throttling
-	const tabState = new Map<
-		string,
-		{
-			lastDomChangeAt: number;
-			lastBodyText: string;
-			title: string;
-			url: string;
-		}
-	>();
-
+	const tabState = new Map<string, TabWatchState>();
 	const clients: CDPClient[] = [];
+	const attachedTabIds = new Set<string>();
 
+	// Attach to all existing page tabs
 	for (const tab of pageTabs) {
 		if (!tab.webSocketDebuggerUrl) continue;
 
@@ -622,197 +805,17 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 		}
 
 		clients.push(client);
+		attachedTabIds.add(tab.id);
 
-		const tabId = tab.id;
-
-		tabState.set(tabId, {
+		tabState.set(tab.id, {
 			lastDomChangeAt: 0,
 			lastBodyText: "",
 			title: tab.title,
 			url: tab.url,
 		});
 
-		// Enable domains
-		await Promise.all([
-			client.send("Page.enable").catch(() => {}),
-			client.send("DOM.enable").catch(() => {}),
-			client.send("Runtime.enable").catch(() => {}),
-		]);
-
-		// Set up reconnect handler to re-enable domains after WebSocket recovery
-		client.setOnReconnect(async () => {
-			await Promise.all([
-				client.send("Page.enable").catch(() => {}),
-				client.send("DOM.enable").catch(() => {}),
-				client.send("Runtime.enable").catch(() => {}),
-			]);
-		});
-
-		// ── browser.navigate ────────────────────────────────────────────────
-		client.on("Page.frameNavigated", async (params) => {
-			const frame = params.frame as Record<string, unknown> | undefined;
-			if (!frame || frame.parentId) return; // Only top-level frame
-
-			const url = (frame.url as string) ?? "";
-			const state = tabState.get(tabId);
-			if (state) {
-				state.url = url;
-			}
-
-			// Resolve title via Runtime.evaluate — frame.name is almost always empty
-			let title = "";
-			try {
-				const { result: titleResult } = (await client.send("Runtime.evaluate", {
-					expression: "document.title",
-					returnByValue: true,
-				})) as { result: { value: string } };
-				title = titleResult?.value ?? "";
-				if (state) state.title = title;
-			} catch {
-				// Page might not be ready yet — title will be updated on loadEventFired
-			}
-
-			emitEvent("browser.navigate", {
-				url,
-				title,
-				tabId,
-				timestamp: Date.now(),
-			});
-		});
-
-		// ── Update title on load ─────────────────────────────────────────────
-		client.on("Page.loadEventFired", async () => {
-			const state = tabState.get(tabId);
-			if (!state) return;
-
-			try {
-				const { result: titleResult } = (await client.send("Runtime.evaluate", {
-					expression: "document.title",
-					returnByValue: true,
-				})) as { result: { value: string } };
-				if (titleResult?.value) {
-					state.title = titleResult.value;
-				}
-
-				// Detect forms — emit rich field objects per spec
-				const { result: formsResult } = (await client.send("Runtime.evaluate", {
-					expression: `(() => {
-						const forms = [];
-						document.querySelectorAll("form").forEach(form => {
-							const fields = [];
-							form.querySelectorAll("input,select,textarea").forEach(inp => {
-								const name = inp.getAttribute("name") || inp.getAttribute("id") || "unknown";
-								const type = inp.tagName.toLowerCase() === "select" ? "select"
-									: inp.tagName.toLowerCase() === "textarea" ? "textarea"
-									: (inp.getAttribute("type") || "text");
-								const label = inp.getAttribute("aria-label")
-									|| inp.getAttribute("placeholder")
-									|| (() => {
-										const id = inp.getAttribute("id");
-										if (id) {
-											const lbl = document.querySelector("label[for='" + id + "']");
-											if (lbl) return lbl.textContent?.trim();
-										}
-										return undefined;
-									})()
-									|| undefined;
-								fields.push({ name, type, ...(label ? { label } : {}) });
-							});
-							if (fields.length > 0) forms.push({ fields, action: form.action || location.href });
-						});
-						return forms;
-					})()`,
-					returnByValue: true,
-				})) as { result: { value: Array<{ fields: BrowserFormField[]; action: string }> } };
-
-				const forms = formsResult?.value ?? [];
-				for (const form of forms) {
-					emitEvent("browser.form", {
-						fields: form.fields,
-						action: form.action,
-						tabId,
-						timestamp: Date.now(),
-					});
-				}
-
-				// Detect checkout / login pages
-				const body = ((
-					await client.send("Runtime.evaluate", {
-						expression: "document.body?.innerText?.slice(0, 1000) ?? ''",
-						returnByValue: true,
-					}).catch(() => ({ result: { value: "" } }))
-				) as { result: { value: string } }).result?.value ?? "";
-
-				if (detectCheckout(state.url, state.title, body)) {
-					// Try to extract checkout details
-					const { result: checkoutResult } = (await client.send("Runtime.evaluate", {
-						expression: `(() => {
-							const items = [];
-							document.querySelectorAll("[class*=item],[class*=product],[class*=cart-line]").forEach(el => {
-								const t = (el.textContent ?? "").trim().replace(/\\s+/g, " ");
-								if (t && t.length < 200) items.push(t);
-							});
-							const totalEl = document.querySelector("[class*=total],[class*=grand-total],[data-total]");
-							const totalText = totalEl?.textContent?.trim() ?? null;
-							const totalMatch = totalText?.match(/[€$£¥][\\d,]+\\.?\\d*/);
-							return { items: [...new Set(items)].slice(0, 20), total: totalMatch ? parseFloat(totalMatch[0].replace(/[^\\d.]/g, "")) : null };
-						})()`,
-						returnByValue: true,
-					}).catch(() => ({ result: { value: { items: [], total: null } } }))) as {
-						result: { value: { items: string[]; total: number | null } };
-					};
-
-					emitEvent("browser.checkout", {
-						items: checkoutResult?.value?.items,
-						total: checkoutResult?.value?.total ?? undefined,
-						tabId,
-						timestamp: Date.now(),
-					});
-				}
-
-				if (detectLogin(state.url, state.title, body)) {
-					emitEvent("browser.login", {
-						domain: getDomain(state.url),
-						tabId,
-						timestamp: Date.now(),
-					});
-				}
-			} catch {
-				// Best-effort
-			}
-		});
-
-		// ── browser.dom.change (throttled) ───────────────────────────────────
-		client.on("DOM.documentUpdated", async () => {
-			const state = tabState.get(tabId);
-			if (!state) return;
-
-			const now = Date.now();
-			if (now - state.lastDomChangeAt < DOM_CHANGE_THROTTLE_MS) return;
-
-			try {
-				const { result: bodyResult } = (await client.send("Runtime.evaluate", {
-					expression: "document.body?.innerText?.slice(0, 5000) ?? ''",
-					returnByValue: true,
-				})) as { result: { value: string } };
-
-				const newBody = bodyResult?.value ?? "";
-				const diff = simpleTextDiff(state.lastBodyText, newBody);
-
-				if (!diff) return; // Not enough change
-
-				state.lastBodyText = newBody;
-				state.lastDomChangeAt = now;
-
-				emitEvent("browser.dom.change", {
-					diff,
-					tabId,
-					timestamp: now,
-				});
-			} catch {
-				// Best-effort
-			}
-		});
+		await enableCDPDomains(client);
+		wireTabEventHandlers(client, tab.id, tabState);
 	}
 
 	if (clients.length === 0) {
@@ -824,9 +827,6 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 		chalk.green(`  ✓ Watching ${clients.length} tab(s). Streaming events to stdout.`),
 	);
 	console.error(chalk.dim("  Press Ctrl+C to stop.\n"));
-
-	// Track which tab IDs we've already attached to
-	const attachedTabIds = new Set(pageTabs.map((t) => t.id));
 
 	// Poll for new tabs every 5 seconds
 	const TAB_POLL_INTERVAL_MS = 5000;
@@ -844,71 +844,19 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 					clients.push(client);
 					attachedTabIds.add(tab.id);
 
-					const tabId = tab.id;
-					tabState.set(tabId, {
+					tabState.set(tab.id, {
 						lastDomChangeAt: 0,
 						lastBodyText: "",
 						title: tab.title,
 						url: tab.url,
 					});
 
-					// Enable domains on the new tab
-					await Promise.all([
-						client.send("Page.enable").catch(() => {}),
-						client.send("DOM.enable").catch(() => {}),
-						client.send("Runtime.enable").catch(() => {}),
-					]);
-
-					// Set up reconnect handler
-					client.setOnReconnect(async () => {
-						await Promise.all([
-							client.send("Page.enable").catch(() => {}),
-							client.send("DOM.enable").catch(() => {}),
-							client.send("Runtime.enable").catch(() => {}),
-						]);
-					});
-
-					// Wire up the same event handlers as initial tabs
-					client.on("Page.frameNavigated", async (params) => {
-						const frame = params.frame as Record<string, unknown> | undefined;
-						if (!frame || frame.parentId) return;
-						const url = (frame.url as string) ?? "";
-						const state = tabState.get(tabId);
-						if (state) state.url = url;
-						let title = "";
-						try {
-							const { result: titleResult } = (await client.send("Runtime.evaluate", {
-								expression: "document.title",
-								returnByValue: true,
-							})) as { result: { value: string } };
-							title = titleResult?.value ?? "";
-							if (state) state.title = title;
-						} catch {}
-						emitEvent("browser.navigate", { url, title, tabId, timestamp: Date.now() });
-					});
-
-					client.on("DOM.documentUpdated", async () => {
-						const state = tabState.get(tabId);
-						if (!state) return;
-						const now = Date.now();
-						if (now - state.lastDomChangeAt < DOM_CHANGE_THROTTLE_MS) return;
-						try {
-							const { result: bodyResult } = (await client.send("Runtime.evaluate", {
-								expression: "document.body?.innerText?.slice(0, 5000) ?? ''",
-								returnByValue: true,
-							})) as { result: { value: string } };
-							const newBody = bodyResult?.value ?? "";
-							const diff = simpleTextDiff(state.lastBodyText, newBody);
-							if (!diff) return;
-							state.lastBodyText = newBody;
-							state.lastDomChangeAt = now;
-							emitEvent("browser.dom.change", { diff, tabId, timestamp: now });
-						} catch {}
-					});
+					await enableCDPDomains(client);
+					wireTabEventHandlers(client, tab.id, tabState);
 
 					console.error(chalk.green(`  ✓ New tab attached: "${tab.title}" (${tab.id})`));
 				} catch {
-					// Failed to attach to new tab — skip, retry next poll
+					// Failed to attach — skip, retry next poll
 				}
 			}
 		} catch {
@@ -921,9 +869,7 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 		process.on("SIGINT", () => {
 			clearInterval(tabPollTimer);
 			for (const c of clients) {
-				try {
-					c.close();
-				} catch {}
+				try { c.close(); } catch {}
 			}
 			resolve();
 		});
