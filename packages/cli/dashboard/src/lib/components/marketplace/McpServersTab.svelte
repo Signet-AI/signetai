@@ -60,8 +60,9 @@ const sourceOptions = $derived(getMarketplaceMcpSourceOptions());
 
 const MCP_PAGE_SIZE = 60;
 let visibleCount = $state(MCP_PAGE_SIZE);
-// Read filteredCatalog to reset pagination when filters change
+// Reset pagination and avatar errors when filters or installed list change
 $effect(() => { filteredCatalog; visibleCount = MCP_PAGE_SIZE; catalogAvatarErrors.clear(); });
+$effect(() => { mcpMarket.installed; installedAvatarErrors.clear(); });
 const visibleCatalog = $derived(filteredCatalog.slice(0, visibleCount));
 const hasMore = $derived(visibleCount < filteredCatalog.length);
 const remaining = $derived(filteredCatalog.length - visibleCount);
