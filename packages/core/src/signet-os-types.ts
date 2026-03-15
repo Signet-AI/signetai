@@ -1,8 +1,9 @@
 /**
- * Signet OS types — manifest schema and app tray definitions.
+ * Signet OS types — manifest schema, app tray definitions, and event bus types.
  *
  * Based on the Signet OS spec: docs/signet-os-spec.md
- * These types define how MCP servers declare their dashboard presence.
+ * These types define how MCP servers declare their dashboard presence
+ * and how the ambient awareness event bus operates.
  */
 
 // ---------------------------------------------------------------------------
@@ -169,4 +170,68 @@ export interface AppTrayEntry {
 	readonly createdAt: string;
 	/** When this entry was last updated */
 	readonly updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Event Bus types (ambient awareness layer — Phase 3/5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The universal event envelope for the Signet OS event bus.
+ * Every event — browser, MCP, system — flows through this shape.
+ */
+export interface SignetOSEvent {
+	/** Unique event ID */
+	readonly id: string;
+	/** Event source: "browser" | "mcp:<widgetId>" | "system" */
+	readonly source: string;
+	/** Event type (e.g., "browser.navigate", "browser.form") */
+	readonly type: string;
+	/** Unix timestamp in milliseconds */
+	readonly timestamp: number;
+	/** Event-specific payload */
+	readonly payload: Record<string, unknown>;
+}
+
+/**
+ * Known browser event types emitted by the CDP bridge.
+ */
+export type BrowserEventType =
+	| "browser.navigate"
+	| "browser.form"
+	| "browser.dom.change"
+	| "browser.extract"
+	| "browser.checkout"
+	| "browser.login";
+
+/**
+ * A subscription handle returned by the event bus.
+ */
+export interface EventBusSubscription {
+	/** The event type pattern subscribed to ('*' for all) */
+	readonly type: string;
+	/** Unique subscription ID */
+	readonly id: string;
+	/** Unsubscribe this subscription */
+	readonly unsubscribe: () => void;
+}
+
+/**
+ * A snapshot of the current ambient context assembled from recent events.
+ * This is what the agent sees — a rolling window of what's happening
+ * across all surfaces: browser, widgets, system.
+ */
+export interface ContextSnapshot {
+	/** Events in the snapshot, sorted by recency (newest first) */
+	readonly events: readonly SignetOSEvent[];
+	/** Total event count in the rolling window */
+	readonly totalEvents: number;
+	/** Start of the window (earliest event timestamp) */
+	readonly windowStart: number;
+	/** End of the window (latest event timestamp) */
+	readonly windowEnd: number;
+	/** Number of unique sources contributing events */
+	readonly activeSources: number;
+	/** When this snapshot was generated */
+	readonly generatedAt: number;
 }

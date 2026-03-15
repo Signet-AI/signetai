@@ -4613,6 +4613,10 @@ mountMarketplaceRoutes(app);
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 mountAppTrayRoutes(app);
 
+// Event bus routes (Signet OS ambient awareness layer — Phase 3/5)
+import { mountEventBusRoutes } from "./routes/event-bus.js";
+mountEventBusRoutes(app);
+
 // Marketplace review routes (Signet Reviews scaffold)
 import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
 mountMarketplaceReviewsRoutes(app);
@@ -10122,6 +10126,16 @@ async function main() {
 	});
 	initFeatureFlags(AGENTS_DIR);
 	startUpdateTimer();
+
+	// Wire browser CDP events into the event bus (Phase 3/5)
+	try {
+		const { initBrowserEventBridge } = await import("./browser-event-bridge.js");
+		await initBrowserEventBridge();
+	} catch (err) {
+		logger.warn("daemon", "Browser event bridge init failed (non-fatal)", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
 
 	// Start HTTP server
 	serve(
