@@ -1,0 +1,232 @@
+<script lang="ts">
+	import { onMount } from "svelte";
+	import {
+		os,
+		fetchTrayEntries,
+		getTrayApps,
+		getGridApps,
+		getDockApps,
+		moveToGrid,
+		loadGroups,
+		type GridPosition,
+	} from "$lib/stores/os.svelte";
+	import WidgetGrid from "$lib/components/os/WidgetGrid.svelte";
+	import AppDock from "$lib/components/os/AppDock.svelte";
+	import SidebarGroups from "$lib/components/os/SidebarGroups.svelte";
+	import MenuBar from "$lib/components/os/MenuBar.svelte";
+	import BrowserPanel from "$lib/components/os/BrowserPanel.svelte";
+	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+	import Monitor from "@lucide/svelte/icons/monitor";
+
+	const GRID_COLS = 12;
+
+	/** Find the first free grid position that can fit a widget of the given size. */
+	function findFreeGridPosition(
+		occupied: Array<{ x: number; y: number; w: number; h: number }>,
+		size: { w: number; h: number },
+	): GridPosition {
+		const collides = (x: number, y: number, w: number, h: number): boolean => {
+			for (const o of occupied) {
+				if (x < o.x + o.w && x + w > o.x && y < o.y + o.h && y + h > o.y) return true;
+			}
+			return false;
+		};
+		for (let y = 0; y < 50; y++) {
+			for (let x = 0; x <= GRID_COLS - size.w; x++) {
+				if (!collides(x, y, size.w, size.h)) {
+					return { x, y, w: size.w, h: size.h };
+				}
+			}
+		}
+		const maxY = occupied.reduce((max, o) => Math.max(max, o.y + o.h), 0);
+		return { x: 0, y: maxY, w: size.w, h: size.h };
+	}
+
+	const trayApps = $derived(getTrayApps());
+	const gridApps = $derived(getGridApps());
+	const dockApps = $derived(getDockApps());
+
+	// Browser panel toggle (collapsed by default)
+	let showBrowserPanel = $state(false);
+
+	onMount(() => {
+		fetchTrayEntries();
+		loadGroups();
+	});
+
+	async function handleDragToBoard(id: string): Promise<void> {
+		const entry = os.entries.find((a) => a.id === id);
+		if (!entry) return;
+		const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
+
+		// Compute a free grid position to avoid overlapping at (0,0)
+		const occupied = gridApps
+			.filter((a) => a.id !== id && a.gridPosition)
+			.map((a) => a.gridPosition!);
+		const pos = findFreeGridPosition(occupied, size);
+
+		await moveToGrid(id, pos);
+	}
+
+	function handleGridDrop(appId: string, x: number, y: number): void {
+		const entry = os.entries.find((a) => a.id === appId);
+		if (!entry) return;
+		const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
+		moveToGrid(appId, { x, y, ...size });
+	}
+
+	/** Resolve the default widget size for a given appId (for WidgetGrid collision detection) */
+	function resolveDefaultSize(appId: string): { w: number; h: number } {
+		const entry = os.entries.find((a) => a.id === appId);
+		return entry?.manifest?.defaultSize ?? { w: 4, h: 3 };
+	}
+</script>
+
+<div class="os-tab">
+	<!-- Sidebar groups panel (left) -->
+	<div class="os-sidebar">
+		<SidebarGroups />
+	</div>
+
+	<!-- Main content area -->
+	<div class="os-main">
+		<!-- Menu bar (from MCP menuItems) -->
+		<MenuBar />
+
+		<!-- Top bar -->
+		<div class="os-topbar">
+			<div class="os-topbar-left">
+				<span class="sig-heading">Signet OS</span>
+				<span class="sig-eyebrow">{os.entries.length} apps</span>
+			</div>
+			<div class="os-topbar-right">
+				<button
+					class="sig-switch os-browser-toggle"
+					class:os-browser-toggle--active={showBrowserPanel}
+					title={showBrowserPanel ? "Hide browser panel" : "Show browser panel"}
+					onclick={() => showBrowserPanel = !showBrowserPanel}
+				>
+					<Monitor class="size-3.5" />
+				</button>
+				<button
+					class="sig-switch os-refresh-btn"
+					title="Refresh app tray"
+					onclick={() => fetchTrayEntries()}
+					disabled={os.loading}
+				>
+					<RefreshCw class="size-3.5 {os.loading ? 'animate-spin' : ''}" />
+				</button>
+			</div>
+		</div>
+
+		{#if os.error}
+			<div class="os-error">
+				<span class="sig-label text-[var(--sig-danger)]">{os.error}</span>
+			</div>
+		{/if}
+
+		<!-- Browser panel (collapsible) -->
+		{#if showBrowserPanel}
+			<div class="os-browser-panel-wrapper">
+				<BrowserPanel />
+			</div>
+		{/if}
+
+		<!-- Widget grid -->
+		<WidgetGrid apps={gridApps} ongriddrop={handleGridDrop} {resolveDefaultSize} />
+
+		<!-- Bottom dock / tray -->
+		<AppDock
+			{trayApps}
+			{dockApps}
+			ondragtoboard={handleDragToBoard}
+		/>
+	</div>
+</div>
+
+<style>
+	.os-tab {
+		display: flex;
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.os-sidebar {
+		width: 180px;
+		min-width: 180px;
+		border-right: 1px solid var(--sig-border);
+		background: var(--sig-surface);
+		overflow-y: auto;
+		padding-top: var(--space-sm);
+	}
+
+	.os-main {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
+	}
+
+	.os-topbar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 8px var(--space-md);
+		border-bottom: 1px solid var(--sig-border);
+		background: var(--sig-surface);
+	}
+
+	.os-topbar-left {
+		display: flex;
+		align-items: center;
+		gap: var(--space-sm);
+	}
+
+	.os-topbar-right {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.os-refresh-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		padding: 0;
+	}
+
+	.os-browser-toggle {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		padding: 0;
+	}
+
+	.os-browser-toggle--active {
+		background: var(--sig-border-strong);
+		color: var(--sig-text-bright);
+	}
+
+	.os-browser-panel-wrapper {
+		padding: 8px var(--space-md) 0;
+		flex-shrink: 0;
+	}
+
+	.os-error {
+		padding: 6px var(--space-md);
+		background: rgba(138, 74, 72, 0.1);
+		border-bottom: 1px solid var(--sig-danger);
+	}
+
+	@media (max-width: 768px) {
+		.os-sidebar {
+			display: none;
+		}
+	}
+</style>

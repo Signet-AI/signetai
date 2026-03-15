@@ -13,6 +13,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
 import { getSecret } from "../secrets.js";
+import { probeServer, storeProbeResult, removeProbeResult } from "../mcp-probe.js";
 
 const CATALOG_PAGE_SIZE = 30;
 const CATALOG_MAX_PAGES = 10;
@@ -742,6 +743,8 @@ function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | n
 	};
 }
 
+/** NOTE: marketplace-helpers.ts has a public copy of this function to avoid circular imports.
+ *  If you change the path or format here, update marketplace-helpers.ts to match. */
 function readInstalledServers(): InstalledMarketplaceMcpServer[] {
 	const path = getInstalledMcpPath();
 	if (!existsSync(path)) return [];
@@ -1226,6 +1229,10 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			const next = installed.map((s) => (s.id === existing.id ? updated : s));
 			writeInstalledServers(next);
 			invalidateMarketplaceToolsCache();
+			// Fire-and-forget probe on install/update
+			void probeServer(updated).then(storeProbeResult).catch((err) => {
+				logger.warn("probe", `Post-install probe failed for ${updated.id}: ${err}`);
+			});
 			return c.json({ success: true, server: updated, updated: true });
 		}
 
@@ -1255,6 +1262,10 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		writeInstalledServers([...installed, server]);
 		invalidateMarketplaceToolsCache();
+		// Fire-and-forget probe on new install
+		void probeServer(server).then(storeProbeResult).catch((err) => {
+			logger.warn("probe", `Post-install probe failed for ${server.id}: ${err}`);
+		});
 		return c.json({ success: true, server, updated: false });
 	});
 
@@ -1295,6 +1306,10 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		writeInstalledServers([...installed, server]);
 		invalidateMarketplaceToolsCache();
+		// Fire-and-forget probe on manual register
+		void probeServer(server).then(storeProbeResult).catch((err) => {
+			logger.warn("probe", `Post-register probe failed for ${server.id}: ${err}`);
+		});
 		return c.json({ success: true, server });
 	});
 
@@ -1445,6 +1460,8 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		}
 		writeInstalledServers(installed.filter((s) => s.id !== id));
 		invalidateMarketplaceToolsCache();
+		// Clean up probe result and app tray entry on uninstall
+		removeProbeResult(id);
 		return c.json({ success: true, id });
 	});
 }

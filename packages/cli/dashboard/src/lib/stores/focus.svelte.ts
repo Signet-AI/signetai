@@ -11,6 +11,7 @@ export type FocusZone = "sidebar-menu" | "sidebar-footer" | "page-content";
 
 export type SidebarFocusItem =
 	| "home"
+	| "os"
 	| "memory-group"
 	| "secrets"
 	| "skills"
@@ -24,6 +25,7 @@ export type SidebarFocusItem =
  */
 export const SIDEBAR_ORDER: readonly SidebarFocusItem[] = [
 	"home",
+	"os",
 	"memory-group",
 	"secrets",
 	"skills",
@@ -50,6 +52,7 @@ function tabToSidebarItem(tab: string): SidebarFocusItem {
 		case "knowledge":
 			return "memory-group";
 		case "home":
+		case "os":
 		case "secrets":
 		case "skills":
 		case "tasks":
@@ -87,6 +90,7 @@ function sidebarItemToTab(item: SidebarFocusItem): TabId | null {
 		case "github-link":
 			return null;
 		case "home":
+		case "os":
 		case "secrets":
 		case "skills":
 		case "tasks":
