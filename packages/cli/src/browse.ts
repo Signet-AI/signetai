@@ -48,8 +48,14 @@ interface BrowserNavigatePayload {
 	timestamp: number;
 }
 
+interface BrowserFormField {
+	name: string;
+	type: string;
+	label?: string;
+}
+
 interface BrowserFormPayload {
-	fields: string[];
+	fields: BrowserFormField[];
 	action: string;
 	tabId: string;
 	timestamp: number;
@@ -101,6 +107,20 @@ function makeEventId(): string {
 	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// ── Event Transport Abstraction ─────────────────────────────────────────────
+// Default: stdout. Phase 3 (event bus) swaps this to EventEmitter/Redis
+// without touching any of the emit callsites.
+type EventTransport = (event: SignetOSEvent) => void;
+
+let activeTransport: EventTransport = (event) => {
+	process.stdout.write(JSON.stringify(event) + "\n");
+};
+
+/** Replace the default stdout transport (Phase 3 hook point) */
+export function setEventTransport(transport: EventTransport): void {
+	activeTransport = transport;
+}
+
 function emitEvent(type: string, payload: BrowserEventPayload) {
 	const event: SignetOSEvent = {
 		id: makeEventId(),
@@ -109,7 +129,7 @@ function emitEvent(type: string, payload: BrowserEventPayload) {
 		timestamp: Date.now(),
 		payload,
 	};
-	process.stdout.write(JSON.stringify(event) + "\n");
+	activeTransport(event);
 }
 
 // ============================================================================
@@ -126,13 +146,23 @@ class CDPClient {
 	private eventListeners = new Map<string, EventListener[]>();
 	private connectResolve: (() => void) | null = null;
 	private connectReject: ((e: Error) => void) | null = null;
+	private closed = false;
+	private reconnectAttempts = 0;
+	private maxReconnectAttempts = 5;
+	private onReconnect: (() => Promise<void>) | null = null;
 
 	constructor(private wsUrl: string) {}
+
+	/** Set a callback to re-enable CDP domains after reconnect */
+	setOnReconnect(cb: () => Promise<void>): void {
+		this.onReconnect = cb;
+	}
 
 	connect(): Promise<void> {
 		return new Promise((resolve, reject) => {
 			this.connectResolve = resolve;
 			this.connectReject = reject;
+			this.closed = false;
 
 			// WebSocket is available natively in Bun and Node.js ≥ 21.
 			// The build target is Node ≥ 18, but the runtime (bun/node 22) supports it.
@@ -151,6 +181,7 @@ class CDPClient {
 			this.ws = new WS(this.wsUrl) as WebSocket;
 
 			this.ws.onopen = () => {
+				this.reconnectAttempts = 0; // Reset on successful connect
 				this.connectResolve?.();
 				this.connectResolve = null;
 				this.connectReject = null;
@@ -176,6 +207,30 @@ class CDPClient {
 					rej(err);
 				}
 				this.pendingCommands.clear();
+
+				// Attempt reconnect with exponential backoff (unless intentionally closed)
+				if (!this.closed && this.reconnectAttempts < this.maxReconnectAttempts) {
+					this.reconnectAttempts++;
+					const delayMs = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 16000);
+					console.error(
+						chalk.yellow(
+							`  CDP connection lost. Reconnecting in ${delayMs}ms ` +
+								`(attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`,
+						),
+					);
+					setTimeout(async () => {
+						try {
+							await this.connect();
+							console.error(chalk.green("  ✓ CDP reconnected."));
+							// Re-enable CDP domains after reconnect
+							if (this.onReconnect) {
+								await this.onReconnect();
+							}
+						} catch {
+							console.error(chalk.red("  CDP reconnect failed."));
+						}
+					}, delayMs);
+				}
 			};
 
 			this.ws.onmessage = (evt: MessageEvent) => {
@@ -242,8 +297,13 @@ class CDPClient {
 	}
 
 	close(): void {
+		this.closed = true;
 		this.ws?.close();
 		this.ws = null;
+	}
+
+	get isConnected(): boolean {
+		return this.ws !== null && this.ws.readyState === 1;
 	}
 }
 
@@ -579,16 +639,37 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 			client.send("Runtime.enable").catch(() => {}),
 		]);
 
+		// Set up reconnect handler to re-enable domains after WebSocket recovery
+		client.setOnReconnect(async () => {
+			await Promise.all([
+				client.send("Page.enable").catch(() => {}),
+				client.send("DOM.enable").catch(() => {}),
+				client.send("Runtime.enable").catch(() => {}),
+			]);
+		});
+
 		// ── browser.navigate ────────────────────────────────────────────────
-		client.on("Page.frameNavigated", (params) => {
+		client.on("Page.frameNavigated", async (params) => {
 			const frame = params.frame as Record<string, unknown> | undefined;
 			if (!frame || frame.parentId) return; // Only top-level frame
 
 			const url = (frame.url as string) ?? "";
-			const title = (frame.name as string) ?? "";
 			const state = tabState.get(tabId);
 			if (state) {
 				state.url = url;
+			}
+
+			// Resolve title via Runtime.evaluate — frame.name is almost always empty
+			let title = "";
+			try {
+				const { result: titleResult } = (await client.send("Runtime.evaluate", {
+					expression: "document.title",
+					returnByValue: true,
+				})) as { result: { value: string } };
+				title = titleResult?.value ?? "";
+				if (state) state.title = title;
+			} catch {
+				// Page might not be ready yet — title will be updated on loadEventFired
 			}
 
 			emitEvent("browser.navigate", {
@@ -613,22 +694,36 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 					state.title = titleResult.value;
 				}
 
-				// Detect forms
+				// Detect forms — emit rich field objects per spec
 				const { result: formsResult } = (await client.send("Runtime.evaluate", {
 					expression: `(() => {
 						const forms = [];
 						document.querySelectorAll("form").forEach(form => {
 							const fields = [];
 							form.querySelectorAll("input,select,textarea").forEach(inp => {
-								const label = inp.getAttribute("placeholder") || inp.getAttribute("aria-label") || inp.getAttribute("name") || inp.getAttribute("id") || "unknown";
-								fields.push(label);
+								const name = inp.getAttribute("name") || inp.getAttribute("id") || "unknown";
+								const type = inp.tagName.toLowerCase() === "select" ? "select"
+									: inp.tagName.toLowerCase() === "textarea" ? "textarea"
+									: (inp.getAttribute("type") || "text");
+								const label = inp.getAttribute("aria-label")
+									|| inp.getAttribute("placeholder")
+									|| (() => {
+										const id = inp.getAttribute("id");
+										if (id) {
+											const lbl = document.querySelector("label[for='" + id + "']");
+											if (lbl) return lbl.textContent?.trim();
+										}
+										return undefined;
+									})()
+									|| undefined;
+								fields.push({ name, type, ...(label ? { label } : {}) });
 							});
 							if (fields.length > 0) forms.push({ fields, action: form.action || location.href });
 						});
 						return forms;
 					})()`,
 					returnByValue: true,
-				})) as { result: { value: Array<{ fields: string[]; action: string }> } };
+				})) as { result: { value: Array<{ fields: BrowserFormField[]; action: string }> } };
 
 				const forms = formsResult?.value ?? [];
 				for (const form of forms) {
@@ -730,9 +825,101 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 	);
 	console.error(chalk.dim("  Press Ctrl+C to stop.\n"));
 
+	// Track which tab IDs we've already attached to
+	const attachedTabIds = new Set(pageTabs.map((t) => t.id));
+
+	// Poll for new tabs every 5 seconds
+	const TAB_POLL_INTERVAL_MS = 5000;
+	const tabPollTimer = setInterval(async () => {
+		try {
+			const currentTabs = await getCDPTabs(opts.port);
+			const newPageTabs = currentTabs.filter(
+				(t) => t.type === "page" && t.webSocketDebuggerUrl && !attachedTabIds.has(t.id),
+			);
+
+			for (const tab of newPageTabs) {
+				if (!tab.webSocketDebuggerUrl) continue;
+				try {
+					const client = await connectToTab(tab);
+					clients.push(client);
+					attachedTabIds.add(tab.id);
+
+					const tabId = tab.id;
+					tabState.set(tabId, {
+						lastDomChangeAt: 0,
+						lastBodyText: "",
+						title: tab.title,
+						url: tab.url,
+					});
+
+					// Enable domains on the new tab
+					await Promise.all([
+						client.send("Page.enable").catch(() => {}),
+						client.send("DOM.enable").catch(() => {}),
+						client.send("Runtime.enable").catch(() => {}),
+					]);
+
+					// Set up reconnect handler
+					client.setOnReconnect(async () => {
+						await Promise.all([
+							client.send("Page.enable").catch(() => {}),
+							client.send("DOM.enable").catch(() => {}),
+							client.send("Runtime.enable").catch(() => {}),
+						]);
+					});
+
+					// Wire up the same event handlers as initial tabs
+					client.on("Page.frameNavigated", async (params) => {
+						const frame = params.frame as Record<string, unknown> | undefined;
+						if (!frame || frame.parentId) return;
+						const url = (frame.url as string) ?? "";
+						const state = tabState.get(tabId);
+						if (state) state.url = url;
+						let title = "";
+						try {
+							const { result: titleResult } = (await client.send("Runtime.evaluate", {
+								expression: "document.title",
+								returnByValue: true,
+							})) as { result: { value: string } };
+							title = titleResult?.value ?? "";
+							if (state) state.title = title;
+						} catch {}
+						emitEvent("browser.navigate", { url, title, tabId, timestamp: Date.now() });
+					});
+
+					client.on("DOM.documentUpdated", async () => {
+						const state = tabState.get(tabId);
+						if (!state) return;
+						const now = Date.now();
+						if (now - state.lastDomChangeAt < DOM_CHANGE_THROTTLE_MS) return;
+						try {
+							const { result: bodyResult } = (await client.send("Runtime.evaluate", {
+								expression: "document.body?.innerText?.slice(0, 5000) ?? ''",
+								returnByValue: true,
+							})) as { result: { value: string } };
+							const newBody = bodyResult?.value ?? "";
+							const diff = simpleTextDiff(state.lastBodyText, newBody);
+							if (!diff) return;
+							state.lastBodyText = newBody;
+							state.lastDomChangeAt = now;
+							emitEvent("browser.dom.change", { diff, tabId, timestamp: now });
+						} catch {}
+					});
+
+					console.error(chalk.green(`  ✓ New tab attached: "${tab.title}" (${tab.id})`));
+				} catch {
+					// Failed to attach to new tab — skip, retry next poll
+				}
+			}
+		} catch {
+			// Tab poll failed — Chrome might be busy, retry next interval
+		}
+	}, TAB_POLL_INTERVAL_MS);
+
 	// Keep process alive until SIGINT
 	await new Promise<void>((resolve) => {
 		process.on("SIGINT", () => {
+			clearInterval(tabPollTimer);
 			for (const c of clients) {
 				try {
 					c.close();
