@@ -247,4 +247,8 @@ export type {
 	McpProbeResult,
 	AppTrayState,
 	AppTrayEntry,
+	SignetOSEvent,
+	BrowserEventType,
+	EventBusSubscription,
+	ContextSnapshot,
 } from "./signet-os-types";

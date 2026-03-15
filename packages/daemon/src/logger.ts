@@ -49,7 +49,9 @@ export type LogCategory =
 	| "summary-condensation" // Session summary DAG condensation
 	| "system" // System events
 	| "update" // Auto-update cycle
-	| "probe"; // MCP server auto-probe (Signet OS)
+	| "probe" // MCP server auto-probe (Signet OS)
+	| "event-bus" // Signet OS event bus
+	| "event-bridge"; // Browser-to-event-bus bridge
 
 export interface LogEntry {
 	timestamp: string;
