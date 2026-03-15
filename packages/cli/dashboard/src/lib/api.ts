@@ -2486,4 +2486,45 @@ export async function getModelsByProvider(): Promise<Record<string, ModelRegistr
 	}
 }
 
+// ============================================================================
+// Signet OS Install API (Phase 7)
+// ============================================================================
+
+export interface InstallMcpOptions {
+	url: string;
+	name?: string;
+	autoPlace?: boolean;
+}
+
+export interface InstallMcpResult {
+	ok: boolean;
+	widgetId: string;
+	manifest: {
+		name: string;
+		icon?: string;
+		ui?: string;
+		defaultSize?: { w: number; h: number };
+		dock?: boolean;
+	} | null;
+	error?: string;
+}
+
+export async function installMcp(options: InstallMcpOptions): Promise<InstallMcpResult> {
+	try {
+		const response = await fetch(`${API_BASE}/api/os/install`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(options),
+		});
+		return await response.json();
+	} catch (e) {
+		return {
+			ok: false,
+			widgetId: "",
+			manifest: null,
+			error: e instanceof Error ? e.message : String(e),
+		};
+	}
+}
+
 
