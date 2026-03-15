@@ -104,6 +104,10 @@ export const sk = $state({
 	uninstalling: null as string | null,
 });
 
+/** Catalog indexed by name — shared across all SkillCard instances. */
+const catalogByName = $derived(new Map(sk.catalog.map((c) => [c.name, c])));
+export function getCatalogByName(): Map<string, SkillSearchResult> { return catalogByName; }
+
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
 function sortItems(items: readonly SkillSearchResult[], sortBy: SortBy): SkillSearchResult[] {

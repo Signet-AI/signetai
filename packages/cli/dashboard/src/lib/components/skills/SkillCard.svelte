@@ -1,7 +1,9 @@
 <script lang="ts">
 import type { Skill, SkillSearchResult } from "$lib/api";
+import { getMonogram, getMonogramBg, getHueRotate } from "$lib/card-utils";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
+import { getCatalogByName } from "$lib/stores/skills.svelte";
 
 type Props = {
 	item: Skill | SkillSearchResult;
@@ -48,32 +50,25 @@ function formatStat(n: number | undefined): string {
 	return String(n);
 }
 
-const MONOGRAM_COLORS = [
-	"var(--sig-icon-bg-1)",
-	"var(--sig-icon-bg-2)",
-	"var(--sig-icon-bg-3)",
-	"var(--sig-icon-bg-4)",
-	"var(--sig-icon-bg-5)",
-	"var(--sig-icon-bg-6)",
-];
-
-function getMonogramBg(name: string): string {
-	let hash = 0;
-	for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) & 0xffff;
-	return MONOGRAM_COLORS[Math.abs(hash) % MONOGRAM_COLORS.length] ?? MONOGRAM_COLORS[0];
-}
-
-function getMonogram(name: string): string {
-	// Split on hyphens, underscores, dots, spaces
-	const parts = name.split(/[-_.\s]+/).filter(Boolean);
-	if (parts.length >= 2) {
-		return (parts[0][0] + parts[1][0]).toUpperCase();
-	}
-	return name.slice(0, 2).toUpperCase();
-}
 
 let monogram = $derived(getMonogram(item.name));
 let monogramBg = $derived(getMonogramBg(item.name));
+
+function getSkillAvatarUrl(): string | null {
+	let maintainer: string | undefined;
+	if (isSearchResult(item)) {
+		maintainer = item.maintainer;
+	} else {
+		maintainer = getCatalogByName().get(item.name)?.maintainer;
+	}
+	if (maintainer) return `https://github.com/${maintainer.split("/")[0]}.png?size=40`;
+	return null;
+}
+
+let hueRotate = $derived(getHueRotate(item.name));
+let avatarUrl = $derived(getSkillAvatarUrl());
+let avatarFailed = $state(false);
+$effect(() => { avatarUrl; avatarFailed = false; });
 
 let isInstalled = $derived(
 	isSkill(item) ? true : isSearchResult(item) ? item.installed : false
@@ -91,9 +86,19 @@ let isInstalled = $derived(
 			<div
 				class="monogram"
 				class:monogram-featured={featured}
-				style="background: {monogramBg};"
+				style="background: {avatarUrl && !avatarFailed ? 'transparent' : monogramBg};"
 			>
-				{monogram}
+				{#if avatarUrl && !avatarFailed}
+					<img
+						src={avatarUrl}
+						alt={item.name}
+						class="monogram-avatar"
+						style="filter: hue-rotate({hueRotate}deg);"
+						onerror={() => { avatarFailed = true; }}
+					/>
+				{:else}
+					{monogram}
+				{/if}
 			</div>
 			<div class="card-header-content">
 				<div class="card-header">
@@ -179,7 +184,7 @@ let isInstalled = $derived(
 			{/if}
 		</div>
 
-		<!-- Action button (browse only) -->
+		<!-- Action buttons -->
 		{#if mode === "browse" && isSearchResult(item)}
 			<div class="card-action">
 				<div class="action-row">
@@ -206,31 +211,32 @@ let isInstalled = $derived(
 				{/if}
 				</div>
 			</div>
+		{:else if mode === "installed" && isSkill(item) && !item.builtin}
+			<div class="card-action">
+				<div class="action-row">
+					<Button
+						variant="outline"
+						size="sm"
+						class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
+						onclick={(e: MouseEvent) => { e.stopPropagation(); onuninstall?.(); }}
+						disabled={uninstalling}
+					>
+						{uninstalling ? "..." : "REMOVE"}
+					</Button>
+				</div>
+			</div>
 		{/if}
 	</button>
 
-	<!-- Hover-reveal remove for installed tab -->
-	{#if mode === "installed" && isSkill(item) && !item.builtin}
-		<button
-			type="button"
-			class="remove-corner"
-			onclick={(e) => { e.stopPropagation(); onuninstall?.(); }}
-			disabled={uninstalling}
-			title="Uninstall"
-		>
-			{uninstalling ? "·" : "×"}
-		</button>
-	{/if}
 </div>
 
 <style>
 	.card-wrap {
 		position: relative;
-		display: block;
+		display: flex;
+		flex-direction: column;
 		width: 100%;
-	}
-	.card-wrap:hover .remove-corner {
-		opacity: 1;
+		height: 100%;
 	}
 
 	.card {
@@ -246,6 +252,7 @@ let isInstalled = $derived(
 		text-align: left;
 		min-height: 0;
 		width: 100%;
+		flex: 1;
 	}
 
 	.card:hover {
@@ -263,6 +270,7 @@ let isInstalled = $derived(
 		display: flex;
 		gap: 6px;
 		width: 100%;
+		margin-top: auto;
 	}
 	.card-wrap.selected > .card {
 		border-color: var(--sig-highlight);
@@ -273,32 +281,6 @@ let isInstalled = $derived(
 		min-height: 0;
 	}
 
-	.remove-corner {
-		position: absolute;
-		top: 6px;
-		right: 6px;
-		width: 20px;
-		height: 20px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		font-family: var(--font-mono);
-		font-size: 14px;
-		line-height: 1;
-		color: var(--sig-text-muted);
-		background: transparent;
-		border: none;
-		cursor: pointer;
-		opacity: 0;
-		transition: opacity 0.1s, color 0.1s;
-		padding: 0;
-	}
-	.remove-corner:hover {
-		color: var(--sig-danger);
-	}
-	.remove-corner:disabled {
-		cursor: default;
-	}
 
 	.card-top {
 		display: flex;
@@ -323,6 +305,13 @@ let isInstalled = $derived(
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 		user-select: none;
+		overflow: hidden;
+	}
+
+	.monogram-avatar {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
 	}
 	.monogram.monogram-featured {
 		width: 24px;
@@ -388,8 +377,7 @@ let isInstalled = $derived(
 		color: var(--sig-text-muted);
 		line-height: 1.5;
 		margin: 0;
-		flex: 1;
-		line-clamp: 2;
+		min-height: calc(9px * 1.5 * 2);
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
 		-webkit-box-orient: vertical;
@@ -401,6 +389,7 @@ let isInstalled = $derived(
 		align-items: center;
 		gap: 8px;
 		flex-wrap: wrap;
+		min-height: 18px;
 	}
 
 	.stat {

@@ -1,8 +1,10 @@
 <script lang="ts">
+import { SvelteSet } from "svelte/reactivity";
 import {
 	type MarketplaceMcpCatalogEntry,
 	type MarketplaceMcpServer,
 } from "$lib/api";
+import { getMonogram, getMonogramBg, getHueRotate, getAvatarUrl, getAvatarFromSource } from "$lib/card-utils";
 import McpDetailSheet from "$lib/components/marketplace/McpDetailSheet.svelte";
 import McpInstallSheet from "$lib/components/marketplace/McpInstallSheet.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -55,6 +57,15 @@ interface McpDetailItem {
 
 const filteredCatalog = $derived(getFilteredMarketplaceMcpCatalog());
 const sourceOptions = $derived(getMarketplaceMcpSourceOptions());
+
+const MCP_PAGE_SIZE = 60;
+let visibleCount = $state(MCP_PAGE_SIZE);
+// Reset pagination and avatar errors when filters or installed list change
+$effect(() => { filteredCatalog; visibleCount = MCP_PAGE_SIZE; catalogAvatarErrors.clear(); });
+$effect(() => { mcpMarket.installed; installedAvatarErrors.clear(); });
+const visibleCatalog = $derived(filteredCatalog.slice(0, visibleCount));
+const hasMore = $derived(visibleCount < filteredCatalog.length);
+const remaining = $derived(filteredCatalog.length - visibleCount);
 const installedCatalogIds = $derived(
 	new Set(mcpMarket.installed.flatMap((s) => (s.catalogId ? [`${s.source}:${s.catalogId}`] : []))),
 );
@@ -85,15 +96,6 @@ const displayMode = $derived<"installed" | "browse">(
 	view === "installed" && !mcpMarket.query.trim() ? "installed" : "browse",
 );
 
-const MONOGRAM_COLORS = [
-	"var(--sig-icon-bg-1)",
-	"var(--sig-icon-bg-2)",
-	"var(--sig-icon-bg-3)",
-	"var(--sig-icon-bg-4)",
-	"var(--sig-icon-bg-5)",
-	"var(--sig-icon-bg-6)",
-] as const;
-
 onMount(() => {
 	fetchMarketplaceMcpInstalled();
 	fetchMarketplaceMcpCatalog(5);
@@ -101,12 +103,9 @@ onMount(() => {
 });
 
 function formatSourceLabel(source: string): string {
-	if (source === "modelcontextprotocol/servers") {
-		return "MCP GitHub";
-	}
-	if (source === "mcpservers.org") {
-		return "MCP Registry";
-	}
+	if (source === "modelcontextprotocol/servers") return "MCP GitHub";
+	if (source === "mcpservers.org") return "MCP Registry";
+	if (source === "github") return "GitHub";
 	return source;
 }
 
@@ -118,7 +117,7 @@ function parseSort(value: string): McpCatalogSort {
 }
 
 function parseSource(value: string): McpCatalogSourceFilter {
-	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers") {
+	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers" || value === "github") {
 		return value;
 	}
 	return "all";
@@ -132,21 +131,8 @@ function parseView(value: string): "browse" | "installed" {
 	return value === "installed" ? "installed" : "browse";
 }
 
-function getMonogram(name: string): string {
-	const parts = name.split(/[-_.\s]+/).filter(Boolean);
-	if (parts.length >= 2) {
-		return `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}`.toUpperCase();
-	}
-	return name.slice(0, 2).toUpperCase();
-}
-
-function getMonogramBg(name: string): string {
-	let hash = 0;
-	for (const ch of name) {
-		hash = (hash * 31 + ch.charCodeAt(0)) & 0xffff;
-	}
-	return MONOGRAM_COLORS[Math.abs(hash) % MONOGRAM_COLORS.length] ?? MONOGRAM_COLORS[0];
-}
+const installedAvatarErrors = new SvelteSet<string>();
+const catalogAvatarErrors = new SvelteSet<string>();
 
 function openInstallSheet(entry: MarketplaceMcpCatalogEntry): void {
 	selectedCatalogEntry = entry;
@@ -316,6 +302,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 			{:else}
 				<div class="catalog-grid">
 					{#each mcpMarket.installed as server (server.id)}
+						{@const sAvatar = getAvatarFromSource(server.source, server.catalogId)}
 						<div
 							class="catalog-card"
 							role="button"
@@ -324,8 +311,12 @@ async function removeFromDetail(serverId: string): Promise<void> {
 							onkeydown={(event) => onInstalledCardKeydown(event, server)}
 						>
 							<div class="catalog-top">
-								<div class="mcp-icon" style={`background: ${getMonogramBg(server.name)};`}>
-									{getMonogram(server.name)}
+								<div class="mcp-icon" style={`background: ${sAvatar && !installedAvatarErrors.has(server.id) ? 'transparent' : getMonogramBg(server.name)};`}>
+									{#if sAvatar && !installedAvatarErrors.has(server.id)}
+										<img src={sAvatar} alt={server.name} class="mcp-avatar" style="filter: hue-rotate({getHueRotate(server.name)}deg);" onerror={() => { installedAvatarErrors.add(server.id); }} />
+									{:else}
+										{getMonogram(server.name)}
+									{/if}
 								</div>
 								<div class="catalog-name">{server.name}</div>
 							</div>
@@ -373,7 +364,8 @@ async function removeFromDetail(serverId: string): Promise<void> {
 			</div>
 		{:else}
 			<div class="catalog-grid">
-				{#each filteredCatalog as entry (entry.id)}
+				{#each visibleCatalog as entry (entry.id)}
+					{@const avatar = getAvatarUrl(entry.sourceUrl)}
 					<div
 						class="catalog-card"
 						role="button"
@@ -382,8 +374,12 @@ async function removeFromDetail(serverId: string): Promise<void> {
 						onkeydown={(event) => onCatalogCardKeydown(event, entry)}
 					>
 						<div class="catalog-top">
-							<div class="mcp-icon" style={`background: ${getMonogramBg(entry.name)};`}>
-								{getMonogram(entry.name)}
+							<div class="mcp-icon" style={`background: ${avatar && !catalogAvatarErrors.has(entry.id) ? 'transparent' : getMonogramBg(entry.name)};`}>
+								{#if avatar && !catalogAvatarErrors.has(entry.id)}
+									<img src={avatar} alt={entry.name} class="mcp-avatar" style="filter: hue-rotate({getHueRotate(entry.name)}deg);" onerror={() => { catalogAvatarErrors.add(entry.id); }} />
+								{:else}
+									{getMonogram(entry.name)}
+								{/if}
 							</div>
 							<div class="catalog-name">{entry.name}</div>
 						</div>
@@ -431,6 +427,15 @@ async function removeFromDetail(serverId: string): Promise<void> {
 					</div>
 				{/each}
 			</div>
+			{#if hasMore}
+				<button
+					type="button"
+					class="show-more"
+					onclick={() => (visibleCount += MCP_PAGE_SIZE)}
+				>
+					Show more ({remaining} remaining)
+				</button>
+			{/if}
 		{/if}
 	</div>
 </div>
@@ -618,34 +623,28 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	.catalog-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-		gap: 8px;
-		padding: var(--space-md);
-		border: 1px solid var(--sig-border-strong);
-		border-radius: 8px;
-		background: var(--sig-surface);
+		gap: var(--space-sm);
+		background: transparent;
 	}
 
 	.catalog-card {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
-		padding: 9px;
+		gap: 6px;
+		padding: var(--space-sm);
 		border: 1px solid var(--sig-border);
-		background:
-			radial-gradient(circle at 15% 120%, color-mix(in srgb, var(--sig-accent) 8%, transparent), transparent 45%),
-			linear-gradient(to right, color-mix(in srgb, var(--sig-surface-raised) 94%, black) 0%, var(--sig-surface) 65%);
+		background: var(--sig-surface);
+		border-radius: var(--radius);
 		cursor: pointer;
-		transition: border-color 0.15s, background 0.15s;
-		min-height: 140px;
+		transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+		min-height: 0;
 		width: 100%;
 		text-align: left;
 	}
 
 	.catalog-card:hover {
-		border-color: var(--sig-highlight);
-		background:
-			radial-gradient(circle at 15% 120%, color-mix(in srgb, var(--sig-accent) 11%, transparent), transparent 45%),
-			linear-gradient(to right, color-mix(in srgb, var(--sig-surface-raised) 91%, black) 0%, var(--sig-surface) 65%);
+		border-color: var(--sig-border-strong);
+		background: var(--sig-surface-raised);
 	}
 
 	.catalog-card:focus {
@@ -667,7 +666,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	.catalog-name {
 		font-family: var(--font-display);
 		font-size: 12px;
-		color: var(--sig-highlight);
+		color: var(--sig-text-bright);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 	}
@@ -686,6 +685,13 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		color: var(--sig-icon-fg);
 		text-transform: uppercase;
 		flex-shrink: 0;
+		overflow: hidden;
+	}
+
+	.mcp-avatar {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
 	}
 
 	.catalog-desc {
@@ -693,12 +699,10 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		font-size: 10px;
 		line-height: 1.45;
 		color: var(--sig-text-muted);
-		line-clamp: 4;
 		display: -webkit-box;
-		-webkit-line-clamp: 4;
+		-webkit-line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
-		min-height: 56px;
 	}
 
 	.catalog-meta {
@@ -733,6 +737,28 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		align-items: center;
 		gap: 6px;
 		margin-top: auto;
+	}
+
+	.show-more {
+		display: block;
+		width: 100%;
+		padding: var(--space-sm) var(--space-md);
+		background: transparent;
+		border: 1px dashed var(--sig-border);
+		border-radius: 6px;
+		color: var(--sig-text-muted);
+		font-family: var(--font-mono);
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		cursor: pointer;
+		transition: border-color 0.15s, color 0.15s;
+		margin-top: var(--space-sm);
+	}
+
+	.show-more:hover {
+		border-color: var(--sig-accent);
+		color: var(--sig-text-bright);
 	}
 
 	.catalog-link {

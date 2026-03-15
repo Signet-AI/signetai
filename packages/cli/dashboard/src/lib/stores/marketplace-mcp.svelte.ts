@@ -14,7 +14,7 @@ import {
 import { toast } from "$lib/stores/toast.svelte";
 
 export type McpCatalogSort = "popularity" | "name" | "official";
-export type McpCatalogSourceFilter = "all" | "mcpservers.org" | "modelcontextprotocol/servers";
+export type McpCatalogSourceFilter = "all" | "mcpservers.org" | "modelcontextprotocol/servers" | "github";
 export type McpMarketView = "browse" | "installed";
 
 export const mcpMarket = $state({
@@ -99,7 +99,7 @@ export function getMarketplaceMcpCategoryOptions(): string[] {
 }
 
 export function getMarketplaceMcpSourceOptions(): McpCatalogSourceFilter[] {
-	return ["all", "mcpservers.org", "modelcontextprotocol/servers"];
+	return ["all", "mcpservers.org", "modelcontextprotocol/servers", "github"];
 }
 
 export function getFilteredMarketplaceMcpCatalog(): MarketplaceMcpCatalogEntry[] {

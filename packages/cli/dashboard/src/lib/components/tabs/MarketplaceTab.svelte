@@ -115,6 +115,7 @@ const activeSecondarySortLabel = $derived.by(() => {
 	}
 	if (mcpMarket.source === "mcpservers.org") return "MCP Registry";
 	if (mcpMarket.source === "modelcontextprotocol/servers") return "MCP GitHub";
+	if (mcpMarket.source === "github") return "GitHub";
 	return "All sources";
 });
 
@@ -164,7 +165,7 @@ function applySecondarySort(value: string): void {
 		sk.providerFilter = "all";
 		return;
 	}
-	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers") {
+	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers" || value === "github") {
 		mcpMarket.source = value;
 		return;
 	}
@@ -830,6 +831,7 @@ $effect(() => {
 									<Select.Item value="all" label="All sources" class="section-select-item" />
 									<Select.Item value="mcpservers.org" label="MCP Registry" class="section-select-item" />
 									<Select.Item value="modelcontextprotocol/servers" label="MCP GitHub" class="section-select-item" />
+									<Select.Item value="github" label="GitHub" class="section-select-item" />
 								{/if}
 							</Select.Content>
 						</Select.Root>
@@ -1115,6 +1117,7 @@ $effect(() => {
 		min-height: 0;
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) 250px;
+		grid-template-rows: 1fr auto;
 		gap: var(--space-sm);
 		padding: var(--space-sm);
 	}
@@ -1124,6 +1127,7 @@ $effect(() => {
 		flex-direction: column;
 		min-height: 0;
 		overflow: hidden;
+		flex: 1;
 	}
 
 	.module-head {
@@ -1362,25 +1366,47 @@ $effect(() => {
 		color: var(--sig-danger);
 	}
 
+	/* Fixed rail panels for tablet (768–1120px); sidebar is visible in this range */
 	@media (max-width: 1120px) {
 		.store-grid {
 			grid-template-columns: 1fr;
+			padding-bottom: 3.5rem;
 		}
 
 		.store-rail {
-			display: grid;
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-			gap: 8px;
+			display: contents;
 			max-width: none;
-			max-height: none;
 		}
 
-		:global(.rail-panel) {
+		.store-rail > :global(.rail-panel) {
+			position: fixed;
+			bottom: var(--space-sm);
+			z-index: 30;
+			width: calc((100% - var(--sidebar-width, 13rem) - 2rem) / 2);
+			max-width: none;
 			min-height: 0;
+			border-radius: var(--radius);
+		}
+
+		.store-rail > :global(.rail-panel:first-child) {
+			left: calc(var(--sidebar-width, 13rem) + 0.5rem);
+		}
+
+		.store-rail > :global(.rail-panel:last-child) {
+			right: 0.5rem;
 		}
 	}
 
-	@media (max-width: 1023px) {
+	/* Below 768px sidebar is hidden — override rail panel sizing */
+	@media (max-width: 767px) {
+		.store-rail > :global(.rail-panel) {
+			width: calc((100% - 1.5rem) / 2);
+		}
+
+		.store-rail > :global(.rail-panel:first-child) {
+			left: 0.5rem;
+		}
+
 		.tab-header {
 			flex-wrap: wrap;
 			gap: var(--space-sm);

@@ -20,7 +20,7 @@ const CATALOG_TTL_MS = 10 * 60 * 1000;
 const TOOLS_TTL_MS = 30 * 1000;
 
 export type MarketplaceMcpTransport = "stdio" | "http";
-export type MarketplaceMcpCatalogSource = "mcpservers.org" | "modelcontextprotocol/servers";
+export type MarketplaceMcpCatalogSource = "mcpservers.org" | "modelcontextprotocol/servers" | "github";
 export type MarketplaceMcpExposureMode = "compact" | "hybrid" | "expanded";
 
 export interface MarketplaceMcpScope {
@@ -426,7 +426,18 @@ function parseCatalogSelection(
 		};
 	}
 
+	if (rawId.startsWith("github:")) {
+		return {
+			source: "github",
+			catalogId: rawId.slice("github:".length),
+		};
+	}
+
 	if (rawSource === "modelcontextprotocol/servers") {
+		return { source: rawSource, catalogId: rawId };
+	}
+
+	if (rawSource === "github") {
 		return { source: rawSource, catalogId: rawId };
 	}
 
@@ -524,46 +535,85 @@ function parseCatalogMarkdown(markdown: string, page: number): ParsedCatalogPage
 	return { total, entries };
 }
 
+/**
+ * Parse the modelcontextprotocol/servers README into catalog entries.
+ * Extracts both official reference servers (src/ links) and third-party
+ * servers (external GitHub links). Non-GitHub third-party URLs are skipped.
+ */
 export function parseReferenceServersMarkdown(markdown: string): MarketplaceMcpCatalogEntry[] {
-	const sectionStart = markdown.indexOf("## 🌟 Reference Servers");
-	if (sectionStart < 0) return [];
+	const entries: MarketplaceMcpCatalogEntry[] = [];
+	// Shared across reference and third-party passes; IDs are namespaced
+	// ("modelcontextprotocol/servers:slug" vs "github:org/repo") so no collisions.
+	const seen = new Set<string>();
 
-	const after = markdown.slice(sectionStart);
-	const archivedIdx = after.indexOf("### Archived");
-	const nextHeadingIdx = after.indexOf("## ", 1);
-	let section = after;
-	if (archivedIdx >= 0) {
-		section = after.slice(0, archivedIdx);
-	} else if (nextHeadingIdx >= 0) {
-		section = after.slice(0, nextHeadingIdx);
+	// Parse reference servers (src/ links)
+	const refStart = markdown.indexOf("## 🌟 Reference Servers");
+	if (refStart >= 0) {
+		const refAfter = markdown.slice(refStart);
+		// Find earliest section boundary; empty filter → Math.min() → Infinity → use whole remainder
+		const boundaries = [refAfter.indexOf("### Archived"), refAfter.indexOf("## ", 1)].filter((i) => i > 0);
+		const refEnd = boundaries.length > 0 ? Math.min(...boundaries) : refAfter.length;
+		const refSection = refAfter.slice(0, refEnd);
+		const re = /^-\s+\*\*\[([^\]]+)\]\(src\/([^)]+)\)\*\*\s+-\s+(.+)$/gm;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(refSection)) !== null) {
+			const name = m[1].trim();
+			const path = m[2].trim();
+			const desc = m[3].trim();
+			const slug = path.split("/").at(-1) ?? path;
+			if (!name || !slug) continue;
+			const id = makeCatalogEntryId("modelcontextprotocol/servers", slug);
+			if (seen.has(id)) continue;
+			seen.add(id);
+			entries.push({
+				id,
+				source: "modelcontextprotocol/servers",
+				catalogId: slug,
+				name,
+				description: desc,
+				category: inferCategory(`${name} ${desc}`),
+				official: true,
+				sponsor: false,
+				popularityRank: entries.length + 1,
+				sourceUrl: `https://github.com/modelcontextprotocol/servers/tree/main/src/${path}`,
+			});
+		}
 	}
 
-	const entries: MarketplaceMcpCatalogEntry[] = [];
-	const re = /^-\s+\*\*\[([^\]]+)\]\(src\/([^)]+)\)\*\*\s+-\s+(.+)$/gm;
-	let m: RegExpExecArray | null;
-
-	while ((m = re.exec(section)) !== null) {
-		const name = m[1].trim();
-		const path = m[2].trim();
-		const description = m[3].trim();
-		if (!name || !path) continue;
-
-		const slug = path.split("/").at(-1) ?? path;
-		const catalogId = slug.trim();
-		if (!catalogId) continue;
-
-		entries.push({
-			id: makeCatalogEntryId("modelcontextprotocol/servers", catalogId),
-			source: "modelcontextprotocol/servers",
-			catalogId,
-			name,
-			description,
-			category: inferCategory(`${name} ${description}`),
-			official: true,
-			sponsor: false,
-			popularityRank: entries.length + 1,
-			sourceUrl: `https://github.com/modelcontextprotocol/servers/tree/main/src/${path}`,
-		});
+	// Parse third-party servers (external GitHub links)
+	const tpStart = markdown.indexOf("## 🤝 Third-Party Servers");
+	if (tpStart >= 0) {
+		const tpAfter = markdown.slice(tpStart);
+		const nextSection = tpAfter.indexOf("## ", 1);
+		const tpSection = nextSection > 0 ? tpAfter.slice(0, nextSection) : tpAfter;
+		const re = /^-\s+(?:<img[^>]*>\s*)?\*\*\[([^\]]+)\]\((https?:\/\/[^)]+)\)\*\*\s+-\s+(.+)$/gm;
+		let m: RegExpExecArray | null;
+		let tpRank = 0;
+		while ((m = re.exec(tpSection)) !== null) {
+			const name = m[1].trim();
+			const url = m[2].trim();
+			const desc = m[3].replace(/<[^>]*>/g, "").replace(/!\[[^\]]*\]\([^)]*\)/g, "").trim();
+			if (!name || !url) continue;
+			const ghMatch = url.match(/github\.com\/([a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+)/);
+			if (!ghMatch) continue;
+			const slug = ghMatch[1].replace(/\/$/, "");
+			const id = makeCatalogEntryId("github", slug);
+			if (seen.has(id)) continue;
+			seen.add(id);
+			tpRank++;
+			entries.push({
+				id,
+				source: "github",
+				catalogId: slug,
+				name,
+				description: desc,
+				category: inferCategory(`${name} ${desc}`),
+				official: false,
+				sponsor: false,
+				popularityRank: tpRank,
+				sourceUrl: url,
+			});
+		}
 	}
 
 	return entries;
@@ -583,7 +633,7 @@ async function fetchReferenceCatalogEntries(): Promise<readonly MarketplaceMcpCa
 		throw new Error(`reference catalog fetch failed: ${res.status}`);
 	}
 
-	const markdown = await res.text();
+	const markdown = await readCapped(res);
 	const entries = parseReferenceServersMarkdown(markdown);
 	referenceCatalogCache = { fetchedAt: now, entries };
 	return entries;
@@ -606,7 +656,7 @@ async function fetchCatalogPage(page: number): Promise<ParsedCatalogPage> {
 		throw new Error(`catalog page fetch failed: ${res.status}`);
 	}
 
-	const markdown = await res.text();
+	const markdown = await readCapped(res);
 	const parsed = parseCatalogMarkdown(markdown, page);
 	catalogCache.set(page, { fetchedAt: now, page: parsed });
 	return parsed;
@@ -712,7 +762,7 @@ export function extractStandardMcpConfig(markdown: string): DetailConfig {
 function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | null {
 	if (!isRecord(value)) return null;
 	if (typeof value.id !== "string") return null;
-	if (value.source !== "mcpservers.org" && value.source !== "modelcontextprotocol/servers" && value.source !== "manual")
+	if (value.source !== "mcpservers.org" && value.source !== "modelcontextprotocol/servers" && value.source !== "manual" && value.source !== "github")
 		return null;
 	if (typeof value.name !== "string") return null;
 	if (typeof value.description !== "string") return null;
@@ -773,10 +823,11 @@ async function fetchMcpServersOrgDetail(catalogId: string): Promise<DetailConfig
 		throw new Error(`detail fetch failed: ${res.status}`);
 	}
 
-	const markdown = await res.text();
+	const markdown = await readCapped(res);
 	return extractStandardMcpConfig(markdown);
 }
 
+/** Fetch README from the modelcontextprotocol/servers repo for a reference server. */
 async function fetchReferenceServerDetail(catalogId: string): Promise<DetailConfig> {
 	const encodedPath = catalogId
 		.split("/")
@@ -792,8 +843,63 @@ async function fetchReferenceServerDetail(catalogId: string): Promise<DetailConf
 		throw new Error(`reference detail fetch failed: ${res.status}`);
 	}
 
-	const markdown = await res.text();
+	const markdown = await readCapped(res);
 	return extractStandardMcpConfig(markdown);
+}
+
+const GITHUB_RAW_HOST = "https://raw.githubusercontent.com" as const;
+const MAX_README_BYTES = 2 * 1024 * 1024; // 2 MB cap on fetched READMEs
+
+/** Read response body with a size cap to prevent memory exhaustion. */
+async function readCapped(res: Response): Promise<string> {
+	const len = res.headers.get("content-length");
+	if (len && parseInt(len, 10) > MAX_README_BYTES) {
+		throw new Error(`response too large: ${len} bytes`);
+	}
+	const text = await res.text();
+	if (text.length > MAX_README_BYTES) {
+		throw new Error(`response too large: ${text.length} chars`);
+	}
+	return text;
+}
+
+/**
+ * Fetch README.md from a GitHub repo to extract MCP server config.
+ * Security: only fetches from raw.githubusercontent.com with strict
+ * org/repo validation — no arbitrary URLs or redirects followed.
+ */
+async function fetchGithubServerDetail(catalogId: string): Promise<DetailConfig> {
+	if (!/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(catalogId)) {
+		throw new Error("invalid github catalog id: expected org/repo");
+	}
+	const encodedPath = catalogId
+		.split("/")
+		.map((part) => encodeURIComponent(part))
+		.join("/");
+	const headers = { "User-Agent": "signet-daemon-marketplace" };
+	const timeout = 25_000;
+	const url = `${GITHUB_RAW_HOST}/${encodedPath}/main/README.md`;
+	const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeout) });
+
+	if (!res.ok) {
+		if (res.status === 404) {
+			const fallback = `${GITHUB_RAW_HOST}/${encodedPath}/master/README.md`;
+			const res2 = await fetch(fallback, { headers, signal: AbortSignal.timeout(timeout) });
+			if (res2.ok) return extractStandardMcpConfig(await readCapped(res2));
+			throw new Error(`github detail fetch failed: main 404, master ${res2.status}`);
+		}
+		throw new Error(`github detail fetch failed: ${res.status}`);
+	}
+
+	const markdown = await readCapped(res);
+	return extractStandardMcpConfig(markdown);
+}
+
+/** Route detail fetch to the appropriate handler based on catalog source. */
+function fetchDetailBySource(source: MarketplaceMcpCatalogSource, catalogId: string): Promise<DetailConfig> {
+	if (source === "modelcontextprotocol/servers") return fetchReferenceServerDetail(catalogId);
+	if (source === "github") return fetchGithubServerDetail(catalogId);
+	return fetchMcpServersOrgDetail(catalogId);
 }
 
 async function withConnectedClient<T>(
@@ -1090,10 +1196,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		}
 
 		try {
-			const detail =
-				selection.source === "modelcontextprotocol/servers"
-					? await fetchReferenceServerDetail(selection.catalogId)
-					: await fetchMcpServersOrgDetail(selection.catalogId);
+			const detail = await fetchDetailBySource(selection.source, selection.catalogId);
 			return c.json({
 				id: selection.catalogId,
 				source: selection.source,
@@ -1192,10 +1295,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		if (!normalized) {
 			try {
-				detail =
-					selection.source === "modelcontextprotocol/servers"
-						? await fetchReferenceServerDetail(catalogId)
-						: await fetchMcpServersOrgDetail(catalogId);
+				detail = await fetchDetailBySource(selection.source, catalogId);
 			} catch (error) {
 				return c.json({ error: `Failed to fetch server detail: ${String(error)}` }, 502);
 			}
@@ -1235,7 +1335,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		const homepage =
 			selection.source === "modelcontextprotocol/servers"
 				? `https://github.com/modelcontextprotocol/servers/tree/main/src/${catalogId}`
-				: `https://mcpservers.org/servers/${catalogId}`;
+				: selection.source === "github"
+					? `https://github.com/${catalogId}`
+					: `https://mcpservers.org/servers/${catalogId}`;
 
 		const server: InstalledMarketplaceMcpServer = {
 			id,
