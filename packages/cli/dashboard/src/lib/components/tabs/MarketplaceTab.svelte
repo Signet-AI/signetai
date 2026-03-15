@@ -164,7 +164,7 @@ function applySecondarySort(value: string): void {
 		sk.providerFilter = "all";
 		return;
 	}
-	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers") {
+	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers" || value === "github") {
 		mcpMarket.source = value;
 		return;
 	}

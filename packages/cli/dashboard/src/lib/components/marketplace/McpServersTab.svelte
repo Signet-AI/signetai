@@ -123,7 +123,7 @@ function parseSort(value: string): McpCatalogSort {
 }
 
 function parseSource(value: string): McpCatalogSourceFilter {
-	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers") {
+	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers" || value === "github") {
 		return value;
 	}
 	return "all";

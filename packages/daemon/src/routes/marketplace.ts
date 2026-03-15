@@ -426,7 +426,18 @@ function parseCatalogSelection(
 		};
 	}
 
+	if (rawId.startsWith("github:")) {
+		return {
+			source: "github",
+			catalogId: rawId.slice("github:".length),
+		};
+	}
+
 	if (rawSource === "modelcontextprotocol/servers") {
+		return { source: rawSource, catalogId: rawId };
+	}
+
+	if (rawSource === "github") {
 		return { source: rawSource, catalogId: rawId };
 	}
 
@@ -741,7 +752,7 @@ export function extractStandardMcpConfig(markdown: string): DetailConfig {
 function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | null {
 	if (!isRecord(value)) return null;
 	if (typeof value.id !== "string") return null;
-	if (value.source !== "mcpservers.org" && value.source !== "modelcontextprotocol/servers" && value.source !== "manual")
+	if (value.source !== "mcpservers.org" && value.source !== "modelcontextprotocol/servers" && value.source !== "manual" && value.source !== "github")
 		return null;
 	if (typeof value.name !== "string") return null;
 	if (typeof value.description !== "string") return null;
@@ -823,6 +834,31 @@ async function fetchReferenceServerDetail(catalogId: string): Promise<DetailConf
 
 	const markdown = await res.text();
 	return extractStandardMcpConfig(markdown);
+}
+
+async function fetchGithubServerDetail(catalogId: string): Promise<DetailConfig> {
+	const encodedPath = catalogId
+		.split("/")
+		.map((part) => encodeURIComponent(part))
+		.join("/");
+	const url = `https://raw.githubusercontent.com/${encodedPath}/main/README.md`;
+	const res = await fetch(url, {
+		headers: { "User-Agent": "signet-daemon-marketplace" },
+		signal: AbortSignal.timeout(25_000),
+	});
+
+	if (!res.ok) {
+		throw new Error(`github detail fetch failed: ${res.status}`);
+	}
+
+	const markdown = await res.text();
+	return extractStandardMcpConfig(markdown);
+}
+
+function fetchDetailBySource(source: MarketplaceMcpCatalogSource, catalogId: string): Promise<DetailConfig> {
+	if (source === "modelcontextprotocol/servers") return fetchReferenceServerDetail(catalogId);
+	if (source === "github") return fetchGithubServerDetail(catalogId);
+	return fetchMcpServersOrgDetail(catalogId);
 }
 
 async function withConnectedClient<T>(
@@ -1119,10 +1155,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		}
 
 		try {
-			const detail =
-				selection.source === "modelcontextprotocol/servers"
-					? await fetchReferenceServerDetail(selection.catalogId)
-					: await fetchMcpServersOrgDetail(selection.catalogId);
+			const detail = await fetchDetailBySource(selection.source, selection.catalogId);
 			return c.json({
 				id: selection.catalogId,
 				source: selection.source,
@@ -1221,10 +1254,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		if (!normalized) {
 			try {
-				detail =
-					selection.source === "modelcontextprotocol/servers"
-						? await fetchReferenceServerDetail(catalogId)
-						: await fetchMcpServersOrgDetail(catalogId);
+				detail = await fetchDetailBySource(selection.source, catalogId);
 			} catch (error) {
 				return c.json({ error: `Failed to fetch server detail: ${String(error)}` }, 502);
 			}
@@ -1264,7 +1294,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		const homepage =
 			selection.source === "modelcontextprotocol/servers"
 				? `https://github.com/modelcontextprotocol/servers/tree/main/src/${catalogId}`
-				: `https://mcpservers.org/servers/${catalogId}`;
+				: selection.source === "github"
+					? `https://github.com/${catalogId}`
+					: `https://mcpservers.org/servers/${catalogId}`;
 
 		const server: InstalledMarketplaceMcpServer = {
 			id,
