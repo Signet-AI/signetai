@@ -12,6 +12,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { SignetAppManifest } from "@signet/core";
+
+import { isPrivateHostname, validatePublicHttpUrl } from "../url-validation.js";
 import {
 	loadAppTray,
 	loadProbeResult,
@@ -224,20 +226,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 				);
 			}
 
-			// Block localhost, loopback, and RFC-1918 private addresses
-			const hostname = parsed.hostname.toLowerCase();
-			const isPrivate =
-				hostname === "localhost" ||
-				hostname === "127.0.0.1" ||
-				hostname === "[::1]" ||
-				hostname === "0.0.0.0" ||
-				hostname.startsWith("10.") ||
-				hostname.startsWith("192.168.") ||
-				/^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-				hostname.endsWith(".local") ||
-				hostname.endsWith(".internal");
-
-			if (isPrivate) {
+			if (isPrivateHostname(parsed.hostname)) {
 				return c.json(
 					{ ok: false, widgetId: "", manifest: null, error: "Private/loopback addresses are not allowed" },
 					400,
