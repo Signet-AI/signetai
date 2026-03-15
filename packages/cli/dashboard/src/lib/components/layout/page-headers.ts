@@ -62,6 +62,10 @@ export const PAGE_HEADERS = {
 		title: "Project",
 		eyebrow: "Repository overview and release history",
 	},
+	os: {
+		title: "Apps",
+		eyebrow: "Signet OS — MCP app dashboard",
+	},
 } as const satisfies Record<TabId, PageHeaderDefinition>;
 
 // --- Tab group item arrays (drives TabGroupBar rendering) ---
@@ -103,4 +107,5 @@ export const PAGE_FOOTERS: Partial<Record<TabId, PageFooterStatic>> = {
 	predictor: { left: "Predictor Model", right: "predictive memory scorer" },
 	connectors: { left: "platform harnesses + data sources", right: "connector health" },
 	changelog: { left: "project docs + release history", right: "github.com/Signet-AI/signetai" },
+	os: { left: "MCP app dashboard", right: "drag apps from tray to grid" },
 };

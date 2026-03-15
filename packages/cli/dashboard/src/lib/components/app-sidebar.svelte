@@ -27,6 +27,7 @@ import House from "@lucide/svelte/icons/house";
 import ListChecks from "@lucide/svelte/icons/list-checks";
 import Moon from "@lucide/svelte/icons/moon";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
+import LayoutGrid from "@lucide/svelte/icons/layout-grid";
 import Store from "@lucide/svelte/icons/store";
 import Sun from "@lucide/svelte/icons/sun";
 import { onMount } from "svelte";
@@ -66,6 +67,7 @@ type NavItem =
 
 const navItems: NavItem[] = [
 	{ id: "home", label: "Home", icon: House },
+	{ id: "os", label: "Apps", icon: LayoutGrid },
 	{ id: "memory-group", label: "Memory", icon: Brain, group: "memory" },
 	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
 	{ id: "skills", label: "Marketplace", icon: Store },
