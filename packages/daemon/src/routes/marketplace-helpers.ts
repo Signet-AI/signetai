@@ -3,6 +3,10 @@
  *
  * The readInstalledServers function from marketplace.ts is not exported,
  * so we provide a public re-implementation here that reads the same file.
+ *
+ * COUPLING NOTE: This reads ~/.agents/marketplace/mcp-servers.json directly.
+ * If marketplace.ts ever changes the file path or format, this must be updated
+ * to match. See also: marketplace.ts readInstalledServers().
  */
 
 import { existsSync, readFileSync } from "node:fs";
