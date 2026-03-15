@@ -19,8 +19,9 @@
 export function isPrivateHostname(hostname: string): boolean {
 	const h = hostname.toLowerCase().replace(/^\[|\]$/g, ""); // strip IPv6 brackets
 
-	// IPv4 loopback + special
-	if (h === "localhost" || h === "127.0.0.1" || h === "0.0.0.0") return true;
+	// IPv4 loopback (full 127.0.0.0/8 range) + special
+	if (h === "localhost" || h === "0.0.0.0") return true;
+	if (h.startsWith("127.")) return true;
 
 	// IPv4 RFC-1918 private ranges
 	if (h.startsWith("10.")) return true;
@@ -37,7 +38,8 @@ export function isPrivateHostname(hostname: string): boolean {
 	if (h.startsWith("fe80:") || h.startsWith("fe80%")) return true;
 
 	// IPv6 unique local (fc00::/7 — equivalent of RFC-1918)
-	if (h.startsWith("fc") || h.startsWith("fd")) return true;
+	// Only match actual IPv6 addresses (contain colons), not hostnames like fcc.gov
+	if ((h.startsWith("fc") || h.startsWith("fd")) && h.includes(":")) return true;
 
 	// mDNS / internal suffixes
 	if (h.endsWith(".local") || h.endsWith(".internal") || h.endsWith(".localhost")) return true;
