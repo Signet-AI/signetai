@@ -214,12 +214,32 @@ export function mountAppTrayRoutes(app: Hono): void {
 			return c.json({ ok: false, widgetId: "", manifest: null, error: "url is required" }, 400);
 		}
 
-		// Validate URL scheme to prevent SSRF (file://, ftp://, RFC-1918, etc.)
+		// Validate URL scheme and block private/loopback addresses (SSRF prevention)
 		try {
 			const parsed = new URL(url);
 			if (!["https:", "http:"].includes(parsed.protocol)) {
 				return c.json(
 					{ ok: false, widgetId: "", manifest: null, error: "Only HTTP/HTTPS URLs are supported" },
+					400,
+				);
+			}
+
+			// Block localhost, loopback, and RFC-1918 private addresses
+			const hostname = parsed.hostname.toLowerCase();
+			const isPrivate =
+				hostname === "localhost" ||
+				hostname === "127.0.0.1" ||
+				hostname === "[::1]" ||
+				hostname === "0.0.0.0" ||
+				hostname.startsWith("10.") ||
+				hostname.startsWith("192.168.") ||
+				/^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+				hostname.endsWith(".local") ||
+				hostname.endsWith(".internal");
+
+			if (isPrivate) {
+				return c.json(
+					{ ok: false, widgetId: "", manifest: null, error: "Private/loopback addresses are not allowed" },
 					400,
 				);
 			}

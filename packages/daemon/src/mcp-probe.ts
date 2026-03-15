@@ -215,9 +215,20 @@ export function parseManifest(
 	const manifest: SignetAppManifest = {
 		name,
 		...(validatedIcon ? { icon: validatedIcon } : {}),
-		...(typeof signetBlock.ui === "string" && signetBlock.ui.trim().length > 0
-			? { ui: signetBlock.ui.trim() }
-			: {}),
+		...(() => {
+			if (typeof signetBlock.ui === "string" && signetBlock.ui.trim().length > 0) {
+				try {
+					const uiUrl = new URL(signetBlock.ui.trim());
+					if (uiUrl.protocol === "https:" || uiUrl.protocol === "http:") {
+						return { ui: signetBlock.ui.trim() };
+					}
+					logger.warn("probe", `Rejected non-HTTP ui URL: ${signetBlock.ui}`);
+				} catch {
+					logger.warn("probe", `Rejected invalid ui URL: ${signetBlock.ui}`);
+				}
+			}
+			return {};
+		})(),
 		...(isRecord(signetBlock.defaultSize) &&
 		typeof signetBlock.defaultSize.w === "number" &&
 		typeof signetBlock.defaultSize.h === "number"
