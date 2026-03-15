@@ -855,6 +855,7 @@ async function fetchGithubServerDetail(catalogId: string): Promise<DetailConfig>
 			const fallback = `https://raw.githubusercontent.com/${encodedPath}/master/README.md`;
 			const res2 = await fetch(fallback, { headers, signal: AbortSignal.timeout(timeout) });
 			if (res2.ok) return extractStandardMcpConfig(await res2.text());
+			throw new Error(`github detail fetch failed: main 404, master ${res2.status}`);
 		}
 		throw new Error(`github detail fetch failed: ${res.status}`);
 	}

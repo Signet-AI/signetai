@@ -1,4 +1,5 @@
 <script lang="ts">
+import { SvelteSet } from "svelte/reactivity";
 import {
 	type MarketplaceMcpCatalogEntry,
 	type MarketplaceMcpServer,
@@ -174,8 +175,8 @@ function getHueRotate(name: string): number {
 	return hash % 360;
 }
 
-const installedAvatarErrors = $state(new Set<string>());
-const catalogAvatarErrors = $state(new Set<string>());
+const installedAvatarErrors = new SvelteSet<string>();
+const catalogAvatarErrors = new SvelteSet<string>();
 
 function openInstallSheet(entry: MarketplaceMcpCatalogEntry): void {
 	selectedCatalogEntry = entry;
