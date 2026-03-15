@@ -48,7 +48,8 @@ export type LogCategory =
 	| "retention" // Retention worker (decay + cold archival)
 	| "summary-condensation" // Session summary DAG condensation
 	| "system" // System events
-	| "update"; // Auto-update cycle
+	| "update" // Auto-update cycle
+	| "probe"; // MCP server auto-probe (Signet OS)
 
 export interface LogEntry {
 	timestamp: string;

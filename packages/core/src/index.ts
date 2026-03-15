@@ -234,3 +234,17 @@ export type {
 	DocumentRow,
 	ConnectorRow,
 } from "./connector-types";
+
+// Signet OS types
+export { DEFAULT_APP_SIZE } from "./signet-os-types";
+export type {
+	SignetAppManifest,
+	SignetAppEvents,
+	SignetAppSize,
+	AutoCardToolAction,
+	AutoCardResource,
+	AutoCardManifest,
+	McpProbeResult,
+	AppTrayState,
+	AppTrayEntry,
+} from "./signet-os-types";
