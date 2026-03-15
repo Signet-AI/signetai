@@ -4610,6 +4610,9 @@ setFetchEmbedding(fetchEmbedding);
 import { mountMarketplaceRoutes } from "./routes/marketplace.js";
 mountMarketplaceRoutes(app);
 
+import { mountAppTrayRoutes } from "./routes/app-tray.js";
+mountAppTrayRoutes(app);
+
 // Marketplace review routes (Signet Reviews scaffold)
 import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
 mountMarketplaceReviewsRoutes(app);

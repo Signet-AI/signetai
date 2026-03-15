@@ -1,0 +1,60 @@
+/**
+ * Marketplace helpers — shared utilities extracted to avoid circular imports.
+ *
+ * The readInstalledServers function from marketplace.ts is not exported,
+ * so we provide a public re-implementation here that reads the same file.
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { InstalledMarketplaceMcpServer } from "./marketplace.js";
+
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
+
+function getInstalledMcpPath(): string {
+	return join(getAgentsDir(), "marketplace", "mcp-servers.json");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function toStringRecord(value: unknown): Record<string, string> {
+	if (!isRecord(value)) return {};
+	const out: Record<string, string> = {};
+	for (const [k, v] of Object.entries(value)) {
+		if (typeof v === "string") out[k] = v;
+	}
+	return out;
+}
+
+function toStringArray(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter((v): v is string => typeof v === "string");
+}
+
+/**
+ * Read installed MCP servers from the marketplace config file.
+ * This is a public accessor for the same data marketplace.ts manages.
+ */
+export function readInstalledServersPublic(): InstalledMarketplaceMcpServer[] {
+	const path = getInstalledMcpPath();
+	if (!existsSync(path)) return [];
+
+	try {
+		const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+		if (!Array.isArray(raw)) return [];
+		return raw.filter(
+			(item): item is InstalledMarketplaceMcpServer =>
+				isRecord(item) &&
+				typeof item.id === "string" &&
+				typeof item.name === "string" &&
+				typeof item.enabled === "boolean",
+		);
+	} catch {
+		return [];
+	}
+}
