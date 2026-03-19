@@ -133,14 +133,18 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		const toWebStream = (nodeStream: import("node:stream").Readable): ReadableStream<Uint8Array> =>
 			Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
 
-		const exitPromise = new Promise<number>((resolve) => {
+		const exitPromise = new Promise<number>((resolve, reject) => {
 			child.on("exit", (code) => resolve(code ?? 1));
-			child.on("error", () => resolve(1));
+			child.on("error", (err) => reject(err));
 		});
 
+		if (!child.stdout || !child.stderr) {
+			throw new Error("spawnHidden(win32): stdout/stderr unexpectedly null");
+		}
+
 		return {
-			stdout: toWebStream(child.stdout!),
-			stderr: toWebStream(child.stderr!),
+			stdout: toWebStream(child.stdout),
+			stderr: toWebStream(child.stderr),
 			exited: exitPromise,
 			kill(signal?: string) {
 				if (signal === "SIGKILL") {
