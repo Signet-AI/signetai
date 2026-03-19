@@ -1,8 +1,10 @@
 <script lang="ts">
+	import { onDestroy } from "svelte";
 	import { fetchTrayEntries } from "$lib/stores/os.svelte";
 	import X from "@lucide/svelte/icons/x";
 	import Loader from "@lucide/svelte/icons/loader";
 	import CheckCircle from "@lucide/svelte/icons/check-circle-2";
+	import { API_BASE } from "$lib/api";
 
 	interface Props {
 		open: boolean;
@@ -11,18 +13,22 @@
 
 	const { open, onclose }: Props = $props();
 
-	const isDev = import.meta.env.DEV;
-	const isTauri =
-		typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-	const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
-
 	let url = $state("");
 	let name = $state("");
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let success = $state<string | null>(null);
+	let closeTimer: ReturnType<typeof setTimeout> | null = null;
+
+	onDestroy(() => {
+		if (closeTimer) clearTimeout(closeTimer);
+	});
 
 	function reset(): void {
+		if (closeTimer) {
+			clearTimeout(closeTimer);
+			closeTimer = null;
+		}
 		url = "";
 		name = "";
 		loading = false;
@@ -86,8 +92,7 @@
 			if (data.ok) {
 				success = `Installed "${data.manifest?.name ?? data.widgetId}" successfully`;
 				await fetchTrayEntries();
-				// Auto-close after a short delay
-				setTimeout(() => {
+				closeTimer = setTimeout(() => {
 					handleClose();
 				}, 1200);
 			} else {

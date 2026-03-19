@@ -1,15 +1,10 @@
-/**
- * Signet OS store — state management for the App Tray, Widget Grid, and Sidebar Groups.
- *
- * Fetches from /api/os/tray and manages local UI state for drag, resize, and group filtering.
- */
+/** Signet OS store — app tray, widget grid, and sidebar group state. */
 
 import { browser } from "$app/environment";
+import { API_BASE } from "$lib/api";
 
-// ---------------------------------------------------------------------------
 // Types (mirrored from @signet/core signet-os-types — kept local to avoid
 // build-time cross-package import issues in the dashboard)
-// ---------------------------------------------------------------------------
 
 export type AppTrayState = "tray" | "grid" | "dock";
 
@@ -66,9 +61,7 @@ export interface AppTrayEntry {
 	readonly updatedAt: string;
 }
 
-// ---------------------------------------------------------------------------
 // Sidebar groups (persisted to localStorage)
-// ---------------------------------------------------------------------------
 
 export interface SidebarGroup {
 	readonly id: string;
@@ -76,18 +69,7 @@ export interface SidebarGroup {
 	readonly items: string[]; // App IDs
 }
 
-// ---------------------------------------------------------------------------
-// API base (same logic as api.ts)
-// ---------------------------------------------------------------------------
-
-const isDev = import.meta.env.DEV;
-const isTauri =
-	typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
-
-// ---------------------------------------------------------------------------
 // Reactive store
-// ---------------------------------------------------------------------------
 
 export const os = $state({
 	/** All app tray entries from the daemon */
@@ -103,10 +85,6 @@ export const os = $state({
 	/** Currently dragging app ID */
 	draggingId: null as string | null,
 });
-
-// ---------------------------------------------------------------------------
-// Derived helpers
-// ---------------------------------------------------------------------------
 
 /** Apps currently in the bottom tray */
 export function getTrayApps(): AppTrayEntry[] {
@@ -130,9 +108,24 @@ export function getDockApps(): AppTrayEntry[] {
 	return os.entries.filter((e) => e.state === "dock");
 }
 
-// ---------------------------------------------------------------------------
-// API calls
-// ---------------------------------------------------------------------------
+const GRID_COLS = 12;
+
+function findFreePosition(
+	occupied: readonly GridPosition[],
+	size: { w: number; h: number },
+): GridPosition {
+	for (let y = 0; y < 50; y++) {
+		for (let x = 0; x <= GRID_COLS - size.w; x++) {
+			const candidate = { x, y, w: size.w, h: size.h };
+			const hit = occupied.some(
+				(o) => x < o.x + o.w && x + size.w > o.x && y < o.y + o.h && y + size.h > o.y,
+			);
+			if (!hit) return candidate;
+		}
+	}
+	const bottom = occupied.reduce((max, o) => Math.max(max, o.y + o.h), 0);
+	return { x: 0, y: bottom, w: size.w, h: size.h };
+}
 
 export async function fetchTrayEntries(): Promise<void> {
 	os.loading = true;
@@ -191,8 +184,16 @@ export async function moveToGrid(
 ): Promise<boolean> {
 	const entry = os.entries.find((e) => e.id === id);
 	if (!entry) return false;
+
+	if (gridPosition) return updateAppState(id, "grid", gridPosition);
+
+	// No position given — find a free spot via simple scan
 	const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
-	const pos = gridPosition ?? { x: 0, y: 0, ...size };
+	const occupied = os.entries.flatMap((e) =>
+		e.id !== id && e.state === "grid" && e.gridPosition ? [e.gridPosition] : [],
+	);
+
+	const pos = findFreePosition(occupied, size);
 	return updateAppState(id, "grid", pos);
 }
 
@@ -204,9 +205,7 @@ export async function moveToTray(id: string): Promise<boolean> {
 	return updateAppState(id, "tray");
 }
 
-// ---------------------------------------------------------------------------
 // Sidebar group management (localStorage-persisted)
-// ---------------------------------------------------------------------------
 
 const GROUPS_KEY = "signet-os-sidebar-groups";
 

@@ -31,6 +31,12 @@ export function isPrivateHostname(hostname: string): boolean {
 	// IPv4 link-local (169.254.x.x — includes AWS/GCP/Azure metadata 169.254.169.254)
 	if (h.startsWith("169.254.")) return true;
 
+	// IPv4 shared address space (RFC 6598 — 100.64.0.0/10: 100.64–127.x)
+	if (h.startsWith("100.")) {
+		const second = Number.parseInt(h.split(".")[1], 10);
+		if (second >= 64 && second <= 127) return true;
+	}
+
 	// IPv6 loopback
 	if (h === "::1" || h === "0:0:0:0:0:0:0:1") return true;
 
@@ -64,4 +70,35 @@ export function validatePublicHttpUrl(url: string): string | null {
 	} catch {
 		return "Invalid URL format";
 	}
+}
+
+/**
+ * Fetch a public URL with SSRF protection. Validates the initial URL and
+ * follows redirects manually so each hop is checked against the blocklist.
+ * Returns the final Response (max 5 redirects).
+ */
+export async function safeFetch(
+	url: string,
+	init?: RequestInit,
+): Promise<Response> {
+	const MAX_REDIRECTS = 5;
+	let current = url;
+
+	for (let i = 0; i <= MAX_REDIRECTS; i++) {
+		const err = validatePublicHttpUrl(current);
+		if (err) throw new Error(`${err}: ${current}`);
+
+		const res = await fetch(current, { ...init, redirect: "manual" });
+
+		if (res.status >= 300 && res.status < 400) {
+			const location = res.headers.get("location");
+			if (!location) throw new Error("Redirect with no Location header");
+			current = new URL(location, current).href;
+			continue;
+		}
+
+		return res;
+	}
+
+	throw new Error("Too many redirects");
 }
