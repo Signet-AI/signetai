@@ -28,6 +28,7 @@
   },
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "prepack": "bun run build",
     "dev": "bun --watch src/index.ts",
     "test": "bun test"
   },
@@ -35,7 +36,8 @@
     "@sinclair/typebox": "0.34.47"
   },
   "devDependencies": {
-    "@signet/core": "workspace:*"
+    "@signet/core": "workspace:*",
+    "@types/node": "^22.0.0"
   },
   "peerDependencies": {
     "openclaw": ">=0.1.0"

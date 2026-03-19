@@ -698,7 +698,7 @@ async function configureHarnessHooks(
 					if (lPathPatched.length > 0) {
 						console.log(
 							chalk.green(
-								`  ✓ OpenClaw config updated with plugins.load.paths (${lPathPatched.length} file(s))`,
+								`  ✓ OpenClaw config updated with plugins.load.paths/plugins.allow (${lPathPatched.length} file(s))`,
 							),
 						);
 					} else if (lPathWarnings.length === 0) {
@@ -796,6 +796,10 @@ function writeOpenClawPluginSyncVersion(basePath: string, version: string): void
 	const syncPath = getOpenClawPluginSyncPath(basePath);
 	mkdirSync(dirname(syncPath), { recursive: true });
 	writeFileSync(syncPath, `${version}\n`);
+}
+
+function hasOpenClawPluginRuntime(path: string): boolean {
+	return existsSync(join(path, "dist", "index.js"));
 }
 
 function predictorSyncPath(basePath: string): string {
@@ -1254,10 +1258,20 @@ async function ensureOpenClawPluginPackage(
 		// written), fall through to re-install rather than returning undefined.
 		const cachedPath = resolveGlobalPackagePath(packageManager.family, OPENCLAW_PLUGIN_PACKAGE);
 		if (cachedPath) {
-			ensureOpenClawExtensionSymlink(cachedPath, options.silent);
-			return cachedPath;
+			if (!hasOpenClawPluginRuntime(cachedPath)) {
+				if (!options.silent) {
+					console.log(
+						chalk.yellow(
+							`  Warning: cached ${OPENCLAW_PLUGIN_PACKAGE}@${VERSION} is missing dist/index.js; retrying install.`,
+						),
+					);
+				}
+			} else {
+				ensureOpenClawExtensionSymlink(cachedPath, options.silent);
+				return cachedPath;
+			}
 		}
-		if (!options.silent) {
+		if (!cachedPath && !options.silent) {
 			console.log(
 				chalk.yellow(
 					`  Warning: cached ${OPENCLAW_PLUGIN_PACKAGE} not found on disk; retrying install.`,
@@ -1291,6 +1305,29 @@ async function ensureOpenClawPluginPackage(
 		return undefined;
 	}
 
+	// Resolve once and reuse for both symlink creation and load.paths patch.
+	const globalPath = resolveGlobalPackagePath(packageManager.family, OPENCLAW_PLUGIN_PACKAGE);
+	if (!globalPath) {
+		if (!options.silent) {
+			console.log(
+				chalk.yellow(
+					`  Warning: could not resolve global path for ${OPENCLAW_PLUGIN_PACKAGE} after install; plugin discovery may be incomplete. Run 'signet setup' again if needed.`,
+				),
+			);
+		}
+		return undefined;
+	}
+	if (!hasOpenClawPluginRuntime(globalPath)) {
+		if (!options.silent) {
+			console.log(
+				chalk.yellow(
+					`  Warning: installed ${OPENCLAW_PLUGIN_PACKAGE}@${VERSION} is missing dist/index.js; this usually means the published package was not built before publish.`,
+				),
+			);
+		}
+		return undefined;
+	}
+
 	writeOpenClawPluginSyncVersion(basePath, VERSION);
 	if (!options.silent) {
 		console.log(
@@ -1298,17 +1335,7 @@ async function ensureOpenClawPluginPackage(
 		);
 	}
 
-	// Resolve once and reuse for both symlink creation and load.paths patch.
-	const globalPath = resolveGlobalPackagePath(packageManager.family, OPENCLAW_PLUGIN_PACKAGE);
-	if (globalPath) {
-		ensureOpenClawExtensionSymlink(globalPath, options.silent);
-	} else if (!options.silent) {
-		console.log(
-			chalk.yellow(
-				`  Warning: could not resolve global path for ${OPENCLAW_PLUGIN_PACKAGE} after install; plugin discovery may be incomplete. Run 'signet setup' again if needed.`,
-			),
-		);
-	}
+	ensureOpenClawExtensionSymlink(globalPath, options.silent);
 	return globalPath;
 }
 

@@ -358,4 +358,62 @@ describe("OpenClawConnector config patching", () => {
 		const connector = new OpenClawConnector();
 		expect(connector.getConfiguredRuntimePath()).toBe("legacy");
 	});
+
+	it("adds signet memory plugin to plugins.allow during plugin install", async () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		const basePath = join(tmpRoot, "agents");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					plugins: {
+						allow: ["existing-plugin"],
+						entries: {},
+					},
+				},
+				null,
+				2,
+			),
+		);
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		await connector.install(basePath, {
+			configureWorkspace: false,
+			configureHooks: false,
+			runtimePath: "plugin",
+		});
+
+		const patched = JSON.parse(readFileSync(configPath, "utf-8"));
+		expect(patched.plugins.allow).toContain("existing-plugin");
+		expect(patched.plugins.allow).toContain("signet-memory-openclaw");
+	});
+
+	it("patchLoadPaths adds signet memory plugin to plugins.allow", () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify(
+				{
+					plugins: {
+						load: {
+							paths: ["/tmp/a"],
+						},
+						entries: {},
+					},
+				},
+				null,
+				2,
+			),
+		);
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		const connector = new OpenClawConnector();
+		const result = connector.patchLoadPaths("/tmp/b");
+		expect(result.patched).toContain(configPath);
+
+		const patched = JSON.parse(readFileSync(configPath, "utf-8"));
+		expect(patched.plugins.load.paths).toEqual(["/tmp/a", "/tmp/b"]);
+		expect(patched.plugins.allow).toContain("signet-memory-openclaw");
+	});
 });
