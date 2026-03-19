@@ -173,6 +173,11 @@ export async function hybridRecall(
 	const minScore = cfg.search.min_score;
 
 	const filter = buildFilterClause(params);
+	// When scope filtering is active, vector search can't filter at query
+	// time so out-of-scope IDs get dropped at hydration. Over-fetch to
+	// compensate so the final result count still hits `limit`.
+	const scoped = params.scope !== undefined;
+	const vecTopK = scoped ? cfg.search.top_k * 2 : cfg.search.top_k;
 
 	// --- BM25 keyword search via FTS5 ---
 	const bm25Map = new Map<string, number>();
@@ -217,7 +222,7 @@ export async function hybridRecall(
 			queryVecF32 = new Float32Array(queryVec);
 			getDbAccessor().withReadDb((db) => {
 				const vecResults = vectorSearch(db as any, queryVecF32!, {
-					limit: cfg.search.top_k,
+					limit: vecTopK,
 					type: params.type as "fact" | "preference" | "decision" | undefined,
 				});
 				for (const r of vecResults) {
@@ -573,9 +578,10 @@ export async function hybridRecall(
 							 WHERE mem.entity_id IN (${ePlaceholders})
 							   AND m.type = 'rationale'
 							   AND m.is_deleted = 0
+							   ${scopeClause}
 							 LIMIT 10`,
 					)
-					.all(...eIds) as Array<{
+					.all(...eIds, ...scopeArgs) as Array<{
 					id: string;
 					content: string;
 					type: string;

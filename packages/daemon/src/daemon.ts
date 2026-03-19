@@ -1946,7 +1946,7 @@ interface ForgetCandidatesRequest {
 	sourceType: string;
 	since: string;
 	until: string;
-	scope: string;
+	scope: string | null;
 	limit: number;
 }
 
@@ -2146,9 +2146,11 @@ function buildForgetCandidatesWhere(req: ForgetCandidatesRequest, alias: string)
 		parts.push(`${prefix}source_type = ?`);
 		args.push(req.sourceType);
 	}
-	if (req.scope) {
+	if (req.scope !== null) {
 		parts.push(`${prefix}scope = ?`);
 		args.push(req.scope);
+	} else {
+		parts.push(`${prefix}scope IS NULL`);
 	}
 	if (req.since) {
 		parts.push(`${prefix}created_at >= ?`);
@@ -3362,7 +3364,7 @@ app.post("/api/memory/forget", async (c) => {
 		sourceType: parseOptionalString(payload.source_type) ?? "",
 		since: parseOptionalString(payload.since) ?? "",
 		until: parseOptionalString(payload.until) ?? "",
-		scope: parseOptionalString(payload.scope) ?? "",
+		scope: parseOptionalString(payload.scope) ?? null,
 		limit,
 	};
 
@@ -3374,7 +3376,7 @@ app.post("/api/memory/forget", async (c) => {
 		request.sourceType.length > 0 ||
 		request.since.length > 0 ||
 		request.until.length > 0 ||
-		request.scope.length > 0;
+		request.scope !== null;
 	if (ids.length === 0 && !hasQueryScope) {
 		return c.json(
 			{
