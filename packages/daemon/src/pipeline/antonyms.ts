@@ -19,6 +19,20 @@ export const NEGATION_TOKENS = new Set([
 	"without",
 ]);
 
+/**
+ * Narrow set of boolean/toggle antonyms for prospective contradiction risk
+ * scoring on UPDATE/DELETE proposals. Kept separate from the full set to
+ * avoid widening the false-positive surface of existing prospective detection.
+ */
+export const PROSPECTIVE_ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]> = [
+	["enabled", "disabled"],
+	["allow", "deny"],
+	["accept", "reject"],
+	["always", "never"],
+	["on", "off"],
+	["true", "false"],
+];
+
 export const ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]> = [
 	// boolean / toggle
 	["enabled", "disabled"],
@@ -87,8 +101,9 @@ export function overlapCount(
 export function hasAntonymConflict(
 	leftTokens: ReadonlySet<string>,
 	rightTokens: ReadonlySet<string>,
+	pairs: ReadonlyArray<readonly [string, string]> = ANTONYM_PAIRS,
 ): boolean {
-	for (const [a, b] of ANTONYM_PAIRS) {
+	for (const [a, b] of pairs) {
 		const leftHasA = leftTokens.has(a);
 		const leftHasB = leftTokens.has(b);
 		const rightHasA = rightTokens.has(a);

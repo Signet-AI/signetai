@@ -25,7 +25,7 @@ import type { AnalyticsCollector } from "../analytics";
 import type { TelemetryCollector } from "../telemetry";
 import { generateWithTracking } from "./provider";
 import {
-	ANTONYM_PAIRS as CONTRADICTION_ANTONYM_PAIRS,
+	PROSPECTIVE_ANTONYM_PAIRS,
 	tokenize,
 	hasNegation,
 	overlapCount,
@@ -93,7 +93,7 @@ function detectContradictionRisk(
 		return true;
 	}
 
-	return hasAntonymConflict(new Set(factTokens), new Set(targetTokens));
+	return hasAntonymConflict(new Set(factTokens), new Set(targetTokens), PROSPECTIVE_ANTONYM_PAIRS);
 }
 
 function zeroWriteStats(): AppliedWriteStats {

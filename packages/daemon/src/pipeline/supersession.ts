@@ -10,7 +10,7 @@
  *  2. Periodic sweep — maintenance worker scans all entities for stale siblings
  */
 
-import type { DbAccessor, WriteDb } from "../db-accessor";
+import type { DbAccessor } from "../db-accessor";
 import type { PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
 import type { EntityAttribute } from "@signet/core";
@@ -20,7 +20,7 @@ import {
 	overlapCount,
 	hasAntonymConflict,
 } from "./antonyms";
-import { supersedeAttribute, getAttributesForAspect } from "../knowledge-graph";
+import { getAttributesForAspect } from "../knowledge-graph";
 import { detectSemanticContradiction } from "./contradiction";
 import { insertHistoryEvent } from "../transactions";
 import { archiveToCold } from "./retention-worker";
@@ -177,7 +177,7 @@ export function detectAttributeContradiction(
 			const newHasTemporal = newTokens.some((t) => TEMPORAL_MARKERS.has(t));
 			const oldHasTemporal = oldTokens.some((t) => TEMPORAL_MARKERS.has(t));
 
-			if (newHasTemporal || oldHasTemporal) {
+			if (newHasTemporal) {
 				return {
 					detected: true,
 					confidence: 0.7,
@@ -239,24 +239,21 @@ function applySupersession(
 		reasoning: candidate.reasoning,
 	});
 
-	if (!shadow) {
-		supersedeAttribute(
-			accessor,
-			candidate.oldAttribute.id,
-			candidate.newAttribute.id,
-			agentId,
-		);
-
-		// Archive the superseded memory to cold tier if it has one
-		if (candidate.oldAttribute.memoryId) {
-			accessor.withWriteTx((db) => {
-				archiveToCold(db, [candidate.oldAttribute.memoryId!], "superseded");
-			});
-		}
-	}
-
-	// Write audit record
+	// Single transaction: status update + archive + audit record
 	accessor.withWriteTx((db) => {
+		if (!shadow) {
+			const ts = now();
+			db.prepare(
+				`UPDATE entity_attributes
+				 SET status = 'superseded', superseded_by = ?, updated_at = ?
+				 WHERE id = ? AND agent_id = ?`,
+			).run(candidate.newAttribute.id, ts, candidate.oldAttribute.id, agentId);
+
+			if (candidate.oldAttribute.memoryId) {
+				archiveToCold(db, [candidate.oldAttribute.memoryId], "superseded");
+			}
+		}
+
 		insertHistoryEvent(db, {
 			memoryId: candidate.oldAttribute.memoryId ?? candidate.oldAttribute.id,
 			event,
@@ -386,7 +383,7 @@ export async function checkAndSupersedeForAttributes(
 	}
 
 	// Apply supersessions
-	const shadow = cfg.shadowMode;
+	const shadow = cfg.shadowMode || cfg.mutationsFrozen;
 	for (const candidate of candidates) {
 		applySupersession(accessor, candidate, agentId, shadow);
 	}
@@ -503,7 +500,7 @@ export async function sweepRetroactiveSupersession(
 		}
 	}
 
-	const shadow = cfg.shadowMode;
+	const shadow = cfg.shadowMode || cfg.mutationsFrozen;
 	for (const candidate of candidates) {
 		applySupersession(accessor, candidate, agentId, shadow);
 	}
