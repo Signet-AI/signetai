@@ -48,6 +48,7 @@ interface ClassifyPayload {
 	readonly entity_type: string;
 	readonly fact_content: string;
 	readonly attribute_id: string;
+	readonly agent_id: string;
 }
 
 interface ClassifyResult {
@@ -242,12 +243,13 @@ async function processClassifyBatch(
 	const entityId = payloads[0].entity_id;
 	const entityName = payloads[0].entity_name;
 	const entityType = payloads[0].entity_type;
+	const agentId = payloads[0].agent_id ?? "default";
 
 	// Load existing aspects
 	const existingAspects = getAspectsForEntity(
 		deps.accessor,
 		entityId,
-		"default",
+		agentId,
 	);
 	const existingAspectNames = existingAspects.map((a) => a.name);
 
@@ -372,7 +374,7 @@ async function processClassifyBatch(
 		const ids = [...processedIndices].map((i) => payloads[i].attribute_id);
 		const { checkAndSupersedeForAttributes } = await import("./supersession");
 		const result = await checkAndSupersedeForAttributes(
-			deps.accessor, ids, "default", deps.pipelineCfg, deps.provider,
+			deps.accessor, ids, agentId, deps.pipelineCfg, deps.provider,
 		);
 		if (result.candidates.length > 0) {
 			logger.info("structural-classify", "Retroactive supersession", {

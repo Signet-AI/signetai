@@ -833,6 +833,7 @@ function runStructuralPass1(
 				entity_type: entityRow.entity_type,
 				fact_content: fact.content,
 				attribute_id: attrId,
+				agent_id: "default",
 			});
 			enqueueStructuralJob(db, fact.memoryId, "structural_classify", classifyPayload);
 			stats.classifyEnqueued++;
