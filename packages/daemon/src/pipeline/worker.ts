@@ -801,8 +801,8 @@ function runStructuralPass1(
 			// Resolve source entity ID from the entities table
 			const canonical = matchedTriple.source.trim().toLowerCase().replace(/\s+/g, " ");
 			const entityRow = db
-				.prepare("SELECT id, entity_type FROM entities WHERE canonical_name = ? LIMIT 1")
-				.get(canonical) as { id: string; entity_type: string } | undefined;
+				.prepare("SELECT id, entity_type, agent_id FROM entities WHERE canonical_name = ? LIMIT 1")
+				.get(canonical) as { id: string; entity_type: string; agent_id: string } | undefined;
 			if (!entityRow) continue;
 
 			// Skip if this memory already has a structural attribute row (classified or stub)
@@ -818,9 +818,9 @@ function runStructuralPass1(
 				`INSERT INTO entity_attributes
 				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
 				  confidence, importance, status, created_at, updated_at)
-				 VALUES (?, NULL, 'default', ?, 'attribute', ?, ?, ?, 0.5, 'active', ?, ?)`,
+				 VALUES (?, NULL, ?, ?, 'attribute', ?, ?, ?, 0.5, 'active', ?, ?)`,
 			).run(
-				attrId, fact.memoryId, fact.content, fact.normalizedContent,
+				attrId, entityRow.agent_id, fact.memoryId, fact.content, fact.normalizedContent,
 				fact.confidence, now, now,
 			);
 			stats.attributesCreated++;
@@ -833,7 +833,7 @@ function runStructuralPass1(
 				entity_type: entityRow.entity_type,
 				fact_content: fact.content,
 				attribute_id: attrId,
-				agent_id: "default",
+				agent_id: entityRow.agent_id,
 			});
 			enqueueStructuralJob(db, fact.memoryId, "structural_classify", classifyPayload);
 			stats.classifyEnqueued++;
