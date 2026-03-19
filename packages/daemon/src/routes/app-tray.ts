@@ -1,11 +1,4 @@
-/**
- * App Tray API routes — Signet OS Phase 1b + Phase 7
- *
- * Exposes endpoints for the dashboard to read/manage the app tray
- * (installed MCP servers with their probe results and manifests).
- *
- * Phase 7 adds POST /api/os/install — the signet.installMCP() backend.
- */
+/** App Tray API routes — CRUD for app tray entries and MCP install endpoint. */
 
 import type { Hono } from "hono";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,9 +17,9 @@ import {
 import { logger } from "../logger.js";
 import { readInstalledServersPublic } from "./marketplace-helpers.js";
 
-// ---------------------------------------------------------------------------
-// Grid helpers for autoPlace
-// ---------------------------------------------------------------------------
+function isValidState(s: string): s is "tray" | "grid" | "dock" {
+	return s === "tray" || s === "grid" || s === "dock";
+}
 
 const GRID_COLS = 12;
 
@@ -118,9 +111,6 @@ export function mountAppTrayRoutes(app: Hono): void {
 	app.post("/api/os/tray/:id/reprobe", async (c) => {
 		const id = c.req.param("id");
 
-		// We need to find the server config from installed servers
-		// Import dynamically to avoid circular dependency
-		const { readInstalledServersPublic } = await import("./marketplace-helpers.js");
 		const installed = readInstalledServersPublic();
 		const server = installed.find((s) => s.id === id);
 
@@ -162,14 +152,14 @@ export function mountAppTrayRoutes(app: Hono): void {
 			return c.json({ error: "App not found in tray" }, 404);
 		}
 
-		const validStates = ["tray", "grid", "dock"];
-		if (body.state && !validStates.includes(body.state)) {
+		if (body.state && !isValidState(body.state)) {
 			return c.json({ error: "state must be tray, grid, or dock" }, 400);
 		}
+		const validState = body.state && isValidState(body.state) ? body.state : undefined;
 
 		const updated = {
 			...tray[index],
-			...(body.state ? { state: body.state as "tray" | "grid" | "dock" } : {}),
+			...(validState ? { state: validState } : {}),
 			...(body.gridPosition ? { gridPosition: body.gridPosition } : {}),
 			updatedAt: new Date().toISOString(),
 		};
@@ -183,22 +173,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 		return c.json({ success: true, entry: updated });
 	});
 
-	// -----------------------------------------------------------------------
-	// Phase 7: POST /api/os/install — signet.installMCP() backend
-	// -----------------------------------------------------------------------
-
-	/**
-	 * POST /api/os/install — install an MCP server by URL
-	 *
-	 * Accepts:
-	 *   - Direct HTTP MCP server URLs → registers as manual HTTP server
-	 *   - mcpservers.org catalog URLs → extracts catalogId and installs via marketplace logic
-	 *
-	 * After install, probes the server and creates an app tray entry.
-	 * If autoPlace is true, assigns a grid position.
-	 *
-	 * Returns: { ok, widgetId, manifest, error? }
-	 */
+	/** POST /api/os/install — install an MCP server by URL */
 	app.post("/api/os/install", async (c) => {
 		let body: {
 			url?: string;
@@ -243,25 +218,13 @@ export function mountAppTrayRoutes(app: Hono): void {
 		const autoPlace = body.autoPlace === true;
 
 		try {
-			// Determine install strategy based on URL pattern
-			let installResult: { serverId: string; isNew: boolean };
-
 			const mcpServersOrgMatch = url.match(
 				/^https?:\/\/(?:www\.)?mcpservers\.org\/servers\/(.+?)(?:\/|\?|#|$)/,
 			);
 
-			if (mcpServersOrgMatch) {
-				// --- mcpservers.org catalog URL ---
-				const catalogId = mcpServersOrgMatch[1];
-				installResult = await installViaCatalog(
-					catalogId,
-					"mcpservers.org",
-					nameOverride,
-				);
-			} else {
-				// --- Treat as direct MCP HTTP server URL ---
-				installResult = await installDirectHttp(url, nameOverride);
-			}
+			const installResult = mcpServersOrgMatch
+				? await installViaCatalog(mcpServersOrgMatch[1], "mcpservers.org", nameOverride)
+				: await installDirectHttp(url, nameOverride);
 
 			// Probe the server
 			const installed = readInstalledServersPublic();
@@ -287,14 +250,11 @@ export function mountAppTrayRoutes(app: Hono): void {
 				const tray = loadAppTray();
 				const entry = tray.find((e) => e.id === installResult.serverId);
 				if (entry) {
-					const occupiedPositions = tray
-						.filter(
-							(e) =>
-								e.state === "grid" &&
-								e.gridPosition &&
-								e.id !== installResult.serverId,
-						)
-						.map((e) => e.gridPosition!);
+					const occupiedPositions = tray.flatMap((e) =>
+					e.state === "grid" && e.gridPosition && e.id !== installResult.serverId
+						? [e.gridPosition]
+						: [],
+				);
 
 					const defaultSize = manifest?.defaultSize ??
 						entry.autoCard?.defaultSize ?? { w: 4, h: 3 };
@@ -345,10 +305,6 @@ export function mountAppTrayRoutes(app: Hono): void {
 		}
 	});
 }
-
-// ---------------------------------------------------------------------------
-// Install helpers (outside mountAppTrayRoutes to keep the handler clean)
-// ---------------------------------------------------------------------------
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");

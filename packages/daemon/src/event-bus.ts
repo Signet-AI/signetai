@@ -1,39 +1,13 @@
-/**
- * Signet OS Event Bus — Phase 3/5
- *
- * The central nervous system of Signet OS. Every event from the browser,
- * MCP widgets, and system flows through here. Provides:
- *
- *   - emit()             — publish an event
- *   - subscribe()        — listen for specific event types or all ('*')
- *   - unsubscribe()      — remove a subscription
- *   - getRecentEvents()  — rolling window query
- *   - getContextSnapshot() — ambient context for the agent
- *
- * Implementation: Node EventEmitter with a bounded rolling buffer.
- * Swap to Redis when multi-device sync is needed (per spec).
- */
+/** Signet OS Event Bus — pub/sub with bounded rolling buffer. */
 
 import { EventEmitter } from "node:events";
 import type { ContextSnapshot, EventBusSubscription, SignetOSEvent } from "@signet/core";
 import { logger } from "./logger.js";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/** Max events to keep in the rolling buffer */
 const MAX_BUFFER_SIZE = 500;
-/** Default rolling window in milliseconds (5 minutes) */
 const DEFAULT_WINDOW_MS = 5 * 60 * 1000;
-/** Max events to include in a context snapshot */
 const MAX_CONTEXT_EVENTS = 100;
-/** Minimum interval between identical events (dedup) */
 const DEDUP_WINDOW_MS = 500;
-
-// ---------------------------------------------------------------------------
-// Event Bus
-// ---------------------------------------------------------------------------
 
 type EventCallback = (event: SignetOSEvent) => void;
 
@@ -236,11 +210,6 @@ class SignetEventBus {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Singleton export
-// ---------------------------------------------------------------------------
-
-/** The global event bus instance — central nervous system of Signet OS */
 export const eventBus = new SignetEventBus();
 
 /**

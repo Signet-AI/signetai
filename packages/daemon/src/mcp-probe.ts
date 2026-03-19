@@ -1,22 +1,4 @@
-/**
- * MCP Auto-Probe Module — Signet OS Phase 1b
- *
- * When a user installs an MCP server, this module probes it to discover
- * tools, resources, and any declared Signet manifest. If no manifest is
- * found, it generates an auto-card fallback so every MCP server gets
- * dashboard presence on install with zero effort from MCP authors.
- *
- * Architecture:
- *   - probeServer()       — connects to the server, discovers capabilities
- *   - parseManifest()     — extracts signet.app block from server metadata
- *   - generateAutoCard()  — creates fallback manifest from tool/resource list
- *   - storeProbeResult()  — persists probe result + app tray entry to disk
- *   - loadAppTray()       — reads persisted app tray entries
- *
- * Storage:
- *   ~/.agents/marketplace/app-manifests/<serverId>.json — per-server probe result
- *   ~/.agents/marketplace/app-tray.json                — app tray index
- */
+/** MCP Auto-Probe — discovers tools/resources and generates app tray entries. */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";

@@ -3,12 +3,7 @@
 	import Globe from "@lucide/svelte/icons/globe";
 	import ExternalLink from "@lucide/svelte/icons/external-link";
 	import MessageSquare from "@lucide/svelte/icons/message-square";
-
-	// API base (same logic as stores/os.svelte.ts)
-	const isDev = import.meta.env.DEV;
-	const isTauri =
-		typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-	const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
+	import { API_BASE } from "$lib/api";
 
 	// Browser state from SSE events
 	let currentUrl = $state<string | null>(null);

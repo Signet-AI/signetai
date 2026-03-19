@@ -60,9 +60,9 @@
 		const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
 
 		// Compute a free grid position to avoid overlapping at (0,0)
-		const occupied = gridApps
-			.filter((a) => a.id !== id && a.gridPosition)
-			.map((a) => a.gridPosition!);
+		const occupied = gridApps.flatMap((a) =>
+			a.id !== id && a.gridPosition ? [a.gridPosition] : [],
+		);
 		const pos = findFreeGridPosition(occupied, size);
 
 		await moveToGrid(id, pos);

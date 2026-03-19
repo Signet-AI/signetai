@@ -11,7 +11,7 @@ import type { ModelRegistryEntry } from "@signet/core";
 const isDev = import.meta.env.DEV;
 const isTauri =
 	typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
+export const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
 
 export interface Memory {
 	id: string;

@@ -2,7 +2,6 @@
 	import type { AppTrayEntry } from "$lib/stores/os.svelte";
 	import AutoCard from "./AutoCard.svelte";
 	import GripVertical from "@lucide/svelte/icons/grip-vertical";
-	import X from "@lucide/svelte/icons/x";
 	import Minimize2 from "@lucide/svelte/icons/minimize-2";
 
 	interface Props {
