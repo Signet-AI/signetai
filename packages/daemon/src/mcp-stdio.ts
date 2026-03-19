@@ -35,8 +35,14 @@ const refreshTimer = setInterval(() => {
 	void refreshMarketplaceProxyTools(server, { notify: true });
 }, refreshMs);
 
+let closing = false;
 const shutdown = () => {
+	if (closing) return;
+	closing = true;
 	clearInterval(refreshTimer);
+	// Hard deadline: exit even if server.close() hangs
+	const deadline = setTimeout(() => process.exit(0), 3000);
+	deadline.unref();
 	void server.close().finally(() => process.exit(0));
 };
 
