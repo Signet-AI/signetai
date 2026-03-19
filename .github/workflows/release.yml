@@ -183,6 +183,7 @@ jobs:
           if ($LASTEXITCODE -notin @(0, 3010)) { exit $LASTEXITCODE }
 
       - name: Build predictor
+        shell: bash
         run: cargo build --release --target "$RELEASE_TARGET"
         working-directory: packages/predictor
 
@@ -252,6 +253,7 @@ jobs:
           if ($LASTEXITCODE -notin @(0, 3010)) { exit $LASTEXITCODE }
 
       - name: Build daemon
+        shell: bash
         run: cargo build --release --target "$RELEASE_TARGET" -p signet-daemon
         working-directory: packages/daemon-rs
       - name: Upload to release
