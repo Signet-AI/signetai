@@ -37,7 +37,11 @@ const refreshTimer = setInterval(() => {
 
 const shutdown = () => {
 	clearInterval(refreshTimer);
+	void server.close().finally(() => process.exit(0));
 };
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+// Exit when the parent process closes our stdin (session ended)
+process.stdin.on("end", shutdown);
