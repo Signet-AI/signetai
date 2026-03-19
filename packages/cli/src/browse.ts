@@ -1021,7 +1021,7 @@ Examples:
 		});
 
 	// signet browse "<task>" — agent-piloted (default action / positional arg)
-	browseCmd.argument("[task]", "Natural language task for the agent to execute in Chrome").action(
+	browseCmd.argument("[task]", "Natural language task for the agent to execute in Chrome [Phase 3 — not yet implemented]").action(
 		async (task: string | undefined) => {
 			if (!task) {
 				browseCmd.help();

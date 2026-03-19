@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { SignetAppManifest } from "@signet/core";
 
-import { isPrivateHostname, validatePublicHttpUrl } from "../url-validation.js";
+import { isPrivateHostname } from "../url-validation.js";
 import {
 	loadAppTray,
 	loadProbeResult,
@@ -192,6 +192,10 @@ export function mountAppTrayRoutes(app: Hono): void {
 		}
 
 		// Validate URL scheme and block private/loopback addresses (SSRF prevention)
+		// TODO(security): DNS rebinding — hostname validation alone doesn't stop rebinding attacks.
+		// An attacker could register a public hostname, pass validation, then flip DNS to 127.0.0.1.
+		// safeFetch redirect protection mitigates but doesn't fully solve. Options: pin resolved IP at
+		// validation time for subsequent connections, or accept residual risk for local-only deployment.
 		try {
 			const parsed = new URL(url);
 			if (!["https:", "http:"].includes(parsed.protocol)) {

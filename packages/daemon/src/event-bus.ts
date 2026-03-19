@@ -178,7 +178,7 @@ class SignetEventBus {
 	reset(): void {
 		this.buffer = [];
 		this.lastEventHash.clear();
-		for (const [id, sub] of this.subscriptions) {
+		for (const [, sub] of this.subscriptions) {
 			this.emitter.off(sub.type, sub.callback);
 		}
 		this.subscriptions.clear();

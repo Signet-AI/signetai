@@ -26,20 +26,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function toStringRecord(value: unknown): Record<string, string> {
-	if (!isRecord(value)) return {};
-	const out: Record<string, string> = {};
-	for (const [k, v] of Object.entries(value)) {
-		if (typeof v === "string") out[k] = v;
-	}
-	return out;
-}
-
-function toStringArray(value: unknown): string[] {
-	if (!Array.isArray(value)) return [];
-	return value.filter((v): v is string => typeof v === "string");
-}
-
 /**
  * Read installed MCP servers from the marketplace config file.
  * This is a public accessor for the same data marketplace.ts manages.

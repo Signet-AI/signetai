@@ -23,6 +23,11 @@ jobs:
           # Extract the pinned hash from our installer
           PINNED=$(grep -oP '"[A-F0-9]{64}"' web/public/install.ps1 | tr -d '"')
 
+          if [ -z "$PINNED" ]; then
+            echo "::error::Could not extract pinned hash from web/public/install.ps1 — file missing or regex didn't match"
+            exit 1
+          fi
+
           echo "Pinned hash: $PINNED"
           echo "Actual hash: $ACTUAL"
 
