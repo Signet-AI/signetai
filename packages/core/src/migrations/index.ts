@@ -38,6 +38,7 @@ import { up as sessionSummaryDag } from "./029-session-summary-dag";
 import { up as nullableMemoryJobMemoryId } from "./030-nullable-memory-job-memory-id";
 import { up as dependencyReason } from "./031-dependency-reason";
 import { up as embeddingsVectorColumn } from "./032-embeddings-vector-column";
+import { up as scope } from "./033-scope";
 
 // -- Public interface consumed by Database.init() --
 
@@ -331,6 +332,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: embeddingsVectorColumn,
 		artifacts: {
 			columns: [{ table: "embeddings", column: "vector", optional: true }],
+		},
+	},
+	{
+		version: 33,
+		name: "scope",
+		up: scope,
+		artifacts: {
+			columns: [{ table: "memories", column: "scope" }],
 		},
 	},
 ];

@@ -32,6 +32,7 @@ export interface IngestEnvelope {
 	updatedBy?: string;
 	sourceType: string;
 	sourceId: string | null;
+	scope?: string | null;
 	createdAt: string;
 }
 
@@ -215,8 +216,8 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		 (id, content, normalized_content, content_hash, who, why, project,
 		  importance, type, tags, pinned, is_deleted, extraction_status,
 		  embedding_model, extraction_model, created_at, updated_at, updated_by,
-		  source_type, source_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  source_type, source_id, scope)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		mem.id,
 		mem.content,
@@ -238,6 +239,7 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.updatedBy ?? mem.who,
 		mem.sourceType,
 		mem.sourceId,
+		mem.scope ?? null,
 	);
 
 	// FTS sync handled by memories_ai AFTER INSERT trigger (migration 001)
