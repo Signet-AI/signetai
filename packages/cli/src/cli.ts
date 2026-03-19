@@ -6098,7 +6098,7 @@ hookCmd
 	.command("pre-compaction")
 	.description("Get summary instructions before session compaction")
 	.requiredOption("-H, --harness <harness>", "Harness name")
-	.option("--project <project>", "Project path")
+	.option("--project <project>", "Project path") // accepted for connector parity; project flows via continuity state from session-start
 	.option("--message-count <count>", "Number of messages in session", Number.parseInt)
 	.option("--json", "Output as JSON")
 	.action(async (options) => {
