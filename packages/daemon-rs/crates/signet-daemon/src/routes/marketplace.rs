@@ -152,11 +152,13 @@ fn scope_matches(scope: &McpScope, ctx: &ContextQuery) -> bool {
             .workspace
             .as_ref()
             .map(|w| {
+                let wn = w.replace('\\', "/");
                 scope.workspaces.iter().any(|s| {
-                    if s.ends_with('*') {
-                        w.starts_with(s.trim_end_matches('*'))
+                    let sn = s.replace('\\', "/");
+                    if sn.ends_with('*') {
+                        wn.starts_with(sn.trim_end_matches('*'))
                     } else {
-                        w.trim_end_matches('/') == s.trim_end_matches('/')
+                        wn.trim_end_matches('/') == sn.trim_end_matches('/')
                     }
                 })
             })

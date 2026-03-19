@@ -234,7 +234,7 @@ function extractScopeContext(input: {
 }
 
 function normalizeWorkspaceScopeEntry(value: string): string {
-	const trimmed = value.trim();
+	const trimmed = value.trim().replaceAll("\\", "/");
 	return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
 }
 
@@ -246,7 +246,7 @@ function dimensionMatches(
 	if (allowed.length === 0) return true;
 	if (!current) return false;
 
-	const currentLower = current.toLowerCase();
+	const currentLower = current.toLowerCase().replaceAll("\\", "/");
 	for (const rawEntry of allowed) {
 		const entry = rawEntry.toLowerCase();
 		if (kind === "workspace") {

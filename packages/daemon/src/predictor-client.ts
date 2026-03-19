@@ -328,6 +328,7 @@ export function createPredictorClient(
 	spawnPredictor: PredictorSpawn = (binaryPath, args) =>
 		spawn(binaryPath, [...args], {
 			stdio: ["pipe", "pipe", "pipe"],
+			windowsHide: true,
 		}),
 ): PredictorClient {
 	let proc: ChildProcess | null = null;

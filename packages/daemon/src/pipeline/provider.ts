@@ -9,7 +9,10 @@
 import type { LlmProvider, LlmGenerateResult } from "@signet/core";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-// node:child_process removed — using Bun.spawn directly for reliable I/O
+// On Windows, use node:child_process spawn with windowsHide to prevent
+// console window flashing. Bun.spawn doesn't support windowsHide.
+import { spawn as nodeSpawn } from "node:child_process";
+import { Readable } from "node:stream";
 import { logger } from "../logger";
 import { trimTrailingSlash } from "./url";
 
@@ -91,9 +94,9 @@ async function withSemaphore<T>(fn: () => Promise<T>): Promise<T> {
 // ---------------------------------------------------------------------------
 // Subprocess spawn helper
 // ---------------------------------------------------------------------------
-// Wraps Bun.spawn with a simplified interface for CLI subprocess calls.
-// Note: Bun.spawn does not support windowsHide, so CLI subprocesses may
-// flash a console window on Windows.
+// Wraps subprocess spawning with a simplified interface for CLI calls.
+// On Windows, uses node:child_process with windowsHide: true to prevent
+// console window flashing. On other platforms, uses Bun.spawn directly.
 
 interface SpawnResult {
 	readonly stdout: ReadableStream<Uint8Array>;
@@ -103,19 +106,11 @@ interface SpawnResult {
 }
 
 function spawnHidden(cmd: string[], options?: { env?: Record<string, string | undefined> }): SpawnResult {
-	// Use Bun.spawn directly — it natively returns ReadableStreams and
-	// handles subprocess I/O correctly. The previous node:child_process
-	// wrapper had stream-closing issues that caused hangs.
-
 	// Resolve the binary via Bun.which() so that .cmd wrappers on Windows
 	// are found correctly (mirrors scheduler/spawn.ts pattern).
 	const [bin, ...args] = cmd;
 	const resolvedBin = Bun.which(bin);
 	if (resolvedBin === null) {
-		// Throws synchronously — same behaviour as Bun.spawn with a missing
-		// binary. All call sites are guarded: available() wraps in try/catch,
-		// and callClaude/callCodex run inside withSemaphore whose try/finally
-		// releases the semaphore before the rejection propagates.
 		throw new Error(`spawnHidden: binary "${bin}" not found on PATH`);
 	}
 	const sanitizedEnv: Record<string, string> = {};
@@ -124,6 +119,40 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 			if (v !== undefined) sanitizedEnv[k] = v;
 		}
 	}
+
+	// On Windows, use node:child_process with windowsHide to prevent
+	// console window flashing. Bun.spawn doesn't support windowsHide.
+	if (process.platform === "win32") {
+		const child = nodeSpawn(resolvedBin, args, {
+			stdio: ["ignore", "pipe", "pipe"],
+			env: options?.env ? sanitizedEnv : undefined,
+			windowsHide: true,
+		});
+
+		// Convert Node.js Readable streams to Web ReadableStreams
+		const toWebStream = (nodeStream: import("node:stream").Readable): ReadableStream<Uint8Array> =>
+			Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+
+		const exitPromise = new Promise<number>((resolve) => {
+			child.on("exit", (code) => resolve(code ?? 1));
+			child.on("error", () => resolve(1));
+		});
+
+		return {
+			stdout: toWebStream(child.stdout!),
+			stderr: toWebStream(child.stderr!),
+			exited: exitPromise,
+			kill(signal?: string) {
+				if (signal === "SIGKILL") {
+					child.kill();
+				} else {
+					child.kill("SIGTERM");
+				}
+			},
+		};
+	}
+
+	// Non-Windows: use Bun.spawn directly for reliable I/O.
 	const proc = Bun.spawn([resolvedBin, ...args], {
 		stdin: "ignore",
 		stdout: "pipe",
@@ -131,8 +160,6 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		env: options?.env ? sanitizedEnv : undefined,
 	});
 
-	// Bun.spawn with stdout:"pipe" guarantees ReadableStream, but the
-	// type is nullable in the general case. Guard at runtime.
 	if (!proc.stdout || !proc.stderr) {
 		throw new Error("spawnHidden: stdout/stderr unexpectedly null despite pipe mode");
 	}
@@ -142,17 +169,6 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		stderr: proc.stderr,
 		exited: proc.exited,
 		kill(signal?: string) {
-			if (process.platform === "win32") {
-				// On Windows, numeric signals don't work. kill() with no
-				// args terminates unconditionally (equivalent to SIGKILL).
-				// SIGTERM is supported as a string on Windows in Node/Bun.
-				if (signal === "SIGKILL") {
-					proc.kill();
-				} else {
-					proc.kill("SIGTERM");
-				}
-				return;
-			}
 			const sigMap: Record<string, number | undefined> = { SIGTERM: 15, SIGKILL: 9 };
 			const sigNum = signal ? sigMap[signal] : 15;
 			if (signal && sigNum === undefined) {
