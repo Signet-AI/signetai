@@ -311,6 +311,20 @@ export function startMaintenanceWorker(
 					});
 				}
 				feedbackPropagatedAttributes += propagateMemoryStatus(accessor, agentId);
+
+				// Retroactive supersession sweep
+				if (cfg.structural.supersessionSweepEnabled) {
+					const { sweepRetroactiveSupersession } = await import("./supersession");
+					const provider = getLlmProvider();
+					const sweep = await sweepRetroactiveSupersession(accessor, agentId, cfg, provider);
+					if (sweep.candidates.length > 0) {
+						logger.info("maintenance", "Supersession sweep", {
+							agentId,
+							superseded: sweep.superseded,
+							proposals: sweep.candidates.length,
+						});
+					}
+				}
 			}
 			recordFeedbackTelemetry({
 				feedbackDecayedAspects,

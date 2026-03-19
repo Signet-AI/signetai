@@ -365,6 +365,23 @@ async function processClassifyBatch(
 		classified: processedIndices.size,
 		dropped: jobs.length - processedIndices.size,
 	});
+
+	// Retroactive supersession: check newly classified attributes against
+	// existing siblings on the same aspect for contradictions.
+	if (processedIndices.size > 0 && deps.pipelineCfg.structural.supersessionEnabled) {
+		const ids = [...processedIndices].map((i) => payloads[i].attribute_id);
+		const { checkAndSupersedeForAttributes } = await import("./supersession");
+		const result = await checkAndSupersedeForAttributes(
+			deps.accessor, ids, "default", deps.pipelineCfg, deps.provider,
+		);
+		if (result.candidates.length > 0) {
+			logger.info("structural-classify", "Retroactive supersession", {
+				entityId,
+				superseded: result.superseded,
+				proposals: result.candidates.length,
+			});
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

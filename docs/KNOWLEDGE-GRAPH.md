@@ -219,6 +219,20 @@ Attribute lifecycle transitions (supersede, delete) are soft: status is set to
 sweeps attributes whose `memory_id` refers to a deleted memory and marks them
 `'superseded'`.
 
+### Retroactive Supersession
+
+Beyond orphaned-memory cleanup, `supersession.ts` detects contradictions
+between active sibling attributes on the same aspect. Two paths trigger this:
+an inline pass after `structural_classify` populates `aspect_id` (catching
+contradictions at classification time), and a periodic sweep in the
+maintenance worker (catching pre-existing contradictions across sessions).
+Detection uses a four-signal heuristic (negation polarity, antonym pairs,
+value conflict, temporal markers) with an optional LLM fallback via
+`detectSemanticContradiction()`. Attributes with `kind='constraint'` are
+never auto-superseded. See the
+[retroactive supersession spec](./specs/planning/retroactive-supersession.md)
+for full design details.
+
 ## API
 
 Graph data is surfaced through these HTTP API endpoints on the daemon:

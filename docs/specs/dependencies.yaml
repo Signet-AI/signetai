@@ -218,3 +218,20 @@ specs:
     success_criteria:
       - "Agent can provide explicit memory quality feedback via MCP tool call instead of raw JSON"
     decision: null
+
+  - id: retroactive-supersession
+    status: planning
+    path: docs/specs/planning/retroactive-supersession.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/MSAM-COMPARISON.md
+    success_criteria:
+      - "When a new fact contradicts an existing attribute on the same entity/aspect, the old attribute is marked superseded within one structural_classify poll cycle"
+      - "Constraints (kind='constraint') are never auto-superseded"
+      - "All supersession events produce memory_history audit records"
+      - "Shadow mode records proposals without mutating attribute status"
+      - "Sweep catches pre-existing contradictions across sessions"
+    decision: null

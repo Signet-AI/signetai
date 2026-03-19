@@ -599,6 +599,13 @@ controlled by `semanticContradictionTimeoutMs` (default 45 seconds, range
 5s–300s). On timeout or parse failure, the result defaults to "no
 contradiction" — the check is advisory and never blocks a proposal.
 
+These same detection primitives are reused by the retroactive supersession
+system (`supersession.ts`), which applies contradiction detection to sibling
+attributes on the same entity/aspect rather than to UPDATE/DELETE proposals.
+See the [retroactive supersession spec](./specs/planning/retroactive-supersession.md)
+and [KNOWLEDGE-GRAPH.md](./KNOWLEDGE-GRAPH.md#retroactive-supersession) for
+details.
+
 ```yaml
 memory:
   pipelineV2:

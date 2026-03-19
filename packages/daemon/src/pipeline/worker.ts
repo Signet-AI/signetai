@@ -24,6 +24,13 @@ import { txPersistEntities } from "./graph-transactions";
 import type { AnalyticsCollector } from "../analytics";
 import type { TelemetryCollector } from "../telemetry";
 import { generateWithTracking } from "./provider";
+import {
+	ANTONYM_PAIRS as CONTRADICTION_ANTONYM_PAIRS,
+	tokenize,
+	hasNegation,
+	overlapCount,
+	hasAntonymConflict,
+} from "./antonyms";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,75 +72,6 @@ interface AppliedWriteStats {
 	embeddingsAdded: number;
 	writtenFacts: WrittenFact[];
 	dedupedFacts: WrittenFact[];
-}
-
-const NEGATION_TOKENS = new Set([
-	"not",
-	"no",
-	"never",
-	"cannot",
-	"cant",
-	"doesnt",
-	"dont",
-	"isnt",
-	"wasnt",
-	"wont",
-	"without",
-]);
-
-const CONTRADICTION_ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]> = [
-	["enabled", "disabled"],
-	["allow", "deny"],
-	["accept", "reject"],
-	["always", "never"],
-	["on", "off"],
-	["true", "false"],
-];
-
-function tokenize(text: string): string[] {
-	return text
-		.toLowerCase()
-		.replace(/[^a-z0-9\s]/g, " ")
-		.split(/\s+/)
-		.filter((token) => token.length >= 2);
-}
-
-function hasNegation(tokens: readonly string[]): boolean {
-	return tokens.some((token) => NEGATION_TOKENS.has(token));
-}
-
-function overlapCount(
-	left: readonly string[],
-	right: readonly string[],
-): number {
-	const rightSet = new Set(right);
-	let overlap = 0;
-	for (const token of left) {
-		if (rightSet.has(token)) overlap++;
-	}
-	return overlap;
-}
-
-function hasAntonymConflict(
-	leftTokens: ReadonlySet<string>,
-	rightTokens: ReadonlySet<string>,
-): boolean {
-	for (const [leftWord, rightWord] of CONTRADICTION_ANTONYM_PAIRS) {
-		const leftHasLeft = leftTokens.has(leftWord);
-		const leftHasRight = leftTokens.has(rightWord);
-		const rightHasLeft = rightTokens.has(leftWord);
-		const rightHasRight = rightTokens.has(rightWord);
-
-		const leftExclusive = leftHasLeft !== leftHasRight;
-		const rightExclusive = rightHasLeft !== rightHasRight;
-		const oppositePolarity =
-			(leftHasLeft && rightHasRight) || (leftHasRight && rightHasLeft);
-
-		if (leftExclusive && rightExclusive && oppositePolarity) {
-			return true;
-		}
-	}
-	return false;
 }
 
 function detectContradictionRisk(
