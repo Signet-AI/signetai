@@ -295,11 +295,11 @@ export async function getMemories(limit = 100, offset = 0): Promise<{ memories: 
 function buildTimelineFallback(memories: readonly Memory[]): MemoryTimelineResponse {
 	const MS_PER_DAY = 24 * 60 * 60 * 1000;
 	const now = new Date();
-	const nowStart = Date.UTC(
-		now.getUTCFullYear(),
-		now.getUTCMonth(),
-		now.getUTCDate(),
-	);
+	const nowStart = new Date(
+		now.getFullYear(),
+		now.getMonth(),
+		now.getDate(),
+	).getTime();
 
 	const ranges = [
 		{ eraIndex: 0 as const, rangeKey: "today" as const, label: "Today" as const, lookbackDays: 1 },
@@ -448,7 +448,8 @@ export async function getMemoryTimeline(options?: {
 		const timeoutId = setTimeout(() => controller.abort(), 10_000);
 		let response: Response;
 		try {
-			response = await fetch(`${API_BASE}/api/memory/timeline`, {
+			const tz = new Date().getTimezoneOffset();
+			response = await fetch(`${API_BASE}/api/memory/timeline?tzOffset=${tz}`, {
 				signal: controller.signal,
 			});
 		} finally {

@@ -1728,7 +1728,11 @@ app.get("/api/memories", (c) => {
 
 app.get("/api/memory/timeline", (c) => {
 	try {
-		const timeline = getDbAccessor().withReadDb((db) => buildMemoryTimeline(db));
+		const raw = Number.parseInt(c.req.query("tzOffset") || "0", 10);
+		const tzOffsetMin = Number.isNaN(raw) ? 0 : raw;
+		const timeline = getDbAccessor().withReadDb((db) =>
+			buildMemoryTimeline(db, { tzOffsetMin }),
+		);
 		return c.json(timeline);
 	} catch (e) {
 		logger.error("memory", "Error building memory timeline", e as Error);

@@ -103,9 +103,17 @@ interface MutableBucket {
 	readonly topTags: Map<string, number>;
 }
 
-function startOfUtcDay(ms: number): number {
-	const d = new Date(ms);
-	return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+/**
+ * Start of day in the caller's timezone.
+ * @param ms - current timestamp
+ * @param tzOffsetMin - minutes west of UTC (same as Date.getTimezoneOffset(),
+ *   e.g. 420 for MST/UTC-7). Defaults to 0 (UTC).
+ */
+function startOfLocalDay(ms: number, tzOffsetMin = 0): number {
+	const local = ms - tzOffsetMin * 60_000;
+	const d = new Date(local);
+	const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+	return dayStart + tzOffsetMin * 60_000;
 }
 
 function parseTimestamp(raw: string): number | null {
@@ -216,10 +224,13 @@ export function buildMemoryTimeline(
 	db: ReadDb,
 	options?: {
 		readonly now?: Date;
+		/** Minutes west of UTC (Date.getTimezoneOffset()). Defaults to 0. */
+		readonly tzOffsetMin?: number;
 	},
 ): MemoryTimelineResponse {
 	const now = options?.now ?? new Date();
-	const nowStartMs = startOfUtcDay(now.getTime());
+	const tzOffsetMin = options?.tzOffsetMin ?? 0;
+	const nowStartMs = startOfLocalDay(now.getTime(), tzOffsetMin);
 	const buckets = createBuckets(nowStartMs);
 
 	// Widest bucket is 30 days — filter SQL to avoid full table scan
