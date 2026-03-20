@@ -86,43 +86,53 @@ export function mountAppTrayRoutes(app: Hono): void {
 
 		if (missing.length > 0) {
 			const now = new Date().toISOString();
-			for (const server of missing) {
-				tray.push({
-					id: server.id,
+			const stubs = missing.map((server) => ({
+				id: server.id,
+				name: server.name,
+				icon: undefined,
+				state: "tray" as const,
+				manifest: {
 					name: server.name,
-					icon: undefined,
-					state: "tray",
-					manifest: {
-						name: server.name,
-						defaultSize: { w: 4, h: 3 },
-					},
-					autoCard: {
-						name: server.name,
-						tools: [],
-						resources: [],
-						hasAppResources: false,
-						defaultSize: { w: 4, h: 3 },
-					},
-					hasDeclaredManifest: false,
-					createdAt: now,
-					updatedAt: now,
-				});
+					defaultSize: { w: 4, h: 3 },
+				},
+				autoCard: {
+					name: server.name,
+					tools: [] as const,
+					resources: [] as const,
+					hasAppResources: false,
+					defaultSize: { w: 4, h: 3 },
+				},
+				hasDeclaredManifest: false,
+				createdAt: now,
+				updatedAt: now,
+			}));
+
+			// Best-effort persist: reload the latest tray before writing
+			// to avoid overwriting concurrent PATCH updates
+			try {
+				ensureMarketplaceDir();
+				const fresh = loadAppTray();
+				const freshIds = new Set(fresh.map((e) => e.id));
+				const toAdd = stubs.filter((s) => !freshIds.has(s.id));
+				if (toAdd.length > 0) {
+					writeFileSync(
+						join(getMarketplaceDir(), "app-tray.json"),
+						JSON.stringify([...fresh, ...toAdd], null, 2),
+					);
+				}
+				logger.info(
+					"os",
+					`Synced ${toAdd.length} installed server(s) to app tray`,
+				);
+			} catch (err) {
+				logger.warn(
+					"os",
+					`Failed to persist auto-synced tray entries: ${err}`,
+				);
 			}
 
-			// Persist so future fetches don't re-sync the same servers
-			const agentsDir =
-				process.env.SIGNET_PATH || join(homedir(), ".agents");
-			const dir = join(agentsDir, "marketplace");
-			if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-			writeFileSync(
-				join(dir, "app-tray.json"),
-				JSON.stringify(tray, null, 2),
-			);
-
-			logger.info(
-				"os",
-				`Synced ${missing.length} installed server(s) to app tray`,
-			);
+			// Return the merged view regardless of persist success
+			for (const stub of stubs) tray.push(stub);
 		}
 
 		return c.json({
