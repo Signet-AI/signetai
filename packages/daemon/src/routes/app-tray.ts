@@ -4,7 +4,7 @@ import type { Hono } from "hono";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { SignetAppManifest } from "@signet/core";
+import type { AutoCardToolAction, AutoCardResource, SignetAppManifest } from "@signet/core";
 
 import { isPrivateHostname } from "../url-validation.js";
 import {
@@ -89,7 +89,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 			const stubs = missing.map((server) => ({
 				id: server.id,
 				name: server.name,
-				icon: undefined,
+				icon: null as string | null,
 				state: "tray" as const,
 				manifest: {
 					name: server.name,
@@ -97,8 +97,8 @@ export function mountAppTrayRoutes(app: Hono): void {
 				},
 				autoCard: {
 					name: server.name,
-					tools: [] as const,
-					resources: [] as const,
+					tools: [] as AutoCardToolAction[],
+					resources: [] as AutoCardResource[],
 					hasAppResources: false,
 					defaultSize: { w: 4, h: 3 },
 				},
