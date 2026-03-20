@@ -4,7 +4,7 @@ import {
 	type MarketplaceMcpCatalogEntry,
 	type MarketplaceMcpServer,
 } from "$lib/api";
-import { getMonogram, getMonogramBg, getHueRotate, getAvatarUrl, getAvatarFromSource } from "$lib/card-utils";
+import { getMonogram, getMonogramBg, getAvatarUrl, getAvatarFromSource } from "$lib/card-utils";
 import McpDetailSheet from "$lib/components/marketplace/McpDetailSheet.svelte";
 import McpInstallSheet from "$lib/components/marketplace/McpInstallSheet.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -313,7 +313,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 							<div class="catalog-top">
 								<div class="mcp-icon" style={`background: ${sAvatar && !installedAvatarErrors.has(server.id) ? 'transparent' : getMonogramBg(server.name)};`}>
 									{#if sAvatar && !installedAvatarErrors.has(server.id)}
-										<img src={sAvatar} alt={server.name} class="mcp-avatar" style="filter: hue-rotate({getHueRotate(server.name)}deg);" onerror={() => { installedAvatarErrors.add(server.id); }} />
+										<img src={sAvatar} alt={server.name} class="mcp-avatar" onerror={() => { installedAvatarErrors.add(server.id); }} />
 									{:else}
 										{getMonogram(server.name)}
 									{/if}
@@ -376,7 +376,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 						<div class="catalog-top">
 							<div class="mcp-icon" style={`background: ${avatar && !catalogAvatarErrors.has(entry.id) ? 'transparent' : getMonogramBg(entry.name)};`}>
 								{#if avatar && !catalogAvatarErrors.has(entry.id)}
-									<img src={avatar} alt={entry.name} class="mcp-avatar" style="filter: hue-rotate({getHueRotate(entry.name)}deg);" onerror={() => { catalogAvatarErrors.add(entry.id); }} />
+									<img src={avatar} alt={entry.name} class="mcp-avatar" onerror={() => { catalogAvatarErrors.add(entry.id); }} />
 								{:else}
 									{getMonogram(entry.name)}
 								{/if}

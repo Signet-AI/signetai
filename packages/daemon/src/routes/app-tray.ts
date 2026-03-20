@@ -70,10 +70,61 @@ function findFreeGridPosition(
  */
 export function mountAppTrayRoutes(app: Hono): void {
 	/**
-	 * GET /api/os/tray — list all app tray entries
+	 * GET /api/os/tray — list all app tray entries.
+	 * Automatically syncs installed MCP servers that are missing
+	 * from the tray so pre-installed apps appear without manual
+	 * probe/install actions.
 	 */
 	app.get("/api/os/tray", (c) => {
 		const tray = loadAppTray();
+		const installed = readInstalledServersPublic();
+		const trayIds = new Set(tray.map((e) => e.id));
+
+		const missing = installed.filter(
+			(s) => s.enabled && !trayIds.has(s.id),
+		);
+
+		if (missing.length > 0) {
+			const now = new Date().toISOString();
+			for (const server of missing) {
+				tray.push({
+					id: server.id,
+					name: server.name,
+					icon: undefined,
+					state: "tray",
+					manifest: {
+						name: server.name,
+						defaultSize: { w: 4, h: 3 },
+					},
+					autoCard: {
+						name: server.name,
+						tools: [],
+						resources: [],
+						hasAppResources: false,
+						defaultSize: { w: 4, h: 3 },
+					},
+					hasDeclaredManifest: false,
+					createdAt: now,
+					updatedAt: now,
+				});
+			}
+
+			// Persist so future fetches don't re-sync the same servers
+			const agentsDir =
+				process.env.SIGNET_PATH || join(homedir(), ".agents");
+			const dir = join(agentsDir, "marketplace");
+			if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+			writeFileSync(
+				join(dir, "app-tray.json"),
+				JSON.stringify(tray, null, 2),
+			);
+
+			logger.info(
+				"os",
+				`Synced ${missing.length} installed server(s) to app tray`,
+			);
+		}
+
 		return c.json({
 			entries: tray,
 			count: tray.length,

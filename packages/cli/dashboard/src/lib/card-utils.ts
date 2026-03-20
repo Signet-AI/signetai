@@ -9,7 +9,7 @@ const MONOGRAM_COLORS = [
 	"var(--sig-icon-bg-6)",
 ] as const;
 
-/** Simple string hash used for deterministic color/rotation assignment. */
+/** Simple string hash used for deterministic color assignment. */
 function hash(name: string): number {
 	let h = 0;
 	for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) & 0xffff;
@@ -28,11 +28,6 @@ export function getMonogram(name: string): string {
 /** Deterministic background color for a card monogram. */
 export function getMonogramBg(name: string): string {
 	return MONOGRAM_COLORS[Math.abs(hash(name)) % MONOGRAM_COLORS.length] ?? MONOGRAM_COLORS[0];
-}
-
-/** Deterministic hue-rotate angle (0-359) for GitHub avatar tinting. */
-export function getHueRotate(name: string): number {
-	return hash(name) % 360;
 }
 
 /**

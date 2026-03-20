@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { Skill, SkillSearchResult } from "$lib/api";
-import { getMonogram, getMonogramBg, getHueRotate } from "$lib/card-utils";
+import { getMonogram, getMonogramBg } from "$lib/card-utils";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import { getCatalogByName } from "$lib/stores/skills.svelte";
@@ -65,7 +65,6 @@ function getSkillAvatarUrl(): string | null {
 	return null;
 }
 
-let hueRotate = $derived(getHueRotate(item.name));
 let avatarUrl = $derived(getSkillAvatarUrl());
 let avatarFailed = $state(false);
 $effect(() => { avatarUrl; avatarFailed = false; });
@@ -93,7 +92,6 @@ let isInstalled = $derived(
 						src={avatarUrl}
 						alt={item.name}
 						class="monogram-avatar"
-						style="filter: hue-rotate({hueRotate}deg);"
 						onerror={() => { avatarFailed = true; }}
 					/>
 				{:else}
