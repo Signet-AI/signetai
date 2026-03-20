@@ -1729,7 +1729,7 @@ app.get("/api/memories", (c) => {
 app.get("/api/memory/timeline", (c) => {
 	try {
 		const raw = Number.parseInt(c.req.query("tzOffset") || "0", 10);
-		const tzOffsetMin = Number.isNaN(raw) ? 0 : raw;
+		const tzOffsetMin = Number.isNaN(raw) ? 0 : Math.max(-840, Math.min(840, raw));
 		const timeline = getDbAccessor().withReadDb((db) =>
 			buildMemoryTimeline(db, { tzOffsetMin }),
 		);
