@@ -26,13 +26,13 @@ function resolveSignetArgs(): string[] {
 	return ["signet"];
 }
 
-/** Resolve signet-mcp command string for config.toml. */
-function resolveSignetMcpCmd(): string {
-	if (process.platform !== "win32") return "signet-mcp";
+/** Resolve signet-mcp command as array for TOML inline array format. */
+function resolveSignetMcpArgs(): string[] {
+	if (process.platform !== "win32") return ["signet-mcp"];
 	const entry = process.argv[1] || "";
 	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
-	if (existsSync(mcpJs)) return `${process.execPath} ${mcpJs}`;
-	return "signet-mcp";
+	if (existsSync(mcpJs)) return [process.execPath, mcpJs];
+	return ["signet-mcp"];
 }
 
 // ---------------------------------------------------------------------------
@@ -122,28 +122,30 @@ function removeSignetHooks(hooks: HooksJson): HooksJson {
 // MCP server registration (config.toml)
 // ---------------------------------------------------------------------------
 
-function tomlQuote(value: string): string {
-	// Use TOML literal string (single quotes, no escape processing) for paths
-	// that may contain backslashes. Falls back to double-quoted with escaping
-	// if the value itself contains single quotes.
-	if (!value.includes("'")) return `'${value}'`;
-	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+function tomlInlineArray(args: string[]): string {
+	// TOML inline array with literal strings (single-quoted, no escape processing)
+	// to safely handle Windows backslash paths
+	const items = args.map((a) => {
+		if (!a.includes("'")) return `'${a}'`;
+		return `"${a.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+	});
+	return `[${items.join(", ")}]`;
 }
 
-function patchConfigToml(path: string, mcpCmd: string): boolean {
+function patchConfigToml(path: string, mcpArgs: string[]): boolean {
 	const dir = join(path, "..");
 	mkdirSync(dir, { recursive: true });
 
-	const quoted = tomlQuote(mcpCmd);
+	const value = mcpArgs.length === 1 ? `'${mcpArgs[0]}'` : tomlInlineArray(mcpArgs);
 	if (!existsSync(path)) {
-		writeFileSync(path, `# Signet MCP server\n[mcp_servers.signet]\ncommand = ${quoted}\n`);
+		writeFileSync(path, `# Signet MCP server\n[mcp_servers.signet]\ncommand = ${value}\n`);
 		return true;
 	}
 
 	const content = readFileSync(path, "utf-8");
 	if (content.includes("[mcp_servers.signet]")) return false;
 
-	const appended = content.trimEnd() + `\n\n# Signet MCP server\n[mcp_servers.signet]\ncommand = ${quoted}\n`;
+	const appended = content.trimEnd() + `\n\n# Signet MCP server\n[mcp_servers.signet]\ncommand = ${value}\n`;
 	writeFileSync(path, appended);
 	return true;
 }
@@ -232,8 +234,8 @@ export class CodexConnector extends BaseConnector {
 		}
 
 		// 3. Register MCP server in config.toml
-		const mcpCmd = resolveSignetMcpCmd();
-		if (patchConfigToml(this.getConfigPath(), mcpCmd)) {
+		const mcpArgs = resolveSignetMcpArgs();
+		if (patchConfigToml(this.getConfigPath(), mcpArgs)) {
 			configsPatched.push(this.getConfigPath());
 		}
 
