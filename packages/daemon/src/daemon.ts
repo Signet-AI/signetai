@@ -6806,6 +6806,10 @@ app.get("/api/pipeline/status", (c) => {
 	});
 });
 
+app.use("/api/pipeline/nudge", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
+
 app.post("/api/pipeline/nudge", (c) => {
 	if (!nudgeExtractionWorker()) {
 		return c.json({ error: "Extraction worker not running" }, 503);
