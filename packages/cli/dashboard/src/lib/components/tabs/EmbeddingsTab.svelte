@@ -55,9 +55,7 @@ import {
 	entityTypeColors,
 	newnessFillStyle,
 	newnessIntensity,
-	parseCreatedMs,
 	sourceColorRgba,
-	sourceRgbaFast,
 	tierChargeStrength,
 } from "../embeddings/embedding-graph";
 
@@ -179,9 +177,9 @@ let graphPhysics = $state<GraphPhysicsConfig>(DEFAULT_GRAPH_PHYSICS);
 let graphPhysicsHydrated = $state(false);
 
 let embeddingById = $state(new Map<string, EmbeddingPoint>());
-let searchIndex = $state(new Map<string, string>());
 let relationLookup = $state(new Map<string, RelationKind>());
 let hoverLockedId = $state<string | null>(null);
+let searchIndex = $state(new Map<string, string>());
 
 // biome-ignore lint/style/useConst: Mutated by bind:this.
 let graphRegion = $state<HTMLDivElement | null>(null);
@@ -641,16 +639,11 @@ function intersectFilterSets(filters: Array<Set<string> | null>): Set<string> | 
 			out = new Set(filter);
 			continue;
 		}
-		// Iterate smaller set, check against larger — avoids spread+filter+new Set
 		if (out.size <= filter.size) {
-			for (const id of out) {
-				if (!filter.has(id)) out.delete(id);
-			}
+			for (const id of out) { if (!filter.has(id)) out.delete(id); }
 		} else {
 			const next = new Set<string>();
-			for (const id of filter) {
-				if (out.has(id)) next.add(id);
-			}
+			for (const id of filter) { if (out.has(id)) next.add(id); }
 			out = next;
 		}
 	}
@@ -658,18 +651,15 @@ function intersectFilterSets(filters: Array<Set<string> | null>): Set<string> | 
 }
 
 function updateEmbeddingInState(id: string, patch: (entry: EmbeddingPoint) => EmbeddingPoint): void {
-	const idx = embeddings.findIndex((entry) => entry.id === id);
+	const idx = embeddings.findIndex((e) => e.id === id);
 	if (idx < 0) return;
 	const patched = patch(embeddings[idx]);
 	embeddings[idx] = patched;
 	embeddings = embeddings;
 	embeddingById.set(id, patched);
 	embeddingById = embeddingById;
-	const nodeIdx = nodes.findIndex((n) => n.data.id === id);
-	if (nodeIdx >= 0) {
-		nodes[nodeIdx] = { ...nodes[nodeIdx], data: patched };
-		nodes = nodes;
-	}
+	const ni = nodes.findIndex((n) => n.data.id === id);
+	if (ni >= 0) { nodes[ni] = { ...nodes[ni], data: patched }; nodes = nodes; }
 	if (graphSelected?.id === id) graphSelected = patched;
 	if (graphHovered?.id === id) graphHovered = patched;
 }
@@ -956,9 +946,8 @@ async function initGraph(): Promise<void> {
 			x: ((node.x - minX) / rangeX - 0.5) * scale,
 			y: ((node.y - minY) / rangeY - 0.5) * scale,
 			radius: 2.3 + (node.importance ?? 0.5) * 2.8,
-			color: sourceRgbaFast(node.who, 0.85),
+			color: sourceColorRgba(node.who, 0.85),
 			data: embeddings[index],
-			createdMs: parseCreatedMs(node.createdAt),
 		}));
 		nodeIdsByIndex = embeddings.map((embedding) => embedding.id);
 
@@ -980,11 +969,10 @@ async function initGraph(): Promise<void> {
 		if (showEntityOverlay) {
 			// Tier-aware force simulation for hierarchical layout
 			canvas2d?.startKnowledgeGraphSimulation(nodes, edges);
-			canvas2d?.startRendering(true);
 		} else {
 			canvas2d?.startSimulation(nodes, edges, graphPhysics);
-			canvas2d?.startRendering();
 		}
+		canvas2d?.startRendering();
 	} catch (error) {
 		graphError = (error as Error).message || "Failed to load projection";
 		graphStatus = "";
@@ -1147,29 +1135,37 @@ async function buildKnowledgeGraph(): Promise<void> {
 
 		// Performance cap: drop memory leaf nodes if > 3000 total
 		if (kgNodes.length > 3000) {
-			// Build index remapping in a single pass — O(n) with no intermediate arrays
-			const indexMap = new Map<number, number>();
-			let writeIdx = 0;
+			const memoryIndices = new Set<number>();
 			for (let i = 0; i < kgNodes.length; i++) {
-				if (kgNodes[i].nodeType === "memory") continue;
-				indexMap.set(i, writeIdx);
-				kgNodes[writeIdx] = kgNodes[i];
-				kgNodeIds[writeIdx] = kgNodeIds[i];
-				writeIdx++;
+				if (kgNodes[i].nodeType === "memory") memoryIndices.add(i);
 			}
-			kgNodes.length = writeIdx;
-			kgNodeIds.length = writeIdx;
-			// Remap edges in place
-			let edgeWrite = 0;
+			// Rebuild without memory nodes (filter edges too)
+			const indexMap = new Map<number, number>();
+			const filtered: GraphNode[] = [];
+			const filteredIds: string[] = [];
+			for (let i = 0; i < kgNodes.length; i++) {
+				if (memoryIndices.has(i)) continue;
+				indexMap.set(i, filtered.length);
+				filtered.push(kgNodes[i]);
+				filteredIds.push(kgNodeIds[i]);
+			}
+			const filteredEdges: GraphEdge[] = [];
 			for (const edge of kgEdges) {
-				const ms = indexMap.get(edge.source as number);
-				const mt = indexMap.get(edge.target as number);
+				const si = edge.source as number;
+				const ti = edge.target as number;
+				const ms = indexMap.get(si);
+				const mt = indexMap.get(ti);
 				if (ms !== undefined && mt !== undefined) {
-					kgEdges[edgeWrite] = { ...edge, source: ms, target: mt };
-					edgeWrite++;
+					filteredEdges.push({ ...edge, source: ms, target: mt });
 				}
 			}
-			kgEdges.length = edgeWrite;
+			kgNodes.length = 0;
+			kgNodes.push(...filtered);
+			kgNodeIds.length = 0;
+			kgNodeIds.push(...filteredIds);
+			kgEdges.length = 0;
+			kgEdges.push(...filteredEdges);
+			// Rebuild embeddingById
 			kgEmbeddingById.clear();
 			for (const n of kgNodes) {
 				kgEmbeddingById.set(n.data.id, n.data);
@@ -1380,8 +1376,7 @@ $effect(() => {
 	const counts = new Map<string, number>();
 	const typeMap = new Map<string, number>();
 	const sourceTypeMap = new Map<string, number>();
-	const index = new Map<string, string>();
-
+	const idx = new Map<string, string>();
 	for (const row of rows) {
 		if (row.pinned) pinned.add(row.id);
 		const key = row.who ?? "unknown";
@@ -1391,16 +1386,10 @@ $effect(() => {
 		}
 		const sourceType = row.sourceType ?? "memory";
 		sourceTypeMap.set(sourceType, (sourceTypeMap.get(sourceType) ?? 0) + 1);
-		// Phase 6: Pre-build search index
-		index.set(row.id, [
-			row.content, row.text ?? "", row.who ?? "",
-			row.type ?? "", row.sourceType ?? "",
-			row.sourceId ?? "", ...(row.tags ?? []),
-		].join(" ").toLowerCase());
+		idx.set(row.id, [row.content, row.text ?? "", row.who ?? "", row.type ?? "", row.sourceType ?? "", row.sourceId ?? "", ...(row.tags ?? [])].join(" ").toLowerCase());
 	}
-
 	pinnedIds = pinned;
-	searchIndex = index;
+	searchIndex = idx;
 	sourceCounts = [...counts.entries()]
 		.sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
 		.map(([who, count]) => ({ who, count }));
@@ -1473,7 +1462,6 @@ $effect(() => {
 
 	const ids = new Set<string>();
 	const matches: EmbeddingPoint[] = [];
-	// Phase 6: Use pre-built search index instead of per-search string construction
 	for (const row of rows) {
 		const haystack = searchIndex.get(row.id);
 		if (haystack && haystack.includes(query)) {
@@ -1857,7 +1845,7 @@ $effect(() => {
 
 	const observer = new IntersectionObserver(
 		(entries) => {
-			if (entries[0].isIntersecting && !graphInitialized && !graphRegionVisible) {
+			if (entries[0].isIntersecting && !graphInitialized && !graphRegionVisible && graphPhysicsHydrated && viewSettingsHydrated) {
 				graphRegionVisible = true;
 				initGraph();
 			}
