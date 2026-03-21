@@ -304,8 +304,9 @@ export class CodexConnector extends BaseConnector {
 	isInstalled(): boolean {
 		const hooks = readHooksJson(this.getHooksJsonPath());
 		if (!hooks) return false;
-		// Check if any handler calls signet hook
-		const raw = JSON.stringify(hooks);
-		return raw.includes("hook session-start") || raw.includes("hook user-prompt-submit");
+		return ["sessionStart", "userPromptSubmit", "stop"].some(
+			(k) => Array.isArray((hooks as Record<string, unknown>)[k]) &&
+				((hooks as Record<string, unknown>)[k] as unknown[]).some(isSignetHandler),
+		);
 	}
 }
