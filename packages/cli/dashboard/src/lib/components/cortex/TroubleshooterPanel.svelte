@@ -170,6 +170,12 @@
 				return;
 			}
 
+			// res.ok means the daemon received and processed the command.
+			// For lifecycle commands the backend writes all SSE events
+			// synchronously, so if we got here the action is committed
+			// even if the TCP stream tears down before "started" arrives.
+			if (cmd.key === "daemon-restart") initiated = true;
+
 			const decoder = new TextDecoder();
 			let buf = "";
 
