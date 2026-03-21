@@ -136,7 +136,7 @@ function patchConfigToml(path: string, mcpArgs: string[]): boolean {
 	const dir = join(path, "..");
 	mkdirSync(dir, { recursive: true });
 
-	const value = mcpArgs.length === 1 ? `'${mcpArgs[0]}'` : tomlInlineArray(mcpArgs);
+	const value = tomlInlineArray(mcpArgs);
 	if (!existsSync(path)) {
 		writeFileSync(path, `# Signet MCP server\n[mcp_servers.signet]\ncommand = ${value}\n`);
 		return true;
@@ -256,7 +256,11 @@ export class CodexConnector extends BaseConnector {
 		const hooksPath = this.getHooksJsonPath();
 		const existing = readHooksJson(hooksPath);
 		if (existing) {
-			if (isSignetOwned(existing)) {
+			// Check marker first; fall back to handler scan if marker was stripped
+			const hasMarker = isSignetOwned(existing);
+			const hasHandlers = JSON.stringify(existing).includes("hook session-start") ||
+				JSON.stringify(existing).includes("hook user-prompt-submit");
+			if (hasMarker || hasHandlers) {
 				const cleaned = removeSignetHooks(existing);
 				const remaining = Object.keys(cleaned).filter((k) => k !== "_signet");
 				if (remaining.length === 0) {
