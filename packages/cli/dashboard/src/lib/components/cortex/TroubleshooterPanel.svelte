@@ -217,7 +217,6 @@
 			if (!abort.signal.aborted) {
 				const lifecycle = cmd.key === "daemon-stop" || cmd.key === "daemon-restart";
 				if (lifecycle) {
-					initiated = true;
 					appendLine(gid, `\x1b[33mDaemon process ended\x1b[0m`);
 				} else {
 					appendLine(gid, `\x1b[31merror:\x1b[0m ${err instanceof Error ? err.message : "fetch failed"}`);
