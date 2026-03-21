@@ -7,7 +7,7 @@ interface TabItem {
 }
 
 interface Props {
-	group: "memory" | "engine";
+	group: "memory" | "engine" | "cortex";
 	tabs: ReadonlyArray<TabItem>;
 	activeTab: TabId;
 	onselect: (tab: TabId, index: number) => void;

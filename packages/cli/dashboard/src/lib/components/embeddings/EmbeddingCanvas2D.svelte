@@ -7,14 +7,15 @@ import {
 	type GraphPhysicsConfig,
 	type NodeColorMode,
 	type RelationKind,
+	NodeColorCache,
+	SpatialGrid,
 	clampGraphPhysics,
 	dependencyEdgeStyle,
 	edgeStrokeStyle,
 	embeddingLabel,
-	entityFillStyle,
+	entityFillFast,
 	hexPath,
 	isNewSinceLastSeen,
-	nodeFillStyle,
 	tierChargeStrength,
 } from "./embedding-graph";
 
@@ -87,6 +88,26 @@ let needsRedraw = true;
 let lastHoveredId: string | null = null;
 let userAdjustedCamera = false;
 
+// Phase 4: O(1) node lookup by ID
+let nodeById = new Map<string, GraphNode>();
+
+// Phase 2: Spatial grid for O(1) hit testing
+const grid = new SpatialGrid();
+let gridDirty = true;
+
+// Phase 1: Pre-computed node color cache
+let colorCache: NodeColorCache | null = null;
+
+// Phase 3: Pre-partitioned edge arrays
+let hierEdges: GraphEdge[] = [];
+let knnEdges: GraphEdge[] = [];
+let depEdges: GraphEdge[] = [];
+
+// Phase 7: Coalesced hover processing
+let pendingHoverX = 0;
+let pendingHoverY = 0;
+let pendingHover = false;
+
 // Throttled camera fit — avoids O(n) computeWorldBounds on every tick
 let lastFitTime = 0;
 const FIT_THROTTLE_MS = 100;
@@ -137,10 +158,14 @@ export function resetCamera(): void {
 	camY = 0;
 	camZoom = 0.15;
 	userAdjustedCamera = false;
+	initialFitDone = false;
 }
 
+// Track whether the initial camera fit has been done — prevents bounce on load
+let initialFitDone = false;
+
 export function focusNode(id: string): void {
-	const node = nodes.find((entry) => entry.data.id === id);
+	const node = nodeById.get(id);
 	if (!node) return;
 	camX = node.x;
 	camY = node.y;
@@ -154,6 +179,7 @@ export function startSimulation(
 	nextPhysics: GraphPhysicsConfig = graphPhysics,
 ): void {
 	simulation?.stop();
+	initialFitDone = false;
 	const physics = clampGraphPhysics(nextPhysics);
 	simulation = forceSimulation(graphNodes as any)
 		.force("link", forceLink(graphEdges).distance(physics.linkDistance).strength(physics.linkForce))
@@ -164,16 +190,15 @@ export function startSimulation(
 			"collide",
 			forceCollide().radius((entry: any) => entry.radius + 2),
 		)
-		.alphaDecay(0.03)
+		.alphaDecay(0.04)
 		.on("tick", () => {
-			if (!userAdjustedCamera) throttledFitCamera();
+			gridDirty = true;
+			colorCache = null;
 			requestRedraw();
 		})
 		.on("end", () => {
 			if (!userAdjustedCamera) fitCameraToBounds();
 		});
-	// Fit immediately — nodes already have UMAP positions before simulation ticks
-	if (!userAdjustedCamera) fitCameraToBounds();
 }
 
 export function startKnowledgeGraphSimulation(
@@ -181,6 +206,7 @@ export function startKnowledgeGraphSimulation(
 	graphEdges: GraphEdge[],
 ): void {
 	simulation?.stop();
+	initialFitDone = false;
 
 	// Tier-aware link distances and strengths
 	const linkForce = forceLink(graphEdges)
@@ -188,7 +214,6 @@ export function startKnowledgeGraphSimulation(
 			const s = d.source as GraphNode;
 			const t = d.target as GraphNode;
 			if (d.edgeType === "dependency") return 120;
-			// hierarchy edges: distance by tier pair
 			if (s.nodeType === "entity" && t.nodeType === "aspect") return 50;
 			if (s.nodeType === "aspect" && t.nodeType === "attribute") return 30;
 			if (s.nodeType === "attribute" && t.nodeType === "memory") return 20;
@@ -216,15 +241,15 @@ export function startKnowledgeGraphSimulation(
 			"collide",
 			forceCollide().radius((entry: any) => entry.radius + 2),
 		)
-		.alphaDecay(0.03)
+		.alphaDecay(0.04)
 		.on("tick", () => {
-			if (!userAdjustedCamera) throttledFitCamera();
+			gridDirty = true;
+			colorCache = null;
 			requestRedraw();
 		})
 		.on("end", () => {
 			if (!userAdjustedCamera) fitCameraToBounds();
 		});
-	if (!userAdjustedCamera) fitCameraToBounds();
 }
 
 export function updatePhysics(nextPhysics: GraphPhysicsConfig): void {
@@ -238,9 +263,11 @@ export function stopSimulation(): void {
 	simulation = null;
 }
 
-export function startRendering(): void {
-	userAdjustedCamera = false;
+export function startRendering(skipInitialFit = false): void {
 	resizeCanvas();
+	// Fit camera now that canvas is sized — only for UMAP mode where positions are stable
+	// Entity overlay starts with random positions so skip fit (wait for simulation end)
+	if (!skipInitialFit && !userAdjustedCamera && nodes.length > 0) fitCameraToBounds();
 	if (!resizeListenerAttached) {
 		window.addEventListener("resize", resizeCanvas);
 		resizeListenerAttached = true;
@@ -282,7 +309,8 @@ function resizeCanvas(): void {
 	if (!rect || rect.width === 0) return;
 	canvas.width = rect.width;
 	canvas.height = rect.height;
-	if (!userAdjustedCamera) {
+	// Only re-fit on resize if simulation has already settled once
+	if (!userAdjustedCamera && initialFitDone) {
 		fitCameraToBounds();
 	}
 	requestRedraw();
@@ -307,6 +335,7 @@ function fitCameraToBounds(): void {
 	camX = (bounds.minX + bounds.maxX) / 2;
 	camY = (bounds.minY + bounds.maxY) / 2;
 	camZoom = Math.max(0.08, fitZoom);
+	initialFitDone = true;
 }
 
 function screenToWorld(sx: number, sy: number): [number, number] {
@@ -318,11 +347,16 @@ function screenToWorld(sx: number, sy: number): [number, number] {
 }
 
 function findNodeAt(wx: number, wy: number): GraphNode | null {
+	if (gridDirty) {
+		grid.rebuild(nodes);
+		gridDirty = false;
+	}
+	const candidates = grid.query(wx, wy, 28);
 	// Hit detection in priority order: entity > aspect > attribute > memory
 	const hitOrder: Array<GraphNode["nodeType"]> = ["entity", "aspect", "attribute", "memory", undefined];
 	for (const tier of hitOrder) {
-		for (let i = nodes.length - 1; i >= 0; i--) {
-			const n = nodes[i];
+		for (let i = candidates.length - 1; i >= 0; i--) {
+			const n = candidates[i];
 			if (n.nodeType !== tier) continue;
 			const dx = n.x - wx;
 			const dy = n.y - wy;
@@ -341,34 +375,21 @@ function computeWorldBounds(): { minX: number; maxX: number; minY: number; maxY:
 	if (nodes.length === 0) {
 		return { minX: -100, maxX: 100, minY: -100, maxY: 100 };
 	}
-
-	let minX = Infinity;
-	let maxX = -Infinity;
-	let minY = Infinity;
-	let maxY = -Infinity;
-
-	for (const node of nodes) {
-		if (node.x < minX) minX = node.x;
-		if (node.x > maxX) maxX = node.x;
-		if (node.y < minY) minY = node.y;
-		if (node.y > maxY) maxY = node.y;
+	// Use spatial grid bounds when available (already computed during rebuild)
+	if (!gridDirty) {
+		return { minX: grid.minX, maxX: grid.maxX, minY: grid.minY, maxY: grid.maxY };
 	}
-
-	const rangeX = Math.max(maxX - minX, 20);
-	const rangeY = Math.max(maxY - minY, 20);
-	const padX = rangeX * 0.1;
-	const padY = rangeY * 0.1;
-
-	return {
-		minX: minX - padX,
-		maxX: maxX + padX,
-		minY: minY - padY,
-		maxY: maxY + padY,
-	};
+	grid.rebuild(nodes);
+	gridDirty = false;
+	return { minX: grid.minX, maxX: grid.maxX, minY: grid.minY, maxY: grid.maxY };
 }
 
 $effect(() => {
 	if (nodes.length > 0) {
+		// Rebuild nodeById map and mark grid as dirty
+		nodeById = new Map(nodes.map((n) => [n.data.id, n]));
+		gridDirty = true;
+		colorCache = null;
 		worldBounds = computeWorldBounds();
 		minimapNeedsRedraw = true;
 	}
@@ -498,7 +519,10 @@ function handleMinimapMouseUp(): void {
 function draw(ctx: CanvasRenderingContext2D, now: number): void {
 	if (!canvas) return;
 
-	const simActive = (simulation as any)?.alpha?.() > 0.001;
+	const alpha = (simulation as any)?.alpha?.() ?? 0;
+	const simActive = alpha > 0.001;
+
+	// Phase 7: Progressive frame skip — stop RAF when settled and no interaction
 	if (!simActive && !needsRedraw) {
 		animFrame = 0;
 		return;
@@ -506,12 +530,26 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 	needsRedraw = false;
 
 	const heavyGraph = edges.length > 14000 || nodes.length > 2200;
-	const minFrameMs = heavyGraph ? 33 : 16;
+	const settling = alpha > 0 && alpha < 0.05;
+	const minFrameMs = heavyGraph ? 33 : settling ? 33 : 16;
 	if (now > 0 && now - lastFrameTime < minFrameMs) {
 		animFrame = requestAnimationFrame((ts) => draw(ctx, ts));
 		return;
 	}
 	lastFrameTime = now;
+
+	// Phase 7: Coalesced hover — process pending hover once per frame
+	if (pendingHover) {
+		pendingHover = false;
+		const [wx, wy] = screenToWorld(pendingHoverX, pendingHoverY);
+		const node = findNodeAt(wx, wy);
+		const hoveredId = node?.data.id ?? null;
+		if (hoveredId !== lastHoveredId) {
+			lastHoveredId = hoveredId;
+			onhovernode(node?.data ?? null);
+		}
+		if (canvas) canvas.style.cursor = node ? "pointer" : "grab";
+	}
 
 	const w = canvas.width;
 	const h = canvas.height;
@@ -524,59 +562,62 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 
 	const selectedId = graphSelected?.id ?? null;
 
-	// --- Draw edges by type: hierarchy first (faintest), then KNN, then dependency ---
-	const edgeBudget = camZoom >= 1.4 ? MAX_EDGES_NEAR : camZoom >= 0.8 ? MAX_EDGES_MID : MAX_EDGES_FAR;
-	const edgeStep = Math.max(1, Math.ceil(edges.length / edgeBudget));
+	// Phase 1: Rebuild color cache if invalidated
+	if (!colorCache) {
+		colorCache = new NodeColorCache(
+			nodes, selectedId, embeddingFilterIds, relationLookup,
+			pinnedIds, lensIds, clusterLensMode, colorMode, nowMs, sourceFocusSources,
+		);
+	}
 
-	// Hierarchy edges (parent-child structure): very faint, budgeted
-	{
-		const hierEdges: typeof edges = [];
-		for (const edge of edges) {
-			if (edge.edgeType === "hierarchy") hierEdges.push(edge);
-		}
+	// --- Draw edges using pre-partitioned arrays (Phase 3) ---
+	const edgeBudget = camZoom >= 1.4 ? MAX_EDGES_NEAR : camZoom >= 0.8 ? MAX_EDGES_MID : MAX_EDGES_FAR;
+
+	// Hierarchy edges: single style, batched into one path
+	if (hierEdges.length > 0) {
 		const hierStep = Math.max(1, Math.ceil(hierEdges.length / edgeBudget));
+		ctx.beginPath();
 		for (let i = 0; i < hierEdges.length; i += hierStep) {
 			const edge = hierEdges[i];
 			const s = edge.source as GraphNode;
 			const t = edge.target as GraphNode;
 			if (typeof s === "number" || typeof t === "number" || !s || !t) continue;
-			ctx.beginPath();
 			ctx.moveTo(s.x, s.y);
 			ctx.lineTo(t.x, t.y);
-			ctx.strokeStyle = "rgba(255, 255, 255, 0.03)";
-			ctx.lineWidth = 0.4 / camZoom;
+		}
+		ctx.strokeStyle = "rgba(255, 255, 255, 0.03)";
+		ctx.lineWidth = 0.4 / camZoom;
+		ctx.stroke();
+	}
+
+	// KNN edges: batch by stroke color (Phase 3)
+	if (knnEdges.length > 0) {
+		const knnStep = Math.max(1, Math.ceil(knnEdges.length / edgeBudget));
+		const batches = new Map<string, Array<[number, number, number, number]>>();
+		for (let i = 0; i < knnEdges.length; i += knnStep) {
+			const edge = knnEdges[i];
+			const s = edge.source as GraphNode;
+			const t = edge.target as GraphNode;
+			if (typeof s === "number" || typeof t === "number" || !s || !t) continue;
+			const color = edgeStrokeStyle(s.data.id, t.data.id, embeddingFilterIds, relationLookup, lensIds, clusterLensMode);
+			const batch = batches.get(color);
+			if (batch) batch.push([s.x, s.y, t.x, t.y]);
+			else batches.set(color, [[s.x, s.y, t.x, t.y]]);
+		}
+		ctx.lineWidth = 0.8 / camZoom;
+		for (const [color, segs] of batches) {
+			ctx.beginPath();
+			for (const [sx, sy, tx, ty] of segs) {
+				ctx.moveTo(sx, sy);
+				ctx.lineTo(tx, ty);
+			}
+			ctx.strokeStyle = color;
 			ctx.stroke();
 		}
 	}
 
-	// KNN edges (normal memory-to-memory)
-	for (let i = 0; i < edges.length; i += edgeStep) {
-		const edge = edges[i];
-		if (edge.edgeType && edge.edgeType !== "knn") continue;
-		const s = edge.source as GraphNode;
-		const t = edge.target as GraphNode;
-		if (typeof s === "number" || typeof t === "number" || !s || !t) continue;
-		ctx.beginPath();
-		ctx.moveTo(s.x, s.y);
-		ctx.lineTo(t.x, t.y);
-		ctx.strokeStyle = edgeStrokeStyle(
-			s.data.id,
-			t.data.id,
-			embeddingFilterIds,
-			relationLookup,
-			lensIds,
-			clusterLensMode,
-		);
-		ctx.lineWidth = 0.8 / camZoom;
-		ctx.stroke();
-	}
-
-	// Dependency edges (entity-to-entity): styled by type, budgeted
-	{
-		const depEdges: typeof edges = [];
-		for (const edge of edges) {
-			if (edge.edgeType === "dependency") depEdges.push(edge);
-		}
+	// Dependency edges: styled by type, budgeted
+	if (depEdges.length > 0) {
 		const depBudget = Math.max(1, Math.floor(edgeBudget / 4));
 		const depStep = Math.max(1, Math.ceil(depEdges.length / depBudget));
 		for (let i = 0; i < depEdges.length; i += depStep) {
@@ -602,62 +643,82 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 
 	// --- Draw nodes in back-to-front order: memory, attribute, aspect, entity ---
 
-	// Memory nodes (smallest, drawn first / behind everything)
-	for (const node of nodes) {
-		if (node.nodeType !== "memory" && node.nodeType !== undefined) continue;
-		ctx.beginPath();
-		ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-		ctx.fillStyle = nodeFillStyle(
-			node,
-			selectedId,
-			embeddingFilterIds,
-			relationLookup,
-			pinnedIds,
-			lensIds,
-			clusterLensMode,
-			colorMode,
-			nowMs,
-			sourceFocusSources,
-		);
-		ctx.fill();
+	// Memory nodes: batched by fill color (Phase 3)
+	{
+		const batches = new Map<string, GraphNode[]>();
+		const newSeen: GraphNode[] = [];
+		const pinned: GraphNode[] = [];
+		let selected: GraphNode | null = null;
 
-		if (colorMode !== "none" && showNewSinceLastSeen && isNewSinceLastSeen(node.data.createdAt, lastSeenMs)) {
+		for (let i = 0; i < nodes.length; i++) {
+			const node = nodes[i];
+			if (node.nodeType !== "memory" && node.nodeType !== undefined) continue;
+			const fill = colorCache.fills[i];
+			const batch = batches.get(fill);
+			if (batch) batch.push(node);
+			else batches.set(fill, [node]);
+			if (colorMode !== "none" && showNewSinceLastSeen && isNewSinceLastSeen(node.data.createdAt, lastSeenMs)) {
+				newSeen.push(node);
+			}
+			if (pinnedIds.has(node.data.id)) pinned.push(node);
+			if (selectedId === node.data.id) selected = node;
+		}
+
+		for (const [fill, batch] of batches) {
 			ctx.beginPath();
-			ctx.arc(node.x, node.y, node.radius + 2.2, 0, Math.PI * 2);
+			for (const node of batch) {
+				ctx.moveTo(node.x + node.radius, node.y);
+				ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+			}
+			ctx.fillStyle = fill;
+			ctx.fill();
+		}
+
+		// New-since-last-seen rings
+		if (newSeen.length > 0) {
+			ctx.beginPath();
+			for (const node of newSeen) {
+				ctx.moveTo(node.x + node.radius + 2.2, node.y);
+				ctx.arc(node.x, node.y, node.radius + 2.2, 0, Math.PI * 2);
+			}
 			ctx.strokeStyle = "rgba(246, 194, 107, 0.85)";
 			ctx.lineWidth = 1.1 / camZoom;
 			ctx.stroke();
 		}
 
-		if (pinnedIds.has(node.data.id)) {
-			const side = (node.radius + 2.5) * 2;
+		// Pinned indicators
+		if (pinned.length > 0) {
 			ctx.strokeStyle = "rgba(240, 240, 240, 0.8)";
 			ctx.lineWidth = 1.2 / camZoom;
-			ctx.strokeRect(node.x - side / 2, node.y - side / 2, side, side);
+			for (const node of pinned) {
+				const side = (node.radius + 2.5) * 2;
+				ctx.strokeRect(node.x - side / 2, node.y - side / 2, side, side);
+			}
 		}
 
-		if (graphSelected && node.data.id === graphSelected.id) {
+		// Selection ring
+		if (selected) {
 			ctx.beginPath();
-			ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
+			ctx.arc(selected.x, selected.y, selected.radius + 3, 0, Math.PI * 2);
 			ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
 			ctx.lineWidth = 1.5 / camZoom;
 			ctx.stroke();
 		}
 	}
 
-	// Attribute nodes (small circles)
+	// Attribute nodes (small circles) — use entityFillFast
 	for (const node of nodes) {
 		if (node.nodeType !== "attribute") continue;
-		const entityType = node.data.who ?? "unknown";
+		const who = node.data.who ?? "unknown";
 		ctx.beginPath();
 		ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-		ctx.fillStyle = entityFillStyle(entityType, 0.3);
+		ctx.fillStyle = entityFillFast(who, 0.3);
 		ctx.fill();
-		ctx.strokeStyle = entityFillStyle(entityType, 0.5);
+		ctx.strokeStyle = entityFillFast(who, 0.5);
 		ctx.lineWidth = 0.6 / camZoom;
 		ctx.stroke();
 
-		if (graphSelected && node.data.id === graphSelected.id) {
+		if (selectedId === node.data.id) {
 			ctx.beginPath();
 			ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
 			ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
@@ -666,19 +727,19 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		}
 	}
 
-	// Aspect nodes (medium circles)
+	// Aspect nodes (medium circles) — use entityFillFast
 	for (const node of nodes) {
 		if (node.nodeType !== "aspect") continue;
-		const entityType = node.data.who ?? "unknown";
+		const who = node.data.who ?? "unknown";
 		ctx.beginPath();
 		ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-		ctx.fillStyle = entityFillStyle(entityType, 0.5);
+		ctx.fillStyle = entityFillFast(who, 0.5);
 		ctx.fill();
-		ctx.strokeStyle = entityFillStyle(entityType, 0.75);
+		ctx.strokeStyle = entityFillFast(who, 0.75);
 		ctx.lineWidth = 0.8 / camZoom;
 		ctx.stroke();
 
-		if (graphSelected && node.data.id === graphSelected.id) {
+		if (selectedId === node.data.id) {
 			ctx.beginPath();
 			ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
 			ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
@@ -688,7 +749,7 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 
 		// Show label on hover/select
 		if ((graphHovered && node.data.id === graphHovered.id) ||
-			(graphSelected && node.data.id === graphSelected.id)) {
+			(selectedId === node.data.id)) {
 			const fs = Math.max(7, 9 / camZoom);
 			ctx.font = `${fs}px var(--font-mono)`;
 			ctx.fillStyle = "rgba(210, 210, 210, 0.85)";
@@ -698,30 +759,30 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		}
 	}
 
-	// Entity nodes (largest, drawn on top)
+	// Entity nodes (largest, drawn on top) — use entityFillFast
 	for (const node of nodes) {
 		if (node.nodeType !== "entity") continue;
-		const entityType = node.entityData?.entityType ?? "unknown";
+		const who = node.entityData?.entityType ?? "unknown";
 
 		// Glow effect
 		ctx.save();
-		ctx.shadowColor = entityFillStyle(entityType, 0.5);
+		ctx.shadowColor = entityFillFast(who, 0.5);
 		ctx.shadowBlur = 12 / camZoom;
 
 		// Hexagonal shape
 		hexPath(ctx, node.x, node.y, node.radius);
-		ctx.fillStyle = entityFillStyle(entityType, 0.7);
+		ctx.fillStyle = entityFillFast(who, 0.7);
 		ctx.fill();
 		ctx.restore();
 
 		// Border
 		hexPath(ctx, node.x, node.y, node.radius);
-		ctx.strokeStyle = entityFillStyle(entityType, 0.9);
+		ctx.strokeStyle = entityFillFast(who, 0.9);
 		ctx.lineWidth = 1.2 / camZoom;
 		ctx.stroke();
 
 		// Selection ring
-		if (graphSelected && node.data.id === graphSelected.id) {
+		if (selectedId === node.data.id) {
 			hexPath(ctx, node.x, node.y, node.radius + 4);
 			ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
 			ctx.lineWidth = 1.5 / camZoom;
@@ -737,9 +798,9 @@ function draw(ctx: CanvasRenderingContext2D, now: number): void {
 		ctx.textAlign = "start";
 	}
 
-	// --- Hover label ---
+	// --- Hover label (Phase 4: O(1) lookup) ---
 	if (graphHovered) {
-		const node = nodes.find((entry) => entry.data.id === graphHovered?.id);
+		const node = nodeById.get(graphHovered.id);
 		if (node && node.nodeType !== "entity" && node.nodeType !== "aspect") {
 			const text = node.nodeType === "attribute"
 				? (node.attributeData?.content ?? embeddingLabel(graphHovered))
@@ -833,14 +894,11 @@ function setupInteractions(): void {
 			requestRedraw();
 			return;
 		}
-		const [wx, wy] = screenToWorld(event.clientX, event.clientY);
-		const node = findNodeAt(wx, wy);
-		const hoveredId = node?.data.id ?? null;
-		if (hoveredId !== lastHoveredId) {
-			lastHoveredId = hoveredId;
-			onhovernode(node?.data ?? null);
-		}
-		target.style.cursor = node ? "pointer" : "grab";
+		// Phase 7: Coalesce hover into RAF — store coords, process in draw()
+		pendingHoverX = event.clientX;
+		pendingHoverY = event.clientY;
+		pendingHover = true;
+		requestRedraw();
 	};
 
 	const onPointerUp = () => {
@@ -908,7 +966,7 @@ function setupInteractions(): void {
 	};
 }
 
-// Redraw when visual props change (filters, selection, hover, etc.)
+// Invalidate color cache and redraw when visual props change
 $effect(() => {
 	graphSelected;
 	graphHovered;
@@ -917,7 +975,24 @@ $effect(() => {
 	pinnedIds;
 	lensIds;
 	clusterLensMode;
+	colorCache = null;
 	requestRedraw();
+});
+
+// Phase 3: Pre-partition edges by type when edges change
+$effect(() => {
+	const all = edges;
+	const hier: GraphEdge[] = [];
+	const knn: GraphEdge[] = [];
+	const dep: GraphEdge[] = [];
+	for (const edge of all) {
+		if (edge.edgeType === "hierarchy") hier.push(edge);
+		else if (edge.edgeType === "dependency") dep.push(edge);
+		else knn.push(edge);
+	}
+	hierEdges = hier;
+	knnEdges = knn;
+	depEdges = dep;
 });
 
 // Cleanup on unmount

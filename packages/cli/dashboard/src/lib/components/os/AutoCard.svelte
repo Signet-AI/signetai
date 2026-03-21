@@ -58,7 +58,6 @@
 		align-items: center;
 		gap: 8px;
 		padding: 10px 12px;
-		border-bottom: 1px solid var(--sig-border);
 	}
 
 	.auto-card-icon {
@@ -117,9 +116,13 @@
 
 	.auto-card-empty {
 		display: flex;
+		flex-direction: column;
 		align-items: center;
 		justify-content: center;
 		flex: 1;
-		padding: 16px;
+		padding: 24px 16px;
+		gap: 6px;
+		background: var(--sig-bg);
+		color: var(--sig-text-muted);
 	}
 </style>

@@ -118,13 +118,13 @@
 
 <style>
 	.app-dock {
-		border-top: 1px solid var(--sig-border-strong);
-		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+		border-top: 1px solid var(--sig-border);
 		background: var(--sig-surface);
-		padding: 6px var(--space-md);
+		padding: 8px var(--space-md);
 		min-height: 52px;
 		display: flex;
 		align-items: center;
+		flex-shrink: 0;
 	}
 
 	.dock-empty {
@@ -160,7 +160,6 @@
 
 	.dock-item:hover {
 		background: var(--sig-surface-raised);
-		border-color: var(--sig-border);
 	}
 
 	.dock-item:active {
@@ -168,7 +167,7 @@
 	}
 
 	.dock-item--pinned {
-		border-color: var(--sig-highlight-dim);
+		background: var(--sig-highlight-dim);
 	}
 
 	.dock-icon {
@@ -230,8 +229,8 @@
 	.dock-separator {
 		width: 1px;
 		height: 28px;
-		background: var(--sig-border-strong);
-		margin: 0 4px;
+		background: var(--sig-border);
+		margin: 0 6px;
 		flex-shrink: 0;
 	}
 

@@ -254,4 +254,39 @@
 	.group-new-input:focus {
 		border-color: var(--sig-highlight);
 	}
+
+	:root[data-theme="light"] .group-item:hover {
+		background: rgba(0, 0, 0, 0.04);
+	}
+
+	:root[data-theme="light"] .group-item--active {
+		background: rgba(0, 0, 0, 0.06);
+	}
+
+	@media (max-width: 768px) {
+		.sidebar-groups {
+			flex-direction: row;
+			flex-wrap: wrap;
+			gap: 4px;
+		}
+
+		.groups-header {
+			padding: 0 4px;
+			min-width: fit-content;
+		}
+
+		.group-item {
+			width: auto;
+			white-space: nowrap;
+			padding: 4px 10px;
+		}
+
+		.group-new-input-wrap {
+			padding: 0 4px;
+		}
+
+		.group-new-input {
+			width: 120px;
+		}
+	}
 </style>

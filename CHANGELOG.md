@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.69.5] - 2026-03-21
+
+### Features
+
+- **dashboard**: Cortex page — unified Memory, Apps, Tasks, Troubleshooter (#256)
+
+
 ## [0.69.3] - 2026-03-21
 
 ### Bug Fixes

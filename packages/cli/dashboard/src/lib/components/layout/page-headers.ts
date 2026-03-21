@@ -66,6 +66,22 @@ export const PAGE_HEADERS = {
 		title: "Apps",
 		eyebrow: "Signet OS — MCP app dashboard",
 	},
+	"cortex-memory": {
+		title: "Cortex",
+		eyebrow: "Memory index and knowledge graph",
+	},
+	"cortex-apps": {
+		title: "Cortex",
+		eyebrow: "Installed apps and tool servers",
+	},
+	"cortex-tasks": {
+		title: "Cortex",
+		eyebrow: "Scheduled agent prompts",
+	},
+	"cortex-troubleshooter": {
+		title: "Cortex",
+		eyebrow: "Diagnostics and repair terminal",
+	},
 } as const satisfies Record<TabId, PageHeaderDefinition>;
 
 // --- Tab group item arrays (drives TabGroupBar rendering) ---
@@ -83,6 +99,13 @@ export const ENGINE_TAB_ITEMS = [
 	{ id: "predictor", label: "Predictor" },
 	{ id: "connectors", label: "Connectors" },
 	{ id: "logs", label: "Logs" },
+] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
+
+export const CORTEX_TAB_ITEMS = [
+	{ id: "cortex-memory", label: "Memory" },
+	{ id: "cortex-apps", label: "Apps" },
+	{ id: "cortex-tasks", label: "Tasks" },
+	{ id: "cortex-troubleshooter", label: "Troubleshooter" },
 ] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
 
 // --- Footer definitions ---
@@ -108,4 +131,8 @@ export const PAGE_FOOTERS: Partial<Record<TabId, PageFooterStatic>> = {
 	connectors: { left: "platform harnesses + data sources", right: "connector health" },
 	changelog: { left: "project docs + release history", right: "github.com/Signet-AI/signetai" },
 	os: { left: "MCP app dashboard", right: "drag apps from tray to grid" },
+	"cortex-memory": { left: "Memory", right: "search, timeline, knowledge, constellation" },
+	"cortex-apps": { left: "Apps", right: "installed tool servers" },
+	"cortex-tasks": { left: "Tasks", right: "scheduled agent prompts" },
+	"cortex-troubleshooter": { left: "Troubleshooter", right: "diagnostics and repair" },
 };

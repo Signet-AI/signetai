@@ -12,10 +12,13 @@
     },
     "packages/adapters/openclaw": {
       "name": "@signetai/signet-memory-openclaw",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
-        "@signet/core": "workspace:*",
         "@sinclair/typebox": "0.34.47",
+      },
+      "devDependencies": {
+        "@signet/core": "workspace:*",
+        "@types/node": "^22.0.0",
       },
       "peerDependencies": {
         "openclaw": ">=0.1.0",
@@ -23,7 +26,7 @@
     },
     "packages/cli": {
       "name": "@signet/cli",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "bin": "./dist/cli.js",
       "dependencies": {
         "@inquirer/prompts": "^7.0.0",
@@ -90,7 +93,7 @@
     },
     "packages/connector-base": {
       "name": "@signet/connector-base",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -104,7 +107,7 @@
     },
     "packages/connector-claude-code": {
       "name": "@signet/connector-claude-code",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -116,7 +119,7 @@
     },
     "packages/connector-codex": {
       "name": "@signet/connector-codex",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -128,7 +131,7 @@
     },
     "packages/connector-openclaw": {
       "name": "@signet/connector-openclaw",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "json5": "^2.2.3",
@@ -140,7 +143,7 @@
     },
     "packages/connector-opencode": {
       "name": "@signet/connector-opencode",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -152,7 +155,7 @@
     },
     "packages/core": {
       "name": "@signet/core",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
         "sqlite-vec": "^0.1.7-alpha.2",
         "yaml": "^2.6.0",
@@ -174,7 +177,7 @@
     },
     "packages/daemon": {
       "name": "@signet/daemon",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "bin": {
         "signet-daemon": "./dist/daemon.js",
         "signet-mcp": "./dist/mcp-stdio.js",
@@ -204,7 +207,7 @@
     },
     "packages/extension": {
       "name": "@signet/extension",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "devDependencies": {
         "@types/chrome": "^0.0.287",
         "typescript": "^5.7.0",
@@ -212,14 +215,14 @@
     },
     "packages/native": {
       "name": "@signet/native",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "devDependencies": {
         "@napi-rs/cli": "^3.5.1",
       },
     },
     "packages/opencode-plugin": {
       "name": "@signet/opencode-plugin",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -229,7 +232,7 @@
     },
     "packages/sdk": {
       "name": "@signet/sdk",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "devDependencies": {
         "@types/react": "^19.0.0",
         "react": "^19.0.0",
@@ -245,7 +248,7 @@
     },
     "packages/signetai": {
       "name": "signetai",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "bin": {
         "signet": "bin/signet.js",
         "signet-mcp": "dist/mcp-stdio.js",
@@ -276,7 +279,7 @@
     },
     "packages/tray": {
       "name": "@signet/tray",
-      "version": "0.65.0",
+      "version": "0.69.3",
       "dependencies": {
         "@signet/sdk": "workspace:*",
         "@tauri-apps/api": "^2.5.0",

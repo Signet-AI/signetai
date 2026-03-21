@@ -21,6 +21,16 @@ function isValidState(s: string): s is "tray" | "grid" | "dock" {
 	return s === "tray" || s === "grid" || s === "dock";
 }
 
+/** Resolve an icon URL from a marketplace source and catalog ID. */
+function resolveServerIcon(source: string, catalogId?: string): string | null {
+	if (source === "modelcontextprotocol/servers") return "https://github.com/modelcontextprotocol.png?size=40";
+	if (source === "github" && catalogId?.includes("/")) {
+		const org = catalogId.split("/")[0];
+		if (org && org.length > 0) return `https://github.com/${org}.png?size=40`;
+	}
+	return null;
+}
+
 const GRID_COLS = 12;
 
 /**
@@ -78,7 +88,18 @@ export function mountAppTrayRoutes(app: Hono): void {
 	app.get("/api/os/tray", (c) => {
 		const tray = loadAppTray();
 		const installed = readInstalledServersPublic();
+		const installedById = new Map(installed.map((s) => [s.id, s]));
 		const trayIds = new Set(tray.map((e) => e.id));
+
+		// Backfill icons on existing entries that have none
+		for (const entry of tray) {
+			if (!entry.icon) {
+				const server = installedById.get(entry.id);
+				if (server) {
+					(entry as { icon: string | null }).icon = resolveServerIcon(server.source, server.catalogId);
+				}
+			}
+		}
 
 		const missing = installed.filter(
 			(s) => s.enabled && !trayIds.has(s.id),
@@ -89,7 +110,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 			const stubs = missing.map((server) => ({
 				id: server.id,
 				name: server.name,
-				icon: null as string | null,
+				icon: resolveServerIcon(server.source, server.catalogId),
 				state: "tray" as const,
 				manifest: {
 					name: server.name,

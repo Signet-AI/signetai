@@ -110,7 +110,7 @@ $effect(() => {
 // --- Embeddings bridge ---
 function openGlobalSimilar(memory: Memory) {
 	mem.query = memory.content;
-	setTab("memory");
+	setTab("cortex-memory");
 	queueMemorySearch();
 }
 

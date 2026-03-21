@@ -96,17 +96,17 @@
 		<!-- Top bar -->
 		<div class="os-topbar">
 			<div class="os-topbar-left">
-				<span class="sig-heading">Signet OS</span>
-				<span class="sig-eyebrow">{os.entries.length} {os.entries.length === 1 ? "app" : "apps"}</span>
+				<span class="sig-heading">View and Manage your Apps</span>
+				<span class="sig-eyebrow">{os.entries.length} {os.entries.length === 1 ? "server" : "servers"}</span>
 			</div>
 			<div class="os-topbar-right">
 				<button
-					class="sig-switch os-refresh-btn"
+					class="os-refresh-btn"
 					title="Refresh app tray"
 					onclick={() => fetchTrayEntries()}
 					disabled={os.loading}
 				>
-					<RefreshCw class="size-3.5 {os.loading ? 'animate-spin' : ''}" />
+					<RefreshCw class={`size-3${os.loading ? " animate-spin" : ""}`} />
 				</button>
 			</div>
 		</div>
@@ -141,9 +141,10 @@
 		width: 180px;
 		min-width: 180px;
 		border-right: 1px solid var(--sig-border);
-		background: var(--sig-surface);
+		background: var(--sig-bg);
 		overflow-y: auto;
-		padding-top: var(--space-sm);
+		padding: var(--space-sm) 0;
+		flex-shrink: 0;
 	}
 
 	.os-main {
@@ -152,15 +153,17 @@
 		flex: 1;
 		min-width: 0;
 		min-height: 0;
+		overflow: hidden;
+		background: var(--sig-bg);
 	}
 
 	.os-topbar {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 8px var(--space-md);
-		border-bottom: 1px solid var(--sig-border);
+		padding: 10px var(--space-md);
 		background: var(--sig-surface);
+		flex-shrink: 0;
 	}
 
 	.os-topbar-left {
@@ -182,17 +185,42 @@
 		width: 28px;
 		height: 28px;
 		padding: 0;
+		border: 1px solid var(--sig-border);
+		border-radius: 6px;
+		background: var(--sig-surface);
+		color: var(--sig-text-muted);
+		cursor: pointer;
+		transition: all var(--dur) var(--ease);
+	}
+
+	.os-refresh-btn:hover:not(:disabled) {
+		border-color: var(--sig-border-strong);
+		color: var(--sig-text-bright);
+	}
+
+	.os-refresh-btn:disabled {
+		opacity: 0.4;
 	}
 
 	.os-error {
-		padding: 6px var(--space-md);
-		background: rgba(138, 74, 72, 0.1);
-		border-bottom: 1px solid var(--sig-danger);
+		padding: 8px var(--space-md);
+		background: color-mix(in srgb, var(--sig-danger) 8%, var(--sig-bg));
 	}
 
 	@media (max-width: 768px) {
+		.os-tab {
+			flex-direction: column;
+		}
+
 		.os-sidebar {
-			display: none;
+			width: 100%;
+			min-width: 0;
+			max-height: 120px;
+			border-right: none;
+			border-bottom: 1px solid var(--sig-border);
+			padding: var(--space-sm);
+			overflow-x: auto;
+			overflow-y: hidden;
 		}
 	}
 </style>

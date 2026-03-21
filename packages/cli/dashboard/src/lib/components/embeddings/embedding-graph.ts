@@ -99,6 +99,7 @@ export interface GraphNode {
 	radius: number;
 	color: string;
 	data: EmbeddingPoint;
+	createdMs?: number;
 	nodeType?: NodeType;
 	entityData?: ConstellationEntity;
 	aspectData?: ConstellationAspect;
@@ -621,6 +622,236 @@ export function tierChargeStrength(nodeType: NodeType | undefined): number {
 		case "attribute": return -15;
 		case "memory": return -5;
 		default: return -5;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pre-computed rgba lookup tables (built once at module load)
+// ---------------------------------------------------------------------------
+
+function buildRgba(hex: string, alpha: number): string {
+	const [r, g, b] = hexToRgb(hex);
+	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const SOURCE_ALPHAS = [0.85] as const;
+const ENTITY_ALPHAS = [0.3, 0.5, 0.7, 0.75, 0.9] as const;
+
+const sourceRgbaCache: Record<string, Record<number, string>> = {};
+for (const [key, hex] of Object.entries(sourceColors)) {
+	const entry: Record<number, string> = {};
+	for (const a of SOURCE_ALPHAS) entry[a] = buildRgba(hex, a);
+	sourceRgbaCache[key] = entry;
+}
+
+const entityRgbaCache: Record<string, Record<number, string>> = {};
+for (const [key, hex] of Object.entries(entityTypeColors)) {
+	const entry: Record<number, string> = {};
+	for (const a of ENTITY_ALPHAS) entry[a] = buildRgba(hex, a);
+	entityRgbaCache[key] = entry;
+}
+
+/** Fast source color lookup — uses pre-computed table for common alphas. */
+export function sourceRgbaFast(who: string | undefined, alpha: number): string {
+	const key = who ?? "unknown";
+	const cached = sourceRgbaCache[key]?.[alpha] ?? sourceRgbaCache["unknown"]?.[alpha];
+	if (cached) return cached;
+	return sourceColorRgba(who, alpha);
+}
+
+/** Fast entity fill lookup — uses pre-computed table for common alphas. */
+export function entityFillFast(entityType: string, alpha: number): string {
+	const key = entityType.toLowerCase();
+	const cached = entityRgbaCache[key]?.[alpha] ?? entityRgbaCache["unknown"]?.[alpha];
+	if (cached) return cached;
+	return entityFillStyle(entityType, alpha);
+}
+
+// Pre-computed newness fill strings for the only alpha values used
+const NEWNESS_FILLS: Record<NewnessBucket, Record<number, string>> = {
+	minutes: { 0.9: "rgba(255, 176, 74, 0.9)", 1: "rgba(255, 176, 74, 1)" },
+	hours: { 0.9: "rgba(168, 34, 98, 0.9)", 1: "rgba(168, 34, 98, 1)" },
+	week: { 0.9: "rgba(76, 34, 122, 0.9)", 1: "rgba(76, 34, 122, 1)" },
+	older: { 0.9: "rgba(118, 111, 102, 0.9)", 1: "rgba(118, 111, 102, 1)" },
+};
+
+/** Fast newness fill — uses pre-computed table for common alphas. */
+export function newnessFillFast(intensity: number, alpha: number): string {
+	const bucket = newnessBucketFromIntensity(intensity);
+	const cached = NEWNESS_FILLS[bucket]?.[alpha];
+	if (cached) return cached;
+	return newnessFillStyle(intensity, alpha);
+}
+
+/** Parse createdAt string to epoch ms (returns 0 on invalid). */
+export function parseCreatedMs(createdAt: string | undefined): number {
+	if (!createdAt) return 0;
+	const ms = new Date(createdAt).getTime();
+	return Number.isNaN(ms) ? 0 : ms;
+}
+
+/** Newness intensity from pre-parsed epoch ms. */
+export function newnessIntensityFast(createdMs: number, nowMs: number): number {
+	if (createdMs === 0) return 0.22;
+	const age = Math.max(0, nowMs - createdMs);
+	if (age <= NEWNESS_MINUTES_MS) return 1;
+	if (age <= NEWNESS_HOURS_MS) return 0.76;
+	if (age <= NEWNESS_WEEK_MS) return 0.52;
+	return 0.22;
+}
+
+// ---------------------------------------------------------------------------
+// NodeColorCache — pre-computes fill colors for all nodes once per state change
+// ---------------------------------------------------------------------------
+
+export class NodeColorCache {
+	readonly fills: string[];
+
+	constructor(
+		nodes: readonly GraphNode[],
+		selectedId: string | null,
+		filterIds: Set<string> | null,
+		relations: Map<string, RelationKind>,
+		pinnedIds: Set<string>,
+		lensIds: Set<string>,
+		lensActive: boolean,
+		colorMode: NodeColorMode,
+		nowMs: number,
+		sourceFocus: Set<string> | null,
+	) {
+		const fills: string[] = new Array(nodes.length);
+		for (let i = 0; i < nodes.length; i++) {
+			const node = nodes[i];
+			// Only cache memory/undefined type nodes — entity/aspect/attribute use separate draw paths
+			if (node.nodeType && node.nodeType !== "memory") {
+				fills[i] = "";
+				continue;
+			}
+			fills[i] = this.compute(node, selectedId, filterIds, relations, pinnedIds, lensIds, lensActive, colorMode, nowMs, sourceFocus);
+		}
+		this.fills = fills;
+	}
+
+	private compute(
+		node: GraphNode,
+		selectedId: string | null,
+		filterIds: Set<string> | null,
+		relations: Map<string, RelationKind>,
+		pinnedIds: Set<string>,
+		lensIds: Set<string>,
+		lensActive: boolean,
+		colorMode: NodeColorMode,
+		nowMs: number,
+		sourceFocus: Set<string> | null,
+	): string {
+		const id = node.data.id;
+		const relation = relations.get(id) ?? null;
+		const dimmed = filterIds !== null && !filterIds.has(id);
+		const pinned = pinnedIds.has(id);
+		const outside = lensActive && !lensIds.has(id);
+
+		if (selectedId === id) return "rgba(255, 255, 255, 0.95)";
+		if (outside) return dimmed ? "rgba(80, 80, 80, 0.08)" : "rgba(95, 95, 95, 0.15)";
+		if (relation === "similar") {
+			if (colorMode === "none") return dimmed ? "rgba(160, 170, 185, 0.3)" : "rgba(198, 210, 228, 0.84)";
+			return dimmed ? "rgba(129, 180, 255, 0.35)" : "rgba(129, 180, 255, 0.9)";
+		}
+		if (relation === "dissimilar") {
+			if (colorMode === "none") return dimmed ? "rgba(165, 150, 150, 0.28)" : "rgba(208, 190, 190, 0.8)";
+			return dimmed ? "rgba(255, 146, 146, 0.35)" : "rgba(255, 146, 146, 0.9)";
+		}
+		if (pinned) return dimmed ? "rgba(220, 220, 220, 0.42)" : "rgba(235, 235, 235, 0.95)";
+		if (dimmed) return "rgba(120, 120, 120, 0.2)";
+		if (colorMode === "none") return "rgba(168, 168, 168, 0.82)";
+		if (colorMode === "newness") {
+			const createdMs = node.createdMs ?? parseCreatedMs(node.data.createdAt);
+			const intensity = newnessIntensityFast(createdMs, nowMs);
+			if (newnessBucketFromIntensity(intensity) === "older") {
+				const source = node.data.who ?? "unknown";
+				if (sourceFocus !== null && sourceFocus.has(source)) {
+					return sourceRgbaFast(source, 0.85);
+				}
+			}
+			return newnessFillFast(intensity, 0.9);
+		}
+		return sourceRgbaFast(node.data.who, 0.85);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SpatialGrid — O(1) average hit testing for canvas nodes
+// ---------------------------------------------------------------------------
+
+const GRID_CELL = 50;
+
+export class SpatialGrid {
+	minX = -100;
+	maxX = 100;
+	minY = -100;
+	maxY = 100;
+
+	private cells = new Map<number, GraphNode[]>();
+	private cols = 1;
+	private offsetX = 0;
+	private offsetY = 0;
+
+	rebuild(nodes: readonly GraphNode[]): void {
+		this.cells.clear();
+		if (nodes.length === 0) {
+			this.minX = -100;
+			this.maxX = 100;
+			this.minY = -100;
+			this.maxY = 100;
+			this.cols = 1;
+			return;
+		}
+
+		let mnX = Infinity;
+		let mxX = -Infinity;
+		let mnY = Infinity;
+		let mxY = -Infinity;
+		for (const n of nodes) {
+			if (n.x < mnX) mnX = n.x;
+			if (n.x > mxX) mxX = n.x;
+			if (n.y < mnY) mnY = n.y;
+			if (n.y > mxY) mxY = n.y;
+		}
+		const pad = GRID_CELL;
+		this.minX = mnX - pad;
+		this.maxX = mxX + pad;
+		this.minY = mnY - pad;
+		this.maxY = mxY + pad;
+		this.offsetX = this.minX;
+		this.offsetY = this.minY;
+		this.cols = Math.max(1, Math.ceil((this.maxX - this.minX) / GRID_CELL));
+
+		for (const node of nodes) {
+			const col = Math.floor((node.x - this.offsetX) / GRID_CELL);
+			const row = Math.floor((node.y - this.offsetY) / GRID_CELL);
+			const key = row * this.cols + col;
+			const bucket = this.cells.get(key);
+			if (bucket) bucket.push(node);
+			else this.cells.set(key, [node]);
+		}
+	}
+
+	query(wx: number, wy: number, radius: number): GraphNode[] {
+		const r = radius + GRID_CELL * 0.5;
+		const minCol = Math.floor((wx - r - this.offsetX) / GRID_CELL);
+		const maxCol = Math.floor((wx + r - this.offsetX) / GRID_CELL);
+		const minRow = Math.floor((wy - r - this.offsetY) / GRID_CELL);
+		const maxRow = Math.floor((wy + r - this.offsetY) / GRID_CELL);
+		const rows = Math.ceil((this.maxY - this.minY) / GRID_CELL);
+		const result: GraphNode[] = [];
+		for (let row = Math.max(0, minRow); row <= maxRow && row < rows; row++) {
+			for (let col = Math.max(0, minCol); col <= Math.min(this.cols - 1, maxCol); col++) {
+				const bucket = this.cells.get(row * this.cols + col);
+				if (bucket) {
+					for (const node of bucket) result.push(node);
+				}
+			}
+		}
+		return result;
 	}
 }
 

@@ -7,18 +7,15 @@
 	interface Props {
 		apps: AppTrayEntry[];
 		ongriddrop: (appId: string, x: number, y: number) => void;
-		/** Resolve the default widget size for a given appId (used for collision detection on drop) */
 		resolveDefaultSize?: (appId: string) => { w: number; h: number };
 	}
 
 	const { apps, ongriddrop, resolveDefaultSize }: Props = $props();
 
-	// Grid config: 12 columns, each row = 80px
 	const GRID_COLS = 12;
 	const ROW_HEIGHT = 80;
 	const GAP = 8;
 
-	// Drag state
 	let dragId = $state<string | null>(null);
 	let dragStartX = $state(0);
 	let dragStartY = $state(0);
@@ -26,7 +23,6 @@
 	let dragOffsetY = $state(0);
 	let gridEl = $state<HTMLDivElement | null>(null);
 
-	// Track active drag listeners for cleanup
 	let activeMoveListener: ((e: PointerEvent) => void) | null = null;
 	let activeUpListener: (() => void) | null = null;
 
@@ -46,12 +42,8 @@
 		window.removeEventListener("keydown", handleKeydown);
 	});
 
-	// Focus mode
-
 	function handleKeydown(e: KeyboardEvent): void {
-		if (e.key === "Escape" && os.focusedId) {
-			collapseWidget();
-		}
+		if (e.key === "Escape" && os.focusedId) collapseWidget();
 	}
 
 	onMount(() => {
@@ -60,27 +52,29 @@
 
 	const focusedApp = $derived(os.focusedId ? apps.find((a) => a.id === os.focusedId) ?? null : null);
 
-	// Compute max rows needed
 	const maxRow = $derived.by(() => {
-		let max = 6; // Minimum 6 rows
+		let max = 4;
 		for (const app of apps) {
 			if (app.gridPosition) {
 				const bottom = app.gridPosition.y + app.gridPosition.h;
 				if (bottom > max) max = bottom;
 			}
 		}
-		return max + 2; // Extra space at bottom
+		return max + 2;
 	});
 
+	// Convert grid units to percentage-based absolute positioning
 	function getStyle(pos: GridPosition | undefined): string {
-		if (!pos) return "";
-		return `grid-column: ${pos.x + 1} / span ${pos.w}; grid-row: ${pos.y + 1} / span ${pos.h};`;
+		if (!pos) return "display: none;";
+		const left = (pos.x / GRID_COLS) * 100;
+		const width = (pos.w / GRID_COLS) * 100;
+		const top = pos.y * ROW_HEIGHT;
+		const height = pos.h * ROW_HEIGHT - GAP;
+		return `left: ${left}%; width: ${width}%; top: ${top}px; height: ${height}px;`;
 	}
 
 	function handleDragStart(id: string, e: PointerEvent): void {
-		// Clean up any lingering listeners from a previous drag
 		cleanupDragListeners();
-
 		dragId = id;
 		dragStartX = e.clientX;
 		dragStartY = e.clientY;
@@ -103,7 +97,6 @@
 		window.addEventListener("pointerup", onUp);
 	}
 
-	/** Find the nearest non-colliding position by spiraling outward */
 	function findFreePosition(desired: GridPosition, excludeId: string): GridPosition {
 		const occupied = apps.flatMap((a) =>
 			a.id !== excludeId && a.gridPosition ? [a.gridPosition] : [],
@@ -123,27 +116,29 @@
 			return;
 		}
 
-		// Convert pixel offset to grid units
-		const cellWidth = gridEl.clientWidth / GRID_COLS;
-		const dx = Math.round(dragOffsetX / cellWidth);
-		const dy = Math.round(dragOffsetY / ROW_HEIGHT);
+		const gridWidth = gridEl.clientWidth;
+		if (gridWidth === 0) {
+			dragId = null;
+			return;
+		}
+		const cellWidth = gridWidth / GRID_COLS;
+		const dx = dragOffsetX / cellWidth;
+		const dy = dragOffsetY / ROW_HEIGHT;
 
-		if (dx === 0 && dy === 0) {
+		if (Math.abs(dx) < 0.15 && Math.abs(dy) < 0.15) {
 			dragId = null;
 			return;
 		}
 
+		// Free placement with collision avoidance — land where dropped unless overlapping
 		const desired: GridPosition = {
 			x: Math.max(0, Math.min(GRID_COLS - app.gridPosition.w, app.gridPosition.x + dx)),
 			y: Math.max(0, app.gridPosition.y + dy),
 			w: app.gridPosition.w,
 			h: app.gridPosition.h,
 		};
-
-		// Resolve collisions — find nearest free spot
-		const newPos = findFreePosition(desired, app.id);
-
-		updateGridPosition(app.id, newPos);
+		const resolved = findFreePosition(desired, app.id);
+		updateGridPosition(app.id, resolved);
 		dragId = null;
 		dragOffsetX = 0;
 		dragOffsetY = 0;
@@ -153,7 +148,6 @@
 		await moveToTray(id);
 	}
 
-	// Drag-over for tray → grid drops
 	function handleGridDragOver(e: DragEvent): void {
 		e.preventDefault();
 		if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
@@ -165,11 +159,11 @@
 		if (!appId || !gridEl) return;
 
 		const rect = gridEl.getBoundingClientRect();
+		if (rect.width === 0) return;
 		const cellWidth = rect.width / GRID_COLS;
 		const rawX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor((e.clientX - rect.left) / cellWidth)));
 		const rawY = Math.max(0, Math.floor((e.clientY - rect.top) / ROW_HEIGHT));
 
-		// Use manifest size if available, otherwise fall back to default
 		const size = resolveDefaultSize ? resolveDefaultSize(appId) : { w: 4, h: 3 };
 		const desired: GridPosition = { x: rawX, y: rawY, ...size };
 		const resolved = findFreePosition(desired, appId);
@@ -181,12 +175,11 @@
 <div
 	class="widget-grid"
 	class:has-focus={os.focusedId !== null}
-	bind:this={gridEl}
-	style="grid-template-rows: repeat({maxRow}, {ROW_HEIGHT}px); gap: {GAP}px;"
 	ondragover={handleGridDragOver}
 	ondrop={handleGridDrop}
 	role="grid"
 >
+	<div class="grid-inner" bind:this={gridEl} style="height: {maxRow * ROW_HEIGHT}px;">
 	{#if apps.length === 0}
 		<div class="grid-empty">
 			<span class="sig-label">Drag apps from the tray below to place them here</span>
@@ -207,6 +200,8 @@
 			/>
 		</div>
 	{/each}
+
+	</div>
 
 	{#if focusedApp}
 		<div
@@ -231,37 +226,33 @@
 
 <style>
 	.widget-grid {
-		display: grid;
-		grid-template-columns: repeat(12, 1fr);
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
 		overflow-x: hidden;
-		padding: var(--space-md);
-		position: relative;
+	}
 
-		/* Blueprint grid lines */
-		background-image:
-			linear-gradient(var(--sig-grid-line) 1px, transparent 1px),
-			linear-gradient(90deg, var(--sig-grid-line) 1px, transparent 1px);
-		background-size: calc(100% / 12) 80px;
+	.grid-inner {
+		position: relative;
+		min-height: 100%;
 	}
 
 	.grid-empty {
-		grid-column: 1 / -1;
-		grid-row: 1 / 4;
+		position: absolute;
+		inset: var(--space-md);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		border: 1px dashed var(--sig-border-strong);
 		border-radius: var(--radius);
-		padding: var(--space-xl);
 	}
 
 	.grid-item {
-		position: relative;
+		position: absolute;
 		z-index: 1;
 		transition: box-shadow 0.15s ease;
+		border-radius: var(--radius);
+		overflow: hidden;
+		padding: 4px;
 	}
 
 	.grid-item--dragging {
@@ -293,5 +284,12 @@
 		height: 80vh;
 		border-radius: 12px;
 		overflow: hidden;
+	}
+
+	@media (max-width: 768px) {
+		.widget-focus-panel {
+			max-width: 100%;
+			height: 70vh;
+		}
 	}
 </style>

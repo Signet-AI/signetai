@@ -7168,6 +7168,108 @@ app.get("/api/repair/cold-stats", (c) => {
 });
 
 // ============================================================================
+// Troubleshooter — live terminal command execution
+// ============================================================================
+
+const TROUBLESHOOT_COMMANDS: Record<string, readonly [string, ReadonlyArray<string>]> = {
+	"status": ["signet", ["status"]],
+	"daemon-status": ["signet", ["daemon", "status"]],
+	"daemon-logs": ["signet", ["daemon", "logs", "--lines", "50"]],
+	"embed-audit": ["signet", ["embed", "audit"]],
+	"embed-backfill": ["signet", ["embed", "backfill"]],
+	"sync": ["signet", ["sync"]],
+	"recall-test": ["signet", ["recall", "test query"]],
+	"skill-list": ["signet", ["skill", "list"]],
+	"secret-list": ["signet", ["secret", "list"]],
+	"daemon-stop": ["signet", ["daemon", "stop"]],
+	"daemon-restart": ["signet", ["daemon", "restart"]],
+	"update": ["signet", ["update", "install"]],
+};
+
+app.get("/api/troubleshoot/commands", (c) => {
+	return c.json({
+		commands: Object.entries(TROUBLESHOOT_COMMANDS).map(([key, [bin, args]]) => ({
+			key,
+			display: `${bin} ${args.join(" ")}`,
+		})),
+	});
+});
+
+app.post("/api/troubleshoot/exec", async (c) => {
+	const body = await c.req.json().catch(() => null);
+	const key = typeof body === "object" && body !== null && "key" in body ? String(body.key) : "";
+
+	const cmd = TROUBLESHOOT_COMMANDS[key];
+	if (!cmd) {
+		return c.json({ error: `Unknown command: ${key}` }, 400);
+	}
+
+	const [bin, args] = cmd;
+	const resolved = Bun.which(bin);
+	if (!resolved) {
+		return c.json({ error: `Binary not found: ${bin}` }, 500);
+	}
+
+	const { CLAUDECODE: _cc, SIGNET_NO_HOOKS: _, ...baseEnv } = process.env;
+	const encoder = new TextEncoder();
+
+	const stream = new ReadableStream({
+		async start(controller) {
+			const write = (event: unknown) => {
+				try {
+					controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+				} catch {}
+			};
+
+			write({ type: "started", key, command: `${bin} ${args.join(" ")}` });
+
+			const { spawn: nodeSpawn } = await import("node:child_process");
+			const child = nodeSpawn(resolved, args as string[], {
+				stdio: "pipe",
+				windowsHide: true,
+				env: { ...baseEnv, SIGNET_NO_HOOKS: "1", FORCE_COLOR: "0" } as NodeJS.ProcessEnv,
+			});
+
+			child.stdout?.on("data", (chunk: Buffer) => {
+				write({ type: "stdout", data: chunk.toString("utf-8") });
+			});
+
+			child.stderr?.on("data", (chunk: Buffer) => {
+				write({ type: "stderr", data: chunk.toString("utf-8") });
+			});
+
+			// 60s timeout — SIGTERM first, force kill after 5s
+			const killTimer = setTimeout(() => {
+				try { child.kill("SIGTERM"); } catch {}
+				setTimeout(() => {
+					try { child.kill(); } catch {}
+				}, 5_000);
+			}, 60_000);
+
+			child.on("close", (code) => {
+				clearTimeout(killTimer);
+				write({ type: "exit", code: code ?? 1 });
+				try { controller.close(); } catch {}
+			});
+
+			child.on("error", (err) => {
+				clearTimeout(killTimer);
+				write({ type: "error", message: err.message });
+				try { controller.close(); } catch {}
+			});
+		},
+	});
+
+	return new Response(stream, {
+		headers: {
+			"content-type": "text/event-stream",
+			"cache-control": "no-cache",
+			connection: "keep-alive",
+		},
+	});
+});
+
+// ============================================================================
 // Session Checkpoints (Continuity Protocol)
 // ============================================================================
 

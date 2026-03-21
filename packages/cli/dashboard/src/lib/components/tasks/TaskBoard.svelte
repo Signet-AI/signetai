@@ -130,17 +130,28 @@ function getColumnTasks(key: string): ScheduledTask[] {
 <style>
 	.board-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+		grid-template-columns: repeat(4, 1fr);
 		gap: var(--space-sm);
 		padding: var(--space-sm);
 		min-height: 0;
-		flex: 1;
+		align-items: start;
+	}
+
+	@media (max-width: 900px) {
+		.board-grid {
+			grid-template-columns: repeat(2, 1fr);
+		}
+	}
+
+	@media (max-width: 480px) {
+		.board-grid {
+			grid-template-columns: 1fr;
+		}
 	}
 
 	.column {
 		display: flex;
 		flex-direction: column;
-		min-height: 0;
 		border: 1px solid var(--sig-border);
 		border-radius: var(--radius);
 		overflow: hidden;
@@ -186,15 +197,15 @@ function getColumnTasks(key: string): ScheduledTask[] {
 		flex-direction: column;
 		gap: 1px;
 		overflow-y: auto;
-		min-height: 0;
-		flex: 1;
+		max-height: 60vh;
 	}
 
 	.column-empty {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: var(--space-lg) var(--space-md);
+		min-height: 80px;
+		padding: var(--space-sm) var(--space-md);
 		font-family: var(--font-mono);
 		font-size: 9px;
 		letter-spacing: 0.08em;
