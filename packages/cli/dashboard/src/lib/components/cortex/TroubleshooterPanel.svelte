@@ -213,8 +213,31 @@
 			}
 		} catch (err) {
 			if (!abort.signal.aborted) {
-				appendLine(gid, `\x1b[31merror:\x1b[0m ${err instanceof Error ? err.message : "fetch failed"}`);
+				const lifecycle = cmd.key === "daemon-stop" || cmd.key === "daemon-restart";
+				if (lifecycle) {
+					appendLine(gid, `\x1b[33mDaemon process ended\x1b[0m`);
+				} else {
+					appendLine(gid, `\x1b[31merror:\x1b[0m ${err instanceof Error ? err.message : "fetch failed"}`);
+				}
 			}
+		}
+
+		// Restart: poll until daemon comes back
+		if (cmd.key === "daemon-restart") {
+			appendLine(gid, "\x1b[90mWaiting for daemon to restart...\x1b[0m");
+			await scrollGroup(gid);
+			let ok = false;
+			for (let i = 0; i < 15; i++) {
+				await new Promise<void>(r => setTimeout(r, 1000));
+				try {
+					const h = await fetch(`${API_BASE}/health`);
+					if (h.ok) { ok = true; break; }
+				} catch { /* still down */ }
+			}
+			appendLine(gid, ok
+				? "\x1b[32m✓ Daemon restarted\x1b[0m"
+				: "\x1b[31m✗ Daemon did not restart within 15s\x1b[0m");
+			await scrollGroup(gid);
 		}
 
 		appendLine(gid, "");

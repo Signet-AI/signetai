@@ -7239,6 +7239,53 @@ app.post("/api/troubleshoot/exec", async (c) => {
 	const { CLAUDECODE: _cc, SIGNET_NO_HOOKS: _, ...baseEnv } = process.env;
 	const encoder = new TextEncoder();
 
+	// Lifecycle commands (stop/restart) can't stream through the general
+	// exec pipeline — the child process would kill its parent mid-stream.
+	// Handle directly: flush SSE output, then schedule graceful shutdown.
+	if (key === "daemon-stop" || key === "daemon-restart") {
+		const action = key === "daemon-stop" ? "stop" : "restart";
+		const lifecycle = new ReadableStream({
+			start(controller) {
+				const write = (event: unknown): void => {
+					try {
+						controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+					} catch {}
+				};
+
+				write({ type: "started", key, command: `signet daemon ${action}` });
+				write({ type: "stdout", data: `Daemon ${action} initiated (PID ${process.pid})\n` });
+				if (key === "daemon-stop") {
+					write({ type: "stdout", data: "Dashboard will lose connection.\n" });
+				}
+				write({ type: "exit", code: 0 });
+				try { controller.close(); } catch {}
+
+				// Give the response time to flush, then trigger graceful shutdown.
+				// SIGTERM triggers cleanup() which handles PID file, DB, watchers.
+				setTimeout(async () => {
+					if (key === "daemon-restart") {
+						const { spawn: nodeSpawn } = await import("node:child_process");
+						const child = nodeSpawn("sh", ["-c", `sleep 1 && ${resolved} daemon start`], {
+							detached: true,
+							stdio: "ignore",
+							env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
+						});
+						child.unref();
+					}
+					process.kill(process.pid, "SIGTERM");
+				}, 500);
+			},
+		});
+
+		return new Response(lifecycle, {
+			headers: {
+				"content-type": "text/event-stream",
+				"cache-control": "no-cache",
+				connection: "keep-alive",
+			},
+		});
+	}
+
 	const stream = new ReadableStream({
 		async start(controller) {
 			const write = (event: unknown) => {
