@@ -1433,10 +1433,11 @@ export function startWorker(
 
 		consecutiveFailures = 0;
 		lastSuccess = Date.now();
+		// If a tick is already running, just reset backoff — the
+		// in-progress tick will call scheduleTick() on completion.
+		if (inflight) return;
 		if (pollTimer) clearTimeout(pollTimer);
-		// Immediate tick — guard against concurrent inflight
 		pollTimer = setTimeout(async () => {
-			if (inflight) { scheduleTick(); return; }
 			inflight = tick();
 			await inflight;
 			inflight = null;
@@ -1479,10 +1480,12 @@ export function startWorker(
 		},
 		nudge() {
 			consecutiveFailures = 0;
+			// If a tick is already running, just reset backoff — the
+			// in-progress tick will call scheduleTick() on completion
+			// with the now-zeroed failure count.
+			if (inflight) return;
 			if (pollTimer) clearTimeout(pollTimer);
-			// Schedule immediate tick — guard against concurrent inflight
 			pollTimer = setTimeout(async () => {
-				if (inflight) { scheduleTick(); return; }
 				inflight = tick();
 				await inflight;
 				inflight = null;
