@@ -128,6 +128,7 @@ import {
 	enqueueExtractionJob,
 	getPipelineWorkerStatus,
 	getSynthesisWorker,
+	nudgeExtractionWorker,
 	readLastSynthesisTime,
 	startPipeline,
 	startRetentionWorker,
@@ -1284,6 +1285,14 @@ app.get("/health", (c) => {
 	} catch {
 		// DB unreachable
 	}
+	const workers = getPipelineWorkerStatus();
+	const extraction = workers.extraction;
+	const stalled =
+		extraction.running &&
+		extraction.stats !== undefined &&
+		extraction.stats.pending > 0 &&
+		Date.now() - extraction.stats.lastProgressAt > 60_000;
+
 	return c.json({
 		status: "healthy",
 		uptime: process.uptime(),
@@ -1294,6 +1303,12 @@ app.get("/health", (c) => {
 		db: dbOk,
 		updateAvailable: us.lastCheck?.updateAvailable ?? false,
 		pendingRestart: us.pendingRestartVersion !== null,
+		pipeline: {
+			extractionRunning: extraction.running,
+			extractionStalled: stalled,
+			extractionPending: extraction.stats?.pending ?? 0,
+			extractionBackoffMs: extraction.stats?.backoffMs ?? 0,
+		},
 	});
 });
 
@@ -6789,6 +6804,13 @@ app.get("/api/pipeline/status", (c) => {
 		},
 		predictor: predictorSnapshot,
 	});
+});
+
+app.post("/api/pipeline/nudge", (c) => {
+	if (!nudgeExtractionWorker()) {
+		return c.json({ error: "Extraction worker not running" }, 503);
+	}
+	return c.json({ nudged: true });
 });
 
 // ---------------------------------------------------------------------------

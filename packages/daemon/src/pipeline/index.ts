@@ -18,9 +18,10 @@ import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./
 import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
 import { type DependencySynthesisHandle, startDependencySynthesisWorker } from "./dependency-synthesis";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
-import { type WorkerHandle, startWorker } from "./worker";
+import { type WorkerHandle, type WorkerStats, startWorker } from "./worker";
 
 export { enqueueExtractionJob } from "./worker";
+export type { WorkerStats } from "./worker";
 export { enqueueDocumentIngestJob } from "./document-worker";
 export {
 	startRetentionWorker,
@@ -57,9 +58,15 @@ let structuralDependencyHandle: StructuralDependencyHandle | null = null;
 let dependencySynthesisHandle: DependencySynthesisHandle | null = null;
 
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
-export function getPipelineWorkerStatus(): Record<string, { running: boolean }> {
+export function getPipelineWorkerStatus(): Record<
+	string,
+	{ running: boolean; stats?: WorkerStats }
+> {
 	return {
-		extraction: { running: workerHandle !== null },
+		extraction: {
+			running: workerHandle !== null,
+			stats: workerHandle?.stats,
+		},
 		summary: { running: summaryWorkerHandle !== null },
 		document: { running: documentWorkerHandle !== null },
 		retention: { running: retentionHandle !== null },
@@ -69,6 +76,13 @@ export function getPipelineWorkerStatus(): Record<string, { running: boolean }> 
 		structuralDependency: { running: structuralDependencyHandle !== null },
 		dependencySynthesis: { running: dependencySynthesisHandle !== null },
 	};
+}
+
+/** Force the extraction worker to repoll immediately. */
+export function nudgeExtractionWorker(): boolean {
+	if (!workerHandle) return false;
+	workerHandle.nudge();
+	return true;
 }
 
 // ---------------------------------------------------------------------------

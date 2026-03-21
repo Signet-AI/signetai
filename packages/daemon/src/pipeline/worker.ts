@@ -36,9 +36,19 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
+export interface WorkerStats {
+	readonly failures: number;
+	readonly lastProgressAt: number;
+	readonly pending: number;
+	readonly processed: number;
+	readonly backoffMs: number;
+}
+
 export interface WorkerHandle {
 	stop(): Promise<void>;
 	readonly running: boolean;
+	nudge(): void;
+	readonly stats: WorkerStats;
 }
 
 interface JobRow {
@@ -900,8 +910,15 @@ export function startWorker(
 	// Backoff state
 	let consecutiveFailures = 0;
 	const BASE_DELAY = 1000;
-	const MAX_DELAY = 30000;
+	const MAX_DELAY = 15000;
 	const JITTER = 500;
+
+	// Progress tracking for watchdog and stats
+	let lastProgress = Date.now();
+	let processed = 0;
+	let watchdog: ReturnType<typeof setInterval> | null = null;
+	const WATCHDOG_INTERVAL = 30_000;
+	const STALL_THRESHOLD = 60_000;
 
 	async function processExtractJob(job: JobRow): Promise<void> {
 		// Fetch memory content
@@ -1289,12 +1306,17 @@ export function startWorker(
 				leaseJob(db, "extract", pipelineCfg.worker.maxRetries),
 			);
 
-			if (!job) return; // Nothing to do
+			if (!job) {
+				consecutiveFailures = 0;
+				return;
+			}
 
 			const jobStart = Date.now();
 			try {
 				await processExtractJob(job);
-				if (consecutiveFailures > 0) consecutiveFailures--;
+				consecutiveFailures = 0;
+				lastProgress = Date.now();
+				processed++;
 				analytics?.recordLatency("jobs", Date.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
@@ -1328,6 +1350,7 @@ export function startWorker(
 					}
 				});
 				consecutiveFailures++;
+				lastProgress = Date.now();
 			}
 		} catch (e) {
 			logger.error(
@@ -1336,6 +1359,7 @@ export function startWorker(
 				e instanceof Error ? e : new Error(String(e)),
 			);
 			consecutiveFailures++;
+			lastProgress = Date.now();
 		}
 	}
 
@@ -1349,6 +1373,12 @@ export function startWorker(
 	function scheduleTick(): void {
 		if (!running) return;
 		const delay = getBackoffDelay();
+		if (consecutiveFailures > 2) {
+			logger.warn("pipeline", "Worker backing off", {
+				failures: consecutiveFailures,
+				delayMs: Math.round(delay),
+			});
+		}
 		pollTimer = setTimeout(async () => {
 			inflight = tick();
 			await inflight;
@@ -1372,6 +1402,44 @@ export function startWorker(
 		}
 	}, 60000);
 
+	// Stall watchdog — detect when worker stops making progress
+	watchdog = setInterval(() => {
+		if (!running) return;
+		if (Date.now() - lastProgress < STALL_THRESHOLD) return;
+
+		let pending = 0;
+		try {
+			const row = accessor.withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'",
+					)
+					.get() as { cnt: number },
+			);
+			pending = row.cnt;
+		} catch {
+			return;
+		}
+		if (pending === 0) return;
+
+		logger.warn("pipeline", "Worker stall detected, resetting backoff", {
+			pending,
+			failures: consecutiveFailures,
+			stalledMs: Date.now() - lastProgress,
+		});
+
+		consecutiveFailures = 0;
+		lastProgress = Date.now();
+		if (pollTimer) clearTimeout(pollTimer);
+		// Immediate tick — bypass pollMs delay
+		pollTimer = setTimeout(async () => {
+			inflight = tick();
+			await inflight;
+			inflight = null;
+			scheduleTick();
+		}, 0);
+	}, WATCHDOG_INTERVAL);
+
 	// Start the tick loop
 	scheduleTick();
 	logger.info("pipeline", "Worker started", {
@@ -1386,14 +1454,50 @@ export function startWorker(
 				: "shadow",
 	});
 
+	function pendingCount(): number {
+		try {
+			const row = accessor.withReadDb((db) =>
+				db
+					.prepare(
+						"SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'",
+					)
+					.get() as { cnt: number },
+			);
+			return row.cnt;
+		} catch {
+			return 0;
+		}
+	}
+
 	return {
 		get running() {
 			return running;
+		},
+		nudge() {
+			consecutiveFailures = 0;
+			if (pollTimer) clearTimeout(pollTimer);
+			// Schedule immediate tick (bypass pollMs delay)
+			pollTimer = setTimeout(async () => {
+				inflight = tick();
+				await inflight;
+				inflight = null;
+				scheduleTick();
+			}, 0);
+		},
+		get stats(): WorkerStats {
+			return {
+				failures: consecutiveFailures,
+				lastProgressAt: lastProgress,
+				pending: pendingCount(),
+				processed,
+				backoffMs: getBackoffDelay(),
+			};
 		},
 		async stop() {
 			running = false;
 			if (pollTimer) clearTimeout(pollTimer);
 			if (reapTimer) clearInterval(reapTimer);
+			if (watchdog) clearInterval(watchdog);
 			if (inflight) await inflight;
 			logger.info("pipeline", "Worker stopped");
 		},

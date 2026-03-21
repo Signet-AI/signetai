@@ -163,6 +163,33 @@ function scriptedProvider(outputs: readonly string[]): LlmProvider {
 }
 
 /**
+ * Provider that throws for the first N calls then returns good extraction
+ * responses. Used to test backoff recovery behavior.
+ */
+function failThenSucceedProvider(failures: number): LlmProvider {
+	let calls = 0;
+	const good = JSON.stringify({
+		facts: [
+			{ content: "Test fact", type: "preference", confidence: 0.9 },
+		],
+		entities: [
+			{ source: "User", relationship: "prefers", target: "tests", confidence: 0.9 },
+		],
+	});
+	return {
+		name: "mock-fail-then-succeed",
+		async generate() {
+			calls++;
+			if (calls <= failures) throw new Error("Transient LLM failure");
+			return good;
+		},
+		async available() {
+			return true;
+		},
+	};
+}
+
+/**
  * Build a provider that throws from generate() on the N-th call,
  * where N = the SECOND call. Used to simulate extraction succeeding
  * but something else going wrong at the worker level via a mock accessor.
@@ -1351,5 +1378,146 @@ describe("Worker dead-job path", () => {
 		expect(job!.attempts).toBeGreaterThanOrEqual(1);
 		// With max_attempts=3 and attempts=1, job goes back to pending
 		expect(job!.status).toBe("pending");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Backoff recovery tests (issue #248)
+// ---------------------------------------------------------------------------
+
+describe("Backoff recovery", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("resets backoff on success after failures — all jobs complete promptly", async () => {
+		// Enqueue 3 jobs. Provider throws on first call then succeeds.
+		// With the old decrement-by-1 logic and 3 failures from retries,
+		// backoff would reach ~8s. With reset-to-0, jobs complete within
+		// a few hundred ms at 10ms pollMs.
+		insertMemory(db, "mem-bf-1", "Content one");
+		insertMemory(db, "mem-bf-2", "Content two");
+		insertMemory(db, "mem-bf-3", "Content three");
+		enqueueExtractionJob(accessor, "mem-bf-1");
+		enqueueExtractionJob(accessor, "mem-bf-2");
+		enqueueExtractionJob(accessor, "mem-bf-3");
+
+		const cfg = {
+			...PIPELINE_CFG,
+			worker: { ...PIPELINE_CFG.worker, pollMs: 10, maxRetries: 1 },
+		};
+		const worker = startWorker(
+			accessor,
+			failThenSucceedProvider(1),
+			cfg,
+			DECISION_CFG,
+		);
+
+		// If backoff doesn't reset, 1 failure = 2s delay per tick.
+		// 3 jobs at 2s each = 6s minimum. We allow 2s — should be plenty
+		// with reset-to-0 and 10ms polling.
+		await Bun.sleep(2000);
+		await worker.stop();
+
+		const j1 = getJob(db, "mem-bf-2");
+		const j2 = getJob(db, "mem-bf-3");
+		expect(j1?.status).toBe("completed");
+		expect(j2?.status).toBe("completed");
+	});
+
+	it("resets backoff when queue empties after failures", async () => {
+		// First job will fail all retries (dead). Then we enqueue a second
+		// job — it should process promptly, not after 30s backoff.
+		insertMemory(db, "mem-drain-1", "Will fail");
+		enqueueExtractionJob(accessor, "mem-drain-1");
+
+		const cfg = {
+			...PIPELINE_CFG,
+			worker: { ...PIPELINE_CFG.worker, pollMs: 10, maxRetries: 1 },
+		};
+		const worker = startWorker(
+			accessor,
+			failThenSucceedProvider(1),
+			cfg,
+			DECISION_CFG,
+		);
+
+		// Let first job fail and enter per-job backoff
+		await Bun.sleep(200);
+
+		// Enqueue a fresh job — provider now returns good results
+		insertMemory(db, "mem-drain-2", "Will succeed");
+		enqueueExtractionJob(accessor, "mem-drain-2");
+
+		// With reset-on-empty, the idle polls after the first failure
+		// reset backoff to 0, so the new job picks up at 10ms interval.
+		await Bun.sleep(500);
+		await worker.stop();
+
+		const job = getJob(db, "mem-drain-2");
+		expect(job?.status).toBe("completed");
+	});
+
+	it("nudge() forces immediate repoll regardless of current delay", async () => {
+		// Start worker with a very long poll interval (60s). Without nudge,
+		// the job would not be processed for 60 seconds. Nudge cancels
+		// the current delay and forces an immediate poll.
+		const cfg = {
+			...PIPELINE_CFG,
+			worker: { ...PIPELINE_CFG.worker, pollMs: 60000 },
+		};
+		const worker = startWorker(accessor, goodProvider(), cfg, DECISION_CFG);
+
+		// First tick fires at 60s — nothing happens in 200ms
+		await Bun.sleep(200);
+
+		// Enqueue a job and nudge — should pick it up immediately
+		insertMemory(db, "mem-nudge", "Content for nudge test");
+		enqueueExtractionJob(accessor, "mem-nudge");
+		worker.nudge();
+
+		// Job should complete within 500ms (not 60s)
+		await Bun.sleep(500);
+		await worker.stop();
+
+		const job = getJob(db, "mem-nudge");
+		expect(job?.status).toBe("completed");
+	});
+
+	it("stats reflect current worker state", async () => {
+		insertMemory(db, "mem-stats-1", "Content one");
+		insertMemory(db, "mem-stats-2", "Content two");
+		enqueueExtractionJob(accessor, "mem-stats-1");
+		enqueueExtractionJob(accessor, "mem-stats-2");
+
+		const cfg = {
+			...PIPELINE_CFG,
+			worker: { ...PIPELINE_CFG.worker, pollMs: 10 },
+		};
+		const worker = startWorker(
+			accessor,
+			goodProvider(),
+			cfg,
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(500);
+		await worker.stop();
+
+		const s = worker.stats;
+		expect(s.processed).toBeGreaterThanOrEqual(2);
+		expect(s.failures).toBe(0);
+		expect(s.pending).toBe(0);
+		expect(s.lastProgressAt).toBeGreaterThan(0);
+		expect(s.backoffMs).toBe(cfg.worker.pollMs);
 	});
 });
