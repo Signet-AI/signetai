@@ -17,7 +17,9 @@ import {
 // Signet command resolution
 // ---------------------------------------------------------------------------
 
-/** Resolve signet command for hook invocation. Returns array form for hooks.json command field. */
+/** Resolve signet command for hook invocation. Returns array form for hooks.json command field.
+ *  Windows: navigates from argv[1] (e.g. <pkg>/bin/signet.js) up two levels to find
+ *  the bin directory. Falls back to bare "signet" if the layout doesn't match (shims, junctions). */
 function resolveSignetArgs(): string[] {
 	if (process.platform !== "win32") return ["signet"];
 	const entry = process.argv[1] || "";
@@ -92,11 +94,20 @@ function writeHooksJson(path: string, hooks: HooksJson): void {
 	writeFileSync(path, JSON.stringify(hooks, null, 2) + "\n");
 }
 
+const SIGNET_HOOK_CMDS = ["hook session-start", "hook user-prompt-submit", "hook session-end"] as const;
+
 function isSignetHandler(entry: unknown): boolean {
-	const raw = JSON.stringify(entry);
-	return raw.includes("hook session-start") ||
-		raw.includes("hook user-prompt-submit") ||
-		raw.includes("hook session-end");
+	if (typeof entry !== "object" || entry === null) return false;
+	const handlers = (entry as Record<string, unknown>).handlers;
+	if (!Array.isArray(handlers)) return false;
+	for (const handler of handlers) {
+		if (typeof handler !== "object" || handler === null) continue;
+		const cmd = (handler as Record<string, unknown>).command;
+		if (!Array.isArray(cmd)) continue;
+		const joined = cmd.join(" ");
+		if (SIGNET_HOOK_CMDS.some((s) => joined.includes(s))) return true;
+	}
+	return false;
 }
 
 function removeSignetHooks(hooks: HooksJson): HooksJson {
@@ -258,8 +269,10 @@ export class CodexConnector extends BaseConnector {
 		if (existing) {
 			// Check marker first; fall back to handler scan if marker was stripped
 			const hasMarker = isSignetOwned(existing);
-			const hasHandlers = JSON.stringify(existing).includes("hook session-start") ||
-				JSON.stringify(existing).includes("hook user-prompt-submit");
+			const hasHandlers = ["sessionStart", "userPromptSubmit", "stop"].some(
+				(k) => Array.isArray((existing as Record<string, unknown>)[k]) &&
+					((existing as Record<string, unknown>)[k] as unknown[]).some(isSignetHandler),
+			);
 			if (hasMarker || hasHandlers) {
 				const cleaned = removeSignetHooks(existing);
 				const remaining = Object.keys(cleaned).filter((k) => k !== "_signet");
