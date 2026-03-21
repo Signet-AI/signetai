@@ -136,35 +136,49 @@ This gives Claude Code direct access to `memory_search`, `memory_store`,
 
 ## Codex
 
-Codex is OpenAI's terminal coding agent. Signet integrates with Codex by
-installing a shell wrapper that fires Signet lifecycle hooks around local
-`codex` sessions and injects session-start context through Codex's
-`model_instructions_file` setting.
+Codex is OpenAI's terminal coding agent (`codex-rs`). Signet integrates
+with Codex using its native hook system (`hooks.json`) for full lifecycle
+memory — including per-prompt recall on every user turn. Signet also
+registers as an MCP server so Codex can call `signet_remember` and
+`signet_recall` as native tools.
 
 ### Files managed by Signet
 
 | File | Description |
 |------|-------------|
-| `~/.config/signet/bin/codex` | Signet-managed Codex wrapper script |
-| `~/.zshrc` / `~/.bashrc` / `~/.bash_profile` | PATH snippet that prioritizes the wrapper |
+| `~/.codex/hooks.json` | Native Codex hooks — SessionStart, UserPromptSubmit, Stop |
+| `~/.codex/config.toml` | MCP server registration (`[mcp_servers.signet]`) |
+| `~/.codex/skills` | Symlink to `~/.agents/skills` |
 
 ### How it works
 
-1. The wrapper calls `signet hook session-start -H codex` before launching Codex.
-2. The returned Signet context is written to a temporary instructions file.
-3. Codex is launched with `-c model_instructions_file=...` so the session starts with Signet context loaded.
-4. When Codex exits, the wrapper finds the newest `~/.codex/sessions/*.jsonl` transcript and calls `signet hook session-end -H codex`.
+1. Codex reads `~/.codex/hooks.json` at startup and registers three hooks.
+2. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex` → Signet returns identity + memories as `additional_context` injected into the model's context window.
+3. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex` → Signet returns per-prompt recalled memories as `additional_context`. This is blocking — Codex waits for the hook before sending to the model.
+4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
+5. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
 
-This gives Codex the same durable memory lifecycle as Claude Code without
-requiring Codex-specific database or schema changes.
+This gives Codex full parity with Claude Code — same hook pattern, same
+daemon endpoints, same memory injection quality.
 
 ### Supported hooks
 
 | Hook | Supported |
 |------|-----------|
-| session-start | yes — context injected via `model_instructions_file` |
-| user-prompt-submit | no |
-| session-end | yes — transcript path passed to daemon for memory extraction |
+| session-start | yes — identity + memories via `additional_context` |
+| user-prompt-submit | yes — per-prompt recall via `additional_context` |
+| session-end | yes — transcript extraction via `Stop` hook |
+
+### MCP tools
+
+When the Signet MCP server is registered, Codex gains access to these
+tools (namespaced as `mcp__signet__*`):
+
+- `memory_store` — save a memory
+- `memory_search` — hybrid recall (vector + keyword)
+- `memory_list` — list recent memories
+- `memory_modify` — update existing memory
+- `memory_forget` — delete a memory
 
 ### Extraction provider
 
@@ -175,8 +189,8 @@ than a local Ollama instance.
 
 ### Prerequisites
 
-- Codex installed and in `PATH`
-- A new terminal session after Signet installs the shell PATH snippet
+- Codex (`codex-rs`) installed and in `PATH`
+- Signet daemon running (`signet start`)
 
 ---
 

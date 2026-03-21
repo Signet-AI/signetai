@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -14,203 +13,144 @@ import {
 	type UninstallResult,
 } from "@signet/connector-base";
 
-const SHELL_BLOCK_START = "# >>> signet codex >>>";
-const SHELL_BLOCK_END = "# <<< signet codex <<<";
-const SHELL_BLOCK = `${SHELL_BLOCK_START}
-if [ -d "$HOME/.config/signet/bin" ]; then
-	case ":$PATH:" in
-		*":$HOME/.config/signet/bin:"*) ;;
-		*) export PATH="$HOME/.config/signet/bin:$PATH" ;;
-	esac
-fi
-${SHELL_BLOCK_END}
-`;
+// ---------------------------------------------------------------------------
+// Signet command resolution
+// ---------------------------------------------------------------------------
 
-function stripBlock(content: string): string {
-	const start = content.indexOf(SHELL_BLOCK_START);
-	if (start < 0) return content;
-	const end = content.indexOf(SHELL_BLOCK_END, start);
-	if (end < 0) return content;
-	const after = content.slice(end + SHELL_BLOCK_END.length);
-	const before = content.slice(0, start).trimEnd();
-	return `${before}${before ? "\n\n" : ""}${after.trimStart()}`.trimEnd() + "\n";
+/** Resolve signet command for hook invocation. Returns array form for hooks.json command field. */
+function resolveSignetArgs(): string[] {
+	if (process.platform !== "win32") return ["signet"];
+	const entry = process.argv[1] || "";
+	const signetJs = join(entry, "..", "..", "bin", "signet.js");
+	if (existsSync(signetJs)) return [process.execPath, signetJs];
+	return ["signet"];
 }
 
-function appendBlock(content: string): string {
-	const stripped = stripBlock(content).trimEnd();
-	return `${stripped}${stripped ? "\n\n" : ""}${SHELL_BLOCK}`;
+/** Resolve signet-mcp command string for config.toml. */
+function resolveSignetMcpCmd(): string {
+	if (process.platform !== "win32") return "signet-mcp";
+	const entry = process.argv[1] || "";
+	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
+	if (existsSync(mcpJs)) return `${process.execPath} ${mcpJs}`;
+	return "signet-mcp";
 }
 
-function shellSingleQuote(value: string): string {
-	return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+// ---------------------------------------------------------------------------
+// hooks.json management
+// ---------------------------------------------------------------------------
+
+interface HooksJson {
+	_signet?: boolean;
+	sessionStart?: unknown[];
+	userPromptSubmit?: unknown[];
+	stop?: unknown[];
+	[key: string]: unknown;
 }
 
-function buildWrapper(realCodexBin: string): string {
-	return `#!/bin/sh
-set -eu
-
-REAL_CODEX_BIN=${shellSingleQuote(realCodexBin)}
-SIGNET_BIN="\${SIGNET_CODEX_SIGNET_BIN:-signet}"
-SESSION_ROOT="\${HOME}/.codex/sessions"
-TMP_ROOT="\${TMPDIR:-/tmp}/signet-codex-\$\$"
-SESSION_KEY=""
-START_MARKER=""
-INSTRUCTIONS_FILE=""
-
-cleanup() {
-	rm -rf "$TMP_ROOT"
+function buildHooksJson(signetArgs: string[]): HooksJson {
+	return {
+		_signet: true,
+		sessionStart: [{
+			handlers: [{
+				command: [...signetArgs, "hook", "session-start", "-H", "codex"],
+				timeout: 10,
+			}],
+		}],
+		userPromptSubmit: [{
+			handlers: [{
+				command: [...signetArgs, "hook", "user-prompt-submit", "-H", "codex"],
+				timeout: 5,
+			}],
+		}],
+		stop: [{
+			handlers: [{
+				command: [...signetArgs, "hook", "session-end", "-H", "codex"],
+				timeout: 30,
+			}],
+		}],
+	};
 }
 
-# Escape a string for embedding in a JSON value (backslash, double-quote, newlines)
-json_escape() {
-	printf '%s' "$1" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' -e 's/	/\\\\t/g' | tr '\\n' ' '
+function readHooksJson(path: string): HooksJson | null {
+	if (!existsSync(path)) return null;
+	try {
+		const raw = readFileSync(path, "utf-8");
+		const parsed = JSON.parse(raw);
+		if (typeof parsed !== "object" || parsed === null) return null;
+		return parsed as HooksJson;
+	} catch {
+		return null;
+	}
 }
 
-session_start() {
-	mkdir -p "$TMP_ROOT"
-	START_MARKER="$TMP_ROOT/start.marker"
-	INSTRUCTIONS_FILE="$TMP_ROOT/model-instructions.md"
-	: > "$START_MARKER"
-	SESSION_KEY="$(uuidgen 2>/dev/null || printf "codex-%s-%s" "$(date +%s)" "$$")"
-
-	payload="$(printf '{"session_id":"%s","cwd":"%s"}' "$(json_escape "$SESSION_KEY")" "$(json_escape "$PWD")")"
-	if printf "%s" "$payload" | "$SIGNET_BIN" hook session-start -H codex --project "$PWD" > "$INSTRUCTIONS_FILE" 2>/dev/null; then
-		if [ ! -s "$INSTRUCTIONS_FILE" ]; then
-			rm -f "$INSTRUCTIONS_FILE"
-			INSTRUCTIONS_FILE=""
-		fi
-	else
-		rm -f "$INSTRUCTIONS_FILE"
-		INSTRUCTIONS_FILE=""
-	fi
+function isSignetOwned(hooks: HooksJson): boolean {
+	return hooks._signet === true;
 }
 
-find_session_file() {
-	if [ ! -d "$SESSION_ROOT" ] || [ -z "$START_MARKER" ] || [ ! -f "$START_MARKER" ]; then
-		return 0
-	fi
-
-	find "$SESSION_ROOT" -type f -name '*.jsonl' -newer "$START_MARKER" 2>/dev/null | sort | tail -n 1
+function writeHooksJson(path: string, hooks: HooksJson): void {
+	mkdirSync(join(path, ".."), { recursive: true });
+	writeFileSync(path, JSON.stringify(hooks, null, 2) + "\n");
 }
 
-session_end() {
-	if [ -z "$SESSION_KEY" ]; then
-		return 0
-	fi
-
-	TRANSCRIPT_PATH="$(find_session_file)"
-	payload="$(printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s"}' "$(json_escape "$SESSION_KEY")" "$(json_escape "$TRANSCRIPT_PATH")" "$(json_escape "$PWD")")"
-	printf "%s" "$payload" | "$SIGNET_BIN" hook session-end -H codex >/dev/null 2>&1 || true
+function removeSignetHooks(hooks: HooksJson): HooksJson {
+	const cleaned = { ...hooks };
+	delete cleaned._signet;
+	delete cleaned.sessionStart;
+	delete cleaned.userPromptSubmit;
+	delete cleaned.stop;
+	return cleaned;
 }
 
-if [ "\${SIGNET_NO_HOOKS:-}" = "1" ] || [ "\${SIGNET_CODEX_BYPASS_WRAPPER:-}" = "1" ]; then
-	exec "$REAL_CODEX_BIN" "$@"
-fi
+// ---------------------------------------------------------------------------
+// MCP server registration (config.toml)
+// ---------------------------------------------------------------------------
 
-if [ ! -x "$REAL_CODEX_BIN" ]; then
-	echo "[signet] codex wrapper could not find real binary at $REAL_CODEX_BIN" >&2
-	exit 1
-fi
+function patchConfigToml(path: string, mcpCmd: string): boolean {
+	const dir = join(path, "..");
+	mkdirSync(dir, { recursive: true });
 
-trap 'cleanup' EXIT
+	if (!existsSync(path)) {
+		writeFileSync(path, `# Signet MCP server\n[mcp_servers.signet]\ncommand = "${mcpCmd}"\n`);
+		return true;
+	}
 
-session_start
+	const content = readFileSync(path, "utf-8");
+	if (content.includes("[mcp_servers.signet]")) return false;
 
-set +e
-if [ -n "$INSTRUCTIONS_FILE" ]; then
-	"$REAL_CODEX_BIN" -c "model_instructions_file=$INSTRUCTIONS_FILE" "$@"
-else
-	"$REAL_CODEX_BIN" "$@"
-fi
-EXIT_CODE=$?
-set -e
-
-session_end
-exit "$EXIT_CODE"
-`;
+	const appended = content.trimEnd() + `\n\n# Signet MCP server\n[mcp_servers.signet]\ncommand = "${mcpCmd}"\n`;
+	writeFileSync(path, appended);
+	return true;
 }
 
-/**
- * Build a Windows .cmd wrapper that mirrors the Unix shell wrapper above.
- *
- * Design notes:
- * - JSON payloads are built via PowerShell's ConvertTo-Json to safely escape
- *   special characters (", &, |, %) that would break raw cmd echo piping.
- * - Environment variables set with `set` inside `setlocal` are inherited by
- *   child PowerShell processes and accessed via $env: — this avoids double-
- *   expansion pitfalls in cmd's string interpolation.
- * - All PowerShell invocations use -NoProfile -ErrorAction SilentlyContinue
- *   to suppress stderr noise and prevent profile scripts from interfering.
- * - Session-start/end hooks match the Unix wrapper's behavior: generate a
- *   session key, capture model instructions, discover transcript files, and
- *   pass structured context to the signet daemon.
- */
-function buildWindowsWrapper(realCodexBin: string): string {
-	// Common PowerShell flags used across all invocations in the wrapper
-	const psFlags = "-NoProfile -ErrorAction SilentlyContinue";
+function unpatchConfigToml(path: string): boolean {
+	if (!existsSync(path)) return false;
+	const content = readFileSync(path, "utf-8");
+	if (!content.includes("[mcp_servers.signet]")) return false;
 
-	return `@echo off
-setlocal
-
-set "REAL_CODEX_BIN=${realCodexBin}"
-set "SIGNET_BIN=signet"
-set "SESSION_ROOT=%USERPROFILE%\\.codex\\sessions"
-set "SESSION_KEY="
-set "INSTRUCTIONS_FILE="
-
-if "%SIGNET_NO_HOOKS%"=="1" goto :run_direct
-if "%SIGNET_CODEX_BYPASS_WRAPPER%"=="1" goto :run_direct
-
-REM Generate a session key (GUID preferred, timestamp+random fallback)
-for /f "tokens=*" %%i in ('powershell ${psFlags} -Command "[guid]::NewGuid().ToString()" 2^>nul') do set "SESSION_KEY=%%i"
-if "%SESSION_KEY%"=="" (
-	for /f "tokens=*" %%i in ('powershell ${psFlags} -Command "Get-Date -UFormat %%s" 2^>nul') do set "SESSION_KEY=codex-%%i-%RANDOM%"
-)
-
-REM Create temp directory for model instructions
-set "TMP_ROOT=%TEMP%\\signet-codex-%RANDOM%"
-mkdir "%TMP_ROOT%" >nul 2>&1
-set "INSTRUCTIONS_FILE=%TMP_ROOT%\\model-instructions.md"
-
-REM Session-start hook: build JSON via ConvertTo-Json for safe escaping of paths containing ", &, |, %
-set "HOOK_OK=0"
-for /f "delims=" %%j in ('powershell ${psFlags} -Command "ConvertTo-Json @{session_id=$env:SESSION_KEY;cwd=$PWD.Path} -Compress"') do (
-	echo %%j| "%SIGNET_BIN%" hook session-start -H codex --project "%CD%" > "%INSTRUCTIONS_FILE%" 2>nul && set "HOOK_OK=1"
-)
-if "%HOOK_OK%"=="0" (
-	set "INSTRUCTIONS_FILE="
-) else (
-	for %%A in ("%INSTRUCTIONS_FILE%") do if %%~zA==0 set "INSTRUCTIONS_FILE="
-)
-
-if defined INSTRUCTIONS_FILE (
-	"%REAL_CODEX_BIN%" -c "model_instructions_file=%INSTRUCTIONS_FILE%" %*
-) else (
-	"%REAL_CODEX_BIN%" %*
-)
-set "EXIT_CODE=%ERRORLEVEL%"
-
-REM Find newest transcript file created during this session
-set "TRANSCRIPT_PATH="
-if exist "%SESSION_ROOT%" (
-	for /f "tokens=*" %%f in ('powershell ${psFlags} -Command "Get-ChildItem -Path \\"%SESSION_ROOT%\\" -Filter *.jsonl -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName" 2^>nul') do set "TRANSCRIPT_PATH=%%f"
-)
-
-REM Session-end hook: same ConvertTo-Json approach for consistent safe escaping
-for /f "delims=" %%j in ('powershell ${psFlags} -Command "ConvertTo-Json @{session_id=$env:SESSION_KEY;transcript_path=$env:TRANSCRIPT_PATH;cwd=$PWD.Path} -Compress"') do (
-	echo %%j| "%SIGNET_BIN%" hook session-end -H codex >nul 2>&1
-)
-
-REM Cleanup temp directory
-if exist "%TMP_ROOT%" rmdir /s /q "%TMP_ROOT%" >nul 2>&1
-
-exit /b %EXIT_CODE%
-
-:run_direct
-"%REAL_CODEX_BIN%" %*
-exit /b %ERRORLEVEL%
-`;
+	// Remove the signet MCP block — handles both with and without comment
+	const lines = content.split("\n");
+	const filtered: string[] = [];
+	let inSection = false;
+	for (const line of lines) {
+		if (line.trim() === "# Signet MCP server") continue;
+		if (line.trim() === "[mcp_servers.signet]") {
+			inSection = true;
+			continue;
+		}
+		// Skip key=value lines belonging to the signet section
+		if (inSection) {
+			if (line.match(/^\s*\w+\s*=/) || line.trim() === "") continue;
+			inSection = false;
+		}
+		filtered.push(line);
+	}
+	writeFileSync(path, filtered.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n");
+	return true;
 }
+
+// ---------------------------------------------------------------------------
+// Connector
+// ---------------------------------------------------------------------------
 
 export class CodexConnector extends BaseConnector {
 	readonly name = "Codex";
@@ -220,83 +160,63 @@ export class CodexConnector extends BaseConnector {
 		return join(homedir(), ".codex");
 	}
 
-	private getWrapperDir(): string {
-		return join(homedir(), ".config", "signet", "bin");
-	}
-
-	private getWrapperPath(): string {
-		const name = process.platform === "win32" ? "codex.cmd" : "codex";
-		return join(this.getWrapperDir(), name);
-	}
-
-	private getShellConfigPaths(): string[] {
-		if (process.platform === "win32") return [];
-		return [
-			join(homedir(), ".zshrc"),
-			join(homedir(), ".bashrc"),
-			join(homedir(), ".bash_profile"),
-		];
+	private getHooksJsonPath(): string {
+		return join(this.getCodexHome(), "hooks.json");
 	}
 
 	getConfigPath(): string {
 		return join(this.getCodexHome(), "config.toml");
 	}
 
-	private resolveRealCodexBin(): string | null {
-		const wrapperPath = this.getWrapperPath();
-		const isWindows = process.platform === "win32";
-		const locatorCmd = isWindows ? ["where", "codex"] : ["which", "-a", "codex"];
-		const proc = spawnSync(locatorCmd[0], locatorCmd.slice(1), {
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		if (proc.status !== 0) return null;
-
-		const candidates = proc.stdout
-			.toString()
-			.split(/\r?\n/)
-			.map((line: string) => line.trim())
-			.filter((line: string) => line.length > 0);
-
-		for (const candidate of candidates) {
-			if (candidate !== wrapperPath) return candidate;
-		}
-		return null;
-	}
-
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
-		const isWindows = process.platform === "win32";
+		const warnings: string[] = [];
 
-		const realCodexBin = this.resolveRealCodexBin();
-		if (!realCodexBin) {
-			throw new Error("Could not find Codex CLI on PATH");
+		const codexHome = this.getCodexHome();
+		mkdirSync(codexHome, { recursive: true });
+
+		const signetArgs = resolveSignetArgs();
+
+		// 1. Install hooks.json (native Codex hook system)
+		const hooksPath = this.getHooksJsonPath();
+		const existing = readHooksJson(hooksPath);
+
+		if (existing && !isSignetOwned(existing)) {
+			// User has their own hooks.json — merge Signet hooks in
+			const signetHooks = buildHooksJson(signetArgs);
+			const merged: HooksJson = { ...existing };
+			merged._signet = true;
+			for (const key of ["sessionStart", "userPromptSubmit", "stop"] as const) {
+				const current = Array.isArray(merged[key]) ? (merged[key] as unknown[]) : [];
+				const signet = signetHooks[key] as unknown[];
+				merged[key] = [...current, ...signet];
+			}
+			writeHooksJson(hooksPath, merged);
+			warnings.push("Merged Signet hooks into existing hooks.json — existing hooks preserved");
+		} else {
+			writeHooksJson(hooksPath, buildHooksJson(signetArgs));
+		}
+		filesWritten.push(hooksPath);
+
+		// 2. Symlink skills directory
+		const skillsResult = this.symlinkSkills(basePath, codexHome);
+		if (!skillsResult) {
+			warnings.push("Failed to symlink skills directory");
 		}
 
-		const wrapperDir = this.getWrapperDir();
-		mkdirSync(wrapperDir, { recursive: true });
-
-		const wrapperPath = this.getWrapperPath();
-		const wrapperContent = isWindows
-			? buildWindowsWrapper(realCodexBin)
-			: buildWrapper(realCodexBin);
-		writeFileSync(wrapperPath, wrapperContent, isWindows ? {} : { mode: 0o755 });
-		filesWritten.push(wrapperPath);
-
-		for (const shellPath of this.getShellConfigPaths()) {
-			const existing = existsSync(shellPath) ? readFileSync(shellPath, "utf-8") : "";
-			const next = appendBlock(existing);
-			if (next !== existing) {
-				writeFileSync(shellPath, next);
-				configsPatched.push(shellPath);
-			}
+		// 3. Register MCP server in config.toml
+		const mcpCmd = resolveSignetMcpCmd();
+		if (patchConfigToml(this.getConfigPath(), mcpCmd)) {
+			configsPatched.push(this.getConfigPath());
 		}
 
 		return {
 			success: true,
-			message: "Codex integration installed successfully",
+			message: "Codex integration installed — native hooks + MCP server",
 			filesWritten,
 			configsPatched,
+			warnings,
 		};
 	}
 
@@ -304,36 +224,36 @@ export class CodexConnector extends BaseConnector {
 		const filesRemoved: string[] = [];
 		const configsPatched: string[] = [];
 
-		const wrapperPath = this.getWrapperPath();
-		if (existsSync(wrapperPath)) {
-			rmSync(wrapperPath, { force: true });
-			filesRemoved.push(wrapperPath);
+		// 1. Remove hooks.json (or clean Signet entries from merged file)
+		const hooksPath = this.getHooksJsonPath();
+		const existing = readHooksJson(hooksPath);
+		if (existing) {
+			if (isSignetOwned(existing)) {
+				const cleaned = removeSignetHooks(existing);
+				const remaining = Object.keys(cleaned).filter((k) => k !== "_signet");
+				if (remaining.length === 0) {
+					rmSync(hooksPath, { force: true });
+					filesRemoved.push(hooksPath);
+				} else {
+					writeHooksJson(hooksPath, cleaned);
+					configsPatched.push(hooksPath);
+				}
+			}
 		}
 
-		for (const shellPath of this.getShellConfigPaths()) {
-			if (!existsSync(shellPath)) continue;
-			const existing = readFileSync(shellPath, "utf-8");
-			const next = stripBlock(existing);
-			if (next !== existing) {
-				writeFileSync(shellPath, next);
-				configsPatched.push(shellPath);
-			}
+		// 2. Remove MCP server from config.toml
+		if (unpatchConfigToml(this.getConfigPath())) {
+			configsPatched.push(this.getConfigPath());
 		}
 
 		return { filesRemoved, configsPatched };
 	}
 
 	isInstalled(): boolean {
-		if (!existsSync(this.getWrapperPath())) return false;
-		// On Windows there are no shell configs to patch
-		if (process.platform === "win32") return true;
-		return this.getShellConfigPaths().some((shellPath) => {
-			if (!existsSync(shellPath)) return false;
-			try {
-				return readFileSync(shellPath, "utf-8").includes(SHELL_BLOCK_START);
-			} catch {
-				return false;
-			}
-		});
+		const hooks = readHooksJson(this.getHooksJsonPath());
+		if (!hooks) return false;
+		// Check if any handler calls signet hook
+		const raw = JSON.stringify(hooks);
+		return raw.includes("hook session-start") || raw.includes("hook user-prompt-submit");
 	}
 }
