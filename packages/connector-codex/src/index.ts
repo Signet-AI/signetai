@@ -92,12 +92,29 @@ function writeHooksJson(path: string, hooks: HooksJson): void {
 	writeFileSync(path, JSON.stringify(hooks, null, 2) + "\n");
 }
 
+function isSignetHandler(entry: unknown): boolean {
+	const raw = JSON.stringify(entry);
+	return raw.includes("hook session-start") ||
+		raw.includes("hook user-prompt-submit") ||
+		raw.includes("hook session-end");
+}
+
 function removeSignetHooks(hooks: HooksJson): HooksJson {
 	const cleaned = { ...hooks };
-	delete cleaned._signet;
-	delete cleaned.sessionStart;
-	delete cleaned.userPromptSubmit;
-	delete cleaned.stop;
+	for (const key of ["sessionStart", "userPromptSubmit", "stop"] as const) {
+		if (!Array.isArray(cleaned[key])) continue;
+		const filtered = (cleaned[key] as unknown[]).filter((e) => !isSignetHandler(e));
+		if (filtered.length === 0) {
+			delete cleaned[key];
+		} else {
+			cleaned[key] = filtered;
+		}
+	}
+	// Only remove marker if no Signet entries remain
+	const hasSignet = ["sessionStart", "userPromptSubmit", "stop"].some(
+		(k) => Array.isArray(cleaned[k]) && (cleaned[k] as unknown[]).some(isSignetHandler),
+	);
+	if (!hasSignet) delete cleaned._signet;
 	return cleaned;
 }
 
@@ -105,19 +122,28 @@ function removeSignetHooks(hooks: HooksJson): HooksJson {
 // MCP server registration (config.toml)
 // ---------------------------------------------------------------------------
 
+function tomlQuote(value: string): string {
+	// Use TOML literal string (single quotes, no escape processing) for paths
+	// that may contain backslashes. Falls back to double-quoted with escaping
+	// if the value itself contains single quotes.
+	if (!value.includes("'")) return `'${value}'`;
+	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 function patchConfigToml(path: string, mcpCmd: string): boolean {
 	const dir = join(path, "..");
 	mkdirSync(dir, { recursive: true });
 
+	const quoted = tomlQuote(mcpCmd);
 	if (!existsSync(path)) {
-		writeFileSync(path, `# Signet MCP server\n[mcp_servers.signet]\ncommand = "${mcpCmd}"\n`);
+		writeFileSync(path, `# Signet MCP server\n[mcp_servers.signet]\ncommand = ${quoted}\n`);
 		return true;
 	}
 
 	const content = readFileSync(path, "utf-8");
 	if (content.includes("[mcp_servers.signet]")) return false;
 
-	const appended = content.trimEnd() + `\n\n# Signet MCP server\n[mcp_servers.signet]\ncommand = "${mcpCmd}"\n`;
+	const appended = content.trimEnd() + `\n\n# Signet MCP server\n[mcp_servers.signet]\ncommand = ${quoted}\n`;
 	writeFileSync(path, appended);
 	return true;
 }
@@ -241,7 +267,14 @@ export class CodexConnector extends BaseConnector {
 			}
 		}
 
-		// 2. Remove MCP server from config.toml
+		// 2. Remove skills symlink
+		const skillsLink = join(this.getCodexHome(), "skills");
+		if (existsSync(skillsLink)) {
+			rmSync(skillsLink, { force: true });
+			filesRemoved.push(skillsLink);
+		}
+
+		// 3. Remove MCP server from config.toml
 		if (unpatchConfigToml(this.getConfigPath())) {
 			configsPatched.push(this.getConfigPath());
 		}
