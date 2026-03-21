@@ -146,6 +146,7 @@
 		await scrollGroup(gid);
 
 		const abort = new AbortController();
+		let initiated = false;
 		try {
 			const res = await fetch(`${API_BASE}/api/troubleshoot/exec`, {
 				method: "POST",
@@ -186,6 +187,7 @@
 						if (!match) continue;
 						try {
 							const event = JSON.parse(match[1]);
+							if (event.type === "started") initiated = true;
 							if (event.type === "stdout" || event.type === "stderr") {
 								const text = String(event.data).replace(/\n$/, "");
 								if (text) {
@@ -215,6 +217,7 @@
 			if (!abort.signal.aborted) {
 				const lifecycle = cmd.key === "daemon-stop" || cmd.key === "daemon-restart";
 				if (lifecycle) {
+					initiated = true;
 					appendLine(gid, `\x1b[33mDaemon process ended\x1b[0m`);
 				} else {
 					appendLine(gid, `\x1b[31merror:\x1b[0m ${err instanceof Error ? err.message : "fetch failed"}`);
@@ -222,8 +225,8 @@
 			}
 		}
 
-		// Restart: poll until daemon comes back
-		if (cmd.key === "daemon-restart") {
+		// Restart: poll until daemon comes back (only if restart was actually initiated)
+		if (cmd.key === "daemon-restart" && initiated) {
 			appendLine(gid, "\x1b[90mWaiting for daemon to restart...\x1b[0m");
 			await scrollGroup(gid);
 			let ok = false;

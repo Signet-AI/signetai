@@ -7265,15 +7265,19 @@ app.post("/api/troubleshoot/exec", async (c) => {
 				setTimeout(async () => {
 					if (key === "daemon-restart") {
 						const { spawn: nodeSpawn } = await import("node:child_process");
-						const child = nodeSpawn("sh", ["-c", `sleep 1 && ${resolved} daemon start`], {
-							detached: true,
-							stdio: "ignore",
-							env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
-						});
-						child.unref();
+						// Use array form — no shell, so paths with spaces are safe.
+						// Inner delay lets cleanup() finish before the new daemon starts.
+						setTimeout(() => {
+							const child = nodeSpawn(resolved, ["daemon", "start"], {
+								detached: true,
+								stdio: "ignore",
+								env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
+							});
+							child.unref();
+						}, 1000);
 					}
 					process.kill(process.pid, "SIGTERM");
-				}, 500);
+				}, 1000);
 			},
 		});
 
