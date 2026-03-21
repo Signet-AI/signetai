@@ -914,7 +914,8 @@ export function startWorker(
 	const JITTER = 500;
 
 	// Progress tracking for watchdog and stats
-	let lastProgress = Date.now();
+	let lastAttempt = Date.now(); // updated on every tick (success or failure)
+	let lastSuccess = Date.now(); // updated only on successful job completion
 	let processed = 0;
 	let watchdog: ReturnType<typeof setInterval> | null = null;
 	const WATCHDOG_INTERVAL = 30_000;
@@ -1315,7 +1316,8 @@ export function startWorker(
 			try {
 				await processExtractJob(job);
 				consecutiveFailures = 0;
-				lastProgress = Date.now();
+				lastAttempt = Date.now();
+				lastSuccess = Date.now();
 				processed++;
 				analytics?.recordLatency("jobs", Date.now() - jobStart);
 			} catch (e) {
@@ -1350,7 +1352,7 @@ export function startWorker(
 					}
 				});
 				consecutiveFailures++;
-				lastProgress = Date.now();
+				lastAttempt = Date.now();
 			}
 		} catch (e) {
 			logger.error(
@@ -1359,7 +1361,7 @@ export function startWorker(
 				e instanceof Error ? e : new Error(String(e)),
 			);
 			consecutiveFailures++;
-			lastProgress = Date.now();
+			lastAttempt = Date.now();
 		}
 	}
 
@@ -1402,10 +1404,11 @@ export function startWorker(
 		}
 	}, 60000);
 
-	// Stall watchdog — detect when worker stops making progress
+	// Stall watchdog — detect when worker stops making progress.
+	// Uses lastSuccess (not lastAttempt) so failure loops still trigger it.
 	watchdog = setInterval(() => {
 		if (!running) return;
-		if (Date.now() - lastProgress < STALL_THRESHOLD) return;
+		if (Date.now() - lastSuccess < STALL_THRESHOLD) return;
 
 		let pending = 0;
 		try {
@@ -1425,14 +1428,15 @@ export function startWorker(
 		logger.warn("pipeline", "Worker stall detected, resetting backoff", {
 			pending,
 			failures: consecutiveFailures,
-			stalledMs: Date.now() - lastProgress,
+			stalledMs: Date.now() - lastSuccess,
 		});
 
 		consecutiveFailures = 0;
-		lastProgress = Date.now();
+		lastSuccess = Date.now();
 		if (pollTimer) clearTimeout(pollTimer);
-		// Immediate tick — bypass pollMs delay
+		// Immediate tick — guard against concurrent inflight
 		pollTimer = setTimeout(async () => {
+			if (inflight) { scheduleTick(); return; }
 			inflight = tick();
 			await inflight;
 			inflight = null;
@@ -1476,8 +1480,9 @@ export function startWorker(
 		nudge() {
 			consecutiveFailures = 0;
 			if (pollTimer) clearTimeout(pollTimer);
-			// Schedule immediate tick (bypass pollMs delay)
+			// Schedule immediate tick — guard against concurrent inflight
 			pollTimer = setTimeout(async () => {
+				if (inflight) { scheduleTick(); return; }
 				inflight = tick();
 				await inflight;
 				inflight = null;
@@ -1487,7 +1492,7 @@ export function startWorker(
 		get stats(): WorkerStats {
 			return {
 				failures: consecutiveFailures,
-				lastProgressAt: lastProgress,
+				lastProgressAt: lastSuccess,
 				pending: pendingCount(),
 				processed,
 				backoffMs: getBackoffDelay(),

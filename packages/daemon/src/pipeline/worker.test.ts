@@ -1428,6 +1428,9 @@ describe("Backoff recovery", () => {
 		await Bun.sleep(2000);
 		await worker.stop();
 
+		// mem-bf-1 may have hit the throwing call — should be dead or completed
+		const j0 = getJob(db, "mem-bf-1");
+		expect(["completed", "dead"]).toContain(j0?.status);
 		const j1 = getJob(db, "mem-bf-2");
 		const j2 = getJob(db, "mem-bf-3");
 		expect(j1?.status).toBe("completed");
