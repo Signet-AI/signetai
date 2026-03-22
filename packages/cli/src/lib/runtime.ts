@@ -20,6 +20,8 @@ interface DaemonInstance {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const cliDir = dirname(__dirname);
+const pkgDir = dirname(cliDir);
 
 export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,7 +108,7 @@ export async function getDaemonStatus(): Promise<{
 async function downloadDaemonBinary(): Promise<void> {
 	let version: string | undefined;
 	try {
-		const raw = readFileSync(join(__dirname, "..", "package.json"), "utf8");
+		const raw = readFileSync(join(pkgDir, "package.json"), "utf8");
 		version = (JSON.parse(raw) as { version?: string }).version;
 	} catch {
 		return;
@@ -120,7 +122,7 @@ async function downloadDaemonBinary(): Promise<void> {
 
 	const ext = plat === "win32" ? ".exe" : "";
 	const name = `signet-daemon-${plat}-${arch}${ext}`;
-	const binDir = join(__dirname, "..", "bin");
+	const binDir = join(pkgDir, "bin");
 	const dest = join(binDir, name);
 	if (existsSync(dest)) return;
 
@@ -187,9 +189,9 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	mkdirSync(logDir, { recursive: true });
 
 	const daemonLocations = [
-		join(__dirname, "daemon.js"),
-		join(__dirname, "..", "..", "daemon", "dist", "daemon.js"),
-		join(__dirname, "..", "..", "daemon", "src", "daemon.ts"),
+		join(cliDir, "daemon.js"),
+		join(pkgDir, "..", "daemon", "dist", "daemon.js"),
+		join(pkgDir, "..", "daemon", "src", "daemon.ts"),
 	];
 
 	let daemonPath: string | null = null;
