@@ -37,7 +37,6 @@ import {
 	type ImportResult,
 	type MigrationResult,
 	type SchemaInfo,
-	SIGNET_GIT_PROTECTED_PATHS,
 	type SetupDetection,
 	type SkillsResult,
 	detectExistingSetup as detectExistingSetupCore,
@@ -49,7 +48,6 @@ import {
 	hasValidIdentity,
 	importMemoryLogs,
 	loadSqliteVec,
-	mergeSignetGitignoreEntries,
 	parseSimpleYaml,
 	resolvePrimaryPackageManager,
 	symlinkSkills,
@@ -96,6 +94,7 @@ import { importFromGitHub } from "./features/import.js";
 import { setupWizard } from "./features/setup.js";
 import { syncTemplates } from "./features/sync.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
+import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
@@ -198,93 +197,6 @@ function syncBuiltinSkills(
 	}
 
 	return result;
-}
-
-// ============================================================================
-// Git Helpers
-// ============================================================================
-
-function isGitRepo(dir: string): boolean {
-	return existsSync(join(dir, ".git"));
-}
-
-async function gitInit(dir: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		const proc = spawn("git", ["init"], { cwd: dir, stdio: "pipe", windowsHide: true });
-		proc.on("close", (code) => resolve(code === 0));
-		proc.on("error", () => resolve(false));
-	});
-}
-
-function ensureProtectedGitignore(dir: string): void {
-	const gitignorePath = join(dir, ".gitignore");
-	const existingContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
-	const nextContent = mergeSignetGitignoreEntries(existingContent);
-	if (nextContent !== existingContent) {
-		writeFileSync(gitignorePath, nextContent, "utf-8");
-	}
-}
-
-async function gitUntrackProtectedFiles(dir: string): Promise<void> {
-	return new Promise((resolve) => {
-		const proc = spawn("git", ["rm", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], {
-			cwd: dir,
-			stdio: "pipe",
-			windowsHide: true,
-		});
-		proc.on("close", () => resolve());
-		proc.on("error", () => resolve());
-	});
-}
-
-async function gitAddAndCommit(dir: string, message: string): Promise<boolean> {
-	ensureProtectedGitignore(dir);
-	await gitUntrackProtectedFiles(dir);
-	return new Promise((resolve) => {
-		// First, git add -A
-		const add = spawn("git", ["add", "-A"], { cwd: dir, stdio: "pipe", windowsHide: true });
-		add.on("close", (addCode) => {
-			if (addCode !== 0) {
-				resolve(false);
-				return;
-			}
-			// Check if there are changes to commit
-			const status = spawn("git", ["status", "--porcelain"], {
-				cwd: dir,
-				stdio: "pipe",
-				windowsHide: true,
-			});
-			let statusOutput = "";
-			status.stdout?.on("data", (d) => {
-				statusOutput += d.toString();
-			});
-			status.on("close", (statusCode) => {
-				if (statusCode !== 0 || !statusOutput.trim()) {
-					// No changes to commit
-					resolve(true);
-					return;
-				}
-				// Commit
-				const commit = spawn("git", ["commit", "-m", message], {
-					cwd: dir,
-					stdio: "pipe",
-					windowsHide: true,
-				});
-				commit.on("close", (commitCode) => resolve(commitCode === 0));
-				commit.on("error", () => resolve(false));
-			});
-			status.on("error", () => resolve(false));
-		});
-		add.on("error", () => resolve(false));
-	});
-}
-
-async function gitAutoCommit(dir: string, changedFile: string): Promise<boolean> {
-	const now = new Date();
-	const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
-	const filename = changedFile.split("/").pop() || "file";
-	const message = `${timestamp}_auto_${filename}`;
-	return gitAddAndCommit(dir, message);
 }
 
 // ============================================================================
