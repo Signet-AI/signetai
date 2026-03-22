@@ -51,3 +51,26 @@ export interface SetupDeps {
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
 }
+
+export interface FreshSetupConfig {
+	readonly basePath: string;
+	readonly agentName: string;
+	readonly agentDescription: string;
+	readonly harnesses: string[];
+	readonly openclawRuntimePath: OpenClawRuntimeChoice;
+	readonly configureOpenClawWs: boolean;
+	readonly embeddingProvider: "native" | "ollama" | "openai" | "none";
+	readonly embeddingModel: string;
+	readonly embeddingDimensions: number;
+	readonly extractionProvider: "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+	readonly extractionModel: string;
+	readonly searchBalance: number;
+	readonly searchTopK: number;
+	readonly searchMinScore: number;
+	readonly memorySessionBudget: number;
+	readonly memoryDecayRate: number;
+	readonly gitEnabled: boolean;
+	readonly existingAgentsDir: boolean;
+	readonly nonInteractive: boolean;
+	readonly openDashboard: boolean;
+}

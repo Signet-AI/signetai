@@ -1,20 +1,16 @@
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
-	ensureUnifiedSchema,
-	formatYaml,
 	parseSimpleYaml,
-	resolvePrimaryPackageManager,
-	runMigrations,
 	type SetupDetection,
 } from "@signet/core";
 import chalk from "chalk";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import open from "open";
 import ora from "ora";
-import Database from "../sqlite.js";
 import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
+import { runFreshSetup } from "./setup-fresh.js";
 import {
 	EMBEDDING_PROVIDER_CHOICES,
 	EXTRACTION_PROVIDER_CHOICES,
@@ -27,7 +23,6 @@ import {
 	hasExistingAgentState,
 	hasExistingIdentityFiles,
 	normalizeHarnessList,
-	readErr,
 	readHarnesses,
 	readRecord,
 	readString,
@@ -643,224 +638,28 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		gitEnabled = initGit;
 	}
 
-	console.log();
-	const spinner = ora("Setting up Signet...").start();
+	const cfg: FreshSetupConfig = {
+		basePath,
+		agentName,
+		agentDescription,
+		harnesses,
+		openclawRuntimePath,
+		configureOpenClawWs,
+		embeddingProvider,
+		embeddingModel,
+		embeddingDimensions,
+		extractionProvider,
+		extractionModel,
+		searchBalance,
+		searchTopK,
+		searchMinScore,
+		memorySessionBudget,
+		memoryDecayRate,
+		gitEnabled,
+		existingAgentsDir: existing.agentsDir,
+		nonInteractive,
+		openDashboard: options.openDashboard === true,
+	};
 
-	try {
-		const templatesDir = deps.getTemplatesDir();
-		mkdirSync(basePath, { recursive: true });
-
-		const gitignoreSource = join(templatesDir, "gitignore.template");
-		if (existsSync(gitignoreSource)) {
-			copyFileSync(gitignoreSource, join(basePath, ".gitignore"));
-		}
-
-		if (gitEnabled && !deps.isGitRepo(basePath)) {
-			spinner.text = "Initializing git...";
-			await deps.gitInit(basePath);
-		}
-
-		if (gitEnabled && existing.agentsDir) {
-			spinner.text = "Creating backup commit...";
-			const date = new Date().toISOString().split("T")[0];
-			await deps.gitAddAndCommit(basePath, `${date}_pre-signet-backup`);
-		}
-
-		mkdirSync(join(basePath, "memory", "scripts"), { recursive: true });
-		mkdirSync(join(basePath, "harnesses"), { recursive: true });
-
-		spinner.text = "Installing memory system...";
-		const scriptsSource = join(templatesDir, "memory", "scripts");
-		if (existsSync(scriptsSource)) {
-			deps.copyDirRecursive(scriptsSource, join(basePath, "memory", "scripts"));
-		}
-
-		const requirementsSource = join(templatesDir, "memory", "requirements.txt");
-		if (existsSync(requirementsSource)) {
-			copyFileSync(requirementsSource, join(basePath, "memory", "requirements.txt"));
-		}
-
-		const utilScriptsSource = join(templatesDir, "scripts");
-		if (existsSync(utilScriptsSource)) {
-			mkdirSync(join(basePath, "scripts"), { recursive: true });
-			deps.copyDirRecursive(utilScriptsSource, join(basePath, "scripts"));
-		}
-
-		spinner.text = "Installing built-in skills...";
-		deps.syncBuiltinSkills(templatesDir, basePath);
-
-		spinner.text = "Creating agent identity...";
-		const agentsTemplate = join(templatesDir, "AGENTS.md.template");
-		let agentsMd: string;
-		if (existsSync(agentsTemplate)) {
-			agentsMd = readFileSync(agentsTemplate, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
-		} else {
-			agentsMd = `# ${agentName}\n\nThis is your agent identity file. Define your agent's personality, capabilities,\nand behaviors here. This file is shared across all your AI tools.\n\n## Personality\n\n${agentName} is a helpful assistant.\n\n## Instructions\n\n- Be concise and direct\n- Ask clarifying questions when needed\n- Remember user preferences\n`;
-		}
-		writeFileSync(join(basePath, "AGENTS.md"), agentsMd);
-
-		spinner.text = "Writing configuration...";
-		const now = new Date().toISOString();
-		const packageManager = resolvePrimaryPackageManager({ agentsDir: basePath, env: process.env });
-		const config: Record<string, unknown> = {
-			version: 1,
-			schema: "signet/v1",
-			agent: {
-				name: agentName,
-				description: agentDescription,
-				created: now,
-				updated: now,
-			},
-			harnesses,
-			install: {
-				primary_package_manager: packageManager.family,
-				source: packageManager.source,
-			},
-			memory: {
-				database: "memory/memories.db",
-				session_budget: memorySessionBudget,
-				decay_rate: memoryDecayRate,
-			},
-			search: {
-				alpha: searchBalance,
-				top_k: searchTopK,
-				min_score: searchMinScore,
-			},
-		};
-
-		if (embeddingProvider !== "none") {
-			config.embedding = {
-				provider: embeddingProvider,
-				model: embeddingModel,
-				dimensions: embeddingDimensions,
-			};
-		}
-
-		if (extractionProvider !== "none") {
-			const memory = readRecord(config.memory);
-			memory.pipelineV2 = {
-				enabled: true,
-				extraction: {
-					provider: extractionProvider,
-					model: extractionModel,
-				},
-				semanticContradictionEnabled: true,
-				graph: { enabled: true },
-				reranker: { enabled: true },
-				autonomous: {
-					enabled: true,
-					allowUpdateDelete: true,
-					maintenanceMode: "execute",
-				},
-				predictor: { enabled: true },
-				predictorPipeline: { agentFeedback: true, trainingTelemetry: false },
-			};
-			config.memory = memory;
-		}
-
-		writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
-
-		const docFiles = [
-			{ name: "MEMORY.md", template: "MEMORY.md.template" },
-			{ name: "SOUL.md", template: "SOUL.md.template" },
-			{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
-			{ name: "USER.md", template: "USER.md.template" },
-		];
-
-		for (const doc of docFiles) {
-			const templatePath = join(templatesDir, doc.template);
-			const destPath = join(basePath, doc.name);
-			if (existsSync(destPath)) {
-				continue;
-			}
-			if (existsSync(templatePath)) {
-				const content = readFileSync(templatePath, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
-				writeFileSync(destPath, content);
-			}
-		}
-
-		spinner.text = "Initializing database...";
-		const dbPath = join(basePath, "memory", "memories.db");
-		const db = Database(dbPath);
-		ensureUnifiedSchema(db);
-		runMigrations(db);
-		db.close();
-
-		spinner.text = "Configuring harness hooks...";
-		const configuredHarnesses: string[] = [];
-		for (const harness of harnesses) {
-			try {
-				await deps.configureHarnessHooks(harness, basePath, { openclawRuntimePath });
-				configuredHarnesses.push(harness);
-			} catch (err) {
-				console.warn(`\n  ⚠ Could not configure ${harness}: ${readErr(err)}`);
-			}
-		}
-
-		if (configureOpenClawWs) {
-			spinner.text = "Configuring OpenClaw workspace...";
-			const patched = await new OpenClawConnector().configureWorkspace(basePath);
-			if (patched.length > 0) {
-				console.log(chalk.dim(`\n  ✓ OpenClaw workspace set to ${basePath}`));
-			}
-		}
-
-		spinner.text = "Starting daemon...";
-		const daemonStarted = await deps.startDaemon(basePath);
-
-		spinner.succeed(chalk.green("Signet initialized!"));
-
-		console.log();
-		console.log(chalk.dim("  Files created:"));
-		console.log(chalk.dim(`    ${basePath}/`));
-		console.log(chalk.dim("    ├── agent.yaml    manifest & config"));
-		console.log(chalk.dim("    ├── AGENTS.md     agent instructions"));
-		console.log(chalk.dim("    ├── SOUL.md       personality & tone"));
-		console.log(chalk.dim("    ├── IDENTITY.md   agent identity"));
-		console.log(chalk.dim("    ├── USER.md       your profile"));
-		console.log(chalk.dim("    ├── MEMORY.md     working memory"));
-		console.log(chalk.dim("    └── memory/       database & vectors"));
-
-		if (configuredHarnesses.length > 0) {
-			console.log();
-			console.log(chalk.dim("  Hooks configured for:"));
-			for (const harness of configuredHarnesses) {
-				console.log(chalk.dim(`    ✓ ${harness}`));
-			}
-		}
-
-		if (daemonStarted) {
-			console.log();
-			console.log(chalk.green(`  ● Daemon running at http://localhost:${deps.DEFAULT_PORT}`));
-		}
-
-		console.log();
-		if (gitEnabled) {
-			const date = new Date().toISOString().split("T")[0];
-			const committed = await deps.gitAddAndCommit(basePath, `${date}_signet-setup`);
-			if (committed) {
-				console.log(chalk.dim("  ✓ Changes committed to git"));
-			}
-		}
-
-		if (nonInteractive) {
-			if (options.openDashboard === true) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
-			}
-		} else {
-			const launchNow = await confirm({ message: "Open the dashboard?", default: true });
-			if (launchNow) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
-			}
-		}
-
-		console.log();
-		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
-		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
-		console.log(chalk.dim("    communication style, and your preferences."));
-	} catch (err) {
-		spinner.fail(chalk.red("Setup failed"));
-		console.error(err);
-		process.exit(1);
-	}
+	await runFreshSetup(cfg, deps);
 }
