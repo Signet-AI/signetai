@@ -5626,16 +5626,16 @@ app.post("/api/hooks/session-end", async (c) => {
 			return c.json({ memoriesSaved: 0, bypassed: true });
 		}
 
-	try {
-		const result = await handleSessionEnd(body);
-		return c.json(result);
-	} finally {
-		// Always release session claim and agent presence, even if extraction throws
-		if (sessionKey) {
-			releaseSession(sessionKey);
-			removeAgentPresence(sessionKey);
+		try {
+			const result = await handleSessionEnd(body);
+			return c.json(result);
+		} finally {
+			// Always release session claim and agent presence, even if extraction throws
+			if (sessionKey) {
+				releaseSession(sessionKey);
+				removeAgentPresence(sessionKey);
+			}
 		}
-	}
 	} catch (e) {
 		logger.error("hooks", "Session end hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);

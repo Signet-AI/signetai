@@ -12,7 +12,7 @@
     },
     "packages/adapters/openclaw": {
       "name": "@signetai/signet-memory-openclaw",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "@sinclair/typebox": "0.34.47",
       },
@@ -26,7 +26,7 @@
     },
     "packages/cli": {
       "name": "@signet/cli",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "bin": "./dist/cli.js",
       "dependencies": {
         "@inquirer/prompts": "^7.0.0",
@@ -93,7 +93,7 @@
     },
     "packages/connector-base": {
       "name": "@signet/connector-base",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -107,7 +107,7 @@
     },
     "packages/connector-claude-code": {
       "name": "@signet/connector-claude-code",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -119,7 +119,7 @@
     },
     "packages/connector-codex": {
       "name": "@signet/connector-codex",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -131,7 +131,7 @@
     },
     "packages/connector-openclaw": {
       "name": "@signet/connector-openclaw",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "json5": "^2.2.3",
@@ -143,7 +143,7 @@
     },
     "packages/connector-opencode": {
       "name": "@signet/connector-opencode",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -155,7 +155,7 @@
     },
     "packages/core": {
       "name": "@signet/core",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "sqlite-vec": "^0.1.7-alpha.2",
         "yaml": "^2.6.0",
@@ -177,7 +177,7 @@
     },
     "packages/daemon": {
       "name": "@signet/daemon",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "bin": {
         "signet-daemon": "./dist/daemon.js",
         "signet-mcp": "./dist/mcp-stdio.js",
@@ -190,9 +190,6 @@
         "@signet/core": "workspace:*",
         "chokidar": "^4.0.0",
         "cron-parser": "^5.5.0",
-        "graphology": "^0.26.0",
-        "graphology-communities-louvain": "^2.0.2",
-        "graphology-types": "^0.24.8",
         "hono": "^4.8.0",
         "libsodium-wrappers": "^0.8.2",
         "onnxruntime-node": "1.21.0",
@@ -210,7 +207,7 @@
     },
     "packages/extension": {
       "name": "@signet/extension",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "devDependencies": {
         "@types/chrome": "^0.0.287",
         "typescript": "^5.7.0",
@@ -218,14 +215,14 @@
     },
     "packages/native": {
       "name": "@signet/native",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "devDependencies": {
         "@napi-rs/cli": "^3.5.1",
       },
     },
     "packages/opencode-plugin": {
       "name": "@signet/opencode-plugin",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -235,7 +232,7 @@
     },
     "packages/sdk": {
       "name": "@signet/sdk",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "devDependencies": {
         "@types/react": "^19.0.0",
         "react": "^19.0.0",
@@ -251,7 +248,7 @@
     },
     "packages/signetai": {
       "name": "signetai",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "bin": {
         "signet": "bin/signet.js",
         "signet-mcp": "dist/mcp-stdio.js",
@@ -282,7 +279,7 @@
     },
     "packages/tray": {
       "name": "@signet/tray",
-      "version": "0.72.7",
+      "version": "0.72.5",
       "dependencies": {
         "@signet/sdk": "workspace:*",
         "@tauri-apps/api": "^2.5.0",
@@ -2026,8 +2023,6 @@
 
     "eventemitter3": ["eventemitter3@5.0.4", "", {}, "sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw=="],
 
-    "events": ["events@3.3.0", "", {}, "sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q=="],
-
     "eventsource": ["eventsource@3.0.7", "", { "dependencies": { "eventsource-parser": "^3.0.1" } }, "sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA=="],
 
     "eventsource-parser": ["eventsource-parser@3.0.6", "", {}, "sha512-Vo1ab+QXPzZ4tCa8SwIHJFaSzy4R6SHf7BY79rFBDf0idraZWAkYrDjDj8uWaSm3S2TK+hJ7/t1CEmZ7jXw+pg=="],
@@ -2143,16 +2138,6 @@
     "graceful-fs": ["graceful-fs@4.2.11", "", {}, "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ=="],
 
     "grammy": ["grammy@1.40.0", "", { "dependencies": { "@grammyjs/types": "3.24.0", "abort-controller": "^3.0.0", "debug": "^4.4.3", "node-fetch": "^2.7.0" } }, "sha512-ssuE7fc1AwqlUxHr931OCVW3fU+oFDjHZGgvIedPKXfTdjXvzP19xifvVGCnPtYVUig1Kz+gwxe4A9M5WdkT4Q=="],
-
-    "graphology": ["graphology@0.26.0", "", { "dependencies": { "events": "^3.3.0" }, "peerDependencies": { "graphology-types": ">=0.24.0" } }, "sha512-8SSImzgUUYC89Z042s+0r/vMibY7GX/Emz4LDO5e7jYXhuoWfHISPFJYjpRLUSJGq6UQ6xlenvX1p/hJdfXuXg=="],
-
-    "graphology-communities-louvain": ["graphology-communities-louvain@2.0.2", "", { "dependencies": { "graphology-indices": "^0.17.0", "graphology-utils": "^2.4.4", "mnemonist": "^0.39.0", "pandemonium": "^2.4.1" }, "peerDependencies": { "graphology-types": ">=0.19.0" } }, "sha512-zt+2hHVPYxjEquyecxWXoUoIuN/UvYzsvI7boDdMNz0rRvpESQ7+e+Ejv6wK7AThycbZXuQ6DkG8NPMCq6XwoA=="],
-
-    "graphology-indices": ["graphology-indices@0.17.0", "", { "dependencies": { "graphology-utils": "^2.4.2", "mnemonist": "^0.39.0" }, "peerDependencies": { "graphology-types": ">=0.20.0" } }, "sha512-A7RXuKQvdqSWOpn7ZVQo4S33O0vCfPBnUSf7FwE0zNCasqwZVUaCXePuWo5HBpWw68KJcwObZDHpFk6HKH6MYQ=="],
-
-    "graphology-types": ["graphology-types@0.24.8", "", {}, "sha512-hDRKYXa8TsoZHjgEaysSRyPdT6uB78Ci8WnjgbStlQysz7xR52PInxNsmnB7IBOM1BhikxkNyCVEFgmPKnpx3Q=="],
-
-    "graphology-utils": ["graphology-utils@2.5.2", "", { "peerDependencies": { "graphology-types": ">=0.23.0" } }, "sha512-ckHg8MXrXJkOARk56ZaSCM1g1Wihe2d6iTmz1enGOz4W/l831MBCKSayeFQfowgF8wd+PQ4rlch/56Vs/VZLDQ=="],
 
     "gsap": ["gsap@3.14.2", "", {}, "sha512-P8/mMxVLU7o4+55+1TCnQrPmgjPKnwkzkXOK1asnR9Jg2lna4tEY5qBJjMmAaOBDDZWtlRjBXjLa0w53G/uBLA=="],
 
@@ -2576,8 +2561,6 @@
 
     "ml-matrix": ["ml-matrix@6.12.1", "", { "dependencies": { "is-any-array": "^2.0.1", "ml-array-rescale": "^1.3.7" } }, "sha512-TJ+8eOFdp+INvzR4zAuwBQJznDUfktMtOB6g/hUcGh3rcyjxbz4Te57Pgri8Q9bhSQ7Zys4IYOGhFdnlgeB6Lw=="],
 
-    "mnemonist": ["mnemonist@0.39.8", "", { "dependencies": { "obliterator": "^2.0.1" } }, "sha512-vyWo2K3fjrUw8YeeZ1zF0fy6Mu59RHokURlld8ymdUPjMlD9EC9ov1/YPqTgqRvUN9nTr3Gqfz29LYAmu0PHPQ=="],
-
     "mode-watcher": ["mode-watcher@1.1.0", "", { "dependencies": { "runed": "^0.25.0", "svelte-toolbelt": "^0.7.1" }, "peerDependencies": { "svelte": "^5.27.0" } }, "sha512-mUT9RRGPDYenk59qJauN1rhsIMKBmWA3xMF+uRwE8MW/tjhaDSCCARqkSuDTq8vr4/2KcAxIGVjACxTjdk5C3g=="],
 
     "mri": ["mri@1.2.0", "", {}, "sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA=="],
@@ -2650,8 +2633,6 @@
 
     "object-keys": ["object-keys@1.1.1", "", {}, "sha512-NuAESUOUMrlIXOfHKzD6bpPu3tYt3xvjNdRIQ+FeT0lNb4K8WR70CaDxhuNguS2XG+GjkyMwOzsN5ZktImfhLA=="],
 
-    "obliterator": ["obliterator@2.0.5", "", {}, "sha512-42CPE9AhahZRsMNslczq0ctAEtqk8Eka26QofnqC346BZdHDySk3LWka23LI7ULIw11NmltpiLagIq8gBozxTw=="],
-
     "obug": ["obug@2.1.1", "", {}, "sha512-uTqF9MuPraAQ+IsnPf366RG4cP9RtUi7MLO1N3KEc+wb0a6yKpeL0lmk2IB1jY5KHPAlTc6T/JRdC/YqxHNwkQ=="],
 
     "octokit": ["octokit@5.0.5", "", { "dependencies": { "@octokit/app": "^16.1.2", "@octokit/core": "^7.0.6", "@octokit/oauth-app": "^8.0.3", "@octokit/plugin-paginate-graphql": "^6.0.0", "@octokit/plugin-paginate-rest": "^14.0.0", "@octokit/plugin-rest-endpoint-methods": "^17.0.0", "@octokit/plugin-retry": "^8.0.3", "@octokit/plugin-throttling": "^11.0.3", "@octokit/request-error": "^7.0.2", "@octokit/types": "^16.0.0", "@octokit/webhooks": "^14.0.0" } }, "sha512-4+/OFSqOjoyULo7eN7EA97DE0Xydj/PW5aIckxqQIoFjFwqXKuFCvXUJObyJfBF9Khu4RL/jlDRI9FPaMGfPnw=="],
@@ -2709,8 +2690,6 @@
     "package-manager-detector": ["package-manager-detector@1.6.0", "", {}, "sha512-61A5ThoTiDG/C8s8UMZwSorAGwMJ0ERVGj2OjoW5pAalsNOg15+iQiPzrLJ4jhZ1HJzmC2PIHT2oEiH3R5fzNA=="],
 
     "pako": ["pako@1.0.11", "", {}, "sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw=="],
-
-    "pandemonium": ["pandemonium@2.4.1", "", { "dependencies": { "mnemonist": "^0.39.2" } }, "sha512-wRqjisUyiUfXowgm7MFH2rwJzKIr20rca5FsHXCMNm1W5YPP1hCtrZfgmQ62kP7OZ7Xt+cR858aB28lu5NX55g=="],
 
     "parse-entities": ["parse-entities@4.0.2", "", { "dependencies": { "@types/unist": "^2.0.0", "character-entities-legacy": "^3.0.0", "character-reference-invalid": "^2.0.0", "decode-named-character-reference": "^1.0.0", "is-alphanumerical": "^2.0.0", "is-decimal": "^2.0.0", "is-hexadecimal": "^2.0.0" } }, "sha512-GG2AQYWoLgL877gQIKeRPGO1xF9+eG1ujIb5soS5gPvLQ1y2o8FL90w2QWNdf9I361Mpp7726c+lj3U0qK1uGw=="],
 
