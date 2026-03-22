@@ -98,7 +98,9 @@ export function stripFences(raw: string): string {
 	const trimmed = stripped.trim();
 
 	// If the input starts with JSON structure, return it as-is — don't
-	// extract sub-arrays from inside a valid JSON object.
+	// extract sub-arrays from inside a valid JSON object. A truncated/
+	// malformed object starting with '{' will pass through here, but
+	// downstream tryParseJson handles that gracefully (returns null).
 	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
 		return trimmed;
 	}

@@ -111,6 +111,8 @@ describe("createMcpServer", () => {
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("session_bypass");
+		// Use a minimum bound instead of exact count — new tools shouldn't
+		// require updating this assertion, only missing ones should fail.
 		expect(names.length).toBeGreaterThanOrEqual(23);
 	});
 

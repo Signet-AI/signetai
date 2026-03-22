@@ -39,28 +39,10 @@ function ensureDir(path: string): void {
 	mkdirSync(path, { recursive: true });
 }
 
-/** Create an isolated test DB with the full schema */
-function createMemoryDb(
-	memories: Array<{
-		content: string;
-		type?: string;
-		importance?: number;
-		who?: string;
-		tags?: string;
-		pinned?: number;
-		project?: string;
-		created_at?: string;
-	}> = [],
-): void {
-	const dbPath = join(TEST_DIR, "memory", "memories.db");
-	ensureDir(join(TEST_DIR, "memory"));
-
-	if (existsSync(dbPath)) rmSync(dbPath);
-
-	const db = new Database(dbPath);
-
+/** Single source of truth for the test DB schema. Used by both
+ *  beforeEach (bare DB) and createMemoryDb (seeded DB). */
+function applyTestSchema(db: Database): void {
 	db.exec("PRAGMA busy_timeout = 5000");
-
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memories (
 			id TEXT PRIMARY KEY,
@@ -87,13 +69,11 @@ function createMemoryDb(
 			confidence REAL DEFAULT 1.0
 		)
 	`);
-
 	db.exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 			content, tags, content=memories, content_rowid=rowid
 		)
 	`);
-
 	db.exec(`
 		CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories
 		BEGIN
@@ -101,7 +81,6 @@ function createMemoryDb(
 			VALUES (new.rowid, new.content, new.tags);
 		END
 	`);
-
 	db.exec(`
 		CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories
 		BEGIN
@@ -109,7 +88,6 @@ function createMemoryDb(
 			VALUES('delete', old.rowid, old.content, old.tags);
 		END
 	`);
-
 	db.exec(`
 		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories
 		BEGIN
@@ -119,7 +97,6 @@ function createMemoryDb(
 			VALUES (new.rowid, new.content, new.tags);
 		END
 	`);
-
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_memories (
 			id TEXT PRIMARY KEY,
@@ -146,7 +123,6 @@ function createMemoryDb(
 		CREATE INDEX IF NOT EXISTS idx_session_memories_memory
 			ON session_memories(memory_id)
 	`);
-
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS summary_jobs (
 			id TEXT PRIMARY KEY,
@@ -161,6 +137,28 @@ function createMemoryDb(
 			completed_at TEXT
 		)
 	`);
+}
+
+/** Create an isolated test DB with the full schema and seeded data */
+function createMemoryDb(
+	memories: Array<{
+		content: string;
+		type?: string;
+		importance?: number;
+		who?: string;
+		tags?: string;
+		pinned?: number;
+		project?: string;
+		created_at?: string;
+	}> = [],
+): void {
+	const dbPath = join(TEST_DIR, "memory", "memories.db");
+	ensureDir(join(TEST_DIR, "memory"));
+
+	if (existsSync(dbPath)) rmSync(dbPath);
+
+	const db = new Database(dbPath);
+	applyTestSchema(db);
 
 	const stmt = db.prepare(`
 		INSERT INTO memories
@@ -228,68 +226,11 @@ beforeEach(() => {
 	ensureDir(TEST_DIR);
 	ensureDir(join(TEST_DIR, "memory"));
 
-	// Initialize a bare DB so handleSessionStart can access the accessor
-	// (tests that need seeded data call createMemoryDb which re-inits)
+	// Initialize a bare DB using the shared schema so handleSessionStart
+	// can access the accessor. Tests needing seeded data call createMemoryDb.
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
 	const db = new Database(dbPath);
-	db.exec("PRAGMA busy_timeout = 5000");
-	db.exec(`
-		CREATE TABLE IF NOT EXISTS memories (
-			id TEXT PRIMARY KEY,
-			content TEXT NOT NULL,
-			who TEXT DEFAULT 'test',
-			why TEXT,
-			created_at TEXT NOT NULL DEFAULT (datetime('now')),
-			updated_at TEXT,
-			project TEXT,
-			session_id TEXT,
-			importance REAL DEFAULT 0.5,
-			last_accessed TEXT,
-			access_count INTEGER DEFAULT 0,
-			type TEXT DEFAULT 'explicit',
-			tags TEXT,
-			pinned INTEGER DEFAULT 0,
-			source_type TEXT DEFAULT 'manual',
-			source_id TEXT,
-			category TEXT,
-			updated_by TEXT DEFAULT 'user',
-			vector_clock TEXT DEFAULT '{}',
-			version INTEGER DEFAULT 1,
-			manual_override INTEGER DEFAULT 0,
-			confidence REAL DEFAULT 1.0
-		)
-	`);
-	db.exec(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-			content, tags, content=memories, content_rowid=rowid
-		)
-	`);
-	db.exec(`
-		CREATE TABLE IF NOT EXISTS session_memories (
-			id TEXT PRIMARY KEY,
-			session_key TEXT NOT NULL,
-			memory_id TEXT NOT NULL,
-			source TEXT NOT NULL,
-			effective_score REAL,
-			predictor_score REAL,
-			final_score REAL NOT NULL,
-			rank INTEGER NOT NULL,
-			was_injected INTEGER NOT NULL,
-			relevance_score REAL,
-			fts_hit_count INTEGER NOT NULL DEFAULT 0,
-			agent_preference TEXT,
-			created_at TEXT NOT NULL,
-			entity_slot INTEGER,
-			aspect_slot INTEGER,
-			is_constraint INTEGER NOT NULL DEFAULT 0,
-			structural_density INTEGER,
-			UNIQUE(session_key, memory_id)
-		);
-		CREATE INDEX IF NOT EXISTS idx_session_memories_session
-			ON session_memories(session_key);
-		CREATE INDEX IF NOT EXISTS idx_session_memories_memory
-			ON session_memories(memory_id)
-	`);
+	applyTestSchema(db);
 	db.close();
 	initDbAccessor(dbPath);
 });
