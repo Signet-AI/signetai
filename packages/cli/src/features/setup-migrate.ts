@@ -1,3 +1,4 @@
+import { confirm } from "@inquirer/prompts";
 import {
 	Database as CoreDatabase,
 	ensureUnifiedSchema,
@@ -177,12 +178,14 @@ export async function runExistingSetupWizard(
 		let importResult: ImportResult | null = null;
 		if (detection.hasMemoryDir && detection.memoryLogCount > 0) {
 			spinner.text = `Importing ${detection.memoryLogCount} memory logs...`;
+			let coreDb: CoreDatabase | null = null;
 			try {
-				const coreDb = new CoreDatabase(dbPath);
+				coreDb = new CoreDatabase(dbPath);
 				importResult = importMemoryLogs(basePath, coreDb);
-				coreDb.close();
 			} catch (err) {
 				console.warn(`\n  ⚠ Memory import warning: ${readErr(err)}`);
+			} finally {
+				coreDb?.close();
 			}
 		}
 

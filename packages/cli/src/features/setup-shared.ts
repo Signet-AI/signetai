@@ -29,7 +29,9 @@ interface HarnessDeps {
 }
 
 export function hasExistingIdentityFiles(detection: SetupDetection): boolean {
-	return detection.identityFiles.length > 0;
+	const core = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
+	const found = detection.identityFiles.filter((file) => core.includes(file));
+	return found.length >= 2;
 }
 
 export function formatDetectionSummary(detection: SetupDetection): string {
