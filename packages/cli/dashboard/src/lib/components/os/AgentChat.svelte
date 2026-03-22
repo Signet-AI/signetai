@@ -29,6 +29,7 @@
 	let loading = $state(false);
 	let loadingStatus = $state("");
 	let chatEl: HTMLDivElement | null = $state(null);
+	const AGENT_EXEC_TIMEOUT_MS = 30_000;
 
 	async function scrollToBottom() {
 		await tick();
@@ -103,11 +104,25 @@
 
 			// 2. Start agent session on daemon
 			loadingStatus = "starting agent...";
-			const execRes = await fetch(`${API_BASE}/api/os/agent-execute`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ serverId, task }),
-			});
+			const ctl = new AbortController();
+			const timeout = setTimeout(() => ctl.abort(), AGENT_EXEC_TIMEOUT_MS);
+			let execRes: Response;
+			try {
+				execRes = await fetch(`${API_BASE}/api/os/agent-execute`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ serverId, task }),
+					signal: ctl.signal,
+				});
+			} catch (err) {
+				if (err instanceof Error && err.name === "AbortError") {
+					throw new Error("Timed out while starting agent session");
+				}
+
+				throw err;
+			} finally {
+				clearTimeout(timeout);
+			}
 			const execData = await execRes.json();
 
 			if (!execRes.ok || !execData.sessionId) {
