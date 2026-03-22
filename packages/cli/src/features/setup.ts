@@ -169,7 +169,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log();
 
 		console.log(chalk.bold("  Signet will:"));
-		console.log(chalk.dim("    1. Create AGENT.yaml manifest pointing to your existing files"));
+		console.log(chalk.dim("    1. Create agent.yaml manifest pointing to your existing files"));
 		console.log(chalk.dim("    2. Import memory logs to SQLite for search"));
 		console.log(chalk.dim("    3. Sync built-in skills + unify external skill sources"));
 		console.log(chalk.dim("    4. Install connectors for detected harnesses"));

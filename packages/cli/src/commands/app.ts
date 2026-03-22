@@ -51,7 +51,10 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 			deps.collectListOption,
 			[],
 		)
-		.option("--embedding-provider <provider>", "Embedding provider in non-interactive mode (ollama, openai, none)")
+		.option(
+			"--embedding-provider <provider>",
+			"Embedding provider in non-interactive mode (native, ollama, openai, none)",
+		)
 		.option("--embedding-model <model>", "Embedding model in non-interactive mode")
 		.option(
 			"--extraction-provider <provider>",

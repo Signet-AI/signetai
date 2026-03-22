@@ -1535,10 +1535,6 @@ function createExtensionSymlink(stateDir: string, globalPath: string, silent?: b
 	}
 }
 
-/**
- * Check if the detected setup has significant existing identity files
- * that should trigger the migration flow
- */
 // ============================================================================
 // Import from GitHub
 // ============================================================================
