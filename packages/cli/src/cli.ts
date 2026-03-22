@@ -94,6 +94,7 @@ import { doRestart, doStart, doStop, launchDashboard, migrateSchema, showLogs } 
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { importFromGitHub } from "./features/import.js";
 import { setupWizard } from "./features/setup.js";
+import { syncTemplates } from "./features/sync.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 
 // Template directory location (relative to built CLI)
@@ -1650,7 +1651,16 @@ registerAppCommands(program, {
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
-	syncTemplates,
+	syncTemplates: () =>
+		syncTemplates({
+			agentsDir: AGENTS_DIR,
+			configureHarnessHooks,
+			getTemplatesDir,
+			signetLogo,
+			syncBuiltinSkills,
+			syncNativeEmbeddingModel,
+			syncPredictorBinary,
+		}),
 });
 
 registerDaemonCommands(program, {
@@ -1660,97 +1670,6 @@ registerDaemonCommands(program, {
 	showLogs: (options) => showLogs(options, daemonDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
 });
-
-async function syncTemplates() {
-	console.log(signetLogo());
-	const basePath = AGENTS_DIR;
-	const templatesDir = getTemplatesDir();
-
-	if (!existsSync(basePath)) {
-		console.log(chalk.red("  No Signet installation found. Run: signet setup"));
-		return;
-	}
-
-	console.log(chalk.bold("  Syncing template files...\n"));
-
-	let synced = 0;
-
-	const gitignoreSrc = join(templatesDir, "gitignore.template");
-	const gitignoreDest = join(basePath, ".gitignore");
-	if (existsSync(gitignoreSrc) && !existsSync(gitignoreDest)) {
-		copyFileSync(gitignoreSrc, gitignoreDest);
-		console.log(chalk.green("  ✓ .gitignore"));
-		synced++;
-	}
-
-	const skillSyncResult = syncBuiltinSkills(templatesDir, basePath);
-	for (const skill of skillSyncResult.installed) {
-		console.log(chalk.green(`  ✓ skills/${skill} (installed)`));
-	}
-	for (const skill of skillSyncResult.updated) {
-		console.log(chalk.green(`  ✓ skills/${skill} (updated)`));
-	}
-	synced += skillSyncResult.installed.length + skillSyncResult.updated.length;
-
-	const predictor = await syncPredictorBinary(basePath);
-	if (predictor.status === "updated") {
-		console.log(chalk.green(`  ✓ predictor sidecar (${predictor.message})`));
-		synced++;
-	} else if (predictor.status === "current") {
-		console.log(chalk.dim("  predictor sidecar is up to date"));
-	} else if (predictor.status === "skipped") {
-		console.log(chalk.dim(`  predictor sidecar skipped: ${predictor.message}`));
-	} else {
-		console.log(chalk.yellow(`  ⚠ predictor sidecar sync failed: ${predictor.message}`));
-	}
-
-	const native = await syncNativeEmbeddingModel(basePath);
-	if (native.status === "updated") {
-		console.log(chalk.green(`  ✓ native embedding model warmed (${native.message})`));
-		synced++;
-	} else if (native.status === "current") {
-		console.log(chalk.dim("  native embedding model is ready"));
-	} else if (native.status === "skipped") {
-		console.log(chalk.dim(`  native embedding warmup skipped: ${native.message}`));
-	} else {
-		console.log(chalk.yellow(`  ⚠ native embedding warmup failed: ${native.message}`));
-	}
-
-	const detectedHarnesses: string[] = [];
-	if (existsSync(join(homedir(), ".claude", "settings.json"))) {
-		detectedHarnesses.push("claude-code");
-	}
-	if (
-		existsSync(join(homedir(), ".config", "signet", "bin", "codex")) ||
-		existsSync(join(homedir(), ".codex", "config.toml"))
-	) {
-		detectedHarnesses.push("codex");
-	}
-	if (existsSync(join(homedir(), ".config", "opencode"))) {
-		detectedHarnesses.push("opencode");
-	}
-	const ocConnector = new OpenClawConnector();
-	if (ocConnector.isInstalled()) {
-		detectedHarnesses.push("openclaw");
-	}
-
-	for (const harness of detectedHarnesses) {
-		try {
-			await configureHarnessHooks(harness, basePath);
-			console.log(chalk.green(`  ✓ hooks re-registered for ${harness}`));
-			synced++;
-		} catch {
-			console.log(chalk.yellow(`  ⚠ hooks re-registration failed for ${harness}`));
-		}
-	}
-
-	if (synced === 0) {
-		console.log(chalk.dim("  All built-in templates are up to date"));
-	}
-
-	console.log();
-	console.log(chalk.green("  Done!"));
-}
 
 // ============================================================================
 // signet secret - Secrets management

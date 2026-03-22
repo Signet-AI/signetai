@@ -153,9 +153,12 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		spinner.text = "Initializing database...";
 		const dbPath = join(cfg.basePath, "memory", "memories.db");
 		const db = Database(dbPath);
-		ensureUnifiedSchema(db);
-		runMigrations(db);
-		db.close();
+		try {
+			ensureUnifiedSchema(db);
+			runMigrations(db);
+		} finally {
+			db.close();
+		}
 
 		spinner.text = "Configuring harness hooks...";
 		const configuredHarnesses: string[] = [];
