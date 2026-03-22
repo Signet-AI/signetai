@@ -108,7 +108,12 @@ export async function migrateSchema(options: PathOptions, deps: Deps): Promise<v
 		const running = await deps.isDaemonRunning();
 		if (running) {
 			console.log(chalk.dim("  Stopping daemon for migration..."));
-			await deps.stopDaemon(basePath);
+			const stopped = await deps.stopDaemon(basePath);
+			if (!stopped) {
+				spinner.fail("Migration aborted");
+				console.log(chalk.red("  Could not stop the daemon cleanly before migration."));
+				return;
+			}
 			await deps.sleep(1000);
 		}
 
@@ -128,7 +133,11 @@ export async function migrateSchema(options: PathOptions, deps: Deps): Promise<v
 
 		if (running) {
 			console.log(chalk.dim("  Restarting daemon..."));
-			await deps.startDaemon(basePath);
+			const restarted = await deps.startDaemon(basePath);
+			if (!restarted) {
+				console.log(chalk.yellow("  Migration finished, but the daemon did not restart cleanly."));
+				return;
+			}
 		}
 
 		console.log();
@@ -210,16 +219,25 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
 	const spinner = ora("Restarting daemon...").start();
+	const running = await deps.isDaemonRunning();
 
-	await deps.stopDaemon(basePath);
-	await deps.sleep(500);
+	if (running) {
+		const stopped = await deps.stopDaemon(basePath);
+		if (!stopped) {
+			spinner.fail("Failed to stop daemon");
+			return;
+		}
+		await deps.sleep(500);
+	}
+
 	const started = await deps.startDaemon(basePath);
 
 	if (started) {
-		spinner.succeed("Daemon restarted");
+		spinner.succeed(running ? "Daemon restarted" : "Daemon started");
 		console.log(chalk.dim(`  Dashboard: http://localhost:${deps.defaultPort}`));
 	} else {
 		spinner.fail("Failed to restart daemon");
+		return;
 	}
 
 	if (options.openclaw === false || !isOpenClawDetected()) {
