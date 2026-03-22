@@ -86,7 +86,10 @@ import { registerBrowseCommand } from "./browse.js";
 import { registerAppCommands } from "./commands/app.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
 import { registerGitCommands } from "./commands/git.js";
+import { registerHookCommands } from "./commands/hook.js";
 import { registerMemoryCommands } from "./commands/memory.js";
+import { registerSecretCommands } from "./commands/secret.js";
+import { registerSkillCommands } from "./commands/skill.js";
 import { registerUpdateCommands } from "./commands/update.js";
 
 // Template directory location (relative to built CLI)
@@ -210,9 +213,7 @@ async function gitInit(dir: string): Promise<boolean> {
 
 function ensureProtectedGitignore(dir: string): void {
 	const gitignorePath = join(dir, ".gitignore");
-	const existingContent = existsSync(gitignorePath)
-		? readFileSync(gitignorePath, "utf-8")
-		: "";
+	const existingContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
 	const nextContent = mergeSignetGitignoreEntries(existingContent);
 	if (nextContent !== existingContent) {
 		writeFileSync(gitignorePath, nextContent, "utf-8");
@@ -221,18 +222,11 @@ function ensureProtectedGitignore(dir: string): void {
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
 	return new Promise((resolve) => {
-		const proc = spawn(
-			"git",
-			[
-				"rm",
-				"--cached",
-				"--ignore-unmatch",
-				"--quiet",
-				"--",
-				...SIGNET_GIT_PROTECTED_PATHS,
-			],
-			{ cwd: dir, stdio: "pipe", windowsHide: true },
-		);
+		const proc = spawn("git", ["rm", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], {
+			cwd: dir,
+			stdio: "pipe",
+			windowsHide: true,
+		});
 		proc.on("close", () => resolve());
 		proc.on("error", () => resolve());
 	});
@@ -679,10 +673,7 @@ async function configureHarnessHooks(
 		}
 		case "openclaw": {
 			const connector = new OpenClawConnector();
-			const runtimePath =
-				options?.openclawRuntimePath ??
-				connector.getConfiguredRuntimePath() ??
-				"plugin";
+			const runtimePath = options?.openclawRuntimePath ?? connector.getConfiguredRuntimePath() ?? "plugin";
 			// Install connector first — writes config with runtimePath so
 			// ensureOpenClawPluginPackage's getConfiguredRuntimePath() check passes.
 			await connector.install(basePath, {
@@ -699,8 +690,7 @@ async function configureHarnessHooks(
 					// that OpenClaw scans for "signet-memory-openclaw" subdirectory.
 					// patchLoadPaths already calls console.warn internally for each
 					// skipped config (same pattern as sibling private methods).
-					const { patched: lPathPatched, warnings: lPathWarnings } =
-						connector.patchLoadPaths(dirname(globalPkgPath));
+					const { patched: lPathPatched, warnings: lPathWarnings } = connector.patchLoadPaths(dirname(globalPkgPath));
 					if (lPathPatched.length > 0) {
 						console.log(
 							chalk.green(
@@ -831,12 +821,10 @@ function writePredictorSyncVersion(basePath: string, version: string): void {
 	writeFileSync(path, `${version}\n`);
 }
 
-function predictorBinaryName():
-	| {
-		readonly name: string;
-		readonly tuple: string;
-	}
-	| null {
+function predictorBinaryName(): {
+	readonly name: string;
+	readonly tuple: string;
+} | null {
 	const host = process.platform;
 	const cpu = process.arch;
 	const tuple = `${host}:${cpu}`;
@@ -1278,19 +1266,12 @@ async function ensureOpenClawPluginPackage(
 			}
 		}
 		if (!cachedPath && !options.silent) {
-			console.log(
-				chalk.yellow(
-					`  Warning: cached ${OPENCLAW_PLUGIN_PACKAGE} not found on disk; retrying install.`,
-				),
-			);
+			console.log(chalk.yellow(`  Warning: cached ${OPENCLAW_PLUGIN_PACKAGE} not found on disk; retrying install.`));
 		}
 		// Fall through to re-install below.
 	}
 
-	const installCommand = getGlobalInstallCommand(
-		packageManager.family,
-		`${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`,
-	);
+	const installCommand = getGlobalInstallCommand(packageManager.family, `${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`);
 
 	const result = spawnSync(installCommand.command, installCommand.args, {
 		stdio: options.silent ? "pipe" : "inherit",
@@ -1302,11 +1283,7 @@ async function ensureOpenClawPluginPackage(
 
 	if (result.status !== 0) {
 		if (!options.silent) {
-			console.log(
-				chalk.yellow(
-					`  Warning: failed to refresh ${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`,
-				),
-			);
+			console.log(chalk.yellow(`  Warning: failed to refresh ${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`));
 		}
 		return undefined;
 	}
@@ -1336,9 +1313,7 @@ async function ensureOpenClawPluginPackage(
 
 	writeOpenClawPluginSyncVersion(basePath, VERSION);
 	if (!options.silent) {
-		console.log(
-			chalk.green(`  ✓ OpenClaw plugin refreshed (${OPENCLAW_PLUGIN_PACKAGE}@${VERSION})`),
-		);
+		console.log(chalk.green(`  ✓ OpenClaw plugin refreshed (${OPENCLAW_PLUGIN_PACKAGE}@${VERSION})`));
 	}
 
 	ensureOpenClawExtensionSymlink(globalPath, options.silent);
@@ -1350,11 +1325,7 @@ async function ensureOpenClawPluginPackage(
  * installed plugin package. Idempotent — skips if already correct,
  * updates if stale, creates if missing.
  */
-function ensureOpenClawExtensionSymlink(
-	globalPath: string,
-	silent?: boolean,
-): void {
-
+function ensureOpenClawExtensionSymlink(globalPath: string, silent?: boolean): void {
 	// Discover the active OpenClaw state directory. Check env overrides first
 	// (expanding ~ just like the connector does), then probe for existing legacy
 	// dirs (~/.clawdbot, ~/.moldbot, ~/.moltbot).
@@ -1389,11 +1360,7 @@ function ensureOpenClawExtensionSymlink(
 	}
 }
 
-function createExtensionSymlink(
-	stateDir: string,
-	globalPath: string,
-	silent?: boolean,
-): void {
+function createExtensionSymlink(stateDir: string, globalPath: string, silent?: boolean): void {
 	const extensionsDir = join(stateDir, "extensions");
 	const symlinkPath = join(extensionsDir, "signet-memory-openclaw");
 
@@ -1401,11 +1368,7 @@ function createExtensionSymlink(
 		mkdirSync(extensionsDir, { recursive: true });
 	} catch (err) {
 		if (!silent) {
-			console.log(
-				chalk.yellow(
-					`  Warning: could not prepare OpenClaw extensions dir at ${extensionsDir}: ${err}`,
-				),
-			);
+			console.log(chalk.yellow(`  Warning: could not prepare OpenClaw extensions dir at ${extensionsDir}: ${err}`));
 		}
 		return;
 	}
@@ -1450,15 +1413,11 @@ function createExtensionSymlink(
 	try {
 		symlinkSync(globalPath, symlinkPath, process.platform === "win32" ? "junction" : "dir");
 		if (!silent) {
-			console.log(
-				chalk.green("  ✓ OpenClaw extension symlink created"),
-			);
+			console.log(chalk.green("  ✓ OpenClaw extension symlink created"));
 		}
 	} catch (err) {
 		if (!silent) {
-			console.log(
-				chalk.yellow(`  Warning: could not create extension symlink: ${err}`),
-			);
+			console.log(chalk.yellow(`  Warning: could not create extension symlink: ${err}`));
 		}
 	}
 }
@@ -1513,13 +1472,7 @@ function formatDetectionSummary(detection: SetupDetection): string {
 
 type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "codex";
 type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
-type ExtractionProviderChoice =
-	| "claude-code"
-	| "ollama"
-	| "opencode"
-	| "codex"
-	| "openrouter"
-	| "none";
+type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 type OpenClawRuntimeChoice = "plugin" | "legacy";
 
 interface SetupWizardOptions {
@@ -1541,7 +1494,14 @@ interface SetupWizardOptions {
 
 const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = ["claude-code", "opencode", "openclaw", "codex"];
 const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "ollama", "openai", "none"];
-const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = ["claude-code", "ollama", "opencode", "codex", "openrouter", "none"];
+const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
+	"claude-code",
+	"ollama",
+	"opencode",
+	"codex",
+	"openrouter",
+	"none",
+];
 const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 
 function collectListOption(value: string, previous: string[]): string[] {
@@ -2434,11 +2394,11 @@ async function existingSetupWizard(
 							? "haiku"
 							: options.extractionProvider === "codex"
 								? "gpt-5.3-codex"
-							: options.extractionProvider === "opencode"
-								? "anthropic/claude-haiku-4-5-20251001"
-							: options.extractionProvider === "openrouter"
-								? "openai/gpt-4o-mini"
-								: "glm-4.7-flash"),
+								: options.extractionProvider === "opencode"
+									? "anthropic/claude-haiku-4-5-20251001"
+									: options.extractionProvider === "openrouter"
+										? "openai/gpt-4o-mini"
+										: "glm-4.7-flash"),
 				},
 				semanticContradictionEnabled: true,
 				graph: { enabled: true },
@@ -2806,7 +2766,9 @@ async function setupWizard(options: SetupWizardOptions) {
 				);
 			}
 			if (!migrationExtractionProvider) {
-				failNonInteractiveSetup("Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, openrouter, or none).");
+				failNonInteractiveSetup(
+					"Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, openrouter, or none).",
+				);
 			}
 
 			await existingSetupWizard(basePath, existing, existingConfig, {
@@ -2997,7 +2959,9 @@ async function setupWizard(options: SetupWizardOptions) {
 	}
 
 	if (nonInteractive && !requestedExtractionProvider) {
-		failNonInteractiveSetup("Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, openrouter, or none).");
+		failNonInteractiveSetup(
+			"Non-interactive setup requires --extraction-provider (claude-code, codex, ollama, opencode, openrouter, or none).",
+		);
 	}
 
 	let embeddingProvider: EmbeddingProviderChoice;
@@ -3097,9 +3061,9 @@ async function setupWizard(options: SetupWizardOptions) {
 				? "opencode"
 				: !!normalizeStringValue(process.env.OPENROUTER_API_KEY)
 					? "openrouter"
-				: hasCommand("ollama")
-					? "ollama"
-					: "none";
+					: hasCommand("ollama")
+						? "ollama"
+						: "none";
 
 	let extractionProvider: ExtractionProviderChoice;
 	if (nonInteractive) {
@@ -4069,10 +4033,7 @@ async function showStatus(options: { path?: string; json?: boolean }) {
 
 	// Daemon status
 	if (report.daemon.running) {
-		const versionLabel =
-			report.daemon.version && report.daemon.version !== "0.0.0"
-				? ` v${report.daemon.version}`
-				: "";
+		const versionLabel = report.daemon.version && report.daemon.version !== "0.0.0" ? ` v${report.daemon.version}` : "";
 		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(versionLabel)}`);
 		console.log(chalk.dim(`    PID: ${report.daemon.pid}`));
 		console.log(chalk.dim(`    Uptime: ${formatUptime(report.daemon.uptime || 0)}`));
@@ -4138,11 +4099,7 @@ async function showDoctor(options: { path?: string; json?: boolean }) {
 
 	for (const finding of findings) {
 		const icon =
-			finding.level === "error"
-				? chalk.red("✗")
-				: finding.level === "warn"
-					? chalk.yellow("⚠")
-					: chalk.cyan("•");
+			finding.level === "error" ? chalk.red("✗") : finding.level === "warn" ? chalk.yellow("⚠") : chalk.cyan("•");
 		console.log(`  ${icon} ${finding.message}`);
 		if (finding.fix) {
 			console.log(chalk.dim(`    ${finding.fix}`));
@@ -4667,10 +4624,7 @@ async function configureAgent() {
 			});
 
 			const harnessYaml = harnesses.map((harness) => `  - ${harness}`).join("\n");
-			const updatedYaml = existingYaml.replace(
-				/^harnesses:\n( {2}- .+\n)+/m,
-				`harnesses:\n${harnessYaml}\n`,
-			);
+			const updatedYaml = existingYaml.replace(/^harnesses:\n( {2}- .+\n)+/m, `harnesses:\n${harnessYaml}\n`);
 
 			writeFileSync(agentYamlPath, updatedYaml);
 			console.log(chalk.green("  ✓ Harnesses updated"));
@@ -4809,7 +4763,12 @@ async function configureAgent() {
 
 const DAEMON_URL = `http://localhost:${DEFAULT_PORT}`;
 
-async function secretApiCall(method: string, path: string, body?: unknown, timeoutMs = 5_000): Promise<{ ok: boolean; data: unknown }> {
+async function secretApiCall(
+	method: string,
+	path: string,
+	body?: unknown,
+	timeoutMs = 5_000,
+): Promise<{ ok: boolean; data: unknown }> {
 	const res = await fetch(`${DAEMON_URL}${path}`, {
 		method,
 		headers: body ? { "Content-Type": "application/json" } : {},
@@ -4835,503 +4794,6 @@ async function ensureDaemonForSecrets(): Promise<boolean> {
 	return true;
 }
 
-const secretCmd = program.command("secret").description("Manage encrypted secrets").enablePositionalOptions();
-
-secretCmd
-	.command("put <name> [value]")
-	.description("Store a secret (prompted if value omitted)")
-	.action(async (name: string, rawValue?: string) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const value =
-			rawValue ??
-			(await password({
-				message: `Enter value for ${chalk.bold(name)}:`,
-				mask: "•",
-			}));
-
-		if (!value) {
-			console.error(chalk.red("  Value cannot be empty"));
-			process.exit(1);
-		}
-
-		const spinner = ora("Saving secret...").start();
-		try {
-			const { ok, data } = await secretApiCall("POST", `/api/secrets/${name}`, {
-				value,
-			});
-			if (ok) {
-				spinner.succeed(chalk.green(`Secret ${chalk.bold(name)} saved`));
-			} else {
-				spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
-				process.exit(1);
-			}
-		} catch (e) {
-			spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-secretCmd
-	.command("list")
-	.description("List secret names (never values)")
-	.action(async () => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		try {
-			const { ok, data } = await secretApiCall("GET", "/api/secrets");
-			if (!ok) {
-				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
-				process.exit(1);
-			}
-			const secrets = (data as { secrets: string[] }).secrets;
-			if (secrets.length === 0) {
-				console.log(chalk.dim("  No secrets stored."));
-			} else {
-				for (const name of secrets) {
-					console.log(`  ${chalk.cyan("◈")} ${name}`);
-				}
-			}
-		} catch (e) {
-			console.error(chalk.red(`  Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-secretCmd
-	.command("delete <name>")
-	.description("Delete a secret")
-	.action(async (name: string) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const confirmed = await confirm({
-			message: `Delete secret ${chalk.bold(name)}?`,
-			default: false,
-		});
-		if (!confirmed) return;
-
-		const spinner = ora("Deleting...").start();
-		try {
-			const { ok, data } = await secretApiCall("DELETE", `/api/secrets/${name}`);
-			if (ok) {
-				spinner.succeed(chalk.green(`Secret ${chalk.bold(name)} deleted`));
-			} else {
-				spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
-				process.exit(1);
-			}
-		} catch (e) {
-			spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-secretCmd
-	.command("get <name>")
-	.description("Explain how to use a secret (values are never exposed)")
-	.action(async (name: string) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		try {
-			const { ok, data } = await secretApiCall("GET", "/api/secrets");
-			if (!ok) {
-				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
-				process.exit(1);
-			}
-			const secrets = (data as { secrets: string[] }).secrets ?? [];
-			const exists = secrets.includes(name);
-
-			if (!exists) {
-				console.error(chalk.red(`\n  Secret "${chalk.bold(name)}" not found.\n`));
-				console.error(chalk.dim("  Store it with:"));
-				console.error(`    signet secret put ${name}\n`);
-				process.exit(1);
-			}
-
-			console.log(
-				chalk.yellow(`\n  Secret "${chalk.bold(name)}" exists, but values are never exposed directly.`)
-			);
-			console.log(chalk.dim("\n  Signet secrets are injected at runtime, not read from disk."));
-			console.log(chalk.dim("  Use one of the following:\n"));
-			console.log(chalk.dim("  In a command (injected as env var):"));
-			console.log(`    signet secret exec --secret ${name} "your-command-here"\n`);
-			console.log(chalk.dim("  In agent.yaml (resolved by the daemon):"));
-			console.log(`    api_key: $secret:${name}\n`);
-		} catch (e) {
-			console.error(chalk.red(`  Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-secretCmd
-	.command("exec <command...>")
-	.description(
-		"Run a command with secrets injected as environment variables\n" +
-			"  NOTE: --secret flags must appear before the command token.\n" +
-			"  Secrets are available via process.env / os.environ in the subprocess;\n" +
-			"  shell-level $VAR expansion is intentionally disabled for security.",
-	)
-	.passThroughOptions()
-	.option("-s, --secret <name>", "Secret to inject (repeatable, must precede command)", appendCliString, [] as string[])
-	.action(async (commandParts: string[], opts: { secret: string[] }) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		if (opts.secret.length === 0) {
-			console.error(chalk.red("  At least one --secret is required."));
-			console.log(chalk.dim("  NOTE: --secret flags must come before the command token."));
-			console.log(chalk.dim("\n  Example:"));
-			console.log(`    signet secret exec --secret OPENAI_API_KEY curl https://api.openai.com/v1/models\n`);
-			process.exit(1);
-		}
-
-		// Validate that each name is a legal POSIX env var identifier.
-		// Secret names that contain hyphens or start with a digit are valid
-		// Signet identifiers but cannot be injected as env vars.
-		const VALID_ENV_VAR = /^[A-Za-z_][A-Za-z0-9_]*$/;
-		for (const name of opts.secret) {
-			if (!VALID_ENV_VAR.test(name)) {
-				console.error(chalk.red(`  Invalid secret name for env injection: "${name}"`));
-				console.log(chalk.dim("  Names must be valid env var identifiers: letters, digits, underscore; no leading digit or hyphens."));
-				process.exitCode = 1;
-				return;
-			}
-		}
-
-		// Map each name to itself — env var name and secret name are the same.
-		// The daemon API accepts Record<envVarName, secretName> for future
-		// "ENV=SECRET" remapping support.
-		const secrets: Record<string, string> = {};
-		for (const name of opts.secret) {
-			secrets[name] = name;
-		}
-
-		// Double-quote each part so arguments with embedded spaces survive
-		// the daemon's `sh -c` invocation. Backslash, double-quote, backtick,
-		// and dollar sign are all escaped. Escaping $ blocks both $VAR expansion
-		// and $(...) command substitution — the latter is a shell injection risk
-		// for a secrets tool and cannot be left open. Secrets are already
-		// injected directly into the subprocess environment; programs access
-		// them via process.env / os.environ, not via in-string shell expansion.
-		// e.g. ["python", "-c", "import os; print(1)"] → "python" "-c" "import os; print(1)"
-		const command = commandParts
-			.map((arg) =>
-				`"${arg
-					.replace(/\\/g, "\\\\")
-					.replace(/"/g, '\\"')
-					.replace(/`/g, "\\`")
-					.replace(/\$/g, "\\$")}"`,
-			)
-			.join(" ");
-
-		try {
-			// TODO: stream output once the daemon exposes a SSE endpoint for
-			// exec (e.g. POST /api/secrets/exec/stream). Currently the daemon
-			// buffers all output before responding, so long-running commands
-			// produce no output until they complete or the 60 s timeout fires.
-			const { ok, data } = await secretApiCall("POST", "/api/secrets/exec", {
-				command,
-				secrets,
-			}, 60_000);
-
-			if (!ok) {
-				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
-				process.exitCode = 1;
-				return;
-			}
-
-			const result = data as { stdout: string; stderr: string; code: number | null };
-			if (result.stdout) process.stdout.write(result.stdout);
-			if (result.stderr) process.stderr.write(result.stderr);
-			// Use exitCode + return so Node flushes stdout/stderr buffers before
-			// the process actually exits. process.exit() can truncate buffered output.
-			// code is null when the child was killed by a signal — treat as failure.
-			process.exitCode = result.code ?? 1;
-		} catch (e) {
-			if (e instanceof Error && e.name === "TimeoutError") {
-				console.error(chalk.red("  Error: command timed out after 60 seconds."));
-				console.error(chalk.dim("  The subprocess may still be running on the daemon."));
-				console.error(chalk.dim("  Streaming support is planned — see TODO in source."));
-			} else {
-				console.error(chalk.red(`  Error: ${(e as Error).message}`));
-			}
-			process.exitCode = 1;
-		}
-	});
-
-secretCmd
-	.command("has <name>")
-	.description("Check if a secret exists (exits 0 if found, 1 if not)")
-	.action(async (name: string) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		try {
-			const { data } = await secretApiCall("GET", "/api/secrets");
-			const secrets = (data as { secrets: string[] }).secrets ?? [];
-			const exists = secrets.includes(name);
-			console.log(exists ? "true" : "false");
-			process.exit(exists ? 0 : 1);
-		} catch (e) {
-			console.error(chalk.red(`  Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-function appendCliString(value: string, previous: string[]): string[] {
-	return [...previous, value];
-}
-
-const onePasswordCmd = secretCmd.command("onepassword").alias("op").description("Manage 1Password integration");
-
-onePasswordCmd
-	.command("connect [token]")
-	.description("Connect 1Password using a service account token")
-	.action(async (rawToken?: string) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const token =
-			rawToken ??
-			(await password({
-				message: "1Password service account token:",
-				mask: "•",
-			}));
-
-		if (!token) {
-			console.error(chalk.red("  Token cannot be empty"));
-			process.exit(1);
-		}
-
-		const spinner = ora("Connecting to 1Password...").start();
-		try {
-			const { ok, data } = await secretApiCall("POST", "/api/secrets/1password/connect", {
-				token,
-			});
-
-			if (!ok) {
-				spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
-				process.exit(1);
-			}
-
-			const vaultCount =
-				typeof (data as { vaultCount?: unknown }).vaultCount === "number"
-					? (data as { vaultCount: number }).vaultCount
-					: 0;
-
-			spinner.succeed(chalk.green(`Connected to 1Password (${vaultCount} vaults accessible)`));
-		} catch (e) {
-			spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-onePasswordCmd
-	.command("status")
-	.description("Show 1Password connection status")
-	.action(async () => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		try {
-			const { ok, data } = await secretApiCall("GET", "/api/secrets/1password/status");
-			if (!ok) {
-				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
-				process.exit(1);
-			}
-
-			const payload = data as {
-				configured?: boolean;
-				connected?: boolean;
-				vaultCount?: number;
-				error?: string;
-			};
-
-			if (!payload.configured) {
-				console.log(chalk.dim("  1Password is not connected."));
-				console.log(chalk.dim("  Run: signet secret onepassword connect"));
-				return;
-			}
-
-			if (payload.connected) {
-				console.log(chalk.green("  Connected to 1Password"));
-				console.log(chalk.dim(`  Accessible vaults: ${payload.vaultCount ?? 0}`));
-				return;
-			}
-
-			console.log(chalk.yellow("  1Password token is configured but not usable."));
-			if (payload.error) {
-				console.log(chalk.dim(`  ${payload.error}`));
-			}
-		} catch (e) {
-			console.error(chalk.red(`  Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-onePasswordCmd
-	.command("vaults")
-	.description("List accessible 1Password vaults")
-	.action(async () => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		try {
-			const { ok, data } = await secretApiCall("GET", "/api/secrets/1password/vaults");
-			if (!ok) {
-				console.error(chalk.red(`  Error: ${(data as { error: string }).error}`));
-				process.exit(1);
-			}
-
-			const vaults = (data as { vaults?: Array<{ id: string; name: string }> }).vaults ?? [];
-			if (vaults.length === 0) {
-				console.log(chalk.dim("  No vaults available."));
-				return;
-			}
-
-			for (const vault of vaults) {
-				console.log(`  ${chalk.cyan("◈")} ${vault.name} ${chalk.dim(`(${vault.id})`)}`);
-			}
-		} catch (e) {
-			console.error(chalk.red(`  Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-onePasswordCmd
-	.command("import")
-	.description("Import password-like fields from 1Password into Signet secrets")
-	.option("-v, --vault <vault>", "Vault ID or exact name (repeatable)", appendCliString, [] as string[])
-	.option("--prefix <prefix>", "Prefix for imported secret names", "OP")
-	.option("--overwrite", "Overwrite existing Signet secrets with the same name", false)
-	.option("--token <token>", "Use token for this import without saving it")
-	.action(
-		async (options: {
-			vault: string[];
-			prefix: string;
-			overwrite: boolean;
-			token?: string;
-		}) => {
-			if (!(await ensureDaemonForSecrets())) return;
-
-			const spinner = ora("Importing from 1Password...").start();
-			try {
-				const { ok, data } = await secretApiCall("POST", "/api/secrets/1password/import", {
-					token: options.token,
-					vaults: options.vault.length > 0 ? options.vault : undefined,
-					prefix: options.prefix,
-					overwrite: options.overwrite,
-				});
-
-				if (!ok) {
-					spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
-					process.exit(1);
-				}
-
-				const result = data as {
-					importedCount?: number;
-					skippedCount?: number;
-					errorCount?: number;
-					errors?: Array<{ itemTitle: string; error: string }>;
-				};
-
-				spinner.succeed(
-					chalk.green(
-						`Imported ${result.importedCount ?? 0} secrets` +
-							` (skipped ${result.skippedCount ?? 0}, errors ${result.errorCount ?? 0})`,
-					),
-				);
-
-				if ((result.errorCount ?? 0) > 0 && result.errors) {
-					const maxPreview = Math.min(3, result.errors.length);
-					for (let index = 0; index < maxPreview; index += 1) {
-						const item = result.errors[index];
-						console.log(chalk.dim(`  - ${item.itemTitle}: ${item.error}`));
-					}
-					if (result.errors.length > maxPreview) {
-						console.log(chalk.dim(`  ...and ${result.errors.length - maxPreview} more`));
-					}
-				}
-			} catch (e) {
-				spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
-				process.exit(1);
-			}
-		},
-	);
-
-onePasswordCmd
-	.command("disconnect")
-	.description("Disconnect 1Password and remove stored service account token")
-	.action(async () => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const confirmed = await confirm({
-			message: "Disconnect 1Password integration?",
-			default: false,
-		});
-		if (!confirmed) return;
-
-		const spinner = ora("Disconnecting 1Password...").start();
-		try {
-			const { ok, data } = await secretApiCall("DELETE", "/api/secrets/1password/connect");
-			if (!ok) {
-				spinner.fail(chalk.red(`Failed: ${(data as { error: string }).error}`));
-				process.exit(1);
-			}
-			spinner.succeed(chalk.green("1Password disconnected"));
-		} catch (e) {
-			spinner.fail(chalk.red(`Error: ${(e as Error).message}`));
-			process.exit(1);
-		}
-	});
-
-// ============================================================================
-// Skills Commands
-// ============================================================================
-
-const SKILLS_DIR = join(AGENTS_DIR, "skills");
-
-interface SkillMeta {
-	name: string;
-	description?: string;
-	version?: string;
-	author?: string;
-	user_invocable?: boolean;
-	arg_hint?: string;
-}
-
-function parseSkillFrontmatter(content: string): SkillMeta {
-	const match = content.match(/^---\n([\s\S]*?)\n---/);
-	if (!match) return { name: "" };
-
-	const fm = match[1];
-	const get = (key: string) => {
-		const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
-		return m ? m[1].trim().replace(/^["']|["']$/g, "") : "";
-	};
-
-	return {
-		name: get("name"),
-		description: get("description") || undefined,
-		version: get("version") || undefined,
-		author: get("author") || undefined,
-		user_invocable: /^user_invocable:\s*true$/m.test(fm),
-		arg_hint: get("arg_hint") || undefined,
-	};
-}
-
-function listLocalSkills(): Array<SkillMeta & { dirName: string }> {
-	if (!existsSync(SKILLS_DIR)) return [];
-
-	return readdirSync(SKILLS_DIR, { withFileTypes: true })
-		.filter((d) => d.isDirectory())
-		.flatMap((d) => {
-			const skillMdPath = join(SKILLS_DIR, d.name, "SKILL.md");
-			if (!existsSync(skillMdPath)) return [];
-			try {
-				const content = readFileSync(skillMdPath, "utf-8");
-				const meta = parseSkillFrontmatter(content);
-				return [{ ...meta, dirName: d.name }];
-			} catch {
-				return [];
-			}
-		});
-}
-
 async function fetchFromDaemon<T>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T | null> {
 	const { timeout: timeoutMs, ...fetchOpts } = opts || {};
 	try {
@@ -5345,266 +4807,19 @@ async function fetchFromDaemon<T>(path: string, opts?: RequestInit & { timeout?:
 		return null;
 	}
 }
+const SKILLS_DIR = join(AGENTS_DIR, "skills");
 
-// Returns [results, rateLimited]
-async function searchRegistry(
-	query: string,
-): Promise<[Array<{ name: string; description: string; url: string }>, boolean]> {
-	// GitHub repository search - no auth needed for public search (10 req/min limit)
-	try {
-		const q = encodeURIComponent(`${query} topic:agent-skill OR filename:SKILL.md in:path`);
-		const res = await fetch(`https://api.github.com/search/repositories?q=${q}&sort=stars&per_page=10`, {
-			headers: {
-				Accept: "application/vnd.github.v3+json",
-				"User-Agent": "signet-cli",
-			},
-			signal: AbortSignal.timeout(8000),
-		});
+registerSecretCommands(program, {
+	ensureDaemonForSecrets,
+	secretApiCall,
+});
 
-		if (res.status === 403 || res.status === 429) return [[], true];
-		if (!res.ok) return [[], false];
-
-		const data = (await res.json()) as {
-			items?: Array<{
-				name: string;
-				description: string | null;
-				html_url: string;
-				full_name: string;
-			}>;
-		};
-
-		return [
-			(data.items ?? []).map((item) => ({
-				name: item.name,
-				description: item.description ?? "",
-				url: item.html_url,
-			})),
-			false,
-		];
-	} catch {
-		return [[], false];
-	}
-}
-
-const skillCmd = program.command("skill").description("Manage agent skills");
-
-// signet skill list
-skillCmd
-	.command("list")
-	.description("Show installed skills")
-	.action(async () => {
-		// Try daemon first, fall back to local FS
-		const data = await fetchFromDaemon<{
-			skills: Array<SkillMeta & { name: string }>;
-		}>("/api/skills");
-		const skills = data?.skills ?? listLocalSkills().map((s) => ({ ...s, name: s.dirName }));
-
-		if (skills.length === 0) {
-			console.log(chalk.dim(`  No skills installed at ${SKILLS_DIR}`));
-			console.log(chalk.dim("  Run `signet skill search <query>` to find skills"));
-			return;
-		}
-
-		console.log(chalk.bold(`  Installed skills (${skills.length}):\n`));
-		const nameWidth = Math.max(...skills.map((s) => s.name.length), 12);
-		for (const skill of skills) {
-			const name = skill.name.padEnd(nameWidth);
-			const desc = skill.description ? chalk.dim(skill.description) : "";
-			const ver = skill.version ? chalk.dim(` v${skill.version}`) : "";
-			console.log(`    ${chalk.cyan(name)}  ${desc}${ver}`);
-		}
-		console.log();
-	});
-
-// signet skill install <name>
-skillCmd
-	.command("install <name>")
-	.description("Install a skill from skills.sh registry (e.g. browser-use or owner/repo)")
-	.action(async (name: string) => {
-		const spinner = ora(`Installing ${chalk.cyan(name)}...`).start();
-
-		const daemonRunning = await isDaemonRunning();
-
-		if (daemonRunning) {
-			const result = await fetchFromDaemon<{
-				success: boolean;
-				error?: string;
-			}>("/api/skills/install", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ name }),
-			});
-
-			if (result?.success) {
-				spinner.succeed(`Installed ${chalk.cyan(name)} to ${SKILLS_DIR}/${name}/`);
-			} else {
-				spinner.fail(`Failed to install ${name}`);
-				if (result?.error) console.error(chalk.dim(`  ${result.error}`));
-				console.log(chalk.dim(`\n  Tip: provide full GitHub path: signet skill install owner/repo`));
-			}
-		} else {
-			const packageManager = resolvePrimaryPackageManager({
-				agentsDir: AGENTS_DIR,
-				env: process.env,
-			});
-			const skillsCommand = getSkillsRunnerCommand(packageManager.family, ["add", name, "--global", "--yes"]);
-
-			spinner.text = `Installing ${chalk.cyan(name)} (daemon offline, running ${skillsCommand.command} skills)...`;
-			if (packageManager.source === "fallback") {
-				console.log(chalk.dim(`  ${packageManager.reason}`));
-			}
-
-			await new Promise<void>((resolve) => {
-				const proc = spawn(skillsCommand.command, skillsCommand.args, {
-					stdio: ["ignore", "pipe", "pipe"],
-					env: { ...process.env },
-					windowsHide: true,
-				});
-
-				let stderr = "";
-				proc.stderr.on("data", (d: Buffer) => {
-					stderr += d.toString();
-				});
-
-				proc.on("close", (code) => {
-					if (code === 0) {
-						spinner.succeed(`Installed ${chalk.cyan(name)}`);
-					} else {
-						spinner.fail(`Failed to install ${name}`);
-						if (stderr) console.error(chalk.dim(`  ${stderr.trim()}`));
-						console.log(chalk.dim(`\n  Tip: provide full GitHub path: signet skill install owner/repo`));
-					}
-					resolve();
-				});
-
-				proc.on("error", () => {
-					spinner.fail(`${skillsCommand.command} is not available`);
-					resolve();
-				});
-			});
-		}
-	});
-
-// signet skill uninstall <name>
-skillCmd
-	.command("uninstall <name>")
-	.alias("remove")
-	.description("Remove an installed skill")
-	.action(async (name: string) => {
-		const skillDir = join(SKILLS_DIR, name);
-
-		if (!existsSync(skillDir)) {
-			console.log(chalk.yellow(`  Skill '${name}' is not installed`));
-			return;
-		}
-
-		const spinner = ora(`Removing ${chalk.cyan(name)}...`).start();
-
-		const daemonRunning = await isDaemonRunning();
-
-		if (daemonRunning) {
-			const result = await fetchFromDaemon<{
-				success: boolean;
-				error?: string;
-			}>(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
-
-			if (result?.success) {
-				spinner.succeed(`Removed ${chalk.cyan(name)}`);
-			} else {
-				spinner.fail(`Failed to remove ${name}`);
-				if (result?.error) console.error(chalk.dim(`  ${result.error}`));
-			}
-		} else {
-			// Daemon offline - remove directly
-			try {
-				const { rmSync } = await import("fs");
-				rmSync(skillDir, { recursive: true, force: true });
-				spinner.succeed(`Removed ${chalk.cyan(name)}`);
-			} catch (err) {
-				spinner.fail(`Failed to remove ${name}`);
-				console.error(chalk.dim(`  ${(err as Error).message}`));
-			}
-		}
-	});
-
-// signet skill search <query>
-skillCmd
-	.command("search <query>")
-	.description("Search skills.sh registry for skills")
-	.action(async (query: string) => {
-		// Search local installed skills first
-		const local = listLocalSkills().filter((s) => {
-			const q = query.toLowerCase();
-			return (
-				s.dirName.includes(q) ||
-				(s.name ?? "").toLowerCase().includes(q) ||
-				(s.description ?? "").toLowerCase().includes(q)
-			);
-		});
-
-		const spinner = ora(`Searching registry for "${query}"...`).start();
-		const [remote, rateLimited] = await searchRegistry(query);
-		spinner.stop();
-
-		const installed = new Set(listLocalSkills().map((s) => s.dirName));
-
-		if (local.length > 0) {
-			console.log(chalk.bold(`  Installed matching "${query}":\n`));
-			for (const skill of local) {
-				const desc = skill.description ? chalk.dim(` — ${skill.description}`) : "";
-				console.log(`    ${chalk.green("✓")} ${chalk.cyan(skill.dirName)}${desc}`);
-			}
-			console.log();
-		}
-
-		if (remote.length > 0) {
-			console.log(chalk.bold(`  Available on GitHub:\n`));
-			for (const skill of remote) {
-				const isInstalled = installed.has(skill.name);
-				const mark = isInstalled ? chalk.green("✓ ") : "  ";
-				const desc = skill.description ? chalk.dim(` — ${skill.description}`) : "";
-				console.log(`  ${mark}${chalk.cyan(skill.name)}${desc}`);
-				console.log(`       ${chalk.dim(skill.url)}`);
-			}
-			console.log();
-			console.log(chalk.dim(`  Install with: signet skill install <owner/repo>`));
-		} else if (rateLimited) {
-			console.log(chalk.yellow(`  Registry search rate-limited. Browse at ${chalk.cyan("https://skills.sh")}`));
-		} else if (local.length === 0) {
-			console.log(chalk.dim(`  No skills found for "${query}"`));
-			console.log(chalk.dim(`  Browse all skills at https://skills.sh`));
-		}
-
-		console.log();
-	});
-
-// signet skill show <name>
-skillCmd
-	.command("show <name>")
-	.description("Display SKILL.md content for an installed skill")
-	.action(async (name: string) => {
-		const data = await fetchFromDaemon<{
-			content?: string;
-			description?: string;
-			version?: string;
-			error?: string;
-		}>(`/api/skills/${encodeURIComponent(name)}`);
-
-		if (data?.error || !data?.content) {
-			// Try local fallback
-			const skillMdPath = join(SKILLS_DIR, name, "SKILL.md");
-			if (!existsSync(skillMdPath)) {
-				console.log(chalk.red(`  Skill '${name}' is not installed`));
-				console.log(chalk.dim(`  Run: signet skill install ${name}`));
-				return;
-			}
-			const content = readFileSync(skillMdPath, "utf-8");
-			console.log(content);
-			return;
-		}
-
-		console.log(data.content);
-	});
+registerSkillCommands(program, {
+	AGENTS_DIR,
+	SKILLS_DIR,
+	fetchFromDaemon,
+	isDaemonRunning,
+});
 
 registerMemoryCommands(program, {
 	ensureDaemonForSecrets,
@@ -5795,385 +5010,11 @@ function loadDirRecursive(dir: string, prefix: string, out: Map<string, string>)
 // signet hook - Lifecycle hooks for harness integration
 // ============================================================================
 
-const hookCmd = program.command("hook").description("Lifecycle hooks for harness integration");
-
-// Suppress all hook subcommands in spawned agent contexts to prevent
-// recursive extraction loops (scheduler spawn, pipeline provider, etc.)
-hookCmd.hook("preAction", () => {
-	if (process.env.SIGNET_NO_HOOKS === "1" || process.env.SIGNET_BYPASS === "1") {
-		process.exit(0);
-	}
+registerHookCommands(program, {
+	AGENTS_DIR,
+	fetchFromDaemon,
+	readStaticIdentity,
 });
-
-// signet hook session-start
-hookCmd
-	.command("session-start")
-	.description("Get context/memories for a new session")
-	.requiredOption("-H, --harness <harness>", "Harness name")
-	.option("--project <project>", "Project path")
-	.option("--agent-id <id>", "Agent ID")
-	.option("--context <context>", "Additional context")
-	.option("--json", "Output as JSON")
-	.action(async (options) => {
-		// Parse stdin for session_id and other fields from harness
-		let sessionKey = "";
-		let stdinProject = "";
-		try {
-			const chunks: Buffer[] = [];
-			for await (const chunk of process.stdin) {
-				chunks.push(chunk);
-			}
-			const input = Buffer.concat(chunks).toString("utf-8").trim();
-			if (input) {
-				const parsed = JSON.parse(input);
-				sessionKey = parsed.session_id || parsed.sessionId || "";
-				stdinProject = parsed.cwd || "";
-			}
-		} catch {
-			// No stdin or invalid JSON
-		}
-
-		const data = await fetchFromDaemon<{
-			identity?: { name: string; description?: string };
-			memories?: Array<{ content: string }>;
-			inject?: string;
-			error?: string;
-		}>("/api/hooks/session-start", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				harness: options.harness,
-				project: options.project || stdinProject,
-				agentId: options.agentId,
-				context: options.context,
-				sessionKey,
-			}),
-		});
-
-		if (!data) {
-			const fallback = readStaticIdentity(AGENTS_DIR);
-			if (fallback) {
-				process.stderr.write("[signet] daemon offline — using static identity\n");
-				if (options.json) {
-					console.log(JSON.stringify({ inject: fallback, identity: { name: "signet" }, memories: [] }));
-				} else {
-					console.log(fallback);
-				}
-			} else {
-				process.stderr.write("[signet] daemon not running, no identity files found\n");
-			}
-			process.exit(0);
-		}
-
-		if (data.error) {
-			console.error(chalk.red(`Error: ${data.error}`));
-			process.exit(1);
-		}
-
-		if (options.json) {
-			console.log(JSON.stringify(data, null, 2));
-		} else {
-			if (data.inject) {
-				console.log(data.inject);
-			}
-		}
-	});
-
-// signet hook user-prompt-submit
-hookCmd
-	.command("user-prompt-submit")
-	.description("Get relevant memories for a user prompt")
-	.requiredOption("-H, --harness <harness>", "Harness name")
-	.option("--project <project>", "Project path")
-	.action(async (options) => {
-		let userPrompt = "";
-		let sessionKey = "";
-		let stdinProject = "";
-		let lastAssistantMessage = "";
-		try {
-			const chunks: Buffer[] = [];
-			for await (const chunk of process.stdin) {
-				chunks.push(chunk);
-			}
-			const input = Buffer.concat(chunks).toString("utf-8").trim();
-			if (input) {
-				const parsed = JSON.parse(input) as Record<string, unknown>;
-
-				const pickString = (...values: unknown[]): string => {
-					for (const value of values) {
-						if (typeof value === "string" && value.trim().length > 0) {
-							return value;
-						}
-					}
-					return "";
-				};
-
-				userPrompt = pickString(parsed.prompt, parsed.user_prompt, parsed.userPrompt);
-				sessionKey = pickString(parsed.session_id, parsed.sessionId);
-				stdinProject = pickString(parsed.cwd);
-
-				lastAssistantMessage = pickString(
-					parsed.last_assistant_message,
-					parsed.lastAssistantMessage,
-					parsed.assistant_message,
-					parsed.assistantMessage,
-					parsed.previous_assistant_message,
-					parsed.previousAssistantMessage,
-				);
-
-				if (!lastAssistantMessage && Array.isArray(parsed.messages)) {
-					for (let i = parsed.messages.length - 1; i >= 0; i--) {
-						const msg = parsed.messages[i];
-						if (typeof msg !== "object" || msg === null) continue;
-
-						const record = msg as Record<string, unknown>;
-						const role = typeof record.role === "string" ? record.role.toLowerCase() : "";
-						const sender = typeof record.sender === "string" ? record.sender.toLowerCase() : "";
-						const isAssistant =
-							role === "assistant" ||
-							role === "agent" ||
-							role === "model" ||
-							sender === "assistant" ||
-							sender === "agent";
-
-						if (!isAssistant) continue;
-
-						const content = pickString(record.content, record.text, record.message);
-						if (content) {
-							lastAssistantMessage = content;
-							break;
-						}
-					}
-				}
-			}
-		} catch {
-			// No stdin or invalid JSON
-		}
-
-		const data = await fetchFromDaemon<{
-			inject?: string;
-			memoryCount?: number;
-			error?: string;
-		}>("/api/hooks/user-prompt-submit", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				harness: options.harness,
-				project: options.project || stdinProject,
-				userPrompt,
-				sessionKey,
-				lastAssistantMessage: lastAssistantMessage || undefined,
-			}),
-		});
-
-		if (!data) {
-			process.stderr.write("[signet] daemon not running, hook skipped\n");
-			process.exit(0);
-		}
-
-		if (data.inject) {
-			console.log(data.inject);
-		}
-	});
-
-// signet hook session-end
-hookCmd
-	.command("session-end")
-	.description("Extract and save memories from session transcript")
-	.requiredOption("-H, --harness <harness>", "Harness name")
-	.action(async (options) => {
-		let body: Record<string, string> = {};
-		try {
-			const chunks: Buffer[] = [];
-			for await (const chunk of process.stdin) {
-				chunks.push(chunk);
-			}
-			const input = Buffer.concat(chunks).toString("utf-8").trim();
-			if (input) {
-				body = JSON.parse(input);
-			}
-		} catch {
-			// No stdin or invalid JSON
-		}
-
-		const data = await fetchFromDaemon<{
-			memoriesSaved?: number;
-			error?: string;
-		}>("/api/hooks/session-end", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				harness: options.harness,
-				transcriptPath: body.transcript_path || body.transcriptPath,
-				sessionId: body.session_id || body.sessionId,
-				sessionKey: body.session_id || body.sessionId,
-				cwd: body.cwd,
-				reason: body.reason,
-			}),
-			timeout: 60000,
-		});
-
-		if (!data) {
-			process.stderr.write("[signet] daemon not running, hook skipped\n");
-			process.exit(0);
-		}
-
-		if (data.memoriesSaved !== undefined && data.memoriesSaved > 0) {
-			process.stderr.write(`[signet] ${data.memoriesSaved} memories saved\n`);
-		}
-	});
-
-// signet hook pre-compaction
-hookCmd
-	.command("pre-compaction")
-	.description("Get summary instructions before session compaction")
-	.requiredOption("-H, --harness <harness>", "Harness name")
-	.option("--project <project>", "Project path") // accepted for connector parity; project flows via continuity state from session-start
-	.option("--message-count <count>", "Number of messages in session", Number.parseInt)
-	.option("--json", "Output as JSON")
-	.action(async (options) => {
-		// Parse stdin for session_id and context from harness
-		let sessionKey = "";
-		let sessionContext = "";
-		try {
-			const chunks: Buffer[] = [];
-			for await (const chunk of process.stdin) {
-				chunks.push(chunk);
-			}
-			const input = Buffer.concat(chunks).toString("utf-8").trim();
-			if (input) {
-				const parsed = JSON.parse(input);
-				sessionKey = parsed.session_id || parsed.sessionId || "";
-				sessionContext = parsed.session_context || parsed.sessionContext || "";
-			}
-		} catch {
-			// No stdin or invalid JSON
-		}
-
-		const data = await fetchFromDaemon<{
-			summaryPrompt?: string;
-			guidelines?: string;
-			error?: string;
-		}>("/api/hooks/pre-compaction", {
-			method: "POST",
-			body: JSON.stringify({
-				harness: options.harness,
-				messageCount: options.messageCount,
-				sessionKey,
-				sessionContext,
-			}),
-		});
-
-		if (data?.error) {
-			console.error(chalk.red(`Error: ${data.error}`));
-			process.exit(1);
-		}
-
-		if (options.json) {
-			console.log(JSON.stringify(data, null, 2));
-		} else {
-			if (data?.summaryPrompt) {
-				console.log(data.summaryPrompt);
-			}
-		}
-	});
-
-// signet hook compaction-complete
-hookCmd
-	.command("compaction-complete")
-	.description("Save session summary after compaction")
-	.requiredOption("-H, --harness <harness>", "Harness name")
-	.requiredOption("-s, --summary <summary>", "Session summary text")
-	.action(async (options) => {
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			memoryId?: number;
-			error?: string;
-		}>("/api/hooks/compaction-complete", {
-			method: "POST",
-			body: JSON.stringify({
-				harness: options.harness,
-				summary: options.summary,
-			}),
-		});
-
-		if (data?.error) {
-			console.error(chalk.red(`Error: ${data.error}`));
-			process.exit(1);
-		}
-
-		if (data?.success) {
-			console.log(chalk.green("✓ Summary saved"));
-			if (data.memoryId) {
-				console.log(chalk.dim(`  Memory ID: ${data.memoryId}`));
-			}
-		}
-	});
-
-// signet hook synthesis
-hookCmd
-	.command("synthesis")
-	.description("Request MEMORY.md synthesis (returns prompt for configured harness)")
-	.option("--json", "Output as JSON")
-	.action(async (options) => {
-		// First get the config
-		const config = await fetchFromDaemon<{
-			harness?: string;
-			model?: string;
-			error?: string;
-		}>("/api/hooks/synthesis/config");
-
-		// Then get the synthesis request
-		const data = await fetchFromDaemon<{
-			harness?: string;
-			model?: string;
-			prompt?: string;
-			fileCount?: number;
-			error?: string;
-		}>("/api/hooks/synthesis", {
-			method: "POST",
-			body: JSON.stringify({ trigger: "manual" }),
-		});
-
-		if (data?.error) {
-			console.error(chalk.red(`Error: ${data.error}`));
-			process.exit(1);
-		}
-
-		if (options.json) {
-			console.log(JSON.stringify(data, null, 2));
-		} else {
-			console.log(chalk.bold("MEMORY.md Synthesis Request\n"));
-			console.log(chalk.dim(`Harness: ${data?.harness}`));
-			console.log(chalk.dim(`Model: ${data?.model}`));
-			console.log(chalk.dim(`Session files: ${data?.fileCount ?? 0}\n`));
-			console.log(data?.prompt);
-		}
-	});
-
-// signet hook synthesis-complete
-hookCmd
-	.command("synthesis-complete")
-	.description("Save synthesized MEMORY.md content")
-	.requiredOption("-c, --content <content>", "Synthesized MEMORY.md content")
-	.action(async (options) => {
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			error?: string;
-		}>("/api/hooks/synthesis/complete", {
-			method: "POST",
-			body: JSON.stringify({ content: options.content }),
-		});
-
-		if (data?.error) {
-			console.error(chalk.red(`Error: ${data.error}`));
-			process.exit(1);
-		}
-
-		if (data?.success) {
-			console.log(chalk.green("✓ MEMORY.md synthesized"));
-		}
-	});
 
 const MIN_AUTO_UPDATE_INTERVAL = 300;
 const MAX_AUTO_UPDATE_INTERVAL = 604800;
