@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import {
 	collectExportData,
 	importEntities,
@@ -32,43 +32,49 @@ export function registerPortableCommands(program: Command): void {
 			}
 
 			const spinner = ora("Collecting export data...").start();
-			const db = new Database(dbPath, { readonly: true });
+			let db: ReturnType<typeof Database> | null = null;
 			try {
-				loadSqliteVec(db);
-			} catch {
-				// Non-fatal
-			}
-
-			const data = collectExportData(agentsDir, db, {
-				includeEmbeddings: options.includeEmbeddings,
-				includeSkills: true,
-			});
-			db.close();
-
-			const fileMap = serializeExportData(data);
-			const today = new Date().toISOString().slice(0, 10);
-			const defaultName = `signet-export-${today}`;
-
-			if (options.json) {
-				const outPath = options.output || `${defaultName}.json`;
-				writeFileSync(outPath, JSON.stringify(Object.fromEntries(fileMap), null, 2));
-				spinner.succeed(`Exported to ${chalk.cyan(outPath)}`);
-			} else {
-				const outDir = options.output || defaultName;
-				mkdirSync(outDir, { recursive: true });
-				for (const [path, content] of fileMap) {
-					const fullPath = join(outDir, path);
-					mkdirSync(dirname(fullPath), { recursive: true });
-					writeFileSync(fullPath, content);
+				db = new Database(dbPath, { readonly: true });
+				try {
+					loadSqliteVec(db);
+				} catch {
+					// Non-fatal
 				}
-				spinner.succeed(`Exported to ${chalk.cyan(`${outDir}/`)}`);
-			}
 
-			console.log(chalk.dim(`  ${data.manifest.stats.memories} memories`));
-			console.log(chalk.dim(`  ${data.manifest.stats.entities} entities`));
-			console.log(chalk.dim(`  ${data.manifest.stats.relations} relations`));
-			console.log(chalk.dim(`  ${data.manifest.stats.skills} skills`));
-			console.log();
+				const data = collectExportData(agentsDir, db, {
+					includeEmbeddings: options.includeEmbeddings,
+					includeSkills: true,
+				});
+
+				const fileMap = serializeExportData(data);
+				const today = new Date().toISOString().slice(0, 10);
+				const defaultName = `signet-export-${today}`;
+
+				if (options.json) {
+					const outPath = options.output || `${defaultName}.json`;
+					writeFileSync(outPath, JSON.stringify(Object.fromEntries(fileMap), null, 2));
+					spinner.succeed(`Exported to ${chalk.cyan(outPath)}`);
+				} else {
+					const outDir = options.output || defaultName;
+					mkdirSync(outDir, { recursive: true });
+					for (const [path, content] of fileMap) {
+						const fullPath = join(outDir, path);
+						mkdirSync(dirname(fullPath), { recursive: true });
+						writeFileSync(fullPath, content);
+					}
+					spinner.succeed(`Exported to ${chalk.cyan(`${outDir}/`)}`);
+				}
+
+				console.log(chalk.dim(`  ${data.manifest.stats.memories} memories`));
+				console.log(chalk.dim(`  ${data.manifest.stats.entities} entities`));
+				console.log(chalk.dim(`  ${data.manifest.stats.relations} relations`));
+				console.log(chalk.dim(`  ${data.manifest.stats.skills} skills`));
+				console.log();
+			} finally {
+				if (db) {
+					db.close();
+				}
+			}
 		});
 
 	program
@@ -92,7 +98,9 @@ export function registerPortableCommands(program: Command): void {
 			for (const [path, content] of fileMap) {
 				if (!path.startsWith("identity/")) continue;
 				const name = path.replace("identity/", "");
-				writeFileSync(join(agentsDir, name), content);
+				const destPath = resolveImportPath(agentsDir, name);
+				if (!destPath) continue;
+				writeFileSync(destPath, content);
 				identityCount++;
 			}
 
@@ -102,26 +110,36 @@ export function registerPortableCommands(program: Command): void {
 			}
 
 			mkdirSync(join(agentsDir, "memory"), { recursive: true });
-			const db = new Database(dbPath);
-			try {
-				loadSqliteVec(db);
-			} catch {
-				// Non-fatal
-			}
-			runMigrations(db);
-
+			let db: ReturnType<typeof Database> | null = null;
 			const conflict = readConflict(options.conflict);
-			const memResult = fileMap.has("memories.jsonl")
-				? importMemories(db, fileMap.get("memories.jsonl") || "", { conflictStrategy: conflict })
-				: { imported: 0, skipped: 0 };
-			const entityCount = fileMap.has("entities.jsonl") ? importEntities(db, fileMap.get("entities.jsonl") || "") : 0;
-			const relationCount = fileMap.has("relations.jsonl") ? importRelations(db, fileMap.get("relations.jsonl") || "") : 0;
-			db.close();
+			let memResult = { imported: 0, skipped: 0 };
+			let entityCount = 0;
+			let relationCount = 0;
+			try {
+				db = new Database(dbPath);
+				try {
+					loadSqliteVec(db);
+				} catch {
+					// Non-fatal
+				}
+				runMigrations(db);
+
+				memResult = fileMap.has("memories.jsonl")
+					? importMemories(db, fileMap.get("memories.jsonl") || "", { conflictStrategy: conflict })
+					: { imported: 0, skipped: 0 };
+				entityCount = fileMap.has("entities.jsonl") ? importEntities(db, fileMap.get("entities.jsonl") || "") : 0;
+				relationCount = fileMap.has("relations.jsonl") ? importRelations(db, fileMap.get("relations.jsonl") || "") : 0;
+			} finally {
+				if (db) {
+					db.close();
+				}
+			}
 
 			let skillCount = 0;
 			for (const [path, content] of fileMap) {
 				if (!path.startsWith("skills/")) continue;
-				const destPath = join(agentsDir, path);
+				const destPath = resolveImportPath(agentsDir, path);
+				if (!destPath) continue;
 				mkdirSync(dirname(destPath), { recursive: true });
 				writeFileSync(destPath, content);
 				skillCount++;
@@ -174,4 +192,13 @@ function loadDirRecursive(dir: string, prefix: string, out: Map<string, string>)
 function readConflict(value: unknown): "skip" | "overwrite" | "merge" {
 	if (value === "overwrite" || value === "merge") return value;
 	return "skip";
+}
+
+function resolveImportPath(root: string, rel: string): string | null {
+	const base = resolve(root);
+	const path = resolve(root, rel);
+	if (path === base || path.startsWith(`${base}${sep}`)) {
+		return path;
+	}
+	return null;
 }

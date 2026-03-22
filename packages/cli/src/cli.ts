@@ -3927,8 +3927,9 @@ async function getStatusReport(basePath: string): Promise<StatusReport> {
 		return report;
 	}
 
+	let db: ReturnType<typeof Database> | null = null;
 	try {
-		const db = Database(join(basePath, "memory", "memories.db"), {
+		db = Database(join(basePath, "memory", "memories.db"), {
 			readonly: true,
 		});
 		const schema = detectSchema(db);
@@ -3936,7 +3937,6 @@ async function getStatusReport(basePath: string): Promise<StatusReport> {
 		const conversationCount = schema.hasConversations
 			? readCount(db, "SELECT COUNT(*) as count FROM conversations")
 			: null;
-		db.close();
 		report.db = {
 			exists: true,
 			schema: schema.type,
@@ -3946,6 +3946,10 @@ async function getStatusReport(basePath: string): Promise<StatusReport> {
 		};
 	} catch {
 		return report;
+	} finally {
+		if (db) {
+			db.close();
+		}
 	}
 
 	return report;
@@ -3963,9 +3967,11 @@ function getDoctorFindings(report: StatusReport): DoctorFinding[] {
 	}
 
 	const findings: DoctorFinding[] = [];
+	const hasAgentYaml = report.files.find((file) => file.name === "agent.yaml")?.exists ?? false;
+	const missingIdentity = report.missingIdentityFiles.filter((file) => file !== "agent.yaml");
 
-	if (!report.validIdentity) {
-		const missing = report.missingIdentityFiles.join(", ");
+	if (!report.validIdentity && (hasAgentYaml || missingIdentity.length > 0)) {
+		const missing = missingIdentity.join(", ");
 		findings.push({
 			level: "error",
 			message: `Missing required identity files${missing ? `: ${missing}` : "."}`,
@@ -3973,7 +3979,7 @@ function getDoctorFindings(report: StatusReport): DoctorFinding[] {
 		});
 	}
 
-	if (!report.files.find((file) => file.name === "agent.yaml")?.exists) {
+	if (!hasAgentYaml) {
 		findings.push({
 			level: "error",
 			message: "agent.yaml is missing.",

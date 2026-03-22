@@ -110,8 +110,9 @@ export function registerVectorCommands(program: Command, deps: VectorDeps): void
 
 			const spinner = ora("Migrating vectors...").start();
 
+			let db: ReturnType<typeof Database> | null = null;
 			try {
-				const db = Database(dbPath);
+				db = Database(dbPath);
 
 				if (!loadSqliteVec(db)) {
 					spinner.fail("sqlite-vec extension not found — cannot migrate vectors.");
@@ -189,8 +190,6 @@ export function registerVectorCommands(program: Command, deps: VectorDeps): void
 					}
 				}
 
-				db.close();
-
 				spinner.succeed(chalk.green(`Migrated ${migrated} embeddings to sqlite-vec format`));
 
 				if (failed > 0) {
@@ -213,6 +212,10 @@ export function registerVectorCommands(program: Command, deps: VectorDeps): void
 				spinner.fail("Migration failed");
 				console.error(chalk.red(`  ${readErr(err)}`));
 				process.exit(1);
+			} finally {
+				if (db) {
+					db.close();
+				}
 			}
 		});
 }
@@ -236,8 +239,9 @@ async function detectSources(root: string): Promise<Source[]> {
 		return out;
 	}
 
+	let db: ReturnType<typeof Database> | null = null;
 	try {
-		const db = Database(dbPath, { readonly: true });
+		db = Database(dbPath, { readonly: true });
 		const table = db
 			.prepare(`
 				SELECT name FROM sqlite_master
@@ -275,10 +279,12 @@ async function detectSources(root: string): Promise<Source[]> {
 				out.push({ type: "vec_table", path: dbPath, count });
 			}
 		}
-
-		db.close();
 	} catch {
 		// Ignore
+	} finally {
+		if (db) {
+			db.close();
+		}
 	}
 
 	return out;
