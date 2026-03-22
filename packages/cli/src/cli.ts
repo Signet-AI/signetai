@@ -83,6 +83,11 @@ import {
 } from "./python.js";
 import Database from "./sqlite.js";
 import { registerBrowseCommand } from "./browse.js";
+import { registerAppCommands } from "./commands/app.js";
+import { registerDaemonCommands } from "./commands/daemon.js";
+import { registerGitCommands } from "./commands/git.js";
+import { registerMemoryCommands } from "./commands/memory.js";
+import { registerUpdateCommands } from "./commands/update.js";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
@@ -3879,13 +3884,182 @@ async function migrateSchema(options: { path?: string }) {
 // signet status - Show Agent Status
 // ============================================================================
 
-async function showStatus(options: { path?: string }) {
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
+interface StatusFile {
+	name: string;
+	exists: boolean;
+}
+
+interface StatusDb {
+	exists: boolean;
+	schema: string | null;
+	needsMigration: boolean;
+	memoryCount: number | null;
+	conversationCount: number | null;
+}
+
+interface StatusReport {
+	basePath: string;
+	installed: boolean;
+	validIdentity: boolean;
+	missingIdentityFiles: string[];
+	files: StatusFile[];
+	db: StatusDb;
+	daemon: {
+		running: boolean;
+		pid: number | null;
+		uptime: number | null;
+		version: string | null;
+	};
+}
+
+interface DoctorFinding {
+	level: "error" | "warn" | "info";
+	message: string;
+	fix?: string;
+}
+
+function readCount(db: ReturnType<typeof Database>, sql: string): number | null {
+	try {
+		const raw = db.prepare(sql).get();
+		if (!isRecord(raw)) {
+			return null;
+		}
+		return parseIntegerValue(raw.count);
+	} catch {
+		return null;
+	}
+}
+
+async function getStatusReport(basePath: string): Promise<StatusReport> {
 	const existing = detectExistingSetup(basePath);
+	const installed = existing.agentsDir;
+	const files = [
+		{ name: "AGENTS.md", exists: existing.agentsMd },
+		{ name: "agent.yaml", exists: existing.agentYaml },
+		{ name: "memories.db", exists: existing.memoryDb },
+	];
+	const daemon = await getDaemonStatus();
+	const report: StatusReport = {
+		basePath,
+		installed,
+		validIdentity: installed ? hasValidIdentity(basePath) : false,
+		missingIdentityFiles: installed ? getMissingIdentityFiles(basePath) : [],
+		files,
+		db: {
+			exists: existing.memoryDb,
+			schema: null,
+			needsMigration: false,
+			memoryCount: null,
+			conversationCount: null,
+		},
+		daemon,
+	};
+
+	if (!existing.memoryDb) {
+		return report;
+	}
+
+	try {
+		const db = Database(join(basePath, "memory", "memories.db"), {
+			readonly: true,
+		});
+		const schema = detectSchema(db);
+		const memoryCount = readCount(db, "SELECT COUNT(*) as count FROM memories");
+		const conversationCount = schema.hasConversations
+			? readCount(db, "SELECT COUNT(*) as count FROM conversations")
+			: null;
+		db.close();
+		report.db = {
+			exists: true,
+			schema: schema.type,
+			needsMigration: schema.type !== "core" && schema.type !== "unknown",
+			memoryCount,
+			conversationCount,
+		};
+	} catch {
+		return report;
+	}
+
+	return report;
+}
+
+function getDoctorFindings(report: StatusReport): DoctorFinding[] {
+	if (!report.installed) {
+		return [
+			{
+				level: "error",
+				message: "No Signet installation found.",
+				fix: "Run `signet setup`.",
+			},
+		];
+	}
+
+	const findings: DoctorFinding[] = [];
+
+	if (!report.validIdentity) {
+		const missing = report.missingIdentityFiles.join(", ");
+		findings.push({
+			level: "error",
+			message: `Missing required identity files${missing ? `: ${missing}` : "."}`,
+			fix: "Run `signet setup` or restore the missing files.",
+		});
+	}
+
+	if (!report.files.find((file) => file.name === "agent.yaml")?.exists) {
+		findings.push({
+			level: "error",
+			message: "agent.yaml is missing.",
+			fix: "Run `signet setup` to recreate the manifest.",
+		});
+	}
+
+	if (!report.db.exists) {
+		findings.push({
+			level: "error",
+			message: "Memory database is missing.",
+			fix: "Run `signet setup` to initialize memory storage.",
+		});
+	}
+
+	if (!report.daemon.running) {
+		findings.push({
+			level: "warn",
+			message: "Daemon is not running.",
+			fix: "Run `signet daemon start`.",
+		});
+	}
+
+	if (report.db.needsMigration && report.db.schema) {
+		findings.push({
+			level: "warn",
+			message: `Database is still on ${report.db.schema} schema.`,
+			fix: "Run `signet migrate-schema`.",
+		});
+	}
+
+	if (report.db.exists && report.db.memoryCount === 0) {
+		findings.push({
+			level: "info",
+			message: "Memory database is empty.",
+			fix: "Use `signet remember` or keep chatting so the daemon can build memory.",
+		});
+	}
+
+	return findings;
+}
+
+async function showStatus(options: { path?: string; json?: boolean }) {
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
+	const report = await getStatusReport(basePath);
+
+	if (options.json) {
+		console.log(JSON.stringify(report, null, 2));
+		return;
+	}
 
 	console.log(signetLogo());
 
-	if (!existing.agentsDir) {
+	if (!report.installed) {
 		console.log(chalk.yellow("  No Signet installation found."));
 		console.log(`  Run ${chalk.bold("signet setup")} to get started.`);
 		return;
@@ -3894,12 +4068,14 @@ async function showStatus(options: { path?: string }) {
 	console.log(chalk.bold("  Status\n"));
 
 	// Daemon status
-	const status = await getDaemonStatus();
-	if (status.running) {
-		const versionLabel = status.version && status.version !== "0.0.0" ? ` v${status.version}` : "";
+	if (report.daemon.running) {
+		const versionLabel =
+			report.daemon.version && report.daemon.version !== "0.0.0"
+				? ` v${report.daemon.version}`
+				: "";
 		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(versionLabel)}`);
-		console.log(chalk.dim(`    PID: ${status.pid}`));
-		console.log(chalk.dim(`    Uptime: ${formatUptime(status.uptime || 0)}`));
+		console.log(chalk.dim(`    PID: ${report.daemon.pid}`));
+		console.log(chalk.dim(`    Uptime: ${formatUptime(report.daemon.uptime || 0)}`));
 		console.log(chalk.dim(`    Dashboard: http://localhost:${DEFAULT_PORT}`));
 	} else {
 		console.log(`  ${chalk.red("○")} Daemon ${chalk.red("stopped")}`);
@@ -3908,56 +4084,77 @@ async function showStatus(options: { path?: string }) {
 	console.log();
 
 	// Files
-	const checks = [
-		{ name: "AGENTS.md", exists: existing.agentsMd },
-		{ name: "agent.yaml", exists: existing.agentYaml },
-		{ name: "memories.db", exists: existing.memoryDb },
-	];
-
-	for (const check of checks) {
-		const icon = check.exists ? chalk.green("✓") : chalk.red("✗");
-		console.log(`  ${icon} ${check.name}`);
+	for (const file of report.files) {
+		const icon = file.exists ? chalk.green("✓") : chalk.red("✗");
+		console.log(`  ${icon} ${file.name}`);
 	}
 
-	if (existing.memoryDb) {
-		try {
-			const db = Database(join(basePath, "memory", "memories.db"), {
-				readonly: true,
-			});
+	if (report.db.needsMigration && report.db.schema) {
+		console.log();
+		console.log(chalk.yellow(`  ⚠ Database schema: ${report.db.schema}`));
+		console.log(chalk.dim(`    Run ${chalk.bold("signet migrate-schema")} to upgrade`));
+	}
 
-			// Detect schema type
-			const schemaInfo = detectSchema(db);
+	if (report.db.exists) {
+		console.log();
+		if (typeof report.db.memoryCount === "number") {
+			console.log(chalk.dim(`  Memories: ${report.db.memoryCount}`));
+		}
+		if (typeof report.db.conversationCount === "number") {
+			console.log(chalk.dim(`  Conversations: ${report.db.conversationCount}`));
+		}
+	}
 
-			if (schemaInfo.type !== "core" && schemaInfo.type !== "unknown") {
-				console.log();
-				console.log(chalk.yellow(`  ⚠ Database schema: ${schemaInfo.type}`));
-				console.log(chalk.dim(`    Run ${chalk.bold("signet migrate-schema")} to upgrade`));
-			}
+	if (!report.validIdentity && report.missingIdentityFiles.length > 0) {
+		console.log();
+		console.log(chalk.yellow(`  Missing identity files: ${report.missingIdentityFiles.join(", ")}`));
+	}
 
-			const memoryCount = db.prepare("SELECT COUNT(*) as count FROM memories").get() as { count: number };
+	console.log();
+	console.log(chalk.dim(`  Path: ${report.basePath}`));
+	console.log();
+}
 
-			// Conversations table may not exist in older schemas
-			let conversationCount: { count: number } | undefined;
-			if (schemaInfo.hasConversations) {
-				conversationCount = db.prepare("SELECT COUNT(*) as count FROM conversations").get() as
-					| { count: number }
-					| undefined;
-			}
+async function showDoctor(options: { path?: string; json?: boolean }) {
+	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
+	const report = await getStatusReport(basePath);
+	const findings = getDoctorFindings(report);
+	const ok = findings.every((finding) => finding.level !== "error");
 
-			console.log();
-			console.log(chalk.dim(`  Memories: ${memoryCount.count}`));
-			if (conversationCount) {
-				console.log(chalk.dim(`  Conversations: ${conversationCount.count}`));
-			}
+	if (options.json) {
+		console.log(JSON.stringify({ ok, report, findings }, null, 2));
+		return;
+	}
 
-			db.close();
-		} catch {
-			// Database might not have expected schema
+	console.log(signetLogo());
+	console.log(chalk.bold("  Doctor\n"));
+
+	if (findings.length === 0) {
+		console.log(chalk.green("  ✓ Looks healthy"));
+		console.log(chalk.dim("  No obvious local issues detected."));
+		console.log();
+		return;
+	}
+
+	for (const finding of findings) {
+		const icon =
+			finding.level === "error"
+				? chalk.red("✗")
+				: finding.level === "warn"
+					? chalk.yellow("⚠")
+					: chalk.cyan("•");
+		console.log(`  ${icon} ${finding.message}`);
+		if (finding.fix) {
+			console.log(chalk.dim(`    ${finding.fix}`));
 		}
 	}
 
 	console.log();
-	console.log(chalk.dim(`  Path: ${basePath}`));
+	if (ok) {
+		console.log(chalk.yellow("  Signet can run, but there's a bit of duct tape showing."));
+	} else {
+		console.log(chalk.red("  Fix the errors above before trusting the CLI to behave."));
+	}
 	console.log();
 }
 
@@ -4106,6 +4303,25 @@ async function showLogs(options: {
 // ============================================================================
 
 program.name("signet").description("Own your agent. Bring it anywhere.").version(VERSION);
+program.showHelpAfterError();
+program.addHelpText(
+	"after",
+	`
+Examples:
+  signet setup
+    Create or migrate a Signet workspace.
+  signet status
+    Show install, daemon, and memory status.
+  signet doctor
+    Run local health checks and suggest fixes.
+  signet daemon start
+    Start the daemon explicitly.
+  signet remember "Nicholai prefers command-first CLIs"
+    Save a memory from the terminal.
+  signet recall "cli preferences" --json
+    Search memories with machine-readable output.
+`,
+);
 
 program.hook("preAction", async (_thisCommand, actionCommand) => {
 	let current: Command | null = actionCommand;
@@ -4119,6 +4335,10 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 		current = current.parent;
 	}
 
+	if (actionCommand.name() === "signet" || topLevelCommand === "") {
+		return;
+	}
+
 	if (topLevelCommand === "hook" || topLevelCommand === "setup") {
 		return;
 	}
@@ -4129,52 +4349,6 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 
 	await ensureOpenClawPluginPackage(AGENTS_DIR, { silent: true });
 });
-
-program
-	.command("setup")
-	.description("Setup wizard (interactive by default)")
-	.option("-p, --path <path>", "Base path for agent files")
-	.option("--non-interactive", "Run setup without prompts")
-	.option("--name <name>", "Agent name (non-interactive mode)")
-	.option("--description <description>", "Agent description (non-interactive mode)")
-	.option(
-		"--harness <harness>",
-		"Harness to configure (repeatable or comma-separated: claude-code, codex, opencode, openclaw)",
-		collectListOption,
-		[],
-	)
-	.option("--embedding-provider <provider>", "Embedding provider in non-interactive mode (ollama, openai, none)")
-	.option("--embedding-model <model>", "Embedding model in non-interactive mode")
-	.option("--extraction-provider <provider>", "Extraction provider in non-interactive mode (claude-code, codex, ollama, opencode, openrouter, none)")
-	.option("--extraction-model <model>", "Extraction model in non-interactive mode")
-	.option("--search-balance <alpha>", "Search balance alpha in non-interactive mode (0-1)")
-	.option("--openclaw-runtime-path <mode>", "OpenClaw runtime path in non-interactive mode (plugin, legacy)")
-	.option(
-		"--configure-openclaw-workspace",
-		"Patch discovered OpenClaw configs to use the selected setup path in non-interactive mode",
-	)
-	.option("--open-dashboard", "Open dashboard after setup in non-interactive mode")
-	.option("--skip-git", "Skip git initialization and setup commits in non-interactive mode")
-	.action(setupWizard);
-
-program
-	.command("dashboard")
-	.alias("ui")
-	.description("Open the web dashboard")
-	.option("-p, --path <path>", "Base path for agent files")
-	.action(launchDashboard);
-
-program
-	.command("status")
-	.description("Show agent and daemon status")
-	.option("-p, --path <path>", "Base path for agent files")
-	.action(showStatus);
-
-program
-	.command("migrate-schema")
-	.description("Migrate database to unified schema")
-	.option("-p, --path <path>", "Base path for agent files")
-	.action(migrateSchema);
 
 // Daemon action handlers (shared between top-level and subcommand)
 async function doStart(options: { path?: string } = {}) {
@@ -4303,399 +4477,331 @@ async function doRestart(options: { path?: string; openclaw?: boolean } = {}) {
 	}
 }
 
-// signet daemon <command> - grouped daemon commands
-const daemonCmd = program.command("daemon").description("Manage the Signet daemon");
+registerAppCommands(program, {
+	collectListOption,
+	configureAgent,
+	launchDashboard,
+	migrateSchema,
+	setupWizard,
+	showDoctor,
+	showStatus,
+	syncTemplates,
+});
 
-daemonCmd
-	.command("start")
-	.description("Start the daemon")
-	.option("-p, --path <path>", "Base path for agent files")
-	.action(doStart);
+registerDaemonCommands(program, {
+	doRestart,
+	doStart,
+	doStop,
+	showLogs,
+	showStatus,
+});
 
-daemonCmd
-	.command("stop")
-	.description("Stop the daemon")
-	.option("-p, --path <path>", "Base path for agent files")
-	.action(doStop);
+async function syncTemplates() {
+	console.log(signetLogo());
+	const basePath = AGENTS_DIR;
+	const templatesDir = getTemplatesDir();
 
-daemonCmd
-	.command("restart")
-	.description("Restart the daemon")
-	.option("-p, --path <path>", "Base path for agent files")
-	.option("--no-openclaw", "Skip OpenClaw restart prompt")
-	.action(doRestart);
+	if (!existsSync(basePath)) {
+		console.log(chalk.red("  No Signet installation found. Run: signet setup"));
+		return;
+	}
 
-daemonCmd
-	.command("status")
-	.description("Show daemon status")
-	.option("-p, --path <path>", "Base path for agent files")
-	.action(showStatus);
+	console.log(chalk.bold("  Syncing template files...\n"));
 
-daemonCmd
-	.command("logs")
-	.description("View daemon logs")
-	.option("-p, --path <path>", "Base path for agent files")
-	.option("-n, --lines <lines>", "Number of lines to show", "50")
-	.option("-f, --follow", "Follow log output in real-time")
-	.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")
-	.option("-c, --category <category>", "Filter by category (daemon, api, memory, sync, git, watcher)")
-	.action(showLogs);
+	let synced = 0;
 
-// Top-level aliases for convenience (backwards compatible)
-program
-	.command("start")
-	.description("Start the daemon (alias for: signet daemon start)")
-	.option("-p, --path <path>", "Base path for agent files")
-	.action(doStart);
+	const gitignoreSrc = join(templatesDir, "gitignore.template");
+	const gitignoreDest = join(basePath, ".gitignore");
+	if (existsSync(gitignoreSrc) && !existsSync(gitignoreDest)) {
+		copyFileSync(gitignoreSrc, gitignoreDest);
+		console.log(chalk.green("  ✓ .gitignore"));
+		synced++;
+	}
 
-program
-	.command("stop")
-	.description("Stop the daemon (alias for: signet daemon stop)")
-	.option("-p, --path <path>", "Base path for agent files")
-	.action(doStop);
+	const skillSyncResult = syncBuiltinSkills(templatesDir, basePath);
+	for (const skill of skillSyncResult.installed) {
+		console.log(chalk.green(`  ✓ skills/${skill} (installed)`));
+	}
+	for (const skill of skillSyncResult.updated) {
+		console.log(chalk.green(`  ✓ skills/${skill} (updated)`));
+	}
+	synced += skillSyncResult.installed.length + skillSyncResult.updated.length;
 
-program
-	.command("restart")
-	.description("Restart the daemon (alias for: signet daemon restart)")
-	.option("-p, --path <path>", "Base path for agent files")
-	.option("--no-openclaw", "Skip OpenClaw restart prompt")
-	.action(doRestart);
+	const predictor = await syncPredictorBinary(basePath);
+	if (predictor.status === "updated") {
+		console.log(chalk.green(`  ✓ predictor sidecar (${predictor.message})`));
+		synced++;
+	} else if (predictor.status === "current") {
+		console.log(chalk.dim("  predictor sidecar is up to date"));
+	} else if (predictor.status === "skipped") {
+		console.log(chalk.dim(`  predictor sidecar skipped: ${predictor.message}`));
+	} else {
+		console.log(chalk.yellow(`  ⚠ predictor sidecar sync failed: ${predictor.message}`));
+	}
 
-program
-	.command("logs")
-	.description("View daemon logs (alias for: signet daemon logs)")
-	.option("-p, --path <path>", "Base path for agent files")
-	.option("-n, --lines <lines>", "Number of lines to show", "50")
-	.option("-f, --follow", "Follow log output in real-time")
-	.option("-l, --level <level>", "Filter by level (debug, info, warn, error)")
-	.option("-c, --category <category>", "Filter by category (daemon, api, memory, sync, git, watcher)")
-	.action(showLogs);
+	const native = await syncNativeEmbeddingModel(basePath);
+	if (native.status === "updated") {
+		console.log(chalk.green(`  ✓ native embedding model warmed (${native.message})`));
+		synced++;
+	} else if (native.status === "current") {
+		console.log(chalk.dim("  native embedding model is ready"));
+	} else if (native.status === "skipped") {
+		console.log(chalk.dim(`  native embedding warmup skipped: ${native.message}`));
+	} else {
+		console.log(chalk.yellow(`  ⚠ native embedding warmup failed: ${native.message}`));
+	}
 
-program
-	.command("sync")
-	.description("Sync built-in templates and skills")
-	.action(async () => {
-		console.log(signetLogo());
-		const basePath = AGENTS_DIR;
-		const templatesDir = getTemplatesDir();
+	const detectedHarnesses: string[] = [];
+	if (existsSync(join(homedir(), ".claude", "settings.json"))) {
+		detectedHarnesses.push("claude-code");
+	}
+	if (
+		existsSync(join(homedir(), ".config", "signet", "bin", "codex")) ||
+		existsSync(join(homedir(), ".codex", "config.toml"))
+	) {
+		detectedHarnesses.push("codex");
+	}
+	if (existsSync(join(homedir(), ".config", "opencode"))) {
+		detectedHarnesses.push("opencode");
+	}
+	const ocConnector = new OpenClawConnector();
+	if (ocConnector.isInstalled()) {
+		detectedHarnesses.push("openclaw");
+	}
 
-		if (!existsSync(basePath)) {
-			console.log(chalk.red("  No Signet installation found. Run: signet setup"));
-			return;
-		}
-
-		console.log(chalk.bold("  Syncing template files...\n"));
-
-		// Sync template files
-		// Note: gitignore stored as gitignore.template because npm excludes .gitignore
-		let synced = 0;
-
-		const gitignoreSrc = join(templatesDir, "gitignore.template");
-		const gitignoreDest = join(basePath, ".gitignore");
-		if (existsSync(gitignoreSrc) && !existsSync(gitignoreDest)) {
-			copyFileSync(gitignoreSrc, gitignoreDest);
-			console.log(chalk.green(`  ✓ .gitignore`));
+	for (const harness of detectedHarnesses) {
+		try {
+			await configureHarnessHooks(harness, basePath);
+			console.log(chalk.green(`  ✓ hooks re-registered for ${harness}`));
 			synced++;
+		} catch {
+			console.log(chalk.yellow(`  ⚠ hooks re-registration failed for ${harness}`));
 		}
+	}
 
-		const skillSyncResult = syncBuiltinSkills(templatesDir, basePath);
-		for (const skill of skillSyncResult.installed) {
-			console.log(chalk.green(`  ✓ skills/${skill} (installed)`));
-		}
-		for (const skill of skillSyncResult.updated) {
-			console.log(chalk.green(`  ✓ skills/${skill} (updated)`));
-		}
-		synced += skillSyncResult.installed.length + skillSyncResult.updated.length;
+	if (synced === 0) {
+		console.log(chalk.dim("  All built-in templates are up to date"));
+	}
 
-		const predictor = await syncPredictorBinary(basePath);
-		if (predictor.status === "updated") {
-			console.log(chalk.green(`  ✓ predictor sidecar (${predictor.message})`));
-			synced++;
-		} else if (predictor.status === "current") {
-			console.log(chalk.dim("  predictor sidecar is up to date"));
-		} else if (predictor.status === "skipped") {
-			console.log(chalk.dim(`  predictor sidecar skipped: ${predictor.message}`));
-		} else {
-			console.log(chalk.yellow(`  ⚠ predictor sidecar sync failed: ${predictor.message}`));
-		}
+	console.log();
+	console.log(chalk.green("  Done!"));
+}
 
-		const native = await syncNativeEmbeddingModel(basePath);
-		if (native.status === "updated") {
-			console.log(chalk.green(`  ✓ native embedding model warmed (${native.message})`));
-			synced++;
-		} else if (native.status === "current") {
-			console.log(chalk.dim("  native embedding model is ready"));
-		} else if (native.status === "skipped") {
-			console.log(chalk.dim(`  native embedding warmup skipped: ${native.message}`));
-		} else {
-			console.log(chalk.yellow(`  ⚠ native embedding warmup failed: ${native.message}`));
-		}
+async function configureAgent() {
+	console.log(signetLogo());
 
-		// Re-register hooks for detected harnesses
-		const detectedHarnesses: string[] = [];
-		if (existsSync(join(homedir(), ".claude", "settings.json"))) {
-			detectedHarnesses.push("claude-code");
-		}
-		if (existsSync(join(homedir(), ".config", "signet", "bin", "codex")) || existsSync(join(homedir(), ".codex", "config.toml"))) {
-			detectedHarnesses.push("codex");
-		}
-		if (existsSync(join(homedir(), ".config", "opencode"))) {
-			detectedHarnesses.push("opencode");
-		}
-		const ocConnector = new OpenClawConnector();
-		if (ocConnector.isInstalled()) {
-			detectedHarnesses.push("openclaw");
-		}
+	const agentYamlPath = join(AGENTS_DIR, "agent.yaml");
+	if (!existsSync(agentYamlPath)) {
+		console.log(chalk.yellow("  No agent.yaml found. Run `signet setup` first."));
+		return;
+	}
 
-		for (const harness of detectedHarnesses) {
-			try {
-				await configureHarnessHooks(harness, basePath);
-				console.log(chalk.green(`  ✓ hooks re-registered for ${harness}`));
-				synced++;
-			} catch {
-				console.log(chalk.yellow(`  ⚠ hooks re-registration failed for ${harness}`));
-			}
-		}
+	const existingYaml = readFileSync(agentYamlPath, "utf-8");
+	const getYamlValue = (key: string, fallback: string) => {
+		const match = existingYaml.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"));
+		return match ? match[1].trim().replace(/^["']|["']$/g, "") : fallback;
+	};
 
-		if (synced === 0) {
-			console.log(chalk.dim("  All built-in templates are up to date"));
-		}
+	console.log(chalk.bold("  Configure your agent\n"));
+
+	while (true) {
+		const section = await select({
+			message: "What would you like to configure?",
+			choices: [
+				{ value: "agent", name: "👤 Agent identity (name, description)" },
+				{ value: "harnesses", name: "[link] Harnesses (AI platforms)" },
+				{ value: "embedding", name: "🧠 Embedding provider" },
+				{ value: "search", name: "🔍 Search settings" },
+				{ value: "memory", name: "💾 Memory settings" },
+				{ value: "view", name: "📄 View current config" },
+				{ value: "done", name: "✓ Done" },
+			],
+		});
+
+		if (section === "done") break;
 
 		console.log();
-		console.log(chalk.green("  Done!"));
-	});
 
-program
-	.command("config")
-	.description("Configure agent settings")
-	.action(async () => {
-		console.log(signetLogo());
-
-		const agentYamlPath = join(AGENTS_DIR, "agent.yaml");
-		if (!existsSync(agentYamlPath)) {
-			console.log(chalk.yellow("  No agent.yaml found. Run `signet setup` first."));
-			return;
+		if (section === "view") {
+			console.log(chalk.dim("  Current agent.yaml:\n"));
+			console.log(
+				existingYaml
+					.split("\n")
+					.map((line) => chalk.dim(`  ${line}`))
+					.join("\n"),
+			);
+			console.log();
+			continue;
 		}
 
-		// Parse existing config
-		const existingYaml = readFileSync(agentYamlPath, "utf-8");
-		// Simple YAML parsing for our known structure
-		const getYamlValue = (key: string, fallback: string) => {
-			const match = existingYaml.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"));
-			return match ? match[1].trim().replace(/^["']|["']$/g, "") : fallback;
-		};
+		if (section === "agent") {
+			const name = await input({
+				message: "Agent name:",
+				default: getYamlValue("name", "My Agent"),
+			});
+			const description = await input({
+				message: "Description:",
+				default: getYamlValue("description", "Personal AI assistant"),
+			});
 
-		console.log(chalk.bold("  Configure your agent\n"));
+			let updatedYaml = existingYaml;
+			updatedYaml = updatedYaml.replace(/^(\s*name:)\s*.+$/m, `$1 "${name}"`);
+			updatedYaml = updatedYaml.replace(/^(\s*description:)\s*.+$/m, `$1 "${description}"`);
+			updatedYaml = updatedYaml.replace(/^(\s*updated:)\s*.+$/m, `$1 "${new Date().toISOString()}"`);
 
-		while (true) {
-			const section = await select({
-				message: "What would you like to configure?",
+			writeFileSync(agentYamlPath, updatedYaml);
+			console.log(chalk.green("  ✓ Agent identity updated"));
+		}
+
+		if (section === "harnesses") {
+			const harnesses = await checkbox({
+				message: "Select AI platforms:",
 				choices: [
-					{ value: "agent", name: "👤 Agent identity (name, description)" },
-					{ value: "harnesses", name: "[link] Harnesses (AI platforms)" },
-					{ value: "embedding", name: "🧠 Embedding provider" },
-					{ value: "search", name: "🔍 Search settings" },
-					{ value: "memory", name: "💾 Memory settings" },
-					{ value: "view", name: "📄 View current config" },
-					{ value: "done", name: "✓ Done" },
+					{ value: "claude-code", name: "Claude Code" },
+					{ value: "codex", name: "Codex" },
+					{ value: "opencode", name: "OpenCode" },
+					{ value: "openclaw", name: "OpenClaw" },
+					{ value: "cursor", name: "Cursor" },
+					{ value: "windsurf", name: "Windsurf" },
 				],
 			});
 
-			if (section === "done") break;
+			const harnessYaml = harnesses.map((harness) => `  - ${harness}`).join("\n");
+			const updatedYaml = existingYaml.replace(
+				/^harnesses:\n( {2}- .+\n)+/m,
+				`harnesses:\n${harnessYaml}\n`,
+			);
 
-			console.log();
+			writeFileSync(agentYamlPath, updatedYaml);
+			console.log(chalk.green("  ✓ Harnesses updated"));
 
-			if (section === "view") {
-				console.log(chalk.dim("  Current agent.yaml:\n"));
-				console.log(
-					existingYaml
-						.split("\n")
-						.map((l) => chalk.dim("  " + l))
-						.join("\n"),
-				);
-				console.log();
-				continue;
-			}
+			const regen = await confirm({
+				message: "Regenerate harness hook configurations?",
+				default: true,
+			});
 
-			if (section === "agent") {
-				const name = await input({
-					message: "Agent name:",
-					default: getYamlValue("name", "My Agent"),
-				});
-				const description = await input({
-					message: "Description:",
-					default: getYamlValue("description", "Personal AI assistant"),
-				});
-
-				// Update the YAML
-				let updatedYaml = existingYaml;
-				updatedYaml = updatedYaml.replace(/^(\s*name:)\s*.+$/m, `$1 "${name}"`);
-				updatedYaml = updatedYaml.replace(/^(\s*description:)\s*.+$/m, `$1 "${description}"`);
-				updatedYaml = updatedYaml.replace(/^(\s*updated:)\s*.+$/m, `$1 "${new Date().toISOString()}"`);
-
-				writeFileSync(agentYamlPath, updatedYaml);
-				console.log(chalk.green("  ✓ Agent identity updated"));
-			}
-
-			if (section === "harnesses") {
-				const harnesses = await checkbox({
-					message: "Select AI platforms:",
-					choices: [
-						{ value: "claude-code", name: "Claude Code" },
-						{ value: "codex", name: "Codex" },
-						{ value: "opencode", name: "OpenCode" },
-						{ value: "openclaw", name: "OpenClaw" },
-						{ value: "cursor", name: "Cursor" },
-						{ value: "windsurf", name: "Windsurf" },
-					],
-				});
-
-				// Update harnesses in YAML
-				const harnessYaml = harnesses.map((h) => `  - ${h}`).join("\n");
-				const updatedYaml = existingYaml.replace(/^harnesses:\n( {2}- .+\n)+/m, `harnesses:\n${harnessYaml}\n`);
-
-				writeFileSync(agentYamlPath, updatedYaml);
-				console.log(chalk.green("  ✓ Harnesses updated"));
-
-				// Offer to regenerate harness configs
-				const regen = await confirm({
-					message: "Regenerate harness hook configurations?",
-					default: true,
-				});
-
-				if (regen) {
-					for (const harness of harnesses) {
-						try {
-							await configureHarnessHooks(harness, AGENTS_DIR);
-							console.log(chalk.dim(`    ✓ ${harness}`));
-						} catch {
-							console.log(chalk.yellow(`    ⚠ ${harness} failed`));
-						}
+			if (regen) {
+				for (const harness of harnesses) {
+					try {
+						await configureHarnessHooks(harness, AGENTS_DIR);
+						console.log(chalk.dim(`    ✓ ${harness}`));
+					} catch {
+						console.log(chalk.yellow(`    ⚠ ${harness} failed`));
 					}
 				}
 			}
-
-			if (section === "embedding") {
-				const provider = await select({
-					message: "Embedding provider:",
-					choices: [
-						{ value: "ollama", name: "Ollama (local)" },
-						{ value: "openai", name: "OpenAI API" },
-						{ value: "none", name: "Disable embeddings" },
-					],
-				});
-
-				if (provider !== "none") {
-					let model = "nomic-embed-text";
-					let dimensions = 768;
-
-					if (provider === "ollama") {
-						const m = await select({
-							message: "Model:",
-							choices: [
-								{ value: "nomic-embed-text", name: "nomic-embed-text (768d)" },
-								{ value: "all-minilm", name: "all-minilm (384d)" },
-								{
-									value: "mxbai-embed-large",
-									name: "mxbai-embed-large (1024d)",
-								},
-							],
-						});
-						model = m;
-						dimensions = m === "all-minilm" ? 384 : m === "mxbai-embed-large" ? 1024 : 768;
-					} else {
-						const m = await select({
-							message: "Model:",
-							choices: [
-								{
-									value: "text-embedding-3-small",
-									name: "text-embedding-3-small (1536d)",
-								},
-								{
-									value: "text-embedding-3-large",
-									name: "text-embedding-3-large (3072d)",
-								},
-							],
-						});
-						model = m;
-						dimensions = m === "text-embedding-3-large" ? 3072 : 1536;
-					}
-
-					// Update embedding section
-					let updatedYaml = existingYaml;
-					if (existingYaml.includes("embedding:")) {
-						updatedYaml = updatedYaml.replace(
-							/^embedding:\n( {2}.+\n)+/m,
-							`embedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
-						);
-					} else {
-						// Add embedding section after harnesses
-						updatedYaml = updatedYaml.replace(
-							/^(harnesses:\n( {2}- .+\n)+)/m,
-							`$1\nembedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
-						);
-					}
-					writeFileSync(agentYamlPath, updatedYaml);
-				}
-
-				console.log(chalk.green("  ✓ Embedding settings updated"));
-			}
-
-			if (section === "search") {
-				const alpha = await select({
-					message: "Search balance:",
-					choices: [
-						{ value: "0.7", name: "Balanced (70% semantic, 30% keyword)" },
-						{ value: "0.9", name: "Semantic-heavy (90/10)" },
-						{ value: "0.5", name: "Equal (50/50)" },
-						{ value: "0.3", name: "Keyword-heavy (30/70)" },
-					],
-				});
-
-				const topK = await input({
-					message: "Candidates per source (top_k):",
-					default: getYamlValue("top_k", "20"),
-				});
-
-				const minScore = await input({
-					message: "Minimum score threshold:",
-					default: getYamlValue("min_score", "0.3"),
-				});
-
-				let updatedYaml = existingYaml;
-				updatedYaml = updatedYaml.replace(/^(\s*alpha:)\s*.+$/m, `$1 ${alpha}`);
-				updatedYaml = updatedYaml.replace(/^(\s*top_k:)\s*.+$/m, `$1 ${topK}`);
-				updatedYaml = updatedYaml.replace(/^(\s*min_score:)\s*.+$/m, `$1 ${minScore}`);
-
-				writeFileSync(agentYamlPath, updatedYaml);
-				console.log(chalk.green("  ✓ Search settings updated"));
-			}
-
-			if (section === "memory") {
-				const sessionBudget = await input({
-					message: "Session context budget (characters):",
-					default: getYamlValue("session_budget", "2000"),
-				});
-
-				const decayRate = await input({
-					message: "Importance decay rate per day (0-1):",
-					default: getYamlValue("decay_rate", "0.95"),
-				});
-
-				let updatedYaml = existingYaml;
-				updatedYaml = updatedYaml.replace(/^(\s*session_budget:)\s*.+$/m, `$1 ${sessionBudget}`);
-				updatedYaml = updatedYaml.replace(/^(\s*decay_rate:)\s*.+$/m, `$1 ${decayRate}`);
-
-				writeFileSync(agentYamlPath, updatedYaml);
-				console.log(chalk.green("  ✓ Memory settings updated"));
-			}
-
-			console.log();
 		}
 
-		console.log(chalk.dim("  Configuration saved to agent.yaml"));
+		if (section === "embedding") {
+			const provider = await select({
+				message: "Embedding provider:",
+				choices: [
+					{ value: "ollama", name: "Ollama (local)" },
+					{ value: "openai", name: "OpenAI API" },
+					{ value: "none", name: "Disable embeddings" },
+				],
+			});
+
+			if (provider !== "none") {
+				let model = "nomic-embed-text";
+				let dimensions = 768;
+
+				if (provider === "ollama") {
+					const selected = await select({
+						message: "Model:",
+						choices: [
+							{ value: "nomic-embed-text", name: "nomic-embed-text (768d)" },
+							{ value: "all-minilm", name: "all-minilm (384d)" },
+							{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d)" },
+						],
+					});
+					model = selected;
+					dimensions = selected === "all-minilm" ? 384 : selected === "mxbai-embed-large" ? 1024 : 768;
+				} else {
+					const selected = await select({
+						message: "Model:",
+						choices: [
+							{ value: "text-embedding-3-small", name: "text-embedding-3-small (1536d)" },
+							{ value: "text-embedding-3-large", name: "text-embedding-3-large (3072d)" },
+						],
+					});
+					model = selected;
+					dimensions = selected === "text-embedding-3-large" ? 3072 : 1536;
+				}
+
+				let updatedYaml = existingYaml;
+				if (existingYaml.includes("embedding:")) {
+					updatedYaml = updatedYaml.replace(
+						/^embedding:\n( {2}.+\n)+/m,
+						`embedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
+					);
+				} else {
+					updatedYaml = updatedYaml.replace(
+						/^(harnesses:\n( {2}- .+\n)+)/m,
+						`$1\nembedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
+					);
+				}
+				writeFileSync(agentYamlPath, updatedYaml);
+			}
+
+			console.log(chalk.green("  ✓ Embedding settings updated"));
+		}
+
+		if (section === "search") {
+			const alpha = await select({
+				message: "Search balance:",
+				choices: [
+					{ value: "0.7", name: "Balanced (70% semantic, 30% keyword)" },
+					{ value: "0.9", name: "Semantic-heavy (90/10)" },
+					{ value: "0.5", name: "Equal (50/50)" },
+					{ value: "0.3", name: "Keyword-heavy (30/70)" },
+				],
+			});
+
+			const topK = await input({
+				message: "Candidates per source (top_k):",
+				default: getYamlValue("top_k", "20"),
+			});
+
+			const minScore = await input({
+				message: "Minimum score threshold:",
+				default: getYamlValue("min_score", "0.3"),
+			});
+
+			let updatedYaml = existingYaml;
+			updatedYaml = updatedYaml.replace(/^(\s*alpha:)\s*.+$/m, `$1 ${alpha}`);
+			updatedYaml = updatedYaml.replace(/^(\s*top_k:)\s*.+$/m, `$1 ${topK}`);
+			updatedYaml = updatedYaml.replace(/^(\s*min_score:)\s*.+$/m, `$1 ${minScore}`);
+
+			writeFileSync(agentYamlPath, updatedYaml);
+			console.log(chalk.green("  ✓ Search settings updated"));
+		}
+
+		if (section === "memory") {
+			const sessionBudget = await input({
+				message: "Session context budget (characters):",
+				default: getYamlValue("session_budget", "2000"),
+			});
+
+			const decayRate = await input({
+				message: "Importance decay rate per day (0-1):",
+				default: getYamlValue("decay_rate", "0.95"),
+			});
+
+			let updatedYaml = existingYaml;
+			updatedYaml = updatedYaml.replace(/^(\s*session_budget:)\s*.+$/m, `$1 ${sessionBudget}`);
+			updatedYaml = updatedYaml.replace(/^(\s*decay_rate:)\s*.+$/m, `$1 ${decayRate}`);
+
+			writeFileSync(agentYamlPath, updatedYaml);
+			console.log(chalk.green("  ✓ Memory settings updated"));
+		}
+
 		console.log();
-	});
+	}
+
+	console.log(chalk.dim("  Configuration saved to agent.yaml"));
+	console.log();
+}
 
 // ============================================================================
 // signet secret - Secrets management
@@ -5500,235 +5606,10 @@ skillCmd
 		console.log(data.content);
 	});
 
-// ============================================================================
-// signet remember / recall - Quick memory operations
-// ============================================================================
-
-// signet remember <content>
-program
-	.command("remember <content>")
-	.description("Save a memory (auto-embedded for vector search)")
-	.option("-w, --who <who>", "Who is remembering", "user")
-	.option("-t, --tags <tags>", "Comma-separated tags")
-	.option("-i, --importance <n>", "Importance (0-1)", Number.parseFloat, 0.7)
-	.option("--critical", "Mark as critical (pinned)", false)
-	.action(async (content: string, options) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const spinner = ora("Saving memory...").start();
-
-		const { ok, data } = await secretApiCall("POST", "/api/memory/remember", {
-			content,
-			who: options.who,
-			tags: options.tags,
-			importance: options.importance,
-			pinned: options.critical,
-		});
-
-		if (!ok || (data as { error?: string }).error) {
-			spinner.fail((data as { error?: string }).error || "Failed to save memory");
-			process.exit(1);
-		}
-
-		const result = data as {
-			id: string;
-			type: string;
-			tags?: string;
-			pinned: boolean;
-			embedded: boolean;
-		};
-
-		const embedStatus = result.embedded ? chalk.dim(" (embedded)") : chalk.yellow(" (no embedding)");
-		spinner.succeed(`Saved memory: ${chalk.cyan(result.id)}${embedStatus}`);
-
-		if (result.pinned) {
-			console.log(chalk.dim("  Marked as critical"));
-		}
-		if (result.tags) {
-			console.log(chalk.dim(`  Tags: ${result.tags}`));
-		}
-	});
-
-// signet recall <query>
-program
-	.command("recall <query>")
-	.description("Search memories using hybrid (vector + keyword) search")
-	.option("-l, --limit <n>", "Max results", Number.parseInt, 10)
-	.option("-t, --type <type>", "Filter by type")
-	.option("--tags <tags>", "Filter by tags (comma-separated)")
-	.option("--who <who>", "Filter by who")
-	.option("--since <date>", "Only memories created after this date (ISO or YYYY-MM-DD)")
-	.option("--until <date>", "Only memories created before this date (ISO or YYYY-MM-DD)")
-	.option("--json", "Output as JSON")
-	.action(async (query: string, options) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const spinner = ora("Searching memories...").start();
-
-		const { ok, data } = await secretApiCall("POST", "/api/memory/recall", {
-			query,
-			limit: options.limit,
-			type: options.type,
-			tags: options.tags,
-			who: options.who,
-			since: options.since,
-			until: options.until,
-		});
-
-		if (!ok || (data as { error?: string }).error) {
-			spinner.fail((data as { error?: string }).error || "Search failed");
-			process.exit(1);
-		}
-
-		spinner.stop();
-
-		const result = data as {
-			results: Array<{
-				content: string;
-				score: number;
-				source: string;
-				type: string;
-				tags?: string;
-				pinned: boolean;
-				who: string;
-				created_at: string;
-			}>;
-			query: string;
-			method: string;
-		};
-
-		if (options.json) {
-			console.log(JSON.stringify(result.results, null, 2));
-			return;
-		}
-
-		if (result.results.length === 0) {
-			console.log(chalk.dim("  No memories found"));
-			console.log(chalk.dim("  Try a different query or add memories with `signet remember`"));
-			return;
-		}
-
-		console.log(chalk.bold(`\n  Found ${result.results.length} memories:\n`));
-
-		for (const r of result.results) {
-			const date = r.created_at.slice(0, 10);
-			const score = chalk.dim(`[${(r.score * 100).toFixed(0)}%]`);
-			const source = chalk.dim(`(${r.source})`);
-			const critical = r.pinned ? chalk.red("★") : "";
-			const tags = r.tags ? chalk.dim(` [${r.tags}]`) : "";
-
-			// Truncate long content for display
-			const displayContent = r.content.length > 120 ? r.content.slice(0, 117) + "..." : r.content;
-
-			console.log(`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tags}`);
-			console.log(chalk.dim(`      by ${r.who} · ${r.type} · ${source}`));
-		}
-		console.log();
-	});
-
-// ============================================================================
-// signet embed - Embedding audit and backfill
-// ============================================================================
-
-const embedCmd = program.command("embed").description("Embedding management (audit, backfill)");
-
-embedCmd
-	.command("audit")
-	.description("Check embedding coverage for memories")
-	.option("--json", "Output as JSON")
-	.action(async (options) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const spinner = ora("Checking embedding coverage...").start();
-
-		const { ok, data } = await secretApiCall("GET", "/api/repair/embedding-gaps");
-
-		if (!ok || (data as { error?: string }).error) {
-			spinner.fail((data as { error?: string }).error || "Audit failed");
-			process.exit(1);
-		}
-
-		spinner.stop();
-
-		const stats = data as {
-			total: number;
-			unembedded: number;
-			coverage: string;
-		};
-
-		if (options.json) {
-			console.log(JSON.stringify(stats, null, 2));
-			return;
-		}
-
-		const embedded = stats.total - stats.unembedded;
-		const coverageColor =
-			stats.unembedded === 0 ? chalk.green : stats.unembedded > stats.total * 0.3 ? chalk.red : chalk.yellow;
-
-		console.log(chalk.bold("\n  Embedding Coverage Audit\n"));
-		console.log(`  Total memories:    ${chalk.cyan(stats.total)}`);
-		console.log(`  Embedded:          ${chalk.green(embedded)}`);
-		console.log(`  Missing:           ${stats.unembedded > 0 ? chalk.red(stats.unembedded) : chalk.green(0)}`);
-		console.log(`  Coverage:          ${coverageColor(stats.coverage)}`);
-		console.log();
-
-		if (stats.unembedded > 0) {
-			console.log(chalk.dim("  Run `signet embed backfill` to generate missing embeddings"));
-			console.log(chalk.dim("  Run `signet embed backfill --dry-run` to preview without changes"));
-			console.log();
-		}
-	});
-
-embedCmd
-	.command("backfill")
-	.description("Generate embeddings for memories that are missing them")
-	.option("--dry-run", "Preview what would be embedded without making changes")
-	.option("--batch-size <n>", "Number of memories to embed per batch", Number.parseInt, 50)
-	.option("--json", "Output as JSON")
-	.action(async (options) => {
-		if (!(await ensureDaemonForSecrets())) return;
-
-		const spinner = ora(options.dryRun ? "Checking missing embeddings..." : "Backfilling embeddings...").start();
-
-		const { ok, data } = await secretApiCall("POST", "/api/repair/re-embed", {
-			batchSize: options.batchSize,
-			dryRun: !!options.dryRun,
-		});
-
-		if (!ok || (data as { error?: string }).error) {
-			spinner.fail((data as { error?: string }).error || "Backfill failed");
-			process.exit(1);
-		}
-
-		spinner.stop();
-
-		const result = data as {
-			action: string;
-			success: boolean;
-			affected: number;
-			message: string;
-		};
-
-		if (options.json) {
-			console.log(JSON.stringify(result, null, 2));
-			return;
-		}
-
-		if (result.success) {
-			if (options.dryRun) {
-				console.log(chalk.bold("\n  Dry Run Results\n"));
-			} else {
-				console.log(chalk.bold("\n  Backfill Results\n"));
-			}
-			console.log(`  ${result.message}`);
-			if (!options.dryRun && result.affected > 0) {
-				console.log(chalk.dim("\n  Run `signet embed audit` to check updated coverage"));
-			}
-		} else {
-			console.log(chalk.yellow(`\n  ${result.message}`));
-		}
-		console.log();
-	});
+registerMemoryCommands(program, {
+	ensureDaemonForSecrets,
+	secretApiCall,
+});
 
 // ============================================================================
 // signet export / import - Portable agent bundles
@@ -6294,505 +6175,22 @@ hookCmd
 		}
 	});
 
-// ============================================================================
-// Update Commands
-// ============================================================================
-
-const updateCmd = program.command("update").description("Check, install, and manage auto-updates");
-
 const MIN_AUTO_UPDATE_INTERVAL = 300;
 const MAX_AUTO_UPDATE_INTERVAL = 604800;
-
-// signet update check
-updateCmd
-	.command("check")
-	.description("Check for available updates")
-	.option("-f, --force", "Force check (ignore cache)")
-	.action(async (options) => {
-		const spinner = ora("Checking for updates...").start();
-
-		const data = await fetchFromDaemon<{
-			currentVersion?: string;
-			latestVersion?: string;
-			updateAvailable?: boolean;
-			releaseUrl?: string;
-			releaseNotes?: string;
-			publishedAt?: string;
-			checkError?: string;
-			cached?: boolean;
-			restartRequired?: boolean;
-			pendingVersion?: string;
-		}>(`/api/update/check${options.force ? "?force=true" : ""}`);
-
-		if (!data) {
-			spinner.fail("Could not connect to daemon");
-			return;
-		}
-
-		if (data?.checkError) {
-			spinner.warn("Could not fully check for updates");
-			console.log(chalk.dim(`  Error: ${data.checkError}`));
-			if (!data.restartRequired) {
-				return;
-			}
-		}
-
-		if (data?.updateAvailable) {
-			spinner.succeed(chalk.green(`Update available: v${data.latestVersion}`));
-			console.log(chalk.dim(`  Current: v${data.currentVersion}`));
-			if (data.restartRequired && data.pendingVersion) {
-				console.log(chalk.dim(`  Pending restart: v${data.pendingVersion} already installed`));
-			}
-			if (data.publishedAt) {
-				console.log(chalk.dim(`  Released: ${new Date(data.publishedAt).toLocaleDateString()}`));
-			}
-			if (data.releaseUrl) {
-				console.log(chalk.dim(`  ${data.releaseUrl}`));
-			}
-			console.log(chalk.cyan("\n  Run: signet update install"));
-		} else if (data.restartRequired) {
-			spinner.succeed(
-				chalk.yellow(`Update installed: v${data.pendingVersion || data.latestVersion}. Restart required.`),
-			);
-			console.log(chalk.cyan("\n  Restart daemon to apply: signet daemon restart"));
-		} else {
-			spinner.succeed("Already up to date");
-			console.log(chalk.dim(`  Version: v${data?.currentVersion}`));
-		}
-	});
-
-// signet update install
-updateCmd
-	.command("install")
-	.description("Install the latest update")
-	.action(async () => {
-		// First check if update available
-		const check = await fetchFromDaemon<{
-			updateAvailable?: boolean;
-			latestVersion?: string;
-			restartRequired?: boolean;
-			pendingVersion?: string;
-		}>("/api/update/check?force=true");
-
-		if (!check) {
-			console.error(chalk.red("Could not connect to daemon"));
-			process.exit(1);
-		}
-
-		if (check.restartRequired && !check.updateAvailable) {
-			console.log(chalk.yellow(`✓ Update already installed (v${check.pendingVersion || check.latestVersion})`));
-			console.log(chalk.cyan("  Restart daemon to apply: signet daemon restart"));
-			return;
-		}
-
-		if (!check?.updateAvailable) {
-			console.log(chalk.green("✓ Already running the latest version"));
-			return;
-		}
-
-		console.log(chalk.cyan(`Installing v${check.latestVersion}...`));
-		const spinner = ora("Downloading and installing...").start();
-
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			message?: string;
-			output?: string;
-			restartRequired?: boolean;
-			installedVersion?: string;
-		}>("/api/update/run", {
-			method: "POST",
-			timeout: 120_000,
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ targetVersion: check.latestVersion }),
-		});
-
-		if (!data?.success) {
-			spinner.fail(data?.message || "Update failed");
-			if (data?.output) {
-				console.log(chalk.dim(data.output));
-			}
-			process.exit(1);
-		}
-
-		spinner.succeed(data.message || "Update installed");
-
-		// Auto-sync skills and re-register hooks after update
-		try {
-			const templatesDir = getTemplatesDir();
-			const skillResult = syncBuiltinSkills(templatesDir, AGENTS_DIR);
-			const totalSynced = skillResult.installed.length + skillResult.updated.length;
-			if (totalSynced > 0) {
-				console.log(chalk.green(`  ✓ ${totalSynced} skills synced`));
-			}
-
-			const harnesses: string[] = [];
-			if (existsSync(join(homedir(), ".claude", "settings.json"))) {
-				harnesses.push("claude-code");
-			}
-			if (existsSync(join(homedir(), ".config", "signet", "bin", "codex")) || existsSync(join(homedir(), ".codex", "config.toml"))) {
-				harnesses.push("codex");
-			}
-			if (existsSync(join(homedir(), ".config", "opencode"))) {
-				harnesses.push("opencode");
-			}
-			const oc = new OpenClawConnector();
-			if (oc.isInstalled()) {
-				harnesses.push("openclaw");
-			}
-
-			for (const h of harnesses) {
-				try {
-					await configureHarnessHooks(h, AGENTS_DIR);
-					console.log(chalk.green(`  ✓ hooks re-registered for ${h}`));
-				} catch {
-					// Non-fatal
-				}
-			}
-		} catch {
-			// Non-fatal: skill sync after update is best-effort
-		}
-
-		if (data.restartRequired) {
-			console.log(chalk.cyan("\n  Restart daemon to apply: signet daemon restart"));
-		}
-	});
-
-// signet update status
-updateCmd
-	.command("status")
-	.description("Show auto-update settings and status")
-	.action(async () => {
-		const data = await fetchFromDaemon<{
-			autoInstall?: boolean;
-			checkInterval?: number;
-			pendingRestartVersion?: string;
-			lastAutoUpdateAt?: string;
-			lastAutoUpdateError?: string;
-			updateInProgress?: boolean;
-		}>("/api/update/config");
-
-		if (!data) {
-			console.error(chalk.red("Failed to get update status"));
-			process.exit(1);
-		}
-
-		console.log(chalk.bold("Update Status\n"));
-		console.log(`  ${chalk.dim("Auto-install:")} ${data.autoInstall ? chalk.green("enabled") : chalk.dim("disabled")}`);
-		console.log(`  ${chalk.dim("Interval:")}     every ${data.checkInterval || "?"}s`);
-		console.log(`  ${chalk.dim("In progress:")}  ${data.updateInProgress ? chalk.yellow("yes") : chalk.dim("no")}`);
-
-		if (data.pendingRestartVersion) {
-			console.log(`  ${chalk.dim("Pending:")}      v${data.pendingRestartVersion} (restart required)`);
-		}
-
-		if (data.lastAutoUpdateAt) {
-			console.log(`  ${chalk.dim("Last success:")} ${new Date(data.lastAutoUpdateAt).toLocaleString()}`);
-		}
-
-		if (data.lastAutoUpdateError) {
-			console.log(`  ${chalk.dim("Last error:")}   ${chalk.yellow(data.lastAutoUpdateError)}`);
-		}
-	});
-
-// signet update enable
-updateCmd
-	.command("enable")
-	.description("Enable unattended auto-update installs")
-	.option(
-		"-i, --interval <seconds>",
-		`Check interval in seconds (${MIN_AUTO_UPDATE_INTERVAL}-${MAX_AUTO_UPDATE_INTERVAL})`,
-		"21600",
-	)
-	.action(async (options) => {
-		const interval = Number.parseInt(options.interval, 10);
-		if (!Number.isFinite(interval) || interval < MIN_AUTO_UPDATE_INTERVAL || interval > MAX_AUTO_UPDATE_INTERVAL) {
-			console.error(
-				chalk.red(`Interval must be between ${MIN_AUTO_UPDATE_INTERVAL} and ${MAX_AUTO_UPDATE_INTERVAL} seconds`),
-			);
-			process.exit(1);
-		}
-
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			config?: { autoInstall: boolean; checkInterval: number };
-			persisted?: boolean;
-		}>("/api/update/config", {
-			method: "POST",
-			body: JSON.stringify({
-				autoInstall: true,
-				checkInterval: interval,
-			}),
-		});
-
-		if (!data?.success) {
-			console.error(chalk.red("Failed to enable auto-update"));
-			process.exit(1);
-		}
-
-		console.log(chalk.green("✓ Auto-update enabled"));
-		console.log(chalk.dim(`  Interval: every ${interval}s`));
-		console.log(chalk.dim("  Updates install in the background"));
-		if (data.persisted === false) {
-			console.log(chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"));
-		}
-	});
-
-// signet update disable
-updateCmd
-	.command("disable")
-	.description("Disable unattended auto-update installs")
-	.action(async () => {
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			persisted?: boolean;
-		}>("/api/update/config", {
-			method: "POST",
-			body: JSON.stringify({ autoInstall: false }),
-		});
-
-		if (!data?.success) {
-			console.error(chalk.red("Failed to disable auto-update"));
-			process.exit(1);
-		}
-
-		console.log(chalk.green("✓ Auto-update disabled"));
-		if (data.persisted === false) {
-			console.log(chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"));
-		}
-	});
-
-// Shortcut: signet update (same as signet update check)
-updateCmd.action(async () => {
-	const spinner = ora("Checking for updates...").start();
-
-	const data = await fetchFromDaemon<{
-		currentVersion?: string;
-		latestVersion?: string;
-		updateAvailable?: boolean;
-		releaseUrl?: string;
-		checkError?: string;
-		restartRequired?: boolean;
-		pendingVersion?: string;
-	}>("/api/update/check?force=true");
-
-	if (!data) {
-		spinner.fail("Could not connect to daemon");
-		return;
-	}
-
-	if (data?.checkError) {
-		spinner.warn("Could not fully check for updates");
-		console.log(chalk.dim(`  Error: ${data.checkError}`));
-		if (!data.restartRequired) {
-			return;
-		}
-	}
-
-	if (data?.updateAvailable) {
-		spinner.succeed(chalk.green(`Update available: v${data.latestVersion}`));
-		console.log(chalk.dim(`  Current: v${data.currentVersion}`));
-		console.log(chalk.cyan("\n  Run: signet update install"));
-	} else if (data.restartRequired) {
-		spinner.succeed(chalk.yellow(`Update installed: v${data.pendingVersion || data.latestVersion}. Restart required.`));
-		console.log(chalk.cyan("\n  Run: signet daemon restart"));
-	} else {
-		spinner.succeed("Already up to date");
-		console.log(chalk.dim(`  Version: v${data?.currentVersion}`));
-	}
+registerUpdateCommands(program, {
+	AGENTS_DIR,
+	MAX_AUTO_UPDATE_INTERVAL,
+	MIN_AUTO_UPDATE_INTERVAL,
+	configureHarnessHooks,
+	fetchFromDaemon,
+	getTemplatesDir,
+	isOpenClawInstalled: () => new OpenClawConnector().isInstalled(),
+	syncBuiltinSkills,
 });
 
-// ============================================================================
-// Git Sync Commands
-// ============================================================================
-
-const gitCmd = program.command("git").description("Git sync management");
-
-// signet git status
-gitCmd
-	.command("status")
-	.description("Show git sync status")
-	.action(async () => {
-		const data = await fetchFromDaemon<{
-			isRepo?: boolean;
-			branch?: string;
-			remote?: string;
-			hasCredentials?: boolean;
-			authMethod?: string;
-			autoSync?: boolean;
-			lastSync?: string;
-			uncommittedChanges?: number;
-			unpushedCommits?: number;
-			unpulledCommits?: number;
-		}>("/api/git/status");
-
-		if (!data) {
-			console.error(chalk.red("Failed to get git status"));
-			process.exit(1);
-		}
-
-		console.log(chalk.bold("Git Status\n"));
-
-		if (!data.isRepo) {
-			console.log(chalk.yellow("  Not a git repository"));
-			console.log(chalk.dim("  Run: cd ~/.agents && git init"));
-			return;
-		}
-
-		console.log(`  ${chalk.dim("Branch:")}     ${data.branch || "unknown"}`);
-		console.log(`  ${chalk.dim("Remote:")}     ${data.remote || "none"}`);
-
-		// Show auth status with context-appropriate messaging
-		if (data.authMethod === "no-remote") {
-			console.log(`  ${chalk.dim("Auth:")}       ${chalk.dim("no remote configured")}`);
-		} else if (data.hasCredentials) {
-			console.log(`  ${chalk.dim("Auth:")}       ${chalk.green(data.authMethod || "configured")}`);
-		} else {
-			console.log(`  ${chalk.dim("Auth:")}       ${chalk.yellow("no credentials")}`);
-		}
-
-		console.log(`  ${chalk.dim("Auto-sync:")}  ${data.autoSync ? chalk.green("enabled") : chalk.dim("disabled")}`);
-
-		if (data.lastSync) {
-			console.log(`  ${chalk.dim("Last sync:")}  ${data.lastSync}`);
-		}
-
-		if (data.uncommittedChanges !== undefined && data.uncommittedChanges > 0) {
-			console.log(`  ${chalk.dim("Uncommitted:")} ${chalk.yellow(data.uncommittedChanges + " changes")}`);
-		}
-
-		if (data.unpushedCommits !== undefined && data.unpushedCommits > 0) {
-			console.log(`  ${chalk.dim("Unpushed:")}   ${chalk.cyan(data.unpushedCommits + " commits")}`);
-		}
-
-		if (data.unpulledCommits !== undefined && data.unpulledCommits > 0) {
-			console.log(`  ${chalk.dim("Unpulled:")}   ${chalk.cyan(data.unpulledCommits + " commits")}`);
-		}
-
-		// Context-appropriate help message
-		if (data.authMethod === "no-remote") {
-			console.log(chalk.dim("\n  To enable sync: git -C ~/.agents remote add origin <url>"));
-		} else if (!data.hasCredentials) {
-			console.log(chalk.dim("\n  To enable sync: gh auth login, or signet secret put GITHUB_TOKEN"));
-		}
-	});
-
-// signet git sync
-gitCmd
-	.command("sync")
-	.description("Sync with remote (pull + push)")
-	.action(async () => {
-		const spinner = ora("Syncing with remote...").start();
-
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			message?: string;
-			pulled?: number;
-			pushed?: number;
-		}>("/api/git/sync", { method: "POST" });
-
-		if (!data?.success) {
-			spinner.fail(data?.message || "Sync failed");
-			process.exit(1);
-		}
-
-		spinner.succeed("Sync complete");
-		console.log(chalk.dim(`  Pulled: ${data.pulled || 0} commits`));
-		console.log(chalk.dim(`  Pushed: ${data.pushed || 0} commits`));
-	});
-
-// signet git pull
-gitCmd
-	.command("pull")
-	.description("Pull changes from remote")
-	.action(async () => {
-		const spinner = ora("Pulling from remote...").start();
-
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			message?: string;
-			changes?: number;
-		}>("/api/git/pull", { method: "POST" });
-
-		if (!data?.success) {
-			spinner.fail(data?.message || "Pull failed");
-			process.exit(1);
-		}
-
-		spinner.succeed(data.message || "Pull complete");
-		if (data.changes !== undefined) {
-			console.log(chalk.dim(`  ${data.changes} commits`));
-		}
-	});
-
-// signet git push
-gitCmd
-	.command("push")
-	.description("Push changes to remote")
-	.action(async () => {
-		const spinner = ora("Pushing to remote...").start();
-
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			message?: string;
-			changes?: number;
-		}>("/api/git/push", { method: "POST" });
-
-		if (!data?.success) {
-			spinner.fail(data?.message || "Push failed");
-			process.exit(1);
-		}
-
-		spinner.succeed(data.message || "Push complete");
-		if (data.changes !== undefined) {
-			console.log(chalk.dim(`  ${data.changes} commits`));
-		}
-	});
-
-// signet git enable
-gitCmd
-	.command("enable")
-	.description("Enable auto-sync")
-	.option("-i, --interval <seconds>", "Sync interval in seconds", "300")
-	.action(async (options) => {
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-			config?: { autoSync: boolean; syncInterval: number };
-		}>("/api/git/config", {
-			method: "POST",
-			body: JSON.stringify({
-				autoSync: true,
-				syncInterval: Number.parseInt(options.interval, 10),
-			}),
-		});
-
-		if (!data?.success) {
-			console.error(chalk.red("Failed to enable auto-sync"));
-			process.exit(1);
-		}
-
-		console.log(chalk.green("✓ Auto-sync enabled"));
-		console.log(chalk.dim(`  Interval: every ${options.interval}s`));
-	});
-
-// signet git disable
-gitCmd
-	.command("disable")
-	.description("Disable auto-sync")
-	.action(async () => {
-		const data = await fetchFromDaemon<{
-			success?: boolean;
-		}>("/api/git/config", {
-			method: "POST",
-			body: JSON.stringify({ autoSync: false }),
-		});
-
-		if (!data?.success) {
-			console.error(chalk.red("Failed to disable auto-sync"));
-			process.exit(1);
-		}
-
-		console.log(chalk.green("✓ Auto-sync disabled"));
-	});
+registerGitCommands(program, {
+	fetchFromDaemon,
+});
 
 // ============================================================================
 // signet migrate-vectors - Migrate BLOB vectors to sqlite-vec
@@ -7202,15 +6600,15 @@ registerBrowseCommand(program);
 
 // Default action when no command specified
 program.action(async () => {
-	const basePath = AGENTS_DIR;
-	const existing = detectExistingSetup(basePath);
-
-	if (existing.agentsDir && existing.memoryDb) {
-		// Existing installation - show interactive menu
-		await interactiveMenu();
+	program.outputHelp();
+	const report = await getStatusReport(AGENTS_DIR);
+	console.log();
+	if (!report.installed) {
+		console.log(chalk.dim("Run `signet setup` to initialize a workspace."));
+	} else if (report.daemon.running) {
+		console.log(chalk.dim(`Daemon running at http://localhost:${DEFAULT_PORT} • ${report.basePath}`));
 	} else {
-		// No installation - run setup
-		await setupWizard({});
+		console.log(chalk.dim("Workspace found. Run `signet daemon start` or `signet doctor`."));
 	}
 });
 
