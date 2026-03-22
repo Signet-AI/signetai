@@ -282,6 +282,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const OPENCLAW_PLUGIN_PACKAGE = "@signetai/signet-memory-openclaw";
 const OPENCLAW_PLUGIN_SYNC_FILENAME = "openclaw-plugin-version";
+const OPENCLAW_PLUGIN_RETRY_FILENAME = "openclaw-plugin-retry-at";
+const OPENCLAW_PLUGIN_RETRY_DELAY_MS = 10 * 60_000;
 const PREDICTOR_SYNC_FILENAME = "predictor-version";
 const NATIVE_SYNC_LOCK_FILENAME = "sync-native.lock";
 const PREDICTOR_DOWNLOAD_TIMEOUT_MS = 60_000;
@@ -463,6 +465,52 @@ function writeOpenClawPluginSyncVersion(basePath: string, version: string): void
 	const syncPath = getOpenClawPluginSyncPath(basePath);
 	mkdirSync(dirname(syncPath), { recursive: true });
 	writeFileSync(syncPath, `${version}\n`);
+}
+
+function openClawPluginRetryPath(basePath: string): string {
+	return join(basePath, ".daemon", OPENCLAW_PLUGIN_RETRY_FILENAME);
+}
+
+function readOpenClawPluginRetryAt(basePath: string): number | null {
+	const path = openClawPluginRetryPath(basePath);
+	if (!existsSync(path)) {
+		return null;
+	}
+
+	try {
+		const raw = readFileSync(path, "utf-8").trim();
+		const parsed = Number.parseInt(raw, 10);
+		return Number.isInteger(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+function writeOpenClawPluginRetryAt(basePath: string): void {
+	try {
+		const path = openClawPluginRetryPath(basePath);
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, `${Date.now()}\n`);
+	} catch {
+		// Best-effort throttle stamp only.
+	}
+}
+
+function clearOpenClawPluginRetryAt(basePath: string): void {
+	try {
+		rmSync(openClawPluginRetryPath(basePath), { force: true });
+	} catch {
+		// Best-effort cleanup only.
+	}
+}
+
+function shouldSkipOpenClawPluginRefresh(basePath: string): boolean {
+	const last = readOpenClawPluginRetryAt(basePath);
+	if (last === null) {
+		return false;
+	}
+
+	return Date.now() - last < OPENCLAW_PLUGIN_RETRY_DELAY_MS;
 }
 
 function hasOpenClawPluginRuntime(path: string): boolean {
@@ -932,6 +980,7 @@ async function ensureOpenClawPluginPackage(
 					);
 				}
 			} else {
+				clearOpenClawPluginRetryAt(basePath);
 				ensureOpenClawExtensionSymlink(cachedPath, options.silent);
 				return cachedPath;
 			}
@@ -940,6 +989,10 @@ async function ensureOpenClawPluginPackage(
 			console.log(chalk.yellow(`  Warning: cached ${OPENCLAW_PLUGIN_PACKAGE} not found on disk; retrying install.`));
 		}
 		// Fall through to re-install below.
+	}
+
+	if (!options.force && shouldSkipOpenClawPluginRefresh(basePath)) {
+		return undefined;
 	}
 
 	const installCommand = getGlobalInstallCommand(packageManager.family, `${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`);
@@ -953,6 +1006,7 @@ async function ensureOpenClawPluginPackage(
 	});
 
 	if (result.status !== 0) {
+		writeOpenClawPluginRetryAt(basePath);
 		if (!options.silent) {
 			console.log(chalk.yellow(`  Warning: failed to refresh ${OPENCLAW_PLUGIN_PACKAGE}@${VERSION}`));
 		}
@@ -962,6 +1016,7 @@ async function ensureOpenClawPluginPackage(
 	// Resolve once and reuse for both symlink creation and load.paths patch.
 	const globalPath = resolveGlobalPackagePath(packageManager.family, OPENCLAW_PLUGIN_PACKAGE);
 	if (!globalPath) {
+		writeOpenClawPluginRetryAt(basePath);
 		if (!options.silent) {
 			console.log(
 				chalk.yellow(
@@ -972,6 +1027,7 @@ async function ensureOpenClawPluginPackage(
 		return undefined;
 	}
 	if (!hasOpenClawPluginRuntime(globalPath)) {
+		writeOpenClawPluginRetryAt(basePath);
 		if (!options.silent) {
 			console.log(
 				chalk.yellow(
@@ -983,6 +1039,7 @@ async function ensureOpenClawPluginPackage(
 	}
 
 	writeOpenClawPluginSyncVersion(basePath, VERSION);
+	clearOpenClawPluginRetryAt(basePath);
 	if (!options.silent) {
 		console.log(chalk.green(`  ✓ OpenClaw plugin refreshed (${OPENCLAW_PLUGIN_PACKAGE}@${VERSION})`));
 	}
