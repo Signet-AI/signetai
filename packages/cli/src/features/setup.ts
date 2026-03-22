@@ -1,21 +1,15 @@
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
-	Database as CoreDatabase,
 	ensureUnifiedSchema,
 	formatYaml,
-	importMemoryLogs,
 	parseSimpleYaml,
 	resolvePrimaryPackageManager,
 	runMigrations,
-	type ImportResult,
 	type SetupDetection,
-	type SkillsResult,
-	unifySkills,
 } from "@signet/core";
 import chalk from "chalk";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import open from "open";
 import ora from "ora";
@@ -42,57 +36,8 @@ import {
 	type HarnessChoice,
 	type OpenClawRuntimeChoice,
 } from "./setup-shared.js";
-
-export interface SetupWizardOptions {
-	path?: string;
-	nonInteractive?: boolean;
-	name?: string;
-	description?: string;
-	harness?: string[];
-	embeddingProvider?: string;
-	embeddingModel?: string;
-	extractionProvider?: string;
-	extractionModel?: string;
-	searchBalance?: string;
-	skipGit?: boolean;
-	openDashboard?: boolean;
-	openclawRuntimePath?: string;
-	configureOpenclawWorkspace?: boolean;
-}
-
-interface SetupDeps {
-	readonly AGENTS_DIR: string;
-	readonly DEFAULT_PORT: number;
-	readonly configureHarnessHooks: (
-		harness: string,
-		basePath: string,
-		options?: {
-			configureOpenClawWorkspace?: boolean;
-			openclawRuntimePath?: OpenClawRuntimeChoice;
-		},
-	) => Promise<void>;
-	readonly copyDirRecursive: (src: string, dest: string) => void;
-	readonly detectExistingSetup: (basePath: string) => SetupDetection;
-	readonly gitAddAndCommit: (dir: string, message: string) => Promise<boolean>;
-	readonly getTemplatesDir: () => string;
-	readonly gitInit: (dir: string) => Promise<boolean>;
-	readonly importFromGitHub: (basePath: string) => Promise<void>;
-	readonly isDaemonRunning: () => Promise<boolean>;
-	readonly isGitRepo: (dir: string) => boolean;
-	readonly launchDashboard: (options: { path?: string }) => Promise<void>;
-	readonly normalizeAgentPath: (pathValue: string) => string;
-	readonly normalizeChoice: <T extends string>(value: unknown, allowed: readonly T[]) => T | null;
-	readonly normalizeStringValue: (value: unknown) => string | null;
-	readonly parseIntegerValue: (value: unknown) => number | null;
-	readonly parseSearchBalanceValue: (value: unknown) => number | null;
-	readonly showStatus: (options: { path?: string; json?: boolean }) => Promise<void>;
-	readonly signetLogo: () => string;
-	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
-	readonly syncBuiltinSkills: (
-		templatesDir: string,
-		basePath: string,
-	) => { installed: string[]; updated: string[]; skipped: string[] };
-}
+import { runExistingSetupWizard } from "./setup-migrate.js";
+import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
 	console.log(deps.signetLogo());
@@ -250,7 +195,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				);
 			}
 
-			await existingSetupWizard(basePath, existing, existingConfig, deps, {
+			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
 				openDashboard: options.openDashboard === true,
 				skipGit: options.skipGit === true,
@@ -288,7 +233,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				return;
 			}
 		} else {
-			await existingSetupWizard(basePath, existing, existingConfig, deps);
+			await runExistingSetupWizard(basePath, existing, existingConfig, deps);
 			return;
 		}
 	} else {
@@ -899,277 +844,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		}
 
 		if (nonInteractive) {
-			if (options.openDashboard === true) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
-			}
-		} else {
-			const launchNow = await confirm({ message: "Open the dashboard?", default: true });
-			if (launchNow) {
-				await open(`http://localhost:${deps.DEFAULT_PORT}`);
-			}
-		}
-
-		console.log();
-		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
-		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
-		console.log(chalk.dim("    communication style, and your preferences."));
-	} catch (err) {
-		spinner.fail(chalk.red("Setup failed"));
-		console.error(err);
-		process.exit(1);
-	}
-}
-
-async function existingSetupWizard(
-	basePath: string,
-	detection: SetupDetection,
-	existingConfig: Record<string, unknown>,
-	deps: SetupDeps,
-	options?: {
-		nonInteractive?: boolean;
-		openDashboard?: boolean;
-		skipGit?: boolean;
-		embeddingProvider?: EmbeddingProviderChoice;
-		embeddingModel?: string;
-		extractionProvider?: ExtractionProviderChoice;
-		extractionModel?: string;
-	},
-): Promise<void> {
-	const spinner = ora("Setting up Signet for existing identity...").start();
-
-	try {
-		const templatesDir = deps.getTemplatesDir();
-
-		if (!existsSync(basePath)) {
-			mkdirSync(basePath, { recursive: true });
-		}
-		if (!existsSync(join(basePath, "memory"))) {
-			mkdirSync(join(basePath, "memory"), { recursive: true });
-		}
-		if (!existsSync(join(basePath, "memory", "scripts"))) {
-			mkdirSync(join(basePath, "memory", "scripts"), { recursive: true });
-		}
-
-		spinner.text = "Installing memory system...";
-		const scriptsSource = join(templatesDir, "memory", "scripts");
-		if (existsSync(scriptsSource)) {
-			deps.copyDirRecursive(scriptsSource, join(basePath, "memory", "scripts"));
-		}
-
-		const requirementsSource = join(templatesDir, "memory", "requirements.txt");
-		if (existsSync(requirementsSource)) {
-			copyFileSync(requirementsSource, join(basePath, "memory", "requirements.txt"));
-		}
-
-		spinner.text = "Syncing built-in skills...";
-		deps.syncBuiltinSkills(templatesDir, basePath);
-
-		spinner.text = "Creating agent manifest...";
-		const now = new Date().toISOString();
-		let agentName = "My Agent";
-		const identityPath = join(basePath, "IDENTITY.md");
-		if (existsSync(identityPath)) {
-			try {
-				const content = readFileSync(identityPath, "utf-8");
-				const nameMatch = content.match(/^#\s*(.+)$/m);
-				if (nameMatch) {
-					agentName = nameMatch[1].trim();
-				}
-			} catch {
-				// Ignore
-			}
-		}
-
-		const detectedHarnesses: string[] = [];
-		if (detection.harnesses.claudeCode) detectedHarnesses.push("claude-code");
-		if (detection.harnesses.openclaw) detectedHarnesses.push("openclaw");
-		if (detection.harnesses.opencode) detectedHarnesses.push("opencode");
-		if (detection.harnesses.codex) detectedHarnesses.push("codex");
-		const packageManager = resolvePrimaryPackageManager({ agentsDir: basePath, env: process.env });
-		const existingAgent = readRecord(existingConfig.agent);
-
-		const config: Record<string, unknown> = {
-			version: 1,
-			schema: "signet/v1",
-			agent: {
-				name: agentName,
-				description: readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant",
-				created: now,
-				updated: now,
-			},
-			harnesses: detectedHarnesses,
-			install: {
-				primary_package_manager: packageManager.family,
-				source: packageManager.source,
-			},
-			memory: {
-				database: "memory/memories.db",
-				session_budget: 2000,
-				decay_rate: 0.95,
-			},
-			search: {
-				alpha: 0.7,
-				top_k: 20,
-				min_score: 0.3,
-			},
-			identity: {
-				agents: "AGENTS.md",
-				soul: "SOUL.md",
-				identity: "IDENTITY.md",
-				user: "USER.md",
-				heartbeat: "HEARTBEAT.md",
-				memory: "MEMORY.md",
-				tools: "TOOLS.md",
-			},
-		};
-
-		if (options?.embeddingProvider && options.embeddingProvider !== "none") {
-			const model = options.embeddingModel || (options.embeddingProvider === "openai" ? "text-embedding-3-small" : "nomic-embed-text");
-			config.embedding = {
-				provider: options.embeddingProvider,
-				model,
-				dimensions: getEmbeddingDimensions(model),
-			};
-		}
-
-		if (options?.extractionProvider && options.extractionProvider !== "none") {
-			const memory = readRecord(config.memory);
-			memory.pipelineV2 = {
-				enabled: true,
-				extraction: {
-					provider: options.extractionProvider,
-					model:
-						options.extractionModel ||
-						(options.extractionProvider === "claude-code"
-							? "haiku"
-							: options.extractionProvider === "codex"
-								? "gpt-5.3-codex"
-								: options.extractionProvider === "opencode"
-									? "anthropic/claude-haiku-4-5-20251001"
-									: options.extractionProvider === "openrouter"
-										? "openai/gpt-4o-mini"
-										: "glm-4.7-flash"),
-				},
-				semanticContradictionEnabled: true,
-				graph: { enabled: true },
-				reranker: { enabled: true },
-				autonomous: { enabled: true, allowUpdateDelete: true },
-				predictor: { enabled: true },
-				predictorPipeline: { agentFeedback: true, trainingTelemetry: false },
-			};
-			config.memory = memory;
-		}
-
-		if (!existsSync(join(basePath, "agent.yaml"))) {
-			writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
-		}
-
-		spinner.text = "Initializing database...";
-		const dbPath = join(basePath, "memory", "memories.db");
-		const db = Database(dbPath);
-		const migrationResult = ensureUnifiedSchema(db);
-		if (migrationResult.migrated) {
-			spinner.text = `Migrated ${migrationResult.memoriesMigrated} memories from ${migrationResult.fromSchema} schema...`;
-		}
-		runMigrations(db);
-		db.close();
-
-		let importResult: ImportResult | null = null;
-		if (detection.hasMemoryDir && detection.memoryLogCount > 0) {
-			spinner.text = `Importing ${detection.memoryLogCount} memory logs...`;
-			try {
-				const coreDb = new CoreDatabase(dbPath);
-				importResult = importMemoryLogs(basePath, coreDb);
-				coreDb.close();
-			} catch (err) {
-				console.warn(`\n  ⚠ Memory import warning: ${readErr(err)}`);
-			}
-		}
-
-		let skillsResult: SkillsResult | null = null;
-		spinner.text = "Unifying skills...";
-		try {
-			skillsResult = await unifySkills(basePath, {
-				registries: [
-					detection.harnesses.opencode
-						? { path: join(homedir(), ".config", "opencode", "skills"), harness: "opencode", symlink: true }
-						: null,
-				].filter((entry): entry is { path: string; harness: string; symlink: boolean } => entry !== null),
-			});
-		} catch (err) {
-			console.warn(`\n  ⚠ Skills unification warning: ${readErr(err)}`);
-		}
-
-		spinner.text = "Configuring harness connectors...";
-		const configuredHarnesses: string[] = [];
-		for (const harness of detectedHarnesses) {
-			try {
-				await deps.configureHarnessHooks(harness, basePath);
-				configuredHarnesses.push(harness);
-			} catch (err) {
-				console.warn(`\n  ⚠ Could not configure ${harness}: ${readErr(err)}`);
-			}
-		}
-
-		const gitignoreSrc = join(templatesDir, "gitignore.template");
-		const gitignoreDest = join(basePath, ".gitignore");
-		if (existsSync(gitignoreSrc) && !existsSync(gitignoreDest)) {
-			copyFileSync(gitignoreSrc, gitignoreDest);
-		}
-
-		let gitEnabled = false;
-		if (options?.skipGit !== true) {
-			if (!deps.isGitRepo(basePath)) {
-				spinner.text = "Initializing git...";
-				gitEnabled = await deps.gitInit(basePath);
-			} else {
-				gitEnabled = true;
-			}
-		}
-
-		spinner.text = "Starting daemon...";
-		const daemonStarted = await deps.startDaemon(basePath);
-
-		spinner.succeed(chalk.green("Signet setup complete!"));
-		console.log();
-		console.log(chalk.dim("  Your existing identity files are now managed by Signet."));
-		console.log(chalk.dim(`    ${basePath}`));
-		console.log();
-
-		if (importResult && importResult.imported > 0) {
-			console.log(chalk.dim(`  Memory logs imported: ${importResult.imported} entries`));
-			if (importResult.skipped > 0) {
-				console.log(chalk.dim(`    (${importResult.skipped} skipped)`));
-			}
-		}
-
-		if (skillsResult && (skillsResult.imported > 0 || skillsResult.symlinked > 0)) {
-			console.log(chalk.dim(`  Skills unified: ${skillsResult.imported} imported, ${skillsResult.symlinked} symlinked`));
-		}
-
-		if (configuredHarnesses.length > 0) {
-			console.log();
-			console.log(chalk.dim("  Connectors installed for:"));
-			for (const harness of configuredHarnesses) {
-				console.log(chalk.dim(`    ✓ ${harness}`));
-			}
-		}
-
-		if (daemonStarted) {
-			console.log();
-			console.log(chalk.green(`  ● Daemon running at http://localhost:${deps.DEFAULT_PORT}`));
-		}
-
-		if (options?.skipGit !== true && gitEnabled) {
-			const date = new Date().toISOString().split("T")[0];
-			const committed = await deps.gitAddAndCommit(basePath, `${date}_signet-setup`);
-			if (committed) {
-				console.log(chalk.dim("  ✓ Changes committed to git"));
-			}
-		}
-
-		console.log();
-		if (options?.nonInteractive === true) {
 			if (options.openDashboard === true) {
 				await open(`http://localhost:${deps.DEFAULT_PORT}`);
 			}
