@@ -95,6 +95,7 @@ import { registerSkillCommands } from "./commands/skill.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
 import { configureAgent } from "./features/configure.js";
+import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 
 // Template directory location (relative to built CLI)
@@ -2070,7 +2071,7 @@ async function interactiveMenu() {
 				break;
 
 			case "status":
-				await showStatus({ path: AGENTS_DIR });
+				await showStatus({ path: AGENTS_DIR }, healthDeps);
 				await input({ message: "Press Enter to continue..." });
 				break;
 
@@ -2721,7 +2722,7 @@ async function setupWizard(options: SetupWizardOptions) {
 		}
 
 		if (action === "status") {
-			await showStatus({ path: basePath });
+			await showStatus({ path: basePath }, healthDeps);
 			return;
 		}
 
@@ -3850,283 +3851,6 @@ async function migrateSchema(options: { path?: string }) {
 }
 
 // ============================================================================
-// signet status - Show Agent Status
-// ============================================================================
-
-interface StatusFile {
-	name: string;
-	exists: boolean;
-}
-
-interface StatusDb {
-	exists: boolean;
-	schema: string | null;
-	needsMigration: boolean;
-	memoryCount: number | null;
-	conversationCount: number | null;
-}
-
-interface StatusReport {
-	basePath: string;
-	installed: boolean;
-	validIdentity: boolean;
-	missingIdentityFiles: string[];
-	files: StatusFile[];
-	db: StatusDb;
-	daemon: {
-		running: boolean;
-		pid: number | null;
-		uptime: number | null;
-		version: string | null;
-	};
-}
-
-interface DoctorFinding {
-	level: "error" | "warn" | "info";
-	message: string;
-	fix?: string;
-}
-
-function readCount(db: ReturnType<typeof Database>, sql: string): number | null {
-	try {
-		const raw = db.prepare(sql).get();
-		if (!isRecord(raw)) {
-			return null;
-		}
-		return parseIntegerValue(raw.count);
-	} catch {
-		return null;
-	}
-}
-
-async function getStatusReport(basePath: string): Promise<StatusReport> {
-	const existing = detectExistingSetup(basePath);
-	const installed = existing.agentsDir;
-	const files = [
-		{ name: "AGENTS.md", exists: existing.agentsMd },
-		{ name: "agent.yaml", exists: existing.agentYaml },
-		{ name: "memories.db", exists: existing.memoryDb },
-	];
-	const daemon = await getDaemonStatus();
-	const report: StatusReport = {
-		basePath,
-		installed,
-		validIdentity: installed ? hasValidIdentity(basePath) : false,
-		missingIdentityFiles: installed ? getMissingIdentityFiles(basePath) : [],
-		files,
-		db: {
-			exists: existing.memoryDb,
-			schema: null,
-			needsMigration: false,
-			memoryCount: null,
-			conversationCount: null,
-		},
-		daemon,
-	};
-
-	if (!existing.memoryDb) {
-		return report;
-	}
-
-	let db: ReturnType<typeof Database> | null = null;
-	try {
-		db = Database(join(basePath, "memory", "memories.db"), {
-			readonly: true,
-		});
-		const schema = detectSchema(db);
-		const memoryCount = readCount(db, "SELECT COUNT(*) as count FROM memories");
-		const conversationCount = schema.hasConversations
-			? readCount(db, "SELECT COUNT(*) as count FROM conversations")
-			: null;
-		report.db = {
-			exists: true,
-			schema: schema.type,
-			needsMigration: schema.type !== "core" && schema.type !== "unknown",
-			memoryCount,
-			conversationCount,
-		};
-	} catch {
-		return report;
-	} finally {
-		if (db) {
-			db.close();
-		}
-	}
-
-	return report;
-}
-
-function getDoctorFindings(report: StatusReport): DoctorFinding[] {
-	if (!report.installed) {
-		return [
-			{
-				level: "error",
-				message: "No Signet installation found.",
-				fix: "Run `signet setup`.",
-			},
-		];
-	}
-
-	const findings: DoctorFinding[] = [];
-	const hasAgentYaml = report.files.find((file) => file.name === "agent.yaml")?.exists ?? false;
-	const missingIdentity = report.missingIdentityFiles.filter((file) => file !== "agent.yaml");
-
-	if (!report.validIdentity && (hasAgentYaml || missingIdentity.length > 0)) {
-		const missing = missingIdentity.join(", ");
-		findings.push({
-			level: "error",
-			message: `Missing required identity files${missing ? `: ${missing}` : "."}`,
-			fix: "Run `signet setup` or restore the missing files.",
-		});
-	}
-
-	if (!hasAgentYaml) {
-		findings.push({
-			level: "error",
-			message: "agent.yaml is missing.",
-			fix: "Run `signet setup` to recreate the manifest.",
-		});
-	}
-
-	if (!report.db.exists) {
-		findings.push({
-			level: "error",
-			message: "Memory database is missing.",
-			fix: "Run `signet setup` to initialize memory storage.",
-		});
-	}
-
-	if (!report.daemon.running) {
-		findings.push({
-			level: "warn",
-			message: "Daemon is not running.",
-			fix: "Run `signet daemon start`.",
-		});
-	}
-
-	if (report.db.needsMigration && report.db.schema) {
-		findings.push({
-			level: "warn",
-			message: `Database is still on ${report.db.schema} schema.`,
-			fix: "Run `signet migrate-schema`.",
-		});
-	}
-
-	if (report.db.exists && report.db.memoryCount === 0) {
-		findings.push({
-			level: "info",
-			message: "Memory database is empty.",
-			fix: "Use `signet remember` or keep chatting so the daemon can build memory.",
-		});
-	}
-
-	return findings;
-}
-
-async function showStatus(options: { path?: string; json?: boolean }) {
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
-	const report = await getStatusReport(basePath);
-
-	if (options.json) {
-		console.log(JSON.stringify(report, null, 2));
-		return;
-	}
-
-	console.log(signetLogo());
-
-	if (!report.installed) {
-		console.log(chalk.yellow("  No Signet installation found."));
-		console.log(`  Run ${chalk.bold("signet setup")} to get started.`);
-		return;
-	}
-
-	console.log(chalk.bold("  Status\n"));
-
-	// Daemon status
-	if (report.daemon.running) {
-		const versionLabel = report.daemon.version && report.daemon.version !== "0.0.0" ? ` v${report.daemon.version}` : "";
-		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(versionLabel)}`);
-		console.log(chalk.dim(`    PID: ${report.daemon.pid}`));
-		console.log(chalk.dim(`    Uptime: ${formatUptime(report.daemon.uptime || 0)}`));
-		console.log(chalk.dim(`    Dashboard: http://localhost:${DEFAULT_PORT}`));
-	} else {
-		console.log(`  ${chalk.red("○")} Daemon ${chalk.red("stopped")}`);
-	}
-
-	console.log();
-
-	// Files
-	for (const file of report.files) {
-		const icon = file.exists ? chalk.green("✓") : chalk.red("✗");
-		console.log(`  ${icon} ${file.name}`);
-	}
-
-	if (report.db.needsMigration && report.db.schema) {
-		console.log();
-		console.log(chalk.yellow(`  ⚠ Database schema: ${report.db.schema}`));
-		console.log(chalk.dim(`    Run ${chalk.bold("signet migrate-schema")} to upgrade`));
-	}
-
-	if (report.db.exists) {
-		console.log();
-		if (typeof report.db.memoryCount === "number") {
-			console.log(chalk.dim(`  Memories: ${report.db.memoryCount}`));
-		}
-		if (typeof report.db.conversationCount === "number") {
-			console.log(chalk.dim(`  Conversations: ${report.db.conversationCount}`));
-		}
-	}
-
-	if (!report.validIdentity && report.missingIdentityFiles.length > 0) {
-		console.log();
-		console.log(chalk.yellow(`  Missing identity files: ${report.missingIdentityFiles.join(", ")}`));
-	}
-
-	console.log();
-	console.log(chalk.dim(`  Path: ${report.basePath}`));
-	console.log();
-}
-
-async function showDoctor(options: { path?: string; json?: boolean }) {
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
-	const report = await getStatusReport(basePath);
-	const findings = getDoctorFindings(report);
-	const ok = findings.every((finding) => finding.level !== "error");
-
-	if (options.json) {
-		console.log(JSON.stringify({ ok, report, findings }, null, 2));
-		return;
-	}
-
-	console.log(signetLogo());
-	console.log(chalk.bold("  Doctor\n"));
-
-	if (findings.length === 0) {
-		console.log(chalk.green("  ✓ Looks healthy"));
-		console.log(chalk.dim("  No obvious local issues detected."));
-		console.log();
-		return;
-	}
-
-	for (const finding of findings) {
-		const icon =
-			finding.level === "error" ? chalk.red("✗") : finding.level === "warn" ? chalk.yellow("⚠") : chalk.cyan("•");
-		console.log(`  ${icon} ${finding.message}`);
-		if (finding.fix) {
-			console.log(chalk.dim(`    ${finding.fix}`));
-		}
-	}
-
-	console.log();
-	if (ok) {
-		console.log(chalk.yellow("  Signet can run, but there's a bit of duct tape showing."));
-	} else {
-		console.log(chalk.red("  Fix the errors above before trusting the CLI to behave."));
-	}
-	console.log();
-}
-
-// ============================================================================
 // signet logs - Show Daemon Logs
 // ============================================================================
 
@@ -4445,6 +4169,18 @@ async function doRestart(options: { path?: string; openclaw?: boolean } = {}) {
 	}
 }
 
+const healthDeps = {
+	agentsDir: AGENTS_DIR,
+	defaultPort: DEFAULT_PORT,
+	detectExistingSetup,
+	extractPathOption,
+	formatUptime,
+	getDaemonStatus,
+	normalizeAgentPath,
+	parseIntegerValue,
+	signetLogo,
+};
+
 registerAppCommands(program, {
 	collectListOption,
 	configureAgent: () =>
@@ -4456,8 +4192,8 @@ registerAppCommands(program, {
 	launchDashboard,
 	migrateSchema,
 	setupWizard,
-	showDoctor,
-	showStatus,
+	showDoctor: (options) => showDoctor(options, healthDeps),
+	showStatus: (options) => showStatus(options, healthDeps),
 	syncTemplates,
 });
 
@@ -4466,7 +4202,7 @@ registerDaemonCommands(program, {
 	doStart,
 	doStop,
 	showLogs,
-	showStatus,
+	showStatus: (options) => showStatus(options, healthDeps),
 });
 
 async function syncTemplates() {
@@ -4643,7 +4379,7 @@ registerBrowseCommand(program);
 // Default action when no command specified
 program.action(async () => {
 	program.outputHelp();
-	const report = await getStatusReport(AGENTS_DIR);
+	const report = await getStatusReport(AGENTS_DIR, healthDeps);
 	console.log();
 	if (!report.installed) {
 		console.log(chalk.dim("Run `signet setup` to initialize a workspace."));
