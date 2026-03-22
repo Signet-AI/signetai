@@ -226,6 +226,72 @@ beforeEach(() => {
 		rmSync(TEST_DIR, { recursive: true, force: true });
 	}
 	ensureDir(TEST_DIR);
+	ensureDir(join(TEST_DIR, "memory"));
+
+	// Initialize a bare DB so handleSessionStart can access the accessor
+	// (tests that need seeded data call createMemoryDb which re-inits)
+	const dbPath = join(TEST_DIR, "memory", "memories.db");
+	const db = new Database(dbPath);
+	db.exec("PRAGMA busy_timeout = 5000");
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS memories (
+			id TEXT PRIMARY KEY,
+			content TEXT NOT NULL,
+			who TEXT DEFAULT 'test',
+			why TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT,
+			project TEXT,
+			session_id TEXT,
+			importance REAL DEFAULT 0.5,
+			last_accessed TEXT,
+			access_count INTEGER DEFAULT 0,
+			type TEXT DEFAULT 'explicit',
+			tags TEXT,
+			pinned INTEGER DEFAULT 0,
+			source_type TEXT DEFAULT 'manual',
+			source_id TEXT,
+			category TEXT,
+			updated_by TEXT DEFAULT 'user',
+			vector_clock TEXT DEFAULT '{}',
+			version INTEGER DEFAULT 1,
+			manual_override INTEGER DEFAULT 0,
+			confidence REAL DEFAULT 1.0
+		)
+	`);
+	db.exec(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+			content, tags, content=memories, content_rowid=rowid
+		)
+	`);
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS session_memories (
+			id TEXT PRIMARY KEY,
+			session_key TEXT NOT NULL,
+			memory_id TEXT NOT NULL,
+			source TEXT NOT NULL,
+			effective_score REAL,
+			predictor_score REAL,
+			final_score REAL NOT NULL,
+			rank INTEGER NOT NULL,
+			was_injected INTEGER NOT NULL,
+			relevance_score REAL,
+			fts_hit_count INTEGER NOT NULL DEFAULT 0,
+			agent_preference TEXT,
+			created_at TEXT NOT NULL,
+			entity_slot INTEGER,
+			aspect_slot INTEGER,
+			is_constraint INTEGER NOT NULL DEFAULT 0,
+			structural_density INTEGER,
+			UNIQUE(session_key, memory_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_session_memories_session
+			ON session_memories(session_key);
+		CREATE INDEX IF NOT EXISTS idx_session_memories_memory
+			ON session_memories(memory_id)
+	`);
+	db.close();
+	initDbAccessor(dbPath);
 });
 
 afterEach(() => {
@@ -252,9 +318,7 @@ describe("effectiveScore", () => {
 	});
 
 	test("30-day-old memory decays", () => {
-		const thirtyDaysAgo = new Date(
-			Date.now() - 30 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 		const score = effectiveScore(1.0, thirtyDaysAgo, false);
 		// 1.0 * 0.95^30 ≈ 0.214
 		expect(score).toBeGreaterThan(0.1);
@@ -310,10 +374,7 @@ describe("isDuplicate", () => {
 		]);
 
 		const db = openTestDb();
-		const result = isDuplicate(
-			db,
-			"The user prefers dark mode and vim keybindings",
-		);
+		const result = isDuplicate(db, "The user prefers dark mode and vim keybindings");
 		db.close();
 
 		expect(result).toBe(true);
@@ -391,8 +452,8 @@ describe("inferType", () => {
 // ============================================================================
 
 describe("handleSessionStart", () => {
-	test("returns default identity when no config files exist", () => {
-		const result = handleSessionStart({ harness: "claude-code" });
+	test("returns default identity when no config files exist", async () => {
+		const result = await handleSessionStart({ harness: "claude-code" });
 
 		expect(result.identity.name).toBe("Agent");
 		expect(result.identity.description).toBeUndefined();
@@ -400,19 +461,19 @@ describe("handleSessionStart", () => {
 		expect(typeof result.inject).toBe("string");
 	});
 
-	test("inject starts with memory status line", () => {
-		const result = handleSessionStart({ harness: "test" });
+	test("inject starts with memory status line", async () => {
+		const result = await handleSessionStart({ harness: "test" });
 		expect(result.inject).toContain("[memory active");
 	});
 
-	test("loads identity from agent.yaml", () => {
+	test("loads identity from agent.yaml", async () => {
 		writeAgentYaml(`
 agent:
   name: TestBot
   description: A test agent
 `);
 
-		const result = handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ harness: "claude-code" });
 
 		expect(result.identity.name).toBe("TestBot");
 		expect(result.identity.description).toBe("A test agent");
@@ -420,52 +481,48 @@ agent:
 		expect(result.inject).toContain("A test agent");
 	});
 
-	test("falls back to IDENTITY.md when agent.yaml has no name", () => {
+	test("falls back to IDENTITY.md when agent.yaml has no name", async () => {
 		writeAgentYaml("version: 1");
 		writeIdentityMd(`
 name: MarkdownBot
 creature: digital assistant
 `);
 
-		const result = handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ harness: "claude-code" });
 
 		expect(result.identity.name).toBe("MarkdownBot");
 		expect(result.identity.description).toBe("digital assistant");
 	});
 
-	test("returns memories from database", () => {
+	test("returns memories from database", async () => {
 		createMemoryDb([
 			{ content: "User prefers dark mode", importance: 0.9 },
 			{ content: "Project uses TypeScript", importance: 0.7 },
 		]);
 
-		const result = handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ harness: "claude-code" });
 
 		expect(result.memories.length).toBe(2);
-		expect(
-			result.memories.some((m) => m.content === "User prefers dark mode"),
-		).toBe(true);
+		expect(result.memories.some((m) => m.content === "User prefers dark mode")).toBe(true);
 		expect(result.inject).toContain("Relevant Memories");
 	});
 
-	test("includes MEMORY.md as working memory", () => {
+	test("includes MEMORY.md as working memory", async () => {
 		writeMemoryMd("# Working Memory\n\nCurrently working on hooks migration.");
 
-		const result = handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ harness: "claude-code" });
 
 		expect(result.recentContext).toContain("Working Memory");
 		expect(result.inject).toContain("## Working Memory");
 	});
 
-	test("loads AGENTS.md before MEMORY.md in inject context", () => {
+	test("loads AGENTS.md before MEMORY.md in inject context", async () => {
 		writeAgentsMd("# AGENTS\n\nFollow AGENTS instructions first.");
 		writeMemoryMd("# Working Memory\n\nThis is working memory context.");
 
-		const result = handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ harness: "claude-code" });
 
-		const agentsIndex = result.inject.indexOf(
-			"Follow AGENTS instructions first.",
-		);
+		const agentsIndex = result.inject.indexOf("Follow AGENTS instructions first.");
 		const workingMemoryIndex = result.inject.indexOf("## Working Memory");
 
 		expect(result.inject).toContain("## Agent Instructions");
@@ -473,7 +530,7 @@ creature: digital assistant
 		expect(workingMemoryIndex).toBeGreaterThan(agentsIndex);
 	});
 
-	test("uses AGENTS.md instead of fallback identity sentence", () => {
+	test("uses AGENTS.md instead of fallback identity sentence", async () => {
 		writeAgentYaml(`
 agent:
   name: TestBot
@@ -481,13 +538,13 @@ agent:
 `);
 		writeAgentsMd("# AGENTS\n\nOperator policy from AGENTS.");
 
-		const result = handleSessionStart({ harness: "claude-code" });
+		const result = await handleSessionStart({ harness: "claude-code" });
 
 		expect(result.inject).toContain("Operator policy from AGENTS.");
 		expect(result.inject).not.toContain("You are TestBot");
 	});
 
-	test("excludes identity when includeIdentity is false", () => {
+	test("excludes identity when includeIdentity is false", async () => {
 		writeAgentYaml(`
 agent:
   name: HiddenBot
@@ -496,22 +553,20 @@ hooks:
     includeIdentity: false
 `);
 
-		const result = handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ harness: "test" });
 
 		expect(result.identity.name).toBe("Agent");
 		expect(result.inject).not.toContain("HiddenBot");
 	});
 
-	test("handles missing memory database gracefully", () => {
-		const result = handleSessionStart({ harness: "test" });
+	test("handles missing memory database gracefully", async () => {
+		const result = await handleSessionStart({ harness: "test" });
 		expect(result.memories).toEqual([]);
 	});
 
-	test("filters out low-score memories", () => {
+	test("filters out low-score memories", async () => {
 		// Very old, low importance memory should be filtered by effectiveScore > 0.2
-		const veryOld = new Date(
-			Date.now() - 365 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const veryOld = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
 		createMemoryDb([
 			{
 				content: "Ancient low-importance fact",
@@ -520,16 +575,14 @@ hooks:
 			},
 		]);
 
-		const result = handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ harness: "test" });
 
 		// 0.1 * 0.95^365 ≈ extremely small, should be filtered out
 		expect(result.memories.length).toBe(0);
 	});
 
-	test("pinned memories are always included", () => {
-		const veryOld = new Date(
-			Date.now() - 365 * 24 * 60 * 60 * 1000,
-		).toISOString();
+	test("pinned memories are always included", async () => {
+		const veryOld = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
 		createMemoryDb([
 			{
 				content: "Critical pinned memory",
@@ -539,13 +592,13 @@ hooks:
 			},
 		]);
 
-		const result = handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ harness: "test" });
 
 		expect(result.memories.length).toBe(1);
 		expect(result.memories[0].content).toBe("Critical pinned memory");
 	});
 
-	test("project-scoped memories sort first", () => {
+	test("project-scoped memories sort first", async () => {
 		createMemoryDb([
 			{
 				content: "General memory",
@@ -559,7 +612,7 @@ hooks:
 			},
 		]);
 
-		const result = handleSessionStart({
+		const result = await handleSessionStart({
 			harness: "test",
 			project: "/home/user/myproject",
 		});
@@ -598,9 +651,7 @@ hooks:
 	});
 
 	test("includes recent memories in summary prompt", () => {
-		createMemoryDb([
-			{ content: "Important decision about auth", importance: 0.9 },
-		]);
+		createMemoryDb([{ content: "Important decision about auth", importance: 0.9 }]);
 
 		const result = handlePreCompaction({ harness: "test" });
 
@@ -656,7 +707,7 @@ describe("handleUserPromptSubmit", () => {
 		const result = await handleUserPromptSubmit({
 			harness: "test",
 			userPrompt:
-				"Conversation info (untrusted metadata):\n{\"conversation_label\":\"OpenClaw Session\",\"message_id\":\"msg_123\",\"sender_id\":\"user_456\"}\n\nCan you reiterate the release checklist?",
+				'Conversation info (untrusted metadata):\n{"conversation_label":"OpenClaw Session","message_id":"msg_123","sender_id":"user_456"}\n\nCan you reiterate the release checklist?',
 		});
 
 		expect(result.memoryCount).toBeGreaterThan(0);
@@ -705,9 +756,7 @@ describe("handleUserPromptSubmit", () => {
 	});
 
 	test("returns empty for no-match prompt", async () => {
-		createMemoryDb([
-			{ content: "PostgreSQL replication setup guide", importance: 0.8 },
-		]);
+		createMemoryDb([{ content: "PostgreSQL replication setup guide", importance: 0.8 }]);
 
 		const result = await handleUserPromptSubmit({
 			harness: "test",
@@ -781,7 +830,6 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).toContain("Current Date & Time");
 		expect(result.inject).not.toContain("[signet:recall");
 	});
-
 });
 
 // ============================================================================
@@ -814,9 +862,7 @@ describe("handleRemember", () => {
 
 		// Verify pinned in DB
 		const db = openTestDb();
-		const row = db
-			.prepare("SELECT * FROM memories WHERE id = ?")
-			.get(result.id) as {
+		const row = db.prepare("SELECT * FROM memories WHERE id = ?").get(result.id) as {
 			pinned: number;
 			importance: number;
 			content: string;
@@ -839,9 +885,7 @@ describe("handleRemember", () => {
 		expect(result.saved).toBe(true);
 
 		const db = openTestDb();
-		const row = db
-			.prepare("SELECT * FROM memories WHERE id = ?")
-			.get(result.id) as {
+		const row = db.prepare("SELECT * FROM memories WHERE id = ?").get(result.id) as {
 			tags: string;
 			content: string;
 		};
@@ -852,7 +896,8 @@ describe("handleRemember", () => {
 	});
 
 	test("fails gracefully on missing database", () => {
-		// Don't create db
+		// Close the accessor so no DB is available
+		closeDbAccessor();
 		const result = handleRemember({
 			harness: "test",
 			content: "This should fail gracefully",
@@ -886,15 +931,11 @@ describe("handleRecall", () => {
 		});
 
 		expect(result.count).toBeGreaterThan(0);
-		expect(result.results.some((r) => r.content.includes("TypeScript"))).toBe(
-			true,
-		);
+		expect(result.results.some((r) => r.content.includes("TypeScript"))).toBe(true);
 	});
 
 	test("returns empty for no-match query", () => {
-		createMemoryDb([
-			{ content: "The database uses PostgreSQL", importance: 0.8 },
-		]);
+		createMemoryDb([{ content: "The database uses PostgreSQL", importance: 0.8 }]);
 
 		const result = handleRecall({
 			harness: "test",
@@ -1023,10 +1064,7 @@ describe("handleSynthesisRequest", () => {
 
 	test("generates fresh prompt when no existing MEMORY.md", () => {
 		ensureDir(join(TEST_DIR, "memory"));
-		writeFileSync(
-			join(TEST_DIR, "memory", "2026-03-04-session-def.md"),
-			"Test session summary content",
-		);
+		writeFileSync(join(TEST_DIR, "memory", "2026-03-04-session-def.md"), "Test session summary content");
 
 		const result = handleSynthesisRequest({ trigger: "scheduled" });
 
@@ -1045,33 +1083,30 @@ describe("handleSynthesisRequest", () => {
 // ============================================================================
 
 describe("error handling", () => {
-	test("handles corrupt agent.yaml gracefully", () => {
+	test("handles corrupt agent.yaml gracefully", async () => {
 		writeAgentYaml("{{{{invalid yaml content!!!!");
 
-		const result = handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ harness: "test" });
 		expect(result.identity.name).toBe("Agent");
 	});
 
-	test("handles empty IDENTITY.md gracefully", () => {
+	test("handles empty IDENTITY.md gracefully", async () => {
 		writeIdentityMd("");
 
-		const result = handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ harness: "test" });
 		expect(result.identity.name).toBe("Agent");
 	});
 
-	test("handles corrupt memory database gracefully", () => {
+	test("handles corrupt memory database gracefully", async () => {
 		ensureDir(join(TEST_DIR, "memory"));
-		writeFileSync(
-			join(TEST_DIR, "memory", "memories.db"),
-			"not a sqlite database",
-		);
+		writeFileSync(join(TEST_DIR, "memory", "memories.db"), "not a sqlite database");
 
-		const result = handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ harness: "test" });
 		expect(result.memories).toEqual([]);
 	});
 
-	test("handles missing MEMORY.md gracefully", () => {
-		const result = handleSessionStart({ harness: "test" });
+	test("handles missing MEMORY.md gracefully", async () => {
+		const result = await handleSessionStart({ harness: "test" });
 		expect(result.recentContext).toBeUndefined();
 	});
 });
@@ -1085,9 +1120,9 @@ describe("schema", () => {
 		createMemoryDb([{ content: "FTS test memory about TypeScript" }]);
 
 		const db = openTestDb();
-		const rows = db
-			.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ?")
-			.all("TypeScript") as Array<{ content: string }>;
+		const rows = db.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ?").all("TypeScript") as Array<{
+			content: string;
+		}>;
 		db.close();
 
 		expect(rows.length).toBe(1);
@@ -1098,9 +1133,7 @@ describe("schema", () => {
 		createMemoryDb([]);
 		const db = openTestDb();
 
-		db.prepare(
-			"INSERT INTO memories (id, content, who, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		).run(
+		db.prepare("INSERT INTO memories (id, content, who, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(
 			crypto.randomUUID(),
 			"Trigger test content",
 			"test",
@@ -1108,9 +1141,9 @@ describe("schema", () => {
 			new Date().toISOString(),
 		);
 
-		const rows = db
-			.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ?")
-			.all("trigger") as Array<{ content: string }>;
+		const rows = db.prepare("SELECT content FROM memories_fts WHERE memories_fts MATCH ?").all("trigger") as Array<{
+			content: string;
+		}>;
 		db.close();
 
 		expect(rows.length).toBe(1);
@@ -1135,7 +1168,7 @@ describe("schema", () => {
 // ============================================================================
 
 describe("inject string formatting", () => {
-	test("combines identity, memories, and working memory", () => {
+	test("combines identity, memories, and working memory", async () => {
 		writeAgentYaml(`
 agent:
   name: IntegrationBot
@@ -1146,7 +1179,7 @@ agent:
 
 		writeMemoryMd("# Context\nSome context here.");
 
-		const result = handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ harness: "test" });
 
 		expect(result.inject).toContain("[memory active");
 		expect(result.inject).toContain("IntegrationBot");
@@ -1157,13 +1190,13 @@ agent:
 		expect(result.inject).toContain("Some context here");
 	});
 
-	test("memories show as bullet points", () => {
+	test("memories show as bullet points", async () => {
 		createMemoryDb([
 			{ content: "First fact", importance: 0.8 },
 			{ content: "Second fact", importance: 0.8 },
 		]);
 
-		const result = handleSessionStart({ harness: "test" });
+		const result = await handleSessionStart({ harness: "test" });
 
 		expect(result.inject).toContain("- First fact");
 		expect(result.inject).toContain("- Second fact");
@@ -1213,9 +1246,7 @@ describe("getAllScoredCandidates", () => {
 	});
 
 	test("filters out low-score memories below 0.2 threshold", () => {
-		const veryOld = new Date(
-			Date.now() - 365 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const veryOld = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
 		createMemoryDb([
 			{
 				content: "Ancient low-importance fact",
@@ -1265,13 +1296,13 @@ describe("getAllScoredCandidates", () => {
 // ============================================================================
 
 describe("session memory recording integration", () => {
-	test("handleSessionStart records candidates to session_memories table", () => {
+	test("handleSessionStart records candidates to session_memories table", async () => {
 		createMemoryDb([
 			{ content: "User prefers dark mode", importance: 0.9 },
 			{ content: "Project uses TypeScript", importance: 0.7 },
 		]);
 
-		handleSessionStart({
+		await handleSessionStart({
 			harness: "test",
 			sessionKey: "integration-session-001",
 		});
@@ -1303,20 +1334,16 @@ describe("session memory recording integration", () => {
 		expect(injectedCount).toBeGreaterThan(0);
 	});
 
-	test("handleSessionStart does not record when sessionKey is missing", () => {
-		createMemoryDb([
-			{ content: "Some memory", importance: 0.9 },
-		]);
+	test("handleSessionStart does not record when sessionKey is missing", async () => {
+		createMemoryDb([{ content: "Some memory", importance: 0.9 }]);
 
-		handleSessionStart({
+		await handleSessionStart({
 			harness: "test",
 			// no sessionKey
 		});
 
 		const db = openTestDb();
-		const count = db
-			.prepare("SELECT COUNT(*) as cnt FROM session_memories")
-			.get() as { cnt: number };
+		const count = db.prepare("SELECT COUNT(*) as cnt FROM session_memories").get() as { cnt: number };
 		db.close();
 
 		expect(count.cnt).toBe(0);
@@ -1345,9 +1372,7 @@ describe("session memory recording integration", () => {
 
 		const db = openTestDb();
 		const rows = db
-			.prepare(
-				"SELECT memory_id, fts_hit_count, source FROM session_memories WHERE session_key = ?",
-			)
+			.prepare("SELECT memory_id, fts_hit_count, source FROM session_memories WHERE session_key = ?")
 			.all("fts-tracking-session") as Array<{
 			memory_id: string;
 			fts_hit_count: number;

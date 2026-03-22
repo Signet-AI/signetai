@@ -95,12 +95,24 @@ export function stripFences(raw: string): string {
 	const match = stripped.match(FENCE_RE);
 	if (match) return match[1].trim();
 
-	// Fallback: extract balanced JSON array from verbose output
-	// (handles "explanation then JSON" pattern common with qwen3)
-	const arr = extractBalancedJsonArray(stripped);
+	const trimmed = stripped.trim();
+
+	// If the input starts with JSON structure, return it as-is — don't
+	// extract sub-arrays from inside a valid JSON object.
+	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+		return trimmed;
+	}
+
+	// Try extracting a balanced JSON object first (e.g. "Here is the data: {...}")
+	const obj = extractBalancedJsonObject(trimmed);
+	if (obj) return obj;
+
+	// Last resort: extract balanced JSON array from verbose output
+	// (handles "explanation then JSON array" pattern common with qwen3)
+	const arr = extractBalancedJsonArray(trimmed);
 	if (arr) return arr;
 
-	return stripped.trim();
+	return trimmed;
 }
 
 export function tryParseJson(candidate: string): unknown | null {
@@ -188,13 +200,22 @@ export function extractBalancedJsonArray(raw: string): string | null {
 		const ch = raw[i];
 
 		if (inString) {
-			if (escaping) { escaping = false; continue; }
-			if (ch === "\\") { escaping = true; continue; }
+			if (escaping) {
+				escaping = false;
+				continue;
+			}
+			if (ch === "\\") {
+				escaping = true;
+				continue;
+			}
 			if (ch === '"') inString = false;
 			continue;
 		}
 
-		if (ch === '"') { inString = true; continue; }
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
 		if (ch === "[") {
 			if (depth === 0) last = i;
 			depth++;
@@ -213,13 +234,22 @@ export function extractBalancedJsonArray(raw: string): string | null {
 		const ch = raw[i];
 
 		if (inString) {
-			if (escaping) { escaping = false; continue; }
-			if (ch === "\\") { escaping = true; continue; }
+			if (escaping) {
+				escaping = false;
+				continue;
+			}
+			if (ch === "\\") {
+				escaping = true;
+				continue;
+			}
 			if (ch === '"') inString = false;
 			continue;
 		}
 
-		if (ch === '"') { inString = true; continue; }
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
 		if (ch === "[") depth++;
 		if (ch === "]") {
 			depth--;
