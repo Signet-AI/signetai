@@ -423,6 +423,9 @@ async function restartOpenClaw(basePath: string): Promise<boolean> {
 		/^brew\s+services\s+restart\s+[\w.-]+$/,
 		/^supervisorctl\s+restart\s+[\w.-]+$/,
 	];
+	// Pre-reject ".." before pattern matching: `[\w.-]+` matches a literal
+	// dot so ".." is a valid segment in the launchctl path regex. ASCII-only
+	// constraint means Unicode normalization attacks aren't a concern here.
 	if (cmd.includes("..") || !SAFE_PATTERNS.some((p) => p.test(cmd))) {
 		console.log();
 		console.log(chalk.red("  Restart command rejected — does not match safe patterns."));
