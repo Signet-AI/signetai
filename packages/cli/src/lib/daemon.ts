@@ -46,20 +46,27 @@ export function createDaemonClient(port: number): {
 		body?: unknown,
 		timeoutMs = 5_000,
 	): Promise<{ readonly ok: boolean; readonly data: unknown }> => {
-		const res = await fetch(`${url}${path}`, {
-			method,
-			headers: body ? { "Content-Type": "application/json" } : {},
-			body: body ? JSON.stringify(body) : undefined,
-			signal: AbortSignal.timeout(timeoutMs),
-		});
-		const text = await res.text();
-		let data: unknown;
 		try {
-			data = JSON.parse(text);
+			const res = await fetch(`${url}${path}`, {
+				method,
+				headers: body ? { "Content-Type": "application/json" } : {},
+				body: body ? JSON.stringify(body) : undefined,
+				signal: AbortSignal.timeout(timeoutMs),
+			});
+			const text = await res.text();
+			let data: unknown;
+			try {
+				data = JSON.parse(text);
+			} catch {
+				data = { error: text || "Request failed" };
+			}
+			return { ok: res.ok, data };
 		} catch {
-			data = { error: text || "Request failed" };
+			return {
+				ok: false,
+				data: { error: "Could not reach Signet daemon" },
+			};
 		}
-		return { ok: res.ok, data };
 	};
 
 	return {
@@ -71,7 +78,7 @@ export function createDaemonClient(port: number): {
 
 export async function ensureDaemonRunning(
 	check: () => Promise<boolean>,
-	msg = "  Daemon is not running. Start it with: signet start",
+	msg = "  Daemon is not running. Start it with: signet daemon start",
 ): Promise<boolean> {
 	const running = await check();
 	if (running) {

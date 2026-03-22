@@ -99,7 +99,7 @@ export async function importFromGitHub(basePath: string, deps: Deps): Promise<vo
 
 		console.log();
 		console.log(chalk.green("  Import complete!"));
-		console.log(chalk.dim("  Run `signet restart` to apply changes"));
+		console.log(chalk.dim("  Run `signet daemon restart` to apply changes"));
 	} catch (err) {
 		spinner.fail("Import failed");
 		console.log(chalk.red(`  ${readErr(err)}`));
