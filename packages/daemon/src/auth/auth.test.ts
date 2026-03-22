@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -686,7 +687,6 @@ describe("security hardening", () => {
 				.replace(/\+/g, "-")
 				.replace(/\//g, "_")
 				.replace(/=+$/, "");
-			const { createHmac } = require("node:crypto");
 			const sig = createHmac("sha256", secret).update(payloadB64).digest();
 			const sigB64 = sig.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 			const token = `${payloadB64}.${sigB64}`;
@@ -709,7 +709,6 @@ describe("security hardening", () => {
 				.replace(/\+/g, "-")
 				.replace(/\//g, "_")
 				.replace(/=+$/, "");
-			const { createHmac } = require("node:crypto");
 			const sig = createHmac("sha256", secret).update(payloadB64).digest();
 			const sigB64 = sig.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 			const token = `${payloadB64}.${sigB64}`;
@@ -732,7 +731,6 @@ describe("security hardening", () => {
 				.replace(/\+/g, "-")
 				.replace(/\//g, "_")
 				.replace(/=+$/, "");
-			const { createHmac } = require("node:crypto");
 			const sig = createHmac("sha256", secret).update(payloadB64).digest();
 			const sigB64 = sig.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 			const token = `${payloadB64}.${sigB64}`;
@@ -755,7 +753,6 @@ describe("security hardening", () => {
 				.replace(/\+/g, "-")
 				.replace(/\//g, "_")
 				.replace(/=+$/, "");
-			const { createHmac } = require("node:crypto");
 			const sig = createHmac("sha256", secret).update(payloadB64).digest();
 			const sigB64 = sig.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 			const token = `${payloadB64}.${sigB64}`;

@@ -423,7 +423,7 @@ async function restartOpenClaw(basePath: string): Promise<boolean> {
 		/^brew\s+services\s+restart\s+[\w.-]+$/,
 		/^supervisorctl\s+restart\s+[\w.-]+$/,
 	];
-	if (!SAFE_PATTERNS.some((p) => p.test(cmd))) {
+	if (cmd.includes("..") || !SAFE_PATTERNS.some((p) => p.test(cmd))) {
 		console.log();
 		console.log(chalk.red("  Restart command rejected — does not match safe patterns."));
 		console.log(chalk.dim(`  Command: ${cmd}`));
