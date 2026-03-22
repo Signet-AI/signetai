@@ -94,6 +94,7 @@ import { registerSessionCommands } from "./commands/session.js";
 import { registerSkillCommands } from "./commands/skill.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
+import { configureAgent } from "./features/configure.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 
 // Template directory location (relative to built CLI)
@@ -4446,7 +4447,12 @@ async function doRestart(options: { path?: string; openclaw?: boolean } = {}) {
 
 registerAppCommands(program, {
 	collectListOption,
-	configureAgent,
+	configureAgent: () =>
+		configureAgent({
+			agentsDir: AGENTS_DIR,
+			configureHarnessHooks,
+			signetLogo,
+		}),
 	launchDashboard,
 	migrateSchema,
 	setupWizard,
@@ -4552,219 +4558,6 @@ async function syncTemplates() {
 
 	console.log();
 	console.log(chalk.green("  Done!"));
-}
-
-async function configureAgent() {
-	console.log(signetLogo());
-
-	const agentYamlPath = join(AGENTS_DIR, "agent.yaml");
-	if (!existsSync(agentYamlPath)) {
-		console.log(chalk.yellow("  No agent.yaml found. Run `signet setup` first."));
-		return;
-	}
-
-	const existingYaml = readFileSync(agentYamlPath, "utf-8");
-	const getYamlValue = (key: string, fallback: string) => {
-		const match = existingYaml.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"));
-		return match ? match[1].trim().replace(/^["']|["']$/g, "") : fallback;
-	};
-
-	console.log(chalk.bold("  Configure your agent\n"));
-
-	while (true) {
-		const section = await select({
-			message: "What would you like to configure?",
-			choices: [
-				{ value: "agent", name: "👤 Agent identity (name, description)" },
-				{ value: "harnesses", name: "[link] Harnesses (AI platforms)" },
-				{ value: "embedding", name: "🧠 Embedding provider" },
-				{ value: "search", name: "🔍 Search settings" },
-				{ value: "memory", name: "💾 Memory settings" },
-				{ value: "view", name: "📄 View current config" },
-				{ value: "done", name: "✓ Done" },
-			],
-		});
-
-		if (section === "done") break;
-
-		console.log();
-
-		if (section === "view") {
-			console.log(chalk.dim("  Current agent.yaml:\n"));
-			console.log(
-				existingYaml
-					.split("\n")
-					.map((line) => chalk.dim(`  ${line}`))
-					.join("\n"),
-			);
-			console.log();
-			continue;
-		}
-
-		if (section === "agent") {
-			const name = await input({
-				message: "Agent name:",
-				default: getYamlValue("name", "My Agent"),
-			});
-			const description = await input({
-				message: "Description:",
-				default: getYamlValue("description", "Personal AI assistant"),
-			});
-
-			let updatedYaml = existingYaml;
-			updatedYaml = updatedYaml.replace(/^(\s*name:)\s*.+$/m, `$1 "${name}"`);
-			updatedYaml = updatedYaml.replace(/^(\s*description:)\s*.+$/m, `$1 "${description}"`);
-			updatedYaml = updatedYaml.replace(/^(\s*updated:)\s*.+$/m, `$1 "${new Date().toISOString()}"`);
-
-			writeFileSync(agentYamlPath, updatedYaml);
-			console.log(chalk.green("  ✓ Agent identity updated"));
-		}
-
-		if (section === "harnesses") {
-			const harnesses = await checkbox({
-				message: "Select AI platforms:",
-				choices: [
-					{ value: "claude-code", name: "Claude Code" },
-					{ value: "codex", name: "Codex" },
-					{ value: "opencode", name: "OpenCode" },
-					{ value: "openclaw", name: "OpenClaw" },
-					{ value: "cursor", name: "Cursor" },
-					{ value: "windsurf", name: "Windsurf" },
-				],
-			});
-
-			const harnessYaml = harnesses.map((harness) => `  - ${harness}`).join("\n");
-			const updatedYaml = existingYaml.replace(/^harnesses:\n( {2}- .+\n)+/m, `harnesses:\n${harnessYaml}\n`);
-
-			writeFileSync(agentYamlPath, updatedYaml);
-			console.log(chalk.green("  ✓ Harnesses updated"));
-
-			const regen = await confirm({
-				message: "Regenerate harness hook configurations?",
-				default: true,
-			});
-
-			if (regen) {
-				for (const harness of harnesses) {
-					try {
-						await configureHarnessHooks(harness, AGENTS_DIR);
-						console.log(chalk.dim(`    ✓ ${harness}`));
-					} catch {
-						console.log(chalk.yellow(`    ⚠ ${harness} failed`));
-					}
-				}
-			}
-		}
-
-		if (section === "embedding") {
-			const provider = await select({
-				message: "Embedding provider:",
-				choices: [
-					{ value: "ollama", name: "Ollama (local)" },
-					{ value: "openai", name: "OpenAI API" },
-					{ value: "none", name: "Disable embeddings" },
-				],
-			});
-
-			if (provider !== "none") {
-				let model = "nomic-embed-text";
-				let dimensions = 768;
-
-				if (provider === "ollama") {
-					const selected = await select({
-						message: "Model:",
-						choices: [
-							{ value: "nomic-embed-text", name: "nomic-embed-text (768d)" },
-							{ value: "all-minilm", name: "all-minilm (384d)" },
-							{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d)" },
-						],
-					});
-					model = selected;
-					dimensions = selected === "all-minilm" ? 384 : selected === "mxbai-embed-large" ? 1024 : 768;
-				} else {
-					const selected = await select({
-						message: "Model:",
-						choices: [
-							{ value: "text-embedding-3-small", name: "text-embedding-3-small (1536d)" },
-							{ value: "text-embedding-3-large", name: "text-embedding-3-large (3072d)" },
-						],
-					});
-					model = selected;
-					dimensions = selected === "text-embedding-3-large" ? 3072 : 1536;
-				}
-
-				let updatedYaml = existingYaml;
-				if (existingYaml.includes("embedding:")) {
-					updatedYaml = updatedYaml.replace(
-						/^embedding:\n( {2}.+\n)+/m,
-						`embedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
-					);
-				} else {
-					updatedYaml = updatedYaml.replace(
-						/^(harnesses:\n( {2}- .+\n)+)/m,
-						`$1\nembedding:\n  provider: ${provider}\n  model: ${model}\n  dimensions: ${dimensions}\n`,
-					);
-				}
-				writeFileSync(agentYamlPath, updatedYaml);
-			}
-
-			console.log(chalk.green("  ✓ Embedding settings updated"));
-		}
-
-		if (section === "search") {
-			const alpha = await select({
-				message: "Search balance:",
-				choices: [
-					{ value: "0.7", name: "Balanced (70% semantic, 30% keyword)" },
-					{ value: "0.9", name: "Semantic-heavy (90/10)" },
-					{ value: "0.5", name: "Equal (50/50)" },
-					{ value: "0.3", name: "Keyword-heavy (30/70)" },
-				],
-			});
-
-			const topK = await input({
-				message: "Candidates per source (top_k):",
-				default: getYamlValue("top_k", "20"),
-			});
-
-			const minScore = await input({
-				message: "Minimum score threshold:",
-				default: getYamlValue("min_score", "0.3"),
-			});
-
-			let updatedYaml = existingYaml;
-			updatedYaml = updatedYaml.replace(/^(\s*alpha:)\s*.+$/m, `$1 ${alpha}`);
-			updatedYaml = updatedYaml.replace(/^(\s*top_k:)\s*.+$/m, `$1 ${topK}`);
-			updatedYaml = updatedYaml.replace(/^(\s*min_score:)\s*.+$/m, `$1 ${minScore}`);
-
-			writeFileSync(agentYamlPath, updatedYaml);
-			console.log(chalk.green("  ✓ Search settings updated"));
-		}
-
-		if (section === "memory") {
-			const sessionBudget = await input({
-				message: "Session context budget (characters):",
-				default: getYamlValue("session_budget", "2000"),
-			});
-
-			const decayRate = await input({
-				message: "Importance decay rate per day (0-1):",
-				default: getYamlValue("decay_rate", "0.95"),
-			});
-
-			let updatedYaml = existingYaml;
-			updatedYaml = updatedYaml.replace(/^(\s*session_budget:)\s*.+$/m, `$1 ${sessionBudget}`);
-			updatedYaml = updatedYaml.replace(/^(\s*decay_rate:)\s*.+$/m, `$1 ${decayRate}`);
-
-			writeFileSync(agentYamlPath, updatedYaml);
-			console.log(chalk.green("  ✓ Memory settings updated"));
-		}
-
-		console.log();
-	}
-
-	console.log(chalk.dim("  Configuration saved to agent.yaml"));
-	console.log();
 }
 
 // ============================================================================
