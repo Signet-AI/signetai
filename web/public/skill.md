@@ -370,7 +370,7 @@ signet status
 If daemon is stopped, start it:
 
 ```bash
-signet start
+signet daemon start
 ```
 
 The daemon runs in the background on port 3850. It must be running
@@ -395,7 +395,7 @@ signet recall "test"                     # Should return without error
 ```
 
 If `signet status` shows the daemon is not running, start it with
-`signet start` and check logs with `signet daemon logs`.
+`signet daemon start` and check logs with `signet daemon logs`.
 
 > GATE: After verification, tell your user:
 > "Signet is installed and running. Here's what's now active:
@@ -603,9 +603,9 @@ make during installation. Do not repeat them.
 | Mistake | Why it's wrong |
 |---------|---------------|
 | Running `sudo npm install -g signetai` | Signet never needs sudo. Fix npm permissions instead. |
-| Running `signet init` | This command does not exist. Use `signet` (no args) or `signet setup`. |
+| Running `signet init` | This command does not exist. Use `signet setup` (or `signet` to view the command map). |
 | Running `npx signet init` | Not a thing. Install globally first, then run `signet`. |
-| Assuming Node.js alone is enough | Bun is required to run the daemon (`signet start`). |
+| Assuming Node.js alone is enough | Bun is required to run the daemon (`signet daemon start`). |
 | Manually writing to `~/.agents/memory/` | The daemon manages memory files. Do not write there directly. |
 | Running `signet secret get NAME` | This command does not exist. Use `put/list/has/delete`, and use secret-exec to run commands with injected values. |
 | Calling `signet recall` before every response | Context injection is automatic. Only use recall for explicit searches. |
@@ -624,7 +624,7 @@ make during installation. Do not repeat them.
 ```bash
 signet daemon logs           # Check for errors
 lsof -i :3850               # Check if port is in use
-signet stop && signet start  # Restart
+signet daemon stop && signet daemon start  # Restart
 ```
 
 **No memories appearing:**
@@ -661,8 +661,8 @@ ollama pull nomic-embed-text
 **Permission errors:**
 Never use sudo. Fix npm prefix (see Safety section above) or use bun.
 
-**Setup wizard not launching:**
-If `signet` with no arguments doesn't launch the wizard, try:
+**Need to initialize a workspace:**
+`signet` with no arguments shows help. Run setup explicitly:
 ```bash
 signet setup
 ```
@@ -680,13 +680,13 @@ node --version                 # Optional, only needed for npm install
 bun add -g signetai          # or: npm install -g signetai
 
 # Setup
-signet                       # First run launches setup wizard
+signet                       # Show command help
 signet setup                 # Explicit setup command
 signet setup --non-interactive --name "Agent" --harness claude-code --embedding-provider ollama --extraction-provider claude-code
 
 # Daemon
-signet start                 # Start daemon
-signet stop                  # Stop daemon
+signet daemon start                 # Start daemon
+signet daemon stop                  # Stop daemon
 signet status                # Check status
 signet daemon logs           # View logs
 

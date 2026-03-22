@@ -35,7 +35,7 @@ agent.yaml
 ----------
 
 The primary configuration file. Created by `signet setup` and editable
-via `signet config` or the dashboard's config editor.
+via `signet configure` or the dashboard's config editor.
 
 ```yaml
 version: 1

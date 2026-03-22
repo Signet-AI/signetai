@@ -21,7 +21,7 @@ Accessing the Dashboard
 The daemon must be running first:
 
 ```bash
-signet start
+signet daemon start
 ```
 
 Then visit `http://localhost:3850` in your browser, or run:
@@ -243,7 +243,7 @@ Port Configuration
 The default port is 3850. To change it:
 
 ```bash
-SIGNET_PORT=4000 signet start
+SIGNET_PORT=4000 signet daemon start
 ```
 
 The dashboard URL changes accordingly.

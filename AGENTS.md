@@ -140,9 +140,9 @@ bun run deploy   # Deploy to Cloudflare (wrangler)
 - YAML manifest parsing
 - Constants and utilities
 
-**@signet/cli** - User interface (~4600 LOC in cli.ts)
+**@signet/cli** - User interface (modular command surface + setup flows)
 - Setup wizard with harness selection
-- Config editor (interactive TUI)
+- Config editor (`signet configure`)
 - Daemon start/stop/status
 - Dashboard launcher
 - Secrets management

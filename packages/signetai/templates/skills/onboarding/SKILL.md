@@ -636,7 +636,7 @@ curl -s http://localhost:3850/api/status
 curl -s http://localhost:3850/api/hooks/synthesis/config
 ```
 
-If the daemon isn't running, suggest `signet restart`. If synthesis
+If the daemon isn't running, suggest `signet daemon start`. If synthesis
 hasn't run recently, suggest triggering it manually.
 
 ### OpenClaw Integration Check

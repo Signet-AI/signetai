@@ -38,19 +38,21 @@ Commands Overview
 
 | Command | Description |
 |---------|-------------|
-| `signet` | Interactive TUI menu |
+| `signet` | Show help, examples, and command map |
 | `signet setup` | First-time setup wizard |
-| `signet config` | Interactive config editor |
+| `signet configure` | Interactive config editor (`signet config` alias) |
 | `signet status` | Show daemon and agent status |
+| `signet doctor` | Run local health checks |
 | `signet dashboard` | Open web UI in browser |
-| `signet start` | Start the daemon |
-| `signet stop` | Stop the daemon |
-| `signet restart` | Restart the daemon |
-| `signet logs` | View daemon logs |
 | `signet daemon` | Grouped daemon subcommands |
+| `signet daemon start` | Start the daemon |
+| `signet daemon stop` | Stop the daemon |
+| `signet daemon restart` | Restart the daemon |
+| `signet daemon logs` | View daemon logs |
 | `signet remember` | Save a memory |
 | `signet recall` | Search memories |
-| `signet migrate` | Import from other platforms |
+| `signet export` | Export a portable bundle |
+| `signet import` | Import a portable bundle |
 | `signet migrate-schema` | Migrate database to unified schema |
 | `signet migrate-vectors` | Migrate BLOB vectors to sqlite-vec format |
 | `signet sync` | Sync built-in templates and skills |
@@ -67,27 +69,29 @@ Commands Overview
 `signet` (No Arguments)
 ---
 
-Opens an interactive TUI menu for common operations.
+Shows the top-level help output with examples. This keeps the CLI safe
+to call from scripts and agents without dropping into an interactive
+menu.
 
 ```
   ◈ signet v0.1.0
   own your agent. bring it anywhere.
 
-  ● Daemon running
-    PID: 12345 | Uptime: 2h 15m
+  Usage: signet [options] [command]
 
-? What would you like to do?
-  Open dashboard
-  View status
-  Configure settings
-  Manage harnesses
-  View logs
-  Restart daemon
-  Stop daemon
-  Exit
+  Examples:
+    signet setup
+    signet status
+    signet doctor
+    signet daemon start
+    signet remember "Nicholai prefers command-first CLIs"
 ```
 
-If the daemon is not running, you'll be prompted to start it.
+Use explicit commands for interactive flows:
+
+- `signet setup` — initialize or migrate a workspace
+- `signet configure` — edit agent settings interactively
+- `signet doctor` — troubleshoot local issues
 
 ---
 
@@ -118,7 +122,7 @@ Options:
 | `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `codex`) |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) — required in non-interactive setup |
 | `--embedding-model <model>` | Non-interactive embedding model |
-| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `ollama`, `codex`, `native`, `none`) — required in non-interactive setup |
+| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) — required in non-interactive setup |
 | `--extraction-model <model>` | Non-interactive extraction model |
 | `--search-balance <alpha>` | Non-interactive search alpha (`0-1`) |
 | `--openclaw-runtime-path <mode>` | Non-interactive OpenClaw mode (`plugin`, `legacy`) |
@@ -140,23 +144,23 @@ Wizard steps:
    - Claude Code (Anthropic CLI)
    - OpenCode
    - OpenClaw
-   - Cursor
-   - Windsurf
-   - ChatGPT
-   - Gemini
+   - Codex
 3. **OpenClaw Workspace** - Appears only when an existing OpenClaw config
    is detected; workspace is patched only if you opt in
 4. **Description** - Short agent description
 5. **Embedding Provider**:
-   - Ollama (local, recommended)
+   - Built-in (recommended, no setup required)
+   - Ollama (local)
    - OpenAI API
    - Skip embeddings
 6. **Embedding Model** - Based on provider:
-   - Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
+   - Built-in: `nomic-embed-text-v1.5`
+   - Ollama: `nomic-embed-text`, `all-minilm`, `mxbai-embed-large`
    - OpenAI: text-embedding-3-small, text-embedding-3-large
    - Ollama selections run preflight checks for binary availability,
      service health, and model presence; if checks fail, setup offers
-     retry, switch-to-OpenAI, or continue-without-embeddings
+     retry, switch to built-in embeddings, switch to OpenAI, or
+     continue without embeddings
 7. **Search Balance** - Semantic vs keyword weighting
 8. **Advanced Settings** (optional):
    - `top_k` - Search candidates per source
@@ -193,13 +197,14 @@ If harnesses are selected, their configs are also created:
 
 ---
 
-`signet config`
+`signet configure`
 ---
 
 Interactive configuration editor for modifying `~/.agents/agent.yaml`.
 
 ```bash
-signet config
+signet configure
+signet config      # Alias
 ```
 
 Sections:
@@ -279,25 +284,25 @@ If the daemon is not running, it will be started automatically.
 Daemon Commands
 ---
 
-Daemon operations are available both as top-level shortcuts and under the
-`signet daemon` subcommand group. Both forms are equivalent.
+Daemon operations live under the `signet daemon` subcommand group. The
+top-level shortcuts still exist as backwards-compatible aliases, but the
+grouped form is the preferred surface.
 
 ```bash
-# Top-level shortcuts (backwards compatible)
-signet start
-signet stop
-signet restart
-signet logs
-
-# Grouped form
 signet daemon start
 signet daemon stop
 signet daemon restart
 signet daemon status
 signet daemon logs
+
+# Backwards-compatible aliases
+signet start
+signet stop
+signet restart
+signet logs
 ```
 
-### `signet start` / `signet daemon start`
+### `signet daemon start`
 
 Start the Signet daemon if not already running.
 
@@ -309,25 +314,33 @@ Start the Signet daemon if not already running.
   Dashboard: http://localhost:3850
 ```
 
-### `signet stop` / `signet daemon stop`
+Top-level alias: `signet start`
+
+### `signet daemon stop`
 
 Stop the running Signet daemon.
 
-### `signet restart` / `signet daemon restart`
+Top-level alias: `signet stop`
+
+### `signet daemon restart`
 
 Stop and start the daemon. Useful after installing an update.
 
-### `signet logs` / `signet daemon logs`
+Top-level alias: `signet restart`
+
+### `signet daemon logs`
 
 View daemon logs.
 
 ```bash
-signet logs
-signet logs -n 100
-signet logs --follow
-signet logs --level warn
-signet logs --category memory
+signet daemon logs
+signet daemon logs -n 100
+signet daemon logs --follow
+signet daemon logs --level warn
+signet daemon logs --category memory
 ```
+
+Top-level alias: `signet logs`
 
 Options:
 
@@ -408,25 +421,35 @@ Options:
 
 ---
 
-`signet migrate`
+`signet export` / `signet import`
 ---
 
-Import conversations and memories from other platforms.
+Export and import portable Signet bundles. This is the supported path
+for moving an agent between machines or backing up identity + memory
+state from the CLI.
 
 ```bash
-signet migrate
-signet migrate chatgpt
+signet export
+signet export --json
+signet import ./signet-export-2026-03-22
+signet import ./signet-export-2026-03-22.json --json --conflict merge
 ```
 
-Supported sources:
+`signet export` writes a portable bundle containing:
 
-- **ChatGPT** - Import from conversations.json export
-- **Claude** - Import from Claude export
-- **Gemini** - Import from Google AI Studio export
-- **Custom** - Custom JSON format
+- identity files
+- `agent.yaml`
+- memories
+- entities
+- relations
+- installed skills
 
-The interactive flow prompts for the source platform and the path to the
-export file, then confirms how many items were imported.
+`signet import` restores those files into `~/.agents/`. Conflict
+handling for memories is controlled with `--conflict`:
+
+- `skip` — keep existing memories and skip duplicates
+- `overwrite` — replace matching memories
+- `merge` — merge compatible records when supported
 
 ---
 

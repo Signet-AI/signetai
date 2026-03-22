@@ -190,7 +190,7 @@ than a local Ollama instance.
 ### Prerequisites
 
 - Codex (`codex-rs`) installed and in `PATH`
-- Signet daemon running (`signet start`)
+- Signet daemon running (`signet daemon start`)
 
 ---
 

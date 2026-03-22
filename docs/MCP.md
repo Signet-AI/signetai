@@ -398,7 +398,7 @@ configuration file during installation. No manual steps needed.
 
 ### Manual discovery
 
-1. The daemon must be running (`signet start`)
+1. The daemon must be running (`signet daemon start`)
 2. The MCP server is available at:
    - **Streamable HTTP:** `http://localhost:3850/mcp`
    - **stdio:** spawn the `signet-mcp` binary as a subprocess
@@ -501,7 +501,7 @@ Manual Setup
 
 If you don't use `signet install`, you can configure MCP manually:
 
-1. Ensure the daemon is running: `signet start`
+1. Ensure the daemon is running: `signet daemon start`
 2. Add the MCP server to your harness config (see examples above)
 3. Verify connectivity: `echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test","version":"1.0"},"capabilities":{}},"id":1}' | signet-mcp`
 

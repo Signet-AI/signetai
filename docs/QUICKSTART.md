@@ -145,14 +145,13 @@ for each:
 - OpenCode — plugin + AGENTS.md sync
 - OpenClaw — adapter-openclaw hooks
 - Codex — wrapper install + session hooks
-- Cursor (planned)
-- Windsurf (planned)
 
 **3. Embedding provider**
 
 Embeddings power semantic (meaning-based) memory search. Choose:
 
-- **Ollama** (recommended) — runs locally, free, no API key needed.
+- **Built-in** (recommended) — no extra setup required.
+- **Ollama** — runs locally, free, no API key needed.
   Setup checks your binary, service, and model, and guides install/pull
   when needed.
 - **OpenAI** — uses the OpenAI embeddings API. Requires `OPENAI_API_KEY`.
@@ -301,16 +300,16 @@ signet recall "signet" --type decision -l 5
 ### View daemon logs
 
 ```bash
-signet logs
-signet logs -n 100
+signet daemon logs
+signet daemon logs -n 100
 ```
 
 ### Stop/start the daemon
 
 ```bash
-signet stop
-signet start
-signet restart
+signet daemon stop
+signet daemon start
+signet daemon restart
 ```
 
 ---
@@ -364,7 +363,8 @@ Install as a System Service
 To have Signet start automatically on boot:
 
 ```bash
-signet install-service
+cd packages/daemon
+bun run install:service
 ```
 
 **macOS (launchd):**
@@ -421,7 +421,7 @@ lsof -i :3850
 Remove a stale PID file if needed:
 ```bash
 rm ~/.agents/.daemon/pid
-signet start
+signet daemon start
 ```
 
 **Embeddings not working**
@@ -447,7 +447,7 @@ signet status
 
 ```bash
 curl http://localhost:3850/health
-signet logs
+signet daemon logs
 ```
 
 ---

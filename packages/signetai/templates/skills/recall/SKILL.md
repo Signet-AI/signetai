@@ -78,7 +78,7 @@ signet status
 curl -s http://localhost:3850/health
 ```
 
-If the daemon is down, start it with `signet start`.
+If the daemon is down, start it with `signet daemon start`.
 
 ## response format
 

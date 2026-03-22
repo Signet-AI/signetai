@@ -18,10 +18,10 @@ npm install -g signetai
 
 ```bash
 # Run the setup wizard
-signet
+signet setup
 
 # Or start immediately
-signet start
+signet daemon start
 signet dashboard
 ```
 
@@ -38,11 +38,12 @@ signet dashboard
 ## Commands
 
 ```bash
-signet                  # Interactive menu / setup wizard
+signet                  # Show help and command map
+signet setup            # Setup wizard
 signet status           # Daemon status
 signet dashboard        # Open web dashboard
-signet start            # Start daemon
-signet stop             # Stop daemon
+signet daemon start     # Start daemon
+signet daemon stop      # Stop daemon
 
 # Memory
 signet remember <text>  # Save a memory
@@ -77,8 +78,8 @@ signet update enable    # Enable unattended installs
 
 ## Requirements
 
-- **Node.js 18+** for CLI commands (setup, config, status, recall, etc.)
-- **Bun 1.0+** required for the daemon (`signet start`) — uses `bun:sqlite`
+- **Node.js 18+** for CLI commands (setup, configure, status, recall, etc.)
+- **Bun 1.0+** required for the daemon (`signet daemon start`) — uses `bun:sqlite`
 
 ## Documentation
 

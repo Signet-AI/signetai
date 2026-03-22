@@ -24,11 +24,14 @@ Starting and Stopping
 ### Via CLI
 
 ```bash
-signet start      # Start the daemon
-signet stop       # Stop the daemon
-signet restart    # Restart the daemon
-signet status     # Check status
+signet daemon start    # Start the daemon
+signet daemon stop     # Stop the daemon
+signet daemon restart  # Restart the daemon
+signet status          # Check status
 ```
+
+Top-level aliases `signet start`, `signet stop`, and `signet restart`
+still exist, but `signet daemon ...` is the preferred command surface.
 
 ### Via System Service
 
@@ -36,7 +39,8 @@ The daemon can be installed as a system service for auto-start on boot.
 
 **macOS (launchd):**
 ```bash
-signet install-service
+cd packages/daemon
+bun run install:service
 
 launchctl load ~/Library/LaunchAgents/ai.signet.daemon.plist
 launchctl unload ~/Library/LaunchAgents/ai.signet.daemon.plist
@@ -44,7 +48,8 @@ launchctl unload ~/Library/LaunchAgents/ai.signet.daemon.plist
 
 **Linux (systemd):**
 ```bash
-signet install-service
+cd packages/daemon
+bun run install:service
 
 systemctl --user start signet.service
 systemctl --user stop signet.service
@@ -371,7 +376,7 @@ lsof -i :3850
 Remove a stale PID file if present:
 ```bash
 rm ~/.agents/.daemon/pid
-signet start
+signet daemon start
 ```
 
 Read the error log:

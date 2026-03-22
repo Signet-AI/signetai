@@ -349,7 +349,7 @@ release. When in doubt, check the config manually.
 ## Commands Reference
 
 ```bash
-signet                  # Interactive menu
+signet                  # Show help and command map
 signet setup            # Setup wizard
 signet setup --non-interactive --name "Agent" --harness claude-code --embedding-provider ollama --extraction-provider claude-code
 signet status           # Show status
@@ -360,5 +360,5 @@ signet secret list      # List secret names
 signet remember "..."   # Save a memory
 signet recall "..."     # Search memories
 signet sync             # Sync built-in templates/skills
-signet restart          # Restart daemon
+signet daemon restart   # Restart daemon
 ```

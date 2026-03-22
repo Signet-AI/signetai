@@ -293,7 +293,7 @@ Try broader terms or check /memory in dashboard
 
 ```
 ✗ Search failed: daemon not running
-  Start with: signet start
+  Start with: signet daemon start
 ```
 
 ---

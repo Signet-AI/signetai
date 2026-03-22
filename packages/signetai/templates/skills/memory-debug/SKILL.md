@@ -39,13 +39,13 @@ If daemon is down or unresponsive, restart it:
 
 ```bash
 # preferred: CLI commands
-signet start          # start if not running
-signet restart        # stop + start (graceful)
+signet daemon start          # start if not running
+signet daemon restart        # stop + start (graceful)
 
 # if CLI restart doesn't work, kill and restart manually
-signet stop
+signet daemon stop
 pkill -f "signet.*daemon"   # force kill if stop hangs
-signet start
+signet daemon start
 
 # if installed as a system service (launchd on macOS, systemd on Linux)
 # macOS:
@@ -111,8 +111,8 @@ Common fixes:
 Check daemon logs for hook and memory errors:
 
 ```bash
-signet logs -c hooks
-signet logs -c memory
+signet daemon logs -c hooks
+signet daemon logs -c memory
 ```
 
 Use direct API checks for deeper issues:
