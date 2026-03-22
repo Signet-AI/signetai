@@ -45,7 +45,13 @@ export async function importFromGitHub(basePath: string, deps: Deps): Promise<vo
 		const clone = spawnSync("git", ["clone", "--depth", "1", gitUrl, tmpDir], {
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
+			timeout: 60_000,
 			windowsHide: true,
+			env: {
+				...process.env,
+				GCM_INTERACTIVE: "never",
+				GIT_TERMINAL_PROMPT: "0",
+			},
 		});
 
 		if (clone.status !== 0) {
@@ -101,15 +107,25 @@ export async function importFromGitHub(basePath: string, deps: Deps): Promise<vo
 	}
 }
 
-function normalizeGitUrl(repoUrl: string): string {
+export function normalizeGitUrl(repoUrl: string): string {
 	const trimmed = repoUrl.trim();
-	if (!trimmed.includes("://") && !trimmed.startsWith("git@")) {
-		return `https://github.com/${trimmed}.git`;
+	const withoutTrailingSlash =
+		trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed;
+	if (
+		!withoutTrailingSlash.includes("://") &&
+		!withoutTrailingSlash.startsWith("git@")
+	) {
+		return withoutTrailingSlash.endsWith(".git")
+			? `https://github.com/${withoutTrailingSlash}`
+			: `https://github.com/${withoutTrailingSlash}.git`;
 	}
-	if (trimmed.startsWith("https://github.com/") && !trimmed.endsWith(".git")) {
-		return `${trimmed}.git`;
+	if (
+		withoutTrailingSlash.startsWith("https://github.com/") &&
+		!withoutTrailingSlash.endsWith(".git")
+	) {
+		return `${withoutTrailingSlash}.git`;
 	}
-	return trimmed;
+	return withoutTrailingSlash;
 }
 
 function hasUncommittedChanges(basePath: string): boolean {

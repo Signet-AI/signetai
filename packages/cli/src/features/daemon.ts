@@ -151,7 +151,7 @@ export async function migrateSchema(options: PathOptions, deps: Deps): Promise<v
 }
 
 export async function showLogs(options: LogOptions, deps: Deps): Promise<void> {
-	const limit = Number.parseInt(options.lines || "50", 10);
+	const limit = readLogLimit(options.lines);
 	const basePath = readPath(options, deps);
 
 	console.log(deps.signetLogo());
@@ -297,26 +297,27 @@ async function followLogs(port: number): Promise<void> {
 	console.log();
 	console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
 
-	const source = new EventSource(`http://localhost:${port}/api/logs/stream`);
-	source.onmessage = (event) => {
-		try {
-			const json = JSON.parse(event.data);
-			const entry = readLogEntry(json);
-			if (entry === null || entry.category === "connected") {
-				return;
+	await new Promise<void>((resolve) => {
+		const source = new EventSource(`http://localhost:${port}/api/logs/stream`);
+		source.onmessage = (event) => {
+			try {
+				const json = JSON.parse(event.data);
+				const entry = readLogEntry(json);
+				if (entry === null || entry.category === "connected") {
+					return;
+				}
+				console.log(`  ${formatLogEntry(entry)}`);
+			} catch {
+				// Ignore parse errors
 			}
-			console.log(`  ${formatLogEntry(entry)}`);
-		} catch {
-			// Ignore parse errors
-		}
-	};
+		};
 
-	source.onerror = () => {
-		console.log(chalk.red("  Stream disconnected"));
-		source.close();
-	};
-
-	await new Promise<void>(() => {});
+		source.onerror = () => {
+			console.log(chalk.red("  Stream disconnected"));
+			source.close();
+			resolve();
+		};
+	});
 }
 
 function readFileLogs(basePath: string, limit: number, options: LogOptions): void {
@@ -436,6 +437,19 @@ function readLogPayload(value: unknown): LogPayload | null {
 		return log === null ? [] : [log];
 	});
 	return { logs, count: value.count };
+}
+
+function readLogLimit(value: string | undefined): number {
+	if (!value) {
+		return 50;
+	}
+
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isInteger(parsed) || parsed <= 0) {
+		return 50;
+	}
+
+	return parsed;
 }
 
 function readLogEntry(value: unknown): LogEntry | null {
