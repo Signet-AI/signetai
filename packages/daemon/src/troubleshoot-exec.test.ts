@@ -110,6 +110,31 @@ describe("troubleshoot exec: restart spawn ordering", () => {
 		// Re-added in spawn env
 		expect(execRoute).toContain('SIGNET_NO_HOOKS: "1"');
 	});
+
+	it("wraps spawn in try/finally so SIGTERM fires even on failure", () => {
+		const block = extract(/setTimeout\(async \(\) => \{[\s\S]*?daemon-restart[\s\S]*?\}, 1000\);/);
+		// try block contains the spawn logic
+		expect(block).toContain("try {");
+		// finally block guarantees SIGTERM
+		expect(block).toContain("} finally {");
+		// SIGTERM is inside the finally, not the try
+		const finallyIdx = block.indexOf("} finally {");
+		const killIdx = block.indexOf("process.kill(process.pid");
+		expect(killIdx).toBeGreaterThan(finallyIdx);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Auth middleware
+// ---------------------------------------------------------------------------
+
+describe("troubleshoot exec: auth middleware", () => {
+	it("has admin auth middleware on /api/troubleshoot/*", () => {
+		const middleware = SRC.match(/app\.use\("\/api\/troubleshoot\/\*"[\s\S]*?\}\);/);
+		expect(middleware).not.toBeNull();
+		expect(middleware?.[0]).toContain("admin");
+		expect(middleware?.[0]).toContain("requirePermission");
+	});
 });
 
 // ---------------------------------------------------------------------------

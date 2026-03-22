@@ -1510,6 +1510,11 @@ app.use("/api/repair/*", async (c, next) => {
 	return requirePermission("admin", authConfig)(c, next);
 });
 
+// Troubleshooter — admin only (can stop/restart daemon, run CLI commands)
+app.use("/api/troubleshoot/*", async (c, next) => {
+	return requirePermission("admin", authConfig)(c, next);
+});
+
 // Per-memory PATCH and DELETE need method-specific guards + scope check
 app.use("/api/memory/:id", async (c, next) => {
 	// Scope enforcement on mutations: if token has project scope, verify
@@ -7267,17 +7272,21 @@ app.post("/api/troubleshoot/exec", async (c) => {
 				// is detached+unref'd so it survives parent exit. A short delay
 				// after spawn lets the fork commit before we self-terminate.
 				setTimeout(async () => {
-					if (key === "daemon-restart") {
-						const { spawn: nodeSpawn } = await import("node:child_process");
-						const child = nodeSpawn(resolved, ["daemon", "start"], {
-							detached: true,
-							stdio: "ignore",
-							env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
-						});
-						child.unref();
+					try {
+						if (key === "daemon-restart") {
+							const { spawn: nodeSpawn } = await import("node:child_process");
+							const child = nodeSpawn(resolved, ["daemon", "start"], {
+								detached: true,
+								stdio: "ignore",
+								env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
+							});
+							child.unref();
+						}
+					} finally {
+						// Guarantee SIGTERM fires even if spawn throws — without
+						// this the daemon zombies with stream closed but process alive.
+						setTimeout(() => process.kill(process.pid, "SIGTERM"), 300);
 					}
-					// Let the fork fully settle before cleanup tears everything down
-					setTimeout(() => process.kill(process.pid, "SIGTERM"), 300);
 				}, 1000);
 			},
 		});
