@@ -93,7 +93,17 @@ import { setupWizard } from "./features/setup.js";
 import { syncTemplates } from "./features/sync.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
-import { AGENTS_DIR, DEFAULT_PORT, formatUptime, getDaemonStatus, isDaemonRunning, sleep, startDaemon, stopDaemon } from "./lib/runtime.js";
+import {
+	AGENTS_DIR,
+	DEFAULT_PORT,
+	formatUptime,
+	getDaemonStatus,
+	getReachableDaemonUrls,
+	isDaemonRunning,
+	sleep,
+	startDaemon,
+	stopDaemon,
+} from "./lib/runtime.js";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {

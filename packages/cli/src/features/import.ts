@@ -50,6 +50,7 @@ export async function importFromGitHub(basePath: string, deps: Deps): Promise<vo
 			env: {
 				...process.env,
 				GCM_INTERACTIVE: "never",
+				GIT_ASKPASS: "echo",
 				GIT_TERMINAL_PROMPT: "0",
 			},
 		});

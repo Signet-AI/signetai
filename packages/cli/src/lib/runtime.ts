@@ -38,7 +38,7 @@ async function isDaemonHealthyAt(baseUrl: string): Promise<boolean> {
 	}
 }
 
-async function getReachableDaemonUrls(): Promise<string[]> {
+export async function getReachableDaemonUrls(): Promise<string[]> {
 	const checks = await Promise.all(
 		DAEMON_BASE_URLS.map(async (baseUrl) => ((await isDaemonHealthyAt(baseUrl)) ? baseUrl : null)),
 	);
