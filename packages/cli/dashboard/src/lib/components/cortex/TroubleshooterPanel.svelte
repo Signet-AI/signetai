@@ -8,7 +8,7 @@
 	import Info from "@lucide/svelte/icons/info";
 	import Terminal from "@lucide/svelte/icons/terminal";
 	import ChevronDown from "@lucide/svelte/icons/chevron-down";
-	import { tick } from "svelte";
+	import { tick, onDestroy } from "svelte";
 
 	type CmdKind = "cli" | "api";
 
@@ -28,6 +28,8 @@
 		readonly color: string;
 		readonly commands: readonly CommandDef[];
 	}
+
+	const HEALTH_PATH = "/health";
 
 	const groupDefs: readonly GroupDef[] = [
 		{
@@ -52,7 +54,7 @@
 			icon: Activity,
 			color: "var(--sig-highlight)",
 			commands: [
-				{ label: "Health", kind: "api", method: "GET", path: "/health" },
+				{ label: "Health", kind: "api", method: "GET", path: HEALTH_PATH },
 				{ label: "Diagnostics", kind: "api", method: "GET", path: "/api/diagnostics" },
 				{ label: "Pipeline", kind: "api", method: "GET", path: "/api/pipeline/status" },
 				{ label: "Predictor", kind: "api", method: "GET", path: "/api/predictor/status" },
@@ -89,8 +91,8 @@
 				{ label: "Reclassify", kind: "api", method: "POST", path: "/api/repair/reclassify-entities" },
 				{ label: "Prune Chunks", kind: "api", method: "POST", path: "/api/repair/prune-chunk-groups" },
 				{ label: "Prune Singletons", kind: "api", method: "POST", path: "/api/repair/prune-singleton-entities" },
-				{ label: "Stop Daemon", kind: "cli", key: "daemon-stop" },
-				{ label: "Restart Daemon", kind: "cli", key: "daemon-restart" },
+				{ label: "Stop Daemon", kind: "cli", key: "daemon-stop", danger: true },
+				{ label: "Restart Daemon", kind: "cli", key: "daemon-restart", danger: true },
 				{ label: "Update Signet", kind: "cli", key: "update" },
 			],
 		},
@@ -107,6 +109,14 @@
 	let panels = $state<Record<string, GroupState>>(
 		Object.fromEntries(groupDefs.map(g => [g.id, { lines: [], running: false, expanded: true, selected: 0 }]))
 	);
+
+	// Track in-flight requests so we can abort on unmount
+	const inflight = new Set<AbortController>();
+
+	onDestroy(() => {
+		for (const c of inflight) c.abort();
+		inflight.clear();
+	});
 
 	const termRefs: Record<string, HTMLDivElement | undefined> = {};
 
@@ -146,6 +156,7 @@
 		await scrollGroup(gid);
 
 		const abort = new AbortController();
+		inflight.add(abort);
 		let initiated = false;
 		try {
 			const res = await fetch(`${API_BASE}/api/troubleshoot/exec`, {
@@ -231,23 +242,29 @@
 		}
 
 		// Restart: poll until daemon comes back (only if restart was actually initiated)
-		if (cmd.key === "daemon-restart" && initiated) {
+		if (cmd.key === "daemon-restart" && initiated && !abort.signal.aborted) {
 			appendLine(gid, "\x1b[90mWaiting for daemon to restart...\x1b[0m");
 			await scrollGroup(gid);
 			let ok = false;
 			for (let i = 0; i < 15; i++) {
+				if (abort.signal.aborted) break;
 				await new Promise<void>(r => setTimeout(r, 1000));
 				try {
-					const h = await fetch(`${API_BASE}/health`);
+					const h = await fetch(`${API_BASE}${HEALTH_PATH}`, { signal: abort.signal });
 					if (h.ok) { ok = true; break; }
-				} catch { /* still down */ }
+				} catch {
+					if (abort.signal.aborted) break;
+				}
 			}
-			appendLine(gid, ok
-				? "\x1b[32m✓ Daemon restarted\x1b[0m"
-				: "\x1b[31m✗ Daemon did not restart within 15s\x1b[0m");
-			await scrollGroup(gid);
+			if (!abort.signal.aborted) {
+				appendLine(gid, ok
+					? "\x1b[32m✓ Daemon restarted\x1b[0m"
+					: "\x1b[31m✗ Daemon did not restart within 15s\x1b[0m");
+				await scrollGroup(gid);
+			}
 		}
 
+		inflight.delete(abort);
 		appendLine(gid, "");
 		gs.running = false;
 		await scrollGroup(gid);
@@ -287,9 +304,27 @@
 		await scrollGroup(gid);
 	}
 
+	// Confirmation gate for dangerous commands
+	let pending = $state<{ gid: string; cmd: CommandDef } | null>(null);
+
 	function exec(gid: string, cmd: CommandDef): void {
+		if (cmd.danger) {
+			pending = { gid, cmd };
+			return;
+		}
+		run(gid, cmd);
+	}
+
+	function run(gid: string, cmd: CommandDef): void {
 		if (cmd.kind === "cli") void execCli(gid, cmd);
 		else void execApi(gid, cmd);
+	}
+
+	function confirmExec(): void {
+		if (!pending) return;
+		const { gid, cmd } = pending;
+		pending = null;
+		run(gid, cmd);
 	}
 
 	function escapeHtml(s: string): string {
@@ -408,6 +443,37 @@
 	{/each}
 </div>
 
+{#if pending}
+	<div
+		class="ts-overlay"
+		role="button"
+		tabindex="0"
+		onclick={(e) => { if (e.target === e.currentTarget) pending = null; }}
+		onkeydown={(e) => { if (e.key === "Escape") pending = null; }}
+	>
+		<div class="ts-dialog" role="dialog" aria-modal="true" aria-labelledby="ts-confirm-title">
+			<div class="ts-dialog-title" id="ts-confirm-title">{pending.cmd.label}?</div>
+			<div class="ts-dialog-body">
+				{#if pending.cmd.key === "daemon-stop"}
+					This will stop the daemon. The dashboard will lose connection and cannot recover from the UI.
+				{:else if pending.cmd.key === "daemon-restart"}
+					This will restart the daemon. The dashboard will briefly lose connection.
+				{:else}
+					This is a destructive operation. Are you sure?
+				{/if}
+			</div>
+			<div class="ts-dialog-actions">
+				<button type="button" class="ts-dialog-btn ts-dialog-cancel" onclick={() => pending = null}>
+					Cancel
+				</button>
+				<button type="button" class="ts-dialog-btn ts-dialog-danger" onclick={confirmExec}>
+					{pending.cmd.label}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
 <style>
 	.ts-root {
 		display: grid;
@@ -418,12 +484,6 @@
 		padding: var(--space-md);
 		gap: 10px;
 		align-items: stretch;
-	}
-
-	@media (min-width: 900px) {
-		.ts-root {
-			grid-template-columns: 1fr 1fr;
-		}
 	}
 
 	@media (max-width: 480px) {
@@ -670,4 +730,78 @@
 
 	:global(.ts-spin) { animation: ts-spin 0.8s linear infinite; }
 	@keyframes ts-spin { to { transform: rotate(360deg); } }
+
+	/* ── Confirmation dialog ── */
+	.ts-overlay {
+		position: fixed;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(0, 0, 0, 0.6);
+		z-index: 100;
+	}
+
+	.ts-dialog {
+		width: 360px;
+		max-width: 90vw;
+		background: var(--sig-surface-raised);
+		border: 1px solid var(--sig-border-strong, var(--sig-border));
+		border-radius: 8px;
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+	}
+
+	.ts-dialog-title {
+		padding: 16px 16px 0;
+		font-family: var(--font-display);
+		font-size: 13px;
+		font-weight: 700;
+		color: var(--sig-text-bright);
+	}
+
+	.ts-dialog-body {
+		padding: 10px 16px 16px;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		line-height: 1.5;
+		color: var(--sig-text-muted);
+	}
+
+	.ts-dialog-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+		padding: 0 16px 16px;
+	}
+
+	.ts-dialog-btn {
+		padding: 6px 14px;
+		border-radius: 6px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		cursor: pointer;
+		transition: all 0.15s ease;
+	}
+
+	.ts-dialog-cancel {
+		background: var(--sig-surface);
+		border: 1px solid var(--sig-border);
+		color: var(--sig-text);
+	}
+
+	.ts-dialog-cancel:hover {
+		background: var(--sig-surface-raised);
+	}
+
+	.ts-dialog-danger {
+		background: var(--sig-danger, #ef4444);
+		border: 1px solid var(--sig-danger, #ef4444);
+		color: white;
+	}
+
+	.ts-dialog-danger:hover {
+		filter: brightness(1.1);
+	}
 </style>

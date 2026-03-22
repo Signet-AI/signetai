@@ -7249,7 +7249,9 @@ app.post("/api/troubleshoot/exec", async (c) => {
 				const write = (event: unknown): void => {
 					try {
 						controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-					} catch {}
+					} catch (err) {
+						logger.debug("troubleshoot", "SSE enqueue failed", err);
+					}
 				};
 
 				write({ type: "started", key, command: `signet daemon ${action}` });
@@ -7261,22 +7263,21 @@ app.post("/api/troubleshoot/exec", async (c) => {
 				try { controller.close(); } catch {}
 
 				// Give the response time to flush, then trigger graceful shutdown.
-				// SIGTERM triggers cleanup() which handles PID file, DB, watchers.
+				// Spawn the replacement daemon BEFORE sending SIGTERM — the child
+				// is detached+unref'd so it survives parent exit. A short delay
+				// after spawn lets the fork commit before we self-terminate.
 				setTimeout(async () => {
 					if (key === "daemon-restart") {
 						const { spawn: nodeSpawn } = await import("node:child_process");
-						// Use array form — no shell, so paths with spaces are safe.
-						// Inner delay lets cleanup() finish before the new daemon starts.
-						setTimeout(() => {
-							const child = nodeSpawn(resolved, ["daemon", "start"], {
-								detached: true,
-								stdio: "ignore",
-								env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
-							});
-							child.unref();
-						}, 1000);
+						const child = nodeSpawn(resolved, ["daemon", "start"], {
+							detached: true,
+							stdio: "ignore",
+							env: { ...baseEnv, SIGNET_NO_HOOKS: "1" } as NodeJS.ProcessEnv,
+						});
+						child.unref();
 					}
-					process.kill(process.pid, "SIGTERM");
+					// Let the fork fully settle before cleanup tears everything down
+					setTimeout(() => process.kill(process.pid, "SIGTERM"), 300);
 				}, 1000);
 			},
 		});
@@ -7285,7 +7286,6 @@ app.post("/api/troubleshoot/exec", async (c) => {
 			headers: {
 				"content-type": "text/event-stream",
 				"cache-control": "no-cache",
-				connection: "keep-alive",
 			},
 		});
 	}
