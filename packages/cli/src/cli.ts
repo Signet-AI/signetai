@@ -28,7 +28,6 @@ import {
 import { homedir, platform, tmpdir } from "os";
 import { dirname, join, resolve as resolvePath } from "path";
 import { fileURLToPath } from "url";
-import { confirm, input, select } from "@inquirer/prompts";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
 import { OpenClawConnector } from "@signet/connector-openclaw";
@@ -42,8 +41,6 @@ import {
 	type SetupDetection,
 	type SkillsResult,
 	detectExistingSetup as detectExistingSetupCore,
-	detectSchema,
-	ensureUnifiedSchema,
 	formatYaml,
 	getGlobalInstallCommand,
 	resolveGlobalPackagePath,
@@ -55,14 +52,12 @@ import {
 	mergeSignetGitignoreEntries,
 	parseSimpleYaml,
 	resolvePrimaryPackageManager,
-	runMigrations,
 	symlinkSkills,
 	readStaticIdentity,
 	unifySkills,
 } from "@signet/core";
 import chalk from "chalk";
 import { Command } from "commander";
-import open from "open";
 import ora from "ora";
 import {
 	type CondaInfo,
@@ -95,7 +90,9 @@ import { registerSkillCommands } from "./commands/skill.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
 import { configureAgent } from "./features/configure.js";
+import { doRestart, doStart, doStop, launchDashboard, migrateSchema, showLogs } from "./features/daemon.js";
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
+import { importFromGitHub } from "./features/import.js";
 import { setupWizard } from "./features/setup.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 
@@ -1536,433 +1533,6 @@ function createExtensionSymlink(stateDir: string, globalPath: string, silent?: b
 }
 
 // ============================================================================
-// Import from GitHub
-// ============================================================================
-
-async function importFromGitHub(basePath: string) {
-	console.log();
-	console.log(chalk.bold("  Import agent configuration from GitHub\n"));
-
-	const repoUrl = await input({
-		message: "GitHub repo URL (e.g., username/repo or full URL):",
-		validate: (val) => {
-			if (!val.trim()) return "URL is required";
-			return true;
-		},
-	});
-
-	// Normalize URL
-	let gitUrl = repoUrl.trim();
-	if (!gitUrl.includes("://") && !gitUrl.startsWith("git@")) {
-		// Assume it's username/repo format
-		gitUrl = `https://github.com/${gitUrl}.git`;
-	} else if (gitUrl.startsWith("https://github.com/") && !gitUrl.endsWith(".git")) {
-		gitUrl = gitUrl + ".git";
-	}
-
-	console.log();
-	console.log(chalk.dim(`  Cloning from ${gitUrl}...`));
-
-	// Check if basePath has uncommitted changes
-	if (isGitRepo(basePath)) {
-		const statusResult = spawnSync("git", ["status", "--porcelain"], {
-			cwd: basePath,
-			encoding: "utf-8",
-			windowsHide: true,
-		});
-		if (statusResult.stdout && statusResult.stdout.trim()) {
-			const proceed = await confirm({
-				message: "You have uncommitted changes. Create backup commit first?",
-				default: true,
-			});
-			if (proceed) {
-				const date = new Date().toISOString().replace(/[:.]/g, "-");
-				await gitAddAndCommit(basePath, `backup-before-import-${date}`);
-				console.log(chalk.green("  ✓ Backup commit created"));
-			}
-		}
-	}
-
-	// Clone to temp dir first
-	const tmpDir = join(basePath, ".import-tmp");
-	if (existsSync(tmpDir)) {
-		rmSync(tmpDir, { recursive: true });
-	}
-
-	// Validate URL scheme — reject file:// and bare local paths to prevent
-	// local filesystem reads and crafted repo content execution.
-	const SAFE_SCHEMES = /^(https?:\/\/|git@|ssh:\/\/|git:\/\/)/i;
-	if (!SAFE_SCHEMES.test(gitUrl)) {
-		console.log(chalk.red("  Invalid git URL — only https://, ssh://, and git:// are allowed"));
-		return;
-	}
-
-	const spinner = ora("Cloning repository...").start();
-
-	try {
-		const cloneResult = spawnSync("git", ["clone", "--depth", "1", "--single-branch", gitUrl, tmpDir], {
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "pipe"],
-			windowsHide: true,
-		});
-
-		if (cloneResult.status !== 0) {
-			spinner.fail("Clone failed");
-			console.log(chalk.red(`  ${cloneResult.stderr || "Unknown error"}`));
-			if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true });
-			return;
-		}
-
-		spinner.succeed("Repository cloned");
-
-		// List files that will be imported
-		const configFiles = ["agent.yaml", "AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
-		const foundFiles: string[] = [];
-
-		for (const file of configFiles) {
-			if (existsSync(join(tmpDir, file))) {
-				foundFiles.push(file);
-			}
-		}
-
-		if (foundFiles.length === 0) {
-			console.log(chalk.yellow("  No agent config files found in repository"));
-			rmSync(tmpDir, { recursive: true });
-			return;
-		}
-
-		console.log();
-		console.log(chalk.dim("  Found config files:"));
-		for (const file of foundFiles) {
-			console.log(chalk.dim(`    • ${file}`));
-		}
-		console.log();
-
-		const doImport = await confirm({
-			message: `Import ${foundFiles.length} file(s)? (will overwrite existing)`,
-			default: true,
-		});
-
-		if (!doImport) {
-			rmSync(tmpDir, { recursive: true });
-			return;
-		}
-
-		// Copy files
-		for (const file of foundFiles) {
-			copyFileSync(join(tmpDir, file), join(basePath, file));
-			console.log(chalk.green(`  ✓ ${file}`));
-		}
-
-		// Also copy skills if present
-		const skillsDir = join(tmpDir, "skills");
-		if (existsSync(skillsDir)) {
-			const skills = readdirSync(skillsDir);
-			if (skills.length > 0) {
-				mkdirSync(join(basePath, "skills"), { recursive: true });
-				for (const skill of skills) {
-					const src = join(skillsDir, skill);
-					const dest = join(basePath, "skills", skill);
-					if (statSync(src).isDirectory()) {
-						copyDirRecursive(src, dest);
-						console.log(chalk.green(`  ✓ skills/${skill}/`));
-					}
-				}
-			}
-		}
-
-		// Also copy memory scripts if present
-		const scriptsDir = join(tmpDir, "memory", "scripts");
-		if (existsSync(scriptsDir)) {
-			mkdirSync(join(basePath, "memory", "scripts"), { recursive: true });
-			copyDirRecursive(scriptsDir, join(basePath, "memory", "scripts"));
-			console.log(chalk.green("  ✓ memory/scripts/"));
-		}
-
-		// Clean up
-		rmSync(tmpDir, { recursive: true });
-
-		// Set up git remote if not already configured
-		if (isGitRepo(basePath)) {
-			const remoteResult = spawnSync("git", ["remote", "get-url", "origin"], {
-				cwd: basePath,
-				encoding: "utf-8",
-				windowsHide: true,
-			});
-			if (remoteResult.status !== 0) {
-				// No origin remote, add it
-				spawnSync("git", ["remote", "add", "origin", gitUrl], {
-					cwd: basePath,
-					windowsHide: true,
-				});
-				console.log(chalk.dim(`  Set origin remote to ${gitUrl}`));
-			}
-		}
-
-		// Commit the import
-		if (isGitRepo(basePath)) {
-			await gitAddAndCommit(basePath, `import from ${repoUrl.trim()}`);
-			console.log(chalk.green("  ✓ Changes committed"));
-		}
-
-		console.log();
-		console.log(chalk.green("  Import complete!"));
-		console.log(chalk.dim("  Run `signet restart` to apply changes"));
-	} catch (err: any) {
-		spinner.fail("Import failed");
-		console.log(chalk.red(`  ${err.message}`));
-		if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true });
-	}
-}
-
-// signet dashboard - Launch Web UI
-// ============================================================================
-
-async function launchDashboard(options: { path?: string }) {
-	console.log(signetLogo());
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
-
-	const running = await isDaemonRunning();
-
-	if (!running) {
-		console.log(chalk.yellow("  Daemon is not running. Starting..."));
-		const started = await startDaemon(basePath);
-		if (!started) {
-			console.error(chalk.red("  Failed to start daemon"));
-			process.exit(1);
-		}
-		console.log(chalk.green("  Daemon started"));
-	}
-
-	console.log();
-	console.log(`  ${chalk.cyan(`http://localhost:${DEFAULT_PORT}`)}`);
-	console.log();
-
-	await open(`http://localhost:${DEFAULT_PORT}`);
-}
-
-// ============================================================================
-// signet migrate-schema - Database Schema Migration
-// ============================================================================
-
-async function migrateSchema(options: { path?: string }) {
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
-	const dbPath = join(basePath, "memory", "memories.db");
-
-	console.log(signetLogo());
-
-	if (!existsSync(dbPath)) {
-		console.log(chalk.yellow("  No database found."));
-		console.log(`  Run ${chalk.bold("signet setup")} to create one.`);
-		return;
-	}
-
-	const spinner = ora("Checking database schema...").start();
-
-	try {
-		// First detect schema in readonly mode
-		const db = Database(dbPath, { readonly: true });
-		const schemaInfo = detectSchema(db);
-		db.close();
-
-		if (schemaInfo.type === "core") {
-			spinner.succeed("Database already on unified schema");
-			return;
-		}
-
-		if (schemaInfo.type === "unknown" && !schemaInfo.hasMemories) {
-			spinner.succeed("Database is empty or has no memories");
-			return;
-		}
-
-		spinner.text = `Migrating from ${schemaInfo.type} schema...`;
-		spinner.info();
-
-		// Stop daemon if running (it may have the DB open)
-		const running = await isDaemonRunning();
-		if (running) {
-			console.log(chalk.dim("  Stopping daemon for migration..."));
-			await stopDaemon(basePath);
-			await new Promise((r) => setTimeout(r, 1000));
-		}
-
-		// Open with write access and migrate
-		const writeDb = Database(dbPath);
-		const result = ensureUnifiedSchema(writeDb);
-
-		if (result.errors.length > 0) {
-			for (const err of result.errors) {
-				console.log(chalk.red(`  Error: ${err}`));
-			}
-		}
-
-		if (result.migrated) {
-			console.log(
-				chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`),
-			);
-		} else {
-			console.log(chalk.dim("  No migration needed"));
-		}
-
-		runMigrations(writeDb);
-
-		writeDb.close();
-
-		// Restart daemon if it was running
-		if (running) {
-			console.log(chalk.dim("  Restarting daemon..."));
-			await startDaemon(basePath);
-		}
-
-		console.log();
-		console.log(chalk.green("  Migration complete!"));
-	} catch (err: any) {
-		spinner.fail("Migration failed");
-		console.log(chalk.red(`  ${err.message}`));
-	}
-}
-
-// ============================================================================
-// signet logs - Show Daemon Logs
-// ============================================================================
-
-interface LogEntry {
-	timestamp: string;
-	level: "debug" | "info" | "warn" | "error";
-	category: string;
-	message: string;
-	data?: Record<string, unknown>;
-	duration?: number;
-	error?: { name: string; message: string; stack?: string };
-}
-
-function formatLogEntry(entry: LogEntry): string {
-	const levelColors: Record<string, string> = {
-		debug: chalk.gray,
-		info: chalk.cyan,
-		warn: chalk.yellow,
-		error: chalk.red,
-	};
-	const colorFn = levelColors[entry.level] || chalk.white;
-
-	const time = entry.timestamp.split("T")[1]?.slice(0, 8) || "";
-	const level = entry.level.toUpperCase().padEnd(5);
-	const category = `[${entry.category}]`.padEnd(12);
-
-	let line = `${chalk.dim(time)} ${colorFn(level)} ${category} ${entry.message}`;
-
-	if (entry.duration !== undefined) {
-		line += chalk.dim(` (${entry.duration}ms)`);
-	}
-
-	if (entry.data && Object.keys(entry.data).length > 0) {
-		line += chalk.dim(` ${JSON.stringify(entry.data)}`);
-	}
-
-	if (entry.error) {
-		line += `\n  ${chalk.red(entry.error.name)}: ${entry.error.message}`;
-	}
-
-	return line;
-}
-
-async function showLogs(options: {
-	lines?: string;
-	follow?: boolean;
-	level?: string;
-	category?: string;
-	path?: string;
-}) {
-	const limit = Number.parseInt(options.lines || "50", 10);
-	const { follow, level, category } = options;
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
-
-	console.log(signetLogo());
-
-	// Check if daemon is running
-	const status = await getDaemonStatus();
-
-	if (status.running) {
-		// Fetch logs from API
-		try {
-			const params = new URLSearchParams({ limit: String(limit) });
-			if (level) params.set("level", level);
-			if (category) params.set("category", category);
-
-			const res = await fetch(`http://localhost:${DEFAULT_PORT}/api/logs?${params}`);
-			const data = await res.json();
-
-			if (data.logs && data.logs.length > 0) {
-				console.log(chalk.bold(`  Recent Logs (${data.count})\n`));
-				for (const entry of data.logs) {
-					console.log("  " + formatLogEntry(entry));
-				}
-			} else {
-				console.log(chalk.dim("  No logs found"));
-			}
-
-			// Follow mode - stream logs
-			if (follow) {
-				console.log();
-				console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
-
-				const eventSource = new EventSource(`http://localhost:${DEFAULT_PORT}/api/logs/stream`);
-
-				eventSource.onmessage = (event) => {
-					try {
-						const entry = JSON.parse(event.data);
-						if (entry.type === "connected") return;
-						console.log("  " + formatLogEntry(entry));
-					} catch {
-						// Ignore parse errors
-					}
-				};
-
-				eventSource.onerror = () => {
-					console.log(chalk.red("  Stream disconnected"));
-					eventSource.close();
-				};
-
-				// Keep process alive
-				await new Promise(() => {});
-			}
-		} catch (e) {
-			console.log(chalk.yellow("  Could not fetch logs from daemon"));
-			fallbackToFile();
-		}
-	} else {
-		console.log(chalk.yellow("  Daemon not running - reading from log files\n"));
-		fallbackToFile();
-	}
-
-	function fallbackToFile() {
-		// Fall back to reading log files directly
-		const logDir = join(basePath, ".daemon", "logs");
-		const logFile = join(logDir, `signet-${new Date().toISOString().split("T")[0]}.log`);
-
-		if (!existsSync(logFile)) {
-			console.log(chalk.dim("  No log files found"));
-			return;
-		}
-
-		const content = readFileSync(logFile, "utf-8");
-		const lines = content.trim().split("\n").slice(-limit);
-
-		for (const line of lines) {
-			try {
-				const entry = JSON.parse(line) as LogEntry;
-				if (level && entry.level !== level) continue;
-				if (category && entry.category !== category) continue;
-				console.log("  " + formatLogEntry(entry));
-			} catch {
-				// Not JSON, print raw
-				console.log("  " + line);
-			}
-		}
-	}
-}
-
-// ============================================================================
 // CLI Definition
 // ============================================================================
 
@@ -2014,133 +1584,6 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 	await ensureOpenClawPluginPackage(AGENTS_DIR, { silent: true });
 });
 
-// Daemon action handlers (shared between top-level and subcommand)
-async function doStart(options: { path?: string } = {}) {
-	console.log(signetLogo());
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
-
-	const running = await isDaemonRunning();
-	if (running) {
-		console.log(chalk.yellow("  Daemon is already running"));
-		return;
-	}
-
-	const spinner = ora("Starting daemon...").start();
-	const started = await startDaemon(basePath);
-
-	if (started) {
-		spinner.succeed("Daemon started");
-		console.log(chalk.dim(`  Dashboard: http://localhost:${DEFAULT_PORT}`));
-	} else {
-		spinner.fail("Failed to start daemon");
-	}
-}
-
-async function doStop(options: { path?: string } = {}) {
-	console.log(signetLogo());
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
-
-	const running = await isDaemonRunning();
-	if (!running) {
-		console.log(chalk.yellow("  Daemon is not running"));
-		return;
-	}
-
-	const spinner = ora("Stopping daemon...").start();
-	const stopped = await stopDaemon(basePath);
-
-	if (stopped) {
-		spinner.succeed("Daemon stopped");
-	} else {
-		spinner.fail("Failed to stop daemon");
-	}
-}
-
-function isOpenClawDetected(): boolean {
-	const connector = new OpenClawConnector();
-	return connector.getDiscoveredConfigPaths().length > 0;
-}
-
-async function restartOpenClaw(basePath: string): Promise<boolean> {
-	const yamlPath = join(basePath, "agent.yaml");
-	let restartCommand: string | undefined;
-
-	try {
-		const yaml = readFileSync(yamlPath, "utf-8");
-		const config = parseSimpleYaml(yaml);
-		restartCommand = config.services?.openclaw?.restart_command;
-	} catch {
-		// agent.yaml missing or unparseable
-	}
-
-	if (!restartCommand) {
-		console.log();
-		console.log(chalk.yellow("  No OpenClaw restart command configured."));
-		console.log(chalk.dim("  Add to ~/.agents/agent.yaml:"));
-		console.log(chalk.dim("    services:"));
-		console.log(chalk.dim("      openclaw:"));
-		console.log(chalk.dim('        restart_command: "systemctl --user restart openclaw"'));
-		return false;
-	}
-
-	// Parse command into argv to avoid sh -c shell injection.
-	// agent.yaml is user-controlled — a tampered file could inject
-	// arbitrary commands if passed directly to a shell wrapper.
-	const argv = restartCommand.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
-	if (!argv || argv.length === 0) {
-		console.log(chalk.red("  Invalid restart command"));
-		return false;
-	}
-	// Strip surrounding quotes from each arg
-	const cmd = argv.map((a: string) => a.replace(/^["']|["']$/g, ""));
-
-	const spinner = ora("Restarting OpenClaw...").start();
-	try {
-		const result = spawnSync(cmd[0], cmd.slice(1), {
-			timeout: 15_000,
-			stdio: "pipe",
-			windowsHide: true,
-		});
-		if (result.status === 0) {
-			spinner.succeed("OpenClaw restarted");
-			return true;
-		}
-		const stderr = result.stderr?.toString().trim();
-		spinner.fail(`OpenClaw restart failed${stderr ? `: ${stderr}` : ""}`);
-		return false;
-	} catch {
-		spinner.fail("OpenClaw restart timed out");
-		return false;
-	}
-}
-
-async function doRestart(options: { path?: string; openclaw?: boolean } = {}) {
-	console.log(signetLogo());
-	const basePath = normalizeAgentPath(extractPathOption(options) ?? AGENTS_DIR);
-
-	const spinner = ora("Restarting daemon...").start();
-	await stopDaemon(basePath);
-	await new Promise((resolve) => setTimeout(resolve, 500));
-	const started = await startDaemon(basePath);
-
-	if (started) {
-		spinner.succeed("Daemon restarted");
-		console.log(chalk.dim(`  Dashboard: http://localhost:${DEFAULT_PORT}`));
-	} else {
-		spinner.fail("Failed to restart daemon");
-	}
-
-	if (options.openclaw !== false && isOpenClawDetected()) {
-		const shouldRestart = await confirm({
-			message: "Restart connected OpenClaw instance?",
-			default: false,
-		});
-		if (shouldRestart) {
-			await restartOpenClaw(basePath);
-		}
-	}
-}
-
 const healthDeps = {
 	agentsDir: AGENTS_DIR,
 	defaultPort: DEFAULT_PORT,
@@ -2153,6 +1596,19 @@ const healthDeps = {
 	signetLogo,
 };
 
+const daemonDeps = {
+	agentsDir: AGENTS_DIR,
+	defaultPort: DEFAULT_PORT,
+	extractPathOption,
+	getDaemonStatus,
+	isDaemonRunning,
+	normalizeAgentPath,
+	signetLogo,
+	sleep,
+	startDaemon,
+	stopDaemon,
+};
+
 registerAppCommands(program, {
 	collectListOption,
 	configureAgent: () =>
@@ -2161,8 +1617,8 @@ registerAppCommands(program, {
 			configureHarnessHooks,
 			signetLogo,
 		}),
-	launchDashboard,
-	migrateSchema,
+	launchDashboard: (options) => launchDashboard(options, daemonDeps),
+	migrateSchema: (options) => migrateSchema(options, daemonDeps),
 	setupWizard: (options) =>
 		setupWizard(options, {
 			AGENTS_DIR,
@@ -2173,10 +1629,15 @@ registerAppCommands(program, {
 			getTemplatesDir,
 			gitAddAndCommit,
 			gitInit,
-			importFromGitHub,
+			importFromGitHub: (basePath) =>
+				importFromGitHub(basePath, {
+					copyDirRecursive,
+					gitAddAndCommit,
+					isGitRepo,
+				}),
 			isDaemonRunning,
 			isGitRepo,
-			launchDashboard,
+			launchDashboard: (options) => launchDashboard(options, daemonDeps),
 			normalizeAgentPath,
 			normalizeChoice,
 			normalizeStringValue,
@@ -2193,10 +1654,10 @@ registerAppCommands(program, {
 });
 
 registerDaemonCommands(program, {
-	doRestart,
-	doStart,
-	doStop,
-	showLogs,
+	doRestart: (options) => doRestart(options, daemonDeps),
+	doStart: (options) => doStart(options, daemonDeps),
+	doStop: (options) => doStop(options, daemonDeps),
+	showLogs: (options) => showLogs(options, daemonDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
 });
 
