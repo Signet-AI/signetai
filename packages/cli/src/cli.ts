@@ -94,6 +94,7 @@ import { registerSessionCommands } from "./commands/session.js";
 import { registerSkillCommands } from "./commands/skill.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
+import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {
@@ -4764,52 +4765,11 @@ async function configureAgent() {
 // signet secret - Secrets management
 // ============================================================================
 
-const DAEMON_URL = `http://localhost:${DEFAULT_PORT}`;
-
-async function secretApiCall(
-	method: string,
-	path: string,
-	body?: unknown,
-	timeoutMs = 5_000,
-): Promise<{ ok: boolean; data: unknown }> {
-	const res = await fetch(`${DAEMON_URL}${path}`, {
-		method,
-		headers: body ? { "Content-Type": "application/json" } : {},
-		body: body ? JSON.stringify(body) : undefined,
-		signal: AbortSignal.timeout(timeoutMs),
-	});
-	const text = await res.text();
-	let data: unknown;
-	try {
-		data = JSON.parse(text);
-	} catch {
-		data = { error: text || "Request failed" };
-	}
-	return { ok: res.ok, data };
-}
-
 async function ensureDaemonForSecrets(): Promise<boolean> {
-	const running = await isDaemonRunning();
-	if (!running) {
-		console.error(chalk.red("  Daemon is not running. Start it with: signet start"));
-		return false;
-	}
-	return true;
+	return ensureDaemonRunning(isDaemonRunning);
 }
 
-async function fetchFromDaemon<T>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T | null> {
-	const { timeout: timeoutMs, ...fetchOpts } = opts || {};
-	try {
-		const res = await fetch(`http://localhost:${DEFAULT_PORT}${path}`, {
-			signal: AbortSignal.timeout(timeoutMs || 5000),
-			...fetchOpts,
-		});
-		if (!res.ok) return null;
-		return (await res.json()) as T;
-	} catch {
-		return null;
-	}
-}
+const { fetchFromDaemon, secretApiCall } = createDaemonClient(DEFAULT_PORT);
 const SKILLS_DIR = join(AGENTS_DIR, "skills");
 
 registerSecretCommands(program, {
