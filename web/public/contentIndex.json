@@ -420,6 +420,23 @@
     ],
     "collection": "blog"
   },
+  "blog/retrieval-is-not-memory": {
+    "title": "Retrieval Is Not Memory",
+    "url": "/blog/retrieval-is-not-memory/",
+    "tags": [
+      "positioning",
+      "benchmarks",
+      "architecture",
+      "retrieval"
+    ],
+    "links": [
+      "blog/knowledge-architecture",
+      "blog/you-think-signet-is-a-memory-system",
+      "docs/pipeline",
+      "blog/why-local-first-memory"
+    ],
+    "collection": "blog"
+  },
   "blog/the-os-moment": {
     "title": "The OS Moment",
     "url": "/blog/the-os-moment/",

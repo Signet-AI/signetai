@@ -1,0 +1,130 @@
+---
+title: "Retrieval Is Not Memory"
+description: "The industry is racing toward 99% retrieval accuracy by throwing more LLM agents at the problem. That solves one dimension of a much larger cognitive challenge. Here's why the architecture matters more than the benchmark."
+date: 2026-03-22
+author: "Nicholai & Mr. Claude"
+tags: ["positioning", "benchmarks", "architecture", "retrieval"]
+image: /blog/retrieval-is-not-memory.png
+---
+
+This week, someone declared agent memory a solved problem.
+
+The claim came from Supermemory, who published a result of ~99% accuracy on LongMemEval, a benchmark designed to test long-term memory retrieval across multi-session conversation histories. It's impressive work. To get there, they deployed six parallel ingestion agents, three parallel search agents, and an eight-variant answering ensemble. Each variant independently evaluated the same retrieved context through a different reasoning path. If any of the eight arrived at the correct answer, the question was marked correct.
+
+That's not memory. That's retrieval with a very large compute budget.
+
+The distinction matters because the entire industry is converging on the same assumption: that the core problem of agent memory is getting the right facts into the context window. That if you can retrieve accurately enough, memory is solved. Everything else follows.
+
+We think that's wrong. And our benchmark results this week help illustrate why.
+
+## What Retrieval Benchmarks Measure
+
+LongMemEval and LoCoMo are the two most rigorous public benchmarks for long-term agent memory. They simulate realistic conditions: 100K+ token conversation histories, contradictory information, temporal updates, multi-session data. They're genuinely hard.
+
+But they measure one thing: given a question about something discussed in a conversation history, can the system find the relevant information and generate a correct answer?
+
+That's retrieval plus reasoning. It is not memory.
+
+Memory, the kind that makes agents genuinely useful across weeks and months of interaction, includes things no retrieval benchmark tests. Does the agent know who it is? Does it maintain consistent personality and values across sessions? Does it track decisions and the reasoning behind them? Does it distinguish between a preference stated yesterday and one that was corrected this morning? Does it understand your projects as organized knowledge rather than retrieved facts? Does it get better at anticipating what you need?
+
+None of that shows up in a retrieval benchmark. The benchmarks test whether the system can find a fact. The real question is whether the agent has a mind.
+
+## The Cost of Brute Force
+
+Supermemory's ASMR technique replaces vector search with active agentic reasoning. Instead of computing cosine similarity against embeddings, it deploys LLM agents to read through stored findings and reason about what's relevant. This works. It yields high accuracy on the benchmark. But every retrieval operation requires multiple LLM calls.
+
+Their 98.60% result routes context through eight parallel answering variants, each running a full LLM. Their 97.20% result (which produces a single consensus answer rather than taking the best of eight) used twelve agents plus an aggregator. The ingestion pipeline deploys three parallel reader agents. The search pipeline deploys three more. A single question can require 15+ LLM invocations.
+
+For a benchmark, that's fine. For a production system running thousands of queries per day, serving agents that need sub-second response times, operating on user-owned hardware with local models, it's a fundamentally different conversation.
+
+Supermemory acknowledges this. Their blog states clearly that ASMR is experimental, not running in their production engine. Their production system sits at ~85%. That honesty is worth noting. The headline, though, is what people will remember. And "agent memory is probably solved" is a claim the architecture doesn't yet support at production scale.
+
+The broader landscape tells a similar story. Mastra OM achieves 84% with observer/reflector agents and scales to 94.87% with newer models. Hindsight from Vectorize hits 91.4% with Gemini-3. MemMachine scores above 91% with aggressive token compression. Each of these systems does something interesting. None of them addresses anything beyond the retrieval problem.
+
+## What We Found This Week
+
+We spent two days running Signet against LoCoMo, a benchmark focused on multi-session conversation understanding. Our full-stack result: **87.5% accuracy with 100% Hit@10**.
+
+That second number is the one worth sitting with. Hit@10 means the correct memory appeared in the top ten retrieved results for every single question. Retrieval worked perfectly. The 12.5% accuracy gap was a single question where the answering model misused correctly retrieved information. An answer quality problem, not a retrieval one.
+
+Here's how we got there: **zero LLM calls at retrieval time**.
+
+Signet's retrieval is entirely algorithmic. It walks a [[blog/knowledge-architecture|knowledge graph]], runs FTS5 keyword search, computes vector similarity against pre-embedded memories, then applies three stages of post-fusion dampening to separate signal from noise. No agents reading through findings. No parallel orchestrators. No ensemble voting. Just data structures, indexes, and math.
+
+The graph walk identifies focal entities from session context, traverses their aspects and attributes, follows dependency edges to related entities. FTS5 catches terminology variations that the graph hasn't connected. Vector search surfaces semantically related content the other channels missed. Then post-fusion dampening runs three corrections: gravity dampening removes semantic ghosts (high cosine similarity but zero vocabulary overlap), hub dampening demotes well-connected entities that appear in everything, and resolution boosting elevates actionable knowledge like decisions and constraints.
+
+All of this happens in milliseconds. On a local SQLite database. With no API calls.
+
+A caveat: our 87.5% is from an eight-question sample of the full-stack configuration. The fifty-question baseline with the basic stack scored lower. The trajectory is strong, each architectural addition produced measurable gains, and the 100% retrieval accuracy holds across configurations. But we need larger-scale validation before making definitive accuracy claims. We're being transparent about that because the insight here isn't the number. It's the architecture.
+
+## Efficiency Is Architecture
+
+There's a philosophical difference between "throw more LLMs at the retrieval problem" and "build data structures that make retrieval algorithmic."
+
+Supermemory's insight is real: vector search alone fails on temporal data and contradictions. Semantic similarity can't distinguish between an old fact and a recent correction. They identified the right problem. Their solution, replacing vector search with agentic reasoning, achieves high accuracy but trades scalability for it.
+
+Signet took a different path. Instead of replacing search with more intelligence at query time, we built structure that makes search unnecessary for most queries. The [[blog/knowledge-architecture|knowledge graph]] contains entities, aspects, attributes, constraints, and explicit dependency edges. When the system needs context about a project, it doesn't search for "relevant memories about the project." It walks to the project entity, reads its aspects, follows its dependencies. Deterministic. Bounded. The cost is known before it starts.
+
+This is why a local system running on SQLite can hit 100% retrieval accuracy. The graph contains the relationships. FTS catches the terms. Vectors find the surprises. Dampening removes the noise. No LLM required.
+
+The LLM calls in Signet happen at *write time*, during extraction, when sessions are processed into structured knowledge asynchronously after they end. The agent never waits on it. The next session loads instantly because the knowledge is already organized, already indexed, already there.
+
+Write-time intelligence, read-time speed. That's the trade.
+
+## The Larger Problem
+
+All of this is still about retrieval. And retrieval is only one dimension of what makes an agent persistent.
+
+Consider what happens after you solve retrieval perfectly. Your agent can find any fact from any past conversation with 100% accuracy. Now ask: does it know who it is? Does it maintain personality across sessions? Does it remember *why* it chose one architecture over another three weeks ago? Can it work in Claude Code, then continue in Cursor, then pick up in OpenCode, as the same entity, with the same knowledge, the same values, the same understanding of your work?
+
+These are not retrieval problems. They're persistence problems. Identity problems. Continuity problems. They live in a layer of the stack that most memory systems don't address because they've framed the entire challenge as "find the fact."
+
+Signet addresses them because we think they're the actual hard problem.
+
+**Identity persistence.** Agents in Signet have identity files that define who they are, their personality, values, and behavioral guidelines. These files travel with the agent across platforms. The model is a guest in a persistent environment, not the center of the system. We wrote about this architecture in [[blog/you-think-signet-is-a-memory-system|You Think Signet Is a Memory System]].
+
+**Decision tracking.** Fourteen regex patterns detect decision language at write time: "chose X over Y," "switched from," "going with," "opted for." Detected decisions auto-promote to constraints, knowledge that *always* surfaces in recall regardless of relevance scoring. The agent doesn't forget why it made a choice. It carries that forward, forever.
+
+**Temporal coherence.** Relative dates normalize to absolute dates during extraction. "Last week" becomes "March 15, 2026." Lossless session transcripts preserve raw conversation text alongside extracted knowledge, so facts that extraction missed are still recoverable at recall time.
+
+**Predictive behavior.** A 370K-parameter cross-attention model trains on each user's interaction patterns, locally, on their machine. It learns which memories matter for which contexts: time of day, active project, session type. Over time, the system doesn't just remember. It anticipates. The agent already knows what it needs before the session starts.
+
+**Knowledge distillation.** The database gets smaller and smarter over time. 7,000 sparse facts become 1,000 atomic facts, properly organized, constraint-aware, connected through explicit dependency edges. The noise refines away. The structure remains. This is the opposite of conversation-log systems, which grow linearly and get noisier with every session.
+
+None of these capabilities improve a retrieval benchmark score. All of them make agents dramatically more useful in practice.
+
+## The Benchmark Trap
+
+Here's the uncomfortable truth about ~99% on LongMemEval: it proves you can find facts in conversations. It doesn't prove your agent is useful.
+
+A system that scores ~99% on retrieval but resets its personality every session, can't track decisions across weeks, doesn't know who it's talking to, and requires fifteen LLM calls per query is *worse in practice* than a system that scores 87% but maintains persistent identity, understands your projects as structured knowledge, evolves over time, and responds in milliseconds on local hardware.
+
+Production usefulness is not a retrieval number. It's the whole stack.
+
+This isn't a knock on Supermemory or any of the teams pushing retrieval accuracy forward. The work is real. Mem0 has 48,000 GitHub stars and genuine adoption. Zep's temporal knowledge graph handles time-dependent queries better than most. Letta's contrarian bet on filesystem-based memory raises good questions about whether we're all over-engineering the wrong thing. Mastra OM's observer pattern shows how extraction architecture matters as much as retrieval. These are serious teams doing real engineering.
+
+But the conclusion that agent memory is "probably solved" mistakes one dimension of the problem for the whole thing.
+
+## Where We Actually Stand
+
+Honesty matters more than optics.
+
+Signet's retrieval is strong. 100% Hit@10 across configurations. The graph-based architecture scales, runs locally, and requires no per-query LLM calls. We're confident in the approach.
+
+The features that sit on top of retrieval, identity persistence, knowledge distillation, predictive scoring, decision tracking, cross-platform continuity, are real and shipping. They're not roadmap items or research papers. They run in production, today, for users who install Signet.
+
+What we don't have yet is large-scale benchmark validation of the full-stack accuracy number. We need to run the complete 50+ question suite with all architectural improvements enabled and get a clean number. That work is in progress. We'll publish it when it's ready, with full methodology and reproducibility instructions.
+
+We also don't claim to have the highest retrieval score on any public benchmark. We might not. What we claim is that our architecture achieves strong retrieval without per-query LLM costs, and then goes further into territory that retrieval benchmarks don't measure.
+
+## The Question That Matters
+
+Agent memory is not solved. Retrieval is getting better. The benchmarks are getting more competitive. But the cognitive problem, building agents that persist, evolve, and genuinely understand the people they work with, is barely started.
+
+The question is not "can you find the fact?"
+
+The question is what the agent already knows when it walks into the room.
+
+---
+
+*Signet is open source. The [[blog/knowledge-architecture|knowledge architecture]], the [[docs/desire-paths|desire paths]] traversal system, and the [[pipeline|extraction pipeline]] are all shipping today. [[blog/why-local-first-memory|Local-first]]. User-owned. No API keys required for retrieval. If retrieval were memory, we'd be done. We're not done.*
