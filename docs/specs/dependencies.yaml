@@ -222,6 +222,19 @@ specs:
       - "Agent can provide explicit memory quality feedback via MCP tool call instead of raw JSON"
     decision: null
 
+  - id: competitive-systems-research
+    status: reference
+    path: docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md
+    hard_depends_on: []
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - references/hermes-agent
+      - references/supermemory
+      - references/hindsight
+    success_criteria: []
+    decision: null
+
   - id: retroactive-supersession
     status: planning
     path: docs/specs/planning/retroactive-supersession.md
