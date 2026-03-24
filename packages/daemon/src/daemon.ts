@@ -461,8 +461,8 @@ interface OpenClawHeartbeatData {
 	readonly latencyMs: number;
 	/** Failures reported in the most recent heartbeat (delta, not cumulative). */
 	readonly lastFailedDelta: number;
-	totalSucceeded: number;
-	totalFailed: number;
+	readonly totalSucceeded: number;
+	readonly totalFailed: number;
 }
 let openClawHeartbeat: { timestamp: string; data: OpenClawHeartbeatData } | null = null;
 const OPENCLAW_STALE_MS = 10 * 60 * 1000; // 10 minutes
