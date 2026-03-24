@@ -247,19 +247,27 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 				{ method: "DELETE" },
 			);
 
+			// Only clean up local files when daemon confirmed success (success: true)
+			// or was offline (null result — no error was returned by the daemon).
+			// If the daemon returned an explicit error the agent record may still
+			// exist in DB; deleting the local files would create an orphan.
+			const daemonOk = result?.success === true;
+			const daemonOffline = result === null;
 			if (result?.error) {
-				spinner.warn(`Daemon returned error: ${result.error}`);
-			} else if (!result) {
+				spinner.fail(`Daemon returned error: ${result.error} — local files preserved`);
+				return;
+			}
+			if (daemonOffline) {
 				spinner.warn("Daemon offline — cleaning up local files only");
 			}
 
-			// Delete identity directory
-			const dir = join(deps.AGENTS_DIR, "agents", name);
-			if (existsSync(dir)) {
-				rmSync(dir, { recursive: true, force: true });
+			if (daemonOk || daemonOffline) {
+				const dir = join(deps.AGENTS_DIR, "agents", name);
+				if (existsSync(dir)) {
+					rmSync(dir, { recursive: true, force: true });
+				}
+				removeFromRoster(deps.AGENTS_DIR, name);
 			}
-
-			removeFromRoster(deps.AGENTS_DIR, name);
 
 			spinner.succeed(`Agent ${chalk.cyan(name)} purged`);
 		});

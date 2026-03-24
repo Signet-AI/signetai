@@ -464,24 +464,47 @@ export class OpenClawConnector extends BaseConnector {
 		}>,
 		basePath: string,
 	): Promise<void> {
-		const eligible = roster.filter(
-			(a) => !a.harnesses || a.harnesses.length === 0 || a.harnesses.includes("openclaw"),
-		);
+		// Validate names before any filesystem join — roster comes from a
+		// user-editable agent.yaml and must not contain path traversal sequences.
+		const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+		const eligible = roster.filter((a) => {
+			if (!SAFE_NAME.test(a.name)) {
+				console.warn(`[signet/openclaw] Skipped unsafe agent name: ${JSON.stringify(a.name)}`);
+				return false;
+			}
+			return !a.harnesses || a.harnesses.length === 0 || a.harnesses.includes("openclaw");
+		});
 
-		const list = eligible.map((a) => ({
+		const signetEntries = eligible.map((a) => ({
 			id: a.name,
 			name: a.name,
 			workspace: join(basePath, "agents", a.name, "workspace"),
 			...(a.skills && a.skills.length > 0 ? { skills: a.skills } : {}),
 		}));
-
-		const patch: JsonObject = { agents: { list } };
+		const signetIds = new Set(signetEntries.map((e) => e.id));
 
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
 				const raw = readFileSync(configPath, "utf-8");
 				const config = parseJsonOrJson5(raw);
 				const indent = this.detectIndent(raw);
+
+				// Preserve pre-existing OpenClaw agents not managed by Signet.
+				// Only replace entries whose id is in the Signet roster.
+				const existing = config as Record<string, unknown>;
+				const agentsSection = existing.agents as Record<string, unknown> | undefined;
+				const prevList = Array.isArray(agentsSection?.list)
+					? (agentsSection.list as Array<Record<string, unknown>>)
+					: [];
+				const kept = prevList.filter((e) => !signetIds.has(e.id as string));
+				const dropped = prevList.length - kept.length;
+				if (dropped === 0 && prevList.length > 0 && signetEntries.length === 0) {
+					// Nothing to do — no Signet agents, no change needed
+					continue;
+				}
+
+				const merged = [...kept, ...signetEntries];
+				const patch: JsonObject = { agents: { list: merged } };
 				deepMerge(config, patch);
 				backupConfig(configPath, raw);
 				atomicWriteJson(configPath, config, indent);

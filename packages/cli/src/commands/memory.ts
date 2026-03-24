@@ -35,7 +35,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 				tags: options.tags,
 				importance: options.importance,
 				pinned: options.critical,
-				...(options.agent ? { agent_id: options.agent } : {}),
+				...(options.agent ? { agentId: options.agent } : {}),
 				...(options.private ? { visibility: "private" } : {}),
 			});
 
