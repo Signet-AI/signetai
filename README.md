@@ -54,7 +54,7 @@ Everything runs locally. You own the data. The agent is yours.
 | 🛠️ Skills | Installable, version-controlled capabilities your agent carries everywhere |
 | 🪪 Identity persistence | Same agent across sessions, platforms, and parallel runs |
 | 💾 Session continuity | Checkpoint-based recovery — the agent wakes up knowing what happened |
-| 👯 Multi-agent | Multiple agents sharing one install, fully isolated by agent scope *(in progress)* |
+| 👯 Multi-agent | Multiple named agents sharing one install — isolated, shared, or group memory policies |
 | 📄 Document ingestion | Feed PDFs, markdown, and URLs directly into the memory pipeline |
 | 🔄 Git sync | Identity and memory auto-committed to your own repo — no vendor lock-in |
 | 🗄️ Open storage | All memory lives in SQLite and plain markdown — inspect, migrate, or script it yourself |
@@ -159,6 +159,27 @@ signet remember "prefers bun over npm"
 signet recall "coding preferences"
 ```
 
+### Multi-agent
+
+Multiple named agents share one daemon and database. Each agent gets its
+own identity directory (`~/.agents/agents/<name>/`) and configurable
+memory visibility:
+
+```bash
+signet agent add alice --memory isolated   # alice sees only her own memories
+signet agent add bob --memory shared       # bob sees all global memories
+signet agent add ci --memory group --group eng  # ci sees memories from the eng group
+
+signet agent list                          # roster + policies
+signet remember "deploy key" --agent alice --private  # alice-only secret
+signet recall "deploy" --agent alice       # scoped to alice's visible memories
+signet agent info alice                    # identity files, policy, memory count
+```
+
+OpenClaw users get zero-config routing — session keys like
+`agent:alice:discord:direct:u123` are parsed automatically; no
+`agentId` header needed.
+
 In connected harnesses, skills work directly:
 
 ```text
@@ -211,7 +232,9 @@ Daemon (@signet/daemon, localhost:3850)
   |-- Auth Middleware
   |     local / team / hybrid, RBAC, rate limiting
   |-- File Watcher
-        identity sync, git auto-commit
+        identity sync, per-agent workspace sync, git auto-commit
+  |-- Multi-Agent
+        roster sync, agent_id scoping, read-policy SQL enforcement
 
 Core (@signet/core)
   types, identity, SQLite, hybrid search, graph traversal
