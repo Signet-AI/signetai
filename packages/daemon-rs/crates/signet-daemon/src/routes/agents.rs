@@ -89,6 +89,20 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(name): Path<String>) -
 // POST /api/agents
 // ---------------------------------------------------------------------------
 
+fn validate_name(name: &str) -> Option<&'static str> {
+    if name == "default" {
+        return Some("Cannot use reserved name 'default'");
+    }
+    let valid = name
+        .chars()
+        .enumerate()
+        .all(|(i, c)| c.is_ascii_lowercase() || c.is_ascii_digit() || (i > 0 && c == '-'));
+    if !valid || name.is_empty() {
+        return Some("Name must be lowercase alphanumeric + hyphens only");
+    }
+    None
+}
+
 pub async fn create(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateBody>,
@@ -97,6 +111,9 @@ pub async fn create(
         Some(n) => n,
         None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name is required" }))).into_response(),
     };
+    if let Some(err) = validate_name(&name) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": err }))).into_response();
+    }
     let read_policy = body.read_policy.unwrap_or_else(|| "isolated".to_string());
     let group = body.policy_group;
     let now = chrono::Utc::now().to_rfc3339();
