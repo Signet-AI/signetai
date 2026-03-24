@@ -994,3 +994,52 @@ packages/daemon/src/
         graph-traversal.ts    Traversal-primary retrieval path
         community-detection.ts Entity community clustering (Louvain)
 ```
+
+---
+
+Multi-Agent Support
+-------------------
+
+Multiple agents can share a single Signet daemon and database. The database
+uses `agent_id` columns on all key tables to keep agent data separate.
+
+**Agent roster** is declared in `agent.yaml` under `agents.roster`. Each
+entry defines a named agent and its read policy. On daemon startup the
+roster is synced to the `agents` table in SQLite.
+
+**Memory ownership** — every memory row carries:
+- `agent_id TEXT DEFAULT 'default'` — which agent wrote this memory
+- `visibility TEXT DEFAULT 'global'` — who can read it:
+  - `global`: any agent whose read policy permits it
+  - `private`: only the owning agent
+  - `archived`: soft-deleted when the owning agent is removed
+
+**Read policies** control what a given agent sees on recall:
+
+| policy    | SQL filter |
+|-----------|------------|
+| `isolated` | `agent_id = self` |
+| `shared`  | `visibility = 'global' OR agent_id = self` |
+| `group`   | `(visibility = 'global' AND agent_id IN group) OR agent_id = self` |
+
+The default agent uses `shared` policy for backward compatibility — existing
+installs see all their memories unchanged.
+
+**Identity inheritance** — each agent can have its own identity files under
+`$SIGNET_WORKSPACE/agents/{name}/`. Only `SOUL.md` and `IDENTITY.md` are
+expected to be overridden; all other files (`AGENTS.md`, `USER.md`, etc.)
+inherit from the workspace root. The daemon's file watcher monitors
+`$SIGNET_WORKSPACE/agents/` and triggers a harness sync on change.
+
+**OpenClaw session keys** — OpenClaw encodes the agent ID in session keys as
+`agent:{id}:{rest}`. The daemon's `resolveAgentId()` helper auto-parses this
+format, so memories are routed to the correct agent without any extra config.
+
+**Per-agent workspace** — when syncing to OpenClaw, the daemon writes an
+assembled `AGENTS.md` to `$SIGNET_WORKSPACE/agents/{name}/workspace/` for
+each agent. OpenClaw is configured to use this directory as the agent's
+workspace, giving each agent its own context on session start.
+
+**Single-agent installs** — fully backward compatible. Omitting
+`agents.roster` from `agent.yaml` keeps the single-agent behavior. All new
+API parameters (`agentId`, `visibility`) are optional with sensible defaults.

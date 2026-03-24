@@ -25,6 +25,8 @@ export type {
 	LlmProvider,
 	LlmUsage,
 	LlmGenerateResult,
+	ReadPolicy,
+	AgentDefinition,
 	Memory,
 	MemoryType,
 	Conversation,
@@ -149,6 +151,7 @@ export {
 	getMissingIdentityFiles,
 	summarizeIdentity,
 	readStaticIdentity,
+	resolveAgentBasePath,
 } from "./identity";
 export type {
 	IdentityFileSpec,
@@ -156,6 +159,14 @@ export type {
 	IdentityMap,
 	SetupDetection,
 } from "./identity";
+
+// Multi-agent support
+export {
+	discoverAgents,
+	scaffoldAgent,
+	getAgentIdentityFiles,
+	resolveAgentSkills,
+} from "./agents";
 
 // Skills unification
 export {

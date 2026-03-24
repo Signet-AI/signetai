@@ -31,6 +31,10 @@ export interface RecallParams {
 	keywordQuery?: string;
 	limit?: number;
 	agentId?: string;
+	/** Agent read policy — 'isolated' | 'shared' | 'group'. When set with agentId, filters by visibility. */
+	readPolicy?: string;
+	/** Policy group name (required when readPolicy is 'group'). */
+	policyGroup?: string | null;
 	type?: string;
 	tags?: string;
 	who?: string;
@@ -77,6 +81,34 @@ export interface RecallResponse {
 }
 
 export type EmbedFn = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
+
+// ---------------------------------------------------------------------------
+// Agent scope clause (exported for testing)
+// ---------------------------------------------------------------------------
+
+export function buildAgentScopeClause(
+	agentId: string,
+	readPolicy: string,
+	policyGroup: string | null,
+): { sql: string; args: unknown[] } {
+	if (readPolicy === "shared") {
+		return {
+			sql: " AND (m.visibility = 'global' OR m.agent_id = ?) AND m.visibility != 'archived'",
+			args: [agentId],
+		};
+	}
+	if (readPolicy === "group") {
+		return {
+			sql: " AND ((m.visibility = 'global' AND m.agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR m.agent_id = ?) AND m.visibility != 'archived'",
+			args: [policyGroup, agentId],
+		};
+	}
+	// 'isolated' or unknown — own memories only
+	return {
+		sql: " AND m.agent_id = ? AND m.visibility != 'archived'",
+		args: [agentId],
+	};
+}
 
 // ---------------------------------------------------------------------------
 // Filter clause builder (private)
@@ -142,10 +174,18 @@ function buildFilterClause(params: RecallParams): FilterClause {
 		args.push(params.project);
 	}
 
-	return {
+	const base: FilterClause = {
 		sql: parts.length ? ` AND ${parts.join(" AND ")}` : "",
 		args,
 	};
+
+	// Agent visibility filtering — only applied when both agentId and readPolicy are provided.
+	if (params.agentId && params.readPolicy) {
+		const scope = buildAgentScopeClause(params.agentId, params.readPolicy, params.policyGroup ?? null);
+		return { sql: base.sql + scope.sql, args: [...base.args, ...scope.args] };
+	}
+
+	return base;
 }
 
 // ---------------------------------------------------------------------------

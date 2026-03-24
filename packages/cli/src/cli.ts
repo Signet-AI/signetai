@@ -74,6 +74,7 @@ import {
 } from "./python.js";
 import Database from "./sqlite.js";
 import { registerBrowseCommand } from "./browse.js";
+import { registerAgentCommands } from "./commands/agent.js";
 import { registerAppCommands } from "./commands/app.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
 import { registerGitCommands } from "./commands/git.js";
@@ -1315,6 +1316,11 @@ registerSkillCommands(program, {
 registerMemoryCommands(program, {
 	ensureDaemonForSecrets,
 	secretApiCall,
+});
+
+registerAgentCommands(program, {
+	AGENTS_DIR,
+	fetchFromDaemon,
 });
 
 registerPortableCommands(program, {

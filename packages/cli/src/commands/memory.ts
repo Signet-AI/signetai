@@ -23,6 +23,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("-t, --tags <tags>", "Comma-separated tags")
 		.option("-i, --importance <n>", "Importance (0-1)", Number.parseFloat, 0.7)
 		.option("--critical", "Mark as critical (pinned)", false)
+		.option("--agent <name>", "Agent ID to associate with this memory")
+		.option("--private", "Set visibility to private", false)
 		.action(async (content: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
@@ -33,6 +35,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 				tags: options.tags,
 				importance: options.importance,
 				pinned: options.critical,
+				...(options.agent ? { agent_id: options.agent } : {}),
+				...(options.private ? { visibility: "private" } : {}),
 			});
 
 			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
@@ -66,6 +70,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--who <who>", "Filter by who")
 		.option("--since <date>", "Only memories created after this date (ISO or YYYY-MM-DD)")
 		.option("--until <date>", "Only memories created before this date (ISO or YYYY-MM-DD)")
+		.option("--agent <name>", "Filter by agent ID")
 		.option("--json", "Output as JSON")
 		.action(async (query: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
@@ -79,6 +84,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 				who: options.who,
 				since: options.since,
 				until: options.until,
+				...(options.agent ? { agentId: options.agent } : {}),
 			});
 
 			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;

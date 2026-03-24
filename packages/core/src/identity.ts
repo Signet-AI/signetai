@@ -11,6 +11,19 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 /**
+ * Returns the base path for agent-specific files.
+ * The 'default' agent maps to the workspace root; all others map to
+ * `{workspaceDir}/agents/{agentName}`.
+ */
+export function resolveAgentBasePath(
+	agentName: string,
+	workspaceDir: string,
+): string {
+	if (agentName === "default") return workspaceDir;
+	return join(workspaceDir, "agents", agentName);
+}
+
+/**
  * Specification for an identity file
  */
 export interface IdentityFileSpec {

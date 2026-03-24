@@ -91,7 +91,13 @@ specs:
     informed_by: []
     success_criteria:
       - "Multiple agents share one SQLite database without data collision via agent_id scoping"
-    decision: null
+      - "Per-agent read policy (isolated/shared/group) enforced at search time"
+      - "OpenClaw session key auto-parse routes memories to correct agent with zero config"
+      - "signet agent CLI manages the roster and scaffolds per-agent identity dirs"
+    decision: "Phases 1-8 implemented (2026-03-24): core types, agents.ts, migration 043,
+      memory scope filtering, agent-id.ts, daemon /api/agents, file watcher, harness sync,
+      CLI subcommand, OpenClaw connector syncMultipleAgents, hooks.ts agentId resolution.
+      Phases 9-10 (dashboard + setup wizard) deferred."
 
   - id: signet-runtime
     status: approved

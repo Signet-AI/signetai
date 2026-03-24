@@ -48,6 +48,7 @@ import { up as dedupEntityDependencies } from "./039-dedup-entity-dependencies";
 import { up as sessionTranscripts } from "./040-session-transcripts";
 import { up as pathFeedback } from "./041-path-feedback";
 import { up as sessionMemoriesAgentId } from "./042-session-memories-agent-id";
+import { up as agentsTable } from "./043-agents-table";
 
 // -- Public interface consumed by Database.init() --
 
@@ -418,6 +419,18 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: sessionMemoriesAgentId,
 		artifacts: {
 			columns: [{ table: "session_memories", column: "agent_id" }],
+		},
+	},
+	{
+		version: 43,
+		name: "agents-table",
+		up: agentsTable,
+		artifacts: {
+			tables: ["agents"],
+			columns: [
+				{ table: "memories", column: "agent_id" },
+				{ table: "memories", column: "visibility" },
+			],
 		},
 	},
 ];

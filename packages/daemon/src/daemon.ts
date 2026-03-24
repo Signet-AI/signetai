@@ -26,6 +26,7 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
 	CONNECTOR_PROVIDERS,
+	type AgentDefinition,
 	type ConnectorConfig,
 	SIGNET_GIT_PROTECTED_PATHS,
 	type SyncCursor,
@@ -123,6 +124,7 @@ import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import { walkImpact } from "./graph-impact";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
+import { resolveAgentId } from "./agent-id";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import {
 	DEFAULT_RETENTION,
@@ -1858,6 +1860,81 @@ app.get("/api/identity", (c) => {
 	} catch {
 		return c.json({ name: "Unknown", creature: "", vibe: "" });
 	}
+});
+
+// ============================================================================
+// Agents API
+// ============================================================================
+
+interface AgentRow {
+	id: string;
+	name: string;
+	read_policy: string;
+	policy_group: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+app.get("/api/agents", (c) => {
+	const agents = getDbAccessor().withReadDb(
+		(db) => db.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name").all() as AgentRow[],
+	);
+	return c.json({ agents });
+});
+
+app.get("/api/agents/:name", (c) => {
+	const name = c.req.param("name");
+	const agent = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE name = ?")
+				.get(name) as AgentRow | undefined,
+	);
+	if (!agent) return c.json({ error: "Agent not found" }, 404);
+	return c.json(agent);
+});
+
+app.post("/api/agents", async (c) => {
+	const body = toRecord(await c.req.json().catch(() => null));
+	if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+	const name = parseOptionalString(body.name);
+	if (!name) return c.json({ error: "name is required" }, 400);
+	const readPolicy = parseOptionalString(body.read_policy) ?? "isolated";
+	const group = parseOptionalString(body.policy_group) ?? null;
+	const now = new Date().toISOString();
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+		).run(name, name, readPolicy, group, now, now);
+	});
+	const created = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare("SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE id = ?")
+				.get(name) as AgentRow,
+	);
+	return c.json(created, 201);
+});
+
+app.delete("/api/agents/:name", (c) => {
+	const name = c.req.param("name");
+	if (name === "default") return c.json({ error: "Cannot remove the default agent" }, 400);
+	const purge = c.req.query("purge") === "true";
+	const agent = getDbAccessor().withReadDb(
+		(db) => db.prepare("SELECT id FROM agents WHERE name = ?").get(name) as { id: string } | undefined,
+	);
+	if (!agent) return c.json({ error: "Agent not found" }, 404);
+	getDbAccessor().withWriteTx((db) => {
+		if (purge) {
+			db.prepare("DELETE FROM memories WHERE agent_id = ?").run(name);
+		} else {
+			// Archive: mark memories as visibility='archived' so they're excluded from search
+			db.prepare("UPDATE memories SET visibility = 'archived' WHERE agent_id = ?").run(name);
+		}
+		db.prepare("DELETE FROM agents WHERE id = ?").run(agent.id);
+	});
+	return c.json({ success: true, purged: purge });
 });
 
 // ============================================================================
@@ -4097,11 +4174,26 @@ app.post("/api/memory/recall", async (c) => {
 
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	try {
-		const agentId = body.agentId ?? c.req.header("x-signet-agent-id") ?? "default";
+		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
+		// Look up read_policy for this agent to pass to hybridRecall.
+		const agentRow = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?")
+					.get(agentId) as { read_policy: string; policy_group: string | null } | undefined,
+		);
+		const readPolicy = agentRow?.read_policy;
+		const policyGroup = agentRow?.policy_group ?? null;
 		// Enforce auth scope: scoped tokens may only read their own project.
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		const result = await hybridRecall(
-			{ ...body, query, agentId, ...(scopeProject ? { project: scopeProject } : {}) },
+			{
+				...body,
+				query,
+				agentId,
+				...(readPolicy ? { readPolicy, policyGroup } : {}),
+				...(scopeProject ? { project: scopeProject } : {}),
+			},
 			cfg,
 			fetchEmbedding,
 		);
@@ -5772,9 +5864,26 @@ app.post("/api/hooks/recall", async (c) => {
 			return c.json({ memories: [], count: 0, bypassed: true });
 		}
 
-		const agentId = c.req.header("x-signet-agent-id") ?? "default";
+		const agentId = resolveAgentId({
+			agentId: c.req.header("x-signet-agent-id"),
+			sessionKey: body.sessionKey,
+		});
+		const agentRow = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?")
+					.get(agentId) as { read_policy: string; policy_group: string | null } | undefined,
+		);
+		const readPolicy = agentRow?.read_policy;
+		const policyGroup = agentRow?.policy_group ?? null;
 		const result = await hybridRecall(
-			{ query: body.query, limit: body.limit, scope: body.project, agentId },
+			{
+				query: body.query,
+				limit: body.limit,
+				scope: body.project,
+				agentId,
+				...(readPolicy ? { readPolicy, policyGroup } : {}),
+			},
 			cfg,
 			fetchEmbedding,
 		);
@@ -9825,7 +9934,73 @@ ${fileList}
 		}
 	}
 
+	// Sync per-agent workspace dirs for OpenClaw multi-agent support
+	syncAgentWorkspaces(AGENTS_DIR);
 	ensureArchitectureDoc();
+}
+
+/**
+ * For each agent subdirectory in ~/.agents/agents/,
+ * assemble and write a workspace AGENTS.md with inherited + overridden
+ * identity files. OpenClaw uses workspace: ~/.agents/agents/{name}/workspace.
+ */
+function syncAgentWorkspaces(agentsDir: string): void {
+	const agentsRoot = join(agentsDir, "agents");
+	if (!existsSync(agentsRoot)) return;
+
+	let entries: string[];
+	try {
+		entries = readdirSync(agentsRoot, { withFileTypes: true })
+			.filter((d) => d.isDirectory())
+			.map((d) => d.name);
+	} catch {
+		return;
+	}
+
+	for (const name of entries) {
+		const agentDir = join(agentsRoot, name);
+		const workspaceDir = join(agentDir, "workspace");
+
+		// Base AGENTS.md: root AGENTS.md content
+		const agentsMdPath = join(agentsDir, "AGENTS.md");
+		if (!existsSync(agentsMdPath)) continue;
+
+		try {
+			const base = readFileSync(agentsMdPath, "utf-8");
+
+			// Agent-specific overrides for SOUL.md and IDENTITY.md
+			const agentIdentity = ["SOUL.md", "IDENTITY.md"]
+				.map((f) => {
+					const override = join(agentDir, f);
+					const root = join(agentsDir, f);
+					const p = existsSync(override) ? override : existsSync(root) ? root : null;
+					if (!p) return "";
+					const c = readFileSync(p, "utf-8").trim();
+					return c ? `\n## ${f.replace(".md", "")}\n\n${c}` : "";
+				})
+				.filter(Boolean)
+				.join("\n");
+
+			// USER.md and MEMORY.md always from root
+			const sharedIdentity = ["USER.md", "MEMORY.md"]
+				.map((f) => {
+					const p = join(agentsDir, f);
+					if (!existsSync(p)) return "";
+					const c = readFileSync(p, "utf-8").trim();
+					return c ? `\n## ${f.replace(".md", "")}\n\n${c}` : "";
+				})
+				.filter(Boolean)
+				.join("\n");
+
+			const composed = base + agentIdentity + sharedIdentity;
+
+			mkdirSync(workspaceDir, { recursive: true });
+			writeFileSync(join(workspaceDir, "AGENTS.md"), composed);
+			logger.sync.harness(`openclaw:${name}`, join(workspaceDir, "AGENTS.md"));
+		} catch (e) {
+			logger.error("sync", `Failed to sync agent workspace: ${name}`, e as Error);
+		}
+	}
 }
 
 /** Write SIGNET-ARCHITECTURE.md if missing or outdated. */
@@ -9871,6 +10046,7 @@ function startFileWatcher() {
 			join(AGENTS_DIR, "USER.md"),
 			join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md"),
 			join(AGENTS_DIR, "memory"), // Watch entire memory directory for new/changed .md files
+			join(AGENTS_DIR, "agents"), // Watch agent subdirectories for multi-agent identity changes
 		],
 		{
 			persistent: true,
@@ -9912,7 +10088,9 @@ function startFileWatcher() {
 
 		// If any identity file changed, sync to harness configs
 		const SYNC_TRIGGER_FILES = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
-		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f))) {
+		const normalizedForSync = path.replace(/\\/g, "/");
+		const isAgentSubdir = normalizedForSync.includes(`${AGENTS_DIR.replace(/\\/g, "/")}/agents/`);
+		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f)) || isAgentSubdir) {
 			scheduleSyncHarnessConfigs();
 		}
 
@@ -10585,6 +10763,59 @@ process.on("uncaughtException", (err) => {
 // initMemorySchema is no longer needed — the migration runner in
 // db-accessor.ts is the sole schema authority. See migrations/ in @signet/core.
 
+/**
+ * Sync the agent roster from the manifest into the agents table.
+ * Upserts each entry; preserves rows not in the roster.
+ */
+function syncAgentRoster(agentsDir: string): void {
+	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
+	let roster: readonly AgentDefinition[] = [];
+	for (const p of paths) {
+		if (!existsSync(p)) continue;
+		try {
+			const yaml = parseSimpleYaml(readFileSync(p, "utf-8")) as Record<string, unknown>;
+			const agents = yaml.agents as Record<string, unknown> | undefined;
+			const raw = agents?.roster;
+			if (Array.isArray(raw)) {
+				roster = raw as AgentDefinition[];
+			}
+		} catch {
+			// malformed yaml — skip
+		}
+		break;
+	}
+	if (roster.length === 0) return;
+
+	const db = getDbAccessor();
+	const now = new Date().toISOString();
+	db.withWriteTx((w) => {
+		const stmt = w.prepare(
+			`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			   name = excluded.name,
+			   read_policy = excluded.read_policy,
+			   policy_group = excluded.policy_group,
+			   updated_at = excluded.updated_at`,
+		);
+		for (const entry of roster) {
+			const policy = entry.memory?.read_policy;
+			let readPolicy: string;
+			let group: string | null = null;
+			if (typeof policy === "string") {
+				readPolicy = policy;
+			} else if (policy && typeof policy === "object" && policy.type === "group") {
+				readPolicy = "group";
+				group = typeof policy.group === "string" ? policy.group : null;
+			} else {
+				readPolicy = "isolated";
+			}
+			stmt.run(entry.name, entry.name, readPolicy, group, now, now);
+		}
+	});
+	logger.info("daemon", "Agent roster synced", { count: roster.length });
+}
+
 async function main() {
 	logger.info("daemon", "Signet Daemon starting");
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
@@ -10597,6 +10828,9 @@ async function main() {
 	// Initialise singleton DB accessor (opens write connection, sets pragmas,
 	// runs migrations). This is the sole schema authority.
 	initDbAccessor(MEMORY_DB);
+
+	// Sync agent roster from manifest into the agents table.
+	syncAgentRoster(AGENTS_DIR);
 
 	// Migrations may have created traversal tables — clear the cache
 	invalidateTraversalCache();

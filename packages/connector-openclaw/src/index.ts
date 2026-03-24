@@ -452,6 +452,47 @@ export class OpenClawConnector extends BaseConnector {
 	}
 
 	/**
+	 * Sync a multi-agent roster into the `agents.list` section of all
+	 * discovered OpenClaw configs. Only agents that include `"openclaw"` in
+	 * their `harnesses` array (or have no harnesses specified) are written.
+	 */
+	async syncMultipleAgents(
+		roster: ReadonlyArray<{
+			name: string;
+			harnesses?: ReadonlyArray<string>;
+			skills?: ReadonlyArray<string>;
+		}>,
+		basePath: string,
+	): Promise<void> {
+		const eligible = roster.filter(
+			(a) => !a.harnesses || a.harnesses.length === 0 || a.harnesses.includes("openclaw"),
+		);
+
+		const list = eligible.map((a) => ({
+			id: a.name,
+			name: a.name,
+			workspace: join(basePath, "agents", a.name, "workspace"),
+			...(a.skills && a.skills.length > 0 ? { skills: a.skills } : {}),
+		}));
+
+		const patch: JsonObject = { agents: { list } };
+
+		for (const configPath of this.getDiscoveredConfigPaths()) {
+			try {
+				const raw = readFileSync(configPath, "utf-8");
+				const config = parseJsonOrJson5(raw);
+				const indent = this.detectIndent(raw);
+				deepMerge(config, patch);
+				backupConfig(configPath, raw);
+				atomicWriteJson(configPath, config, indent);
+			} catch (e) {
+				const message = e instanceof Error ? e.message : String(e);
+				console.warn(`[signet/openclaw] Skipped agents.list patch for ${configPath}: ${message}`);
+			}
+		}
+	}
+
+	/**
 	 * Return all existing OpenClaw config paths discovered on this machine.
 	 */
 	getDiscoveredConfigPaths(): string[] {

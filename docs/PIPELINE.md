@@ -1091,3 +1091,24 @@ memory:
       enabled: true
       pollMs: 5000
 ```
+
+
+---
+
+Multi-Agent Pipeline Notes
+---------------------------
+
+When multiple agents share a daemon, the pipeline tags each extracted memory
+with the requesting agent's ID. The `agent_id` is resolved from the
+session-start hook request: if the caller provides `agentId` in the body it
+is used directly; otherwise the daemon parses OpenClaw's session key format
+(`agent:{id}:{rest}`) as a fallback.
+
+Extracted memories default to `visibility = 'global'`. Callers that want
+private memories must set `visibility = 'private'` explicitly in the
+remember request or via `signet remember --private`.
+
+The pipeline worker itself is agent-agnostic: it operates on the `memory_jobs`
+queue and reads `agent_id` from each job record. Entity graph operations
+(extraction, traversal, aspect updates) all pass `agent_id` through to
+ensure knowledge is scoped to the correct agent.

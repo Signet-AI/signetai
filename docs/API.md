@@ -330,11 +330,18 @@ Body-level fields override prefix-parsed values.
   "tags": "preference,editor",
   "pinned": false,
   "sourceType": "manual",
-  "sourceId": "optional-external-id"
+  "sourceId": "optional-external-id",
+  "agentId": "alice",
+  "visibility": "global"
 }
 ```
 
-Only `content` is required.
+Only `content` is required. Multi-agent fields:
+
+| Field        | Description |
+|--------------|-------------|
+| `agentId`    | Agent that owns this memory. Defaults to `"default"`. |
+| `visibility` | `"global"` (any permitted agent can read), `"private"` (owner only). Defaults to `"global"`. |
 
 **Response**
 
@@ -726,7 +733,8 @@ Requires `recall` permission.
   "who": "claude-code",
   "pinned": false,
   "importance_min": 0.5,
-  "since": "2026-01-01T00:00:00Z"
+  "since": "2026-01-01T00:00:00Z",
+  "agentId": "alice"
 }
 ```
 
@@ -1205,6 +1213,88 @@ Lightweight health check for a connector, including document count.
 }
 ```
 
+
+Agents
+------
+
+Multi-agent endpoints for managing the agent roster. All agents share one
+SQLite database; memories are scoped by `agent_id` and `visibility`. The
+read policy controls which other agents' global memories each agent can see.
+
+### GET /api/agents
+
+List all registered agents. Requires no permission (local mode) or `recall`.
+
+**Response**
+
+```json
+{
+  "agents": [
+    {
+      "id": "default",
+      "name": "default",
+      "read_policy": "shared",
+      "policy_group": null,
+      "created_at": "2026-03-24T00:00:00.000Z",
+      "updated_at": "2026-03-24T00:00:00.000Z"
+    },
+    {
+      "id": "alice",
+      "name": "alice",
+      "read_policy": "isolated",
+      "policy_group": null,
+      "created_at": "2026-03-24T12:00:00.000Z",
+      "updated_at": "2026-03-24T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+`read_policy` is one of:
+- `isolated` — agent sees only its own memories
+- `shared` — agent sees all `visibility=global` memories from any agent
+- `group` — agent sees `visibility=global` memories from agents in the same `policy_group`
+
+### GET /api/agents/:name
+
+Get a single agent by name. Returns `404` if not found.
+
+**Response** — same shape as a single entry in `GET /api/agents`.
+
+### POST /api/agents
+
+Register a new agent. Requires `remember` permission.
+
+**Request body**
+
+```json
+{
+  "name": "alice",
+  "read_policy": "isolated",
+  "policy_group": null
+}
+```
+
+Only `name` is required. `read_policy` defaults to `"isolated"`.
+
+**Response** — the created agent record.
+
+### DELETE /api/agents/:name
+
+Remove an agent from the roster. Memories owned by the agent are marked
+`visibility='archived'` (not deleted). Requires `admin` permission.
+
+**Query parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `purge`   | Set to `true` to permanently delete all memories where `agent_id = name`. |
+
+**Response**
+
+```json
+{ "ok": true }
+```
 
 Skills
 ------

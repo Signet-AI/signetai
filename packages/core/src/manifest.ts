@@ -12,6 +12,7 @@ export function generateManifest(manifest: AgentManifest): string {
 		schema: manifest.schema || SCHEMA_ID,
 		agent: manifest.agent,
 		...(manifest.owner && { owner: manifest.owner }),
+		...(manifest.agents && { agents: manifest.agents }),
 		...(manifest.auth && { auth: manifest.auth }),
 		...(manifest.capabilities && { capabilities: manifest.capabilities }),
 		...(manifest.harnessCompatibility && {

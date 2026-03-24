@@ -27,6 +27,37 @@ export interface LlmProvider {
 	available(): Promise<boolean>;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-agent types
+// ---------------------------------------------------------------------------
+
+/**
+ * Controls which agents' memories are visible on read.
+ * - "isolated": only own memories
+ * - "shared": all global memories + own private
+ * - { type: "group" }: global memories from group members + own private
+ */
+export type ReadPolicy =
+	| "isolated"
+	| "shared"
+	| { readonly type: "group"; readonly group: string };
+
+/** A named agent entry in the roster. */
+export interface AgentDefinition {
+	readonly name: string;
+	readonly model?: string;
+	readonly harnesses?: readonly string[];
+	/** Skills allowlist. Omit or empty string[] = all skills. */
+	readonly skills?: readonly string[];
+	/** Relative path to agent's SOUL.md (defaults to root SOUL.md). */
+	readonly personality?: string;
+	readonly memory?: {
+		readonly read_policy?: ReadPolicy;
+	};
+}
+
+// ---------------------------------------------------------------------------
+
 export interface AgentManifest {
 	version: number;
 	schema: string;
@@ -45,6 +76,11 @@ export interface AgentManifest {
 		localId?: string;
 		ens?: string;
 		name?: string;
+	};
+
+	// Multi-agent roster (optional; omit for single-agent installs)
+	agents?: {
+		readonly roster: readonly AgentDefinition[];
 	};
 
 	// Harnesses this agent works with
