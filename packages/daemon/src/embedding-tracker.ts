@@ -79,11 +79,21 @@ export function startEmbeddingTracker(
 			const staleRows = accessor.withReadDb((db) => {
 				return db
 					.prepare(
+						// Join on both source_id and content_hash so that memories with
+						// duplicate content (same hash, different memory row) are not
+						// needlessly re-embedded each cycle. Without the hash fallback,
+						// the ON CONFLICT in the write path keeps the vector but not the
+						// source_id, so the original owner's source_id match is gone and
+						// the tracker picks it up again every poll interval.
 						`SELECT m.id, m.content, m.content_hash AS contentHash,
 						        m.embedding_model AS currentModel
 						 FROM memories m
 						 LEFT JOIN embeddings e
-						   ON e.source_type = 'memory' AND e.source_id = m.id
+						   ON e.source_type = 'memory'
+						   AND (
+						     e.source_id = m.id
+						     OR (m.content_hash IS NOT NULL AND e.content_hash = m.content_hash)
+						   )
 						 WHERE m.is_deleted = 0
 						   AND m.content_hash IS NOT NULL
 						   AND trim(m.content_hash) <> ''

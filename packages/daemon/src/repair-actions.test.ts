@@ -13,6 +13,7 @@ import {
 	createRateLimiter,
 	deduplicateMemories,
 	getDedupStats,
+	getEmbeddingGapStats,
 	reembedMissingMemories,
 	releaseStaleLeases,
 	requeueDeadJobs,
@@ -508,6 +509,51 @@ describe("reembedMissingMemories", () => {
 
 		const vecIds = db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all() as Array<{ id: string }>;
 		expect(vecIds.map((row) => row.id)).toEqual(["emb-existing"]);
+	});
+
+	it("does not cycle-embed duplicate-hash memories — both report as embedded after one pass", async () => {
+		// Regression test: before the fix, two memories with the same content_hash
+		// created an infinite backfill loop. Backfill would embed A, then embed B
+		// (ON CONFLICT reassigns source_id to B), making A "missing" again. The
+		// fix makes the gap-stats and backfill queries consider content_hash matches
+		// so both memories are treated as embedded regardless of which source_id
+		// the embedding row currently holds.
+		const now = new Date().toISOString();
+
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+		).run("mem-dup-a", "identical content", "hash-dup", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+		).run("mem-dup-b", "identical content", "hash-dup", now, now);
+
+		// No embedding yet — both should show as missing
+		const before = getEmbeddingGapStats(accessor);
+		expect(before.unembedded).toBe(2);
+
+		const limiter = createRateLimiter();
+
+		// First pass: embeds both (one is deduplicated via ON CONFLICT)
+		await reembedMissingMemories(
+			accessor, TEST_CFG, CTX_OPERATOR, limiter,
+			async () => [0.7, 0.8, 0.9],
+			TEST_EMBEDDING_CFG, 10, false,
+		);
+
+		// After one pass, both should be considered "embedded" via hash match
+		const after = getEmbeddingGapStats(accessor);
+		expect(after.unembedded).toBe(0);
+
+		// A second pass should not attempt to re-embed either memory (no cycle)
+		const limiter2 = createRateLimiter();
+		const secondPass = await reembedMissingMemories(
+			accessor, TEST_CFG, CTX_OPERATOR, limiter2,
+			async () => [0.7, 0.8, 0.9],
+			TEST_EMBEDDING_CFG, 10, false,
+		);
+		expect(secondPass.message).toMatch(/no unembedded memories found/);
 	});
 
 	it("can sweep all missing embeddings across multiple batches in one run", async () => {

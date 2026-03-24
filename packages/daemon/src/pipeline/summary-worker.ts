@@ -1218,6 +1218,44 @@ export function startSummaryWorker(
 		}, delay);
 	}
 
+	// Crash recovery: on startup, reset any jobs that were left in 'processing'
+	// state when the daemon was killed or crashed mid-job. Without this, those
+	// jobs are silently abandoned — the worker only polls for 'pending' jobs, so
+	// anything stuck in 'processing' is never retried. Jobs that have consumed
+	// all their attempts are promoted to 'dead'; all others go back to 'pending'.
+	try {
+		accessor.withWriteTx((db) => {
+			const tableExists = db
+				.prepare(
+					"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'",
+				)
+				.get();
+			if (!tableExists) return;
+
+			const result = db
+				.prepare(
+					`UPDATE summary_jobs
+					 SET status = CASE
+					   WHEN attempts >= max_attempts THEN 'dead'
+					   ELSE 'pending'
+					 END
+					 WHERE status = 'processing'`,
+				)
+				.run();
+
+			if (result.changes > 0) {
+				logger.info(
+					"summary-worker",
+					`Crash recovery: reset ${result.changes} stuck processing job(s) to pending/dead`,
+				);
+			}
+		});
+	} catch (e) {
+		logger.warn("summary-worker", "Crash recovery failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+
 	// Start polling
 	scheduleTick(POLL_INTERVAL_MS);
 
