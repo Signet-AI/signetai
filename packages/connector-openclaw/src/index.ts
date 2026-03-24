@@ -504,6 +504,8 @@ export class OpenClawConnector extends BaseConnector {
 				}
 
 				const merged = [...kept, ...signetEntries];
+				// deepMerge replaces arrays (not concatenates), so passing `merged`
+				// directly is intentional — it's already the complete target list.
 				const patch: JsonObject = { agents: { list: merged } };
 				deepMerge(config, patch);
 				backupConfig(configPath, raw);

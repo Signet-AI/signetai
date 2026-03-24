@@ -1293,7 +1293,7 @@ Remove an agent from the roster. Memories owned by the agent are marked
 **Response**
 
 ```json
-{ "ok": true }
+{ "success": true, "purged": false }
 ```
 
 Skills
