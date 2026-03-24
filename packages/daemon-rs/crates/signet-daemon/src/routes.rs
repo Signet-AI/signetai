@@ -1,5 +1,6 @@
 //! HTTP route handlers for the Signet daemon.
 
+pub mod agents;
 pub mod config;
 pub mod connectors;
 pub mod crossagent;

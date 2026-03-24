@@ -195,8 +195,10 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			);
 
 			if (result?.error) {
-				spinner.warn(`Daemon returned error: ${result.error}`);
-			} else if (!result) {
+				spinner.fail(`Daemon returned error: ${result.error} — roster preserved`);
+				return;
+			}
+			if (!result) {
 				spinner.warn("Daemon offline — removing from agent.yaml only");
 			}
 
@@ -215,6 +217,12 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 		.action(async (name: string, options: { force?: boolean }) => {
 			if (name === "default") {
 				console.log(chalk.red("  Cannot purge the default agent"));
+				process.exit(1);
+			}
+
+			const nameErr = validateName(name);
+			if (nameErr) {
+				console.log(chalk.red(`  ${nameErr}`));
 				process.exit(1);
 			}
 
@@ -252,7 +260,7 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			// If the daemon returned an explicit error the agent record may still
 			// exist in DB; deleting the local files would create an orphan.
 			const daemonOk = result?.success === true;
-			const daemonOffline = result === null;
+			const daemonOffline = !result;
 			if (result?.error) {
 				spinner.fail(`Daemon returned error: ${result.error} — local files preserved`);
 				return;

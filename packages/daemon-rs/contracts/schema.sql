@@ -67,11 +67,22 @@ CREATE TABLE "memories" (
   last_accessed   TEXT,
   access_count    INTEGER DEFAULT 0,
   pinned          INTEGER DEFAULT 0
-, content_hash TEXT, normalized_content TEXT, is_deleted INTEGER DEFAULT 0, deleted_at TEXT, extraction_status TEXT DEFAULT 'none', embedding_model TEXT, extraction_model TEXT, update_count INTEGER DEFAULT 0, idempotency_key TEXT, runtime_path TEXT, source_path TEXT, source_section TEXT);
+, content_hash TEXT, normalized_content TEXT, is_deleted INTEGER DEFAULT 0, deleted_at TEXT, extraction_status TEXT DEFAULT 'none', embedding_model TEXT, extraction_model TEXT, update_count INTEGER DEFAULT 0, idempotency_key TEXT, runtime_path TEXT, source_path TEXT, source_section TEXT, agent_id TEXT DEFAULT 'default', visibility TEXT DEFAULT 'global');
 CREATE INDEX idx_memories_type ON memories(type);
 CREATE INDEX idx_memories_category ON memories(category);
 CREATE INDEX idx_memories_source ON memories(source_type, source_id);
 CREATE INDEX idx_memories_created ON memories(created_at DESC);
+CREATE INDEX idx_memories_agent_id ON memories(agent_id);
+CREATE INDEX idx_memories_agent_visibility ON memories(agent_id, visibility);
+-- migration 043: agent roster (multi-agent support)
+CREATE TABLE IF NOT EXISTS agents (
+  id           TEXT PRIMARY KEY,
+  name         TEXT,
+  read_policy  TEXT NOT NULL DEFAULT 'isolated',
+  policy_group TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
 CREATE VIRTUAL TABLE memories_fts USING fts5(content, content=memories, content_rowid=rowid)
 /* memories_fts(content) */;
 CREATE TABLE 'memories_fts_data'(id INTEGER PRIMARY KEY, block BLOB);

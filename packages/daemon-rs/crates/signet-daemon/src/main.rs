@@ -173,6 +173,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/hooks/compaction-complete",
             axum::routing::post(routes::hooks::compaction_complete),
         )
+        // Agent roster routes (multi-agent support — migration 043)
+        .route("/api/agents", get(routes::agents::list).post(routes::agents::create))
+        .route(
+            "/api/agents/{name}",
+            get(routes::agents::get).delete(routes::agents::delete),
+        )
         // Session routes
         .route("/api/sessions", get(routes::sessions::list))
         .route("/api/sessions/summaries", get(routes::sessions::summaries))
