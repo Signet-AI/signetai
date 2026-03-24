@@ -17,6 +17,7 @@ export interface SessionInfo {
 	readonly key: string;
 	readonly runtimePath: RuntimePath;
 	readonly claimedAt: string;
+	readonly expiresAt: string;
 	readonly bypassed: boolean;
 }
 
@@ -30,9 +31,12 @@ type ClaimResult = { readonly ok: true } | { readonly ok: false; readonly claime
 
 const STALE_SESSION_MS = 4 * 60 * 60 * 1000; // 4 hours
 const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const WARN_BEFORE_MS = 30 * 60 * 1000; // warn 30 min before expiry
 
 const sessions = new Map<string, SessionClaim>();
 const bypassedSessions = new Set<string>();
+/** Sessions that have already received an expiry warning — avoid per-hook spam. */
+const warnedSessions = new Set<string>();
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 // Synchronous guard — prevents double-start during concurrent async init.
 let cleanupStarted = false;
@@ -87,6 +91,7 @@ export function claimSession(sessionKey: string, runtimePath: RuntimePath): Clai
 export function releaseSession(sessionKey: string): void {
 	const removed = sessions.delete(sessionKey);
 	bypassedSessions.delete(sessionKey);
+	warnedSessions.delete(sessionKey);
 	if (removed) {
 		logger.info("session-tracker", "Session released", { sessionKey });
 	}
@@ -171,11 +176,50 @@ export function getActiveSessions(): readonly SessionInfo[] {
 			key,
 			runtimePath: claim.runtimePath,
 			claimedAt: claim.claimedAt,
+			expiresAt: new Date(claim.expiresAt).toISOString(),
 			bypassed: bypassedSessions.has(key),
 		});
 	}
 
 	return result;
+}
+
+/**
+ * Returns a warning string if the session will expire within WARN_BEFORE_MS,
+ * or null if healthy or not found. Throttled — only warns once per session
+ * until the session is renewed.
+ */
+export function getExpiryWarning(sessionKey: string): string | null {
+	if (isSessionBypassed(sessionKey)) return null;
+	const claim = sessions.get(sessionKey);
+	if (!claim) return null;
+	const remaining = claim.expiresAt - Date.now();
+	if (remaining <= 0) return "session has expired — reconnect to start a new session";
+	if (remaining > WARN_BEFORE_MS) return null;
+	if (warnedSessions.has(sessionKey)) return null;
+	warnedSessions.add(sessionKey);
+	const mins = Math.max(1, Math.round(remaining / 60_000));
+	return `session expires in ~${mins} minute${mins === 1 ? "" : "s"} — consider /checkpoint`;
+}
+
+/**
+ * Reset a session's TTL. Returns the new expiresAt ISO string, or null
+ * if the session is not found.
+ */
+export function renewSession(sessionKey: string): string | null {
+	const claim = sessions.get(sessionKey);
+	if (!claim) return null;
+	// Reject renewal of already-expired sessions — caller should re-claim
+	if (claim.expiresAt <= Date.now()) {
+		sessions.delete(sessionKey);
+		bypassedSessions.delete(sessionKey);
+		warnedSessions.delete(sessionKey);
+		return null;
+	}
+	claim.expiresAt = Date.now() + STALE_SESSION_MS;
+	warnedSessions.delete(sessionKey);
+	logger.info("session-tracker", "Session renewed", { sessionKey });
+	return new Date(claim.expiresAt).toISOString();
 }
 
 /**
@@ -189,7 +233,13 @@ function cleanupStaleSessions(): void {
 		if (now > claim.expiresAt) {
 			sessions.delete(key);
 			bypassedSessions.delete(key);
+			warnedSessions.delete(key);
 			cleaned++;
+			logger.warn("session-tracker", "Session evicted (TTL expired)", {
+				sessionKey: key,
+				runtimePath: claim.runtimePath,
+				claimedAt: claim.claimedAt,
+			});
 		}
 	}
 
@@ -238,4 +288,5 @@ export function activeSessionCount(): number {
 export function resetSessions(): void {
 	sessions.clear();
 	bypassedSessions.clear();
+	warnedSessions.clear();
 }

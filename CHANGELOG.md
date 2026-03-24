@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.75.2] - 2026-03-24
+
+### Bug Fixes
+
+- session expiry, hooks config, dead-memory API, openclaw health (#295)
+
+
 ## [0.75.1] - 2026-03-24
 
 ### Bug Fixes
