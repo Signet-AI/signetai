@@ -24,7 +24,7 @@ import {
 	createOpenRouterProvider,
 	resolveDefaultOllamaFallbackMaxContextTokens,
 } from "./provider";
-
+import { countChanges } from "../db-helpers";
 import { isDuplicate, inferType } from "../hooks";
 import { loadMemoryConfig } from "../memory-config";
 import { logger } from "../logger";
@@ -1229,10 +1229,10 @@ export function startSummaryWorker(
 				.prepare(
 					"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'",
 				)
-				.get();
+				.get() as { name: string } | undefined;
 			if (!tableExists) return;
 
-			const result = db
+			const result: unknown = db
 				.prepare(
 					`UPDATE summary_jobs
 					 SET status = CASE
@@ -1243,10 +1243,11 @@ export function startSummaryWorker(
 				)
 				.run();
 
-			if (result.changes > 0) {
+			const changed = countChanges(result);
+			if (changed > 0) {
 				logger.info(
 					"summary-worker",
-					`Crash recovery: reset ${result.changes} stuck processing job(s) to pending/dead`,
+					`Crash recovery: reset ${changed} stuck processing job(s) to pending/dead`,
 				);
 			}
 		});
