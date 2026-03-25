@@ -112,10 +112,10 @@ describe("recoverSummaryJobs", () => {
 			stmt.run(`job-${i}`, attempts, max, now);
 		}
 
-		expect(recoverSummaryJobs(accessor, 100)).toBe(100);
-		expect(recoverSummaryJobs(accessor, 100)).toBe(100);
-		expect(recoverSummaryJobs(accessor, 100)).toBe(5);
-		expect(recoverSummaryJobs(accessor, 100)).toBe(0);
+		expect(recoverSummaryJobs(accessor, 100)).toEqual({ selected: 100, updated: 100 });
+		expect(recoverSummaryJobs(accessor, 100)).toEqual({ selected: 100, updated: 100 });
+		expect(recoverSummaryJobs(accessor, 100)).toEqual({ selected: 5, updated: 5 });
+		expect(recoverSummaryJobs(accessor, 100)).toEqual({ selected: 0, updated: 0 });
 
 		const left = db.prepare("SELECT COUNT(*) as n FROM summary_jobs WHERE status = 'processing'").get() as {
 			n: number;
@@ -124,6 +124,23 @@ describe("recoverSummaryJobs", () => {
 
 		const dead = db.prepare("SELECT COUNT(*) as n FROM summary_jobs WHERE status = 'dead'").get() as { n: number };
 		expect(dead.n).toBeGreaterThan(0);
+	});
+
+	it("clamps invalid recovery limits to a sane positive range", () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
+			 VALUES ('job-limit', NULL, 'codex', NULL, 'transcript', 'processing', 0, 3, ?)`,
+		).run(now);
+		db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
+			 VALUES ('job-limit-2', NULL, 'codex', NULL, 'transcript', 'processing', 0, 3, ?)`,
+		).run(now);
+
+		expect(recoverSummaryJobs(accessor, 0)).toEqual({ selected: 1, updated: 1 });
+		expect(recoverSummaryJobs(accessor, Number.POSITIVE_INFINITY)).toEqual({ selected: 1, updated: 1 });
 	});
 
 	it("defers crash recovery off the synchronous startup path", async () => {

@@ -41,6 +41,12 @@ export interface SummaryWorkerHandle {
 }
 
 const RECOVER_BATCH = 100;
+const RECOVER_LIMIT_MAX = 1000;
+
+interface SummaryRecoveryBatch {
+	readonly selected: number;
+	readonly updated: number;
+}
 
 interface SummaryJobRow {
 	readonly id: string;
@@ -949,12 +955,15 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 
 /** Resolve from synthesis config — distinct from extraction so users can
  *  decouple the summary provider/model/timeout from the extraction pipeline. */
-export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER_BATCH): number {
+export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER_BATCH): SummaryRecoveryBatch {
 	return accessor.withWriteTx((db) => {
+		const take = Number.isFinite(limit) ? Math.max(1, Math.min(RECOVER_LIMIT_MAX, Math.trunc(limit))) : RECOVER_BATCH;
 		const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'").get() as
 			| { name: string }
 			| undefined;
-		if (!table) return 0;
+		if (!table) {
+			return { selected: 0, updated: 0 };
+		}
 
 		const rows = db
 			.prepare(
@@ -964,13 +973,15 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 				 ORDER BY created_at ASC
 				 LIMIT ?`,
 			)
-			.all(limit) as Array<{
+			.all(take) as Array<{
 			id: string;
 			attempts: number;
 			max_attempts: number;
 		}>;
 
-		if (rows.length === 0) return 0;
+		if (rows.length === 0) {
+			return { selected: 0, updated: 0 };
+		}
 
 		const update = db.prepare(
 			`UPDATE summary_jobs
@@ -978,13 +989,13 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 			 WHERE id = ? AND status = 'processing'`,
 		);
 
-		let count = 0;
+		let updated = 0;
 		for (const row of rows) {
 			const status = row.attempts >= row.max_attempts ? "dead" : "pending";
-			count += countChanges(update.run(status, row.id));
+			updated += countChanges(update.run(status, row.id));
 		}
 
-		return count;
+		return { selected: rows.length, updated };
 	});
 }
 
@@ -1206,11 +1217,11 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 		if (stopped) return;
 		recoverTimer = setTimeout(() => {
 			try {
-				const n = recoverSummaryJobs(accessor);
-				if (n > 0) {
-					logger.info("summary-worker", `Crash recovery: reset ${n} stuck job(s) to pending/dead`);
+				const batch = recoverSummaryJobs(accessor);
+				if (batch.updated > 0) {
+					logger.info("summary-worker", `Crash recovery: reset ${batch.updated} stuck job(s) to pending/dead`);
 				}
-				if (n >= RECOVER_BATCH) {
+				if (batch.selected >= RECOVER_BATCH) {
 					scheduleRecovery(0);
 				}
 			} catch (e) {

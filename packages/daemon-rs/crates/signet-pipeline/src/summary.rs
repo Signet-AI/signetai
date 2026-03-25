@@ -14,6 +14,8 @@ use signet_core::db::DbPool;
 
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
 
+const RECOVER_BATCH: i64 = 100;
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -65,6 +67,12 @@ pub struct SummaryResult {
     pub chunks_processed: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecoveryBatch {
+    selected: usize,
+    updated: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Worker handle
 // ---------------------------------------------------------------------------
@@ -111,6 +119,7 @@ async fn worker_loop(
     let mut failures: u32 = 0;
     let base = Duration::from_millis(config.poll_ms);
     let max = Duration::from_secs(120);
+    let mut recovered = false;
 
     info!(poll_ms = config.poll_ms, "summary worker started");
 
@@ -118,6 +127,28 @@ async fn worker_loop(
         if *shutdown.borrow() {
             info!("summary worker shutting down");
             break;
+        }
+
+        if !recovered {
+            match recover_summary_jobs(&pool, RECOVER_BATCH).await {
+                Ok(batch) => {
+                    if batch.updated > 0 {
+                        info!(
+                            updated = batch.updated,
+                            "summary crash recovery reset stuck job(s)"
+                        );
+                    }
+                    if batch.selected >= RECOVER_BATCH as usize {
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                    recovered = true;
+                }
+                Err(e) => {
+                    warn!(err = %e, "summary crash recovery failed");
+                    recovered = true;
+                }
+            }
         }
 
         let delay = if failures > 0 {
@@ -299,6 +330,71 @@ async fn lease_summary_job(pool: &DbPool, max_attempts: u32) -> Result<Option<Su
     }
 }
 
+async fn recover_summary_jobs(pool: &DbPool, limit: i64) -> Result<RecoveryBatch, String> {
+    let val = pool
+        .write_tx(signet_core::db::Priority::Low, move |conn| {
+            let rows = {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT id, attempts, max_attempts
+                     FROM summary_jobs
+                     WHERE status = 'leased'
+                     ORDER BY created_at ASC
+                     LIMIT ?1",
+                )?;
+                let rows = stmt.query_map(rusqlite::params![limit], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?;
+
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+
+            if rows.is_empty() {
+                return Ok(serde_json::json!({
+                    "selected": 0,
+                    "updated": 0,
+                }));
+            }
+
+            let mut stmt = conn.prepare_cached(
+                "UPDATE summary_jobs
+                 SET status = ?1
+                 WHERE id = ?2 AND status = 'leased'",
+            )?;
+
+            let mut updated = 0usize;
+            for (id, attempts, max_attempts) in &rows {
+                let status = if attempts >= max_attempts {
+                    "dead"
+                } else {
+                    "pending"
+                };
+                updated += stmt.execute(rusqlite::params![status, id])?;
+            }
+
+            Ok(serde_json::json!({
+                "selected": rows.len(),
+                "updated": updated,
+            }))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let selected = val
+        .get("selected")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize;
+    let updated = val
+        .get("updated")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as usize;
+
+    Ok(RecoveryBatch { selected, updated })
+}
+
 async fn complete_summary_job(pool: &DbPool, job_id: &str, result: &str) -> Result<(), String> {
     let id = job_id.to_string();
     let result = result.to_string();
@@ -329,4 +425,118 @@ async fn fail_summary_job(pool: &DbPool, job_id: &str, error: &str) -> Result<()
     .await
     .map(|_| ())
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use signet_core::db::Priority;
+
+    fn test_db(name: &str) -> std::path::PathBuf {
+        let pid = std::process::id();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("signet-summary-{name}-{pid}-{now}.db"))
+    }
+
+    #[tokio::test]
+    async fn recovers_leased_summary_jobs_in_batches() {
+        let path = test_db("recover");
+        let (pool, handle) = DbPool::open(&path).expect("failed to open DB");
+
+        let now = chrono::Utc::now().to_rfc3339();
+        pool.write(Priority::Low, move |conn| {
+            let tx = conn.unchecked_transaction()?;
+            {
+                let mut stmt = tx.prepare_cached(
+                    "INSERT INTO summary_jobs
+                     (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
+                     VALUES (?1, ?2, 'codex', NULL, 'transcript', 'leased', ?3, ?4, ?5)",
+                )?;
+                for i in 0..205 {
+                    let attempts = (i % 3) as i64;
+                    stmt.execute(rusqlite::params![
+                        format!("job-{i}"),
+                        format!("session-{i}"),
+                        attempts,
+                        2i64,
+                        &now,
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("failed to seed summary jobs");
+
+        assert_eq!(
+            recover_summary_jobs(&pool, 100)
+                .await
+                .expect("first recovery failed"),
+            RecoveryBatch {
+                selected: 100,
+                updated: 100,
+            }
+        );
+        assert_eq!(
+            recover_summary_jobs(&pool, 100)
+                .await
+                .expect("second recovery failed"),
+            RecoveryBatch {
+                selected: 100,
+                updated: 100,
+            }
+        );
+        assert_eq!(
+            recover_summary_jobs(&pool, 100)
+                .await
+                .expect("third recovery failed"),
+            RecoveryBatch {
+                selected: 5,
+                updated: 5,
+            }
+        );
+        assert_eq!(
+            recover_summary_jobs(&pool, 100)
+                .await
+                .expect("empty recovery failed"),
+            RecoveryBatch {
+                selected: 0,
+                updated: 0,
+            }
+        );
+
+        let leased: i64 = pool
+            .read(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM summary_jobs WHERE status = 'leased'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .expect("failed to count leased jobs");
+        assert_eq!(leased, 0);
+
+        let dead: i64 = pool
+            .read(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM summary_jobs WHERE status = 'dead'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .expect("failed to count dead jobs");
+        assert!(dead > 0);
+
+        drop(pool);
+        handle.await.expect("writer task join failed");
+        let _ = std::fs::remove_file(path);
+    }
 }
