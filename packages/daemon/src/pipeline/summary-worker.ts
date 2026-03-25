@@ -40,6 +40,8 @@ export interface SummaryWorkerHandle {
 	readonly running: boolean;
 }
 
+const RECOVER_BATCH = 100;
+
 interface SummaryJobRow {
 	readonly id: string;
 	readonly session_key: string | null;
@@ -947,6 +949,45 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 
 /** Resolve from synthesis config — distinct from extraction so users can
  *  decouple the summary provider/model/timeout from the extraction pipeline. */
+export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER_BATCH): number {
+	return accessor.withWriteTx((db) => {
+		const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'").get() as
+			| { name: string }
+			| undefined;
+		if (!table) return 0;
+
+		const rows = db
+			.prepare(
+				`SELECT id, attempts, max_attempts
+				 FROM summary_jobs
+				 WHERE status = 'processing'
+				 ORDER BY created_at ASC
+				 LIMIT ?`,
+			)
+			.all(limit) as Array<{
+			id: string;
+			attempts: number;
+			max_attempts: number;
+		}>;
+
+		if (rows.length === 0) return 0;
+
+		const update = db.prepare(
+			`UPDATE summary_jobs
+			 SET status = ?
+			 WHERE id = ? AND status = 'processing'`,
+		);
+
+		let count = 0;
+		for (const row of rows) {
+			const status = row.attempts >= row.max_attempts ? "dead" : "pending";
+			count += countChanges(update.run(status, row.id));
+		}
+
+		return count;
+	});
+}
+
 async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promise<LlmProvider> {
 	const p = cfg.pipelineV2.synthesis.provider;
 	const model = cfg.pipelineV2.synthesis.model;
@@ -1028,6 +1069,7 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 
 export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
+	let recoverTimer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 
 	// Cache the LLM provider to avoid per-job getSecret calls.
@@ -1160,39 +1202,28 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 		}, delay);
 	}
 
-	// Crash recovery: on startup, reset any jobs that were left in 'processing'
-	// state when the daemon was killed or crashed mid-job. Without this, those
-	// jobs are silently abandoned — the worker only polls for 'pending' jobs, so
-	// anything stuck in 'processing' is never retried. Jobs that have consumed
-	// all their attempts are promoted to 'dead'; all others go back to 'pending'.
-	try {
-		accessor.withWriteTx((db) => {
-			// Defensive for tests and partially upgraded workspaces that may
-			// reach the worker before migration 009 has created summary_jobs.
-			const table = db
-				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'")
-				.get() as { name: string } | undefined;
-			if (!table) return;
-
-			const n = countChanges(
-				db.prepare(
-					`UPDATE summary_jobs
-					 SET status = CASE
-					   WHEN attempts >= max_attempts THEN 'dead'
-					   ELSE 'pending'
-					 END
-					 WHERE status = 'processing'`,
-				).run(),
-			);
-			if (n > 0) {
-				logger.info("summary-worker", `Crash recovery: reset ${n} stuck job(s) to pending/dead`);
+	function scheduleRecovery(delay: number): void {
+		if (stopped) return;
+		recoverTimer = setTimeout(() => {
+			try {
+				const n = recoverSummaryJobs(accessor);
+				if (n > 0) {
+					logger.info("summary-worker", `Crash recovery: reset ${n} stuck job(s) to pending/dead`);
+				}
+				if (n >= RECOVER_BATCH) {
+					scheduleRecovery(0);
+				}
+			} catch (e) {
+				logger.warn("summary-worker", "Crash recovery failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
 			}
-		});
-	} catch (e) {
-		logger.warn("summary-worker", "Crash recovery failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
+		}, delay);
 	}
+
+	// Crash recovery runs in small async batches so daemon startup and HTTP
+	// readiness are not blocked by large summary_jobs tables.
+	scheduleRecovery(0);
 
 	// Start polling
 	scheduleTick(POLL_INTERVAL_MS);
@@ -1201,6 +1232,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 		stop() {
 			stopped = true;
 			if (timer) clearTimeout(timer);
+			if (recoverTimer) clearTimeout(recoverTimer);
 		},
 		get running() {
 			return !stopped;

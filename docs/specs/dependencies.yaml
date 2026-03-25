@@ -123,6 +123,21 @@ specs:
       - "Resuming restores normal worker startup and backlog draining with no schema migration"
     decision: null
 
+  - id: daemon-startup-responsiveness
+    status: planning
+    path: docs/specs/planning/daemon-startup-responsiveness.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-DAEMON-STARTUP-RESPONSIVENESS.md
+    success_criteria:
+      - "Daemon startup keeps /health responsive while recovery work runs on large databases"
+      - "Startup recovery and embedding coverage queries avoid unbounded synchronous scans on the main thread"
+      - "Regression tests cover batched summary-job recovery and duplicate-hash embedding coverage"
+    decision: null
+
   - id: daemon-refactor
     status: planning
     path: docs/specs/planning/daemon-refactor.md

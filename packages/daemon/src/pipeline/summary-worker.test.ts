@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import {
-	insertSummaryFacts,
 	SUMMARY_WORKER_UPDATED_BY,
+	insertSummaryFacts,
+	recoverSummaryJobs,
+	startSummaryWorker,
 } from "./summary-worker";
 
 function makeAccessor(db: Database): DbAccessor {
@@ -63,11 +65,7 @@ describe("insertSummaryFacts", () => {
 
 		expect(saved).toBe(1);
 
-		const row = db
-			.prepare(
-				"SELECT who, source_id, source_type, project, updated_by FROM memories",
-			)
-			.get() as
+		const row = db.prepare("SELECT who, source_id, source_type, project, updated_by FROM memories").get() as
 			| {
 					who: string;
 					source_id: string | null;
@@ -83,5 +81,67 @@ describe("insertSummaryFacts", () => {
 		expect(row?.source_type).toBe("session_end");
 		expect(row?.project).toBe("/tmp/project");
 		expect(row?.updated_by).toBe(SUMMARY_WORKER_UPDATED_BY);
+	});
+});
+
+describe("recoverSummaryJobs", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("recovers stuck summary jobs in bounded batches", () => {
+		const now = new Date().toISOString();
+		const stmt = db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
+			 VALUES (?, NULL, 'codex', NULL, 'transcript', 'processing', ?, ?, ?)`,
+		);
+
+		for (let i = 0; i < 205; i++) {
+			const attempts = i % 3;
+			const max = 2;
+			stmt.run(`job-${i}`, attempts, max, now);
+		}
+
+		expect(recoverSummaryJobs(accessor, 100)).toBe(100);
+		expect(recoverSummaryJobs(accessor, 100)).toBe(100);
+		expect(recoverSummaryJobs(accessor, 100)).toBe(5);
+		expect(recoverSummaryJobs(accessor, 100)).toBe(0);
+
+		const left = db.prepare("SELECT COUNT(*) as n FROM summary_jobs WHERE status = 'processing'").get() as {
+			n: number;
+		};
+		expect(left.n).toBe(0);
+
+		const dead = db.prepare("SELECT COUNT(*) as n FROM summary_jobs WHERE status = 'dead'").get() as { n: number };
+		expect(dead.n).toBeGreaterThan(0);
+	});
+
+	it("defers crash recovery off the synchronous startup path", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
+			 VALUES ('job-startup', NULL, 'codex', NULL, 'transcript', 'processing', 0, 3, ?)`,
+		).run(now);
+
+		const handle = startSummaryWorker(accessor);
+		const before = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
+		expect(before.status).toBe("processing");
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		handle.stop();
+
+		const after = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
+		expect(after.status).toBe("pending");
 	});
 });
