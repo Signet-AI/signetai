@@ -1169,25 +1169,23 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 		accessor.withWriteTx((db) => {
 			// Defensive for tests and partially upgraded workspaces that may
 			// reach the worker before migration 009 has created summary_jobs.
-			const tableExists = db
+			const table = db
 				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'")
 				.get() as { name: string } | undefined;
-			if (!tableExists) return;
+			if (!table) return;
 
-			const result: unknown = db
-				.prepare(
+			const n = countChanges(
+				db.prepare(
 					`UPDATE summary_jobs
 					 SET status = CASE
 					   WHEN attempts >= max_attempts THEN 'dead'
 					   ELSE 'pending'
 					 END
 					 WHERE status = 'processing'`,
-				)
-				.run();
-
-			const changed = countChanges(result);
-			if (changed > 0) {
-				logger.info("summary-worker", `Crash recovery: reset ${changed} stuck processing job(s) to pending/dead`);
+				).run(),
+			);
+			if (n > 0) {
+				logger.info("summary-worker", `Crash recovery: reset ${n} stuck job(s) to pending/dead`);
 			}
 		});
 	} catch (e) {
