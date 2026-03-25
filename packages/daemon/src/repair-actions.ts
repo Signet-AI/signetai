@@ -612,7 +612,6 @@ async function reembedMissingMemoriesBatch(
 					   vector = excluded.vector,
 					   dimensions = excluded.dimensions,
 					   source_type = excluded.source_type,
-					   source_id = excluded.source_id,
 					   chunk_text = excluded.chunk_text,
 					   created_at = excluded.created_at`,
 				)
@@ -781,7 +780,8 @@ export async function reembedMissingMemories(
 // ---------------------------------------------------------------------------
 
 /**
- * Remove embeddings whose source memory is deleted or missing.
+ * Remove embeddings whose source memory is deleted or missing, unless the
+ * vector is still covering an active memory with the same content hash.
  * Syncs vec_embeddings to match.
  */
 export function cleanOrphanedEmbeddings(
@@ -807,8 +807,13 @@ export function cleanOrphanedEmbeddings(
 			.prepare(
 				`SELECT e.id FROM embeddings e
 				 LEFT JOIN memories m ON e.source_type = 'memory' AND e.source_id = m.id
+				 LEFT JOIN memories m2
+				   ON e.source_type = 'memory'
+				  AND e.content_hash = m2.content_hash
+				  AND m2.is_deleted = 0
 				 WHERE e.source_type = 'memory'
-				   AND (m.id IS NULL OR m.is_deleted = 1)`,
+				   AND (m.id IS NULL OR m.is_deleted = 1)
+				   AND m2.id IS NULL`,
 			)
 			.all() as Array<{ id: string }>;
 
@@ -2019,12 +2024,18 @@ export function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[])
 		for (const id of ids) {
 			total += countChanges(stmt.run(now, id));
 		}
-		writeRepairAudit(db, "forget-dead-memories", {
-			actor: "api",
-			reason: "dead-memory hygiene",
-			actorType: "system",
-			requestId: null,
-		}, total, `soft-deleted ${total} dead memories`);
+		writeRepairAudit(
+			db,
+			"forget-dead-memories",
+			{
+				actor: "api",
+				reason: "dead-memory hygiene",
+				actorType: "system",
+				requestId: null,
+			},
+			total,
+			`soft-deleted ${total} dead memories`,
+		);
 		return total;
 	});
 }

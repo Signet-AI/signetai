@@ -10,29 +10,26 @@
  * immediately, so users never wait for LLM inference.
  */
 
+import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Database } from "bun:sqlite";
-import type { DbAccessor } from "../db-accessor";
 import type { LlmProvider } from "@signet/core";
+import type { DbAccessor } from "../db-accessor";
+import { countChanges } from "../db-helpers";
+import { inferType, isDuplicate } from "../hooks";
+import { logger } from "../logger";
+import { loadMemoryConfig } from "../memory-config";
+import { getSecret } from "../secrets";
 import {
 	createAnthropicProvider,
-	createOllamaProvider,
 	createClaudeCodeProvider,
+	createOllamaProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
 	resolveDefaultOllamaFallbackMaxContextTokens,
 } from "./provider";
-import { countChanges } from "../db-helpers";
-import { isDuplicate, inferType } from "../hooks";
-import { loadMemoryConfig } from "../memory-config";
-import { logger } from "../logger";
-import { getSecret } from "../secrets";
-import {
-	assessSignificance,
-	type SignificanceConfig,
-} from "./significance-gate";
+import { type SignificanceConfig, assessSignificance } from "./significance-gate";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -284,9 +281,7 @@ function parseLlmResponse(raw: string): LlmSummaryResult | null {
 			summary: parsed.summary,
 			facts: parsed.facts.filter(
 				(f: unknown): f is LlmSummaryResult["facts"][number] =>
-					typeof f === "object" &&
-					f !== null &&
-					typeof (f as Record<string, unknown>).content === "string",
+					typeof f === "object" && f !== null && typeof (f as Record<string, unknown>).content === "string",
 			),
 		};
 	} catch {
@@ -305,35 +300,23 @@ async function processJob(
 	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
 	// --- Significance gate ---
-	const significanceCfg: SignificanceConfig =
-		memoryCfg.pipelineV2.significance ?? {
-			enabled: true,
-			minTurns: 5,
-			minEntityOverlap: 1,
-			noveltyThreshold: 0.15,
-		};
+	const significanceCfg: SignificanceConfig = memoryCfg.pipelineV2.significance ?? {
+		enabled: true,
+		minTurns: 5,
+		minEntityOverlap: 1,
+		noveltyThreshold: 0.15,
+	};
 
 	if (significanceCfg.enabled) {
-		const assessment = accessor.withReadDb((db) =>
-			assessSignificance(
-				job.transcript,
-				db,
-				"default",
-				significanceCfg,
-			),
-		);
+		const assessment = accessor.withReadDb((db) => assessSignificance(job.transcript, db, "default", significanceCfg));
 
 		if (!assessment.significant) {
-			logger.info(
-				"summary-worker",
-				"Session below significance threshold — skipping extraction",
-				{
-					sessionKey: job.session_key,
-					project: job.project,
-					scores: assessment.scores,
-					reason: assessment.reason,
-				},
-			);
+			logger.info("summary-worker", "Session below significance threshold — skipping extraction", {
+				sessionKey: job.session_key,
+				project: job.project,
+				scores: assessment.scores,
+				reason: assessment.reason,
+			});
 			// Job row and transcript are preserved (lossless retention).
 			// processJob caller marks it completed.
 			return;
@@ -346,9 +329,10 @@ async function processJob(
 		maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
 	};
 
-	const result = job.transcript.length > CHUNK_TARGET_CHARS
-		? await processChunked(provider, job.transcript, today, genOpts)
-		: await processSingle(provider, job.transcript, today, genOpts);
+	const result =
+		job.transcript.length > CHUNK_TARGET_CHARS
+			? await processChunked(provider, job.transcript, today, genOpts)
+			: await processSingle(provider, job.transcript, today, genOpts);
 
 	if (!result) {
 		throw new Error("Failed to parse LLM summary response");
@@ -373,9 +357,7 @@ async function processJob(
 		total: result.facts.length,
 		saved,
 		deduplicated: result.facts.length - saved,
-		factsPreview: result.facts
-			.slice(0, 10)
-			.map((fact) => fact.content),
+		factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
 	});
 
 	// Lossless retention: preserve raw transcript alongside extracted facts
@@ -422,18 +404,9 @@ async function processJob(
 	// memoryCfg already loaded at function entry (significance gate).
 	try {
 		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
-			const {
-				runSessionComparison,
-				saveComparison,
-				updateSuccessRate,
-				shouldTriggerTraining,
-				detectDrift,
-			} = await import("../predictor-comparison");
-			const comparison = runSessionComparison(
-				job.session_key,
-				agentId,
-				accessor,
-			);
+			const { runSessionComparison, saveComparison, updateSuccessRate, shouldTriggerTraining, detectDrift } =
+				await import("../predictor-comparison");
+			const comparison = runSessionComparison(job.session_key, agentId, accessor);
 
 			if (comparison !== null) {
 				saveComparison(comparison, agentId, accessor);
@@ -441,11 +414,7 @@ async function processJob(
 				// otherwise predictorWon is deterministically false and the EMA
 				// accrues phantom losses during cold start or sidecar downtime.
 				if (comparison.hasPredictorScores) {
-					updateSuccessRate(
-						agentId,
-						comparison.predictorWon,
-						comparison.scorerConfidence,
-					);
+					updateSuccessRate(agentId, comparison.predictorWon, comparison.scorerConfidence);
 				}
 
 				// Drift detection
@@ -512,9 +481,7 @@ async function processJob(
 	if (job.session_key) {
 		try {
 			if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
-				const { collectTrainingPairs, saveTrainingPairs } = await import(
-					"../predictor-training-pairs"
-				);
+				const { collectTrainingPairs, saveTrainingPairs } = await import("../predictor-training-pairs");
 				const pairs = collectTrainingPairs(accessor, job.session_key, agentId);
 				if (pairs.length > 0) {
 					saveTrainingPairs(accessor, agentId, job.session_key, pairs);
@@ -622,10 +589,7 @@ interface InjectedMemoryPreview {
 	readonly effectiveScore: number;
 }
 
-function loadInjectedMemories(
-	accessor: DbAccessor,
-	sessionKey: string | null,
-): ReadonlyArray<InjectedMemoryPreview> {
+function loadInjectedMemories(accessor: DbAccessor, sessionKey: string | null): ReadonlyArray<InjectedMemoryPreview> {
 	if (!sessionKey) return [];
 
 	try {
@@ -710,9 +674,7 @@ function buildContinuityPrompt(
 		memorySection = "(no memories were injected for this session)";
 	} else {
 		const previews = injectedMemories.map((m) => {
-			const preview = m.content.length > 120
-				? `${m.content.slice(0, 120)}...`
-				: m.content;
+			const preview = m.content.length > 120 ? `${m.content.slice(0, 120)}...` : m.content;
 			return `- [${m.memoryId.slice(0, 8)}] (score=${m.effectiveScore.toFixed(2)}) ${preview}`;
 		});
 		memorySection = previews.join("\n");
@@ -771,11 +733,7 @@ async function scoreContinuity(
 	// Load injected memories for this session (empty array for old sessions)
 	const injectedMemories = loadInjectedMemories(accessor, job.session_key);
 
-	const prompt = buildContinuityPrompt(
-		job.transcript,
-		summary.slice(0, 2000),
-		injectedMemories,
-	);
+	const prompt = buildContinuityPrompt(job.transcript, summary.slice(0, 2000), injectedMemories);
 
 	const raw = await provider.generate(prompt, {
 		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
@@ -808,9 +766,7 @@ async function scoreContinuity(
 
 	const result: ContinuityResult = {
 		score: Math.max(0, Math.min(1, parsed.score)),
-		confidence: typeof parsed.confidence === "number"
-			? Math.max(0, Math.min(1, parsed.confidence))
-			: 0,
+		confidence: typeof parsed.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0,
 		memories_used: typeof parsed.memories_used === "number" ? parsed.memories_used : 0,
 		novel_context_count: typeof parsed.novel_context_count === "number" ? parsed.novel_context_count : 0,
 		reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
@@ -819,12 +775,7 @@ async function scoreContinuity(
 
 	// Write per-memory relevance scores back to session_memories
 	if (job.session_key && result.per_memory.length > 0) {
-		writePerMemoryRelevance(
-			accessor,
-			job.session_key,
-			result.per_memory,
-			injectedMemories,
-		);
+		writePerMemoryRelevance(accessor, job.session_key, result.per_memory, injectedMemories);
 	}
 
 	const id = crypto.randomUUID();
@@ -915,19 +866,10 @@ export function insertSummaryFacts(
 // DAG write helper
 // ---------------------------------------------------------------------------
 
-function writeSummaryToDAG(
-	accessor: DbAccessor,
-	job: SummaryJobRow,
-	result: LlmSummaryResult,
-	agentId: string,
-): void {
+function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: LlmSummaryResult, agentId: string): void {
 	accessor.withWriteTx((db) => {
 		// Check if table exists (migration may not have run)
-		const row = db
-			.prepare(
-				`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`,
-			)
-			.get();
+		const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();
 		if (!row) return;
 
 		const now = new Date().toISOString();
@@ -936,10 +878,12 @@ function writeSummaryToDAG(
 		// Upsert: check for existing row first since ON CONFLICT doesn't
 		// work with the partial unique index (WHERE session_key IS NOT NULL).
 		const existing = job.session_key
-			? (db.prepare(
-				`SELECT id FROM session_summaries
+			? (db
+					.prepare(
+						`SELECT id FROM session_summaries
 				 WHERE session_key = ? AND depth = 0`,
-			).get(job.session_key) as { id: string } | undefined)
+					)
+					.get(job.session_key) as { id: string } | undefined)
 			: undefined;
 
 		let effectiveId: string;
@@ -1008,8 +952,7 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 	const model = cfg.pipelineV2.synthesis.model;
 	const timeout = cfg.pipelineV2.synthesis.timeout;
 	const endpoint = cfg.pipelineV2.synthesis.endpoint;
-	const ollamaFallbackMaxContextTokens =
-		resolveDefaultOllamaFallbackMaxContextTokens();
+	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
 	switch (p) {
 		case "none":
 			throw new Error("Summary worker requires an LLM provider but synthesis.provider is 'none'");
@@ -1017,13 +960,16 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 			let apiKey = process.env.ANTHROPIC_API_KEY;
 			if (!apiKey) {
 				try {
-					apiKey = await getSecret("ANTHROPIC_API_KEY") ?? undefined;
+					apiKey = (await getSecret("ANTHROPIC_API_KEY")) ?? undefined;
 				} catch {
 					// secrets store unavailable
 				}
 			}
 			if (!apiKey) {
-				logger.error("summary-worker", "ANTHROPIC_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`");
+				logger.error(
+					"summary-worker",
+					"ANTHROPIC_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
+				);
 				return createOllamaProvider({
 					defaultTimeoutMs: timeout,
 					maxContextTokens: ollamaFallbackMaxContextTokens,
@@ -1035,13 +981,16 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 			let apiKey = process.env.OPENROUTER_API_KEY;
 			if (!apiKey) {
 				try {
-					apiKey = await getSecret("OPENROUTER_API_KEY") ?? undefined;
+					apiKey = (await getSecret("OPENROUTER_API_KEY")) ?? undefined;
 				} catch {
 					// secrets store unavailable
 				}
 			}
 			if (!apiKey) {
-				logger.error("summary-worker", "OPENROUTER_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`");
+				logger.error(
+					"summary-worker",
+					"OPENROUTER_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
+				);
 				return createOllamaProvider({
 					defaultTimeoutMs: timeout,
 					maxContextTokens: ollamaFallbackMaxContextTokens,
@@ -1070,18 +1019,14 @@ async function resolveProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promis
 			// Intentionally omit maxContextTokens here. When Ollama is explicitly
 			// configured (not fallback), users control context via model config.
 			return createOllamaProvider({
-				...(typeof model === "string" && model.trim().length > 0
-					? { model }
-					: {}),
+				...(typeof model === "string" && model.trim().length > 0 ? { model } : {}),
 				...(endpoint ? { baseUrl: endpoint } : {}),
 				defaultTimeoutMs: timeout,
 			});
 	}
 }
 
-export function startSummaryWorker(
-	accessor: DbAccessor,
-): SummaryWorkerHandle {
+export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 
@@ -1180,18 +1125,13 @@ export function startSummaryWorker(
 			try {
 				if (jobId) {
 					accessor.withWriteTx((db) => {
-						const row = db
-							.prepare(
-								"SELECT attempts, max_attempts FROM summary_jobs WHERE id = ?",
-							)
-							.get(jobId) as
+						const row = db.prepare("SELECT attempts, max_attempts FROM summary_jobs WHERE id = ?").get(jobId) as
 							| { attempts: number; max_attempts: number }
 							| undefined;
 
 						if (!row) return;
 
-						const status =
-							row.attempts >= row.max_attempts ? "dead" : "pending";
+						const status = row.attempts >= row.max_attempts ? "dead" : "pending";
 
 						db.prepare(
 							`UPDATE summary_jobs
@@ -1213,7 +1153,9 @@ export function startSummaryWorker(
 		if (stopped) return;
 		timer = setTimeout(() => {
 			tick().catch((err) => {
-				logger.error("summary-worker", "Unhandled tick error", err instanceof Error ? err : undefined, { error: err instanceof Error ? err.message : String(err) });
+				logger.error("summary-worker", "Unhandled tick error", err instanceof Error ? err : undefined, {
+					error: err instanceof Error ? err.message : String(err),
+				});
 			});
 		}, delay);
 	}
@@ -1225,10 +1167,10 @@ export function startSummaryWorker(
 	// all their attempts are promoted to 'dead'; all others go back to 'pending'.
 	try {
 		accessor.withWriteTx((db) => {
+			// Defensive for tests and partially upgraded workspaces that may
+			// reach the worker before migration 009 has created summary_jobs.
 			const tableExists = db
-				.prepare(
-					"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'",
-				)
+				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'summary_jobs'")
 				.get() as { name: string } | undefined;
 			if (!tableExists) return;
 
@@ -1245,10 +1187,7 @@ export function startSummaryWorker(
 
 			const changed = countChanges(result);
 			if (changed > 0) {
-				logger.info(
-					"summary-worker",
-					`Crash recovery: reset ${changed} stuck processing job(s) to pending/dead`,
-				);
+				logger.info("summary-worker", `Crash recovery: reset ${changed} stuck processing job(s) to pending/dead`);
 			}
 		});
 	} catch (e) {
@@ -1292,14 +1231,7 @@ export function enqueueSummaryJob(
 			`INSERT INTO summary_jobs
 			 (id, session_key, harness, project, transcript, status, created_at)
 			 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
-		).run(
-			id,
-			params.sessionKey || null,
-			params.harness,
-			params.project || null,
-			params.transcript,
-			now,
-		);
+		).run(id, params.sessionKey || null, params.harness, params.project || null, params.transcript, now);
 	});
 
 	logger.info("summary-worker", "Enqueued session summary job", {

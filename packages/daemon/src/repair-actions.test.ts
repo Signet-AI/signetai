@@ -5,11 +5,13 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@signet/core";
+import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import {
 	checkFtsConsistency,
 	checkRepairGate,
+	cleanOrphanedEmbeddings,
 	createRateLimiter,
 	deduplicateMemories,
 	getDedupStats,
@@ -476,19 +478,20 @@ describe("reembedMissingMemories", () => {
 	it("syncs vec row using canonical embedding id on hash conflict", async () => {
 		ensureVecTable(db);
 		const now = new Date().toISOString();
+		const hash = normalizeAndHashContent("duplicate content").contentHash;
 
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
-		).run("mem-existing", "duplicate content", "hash-shared", now, now);
+		).run("mem-existing", "duplicate content", hash, now, now);
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
-		).run("mem-target", "duplicate content", "hash-shared", now, now);
+		).run("mem-target", "duplicate content", null, now, now);
 
 		insertEmbedding(db, {
 			id: "emb-existing",
-			contentHash: "hash-shared",
+			contentHash: hash,
 			sourceId: "mem-existing",
 			vector: [0.9, 0.9, 0.9],
 		});
@@ -509,25 +512,31 @@ describe("reembedMissingMemories", () => {
 
 		const vecIds = db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all() as Array<{ id: string }>;
 		expect(vecIds.map((row) => row.id)).toEqual(["emb-existing"]);
+		const rows = db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(hash) as Array<{
+			source_id: string;
+		}>;
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.source_id).toBe("mem-existing");
 	});
 
 	it("does not cycle-embed duplicate-hash memories — both report as embedded after one pass", async () => {
+		ensureVecTable(db);
 		// Regression test: before the fix, two memories with the same content_hash
 		// created an infinite backfill loop. Backfill would embed A, then embed B
 		// (ON CONFLICT reassigns source_id to B), making A "missing" again. The
-		// fix makes the gap-stats and backfill queries consider content_hash matches
-		// so both memories are treated as embedded regardless of which source_id
-		// the embedding row currently holds.
-		const now = new Date().toISOString();
+		// fix keeps the original owner stable on conflict and treats hash coverage
+		// as embedded, so both memories are considered covered after one pass.
+		const a = "2026-03-25T00:00:00.000Z";
+		const b = "2026-03-25T00:00:01.000Z";
 
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
-		).run("mem-dup-a", "identical content", "hash-dup", now, now);
+		).run("mem-dup-a", "identical content", "hash-dup", a, a);
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
-		).run("mem-dup-b", "identical content", "hash-dup", now, now);
+		).run("mem-dup-b", "identical content", "hash-dup", b, b);
 
 		// No embedding yet — both should show as missing
 		const before = getEmbeddingGapStats(accessor);
@@ -536,22 +545,38 @@ describe("reembedMissingMemories", () => {
 		const limiter = createRateLimiter();
 
 		// First pass: embeds both (one is deduplicated via ON CONFLICT)
-		await reembedMissingMemories(
-			accessor, TEST_CFG, CTX_OPERATOR, limiter,
+		const first = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
 			async () => [0.7, 0.8, 0.9],
-			TEST_EMBEDDING_CFG, 10, false,
+			TEST_EMBEDDING_CFG,
+			10,
+			false,
 		);
+		expect(first.success).toBe(true);
 
 		// After one pass, both should be considered "embedded" via hash match
 		const after = getEmbeddingGapStats(accessor);
 		expect(after.unembedded).toBe(0);
+		const rows = db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all("hash-dup") as Array<{
+			source_id: string;
+		}>;
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.source_id).toBe("mem-dup-a");
 
 		// A second pass should not attempt to re-embed either memory (no cycle)
 		const limiter2 = createRateLimiter();
 		const secondPass = await reembedMissingMemories(
-			accessor, TEST_CFG, CTX_OPERATOR, limiter2,
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter2,
 			async () => [0.7, 0.8, 0.9],
-			TEST_EMBEDDING_CFG, 10, false,
+			TEST_EMBEDDING_CFG,
+			10,
+			false,
 		);
 		expect(secondPass.message).toMatch(/no unembedded memories found/);
 	});
@@ -591,6 +616,83 @@ describe("reembedMissingMemories", () => {
 			)
 			.get() as { n: number };
 		expect(remaining.n).toBe(0);
+	});
+});
+
+describe("cleanOrphanedEmbeddings", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		db.exec("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
+		ensureVecTable(db);
+		accessor = asAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("keeps hash-covered embeddings even when the original source row is deleted", () => {
+		const now = new Date().toISOString();
+
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, is_deleted, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', 0, ?, ?, 'test')`,
+		).run("mem-live", "shared content", "hash-shared", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, is_deleted, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', 1, ?, ?, 'test')`,
+		).run("mem-dead", "shared content", "hash-shared", now, now);
+
+		insertEmbedding(db, {
+			id: "emb-shared",
+			contentHash: "hash-shared",
+			sourceId: "mem-dead",
+			vector: [0.2, 0.3, 0.4],
+		});
+		db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(
+			"emb-shared",
+			vectorBlob([0.2, 0.3, 0.4]),
+		);
+
+		const limiter = createRateLimiter();
+		const result = cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(0);
+		expect(getEmbeddingGapStats(accessor).unembedded).toBe(0);
+
+		const rows = db.prepare("SELECT id FROM embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
+		expect(rows).toHaveLength(1);
+		const vecRows = db.prepare("SELECT id FROM vec_embeddings WHERE id = ?").all("emb-shared") as Array<{ id: string }>;
+		expect(vecRows).toHaveLength(1);
+	});
+
+	it("removes embeddings with no source row and no active hash peer", () => {
+		insertEmbedding(db, {
+			id: "emb-orphan",
+			contentHash: "hash-orphan",
+			sourceId: "mem-missing",
+			vector: [0.5, 0.6, 0.7],
+		});
+		db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(
+			"emb-orphan",
+			vectorBlob([0.5, 0.6, 0.7]),
+		);
+
+		const limiter = createRateLimiter();
+		const result = cleanOrphanedEmbeddings(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+
+		const rows = db.prepare("SELECT id FROM embeddings WHERE id = ?").all("emb-orphan") as Array<{ id: string }>;
+		expect(rows).toHaveLength(0);
+		const vecRows = db.prepare("SELECT id FROM vec_embeddings WHERE id = ?").all("emb-orphan") as Array<{ id: string }>;
+		expect(vecRows).toHaveLength(0);
 	});
 });
 
