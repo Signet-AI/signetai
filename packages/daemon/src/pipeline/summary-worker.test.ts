@@ -103,13 +103,14 @@ describe("recoverSummaryJobs", () => {
 		const stmt = db.prepare(
 			`INSERT INTO summary_jobs
 			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
-			 VALUES (?, NULL, 'codex', NULL, 'transcript', 'processing', ?, ?, ?)`,
+			 VALUES (?, NULL, 'codex', NULL, 'transcript', ?, ?, ?, ?)`,
 		);
 
 		for (let i = 0; i < 205; i++) {
 			const attempts = i % 3;
 			const max = 2;
-			stmt.run(`job-${i}`, attempts, max, now);
+			const status = i % 2 === 0 ? "processing" : "leased";
+			stmt.run(`job-${i}`, status, attempts, max, now);
 		}
 
 		expect(recoverSummaryJobs(accessor, 100)).toEqual({ selected: 100, updated: 100 });
@@ -117,9 +118,9 @@ describe("recoverSummaryJobs", () => {
 		expect(recoverSummaryJobs(accessor, 100)).toEqual({ selected: 5, updated: 5 });
 		expect(recoverSummaryJobs(accessor, 100)).toEqual({ selected: 0, updated: 0 });
 
-		const left = db.prepare("SELECT COUNT(*) as n FROM summary_jobs WHERE status = 'processing'").get() as {
-			n: number;
-		};
+		const left = db
+			.prepare("SELECT COUNT(*) as n FROM summary_jobs WHERE status IN ('processing', 'leased')")
+			.get() as { n: number };
 		expect(left.n).toBe(0);
 
 		const dead = db.prepare("SELECT COUNT(*) as n FROM summary_jobs WHERE status = 'dead'").get() as { n: number };
@@ -141,6 +142,29 @@ describe("recoverSummaryJobs", () => {
 
 		expect(recoverSummaryJobs(accessor, 0)).toEqual({ selected: 1, updated: 1 });
 		expect(recoverSummaryJobs(accessor, Number.POSITIVE_INFINITY)).toEqual({ selected: 1, updated: 1 });
+	});
+
+	it("recovers both js and rust persisted in-flight status variants", () => {
+		const now = new Date().toISOString();
+		const stmt = db.prepare(
+			`INSERT INTO summary_jobs
+			 (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
+			 VALUES (?, NULL, 'codex', NULL, 'transcript', ?, 0, 3, ?)`,
+		);
+
+		stmt.run("job-processing", "processing", now);
+		stmt.run("job-leased", "leased", now);
+
+		expect(recoverSummaryJobs(accessor, 10)).toEqual({ selected: 2, updated: 2 });
+
+		const rows = db.prepare("SELECT id, status FROM summary_jobs ORDER BY id ASC").all() as Array<{
+			id: string;
+			status: string;
+		}>;
+		expect(rows).toEqual([
+			{ id: "job-leased", status: "pending" },
+			{ id: "job-processing", status: "pending" },
+		]);
 	});
 
 	it("defers crash recovery off the synchronous startup path", async () => {

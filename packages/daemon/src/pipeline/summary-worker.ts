@@ -969,7 +969,7 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 			.prepare(
 				`SELECT id, attempts, max_attempts
 				 FROM summary_jobs
-				 WHERE status = 'processing'
+				 WHERE status IN ('processing', 'leased')
 				 ORDER BY created_at ASC
 				 LIMIT ?`,
 			)
@@ -986,7 +986,7 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 		const update = db.prepare(
 			`UPDATE summary_jobs
 			 SET status = ?
-			 WHERE id = ? AND status = 'processing'`,
+			 WHERE id = ? AND status IN ('processing', 'leased')`,
 		);
 
 		let updated = 0;

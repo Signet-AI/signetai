@@ -337,7 +337,7 @@ async fn recover_summary_jobs(pool: &DbPool, limit: i64) -> Result<RecoveryBatch
                 let mut stmt = conn.prepare_cached(
                     "SELECT id, attempts, max_attempts
                      FROM summary_jobs
-                     WHERE status = 'leased'
+                     WHERE status IN ('processing', 'leased')
                      ORDER BY created_at ASC
                      LIMIT ?1",
                 )?;
@@ -362,7 +362,7 @@ async fn recover_summary_jobs(pool: &DbPool, limit: i64) -> Result<RecoveryBatch
             let mut stmt = conn.prepare_cached(
                 "UPDATE summary_jobs
                  SET status = ?1
-                 WHERE id = ?2 AND status = 'leased'",
+                 WHERE id = ?2 AND status IN ('processing', 'leased')",
             )?;
 
             let mut updated = 0usize;
@@ -453,13 +453,15 @@ mod tests {
                 let mut stmt = tx.prepare_cached(
                     "INSERT INTO summary_jobs
                      (id, session_key, harness, project, transcript, status, attempts, max_attempts, created_at)
-                     VALUES (?1, ?2, 'codex', NULL, 'transcript', 'leased', ?3, ?4, ?5)",
+                     VALUES (?1, ?2, 'codex', NULL, 'transcript', ?3, ?4, ?5, ?6)",
                 )?;
                 for i in 0..205 {
                     let attempts = (i % 3) as i64;
+                    let status = if i % 2 == 0 { "processing" } else { "leased" };
                     stmt.execute(rusqlite::params![
                         format!("job-{i}"),
                         format!("session-{i}"),
+                        status,
                         attempts,
                         2i64,
                         &now,
@@ -509,18 +511,18 @@ mod tests {
             }
         );
 
-        let leased: i64 = pool
+        let inflight: i64 = pool
             .read(|conn| {
                 conn.query_row(
-                    "SELECT COUNT(*) FROM summary_jobs WHERE status = 'leased'",
+                    "SELECT COUNT(*) FROM summary_jobs WHERE status IN ('processing', 'leased')",
                     [],
                     |row| row.get(0),
                 )
                 .map_err(Into::into)
             })
             .await
-            .expect("failed to count leased jobs");
-        assert_eq!(leased, 0);
+            .expect("failed to count in-flight jobs");
+        assert_eq!(inflight, 0);
 
         let dead: i64 = pool
             .read(|conn| {
