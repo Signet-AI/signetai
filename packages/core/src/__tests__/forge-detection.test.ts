@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isCompatibleForgeBinary, isSignetForgeBinary } from "../identity";
@@ -19,6 +19,7 @@ function makeBinary(contents: string): string {
 	tempDirs.push(dir);
 	const file = join(dir, "forge");
 	writeFileSync(file, contents);
+	chmodSync(file, 0o755);
 	return file;
 }
 
