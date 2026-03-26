@@ -106,18 +106,10 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.requiredOption("-H, --harness <harness>", "Harness name")
 		.action(async (options) => {
 			const body = (await readJson()) ?? {};
-			const sessionKey = pickSessionKey(body);
 			const data = await deps.fetchFromDaemon<{ memoriesSaved?: number }>("/api/hooks/session-end", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					harness: options.harness,
-					transcriptPath: pickString(body.transcript_path, body.transcriptPath),
-					sessionId: sessionKey,
-					sessionKey,
-					cwd: pickString(body.cwd),
-					reason: pickString(body.reason),
-				}),
+				body: JSON.stringify(buildSessionEndBody(body, options.harness)),
 				timeout: 60_000,
 			});
 			if (!data) {
@@ -265,6 +257,31 @@ function pickString(...values: unknown[]): string {
 export function pickSessionKey(input: Record<string, unknown> | null): string {
 	if (!input) return "";
 	return pickString(input.session_key, input.sessionKey, input.session_id, input.sessionId);
+}
+
+export function buildSessionEndBody(
+	input: Record<string, unknown> | null,
+	harness: string,
+): {
+	harness: string;
+	transcriptPath: string;
+	transcript: string;
+	sessionId: string;
+	sessionKey: string;
+	cwd: string;
+	reason: string;
+} {
+	const body = input ?? {};
+	const sessionKey = pickSessionKey(body);
+	return {
+		harness,
+		transcriptPath: pickString(body.transcript_path, body.transcriptPath),
+		transcript: pickString(body.transcript),
+		sessionId: sessionKey,
+		sessionKey,
+		cwd: pickString(body.cwd),
+		reason: pickString(body.reason),
+	};
 }
 
 function readLastAssistantMessage(input: Record<string, unknown> | null): string {

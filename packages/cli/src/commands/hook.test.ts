@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pickSessionKey } from "./hook";
+import { buildSessionEndBody, pickSessionKey } from "./hook";
 
 describe("pickSessionKey", () => {
 	test("prefers canonical sessionKey fields before legacy session_id aliases", () => {
@@ -19,5 +19,30 @@ describe("pickSessionKey", () => {
 				sessionId: "sess-camel-id",
 			}),
 		).toBe("sess-camel-id");
+	});
+});
+
+describe("buildSessionEndBody", () => {
+	test("forwards inline transcript capture for session-end hooks", () => {
+		expect(
+			buildSessionEndBody(
+				{
+					sessionKey: "sess-1",
+					transcript: "user: hi\nassistant: hello",
+					transcriptPath: "/tmp/session.txt",
+					cwd: "/tmp/project",
+					reason: "shutdown",
+				},
+				"claude-code",
+			),
+		).toEqual({
+			harness: "claude-code",
+			transcriptPath: "/tmp/session.txt",
+			transcript: "user: hi\nassistant: hello",
+			sessionId: "sess-1",
+			sessionKey: "sess-1",
+			cwd: "/tmp/project",
+			reason: "shutdown",
+		});
 	});
 });

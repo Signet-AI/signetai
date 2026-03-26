@@ -484,6 +484,42 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
+	it("reads the compaction summary from the event payload sessionFile when hook context lacks it", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		const sessionFile = join(testDir, "session-after-event.jsonl");
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({ type: "session", version: 1, id: "session-after-event" }),
+				JSON.stringify({
+					type: "compaction",
+					id: "comp-2",
+					summary: "Recovered from event metadata session file.",
+				}),
+			].join("\n"),
+			"utf-8",
+		);
+
+		await afterCompaction?.(
+			{ messageCount: 5, compactedCount: 3, sessionFile },
+			{ sessionKey: "session-after-event", agentId: "agent-1" },
+		);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
+		expect(lastCompactionBody).toMatchObject({
+			harness: "openclaw",
+			project: process.cwd(),
+			sessionKey: "session-after-event",
+			runtimePath: "plugin",
+			summary: "Recovered from event metadata session file.",
+		});
+	});
+
 	it("clears prompt dedupe after compaction so the next turn can re-inject context", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);

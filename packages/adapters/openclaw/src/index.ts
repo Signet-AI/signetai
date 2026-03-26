@@ -788,6 +788,20 @@ function readString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function resolveCompactionSessionFile(
+	event: Record<string, unknown>,
+	sessionFile: string | undefined,
+): string | undefined {
+	const compaction = isRecord(event.compaction) ? event.compaction : undefined;
+	return firstNonEmptyString(
+		event.sessionFile,
+		event.session_file,
+		compaction?.sessionFile,
+		compaction?.session_file,
+		sessionFile,
+	);
+}
+
 function extractCompactionSummary(event: Record<string, unknown>, sessionFile: string | undefined): string | undefined {
 	const direct = readString(event.summary);
 	if (direct) return direct;
@@ -1441,7 +1455,8 @@ const signetPlugin = {
 		): Promise<void> => {
 			if (!cfg.enabled || !daemonReachable) return;
 			const sessionKey = resolveCompactionSessionKey(event, ctx);
-			const summary = extractCompactionSummary(event, ctx.sessionFile);
+			const sessionFile = resolveCompactionSessionFile(event, ctx.sessionFile);
+			const summary = extractCompactionSummary(event, sessionFile);
 			if (!summary) return;
 
 			const dedupeKey = `${sessionKey ?? "-"}|${summary.slice(0, 120)}`;
