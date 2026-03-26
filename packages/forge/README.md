@@ -49,6 +49,9 @@ signet forge install
 signet forge update
 ```
 
+Managed binary downloads currently support macOS arm64, macOS x64, and Linux x64.
+On other platforms, build Forge from source or use a local standalone install.
+
 ### Update from source
 
 ```bash

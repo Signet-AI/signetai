@@ -229,18 +229,21 @@ async function resolveForgeRelease(manifest: ForgeManifest, requestedVersion?: s
 	};
 }
 
+function supportedManagedForgePlatformList(): string {
+	return "macOS arm64, macOS x64, and Linux x64";
+}
+
+export function managedForgeAssetNameForPlatform(platform: NodeJS.Platform, arch: string): string {
+	if (platform === "darwin" && arch === "arm64") return "forge-macos-arm64.tar.gz";
+	if (platform === "darwin" && arch === "x64") return "forge-macos-x64.tar.gz";
+	if (platform === "linux" && arch === "x64") return "forge-linux-x64.tar.gz";
+	throw new Error(
+		`signet forge install/update currently publishes managed binaries for ${supportedManagedForgePlatformList()}. Detected ${platform} ${arch}. Install Forge from source or a local standalone build instead.`,
+	);
+}
+
 function platformAssetName(): string {
-	const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : null;
-	if (!arch) {
-		throw new Error(`Unsupported Forge architecture: ${process.arch}`);
-	}
-	if (process.platform === "darwin") {
-		return `forge-macos-${arch}.tar.gz`;
-	}
-	if (process.platform === "linux") {
-		return `forge-linux-${arch}.tar.gz`;
-	}
-	throw new Error(`Forge binary install is not supported on ${process.platform} yet`);
+	return managedForgeAssetNameForPlatform(process.platform, process.arch);
 }
 
 function checksumAssetName(assetName: string): string {
