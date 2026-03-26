@@ -2,35 +2,18 @@
 
 Forge is Signet’s terminal-native AI client.
 
-This package now lives inside the `signetai` monorepo as Signet's
-first-party native harness and reference runtime implementation.
+This package lives inside the `signetai` monorepo as Signet's first-party native harness and reference runtime implementation.
 
-It gives you one place to chat with API providers and CLI-based models, while routing memory, identity, secrets, skills, and MCP through the Signet pipeline instead of through a host editor or plugin.
+It gives you a native terminal interface for Signet-backed memory, identity, secrets, skills, MCP, and provider access without relying on editor-specific hooks or plugin patches.
 
 ## What Forge does
 
 - runs as a native terminal app written in Rust
 - talks directly to the Signet daemon over localhost HTTP
-- supports both API providers and authenticated CLI providers
+- supports API providers and supported locally authenticated CLI providers
 - loads Signet identity and memory into the agent loop
-- auto-discovers connected providers and their models
-- exposes Signet skills and MCP tools inside the terminal UI
-
-## Why Forge exists
-
-When Signet runs inside another harness, two systems tend to compete:
-
-- the host’s built-in memory and auth behavior
-- Signet’s own memory, identity, and secret pipeline
-
-Forge removes that split. It is the harness, so the Signet pipeline becomes the primary path instead of a sidecar integration.
-
-## Core ideas
-
-- **One memory system**: memory recall and storage go through Signet
-- **Connected models only**: the picker shows what is actually usable
-- **CLI auth counts as real auth**: existing Claude, Codex, and Gemini logins are detected
-- **Signet stays the source of truth**: secrets, skills, and MCP can flow into Forge automatically
+- auto-discovers usable providers and models
+- surfaces Signet skills and MCP tools in the terminal UI
 
 ## Install
 
@@ -49,8 +32,9 @@ signet forge install
 signet forge update
 ```
 
-Managed binary downloads currently support macOS arm64, macOS x64, Linux x64, and Linux arm64.
-On other platforms, build Forge from source or use a local standalone install.
+Managed installs place the binary in `~/.config/signet/bin`. Add that directory to your `PATH` if you want `forge` available in a normal shell.
+
+Managed binary downloads currently support macOS arm64, macOS x64, Linux x64, and Linux arm64. On other platforms, build Forge from source or use a local standalone install.
 
 ### Update from source
 
@@ -58,14 +42,6 @@ On other platforms, build Forge from source or use a local standalone install.
 cd ~/signetai/packages/forge
 git pull
 cargo install --path crates/forge-cli --locked --force
-```
-
-### Binary location
-
-Typical local install path:
-
-```bash
-~/.cargo/bin/forge
 ```
 
 ## Quick start
@@ -85,7 +61,6 @@ forge --auth
 Pick a provider directly:
 
 ```bash
-forge --provider claude-cli
 forge --provider codex-cli
 forge --provider openai
 ```
@@ -112,13 +87,13 @@ Forge supports two broad provider types.
 - `codex-cli`
 - `gemini-cli`
 
-Forge treats these as connected when they are actually authenticated, including persisted login state already on disk.
+Forge only treats these as available when the corresponding CLI and supported local auth state are both present.
 
 ### API providers
 
 - `openai`
 - `anthropic`
-- `google`
+- `gemini`
 - `openrouter`
 - `groq`
 - `xai`
@@ -127,23 +102,21 @@ Forge treats these as connected when they are actually authenticated, including 
 
 ## Auth and model discovery
 
-Forge discovers connectivity from multiple places:
+Forge discovers provider availability from multiple sources:
 
 - environment variables
 - Forge local credentials
-- authenticated CLI state already on disk
 - Signet secrets
+- supported local CLI auth state
 - Ollama availability
 
-The model picker is filtered to connected providers. Forge prefers Signet registry models when available, and also carries curated coverage for supported CLI model families.
+The model picker is filtered to providers that are actually usable. Forge prefers Signet registry models when available and falls back to provider-specific coverage where needed.
 
-For the full auth and model behavior, see [docs/AUTH_AND_MODELS.md](docs/AUTH_AND_MODELS.md).
+For the current auth and model behavior, see [docs/AUTH_AND_MODELS.md](docs/AUTH_AND_MODELS.md).
 
 ## Slash commands, skills, and MCP
 
-Forge includes built-in slash commands and now also supports dynamic commands sourced from Signet.
-
-### Built-in slash commands
+Forge includes built-in slash commands and supports dynamic commands sourced from Signet.
 
 Examples include:
 
@@ -151,20 +124,7 @@ Examples include:
 - `/recall`
 - `/remember`
 - `/mcp`
-
-### Dynamic Signet skill commands
-
-Installed user-invocable Signet skills can appear automatically as:
-
 - `/skill-name`
-
-### Dynamic MCP commands
-
-Installed MCP servers and tools can appear automatically as:
-
-- `/mcp`
-- `/mcp-<server-id> <tool> [json args]`
-- `/mcp-<server-id>-<tool-name> [json args]`
 
 For details, see [docs/SLASH_COMMANDS.md](docs/SLASH_COMMANDS.md).
 
@@ -183,7 +143,6 @@ That includes:
 
 See:
 
-- [docs/MEMORY_ARCHITECTURE.md](docs/MEMORY_ARCHITECTURE.md)
 - [docs/AUTH_AND_MODELS.md](docs/AUTH_AND_MODELS.md)
 - [docs/SLASH_COMMANDS.md](docs/SLASH_COMMANDS.md)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
@@ -194,7 +153,6 @@ See:
 forge
 forge --auth
 forge --auth --auth-provider openai
-forge --auth --auth-provider claude-cli
 forge --provider codex-cli
 forge --model gpt-5.4
 forge --resume
@@ -218,16 +176,15 @@ Common defaults:
 ## Docs
 
 - [docs/AUTH_AND_MODELS.md](docs/AUTH_AND_MODELS.md)
-- [docs/MEMORY_ARCHITECTURE.md](docs/MEMORY_ARCHITECTURE.md)
 - [docs/SLASH_COMMANDS.md](docs/SLASH_COMMANDS.md)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [changelogs/README.md](changelogs/README.md)
 
 ## Status
 
-Forge is under active development. The current direction is:
+Forge is under active development. Current priorities include:
 
 - stronger Signet-native auth and model discovery
-- better CLI-provider support
+- better supported CLI-provider coverage
 - dynamic skills and MCP surfaced directly in the terminal
 - less duplicated config between Forge and Signet

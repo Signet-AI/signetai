@@ -157,7 +157,7 @@ platform-specific lifecycle events to daemon API calls.
 
 ```typescript
 interface RuntimeAdapter {
-  harness: string  // 'openclaw' | 'claude-code' | 'opencode' | 'signet-cli' | ...
+  harness: string  // 'forge' | 'openclaw' | 'claude-code' | 'opencode' | ...
 
   onSessionStart(params: SessionStartParams): Promise<SessionStartResult>
   onUserPromptSubmit(params: PromptSubmitParams): Promise<PromptSubmitResult>
@@ -168,7 +168,7 @@ interface RuntimeAdapter {
 ```
 
 All `RuntimeAdapter` implementations are thin clients: every method body is
-a daemon API call. The reference runtime (`signet-cli` harness) implements
+a daemon API call. Forge, the reference runtime (`forge` harness), implements
 this interface using the full execution loop. OpenClaw's adapter implements
 the same interface by calling the same daemon endpoints via its plugin system.
 
@@ -351,219 +351,76 @@ about or diverge.
 Build Sequence
 --------------
 
-**Phase 1: scaffold + CLI channel**
-- Create `packages/runtime/` with all interfaces
-- Implement Anthropic provider
-- Implement CLI channel (stdin/stdout, streaming)
-- Wire session lifecycle to daemon API
-- Add `signet chat` to CLI
-- Deliverable: `signet chat` works as a native terminal session with full
-  memory injection, tool use, and session continuity
+**Phase 1: monorepo-owned reference runtime**
+- Keep Forge as the canonical runtime implementation in `packages/forge/`
+- Preserve the daemon-owned execution contract: memory, hooks, secrets, and session state stay daemon-side
+- Deliverable: `forge` remains the primary native Signet runtime surface
 
-**Phase 2: built-in tools + pre-generation phase**
-- Implement memory tools as Tool wrappers over daemon API
-- Implement pre-generation research phase in executor
-- Dynamic tool registry (register/unregister at runtime)
-- Deliverable: `signet chat` has native memory tools; pre-generation phase
-  active
+**Phase 2: parity for non-Forge harnesses**
+- Keep Bun daemon, Rust daemon, and existing harness adapters aligned on the same daemon endpoints
+- Treat external harnesses as thin adapters over the same runtime contract
+- Deliverable: external harnesses share the same lifecycle semantics as Forge where supported
 
-**Phase 3: HTTP channel + adapter retrofit**
-- Implement HTTP channel for harness attachment
-- Add `createAdapter` factory and `RuntimeAdapterServer` to TypeScript SDK
-- Retrofit openclaw, claude-code, opencode connectors to use `createAdapter`
-- Deliverable: all existing harnesses use the same integration path;
-  new harnesses have a minimal, documented integration pattern
+**Phase 3: SDK adapter ergonomics**
+- Add or refine adapter helpers in the SDKs so external harnesses can implement the runtime contract with less boilerplate
+- Keep adapter logic translation-only; business logic stays in the daemon/runtime boundary
+- Deliverable: new harness integrations have a minimal documented path
 
-**Phase 4: SDK parity**
-- Rust SDK: `RuntimeAdapter` trait + `AdapterClient`
-- Python SDK: `RuntimeAdapter` ABC + `AdapterClient`
-- Deliverable: harness in any supported language has first-class SDK support
-
-**Phase 5: Rust runtime** (when daemon-rs reaches phase 3+)
-- Rewrite `packages/runtime/` as `packages/runtime-rs/` Rust crate
-- TypeScript runtime stays supported during transition
-- Rust binary bundles daemon-rs + runtime-rs: single static binary
-- Deliverable: `signet chat` is <10MB binary, <10ms startup, <5MB RAM
+**Phase 4: optional runtime transport expansion**
+- If Forge exposes a stable local API in the future, document it as an extension of the same runtime contract instead of a separate architecture
+- Deliverable: transport choices can evolve without changing the core daemon contract
 
 
 What This Is Not
 ----------------
 
 - Not a replacement for the daemon. All state lives in the daemon.
-  The runtime is stateless.
+  The runtime is stateless at the contract boundary.
 - Not a new memory system. Memory is still pipeline v2 + predictive scorer
   + knowledge graph, owned by the daemon.
 - Not breaking for existing harnesses. OpenClaw/Claude Code/OpenCode work
-  exactly as today. Phase 3 retrofit is additive and non-breaking.
+  through their own adapters and remain additive integrations.
 - Not a config system. Config lives in agent.yaml, read by the daemon.
-  The runtime reads provider/channel config from daemon API at startup.
+  Forge consumes that contract; it does not redefine it.
 
 
 Critical Files
 --------------
 
-New:
-- `packages/runtime/src/index.ts`
-- `packages/runtime/src/runtime.ts`
-- `packages/runtime/src/executor.ts`
-- `packages/runtime/src/context.ts`
-- `packages/runtime/src/channels/cli.ts`
-- `packages/runtime/src/providers/anthropic.ts`
-- `packages/runtime/src/tools/memory.ts`
-- `packages/sdk/src/adapter.ts`
+Reference runtime:
+- `packages/forge/crates/forge-cli/`
+- `packages/forge/crates/forge-agent/`
+- `packages/forge/crates/forge-provider/`
+- `packages/forge/crates/forge-tools/`
+- `packages/forge/crates/forge-signet/`
+- `packages/forge/crates/forge-tui/`
 
-Modified:
-- `packages/cli/src/cli.ts` — add `signet chat`
-- `packages/sdk/src/index.ts` — export adapter utilities
-- `packages/connector-openclaw/src/index.ts` — retrofit to createAdapter
-- `packages/connector-claude-code/src/index.ts` — retrofit to createAdapter
-- `packages/connector-opencode/src/index.ts` — retrofit to createAdapter
+Runtime contract + adapters:
+- `packages/sdk/`
+- `packages/connector-openclaw/`
+- `packages/connector-claude-code/`
+- `packages/connector-opencode/`
+
+Daemon surfaces:
+- `packages/daemon/`
+- `packages/daemon-rs/`
 
 
 Open Questions
 --------------
 
 1. **Provider config** — provider selection and model live in agent.yaml.
-   Define the `runtime` config section schema before Phase 1 ships.
+   Keep the runtime-facing schema minimal and daemon-owned.
 
 2. **Multi-provider routing** — route different task types to different
-   providers (Haiku for tool calls, Sonnet for generation)? Defer to Phase 2
-   unless the predictive scorer pre-filter needs it sooner.
+   providers when there is a concrete need, not as a prerequisite for the
+   reference runtime.
 
-3. **Streaming in adapters** — CLI channel streams via stdout. HTTP channel
-   streams via SSE. Harness adapters (OpenClaw) handle their own streaming —
-   the adapter only covers lifecycle hooks, not output delivery. Confirm this
-   holds for all current harnesses before Phase 3.
+3. **Streaming in adapters** — adapters should continue to translate
+   lifecycle hooks cleanly without taking ownership of core runtime state.
 
 4. **Tool sandboxing** — third-party tools run in-process by default.
-   Consider subprocess sandbox for untrusted tools. Defer until there is a
-   third-party tool ecosystem to sandbox.
+   Consider stronger isolation only when the third-party tool surface grows.
 
-5. **Session resume** — conversation history lives in memory during a
-   session; the daemon stores checkpoints. Resume loads the last checkpoint
-   as initial context. Document this behavior clearly for users before
-   Phase 1 ships.
-
-
-HTTP-Server-First Architecture
--------------------------------
-
-The runtime is an HTTP server. Not a library with an optional HTTP mode —
-an HTTP server that happens to ship with a CLI client attached. This is the
-same pattern OpenCode uses: `opencode` is a server, the TUI is a client,
-the SDK is a typed HTTP client, and the community builds additional clients
-on top.
-
-This distinction matters because it separates the runtime from any specific
-interface. The runtime defines what a Signet agent session *is* — the
-interface on top is whoever decides to build it.
-
-### Server API
-
-The runtime exposes a local HTTP API (default: localhost:7700). Endpoints:
-
-```
-POST   /session                  create a new session
-GET    /session/:id              get session state
-DELETE /session/:id              end a session
-POST   /session/:id/prompt       send a user message, receive response
-GET    /session/:id/stream       SSE stream of session events
-GET    /session/:id/messages     conversation history
-
-GET    /providers                list configured providers
-GET    /providers/:id/status     provider health check
-
-GET    /tools                    list registered tools
-POST   /tools/:name              execute a tool directly
-
-GET    /health                   runtime health + daemon connectivity
-GET    /info                     runtime version, config summary
-```
-
-All endpoints use JSON. Streaming responses use SSE (text/event-stream).
-The runtime binds to localhost only — not exposed to the network.
-
-### SDK is a typed HTTP client
-
-`@signet/sdk` grows a `RuntimeClient` that is just a typed wrapper over
-the runtime HTTP API — the same relationship as OpenCode's SDK to its server:
-
-```typescript
-import { createRuntime, createRuntimeClient } from '@signet/sdk'
-
-// Start runtime + get client (development / CLI use)
-const { client, server } = await createRuntime({ port: 7700 })
-
-// Connect to already-running runtime (harness adapters, community tools)
-const client = createRuntimeClient({ baseUrl: 'http://localhost:7700' })
-
-// Use it
-const session = await client.session.create()
-const response = await client.session.prompt(session.id, {
-  content: 'what are we working on today?'
-})
-for await (const event of client.session.stream(session.id)) {
-  process.stdout.write(event.content ?? '')
-}
-```
-
-### What this enables
-
-- **CLI client**: `signet chat` starts the runtime server and attaches a
-  CLI client. It's not the runtime — it's a client of the runtime.
-- **TUI**: a terminal UI that connects to a running runtime instance, same
-  as OpenCode's TUI against its server.
-- **Web UI**: a browser app connecting to the local runtime. The dashboard
-  already runs on localhost — the runtime server can serve alongside it.
-- **VSCode extension**: extension connects to the runtime server on a
-  known port. No special integration mode needed.
-- **Harness adapters**: adapters can attach as HTTP clients rather than
-  importing the library. A Rust harness can attach to the TypeScript runtime
-  over HTTP before the Rust runtime exists.
-- **Community tooling**: anyone can build against the runtime HTTP API in
-  any language. The runtime becomes a platform.
-
-### Channel model revision
-
-With the HTTP-server-first design, the Channel interface changes:
-
-```typescript
-// Before: channel is a direct IO interface
-interface Channel {
-  receive(): Promise<UserTurn>
-  send(output: AgentOutput): Promise<void>
-}
-
-// After: channel is a client connection to the runtime server
-interface RuntimeClient {
-  // connects to POST /session/:id/prompt + GET /session/:id/stream
-  prompt(sessionId: string, turn: UserTurn): Promise<void>
-  stream(sessionId: string): AsyncIterable<SessionEvent>
-}
-```
-
-The runtime's internal execution loop doesn't change — it still does
-pre-generation → context assembly → provider call → tool dispatch → record.
-What changes is the I/O boundary: user messages come in via HTTP POST, output
-goes out via SSE stream. The CLI client is just readline + HTTP.
-
-### Port convention
-
-Runtime server: `7700` (default, configurable)
-Daemon server: `3850` (existing, unchanged)
-
-Both bind to localhost. The runtime talks to the daemon at 3850. Clients
-talk to the runtime at 7700. Clean separation — the daemon is never exposed
-to clients directly through the runtime.
-
-### OpenAPI spec
-
-The runtime generates and serves an OpenAPI spec at `GET /openapi.json`.
-This enables:
-- Auto-generated SDK clients in any language (the same way OpenCode's
-  TypeScript SDK is generated from its OpenAPI spec)
-- Community documentation
-- Type-safe integrations without the official SDK
-
-The spec is generated at build time from TypeScript types (using the same
-pattern as the daemon's existing API surface).
+5. **Session resume** — checkpoints stay daemon-owned; document resume
+   behavior consistently across Forge and external harnesses.

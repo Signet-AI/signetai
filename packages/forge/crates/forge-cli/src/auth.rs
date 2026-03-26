@@ -8,8 +8,8 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 use forge_signet::secrets::{
-    apply_local_cli_auth_env, clear_local_api_key, clear_local_cli_auth, credentials_path,
-    local_api_key_for_provider, local_cli_auth_vars_for_provider, provider_to_secret_name,
+    apply_local_cli_auth_env, clear_local_api_key, clear_local_cli_auth,
+    local_api_key_for_provider, local_cli_auth_vars_for_provider,
     store_local_api_key, store_local_cli_auth_env,
 };
 use std::io::{IsTerminal, Write};
@@ -366,17 +366,16 @@ fn setup_api_provider(provider: AuthProvider, login_url: &str) -> Result<()> {
     }
 
     if local_api_key_for_provider(provider.id).is_some() {
-        let secret_label = provider_to_secret_name(provider.id);
         let _ = writeln!(
             std::io::stdout(),
-            "A local key already exists for {secret_label}."
+            "A local API key already exists for {}.",
+            provider.label
         );
         let action = read_line("Enter [p]aste new key, [c]lear key, or [s]kip [p]: ")?;
         let action = action.trim().to_lowercase();
         if action == "c" || action == "clear" {
             clear_local_api_key(provider.id)?;
-            let secret_label = provider_to_secret_name(provider.id);
-            let _ = writeln!(std::io::stdout(), "Cleared {secret_label}");
+            let _ = writeln!(std::io::stdout(), "Cleared saved API key for {}.", provider.label);
             return Ok(());
         }
         if action == "s" || action == "skip" {
@@ -385,10 +384,7 @@ fn setup_api_provider(provider: AuthProvider, login_url: &str) -> Result<()> {
         }
     }
 
-    let prompt = format!(
-        "Paste {} (leave empty to cancel): ",
-        provider_to_secret_name(provider.id)
-    );
+    let prompt = format!("Paste API key for {} (leave empty to cancel): ", provider.label);
     let key = read_line(&prompt)?;
     if key.trim().is_empty() {
         println!("No key entered. Cancelled.");
@@ -396,12 +392,10 @@ fn setup_api_provider(provider: AuthProvider, login_url: &str) -> Result<()> {
     }
 
     store_local_api_key(provider.id, key.trim())?;
-    let secret_label = provider_to_secret_name(provider.id);
     let _ = writeln!(
         std::io::stdout(),
-        "Saved {secret_label} for {} in {}",
-        provider.label,
-        credentials_path().display()
+        "Saved API key for {}.",
+        provider.label
     );
     Ok(())
 }
@@ -607,10 +601,10 @@ fn setup_cli_token(provider: AuthProvider) -> Result<()> {
     let mut saved_keys: Vec<&str> = env.keys().map(|k| k.as_str()).collect();
     saved_keys.sort_unstable();
     println!(
-        "Saved token for {} in {} (env: {}).",
+        "Saved local auth material for {} ({} variable{} prepared).",
         provider.id,
-        credentials_path().display(),
-        saved_keys.join(", ")
+        saved_keys.len(),
+        if saved_keys.len() == 1 { "" } else { "s" }
     );
     if injected > 0 {
         println!("Applied {} env var{} for this Forge session.", injected, if injected == 1 { "" } else { "s" });

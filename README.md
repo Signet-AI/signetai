@@ -155,12 +155,9 @@ Signet is built to support:
 
 ## Harness support
 
-Signet supports both:
-- external harness integrations (Claude Code, Codex, OpenCode, OpenClaw)
-- Forge, the first-party native harness and reference runtime implementation
-
-If you already use another harness, Signet still runs underneath it. If
-you want the native Signet path, use Forge.
+Signet is not a harness. It doesn't replace Claude Code, OpenClaw, or
+OpenCode — it runs alongside them as an enhancement. Bring the harness
+you already use. Signet handles the memory layer underneath it.
 
 | Harness | Status | Integration |
 |---|---|---|

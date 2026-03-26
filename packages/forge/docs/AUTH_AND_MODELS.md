@@ -1,6 +1,6 @@
 # Auth and Models
 
-Forge treats auth and model availability as part of the Signet pipeline, not as a separate manual setup problem.
+Forge treats provider availability as part of the Signet runtime, not as a separate setup checklist.
 
 ## Connectivity sources
 
@@ -9,7 +9,7 @@ Forge determines whether a provider is usable from these sources:
 1. environment variables
 2. Forge local credentials
 3. Signet secrets
-4. authenticated CLI login state
+4. supported local CLI auth state
 5. local provider availability such as Ollama
 
 ## Forge local credentials
@@ -21,7 +21,7 @@ Typical paths:
 - macOS: `~/Library/Application Support/forge/credentials.json`
 - Linux: `~/.config/forge/credentials.json`
 
-These credentials are used for API providers and, where needed, for pasted CLI auth material.
+These credentials are used for API providers and for any supported locally stored CLI auth material.
 
 ## Signet secret sync
 
@@ -29,44 +29,30 @@ When Forge connects to the Signet daemon, it can import supported provider API k
 
 That means a key stored once in Signet can automatically make the provider available in Forge.
 
-The general flow is:
+Forge only imports supported provider credentials. It does not treat every secret in Signet as Forge auth state.
 
-1. Forge connects to Signet
-2. Forge checks available Signet secrets
-3. matching provider keys are imported if Forge does not already have a local value
-4. Forge requests a model-registry refresh
-
-## CLI provider auth detection
+## CLI provider detection
 
 Forge does not treat a CLI provider as connected just because the binary exists.
 
-It treats supported CLI providers as connected when they are actually authenticated, including persisted login state that already exists on disk.
+A CLI provider only counts as available when Forge can confirm both:
 
-### Supported CLI detection
+- the provider CLI is present
+- supported local auth state already exists for that CLI
 
-- `claude-cli`
-  - checked through Claude auth status
-- `codex-cli`
-  - checked through Codex login status
-  - can also trust persisted Codex auth state on disk
-- `gemini-cli`
-  - checked through persisted or configured auth state
+This keeps `/model` focused on providers that are actually usable.
 
-This is important because a provider should not show up in `/model` just because the executable is installed.
-
-## Auth flow
-
-Forge’s auth flow supports both API-style auth and CLI-style auth.
+## Auth behavior
 
 ### API providers
 
-For API providers, Forge expects a real API key.
+API providers use provider-issued API keys.
 
 ### CLI providers
 
-For CLI providers, Forge supports the native login flow and persisted login detection.
+For CLI providers, Forge can reuse supported local CLI auth state that already exists on disk.
 
-Depending on the provider, Forge can also support token or auth-state import paths where that matches how the CLI really works.
+Provider-specific authentication policies still apply. Forge documentation does not supersede the upstream provider's terms, SDK requirements, or branding restrictions. For Claude integrations in particular, use Anthropic-approved authentication methods rather than assuming a claude.ai login flow is available through Forge.
 
 ## Signet daemon auth
 
@@ -115,4 +101,4 @@ Important cases include:
 - connecting to Signet and importing secrets
 - detecting an already-authenticated CLI provider
 
-The intended result is simple: if a provider is connected, its models should appear without forcing unnecessary re-auth.
+The intended result is simple: if a provider is connected, its models should appear without unnecessary re-auth or stale placeholder entries.

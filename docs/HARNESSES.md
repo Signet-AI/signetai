@@ -76,6 +76,8 @@ signet forge status
 signet forge doctor
 ```
 
+Managed installs place the binary in `~/.config/signet/bin`. Add that directory to your `PATH` if you want `forge` available in a normal shell.
+
 Managed binary downloads currently support macOS arm64, macOS x64, Linux x64, and Linux arm64.
 On other platforms, install Forge from source or use a local standalone build.
 

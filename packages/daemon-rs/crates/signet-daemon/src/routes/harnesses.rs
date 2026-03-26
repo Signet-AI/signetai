@@ -143,17 +143,13 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-fn resolve_safe_base_path(home: &std::path::Path, raw_base: &std::path::Path) -> PathBuf {
-    let candidate = home.join(raw_base);
-    match candidate.canonicalize() {
-        Ok(canon) if canon.starts_with(home) => canon,
-        _ => home.to_path_buf(),
-    }
-}
-
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let home = home_dir();
-    let base_path = resolve_safe_base_path(&home, &state.config.base_path);
+    let base_path = state
+        .config
+        .base_path
+        .canonicalize()
+        .unwrap_or_else(|_| state.config.base_path.clone());
     let forge_path = find_signet_forge_binary(&base_path)
         .unwrap_or_else(|| signet_managed_forge_path(&home));
 
