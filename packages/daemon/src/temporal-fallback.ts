@@ -164,10 +164,6 @@ function searchFromThreadHeads(params: {
 				args.push(pattern);
 			}
 			args.push(params.agentId);
-			if (params.sessionKey) {
-				parts.push("AND (session_key IS NULL OR session_key != ?)");
-				args.push(params.sessionKey);
-			}
 			parts.push(`AND (${any})`);
 			for (const pattern of params.termPatterns) {
 				args.push(pattern);
@@ -217,10 +213,6 @@ function searchFromSessionSummaries(params: {
 				args.push(pattern);
 			}
 			args.push(params.agentId);
-			if (params.sessionKey) {
-				parts.push("AND (session_key IS NULL OR session_key != ?)");
-				args.push(params.sessionKey);
-			}
 			parts.push(`AND (${any})`);
 			for (const pattern of params.termPatterns) {
 				args.push(pattern);
