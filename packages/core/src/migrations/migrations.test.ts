@@ -1,3 +1,6 @@
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
+
 /**
  * Tests for the migration framework.
  *
@@ -5,11 +8,9 @@
  * These tests document expected behavior. If the import fails, the migration
  * module hasn't been created yet — the integration pass will finalize.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-
-import { MIGRATIONS, runMigrations } from "./index";
 import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
+import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
+import { MIGRATIONS, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
@@ -31,7 +32,8 @@ describe("migration framework", () => {
 			version: number;
 			applied_at: string;
 		}>;
-		expect(migrations.length).toBe(MIGRATIONS.length);		expect(migrations[0].version).toBe(1);
+		expect(migrations.length).toBe(MIGRATIONS.length);
+		expect(migrations[0].version).toBe(1);
 		expect(migrations[1].version).toBe(2);
 		expect(migrations[2].version).toBe(3);
 		expect(migrations[3].version).toBe(4);
@@ -170,7 +172,8 @@ describe("migration framework", () => {
 			version: number;
 			applied_at: string;
 		}>;
-		expect(audits.length).toBe(MIGRATIONS.length);		for (const audit of audits) {
+		expect(audits.length).toBe(MIGRATIONS.length);
+		for (const audit of audits) {
 			expect(audit.applied_at).toBeTruthy();
 		}
 	});
@@ -360,7 +363,9 @@ describe("migration framework", () => {
 		expect(() => sessionSummaryUniqueness(db)).not.toThrow();
 
 		const rows = db
-			.query<{ id: string }, []>("SELECT id FROM session_summaries WHERE agent_id = 'agent-a' AND session_key = 'sess-dup'")
+			.query<{ id: string }, []>(
+				"SELECT id FROM session_summaries WHERE agent_id = 'agent-a' AND session_key = 'sess-dup'",
+			)
 			.all();
 		expect(rows.map((row) => row.id)).toEqual(["sum-newer"]);
 
@@ -370,6 +375,74 @@ describe("migration framework", () => {
 			)
 			.all();
 		expect(links).toEqual([{ summary_id: "sum-newer", memory_id: "mem-1" }]);
+	});
+
+	test("migration 047 deterministically keeps the newest transcript row per agent/session", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_transcripts (
+				session_key TEXT NOT NULL,
+				content TEXT NOT NULL,
+				harness TEXT,
+				project TEXT,
+				agent_id TEXT,
+				created_at TEXT NOT NULL,
+				updated_at TEXT
+			);
+			CREATE TABLE session_summaries (
+				id TEXT PRIMARY KEY,
+				project TEXT,
+				depth INTEGER NOT NULL DEFAULT 0,
+				kind TEXT NOT NULL,
+				content TEXT NOT NULL,
+				token_count INTEGER,
+				earliest_at TEXT NOT NULL,
+				latest_at TEXT NOT NULL,
+				session_key TEXT,
+				harness TEXT,
+				agent_id TEXT NOT NULL DEFAULT 'default',
+				source_type TEXT,
+				source_ref TEXT,
+				meta_json TEXT,
+				created_at TEXT NOT NULL
+			);
+		`);
+
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"sess-1",
+			"older transcript",
+			"codex",
+			"proj",
+			"agent-a",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:01:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"sess-1",
+			"newer transcript with more detail",
+			"codex",
+			"proj",
+			"agent-a",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+		);
+
+		expect(() => agentScopedTemporalUniqueness(db)).not.toThrow();
+
+		const rows = db
+			.query<{ content: string }, []>(
+				"SELECT content FROM session_transcripts WHERE agent_id = 'agent-a' AND session_key = 'sess-1'",
+			)
+			.all();
+		expect(rows).toEqual([{ content: "newer transcript with more detail" }]);
 	});
 
 	test("entities table has pinning columns after migration 022", () => {
@@ -559,7 +632,8 @@ describe("migration framework", () => {
 		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 		}>;
-		expect(migrations.length).toBe(MIGRATIONS.length);	});
+		expect(migrations.length).toBe(MIGRATIONS.length);
+	});
 
 	test("version 1 stamped by old inline migrate upgrades cleanly", () => {
 		db = createFreshDb();
@@ -599,7 +673,8 @@ describe("migration framework", () => {
 		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 		}>;
-		expect(migrations.length).toBe(MIGRATIONS.length);	});
+		expect(migrations.length).toBe(MIGRATIONS.length);
+	});
 
 	test("DB with existing v1 schema only gets v2 migration", () => {
 		db = createFreshDb();
@@ -625,9 +700,7 @@ describe("migration framework", () => {
 
 		// Record audit count before repair (v14 should have 1 entry)
 		const auditBefore = db
-			.query<{ count: number }, []>(
-				"SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14",
-			)
+			.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14")
 			.get();
 		expect(auditBefore?.count).toBe(1);
 
@@ -635,9 +708,7 @@ describe("migration framework", () => {
 		db.run("DROP TABLE telemetry_events");
 
 		// Verify it's gone
-		const before = db
-			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'")
-			.all();
+		const before = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'").all();
 		expect(before.length).toBe(0);
 
 		// Re-run — phantom repair should detect the missing table,
@@ -645,24 +716,18 @@ describe("migration framework", () => {
 		runMigrations(db);
 
 		// Table should be recreated
-		const after = db
-			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'")
-			.all();
+		const after = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'").all();
 		expect(after.length).toBe(1);
 
 		// All versions should be recorded
 		const migrations = db
-			.query<{ version: number }, []>(
-				"SELECT version FROM schema_migrations ORDER BY version",
-			)
+			.query<{ version: number }, []>("SELECT version FROM schema_migrations ORDER BY version")
 			.all();
 		expect(migrations.length).toBe(MIGRATIONS.length);
 
 		// Audit history preserved: original entry plus new re-run entry
 		const auditAfter = db
-			.query<{ count: number }, []>(
-				"SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14",
-			)
+			.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14")
 			.get();
 		expect(auditAfter?.count).toBe((auditBefore?.count ?? 0) + 1);
 	});
@@ -687,9 +752,7 @@ describe("migration framework", () => {
 
 		// All tables restored
 		const tables = db
-			.query<{ name: string }, []>(
-				"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-			)
+			.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
 			.all();
 		const tableNames = tables.map((t) => t.name);
 		expect(tableNames).toContain("telemetry_events");
@@ -698,9 +761,7 @@ describe("migration framework", () => {
 
 		// All versions present
 		const migrations = db
-			.query<{ version: number }, []>(
-				"SELECT version FROM schema_migrations ORDER BY version",
-			)
+			.query<{ version: number }, []>("SELECT version FROM schema_migrations ORDER BY version")
 			.all();
 		expect(migrations.length).toBe(MIGRATIONS.length);
 	});
@@ -713,9 +774,7 @@ describe("migration framework", () => {
 		// run, all declared artifacts actually exist
 		runMigrations(db);
 
-		const tables = db
-			.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
-			.all();
+		const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'").all();
 		const tableNames = new Set(tables.map((t) => t.name));
 
 		for (const m of MIGRATIONS) {
@@ -727,9 +786,7 @@ describe("migration framework", () => {
 			}
 			if (m.artifacts.columns) {
 				for (const col of m.artifacts.columns) {
-					const cols = db
-						.query<{ name: string }, []>(`PRAGMA table_info("${col.table}")`)
-						.all();
+					const cols = db.query<{ name: string }, []>(`PRAGMA table_info("${col.table}")`).all();
 					const colNames = cols.map((c) => c.name);
 					expect(colNames).toContain(col.column);
 				}

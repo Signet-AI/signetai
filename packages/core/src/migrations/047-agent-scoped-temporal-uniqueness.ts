@@ -24,7 +24,7 @@ export function up(db: MigrationDb): void {
 			PRIMARY KEY (agent_id, session_key)
 		);
 
-		INSERT OR REPLACE INTO session_transcripts_next (
+		INSERT INTO session_transcripts_next (
 			session_key,
 			content,
 			harness,
@@ -38,10 +38,25 @@ export function up(db: MigrationDb): void {
 			content,
 			harness,
 			project,
-			COALESCE(agent_id, 'default'),
+			agent_id,
 			created_at,
-			COALESCE(updated_at, created_at)
-		FROM session_transcripts;
+			updated_at
+		FROM (
+			SELECT
+				session_key,
+				content,
+				harness,
+				project,
+				COALESCE(agent_id, 'default') AS agent_id,
+				created_at,
+				COALESCE(updated_at, created_at) AS updated_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY COALESCE(agent_id, 'default'), session_key
+					ORDER BY COALESCE(updated_at, created_at) DESC, LENGTH(content) DESC, created_at DESC, rowid DESC
+				) AS rn
+			FROM session_transcripts
+		) ranked
+		WHERE rn = 1;
 
 		DROP TABLE session_transcripts;
 		ALTER TABLE session_transcripts_next RENAME TO session_transcripts;

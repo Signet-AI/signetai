@@ -400,7 +400,11 @@ function buildSynthesisIndexBlock(nodes: ReadonlyArray<TemporalNode>): string {
 function collectSynthesisMaterial(charBudget: number, agentId: string): SynthesisMaterial {
 	const memoryBudget = Math.max(1200, Math.floor(charBudget * 0.35));
 	const nodeBudget = Math.max(1200, Math.floor(charBudget * 0.45));
-	const memories = selectWithBudget(getAllScoredCandidates(undefined, 120, agentId), memoryBudget);
+	const scope = getAgentScope(agentId);
+	const memories = selectWithBudget(
+		getAllScoredCandidates(undefined, 120, agentId, scope.readPolicy, scope.policyGroup),
+		memoryBudget,
+	);
 
 	if (!existsSync(MEMORY_DB)) {
 		return {

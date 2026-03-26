@@ -8795,12 +8795,27 @@ app.post("/api/knowledge/expand/session", async (c) => {
 	const body = await c.req.json().catch(() => ({}));
 	const entityName =
 		typeof body.entityName === "string" ? body.entityName.trim() : "";
-	const agentId = resolveAgentId({
-		agentId:
-			typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
-		sessionKey:
-			typeof body.sessionId === "string" ? body.sessionId : c.req.header("x-signet-session-key"),
-	});
+	const scopedAgent = resolveScopedAgentId(
+		c,
+		resolveAgentId({
+			agentId:
+				typeof body.agentId === "string"
+					? body.agentId
+					: c.req.header("x-signet-agent-id"),
+			sessionKey:
+				typeof body.sessionId === "string"
+					? body.sessionId
+					: c.req.header("x-signet-session-key"),
+		}),
+	);
+	if (scopedAgent.error) {
+		return c.json({ error: scopedAgent.error }, 403);
+	}
+	const scopedProject = resolveScopedProject(c, undefined);
+	if (scopedProject.error) {
+		return c.json({ error: scopedProject.error }, 403);
+	}
+	const agentId = scopedAgent.agentId;
 	const sessionId =
 		typeof body.sessionId === "string" ? body.sessionId.trim() : undefined;
 	const timeRange =
@@ -8851,6 +8866,11 @@ app.post("/api/knowledge/expand/session", async (c) => {
 			"COALESCE(ss.source_type, 'summary') = 'summary'",
 		];
 		const args: Array<string | number> = [entity.id, agentId];
+
+		if (scopedProject.project) {
+			conditions.push("ss.project = ?");
+			args.push(scopedProject.project);
+		}
 
 		if (sessionId) {
 			conditions.push("ss.session_key = ?");

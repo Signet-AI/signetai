@@ -1328,6 +1328,22 @@ describe("handleSynthesisRequest", () => {
 		const result = handleSynthesisRequest({ trigger: "manual" });
 		expect(result.fileCount).toBe(0);
 	});
+
+	test.serial("uses shared-visible memories when synthesizing for shared agents", async () => {
+		createMemoryDb([
+			{
+				content: "Shared synthesis memory",
+				importance: 0.9,
+				agent_id: "agent-owner",
+				visibility: "global",
+			},
+		]);
+		upsertAgent("agent-shared", "shared");
+
+		const result = handleSynthesisRequest({ trigger: "manual" }, { agentId: "agent-shared" });
+
+		expect(result.prompt).toContain("Shared synthesis memory");
+	});
 });
 
 // ============================================================================
