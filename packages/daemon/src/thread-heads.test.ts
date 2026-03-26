@@ -38,14 +38,14 @@ afterEach(() => {
 });
 
 describe("thread-heads", () => {
-	it("uses composite project+source scope when deriving thread keys", () => {
+	it("uses project+session scope when source_ref equals session_key", () => {
 		const key = deriveThreadKey({
 			project: "/tmp/proj",
 			sourceRef: "sess-1",
 			sessionKey: "sess-1",
 			harness: "test",
 		});
-		expect(key).toBe("project:/tmp/proj|source:sess-1|harness:test");
+		expect(key).toBe("project:/tmp/proj|session:sess-1|harness:test");
 	});
 
 	it("upserts newer thread head state and ignores older writes", () => {

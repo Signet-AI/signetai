@@ -32,9 +32,13 @@ export function deriveThreadKey(input: {
 	readonly harness: string | null;
 }): string {
 	const project = input.project?.trim();
-	const sourceRef = input.sourceRef?.trim();
+	let sourceRef = input.sourceRef?.trim();
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
+
+	if (sourceRef && project && sessionKey && sourceRef === sessionKey) {
+		sourceRef = null;
+	}
 	const base =
 		sourceRef && project
 			? `project:${project}|source:${sourceRef}`
@@ -60,9 +64,13 @@ export function deriveThreadLabel(input: {
 	readonly harness: string | null;
 }): string {
 	const project = projectTag(input.project);
-	const sourceRef = input.sourceRef?.trim();
+	let sourceRef = input.sourceRef?.trim();
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
+
+	if (sourceRef && project && sessionKey && sourceRef === sessionKey) {
+		sourceRef = null;
+	}
 	const base =
 		project && sourceRef
 			? `project:${project}#source:${sourceRef}`

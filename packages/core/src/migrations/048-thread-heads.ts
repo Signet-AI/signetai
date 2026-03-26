@@ -43,6 +43,15 @@ export function up(db: MigrationDb): void {
 					THEN 'harness:' || TRIM(ss.harness)
 				ELSE
 					CASE
+						WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != ''
+								AND ss.session_key IS NOT NULL AND TRIM(ss.session_key) != ''
+								AND TRIM(ss.source_ref) = TRIM(ss.session_key)
+								AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
+							'project:' || TRIM(ss.project) || '|session:' || TRIM(ss.session_key)
+						WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != ''
+								AND ss.session_key IS NOT NULL AND TRIM(ss.session_key) != ''
+								AND TRIM(ss.source_ref) = TRIM(ss.session_key) THEN
+							'session:' || TRIM(ss.session_key)
 						WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
 							'project:' || TRIM(ss.project) || '|source:' || TRIM(ss.source_ref)
 						WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' THEN 'source:' || TRIM(ss.source_ref)
@@ -58,6 +67,15 @@ export function up(db: MigrationDb): void {
 					END
 			END AS thread_key,
 			CASE
+				WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != ''
+						AND ss.session_key IS NOT NULL AND TRIM(ss.session_key) != ''
+						AND TRIM(ss.source_ref) = TRIM(ss.session_key)
+						AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
+					'project:' || TRIM(ss.project) || '#session:' || TRIM(ss.session_key)
+				WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != ''
+						AND ss.session_key IS NOT NULL AND TRIM(ss.session_key) != ''
+						AND TRIM(ss.source_ref) = TRIM(ss.session_key) THEN
+					'session:' || TRIM(ss.session_key)
 				WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
 					'project:' || TRIM(ss.project) || '#source:' || TRIM(ss.source_ref)
 				WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' THEN 'source:' || TRIM(ss.source_ref)
@@ -90,6 +108,15 @@ export function up(db: MigrationDb): void {
 							THEN 'harness:' || TRIM(s0.harness)
 						ELSE
 							CASE
+								WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != ''
+										AND s0.session_key IS NOT NULL AND TRIM(s0.session_key) != ''
+										AND TRIM(s0.source_ref) = TRIM(s0.session_key)
+										AND s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN
+									'project:' || TRIM(s0.project) || '|session:' || TRIM(s0.session_key)
+								WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != ''
+										AND s0.session_key IS NOT NULL AND TRIM(s0.session_key) != ''
+										AND TRIM(s0.source_ref) = TRIM(s0.session_key) THEN
+									'session:' || TRIM(s0.session_key)
 								WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != '' AND s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN
 									'project:' || TRIM(s0.project) || '|source:' || TRIM(s0.source_ref)
 								WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != '' THEN 'source:' || TRIM(s0.source_ref)
