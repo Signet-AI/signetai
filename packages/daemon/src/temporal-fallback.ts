@@ -1,6 +1,6 @@
-import { basename } from "node:path";
 import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
+import { deriveThreadLabel } from "./thread-heads";
 
 interface TemporalRow {
 	readonly id: string;
@@ -10,6 +10,7 @@ interface TemporalRow {
 	readonly session_key: string | null;
 	readonly source_ref: string | null;
 	readonly harness: string | null;
+	readonly thread_label?: string | null;
 	readonly rank?: number | null;
 }
 
@@ -38,22 +39,6 @@ function clean(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-function projectLabel(project: string | null): string | null {
-	if (!project) return null;
-	const trimmed = project.trim();
-	if (trimmed.length === 0) return null;
-	return basename(trimmed) || trimmed;
-}
-
-function threadLabel(row: TemporalRow): string {
-	const project = projectLabel(row.project);
-	if (project) return `project:${project}`;
-	if (row.source_ref && row.source_ref.trim().length > 0) return `source:${row.source_ref}`;
-	if (row.session_key && row.session_key.trim().length > 0) return `session:${row.session_key}`;
-	if (row.harness && row.harness.trim().length > 0) return `harness:${row.harness}`;
-	return "thread:unscoped";
-}
-
 function buildExcerpt(content: string, query: string): string {
 	const base = clean(content);
 	if (base.length <= 280) return base;
@@ -75,6 +60,152 @@ function buildExcerpt(content: string, query: string): string {
 	return `${base.slice(0, 277).trim()}...`;
 }
 
+function rankThreshold(termCount: number, anchorCount: number): number {
+	if (anchorCount > 0) return 1;
+	return Math.max(1, Math.min(2, termCount));
+}
+
+function toHits(
+	rows: ReadonlyArray<TemporalRow>,
+	query: string,
+	project: string | undefined,
+	termCount: number,
+	anchorCount: number,
+	limit: number,
+): TemporalHit[] {
+	const sameProject = (value: string | null): number => (project && value && project === value ? 0 : 1);
+	const baseMin = rankThreshold(termCount, anchorCount);
+	const crossMin = Math.min(termCount, baseMin + 1);
+	const scoped = rows
+		.map((row) => ({
+			id: row.id,
+			latestAt: row.latest_at,
+			project: row.project,
+			sessionKey: row.session_key,
+			threadLabel:
+				row.thread_label && row.thread_label.trim().length > 0
+					? row.thread_label.trim()
+					: deriveThreadLabel({
+							project: row.project,
+							sourceRef: row.source_ref ?? null,
+							sessionKey: row.session_key ?? null,
+							harness: row.harness ?? null,
+						}),
+			excerpt: buildExcerpt(row.content, query),
+			rank: typeof row.rank === "number" ? row.rank : 0,
+		}))
+		.filter((row) => row.excerpt.length > 0)
+		.filter((row) => row.rank >= baseMin)
+		.filter((row) => {
+			if (!project) return true;
+			if (row.project && row.project === project) return true;
+			return row.rank >= crossMin;
+		})
+		.sort(
+			(a, b) =>
+				sameProject(a.project) - sameProject(b.project) || b.rank - a.rank || b.latestAt.localeCompare(a.latestAt),
+		);
+
+	const deduped: TemporalHit[] = [];
+	const seen = new Set<string>();
+	for (const row of scoped) {
+		if (seen.has(row.threadLabel)) continue;
+		seen.add(row.threadLabel);
+		deduped.push(row);
+		if (deduped.length >= limit) break;
+	}
+	return deduped;
+}
+
+function searchFromThreadHeads(params: {
+	readonly query: string;
+	readonly agentId: string;
+	readonly sessionKey?: string;
+	readonly termPatterns: ReadonlyArray<string>;
+	readonly termCount: number;
+	readonly anchorCount: number;
+	readonly project?: string;
+	readonly limit: number;
+}): TemporalHit[] {
+	if (!tableExists("memory_thread_heads")) return [];
+	try {
+		const rows = getDbAccessor().withReadDb((db) => {
+			const score = params.termPatterns.map(() => "CASE WHEN LOWER(sample) LIKE ? THEN 1 ELSE 0 END").join(" + ");
+			const any = params.termPatterns.map(() => "LOWER(sample) LIKE ?").join(" OR ");
+			const parts = [
+				`SELECT node_id AS id, sample AS content, latest_at, project, session_key, source_ref, harness, label AS thread_label, ${score} AS rank`,
+				"FROM memory_thread_heads",
+				"WHERE agent_id = ?",
+			];
+			const args: unknown[] = [];
+			for (const pattern of params.termPatterns) {
+				args.push(pattern);
+			}
+			args.push(params.agentId);
+			if (params.sessionKey) {
+				parts.push("AND (session_key IS NULL OR session_key != ?)");
+				args.push(params.sessionKey);
+			}
+			parts.push(`AND (${any})`);
+			for (const pattern of params.termPatterns) {
+				args.push(pattern);
+			}
+			parts.push("ORDER BY rank DESC, latest_at DESC LIMIT ?");
+			args.push(params.limit * 4);
+			return db.prepare(parts.join("\n")).all(...args) as TemporalRow[];
+		});
+
+		return toHits(rows, params.query, params.project, params.termCount, params.anchorCount, params.limit);
+	} catch {
+		return [];
+	}
+}
+
+function searchFromSessionSummaries(params: {
+	readonly query: string;
+	readonly agentId: string;
+	readonly sessionKey?: string;
+	readonly termPatterns: ReadonlyArray<string>;
+	readonly termCount: number;
+	readonly anchorCount: number;
+	readonly project?: string;
+	readonly limit: number;
+}): TemporalHit[] {
+	if (!tableExists("session_summaries")) return [];
+	try {
+		const rows = getDbAccessor().withReadDb((db) => {
+			const score = params.termPatterns.map(() => "CASE WHEN LOWER(content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
+			const any = params.termPatterns.map(() => "LOWER(content) LIKE ?").join(" OR ");
+			const parts = [
+				`SELECT id, content, latest_at, project, session_key, source_ref, harness, ${score} AS rank`,
+				"FROM session_summaries",
+				"WHERE agent_id = ?",
+				"AND COALESCE(source_type, kind) != 'chunk'",
+			];
+			const args: unknown[] = [];
+			for (const pattern of params.termPatterns) {
+				args.push(pattern);
+			}
+			args.push(params.agentId);
+			if (params.sessionKey) {
+				parts.push("AND (session_key IS NULL OR session_key != ?)");
+				args.push(params.sessionKey);
+			}
+			parts.push(`AND (${any})`);
+			for (const pattern of params.termPatterns) {
+				args.push(pattern);
+			}
+			parts.push("ORDER BY rank DESC, latest_at DESC LIMIT ?");
+			args.push(params.limit * 4);
+			return db.prepare(parts.join("\n")).all(...args) as TemporalRow[];
+		});
+
+		return toHits(rows, params.query, params.project, params.termCount, params.anchorCount, params.limit);
+	} catch {
+		return [];
+	}
+}
+
 export function searchTemporalFallback(params: {
 	readonly query: string;
 	readonly agentId: string;
@@ -83,8 +214,6 @@ export function searchTemporalFallback(params: {
 	readonly limit: number;
 }): TemporalHit[] {
 	const limit = Math.max(1, Math.min(8, Math.trunc(params.limit)));
-	if (!tableExists("session_summaries")) return [];
-
 	const words = params.query
 		.toLowerCase()
 		.split(/\W+/)
@@ -93,52 +222,28 @@ export function searchTemporalFallback(params: {
 	const anchors = extractAnchorTerms(params.query).slice(0, 6);
 	const terms = anchors.length > 0 ? anchors : words;
 	if (terms.length === 0) return [];
+	const termPatterns = terms.map((term) => `%${term}%`);
 
-	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			const score = terms.map(() => "CASE WHEN LOWER(content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
-			const any = terms.map(() => "LOWER(content) LIKE ?").join(" OR ");
-			const parts = [
-				`SELECT id, content, latest_at, project, session_key, source_ref, harness, ${score} AS rank`,
-				"FROM session_summaries",
-				"WHERE agent_id = ?",
-				"AND COALESCE(source_type, kind) != 'chunk'",
-			];
-			const args: unknown[] = [];
-			for (const term of terms) {
-				args.push(`%${term}%`);
-			}
-			args.push(params.agentId);
-			if (params.sessionKey) {
-				parts.push("AND (session_key IS NULL OR session_key != ?)");
-				args.push(params.sessionKey);
-			}
-			parts.push(`AND (${any})`);
-			for (const term of terms) {
-				args.push(`%${term}%`);
-			}
-			parts.push("ORDER BY rank DESC, latest_at DESC LIMIT ?");
-			args.push(limit * 3);
-			return db.prepare(parts.join("\n")).all(...args) as TemporalRow[];
-		});
+	const fromHeads = searchFromThreadHeads({
+		query: params.query,
+		agentId: params.agentId,
+		sessionKey: params.sessionKey,
+		termPatterns,
+		termCount: terms.length,
+		anchorCount: anchors.length,
+		project: params.project,
+		limit,
+	});
+	if (fromHeads.length > 0) return fromHeads;
 
-		const sameProject = (project: string | null): number =>
-			params.project && project && params.project === project ? 0 : 1;
-
-		return rows
-			.map((row) => ({
-				id: row.id,
-				latestAt: row.latest_at,
-				project: row.project,
-				sessionKey: row.session_key,
-				threadLabel: threadLabel(row),
-				excerpt: buildExcerpt(row.content, params.query),
-				rank: typeof row.rank === "number" ? row.rank : 0,
-			}))
-			.filter((row) => row.excerpt.length > 0)
-			.sort((a, b) => sameProject(a.project) - sameProject(b.project) || b.rank - a.rank)
-			.slice(0, limit);
-	} catch {
-		return [];
-	}
+	return searchFromSessionSummaries({
+		query: params.query,
+		agentId: params.agentId,
+		sessionKey: params.sessionKey,
+		termPatterns,
+		termCount: terms.length,
+		anchorCount: anchors.length,
+		project: params.project,
+		limit,
+	});
 }

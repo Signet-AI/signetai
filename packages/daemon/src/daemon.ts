@@ -130,6 +130,7 @@ import { type RecallParams, hybridRecall } from "./memory-search";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import { expandTemporalNode } from "./temporal-expand";
+import { upsertThreadHead } from "./thread-heads";
 import {
 	DEFAULT_RETENTION,
 	enqueueDocumentIngestJob,
@@ -6064,6 +6065,17 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 					JSON.stringify({ source: "compaction-complete" }),
 					now,
 				);
+				upsertThreadHead(db as unknown as Database, {
+					agentId,
+					nodeId,
+					content: body.summary,
+					latestAt: now,
+					project,
+					sessionKey: body.sessionKey ?? null,
+					sourceType: "compaction",
+					sourceRef: body.sessionKey ?? null,
+					harness: body.harness,
+				});
 			}
 		});
 

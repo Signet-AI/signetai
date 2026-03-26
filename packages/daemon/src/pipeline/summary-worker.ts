@@ -22,6 +22,7 @@ import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { getSecret } from "../secrets";
 import { upsertSessionTranscript } from "../session-transcripts";
+import { upsertThreadHead } from "../thread-heads";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -980,6 +981,18 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 				now,
 			);
 		}
+
+		upsertThreadHead(db as unknown as Database, {
+			agentId,
+			nodeId: effectiveId,
+			content: result.summary,
+			latestAt: now,
+			project: job.project ?? null,
+			sessionKey: job.session_key ?? null,
+			sourceType: "summary",
+			sourceRef: job.session_key ?? null,
+			harness: job.harness,
+		});
 
 		if (job.session_key && result.leaves && result.leaves.length > 0) {
 			db.prepare(

@@ -13,7 +13,7 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
@@ -78,6 +78,7 @@ import { getExpiryWarning } from "./session-tracker";
 import { searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
 import { searchTemporalFallback } from "./temporal-fallback";
+import { deriveThreadKey, deriveThreadLabel, summarizeThreadContent } from "./thread-heads";
 import { getUpdateSummary } from "./update-system";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -413,51 +414,81 @@ function buildSynthesisIndexBlock(nodes: ReadonlyArray<TemporalNode>): string {
 	return `## Temporal Index\n\n${lines.join("\n")}`;
 }
 
-function cleanOneLine(text: string): string {
-	return text.replace(/\s+/g, " ").trim();
-}
-
-function threadKey(node: TemporalNode): string {
-	if (node.project && node.project.trim().length > 0) return `project:${node.project}`;
-	if (node.sourceRef && node.sourceRef.trim().length > 0) return `source:${node.sourceRef}`;
-	if (node.sessionKey && node.sessionKey.trim().length > 0) return `session:${node.sessionKey}`;
-	if (node.harness && node.harness.trim().length > 0) return `harness:${node.harness}`;
-	return "thread:unscoped";
-}
-
-function threadLabel(node: TemporalNode, key: string): string {
-	if (node.project && node.project.trim().length > 0) {
-		const name = basename(node.project.trim());
-		return `project:${name || node.project.trim()}`;
-	}
-	if (node.sourceRef && node.sourceRef.trim().length > 0) {
-		return `source:${node.sourceRef.trim()}`;
-	}
-	return key;
-}
-
 function collectThreadHeads(nodes: ReadonlyArray<TemporalNode>, limit: number): ThreadHead[] {
 	const selected: ThreadHead[] = [];
 	const seen = new Set<string>();
 	for (const node of nodes) {
 		if (node.sourceType === "chunk") continue;
-		const key = threadKey(node);
+		const key = deriveThreadKey({
+			project: node.project,
+			sourceRef: node.sourceRef,
+			sessionKey: node.sessionKey,
+			harness: node.harness,
+		});
 		if (seen.has(key)) continue;
 		seen.add(key);
 		selected.push({
 			key,
-			label: threadLabel(node, key),
+			label: deriveThreadLabel({
+				project: node.project,
+				sourceRef: node.sourceRef,
+				sessionKey: node.sessionKey,
+				harness: node.harness,
+			}),
 			latestAt: node.latestAt,
 			project: node.project,
 			sessionKey: node.sessionKey,
 			sourceType: node.sourceType,
 			score: node.score,
-			sample: trimContent(cleanOneLine(node.content), 240),
+			sample: summarizeThreadContent(node.content, 240),
 			nodeId: node.id,
 		});
 		if (selected.length >= limit) break;
 	}
 	return selected;
+}
+
+function readPersistedThreadHeads(agentId: string, limit: number): ThreadHead[] {
+	if (!existsSync(MEMORY_DB)) return [];
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const table = db
+				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_thread_heads'`)
+				.get();
+			if (!table) return [];
+			const rows = db
+				.prepare(
+					`SELECT thread_key, label, latest_at, project, session_key, source_type, sample, node_id
+					 FROM memory_thread_heads
+					 WHERE agent_id = ?
+					 ORDER BY latest_at DESC
+					 LIMIT ?`,
+				)
+				.all(agentId, Math.max(1, Math.min(80, limit * 4))) as Array<{
+				thread_key: string;
+				label: string;
+				latest_at: string;
+				project: string | null;
+				session_key: string | null;
+				source_type: string | null;
+				sample: string;
+				node_id: string;
+			}>;
+			return rows.slice(0, limit).map((row) => ({
+				key: row.thread_key,
+				label: row.label,
+				latestAt: row.latest_at,
+				project: row.project,
+				sessionKey: row.session_key,
+				sourceType: row.source_type ?? "summary",
+				score: scoreTemporalNode("session", row.source_type ?? "summary", row.latest_at),
+				sample: row.sample,
+				nodeId: row.node_id,
+			}));
+		});
+	} catch {
+		return [];
+	}
 }
 
 function collectSynthesisMaterial(charBudget: number, agentId: string): SynthesisMaterial {
@@ -531,7 +562,8 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 			scored.filter((node) => node.sourceType !== "chunk"),
 			nodeBudget,
 		);
-		const threadHeads = collectThreadHeads(scored, 12);
+		const persistedThreadHeads = readPersistedThreadHeads(agentId, 12);
+		const threadHeads = persistedThreadHeads.length > 0 ? persistedThreadHeads : collectThreadHeads(scored, 12);
 		const indexNodes = scored.slice(0, 20);
 
 		return {

@@ -268,6 +268,24 @@ function createMemoryDb(
 	`);
 
 	db.exec(`
+		CREATE TABLE IF NOT EXISTS memory_thread_heads (
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			thread_key TEXT NOT NULL,
+			label TEXT NOT NULL,
+			project TEXT,
+			session_key TEXT,
+			source_type TEXT NOT NULL DEFAULT 'summary',
+			source_ref TEXT,
+			harness TEXT,
+			node_id TEXT NOT NULL,
+			latest_at TEXT NOT NULL,
+			sample TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (agent_id, thread_key)
+		)
+	`);
+
+	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_summary_children (
 			parent_id TEXT NOT NULL,
 			child_id TEXT NOT NULL,
@@ -1051,6 +1069,62 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).toContain("ultra-needle-transcript-only-5529931");
 	});
 
+	test.serial("uses persisted thread heads for temporal fallback and filters cross-project bleed", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj-good",
+			"project:proj-good",
+			"/tmp/proj-good",
+			"sess-good",
+			"summary",
+			"sess-good",
+			"test",
+			"node-good",
+			"2026-03-25T10:05:00.000Z",
+			"deploy rollback checklist and execution notes",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj-bleed",
+			"project:proj-bleed",
+			"/tmp/proj-bleed",
+			"sess-bleed",
+			"summary",
+			"sess-bleed",
+			"test",
+			"node-bleed",
+			"2026-03-25T10:06:00.000Z",
+			"deploy notes only",
+			"2026-03-25T10:06:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "/tmp/proj-good",
+			sessionKey: "sess-current",
+			userPrompt: "deploy rollback",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("node-good");
+		expect(result.inject).not.toContain("node-bleed");
+	});
+
 	test.serial("falls back to transcript excerpts when hybrid top hit misses query anchors", async () => {
 		createMemoryDb([
 			{
@@ -1407,6 +1481,38 @@ describe("handleSynthesisRequest", () => {
 		expect(result.prompt).toContain("User likes Bun");
 		expect(result.indexBlock).toContain("node-1");
 		expect(result.fileCount).toBe(2);
+	});
+
+	test.serial("includes persisted thread head seeds in synthesis prompt", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/rpg",
+			"project:rpg",
+			"/tmp/rpg",
+			"sess-rpg",
+			"summary",
+			"sess-rpg",
+			"test",
+			"node-rpg",
+			"2026-03-25T11:00:00.000Z",
+			"William RPG planning thread: combat loop and quest pacing.",
+			"2026-03-25T11:00:00.000Z",
+		);
+		db.close();
+
+		const result = handleSynthesisRequest({ trigger: "manual" });
+
+		expect(result.prompt).toContain("Candidate Thread Heads (Tier 2 seeds)");
+		expect(result.prompt).toContain("project:rpg");
+		expect(result.prompt).toContain("node-rpg");
+		expect(result.prompt).toContain("William RPG planning thread");
 	});
 
 	test.serial("generates prompt with exact temporal index instructions", async () => {
