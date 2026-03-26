@@ -145,7 +145,9 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
 
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let home = home_dir();
-    let forge_path = find_signet_forge_binary(&state.config.base_path)
+    let base_path = state.config.base_path.canonicalize()
+        .unwrap_or_else(|_| state.config.base_path.clone());
+    let forge_path = find_signet_forge_binary(&base_path)
         .unwrap_or_else(|| signet_managed_forge_path(&home));
 
     let harnesses = vec![
@@ -166,8 +168,8 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
         json!({
             "name": "OpenClaw",
             "id": "openclaw",
-            "path": state.config.base_path.join("AGENTS.md"),
-            "exists": state.config.base_path.join("AGENTS.md").exists(),
+            "path": base_path.join("AGENTS.md"),
+            "exists": base_path.join("AGENTS.md").exists(),
             "lastSeen": serde_json::Value::Null,
         }),
         json!({

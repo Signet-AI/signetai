@@ -855,7 +855,7 @@ async fn which(binary: &str) -> Option<String> {
 }
 
 fn read_line(prompt: &str) -> Result<String> {
-    std::io::stdout().write_all(prompt.as_bytes())?;
+    let _ = write!(std::io::stdout(), "{prompt}");
     std::io::stdout().flush()?;
     let mut buf = String::new();
     std::io::stdin().read_line(&mut buf)?;
