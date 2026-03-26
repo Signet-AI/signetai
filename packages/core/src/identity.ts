@@ -210,8 +210,12 @@ interface SignetForgeInstallRecord {
 	readonly binaryPath?: string;
 }
 
-function readSignetForgeInstallRecord(agentsDir: string): SignetForgeInstallRecord | null {
-	const recordPath = join(agentsDir, ".forge-install.json");
+function signetManagedInstallDir(home = homedir()): string {
+	return join(home, ".config", "signet", "bin");
+}
+
+function readSignetForgeInstallRecord(home = homedir()): SignetForgeInstallRecord | null {
+	const recordPath = join(signetManagedInstallDir(home), ".forge-install.json");
 	if (!existsSync(recordPath)) return null;
 	try {
 		return JSON.parse(readFileSync(recordPath, "utf8")) as SignetForgeInstallRecord;
@@ -220,8 +224,20 @@ function readSignetForgeInstallRecord(agentsDir: string): SignetForgeInstallReco
 	}
 }
 
+function isExecutableFile(filePath: string): boolean {
+	try {
+		const stats = statSync(filePath);
+		if (!stats.isFile()) return false;
+		if (process.platform === "win32") return true;
+		return (stats.mode & 0o111) !== 0;
+	} catch {
+		return false;
+	}
+}
+
 export function isSignetForgeBinary(binaryPath: string): boolean {
 	if (!existsSync(binaryPath)) return false;
+	if (!isExecutableFile(binaryPath)) return false;
 	try {
 		const binary = readFileSync(binaryPath);
 		if (binary.includes(Buffer.from(SIGNET_FORGE_PRIMARY_MARKER))) return true;
@@ -238,6 +254,7 @@ export function isSignetForgeBinary(binaryPath: string): boolean {
 
 export function isCompatibleForgeBinary(binaryPath: string): boolean {
 	if (!existsSync(binaryPath)) return false;
+	if (!isExecutableFile(binaryPath)) return false;
 	try {
 		const binary = readFileSync(binaryPath);
 		if (binary.includes(Buffer.from(SIGNET_FORGE_PRIMARY_MARKER))) return true;
@@ -249,13 +266,11 @@ export function isCompatibleForgeBinary(binaryPath: string): boolean {
 	}
 }
 
-export function findSignetForgeBinary(agentsDir?: string, home = homedir()): string | null {
+export function findSignetForgeBinary(_agentsDir?: string, home = homedir()): string | null {
 	const candidates = signetForgeCandidatePaths(home);
-	if (agentsDir) {
-		const record = readSignetForgeInstallRecord(agentsDir);
-		if (record?.binaryPath) {
-			candidates.unshift(record.binaryPath);
-		}
+	const record = readSignetForgeInstallRecord(home);
+	if (record?.binaryPath) {
+		candidates.unshift(record.binaryPath);
 	}
 	for (const candidate of candidates) {
 		if (isCompatibleForgeBinary(candidate)) return candidate;

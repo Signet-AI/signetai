@@ -111,12 +111,12 @@ export function loadForgeManifest(getTemplatesDir: () => string): ForgeManifest 
 	return JSON.parse(raw) as ForgeManifest;
 }
 
-function installRecordPath(agentsDir: string): string {
-	return join(agentsDir, ".forge-install.json");
+function installRecordPath(): string {
+	return join(signetManagedInstallDir(), ".forge-install.json");
 }
 
-function readInstallRecord(agentsDir: string): ForgeInstallRecord | null {
-	const path = installRecordPath(agentsDir);
+function readInstallRecord(): ForgeInstallRecord | null {
+	const path = installRecordPath();
 	if (!existsSync(path)) return null;
 	try {
 		return JSON.parse(readFileSync(path, "utf8")) as ForgeInstallRecord;
@@ -125,9 +125,10 @@ function readInstallRecord(agentsDir: string): ForgeInstallRecord | null {
 	}
 }
 
-function writeInstallRecord(agentsDir: string, record: ForgeInstallRecord): void {
-	mkdirSync(agentsDir, { recursive: true });
-	writeFileSync(installRecordPath(agentsDir), `${JSON.stringify(record, null, 2)}\n`);
+function writeInstallRecord(record: ForgeInstallRecord): void {
+	const dir = signetManagedInstallDir();
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(installRecordPath(), `${JSON.stringify(record, null, 2)}\n`);
 }
 
 export function isSignetManagedForgeRecord(record: ManagedForgeRecordLike | null, managedBinaryPath: string): boolean {
@@ -222,7 +223,7 @@ function findInstalledForge(deps: ForgeDeps, binaryName = "forge"): string | nul
 
 function findManagedForge(deps: ForgeDeps, binaryName = "forge"): string | null {
 	const managedPath = signetManagedBinaryPath(binaryName);
-	const record = readInstallRecord(deps.agentsDir);
+	const record = readInstallRecord();
 	const validManagedBinary = existsSync(managedPath) && (binaryName !== "forge" || isSignetForgeBinary(managedPath));
 	if (isSignetManagedForgeRecord(record, managedPath) && validManagedBinary) {
 		return managedPath;
@@ -396,7 +397,7 @@ async function installForgeBinary(
 		mkdirSync(installDir, { recursive: true });
 		const targetBinary = binaryFilename(manifest.binary);
 		const finalPath = join(installDir, targetBinary);
-		const existingRecord = readInstallRecord(deps.agentsDir);
+		const existingRecord = readInstallRecord();
 		if (existsSync(finalPath) && !isSignetManagedForgeRecord(existingRecord, finalPath)) {
 			throw new Error(
 				`Refusing to overwrite unmanaged Forge at ${chalk.cyan(finalPath)}. Move or remove that binary first, or keep using it as a standalone install.`,
@@ -422,7 +423,7 @@ async function installForgeBinary(
 			rmSync(tempRoot, { recursive: true, force: true });
 		}
 
-		writeInstallRecord(deps.agentsDir, {
+		writeInstallRecord({
 			managed: true,
 			version: release.version,
 			binaryPath: finalPath,
@@ -438,7 +439,7 @@ async function installForgeBinary(
 
 function buildStatusPayload(deps: ForgeDeps, manifest: ForgeManifest): ForgeStatusPayload {
 	const binaryPath = findInstalledForge(deps, manifest.binary);
-	const record = readInstallRecord(deps.agentsDir);
+	const record = readInstallRecord();
 	const managedBinaryPath = findManagedForge(deps, manifest.binary);
 	const installedVersion = binaryPath ? readInstalledForgeVersion(binaryPath) : null;
 	const managedVersion = managedBinaryPath ? readInstalledForgeVersion(managedBinaryPath) : null;
