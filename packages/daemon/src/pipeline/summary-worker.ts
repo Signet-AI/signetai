@@ -994,7 +994,7 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 			project: job.project ?? null,
 			sessionKey: job.session_key ?? null,
 			sourceType: "summary",
-			sourceRef: job.project ?? null,
+			sourceRef: null,
 			harness: job.harness,
 		});
 
