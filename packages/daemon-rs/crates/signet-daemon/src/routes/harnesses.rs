@@ -57,15 +57,37 @@ fn signet_managed_forge_path(home: &std::path::Path) -> PathBuf {
     home.join(".config").join("signet").join("bin").join(binary_name("forge"))
 }
 
-fn forge_candidate_paths(home: &std::path::Path, _agents_dir: &std::path::Path) -> Vec<PathBuf> {
+fn workspace_forge_candidate_paths(agents_dir: &std::path::Path) -> Vec<PathBuf> {
     let binary = binary_name("forge");
-    let mut paths = vec![
+    vec![
+        agents_dir.join(&binary),
+        agents_dir.join("target").join("release").join(&binary),
+        agents_dir.join("target").join("debug").join(&binary),
+        agents_dir
+            .join("packages")
+            .join("forge")
+            .join("target")
+            .join("release")
+            .join(&binary),
+        agents_dir
+            .join("packages")
+            .join("forge")
+            .join("target")
+            .join("debug")
+            .join(&binary),
+    ]
+}
+
+fn forge_candidate_paths(home: &std::path::Path, agents_dir: &std::path::Path) -> Vec<PathBuf> {
+    let binary = binary_name("forge");
+    let mut paths = workspace_forge_candidate_paths(agents_dir);
+    paths.extend([
         signet_managed_forge_path(home),
         home.join(".cargo").join("bin").join(&binary),
         home.join(".local").join("bin").join(&binary),
         PathBuf::from("/usr/local/bin").join(&binary),
         PathBuf::from("/opt/homebrew/bin").join(&binary),
-    ];
+    ]);
 
     // Read install record from the global managed location, matching
     // the CLI install path (~/.config/signet/bin/.forge-install.json).
@@ -87,7 +109,14 @@ fn forge_candidate_paths(home: &std::path::Path, _agents_dir: &std::path::Path) 
         }
     }
 
-    paths
+    let mut deduped = Vec::with_capacity(paths.len());
+    for candidate in paths {
+        if !deduped.contains(&candidate) {
+            deduped.push(candidate);
+        }
+    }
+
+    deduped
 }
 
 fn is_signet_forge_binary(path: &std::path::Path) -> bool {
@@ -119,9 +148,11 @@ fn is_compatible_forge_binary(path: &std::path::Path) -> bool {
     })
 }
 
-fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
-    let home = home_dir();
-    for candidate in forge_candidate_paths(&home, agents_dir) {
+fn find_signet_forge_binary_with_home(
+    home: &std::path::Path,
+    agents_dir: &std::path::Path,
+) -> Option<PathBuf> {
+    for candidate in forge_candidate_paths(home, agents_dir) {
         if candidate.exists() && is_compatible_forge_binary(&candidate) {
             return Some(candidate);
         }
@@ -141,6 +172,10 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
+    find_signet_forge_binary_with_home(&home_dir(), agents_dir)
 }
 
 fn is_safe_path_component(value: &str) -> bool {
@@ -231,4 +266,36 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
     ];
 
     Json(json!({ "harnesses": harnesses }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_signet_forge_binary_with_home;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn detects_workspace_local_forge_builds_before_path_lookup() {
+        let home = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+
+        let binary = workspace
+            .path()
+            .join("packages")
+            .join("forge")
+            .join("target")
+            .join("release")
+            .join("forge");
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(
+            &binary,
+            "Forge — First Run\nFORGE_SIGNET_TOKEN\nDashboard (Ctrl+D)\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            find_signet_forge_binary_with_home(home.path(), workspace.path()),
+            Some(binary)
+        );
+    }
 }
