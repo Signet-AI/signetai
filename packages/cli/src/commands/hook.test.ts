@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { buildCompactionCompleteBody, buildSessionEndBody, buildUserPromptSubmitBody, pickSessionKey } from "./hook";
+import {
+	buildCompactionCompleteBody,
+	buildSessionEndBody,
+	buildUserPromptSubmitBody,
+	pickSessionKey,
+	shouldReadCompactionInput,
+} from "./hook";
 
 describe("pickSessionKey", () => {
 	test("prefers canonical sessionKey fields before legacy session_id aliases", () => {
@@ -142,5 +148,17 @@ describe("buildCompactionCompleteBody", () => {
 			harness: "claude-code",
 			summary: "summary text",
 		});
+	});
+});
+
+describe("shouldReadCompactionInput", () => {
+	test("skips stdin when compaction lineage is fully provided on flags", () => {
+		expect(
+			shouldReadCompactionInput(false, {
+				agentId: "agent-1",
+				project: "/tmp/project",
+				sessionKey: "sess-1",
+			}),
+		).toBeFalse();
 	});
 });

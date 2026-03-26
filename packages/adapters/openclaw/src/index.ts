@@ -797,6 +797,10 @@ function readString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function readNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function resolveCompactionSessionFile(
 	event: Record<string, unknown>,
 	sessionFile: string | undefined,
@@ -840,6 +844,35 @@ function extractCompactionSummary(event: Record<string, unknown>, sessionFile: s
 	}
 
 	return undefined;
+}
+
+function buildCompactionEventKey(
+	event: Record<string, unknown>,
+	options: {
+		agentId?: string;
+		sessionKey?: string;
+		summary?: string;
+	},
+): string {
+	const compaction = isRecord(event.compaction) ? event.compaction : undefined;
+	const parts = [
+		options.agentId ?? "-",
+		options.sessionKey ?? "-",
+		readString(event.runId) ?? readString(compaction?.runId) ?? "-",
+		readString(event.id) ?? readString(compaction?.id) ?? "-",
+		String(
+			readNumber(event.messageCount) ??
+				readNumber(event.compactingCount) ??
+				readNumber(event.compactedCount) ??
+				readNumber(compaction?.messageCount) ??
+				readNumber(compaction?.compactingCount) ??
+				readNumber(compaction?.compactedCount) ??
+				-1,
+		),
+		String(readNumber(event.tokenCount) ?? readNumber(compaction?.tokenCount) ?? -1),
+		options.summary ?? "-",
+	];
+	return parts.join("|");
 }
 
 async function registerMarketplaceProxyTools(
@@ -1486,7 +1519,10 @@ const signetPlugin = {
 						: typeof event.compactedCount === "number"
 							? event.compactedCount
 							: undefined;
-			const dedupeKey = `${ctx.agentId ?? "-"}|${sessionKey ?? "-"}|${messageCount ?? -1}`;
+			const dedupeKey = buildCompactionEventKey(event, {
+				agentId: ctx.agentId,
+				sessionKey,
+			});
 			if (dedupeCompaction(beforeCompactions, dedupeKey)) {
 				return undefined;
 			}
@@ -1531,7 +1567,11 @@ const signetPlugin = {
 				return;
 			}
 
-			const dedupeKey = `${ctx.agentId ?? "-"}|${sessionKey ?? "-"}|${summary}`;
+			const dedupeKey = buildCompactionEventKey(event, {
+				agentId: ctx.agentId,
+				sessionKey,
+				summary,
+			});
 			if (dedupeCompaction(afterCompactions, dedupeKey)) {
 				return;
 			}

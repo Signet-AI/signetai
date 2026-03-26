@@ -514,6 +514,20 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/pre-compaction")).toBe(2);
 	});
 
+	it("does not collapse distinct pre-compaction events that reuse the same message count", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		const ctx = { sessionKey: "shared-compaction-shape", agentId: "agent-a" };
+		await beforeCompaction?.({ messageCount: 12, tokenCount: 100 }, ctx);
+		await beforeCompaction?.({ messageCount: 12, tokenCount: 200 }, ctx);
+
+		expect(getHits("/api/hooks/pre-compaction")).toBe(2);
+	});
+
 	it("reads the compaction summary from sessionFile and saves it once", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -675,6 +689,20 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			{ summary: "Shared summary text" },
 			{ sessionKey: "shared-compaction", agentId: "agent-b" },
 		);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(2);
+	});
+
+	it("does not collapse distinct compactions that reuse the same summary text", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		const ctx = { sessionKey: "same-summary", agentId: "agent-a" };
+		await afterCompaction?.({ compactedCount: 2, messageCount: 8, summary: "Stable summary" }, ctx);
+		await afterCompaction?.({ compactedCount: 3, messageCount: 9, summary: "Stable summary" }, ctx);
 
 		expect(getHits("/api/hooks/compaction-complete")).toBe(2);
 	});

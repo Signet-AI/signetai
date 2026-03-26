@@ -153,7 +153,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--project <project>", "Project path")
 		.option("--agent-id <id>", "Agent ID")
 		.action(async (options) => {
-			const input = process.stdin.isTTY ? null : await readJson();
+			const input = shouldReadCompactionInput(process.stdin.isTTY, options) ? await readJson() : null;
 			const data = await deps.fetchFromDaemon<{ success?: boolean; memoryId?: number; error?: string }>(
 				"/api/hooks/compaction-complete",
 				{
@@ -222,6 +222,19 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			}
 			if (data?.success) console.log(chalk.green("✓ MEMORY.md synthesized"));
 		});
+}
+
+export function shouldReadCompactionInput(
+	isTTY: boolean,
+	options: {
+		sessionKey?: string;
+		project?: string;
+		agentId?: string;
+	},
+): boolean {
+	if (isTTY) return false;
+	if (options.sessionKey && options.project && options.agentId) return false;
+	return true;
 }
 
 async function readJson(): Promise<Record<string, unknown> | null> {
