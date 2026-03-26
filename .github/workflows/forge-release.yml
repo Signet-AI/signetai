@@ -85,6 +85,21 @@ jobs:
         with:
           workspaces: packages/forge
           key: forge-${{ matrix.target }}
+      - name: Assert rustls-only TLS stack
+        shell: bash
+        working-directory: packages/forge
+        run: |
+          set -euo pipefail
+          if cargo tree -i openssl-sys -e features >/tmp/openssl-tree.log 2>&1; then
+            echo "::error::Forge includes openssl-sys in the dependency graph. Keep Forge on rustls-only reqwest features for portable cross-builds."
+            cat /tmp/openssl-tree.log
+            exit 1
+          fi
+          if cargo tree -i native-tls -e features >/tmp/native-tls-tree.log 2>&1; then
+            echo "::error::Forge includes native-tls in the dependency graph. Keep Forge on rustls-only reqwest features for portable cross-builds."
+            cat /tmp/native-tls-tree.log
+            exit 1
+          fi
       - name: Build Forge
         shell: bash
         working-directory: packages/forge
