@@ -215,8 +215,7 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
         .clone()
         .unwrap_or_else(|| signet_managed_forge_path(&home));
     let forge_exists = verified_forge_path.is_some();
-    let openclaw_exists = home.join(".openclaw").join("openclaw.json").exists()
-        || home.join(".clawdbot").join("clawdbot.json").exists();
+    let openclaw_exists = openclaw_path.exists();
     let claude_last_seen = state.harness_last_seen("claude-code").await;
     let opencode_last_seen = state.harness_last_seen("opencode").await;
     let openclaw_last_seen = state.harness_last_seen("openclaw").await;
