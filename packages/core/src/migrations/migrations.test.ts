@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { MIGRATIONS, runMigrations } from "./index";
+import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
@@ -255,6 +256,45 @@ describe("migration framework", () => {
 			  final_score, rank, was_injected, fts_hit_count, created_at)
 			 VALUES (?, ?, ?, ?, 'effective', 0.9, 0.9, 0, 1, 0, ?)`,
 		).run("sm-3", "session-x", "agent-b", "mem-x", now);
+	});
+
+	test("migration 046 keeps multi-agent session summaries upgrade-safe", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_summaries (
+				id TEXT PRIMARY KEY,
+				project TEXT,
+				depth INTEGER NOT NULL DEFAULT 0,
+				kind TEXT NOT NULL,
+				content TEXT NOT NULL,
+				token_count INTEGER,
+				earliest_at TEXT NOT NULL,
+				latest_at TEXT NOT NULL,
+				session_key TEXT,
+				harness TEXT,
+				agent_id TEXT NOT NULL DEFAULT 'default',
+				source_type TEXT,
+				source_ref TEXT,
+				meta_json TEXT,
+				created_at TEXT NOT NULL
+			);
+		`);
+
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, depth, kind, content, earliest_at, latest_at,
+				session_key, harness, agent_id, source_type, created_at
+			) VALUES (?, 0, 'session', ?, ?, ?, ?, 'codex', ?, 'summary', ?)`,
+		).run("sum-a", "agent a summary", now, now, "sess-1", "agent-a", now);
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, depth, kind, content, earliest_at, latest_at,
+				session_key, harness, agent_id, source_type, created_at
+			) VALUES (?, 0, 'session', ?, ?, ?, ?, 'codex', ?, 'summary', ?)`,
+		).run("sum-b", "agent b summary", now, now, "sess-1", "agent-b", now);
+
+		expect(() => sessionSummaryUniqueness(db)).not.toThrow();
 	});
 
 	test("entities table has pinning columns after migration 022", () => {

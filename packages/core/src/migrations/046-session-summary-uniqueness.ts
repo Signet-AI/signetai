@@ -5,7 +5,7 @@ export function up(db: MigrationDb): void {
 		DROP INDEX IF EXISTS idx_summaries_session_depth;
 
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_session_depth_summary
-			ON session_summaries(session_key, depth)
+			ON session_summaries(agent_id, session_key, depth)
 			WHERE session_key IS NOT NULL
 			  AND COALESCE(source_type, 'summary') = 'summary';
 	`);

@@ -62,6 +62,7 @@ import {
 	requireRateLimit,
 	requireScope,
 } from "./auth";
+import { resolveScopedAgent, resolveScopedProject as resolveScopedProjectForClaims, shouldEnforceScope } from "./request-scope";
 import { migrateConfig } from "./config-migration";
 import { createFilesystemConnector } from "./connectors/filesystem";
 import {
@@ -2387,10 +2388,7 @@ function parseOptionalBoolean(value: unknown): boolean | undefined {
 }
 
 function shouldEnforceAuthScope(c: Context): boolean {
-	if (authConfig.mode === "local") return false;
-	const auth = c.get("auth");
-	if (authConfig.mode === "hybrid" && !auth?.claims) return false;
-	return true;
+	return shouldEnforceScope(authConfig.mode, c.get("auth")?.claims ?? null);
 }
 
 function resolveScopedAgentId(
@@ -2398,20 +2396,14 @@ function resolveScopedAgentId(
 	requestedAgentId: string | undefined,
 	fallbackAgentId = "default",
 ): { agentId: string; error?: string } {
-	const auth = c.get("auth");
-	const scopedAgentId = parseOptionalString(auth?.claims?.scope.agent);
-	const agentId = requestedAgentId ?? scopedAgentId ?? fallbackAgentId;
+	return resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, requestedAgentId, fallbackAgentId);
+}
 
-	if (!shouldEnforceAuthScope(c)) {
-		return { agentId };
-	}
-
-	const decision = checkScope(auth?.claims ?? null, { agent: agentId }, authConfig.mode);
-	if (!decision.allowed) {
-		return { agentId, error: decision.reason ?? "scope violation" };
-	}
-
-	return { agentId };
+function resolveScopedProject(
+	c: Context,
+	requestedProject: string | undefined,
+): { project: string | undefined; error?: string } {
+	return resolveScopedProjectForClaims(c.get("auth")?.claims ?? null, authConfig.mode, requestedProject);
 }
 
 function validateSessionAgentBinding(
@@ -5994,7 +5986,14 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		}
 
 		const now = new Date().toISOString();
-		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: body.sessionKey });
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({ agentId: body.agentId, sessionKey: body.sessionKey }),
+		);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const agentId = scopedAgent.agentId;
 
 		const summaryId = crypto.randomUUID();
 		getDbAccessor().withWriteTx((db) => {
@@ -6023,7 +6022,7 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 				body.sessionKey ?? null,
 				body.harness,
 				"system",
-				JSON.stringify(["session", "summary", body.harness]),
+				`session,summary,${body.harness}`,
 				project,
 				agentId,
 				now,
@@ -6467,11 +6466,17 @@ app.get("/api/hooks/synthesis/config", (c) => {
 app.post("/api/hooks/synthesis", async (c) => {
 	try {
 		const body = (await c.req.json()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
-		const agentId = resolveAgentId({
-			agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
-			sessionKey: body.sessionKey ?? c.req.header("x-signet-session-key"),
-		});
-		const result = handleSynthesisRequest(body, { agentId });
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
+				sessionKey: body.sessionKey ?? c.req.header("x-signet-session-key"),
+			}),
+		);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const result = handleSynthesisRequest(body, { agentId: scopedAgent.agentId });
 		return c.json(result);
 	} catch (e) {
 		logger.error("hooks", "Synthesis request failed", e as Error);
@@ -6506,12 +6511,18 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 		}
 
 		try {
-			const agentId = resolveAgentId({
-				agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
-				sessionKey: body.sessionKey ?? c.req.header("x-signet-session-key"),
-			});
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({
+					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
+					sessionKey: body.sessionKey ?? c.req.header("x-signet-session-key"),
+				}),
+			);
+			if (scopedAgent.error) {
+				return c.json({ error: scopedAgent.error }, 403);
+			}
 			const result = writeMemoryMd(body.content, {
-				agentId,
+				agentId: scopedAgent.agentId,
 				owner: "api-hooks-synthesis-complete",
 			});
 			if (!result.ok) {
@@ -6570,7 +6581,7 @@ app.get("/api/sessions", (c) => {
 });
 
 // Get single session status
-app.get("/api/sessions/:key", (c) => {
+app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
 	const key = c.req.param("key");
 	const sessions = getActiveSessions();
 	const session = sessions.find((s) => s.key === key);
@@ -6581,7 +6592,7 @@ app.get("/api/sessions/:key", (c) => {
 });
 
 // Toggle bypass for a session
-app.post("/api/sessions/:key/bypass", async (c) => {
+app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
 	const key = c.req.param("key");
 	const sessions = getActiveSessions();
 	const session = sessions.find((s) => s.key === key);
@@ -6607,7 +6618,7 @@ app.post("/api/sessions/:key/bypass", async (c) => {
 });
 
 // Renew a session — reset TTL to prevent silent eviction
-app.post("/api/sessions/:key/renew", (c) => {
+app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", (c) => {
 	const key = c.req.param("key");
 	const expiresAt = renewSession(key);
 	if (!expiresAt) {
@@ -6619,11 +6630,22 @@ app.post("/api/sessions/:key/renew", (c) => {
 // Session summaries DAG
 app.get("/api/sessions/summaries", (c) => {
 	const accessor = getDbAccessor();
-	const agentId = resolveAgentId({
-		agentId: c.req.query("agentId") ?? c.req.header("x-signet-agent-id"),
-		sessionKey: c.req.query("sessionKey") ?? c.req.header("x-signet-session-key"),
-	});
-	const project = c.req.query("project");
+	const scopedAgent = resolveScopedAgentId(
+		c,
+		resolveAgentId({
+			agentId: c.req.query("agentId") ?? c.req.header("x-signet-agent-id"),
+			sessionKey: c.req.query("sessionKey") ?? c.req.header("x-signet-session-key"),
+		}),
+	);
+	if (scopedAgent.error) {
+		return c.json({ error: scopedAgent.error }, 403);
+	}
+	const scopedProject = resolveScopedProject(c, c.req.query("project"));
+	if (scopedProject.error) {
+		return c.json({ error: scopedProject.error }, 403);
+	}
+	const agentId = scopedAgent.agentId;
+	const project = scopedProject.project;
 	const depthRaw = c.req.query("depth");
 	const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
 	if (
@@ -6701,19 +6723,32 @@ app.post("/api/sessions/summaries/expand", async (c) => {
 		typeof body.transcriptCharLimit === "number" && Number.isFinite(body.transcriptCharLimit)
 			? Math.max(200, Math.min(12000, Math.trunc(body.transcriptCharLimit)))
 			: undefined;
-	const agentId = resolveAgentId({
-		agentId:
-			typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
-		sessionKey:
-			typeof body.sessionKey === "string" ? body.sessionKey : c.req.header("x-signet-session-key"),
-	});
+	const scopedAgent = resolveScopedAgentId(
+		c,
+		resolveAgentId({
+			agentId:
+				typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
+			sessionKey:
+				typeof body.sessionKey === "string" ? body.sessionKey : c.req.header("x-signet-session-key"),
+		}),
+	);
+	if (scopedAgent.error) {
+		return c.json({ error: scopedAgent.error }, 403);
+	}
+	const scopedProject = resolveScopedProject(c, undefined);
+	if (scopedProject.error) {
+		return c.json({ error: scopedProject.error }, 403);
+	}
 
-	const result = expandTemporalNode(id, agentId, {
+	const result = expandTemporalNode(id, scopedAgent.agentId, {
 		includeTranscript,
 		transcriptCharLimit,
 	});
 	if (!result) {
 		return c.json({ error: "summary node not found" }, 404);
+	}
+	if (scopedProject.project && result.node.project !== scopedProject.project) {
+		return c.json({ error: `scope restricted to project '${scopedProject.project}'` }, 403);
 	}
 	return c.json(result);
 });
