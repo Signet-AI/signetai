@@ -180,7 +180,32 @@ describe("managed Forge install lock", () => {
 		}
 	});
 
-	it("recovers a stale lock even if the recorded pid has been reused", async () => {
+	it("recovers a stale lock when pid metadata is invalid", async () => {
+		const tempHome = mkdtempSync(join(tmpdir(), "forge-home-"));
+		process.env.HOME = tempHome;
+		try {
+			const lockDir = join(tempHome, ".config", "signet", "bin", ".forge-install.lock");
+			mkdirSync(lockDir, { recursive: true });
+			writeFileSync(
+				join(lockDir, "owner.json"),
+				JSON.stringify({
+					pid: "not-a-pid",
+					createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+				}),
+			);
+			const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			utimesSync(lockDir, staleTime, staleTime);
+
+			const result = await withManagedForgeInstallLock(async () => "ok", tempHome);
+
+			expect(result).toBe("ok");
+			expect(existsSync(lockDir)).toBe(false);
+		} finally {
+			rmSync(tempHome, { recursive: true, force: true });
+		}
+	});
+
+	it("does not treat lock as stale when the recorded pid is still alive", async () => {
 		const tempHome = mkdtempSync(join(tmpdir(), "forge-home-"));
 		process.env.HOME = tempHome;
 		try {
@@ -196,10 +221,11 @@ describe("managed Forge install lock", () => {
 			const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
 			utimesSync(lockDir, staleTime, staleTime);
 
-			const result = await withManagedForgeInstallLock(async () => "ok", tempHome);
+			expect(() => {
+				withManagedForgeInstallLock(async () => "ok", tempHome);
+			}).toThrow("already running");
 
-			expect(result).toBe("ok");
-			expect(existsSync(lockDir)).toBe(false);
+			expect(existsSync(lockDir)).toBe(true);
 		} finally {
 			rmSync(tempHome, { recursive: true, force: true });
 		}

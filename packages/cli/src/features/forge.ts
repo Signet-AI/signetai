@@ -148,7 +148,7 @@ function isManagedForgeInstallLockStale(lockDir: string): boolean {
 		}
 	})();
 	if (typeof metadata?.pid === "number") {
-		return !isRunningPid(metadata.pid) || (lockAgeMs !== null && lockAgeMs > MANAGED_FORGE_INSTALL_LOCK_STALE_MS);
+		return !isRunningPid(metadata.pid);
 	}
 	return lockAgeMs !== null && lockAgeMs > MANAGED_FORGE_INSTALL_LOCK_STALE_MS;
 }
@@ -575,7 +575,13 @@ export async function updateForge(options: ForgeInstallOptions, deps: ForgeDeps)
 	}
 	const currentVersion = status.managedVersion ?? status.managedRecord?.version ?? null;
 	const latest = await resolveForgeRelease(manifest, options.version);
-	if (currentVersion && compareSemver(currentVersion, latest.version) >= 0) {
+	const requestedVersion = Boolean(options.version);
+	const shouldSkipUpdate =
+		currentVersion !== null &&
+		(!requestedVersion
+			? compareSemver(currentVersion, latest.version) >= 0
+			: compareSemver(currentVersion, latest.version) === 0);
+	if (shouldSkipUpdate) {
 		console.log(chalk.green(`✓ Forge is already up to date (${currentVersion})`));
 		return;
 	}
