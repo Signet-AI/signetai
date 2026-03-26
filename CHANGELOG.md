@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.77.4] - 2026-03-26
+
+### Bug Fixes
+
+- **memory**: close lossless working-memory runtime gaps (#344)
+
+
 ## [0.77.3] - 2026-03-26
 
 ### Bug Fixes
