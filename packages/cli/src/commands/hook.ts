@@ -293,17 +293,20 @@ export function buildCompactionCompleteBody(
 ): {
 	harness: string;
 	summary: string;
-	agentId: string;
-	sessionKey: string;
-	project: string;
+	agentId?: string;
+	sessionKey?: string;
+	project?: string;
 } {
 	const body = input;
+	const agentId = pickString(overrides.agentId, body?.agent_id, body?.agentId);
+	const sessionKey = pickString(overrides.sessionKey, pickSessionKey(body));
+	const project = pickString(overrides.project, body?.project, body?.cwd);
 	return {
 		harness,
 		summary,
-		agentId: pickString(overrides.agentId, body?.agent_id, body?.agentId),
-		sessionKey: pickString(overrides.sessionKey, pickSessionKey(body)),
-		project: pickString(overrides.project, body?.project, body?.cwd),
+		...(agentId ? { agentId } : {}),
+		...(sessionKey ? { sessionKey } : {}),
+		...(project ? { project } : {}),
 	};
 }
 

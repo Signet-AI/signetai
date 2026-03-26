@@ -136,4 +136,11 @@ describe("buildCompactionCompleteBody", () => {
 			summary: "summary text",
 		});
 	});
+
+	test("omits unset optional lineage fields instead of serializing blank strings", () => {
+		expect(buildCompactionCompleteBody(null, "claude-code", "summary text")).toEqual({
+			harness: "claude-code",
+			summary: "summary text",
+		});
+	});
 });
