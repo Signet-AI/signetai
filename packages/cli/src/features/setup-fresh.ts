@@ -7,7 +7,7 @@ import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
-import { installForge } from "./forge.js";
+import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
 import { readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
@@ -144,6 +144,11 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		}
 
 		if (cfg.harnesses.includes("forge") && !deps.detectExistingSetup(cfg.basePath).harnesses.forge) {
+			if (!managedForgeInstallSupportedOnCurrentPlatform()) {
+				throw new Error(
+					`Forge is selected, but Signet-managed Forge binaries are only available on macOS/Linux arm64/x64. Install Forge separately on ${process.platform} ${process.arch}, then rerun ${chalk.cyan("signet setup")}.`,
+				);
+			}
 			spinner.text = "Installing Forge...";
 			await installForge(
 				{},

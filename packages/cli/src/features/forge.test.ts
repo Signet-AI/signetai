@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	isSignetManagedForgeRecord,
 	managedForgeAssetNameForPlatform,
+	managedForgeInstallSupportedForPlatform,
 	selectLatestStableForgeRelease,
 } from "./forge.js";
 
@@ -17,6 +18,12 @@ describe("managed Forge release asset selection", () => {
 		expect(() => managedForgeAssetNameForPlatform("linux", "ppc64")).toThrow(
 			"signet forge install/update currently publishes managed binaries for macOS arm64, macOS x64, Linux x64, and Linux arm64.",
 		);
+	});
+
+	it("exposes the managed-install support matrix for setup gating", () => {
+		expect(managedForgeInstallSupportedForPlatform("darwin", "arm64")).toBe(true);
+		expect(managedForgeInstallSupportedForPlatform("linux", "arm64")).toBe(true);
+		expect(managedForgeInstallSupportedForPlatform("win32", "x64")).toBe(false);
 	});
 });
 

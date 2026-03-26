@@ -80,6 +80,31 @@ export interface ForgeDeps {
 	readonly isDaemonRunning: () => Promise<boolean>;
 }
 
+function managedForgeInstallLockDir(): string {
+	return join(signetManagedInstallDir(), ".forge-install.lock");
+}
+
+function withManagedForgeInstallLock<T>(run: () => Promise<T>): Promise<T> {
+	const lockDir = managedForgeInstallLockDir();
+	try {
+		mkdirSync(lockDir);
+	} catch (err) {
+		const code = err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : "";
+		if (code === "EEXIST") {
+			throw new Error(
+				`Another ${chalk.cyan("signet forge install/update")} is already running. Wait for it to finish and try again.`,
+			);
+		}
+		throw err;
+	}
+
+	return Promise.resolve()
+		.then(run)
+		.finally(() => {
+			rmSync(lockDir, { recursive: true, force: true });
+		});
+}
+
 export function loadForgeManifest(getTemplatesDir: () => string): ForgeManifest {
 	const manifestPath = join(getTemplatesDir(), "forge", "manifest.json");
 	const raw = readFileSync(manifestPath, "utf8");
@@ -270,6 +295,19 @@ export function managedForgeAssetNameForPlatform(platform: NodeJS.Platform, arch
 	);
 }
 
+export function managedForgeInstallSupportedForPlatform(platform: NodeJS.Platform, arch: string): boolean {
+	try {
+		managedForgeAssetNameForPlatform(platform, arch);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+export function managedForgeInstallSupportedOnCurrentPlatform(): boolean {
+	return managedForgeInstallSupportedForPlatform(process.platform, process.arch);
+}
+
 function platformAssetName(): string {
 	return managedForgeAssetNameForPlatform(process.platform, process.arch);
 }
@@ -342,58 +380,60 @@ async function installForgeBinary(
 	manifest: ForgeManifest,
 	version?: string,
 ): Promise<{ version: string; binaryPath: string; releaseTag: string; releaseUrl: string }> {
-	const release = await resolveForgeRelease(manifest, version);
-	const assetName = platformAssetName();
-	const asset = release.assets.find((entry) => entry.name === assetName);
-	if (!asset) {
-		throw new Error(`Release ${release.tag} does not include asset ${assetName}`);
-	}
-	const checksumAsset = release.assets.find((entry) => entry.name === checksumAssetName(asset.name));
-	if (!checksumAsset) {
-		throw new Error(`Release ${release.tag} does not include checksum asset ${checksumAssetName(asset.name)}`);
-	}
+	return withManagedForgeInstallLock(async () => {
+		const release = await resolveForgeRelease(manifest, version);
+		const assetName = platformAssetName();
+		const asset = release.assets.find((entry) => entry.name === assetName);
+		if (!asset) {
+			throw new Error(`Release ${release.tag} does not include asset ${assetName}`);
+		}
+		const checksumAsset = release.assets.find((entry) => entry.name === checksumAssetName(asset.name));
+		if (!checksumAsset) {
+			throw new Error(`Release ${release.tag} does not include checksum asset ${checksumAssetName(asset.name)}`);
+		}
 
-	const installDir = signetManagedInstallDir();
-	mkdirSync(installDir, { recursive: true });
-	const targetBinary = binaryFilename(manifest.binary);
-	const finalPath = join(installDir, targetBinary);
-	const existingRecord = readInstallRecord(deps.agentsDir);
-	if (existsSync(finalPath) && !isSignetManagedForgeRecord(existingRecord, finalPath)) {
-		throw new Error(
-			`Refusing to overwrite unmanaged Forge at ${chalk.cyan(finalPath)}. Move or remove that binary first, or keep using it as a standalone install.`,
-		);
-	}
+		const installDir = signetManagedInstallDir();
+		mkdirSync(installDir, { recursive: true });
+		const targetBinary = binaryFilename(manifest.binary);
+		const finalPath = join(installDir, targetBinary);
+		const existingRecord = readInstallRecord(deps.agentsDir);
+		if (existsSync(finalPath) && !isSignetManagedForgeRecord(existingRecord, finalPath)) {
+			throw new Error(
+				`Refusing to overwrite unmanaged Forge at ${chalk.cyan(finalPath)}. Move or remove that binary first, or keep using it as a standalone install.`,
+			);
+		}
 
-	const tempRoot = mkdtempSync(join(installDir, ".forge-install-"));
-	const extractDir = join(tempRoot, "extract");
-	const archivePath = join(tempRoot, asset.name);
-	const stagedPath = join(installDir, `.${targetBinary}.new`);
-	try {
-		await downloadFile(asset.url, archivePath);
-		const expectedSha256 = parseSha256Checksum(await fetchText(checksumAsset.url), asset.name);
-		verifyFileChecksum(archivePath, expectedSha256);
-		const extracted = extractForgeBinary(archivePath, extractDir, manifest.binary);
-		verifyForgeBinaryFingerprint(extracted);
-		if (existsSync(stagedPath)) unlinkSync(stagedPath);
-		renameSync(extracted, stagedPath);
-		chmodSync(stagedPath, 0o755);
-		renameSync(stagedPath, finalPath);
-	} finally {
-		if (existsSync(stagedPath)) unlinkSync(stagedPath);
-		rmSync(tempRoot, { recursive: true, force: true });
-	}
+		const tempRoot = mkdtempSync(join(installDir, ".forge-install-"));
+		const extractDir = join(tempRoot, "extract");
+		const archivePath = join(tempRoot, asset.name);
+		const stagedPath = join(installDir, `.${targetBinary}.new`);
+		try {
+			await downloadFile(asset.url, archivePath);
+			const expectedSha256 = parseSha256Checksum(await fetchText(checksumAsset.url), asset.name);
+			verifyFileChecksum(archivePath, expectedSha256);
+			const extracted = extractForgeBinary(archivePath, extractDir, manifest.binary);
+			verifyForgeBinaryFingerprint(extracted);
+			if (existsSync(stagedPath)) unlinkSync(stagedPath);
+			renameSync(extracted, stagedPath);
+			chmodSync(stagedPath, 0o755);
+			renameSync(stagedPath, finalPath);
+		} finally {
+			if (existsSync(stagedPath)) unlinkSync(stagedPath);
+			rmSync(tempRoot, { recursive: true, force: true });
+		}
 
-	writeInstallRecord(deps.agentsDir, {
-		managed: true,
-		version: release.version,
-		binaryPath: finalPath,
-		releaseTag: release.tag,
-		repository: manifest.repository,
-		installedAt: new Date().toISOString(),
-		source: "github-release",
+		writeInstallRecord(deps.agentsDir, {
+			managed: true,
+			version: release.version,
+			binaryPath: finalPath,
+			releaseTag: release.tag,
+			repository: manifest.repository,
+			installedAt: new Date().toISOString(),
+			source: "github-release",
+		});
+
+		return { version: release.version, binaryPath: finalPath, releaseTag: release.tag, releaseUrl: release.htmlUrl };
 	});
-
-	return { version: release.version, binaryPath: finalPath, releaseTag: release.tag, releaseUrl: release.htmlUrl };
 }
 
 function buildStatusPayload(deps: ForgeDeps, manifest: ForgeManifest): ForgeStatusPayload {

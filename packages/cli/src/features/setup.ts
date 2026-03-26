@@ -6,6 +6,7 @@ import { NETWORK_MODES, type NetworkMode, type SetupDetection, parseSimpleYaml, 
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
+import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
@@ -266,7 +267,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "codex", name: "Codex", checked: existingHarnesses.includes("codex") },
 		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
-		{ value: "forge", name: "Forge (native Signet harness)", checked: existingHarnesses.includes("forge") },
+		{
+			value: "forge",
+			name: "Forge (native Signet harness)",
+			checked: existingHarnesses.includes("forge"),
+			disabled:
+				!existing.harnesses.forge && !managedForgeInstallSupportedOnCurrentPlatform()
+					? "managed install unavailable on this platform; install Forge separately first"
+					: false,
+		},
 	];
 
 	let harnesses: string[] = [];
@@ -297,6 +306,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			message: "Which AI platforms do you use?",
 			choices: harnessChoices,
 		});
+	}
+
+	if (harnesses.includes("forge") && !existing.harnesses.forge && !managedForgeInstallSupportedOnCurrentPlatform()) {
+		const message =
+			"Forge selected, but Signet-managed Forge binaries are only available on macOS/Linux arm64/x64. Install Forge separately first, then rerun setup.";
+		if (nonInteractive) {
+			failNonInteractiveSetup(message);
+		}
+		throw new Error(message);
 	}
 
 	let configureOpenClawWs = false;
