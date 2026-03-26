@@ -38,6 +38,14 @@ interface ForgeRelease {
 	readonly htmlUrl: string;
 }
 
+interface GitHubForgeRelease {
+	readonly tag_name: string;
+	readonly html_url: string;
+	readonly draft: boolean;
+	readonly prerelease: boolean;
+	readonly assets: Array<{ name: string; browser_download_url: string }>;
+}
+
 interface ForgeInstallRecord {
 	readonly managed: boolean;
 	readonly version: string;
@@ -112,6 +120,31 @@ function compareSemver(left: string, right: string): number {
 		if (delta !== 0) return delta;
 	}
 	return 0;
+}
+
+function normalizeForgeRelease(release: GitHubForgeRelease, tagPrefix: string): ForgeRelease {
+	return {
+		tag: release.tag_name,
+		version: release.tag_name.replace(tagPrefix, ""),
+		htmlUrl: release.html_url,
+		assets: release.assets.map((asset) => ({ name: asset.name, url: asset.browser_download_url })),
+	};
+}
+
+export function selectLatestStableForgeRelease(
+	releases: ReadonlyArray<GitHubForgeRelease>,
+	manifest: Pick<ForgeManifest, "tagPrefix" | "repository">,
+): ForgeRelease {
+	const match = releases
+		.filter((release) => release.tag_name.startsWith(manifest.tagPrefix))
+		.filter((release) => !release.draft && !release.prerelease)
+		.sort((left, right) =>
+			compareSemver(right.tag_name.replace(manifest.tagPrefix, ""), left.tag_name.replace(manifest.tagPrefix, "")),
+		)[0];
+	if (!match) {
+		throw new Error(`No stable Forge releases found in ${manifest.repository}`);
+	}
+	return normalizeForgeRelease(match, manifest.tagPrefix);
 }
 
 function commonForgePaths(binaryName = "forge"): string[] {
@@ -215,40 +248,12 @@ async function resolveForgeRelease(manifest: ForgeManifest, requestedVersion?: s
 	const requestedTag = requestedVersion ? `${manifest.tagPrefix}${requestedVersion}` : null;
 	const base = `https://api.github.com/repos/${manifest.repository}/releases`;
 	if (requestedTag) {
-		const release = await fetchJson<{
-			tag_name: string;
-			html_url: string;
-			assets: Array<{ name: string; browser_download_url: string }>;
-		}>(`${base}/tags/${requestedTag}`);
-		return {
-			tag: release.tag_name,
-			version: release.tag_name.replace(manifest.tagPrefix, ""),
-			htmlUrl: release.html_url,
-			assets: release.assets.map((asset) => ({ name: asset.name, url: asset.browser_download_url })),
-		};
+		const release = await fetchJson<GitHubForgeRelease>(`${base}/tags/${requestedTag}`);
+		return normalizeForgeRelease(release, manifest.tagPrefix);
 	}
 
-	const releases = await fetchJson<
-		Array<{
-			tag_name: string;
-			html_url: string;
-			assets: Array<{ name: string; browser_download_url: string }>;
-		}>
-	>(`${base}?per_page=30`);
-	const match = releases
-		.filter((release) => release.tag_name.startsWith(manifest.tagPrefix))
-		.sort((left, right) =>
-			compareSemver(right.tag_name.replace(manifest.tagPrefix, ""), left.tag_name.replace(manifest.tagPrefix, "")),
-		)[0];
-	if (!match) {
-		throw new Error(`No Forge releases found in ${manifest.repository}`);
-	}
-	return {
-		tag: match.tag_name,
-		version: match.tag_name.replace(manifest.tagPrefix, ""),
-		htmlUrl: match.html_url,
-		assets: match.assets.map((asset) => ({ name: asset.name, url: asset.browser_download_url })),
-	};
+	const releases = await fetchJson<Array<GitHubForgeRelease>>(`${base}?per_page=30`);
+	return selectLatestStableForgeRelease(releases, manifest);
 }
 
 function supportedManagedForgePlatformList(): string {

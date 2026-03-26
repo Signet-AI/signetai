@@ -6,6 +6,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 const REFERENCE_FILE = "packages/signetai/package.json";
 const EXCLUDED_FILES = new Set(["packages/cli/dashboard/package.json"]);
 const EXCLUDED_CARGO_FILES = new Set(["packages/forge/Cargo.toml"]);
+const FORGE_VERSION_FILE = "packages/forge/forge-version.json";
+const FORGE_MANIFEST_FILES = [
+	"packages/cli/templates/forge/manifest.json",
+	"packages/signetai/templates/forge/manifest.json",
+];
 
 function parseSemver(version: string): [number, number, number] {
 	const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -164,6 +169,18 @@ function getArg(name: string): string | null {
 	return process.argv[index + 1] ?? null;
 }
 
+function syncForgeManifestCopies(): string[] {
+	const source = readFileSync(FORGE_VERSION_FILE, "utf8");
+	const updated: string[] = [];
+	for (const file of FORGE_MANIFEST_FILES) {
+		const raw = readFileSync(file, "utf8");
+		if (raw === source) continue;
+		writeFileSync(file, source);
+		updated.push(file);
+	}
+	return updated;
+}
+
 function main() {
 	const explicitVersion = getArg("--to");
 	if (explicitVersion) {
@@ -235,7 +252,9 @@ function main() {
 		throw new Error(`Cargo version sync failed. Mismatches:\n- ${cargoMismatches.join("\n- ")}`);
 	}
 
-	if (updated.length === 0 && cargoUpdated.length === 0 && resolved.length === 0) {
+	const forgeManifestUpdated = syncForgeManifestCopies();
+
+	if (updated.length === 0 && cargoUpdated.length === 0 && resolved.length === 0 && forgeManifestUpdated.length === 0) {
 		console.log(`All versions already aligned at ${targetVersion}.`);
 		return;
 	}
@@ -257,6 +276,13 @@ function main() {
 	if (resolved.length > 0) {
 		console.log(`Resolved workspace: protocols in ${resolved.length} publishable package(s):`);
 		for (const file of resolved) {
+			console.log(`- ${file}`);
+		}
+	}
+
+	if (forgeManifestUpdated.length > 0) {
+		console.log(`Synced Forge manifest copies from ${FORGE_VERSION_FILE}:`);
+		for (const file of forgeManifestUpdated) {
 			console.log(`- ${file}`);
 		}
 	}

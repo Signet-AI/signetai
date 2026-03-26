@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { isSignetManagedForgeRecord, managedForgeAssetNameForPlatform } from "./forge.js";
+import {
+	isSignetManagedForgeRecord,
+	managedForgeAssetNameForPlatform,
+	selectLatestStableForgeRelease,
+} from "./forge.js";
 
 describe("managed Forge release asset selection", () => {
 	it("maps the published managed targets to release assets", () => {
@@ -48,5 +52,56 @@ describe("managed Forge ownership", () => {
 				"/tmp/forge",
 			),
 		).toBe(false);
+	});
+});
+
+describe("stable Forge release selection", () => {
+	it("ignores drafts and prereleases when choosing the default managed release", () => {
+		const release = selectLatestStableForgeRelease(
+			[
+				{
+					tag_name: "forge-v2.0.0-rc.1",
+					html_url: "https://example.test/rc",
+					draft: false,
+					prerelease: true,
+					assets: [],
+				},
+				{
+					tag_name: "forge-v1.9.1",
+					html_url: "https://example.test/stable-newest",
+					draft: false,
+					prerelease: false,
+					assets: [],
+				},
+				{
+					tag_name: "forge-v2.0.0",
+					html_url: "https://example.test/draft",
+					draft: true,
+					prerelease: false,
+					assets: [],
+				},
+			],
+			{ tagPrefix: "forge-v", repository: "Signet-AI/signetai" },
+		);
+
+		expect(release.version).toBe("1.9.1");
+		expect(release.tag).toBe("forge-v1.9.1");
+	});
+
+	it("fails clearly when only prereleases are available", () => {
+		expect(() =>
+			selectLatestStableForgeRelease(
+				[
+					{
+						tag_name: "forge-v2.0.0-rc.1",
+						html_url: "https://example.test/rc",
+						draft: false,
+						prerelease: true,
+						assets: [],
+					},
+				],
+				{ tagPrefix: "forge-v", repository: "Signet-AI/signetai" },
+			),
+		).toThrow("No stable Forge releases found in Signet-AI/signetai");
 	});
 });
