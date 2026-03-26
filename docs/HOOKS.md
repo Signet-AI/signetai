@@ -18,7 +18,7 @@ Hooks are HTTP endpoints exposed by the Signet [[daemon]]. Harnesses call them a
 | Hook | When | Purpose |
 |------|------|---------|
 | `session-start` | New session begins | Inject memories and identity into context |
-| `user-prompt-submit` | Before each user turn | Prefer structured recall, then transcript fallback when needed |
+| `user-prompt-submit` | Before each user turn | Prefer structured recall, then temporal fallback, then transcript fallback when needed |
 | `session-end` | Session finishes | Persist transcript lineage and queue session summary |
 | `pre-compaction` | Before context compaction | Get summary guidelines |
 | `compaction-complete` | After compaction | Save a first-class compaction artifact into the temporal DAG |

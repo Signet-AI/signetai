@@ -13,7 +13,7 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
@@ -77,6 +77,7 @@ import { parseFeedback, recordAgentFeedback, recordSessionCandidates, trackFtsHi
 import { getExpiryWarning } from "./session-tracker";
 import { searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { searchTemporalFallback } from "./temporal-fallback";
 import { getUpdateSummary } from "./update-system";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -358,12 +359,26 @@ interface TemporalNode {
 	readonly latestAt: string;
 	readonly project: string | null;
 	readonly sessionKey: string | null;
+	readonly harness: string | null;
 	readonly score: number;
+}
+
+interface ThreadHead {
+	readonly key: string;
+	readonly label: string;
+	readonly latestAt: string;
+	readonly project: string | null;
+	readonly sessionKey: string | null;
+	readonly sourceType: string;
+	readonly score: number;
+	readonly sample: string;
+	readonly nodeId: string;
 }
 
 interface SynthesisMaterial {
 	readonly nodes: ReadonlyArray<TemporalNode>;
 	readonly memories: ReadonlyArray<ScoredMemory>;
+	readonly threadHeads: ReadonlyArray<ThreadHead>;
 	readonly indexBlock: string;
 	readonly sourceCount: number;
 }
@@ -398,6 +413,53 @@ function buildSynthesisIndexBlock(nodes: ReadonlyArray<TemporalNode>): string {
 	return `## Temporal Index\n\n${lines.join("\n")}`;
 }
 
+function cleanOneLine(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
+function threadKey(node: TemporalNode): string {
+	if (node.project && node.project.trim().length > 0) return `project:${node.project}`;
+	if (node.sourceRef && node.sourceRef.trim().length > 0) return `source:${node.sourceRef}`;
+	if (node.sessionKey && node.sessionKey.trim().length > 0) return `session:${node.sessionKey}`;
+	if (node.harness && node.harness.trim().length > 0) return `harness:${node.harness}`;
+	return "thread:unscoped";
+}
+
+function threadLabel(node: TemporalNode, key: string): string {
+	if (node.project && node.project.trim().length > 0) {
+		const name = basename(node.project.trim());
+		return `project:${name || node.project.trim()}`;
+	}
+	if (node.sourceRef && node.sourceRef.trim().length > 0) {
+		return `source:${node.sourceRef.trim()}`;
+	}
+	return key;
+}
+
+function collectThreadHeads(nodes: ReadonlyArray<TemporalNode>, limit: number): ThreadHead[] {
+	const selected: ThreadHead[] = [];
+	const seen = new Set<string>();
+	for (const node of nodes) {
+		if (node.sourceType === "chunk") continue;
+		const key = threadKey(node);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		selected.push({
+			key,
+			label: threadLabel(node, key),
+			latestAt: node.latestAt,
+			project: node.project,
+			sessionKey: node.sessionKey,
+			sourceType: node.sourceType,
+			score: node.score,
+			sample: trimContent(cleanOneLine(node.content), 240),
+			nodeId: node.id,
+		});
+		if (selected.length >= limit) break;
+	}
+	return selected;
+}
+
 function collectSynthesisMaterial(charBudget: number, agentId: string): SynthesisMaterial {
 	const memoryBudget = Math.max(1200, Math.floor(charBudget * 0.35));
 	const nodeBudget = Math.max(1200, Math.floor(charBudget * 0.45));
@@ -411,6 +473,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 		return {
 			nodes: [],
 			memories,
+			threadHeads: [],
 			indexBlock: buildSynthesisIndexBlock([]),
 			sourceCount: memories.length,
 		};
@@ -426,6 +489,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 			return db
 				.prepare(
 					`SELECT id, content, kind, depth, latest_at, project, session_key,
+					        harness,
 					        COALESCE(source_type, kind) AS source_type,
 					        source_ref
 					 FROM session_summaries
@@ -441,6 +505,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 				latest_at: string;
 				project: string | null;
 				session_key: string | null;
+				harness: string | null;
 				source_type: string;
 				source_ref: string | null;
 			}>;
@@ -457,6 +522,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 				latestAt: node.latest_at,
 				project: node.project,
 				sessionKey: node.session_key,
+				harness: node.harness,
 				score: scoreTemporalNode(node.kind, node.source_type, node.latest_at),
 			}))
 			.sort((a, b) => b.score - a.score);
@@ -465,11 +531,13 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 			scored.filter((node) => node.sourceType !== "chunk"),
 			nodeBudget,
 		);
+		const threadHeads = collectThreadHeads(scored, 12);
 		const indexNodes = scored.slice(0, 20);
 
 		return {
 			nodes: promptNodes,
 			memories,
+			threadHeads,
 			indexBlock: buildSynthesisIndexBlock(indexNodes),
 			sourceCount: promptNodes.length + memories.length,
 		};
@@ -480,6 +548,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 		return {
 			nodes: [],
 			memories,
+			threadHeads: [],
 			indexBlock: buildSynthesisIndexBlock([]),
 			sourceCount: memories.length,
 		};
@@ -514,6 +583,32 @@ function buildTranscriptFallbackResponse(
 		memoryCount: lines.length,
 		queryTerms,
 		engine: "transcript-fallback",
+		warnings,
+	};
+}
+
+function buildTemporalFallbackResponse(
+	metadataHeader: string,
+	queryTerms: string,
+	charBudget: number,
+	hits: ReadonlyArray<{
+		readonly id: string;
+		readonly latestAt: string;
+		readonly threadLabel: string;
+		readonly excerpt: string;
+	}>,
+	warnings?: string[],
+): UserPromptSubmitResponse {
+	const rows = hits.map((hit) => ({
+		content: `- [node ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
+	}));
+	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
+	const inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${lines.length} | engine=temporal-fallback]\n${lines.join("\n")}`;
+	return {
+		inject,
+		memoryCount: lines.length,
+		queryTerms,
+		engine: "temporal-fallback",
 		warnings,
 	};
 }
@@ -2273,6 +2368,16 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			topScore < 0.4 ||
 			queryAnchorsMissingFromRecall(vectorQuery, recall.results);
 		if (weakHybrid) {
+			const temporalHits = searchTemporalFallback({
+				query: vectorQuery,
+				agentId,
+				sessionKey: req.sessionKey,
+				project: req.project,
+				limit: 4,
+			});
+			if (temporalHits.length > 0) {
+				return buildTemporalFallbackResponse(metadataHeader, queryTerms, injectBudget, temporalHits, warnings);
+			}
 			const transcriptHits = searchTranscriptFallback({
 				query: vectorQuery,
 				agentId,
@@ -2976,24 +3081,44 @@ export function handleSynthesisRequest(
 		const sessionText = node.sessionKey ? ` session=${node.sessionKey}` : "";
 		return `- id=${node.id} kind=${node.kind} source=${source} depth=${node.depth}${projectText}${sessionText} score=${node.score.toFixed(3)} latest=${node.latestAt}\n  ${node.content}`;
 	});
+	const threadLines = material.threadHeads.map((thread) => {
+		const projectText = thread.project ? ` project=${thread.project}` : "";
+		const sessionText = thread.sessionKey ? ` session=${thread.sessionKey}` : "";
+		return `- key=${thread.key} label=${thread.label} source=${thread.sourceType}${projectText}${sessionText} score=${thread.score.toFixed(3)} latest=${thread.latestAt} node=${thread.nodeId}\n  ${thread.sample}`;
+	});
 
 	const prompt = `You are generating MEMORY.md — the working memory head for an AI agent.
 
-The output must be a two-part markdown document:
+The output must follow a strict three-tier contract:
 
-1. A concise operator-facing working summary
-2. A machine-facing temporal lineage appendix
+1. Tier 1 global head (highest-signal, always injected)
+2. Tier 2 thread heads (scoped rolling summaries)
+3. Tier 3 lineage index (temporal DAG handles for drill-down)
 
-## Operator-facing rules
+Use these top-level headings exactly:
+
+# Working Memory Summary
+## Global Head (Tier 1)
+## Thread Heads (Tier 2)
+## Open Threads
+## Durable Notes & Constraints
+
+## Tier 1 rules
 
 - Focus on active work, not biography
 - Prefer current state over changelog wording
-- Surface active projects, open threads, durable decisions, constraints, relevant people, and technical notes
+- Surface active priorities across people/projects/topics
 - Let stale sections shrink or disappear naturally
-- Do not mention every source item
 - Keep the visible summary concise
 
-## Machine-facing rules
+## Tier 2 rules
+
+- Group by thread lane (person/project/topic where possible)
+- Each lane should include current status, latest decision/context, and next action
+- Prevent thread bleed: keep unrelated lanes separate unless there is explicit relevance
+- Use the provided candidate thread heads as source material
+
+## Tier 3 rules
 
 - After the human-readable summary, append the exact Temporal Index block provided below
 - Do not rewrite the Temporal Index block
@@ -3007,6 +3132,10 @@ ${memoryLines.join("\n")}
 
 ${nodeLines.join("\n")}
 
+## Candidate Thread Heads (Tier 2 seeds)
+
+${threadLines.join("\n")}
+
 ## Exact Temporal Index Block
 
 ${material.indexBlock}
@@ -3015,6 +3144,7 @@ Instructions:
 - Write clean markdown
 - Keep the human-facing half under roughly ${Math.max(800, Math.floor(maxTokens * 0.7))} tokens
 - Do not include a generated timestamp
+- Do not output JSON
 - Output the full MEMORY.md content`;
 
 	return {

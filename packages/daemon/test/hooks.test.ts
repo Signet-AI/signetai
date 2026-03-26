@@ -994,6 +994,63 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).toContain("sess-olde");
 	});
 
+	test.serial("uses temporal fallback before transcript fallback when weak hybrid misses anchors", async () => {
+		createMemoryDb([
+			{
+				content: "Locate deployment logs from the latest rollout runbook.",
+				importance: 0.95,
+			},
+		]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, project, depth, kind, content, token_count,
+				earliest_at, latest_at, session_key, harness,
+				agent_id, source_type, source_ref, meta_json, created_at
+			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"temporal-node-1",
+			"proj",
+			"# Session\n\nultra-needle-transcript-only-5529931 is tracked in temporal summaries.",
+			24,
+			"2026-03-25T09:59:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+			"sess-temporal",
+			"test",
+			"default",
+			"summary",
+			"sess-temporal",
+			JSON.stringify({ source: "summary-worker" }),
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"sess-anchor",
+			"User: marker lookup\nAssistant: ultra-needle-transcript-only-5529931 is only in transcript history.",
+			"test",
+			"proj",
+			"default",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "proj",
+			sessionKey: "sess-current",
+			userPrompt: "locate ultra-needle-transcript-only-5529931",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("temporal-node-1");
+		expect(result.inject).toContain("ultra-needle-transcript-only-5529931");
+	});
+
 	test.serial("falls back to transcript excerpts when hybrid top hit misses query anchors", async () => {
 		createMemoryDb([
 			{
@@ -1345,6 +1402,8 @@ describe("handleSynthesisRequest", () => {
 		expect(result.model).toBe("synthesis");
 		expect(result.prompt).toContain("MEMORY.md");
 		expect(result.prompt).toContain("Temporal DAG artifacts");
+		expect(result.prompt).toContain("Thread Heads (Tier 2)");
+		expect(result.prompt).toContain("Candidate Thread Heads (Tier 2 seeds)");
 		expect(result.prompt).toContain("User likes Bun");
 		expect(result.indexBlock).toContain("node-1");
 		expect(result.fileCount).toBe(2);
@@ -1356,6 +1415,7 @@ describe("handleSynthesisRequest", () => {
 		const result = handleSynthesisRequest({ trigger: "scheduled" });
 
 		expect(result.prompt).toContain("generating MEMORY.md");
+		expect(result.prompt).toContain("strict three-tier contract");
 		expect(result.prompt).toContain("Test session summary content");
 		expect(result.prompt).toContain("Exact Temporal Index Block");
 	});
