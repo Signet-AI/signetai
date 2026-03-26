@@ -148,8 +148,9 @@ scorer health metrics:
 - Drift detection status (flags when model performance has degraded)
 - Training pair count (total comparison pairs accumulated)
 
-The predictor is disabled by default; the tab shows a "not enabled"
-placeholder until `predictor.enabled: true` is set in `agent.yaml`.
+The predictor follows the current runtime config. If
+`predictor.enabled` is set to `false`, the tab shows a "not enabled"
+placeholder instead of live scorer metrics.
 
 
 **Pipeline — Active Sessions**

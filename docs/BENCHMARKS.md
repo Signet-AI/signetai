@@ -127,10 +127,12 @@ smaller 8-question sample. Larger-scale validation pending.
 
 Metrics not directly comparable across systems (different benchmarks,
 k-values, dataset splits, evaluation methodology). Signet's 0 inference
-calls at retrieval time is a key differentiator: all retrieval is
-algorithmic (graph traversal + FTS5 + vector + dampening), with LLM
-inference only at extraction time (write path) and answering time
-(consumer's responsibility).
+calls at retrieval time is a useful property of the current stack: the
+candidate-building path is algorithmic (graph traversal + FTS5 + vector
++ dampening), with LLM inference only at extraction time (write path)
+and answering time (consumer's responsibility). Long-term, this
+candidate substrate is meant to support learned context selection rather
+than stand as the final story by itself.
 
 ### Failure Analysis (run-full-stack-8)
 
@@ -157,9 +159,10 @@ cause: answering LLM error, not retrieval failure.
    "next month") to absolute dates during extraction eliminates an
    entire failure category.
 
-5. **Zero-inference retrieval is viable.** 100% Hit@10 with purely
-   algorithmic retrieval (no LLM calls at search time) validates the
-   multi-signal architecture.
+5. **Zero-inference candidate generation is viable.** 100% Hit@10 with
+   purely algorithmic retrieval (no LLM calls at search time) validates
+   the current multi-signal substrate and gives the predictor a bounded,
+   useful pool to learn over.
 
 ### Complete LoCoMo Leaderboard (March 2026)
 
@@ -238,7 +241,8 @@ for search due to API-based embedding vs local Ollama inference.
 
 **What's working:** Retrieval finds relevant results 76% of the time.
 Multi-hop and temporal questions perform reasonably (38-57%). The
-knowledge graph and prospective indexing are doing their job.
+current substrate is producing useful candidates often enough to support
+both answering and future learned reranking.
 
 **What's not:** Single-hop accuracy (16-26%) is the weakest category.
 These are direct fact lookups where the answer exists in a single

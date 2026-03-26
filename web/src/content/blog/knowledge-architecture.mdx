@@ -7,9 +7,9 @@ tags: ["architecture", "memory", "knowledge-graph", "technical"]
 image: /blog/knowledge-architecture.png
 ---
 
-The difference between a memory system and an intelligent one is structure.
+Structure matters, but structure alone is not the breakthrough.
 
-Any system can store facts. The question is whether those facts are organized in a way that makes them *useful* — findable at the right moment, connected to the right things, and trimmed of everything that doesn't serve the goal.
+Any system can store facts. Plenty of systems can organize them into tables, graphs, or embeddings. The harder question is whether that structure helps the agent surface the *right* context at the right moment, and keep unhelpful context from lingering forever.
 
 Signet's knowledge architecture is built around one question:
 
@@ -92,7 +92,7 @@ entity: ooIDE
         └── dependency → nicholai [entity]
 ```
 
-The dependency on `nicholai` is not a semantic link inferred from word similarity. It is an explicit structural edge. When reasoning about ooIDE, the agent follows that edge and nicholai's relevant aspects become available. This is how the graph retrieves without searching — it walks.
+The dependency on `nicholai` is not a semantic link inferred from word similarity. It is an explicit structural edge. When reasoning about ooIDE, the agent can follow that edge and make nicholai's relevant aspects available. This is one of the ways the graph helps shape a bounded candidate pool before flatter retrieval layers or learned ranking take over.
 
 ## Tasks Are Not Entities
 
@@ -104,11 +104,9 @@ But tasks are built to expire. They complete, they get cancelled, they age out. 
 
 Conflating tasks and entities would mean completed work accumulating importance scores forever, cluttering the graph with finished things. Entities grow. Tasks close.
 
-The goal of this architecture is not to build the most complete knowledge graph. It is to build the most *useful* one.
+The goal of this architecture is not to build the most complete knowledge graph. It is to build the most *useful* substrate for context selection.
 
-A database full of atomic facts, organized under entities, structured by aspects, connected through explicit dependencies, with constraints that always surface — that database needs almost no search to be useful. The structure does the work. The agent walks to what it needs.
-
-Everything else — the predictive scorer, the hybrid search, the reranker — is enhancement. They make a good system better. But the foundation is the structure itself. For technical implementation details, see the [[docs/knowledge-architecture|knowledge architecture docs]].
+A database full of atomic facts, organized under entities, structured by aspects, connected through explicit dependencies, with constraints that always surface, gives the system a much better starting point than a flat pile of transcripts. The structure does real work. But it is still substrate. The point is not "we have a graph." The point is that the graph makes it easier to build a bounded, coherent set of candidates that the system can rank, trim, and learn over time. For technical implementation details, see the [[docs/knowledge-architecture|knowledge architecture docs]].
 
 ## Constraint Confidence
 
@@ -122,13 +120,13 @@ In the [[dashboard|constellation view]], this manifests as node brightness. Enti
 
 ## Context Is Bounded by Design
 
-One of the structural advantages of this architecture is that context loading is deterministic.
+One of the structural advantages of this architecture is that context loading can start from something deterministic.
 
-When the agent identifies which entities are active in a session, it loads their graphs: aspects, attributes, constraints, and first-degree dependencies. The cost is known before it starts. The result is bounded. There are no threshold knobs to tune, no candidate pools to score — just a walk through a finite, pre-organized structure.
+When the agent identifies which entities are active in a session, it can load their graphs: aspects, attributes, constraints, and first-degree dependencies. The cost is known before it starts. The result is bounded. That gives the system a coherent starting pool before it consults flatter retrieval layers or learned ranking.
 
-This is the practical case for the entity graph over pure embedding search. Embedding search scales with database size. It's probabilistic. It can miss structurally critical facts that don't happen to *sound* similar to the query. The graph walk finds everything that is structurally required, deterministically, every time.
+This is the practical case for the entity graph over pure embedding search. Embedding search scales with database size. It's probabilistic. It can miss structurally critical facts that don't happen to *sound* similar to the query. The graph walk can surface what is structurally required before semantic similarity is asked to do all the work by itself.
 
-Embedding search still has a role — it's how the agent discovers things the graph hasn't connected yet. But it's the fallback, not the primary path. The graph walk loads the known context. Search fills the gaps.
+Embedding search still has a role — it's how the agent discovers things the graph hasn't connected yet. The graph walk loads known structure. Search fills the gaps. Learned ranking is what decides which of those candidates should actually earn scarce context window space.
 
 ## Constraints Evolve Without Your Help
 
@@ -141,15 +139,15 @@ The user doesn't manage this. There are no review prompts, no "this constraint h
 This is the broader principle: the memory system is set and forget. **The user's job is to work. The system's job is to remember, organize, and get out of the way.**
 
 
-## The Graph That Walks Itself
+## The Graph Shapes the Candidate Pool
 
-We call this concept [[docs/desire-paths|desire paths]] — like the worn trails in a park that reveal where people actually walk, the knowledge graph learns which traversals are productive and reinforces them over time. The fundamental shift this architecture makes is from *search* to *traversal*.
+We call this concept [[docs/desire-paths|desire paths]] — like the worn trails in a park that reveal where people actually walk, the knowledge graph learns which traversals are productive and reinforces them over time. But the real shift is not from *search* to *traversal*. It is from naive retrieval to context selection.
 
 Current memory systems find relevant knowledge by asking: what is semantically similar to this query? They embed the query, embed the memories, compute cosine distances, retrieve the closest matches. This works. It's also expensive, probabilistic, and structurally blind — it finds things that *sound related*, not things that *are structurally required*.
 
-In Signet's knowledge architecture, session-start can ask a different question: what entity is this session about? Walk its aspects. Pull its attributes and constraints. Follow its dependencies. You now have the minimum structured context needed to act — without an embedding call, without a vector search, without scoring thousands of candidates.
+In Signet's knowledge architecture, session-start can ask a different question: what entity is this session about? Walk its aspects. Pull its attributes and constraints. Follow its dependencies. You now have a bounded, structured context candidate set before an embedding call, before a vector search has to shoulder the whole problem, before thousands of unrelated memories get considered.
 
-Signet's predictive scorer runs on top of this — a neural network trained on your interaction patterns that already holds the highest relevance accuracy of any retrieval method in the system. It learns which aspects matter most for which kinds of sessions, which attributes to prioritize, which dependencies are worth following. It anticipates what context will be needed before the agent asks, before a prompt is submitted. It operates on a candidate pool that's already structurally coherent — not a flat bag of facts.
+Signet's predictive scorer runs on top of this. The structure gives it something coherent to learn over: which aspects matter most for which kinds of sessions, which attributes to prioritize, which dependencies are worth following, and which retrieved context keeps showing up without actually helping. The goal is for the system to learn from regret, not just reuse, so stale or distracting context gradually loses influence instead of haunting the window forever.
 
 The floor is better. The ceiling is higher. For the deterministic guarantees that protect knowledge during distillation, see [[docs/lcm-patterns|Lossless Context Patterns]].
 

@@ -22,6 +22,14 @@ model out entirely and the agent stays the same entity.
 
 The simplest analogy: Signet is a home directory for AI agents.
 
+But that still understates the real problem.
+
+Persistent memory is not just a storage problem. It is a context
+selection problem. Given everything an agent knows, what should actually
+enter the context window right now to help, not distract?
+
+That is the job Signet is built around.
+
 
 Why This Matters
 ----------------
@@ -65,76 +73,94 @@ and operating systems. SQL sits between applications and databases.
 
 Signet sits between agents and models.
 
+The Real Problem
+----------------
 
-How Knowledge Works
--------------------
+Most memory systems stop at storage and retrieval. They persist
+transcripts, embeddings, or structured facts, then rely on explicit
+search or heuristic ranking to recover relevant context later.
 
-Most AI memory systems store conversations — they save what was said and
-search it later. That works, but it gets noisier over time. More data
-doesn't mean better understanding.
+That works, up to a point. But agents usually do not fail because they
+cannot store enough. They fail because the wrong things surface at the
+wrong time, or useful context never surfaces at all.
 
-Signet takes a different approach. Instead of storing conversations, it
-extracts knowledge from them. The extraction pipeline runs in the
-background, continuously refining raw session data into structured
-understanding:
+The hard problem is not merely how to store knowledge, nor even how to
+retrieve it. It is how to ensure that the context surfaced to an agent
+is consistently the most helpful possible at the moment of use.
+
+
+How Signet Approaches It
+------------------------
+
+Signet approaches this as a predictive context-selection problem.
+
+It starts by turning messy session output into more durable substrate.
+The extraction pipeline runs in the background, continuously distilling
+raw session data into structured memory:
 
 - **Sparse facts** — raw observations, unprocessed, high volume
 - **Observational facts** — extracted and validated, but not yet connected
 - **Atomic facts** — the target form: standalone, named, useful in isolation
 - **Procedural memory** — knowledge about how to do things (workflows, rules)
 
-Over time, the database gets *smaller and smarter*, not larger and
-noisier. A heavy week of sessions might produce thousands of memories.
-Leave the system alone and the pipeline prunes, deduplicates, and
-organizes — what remains is dense, connected, and useful.
+Over time, the goal is for the database to get *smaller and smarter*,
+not larger and noisier. Distillation, deduplication, and structural
+organization all exist to improve the quality of candidate context, not
+just to make storage prettier.
 
 This is the difference between "here's everything that was said" and
-"here's what the system actually learned."
+"here's what the system might actually need later."
 
 
-Entities and the Knowledge Graph
---------------------------------
+Structured Memory Is Substrate
+------------------------------
 
-Everything in Signet's knowledge base is organized around entities —
-people, projects, tools, concepts. An entity is anything that can be
-identified and that accumulates knowledge over time.
+Signet uses structured memory because prediction needs structure.
 
-Each entity has aspects (dimensions of what matters about it), attributes
-(specific facts organized under those aspects), and constraints (rules
-that always surface, no matter what). Entities connect to each other
-through explicit dependencies, forming a graph.
+Everything in Signet's knowledge base is organized around entities,
+aspects, attributes, constraints, and dependencies. That graph matters,
+but it is not the product. It is storage and retrieval substrate.
 
-When a session starts, the system doesn't search through thousands of
-memories looking for what's relevant. It identifies which entities matter
-for this session and walks the graph — loading aspects, attributes,
-constraints, and following dependencies. The result is a bounded,
-structured context that's deterministic and fast.
+The graph makes retrieval more coherent. Instead of treating memory as a
+flat pile of fragments, Signet can walk from a project to its
+architecture, constraints, people, and tools. Embedding search and
+keyword search still matter, but they now operate alongside explicit
+structure.
 
-This is the shift from search to traversal. Embedding search still
-exists for discovering things the graph hasn't connected yet, but the
-graph walk is the primary path. The floor is higher because structure
-does the work.
+That makes the candidate pool better. It does not, by itself, solve the
+hard problem.
 
 
 The Predictive Scorer
 ---------------------
 
-Today, Signet uses a decay formula and keyword matching to decide which
-memories to surface. That's the baseline.
+Today, Signet still has a baseline retrieval path built from heuristics,
+hybrid search, traversal, and bounded ranking rules. That substrate
+works, but the endgame is not heuristic retrieval with a nicer graph.
 
-What we're building toward is a predictive model — a small neural network
-unique to each user, trained on their own interaction patterns. It learns
-which memories actually helped in past sessions, what time of day certain
-projects matter, which aspects to prioritize, and which memories just
-took up space.
+What Signet is building toward is a predictive model — a per-user
+relevance system that learns which memories, constraints, entities, and
+paths were actually useful in real sessions.
+
+The key idea is simple: use the agent in the loop as the source of
+training signal. Inject context, observe what actually helped, compare
+that against the baseline, and let the model earn influence over time.
+
+That means learning from regret, not just reuse. If injected context
+does not improve the outcome, that should count as negative evidence.
+Stale or repeatedly unhelpful context should decay, be downweighted, or
+lose influence over time.
+
+That makes Signet more than a memory store. It becomes a system for
+learning what context is useful.
 
 The model runs locally. No cloud, no shared weights. It earns its
 influence by proving it outperforms the baseline in controlled
 comparisons. If it doesn't help, it gets rolled back automatically.
 
-This is what transforms Signet from a memory system into something closer
-to a mind — a system that doesn't just store what happened, but learns
-to predict what you'll need next.
+This is what transforms Signet from a persistence layer into something
+closer to persistent cognition: not just storing what happened, but
+learning what should surface next.
 
 
 Skills
@@ -182,15 +208,16 @@ not an afterthought.
 Identity and Trust
 ------------------
 
-Signet is building toward a decentralized identity layer for agents.
-Through EIP-8004 (Trustless Agents), agents can be discovered, verified,
-and interacted with using blockchain-based identity — enabling open agent
-economies where agents hire other agents and humans for real services.
+Today, Signet's identity story is local-first and practical: files,
+config, scopes, and portable agent state you control. Longer-term,
+Signet is exploring stronger cryptographic identity and trust layers for
+cross-machine and cross-network agent systems.
 
-This isn't about cryptocurrency. It's about provable identity. When an
-agent acts on your behalf online, there needs to be a trust layer that
-verifies who it is and what it's authorized to do. That trust layer is
-built into Signet's architecture.
+That future direction is about provable identity, not chain maximalism.
+When an agent acts on your behalf online, there eventually needs to be a
+portable trust layer that verifies who it is and what it's authorized to
+do. Signet is being built so that layer can exist without owning the
+agent itself.
 
 
 Local-First, Open Standard
@@ -213,9 +240,10 @@ Where This Is Going
 -------------------
 
 The vision is an agent that becomes genuinely more useful over time.
-Not because it stores more data, but because it understands more deeply.
-An agent that knows your projects, your preferences, your decision
-patterns — and that gets sharper the longer you work together.
+Not because it stores more data, but because it gets better at
+selecting the right context. An agent that knows your projects, your
+preferences, your decision patterns — and that gets sharper the longer
+you work together.
 
 An agent that moves between tools and models without losing itself. That
 maintains coherence across concurrent sessions. That accumulates real

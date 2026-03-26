@@ -13,6 +13,11 @@ This document covers the full system — from package boundaries through
 database schema — with enough detail to reason about correctness,
 performance, and failure modes.
 
+This is a substrate document. It explains how Signet stores, structures,
+and routes memory today. It should not be read as a claim that the graph
+or retrieval stack is the product by itself. Those layers exist to
+support bounded, high-quality context selection.
+
 ---
 
 Package Overview
@@ -96,7 +101,8 @@ Harness hook fires (session-start / user-prompt / session-end)
     → memory_history records every proposal (shadow or applied)
     → /api/memory/recall runs traversal-primary search:
       graph traversal produces the base candidate pool,
-      flat FTS5/vector search fills remaining slots
+      flat FTS5/vector search fills remaining slots,
+      predictor path can rerank if available
 ```
 
 The database is the source of truth. The daemon's file watcher is
@@ -270,8 +276,8 @@ mention counts incremented. Mention links are inserted into
 **Traversal-primary search** (`memory-search.ts`,
 `graph-traversal.ts`): when `traversal.primary` is enabled (the
 default when both `graph.enabled` and `traversal.enabled` are true),
-graph traversal is the PRIMARY retrieval path. It resolves focal
-entities from query tokens, traverses the knowledge graph through
+graph traversal is the primary candidate-building path. It resolves
+focal entities from query tokens, traverses the knowledge graph through
 aspects, attributes, and dependency hops, and produces a scored
 candidate pool blended with cosine similarity (70% cosine, 30%
 structural importance). Flat FTS5/vector search fills remaining
@@ -280,7 +286,9 @@ candidates so hub entities cannot exclude keyword/vector matches
 entirely. After merging, the combined pool is score-sorted. When
 traversal is disabled or the graph has no matching entities, the
 system falls back to the legacy path: flat BM25 + vector search
-with optional graph boost (`getGraphBoostIds`).
+with optional graph boost (`getGraphBoostIds`). This improves the
+quality of the pool the rest of the system ranks; it is not, by itself,
+the whole Signet thesis.
 
 **Post-fusion dampening** (`dampening.ts`): three corrections run
 after fusion scoring but before the final sort/return. (1) *Gravity*

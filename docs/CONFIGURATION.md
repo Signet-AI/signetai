@@ -150,13 +150,14 @@ Core agent identity metadata.
 
 ### owner
 
-Optional owner identification. Reserved for future ERC-8128 verification.
+Optional owner identification. Reserved for future cryptographic identity
+verification.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `address` | string | Ethereum wallet address |
+| `address` | string | Cryptographic identity address or external identity ID, reserved for future use |
 | `localId` | string | Local user identifier |
-| `ens` | string | ENS domain name |
+| `ens` | string | Optional ENS or human-friendly identity alias |
 | `name` | string | Human-readable name |
 
 
@@ -578,8 +579,8 @@ auth:
 
 In `"local"` mode the token secret is generated automatically and stored
 at `$SIGNET_WORKSPACE/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
-wallet-based ERC-8128 signatures are used alongside or instead of local
-tokens.
+the daemon validates HMAC-signed bearer tokens with role and scope
+claims.
 
 
 ### Rate limits

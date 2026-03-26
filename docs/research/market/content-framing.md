@@ -133,7 +133,7 @@ Strong existing positioning:
 **Secondary: "Why Your OpenClaw Agent Needs a Persistent Cognition Layer"**
 - Format: Technical architecture with stack diagrams
 - Length: 2,000-2,500 words
-- Structure: Problem (memory is broken) — Why (architectural explanation) — Architecture (stack diagram) — How it works (extraction, knowledge graphs, decay) — What this enables (portability, model independence)
+- Structure: Problem (memory is distracting and brittle) — Why (context selection is the real problem) — Architecture (stack diagram) — How it works (distillation, candidate shaping, predictive scoring, negative evidence) — What this enables (portability, model independence)
 - Tone: Authoritative, opinionated, technical, not salesy
 
 **Tertiary: "How to Give Your OpenClaw Agent Persistent Memory in 5 Minutes"**
@@ -161,11 +161,13 @@ The "home directory" analogy is the strongest asset. Every developer understands
 
 2. **Platform-agnostic by design** — "Same agent across Claude Code, OpenClaw, and OpenCode." This is the moat.
 
-3. **Knowledge, not conversations** — "Gets smaller and smarter, not larger and noisier." Resonates with developers who've experienced context pollution.
+3. **Context selection, not just storage** — "The problem is not only remembering more. It's surfacing the right thing at the right moment." This is the core thesis.
 
-4. **Local-first, user-owned** — "Your agent is yours." Contrasts with BetterClaw ($29/mo hosted) and ChatGPT memory (OpenAI-locked). Resonates with open-source ethos.
+4. **Knowledge, not conversations** — "Gets smaller and smarter, not larger and noisier." Resonates with developers who've experienced context pollution.
 
-5. **The layer between** — TCP/IP, POSIX, SQL. Layers between systems become foundational. Signet is the layer between agents and models.
+5. **Local-first, user-owned** — "Your agent is yours." Contrasts with BetterClaw ($29/mo hosted) and ChatGPT memory (OpenAI-locked). Resonates with open-source ethos.
+
+6. **The layer between** — TCP/IP, POSIX, SQL. Layers between systems become foundational. Signet is the layer between agents and models.
 
 ### Distribution Channels and Timing
 
@@ -197,8 +199,12 @@ The "home directory" analogy is the strongest asset. Every developer understands
 
 4. **Competing on features with memory APIs.** Signet is not a better Mem0. It is a different category. Feature comparison matrices lose the architectural framing.
 
-5. **Corporate voice.** Keep the technical, opinionated, slightly irreverent blog voice. Developers on HN/Reddit smell promotional content instantly.
+5. **Accidentally claiming novelty in the graph layer.** Knowledge graphs,
+graph traversal, and structured memory are substrate, not the headline.
+Lead with learned context selection.
 
-6. **Neglecting the practical.** Architecture posts establish credibility but integration guides drive adoption. Ratio: 1 architecture piece for every 2 practical guides.
+6. **Corporate voice.** Keep the technical, opinionated, slightly irreverent blog voice. Developers on HN/Reddit smell promotional content instantly.
 
-7. **Timing lag.** GTC keynote happened within 24 hours. Ecosystem analysis window is 1-2 weeks maximum. Publish quickly, even if imperfect.
+7. **Neglecting the practical.** Architecture posts establish credibility but integration guides drive adoption. Ratio: 1 architecture piece for every 2 practical guides.
+
+8. **Timing lag.** GTC keynote happened within 24 hours. Ecosystem analysis window is 1-2 weeks maximum. Publish quickly, even if imperfect.

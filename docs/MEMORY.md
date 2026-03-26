@@ -35,7 +35,9 @@ happens without touching the original memory's content.
 
 Search (`POST /api/memory/recall`) runs hybrid BM25 + vector search,
 optionally augmented by the knowledge graph, and returns a scored,
-ranked list.
+ranked list. This is the current retrieval substrate. Its job is to
+produce a useful candidate set for context construction, not merely to
+act as a better search engine in isolation.
 
 
 Pipeline V2 Processing
@@ -125,7 +127,9 @@ Hybrid Search
 -------------
 
 Search (`packages/core/src/search.ts`) blends two independent signals:
-BM25 keyword relevance and cosine vector similarity.
+BM25 keyword relevance and cosine vector similarity. These signals are
+useful because they help build a bounded candidate pool for later
+ranking and context selection.
 
 ### BM25 Keyword Search
 
@@ -193,7 +197,9 @@ graph expands one hop in both directions through the `relations` table
 Memories in this set receive a configurable boost to their combined
 score. The graph lookup runs synchronously with a deadline to prevent
 slow queries from blocking recall. On timeout or error, the boost
-set is empty and search degrades gracefully.
+set is empty and search degrades gracefully. In other words, graph
+structure improves candidate quality when available but does not become
+a hard dependency for recall.
 
 ### Optional Reranking
 

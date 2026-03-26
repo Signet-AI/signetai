@@ -8,11 +8,18 @@ section: "Core Concepts"
 Knowledge Architecture
 ======================
 
-The difference between a [[memory]] system and an intelligent one is structure.
-Any system can store facts. The question is whether those facts are
-organized in a way that makes them *useful* — findable at the right moment,
-connected to the right things, and trimmed of everything that doesn't
-serve the goal.
+This document describes Signet's structural memory substrate.
+
+That distinction matters. Signet is not novel because it has a knowledge
+graph, structured facts, or graph traversal. Those are implementation
+primitives. They exist here to support the real job: building a bounded,
+useful candidate pool for context selection.
+
+The difference between a [[memory]] system and an intelligent one is not
+just that it stores structure. It is that the structure is organized in
+a way that makes later context selection more useful — findable at the
+right moment, connected to the right things, and trimmed of everything
+that does not serve the goal.
 
 Signet's knowledge architecture is built around one question:
 
@@ -154,8 +161,9 @@ entity: ooIDE
 
 The dependency on `nicholai` is not a semantic link inferred from word
 similarity. It is an explicit structural edge. When reasoning about ooIDE,
-the agent follows that edge and nicholai's relevant aspects become available.
-This is how the graph retrieves without searching — it walks.
+the agent can follow that edge and make nicholai's relevant aspects
+available. This is one of the ways the graph helps shape a bounded candidate
+pool before flatter retrieval layers or learned ranking take over.
 
 
 Tasks
@@ -177,10 +185,11 @@ tasks accumulating importance scores forever, cluttering the graph with
 finished work. Entities grow. Tasks close.
 
 
-The Graph That Walks Itself
-----------------------------
+Traversal as Candidate Shaping
+------------------------------
 
-The fundamental shift this architecture makes is from *search* to *traversal*.
+The fundamental retrieval shift in this architecture is from *flat
+search only* to *structure-aware candidate shaping*.
 
 Current memory systems find relevant knowledge by asking: what is
 semantically similar to this query? They embed the query, embed the
@@ -191,9 +200,9 @@ required*.
 
 In Signet's knowledge architecture, session-start can ask a different
 question: what entity is this session about? Walk its aspects. Pull its
-attributes and constraints. Follow its dependencies. You now have the
-minimum structured context needed to act — without an embedding call,
-without a vector search, without scoring 4,000 candidates.
+attributes and constraints. Follow its dependencies. You now have a
+bounded, structurally coherent candidate pool — without scoring 4,000
+flat memories first.
 
 The predictive scorer still runs on top of this. It learns which aspects
 matter most for which kinds of sessions, which attributes to prioritize,
@@ -201,7 +210,14 @@ which dependencies are worth following. It adds the learned intelligence
 layer. But it operates on a candidate pool that's already structurally
 coherent — not a flat bag of facts.
 
-The floor is better. The ceiling is higher.
+This is also where negative evidence matters. The system should not only
+reinforce what gets reused. It should learn from regret: if injected
+context repeatedly fails to help, its influence should decay rather than
+become permanent residue in the window.
+
+That is the value of the graph here. The floor is better because the
+candidate pool is cleaner. The ceiling is higher because the predictor
+has better structure to learn over.
 
 
 Constraint Confidence
@@ -242,8 +258,8 @@ score — just a walk through a finite, pre-organized structure.
 This is the practical case for the entity graph over pure embedding
 search. Embedding search scales with database size. It's probabilistic.
 It can miss structurally critical facts that don't happen to *sound*
-similar to the query. The graph walk finds everything that is
-structurally required, deterministically, every time.
+similar to the query. The graph walk helps recover what is structurally
+required before learned ranking and flat retrieval finish the job.
 
 Embedding search still has a role — it's how the agent discovers things
 the graph hasn't connected yet. But it's the fallback, not the primary
