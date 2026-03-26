@@ -268,6 +268,24 @@ function createMemoryDb(
 	`);
 
 	db.exec(`
+		CREATE TABLE IF NOT EXISTS memory_thread_heads (
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			thread_key TEXT NOT NULL,
+			label TEXT NOT NULL,
+			project TEXT,
+			session_key TEXT,
+			source_type TEXT NOT NULL DEFAULT 'summary',
+			source_ref TEXT,
+			harness TEXT,
+			node_id TEXT NOT NULL,
+			latest_at TEXT NOT NULL,
+			sample TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (agent_id, thread_key)
+		)
+	`);
+
+	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_summary_children (
 			parent_id TEXT NOT NULL,
 			child_id TEXT NOT NULL,
@@ -994,6 +1012,322 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).toContain("sess-olde");
 	});
 
+	test.serial("uses temporal fallback before transcript fallback when weak hybrid misses anchors", async () => {
+		createMemoryDb([
+			{
+				content: "Locate deployment logs from the latest rollout runbook.",
+				importance: 0.95,
+			},
+		]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, project, depth, kind, content, token_count,
+				earliest_at, latest_at, session_key, harness,
+				agent_id, source_type, source_ref, meta_json, created_at
+			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"temporal-node-1",
+			"proj",
+			"# Session\n\nultra-needle-transcript-only-5529931 is tracked in temporal summaries.",
+			24,
+			"2026-03-25T09:59:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+			"sess-temporal",
+			"test",
+			"default",
+			"summary",
+			"sess-temporal",
+			JSON.stringify({ source: "summary-worker" }),
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"sess-anchor",
+			"User: marker lookup\nAssistant: ultra-needle-transcript-only-5529931 is only in transcript history.",
+			"test",
+			"proj",
+			"default",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "proj",
+			sessionKey: "sess-current",
+			userPrompt: "locate ultra-needle-transcript-only-5529931",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("temporal-node-1");
+		expect(result.inject).toContain("ultra-needle-transcript-only-5529931");
+	});
+
+	test.serial("uses persisted thread heads for temporal fallback and filters cross-project bleed", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj-good",
+			"project:proj-good",
+			"/tmp/proj-good",
+			"sess-good",
+			"summary",
+			"sess-good",
+			"test",
+			"node-good",
+			"2026-03-25T10:05:00.000Z",
+			"deploy rollback checklist and execution notes",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj-bleed",
+			"project:proj-bleed",
+			"/tmp/proj-bleed",
+			"sess-bleed",
+			"summary",
+			"sess-bleed",
+			"test",
+			"node-bleed",
+			"2026-03-25T10:06:00.000Z",
+			"deploy notes only",
+			"2026-03-25T10:06:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "/tmp/proj-good",
+			sessionKey: "sess-current",
+			userPrompt: "deploy rollback",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("node-good");
+		expect(result.inject).not.toContain("node-bleed");
+	});
+
+	test.serial("keeps single-anchor temporal fallback project-scoped", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj-good|session:sess-good|harness:test",
+			"project:proj-good#session:sess-good#harness:test",
+			"/tmp/proj-good",
+			"sess-good",
+			"summary",
+			"sess-good",
+			"test",
+			"node-good",
+			"2026-03-25T10:05:00.000Z",
+			"ticket-7711 root cause and fix details",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj-bleed|session:sess-bleed|harness:test",
+			"project:proj-bleed#session:sess-bleed#harness:test",
+			"/tmp/proj-bleed",
+			"sess-bleed",
+			"summary",
+			"sess-bleed",
+			"test",
+			"node-bleed",
+			"2026-03-25T10:06:00.000Z",
+			"ticket-7711 appears in another project context",
+			"2026-03-25T10:06:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "/tmp/proj-good",
+			sessionKey: "sess-current",
+			userPrompt: "ticket-7711",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("node-good");
+		expect(result.inject).not.toContain("node-bleed");
+	});
+
+	test.serial("escapes underscore anchors in temporal fallback matching", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj|session:sess-exact|harness:test",
+			"project:proj#session:sess-exact#harness:test",
+			"/tmp/proj",
+			"sess-exact",
+			"summary",
+			"sess-exact",
+			"test",
+			"node-exact",
+			"2026-03-25T10:05:00.000Z",
+			"ticket_7711 is tracked exactly in this lane",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj|session:sess-wild|harness:test",
+			"project:proj#session:sess-wild#harness:test",
+			"/tmp/proj",
+			"sess-wild",
+			"summary",
+			"sess-wild",
+			"test",
+			"node-wild",
+			"2026-03-25T10:06:00.000Z",
+			"ticketA7711 should stay isolated from the underscored ticket code",
+			"2026-03-25T10:06:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "/tmp/proj",
+			sessionKey: "sess-current",
+			userPrompt: "ticket_7711",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("node-exact");
+		expect(result.inject).not.toContain("node-wild");
+	});
+
+	test.serial("does not collapse distinct thread keys that share the same label", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/work/foo|session:sess-a",
+			"project:foo",
+			"/work/foo",
+			"sess-a",
+			"summary",
+			null,
+			"test",
+			"node-foo-a",
+			"2026-03-25T10:05:00.000Z",
+			"deploy rollout checklist for foo lane a",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/foo|session:sess-b",
+			"project:foo",
+			"/tmp/foo",
+			"sess-b",
+			"summary",
+			null,
+			"test",
+			"node-foo-b",
+			"2026-03-25T10:06:00.000Z",
+			"deploy rollout checklist for foo lane b",
+			"2026-03-25T10:06:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			sessionKey: "sess-current",
+			userPrompt: "deploy rollout checklist",
+		});
+
+		expect(result.memoryCount).toBe(2);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("node-foo-a");
+		expect(result.inject).toContain("node-foo-b");
+	});
+
+	test.serial("falls back to transcript excerpts when hybrid top hit misses query anchors", async () => {
+		createMemoryDb([
+			{
+				content: "Locate deployment logs from the latest rollout runbook.",
+				importance: 0.95,
+			},
+		]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"sess-anchor",
+			"User: marker lookup\nAssistant: ultra-needle-transcript-only-5529931 is only in transcript history.",
+			"test",
+			"proj",
+			"default",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "proj",
+			sessionKey: "sess-current",
+			userPrompt: "locate ultra-needle-transcript-only-5529931",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("transcript-fallback");
+		expect(result.inject).toContain("ultra-needle-transcript-only-5529931");
+		expect(result.inject).toContain("sess-anch");
+	});
+
 	test.serial("applies character budget", async () => {
 		// Create many memories that would exceed the 500 char budget
 		const mems = Array.from({ length: 20 }, (_, i) => ({
@@ -1309,9 +1643,96 @@ describe("handleSynthesisRequest", () => {
 		expect(result.model).toBe("synthesis");
 		expect(result.prompt).toContain("MEMORY.md");
 		expect(result.prompt).toContain("Temporal DAG artifacts");
+		expect(result.prompt).toContain("Thread Heads (Tier 2)");
+		expect(result.prompt).toContain("Candidate Thread Heads (Tier 2 seeds)");
 		expect(result.prompt).toContain("User likes Bun");
 		expect(result.indexBlock).toContain("node-1");
 		expect(result.fileCount).toBe(2);
+	});
+
+	test.serial("includes persisted thread head seeds in synthesis prompt", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/rpg",
+			"project:rpg",
+			"/tmp/rpg",
+			"sess-rpg",
+			"summary",
+			"sess-rpg",
+			"test",
+			"node-rpg",
+			"2026-03-25T11:00:00.000Z",
+			"William RPG planning thread: combat loop and quest pacing.",
+			"2026-03-25T11:00:00.000Z",
+		);
+		db.close();
+
+		const result = handleSynthesisRequest({ trigger: "manual" });
+
+		expect(result.prompt).toContain("Candidate Thread Heads (Tier 2 seeds)");
+		expect(result.prompt).toContain("project:rpg");
+		expect(result.prompt).toContain("node-rpg");
+		expect(result.prompt).toContain("William RPG planning thread");
+	});
+
+	test.serial("merges persisted and freshly derived thread heads in synthesis prompt", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/rpg|session:sess-rpg|harness:test",
+			"project:rpg#session:sess-rpg#harness:test",
+			"/tmp/rpg",
+			"sess-rpg",
+			"summary",
+			"sess-rpg",
+			"test",
+			"node-rpg",
+			"2026-03-25T11:00:00.000Z",
+			"William RPG planning thread: combat loop and quest pacing.",
+			"2026-03-25T11:00:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, project, depth, kind, content, token_count,
+				earliest_at, latest_at, session_key, harness,
+				agent_id, source_type, source_ref, meta_json, created_at
+			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"node-green",
+			"/tmp/greenscreen",
+			"# Session\n\nMiguel green screen tool thread: keying edge stability and spill suppression.",
+			40,
+			"2026-03-26T00:00:00.000Z",
+			"2026-03-26T00:00:00.000Z",
+			"sess-green",
+			"test",
+			"default",
+			"summary",
+			"sess-green",
+			JSON.stringify({ source: "summary-worker" }),
+			"2026-03-26T00:00:00.000Z",
+		);
+		db.close();
+
+		const result = handleSynthesisRequest({ trigger: "manual" });
+
+		expect(result.prompt).toContain("project:rpg#session:sess-rpg#harness:test");
+		expect(result.prompt).toContain("project:greenscreen#source:sess-green#harness:test");
+		expect(result.prompt).toContain("node-rpg");
+		expect(result.prompt).toContain("node-green");
 	});
 
 	test.serial("generates prompt with exact temporal index instructions", async () => {
@@ -1320,6 +1741,7 @@ describe("handleSynthesisRequest", () => {
 		const result = handleSynthesisRequest({ trigger: "scheduled" });
 
 		expect(result.prompt).toContain("generating MEMORY.md");
+		expect(result.prompt).toContain("strict three-tier contract");
 		expect(result.prompt).toContain("Test session summary content");
 		expect(result.prompt).toContain("Exact Temporal Index Block");
 	});

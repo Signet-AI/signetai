@@ -1,255 +1,261 @@
 {
-  "description": "Per-endpoint semantic parity rules for shadow replay comparison",
-  "rules": {
-    "default": {
-      "compareMode": "json",
-      "ignoreFields": ["updatedAt", "createdAt"],
-      "timestampPrecision": "second",
-      "arrayOrdering": "ordered"
-    },
-    "endpoints": {
-      "GET /health": {
-        "deterministic": ["status"],
-        "ignoreFields": ["version"]
-      },
-      "GET /api/status": {
-        "deterministic": ["status", "db.memories", "db.entities", "db.embeddings", "db.schemaVersion", "agent"],
-        "ignoreFields": ["version"]
-      },
-      "GET /api/memories": {
-        "deterministic": ["memories.*.id", "memories.*.content", "memories.*.type", "memories.*.importance", "memories.*.tags"],
-        "ignoreFields": ["memories.*.createdAt", "memories.*.updatedAt"],
-        "arrayOrdering": "ordered"
-      },
-      "GET /api/memory/:id": {
-        "deterministic": ["id", "content", "type", "importance", "tags", "who", "what", "context"],
-        "ignoreFields": ["createdAt", "updatedAt"]
-      },
-      "GET /api/memory/:id/history": {
-        "deterministic": ["history.*.id"],
-        "ignoreFields": ["history.*.createdAt"],
-        "arrayOrdering": "ordered"
-      },
-      "POST /api/memory/recall": {
-        "deterministic": ["results.*.id"],
-        "ignoreFields": ["results.*.score"],
-        "tolerance": { "score": 0.05 },
-        "arrayOrdering": "unordered"
-      },
-      "GET /api/memory/search": {
-        "deterministic": ["results.*.id"],
-        "ignoreFields": ["results.*.score"],
-        "tolerance": { "score": 0.05 },
-        "arrayOrdering": "unordered"
-      },
-      "GET /memory/search": {
-        "deterministic": ["results.*.id"],
-        "ignoreFields": ["results.*.score"],
-        "tolerance": { "score": 0.05 },
-        "arrayOrdering": "unordered"
-      },
-      "GET /api/embeddings": {
-        "deterministic": ["total", "dimensions"],
-        "ignoreFields": []
-      },
-      "POST /api/memory/remember": {
-        "deterministic": ["status"],
-        "ignoreFields": ["id"],
-        "note": "ID is generated, skip comparison"
-      },
-      "POST /api/memory/save": {
-        "deterministic": ["status"],
-        "ignoreFields": ["id"]
-      },
-      "POST /api/hook/remember": {
-        "deterministic": ["status"],
-        "ignoreFields": ["id"]
-      },
-      "POST /api/memory/:id/recover": {
-        "deterministic": ["recovered"],
-        "ignoreFields": []
-      },
-      "POST /api/memory/modify": {
-        "deterministic": ["modified"],
-        "ignoreFields": []
-      },
-      "POST /api/memory/feedback": {
-        "deterministic": ["ok", "recorded", "accepted"],
-        "ignoreFields": ["propagated", "cooccurrenceUpdated", "dependenciesUpdated"],
-        "note": "Rust currently applies feedback to session memories; full path propagation parity is pending."
-      },
-      "DELETE /api/memory/:id": {
-        "deterministic": ["deleted"],
-        "ignoreFields": []
-      },
-      "GET /api/config": {
-        "deterministic": ["agent", "embedding", "search", "memory"],
-        "ignoreFields": ["home"]
-      },
-      "POST /api/config": {
-        "deterministic": ["saved"],
-        "ignoreFields": []
-      },
-      "GET /api/identity": {
-        "deterministic": ["name", "identity", "soul"],
-        "ignoreFields": []
-      },
-      "GET /api/features": {
-        "deterministic": ["pipeline", "graph", "predictor", "autonomous"],
-        "ignoreFields": []
-      },
-      "POST /api/hooks/session-start": {
-        "deterministic": ["injections"],
-        "ignoreFields": ["sessionKey"],
-        "note": "Injections content must match semantically"
-      },
-      "POST /api/hooks/user-prompt-submit": {
-        "deterministic": ["injections"],
-        "ignoreFields": []
-      },
-      "POST /api/hooks/session-end": {
-        "deterministic": ["status"],
-        "ignoreFields": []
-      },
-      "POST /api/hooks/remember": {
-        "deterministic": ["status"],
-        "ignoreFields": ["id"]
-      },
-      "POST /api/hooks/recall": {
-        "deterministic": ["results.*.id"],
-        "ignoreFields": ["results.*.score"],
-        "arrayOrdering": "unordered"
-      },
-      "POST /api/hooks/pre-compaction": {
-        "deterministic": ["injections"],
-        "ignoreFields": []
-      },
-      "POST /api/hooks/compaction-complete": {
-        "deterministic": ["status"],
-        "ignoreFields": []
-      },
-      "GET /api/sessions": {
-        "deterministic": ["sessions.*.key", "sessions.*.harness"],
-        "ignoreFields": ["sessions.*.startedAt", "sessions.*.lastActivityAt"],
-        "arrayOrdering": "ordered"
-      },
-      "GET /api/sessions/summaries": {
-        "deterministic": ["summaries.*.sessionKey"],
-        "ignoreFields": ["summaries.*.createdAt"],
-        "arrayOrdering": "ordered"
-      },
-      "GET /api/sessions/checkpoints": {
-        "deterministic": ["checkpoints.*.sessionKey"],
-        "ignoreFields": ["checkpoints.*.createdAt"],
-        "arrayOrdering": "ordered"
-      },
-      "GET /api/sessions/:key": {
-        "deterministic": ["key", "harness", "status"],
-        "ignoreFields": ["startedAt", "lastActivityAt"]
-      },
-      "POST /api/sessions/:key/bypass": {
-        "deterministic": ["bypassed"],
-        "ignoreFields": []
-      },
-      "GET /api/knowledge/entities": {
-        "deterministic": ["entities.*.id", "entities.*.name", "entities.*.type"],
-        "ignoreFields": ["entities.*.createdAt", "entities.*.updatedAt"],
-        "arrayOrdering": "unordered"
-      },
-      "GET /api/knowledge/entities/:id": {
-        "deterministic": ["id", "name", "type", "canonical"],
-        "ignoreFields": ["createdAt", "updatedAt"]
-      },
-      "GET /api/knowledge/stats": {
-        "deterministic": ["totalEntities", "totalRelations", "types"],
-        "ignoreFields": []
-      },
-      "GET /api/knowledge/constellation": {
-        "deterministic": ["nodes.*.id", "edges.*.source", "edges.*.target"],
-        "ignoreFields": [],
-        "arrayOrdering": "unordered"
-      },
-      "GET /api/pipeline/status": {
-        "deterministic": ["enabled", "mode", "pending", "processing", "dead"],
-        "ignoreFields": []
-      },
-      "GET /api/pipeline/models": {
-        "deterministic": ["models"],
-        "ignoreFields": []
-      },
-      "GET /api/predictor/status": {
-        "deterministic": ["enabled", "modelLoaded"],
-        "ignoreFields": ["lastTrainedAt"]
-      },
-      "GET /api/memory/timeline": {
-        "deterministic": ["events.*.id", "events.*.type"],
-        "ignoreFields": ["events.*.timestamp"],
-        "arrayOrdering": "ordered"
-      },
-      "GET /api/marketplace/mcp": {
-        "deterministic": ["servers.*.id", "servers.*.name"],
-        "ignoreFields": ["servers.*.registeredAt"],
-        "arrayOrdering": "unordered"
-      },
-      "GET /api/secrets": {
-        "deterministic": ["secrets"],
-        "ignoreFields": [],
-        "note": "Only names returned, not values"
-      },
-      "GET /api/tasks": {
-        "deterministic": ["tasks.*.id", "tasks.*.name", "tasks.*.schedule"],
-        "ignoreFields": ["tasks.*.createdAt", "tasks.*.updatedAt", "tasks.*.lastRunAt", "tasks.*.nextRunAt"],
-        "arrayOrdering": "ordered"
-      },
-      "GET /api/git/status": {
-        "deterministic": ["configured", "branch"],
-        "ignoreFields": ["lastSync"]
-      },
-      "GET /api/connectors": {
-        "deterministic": ["connectors.*.id", "connectors.*.provider"],
-        "ignoreFields": ["connectors.*.createdAt", "connectors.*.updatedAt"],
-        "arrayOrdering": "ordered"
-      },
-      "GET /api/documents": {
-        "deterministic": ["documents.*.id", "documents.*.status", "documents.*.title"],
-        "ignoreFields": ["documents.*.createdAt", "documents.*.updatedAt"],
-        "arrayOrdering": "ordered"
-      },
-      "GET /api/diagnostics": {
-        "deterministic": ["status", "domains.storage", "domains.index", "domains.queue"],
-        "ignoreFields": ["score"],
-        "tolerance": { "score": 0.1 }
-      },
-      "GET /api/version": {
-        "deterministic": ["runtime"],
-        "ignoreFields": ["version", "target"],
-        "note": "version and target differ by design between TS and Rust"
-      },
-      "GET /api/logs": {
-        "deterministic": [],
-        "ignoreFields": ["logs"],
-        "note": "Log contents are inherently different between daemons"
-      },
-      "GET /api/update": {
-        "deterministic": ["available"],
-        "ignoreFields": ["current"]
-      },
-      "GET /api/cross-agent/presence": {
-        "deterministic": ["agents.*.key", "agents.*.harness"],
-        "ignoreFields": ["agents.*.lastSeen"],
-        "arrayOrdering": "unordered"
-      },
-      "GET /api/cross-agent/messages": {
-        "deterministic": ["messages.*.id", "messages.*.content"],
-        "ignoreFields": ["messages.*.sentAt"],
-        "arrayOrdering": "ordered"
-      }
-    }
-  },
-  "errorComparison": {
-    "mustMatch": ["statusCode"],
-    "compareBody": true,
-    "ignoreFields": ["error"],
-    "note": "Error messages may differ in wording but status codes must match"
-  }
+	"description": "Per-endpoint semantic parity rules for shadow replay comparison",
+	"rules": {
+		"default": {
+			"compareMode": "json",
+			"ignoreFields": ["updatedAt", "createdAt"],
+			"timestampPrecision": "second",
+			"arrayOrdering": "ordered"
+		},
+		"endpoints": {
+			"GET /health": {
+				"deterministic": ["status"],
+				"ignoreFields": ["version"]
+			},
+			"GET /api/status": {
+				"deterministic": ["status", "db.memories", "db.entities", "db.embeddings", "db.schemaVersion", "agent"],
+				"ignoreFields": ["version"]
+			},
+			"GET /api/memories": {
+				"deterministic": [
+					"memories.*.id",
+					"memories.*.content",
+					"memories.*.type",
+					"memories.*.importance",
+					"memories.*.tags"
+				],
+				"ignoreFields": ["memories.*.createdAt", "memories.*.updatedAt"],
+				"arrayOrdering": "ordered"
+			},
+			"GET /api/memory/:id": {
+				"deterministic": ["id", "content", "type", "importance", "tags", "who", "what", "context"],
+				"ignoreFields": ["createdAt", "updatedAt"]
+			},
+			"GET /api/memory/:id/history": {
+				"deterministic": ["history.*.id"],
+				"ignoreFields": ["history.*.createdAt"],
+				"arrayOrdering": "ordered"
+			},
+			"POST /api/memory/recall": {
+				"deterministic": ["results.*.id"],
+				"ignoreFields": ["results.*.score"],
+				"tolerance": { "score": 0.05 },
+				"arrayOrdering": "unordered"
+			},
+			"GET /api/memory/search": {
+				"deterministic": ["results.*.id"],
+				"ignoreFields": ["results.*.score"],
+				"tolerance": { "score": 0.05 },
+				"arrayOrdering": "unordered"
+			},
+			"GET /memory/search": {
+				"deterministic": ["results.*.id"],
+				"ignoreFields": ["results.*.score"],
+				"tolerance": { "score": 0.05 },
+				"arrayOrdering": "unordered"
+			},
+			"GET /api/embeddings": {
+				"deterministic": ["total", "dimensions"],
+				"ignoreFields": []
+			},
+			"POST /api/memory/remember": {
+				"deterministic": ["status"],
+				"ignoreFields": ["id"],
+				"note": "ID is generated, skip comparison"
+			},
+			"POST /api/memory/save": {
+				"deterministic": ["status"],
+				"ignoreFields": ["id"]
+			},
+			"POST /api/hook/remember": {
+				"deterministic": ["status"],
+				"ignoreFields": ["id"]
+			},
+			"POST /api/memory/:id/recover": {
+				"deterministic": ["recovered"],
+				"ignoreFields": []
+			},
+			"POST /api/memory/modify": {
+				"deterministic": ["modified"],
+				"ignoreFields": []
+			},
+			"POST /api/memory/feedback": {
+				"deterministic": ["ok", "recorded", "accepted"],
+				"ignoreFields": ["propagated", "cooccurrenceUpdated", "dependenciesUpdated"],
+				"note": "Rust currently applies feedback to session memories; full path propagation parity is pending."
+			},
+			"DELETE /api/memory/:id": {
+				"deterministic": ["deleted"],
+				"ignoreFields": []
+			},
+			"GET /api/config": {
+				"deterministic": ["agent", "embedding", "search", "memory"],
+				"ignoreFields": ["home"]
+			},
+			"POST /api/config": {
+				"deterministic": ["saved"],
+				"ignoreFields": []
+			},
+			"GET /api/identity": {
+				"deterministic": ["name", "identity", "soul"],
+				"ignoreFields": []
+			},
+			"GET /api/features": {
+				"deterministic": ["pipeline", "graph", "predictor", "autonomous"],
+				"ignoreFields": []
+			},
+			"POST /api/hooks/session-start": {
+				"deterministic": ["injections"],
+				"ignoreFields": ["sessionKey"],
+				"note": "Injections content must match semantically"
+			},
+			"POST /api/hooks/user-prompt-submit": {
+				"deterministic": ["injections"],
+				"ignoreFields": []
+			},
+			"POST /api/hooks/session-end": {
+				"deterministic": ["status"],
+				"ignoreFields": []
+			},
+			"POST /api/hooks/remember": {
+				"deterministic": ["status"],
+				"ignoreFields": ["id"]
+			},
+			"POST /api/hooks/recall": {
+				"deterministic": ["results.*.id"],
+				"ignoreFields": ["results.*.score"],
+				"arrayOrdering": "unordered"
+			},
+			"POST /api/hooks/pre-compaction": {
+				"deterministic": ["injections"],
+				"ignoreFields": []
+			},
+			"POST /api/hooks/compaction-complete": {
+				"deterministic": ["status"],
+				"ignoreFields": []
+			},
+			"GET /api/sessions": {
+				"deterministic": ["sessions.*.key", "sessions.*.harness"],
+				"ignoreFields": ["sessions.*.startedAt", "sessions.*.lastActivityAt"],
+				"arrayOrdering": "ordered"
+			},
+			"GET /api/sessions/summaries": {
+				"deterministic": ["summaries.*.sessionKey"],
+				"ignoreFields": ["summaries.*.createdAt"],
+				"arrayOrdering": "ordered"
+			},
+			"GET /api/sessions/checkpoints": {
+				"deterministic": ["checkpoints.*.sessionKey"],
+				"ignoreFields": ["checkpoints.*.createdAt"],
+				"arrayOrdering": "ordered"
+			},
+			"GET /api/sessions/:key": {
+				"deterministic": ["key", "harness", "status"],
+				"ignoreFields": ["startedAt", "lastActivityAt"]
+			},
+			"POST /api/sessions/:key/bypass": {
+				"deterministic": ["bypassed"],
+				"ignoreFields": []
+			},
+			"GET /api/knowledge/entities": {
+				"deterministic": ["entities.*.id", "entities.*.name", "entities.*.type"],
+				"ignoreFields": ["entities.*.createdAt", "entities.*.updatedAt"],
+				"arrayOrdering": "unordered"
+			},
+			"GET /api/knowledge/entities/:id": {
+				"deterministic": ["id", "name", "type", "canonical"],
+				"ignoreFields": ["createdAt", "updatedAt"]
+			},
+			"GET /api/knowledge/stats": {
+				"deterministic": ["totalEntities", "totalRelations", "types"],
+				"ignoreFields": []
+			},
+			"GET /api/knowledge/constellation": {
+				"deterministic": ["nodes.*.id", "edges.*.source", "edges.*.target"],
+				"ignoreFields": [],
+				"arrayOrdering": "unordered"
+			},
+			"GET /api/pipeline/status": {
+				"deterministic": ["enabled", "mode", "pending", "processing", "dead"],
+				"ignoreFields": []
+			},
+			"GET /api/pipeline/models": {
+				"deterministic": ["models"],
+				"ignoreFields": []
+			},
+			"GET /api/predictor/status": {
+				"deterministic": ["enabled", "modelLoaded"],
+				"ignoreFields": ["lastTrainedAt"]
+			},
+			"GET /api/memory/timeline": {
+				"deterministic": ["events.*.id", "events.*.type"],
+				"ignoreFields": ["events.*.timestamp"],
+				"arrayOrdering": "ordered"
+			},
+			"GET /api/marketplace/mcp": {
+				"deterministic": ["servers.*.id", "servers.*.name"],
+				"ignoreFields": ["servers.*.registeredAt"],
+				"arrayOrdering": "unordered"
+			},
+			"GET /api/secrets": {
+				"deterministic": ["secrets"],
+				"ignoreFields": [],
+				"note": "Only names returned, not values"
+			},
+			"GET /api/tasks": {
+				"deterministic": ["tasks.*.id", "tasks.*.name", "tasks.*.schedule"],
+				"ignoreFields": ["tasks.*.createdAt", "tasks.*.updatedAt", "tasks.*.lastRunAt", "tasks.*.nextRunAt"],
+				"arrayOrdering": "ordered"
+			},
+			"GET /api/git/status": {
+				"deterministic": ["configured", "branch"],
+				"ignoreFields": ["lastSync"]
+			},
+			"GET /api/connectors": {
+				"deterministic": ["connectors.*.id", "connectors.*.provider"],
+				"ignoreFields": ["connectors.*.createdAt", "connectors.*.updatedAt"],
+				"arrayOrdering": "ordered"
+			},
+			"GET /api/documents": {
+				"deterministic": ["documents.*.id", "documents.*.status", "documents.*.title"],
+				"ignoreFields": ["documents.*.createdAt", "documents.*.updatedAt"],
+				"arrayOrdering": "ordered"
+			},
+			"GET /api/diagnostics": {
+				"deterministic": ["status", "domains.storage", "domains.index", "domains.queue"],
+				"ignoreFields": ["score"],
+				"tolerance": { "score": 0.1 }
+			},
+			"GET /api/version": {
+				"deterministic": ["runtime"],
+				"ignoreFields": ["version", "target"],
+				"note": "version and target differ by design between TS and Rust"
+			},
+			"GET /api/logs": {
+				"deterministic": [],
+				"ignoreFields": ["logs"],
+				"note": "Log contents are inherently different between daemons"
+			},
+			"GET /api/update": {
+				"deterministic": ["available"],
+				"ignoreFields": ["current"]
+			},
+			"GET /api/cross-agent/presence": {
+				"deterministic": ["agents.*.key", "agents.*.harness"],
+				"ignoreFields": ["agents.*.lastSeen"],
+				"arrayOrdering": "unordered"
+			},
+			"GET /api/cross-agent/messages": {
+				"deterministic": ["messages.*.id", "messages.*.content"],
+				"ignoreFields": ["messages.*.sentAt"],
+				"arrayOrdering": "ordered"
+			}
+		}
+	},
+	"errorComparison": {
+		"mustMatch": ["statusCode"],
+		"compareBody": true,
+		"ignoreFields": ["error"],
+		"note": "Error messages may differ in wording but status codes must match"
+	}
 }

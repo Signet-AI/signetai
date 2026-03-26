@@ -132,6 +132,7 @@ import { type RecallParams, hybridRecall } from "./memory-search";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import { expandTemporalNode } from "./temporal-expand";
+import { upsertThreadHead } from "./thread-heads";
 import {
 	DEFAULT_RETENTION,
 	enqueueDocumentIngestJob,
@@ -2342,7 +2343,7 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 }
 
 async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
-	const raw = await c.req.raw.text();
+	const raw = await c.req.text();
 	if (!raw.trim()) return {};
 	try {
 		return toRecord(JSON.parse(raw));
@@ -6088,6 +6089,17 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 					JSON.stringify({ source: "compaction-complete" }),
 					now,
 				);
+				upsertThreadHead(db as unknown as Database, {
+					agentId,
+					nodeId,
+					content: body.summary,
+					latestAt: now,
+					project,
+					sessionKey: body.sessionKey ?? null,
+					sourceType: "compaction",
+					sourceRef: body.sessionKey ?? null,
+					harness: body.harness,
+				});
 			}
 		});
 
@@ -6102,11 +6114,24 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			resetPromptDedup(body.sessionKey);
 		}
 
-		void getSynthesisWorker()?.triggerNow().catch((error) => {
-			logger.warn("synthesis", "Failed to trigger MEMORY.md synthesis after compaction", {
-				error: error instanceof Error ? error.message : String(error),
+		void getSynthesisWorker()
+			?.triggerNow({
+				force: true,
+				source: "compaction-complete",
+				agentId,
+			})
+			.then((result) => {
+				if (!result.skipped) return;
+				logger.info("synthesis", "Skipped MEMORY.md synthesis after compaction", {
+					reason: result.reason,
+					sessionKey: body.sessionKey,
+				});
+			})
+			.catch((error) => {
+				logger.warn("synthesis", "Failed to trigger MEMORY.md synthesis after compaction", {
+					error: error instanceof Error ? error.message : String(error),
+				});
 			});
-		});
 
 		return c.json({
 			success: true,

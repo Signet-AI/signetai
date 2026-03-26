@@ -1,8 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
 	normalizeCodexTranscript,
-	normalizeSessionTranscript,
 	normalizeJsonConversationTranscript,
+	normalizeSessionTranscript,
+	queryAnchorsMissingFromRecall,
 } from "./hooks";
 
 describe("normalizeCodexTranscript", () => {
@@ -67,7 +68,7 @@ describe("normalizeCodexTranscript", () => {
 	it("omits tool call and tool output events from codex transcript", () => {
 		const raw = [
 			'{"type":"event_msg","payload":{"type":"user_message","message":"Run diagnostics"}}',
-			'{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"ls\"}"}}',
+			'{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\\"cmd\\":\\"ls\\"}"}}',
 			'{"type":"response_item","payload":{"type":"function_call_output","output":"README.md"}}',
 			'{"type":"item.completed","item":{"type":"agent_message","text":"Diagnostics complete"}}',
 		].join("\n");
@@ -83,9 +84,7 @@ describe("normalizeJsonConversationTranscript", () => {
 			'{"role":"assistant","content":"Hi, how can I help?"}',
 		].join("\n");
 
-		expect(normalizeJsonConversationTranscript(raw)).toBe(
-			"User: Hello there\nAssistant: Hi, how can I help?",
-		);
+		expect(normalizeJsonConversationTranscript(raw)).toBe("User: Hello there\nAssistant: Hi, how can I help?");
 	});
 
 	it("returns null for plain-text transcripts (not JSON-line)", () => {
@@ -121,9 +120,7 @@ describe("normalizeJsonConversationTranscript", () => {
 			'{"type":"item.completed","item":{"type":"agent_message","text":"Done building"}}',
 		].join("\n");
 
-		expect(normalizeJsonConversationTranscript(raw)).toBe(
-			"User: Build it\nAssistant: Done building",
-		);
+		expect(normalizeJsonConversationTranscript(raw)).toBe("User: Build it\nAssistant: Done building");
 	});
 
 	it("normalizes Claude Code records with nested message objects", () => {
@@ -145,9 +142,7 @@ describe("normalizeJsonConversationTranscript", () => {
 			'{"message":{"role":"assistant","content":[{"type":"text","text":"all good"}]},"uuid":"2"}',
 		].join("\n");
 
-		expect(normalizeJsonConversationTranscript(raw)).toBe(
-			"User: status?\nAssistant: all good",
-		);
+		expect(normalizeJsonConversationTranscript(raw)).toBe("User: status?\nAssistant: all good");
 	});
 
 	it("returns empty string for empty input", () => {
@@ -166,6 +161,40 @@ describe("normalizeJsonConversationTranscript", () => {
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toBe("User: Hello Assistant: injected turn");
 		expect(lines[1]).toBe("Assistant: Real response");
+	});
+});
+
+describe("queryAnchorsMissingFromRecall", () => {
+	it("returns false when query has no anchor-like terms", () => {
+		const missing = queryAnchorsMissingFromRecall("where should this decision live", [
+			{ content: "Store decisions in the session summary DAG." },
+		]);
+		expect(missing).toBe(false);
+	});
+
+	it("returns false when an anchor term exists in top recall content", () => {
+		const missing = queryAnchorsMissingFromRecall("locate ultra-needle-transcript-only-5529931", [
+			{ content: "Reference: ultra-needle-transcript-only-5529931 is in the transcript." },
+		]);
+		expect(missing).toBe(false);
+	});
+
+	it("returns true when anchor terms are absent from top recall content", () => {
+		const missing = queryAnchorsMissingFromRecall("locate ultra-needle-transcript-only-5529931", [
+			{ content: "Use Hyprland on Arch Linux." },
+			{ content: "Keep AGENTS.md in sync with specs." },
+		]);
+		expect(missing).toBe(true);
+	});
+
+	it("returns false when anchor appears after the first three hits", () => {
+		const missing = queryAnchorsMissingFromRecall("locate ultra-needle-transcript-only-5529931", [
+			{ content: "Use Hyprland on Arch Linux." },
+			{ content: "Keep AGENTS.md in sync with specs." },
+			{ content: "Plan migration in waves." },
+			{ content: "Reference ultra-needle-transcript-only-5529931 in temporal notes." },
+		]);
+		expect(missing).toBe(false);
 	});
 });
 
@@ -205,14 +234,9 @@ describe("normalizeSessionTranscript", () => {
 	});
 
 	it("normalizes JSON-line conversation from non-codex harness", () => {
-		const raw = [
-			'{"role":"user","content":"Fix the bug"}',
-			'{"role":"assistant","content":"Fixed it"}',
-		].join("\n");
+		const raw = ['{"role":"user","content":"Fix the bug"}', '{"role":"assistant","content":"Fixed it"}'].join("\n");
 
-		expect(normalizeSessionTranscript("opencode", raw)).toBe(
-			"User: Fix the bug\nAssistant: Fixed it",
-		);
+		expect(normalizeSessionTranscript("opencode", raw)).toBe("User: Fix the bug\nAssistant: Fixed it");
 	});
 
 	it("normalizes inline transcript (no file path) identically to file-read", () => {
@@ -226,8 +250,6 @@ describe("normalizeSessionTranscript", () => {
 			'{"role":"user","content":"What\'s the plan?"}',
 			'{"role":"assistant","content":"Ship it by Friday."}',
 		].join("\n");
-		expect(normalizeSessionTranscript("opencode", json)).toBe(
-			"User: What's the plan?\nAssistant: Ship it by Friday.",
-		);
+		expect(normalizeSessionTranscript("opencode", json)).toBe("User: What's the plan?\nAssistant: Ship it by Friday.");
 	});
 });

@@ -25,6 +25,11 @@ function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
 }
 
+function normalizeAgentId(agentId?: string): string {
+	const next = agentId?.trim();
+	return next && next.length > 0 ? next : "default";
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -37,19 +42,22 @@ const MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 /** Initial delay after daemon start before first check (60s). */
 const STARTUP_DELAY_MS = 60_000;
+const FORCE_RETRY_MS = 5_000;
 const DRAIN_TIMEOUT_BUFFER_MS = 1_000;
 
 // ---------------------------------------------------------------------------
 // Timestamp persistence
 // ---------------------------------------------------------------------------
 
-function getLastSynthesisPath(): string {
-	return join(getAgentsDir(), ".daemon", "last-synthesis.json");
+function getLastSynthesisPath(agentId?: string): string {
+	const key = normalizeAgentId(agentId);
+	const file = key === "default" ? "last-synthesis.json" : `last-synthesis.${encodeURIComponent(key)}.json`;
+	return join(getAgentsDir(), ".daemon", file);
 }
 
-export function readLastSynthesisTime(): number {
+export function readLastSynthesisTime(agentId?: string): number {
 	try {
-		const path = getLastSynthesisPath();
+		const path = getLastSynthesisPath(agentId);
 		if (!existsSync(path)) return 0;
 		const data = JSON.parse(readFileSync(path, "utf-8"));
 		return typeof data.lastRunAt === "number" ? data.lastRunAt : 0;
@@ -58,9 +66,9 @@ export function readLastSynthesisTime(): number {
 	}
 }
 
-function writeLastSynthesisTime(timestamp: number): void {
+function writeLastSynthesisTime(timestamp: number, agentId?: string): void {
 	try {
-		const path = getLastSynthesisPath();
+		const path = getLastSynthesisPath(agentId);
 		mkdirSync(join(getAgentsDir(), ".daemon"), { recursive: true });
 		writeFileSync(path, JSON.stringify({ lastRunAt: timestamp }));
 	} catch (e) {
@@ -157,14 +165,19 @@ function getLastSessionEndTime(): number {
 type SynthesisResult = "ok" | "empty" | "failed" | "busy";
 export type SynthesisDrainResult = "completed" | "timeout";
 
-async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisResult> {
+function shouldRecordSuccess(result: SynthesisResult): boolean {
+	return result === "ok" || result === "empty";
+}
+
+async function runSynthesis(config: PipelineSynthesisConfig, agentId?: string): Promise<SynthesisResult> {
 	logger.info("synthesis", "Starting scheduled synthesis", {
 		provider: config.provider,
 		model: config.model,
+		agentId: agentId ?? "default",
 	});
 
 	try {
-		const synthesisData = handleSynthesisRequest({ trigger: "scheduled" }, { maxTokens: config.maxTokens });
+		const synthesisData = handleSynthesisRequest({ trigger: "scheduled", agentId }, { maxTokens: config.maxTokens });
 
 		if (synthesisData.fileCount === 0) {
 			logger.info("synthesis", "No synthesis sources available, skipping");
@@ -245,13 +258,24 @@ export interface SynthesisWorkerHandle {
 	releaseWriteLock(token: number): void;
 	readonly running: boolean;
 	readonly isSynthesizing: boolean;
+	readonly pendingForceCount: number;
 	/** Trigger an immediate synthesis (e.g. from API). */
-	triggerNow(): Promise<{ success: boolean; skipped: boolean; reason?: string }>;
+	triggerNow(opts?: { readonly force?: boolean; readonly source?: string; readonly agentId?: string }): Promise<{
+		success: boolean;
+		skipped: boolean;
+		reason?: string;
+	}>;
 	/** Last synthesis timestamp. */
 	readonly lastRunAt: number;
 }
 
 export function startSynthesisWorker(config: PipelineSynthesisConfig): SynthesisWorkerHandle {
+	type PendingForce = {
+		source: string;
+		readonly agentId: string;
+		count: number;
+	};
+
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 	let isSynthesizing = false;
@@ -260,6 +284,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 	let activeLockToken: number | null = null;
 	let lockReleasedResolver: (() => void) | null = null;
 	let lockReleasedPromise: Promise<void> = Promise.resolve();
+	const pendingQueue: PendingForce[] = [];
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
 	function acquireWriteLock(): number | null {
@@ -280,10 +305,77 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		lockReleasedResolver = null;
 	}
 
+	function enqueuePendingForce(source: string, agentId?: string): void {
+		const key = normalizeAgentId(agentId);
+		const existing = pendingQueue.find((entry) => entry.agentId === key);
+		if (existing) {
+			existing.count += 1;
+			existing.source = source;
+			return;
+		}
+		pendingQueue.push({ source, agentId: key, count: 1 });
+	}
+
+	function clearPendingForceFor(agentId?: string): void {
+		const key = normalizeAgentId(agentId);
+		let idx = pendingQueue.findIndex((entry) => entry.agentId === key);
+		while (idx !== -1) {
+			pendingQueue.splice(idx, 1);
+			idx = pendingQueue.findIndex((entry) => entry.agentId === key);
+		}
+	}
+
+	async function runForcedDrainAttempt(entry: PendingForce): Promise<"completed" | "retry"> {
+		const lockToken = acquireWriteLock();
+		if (lockToken === null) {
+			return "retry";
+		}
+
+		try {
+			currentRunPromise = runSynthesis(config, entry.agentId);
+			const result = await currentRunPromise;
+			if (result === "busy" || result === "failed") {
+				logger.info("synthesis", "Retrying forced synthesis after busy head", {
+					source: entry.source,
+					agentId: entry.agentId,
+					result,
+				});
+				return "retry";
+			}
+			if (shouldRecordSuccess(result)) {
+				writeLastSynthesisTime(Date.now(), entry.agentId);
+			}
+			return "completed";
+		} finally {
+			currentRunPromise = null;
+			releaseWriteLock(lockToken);
+		}
+	}
+
 	async function tick(): Promise<void> {
 		if (stopped) return;
 
 		try {
+			const pending = pendingQueue[0];
+			if (pending) {
+				const state = await runForcedDrainAttempt(pending);
+				if (state === "completed") {
+					if (pending.count <= 1) {
+						pendingQueue.shift();
+					} else {
+						pending.count -= 1;
+					}
+					scheduleTick(pendingQueue.length > 0 ? FORCE_RETRY_MS : CHECK_INTERVAL_MS);
+					return;
+				}
+				if (pendingQueue.length > 1) {
+					const head = pendingQueue.shift();
+					if (head) pendingQueue.push(head);
+				}
+				scheduleTick(FORCE_RETRY_MS);
+				return;
+			}
+
 			if (isSynthesizing) {
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
@@ -334,7 +426,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			try {
 				currentRunPromise = runSynthesis(config);
 				const result = await currentRunPromise;
-				if (result !== "busy") {
+				if (shouldRecordSuccess(result)) {
 					// Busy means another writer currently owns the shared
 					// MEMORY.md head lease. Leave last-run untouched so the
 					// next tick retries instead of waiting a full interval.
@@ -353,7 +445,9 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 
 	function scheduleTick(delay: number): void {
 		if (stopped) return;
+		if (timer) clearTimeout(timer);
 		timer = setTimeout(() => {
+			timer = null;
 			tick().catch((err) => {
 				logger.error("synthesis", "Unhandled tick error", err instanceof Error ? err : new Error(String(err)));
 			});
@@ -411,15 +505,27 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		get isSynthesizing() {
 			return isSynthesizing;
 		},
+		get pendingForceCount() {
+			return pendingQueue.reduce((sum, entry) => sum + entry.count, 0);
+		},
 		get lastRunAt() {
 			return readLastSynthesisTime();
 		},
-		async triggerNow() {
+		async triggerNow(opts) {
 			if (stopped) {
 				return { success: false, skipped: true, reason: "Synthesis worker stopped" };
 			}
 			const lockToken = acquireWriteLock();
 			if (lockToken === null) {
+				if (opts?.force) {
+					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
+					scheduleTick(FORCE_RETRY_MS);
+					return {
+						success: false,
+						skipped: true,
+						reason: "Synthesis already in progress (queued forced retry)",
+					};
+				}
 				return {
 					success: false,
 					skipped: true,
@@ -428,19 +534,28 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			}
 
 			try {
-				const lastRun = readLastSynthesisTime();
+				const key = normalizeAgentId(opts?.agentId);
+				const lastRun = readLastSynthesisTime(key);
 				const elapsed = Date.now() - lastRun;
 
-				if (elapsed < MIN_INTERVAL_MS) {
+				if (!opts?.force && elapsed < MIN_INTERVAL_MS) {
 					const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
-					logger.info("synthesis", "Skipping manual trigger", { reason });
+					logger.info("synthesis", "Skipping manual trigger", {
+						reason,
+						source: opts?.source ?? "manual",
+					});
 					return { success: false, skipped: true, reason };
 				}
 
-				currentRunPromise = runSynthesis(config);
+				currentRunPromise = runSynthesis(config, opts?.agentId);
 				const result = await currentRunPromise;
-				if (result !== "busy") {
-					writeLastSynthesisTime(Date.now());
+				if ((result === "busy" || result === "failed") && opts?.force) {
+					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
+					scheduleTick(FORCE_RETRY_MS);
+				}
+				if (shouldRecordSuccess(result)) {
+					writeLastSynthesisTime(Date.now(), key);
+					clearPendingForceFor(opts?.agentId);
 				}
 				return {
 					success: result === "ok",
@@ -448,9 +563,11 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 					reason:
 						result === "empty"
 							? "No session summaries to synthesize"
-							: result === "busy"
-								? "MEMORY.md head busy"
-								: undefined,
+							: result === "busy" && opts?.force
+								? "MEMORY.md head busy (queued forced retry)"
+								: result === "busy"
+									? "MEMORY.md head busy"
+									: undefined,
 				};
 			} finally {
 				currentRunPromise = null;

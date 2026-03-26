@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.77.5] - 2026-03-26
+
+### Bug Fixes
+
+- force event-driven MEMORY.md refresh after summary/compaction (#349)
+
+
 ## [0.77.4] - 2026-03-26
 
 ### Bug Fixes

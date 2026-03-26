@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
 import { getAgentScope, resolveAgentId } from "./agent-id";
+import { extractAnchorTerms } from "./anchor-terms";
 import {
 	clearContinuity,
 	consumeState,
@@ -76,6 +77,8 @@ import { parseFeedback, recordAgentFeedback, recordSessionCandidates, trackFtsHi
 import { getExpiryWarning } from "./session-tracker";
 import { searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { searchTemporalFallback } from "./temporal-fallback";
+import { deriveThreadKey, deriveThreadLabel, summarizeThreadContent } from "./thread-heads";
 import { getUpdateSummary } from "./update-system";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -357,12 +360,26 @@ interface TemporalNode {
 	readonly latestAt: string;
 	readonly project: string | null;
 	readonly sessionKey: string | null;
+	readonly harness: string | null;
 	readonly score: number;
+}
+
+interface ThreadHead {
+	readonly key: string;
+	readonly label: string;
+	readonly latestAt: string;
+	readonly project: string | null;
+	readonly sessionKey: string | null;
+	readonly sourceType: string;
+	readonly score: number;
+	readonly sample: string;
+	readonly nodeId: string;
 }
 
 interface SynthesisMaterial {
 	readonly nodes: ReadonlyArray<TemporalNode>;
 	readonly memories: ReadonlyArray<ScoredMemory>;
+	readonly threadHeads: ReadonlyArray<ThreadHead>;
 	readonly indexBlock: string;
 	readonly sourceCount: number;
 }
@@ -397,6 +414,115 @@ function buildSynthesisIndexBlock(nodes: ReadonlyArray<TemporalNode>): string {
 	return `## Temporal Index\n\n${lines.join("\n")}`;
 }
 
+function collectThreadHeads(nodes: ReadonlyArray<TemporalNode>, limit: number): ThreadHead[] {
+	const selected: ThreadHead[] = [];
+	const seen = new Set<string>();
+	for (const node of nodes) {
+		if (node.sourceType === "chunk") continue;
+		const key = deriveThreadKey({
+			project: node.project,
+			sourceRef: node.sourceRef,
+			sessionKey: node.sessionKey,
+			harness: node.harness,
+		});
+		if (seen.has(key)) continue;
+		seen.add(key);
+		selected.push({
+			key,
+			label: deriveThreadLabel({
+				project: node.project,
+				sourceRef: node.sourceRef,
+				sessionKey: node.sessionKey,
+				harness: node.harness,
+			}),
+			latestAt: node.latestAt,
+			project: node.project,
+			sessionKey: node.sessionKey,
+			sourceType: node.sourceType,
+			score: node.score,
+			sample: summarizeThreadContent(node.content, 240),
+			nodeId: node.id,
+		});
+		if (selected.length >= limit) break;
+	}
+	return selected;
+}
+
+function readPersistedThreadHeads(agentId: string, limit: number): ThreadHead[] {
+	if (!existsSync(MEMORY_DB)) return [];
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const table = db
+				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_thread_heads'`)
+				.get();
+			if (!table) return [];
+			const rows = db
+				.prepare(
+					`SELECT thread_key, label, latest_at, project, session_key, source_type, sample, node_id
+					 FROM memory_thread_heads
+					 WHERE agent_id = ?
+					 ORDER BY latest_at DESC
+					 LIMIT ?`,
+				)
+				.all(agentId, Math.max(1, Math.min(80, limit * 4))) as Array<{
+				thread_key: string;
+				label: string;
+				latest_at: string;
+				project: string | null;
+				session_key: string | null;
+				source_type: string | null;
+				sample: string;
+				node_id: string;
+			}>;
+			return rows.slice(0, limit).map((row) => ({
+				key: row.thread_key,
+				label: row.label,
+				latestAt: row.latest_at,
+				project: row.project,
+				sessionKey: row.session_key,
+				sourceType: row.source_type ?? "summary",
+				score: scoreTemporalNode("session", row.source_type ?? "summary", row.latest_at),
+				sample: row.sample,
+				nodeId: row.node_id,
+			}));
+		});
+	} catch {
+		return [];
+	}
+}
+
+function threadTime(head: ThreadHead): number {
+	const at = Date.parse(head.latestAt);
+	return Number.isFinite(at) ? at : 0;
+}
+
+function mergeThreadHeads(
+	persisted: ReadonlyArray<ThreadHead>,
+	derived: ReadonlyArray<ThreadHead>,
+	limit: number,
+): ThreadHead[] {
+	const map = new Map<string, ThreadHead>();
+	for (const head of [...persisted, ...derived]) {
+		const prev = map.get(head.key);
+		if (!prev) {
+			map.set(head.key, head);
+			continue;
+		}
+		const prevAt = threadTime(prev);
+		const headAt = threadTime(head);
+		if (headAt > prevAt) {
+			map.set(head.key, head);
+			continue;
+		}
+		if (headAt === prevAt && head.score > prev.score) {
+			map.set(head.key, head);
+		}
+	}
+	return Array.from(map.values())
+		.sort((a, b) => threadTime(b) - threadTime(a) || b.score - a.score)
+		.slice(0, limit);
+}
+
 function collectSynthesisMaterial(charBudget: number, agentId: string): SynthesisMaterial {
 	const memoryBudget = Math.max(1200, Math.floor(charBudget * 0.35));
 	const nodeBudget = Math.max(1200, Math.floor(charBudget * 0.45));
@@ -410,6 +536,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 		return {
 			nodes: [],
 			memories,
+			threadHeads: [],
 			indexBlock: buildSynthesisIndexBlock([]),
 			sourceCount: memories.length,
 		};
@@ -425,6 +552,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 			return db
 				.prepare(
 					`SELECT id, content, kind, depth, latest_at, project, session_key,
+					        harness,
 					        COALESCE(source_type, kind) AS source_type,
 					        source_ref
 					 FROM session_summaries
@@ -440,6 +568,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 				latest_at: string;
 				project: string | null;
 				session_key: string | null;
+				harness: string | null;
 				source_type: string;
 				source_ref: string | null;
 			}>;
@@ -456,6 +585,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 				latestAt: node.latest_at,
 				project: node.project,
 				sessionKey: node.session_key,
+				harness: node.harness,
 				score: scoreTemporalNode(node.kind, node.source_type, node.latest_at),
 			}))
 			.sort((a, b) => b.score - a.score);
@@ -464,11 +594,15 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 			scored.filter((node) => node.sourceType !== "chunk"),
 			nodeBudget,
 		);
+		const persistedThreadHeads = readPersistedThreadHeads(agentId, 24);
+		const derivedThreadHeads = collectThreadHeads(scored, 24);
+		const threadHeads = mergeThreadHeads(persistedThreadHeads, derivedThreadHeads, 12);
 		const indexNodes = scored.slice(0, 20);
 
 		return {
 			nodes: promptNodes,
 			memories,
+			threadHeads,
 			indexBlock: buildSynthesisIndexBlock(indexNodes),
 			sourceCount: promptNodes.length + memories.length,
 		};
@@ -479,6 +613,7 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 		return {
 			nodes: [],
 			memories,
+			threadHeads: [],
 			indexBlock: buildSynthesisIndexBlock([]),
 			sourceCount: memories.length,
 		};
@@ -513,6 +648,32 @@ function buildTranscriptFallbackResponse(
 		memoryCount: lines.length,
 		queryTerms,
 		engine: "transcript-fallback",
+		warnings,
+	};
+}
+
+function buildTemporalFallbackResponse(
+	metadataHeader: string,
+	queryTerms: string,
+	charBudget: number,
+	hits: ReadonlyArray<{
+		readonly id: string;
+		readonly latestAt: string;
+		readonly threadLabel: string;
+		readonly excerpt: string;
+	}>,
+	warnings?: string[],
+): UserPromptSubmitResponse {
+	const rows = hits.map((hit) => ({
+		content: `- [node ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
+	}));
+	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
+	const inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${lines.length} | engine=temporal-fallback]\n${lines.join("\n")}`;
+	return {
+		inject,
+		memoryCount: lines.length,
+		queryTerms,
+		engine: "temporal-fallback",
 		warnings,
 	};
 }
@@ -2095,7 +2256,23 @@ function extractSubstantiveWords(text: string): string[] {
 	return result;
 }
 
-function buildRecallQueryShape(userPrompt: string, lastAssistantMessage?: string): RecallQueryShape {
+export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyArray<{ content: string }>): boolean {
+	const anchors = extractAnchorTerms(stripUntrustedMetadata(query));
+	if (anchors.length === 0) return false;
+	if (results.length === 0) return false;
+	const anchorSet = new Set(anchors);
+	for (const row of results.slice(0, 8)) {
+		const rowAnchors = extractAnchorTerms(row.content);
+		for (const rowAnchor of rowAnchors) {
+			if (anchorSet.has(rowAnchor)) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+function buildRecallQueryShape(userPrompt: string): RecallQueryShape {
 	// Pass cleaned raw text for both keyword and vector queries.
 	// FTS5 with implicit AND + BM25 IDF handles term weighting naturally —
 	// manual stopword stripping destroyed phrase semantics and let
@@ -2126,7 +2303,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 	const userMessage = resolveRecallUserMessage(req);
 	const agentId = resolveAgentId(req);
 	const agentScope = getAgentScope(agentId);
-	const { keywordTerms, vectorQuery } = buildRecallQueryShape(userMessage, req.lastAssistantMessage);
+	const { keywordTerms, vectorQuery } = buildRecallQueryShape(userMessage);
 
 	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
@@ -2249,7 +2426,22 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			fetchEmbedding,
 		);
 
-		if (recall.results.length === 0 || typeof recall.results[0]?.score !== "number" || recall.results[0].score < 0.4) {
+		const topScore = recall.results[0]?.score;
+		const noStructured = recall.results.length === 0 || typeof topScore !== "number" || topScore < 0.4;
+		// Anchor checks must be driven by the current user turn text, not any
+		// expanded/derived recall query shape.
+		const anchorsMissed = queryAnchorsMissingFromRecall(userMessage, recall.results);
+		if (noStructured || anchorsMissed) {
+			const temporalHits = searchTemporalFallback({
+				query: vectorQuery,
+				agentId,
+				sessionKey: req.sessionKey,
+				project: req.project,
+				limit: 4,
+			});
+			if (temporalHits.length > 0) {
+				return buildTemporalFallbackResponse(metadataHeader, queryTerms, injectBudget, temporalHits, warnings);
+			}
 			const transcriptHits = searchTranscriptFallback({
 				query: vectorQuery,
 				agentId,
@@ -2260,7 +2452,9 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			if (transcriptHits.length > 0) {
 				return buildTranscriptFallbackResponse(metadataHeader, queryTerms, injectBudget, transcriptHits, warnings);
 			}
-			return { inject: metadataHeader, memoryCount: 0, warnings };
+			if (noStructured) {
+				return { inject: metadataHeader, memoryCount: 0, warnings };
+			}
 		}
 
 		const mapped = recall.results.map((result) => ({
@@ -2953,24 +3147,44 @@ export function handleSynthesisRequest(
 		const sessionText = node.sessionKey ? ` session=${node.sessionKey}` : "";
 		return `- id=${node.id} kind=${node.kind} source=${source} depth=${node.depth}${projectText}${sessionText} score=${node.score.toFixed(3)} latest=${node.latestAt}\n  ${node.content}`;
 	});
+	const threadLines = material.threadHeads.map((thread) => {
+		const projectText = thread.project ? ` project=${thread.project}` : "";
+		const sessionText = thread.sessionKey ? ` session=${thread.sessionKey}` : "";
+		return `- key=${thread.key} label=${thread.label} source=${thread.sourceType}${projectText}${sessionText} score=${thread.score.toFixed(3)} latest=${thread.latestAt} node=${thread.nodeId}\n  ${thread.sample}`;
+	});
 
 	const prompt = `You are generating MEMORY.md — the working memory head for an AI agent.
 
-The output must be a two-part markdown document:
+The output must follow a strict three-tier contract:
 
-1. A concise operator-facing working summary
-2. A machine-facing temporal lineage appendix
+1. Tier 1 global head (highest-signal, always injected)
+2. Tier 2 thread heads (scoped rolling summaries)
+3. Tier 3 lineage index (temporal DAG handles for drill-down)
 
-## Operator-facing rules
+Use these top-level headings exactly:
+
+# Working Memory Summary
+## Global Head (Tier 1)
+## Thread Heads (Tier 2)
+## Open Threads
+## Durable Notes & Constraints
+
+## Tier 1 rules
 
 - Focus on active work, not biography
 - Prefer current state over changelog wording
-- Surface active projects, open threads, durable decisions, constraints, relevant people, and technical notes
+- Surface active priorities across people/projects/topics
 - Let stale sections shrink or disappear naturally
-- Do not mention every source item
 - Keep the visible summary concise
 
-## Machine-facing rules
+## Tier 2 rules
+
+- Group by thread lane (person/project/topic where possible)
+- Each lane should include current status, latest decision/context, and next action
+- Prevent thread bleed: keep unrelated lanes separate unless there is explicit relevance
+- Use the provided candidate thread heads as source material
+
+## Tier 3 rules
 
 - After the human-readable summary, append the exact Temporal Index block provided below
 - Do not rewrite the Temporal Index block
@@ -2984,6 +3198,10 @@ ${memoryLines.join("\n")}
 
 ${nodeLines.join("\n")}
 
+## Candidate Thread Heads (Tier 2 seeds)
+
+${threadLines.join("\n")}
+
 ## Exact Temporal Index Block
 
 ${material.indexBlock}
@@ -2992,6 +3210,7 @@ Instructions:
 - Write clean markdown
 - Keep the human-facing half under roughly ${Math.max(800, Math.floor(maxTokens * 0.7))} tokens
 - Do not include a generated timestamp
+- Do not output JSON
 - Output the full MEMORY.md content`;
 
 	return {

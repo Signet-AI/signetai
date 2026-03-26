@@ -1635,9 +1635,9 @@ for in-context injection.
 are optional.
 
 Prompt-submit retrieval prefers structured memory recall. When structured
-recall is weak or empty, the daemon may inject agent-scoped transcript
-fallback excerpts from prior session transcripts instead of returning no
-context.
+recall is weak or empty, the daemon first attempts temporal-summary
+fallback (session DAG artifacts) and then transcript fallback from prior
+session transcripts instead of returning no context.
 
 ### POST /api/hooks/session-end
 

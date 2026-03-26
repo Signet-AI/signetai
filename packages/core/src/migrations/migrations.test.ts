@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test } from "bun:test";
  */
 import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
+import { up as threadHeadsMigration } from "./048-thread-heads";
 import { MIGRATIONS, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -443,6 +444,48 @@ describe("migration framework", () => {
 			)
 			.all();
 		expect(rows).toEqual([{ content: "newer transcript with more detail" }]);
+	});
+
+	test("migration 048 treats source_ref=session_key as session-scoped lane", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_summaries (
+				id TEXT PRIMARY KEY,
+				project TEXT,
+				depth INTEGER NOT NULL DEFAULT 0,
+				kind TEXT NOT NULL,
+				content TEXT NOT NULL,
+				token_count INTEGER,
+				earliest_at TEXT NOT NULL,
+				latest_at TEXT NOT NULL,
+				session_key TEXT,
+				harness TEXT,
+				agent_id TEXT NOT NULL DEFAULT 'default',
+				source_type TEXT,
+				source_ref TEXT,
+				meta_json TEXT,
+				created_at TEXT NOT NULL
+			);
+		`);
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, project, depth, kind, content, earliest_at, latest_at, session_key,
+				harness, agent_id, source_type, source_ref, created_at
+			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, 'summary', ?, ?)`,
+		).run("sum-1", "/tmp/proj", "lane seed", now, now, "sess-1", "codex", "agent-a", "sess-1", now);
+
+		expect(() => threadHeadsMigration(db)).not.toThrow();
+
+		const row = db
+			.query<{ thread_key: string; label: string }, []>(
+				`SELECT thread_key, label FROM memory_thread_heads WHERE agent_id = 'agent-a'`,
+			)
+			.get();
+		expect(row).toEqual({
+			thread_key: "project:/tmp/proj|source:sess-1|harness:codex",
+			label: "project:/tmp/proj#source:sess-1",
+		});
 	});
 
 	test("entities table has pinning columns after migration 022", () => {

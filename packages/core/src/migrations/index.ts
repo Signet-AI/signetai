@@ -53,6 +53,7 @@ import { up as memoryMdTemporalHead } from "./044-memory-md-temporal-head";
 import { up as losslessWorkingMemoryHardening } from "./045-lossless-working-memory-hardening";
 import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
+import { up as threadHeads } from "./048-thread-heads";
 
 // -- Public interface consumed by Database.init() --
 
@@ -454,6 +455,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 47,
 		name: "agent-scoped-temporal-uniqueness",
 		up: agentScopedTemporalUniqueness,
+	},
+	{
+		version: 48,
+		name: "thread-heads",
+		up: threadHeads,
+		artifacts: {
+			tables: ["memory_thread_heads"],
+		},
 	},
 ];
 

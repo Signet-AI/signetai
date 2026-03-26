@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-25"
+updated_at: "2026-03-26"
 
 specs:
   - id: memory-pipeline-v2
@@ -95,6 +95,8 @@ specs:
       - "Concurrent same-agent MEMORY.md writes are lease-safe and retry-safe, and busy head writes do not suppress future regeneration"
       - "Compaction artifacts participate in the same temporal DAG and condensation path as session summaries, with harness fidelity and degraded modes explicitly documented"
       - "Prompt-time retrieval keeps structured distillation primary while transcript retrieval stays a searchable, embeddable fallback and deep-history substrate"
+      - "Three-tier memory surfaces are mandatory: a compact global head, rolling thread heads, and a lossless lineage substrate"
+      - "Multi-thread continuity remains stable across many simultaneous people/projects/topics via thread-scoped indexing and anti-bleed retrieval controls"
     decision: null
 
   - id: procedural-memory-plan

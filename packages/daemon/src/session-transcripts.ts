@@ -1,3 +1,4 @@
+import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { sanitizeFtsQuery } from "./memory-search";
@@ -142,64 +143,79 @@ export function searchTranscriptFallback(params: {
 	try {
 		if (tableExists("session_transcripts_fts")) {
 			const fts = sanitizeFtsQuery(params.query);
-			if (fts.length === 0) return [];
+			if (fts.length > 0) {
+				try {
+					const rows = getDbAccessor().withReadDb((db) => {
+						const parts = [
+							`SELECT st.session_key, st.project, ${seenExpr} AS seen_at,`,
+							`snippet(session_transcripts_fts, 0, '', '', ' … ', 18) AS excerpt,`,
+							"bm25(session_transcripts_fts) AS rank",
+							"FROM session_transcripts_fts",
+							"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
+							"WHERE session_transcripts_fts MATCH ?",
+							"AND st.agent_id = ?",
+						];
+						const args: unknown[] = [fts, params.agentId];
+						if (params.sessionKey) {
+							parts.push("AND st.session_key != ?");
+							args.push(params.sessionKey);
+						}
+						parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
+						args.push(limit * 2);
+						return db.prepare(parts.join("\n")).all(...args) as TranscriptRow[];
+					});
 
-			const rows = getDbAccessor().withReadDb((db) => {
-				const parts = [
-					`SELECT st.session_key, st.project, ${seenExpr} AS seen_at,`,
-					`snippet(session_transcripts_fts, 0, '', '', ' … ', 18) AS excerpt,`,
-					"bm25(session_transcripts_fts) AS rank",
-					"FROM session_transcripts_fts",
-					"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
-					"WHERE session_transcripts_fts MATCH ?",
-					"AND st.agent_id = ?",
-				];
-				const args: unknown[] = [fts, params.agentId];
-				if (params.sessionKey) {
-					parts.push("AND st.session_key != ?");
-					args.push(params.sessionKey);
+					const hits = rows
+						.map((row) => ({
+							sessionKey: row.session_key,
+							project: row.project,
+							updatedAt: row.seen_at,
+							excerpt: buildExcerpt(typeof row.excerpt === "string" ? row.excerpt : "", params.query),
+							rank: typeof row.rank === "number" ? row.rank : 0,
+						}))
+						.filter((row) => row.excerpt.length > 0)
+						.sort((a, b) => sameProject(a.project) - sameProject(b.project) || a.rank - b.rank)
+						.slice(0, limit);
+					if (hits.length > 0) return hits;
+				} catch (error) {
+					logger.warn("transcripts", "Transcript FTS query failed, falling back to LIKE", {
+						error: error instanceof Error ? error.message : String(error),
+					});
 				}
-				parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
-				args.push(limit * 2);
-				return db.prepare(parts.join("\n")).all(...args) as TranscriptRow[];
-			});
-
-			return rows
-				.map((row) => ({
-					sessionKey: row.session_key,
-					project: row.project,
-					updatedAt: row.seen_at,
-					excerpt: buildExcerpt(typeof row.excerpt === "string" ? row.excerpt : "", params.query),
-					rank: typeof row.rank === "number" ? row.rank : 0,
-				}))
-				.filter((row) => row.excerpt.length > 0)
-				.sort((a, b) => sameProject(a.project) - sameProject(b.project) || a.rank - b.rank)
-				.slice(0, limit);
+			}
 		}
 
-		const terms = params.query
+		const words = params.query
 			.toLowerCase()
 			.split(/\W+/)
 			.filter((term) => term.length >= 3)
 			.slice(0, 5);
+		const anchors = extractAnchorTerms(params.query).slice(0, 5);
+		const terms = anchors.length > 0 ? anchors : words;
 		if (terms.length === 0) return [];
 
 		const rows = getDbAccessor().withReadDb((db) => {
+			const score = terms.map(() => "CASE WHEN LOWER(st.content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
+			const any = terms.map(() => "LOWER(st.content) LIKE ?").join(" OR ");
 			const parts = [
-				`SELECT st.session_key, st.project, ${seenExpr} AS seen_at, st.content`,
+				`SELECT st.session_key, st.project, ${seenExpr} AS seen_at, st.content, ${score} AS rank`,
 				"FROM session_transcripts st",
 				"WHERE st.agent_id = ?",
 			];
-			const args: unknown[] = [params.agentId];
+			const args: unknown[] = [];
+			for (const term of terms) {
+				args.push(`%${term}%`);
+			}
+			args.push(params.agentId);
 			if (params.sessionKey) {
 				parts.push("AND st.session_key != ?");
 				args.push(params.sessionKey);
 			}
+			parts.push(`AND (${any})`);
 			for (const term of terms) {
-				parts.push("AND LOWER(st.content) LIKE ?");
 				args.push(`%${term}%`);
 			}
-			parts.push(`ORDER BY ${seenExpr} DESC LIMIT ?`);
+			parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 			args.push(limit);
 			return db.prepare(parts.join("\n")).all(...args) as TranscriptRow[];
 		});
@@ -210,10 +226,10 @@ export function searchTranscriptFallback(params: {
 				project: row.project,
 				updatedAt: row.seen_at,
 				excerpt: buildExcerpt(typeof row.content === "string" ? row.content : "", params.query),
-				rank: 0,
+				rank: typeof row.rank === "number" ? row.rank : 0,
 			}))
 			.filter((row) => row.excerpt.length > 0)
-			.sort((a, b) => sameProject(a.project) - sameProject(b.project))
+			.sort((a, b) => sameProject(a.project) - sameProject(b.project) || b.rank - a.rank)
 			.slice(0, limit);
 	} catch (error) {
 		logger.warn("transcripts", "Transcript fallback search failed", {

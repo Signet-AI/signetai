@@ -22,6 +22,7 @@ import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { getSecret } from "../secrets";
 import { upsertSessionTranscript } from "../session-transcripts";
+import { upsertThreadHead } from "../thread-heads";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -496,7 +497,17 @@ async function processJob(
 	try {
 		const { getSynthesisWorker } = await import("./index");
 		void getSynthesisWorker()
-			?.triggerNow()
+			?.triggerNow({
+				force: true,
+				source: "session-summary",
+				agentId: job.agent_id,
+			})
+			.then((result) => {
+				if (!result.skipped) return;
+				logger.info("summary-worker", "Skipped MEMORY.md synthesis after session summary", {
+					reason: result.reason,
+				});
+			})
 			.catch((error) => {
 				logger.warn("summary-worker", "Failed to trigger MEMORY.md synthesis after session summary", {
 					error: error instanceof Error ? error.message : String(error),
@@ -974,6 +985,18 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 				now,
 			);
 		}
+
+		upsertThreadHead(db as unknown as Database, {
+			agentId,
+			nodeId: effectiveId,
+			content: result.summary,
+			latestAt: now,
+			project: job.project ?? null,
+			sessionKey: job.session_key ?? null,
+			sourceType: "summary",
+			sourceRef: job.session_key ?? null,
+			harness: job.harness,
+		});
 
 		if (job.session_key && result.leaves && result.leaves.length > 0) {
 			db.prepare(

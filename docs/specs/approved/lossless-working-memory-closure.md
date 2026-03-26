@@ -11,6 +11,8 @@ success_criteria:
   - "Concurrent same-agent MEMORY.md writes are lease-safe and retry-safe, and busy head writes do not suppress future regeneration"
   - "Compaction artifacts participate in the same temporal DAG and condensation path as session summaries, with harness fidelity and degraded modes explicitly documented"
   - "Prompt-time retrieval keeps structured distillation primary while transcript retrieval stays a searchable, embeddable fallback and deep-history substrate"
+  - "Three-tier memory surfaces are mandatory: a compact global head, rolling thread heads, and a lossless lineage substrate"
+  - "Multi-thread continuity remains stable across many simultaneous people/projects/topics via thread-scoped indexing and anti-bleed retrieval controls"
 scope_boundary: "Closes the runtime and documentation gaps around lossless working memory, and mirrors touched daemon hook contracts into daemon-rs in the same work wave. Full daemon-rs cutover remains a separate program."
 ---
 
@@ -26,6 +28,61 @@ surfaces.
 This closure spec makes the missing pieces mandatory. The intended user
 experience is not "roughly LCM-shaped." It is a complete working system.
 
+## Strict Adherence Contract (Non-negotiable)
+
+Everything in this document is a MUST-level contract, not guidance.
+
+Any implementation that fails one of these requirements is non-compliant.
+There is no "partial credit" version where `MEMORY.md` is useful only for
+coding flows or only for single-thread sessions.
+
+The system must hold up for mixed days with many active people, topics,
+projects, and concurrent conversations.
+
+## Three-Tier Universal Memory Contract
+
+The runtime must implement all three tiers at once.
+
+### Tier 1: Global Head (always injected)
+
+`MEMORY.md` is the active head and must stay concise, high-signal, and
+immediately actionable.
+
+It must include:
+
+- highest-priority active state across threads
+- commitments, blockers, and next actions
+- durable constraints and safety boundaries
+- references to deeper lineage nodes
+
+It must not become an unbounded transcript dump.
+
+### Tier 2: Thread Heads (rolling, scoped summaries)
+
+The runtime must maintain rolling summaries per active thread so work does
+not collapse into one monolithic narrative.
+
+A thread can be any durable context stream, including person, project,
+topic, or mixed conversational lane.
+
+Each thread head must carry:
+
+- current status
+- decisions already made
+- unresolved open loops
+- next action
+- references to temporal lineage
+
+### Tier 3: Lossless Lineage Substrate (deep history)
+
+Transcripts, session summaries, compaction artifacts, and condensed DAG
+nodes form the lossless substrate.
+
+Tier 3 is complete history, not the default prompt surface.
+
+Tier 1 and Tier 2 are rendered views over Tier 3 plus structured
+distillation outputs.
+
 ## Hard Requirements
 
 ### 1. Temporal drill-down is mandatory
@@ -39,6 +96,7 @@ node id and returns:
 - the selected node
 - parent lineage
 - child lineage
+- sibling and thread-local context when available
 - linked memory rows when they exist
 - transcript context when it exists for that lineage
 
@@ -65,6 +123,9 @@ Temporal scoping must be just as strict for storage keys:
 - summary retry uniqueness must be unique by `agent_id + session_key`
 - no temporal write path may assume `session_key` is globally unique
 
+The same merge safety requirement applies to thread heads and any
+thread-index metadata used to build Tier 2.
+
 ### 3. Compaction is part of the same memory system
 
 Compaction artifacts are not auxiliary notes and are not allowed to fork
@@ -78,6 +139,8 @@ Hard requirements:
 - temporal condensation may consume summary and compaction roots alike
 - prompt dedup / continuity bookkeeping resets correctly after
   compaction so stale injected context can be reconsidered
+- Tier 1 and affected Tier 2 thread heads are refreshed after compaction
+  completes, using the same DAG lineage
 
 ### 4. Transcript fallback stays secondary
 
@@ -92,6 +155,12 @@ Transcript retrieval is required, but only as:
 Transcript searchability and embeddability are required capabilities,
 not justification for promoting transcripts to the default prompt-time
 source of truth.
+
+Default retrieval order must remain:
+
+1. structured distillation surfaces
+2. thread heads and temporal summaries
+3. transcript fallback and deep-history lookup
 
 ### 5. Harness fidelity must be explicit
 
@@ -108,6 +177,33 @@ The compatibility contract must explicitly state:
 
 No docs may overclaim full lifecycle parity when the runtime does not yet
 wire the required hook events.
+
+### 6. Thread scoping and anti-bleed are mandatory
+
+Generalized usage requires strict separation between concurrently active
+threads.
+
+Hard requirements:
+
+- each thread head has a stable scoped key
+- retrieval and refresh logic respect `agent_id` plus thread scope
+- unrelated thread context is not injected by default
+- cross-thread linkage is allowed only when explicit relevance signals
+  exist
+
+This prevents context bleed between unrelated topics and people.
+
+### 7. Freshness cadence is mandatory
+
+To keep continuity deterministic:
+
+- Tier 1 refreshes on session end and compaction completion
+- Tier 2 refreshes for affected threads on the same events
+- Tier 3 transcript writes happen during active prompt flow whenever
+  harness hooks allow it
+
+When a harness cannot provide one event type, degraded behavior must be
+explicitly documented.
 
 ## Required Harness Outcomes
 
@@ -173,21 +269,28 @@ Required documentation coverage:
 
 - transcript fallback is secondary, not primary
 - `MEMORY.md` is the merge-safe temporal head
+- three-tier model (global head, thread heads, lineage substrate) is a
+  strict contract
 - temporal drill-down surfaces are documented
 - harness fidelity matrix is documented
 - compaction parity and degraded modes are documented
+- thread scoping, anti-bleed behavior, and freshness cadence are
+  documented
 
 ## Rust Parity Requirement
 
-This closure spec does not require full daemon-rs cutover, but it does
-require parity for every daemon hook contract touched by the work.
+This closure spec does not require full daemon-rs cutover. For closure-wave
+changes, request/response contract changes must be mirrored in daemon-rs
+in the same PR, while deeper runtime behavior parity can land in the
+follow-up parity wave tracked under rust cutover specs.
 
-That means:
+Minimum contract:
 
-- request/response shape changes must be mirrored into `packages/daemon-rs/`
-- fallback and scoping semantics must be mirrored for the touched paths
-- parity tests or route-local regressions must land in the same PR when
-  practical
+- request/response shape changes are mirrored into `packages/daemon-rs/`
+  in the same PR
+- touched endpoints keep parity guard coverage so divergences are visible
+- behavior deltas that cannot be mirrored in-wave are explicitly documented
+  in `docs/HARNESSES.md` degraded-mode notes
 
-Broader Rust daemon completion remains tracked by the separate parity and
-cutover specs, but hook-surface drift is not allowed here.
+Broader runtime parity completion remains tracked by the separate parity and
+cutover specs.
