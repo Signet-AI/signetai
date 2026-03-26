@@ -36,9 +36,9 @@ automatically, between sessions, before the next prompt starts.
 Your agent just has memory.
 
 Structured memory, graph traversal, and hybrid retrieval matter, but
-they are not the point. They are substrate for the real job:
-deciding what should enter the model's context window right now, with
-enough precision to help instead of distract.
+they are not the point. They are substrate for the larger job Signet is
+building toward: deciding what should enter the model's context window
+right now, with enough precision to help instead of distract.
 
 Why teams adopt it:
 - less prompt re-explaining between sessions
@@ -91,7 +91,7 @@ These are the product surface areas Signet is optimized around:
 | Core | What it does |
 |---|---|
 | 🧠 Ambient memory extraction | Sessions are distilled automatically, no memory tool calls required |
-| 🎯 Predictive context selection | Structured memory feeds a scorer that learns what context is actually useful |
+| 🎯 Predictive context selection | Structured memory and session feedback build toward a scorer that learns what context is actually useful |
 | 💾 Session continuity | Checkpoint and transcript-backed context carried across sessions |
 | 🏠 Local-first storage | Data lives on your machine in SQLite and markdown, portable by default |
 | 🤝 Cross-harness runtime | Claude Code, OpenCode, OpenClaw, Codex, one shared memory substrate |
@@ -122,7 +122,7 @@ These systems improve quality and reliability of the core memory loop:
 |---|---|
 | 📜 Lossless transcripts | Raw session history preserved alongside extracted memories |
 | 🕸️ Structured retrieval substrate | Graph traversal + FTS5 + vector search produce bounded candidate context |
-| 🎯 Predictive scorer | Learns from session outcomes, including regret signals, to rerank likely-useful context |
+| 🎯 Predictive scorer | Wired into the system as a maturing path toward learned reranking from session outcomes, including regret signals |
 | 🔬 Noise filtering | Hub and similarity controls reduce low-signal memory surfacing |
 | 📄 Document ingestion | Pull PDFs, markdown, and URLs into the same retrieval pipeline |
 | 🖥️ CLI + Dashboard | Operate and inspect the system from terminal or web UI |
