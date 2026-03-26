@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import { basename } from "node:path";
 
 export interface ThreadHeadSeed {
 	readonly agentId: string;
@@ -21,8 +20,7 @@ function projectTag(project: string | null): string | null {
 	if (!project) return null;
 	const trimmed = project.trim();
 	if (trimmed.length === 0) return null;
-	const name = basename(trimmed);
-	return name.length > 0 ? name : trimmed;
+	return trimmed;
 }
 
 export function deriveThreadKey(input: {

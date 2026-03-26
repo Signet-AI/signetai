@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deriveThreadKey, summarizeThreadContent, upsertThreadHead } from "./thread-heads";
+import { deriveThreadKey, deriveThreadLabel, summarizeThreadContent, upsertThreadHead } from "./thread-heads";
 
 const dirs: string[] = [];
 
@@ -46,6 +46,16 @@ describe("thread-heads", () => {
 			harness: "test",
 		});
 		expect(key).toBe("project:/tmp/proj|harness:test");
+	});
+
+	it("keeps full project path in labels to avoid basename collisions", () => {
+		const label = deriveThreadLabel({
+			project: "/mnt/work/client/proj",
+			sourceRef: "sess-1",
+			sessionKey: "sess-1",
+			harness: "test",
+		});
+		expect(label).toBe("project:/mnt/work/client/proj#harness:test");
 	});
 
 	it("upserts newer thread head state and ignores older writes", () => {
