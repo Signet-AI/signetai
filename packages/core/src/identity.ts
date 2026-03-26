@@ -205,6 +205,18 @@ function signetForgeCandidatePaths(home: string): string[] {
 	];
 }
 
+function workspaceForgeCandidatePaths(agentsDir?: string): string[] {
+	if (!agentsDir) return [];
+	const binary = forgeBinaryFilename();
+	return [
+		join(agentsDir, binary),
+		join(agentsDir, "target", "release", binary),
+		join(agentsDir, "target", "debug", binary),
+		join(agentsDir, "packages", "forge", "target", "release", binary),
+		join(agentsDir, "packages", "forge", "target", "debug", binary),
+	];
+}
+
 interface SignetForgeInstallRecord {
 	readonly managed?: boolean;
 	readonly binaryPath?: string;
@@ -267,12 +279,12 @@ export function isCompatibleForgeBinary(binaryPath: string): boolean {
 }
 
 export function findSignetForgeBinary(_agentsDir?: string, home = homedir()): string | null {
-	const candidates = signetForgeCandidatePaths(home);
+	const candidates = [...workspaceForgeCandidatePaths(_agentsDir), ...signetForgeCandidatePaths(home)];
 	const record = readSignetForgeInstallRecord(home);
 	if (record?.binaryPath) {
 		candidates.unshift(record.binaryPath);
 	}
-	for (const candidate of candidates) {
+	for (const candidate of [...new Set(candidates)]) {
 		if (isCompatibleForgeBinary(candidate)) return candidate;
 	}
 	try {

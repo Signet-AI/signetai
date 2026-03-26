@@ -87,8 +87,8 @@ const __dirname = dirname(__filename);
 const MANAGED_FORGE_INSTALL_LOCK_INFO = "owner.json";
 const MANAGED_FORGE_INSTALL_LOCK_STALE_MS = 60 * 60 * 1000;
 
-function managedForgeInstallLockDir(): string {
-	return join(signetManagedInstallDir(), ".forge-install.lock");
+function managedForgeInstallLockDir(home = homedir()): string {
+	return join(signetManagedInstallDir(home), ".forge-install.lock");
 }
 
 function managedForgeInstallLockInfoPath(lockDir: string): string {
@@ -134,14 +134,23 @@ function isRunningPid(pid: number): boolean {
 
 function isManagedForgeInstallLockStale(lockDir: string): boolean {
 	const metadata = readManagedForgeInstallLockMetadata(lockDir);
+	const lockAgeMs = (() => {
+		if (typeof metadata?.createdAt === "string") {
+			const parsed = Date.parse(metadata.createdAt);
+			if (Number.isFinite(parsed)) {
+				return Date.now() - parsed;
+			}
+		}
+		try {
+			return Date.now() - statSync(lockDir).mtimeMs;
+		} catch {
+			return null;
+		}
+	})();
 	if (typeof metadata?.pid === "number") {
-		return !isRunningPid(metadata.pid);
+		return !isRunningPid(metadata.pid) || (lockAgeMs !== null && lockAgeMs > MANAGED_FORGE_INSTALL_LOCK_STALE_MS);
 	}
-	try {
-		return Date.now() - statSync(lockDir).mtimeMs > MANAGED_FORGE_INSTALL_LOCK_STALE_MS;
-	} catch {
-		return false;
-	}
+	return lockAgeMs !== null && lockAgeMs > MANAGED_FORGE_INSTALL_LOCK_STALE_MS;
 }
 
 function acquireManagedForgeInstallLock(lockDir: string): void {
@@ -169,9 +178,9 @@ function acquireManagedForgeInstallLock(lockDir: string): void {
 	}
 }
 
-export function withManagedForgeInstallLock<T>(run: () => Promise<T>): Promise<T> {
-	const lockDir = managedForgeInstallLockDir();
-	mkdirSync(signetManagedInstallDir(), { recursive: true });
+export function withManagedForgeInstallLock<T>(run: () => Promise<T>, home = homedir()): Promise<T> {
+	const lockDir = managedForgeInstallLockDir(home);
+	mkdirSync(signetManagedInstallDir(home), { recursive: true });
 	acquireManagedForgeInstallLock(lockDir);
 
 	return Promise.resolve()
@@ -276,8 +285,8 @@ function binaryFilename(binaryName = "forge"): string {
 	return process.platform === "win32" ? `${binaryName}.exe` : binaryName;
 }
 
-function signetManagedInstallDir(): string {
-	return join(homedir(), ".config", "signet", "bin");
+function signetManagedInstallDir(home = homedir()): string {
+	return join(home, ".config", "signet", "bin");
 }
 
 function signetManagedBinaryPath(binaryName = "forge"): string {

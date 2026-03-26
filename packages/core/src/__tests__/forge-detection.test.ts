@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isCompatibleForgeBinary, isSignetForgeBinary } from "../identity";
+import { findSignetForgeBinary, isCompatibleForgeBinary, isSignetForgeBinary } from "../identity";
 
 const tempDirs: string[] = [];
 
@@ -40,5 +40,16 @@ describe("Forge binary detection", () => {
 		const binary = makeBinary(["forge", "solidity", "build contracts"].join("\n"));
 		expect(isSignetForgeBinary(binary)).toBe(false);
 		expect(isCompatibleForgeBinary(binary)).toBe(false);
+	});
+
+	it("detects compatible local/source builds under the workspace even when they are not on PATH", () => {
+		const workspace = mkdtempSync(join(tmpdir(), "signet-forge-workspace-"));
+		tempDirs.push(workspace);
+		const binary = join(workspace, "packages", "forge", "target", "release", "forge");
+		mkdirSync(join(workspace, "packages", "forge", "target", "release"), { recursive: true });
+		writeFileSync(binary, ["Forge — First Run", "FORGE_SIGNET_TOKEN", "Dashboard (Ctrl+D)"].join("\n"));
+		chmodSync(binary, 0o755);
+
+		expect(findSignetForgeBinary(workspace, "/nonexistent-home")).toBe(binary);
 	});
 });
