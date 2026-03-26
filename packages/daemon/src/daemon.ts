@@ -32,12 +32,14 @@ import {
 	type SyncCursor,
 	buildArchitectureDoc,
 	buildSignetBlock,
+	findSignetForgeBinary,
 	keywordSearch,
 	mergeSignetGitignoreEntries,
 	networkModeFromBindHost,
 	parseSimpleYaml,
 	readNetworkMode,
 	readPipelinePauseState,
+	resolveSignetForgeManagedPath,
 	resolveNetworkBinding,
 	setPipelinePaused,
 	stripSignetBlock,
@@ -5295,23 +5297,7 @@ mountOsAgentRoutes(app);
 // ============================================================================
 
 function findForgeBinaryPath(): string | null {
-	const home = homedir();
-	const candidates = [
-		join(home, ".cargo", "bin", "forge"),
-		join(home, ".local", "bin", "forge"),
-		join(home, ".config", "signet", "bin", "forge"),
-		"/usr/local/bin/forge",
-		"/opt/homebrew/bin/forge",
-	];
-	for (const candidate of candidates) {
-		if (existsSync(candidate)) return candidate;
-	}
-	try {
-		const lookup = process.platform === "win32" ? "where" : "which";
-		return execFileSync(lookup, ["forge"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
-	} catch {
-		return null;
-	}
+	return findSignetForgeBinary();
 }
 
 app.get("/api/harnesses", async (c) => {
@@ -5324,7 +5310,7 @@ app.get("/api/harnesses", async (c) => {
 			path: join(homedir(), ".config", "opencode", "AGENTS.md"),
 		},
 		{ name: "OpenClaw", id: "openclaw", path: join(AGENTS_DIR, "AGENTS.md") },
-		{ name: "Forge", id: "forge", path: forgePath ?? join(homedir(), ".local", "bin", "forge") },
+		{ name: "Forge", id: "forge", path: forgePath ?? resolveSignetForgeManagedPath() },
 	];
 
 	const harnesses = configs.map((config) => ({

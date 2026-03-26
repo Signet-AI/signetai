@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { findSignetForgeBinary, isSignetForgeBinary, resolveSignetForgeManagedPath } from "@signet/core";
 import chalk from "chalk";
 
 export interface ForgeManifest {
@@ -112,6 +113,7 @@ function signetManagedInstallDir(): string {
 }
 
 function signetManagedBinaryPath(binaryName = "forge"): string {
+	if (binaryName === "forge") return resolveSignetForgeManagedPath();
 	return join(signetManagedInstallDir(), binaryFilename(binaryName));
 }
 
@@ -129,6 +131,7 @@ function resolveBinaryFromPath(binaryName = "forge"): string | null {
 }
 
 function findInstalledForge(binaryName = "forge"): string | null {
+	if (binaryName === "forge") return findSignetForgeBinary();
 	const fromPath = resolveBinaryFromPath(binaryName);
 	if (fromPath) return fromPath;
 	for (const candidate of commonForgePaths(binaryName)) {
@@ -140,10 +143,11 @@ function findInstalledForge(binaryName = "forge"): string | null {
 function findManagedForge(deps: ForgeDeps, binaryName = "forge"): string | null {
 	const managedPath = signetManagedBinaryPath(binaryName);
 	const record = readInstallRecord(deps.agentsDir);
-	if (record?.managed && record.binaryPath === managedPath && existsSync(managedPath)) {
+	const validManagedBinary = existsSync(managedPath) && (binaryName !== "forge" || isSignetForgeBinary(managedPath));
+	if (record?.managed && record.binaryPath === managedPath && validManagedBinary) {
 		return managedPath;
 	}
-	return existsSync(managedPath) ? managedPath : null;
+	return validManagedBinary ? managedPath : null;
 }
 
 function readInstalledForgeVersion(binaryPath: string): string | null {
@@ -323,7 +327,6 @@ async function installForgeBinary(
 	const finalPath = join(installDir, targetBinary);
 	const stagedPath = join(dirname(finalPath), `.${targetBinary}.new`);
 	if (existsSync(stagedPath)) unlinkSync(stagedPath);
-	if (existsSync(finalPath)) unlinkSync(finalPath);
 	renameSync(extracted, stagedPath);
 	chmodSync(stagedPath, 0o755);
 	renameSync(stagedPath, finalPath);

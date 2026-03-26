@@ -152,12 +152,15 @@ export {
 	REQUIRED_IDENTITY_KEYS,
 	OPTIONAL_IDENTITY_KEYS,
 	detectExistingSetup,
+	findSignetForgeBinary,
+	isSignetForgeBinary,
 	loadIdentityFiles,
 	loadIdentityFilesSync,
 	hasValidIdentity,
 	getMissingIdentityFiles,
 	summarizeIdentity,
 	readStaticIdentity,
+	resolveSignetForgeManagedPath,
 	resolveAgentBasePath,
 } from "./identity";
 export type {
