@@ -366,15 +366,17 @@ fn setup_api_provider(provider: AuthProvider, login_url: &str) -> Result<()> {
     }
 
     if local_api_key_for_provider(provider.id).is_some() {
-        println!(
-            "A local key already exists for {}.",
-            provider_to_secret_name(provider.id)
+        let secret_label = provider_to_secret_name(provider.id);
+        let _ = writeln!(
+            std::io::stdout(),
+            "A local key already exists for {secret_label}."
         );
         let action = read_line("Enter [p]aste new key, [c]lear key, or [s]kip [p]: ")?;
         let action = action.trim().to_lowercase();
         if action == "c" || action == "clear" {
             clear_local_api_key(provider.id)?;
-            println!("Cleared {}", provider_to_secret_name(provider.id));
+            let secret_label = provider_to_secret_name(provider.id);
+            let _ = writeln!(std::io::stdout(), "Cleared {secret_label}");
             return Ok(());
         }
         if action == "s" || action == "skip" {
@@ -394,9 +396,10 @@ fn setup_api_provider(provider: AuthProvider, login_url: &str) -> Result<()> {
     }
 
     store_local_api_key(provider.id, key.trim())?;
-    println!(
-        "Saved {} for {} in {}",
-        provider_to_secret_name(provider.id),
+    let secret_label = provider_to_secret_name(provider.id);
+    let _ = writeln!(
+        std::io::stdout(),
+        "Saved {secret_label} for {} in {}",
         provider.label,
         credentials_path().display()
     );
@@ -852,8 +855,8 @@ async fn which(binary: &str) -> Option<String> {
 }
 
 fn read_line(prompt: &str) -> Result<String> {
-    print!("{prompt}");
-    let _ = std::io::stdout().flush();
+    std::io::stdout().write_all(prompt.as_bytes())?;
+    std::io::stdout().flush()?;
     let mut buf = String::new();
     std::io::stdin().read_line(&mut buf)?;
     Ok(buf.trim_end().to_string())

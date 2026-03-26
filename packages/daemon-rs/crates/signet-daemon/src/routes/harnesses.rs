@@ -57,7 +57,7 @@ fn signet_managed_forge_path(home: &std::path::Path) -> PathBuf {
     home.join(".config").join("signet").join("bin").join(binary_name("forge"))
 }
 
-fn forge_candidate_paths(home: &std::path::Path, agents_dir: &std::path::Path) -> Vec<PathBuf> {
+fn forge_candidate_paths(home: &std::path::Path, _agents_dir: &std::path::Path) -> Vec<PathBuf> {
     let binary = binary_name("forge");
     let mut paths = vec![
         signet_managed_forge_path(home),
@@ -67,11 +67,22 @@ fn forge_candidate_paths(home: &std::path::Path, agents_dir: &std::path::Path) -
         PathBuf::from("/opt/homebrew/bin").join(&binary),
     ];
 
-    let record_path = agents_dir.join(".forge-install.json");
-    if let Ok(raw) = std::fs::read_to_string(record_path) {
+    // Read install record from the global managed location, matching
+    // the CLI install path (~/.config/signet/bin/.forge-install.json).
+    let record_path = home
+        .join(".config")
+        .join("signet")
+        .join("bin")
+        .join(".forge-install.json");
+    if let Ok(raw) = std::fs::read_to_string(&record_path) {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(path) = value.get("binaryPath").and_then(|v| v.as_str()) {
-                paths.insert(0, PathBuf::from(path));
+            if let Some(path_str) = value.get("binaryPath").and_then(|v| v.as_str()) {
+                let candidate = PathBuf::from(path_str);
+                if candidate.is_absolute() {
+                    if let Ok(resolved) = candidate.canonicalize() {
+                        paths.insert(0, resolved);
+                    }
+                }
             }
         }
     }

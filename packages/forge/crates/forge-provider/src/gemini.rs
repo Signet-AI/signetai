@@ -138,8 +138,8 @@ impl Provider for GeminiProvider {
         }
 
         let url = format!(
-            "{}/{}:streamGenerateContent?alt=sse&key={}",
-            GEMINI_API_URL, self.model, self.api_key
+            "{}/{}:streamGenerateContent?alt=sse",
+            GEMINI_API_URL, self.model
         );
 
         debug!("Sending request to Gemini API: model={}", self.model);
@@ -148,6 +148,7 @@ impl Provider for GeminiProvider {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
+            .header("x-goog-api-key", &self.api_key)
             .json(&body)
             .send()
             .await
