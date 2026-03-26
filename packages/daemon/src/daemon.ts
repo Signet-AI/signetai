@@ -6091,7 +6091,11 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		}
 
 		void getSynthesisWorker()
-			?.triggerNow({ force: true, source: "compaction-complete" })
+			?.triggerNow({
+				force: true,
+				source: "compaction-complete",
+				agentId,
+			})
 			.then((result) => {
 				if (!result.skipped) return;
 				logger.info("synthesis", "Skipped MEMORY.md synthesis after compaction", {

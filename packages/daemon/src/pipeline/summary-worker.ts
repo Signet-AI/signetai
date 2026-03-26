@@ -497,7 +497,11 @@ async function processJob(
 	try {
 		const { getSynthesisWorker } = await import("./index");
 		void getSynthesisWorker()
-			?.triggerNow({ force: true, source: "session-summary" })
+			?.triggerNow({
+				force: true,
+				source: "session-summary",
+				agentId: job.agent_id,
+			})
 			.then((result) => {
 				if (!result.skipped) return;
 				logger.info("summary-worker", "Skipped MEMORY.md synthesis after session summary", {

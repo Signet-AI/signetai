@@ -274,6 +274,35 @@ describe("synthesis-worker", () => {
 		}
 	});
 
+	it("threads agent scope into forced synthesis requests", async () => {
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			await worker.triggerNow({
+				force: true,
+				source: "session-summary",
+				agentId: "agent-a",
+			});
+			expect(mockHandleSynthesisRequest).toHaveBeenCalledWith(
+				expect.objectContaining({
+					trigger: "scheduled",
+					agentId: "agent-a",
+				}),
+				expect.any(Object),
+			);
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
+	});
+
 	it("queues forced trigger when synthesis is already in progress", async () => {
 		const worker = startSynthesisWorker({
 			enabled: true,

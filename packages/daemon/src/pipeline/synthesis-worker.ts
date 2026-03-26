@@ -158,14 +158,15 @@ function getLastSessionEndTime(): number {
 type SynthesisResult = "ok" | "empty" | "failed" | "busy";
 export type SynthesisDrainResult = "completed" | "timeout";
 
-async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisResult> {
+async function runSynthesis(config: PipelineSynthesisConfig, agentId?: string): Promise<SynthesisResult> {
 	logger.info("synthesis", "Starting scheduled synthesis", {
 		provider: config.provider,
 		model: config.model,
+		agentId: agentId ?? "default",
 	});
 
 	try {
-		const synthesisData = handleSynthesisRequest({ trigger: "scheduled" }, { maxTokens: config.maxTokens });
+		const synthesisData = handleSynthesisRequest({ trigger: "scheduled", agentId }, { maxTokens: config.maxTokens });
 
 		if (synthesisData.fileCount === 0) {
 			logger.info("synthesis", "No synthesis sources available, skipping");
@@ -247,7 +248,7 @@ export interface SynthesisWorkerHandle {
 	readonly running: boolean;
 	readonly isSynthesizing: boolean;
 	/** Trigger an immediate synthesis (e.g. from API). */
-	triggerNow(opts?: { readonly force?: boolean; readonly source?: string }): Promise<{
+	triggerNow(opts?: { readonly force?: boolean; readonly source?: string; readonly agentId?: string }): Promise<{
 		success: boolean;
 		skipped: boolean;
 		reason?: string;
@@ -267,6 +268,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 	let lockReleasedPromise: Promise<void> = Promise.resolve();
 	let pendingForce = false;
 	let pendingSource: string | null = null;
+	let pendingAgentId: string | undefined;
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
 	function acquireWriteLock(): number | null {
@@ -287,17 +289,20 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		lockReleasedResolver = null;
 	}
 
-	function setPendingForce(source: string): void {
+	function setPendingForce(source: string, agentId?: string): void {
 		pendingForce = true;
 		pendingSource = source;
+		const next = agentId?.trim();
+		pendingAgentId = next && next.length > 0 ? next : undefined;
 	}
 
 	function clearPendingForce(): void {
 		pendingForce = false;
 		pendingSource = null;
+		pendingAgentId = undefined;
 	}
 
-	async function runForcedDrainAttempt(source: string): Promise<void> {
+	async function runForcedDrainAttempt(source: string, agentId?: string): Promise<void> {
 		const lockToken = acquireWriteLock();
 		if (lockToken === null) {
 			scheduleTick(FORCE_RETRY_MS);
@@ -305,10 +310,13 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		}
 
 		try {
-			currentRunPromise = runSynthesis(config);
+			currentRunPromise = runSynthesis(config, agentId);
 			const result = await currentRunPromise;
 			if (result === "busy") {
-				logger.info("synthesis", "Retrying forced synthesis after busy head", { source });
+				logger.info("synthesis", "Retrying forced synthesis after busy head", {
+					source,
+					agentId: agentId ?? "default",
+				});
 				scheduleTick(FORCE_RETRY_MS);
 				return;
 			}
@@ -325,7 +333,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 
 		try {
 			if (pendingForce) {
-				await runForcedDrainAttempt(pendingSource ?? "forced-retry");
+				await runForcedDrainAttempt(pendingSource ?? "forced-retry", pendingAgentId);
 				if (!pendingForce) {
 					scheduleTick(CHECK_INTERVAL_MS);
 				}
@@ -471,7 +479,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			const lockToken = acquireWriteLock();
 			if (lockToken === null) {
 				if (opts?.force) {
-					setPendingForce(opts.source ?? "manual");
+					setPendingForce(opts.source ?? "manual", opts.agentId);
 					scheduleTick(FORCE_RETRY_MS);
 					return {
 						success: false,
@@ -499,10 +507,10 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 					return { success: false, skipped: true, reason };
 				}
 
-				currentRunPromise = runSynthesis(config);
+				currentRunPromise = runSynthesis(config, opts?.agentId);
 				const result = await currentRunPromise;
 				if (result === "busy" && opts?.force) {
-					setPendingForce(opts.source ?? "manual");
+					setPendingForce(opts.source ?? "manual", opts.agentId);
 					scheduleTick(FORCE_RETRY_MS);
 				}
 				if (result !== "busy") {
