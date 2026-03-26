@@ -7,6 +7,7 @@ pub mod crossagent;
 pub mod diagnostics;
 pub mod documents;
 pub mod git;
+pub mod harnesses;
 pub mod hooks;
 pub mod knowledge;
 pub mod marketplace;

@@ -213,7 +213,11 @@ async function resolveForgeRelease(manifest: ForgeManifest, requestedVersion?: s
 			assets: Array<{ name: string; browser_download_url: string }>;
 		}>
 	>(`${base}?per_page=30`);
-	const match = releases.find((release) => release.tag_name.startsWith(manifest.tagPrefix));
+	const match = releases
+		.filter((release) => release.tag_name.startsWith(manifest.tagPrefix))
+		.sort((left, right) =>
+			compareSemver(right.tag_name.replace(manifest.tagPrefix, ""), left.tag_name.replace(manifest.tagPrefix, "")),
+		)[0];
 	if (!match) {
 		throw new Error(`No Forge releases found in ${manifest.repository}`);
 	}

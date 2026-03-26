@@ -211,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/config",
             get(routes::config::get_config).post(routes::config::save_config),
         )
+        .route("/api/harnesses", get(routes::harnesses::list))
         .route("/api/identity", get(routes::config::identity))
         .route("/api/features", get(routes::config::features))
         // Hook lifecycle routes

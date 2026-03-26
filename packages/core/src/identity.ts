@@ -12,7 +12,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const FORGE_BINARY_NAME = "forge";
-const SIGNET_FORGE_BINARY_MARKER = "Signet's native AI terminal";
+const SIGNET_FORGE_PRIMARY_MARKER = "Signet's native AI terminal";
+const SIGNET_FORGE_FALLBACK_MARKERS = [
+	"Signet daemon URL",
+	"SIGNET_TOKEN",
+	"signet-token",
+	"signet-dark",
+	"Starting Signet daemon",
+	"Signet provides memory, identity, and extraction for Forge",
+];
 
 /**
  * Returns the base path for agent-specific files.
@@ -199,7 +207,13 @@ export function isSignetForgeBinary(binaryPath: string): boolean {
 	if (!existsSync(binaryPath)) return false;
 	try {
 		const binary = readFileSync(binaryPath);
-		return binary.includes(Buffer.from(SIGNET_FORGE_BINARY_MARKER));
+		if (binary.includes(Buffer.from(SIGNET_FORGE_PRIMARY_MARKER))) return true;
+		let matches = 0;
+		for (const marker of SIGNET_FORGE_FALLBACK_MARKERS) {
+			if (binary.includes(Buffer.from(marker))) matches += 1;
+			if (matches >= 2) return true;
+		}
+		return false;
 	} catch {
 		return false;
 	}
