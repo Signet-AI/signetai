@@ -1374,6 +1374,7 @@ const signetPlugin = {
 			sessionKey?: string;
 			sessionFile?: string;
 			agentId?: string;
+			project?: string;
 		} => {
 			if (!isRecord(ctx)) {
 				return {};
@@ -1383,6 +1384,7 @@ const signetPlugin = {
 				sessionKey: typeof sessionContext?.sessionKey === "string" ? sessionContext.sessionKey : undefined,
 				sessionFile: typeof sessionContext?.sessionFile === "string" ? sessionContext.sessionFile.trim() : undefined,
 				agentId: typeof sessionContext?.agentId === "string" ? sessionContext.agentId : undefined,
+				project: firstNonEmptyString(sessionContext.project, sessionContext.cwd, sessionContext.workspace),
 			};
 		};
 
@@ -1392,12 +1394,32 @@ const signetPlugin = {
 				sessionKey?: string;
 				sessionFile?: string;
 				agentId?: string;
+				project?: string;
 			},
 		): string | undefined => {
 			const fromEvent = readString(event.sessionKey) ?? readString(event.sessionId);
 			if (fromEvent) return fromEvent;
 			if (ctx.sessionKey) return ctx.sessionKey;
 			return undefined;
+		};
+
+		const resolveCompactionProject = (
+			event: Record<string, unknown>,
+			ctx: {
+				project?: string;
+			},
+		): string | undefined => {
+			const compaction = isRecord(event.compaction) ? event.compaction : undefined;
+			return firstNonEmptyString(
+				event.project,
+				event.cwd,
+				event.workspace,
+				compaction?.project,
+				compaction?.cwd,
+				compaction?.workspace,
+				ctx.project,
+				opts.workspace,
+			);
 		};
 
 		const dedupeCompaction = (map: Map<string, number>, key: string): boolean => {
@@ -1417,6 +1439,7 @@ const signetPlugin = {
 				sessionKey?: string;
 				sessionFile?: string;
 				agentId?: string;
+				project?: string;
 			},
 		): Promise<unknown> => {
 			if (!cfg.enabled || !daemonReachable) return undefined;
@@ -1437,11 +1460,14 @@ const signetPlugin = {
 				sessionKey,
 				messageCount,
 			});
-			if (!result?.guidelines && !result?.summaryPrompt) {
+			const parts = [result?.summaryPrompt, result?.guidelines].filter(
+				(value) => typeof value === "string" && value.length > 0,
+			);
+			if (parts.length === 0) {
 				return undefined;
 			}
 			return {
-				prependContext: result.summaryPrompt ?? result.guidelines,
+				prependContext: parts.join("\n\n"),
 			};
 		};
 
@@ -1451,6 +1477,7 @@ const signetPlugin = {
 				sessionKey?: string;
 				sessionFile?: string;
 				agentId?: string;
+				project?: string;
 			},
 		): Promise<void> => {
 			if (!cfg.enabled || !daemonReachable) return;
@@ -1469,7 +1496,7 @@ const signetPlugin = {
 
 			await onCompactionComplete("openclaw", summary, {
 				...opts,
-				project: opts.workspace,
+				project: resolveCompactionProject(event, ctx),
 				sessionKey,
 			});
 		};

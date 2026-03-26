@@ -441,6 +441,22 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
+	it("combines summaryPrompt and guidelines for pre-compaction context", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		const result = await beforeCompaction?.(
+			{ messageCount: 7, compactedCount: 2 },
+			{ sessionKey: "session-compact-guidance", agentId: "agent-1" },
+		);
+
+		expect(getPrependContext(result)).toContain("flush durable state");
+		expect(getPrependContext(result)).toContain("focus decisions");
+	});
+
 	it("does not dedupe pre-compaction hooks across different agents sharing a session key", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -531,6 +547,24 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionKey: "session-after-event",
 			runtimePath: "plugin",
 			summary: "Recovered from event metadata session file.",
+		});
+	});
+
+	it("prefers event project lineage over workspace fallback for compaction-complete", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		await afterCompaction?.(
+			{ summary: "Scoped summary", cwd: "/tmp/branch-lineage" },
+			{ sessionKey: "session-lineage", agentId: "agent-1" },
+		);
+
+		expect(lastCompactionBody).toMatchObject({
+			project: "/tmp/branch-lineage",
+			sessionKey: "session-lineage",
 		});
 	});
 
