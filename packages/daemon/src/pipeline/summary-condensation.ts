@@ -74,11 +74,12 @@ export async function checkAndCondense(
 			.prepare(
 				`SELECT id, content, project, earliest_at, latest_at
 				 FROM session_summaries
-				 WHERE project = ? AND kind = 'session' AND depth = 0
+				 WHERE project = ? AND agent_id = ? AND kind = 'session' AND depth = 0
+				   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction')
 				   AND id NOT IN (SELECT child_id FROM session_summary_children)
 				 ORDER BY created_at ASC`,
 			)
-			.all(project) as SummaryRow[];
+			.all(project, agentId) as SummaryRow[];
 	});
 
 	if (uncondensedSessions.length >= cfg.arcThreshold) {
@@ -93,11 +94,12 @@ export async function checkAndCondense(
 			.prepare(
 				`SELECT id, content, project, earliest_at, latest_at
 				 FROM session_summaries
-				 WHERE project = ? AND kind = 'arc' AND depth = 1
+				 WHERE project = ? AND agent_id = ? AND kind = 'arc' AND depth = 1
+				   AND COALESCE(source_type, 'condensation') = 'condensation'
 				   AND id NOT IN (SELECT child_id FROM session_summary_children)
 				 ORDER BY created_at ASC`,
 			)
-			.all(project) as SummaryRow[];
+			.all(project, agentId) as SummaryRow[];
 	});
 
 	if (uncondensedArcs.length >= cfg.epochThreshold) {
@@ -142,9 +144,19 @@ ${summaryTexts.join("\n\n")}`;
 			`INSERT INTO session_summaries (
 				id, project, depth, kind, content, token_count,
 				earliest_at, latest_at, session_key, harness,
-				agent_id, created_at
-			) VALUES (?, ?, 1, 'arc', ?, ?, ?, ?, NULL, NULL, ?, ?)`,
-		).run(arcId, sessions[0].project, condensed, tokenCount, earliestAt, latestAt, agentId, now);
+				agent_id, source_type, source_ref, meta_json, created_at
+			) VALUES (?, ?, 1, 'arc', ?, ?, ?, ?, NULL, NULL, ?, 'condensation', NULL, ?, ?)`,
+		).run(
+			arcId,
+			sessions[0].project,
+			condensed,
+			tokenCount,
+			earliestAt,
+			latestAt,
+			agentId,
+			JSON.stringify({ source: "summary-condensation", childCount: sessions.length }),
+			now,
+		);
 
 		const childStmt = db.prepare(
 			`INSERT OR IGNORE INTO session_summary_children (parent_id, child_id, ordinal)
@@ -202,9 +214,19 @@ ${arcTexts.join("\n\n")}`;
 			`INSERT INTO session_summaries (
 				id, project, depth, kind, content, token_count,
 				earliest_at, latest_at, session_key, harness,
-				agent_id, created_at
-			) VALUES (?, ?, 2, 'epoch', ?, ?, ?, ?, NULL, NULL, ?, ?)`,
-		).run(epochId, arcs[0].project, condensed, tokenCount, earliestAt, latestAt, agentId, now);
+				agent_id, source_type, source_ref, meta_json, created_at
+			) VALUES (?, ?, 2, 'epoch', ?, ?, ?, ?, NULL, NULL, ?, 'condensation', NULL, ?, ?)`,
+		).run(
+			epochId,
+			arcs[0].project,
+			condensed,
+			tokenCount,
+			earliestAt,
+			latestAt,
+			agentId,
+			JSON.stringify({ source: "summary-condensation", childCount: arcs.length }),
+			now,
+		);
 
 		const childStmt = db.prepare(
 			`INSERT OR IGNORE INTO session_summary_children (parent_id, child_id, ordinal)

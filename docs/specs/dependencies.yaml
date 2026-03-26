@@ -34,6 +34,69 @@ specs:
       - "Agent recovers meaningful context when resuming after session compaction or restart"
     decision: null
 
+  - id: memory-md-temporal-head
+    status: approved
+    path: docs/specs/approved/memory-md-temporal-head.md
+    hard_depends_on:
+      - memory-pipeline-v2
+      - session-continuity-protocol
+      - desire-paths-epic
+    soft_depends_on:
+      - multi-agent-support
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-LCM-ACP.md
+      - docs/specs/planning/LCM-PATTERNS.md
+    success_criteria:
+      - "MEMORY.md is rendered from decay-scored database state instead of flat markdown session-summary merges"
+      - "Session-end and compaction-complete both produce temporal artifacts that can be surfaced in MEMORY.md"
+      - "Rendered MEMORY.md exposes drill-down lineage to temporal nodes and transcripts without flooding the visible summary"
+    decision: null
+
+  - id: lossless-working-memory-runtime
+    status: approved
+    path: docs/specs/approved/lossless-working-memory-runtime.md
+    hard_depends_on:
+      - memory-md-temporal-head
+      - session-continuity-protocol
+      - knowledge-architecture-schema
+      - multi-agent-support
+    soft_depends_on:
+      - signet-runtime
+      - distributed-harness-orchestration
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-LCM-ACP.md
+      - docs/specs/planning/LCM-PATTERNS.md
+      - docs/specs/approved/memory-md-temporal-head.md
+    success_criteria:
+      - "One agent can accumulate context across many sessions and branches while rendering a single shared MEMORY.md head"
+      - "Live transcripts are persisted with agent/session scoping and remain queryable before full structural distillation finishes"
+      - "Session-end and compaction paths both feed the same temporal head model without splitting memory state across incompatible branches"
+    decision: null
+
+  - id: lossless-working-memory-closure
+    status: approved
+    path: docs/specs/approved/lossless-working-memory-closure.md
+    hard_depends_on:
+      - memory-md-temporal-head
+      - lossless-working-memory-runtime
+      - signet-runtime
+    soft_depends_on:
+      - distributed-harness-orchestration
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-LCM-ACP.md
+      - docs/specs/planning/LCM-PATTERNS.md
+      - docs/specs/approved/memory-md-temporal-head.md
+      - docs/specs/approved/lossless-working-memory-runtime.md
+    success_criteria:
+      - "Temporal node drill-down is available by id and returns parent/child lineage, linked memories, and transcript context without flooding the main MEMORY.md body"
+      - "Concurrent same-agent MEMORY.md writes are lease-safe and retry-safe, and busy head writes do not suppress future regeneration"
+      - "Compaction artifacts participate in the same temporal DAG and condensation path as session summaries, with harness fidelity and degraded modes explicitly documented"
+      - "Prompt-time retrieval keeps structured distillation primary while transcript retrieval stays a searchable, embeddable fallback and deep-history substrate"
+    decision: null
+
   - id: procedural-memory-plan
     status: approved
     path: docs/specs/approved/procedural-memory-plan.md

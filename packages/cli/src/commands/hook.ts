@@ -26,7 +26,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
 			const input = await readJson();
-			const sessionKey = pickString(input?.session_id, input?.sessionId);
+			const sessionKey = pickSessionKey(input);
 			const stdinProject = pickString(input?.cwd);
 			const data = await deps.fetchFromDaemon<{
 				identity?: { name: string; description?: string };
@@ -76,20 +76,11 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--project <project>", "Project path")
 		.action(async (options) => {
 			const input = await readJson();
-			const userPrompt = pickString(input?.prompt, input?.user_prompt, input?.userPrompt);
-			const sessionKey = pickString(input?.session_id, input?.sessionId);
 			const stdinProject = pickString(input?.cwd);
-			const lastAssistantMessage = readLastAssistantMessage(input);
 			const data = await deps.fetchFromDaemon<{ inject?: string }>("/api/hooks/user-prompt-submit", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					harness: options.harness,
-					project: options.project || stdinProject,
-					userPrompt,
-					sessionKey,
-					lastAssistantMessage: lastAssistantMessage || undefined,
-				}),
+				body: JSON.stringify(buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject)),
 			});
 			if (!data) {
 				process.stderr.write("[signet] daemon not running, hook skipped\n");
@@ -107,14 +98,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const data = await deps.fetchFromDaemon<{ memoriesSaved?: number }>("/api/hooks/session-end", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					harness: options.harness,
-					transcriptPath: pickString(body.transcript_path, body.transcriptPath),
-					sessionId: pickString(body.session_id, body.sessionId),
-					sessionKey: pickString(body.session_id, body.sessionId),
-					cwd: pickString(body.cwd),
-					reason: pickString(body.reason),
-				}),
+				body: JSON.stringify(buildSessionEndBody(body, options.harness)),
 				timeout: 60_000,
 			});
 			if (!data) {
@@ -135,7 +119,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
 			const input = await readJson();
-			const sessionKey = pickString(input?.session_id, input?.sessionId);
+			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
 			const data = await deps.fetchFromDaemon<{ summaryPrompt?: string; guidelines?: string; error?: string }>(
 				"/api/hooks/pre-compaction",
@@ -165,12 +149,22 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.description("Save session summary after compaction")
 		.requiredOption("-H, --harness <harness>", "Harness name")
 		.requiredOption("-s, --summary <summary>", "Session summary text")
+		.option("--session-key <key>", "Session key")
+		.option("--project <project>", "Project path")
+		.option("--agent-id <id>", "Agent ID")
 		.action(async (options) => {
+			const input = shouldReadCompactionInput(process.stdin.isTTY, options) ? await readJson() : null;
 			const data = await deps.fetchFromDaemon<{ success?: boolean; memoryId?: number; error?: string }>(
 				"/api/hooks/compaction-complete",
 				{
 					method: "POST",
-					body: JSON.stringify({ harness: options.harness, summary: options.summary }),
+					body: JSON.stringify(
+						buildCompactionCompleteBody(input, options.harness, options.summary, {
+							agentId: options.agentId,
+							project: options.project,
+							sessionKey: options.sessionKey,
+						}),
+					),
 				},
 			);
 			if (data?.error) {
@@ -230,6 +224,19 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		});
 }
 
+export function shouldReadCompactionInput(
+	isTTY: boolean,
+	options: {
+		sessionKey?: string;
+		project?: string;
+		agentId?: string;
+	},
+): boolean {
+	if (isTTY) return false;
+	if (options.sessionKey && options.project && options.agentId) return false;
+	return true;
+}
+
 async function readJson(): Promise<Record<string, unknown> | null> {
 	try {
 		const chunks: Buffer[] = [];
@@ -250,6 +257,96 @@ function pickString(...values: unknown[]): string {
 		if (typeof value === "string" && value.trim().length > 0) return value;
 	}
 	return "";
+}
+
+export function pickSessionKey(input: Record<string, unknown> | null): string {
+	if (!input) return "";
+	return pickString(input.session_key, input.sessionKey, input.session_id, input.sessionId);
+}
+
+export function buildUserPromptSubmitBody(
+	input: Record<string, unknown> | null,
+	harness: string,
+	project: string,
+): {
+	harness: string;
+	project: string;
+	userMessage: string;
+	userPrompt: string;
+	sessionKey: string;
+	transcriptPath: string;
+	transcript: string;
+	lastAssistantMessage?: string;
+} {
+	const body = input;
+	const userPrompt = pickString(body?.prompt, body?.user_prompt, body?.userPrompt);
+	const userMessage = pickString(body?.user_message, body?.userMessage, userPrompt);
+	const lastAssistantMessage = readLastAssistantMessage(body);
+	return {
+		harness,
+		project,
+		userMessage,
+		userPrompt,
+		sessionKey: pickSessionKey(body),
+		transcriptPath: pickString(body?.transcript_path, body?.transcriptPath),
+		transcript: pickString(body?.transcript),
+		...(lastAssistantMessage ? { lastAssistantMessage } : {}),
+	};
+}
+
+export function buildCompactionCompleteBody(
+	input: Record<string, unknown> | null,
+	harness: string,
+	summary: string,
+	overrides: {
+		agentId?: string;
+		project?: string;
+		sessionKey?: string;
+	} = {},
+): {
+	harness: string;
+	summary: string;
+	agentId?: string;
+	sessionKey?: string;
+	project?: string;
+} {
+	const body = input;
+	const agentId = pickString(overrides.agentId, body?.agent_id, body?.agentId);
+	const sessionKey = pickString(overrides.sessionKey, pickSessionKey(body));
+	const project = pickString(overrides.project, body?.project, body?.cwd);
+	return {
+		harness,
+		summary,
+		...(agentId ? { agentId } : {}),
+		...(sessionKey ? { sessionKey } : {}),
+		...(project ? { project } : {}),
+	};
+}
+
+export function buildSessionEndBody(
+	input: Record<string, unknown> | null,
+	harness: string,
+): {
+	harness: string;
+	transcriptPath: string;
+	transcript: string;
+	sessionId: string;
+	sessionKey: string;
+	cwd: string;
+	reason: string;
+} {
+	const body = input ?? {};
+	const sessionKey = pickSessionKey(body);
+	const sessionId = pickString(body.session_id, body.sessionId, sessionKey);
+	return {
+		harness,
+		transcriptPath: pickString(body.transcript_path, body.transcriptPath),
+		transcript: pickString(body.transcript),
+		sessionId,
+		sessionKey,
+		cwd: pickString(body.cwd),
+		reason: pickString(body.reason),
+	};
 }
 
 function readLastAssistantMessage(input: Record<string, unknown> | null): string {

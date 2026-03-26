@@ -115,6 +115,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"memory_feedback",
 	"knowledge_expand",
 	"knowledge_expand_session",
+	"lcm_expand",
 	"agent_peers",
 	"agent_message_send",
 	"agent_message_inbox",
@@ -522,10 +523,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				limit: z.number().optional().describe("Max results to return (default 10)"),
 				type: z.string().optional().describe("Filter by memory type"),
 				min_score: z.number().optional().describe("Minimum relevance score threshold"),
-				expand: z
-					.boolean()
-					.optional()
-					.describe("Include lossless session transcripts as sources"),
+				expand: z.boolean().optional().describe("Include lossless session transcripts as sources"),
 			}),
 		},
 		async ({ query, limit, type, min_score, expand }) => {
@@ -1423,6 +1421,37 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 
 			if (!result.ok) {
 				return errorResult(`Session expansion failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"lcm_expand",
+		{
+			title: "Expand Temporal Node",
+			description:
+				"Expand a temporal MEMORY.md or session DAG node by id. " +
+				"Returns parent and child lineage, linked memories, and " +
+				"optionally transcript context for drill-down.",
+			inputSchema: z.object({
+				id: z.string().describe("Temporal node id from MEMORY.md or /api/sessions/summaries"),
+				include_transcript: z.boolean().optional().describe("Include transcript context when available"),
+				transcript_char_limit: z.number().optional().describe("Max transcript chars to return (default 2000)"),
+			}),
+		},
+		async ({ id, include_transcript, transcript_char_limit }) => {
+			const result = await daemonFetch<unknown>(baseUrl, "/api/sessions/summaries/expand", {
+				method: "POST",
+				body: {
+					id,
+					includeTranscript: include_transcript ?? true,
+					transcriptCharLimit: transcript_char_limit,
+				},
+			});
+
+			if (!result.ok) {
+				return errorResult(`Temporal expansion failed: ${result.error}`);
 			}
 			return textResult(result.data);
 		},

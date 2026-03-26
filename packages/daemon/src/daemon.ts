@@ -64,6 +64,7 @@ import {
 	requireRateLimit,
 	requireScope,
 } from "./auth";
+import { resolveScopedAgent, resolveScopedProject as resolveScopedProjectForClaims, shouldEnforceScope } from "./request-scope";
 import { migrateConfig } from "./config-migration";
 import { createFilesystemConnector } from "./connectors/filesystem";
 import {
@@ -128,8 +129,9 @@ import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } fro
 import { walkImpact } from "./graph-impact";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
-import { resolveAgentId } from "./agent-id";
+import { getAgentScope, resolveAgentId } from "./agent-id";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
+import { expandTemporalNode } from "./temporal-expand";
 import {
 	DEFAULT_RETENTION,
 	enqueueDocumentIngestJob,
@@ -2388,10 +2390,7 @@ function parseOptionalBoolean(value: unknown): boolean | undefined {
 }
 
 function shouldEnforceAuthScope(c: Context): boolean {
-	if (authConfig.mode === "local") return false;
-	const auth = c.get("auth");
-	if (authConfig.mode === "hybrid" && !auth?.claims) return false;
-	return true;
+	return shouldEnforceScope(authConfig.mode, c.get("auth")?.claims ?? null);
 }
 
 function resolveScopedAgentId(
@@ -2399,20 +2398,14 @@ function resolveScopedAgentId(
 	requestedAgentId: string | undefined,
 	fallbackAgentId = "default",
 ): { agentId: string; error?: string } {
-	const auth = c.get("auth");
-	const scopedAgentId = parseOptionalString(auth?.claims?.scope.agent);
-	const agentId = requestedAgentId ?? scopedAgentId ?? fallbackAgentId;
+	return resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, requestedAgentId, fallbackAgentId);
+}
 
-	if (!shouldEnforceAuthScope(c)) {
-		return { agentId };
-	}
-
-	const decision = checkScope(auth?.claims ?? null, { agent: agentId }, authConfig.mode);
-	if (!decision.allowed) {
-		return { agentId, error: decision.reason ?? "scope violation" };
-	}
-
-	return { agentId };
+function resolveScopedProject(
+	c: Context,
+	requestedProject: string | undefined,
+): { project: string | undefined; error?: string } {
+	return resolveScopedProjectForClaims(c.get("auth")?.claims ?? null, authConfig.mode, requestedProject);
 }
 
 function validateSessionAgentBinding(
@@ -3135,17 +3128,7 @@ app.post("/api/memory/remember", async (c) => {
 	// Lossless transcript storage: write raw conversation text to
 	// session_transcripts so expand=true can join it at recall time.
 	if (body.transcript && sourceId) {
-		try {
-			getDbAccessor().withWriteTx((db) => {
-				db.prepare(
-					`INSERT OR IGNORE INTO session_transcripts
-					 (session_key, content, harness, project, agent_id, created_at)
-					VALUES (?, ?, ?, ?, 'default', ?)`,
-				).run(sourceId, body.transcript, sourceType, project, now);
-			});
-		} catch {
-			// Non-fatal — table may not exist pre-migration
-		}
+		upsertSessionTranscript(sourceId, body.transcript, sourceType, project, agentId);
 	}
 
 	// Generate embedding asynchronously — save memory first so failures are
@@ -4241,15 +4224,7 @@ app.post("/api/memory/recall", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	try {
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
-		// Look up read_policy for this agent to pass to hybridRecall.
-		const agentRow = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?")
-					.get(agentId) as { read_policy: string; policy_group: string | null } | undefined,
-		);
-		const readPolicy = agentRow?.read_policy;
-		const policyGroup = agentRow?.policy_group ?? null;
+		const agentScope = getAgentScope(agentId);
 		// Enforce auth scope: scoped tokens may only read their own project.
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		const result = await hybridRecall(
@@ -4257,7 +4232,8 @@ app.post("/api/memory/recall", async (c) => {
 				...body,
 				query,
 				agentId,
-				...(readPolicy ? { readPolicy, policyGroup } : {}),
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup,
 				...(scopeProject ? { project: scopeProject } : {}),
 			},
 			cfg,
@@ -5650,6 +5626,7 @@ import {
 	resetPromptDedup,
 	writeMemoryMd,
 } from "./hooks.js";
+import { upsertSessionTranscript } from "./session-transcripts.js";
 
 import {
 	type RuntimePath,
@@ -5941,21 +5918,15 @@ app.post("/api/hooks/recall", async (c) => {
 			agentId: c.req.header("x-signet-agent-id"),
 			sessionKey: body.sessionKey,
 		});
-		const agentRow = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?")
-					.get(agentId) as { read_policy: string; policy_group: string | null } | undefined,
-		);
-		const readPolicy = agentRow?.read_policy;
-		const policyGroup = agentRow?.policy_group ?? null;
+		const agentScope = getAgentScope(agentId);
 		const result = await hybridRecall(
 			{
 				query: body.query,
 				limit: body.limit,
 				scope: body.project,
 				agentId,
-				...(readPolicy ? { readPolicy, policyGroup } : {}),
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup,
 			},
 			cfg,
 			fetchEmbedding,
@@ -6001,6 +5972,8 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			harness: string;
 			summary: string;
 			sessionKey?: string;
+			project?: string;
+			agentId?: string;
 			runtimePath?: string;
 		};
 
@@ -6022,24 +5995,84 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		}
 
 		const now = new Date().toISOString();
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({ agentId: body.agentId, sessionKey: body.sessionKey }),
+		);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const agentId = scopedAgent.agentId;
+		const transcriptRow = body.sessionKey
+			? getDbAccessor().withReadDb((db) =>
+					db
+						.prepare(
+							`SELECT project
+							 FROM session_transcripts
+							 WHERE session_key = ? AND agent_id = ?`,
+						)
+						.get(body.sessionKey, agentId) as { project: string | null } | undefined,
+				)
+			: undefined;
+		const requestedProject = transcriptRow?.project ?? parseOptionalString(body.project);
+		const scopedProject = resolveScopedProject(c, requestedProject);
+		if (scopedProject.error) {
+			return c.json({ error: scopedProject.error }, 403);
+		}
+		const project = scopedProject.project ?? null;
 
 		const summaryId = crypto.randomUUID();
 		getDbAccessor().withWriteTx((db) => {
-			db.prepare(`
-        INSERT INTO memories (id, content, type, importance, source_type, who, tags, created_at, updated_at, updated_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, importance, source_id, source_type,
+					who, tags, project, agent_id, created_at, updated_at, updated_by
+				)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
 				summaryId,
 				body.summary,
 				"session_summary",
 				0.8,
+				body.sessionKey ?? null,
 				body.harness,
 				"system",
-				JSON.stringify(["session", "summary", body.harness]),
+				`session,summary,${body.harness}`,
+				project,
+				agentId,
 				now,
 				now,
 				"system",
 			);
+
+			const table = db
+				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
+				.get();
+			if (table) {
+				const nodeId = body.sessionKey
+					? `${body.sessionKey}:compaction:${Date.parse(now)}`
+					: crypto.randomUUID();
+				db.prepare(
+					`INSERT OR REPLACE INTO session_summaries (
+						id, project, depth, kind, content, token_count,
+						earliest_at, latest_at, session_key, harness,
+						agent_id, source_type, source_ref, meta_json, created_at
+					) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?)`,
+				).run(
+					nodeId,
+					project,
+					body.summary,
+					Math.ceil(body.summary.length / 4),
+					now,
+					now,
+					body.sessionKey ?? null,
+					body.harness,
+					agentId,
+					body.sessionKey ?? null,
+					JSON.stringify({ source: "compaction-complete" }),
+					now,
+				);
+			}
 		});
 
 		logger.info("hooks", "Compaction summary saved", {
@@ -6052,6 +6085,12 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		if (body.sessionKey) {
 			resetPromptDedup(body.sessionKey);
 		}
+
+		void getSynthesisWorker()?.triggerNow().catch((error) => {
+			logger.warn("synthesis", "Failed to trigger MEMORY.md synthesis after compaction", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
 
 		return c.json({
 			success: true,
@@ -6441,8 +6480,18 @@ app.get("/api/hooks/synthesis/config", (c) => {
 // Request MEMORY.md synthesis
 app.post("/api/hooks/synthesis", async (c) => {
 	try {
-		const body = (await c.req.json()) as SynthesisRequest;
-		const result = handleSynthesisRequest(body);
+		const body = (await c.req.json()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
+				sessionKey: body.sessionKey ?? c.req.header("x-signet-session-key"),
+			}),
+		);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const result = handleSynthesisRequest(body, { agentId: scopedAgent.agentId });
 		return c.json(result);
 	} catch (e) {
 		logger.error("hooks", "Synthesis request failed", e as Error);
@@ -6453,7 +6502,7 @@ app.post("/api/hooks/synthesis", async (c) => {
 // Save synthesized MEMORY.md
 app.post("/api/hooks/synthesis/complete", async (c) => {
 	try {
-		const body = (await c.req.json()) as { content: string };
+		const body = (await c.req.json()) as { content: string; agentId?: string; sessionKey?: string };
 
 		if (!body.content) {
 			return c.json({ error: "content is required" }, 400);
@@ -6477,9 +6526,23 @@ app.post("/api/hooks/synthesis/complete", async (c) => {
 		}
 
 		try {
-			const result = writeMemoryMd(body.content);
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({
+					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
+					sessionKey: body.sessionKey ?? c.req.header("x-signet-session-key"),
+				}),
+			);
+			if (scopedAgent.error) {
+				return c.json({ error: scopedAgent.error }, 403);
+			}
+			const result = writeMemoryMd(body.content, {
+				agentId: scopedAgent.agentId,
+				owner: "api-hooks-synthesis-complete",
+			});
 			if (!result.ok) {
-				return c.json({ error: result.error }, 400);
+				const status = result.code === "busy" ? 409 : 400;
+				return c.json({ error: result.error }, status);
 			}
 			logger.info("hooks", "MEMORY.md synthesized");
 		} finally {
@@ -6533,7 +6596,7 @@ app.get("/api/sessions", (c) => {
 });
 
 // Get single session status
-app.get("/api/sessions/:key", (c) => {
+app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {
 	const key = c.req.param("key");
 	const sessions = getActiveSessions();
 	const session = sessions.find((s) => s.key === key);
@@ -6544,7 +6607,7 @@ app.get("/api/sessions/:key", (c) => {
 });
 
 // Toggle bypass for a session
-app.post("/api/sessions/:key/bypass", async (c) => {
+app.post("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c) => {
 	const key = c.req.param("key");
 	const sessions = getActiveSessions();
 	const session = sessions.find((s) => s.key === key);
@@ -6570,7 +6633,7 @@ app.post("/api/sessions/:key/bypass", async (c) => {
 });
 
 // Renew a session — reset TTL to prevent silent eviction
-app.post("/api/sessions/:key/renew", (c) => {
+app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", (c) => {
 	const key = c.req.param("key");
 	const expiresAt = renewSession(key);
 	if (!expiresAt) {
@@ -6582,7 +6645,22 @@ app.post("/api/sessions/:key/renew", (c) => {
 // Session summaries DAG
 app.get("/api/sessions/summaries", (c) => {
 	const accessor = getDbAccessor();
-	const project = c.req.query("project");
+	const scopedAgent = resolveScopedAgentId(
+		c,
+		resolveAgentId({
+			agentId: c.req.query("agentId") ?? c.req.header("x-signet-agent-id"),
+			sessionKey: c.req.query("sessionKey") ?? c.req.header("x-signet-session-key"),
+		}),
+	);
+	if (scopedAgent.error) {
+		return c.json({ error: scopedAgent.error }, 403);
+	}
+	const scopedProject = resolveScopedProject(c, c.req.query("project"));
+	if (scopedProject.error) {
+		return c.json({ error: scopedProject.error }, 403);
+	}
+	const agentId = scopedAgent.agentId;
+	const project = scopedProject.project;
 	const depthRaw = c.req.query("depth");
 	const depthNum = depthRaw !== undefined ? Number(depthRaw) : undefined;
 	if (
@@ -6605,8 +6683,8 @@ app.get("/api/sessions/summaries", (c) => {
 	}
 
 	return accessor.withReadDb((db) => {
-		let where = "WHERE 1=1";
-		const params: unknown[] = [];
+		let where = "WHERE agent_id = ?";
+		const params: unknown[] = [agentId];
 
 		if (project) {
 			where += " AND project = ?";
@@ -6624,7 +6702,8 @@ app.get("/api/sessions/summaries", (c) => {
 		const summaries = db
 			.prepare(
 				`SELECT id, project, depth, kind, content, token_count,
-				        earliest_at, latest_at, session_key, harness, agent_id, created_at
+				        earliest_at, latest_at, session_key, harness, agent_id,
+				        source_type, source_ref, meta_json, created_at
 				 FROM session_summaries
 				 ${where}
 				 ORDER BY latest_at DESC
@@ -6644,6 +6723,47 @@ app.get("/api/sessions/summaries", (c) => {
 			total: countRow?.cnt ?? 0,
 		});
 	});
+});
+
+app.post("/api/sessions/summaries/expand", async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+	const id = typeof body.id === "string" ? body.id.trim() : "";
+	if (!id) {
+		return c.json({ error: "id is required" }, 400);
+	}
+
+	const includeTranscript =
+		typeof body.includeTranscript === "boolean" ? body.includeTranscript : true;
+	const transcriptCharLimit =
+		typeof body.transcriptCharLimit === "number" && Number.isFinite(body.transcriptCharLimit)
+			? Math.max(200, Math.min(12000, Math.trunc(body.transcriptCharLimit)))
+			: undefined;
+	const scopedAgent = resolveScopedAgentId(
+		c,
+		resolveAgentId({
+			agentId:
+				typeof body.agentId === "string" ? body.agentId : c.req.header("x-signet-agent-id"),
+			sessionKey:
+				typeof body.sessionKey === "string" ? body.sessionKey : c.req.header("x-signet-session-key"),
+		}),
+	);
+	if (scopedAgent.error) {
+		return c.json({ error: scopedAgent.error }, 403);
+	}
+	const scopedProject = resolveScopedProject(c, undefined);
+	if (scopedProject.error) {
+		return c.json({ error: scopedProject.error }, 403);
+	}
+
+	const result = expandTemporalNode(id, scopedAgent.agentId, {
+		includeTranscript,
+		project: scopedProject.project,
+		transcriptCharLimit,
+	});
+	if (!result) {
+		return c.json({ error: "summary node not found" }, 404);
+	}
+	return c.json(result);
 });
 
 // ============================================================================
@@ -8690,6 +8810,27 @@ app.post("/api/knowledge/expand/session", async (c) => {
 	const body = await c.req.json().catch(() => ({}));
 	const entityName =
 		typeof body.entityName === "string" ? body.entityName.trim() : "";
+	const scopedAgent = resolveScopedAgentId(
+		c,
+		resolveAgentId({
+			agentId:
+				typeof body.agentId === "string"
+					? body.agentId
+					: c.req.header("x-signet-agent-id"),
+			sessionKey:
+				typeof body.sessionId === "string"
+					? body.sessionId
+					: c.req.header("x-signet-session-key"),
+		}),
+	);
+	if (scopedAgent.error) {
+		return c.json({ error: scopedAgent.error }, 403);
+	}
+	const scopedProject = resolveScopedProject(c, undefined);
+	if (scopedProject.error) {
+		return c.json({ error: scopedProject.error }, 403);
+	}
+	const agentId = scopedAgent.agentId;
 	const sessionId =
 		typeof body.sessionId === "string" ? body.sessionId.trim() : undefined;
 	const timeRange =
@@ -8719,11 +8860,11 @@ app.post("/api/knowledge/expand/session", async (c) => {
 			.prepare(
 				`SELECT id, name FROM entities
 				 WHERE canonical_name LIKE ?
-				   AND agent_id = 'default'
+				   AND agent_id = ?
 				 ORDER BY mentions DESC, updated_at DESC
 				 LIMIT 1`,
 			)
-			.get(`%${entityName.toLowerCase()}%`) as
+			.get(`%${entityName.toLowerCase()}%`, agentId) as
 			| { id: string; name: string }
 			| undefined;
 
@@ -8735,9 +8876,16 @@ app.post("/api/knowledge/expand/session", async (c) => {
 		//   ← memory_entity_mentions → entities
 		const conditions = [
 			"mem.entity_id = ?",
+			"ss.agent_id = ?",
 			"ss.kind = 'session'",
+			"COALESCE(ss.source_type, 'summary') = 'summary'",
 		];
-		const args: Array<string | number> = [entity.id];
+		const args: Array<string | number> = [entity.id, agentId];
+
+		if (scopedProject.project) {
+			conditions.push("ss.project = ?");
+			args.push(scopedProject.project);
+		}
 
 		if (sessionId) {
 			conditions.push("ss.session_key = ?");

@@ -18,10 +18,12 @@ Hooks are HTTP endpoints exposed by the Signet [[daemon]]. Harnesses call them a
 | Hook | When | Purpose |
 |------|------|---------|
 | `session-start` | New session begins | Inject memories and identity into context |
+| `user-prompt-submit` | Before each user turn | Prefer structured recall, then transcript fallback when needed |
+| `session-end` | Session finishes | Persist transcript lineage and queue session summary |
 | `pre-compaction` | Before context compaction | Get summary guidelines |
-| `compaction-complete` | After compaction | Save session summary as a memory |
+| `compaction-complete` | After compaction | Save a first-class compaction artifact into the temporal DAG |
 | `synthesis` | Scheduled or manual | Get prompt to regenerate MEMORY.md |
-| `synthesis/complete` | After synthesis | Save new MEMORY.md |
+| `synthesis/complete` | After synthesis | Save the merge-safe temporal head |
 
 ---
 
@@ -175,7 +177,12 @@ hooks:
 
 **`POST /api/hooks/compaction-complete`**
 
-Called after compaction with the generated summary. Saves the summary as a `session_summary` type memory.
+Called after compaction with the generated summary. Saves the summary as a
+`session_summary` memory row and as a first-class temporal DAG artifact used
+by `MEMORY.md`.
+
+Temporal lineage remains agent-scoped. Same `sessionKey` values from
+different agents do not share transcript or summary storage.
 
 ### Request
 
@@ -183,9 +190,14 @@ Called after compaction with the generated summary. Saves the summary as a `sess
 {
   "harness": "openclaw",
   "summary": "Session summary text...",
-  "sessionKey": "optional-session-id"
+  "sessionKey": "optional-session-id",
+  "project": "/workspace/repo"
 }
 ```
+
+If compaction arrives before transcript persistence, `project` is the required
+fallback lineage key. When both exist, transcript lineage wins and the request
+project is only used as a fallback.
 
 ### Response
 
@@ -200,7 +212,13 @@ Called after compaction with the generated summary. Saves the summary as a `sess
 
 ## MEMORY.md Synthesis
 
-Synthesis regenerates the `MEMORY.md` file by asking an AI model to write a coherent summary of all stored memories. This is typically done on a schedule (daily or weekly) by the configured harness.
+Synthesis regenerates the `MEMORY.md` file by asking an AI model to write a
+coherent summary of scored memory and temporal state.
+
+The daemon synthesis worker is the primary runtime path. Harness-scheduled
+calls are still supported, but they now write through the same DB-backed,
+lease-protected head record. A busy head lease is a deferred write, not a
+terminal failure.
 
 ### Step 1: Request synthesis
 
@@ -306,6 +324,11 @@ await signet.onCompactionComplete({
 await signet.remember('nicholai prefers bun', { who: 'openclaw' });
 const results = await signet.recall('coding preferences');
 ```
+
+In the current OpenClaw plugin runtime, post-compaction persistence may read
+the latest compaction summary back from `sessionFile` when the hook payload
+only exposes metadata. That keeps compaction artifacts in the same temporal
+body as ordinary session-end summaries instead of discarding them.
 
 ---
 

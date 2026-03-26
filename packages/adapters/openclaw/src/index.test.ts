@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { OpenClawPluginApi } from "./openclaw-types";
 
 // Mock readStaticIdentity so staticFallback() always returns a
@@ -28,6 +31,11 @@ let failPromptSubmitCount = 0;
 let delaySessionStartMs = 0;
 let delayPromptSubmitMs = 0;
 let lastRememberBody: unknown = null;
+let lastPreCompactionBody: unknown = null;
+let lastCompactionBody: unknown = null;
+let lastSessionEndBody: unknown = null;
+let warnMessages: string[] = [];
+let testDir = "";
 
 function hit(path: string): void {
 	pathCounts.set(path, (pathCounts.get(path) ?? 0) + 1);
@@ -82,8 +90,8 @@ function createMockApi(): {
 			info() {
 				// no-op in tests
 			},
-			warn() {
-				// no-op in tests
+			warn(message) {
+				warnMessages.push(String(message));
 			},
 			error() {
 				// no-op in tests
@@ -124,6 +132,11 @@ beforeEach(() => {
 	delaySessionStartMs = 0;
 	delayPromptSubmitMs = 0;
 	lastRememberBody = null;
+	lastPreCompactionBody = null;
+	lastCompactionBody = null;
+	lastSessionEndBody = null;
+	warnMessages = [];
+	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
 
 	const mockFetch = Object.assign(
 		async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -133,7 +146,7 @@ beforeEach(() => {
 
 			switch (path) {
 				case "/health":
-					return new Response("ok", { status: 200 });
+					return jsonResponse({ pid: 1234 });
 				case "/api/hooks/session-start":
 					if (delaySessionStartMs > 0) {
 						await Bun.sleep(delaySessionStartMs);
@@ -157,7 +170,14 @@ beforeEach(() => {
 						engine: "fts+decay",
 					});
 				case "/api/hooks/session-end":
+					lastSessionEndBody = init?.body ? JSON.parse(String(init.body)) : null;
 					return jsonResponse({ memoriesSaved: 0 });
+				case "/api/hooks/pre-compaction":
+					lastPreCompactionBody = init?.body ? JSON.parse(String(init.body)) : null;
+					return jsonResponse({ summaryPrompt: "flush durable state", guidelines: "focus decisions" });
+				case "/api/hooks/compaction-complete":
+					lastCompactionBody = init?.body ? JSON.parse(String(init.body)) : null;
+					return jsonResponse({ success: true, memoryId: "sum-1" });
 				case "/api/memory/remember":
 					lastRememberBody = init?.body ? JSON.parse(String(init.body)) : null;
 					return jsonResponse({ id: "mem-1" });
@@ -214,6 +234,7 @@ afterEach(async () => {
 	globalThis.fetch = originalFetch;
 	globalThis.setInterval = originalSetInterval;
 	globalThis.clearInterval = originalClearInterval;
+	rmSync(testDir, { recursive: true, force: true });
 	for (const service of registeredServices) {
 		await service.stop();
 	}
@@ -249,6 +270,27 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 	});
 
+	it("does not dedupe prompt injection across different agents sharing a session key", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		const event = {
+			prompt: "Remember release criteria for this plugin",
+			messages: [{ role: "assistant", content: "Prior context" }],
+		};
+
+		const first = await beforePromptBuild?.(event, { sessionKey: "shared-session", agentId: "agent-a" });
+		const second = await beforePromptBuild?.(event, { sessionKey: "shared-session", agentId: "agent-b" });
+
+		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getPrependContext(second)).toContain("turn-memory");
+		expect(getHits("/api/hooks/session-start")).toBe(2);
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
+	});
+
 	it("keeps legacy before_agent_start path working when used alone", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -282,7 +324,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(lastRememberBody).not.toHaveProperty("importance");
 	});
 
-	it("deduplicates session-start for sessionless turns when both hooks fire", async () => {
+	it("deduplicates session-start for sessionless turns even if recall runs on both hooks", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
@@ -301,9 +343,9 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		const second = await beforeAgentStart?.(event, ctx);
 
 		expect(getPrependContext(first)).toContain("turn-memory");
-		expect(second).toBeUndefined();
+		expect(getPrependContext(second)).toContain("turn-memory");
 		expect(getHits("/api/hooks/session-start")).toBe(1);
-		expect(getHits("/api/hooks/user-prompt-submit")).toBe(1);
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
 	});
 
 	it("does not retry session-start on fallback hook after prompt dedupe kicks in", async () => {
@@ -396,6 +438,423 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 	});
+
+	it("fires pre-compaction hooks once across both OpenClaw compaction event names", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		const sessionCompactBefore = hooks.get("session:compact:before");
+		expect(beforeCompaction).toBeDefined();
+		expect(sessionCompactBefore).toBeDefined();
+
+		const event = { messageCount: 12, tokenCount: 240, compactingCount: 8 };
+		const ctx = {
+			sessionKey: "session-compact-1",
+			sessionFile: join(testDir, "session-compact-1.jsonl"),
+			agentId: "agent-1",
+		};
+
+		await beforeCompaction?.(event, ctx);
+		await sessionCompactBefore?.(event, ctx);
+
+		expect(getHits("/api/hooks/pre-compaction")).toBe(1);
+		expect(lastPreCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-compact-1",
+			messageCount: 12,
+			runtimePath: "plugin",
+		});
+	});
+
+	it("uses compactedCount as a fallback pre-compaction message count", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		await beforeCompaction?.({ compactedCount: 6 }, { sessionKey: "session-compact-count", agentId: "agent-1" });
+
+		expect(lastPreCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-compact-count",
+			messageCount: 6,
+			runtimePath: "plugin",
+		});
+	});
+
+	it("uses nested compaction counts as a fallback pre-compaction message count", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		await beforeCompaction?.(
+			{ compaction: { compactingCount: 9 } },
+			{ sessionKey: "session-compact-nested", agentId: "agent-1" },
+		);
+
+		expect(lastPreCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-compact-nested",
+			messageCount: 9,
+			runtimePath: "plugin",
+		});
+	});
+
+	it("combines summaryPrompt and guidelines for pre-compaction context", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		const result = await beforeCompaction?.(
+			{ messageCount: 7, compactedCount: 2 },
+			{ sessionKey: "session-compact-guidance", agentId: "agent-1" },
+		);
+
+		expect(getPrependContext(result)).toContain("flush durable state");
+		expect(getPrependContext(result)).toContain("focus decisions");
+	});
+
+	it("does not dedupe pre-compaction hooks across different agents sharing a session key", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		const event = { messageCount: 12, compactedCount: 5 };
+		await beforeCompaction?.(event, { sessionKey: "shared-compaction", agentId: "agent-a" });
+		await beforeCompaction?.(event, { sessionKey: "shared-compaction", agentId: "agent-b" });
+
+		expect(getHits("/api/hooks/pre-compaction")).toBe(2);
+	});
+
+	it("does not collapse distinct pre-compaction events that reuse the same message count", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		const ctx = { sessionKey: "shared-compaction-shape", agentId: "agent-a" };
+		await beforeCompaction?.({ messageCount: 12, tokenCount: 100 }, ctx);
+		await beforeCompaction?.({ messageCount: 12, tokenCount: 200 }, ctx);
+
+		expect(getHits("/api/hooks/pre-compaction")).toBe(2);
+	});
+
+	it("reads the compaction summary from sessionFile and saves it once", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		const sessionCompactAfter = hooks.get("session:compact:after");
+		expect(afterCompaction).toBeDefined();
+		expect(sessionCompactAfter).toBeDefined();
+
+		const sessionFile = join(testDir, "session-after.jsonl");
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({ type: "session", version: 1, id: "session-after" }),
+				JSON.stringify({
+					type: "compaction",
+					id: "comp-1",
+					summary: "Compacted history keeps the release blockers and migration plan.",
+				}),
+			].join("\n"),
+			"utf-8",
+		);
+
+		const event = { messageCount: 4, compactedCount: 2, sessionFile };
+		const ctx = {
+			sessionKey: "session-after",
+			sessionFile,
+			agentId: "agent-1",
+		};
+
+		await afterCompaction?.(event, ctx);
+		await sessionCompactAfter?.(event, ctx);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
+		expect(lastCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-after",
+			runtimePath: "plugin",
+			summary: "Compacted history keeps the release blockers and migration plan.",
+		});
+		expect(lastCompactionBody).not.toHaveProperty("project");
+	});
+
+	it("reads the compaction summary from the event payload sessionFile when hook context lacks it", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		const sessionFile = join(testDir, "session-after-event.jsonl");
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({ type: "session", version: 1, id: "session-after-event" }),
+				JSON.stringify({
+					type: "compaction",
+					id: "comp-2",
+					summary: "Recovered from event metadata session file.",
+				}),
+			].join("\n"),
+			"utf-8",
+		);
+
+		await afterCompaction?.(
+			{ messageCount: 5, compactedCount: 3, sessionFile },
+			{ sessionKey: "session-after-event", agentId: "agent-1" },
+		);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
+		expect(lastCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-after-event",
+			runtimePath: "plugin",
+			summary: "Recovered from event metadata session file.",
+		});
+		expect(lastCompactionBody).not.toHaveProperty("project");
+	});
+
+	it("prefers event project lineage over workspace fallback for compaction-complete", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		await afterCompaction?.(
+			{ summary: "Scoped summary", cwd: "/tmp/branch-lineage" },
+			{ sessionKey: "session-lineage", agentId: "agent-1" },
+		);
+
+		expect(lastCompactionBody).toMatchObject({
+			project: "/tmp/branch-lineage",
+			sessionKey: "session-lineage",
+		});
+	});
+
+	it("recovers project lineage from the session file header when the event lacks cwd/project hints", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		const sessionFile = join(testDir, "session-lineage-header.jsonl");
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({
+					type: "session",
+					version: 1,
+					id: "session-lineage-header",
+					cwd: "/tmp/header-lineage",
+				}),
+				JSON.stringify({
+					type: "compaction",
+					id: "comp-lineage-header",
+					summary: "Recovered project from session header.",
+				}),
+			].join("\n"),
+			"utf-8",
+		);
+
+		await afterCompaction?.({ sessionFile }, { sessionKey: "session-lineage-header", agentId: "agent-1" });
+
+		expect(lastCompactionBody).toMatchObject({
+			project: "/tmp/header-lineage",
+			sessionKey: "session-lineage-header",
+		});
+	});
+
+	it("deduplicates duplicate compaction-complete writes even when session file visibility differs across hook aliases", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		const sessionCompactAfter = hooks.get("session:compact:after");
+		expect(afterCompaction).toBeDefined();
+		expect(sessionCompactAfter).toBeDefined();
+
+		const sessionFile = join(testDir, "session-after-dedupe.jsonl");
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({ type: "session", version: 1, id: "session-after-dedupe" }),
+				JSON.stringify({
+					type: "compaction",
+					id: "comp-dedupe",
+					summary: "Stable recovered summary.",
+				}),
+			].join("\n"),
+			"utf-8",
+		);
+
+		await afterCompaction?.(
+			{ summary: "Stable recovered summary.", sessionFile },
+			{ sessionKey: "session-after-dedupe", sessionFile, agentId: "agent-1" },
+		);
+		await sessionCompactAfter?.(
+			{ summary: "Stable recovered summary." },
+			{ sessionKey: "session-after-dedupe", agentId: "agent-1" },
+		);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
+	});
+
+	it("does not dedupe distinct compaction summaries that share the same prefix", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		const prefix = "x".repeat(140);
+		await afterCompaction?.({ summary: `${prefix}-a` }, { sessionKey: "session-prefix", agentId: "agent-1" });
+		await afterCompaction?.({ summary: `${prefix}-b` }, { sessionKey: "session-prefix", agentId: "agent-1" });
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(2);
+	});
+
+	it("does not dedupe compaction-complete hooks across different agents sharing a session key", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		await afterCompaction?.(
+			{ summary: "Shared summary text" },
+			{ sessionKey: "shared-compaction", agentId: "agent-a" },
+		);
+		await afterCompaction?.(
+			{ summary: "Shared summary text" },
+			{ sessionKey: "shared-compaction", agentId: "agent-b" },
+		);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(2);
+	});
+
+	it("does not collapse distinct compactions that reuse the same summary text", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		const ctx = { sessionKey: "same-summary", agentId: "agent-a" };
+		await afterCompaction?.({ compactedCount: 2, messageCount: 8, summary: "Stable summary" }, ctx);
+		await afterCompaction?.({ compactedCount: 3, messageCount: 9, summary: "Stable summary" }, ctx);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(2);
+	});
+
+	it("clears prompt dedupe after compaction even when no summary is recoverable", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const afterCompaction = hooks.get("after_compaction");
+		expect(beforePromptBuild).toBeDefined();
+		expect(afterCompaction).toBeDefined();
+
+		const event = {
+			prompt: "Need the same context again",
+			messages: [{ role: "assistant", content: "Earlier turn" }],
+		};
+		const ctx = {
+			sessionKey: "compact-reset-nosummary",
+			agentId: "agent-1",
+		};
+
+		const first = await beforePromptBuild?.(event, ctx);
+		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(1);
+
+		await afterCompaction?.({ compactedCount: 2 }, ctx);
+		expect(getHits("/api/hooks/compaction-complete")).toBe(0);
+		expect(warnMessages.some((message) => message.includes("compaction summary unavailable"))).toBe(true);
+
+		const second = await beforePromptBuild?.(event, ctx);
+		expect(getPrependContext(second)).toContain("turn-memory");
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
+	});
+
+	it("clears prompt dedupe after compaction so the next turn can re-inject context", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const afterCompaction = hooks.get("after_compaction");
+		expect(beforePromptBuild).toBeDefined();
+		expect(afterCompaction).toBeDefined();
+
+		const event = {
+			prompt: "Need the same context again",
+			messages: [{ role: "assistant", content: "Earlier turn" }],
+		};
+		const ctx = {
+			sessionKey: "compact-reset",
+			agentId: "agent-1",
+		};
+
+		const first = await beforePromptBuild?.(event, ctx);
+		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(1);
+
+		await afterCompaction?.({ summary: "Compacted state" }, ctx);
+		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
+
+		const second = await beforePromptBuild?.(event, ctx);
+		expect(getPrependContext(second)).toContain("turn-memory");
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
+	});
+
+	it("forwards transcript and project lineage on agent_end session capture", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const agentEnd = hooks.get("agent_end");
+		expect(agentEnd).toBeDefined();
+
+		const sessionFile = join(testDir, "session-end.jsonl");
+		await agentEnd?.(
+			{
+				cwd: "/tmp/session-end-project",
+				sessionId: "session-end-id",
+				sessionKey: "session-end-key",
+				sessionFile,
+			},
+			{
+				agentId: "agent-1",
+				sessionFile,
+			},
+		);
+
+		expect(getHits("/api/hooks/session-end")).toBe(1);
+		expect(lastSessionEndBody).toMatchObject({
+			agentId: "agent-1",
+			cwd: "/tmp/session-end-project",
+			harness: "openclaw",
+			runtimePath: "plugin",
+			sessionId: "session-end-id",
+			sessionKey: "session-end-key",
+			transcriptPath: sessionFile,
+		});
+	});
+
 	it("does not reregister marketplace proxy tools on refresh", async () => {
 		const { api, tools } = createMockApi();
 		signetPlugin.register(api);
@@ -414,5 +873,4 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(refreshedNames.some((name) => name === "signet_server_a_alpha_2")).toBeFalse();
 		expect(refreshedNames.some((name) => name === "signet_server_a_beta_2")).toBeFalse();
 	});
-
 });

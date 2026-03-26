@@ -13,12 +13,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { PipelineSynthesisConfig } from "../memory-config";
-import { handleSynthesisRequest, writeMemoryMd } from "../hooks";
-import { getSynthesisProvider } from "../synthesis-llm";
-import { logger } from "../logger";
+import type { PipelineSynthesisConfig } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
+import { appendSynthesisIndexBlock, handleSynthesisRequest, writeMemoryMd } from "../hooks";
+import { logger } from "../logger";
 import { activeSessionCount } from "../session-tracker";
+import { getSynthesisProvider } from "../synthesis-llm";
 import { generateWithTracking } from "./provider";
 
 function getAgentsDir(): string {
@@ -103,11 +103,13 @@ function isExpectedSessionActivityLookupError(error: unknown, table: string): bo
 function getLastSessionEndTime(): number {
 	try {
 		const checkpointRow = getDbAccessor().withReadDb((db) => {
-			return db.prepare(`
+			return db
+				.prepare(`
 				SELECT MAX(created_at) as last_end
 				FROM session_checkpoints
 				WHERE trigger = 'session_end'
-			`).get();
+			`)
+				.get();
 		});
 		const checkpointTs = parseLastEndTimestamp(checkpointRow);
 		if (checkpointTs > 0) {
@@ -152,7 +154,7 @@ function getLastSessionEndTime(): number {
 // Core synthesis execution
 // ---------------------------------------------------------------------------
 
-type SynthesisResult = "ok" | "empty" | "failed";
+type SynthesisResult = "ok" | "empty" | "failed" | "busy";
 export type SynthesisDrainResult = "completed" | "timeout";
 
 async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisResult> {
@@ -162,22 +164,10 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 	});
 
 	try {
-		const lastRun = readLastSynthesisTime();
-
-		// Only use incremental merge when MEMORY.md exists to merge into;
-		// if the file was deleted, fall back to full regeneration so no
-		// memories older than lastRun are silently omitted.
-		const memoryMdExists = existsSync(join(getAgentsDir(), "MEMORY.md"));
-		const synthesisData = handleSynthesisRequest(
-			{ trigger: "scheduled" },
-			{
-				maxTokens: config.maxTokens,
-				sinceTimestamp: lastRun > 0 && memoryMdExists ? lastRun : undefined,
-			},
-		);
+		const synthesisData = handleSynthesisRequest({ trigger: "scheduled" }, { maxTokens: config.maxTokens });
 
 		if (synthesisData.fileCount === 0) {
-			logger.info("synthesis", "No session summaries to synthesize, skipping");
+			logger.info("synthesis", "No synthesis sources available, skipping");
 			return "empty";
 		}
 
@@ -198,24 +188,31 @@ async function runSynthesis(config: PipelineSynthesisConfig): Promise<SynthesisR
 		if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
 			try {
 				JSON.parse(trimmed);
-				logger.error("synthesis", "LLM returned JSON instead of markdown, skipping write",
-					undefined, { preview: trimmed.slice(0, 200) });
+				logger.error("synthesis", "LLM returned JSON instead of markdown, skipping write", undefined, {
+					preview: trimmed.slice(0, 200),
+				});
 				return "failed";
 			} catch {
 				// Not valid JSON — markdown starting with [ or { is fine
 			}
 		}
 
+		const finalText = appendSynthesisIndexBlock(result.text, synthesisData.indexBlock ?? "");
+
 		// Write MEMORY.md via shared helper (handles backup)
-		const writeResult = writeMemoryMd(result.text);
+		const writeResult = writeMemoryMd(finalText, { owner: "synthesis-worker" });
 		if (!writeResult.ok) {
+			if (writeResult.code === "busy") {
+				logger.warn("synthesis", "MEMORY.md head busy, deferring synthesis write");
+				return "busy";
+			}
 			logger.error("synthesis", `MEMORY.md write refused: ${writeResult.error}`);
 			return "failed";
 		}
 
 		logger.info("synthesis", "MEMORY.md synthesized", {
-			sessionFiles: synthesisData.fileCount,
-			outputLength: result.text.length,
+			sourceItems: synthesisData.fileCount,
+			outputLength: finalText.length,
 			...(result.usage
 				? {
 						inputTokens: result.usage.inputTokens,
@@ -254,9 +251,7 @@ export interface SynthesisWorkerHandle {
 	readonly lastRunAt: number;
 }
 
-export function startSynthesisWorker(
-	config: PipelineSynthesisConfig,
-): SynthesisWorkerHandle {
+export function startSynthesisWorker(config: PipelineSynthesisConfig): SynthesisWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 	let isSynthesizing = false;
@@ -338,10 +333,13 @@ export function startSynthesisWorker(
 
 			try {
 				currentRunPromise = runSynthesis(config);
-				await currentRunPromise;
-				// Write timestamp on both success and failure to prevent
-				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
-				writeLastSynthesisTime(Date.now());
+				const result = await currentRunPromise;
+				if (result !== "busy") {
+					// Busy means another writer currently owns the shared
+					// MEMORY.md head lease. Leave last-run untouched so the
+					// next tick retries instead of waiting a full interval.
+					writeLastSynthesisTime(Date.now());
+				}
 			} finally {
 				currentRunPromise = null;
 				releaseWriteLock(lockToken);
@@ -391,10 +389,7 @@ export function startSynthesisWorker(
 					// External callers can hold the write lock without setting
 					// currentRunPromise, so drain must wait for both the active run
 					// and the shared lock release before shutdown continues.
-					Promise.all([
-						currentRunPromise ?? Promise.resolve(),
-						lockReleasedPromise,
-					]).then(() => undefined),
+					Promise.all([currentRunPromise ?? Promise.resolve(), lockReleasedPromise]).then(() => undefined),
 					new Promise<void>((resolve) => {
 						timeoutId = setTimeout(() => {
 							timedOut = true;
@@ -444,13 +439,18 @@ export function startSynthesisWorker(
 
 				currentRunPromise = runSynthesis(config);
 				const result = await currentRunPromise;
-				// Write timestamp on both success and failure to prevent
-				// rapid retry loops (next attempt waits MIN_INTERVAL_MS)
-				writeLastSynthesisTime(Date.now());
+				if (result !== "busy") {
+					writeLastSynthesisTime(Date.now());
+				}
 				return {
 					success: result === "ok",
-					skipped: result === "empty",
-					reason: result === "empty" ? "No session summaries to synthesize" : undefined,
+					skipped: result === "empty" || result === "busy",
+					reason:
+						result === "empty"
+							? "No session summaries to synthesize"
+							: result === "busy"
+								? "MEMORY.md head busy"
+								: undefined,
 				};
 			} finally {
 				currentRunPromise = null;

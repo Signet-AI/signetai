@@ -1620,15 +1620,24 @@ for in-context injection.
 ```json
 {
   "harness": "claude-code",
+  "userMessage": "How do I set up dark mode?",
   "userPrompt": "How do I set up dark mode?",
   "lastAssistantMessage": "Earlier we discussed using CSS variables for theme tokens.",
   "sessionKey": "session-uuid",
+  "transcriptPath": "/tmp/session-transcript.txt",
   "runtimePath": "plugin"
 }
 ```
 
-`harness` and `userPrompt` are required.
-`lastAssistantMessage` is optional and improves recall matching.
+`harness` is required.
+`userMessage` is preferred when the harness can provide a cleaned user turn.
+`userPrompt`, `lastAssistantMessage`, `transcriptPath`, and inline `transcript`
+are optional.
+
+Prompt-submit retrieval prefers structured memory recall. When structured
+recall is weak or empty, the daemon may inject agent-scoped transcript
+fallback excerpts from prior session transcripts instead of returning no
+context.
 
 ### POST /api/hooks/session-end
 
@@ -1642,11 +1651,14 @@ Releases the session's runtime path claim.
   "harness": "claude-code",
   "sessionKey": "session-uuid",
   "sessionId": "session-uuid",
+  "transcriptPath": "/tmp/session-transcript.txt",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` is required.
+`transcriptPath` or inline `transcript` may be provided for lossless transcript
+capture.
 
 ### POST /api/hooks/remember
 
@@ -1701,7 +1713,8 @@ the compaction prompt.
 
 ### POST /api/hooks/compaction-complete
 
-Save a compaction summary as a `session_summary` memory.
+Save a compaction summary as a memory row and as a temporal DAG artifact used by
+`MEMORY.md` synthesis.
 
 **Request body**
 
@@ -1710,11 +1723,25 @@ Save a compaction summary as a `session_summary` memory.
   "harness": "claude-code",
   "summary": "Session covered dark mode setup and vim configuration...",
   "sessionKey": "session-uuid",
+  "project": "/workspace/repo",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` and `summary` are required.
+
+If `sessionKey` is present, the daemon uses it to preserve lineage:
+
+- the memory row is agent-scoped
+- `source_id` points back to the session lineage
+- the temporal node keeps `session_key`
+- the artifact can later be expanded through the temporal drill-down API
+- transcript and temporal summary persistence are keyed by `agentId +
+  sessionKey`, so identical session keys from different agents do not collide
+
+If compaction fires before transcript persistence lands, callers should also
+send `project`. The daemon uses that explicit project as the fallback lineage
+scope until transcript storage catches up.
 
 **Response**
 
@@ -1731,18 +1758,35 @@ Return the current synthesis configuration (thresholds, model, schedule).
 Request a `MEMORY.md` synthesis run. Implementation-defined request body
 and response from `handleSynthesisRequest`.
 
+Current synthesis prompt construction is DB-backed:
+- scored memories come from the memory database, not dated markdown files
+- temporal context comes from `session_summaries` DAG artifacts
+- responses may include an `indexBlock` used to append the exact temporal index
+  to the rendered `MEMORY.md`
+
+Optional `agentId` / `sessionKey` inputs may be provided so synthesis resolves
+the correct agent-scoped head.
+
 ### POST /api/hooks/synthesis/complete
 
 Write a newly synthesized `MEMORY.md`. Backs up the existing file before
-overwriting.
+overwriting and records DB-backed head metadata used for same-agent
+merge protection.
 
 **Request body**
 
 ```json
-{ "content": "# Memory\n\n..." }
+{
+  "content": "# Memory\n\n...",
+  "agentId": "optional-agent-id",
+  "sessionKey": "optional-session-key"
+}
 ```
 
 `content` is required.
+
+If another writer currently holds the active `MEMORY.md` lease for the same
+agent head, this route returns `409`.
 
 **Response**
 
@@ -1795,6 +1839,64 @@ Get a single session's status by its session key.
 ```
 
 Returns `404` if the session key is not found.
+
+### GET /api/sessions/summaries
+
+List temporal summary nodes used for drill-down and `MEMORY.md` synthesis.
+Results are agent-scoped.
+
+**Response**
+
+```json
+{
+  "summaries": [
+    {
+      "id": "sess-1",
+      "kind": "session",
+      "depth": 0,
+      "source_type": "summary",
+      "source_ref": "session-uuid",
+      "meta_json": "{\"source\":\"summary-worker\"}"
+    }
+  ]
+}
+```
+
+### POST /api/sessions/summaries/expand
+
+Expand a temporal node by id. Returns lineage, linked memories, and transcript
+context for `MEMORY.md` drill-down and LCM-style expansion. Expansion is
+agent-scoped.
+
+**Request body**
+
+```json
+{
+  "id": "node-id",
+  "includeTranscript": true,
+  "transcriptCharLimit": 2000
+}
+```
+
+**Response**
+
+```json
+{
+  "node": {
+    "id": "node-id",
+    "kind": "session",
+    "depth": 0,
+    "sourceType": "summary"
+  },
+  "parents": [],
+  "children": [],
+  "linkedMemories": [],
+  "transcript": {
+    "sessionKey": "session-uuid",
+    "excerpt": "..."
+  }
+}
+```
 
 ### POST /api/sessions/:key/bypass
 

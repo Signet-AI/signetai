@@ -133,15 +133,27 @@ export function runSessionComparison(
 ): ComparisonResult | null {
 	// Step 1: Read session_scores for continuity confidence
 	const sessionScore = accessor.withReadDb((db) => {
-		return db
-			.prepare(
-				`SELECT score, confidence, project
-				 FROM session_scores
-				 WHERE session_key = ?
-				 ORDER BY created_at DESC
-				 LIMIT 1`,
-			)
-			.get(sessionKey) as SessionScoreRow | undefined;
+		try {
+			return db
+				.prepare(
+					`SELECT score, confidence, project
+					 FROM session_scores
+					 WHERE session_key = ? AND agent_id = ?
+					 ORDER BY created_at DESC
+					 LIMIT 1`,
+				)
+				.get(sessionKey, agentId) as SessionScoreRow | undefined;
+		} catch {
+			return db
+				.prepare(
+					`SELECT score, confidence, project
+					 FROM session_scores
+					 WHERE session_key = ?
+					 ORDER BY created_at DESC
+					 LIMIT 1`,
+				)
+				.get(sessionKey) as SessionScoreRow | undefined;
+		}
 	});
 
 	if (!sessionScore) {
