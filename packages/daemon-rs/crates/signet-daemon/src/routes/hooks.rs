@@ -62,6 +62,21 @@ fn resolve_compaction_project(
     Ok(fallback.map(ToOwned::to_owned))
 }
 
+fn strip_untrusted_metadata(raw: &str) -> String {
+    raw.lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with("conversation_label:")
+                && !trimmed.starts_with("session_label:")
+                && !trimmed.starts_with("assistant_context:")
+                && !trimmed.starts_with("system_context:")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/hooks/session-start
 // ---------------------------------------------------------------------------
@@ -244,9 +259,10 @@ pub async fn prompt_submit(
         .as_deref()
         .or(body.user_prompt.as_deref())
         .unwrap_or("");
+    let cleaned = strip_untrusted_metadata(message);
 
     // Extract simple query terms for search
-    let terms: Vec<&str> = message
+    let terms: Vec<&str> = cleaned
         .split_whitespace()
         .filter(|w| w.len() >= 3)
         .take(12)
@@ -255,10 +271,10 @@ pub async fn prompt_submit(
 
     // Record in continuity tracker
     if let Some(key) = &body.session_key {
-        let snippet = if message.len() > 200 {
-            &message[..200]
+        let snippet = if cleaned.len() > 200 {
+            &cleaned[..200]
         } else {
-            message
+            cleaned.as_str()
         };
         state.continuity.record_prompt(key, &query_terms, snippet);
     }
@@ -788,7 +804,7 @@ pub async fn compaction_complete(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_compaction_project;
+    use super::{resolve_compaction_project, strip_untrusted_metadata};
 
     #[test]
     fn compaction_project_prefers_transcript_lineage() {
@@ -851,5 +867,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(project.as_deref(), Some("proj-fallback"));
+    }
+
+    #[test]
+    fn strip_untrusted_metadata_removes_envelope_lines() {
+        let cleaned = strip_untrusted_metadata(
+            "conversation_label: ops\nassistant_context: ignore this\nwhat changed in tier2",
+        );
+        assert_eq!(cleaned, "what changed in tier2");
     }
 }

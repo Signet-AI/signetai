@@ -6073,7 +6073,7 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 					project,
 					sessionKey: body.sessionKey ?? null,
 					sourceType: "compaction",
-					sourceRef: null,
+					sourceRef: body.sessionKey ?? null,
 					harness: body.harness,
 				});
 			}

@@ -13,7 +13,7 @@ success_criteria:
   - "Prompt-time retrieval keeps structured distillation primary while transcript retrieval stays a searchable, embeddable fallback and deep-history substrate"
   - "Three-tier memory surfaces are mandatory: a compact global head, rolling thread heads, and a lossless lineage substrate"
   - "Multi-thread continuity remains stable across many simultaneous people/projects/topics via thread-scoped indexing and anti-bleed retrieval controls"
-scope_boundary: "Closes the runtime and documentation gaps around lossless working memory and defines strict three-tier behavior for generalized multi-thread use cases. Full daemon-rs cutover remains a separate program."
+scope_boundary: "Closes the runtime and documentation gaps around lossless working memory, and mirrors touched daemon hook contracts into daemon-rs in the same work wave. Full daemon-rs cutover remains a separate program."
 ---
 
 # Lossless Working Memory Closure
@@ -279,9 +279,15 @@ Required documentation coverage:
 
 ## Rust Parity Requirement
 
-Rust parity remains an explicit program, but it is deferred for this
-closure wave.
+This closure spec does not require full daemon-rs cutover, but it does
+require parity for every daemon hook contract touched by the work.
 
-For this spec, TypeScript runtime behavior is the source of truth.
-Rust cutover and parity enforcement remain tracked by the dedicated
-daemon-rust specs and are not merge blockers here.
+Minimum contract:
+
+- request/response shape changes must be mirrored into `packages/daemon-rs/`
+  in the same PR
+- parity tests or route-local regressions must land in the same PR when
+  hook semantics change
+
+Broader Rust daemon completion remains tracked by the separate parity and
+cutover specs.
