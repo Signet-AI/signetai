@@ -815,6 +815,30 @@ function resolveCompactionSessionFile(
 	);
 }
 
+function readSessionFileProject(sessionFile: string | undefined): string | undefined {
+	if (!sessionFile || !existsSync(sessionFile)) return undefined;
+
+	try {
+		const lines = readFileSync(sessionFile, "utf-8")
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
+		for (const line of lines) {
+			try {
+				const row = JSON.parse(line) as unknown;
+				if (!isRecord(row) || row.type !== "session") continue;
+				return firstNonEmptyString(row.cwd, row.project, row.workspace);
+			} catch {
+				// ignore malformed transcript lines
+			}
+		}
+	} catch {
+		// best effort only
+	}
+
+	return undefined;
+}
+
 function extractCompactionSummary(event: Record<string, unknown>, sessionFile: string | undefined): string | undefined {
 	const direct = readString(event.summary);
 	if (direct) return direct;
@@ -1448,10 +1472,12 @@ const signetPlugin = {
 		const resolveCompactionProject = (
 			event: Record<string, unknown>,
 			ctx: {
+				sessionFile?: string;
 				project?: string;
 			},
 		): string | undefined => {
 			const compaction = isRecord(event.compaction) ? event.compaction : undefined;
+			const sessionFile = resolveCompactionSessionFile(event, ctx.sessionFile);
 			return firstNonEmptyString(
 				event.project,
 				event.cwd,
@@ -1460,6 +1486,7 @@ const signetPlugin = {
 				compaction?.cwd,
 				compaction?.workspace,
 				ctx.project,
+				readSessionFileProject(sessionFile),
 			);
 		};
 
@@ -1518,7 +1545,11 @@ const signetPlugin = {
 						? event.compactingCount
 						: typeof event.compactedCount === "number"
 							? event.compactedCount
-							: undefined;
+							: isRecord(event.compaction) && typeof event.compaction.compactingCount === "number"
+								? event.compaction.compactingCount
+								: isRecord(event.compaction) && typeof event.compaction.compactedCount === "number"
+									? event.compaction.compactedCount
+									: undefined;
 			const dedupeKey = buildCompactionEventKey(event, {
 				agentId: ctx.agentId,
 				sessionKey,

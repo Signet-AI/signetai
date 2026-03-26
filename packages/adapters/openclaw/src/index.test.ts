@@ -484,6 +484,26 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
+	it("uses nested compaction counts as a fallback pre-compaction message count", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		await beforeCompaction?.(
+			{ compaction: { compactingCount: 9 } },
+			{ sessionKey: "session-compact-nested", agentId: "agent-1" },
+		);
+
+		expect(lastPreCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-compact-nested",
+			messageCount: 9,
+			runtimePath: "plugin",
+		});
+	});
+
 	it("combines summaryPrompt and guidelines for pre-compaction context", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -622,6 +642,40 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(lastCompactionBody).toMatchObject({
 			project: "/tmp/branch-lineage",
 			sessionKey: "session-lineage",
+		});
+	});
+
+	it("recovers project lineage from the session file header when the event lacks cwd/project hints", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		const sessionFile = join(testDir, "session-lineage-header.jsonl");
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({
+					type: "session",
+					version: 1,
+					id: "session-lineage-header",
+					cwd: "/tmp/header-lineage",
+				}),
+				JSON.stringify({
+					type: "compaction",
+					id: "comp-lineage-header",
+					summary: "Recovered project from session header.",
+				}),
+			].join("\n"),
+			"utf-8",
+		);
+
+		await afterCompaction?.({ sessionFile }, { sessionKey: "session-lineage-header", agentId: "agent-1" });
+
+		expect(lastCompactionBody).toMatchObject({
+			project: "/tmp/header-lineage",
+			sessionKey: "session-lineage-header",
 		});
 	});
 
