@@ -337,19 +337,6 @@ function findManagedForge(deps: ForgeDeps, binaryName = "forge"): string | null 
 	return null;
 }
 
-function readInstalledForgeVersion(binaryPath: string): string | null {
-	try {
-		const output = execFileSync(binaryPath, ["--version"], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		}).trim();
-		const match = output.match(/(\d+\.\d+\.\d+)/);
-		return match?.[1] ?? (output || null);
-	} catch {
-		return null;
-	}
-}
-
 async function fetchJson<T>(url: string): Promise<T> {
 	const response = await fetch(url, {
 		headers: {
@@ -552,10 +539,10 @@ function buildStatusPayload(deps: ForgeDeps, manifest: ForgeManifest): ForgeStat
 	const binaryPath = findInstalledForge(deps, manifest.binary);
 	const record = readInstallRecord();
 	const managedBinaryPath = findManagedForge(deps, manifest.binary);
-	const installedVersion = binaryPath ? readInstalledForgeVersion(binaryPath) : null;
-	const managedVersion = managedBinaryPath ? readInstalledForgeVersion(managedBinaryPath) : null;
 	const managedPath = signetManagedBinaryPath(manifest.binary);
 	const managedRecord = isSignetManagedForgeRecord(record, managedPath) ? record : null;
+	const managedVersion = managedRecord?.version ?? null;
+	const installedVersion = binaryPath && managedBinaryPath && binaryPath === managedBinaryPath ? managedVersion : null;
 	return {
 		installed: Boolean(binaryPath ?? managedBinaryPath),
 		binaryPath: binaryPath ?? managedBinaryPath,

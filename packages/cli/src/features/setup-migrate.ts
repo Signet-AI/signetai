@@ -8,6 +8,7 @@ import {
 	type SetupDetection,
 	type SkillsResult,
 	ensureUnifiedSchema,
+	findSignetForgeBinary,
 	formatYaml,
 	importMemoryLogs,
 	resolvePrimaryPackageManager,
@@ -20,12 +21,14 @@ import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
+import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
 	getEmbeddingDimensions,
 	readErr,
+	readHarnesses,
 	readRecord,
 	readString,
 } from "./setup-shared.js";
@@ -96,7 +99,29 @@ export async function runExistingSetupWizard(
 		if (detection.harnesses.openclaw) detectedHarnesses.push("openclaw");
 		if (detection.harnesses.opencode) detectedHarnesses.push("opencode");
 		if (detection.harnesses.codex) detectedHarnesses.push("codex");
-		if (detection.harnesses.forge) detectedHarnesses.push("forge");
+		const configuredHarnessList = readHarnesses(existingConfig.harnesses);
+		const wantsForge = detection.harnesses.forge || configuredHarnessList.includes("forge");
+		const installedForgePath = findSignetForgeBinary(basePath);
+		if (wantsForge && installedForgePath) {
+			detectedHarnesses.push("forge");
+		} else if (wantsForge) {
+			if (!managedForgeInstallSupportedOnCurrentPlatform()) {
+				throw new Error(
+					`Forge is configured, but Signet-managed Forge binaries are only available on macOS/Linux arm64/x64. Install Forge separately on ${process.platform} ${process.arch}, then rerun ${chalk.cyan("signet setup")}.`,
+				);
+			}
+			spinner.text = "Installing Forge...";
+			await installForge(
+				{},
+				{
+					agentsDir: basePath,
+					defaultPort: deps.DEFAULT_PORT,
+					getTemplatesDir: deps.getTemplatesDir,
+					isDaemonRunning: deps.isDaemonRunning,
+				},
+			);
+			detectedHarnesses.push("forge");
+		}
 		const packageManager = resolvePrimaryPackageManager({ agentsDir: basePath, env: process.env });
 		const existingAgent = readRecord(existingConfig.agent);
 
