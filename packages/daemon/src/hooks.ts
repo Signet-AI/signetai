@@ -818,6 +818,8 @@ function getPredictedContextMemories(
 	charBudget: number,
 	excludeIds: ReadonlySet<string>,
 	agentId: string,
+	readPolicy = "isolated",
+	policyGroup: string | null = null,
 ): ScoredMemory[] {
 	if (!existsSync(MEMORY_DB)) return [];
 
@@ -872,6 +874,7 @@ function getPredictedContextMemories(
 
 		// Use recurring terms as FTS query
 		const ftsQuery = recurring.join(" OR ");
+		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
 				db
@@ -883,11 +886,11 @@ function getPredictedContextMemories(
 						 JOIN memories m ON memories_fts.rowid = m.rowid
 						 WHERE memories_fts MATCH ?
 						   AND m.is_deleted = 0
-						   AND m.agent_id = ?
+						   ${scope.sql}
 						 ORDER BY bm25(memories_fts)
 						 LIMIT ?`,
 					)
-					.all(ftsQuery, agentId, limit * 2) as Array<{
+					.all(ftsQuery, ...scope.args, limit * 2) as Array<{
 					id: string;
 					content: string;
 					type: string;
@@ -1471,7 +1474,15 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
-	const predictedMemories = getPredictedContextMemories(req.project, 10, 600, existingIds, agentId);
+	const predictedMemories = getPredictedContextMemories(
+		req.project,
+		10,
+		600,
+		existingIds,
+		agentId,
+		agentScope.readPolicy,
+		agentScope.policyGroup,
+	);
 	if (predictedMemories.length > 0) {
 		memories.push(...predictedMemories);
 	}

@@ -6742,13 +6742,11 @@ app.post("/api/sessions/summaries/expand", async (c) => {
 
 	const result = expandTemporalNode(id, scopedAgent.agentId, {
 		includeTranscript,
+		project: scopedProject.project,
 		transcriptCharLimit,
 	});
 	if (!result) {
 		return c.json({ error: "summary node not found" }, 404);
-	}
-	if (scopedProject.project && result.node.project !== scopedProject.project) {
-		return c.json({ error: `scope restricted to project '${scopedProject.project}'` }, 403);
 	}
 	return c.json(result);
 });

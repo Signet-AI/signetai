@@ -713,6 +713,64 @@ hooks:
 		expect(result.memories.some((memory) => memory.content === "Shared release checklist")).toBe(true);
 		expect(result.memories.some((memory) => memory.content === "Hidden private note")).toBe(false);
 	});
+
+	test.serial("predictive context honors shared visibility", async () => {
+		createMemoryDb([
+			...Array.from({ length: 51 }, (_, i) => ({
+				content: `Noise memory ${i}`,
+				importance: 0.95,
+				agent_id: "agent-shared",
+				visibility: "global",
+			})),
+			{
+				content: "Shared shardaware rollout memory",
+				importance: 0.2,
+				agent_id: "agent-owner",
+				visibility: "global",
+			},
+		]);
+		upsertAgent("agent-shared", "shared");
+
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO summary_jobs (
+				id, session_key, harness, project, agent_id, transcript,
+				status, attempts, max_attempts, created_at, completed_at
+			) VALUES (?, ?, ?, ?, ?, ?, 'completed', 1, 3, ?, ?)`,
+		).run(
+			"job-1",
+			"sess-1",
+			"codex",
+			null,
+			"agent-shared",
+			"We discussed shardaware rollout planning for the release train.",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:01:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO summary_jobs (
+				id, session_key, harness, project, agent_id, transcript,
+				status, attempts, max_attempts, created_at, completed_at
+			) VALUES (?, ?, ?, ?, ?, ?, 'completed', 1, 3, ?, ?)`,
+		).run(
+			"job-2",
+			"sess-2",
+			"codex",
+			null,
+			"agent-shared",
+			"We revisited shardaware rollout coordination and deployment notes.",
+			"2026-03-25T11:00:00.000Z",
+			"2026-03-25T11:01:00.000Z",
+		);
+		db.close();
+
+		const result = await handleSessionStart({
+			harness: "test",
+			agentId: "agent-shared",
+		});
+
+		expect(result.memories.some((memory) => memory.content === "Shared shardaware rollout memory")).toBe(true);
+	});
 });
 
 // ============================================================================

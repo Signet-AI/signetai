@@ -232,6 +232,7 @@ describe("migration framework", () => {
 		expect(cols.map((col) => col.name)).toContain("agent_id");
 
 		const now = new Date().toISOString();
+		const later = new Date(Date.now() + 1000).toISOString();
 		db.prepare(
 			`INSERT INTO session_memories
 			 (id, session_key, agent_id, memory_id, source, effective_score,
@@ -278,6 +279,17 @@ describe("migration framework", () => {
 				meta_json TEXT,
 				created_at TEXT NOT NULL
 			);
+			CREATE TABLE session_summary_children (
+				parent_id TEXT NOT NULL,
+				child_id TEXT NOT NULL,
+				ordinal INTEGER NOT NULL,
+				PRIMARY KEY (parent_id, child_id)
+			);
+			CREATE TABLE session_summary_memories (
+				summary_id TEXT NOT NULL,
+				memory_id TEXT NOT NULL,
+				PRIMARY KEY (summary_id, memory_id)
+			);
 		`);
 
 		const now = new Date().toISOString();
@@ -295,6 +307,70 @@ describe("migration framework", () => {
 		).run("sum-b", "agent b summary", now, now, "sess-1", "agent-b", now);
 
 		expect(() => sessionSummaryUniqueness(db)).not.toThrow();
+	});
+
+	test("migration 046 deduplicates same-agent retry rows before adding uniqueness", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE session_summaries (
+				id TEXT PRIMARY KEY,
+				project TEXT,
+				depth INTEGER NOT NULL DEFAULT 0,
+				kind TEXT NOT NULL,
+				content TEXT NOT NULL,
+				token_count INTEGER,
+				earliest_at TEXT NOT NULL,
+				latest_at TEXT NOT NULL,
+				session_key TEXT,
+				harness TEXT,
+				agent_id TEXT NOT NULL DEFAULT 'default',
+				source_type TEXT,
+				source_ref TEXT,
+				meta_json TEXT,
+				created_at TEXT NOT NULL
+			);
+			CREATE TABLE session_summary_children (
+				parent_id TEXT NOT NULL,
+				child_id TEXT NOT NULL,
+				ordinal INTEGER NOT NULL,
+				PRIMARY KEY (parent_id, child_id)
+			);
+			CREATE TABLE session_summary_memories (
+				summary_id TEXT NOT NULL,
+				memory_id TEXT NOT NULL,
+				PRIMARY KEY (summary_id, memory_id)
+			);
+		`);
+
+		const now = new Date().toISOString();
+		const later = new Date(Date.now() + 1000).toISOString();
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, depth, kind, content, earliest_at, latest_at,
+				session_key, harness, agent_id, source_type, created_at
+			) VALUES (?, 0, 'session', ?, ?, ?, ?, 'codex', ?, 'summary', ?)`,
+		).run("sum-older", "older summary", now, now, "sess-dup", "agent-a", now);
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, depth, kind, content, earliest_at, latest_at,
+				session_key, harness, agent_id, source_type, created_at
+			) VALUES (?, 0, 'session', ?, ?, ?, ?, 'codex', ?, 'summary', ?)`,
+		).run("sum-newer", "newer summary", now, later, "sess-dup", "agent-a", later);
+		db.prepare(`INSERT INTO session_summary_memories (summary_id, memory_id) VALUES ('sum-older', 'mem-1')`).run();
+
+		expect(() => sessionSummaryUniqueness(db)).not.toThrow();
+
+		const rows = db
+			.query<{ id: string }, []>("SELECT id FROM session_summaries WHERE agent_id = 'agent-a' AND session_key = 'sess-dup'")
+			.all();
+		expect(rows.map((row) => row.id)).toEqual(["sum-newer"]);
+
+		const links = db
+			.query<{ summary_id: string; memory_id: string }, []>(
+				"SELECT summary_id, memory_id FROM session_summary_memories WHERE memory_id = 'mem-1'",
+			)
+			.all();
+		expect(links).toEqual([{ summary_id: "sum-newer", memory_id: "mem-1" }]);
 	});
 
 	test("entities table has pinning columns after migration 022", () => {

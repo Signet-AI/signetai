@@ -133,6 +133,7 @@ export function expandTemporalNode(
 	agentId: string,
 	opts?: {
 		readonly includeTranscript?: boolean;
+		readonly project?: string;
 		readonly transcriptCharLimit?: number;
 	},
 ): TemporalExpandResult | null {
@@ -142,15 +143,17 @@ export function expandTemporalNode(
 			.get();
 		if (!table) return null;
 
+		const projectClause = opts?.project ? " AND project = ?" : "";
+		const projectArgs = opts?.project ? [opts.project] : [];
 		const node = db
 			.prepare(
 				`SELECT id, project, depth, kind, content, token_count,
 				        earliest_at, latest_at, session_key, harness, agent_id,
 				        source_type, source_ref, meta_json, created_at
 				 FROM session_summaries
-				 WHERE id = ? AND agent_id = ?`,
+				 WHERE id = ? AND agent_id = ?${projectClause}`,
 			)
-			.get(id, agentId) as RawNode | undefined;
+			.get(id, agentId, ...projectArgs) as RawNode | undefined;
 		if (!node) return null;
 
 		const parentRows = db
@@ -161,10 +164,10 @@ export function expandTemporalNode(
 				        rel.ordinal
 				 FROM session_summary_children rel
 				 JOIN session_summaries ss ON ss.id = rel.parent_id
-				 WHERE rel.child_id = ? AND ss.agent_id = ?
+				 WHERE rel.child_id = ? AND ss.agent_id = ?${projectClause}
 				 ORDER BY rel.ordinal ASC, ss.latest_at DESC`,
 			)
-			.all(id, agentId) as Array<RawNode & RawLink>;
+			.all(id, agentId, ...projectArgs) as Array<RawNode & RawLink>;
 
 		const childRows = db
 			.prepare(
@@ -174,10 +177,10 @@ export function expandTemporalNode(
 				        rel.ordinal
 				 FROM session_summary_children rel
 				 JOIN session_summaries ss ON ss.id = rel.child_id
-				 WHERE rel.parent_id = ? AND ss.agent_id = ?
+				 WHERE rel.parent_id = ? AND ss.agent_id = ?${projectClause}
 				 ORDER BY rel.ordinal ASC, ss.latest_at DESC`,
 			)
-			.all(id, agentId) as Array<RawNode & RawLink>;
+			.all(id, agentId, ...projectArgs) as Array<RawNode & RawLink>;
 
 		const memories = db
 			.prepare(
@@ -189,11 +192,13 @@ export function expandTemporalNode(
 				 FROM session_summary_memories ssm
 				 JOIN session_summaries ss ON ss.id = ssm.summary_id
 				 LEFT JOIN memories m ON m.id = ssm.memory_id
-				 WHERE ssm.summary_id = ? AND ss.agent_id = ?
+				 WHERE ssm.summary_id = ? AND ss.agent_id = ?${
+						opts?.project ? " AND ss.project = ? AND (m.id IS NULL OR COALESCE(m.project, ss.project) = ?)" : ""
+					}
 				 ORDER BY created_at DESC
 				 LIMIT 25`,
 			)
-			.all(id, agentId) as RawMemory[];
+			.all(id, agentId, ...(opts?.project ? [opts.project, opts.project] : [])) as RawMemory[];
 
 		const mapped = mapNode(node);
 		const transcriptKey = resolveTranscriptKey(mapped);
@@ -206,9 +211,9 @@ export function expandTemporalNode(
 				.prepare(
 					`SELECT session_key, harness, project, content, ${seenExpr} AS seen_at
 					 FROM session_transcripts
-					 WHERE session_key = ? AND agent_id = ?`,
+					 WHERE session_key = ? AND agent_id = ?${opts?.project ? " AND project = ?" : ""}`,
 				)
-				.get(transcriptKey, agentId) as
+				.get(transcriptKey, agentId, ...(opts?.project ? [opts.project] : [])) as
 				| {
 						session_key: string;
 						harness: string | null;
