@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
-import { resolveAgentId } from "./agent-id";
+import { getAgentScope, resolveAgentId } from "./agent-id";
 import {
 	clearContinuity,
 	consumeState,
@@ -33,7 +33,7 @@ import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import { writeMemoryHead } from "./memory-head";
-import { hybridRecall } from "./memory-search";
+import { buildAgentScopeClause, hybridRecall } from "./memory-search";
 import {
 	applyFtsOverlapFeedback,
 	decayAspectWeights,
@@ -752,21 +752,24 @@ export function getAllScoredCandidates(
 	project: string | undefined,
 	limit: number,
 	agentId = "default",
+	readPolicy = "isolated",
+	policyGroup: string | null = null,
 ): ScoredMemory[] {
 	if (!existsSync(MEMORY_DB)) return [];
 
 	try {
+		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
 				db
 					.prepare(
-						`SELECT id, content, type, importance, tags, pinned, project, created_at,
+						`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
 						        COALESCE(access_count, 0) AS access_count
-					 FROM memories
-					 WHERE is_deleted = 0 AND agent_id = ?
+					 FROM memories m
+					 WHERE m.is_deleted = 0${scope.sql}
 					 ORDER BY created_at DESC LIMIT ?`,
 					)
-					.all(agentId, limit * 3) as Array<{
+					.all(...scope.args, limit * 3) as Array<{
 					id: string;
 					content: string;
 					type: string;
@@ -1225,6 +1228,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
+	const traversalAgentId = resolveAgentId(req);
+	const agentScope = getAgentScope(traversalAgentId);
 	const traversalRuntimeCfg = {
 		maxAspectsPerEntity: traversalCfg?.maxAspectsPerEntity ?? 10,
 		maxAttributesPerAspect: traversalCfg?.maxAttributesPerAspect ?? 20,
@@ -1241,8 +1246,13 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Candidate pool fusion: traversal U effective (capped before budget truncation)
 	const recallLimit = Math.max(1, config.recallLimit ?? 50);
 	const candidatePoolLimit = Math.max(1, config.candidatePoolLimit ?? 100);
-	const traversalAgentId = resolveAgentId(req);
-	const allCandidates = getAllScoredCandidates(req.project, recallLimit, traversalAgentId);
+	const allCandidates = getAllScoredCandidates(
+		req.project,
+		recallLimit,
+		traversalAgentId,
+		agentScope.readPolicy,
+		agentScope.policyGroup,
+	);
 	const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
 	const candidateSourceById = new Map<string, CandidateSource>(
 		allCandidates.map((candidate) => [candidate.id, "effective" as const]),
@@ -2100,6 +2110,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 	const submitCfg = loadHooksConfig().userPromptSubmit ?? {};
 	const userMessage = resolveRecallUserMessage(req);
 	const agentId = resolveAgentId(req);
+	const agentScope = getAgentScope(agentId);
 	const { keywordTerms, vectorQuery } = buildRecallQueryShape(userMessage, req.lastAssistantMessage);
 
 	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
@@ -2215,7 +2226,8 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 				limit: recallLimit,
 				importance_min: 0.3,
 				agentId,
-				readPolicy: "isolated",
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup,
 				project: req.project,
 			},
 			cfg,

@@ -51,6 +51,8 @@ function createMemoryDb(
 		pinned?: number;
 		project?: string;
 		created_at?: string;
+		agent_id?: string;
+		visibility?: string;
 	}> = [],
 ): void {
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
@@ -61,6 +63,23 @@ function createMemoryDb(
 	const db = new Database(dbPath);
 
 	db.exec("PRAGMA busy_timeout = 5000");
+
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS agents (
+			id TEXT PRIMARY KEY,
+			name TEXT,
+			read_policy TEXT NOT NULL DEFAULT 'isolated',
+			policy_group TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`);
+
+	const seedNow = new Date().toISOString();
+	db.prepare(
+		`INSERT OR IGNORE INTO agents (id, name, read_policy, created_at, updated_at)
+		 VALUES ('default', 'default', 'shared', ?, ?)`,
+	).run(seedNow, seedNow);
 
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memories (
@@ -259,8 +278,8 @@ function createMemoryDb(
 
 	const stmt = db.prepare(`
 		INSERT INTO memories
-			(id, content, type, importance, who, tags, pinned, project, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, content, type, importance, who, tags, pinned, project, created_at, updated_at, agent_id, visibility)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`);
 
 	for (const m of memories) {
@@ -276,6 +295,8 @@ function createMemoryDb(
 			m.project || null,
 			now,
 			now,
+			m.agent_id || "default",
+			m.visibility || "global",
 		);
 	}
 
@@ -310,6 +331,21 @@ function writeAgentsMd(content: string): void {
 function writeMemoryMd(content: string): void {
 	ensureDir(TEST_DIR);
 	writeFileSync(join(TEST_DIR, "MEMORY.md"), content);
+}
+
+function upsertAgent(id: string, readPolicy: string, policyGroup?: string): void {
+	const db = openTestDb();
+	const now = new Date().toISOString();
+	db.prepare(
+		`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		 	name = excluded.name,
+		 	read_policy = excluded.read_policy,
+		 	policy_group = excluded.policy_group,
+		 	updated_at = excluded.updated_at`,
+	).run(id, id, readPolicy, policyGroup ?? null, now, now);
+	db.close();
 }
 
 // ============================================================================
@@ -651,6 +687,32 @@ hooks:
 			expect(result.memories[0].content).toBe("Project-specific memory");
 		}
 	});
+
+	test.serial("respects shared visibility at session start", async () => {
+		createMemoryDb([
+			{
+				content: "Shared release checklist",
+				importance: 0.9,
+				agent_id: "agent-owner",
+				visibility: "global",
+			},
+			{
+				content: "Hidden private note",
+				importance: 0.95,
+				agent_id: "agent-hidden",
+				visibility: "private",
+			},
+		]);
+		upsertAgent("agent-shared", "shared");
+
+		const result = await handleSessionStart({
+			harness: "test",
+			agentId: "agent-shared",
+		});
+
+		expect(result.memories.some((memory) => memory.content === "Shared release checklist")).toBe(true);
+		expect(result.memories.some((memory) => memory.content === "Hidden private note")).toBe(false);
+	});
 });
 
 // ============================================================================
@@ -911,6 +973,36 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.memoryCount).toBe(0);
 		expect(result.inject).toContain("Current Date & Time");
 		expect(result.inject).not.toContain("[signet:recall");
+	});
+
+	test.serial("respects group visibility during prompt recall", async () => {
+		createMemoryDb([
+			{
+				content: "Team alpha uses shard-aware rollout plans",
+				importance: 0.95,
+				agent_id: "agent-alpha",
+				visibility: "global",
+			},
+			{
+				content: "Team beta migration notes",
+				importance: 0.95,
+				agent_id: "agent-beta",
+				visibility: "global",
+			},
+		]);
+		upsertAgent("agent-group", "group", "team-1");
+		upsertAgent("agent-alpha", "isolated", "team-1");
+		upsertAgent("agent-beta", "isolated", "team-2");
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			agentId: "agent-group",
+			userPrompt: "which rollout plans are shard aware?",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.inject).toContain("shard-aware rollout plans");
+		expect(result.inject).not.toContain("Team beta migration notes");
 	});
 });
 

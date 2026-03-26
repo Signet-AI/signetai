@@ -126,7 +126,7 @@ import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } fro
 import { walkImpact } from "./graph-impact";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
-import { resolveAgentId } from "./agent-id";
+import { getAgentScope, resolveAgentId } from "./agent-id";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import { expandTemporalNode } from "./temporal-expand";
 import {
@@ -4230,15 +4230,7 @@ app.post("/api/memory/recall", async (c) => {
 	const cfg = loadMemoryConfig(AGENTS_DIR);
 	try {
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
-		// Look up read_policy for this agent to pass to hybridRecall.
-		const agentRow = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?")
-					.get(agentId) as { read_policy: string; policy_group: string | null } | undefined,
-		);
-		const readPolicy = agentRow?.read_policy;
-		const policyGroup = agentRow?.policy_group ?? null;
+		const agentScope = getAgentScope(agentId);
 		// Enforce auth scope: scoped tokens may only read their own project.
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		const result = await hybridRecall(
@@ -4246,7 +4238,8 @@ app.post("/api/memory/recall", async (c) => {
 				...body,
 				query,
 				agentId,
-				...(readPolicy ? { readPolicy, policyGroup } : {}),
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup,
 				...(scopeProject ? { project: scopeProject } : {}),
 			},
 			cfg,
@@ -5925,21 +5918,15 @@ app.post("/api/hooks/recall", async (c) => {
 			agentId: c.req.header("x-signet-agent-id"),
 			sessionKey: body.sessionKey,
 		});
-		const agentRow = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare("SELECT read_policy, policy_group FROM agents WHERE id = ?")
-					.get(agentId) as { read_policy: string; policy_group: string | null } | undefined,
-		);
-		const readPolicy = agentRow?.read_policy;
-		const policyGroup = agentRow?.policy_group ?? null;
+		const agentScope = getAgentScope(agentId);
 		const result = await hybridRecall(
 			{
 				query: body.query,
 				limit: body.limit,
 				scope: body.project,
 				agentId,
-				...(readPolicy ? { readPolicy, policyGroup } : {}),
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup,
 			},
 			cfg,
 			fetchEmbedding,
