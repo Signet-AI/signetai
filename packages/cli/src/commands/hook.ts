@@ -151,17 +151,11 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.requiredOption("-s, --summary <summary>", "Session summary text")
 		.action(async (options) => {
 			const input = await readJson();
-			const project = pickString(input?.cwd);
 			const data = await deps.fetchFromDaemon<{ success?: boolean; memoryId?: number; error?: string }>(
 				"/api/hooks/compaction-complete",
 				{
 					method: "POST",
-					body: JSON.stringify({
-						harness: options.harness,
-						summary: options.summary,
-						sessionKey: pickSessionKey(input),
-						project,
-					}),
+					body: JSON.stringify(buildCompactionCompleteBody(input, options.harness, options.summary)),
 				},
 			);
 			if (data?.error) {
@@ -275,6 +269,27 @@ export function buildUserPromptSubmitBody(
 		transcriptPath: pickString(body?.transcript_path, body?.transcriptPath),
 		transcript: pickString(body?.transcript),
 		...(lastAssistantMessage ? { lastAssistantMessage } : {}),
+	};
+}
+
+export function buildCompactionCompleteBody(
+	input: Record<string, unknown> | null,
+	harness: string,
+	summary: string,
+): {
+	harness: string;
+	summary: string;
+	agentId: string;
+	sessionKey: string;
+	project: string;
+} {
+	const body = input;
+	return {
+		harness,
+		summary,
+		agentId: pickString(body?.agent_id, body?.agentId),
+		sessionKey: pickSessionKey(body),
+		project: pickString(body?.project, body?.cwd),
 	};
 }
 

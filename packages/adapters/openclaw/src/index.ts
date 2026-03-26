@@ -463,6 +463,7 @@ export async function onCompactionComplete(
 	summary: string,
 	options: {
 		daemonUrl?: string;
+		agentId?: string;
 		sessionKey?: string;
 		project?: string;
 	} = {},
@@ -475,6 +476,7 @@ export async function onCompactionComplete(
 			body: {
 				harness,
 				summary,
+				agentId: options.agentId,
 				sessionKey: options.sessionKey,
 				project: options.project,
 				runtimePath: RUNTIME_PATH,
@@ -489,6 +491,7 @@ export async function onSessionEnd(
 	harness: string,
 	options: {
 		daemonUrl?: string;
+		agentId?: string;
 		transcriptPath?: string;
 		sessionKey?: string;
 		sessionId?: string;
@@ -500,6 +503,7 @@ export async function onSessionEnd(
 		method: "POST",
 		body: {
 			harness,
+			agentId: options.agentId,
 			transcriptPath: options.transcriptPath,
 			sessionKey: options.sessionKey,
 			sessionId: options.sessionId,
@@ -782,6 +786,11 @@ function buildSessionlessTurnKey(event: Record<string, unknown>, agentId: string
 	const normalizedPrompt = rawPrompt.trim().replace(/\s+/g, " ").slice(0, 240);
 	const messageCount = Array.isArray(event.messages) ? event.messages.length : -1;
 	return `${agentId ?? "-"}|${messageCount}|${normalizedPrompt}`;
+}
+
+function buildScopedSessionKey(sessionKey: string | undefined, agentId: string | undefined): string | undefined {
+	if (!sessionKey) return undefined;
+	return `${agentId ?? "-"}|${sessionKey}`;
 }
 
 function readString(value: unknown): string | undefined {
@@ -1355,7 +1364,7 @@ const signetPlugin = {
 
 		const claimedSessions = new Set<string>();
 		const sessionlessSessionStarts = new Map<string, number>();
-		// Maps sessionKey → {count, at} for per-turn idempotency. Entries are
+		// Maps scoped agent/session keys → {count, at} for per-turn idempotency. Entries are
 		// evicted on agent_end or lazily after SESSION_TURN_TTL_MS so crash/
 		// SIGKILL sessions don't accumulate indefinitely.
 		const SESSION_TURN_TTL_MS = 4 * 60 * 60 * 1000;
@@ -1482,8 +1491,9 @@ const signetPlugin = {
 		): Promise<void> => {
 			if (!cfg.enabled || !daemonReachable) return;
 			const sessionKey = resolveCompactionSessionKey(event, ctx);
-			if (sessionKey) {
-				injectedTurns.delete(sessionKey);
+			const scopedKey = buildScopedSessionKey(sessionKey, ctx.agentId);
+			if (scopedKey) {
+				injectedTurns.delete(scopedKey);
 			}
 			const sessionFile = resolveCompactionSessionFile(event, ctx.sessionFile);
 			const summary = extractCompactionSummary(event, sessionFile);
@@ -1496,6 +1506,7 @@ const signetPlugin = {
 
 			await onCompactionComplete("openclaw", summary, {
 				...opts,
+				agentId: ctx.agentId,
 				project: resolveCompactionProject(event, ctx),
 				sessionKey,
 			});
@@ -1526,7 +1537,8 @@ const signetPlugin = {
 				return;
 			}
 
-			if (claimedSessions.has(sessionKey)) {
+			const scopedKey = buildScopedSessionKey(sessionKey, agentId);
+			if (scopedKey && claimedSessions.has(scopedKey)) {
 				return;
 			}
 
@@ -1535,8 +1547,8 @@ const signetPlugin = {
 				sessionKey,
 				agentId,
 			});
-			if (startResult) {
-				claimedSessions.add(sessionKey);
+			if (startResult && scopedKey) {
+				claimedSessions.add(scopedKey);
 			}
 		};
 
@@ -1561,9 +1573,10 @@ const signetPlugin = {
 			// reliably correlated and are allowed to fall through rather than
 			// risk cross-suppressing concurrent independent sessions.
 			const count = Array.isArray(event.messages) ? event.messages.length : undefined;
-			// sig is only defined when we have both a stable session identity and
-			// a message count — the two values that make dedup meaningful.
-			const sig = sessionKey && typeof count === "number" ? `${sessionKey}|${count}` : undefined;
+			const scopedKey = buildScopedSessionKey(sessionKey, agentId);
+			// sig is only defined when we have both a stable scoped session identity
+			// and a message count — the two values that make dedup meaningful.
+			const sig = scopedKey && typeof count === "number" ? `${scopedKey}|${count}` : undefined;
 			// Lazy TTL sweep: evict entries from sessions that ended without agent_end.
 			if (sig) {
 				const now = Date.now();
@@ -1573,7 +1586,7 @@ const signetPlugin = {
 			}
 			if (
 				sig &&
-				(inFlightTurns.has(sig) || (sessionKey !== undefined && injectedTurns.get(sessionKey)?.count === count))
+				(inFlightTurns.has(sig) || (scopedKey !== undefined && injectedTurns.get(scopedKey)?.count === count))
 			) {
 				return undefined;
 			}
@@ -1597,8 +1610,8 @@ const signetPlugin = {
 				return undefined;
 			}
 			// Record the completed turn so the other hook sees it on arrival.
-			if (sessionKey && typeof count === "number") {
-				injectedTurns.set(sessionKey, { count, at: Date.now() });
+			if (scopedKey && typeof count === "number") {
+				injectedTurns.set(scopedKey, { count, at: Date.now() });
 			}
 			return buildInjectionResult(result);
 		};
@@ -1628,12 +1641,13 @@ const signetPlugin = {
 		api.on("agent_end", async (_event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
 			if (!cfg.enabled) return undefined;
 
-			const { sessionKey } = resolveHookContext(ctx);
+			const { sessionKey, agentId } = resolveHookContext(ctx);
+			const scopedKey = buildScopedSessionKey(sessionKey, agentId);
 
-			await onSessionEnd("openclaw", { ...opts, sessionKey });
-			if (sessionKey) {
-				claimedSessions.delete(sessionKey);
-				injectedTurns.delete(sessionKey);
+			await onSessionEnd("openclaw", { ...opts, agentId, sessionKey });
+			if (scopedKey) {
+				claimedSessions.delete(scopedKey);
+				injectedTurns.delete(scopedKey);
 			}
 			return undefined;
 		});

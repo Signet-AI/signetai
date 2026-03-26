@@ -265,6 +265,27 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 	});
 
+	it("does not dedupe prompt injection across different agents sharing a session key", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		const event = {
+			prompt: "Remember release criteria for this plugin",
+			messages: [{ role: "assistant", content: "Prior context" }],
+		};
+
+		const first = await beforePromptBuild?.(event, { sessionKey: "shared-session", agentId: "agent-a" });
+		const second = await beforePromptBuild?.(event, { sessionKey: "shared-session", agentId: "agent-b" });
+
+		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getPrependContext(second)).toContain("turn-memory");
+		expect(getHits("/api/hooks/session-start")).toBe(2);
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
+	});
+
 	it("keeps legacy before_agent_start path working when used alone", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);

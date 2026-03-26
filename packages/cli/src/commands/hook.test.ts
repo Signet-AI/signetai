@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildSessionEndBody, buildUserPromptSubmitBody, pickSessionKey } from "./hook";
+import { buildCompactionCompleteBody, buildSessionEndBody, buildUserPromptSubmitBody, pickSessionKey } from "./hook";
 
 describe("pickSessionKey", () => {
 	test("prefers canonical sessionKey fields before legacy session_id aliases", () => {
@@ -70,6 +70,29 @@ describe("buildUserPromptSubmitBody", () => {
 			transcriptPath: "",
 			transcript: "user: hi",
 			lastAssistantMessage: "prior answer",
+		});
+	});
+});
+
+describe("buildCompactionCompleteBody", () => {
+	test("prefers explicit project input over cwd fallback for compaction lineage", () => {
+		expect(
+			buildCompactionCompleteBody(
+				{
+					agentId: "agent-7",
+					sessionKey: "sess-3",
+					project: "/tmp/explicit-project",
+					cwd: "/tmp/cwd-project",
+				},
+				"claude-code",
+				"summary text",
+			),
+		).toEqual({
+			harness: "claude-code",
+			summary: "summary text",
+			agentId: "agent-7",
+			sessionKey: "sess-3",
+			project: "/tmp/explicit-project",
 		});
 	});
 });
