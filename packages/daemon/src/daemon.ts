@@ -5994,20 +5994,25 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			return c.json({ error: scopedAgent.error }, 403);
 		}
 		const agentId = scopedAgent.agentId;
-
-		const summaryId = crypto.randomUUID();
-		getDbAccessor().withWriteTx((db) => {
-			const transcriptRow = body.sessionKey
-				? (db
+		const transcriptRow = body.sessionKey
+			? getDbAccessor().withReadDb((db) =>
+					db
 						.prepare(
 							`SELECT project
 							 FROM session_transcripts
 							 WHERE session_key = ? AND agent_id = ?`,
 						)
-						.get(body.sessionKey, agentId) as { project: string | null } | undefined)
-				: undefined;
-			const project = transcriptRow?.project ?? null;
+						.get(body.sessionKey, agentId) as { project: string | null } | undefined,
+				)
+			: undefined;
+		const scopedProject = resolveScopedProject(c, transcriptRow?.project ?? undefined);
+		if (scopedProject.error) {
+			return c.json({ error: scopedProject.error }, 403);
+		}
+		const project = scopedProject.project ?? transcriptRow?.project ?? null;
 
+		const summaryId = crypto.randomUUID();
+		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories (
 					id, content, type, importance, source_id, source_type,

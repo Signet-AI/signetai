@@ -26,7 +26,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
 			const input = await readJson();
-			const sessionKey = pickString(input?.session_id, input?.sessionId);
+			const sessionKey = pickSessionKey(input);
 			const stdinProject = pickString(input?.cwd);
 			const data = await deps.fetchFromDaemon<{
 				identity?: { name: string; description?: string };
@@ -77,7 +77,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const input = await readJson();
 			const userPrompt = pickString(input?.prompt, input?.user_prompt, input?.userPrompt);
-			const sessionKey = pickString(input?.session_id, input?.sessionId);
+			const sessionKey = pickSessionKey(input);
 			const stdinProject = pickString(input?.cwd);
 			const lastAssistantMessage = readLastAssistantMessage(input);
 			const data = await deps.fetchFromDaemon<{ inject?: string }>("/api/hooks/user-prompt-submit", {
@@ -106,14 +106,15 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.requiredOption("-H, --harness <harness>", "Harness name")
 		.action(async (options) => {
 			const body = (await readJson()) ?? {};
+			const sessionKey = pickSessionKey(body);
 			const data = await deps.fetchFromDaemon<{ memoriesSaved?: number }>("/api/hooks/session-end", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					harness: options.harness,
 					transcriptPath: pickString(body.transcript_path, body.transcriptPath),
-					sessionId: pickString(body.session_id, body.sessionId),
-					sessionKey: pickString(body.session_id, body.sessionId),
+					sessionId: sessionKey,
+					sessionKey,
 					cwd: pickString(body.cwd),
 					reason: pickString(body.reason),
 				}),
@@ -137,7 +138,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
 			const input = await readJson();
-			const sessionKey = pickString(input?.session_id, input?.sessionId);
+			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
 			const data = await deps.fetchFromDaemon<{ summaryPrompt?: string; guidelines?: string; error?: string }>(
 				"/api/hooks/pre-compaction",
@@ -176,7 +177,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					body: JSON.stringify({
 						harness: options.harness,
 						summary: options.summary,
-						sessionKey: pickString(input?.session_id, input?.sessionId),
+						sessionKey: pickSessionKey(input),
 					}),
 				},
 			);
@@ -257,6 +258,11 @@ function pickString(...values: unknown[]): string {
 		if (typeof value === "string" && value.trim().length > 0) return value;
 	}
 	return "";
+}
+
+export function pickSessionKey(input: Record<string, unknown> | null): string {
+	if (!input) return "";
+	return pickString(input.session_key, input.sessionKey, input.session_id, input.sessionId);
 }
 
 function readLastAssistantMessage(input: Record<string, unknown> | null): string {

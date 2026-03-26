@@ -42,4 +42,19 @@ describe("request scope helpers", () => {
 		expect(result.project).toBe("proj-a");
 		expect(result.error).toBeUndefined();
 	});
+
+	it("rejects project scope mismatches in team mode", () => {
+		const result = resolveScopedProject(
+			{
+				sub: "operator",
+				role: "operator",
+				scope: { project: "proj-a" },
+				exp: Math.floor(Date.now() / 1000) + 300,
+			},
+			"team",
+			"proj-b",
+		);
+
+		expect(result.error).toContain("project 'proj-a'");
+	});
 });
