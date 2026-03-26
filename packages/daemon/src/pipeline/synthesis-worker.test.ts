@@ -6,10 +6,10 @@ import { join } from "node:path";
 let agentsDir = "";
 let previousSignetPath: string | undefined;
 
-const mockHandleSynthesisRequest = mock(() => ({
+const mockHandleSynthesisRequest = mock((req?: { readonly agentId?: string }) => ({
 	harness: "daemon",
 	model: "synthesis",
-	prompt: "synthesize memory",
+	prompt: `synthesize memory ${req?.agentId ?? "default"}`,
 	fileCount: 1,
 	indexBlock: "",
 }));
@@ -417,6 +417,64 @@ describe("synthesis-worker", () => {
 			expect(await worker.drain()).toBe("completed");
 		}
 	});
+
+	it("does not starve later agents when an earlier forced retry keeps returning busy", async () => {
+		let current = "default";
+		const seen: string[] = [];
+		mockHandleSynthesisRequest.mockImplementation((req?: { readonly agentId?: string }) => {
+			current = req?.agentId ?? "default";
+			seen.push(current);
+			return {
+				harness: "daemon",
+				model: "synthesis",
+				prompt: `synthesize memory ${current}`,
+				fileCount: 1,
+				indexBlock: "",
+			};
+		});
+		mockWriteMemoryMd.mockImplementation(() =>
+			current === "agent-a"
+				? {
+						ok: false as const,
+						error: "MEMORY.md write busy",
+						code: "busy" as const,
+					}
+				: { ok: true as const },
+		);
+
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			const lockToken = worker.acquireWriteLock();
+			expect(lockToken).not.toBeNull();
+
+			await worker.triggerNow({ force: true, source: "session-summary", agentId: "agent-a" });
+			await worker.triggerNow({ force: true, source: "compaction-complete", agentId: "agent-b" });
+
+			if (lockToken === null) {
+				throw new Error("expected write lock token");
+			}
+			worker.releaseWriteLock(lockToken);
+
+			const deadline = Date.now() + 12_500;
+			while (Date.now() < deadline) {
+				if (seen.includes("agent-b")) break;
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+
+			expect(seen).toContain("agent-b");
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
+	}, 20_000);
 
 	it("surfaces MEMORY.md head lease contention as a retryable skip", async () => {
 		mockWriteMemoryMd.mockImplementationOnce(() => ({

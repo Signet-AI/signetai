@@ -1181,6 +1181,62 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).not.toContain("node-bleed");
 	});
 
+	test.serial("escapes underscore anchors in temporal fallback matching", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj|session:sess-exact|harness:test",
+			"project:proj#session:sess-exact#harness:test",
+			"/tmp/proj",
+			"sess-exact",
+			"summary",
+			"sess-exact",
+			"test",
+			"node-exact",
+			"2026-03-25T10:05:00.000Z",
+			"ticket_7711 is tracked exactly in this lane",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj|session:sess-wild|harness:test",
+			"project:proj#session:sess-wild#harness:test",
+			"/tmp/proj",
+			"sess-wild",
+			"summary",
+			"sess-wild",
+			"test",
+			"node-wild",
+			"2026-03-25T10:06:00.000Z",
+			"ticketA7711 should stay isolated from the underscored ticket code",
+			"2026-03-25T10:06:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "/tmp/proj",
+			sessionKey: "sess-current",
+			userPrompt: "ticket_7711",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("node-exact");
+		expect(result.inject).not.toContain("node-wild");
+	});
+
 	test.serial("does not collapse distinct thread keys that share the same label", async () => {
 		createMemoryDb([]);
 		const db = openTestDb();

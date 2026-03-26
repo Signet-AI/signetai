@@ -361,6 +361,10 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 					scheduleTick(pendingQueue.length > 0 ? FORCE_RETRY_MS : CHECK_INTERVAL_MS);
 					return;
 				}
+				if (pendingQueue.length > 1) {
+					const head = pendingQueue.shift();
+					if (head) pendingQueue.push(head);
+				}
 				scheduleTick(FORCE_RETRY_MS);
 				return;
 			}

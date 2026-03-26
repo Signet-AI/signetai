@@ -41,6 +41,10 @@ function clean(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
+function escapeLike(text: string): string {
+	return text.replace(/([\\%_])/g, "\\$1");
+}
+
 function buildExcerpt(content: string, query: string): string {
 	const base = clean(content);
 	if (base.length <= 280) return base;
@@ -141,8 +145,10 @@ function searchFromThreadHeads(params: {
 	if (!tableExists("memory_thread_heads")) return [];
 	try {
 		const rows = getDbAccessor().withReadDb((db) => {
-			const score = params.termPatterns.map(() => "CASE WHEN LOWER(sample) LIKE ? THEN 1 ELSE 0 END").join(" + ");
-			const any = params.termPatterns.map(() => "LOWER(sample) LIKE ?").join(" OR ");
+			const score = params.termPatterns
+				.map(() => "CASE WHEN LOWER(sample) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END")
+				.join(" + ");
+			const any = params.termPatterns.map(() => "LOWER(sample) LIKE ? ESCAPE '\\'").join(" OR ");
 			const parts = [
 				`SELECT node_id AS id, sample AS content, latest_at, project, session_key, source_ref, harness, thread_key, label AS thread_label, ${score} AS rank`,
 				"FROM memory_thread_heads",
@@ -185,8 +191,10 @@ function searchFromSessionSummaries(params: {
 	if (!tableExists("session_summaries")) return [];
 	try {
 		const rows = getDbAccessor().withReadDb((db) => {
-			const score = params.termPatterns.map(() => "CASE WHEN LOWER(content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
-			const any = params.termPatterns.map(() => "LOWER(content) LIKE ?").join(" OR ");
+			const score = params.termPatterns
+				.map(() => "CASE WHEN LOWER(content) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END")
+				.join(" + ");
+			const any = params.termPatterns.map(() => "LOWER(content) LIKE ? ESCAPE '\\'").join(" OR ");
 			const parts = [
 				`SELECT id, content, latest_at, project, session_key, source_ref, harness, ${score} AS rank`,
 				"FROM session_summaries",
@@ -233,7 +241,7 @@ export function searchTemporalFallback(params: {
 	const anchors = extractAnchorTerms(params.query).slice(0, 6);
 	const terms = anchors.length > 0 ? anchors : words;
 	if (terms.length === 0) return [];
-	const termPatterns = terms.map((term) => `%${term}%`);
+	const termPatterns = terms.map((term) => `%${escapeLike(term)}%`);
 
 	const fromHeads = searchFromThreadHeads({
 		query: params.query,
