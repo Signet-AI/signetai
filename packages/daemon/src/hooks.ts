@@ -2257,7 +2257,7 @@ function extractSubstantiveWords(text: string): string[] {
 }
 
 export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyArray<{ content: string }>): boolean {
-	const anchors = extractAnchorTerms(query);
+	const anchors = extractAnchorTerms(stripUntrustedMetadata(query));
 	if (anchors.length === 0) return false;
 	if (results.length === 0) return false;
 	const anchorSet = new Set(anchors);
@@ -2272,7 +2272,7 @@ export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyAr
 	return true;
 }
 
-function buildRecallQueryShape(userPrompt: string, lastAssistantMessage?: string): RecallQueryShape {
+function buildRecallQueryShape(userPrompt: string): RecallQueryShape {
 	// Pass cleaned raw text for both keyword and vector queries.
 	// FTS5 with implicit AND + BM25 IDF handles term weighting naturally —
 	// manual stopword stripping destroyed phrase semantics and let
@@ -2303,7 +2303,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 	const userMessage = resolveRecallUserMessage(req);
 	const agentId = resolveAgentId(req);
 	const agentScope = getAgentScope(agentId);
-	const { keywordTerms, vectorQuery } = buildRecallQueryShape(userMessage, req.lastAssistantMessage);
+	const { keywordTerms, vectorQuery } = buildRecallQueryShape(userMessage);
 
 	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
@@ -2428,7 +2428,9 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 
 		const topScore = recall.results[0]?.score;
 		const noStructured = recall.results.length === 0 || typeof topScore !== "number" || topScore < 0.4;
-		const anchorsMissed = queryAnchorsMissingFromRecall(vectorQuery, recall.results);
+		// Anchor checks must be driven by the current user turn text, not any
+		// expanded/derived recall query shape.
+		const anchorsMissed = queryAnchorsMissingFromRecall(userMessage, recall.results);
 		if (noStructured || anchorsMissed) {
 			const temporalHits = searchTemporalFallback({
 				query: vectorQuery,
