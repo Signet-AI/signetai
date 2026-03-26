@@ -86,6 +86,7 @@ function managedForgeInstallLockDir(): string {
 
 function withManagedForgeInstallLock<T>(run: () => Promise<T>): Promise<T> {
 	const lockDir = managedForgeInstallLockDir();
+	mkdirSync(signetManagedInstallDir(), { recursive: true });
 	try {
 		mkdirSync(lockDir);
 	} catch (err) {
@@ -453,7 +454,10 @@ function buildStatusPayload(deps: ForgeDeps, manifest: ForgeManifest): ForgeStat
 		managedBinaryPath,
 		managedVersion,
 		managedRecord,
-		workspaceConfigured: existsSync(join(deps.agentsDir, "agent.yaml")),
+		workspaceConfigured:
+			existsSync(join(deps.agentsDir, "agent.yaml")) ||
+			existsSync(join(deps.agentsDir, "AGENT.yaml")) ||
+			existsSync(join(deps.agentsDir, "config.yaml")),
 	};
 }
 
