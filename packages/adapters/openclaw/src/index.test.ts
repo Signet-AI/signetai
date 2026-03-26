@@ -441,6 +441,20 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
+	it("does not dedupe pre-compaction hooks across different agents sharing a session key", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		const event = { messageCount: 12, compactedCount: 5 };
+		await beforeCompaction?.(event, { sessionKey: "shared-compaction", agentId: "agent-a" });
+		await beforeCompaction?.(event, { sessionKey: "shared-compaction", agentId: "agent-b" });
+
+		expect(getHits("/api/hooks/pre-compaction")).toBe(2);
+	});
+
 	it("reads the compaction summary from sessionFile and saves it once", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -518,6 +532,25 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			runtimePath: "plugin",
 			summary: "Recovered from event metadata session file.",
 		});
+	});
+
+	it("does not dedupe compaction-complete hooks across different agents sharing a session key", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		await afterCompaction?.(
+			{ summary: "Shared summary text" },
+			{ sessionKey: "shared-compaction", agentId: "agent-a" },
+		);
+		await afterCompaction?.(
+			{ summary: "Shared summary text" },
+			{ sessionKey: "shared-compaction", agentId: "agent-b" },
+		);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(2);
 	});
 
 	it("clears prompt dedupe after compaction even when no summary is recoverable", async () => {

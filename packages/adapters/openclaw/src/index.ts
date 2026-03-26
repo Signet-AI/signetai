@@ -1427,7 +1427,7 @@ const signetPlugin = {
 					: typeof event.compactingCount === "number"
 						? event.compactingCount
 						: undefined;
-			const dedupeKey = `${sessionKey ?? "-"}|${messageCount ?? -1}`;
+			const dedupeKey = `${ctx.agentId ?? "-"}|${sessionKey ?? "-"}|${messageCount ?? -1}`;
 			if (dedupeCompaction(beforeCompactions, dedupeKey)) {
 				return undefined;
 			}
@@ -1462,7 +1462,7 @@ const signetPlugin = {
 			const summary = extractCompactionSummary(event, sessionFile);
 			if (!summary) return;
 
-			const dedupeKey = `${sessionKey ?? "-"}|${summary.slice(0, 120)}`;
+			const dedupeKey = `${ctx.agentId ?? "-"}|${sessionKey ?? "-"}|${summary.slice(0, 120)}`;
 			if (dedupeCompaction(afterCompactions, dedupeKey)) {
 				return;
 			}
