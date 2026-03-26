@@ -110,22 +110,12 @@
 				"note": "Injections content must match semantically"
 			},
 			"POST /api/hooks/user-prompt-submit": {
-				"deterministic": ["queryTerms", "memoryCount"],
-				"ignoreFields": ["inject", "engine", "warnings", "sources"],
-				"note": "Query shape and result cardinality must stay aligned; inject text may diverge while Rust hook retrieval parity is in progress."
+				"deterministic": ["injections"],
+				"ignoreFields": []
 			},
 			"POST /api/hooks/session-end": {
-				"deterministic": ["queued"],
-				"ignoreFields": [
-					"memoriesSaved",
-					"jobId",
-					"feedbackAspectsUpdated",
-					"feedbackFtsConfirmations",
-					"feedbackDecayedAspects",
-					"feedbackPropagatedAttributes",
-					"feedbackTelemetry"
-				],
-				"note": "Queueing behavior must remain parity-safe; payload detail fields may diverge while Rust summary worker parity is pending."
+				"deterministic": ["status"],
+				"ignoreFields": []
 			},
 			"POST /api/hooks/remember": {
 				"deterministic": ["status"],
@@ -141,8 +131,8 @@
 				"ignoreFields": []
 			},
 			"POST /api/hooks/compaction-complete": {
-				"deterministic": ["success"],
-				"ignoreFields": ["memoryId", "queued", "reason"]
+				"deterministic": ["status"],
+				"ignoreFields": []
 			},
 			"GET /api/sessions": {
 				"deterministic": ["sessions.*.key", "sessions.*.harness"],

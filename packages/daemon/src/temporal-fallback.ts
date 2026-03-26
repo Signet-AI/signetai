@@ -1,5 +1,6 @@
 import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
+import { logger } from "./logger";
 import { deriveThreadKey, deriveThreadLabel } from "./thread-heads";
 
 interface TemporalRow {
@@ -32,7 +33,11 @@ function tableExists(name: string): boolean {
 			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
 			return row !== undefined;
 		});
-	} catch {
+	} catch (err) {
+		logger.warn("temporal-fallback", "tableExists failed", {
+			table: name,
+			error: err instanceof Error ? err.message : String(err),
+		});
 		return false;
 	}
 }
@@ -173,7 +178,13 @@ function searchFromThreadHeads(params: {
 		});
 
 		return toHits(rows, params.query, params.project, params.termCount, params.anchorCount, params.limit);
-	} catch {
+	} catch (err) {
+		logger.warn("temporal-fallback", "thread-head fallback search failed", {
+			agentId: params.agentId,
+			sessionKey: params.sessionKey,
+			project: params.project,
+			error: err instanceof Error ? err.message : String(err),
+		});
 		return [];
 	}
 }
@@ -220,7 +231,13 @@ function searchFromSessionSummaries(params: {
 		});
 
 		return toHits(rows, params.query, params.project, params.termCount, params.anchorCount, params.limit);
-	} catch {
+	} catch (err) {
+		logger.warn("temporal-fallback", "session-summary fallback search failed", {
+			agentId: params.agentId,
+			sessionKey: params.sessionKey,
+			project: params.project,
+			error: err instanceof Error ? err.message : String(err),
+		});
 		return [];
 	}
 }
