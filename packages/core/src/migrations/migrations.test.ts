@@ -232,7 +232,6 @@ describe("migration framework", () => {
 		expect(cols.map((col) => col.name)).toContain("agent_id");
 
 		const now = new Date().toISOString();
-		const later = new Date(Date.now() + 1000).toISOString();
 		db.prepare(
 			`INSERT INTO session_memories
 			 (id, session_key, agent_id, memory_id, source, effective_score,
