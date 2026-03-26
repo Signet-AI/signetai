@@ -315,6 +315,10 @@ pub async fn prompt_submit(
 
     let project = body.project.clone();
     let session_key = body.session_key.clone();
+    let agent_id = body
+        .agent_id
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
     let query_terms_for_resp = query_terms.clone();
 
     let result = state
@@ -337,9 +341,10 @@ pub async fn prompt_submit(
             let mut mem_sql = String::from(
                 "SELECT id, content, created_at
                  FROM memories
-                 WHERE deleted = 0",
+                 WHERE deleted = 0 AND agent_id = ?",
             );
             let mut mem_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            mem_params.push(Box::new(agent_id.clone()));
             if let Some(ref p) = project {
                 mem_sql.push_str(" AND project = ?");
                 mem_params.push(Box::new(p.clone()));
@@ -400,11 +405,11 @@ pub async fn prompt_submit(
             if let Ok(mut stmt) = conn.prepare(
                 "SELECT node_id, sample, latest_at, label, project
                  FROM memory_thread_heads
-                 WHERE agent_id = 'default'
+                 WHERE agent_id = ?1
                  ORDER BY latest_at DESC LIMIT 24",
             ) {
                 let rows = stmt
-                    .query_map([], |row| {
+                    .query_map([agent_id.clone()], |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
@@ -463,9 +468,10 @@ pub async fn prompt_submit(
             let mut tx_sql = String::from(
                 "SELECT session_key, content, updated_at, project
                  FROM session_transcripts
-                 WHERE agent_id = 'default'",
+                 WHERE agent_id = ?",
             );
             let mut tx_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            tx_params.push(Box::new(agent_id.clone()));
             if let Some(ref p) = project {
                 tx_sql.push_str(" AND project = ?");
                 tx_params.push(Box::new(p.clone()));
