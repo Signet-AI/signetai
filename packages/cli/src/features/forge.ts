@@ -8,11 +8,13 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { findSignetForgeBinary, isSignetForgeBinary, resolveSignetForgeManagedPath } from "@signet/core";
 import chalk from "chalk";
 
@@ -80,24 +82,97 @@ export interface ForgeDeps {
 	readonly isDaemonRunning: () => Promise<boolean>;
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const MANAGED_FORGE_INSTALL_LOCK_INFO = "owner.json";
+const MANAGED_FORGE_INSTALL_LOCK_STALE_MS = 60 * 60 * 1000;
+
 function managedForgeInstallLockDir(): string {
 	return join(signetManagedInstallDir(), ".forge-install.lock");
 }
 
-function withManagedForgeInstallLock<T>(run: () => Promise<T>): Promise<T> {
-	const lockDir = managedForgeInstallLockDir();
-	mkdirSync(signetManagedInstallDir(), { recursive: true });
+function managedForgeInstallLockInfoPath(lockDir: string): string {
+	return join(lockDir, MANAGED_FORGE_INSTALL_LOCK_INFO);
+}
+
+function currentManagedForgeInstallLockMetadata(): { pid: number; createdAt: string } {
+	return {
+		pid: process.pid,
+		createdAt: new Date().toISOString(),
+	};
+}
+
+function writeManagedForgeInstallLockMetadata(lockDir: string): void {
+	writeFileSync(
+		managedForgeInstallLockInfoPath(lockDir),
+		`${JSON.stringify(currentManagedForgeInstallLockMetadata(), null, 2)}\n`,
+	);
+}
+
+function readManagedForgeInstallLockMetadata(lockDir: string): { pid?: unknown; createdAt?: unknown } | null {
 	try {
-		mkdirSync(lockDir);
-	} catch (err) {
-		const code = err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : "";
-		if (code === "EEXIST") {
+		return JSON.parse(readFileSync(managedForgeInstallLockInfoPath(lockDir), "utf8")) as {
+			pid?: unknown;
+			createdAt?: unknown;
+		};
+	} catch {
+		return null;
+	}
+}
+
+function isRunningPid(pid: number): boolean {
+	if (!Number.isInteger(pid) || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		const code =
+			error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : "";
+		return code === "EPERM";
+	}
+}
+
+function isManagedForgeInstallLockStale(lockDir: string): boolean {
+	const metadata = readManagedForgeInstallLockMetadata(lockDir);
+	if (typeof metadata?.pid === "number") {
+		return !isRunningPid(metadata.pid);
+	}
+	try {
+		return Date.now() - statSync(lockDir).mtimeMs > MANAGED_FORGE_INSTALL_LOCK_STALE_MS;
+	} catch {
+		return false;
+	}
+}
+
+function acquireManagedForgeInstallLock(lockDir: string): void {
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		try {
+			mkdirSync(lockDir);
+			try {
+				writeManagedForgeInstallLockMetadata(lockDir);
+			} catch (error) {
+				rmSync(lockDir, { recursive: true, force: true });
+				throw error;
+			}
+			return;
+		} catch (err) {
+			const code = err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : "";
+			if (code !== "EEXIST") throw err;
+			if (attempt === 0 && isManagedForgeInstallLockStale(lockDir)) {
+				rmSync(lockDir, { recursive: true, force: true });
+				continue;
+			}
 			throw new Error(
 				`Another ${chalk.cyan("signet forge install/update")} is already running. Wait for it to finish and try again.`,
 			);
 		}
-		throw err;
 	}
+}
+
+export function withManagedForgeInstallLock<T>(run: () => Promise<T>): Promise<T> {
+	const lockDir = managedForgeInstallLockDir();
+	mkdirSync(signetManagedInstallDir(), { recursive: true });
+	acquireManagedForgeInstallLock(lockDir);
 
 	return Promise.resolve()
 		.then(run)
@@ -106,8 +181,19 @@ function withManagedForgeInstallLock<T>(run: () => Promise<T>): Promise<T> {
 		});
 }
 
+function resolveForgeManifestPath(getTemplatesDir: () => string): string {
+	const sourceCandidates = [
+		join(__dirname, "..", "..", "forge", "forge-version.json"),
+		join(__dirname, "..", "..", "..", "forge", "forge-version.json"),
+	];
+	for (const candidate of sourceCandidates) {
+		if (existsSync(candidate)) return candidate;
+	}
+	return join(getTemplatesDir(), "forge", "manifest.json");
+}
+
 export function loadForgeManifest(getTemplatesDir: () => string): ForgeManifest {
-	const manifestPath = join(getTemplatesDir(), "forge", "manifest.json");
+	const manifestPath = resolveForgeManifestPath(getTemplatesDir);
 	const raw = readFileSync(manifestPath, "utf8");
 	return JSON.parse(raw) as ForgeManifest;
 }

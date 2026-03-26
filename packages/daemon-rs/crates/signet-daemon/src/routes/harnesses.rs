@@ -143,6 +143,13 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
+fn directory_has_named_entry(dir: &std::path::Path, expected_name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| entry.file_name() == expected_name)
+}
+
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let home = home_dir();
     let base_path = state
@@ -150,6 +157,7 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
         .base_path
         .canonicalize()
         .unwrap_or_else(|_| state.config.base_path.clone());
+    let openclaw_path = base_path.join("AGENTS.md");
     let forge_path = find_signet_forge_binary(&base_path)
         .unwrap_or_else(|| signet_managed_forge_path(&home));
 
@@ -171,8 +179,8 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
         json!({
             "name": "OpenClaw",
             "id": "openclaw",
-            "path": base_path.join("AGENTS.md"),
-            "exists": base_path.join("AGENTS.md").exists(),
+            "path": openclaw_path,
+            "exists": directory_has_named_entry(&base_path, "AGENTS.md"),
             "lastSeen": serde_json::Value::Null,
         }),
         json!({

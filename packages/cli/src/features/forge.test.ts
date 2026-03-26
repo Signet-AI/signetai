@@ -1,10 +1,25 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	isSignetManagedForgeRecord,
+	loadForgeManifest,
 	managedForgeAssetNameForPlatform,
 	managedForgeInstallSupportedForPlatform,
 	selectLatestStableForgeRelease,
+	withManagedForgeInstallLock,
 } from "./forge.js";
+
+const originalHome = process.env.HOME;
+
+afterEach(() => {
+	if (originalHome === undefined) {
+		process.env.HOME = undefined;
+	} else {
+		process.env.HOME = originalHome;
+	}
+});
 
 describe("managed Forge release asset selection", () => {
 	it("maps the published managed targets to release assets", () => {
@@ -110,5 +125,58 @@ describe("stable Forge release selection", () => {
 				{ tagPrefix: "forge-v", repository: "Signet-AI/signetai" },
 			),
 		).toThrow("No stable Forge releases found in Signet-AI/signetai");
+	});
+});
+
+describe("managed Forge manifest resolution", () => {
+	it("prefers packages/forge/forge-version.json over the template copy when available", () => {
+		const tempTemplates = mkdtempSync(join(tmpdir(), "forge-manifest-"));
+		try {
+			mkdirSync(join(tempTemplates, "forge"), { recursive: true });
+			writeFileSync(
+				join(tempTemplates, "forge", "manifest.json"),
+				JSON.stringify({
+					version: "0.0.0-test",
+					tagPrefix: "wrong-v",
+					repository: "wrong/repo",
+					binary: "wrong",
+				}),
+			);
+
+			const manifest = loadForgeManifest(() => tempTemplates);
+
+			expect(manifest.repository).toBe("Signet-AI/signetai");
+			expect(manifest.tagPrefix).toBe("forge-v");
+			expect(manifest.binary).toBe("forge");
+		} finally {
+			rmSync(tempTemplates, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("managed Forge install lock", () => {
+	it("recovers a stale lock left behind by a dead process", async () => {
+		const tempHome = mkdtempSync(join(tmpdir(), "forge-home-"));
+		process.env.HOME = tempHome;
+		try {
+			const lockDir = join(tempHome, ".config", "signet", "bin", ".forge-install.lock");
+			mkdirSync(lockDir, { recursive: true });
+			writeFileSync(
+				join(lockDir, "owner.json"),
+				JSON.stringify({
+					pid: 999_999,
+					createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+				}),
+			);
+			const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			utimesSync(lockDir, staleTime, staleTime);
+
+			const result = await withManagedForgeInstallLock(async () => "ok");
+
+			expect(result).toBe("ok");
+			expect(existsSync(lockDir)).toBe(false);
+		} finally {
+			rmSync(tempHome, { recursive: true, force: true });
+		}
 	});
 });
