@@ -2,6 +2,14 @@
 
 All notable changes to Signet are documented here.
 
+## [0.77.3] - 2026-03-26
+
+### Bug Fixes
+
+- **daemon**: broaden macOS SQLite runtime discovery for sqlite-vec (#338)
+- **docs**: align Signet positioning around context selection (#342)
+
+
 ## [0.77.1] - 2026-03-25
 
 ### Bug Fixes

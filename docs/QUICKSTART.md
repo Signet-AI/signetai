@@ -22,43 +22,49 @@ worked on yesterday. It doesn't know your preferences, your projects,
 or the decisions you've already made together. Every session is a
 first date.
 
-The industry's answer to this has been to give agents memory tools —
-"remember this," "recall that." That's not memory. That's a filing
+The industry's answer to this has often been to give agents memory tools
+— "remember this," "recall that." That's not memory. That's a filing
 cabinet the agent sometimes opens. It puts the LLM in charge of
-deciding what's important, when to store it, and when to retrieve it.
-You don't query a database to remember your coworker's name. It
-surfaces because it's relevant.
+micromanaging what to store and when to retrieve it.
 
-Signet takes a different approach. The agent is not in the loop.
+Signet takes a different approach. The goal is ambient context
+selection: turn interactions into durable memory substrate, then learn
+what should surface automatically when the next session begins.
 
 ### The distillation layer
 
 At the end of every conversation, Signet reviews the session and
 distills it. A local LLM breaks the conversation into atomic facts,
-checks them against what's already known, and decides: file as new,
-update something existing, replace something outdated, or skip
-entirely. Your agent won't store "prefers dark mode" fourteen times.
+checks them against what's already known, and decides whether to add new
+facts, skip duplicates, or record proposals for more complex changes.
+Your agent won't store "prefers dark mode" fourteen times.
 
 ### The knowledge graph
 
 Named entities — people, projects, tools, concepts — are extracted
 and linked. When you ask about a project, Signet traverses the graph:
 the project's architecture, the people involved, the tools it depends
-on, the constraints that apply. Context arrives structured, not as a
-pile of fragments.
+on, the constraints that apply. This structure improves the quality of
+candidate context instead of treating memory as a flat pile of fragments.
 
 ### The predictive scorer
 
-A neural network trained on your interaction patterns runs at inference
-time. It observes the conversation context and predicts which memories
-will be needed — before the agent asks, before a search is triggered.
-The scorer is unique to each user. Your weights never leave your machine.
+A predictive scorer can use that structured candidate pool to learn what
+context is actually useful in your sessions. The aim is not just storage
+or retrieval, but selecting the most helpful context automatically, with
+high precision. The scorer is unique to each user. Your weights never
+leave your machine.
+
+Crucially, the system should learn from regret, not just reuse. If
+injected context does not help, that should become negative evidence
+instead of being silently reinforced forever.
 
 ### Retrieval
 
 Retrieval blends graph traversal, keyword search, and semantic
-similarity into a single ranked result. The constellation view in the
-dashboard lets you see your agent's knowledge topology.
+similarity into a bounded candidate set, then reranks and filters it.
+The constellation view in the dashboard lets you inspect the agent's
+knowledge topology.
 
 ### Document ingest
 
@@ -73,6 +79,10 @@ agent's insights.
   them. Only you can.
 - **Everything is recoverable**: deletions are soft, with a recovery
   window and full audit trail
+
+Automatic destructive memory mutations remain conservative and gated in
+the current implementation. Explicit user/operator repair flows are the
+reliable path today.
 
 The same agent follows you across Claude Code, OpenCode, and OpenClaw.
 Same personality, same knowledge, same secrets. Switch tools without
@@ -245,8 +255,8 @@ across all your AI tools. The core features:
 - **Secrets** — API keys stored encrypted at rest, never exposed to agents
   directly.
 - **Skills** — installable instruction packages that extend agent behavior.
-- **Auth** — wallet-based identity (ERC-8128) for team deployments and
-  sync. See [Auth](./AUTH.md) for details.
+- **Auth** — token-based access control for local, team, and hybrid
+  deployments. See [Auth](./AUTH.md) for details.
 
 ---
 
@@ -410,12 +420,12 @@ Changes sync to harnesses automatically within 2 seconds.
 Auth and Team Deployments
 ---
 
-Signet uses ERC-8128 wallet-based signatures for identity verification.
-For personal use you don't need to think about this — it's handled
-automatically. For team deployments or self-hosted sync servers, auth
-modes let you scope memory access and control who can write to a shared
-agent. See [Auth](./AUTH.md) and [Self-Hosting](./SELF-HOSTING.md) for
-setup details.
+By default, Signet runs in local mode with no auth required on
+requests. In the default local setup, the daemon also binds to
+localhost only, which keeps that unauthenticated mode local by default.
+For team deployments or self-hosted remote access, Signet supports
+token-based auth with roles and scopes. See [Auth](./AUTH.md) and
+[Self-Hosting](./SELF-HOSTING.md) for setup details.
 
 ---
 
@@ -475,6 +485,6 @@ Next Steps
 - [Diagnostics](./DIAGNOSTICS.md) — health checks and pipeline status
 - [Documents](./DOCUMENTS.md) — ingest files and URLs into memory
 - [SDK](./SDK.md) — embed Signet in your own apps
-- [Auth](./AUTH.md) — wallet-based identity and team auth modes
+- [Auth](./AUTH.md) — token-based auth and team deployment modes
 - [Harnesses](./HARNESSES.md) — detailed integration docs
 - [API Reference](./API.md) — HTTP API for scripting and tooling

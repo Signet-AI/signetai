@@ -18,9 +18,12 @@ baseline) to ~99% (Supermemory ASMR experimental). The field is splitting into
 three architectural camps: **agentic retrieval** (Supermemory ASMR, Letta),
 **temporal knowledge graphs** (Zep/Graphiti), and **observational compression**
 (Mastra OM). A fourth approach -- **hybrid extract+graph** -- is used by Mem0,
-Hindsight, and MemMachine. No system handles identity, personality,
-cross-session continuity, and predictive behavior as a unified concern -- that
-gap is Signet's positioning.
+Hindsight, and MemMachine.
+
+The open space for Signet is narrower and more specific: use structured
+memory, continuity data, and agent-in-the-loop feedback to build a system
+that learns what context should be surfaced automatically, not merely how to
+store and retrieve more of it.
 
 ---
 

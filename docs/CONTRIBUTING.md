@@ -71,7 +71,7 @@ optional graph operations → retention decay. The entrypoint is `worker.ts`;
 `provider.ts` wires up the stages. Config modes like `shadowMode` and
 `mutationsFrozen` are respected here.
 
-**`packages/daemon/src/auth/`** handles ERC-8128 wallet-based [[auth]] for the
+**`packages/daemon/src/auth/`** handles token-based [[auth]] for the
 HTTP API. Key files: `middleware.ts` (Hono middleware), `tokens.ts` (token
 lifecycle), `policy.ts` (access rules), `rate-limiter.ts`.
 

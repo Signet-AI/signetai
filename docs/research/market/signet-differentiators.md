@@ -69,32 +69,37 @@ LLM, actively providing needed context without the agent ever having to ask.
   what helped, on every prompt, accumulated across thousands of sessions from
   real users. Nobody else has this data.
 
-**What this replaces:**
-The current memory retrieval stack (embeddings + BM25 keyword search + decay
-scoring) is scaffolding. It works well enough to ship, but it's not the
-endgame. The predictive scorer + entity-weight graph traversal replaces all
-of it:
+**What this changes:**
+The current retrieval stack (graph traversal, flat search, decay, filters,
+and ranking heuristics) is scaffolding. It works well enough to ship, but
+it is not the endgame. The point is not "we built a graph" or "we built
+better search." The point is to generate the data and candidate structure
+needed for a model that can learn which context is actually useful.
 
-- **Decay** — replaced by entity-weight and weight-override mechanisms. Memory
-  importance is determined by graph relationships and learned patterns, not
-  arbitrary time-based decay functions.
-- **Embeddings + BM25** — replaced by graph traversal over the knowledge graph.
-  Instead of keyword matching against flat vectors, the system walks entity
-  relationships to find contextually relevant memories.
-- **Manual recall** — replaced by predictive injection. The scorer anticipates
-  what context is needed and provides it before the agent asks. Extremely fast.
+The predictor does not make structure irrelevant. It consumes structure.
 
-**Current status:** All 4 implementation sprints complete. Three critical bugs
-identified (feature vector mismatch, cold start threshold, stale cache). Disabled
-by default, safe in production. Once bugs are fixed and entity weights take over,
-this becomes Signet's primary retrieval mechanism.
+- **Decay** becomes more than a blunt time function. It becomes part of a
+  broader learning loop where stale and repeatedly unhelpful context loses
+  influence over time.
+- **Graph traversal + flat retrieval** become candidate-generation substrate.
+  They improve the pool the model ranks, but they are not the core novelty.
+- **Manual recall** becomes less central because predictive injection can
+  surface useful context before the agent asks.
+- **Relevance learning** gains negative evidence. The system should learn
+  from regret, not just reuse: if injected context does not help, that
+  should count against it.
+
+**Current status:** The predictor integration path exists and is wired into the
+system, but it is still maturing. The important claim is not that Signet has
+already solved learned memory selection perfectly. The claim is that Signet is
+building the agent-in-the-loop training and comparison machinery required to do it.
 
 ### Competitive Implication
-Nobody else is training a prediction model on real agent interaction data. The
-competitors are building better search engines for memory. Signet is building
-a system that knows what you need before you search. The cold start problem
-disappears because the community base model ships with every install — your
-agent starts smart on day one, then gets smarter for you specifically.
+Nobody else is clearly centered on learning context selection from real agent
+interaction data. Most competitors are building better storage and retrieval
+systems for memory. Signet is building the loop that can eventually learn what
+you need before you search, and learn against what keeps getting surfaced
+without helping.
 
 ---
 

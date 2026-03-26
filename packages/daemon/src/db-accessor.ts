@@ -7,47 +7,42 @@
  */
 
 import { Database, type Statement } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
-
-// ---------------------------------------------------------------------------
-// macOS SQLite extension loading fix
-// ---------------------------------------------------------------------------
-// Apple's system SQLite is compiled with SQLITE_OMIT_LOAD_EXTENSION for
-// security reasons. Bun's bun:sqlite uses the system SQLite by default,
-// which prevents loading sqlite-vec and silently degrades to keyword-only
-// search. Use Homebrew's SQLite if available (supports extension loading).
-// ---------------------------------------------------------------------------
-
-// Only attempt Homebrew SQLite override on macOS
-if (process.platform === "darwin") {
-	const HOMEBREW_SQLITE_PATHS = [
-		"/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib", // Apple Silicon
-		"/usr/local/opt/sqlite/lib/libsqlite3.dylib", // Intel
-	];
-
-	for (const sqlitePath of HOMEBREW_SQLITE_PATHS) {
-		if (existsSync(sqlitePath)) {
-			try {
-				Database.setCustomSQLite(sqlitePath);
-			} catch (e) {
-				// SQLite already loaded (e.g., in test environment) — skip.
-				// Log so users can diagnose extension-loading failures.
-				console.warn(
-					`[db-accessor] setCustomSQLite(${sqlitePath}) skipped:`,
-					e instanceof Error ? e.message : String(e),
-				);
-			}
-			break;
-		}
-	}
-}
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
-	runMigrations,
-	hasPendingMigrations,
-	findSqliteVecExtension,
 	DEFAULT_EMBEDDING_DIMENSIONS,
+	findSqliteVecExtension,
+	hasPendingMigrations,
+	runMigrations,
 } from "@signet/core";
+
+const HOMEBREW_SQLITE_PATHS = [
+	"/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
+	"/usr/local/opt/sqlite/lib/libsqlite3.dylib",
+] as const;
+
+type SqliteSource = "env" | "workspace" | "homebrew";
+
+export interface SqliteChoice {
+	readonly path: string;
+	readonly source: SqliteSource;
+}
+
+export interface VectorRuntimeStatus {
+	readonly sqlite: SqliteChoice | null;
+	readonly sqliteAttempt: string | null;
+	readonly sqliteWarning: string | null;
+	readonly extensionPath: string | null;
+	readonly extensionLoaded: boolean;
+	readonly extensionLoadError: string | null;
+}
+
+interface SqliteRuntimeConfig {
+	readonly choice: SqliteChoice | null;
+	readonly attempt: string | null;
+	readonly warning: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Public interfaces — thin wrappers over the bun:sqlite Database surface
@@ -79,6 +74,11 @@ export interface DbAccessor {
 
 let accessor: DbAccessor | null = null;
 let dbPath: string | null = null;
+let sqliteChoice: SqliteChoice | null = null;
+let sqliteAttempt: string | null = null;
+let sqliteWarning: string | null = null;
+let vecLoaded = false;
+let vecLoadError: string | null = null;
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -94,23 +94,225 @@ function configurePragmas(db: Database): void {
 // Cached extension path — resolved once at startup
 let vecExtPath: string | null | undefined;
 
+function readTrimmed(env: NodeJS.ProcessEnv, key: string): string | null {
+	const value = env[key];
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+function readConfigHome(env: NodeJS.ProcessEnv): string {
+	const dir = readTrimmed(env, "XDG_CONFIG_HOME");
+	if (dir !== null) return dir;
+	return join(homedir(), ".config");
+}
+
+function readWorkspaceConfig(path: string): string | null {
+	if (!existsSync(path)) return null;
+
+	try {
+		const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+		if (typeof raw !== "object" || raw === null) return null;
+		if (!("workspace" in raw)) return null;
+		const value = raw.workspace;
+		if (typeof value !== "string") return null;
+		const trimmed = value.trim();
+		return trimmed.length > 0 ? trimmed : null;
+	} catch {
+		return null;
+	}
+}
+
+export function resolveSqliteAgentsDir(opts?: {
+	readonly env?: NodeJS.ProcessEnv;
+	readonly home?: () => string;
+}): string {
+	const env = opts?.env ?? process.env;
+	const path = readTrimmed(env, "SIGNET_PATH");
+	if (path !== null) return path;
+
+	const cfg = readWorkspaceConfig(join(readConfigHome(env), "signet", "workspace.json"));
+	if (cfg !== null) return cfg;
+
+	return join((opts?.home ?? homedir)(), ".agents");
+}
+
+export function resolveCustomSqlitePath(opts?: {
+	readonly platform?: NodeJS.Platform;
+	readonly env?: NodeJS.ProcessEnv;
+	readonly agentsDir?: string;
+	readonly exists?: (path: string) => boolean;
+}): SqliteChoice | null {
+	const platform = opts?.platform ?? process.platform;
+	if (platform !== "darwin") return null;
+
+	const env = opts?.env ?? process.env;
+	const exists = opts?.exists ?? existsSync;
+	const agentsDir = opts?.agentsDir ?? resolveSqliteAgentsDir({ env });
+
+	const envPath = env.SIGNET_SQLITE_PATH;
+	if (envPath) {
+		if (exists(envPath)) {
+			return { path: envPath, source: "env" };
+		}
+		return null;
+	}
+
+	const local = join(agentsDir, "libsqlite3.dylib");
+	if (exists(local)) {
+		return { path: local, source: "workspace" };
+	}
+
+	for (const path of HOMEBREW_SQLITE_PATHS) {
+		if (exists(path)) {
+			return { path, source: "homebrew" };
+		}
+	}
+
+	return null;
+}
+
+function resolveHomebrewSqlitePath(exists: (path: string) => boolean): SqliteChoice | null {
+	for (const path of HOMEBREW_SQLITE_PATHS) {
+		if (exists(path)) {
+			return { path, source: "homebrew" };
+		}
+	}
+
+	return null;
+}
+
+function explainSqliteSetup(agentsDir: string): string {
+	return [
+		"macOS system SQLite may block loadExtension() and force keyword-only recall.",
+		`Set SIGNET_SQLITE_PATH, place libsqlite3.dylib in ${agentsDir}, or install Homebrew sqlite.`,
+	].join(" ");
+}
+
+export function resolveSqliteRuntimeConfig(opts?: {
+	readonly platform?: NodeJS.Platform;
+	readonly env?: NodeJS.ProcessEnv;
+	readonly agentsDir?: string;
+	readonly exists?: (path: string) => boolean;
+	readonly set?: (path: string) => void;
+}): SqliteRuntimeConfig {
+	const platform = opts?.platform ?? process.platform;
+	if (platform !== "darwin") {
+		return {
+			choice: null,
+			attempt: null,
+			warning: null,
+		};
+	}
+
+	const env = opts?.env ?? process.env;
+	const exists = opts?.exists ?? existsSync;
+	const set = opts?.set ?? ((path: string) => Database.setCustomSQLite(path));
+	const agentsDir = opts?.agentsDir ?? resolveSqliteAgentsDir({ env });
+	const envPath = env.SIGNET_SQLITE_PATH;
+	if (envPath && !exists(envPath)) {
+		return {
+			choice: null,
+			attempt: envPath,
+			warning: `SIGNET_SQLITE_PATH does not exist: ${envPath}. Explicit override is authoritative, refusing fallback to workspace/Homebrew SQLite.`,
+		};
+	}
+
+	const choice = resolveCustomSqlitePath({ platform, env, agentsDir, exists });
+	if (!choice) {
+		return {
+			choice: null,
+			attempt: null,
+			warning: explainSqliteSetup(agentsDir),
+		};
+	}
+
+	try {
+		set(choice.path);
+		return {
+			choice,
+			attempt: choice.path,
+			warning: null,
+		};
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		if (choice.source !== "workspace") {
+			return {
+				choice: null,
+				attempt: choice.path,
+				warning: `Failed to activate custom SQLite at ${choice.path}: ${msg}. ${explainSqliteSetup(agentsDir)}`,
+			};
+		}
+
+		const fallback = resolveHomebrewSqlitePath(exists);
+		if (fallback === null || fallback.path === choice.path) {
+			return {
+				choice: null,
+				attempt: choice.path,
+				warning: `Failed to activate custom SQLite at ${choice.path}: ${msg}. ${explainSqliteSetup(agentsDir)}`,
+			};
+		}
+
+		try {
+			set(fallback.path);
+			console.warn(`[db-accessor] workspace SQLite at ${choice.path} failed (${msg}), fell back to ${fallback.path}`);
+			return {
+				choice: fallback,
+				attempt: fallback.path,
+				warning: null,
+			};
+		} catch (err) {
+			const next = err instanceof Error ? err.message : String(err);
+			return {
+				choice: null,
+				attempt: fallback.path,
+				warning: `Failed to activate workspace SQLite at ${choice.path}: ${msg}. Fallback Homebrew SQLite at ${fallback.path} also failed: ${next}. ${explainSqliteSetup(agentsDir)}`,
+			};
+		}
+	}
+}
+
+function configureCustomSqlite(agentsDir?: string): void {
+	const cfg = resolveSqliteRuntimeConfig({ agentsDir });
+	sqliteChoice = cfg.choice;
+	sqliteAttempt = cfg.attempt;
+	sqliteWarning = cfg.warning;
+	if (cfg.warning !== null) {
+		console.warn(`[db-accessor] ${cfg.warning}`);
+	}
+}
+
 function loadVecExtension(db: Database): void {
 	if (vecExtPath === undefined) {
 		vecExtPath = findSqliteVecExtension();
 		if (!vecExtPath) {
+			vecLoaded = false;
+			vecLoadError = "sqlite-vec extension not found";
 			console.warn("[db-accessor] sqlite-vec extension not found — vector search disabled");
 		}
 	}
 	if (vecExtPath) {
 		try {
 			db.loadExtension(vecExtPath);
+			vecLoaded = true;
+			vecLoadError = null;
 		} catch (e) {
-			console.warn(
-				"[db-accessor] loadExtension failed:",
-				e instanceof Error ? e.message : String(e),
-			);
+			vecLoaded = false;
+			vecLoadError = e instanceof Error ? e.message : String(e);
+			console.warn("[db-accessor] loadExtension failed:", vecLoadError);
 		}
 	}
+}
+
+export function getVectorRuntimeStatus(): VectorRuntimeStatus {
+	return {
+		sqlite: sqliteChoice,
+		sqliteAttempt,
+		sqliteWarning,
+		extensionPath: vecExtPath ?? null,
+		extensionLoaded: vecLoaded,
+		extensionLoadError: vecLoadError,
+	};
 }
 
 const MAX_MIGRATION_BACKUPS = 5;
@@ -156,7 +358,7 @@ function backupBeforeMigration(db: Database, dbPath: string, schemaVersion: numb
  * before any route handler runs. Ensures the memory directory exists, opens
  * the write connection, sets pragmas, and runs pending migrations.
  */
-export function initDbAccessor(path: string): void {
+export function initDbAccessor(path: string, opts?: { readonly agentsDir?: string }): void {
 	if (accessor) {
 		throw new Error("DbAccessor already initialised");
 	}
@@ -168,17 +370,18 @@ export function initDbAccessor(path: string): void {
 
 	dbPath = path;
 
+	configureCustomSqlite(opts?.agentsDir);
+
 	const writeConn = new Database(path);
 	configurePragmas(writeConn);
 	loadVecExtension(writeConn);
 
 	// Back up before migrations if there are pending changes
 	if (existsSync(path) && hasPendingMigrations(writeConn)) {
-		const row = writeConn.prepare(
-			"SELECT MAX(version) as version FROM schema_migrations",
-		).get() as { version: number } | undefined;
-		const currentSchemaVersion =
-			row && typeof row.version === "number" ? row.version : 0;
+		const row = writeConn.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
+			| { version: number }
+			| undefined;
+		const currentSchemaVersion = row && typeof row.version === "number" ? row.version : 0;
 		backupBeforeMigration(writeConn, path, currentSchemaVersion);
 	}
 
@@ -215,11 +418,9 @@ export function initDbAccessor(path: string): void {
  * from existing memories rows.
  */
 export function ensureFtsTable(db: Database): void {
-	const existing = db
-		.prepare(
-			"SELECT name FROM sqlite_master WHERE name = 'memories_fts' AND type = 'table'",
-		)
-		.get() as { name: string } | undefined;
+	const existing = db.prepare("SELECT name FROM sqlite_master WHERE name = 'memories_fts' AND type = 'table'").get() as
+		| { name: string }
+		| undefined;
 
 	if (existing) return;
 
@@ -252,17 +453,11 @@ export function ensureFtsTable(db: Database): void {
 	`);
 
 	// Backfill existing rows
-	const backfilled = db
-		.prepare("SELECT COUNT(*) as n FROM memories")
-		.get() as { n: number };
+	const backfilled = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
 
 	if (backfilled.n > 0) {
-		db.exec(
-			"INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories",
-		);
-		console.log(
-			`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`,
-		);
+		db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
+		console.log(`[db-accessor] Backfilled ${backfilled.n} rows into memories_fts`);
 	}
 }
 
@@ -273,11 +468,9 @@ export function ensureFtsTable(db: Database): void {
 function ensureVecTable(db: Database): void {
 	// Check if vec_embeddings exists and has the correct schema (TEXT id).
 	// If it exists without an id column, drop and recreate.
-	const existing = db
-		.prepare(
-			"SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'",
-		)
-		.get() as { sql: string } | undefined;
+	const existing = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
+		| { sql: string }
+		| undefined;
 
 	if (existing) {
 		if (existing.sql.includes("id TEXT")) return;
@@ -286,9 +479,7 @@ function ensureVecTable(db: Database): void {
 	}
 
 	// Detect actual embedding dimensions from existing data
-	const dimRow = db
-		.prepare("SELECT dimensions FROM embeddings LIMIT 1")
-		.get() as { dimensions: number } | undefined;
+	const dimRow = db.prepare("SELECT dimensions FROM embeddings LIMIT 1").get() as { dimensions: number } | undefined;
 	const dims = dimRow?.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
 
 	db.exec(`
@@ -313,9 +504,7 @@ function backfillVecEmbeddings(db: Database): void {
 
 	if (rows.length === 0) return;
 
-	const insert = db.prepare(
-		"INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)",
-	);
+	const insert = db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
 
 	let migrated = 0;
 	try {
@@ -323,10 +512,7 @@ function backfillVecEmbeddings(db: Database): void {
 		for (const row of rows) {
 			try {
 				const vec = new Float32Array(
-					row.vector.buffer.slice(
-						row.vector.byteOffset,
-						row.vector.byteOffset + row.vector.byteLength,
-					),
+					row.vector.buffer.slice(row.vector.byteOffset, row.vector.byteOffset + row.vector.byteLength),
 				);
 				insert.run(row.id, vec);
 				migrated++;
@@ -346,9 +532,7 @@ function backfillVecEmbeddings(db: Database): void {
 
 	if (migrated > 0) {
 		// eslint-disable-next-line no-console
-		console.log(
-			`[db-accessor] Backfilled ${migrated}/${rows.length} missing embeddings into vec_embeddings`,
-		);
+		console.log(`[db-accessor] Backfilled ${migrated}/${rows.length} missing embeddings into vec_embeddings`);
 	}
 
 	// Clean orphaned vec_embeddings rows (phantom IDs from prior sync bugs)
@@ -362,13 +546,9 @@ function backfillVecEmbeddings(db: Database): void {
 			.get() as { n: number } | undefined;
 		const orphanCount = orphanRow?.n ?? 0;
 		if (orphanCount > 0) {
-			db.prepare(
-				"DELETE FROM vec_embeddings WHERE id NOT IN (SELECT id FROM embeddings)",
-			).run();
+			db.prepare("DELETE FROM vec_embeddings WHERE id NOT IN (SELECT id FROM embeddings)").run();
 			// eslint-disable-next-line no-console
-			console.log(
-				`[db-accessor] Cleaned ${orphanCount} orphaned vec_embeddings rows`,
-			);
+			console.log(`[db-accessor] Cleaned ${orphanCount} orphaned vec_embeddings rows`);
 		}
 	} catch {
 		// vec_embeddings may not exist — non-fatal
@@ -472,4 +652,10 @@ export function closeDbAccessor(): void {
 		accessor = null;
 		dbPath = null;
 	}
+	sqliteChoice = null;
+	sqliteAttempt = null;
+	sqliteWarning = null;
+	vecLoaded = false;
+	vecLoadError = null;
+	vecExtPath = undefined;
 }

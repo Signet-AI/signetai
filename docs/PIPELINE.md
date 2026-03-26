@@ -26,6 +26,10 @@ back into the memory store. This means the caller's raw content is never
 lost — it is always durably committed before any LLM call runs — and
 derived facts are layered on top rather than replacing the original.
 
+This is substrate work. The pipeline's job is to turn raw interaction
+data into cleaner, more structured material the rest of the system can
+use for retrieval, repair, and eventually learned context selection.
+
 The central constraint governing every design decision here is: **no LLM
 calls inside write-locked transactions.** SQLite write locks are exclusive,
 and a blocking HTTP call to Ollama inside one would stall the entire [[daemon]].
@@ -110,6 +114,11 @@ The decision stage evaluates each extracted fact independently against the
 existing memory store. For each fact, the engine retrieves the top-5
 candidate memories via hybrid search, then asks the LLM which of four
 actions to take: ADD, UPDATE, DELETE, or NONE.
+
+This stage is intentionally conservative. It is better understood as a
+proposal and curation layer than as autonomous semantic rewriting. Its
+output improves memory quality and auditability; it does not eliminate
+the need for downstream relevance learning.
 
 Candidate retrieval uses the same BM25 + vector hybrid search that powers
 recall. The BM25 leg queries `memories_fts` with the fact's content as the
@@ -562,8 +571,10 @@ is called in the summary worker. It builds comparison pairs from the session
 `predictor_comparisons`. The EMA health signal and drift detector are updated
 based on the session's NDCG@10 score.
 
-The predictor is disabled by default (`predictor.enabled: false`). When
-disabled, both hooks are no-ops and the baseline pipeline is unchanged.
+In the current config defaults, the predictor path is enabled, but it
+still fails open. During cold start, sidecar unavailability, or explicit
+`predictor.enabled: false`, both hooks fall back to baseline ordering and
+the baseline pipeline remains unchanged.
 
 
 Optional Reranking

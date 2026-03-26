@@ -134,7 +134,9 @@ No specific agent memory architecture found. Focus appears on model capabilities
 
 **2. Agent identity (not just memory):** Every memory solution stores facts. None maintain persistent agent identity — personality files (SOUL.md), behavioral guidelines (AGENTS.md), structured identity metadata (IDENTITY.md), user profiles (USER.md).
 
-**3. Memory extraction pipeline + identity + local storage:** Letta has the deepest memory architecture but requires its runtime. Mem0 has ecosystem reach but is cloud-hosted. Claude Code has auto-memory but is harness-locked. No solution combines LLM-driven extraction, knowledge graph, hybrid search, retention decay, session summaries, AND local-first SQLite, AND cross-platform connectors, AND persistent identity files.
+**3. Memory extraction pipeline + identity + local storage:** Letta has the deepest memory architecture but requires its runtime. Mem0 has ecosystem reach but is cloud-hosted. Claude Code has auto-memory but is harness-locked. No solution combines LLM-driven extraction, structured memory substrate, retention/repair loops, local-first SQLite, cross-platform connectors, and persistent identity files in one portable layer.
+
+**4. Learned context selection as the endgame:** Many systems compete on storing and retrieving memory better. Far fewer are clearly building toward a model that learns, from real session outcomes, what context should be surfaced automatically and what should count as negative evidence when it does not help.
 
 ### Supporting Industry Framing
 
@@ -161,4 +163,4 @@ No specific agent memory architecture found. Focus appears on model capabilities
 | User owns all data | Self-host | No | Self-host | No | Yes | No | Partial | Yes | **Yes** |
 | Execution sandboxing | No | No | No | No | No | No | No | **Yes** | No |
 
-**The clearest framing:** every other solution treats memory as an API service or framework feature. Signet treats it as infrastructure that belongs to the user — a home directory for agents where identity, memory, skills, and configuration are plain-text files under version control, portable across any AI harness, running entirely on the user's machine.
+**The clearest framing:** every other solution treats memory as an API service or framework feature. Signet treats it as infrastructure that belongs to the user — a home directory for agents where identity, memory, skills, and configuration are portable across harnesses, and where the long-term goal is not just better retrieval but learned context selection.

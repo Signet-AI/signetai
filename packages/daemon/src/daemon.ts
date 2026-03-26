@@ -11848,8 +11848,10 @@ async function main() {
 	mkdirSync(LOG_DIR, { recursive: true });
 
 	// Initialise singleton DB accessor (opens write connection, sets pragmas,
-	// runs migrations). This is the sole schema authority.
-	initDbAccessor(MEMORY_DB);
+	// runs migrations). This is the sole schema authority and the only
+	// production Bun SQLite constructor path, which keeps macOS custom
+	// SQLite selection ahead of any live connection.
+	initDbAccessor(MEMORY_DB, { agentsDir: AGENTS_DIR });
 
 	// Sync agent roster from manifest into the agents table.
 	syncAgentRoster(AGENTS_DIR);

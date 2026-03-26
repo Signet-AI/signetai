@@ -35,6 +35,11 @@ Signet makes memory ambient. It extracts and injects context
 automatically, between sessions, before the next prompt starts.
 Your agent just has memory.
 
+Structured memory, graph traversal, and hybrid retrieval matter, but
+they are not the point. They are substrate for the larger job Signet is
+building toward: deciding what should enter the model's context window
+right now, with enough precision to help instead of distract.
+
 Why teams adopt it:
 - less prompt re-explaining between sessions
 - one memory layer across Claude Code, OpenCode, OpenClaw, and Codex
@@ -86,7 +91,7 @@ These are the product surface areas Signet is optimized around:
 | Core | What it does |
 |---|---|
 | 🧠 Ambient memory extraction | Sessions are distilled automatically, no memory tool calls required |
-| 🕸️ Hybrid retrieval | Graph traversal + FTS5 + vector search for robust recall under real prompts |
+| 🎯 Predictive context selection | Structured memory and session feedback build toward a scorer that learns what context is actually useful |
 | 💾 Session continuity | Checkpoint and transcript-backed context carried across sessions |
 | 🏠 Local-first storage | Data lives on your machine in SQLite and markdown, portable by default |
 | 🤝 Cross-harness runtime | Claude Code, OpenCode, OpenClaw, Codex, one shared memory substrate |
@@ -116,7 +121,8 @@ These systems improve quality and reliability of the core memory loop:
 | Supporting | What it does |
 |---|---|
 | 📜 Lossless transcripts | Raw session history preserved alongside extracted memories |
-| 🎯 Predictive scorer | Learns your interaction patterns to prioritize likely-useful context |
+| 🕸️ Structured retrieval substrate | Graph traversal + FTS5 + vector search produce bounded candidate context |
+| 🎯 Predictive scorer | Wired into the system as a maturing path toward learned reranking from session outcomes, including regret signals |
 | 🔬 Noise filtering | Hub and similarity controls reduce low-signal memory surfacing |
 | 📄 Document ingestion | Pull PDFs, markdown, and URLs into the same retrieval pipeline |
 | 🖥️ CLI + Dashboard | Operate and inspect the system from terminal or web UI |
@@ -264,11 +270,11 @@ In connected harnesses, skills work directly:
 
 ```
 session ends
-  → distillation engine extracts entities, facts, and relationships
-  → knowledge graph links them to existing memory
-  → decisions auto-detected and promoted to always-surface constraints
-  → raw transcript preserved alongside extracted facts (lossless retention)
-  → predictive scorer ranks candidates against your interaction patterns
+  → raw transcript is preserved and distilled into structured memory
+  → entities, constraints, and relations are linked into a navigable graph
+  → traversal + flat search build a bounded candidate pool
+  → predictive scorer reranks candidates against your interaction patterns
+  → fail-open guards keep baseline ordering if the model is cold or unavailable
   → post-fusion dampening separates signal from noise
   → right context injected before the next prompt starts
 ```
@@ -289,7 +295,7 @@ Daemon (@signet/daemon, localhost:3850)
   |-- Distillation Layer
   |     extraction -> decision -> graph -> retention
   |-- Retrieval
-  |     traversal-primary -> cosine re-scoring -> dampening -> hybrid fallback
+  |     traversal + flat search -> fusion -> dampening
   |-- Lossless Transcripts
   |     raw session storage -> expand-on-recall join
   |-- Hints Worker
@@ -297,7 +303,7 @@ Daemon (@signet/daemon, localhost:3850)
   |-- Inline Entity Linker
   |     write-time entity extraction (no LLM), decision auto-protection
   |-- Predictive Scorer
-  |     entity-weight traversal, per-user trained model
+  |     learned relevance model over structured candidates
   |-- Document Worker
   |     ingest -> chunk -> embed -> index
   |-- MCP Server

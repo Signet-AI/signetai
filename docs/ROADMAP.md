@@ -34,8 +34,8 @@ Planned
 
 - [next] Desire Paths Phase 5 — explorer bees, cross-entity boundary
   traversal, discovered principles, entity health dashboard
-- [next] Wallet auth (EIP-8004) — blockchain-based agent identity
-  verification and encrypted sync
+- [next] Cryptographic identity and trust layer — portable agent
+  identity, verification, and encrypted sync
 - [next] Agent branching — version-control-like identity branching
   and merging across parallel sessions
 - [next] Gemini CLI connector — platform adapter
@@ -57,8 +57,8 @@ Recently Shipped
 - [done] 0.71.0 — Desire Paths Phase 3 complete: traversal-primary
   retrieval, prospective indexing (hypothetical query hints at write
   time), cosine re-scoring, scoped vector search with 2x over-fetch
-- [done] 0.70.x — Predictive memory scorer: all 4 phases complete,
-  critical bugs fixed, enabled by default
+- [done] 0.70.x — Predictive memory scorer integration: sidecar,
+  training pairs, comparison reporting, and default config enablement
 - [done] 0.69.x — Knowledge Architecture KA-1 through KA-6: entity/
   aspect/attribute schema, graph traversal, behavioral feedback loop,
   entity pinning, constraint surfacing

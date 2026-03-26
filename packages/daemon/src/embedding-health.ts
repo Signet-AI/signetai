@@ -6,7 +6,7 @@
  * All functions accept a ReadDb and return plain data structs.
  */
 
-import type { ReadDb } from "./db-accessor";
+import { type ReadDb, type VectorRuntimeStatus, getVectorRuntimeStatus } from "./db-accessor";
 import type { EmbeddingConfig } from "./memory-config";
 
 // ---------------------------------------------------------------------------
@@ -61,9 +61,7 @@ function clamp(n: number): number {
 // Individual checks
 // ---------------------------------------------------------------------------
 
-function checkProviderAvailable(
-	providerStatus: EmbeddingStatus,
-): EmbeddingCheckResult {
+function checkProviderAvailable(providerStatus: EmbeddingStatus): EmbeddingCheckResult {
 	if (providerStatus.available) {
 		return {
 			name: "provider-available",
@@ -80,18 +78,19 @@ function checkProviderAvailable(
 			base_url: providerStatus.base_url,
 			error: providerStatus.error,
 		},
-		fix: providerStatus.provider === "native"
-			? "Check disk space and network connectivity for initial model download"
-			: providerStatus.provider === "ollama"
-				? "Start ollama with `ollama serve` or check that the model is pulled"
-				: "Verify your OpenAI API key and network connectivity",
+		fix:
+			providerStatus.provider === "native"
+				? "Check disk space and network connectivity for initial model download"
+				: providerStatus.provider === "ollama"
+					? "Start ollama with `ollama serve` or check that the model is pulled"
+					: "Verify your OpenAI API key and network connectivity",
 	};
 }
 
 function checkCoverage(db: ReadDb): EmbeddingCheckResult {
-	const totalRow = db
-		.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0")
-		.get() as { n: number } | undefined;
+	const totalRow = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE is_deleted = 0").get() as
+		| { n: number }
+		| undefined;
 	const total = totalRow?.n ?? 0;
 
 	if (total === 0) {
@@ -147,13 +146,8 @@ function checkCoverage(db: ReadDb): EmbeddingCheckResult {
 	};
 }
 
-function checkDimensionMismatch(
-	db: ReadDb,
-	expectedDimensions: number,
-): EmbeddingCheckResult {
-	const rows = db
-		.prepare("SELECT DISTINCT dimensions FROM embeddings")
-		.all() as Array<{ dimensions: number }>;
+function checkDimensionMismatch(db: ReadDb, expectedDimensions: number): EmbeddingCheckResult {
+	const rows = db.prepare("SELECT DISTINCT dimensions FROM embeddings").all() as Array<{ dimensions: number }>;
 
 	if (rows.length === 0) {
 		return {
@@ -184,9 +178,7 @@ function checkDimensionMismatch(
 
 function checkModelDrift(db: ReadDb): EmbeddingCheckResult {
 	const rows = db
-		.prepare(
-			"SELECT DISTINCT embedding_model FROM memories WHERE embedding_model IS NOT NULL",
-		)
+		.prepare("SELECT DISTINCT embedding_model FROM memories WHERE embedding_model IS NOT NULL")
 		.all() as Array<{ embedding_model: string }>;
 
 	const models = rows.map((r) => r.embedding_model);
@@ -195,9 +187,7 @@ function checkModelDrift(db: ReadDb): EmbeddingCheckResult {
 		return {
 			name: "model-drift",
 			status: "ok",
-			message: models.length === 0
-				? "No embedding models recorded"
-				: `All memories use ${models[0]}`,
+			message: models.length === 0 ? "No embedding models recorded" : `All memories use ${models[0]}`,
 		};
 	}
 	return {
@@ -209,13 +199,53 @@ function checkModelDrift(db: ReadDb): EmbeddingCheckResult {
 	};
 }
 
-function checkNullVectors(db: ReadDb): EmbeddingCheckResult {
-	const row = db
-		.prepare(
-			"SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN vec_embeddings v ON v.id = e.id WHERE v.id IS NULL",
-		)
-		.get() as { n: number } | undefined;
-	const count = row?.n ?? 0;
+function msg(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+function missing(err: unknown, name: string): boolean {
+	const text = msg(err);
+	return text.includes(`no such table: ${name}`) || text.includes(`no such table: main.${name}`);
+}
+
+function vecDetail(runtime: VectorRuntimeStatus, error?: string): Record<string, unknown> {
+	return {
+		sqlite: runtime.sqlite,
+		sqliteAttempt: runtime.sqliteAttempt,
+		sqliteWarning: runtime.sqliteWarning,
+		extensionPath: runtime.extensionPath,
+		extensionLoaded: runtime.extensionLoaded,
+		extensionLoadError: runtime.extensionLoadError,
+		error,
+	};
+}
+
+function checkNullVectors(db: ReadDb, runtime: VectorRuntimeStatus): EmbeddingCheckResult {
+	let count = 0;
+	try {
+		const row = db
+			.prepare("SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN vec_embeddings v ON v.id = e.id WHERE v.id IS NULL")
+			.get() as { n: number } | undefined;
+		count = row?.n ?? 0;
+	} catch (err) {
+		if (!missing(err, "vec_embeddings")) {
+			return {
+				name: "null-vectors",
+				status: "fail",
+				message: "Failed to verify vector row coverage",
+				detail: vecDetail(runtime, msg(err)),
+				fix: "Inspect SQLite schema integrity and repair the underlying query failure",
+			};
+		}
+
+		return {
+			name: "null-vectors",
+			status: "warn",
+			message: "Cannot verify null vectors because vec_embeddings is unavailable",
+			detail: vecDetail(runtime, msg(err)),
+			fix: vecFix(runtime),
+		};
+	}
 
 	if (count === 0) {
 		return {
@@ -233,25 +263,47 @@ function checkNullVectors(db: ReadDb): EmbeddingCheckResult {
 	};
 }
 
-function checkVecTableSync(db: ReadDb): EmbeddingCheckResult {
-	const embRow = db
-		.prepare("SELECT COUNT(*) AS n FROM embeddings")
-		.get() as { n: number } | undefined;
+function vecFix(runtime: VectorRuntimeStatus): string {
+	if (runtime.extensionPath === null) {
+		return "Install the sqlite-vec platform package or set SIGNET_VEC_PATH to vec0.dylib/.so/.dll";
+	}
+
+	if (runtime.sqlite === null && runtime.sqliteWarning !== null) {
+		return "On macOS, set SIGNET_SQLITE_PATH, place libsqlite3.dylib in $SIGNET_PATH, or install Homebrew sqlite";
+	}
+
+	if (runtime.extensionLoadError) {
+		return `Vector extension failed to load: ${runtime.extensionLoadError}`;
+	}
+
+	return "Restart daemon to initialize the vector table";
+}
+
+function checkVecTableSync(db: ReadDb, runtime: VectorRuntimeStatus): EmbeddingCheckResult {
+	const embRow = db.prepare("SELECT COUNT(*) AS n FROM embeddings").get() as { n: number } | undefined;
 	const embCount = embRow?.n ?? 0;
 
 	let vecCount = 0;
 	try {
-		const vecRow = db
-			.prepare("SELECT COUNT(*) AS n FROM vec_embeddings")
-			.get() as { n: number } | undefined;
+		const vecRow = db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get() as { n: number } | undefined;
 		vecCount = vecRow?.n ?? 0;
-	} catch {
-		// vec_embeddings may not exist
+	} catch (err) {
+		if (!missing(err, "vec_embeddings")) {
+			return {
+				name: "vec-table-sync",
+				status: "fail",
+				message: "Failed to inspect vec_embeddings health",
+				detail: vecDetail(runtime, msg(err)),
+				fix: "Inspect SQLite schema integrity and repair the underlying query failure",
+			};
+		}
+
 		return {
 			name: "vec-table-sync",
 			status: "warn",
 			message: "vec_embeddings table not found",
-			fix: "Restart daemon to initialize the vector table",
+			detail: vecDetail(runtime, msg(err)),
+			fix: vecFix(runtime),
 		};
 	}
 
@@ -303,10 +355,10 @@ function checkOrphanedEmbeddings(db: ReadDb): EmbeddingCheckResult {
 // ---------------------------------------------------------------------------
 
 const WEIGHTS: Record<string, number> = {
-	"provider-available": 0.30,
+	"provider-available": 0.3,
 	coverage: 0.25,
 	"dimension-mismatch": 0.15,
-	"model-drift": 0.10,
+	"model-drift": 0.1,
 	"null-vectors": 0.08,
 	"vec-table-sync": 0.07,
 	"orphaned-embeddings": 0.05,
@@ -326,14 +378,15 @@ export function buildEmbeddingHealth(
 	db: ReadDb,
 	embeddingCfg: EmbeddingConfig,
 	providerStatus: EmbeddingStatus,
+	runtime: VectorRuntimeStatus = getVectorRuntimeStatus(),
 ): EmbeddingHealthReport {
 	const checks: EmbeddingCheckResult[] = [
 		checkProviderAvailable(providerStatus),
 		checkCoverage(db),
 		checkDimensionMismatch(db, embeddingCfg.dimensions),
 		checkModelDrift(db),
-		checkNullVectors(db),
-		checkVecTableSync(db),
+		checkNullVectors(db, runtime),
+		checkVecTableSync(db, runtime),
 		checkOrphanedEmbeddings(db),
 	];
 

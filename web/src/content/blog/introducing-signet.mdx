@@ -56,7 +56,7 @@ Most AI memory systems store conversations — they save what was said and searc
 
 Worse, most of them put the agent in charge. They give the LLM memory tools — "remember this," "recall that" — and trust the stateless reasoning engine to decide what's worth keeping. That's not memory. That's a filing cabinet the agent sometimes opens.
 
-Signet takes a fundamentally different approach. The agent is not in the loop. It doesn't call memory tools. It doesn't decide what to keep. A distillation engine runs outside the conversation, in the background, continuously refining raw session data into structured understanding:
+Signet takes a fundamentally different approach. A distillation engine runs outside the conversation, in the background, continuously refining raw session data into structured understanding:
 
 - **Sparse facts** — raw observations, unprocessed, high volume
 - **Observational facts** — extracted and validated, but not yet connected
@@ -65,7 +65,7 @@ Signet takes a fundamentally different approach. The agent is not in the loop. I
 
 Over time, the database gets *smaller and smarter*, not larger and noisier. A heavy week of sessions might produce thousands of memories. Leave the system alone and the pipeline prunes, deduplicates, and organizes — what remains is dense, connected, and useful.
 
-This is the difference between "here's everything that was said" and "here's what the system actually learned." For the full technical deep dive, see [[blog/knowledge-architecture|The Database Knows What You Did Last Summer]].
+This is the difference between "here's everything that was said" and "here's what the system actually learned." But storage and structure are only the beginning. The real problem is deciding what should actually enter the model's context window at the moment of use. For the full technical deep dive, see [[blog/knowledge-architecture|The Database Knows What You Did Last Summer]].
 
 
 ## Entities and the Knowledge Graph
@@ -74,20 +74,20 @@ Everything in Signet's [[docs/knowledge-architecture|knowledge base]] is organiz
 
 Each entity has aspects (dimensions of what matters about it), attributes (specific facts organized under those aspects), and constraints (rules that always surface, no matter what). Entities connect to each other through explicit dependencies, forming a graph.
 
-When a session starts, the system doesn't search through thousands of memories looking for what's relevant. It identifies which entities matter for this session and walks the graph — loading aspects, attributes, constraints, and following dependencies. The result is a bounded, structured context that's deterministic and fast.
+When a session starts, the system doesn't just search through thousands of memories looking for what's relevant. It identifies which entities matter for this session and walks the graph — loading aspects, attributes, constraints, and following dependencies. The result is a bounded, structured candidate set that's deterministic and fast.
 
-This is the shift from search to traversal — what we call [[docs/desire-paths|desire paths]]. Like the worn trails in a park that reveal where people actually walk, the graph learns which traversals are productive and reinforces them. Embedding search still exists for discovering things the graph hasn't connected yet, but the graph walk is the primary path. For the deterministic guarantees underneath, see [[docs/lcm-patterns|Lossless Context Patterns]].
+This is part of what we call [[docs/desire-paths|desire paths]]. Like the worn trails in a park that reveal where people actually walk, the graph learns which traversals are productive and reinforces them. Embedding search still exists for discovering things the graph hasn't connected yet, but the graph is not the whole thesis. It is substrate for context selection. For the deterministic guarantees underneath, see [[docs/lcm-patterns|Lossless Context Patterns]].
 
 
 ## The Predictive Scorer
 
-A neural network, unique to each user, runs alongside the LLM at inference time. It's trained on your interaction patterns — which memories actually helped in past sessions, what time of day certain projects matter, which entity relationships are relevant to your current work. It predicts which context will be needed before the agent asks, before a prompt is submitted.
+A learned scorer runs alongside the LLM at inference time. It's trained on your interaction patterns — which memories actually helped in past sessions, what time of day certain projects matter, which entity relationships are relevant to your current work. It predicts which context will be needed before the agent asks, before a prompt is submitted.
 
-The scorer already holds the highest relevance accuracy of any retrieval method in the system. Entity weights in the knowledge graph inform traversal, so the system doesn't just find text that looks similar — it walks the relationships that matter.
+This is the real bet in Signet. Not that a knowledge graph is novel, or that structured memory by itself is enough, but that storage, distillation, traversal, and retrieval can feed a model that learns what context is actually useful. Memory should learn from regret, not just reuse. If injected context doesn't improve the outcome, that should count as negative evidence.
 
-Your weights never leave your machine. No cloud, no shared weights. With consent, anonymized training signals from across the community feed a shared base model that ships with every new install — so your agent starts smart on day one, then gets sharper for you specifically. Federated learning applied to agent memory. The training signal is first-order ground truth: the agent itself reporting what helped, on every prompt, accumulated across real sessions.
+The model, weights, and training path are all designed to stay local-first. Signet can use broad prior structure to start useful, then get sharper for you specifically over time. The critical training signal is first-order usage evidence: what helped, what did not, and what keeps resurfacing without earning its place.
 
-Nobody else has this data. The rest of the market is building better search. We're building a system that knows what you need before you search.
+Nobody else has this data. Much of the market is building better search. Signet is building a system that learns what you need before you search.
 
 
 ## Skills
@@ -113,7 +113,7 @@ This is the hard problem. Not just remembering across sessions, but maintaining 
 
 ## Identity and Trust
 
-Signet is building toward a decentralized identity layer for agents. Through EIP-8004 (Trustless Agents), agents can be discovered, verified, and interacted with using blockchain-based identity — enabling open agent economies where agents hire other agents and humans for real services.
+Signet is building toward a cryptographic identity and trust layer for agents. The goal is portable verification: agents that can be discovered, verified, and authorized across environments without collapsing back into platform lock-in.
 
 This isn't about cryptocurrency. It's about provable identity. When an agent acts on your behalf online, there needs to be a trust layer that verifies who it is and what it's authorized to do.
 

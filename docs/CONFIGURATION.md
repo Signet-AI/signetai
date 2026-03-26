@@ -154,13 +154,14 @@ Core agent identity metadata.
 
 ### owner
 
-Optional owner identification. Reserved for future ERC-8128 verification.
+Optional owner identification. Reserved for future cryptographic identity
+verification.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `address` | string | Ethereum wallet address |
+| `address` | string | Cryptographic identity address or external identity ID, reserved for future use |
 | `localId` | string | Local user identifier |
-| `ens` | string | ENS domain name |
+| `ens` | string | Optional ENS or human-friendly identity alias |
 | `name` | string | Human-readable name |
 
 
@@ -617,8 +618,8 @@ auth:
 
 In `"local"` mode the token secret is generated automatically and stored
 at `$SIGNET_WORKSPACE/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
-wallet-based ERC-8128 signatures are used alongside or instead of local
-tokens.
+the daemon validates HMAC-signed bearer tokens with role and scope
+claims.
 
 
 ### Rate limits
@@ -725,11 +726,21 @@ editing the config file is impractical.
 | `SIGNET_BIND` | `SIGNET_HOST` | Explicit bind address override (`0.0.0.0`, etc.) |
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
+| `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
 | `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
 
 `SIGNET_PATH` changes where Signet reads and writes all agent data for
 that process, including the config file itself. Use this for temporary
 overrides in CI or isolated local testing.
+
+On macOS, `SIGNET_SQLITE_PATH` can point at a `libsqlite3.dylib` build
+that supports `loadExtension()`. If it is set, Signet treats it as an
+authoritative override and refuses fallback if the file is missing. If
+it is unset, Signet checks `$SIGNET_WORKSPACE/libsqlite3.dylib`, where
+`$SIGNET_WORKSPACE` resolves from `SIGNET_PATH`, then
+`~/.config/signet/workspace.json`, then the default `~/.agents`, before
+trying standard Homebrew SQLite locations and finally falling back to
+Apple's system SQLite.
 
 
 AGENTS.md
