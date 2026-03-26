@@ -6,11 +6,13 @@
  * that form the cross-harness identity standard.
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const FORGE_BINARY_NAME = "forge";
+const SIGNET_FORGE_BINARY_MARKER = "Signet's native AI terminal";
 
 /**
  * Returns the base path for agent-specific files.
@@ -167,6 +169,17 @@ export function resolveSignetForgeManagedPath(home = homedir()): string {
 	return join(home, ".config", "signet", "bin", forgeBinaryFilename());
 }
 
+function signetForgeCandidatePaths(home: string): string[] {
+	const binary = forgeBinaryFilename();
+	return [
+		resolveSignetForgeManagedPath(home),
+		join(home, ".cargo", "bin", binary),
+		join(home, ".local", "bin", binary),
+		"/usr/local/bin/forge",
+		"/opt/homebrew/bin/forge",
+	];
+}
+
 interface SignetForgeInstallRecord {
 	readonly managed?: boolean;
 	readonly binaryPath?: string;
@@ -182,13 +195,41 @@ function readSignetForgeInstallRecord(agentsDir: string): SignetForgeInstallReco
 	}
 }
 
+export function isSignetForgeBinary(binaryPath: string): boolean {
+	if (!existsSync(binaryPath)) return false;
+	try {
+		const binary = readFileSync(binaryPath);
+		return binary.includes(Buffer.from(SIGNET_FORGE_BINARY_MARKER));
+	} catch {
+		return false;
+	}
+}
+
 export function findSignetForgeBinary(agentsDir?: string, home = homedir()): string | null {
-	const managedPath = resolveSignetForgeManagedPath(home);
-	if (existsSync(managedPath)) return managedPath;
-	if (!agentsDir) return null;
-	const record = readSignetForgeInstallRecord(agentsDir);
-	if (record?.managed && record.binaryPath === managedPath && existsSync(managedPath)) {
-		return managedPath;
+	const candidates = signetForgeCandidatePaths(home);
+	if (agentsDir) {
+		const record = readSignetForgeInstallRecord(agentsDir);
+		if (record?.binaryPath) {
+			candidates.unshift(record.binaryPath);
+		}
+	}
+	for (const candidate of candidates) {
+		if (isSignetForgeBinary(candidate)) return candidate;
+	}
+	try {
+		const lookup = process.platform === "win32" ? "where" : "which";
+		const output = execFileSync(lookup, [FORGE_BINARY_NAME], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		})
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean);
+		for (const candidate of output) {
+			if (isSignetForgeBinary(candidate)) return candidate;
+		}
+	} catch {
+		return null;
 	}
 	return null;
 }

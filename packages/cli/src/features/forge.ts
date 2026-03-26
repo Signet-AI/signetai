@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { findSignetForgeBinary, resolveSignetForgeManagedPath } from "@signet/core";
+import { findSignetForgeBinary, isSignetForgeBinary, resolveSignetForgeManagedPath } from "@signet/core";
 import chalk from "chalk";
 
 export interface ForgeManifest {
@@ -143,7 +143,7 @@ function findInstalledForge(deps: ForgeDeps, binaryName = "forge"): string | nul
 function findManagedForge(deps: ForgeDeps, binaryName = "forge"): string | null {
 	const managedPath = signetManagedBinaryPath(binaryName);
 	const record = readInstallRecord(deps.agentsDir);
-	const validManagedBinary = existsSync(managedPath);
+	const validManagedBinary = existsSync(managedPath) && (binaryName !== "forge" || isSignetForgeBinary(managedPath));
 	if (record?.managed && record.binaryPath === managedPath && validManagedBinary) {
 		return managedPath;
 	}
@@ -274,6 +274,12 @@ function verifyFileChecksum(filePath: string, expectedSha256: string): void {
 	}
 }
 
+function verifyForgeBinaryIdentity(binaryPath: string): void {
+	if (!isSignetForgeBinary(binaryPath)) {
+		throw new Error(`Extracted binary failed Signet Forge identity verification: ${binaryPath}`);
+	}
+}
+
 function extractForgeBinary(archivePath: string, destinationDir: string, binaryName: string): string {
 	mkdirSync(destinationDir, { recursive: true });
 	const result = spawnSync("tar", ["-xzf", archivePath, "-C", destinationDir], { stdio: "pipe" });
@@ -323,6 +329,7 @@ async function installForgeBinary(
 	const expectedSha256 = parseSha256Checksum(await fetchText(checksumAsset.url), asset.name);
 	verifyFileChecksum(archivePath, expectedSha256);
 	const extracted = extractForgeBinary(archivePath, extractDir, manifest.binary);
+	verifyForgeBinaryIdentity(extracted);
 	const targetBinary = binaryFilename(manifest.binary);
 	const finalPath = join(installDir, targetBinary);
 	const stagedPath = join(dirname(finalPath), `.${targetBinary}.new`);
