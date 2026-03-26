@@ -1570,6 +1570,59 @@ describe("handleSynthesisRequest", () => {
 		expect(result.prompt).toContain("William RPG planning thread");
 	});
 
+	test.serial("merges persisted and freshly derived thread heads in synthesis prompt", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/rpg|session:sess-rpg|harness:test",
+			"project:rpg#session:sess-rpg#harness:test",
+			"/tmp/rpg",
+			"sess-rpg",
+			"summary",
+			"sess-rpg",
+			"test",
+			"node-rpg",
+			"2026-03-25T11:00:00.000Z",
+			"William RPG planning thread: combat loop and quest pacing.",
+			"2026-03-25T11:00:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, project, depth, kind, content, token_count,
+				earliest_at, latest_at, session_key, harness,
+				agent_id, source_type, source_ref, meta_json, created_at
+			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"node-green",
+			"/tmp/greenscreen",
+			"# Session\n\nMiguel green screen tool thread: keying edge stability and spill suppression.",
+			40,
+			"2026-03-26T00:00:00.000Z",
+			"2026-03-26T00:00:00.000Z",
+			"sess-green",
+			"test",
+			"default",
+			"summary",
+			"sess-green",
+			JSON.stringify({ source: "summary-worker" }),
+			"2026-03-26T00:00:00.000Z",
+		);
+		db.close();
+
+		const result = handleSynthesisRequest({ trigger: "manual" });
+
+		expect(result.prompt).toContain("project:rpg#session:sess-rpg#harness:test");
+		expect(result.prompt).toContain("project:greenscreen#source:sess-green#harness:test");
+		expect(result.prompt).toContain("node-rpg");
+		expect(result.prompt).toContain("node-green");
+	});
+
 	test.serial("generates prompt with exact temporal index instructions", async () => {
 		createMemoryDb([{ content: "Test session summary content", importance: 0.9 }]);
 

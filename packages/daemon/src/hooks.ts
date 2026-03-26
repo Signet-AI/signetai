@@ -491,6 +491,38 @@ function readPersistedThreadHeads(agentId: string, limit: number): ThreadHead[] 
 	}
 }
 
+function threadTime(head: ThreadHead): number {
+	const at = Date.parse(head.latestAt);
+	return Number.isFinite(at) ? at : 0;
+}
+
+function mergeThreadHeads(
+	persisted: ReadonlyArray<ThreadHead>,
+	derived: ReadonlyArray<ThreadHead>,
+	limit: number,
+): ThreadHead[] {
+	const map = new Map<string, ThreadHead>();
+	for (const head of [...persisted, ...derived]) {
+		const prev = map.get(head.key);
+		if (!prev) {
+			map.set(head.key, head);
+			continue;
+		}
+		const prevAt = threadTime(prev);
+		const headAt = threadTime(head);
+		if (headAt > prevAt) {
+			map.set(head.key, head);
+			continue;
+		}
+		if (headAt === prevAt && head.score > prev.score) {
+			map.set(head.key, head);
+		}
+	}
+	return Array.from(map.values())
+		.sort((a, b) => threadTime(b) - threadTime(a) || b.score - a.score)
+		.slice(0, limit);
+}
+
 function collectSynthesisMaterial(charBudget: number, agentId: string): SynthesisMaterial {
 	const memoryBudget = Math.max(1200, Math.floor(charBudget * 0.35));
 	const nodeBudget = Math.max(1200, Math.floor(charBudget * 0.45));
@@ -562,8 +594,9 @@ function collectSynthesisMaterial(charBudget: number, agentId: string): Synthesi
 			scored.filter((node) => node.sourceType !== "chunk"),
 			nodeBudget,
 		);
-		const persistedThreadHeads = readPersistedThreadHeads(agentId, 12);
-		const threadHeads = persistedThreadHeads.length > 0 ? persistedThreadHeads : collectThreadHeads(scored, 12);
+		const persistedThreadHeads = readPersistedThreadHeads(agentId, 24);
+		const derivedThreadHeads = collectThreadHeads(scored, 24);
+		const threadHeads = mergeThreadHeads(persistedThreadHeads, derivedThreadHeads, 12);
 		const indexNodes = scored.slice(0, 20);
 
 		return {

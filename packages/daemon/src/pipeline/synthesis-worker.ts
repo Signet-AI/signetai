@@ -260,8 +260,9 @@ export interface SynthesisWorkerHandle {
 
 export function startSynthesisWorker(config: PipelineSynthesisConfig): SynthesisWorkerHandle {
 	type PendingForce = {
-		readonly source: string;
+		source: string;
 		readonly agentId: string;
+		count: number;
 	};
 
 	let timer: ReturnType<typeof setTimeout> | null = null;
@@ -301,8 +302,12 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 	function enqueuePendingForce(source: string, agentId?: string): void {
 		const key = normalizeAgentId(agentId);
 		const existing = pendingQueue.find((entry) => entry.agentId === key);
-		if (existing) return;
-		pendingQueue.push({ source, agentId: key });
+		if (existing) {
+			existing.count += 1;
+			existing.source = source;
+			return;
+		}
+		pendingQueue.push({ source, agentId: key, count: 1 });
 	}
 
 	function clearPendingForceFor(agentId?: string): void {
@@ -346,7 +351,11 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			if (pending) {
 				const state = await runForcedDrainAttempt(pending);
 				if (state === "completed") {
-					pendingQueue.shift();
+					if (pending.count <= 1) {
+						pendingQueue.shift();
+					} else {
+						pending.count -= 1;
+					}
 					scheduleTick(pendingQueue.length > 0 ? FORCE_RETRY_MS : CHECK_INTERVAL_MS);
 					return;
 				}
@@ -484,7 +493,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			return isSynthesizing;
 		},
 		get pendingForceCount() {
-			return pendingQueue.length;
+			return pendingQueue.reduce((sum, entry) => sum + entry.count, 0);
 		},
 		get lastRunAt() {
 			return readLastSynthesisTime();
