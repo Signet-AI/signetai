@@ -262,10 +262,7 @@ specs:
     hard_depends_on: []
     soft_depends_on: []
     blocks: []
-    informed_by:
-      - references/hermes-agent
-      - references/supermemory
-      - references/hindsight
+    informed_by: []
     success_criteria: []
     decision: null
 
@@ -699,6 +696,21 @@ specs:
     informed_by: []
     success_criteria:
       - "A single doctor command validates local setup, daemon health, and baseline checks"
+    decision: null
+
+  - id: macos-sqlite-runtime-discovery
+    status: planning
+    path: docs/specs/planning/macos-sqlite-runtime-discovery.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-MACOS-SQLITE-RUNTIME-DISCOVERY.md
+    success_criteria:
+      - "On macOS, the daemon can discover a custom SQLite dylib via explicit override, workspace-local fallback, or Homebrew path before opening the first Bun connection"
+      - "When no compatible dylib is available, Signet surfaces an explicit warning and embedding health guidance instead of silently degrading"
+      - "Regression tests lock the macOS SQLite discovery order and degraded-mode messaging"
     decision: null
 
 

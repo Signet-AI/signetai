@@ -31,9 +31,14 @@ Environment variables control the network address:
 - `SIGNET_PORT` — port to listen on (default: `3850`)
 - `SIGNET_PATH` — override the data directory (default: `$SIGNET_WORKSPACE/`)
 - `SIGNET_LOG_FILE` — optional explicit daemon log file path
+- `SIGNET_SQLITE_PATH` — macOS override for a custom `libsqlite3.dylib`
 
 Bun is a hard requirement. The daemon uses `bun:sqlite` directly and will
 refuse to start under Node.
+
+On macOS, Signet checks `SIGNET_SQLITE_PATH`, then
+`$SIGNET_PATH/libsqlite3.dylib`, then standard Homebrew SQLite paths so
+`sqlite-vec` can load before the first Bun connection opens.
 
 
 Running as a Service
