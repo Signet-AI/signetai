@@ -217,6 +217,27 @@ pub struct PromptSubmitBody {
     pub runtime_path: Option<String>,
 }
 
+fn trim_for_inject(text: &str, limit: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= limit {
+        return trimmed.to_string();
+    }
+    let mut end = limit;
+    while !trimmed.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    format!("{}...", &trimmed[..end])
+}
+
+fn format_metadata_header() -> String {
+    let now = chrono::Local::now();
+    format!(
+        "# Current Date & Time\n{} ({})\n",
+        now.format("%A, %B %-d, %Y at %-I:%M %p"),
+        now.format("%Z")
+    )
+}
+
 pub async fn prompt_submit(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -268,6 +289,7 @@ pub async fn prompt_submit(
         .take(12)
         .collect();
     let query_terms = terms.join(" ");
+    let metadata_header = format_metadata_header();
 
     // Record in continuity tracker
     if let Some(key) = &body.session_key {
@@ -279,18 +301,250 @@ pub async fn prompt_submit(
         state.continuity.record_prompt(key, &query_terms, snippet);
     }
 
-    // TODO: Phase 5 — full hybrid search, memory injection, predictor scoring,
-    // graph traversal, dedup window filtering, budget truncation
+    if query_terms.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "inject": metadata_header,
+                "memoryCount": 0,
+                "queryTerms": query_terms,
+            })),
+        )
+            .into_response();
+    }
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "inject": "",
-            "memoryCount": 0,
-            "queryTerms": query_terms,
-        })),
-    )
-        .into_response()
+    let project = body.project.clone();
+    let session_key = body.session_key.clone();
+    let query_terms_for_resp = query_terms.clone();
+
+    let result = state
+        .pool
+        .read(move |conn| {
+            let mut terms = query_terms
+                .split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if terms.is_empty() {
+                terms.push(cleaned.clone());
+            }
+            let like_patterns = terms
+                .iter()
+                .take(6)
+                .map(|t| format!("%{}%", t.to_lowercase()))
+                .collect::<Vec<_>>();
+
+            // 1) Structured recall from memories (best effort parity with TS hybrid-first path).
+            let mut mem_sql = String::from(
+                "SELECT id, content, created_at
+                 FROM memories
+                 WHERE deleted = 0",
+            );
+            let mut mem_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            if let Some(ref p) = project {
+                mem_sql.push_str(" AND project = ?");
+                mem_params.push(Box::new(p.clone()));
+            }
+            if !like_patterns.is_empty() {
+                let clauses = like_patterns
+                    .iter()
+                    .map(|_| "LOWER(content) LIKE ?")
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                mem_sql.push_str(" AND (");
+                mem_sql.push_str(&clauses);
+                mem_sql.push(')');
+                for pat in &like_patterns {
+                    mem_params.push(Box::new(pat.clone()));
+                }
+            }
+            mem_sql.push_str(" ORDER BY importance DESC, created_at DESC LIMIT 5");
+            let mem_param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                mem_params.iter().map(|p| p.as_ref()).collect();
+            let mem_rows = match conn.prepare(&mem_sql) {
+                Ok(mut stmt) => stmt
+                    .query_map(mem_param_refs.as_slice(), |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    })
+                    .ok()
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                Err(_) => vec![],
+            };
+
+            if !mem_rows.is_empty() {
+                let lines = mem_rows
+                    .iter()
+                    .map(|(_, content, created_at)| {
+                        format!("- {} ({})", trim_for_inject(content, 300), created_at)
+                    })
+                    .collect::<Vec<_>>();
+                return Ok(serde_json::json!({
+                    "inject": format!(
+                        "{}\n[signet:recall | query=\"{}\" | results={} | engine=hybrid]\n{}",
+                        metadata_header,
+                        query_terms_for_resp,
+                        lines.len(),
+                        lines.join("\n")
+                    ),
+                    "memoryCount": lines.len(),
+                    "queryTerms": query_terms_for_resp,
+                    "engine": "hybrid",
+                }));
+            }
+
+            // 2) Temporal fallback from persisted thread heads.
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT node_id, sample, latest_at, label, project
+                 FROM memory_thread_heads
+                 WHERE agent_id = 'default'
+                 ORDER BY latest_at DESC LIMIT 24",
+            ) {
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                        ))
+                    })
+                    .ok()
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+
+                let mut picked = Vec::new();
+                for (id, sample, latest_at, label, row_project) in rows {
+                    let lower = sample.to_lowercase();
+                    if !like_patterns.iter().any(|p| {
+                        let needle = p.trim_matches('%');
+                        !needle.is_empty() && lower.contains(needle)
+                    }) {
+                        continue;
+                    }
+                    if let Some(ref want) = project
+                        && let Some(ref got) = row_project
+                        && got != want
+                    {
+                        continue;
+                    }
+                    picked.push(format!(
+                        "- [node {}] {} ({}, {})",
+                        id,
+                        trim_for_inject(&sample, 280),
+                        latest_at,
+                        label
+                    ));
+                    if picked.len() >= 4 {
+                        break;
+                    }
+                }
+                if !picked.is_empty() {
+                    return Ok(serde_json::json!({
+                        "inject": format!(
+                            "{}\n[signet:recall | query=\"{}\" | results={} | engine=temporal-fallback]\n{}",
+                            metadata_header,
+                            query_terms_for_resp,
+                            picked.len(),
+                            picked.join("\n")
+                        ),
+                        "memoryCount": picked.len(),
+                        "queryTerms": query_terms_for_resp,
+                        "engine": "temporal-fallback",
+                    }));
+                }
+            }
+
+            // 3) Transcript fallback.
+            let mut tx_sql = String::from(
+                "SELECT session_key, content, updated_at, project
+                 FROM session_transcripts
+                 WHERE agent_id = 'default'",
+            );
+            let mut tx_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            if let Some(ref p) = project {
+                tx_sql.push_str(" AND project = ?");
+                tx_params.push(Box::new(p.clone()));
+            }
+            if let Some(ref sk) = session_key {
+                // Prefer other sessions first, but still allow this session if it is all we have.
+                tx_sql.push_str(" ORDER BY (session_key = ?) ASC, updated_at DESC LIMIT 6");
+                tx_params.push(Box::new(sk.clone()));
+            } else {
+                tx_sql.push_str(" ORDER BY updated_at DESC LIMIT 6");
+            }
+            let tx_param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                tx_params.iter().map(|p| p.as_ref()).collect();
+            let tx_rows = match conn.prepare(&tx_sql) {
+                Ok(mut stmt) => stmt
+                    .query_map(tx_param_refs.as_slice(), |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    })
+                    .ok()
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                Err(_) => vec![],
+            };
+
+            let mut tx_lines = Vec::new();
+            for (sk, content, updated_at) in tx_rows {
+                let lower = content.to_lowercase();
+                if !like_patterns.iter().any(|p| {
+                    let needle = p.trim_matches('%');
+                    !needle.is_empty() && lower.contains(needle)
+                }) {
+                    continue;
+                }
+                let excerpt = trim_for_inject(&content, 260);
+                tx_lines.push(format!(
+                    "- {} ({}, session {})",
+                    excerpt,
+                    updated_at.unwrap_or_else(|| "unknown".to_string()),
+                    sk
+                ));
+                if tx_lines.len() >= 3 {
+                    break;
+                }
+            }
+            if !tx_lines.is_empty() {
+                return Ok(serde_json::json!({
+                    "inject": format!(
+                        "{}\n[signet:recall | query=\"{}\" | results={} | engine=transcript-fallback]\n{}",
+                        metadata_header,
+                        query_terms_for_resp,
+                        tx_lines.len(),
+                        tx_lines.join("\n")
+                    ),
+                    "memoryCount": tx_lines.len(),
+                    "queryTerms": query_terms_for_resp,
+                    "engine": "transcript-fallback",
+                }));
+            }
+
+            Ok(serde_json::json!({
+                "inject": metadata_header,
+                "memoryCount": 0,
+                "queryTerms": query_terms_for_resp,
+            }))
+        })
+        .await;
+
+    return match result {
+        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    };
 }
 
 // ---------------------------------------------------------------------------
