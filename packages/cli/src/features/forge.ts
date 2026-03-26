@@ -278,9 +278,9 @@ function verifyFileChecksum(filePath: string, expectedSha256: string): void {
 	}
 }
 
-function verifyForgeBinaryIdentity(binaryPath: string): void {
+function verifyForgeBinaryFingerprint(binaryPath: string): void {
 	if (!isSignetForgeBinary(binaryPath)) {
-		throw new Error(`Extracted binary failed Signet Forge identity verification: ${binaryPath}`);
+		throw new Error(`Extracted binary failed Signet Forge fingerprint check: ${binaryPath}`);
 	}
 }
 
@@ -333,7 +333,7 @@ async function installForgeBinary(
 	const expectedSha256 = parseSha256Checksum(await fetchText(checksumAsset.url), asset.name);
 	verifyFileChecksum(archivePath, expectedSha256);
 	const extracted = extractForgeBinary(archivePath, extractDir, manifest.binary);
-	verifyForgeBinaryIdentity(extracted);
+	verifyForgeBinaryFingerprint(extracted);
 	const targetBinary = binaryFilename(manifest.binary);
 	const finalPath = join(installDir, targetBinary);
 	const stagedPath = join(dirname(finalPath), `.${targetBinary}.new`);

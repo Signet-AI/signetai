@@ -7,6 +7,7 @@ import open from "open";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
+import { installForge } from "./forge.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
 import { readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
@@ -140,6 +141,19 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			runMigrations(db);
 		} finally {
 			db.close();
+		}
+
+		if (cfg.harnesses.includes("forge") && !deps.detectExistingSetup(cfg.basePath).harnesses.forge) {
+			spinner.text = "Installing Forge...";
+			await installForge(
+				{},
+				{
+					agentsDir: cfg.basePath,
+					defaultPort: deps.DEFAULT_PORT,
+					getTemplatesDir: deps.getTemplatesDir,
+					isDaemonRunning: deps.isDaemonRunning,
+				},
+			);
 		}
 
 		spinner.text = "Configuring harness hooks...";
