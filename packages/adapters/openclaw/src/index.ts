@@ -1427,7 +1427,6 @@ const signetPlugin = {
 				compaction?.cwd,
 				compaction?.workspace,
 				ctx.project,
-				opts.workspace,
 			);
 		};
 
@@ -1504,7 +1503,7 @@ const signetPlugin = {
 				return;
 			}
 
-			const dedupeKey = `${ctx.agentId ?? "-"}|${sessionKey ?? "-"}|${summary.slice(0, 120)}`;
+			const dedupeKey = `${ctx.agentId ?? "-"}|${sessionKey ?? "-"}|${sessionFile ?? "-"}|${summary}`;
 			if (dedupeCompaction(afterCompactions, dedupeKey)) {
 				return;
 			}

@@ -530,11 +530,11 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
 		expect(lastCompactionBody).toMatchObject({
 			harness: "openclaw",
-			project: process.cwd(),
 			sessionKey: "session-after",
 			runtimePath: "plugin",
 			summary: "Compacted history keeps the release blockers and migration plan.",
 		});
+		expect(lastCompactionBody).not.toHaveProperty("project");
 	});
 
 	it("reads the compaction summary from the event payload sessionFile when hook context lacks it", async () => {
@@ -566,11 +566,11 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
 		expect(lastCompactionBody).toMatchObject({
 			harness: "openclaw",
-			project: process.cwd(),
 			sessionKey: "session-after-event",
 			runtimePath: "plugin",
 			summary: "Recovered from event metadata session file.",
 		});
+		expect(lastCompactionBody).not.toHaveProperty("project");
 	});
 
 	it("prefers event project lineage over workspace fallback for compaction-complete", async () => {
@@ -589,6 +589,20 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			project: "/tmp/branch-lineage",
 			sessionKey: "session-lineage",
 		});
+	});
+
+	it("does not dedupe distinct compaction summaries that share the same prefix", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		expect(afterCompaction).toBeDefined();
+
+		const prefix = "x".repeat(140);
+		await afterCompaction?.({ summary: `${prefix}-a` }, { sessionKey: "session-prefix", agentId: "agent-1" });
+		await afterCompaction?.({ summary: `${prefix}-b` }, { sessionKey: "session-prefix", agentId: "agent-1" });
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(2);
 	});
 
 	it("does not dedupe compaction-complete hooks across different agents sharing a session key", async () => {
