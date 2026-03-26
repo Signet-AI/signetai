@@ -11,6 +11,7 @@ import {
 	initDbAccessor,
 	resolveCustomSqlitePath,
 	resolveSqliteAgentsDir,
+	resolveSqliteRuntimeConfig,
 } from "./db-accessor";
 
 function tmpDbPath(): string {
@@ -219,6 +220,53 @@ describe("resolveCustomSqlitePath", () => {
 		});
 
 		expect(result).toBeNull();
+	});
+
+	test("falls back to Homebrew when workspace sqlite exists but fails activation", () => {
+		const found = new Set(["/tmp/agents/libsqlite3.dylib", "/usr/local/opt/sqlite/lib/libsqlite3.dylib"]);
+		const calls: string[] = [];
+		const cfg = resolveSqliteRuntimeConfig({
+			platform: "darwin",
+			agentsDir: "/tmp/agents",
+			env: {},
+			exists: (path) => found.has(path),
+			set: (path) => {
+				calls.push(path);
+				if (path === "/tmp/agents/libsqlite3.dylib") {
+					throw new Error("wrong architecture");
+				}
+			},
+		});
+
+		expect(calls).toEqual(["/tmp/agents/libsqlite3.dylib", "/usr/local/opt/sqlite/lib/libsqlite3.dylib"]);
+		expect(cfg).toEqual({
+			choice: {
+				path: "/usr/local/opt/sqlite/lib/libsqlite3.dylib",
+				source: "homebrew",
+			},
+			attempt: "/usr/local/opt/sqlite/lib/libsqlite3.dylib",
+			warning: null,
+		});
+	});
+
+	test("uses the explicit agentsDir passed to init-time sqlite resolution", () => {
+		const found = new Set(["/tmp/explicit/libsqlite3.dylib"]);
+		const cfg = resolveSqliteRuntimeConfig({
+			platform: "darwin",
+			agentsDir: "/tmp/explicit",
+			env: { SIGNET_PATH: "/tmp/env-workspace" },
+			exists: (path) => found.has(path),
+			set: () => {},
+		});
+
+		expect(cfg).toEqual({
+			choice: {
+				path: "/tmp/explicit/libsqlite3.dylib",
+				source: "workspace",
+			},
+			attempt: "/tmp/explicit/libsqlite3.dylib",
+			warning: null,
+		});
 	});
 });
 

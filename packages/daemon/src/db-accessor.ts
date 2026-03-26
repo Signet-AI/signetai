@@ -38,6 +38,12 @@ export interface VectorRuntimeStatus {
 	readonly extensionLoadError: string | null;
 }
 
+interface SqliteRuntimeConfig {
+	readonly choice: SqliteChoice | null;
+	readonly attempt: string | null;
+	readonly warning: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Public interfaces — thin wrappers over the bun:sqlite Database surface
 // ---------------------------------------------------------------------------
@@ -166,6 +172,16 @@ export function resolveCustomSqlitePath(opts?: {
 	return null;
 }
 
+function resolveHomebrewSqlitePath(exists: (path: string) => boolean): SqliteChoice | null {
+	for (const path of HOMEBREW_SQLITE_PATHS) {
+		if (exists(path)) {
+			return { path, source: "homebrew" };
+		}
+	}
+
+	return null;
+}
+
 function explainSqliteSetup(agentsDir: string): string {
 	return [
 		"macOS system SQLite may block loadExtension() and force keyword-only recall.",
@@ -173,36 +189,96 @@ function explainSqliteSetup(agentsDir: string): string {
 	].join(" ");
 }
 
-function configureCustomSqlite(): void {
-	sqliteChoice = null;
-	sqliteAttempt = null;
-	sqliteWarning = null;
-	if (process.platform !== "darwin") return;
-
-	const agentsDir = resolveSqliteAgentsDir();
-	const envPath = process.env.SIGNET_SQLITE_PATH;
-	if (envPath && !existsSync(envPath)) {
-		sqliteAttempt = envPath;
-		sqliteWarning = `SIGNET_SQLITE_PATH does not exist: ${envPath}. Explicit override is authoritative, refusing fallback to workspace/Homebrew SQLite.`;
-		console.warn(`[db-accessor] ${sqliteWarning}`);
-		return;
+export function resolveSqliteRuntimeConfig(opts?: {
+	readonly platform?: NodeJS.Platform;
+	readonly env?: NodeJS.ProcessEnv;
+	readonly agentsDir?: string;
+	readonly exists?: (path: string) => boolean;
+	readonly set?: (path: string) => void;
+}): SqliteRuntimeConfig {
+	const platform = opts?.platform ?? process.platform;
+	if (platform !== "darwin") {
+		return {
+			choice: null,
+			attempt: null,
+			warning: null,
+		};
 	}
 
-	const choice = resolveCustomSqlitePath({ agentsDir });
+	const env = opts?.env ?? process.env;
+	const exists = opts?.exists ?? existsSync;
+	const set = opts?.set ?? ((path: string) => Database.setCustomSQLite(path));
+	const agentsDir = opts?.agentsDir ?? resolveSqliteAgentsDir({ env });
+	const envPath = env.SIGNET_SQLITE_PATH;
+	if (envPath && !exists(envPath)) {
+		return {
+			choice: null,
+			attempt: envPath,
+			warning: `SIGNET_SQLITE_PATH does not exist: ${envPath}. Explicit override is authoritative, refusing fallback to workspace/Homebrew SQLite.`,
+		};
+	}
+
+	const choice = resolveCustomSqlitePath({ platform, env, agentsDir, exists });
 	if (!choice) {
-		sqliteWarning = explainSqliteSetup(agentsDir);
-		console.warn(`[db-accessor] ${sqliteWarning}`);
-		return;
+		return {
+			choice: null,
+			attempt: null,
+			warning: explainSqliteSetup(agentsDir),
+		};
 	}
 
-	sqliteAttempt = choice.path;
 	try {
-		Database.setCustomSQLite(choice.path);
-		sqliteChoice = choice;
+		set(choice.path);
+		return {
+			choice,
+			attempt: choice.path,
+			warning: null,
+		};
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
-		sqliteWarning = `Failed to activate custom SQLite at ${choice.path}: ${msg}. ${explainSqliteSetup(agentsDir)}`;
-		console.warn(`[db-accessor] setCustomSQLite(${choice.path}) skipped: ${sqliteWarning}`);
+		if (choice.source !== "workspace") {
+			return {
+				choice: null,
+				attempt: choice.path,
+				warning: `Failed to activate custom SQLite at ${choice.path}: ${msg}. ${explainSqliteSetup(agentsDir)}`,
+			};
+		}
+
+		const fallback = resolveHomebrewSqlitePath(exists);
+		if (fallback === null || fallback.path === choice.path) {
+			return {
+				choice: null,
+				attempt: choice.path,
+				warning: `Failed to activate custom SQLite at ${choice.path}: ${msg}. ${explainSqliteSetup(agentsDir)}`,
+			};
+		}
+
+		try {
+			set(fallback.path);
+			console.warn(`[db-accessor] workspace SQLite at ${choice.path} failed (${msg}), fell back to ${fallback.path}`);
+			return {
+				choice: fallback,
+				attempt: fallback.path,
+				warning: null,
+			};
+		} catch (err) {
+			const next = err instanceof Error ? err.message : String(err);
+			return {
+				choice: null,
+				attempt: fallback.path,
+				warning: `Failed to activate workspace SQLite at ${choice.path}: ${msg}. Fallback Homebrew SQLite at ${fallback.path} also failed: ${next}. ${explainSqliteSetup(agentsDir)}`,
+			};
+		}
+	}
+}
+
+function configureCustomSqlite(agentsDir?: string): void {
+	const cfg = resolveSqliteRuntimeConfig({ agentsDir });
+	sqliteChoice = cfg.choice;
+	sqliteAttempt = cfg.attempt;
+	sqliteWarning = cfg.warning;
+	if (cfg.warning !== null) {
+		console.warn(`[db-accessor] ${cfg.warning}`);
 	}
 }
 
@@ -282,7 +358,7 @@ function backupBeforeMigration(db: Database, dbPath: string, schemaVersion: numb
  * before any route handler runs. Ensures the memory directory exists, opens
  * the write connection, sets pragmas, and runs pending migrations.
  */
-export function initDbAccessor(path: string): void {
+export function initDbAccessor(path: string, opts?: { readonly agentsDir?: string }): void {
 	if (accessor) {
 		throw new Error("DbAccessor already initialised");
 	}
@@ -294,7 +370,7 @@ export function initDbAccessor(path: string): void {
 
 	dbPath = path;
 
-	configureCustomSqlite();
+	configureCustomSqlite(opts?.agentsDir);
 
 	const writeConn = new Database(path);
 	configurePragmas(writeConn);

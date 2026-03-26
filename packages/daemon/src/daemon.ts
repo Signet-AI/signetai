@@ -11669,7 +11669,7 @@ async function main() {
 	// runs migrations). This is the sole schema authority and the only
 	// production Bun SQLite constructor path, which keeps macOS custom
 	// SQLite selection ahead of any live connection.
-	initDbAccessor(MEMORY_DB);
+	initDbAccessor(MEMORY_DB, { agentsDir: AGENTS_DIR });
 
 	// Sync agent roster from manifest into the agents table.
 	syncAgentRoster(AGENTS_DIR);
