@@ -483,8 +483,8 @@ describe("migration framework", () => {
 			)
 			.get();
 		expect(row).toEqual({
-			thread_key: "project:/tmp/proj|harness:codex",
-			label: "project:/tmp/proj",
+			thread_key: "project:/tmp/proj|source:sess-1|harness:codex",
+			label: "project:/tmp/proj#source:sess-1",
 		});
 	});
 

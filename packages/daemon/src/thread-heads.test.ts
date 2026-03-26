@@ -38,14 +38,14 @@ afterEach(() => {
 });
 
 describe("thread-heads", () => {
-	it("uses rolling project scope when source_ref equals session_key", () => {
+	it("uses project+source scope when source_ref equals session_key", () => {
 		const key = deriveThreadKey({
 			project: "/tmp/proj",
 			sourceRef: "sess-1",
 			sessionKey: "sess-1",
 			harness: "test",
 		});
-		expect(key).toBe("project:/tmp/proj|harness:test");
+		expect(key).toBe("project:/tmp/proj|source:sess-1|harness:test");
 	});
 
 	it("keeps full project path in labels to avoid basename collisions", () => {
@@ -55,7 +55,7 @@ describe("thread-heads", () => {
 			sessionKey: "sess-1",
 			harness: "test",
 		});
-		expect(label).toBe("project:/mnt/work/client/proj#harness:test");
+		expect(label).toBe("project:/mnt/work/client/proj#source:sess-1#harness:test");
 	});
 
 	it("upserts newer thread head state and ignores older writes", () => {

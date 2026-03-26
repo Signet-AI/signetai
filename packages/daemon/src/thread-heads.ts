@@ -34,22 +34,20 @@ export function deriveThreadKey(input: {
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
 
-	const sourceIsSession = sourceRef && sessionKey && sourceRef === sessionKey;
-	if (sourceIsSession) {
-		sourceRef = null;
-	}
 	const base =
 		project && sourceRef
 			? `project:${project}|source:${sourceRef}`
-			: project
-				? `project:${project}`
-				: sourceRef
-					? `source:${sourceRef}`
-					: sessionKey
-						? `session:${sessionKey}`
-						: harness
-							? `harness:${harness}`
-							: "thread:unscoped";
+			: sourceRef
+				? `source:${sourceRef}`
+				: sessionKey && project
+					? `project:${project}|session:${sessionKey}`
+					: project
+						? `project:${project}`
+						: sessionKey
+							? `session:${sessionKey}`
+							: harness
+								? `harness:${harness}`
+								: "thread:unscoped";
 	if (!harness || base === `harness:${harness}`) return base;
 	return `${base}|harness:${harness}`;
 }
@@ -65,22 +63,20 @@ export function deriveThreadLabel(input: {
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
 
-	const sourceIsSession = sourceRef && sessionKey && sourceRef === sessionKey;
-	if (sourceIsSession) {
-		sourceRef = null;
-	}
 	const base =
 		project && sourceRef
 			? `project:${project}#source:${sourceRef}`
-			: project
-				? `project:${project}`
-				: sourceRef
-					? `source:${sourceRef}`
-					: sessionKey
-						? `session:${sessionKey}`
-						: harness
-							? `harness:${harness}`
-							: "thread:unscoped";
+			: sourceRef
+				? `source:${sourceRef}`
+				: project && sessionKey
+					? `project:${project}#session:${sessionKey}`
+					: project
+						? `project:${project}`
+						: sessionKey
+							? `session:${sessionKey}`
+							: harness
+								? `harness:${harness}`
+								: "thread:unscoped";
 	if (!harness || base === `harness:${harness}`) return base;
 	return `${base}#harness:${harness}`;
 }
