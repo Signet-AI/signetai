@@ -5277,23 +5277,39 @@ function findForgeBinaryPath(): string | null {
 }
 
 app.get("/api/harnesses", async (c) => {
-	const forgePath = findForgeBinaryPath();
+	const verifiedForgePath = findForgeBinaryPath();
 	const configs = [
-		{ name: "Claude Code", id: "claude-code", path: join(homedir(), ".claude", "settings.json") },
+		{
+			name: "Claude Code",
+			id: "claude-code",
+			path: join(homedir(), ".claude", "settings.json"),
+			exists: existsSync(join(homedir(), ".claude", "settings.json")),
+		},
 		{
 			name: "OpenCode",
 			id: "opencode",
 			path: join(homedir(), ".config", "opencode", "AGENTS.md"),
+			exists: existsSync(join(homedir(), ".config", "opencode", "AGENTS.md")),
 		},
-		{ name: "OpenClaw", id: "openclaw", path: join(AGENTS_DIR, "AGENTS.md") },
-		{ name: "Forge", id: "forge", path: forgePath ?? resolveSignetForgeManagedPath() },
+		{
+			name: "OpenClaw",
+			id: "openclaw",
+			path: join(AGENTS_DIR, "AGENTS.md"),
+			exists: existsSync(join(AGENTS_DIR, "AGENTS.md")),
+		},
+		{
+			name: "Forge",
+			id: "forge",
+			path: verifiedForgePath ?? resolveSignetForgeManagedPath(),
+			exists: Boolean(verifiedForgePath),
+		},
 	];
 
 	const harnesses = configs.map((config) => ({
 		name: config.name,
 		id: config.id,
 		path: config.path,
-		exists: existsSync(config.path),
+		exists: config.exists,
 		lastSeen: harnessLastSeen.get(config.id) ?? null,
 	}));
 

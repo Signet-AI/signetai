@@ -20,10 +20,14 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - id: meta
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           VERSION=$(jq -r '.version' packages/forge/forge-version.json)
@@ -31,6 +35,16 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            if [[ "${EVENT_NAME}" == "push" && -n "${EVENT_BEFORE}" && "${EVENT_BEFORE}" != "0000000000000000000000000000000000000000" ]]; then
+              CHANGED_FORGE_FILES=$(git diff --name-only "${EVENT_BEFORE}" "${GITHUB_SHA}" -- 'packages/forge/**' || true)
+              CHANGED_NON_VERSION_FILES=$(printf '%s\n' "${CHANGED_FORGE_FILES}" | grep -E '^packages/forge/' | grep -v '^packages/forge/forge-version.json$' || true)
+              VERSION_FILE_CHANGED=$(printf '%s\n' "${CHANGED_FORGE_FILES}" | grep -E '^packages/forge/forge-version.json$' || true)
+              if [[ -n "${CHANGED_NON_VERSION_FILES}" && -z "${VERSION_FILE_CHANGED}" ]]; then
+                echo "::error::Forge source changed without a packages/forge/forge-version.json bump, but ${TAG} is already released. Bump Forge's version before merging Forge source changes to main."
+                printf '%s\n' "${CHANGED_NON_VERSION_FILES}"
+                exit 1
+              fi
+            fi
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi

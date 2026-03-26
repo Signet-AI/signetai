@@ -158,8 +158,11 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
         .canonicalize()
         .unwrap_or_else(|_| state.config.base_path.clone());
     let openclaw_path = base_path.join("AGENTS.md");
-    let forge_path = find_signet_forge_binary(&base_path)
+    let verified_forge_path = find_signet_forge_binary(&base_path);
+    let forge_path = verified_forge_path
+        .clone()
         .unwrap_or_else(|| signet_managed_forge_path(&home));
+    let forge_exists = verified_forge_path.is_some();
 
     let harnesses = vec![
         json!({
@@ -187,7 +190,7 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
             "name": "Forge",
             "id": "forge",
             "path": forge_path,
-            "exists": forge_path.exists(),
+            "exists": forge_exists,
             "lastSeen": serde_json::Value::Null,
         }),
     ];
