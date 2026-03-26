@@ -68,7 +68,7 @@ describe("normalizeCodexTranscript", () => {
 	it("omits tool call and tool output events from codex transcript", () => {
 		const raw = [
 			'{"type":"event_msg","payload":{"type":"user_message","message":"Run diagnostics"}}',
-			'{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{"cmd":"ls"}"}}',
+			'{"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\\"cmd\\":\\"ls\\"}"}}',
 			'{"type":"response_item","payload":{"type":"function_call_output","output":"README.md"}}',
 			'{"type":"item.completed","item":{"type":"agent_message","text":"Diagnostics complete"}}',
 		].join("\n");

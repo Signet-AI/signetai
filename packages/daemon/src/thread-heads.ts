@@ -31,10 +31,16 @@ export function deriveThreadKey(input: {
 	readonly sessionKey: string | null;
 	readonly harness: string | null;
 }): string {
-	if (input.project && input.project.trim().length > 0) return `project:${input.project.trim()}`;
-	if (input.sourceRef && input.sourceRef.trim().length > 0) return `source:${input.sourceRef.trim()}`;
-	if (input.sessionKey && input.sessionKey.trim().length > 0) return `session:${input.sessionKey.trim()}`;
-	if (input.harness && input.harness.trim().length > 0) return `harness:${input.harness.trim()}`;
+	const project = input.project?.trim();
+	const sourceRef = input.sourceRef?.trim();
+	const sessionKey = input.sessionKey?.trim();
+	const harness = input.harness?.trim();
+	if (sourceRef && project) return `project:${project}|source:${sourceRef}`;
+	if (sourceRef) return `source:${sourceRef}`;
+	if (sessionKey && project) return `project:${project}|session:${sessionKey}`;
+	if (project) return `project:${project}`;
+	if (sessionKey) return `session:${sessionKey}`;
+	if (harness) return `harness:${harness}`;
 	return "thread:unscoped";
 }
 
@@ -45,10 +51,15 @@ export function deriveThreadLabel(input: {
 	readonly harness: string | null;
 }): string {
 	const project = projectTag(input.project);
+	const sourceRef = input.sourceRef?.trim();
+	const sessionKey = input.sessionKey?.trim();
+	const harness = input.harness?.trim();
+	if (project && sourceRef) return `project:${project}#source:${sourceRef}`;
+	if (sourceRef) return `source:${sourceRef}`;
+	if (project && sessionKey) return `project:${project}#session:${sessionKey}`;
 	if (project) return `project:${project}`;
-	if (input.sourceRef && input.sourceRef.trim().length > 0) return `source:${input.sourceRef.trim()}`;
-	if (input.sessionKey && input.sessionKey.trim().length > 0) return `session:${input.sessionKey.trim()}`;
-	if (input.harness && input.harness.trim().length > 0) return `harness:${input.harness.trim()}`;
+	if (sessionKey) return `session:${sessionKey}`;
+	if (harness) return `harness:${harness}`;
 	return "thread:unscoped";
 }
 

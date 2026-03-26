@@ -2341,7 +2341,7 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 }
 
 async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
-	const raw = await c.req.raw.text();
+	const raw = await c.req.text();
 	if (!raw.trim()) return {};
 	try {
 		return toRecord(JSON.parse(raw));

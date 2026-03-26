@@ -2394,12 +2394,9 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		);
 
 		const topScore = recall.results[0]?.score;
-		const weakHybrid =
-			recall.results.length === 0 ||
-			typeof topScore !== "number" ||
-			topScore < 0.4 ||
-			queryAnchorsMissingFromRecall(vectorQuery, recall.results);
-		if (weakHybrid) {
+		const noStructured = recall.results.length === 0 || typeof topScore !== "number" || topScore < 0.4;
+		const anchorsMissed = queryAnchorsMissingFromRecall(vectorQuery, recall.results);
+		if (noStructured || anchorsMissed) {
 			const temporalHits = searchTemporalFallback({
 				query: vectorQuery,
 				agentId,
@@ -2420,7 +2417,9 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			if (transcriptHits.length > 0) {
 				return buildTranscriptFallbackResponse(metadataHeader, queryTerms, injectBudget, transcriptHits, warnings);
 			}
-			return { inject: metadataHeader, memoryCount: 0, warnings };
+			if (noStructured) {
+				return { inject: metadataHeader, memoryCount: 0, warnings };
+			}
 		}
 
 		const mapped = recall.results.map((result) => ({

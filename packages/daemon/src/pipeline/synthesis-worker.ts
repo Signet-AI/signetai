@@ -37,6 +37,7 @@ const MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 /** Initial delay after daemon start before first check (60s). */
 const STARTUP_DELAY_MS = 60_000;
+const FORCE_RETRY_MS = 5_000;
 const DRAIN_TIMEOUT_BUFFER_MS = 1_000;
 
 // ---------------------------------------------------------------------------
@@ -264,6 +265,8 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 	let activeLockToken: number | null = null;
 	let lockReleasedResolver: (() => void) | null = null;
 	let lockReleasedPromise: Promise<void> = Promise.resolve();
+	let pendingForce = false;
+	let pendingSource: string | null = null;
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
 	function acquireWriteLock(): number | null {
@@ -284,10 +287,56 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		lockReleasedResolver = null;
 	}
 
+	function setPendingForce(source: string): void {
+		pendingForce = true;
+		pendingSource = source;
+	}
+
+	function clearPendingForce(): void {
+		pendingForce = false;
+		pendingSource = null;
+	}
+
+	async function runForcedDrainAttempt(source: string): Promise<void> {
+		if (activeSessionCount() > 0) {
+			scheduleTick(FORCE_RETRY_MS);
+			return;
+		}
+
+		const lockToken = acquireWriteLock();
+		if (lockToken === null) {
+			scheduleTick(FORCE_RETRY_MS);
+			return;
+		}
+
+		try {
+			currentRunPromise = runSynthesis(config);
+			const result = await currentRunPromise;
+			if (result === "busy") {
+				logger.info("synthesis", "Retrying forced synthesis after busy head", { source });
+				scheduleTick(FORCE_RETRY_MS);
+				return;
+			}
+			writeLastSynthesisTime(Date.now());
+			clearPendingForce();
+		} finally {
+			currentRunPromise = null;
+			releaseWriteLock(lockToken);
+		}
+	}
+
 	async function tick(): Promise<void> {
 		if (stopped) return;
 
 		try {
+			if (pendingForce) {
+				await runForcedDrainAttempt(pendingSource ?? "forced-retry");
+				if (!pendingForce) {
+					scheduleTick(CHECK_INTERVAL_MS);
+				}
+				return;
+			}
+
 			if (isSynthesizing) {
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
@@ -357,7 +406,9 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 
 	function scheduleTick(delay: number): void {
 		if (stopped) return;
+		if (timer) clearTimeout(timer);
 		timer = setTimeout(() => {
+			timer = null;
 			tick().catch((err) => {
 				logger.error("synthesis", "Unhandled tick error", err instanceof Error ? err : new Error(String(err)));
 			});
@@ -424,6 +475,15 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			}
 			const lockToken = acquireWriteLock();
 			if (lockToken === null) {
+				if (opts?.force) {
+					setPendingForce(opts.source ?? "manual");
+					scheduleTick(FORCE_RETRY_MS);
+					return {
+						success: false,
+						skipped: true,
+						reason: "Synthesis already in progress (queued forced retry)",
+					};
+				}
 				return {
 					success: false,
 					skipped: true,
@@ -446,8 +506,13 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 
 				currentRunPromise = runSynthesis(config);
 				const result = await currentRunPromise;
+				if (result === "busy" && opts?.force) {
+					setPendingForce(opts.source ?? "manual");
+					scheduleTick(FORCE_RETRY_MS);
+				}
 				if (result !== "busy") {
 					writeLastSynthesisTime(Date.now());
+					clearPendingForce();
 				}
 				return {
 					success: result === "ok",
@@ -455,9 +520,11 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 					reason:
 						result === "empty"
 							? "No session summaries to synthesize"
-							: result === "busy"
-								? "MEMORY.md head busy"
-								: undefined,
+							: result === "busy" && opts?.force
+								? "MEMORY.md head busy (queued forced retry)"
+								: result === "busy"
+									? "MEMORY.md head busy"
+									: undefined,
 				};
 			} finally {
 				currentRunPromise = null;

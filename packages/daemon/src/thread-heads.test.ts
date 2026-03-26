@@ -38,14 +38,14 @@ afterEach(() => {
 });
 
 describe("thread-heads", () => {
-	it("prefers project scope when deriving thread keys", () => {
+	it("uses composite project+source scope when deriving thread keys", () => {
 		const key = deriveThreadKey({
 			project: "/tmp/proj",
 			sourceRef: "sess-1",
 			sessionKey: "sess-1",
 			harness: "test",
 		});
-		expect(key).toBe("project:/tmp/proj");
+		expect(key).toBe("project:/tmp/proj|source:sess-1");
 	});
 
 	it("upserts newer thread head state and ignores older writes", () => {
@@ -58,7 +58,7 @@ describe("thread-heads", () => {
 			project: "/tmp/proj",
 			sessionKey: "sess-1",
 			sourceType: "summary",
-			sourceRef: "sess-1",
+			sourceRef: "lane-a",
 			harness: "test",
 		});
 		upsertThreadHead(db, {
@@ -69,7 +69,7 @@ describe("thread-heads", () => {
 			project: "/tmp/proj",
 			sessionKey: "sess-1",
 			sourceType: "summary",
-			sourceRef: "sess-1",
+			sourceRef: "lane-a",
 			harness: "test",
 		});
 		upsertThreadHead(db, {
@@ -80,7 +80,7 @@ describe("thread-heads", () => {
 			project: "/tmp/proj",
 			sessionKey: "sess-2",
 			sourceType: "compaction",
-			sourceRef: "sess-2",
+			sourceRef: "lane-a",
 			harness: "test",
 		});
 
@@ -90,7 +90,7 @@ describe("thread-heads", () => {
 				 FROM memory_thread_heads
 				 WHERE agent_id = ? AND thread_key = ?`,
 			)
-			.get("default", "project:/tmp/proj") as
+			.get("default", "project:/tmp/proj|source:lane-a") as
 			| {
 					node_id: string;
 					latest_at: string;

@@ -1125,6 +1125,61 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).not.toContain("node-bleed");
 	});
 
+	test.serial("does not collapse distinct thread keys that share the same label", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/work/foo|session:sess-a",
+			"project:foo",
+			"/work/foo",
+			"sess-a",
+			"summary",
+			null,
+			"test",
+			"node-foo-a",
+			"2026-03-25T10:05:00.000Z",
+			"deploy rollout checklist for foo lane a",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/foo|session:sess-b",
+			"project:foo",
+			"/tmp/foo",
+			"sess-b",
+			"summary",
+			null,
+			"test",
+			"node-foo-b",
+			"2026-03-25T10:06:00.000Z",
+			"deploy rollout checklist for foo lane b",
+			"2026-03-25T10:06:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			sessionKey: "sess-current",
+			userPrompt: "deploy rollout checklist",
+		});
+
+		expect(result.memoryCount).toBe(2);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("node-foo-a");
+		expect(result.inject).toContain("node-foo-b");
+	});
+
 	test.serial("falls back to transcript excerpts when hybrid top hit misses query anchors", async () => {
 		createMemoryDb([
 			{

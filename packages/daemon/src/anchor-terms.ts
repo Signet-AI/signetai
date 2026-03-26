@@ -1,13 +1,13 @@
 export function extractAnchorTerms(text: string): string[] {
-	const tokens = text.toLowerCase().match(/[a-z0-9-]+/g) ?? [];
+	const tokens = text.toLowerCase().match(/[a-z0-9_:/.-]+/g) ?? [];
 	const seen = new Set<string>();
 	const terms: string[] = [];
 	for (const token of tokens) {
 		if (token.length < 6) continue;
 		const hasDigit = /\d/.test(token);
-		const hasHyphen = token.includes("-");
-		const isLong = token.length >= 12;
-		if (!hasDigit && !hasHyphen && !isLong) continue;
+		const hasMarker = /[_:/.-]/.test(token);
+		const isVeryLong = token.length >= 18;
+		if (!hasDigit && !hasMarker && !isVeryLong) continue;
 		if (seen.has(token)) continue;
 		seen.add(token);
 		terms.push(token);

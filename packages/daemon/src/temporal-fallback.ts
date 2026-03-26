@@ -1,6 +1,6 @@
 import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
-import { deriveThreadLabel } from "./thread-heads";
+import { deriveThreadKey, deriveThreadLabel } from "./thread-heads";
 
 interface TemporalRow {
 	readonly id: string;
@@ -10,6 +10,7 @@ interface TemporalRow {
 	readonly session_key: string | null;
 	readonly source_ref: string | null;
 	readonly harness: string | null;
+	readonly thread_key?: string | null;
 	readonly thread_label?: string | null;
 	readonly rank?: number | null;
 }
@@ -19,6 +20,7 @@ export interface TemporalHit {
 	readonly latestAt: string;
 	readonly project: string | null;
 	readonly sessionKey: string | null;
+	readonly threadKey: string;
 	readonly threadLabel: string;
 	readonly excerpt: string;
 	readonly rank: number;
@@ -82,6 +84,15 @@ function toHits(
 			latestAt: row.latest_at,
 			project: row.project,
 			sessionKey: row.session_key,
+			threadKey:
+				row.thread_key && row.thread_key.trim().length > 0
+					? row.thread_key.trim()
+					: deriveThreadKey({
+							project: row.project,
+							sourceRef: row.source_ref ?? null,
+							sessionKey: row.session_key ?? null,
+							harness: row.harness ?? null,
+						}),
 			threadLabel:
 				row.thread_label && row.thread_label.trim().length > 0
 					? row.thread_label.trim()
@@ -109,8 +120,8 @@ function toHits(
 	const deduped: TemporalHit[] = [];
 	const seen = new Set<string>();
 	for (const row of scoped) {
-		if (seen.has(row.threadLabel)) continue;
-		seen.add(row.threadLabel);
+		if (seen.has(row.threadKey)) continue;
+		seen.add(row.threadKey);
 		deduped.push(row);
 		if (deduped.length >= limit) break;
 	}
@@ -133,7 +144,7 @@ function searchFromThreadHeads(params: {
 			const score = params.termPatterns.map(() => "CASE WHEN LOWER(sample) LIKE ? THEN 1 ELSE 0 END").join(" + ");
 			const any = params.termPatterns.map(() => "LOWER(sample) LIKE ?").join(" OR ");
 			const parts = [
-				`SELECT node_id AS id, sample AS content, latest_at, project, session_key, source_ref, harness, label AS thread_label, ${score} AS rank`,
+				`SELECT node_id AS id, sample AS content, latest_at, project, session_key, source_ref, harness, thread_key, label AS thread_label, ${score} AS rank`,
 				"FROM memory_thread_heads",
 				"WHERE agent_id = ?",
 			];

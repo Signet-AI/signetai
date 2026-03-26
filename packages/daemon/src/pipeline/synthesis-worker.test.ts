@@ -274,6 +274,37 @@ describe("synthesis-worker", () => {
 		}
 	});
 
+	it("queues forced trigger when synthesis is already in progress", async () => {
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			const lockToken = worker.acquireWriteLock();
+			expect(lockToken).not.toBeNull();
+
+			const result = await worker.triggerNow({ force: true, source: "session-summary" });
+			expect(result).toEqual({
+				success: false,
+				skipped: true,
+				reason: "Synthesis already in progress (queued forced retry)",
+			});
+			expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+			if (lockToken === null) {
+				throw new Error("expected write lock token");
+			}
+			worker.releaseWriteLock(lockToken);
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
+	});
+
 	it("surfaces MEMORY.md head lease contention as a retryable skip", async () => {
 		mockWriteMemoryMd.mockImplementationOnce(() => ({
 			ok: false as const,
@@ -296,6 +327,35 @@ describe("synthesis-worker", () => {
 				success: false,
 				skipped: true,
 				reason: "MEMORY.md head busy",
+			});
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
+	});
+
+	it("queues forced retry when MEMORY.md head is busy", async () => {
+		mockWriteMemoryMd.mockImplementationOnce(() => ({
+			ok: false as const,
+			error: "MEMORY.md write busy",
+			code: "busy" as const,
+		}));
+
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			const result = await worker.triggerNow({ force: true, source: "compaction-complete" });
+			expect(result).toEqual({
+				success: false,
+				skipped: true,
+				reason: "MEMORY.md head busy (queued forced retry)",
 			});
 		} finally {
 			worker.stop();
