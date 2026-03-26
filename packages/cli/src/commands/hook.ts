@@ -88,6 +88,8 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					project: options.project || stdinProject,
 					userPrompt,
 					sessionKey,
+					transcriptPath: pickString(input?.transcript_path, input?.transcriptPath),
+					transcript: pickString(input?.transcript),
 					lastAssistantMessage: lastAssistantMessage || undefined,
 				}),
 			});
@@ -166,11 +168,16 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.requiredOption("-H, --harness <harness>", "Harness name")
 		.requiredOption("-s, --summary <summary>", "Session summary text")
 		.action(async (options) => {
+			const input = await readJson();
 			const data = await deps.fetchFromDaemon<{ success?: boolean; memoryId?: number; error?: string }>(
 				"/api/hooks/compaction-complete",
 				{
 					method: "POST",
-					body: JSON.stringify({ harness: options.harness, summary: options.summary }),
+					body: JSON.stringify({
+						harness: options.harness,
+						summary: options.summary,
+						sessionKey: pickString(input?.session_id, input?.sessionId),
+					}),
 				},
 			);
 			if (data?.error) {

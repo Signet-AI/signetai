@@ -195,7 +195,7 @@ function buildFilterClause(params: RecallParams): FilterClause {
  * token as a literal. Short queries (<=3 tokens) use implicit AND for
  * precision; longer queries use OR so BM25 IDF ranks by term importance.
  */
-function sanitizeFtsQuery(raw: string): string {
+export function sanitizeFtsQuery(raw: string): string {
 	const tokens = raw
 		.replace(/'/g, " ")
 		.split(/\s+/)
@@ -356,9 +356,7 @@ export async function hybridRecall(
 					// Hint-only memories score on their own merit (0-1) — capping
 					// at 0.3 placed them exactly at the min_score cliff, filtering
 					// out the memories hints were designed to rescue.
-					const blended = content > 0
-						? content * 0.7 + hint * 0.3
-						: hint;
+					const blended = content > 0 ? content * 0.7 + hint * 0.3 : hint;
 					bm25Map.set(row.id, Math.max(content, blended));
 				}
 			});
@@ -1140,14 +1138,15 @@ export async function hybridRecall(
 			];
 			if (keys.length > 0) {
 				const ph = keys.map(() => "?").join(", ");
+				const agentId = params.agentId ?? "default";
 				const transcripts = getDbAccessor().withReadDb(
 					(db) =>
 						db
 							.prepare(
 								`SELECT session_key, content FROM session_transcripts
-								 WHERE session_key IN (${ph})`,
+								 WHERE agent_id = ? AND session_key IN (${ph})`,
 							)
-							.all(...keys) as Array<{ session_key: string; content: string }>,
+							.all(agentId, ...keys) as Array<{ session_key: string; content: string }>,
 				);
 				if (transcripts.length > 0) {
 					sources = {};

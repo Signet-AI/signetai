@@ -1,7 +1,7 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 
 let agentsDir = "";
 let previousSignetPath: string | undefined;
@@ -11,8 +11,10 @@ const mockHandleSynthesisRequest = mock(() => ({
 	model: "synthesis",
 	prompt: "synthesize memory",
 	fileCount: 1,
+	indexBlock: "",
 }));
-const mockWriteMemoryMd = mock((_content: string) => ({ ok: true as const }));
+const mockWriteMemoryMd = mock((_content: string, _opts?: { owner?: string }) => ({ ok: true as const }));
+const mockAppendSynthesisIndexBlock = mock((content: string) => content);
 const mockGetSynthesisProvider = mock(() => ({ name: "mock-synthesis-provider" }));
 const mockGenerateWithTracking = mock(async () => ({
 	text: "# MEMORY\n",
@@ -21,6 +23,7 @@ const mockGenerateWithTracking = mock(async () => ({
 const mockActiveSessionCount = mock(() => 0);
 
 mock.module("../hooks", () => ({
+	appendSynthesisIndexBlock: mockAppendSynthesisIndexBlock,
 	handleSynthesisRequest: mockHandleSynthesisRequest,
 	writeMemoryMd: mockWriteMemoryMd,
 }));
@@ -71,6 +74,7 @@ describe("synthesis-worker", () => {
 		mkdirSync(agentsDir, { recursive: true });
 		mockHandleSynthesisRequest.mockClear();
 		mockWriteMemoryMd.mockClear();
+		mockAppendSynthesisIndexBlock.mockClear();
 		mockGetSynthesisProvider.mockClear();
 		mockGenerateWithTracking.mockClear();
 		mockActiveSessionCount.mockClear();
@@ -88,7 +92,7 @@ describe("synthesis-worker", () => {
 	afterAll(() => {
 		rmSync(agentsDir, { recursive: true, force: true });
 		if (previousSignetPath === undefined) {
-			delete process.env.SIGNET_PATH;
+			process.env.SIGNET_PATH = undefined;
 		} else {
 			process.env.SIGNET_PATH = previousSignetPath;
 		}
@@ -176,7 +180,7 @@ describe("synthesis-worker", () => {
 			});
 			expect(drained).toBe(true);
 			expect(worker.isSynthesizing).toBe(false);
-			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# Updated memory\n");
+			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# Updated memory\n", { owner: "synthesis-worker" });
 		} finally {
 			worker.stop();
 			if (resolveRun !== null) {
@@ -209,16 +213,44 @@ describe("synthesis-worker", () => {
 		expect(mockGenerateWithTracking).not.toHaveBeenCalled();
 	});
 
+	it("surfaces MEMORY.md head lease contention as a retryable skip", async () => {
+		mockWriteMemoryMd.mockImplementationOnce(() => ({
+			ok: false as const,
+			error: "MEMORY.md write busy",
+			code: "busy" as const,
+		}));
+
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			const result = await worker.triggerNow();
+			expect(result).toEqual({
+				success: false,
+				skipped: true,
+				reason: "MEMORY.md head busy",
+			});
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
+	});
+
 	it("drain times out if an in-flight synthesis never resolves", async () => {
 		let releaseRun: (() => void) | null = null;
-		mockGenerateWithTracking.mockImplementationOnce(
-			() =>
-				new Promise<void>((resolve) => {
-					releaseRun = resolve;
-				}).then(() => ({
-					text: "# MEMORY\n",
-					usage: null,
-				})),
+		mockGenerateWithTracking.mockImplementationOnce(() =>
+			new Promise<void>((resolve) => {
+				releaseRun = resolve;
+			}).then(() => ({
+				text: "# MEMORY\n",
+				usage: null,
+			})),
 		);
 
 		const worker = startSynthesisWorker({

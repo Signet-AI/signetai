@@ -21,6 +21,7 @@ import { inferType, isDuplicate } from "../hooks";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { getSecret } from "../secrets";
+import { upsertSessionTranscript } from "../session-transcripts";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -54,6 +55,7 @@ interface SummaryJobRow {
 	readonly session_key: string | null;
 	readonly harness: string;
 	readonly project: string | null;
+	readonly agent_id: string;
 	readonly transcript: string;
 	readonly attempts: number;
 	readonly max_attempts: number;
@@ -68,6 +70,7 @@ interface LlmSummaryResult {
 		readonly tags?: string;
 		readonly type?: string;
 	}>;
+	readonly leaves?: ReadonlyArray<string>;
 }
 
 export const SUMMARY_WORKER_UPDATED_BY = "summary-worker";
@@ -317,7 +320,9 @@ async function processJob(
 	};
 
 	if (significanceCfg.enabled) {
-		const assessment = accessor.withReadDb((db) => assessSignificance(job.transcript, db, "default", significanceCfg));
+		const assessment = accessor.withReadDb((db) =>
+			assessSignificance(job.transcript, db, job.agent_id, significanceCfg),
+		);
 
 		if (!assessment.significant) {
 			logger.info("summary-worker", "Session below significance threshold — skipping extraction", {
@@ -370,28 +375,13 @@ async function processJob(
 	});
 
 	// Lossless retention: preserve raw transcript alongside extracted facts
-	try {
-		accessor.withWriteTx((db) => {
-			db.prepare(`
-				INSERT OR IGNORE INTO session_transcripts
-					(session_key, content, harness, project, agent_id, created_at)
-				VALUES (?, ?, ?, ?, 'default', ?)
-			`).run(job.session_key, job.transcript, job.harness, job.project, today);
-		});
-	} catch {
-		// Non-fatal — table may not exist if migration hasn't run
+	if (job.session_key) {
+		upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
 	}
-
-	// Agent ID is hardcoded because summary_jobs and session_scores tables
-	// lack an agent_id column (pre-existing schema limitation). In a
-	// multi-agent deployment, all predictor comparisons route to the
-	// "default" bucket. Adding agent_id to these tables requires a schema
-	// migration and is tracked as future work.
-	const agentId = "default";
 
 	// Write to session_summaries DAG (depth 0 = session level)
 	try {
-		writeSummaryToDAG(accessor, job, result, agentId);
+		writeSummaryToDAG(accessor, job, result, job.agent_id);
 	} catch (e) {
 		logger.warn("summary-worker", "Failed to write session summary to DAG (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
@@ -415,29 +405,29 @@ async function processJob(
 		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
 			const { runSessionComparison, saveComparison, updateSuccessRate, shouldTriggerTraining, detectDrift } =
 				await import("../predictor-comparison");
-			const comparison = runSessionComparison(job.session_key, agentId, accessor);
+			const comparison = runSessionComparison(job.session_key, job.agent_id, accessor);
 
 			if (comparison !== null) {
-				saveComparison(comparison, agentId, accessor);
+				saveComparison(comparison, job.agent_id, accessor);
 				// Only update EMA when the predictor actually produced scores —
 				// otherwise predictorWon is deterministically false and the EMA
 				// accrues phantom losses during cold start or sidecar downtime.
 				if (comparison.hasPredictorScores) {
-					updateSuccessRate(agentId, comparison.predictorWon, comparison.scorerConfidence);
+					updateSuccessRate(job.agent_id, comparison.predictorWon, comparison.scorerConfidence);
 				}
 
 				// Drift detection
-				const driftResult = detectDrift(agentId, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
+				const driftResult = detectDrift(job.agent_id, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
 				if (driftResult.drifting) {
 					logger.warn("predictor", "Drift detected — resetting predictor state", {
 						recentWinRate: driftResult.recentWinRate,
 						windowSize: driftResult.windowSize,
-						agentId,
+						agentId: job.agent_id,
 					});
 
 					// Reset alpha to 1.0 (full baseline weight) and EMA to neutral
 					const { updatePredictorState: resetState } = await import("../predictor-state");
-					resetState(agentId, {
+					resetState(job.agent_id, {
 						alpha: 1.0,
 						successRate: 0.5,
 					});
@@ -459,7 +449,7 @@ async function processJob(
 				}
 
 				// Check training trigger
-				if (shouldTriggerTraining(agentId, memoryCfg.pipelineV2.predictor, accessor)) {
+				if (shouldTriggerTraining(job.agent_id, memoryCfg.pipelineV2.predictor, accessor)) {
 					try {
 						const { getPredictorClient } = await import("../daemon");
 						const predictorClient = getPredictorClient();
@@ -468,7 +458,7 @@ async function processJob(
 							await predictorClient.trainFromDb({ db_path: dbPath });
 
 							const { updatePredictorState } = await import("../predictor-state");
-							updatePredictorState(agentId, { lastTrainingAt: new Date().toISOString() });
+							updatePredictorState(job.agent_id, { lastTrainingAt: new Date().toISOString() });
 
 							logger.info("predictor", "Training triggered after session comparison");
 						}
@@ -491,9 +481,9 @@ async function processJob(
 		try {
 			if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
 				const { collectTrainingPairs, saveTrainingPairs } = await import("../predictor-training-pairs");
-				const pairs = collectTrainingPairs(accessor, job.session_key, agentId);
+				const pairs = collectTrainingPairs(accessor, job.session_key, job.agent_id);
 				if (pairs.length > 0) {
-					saveTrainingPairs(accessor, agentId, job.session_key, pairs);
+					saveTrainingPairs(accessor, job.agent_id, job.session_key, pairs);
 				}
 			}
 		} catch (e) {
@@ -501,6 +491,21 @@ async function processJob(
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
+	}
+
+	try {
+		const { getSynthesisWorker } = await import("./index");
+		void getSynthesisWorker()
+			?.triggerNow()
+			.catch((error) => {
+				logger.warn("summary-worker", "Failed to trigger MEMORY.md synthesis after session summary", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+	} catch (error) {
+		logger.warn("summary-worker", "Could not load synthesis worker for post-summary trigger", {
+			error: error instanceof Error ? error.message : String(error),
+		});
 	}
 }
 
@@ -520,7 +525,8 @@ async function processSingle(
 	opts: GenerateOpts,
 ): Promise<LlmSummaryResult | null> {
 	const raw = await provider.generate(buildPrompt(transcript, date), opts);
-	return parseLlmResponse(raw);
+	const parsed = parseLlmResponse(raw);
+	return parsed ? { ...parsed, leaves: [parsed.summary] } : null;
 }
 
 async function processChunked(
@@ -565,6 +571,7 @@ async function processChunked(
 		return {
 			summary: `# ${date} Session Notes\n\n${chunkSummaries[0]}`,
 			facts: allFacts,
+			leaves: chunkSummaries,
 		};
 	}
 
@@ -573,14 +580,14 @@ async function processChunked(
 	const combineRaw = await provider.generate(combinePrompt, opts);
 	const combined = parseLlmResponse(combineRaw);
 
-	if (combined) return combined;
+	if (combined) return { ...combined, leaves: chunkSummaries };
 
 	// Combine failed — join all summaries as degraded fallback
 	logger.warn("summary-worker", "Combine step failed, joining chunks as fallback", {
 		chunks: chunkSummaries.length,
 		facts: allFacts.length,
 	});
-	return { summary: chunkSummaries.join("\n\n---\n\n"), facts: allFacts };
+	return { summary: chunkSummaries.join("\n\n---\n\n"), facts: allFacts, leaves: chunkSummaries };
 }
 
 // ---------------------------------------------------------------------------
@@ -598,7 +605,11 @@ interface InjectedMemoryPreview {
 	readonly effectiveScore: number;
 }
 
-function loadInjectedMemories(accessor: DbAccessor, sessionKey: string | null): ReadonlyArray<InjectedMemoryPreview> {
+function loadInjectedMemories(
+	accessor: DbAccessor,
+	sessionKey: string | null,
+	agentId: string,
+): ReadonlyArray<InjectedMemoryPreview> {
 	if (!sessionKey) return [];
 
 	try {
@@ -608,10 +619,10 @@ function loadInjectedMemories(accessor: DbAccessor, sessionKey: string | null): 
 					`SELECT sm.memory_id, m.content, sm.source, sm.effective_score
 					 FROM session_memories sm
 					 JOIN memories m ON m.id = sm.memory_id
-					 WHERE sm.session_key = ? AND sm.was_injected = 1
+					 WHERE sm.session_key = ? AND sm.agent_id = ? AND sm.was_injected = 1
 					 ORDER BY sm.rank ASC LIMIT 50`,
 				)
-				.all(sessionKey) as Array<{
+				.all(sessionKey, agentId) as Array<{
 				memory_id: string;
 				content: string;
 				source: string;
@@ -637,6 +648,7 @@ function loadInjectedMemories(accessor: DbAccessor, sessionKey: string | null): 
 function writePerMemoryRelevance(
 	accessor: DbAccessor,
 	sessionKey: string,
+	agentId: string,
 	perMemory: ReadonlyArray<{ readonly id: string; readonly relevance: number }>,
 	injectedMemories: ReadonlyArray<InjectedMemoryPreview>,
 ): void {
@@ -652,14 +664,14 @@ function writePerMemoryRelevance(
 		accessor.withWriteTx((db) => {
 			const stmt = db.prepare(
 				`UPDATE session_memories SET relevance_score = ?
-				 WHERE session_key = ? AND memory_id = ?`,
+				 WHERE session_key = ? AND agent_id = ? AND memory_id = ?`,
 			);
 
 			for (const entry of perMemory) {
 				const fullId = prefixMap.get(entry.id);
 				if (!fullId) continue;
 				const score = Math.max(0, Math.min(1, entry.relevance));
-				stmt.run(score, sessionKey, fullId);
+				stmt.run(score, sessionKey, agentId, fullId);
 			}
 		});
 	} catch (e) {
@@ -740,7 +752,7 @@ async function scoreContinuity(
 	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
 	// Load injected memories for this session (empty array for old sessions)
-	const injectedMemories = loadInjectedMemories(accessor, job.session_key);
+	const injectedMemories = loadInjectedMemories(accessor, job.session_key, job.agent_id);
 
 	const prompt = buildContinuityPrompt(job.transcript, summary.slice(0, 2000), injectedMemories);
 
@@ -784,33 +796,57 @@ async function scoreContinuity(
 
 	// Write per-memory relevance scores back to session_memories
 	if (job.session_key && result.per_memory.length > 0) {
-		writePerMemoryRelevance(accessor, job.session_key, result.per_memory, injectedMemories);
+		writePerMemoryRelevance(accessor, job.session_key, job.agent_id, result.per_memory, injectedMemories);
 	}
 
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 
 	accessor.withWriteTx((db) => {
-		db.prepare(
-			`INSERT INTO session_scores
-			 (id, session_key, project, harness, score, memories_recalled,
-			  memories_used, novel_context_count, reasoning,
-			  confidence, continuity_reasoning, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			id,
-			job.session_key || "unknown",
-			job.project || null,
-			job.harness,
-			result.score,
-			injectedMemories.length,
-			result.memories_used,
-			result.novel_context_count,
-			result.reasoning,
-			result.confidence,
-			result.reasoning, // full reasoning for audit trail
-			now,
-		);
+		try {
+			db.prepare(
+				`INSERT INTO session_scores
+				 (id, session_key, project, harness, agent_id, score, memories_recalled,
+				  memories_used, novel_context_count, reasoning,
+				  confidence, continuity_reasoning, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				id,
+				job.session_key || "unknown",
+				job.project || null,
+				job.harness,
+				job.agent_id,
+				result.score,
+				injectedMemories.length,
+				result.memories_used,
+				result.novel_context_count,
+				result.reasoning,
+				result.confidence,
+				result.reasoning, // full reasoning for audit trail
+				now,
+			);
+		} catch {
+			db.prepare(
+				`INSERT INTO session_scores
+				 (id, session_key, project, harness, score, memories_recalled,
+				  memories_used, novel_context_count, reasoning,
+				  confidence, continuity_reasoning, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				id,
+				job.session_key || "unknown",
+				job.project || null,
+				job.harness,
+				result.score,
+				injectedMemories.length,
+				result.memories_used,
+				result.novel_context_count,
+				result.reasoning,
+				result.confidence,
+				result.reasoning,
+				now,
+			);
+		}
 	});
 
 	logger.info("summary-worker", "Session continuity scored", {
@@ -827,7 +863,7 @@ async function scoreContinuity(
 
 export function insertSummaryFacts(
 	accessor: DbAccessor,
-	job: Pick<SummaryJobRow, "harness" | "project" | "session_key">,
+	job: Pick<SummaryJobRow, "harness" | "project" | "session_key" | "agent_id">,
 	facts: ReadonlyArray<LlmSummaryResult["facts"][number]>,
 ): number {
 	const now = new Date().toISOString();
@@ -837,8 +873,8 @@ export function insertSummaryFacts(
 		const stmt = db.prepare(
 			`INSERT INTO memories
 			 (id, content, type, importance, source_id, source_type, who, tags,
-			  project, created_at, updated_at, updated_by)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  project, agent_id, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		);
 
 		for (const item of facts) {
@@ -861,6 +897,7 @@ export function insertSummaryFacts(
 				job.harness,
 				item.tags || null,
 				job.project || null,
+				job.agent_id,
 				now,
 				now,
 				SUMMARY_WORKER_UPDATED_BY,
@@ -890,9 +927,11 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 			? (db
 					.prepare(
 						`SELECT id FROM session_summaries
-				 WHERE session_key = ? AND depth = 0`,
+				 WHERE session_key = ? AND depth = 0
+				   AND agent_id = ?
+				   AND COALESCE(source_type, 'summary') = 'summary'`,
 					)
-					.get(job.session_key) as { id: string } | undefined)
+					.get(job.session_key, agentId) as { id: string } | undefined)
 			: undefined;
 
 		let effectiveId: string;
@@ -901,17 +940,25 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 			effectiveId = existing.id;
 			db.prepare(
 				`UPDATE session_summaries
-				 SET content = ?, token_count = ?, latest_at = ?
+				 SET content = ?, token_count = ?, latest_at = ?,
+				     source_type = 'summary', source_ref = ?, meta_json = ?
 				 WHERE id = ?`,
-			).run(result.summary, tokenCount, now, existing.id);
+			).run(
+				result.summary,
+				tokenCount,
+				now,
+				job.session_key ?? null,
+				JSON.stringify({ source: "summary-worker" }),
+				existing.id,
+			);
 		} else {
 			effectiveId = crypto.randomUUID();
 			db.prepare(
 				`INSERT INTO session_summaries (
 					id, project, depth, kind, content, token_count,
 					earliest_at, latest_at, session_key, harness,
-					agent_id, created_at
-				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?)`,
+					agent_id, source_type, source_ref, meta_json, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'summary', ?, ?, ?)`,
 			).run(
 				effectiveId,
 				job.project,
@@ -922,8 +969,52 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 				job.session_key,
 				job.harness,
 				agentId,
+				job.session_key ?? null,
+				JSON.stringify({ source: "summary-worker" }),
 				now,
 			);
+		}
+
+		if (job.session_key && result.leaves && result.leaves.length > 0) {
+			db.prepare(
+				`DELETE FROM session_summary_children
+				 WHERE parent_id = ?
+				   AND child_id IN (
+				     SELECT id FROM session_summaries
+				     WHERE source_type = 'chunk' AND source_ref = ?
+				   )`,
+			).run(effectiveId, job.session_key);
+
+			const chunkStmt = db.prepare(
+				`INSERT OR REPLACE INTO session_summaries (
+					id, project, depth, kind, content, token_count,
+					earliest_at, latest_at, session_key, harness,
+					agent_id, source_type, source_ref, meta_json, created_at
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, NULL, ?, ?, 'chunk', ?, ?, ?)`,
+			);
+			const childStmt = db.prepare(
+				`INSERT OR REPLACE INTO session_summary_children (parent_id, child_id, ordinal)
+				 VALUES (?, ?, ?)`,
+			);
+
+			for (let i = 0; i < result.leaves.length; i++) {
+				const leaf = result.leaves[i];
+				const chunkId = job.session_key ? `${agentId}:${job.session_key}:chunk:${i + 1}` : crypto.randomUUID();
+				chunkStmt.run(
+					chunkId,
+					job.project,
+					leaf,
+					Math.ceil(leaf.length / 4),
+					job.created_at,
+					now,
+					job.harness,
+					agentId,
+					job.session_key,
+					JSON.stringify({ ordinal: i + 1, total: result.leaves.length }),
+					now,
+				);
+				childStmt.run(effectiveId, chunkId, i);
+			}
 		}
 
 		// Link extracted memories to this summary.
@@ -1116,16 +1207,30 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 		try {
 			// Lease a pending job
 			const job = accessor.withWriteTx((db) => {
-				const row = db
-					.prepare(
-						`SELECT id, session_key, harness, project, transcript,
-						        attempts, max_attempts, created_at
-						 FROM summary_jobs
-						 WHERE status = 'pending' AND attempts < max_attempts
-						 ORDER BY created_at ASC
-						 LIMIT 1`,
-					)
-					.get() as SummaryJobRow | undefined;
+				let row: SummaryJobRow | undefined;
+				try {
+					row = db
+						.prepare(
+							`SELECT id, session_key, harness, project, transcript,
+							        agent_id, attempts, max_attempts, created_at
+							 FROM summary_jobs
+							 WHERE status = 'pending' AND attempts < max_attempts
+							 ORDER BY created_at ASC
+							 LIMIT 1`,
+						)
+						.get() as SummaryJobRow | undefined;
+				} catch {
+					row = db
+						.prepare(
+							`SELECT id, session_key, harness, project, transcript,
+							        'default' AS agent_id, attempts, max_attempts, created_at
+							 FROM summary_jobs
+							 WHERE status = 'pending' AND attempts < max_attempts
+							 ORDER BY created_at ASC
+							 LIMIT 1`,
+						)
+						.get() as SummaryJobRow | undefined;
+				}
 
 				if (!row) return null;
 
@@ -1272,17 +1377,34 @@ export function enqueueSummaryJob(
 		readonly transcript: string;
 		readonly sessionKey?: string;
 		readonly project?: string;
+		readonly agentId: string;
 	},
 ): string {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 
 	accessor.withWriteTx((db) => {
-		db.prepare(
-			`INSERT INTO summary_jobs
-			 (id, session_key, harness, project, transcript, status, created_at)
-			 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
-		).run(id, params.sessionKey || null, params.harness, params.project || null, params.transcript, now);
+		try {
+			db.prepare(
+				`INSERT INTO summary_jobs
+				 (id, session_key, harness, project, agent_id, transcript, status, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+			).run(
+				id,
+				params.sessionKey || null,
+				params.harness,
+				params.project || null,
+				params.agentId,
+				params.transcript,
+				now,
+			);
+		} catch {
+			db.prepare(
+				`INSERT INTO summary_jobs
+				 (id, session_key, harness, project, transcript, status, created_at)
+				 VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+			).run(id, params.sessionKey || null, params.harness, params.project || null, params.transcript, now);
+		}
 	});
 
 	logger.info("summary-worker", "Enqueued session summary job", {

@@ -49,6 +49,10 @@ import { up as sessionTranscripts } from "./040-session-transcripts";
 import { up as pathFeedback } from "./041-path-feedback";
 import { up as sessionMemoriesAgentId } from "./042-session-memories-agent-id";
 import { up as agentsTable } from "./043-agents-table";
+import { up as memoryMdTemporalHead } from "./044-memory-md-temporal-head";
+import { up as losslessWorkingMemoryHardening } from "./045-lossless-working-memory-hardening";
+import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
+import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 
 // -- Public interface consumed by Database.init() --
 
@@ -416,6 +420,41 @@ export const MIGRATIONS: readonly Migration[] = [
 			],
 		},
 	},
+	{
+		version: 44,
+		name: "memory-md-temporal-head",
+		up: memoryMdTemporalHead,
+		artifacts: {
+			columns: [
+				{ table: "session_summaries", column: "source_type" },
+				{ table: "session_summaries", column: "source_ref" },
+				{ table: "session_summaries", column: "meta_json" },
+			],
+		},
+	},
+	{
+		version: 45,
+		name: "lossless-working-memory-hardening",
+		up: losslessWorkingMemoryHardening,
+		artifacts: {
+			tables: ["session_transcripts_fts", "memory_md_heads"],
+			columns: [
+				{ table: "session_transcripts", column: "updated_at" },
+				{ table: "summary_jobs", column: "agent_id" },
+				{ table: "session_scores", column: "agent_id" },
+			],
+		},
+	},
+	{
+		version: 46,
+		name: "session-summary-uniqueness",
+		up: sessionSummaryUniqueness,
+	},
+	{
+		version: 47,
+		name: "agent-scoped-temporal-uniqueness",
+		up: agentScopedTemporalUniqueness,
+	},
 ];
 
 /** Simple checksum for audit trail (hash of migration name + version). */
@@ -747,10 +786,7 @@ export function runMigrations(db: MigrationDb): void {
 			db.exec(`RELEASE migration_${migration.version}`);
 			const detail = err instanceof Error ? err.message : String(err);
 			throw new Error(
-				`Migration ${migration.version} (${migration.name}) failed: ${detail}\n\n` +
-					"Your data is safe — the failed migration was rolled back.\n" +
-					"Please report this at https://github.com/Signet-AI/signetai/issues\n" +
-					"with the error message above and your signetai version.",
+				`Migration ${migration.version} (${migration.name}) failed: ${detail}\n\nYour data is safe — the failed migration was rolled back.\nPlease report this at https://github.com/Signet-AI/signetai/issues\nwith the error message above and your signetai version.`,
 			);
 		}
 	}

@@ -55,8 +55,8 @@ function countSubstantiveTurns(transcript: string): number {
 
 	let currentRole: "user" | "assistant" | null = null;
 	let currentBlock = "";
-	let userBlocks: string[] = [];
-	let assistantBlocks: string[] = [];
+	const userBlocks: string[] = [];
+	const assistantBlocks: string[] = [];
 
 	for (const line of lines) {
 		const lower = line.trimStart().toLowerCase();
@@ -147,16 +147,26 @@ interface TranscriptRow {
  * the transcript against the last 5 completed session transcripts.
  * Returns a 0-1 score: 1.0 = highly novel, 0.0 = highly redundant.
  */
-function computeNovelty(transcript: string, db: ReadDb): number {
+function computeNovelty(transcript: string, db: ReadDb, agentId: string): number {
 	let recentTranscripts: ReadonlyArray<TranscriptRow>;
 	try {
-		recentTranscripts = db
-			.prepare(
-				`SELECT transcript FROM summary_jobs
-				 WHERE status = 'completed'
-				 ORDER BY completed_at DESC LIMIT 5`,
-			)
-			.all() as TranscriptRow[];
+		try {
+			recentTranscripts = db
+				.prepare(
+					`SELECT transcript FROM summary_jobs
+					 WHERE status = 'completed' AND agent_id = ?
+					 ORDER BY completed_at DESC LIMIT 5`,
+				)
+				.all(agentId) as TranscriptRow[];
+		} catch {
+			recentTranscripts = db
+				.prepare(
+					`SELECT transcript FROM summary_jobs
+					 WHERE status = 'completed'
+					 ORDER BY completed_at DESC LIMIT 5`,
+				)
+				.all() as TranscriptRow[];
+		}
 	} catch {
 		// Table missing or query failed — treat as novel
 		return 1.0;
@@ -224,7 +234,7 @@ export function assessSignificance(
 ): SignificanceResult {
 	const turnCount = countSubstantiveTurns(transcript);
 	const entityOverlap = countEntityOverlap(transcript, db, agentId);
-	const novelty = computeNovelty(transcript, db);
+	const novelty = computeNovelty(transcript, db, agentId);
 
 	// Entity overlap of -1 means the table doesn't exist — let it pass
 	const entityPasses = entityOverlap < 0 || entityOverlap >= config.minEntityOverlap;

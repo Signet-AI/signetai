@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { OpenClawPluginApi } from "./openclaw-types";
 
 // Mock readStaticIdentity so staticFallback() always returns a
@@ -28,6 +31,9 @@ let failPromptSubmitCount = 0;
 let delaySessionStartMs = 0;
 let delayPromptSubmitMs = 0;
 let lastRememberBody: unknown = null;
+let lastPreCompactionBody: unknown = null;
+let lastCompactionBody: unknown = null;
+let testDir = "";
 
 function hit(path: string): void {
 	pathCounts.set(path, (pathCounts.get(path) ?? 0) + 1);
@@ -124,6 +130,9 @@ beforeEach(() => {
 	delaySessionStartMs = 0;
 	delayPromptSubmitMs = 0;
 	lastRememberBody = null;
+	lastPreCompactionBody = null;
+	lastCompactionBody = null;
+	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
 
 	const mockFetch = Object.assign(
 		async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -133,7 +142,7 @@ beforeEach(() => {
 
 			switch (path) {
 				case "/health":
-					return new Response("ok", { status: 200 });
+					return jsonResponse({ pid: 1234 });
 				case "/api/hooks/session-start":
 					if (delaySessionStartMs > 0) {
 						await Bun.sleep(delaySessionStartMs);
@@ -158,6 +167,12 @@ beforeEach(() => {
 					});
 				case "/api/hooks/session-end":
 					return jsonResponse({ memoriesSaved: 0 });
+				case "/api/hooks/pre-compaction":
+					lastPreCompactionBody = init?.body ? JSON.parse(String(init.body)) : null;
+					return jsonResponse({ summaryPrompt: "flush durable state", guidelines: "focus decisions" });
+				case "/api/hooks/compaction-complete":
+					lastCompactionBody = init?.body ? JSON.parse(String(init.body)) : null;
+					return jsonResponse({ success: true, memoryId: "sum-1" });
 				case "/api/memory/remember":
 					lastRememberBody = init?.body ? JSON.parse(String(init.body)) : null;
 					return jsonResponse({ id: "mem-1" });
@@ -214,6 +229,7 @@ afterEach(async () => {
 	globalThis.fetch = originalFetch;
 	globalThis.setInterval = originalSetInterval;
 	globalThis.clearInterval = originalClearInterval;
+	rmSync(testDir, { recursive: true, force: true });
 	for (const service of registeredServices) {
 		await service.stop();
 	}
@@ -282,7 +298,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(lastRememberBody).not.toHaveProperty("importance");
 	});
 
-	it("deduplicates session-start for sessionless turns when both hooks fire", async () => {
+	it("deduplicates session-start for sessionless turns even if recall runs on both hooks", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
@@ -301,9 +317,9 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		const second = await beforeAgentStart?.(event, ctx);
 
 		expect(getPrependContext(first)).toContain("turn-memory");
-		expect(second).toBeUndefined();
+		expect(getPrependContext(second)).toContain("turn-memory");
 		expect(getHits("/api/hooks/session-start")).toBe(1);
-		expect(getHits("/api/hooks/user-prompt-submit")).toBe(1);
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
 	});
 
 	it("does not retry session-start on fallback hook after prompt dedupe kicks in", async () => {
@@ -396,6 +412,107 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 	});
+
+	it("fires pre-compaction hooks once across both OpenClaw compaction event names", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		const sessionCompactBefore = hooks.get("session:compact:before");
+		expect(beforeCompaction).toBeDefined();
+		expect(sessionCompactBefore).toBeDefined();
+
+		const event = { messageCount: 12, tokenCount: 240, compactingCount: 8 };
+		const ctx = {
+			sessionKey: "session-compact-1",
+			sessionFile: join(testDir, "session-compact-1.jsonl"),
+			agentId: "agent-1",
+		};
+
+		await beforeCompaction?.(event, ctx);
+		await sessionCompactBefore?.(event, ctx);
+
+		expect(getHits("/api/hooks/pre-compaction")).toBe(1);
+		expect(lastPreCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-compact-1",
+			messageCount: 12,
+			runtimePath: "plugin",
+		});
+	});
+
+	it("reads the compaction summary from sessionFile and saves it once", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		const sessionCompactAfter = hooks.get("session:compact:after");
+		expect(afterCompaction).toBeDefined();
+		expect(sessionCompactAfter).toBeDefined();
+
+		const sessionFile = join(testDir, "session-after.jsonl");
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({ type: "session", version: 1, id: "session-after" }),
+				JSON.stringify({
+					type: "compaction",
+					id: "comp-1",
+					summary: "Compacted history keeps the release blockers and migration plan.",
+				}),
+			].join("\n"),
+			"utf-8",
+		);
+
+		const event = { messageCount: 4, compactedCount: 2, sessionFile };
+		const ctx = {
+			sessionKey: "session-after",
+			sessionFile,
+			agentId: "agent-1",
+		};
+
+		await afterCompaction?.(event, ctx);
+		await sessionCompactAfter?.(event, ctx);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
+		expect(lastCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-after",
+			runtimePath: "plugin",
+			summary: "Compacted history keeps the release blockers and migration plan.",
+		});
+	});
+
+	it("clears prompt dedupe after compaction so the next turn can re-inject context", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const afterCompaction = hooks.get("after_compaction");
+		expect(beforePromptBuild).toBeDefined();
+		expect(afterCompaction).toBeDefined();
+
+		const event = {
+			prompt: "Need the same context again",
+			messages: [{ role: "assistant", content: "Earlier turn" }],
+		};
+		const ctx = {
+			sessionKey: "compact-reset",
+			agentId: "agent-1",
+		};
+
+		const first = await beforePromptBuild?.(event, ctx);
+		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(1);
+
+		await afterCompaction?.({ summary: "Compacted state" }, ctx);
+		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
+
+		const second = await beforePromptBuild?.(event, ctx);
+		expect(getPrependContext(second)).toContain("turn-memory");
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
+	});
+
 	it("does not reregister marketplace proxy tools on refresh", async () => {
 		const { api, tools } = createMockApi();
 		signetPlugin.register(api);
@@ -414,5 +531,4 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(refreshedNames.some((name) => name === "signet_server_a_alpha_2")).toBeFalse();
 		expect(refreshedNames.some((name) => name === "signet_server_a_beta_2")).toBeFalse();
 	});
-
 });

@@ -96,8 +96,7 @@ export function computeCombinedLabel(
 	const ftsAdj = ftsAdjustment(ftsHitCount);
 	const ftsOverlap = ftsAdj;
 	// Normalize continuity to [0, 1]
-	const continuityNormalized =
-		continuityScore !== null ? Math.max(0, Math.min(1, continuityScore)) : null;
+	const continuityNormalized = continuityScore !== null ? Math.max(0, Math.min(1, continuityScore)) : null;
 
 	let combined: number;
 	if (agentRelevanceScore !== null) {
@@ -182,11 +181,7 @@ export function collectTrainingPairs(
 	}
 }
 
-function collectTrainingPairsFromDb(
-	db: ReadDb,
-	sessionKey: string,
-	agentId: string,
-): ReadonlyArray<TrainingPair> {
+function collectTrainingPairsFromDb(db: ReadDb, sessionKey: string, agentId: string): ReadonlyArray<TrainingPair> {
 	// Load session memories for this session
 	const sessionMemories = db
 		.prepare(
@@ -266,13 +261,24 @@ function collectTrainingPairsFromDb(
 	// Get session continuity score if available
 	let sessionContinuityScore: number | null = null;
 	try {
-		const scoreRow = db
-			.prepare(
-				`SELECT score FROM session_scores
-				 WHERE session_key = ?
-				 ORDER BY created_at DESC LIMIT 1`,
-			)
-			.get(sessionKey) as { score: number } | undefined;
+		let scoreRow: { score: number } | undefined;
+		try {
+			scoreRow = db
+				.prepare(
+					`SELECT score FROM session_scores
+					 WHERE session_key = ? AND agent_id = ?
+					 ORDER BY created_at DESC LIMIT 1`,
+				)
+				.get(sessionKey, agentId) as { score: number } | undefined;
+		} catch {
+			scoreRow = db
+				.prepare(
+					`SELECT score FROM session_scores
+					 WHERE session_key = ?
+					 ORDER BY created_at DESC LIMIT 1`,
+				)
+				.get(sessionKey) as { score: number } | undefined;
+		}
 		if (scoreRow) {
 			sessionContinuityScore = scoreRow.score;
 		}
@@ -300,11 +306,7 @@ function collectTrainingPairsFromDb(
 		// Use LLM continuity score or session-level fallback
 		const continuity = sm.relevance_score ?? sessionContinuityScore;
 
-		const label = computeCombinedLabel(
-			agentRelevance,
-			continuity,
-			sm.fts_hit_count,
-		);
+		const label = computeCombinedLabel(agentRelevance, continuity, sm.fts_hit_count);
 
 		const features: FeatureVector = {
 			recencyDays,
@@ -476,10 +478,7 @@ export function exportTrainingPairs(
  * Purge training pairs older than the retention period (default 90 days).
  * Returns the number of rows deleted.
  */
-export function purgeOldTrainingPairs(
-	accessor: DbAccessor,
-	retentionDays: number = 90,
-): number {
+export function purgeOldTrainingPairs(accessor: DbAccessor, retentionDays = 90): number {
 	try {
 		return accessor.withWriteTx((db) => {
 			const result = db
@@ -490,9 +489,8 @@ export function purgeOldTrainingPairs(
 				.run(`-${retentionDays}`);
 
 			// bun:sqlite .run() returns the statement; use changes property
-			const changes = typeof result === "object" && result !== null
-				? (result as { changes?: number }).changes ?? 0
-				: 0;
+			const changes =
+				typeof result === "object" && result !== null ? ((result as { changes?: number }).changes ?? 0) : 0;
 
 			if (changes > 0) {
 				logger.info("training-pairs", "Purged old training pairs", {

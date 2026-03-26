@@ -161,8 +161,9 @@ registers as an MCP server so Codex can call `signet_remember` and
 4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
 5. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
 
-This gives Codex full parity with Claude Code — same hook pattern, same
-daemon endpoints, same memory injection quality.
+Codex matches the session-start, prompt-submit, and session-end path, but
+it does **not** currently expose the same compaction lifecycle fidelity as
+Claude Code or OpenCode.
 
 ### Supported hooks
 
@@ -258,6 +259,16 @@ in the config file during install:
 
 The plugin handles lifecycle hooks; MCP provides on-demand memory tools.
 
+### Supported hooks
+
+| Hook | Supported |
+|------|-----------|
+| session-start | yes |
+| user-prompt-submit | yes |
+| pre-compaction | yes |
+| compaction-complete | yes |
+| session-end | yes |
+
 ### Prerequisites
 
 - OpenCode installed
@@ -267,7 +278,9 @@ The plugin handles lifecycle hooks; MCP provides on-demand memory tools.
 
 ## OpenClaw
 
-OpenClaw is a desktop AI agent harness. Signet has the deepest integration here via the `@signetai/adapter-openclaw` package and the full hooks system.
+OpenClaw is the flagship harness for the lossless working-memory model.
+The plugin path gives the closest match to the full LCM runtime, while the
+legacy hook path remains compatibility-only.
 
 ### Files managed by Signet
 
@@ -350,6 +363,11 @@ await signet.onCompactionComplete({
 });
 ```
 
+When OpenClaw only exposes compaction metadata to the plugin hook, the
+runtime may read the latest compaction summary back from `sessionFile`
+before calling the daemon so the temporal DAG still receives the real
+artifact.
+
 **Manual memory operations:**
 ```javascript
 await signet.remember('nicholai prefers bun', { who: 'openclaw' });
@@ -358,14 +376,17 @@ const results = await signet.recall('coding preferences');
 
 ### MEMORY.md synthesis
 
-OpenClaw is the default harness for MEMORY.md synthesis. On the configured schedule, OpenClaw:
+The daemon synthesis worker is the primary runtime path for keeping
+`MEMORY.md` current. OpenClaw may still drive synthesis on a schedule by:
 
 1. Calls `GET /api/hooks/synthesis/config` to check if synthesis should run
 2. Calls `POST /api/hooks/synthesis` to get the synthesis prompt
 3. Runs the prompt through the configured model
 4. Posts the result to `POST /api/hooks/synthesis/complete`
 
-This keeps MEMORY.md up to date with a coherent summary of your memory database.
+Both paths write through the same merge-safe head record, so the rendered
+`MEMORY.md` stays shared across harnesses instead of becoming
+OpenClaw-specific.
 
 ### Hooks directory
 
@@ -422,6 +443,32 @@ To integrate Signet with a harness not listed here:
 4. **Check daemon health** — always verify `GET /health` returns 200 before making other calls.
 
 See [API.md](./API.md) for full endpoint documentation and [HOOKS.md](./HOOKS.md) for hook integration details.
+
+---
+
+## Working-Memory Fidelity Matrix
+
+All harnesses target the same model:
+
+- one agent
+- many sessions / branches
+- one shared `MEMORY.md` head
+- structured retrieval first
+- transcripts as fallback / deep history
+- compaction artifacts feeding the same temporal DAG
+
+Where they differ is lifecycle fidelity:
+
+| Harness | session-start | prompt-submit | pre-compaction | post-compaction | session-end | Notes |
+|---------|---------------|---------------|----------------|-----------------|-------------|-------|
+| OpenCode plugin | yes | yes | yes | yes | yes | Reference full-fidelity path |
+| OpenClaw plugin | yes | yes | yes | yes | yes | Flagship path; post-compaction may read summary back from `sessionFile` when the hook only exposes metadata |
+| Claude Code | yes | yes | yes | no | yes | Good continuity, degraded after-compaction fidelity |
+| Codex | yes | yes | no | no | yes | Solid baseline, degraded compaction fidelity |
+| OpenClaw legacy hooks | manual `/context` | no | no | no | no | Compatibility-only, not full parity |
+
+The docs should be read literally. If a hook surface is absent here, that
+mode is degraded rather than silently assumed.
 
 ---
 

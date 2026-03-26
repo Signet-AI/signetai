@@ -9,6 +9,7 @@
  * path for dedup safety.
  */
 
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readStaticIdentity } from "@signet/core";
@@ -19,6 +20,7 @@ const DEFAULT_DAEMON_URL = "http://localhost:3850";
 const RUNTIME_PATH = "plugin" as const;
 const READ_TIMEOUT = 5000;
 const WRITE_TIMEOUT = 10000;
+const COMPACTION_HOOK_DEDUPE_MS = 1000;
 
 // ---------------------------------------------------------------------------
 // Prompt extraction — OpenClaw wraps user messages in metadata envelopes.
@@ -251,7 +253,6 @@ interface MarketplaceExposurePolicy {
 	readonly updatedAt: string;
 }
 
-
 function sanitizeToolSegment(value: string): string {
 	const normalized = value
 		.trim()
@@ -325,14 +326,9 @@ async function daemonFetch<T>(
 		// layers may rethrow the OS error directly — check both forms.
 		const cause: unknown = e instanceof TypeError ? e.cause : e;
 		const isConnRefused =
-			typeof cause === "object" &&
-			cause !== null &&
-			"code" in cause &&
-			cause.code === "ECONNREFUSED";
+			typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ECONNREFUSED";
 		if (isConnRefused) {
-			console.warn(
-				`[signet] daemon unreachable at ${daemonUrl} — is the Signet daemon running? (${method} ${path})`,
-			);
+			console.warn(`[signet] daemon unreachable at ${daemonUrl} — is the Signet daemon running? (${method} ${path})`);
 		} else {
 			console.warn(`[signet] ${method} ${path} error:`, e);
 		}
@@ -560,7 +556,10 @@ export async function memoryStore(
 			tags:
 				typeof options.tags === "string"
 					? options.tags
-					: options.tags?.map((tag) => tag.trim()).filter((tag) => tag.length > 0).join(","),
+					: options.tags
+							?.map((tag) => tag.trim())
+							.filter((tag) => tag.length > 0)
+							.join(","),
 			who: options.who || "openclaw",
 		},
 		timeout: WRITE_TIMEOUT,
@@ -757,9 +756,9 @@ function textResult(text: string, details?: Record<string, unknown>): OpenClawTo
 // have a stable messageCount to key on).
 const SESSIONLESS_DEDUPE_MS = 1_000;
 
-function cleanupTimedMap(map: Map<string, number>, now: number): void {
+function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONLESS_DEDUPE_MS): void {
 	for (const [key, ts] of map) {
-		if (now - ts > SESSIONLESS_DEDUPE_MS) {
+		if (now - ts > ttlMs) {
 			map.delete(key);
 		}
 	}
@@ -781,6 +780,41 @@ function buildSessionlessTurnKey(event: Record<string, unknown>, agentId: string
 	const normalizedPrompt = rawPrompt.trim().replace(/\s+/g, " ").slice(0, 240);
 	const messageCount = Array.isArray(event.messages) ? event.messages.length : -1;
 	return `${agentId ?? "-"}|${messageCount}|${normalizedPrompt}`;
+}
+
+function readString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function extractCompactionSummary(event: Record<string, unknown>, sessionFile: string | undefined): string | undefined {
+	const direct = readString(event.summary);
+	if (direct) return direct;
+
+	const compaction = isRecord(event.compaction) ? event.compaction : undefined;
+	const nested = readString(compaction?.summary);
+	if (nested) return nested;
+	if (!sessionFile || !existsSync(sessionFile)) return undefined;
+
+	try {
+		const lines = readFileSync(sessionFile, "utf-8")
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
+		for (let i = lines.length - 1; i >= 0; i--) {
+			try {
+				const row = JSON.parse(lines[i]) as unknown;
+				if (!isRecord(row) || row.type !== "compaction") continue;
+				const summary = readString(row.summary);
+				if (summary) return summary;
+			} catch {
+				// ignore malformed transcript lines
+			}
+		}
+	} catch {
+		// best effort only
+	}
+
+	return undefined;
 }
 
 async function registerMarketplaceProxyTools(
@@ -1315,11 +1349,14 @@ const signetPlugin = {
 		// the same event-loop tick don't both pass the guard before either await
 		// completes (injectedTurns is only written after the daemon responds).
 		const inFlightTurns = new Set<string>();
+		const beforeCompactions = new Map<string, number>();
+		const afterCompactions = new Map<string, number>();
 
 		const resolveHookContext = (
 			ctx: unknown,
 		): {
 			sessionKey?: string;
+			sessionFile?: string;
 			agentId?: string;
 		} => {
 			if (!isRecord(ctx)) {
@@ -1328,8 +1365,95 @@ const signetPlugin = {
 			const sessionContext = ctx;
 			return {
 				sessionKey: typeof sessionContext?.sessionKey === "string" ? sessionContext.sessionKey : undefined,
+				sessionFile: typeof sessionContext?.sessionFile === "string" ? sessionContext.sessionFile.trim() : undefined,
 				agentId: typeof sessionContext?.agentId === "string" ? sessionContext.agentId : undefined,
 			};
+		};
+
+		const resolveCompactionSessionKey = (
+			event: Record<string, unknown>,
+			ctx: {
+				sessionKey?: string;
+				sessionFile?: string;
+				agentId?: string;
+			},
+		): string | undefined => {
+			const fromEvent = readString(event.sessionKey) ?? readString(event.sessionId);
+			if (fromEvent) return fromEvent;
+			if (ctx.sessionKey) return ctx.sessionKey;
+			return undefined;
+		};
+
+		const dedupeCompaction = (map: Map<string, number>, key: string): boolean => {
+			const now = Date.now();
+			cleanupTimedMap(map, now, COMPACTION_HOOK_DEDUPE_MS);
+			const seenAt = map.get(key);
+			if (typeof seenAt === "number" && now - seenAt <= COMPACTION_HOOK_DEDUPE_MS) {
+				return true;
+			}
+			map.set(key, now);
+			return false;
+		};
+
+		const handleBeforeCompaction = async (
+			event: Record<string, unknown>,
+			ctx: {
+				sessionKey?: string;
+				sessionFile?: string;
+				agentId?: string;
+			},
+		): Promise<unknown> => {
+			if (!cfg.enabled || !daemonReachable) return undefined;
+			const sessionKey = resolveCompactionSessionKey(event, ctx);
+			const messageCount =
+				typeof event.messageCount === "number"
+					? event.messageCount
+					: typeof event.compactingCount === "number"
+						? event.compactingCount
+						: undefined;
+			const dedupeKey = `${sessionKey ?? "-"}|${messageCount ?? -1}`;
+			if (dedupeCompaction(beforeCompactions, dedupeKey)) {
+				return undefined;
+			}
+
+			const result = await onPreCompaction("openclaw", {
+				...opts,
+				sessionKey,
+				messageCount,
+			});
+			if (!result?.guidelines && !result?.summaryPrompt) {
+				return undefined;
+			}
+			return {
+				prependContext: result.summaryPrompt ?? result.guidelines,
+			};
+		};
+
+		const handleAfterCompaction = async (
+			event: Record<string, unknown>,
+			ctx: {
+				sessionKey?: string;
+				sessionFile?: string;
+				agentId?: string;
+			},
+		): Promise<void> => {
+			if (!cfg.enabled || !daemonReachable) return;
+			const sessionKey = resolveCompactionSessionKey(event, ctx);
+			const summary = extractCompactionSummary(event, ctx.sessionFile);
+			if (!summary) return;
+
+			const dedupeKey = `${sessionKey ?? "-"}|${summary.slice(0, 120)}`;
+			if (dedupeCompaction(afterCompactions, dedupeKey)) {
+				return;
+			}
+
+			await onCompactionComplete("openclaw", summary, {
+				...opts,
+				sessionKey,
+			});
+			if (sessionKey) {
+				injectedTurns.delete(sessionKey);
+			}
 		};
 
 		const ensureSessionStarted = async (
@@ -1402,7 +1526,10 @@ const signetPlugin = {
 					if (now - v.at > SESSION_TURN_TTL_MS) injectedTurns.delete(k);
 				}
 			}
-			if (sig && (inFlightTurns.has(sig) || (sessionKey !== undefined && injectedTurns.get(sessionKey)?.count === count))) {
+			if (
+				sig &&
+				(inFlightTurns.has(sig) || (sessionKey !== undefined && injectedTurns.get(sessionKey)?.count === count))
+			) {
 				return undefined;
 			}
 			// Mark in-flight synchronously before any await so concurrent
@@ -1463,6 +1590,24 @@ const signetPlugin = {
 				claimedSessions.delete(sessionKey);
 				injectedTurns.delete(sessionKey);
 			}
+			return undefined;
+		});
+
+		api.on("before_compaction", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+			return handleBeforeCompaction(event, resolveHookContext(ctx));
+		});
+
+		api.on("after_compaction", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+			await handleAfterCompaction(event, resolveHookContext(ctx));
+			return undefined;
+		});
+
+		api.on("session:compact:before", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+			return handleBeforeCompaction(event, resolveHookContext(ctx));
+		});
+
+		api.on("session:compact:after", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+			await handleAfterCompaction(event, resolveHookContext(ctx));
 			return undefined;
 		});
 
