@@ -84,6 +84,12 @@ export interface ForgeDeps {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const FALLBACK_FORGE_MANIFEST: ForgeManifest = {
+	version: "0.0.0",
+	tagPrefix: "forge-v",
+	repository: "Signet-AI/signetai",
+	binary: "forge",
+};
 const MANAGED_FORGE_INSTALL_LOCK_INFO = "owner.json";
 const MANAGED_FORGE_INSTALL_LOCK_STALE_MS = 60 * 60 * 1000;
 
@@ -190,19 +196,23 @@ export function withManagedForgeInstallLock<T>(run: () => Promise<T>, home = hom
 		});
 }
 
-function resolveForgeManifestPath(getTemplatesDir: () => string): string {
+function resolveForgeManifestPath(getTemplatesDir: () => string): string | null {
 	const sourceCandidates = [
 		join(__dirname, "..", "..", "forge", "forge-version.json"),
 		join(__dirname, "..", "..", "..", "forge", "forge-version.json"),
+		join(getTemplatesDir(), "forge", "manifest.json"),
 	];
 	for (const candidate of sourceCandidates) {
 		if (existsSync(candidate)) return candidate;
 	}
-	return join(getTemplatesDir(), "forge", "manifest.json");
+	return null;
 }
 
 export function loadForgeManifest(getTemplatesDir: () => string): ForgeManifest {
 	const manifestPath = resolveForgeManifestPath(getTemplatesDir);
+	if (!manifestPath) {
+		return FALLBACK_FORGE_MANIFEST;
+	}
 	const raw = readFileSync(manifestPath, "utf8");
 	return JSON.parse(raw) as ForgeManifest;
 }
