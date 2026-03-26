@@ -36,23 +36,22 @@ export function deriveThreadKey(input: {
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
 
-	if (sourceRef && project && sessionKey && sourceRef === sessionKey) {
+	const sourceIsSession = sourceRef && sessionKey && sourceRef === sessionKey;
+	if (sourceIsSession) {
 		sourceRef = null;
 	}
 	const base =
-		sourceRef && project
+		project && sourceRef
 			? `project:${project}|source:${sourceRef}`
-			: sourceRef
-				? `source:${sourceRef}`
-				: sessionKey && project
-					? `project:${project}|session:${sessionKey}`
-					: project
-						? `project:${project}`
-						: sessionKey
-							? `session:${sessionKey}`
-							: harness
-								? `harness:${harness}`
-								: "thread:unscoped";
+			: project
+				? `project:${project}`
+				: sourceRef
+					? `source:${sourceRef}`
+					: sessionKey
+						? `session:${sessionKey}`
+						: harness
+							? `harness:${harness}`
+							: "thread:unscoped";
 	if (!harness || base === `harness:${harness}`) return base;
 	return `${base}|harness:${harness}`;
 }
@@ -68,23 +67,22 @@ export function deriveThreadLabel(input: {
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
 
-	if (sourceRef && project && sessionKey && sourceRef === sessionKey) {
+	const sourceIsSession = sourceRef && sessionKey && sourceRef === sessionKey;
+	if (sourceIsSession) {
 		sourceRef = null;
 	}
 	const base =
 		project && sourceRef
 			? `project:${project}#source:${sourceRef}`
-			: sourceRef
-				? `source:${sourceRef}`
-				: project && sessionKey
-					? `project:${project}#session:${sessionKey}`
-					: project
-						? `project:${project}`
-						: sessionKey
-							? `session:${sessionKey}`
-							: harness
-								? `harness:${harness}`
-								: "thread:unscoped";
+			: project
+				? `project:${project}`
+				: sourceRef
+					? `source:${sourceRef}`
+					: sessionKey
+						? `session:${sessionKey}`
+						: harness
+							? `harness:${harness}`
+							: "thread:unscoped";
 	if (!harness || base === `harness:${harness}`) return base;
 	return `${base}#harness:${harness}`;
 }

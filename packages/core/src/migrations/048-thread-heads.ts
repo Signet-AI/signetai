@@ -47,7 +47,7 @@ export function up(db: MigrationDb): void {
 								AND ss.session_key IS NOT NULL AND TRIM(ss.session_key) != ''
 								AND TRIM(ss.source_ref) = TRIM(ss.session_key)
 								AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
-							'project:' || TRIM(ss.project) || '|session:' || TRIM(ss.session_key)
+							'project:' || TRIM(ss.project)
 						WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != ''
 								AND ss.session_key IS NOT NULL AND TRIM(ss.session_key) != ''
 								AND TRIM(ss.source_ref) = TRIM(ss.session_key) THEN
@@ -71,7 +71,7 @@ export function up(db: MigrationDb): void {
 						AND ss.session_key IS NOT NULL AND TRIM(ss.session_key) != ''
 						AND TRIM(ss.source_ref) = TRIM(ss.session_key)
 						AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
-					'project:' || TRIM(ss.project) || '#session:' || TRIM(ss.session_key)
+					'project:' || TRIM(ss.project)
 				WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != ''
 						AND ss.session_key IS NOT NULL AND TRIM(ss.session_key) != ''
 						AND TRIM(ss.source_ref) = TRIM(ss.session_key) THEN
@@ -112,7 +112,7 @@ export function up(db: MigrationDb): void {
 										AND s0.session_key IS NOT NULL AND TRIM(s0.session_key) != ''
 										AND TRIM(s0.source_ref) = TRIM(s0.session_key)
 										AND s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN
-									'project:' || TRIM(s0.project) || '|session:' || TRIM(s0.session_key)
+									'project:' || TRIM(s0.project)
 								WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != ''
 										AND s0.session_key IS NOT NULL AND TRIM(s0.session_key) != ''
 										AND TRIM(s0.source_ref) = TRIM(s0.session_key) THEN

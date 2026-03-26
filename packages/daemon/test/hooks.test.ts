@@ -1730,7 +1730,7 @@ describe("handleSynthesisRequest", () => {
 		const result = handleSynthesisRequest({ trigger: "manual" });
 
 		expect(result.prompt).toContain("project:rpg#session:sess-rpg#harness:test");
-		expect(result.prompt).toContain("project:greenscreen#session:sess-green#harness:test");
+		expect(result.prompt).toContain("project:greenscreen#harness:test");
 		expect(result.prompt).toContain("node-rpg");
 		expect(result.prompt).toContain("node-green");
 	});
