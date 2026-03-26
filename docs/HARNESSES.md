@@ -76,7 +76,7 @@ signet forge status
 signet forge doctor
 ```
 
-Managed binary downloads currently support macOS arm64, macOS x64, and Linux x64.
+Managed binary downloads currently support macOS arm64, macOS x64, Linux x64, and Linux arm64.
 On other platforms, install Forge from source or use a local standalone build.
 
 ### Runtime role

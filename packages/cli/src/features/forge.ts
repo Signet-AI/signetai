@@ -1,8 +1,18 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { findSignetForgeBinary, isSignetForgeBinary, resolveSignetForgeManagedPath } from "@signet/core";
 import chalk from "chalk";
 
@@ -36,6 +46,12 @@ interface ForgeInstallRecord {
 	readonly repository: string;
 	readonly installedAt: string;
 	readonly source: "github-release";
+}
+
+interface ManagedForgeRecordLike {
+	readonly managed?: boolean;
+	readonly binaryPath?: string;
+	readonly source?: string;
 }
 
 interface ForgeStatusPayload {
@@ -79,6 +95,12 @@ function readInstallRecord(agentsDir: string): ForgeInstallRecord | null {
 function writeInstallRecord(agentsDir: string, record: ForgeInstallRecord): void {
 	mkdirSync(agentsDir, { recursive: true });
 	writeFileSync(installRecordPath(agentsDir), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+export function isSignetManagedForgeRecord(record: ManagedForgeRecordLike | null, managedBinaryPath: string): boolean {
+	return Boolean(
+		record?.managed === true && record.binaryPath === managedBinaryPath && record.source === "github-release",
+	);
 }
 
 function compareSemver(left: string, right: string): number {
@@ -144,10 +166,10 @@ function findManagedForge(deps: ForgeDeps, binaryName = "forge"): string | null 
 	const managedPath = signetManagedBinaryPath(binaryName);
 	const record = readInstallRecord(deps.agentsDir);
 	const validManagedBinary = existsSync(managedPath) && (binaryName !== "forge" || isSignetForgeBinary(managedPath));
-	if (record?.managed && record.binaryPath === managedPath && validManagedBinary) {
+	if (isSignetManagedForgeRecord(record, managedPath) && validManagedBinary) {
 		return managedPath;
 	}
-	return validManagedBinary ? managedPath : null;
+	return null;
 }
 
 function readInstalledForgeVersion(binaryPath: string): string | null {
@@ -230,13 +252,14 @@ async function resolveForgeRelease(manifest: ForgeManifest, requestedVersion?: s
 }
 
 function supportedManagedForgePlatformList(): string {
-	return "macOS arm64, macOS x64, and Linux x64";
+	return "macOS arm64, macOS x64, Linux x64, and Linux arm64";
 }
 
 export function managedForgeAssetNameForPlatform(platform: NodeJS.Platform, arch: string): string {
 	if (platform === "darwin" && arch === "arm64") return "forge-macos-arm64.tar.gz";
 	if (platform === "darwin" && arch === "x64") return "forge-macos-x64.tar.gz";
 	if (platform === "linux" && arch === "x64") return "forge-linux-x64.tar.gz";
+	if (platform === "linux" && arch === "arm64") return "forge-linux-arm64.tar.gz";
 	throw new Error(
 		`signet forge install/update currently publishes managed binaries for ${supportedManagedForgePlatformList()}. Detected ${platform} ${arch}. Install Forge from source or a local standalone build instead.`,
 	);
@@ -327,24 +350,33 @@ async function installForgeBinary(
 
 	const installDir = signetManagedInstallDir();
 	mkdirSync(installDir, { recursive: true });
-	const tempRoot = join(deps.agentsDir, ".tmp", "forge-install");
-	const extractDir = join(tempRoot, `extract-${Date.now()}`);
-	const archivePath = join(tempRoot, asset.name);
-	mkdirSync(tempRoot, { recursive: true });
-
-	await downloadFile(asset.url, archivePath);
-	const expectedSha256 = parseSha256Checksum(await fetchText(checksumAsset.url), asset.name);
-	verifyFileChecksum(archivePath, expectedSha256);
-	const extracted = extractForgeBinary(archivePath, extractDir, manifest.binary);
-	verifyForgeBinaryFingerprint(extracted);
 	const targetBinary = binaryFilename(manifest.binary);
 	const finalPath = join(installDir, targetBinary);
-	const stagedPath = join(dirname(finalPath), `.${targetBinary}.new`);
-	if (existsSync(stagedPath)) unlinkSync(stagedPath);
-	renameSync(extracted, stagedPath);
-	chmodSync(stagedPath, 0o755);
-	renameSync(stagedPath, finalPath);
-	if (existsSync(archivePath)) unlinkSync(archivePath);
+	const existingRecord = readInstallRecord(deps.agentsDir);
+	if (existsSync(finalPath) && !isSignetManagedForgeRecord(existingRecord, finalPath)) {
+		throw new Error(
+			`Refusing to overwrite unmanaged Forge at ${chalk.cyan(finalPath)}. Move or remove that binary first, or keep using it as a standalone install.`,
+		);
+	}
+
+	const tempRoot = mkdtempSync(join(installDir, ".forge-install-"));
+	const extractDir = join(tempRoot, "extract");
+	const archivePath = join(tempRoot, asset.name);
+	const stagedPath = join(installDir, `.${targetBinary}.new`);
+	try {
+		await downloadFile(asset.url, archivePath);
+		const expectedSha256 = parseSha256Checksum(await fetchText(checksumAsset.url), asset.name);
+		verifyFileChecksum(archivePath, expectedSha256);
+		const extracted = extractForgeBinary(archivePath, extractDir, manifest.binary);
+		verifyForgeBinaryFingerprint(extracted);
+		if (existsSync(stagedPath)) unlinkSync(stagedPath);
+		renameSync(extracted, stagedPath);
+		chmodSync(stagedPath, 0o755);
+		renameSync(stagedPath, finalPath);
+	} finally {
+		if (existsSync(stagedPath)) unlinkSync(stagedPath);
+		rmSync(tempRoot, { recursive: true, force: true });
+	}
 
 	writeInstallRecord(deps.agentsDir, {
 		managed: true,
@@ -365,14 +397,16 @@ function buildStatusPayload(deps: ForgeDeps, manifest: ForgeManifest): ForgeStat
 	const managedBinaryPath = findManagedForge(deps, manifest.binary);
 	const installedVersion = binaryPath ? readInstalledForgeVersion(binaryPath) : null;
 	const managedVersion = managedBinaryPath ? readInstalledForgeVersion(managedBinaryPath) : null;
+	const managedPath = signetManagedBinaryPath(manifest.binary);
+	const managedRecord = isSignetManagedForgeRecord(record, managedPath) ? record : null;
 	return {
 		installed: Boolean(binaryPath ?? managedBinaryPath),
 		binaryPath: binaryPath ?? managedBinaryPath,
 		version: installedVersion ?? managedVersion,
-		managed: Boolean(record?.managed || managedBinaryPath),
+		managed: Boolean(managedRecord),
 		managedBinaryPath,
 		managedVersion,
-		managedRecord: record,
+		managedRecord,
 		workspaceConfigured: existsSync(join(deps.agentsDir, "agent.yaml")),
 	};
 }
@@ -389,7 +423,7 @@ export async function installForge(options: ForgeInstallOptions, deps: ForgeDeps
 export async function updateForge(options: ForgeInstallOptions, deps: ForgeDeps): Promise<void> {
 	const manifest = loadForgeManifest(deps.getTemplatesDir);
 	const status = buildStatusPayload(deps, manifest);
-	if (!status.managedBinaryPath && !status.managedRecord?.managed) {
+	if (!status.managedRecord) {
 		throw new Error(
 			`Refusing to update a non-Signet-managed Forge install. Run ${chalk.cyan("signet forge install")} to install Forge into ${chalk.cyan(signetManagedInstallDir())}.`,
 		);
