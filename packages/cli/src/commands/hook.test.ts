@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildSessionEndBody, pickSessionKey } from "./hook";
+import { buildSessionEndBody, buildUserPromptSubmitBody, pickSessionKey } from "./hook";
 
 describe("pickSessionKey", () => {
 	test("prefers canonical sessionKey fields before legacy session_id aliases", () => {
@@ -43,6 +43,33 @@ describe("buildSessionEndBody", () => {
 			sessionKey: "sess-1",
 			cwd: "/tmp/project",
 			reason: "shutdown",
+		});
+	});
+});
+
+describe("buildUserPromptSubmitBody", () => {
+	test("forwards the preferred userMessage field alongside legacy userPrompt compatibility", () => {
+		expect(
+			buildUserPromptSubmitBody(
+				{
+					userMessage: "clean prompt",
+					prompt: "raw prompt",
+					sessionKey: "sess-2",
+					transcript: "user: hi",
+					lastAssistantMessage: "prior answer",
+				},
+				"claude-code",
+				"/tmp/project",
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/project",
+			userMessage: "clean prompt",
+			userPrompt: "raw prompt",
+			sessionKey: "sess-2",
+			transcriptPath: "",
+			transcript: "user: hi",
+			lastAssistantMessage: "prior answer",
 		});
 	});
 });

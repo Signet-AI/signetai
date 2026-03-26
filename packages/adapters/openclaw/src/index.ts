@@ -1455,6 +1455,9 @@ const signetPlugin = {
 		): Promise<void> => {
 			if (!cfg.enabled || !daemonReachable) return;
 			const sessionKey = resolveCompactionSessionKey(event, ctx);
+			if (sessionKey) {
+				injectedTurns.delete(sessionKey);
+			}
 			const sessionFile = resolveCompactionSessionFile(event, ctx.sessionFile);
 			const summary = extractCompactionSummary(event, sessionFile);
 			if (!summary) return;
@@ -1469,9 +1472,6 @@ const signetPlugin = {
 				project: opts.workspace,
 				sessionKey,
 			});
-			if (sessionKey) {
-				injectedTurns.delete(sessionKey);
-			}
 		};
 
 		const ensureSessionStarted = async (

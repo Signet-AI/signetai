@@ -520,6 +520,36 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
+	it("clears prompt dedupe after compaction even when no summary is recoverable", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const afterCompaction = hooks.get("after_compaction");
+		expect(beforePromptBuild).toBeDefined();
+		expect(afterCompaction).toBeDefined();
+
+		const event = {
+			prompt: "Need the same context again",
+			messages: [{ role: "assistant", content: "Earlier turn" }],
+		};
+		const ctx = {
+			sessionKey: "compact-reset-nosummary",
+			agentId: "agent-1",
+		};
+
+		const first = await beforePromptBuild?.(event, ctx);
+		expect(getPrependContext(first)).toContain("turn-memory");
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(1);
+
+		await afterCompaction?.({ compactedCount: 2 }, ctx);
+		expect(getHits("/api/hooks/compaction-complete")).toBe(0);
+
+		const second = await beforePromptBuild?.(event, ctx);
+		expect(getPrependContext(second)).toContain("turn-memory");
+		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
+	});
+
 	it("clears prompt dedupe after compaction so the next turn can re-inject context", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);

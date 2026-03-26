@@ -76,22 +76,11 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--project <project>", "Project path")
 		.action(async (options) => {
 			const input = await readJson();
-			const userPrompt = pickString(input?.prompt, input?.user_prompt, input?.userPrompt);
-			const sessionKey = pickSessionKey(input);
 			const stdinProject = pickString(input?.cwd);
-			const lastAssistantMessage = readLastAssistantMessage(input);
 			const data = await deps.fetchFromDaemon<{ inject?: string }>("/api/hooks/user-prompt-submit", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					harness: options.harness,
-					project: options.project || stdinProject,
-					userPrompt,
-					sessionKey,
-					transcriptPath: pickString(input?.transcript_path, input?.transcriptPath),
-					transcript: pickString(input?.transcript),
-					lastAssistantMessage: lastAssistantMessage || undefined,
-				}),
+				body: JSON.stringify(buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject)),
 			});
 			if (!data) {
 				process.stderr.write("[signet] daemon not running, hook skipped\n");
@@ -257,6 +246,36 @@ function pickString(...values: unknown[]): string {
 export function pickSessionKey(input: Record<string, unknown> | null): string {
 	if (!input) return "";
 	return pickString(input.session_key, input.sessionKey, input.session_id, input.sessionId);
+}
+
+export function buildUserPromptSubmitBody(
+	input: Record<string, unknown> | null,
+	harness: string,
+	project: string,
+): {
+	harness: string;
+	project: string;
+	userMessage: string;
+	userPrompt: string;
+	sessionKey: string;
+	transcriptPath: string;
+	transcript: string;
+	lastAssistantMessage?: string;
+} {
+	const body = input;
+	const userPrompt = pickString(body?.prompt, body?.user_prompt, body?.userPrompt);
+	const userMessage = pickString(body?.user_message, body?.userMessage, userPrompt);
+	const lastAssistantMessage = readLastAssistantMessage(body);
+	return {
+		harness,
+		project,
+		userMessage,
+		userPrompt,
+		sessionKey: pickSessionKey(body),
+		transcriptPath: pickString(body?.transcript_path, body?.transcriptPath),
+		transcript: pickString(body?.transcript),
+		...(lastAssistantMessage ? { lastAssistantMessage } : {}),
+	};
 }
 
 export function buildSessionEndBody(
