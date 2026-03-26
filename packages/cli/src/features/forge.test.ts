@@ -221,9 +221,11 @@ describe("managed Forge install lock", () => {
 			const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
 			utimesSync(lockDir, staleTime, staleTime);
 
-			expect(() => {
-				withManagedForgeInstallLock(async () => "ok", tempHome);
-			}).toThrow("already running");
+			await expect(
+				(async () => {
+					await withManagedForgeInstallLock(async () => "ok", tempHome);
+				})(),
+			).rejects.toThrow("already running");
 
 			expect(existsSync(lockDir)).toBe(true);
 		} finally {

@@ -119,7 +119,28 @@ fn forge_candidate_paths(home: &std::path::Path, agents_dir: &std::path::Path) -
     deduped
 }
 
+fn is_executable_file(path: &std::path::Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        true
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        (metadata.permissions().mode() & 0o111) != 0
+    }
+}
+
 fn is_signet_forge_binary(path: &std::path::Path) -> bool {
+    if !is_executable_file(path) {
+        return false;
+    }
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
@@ -134,6 +155,9 @@ fn is_signet_forge_binary(path: &std::path::Path) -> bool {
 }
 
 fn is_compatible_forge_binary(path: &std::path::Path) -> bool {
+    if !is_executable_file(path) {
+        return false;
+    }
     if is_signet_forge_binary(path) {
         return true;
     }
@@ -272,6 +296,8 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
 mod tests {
     use super::find_signet_forge_binary_with_home;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     #[test]
@@ -292,6 +318,12 @@ mod tests {
             "Forge — First Run\nFORGE_SIGNET_TOKEN\nDashboard (Ctrl+D)\n",
         )
         .unwrap();
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&binary).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&binary, perms).unwrap();
+        }
 
         assert_eq!(
             find_signet_forge_binary_with_home(home.path(), workspace.path()),
