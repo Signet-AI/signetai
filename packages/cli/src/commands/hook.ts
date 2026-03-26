@@ -321,11 +321,12 @@ export function buildSessionEndBody(
 } {
 	const body = input ?? {};
 	const sessionKey = pickSessionKey(body);
+	const sessionId = pickString(body.session_id, body.sessionId, sessionKey);
 	return {
 		harness,
 		transcriptPath: pickString(body.transcript_path, body.transcriptPath),
 		transcript: pickString(body.transcript),
-		sessionId: sessionKey,
+		sessionId,
 		sessionKey,
 		cwd: pickString(body.cwd),
 		reason: pickString(body.reason),

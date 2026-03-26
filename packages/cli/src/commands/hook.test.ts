@@ -45,6 +45,27 @@ describe("buildSessionEndBody", () => {
 			reason: "shutdown",
 		});
 	});
+
+	test("preserves a distinct legacy sessionId alongside canonical sessionKey", () => {
+		expect(
+			buildSessionEndBody(
+				{
+					sessionId: "sess-legacy-id",
+					sessionKey: "sess-canonical-key",
+					transcriptPath: "/tmp/session.txt",
+				},
+				"claude-code",
+			),
+		).toEqual({
+			cwd: "",
+			harness: "claude-code",
+			reason: "",
+			sessionId: "sess-legacy-id",
+			sessionKey: "sess-canonical-key",
+			transcript: "",
+			transcriptPath: "/tmp/session.txt",
+		});
+	});
 });
 
 describe("buildUserPromptSubmitBody", () => {
