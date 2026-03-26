@@ -1,0 +1,20 @@
+[package]
+name = "forge-provider"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+reqwest = { workspace = true }
+reqwest-eventsource = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+portable-pty = "0.9.0"

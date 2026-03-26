@@ -1,0 +1,24 @@
+[package]
+name = "forge-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+forge-provider = { workspace = true }
+forge-tools = { workspace = true }
+forge-mcp = { workspace = true }
+forge-signet = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+dirs = { workspace = true }

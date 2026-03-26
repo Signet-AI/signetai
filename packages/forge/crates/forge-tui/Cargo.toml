@@ -1,0 +1,41 @@
+[package]
+name = "forge-tui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+forge-agent = { workspace = true }
+forge-provider = { workspace = true }
+forge-signet = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+pulldown-cmark = { workspace = true }
+syntect.workspace = true
+arboard = { workspace = true }
+tracing = { workspace = true }
+dirs = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+png = { workspace = true }
+unicode-width = "0.2"
+reqwest-eventsource.workspace = true
+forge-mcp = { workspace = true }
+reqwest = { workspace = true }
+whisper-rs = { version = "0.14", optional = true }
+cpal = { version = "0.15", optional = true }
+libc = "0.2"
+zip = "8.4.0"
+
+[features]
+default = ["voice"]
+voice = ["whisper-rs", "cpal"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.14", features = ["metal"], optional = true }

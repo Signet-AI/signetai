@@ -1,0 +1,20 @@
+[package]
+name = "forge-signet"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+reqwest = { workspace = true }
+reqwest-eventsource = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+notify = { workspace = true }
+dirs = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }

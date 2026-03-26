@@ -1,0 +1,88 @@
+[workspace]
+members = [
+    "crates/forge-core",
+    "crates/forge-provider",
+    "crates/forge-tools",
+    "crates/forge-mcp",
+    "crates/forge-signet",
+    "crates/forge-agent",
+    "crates/forge-tui",
+    "crates/forge-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "1.1.14"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Signet-AI/signetai/tree/main/packages/forge"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest-eventsource = "0.6"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# File watching
+notify = "7"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+glob = "0.3"
+regex-lite = "0.1"
+arboard = "3"
+
+# Image encoding
+png = "0.17"
+
+# Markdown & syntax
+pulldown-cmark = "0.12"
+syntect = "5"
+
+# Async trait
+async-trait = "0.1"
+
+# Streaming
+futures = "0.3"
+tokio-stream = "0.1"
+
+# Internal crates
+forge-core = { path = "crates/forge-core" }
+forge-provider = { path = "crates/forge-provider" }
+forge-tools = { path = "crates/forge-tools" }
+forge-mcp = { path = "crates/forge-mcp" }
+forge-signet = { path = "crates/forge-signet" }
+forge-agent = { path = "crates/forge-agent" }
+forge-tui = { path = "crates/forge-tui", default-features = false }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

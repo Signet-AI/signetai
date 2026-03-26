@@ -1,0 +1,16 @@
+[package]
+name = "forge-mcp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+forge-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
