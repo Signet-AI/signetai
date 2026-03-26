@@ -279,15 +279,18 @@ Required documentation coverage:
 
 ## Rust Parity Requirement
 
-This closure spec does not require full daemon-rs cutover, but it does
-require parity for every daemon hook contract touched by the work.
+This closure spec does not require full daemon-rs cutover. For closure-wave
+changes, request/response contract changes must be mirrored in daemon-rs
+in the same PR, while deeper runtime behavior parity can land in the
+follow-up parity wave tracked under rust cutover specs.
 
 Minimum contract:
 
-- request/response shape changes must be mirrored into `packages/daemon-rs/`
+- request/response shape changes are mirrored into `packages/daemon-rs/`
   in the same PR
-- parity tests or route-local regressions must land in the same PR when
-  hook semantics change
+- touched endpoints keep parity guard coverage so divergences are visible
+- behavior deltas that cannot be mirrored in-wave are explicitly documented
+  in `docs/HARNESSES.md` degraded-mode notes
 
-Broader Rust daemon completion remains tracked by the separate parity and
+Broader runtime parity completion remains tracked by the separate parity and
 cutover specs.

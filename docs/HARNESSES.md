@@ -50,6 +50,26 @@ curl -X POST http://localhost:3850/api/harnesses/regenerate
 
 ---
 
+## Lossless Working Memory Fidelity (Closure Wave)
+
+This matrix is the source of truth for closure-wave fidelity and degraded
+mode expectations across harness paths.
+
+| Harness path | Prompt retrieval order | Thread-head continuity | Compaction artifact persistence | Forced post-event MEMORY refresh |
+|---|---|---|---|---|
+| TS daemon (primary) | hybrid -> temporal-fallback -> transcript-fallback | yes | yes | yes (session-summary + compaction-complete) |
+| daemon-rs shadow | hybrid-style scoped recall with temporal/transcript fallback | yes (agent-scoped retrieval path) | partial (hook route persistence only) | degraded (full event-driven refresh parity follows rust cutover wave) |
+
+Degraded mode rules:
+
+- When a harness/runtime path cannot emit every lifecycle event, Signet must
+  document the missing surface explicitly instead of implying full parity.
+- Compaction/session-summary forced-refresh guarantees are currently full in
+  TS daemon and degraded in daemon-rs shadow path.
+- Prompt-time anti-bleed scoping remains mandatory across all paths.
+
+---
+
 ## Claude Code
 
 Claude Code is Anthropic's official CLI for Claude. It reads configuration from `~/.claude/`.
