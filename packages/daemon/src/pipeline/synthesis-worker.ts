@@ -25,6 +25,11 @@ function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
 }
 
+function normalizeAgentId(agentId?: string): string {
+	const next = agentId?.trim();
+	return next && next.length > 0 ? next : "default";
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -44,13 +49,15 @@ const DRAIN_TIMEOUT_BUFFER_MS = 1_000;
 // Timestamp persistence
 // ---------------------------------------------------------------------------
 
-function getLastSynthesisPath(): string {
-	return join(getAgentsDir(), ".daemon", "last-synthesis.json");
+function getLastSynthesisPath(agentId?: string): string {
+	const key = normalizeAgentId(agentId);
+	const file = key === "default" ? "last-synthesis.json" : `last-synthesis.${encodeURIComponent(key)}.json`;
+	return join(getAgentsDir(), ".daemon", file);
 }
 
-export function readLastSynthesisTime(): number {
+export function readLastSynthesisTime(agentId?: string): number {
 	try {
-		const path = getLastSynthesisPath();
+		const path = getLastSynthesisPath(agentId);
 		if (!existsSync(path)) return 0;
 		const data = JSON.parse(readFileSync(path, "utf-8"));
 		return typeof data.lastRunAt === "number" ? data.lastRunAt : 0;
@@ -59,9 +66,9 @@ export function readLastSynthesisTime(): number {
 	}
 }
 
-function writeLastSynthesisTime(timestamp: number): void {
+function writeLastSynthesisTime(timestamp: number, agentId?: string): void {
 	try {
-		const path = getLastSynthesisPath();
+		const path = getLastSynthesisPath(agentId);
 		mkdirSync(join(getAgentsDir(), ".daemon"), { recursive: true });
 		writeFileSync(path, JSON.stringify({ lastRunAt: timestamp }));
 	} catch (e) {
@@ -294,11 +301,6 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		lockReleasedResolver = null;
 	}
 
-	function normalizeAgentId(agentId?: string): string {
-		const next = agentId?.trim();
-		return next && next.length > 0 ? next : "default";
-	}
-
 	function enqueuePendingForce(source: string, agentId?: string): void {
 		const key = normalizeAgentId(agentId);
 		const existing = pendingQueue.find((entry) => entry.agentId === key);
@@ -335,7 +337,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 				});
 				return "retry";
 			}
-			writeLastSynthesisTime(Date.now());
+			writeLastSynthesisTime(Date.now(), entry.agentId);
 			return "completed";
 		} finally {
 			currentRunPromise = null;
@@ -521,7 +523,8 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			}
 
 			try {
-				const lastRun = readLastSynthesisTime();
+				const key = normalizeAgentId(opts?.agentId);
+				const lastRun = readLastSynthesisTime(key);
 				const elapsed = Date.now() - lastRun;
 
 				if (!opts?.force && elapsed < MIN_INTERVAL_MS) {
@@ -540,7 +543,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 					scheduleTick(FORCE_RETRY_MS);
 				}
 				if (result !== "busy") {
-					writeLastSynthesisTime(Date.now());
+					writeLastSynthesisTime(Date.now(), key);
 					clearPendingForceFor(opts?.agentId);
 				}
 				return {

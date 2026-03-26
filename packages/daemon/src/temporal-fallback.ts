@@ -77,7 +77,7 @@ function toHits(
 ): TemporalHit[] {
 	const sameProject = (value: string | null): number => (project && value && project === value ? 0 : 1);
 	const baseMin = rankThreshold(termCount, anchorCount);
-	const crossMin = Math.min(termCount, baseMin + 1);
+	const crossMin = termCount === 1 ? 2 : Math.min(termCount, Math.max(2, baseMin + 1));
 	const scoped = rows
 		.map((row) => ({
 			id: row.id,

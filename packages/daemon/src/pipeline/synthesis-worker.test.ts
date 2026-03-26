@@ -243,6 +243,32 @@ describe("synthesis-worker", () => {
 		}
 	});
 
+	it("does not apply default-agent cooldown to a different agent scope", async () => {
+		mkdirSync(join(agentsDir, ".daemon"), { recursive: true });
+		writeFileSync(join(agentsDir, ".daemon", "last-synthesis.json"), JSON.stringify({ lastRunAt: Date.now() }));
+
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			const result = await worker.triggerNow({ agentId: "agent-b" });
+			expect(result).toEqual({
+				success: true,
+				skipped: false,
+				reason: undefined,
+			});
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
+	});
+
 	it("allows forced manual synthesis even when the last run was too recent", async () => {
 		mkdirSync(join(agentsDir, ".daemon"), { recursive: true });
 		writeFileSync(

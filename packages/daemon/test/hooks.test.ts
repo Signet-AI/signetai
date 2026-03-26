@@ -1125,6 +1125,62 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).not.toContain("node-bleed");
 	});
 
+	test.serial("keeps single-anchor temporal fallback project-scoped", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj-good|session:sess-good|harness:test",
+			"project:proj-good#session:sess-good#harness:test",
+			"/tmp/proj-good",
+			"sess-good",
+			"summary",
+			"sess-good",
+			"test",
+			"node-good",
+			"2026-03-25T10:05:00.000Z",
+			"ticket-7711 root cause and fix details",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.prepare(
+			`INSERT INTO memory_thread_heads (
+				agent_id, thread_key, label, project, session_key, source_type,
+				source_ref, harness, node_id, latest_at, sample, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"default",
+			"project:/tmp/proj-bleed|session:sess-bleed|harness:test",
+			"project:proj-bleed#session:sess-bleed#harness:test",
+			"/tmp/proj-bleed",
+			"sess-bleed",
+			"summary",
+			"sess-bleed",
+			"test",
+			"node-bleed",
+			"2026-03-25T10:06:00.000Z",
+			"ticket-7711 appears in another project context",
+			"2026-03-25T10:06:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "/tmp/proj-good",
+			sessionKey: "sess-current",
+			userPrompt: "ticket-7711",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("temporal-fallback");
+		expect(result.inject).toContain("node-good");
+		expect(result.inject).not.toContain("node-bleed");
+	});
+
 	test.serial("does not collapse distinct thread keys that share the same label", async () => {
 		createMemoryDb([]);
 		const db = openTestDb();
