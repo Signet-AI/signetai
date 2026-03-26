@@ -334,6 +334,36 @@ describe("synthesis-worker", () => {
 		}
 	});
 
+	it("keeps separate forced retry entries for different agents", async () => {
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			const lockToken = worker.acquireWriteLock();
+			expect(lockToken).not.toBeNull();
+
+			const first = await worker.triggerNow({ force: true, source: "session-summary", agentId: "agent-a" });
+			const second = await worker.triggerNow({ force: true, source: "compaction-complete", agentId: "agent-b" });
+			expect(first.skipped).toBe(true);
+			expect(second.skipped).toBe(true);
+			expect(worker.pendingForceCount).toBe(2);
+
+			if (lockToken === null) {
+				throw new Error("expected write lock token");
+			}
+			worker.releaseWriteLock(lockToken);
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
+	});
+
 	it("surfaces MEMORY.md head lease contention as a retryable skip", async () => {
 		mockWriteMemoryMd.mockImplementationOnce(() => ({
 			ok: false as const,

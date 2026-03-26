@@ -247,6 +247,7 @@ export interface SynthesisWorkerHandle {
 	releaseWriteLock(token: number): void;
 	readonly running: boolean;
 	readonly isSynthesizing: boolean;
+	readonly pendingForceCount: number;
 	/** Trigger an immediate synthesis (e.g. from API). */
 	triggerNow(opts?: { readonly force?: boolean; readonly source?: string; readonly agentId?: string }): Promise<{
 		success: boolean;
@@ -258,6 +259,11 @@ export interface SynthesisWorkerHandle {
 }
 
 export function startSynthesisWorker(config: PipelineSynthesisConfig): SynthesisWorkerHandle {
+	type PendingForce = {
+		readonly source: string;
+		readonly agentId: string;
+	};
+
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 	let isSynthesizing = false;
@@ -266,9 +272,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 	let activeLockToken: number | null = null;
 	let lockReleasedResolver: (() => void) | null = null;
 	let lockReleasedPromise: Promise<void> = Promise.resolve();
-	let pendingForce = false;
-	let pendingSource: string | null = null;
-	let pendingAgentId: string | undefined;
+	const pendingQueue: PendingForce[] = [];
 	const idleGapMs = config.idleGapMinutes * 60 * 1000;
 
 	function acquireWriteLock(): number | null {
@@ -289,39 +293,45 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		lockReleasedResolver = null;
 	}
 
-	function setPendingForce(source: string, agentId?: string): void {
-		pendingForce = true;
-		pendingSource = source;
+	function normalizeAgentId(agentId?: string): string {
 		const next = agentId?.trim();
-		pendingAgentId = next && next.length > 0 ? next : undefined;
+		return next && next.length > 0 ? next : "default";
 	}
 
-	function clearPendingForce(): void {
-		pendingForce = false;
-		pendingSource = null;
-		pendingAgentId = undefined;
+	function enqueuePendingForce(source: string, agentId?: string): void {
+		const key = normalizeAgentId(agentId);
+		const existing = pendingQueue.find((entry) => entry.agentId === key);
+		if (existing) return;
+		pendingQueue.push({ source, agentId: key });
 	}
 
-	async function runForcedDrainAttempt(source: string, agentId?: string): Promise<void> {
+	function clearPendingForceFor(agentId?: string): void {
+		const key = normalizeAgentId(agentId);
+		let idx = pendingQueue.findIndex((entry) => entry.agentId === key);
+		while (idx !== -1) {
+			pendingQueue.splice(idx, 1);
+			idx = pendingQueue.findIndex((entry) => entry.agentId === key);
+		}
+	}
+
+	async function runForcedDrainAttempt(entry: PendingForce): Promise<"completed" | "retry"> {
 		const lockToken = acquireWriteLock();
 		if (lockToken === null) {
-			scheduleTick(FORCE_RETRY_MS);
-			return;
+			return "retry";
 		}
 
 		try {
-			currentRunPromise = runSynthesis(config, agentId);
+			currentRunPromise = runSynthesis(config, entry.agentId);
 			const result = await currentRunPromise;
 			if (result === "busy") {
 				logger.info("synthesis", "Retrying forced synthesis after busy head", {
-					source,
-					agentId: agentId ?? "default",
+					source: entry.source,
+					agentId: entry.agentId,
 				});
-				scheduleTick(FORCE_RETRY_MS);
-				return;
+				return "retry";
 			}
 			writeLastSynthesisTime(Date.now());
-			clearPendingForce();
+			return "completed";
 		} finally {
 			currentRunPromise = null;
 			releaseWriteLock(lockToken);
@@ -332,11 +342,15 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		if (stopped) return;
 
 		try {
-			if (pendingForce) {
-				await runForcedDrainAttempt(pendingSource ?? "forced-retry", pendingAgentId);
-				if (!pendingForce) {
-					scheduleTick(CHECK_INTERVAL_MS);
+			const pending = pendingQueue[0];
+			if (pending) {
+				const state = await runForcedDrainAttempt(pending);
+				if (state === "completed") {
+					pendingQueue.shift();
+					scheduleTick(pendingQueue.length > 0 ? FORCE_RETRY_MS : CHECK_INTERVAL_MS);
+					return;
 				}
+				scheduleTick(FORCE_RETRY_MS);
 				return;
 			}
 
@@ -469,6 +483,9 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		get isSynthesizing() {
 			return isSynthesizing;
 		},
+		get pendingForceCount() {
+			return pendingQueue.length;
+		},
 		get lastRunAt() {
 			return readLastSynthesisTime();
 		},
@@ -479,7 +496,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			const lockToken = acquireWriteLock();
 			if (lockToken === null) {
 				if (opts?.force) {
-					setPendingForce(opts.source ?? "manual", opts.agentId);
+					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
 					scheduleTick(FORCE_RETRY_MS);
 					return {
 						success: false,
@@ -510,12 +527,12 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 				currentRunPromise = runSynthesis(config, opts?.agentId);
 				const result = await currentRunPromise;
 				if (result === "busy" && opts?.force) {
-					setPendingForce(opts.source ?? "manual", opts.agentId);
+					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
 					scheduleTick(FORCE_RETRY_MS);
 				}
 				if (result !== "busy") {
 					writeLastSynthesisTime(Date.now());
-					clearPendingForce();
+					clearPendingForceFor(opts?.agentId);
 				}
 				return {
 					success: result === "ok",
