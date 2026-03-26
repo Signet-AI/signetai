@@ -38,9 +38,11 @@ refuse to start under Node.
 
 On macOS, `SIGNET_SQLITE_PATH` is authoritative when set. If it points
 at a missing file, Signet refuses fallback so the misconfiguration is
-obvious. If it is unset, Signet checks `$SIGNET_PATH/libsqlite3.dylib`
-and then standard Homebrew SQLite paths so `sqlite-vec` can load before
-the first Bun connection opens.
+obvious. If it is unset, Signet checks
+`$SIGNET_WORKSPACE/libsqlite3.dylib`, where the workspace resolves from
+`SIGNET_PATH`, then `~/.config/signet/workspace.json`, then the default
+`~/.agents`, and then standard Homebrew SQLite paths so `sqlite-vec`
+can load before the first Bun connection opens.
 
 
 Running as a Service

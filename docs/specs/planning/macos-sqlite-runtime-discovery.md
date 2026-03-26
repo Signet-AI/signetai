@@ -45,7 +45,9 @@ Resolve a custom SQLite dylib on macOS in this order:
 
 1. `SIGNET_SQLITE_PATH` as an authoritative explicit override, fail
    closed if it is set but missing
-2. `$SIGNET_PATH/libsqlite3.dylib`
+2. `$SIGNET_WORKSPACE/libsqlite3.dylib` using the active workspace
+   resolution chain (`SIGNET_PATH` → stored workspace config →
+   default `~/.agents`)
 3. `/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib`
 4. `/usr/local/opt/sqlite/lib/libsqlite3.dylib`
 

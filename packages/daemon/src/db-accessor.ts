@@ -7,7 +7,7 @@
  */
 
 import { Database, type Statement } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -88,13 +88,46 @@ function configurePragmas(db: Database): void {
 // Cached extension path — resolved once at startup
 let vecExtPath: string | null | undefined;
 
+function readTrimmed(env: NodeJS.ProcessEnv, key: string): string | null {
+	const value = env[key];
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : null;
+}
+
+function readConfigHome(env: NodeJS.ProcessEnv): string {
+	const dir = readTrimmed(env, "XDG_CONFIG_HOME");
+	if (dir !== null) return dir;
+	return join(homedir(), ".config");
+}
+
+function readWorkspaceConfig(path: string): string | null {
+	if (!existsSync(path)) return null;
+
+	try {
+		const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+		if (typeof raw !== "object" || raw === null) return null;
+		if (!("workspace" in raw)) return null;
+		const value = raw.workspace;
+		if (typeof value !== "string") return null;
+		const trimmed = value.trim();
+		return trimmed.length > 0 ? trimmed : null;
+	} catch {
+		return null;
+	}
+}
+
 export function resolveSqliteAgentsDir(opts?: {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly home?: () => string;
 }): string {
 	const env = opts?.env ?? process.env;
-	const path = env.SIGNET_PATH?.trim();
-	if (path) return path;
+	const path = readTrimmed(env, "SIGNET_PATH");
+	if (path !== null) return path;
+
+	const cfg = readWorkspaceConfig(join(readConfigHome(env), "signet", "workspace.json"));
+	if (cfg !== null) return cfg;
+
 	return join((opts?.home ?? homedir)(), ".agents");
 }
 

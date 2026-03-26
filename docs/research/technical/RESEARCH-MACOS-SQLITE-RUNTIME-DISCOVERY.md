@@ -40,7 +40,8 @@ replacement problem.
 Preferred resolution order on macOS:
 
 1. `SIGNET_SQLITE_PATH` explicit override, authoritative when set
-2. `$SIGNET_PATH/libsqlite3.dylib` workspace-local fallback
+2. `$SIGNET_WORKSPACE/libsqlite3.dylib` workspace-local fallback using
+   the active workspace resolution chain
 3. Homebrew SQLite dylib paths
 
 If none are present, the daemon should emit an explicit warning that

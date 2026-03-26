@@ -710,9 +710,11 @@ overrides in CI or isolated local testing.
 On macOS, `SIGNET_SQLITE_PATH` can point at a `libsqlite3.dylib` build
 that supports `loadExtension()`. If it is set, Signet treats it as an
 authoritative override and refuses fallback if the file is missing. If
-it is unset, Signet checks `$SIGNET_PATH/libsqlite3.dylib` and then
-standard Homebrew SQLite locations before falling back to Apple's
-system SQLite.
+it is unset, Signet checks `$SIGNET_WORKSPACE/libsqlite3.dylib`, where
+`$SIGNET_WORKSPACE` resolves from `SIGNET_PATH`, then
+`~/.config/signet/workspace.json`, then the default `~/.agents`, before
+trying standard Homebrew SQLite locations and finally falling back to
+Apple's system SQLite.
 
 
 AGENTS.md

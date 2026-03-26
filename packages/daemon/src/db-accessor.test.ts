@@ -2,7 +2,7 @@
  * Tests for the DB accessor (singleton read/write transaction wrapper).
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -122,6 +122,31 @@ describe("resolveCustomSqlitePath", () => {
 		});
 
 		expect(dir).toBe("/tmp/home/.agents");
+	});
+
+	test("uses persisted workspace config when SIGNET_PATH is unset", () => {
+		const root = join(tmpdir(), `signet-workspace-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const cfgDir = join(root, "xdg", "signet");
+		mkdirSync(cfgDir, { recursive: true });
+		writeFileSync(
+			join(cfgDir, "workspace.json"),
+			JSON.stringify({
+				version: 1,
+				workspace: "/tmp/custom-workspace",
+				updatedAt: new Date().toISOString(),
+			}),
+		);
+
+		try {
+			const dir = resolveSqliteAgentsDir({
+				env: { XDG_CONFIG_HOME: join(root, "xdg") },
+				home: () => "/tmp/home",
+			});
+
+			expect(dir).toBe("/tmp/custom-workspace");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	test("prefers explicit SIGNET_SQLITE_PATH on macOS", () => {
