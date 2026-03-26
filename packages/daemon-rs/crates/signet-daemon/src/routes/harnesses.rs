@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{Json, extract::State};
@@ -202,48 +202,6 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
     find_signet_forge_binary_with_home(&home_dir(), agents_dir)
 }
 
-fn is_safe_path_component(value: &str) -> bool {
-    !value.is_empty()
-        && !value.contains('/')
-        && !value.contains('\\')
-        && value != "."
-        && value != ".."
-        && !value.contains("..")
-}
-
-fn normalize_safe_directory(dir: &Path) -> Option<PathBuf> {
-    let normalized = dir.canonicalize().ok().or_else(|| {
-        if dir.is_absolute()
-            && !dir
-                .components()
-                .any(|component| matches!(component, Component::ParentDir))
-        {
-            Some(dir.to_path_buf())
-        } else {
-            None
-        }
-    })?;
-    let metadata = std::fs::metadata(&normalized).ok()?;
-    if metadata.is_dir() {
-        Some(normalized)
-    } else {
-        None
-    }
-}
-
-fn directory_has_named_entry(dir: &Path, expected_name: &str) -> bool {
-    if !is_safe_path_component(expected_name) {
-        return false;
-    }
-    let Some(safe_dir) = normalize_safe_directory(dir) else {
-        return false;
-    };
-    let Ok(entries) = std::fs::read_dir(safe_dir) else {
-        return false;
-    };
-    entries.flatten().any(|entry| entry.file_name() == expected_name)
-}
-
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let home = home_dir();
     let base_path = state
@@ -257,6 +215,8 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
         .clone()
         .unwrap_or_else(|| signet_managed_forge_path(&home));
     let forge_exists = verified_forge_path.is_some();
+    let openclaw_exists = home.join(".openclaw").join("openclaw.json").exists()
+        || home.join(".clawdbot").join("clawdbot.json").exists();
     let claude_last_seen = state.harness_last_seen("claude-code").await;
     let opencode_last_seen = state.harness_last_seen("opencode").await;
     let openclaw_last_seen = state.harness_last_seen("openclaw").await;
@@ -281,7 +241,7 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
             "name": "OpenClaw",
             "id": "openclaw",
             "path": openclaw_path,
-            "exists": directory_has_named_entry(&base_path, "AGENTS.md"),
+            "exists": openclaw_exists,
             "lastSeen": openclaw_last_seen,
         }),
         json!({
