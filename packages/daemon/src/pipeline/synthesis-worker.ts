@@ -165,6 +165,10 @@ function getLastSessionEndTime(): number {
 type SynthesisResult = "ok" | "empty" | "failed" | "busy";
 export type SynthesisDrainResult = "completed" | "timeout";
 
+function shouldRecordSuccess(result: SynthesisResult): boolean {
+	return result === "ok" || result === "empty";
+}
+
 async function runSynthesis(config: PipelineSynthesisConfig, agentId?: string): Promise<SynthesisResult> {
 	logger.info("synthesis", "Starting scheduled synthesis", {
 		provider: config.provider,
@@ -330,14 +334,17 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		try {
 			currentRunPromise = runSynthesis(config, entry.agentId);
 			const result = await currentRunPromise;
-			if (result === "busy") {
+			if (result === "busy" || result === "failed") {
 				logger.info("synthesis", "Retrying forced synthesis after busy head", {
 					source: entry.source,
 					agentId: entry.agentId,
+					result,
 				});
 				return "retry";
 			}
-			writeLastSynthesisTime(Date.now(), entry.agentId);
+			if (shouldRecordSuccess(result)) {
+				writeLastSynthesisTime(Date.now(), entry.agentId);
+			}
 			return "completed";
 		} finally {
 			currentRunPromise = null;
@@ -419,7 +426,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			try {
 				currentRunPromise = runSynthesis(config);
 				const result = await currentRunPromise;
-				if (result !== "busy") {
+				if (shouldRecordSuccess(result)) {
 					// Busy means another writer currently owns the shared
 					// MEMORY.md head lease. Leave last-run untouched so the
 					// next tick retries instead of waiting a full interval.
@@ -542,11 +549,11 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 
 				currentRunPromise = runSynthesis(config, opts?.agentId);
 				const result = await currentRunPromise;
-				if (result === "busy" && opts?.force) {
+				if ((result === "busy" || result === "failed") && opts?.force) {
 					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
 					scheduleTick(FORCE_RETRY_MS);
 				}
-				if (result !== "busy") {
+				if (shouldRecordSuccess(result)) {
 					writeLastSynthesisTime(Date.now(), key);
 					clearPendingForceFor(opts?.agentId);
 				}

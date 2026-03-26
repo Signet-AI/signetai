@@ -235,6 +235,35 @@ fn escape_like(text: &str) -> String {
         .replace('_', "\\_")
 }
 
+fn extract_anchor_terms(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for token in text
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':' && c != '/' && c != '.' && c != '-')
+    {
+        if token.len() < 6 {
+            continue;
+        }
+        let has_digit = token.chars().any(|c| c.is_ascii_digit());
+        let has_marker = token.contains('_')
+            || token.contains(':')
+            || token.contains('/')
+            || token.contains('.')
+            || token.contains('-');
+        if !has_digit && !has_marker && token.len() < 18 {
+            continue;
+        }
+        if seen.insert(token.to_string()) {
+            out.push(token.to_string());
+            if out.len() >= 8 {
+                break;
+            }
+        }
+    }
+    out
+}
+
 fn format_metadata_header() -> String {
     let now = chrono::Local::now();
     format!(
@@ -426,7 +455,15 @@ pub async fn prompt_submit(
                 Err(_) => vec![],
             };
 
-            if !mem_rows.is_empty() {
+            let anchors = extract_anchor_terms(&cleaned);
+            let anchor_missed = !anchors.is_empty()
+                && !mem_rows
+                    .iter()
+                    .take(8)
+                    .map(|(_, content, _)| content.to_lowercase())
+                    .any(|content| anchors.iter().any(|anchor| content.contains(anchor)));
+
+            if !mem_rows.is_empty() && !anchor_missed {
                 let lines = mem_rows
                     .iter()
                     .map(|(_, content, created_at)| {
@@ -474,11 +511,10 @@ pub async fn prompt_submit(
                     if !needles.iter().any(|needle| !needle.is_empty() && lower.contains(needle)) {
                         continue;
                     }
-                    if let Some(ref want) = project
-                        && let Some(ref got) = row_project
-                        && got != want
-                    {
-                        continue;
+                    if let Some(ref want) = project {
+                        if row_project.as_deref() != Some(want.as_str()) {
+                            continue;
+                        }
                     }
                     picked.push(format!(
                         "- [node {}] {} ({}, {})",
