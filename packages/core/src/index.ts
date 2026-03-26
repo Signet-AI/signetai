@@ -153,6 +153,7 @@ export {
 	OPTIONAL_IDENTITY_KEYS,
 	detectExistingSetup,
 	findSignetForgeBinary,
+	isCompatibleForgeBinary,
 	isSignetForgeBinary,
 	loadIdentityFiles,
 	loadIdentityFilesSync,

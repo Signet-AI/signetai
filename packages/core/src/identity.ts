@@ -21,6 +21,23 @@ const SIGNET_FORGE_FALLBACK_MARKERS = [
 	"Starting Signet daemon",
 	"Signet provides memory, identity, and extraction for Forge",
 ];
+const COMPATIBLE_FORGE_MARKER_GROUPS = [
+	[SIGNET_FORGE_PRIMARY_MARKER, "Forge — First Run", "Forge — Provider auth needed", "Forge TUI starting — model:"],
+	[
+		"FORGE_SIGNET_TOKEN",
+		"SIGNET_AUTH_TOKEN",
+		"SIGNET_TOKEN",
+		"Signet daemon URL",
+		"Signet provides memory, identity, and extraction for Forge",
+	],
+	[
+		"signet-dark",
+		"Dashboard (Ctrl+D)",
+		"/forge-usage",
+		"Switch theme (signet-dark, signet-light, midnight, amber)",
+		"Open main dashboard in browser",
+	],
+] as const;
 
 /**
  * Returns the base path for agent-specific files.
@@ -219,6 +236,19 @@ export function isSignetForgeBinary(binaryPath: string): boolean {
 	}
 }
 
+export function isCompatibleForgeBinary(binaryPath: string): boolean {
+	if (!existsSync(binaryPath)) return false;
+	try {
+		const binary = readFileSync(binaryPath);
+		if (binary.includes(Buffer.from(SIGNET_FORGE_PRIMARY_MARKER))) return true;
+		return COMPATIBLE_FORGE_MARKER_GROUPS.every((group) =>
+			group.some((marker) => binary.includes(Buffer.from(marker))),
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function findSignetForgeBinary(agentsDir?: string, home = homedir()): string | null {
 	const candidates = signetForgeCandidatePaths(home);
 	if (agentsDir) {
@@ -228,7 +258,7 @@ export function findSignetForgeBinary(agentsDir?: string, home = homedir()): str
 		}
 	}
 	for (const candidate of candidates) {
-		if (isSignetForgeBinary(candidate)) return candidate;
+		if (isCompatibleForgeBinary(candidate)) return candidate;
 	}
 	try {
 		const lookup = process.platform === "win32" ? "where" : "which";
@@ -240,7 +270,7 @@ export function findSignetForgeBinary(agentsDir?: string, home = homedir()): str
 			.map((line) => line.trim())
 			.filter(Boolean);
 		for (const candidate of output) {
-			if (isSignetForgeBinary(candidate)) return candidate;
+			if (isCompatibleForgeBinary(candidate)) return candidate;
 		}
 	} catch {
 		return null;

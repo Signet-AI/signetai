@@ -15,6 +15,28 @@ const FORGE_FALLBACK_MARKERS: &[&str] = &[
     "Starting Signet daemon",
     "Signet provides memory, identity, and extraction for Forge",
 ];
+const FORGE_COMPAT_MARKER_GROUPS: &[&[&str]] = &[
+    &[
+        FORGE_PRIMARY_MARKER,
+        "Forge — First Run",
+        "Forge — Provider auth needed",
+        "Forge TUI starting — model:",
+    ],
+    &[
+        "FORGE_SIGNET_TOKEN",
+        "SIGNET_AUTH_TOKEN",
+        "SIGNET_TOKEN",
+        "Signet daemon URL",
+        "Signet provides memory, identity, and extraction for Forge",
+    ],
+    &[
+        "signet-dark",
+        "Dashboard (Ctrl+D)",
+        "/forge-usage",
+        "Switch theme (signet-dark, signet-light, midnight, amber)",
+        "Open main dashboard in browser",
+    ],
+];
 
 fn home_dir() -> PathBuf {
     std::env::var("HOME")
@@ -71,10 +93,25 @@ fn is_signet_forge_binary(path: &std::path::Path) -> bool {
     matches >= 2
 }
 
+fn is_compatible_forge_binary(path: &std::path::Path) -> bool {
+    if is_signet_forge_binary(path) {
+        return true;
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    FORGE_COMPAT_MARKER_GROUPS.iter().all(|group| {
+        group.iter().any(|marker| {
+            bytes.windows(marker.len())
+                .any(|w| w == marker.as_bytes())
+        })
+    })
+}
+
 fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
     let home = home_dir();
     for candidate in forge_candidate_paths(&home, agents_dir) {
-        if candidate.exists() && is_signet_forge_binary(&candidate) {
+        if candidate.exists() && is_compatible_forge_binary(&candidate) {
             return Some(candidate);
         }
     }
@@ -88,7 +125,7 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
     }
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let candidate = PathBuf::from(line.trim());
-        if candidate.exists() && is_signet_forge_binary(&candidate) {
+        if candidate.exists() && is_compatible_forge_binary(&candidate) {
             return Some(candidate);
         }
     }

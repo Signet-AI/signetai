@@ -32,6 +32,8 @@ jobs:
             | grep -v '\.md$' \
             | grep -v '^.github/workflows/forge-release.yml$' \
             | grep -v '^packages/forge/' \
+            | grep -v '^packages/cli/templates/forge/manifest.json$' \
+            | grep -v '^packages/signetai/templates/forge/manifest.json$' \
             | grep -v '\.jpg$' \
             | grep -v '\.jpeg$' \
             | grep -v '\.png$' \
