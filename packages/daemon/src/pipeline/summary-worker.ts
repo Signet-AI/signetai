@@ -496,7 +496,13 @@ async function processJob(
 	try {
 		const { getSynthesisWorker } = await import("./index");
 		void getSynthesisWorker()
-			?.triggerNow()
+			?.triggerNow({ force: true, source: "session-summary" })
+			.then((result) => {
+				if (!result.skipped) return;
+				logger.info("summary-worker", "Skipped MEMORY.md synthesis after session summary", {
+					reason: result.reason,
+				});
+			})
 			.catch((error) => {
 				logger.warn("summary-worker", "Failed to trigger MEMORY.md synthesis after session summary", {
 					error: error instanceof Error ? error.message : String(error),

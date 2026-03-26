@@ -6078,11 +6078,20 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			resetPromptDedup(body.sessionKey);
 		}
 
-		void getSynthesisWorker()?.triggerNow().catch((error) => {
-			logger.warn("synthesis", "Failed to trigger MEMORY.md synthesis after compaction", {
-				error: error instanceof Error ? error.message : String(error),
+		void getSynthesisWorker()
+			?.triggerNow({ force: true, source: "compaction-complete" })
+			.then((result) => {
+				if (!result.skipped) return;
+				logger.info("synthesis", "Skipped MEMORY.md synthesis after compaction", {
+					reason: result.reason,
+					sessionKey: body.sessionKey,
+				});
+			})
+			.catch((error) => {
+				logger.warn("synthesis", "Failed to trigger MEMORY.md synthesis after compaction", {
+					error: error instanceof Error ? error.message : String(error),
+				});
 			});
-		});
 
 		return c.json({
 			success: true,

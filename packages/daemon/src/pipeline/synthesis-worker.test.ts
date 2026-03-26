@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -211,6 +211,67 @@ describe("synthesis-worker", () => {
 			reason: "Synthesis worker stopped",
 		});
 		expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+	});
+
+	it("skips non-forced manual synthesis when the last run was too recent", async () => {
+		mkdirSync(join(agentsDir, ".daemon"), { recursive: true });
+		writeFileSync(
+			join(agentsDir, ".daemon", "last-synthesis.json"),
+			JSON.stringify({ lastRunAt: Date.now() - 5 * 60 * 1000 }),
+		);
+
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			const result = await worker.triggerNow();
+			expect(result).toEqual({
+				success: false,
+				skipped: true,
+				reason: "Too recent — last run 5m ago, minimum is 60m",
+			});
+			expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
+	});
+
+	it("allows forced manual synthesis even when the last run was too recent", async () => {
+		mkdirSync(join(agentsDir, ".daemon"), { recursive: true });
+		writeFileSync(
+			join(agentsDir, ".daemon", "last-synthesis.json"),
+			JSON.stringify({ lastRunAt: Date.now() - 5 * 60 * 1000 }),
+		);
+
+		const worker = startSynthesisWorker({
+			enabled: true,
+			provider: "claude-code",
+			model: "sonnet",
+			timeout: 1000,
+			maxTokens: 8000,
+			idleGapMinutes: 15,
+		});
+
+		try {
+			const result = await worker.triggerNow({ force: true, source: "session-summary" });
+			expect(result).toEqual({
+				success: true,
+				skipped: false,
+				reason: undefined,
+			});
+			expect(mockGenerateWithTracking).toHaveBeenCalledTimes(1);
+			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# MEMORY\n", { owner: "synthesis-worker" });
+		} finally {
+			worker.stop();
+			expect(await worker.drain()).toBe("completed");
+		}
 	});
 
 	it("surfaces MEMORY.md head lease contention as a retryable skip", async () => {

@@ -246,7 +246,11 @@ export interface SynthesisWorkerHandle {
 	readonly running: boolean;
 	readonly isSynthesizing: boolean;
 	/** Trigger an immediate synthesis (e.g. from API). */
-	triggerNow(): Promise<{ success: boolean; skipped: boolean; reason?: string }>;
+	triggerNow(opts?: { readonly force?: boolean; readonly source?: string }): Promise<{
+		success: boolean;
+		skipped: boolean;
+		reason?: string;
+	}>;
 	/** Last synthesis timestamp. */
 	readonly lastRunAt: number;
 }
@@ -414,7 +418,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		get lastRunAt() {
 			return readLastSynthesisTime();
 		},
-		async triggerNow() {
+		async triggerNow(opts) {
 			if (stopped) {
 				return { success: false, skipped: true, reason: "Synthesis worker stopped" };
 			}
@@ -431,9 +435,12 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 				const lastRun = readLastSynthesisTime();
 				const elapsed = Date.now() - lastRun;
 
-				if (elapsed < MIN_INTERVAL_MS) {
+				if (!opts?.force && elapsed < MIN_INTERVAL_MS) {
 					const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
-					logger.info("synthesis", "Skipping manual trigger", { reason });
+					logger.info("synthesis", "Skipping manual trigger", {
+						reason,
+						source: opts?.source ?? "manual",
+					});
 					return { success: false, skipped: true, reason };
 				}
 
