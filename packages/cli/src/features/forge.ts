@@ -341,12 +341,9 @@ export function readForgeVersionFromBinaryMetadata(binaryPath: string): string |
 	try {
 		const raw = readFileSync(binaryPath);
 		const text = raw.toString("utf8");
-		const matches = [...text.matchAll(/\bforge[\s/-]?v?(\d+\.\d+\.\d+)\b/gi), ...text.matchAll(/\b(\d+\.\d+\.\d+)\b/g)]
-			.map((match) => match[1])
-			.filter(Boolean);
+		const matches = [...text.matchAll(/\bforge[\s/-]?v?(\d+\.\d+\.\d+)\b/gi)].map((match) => match[1]).filter(Boolean);
 		if (matches.length === 0) return null;
-		matches.sort((left, right) => compareSemver(right, left));
-		return matches[0] ?? null;
+		return matches[matches.length - 1] ?? null;
 	} catch {
 		return null;
 	}

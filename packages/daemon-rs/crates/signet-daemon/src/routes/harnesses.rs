@@ -202,18 +202,13 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
     find_signet_forge_binary_with_home(&home_dir(), agents_dir)
 }
 
-fn resolve_safe_agents_dir(base_path: &std::path::Path, home: &std::path::Path) -> Option<PathBuf> {
-    let canonical_home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-    let canonical_base = base_path.canonicalize().ok()?;
-    if !canonical_base.starts_with(&canonical_home) {
-        return None;
-    }
-    Some(canonical_base)
+fn resolve_safe_agents_dir(base_path: &std::path::Path) -> Option<PathBuf> {
+    base_path.canonicalize().ok()
 }
 
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let home = home_dir();
-    let safe_agents_dir = resolve_safe_agents_dir(&state.config.base_path, &home);
+    let safe_agents_dir = resolve_safe_agents_dir(&state.config.base_path);
     let openclaw_path = safe_agents_dir
         .as_ref()
         .map(|dir| dir.join("AGENTS.md"))

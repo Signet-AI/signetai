@@ -246,4 +246,15 @@ describe("Forge version metadata parsing", () => {
 			rmSync(tempHome, { recursive: true, force: true });
 		}
 	});
+
+	it("does not over-select unrelated higher semver strings in binary metadata", () => {
+		const tempHome = mkdtempSync(join(tmpdir(), "forge-version-"));
+		try {
+			const binaryPath = join(tempHome, "forge");
+			writeFileSync(binaryPath, "forge-v1.2.3 dependency-9.9.9 forge 1.2.3");
+			expect(readForgeVersionFromBinaryMetadata(binaryPath)).toBe("1.2.3");
+		} finally {
+			rmSync(tempHome, { recursive: true, force: true });
+		}
+	});
 });
