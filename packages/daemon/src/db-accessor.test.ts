@@ -2,10 +2,16 @@
  * Tests for the DB accessor (singleton read/write transaction wrapper).
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor, resolveCustomSqlitePath } from "./db-accessor";
+import {
+	closeDbAccessor,
+	getDbAccessor,
+	initDbAccessor,
+	resolveCustomSqlitePath,
+	resolveSqliteAgentsDir,
+} from "./db-accessor";
 
 function tmpDbPath(): string {
 	const dir = join(tmpdir(), `signet-accessor-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -109,6 +115,15 @@ describe("DbAccessor", () => {
 });
 
 describe("resolveCustomSqlitePath", () => {
+	test("defaults workspace discovery to the home-scoped agents dir when SIGNET_PATH is unset", () => {
+		const dir = resolveSqliteAgentsDir({
+			env: {},
+			home: () => "/tmp/home",
+		});
+
+		expect(dir).toBe("/tmp/home/.agents");
+	});
+
 	test("prefers explicit SIGNET_SQLITE_PATH on macOS", () => {
 		const found = new Set([
 			"/tmp/custom/libsqlite3.dylib",
@@ -179,5 +194,22 @@ describe("resolveCustomSqlitePath", () => {
 		});
 
 		expect(result).toBeNull();
+	});
+});
+
+describe("sqlite runtime ordering", () => {
+	test("keeps bun sqlite construction centralized in db-accessor", async () => {
+		const hits: string[] = [];
+
+		for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: import.meta.dir })) {
+			if (file.endsWith(".test.ts") || file.endsWith(".bench.ts")) continue;
+
+			const text = readFileSync(join(import.meta.dir, file), "utf8");
+			if (text.includes("new Database(")) {
+				hits.push(file);
+			}
+		}
+
+		expect(hits).toEqual(["db-accessor.ts"]);
 	});
 });

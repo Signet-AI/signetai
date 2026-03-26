@@ -88,6 +88,16 @@ function configurePragmas(db: Database): void {
 // Cached extension path — resolved once at startup
 let vecExtPath: string | null | undefined;
 
+export function resolveSqliteAgentsDir(opts?: {
+	readonly env?: NodeJS.ProcessEnv;
+	readonly home?: () => string;
+}): string {
+	const env = opts?.env ?? process.env;
+	const path = env.SIGNET_PATH?.trim();
+	if (path) return path;
+	return join((opts?.home ?? homedir)(), ".agents");
+}
+
 export function resolveCustomSqlitePath(opts?: {
 	readonly platform?: NodeJS.Platform;
 	readonly env?: NodeJS.ProcessEnv;
@@ -99,7 +109,7 @@ export function resolveCustomSqlitePath(opts?: {
 
 	const env = opts?.env ?? process.env;
 	const exists = opts?.exists ?? existsSync;
-	const agentsDir = opts?.agentsDir ?? env.SIGNET_PATH ?? join(homedir(), ".agents");
+	const agentsDir = opts?.agentsDir ?? resolveSqliteAgentsDir({ env });
 
 	const envPath = env.SIGNET_SQLITE_PATH;
 	if (envPath) {
@@ -130,13 +140,13 @@ function explainSqliteSetup(agentsDir: string): string {
 	].join(" ");
 }
 
-function configureCustomSqlite(path: string): void {
+function configureCustomSqlite(): void {
 	sqliteChoice = null;
 	sqliteAttempt = null;
 	sqliteWarning = null;
 	if (process.platform !== "darwin") return;
 
-	const agentsDir = process.env.SIGNET_PATH ?? dirname(dirname(path));
+	const agentsDir = resolveSqliteAgentsDir();
 	const envPath = process.env.SIGNET_SQLITE_PATH;
 	if (envPath && !existsSync(envPath)) {
 		sqliteAttempt = envPath;
@@ -251,7 +261,7 @@ export function initDbAccessor(path: string): void {
 
 	dbPath = path;
 
-	configureCustomSqlite(path);
+	configureCustomSqlite();
 
 	const writeConn = new Database(path);
 	configurePragmas(writeConn);
