@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{Json, extract::State};
@@ -143,8 +143,43 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-fn directory_has_named_entry(dir: &std::path::Path, expected_name: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+fn is_safe_path_component(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains('/')
+        && !value.contains('\\')
+        && value != "."
+        && value != ".."
+        && !value.contains("..")
+}
+
+fn normalize_safe_directory(dir: &Path) -> Option<PathBuf> {
+    let normalized = dir.canonicalize().ok().or_else(|| {
+        if dir.is_absolute()
+            && !dir
+                .components()
+                .any(|component| matches!(component, Component::ParentDir))
+        {
+            Some(dir.to_path_buf())
+        } else {
+            None
+        }
+    })?;
+    let metadata = std::fs::metadata(&normalized).ok()?;
+    if metadata.is_dir() {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn directory_has_named_entry(dir: &Path, expected_name: &str) -> bool {
+    if !is_safe_path_component(expected_name) {
+        return false;
+    }
+    let Some(safe_dir) = normalize_safe_directory(dir) else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(safe_dir) else {
         return false;
     };
     entries.flatten().any(|entry| entry.file_name() == expected_name)
