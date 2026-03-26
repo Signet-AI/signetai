@@ -230,8 +230,8 @@ describe("quantize + dequantize", () => {
 
 		for (let i = 0; i < vectors.length; i++) {
 			const sim = cosine(vectors[i], restored[i]);
-			// Quantization introduces error; cosine > 0.7 is reasonable for 4-bit
-			expect(sim).toBeGreaterThan(0.7);
+			// With maxDev stored, round-trip accuracy is high; cosine > 0.85 for 4-bit at dim=64
+			expect(sim).toBeGreaterThan(0.85);
 		}
 	});
 

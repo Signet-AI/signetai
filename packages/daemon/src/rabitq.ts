@@ -25,6 +25,8 @@ export interface CompressedVector {
 	norm: number;
 	/** Mean of the rotated vector components. */
 	mean: number;
+	/** Max absolute deviation from mean (per-vector scale factor for dequantization). */
+	maxDev: number;
 	/** Packed quantized indices (2 indices per byte for 4-bit). */
 	codes: Uint8Array;
 }
@@ -585,6 +587,7 @@ export function quantize(
 			id: ids[vi],
 			norm,
 			mean,
+			maxDev: scale,
 			codes,
 		});
 	}
@@ -644,13 +647,10 @@ export function dequantize(index: CompressedIndex): Float32Array[] {
 			}
 		}
 
-		// 2. The centroid values are in [-1, 1] (normalized space).
-		// We stored mean but not maxDev — for dequantization we estimate
-		// scale from the norm and mean. Since we're doing approximate
-		// reconstruction, we use norm/sqrt(dim) as scale estimate.
-		// rotated[i] ≈ (original_rotated[i] - mean) / scale
-		// So: original_rotated[i] ≈ rotated[i] * scale + mean
-		const scale = cv.norm / Math.sqrt(dim);
+		// 2. Rescale centroid values from [-1, 1] back to original rotated space.
+		// During quantization: normalized[i] = (rotated[i] - mean) / maxDev
+		// So: rotated[i] = centroid[idx] * maxDev + mean
+		const scale = cv.maxDev;
 		for (let i = 0; i < dim; i++) {
 			rotated[i] = rotated[i] * scale + cv.mean;
 		}
@@ -777,14 +777,14 @@ export function compressedSearch(query: Float32Array, index: CompressedIndex, to
 			}
 		}
 
-		// The centroid values represent (rotated[i] - mean) / scale,
+		// The centroid values represent (rotated[i] - mean) / maxDev,
 		// and we want dot(query, original_vector) ≈ dot(R*query, R*vec)
 		// = dot(rotatedQuery, rotated).
 		//
-		// rotated[i] ≈ codebook[idx] * scale + mean
-		// dot ≈ sum_i rotatedQuery[i] * (codebook[idx_i] * scale + mean)
-		//      = scale * sum_i rotatedQuery[i] * codebook[idx_i] + mean * sum_i rotatedQuery[i]
-		const scale = cv.norm / Math.sqrt(dim);
+		// rotated[i] ≈ codebook[idx] * maxDev + mean
+		// dot ≈ sum_i rotatedQuery[i] * (codebook[idx_i] * maxDev + mean)
+		//      = maxDev * sum_i rotatedQuery[i] * codebook[idx_i] + mean * sum_i rotatedQuery[i]
+		const scale = cv.maxDev;
 		let queryRotatedSum = 0;
 		for (let i = 0; i < dim; i++) {
 			queryRotatedSum += rotatedQuery[i];

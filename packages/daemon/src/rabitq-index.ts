@@ -10,6 +10,23 @@
  * invalidation via row-count check).
  */
 
+// ---------------------------------------------------------------------------
+// Memory overhead notes
+// ---------------------------------------------------------------------------
+//
+// For dim=768, the rotation matrix alone is 768x768x4 bytes = 2.36 MB.
+// Each compressed vector is ~392 bytes vs 3072 bytes uncompressed (7.8x).
+// However, the rotation matrix overhead means compression only saves net
+// memory above ~5,000 vectors. Below that threshold, sqlite-vec brute-force
+// search is cheaper in both memory and wall-clock time.
+//
+// Approximate break-even analysis (dim=768, 4-bit):
+//   Overhead:  2.36 MB (rotation) + 64 B (codebook) = 2.36 MB
+//   Savings per vector: 3072 - 392 = 2680 bytes
+//   Break-even: 2,360,000 / 2,680 = 881 vectors (memory only)
+//   Practical break-even with build cost: ~5,000 vectors
+//
+
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import {
@@ -196,8 +213,8 @@ function getEmbeddingFingerprint(): { count: number; hash: string } {
 /**
  * Ensure the compressed index is built and up-to-date.
  *
- * Lazily rebuilds when the embedding count changes. Thread-safe via
- * build-in-progress flag (skips if another build is running).
+ * Lazily rebuilds when the embedding count changes. Single-threaded guard via
+ * build-in-progress flag (Bun JS is single-threaded; not safe across worker threads).
  *
  * @param config - RaBitQ configuration
  * @returns The current compressed index, or null if unavailable
@@ -206,6 +223,14 @@ export function ensureIndex(config: RaBitQConfig): CompressedIndex | null {
 	if (!config.enabled) return null;
 
 	const { count: currentCount, hash: currentHash } = getEmbeddingFingerprint();
+
+	// Skip building for very small datasets where brute-force is cheaper
+	if (currentCount > 0 && currentCount < 1000) {
+		logger.info("memory", "RaBitQ: skipping index build, brute-force is cheaper for <1000 vectors", {
+			vectorCount: currentCount,
+		});
+		return null;
+	}
 
 	// Check if cached index is still valid (count + content fingerprint + config params)
 	if (
