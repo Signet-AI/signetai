@@ -26,6 +26,7 @@ agent:
 
 # AI tools this agent works with
 harnesses:
+  - forge
   - claude-code
   - codex
   - opencode
@@ -84,7 +85,7 @@ memory:
   
   # MEMORY.md synthesis configuration
   synthesis:
-    # Which harness performs the synthesis (openclaw, claude-code, codex, opencode)
+    # Which harness performs the synthesis (forge, openclaw, claude-code, codex, opencode)
     harness: openclaw
     
     # Model to use for synthesis (harness-specific format)

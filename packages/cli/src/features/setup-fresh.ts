@@ -179,7 +179,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 
 		if (configuredHarnesses.length > 0) {
 			console.log();
-			console.log(chalk.dim("  Hooks configured for:"));
+			console.log(chalk.dim("  Harnesses configured:"));
 			for (const harness of configuredHarnesses) {
 				console.log(chalk.dim(`    ✓ ${harness}`));
 			}

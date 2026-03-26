@@ -26,6 +26,7 @@ agent:
 
 # AI tools this agent works with
 harnesses:
+  - forge
   - claude-code
   - codex
   - opencode
@@ -58,12 +59,15 @@ search:
   # Alpha: weight for vector similarity (1-alpha = BM25 keyword weight)
   # 0.7 = 70% semantic, 30% keyword
   alpha: 0.7
-  
+
   # Candidates to fetch from each source before blending
   top_k: 20
-  
+
   # Minimum score threshold for results
   min_score: 0.3
+
+  # Spaced rehearsal — boosts frequently-accessed memories
+  rehearsal_enabled: true
 
 # ============================================================================
 # Memory Configuration
@@ -72,10 +76,7 @@ search:
 memory:
   # Database location (relative to ~/.agents/)
   database: memory/memories.db
-  
-  # Vector storage
-  vectors: memory/vectors.zvec
-  
+
   # Character budget for session context injection
   session_budget: 2000
   
@@ -84,7 +85,7 @@ memory:
   
   # MEMORY.md synthesis configuration
   synthesis:
-    # Which harness performs the synthesis (openclaw, claude-code, codex, opencode)
+    # Which harness performs the synthesis (forge, openclaw, claude-code, codex, opencode)
     harness: openclaw
     
     # Model to use for synthesis (harness-specific format)
@@ -96,6 +97,65 @@ memory:
     
     # Maximum tokens for synthesis output
     max_tokens: 4000
+
+  # Pipeline V2 — automatic memory extraction from conversations
+  pipelineV2:
+    # Master switch (true = run pipeline workers)
+    # When false, shadowMode is ignored and the pipeline is fully disabled.
+    enabled: true
+
+    # Shadow mode: extract but don't write to DB (dry-run for testing)
+    # shadowMode: false
+
+    # Freeze all mutations (reads only, no writes/updates/deletes)
+    # mutationsFrozen: false
+
+    # Extraction provider and model
+    # Safety: on a VPS, set provider: none unless you explicitly want
+    # background extraction.
+    # Intended usage: Claude Code on haiku, Codex on GPT Mini with a
+    # Pro/Max subscription, or local Ollama at qwen3:4b or larger.
+    # Remote API extraction can rack up extreme fees fast.
+    extraction:
+      # "none", "claude-code" (Claude CLI), "codex" (Codex CLI),
+      # "opencode" (OpenCode), or "ollama" (local)
+      provider: claude-code
+      model: haiku
+      # endpoint/base_url override (ollama base URL, or OpenCode server URL when provider=opencode)
+      # endpoint: http://127.0.0.1:11434  # ollama
+      # endpoint: http://127.0.0.1:4096   # opencode
+      # timeout: 120000
+      # minConfidence: 0.7
+
+    # Knowledge graph — boosts related memories in search results
+    graph:
+      enabled: true
+      # boostWeight: 0.15
+
+    # Reranker — re-scores search results for better relevance
+    reranker:
+      enabled: true
+      # topN: 20
+
+    # Autonomous maintenance — prunes, merges, and updates memories
+    autonomous:
+      enabled: true
+      allowUpdateDelete: true
+      maintenanceMode: execute  # "execute" or "observe"
+      # maintenanceIntervalMs: 1800000  # 30 min
+
+    # Semantic contradiction detection — flags conflicting memory updates
+    semanticContradictionEnabled: true
+
+    # Predictor — ML-based memory relevance scoring
+    predictor:
+      enabled: true
+
+    # Agent feedback loop for memory relevance
+    predictorPipeline:
+      agentFeedback: true
+      # Opt-in: contribute anonymized training data
+      trainingTelemetry: false
 
 # ============================================================================
 # Hooks Configuration
@@ -113,7 +173,7 @@ hooks:
     includeRecentContext: true
     # Weight recent memories higher (0-1, higher = more recency bias)
     recencyBias: 0.7
-  
+
   # Called before session compaction/summarization
   preCompaction:
     # Guidelines for the agent when generating session summary
@@ -124,7 +184,7 @@ hooks:
       - User preferences discovered
       - Open threads or todos
       - Any errors or issues encountered
-      
+
       Keep the summary concise but complete.
     # Include recent memories for context when summarizing
     includeRecentMemories: true

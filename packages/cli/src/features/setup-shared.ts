@@ -2,12 +2,18 @@ import { OpenClawConnector } from "@signet/connector-openclaw";
 import type { SetupDetection } from "@signet/core";
 import chalk from "chalk";
 
-export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "codex";
+export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "codex" | "forge";
 export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
 export type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
 
-export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = ["claude-code", "opencode", "openclaw", "codex"];
+export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
+	"claude-code",
+	"opencode",
+	"openclaw",
+	"codex",
+	"forge",
+];
 export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "ollama", "openai", "none"];
 export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
 	"claude-code",
@@ -47,6 +53,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.openclaw) harnesses.push("OpenClaw");
 	if (detection.harnesses.opencode) harnesses.push("OpenCode");
 	if (detection.harnesses.codex) harnesses.push("Codex");
+	if (detection.harnesses.forge) harnesses.push("Forge");
 	if (harnesses.length > 0) {
 		lines.push(`    ✓ Harnesses: ${harnesses.join(", ")}`);
 	}
@@ -81,10 +88,7 @@ export function detectPreferredOpenClawWorkspace(defaultPath: string, deps: Path
 	return ranked.length === 1 ? ranked[0].workspacePath : null;
 }
 
-export function normalizeHarnessList(
-	rawValues: readonly string[] | undefined,
-	deps: HarnessDeps,
-): HarnessChoice[] {
+export function normalizeHarnessList(rawValues: readonly string[] | undefined, deps: HarnessDeps): HarnessChoice[] {
 	if (!rawValues || rawValues.length === 0) {
 		return [];
 	}

@@ -59,6 +59,7 @@ import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerAppCommands } from "./commands/app.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
+import { registerForgeCommands } from "./commands/forge.js";
 import { registerGitCommands } from "./commands/git.js";
 import { registerHookCommands } from "./commands/hook.js";
 import { registerMemoryCommands } from "./commands/memory.js";
@@ -80,6 +81,7 @@ import {
 	migrateSchema,
 	showLogs,
 } from "./features/daemon.js";
+import { doctorForge, installForge, showForgeStatus, updateForge } from "./features/forge.js";
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { importFromGitHub } from "./features/import.js";
 import { setupWizard } from "./features/setup.js";
@@ -268,6 +270,11 @@ async function configureHarnessHooks(
 					}
 				}
 			}
+			break;
+		}
+		case "forge": {
+			// Forge is a first-party native harness managed as its own product.
+			// There are no hook/config patches to apply from the Signet CLI.
 			break;
 		}
 	}
@@ -1284,6 +1291,37 @@ registerDaemonCommands(program, {
 	doStop: (options) => doStop(options, daemonDeps),
 	showLogs: (options) => showLogs(options, daemonDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
+});
+
+registerForgeCommands(program, {
+	doctorForge: (options) =>
+		doctorForge(options, {
+			agentsDir: AGENTS_DIR,
+			defaultPort: DEFAULT_PORT,
+			getTemplatesDir,
+			isDaemonRunning,
+		}),
+	installForge: (options) =>
+		installForge(options, {
+			agentsDir: AGENTS_DIR,
+			defaultPort: DEFAULT_PORT,
+			getTemplatesDir,
+			isDaemonRunning,
+		}),
+	showForgeStatus: (options) =>
+		showForgeStatus(options, {
+			agentsDir: AGENTS_DIR,
+			defaultPort: DEFAULT_PORT,
+			getTemplatesDir,
+			isDaemonRunning,
+		}),
+	updateForge: (options) =>
+		updateForge(options, {
+			agentsDir: AGENTS_DIR,
+			defaultPort: DEFAULT_PORT,
+			getTemplatesDir,
+			isDaemonRunning,
+		}),
 });
 
 // ============================================================================

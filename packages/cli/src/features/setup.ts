@@ -266,6 +266,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "codex", name: "Codex", checked: existingHarnesses.includes("codex") },
 		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
+		{ value: "forge", name: "Forge (native Signet harness)", checked: existingHarnesses.includes("forge") },
 	];
 
 	let harnesses: string[] = [];

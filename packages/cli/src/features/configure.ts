@@ -252,6 +252,7 @@ async function configureHarnesses(yaml: string, deps: Deps, dir: string): Promis
 			{ value: "codex", name: "Codex" },
 			{ value: "opencode", name: "OpenCode" },
 			{ value: "openclaw", name: "OpenClaw" },
+			{ value: "forge", name: "Forge" },
 			{ value: "cursor", name: "Cursor" },
 			{ value: "windsurf", name: "Windsurf" },
 		],

@@ -96,6 +96,7 @@ export async function runExistingSetupWizard(
 		if (detection.harnesses.openclaw) detectedHarnesses.push("openclaw");
 		if (detection.harnesses.opencode) detectedHarnesses.push("opencode");
 		if (detection.harnesses.codex) detectedHarnesses.push("codex");
+		if (detection.harnesses.forge) detectedHarnesses.push("forge");
 		const packageManager = resolvePrimaryPackageManager({ agentsDir: basePath, env: process.env });
 		const existingAgent = readRecord(existingConfig.agent);
 

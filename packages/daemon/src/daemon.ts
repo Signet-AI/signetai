@@ -5294,7 +5294,28 @@ mountOsAgentRoutes(app);
 // Harnesses API
 // ============================================================================
 
+function findForgeBinaryPath(): string | null {
+	const home = homedir();
+	const candidates = [
+		join(home, ".cargo", "bin", "forge"),
+		join(home, ".local", "bin", "forge"),
+		join(home, ".config", "signet", "bin", "forge"),
+		"/usr/local/bin/forge",
+		"/opt/homebrew/bin/forge",
+	];
+	for (const candidate of candidates) {
+		if (existsSync(candidate)) return candidate;
+	}
+	try {
+		const lookup = process.platform === "win32" ? "where" : "which";
+		return execFileSync(lookup, ["forge"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+	} catch {
+		return null;
+	}
+}
+
 app.get("/api/harnesses", async (c) => {
+	const forgePath = findForgeBinaryPath();
 	const configs = [
 		{ name: "Claude Code", id: "claude-code", path: join(homedir(), ".claude", "settings.json") },
 		{
@@ -5303,6 +5324,7 @@ app.get("/api/harnesses", async (c) => {
 			path: join(homedir(), ".config", "opencode", "AGENTS.md"),
 		},
 		{ name: "OpenClaw", id: "openclaw", path: join(AGENTS_DIR, "AGENTS.md") },
+		{ name: "Forge", id: "forge", path: forgePath ?? join(homedir(), ".local", "bin", "forge") },
 	];
 
 	const harnesses = configs.map((config) => ({
