@@ -994,6 +994,42 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).toContain("sess-olde");
 	});
 
+	test.serial("falls back to transcript excerpts when hybrid top hit misses query anchors", async () => {
+		createMemoryDb([
+			{
+				content: "Locate deployment logs from the latest rollout runbook.",
+				importance: 0.95,
+			},
+		]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"sess-anchor",
+			"User: marker lookup\nAssistant: ultra-needle-transcript-only-5529931 is only in transcript history.",
+			"test",
+			"proj",
+			"default",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.close();
+
+		const result = await handleUserPromptSubmit({
+			harness: "test",
+			project: "proj",
+			sessionKey: "sess-current",
+			userPrompt: "locate ultra-needle-transcript-only-5529931",
+		});
+
+		expect(result.memoryCount).toBeGreaterThan(0);
+		expect(result.engine).toBe("transcript-fallback");
+		expect(result.inject).toContain("ultra-needle-transcript-only-5529931");
+		expect(result.inject).toContain("sess-anch");
+	});
+
 	test.serial("applies character budget", async () => {
 		// Create many memories that would exceed the 500 char budget
 		const mems = Array.from({ length: 20 }, (_, i) => ({

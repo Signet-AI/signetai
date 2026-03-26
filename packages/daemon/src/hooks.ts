@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
 import { getAgentScope, resolveAgentId } from "./agent-id";
+import { extractAnchorTerms } from "./anchor-terms";
 import {
 	clearContinuity,
 	consumeState,
@@ -2095,6 +2096,22 @@ function extractSubstantiveWords(text: string): string[] {
 	return result;
 }
 
+export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyArray<{ content: string }>): boolean {
+	const anchors = extractAnchorTerms(query);
+	if (anchors.length === 0) return false;
+	if (results.length === 0) return false;
+	const anchorSet = new Set(anchors);
+	for (const row of results.slice(0, 3)) {
+		const rowAnchors = extractAnchorTerms(row.content);
+		for (const rowAnchor of rowAnchors) {
+			if (anchorSet.has(rowAnchor)) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 function buildRecallQueryShape(userPrompt: string, lastAssistantMessage?: string): RecallQueryShape {
 	// Pass cleaned raw text for both keyword and vector queries.
 	// FTS5 with implicit AND + BM25 IDF handles term weighting naturally —
@@ -2249,7 +2266,13 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			fetchEmbedding,
 		);
 
-		if (recall.results.length === 0 || typeof recall.results[0]?.score !== "number" || recall.results[0].score < 0.4) {
+		const topScore = recall.results[0]?.score;
+		const weakHybrid =
+			recall.results.length === 0 ||
+			typeof topScore !== "number" ||
+			topScore < 0.4 ||
+			queryAnchorsMissingFromRecall(vectorQuery, recall.results);
+		if (weakHybrid) {
 			const transcriptHits = searchTranscriptFallback({
 				query: vectorQuery,
 				agentId,
