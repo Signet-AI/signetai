@@ -7,6 +7,11 @@ section: "Internal"
 
 # Documentation Audit — March 25, 2026
 
+This document is a point-in-time audit snapshot taken before the
+follow-up remediation pass in this PR was complete. Treat contradiction
+lists below as audit findings captured at review time, not as a claim
+that every item still remains unresolved in the current branch state.
+
 ## Scope
 
 This audit covers the highest-impact documentation surfaces in the
@@ -39,7 +44,7 @@ Primary files reviewed:
 
 ## Executive Summary
 
-The docs currently have three major failure modes.
+At audit start, the docs had three major failure modes.
 
 ### P0-1. Core positioning drift
 
@@ -71,7 +76,7 @@ If a doc makes Signet sound like “a knowledge graph for agents” or
 The docs disagree with each other and with the codebase about whether the
 predictor is enabled by default.
 
-Contradictions found:
+Contradictions found at audit time:
 
 - `docs/PIPELINE.md` says: predictor disabled by default
 - `docs/DASHBOARD.md` says: predictor disabled by default
@@ -84,7 +89,7 @@ This is a straight factual contradiction and must be resolved.
 
 The docs disagree about current auth architecture.
 
-Contradictions found:
+Contradictions found at audit time:
 
 - `docs/AUTH.md` describes current auth as HMAC-signed bearer tokens
 - `docs/QUICKSTART.md` claims current ERC-8128 wallet-based identity/signatures
@@ -314,7 +319,7 @@ Decide the truth, then sync all of these:
 
 ### P0-5. Auth docs are internally inconsistent
 
-**Current truth according to reference docs:**
+**Current truth according to reference docs at audit time:**
 
 `docs/AUTH.md` says auth is simple HMAC-signed bearer tokens with roles
 and scopes.

@@ -410,9 +410,11 @@ Auth and Team Deployments
 ---
 
 By default, Signet runs in local mode with no auth required on
-localhost. For team deployments or self-hosted remote access, Signet
-supports token-based auth with roles and scopes. See [Auth](./AUTH.md)
-and [Self-Hosting](./SELF-HOSTING.md) for setup details.
+requests. In the default local setup, the daemon also binds to
+localhost only, which keeps that unauthenticated mode local by default.
+For team deployments or self-hosted remote access, Signet supports
+token-based auth with roles and scopes. See [Auth](./AUTH.md) and
+[Self-Hosting](./SELF-HOSTING.md) for setup details.
 
 ---
 
