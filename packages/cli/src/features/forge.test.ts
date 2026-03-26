@@ -7,6 +7,7 @@ import {
 	loadForgeManifest,
 	managedForgeAssetNameForPlatform,
 	managedForgeInstallSupportedForPlatform,
+	readForgeVersionFromBinaryMetadata,
 	selectLatestStableForgeRelease,
 	withManagedForgeInstallLock,
 } from "./forge.js";
@@ -228,6 +229,19 @@ describe("managed Forge install lock", () => {
 			).rejects.toThrow("already running");
 
 			expect(existsSync(lockDir)).toBe(true);
+		} finally {
+			rmSync(tempHome, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("Forge version metadata parsing", () => {
+	it("extracts a semver version from passive binary metadata without executing the binary", () => {
+		const tempHome = mkdtempSync(join(tmpdir(), "forge-version-"));
+		try {
+			const binaryPath = join(tempHome, "forge");
+			writeFileSync(binaryPath, "Forge binary marker forge-v1.2.3 and build notes");
+			expect(readForgeVersionFromBinaryMetadata(binaryPath)).toBe("1.2.3");
 		} finally {
 			rmSync(tempHome, { recursive: true, force: true });
 		}

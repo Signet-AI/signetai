@@ -257,6 +257,10 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
         .clone()
         .unwrap_or_else(|| signet_managed_forge_path(&home));
     let forge_exists = verified_forge_path.is_some();
+    let claude_last_seen = state.harness_last_seen("claude-code").await;
+    let opencode_last_seen = state.harness_last_seen("opencode").await;
+    let openclaw_last_seen = state.harness_last_seen("openclaw").await;
+    let forge_last_seen = state.harness_last_seen("forge").await;
 
     let harnesses = vec![
         json!({
@@ -264,28 +268,28 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
             "id": "claude-code",
             "path": home.join(".claude").join("settings.json"),
             "exists": home.join(".claude").join("settings.json").exists(),
-            "lastSeen": serde_json::Value::Null,
+            "lastSeen": claude_last_seen,
         }),
         json!({
             "name": "OpenCode",
             "id": "opencode",
             "path": home.join(".config").join("opencode").join("AGENTS.md"),
             "exists": home.join(".config").join("opencode").join("AGENTS.md").exists(),
-            "lastSeen": serde_json::Value::Null,
+            "lastSeen": opencode_last_seen,
         }),
         json!({
             "name": "OpenClaw",
             "id": "openclaw",
             "path": openclaw_path,
             "exists": directory_has_named_entry(&base_path, "AGENTS.md"),
-            "lastSeen": serde_json::Value::Null,
+            "lastSeen": openclaw_last_seen,
         }),
         json!({
             "name": "Forge",
             "id": "forge",
             "path": forge_path,
             "exists": forge_exists,
-            "lastSeen": serde_json::Value::Null,
+            "lastSeen": forge_last_seen,
         }),
     ];
 
