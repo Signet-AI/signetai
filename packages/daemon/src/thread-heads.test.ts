@@ -45,7 +45,7 @@ describe("thread-heads", () => {
 			sessionKey: "sess-1",
 			harness: "test",
 		});
-		expect(key).toBe("project:/tmp/proj|source:sess-1");
+		expect(key).toBe("project:/tmp/proj|source:sess-1|harness:test");
 	});
 
 	it("upserts newer thread head state and ignores older writes", () => {
@@ -90,7 +90,7 @@ describe("thread-heads", () => {
 				 FROM memory_thread_heads
 				 WHERE agent_id = ? AND thread_key = ?`,
 			)
-			.get("default", "project:/tmp/proj|source:lane-a") as
+			.get("default", "project:/tmp/proj|source:lane-a|harness:test") as
 			| {
 					node_id: string;
 					latest_at: string;

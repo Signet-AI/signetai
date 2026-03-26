@@ -36,15 +36,26 @@ export function up(db: MigrationDb): void {
 		SELECT
 			ss.agent_id,
 			CASE
-				WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
-					'project:' || TRIM(ss.project) || '|source:' || TRIM(ss.source_ref)
-				WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' THEN 'source:' || TRIM(ss.source_ref)
-				WHEN ss.session_key IS NOT NULL AND TRIM(ss.session_key) != '' AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
-					'project:' || TRIM(ss.project) || '|session:' || TRIM(ss.session_key)
-				WHEN ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN 'project:' || TRIM(ss.project)
-				WHEN ss.session_key IS NOT NULL AND TRIM(ss.session_key) != '' THEN 'session:' || TRIM(ss.session_key)
-				WHEN ss.harness IS NOT NULL AND TRIM(ss.harness) != '' THEN 'harness:' || TRIM(ss.harness)
-				ELSE 'thread:unscoped'
+				WHEN ss.harness IS NOT NULL AND TRIM(ss.harness) != ''
+						AND (ss.project IS NULL OR TRIM(ss.project) = '')
+						AND (ss.source_ref IS NULL OR TRIM(ss.source_ref) = '')
+						AND (ss.session_key IS NULL OR TRIM(ss.session_key) = '')
+					THEN 'harness:' || TRIM(ss.harness)
+				ELSE
+					CASE
+						WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
+							'project:' || TRIM(ss.project) || '|source:' || TRIM(ss.source_ref)
+						WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' THEN 'source:' || TRIM(ss.source_ref)
+						WHEN ss.session_key IS NOT NULL AND TRIM(ss.session_key) != '' AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
+							'project:' || TRIM(ss.project) || '|session:' || TRIM(ss.session_key)
+						WHEN ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN 'project:' || TRIM(ss.project)
+						WHEN ss.session_key IS NOT NULL AND TRIM(ss.session_key) != '' THEN 'session:' || TRIM(ss.session_key)
+						ELSE 'thread:unscoped'
+					END ||
+					CASE
+						WHEN ss.harness IS NOT NULL AND TRIM(ss.harness) != '' THEN '|harness:' || TRIM(ss.harness)
+						ELSE ''
+					END
 			END AS thread_key,
 			CASE
 				WHEN ss.source_ref IS NOT NULL AND TRIM(ss.source_ref) != '' AND ss.project IS NOT NULL AND TRIM(ss.project) != '' THEN
@@ -72,15 +83,26 @@ export function up(db: MigrationDb): void {
 				ROW_NUMBER() OVER (
 					PARTITION BY s0.agent_id,
 					CASE
-						WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != '' AND s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN
-							'project:' || TRIM(s0.project) || '|source:' || TRIM(s0.source_ref)
-						WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != '' THEN 'source:' || TRIM(s0.source_ref)
-						WHEN s0.session_key IS NOT NULL AND TRIM(s0.session_key) != '' AND s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN
-							'project:' || TRIM(s0.project) || '|session:' || TRIM(s0.session_key)
-						WHEN s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN 'project:' || TRIM(s0.project)
-						WHEN s0.session_key IS NOT NULL AND TRIM(s0.session_key) != '' THEN 'session:' || TRIM(s0.session_key)
-						WHEN s0.harness IS NOT NULL AND TRIM(s0.harness) != '' THEN 'harness:' || TRIM(s0.harness)
-						ELSE 'thread:unscoped'
+						WHEN s0.harness IS NOT NULL AND TRIM(s0.harness) != ''
+								AND (s0.project IS NULL OR TRIM(s0.project) = '')
+								AND (s0.source_ref IS NULL OR TRIM(s0.source_ref) = '')
+								AND (s0.session_key IS NULL OR TRIM(s0.session_key) = '')
+							THEN 'harness:' || TRIM(s0.harness)
+						ELSE
+							CASE
+								WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != '' AND s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN
+									'project:' || TRIM(s0.project) || '|source:' || TRIM(s0.source_ref)
+								WHEN s0.source_ref IS NOT NULL AND TRIM(s0.source_ref) != '' THEN 'source:' || TRIM(s0.source_ref)
+								WHEN s0.session_key IS NOT NULL AND TRIM(s0.session_key) != '' AND s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN
+									'project:' || TRIM(s0.project) || '|session:' || TRIM(s0.session_key)
+								WHEN s0.project IS NOT NULL AND TRIM(s0.project) != '' THEN 'project:' || TRIM(s0.project)
+								WHEN s0.session_key IS NOT NULL AND TRIM(s0.session_key) != '' THEN 'session:' || TRIM(s0.session_key)
+								ELSE 'thread:unscoped'
+							END ||
+							CASE
+								WHEN s0.harness IS NOT NULL AND TRIM(s0.harness) != '' THEN '|harness:' || TRIM(s0.harness)
+								ELSE ''
+							END
 					END
 					ORDER BY s0.latest_at DESC, s0.created_at DESC
 				) AS rn

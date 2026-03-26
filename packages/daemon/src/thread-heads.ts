@@ -35,13 +35,22 @@ export function deriveThreadKey(input: {
 	const sourceRef = input.sourceRef?.trim();
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
-	if (sourceRef && project) return `project:${project}|source:${sourceRef}`;
-	if (sourceRef) return `source:${sourceRef}`;
-	if (sessionKey && project) return `project:${project}|session:${sessionKey}`;
-	if (project) return `project:${project}`;
-	if (sessionKey) return `session:${sessionKey}`;
-	if (harness) return `harness:${harness}`;
-	return "thread:unscoped";
+	const base =
+		sourceRef && project
+			? `project:${project}|source:${sourceRef}`
+			: sourceRef
+				? `source:${sourceRef}`
+				: sessionKey && project
+					? `project:${project}|session:${sessionKey}`
+					: project
+						? `project:${project}`
+						: sessionKey
+							? `session:${sessionKey}`
+							: harness
+								? `harness:${harness}`
+								: "thread:unscoped";
+	if (!harness || base === `harness:${harness}`) return base;
+	return `${base}|harness:${harness}`;
 }
 
 export function deriveThreadLabel(input: {
@@ -54,13 +63,22 @@ export function deriveThreadLabel(input: {
 	const sourceRef = input.sourceRef?.trim();
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
-	if (project && sourceRef) return `project:${project}#source:${sourceRef}`;
-	if (sourceRef) return `source:${sourceRef}`;
-	if (project && sessionKey) return `project:${project}#session:${sessionKey}`;
-	if (project) return `project:${project}`;
-	if (sessionKey) return `session:${sessionKey}`;
-	if (harness) return `harness:${harness}`;
-	return "thread:unscoped";
+	const base =
+		project && sourceRef
+			? `project:${project}#source:${sourceRef}`
+			: sourceRef
+				? `source:${sourceRef}`
+				: project && sessionKey
+					? `project:${project}#session:${sessionKey}`
+					: project
+						? `project:${project}`
+						: sessionKey
+							? `session:${sessionKey}`
+							: harness
+								? `harness:${harness}`
+								: "thread:unscoped";
+	if (!harness || base === `harness:${harness}`) return base;
+	return `${base}#harness:${harness}`;
 }
 
 export function summarizeThreadContent(content: string, limit = 240): string {

@@ -298,11 +298,6 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 	}
 
 	async function runForcedDrainAttempt(source: string): Promise<void> {
-		if (activeSessionCount() > 0) {
-			scheduleTick(FORCE_RETRY_MS);
-			return;
-		}
-
 		const lockToken = acquireWriteLock();
 		if (lockToken === null) {
 			scheduleTick(FORCE_RETRY_MS);
