@@ -79,13 +79,16 @@ jobs:
         run: |
           cp "packages/forge/target/${RELEASE_TARGET}/release/forge" forge
           tar czf "${RELEASE_ASSET}" forge
+          shasum -a 256 "${RELEASE_ASSET}" > "${RELEASE_ASSET}.sha256"
         env:
           RELEASE_TARGET: ${{ matrix.target }}
           RELEASE_ASSET: ${{ matrix.asset }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          path: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256
 
   release:
     needs: [prepare, build]
@@ -102,4 +105,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ needs.prepare.outputs.tag }}"             --title "Forge v${{ needs.prepare.outputs.version }}"             --notes "Forge release from the Signet monorepo (packages/forge)."             artifacts/**/*.tar.gz
+          FILES=$(find artifacts -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) | sort)
+          gh release create "${{ needs.prepare.outputs.tag }}" \
+            --title "Forge v${{ needs.prepare.outputs.version }}" \
+            --notes "Forge release from the Signet monorepo (packages/forge)." \
+            ${FILES}
