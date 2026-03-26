@@ -464,6 +464,23 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
+	it("uses compactedCount as a fallback pre-compaction message count", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforeCompaction = hooks.get("before_compaction");
+		expect(beforeCompaction).toBeDefined();
+
+		await beforeCompaction?.({ compactedCount: 6 }, { sessionKey: "session-compact-count", agentId: "agent-1" });
+
+		expect(lastPreCompactionBody).toMatchObject({
+			harness: "openclaw",
+			sessionKey: "session-compact-count",
+			messageCount: 6,
+			runtimePath: "plugin",
+		});
+	});
+
 	it("combines summaryPrompt and guidelines for pre-compaction context", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -589,6 +606,41 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			project: "/tmp/branch-lineage",
 			sessionKey: "session-lineage",
 		});
+	});
+
+	it("deduplicates duplicate compaction-complete writes even when session file visibility differs across hook aliases", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const afterCompaction = hooks.get("after_compaction");
+		const sessionCompactAfter = hooks.get("session:compact:after");
+		expect(afterCompaction).toBeDefined();
+		expect(sessionCompactAfter).toBeDefined();
+
+		const sessionFile = join(testDir, "session-after-dedupe.jsonl");
+		writeFileSync(
+			sessionFile,
+			[
+				JSON.stringify({ type: "session", version: 1, id: "session-after-dedupe" }),
+				JSON.stringify({
+					type: "compaction",
+					id: "comp-dedupe",
+					summary: "Stable recovered summary.",
+				}),
+			].join("\n"),
+			"utf-8",
+		);
+
+		await afterCompaction?.(
+			{ summary: "Stable recovered summary.", sessionFile },
+			{ sessionKey: "session-after-dedupe", sessionFile, agentId: "agent-1" },
+		);
+		await sessionCompactAfter?.(
+			{ summary: "Stable recovered summary." },
+			{ sessionKey: "session-after-dedupe", agentId: "agent-1" },
+		);
+
+		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
 	});
 
 	it("does not dedupe distinct compaction summaries that share the same prefix", async () => {
