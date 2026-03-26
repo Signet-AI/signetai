@@ -207,10 +207,6 @@ pub async fn prompt_submit(
     headers: HeaderMap,
     Json(body): Json<PromptSubmitBody>,
 ) -> axum::response::Response {
-    // NOTE(parity): TypeScript currently runs a richer fallback stack
-    // (structured -> temporal/thread -> transcript) with anchor-aware checks.
-    // Rust keeps deterministic baseline prompt recall until that path is
-    // landed here; shadow parity rules annotate this temporary drift.
     let Some(_harness) = body.harness.as_deref() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -704,9 +700,6 @@ pub async fn compaction_complete(
     headers: HeaderMap,
     Json(body): Json<CompactionCompleteBody>,
 ) -> axum::response::Response {
-    // NOTE(parity): TypeScript now queues forced synthesis retries after
-    // compaction when MEMORY.md head writes are contended. Rust currently
-    // persists compaction artifacts without synthesis retry orchestration.
     let Some(_harness) = body.harness.as_deref() else {
         return (
             StatusCode::BAD_REQUEST,
