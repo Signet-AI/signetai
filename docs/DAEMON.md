@@ -71,7 +71,7 @@ Configuration
 | `SIGNET_PATH` | `$SIGNET_WORKSPACE` | Base agents directory |
 | `SIGNET_LOG_FILE` | — | Optional explicit log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional log directory override |
-| `SIGNET_SQLITE_PATH` | — | macOS override for a custom SQLite dylib used before Bun opens the database |
+| `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
 
 ### Files
 

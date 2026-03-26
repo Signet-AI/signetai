@@ -700,7 +700,7 @@ editing the config file is impractical.
 | `SIGNET_BIND` | `SIGNET_HOST` | Explicit bind address override (`0.0.0.0`, etc.) |
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
-| `SIGNET_SQLITE_PATH` | — | macOS override for a custom SQLite dylib used before Bun opens the database |
+| `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
 | `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
 
 `SIGNET_PATH` changes where Signet reads and writes all agent data for
@@ -708,9 +708,11 @@ that process, including the config file itself. Use this for temporary
 overrides in CI or isolated local testing.
 
 On macOS, `SIGNET_SQLITE_PATH` can point at a `libsqlite3.dylib` build
-that supports `loadExtension()`. If unset, Signet checks
-`$SIGNET_PATH/libsqlite3.dylib` and then standard Homebrew SQLite
-locations before falling back to Apple's system SQLite.
+that supports `loadExtension()`. If it is set, Signet treats it as an
+authoritative override and refuses fallback if the file is missing. If
+it is unset, Signet checks `$SIGNET_PATH/libsqlite3.dylib` and then
+standard Homebrew SQLite locations before falling back to Apple's
+system SQLite.
 
 
 AGENTS.md

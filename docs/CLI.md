@@ -793,7 +793,7 @@ Environment Variables
 | `SIGNET_BIND` | Explicit daemon bind address override | `SIGNET_HOST` |
 | `SIGNET_LOG_FILE` | Explicit daemon log file path | unset |
 | `SIGNET_LOG_DIR` | Daemon log directory override | `$SIGNET_WORKSPACE/.daemon/logs` |
-| `SIGNET_SQLITE_PATH` | macOS override for a custom SQLite dylib used by the daemon before opening the database | unset |
+| `SIGNET_SQLITE_PATH` | macOS explicit SQLite dylib override used by the daemon before opening the database | unset |
 | `SIGNET_BYPASS` | Skip all hook processing (exit immediately) | unset |
 
 ---

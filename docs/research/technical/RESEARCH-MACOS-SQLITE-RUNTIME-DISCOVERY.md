@@ -39,7 +39,7 @@ replacement problem.
 
 Preferred resolution order on macOS:
 
-1. `SIGNET_SQLITE_PATH` explicit override
+1. `SIGNET_SQLITE_PATH` explicit override, authoritative when set
 2. `$SIGNET_PATH/libsqlite3.dylib` workspace-local fallback
 3. Homebrew SQLite dylib paths
 

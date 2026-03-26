@@ -199,6 +199,27 @@ function checkModelDrift(db: ReadDb): EmbeddingCheckResult {
 	};
 }
 
+function msg(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+function missing(err: unknown, name: string): boolean {
+	const text = msg(err);
+	return text.includes(`no such table: ${name}`) || text.includes(`no such table: main.${name}`);
+}
+
+function vecDetail(runtime: VectorRuntimeStatus, error?: string): Record<string, unknown> {
+	return {
+		sqlite: runtime.sqlite,
+		sqliteAttempt: runtime.sqliteAttempt,
+		sqliteWarning: runtime.sqliteWarning,
+		extensionPath: runtime.extensionPath,
+		extensionLoaded: runtime.extensionLoaded,
+		extensionLoadError: runtime.extensionLoadError,
+		error,
+	};
+}
+
 function checkNullVectors(db: ReadDb, runtime: VectorRuntimeStatus): EmbeddingCheckResult {
 	let count = 0;
 	try {
@@ -206,11 +227,22 @@ function checkNullVectors(db: ReadDb, runtime: VectorRuntimeStatus): EmbeddingCh
 			.prepare("SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN vec_embeddings v ON v.id = e.id WHERE v.id IS NULL")
 			.get() as { n: number } | undefined;
 		count = row?.n ?? 0;
-	} catch {
+	} catch (err) {
+		if (!missing(err, "vec_embeddings")) {
+			return {
+				name: "null-vectors",
+				status: "fail",
+				message: "Failed to verify vector row coverage",
+				detail: vecDetail(runtime, msg(err)),
+				fix: "Inspect SQLite schema integrity and repair the underlying query failure",
+			};
+		}
+
 		return {
 			name: "null-vectors",
 			status: "warn",
 			message: "Cannot verify null vectors because vec_embeddings is unavailable",
+			detail: vecDetail(runtime, msg(err)),
 			fix: vecFix(runtime),
 		};
 	}
@@ -255,20 +287,22 @@ function checkVecTableSync(db: ReadDb, runtime: VectorRuntimeStatus): EmbeddingC
 	try {
 		const vecRow = db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get() as { n: number } | undefined;
 		vecCount = vecRow?.n ?? 0;
-	} catch {
-		// vec_embeddings may not exist
+	} catch (err) {
+		if (!missing(err, "vec_embeddings")) {
+			return {
+				name: "vec-table-sync",
+				status: "fail",
+				message: "Failed to inspect vec_embeddings health",
+				detail: vecDetail(runtime, msg(err)),
+				fix: "Inspect SQLite schema integrity and repair the underlying query failure",
+			};
+		}
+
 		return {
 			name: "vec-table-sync",
 			status: "warn",
 			message: "vec_embeddings table not found",
-			detail: {
-				sqlite: runtime.sqlite,
-				sqliteAttempt: runtime.sqliteAttempt,
-				sqliteWarning: runtime.sqliteWarning,
-				extensionPath: runtime.extensionPath,
-				extensionLoaded: runtime.extensionLoaded,
-				extensionLoadError: runtime.extensionLoadError,
-			},
+			detail: vecDetail(runtime, msg(err)),
 			fix: vecFix(runtime),
 		};
 	}
