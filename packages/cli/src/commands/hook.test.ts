@@ -95,4 +95,24 @@ describe("buildCompactionCompleteBody", () => {
 			project: "/tmp/explicit-project",
 		});
 	});
+
+	test("preserves legacy session_id aliases for compaction lineage", () => {
+		expect(
+			buildCompactionCompleteBody(
+				{
+					agentId: "agent-8",
+					project: "/tmp/legacy-project",
+					sessionId: "sess-legacy-id",
+				},
+				"claude-code",
+				"summary text",
+			),
+		).toEqual({
+			agentId: "agent-8",
+			harness: "claude-code",
+			project: "/tmp/legacy-project",
+			sessionKey: "sess-legacy-id",
+			summary: "summary text",
+		});
+	});
 });

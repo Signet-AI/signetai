@@ -1430,6 +1430,32 @@ const signetPlugin = {
 			);
 		};
 
+		const resolveSessionEndSessionKey = (
+			event: Record<string, unknown>,
+			ctx: {
+				sessionKey?: string;
+			},
+		): string | undefined => {
+			const fromEvent = readString(event.sessionKey) ?? readString(event.sessionId);
+			if (fromEvent) return fromEvent;
+			if (ctx.sessionKey) return ctx.sessionKey;
+			return undefined;
+		};
+
+		const resolveSessionEndTranscript = (
+			event: Record<string, unknown>,
+			ctx: {
+				sessionFile?: string;
+			},
+		): string | undefined => firstNonEmptyString(event.transcriptPath, event.sessionFile, ctx.sessionFile);
+
+		const resolveSessionEndProject = (
+			event: Record<string, unknown>,
+			ctx: {
+				project?: string;
+			},
+		): string | undefined => firstNonEmptyString(event.cwd, event.project, event.workspace, ctx.project);
+
 		const dedupeCompaction = (map: Map<string, number>, key: string): boolean => {
 			const now = Date.now();
 			cleanupTimedMap(map, now, COMPACTION_HOOK_DEDUPE_MS);
@@ -1644,13 +1670,22 @@ const signetPlugin = {
 			return runPromptInjection(event, sessionKey, agentId);
 		});
 
-		api.on("agent_end", async (_event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+		api.on("agent_end", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
 			if (!cfg.enabled) return undefined;
 
-			const { sessionKey, agentId } = resolveHookContext(ctx);
+			const hook = resolveHookContext(ctx);
+			const sessionKey = resolveSessionEndSessionKey(event, hook);
+			const agentId = hook.agentId;
 			const scopedKey = buildScopedSessionKey(sessionKey, agentId);
 
-			await onSessionEnd("openclaw", { ...opts, agentId, sessionKey });
+			await onSessionEnd("openclaw", {
+				...opts,
+				agentId,
+				cwd: resolveSessionEndProject(event, hook),
+				sessionId: readString(event.sessionId),
+				sessionKey,
+				transcriptPath: resolveSessionEndTranscript(event, hook),
+			});
 			if (scopedKey) {
 				claimedSessions.delete(scopedKey);
 				injectedTurns.delete(scopedKey);

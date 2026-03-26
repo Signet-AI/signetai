@@ -33,6 +33,7 @@ let delayPromptSubmitMs = 0;
 let lastRememberBody: unknown = null;
 let lastPreCompactionBody: unknown = null;
 let lastCompactionBody: unknown = null;
+let lastSessionEndBody: unknown = null;
 let warnMessages: string[] = [];
 let testDir = "";
 
@@ -133,6 +134,7 @@ beforeEach(() => {
 	lastRememberBody = null;
 	lastPreCompactionBody = null;
 	lastCompactionBody = null;
+	lastSessionEndBody = null;
 	warnMessages = [];
 	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
 
@@ -168,6 +170,7 @@ beforeEach(() => {
 						engine: "fts+decay",
 					});
 				case "/api/hooks/session-end":
+					lastSessionEndBody = init?.body ? JSON.parse(String(init.body)) : null;
 					return jsonResponse({ memoriesSaved: 0 });
 				case "/api/hooks/pre-compaction":
 					lastPreCompactionBody = init?.body ? JSON.parse(String(init.body)) : null;
@@ -735,6 +738,39 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		const second = await beforePromptBuild?.(event, ctx);
 		expect(getPrependContext(second)).toContain("turn-memory");
 		expect(getHits("/api/hooks/user-prompt-submit")).toBe(2);
+	});
+
+	it("forwards transcript and project lineage on agent_end session capture", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const agentEnd = hooks.get("agent_end");
+		expect(agentEnd).toBeDefined();
+
+		const sessionFile = join(testDir, "session-end.jsonl");
+		await agentEnd?.(
+			{
+				cwd: "/tmp/session-end-project",
+				sessionId: "session-end-id",
+				sessionKey: "session-end-key",
+				sessionFile,
+			},
+			{
+				agentId: "agent-1",
+				sessionFile,
+			},
+		);
+
+		expect(getHits("/api/hooks/session-end")).toBe(1);
+		expect(lastSessionEndBody).toMatchObject({
+			agentId: "agent-1",
+			cwd: "/tmp/session-end-project",
+			harness: "openclaw",
+			runtimePath: "plugin",
+			sessionId: "session-end-id",
+			sessionKey: "session-end-key",
+			transcriptPath: sessionFile,
+		});
 	});
 
 	it("does not reregister marketplace proxy tools on refresh", async () => {
