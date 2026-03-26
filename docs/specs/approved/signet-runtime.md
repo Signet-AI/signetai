@@ -39,9 +39,9 @@ Key constraints:
   Daemon API calls using the same interfaces the reference runtime uses.
 - SDKs for TypeScript, Rust, and Python continue to be first-class. The
   runtime expands what the SDKs expose, not replaces them.
-- Don't wait for the Rust daemon rewrite. The runtime scaffolds in
-  TypeScript over the existing bun daemon today. When the Rust daemon is
-  ready, the runtime talks to a faster daemon — nothing changes structurally.
+- Forge is the canonical reference implementation of this runtime
+  contract. The contract is language-agnostic; the implementation is
+  currently Rust, not TypeScript.
 
 
 What the Runtime Is
@@ -179,35 +179,24 @@ Package Structure
 -----------------
 
 ```
-packages/runtime/
-  package.json              (@signet/runtime)
-  src/
-    index.ts                (public API — Runtime class, all interfaces)
-    runtime.ts              (main execution loop)
-    session.ts              (session lifecycle management)
-    executor.ts             (pre-generation research phase, tool dispatch)
-    context.ts              (memory injection, system prompt assembly)
-    provider.ts             (Provider interface + registry)
-    tool.ts                 (Tool interface + ToolRegistry)
-    channel.ts              (Channel interface)
-    adapter.ts              (RuntimeAdapter interface)
-    channels/
-      cli.ts                (stdin/stdout — ships first)
-      http.ts               (HTTP for harness attachment)
-    providers/
-      anthropic.ts
-      openai.ts
-      openai-compat.ts      (Ollama, local, etc.)
-    tools/
-      memory.ts             (memory_search, store, get, modify, forget)
+packages/forge/
+  Cargo.toml                (Forge Rust workspace root)
+  crates/
+    forge-cli/             (primary `forge` binary)
+    forge-agent/           (execution loop)
+    forge-provider/        (provider registry + clients)
+    forge-tools/           (tool registry + built-in tools)
+    forge-signet/          (daemon client / Signet integration)
+    forge-tui/             (terminal channel / UI)
 ```
 
-`@signet/runtime` is a new workspace package. It depends on `@signet/sdk`
-for daemon communication. It does not depend on `@signet/daemon` directly —
-everything goes through the HTTP API.
+Forge is the monorepo-owned reference implementation of the runtime
+contract. The public contract stays the same even though the concrete
+implementation lives in `packages/forge/`.
 
-The CLI gets a new `signet chat` command that instantiates the runtime with
-the CLI channel. This is the reference experience.
+`forge` remains the primary end-user command. Signet may additionally
+manage Forge installs through `signet forge ...`, but the runtime itself
+is the Forge product.
 
 
 Session Lifecycle

@@ -7,7 +7,10 @@ section: "Reference"
 
 # Harnesses
 
-Harnesses are the AI platforms and tools that Signet integrates with. Signet syncs your agent identity and [[memory]] to each one via the [[connectors|connector framework]].
+Harnesses are the AI platforms and tools that Signet integrates with.
+Some are external platforms reached through connectors. Forge is the
+first-party native harness and the reference runtime implementation for
+the Signet runtime contract.
 
 > **Path note:** `$SIGNET_WORKSPACE` means your active Signet workspace path.
 > Default is `~/.agents`, configurable via `signet workspace set <path>`.
@@ -47,6 +50,40 @@ You can also trigger a manual re-sync:
 ```bash
 curl -X POST http://localhost:3850/api/harnesses/regenerate
 ```
+
+---
+
+## Forge
+
+Forge is Signet's native terminal harness. Unlike external harness
+integrations, it does not need hook/config patching because it speaks to
+the daemon directly as the host runtime.
+
+### Management surface
+
+Forge remains a separate product command:
+
+```bash
+forge
+```
+
+Signet can also manage Forge installs directly:
+
+```bash
+signet forge install
+signet forge update
+signet forge status
+signet forge doctor
+```
+
+### Runtime role
+
+- first-party native harness
+- reference implementation of the Signet runtime contract
+- direct daemon client for memory, hooks, skills, secrets, and MCP
+
+Forge is still represented as a harness id (`forge`) in Signet config,
+setup detection, and dashboard surfaces.
 
 ---
 
