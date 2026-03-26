@@ -102,8 +102,11 @@ export function resolveCustomSqlitePath(opts?: {
 	const agentsDir = opts?.agentsDir ?? env.SIGNET_PATH ?? join(homedir(), ".agents");
 
 	const envPath = env.SIGNET_SQLITE_PATH;
-	if (envPath && exists(envPath)) {
-		return { path: envPath, source: "env" };
+	if (envPath) {
+		if (exists(envPath)) {
+			return { path: envPath, source: "env" };
+		}
+		return null;
 	}
 
 	const local = join(agentsDir, "libsqlite3.dylib");
@@ -136,7 +139,10 @@ function configureCustomSqlite(path: string): void {
 	const agentsDir = process.env.SIGNET_PATH ?? dirname(dirname(path));
 	const envPath = process.env.SIGNET_SQLITE_PATH;
 	if (envPath && !existsSync(envPath)) {
-		console.warn(`[db-accessor] SIGNET_SQLITE_PATH does not exist: ${envPath}`);
+		sqliteAttempt = envPath;
+		sqliteWarning = `SIGNET_SQLITE_PATH does not exist: ${envPath}. Explicit override is authoritative, refusing fallback to workspace/Homebrew SQLite.`;
+		console.warn(`[db-accessor] ${sqliteWarning}`);
+		return;
 	}
 
 	const choice = resolveCustomSqlitePath({ agentsDir });

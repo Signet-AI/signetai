@@ -128,6 +128,18 @@ describe("resolveCustomSqlitePath", () => {
 		});
 	});
 
+	test("does not fall back when explicit SIGNET_SQLITE_PATH is missing", () => {
+		const found = new Set(["/tmp/agents/libsqlite3.dylib", "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib"]);
+		const result = resolveCustomSqlitePath({
+			platform: "darwin",
+			agentsDir: "/tmp/agents",
+			env: { SIGNET_SQLITE_PATH: "/tmp/missing/libsqlite3.dylib" },
+			exists: (path) => found.has(path),
+		});
+
+		expect(result).toBeNull();
+	});
+
 	test("falls back to workspace sqlite dylib before Homebrew", () => {
 		const found = new Set(["/tmp/agents/libsqlite3.dylib", "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib"]);
 		const result = resolveCustomSqlitePath({
