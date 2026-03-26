@@ -1723,6 +1723,7 @@ Save a compaction summary as a memory row and as a temporal DAG artifact used by
   "harness": "claude-code",
   "summary": "Session covered dark mode setup and vim configuration...",
   "sessionKey": "session-uuid",
+  "project": "/workspace/repo",
   "runtimePath": "plugin"
 }
 ```
@@ -1737,6 +1738,10 @@ If `sessionKey` is present, the daemon uses it to preserve lineage:
 - the artifact can later be expanded through the temporal drill-down API
 - transcript and temporal summary persistence are keyed by `agentId +
   sessionKey`, so identical session keys from different agents do not collide
+
+If compaction fires before transcript persistence lands, callers should also
+send `project`. The daemon uses that explicit project as the fallback lineage
+scope until transcript storage catches up.
 
 **Response**
 

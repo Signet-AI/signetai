@@ -117,4 +117,25 @@ describe("temporal summary API auth", () => {
 
 		expect(row?.tags).toBe("session,summary,codex");
 	});
+
+	it("uses explicit project fallback when compaction lands before transcript persistence", async () => {
+		const res = await app.request("http://localhost/api/hooks/compaction-complete", {
+			method: "POST",
+			headers: jsonHeader(),
+			body: JSON.stringify({
+				harness: "codex",
+				summary: "compaction before transcript flush",
+				project: "proj-fallback",
+				agentId: "agent-a",
+			}),
+		});
+
+		expect(res.status).toBe(200);
+
+		const row = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT project FROM memories WHERE type = 'session_summary' ORDER BY created_at DESC LIMIT 1").get(),
+		) as { project?: string } | undefined;
+
+		expect(row?.project).toBe("proj-fallback");
+	});
 });

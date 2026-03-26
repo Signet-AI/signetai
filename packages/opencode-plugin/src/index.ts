@@ -279,6 +279,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 						{
 							harness: HARNESS,
 							summary: event.summary,
+							project: directory,
 							sessionKey: sid || undefined,
 							runtimePath: RUNTIME_PATH,
 						},

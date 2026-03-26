@@ -5964,6 +5964,7 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 			harness: string;
 			summary: string;
 			sessionKey?: string;
+			project?: string;
 			agentId?: string;
 			runtimePath?: string;
 		};
@@ -6005,11 +6006,12 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 						.get(body.sessionKey, agentId) as { project: string | null } | undefined,
 				)
 			: undefined;
-		const scopedProject = resolveScopedProject(c, transcriptRow?.project ?? undefined);
+		const requestedProject = transcriptRow?.project ?? parseOptionalString(body.project);
+		const scopedProject = resolveScopedProject(c, requestedProject);
 		if (scopedProject.error) {
 			return c.json({ error: scopedProject.error }, 403);
 		}
-		const project = scopedProject.project ?? transcriptRow?.project ?? null;
+		const project = scopedProject.project ?? null;
 
 		const summaryId = crypto.randomUUID();
 		getDbAccessor().withWriteTx((db) => {

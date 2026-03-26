@@ -11,7 +11,7 @@ success_criteria:
   - "Concurrent same-agent MEMORY.md writes are lease-safe and retry-safe, and busy head writes do not suppress future regeneration"
   - "Compaction artifacts participate in the same temporal DAG and condensation path as session summaries, with harness fidelity and degraded modes explicitly documented"
   - "Prompt-time retrieval keeps structured distillation primary while transcript retrieval stays a searchable, embeddable fallback and deep-history substrate"
-scope_boundary: "Closes the TypeScript runtime and documentation gaps around lossless working memory. Rust parity is explicitly deferred to a later wave."
+scope_boundary: "Closes the runtime and documentation gaps around lossless working memory, and mirrors touched daemon hook contracts into daemon-rs in the same work wave. Full daemon-rs cutover remains a separate program."
 ---
 
 # Lossless Working Memory Closure
@@ -177,10 +177,17 @@ Required documentation coverage:
 - harness fidelity matrix is documented
 - compaction parity and degraded modes are documented
 
-## Explicit Deferral
+## Rust Parity Requirement
 
-Rust parity is intentionally deferred from this closure spec.
+This closure spec does not require full daemon-rs cutover, but it does
+require parity for every daemon hook contract touched by the work.
 
-The TypeScript daemon path is the source of truth for this work wave.
-A later parity pass must mirror the finalized behavior into
-`packages/daemon-rs/`, but that is not a blocker for this spec.
+That means:
+
+- request/response shape changes must be mirrored into `packages/daemon-rs/`
+- fallback and scoping semantics must be mirrored for the touched paths
+- parity tests or route-local regressions must land in the same PR when
+  practical
+
+Broader Rust daemon completion remains tracked by the separate parity and
+cutover specs, but hook-surface drift is not allowed here.

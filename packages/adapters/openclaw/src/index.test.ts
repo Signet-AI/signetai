@@ -477,6 +477,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
 		expect(lastCompactionBody).toMatchObject({
 			harness: "openclaw",
+			project: process.cwd(),
 			sessionKey: "session-after",
 			runtimePath: "plugin",
 			summary: "Compacted history keeps the release blockers and migration plan.",

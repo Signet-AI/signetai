@@ -464,6 +464,7 @@ export async function onCompactionComplete(
 	options: {
 		daemonUrl?: string;
 		sessionKey?: string;
+		project?: string;
 	} = {},
 ): Promise<boolean> {
 	const result = await daemonFetch<{ success: boolean }>(
@@ -475,6 +476,7 @@ export async function onCompactionComplete(
 				harness,
 				summary,
 				sessionKey: options.sessionKey,
+				project: options.project,
 				runtimePath: RUNTIME_PATH,
 			},
 			timeout: WRITE_TIMEOUT,
@@ -1449,6 +1451,7 @@ const signetPlugin = {
 
 			await onCompactionComplete("openclaw", summary, {
 				...opts,
+				project: opts.workspace,
 				sessionKey,
 			});
 			if (sessionKey) {

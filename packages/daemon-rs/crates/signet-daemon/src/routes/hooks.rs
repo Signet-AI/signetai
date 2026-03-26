@@ -41,6 +41,27 @@ fn conflict_response(claimed_by: RuntimePath) -> axum::response::Response {
         .into_response()
 }
 
+fn resolve_compaction_project(
+    conn: &rusqlite::Connection,
+    session_key: Option<&str>,
+    agent_id: &str,
+    fallback: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    let Some(key) = session_key else {
+        return Ok(fallback.map(ToOwned::to_owned));
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT project FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2 LIMIT 1",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![key, agent_id])?;
+    if let Some(row) = rows.next()? {
+        return row.get(0);
+    }
+
+    Ok(fallback.map(ToOwned::to_owned))
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/hooks/session-start
 // ---------------------------------------------------------------------------
@@ -669,6 +690,8 @@ pub struct CompactionCompleteBody {
     pub harness: Option<String>,
     pub summary: Option<String>,
     pub session_key: Option<String>,
+    pub project: Option<String>,
+    pub agent_id: Option<String>,
     pub runtime_path: Option<String>,
 }
 
@@ -709,26 +732,36 @@ pub async fn compaction_complete(
 
     // Save summary as session_summary memory
     let summary = summary.to_string();
+    let harness = body.harness.clone().unwrap_or_default();
+    let fallback_project = body.project.clone();
+    let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
+    let session_key = body.session_key.clone();
     let result = state
         .pool
         .write(Priority::High, move |conn| {
+            let project = resolve_compaction_project(
+                conn,
+                session_key.as_deref(),
+                &agent_id,
+                fallback_project.as_deref(),
+            )?;
             let r = transactions::ingest(
                 conn,
                 &transactions::IngestInput {
                     content: &summary,
                     memory_type: "session_summary",
-                    tags: vec![],
+                    tags: vec!["session".into(), "summary".into(), harness.clone()],
                     who: None,
                     why: Some("compaction"),
-                    project: None,
+                    project: project.as_deref(),
                     importance: 0.3,
                     pinned: false,
                     source_type: Some("compaction"),
-                    source_id: None,
+                    source_id: session_key.as_deref(),
                     idempotency_key: None,
                     runtime_path: None,
                     actor: "compaction",
-                    agent_id: "default",
+                    agent_id: &agent_id,
                     visibility: "global",
                 },
             )?;
@@ -750,5 +783,73 @@ pub async fn compaction_complete(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_compaction_project;
+
+    #[test]
+    fn compaction_project_prefers_transcript_lineage() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE session_transcripts (
+                session_key TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                harness TEXT,
+                project TEXT,
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                created_at TEXT NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "sess-1",
+                "compaction transcript",
+                "codex",
+                "proj-transcript",
+                "agent-a",
+                "2026-03-25T00:00:00Z"
+            ],
+        )
+        .unwrap();
+
+        let project =
+            resolve_compaction_project(&conn, Some("sess-1"), "agent-a", Some("proj-fallback"))
+                .unwrap();
+
+        assert_eq!(project.as_deref(), Some("proj-transcript"));
+    }
+
+    #[test]
+    fn compaction_project_falls_back_to_request_project() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE session_transcripts (
+                session_key TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                harness TEXT,
+                project TEXT,
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                created_at TEXT NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+
+        let project = resolve_compaction_project(
+            &conn,
+            Some("sess-missing"),
+            "agent-a",
+            Some("proj-fallback"),
+        )
+        .unwrap();
+
+        assert_eq!(project.as_deref(), Some("proj-fallback"));
     }
 }

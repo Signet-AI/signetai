@@ -170,6 +170,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.requiredOption("-s, --summary <summary>", "Session summary text")
 		.action(async (options) => {
 			const input = await readJson();
+			const project = pickString(input?.cwd);
 			const data = await deps.fetchFromDaemon<{ success?: boolean; memoryId?: number; error?: string }>(
 				"/api/hooks/compaction-complete",
 				{
@@ -178,6 +179,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 						harness: options.harness,
 						summary: options.summary,
 						sessionKey: pickSessionKey(input),
+						project,
 					}),
 				},
 			);

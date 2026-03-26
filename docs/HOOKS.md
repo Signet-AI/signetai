@@ -190,9 +190,14 @@ different agents do not share transcript or summary storage.
 {
   "harness": "openclaw",
   "summary": "Session summary text...",
-  "sessionKey": "optional-session-id"
+  "sessionKey": "optional-session-id",
+  "project": "/workspace/repo"
 }
 ```
+
+If compaction arrives before transcript persistence, `project` is the required
+fallback lineage key. When both exist, transcript lineage wins and the request
+project is only used as a fallback.
 
 ### Response
 
