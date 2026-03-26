@@ -64,7 +64,20 @@ impl AppState {
         self.pipeline_paused.load(Ordering::SeqCst)
     }
 
+    fn normalize_harness_id(harness: &str) -> Option<&'static str> {
+        match harness.trim().to_ascii_lowercase().as_str() {
+            "claude" | "claude-code" => Some("claude-code"),
+            "opencode" => Some("opencode"),
+            "openclaw" => Some("openclaw"),
+            "forge" => Some("forge"),
+            _ => None,
+        }
+    }
+
     pub async fn stamp_harness(&self, harness: &str) {
+        let Some(harness) = Self::normalize_harness_id(harness) else {
+            return;
+        };
         let timestamp = chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339();
         self.harness_last_seen
             .write()

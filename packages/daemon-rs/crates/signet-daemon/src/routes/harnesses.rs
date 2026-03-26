@@ -202,20 +202,33 @@ fn find_signet_forge_binary(agents_dir: &std::path::Path) -> Option<PathBuf> {
     find_signet_forge_binary_with_home(&home_dir(), agents_dir)
 }
 
+fn resolve_safe_agents_dir(base_path: &std::path::Path, home: &std::path::Path) -> Option<PathBuf> {
+    let canonical_home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
+    let canonical_base = base_path.canonicalize().ok()?;
+    if !canonical_base.starts_with(&canonical_home) {
+        return None;
+    }
+    Some(canonical_base)
+}
+
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let home = home_dir();
-    let base_path = state
-        .config
-        .base_path
-        .canonicalize()
-        .unwrap_or_else(|_| state.config.base_path.clone());
-    let openclaw_path = base_path.join("AGENTS.md");
-    let verified_forge_path = find_signet_forge_binary(&base_path);
+    let safe_agents_dir = resolve_safe_agents_dir(&state.config.base_path, &home);
+    let openclaw_path = safe_agents_dir
+        .as_ref()
+        .map(|dir| dir.join("AGENTS.md"))
+        .unwrap_or_else(|| state.config.base_path.join("AGENTS.md"));
+    let openclaw_exists = safe_agents_dir
+        .as_ref()
+        .map(|dir| dir.join("AGENTS.md").exists())
+        .unwrap_or(false);
+    let verified_forge_path = safe_agents_dir
+        .as_ref()
+        .and_then(|dir| find_signet_forge_binary(dir));
     let forge_path = verified_forge_path
         .clone()
         .unwrap_or_else(|| signet_managed_forge_path(&home));
     let forge_exists = verified_forge_path.is_some();
-    let openclaw_exists = openclaw_path.exists();
     let claude_last_seen = state.harness_last_seen("claude-code").await;
     let opencode_last_seen = state.harness_last_seen("opencode").await;
     let openclaw_last_seen = state.harness_last_seen("openclaw").await;
