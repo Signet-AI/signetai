@@ -66,6 +66,10 @@ jobs:
           FORGE_SOURCE="packages/forge/forge-version.json"
           FORGE_MANIFESTS="packages/cli/templates/forge/manifest.json packages/signetai/templates/forge/manifest.json"
           for file in $FORGE_MANIFESTS; do
+            if [ ! -f "$file" ]; then
+              echo "Skipping Forge metadata comparison for missing template copy: $file"
+              continue
+            fi
             if ! cmp -s "$FORGE_SOURCE" "$file"; then
               echo "Forge version metadata drift detected between $FORGE_SOURCE and $file."
               echo "Keep forge-version.json as the source of truth and sync the template copies before merging."

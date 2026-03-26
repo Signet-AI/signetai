@@ -444,9 +444,14 @@ function verifyFileChecksum(filePath: string, expectedSha256: string): void {
 	}
 }
 
-function verifyForgeBinaryFingerprint(binaryPath: string): void {
+/**
+ * Heuristic compatibility check only (non-cryptographic).
+ * This confirms the extracted executable looks like a Signet-compatible Forge binary,
+ * but it is not a provenance/authenticity boundary by itself.
+ */
+function verifyForgeBinaryCompatibilityMarkers(binaryPath: string): void {
 	if (!isSignetForgeBinary(binaryPath)) {
-		throw new Error(`Extracted binary failed Signet Forge fingerprint check: ${binaryPath}`);
+		throw new Error(`Extracted binary failed Signet Forge compatibility marker check: ${binaryPath}`);
 	}
 }
 
@@ -509,7 +514,7 @@ async function installForgeBinary(
 			const expectedSha256 = parseSha256Checksum(await fetchText(checksumAsset.url), asset.name);
 			verifyFileChecksum(archivePath, expectedSha256);
 			const extracted = extractForgeBinary(archivePath, extractDir, manifest.binary);
-			verifyForgeBinaryFingerprint(extracted);
+			verifyForgeBinaryCompatibilityMarkers(extracted);
 			if (existsSync(stagedPath)) unlinkSync(stagedPath);
 			renameSync(extracted, stagedPath);
 			chmodSync(stagedPath, 0o755);
