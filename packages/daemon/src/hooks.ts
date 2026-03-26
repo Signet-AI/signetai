@@ -2228,7 +2228,7 @@ export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyAr
 	if (anchors.length === 0) return false;
 	if (results.length === 0) return false;
 	const anchorSet = new Set(anchors);
-	for (const row of results.slice(0, 3)) {
+	for (const row of results.slice(0, 8)) {
 		const rowAnchors = extractAnchorTerms(row.content);
 		for (const rowAnchor of rowAnchors) {
 			if (anchorSet.has(rowAnchor)) {

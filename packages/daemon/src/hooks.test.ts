@@ -186,6 +186,16 @@ describe("queryAnchorsMissingFromRecall", () => {
 		]);
 		expect(missing).toBe(true);
 	});
+
+	it("returns false when anchor appears after the first three hits", () => {
+		const missing = queryAnchorsMissingFromRecall("locate ultra-needle-transcript-only-5529931", [
+			{ content: "Use Hyprland on Arch Linux." },
+			{ content: "Keep AGENTS.md in sync with specs." },
+			{ content: "Plan migration in waves." },
+			{ content: "Reference ultra-needle-transcript-only-5529931 in temporal notes." },
+		]);
+		expect(missing).toBe(false);
+	});
 });
 
 describe("normalizeSessionTranscript", () => {

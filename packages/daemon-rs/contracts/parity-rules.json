@@ -105,11 +105,13 @@
       },
       "POST /api/hooks/user-prompt-submit": {
         "deterministic": ["injections"],
-        "ignoreFields": []
+        "ignoreFields": [],
+        "note": "TypeScript now includes anchor-aware temporal/thread fallback before transcript fallback; rust parity track is in progress and shadow comparator should expect prompt-shape drift during rollout."
       },
       "POST /api/hooks/session-end": {
         "deterministic": ["status"],
-        "ignoreFields": []
+        "ignoreFields": [],
+        "note": "TypeScript session-end path now queues forced MEMORY.md synthesis retries under head-lock contention; rust parity is pending."
       },
       "POST /api/hooks/remember": {
         "deterministic": ["status"],
@@ -126,7 +128,8 @@
       },
       "POST /api/hooks/compaction-complete": {
         "deterministic": ["status"],
-        "ignoreFields": []
+        "ignoreFields": [],
+        "note": "TypeScript compaction-complete now queues forced MEMORY.md synthesis retries under contention; rust parity is pending."
       },
       "GET /api/sessions": {
         "deterministic": ["sessions.*.key", "sessions.*.harness"],
