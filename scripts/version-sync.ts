@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const REFERENCE_FILE = "packages/signetai/package.json";
 const EXCLUDED_FILES = new Set(["packages/cli/dashboard/package.json"]);
+const EXCLUDED_CARGO_FILES = new Set(["packages/forge/Cargo.toml"]);
 
 function parseSemver(version: string): [number, number, number] {
 	const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -48,12 +49,9 @@ function getRemoteVersion(filePath: string): string | null {
 }
 
 function listTargetPackageFiles(): string[] {
-	const output = execSync(
-		"git ls-files package.json 'packages/**/package.json'",
-		{
-			encoding: "utf8",
-		},
-	);
+	const output = execSync("git ls-files package.json 'packages/**/package.json'", {
+		encoding: "utf8",
+	});
 
 	return output
 		.split("\n")
@@ -86,7 +84,8 @@ function listCargoFiles(): string[] {
 	return output
 		.split("\n")
 		.map((line) => line.trim())
-		.filter(Boolean);
+		.filter(Boolean)
+		.filter((file) => !EXCLUDED_CARGO_FILES.has(file));
 }
 
 function readCargoVersion(filePath: string): string | null {
@@ -135,10 +134,7 @@ function regenerateCargoLock(cargoFile: string): void {
 	}
 }
 
-function resolveWorkspaceProtocols(
-	files: readonly string[],
-	version: string,
-): string[] {
+function resolveWorkspaceProtocols(files: readonly string[], version: string): string[] {
 	const patched: string[] = [];
 	for (const file of files) {
 		const raw = readFileSync(file, "utf8");
@@ -179,8 +175,7 @@ function main() {
 
 	const targetVersion = explicitVersion
 		? explicitVersion
-		: remoteReferenceVersion &&
-				compareSemver(remoteReferenceVersion, localReferenceVersion) > 0
+		: remoteReferenceVersion && compareSemver(remoteReferenceVersion, localReferenceVersion) > 0
 			? remoteReferenceVersion
 			: localReferenceVersion;
 
@@ -205,19 +200,11 @@ function main() {
 	}
 
 	if (mismatches.length > 0) {
-		throw new Error(
-			`Version sync failed. Mismatches:\n- ${mismatches.join("\n- ")}`,
-		);
+		throw new Error(`Version sync failed. Mismatches:\n- ${mismatches.join("\n- ")}`);
 	}
 
-	if (
-		!explicitVersion &&
-		remoteReferenceVersion &&
-		compareSemver(remoteReferenceVersion, localReferenceVersion) > 0
-	) {
-		console.log(
-			`Local reference (${localReferenceVersion}) was behind origin/main (${remoteReferenceVersion}).`,
-		);
+	if (!explicitVersion && remoteReferenceVersion && compareSemver(remoteReferenceVersion, localReferenceVersion) > 0) {
+		console.log(`Local reference (${localReferenceVersion}) was behind origin/main (${remoteReferenceVersion}).`);
 	}
 
 	// Resolve workspace: protocols in publishable packages so npm publish
@@ -245,9 +232,7 @@ function main() {
 	}
 
 	if (cargoMismatches.length > 0) {
-		throw new Error(
-			`Cargo version sync failed. Mismatches:\n- ${cargoMismatches.join("\n- ")}`,
-		);
+		throw new Error(`Cargo version sync failed. Mismatches:\n- ${cargoMismatches.join("\n- ")}`);
 	}
 
 	if (updated.length === 0 && cargoUpdated.length === 0 && resolved.length === 0) {
@@ -256,27 +241,21 @@ function main() {
 	}
 
 	if (updated.length > 0) {
-		console.log(
-			`Aligned ${updated.length} package.json files to ${targetVersion}:`,
-		);
+		console.log(`Aligned ${updated.length} package.json files to ${targetVersion}:`);
 		for (const file of updated) {
 			console.log(`- ${file}`);
 		}
 	}
 
 	if (cargoUpdated.length > 0) {
-		console.log(
-			`Aligned ${cargoUpdated.length} Cargo.toml files to ${targetVersion}:`,
-		);
+		console.log(`Aligned ${cargoUpdated.length} Cargo.toml files to ${targetVersion}:`);
 		for (const file of cargoUpdated) {
 			console.log(`- ${file}`);
 		}
 	}
 
 	if (resolved.length > 0) {
-		console.log(
-			`Resolved workspace: protocols in ${resolved.length} publishable package(s):`,
-		);
+		console.log(`Resolved workspace: protocols in ${resolved.length} publishable package(s):`);
 		for (const file of resolved) {
 			console.log(`- ${file}`);
 		}

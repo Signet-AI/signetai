@@ -30,6 +30,8 @@ jobs:
             'package.json' 'bunfig.toml' 'tsconfig*.json' \
             '.github/workflows/**' \
             | grep -v '\.md$' \
+            | grep -v '^.github/workflows/forge-release.yml$' \
+            | grep -v '^packages/forge/' \
             | grep -v '\.jpg$' \
             | grep -v '\.jpeg$' \
             | grep -v '\.png$' \
