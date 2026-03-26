@@ -263,6 +263,7 @@ function checkVecTableSync(db: ReadDb, runtime: VectorRuntimeStatus): EmbeddingC
 			message: "vec_embeddings table not found",
 			detail: {
 				sqlite: runtime.sqlite,
+				sqliteAttempt: runtime.sqliteAttempt,
 				sqliteWarning: runtime.sqliteWarning,
 				extensionPath: runtime.extensionPath,
 				extensionLoaded: runtime.extensionLoaded,

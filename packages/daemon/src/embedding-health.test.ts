@@ -38,6 +38,7 @@ describe("buildEmbeddingHealth", () => {
 			},
 			{
 				sqlite: null,
+				sqliteAttempt: "/tmp/bad-sqlite.dylib",
 				sqliteWarning: "custom sqlite not configured",
 				extensionPath: "/tmp/vec0.dylib",
 				extensionLoaded: false,
@@ -50,6 +51,7 @@ describe("buildEmbeddingHealth", () => {
 		expect(vec?.fix).toContain("macOS");
 		expect(vec?.detail).toEqual({
 			sqlite: null,
+			sqliteAttempt: "/tmp/bad-sqlite.dylib",
 			sqliteWarning: "custom sqlite not configured",
 			extensionPath: "/tmp/vec0.dylib",
 			extensionLoaded: false,

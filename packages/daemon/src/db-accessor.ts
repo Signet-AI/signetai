@@ -31,6 +31,7 @@ export interface SqliteChoice {
 
 export interface VectorRuntimeStatus {
 	readonly sqlite: SqliteChoice | null;
+	readonly sqliteAttempt: string | null;
 	readonly sqliteWarning: string | null;
 	readonly extensionPath: string | null;
 	readonly extensionLoaded: boolean;
@@ -68,6 +69,7 @@ export interface DbAccessor {
 let accessor: DbAccessor | null = null;
 let dbPath: string | null = null;
 let sqliteChoice: SqliteChoice | null = null;
+let sqliteAttempt: string | null = null;
 let sqliteWarning: string | null = null;
 let vecLoaded = false;
 let vecLoadError: string | null = null;
@@ -127,6 +129,7 @@ function explainSqliteSetup(agentsDir: string): string {
 
 function configureCustomSqlite(path: string): void {
 	sqliteChoice = null;
+	sqliteAttempt = null;
 	sqliteWarning = null;
 	if (process.platform !== "darwin") return;
 
@@ -143,12 +146,13 @@ function configureCustomSqlite(path: string): void {
 		return;
 	}
 
+	sqliteAttempt = choice.path;
 	try {
 		Database.setCustomSQLite(choice.path);
 		sqliteChoice = choice;
 	} catch (e) {
-		sqliteChoice = choice;
-		sqliteWarning = e instanceof Error ? e.message : String(e);
+		const msg = e instanceof Error ? e.message : String(e);
+		sqliteWarning = `Failed to activate custom SQLite at ${choice.path}: ${msg}. ${explainSqliteSetup(agentsDir)}`;
 		console.warn(`[db-accessor] setCustomSQLite(${choice.path}) skipped: ${sqliteWarning}`);
 	}
 }
@@ -178,6 +182,7 @@ function loadVecExtension(db: Database): void {
 export function getVectorRuntimeStatus(): VectorRuntimeStatus {
 	return {
 		sqlite: sqliteChoice,
+		sqliteAttempt,
 		sqliteWarning,
 		extensionPath: vecExtPath ?? null,
 		extensionLoaded: vecLoaded,
@@ -523,6 +528,7 @@ export function closeDbAccessor(): void {
 		dbPath = null;
 	}
 	sqliteChoice = null;
+	sqliteAttempt = null;
 	sqliteWarning = null;
 	vecLoaded = false;
 	vecLoadError = null;

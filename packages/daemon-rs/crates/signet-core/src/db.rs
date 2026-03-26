@@ -14,6 +14,11 @@ use crate::migrations;
 // ---------------------------------------------------------------------------
 
 pub fn register_vec_extension() {
+    // Rust parity note: unlike the TypeScript daemon on macOS, the rust
+    // daemon does not rely on Apple/Homebrew/custom SQLite dylib selection.
+    // rusqlite is built with bundled SQLite and sqlite-vec is registered as an
+    // auto-extension before any connection opens. Keep this invariant in sync
+    // with the TS daemon's startup contract so shadow mode does not diverge.
     // SAFETY: sqlite3_vec_init is the canonical SQLite extension entry point for
     // sqlite-vec. sqlite3_auto_extension DOES call this pointer during connection
     // init, passing (sqlite3*, char**, sqlite3_api_routines*). The transmute is
@@ -508,5 +513,18 @@ mod tests {
             .query_row("SELECT vec_version()", [], |r| r.get(0))
             .unwrap();
         assert!(version.starts_with("v"), "vec_version should start with v");
+    }
+
+    #[test]
+    fn vec_is_available_without_external_sqlite_selection() {
+        register_vec_extension();
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        let version: String = conn
+            .query_row("SELECT vec_version()", [], |r| r.get(0))
+            .expect("sqlite-vec should be available without external dylib selection");
+        assert!(
+            version.starts_with('v'),
+            "vec_version should start with v, got {version}"
+        );
     }
 }
