@@ -1497,7 +1497,12 @@ const signetPlugin = {
 			}
 			const sessionFile = resolveCompactionSessionFile(event, ctx.sessionFile);
 			const summary = extractCompactionSummary(event, sessionFile);
-			if (!summary) return;
+			if (!summary) {
+				api.logger.warn(
+					`signet-memory: compaction summary unavailable, skipping save${sessionFile ? ` (${sessionFile})` : ""}`,
+				);
+				return;
+			}
 
 			const dedupeKey = `${ctx.agentId ?? "-"}|${sessionKey ?? "-"}|${summary.slice(0, 120)}`;
 			if (dedupeCompaction(afterCompactions, dedupeKey)) {

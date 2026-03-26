@@ -33,6 +33,7 @@ let delayPromptSubmitMs = 0;
 let lastRememberBody: unknown = null;
 let lastPreCompactionBody: unknown = null;
 let lastCompactionBody: unknown = null;
+let warnMessages: string[] = [];
 let testDir = "";
 
 function hit(path: string): void {
@@ -88,8 +89,8 @@ function createMockApi(): {
 			info() {
 				// no-op in tests
 			},
-			warn() {
-				// no-op in tests
+			warn(message) {
+				warnMessages.push(String(message));
 			},
 			error() {
 				// no-op in tests
@@ -132,6 +133,7 @@ beforeEach(() => {
 	lastRememberBody = null;
 	lastPreCompactionBody = null;
 	lastCompactionBody = null;
+	warnMessages = [];
 	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
 
 	const mockFetch = Object.assign(
@@ -632,6 +634,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		await afterCompaction?.({ compactedCount: 2 }, ctx);
 		expect(getHits("/api/hooks/compaction-complete")).toBe(0);
+		expect(warnMessages.some((message) => message.includes("compaction summary unavailable"))).toBe(true);
 
 		const second = await beforePromptBuild?.(event, ctx);
 		expect(getPrependContext(second)).toContain("turn-memory");

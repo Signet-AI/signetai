@@ -149,13 +149,22 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.description("Save session summary after compaction")
 		.requiredOption("-H, --harness <harness>", "Harness name")
 		.requiredOption("-s, --summary <summary>", "Session summary text")
+		.option("--session-key <key>", "Session key")
+		.option("--project <project>", "Project path")
+		.option("--agent-id <id>", "Agent ID")
 		.action(async (options) => {
-			const input = await readJson();
+			const input = process.stdin.isTTY ? null : await readJson();
 			const data = await deps.fetchFromDaemon<{ success?: boolean; memoryId?: number; error?: string }>(
 				"/api/hooks/compaction-complete",
 				{
 					method: "POST",
-					body: JSON.stringify(buildCompactionCompleteBody(input, options.harness, options.summary)),
+					body: JSON.stringify(
+						buildCompactionCompleteBody(input, options.harness, options.summary, {
+							agentId: options.agentId,
+							project: options.project,
+							sessionKey: options.sessionKey,
+						}),
+					),
 				},
 			);
 			if (data?.error) {
@@ -276,6 +285,11 @@ export function buildCompactionCompleteBody(
 	input: Record<string, unknown> | null,
 	harness: string,
 	summary: string,
+	overrides: {
+		agentId?: string;
+		project?: string;
+		sessionKey?: string;
+	} = {},
 ): {
 	harness: string;
 	summary: string;
@@ -287,9 +301,9 @@ export function buildCompactionCompleteBody(
 	return {
 		harness,
 		summary,
-		agentId: pickString(body?.agent_id, body?.agentId),
-		sessionKey: pickSessionKey(body),
-		project: pickString(body?.project, body?.cwd),
+		agentId: pickString(overrides.agentId, body?.agent_id, body?.agentId),
+		sessionKey: pickString(overrides.sessionKey, pickSessionKey(body)),
+		project: pickString(overrides.project, body?.project, body?.cwd),
 	};
 }
 
