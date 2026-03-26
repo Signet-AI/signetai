@@ -229,6 +229,12 @@ fn trim_for_inject(text: &str, limit: usize) -> String {
     format!("{}...", &trimmed[..end])
 }
 
+fn escape_like(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 fn format_metadata_header() -> String {
     let now = chrono::Local::now();
     format!(
@@ -331,20 +337,60 @@ pub async fn prompt_submit(
             if terms.is_empty() {
                 terms.push(cleaned.clone());
             }
-            let like_patterns = terms
+            let needles = terms
                 .iter()
                 .take(6)
-                .map(|t| format!("%{}%", t.to_lowercase()))
+                .map(|t| t.to_lowercase())
+                .collect::<Vec<_>>();
+            let like_patterns = needles
+                .iter()
+                .map(|t| format!("%{}%", escape_like(&t.to_lowercase())))
                 .collect::<Vec<_>>();
 
             // 1) Structured recall from memories (best effort parity with TS hybrid-first path).
             let mut mem_sql = String::from(
                 "SELECT id, content, created_at
                  FROM memories
-                 WHERE deleted = 0 AND agent_id = ?",
+                 WHERE deleted = 0",
             );
             let mut mem_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-            mem_params.push(Box::new(agent_id.clone()));
+            let read_policy: String = conn
+                .query_row(
+                    "SELECT read_policy FROM agents WHERE id = ?1",
+                    rusqlite::params![agent_id.clone()],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|_| "isolated".to_string());
+            match read_policy.as_str() {
+                "shared" => {
+                    mem_sql.push_str(" AND (visibility = 'global' OR agent_id = ?) AND visibility != 'archived'");
+                    mem_params.push(Box::new(agent_id.clone()));
+                }
+                "group" => {
+                    let group: Option<String> = conn
+                        .query_row(
+                            "SELECT policy_group FROM agents WHERE id = ?1",
+                            rusqlite::params![agent_id.clone()],
+                            |row| row.get(0),
+                        )
+                        .ok()
+                        .flatten();
+                    if let Some(g) = group {
+                        mem_sql.push_str(
+                            " AND ((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR agent_id = ?) AND visibility != 'archived'",
+                        );
+                        mem_params.push(Box::new(g));
+                        mem_params.push(Box::new(agent_id.clone()));
+                    } else {
+                        mem_sql.push_str(" AND agent_id = ? AND visibility != 'archived'");
+                        mem_params.push(Box::new(agent_id.clone()));
+                    }
+                }
+                _ => {
+                    mem_sql.push_str(" AND agent_id = ? AND visibility != 'archived'");
+                    mem_params.push(Box::new(agent_id.clone()));
+                }
+            }
             if let Some(ref p) = project {
                 mem_sql.push_str(" AND project = ?");
                 mem_params.push(Box::new(p.clone()));
@@ -352,7 +398,7 @@ pub async fn prompt_submit(
             if !like_patterns.is_empty() {
                 let clauses = like_patterns
                     .iter()
-                    .map(|_| "LOWER(content) LIKE ?")
+                    .map(|_| "LOWER(content) LIKE ? ESCAPE '\\'")
                     .collect::<Vec<_>>()
                     .join(" OR ");
                 mem_sql.push_str(" AND (");
@@ -425,10 +471,7 @@ pub async fn prompt_submit(
                 let mut picked = Vec::new();
                 for (id, sample, latest_at, label, row_project) in rows {
                     let lower = sample.to_lowercase();
-                    if !like_patterns.iter().any(|p| {
-                        let needle = p.trim_matches('%');
-                        !needle.is_empty() && lower.contains(needle)
-                    }) {
+                    if !needles.iter().any(|needle| !needle.is_empty() && lower.contains(needle)) {
                         continue;
                     }
                     if let Some(ref want) = project
@@ -503,10 +546,7 @@ pub async fn prompt_submit(
             let mut tx_lines = Vec::new();
             for (sk, content, updated_at) in tx_rows {
                 let lower = content.to_lowercase();
-                if !like_patterns.iter().any(|p| {
-                    let needle = p.trim_matches('%');
-                    !needle.is_empty() && lower.contains(needle)
-                }) {
+                if !needles.iter().any(|needle| !needle.is_empty() && lower.contains(needle)) {
                     continue;
                 }
                 let excerpt = trim_for_inject(&content, 260);
