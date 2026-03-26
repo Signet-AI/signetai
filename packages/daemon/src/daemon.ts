@@ -5297,7 +5297,7 @@ mountOsAgentRoutes(app);
 // ============================================================================
 
 function findForgeBinaryPath(): string | null {
-	return findSignetForgeBinary();
+	return findSignetForgeBinary(AGENTS_DIR);
 }
 
 app.get("/api/harnesses", async (c) => {

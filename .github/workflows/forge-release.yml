@@ -20,24 +20,20 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - id: meta
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           VERSION=$(jq -r '.version' packages/forge/forge-version.json)
           TAG="forge-v${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${TAG}"
-          git push origin "${TAG}"
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
   build:
@@ -59,8 +55,6 @@ jobs:
             asset: forge-linux-x64.tar.gz
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -95,9 +89,6 @@ jobs:
     if: needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.tag }}
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -107,6 +98,8 @@ jobs:
         run: |
           FILES=$(find artifacts -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) | sort)
           gh release create "${{ needs.prepare.outputs.tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
             --title "Forge v${{ needs.prepare.outputs.version }}" \
             --notes "Forge release from the Signet monorepo (packages/forge)." \
             ${FILES}

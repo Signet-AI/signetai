@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { findSignetForgeBinary, isSignetForgeBinary, resolveSignetForgeManagedPath } from "@signet/core";
+import { findSignetForgeBinary, resolveSignetForgeManagedPath } from "@signet/core";
 import chalk from "chalk";
 
 export interface ForgeManifest {
@@ -130,8 +130,8 @@ function resolveBinaryFromPath(binaryName = "forge"): string | null {
 	}
 }
 
-function findInstalledForge(binaryName = "forge"): string | null {
-	if (binaryName === "forge") return findSignetForgeBinary();
+function findInstalledForge(deps: ForgeDeps, binaryName = "forge"): string | null {
+	if (binaryName === "forge") return findSignetForgeBinary(deps.agentsDir);
 	const fromPath = resolveBinaryFromPath(binaryName);
 	if (fromPath) return fromPath;
 	for (const candidate of commonForgePaths(binaryName)) {
@@ -143,7 +143,7 @@ function findInstalledForge(binaryName = "forge"): string | null {
 function findManagedForge(deps: ForgeDeps, binaryName = "forge"): string | null {
 	const managedPath = signetManagedBinaryPath(binaryName);
 	const record = readInstallRecord(deps.agentsDir);
-	const validManagedBinary = existsSync(managedPath) && (binaryName !== "forge" || isSignetForgeBinary(managedPath));
+	const validManagedBinary = existsSync(managedPath);
 	if (record?.managed && record.binaryPath === managedPath && validManagedBinary) {
 		return managedPath;
 	}
@@ -346,7 +346,7 @@ async function installForgeBinary(
 }
 
 function buildStatusPayload(deps: ForgeDeps, manifest: ForgeManifest): ForgeStatusPayload {
-	const binaryPath = findInstalledForge(manifest.binary);
+	const binaryPath = findInstalledForge(deps, manifest.binary);
 	const record = readInstallRecord(deps.agentsDir);
 	const managedBinaryPath = findManagedForge(deps, manifest.binary);
 	const installedVersion = binaryPath ? readInstalledForgeVersion(binaryPath) : null;

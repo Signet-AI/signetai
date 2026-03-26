@@ -6,13 +6,11 @@
  * that form the cross-harness identity standard.
  */
 
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const FORGE_BINARY_NAME = "forge";
-const SIGNET_FORGE_ABOUT = "Signet's native AI terminal";
 
 /**
  * Returns the base path for agent-specific files.
@@ -169,54 +167,34 @@ export function resolveSignetForgeManagedPath(home = homedir()): string {
 	return join(home, ".config", "signet", "bin", forgeBinaryFilename());
 }
 
-function signetForgeCandidatePaths(home: string): string[] {
-	const binary = forgeBinaryFilename();
-	return [
-		resolveSignetForgeManagedPath(home),
-		join(home, ".cargo", "bin", binary),
-		join(home, ".local", "bin", binary),
-		"/usr/local/bin/forge",
-		"/opt/homebrew/bin/forge",
-	];
+interface SignetForgeInstallRecord {
+	readonly managed?: boolean;
+	readonly binaryPath?: string;
 }
 
-export function isSignetForgeBinary(binaryPath: string): boolean {
-	if (!existsSync(binaryPath)) return false;
+function readSignetForgeInstallRecord(agentsDir: string): SignetForgeInstallRecord | null {
+	const recordPath = join(agentsDir, ".forge-install.json");
+	if (!existsSync(recordPath)) return null;
 	try {
-		const help = execFileSync(binaryPath, ["--help"], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		return help.includes(SIGNET_FORGE_ABOUT);
-	} catch {
-		return false;
-	}
-}
-
-export function findSignetForgeBinary(home = homedir()): string | null {
-	for (const candidate of signetForgeCandidatePaths(home)) {
-		if (isSignetForgeBinary(candidate)) return candidate;
-	}
-	try {
-		const lookup = process.platform === "win32" ? "where" : "which";
-		const output = execFileSync(lookup, [FORGE_BINARY_NAME], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		})
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter(Boolean);
-		for (const candidate of output) {
-			if (isSignetForgeBinary(candidate)) return candidate;
-		}
-		return null;
+		return JSON.parse(readFileSync(recordPath, "utf8")) as SignetForgeInstallRecord;
 	} catch {
 		return null;
 	}
 }
 
-function isForgeInstalled(home: string): boolean {
-	return findSignetForgeBinary(home) !== null;
+export function findSignetForgeBinary(agentsDir?: string, home = homedir()): string | null {
+	const managedPath = resolveSignetForgeManagedPath(home);
+	if (existsSync(managedPath)) return managedPath;
+	if (!agentsDir) return null;
+	const record = readSignetForgeInstallRecord(agentsDir);
+	if (record?.managed && record.binaryPath === managedPath && existsSync(managedPath)) {
+		return managedPath;
+	}
+	return null;
+}
+
+function isForgeInstalled(agentsDir: string, home: string): boolean {
+	return findSignetForgeBinary(agentsDir, home) !== null;
 }
 
 /**
@@ -268,7 +246,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			opencode: existsSync(join(home, ".config", "opencode", "config.json")),
 			codex:
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
-			forge: isForgeInstalled(home),
+			forge: isForgeInstalled(basePath, home),
 		},
 	};
 }
