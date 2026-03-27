@@ -17,9 +17,9 @@ import { Type } from "@sinclair/typebox";
 import type {
 	OpenClawPluginApi,
 	OpenClawToolResult,
+	PluginHookAfterCompactionEvent,
 	PluginHookAgentContext,
 	PluginHookAgentEndEvent,
-	PluginHookAfterCompactionEvent,
 	PluginHookBeforeAgentStartEvent,
 	PluginHookBeforeCompactionEvent,
 	PluginHookBeforePromptBuildEvent,
@@ -1505,11 +1505,14 @@ const signetPlugin = {
 		// dedup), and timestamp (for TTL eviction when agent_end never fires).
 		const checkpointTurns = new Map<string, { count: number; lastMsgCount: number | undefined; at: number }>();
 		// Legacy dedup: when both before_prompt_build and before_agent_start fire
-		// on the same turn but the messages field is absent (older OpenClaw that
-		// predates the messages field), use a flag to ensure only one of the pair
-		// counts. before_prompt_build sets the flag; before_agent_start clears it
-		// and skips checkpoint counting if the flag was set.
-		const bpbFired = new Set<string>();
+		// on the same turn without the messages field (older OpenClaw), only one
+		// should count the turn. Generation counters: bpb increments bpbGen each
+		// call; bas tracks the last generation it consumed in basGen. If
+		// basGen < bpbGen, bas is covered and skips the count (then syncs basGen).
+		// Avoids the stale-flag problem where a missed bas leaves the flag set
+		// for the next turn.
+		const bpbGen = new Map<string, number>();
+		const basGen = new Map<string, number>();
 
 		const maybeFireCheckpoint = (
 			sessionKey: string | undefined,
@@ -1718,8 +1721,7 @@ const signetPlugin = {
 			// array. The prompt field carries platform metadata wrappers
 			// (Discord JSON, untrusted-context blocks) that pollute recall.
 			const rawPrompt = typeof event.prompt === "string" ? event.prompt : undefined;
-			const prompt =
-				extractLastUserMessage(event.messages) ?? (rawPrompt ? extractUserMessage(rawPrompt) : undefined);
+			const prompt = extractLastUserMessage(event.messages) ?? (rawPrompt ? extractUserMessage(rawPrompt) : undefined);
 			if (!prompt || prompt.length <= 3) {
 				return undefined;
 			}
@@ -1785,10 +1787,9 @@ const signetPlugin = {
 				// Count every turn unconditionally — checkpoint should fire based on
 				// conversation progress, not on whether recall injection succeeded.
 				const msgCount = Array.isArray(event.messages) ? event.messages.length : undefined;
-				// Flag for legacy dedup: if bpb and bas both fire without messages,
-				// bas checks this flag and skips its count (cleared atomically by bas).
+				// Legacy dedup: increment bpbGen so bas can detect if bpb ran this turn.
 				const bpbKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
-				if (bpbKey) bpbFired.add(bpbKey);
+				if (bpbKey) bpbGen.set(bpbKey, (bpbGen.get(bpbKey) ?? 0) + 1);
 				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
 				return result;
 			},
@@ -1803,10 +1804,13 @@ const signetPlugin = {
 			await ensureSessionStarted(event, resolved.sessionKey, resolved.agentId);
 			const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
 			const msgCount = Array.isArray(event.messages) ? event.messages.length : undefined;
-			// When messages absent, check if bpb already counted this turn.
-			// bpbFired.delete() returns true and clears the flag atomically.
+			// When messages absent, check generation counters to see if bpb already
+			// counted this turn. If basGen < bpbGen, bas is covered; sync basGen.
 			const basKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
-			const coveredByBpb = basKey ? bpbFired.delete(basKey) : false;
+			const latestBpb = basKey ? (bpbGen.get(basKey) ?? 0) : 0;
+			const lastConsumed = basKey ? (basGen.get(basKey) ?? 0) : 0;
+			const coveredByBpb = latestBpb > lastConsumed;
+			if (basKey && coveredByBpb) basGen.set(basKey, latestBpb);
 			if (!coveredByBpb || msgCount !== undefined) {
 				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
 			}
@@ -1831,7 +1835,8 @@ const signetPlugin = {
 				claimedSessions.delete(scopedKey);
 				injectedTurns.delete(scopedKey);
 				checkpointTurns.delete(scopedKey);
-				bpbFired.delete(scopedKey);
+				bpbGen.delete(scopedKey);
+				basGen.delete(scopedKey);
 			}
 			return undefined;
 		});

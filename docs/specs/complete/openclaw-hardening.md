@@ -6,7 +6,7 @@ success_criteria:
   - "Temporal index entries in MEMORY.md synthesis include a content preview line"
   - "OpenClaw plugin compiles and passes tests against the typed hook interfaces"
   - "Mid-session checkpoint extraction fires after N turns for long-lived sessions"
-  - "Rust daemon implements cursor-tracking parity for session-checkpoint-extract"
+  - "Rust daemon implements cursor-reading parity for session-checkpoint-extract (advance deferred to Phase 5)"
 scope_boundary: "OpenClaw adapter, TS/Rust daemon hooks, temporal synthesis — no OpenClaw core changes"
 ---
 
@@ -36,9 +36,11 @@ single dual-source resolver: typed ctx fields preferred, legacy event
 extras as fallback.
 
 Legacy dedup: when both `before_prompt_build` and `before_agent_start`
-fire on the same turn without the `messages` field (older OpenClaw), a
-`bpbFired: Set<string>` flag ensures only one of the pair increments the
-turn counter.
+fire on the same turn without the `messages` field (older OpenClaw),
+generation counters (`bpbGen`/`basGen` Maps) ensure only one of the pair
+increments the turn counter. Generation-based tracking avoids the
+stale-flag problem a `Set` approach has when `before_agent_start` misses
+a turn.
 
 ## Problem 3 — Mid-Session Extraction for Long-Lived Sessions
 

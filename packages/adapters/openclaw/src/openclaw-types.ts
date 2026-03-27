@@ -99,7 +99,7 @@ export interface OpenClawPluginApi {
 		handler: (
 			event: PluginHookBeforePromptBuildEvent,
 			ctx: PluginHookAgentContext,
-		) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void,
+		) => Promise<PluginHookBeforePromptBuildResult | undefined> | PluginHookBeforePromptBuildResult | undefined,
 		opts?: { priority?: number },
 	): void;
 	on(
@@ -107,15 +107,12 @@ export interface OpenClawPluginApi {
 		handler: (
 			event: PluginHookBeforeAgentStartEvent,
 			ctx: PluginHookAgentContext,
-		) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void,
+		) => Promise<PluginHookBeforePromptBuildResult | undefined> | PluginHookBeforePromptBuildResult | undefined,
 		opts?: { priority?: number },
 	): void;
 	on(
 		event: "agent_end",
-		handler: (
-			event: PluginHookAgentEndEvent,
-			ctx: PluginHookAgentContext,
-		) => Promise<void> | void,
+		handler: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void,
 		opts?: { priority?: number },
 	): void;
 	on(
@@ -123,15 +120,12 @@ export interface OpenClawPluginApi {
 		handler: (
 			event: PluginHookBeforeCompactionEvent,
 			ctx: PluginHookAgentContext,
-		) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void,
+		) => Promise<PluginHookBeforePromptBuildResult | undefined> | PluginHookBeforePromptBuildResult | undefined,
 		opts?: { priority?: number },
 	): void;
 	on(
 		event: "after_compaction",
-		handler: (
-			event: PluginHookAfterCompactionEvent,
-			ctx: PluginHookAgentContext,
-		) => Promise<void> | void,
+		handler: (event: PluginHookAfterCompactionEvent, ctx: PluginHookAgentContext) => Promise<void> | void,
 		opts?: { priority?: number },
 	): void;
 	// Fallback for unknown/newer hooks + legacy event names
