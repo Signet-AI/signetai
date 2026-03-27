@@ -19,6 +19,12 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 	try {
 		const templatesDir = deps.getTemplatesDir();
 		mkdirSync(cfg.basePath, { recursive: true });
+		const protection = await enforceSetupProtection({
+			basePath: cfg.basePath,
+			nonInteractive: cfg.nonInteractive,
+			allowUnprotectedWorkspace: cfg.allowUnprotectedWorkspace,
+			createLocalBackup: cfg.createLocalBackup,
+		});
 
 		const gitignoreSource = join(templatesDir, "gitignore.template");
 		if (existsSync(gitignoreSource)) {
@@ -221,13 +227,6 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 				console.log(chalk.dim("  ✓ Changes committed to git"));
 			}
 		}
-
-		const protection = await enforceSetupProtection({
-			basePath: cfg.basePath,
-			nonInteractive: cfg.nonInteractive,
-			allowUnprotectedWorkspace: cfg.allowUnprotectedWorkspace,
-			createLocalBackup: cfg.createLocalBackup,
-		});
 
 		if (cfg.nonInteractive) {
 			if (cfg.openDashboard) {

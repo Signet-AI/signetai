@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { detectSchema, getMissingIdentityFiles, hasValidIdentity } from "@signet/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
-import { getGitRemoteState, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
+import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
 
 interface Existing {
@@ -48,6 +48,7 @@ interface StatusReport {
 	readonly git: {
 		readonly isRepo: boolean;
 		readonly origin: string | null;
+		readonly snapshot: string | null;
 	};
 	// True when an openclaw config was found with both the legacy hook AND the
 	// plugin path enabled simultaneously (dual-system misconfiguration).
@@ -120,6 +121,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 	];
 	const daemon = await deps.getDaemonStatus();
 	const git = getGitRemoteState(basePath);
+	const snapshot = getSnapshotProtection(basePath);
 	const openclawWorkspaceLinked = hasOpenClawWorkspaceLink(basePath);
 	const report: StatusReport = {
 		basePath,
@@ -135,10 +137,14 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 			conversationCount: null,
 		},
 		daemon,
-		git,
+		git: {
+			isRepo: git.isRepo,
+			origin: git.origin,
+			snapshot,
+		},
 		openclawDualSystem: detectOpenClawDualSystem(),
 		openclawWorkspaceLinked,
-		openclawWorkspaceUnprotected: openclawWorkspaceLinked && git.origin === null,
+		openclawWorkspaceUnprotected: openclawWorkspaceLinked && git.origin === null && snapshot === null,
 	};
 
 	if (!existing.memoryDb) {
@@ -238,6 +244,9 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 	if (report.openclawWorkspaceUnprotected) {
 		console.log(chalk.red("  ⚠ OpenClaw workspace protection: unprotected"));
 		console.log(chalk.dim("    No origin remote detected for this workspace."));
+	} else if (report.openclawWorkspaceLinked && report.git.snapshot) {
+		console.log(chalk.yellow("  ⚠ OpenClaw workspace protection: local snapshot"));
+		console.log(chalk.dim(`    Snapshot: ${report.git.snapshot}`));
 	}
 	console.log();
 }

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getSnapshotProtection } from "../lib/workspace-protection.js";
 import { enforceSetupProtection } from "./setup-protection.js";
 
 const originalEnv = {
@@ -82,6 +83,7 @@ describe("setup protection soft gate", () => {
 			if (result.snapshotPath) {
 				expect(existsSync(result.snapshotPath)).toBe(true);
 			}
+			expect(getSnapshotProtection(workspace)).toBe(result.snapshotPath);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

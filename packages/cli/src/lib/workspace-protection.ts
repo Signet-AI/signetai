@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
@@ -12,6 +12,12 @@ export interface GitRemoteState {
 export interface SnapshotResult {
 	readonly path: string;
 	readonly root: string;
+}
+
+interface SnapshotState {
+	readonly source: string;
+	readonly snapshot: string;
+	readonly createdAt: string;
 }
 
 function readOutput(value: string | Buffer | null): string {
@@ -70,6 +76,10 @@ export function defaultBackupRoot(): string {
 	return join(homedir(), ".signet", "backups");
 }
 
+function snapshotStatePath(basePath: string): string {
+	return join(resolve(basePath), ".signet-workspace-protection.json");
+}
+
 export function createWorkspaceSnapshot(basePath: string, backupRoot = defaultBackupRoot()): SnapshotResult {
 	const root = resolve(backupRoot);
 	const source = resolve(basePath);
@@ -92,11 +102,74 @@ export function createWorkspaceSnapshot(basePath: string, backupRoot = defaultBa
 	return { path: target, root };
 }
 
+function readSnapshotState(basePath: string): SnapshotState | null {
+	const file = snapshotStatePath(basePath);
+	if (!existsSync(file)) {
+		return null;
+	}
+	try {
+		const raw = JSON.parse(readFileSync(file, "utf-8"));
+		if (typeof raw !== "object" || raw === null) {
+			return null;
+		}
+		const source = "source" in raw ? raw.source : null;
+		if (typeof source !== "string" || source.trim().length === 0) {
+			return null;
+		}
+		const snapshot = "snapshot" in raw ? raw.snapshot : null;
+		if (typeof snapshot !== "string" || snapshot.trim().length === 0) {
+			return null;
+		}
+		const createdAt = "createdAt" in raw ? raw.createdAt : null;
+		if (typeof createdAt !== "string" || createdAt.trim().length === 0) {
+			return null;
+		}
+		return {
+			source: resolve(source),
+			snapshot: resolve(snapshot),
+			createdAt: createdAt.trim(),
+		};
+	} catch {
+		return null;
+	}
+}
+
+export function saveSnapshotProtection(basePath: string, snapshotPath: string): void {
+	const state: SnapshotState = {
+		source: resolve(basePath),
+		snapshot: resolve(snapshotPath),
+		createdAt: new Date().toISOString(),
+	};
+	writeFileSync(snapshotStatePath(basePath), `${JSON.stringify(state, null, 2)}\n`);
+}
+
+export function getSnapshotProtection(basePath: string): string | null {
+	const state = readSnapshotState(basePath);
+	if (!state) {
+		return null;
+	}
+	if (state.source !== resolve(basePath)) {
+		return null;
+	}
+	if (!existsSync(state.snapshot)) {
+		return null;
+	}
+	return state.snapshot;
+}
+
 export function setOriginRemote(dir: string, url: string): void {
 	const path = resolve(dir);
-	const state = getGitRemoteState(path);
+	let state = getGitRemoteState(path);
 	if (!state.isRepo) {
-		throw new Error(`Not a git repository: ${path}`);
+		const init = spawnSync("git", ["init"], {
+			cwd: path,
+			encoding: "utf-8",
+			windowsHide: true,
+		});
+		if (init.status !== 0) {
+			throw new Error(readOutput(init.stderr) || `Failed to initialize git repository: ${path}`);
+		}
+		state = getGitRemoteState(path);
 	}
 	if (state.origin) {
 		const set = spawnSync("git", ["remote", "set-url", "origin", url], {

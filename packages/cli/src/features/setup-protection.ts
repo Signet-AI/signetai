@@ -3,7 +3,9 @@ import chalk from "chalk";
 import {
 	createWorkspaceSnapshot,
 	getGitRemoteState,
+	getSnapshotProtection,
 	hasOpenClawWorkspaceLink,
+	saveSnapshotProtection,
 	setOriginRemote,
 } from "../lib/workspace-protection.js";
 
@@ -49,12 +51,13 @@ function printRisk(path: string): void {
 export async function enforceSetupProtection(opts: SetupProtectionOptions): Promise<SetupProtectionResult> {
 	const openclawLinked = hasOpenClawWorkspaceLink(opts.basePath);
 	const remote = getGitRemoteState(opts.basePath);
+	const snapshot = getSnapshotProtection(opts.basePath);
 	if (!openclawLinked) {
 		return {
 			state: "not-applicable",
 			openclawLinked: false,
 			origin: remote.origin,
-			snapshotPath: null,
+			snapshotPath: snapshot,
 		};
 	}
 
@@ -67,9 +70,19 @@ export async function enforceSetupProtection(opts: SetupProtectionOptions): Prom
 		};
 	}
 
+	if (snapshot) {
+		return {
+			state: "snapshot",
+			openclawLinked: true,
+			origin: null,
+			snapshotPath: snapshot,
+		};
+	}
+
 	if (opts.nonInteractive) {
 		if (opts.createLocalBackup) {
 			const snap = createWorkspaceSnapshot(opts.basePath);
+			saveSnapshotProtection(opts.basePath, snap.path);
 			return {
 				state: "snapshot",
 				openclawLinked: true,
@@ -107,7 +120,13 @@ export async function enforceSetupProtection(opts: SetupProtectionOptions): Prom
 				message: "Origin URL (ssh or https):",
 				validate: (value) => (value.trim().length > 0 ? true : "Origin URL is required"),
 			});
-			setOriginRemote(opts.basePath, url.trim());
+			try {
+				setOriginRemote(opts.basePath, url.trim());
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				console.log(chalk.red(`  Could not set origin: ${message}`));
+				continue;
+			}
 			const updated = getGitRemoteState(opts.basePath);
 			if (updated.origin) {
 				return {
@@ -123,6 +142,7 @@ export async function enforceSetupProtection(opts: SetupProtectionOptions): Prom
 
 		if (action === "snapshot") {
 			const snap = createWorkspaceSnapshot(opts.basePath);
+			saveSnapshotProtection(opts.basePath, snap.path);
 			console.log(chalk.green(`  ✓ Snapshot created at ${snap.path}`));
 			return {
 				state: "snapshot",

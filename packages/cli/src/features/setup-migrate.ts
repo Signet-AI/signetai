@@ -66,6 +66,12 @@ export async function runExistingSetupWizard(
 		if (!existsSync(join(basePath, "memory", "scripts"))) {
 			mkdirSync(join(basePath, "memory", "scripts"), { recursive: true });
 		}
+		const protection = await enforceSetupProtection({
+			basePath,
+			nonInteractive: options?.nonInteractive === true,
+			allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
+			createLocalBackup: options?.createLocalBackup === true,
+		});
 
 		spinner.text = "Installing memory system...";
 		const scriptsSource = join(templatesDir, "memory", "scripts");
@@ -301,13 +307,6 @@ export async function runExistingSetupWizard(
 				console.log(chalk.dim("  ✓ Changes committed to git"));
 			}
 		}
-
-		const protection = await enforceSetupProtection({
-			basePath,
-			nonInteractive: options?.nonInteractive === true,
-			allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
-			createLocalBackup: options?.createLocalBackup === true,
-		});
 
 		console.log();
 		printSetupProtectionSummary(protection);
