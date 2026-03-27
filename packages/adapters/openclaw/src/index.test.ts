@@ -30,11 +30,13 @@ let failSessionStartCount = 0;
 let failPromptSubmitCount = 0;
 let delaySessionStartMs = 0;
 let delayPromptSubmitMs = 0;
+let checkpointResponse: Record<string, unknown> | null = null;
 let lastRememberBody: unknown = null;
 let lastPreCompactionBody: unknown = null;
 let lastCompactionBody: unknown = null;
 let lastSessionEndBody: unknown = null;
 let lastPromptSubmitBody: unknown = null;
+let lastCheckpointBody: unknown = null;
 let warnMessages: string[] = [];
 let testDir = "";
 
@@ -137,6 +139,8 @@ beforeEach(() => {
 	lastCompactionBody = null;
 	lastSessionEndBody = null;
 	lastPromptSubmitBody = null;
+	lastCheckpointBody = null;
+	checkpointResponse = null;
 	warnMessages = [];
 	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
 
@@ -185,6 +189,12 @@ beforeEach(() => {
 					lastRememberBody = init?.body ? JSON.parse(String(init.body)) : null;
 					return jsonResponse({ id: "mem-1" });
 				case "/api/hooks/session-checkpoint-extract":
+					lastCheckpointBody = init?.body ? JSON.parse(String(init.body)) : null;
+					if (checkpointResponse) {
+						const resp = checkpointResponse;
+						checkpointResponse = null;
+						return jsonResponse(resp);
+					}
 					return jsonResponse({ queued: true, jobId: "checkpoint-1" });
 				case "/api/marketplace/mcp/tools":
 					return jsonResponse({
@@ -1345,6 +1355,84 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		await Bun.sleep(0);
 		// Exactly 1 checkpoint at turn 20 — no double-counting from the pair.
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+	});
+
+
+	it("sends inline transcript when sessionFile absent (typed-only ctx)", async () => {
+		// Future OpenClaw: ctx carries sessionKey/agentId but event has no sessionFile.
+		// The adapter must serialize event.messages as JSONL inline transcript so the
+		// daemon always has a transcript source for checkpoint delta extraction.
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		const ctx = { sessionKey: "typed-session", agentId: "typed-agent" };
+		// Fire 20 turns with typed-only ctx — no sessionFile on event.
+		// Messages grow each turn so the message-count dedup doesn't collapse them.
+		let lastMsgs: Array<{ role: string; content: string }> = [];
+		for (let i = 0; i < 20; i++) {
+			lastMsgs = Array.from({ length: i + 1 }, (_, j) => ({
+				role: j % 2 === 0 ? "user" : "assistant",
+				content: `Message ${j + 1}`,
+			}));
+			await beforePromptBuild?.(
+				{ prompt: `Turn ${i + 1}`, messages: lastMsgs },
+				ctx,
+			);
+		}
+
+		await Bun.sleep(0);
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+		// The body should carry an inline transcript (JSONL of the messages array)
+		// since no sessionFile was present on the event.
+		const body = lastCheckpointBody as Record<string, unknown>;
+		expect(body.transcriptPath).toBeUndefined();
+		expect(typeof body.transcript).toBe("string");
+		const lines = (body.transcript as string).split("\n");
+		expect(lines.length).toBe(lastMsgs.length);
+		expect(JSON.parse(lines[0])).toEqual(lastMsgs[0]);
+	});
+
+	it("restores counter on skipped/queued:false so next turn retries (CAS guard)", async () => {
+		// When the daemon returns skipped:true or queued:false, the counter should
+		// be restored to threshold-1 so the NEXT turn triggers another attempt.
+		// CAS guard: restoration only happens if no new turns arrived during the
+		// async round-trip (prevents a stale callback from overwriting newer count).
+		checkpointResponse = { skipped: true };
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		const ctx = { sessionKey: "retry-session", agentId: "retry-agent" };
+
+		// Fire 20 turns — checkpoint fires but returns skipped:true
+		for (let i = 0; i < 20; i++) {
+			await beforePromptBuild?.(
+				{
+					prompt: `Turn ${i + 1}`,
+					messages: Array.from({ length: i + 1 }, () => ({ role: "user", content: "test" })),
+				},
+				ctx,
+			);
+		}
+		await Bun.sleep(0);
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+
+		// Counter was restored to threshold-1, so one more turn should trigger retry
+		checkpointResponse = { queued: true, jobId: "retry-1" };
+		await beforePromptBuild?.(
+			{
+				prompt: "Turn 21",
+				messages: Array.from({ length: 21 }, () => ({ role: "user", content: "test" })),
+			},
+			ctx,
+		);
+		await Bun.sleep(0);
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(2);
 	});
 
 	it("does not reregister marketplace proxy tools on refresh", async () => {

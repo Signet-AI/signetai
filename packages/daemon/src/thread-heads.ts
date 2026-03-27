@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { Database } from "bun:sqlite";
 
 export interface ThreadHeadSeed {
@@ -16,11 +17,15 @@ function clean(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
+// Returns the project display label: basename for absolute paths, full value
+// for short identifiers (bare names, URLs). Used in thread head labels only;
+// thread keys always use the full path for precise lookup/dedup.
 function projectTag(project: string | null): string | null {
 	if (!project) return null;
 	const trimmed = project.trim();
 	if (trimmed.length === 0) return null;
-	return trimmed;
+	// Use basename for absolute paths so labels stay readable in MEMORY.md
+	return trimmed.startsWith("/") ? (basename(trimmed) || trimmed) : trimmed;
 }
 
 export function deriveThreadKey(input: {

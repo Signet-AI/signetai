@@ -1520,6 +1520,7 @@ const signetPlugin = {
 			project: string | undefined,
 			sessionFile: string | undefined,
 			msgCount: number | undefined,
+			messages: readonly unknown[] | undefined,
 		): void => {
 			const scopedKey = buildScopedSessionKey(sessionKey, agentId);
 			if (!scopedKey || !sessionKey) return;
@@ -1546,6 +1547,13 @@ const signetPlugin = {
 
 			if (newCount < CHECKPOINT_TURN_THRESHOLD) return;
 
+			// Inline transcript fallback: when sessionFile is absent (typed-only
+			// OpenClaw without extra event fields), serialize event.messages as JSONL
+			// so the daemon always has a transcript source for delta extraction.
+			const inlineTranscript =
+				!sessionFile && Array.isArray(messages) && messages.length > 0
+					? messages.map((m) => JSON.stringify(m)).join("\n")
+					: undefined;
 			// Fire-and-forget — don't block the hook response.
 			// Restore counter to threshold-1 on non-success responses so the
 			// next turn retries: skipped=true (small delta, no transcript, bypassed),
@@ -1558,23 +1566,29 @@ const signetPlugin = {
 					agentId,
 					project,
 					transcriptPath: sessionFile,
+					...(inlineTranscript && { transcript: inlineTranscript }),
 					runtimePath: RUNTIME_PATH,
 				},
 				timeout: WRITE_TIMEOUT,
 			})
 				.then((resp) => {
 					if (isRecord(resp) && (resp.skipped === true || resp.queued === false)) {
+						// CAS guard: only restore if the counter hasn't advanced past
+						// threshold-1 by new turns arriving during the async round-trip.
+						// Prevents a stale callback from overwriting newer accumulated count.
 						const cur = checkpointTurns.get(scopedKey);
-						if (cur) checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
+						if (cur && cur.count < CHECKPOINT_TURN_THRESHOLD - 1)
+							checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
 					}
 				})
 				.catch((err) => {
 					api.logger.warn(
 						`signet-memory: checkpoint extract failed: ${err instanceof Error ? err.message : String(err)}`,
 					);
-					// Restore counter so the next turn retries after a transient failure.
+					// CAS guard: same protection as the .then() path.
 					const cur = checkpointTurns.get(scopedKey);
-					if (cur) checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
+					if (cur && cur.count < CHECKPOINT_TURN_THRESHOLD - 1)
+						checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
 				});
 		};
 
@@ -1799,11 +1813,12 @@ const signetPlugin = {
 				const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
 				// Count every turn unconditionally — checkpoint should fire based on
 				// conversation progress, not on whether recall injection succeeded.
-				const msgCount = Array.isArray(event.messages) ? event.messages.length : undefined;
+				const msgs = Array.isArray(event.messages) ? (event.messages as readonly unknown[]) : undefined;
+				const msgCount = msgs?.length;
 				// Legacy dedup: increment bpbGen so bas can detect if bpb ran this turn.
 				const bpbKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
 				if (bpbKey) bpbGen.set(bpbKey, (bpbGen.get(bpbKey) ?? 0) + 1);
-				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
+				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount, msgs);
 				return result;
 			},
 			{ priority: 20 },
@@ -1816,7 +1831,8 @@ const signetPlugin = {
 			const resolved = resolveCtx(event, ctx);
 			await ensureSessionStarted(event, resolved.sessionKey, resolved.agentId);
 			const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
-			const msgCount = Array.isArray(event.messages) ? event.messages.length : undefined;
+			const msgs = Array.isArray(event.messages) ? (event.messages as readonly unknown[]) : undefined;
+			const msgCount = msgs?.length;
 			// When messages absent, check generation counters to see if bpb already
 			// counted this turn. If basGen < bpbGen, bas is covered; sync basGen.
 			const basKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
@@ -1825,7 +1841,7 @@ const signetPlugin = {
 			const coveredByBpb = latestBpb > lastConsumed;
 			if (basKey && coveredByBpb) basGen.set(basKey, latestBpb);
 			if (!coveredByBpb || msgCount !== undefined) {
-				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
+				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount, msgs);
 			}
 			return result;
 		});
