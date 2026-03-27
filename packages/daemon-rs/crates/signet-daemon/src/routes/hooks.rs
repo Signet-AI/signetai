@@ -1145,43 +1145,140 @@ pub async fn compaction_complete(
 // POST /api/hooks/session-checkpoint-extract
 //
 // Mid-session delta extraction for long-lived sessions (Discord bots, etc.)
-// that never call session-end. The TS daemon handles the full implementation;
-// this stub returns {skipped: true} so the shadow-proxy divergence log shows
-// a mismatch rather than a hard error while Rust parity is in progress.
+// that never call session-end. Reads the stored session transcript, computes
+// the delta since the last extraction cursor, and advances the cursor when
+// the delta is large enough.
+//
+// Summary job enqueuing is Phase 5 (same as session_end's TODO comment).
+// Until then this returns {queued: false} when a delta was found, mirroring
+// how session_end writes a checkpoint but defers async extraction.
 // ---------------------------------------------------------------------------
+
+const CHECKPOINT_MIN_DELTA: usize = 500;
+
+/// Returns the transcript slice starting at `cursor`, or None if the
+/// delta is absent or below the minimum size threshold.
+fn extract_delta<'a>(full: &'a str, cursor: i64) -> Option<&'a str> {
+    let start = cursor.max(0) as usize;
+    if start >= full.len() {
+        return None;
+    }
+    let delta = &full[start..];
+    if delta.len() < CHECKPOINT_MIN_DELTA { None } else { Some(delta) }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointExtractBody {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // accepted for API compat; used for harness stamping in Phase 5
     pub harness: Option<String>,
-    #[allow(dead_code)]
     pub session_key: Option<String>,
-    #[allow(dead_code)]
     pub agent_id: Option<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used for project resolution in Phase 5
     pub project: Option<String>,
-    #[allow(dead_code)]
+    // Inline transcript (takes precedence over stored transcript).
     pub transcript: Option<String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Phase 5: read from path when no stored transcript
     pub transcript_path: Option<String>,
-    #[allow(dead_code)]
     pub runtime_path: Option<String>,
 }
 
 pub async fn session_checkpoint_extract(
-    _state: State<Arc<AppState>>,
-    _headers: HeaderMap,
-    Json(_body): Json<CheckpointExtractBody>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<CheckpointExtractBody>,
 ) -> axum::response::Response {
-    // Parity stub — full delta extraction is implemented in the TS daemon.
-    // Returns skipped so callers treat this as a no-op rather than an error.
-    (StatusCode::OK, Json(serde_json::json!({"skipped": true}))).into_response()
+    let Some(session_key) = body.session_key.clone() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "sessionKey is required"})),
+        )
+        .into_response();
+    };
+
+    let path = resolve_runtime_path(&headers, body.runtime_path.as_deref());
+
+    // Session conflict check — only extract for the claiming runtime path.
+    if let Some(p) = path
+        && let Some(claimed_by) = state.sessions.check(&session_key, p)
+    {
+        return conflict_response(claimed_by);
+    }
+
+    let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
+    let inline = body.transcript.clone();
+    let sk = session_key.clone();
+    let aid = agent_id.clone();
+
+    let result = state
+        .pool
+        .write(Priority::Low, move |conn| {
+            // Read current extraction cursor.
+            let cursor: i64 = conn
+                .query_row(
+                    "SELECT last_offset FROM session_extract_cursors \
+                     WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![sk, aid],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            // Resolve transcript: inline body takes precedence over stored.
+            let full = inline.or_else(|| {
+                conn.query_row(
+                    "SELECT content FROM session_transcripts WHERE session_key = ?1",
+                    rusqlite::params![sk],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            });
+
+            let Some(full) = full else {
+                return Ok(serde_json::json!({"skipped": true}));
+            };
+
+            if extract_delta(&full, cursor).is_none() {
+                return Ok(serde_json::json!({"skipped": true}));
+            }
+
+            let len = full.len() as i64;
+
+            // Advance cursor. Ordering: advance after we've confirmed a workable
+            // delta exists. Phase 5 will advance AFTER enqueueSummaryJob succeeds
+            // (crash-safe); for now advancing eagerly is acceptable because the TS
+            // daemon is authoritative when shadow mode is active.
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO session_extract_cursors \
+                 (session_key, agent_id, last_offset, last_extract_at) \
+                 VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT(session_key, agent_id) DO UPDATE SET \
+                   last_offset = excluded.last_offset, \
+                   last_extract_at = excluded.last_extract_at",
+                rusqlite::params![sk, aid, len, now],
+            )?;
+
+            // TODO: Phase 5 — enqueue summary job (same as session_end's TODO).
+            Ok(serde_json::json!({"queued": false, "skipped": false}))
+        })
+        .await;
+
+    match result {
+        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+        Err(e) => {
+            warn!(err = %e, "session-checkpoint-extract failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_compaction_project, strip_untrusted_metadata};
+    use super::{extract_delta, resolve_compaction_project, strip_untrusted_metadata, CHECKPOINT_MIN_DELTA};
 
     #[test]
     fn compaction_project_prefers_transcript_lineage() {
@@ -1244,6 +1341,41 @@ mod tests {
         .unwrap();
 
         assert_eq!(project.as_deref(), Some("proj-fallback"));
+    }
+
+    #[test]
+    fn extract_delta_skips_when_small() {
+        let short = "a".repeat(CHECKPOINT_MIN_DELTA - 1);
+        assert!(extract_delta(&short, 0).is_none());
+    }
+
+    #[test]
+    fn extract_delta_returns_slice_when_large_enough() {
+        let full = "a".repeat(CHECKPOINT_MIN_DELTA + 10);
+        let delta = extract_delta(&full, 0).unwrap();
+        assert_eq!(delta.len(), full.len());
+    }
+
+    #[test]
+    fn extract_delta_uses_cursor_offset() {
+        let prefix = "x".repeat(100);
+        let suffix = "y".repeat(CHECKPOINT_MIN_DELTA + 1);
+        let full = format!("{prefix}{suffix}");
+        let delta = extract_delta(&full, 100).unwrap();
+        assert_eq!(delta, suffix.as_str());
+    }
+
+    #[test]
+    fn extract_delta_skips_when_cursor_at_end() {
+        let full = "a".repeat(CHECKPOINT_MIN_DELTA + 100);
+        let cursor = full.len() as i64;
+        assert!(extract_delta(&full, cursor).is_none());
+    }
+
+    #[test]
+    fn extract_delta_skips_when_cursor_past_end() {
+        let full = "a".repeat(CHECKPOINT_MIN_DELTA);
+        assert!(extract_delta(&full, (full.len() + 1) as i64).is_none());
     }
 
     #[test]
