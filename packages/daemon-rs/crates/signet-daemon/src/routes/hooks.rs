@@ -1196,6 +1196,15 @@ pub async fn session_checkpoint_extract(
     headers: HeaderMap,
     Json(body): Json<CheckpointExtractBody>,
 ) -> axum::response::Response {
+    // Both harness and sessionKey are required — matches TS daemon validation
+    // and the contract documented in docs/API.md.
+    let Some(_harness) = body.harness.as_deref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "harness is required"})),
+        )
+        .into_response();
+    };
     let Some(session_key) = body.session_key.clone() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -1211,6 +1220,11 @@ pub async fn session_checkpoint_extract(
         && let Some(claimed_by) = state.sessions.check(&session_key, p)
     {
         return conflict_response(claimed_by);
+    }
+
+    // Honor bypass — consistent with other hook routes and the TS daemon.
+    if state.sessions.is_bypassed(&session_key) {
+        return (StatusCode::OK, Json(serde_json::json!({"skipped": true}))).into_response();
     }
 
     let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
