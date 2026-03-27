@@ -1090,6 +1090,29 @@ pub async fn compaction_complete(
     let harness = body.harness.clone().unwrap_or_default();
     let fallback_project = body.project.clone();
     let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
+    // Compaction resets the message array to a short post-compaction summary.
+    // Clear the stored transcript and extract cursor so the next checkpoint
+    // fires from byte 0 instead of skipping because the pre-compaction cursor
+    // exceeds the new (shorter) transcript. Mirrors the TS daemon behaviour
+    // added in the same PR. Non-fatal on failure (tables may not exist yet).
+    if let Some(key) = &body.session_key {
+        let sk = key.clone();
+        let aid = agent_id.clone();
+        let _ = state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let _ = conn.execute(
+                    "DELETE FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![sk, aid],
+                );
+                let _ = conn.execute(
+                    "DELETE FROM session_extract_cursors WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![sk, aid],
+                );
+                Ok(serde_json::Value::Null)
+            })
+            .await;
+    }
     let session_key = body.session_key.clone();
     let result = state
         .pool

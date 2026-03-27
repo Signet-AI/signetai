@@ -1557,9 +1557,11 @@ const signetPlugin = {
 					? messages.map((m) => JSON.stringify(m)).join("\n")
 					: undefined;
 			// Fire-and-forget — don't block the hook response.
-			// Restore counter to threshold-1 on non-success responses so the
-			// next turn retries: skipped=true (small delta, no transcript, bypassed),
-			// queued=false (Rust stub: delta found but no job yet), or HTTP error.
+			// Counter restore policy (CAS-guarded):
+			//   skipped:true  → restore to threshold-1 (nothing extracted, retry next turn)
+			//   queued:false  → treat as success (Rust Phase 5 stub: delta found, no job yet;
+			//                   counter stays at 0 to prevent per-turn retries against stub)
+			//   HTTP error    → restore to threshold-1 (retry next turn)
 			void daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
 				method: "POST",
 				body: {
