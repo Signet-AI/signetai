@@ -164,15 +164,16 @@ export function isCortexGroup(tab: TabId): boolean {
 }
 
 export function setTab(tab: TabId): boolean {
-	if (!VALID_TABS.has(tab)) return false;
-	if (tab === nav.activeTab) return true;
-	if (!confirmDiscardChanges(`switch to ${tab}`)) return false;
-	nav.activeTab = tab;
-	if (MEMORY_TABS.has(tab)) lastMemoryTab.value = tab;
-	if (ENGINE_TABS.has(tab)) lastEngineTab.value = tab;
-	if (CORTEX_TABS.has(tab)) lastCortexTab.value = tab;
+	const next = VALID_TABS.has(tab) ? tab : (HASH_ALIASES.get(tab) ?? null);
+	if (!next) return false;
+	if (next === nav.activeTab) return true;
+	if (!confirmDiscardChanges(`switch to ${next}`)) return false;
+	nav.activeTab = next;
+	if (MEMORY_TABS.has(next)) lastMemoryTab.value = next;
+	if (ENGINE_TABS.has(next)) lastEngineTab.value = next;
+	if (CORTEX_TABS.has(next)) lastCortexTab.value = next;
 	if (typeof window !== "undefined") {
-		history.replaceState(null, "", `#${tab}`);
+		history.replaceState(null, "", `#${next}`);
 	}
 	return true;
 }
