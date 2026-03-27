@@ -2332,9 +2332,13 @@ export interface ConstellationGraph {
 	dependencies: ConstellationDependency[];
 }
 
-export async function getConstellationOverlay(agentId = "default"): Promise<ConstellationGraph | null> {
+export async function getConstellationOverlay(agentId?: string): Promise<ConstellationGraph | null> {
 	try {
-		const res = await fetch(`${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}`);
+		const id = agentId?.trim();
+		const path = id
+			? `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(id)}`
+			: `${API_BASE}/api/knowledge/constellation`;
+		const res = await fetch(path);
 		if (!res.ok) return null;
 		return (await res.json()) as ConstellationGraph;
 	} catch {

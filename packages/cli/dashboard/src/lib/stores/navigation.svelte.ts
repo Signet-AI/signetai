@@ -84,6 +84,42 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["review-queue", "settings"],
 ]);
 
+const HASH_CANONICAL: ReadonlyMap<string, string> = new Map([
+	["memory/constellation", "cortex-memory/constellation"],
+	["ontology/constellation", "cortex-memory/constellation"],
+	["cortex-memory/constellation", "cortex-memory/constellation"],
+	["memory/timeline", "cortex-memory"],
+	["memory/knowledge", "cortex-memory"],
+	["memory/memories", "cortex-memory"],
+	["ontology", "cortex-memory"],
+	["ontology/cortex", "cortex-memory"],
+	["cortex", "cortex-memory"],
+	["cortex/memory", "cortex-memory"],
+	["cortex/apps", "cortex-memory"],
+	["cortex-apps", "cortex-memory"],
+	["matt", "cortex-memory"],
+	["matt/memory", "cortex-memory"],
+	["matt/apps", "cortex-memory"],
+	["memory", "cortex-memory"],
+	["embeddings", "cortex-memory"],
+	["knowledge", "cortex-memory"],
+	["audit/logs", "audit/logs"],
+	["engine/logs", "audit/logs"],
+	["audit/troubleshooter", "audit"],
+	["cortex/troubleshooter", "audit"],
+	["matt/troubleshooter", "audit"],
+	["logs", "audit/logs"],
+	["pipeline", "settings"],
+	["predictor", "settings"],
+	["connectors", "settings"],
+	["engine/pipeline", "settings"],
+	["engine/predictor", "settings"],
+	["engine/connectors", "settings"],
+	["cortex/tasks", "tasks"],
+	["matt/tasks", "tasks"],
+	["cortex-tasks", "tasks"],
+]);
+
 function readHash(): string {
 	if (typeof window === "undefined") return "";
 	return window.location.hash.slice(1);
@@ -92,6 +128,13 @@ function readHash(): string {
 function readTabFromHash(hash = readHash()): TabId | null {
 	if (VALID_TABS.has(hash)) return hash as TabId;
 	return HASH_ALIASES.get(hash) ?? null;
+}
+
+function canonicalHash(hash: string, tab: TabId): string {
+	const exact = HASH_CANONICAL.get(hash);
+	if (exact) return exact;
+	if (hash === tab) return hash;
+	return tab;
 }
 
 export const nav = $state({
@@ -153,8 +196,11 @@ export function initNavFromHash(): () => void {
 	const initial = readTabFromHash(raw);
 	if (initial) {
 		nav.activeTab = initial;
-		if (typeof window !== "undefined" && raw !== initial && !raw.includes("/")) {
-			history.replaceState(null, "", `#${initial}`);
+		if (typeof window !== "undefined") {
+			const next = canonicalHash(raw, initial);
+			if (raw !== next) {
+				history.replaceState(null, "", `#${next}`);
+			}
 		}
 	} else if (typeof window !== "undefined") {
 		// No hash present — set it to the default tab
@@ -166,8 +212,9 @@ export function initNavFromHash(): () => void {
 		const tab = readTabFromHash(next);
 		if (!tab) return;
 		if (tab !== nav.activeTab) nav.activeTab = tab;
-		if (next !== tab && !next.includes("/")) {
-			history.replaceState(null, "", `#${tab}`);
+		const target = canonicalHash(next, tab);
+		if (next !== target) {
+			history.replaceState(null, "", `#${target}`);
 		}
 	};
 	window.addEventListener("hashchange", onHashChange);

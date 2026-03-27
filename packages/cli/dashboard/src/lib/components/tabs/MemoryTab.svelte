@@ -155,8 +155,8 @@ async function ensureGraph(): Promise<void> {
 	try {
 		const agentId =
 			typeof window === "undefined"
-				? "default"
-				: new URLSearchParams(window.location.search).get("agent_id") || "default";
+				? undefined
+				: new URLSearchParams(window.location.search).get("agent_id") ?? undefined;
 		graph = await getConstellationOverlay(agentId);
 		if (!graph) graphError = "Ontology overlay unavailable.";
 	} catch (error) {
