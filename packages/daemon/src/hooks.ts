@@ -2827,30 +2827,36 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
  * Read (or upsert) the extract cursor for delta tracking.
  * Returns the last_offset for the given session/agent pair.
  */
-function getExtractCursor(sessionKey: string, agentId: string): number {
+/**
+ * Atomically claim the extraction delta for this session.
+ * Reads the current cursor and writes the new offset in a single write
+ * transaction so concurrent requests are serialized by SQLite.
+ * Returns the claimed cursor position, or null if delta < 500 chars.
+ */
+function claimExtractDelta(sessionKey: string, agentId: string, transcriptLen: number): number | null {
+	const now = new Date().toISOString();
 	try {
-		return getDbAccessor().withReadDb((db) => {
+		return getDbAccessor().withWriteTx((db) => {
 			const row = db
 				.prepare("SELECT last_offset FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?")
 				.get(sessionKey, agentId) as { last_offset: number } | undefined;
-			return row?.last_offset ?? 0;
+			const cursor = row?.last_offset ?? 0;
+			if (transcriptLen - cursor < 500) return null;
+			db.prepare(
+				`INSERT INTO session_extract_cursors (session_key, agent_id, last_offset, last_extract_at)
+				 VALUES (?, ?, ?, ?)
+				 ON CONFLICT(session_key, agent_id) DO UPDATE SET
+				   last_offset = excluded.last_offset,
+				   last_extract_at = excluded.last_extract_at`,
+			).run(sessionKey, agentId, transcriptLen, now);
+			return cursor;
 		});
-	} catch {
-		return 0;
+	} catch (e) {
+		logger.warn("hooks", "claimExtractDelta failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+		return null;
 	}
-}
-
-function updateExtractCursor(sessionKey: string, agentId: string, offset: number): void {
-	const now = new Date().toISOString();
-	getDbAccessor().withWriteTx((db) => {
-		db.prepare(
-			`INSERT INTO session_extract_cursors (session_key, agent_id, last_offset, last_extract_at)
-			 VALUES (?, ?, ?, ?)
-			 ON CONFLICT(session_key, agent_id) DO UPDATE SET
-			   last_offset = excluded.last_offset,
-			   last_extract_at = excluded.last_extract_at`,
-		).run(sessionKey, agentId, offset, now);
-	});
 }
 
 /**
@@ -2858,8 +2864,11 @@ function updateExtractCursor(sessionKey: string, agentId: string, offset: number
  * for long-lived sessions that never call session-end.
  *
  * Key differences from handleSessionEnd:
- * - Does NOT release the session claim or clear continuity state
- * - Only extracts the delta since the last extraction (cursor tracking)
+ * - Does NOT release the session claim (session continues after this call)
+ * - Calls consumeState() to flush accumulated continuity data, then
+ *   initContinuity() to restart the tracking window for the next interval
+ * - Only extracts the delta since the last extraction (cursor tracking via
+ *   claimExtractDelta — atomic read+update in one write transaction)
  * - Skips if delta is < 500 chars (not worth extracting)
  * - Writes a checkpoint with trigger 'mid_session_extract'
  */
@@ -2909,24 +2918,24 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		});
 	}
 
-	// Compute delta: only extract content since last extraction offset
-	const cursor = getExtractCursor(req.sessionKey, agentId);
-	const delta = transcript.slice(cursor);
-
-	if (delta.length < 500) {
-		logger.info("hooks", "Checkpoint extract skipped — delta too small", {
+	// Atomically claim the delta since last extraction. Returns null if delta
+	// is < 500 chars or if a concurrent request already advanced the cursor.
+	const cursor = claimExtractDelta(req.sessionKey, agentId, transcript.length);
+	if (cursor === null) {
+		logger.info("hooks", "Checkpoint extract skipped — delta too small or already claimed", {
 			sessionKey: req.sessionKey,
-			deltaChars: delta.length,
-			cursor,
 		});
 		return { skipped: true };
 	}
 
+	const delta = transcript.slice(cursor);
 	// Safety cap against degenerate inputs
 	const MAX_DELTA_CHARS = 100_000;
 	const capped = delta.length > MAX_DELTA_CHARS ? `${delta.slice(0, MAX_DELTA_CHARS)}\n[truncated]` : delta;
 
-	// Write checkpoint with mid_session_extract trigger
+	// Flush accumulated continuity data into a checkpoint, then re-init the
+	// tracking window so subsequent turns continue accumulating. Unlike
+	// session-end, we do NOT release the session claim.
 	try {
 		const snap = consumeState(req.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
@@ -2958,9 +2967,6 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		});
 	}
 
-	// Re-init continuity so the session continues tracking after this checkpoint.
-	// Unlike session-end, we do NOT release the session claim or clear state —
-	// we just restore the tracking window so subsequent turns accumulate normally.
 	try {
 		initContinuity(req.sessionKey, req.harness, req.project);
 	} catch {
@@ -2975,15 +2981,6 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		project: req.project,
 		agentId,
 	});
-
-	// Update cursor to the end of the current transcript
-	try {
-		updateExtractCursor(req.sessionKey, agentId, transcript.length);
-	} catch (e) {
-		logger.warn("hooks", "Checkpoint cursor update failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
-	}
 
 	logger.info("hooks", "Checkpoint extract queued", {
 		jobId,
