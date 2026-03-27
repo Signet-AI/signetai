@@ -1546,7 +1546,9 @@ const signetPlugin = {
 
 			if (newCount < CHECKPOINT_TURN_THRESHOLD) return;
 
-			// Fire-and-forget — don't block the hook response
+			// Fire-and-forget — don't block the hook response.
+			// On {queued:false} (delta too small, session bypassed) restore counter
+			// to threshold-1 so the next turn retries immediately.
 			void daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
 				method: "POST",
 				body: {
@@ -1558,11 +1560,18 @@ const signetPlugin = {
 					runtimePath: RUNTIME_PATH,
 				},
 				timeout: WRITE_TIMEOUT,
-			}).catch((err) => {
-				api.logger.warn(
-					`signet-memory: checkpoint extract failed: ${err instanceof Error ? err.message : String(err)}`,
-				);
-			});
+			})
+				.then((resp) => {
+					if (isRecord(resp) && resp.queued === false) {
+						const cur = checkpointTurns.get(scopedKey);
+						if (cur) checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
+					}
+				})
+				.catch((err) => {
+					api.logger.warn(
+						`signet-memory: checkpoint extract failed: ${err instanceof Error ? err.message : String(err)}`,
+					);
+				});
 		};
 
 		const resolveCompactionProject = (event: Record<string, unknown>, resolved: ResolvedCtx): string | undefined => {

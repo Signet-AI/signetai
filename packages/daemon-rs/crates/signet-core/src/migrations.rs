@@ -501,15 +501,21 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
         }
         34 => {
             // Rebuild session_transcripts with compound (session_key, agent_id) PK.
-            // Skip if agent_id column already exists (table was created with compound
-            // PK by a pre-release version of this migration — e.g. a patched 032).
-            let has_agent_id: bool = conn
+            // Skip only when agent_id is already a PRIMARY KEY member (PRAGMA
+            // table_info column 5 = pk, nonzero = part of the PK). Checking just
+            // for column existence would incorrectly skip when agent_id was added
+            // by a different migration as a regular column without PK membership.
+            let agent_id_in_pk: bool = conn
                 .prepare("PRAGMA table_info(session_transcripts)")?
-                .query_map([], |row| row.get::<_, String>(1))?
+                .query_map([], |row| {
+                    let name: String = row.get(1)?;
+                    let pk: i64 = row.get(5)?;
+                    Ok((name, pk))
+                })?
                 .filter_map(|r| r.ok())
-                .any(|n| n == "agent_id");
+                .any(|(name, pk)| name == "agent_id" && pk > 0);
 
-            if !has_agent_id {
+            if !agent_id_in_pk {
                 conn.execute_batch(
                     "CREATE TABLE session_transcripts_new (
                         session_key TEXT NOT NULL,
