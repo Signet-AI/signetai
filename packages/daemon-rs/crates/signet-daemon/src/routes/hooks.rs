@@ -1227,6 +1227,11 @@ pub async fn session_checkpoint_extract(
         return (StatusCode::OK, Json(serde_json::json!({"skipped": true}))).into_response();
     }
 
+    // Refresh session TTL — keeps long-lived sessions (Discord bots) alive
+    // without ending the claim. Mirrors TS daemon renewSession() call on
+    // this route. Non-fatal: sessions without an active claim are a no-op.
+    state.sessions.renew(&session_key);
+
     // Resolve agent_id: explicit value > "agent:{id}:..." session-key parse > "default".
     // Mirrors TS resolveAgentId(sessionKey) so multi-agent checkpoints scope correctly.
     let agent_id = {

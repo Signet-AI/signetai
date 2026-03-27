@@ -505,7 +505,13 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
             // table_info column 5 = pk, nonzero = part of the PK). Checking just
             // for column existence would incorrectly skip when agent_id was added
             // by a different migration as a regular column without PK membership.
-            let agent_id_in_pk: bool = conn
+            //
+            // Two scenarios for the old table when this migration runs:
+            // (a) Fresh Rust install: migration 032 created session_transcripts
+            //     without agent_id → SELECT must use literal 'default'
+            // (b) Cross-daemon: TS daemon ran first and added agent_id as a
+            //     regular (non-PK) column → SELECT must use COALESCE(agent_id, 'default')
+            let cols: Vec<(String, i64)> = conn
                 .prepare("PRAGMA table_info(session_transcripts)")?
                 .query_map([], |row| {
                     let name: String = row.get(1)?;
@@ -513,10 +519,20 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
                     Ok((name, pk))
                 })?
                 .filter_map(|r| r.ok())
-                .any(|(name, pk)| name == "agent_id" && pk > 0);
+                .collect();
+
+            let agent_id_in_pk = cols.iter().any(|(name, pk)| name == "agent_id" && *pk > 0);
+            let agent_id_col_exists = cols.iter().any(|(name, _)| name == "agent_id");
 
             if !agent_id_in_pk {
-                conn.execute_batch(
+                // Build the agent_id expression for the SELECT based on whether
+                // the column already exists in the source table.
+                let agent_id_expr = if agent_id_col_exists {
+                    "COALESCE(agent_id, 'default')"
+                } else {
+                    "'default'"
+                };
+                let sql = format!(
                     "CREATE TABLE session_transcripts_new (
                         session_key TEXT NOT NULL,
                         agent_id    TEXT NOT NULL DEFAULT 'default',
@@ -528,15 +544,16 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
                     );
                     INSERT OR IGNORE INTO session_transcripts_new
                         (session_key, agent_id, content, harness, project, created_at)
-                    SELECT session_key, COALESCE(agent_id, 'default'), content, harness, project, created_at
+                    SELECT session_key, {agent_id_expr}, content, harness, project, created_at
                     FROM session_transcripts;
                     DROP TABLE session_transcripts;
                     ALTER TABLE session_transcripts_new RENAME TO session_transcripts;
                     CREATE INDEX IF NOT EXISTS idx_st_project
                         ON session_transcripts(project);
                     CREATE INDEX IF NOT EXISTS idx_st_created
-                        ON session_transcripts(created_at);",
-                )?;
+                        ON session_transcripts(created_at);"
+                );
+                conn.execute_batch(&sql)?;
             }
         }
         _ => {}
