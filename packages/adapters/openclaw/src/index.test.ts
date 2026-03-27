@@ -1251,6 +1251,51 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(0);
 	});
 
+	it("resets turn dedup after compaction so post-compaction turns are not skipped", async () => {
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const afterCompaction = hooks.get("after_compaction");
+		expect(beforePromptBuild).toBeDefined();
+		expect(afterCompaction).toBeDefined();
+
+		const ctx = { sessionKey: "compact-dedup-session", agentId: "agent-1" };
+
+		// Fire 5 pre-compaction turns — sets lastMsgCount to 5
+		for (let i = 0; i < 5; i++) {
+			await beforePromptBuild?.(
+				{
+					prompt: `Pre-compaction turn ${i + 1}`,
+					messages: Array.from({ length: i + 1 }, () => ({ role: "user", content: "test message" })),
+				},
+				ctx,
+			);
+		}
+
+		// Compaction fires — messages reset back to low count.
+		// The after_compaction handler resets checkpointTurns even when no
+		// summary is available (it deletes the entry before the summary check).
+		await afterCompaction?.({ messageCount: 4, compactedCount: 2 }, ctx);
+
+		// Post-compaction: message count starts at 1 again (same as early pre-compaction).
+		// Without the fix, lastMsgCount=1 would be seen as a dup and the turn skipped.
+		// With the fix, checkpointTurns is reset and the counter increments normally.
+		for (let i = 0; i < 20; i++) {
+			await beforePromptBuild?.(
+				{
+					prompt: `Post-compaction turn ${i + 1}`,
+					messages: Array.from({ length: i + 1 }, () => ({ role: "user", content: "test message" })),
+				},
+				ctx,
+			);
+		}
+
+		await Bun.sleep(0);
+		// 20 post-compaction turns should trigger exactly one checkpoint
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+	});
+
 	it("fires checkpoint via legacy before_agent_start path", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);

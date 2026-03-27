@@ -1626,6 +1626,11 @@ const signetPlugin = {
 			const scopedKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
 			if (scopedKey) {
 				injectedTurns.delete(scopedKey);
+				// Compaction resets the message count, so the checkpoint turn-dedup
+				// (keyed on lastMsgCount) would falsely skip the first post-compaction
+				// turn if it happens to share the same count as a pre-compaction turn.
+				// Reset the checkpoint state so dedup starts fresh after compaction.
+				checkpointTurns.delete(scopedKey);
 			}
 			const sessionFile = resolveCompactionSessionFile(event, resolved.sessionFile);
 			const summary = extractCompactionSummary(event, sessionFile);

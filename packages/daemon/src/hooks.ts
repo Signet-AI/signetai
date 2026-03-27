@@ -2944,6 +2944,10 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	// Flush accumulated continuity data into a checkpoint, then re-init the
 	// tracking window so subsequent turns continue accumulating. Unlike
 	// session-end, we do NOT release the session claim.
+	//
+	// Note: consumeState/initContinuity are session-key-scoped (not agentId-
+	// scoped) — matching the same design in handleSessionEnd. agentId is only
+	// used for cursor dedup in session_extract_cursors.
 	try {
 		const snap = consumeState(req.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
