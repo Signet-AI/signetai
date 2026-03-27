@@ -4,17 +4,15 @@
 -- Extraction creates the search surface; the transcript preserves
 -- completeness so nothing is permanently lost.
 --
--- Compound primary key (session_key, agent_id) matches the TS daemon schema
--- so queries that scope by agent_id work correctly against this table.
+-- Single-column primary key on session_key. Migration 034 upgrades
+-- this to a compound (session_key, agent_id) key for multi-agent support.
 
 CREATE TABLE IF NOT EXISTS session_transcripts (
-    session_key TEXT NOT NULL,
-    agent_id    TEXT NOT NULL DEFAULT 'default',
+    session_key TEXT PRIMARY KEY,
     content     TEXT NOT NULL,
     harness     TEXT,
     project     TEXT,
-    created_at  TEXT NOT NULL,
-    PRIMARY KEY (session_key, agent_id)
+    created_at  TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_st_project

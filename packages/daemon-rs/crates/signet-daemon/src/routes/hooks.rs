@@ -1207,6 +1207,7 @@ pub async fn session_checkpoint_extract(
 
     let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
     let inline = body.transcript.clone();
+    let tpath = body.transcript_path.clone();
     let sk = session_key.clone();
     let aid = agent_id.clone();
 
@@ -1223,17 +1224,21 @@ pub async fn session_checkpoint_extract(
                 )
                 .unwrap_or(0);
 
-            // Resolve transcript: inline body takes precedence over stored.
-            // Always filter by agent_id to satisfy the repo-wide scoping invariant.
-            let full = inline.or_else(|| {
-                conn.query_row(
-                    "SELECT content FROM session_transcripts \
-                     WHERE session_key = ?1 AND agent_id = ?2",
-                    rusqlite::params![sk, aid],
-                    |row| row.get::<_, String>(0),
-                )
-                .ok()
-            });
+            // Resolve transcript: inline body → transcript_path file → stored.
+            // Mirrors the TS daemon priority order. Always filter by agent_id.
+            let full = inline
+                .or_else(|| {
+                    tpath.as_deref().and_then(|p| std::fs::read_to_string(p).ok())
+                })
+                .or_else(|| {
+                    conn.query_row(
+                        "SELECT content FROM session_transcripts \
+                         WHERE session_key = ?1 AND agent_id = ?2",
+                        rusqlite::params![sk, aid],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                });
 
             let Some(full) = full else {
                 return Ok(serde_json::json!({"skipped": true}));

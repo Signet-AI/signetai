@@ -1,0 +1,12 @@
+-- Migration 034: Session Transcripts — compound primary key
+--
+-- Upgrades session_transcripts from a single-column primary key (session_key)
+-- to a compound (session_key, agent_id) key so multi-agent sessions with the
+-- same session_key are stored as separate rows.
+--
+-- The actual table rebuild is conditional on the existing schema and is handled
+-- programmatically in migrations.rs (match arm 34), because SQLite does not
+-- support ADD CONSTRAINT or ALTER TABLE ... PRIMARY KEY.
+--
+-- If agent_id already exists (table already has compound PK), this migration
+-- is a documented no-op and records the schema version without data changes.
