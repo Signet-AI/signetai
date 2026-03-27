@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { detectSchema, getMissingIdentityFiles, hasValidIdentity } from "@signet/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
+import { getGitRemoteState, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
 
 interface Existing {
@@ -44,9 +45,15 @@ interface StatusReport {
 	readonly files: readonly FileReport[];
 	readonly db: DbReport;
 	readonly daemon: DaemonStatus;
+	readonly git: {
+		readonly isRepo: boolean;
+		readonly origin: string | null;
+	};
 	// True when an openclaw config was found with both the legacy hook AND the
 	// plugin path enabled simultaneously (dual-system misconfiguration).
 	readonly openclawDualSystem: boolean;
+	readonly openclawWorkspaceLinked: boolean;
+	readonly openclawWorkspaceUnprotected: boolean;
 }
 
 /**
@@ -112,6 +119,8 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 		{ name: "memories.db", exists: existing.memoryDb },
 	];
 	const daemon = await deps.getDaemonStatus();
+	const git = getGitRemoteState(basePath);
+	const openclawWorkspaceLinked = hasOpenClawWorkspaceLink(basePath);
 	const report: StatusReport = {
 		basePath,
 		installed,
@@ -126,7 +135,10 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 			conversationCount: null,
 		},
 		daemon,
+		git,
 		openclawDualSystem: detectOpenClawDualSystem(),
+		openclawWorkspaceLinked,
+		openclawWorkspaceUnprotected: openclawWorkspaceLinked && git.origin === null,
 	};
 
 	if (!existing.memoryDb) {
@@ -223,6 +235,10 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 
 	console.log();
 	console.log(chalk.dim(`  Path: ${report.basePath}`));
+	if (report.openclawWorkspaceUnprotected) {
+		console.log(chalk.red("  ⚠ OpenClaw workspace protection: unprotected"));
+		console.log(chalk.dim("    No origin remote detected for this workspace."));
+	}
 	console.log();
 }
 
@@ -335,6 +351,15 @@ function getDoctorFindings(report: StatusReport): DoctorFinding[] {
 			message:
 				"OpenClaw dual-system conflict: legacy hook AND plugin are both enabled. This causes duplicate memories, 2× token burn, and 409 session errors.",
 			fix: 'Run `signet setup --harness openclaw` to repair, or set hooks.internal.entries["signet-memory"].enabled = false in your openclaw config.',
+		});
+	}
+
+	if (report.openclawWorkspaceUnprotected) {
+		findings.push({
+			level: "warn",
+			message:
+				"OpenClaw points at this Signet workspace, but no git origin remote is configured. Uninstalling OpenClaw can leave this workspace unrecoverable without backup.",
+			fix: "Run `git -C <workspace> remote add origin <private-repo-url>` or rerun `signet setup` and create a local snapshot backup.",
 		});
 	}
 

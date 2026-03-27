@@ -195,6 +195,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				nonInteractive: true,
 				openDashboard: options.openDashboard === true,
 				skipGit: options.skipGit === true,
+				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+				createLocalBackup: options.createLocalBackup === true,
 				embeddingProvider: migrationEmbeddingProvider,
 				embeddingModel: deps.normalizeStringValue(options.embeddingModel) || undefined,
 				extractionProvider: migrationExtractionProvider,
@@ -229,7 +231,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				return;
 			}
 		} else {
-			await runExistingSetupWizard(basePath, existing, existingConfig, deps);
+			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
+				allowUnprotectedWorkspace: false,
+				createLocalBackup: false,
+			});
 			return;
 		}
 	} else {
@@ -330,7 +335,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			if (existingConfigs.length > 0) {
 				console.log();
 				configureOpenClawWs = await confirm({
-					message: `Set OpenClaw workspace to ${basePath} in ${existingConfigs.length} config file(s)?`,
+					message: `Set OpenClaw workspace to ${basePath} in ${existingConfigs.length} config file(s)? This can be destructive on OpenClaw uninstall unless backups are configured.`,
 					default: true,
 				});
 			}
@@ -704,6 +709,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		existingAgentsDir: existing.agentsDir,
 		nonInteractive,
 		openDashboard: options.openDashboard === true,
+		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+		createLocalBackup: options.createLocalBackup === true,
 	};
 
 	await runFreshSetup(cfg, deps);
