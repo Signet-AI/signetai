@@ -2877,7 +2877,7 @@ function advanceExtractCursor(sessionKey: string, agentId: string, offset: numbe
  * - Only extracts the delta since the last extraction (cursor via
  *   readExtractCursor / advanceExtractCursor; cursor is advanced AFTER
  *   enqueueSummaryJob succeeds to preserve crash-safety)
- * - Skips if delta is < 500 chars (not worth extracting)
+ * - Skips if delta is < 500 bytes (not worth extracting)
  * - Writes a checkpoint with trigger 'mid_session_extract'
  */
 export function handleCheckpointExtract(req: CheckpointExtractRequest): CheckpointExtractResponse {
@@ -2947,16 +2947,17 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	// keep the unit consistent across daemons.
 	const cursor = readExtractCursor(req.sessionKey, agentId);
 	const transcriptBuf = Buffer.from(transcript, "utf8");
-	const delta = transcriptBuf.subarray(cursor).toString("utf8");
-	if (delta.length < 500) {
+	const deltaBuf = transcriptBuf.subarray(cursor);
+	if (deltaBuf.byteLength < 500) {
 		logger.info("hooks", "Checkpoint extract skipped — delta too small", {
 			sessionKey: req.sessionKey,
-			deltaChars: delta.length,
+			deltaBytes: deltaBuf.byteLength,
 			cursor,
 		});
 		return { skipped: true };
 	}
-	// Safety cap against degenerate inputs
+	// Convert delta buffer to string; safety cap against degenerate inputs
+	const delta = deltaBuf.toString("utf8");
 	const MAX_DELTA_CHARS = 100_000;
 	const capped = delta.length > MAX_DELTA_CHARS ? `${delta.slice(0, MAX_DELTA_CHARS)}\n[truncated]` : delta;
 
