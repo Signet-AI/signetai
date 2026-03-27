@@ -153,11 +153,7 @@ async function ensureGraph(): Promise<void> {
 	graphLoading = true;
 	graphError = "";
 	try {
-		const agentId =
-			typeof window === "undefined"
-				? undefined
-				: new URLSearchParams(window.location.search).get("agent_id") ?? undefined;
-		graph = await getConstellationOverlay(agentId);
+		graph = await getConstellationOverlay();
 		if (!graph) graphError = "Ontology overlay unavailable.";
 	} catch (error) {
 		graphError = error instanceof Error ? error.message : "Failed to load ontology overlay.";

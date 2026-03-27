@@ -2332,12 +2332,27 @@ export interface ConstellationGraph {
 	dependencies: ConstellationDependency[];
 }
 
+export function resolveAgentId(agentId?: string): string {
+	const fromArg = agentId?.trim();
+	if (fromArg) return fromArg;
+	if (typeof window === "undefined") return "default";
+	const fromQuery = new URLSearchParams(window.location.search).get("agent_id")?.trim();
+	if (fromQuery) return fromQuery;
+	const fromDom = document.documentElement.dataset.agentId?.trim();
+	if (fromDom) return fromDom;
+	try {
+		const fromStore = window.localStorage.getItem("signet-agent-id")?.trim();
+		if (fromStore) return fromStore;
+	} catch {
+		// ignore
+	}
+	return "default";
+}
+
 export async function getConstellationOverlay(agentId?: string): Promise<ConstellationGraph | null> {
 	try {
-		const id = agentId?.trim();
-		const path = id
-			? `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(id)}`
-			: `${API_BASE}/api/knowledge/constellation`;
+		const id = resolveAgentId(agentId);
+		const path = `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(id)}`;
 		const res = await fetch(path);
 		if (!res.ok) return null;
 		return (await res.json()) as ConstellationGraph;
