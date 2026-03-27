@@ -134,6 +134,11 @@ signet setup --non-interactive \
 In non-interactive mode, agents should ask the user to choose both
 providers first, then pass those choices explicitly.
 
+If OpenClaw is configured to use the same workspace path, setup now enforces
+backup posture before finishing. In automation, either configure a git
+`origin` remote ahead of time, or pass `--create-local-backup` (or
+`--allow-unprotected-workspace` if you intentionally accept the risk).
+
 Extraction safety note:
 
 - intended usage is Claude Code on Haiku, Codex CLI on GPT Mini with a

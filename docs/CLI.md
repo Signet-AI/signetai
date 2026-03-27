@@ -132,6 +132,8 @@ Options:
 | `--configure-openclaw-workspace` | Patch discovered OpenClaw configs to `$SIGNET_WORKSPACE` |
 | `--open-dashboard` | Open dashboard after non-interactive setup |
 | `--skip-git` | Skip git initialization/commits in non-interactive mode |
+| `--create-local-backup` | If OpenClaw points at this workspace and no origin exists, create a local snapshot automatically |
+| `--allow-unprotected-workspace` | Explicitly allow setup to finish without origin or snapshot in non-interactive mode |
 
 Non-interactive behavior:
 
@@ -139,6 +141,9 @@ Non-interactive behavior:
 - embedding provider must be explicitly provided via `--embedding-provider`
 - extraction provider must be explicitly provided via `--extraction-provider`
 - git: enabled unless `--skip-git` is passed
+- when OpenClaw points at this workspace and no `origin` remote exists, setup
+  requires either backup creation (`--create-local-backup`) or explicit bypass
+  (`--allow-unprotected-workspace`)
 
 Extraction safety note:
 
@@ -157,7 +162,8 @@ Wizard steps:
    - OpenClaw
    - Codex
 3. **OpenClaw Workspace** - Appears only when an existing OpenClaw config
-   is detected; workspace is patched only if you opt in
+   is detected; workspace is patched only if you opt in, and setup warns
+   that uninstalling OpenClaw can delete this workspace unless backups exist
 4. **Description** - Short agent description
 5. **Embedding Provider**:
    - Built-in (recommended, no setup required)

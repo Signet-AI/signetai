@@ -17,6 +17,8 @@ export interface SetupWizardOptions {
 	openDashboard?: boolean;
 	openclawRuntimePath?: string;
 	configureOpenclawWorkspace?: boolean;
+	allowUnprotectedWorkspace?: boolean;
+	createLocalBackup?: boolean;
 }
 
 export interface SetupDeps {
@@ -75,4 +77,6 @@ export interface FreshSetupConfig {
 	readonly existingAgentsDir: boolean;
 	readonly nonInteractive: boolean;
 	readonly openDashboard: boolean;
+	readonly allowUnprotectedWorkspace: boolean;
+	readonly createLocalBackup: boolean;
 }

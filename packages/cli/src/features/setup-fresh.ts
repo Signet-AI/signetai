@@ -9,6 +9,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
+import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import { readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
 
@@ -221,6 +222,13 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			}
 		}
 
+		const protection = await enforceSetupProtection({
+			basePath: cfg.basePath,
+			nonInteractive: cfg.nonInteractive,
+			allowUnprotectedWorkspace: cfg.allowUnprotectedWorkspace,
+			createLocalBackup: cfg.createLocalBackup,
+		});
+
 		if (cfg.nonInteractive) {
 			if (cfg.openDashboard) {
 				await open(`http://localhost:${deps.DEFAULT_PORT}`);
@@ -235,9 +243,14 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		}
 
 		console.log();
+		printSetupProtectionSummary(protection);
+		console.log();
 		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
 		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
 		console.log(chalk.dim("    communication style, and your preferences."));
+		if (protection.state === "bypass") {
+			console.log(chalk.red("    Backup warning: this workspace is still unprotected."));
+		}
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);

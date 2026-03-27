@@ -23,6 +23,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
+import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
@@ -43,6 +44,8 @@ export async function runExistingSetupWizard(
 		nonInteractive?: boolean;
 		openDashboard?: boolean;
 		skipGit?: boolean;
+		allowUnprotectedWorkspace?: boolean;
+		createLocalBackup?: boolean;
 		embeddingProvider?: EmbeddingProviderChoice;
 		embeddingModel?: string;
 		extractionProvider?: ExtractionProviderChoice;
@@ -299,6 +302,15 @@ export async function runExistingSetupWizard(
 			}
 		}
 
+		const protection = await enforceSetupProtection({
+			basePath,
+			nonInteractive: options?.nonInteractive === true,
+			allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
+			createLocalBackup: options?.createLocalBackup === true,
+		});
+
+		console.log();
+		printSetupProtectionSummary(protection);
 		console.log();
 		if (options?.nonInteractive === true) {
 			if (options.openDashboard === true) {
@@ -315,6 +327,9 @@ export async function runExistingSetupWizard(
 		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
 		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
 		console.log(chalk.dim("    communication style, and your preferences."));
+		if (protection.state === "bypass") {
+			console.log(chalk.red("    Backup warning: this workspace is still unprotected."));
+		}
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);

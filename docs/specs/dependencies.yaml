@@ -287,6 +287,40 @@ specs:
       - "Rust daemon implements cursor-tracking parity for session-checkpoint-extract"
     decision: null
 
+  - id: openclaw-workspace-protection-plan
+    status: planning
+    path: docs/specs/planning/openclaw-workspace-protection-plan.md
+    hard_depends_on:
+      - openclaw-hardening
+    soft_depends_on: []
+    blocks:
+      - openclaw-workspace-protection
+    informed_by:
+      - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
+    success_criteria:
+      - "Setup blocks silent completion when OpenClaw points at the Signet workspace and no remote backup is configured"
+      - "Users can satisfy setup protection by configuring git origin or creating an out-of-workspace local snapshot"
+      - "Status and doctor surfaces flag unprotected OpenClaw-linked workspaces with remediation commands"
+    decision: null
+
+  - id: openclaw-workspace-protection
+    status: approved
+    path: docs/specs/approved/openclaw-workspace-protection.md
+    hard_depends_on:
+      - openclaw-hardening
+      - openclaw-workspace-protection-plan
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
+      - docs/specs/planning/openclaw-workspace-protection-plan.md
+    success_criteria:
+      - "Setup refuses to complete silently for OpenClaw-linked workspaces without backup posture"
+      - "Interactive setup requires explicit user action: set origin, create snapshot, or explicit bypass acknowledgement"
+      - "Non-interactive setup errors unless origin exists or explicit backup/bypass flags are provided"
+      - "Status and doctor report OpenClaw-linked unprotected workspace risk"
+    decision: null
+
   - id: desire-paths-epic
     status: approved
     path: docs/specs/approved/desire-paths-epic.md

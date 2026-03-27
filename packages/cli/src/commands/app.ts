@@ -17,6 +17,8 @@ interface SetupOptions {
 	configureOpenclawWorkspace?: boolean;
 	openDashboard?: boolean;
 	skipGit?: boolean;
+	allowUnprotectedWorkspace?: boolean;
+	createLocalBackup?: boolean;
 }
 
 interface PathOptions {
@@ -71,6 +73,14 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		)
 		.option("--open-dashboard", "Open dashboard after setup in non-interactive mode")
 		.option("--skip-git", "Skip git initialization and setup commits in non-interactive mode")
+		.option(
+			"--allow-unprotected-workspace",
+			"Allow setup to finish without remote origin or local snapshot when OpenClaw points at this workspace",
+		)
+		.option(
+			"--create-local-backup",
+			"Create a local snapshot backup automatically when OpenClaw points at this workspace and no origin remote exists",
+		)
 		.action(deps.setupWizard);
 
 	const dashboard = program
