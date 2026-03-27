@@ -2827,35 +2827,42 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
  * Read (or upsert) the extract cursor for delta tracking.
  * Returns the last_offset for the given session/agent pair.
  */
-/**
- * Atomically claim the extraction delta for this session.
- * Reads the current cursor and writes the new offset in a single write
- * transaction so concurrent requests are serialized by SQLite.
- * Returns the claimed cursor position, or null if delta < 500 chars.
- */
-function claimExtractDelta(sessionKey: string, agentId: string, transcriptLen: number): number | null {
-	const now = new Date().toISOString();
+/** Read the extract cursor for a session, returning last_offset (0 if none). */
+function readExtractCursor(sessionKey: string, agentId: string): number {
 	try {
-		return getDbAccessor().withWriteTx((db) => {
+		return getDbAccessor().withReadDb((db) => {
 			const row = db
 				.prepare("SELECT last_offset FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?")
 				.get(sessionKey, agentId) as { last_offset: number } | undefined;
-			const cursor = row?.last_offset ?? 0;
-			if (transcriptLen - cursor < 500) return null;
+			return row?.last_offset ?? 0;
+		});
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * Advance the extract cursor to `offset` for this session.
+ * Called AFTER the summary job is enqueued so a crash between enqueue and
+ * cursor advance causes a redundant re-extraction (acceptable) rather than
+ * permanently skipping a delta window (data loss).
+ */
+function advanceExtractCursor(sessionKey: string, agentId: string, offset: number): void {
+	const now = new Date().toISOString();
+	try {
+		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO session_extract_cursors (session_key, agent_id, last_offset, last_extract_at)
 				 VALUES (?, ?, ?, ?)
 				 ON CONFLICT(session_key, agent_id) DO UPDATE SET
 				   last_offset = excluded.last_offset,
 				   last_extract_at = excluded.last_extract_at`,
-			).run(sessionKey, agentId, transcriptLen, now);
-			return cursor;
+			).run(sessionKey, agentId, offset, now);
 		});
 	} catch (e) {
-		logger.warn("hooks", "claimExtractDelta failed (non-fatal)", {
+		logger.warn("hooks", "advanceExtractCursor failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
 		});
-		return null;
 	}
 }
 
@@ -2867,8 +2874,9 @@ function claimExtractDelta(sessionKey: string, agentId: string, transcriptLen: n
  * - Does NOT release the session claim (session continues after this call)
  * - Calls consumeState() to flush accumulated continuity data, then
  *   initContinuity() to restart the tracking window for the next interval
- * - Only extracts the delta since the last extraction (cursor tracking via
- *   claimExtractDelta — atomic read+update in one write transaction)
+ * - Only extracts the delta since the last extraction (cursor via
+ *   readExtractCursor / advanceExtractCursor; cursor is advanced AFTER
+ *   enqueueSummaryJob succeeds to preserve crash-safety)
  * - Skips if delta is < 500 chars (not worth extracting)
  * - Writes a checkpoint with trigger 'mid_session_extract'
  */
@@ -2918,17 +2926,17 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		});
 	}
 
-	// Atomically claim the delta since last extraction. Returns null if delta
-	// is < 500 chars or if a concurrent request already advanced the cursor.
-	const cursor = claimExtractDelta(req.sessionKey, agentId, transcript.length);
-	if (cursor === null) {
-		logger.info("hooks", "Checkpoint extract skipped — delta too small or already claimed", {
+	// Read current cursor; skip if delta is too small.
+	const cursor = readExtractCursor(req.sessionKey, agentId);
+	const delta = transcript.slice(cursor);
+	if (delta.length < 500) {
+		logger.info("hooks", "Checkpoint extract skipped — delta too small", {
 			sessionKey: req.sessionKey,
+			deltaChars: delta.length,
+			cursor,
 		});
 		return { skipped: true };
 	}
-
-	const delta = transcript.slice(cursor);
 	// Safety cap against degenerate inputs
 	const MAX_DELTA_CHARS = 100_000;
 	const capped = delta.length > MAX_DELTA_CHARS ? `${delta.slice(0, MAX_DELTA_CHARS)}\n[truncated]` : delta;
@@ -2973,7 +2981,10 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		// Non-fatal — continuity will re-init on the next prompt
 	}
 
-	// Enqueue summary job for the delta only
+	// Enqueue summary job for the delta only.
+	// Cursor is advanced AFTER the enqueue so a crash between the two steps
+	// causes a redundant re-extraction next time rather than silently
+	// skipping a delta window.
 	const jobId = enqueueSummaryJob(getDbAccessor(), {
 		harness: req.harness,
 		transcript: capped,
@@ -2981,6 +2992,7 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		project: req.project,
 		agentId,
 	});
+	advanceExtractCursor(req.sessionKey, agentId, transcript.length);
 
 	logger.info("hooks", "Checkpoint extract queued", {
 		jobId,

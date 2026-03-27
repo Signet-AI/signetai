@@ -5888,6 +5888,11 @@ app.post("/api/hooks/session-checkpoint-extract", async (c) => {
 		const runtimePath = resolveRuntimePath(c, body);
 		if (runtimePath) body.runtimePath = runtimePath;
 
+		// Reject if the session was claimed by a different runtime path so a
+		// plugin running in parallel cannot enqueue jobs for another session.
+		const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
+		if (conflict) return conflict;
+
 		stampHarness(body.harness);
 
 		if (isSessionBypassed(body.sessionKey)) {
