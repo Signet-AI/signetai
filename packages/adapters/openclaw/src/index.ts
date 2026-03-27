@@ -1574,7 +1574,12 @@ const signetPlugin = {
 				timeout: WRITE_TIMEOUT,
 			})
 				.then((resp) => {
-					if (isRecord(resp) && (resp.skipped === true || resp.queued === false)) {
+					// Restore counter only on skipped:true (nothing extracted — delta
+					// too small, no transcript, or bypassed). queued:false is the Rust
+					// Phase 5 stub response meaning "valid delta seen, no job queued"
+					// — treat it as success (counter stays at 0) so the next trigger
+					// waits another N turns rather than firing on every subsequent turn.
+					if (isRecord(resp) && resp.skipped === true) {
 						// CAS guard: only restore if the counter hasn't advanced past
 						// threshold-1 by new turns arriving during the async round-trip.
 						// Prevents a stale callback from overwriting newer accumulated count.

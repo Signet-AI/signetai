@@ -1395,9 +1395,9 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(JSON.parse(lines[0])).toEqual(lastMsgs[0]);
 	});
 
-	it("restores counter on skipped/queued:false so next turn retries (CAS guard)", async () => {
-		// When the daemon returns skipped:true or queued:false, the counter should
-		// be restored to threshold-1 so the NEXT turn triggers another attempt.
+	it("restores counter on skipped:true so next turn retries (CAS guard)", async () => {
+		// When the daemon returns skipped:true (delta too small, no transcript,
+		// bypassed), the counter is restored to threshold-1 so the next turn retries.
 		// CAS guard: restoration only happens if no new turns arrived during the
 		// async round-trip (prevents a stale callback from overwriting newer count).
 		checkpointResponse = { skipped: true };
@@ -1433,6 +1433,47 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		);
 		await Bun.sleep(0);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(2);
+	});
+
+	it("does NOT restore counter on queued:false (Rust stub success response)", async () => {
+		// queued:false is the Rust Phase 5 stub's way of saying "valid delta seen,
+		// no actual job queued yet". Treating it as success (no counter restoration)
+		// prevents per-turn checkpoint spam once a session exceeds 20 turns.
+		checkpointResponse = { queued: false };
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		expect(beforePromptBuild).toBeDefined();
+
+		const ctx = { sessionKey: "rust-stub-session", agentId: "rust-agent" };
+
+		// Fire 20 turns — checkpoint fires and returns queued:false (Rust stub)
+		for (let i = 0; i < 20; i++) {
+			await beforePromptBuild?.(
+				{
+					prompt: `Turn ${i + 1}`,
+					messages: Array.from({ length: i + 1 }, () => ({ role: "user", content: "test" })),
+				},
+				ctx,
+			);
+		}
+		await Bun.sleep(0);
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+
+		// Counter left at 0 (success path) — next 19 turns should NOT fire
+		for (let i = 0; i < 19; i++) {
+			await beforePromptBuild?.(
+				{
+					prompt: `Turn ${i + 21}`,
+					messages: Array.from({ length: i + 21 }, () => ({ role: "user", content: "test" })),
+				},
+				ctx,
+			);
+		}
+		await Bun.sleep(0);
+		// Still 1 hit — no spam from the queued:false path
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
 	it("does not reregister marketplace proxy tools on refresh", async () => {
