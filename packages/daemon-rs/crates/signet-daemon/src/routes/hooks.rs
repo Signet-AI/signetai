@@ -1159,9 +1159,17 @@ const CHECKPOINT_MIN_DELTA: usize = 500;
 /// Returns the transcript slice starting at `cursor`, or None if the
 /// delta is absent or below the minimum size threshold.
 fn extract_delta<'a>(full: &'a str, cursor: i64) -> Option<&'a str> {
-    let start = cursor.max(0) as usize;
+    let mut start = cursor.max(0) as usize;
     if start >= full.len() {
         return None;
+    }
+    // Snap to next char boundary if the cursor landed mid-char (multi-byte
+    // UTF-8). Prefers re-extracting a few bytes over panicking or silently
+    // skipping a checkpoint.
+    if !full.is_char_boundary(start) {
+        start = (start + 1..=full.len())
+            .find(|&i| full.is_char_boundary(i))
+            .unwrap_or(full.len());
     }
     let delta = &full[start..];
     if delta.len() < CHECKPOINT_MIN_DELTA { None } else { Some(delta) }
@@ -1373,6 +1381,18 @@ mod tests {
     fn extract_delta_skips_when_cursor_past_end() {
         let full = "a".repeat(CHECKPOINT_MIN_DELTA);
         assert!(extract_delta(&full, (full.len() + 1) as i64).is_none());
+    }
+
+    #[test]
+    fn extract_delta_snaps_past_mid_char_cursor() {
+        // "🦀" is 4 bytes. A cursor landing at byte 1, 2, or 3 is mid-char.
+        // Snap should move forward to byte 4 (start of the suffix).
+        let suffix = "a".repeat(CHECKPOINT_MIN_DELTA + 50);
+        let full = format!("🦀{suffix}"); // 🦀 occupies bytes 0-3
+        // cursor at byte 1 (inside the crab emoji) — must not panic.
+        let delta = extract_delta(&full, 1);
+        assert!(delta.is_some(), "should snap to byte 4 and return the suffix");
+        assert_eq!(delta.unwrap().len(), suffix.len());
     }
 
     #[test]

@@ -848,7 +848,7 @@ interface ResolvedCtx {
 function resolveCtx(event: Record<string, unknown>, ctx: unknown): ResolvedCtx {
 	const c = isRecord(ctx) ? ctx : {};
 	return {
-		sessionKey: readString(c.sessionKey) ?? readString(event.sessionKey) ?? readString(event.sessionId),
+		sessionKey: readString(c.sessionKey) ?? readString(event.sessionKey) ?? readString(c.sessionId) ?? readString(event.sessionId),
 		agentId: readString(c.agentId) ?? readString(event.agentId),
 		project: firstNonEmptyString(
 			c.workspaceDir,
