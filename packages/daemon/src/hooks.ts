@@ -2892,14 +2892,31 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 
 	// Read transcript: prefer inline body, then file path, then stored transcript
 	let transcript = "";
+	let fromStore = false;
 	if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	} else if (req.transcriptPath && existsSync(req.transcriptPath)) {
+		// Validate the path is within the user's home directory before reading.
+		// transcriptPath comes from an external request body; guard against
+		// local file-read via path traversal or absolute paths to system files.
+		let real: string | undefined;
 		try {
-			const raw = readFileSync(req.transcriptPath, "utf-8");
-			transcript = normalizeSessionTranscript(req.harness, raw);
+			real = realpathSync(req.transcriptPath);
 		} catch {
-			logger.warn("hooks", "Could not read checkpoint transcript", {
+			real = undefined;
+		}
+		const home = homedir();
+		if (real && (real.startsWith(`${home}/`) || real === home)) {
+			try {
+				const raw = readFileSync(real, "utf-8");
+				transcript = normalizeSessionTranscript(req.harness, raw);
+			} catch {
+				logger.warn("hooks", "Could not read checkpoint transcript", {
+					path: req.transcriptPath,
+				});
+			}
+		} else {
+			logger.warn("hooks", "Checkpoint transcript path outside home dir — skipped", {
 				path: req.transcriptPath,
 			});
 		}
@@ -2908,6 +2925,7 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	// Fall back to stored transcript if nothing was provided inline
 	if (!transcript) {
 		transcript = getSessionTranscriptContent(req.sessionKey, agentId) ?? "";
+		fromStore = true;
 	}
 
 	if (!transcript) {
@@ -2917,13 +2935,22 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		return { skipped: true };
 	}
 
-	// Upsert transcript for lossless retention (same as session-end path)
-	try {
-		upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
-	} catch (e) {
-		logger.warn("hooks", "Checkpoint transcript upsert failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
+	// Upsert transcript for lossless retention, but only when new content is
+	// provided (not merely re-reading the stored transcript) and only when it
+	// is at least as long as what is already stored.  Upserting a shorter
+	// payload would move the extraction cursor past valid content and cause
+	// future checkpoints to permanently skip that range.
+	if (!fromStore) {
+		const prev = getSessionTranscriptContent(req.sessionKey, agentId);
+		if (!prev || transcript.length >= prev.length) {
+			try {
+				upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+			} catch (e) {
+				logger.warn("hooks", "Checkpoint transcript upsert failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
 	}
 
 	// Read current cursor; skip if delta is too small.
