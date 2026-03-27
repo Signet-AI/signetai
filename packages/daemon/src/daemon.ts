@@ -5629,6 +5629,7 @@ app.delete("/api/secrets/:name", (c) => {
 // ============================================================================
 
 import {
+	type CheckpointExtractRequest,
 	type PreCompactionRequest,
 	type RecallRequest,
 	type RememberRequest,
@@ -5636,6 +5637,7 @@ import {
 	type SessionStartRequest,
 	type SynthesisRequest,
 	type UserPromptSubmitRequest,
+	handleCheckpointExtract,
 	handlePreCompaction,
 	handleSessionEnd,
 	handleSessionStart,
@@ -5867,6 +5869,38 @@ app.post("/api/hooks/session-end", async (c) => {
 		}
 	} catch (e) {
 		logger.error("hooks", "Session end hook failed", e as Error);
+		return c.json({ error: "Hook execution failed" }, 500);
+	}
+});
+
+// Mid-session checkpoint extraction (long-lived sessions)
+app.post("/api/hooks/session-checkpoint-extract", async (c) => {
+	if (isInternalCall(c)) {
+		return c.json({ skipped: true });
+	}
+	try {
+		const body = (await c.req.json()) as CheckpointExtractRequest;
+
+		if (!body.harness || !body.sessionKey) {
+			return c.json({ error: "harness and sessionKey are required" }, 400);
+		}
+
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
+		stampHarness(body.harness);
+
+		if (isSessionBypassed(body.sessionKey)) {
+			return c.json({ skipped: true });
+		}
+
+		// Refresh session TTL — keeps the session alive without ending it
+		renewSession(body.sessionKey);
+
+		const result = handleCheckpointExtract(body);
+		return c.json(result);
+	} catch (e) {
+		logger.error("hooks", "Checkpoint extract hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);
 	}
 });

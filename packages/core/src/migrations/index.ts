@@ -54,6 +54,7 @@ import { up as losslessWorkingMemoryHardening } from "./045-lossless-working-mem
 import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 import { up as threadHeads } from "./048-thread-heads";
+import { up as sessionExtractCursors } from "./049-session-extract-cursors";
 
 // -- Public interface consumed by Database.init() --
 
@@ -462,6 +463,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: threadHeads,
 		artifacts: {
 			tables: ["memory_thread_heads"],
+		},
+	},
+	{
+		version: 49,
+		name: "session-extract-cursors",
+		up: sessionExtractCursors,
+		artifacts: {
+			tables: ["session_extract_cursors"],
 		},
 	},
 ];
