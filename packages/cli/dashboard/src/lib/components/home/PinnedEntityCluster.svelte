@@ -109,7 +109,7 @@
 	</div>
 
 	<div class="panel-footer sig-panel-footer">
-		<button class="panel-link" onclick={() => setTab("memory")}>
+		<button class="panel-link" onclick={() => setTab("cortex-memory")}>
 			VIEW IN MEMORY
 		</button>
 	</div>

@@ -32,7 +32,7 @@
 </script>
 
 <div class="quick-links">
-	{#each links as link (link.tab)}
+	{#each links as link (link.label)}
 		<Button
 			variant="ghost"
 			size="sm"

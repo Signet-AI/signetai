@@ -32,8 +32,6 @@ export type TabId =
 const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"home",
 	"settings",
-	"memory",
-	"embeddings",
 	"audit",
 	"secrets",
 	"skills",
@@ -52,6 +50,9 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["ontology", "cortex-memory"],
 	["ontology/cortex", "cortex-memory"],
 	["ontology/constellation", "cortex-memory"],
+	["memory", "cortex-memory"],
+	["embeddings", "cortex-memory"],
+	["knowledge", "cortex-memory"],
 	["cortex", "cortex-memory"],
 	["cortex/memory", "cortex-memory"],
 	["cortex/apps", "cortex-memory"],
@@ -74,6 +75,8 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["predictor", "settings"],
 	["connectors", "settings"],
 	["logs", "audit"],
+	["audit/logs", "audit"],
+	["audit/troubleshooter", "audit"],
 	["cortex-apps", "cortex-memory"],
 	["cortex-tasks", "tasks"],
 	["cortex-troubleshooter", "audit"],
@@ -150,7 +153,7 @@ export function initNavFromHash(): () => void {
 	const initial = readTabFromHash(raw);
 	if (initial) {
 		nav.activeTab = initial;
-		if (typeof window !== "undefined" && raw !== initial) {
+		if (typeof window !== "undefined" && raw !== initial && !raw.includes("/")) {
 			history.replaceState(null, "", `#${initial}`);
 		}
 	} else if (typeof window !== "undefined") {
@@ -163,7 +166,7 @@ export function initNavFromHash(): () => void {
 		const tab = readTabFromHash(next);
 		if (!tab) return;
 		if (tab !== nav.activeTab) nav.activeTab = tab;
-		if (next !== tab) {
+		if (next !== tab && !next.includes("/")) {
 			history.replaceState(null, "", `#${tab}`);
 		}
 	};

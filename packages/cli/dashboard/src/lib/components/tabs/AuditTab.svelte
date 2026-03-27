@@ -21,6 +21,17 @@ $effect(() => {
 	}
 });
 
+$effect(() => {
+	if (typeof window === "undefined") return;
+	const onHash = () => {
+		const next = readSection();
+		if (next === section) return;
+		section = next;
+	};
+	window.addEventListener("hashchange", onHash);
+	return () => window.removeEventListener("hashchange", onHash);
+});
+
 const btn =
 	"px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.06em] rounded-md transition-colors duration-150 border-none cursor-pointer whitespace-nowrap";
 const active = `${btn} text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)] border border-[color-mix(in_srgb,var(--sig-highlight),transparent_85%)]`;
