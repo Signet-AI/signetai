@@ -4,19 +4,40 @@ on:
   pull_request:
     paths:
       - "deploy/docker/**"
-      - "packages/daemon/**"
-      - "packages/signetai/**"
+      - "packages/**"
+      - "scripts/**"
+      - "public/**"
+      - "web/**"
       - "package.json"
       - "bun.lock"
+      - "bunfig.toml"
+      - "tsconfig*.json"
+      - "biome.json"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "LICENSE"
   push:
     branches:
       - main
     paths:
       - "deploy/docker/**"
-      - "packages/daemon/**"
-      - "packages/signetai/**"
+      - "packages/**"
+      - "scripts/**"
+      - "public/**"
+      - "web/**"
       - "package.json"
       - "bun.lock"
+      - "bunfig.toml"
+      - "tsconfig*.json"
+      - "biome.json"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+
+permissions:
+  contents: read
 
 jobs:
   smoke:
