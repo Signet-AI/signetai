@@ -19,7 +19,7 @@ services:
     expose:
       - "3850"
     healthcheck:
-      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3850/health'); if (!r.ok) process.exit(1);"]
+      test: ["CMD", "bun", "/app/deploy/docker/scripts/healthcheck.mjs"]
       interval: 30s
       timeout: 5s
       retries: 5
