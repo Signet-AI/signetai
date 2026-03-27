@@ -3028,7 +3028,7 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		sessionKey: req.sessionKey,
 		deltaChars: capped.length,
 		cursor,
-		newCursor: transcript.length,
+		newCursor: Buffer.byteLength(transcript, "utf8"),
 	});
 
 	return { queued: true, jobId };
