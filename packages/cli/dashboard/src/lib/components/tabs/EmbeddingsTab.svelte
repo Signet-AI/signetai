@@ -64,7 +64,7 @@ import {
 interface Props {
 	onopenglobalsimilar: (memory: Memory) => void;
 	embedded?: boolean;
-	agentId?: string;
+	agentId: string;
 }
 
 interface FilterPreset {
@@ -77,7 +77,7 @@ interface FilterPreset {
 	clusterLensMode: boolean;
 }
 
-const { onopenglobalsimilar, embedded = false, agentId = "default" }: Props =
+const { onopenglobalsimilar, embedded = false, agentId }: Props =
 	$props();
 
 // -----------------------------------------------------------------------

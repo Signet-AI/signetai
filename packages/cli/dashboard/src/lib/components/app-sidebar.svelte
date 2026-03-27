@@ -86,13 +86,7 @@ function isActive(item: NavItem): boolean {
 }
 
 function handleClick(item: NavItem): void {
-	if (nav.activeTab === item.id && typeof window !== "undefined") {
-		const hash = window.location.hash.replace("#", "");
-		if (hash !== item.id) {
-			window.history.replaceState(null, "", `#${item.id}`);
-		}
-		return;
-	}
+	if (nav.activeTab === item.id) return;
 	setTab(item.id);
 }
 

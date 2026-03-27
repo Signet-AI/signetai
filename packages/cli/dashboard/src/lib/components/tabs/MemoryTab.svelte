@@ -37,10 +37,10 @@ import { getLocalTimeZone, CalendarDate, type DateValue } from "@internationaliz
 interface Props {
 	memories: Memory[];
 	embedded?: boolean;
-	agentId?: string;
+	agentId: string;
 }
 
-let { memories, embedded = false, agentId = "default" }: Props = $props();
+let { memories, embedded = false, agentId }: Props = $props();
 
 // Delete confirmation state - tracks which memory is pending delete confirmation
 let deleteConfirmId = $state<string | null>(null);
