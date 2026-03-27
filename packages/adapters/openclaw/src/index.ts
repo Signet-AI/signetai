@@ -524,6 +524,7 @@ export async function onSessionEnd(
 		daemonUrl?: string;
 		agentId?: string;
 		transcriptPath?: string;
+		transcript?: string;
 		sessionKey?: string;
 		sessionId?: string;
 		cwd?: string;
@@ -536,6 +537,7 @@ export async function onSessionEnd(
 			harness,
 			agentId: options.agentId,
 			transcriptPath: options.transcriptPath,
+			...(options.transcript && { transcript: options.transcript }),
 			sessionKey: options.sessionKey,
 			sessionId: options.sessionId,
 			cwd: options.cwd,
@@ -1852,6 +1854,14 @@ const signetPlugin = {
 			const resolved = resolveCtx(event, ctx);
 			const scopedKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
 
+			// Inline transcript fallback: same pattern as maybeFireCheckpoint —
+			// when sessionFile is absent (typed-only ctx), serialize event.messages
+			// so the daemon has a transcript source for session-end extraction.
+			const endMsgs = Array.isArray(event.messages) ? (event.messages as readonly unknown[]) : undefined;
+			const endTranscript =
+				!resolved.sessionFile && endMsgs && endMsgs.length > 0
+					? endMsgs.map((m) => JSON.stringify(m)).join("\n")
+					: undefined;
 			await onSessionEnd("openclaw", {
 				...opts,
 				agentId: resolved.agentId,
@@ -1859,6 +1869,7 @@ const signetPlugin = {
 				sessionId: resolved.sessionId,
 				sessionKey: resolved.sessionKey,
 				transcriptPath: resolved.sessionFile,
+				...(endTranscript && { transcript: endTranscript }),
 			});
 			if (scopedKey) {
 				claimedSessions.delete(scopedKey);
