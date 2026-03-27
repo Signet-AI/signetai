@@ -661,6 +661,7 @@ Legend:
 | `signet-roadmap-spec` | planning | `docs/specs/planning/signet-roadmap-spec.md` | - | - | superseded by INDEX.md as active roadmap |
 | `openclaw-integration-strategy` | complete | `docs/specs/complete/openclaw-integration-strategy.md` | - | `openclaw-importance-scoring-pr` | |
 | `openclaw-importance-scoring-pr` | complete | `docs/specs/complete/openclaw-importance-scoring-pr.md` | `openclaw-integration-strategy` | - | |
+| `openclaw-hardening` | complete | `docs/specs/complete/openclaw-hardening.md` | `openclaw-importance-scoring-pr` | - | temporal index previews, typed hooks, mid-session extraction (PR #369) |
 | `desire-paths-epic` | approved | `docs/specs/approved/desire-paths-epic.md` | `knowledge-architecture-schema`, `predictive-memory-scorer` | - | 20 stories across 5 phases; Phases 1-3 COMPLETE. DP-16 through DP-20 added from reference repo analysis (Ori-Mnemos, Zikkaron) |
 | `notebook-dump-2026-02-25` | reference | `docs/research/technical/notebook-dump-2026-02-25.md` | - | - | |
 | `marketplace-reviews-cloudflare-staging` | planning | `docs/specs/planning/marketplace-reviews-cloudflare-staging.md` | - | - | |

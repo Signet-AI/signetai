@@ -1749,6 +1749,46 @@ scope until transcript storage catches up.
 { "success": true, "memoryId": "uuid" }
 ```
 
+### POST /api/hooks/session-checkpoint-extract
+
+Trigger a mid-session memory extraction for long-lived sessions (Discord bots,
+persistent agents) that never call `session-end`. Computes a delta since the
+last extraction cursor and enqueues a summary job without releasing the session
+claim.
+
+**Request body**
+
+```json
+{
+  "harness": "openclaw",
+  "sessionKey": "session-uuid",
+  "agentId": "agent-id",
+  "project": "/workspace/repo",
+  "transcriptPath": "/path/to/session.jsonl",
+  "runtimePath": "plugin"
+}
+```
+
+`harness` and `sessionKey` are required. `transcript` (inline string) takes
+precedence over `transcriptPath`; both fall back to the stored session
+transcript from a prior `session-end` or `user-prompt-submit` call.
+
+The endpoint skips silently when:
+- The delta since the last extraction cursor is < 500 characters
+- No transcript is available
+- The session is bypassed
+
+On success the extraction cursor advances so the next call only processes
+new content.
+
+**Response**
+
+```json
+{ "queued": true, "jobId": "uuid" }
+```
+
+or `{ "skipped": true }` when the delta threshold was not met.
+
 ### GET /api/hooks/synthesis/config
 
 Return the current synthesis configuration (thresholds, model, schedule).

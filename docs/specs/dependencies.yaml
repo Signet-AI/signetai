@@ -272,6 +272,21 @@ specs:
       - "OpenClaw importance scoring uses Signet's structural density rather than arbitrary floats"
     decision: null
 
+  - id: openclaw-hardening
+    status: complete
+    path: docs/specs/complete/openclaw-hardening.md
+    hard_depends_on:
+      - openclaw-importance-scoring-pr
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Temporal index entries in MEMORY.md synthesis include a content preview line"
+      - "OpenClaw plugin compiles and passes tests against typed hook interfaces"
+      - "Mid-session checkpoint extraction fires after N turns for long-lived sessions"
+      - "Rust daemon implements cursor-tracking parity for session-checkpoint-extract"
+    decision: null
+
   - id: desire-paths-epic
     status: approved
     path: docs/specs/approved/desire-paths-epic.md
