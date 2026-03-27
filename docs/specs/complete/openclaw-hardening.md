@@ -51,8 +51,12 @@ daemon, 033 in Rust daemon). The cursor is advanced AFTER
 `enqueueSummaryJob` succeeds so a crash causes redundant re-extraction
 rather than a silent data-loss window.
 
-Rust daemon implements cursor read/advance parity; summary job queueing
-is Phase 5 (same TODO already present in Rust `session_end`).
+Rust daemon reads cursor and transcript, checks the delta threshold, and
+returns `{queued: false}` when a valid delta is found (cursor NOT
+advanced — no job to pair it with). Summary job queueing and cursor
+advance are Phase 5 (same TODO in Rust `session_end`). The `{queued:
+false}` response is a documented API variant meaning "delta found, job
+deferred"; callers treat it the same as `{skipped: true}` for retry.
 
 ## Delivered
 

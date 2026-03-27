@@ -1787,7 +1787,26 @@ new content.
 { "queued": true, "jobId": "uuid" }
 ```
 
-or `{ "skipped": true }` when the delta threshold was not met.
+`queued: true` means a summary job was enqueued; `jobId` identifies the
+async job. The job extracts the delta and writes a temporal node scored
+at 0.85 (below compaction summaries at 0.95, above chunks at 0.55).
+
+```json
+{ "skipped": true }
+```
+
+Returned when delta < 500 chars, no transcript is available, or the
+session is bypassed.
+
+```json
+{ "queued": false }
+```
+
+Returned by daemon implementations where summary job enqueueing is not
+yet available (Phase 5). The delta was found and is above the threshold
+but no job was enqueued. Callers may treat this identically to
+`{skipped: true}` for retry purposes — the content is not consumed and
+will be re-evaluated on the next call.
 
 ### GET /api/hooks/synthesis/config
 

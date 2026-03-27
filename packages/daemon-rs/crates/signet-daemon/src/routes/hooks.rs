@@ -1243,14 +1243,13 @@ pub async fn session_checkpoint_extract(
                 return Ok(serde_json::json!({"skipped": true}));
             }
 
-            // Cursor advance is intentionally deferred to Phase 5.
-            // Advancing the cursor without enqueueing a summary job would
-            // permanently discard the delta — the content would never be
-            // extracted. Until Phase 5 lands, return a distinct response so
-            // callers know a valid delta was found (the TS daemon is
-            // authoritative in shadow mode and will handle the actual job).
+            // Cursor advance deferred to Phase 5 (same as session_end TODO).
+            // Advancing without a summary job would permanently discard the
+            // delta. Return {queued: false} — a documented response meaning
+            // "delta was found but no job was enqueued this time". Callers
+            // treat this identically to {skipped: true} for retry purposes.
             // TODO: Phase 5 — enqueue summary job, then advance cursor.
-            Ok(serde_json::json!({"queued": false, "deltaReady": true}))
+            Ok(serde_json::json!({"queued": false}))
         })
         .await;
 
