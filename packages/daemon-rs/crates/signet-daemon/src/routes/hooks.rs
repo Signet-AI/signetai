@@ -1227,9 +1227,37 @@ pub async fn session_checkpoint_extract(
         return (StatusCode::OK, Json(serde_json::json!({"skipped": true}))).into_response();
     }
 
-    let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
+    // Resolve agent_id: explicit value > "agent:{id}:..." session-key parse > "default".
+    // Mirrors TS resolveAgentId(sessionKey) so multi-agent checkpoints scope correctly.
+    let agent_id = {
+        let explicit = body.agent_id.as_deref().filter(|s| !s.is_empty());
+        explicit.map(str::to_string).unwrap_or_else(|| {
+            let mut parts = session_key.splitn(3, ':');
+            if parts.next() == Some("agent") {
+                let id = parts.next().unwrap_or("").trim();
+                if !id.is_empty() {
+                    return id.to_string();
+                }
+            }
+            "default".to_string()
+        })
+    };
     let inline = body.transcript.clone();
-    let tpath = body.transcript_path.clone();
+    // Validate transcript_path is within the user's home directory before
+    // reading. Mirrors the TS daemon guard added for this same attack surface.
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let tpath: Option<String> = body.transcript_path.as_deref().and_then(|p| {
+        let real = std::fs::canonicalize(p).ok()?;
+        let real_s = real.to_string_lossy();
+        if !home.is_empty() && (real_s.starts_with(&format!("{home}/")) || real_s == home) {
+            Some(p.to_string())
+        } else {
+            tracing::warn!(path = p, "checkpoint transcript_path outside home dir — skipped");
+            None
+        }
+    });
     let sk = session_key.clone();
     let aid = agent_id.clone();
 

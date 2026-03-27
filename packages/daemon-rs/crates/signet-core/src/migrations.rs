@@ -528,7 +528,7 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
                     );
                     INSERT OR IGNORE INTO session_transcripts_new
                         (session_key, agent_id, content, harness, project, created_at)
-                    SELECT session_key, 'default', content, harness, project, created_at
+                    SELECT session_key, COALESCE(agent_id, 'default'), content, harness, project, created_at
                     FROM session_transcripts;
                     DROP TABLE session_transcripts;
                     ALTER TABLE session_transcripts_new RENAME TO session_transcripts;
