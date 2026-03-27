@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	DEFAULT_PIPELINE_TIMEOUT_MS,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
 	type PipelineV2Config,
-	DEFAULT_PIPELINE_TIMEOUT_MS,
 	defaultPipelineModel,
 	isPipelineProvider,
 	parseSimpleYaml,
@@ -31,6 +31,13 @@ export interface MemorySearchConfig {
 export { PIPELINE_FLAGS };
 export type { PipelineFlag, PipelineV2Config };
 
+class PipelineConfigValidationError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "PipelineConfigValidationError";
+	}
+}
+
 export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	enabled: true,
 	paused: false,
@@ -46,6 +53,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		endpoint: undefined,
 		timeout: DEFAULT_PIPELINE_TIMEOUT_MS,
 		minConfidence: 0.7,
+		command: undefined,
 		escalation: {
 			maxNewEntitiesPerChunk: 10,
 			maxNewAttributesPerEntity: 20,
@@ -241,6 +249,67 @@ function parseOptionalUrl(raw: unknown): string | undefined {
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseCommandArgv(raw: string): { bin: string; args: string[] } | null {
+	const tokens = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
+	if (!tokens || tokens.length === 0) return null;
+	const argv = tokens.map((token) => token.replace(/^["']|["']$/g, "")).filter((token) => token.length > 0);
+	if (argv.length === 0) return null;
+	return {
+		bin: argv[0],
+		args: argv.slice(1),
+	};
+}
+
+function parseCommandConfig(raw: unknown): PipelineV2Config["extraction"]["command"] | undefined {
+	if (typeof raw === "string") {
+		const parsed = parseCommandArgv(raw);
+		if (!parsed) return undefined;
+		return {
+			bin: parsed.bin,
+			args: parsed.args,
+		};
+	}
+
+	if (!isRecord(raw)) {
+		return undefined;
+	}
+
+	const record = raw;
+	const candidateBin = typeof record.bin === "string" ? record.bin : "";
+	const bin = candidateBin.trim();
+	if (bin.length === 0) return undefined;
+
+	let args: string[] = [];
+	if (Array.isArray(record.args)) {
+		if (record.args.some((item) => typeof item !== "string")) {
+			return undefined;
+		}
+		args = [...record.args];
+	}
+	const cwd = typeof record.cwd === "string" && record.cwd.trim().length > 0 ? record.cwd.trim() : undefined;
+
+	let env: Record<string, string> | undefined;
+	if (typeof record.env === "object" && record.env !== null && !Array.isArray(record.env)) {
+		for (const [key, value] of Object.entries(record.env)) {
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+			if (typeof value !== "string") continue;
+			if (!env) env = {};
+			env[key] = value;
+		}
+	}
+
+	return {
+		bin,
+		args,
+		cwd,
+		env,
+	};
+}
+
 /**
  * Load pipeline config from YAML, supporting both nested and flat key formats.
  * Flat extraction keys (dashboard-written) take precedence over nested keys.
@@ -292,6 +361,9 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const flatModel = raw.extractionModel;
 
 	type ProviderKind = Parameters<typeof defaultPipelineModel>[0];
+	type SynthesisProviderKind = Exclude<ProviderKind, "command">;
+	const isSynthesisProvider = (value: unknown): value is SynthesisProviderKind =>
+		isPipelineProvider(value) && value !== "command";
 
 	function resolveModel(provider: ProviderKind, raw: unknown, fallback?: string): string {
 		if (typeof raw === "string" && raw.trim().length > 0) {
@@ -333,28 +405,44 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		300000,
 		d.extraction.timeout,
 	);
-	const synthesisProviderWon = isPipelineProvider(synthesisRaw?.provider);
-	const resolvedSynthesisProvider = synthesisProviderWon ? synthesisRaw.provider : resolvedProvider;
+	const resolvedCommandConfig = parseCommandConfig(extractionRaw?.command ?? raw.extractionCommand);
+	if (resolvedProvider === "command" && !resolvedCommandConfig) {
+		throw new PipelineConfigValidationError(
+			"memory.pipelineV2.extraction.command is required when extraction.provider='command'.",
+		);
+	}
+	if (synthesisRaw?.provider === "command") {
+		throw new PipelineConfigValidationError(
+			"memory.pipelineV2.synthesis.provider='command' is not supported. Use memory.pipelineV2.extraction.provider='command' instead.",
+		);
+	}
+
+	const synthesisProviderWon = isSynthesisProvider(synthesisRaw?.provider);
+	const resolvedSynthesisProvider: SynthesisProviderKind = synthesisProviderWon
+		? synthesisRaw.provider
+		: resolvedProvider === "command"
+			? d.synthesis.provider
+			: resolvedProvider;
 	const resolvedSynthesisModel =
 		typeof synthesisRaw?.model === "string" && synthesisRaw.model.trim().length > 0
 			? synthesisRaw.model
 			: synthesisProviderWon
 				? defaultPipelineModel(resolvedSynthesisProvider)
-				: resolvedModel;
+				: resolvedProvider === "command"
+					? d.synthesis.model
+					: resolvedModel;
 	const resolvedSynthesisEndpoint =
 		parseOptionalUrl(synthesisRaw?.endpoint) ??
 		parseOptionalUrl(synthesisRaw?.base_url) ??
-		(synthesisProviderWon ? undefined : resolvedEndpoint);
+		(synthesisProviderWon || resolvedProvider === "command" ? undefined : resolvedEndpoint);
 	const resolvedSynthesisTimeout = clampPositive(
 		synthesisRaw?.timeout,
 		5000,
 		300000,
-		synthesisProviderWon ? d.synthesis.timeout : resolvedTimeout,
+		synthesisProviderWon || resolvedProvider === "command" ? d.synthesis.timeout : resolvedTimeout,
 	);
 	const resolvedSynthesisEnabled =
-		resolvedSynthesisProvider === "none"
-			? false
-			: resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
+		resolvedSynthesisProvider === "none" ? false : resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
 
 	// Normalize aspect weights: clamp independently, then enforce min <= max
 	const maxAW = clampFraction(feedbackRaw?.maxAspectWeight, d.feedback.maxAspectWeight);
@@ -392,6 +480,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
 				d.extraction.minConfidence,
 			),
+			command: resolvedCommandConfig,
 			escalation: {
 				maxNewEntitiesPerChunk: clampPositive(
 					escalationRaw?.maxNewEntitiesPerChunk,
@@ -627,13 +716,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 
 		synthesis: {
 			enabled: resolvedSynthesisEnabled,
-			provider: (() => {
-				const p = synthesisRaw?.provider;
-				if (isPipelineProvider(p)) {
-					return p;
-				}
-				return resolvedSynthesisProvider;
-			})(),
+			provider: resolvedSynthesisProvider,
 			model: resolvedSynthesisModel,
 			endpoint: resolvedSynthesisEndpoint,
 			timeout: resolvedSynthesisTimeout,
@@ -857,7 +940,10 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			defaults.auth = parseAuthConfig(yaml.auth, agentsDir);
 
 			break;
-		} catch {
+		} catch (error) {
+			if (error instanceof PipelineConfigValidationError) {
+				throw error;
+			}
 			// ignore parse errors, try next file
 		}
 	}

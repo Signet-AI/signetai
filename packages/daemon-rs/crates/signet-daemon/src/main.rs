@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Service management subcommands (no logging needed)
     if args.iter().any(|a| a == "--install-service") {
-        let config = DaemonConfig::from_env();
+        let config = DaemonConfig::from_env().map_err(anyhow::Error::msg)?;
         service::install(config.port)?;
         println!("signet service installed (port {})", config.port);
         return Ok(());
@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Load config
-    let config = DaemonConfig::from_env();
+    let config = DaemonConfig::from_env().map_err(anyhow::Error::msg)?;
 
     // --check-migrations: open DB, run migrations, exit (for benchmarking startup)
     if args.iter().any(|a| a == "--check-migrations") {

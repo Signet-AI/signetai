@@ -6,6 +6,7 @@ export const PIPELINE_PROVIDER_CHOICES = [
 	"opencode",
 	"anthropic",
 	"openrouter",
+	"command",
 ] as const;
 
 export type PipelineProviderChoice = (typeof PIPELINE_PROVIDER_CHOICES)[number];
@@ -20,6 +21,7 @@ const MODEL_DEFAULTS = {
 	opencode: "anthropic/claude-haiku-4-5-20251001",
 	anthropic: "haiku",
 	openrouter: "openai/gpt-4o-mini",
+	command: "",
 } as const satisfies Record<PipelineProviderChoice, string>;
 
 const PIPELINE_PROVIDER_SET = new Set<string>(PIPELINE_PROVIDER_CHOICES);

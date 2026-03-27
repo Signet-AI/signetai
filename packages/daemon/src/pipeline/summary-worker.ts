@@ -11,8 +11,9 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { spawn as nodeSpawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { normalizeAndHashContent } from "../content-normalization";
@@ -76,6 +77,9 @@ interface LlmSummaryResult {
 }
 
 export const SUMMARY_WORKER_UPDATED_BY = "summary-worker";
+const COMMAND_STAGE_RUNNING_RESULT = "command-stage-running";
+const COMMAND_STAGE_COMPLETED_RESULT = "command-stage-complete";
+type CommandStageStatus = "none" | "running" | "complete";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -307,217 +311,442 @@ function parseLlmResponse(raw: string): LlmSummaryResult | null {
 // Core processing
 // ---------------------------------------------------------------------------
 
-async function processJob(
+function passesSignificanceGate(
 	accessor: DbAccessor,
-	provider: LlmProvider,
 	job: SummaryJobRow,
 	memoryCfg: ReturnType<typeof loadMemoryConfig>,
-): Promise<void> {
-	// --- Significance gate ---
+): boolean {
 	const significanceCfg: SignificanceConfig = memoryCfg.pipelineV2.significance ?? {
 		enabled: true,
 		minTurns: 5,
 		minEntityOverlap: 1,
 		noveltyThreshold: 0.15,
 	};
+	if (!significanceCfg.enabled) return true;
 
-	if (significanceCfg.enabled) {
-		const assessment = accessor.withReadDb((db) =>
-			assessSignificance(job.transcript, db, job.agent_id, significanceCfg),
-		);
+	const assessment = accessor.withReadDb((db) => assessSignificance(job.transcript, db, job.agent_id, significanceCfg));
 
-		if (!assessment.significant) {
-			logger.info("summary-worker", "Session below significance threshold — skipping extraction", {
-				sessionKey: job.session_key,
-				project: job.project,
-				scores: assessment.scores,
-				reason: assessment.reason,
-			});
-			// Job row and transcript are preserved (lossless retention).
-			// processJob caller marks it completed.
-			return;
-		}
-	}
+	if (assessment.significant) return true;
 
-	const today = new Date().toISOString().slice(0, 10);
-	const genOpts = {
-		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-		maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
-	};
-
-	const result =
-		job.transcript.length > CHUNK_TARGET_CHARS
-			? await processChunked(provider, job.transcript, today, genOpts)
-			: await processSingle(provider, job.transcript, today, genOpts);
-
-	if (!result) {
-		throw new Error("Failed to parse LLM summary response");
-	}
-
-	// Write markdown file
-	mkdirSync(MEMORY_DIR, { recursive: true });
-	const slug = deriveSlug(result.summary, job.project);
-	const filename = uniqueFilename(MEMORY_DIR, `${today}-${slug}`, ".md");
-	writeFileSync(filename, result.summary, "utf-8");
-
-	logger.info("summary-worker", "Wrote session summary", {
-		path: filename,
+	logger.info("summary-worker", "Session below significance threshold — skipping extraction", {
 		sessionKey: job.session_key,
 		project: job.project,
-		summaryChars: result.summary.length,
+		scores: assessment.scores,
+		reason: assessment.reason,
 	});
+	return false;
+}
 
-	const saved = insertSummaryFacts(accessor, job, result.facts);
+export function shouldRunSignificanceGateForJob(commandMode: boolean, commandStageStatus: CommandStageStatus): boolean {
+	return !commandMode || commandStageStatus === "none";
+}
 
-	logger.info("summary-worker", "Inserted session facts", {
-		total: result.facts.length,
-		saved,
-		deduplicated: result.facts.length - saved,
-		factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
-	});
+function substituteCommandTokens(input: string, replacements: Record<string, string>): string {
+	let output = input;
+	for (const [token, value] of Object.entries(replacements)) {
+		output = output.split(token).join(value);
+	}
+	return output;
+}
 
-	// Lossless retention: preserve raw transcript alongside extracted facts
-	if (job.session_key) {
-		upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
+export async function runSummaryCommandProvider(
+	job: SummaryJobRow,
+	cfg: ReturnType<typeof loadMemoryConfig>,
+): Promise<void> {
+	const command = cfg.pipelineV2.extraction.command;
+	if (!command) {
+		throw new Error("pipelineV2.extraction.command is required when extraction.provider is 'command'");
 	}
 
-	// Write to session_summaries DAG (depth 0 = session level)
-	try {
-		writeSummaryToDAG(accessor, job, result, job.agent_id);
-	} catch (e) {
-		logger.warn("summary-worker", "Failed to write session summary to DAG (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
+	const tempDir = mkdtempSync(join(tmpdir(), "signet-summary-command-"));
+	const transcriptPath = join(tempDir, "transcript.txt");
+	writeFileSync(transcriptPath, job.transcript, "utf-8");
+
+	const tokenReplacements: Record<string, string> = {
+		$TRANSCRIPT: transcriptPath,
+		$TRANSCRIPT_PATH: transcriptPath,
+		$SESSION_KEY: job.session_key ?? "",
+		$PROJECT: job.project ?? "",
+		$AGENT_ID: job.agent_id,
+		$SIGNET_PATH: AGENTS_DIR,
+	};
+	const locationReplacements: Record<string, string> = {
+		$AGENT_ID: job.agent_id,
+		$SIGNET_PATH: AGENTS_DIR,
+	};
+	const bin = substituteCommandTokens(command.bin, locationReplacements).trim();
+	if (bin.length === 0) {
+		throw new Error("pipelineV2.extraction.command.bin resolved to an empty value");
+	}
+	const args = command.args.map((arg) => substituteCommandTokens(arg, tokenReplacements));
+	const timeoutMs = Math.max(5000, Math.min(300000, cfg.pipelineV2.extraction.timeout));
+	const cwd = command.cwd ? substituteCommandTokens(command.cwd, locationReplacements).trim() : undefined;
+	const envFromConfig: Record<string, string> = {};
+	if (command.env) {
+		for (const [key, value] of Object.entries(command.env)) {
+			envFromConfig[key] = substituteCommandTokens(value, tokenReplacements);
+		}
 	}
 
-	// --- Session continuity scoring ---
 	try {
-		await scoreContinuity(accessor, provider, job, result.summary, memoryCfg);
-	} catch (e) {
-		logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
-	}
+		await new Promise<void>((resolve, reject) => {
+			const child = nodeSpawn(bin, args, {
+				cwd: cwd && cwd.length > 0 ? cwd : undefined,
+				env: {
+					...process.env,
+					...envFromConfig,
+					SIGNET_PATH: AGENTS_DIR,
+				},
+				stdio: ["ignore", "ignore", "ignore"],
+				windowsHide: true,
+			});
 
-	// --- Predictor comparison (Sprint 3) ---
-	// Runs after continuity scoring has written per-memory relevance scores
-	// and session_scores. Uses dynamic imports to avoid circular deps.
-	// memoryCfg already loaded at function entry (significance gate).
-	try {
-		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
-			const { runSessionComparison, saveComparison, updateSuccessRate, shouldTriggerTraining, detectDrift } =
-				await import("../predictor-comparison");
-			const comparison = runSessionComparison(job.session_key, job.agent_id, accessor);
-
-			if (comparison !== null) {
-				saveComparison(comparison, job.agent_id, accessor);
-				// Only update EMA when the predictor actually produced scores —
-				// otherwise predictorWon is deterministically false and the EMA
-				// accrues phantom losses during cold start or sidecar downtime.
-				if (comparison.hasPredictorScores) {
-					updateSuccessRate(job.agent_id, comparison.predictorWon, comparison.scorerConfidence);
+			let settled = false;
+			let timedOut = false;
+			let killTimer: ReturnType<typeof setTimeout> | null = null;
+			const clearKillTimer = (): void => {
+				if (killTimer) {
+					clearTimeout(killTimer);
+					killTimer = null;
 				}
-
-				// Drift detection
-				const driftResult = detectDrift(job.agent_id, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
-				if (driftResult.drifting) {
-					logger.warn("predictor", "Drift detected — resetting predictor state", {
-						recentWinRate: driftResult.recentWinRate,
-						windowSize: driftResult.windowSize,
-						agentId: job.agent_id,
-					});
-
-					// Reset alpha to 1.0 (full baseline weight) and EMA to neutral
-					const { updatePredictorState: resetState } = await import("../predictor-state");
-					resetState(job.agent_id, {
-						alpha: 1.0,
-						successRate: 0.5,
-					});
-
-					// Trigger retraining (non-fatal if it fails)
+			};
+			const timeoutError = new Error(`summary command timed out after ${timeoutMs}ms`);
+			const timeout = setTimeout(() => {
+				if (settled) return;
+				timedOut = true;
+				child.kill("SIGTERM");
+				killTimer = setTimeout(() => {
 					try {
-						const { getPredictorClient } = await import("../daemon");
-						const predictorClient = getPredictorClient();
-						if (predictorClient) {
-							const dbPath = join(AGENTS_DIR, "memory", "memories.db");
-							await predictorClient.trainFromDb({ db_path: dbPath });
-							logger.info("predictor", "Drift-triggered retraining complete");
-						}
-					} catch (trainErr) {
-						logger.warn("predictor", "Drift-triggered retraining failed", {
-							error: trainErr instanceof Error ? trainErr.message : String(trainErr),
+						child.kill("SIGKILL");
+					} catch {
+						// Child is already gone.
+					}
+				}, 2000);
+			}, timeoutMs);
+
+			child.on("error", (err) => {
+				clearKillTimer();
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeout);
+				if (timedOut) {
+					reject(timeoutError);
+					return;
+				}
+				reject(err);
+			});
+
+			child.on("close", (code) => {
+				clearKillTimer();
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeout);
+				if (timedOut) {
+					reject(timeoutError);
+					return;
+				}
+				const exitCode = code ?? 1;
+				if (exitCode !== 0) {
+					reject(new Error(`summary command exited with code ${exitCode}`));
+					return;
+				}
+				resolve();
+			});
+		});
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
+	}
+}
+
+export function getCommandStageStatus(accessor: DbAccessor, jobId: string): CommandStageStatus {
+	return accessor.withReadDb((db) => {
+		const row = db.prepare("SELECT result FROM summary_jobs WHERE id = ?").get(jobId) as
+			| { result: string | null }
+			| undefined;
+		if (row?.result === COMMAND_STAGE_COMPLETED_RESULT) {
+			return "complete";
+		}
+		if (row?.result === COMMAND_STAGE_RUNNING_RESULT) {
+			return "running";
+		}
+		return "none";
+	});
+}
+
+export function hasCommandStageCompleted(accessor: DbAccessor, jobId: string): boolean {
+	return getCommandStageStatus(accessor, jobId) === "complete";
+}
+
+export function markCommandStageRunning(accessor: DbAccessor, jobId: string): void {
+	accessor.withWriteTx((db) => {
+		db.prepare(
+			`UPDATE summary_jobs
+			 SET result = ?
+			 WHERE id = ? AND status = 'processing' AND (result IS NULL OR result = '')`,
+		).run(COMMAND_STAGE_RUNNING_RESULT, jobId);
+	});
+}
+
+export function clearCommandStageRunning(accessor: DbAccessor, jobId: string): void {
+	accessor.withWriteTx((db) => {
+		db.prepare(
+			`UPDATE summary_jobs
+			 SET result = NULL
+			 WHERE id = ? AND status = 'processing' AND result = ?`,
+		).run(jobId, COMMAND_STAGE_RUNNING_RESULT);
+	});
+}
+
+export function markCommandStageCompleted(accessor: DbAccessor, jobId: string): void {
+	accessor.withWriteTx((db) => {
+		db.prepare(
+			`UPDATE summary_jobs
+			 SET result = ?
+			 WHERE id = ? AND status = 'processing' AND (result = ? OR result IS NULL OR result = '')`,
+		).run(COMMAND_STAGE_COMPLETED_RESULT, jobId, COMMAND_STAGE_RUNNING_RESULT);
+	});
+}
+
+async function processJob(
+	accessor: DbAccessor,
+	provider: LlmProvider | null,
+	job: SummaryJobRow,
+	memoryCfg: ReturnType<typeof loadMemoryConfig>,
+): Promise<void> {
+	const commandMode = memoryCfg.pipelineV2.extraction.provider === "command";
+	const commandStageStatus: CommandStageStatus = commandMode ? getCommandStageStatus(accessor, job.id) : "none";
+
+	if (
+		shouldRunSignificanceGateForJob(commandMode, commandStageStatus) &&
+		!passesSignificanceGate(accessor, job, memoryCfg)
+	) {
+		return;
+	}
+
+	if (commandMode) {
+		if (commandStageStatus === "none") {
+			markCommandStageRunning(accessor, job.id);
+			try {
+				await runSummaryCommandProvider(job, memoryCfg);
+			} catch (error) {
+				clearCommandStageRunning(accessor, job.id);
+				throw error;
+			}
+			markCommandStageCompleted(accessor, job.id);
+		} else if (commandStageStatus === "complete") {
+			logger.info("summary-worker", "Command extraction already completed for this job attempt chain; skipping rerun", {
+				jobId: job.id,
+				attempt: job.attempts,
+				sessionKey: job.session_key,
+				project: job.project,
+			});
+		} else {
+			logger.warn(
+				"summary-worker",
+				"Command stage checkpoint indicates in-flight prior attempt; skipping rerun to avoid duplicate side effects",
+				{
+					jobId: job.id,
+					attempt: job.attempts,
+					sessionKey: job.session_key,
+					project: job.project,
+				},
+			);
+		}
+	}
+	if (!commandMode && !provider) {
+		throw new Error("summary worker requires an LLM provider when extraction.provider is not 'command'");
+	}
+
+	if (provider) {
+		const today = new Date().toISOString().slice(0, 10);
+		const genOpts = {
+			timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+			maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
+		};
+
+		const result =
+			job.transcript.length > CHUNK_TARGET_CHARS
+				? await processChunked(provider, job.transcript, today, genOpts)
+				: await processSingle(provider, job.transcript, today, genOpts);
+
+		if (!result) {
+			throw new Error("Failed to parse LLM summary response");
+		}
+
+		if (!commandMode) {
+			// Write markdown file
+			mkdirSync(MEMORY_DIR, { recursive: true });
+			const slug = deriveSlug(result.summary, job.project);
+			const filename = uniqueFilename(MEMORY_DIR, `${today}-${slug}`, ".md");
+			writeFileSync(filename, result.summary, "utf-8");
+
+			logger.info("summary-worker", "Wrote session summary", {
+				path: filename,
+				sessionKey: job.session_key,
+				project: job.project,
+				summaryChars: result.summary.length,
+			});
+
+			const saved = insertSummaryFacts(accessor, job, result.facts);
+
+			logger.info("summary-worker", "Inserted session facts", {
+				total: result.facts.length,
+				saved,
+				deduplicated: result.facts.length - saved,
+				factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
+			});
+		} else {
+			logger.info("summary-worker", "Command extraction mode: skipping summary markdown + fact insertion", {
+				sessionKey: job.session_key,
+				project: job.project,
+			});
+		}
+
+		// Write to session_summaries DAG (depth 0 = session level)
+		try {
+			writeSummaryToDAG(accessor, job, result, job.agent_id);
+		} catch (e) {
+			logger.warn("summary-worker", "Failed to write session summary to DAG (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+
+		// --- Session continuity scoring ---
+		try {
+			await scoreContinuity(accessor, provider, job, result.summary, memoryCfg);
+		} catch (e) {
+			logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+
+		// --- Predictor comparison (Sprint 3) ---
+		// Runs after continuity scoring has written per-memory relevance scores
+		// and session_scores. Uses dynamic imports to avoid circular deps.
+		// memoryCfg already loaded at function entry (significance gate).
+		try {
+			if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
+				const { runSessionComparison, saveComparison, updateSuccessRate, shouldTriggerTraining, detectDrift } =
+					await import("../predictor-comparison");
+				const comparison = runSessionComparison(job.session_key, job.agent_id, accessor);
+
+				if (comparison !== null) {
+					saveComparison(comparison, job.agent_id, accessor);
+					// Only update EMA when the predictor actually produced scores —
+					// otherwise predictorWon is deterministically false and the EMA
+					// accrues phantom losses during cold start or sidecar downtime.
+					if (comparison.hasPredictorScores) {
+						updateSuccessRate(job.agent_id, comparison.predictorWon, comparison.scorerConfidence);
+					}
+
+					// Drift detection
+					const driftResult = detectDrift(
+						job.agent_id,
+						accessor,
+						memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20,
+					);
+					if (driftResult.drifting) {
+						logger.warn("predictor", "Drift detected — resetting predictor state", {
+							recentWinRate: driftResult.recentWinRate,
+							windowSize: driftResult.windowSize,
+							agentId: job.agent_id,
 						});
+
+						// Reset alpha to 1.0 (full baseline weight) and EMA to neutral
+						const { updatePredictorState: resetState } = await import("../predictor-state");
+						resetState(job.agent_id, {
+							alpha: 1.0,
+							successRate: 0.5,
+						});
+
+						// Trigger retraining (non-fatal if it fails)
+						try {
+							const { getPredictorClient } = await import("../daemon");
+							const predictorClient = getPredictorClient();
+							if (predictorClient) {
+								const dbPath = join(AGENTS_DIR, "memory", "memories.db");
+								await predictorClient.trainFromDb({ db_path: dbPath });
+								logger.info("predictor", "Drift-triggered retraining complete");
+							}
+						} catch (trainErr) {
+							logger.warn("predictor", "Drift-triggered retraining failed", {
+								error: trainErr instanceof Error ? trainErr.message : String(trainErr),
+							});
+						}
+					}
+
+					// Check training trigger
+					if (shouldTriggerTraining(job.agent_id, memoryCfg.pipelineV2.predictor, accessor)) {
+						try {
+							const { getPredictorClient } = await import("../daemon");
+							const predictorClient = getPredictorClient();
+							if (predictorClient) {
+								const dbPath = join(AGENTS_DIR, "memory", "memories.db");
+								await predictorClient.trainFromDb({ db_path: dbPath });
+
+								const { updatePredictorState } = await import("../predictor-state");
+								updatePredictorState(job.agent_id, { lastTrainingAt: new Date().toISOString() });
+
+								logger.info("predictor", "Training triggered after session comparison");
+							}
+						} catch (trainErr) {
+							logger.warn("predictor", "Training trigger failed (non-fatal)", {
+								error: trainErr instanceof Error ? trainErr.message : String(trainErr),
+							});
+						}
 					}
 				}
+			}
+		} catch (err) {
+			logger.warn("predictor", "Session comparison failed (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 
-				// Check training trigger
-				if (shouldTriggerTraining(job.agent_id, memoryCfg.pipelineV2.predictor, accessor)) {
-					try {
-						const { getPredictorClient } = await import("../daemon");
-						const predictorClient = getPredictorClient();
-						if (predictorClient) {
-							const dbPath = join(AGENTS_DIR, "memory", "memories.db");
-							await predictorClient.trainFromDb({ db_path: dbPath });
-
-							const { updatePredictorState } = await import("../predictor-state");
-							updatePredictorState(job.agent_id, { lastTrainingAt: new Date().toISOString() });
-
-							logger.info("predictor", "Training triggered after session comparison");
-						}
-					} catch (trainErr) {
-						logger.warn("predictor", "Training trigger failed (non-fatal)", {
-							error: trainErr instanceof Error ? trainErr.message : String(trainErr),
-						});
+		// --- Training pair collection for predictor federated learning ---
+		if (job.session_key) {
+			try {
+				if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
+					const { collectTrainingPairs, saveTrainingPairs } = await import("../predictor-training-pairs");
+					const pairs = collectTrainingPairs(accessor, job.session_key, job.agent_id);
+					if (pairs.length > 0) {
+						saveTrainingPairs(accessor, job.agent_id, job.session_key, pairs);
 					}
 				}
+			} catch (e) {
+				logger.warn("summary-worker", "Training pair collection failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
 			}
 		}
-	} catch (err) {
-		logger.warn("predictor", "Session comparison failed (non-fatal)", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
 
-	// --- Training pair collection for predictor federated learning ---
-	if (job.session_key) {
 		try {
-			if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
-				const { collectTrainingPairs, saveTrainingPairs } = await import("../predictor-training-pairs");
-				const pairs = collectTrainingPairs(accessor, job.session_key, job.agent_id);
-				if (pairs.length > 0) {
-					saveTrainingPairs(accessor, job.agent_id, job.session_key, pairs);
-				}
-			}
+			const { getSynthesisWorker } = await import("./index");
+			void getSynthesisWorker()
+				?.triggerNow({
+					force: true,
+					source: "session-summary",
+					agentId: job.agent_id,
+				})
+				.then((result) => {
+					if (!result.skipped) return;
+					logger.info("summary-worker", "Skipped MEMORY.md synthesis after session summary", {
+						reason: result.reason,
+					});
+				})
+				.catch((error) => {
+					logger.warn("summary-worker", "Failed to trigger MEMORY.md synthesis after session summary", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				});
 		} catch (e) {
-			logger.warn("summary-worker", "Training pair collection failed (non-fatal)", {
+			logger.warn("summary-worker", "Could not load synthesis worker for post-summary trigger", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
 	}
-
-	try {
-		const { getSynthesisWorker } = await import("./index");
-		void getSynthesisWorker()
-			?.triggerNow({
-				force: true,
-				source: "session-summary",
-				agentId: job.agent_id,
-			})
-			.then((result) => {
-				if (!result.skipped) return;
-				logger.info("summary-worker", "Skipped MEMORY.md synthesis after session summary", {
-					reason: result.reason,
-				});
-			})
-			.catch((error) => {
-				logger.warn("summary-worker", "Failed to trigger MEMORY.md synthesis after session summary", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			});
-	} catch (error) {
-		logger.warn("summary-worker", "Could not load synthesis worker for post-summary trigger", {
-			error: error instanceof Error ? error.message : String(error),
-		});
+	if (job.session_key && (commandMode || provider)) {
+		upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
 	}
 }
 
@@ -1107,14 +1336,18 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 
 		const update = db.prepare(
 			`UPDATE summary_jobs
-			 SET status = ?
+			 SET status = ?,
+			     result = CASE
+			       WHEN result = ? THEN NULL
+			       ELSE result
+			     END
 			 WHERE id = ? AND status IN ('processing', 'leased')`,
 		);
 
 		let updated = 0;
 		for (const row of rows) {
 			const status = row.attempts >= row.max_attempts ? "dead" : "pending";
-			updated += countChanges(update.run(status, row.id));
+			updated += countChanges(update.run(status, COMMAND_STAGE_RUNNING_RESULT, row.id));
 		}
 
 		return { selected: rows.length, updated };
@@ -1288,19 +1521,26 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				project: job.project,
 			});
 
-			// Cache provider across jobs — re-resolve on config change, env
-			// key rotation, or TTL expiry. Env-var key changes invalidate
-			// immediately; secrets-store-only rotations rely on the 5-min TTL.
-			const envKey = process.env.ANTHROPIC_API_KEY ?? "";
-			const keyFingerprint = envKey ? new Bun.CryptoHasher("sha256").update(envKey).digest("hex").slice(0, 8) : "";
-			const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
-			const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
-			if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
-				cachedProvider = await resolveSummaryProvider(cfg);
-				cachedProviderKey = providerKey;
-				cachedProviderAt = Date.now();
+			let providerForJob: LlmProvider | null = null;
+			const requiresProviderForExtraction = cfg.pipelineV2.extraction.provider !== "command";
+			const requiresProviderForSynthesis =
+				cfg.pipelineV2.synthesis.enabled && cfg.pipelineV2.synthesis.provider !== "none";
+			if (requiresProviderForExtraction || requiresProviderForSynthesis) {
+				// Cache provider across jobs — re-resolve on config change, env
+				// key rotation, or TTL expiry. Env-var key changes invalidate
+				// immediately; secrets-store-only rotations rely on the 5-min TTL.
+				const envKey = process.env.ANTHROPIC_API_KEY ?? "";
+				const keyFingerprint = envKey ? new Bun.CryptoHasher("sha256").update(envKey).digest("hex").slice(0, 8) : "";
+				const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
+				const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
+				if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
+					cachedProvider = await resolveSummaryProvider(cfg);
+					cachedProviderKey = providerKey;
+					cachedProviderAt = Date.now();
+				}
+				providerForJob = cachedProvider;
 			}
-			await processJob(accessor, cachedProvider, job, cfg);
+			await processJob(accessor, providerForJob, job, cfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {

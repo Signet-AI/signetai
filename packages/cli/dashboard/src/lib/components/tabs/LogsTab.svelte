@@ -1,16 +1,17 @@
 <script lang="ts">
-import { Button } from "$lib/components/ui/button/index.js";
-import { Checkbox } from "$lib/components/ui/checkbox/index.js";
-import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
 import { browser } from "$app/environment";
-import * as Select from "$lib/components/ui/select/index.js";
-import { ActionLabels } from "$lib/ui/action-labels";
-import { onMount, tick } from "svelte";
+import { API_BASE } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import { Button } from "$lib/components/ui/button/index.js";
+import { Checkbox } from "$lib/components/ui/checkbox/index.js";
+import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+import * as Select from "$lib/components/ui/select/index.js";
 import { nav } from "$lib/stores/navigation.svelte";
 import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
+import { ActionLabels } from "$lib/ui/action-labels";
+import { onMount, tick } from "svelte";
 
 interface LogEntry {
 	timestamp: string;
@@ -22,16 +23,36 @@ interface LogEntry {
 	error?: { name: string; message: string };
 }
 
+type LogOrder = "desc" | "asc";
+
+interface LogViewEntry {
+	readonly id: number;
+	readonly key: string;
+	readonly entry: LogEntry;
+}
+
+interface CreatedLogEntries {
+	readonly entries: readonly LogViewEntry[];
+	readonly nextId: number;
+}
+
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 30000;
+const LOG_ORDER_STORAGE_KEY = "signet-dashboard-log-order";
+const DEFAULT_LOG_ORDER: LogOrder = "desc";
+const LOG_ORDER_PLACEHOLDER = "List order";
 const LOG_LEVEL_ORDER: Record<LogEntry["level"], number> = {
 	debug: 0,
 	info: 1,
 	warn: 2,
 	error: 3,
 };
+const LOG_ORDER_LABELS: Record<LogOrder, string> = {
+	desc: "Newest first",
+	asc: "Oldest first",
+};
 
-let logs = $state<LogEntry[]>([]);
+let logs = $state<readonly LogViewEntry[]>([]);
 let logsLoading = $state(false);
 let logsError = $state("");
 let logsStreaming = $state(false);
@@ -44,6 +65,7 @@ let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let logLevelFilter = $state<string>("");
 let logCategoryFilter = $state<string>("");
+let logOrderChoice = $state<LogOrder | null>(null);
 let logAutoScroll = $state(false);
 let logAutoScrollPausedByScroll = $state(false);
 let initialLoadDone = $state(false);
@@ -51,7 +73,8 @@ let logViewport = $state<HTMLElement | null>(null);
 let selectedLogKey = $state<string | null>(null);
 let copied = $state(false);
 let autoScrollSnapFrame: number | null = null;
-const BOTTOM_THRESHOLD_PX = 24;
+let nextLogId = 0;
+const TOP_THRESHOLD_PX = 24;
 
 const logCategories = [
 	"daemon",
@@ -78,6 +101,138 @@ const logCategories = [
 	"llm",
 ];
 const logLevels = ["debug", "info", "warn", "error"];
+const activeLogOrder = $derived(logOrderChoice ?? DEFAULT_LOG_ORDER);
+
+function isLogOrder(value: string): value is LogOrder {
+	return value === "desc" || value === "asc";
+}
+
+function isLogLevel(value: string): value is LogEntry["level"] {
+	return value === "debug" || value === "info" || value === "warn" || value === "error";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isStreamConnectedEvent(value: unknown): value is { type: "connected" } {
+	return isRecord(value) && value.type === "connected";
+}
+
+function readLogEntry(value: unknown): LogEntry | null {
+	if (!isRecord(value)) return null;
+	if (typeof value.timestamp !== "string") return null;
+	if (typeof value.category !== "string") return null;
+	if (typeof value.message !== "string") return null;
+	if (typeof value.level !== "string" || !isLogLevel(value.level)) return null;
+
+	const entry: LogEntry = {
+		timestamp: value.timestamp,
+		level: value.level,
+		category: value.category,
+		message: value.message,
+	};
+
+	if (isRecord(value.data)) {
+		entry.data = value.data;
+	}
+
+	if (typeof value.duration === "number" && Number.isFinite(value.duration)) {
+		entry.duration = value.duration;
+	}
+
+	if (isRecord(value.error) && typeof value.error.name === "string" && typeof value.error.message === "string") {
+		entry.error = {
+			name: value.error.name,
+			message: value.error.message,
+		};
+	}
+
+	return entry;
+}
+
+function getLogTime(timestamp: string): number {
+	const time = Date.parse(timestamp);
+	if (!Number.isNaN(time)) return time;
+	return 0;
+}
+
+function compareLogEntries(left: LogViewEntry, right: LogViewEntry, order: LogOrder): number {
+	const delta =
+		order === "desc"
+			? getLogTime(right.entry.timestamp) - getLogTime(left.entry.timestamp)
+			: getLogTime(left.entry.timestamp) - getLogTime(right.entry.timestamp);
+	if (delta !== 0) return delta;
+	return order === "desc" ? right.id - left.id : left.id - right.id;
+}
+
+function createLogEntries(entries: readonly LogEntry[], startId = 0): CreatedLogEntries {
+	const next = entries.map((entry, index) => {
+		const id = startId + index;
+		return {
+			id,
+			key: `log-${id}`,
+			entry,
+		};
+	});
+	return {
+		entries: next,
+		nextId: startId + next.length,
+	};
+}
+
+function sortLogEntries(entries: readonly LogViewEntry[], order: LogOrder): LogViewEntry[] {
+	return [...entries].sort((left, right) => compareLogEntries(left, right, order));
+}
+
+function getLatestLogEntry(entries: readonly LogViewEntry[], order: LogOrder): LogViewEntry | null {
+	if (entries.length === 0) return null;
+	return order === "desc" ? (entries[0] ?? null) : (entries[entries.length - 1] ?? null);
+}
+
+function mergeLogEntry(
+	entries: readonly LogViewEntry[],
+	entry: LogEntry,
+	nextId: number,
+	order: LogOrder,
+	max = 500,
+): CreatedLogEntries {
+	const created = createLogEntries([entry], nextId);
+	const next = sortLogEntries([...entries, ...created.entries], order);
+	return {
+		entries: order === "desc" ? next.slice(0, max) : next.slice(-max),
+		nextId: created.nextId,
+	};
+}
+
+function loadLogOrder(): LogOrder | null {
+	if (!browser) return null;
+	try {
+		const value = localStorage.getItem(LOG_ORDER_STORAGE_KEY);
+		if (value && isLogOrder(value)) return value;
+	} catch {
+		return null;
+	}
+	return null;
+}
+
+function saveLogOrder(value: LogOrder | null): void {
+	if (!browser) return;
+	try {
+		if (value === null) {
+			localStorage.removeItem(LOG_ORDER_STORAGE_KEY);
+			return;
+		}
+		localStorage.setItem(LOG_ORDER_STORAGE_KEY, value);
+	} catch {
+		return;
+	}
+}
+
+function getLogOrderLabel(): string {
+	if (logOrderChoice === null) return LOG_ORDER_PLACEHOLDER;
+	return LOG_ORDER_LABELS[logOrderChoice];
+}
 
 function getLogLevelClass(level: LogEntry["level"]): string {
 	switch (level) {
@@ -123,57 +278,66 @@ function getLogCategoryClass(category: string): string {
 	}
 }
 
-function buildLogKey(log: LogEntry, index: number): string {
-	return `${log.timestamp}-${log.level}-${log.category}-${index}`;
-}
-
 function isViewingLatest(): boolean {
-	if (logs.length === 0) return true;
+	const log = getLatestLogEntry(logs, activeLogOrder);
+	if (!log) return true;
 	if (!selectedLogKey) return true;
-	return selectedLogKey === buildLogKey(logs[logs.length - 1], logs.length - 1);
+	return selectedLogKey === log.key;
 }
 
 function selectLatestLog(): void {
-	if (logs.length === 0) {
-		selectedLogKey = null;
-		return;
-	}
-	selectedLogKey = buildLogKey(logs[logs.length - 1], logs.length - 1);
+	selectedLogKey = getLatestLogEntry(logs, activeLogOrder)?.key ?? null;
 }
 
 function getSelectedLog(): LogEntry | null {
-	if (!selectedLogKey) return logs.at(-1) ?? null;
-	for (let i = 0; i < logs.length; i += 1) {
-		if (buildLogKey(logs[i], i) === selectedLogKey) return logs[i];
+	const latest = getLatestLogEntry(logs, activeLogOrder)?.entry ?? null;
+	if (!selectedLogKey) return latest;
+	for (const log of logs) {
+		if (log.key === selectedLogKey) return log.entry;
 	}
-	return logs.at(-1) ?? null;
+	return latest;
 }
 
 const selectedLog = $derived(getSelectedLog());
 
-function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
+function scrollToLatest(behavior: ScrollBehavior = "smooth"): void {
 	if (!logViewport) return;
 	logViewport.scrollTo({
-		top: logViewport.scrollHeight,
+		top: activeLogOrder === "desc" ? 0 : logViewport.scrollHeight,
 		behavior,
 	});
 }
 
-function scrollToBottomNextFrame(behavior: ScrollBehavior = "auto"): void {
+function scrollToLatestNextFrame(behavior: ScrollBehavior = "auto"): void {
 	if (autoScrollSnapFrame !== null) return;
 	void tick().then(() => {
 		if (autoScrollSnapFrame !== null) return;
 		autoScrollSnapFrame = requestAnimationFrame(() => {
 			autoScrollSnapFrame = null;
 			if (!logAutoScroll) return;
-			scrollToBottom(behavior);
+			scrollToLatest(behavior);
 		});
 	});
 }
 
-function isNearBottom(viewport: HTMLElement | null): boolean {
+function isNearLatest(viewport: HTMLElement | null): boolean {
 	if (!viewport) return true;
-	return viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - BOTTOM_THRESHOLD_PX;
+	if (activeLogOrder === "desc") return viewport.scrollTop <= TOP_THRESHOLD_PX;
+	return viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= TOP_THRESHOLD_PX;
+}
+
+function updateLogOrder(value: string | null | undefined): void {
+	const next = value && isLogOrder(value) ? value : null;
+	if (next === logOrderChoice) return;
+	const wasViewingLatest = isViewingLatest();
+	logOrderChoice = next;
+	logs = sortLogEntries(logs, next ?? DEFAULT_LOG_ORDER);
+	if (wasViewingLatest) selectLatestLog();
+	if (logAutoScroll) {
+		logAutoScrollPausedByScroll = false;
+		scrollToLatestNextFrame("auto");
+	}
+	saveLogOrder(next);
 }
 
 async function fetchLogs() {
@@ -183,15 +347,20 @@ async function fetchLogs() {
 		const params = new URLSearchParams({ limit: "200" });
 		if (logLevelFilter) params.set("level", logLevelFilter);
 		if (logCategoryFilter) params.set("category", logCategoryFilter);
-		const res = await fetch(`/api/logs?${params}`);
+		const res = await fetch(`${API_BASE}/api/logs?${params}`);
 		const data = await res.json();
-		logs = data.logs || [];
+		const entries = Array.isArray(data.logs)
+			? data.logs.map((entry) => readLogEntry(entry)).filter((entry): entry is LogEntry => entry !== null)
+			: [];
+		const created = createLogEntries(entries);
+		nextLogId = created.nextId;
+		logs = sortLogEntries(created.entries, activeLogOrder);
 		selectLatestLog();
 		if (!initialLoadDone) {
 			initialLoadDone = true;
-			void tick().then(() => scrollToBottom("auto"));
+			void tick().then(() => scrollToLatest("auto"));
 		} else if (logAutoScroll) {
-			scrollToBottomNextFrame("auto");
+			scrollToLatestNextFrame("auto");
 		}
 	} catch {
 		logsError = "Failed to fetch logs";
@@ -213,12 +382,12 @@ function startLogStream() {
 		logsReconnecting = false;
 		streamError = "";
 	}
-	logEventSource = new EventSource("/api/logs/stream");
+	logEventSource = new EventSource(`${API_BASE}/api/logs/stream`);
 
 	logEventSource.onmessage = (event) => {
 		try {
-			const entry = JSON.parse(event.data);
-			if (entry.type === "connected") {
+			const payload: unknown = JSON.parse(event.data);
+			if (isStreamConnectedEvent(payload)) {
 				reconnectAttempt = 0;
 				logsReconnecting = false;
 				logsConnecting = false;
@@ -226,23 +395,23 @@ function startLogStream() {
 				streamError = "";
 				return;
 			}
+			const entry = readLogEntry(payload);
+			if (!entry) return;
 			if (logsConnecting) {
 				logsConnecting = false;
 				logsStreaming = true;
 			}
-			const entryLevelValue =
-				typeof entry.level === "string"
-					? LOG_LEVEL_ORDER[entry.level as LogEntry["level"]]
-					: undefined;
-			const filterLevelValue =
-				LOG_LEVEL_ORDER[logLevelFilter as LogEntry["level"]];
+			const entryLevelValue = LOG_LEVEL_ORDER[entry.level];
+			const filterLevelValue = isLogLevel(logLevelFilter) ? LOG_LEVEL_ORDER[logLevelFilter] : undefined;
 			if (logLevelFilter && (entryLevelValue ?? -1) < (filterLevelValue ?? -1)) return;
 			if (logCategoryFilter && entry.category !== logCategoryFilter) return;
 			const wasViewingLatest = isViewingLatest();
-			logs = [...logs.slice(-499), entry];
+			const merged = mergeLogEntry(logs, entry, nextLogId, activeLogOrder);
+			nextLogId = merged.nextId;
+			logs = merged.entries;
 			if (wasViewingLatest) selectLatestLog();
 			if (logAutoScroll) {
-				scrollToBottomNextFrame("auto");
+				scrollToLatestNextFrame("auto");
 			}
 		} catch {
 			// ignore parse errors
@@ -392,6 +561,7 @@ async function copySelectedLog(): Promise<void> {
 }
 
 onMount(() => {
+	logOrderChoice = loadLogOrder();
 	fetchLogs();
 	manualStartLogStream();
 	return () => {
@@ -407,13 +577,13 @@ $effect(() => {
 	if (!viewport) return;
 
 	const onScroll = () => {
-		const nearBottom = isNearBottom(viewport);
-		if (logAutoScroll && !nearBottom) {
+		const nearLatest = isNearLatest(viewport);
+		if (logAutoScroll && !nearLatest) {
 			logAutoScroll = false;
 			logAutoScrollPausedByScroll = true;
 			return;
 		}
-		if (!logAutoScroll && logAutoScrollPausedByScroll && nearBottom) {
+		if (!logAutoScroll && logAutoScrollPausedByScroll && nearLatest) {
 			logAutoScroll = true;
 			logAutoScrollPausedByScroll = false;
 		}
@@ -463,12 +633,22 @@ $effect(() => {
 						{/each}
 					</Select.Content>
 				</Select.Root>
+				<Select.Root type="single" value={logOrderChoice ?? ""} onValueChange={updateLogOrder}>
+					<Select.Trigger data-placeholder={logOrderChoice === null ? "" : undefined} class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] data-[placeholder]:text-[var(--sig-text-muted)] rounded-lg h-auto py-1 px-2 min-w-[124px]">
+						{getLogOrderLabel()}
+					</Select.Trigger>
+					<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg">
+						<Select.Item value="" label={LOG_ORDER_PLACEHOLDER} />
+						<Select.Item value="desc" label={LOG_ORDER_LABELS.desc} />
+						<Select.Item value="asc" label={LOG_ORDER_LABELS.asc} />
+					</Select.Content>
+				</Select.Root>
 				<label class="flex items-center gap-1.5 sig-label text-[var(--sig-text)] cursor-pointer">
 					<Checkbox checked={logAutoScroll} onCheckedChange={(value: unknown) => {
 						logAutoScroll = value === true;
 						logAutoScrollPausedByScroll = false;
 						if (logAutoScroll) {
-							scrollToBottomNextFrame("auto");
+							scrollToLatestNextFrame("auto");
 						}
 					}} class="rounded-lg" />
 					Auto-scroll
@@ -520,27 +700,29 @@ $effect(() => {
 					{:else if logs.length === 0}
 						<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">No logs found</div>
 					{:else}
-						{#each logs as log, i}
+						{#each logs as log (log.key)}
+							{@const entry = log.entry}
+							{@const logKey = log.key}
 							<button
 								type="button"
-								class={`log-row ${getLogLevelClass(log.level)} w-full text-left px-[var(--space-md)] py-1.5 border-b border-[var(--sig-border)] hover:bg-[var(--sig-surface)] cursor-pointer ${
-									selectedLogKey === buildLogKey(log, i) ? "bg-[var(--sig-surface)] border-[var(--sig-border-strong)]" : ""
+								class={`log-row ${getLogLevelClass(entry.level)} w-full text-left px-[var(--space-md)] py-1.5 border-b border-[var(--sig-border)] hover:bg-[var(--sig-surface)] cursor-pointer ${
+									selectedLogKey === logKey ? "bg-[var(--sig-surface)] border-[var(--sig-border-strong)]" : ""
 								}`}
 								onclick={() => {
-									selectedLogKey = buildLogKey(log, i);
+									selectedLogKey = logKey;
 								}}
 							>
 								<div class="flex flex-wrap items-baseline gap-[var(--space-xs)]">
-									<span class="text-[var(--sig-text-muted)] shrink-0">{formatLogTime(log.timestamp)}</span>
-									<span class={`font-semibold shrink-0 min-w-[40px] ${getLogLevelClass(log.level)}`}>{log.level.toUpperCase()}</span>
-									<span class={`log-category ${getLogCategoryClass(log.category)} shrink-0`}>[{log.category}]</span>
-									<span class="text-[var(--sig-text-bright)] break-all">{log.message}</span>
-									{#if log.duration !== undefined}
-										<span class="text-[var(--sig-text-muted)]">({log.duration}ms)</span>
+									<span class="text-[var(--sig-text-muted)] shrink-0">{formatLogTime(entry.timestamp)}</span>
+									<span class={`font-semibold shrink-0 min-w-[40px] ${getLogLevelClass(entry.level)}`}>{entry.level.toUpperCase()}</span>
+									<span class={`log-category ${getLogCategoryClass(entry.category)} shrink-0`}>[{entry.category}]</span>
+									<span class="text-[var(--sig-text-bright)] break-all">{entry.message}</span>
+									{#if entry.duration !== undefined}
+										<span class="text-[var(--sig-text-muted)]">({entry.duration}ms)</span>
 									{/if}
 								</div>
-								{#if getReadableLogSnippet(log)}
-									<div class="mt-1 text-[11px] text-[var(--sig-text-muted)] whitespace-pre-wrap break-words">{getReadableLogSnippet(log)}</div>
+								{#if getReadableLogSnippet(entry)}
+									<div class="mt-1 text-[11px] text-[var(--sig-text-muted)] whitespace-pre-wrap break-words">{getReadableLogSnippet(entry)}</div>
 								{/if}
 							</button>
 						{/each}

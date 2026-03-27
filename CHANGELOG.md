@@ -2,6 +2,25 @@
 
 All notable changes to Signet are documented here.
 
+## [0.79.0] - 2026-03-27
+
+### Features
+
+- **pipeline**: add command extraction provider for summary worker control-plane path (#368)
+
+
+## [0.78.4] - 2026-03-27
+
+### Features
+
+- **dashboard**: add configurable log ordering (#371)
+
+### Docs
+
+- add first-PR guide for new contributors
+- **research**: add agent loop comparison across Forge, Codex, Hermes
+
+
 ## [0.78.3] - 2026-03-27
 
 ### Bug Fixes

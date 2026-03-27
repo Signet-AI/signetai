@@ -520,6 +520,160 @@ describe("loadPipelineConfig", () => {
 		expect(result.extraction.model).toBe("gpt-5.3-codex");
 	});
 
+	it("accepts command extraction provider with argv-safe command config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						provider: "command",
+						command: {
+							bin: "node",
+							args: ["script.mjs", "--transcript", "$TRANSCRIPT"],
+							cwd: "/tmp/signet",
+							env: {
+								SIGNET_MODE: "pipeline",
+								"NOT VALID": "skip-me",
+							},
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.provider).toBe("command");
+		expect(result.extraction.command).toEqual({
+			bin: "node",
+			args: ["script.mjs", "--transcript", "$TRANSCRIPT"],
+			cwd: "/tmp/signet",
+			env: {
+				SIGNET_MODE: "pipeline",
+			},
+		});
+		// synthesis never accepts command provider; extraction command falls back to synthesis defaults
+		expect(result.synthesis.provider).toBe("ollama");
+		expect(result.synthesis.model).toBe("qwen3:4b");
+	});
+
+	it("parses legacy extraction.command string into argv", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "command",
+					extractionCommand: 'node ./extract.mjs --transcript "$TRANSCRIPT" --session "$SESSION_KEY"',
+				},
+			},
+		});
+
+		expect(result.extraction.provider).toBe("command");
+		expect(result.extraction.command).toEqual({
+			bin: "node",
+			args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY"],
+		});
+	});
+
+	it("rejects synthesis.provider=command with a clear validation error", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							provider: "ollama",
+							model: "qwen3:4b",
+						},
+						synthesis: {
+							provider: "command",
+						},
+					},
+				},
+			}),
+		).toThrow("synthesis.provider='command' is not supported");
+	});
+
+	it("loadMemoryConfig fails fast when synthesis.provider=command is configured", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: ollama
+      model: qwen3:4b
+    synthesis:
+      provider: command
+`,
+			"utf8",
+		);
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow("synthesis.provider='command' is not supported");
+	});
+
+	it("rejects extraction.provider=command when extraction.command is missing", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							provider: "command",
+						},
+					},
+				},
+			}),
+		).toThrow("extraction.command is required when extraction.provider='command'");
+	});
+
+	it("rejects extraction.command object that omits bin", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							provider: "command",
+							command: {
+								command: "node",
+								args: ["script.mjs"],
+							},
+						},
+					},
+				},
+			}),
+		).toThrow("extraction.command is required when extraction.provider='command'");
+	});
+
+	it("rejects extraction.command args that contain non-strings", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							provider: "command",
+							command: {
+								bin: "node",
+								args: ["script.mjs", 123],
+							},
+						},
+					},
+				},
+			}),
+		).toThrow("extraction.command is required when extraction.provider='command'");
+	});
+
+	it("loadMemoryConfig fails fast when extraction.provider=command is missing command config", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: command
+`,
+			"utf8",
+		);
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow(
+			"extraction.command is required when extraction.provider='command'",
+		);
+	});
+
 	it("loads all flags correctly when all set to true (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {

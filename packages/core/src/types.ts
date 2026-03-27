@@ -182,13 +182,21 @@ export interface PipelineEscalationConfig {
 	readonly level2MaxEntities: number;
 }
 
+export interface PipelineCommandConfig {
+	readonly bin: string;
+	readonly args: ReadonlyArray<string>;
+	readonly cwd?: string;
+	readonly env?: Readonly<Record<string, string>>;
+}
+
 export interface PipelineExtractionConfig {
-	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter";
+	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;
 	readonly timeout: number;
 	readonly minConfidence: number;
+	readonly command?: PipelineCommandConfig;
 	readonly escalation?: PipelineEscalationConfig;
 }
 

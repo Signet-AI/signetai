@@ -970,17 +970,25 @@ Extraction safety note:
 
 ```yaml
 extraction:
-  provider: ollama               # "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
+  provider: ollama               # "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
   model: qwen3:4b
-  timeout: 45000                 # ms, range 5000–300000
+  timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
+  command:                       # required when provider: command
+    bin: node
+    args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY", "--agent", "$AGENT_ID"]
+    # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $AGENT_ID, $SIGNET_PATH
+    # keep bin/cwd fixed (or trusted $SIGNET_PATH/$AGENT_ID only); use args/env for session/project tokens
+    # command stdout/stderr are ignored; command must write memories to Signet state directly
+    # after command success, synthesis hooks can run when configured, but markdown/fact writes are skipped in command mode
 
 synthesis:
   enabled: true
-  provider: ollama               # same provider choices as extraction
+  provider: ollama               # same provider choices as extraction, except "command"
   model: qwen3:4b
   timeout: 120000                # ms, range 5000–300000
-  # when omitted entirely, synthesis falls back to the resolved extraction provider/model
+  # when omitted entirely, synthesis falls back to extraction provider/model
+  # except extraction.provider=command, which falls back to synthesis defaults
 
 worker:
   pollMs: 2000                   # ms, range 100–60000
