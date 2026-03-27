@@ -55,6 +55,8 @@ function tabToSidebarItem(tab: string): SidebarFocusItem {
 		case "secrets":
 		case "skills":
 			return tab;
+		case "changelog":
+			return "github-link";
 		default:
 			return "home";
 	}

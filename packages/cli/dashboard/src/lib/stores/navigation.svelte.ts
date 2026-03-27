@@ -143,15 +143,13 @@ export const nav = $state({
 
 /* ── Tab groups (display-layer only) ── */
 
-const MEMORY_TABS: ReadonlySet<TabId> = new Set([
-	"memory",
-]);
+const MEMORY_TABS: ReadonlySet<TabId> = new Set(["cortex-memory"]);
 const ENGINE_TABS: ReadonlySet<TabId> = new Set(["settings"]);
 const CORTEX_TABS: ReadonlySet<TabId> = new Set(["cortex-memory"]);
 
 export type NavGroup = "memory" | "engine" | "cortex";
 
-const lastMemoryTab = $state({ value: "memory" as TabId });
+const lastMemoryTab = $state({ value: "cortex-memory" as TabId });
 const lastEngineTab = $state({ value: "settings" as TabId });
 const lastCortexTab = $state({ value: "cortex-memory" as TabId });
 
