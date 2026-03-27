@@ -2942,8 +2942,12 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	}
 
 	// Read current cursor; skip if delta is too small.
+	// Cursor is stored as UTF-8 byte offset so it matches the Rust daemon's
+	// byte-based cursor on a shared database. Slice transcript by bytes to
+	// keep the unit consistent across daemons.
 	const cursor = readExtractCursor(req.sessionKey, agentId);
-	const delta = transcript.slice(cursor);
+	const transcriptBuf = Buffer.from(transcript, "utf8");
+	const delta = transcriptBuf.subarray(cursor).toString("utf8");
 	if (delta.length < 500) {
 		logger.info("hooks", "Checkpoint extract skipped — delta too small", {
 			sessionKey: req.sessionKey,
@@ -3014,7 +3018,9 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		project: req.project,
 		agentId,
 	});
-	advanceExtractCursor(req.sessionKey, agentId, transcript.length);
+	// Advance cursor using UTF-8 byte length so the stored offset is
+	// byte-compatible with the Rust daemon on a shared database.
+	advanceExtractCursor(req.sessionKey, agentId, Buffer.byteLength(transcript, "utf8"));
 
 	logger.info("hooks", "Checkpoint extract queued", {
 		jobId,
