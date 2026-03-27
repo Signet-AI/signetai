@@ -100,47 +100,44 @@
 	interface GroupState {
 		lines: string[];
 		running: boolean;
-		expanded: boolean;
 		selected: number;
 	}
 
 	let panels = $state<Record<string, GroupState>>(
-		Object.fromEntries(groupDefs.map(g => [g.id, { lines: [], running: false, expanded: true, selected: 0 }]))
+		Object.fromEntries(groupDefs.map(g => [g.id, { lines: [], running: false, selected: 0 }]))
 	);
+	let termLines = $state<string[]>([]);
+	let termRef = $state<HTMLDivElement | undefined>(undefined);
+	const groupMap = Object.fromEntries(groupDefs.map((g) => [g.id, g]));
 
-	const termRefs: Record<string, HTMLDivElement | undefined> = {};
-
-	function bindTerm(el: HTMLDivElement, id: string): void {
-		termRefs[id] = el;
+	function bindTerm(el: HTMLDivElement): void {
+		termRef = el;
 	}
 
-	async function scrollGroup(id: string): Promise<void> {
+	async function scrollGroup(_id?: string): Promise<void> {
 		await tick();
-		const el = termRefs[id];
-		el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+		termRef?.scrollTo({ top: termRef.scrollHeight, behavior: "smooth" });
 	}
 
 	function appendLine(id: string, text: string): void {
 		const gs = panels[id];
 		if (!gs) return;
 		gs.lines = [...gs.lines, text];
+		const label = groupMap[id]?.title ?? id;
+		termLines = [...termLines, text ? `[${label}] ${text}` : ""];
 	}
 
-	function clearGroup(id: string): void {
-		const gs = panels[id];
-		if (gs) gs.lines = [];
-	}
-
-	function toggleGroup(id: string): void {
-		const gs = panels[id];
-		if (gs) gs.expanded = !gs.expanded;
+	function clearOutput(): void {
+		termLines = [];
+		for (const g of groupDefs) {
+			panels[g.id].lines = [];
+		}
 	}
 
 	async function execCli(gid: string, cmd: CommandDef): Promise<void> {
 		const gs = panels[gid];
 		if (!gs || gs.running || !cmd.key) return;
 		gs.running = true;
-		gs.expanded = true;
 
 		appendLine(gid, `\x1b[32m$\x1b[0m signet ${cmd.key.replace(/-/g, " ")}`);
 		await scrollGroup(gid);
@@ -257,7 +254,6 @@
 		const gs = panels[gid];
 		if (!gs || gs.running || !cmd.path || !cmd.method) return;
 		gs.running = true;
-		gs.expanded = true;
 		const start = performance.now();
 
 		appendLine(gid, `\x1b[32m$\x1b[0m ${cmd.method} ${cmd.path}`);
@@ -324,46 +320,22 @@
 </script>
 
 <div class="ts-root">
-	{#each groupDefs as group (group.id)}
-		{@const gs = panels[group.id]}
-		<div class="ts-panel" class:ts-panel--collapsed={!gs.expanded} style="--panel-color: {group.color}">
-			<!-- Panel header row -->
-			<div class="ts-panel-header-row">
-				<button class="ts-panel-header" onclick={() => toggleGroup(group.id)}>
-					<svelte:component this={group.icon} class="size-3.5" style="color: {group.color}" />
-					<span class="ts-panel-title">{group.title}</span>
-					{#if gs.running}
-						<Loader class="size-3 ts-spin" style="color: var(--sig-highlight-text)" />
-					{/if}
+	<div class="ts-controls">
+		{#each groupDefs as group (group.id)}
+			{@const gs = panels[group.id]}
+			<div class="ts-control" style="--panel-color: {group.color}">
+				<div class="ts-control-head">
+					<div class="ts-control-title-wrap">
+						<svelte:component this={group.icon} class="size-3.5" style="color: {group.color}" />
+						<span class="ts-control-title">{group.title}</span>
+						{#if gs.running}
+							<Loader class="size-3 ts-spin" style="color: var(--sig-highlight-text)" />
+						{/if}
+					</div>
 					{#if gs.lines.length > 0}
 						<span class="ts-panel-count">{gs.lines.length}</span>
 					{/if}
-					<ChevronDown class={`size-3 ts-chevron ${gs.expanded ? "" : "ts-chevron--closed"}`} />
-				</button>
-				{#if gs.lines.length > 0}
-					<button
-						class="ts-header-clear"
-						title="Clear output"
-						onclick={() => clearGroup(group.id)}
-					>
-						<Trash2 class="size-3" />
-					</button>
-				{/if}
-			</div>
-
-			{#if gs.expanded}
-				<!-- Terminal output -->
-				<div class="ts-term" use:bindTerm={group.id} role="log">
-					{#if gs.lines.length === 0}
-						<div class="ts-empty">no output yet</div>
-					{:else}
-						{#each gs.lines as line, i (i)}
-							<div class="ts-line">{@html ansiToHtml(line) || "&nbsp;"}</div>
-						{/each}
-					{/if}
 				</div>
-
-				<!-- Command select + run -->
 				<div class="ts-action-bar">
 					<Select.Root
 						type="single"
@@ -393,47 +365,55 @@
 							Run
 						{/if}
 					</button>
-					{#if gs.lines.length > 0}
-						<button
-							class="ts-clear"
-							onclick={() => clearGroup(group.id)}
-							title="Clear output"
-						>
-							<Trash2 class="size-3" />
-						</button>
-					{/if}
 				</div>
+			</div>
+		{/each}
+	</div>
+
+	<div class="ts-terminal-wrap">
+		<div class="ts-terminal-head">
+			<span class="ts-control-title">Terminal</span>
+			{#if termLines.length > 0}
+				<button
+					class="ts-clear"
+					onclick={clearOutput}
+					title="Clear output"
+				>
+					<Trash2 class="size-3" />
+				</button>
 			{/if}
 		</div>
-	{/each}
+		<div class="ts-term" use:bindTerm role="log">
+			{#if termLines.length === 0}
+				<div class="ts-empty">no output yet</div>
+			{:else}
+				{#each termLines as line, i (i)}
+					<div class="ts-line">{@html ansiToHtml(line) || "&nbsp;"}</div>
+				{/each}
+			{/if}
+		</div>
+	</div>
 </div>
 
 <style>
 	.ts-root {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
+		display: flex;
+		flex-direction: column;
 		flex: 1;
 		min-height: 0;
-		overflow-y: auto;
 		padding: var(--space-md);
 		gap: 10px;
-		align-items: stretch;
+		overflow: hidden;
 	}
 
-	@media (min-width: 900px) {
-		.ts-root {
-			grid-template-columns: 1fr 1fr;
-		}
+	.ts-controls {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+		gap: 10px;
+		flex-shrink: 0;
 	}
 
-	@media (max-width: 480px) {
-		.ts-root {
-			grid-template-columns: 1fr;
-		}
-	}
-
-	/* ── Panel ── */
-	.ts-panel {
+	.ts-control {
 		display: flex;
 		flex-direction: column;
 		border: 1px solid var(--sig-border);
@@ -442,69 +422,28 @@
 		overflow: hidden;
 	}
 
-	.ts-panel--collapsed {
-		/* keep collapsed panels minimal */
-	}
-
-	.ts-panel-header-row {
+	.ts-control-head {
 		display: flex;
-		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 8px 10px 0;
 		border-bottom: 1px solid var(--sig-border);
 	}
 
-	.ts-panel--collapsed .ts-panel-header-row {
-		border-bottom-color: transparent;
-	}
-
-	.ts-panel-header {
+	.ts-control-title-wrap {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 10px 14px;
-		padding-right: 6px;
-		background: transparent;
-		border: none;
-		color: var(--sig-text-bright);
+		padding-bottom: 8px;
+	}
+
+	.ts-control-title {
 		font-family: var(--font-display);
 		font-size: 11px;
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
-		cursor: pointer;
-		transition: background 0.15s ease;
-		flex: 1;
-		text-align: left;
-	}
-
-	.ts-header-clear {
-		display: grid;
-		place-items: center;
-		width: 28px;
-		height: 28px;
-		background: transparent;
-		border: none;
-		border-radius: 5px;
-		color: var(--sig-text-muted);
-		cursor: pointer;
-		transition: color 0.15s ease;
-		flex-shrink: 0;
-		margin-right: 6px;
-	}
-
-	.ts-header-clear:hover {
-		color: var(--sig-danger);
-	}
-
-	.ts-panel--collapsed .ts-panel-header {
-		border-bottom-color: transparent;
-	}
-
-	.ts-panel-header:hover {
-		background: var(--sig-surface-raised);
-	}
-
-	.ts-panel-title {
-		flex: 1;
+		color: var(--sig-text-bright);
 	}
 
 	.ts-panel-count {
@@ -518,21 +457,29 @@
 		line-height: 1.5;
 	}
 
-	.ts-chevron {
-		color: var(--sig-text-muted);
-		transition: transform 0.2s ease;
-		flex-shrink: 0;
+	.ts-terminal-wrap {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		min-height: 0;
+		border: 1px solid var(--sig-border);
+		border-radius: 8px;
+		background: var(--sig-surface);
+		overflow: hidden;
 	}
 
-	.ts-chevron--closed {
-		transform: rotate(-90deg);
+	.ts-terminal-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 8px 10px;
+		border-bottom: 1px solid var(--sig-border);
 	}
 
 	/* ── Terminal ── */
 	.ts-term {
 		flex: 1;
-		min-height: 48px;
-		max-height: 300px;
+		min-height: 240px;
 		overflow-y: auto;
 		padding: 10px 14px;
 		background: var(--sig-bg);

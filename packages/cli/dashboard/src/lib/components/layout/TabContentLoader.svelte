@@ -139,6 +139,14 @@ const {
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
+{:else if activeTab === "audit"}
+	{#await import("$lib/components/tabs/AuditTab.svelte")}
+		{@render skeletonList()}
+	{:then module}
+		<module.default />
+	{:catch error}
+		{@render skeletonError(error)}
+	{/await}
 {:else if activeTab === "pipeline"}
 	{#await import("$lib/components/tabs/PipelineTab.svelte")}
 		{@render skeletonList()}
@@ -172,7 +180,7 @@ const {
 		{@render skeletonError(error)}
 	{/await}
 {:else if activeTab === "tasks"}
-	{#await import("$lib/components/tabs/TasksTab.svelte")}
+	{#await import("$lib/components/cortex/CortexTasksPanel.svelte")}
 		{@render skeletonList()}
 	{:then module}
 		<module.default />

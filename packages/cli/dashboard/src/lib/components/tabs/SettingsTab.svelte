@@ -2,12 +2,7 @@
 import { invalidateAll } from "$app/navigation";
 import type { ConfigFile } from "$lib/api";
 import IdentityPanel from "$lib/components/config/IdentityPanel.svelte";
-import PageBanner from "$lib/components/layout/PageBanner.svelte";
-import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
-import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
-import { nav } from "$lib/stores/navigation.svelte";
 import { st } from "$lib/stores/settings.svelte";
-import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
 import { setSettingsDirty } from "$lib/stores/unsaved-changes.svelte";
 import { untrack } from "svelte";
 import AgentSection from "./settings/AgentSection.svelte";
@@ -162,14 +157,6 @@ function formatSavedAt(raw: string | null): string {
 <svelte:window onkeydown={handleGlobalKey} />
 
 <div class="settings-tab">
-	<PageBanner title="Settings">
-		<TabGroupBar
-			group="engine"
-			tabs={ENGINE_TAB_ITEMS}
-			activeTab={nav.activeTab}
-			onselect={(_tab, index) => focusEngineTab(index)}
-		/>
-	</PageBanner>
 	{#if !st.hasFiles}
 		<div class="empty-state">No YAML config files found</div>
 	{:else}

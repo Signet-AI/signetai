@@ -7,7 +7,7 @@ export interface PageHeaderDefinition {
 
 export const PAGE_HEADERS = {
 	home: {
-		title: "Home",
+		title: "Overview",
 		eyebrow: "Agent overview",
 	},
 	settings: {
@@ -15,20 +15,24 @@ export const PAGE_HEADERS = {
 		eyebrow: "Configuration and identity",
 	},
 	memory: {
-		title: "Memory",
-		eyebrow: "Persistent memory index",
+		title: "Ontology",
+		eyebrow: "Persistent cortex index",
 	},
 	timeline: {
-		title: "Memory",
+		title: "Ontology",
 		eyebrow: "Era evolution timeline",
 	},
 	knowledge: {
-		title: "Memory",
+		title: "Ontology",
 		eyebrow: "Knowledge graph and traversal view",
 	},
 	embeddings: {
-		title: "Memory",
+		title: "Ontology",
 		eyebrow: "Semantic projection workspace",
+	},
+	audit: {
+		title: "Audit",
+		eyebrow: "Diagnostics, repair, and daemon logs",
 	},
 	pipeline: {
 		title: "Engine",
@@ -43,7 +47,7 @@ export const PAGE_HEADERS = {
 		eyebrow: "Secure secret vault",
 	},
 	skills: {
-		title: "Marketplace",
+		title: "Skills",
 		eyebrow: "Skills and Tool Servers",
 	},
 	tasks: {
@@ -67,8 +71,8 @@ export const PAGE_HEADERS = {
 		eyebrow: "Signet OS — MCP app dashboard",
 	},
 	"cortex-memory": {
-		title: "Cortex",
-		eyebrow: "Memory index and knowledge graph",
+		title: "Ontology",
+		eyebrow: "Cortex index and constellation",
 	},
 	"cortex-apps": {
 		title: "Cortex",
@@ -87,7 +91,7 @@ export const PAGE_HEADERS = {
 // --- Tab group item arrays (drives TabGroupBar rendering) ---
 
 export const MEMORY_TAB_ITEMS = [
-	{ id: "memory", label: "Index" },
+	{ id: "memory", label: "Cortex" },
 	{ id: "timeline", label: "Timeline" },
 	{ id: "knowledge", label: "Knowledge" },
 	{ id: "embeddings", label: "Constellation" },
@@ -95,17 +99,10 @@ export const MEMORY_TAB_ITEMS = [
 
 export const ENGINE_TAB_ITEMS = [
 	{ id: "settings", label: "Settings" },
-	{ id: "pipeline", label: "Pipeline" },
-	{ id: "predictor", label: "Predictor" },
-	{ id: "connectors", label: "Connectors" },
-	{ id: "logs", label: "Logs" },
 ] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
 
 export const CORTEX_TAB_ITEMS = [
-	{ id: "cortex-memory", label: "Memory" },
-	{ id: "cortex-apps", label: "Apps" },
-	{ id: "cortex-tasks", label: "Tasks" },
-	{ id: "cortex-troubleshooter", label: "Troubleshooter" },
+	{ id: "cortex-memory", label: "Ontology" },
 ] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
 
 // --- Footer definitions ---
@@ -121,7 +118,8 @@ export interface PageFooterStatic {
  * Skills returns null (no footer).
  */
 export const PAGE_FOOTERS: Partial<Record<TabId, PageFooterStatic>> = {
-	home: { left: "Agent overview", right: "dashboard home" },
+	home: { left: "Agent overview", right: "overview" },
+	audit: { left: "Audit", right: "troubleshooter + logs" },
 	pipeline: { left: "Pipeline", right: "memory loop v2" },
 	embeddings: { left: "Constellation", right: "UMAP" },
 	knowledge: { left: "structural graph browser", right: "entities, traversal, predictor slices" },
@@ -131,7 +129,7 @@ export const PAGE_FOOTERS: Partial<Record<TabId, PageFooterStatic>> = {
 	connectors: { left: "platform harnesses + data sources", right: "connector health" },
 	changelog: { left: "project docs + release history", right: "github.com/Signet-AI/signetai" },
 	os: { left: "MCP app dashboard", right: "drag apps from tray to grid" },
-	"cortex-memory": { left: "Memory", right: "search, timeline, knowledge, constellation" },
+	"cortex-memory": { left: "Ontology", right: "cortex index + constellation" },
 	"cortex-apps": { left: "Apps", right: "installed tool servers" },
 	"cortex-tasks": { left: "Tasks", right: "scheduled agent prompts" },
 	"cortex-troubleshooter": { left: "Troubleshooter", right: "diagnostics and repair" },

@@ -5,6 +5,10 @@ import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
 import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
 import type { Memory } from "$lib/api";
 import {
+	getConstellationOverlay,
+	type ConstellationGraph,
+} from "$lib/api";
+import {
 	mem,
 	hasActiveFilters,
 	queueMemorySearch,
@@ -24,15 +28,18 @@ import { ActionLabels } from "$lib/ui/action-labels";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Popover from "$lib/components/ui/popover/index.js";
 import { Calendar } from "$lib/components/ui/calendar/index.js";
+import * as Card from "$lib/components/ui/card/index.js";
+import { Separator } from "$lib/components/ui/separator/index.js";
 
 import CalendarIcon from "@lucide/svelte/icons/calendar";
 import { getLocalTimeZone, CalendarDate, type DateValue } from "@internationalized/date";
 
 interface Props {
 	memories: Memory[];
+	embedded?: boolean;
 }
 
-let { memories }: Props = $props();
+let { memories, embedded = false }: Props = $props();
 
 // Delete confirmation state - tracks which memory is pending delete confirmation
 let deleteConfirmId = $state<string | null>(null);
@@ -54,6 +61,111 @@ let display = $derived(
 
 let totalCount = $derived(memories.length);
 let displayCount = $derived(display.length);
+let selectedId = $state<string | null>(null);
+let graph = $state<ConstellationGraph | null>(null);
+let graphLoading = $state(false);
+let graphError = $state("");
+
+let selectedMemory = $derived(
+	selectedId ? display.find((m) => m.id === selectedId) ?? null : null,
+);
+
+$effect(() => {
+	if (!selectedId) return;
+	if (display.some((m) => m.id === selectedId)) return;
+	selectedId = null;
+});
+
+type RelatedEntity = {
+	id: string;
+	name: string;
+	type: string;
+	mentions: number;
+	aspectNames: string[];
+	constraints: string[];
+	dependencies: string[];
+};
+
+let relatedEntities = $derived.by((): RelatedEntity[] => {
+	if (!selectedMemory || !graph) return [];
+	const data = graph;
+	const memId = selectedMemory.id;
+	const byId = new Map(data.entities.map((entity) => [entity.id, entity.name]));
+
+	return data.entities
+		.map((entity) => {
+			const aspects = entity.aspects.filter((aspect) =>
+				aspect.attributes.some((attr) => attr.memoryId === memId),
+			);
+			if (aspects.length === 0) return null;
+
+			const constraints = Array.from(
+				new Set(
+					aspects.flatMap((aspect) =>
+						aspect.attributes
+							.filter(
+								(attr) =>
+									attr.memoryId === memId &&
+									attr.kind === "constraint" &&
+									attr.content.trim().length > 0,
+							)
+							.map((attr) => attr.content.trim()),
+					),
+				),
+			);
+
+			const deps = data.dependencies
+				.filter(
+					(dep) =>
+						dep.sourceEntityId === entity.id || dep.targetEntityId === entity.id,
+				)
+				.map((dep) => {
+					const from = byId.get(dep.sourceEntityId) ?? dep.sourceEntityId;
+					const to = byId.get(dep.targetEntityId) ?? dep.targetEntityId;
+					return `${from} ${dep.dependencyType} ${to}`;
+				});
+
+			return {
+				id: entity.id,
+				name: entity.name,
+				type: entity.entityType,
+				mentions: entity.mentions,
+				aspectNames: aspects.map((aspect) => aspect.name),
+				constraints,
+				dependencies: Array.from(new Set(deps)),
+			};
+		})
+		.filter((item): item is RelatedEntity => item !== null);
+});
+
+let relatedAspectCount = $derived(
+	relatedEntities.reduce((sum, entity) => sum + entity.aspectNames.length, 0),
+);
+let relatedConstraintCount = $derived(
+	relatedEntities.reduce((sum, entity) => sum + entity.constraints.length, 0),
+);
+let relatedDependencyCount = $derived(
+	relatedEntities.reduce((sum, entity) => sum + entity.dependencies.length, 0),
+);
+
+async function ensureGraph(): Promise<void> {
+	if (graph || graphLoading) return;
+	graphLoading = true;
+	graphError = "";
+	try {
+		graph = await getConstellationOverlay("default");
+		if (!graph) graphError = "Ontology overlay unavailable.";
+	} catch (error) {
+		graphError = error instanceof Error ? error.message : "Failed to load ontology overlay.";
+	} finally {
+		graphLoading = false;
+	}
+}
+
+function selectMemory(memory: Memory): void {
+	selectedId = memory.id;
+	void ensureGraph();
+}
 
 function parseMemoryTags(raw: Memory["tags"]): string[] {
 	if (!raw) return [];
@@ -361,17 +473,35 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 <svelte:window onkeydown={handleGlobalKey} />
 
 <div class="flex flex-col flex-1 min-h-0 overflow-hidden">
-	<PageBanner title="Memory Index">
-		<TabGroupBar
-			group="memory"
-			tabs={MEMORY_TAB_ITEMS}
-			activeTab={nav.activeTab}
-			onselect={(_tab, index) => focusMemoryTab(index)}
-		/>
-	</PageBanner>
+	{#if !embedded}
+		<PageBanner title="Ontology">
+			<TabGroupBar
+				group="memory"
+				tabs={MEMORY_TAB_ITEMS}
+				activeTab={nav.activeTab}
+				onselect={(_tab, index) => focusMemoryTab(index)}
+			/>
+		</PageBanner>
+	{/if}
 	<section class="flex flex-col flex-1 min-h-0 gap-2.5 p-3 bg-[var(--sig-bg)]">
+	<Card.Root class="gap-0 py-0 border-[var(--sig-border-strong)] bg-[var(--sig-surface)] shadow-none">
+		<Card.Header class="px-3 py-2 border-b border-[var(--sig-border)]">
+			<div class="flex items-center justify-between">
+				<span class="sig-eyebrow">Cortex Search</span>
+				<span class="sig-meta">
+					{#if mem.similarSourceId}
+						{displayCount} similar
+					{:else if mem.searched || hasActiveFilters()}
+						{displayCount}/{totalCount}
+					{:else}
+						{totalCount}
+					{/if}
+				</span>
+			</div>
+		</Card.Header>
+		<Card.Content class="p-3 space-y-2.5">
 	<!-- Search bar -->
-	<label class="flex items-center gap-2 px-3 py-1.5
+	<label class="flex items-center gap-2 px-3 py-2 rounded-lg
 		border border-[var(--sig-border-strong)]
 		bg-[var(--sig-surface-raised)]">
 		{#if mem.debouncing || mem.searching}
@@ -387,7 +517,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 			bind:value={mem.query}
 			oninput={queueMemorySearch}
 			onkeydown={handleSearchKeydown}
-			placeholder="Search across memories..."
+			placeholder="search cortex memories..."
 		/>
 		{#if mem.searched || hasActiveFilters() || mem.similarSourceId}
 			<Button
@@ -398,6 +528,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 			>{ActionLabels.Clear}</Button>
 		{/if}
 	</label>
+	<Separator class="bg-[var(--sig-border)]" />
 
 	<!-- Filter row -->
 	<div class="filter-row flex flex-wrap items-center gap-2">
@@ -516,8 +647,10 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 			</Button>
 		{/if}
 
-		<button
-			class={mem.filterPinned ? pillActive : pillInactive}
+		<Button
+			variant="outline"
+			size="sm"
+			class={mem.filterPinned ? `${pillActive} h-auto` : `${pillInactive} h-auto`}
 			onclick={() => mem.filterPinned = !mem.filterPinned}
 			onkeydown={(e) => {
 				if (e.key === "Enter" || e.key === " ") {
@@ -527,12 +660,14 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 					handleFilterKeydown(e);
 				}
 			}}
-		>pinned</button>
+		>pinned</Button>
 
 		<!-- Type filters -->
 		{#each ['fact', 'decision', 'preference', 'issue', 'learning'] as t}
-			<button
-				class={mem.filterType === t ? pillActive : pillInactive}
+			<Button
+				variant="outline"
+				size="sm"
+				class={mem.filterType === t ? `${pillActive} h-auto` : `${pillInactive} h-auto`}
 				onclick={() => mem.filterType = mem.filterType === t ? '' : t}
 				onkeydown={(e) => {
 					if (e.key === "Enter" || e.key === " ") {
@@ -542,12 +677,14 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 						handleFilterKeydown(e);
 					}
 				}}
-			>{t}</button>
+			>{t}</Button>
 		{/each}
 	</div>
+		</Card.Content>
+	</Card.Root>
 
 	<!-- Count bar -->
-	<div class="flex items-center sig-eyebrow">
+	<div class="flex items-center justify-between sig-eyebrow px-1">
 		{#if mem.similarSourceId}
 			Showing {displayCount} similar {displayCount === 1 ? 'memory' : 'memories'}
 		{:else if mem.searched || hasActiveFilters()}
@@ -555,6 +692,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 		{:else}
 			{totalCount} {totalCount === 1 ? 'memory' : 'memories'}
 		{/if}
+		<span class="sig-meta">cortex index</span>
 	</div>
 
 	<!-- Similarity mode banner -->
@@ -580,10 +718,73 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 		</div>
 	{/if}
 
+	{#if selectedMemory}
+		<Card.Root class="gap-0 py-0 border-[var(--sig-border-strong)] bg-[var(--sig-surface)] shadow-none">
+			<Card.Header class="px-3 py-2 border-b border-[var(--sig-border)] gap-1">
+				<div class="flex items-center justify-between gap-2">
+					<div class="flex items-center gap-2 flex-wrap">
+						<span class="sig-eyebrow">Ontology Context</span>
+						<Badge variant="outline" class={badgeBase}>{selectedMemory.who || 'unknown'}</Badge>
+						{#if selectedMemory.type}
+							<Badge variant="outline" class={badgeBase}>{selectedMemory.type}</Badge>
+						{/if}
+					</div>
+					<span class="sig-meta">selected memory</span>
+				</div>
+			</Card.Header>
+			<Card.Content class="px-3 py-2 space-y-2">
+				{#if graphLoading}
+					<div class="sig-meta">Loading ontology overlay...</div>
+				{:else if graphError}
+					<div class="sig-meta text-[var(--sig-danger)]">{graphError}</div>
+				{:else if relatedEntities.length === 0}
+					<div class="sig-meta">No linked entities found for this memory yet.</div>
+				{:else}
+					<div class="flex items-center gap-1.5 flex-wrap">
+						<Badge variant="outline" class={badgeBase}>{relatedEntities.length} entities</Badge>
+						<Badge variant="outline" class={badgeBase}>{relatedAspectCount} aspects</Badge>
+						<Badge variant="outline" class={badgeBase}>{relatedConstraintCount} constraints</Badge>
+						<Badge variant="outline" class={badgeBase}>{relatedDependencyCount} dependencies</Badge>
+					</div>
+					<div class="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2">
+						{#each relatedEntities as entity (entity.id)}
+							<div class="rounded-md border border-[var(--sig-border)] bg-[var(--sig-surface-raised)] p-2 space-y-1.5">
+								<div class="flex items-center justify-between gap-2">
+									<span class="sig-label text-[var(--sig-text-bright)]">{entity.name}</span>
+									<span class="sig-meta">{entity.type}</span>
+								</div>
+								<div class="sig-meta">mentions {entity.mentions}</div>
+								<div class="sig-meta">aspects: {entity.aspectNames.join(", ")}</div>
+								{#if entity.constraints.length > 0}
+									<div class="space-y-1">
+										<div class="sig-meta text-[var(--sig-text-bright)]">constraints</div>
+										{#each entity.constraints.slice(0, 3) as constraint}
+											<div class="sig-meta">• {constraint}</div>
+										{/each}
+									</div>
+								{/if}
+								{#if entity.dependencies.length > 0}
+									<div class="space-y-1">
+										<div class="sig-meta text-[var(--sig-text-bright)]">dependencies</div>
+										{#each entity.dependencies.slice(0, 3) as dep}
+											<div class="sig-meta">• {dep}</div>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
+	{:else}
+		<div class="sig-meta px-1">Select a memory card to inspect entities, aspects, dependencies, and constraints.</div>
+	{/if}
+
 	<!-- Memory cards grid -->
 	<div class="memory-cards-grid flex-1 min-h-0 overflow-y-auto
-		grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))]
-		auto-rows-min gap-2.5 content-start">
+		grid grid-cols-[repeat(auto-fill,minmax(340px,1fr))]
+		auto-rows-min gap-3 content-start pr-0.5">
 		{#if mem.loadingSimilar}
 			<div class="col-span-full py-8 text-center text-[12px]
 				text-[var(--sig-text-muted)] rounded-lg
@@ -595,78 +796,77 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 				{@const tags = parseMemoryTags(memory.tags)}
 				{@const scoreLabel = memoryScoreLabel(memory)}
 
-			<div
+			<Card.Root
 				role="group"
-				tabindex="0"
+				tabindex={0}
+				onfocus={() => selectMemory(memory)}
+				onclick={() => selectMemory(memory)}
 				onkeydown={handleCardKeydown}
-				class="doc-card relative flex flex-col
-				gap-1.5 p-3 border border-[var(--sig-border-strong)]
-				border-t-2 border-t-[var(--sig-text-muted)]
-				bg-[var(--sig-surface)] overflow-hidden rounded-lg
-				transition-colors duration-150
-				hover:border-[var(--sig-text-muted)]
+				class="doc-card gap-0 py-0 border-[var(--sig-border-strong)]
+				bg-[var(--sig-surface)] rounded-lg shadow-none
+				transition-colors duration-150 hover:border-[var(--sig-text-muted)]
 				focus-visible:outline focus-visible:outline-2
 				focus-visible:outline-[var(--sig-accent)]
 				focus-visible:outline-offset-2"
 			>
-
-					<header class="flex justify-between items-start gap-1.5">
+				<Card.Header class="px-3 py-2 border-b border-[var(--sig-border)] gap-1">
+					<div class="flex justify-between items-start gap-2">
 						<div class="flex items-center flex-wrap gap-1">
-							<Badge variant="outline" class={badgeAccent}>{memory.who || 'unknown'}</Badge>
+							<Badge variant="outline" class={`${badgeAccent} tracking-[0.05em]`}>{memory.who || 'unknown'}</Badge>
 							{#if memory.type}
-								<Badge variant="outline" class={badgeBase}>{memory.type}</Badge>
+								<Badge variant="outline" class={`${badgeBase} tracking-[0.04em]`}>{memory.type}</Badge>
 							{/if}
 							{#if memory.pinned}
-								<Badge variant="outline" class="{badgeBase} text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.06)]">pinned</Badge>
+								<Badge variant="outline" class="{badgeBase} tracking-[0.04em] text-[var(--sig-text-bright)] bg-[rgba(255,255,255,0.06)]">pinned</Badge>
 							{/if}
 						</div>
-						<span class="sig-meta shrink-0">
-							{formatDate(memory.created_at)}
-						</span>
-					</header>
+						<span class="sig-meta shrink-0">{formatDate(memory.created_at)}</span>
+					</div>
+				</Card.Header>
 
+				<Card.Content class="px-3 py-2">
 					<p class="m-0 text-[var(--sig-text-bright)]
-						leading-[1.5] text-[11px] whitespace-pre-wrap
+						leading-[1.6] text-[12px] whitespace-pre-wrap
 						break-words overflow-hidden line-clamp-4">
 						{memory.content}
 					</p>
+				</Card.Content>
+
+				<Card.Footer class="px-3 py-2 border-t border-[var(--sig-border)] flex-wrap gap-1.5">
+					<Badge variant="outline" class={`${badgeBase} tracking-[0.04em]`}>imp {Math.round((memory.importance ?? 0) * 100)}%</Badge>
+
+					{#if scoreLabel}
+						<Badge variant="outline" class="{badgeBase} tracking-[0.04em] text-[var(--sig-accent)]">{scoreLabel}</Badge>
+					{/if}
 
 					{#if tags.length > 0}
-						<div class="flex flex-wrap gap-1">
+						<div class="flex items-center flex-wrap gap-1 w-full">
 							{#each tags.slice(0, 5) as tag}
-								<Badge variant="outline" class={badgeBase}>#{tag}</Badge>
+								<Badge variant="outline" class={`${badgeBase} tracking-[0.04em]`}>#{tag}</Badge>
 							{/each}
 						</div>
 					{/if}
-
-					<footer class="flex items-center gap-1.5 mt-auto pt-1">
-						<Badge variant="outline" class={badgeBase}>imp {Math.round((memory.importance ?? 0) * 100)}%</Badge>
-
-						{#if scoreLabel}
-							<Badge variant="outline" class="{badgeBase} text-[var(--sig-accent)]">{scoreLabel}</Badge>
-						{/if}
 
 					{#if memory.id}
 						<Button
 							variant="outline"
 							size="sm"
-							class="sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-accent)]"
+							class="sig-badge py-px px-[6px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-accent)]"
 							onclick={() => openEditForm(memory.id, "edit")}
 							title="Edit memory"
 						>edit</Button>
 						{#if deleteConfirmId === memory.id}
-							<!-- Inline delete confirmation -->
 							<Button
 								variant="outline"
 								size="sm"
-								class="sig-badge py-px px-[5px] h-auto border-red-500 text-red-400 hover:bg-red-500 hover:text-white"
+								class="sig-badge py-px px-[6px] h-auto border-red-500 text-red-400 hover:bg-red-500 hover:text-white"
 								onclick={() => { openEditForm(memory.id, "delete"); deleteConfirmId = null; }}
 								title="Confirm delete"
 							>confirm</Button>
 							<Button
 								variant="outline"
 								size="sm"
-								class="sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
+								class="sig-badge py-px px-[6px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
 								onclick={() => deleteConfirmId = null}
 								title="Cancel delete"
 							>cancel</Button>
@@ -674,7 +874,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 							<Button
 								variant="outline"
 								size="sm"
-								class="sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-red-400"
+								class="sig-badge py-px px-[6px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-red-400"
 								onclick={() => deleteConfirmId = memory.id}
 								title="Delete memory"
 							>delete</Button>
@@ -682,13 +882,13 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 						<Button
 							variant="outline"
 							size="sm"
-							class="ml-auto sig-badge py-px px-[5px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-accent)]"
+							class="ml-auto sig-badge py-px px-[6px] h-auto border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-accent)]"
 							onclick={() => findSimilar(memory.id, memory)}
 							title="Find similar"
 						>similar</Button>
 					{/if}
-					</footer>
-				</div>
+				</Card.Footer>
+			</Card.Root>
 			{:else}
 				<div class="col-span-full py-8 text-center text-[12px]
 					text-[var(--sig-text-muted)] rounded-lg

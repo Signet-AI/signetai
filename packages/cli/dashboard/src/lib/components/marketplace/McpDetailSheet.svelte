@@ -28,6 +28,7 @@ interface Props {
 	item: McpDetailItem | null;
 	isInstalled: boolean;
 	canReview: boolean;
+	canInstall?: boolean;
 	installBusy?: boolean;
 	removeBusy?: boolean;
 	onclose: () => void;
@@ -45,6 +46,7 @@ const {
 	item,
 	isInstalled,
 	canReview,
+	canInstall = true,
 	installBusy = false,
 	removeBusy = false,
 	onclose,
@@ -216,7 +218,7 @@ async function submitReview(): Promise<void> {
 						>
 							{removeBusy ? "..." : "Remove"}
 						</Button>
-					{:else if item.catalogEntry}
+					{:else if item.catalogEntry && canInstall}
 						<Button
 							variant="outline"
 							size="sm"
@@ -225,6 +227,16 @@ async function submitReview(): Promise<void> {
 							disabled={installBusy}
 						>
 							{installBusy ? "..." : "Install"}
+						</Button>
+					{:else if item.catalogEntry}
+						<Button
+							variant="outline"
+							size="sm"
+							class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]"
+							disabled={true}
+							title="MCP installs are temporarily disabled"
+						>
+							Install disabled
 						</Button>
 					{/if}
 				</div>

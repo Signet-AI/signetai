@@ -156,3 +156,18 @@ drag-to-resize, transition animations.
 1. Whether Cortex tabs merge into new hierarchy or stay separate.
 2. Whether identity panel supports split-view editing of two files.
 3. Final placement of OS and Changelog (System group vs footer utility).
+
+## 10) Implemented IA slice (2026-03-26)
+
+This planning track now has a shipped slice in the dashboard shell:
+
+- Sidebar now surfaces direct top-level destinations for `Memory`, `Tasks`,
+  `Audit`, and `Settings` (with `Cortex` renamed to `Memory` and `Engine`
+  renamed to `Settings`).
+- `Audit` is the new home for diagnostics and log viewing, combining
+  troubleshooter workflows with daemon logs.
+- `Pipeline`, `Predictor`, `Connectors`, `Logs`, and `Cortex Apps` were
+  switched off from primary navigation, not deleted.
+- Legacy hashes for switched-off destinations now redirect to active tabs
+  (`settings`, `tasks`, `audit`, or `cortex-memory`) for bookmark
+  compatibility.

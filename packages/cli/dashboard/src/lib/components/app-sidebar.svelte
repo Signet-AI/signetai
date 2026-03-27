@@ -3,11 +3,7 @@ import type { DaemonStatus, Harness, Identity } from "$lib/api";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 import {
 	type TabId,
-	isEngineGroup,
-	isMemoryGroup,
-	isCortexGroup,
 	nav,
-	navigateToGroup,
 	setTab,
 } from "$lib/stores/navigation.svelte";
 import {
@@ -20,15 +16,16 @@ import {
 	focusFirstPageElement,
 } from "$lib/stores/focus.svelte";
 import BookOpen from "@lucide/svelte/icons/book-open";
-import Brain from "@lucide/svelte/icons/brain";
+import Orbit from "@lucide/svelte/icons/orbit";
 import Cog from "@lucide/svelte/icons/cog";
 import ExternalLink from "@lucide/svelte/icons/external-link";
 import Github from "@lucide/svelte/icons/github";
-import House from "@lucide/svelte/icons/house";
+import BarChart3 from "@lucide/svelte/icons/bar-chart-3";
+import ShieldAlert from "@lucide/svelte/icons/shield-alert";
 import Moon from "@lucide/svelte/icons/moon";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
-import Store from "@lucide/svelte/icons/store";
 import Sun from "@lucide/svelte/icons/sun";
+import ListTodo from "@lucide/svelte/icons/list-todo";
 import { onMount } from "svelte";
 
 const { useSidebar } = Sidebar;
@@ -56,20 +53,24 @@ const {
 const sidebar = useSidebar();
 
 function maybePrefetchEmbeddings(id: string): void {
-	if (id !== "cortex") return;
+	if (id !== "cortex-memory") return;
 	onprefetchembeddings?.();
 }
 
-type NavItem =
-	| { id: TabId; label: string; icon: typeof Brain; group?: undefined }
-	| { id: string; label: string; icon: typeof Brain; group: "memory" | "engine" | "cortex" };
+type NavItem = {
+	id: TabId;
+	focusId: SidebarFocusItem;
+	label: string;
+	icon: typeof Orbit;
+};
 
 const navItems: NavItem[] = [
-	{ id: "home", label: "Home", icon: House },
-	{ id: "cortex-group", label: "Cortex", icon: Brain, group: "cortex" },
-	{ id: "secrets", label: "Secrets", icon: ShieldCheck },
-	{ id: "skills", label: "Marketplace", icon: Store },
-	{ id: "engine-group", label: "Engine", icon: Cog, group: "engine" },
+	{ id: "home", focusId: "home", label: "Overview", icon: BarChart3 },
+	{ id: "cortex-memory", focusId: "memory", label: "Ontology", icon: Orbit },
+	{ id: "tasks", focusId: "tasks", label: "Tasks", icon: ListTodo },
+	{ id: "audit", focusId: "audit", label: "Audit", icon: ShieldAlert },
+	{ id: "secrets", focusId: "secrets", label: "Secrets", icon: ShieldCheck },
+	{ id: "skills", focusId: "skills", label: "Skills", icon: BookOpen },
 ];
 
 function openGithub(): void {
@@ -81,25 +82,18 @@ function openProjectPage(): void {
 }
 
 function isActive(item: NavItem): boolean {
-	if (item.group === "memory") return isMemoryGroup(nav.activeTab);
-	if (item.group === "engine") return isEngineGroup(nav.activeTab);
-	if (item.group === "cortex") return isCortexGroup(nav.activeTab);
 	return nav.activeTab === item.id;
 }
 
 function handleClick(item: NavItem): void {
-	if (item.group) {
-		navigateToGroup(item.group);
-	} else {
-		setTab(item.id as TabId);
-	}
+	setTab(item.id);
 }
 
 // Initialize sidebar focus on mount — derive from current active tab
 onMount(() => {
 	if (!focus.sidebarItem) {
 		const item = navItems.find(n => isActive(n));
-		setSidebarItem((item?.id ?? "home") as SidebarFocusItem);
+		setSidebarItem(item?.focusId ?? "home");
 	}
 });
 
@@ -132,7 +126,9 @@ function handleFooterKeydown(e: KeyboardEvent, item: SidebarFocusItem): void {
 		navigateSidebarPrev();
 	} else if (e.key === "Enter" || e.key === " ") {
 		e.preventDefault();
-		if (item === "theme-toggle") {
+		if (item === "settings") {
+			setTab("settings");
+		} else if (item === "theme-toggle") {
 			onthemetoggle();
 		} else if (item === "github-link") {
 			window.open("https://github.com/Signet-AI/signetai", "_blank");
@@ -199,15 +195,15 @@ function activateItem(item: NavItem): void {
 								class:nav-blend-item--active={active}
 							>
 								<Sidebar.MenuButton
-									data-sidebar-item={item.id}
-									tabindex={getTabIndex(item.id as SidebarFocusItem)}
+									data-sidebar-item={item.focusId}
+									tabindex={getTabIndex(item.focusId)}
 									isActive={active}
 									onclick={() => activateItem(item)}
 									onkeydown={(e) => handleSidebarKeydown(e, item)}
 									onmouseenter={() => maybePrefetchEmbeddings(item.id)}
 									onfocus={() => {
 										maybePrefetchEmbeddings(item.id);
-										focus.sidebarItem = item.id as SidebarFocusItem;
+										focus.sidebarItem = item.focusId;
 									}}
 									tooltipContent={item.label}
 								>
@@ -231,6 +227,27 @@ function activateItem(item: NavItem): void {
 
 	<Sidebar.Footer class="sidebar-carbon-footer">
 		<Sidebar.Menu>
+			<Sidebar.MenuItem>
+				<Sidebar.MenuButton
+					data-sidebar-item="settings"
+					tabindex={getTabIndex("settings")}
+					isActive={nav.activeTab === "settings"}
+					onclick={() => setTab("settings")}
+					onkeydown={(e) => handleFooterKeydown(e, "settings")}
+					onfocus={() => { focus.sidebarItem = "settings"; }}
+					tooltipContent="Settings"
+				>
+					<Cog class="size-4" />
+					<span class="text-xs font-[family-name:var(--font-mono)]
+						overflow-hidden whitespace-nowrap
+						transition-opacity duration-200 ease-out
+						group-data-[collapsible=icon]:opacity-0"
+					>
+						Settings
+					</span>
+				</Sidebar.MenuButton>
+			</Sidebar.MenuItem>
+
 			<Sidebar.MenuItem>
 			<Sidebar.MenuButton
 				data-sidebar-item="theme-toggle"

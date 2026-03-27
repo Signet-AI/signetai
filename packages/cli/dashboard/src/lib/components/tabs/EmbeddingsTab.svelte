@@ -63,6 +63,7 @@ import {
 
 interface Props {
 	onopenglobalsimilar: (memory: Memory) => void;
+	embedded?: boolean;
 }
 
 interface FilterPreset {
@@ -75,7 +76,7 @@ interface FilterPreset {
 	clusterLensMode: boolean;
 }
 
-const { onopenglobalsimilar }: Props = $props();
+const { onopenglobalsimilar, embedded = false }: Props = $props();
 
 // -----------------------------------------------------------------------
 // State
@@ -1878,14 +1879,16 @@ $effect(() => {
 </script>
 
 <div class="flex flex-col flex-1 min-h-0 overflow-hidden">
-	<PageBanner title="Constellation">
-		<TabGroupBar
-			group="memory"
-			tabs={MEMORY_TAB_ITEMS}
-			activeTab={nav.activeTab}
-			onselect={(_tab, index) => focusMemoryTab(index)}
-		/>
-	</PageBanner>
+	{#if !embedded}
+		<PageBanner title="Constellation">
+			<TabGroupBar
+				group="memory"
+				tabs={MEMORY_TAB_ITEMS}
+				activeTab={nav.activeTab}
+				onselect={(_tab, index) => focusMemoryTab(index)}
+			/>
+		</PageBanner>
+	{/if}
 	<div class="flex flex-1 min-h-0 bg-[#050505] max-lg:flex-col">
 		<div
 		bind:this={graphRegion}

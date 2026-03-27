@@ -17,13 +17,11 @@ let selectedIndex = $state(0);
 
 const tabItems: CommandItem[] = [
 	{ id: "settings", label: "Settings", shortcut: "1", action: () => setTabAndClose("settings") },
-	{ id: "memory", label: "Memory", shortcut: "2", action: () => setTabAndClose("memory") },
-	{ id: "embeddings", label: "Embeddings", shortcut: "3", action: () => setTabAndClose("embeddings") },
-	{ id: "pipeline", label: "Pipeline", shortcut: "4", action: () => setTabAndClose("pipeline") },
-	{ id: "logs", label: "Logs", shortcut: "5", action: () => setTabAndClose("logs") },
+	{ id: "memory", label: "Ontology", shortcut: "2", action: () => setTabAndClose("cortex-memory") },
+	{ id: "tasks", label: "Tasks", shortcut: "3", action: () => setTabAndClose("tasks") },
+	{ id: "audit", label: "Audit", shortcut: "4", action: () => setTabAndClose("audit") },
 	{ id: "secrets", label: "Secrets", shortcut: "6", action: () => setTabAndClose("secrets") },
-	{ id: "skills", label: "Marketplace", shortcut: "7", action: () => setTabAndClose("skills") },
-	{ id: "tasks", label: "Tasks", shortcut: "8", action: () => setTabAndClose("tasks") },
+	{ id: "skills", label: "Skills", shortcut: "7", action: () => setTabAndClose("skills") },
 ];
 
 const actionItems: CommandItem[] = [

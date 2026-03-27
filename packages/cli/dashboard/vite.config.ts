@@ -1,9 +1,21 @@
 import tailwindcss from "@tailwindcss/vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+
+const root = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
+	resolve: {
+		alias: {
+			"@signet/core/pipeline-providers": resolve(
+				root,
+				"../../core/src/pipeline-providers.ts",
+			),
+		},
+	},
 	build: {
 		chunkSizeWarningLimit: 1200,
 		rollupOptions: {

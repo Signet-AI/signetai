@@ -14,6 +14,7 @@ export type TabId =
 	| "timeline"
 	| "knowledge"
 	| "embeddings"
+	| "audit"
 	| "pipeline"
 	| "logs"
 	| "secrets"
@@ -32,22 +33,14 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"home",
 	"settings",
 	"memory",
-	"timeline",
-	"knowledge",
 	"embeddings",
-	"pipeline",
-	"logs",
+	"audit",
 	"secrets",
 	"skills",
 	"tasks",
-	"connectors",
-	"predictor",
 	"changelog",
 	"os",
 	"cortex-memory",
-	"cortex-apps",
-	"cortex-tasks",
-	"cortex-troubleshooter",
 ]);
 
 // Alias map for path-style hashes (e.g. #memory/constellation -> embeddings)
@@ -56,31 +49,44 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["memory/timeline", "cortex-memory"],
 	["memory/knowledge", "cortex-memory"],
 	["memory/memories", "cortex-memory"],
+	["ontology", "cortex-memory"],
+	["ontology/cortex", "cortex-memory"],
+	["ontology/constellation", "cortex-memory"],
 	["cortex", "cortex-memory"],
 	["cortex/memory", "cortex-memory"],
-	["cortex/apps", "cortex-apps"],
-	["cortex/tasks", "cortex-tasks"],
-	["cortex/troubleshooter", "cortex-troubleshooter"],
+	["cortex/apps", "cortex-memory"],
+	["cortex/tasks", "tasks"],
+	["cortex/troubleshooter", "audit"],
 	["cortex-memory/constellation", "cortex-memory"],
 	["cortex-memory/timeline", "cortex-memory"],
 	["cortex-memory/knowledge", "cortex-memory"],
 	["matt", "cortex-memory"],
 	["matt/memory", "cortex-memory"],
-	["matt/apps", "cortex-apps"],
-	["matt/tasks", "cortex-tasks"],
-	["matt/troubleshooter", "cortex-troubleshooter"],
+	["matt/apps", "cortex-memory"],
+	["matt/tasks", "tasks"],
+	["matt/troubleshooter", "audit"],
 	["engine/settings", "settings"],
-	["engine/pipeline", "pipeline"],
-	["engine/predictor", "predictor"],
-	["engine/connectors", "connectors"],
-	["engine/logs", "logs"],
+	["engine/pipeline", "settings"],
+	["engine/predictor", "settings"],
+	["engine/connectors", "settings"],
+	["engine/logs", "audit"],
+	["pipeline", "settings"],
+	["predictor", "settings"],
+	["connectors", "settings"],
+	["logs", "audit"],
+	["cortex-apps", "cortex-memory"],
+	["cortex-tasks", "tasks"],
+	["cortex-troubleshooter", "audit"],
 	["config", "settings"],
-	["review-queue", "pipeline"],
+	["review-queue", "settings"],
 ]);
 
-function readTabFromHash(): TabId | null {
-	if (typeof window === "undefined") return null;
-	const hash = window.location.hash.slice(1);
+function readHash(): string {
+	if (typeof window === "undefined") return "";
+	return window.location.hash.slice(1);
+}
+
+function readTabFromHash(hash = readHash()): TabId | null {
 	if (VALID_TABS.has(hash)) return hash as TabId;
 	return HASH_ALIASES.get(hash) ?? null;
 }
@@ -93,23 +99,9 @@ export const nav = $state({
 
 const MEMORY_TABS: ReadonlySet<TabId> = new Set([
 	"memory",
-	"timeline",
-	"knowledge",
-	"embeddings",
 ]);
-const ENGINE_TABS: ReadonlySet<TabId> = new Set([
-	"settings",
-	"pipeline",
-	"predictor",
-	"connectors",
-	"logs",
-]);
-const CORTEX_TABS: ReadonlySet<TabId> = new Set([
-	"cortex-memory",
-	"cortex-apps",
-	"cortex-tasks",
-	"cortex-troubleshooter",
-]);
+const ENGINE_TABS: ReadonlySet<TabId> = new Set(["settings"]);
+const CORTEX_TABS: ReadonlySet<TabId> = new Set(["cortex-memory"]);
 
 export type NavGroup = "memory" | "engine" | "cortex";
 
@@ -128,6 +120,7 @@ export function isCortexGroup(tab: TabId): boolean {
 }
 
 export function setTab(tab: TabId): boolean {
+	if (!VALID_TABS.has(tab)) return false;
 	if (tab === nav.activeTab) return true;
 	if (!confirmDiscardChanges(`switch to ${tab}`)) return false;
 	nav.activeTab = tab;
@@ -153,17 +146,26 @@ export function navigateToGroup(group: NavGroup): boolean {
  * Returns a cleanup function to remove the event listener.
  */
 export function initNavFromHash(): () => void {
-	const initial = readTabFromHash();
+	const raw = readHash();
+	const initial = readTabFromHash(raw);
 	if (initial) {
 		nav.activeTab = initial;
+		if (typeof window !== "undefined" && raw !== initial) {
+			history.replaceState(null, "", `#${initial}`);
+		}
 	} else if (typeof window !== "undefined") {
 		// No hash present — set it to the default tab
 		history.replaceState(null, "", `#${nav.activeTab}`);
 	}
 
 	const onHashChange = () => {
-		const tab = readTabFromHash();
-		if (tab && tab !== nav.activeTab) nav.activeTab = tab;
+		const next = readHash();
+		const tab = readTabFromHash(next);
+		if (!tab) return;
+		if (tab !== nav.activeTab) nav.activeTab = tab;
+		if (next !== tab) {
+			history.replaceState(null, "", `#${tab}`);
+		}
 	};
 	window.addEventListener("hashchange", onHashChange);
 	return () => window.removeEventListener("hashchange", onHashChange);

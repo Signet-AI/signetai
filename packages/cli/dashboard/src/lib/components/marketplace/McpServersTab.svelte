@@ -86,6 +86,7 @@ let selectedCatalogEntry = $state<MarketplaceMcpCatalogEntry | null>(null);
 let detailOpen = $state(false);
 let detailItem = $state<McpDetailItem | null>(null);
 let view = $state<"browse" | "installed">("browse");
+const MCP_INSTALLS_ENABLED = false;
 const activeSourceLabel = $derived(mcpMarket.source === "all" ? "All sources" : formatSourceLabel(mcpMarket.source));
 const activeSortLabel = $derived.by(() => {
 	if (mcpMarket.sortBy === "name") return "Name";
@@ -135,6 +136,7 @@ const installedAvatarErrors = new SvelteSet<string>();
 const catalogAvatarErrors = new SvelteSet<string>();
 
 function openInstallSheet(entry: MarketplaceMcpCatalogEntry): void {
+	if (!MCP_INSTALLS_ENABLED) return;
 	selectedCatalogEntry = entry;
 	installSheetOpen = true;
 }
@@ -206,6 +208,7 @@ function onInstalledCardKeydown(event: KeyboardEvent, server: MarketplaceMcpServ
 }
 
 function openInstallFromDetail(entry: MarketplaceMcpCatalogEntry): void {
+	if (!MCP_INSTALLS_ENABLED) return;
 	detailOpen = false;
 	mcpMarket.catalogDetail = false;
 	openInstallSheet(entry);
@@ -290,6 +293,11 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	</div>
 
 	<div class="flex-1 overflow-y-auto px-[var(--space-sm)] pb-[var(--space-sm)] pt-0 flex flex-col gap-[var(--space-sm)]">
+		{#if !MCP_INSTALLS_ENABLED && displayMode !== "installed"}
+			<div class="panel-alert">
+				MCP installation is temporarily disabled while we harden reliability.
+			</div>
+		{/if}
 		{#if displayMode === "installed"}
 			{#if mcpMarket.installed.length === 0}
 				<div class="panel-empty">
@@ -414,13 +422,17 @@ async function removeFromDetail(serverId: string): Promise<void> {
 									variant="outline"
 									size="sm"
 									class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-text-muted)] hover:shadow-[0_0_12px_rgba(255,255,255,0.1)] hover:scale-[1.02]"
-										onclick={(event: MouseEvent) => {
-											event.stopPropagation();
-											openInstallSheet(entry);
-										}}
-										disabled={mcpMarket.installingId === entry.id}
+									onclick={(event: MouseEvent) => {
+										event.stopPropagation();
+										openInstallSheet(entry);
+									}}
+									disabled={!MCP_INSTALLS_ENABLED || mcpMarket.installingId === entry.id}
 								>
-									{mcpMarket.installingId === entry.id ? "..." : "INSTALL"}
+									{#if !MCP_INSTALLS_ENABLED}
+										DISABLED
+									{:else}
+										{mcpMarket.installingId === entry.id ? "..." : "INSTALL"}
+									{/if}
 								</Button>
 							{/if}
 						</div>
@@ -451,6 +463,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	item={detailItem}
 	isInstalled={detailItem ? detailItem.serverId !== null : false}
 	canReview={detailItem ? detailItem.serverId !== null : false}
+	canInstall={MCP_INSTALLS_ENABLED}
 	installBusy={detailItem?.catalogEntry ? mcpMarket.installingId === detailItem.catalogEntry.id : false}
 	removeBusy={detailItem?.serverId ? mcpMarket.removingId === detailItem.serverId : false}
 	onclose={closeDetailSheet}

@@ -6,7 +6,7 @@
 	import Orbit from "@lucide/svelte/icons/orbit";
 	import Activity from "@lucide/svelte/icons/activity";
 	import Cog from "@lucide/svelte/icons/cog";
-	import Store from "@lucide/svelte/icons/store";
+	import BookOpen from "@lucide/svelte/icons/book-open";
 	import ListChecks from "@lucide/svelte/icons/list-checks";
 
 	interface QuickLink {
@@ -21,7 +21,7 @@
 		{ label: "Constellation", tab: "embeddings", icon: Orbit },
 		{ label: "Pipeline", tab: "pipeline", icon: Activity },
 		{ label: "Settings", tab: "settings", icon: Cog },
-		{ label: "Marketplace", tab: "skills", icon: Store },
+		{ label: "Skills", tab: "skills", icon: BookOpen },
 		{ label: "Tasks", tab: "tasks", icon: ListChecks },
 	];
 </script>
