@@ -61,6 +61,19 @@ signet dashboard           # open memory + retrieval inspector
 If you already use Claude Code, OpenCode, OpenClaw, or Codex, keep your
 existing harness. Signet installs under it.
 
+### Docker self-hosting
+
+Run Signet as a containerized daemon with first-party Compose assets:
+
+```bash
+cd deploy/docker
+cp .env.example .env
+docker compose up -d --build
+```
+
+See [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) for token bootstrap,
+backup, and upgrade runbook details.
+
 ## First proof of value (2-session test)
 
 Run this once:

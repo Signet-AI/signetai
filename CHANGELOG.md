@@ -7,7 +7,11 @@ All notable changes to Signet are documented here.
 ### Features
 
 - **pipeline**: add command extraction provider for summary worker control-plane path (#368)
+- **docker**: add first-party self-hosting stack (Compose + Caddy + token bootstrap) and GHCR image workflows
 
+### Docs
+
+- add Docker self-hosting quickstart and operations runbook updates
 
 ## [0.78.4] - 2026-03-27
 

@@ -45,6 +45,42 @@ obvious. If it is unset, Signet checks
 can load before the first Bun connection opens.
 
 
+Docker Compose (first-party)
+----------------------------
+
+Signet now ships a first-party Docker stack in `deploy/docker/` for
+self-hosted daemon deployments:
+
+```bash
+cd deploy/docker
+cp .env.example .env
+docker compose up -d --build
+```
+
+This stack includes:
+
+- `signet` service (daemon runtime)
+- `caddy` reverse proxy (TLS-capable, SSE-safe)
+- named Docker volumes for persistent workspace and proxy state
+
+The container entrypoint creates `$SIGNET_WORKSPACE/agent.yaml` with
+`auth.mode: team` on first start when no config exists. To generate an
+initial admin token from the auth secret, run:
+
+```bash
+docker compose exec signet \
+  bun /app/deploy/docker/scripts/create-token.mjs --role admin --sub bootstrap
+```
+
+The command prints a bearer token to stdout. Store it securely and use it
+for admin API calls (for example `/api/auth/token` to mint scoped
+operator/agent tokens).
+
+By default, Compose publishes Caddy on ports 80/443. Override
+`SIGNET_HTTP_PORT` and `SIGNET_HTTPS_PORT` in `.env` when those ports are
+already occupied.
+
+
 Running as a Service
 --------------------
 
