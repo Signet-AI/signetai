@@ -518,6 +518,52 @@ describe("reembedMissingMemories", () => {
 		expect(embedded?.content_hash).toBeTruthy();
 	});
 
+	it("writes content_hash back to memories row when it was NULL -- null-hash memory does not reappear in subsequent backfill passes", async () => {
+		// Regression test for Bug 2: reembedMissingMemoriesBatch computed a hash but
+		// did not write it back to memories.content_hash. On the next pass the
+		// embedding-coverage query could not use the hash-match branch (because
+		// m.content_hash IS NULL), so the memory kept appearing as unembedded
+		// and the backfill cycled indefinitely.
+		insertMemory(db, "mem-write-back");
+		const before = db.prepare("SELECT content_hash FROM memories WHERE id = 'mem-write-back'").get() as {
+			content_hash: string | null;
+		};
+		expect(before.content_hash).toBeNull();
+
+		const limiter = createRateLimiter();
+		await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			10,
+			false,
+		);
+
+		// After first pass, memories.content_hash must be populated
+		const after = db.prepare("SELECT content_hash FROM memories WHERE id = 'mem-write-back'").get() as {
+			content_hash: string | null;
+		};
+		expect(typeof after.content_hash).toBe("string");
+		expect((after.content_hash ?? "").length).toBeGreaterThan(0);
+
+		// A second pass must find zero unembedded memories (no cycle)
+		const limiter2 = createRateLimiter();
+		const second = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter2,
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			10,
+			false,
+		);
+		expect(second.message).toMatch(/no unembedded memories found/);
+	});
+
 	it("syncs vec row using canonical embedding id on hash conflict", async () => {
 		ensureVecTable(db);
 		const now = new Date().toISOString();
