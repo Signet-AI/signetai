@@ -117,10 +117,7 @@ export interface OpenClawPluginApi {
 	): void;
 	on(
 		event: "before_compaction",
-		handler: (
-			event: PluginHookBeforeCompactionEvent,
-			ctx: PluginHookAgentContext,
-		) => Promise<PluginHookBeforePromptBuildResult | undefined> | PluginHookBeforePromptBuildResult | undefined,
+		handler: (event: PluginHookBeforeCompactionEvent, ctx: PluginHookAgentContext) => Promise<void> | void,
 		opts?: { priority?: number },
 	): void;
 	on(
