@@ -167,7 +167,12 @@ export function isCortexGroup(tab: TabId): boolean {
 
 export function setTab(tab: TabId): boolean {
 	if (!VALID_TABS.has(tab)) return false;
-	if (tab === nav.activeTab) return true;
+	if (tab === nav.activeTab) {
+		if (typeof window !== "undefined" && readHash() !== tab) {
+			history.replaceState(null, "", `#${tab}`);
+		}
+		return true;
+	}
 	if (!confirmDiscardChanges(`switch to ${tab}`)) return false;
 	nav.activeTab = tab;
 	if (MEMORY_TABS.has(tab)) lastMemoryTab.value = tab;
