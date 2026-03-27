@@ -1547,8 +1547,9 @@ const signetPlugin = {
 			if (newCount < CHECKPOINT_TURN_THRESHOLD) return;
 
 			// Fire-and-forget — don't block the hook response.
-			// On {queued:false} (delta too small, session bypassed) restore counter
-			// to threshold-1 so the next turn retries immediately.
+			// Restore counter to threshold-1 on non-success responses so the
+			// next turn retries: skipped=true (small delta, no transcript, bypassed),
+			// queued=false (Rust stub: delta found but no job yet), or HTTP error.
 			void daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
 				method: "POST",
 				body: {
@@ -1562,7 +1563,7 @@ const signetPlugin = {
 				timeout: WRITE_TIMEOUT,
 			})
 				.then((resp) => {
-					if (isRecord(resp) && resp.queued === false) {
+					if (isRecord(resp) && (resp.skipped === true || resp.queued === false)) {
 						const cur = checkpointTurns.get(scopedKey);
 						if (cur) checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
 					}
