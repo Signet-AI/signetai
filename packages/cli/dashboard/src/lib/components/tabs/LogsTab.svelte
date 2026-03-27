@@ -349,7 +349,9 @@ async function fetchLogs() {
 		if (logCategoryFilter) params.set("category", logCategoryFilter);
 		const res = await fetch(`${API_BASE}/api/logs?${params}`);
 		const data = await res.json();
-		const entries = Array.isArray(data.logs) ? data.logs : [];
+		const entries = Array.isArray(data.logs)
+			? data.logs.map((entry) => readLogEntry(entry)).filter((entry): entry is LogEntry => entry !== null)
+			: [];
 		const created = createLogEntries(entries);
 		nextLogId = created.nextId;
 		logs = sortLogEntries(created.entries, activeLogOrder);
