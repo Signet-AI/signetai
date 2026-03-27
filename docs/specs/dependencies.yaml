@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-26"
+updated_at: "2026-03-27"
 
 specs:
   - id: memory-pipeline-v2
@@ -879,4 +879,20 @@ specs:
     informed_by: []
     success_criteria:
       - "Every production incident produces at least one durable AGENTS/CI guardrail update"
+    decision: null
+
+  - id: docker-self-hosting-stack
+    status: planning
+    path: docs/specs/planning/docker-self-hosting-stack.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-DOCKER-SELF-HOSTING.md
+    success_criteria:
+      - "Signet ships a first-party Docker image and Compose stack that boots daemon + reverse proxy with persistent workspace storage"
+      - "Default Docker bootstrap path enforces team auth posture and provides an explicit initial admin-token creation path"
+      - "Official image publishing supports linux/amd64 and linux/arm64 with stable tags"
+      - "Self-hosting docs include Docker quickstart, backup/restore, and in-place upgrade flow"
     decision: null

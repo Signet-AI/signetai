@@ -135,6 +135,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `ssm-foundation-evaluation`, `ssm-temporal-backbone`, `ssm-graph-traversal-model` | RESEARCH-SSM-INTEGRATION, SSM-GRAPH-INTERSECTION, SSM-LITERATURE-REVIEW, SYNTHETIC-DATA-GENERATION | How should SSM research translate into benchmarked, staged deployment without violating retrieval invariants? |
 | `engram-informed-predictor-track` | references/Engram, RESEARCH-SSM-INTEGRATION, ssm-foundation-evaluation | How should Engram design patterns be translated into Signet scorer and SSM architecture decisions? |
 | `macos-sqlite-runtime-discovery` | RESEARCH-MACOS-SQLITE-RUNTIME-DISCOVERY | How should Signet select a compatible SQLite runtime on macOS so Bun can load sqlite-vec? |
+| `docker-self-hosting-stack` | RESEARCH-DOCKER-SELF-HOSTING | What deployment contract keeps Docker self-hosting reproducible, persistent, and secure by default? |
 
 ### Research Adoption Ledger (high-impact)
 
@@ -146,6 +147,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `RESEARCH-SSM-INTEGRATION` | ADOPT (planning track active) | `ssm-foundation-evaluation`, `ssm-temporal-backbone` |
 | `SSM-GRAPH-INTERSECTION` | ADOPT (planning track active) | `ssm-graph-traversal-model` |
 | `arxiv:2601.07372 (Engram)` | ADOPT (translation track) | `engram-informed-predictor-track`, SSM planning contracts |
+| `RESEARCH-DOCKER-SELF-HOSTING` | ADOPT (planning track active) | `docker-self-hosting-stack` |
 
 ---
 
@@ -613,6 +615,8 @@ Phase ordering based on hard dependencies and integration contracts.
   - settings as standalone page, breadcrumb-driven unified navigation model
 - **Post-Install Behavior Migration Audit** (`postinstall-behavior-migration-audit`)
   - verify no critical install behavior relies on fragile post-install scripts
+- **Docker Self-Hosting Stack** (`docker-self-hosting-stack`)
+  - first-party image + compose stack with Caddy, persistent workspace volume, and team-mode bootstrap path
 
 - **Explicitly dropped:** client-side LLM reranking (superseded by different solution)
 
@@ -689,6 +693,7 @@ Legend:
 | `constellation-unified-viewer` | planning | `docs/specs/planning/constellation-unified-viewer.md` | `knowledge-architecture-schema` | - | Stub: realtime unified constellation/embedding/entity viewer |
 | `dashboard-information-architecture-refactor` | planning | `docs/specs/planning/dashboard-information-architecture-refactor.md` | `signet-runtime` | - | Stub: dashboard IA cleanup, settings split, breadcrumb navigation |
 | `postinstall-behavior-migration-audit` | planning | `docs/specs/planning/postinstall-behavior-migration-audit.md` | `memory-pipeline-v2` | - | Stub: ensure post-install behavior is daemon/CLI-owned |
+| `docker-self-hosting-stack` | planning | `docs/specs/planning/docker-self-hosting-stack.md` | `signet-runtime` | - | First-party Docker image + Compose + Caddy deployment contract with team-mode bootstrap path and operations runbook |
 | `ci-changed-files-selective` | planning | `docs/specs/planning/ci-changed-files-selective.md` | `memory-pipeline-v2` | - | Stub: selective PR CI by changed package graph |
 | `ci-contract-invariants-lane` | planning | `docs/specs/planning/ci-contract-invariants-lane.md` | `knowledge-architecture-schema` | - | Stub: mandatory fast invariant contract checks |
 | `ci-flaky-test-quarantine` | planning | `docs/specs/planning/ci-flaky-test-quarantine.md` | `ci-contract-invariants-lane` | - | Stub: flaky detection, quarantine, threshold policy |
