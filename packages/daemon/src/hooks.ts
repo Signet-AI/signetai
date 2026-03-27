@@ -2958,14 +2958,11 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		});
 	}
 
-	// Re-init continuity so session state is preserved (not cleared like session-end)
-	// consumeState above drains pending state; re-init restores the tracking.
+	// Re-init continuity so the session continues tracking after this checkpoint.
+	// Unlike session-end, we do NOT release the session claim or clear state —
+	// we just restore the tracking window so subsequent turns accumulate normally.
 	try {
-		const snap = consumeState(req.sessionKey);
-		if (!snap) {
-			// consumeState already consumed, re-init fresh
-			initContinuity(req.sessionKey, req.harness, req.project);
-		}
+		initContinuity(req.sessionKey, req.harness, req.project);
 	} catch {
 		// Non-fatal — continuity will re-init on the next prompt
 	}
@@ -2980,7 +2977,13 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	});
 
 	// Update cursor to the end of the current transcript
-	updateExtractCursor(req.sessionKey, agentId, transcript.length);
+	try {
+		updateExtractCursor(req.sessionKey, agentId, transcript.length);
+	} catch (e) {
+		logger.warn("hooks", "Checkpoint cursor update failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
 
 	logger.info("hooks", "Checkpoint extract queued", {
 		jobId,

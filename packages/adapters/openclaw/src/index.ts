@@ -1501,21 +1501,40 @@ const signetPlugin = {
 		// fire a checkpoint extract after every N turns. Prevents long-lived
 		// sessions (Discord bots, persistent agents) from going invisible.
 		const CHECKPOINT_TURN_THRESHOLD = 20;
-		const checkpointTurns = new Map<string, number>();
+		// State per scoped session key: turn count, last seen message count (for
+		// dedup), and timestamp (for TTL eviction when agent_end never fires).
+		const checkpointTurns = new Map<string, { count: number; lastMsgCount: number | undefined; at: number }>();
 
 		const maybeFireCheckpoint = (
 			sessionKey: string | undefined,
 			agentId: string | undefined,
 			project: string | undefined,
+			sessionFile: string | undefined,
+			msgCount: number | undefined,
 		): void => {
 			const scopedKey = buildScopedSessionKey(sessionKey, agentId);
 			if (!scopedKey || !sessionKey) return;
-			const count = (checkpointTurns.get(scopedKey) ?? 0) + 1;
-			checkpointTurns.set(scopedKey, count);
-			if (count < CHECKPOINT_TURN_THRESHOLD) return;
 
-			// Reset counter before firing so concurrent turns don't re-trigger
-			checkpointTurns.set(scopedKey, 0);
+			const now = Date.now();
+			const state = checkpointTurns.get(scopedKey);
+
+			// Lazy TTL: evict stale entries for sessions that ended without agent_end.
+			if (state && now - state.at > SESSION_TURN_TTL_MS) {
+				checkpointTurns.delete(scopedKey);
+			}
+
+			// Dedup: before_agent_start and before_prompt_build both fire on
+			// the same turn; use message count to skip the duplicate call.
+			if (msgCount !== undefined && checkpointTurns.get(scopedKey)?.lastMsgCount === msgCount) return;
+
+			const newCount = (checkpointTurns.get(scopedKey)?.count ?? 0) + 1;
+			checkpointTurns.set(scopedKey, {
+				count: newCount >= CHECKPOINT_TURN_THRESHOLD ? 0 : newCount,
+				lastMsgCount: msgCount,
+				at: now,
+			});
+
+			if (newCount < CHECKPOINT_TURN_THRESHOLD) return;
 
 			// Fire-and-forget — don't block the hook response
 			void daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
@@ -1525,6 +1544,7 @@ const signetPlugin = {
 					sessionKey,
 					agentId,
 					project,
+					transcriptPath: sessionFile,
 					runtimePath: RUNTIME_PATH,
 				},
 				timeout: WRITE_TIMEOUT,
@@ -1750,9 +1770,10 @@ const signetPlugin = {
 				const resolved = resolveCtx(event, ctx);
 				await ensureSessionStarted(event, resolved.sessionKey, resolved.agentId);
 				const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
-				if (result !== undefined) {
-					maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project);
-				}
+				// Count every turn unconditionally — checkpoint should fire based on
+				// conversation progress, not on whether recall injection succeeded.
+				const msgCount = Array.isArray(event.messages) ? event.messages.length : undefined;
+				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
 				return result;
 			},
 			{ priority: 20 },
@@ -1765,9 +1786,8 @@ const signetPlugin = {
 			const resolved = resolveCtx(event, ctx);
 			await ensureSessionStarted(event, resolved.sessionKey, resolved.agentId);
 			const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
-			if (result !== undefined) {
-				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project);
-			}
+			const msgCount = Array.isArray(event.messages) ? event.messages.length : undefined;
+			maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
 			return result;
 		});
 
