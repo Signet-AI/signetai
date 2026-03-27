@@ -106,6 +106,25 @@ describe("insertSummaryFacts", () => {
 		expect(row?.project).toBe("/tmp/project");
 		expect(row?.updated_by).toBe(SUMMARY_WORKER_UPDATED_BY);
 	});
+
+	it("populates content_hash so the embedding tracker can index summary facts", () => {
+		// Regression: summary-worker previously inserted facts without content_hash,
+		// making them invisible to the embedding tracker (which skips NULL-hash rows)
+		// and causing the embed backfill to cycle indefinitely on duplicate content.
+		insertSummaryFacts(
+			accessor,
+			{ harness: "claude-code", project: null, session_key: "sess-hash-test", agent_id: "test-agent" },
+			[{ content: "Summary fact that needs a hash for embedding.", importance: 0.4, type: "fact" }],
+		);
+
+		const row = db.prepare("SELECT content_hash FROM memories WHERE source_id = 'sess-hash-test'").get() as
+			| { content_hash: string | null }
+			| undefined;
+
+		expect(row).toBeDefined();
+		expect(typeof row?.content_hash).toBe("string");
+		expect((row?.content_hash ?? "").length).toBeGreaterThan(0);
+	});
 });
 
 describe("recoverSummaryJobs", () => {

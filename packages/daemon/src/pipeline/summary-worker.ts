@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
+import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor } from "../db-accessor";
 import { countChanges } from "../db-helpers";
 import { inferType, isDuplicate } from "../hooks";
@@ -882,10 +883,14 @@ export function insertSummaryFacts(
 	return accessor.withWriteTx((db) => {
 		let count = 0;
 		const stmt = db.prepare(
+			// content_hash is required for the embedding tracker to pick up
+			// summary facts — the tracker skips rows with NULL content_hash.
+			// Without it, facts are invisible to vector search until a manual
+			// backfill is run, and the backfill itself cycles for duplicate content.
 			`INSERT INTO memories
-			 (id, content, type, importance, source_id, source_type, who, tags,
+			 (id, content, content_hash, type, importance, source_id, source_type, who, tags,
 			  project, agent_id, created_at, updated_at, updated_by)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		);
 
 		for (const item of facts) {
@@ -897,10 +902,12 @@ export function insertSummaryFacts(
 
 			const id = crypto.randomUUID();
 			const type = item.type || inferType(item.content);
+			const { contentHash } = normalizeAndHashContent(item.content);
 
 			stmt.run(
 				id,
 				item.content,
+				contentHash,
 				type,
 				importance,
 				job.session_key || null,

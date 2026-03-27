@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "@signet/core";
-import { enqueueExtractionJob, startWorker } from "./worker";
+import { enqueueExtractionJob, recoverMemoryJobs, startWorker } from "./worker";
 import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
 import type { LlmProvider } from "./provider";
 import type { PipelineV2Config } from "../memory-config";
@@ -1528,5 +1528,53 @@ describe("Backoff recovery", () => {
 		expect(s.pending).toBe(0);
 		expect(s.lastProgressAt).toBeGreaterThan(0);
 		expect(s.backoffMs).toBe(cfg.worker.pollMs);
+	});
+});
+
+describe("recoverMemoryJobs", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("marks exhausted pending jobs as dead", () => {
+		// Regression: memory_jobs stuck in 'pending' with attempts >= max_attempts
+		// are silently skipped by the tick loop (requires attempts < max_attempts)
+		// and never recovered. The stall detector fires every 60s indefinitely.
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-exhausted', NULL, 'extract', 'pending', 3, 3, ?, ?)`,
+		).run(now, now);
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-active', NULL, 'extract', 'pending', 1, 3, ?, ?)`,
+		).run(now, now);
+
+		const { updated } = recoverMemoryJobs(accessor);
+		expect(updated).toBe(1);
+
+		const dead = db.prepare("SELECT status FROM memory_jobs WHERE id = 'job-exhausted'").get() as
+			| { status: string }
+			| undefined;
+		const active = db.prepare("SELECT status FROM memory_jobs WHERE id = 'job-active'").get() as
+			| { status: string }
+			| undefined;
+
+		expect(dead?.status).toBe("dead");
+		expect(active?.status).toBe("pending");
+	});
+
+	it("returns zero when no exhausted jobs exist", () => {
+		const { updated } = recoverMemoryJobs(accessor);
+		expect(updated).toBe(0);
 	});
 });

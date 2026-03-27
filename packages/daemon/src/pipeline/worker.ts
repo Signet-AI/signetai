@@ -906,6 +906,38 @@ function enqueueStructuralJob(
 }
 
 // ---------------------------------------------------------------------------
+// Startup recovery
+// ---------------------------------------------------------------------------
+
+interface MemoryRecoveryResult {
+	readonly updated: number;
+}
+
+/**
+ * Mark memory_jobs that are stuck in 'pending' with attempts >= max_attempts
+ * as 'dead'. The tick loop requires attempts < max_attempts, so these jobs
+ * are silently skipped forever without this recovery step, causing the stall
+ * detector to fire on every interval.
+ */
+export function recoverMemoryJobs(accessor: DbAccessor): MemoryRecoveryResult {
+	return accessor.withWriteTx((db) => {
+		const table = db
+			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_jobs'")
+			.get() as { name: string } | undefined;
+		if (!table) return { updated: 0 };
+
+		const updated = countChanges(
+			db.prepare(
+				`UPDATE memory_jobs
+				 SET status = 'dead'
+				 WHERE status = 'pending' AND attempts >= max_attempts`,
+			).run(),
+		);
+		return { updated };
+	});
+}
+
+// ---------------------------------------------------------------------------
 // Worker loop
 // ---------------------------------------------------------------------------
 
@@ -1547,6 +1579,20 @@ export function startWorker(
 			scheduleTick();
 		}, 0);
 	}, WATCHDOG_INTERVAL);
+
+	// Startup recovery: mark memory_jobs that are pending but have exhausted
+	// all attempts as dead. These are skipped by the tick loop (requires
+	// attempts < max_attempts) but stay in 'pending' forever, causing the
+	// stall detector to fire on every interval. Same pattern as summary-worker's
+	// recoverSummaryJobs for summary_jobs.
+	try {
+		const { updated } = recoverMemoryJobs(accessor);
+		if (updated > 0) logger.info("pipeline", `Startup recovery: marked ${updated} exhausted pending job(s) as dead`);
+	} catch (e) {
+		logger.warn("pipeline", "Startup recovery failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
 
 	// Start the tick loop
 	scheduleTick();
