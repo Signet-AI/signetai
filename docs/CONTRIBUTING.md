@@ -11,6 +11,9 @@ Contributing to Signet
 This guide is for developers contributing to the `signetai/` monorepo,
 the reference implementation of the Signet open standard.
 
+**New to git or GitHub?** Start with [Your First PR](./FIRST-PR.md),
+a step-by-step walkthrough of making your first contribution.
+
 Development Setup
 ---
 

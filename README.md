@@ -400,8 +400,10 @@ Requirements: Node.js 18+, Bun, Ollama (recommended) or OpenAI API key. macOS or
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](./docs/CONTRIBUTING.md). Build on existing patterns.
-Open an issue before contributing significant features. Read the
+New to open source? Start with [Your First PR](./docs/FIRST-PR.md).
+For code conventions and project structure, see
+[CONTRIBUTING.md](./docs/CONTRIBUTING.md). Open an issue before
+contributing significant features. Read the
 [AI Policy](./AI_POLICY.md) before submitting AI-assisted work.
 
 ## Contributors

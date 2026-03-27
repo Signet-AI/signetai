@@ -19,8 +19,7 @@ function clean(text: string): string {
 function projectTag(project: string | null): string | null {
 	if (!project) return null;
 	const trimmed = project.trim();
-	if (trimmed.length === 0) return null;
-	return trimmed;
+	return trimmed.length === 0 ? null : trimmed;
 }
 
 export function deriveThreadKey(input: {

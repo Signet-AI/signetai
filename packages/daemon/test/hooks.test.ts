@@ -24,6 +24,7 @@ const {
 	handleRemember,
 	handleRecall,
 	handleSessionEnd,
+	handleCheckpointExtract,
 	effectiveScore,
 	selectWithBudget,
 	isDuplicate,
@@ -190,13 +191,24 @@ function createMemoryDb(
 
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_transcripts (
-			session_key TEXT PRIMARY KEY,
+			session_key TEXT NOT NULL,
+			agent_id    TEXT NOT NULL DEFAULT 'default',
 			content TEXT NOT NULL,
 			harness TEXT,
 			project TEXT,
-			agent_id TEXT NOT NULL DEFAULT 'default',
 			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (session_key, agent_id)
+		)
+	`);
+
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS session_extract_cursors (
+			session_key TEXT NOT NULL,
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			last_offset INTEGER NOT NULL DEFAULT 0,
+			last_extract_at TEXT NOT NULL,
+			PRIMARY KEY (session_key, agent_id)
 		)
 	`);
 
@@ -2119,5 +2131,134 @@ describe("session memory recording integration", () => {
 		// Should have at least one row with fts_hit_count > 0
 		const withHits = rows.filter((r) => r.fts_hit_count > 0);
 		expect(withHits.length).toBeGreaterThan(0);
+	});
+});
+
+// ============================================================================
+// handleCheckpointExtract
+// ============================================================================
+
+describe("handleCheckpointExtract", () => {
+	test.serial("returns skipped when no transcript available", () => {
+		createMemoryDb([]);
+
+		const result = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-no-transcript",
+		});
+
+		expect(result.skipped).toBe(true);
+		expect(result.queued).toBeUndefined();
+	});
+
+	test.serial("returns skipped when delta is below 500 chars", () => {
+		createMemoryDb([]);
+
+		const result = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-short",
+			transcript: "x".repeat(400),
+		});
+
+		expect(result.skipped).toBe(true);
+		expect(result.queued).toBeUndefined();
+	});
+
+	test.serial("returns queued with jobId when delta is sufficient", () => {
+		createMemoryDb([]);
+
+		const result = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-sufficient",
+			transcript: "x".repeat(600),
+		});
+
+		expect(result.queued).toBe(true);
+		expect(typeof result.jobId).toBe("string");
+	});
+
+	test.serial("advances cursor — second call with no new content is skipped", () => {
+		createMemoryDb([]);
+		const transcript = "x".repeat(600);
+
+		const first = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-cursor",
+			transcript,
+		});
+		expect(first.queued).toBe(true);
+
+		// Same transcript — delta from cursor to end is 0 chars
+		const second = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-cursor",
+			transcript,
+		});
+		expect(second.skipped).toBe(true);
+	});
+
+	test.serial("new content beyond cursor is extracted on second call", () => {
+		createMemoryDb([]);
+		const initial = "x".repeat(600);
+		const extended = initial + "y".repeat(600);
+
+		const first = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-extend",
+			transcript: initial,
+		});
+		expect(first.queued).toBe(true);
+
+		const second = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-extend",
+			transcript: extended,
+		});
+		expect(second.queued).toBe(true);
+	});
+
+	test.serial("truncated inline transcript does not overwrite stored lossless transcript", () => {
+		createMemoryDb([]);
+		const full = "x".repeat(600);
+
+		// First call: store the full transcript and advance cursor
+		handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-truncation",
+			transcript: full,
+		});
+
+		// Second call: send a truncated version (shorter than stored)
+		// The stored transcript must remain unchanged — cursor must not regress
+		const truncated = "x".repeat(200);
+		const result = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-truncation",
+			transcript: truncated,
+		});
+
+		// With cursor at 600 and stored transcript still at 600, delta is 0 → skipped
+		expect(result.skipped).toBe(true);
+
+		// Confirm stored content length was not shortened
+		const db = openTestDb();
+		const row = db
+			.prepare("SELECT length(content) as len FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+			.get("ckpt-truncation", "default") as { len: number } | undefined;
+		db.close();
+		expect(row?.len).toBe(full.length);
+	});
+
+	test.serial("skips when transcriptPath does not exist", () => {
+		createMemoryDb([]);
+
+		const result = handleCheckpointExtract({
+			harness: "test",
+			sessionKey: "ckpt-nopath",
+			transcriptPath: "/nonexistent/path/transcript.jsonl",
+		});
+
+		expect(result.skipped).toBe(true);
+		expect(result.queued).toBeUndefined();
 	});
 });

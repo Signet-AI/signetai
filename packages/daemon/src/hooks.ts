@@ -75,7 +75,7 @@ import {
 } from "./session-checkpoints";
 import { parseFeedback, recordAgentFeedback, recordSessionCandidates, trackFtsHits } from "./session-memories";
 import { getExpiryWarning } from "./session-tracker";
-import { searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
+import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { deriveThreadKey, deriveThreadLabel, summarizeThreadContent } from "./thread-heads";
@@ -277,6 +277,22 @@ export interface SessionEndResponse {
 	jobId?: string;
 }
 
+export interface CheckpointExtractRequest {
+	harness: string;
+	sessionKey: string;
+	agentId?: string;
+	project?: string;
+	transcript?: string;
+	transcriptPath?: string;
+	runtimePath?: "plugin" | "legacy";
+}
+
+export interface CheckpointExtractResponse {
+	queued?: boolean;
+	jobId?: string;
+	skipped?: boolean;
+}
+
 export interface RememberRequest {
 	harness: string;
 	who?: string;
@@ -387,6 +403,7 @@ interface SynthesisMaterial {
 function temporalBaseScore(kind: string, sourceType: string): number {
 	if (sourceType === "compaction") return 0.95;
 	if (sourceType === "summary") return 0.9;
+	if (sourceType === "checkpoint") return 0.85;
 	if (sourceType === "chunk") return 0.55;
 	if (kind === "arc") return 0.8;
 	if (kind === "epoch") return 0.7;
@@ -409,7 +426,8 @@ function buildSynthesisIndexBlock(nodes: ReadonlyArray<TemporalNode>): string {
 		const session = node.sessionKey ?? "none";
 		const ref = node.sourceRef ?? "none";
 		const project = node.project ?? "none";
-		return `- id=${node.id} kind=${node.kind} source=${source} depth=${node.depth} session=${session} project=${project} ref=${ref} latest=${node.latestAt}`;
+		const preview = trimContent(node.content, 120);
+		return `- id=${node.id} kind=${node.kind} source=${source} depth=${node.depth} session=${session} project=${project} ref=${ref} latest=${node.latestAt}\n  summary: ${preview}`;
 	});
 	return `## Temporal Index\n\n${lines.join("\n")}`;
 }
@@ -2801,6 +2819,221 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	return { memoriesSaved: 0, queued: true, jobId };
 }
 
+// ---------------------------------------------------------------------------
+// Mid-session checkpoint extraction (long-lived sessions)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read (or upsert) the extract cursor for delta tracking.
+ * Returns the last_offset for the given session/agent pair.
+ */
+/** Read the extract cursor for a session, returning last_offset (0 if none). */
+function readExtractCursor(sessionKey: string, agentId: string): number {
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const row = db
+				.prepare("SELECT last_offset FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?")
+				.get(sessionKey, agentId) as { last_offset: number } | undefined;
+			return row?.last_offset ?? 0;
+		});
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * Advance the extract cursor to `offset` for this session.
+ * Called AFTER the summary job is enqueued so a crash between enqueue and
+ * cursor advance causes a redundant re-extraction (acceptable) rather than
+ * permanently skipping a delta window (data loss).
+ */
+function advanceExtractCursor(sessionKey: string, agentId: string, offset: number): void {
+	const now = new Date().toISOString();
+	try {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_extract_cursors (session_key, agent_id, last_offset, last_extract_at)
+				 VALUES (?, ?, ?, ?)
+				 ON CONFLICT(session_key, agent_id) DO UPDATE SET
+				   last_offset = excluded.last_offset,
+				   last_extract_at = excluded.last_extract_at`,
+			).run(sessionKey, agentId, offset, now);
+		});
+	} catch (e) {
+		logger.warn("hooks", "advanceExtractCursor failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+}
+
+/**
+ * Mid-session checkpoint extraction. Simplified version of handleSessionEnd
+ * for long-lived sessions that never call session-end.
+ *
+ * Key differences from handleSessionEnd:
+ * - Does NOT release the session claim (session continues after this call)
+ * - Calls consumeState() to flush accumulated continuity data, then
+ *   initContinuity() to restart the tracking window for the next interval
+ * - Only extracts the delta since the last extraction (cursor via
+ *   readExtractCursor / advanceExtractCursor; cursor is advanced AFTER
+ *   enqueueSummaryJob succeeds to preserve crash-safety)
+ * - Skips if delta is < 500 bytes (not worth extracting)
+ * - Writes a checkpoint with trigger 'mid_session_extract'
+ */
+export function handleCheckpointExtract(req: CheckpointExtractRequest): CheckpointExtractResponse {
+	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
+
+	// Respect the pipeline master switch
+	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
+		logger.info("hooks", "Checkpoint extract skipped — pipeline disabled");
+		return { skipped: true };
+	}
+
+	// Read transcript: prefer inline body, then file path, then stored transcript.
+	// transcriptPath is trusted the same way as in handleSessionEnd and
+	// handleUserPromptSubmit — OpenClaw session files are written by the same
+	// user process as the daemon and may be anywhere (project dirs, /tmp,
+	// containers). Protection at the network level is the global auth middleware.
+	let transcript = "";
+	let fromStore = false;
+	if (req.transcript) {
+		transcript = normalizeSessionTranscript(req.harness, req.transcript);
+	} else if (req.transcriptPath && existsSync(req.transcriptPath)) {
+		try {
+			const raw = readFileSync(req.transcriptPath, "utf-8");
+			transcript = normalizeSessionTranscript(req.harness, raw);
+		} catch {
+			logger.warn("hooks", "Could not read checkpoint transcript", {
+				path: req.transcriptPath,
+			});
+		}
+	}
+
+	// Fall back to stored transcript if nothing was provided inline
+	if (!transcript) {
+		transcript = getSessionTranscriptContent(req.sessionKey, agentId) ?? "";
+		fromStore = true;
+	}
+
+	if (!transcript) {
+		logger.info("hooks", "Checkpoint extract skipped — no transcript available", {
+			sessionKey: req.sessionKey,
+		});
+		return { skipped: true };
+	}
+
+	// Upsert transcript for lossless retention, but only when new content is
+	// provided (not merely re-reading the stored transcript) and only when it
+	// is at least as long as what is already stored.  Upserting a shorter
+	// payload would move the extraction cursor past valid content and cause
+	// future checkpoints to permanently skip that range.
+	if (!fromStore) {
+		const prev = getSessionTranscriptContent(req.sessionKey, agentId);
+		if (!prev || transcript.length >= prev.length) {
+			try {
+				upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+			} catch (e) {
+				logger.warn("hooks", "Checkpoint transcript upsert failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
+	}
+
+	// Read current cursor; skip if delta is too small.
+	// Cursor is stored as UTF-8 byte offset so it matches the Rust daemon's
+	// byte-based cursor on a shared database. Slice transcript by bytes to
+	// keep the unit consistent across daemons.
+	const cursor = readExtractCursor(req.sessionKey, agentId);
+	const transcriptBuf = Buffer.from(transcript, "utf8");
+	const deltaBuf = transcriptBuf.subarray(cursor);
+	if (deltaBuf.byteLength < 500) {
+		logger.info("hooks", "Checkpoint extract skipped — delta too small", {
+			sessionKey: req.sessionKey,
+			deltaBytes: deltaBuf.byteLength,
+			cursor,
+		});
+		return { skipped: true };
+	}
+	// Convert delta buffer to string; safety cap against degenerate inputs
+	const delta = deltaBuf.toString("utf8");
+	const MAX_DELTA_CHARS = 100_000;
+	const capped = delta.length > MAX_DELTA_CHARS ? `${delta.slice(0, MAX_DELTA_CHARS)}\n[truncated]` : delta;
+
+	// Flush accumulated continuity data into a checkpoint, then re-init the
+	// tracking window so subsequent turns continue accumulating. Unlike
+	// session-end, we do NOT release the session claim.
+	//
+	// Note: consumeState/initContinuity are session-key-scoped (not agentId-
+	// scoped) — matching the same design in handleSessionEnd. In the OpenClaw
+	// multi-agent model each agent run always has a unique session key, so
+	// session-key scoping is sufficient in practice. agentId is used for
+	// cursor and transcript dedup in session_extract_cursors /
+	// session_transcripts, where it matters for correct per-agent scoping.
+	try {
+		const snap = consumeState(req.sessionKey);
+		if (snap && snap.totalPromptCount > 0) {
+			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+			writeCheckpoint(
+				getDbAccessor(),
+				{
+					sessionKey: snap.sessionKey,
+					harness: snap.harness,
+					project: snap.project,
+					projectNormalized: snap.projectNormalized,
+					trigger: "mid_session_extract",
+					digest: formatPeriodicDigest(snap),
+					promptCount: snap.totalPromptCount,
+					memoryQueries: snap.pendingQueries,
+					recentRemembers: snap.pendingRemembers,
+					focalEntityIds: snap.structuralSnapshot?.focalEntityIds,
+					focalEntityNames: snap.structuralSnapshot?.focalEntityNames,
+					activeAspectIds: snap.structuralSnapshot?.activeAspectIds,
+					surfacedConstraintCount: snap.structuralSnapshot?.surfacedConstraintCount,
+					traversalMemoryCount: snap.structuralSnapshot?.traversalMemoryCount,
+				},
+				cfg.maxCheckpointsPerSession,
+			);
+		}
+	} catch (err) {
+		logger.warn("hooks", "Checkpoint extract checkpoint write failed", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+
+	try {
+		initContinuity(req.sessionKey, req.harness, req.project);
+	} catch {
+		// Non-fatal — continuity will re-init on the next prompt
+	}
+
+	// Enqueue summary job for the delta only.
+	// Cursor is advanced AFTER the enqueue so a crash between the two steps
+	// causes a redundant re-extraction next time rather than silently
+	// skipping a delta window.
+	const jobId = enqueueSummaryJob(getDbAccessor(), {
+		harness: req.harness,
+		transcript: capped,
+		sessionKey: req.sessionKey,
+		project: req.project,
+		agentId,
+	});
+	// Advance cursor using UTF-8 byte length so the stored offset is
+	// byte-compatible with the Rust daemon on a shared database.
+	advanceExtractCursor(req.sessionKey, agentId, Buffer.byteLength(transcript, "utf8"));
+
+	logger.info("hooks", "Checkpoint extract queued", {
+		jobId,
+		sessionKey: req.sessionKey,
+		deltaChars: capped.length,
+		cursor,
+		newCursor: Buffer.byteLength(transcript, "utf8"),
+	});
+
+	return { queued: true, jobId };
+}
+
 export function normalizeSessionTranscript(harness: string, raw: string): string {
 	if (harness.trim().toLowerCase() === "codex") {
 		return normalizeCodexTranscript(raw);
@@ -3258,8 +3491,8 @@ Use these top-level headings exactly:
 ## Tier 3 rules
 
 - After the human-readable summary, append the exact Temporal Index block provided below
-- Do not rewrite the Temporal Index block
-- Do not invent node IDs, sessions, or lineage
+- Do not rewrite the Temporal Index block; each entry has a metadata line and a summary line
+- Do not invent node IDs, sessions, summaries, or lineage
 
 ## Decay-ranked memories
 

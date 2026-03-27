@@ -126,6 +126,21 @@ export function upsertSessionTranscript(
 	}
 }
 
+/** Read the stored transcript content for a session. */
+export function getSessionTranscriptContent(sessionKey: string, agentId: string): string | undefined {
+	if (!tableExists("session_transcripts")) return undefined;
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const row = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get(sessionKey, agentId) as { content: string } | undefined;
+			return row?.content;
+		});
+	} catch {
+		return undefined;
+	}
+}
+
 export function searchTranscriptFallback(params: {
 	readonly query: string;
 	readonly agentId: string;

@@ -19,6 +19,7 @@ export type CheckpointTrigger =
 	| "periodic"
 	| "pre_compaction"
 	| "session_end"
+	| "mid_session_extract"
 	| "agent"
 	| "explicit";
 

@@ -1749,6 +1749,65 @@ scope until transcript storage catches up.
 { "success": true, "memoryId": "uuid" }
 ```
 
+### POST /api/hooks/session-checkpoint-extract
+
+Trigger a mid-session memory extraction for long-lived sessions (Discord bots,
+persistent agents) that never call `session-end`. Computes a delta since the
+last extraction cursor and enqueues a summary job without releasing the session
+claim.
+
+**Request body**
+
+```json
+{
+  "harness": "openclaw",
+  "sessionKey": "session-uuid",
+  "agentId": "agent-id",
+  "project": "/workspace/repo",
+  "transcriptPath": "/path/to/session.jsonl",
+  "runtimePath": "plugin"
+}
+```
+
+`harness` and `sessionKey` are required. `transcript` (inline string) takes
+precedence over `transcriptPath`; both fall back to the stored session
+transcript from a prior `session-end` or `user-prompt-submit` call.
+
+The endpoint skips silently when:
+- The delta since the last extraction cursor is < 500 characters
+- No transcript is available
+- The session is bypassed
+
+On success the extraction cursor advances so the next call only processes
+new content.
+
+**Response**
+
+```json
+{ "queued": true, "jobId": "uuid" }
+```
+
+`queued: true` means a summary job was enqueued; `jobId` identifies the
+async job. The job extracts the delta and writes a temporal node scored
+at 0.85 (below compaction summaries at 0.95, above chunks at 0.55).
+
+```json
+{ "skipped": true }
+```
+
+Returned when delta < 500 chars, no transcript is available, or the
+session is bypassed.
+
+```json
+{ "queued": false }
+```
+
+Returned by daemon implementations where summary job enqueueing is not
+yet available (Phase 5). The delta was found and is above the threshold
+but no job was enqueued. Callers may treat this identically to
+`{skipped: true}` for retry purposes — the content is not consumed and
+will be re-evaluated on the next call.
+
 ### GET /api/hooks/synthesis/config
 
 Return the current synthesis configuration (thresholds, model, schedule).

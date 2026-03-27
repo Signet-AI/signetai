@@ -152,6 +152,24 @@ impl SessionTracker {
         None
     }
 
+    /// Renew a session's TTL. Returns true if the session was found and
+    /// refreshed, false if the session is not tracked or already expired.
+    /// Mirrors TS renewSession() — called on checkpoint-extract to keep
+    /// long-lived sessions (Discord bots) alive without ending them.
+    pub fn renew(&self, key: &str) -> bool {
+        let mut claims = self.claims.lock().unwrap();
+        if let Some(claim) = claims.get_mut(key) {
+            if claim.is_stale() {
+                claims.remove(key);
+                return false;
+            }
+            claim.refresh();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Bypass a session.
     pub fn bypass(&self, key: &str) {
         let mut claims = self.claims.lock().unwrap();

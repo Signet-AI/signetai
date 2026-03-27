@@ -1090,6 +1090,29 @@ pub async fn compaction_complete(
     let harness = body.harness.clone().unwrap_or_default();
     let fallback_project = body.project.clone();
     let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
+    // Compaction resets the message array to a short post-compaction summary.
+    // Clear the stored transcript and extract cursor so the next checkpoint
+    // fires from byte 0 instead of skipping because the pre-compaction cursor
+    // exceeds the new (shorter) transcript. Mirrors the TS daemon behaviour
+    // added in the same PR. Non-fatal on failure (tables may not exist yet).
+    if let Some(key) = &body.session_key {
+        let sk = key.clone();
+        let aid = agent_id.clone();
+        let _ = state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let _ = conn.execute(
+                    "DELETE FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![sk, aid],
+                );
+                let _ = conn.execute(
+                    "DELETE FROM session_extract_cursors WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![sk, aid],
+                );
+                Ok(serde_json::Value::Null)
+            })
+            .await;
+    }
     let session_key = body.session_key.clone();
     let result = state
         .pool
@@ -1141,21 +1164,196 @@ pub async fn compaction_complete(
     }
 }
 
+// ---------------------------------------------------------------------------
+// POST /api/hooks/session-checkpoint-extract
+//
+// Mid-session delta extraction for long-lived sessions (Discord bots, etc.)
+// that never call session-end. Reads the stored session transcript, computes
+// the delta since the last extraction cursor, and advances the cursor when
+// the delta is large enough.
+//
+// Summary job enqueuing is Phase 5 (same as session_end's TODO comment).
+// Until then this returns {queued: false} when a delta was found, mirroring
+// how session_end writes a checkpoint but defers async extraction.
+// ---------------------------------------------------------------------------
+
+const CHECKPOINT_MIN_DELTA: usize = 500;
+
+/// Returns the transcript slice starting at `cursor`, or None if the
+/// delta is absent or below the minimum size threshold.
+fn extract_delta<'a>(full: &'a str, cursor: i64) -> Option<&'a str> {
+    let mut start = cursor.max(0) as usize;
+    if start >= full.len() {
+        return None;
+    }
+    // Snap to next char boundary if the cursor landed mid-char (multi-byte
+    // UTF-8). Prefers re-extracting a few bytes over panicking or silently
+    // skipping a checkpoint.
+    if !full.is_char_boundary(start) {
+        start = (start + 1..=full.len())
+            .find(|&i| full.is_char_boundary(i))
+            .unwrap_or(full.len());
+    }
+    let delta = &full[start..];
+    if delta.len() < CHECKPOINT_MIN_DELTA { None } else { Some(delta) }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointExtractBody {
+    #[allow(dead_code)] // accepted for API compat; used for harness stamping in Phase 5
+    pub harness: Option<String>,
+    pub session_key: Option<String>,
+    pub agent_id: Option<String>,
+    #[allow(dead_code)] // used for project resolution in Phase 5
+    pub project: Option<String>,
+    // Inline transcript (takes precedence over stored transcript).
+    pub transcript: Option<String>,
+    #[allow(dead_code)] // Phase 5: read from path when no stored transcript
+    pub transcript_path: Option<String>,
+    pub runtime_path: Option<String>,
+}
+
+pub async fn session_checkpoint_extract(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<CheckpointExtractBody>,
+) -> axum::response::Response {
+    // Both harness and sessionKey are required — matches TS daemon validation
+    // and the contract documented in docs/API.md.
+    let Some(_harness) = body.harness.as_deref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "harness is required"})),
+        )
+        .into_response();
+    };
+    let Some(session_key) = body.session_key.clone() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "sessionKey is required"})),
+        )
+        .into_response();
+    };
+
+    let path = resolve_runtime_path(&headers, body.runtime_path.as_deref());
+
+    // Session conflict check — only extract for the claiming runtime path.
+    if let Some(p) = path
+        && let Some(claimed_by) = state.sessions.check(&session_key, p)
+    {
+        return conflict_response(claimed_by);
+    }
+
+    // Honor bypass — consistent with other hook routes and the TS daemon.
+    if state.sessions.is_bypassed(&session_key) {
+        return (StatusCode::OK, Json(serde_json::json!({"skipped": true}))).into_response();
+    }
+
+    // Refresh session TTL — keeps long-lived sessions (Discord bots) alive
+    // without ending the claim. Mirrors TS daemon renewSession() call on
+    // this route. Non-fatal: sessions without an active claim are a no-op.
+    state.sessions.renew(&session_key);
+
+    // Resolve agent_id: explicit value > "agent:{id}:..." session-key parse > "default".
+    // Mirrors TS resolveAgentId(sessionKey) so multi-agent checkpoints scope correctly.
+    let agent_id = {
+        let explicit = body.agent_id.as_deref().filter(|s| !s.is_empty());
+        explicit.map(str::to_string).unwrap_or_else(|| {
+            let mut parts = session_key.splitn(3, ':');
+            if parts.next() == Some("agent") {
+                let id = parts.next().unwrap_or("").trim();
+                if !id.is_empty() {
+                    return id.to_string();
+                }
+            }
+            "default".to_string()
+        })
+    };
+    let inline = body.transcript.clone();
+    // transcript_path is trusted the same way as in session_end — OpenClaw
+    // session files may be anywhere (project dirs, /tmp, containers). Auth
+    // middleware provides network-level protection. Mirrors TS daemon behavior.
+    let tpath = body.transcript_path.clone();
+    let sk = session_key.clone();
+    let aid = agent_id.clone();
+
+    let result = state
+        .pool
+        .write(Priority::Low, move |conn| {
+            // Read current extraction cursor.
+            let cursor: i64 = conn
+                .query_row(
+                    "SELECT last_offset FROM session_extract_cursors \
+                     WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![sk, aid],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+
+            // Resolve transcript: inline body → transcript_path file → stored.
+            // Mirrors the TS daemon priority order. Always filter by agent_id.
+            let full = inline
+                .or_else(|| {
+                    tpath.as_deref().and_then(|p| std::fs::read_to_string(p).ok())
+                })
+                .or_else(|| {
+                    conn.query_row(
+                        "SELECT content FROM session_transcripts \
+                         WHERE session_key = ?1 AND agent_id = ?2",
+                        rusqlite::params![sk, aid],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                });
+
+            let Some(full) = full else {
+                return Ok(serde_json::json!({"skipped": true}));
+            };
+
+            if extract_delta(&full, cursor).is_none() {
+                return Ok(serde_json::json!({"skipped": true}));
+            }
+
+            // Cursor advance deferred to Phase 5 (same as session_end TODO).
+            // Advancing without a summary job would permanently discard the
+            // delta. Return {queued: false} — a documented response meaning
+            // "delta was found but no job was enqueued this time". Callers
+            // treat this identically to {skipped: true} for retry purposes.
+            // TODO: Phase 5 — enqueue summary job, then advance cursor.
+            Ok(serde_json::json!({"queued": false}))
+        })
+        .await;
+
+    match result {
+        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+        Err(e) => {
+            warn!(err = %e, "session-checkpoint-extract failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{resolve_compaction_project, strip_untrusted_metadata};
+    use super::{extract_delta, resolve_compaction_project, strip_untrusted_metadata, CHECKPOINT_MIN_DELTA};
 
     #[test]
     fn compaction_project_prefers_transcript_lineage() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute(
             "CREATE TABLE session_transcripts (
-                session_key TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                harness TEXT,
-                project TEXT,
-                agent_id TEXT NOT NULL DEFAULT 'default',
-                created_at TEXT NOT NULL
+                session_key TEXT NOT NULL,
+                agent_id    TEXT NOT NULL DEFAULT 'default',
+                content     TEXT NOT NULL,
+                harness     TEXT,
+                project     TEXT,
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (session_key, agent_id)
             )",
             [],
         )
@@ -1186,12 +1384,13 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute(
             "CREATE TABLE session_transcripts (
-                session_key TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                harness TEXT,
-                project TEXT,
-                agent_id TEXT NOT NULL DEFAULT 'default',
-                created_at TEXT NOT NULL
+                session_key TEXT NOT NULL,
+                agent_id    TEXT NOT NULL DEFAULT 'default',
+                content     TEXT NOT NULL,
+                harness     TEXT,
+                project     TEXT,
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (session_key, agent_id)
             )",
             [],
         )
@@ -1206,6 +1405,53 @@ mod tests {
         .unwrap();
 
         assert_eq!(project.as_deref(), Some("proj-fallback"));
+    }
+
+    #[test]
+    fn extract_delta_skips_when_small() {
+        let short = "a".repeat(CHECKPOINT_MIN_DELTA - 1);
+        assert!(extract_delta(&short, 0).is_none());
+    }
+
+    #[test]
+    fn extract_delta_returns_slice_when_large_enough() {
+        let full = "a".repeat(CHECKPOINT_MIN_DELTA + 10);
+        let delta = extract_delta(&full, 0).unwrap();
+        assert_eq!(delta.len(), full.len());
+    }
+
+    #[test]
+    fn extract_delta_uses_cursor_offset() {
+        let prefix = "x".repeat(100);
+        let suffix = "y".repeat(CHECKPOINT_MIN_DELTA + 1);
+        let full = format!("{prefix}{suffix}");
+        let delta = extract_delta(&full, 100).unwrap();
+        assert_eq!(delta, suffix.as_str());
+    }
+
+    #[test]
+    fn extract_delta_skips_when_cursor_at_end() {
+        let full = "a".repeat(CHECKPOINT_MIN_DELTA + 100);
+        let cursor = full.len() as i64;
+        assert!(extract_delta(&full, cursor).is_none());
+    }
+
+    #[test]
+    fn extract_delta_skips_when_cursor_past_end() {
+        let full = "a".repeat(CHECKPOINT_MIN_DELTA);
+        assert!(extract_delta(&full, (full.len() + 1) as i64).is_none());
+    }
+
+    #[test]
+    fn extract_delta_snaps_past_mid_char_cursor() {
+        // "🦀" is 4 bytes. A cursor landing at byte 1, 2, or 3 is mid-char.
+        // Snap should move forward to byte 4 (start of the suffix).
+        let suffix = "a".repeat(CHECKPOINT_MIN_DELTA + 50);
+        let full = format!("🦀{suffix}"); // 🦀 occupies bytes 0-3
+        // cursor at byte 1 (inside the crab emoji) — must not panic.
+        let delta = extract_delta(&full, 1);
+        assert!(delta.is_some(), "should snap to byte 4 and return the suffix");
+        assert_eq!(delta.unwrap().len(), suffix.len());
     }
 
     #[test]

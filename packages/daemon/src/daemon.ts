@@ -5629,6 +5629,7 @@ app.delete("/api/secrets/:name", (c) => {
 // ============================================================================
 
 import {
+	type CheckpointExtractRequest,
 	type PreCompactionRequest,
 	type RecallRequest,
 	type RememberRequest,
@@ -5636,6 +5637,7 @@ import {
 	type SessionStartRequest,
 	type SynthesisRequest,
 	type UserPromptSubmitRequest,
+	handleCheckpointExtract,
 	handlePreCompaction,
 	handleSessionEnd,
 	handleSessionStart,
@@ -5867,6 +5869,43 @@ app.post("/api/hooks/session-end", async (c) => {
 		}
 	} catch (e) {
 		logger.error("hooks", "Session end hook failed", e as Error);
+		return c.json({ error: "Hook execution failed" }, 500);
+	}
+});
+
+// Mid-session checkpoint extraction (long-lived sessions)
+app.post("/api/hooks/session-checkpoint-extract", async (c) => {
+	if (isInternalCall(c)) {
+		return c.json({ skipped: true });
+	}
+	try {
+		const body = (await c.req.json()) as CheckpointExtractRequest;
+
+		if (!body.harness || !body.sessionKey) {
+			return c.json({ error: "harness and sessionKey are required" }, 400);
+		}
+
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
+		// Reject if the session was claimed by a different runtime path so a
+		// plugin running in parallel cannot enqueue jobs for another session.
+		const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
+		if (conflict) return conflict;
+
+		stampHarness(body.harness);
+
+		if (isSessionBypassed(body.sessionKey)) {
+			return c.json({ skipped: true });
+		}
+
+		// Refresh session TTL — keeps the session alive without ending it
+		renewSession(body.sessionKey);
+
+		const result = handleCheckpointExtract(body);
+		return c.json(result);
+	} catch (e) {
+		logger.error("hooks", "Checkpoint extract hook failed", e as Error);
 		return c.json({ error: "Hook execution failed" }, 500);
 	}
 });
@@ -6113,6 +6152,41 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		// so previously-injected memories are eligible for re-injection.
 		if (body.sessionKey) {
 			resetPromptDedup(body.sessionKey);
+		}
+
+		// Compaction resets the message array to a short summary. Clear the
+		// stored transcript and extract cursor so post-compaction inline
+		// transcripts from event.messages can accumulate from byte 0.
+		// Without this, the pre-compaction cursor would exceed the new
+		// transcript length and every checkpoint would be skipped.
+		if (body.sessionKey) {
+			try {
+				getDbAccessor().withWriteTx((db) => {
+					const hasTx = db
+						.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
+						.get();
+					if (hasTx) {
+						db.prepare(
+							"DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+						).run(body.sessionKey, agentId);
+					}
+					const hasCur = db
+						.prepare(
+							"SELECT name FROM sqlite_master WHERE type='table' AND name='session_extract_cursors'",
+						)
+						.get();
+					if (hasCur) {
+						db.prepare(
+							"DELETE FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?",
+						).run(body.sessionKey, agentId);
+					}
+				});
+			} catch (err) {
+				logger.warn("hooks", "Failed to reset checkpoint state after compaction (non-fatal)", {
+					error: err instanceof Error ? err.message : String(err),
+					sessionKey: body.sessionKey,
+				});
+			}
 		}
 
 		void getSynthesisWorker()

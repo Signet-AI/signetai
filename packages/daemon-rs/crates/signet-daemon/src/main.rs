@@ -243,6 +243,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/hooks/compaction-complete",
             axum::routing::post(routes::hooks::compaction_complete),
         )
+        .route(
+            "/api/hooks/session-checkpoint-extract",
+            axum::routing::post(routes::hooks::session_checkpoint_extract),
+        )
         // Agent roster routes (multi-agent support — migration 043)
         .route(
             "/api/agents",

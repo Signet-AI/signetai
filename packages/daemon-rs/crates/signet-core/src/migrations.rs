@@ -201,9 +201,24 @@ static MIGRATIONS: &[Migration] = &[
         name: "dependency-reason",
         sql: include_str!("sql/031-dependency-reason.sql"),
     },
+    Migration {
+        version: 32,
+        name: "session-transcripts",
+        sql: include_str!("sql/032-session-transcripts.sql"),
+    },
+    Migration {
+        version: 33,
+        name: "session-extract-cursors",
+        sql: include_str!("sql/033-session-extract-cursors.sql"),
+    },
+    Migration {
+        version: 34,
+        name: "session-transcripts-compound-pk",
+        sql: include_str!("sql/034-session-transcripts-compound-pk.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 31;
+pub const LATEST_SCHEMA_VERSION: u32 = 34;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
@@ -483,6 +498,63 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
         31 => {
             add_column_if_missing(conn, "entity_dependencies", "reason", "TEXT");
             add_column_if_missing(conn, "entities", "last_synthesized_at", "TEXT");
+        }
+        34 => {
+            // Rebuild session_transcripts with compound (session_key, agent_id) PK.
+            // Skip only when agent_id is already a PRIMARY KEY member (PRAGMA
+            // table_info column 5 = pk, nonzero = part of the PK). Checking just
+            // for column existence would incorrectly skip when agent_id was added
+            // by a different migration as a regular column without PK membership.
+            //
+            // Two scenarios for the old table when this migration runs:
+            // (a) Fresh Rust install: migration 032 created session_transcripts
+            //     without agent_id → SELECT must use literal 'default'
+            // (b) Cross-daemon: TS daemon ran first and added agent_id as a
+            //     regular (non-PK) column → SELECT must use COALESCE(agent_id, 'default')
+            let cols: Vec<(String, i64)> = conn
+                .prepare("PRAGMA table_info(session_transcripts)")?
+                .query_map([], |row| {
+                    let name: String = row.get(1)?;
+                    let pk: i64 = row.get(5)?;
+                    Ok((name, pk))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            let agent_id_in_pk = cols.iter().any(|(name, pk)| name == "agent_id" && *pk > 0);
+            let agent_id_col_exists = cols.iter().any(|(name, _)| name == "agent_id");
+
+            if !agent_id_in_pk {
+                // Build the agent_id expression for the SELECT based on whether
+                // the column already exists in the source table.
+                let agent_id_expr = if agent_id_col_exists {
+                    "COALESCE(agent_id, 'default')"
+                } else {
+                    "'default'"
+                };
+                let sql = format!(
+                    "CREATE TABLE session_transcripts_new (
+                        session_key TEXT NOT NULL,
+                        agent_id    TEXT NOT NULL DEFAULT 'default',
+                        content     TEXT NOT NULL,
+                        harness     TEXT,
+                        project     TEXT,
+                        created_at  TEXT NOT NULL,
+                        PRIMARY KEY (session_key, agent_id)
+                    );
+                    INSERT OR IGNORE INTO session_transcripts_new
+                        (session_key, agent_id, content, harness, project, created_at)
+                    SELECT session_key, {agent_id_expr}, content, harness, project, created_at
+                    FROM session_transcripts;
+                    DROP TABLE session_transcripts;
+                    ALTER TABLE session_transcripts_new RENAME TO session_transcripts;
+                    CREATE INDEX IF NOT EXISTS idx_st_project
+                        ON session_transcripts(project);
+                    CREATE INDEX IF NOT EXISTS idx_st_created
+                        ON session_transcripts(created_at);"
+                );
+                conn.execute_batch(&sql)?;
+            }
         }
         _ => {}
     }
