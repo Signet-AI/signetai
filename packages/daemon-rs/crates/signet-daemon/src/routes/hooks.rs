@@ -1224,10 +1224,12 @@ pub async fn session_checkpoint_extract(
                 .unwrap_or(0);
 
             // Resolve transcript: inline body takes precedence over stored.
+            // Always filter by agent_id to satisfy the repo-wide scoping invariant.
             let full = inline.or_else(|| {
                 conn.query_row(
-                    "SELECT content FROM session_transcripts WHERE session_key = ?1",
-                    rusqlite::params![sk],
+                    "SELECT content FROM session_transcripts \
+                     WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![sk, aid],
                     |row| row.get::<_, String>(0),
                 )
                 .ok()
@@ -1241,25 +1243,14 @@ pub async fn session_checkpoint_extract(
                 return Ok(serde_json::json!({"skipped": true}));
             }
 
-            let len = full.len() as i64;
-
-            // Advance cursor. Ordering: advance after we've confirmed a workable
-            // delta exists. Phase 5 will advance AFTER enqueueSummaryJob succeeds
-            // (crash-safe); for now advancing eagerly is acceptable because the TS
-            // daemon is authoritative when shadow mode is active.
-            let now = chrono::Utc::now().to_rfc3339();
-            conn.execute(
-                "INSERT INTO session_extract_cursors \
-                 (session_key, agent_id, last_offset, last_extract_at) \
-                 VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT(session_key, agent_id) DO UPDATE SET \
-                   last_offset = excluded.last_offset, \
-                   last_extract_at = excluded.last_extract_at",
-                rusqlite::params![sk, aid, len, now],
-            )?;
-
-            // TODO: Phase 5 — enqueue summary job (same as session_end's TODO).
-            Ok(serde_json::json!({"queued": false, "skipped": false}))
+            // Cursor advance is intentionally deferred to Phase 5.
+            // Advancing the cursor without enqueueing a summary job would
+            // permanently discard the delta — the content would never be
+            // extracted. Until Phase 5 lands, return a distinct response so
+            // callers know a valid delta was found (the TS daemon is
+            // authoritative in shadow mode and will handle the actual job).
+            // TODO: Phase 5 — enqueue summary job, then advance cursor.
+            Ok(serde_json::json!({"queued": false, "deltaReady": true}))
         })
         .await;
 
@@ -1285,12 +1276,13 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute(
             "CREATE TABLE session_transcripts (
-                session_key TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                harness TEXT,
-                project TEXT,
-                agent_id TEXT NOT NULL DEFAULT 'default',
-                created_at TEXT NOT NULL
+                session_key TEXT NOT NULL,
+                agent_id    TEXT NOT NULL DEFAULT 'default',
+                content     TEXT NOT NULL,
+                harness     TEXT,
+                project     TEXT,
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (session_key, agent_id)
             )",
             [],
         )
@@ -1321,12 +1313,13 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute(
             "CREATE TABLE session_transcripts (
-                session_key TEXT PRIMARY KEY,
-                content TEXT NOT NULL,
-                harness TEXT,
-                project TEXT,
-                agent_id TEXT NOT NULL DEFAULT 'default',
-                created_at TEXT NOT NULL
+                session_key TEXT NOT NULL,
+                agent_id    TEXT NOT NULL DEFAULT 'default',
+                content     TEXT NOT NULL,
+                harness     TEXT,
+                project     TEXT,
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (session_key, agent_id)
             )",
             [],
         )
