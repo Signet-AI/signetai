@@ -1571,6 +1571,9 @@ const signetPlugin = {
 					api.logger.warn(
 						`signet-memory: checkpoint extract failed: ${err instanceof Error ? err.message : String(err)}`,
 					);
+					// Restore counter so the next turn retries after a transient failure.
+					const cur = checkpointTurns.get(scopedKey);
+					if (cur) checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
 				});
 		};
 
