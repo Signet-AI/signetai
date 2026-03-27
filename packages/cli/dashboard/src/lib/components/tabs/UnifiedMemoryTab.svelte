@@ -79,7 +79,7 @@
 		{:else}
 			<div class="unified-main">
 				<div class="extra-body">
-					<EmbeddingsTab {onopenglobalsimilar} embedded={true} />
+					<EmbeddingsTab {onopenglobalsimilar} {agentId} embedded={true} />
 				</div>
 			</div>
 		{/if}

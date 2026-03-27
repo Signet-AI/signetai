@@ -64,6 +64,7 @@ import {
 interface Props {
 	onopenglobalsimilar: (memory: Memory) => void;
 	embedded?: boolean;
+	agentId?: string;
 }
 
 interface FilterPreset {
@@ -76,7 +77,8 @@ interface FilterPreset {
 	clusterLensMode: boolean;
 }
 
-const { onopenglobalsimilar, embedded = false }: Props = $props();
+const { onopenglobalsimilar, embedded = false, agentId = "default" }: Props =
+	$props();
 
 // -----------------------------------------------------------------------
 // State
@@ -1000,7 +1002,7 @@ async function initGraph(): Promise<void> {
 async function buildKnowledgeGraph(): Promise<void> {
 	entityOverlayLoading = true;
 	try {
-		const graph = await getConstellationOverlay();
+		const graph = await getConstellationOverlay(agentId);
 		if (!graph) {
 			constellationOverlay = null;
 			return;

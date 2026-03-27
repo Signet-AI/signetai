@@ -129,7 +129,7 @@ const {
 			<Skeleton class="h-64 w-64 rounded-full" />
 		</div>
 	{:then module}
-		<module.default onopenglobalsimilar={onopenglobalsimilar} />
+		<module.default onopenglobalsimilar={onopenglobalsimilar} {agentId} />
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
