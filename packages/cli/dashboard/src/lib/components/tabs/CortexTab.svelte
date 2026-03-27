@@ -6,6 +6,7 @@
 	interface Props {
 		activeTab: TabId;
 		memories: Memory[];
+		agentId: string;
 		memoryStats: MemoryStats;
 		harnesses: Harness[];
 		daemonStatus: DaemonStatus | null;
@@ -16,6 +17,7 @@
 	const {
 		activeTab,
 		memories,
+		agentId,
 		onopenglobalsimilar,
 		ontimelinegeneratedforchange,
 	}: Props = $props();
@@ -24,7 +26,7 @@
 <div class="cortex-tab">
 	{#if activeTab === "cortex-memory"}
 		<div class="cortex-content">
-			<UnifiedMemoryTab {memories} {onopenglobalsimilar} />
+			<UnifiedMemoryTab {memories} {agentId} {onopenglobalsimilar} />
 		</div>
 	{:else if activeTab === "cortex-apps"}
 		<div class="cortex-content">

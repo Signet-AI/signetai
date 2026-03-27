@@ -37,9 +37,10 @@ import { getLocalTimeZone, CalendarDate, type DateValue } from "@internationaliz
 interface Props {
 	memories: Memory[];
 	embedded?: boolean;
+	agentId?: string;
 }
 
-let { memories, embedded = false }: Props = $props();
+let { memories, embedded = false, agentId = "default" }: Props = $props();
 
 // Delete confirmation state - tracks which memory is pending delete confirmation
 let deleteConfirmId = $state<string | null>(null);
@@ -91,6 +92,15 @@ let relatedEntities = $derived.by((): RelatedEntity[] => {
 	const data = graph;
 	const memId = selectedMemory.id;
 	const byId = new Map(data.entities.map((entity) => [entity.id, entity.name]));
+	const relevant = new Set(
+		data.entities
+			.filter((entity) =>
+				entity.aspects.some((aspect) =>
+					aspect.attributes.some((attr) => attr.memoryId === memId),
+				),
+			)
+			.map((entity) => entity.id),
+	);
 
 	return data.entities
 		.map((entity) => {
@@ -117,7 +127,9 @@ let relatedEntities = $derived.by((): RelatedEntity[] => {
 			const deps = data.dependencies
 				.filter(
 					(dep) =>
-						dep.sourceEntityId === entity.id || dep.targetEntityId === entity.id,
+						(dep.sourceEntityId === entity.id || dep.targetEntityId === entity.id) &&
+						relevant.has(dep.sourceEntityId) &&
+						relevant.has(dep.targetEntityId),
 				)
 				.map((dep) => {
 					const from = byId.get(dep.sourceEntityId) ?? dep.sourceEntityId;
@@ -153,7 +165,7 @@ async function ensureGraph(): Promise<void> {
 	graphLoading = true;
 	graphError = "";
 	try {
-		graph = await getConstellationOverlay();
+		graph = await getConstellationOverlay(agentId);
 		if (!graph) graphError = "Ontology overlay unavailable.";
 	} catch (error) {
 		graphError = error instanceof Error ? error.message : "Failed to load ontology overlay.";

@@ -2335,17 +2335,6 @@ export interface ConstellationGraph {
 export function resolveAgentId(agentId?: string): string {
 	const fromArg = agentId?.trim();
 	if (fromArg) return fromArg;
-	if (typeof window === "undefined") return "default";
-	const fromQuery = new URLSearchParams(window.location.search).get("agent_id")?.trim();
-	if (fromQuery) return fromQuery;
-	const fromDom = document.documentElement.dataset.agentId?.trim();
-	if (fromDom) return fromDom;
-	try {
-		const fromStore = window.localStorage.getItem("signet-agent-id")?.trim();
-		if (fromStore) return fromStore;
-	} catch {
-		// ignore
-	}
 	return "default";
 }
 

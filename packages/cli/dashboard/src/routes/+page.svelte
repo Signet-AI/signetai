@@ -47,6 +47,10 @@ import { onMount } from "svelte";
 
 const activeTab = $derived(nav.activeTab);
 const { data } = $props();
+const agentId = $derived.by(() => {
+	if (typeof window === "undefined") return "default";
+	return new URLSearchParams(window.location.search).get("agent_id") ?? "default";
+});
 let daemonStatus = $state<DaemonStatus | null>(null);
 let bannerShowing = $state(false);
 let embeddingsPrefetchPromise: Promise<unknown[]> | null = null;
@@ -272,6 +276,7 @@ $effect(() => {
 				harnesses={data.harnesses}
 				{daemonStatus}
 				{displayMemories}
+				{agentId}
 				onopenglobalsimilar={openGlobalSimilar}
 				ontimelinegeneratedforchange={handleTimelineGeneratedForChange}
 			/>
@@ -305,4 +310,3 @@ $effect(() => {
 		}
 	}
 </style>
-

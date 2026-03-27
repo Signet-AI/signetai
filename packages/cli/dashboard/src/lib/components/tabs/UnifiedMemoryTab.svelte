@@ -6,10 +6,11 @@
 
 	interface Props {
 		memories: Memory[];
+		agentId: string;
 		onopenglobalsimilar: (memory: Memory) => void;
 	}
 
-	const { memories, onopenglobalsimilar }: Props = $props();
+	const { memories, agentId, onopenglobalsimilar }: Props = $props();
 	type Section = "cortex" | "constellation";
 	const SECTION_SET = new Set<string>(["cortex", "constellation"]);
 
@@ -73,7 +74,7 @@
 	<div class="unified-body">
 		{#if section === "cortex"}
 			<div class="unified-main">
-				<MemoryTab {memories} embedded={true} />
+				<MemoryTab {memories} {agentId} embedded={true} />
 			</div>
 		{:else}
 			<div class="unified-main">

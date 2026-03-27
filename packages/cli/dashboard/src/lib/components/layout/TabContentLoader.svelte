@@ -19,6 +19,7 @@ interface Props {
 	harnesses: Harness[];
 	daemonStatus: DaemonStatus | null;
 	displayMemories: Memory[];
+	agentId: string;
 	onopenglobalsimilar: (memory: Memory) => void;
 	ontimelinegeneratedforchange: (value: string) => void;
 }
@@ -31,6 +32,7 @@ const {
 	harnesses,
 	daemonStatus,
 	displayMemories,
+	agentId,
 	onopenglobalsimilar,
 	ontimelinegeneratedforchange,
 }: Props = $props();
@@ -109,7 +111,7 @@ const {
 	{#await import("$lib/components/tabs/MemoryTab.svelte")}
 		{@render skeletonCards()}
 	{:then module}
-		<module.default memories={displayMemories} />
+		<module.default memories={displayMemories} {agentId} />
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
@@ -226,6 +228,7 @@ const {
 		<module.default
 			{activeTab}
 			memories={displayMemories}
+			{agentId}
 			{memoryStats}
 			{harnesses}
 			{daemonStatus}
