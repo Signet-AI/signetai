@@ -201,9 +201,19 @@ static MIGRATIONS: &[Migration] = &[
         name: "dependency-reason",
         sql: include_str!("sql/031-dependency-reason.sql"),
     },
+    Migration {
+        version: 32,
+        name: "session-transcripts",
+        sql: include_str!("sql/032-session-transcripts.sql"),
+    },
+    Migration {
+        version: 33,
+        name: "session-extract-cursors",
+        sql: include_str!("sql/033-session-extract-cursors.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 31;
+pub const LATEST_SCHEMA_VERSION: u32 = 33;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {

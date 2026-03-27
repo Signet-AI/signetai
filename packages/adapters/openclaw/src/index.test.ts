@@ -1320,6 +1320,33 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
+	it("deduplicates turns when messages field absent (legacy OpenClaw)", async () => {
+		// Older OpenClaw builds omit event.messages entirely. When both
+		// before_prompt_build and before_agent_start fire without it, only
+		// one of the two should count as a turn (time-window dedup path).
+		const { api, hooks } = createMockApi();
+		signetPlugin.register(api);
+
+		const beforePromptBuild = hooks.get("before_prompt_build");
+		const beforeAgentStart = hooks.get("before_agent_start");
+		expect(beforePromptBuild).toBeDefined();
+		expect(beforeAgentStart).toBeDefined();
+
+		const ctx = { sessionKey: "legacy-no-messages", agentId: "agent-nm" };
+
+		// Fire 20 full turns: each turn fires both hooks without messages field.
+		// With time-window dedup, each pair counts as 1 turn → 20 turns total.
+		for (let i = 0; i < 20; i++) {
+			await beforePromptBuild?.({ prompt: `Turn ${i + 1}` }, ctx);
+			// Fire before_agent_start immediately after (same turn, within window).
+			await beforeAgentStart?.({ prompt: `Turn ${i + 1}` }, ctx);
+		}
+
+		await Bun.sleep(0);
+		// Exactly 1 checkpoint at turn 20 — no double-counting from the pair.
+		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+	});
+
 	it("does not reregister marketplace proxy tools on refresh", async () => {
 		const { api, tools } = createMockApi();
 		signetPlugin.register(api);

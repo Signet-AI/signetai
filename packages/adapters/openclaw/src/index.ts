@@ -1504,6 +1504,12 @@ const signetPlugin = {
 		// State per scoped session key: turn count, last seen message count (for
 		// dedup), and timestamp (for TTL eviction when agent_end never fires).
 		const checkpointTurns = new Map<string, { count: number; lastMsgCount: number | undefined; at: number }>();
+		// Legacy dedup: when both before_prompt_build and before_agent_start fire
+		// on the same turn but the messages field is absent (older OpenClaw that
+		// predates the messages field), use a flag to ensure only one of the pair
+		// counts. before_prompt_build sets the flag; before_agent_start clears it
+		// and skips checkpoint counting if the flag was set.
+		const bpbFired = new Set<string>();
 
 		const maybeFireCheckpoint = (
 			sessionKey: string | undefined,
@@ -1523,8 +1529,9 @@ const signetPlugin = {
 				checkpointTurns.delete(scopedKey);
 			}
 
-			// Dedup: before_agent_start and before_prompt_build both fire on
-			// the same turn; use message count to skip the duplicate call.
+			// Dedup: before_agent_start and before_prompt_build both fire on the
+			// same turn when both are registered. Use message count when available
+			// (modern OpenClaw). Legacy path relies on bpbFired flag — see below.
 			if (msgCount !== undefined && checkpointTurns.get(scopedKey)?.lastMsgCount === msgCount) return;
 
 			const newCount = (checkpointTurns.get(scopedKey)?.count ?? 0) + 1;
@@ -1778,6 +1785,10 @@ const signetPlugin = {
 				// Count every turn unconditionally — checkpoint should fire based on
 				// conversation progress, not on whether recall injection succeeded.
 				const msgCount = Array.isArray(event.messages) ? event.messages.length : undefined;
+				// Flag for legacy dedup: if bpb and bas both fire without messages,
+				// bas checks this flag and skips its count (cleared atomically by bas).
+				const bpbKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
+				if (bpbKey) bpbFired.add(bpbKey);
 				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
 				return result;
 			},
@@ -1792,7 +1803,13 @@ const signetPlugin = {
 			await ensureSessionStarted(event, resolved.sessionKey, resolved.agentId);
 			const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
 			const msgCount = Array.isArray(event.messages) ? event.messages.length : undefined;
-			maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
+			// When messages absent, check if bpb already counted this turn.
+			// bpbFired.delete() returns true and clears the flag atomically.
+			const basKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
+			const coveredByBpb = basKey ? bpbFired.delete(basKey) : false;
+			if (!coveredByBpb || msgCount !== undefined) {
+				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount);
+			}
 			return result;
 		});
 
@@ -1814,6 +1831,7 @@ const signetPlugin = {
 				claimedSessions.delete(scopedKey);
 				injectedTurns.delete(scopedKey);
 				checkpointTurns.delete(scopedKey);
+				bpbFired.delete(scopedKey);
 			}
 			return undefined;
 		});

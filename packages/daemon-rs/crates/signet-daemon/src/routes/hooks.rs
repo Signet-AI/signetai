@@ -1141,6 +1141,44 @@ pub async fn compaction_complete(
     }
 }
 
+// ---------------------------------------------------------------------------
+// POST /api/hooks/session-checkpoint-extract
+//
+// Mid-session delta extraction for long-lived sessions (Discord bots, etc.)
+// that never call session-end. The TS daemon handles the full implementation;
+// this stub returns {skipped: true} so the shadow-proxy divergence log shows
+// a mismatch rather than a hard error while Rust parity is in progress.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointExtractBody {
+    #[allow(dead_code)]
+    pub harness: Option<String>,
+    #[allow(dead_code)]
+    pub session_key: Option<String>,
+    #[allow(dead_code)]
+    pub agent_id: Option<String>,
+    #[allow(dead_code)]
+    pub project: Option<String>,
+    #[allow(dead_code)]
+    pub transcript: Option<String>,
+    #[allow(dead_code)]
+    pub transcript_path: Option<String>,
+    #[allow(dead_code)]
+    pub runtime_path: Option<String>,
+}
+
+pub async fn session_checkpoint_extract(
+    _state: State<Arc<AppState>>,
+    _headers: HeaderMap,
+    Json(_body): Json<CheckpointExtractBody>,
+) -> axum::response::Response {
+    // Parity stub — full delta extraction is implemented in the TS daemon.
+    // Returns skipped so callers treat this as a no-op rather than an error.
+    (StatusCode::OK, Json(serde_json::json!({"skipped": true}))).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{resolve_compaction_project, strip_untrusted_metadata};
