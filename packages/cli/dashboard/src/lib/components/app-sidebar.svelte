@@ -90,11 +90,18 @@ function handleClick(item: NavItem): void {
 	setTab(item.id);
 }
 
+function focusIdForTab(tab: TabId): SidebarFocusItem {
+	if (tab === "settings") return "settings";
+	if (tab === "changelog") return "github-link";
+	const item = navItems.find((entry) => entry.id === tab);
+	if (item) return item.focusId;
+	return "home";
+}
+
 // Initialize sidebar focus on mount — derive from current active tab
 onMount(() => {
 	if (!focus.sidebarItem) {
-		const item = navItems.find(n => isActive(n));
-		setSidebarItem(item?.focusId ?? "home");
+		setSidebarItem(focusIdForTab(nav.activeTab));
 	}
 });
 

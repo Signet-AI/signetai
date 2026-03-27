@@ -157,9 +157,9 @@ drag-to-resize, transition animations.
 2. Whether identity panel supports split-view editing of two files.
 3. Final placement of OS and Changelog (System group vs footer utility).
 
-## 10) Implemented IA slice (2026-03-26)
+## 10) Implementation notes for planning validation (2026-03-26)
 
-This planning track now has a shipped slice in the dashboard shell:
+Implementation notes observed during planning validation:
 
 - Sidebar now surfaces direct top-level destinations for `Memory`, `Tasks`,
   `Audit`, and `Settings` (with `Cortex` renamed to `Memory` and `Engine`
