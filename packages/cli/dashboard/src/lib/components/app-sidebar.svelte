@@ -86,6 +86,13 @@ function isActive(item: NavItem): boolean {
 }
 
 function handleClick(item: NavItem): void {
+	if (nav.activeTab === item.id && typeof window !== "undefined") {
+		const hash = window.location.hash.replace("#", "");
+		if (hash !== item.id) {
+			window.history.replaceState(null, "", `#${item.id}`);
+		}
+		return;
+	}
 	setTab(item.id);
 }
 
@@ -131,7 +138,7 @@ function handleFooterKeydown(e: KeyboardEvent, item: SidebarFocusItem): void {
 		} else if (item === "theme-toggle") {
 			onthemetoggle();
 		} else if (item === "github-link") {
-			window.open("https://github.com/Signet-AI/signetai", "_blank");
+			openProjectPage();
 		}
 	}
 }
