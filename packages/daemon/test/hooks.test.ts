@@ -2249,14 +2249,13 @@ describe("handleCheckpointExtract", () => {
 		expect(row?.len).toBe(full.length);
 	});
 
-	test.serial("rejects transcriptPath outside homedir", () => {
+	test.serial("skips when transcriptPath does not exist", () => {
 		createMemoryDb([]);
 
-		// /etc/hostname is outside homedir — should be rejected, fall through to no transcript
 		const result = handleCheckpointExtract({
 			harness: "test",
-			sessionKey: "ckpt-pathguard",
-			transcriptPath: "/etc/hostname",
+			sessionKey: "ckpt-nopath",
+			transcriptPath: "/nonexistent/path/transcript.jsonl",
 		});
 
 		expect(result.skipped).toBe(true);

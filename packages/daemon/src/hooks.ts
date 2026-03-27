@@ -2890,33 +2890,21 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		return { skipped: true };
 	}
 
-	// Read transcript: prefer inline body, then file path, then stored transcript
+	// Read transcript: prefer inline body, then file path, then stored transcript.
+	// transcriptPath is trusted the same way as in handleSessionEnd and
+	// handleUserPromptSubmit — OpenClaw session files are written by the same
+	// user process as the daemon and may be anywhere (project dirs, /tmp,
+	// containers). Protection at the network level is the global auth middleware.
 	let transcript = "";
 	let fromStore = false;
 	if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	} else if (req.transcriptPath && existsSync(req.transcriptPath)) {
-		// Validate the path is within the user's home directory before reading.
-		// transcriptPath comes from an external request body; guard against
-		// local file-read via path traversal or absolute paths to system files.
-		let real: string | undefined;
 		try {
-			real = realpathSync(req.transcriptPath);
+			const raw = readFileSync(req.transcriptPath, "utf-8");
+			transcript = normalizeSessionTranscript(req.harness, raw);
 		} catch {
-			real = undefined;
-		}
-		const home = homedir();
-		if (real && (real.startsWith(`${home}/`) || real === home)) {
-			try {
-				const raw = readFileSync(real, "utf-8");
-				transcript = normalizeSessionTranscript(req.harness, raw);
-			} catch {
-				logger.warn("hooks", "Could not read checkpoint transcript", {
-					path: req.transcriptPath,
-				});
-			}
-		} else {
-			logger.warn("hooks", "Checkpoint transcript path outside home dir — skipped", {
+			logger.warn("hooks", "Could not read checkpoint transcript", {
 				path: req.transcriptPath,
 			});
 		}
@@ -2973,8 +2961,11 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	// session-end, we do NOT release the session claim.
 	//
 	// Note: consumeState/initContinuity are session-key-scoped (not agentId-
-	// scoped) — matching the same design in handleSessionEnd. agentId is only
-	// used for cursor dedup in session_extract_cursors.
+	// scoped) — matching the same design in handleSessionEnd. In the OpenClaw
+	// multi-agent model each agent run always has a unique session key, so
+	// session-key scoping is sufficient in practice. agentId is used for
+	// cursor and transcript dedup in session_extract_cursors /
+	// session_transcripts, where it matters for correct per-agent scoping.
 	try {
 		const snap = consumeState(req.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {

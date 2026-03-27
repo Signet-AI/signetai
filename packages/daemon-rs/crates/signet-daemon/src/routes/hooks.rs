@@ -1243,21 +1243,10 @@ pub async fn session_checkpoint_extract(
         })
     };
     let inline = body.transcript.clone();
-    // Validate transcript_path is within the user's home directory before
-    // reading. Mirrors the TS daemon guard added for this same attack surface.
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default();
-    let tpath: Option<String> = body.transcript_path.as_deref().and_then(|p| {
-        let real = std::fs::canonicalize(p).ok()?;
-        let real_s = real.to_string_lossy();
-        if !home.is_empty() && (real_s.starts_with(&format!("{home}/")) || real_s == home) {
-            Some(p.to_string())
-        } else {
-            tracing::warn!(path = p, "checkpoint transcript_path outside home dir — skipped");
-            None
-        }
-    });
+    // transcript_path is trusted the same way as in session_end — OpenClaw
+    // session files may be anywhere (project dirs, /tmp, containers). Auth
+    // middleware provides network-level protection. Mirrors TS daemon behavior.
+    let tpath = body.transcript_path.clone();
     let sk = session_key.clone();
     let aid = agent_id.clone();
 
