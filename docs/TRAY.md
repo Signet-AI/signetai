@@ -78,8 +78,9 @@ daemon sidecar (`signet-daemon*`) shipped with the desktop app.
 **Linux process management:**
 
 Start order: check for `~/.config/systemd/user/signet.service` — if
-present, use `systemctl --user start signet`. Otherwise: locate bun
-binary → locate `signet-daemon` → fall back to the globally installed `signet daemon start`.
+present, use `systemctl --user start signet`. Otherwise: try installed
+`signet daemon start` first, then Bun-driven fallbacks
+(`signet-daemon`, `daemon.js`, `bun x signetai daemon start`).
 
 Stop: send SIGTERM, poll at 100ms intervals up to 3 seconds, then clean
 up the PID file.
