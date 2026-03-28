@@ -235,7 +235,7 @@ jobs:
               /f "$certPath" `
               /p "$env:WINDOWS_CERTIFICATE_PASSWORD" `
               /fd SHA256 `
-              /tr "http://timestamp.digicert.com" `
+              /tr "https://timestamp.digicert.com" `
               /td SHA256 `
               "$($msi.FullName)"
 
