@@ -6,7 +6,9 @@
 	"scripts": {
 		"build:dashboard": "cd ../cli/dashboard && bun run build",
 		"build:ts": "node build-ts.mjs",
+		"build:daemon": "cargo build --manifest-path ../daemon-rs/Cargo.toml --release -p signet-daemon",
 		"stage:daemon": "node scripts/stage-daemon.mjs",
+		"build:desktop": "bun run build:daemon && bun run stage:daemon && bun run build",
 		"dev": "tauri dev",
 		"build": "tauri build",
 		"tauri": "tauri"

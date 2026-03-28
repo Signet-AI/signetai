@@ -827,7 +827,7 @@ specs:
       - docs/research/technical/RESEARCH-DESKTOP-PACKAGING-DISTRIBUTION.md
     success_criteria:
       - "Desktop release CI produces installable artifacts for macOS, Windows, Ubuntu, and Arch deliverables from one contract"
-      - "Tray runtime prefers bundled daemon binaries before system-installed fallbacks"
+      - "Tray runtime can launch bundled daemon binaries as a fallback when system-installed runtimes are unavailable"
       - "Ubuntu outputs include both .deb and .AppImage artifacts per release"
       - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
       - "Desktop release jobs enforce signing preflight checks before publish"

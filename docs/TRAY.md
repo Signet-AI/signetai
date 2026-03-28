@@ -70,10 +70,10 @@ Eleven Tauri commands are registered:
 A `DaemonManager` platform trait abstracts start/stop/is_running.
 All three platform managers are implemented.
 
-Start order prefers a bundled daemon sidecar (`signet-daemon*`) shipped
-with the desktop app. If no bundled runtime is found, each platform
-falls back to existing system-installed paths (`signet`, `signet-daemon`,
-or Bun+daemon script) for compatibility.
+Start order prefers existing system-installed runtimes (`signet`,
+`signet-daemon`, or Bun+daemon script) for parity with current installs.
+If no system runtime is available, the tray falls back to a bundled
+daemon sidecar (`signet-daemon*`) shipped with the desktop app.
 
 **Linux process management:**
 
@@ -125,6 +125,9 @@ TypeScript is compiled with `bun build --target browser` (output to
 `dist/`). Tauri reads from `dist/` as configured in `tauri.conf.json`.
 Before packaging, a staged daemon sidecar is copied to
 `src-tauri/binaries/` and bundled into the desktop artifact.
+The bundled sidecar currently comes from `packages/daemon-rs` (shadow
+rewrite) and is treated as a compatibility fallback, not the primary
+runtime path.
 
 The tray build is independent of the monorepo root `bun run build`.
 
@@ -137,10 +140,13 @@ bun install
 # 2. Build TypeScript frontend (runs automatically as beforeBuildCommand)
 bun run build:ts
 
-# 3. Stage daemon sidecar (target-aware)
+# 3. Build daemon sidecar binary (host target by default)
+bun run build:daemon
+
+# 4. Stage daemon sidecar (target-aware)
 bun run stage:daemon
 
-# 4. Build the Tauri app
+# 5. Build the Tauri app
 bun tauri build
 ```
 
