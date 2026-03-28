@@ -147,6 +147,7 @@ import {
 	stopPipeline,
 } from "./pipeline";
 import { clusterEntities } from "./pipeline/community-detection";
+import { deadLetterExtractionJob, deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import { linkMemoryToEntities } from "./inline-entity-linker";
@@ -436,6 +437,12 @@ interface ProviderRuntimeResolution {
 		configured: string | null;
 		resolved: RuntimeProviderName;
 		effective: RuntimeProviderName;
+		fallbackProvider: "ollama" | "none";
+		status: "active" | "degraded" | "blocked" | "disabled" | "paused";
+		degraded: boolean;
+		fallbackApplied: boolean;
+		reason: string | null;
+		since: string | null;
 	};
 	synthesis: {
 		configured: string | null;
@@ -449,6 +456,12 @@ const providerRuntimeResolution: ProviderRuntimeResolution = {
 		configured: null,
 		resolved: "claude-code",
 		effective: "claude-code",
+		fallbackProvider: "ollama",
+		status: "active",
+		degraded: false,
+		fallbackApplied: false,
+		reason: null,
+		since: null,
 	},
 	synthesis: {
 		configured: null,
@@ -461,6 +474,18 @@ const providerRuntimeResolution: ProviderRuntimeResolution = {
 const providerTracker = createProviderTracker();
 const analyticsCollector = createAnalyticsCollector();
 const repairLimiter = createRateLimiter();
+
+function queueExtractionJob(memoryId: string): void {
+	if (providerRuntimeResolution.extraction.status === "blocked") {
+		deadLetterExtractionJob(getDbAccessor(), memoryId, {
+			reason:
+				providerRuntimeResolution.extraction.reason ??
+				"Configured extraction provider unavailable at startup",
+		});
+		return;
+	}
+	enqueueExtractionJob(getDbAccessor(), memoryId);
+}
 
 // Telemetry — assigned in main(), read by cleanup()
 let telemetryRef: TelemetryCollector | undefined;
@@ -2962,7 +2987,7 @@ app.post("/api/memory/remember", async (c) => {
 				// Enqueue pipeline extraction if enabled
 				if (pipelineEnqueueEnabled) {
 					try {
-						enqueueExtractionJob(getDbAccessor(), chunkId);
+						queueExtractionJob(chunkId);
 					} catch (e) {
 						logger.warn("pipeline", "Failed to enqueue chunk extraction", {
 							chunkId,
@@ -3270,7 +3295,7 @@ app.post("/api/memory/remember", async (c) => {
 		// Enqueue pipeline extraction if enabled
 		if (pipelineEnqueueEnabled) {
 			try {
-				enqueueExtractionJob(getDbAccessor(), id);
+				queueExtractionJob(id);
 			} catch (e) {
 				getDbAccessor().withWriteTx((db) => {
 					db.prepare(
@@ -7509,6 +7534,8 @@ app.get("/api/tasks/:id/runs", (c) => {
 
 app.get("/api/status", (c) => {
 	const config = loadMemoryConfig(AGENTS_DIR);
+	const workerStatus = getPipelineWorkerStatus();
+	const extractionWorker = workerStatus.extraction;
 	const configuredLogFile = readEnvTrimmed("SIGNET_LOG_FILE");
 	const configuredLogDir = readEnvTrimmed("SIGNET_LOG_DIR") ?? LOG_DIR;
 	const datedLogFile = join(configuredLogDir, `signet-${new Date().toISOString().slice(0, 10)}.log`);
@@ -7553,6 +7580,17 @@ app.get("/api/status", (c) => {
 		agentsDir: AGENTS_DIR,
 		memoryDb: existsSync(MEMORY_DB),
 		pipelineV2: config.pipelineV2,
+		pipeline: {
+			extraction: {
+				running: extractionWorker.running,
+				overloaded: extractionWorker.stats?.overloaded ?? false,
+				loadPerCpu: extractionWorker.stats?.loadPerCpu ?? null,
+				maxLoadPerCpu: extractionWorker.stats?.maxLoadPerCpu ?? null,
+				overloadBackoffMs: extractionWorker.stats?.overloadBackoffMs ?? null,
+				overloadSince: extractionWorker.stats?.overloadSince ?? null,
+				nextTickInMs: extractionWorker.stats?.nextTickInMs ?? null,
+			},
+		},
 		providerResolution: providerRuntimeResolution,
 		logging: {
 			logDir: configuredLogFile ? dirname(configuredLogFile) : configuredLogDir,
@@ -11374,6 +11412,12 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		configured: providerHints.extraction,
 		resolved: memoryCfg.pipelineV2.extraction.provider,
 		effective: memoryCfg.pipelineV2.extraction.provider,
+		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider,
+		status: "active",
+		degraded: false,
+		fallbackApplied: false,
+		reason: null,
+		since: null,
 	};
 	providerRuntimeResolution.synthesis = {
 		configured: providerHints.synthesis,
@@ -11397,9 +11441,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		});
 	}
 
-	// Auto-detect extraction provider: verify the configured provider is
-	// available, falling back to ollama with a warning if not.
+	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider;
 	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
+	let extractionStatus: "active" | "degraded" | "blocked" | "disabled" | "paused" = "active";
+	let extractionDegraded = false;
+	let extractionFallbackApplied = false;
+	let extractionReason: string | null = null;
+	let extractionSince: string | null = null;
 	const extractionOllamaBaseUrl = normalizeRuntimeBaseUrl(
 		memoryCfg.pipelineV2.extraction.endpoint,
 		"http://127.0.0.1:11434",
@@ -11416,19 +11464,36 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	);
 	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
 	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(extractionOpenCodeBaseUrl);
+
+	const markExtractionUnavailable = (reason: string): void => {
+		extractionReason = reason;
+		extractionSince = new Date().toISOString();
+		extractionDegraded = true;
+		if (extractionFallbackProvider === "ollama" && effectiveExtractionProvider !== "ollama") {
+			effectiveExtractionProvider = "ollama";
+			extractionStatus = "degraded";
+			extractionFallbackApplied = true;
+			return;
+		}
+		effectiveExtractionProvider = "none";
+		extractionStatus = "blocked";
+		extractionFallbackApplied = false;
+	};
+
 	if (pipelinePaused) {
 		logger.info("config", "Pipeline paused; extraction provider startup deferred");
 		effectiveExtractionProvider = "none";
+		extractionStatus = "paused";
 	} else if (effectiveExtractionProvider === "none") {
 		logger.info("config", "Extraction provider set to 'none', pipeline LLM disabled");
+		extractionStatus = "disabled";
 	} else if (effectiveExtractionProvider === "command") {
 		logger.info("config", "Extraction provider set to 'command'; summary worker will execute pipelineV2.extraction.command");
 	} else if (effectiveExtractionProvider === "opencode") {
 		if (extractionOpenCodeShouldManage) {
 			const serverReady = await ensureOpenCodeServer(4096);
 			if (!serverReady) {
-				logger.warn("config", "OpenCode server not available, falling back to ollama for extraction");
-				effectiveExtractionProvider = "ollama";
+				markExtractionUnavailable("OpenCode server not available for extraction startup preflight");
 			}
 		} else {
 			logger.info("config", "Using external OpenCode endpoint for extraction", {
@@ -11439,8 +11504,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		// Resolve full path so .cmd wrappers on Windows are found correctly.
 		const resolvedClaude = Bun.which("claude");
 		if (resolvedClaude === null) {
-			logger.warn("config", "Claude Code CLI not found, falling back to ollama for extraction");
-			effectiveExtractionProvider = "ollama";
+			markExtractionUnavailable("Claude Code CLI not found during extraction startup preflight");
 		} else {
 			try {
 				const exitCode = await new Promise<number>((resolve) => {
@@ -11454,15 +11518,13 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				});
 				if (exitCode !== 0) throw new Error("non-zero exit");
 			} catch {
-				logger.warn("config", "Claude Code CLI not found, falling back to ollama for extraction");
-				effectiveExtractionProvider = "ollama";
+				markExtractionUnavailable("Claude Code CLI failed extraction startup preflight");
 			}
 		}
 	} else if (effectiveExtractionProvider === "codex") {
 		const resolvedCodex = Bun.which("codex");
 		if (resolvedCodex === null) {
-			logger.warn("config", "Codex CLI not found, falling back to ollama for extraction");
-			effectiveExtractionProvider = "ollama";
+			markExtractionUnavailable("Codex CLI not found during extraction startup preflight");
 		} else {
 			try {
 				const exitCode = await new Promise<number>((resolve) => {
@@ -11480,8 +11542,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				});
 				if (exitCode !== 0) throw new Error("non-zero exit");
 			} catch {
-				logger.warn("config", "Codex CLI not found, falling back to ollama for extraction");
-				effectiveExtractionProvider = "ollama";
+				markExtractionUnavailable("Codex CLI failed extraction startup preflight");
 			}
 		}
 	}
@@ -11512,7 +11573,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				"ANTHROPIC_API_KEY not found — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
 			);
 			if (effectiveExtractionProvider === "anthropic") {
-				effectiveExtractionProvider = "ollama";
+				markExtractionUnavailable("ANTHROPIC_API_KEY not found for extraction startup preflight");
 			}
 		}
 	}
@@ -11529,36 +11590,143 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				"OPENROUTER_API_KEY not found — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
 			);
 			if (effectiveExtractionProvider === "openrouter") {
-				effectiveExtractionProvider = "ollama";
+				markExtractionUnavailable("OPENROUTER_API_KEY not found for extraction startup preflight");
 			}
 		}
 	}
 
-	// When falling back to ollama, reset model so ollama uses its own default
-	// instead of inheriting an anthropic-specific alias like "haiku".
+	const createExtractionProvider = (provider: RuntimeProviderName) => {
+		const model = resolveRuntimeModel(
+			provider,
+			memoryCfg.pipelineV2.extraction.provider,
+			memoryCfg.pipelineV2.extraction.model,
+		);
+		const usingExtractionOllamaFallback =
+			provider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama";
+		if (provider === "none") return null;
+		if (provider === "anthropic") {
+			if (!anthropicApiKey) return null;
+			return createAnthropicProvider({
+				model: model || "haiku",
+				apiKey: anthropicApiKey,
+				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+			});
+		}
+		if (provider === "openrouter") {
+			if (!openRouterApiKey) return null;
+			return createOpenRouterProvider({
+				model: model || "openai/gpt-4o-mini",
+				apiKey: openRouterApiKey,
+				baseUrl: extractionOpenRouterBaseUrl,
+				referer: readEnvTrimmed("OPENROUTER_HTTP_REFERER"),
+				title: readEnvTrimmed("OPENROUTER_TITLE"),
+				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+			});
+		}
+		if (provider === "opencode") {
+			return createOpenCodeProvider({
+				model: model || "anthropic/claude-haiku-4-5-20251001",
+				baseUrl: extractionOpenCodeBaseUrl,
+				ollamaFallbackBaseUrl: extractionOllamaFallbackBaseUrl,
+				ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
+				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+			});
+		}
+		if (provider === "claude-code") {
+			return createClaudeCodeProvider({
+				model: model || "haiku",
+				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+			});
+		}
+		if (provider === "codex") {
+			return createCodexProvider({
+				model: model || "gpt-5-codex-mini",
+				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+			});
+		}
+		return createOllamaProvider({
+			...(model ? { model } : {}),
+			baseUrl: extractionOllamaFallbackBaseUrl,
+			defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+			...(usingExtractionOllamaFallback
+				? {
+						maxContextTokens: ollamaFallbackMaxContextTokens,
+					}
+				: {}),
+		});
+	};
+
+	let llmProvider = createExtractionProvider(effectiveExtractionProvider);
+	if (llmProvider) {
+		const preflightOk = await llmProvider.available();
+		if (!preflightOk) {
+			const failedProvider = effectiveExtractionProvider;
+			const failedReason =
+				extractionReason ?? `Extraction provider ${failedProvider} failed startup preflight`;
+			if (failedProvider !== "ollama" && extractionFallbackProvider === "ollama") {
+				extractionReason = failedReason;
+				extractionSince = extractionSince ?? new Date().toISOString();
+				extractionDegraded = true;
+				extractionFallbackApplied = true;
+				extractionStatus = "degraded";
+				effectiveExtractionProvider = "ollama";
+				llmProvider = createExtractionProvider("ollama");
+				if (!llmProvider || !(await llmProvider.available())) {
+					effectiveExtractionProvider = "none";
+					extractionStatus = "blocked";
+					extractionFallbackApplied = false;
+					extractionReason = `${failedReason}; ollama fallback startup preflight failed`;
+					llmProvider = null;
+				}
+			} else {
+				effectiveExtractionProvider = "none";
+				extractionStatus = "blocked";
+				extractionDegraded = true;
+				extractionFallbackApplied = false;
+				extractionReason =
+					extractionFallbackProvider === "none"
+						? `${failedReason}; fallbackProvider is none`
+						: failedReason;
+				extractionSince = extractionSince ?? new Date().toISOString();
+				llmProvider = null;
+			}
+		}
+	}
+
 	const effectiveExtractionModel = resolveRuntimeModel(
 		effectiveExtractionProvider,
 		memoryCfg.pipelineV2.extraction.provider,
 		memoryCfg.pipelineV2.extraction.model,
 	);
-	const usingExtractionOllamaFallback =
-		effectiveExtractionProvider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama";
 	providerRuntimeResolution.extraction = {
 		configured: providerHints.extraction,
 		resolved: memoryCfg.pipelineV2.extraction.provider,
 		effective: effectiveExtractionProvider,
+		fallbackProvider: extractionFallbackProvider,
+		status: extractionStatus,
+		degraded: extractionDegraded,
+		fallbackApplied: extractionFallbackApplied,
+		reason: extractionReason,
+		since: extractionSince,
 	};
 	if (providerHints.extraction && providerHints.extraction !== effectiveExtractionProvider) {
 		logger.warn("config", "Extraction provider resolved differently than configured", {
 			configured: providerHints.extraction,
 			resolved: memoryCfg.pipelineV2.extraction.provider,
 			effective: effectiveExtractionProvider,
+			fallbackProvider: extractionFallbackProvider,
+			status: extractionStatus,
+			reason: extractionReason,
 		});
 	}
 	logger.info("config", "Extraction provider", {
 		configured: providerHints.extraction,
 		resolved: memoryCfg.pipelineV2.extraction.provider,
 		effective: effectiveExtractionProvider,
+		fallbackProvider: extractionFallbackProvider,
+		status: extractionStatus,
+		degraded: extractionDegraded,
+		reason: extractionReason,
 		endpoint: redactUrlForLogs(
 			effectiveExtractionProvider === "ollama"
 				? extractionOllamaFallbackBaseUrl
@@ -11566,11 +11734,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					? extractionOpenCodeBaseUrl
 					: effectiveExtractionProvider === "openrouter"
 						? extractionOpenRouterBaseUrl
-				: undefined,
+						: undefined,
 		),
 	});
-	const extractionModelName =
-		effectiveExtractionModel ?? memoryCfg.pipelineV2.extraction.model;
+	const extractionModelName = effectiveExtractionModel ?? memoryCfg.pipelineV2.extraction.model;
 	if (
 		effectiveExtractionProvider === "anthropic" ||
 		effectiveExtractionProvider === "openrouter" ||
@@ -11612,52 +11779,23 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		);
 	}
 
-	// Create LLM provider once, register as daemon-wide singleton
-	const llmProvider = effectiveExtractionProvider === "none"
-		? null
-		: effectiveExtractionProvider === "anthropic" && anthropicApiKey
-			? createAnthropicProvider({
-					model: effectiveExtractionModel || "haiku",
-					apiKey: anthropicApiKey,
-					defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-				})
-			: effectiveExtractionProvider === "openrouter" && openRouterApiKey
-				? createOpenRouterProvider({
-						model: effectiveExtractionModel || "openai/gpt-4o-mini",
-						apiKey: openRouterApiKey,
-						baseUrl: extractionOpenRouterBaseUrl,
-						referer: readEnvTrimmed("OPENROUTER_HTTP_REFERER"),
-						title: readEnvTrimmed("OPENROUTER_TITLE"),
-						defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-					})
-				: effectiveExtractionProvider === "opencode"
-					? createOpenCodeProvider({
-							model: effectiveExtractionModel || "anthropic/claude-haiku-4-5-20251001",
-							baseUrl: extractionOpenCodeBaseUrl,
-							ollamaFallbackBaseUrl: extractionOllamaFallbackBaseUrl,
-							ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
-							defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-						})
-					: effectiveExtractionProvider === "claude-code"
-						? createClaudeCodeProvider({
-								model: effectiveExtractionModel || "haiku",
-								defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-							})
-						: effectiveExtractionProvider === "codex"
-							? createCodexProvider({
-									model: effectiveExtractionModel || "gpt-5-codex-mini",
-									defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-								})
-							: createOllamaProvider({
-									...(effectiveExtractionModel ? { model: effectiveExtractionModel } : {}),
-									baseUrl: extractionOllamaFallbackBaseUrl,
-									defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-									...(usingExtractionOllamaFallback
-										? {
-												maxContextTokens: ollamaFallbackMaxContextTokens,
-											}
-										: {}),
-								});
+	const startupExtractionBlocked = extractionStatus === "blocked" && extractionReason !== null;
+	if (startupExtractionBlocked && !llmProvider) {
+		const blockedReason = extractionReason ?? "Extraction provider unavailable during startup preflight";
+		// Startup preflight blocked extraction with no viable provider.
+		// Dead-letter any already-pending extraction jobs so they do not
+		// remain silently pending after boot.
+		const deadLettered = deadLetterPendingExtractionJobs(getDbAccessor(), {
+			reason: blockedReason,
+			extractionModel: effectiveExtractionModel || undefined,
+		});
+		if (deadLettered > 0) {
+			logger.warn("pipeline", "Dead-lettered pending extraction jobs at startup", {
+				count: deadLettered,
+				reason: blockedReason,
+			});
+		}
+	}
 	if (llmProvider) {
 		initLlmProvider(llmProvider);
 	}

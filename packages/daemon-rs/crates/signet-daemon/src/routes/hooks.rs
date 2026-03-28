@@ -708,7 +708,10 @@ pub async fn session_end(
     state.dedup.clear_session_start(&sk);
     state.dedup.clear(&sk);
 
-    // TODO: Phase 5 — transcript extraction, summary worker queueing
+    // NOTE: transcript extraction enqueue is not implemented in daemon-rs yet
+    // (Phase 5). This route currently performs checkpoint/session cleanup only.
+    // When transcript extraction is added here, it MUST check
+    // state.is_extraction_blocked() and dead-letter blocked work.
 
     (
         StatusCode::OK,

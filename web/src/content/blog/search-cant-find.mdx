@@ -1,0 +1,141 @@
+---
+title: "Search Can't Find What It Doesn't Know to Look For"
+description: "The MemAware benchmark proved RAG-based memory fails on implicit cross-domain context. The fix isn't better search. It's better indexing, graph traversal, and knowing what to keep raw versus what to distill."
+date: 2026-03-28
+author: "Nicholai & Mr. Claude"
+tags: ["architecture", "benchmarks", "memory", "knowledge-graph", "retrieval"]
+image: /blog/search-cant-find.png
+---
+
+Your car needs an air filter. You mentioned three months ago, in a completely different conversation, that you have a Target loyalty card. A useful memory system should connect those facts. Not because they share keywords, but because they share a person.
+
+The MemAware benchmark tested exactly this kind of implicit recall. Nine hundred questions across three difficulty tiers, each designed to probe whether an agent can surface relevant past context when the user never directly asks for it. The easy tier has some keyword overlap between the query and the stored memory. The medium tier shares a domain but not the vocabulary. The hard tier has nothing in common at all.
+
+Results with BM25 plus vector search: 6% on easy, 3.7% on medium, 0.7% on hard. That last number is statistically indistinguishable from having no memory at all.
+
+The hard tier is the one worth sitting with. "Ford Mustang needs an air filter, where can I use my loyalty discounts?" should surface the fact that the user shops at Target. But there is no search query that connects car maintenance to grocery store loyalty programs. The vocabulary gap is total. Every retrieval-based system tested scored at chance level on these questions.
+
+This is not a retrieval algorithm problem. It is a knowledge architecture problem.
+
+## The Discussion That Got Close
+
+A Reddit thread about MemAware surfaced several interesting approaches to this failure mode. The ideas were good, and they weren't competing with each other. They were addressing different layers of the same problem.
+
+Always-loaded working memory: instead of searching per-query, maintain a compressed summary that's always in the context window. This sidesteps the search problem entirely for high-importance facts. The tradeoff is budget. You can't load everything, so you need to decide what earns a permanent seat.
+
+Knowledge graphs with entity relationships: if "user shops at Target" and "user has a Ford Mustang" are separate memories but Target and the user are linked entities, graph traversal can surface connections that text search never will. The car maintenance to loyalty discount path becomes an entity hop, not a retrieval problem.
+
+Predictive scoring: pre-rank memories based on session context, recency, and access patterns before the user says anything. By the time the query arrives, the system has already estimated what's likely relevant.
+
+One commenter framed it as building an "external attention layer," decoupled relevance scoring that doesn't depend on the query at all. Another pushed back with the bitter lesson: hand-engineering graph topology might not survive at scale. Both points are real. The graph is only useful if the structure is learned from actual use, not designed by someone guessing what connections might matter.
+
+The thread converged on something important: search and memory are not the same thing. Retrieval is one mechanism. Memory is the whole system.
+
+## Write Time Is the Real Bottleneck
+
+Most discussions about agent memory focus on retrieval. How do you find the right fact? How do you rank candidates? How do you handle contradictions at query time? These are real questions, but the MemAware failure exposes something upstream of all of them.
+
+If the Target loyalty card fact was never indexed in a way that connects it to "discounts" or "shopping" or the user's broader entity graph, no retrieval algorithm on earth will find it. The problem is not that search failed. The problem is that the information was never made findable.
+
+This is why the write pipeline matters more than the read pipeline for cross-domain recall. What happens when a memory enters the system determines what can be retrieved later.
+
+In Signet, the write pipeline runs outside the conversation. The agent never pauses, never calls a memory tool, never says "let me save that." Sessions are processed asynchronously after they end by a local LLM (currently qwen3:4b) that extracts facts, evaluates them against existing knowledge, and makes a decision for each one: add, update, delete, or skip.
+
+The extraction refinery distills raw session content through progressive stages, from sparse observations to atomic facts, the form where a single statement captures a complete, self-contained piece of knowledge. We covered this in detail in [[blog/knowledge-architecture|The Database Knows What You Did Last Summer]]. The critical design principle for this post is simpler:
+
+**Distillation is additive. It never destroys the layer below.**
+
+The raw transcript is always preserved. The distilled facts are what make it findable. If extraction misses something, and it will, the raw data is still there. This is the first half of the answer to "what gets distilled vs kept raw": everything gets kept raw. Distillation adds structure on top.
+
+But extraction alone does not solve the MemAware problem. The Target loyalty card becomes an atomic fact. It gets linked to the user entity. That's necessary but not sufficient. The question is whether the system can find it when the query is about car maintenance.
+
+## Conflicting Facts Block by Default
+
+The second half of the original question was about conflicting facts over time. How does the system handle it when a new fact contradicts an old one?
+
+The design choice here is deliberate: contradictions block updates by default. The system does not silently overwrite.
+
+When the decision engine proposes an update to an existing memory, two layers of conflict detection run. The fast path is syntactic, zero LLM cost. It tokenizes both facts and checks for three signals: negation polarity flip ("uses PostgreSQL" vs "does not use PostgreSQL"), antonym pair conflict (enabled/disabled, always/never, allow/deny), and value conflict where the same verb has different objects ("uses PostgreSQL" vs "migrated to MongoDB"). Each signal carries a confidence score.
+
+If the fast path returns clean but the two facts share three or more tokens (suggesting they're about the same subject), the slow path fires. An LLM evaluates whether the statements are semantically contradictory. "The API uses REST" vs "the endpoint returns JSON" is not a contradiction, just complementary information. "Dark mode is the default" vs "light mode is the default" is a contradiction. The model distinguishes these with worked examples in the prompt.
+
+When a contradiction is detected with confidence above the threshold, the update is blocked and flagged for review. The newer fact does not silently win. This is a deliberate choice. Silent supersession causes the kind of subtle data corruption that is nearly impossible to debug later. You end up with an agent that confidently acts on stale or incorrect information because the correction happened invisibly.
+
+When supersession does happen, whether through temporal rules (newer fact with explicit temporal markers like "now," "currently," "no longer") or explicit approval, the older fact is archived to a cold tier before anything changes. Soft delete, not hard delete. The cold archive has a 180-day retention floor. Nothing is truly lost, it just decays in visibility.
+
+```
+update proposal arrives
+  -> tokenize both statements
+  -> check negation polarity      (fast, 0 LLM cost)
+  -> check antonym pairs          (fast, 0 LLM cost)
+  -> if fast path clean AND token overlap >= 3:
+       -> semantic contradiction   (slow, 1 LLM call)
+  -> if contradiction detected:
+       -> BLOCK, flag for review
+  -> if clean:
+       -> archive old fact to cold tier
+       -> apply update with audit trail
+```
+
+The practical effect is that the system is conservative with destructive mutations. It adds freely, updates cautiously, and deletes only with a full audit trail and a recoverable archive. Over time, the database gets more correct, not less, because contradictions are caught at write time instead of propagating silently.
+
+## Three Tiers of Knowing
+
+The Reddit discussion surfaced a real tension: always-loaded context vs per-query retrieval. Several commenters noted that pre-loading a compressed summary avoids the search problem entirely. Others pointed out that you can't fit everything into context. Both are right. The answer is a tiered model where different kinds of knowledge live at different levels of proximity to the agent.
+
+The first tier is the global head. It is always loaded, always present, injected at the start of every session. This is a compressed summary of the most important active knowledge, rendered from the scored database state by a synthesis worker that fires after idle gaps. It contains active projects, blocking constraints, open decisions, key relationships. If the Target loyalty card is important enough to the user's daily life, it lives here. No search required.
+
+The global head is not a flat transcript dump. It is decay-aware. Importance decays at roughly 5% per day since last access. Accessing a memory through recall resets the timer. Pinned memories (constraints, critical decisions) are exempt from decay entirely. The synthesis worker re-renders the head periodically, so the always-loaded context stays current and concise.
+
+The second tier is thread heads: per-topic rolling summaries. These track the state of individual projects, relationships, or conversational lanes. Sessions condense into arcs (after roughly eight sessions on the same topic), arcs condense into epochs (after four or more arcs). Each level of condensation drops more transient detail but preserves architectural facts, constraints, and direction changes. The agent has structured access to project-level context without searching the full database.
+
+The third tier is the lossless lineage. Raw transcripts, session summaries, compaction artifacts, the full temporal DAG. This is the insurance policy. It is not injected into sessions by default. It is accessible on demand, when the agent needs to drill down into the history behind a summary or recover something extraction missed. The retention floor is 180 days before any hard deletion, and even then, the data archives to cold storage first.
+
+The principle: distillation flows upward but never destroys the layer below. The global head is a compressed view of thread heads. Thread heads are compressed views of session summaries. Session summaries are compressed views of raw transcripts. At every tier, the layer beneath is intact. You can always trace a summary back to the conversation that produced it.
+
+A significance gate sits at the entry point. Three independent signals, turn count, entity overlap, and content novelty, determine whether a session is worth sending through the LLM summarization pipeline. All three must indicate low significance to skip. If a session is trivial (fewer than five substantive exchanges, no known entities referenced, no novel content), extraction is skipped entirely. But the raw transcript is still preserved. Zero-cost continuity: the system is invisible when it has nothing to contribute, but it never throws data away.
+
+## Making Cross-Domain Connections Findable
+
+This is where the MemAware hard tier gets addressed directly. Two mechanisms work together to bridge the semantic gap between how information is stored and how it is later needed.
+
+The first is graph traversal. Signet's [[blog/knowledge-architecture|knowledge graph]] organizes facts under entities, with typed aspects, attributes, and explicit dependency edges. When a query activates an entity, the system can walk to related entities through those edges. The user entity connects to both a vehicles aspect (Ford Mustang, maintenance history) and a shopping aspect (Target loyalty card, discount programs). The connection between car maintenance and loyalty discounts is not a retrieval match. It is a structural path through the graph, two hops from the same root entity.
+
+We call this concept [[docs/desire-paths|desire paths]]. The paths people actually walk get worn into the ground. Pave those. Over time, traversal routes that produce useful context get reinforced. Routes that lead to noise get deprioritized. The graph develops a learned topology based on actual use patterns, not a static schema someone designed up front.
+
+```
+query: "Ford Mustang needs air filter, where can I
+        use my loyalty discounts?"
+
+graph walk:
+  ford_mustang -> aspect: maintenance -> needs air filter
+  ford_mustang -> dependency: user (owner)
+  user -> aspect: vehicles -> ford_mustang
+  user -> aspect: shopping -> Target loyalty card
+  user -> aspect: shopping -> Target auto department
+
+  result: Target loyalty card surfaces via entity
+          traversal, not keyword match
+```
+
+The second mechanism is prospective indexing. At write time, when a new memory is stored, the extraction pipeline generates three to five hypothetical future queries that would need this fact. "User has a Target loyalty card" gets indexed alongside cues like "where can I get discounts?", "which stores have my loyalty cards?", and "shopping recommendations." These hints are indexed in FTS5 alongside the actual memory content.
+
+When a future query about discounts arrives, the prospective hints create keyword overlap that would not otherwise exist. The MemAware hard tier fails because stored facts and future queries share zero vocabulary. Prospective indexing bridges that gap at write time, before retrieval ever runs. This approach was inspired by Kumiho's anticipatory indexing, adapted for Signet's local-first FTS5 architecture.
+
+Together, graph traversal and prospective indexing attack the cross-domain problem from two directions. The graph provides structural connections between entities that share no vocabulary. The hints provide lexical bridges between how facts are stated and how they will be needed. Neither alone solves the hard tier. Both together give the system a real path to it.
+
+## What We Haven't Proven Yet
+
+Honesty is worth more than positioning.
+
+Signet has not run MemAware. The LoCoMo benchmark validates retrieval quality (87.5% accuracy, 100% Hit@10 in our [[blog/retrieval-is-not-memory|full-stack configuration]]), but LoCoMo tests different failure modes than MemAware's cross-domain implicit context. Strong LoCoMo numbers do not predict MemAware performance. They measure different things.
+
+The architectural approach described in this post, graph traversal, prospective indexing, tiered retention with always-loaded context, is designed to address exactly the problem MemAware quantifies. But "designed to address" is not the same as "benchmarked against." That work is planned. When results are ready, we will publish them, whatever they are.
+
+The bitter lesson concern deserves genuine engagement, not dismissal. If the graph topology is too dependent on hand-crafted rules, it might not generalize. Signet's response is that the graph is a learned structure: the inline entity linker derives it at write time from actual content, community detection clusters it, aspect feedback adjusts weights based on retrieval outcomes, and desire path reinforcement strengthens traversals that prove useful. The structure emerges from use. But this is an argument, not a proof. It needs empirical validation at scale, and the MemAware hard tier is a good place to start.
+
+The field is early. The MemAware benchmark showed that most of the industry's approach to agent memory scores at chance level on the hardest cases. The question now is whether knowledge architecture, the way facts are organized, connected, and made findable at write time, can close the gap that retrieval cannot. We think it can. The numbers will tell us if we're right.
+
+---
+
+*Signet is open source. The [[blog/knowledge-architecture|knowledge architecture]], the [[docs/desire-paths|desire paths]] traversal system, and the [[pipeline|extraction pipeline]] are all part of the shipped substrate. [[blog/why-local-first-memory|Local-first]]. User-owned. No API keys required for retrieval.*

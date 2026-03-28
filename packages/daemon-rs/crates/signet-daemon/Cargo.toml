@@ -30,9 +30,9 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 getrandom = { workspace = true }
 uuid = { workspace = true }
+reqwest = { workspace = true }
+libc = "0.2"
 
 [dev-dependencies]
-reqwest = { workspace = true }
 tempfile = "3"
-libc = "0.2"
 tokio = { workspace = true, features = ["full", "test-util"] }

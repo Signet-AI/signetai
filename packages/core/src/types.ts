@@ -190,7 +190,16 @@ export interface PipelineCommandConfig {
 }
 
 export interface PipelineExtractionConfig {
-	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
+	readonly provider:
+		| "none"
+		| "ollama"
+		| "claude-code"
+		| "opencode"
+		| "codex"
+		| "anthropic"
+		| "openrouter"
+		| "command";
+	readonly fallbackProvider?: "ollama" | "none";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;
@@ -204,6 +213,8 @@ export interface PipelineWorkerConfig {
 	readonly pollMs: number;
 	readonly maxRetries: number;
 	readonly leaseTimeoutMs: number;
+	readonly maxLoadPerCpu: number;
+	readonly overloadBackoffMs: number;
 }
 
 export interface PipelineGraphConfig {

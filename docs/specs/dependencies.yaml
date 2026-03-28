@@ -205,6 +205,20 @@ specs:
       - "CLI start/restart can recover from a stale managed daemon process that still owns the port after health probes fail"
     decision: null
 
+  - id: daemon-provider-fallback-status
+    status: complete
+    path: docs/specs/complete/daemon-provider-fallback-status.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Startup provider fallback or hard-failure is persisted in /api/status and surfaced by signet status"
+      - "Operators can set extraction fallbackProvider to none to block rerouting when the configured provider is unavailable"
+      - "Unavailable extraction startup state dead-letters queued extraction jobs instead of silently leaving them pending"
+    decision: null
+
   - id: daemon-refactor
     status: planning
     path: docs/specs/planning/daemon-refactor.md

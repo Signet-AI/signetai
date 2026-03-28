@@ -209,6 +209,8 @@ const PIPELINE_CFG: PipelineV2Config = {
 		pollMs: 10, // fast polling for tests
 		maxRetries: 3,
 		leaseTimeoutMs: 300000,
+		maxLoadPerCpu: 0.8,
+		overloadBackoffMs: 30000,
 	},
 	graph: {
 		enabled: false,
@@ -599,6 +601,39 @@ describe("Worker processing", () => {
 		expect(worker.running).toBe(true);
 		await worker.stop();
 		expect(worker.running).toBe(false);
+	});
+
+	it("defers ticks while host load is above maxLoadPerCpu", async () => {
+		insertMemory(db, "mem-overload", "User prefers dark mode in their IDE setup");
+		enqueueExtractionJob(accessor, "mem-overload");
+
+		const worker = startWorker(
+			accessor,
+			goodProvider(),
+			{
+				...PIPELINE_CFG,
+				worker: {
+					...PIPELINE_CFG.worker,
+					maxLoadPerCpu: 0.8,
+					overloadBackoffMs: 80,
+				},
+			},
+			DECISION_CFG,
+			undefined,
+			undefined,
+			{ getLoadPerCpu: () => 1.9 },
+		);
+
+		await Bun.sleep(120);
+		const job = getJob(db, "mem-overload");
+		expect(job?.status).toBe("pending");
+		expect(worker.stats.overloaded).toBe(true);
+		expect(worker.stats.loadPerCpu).toBe(1.9);
+		expect(worker.stats.maxLoadPerCpu).toBe(0.8);
+		expect(worker.stats.overloadBackoffMs).toBe(80);
+		expect(worker.stats.nextTickInMs).toBeGreaterThanOrEqual(0);
+
+		await worker.stop();
 	});
 });
 
