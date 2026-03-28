@@ -1514,6 +1514,33 @@ describe("Worker phase C controlled writes", () => {
 		expect(payload.writeMode).toBe("shadow");
 	});
 
+	it("falls back to shadow-mode audits when native shadow is enabled", async () => {
+		insertMemory(db, "mem-src-native-shadow", "User prefers dark mode in editor");
+		enqueueExtractionJob(accessor, "mem-src-native-shadow");
+
+		const worker = startWorker(
+			accessor,
+			goodProvider(),
+			{ ...PHASE_C_CFG, nativeShadowEnabled: true },
+			DECISION_CFG,
+		);
+
+		await Bun.sleep(250);
+		await worker.stop();
+
+		const extractedCount = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2'`,
+			)
+			.get() as { cnt: number };
+		expect(extractedCount.cnt).toBe(0);
+
+		const payload = JSON.parse(getJob(db, "mem-src-native-shadow")?.result ?? "{}");
+		expect(payload.writeMode).toBe("shadow");
+	});
+
 	it("executes update mutation when allowUpdateDelete is true", async () => {
 		insertMemory(db, "mem-target-update", "User prefers dark mode editor theme with high contrast setting");
 		insertMemory(db, "mem-src-update", "Source envelope for update recommendation");

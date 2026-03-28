@@ -1148,7 +1148,11 @@ export function startWorker(
 					)
 				: { proposals: [], warnings: [] };
 
-		const controlledWritesEnabled = pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen;
+		const controlledWritesEnabled =
+			pipelineCfg.enabled &&
+			!pipelineCfg.shadowMode &&
+			!pipelineCfg.mutationsFrozen &&
+			!pipelineCfg.nativeShadowEnabled;
 
 		// Convenience aliases for nested config
 		const { extraction: extractionCfg, autonomous: autonomousCfg } = pipelineCfg;

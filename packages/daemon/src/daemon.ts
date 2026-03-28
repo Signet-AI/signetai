@@ -11253,6 +11253,7 @@ function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 	if (!cfg.enabled) return "disabled";
 	if (cfg.paused) return "paused";
 	if (cfg.mutationsFrozen) return "frozen";
+	if (cfg.nativeShadowEnabled) return "shadow";
 	if (cfg.shadowMode) return "shadow";
 	return "controlled-write";
 }
