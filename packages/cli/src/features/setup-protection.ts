@@ -14,6 +14,7 @@ export interface SetupProtectionOptions {
 	readonly nonInteractive: boolean;
 	readonly allowUnprotectedWorkspace: boolean;
 	readonly createLocalBackup: boolean;
+	readonly assumeOpenClawLinked?: boolean;
 }
 
 export interface SetupProtectionResult {
@@ -49,7 +50,7 @@ function printRisk(path: string): void {
 }
 
 export async function enforceSetupProtection(opts: SetupProtectionOptions): Promise<SetupProtectionResult> {
-	const openclawLinked = hasOpenClawWorkspaceLink(opts.basePath);
+	const openclawLinked = opts.assumeOpenClawLinked === true || hasOpenClawWorkspaceLink(opts.basePath);
 	const remote = getGitRemoteState(opts.basePath);
 	const snapshot = getSnapshotProtection(opts.basePath);
 	if (!openclawLinked) {

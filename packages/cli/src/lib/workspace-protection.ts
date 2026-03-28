@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import Database from "../sqlite.js";
 
@@ -37,6 +37,15 @@ function sanitize(name: string): string {
 		return "workspace";
 	}
 	return trimmed.replace(/[^a-z0-9._-]+/g, "-");
+}
+
+function isWithin(root: string, path: string): boolean {
+	const outer = resolve(root);
+	const inner = resolve(path);
+	if (outer === inner) {
+		return true;
+	}
+	return inner.startsWith(`${outer}${sep}`);
 }
 
 function escapeSqlPath(value: string): string {
@@ -98,6 +107,9 @@ function snapshotStatePath(basePath: string): string {
 export function createWorkspaceSnapshot(basePath: string, backupRoot = defaultBackupRoot()): SnapshotResult {
 	const root = resolve(backupRoot);
 	const source = resolve(basePath);
+	if (isWithin(source, root)) {
+		throw new Error(`Backup root must be outside workspace: ${root}`);
+	}
 	mkdirSync(root, { recursive: true });
 
 	const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
@@ -176,6 +188,9 @@ export function getSnapshotProtection(basePath: string): string | null {
 		return null;
 	}
 	if (!existsSync(state.snapshot)) {
+		return null;
+	}
+	if (isWithin(resolve(basePath), state.snapshot)) {
 		return null;
 	}
 	return state.snapshot;

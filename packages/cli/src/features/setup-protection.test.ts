@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getSnapshotProtection } from "../lib/workspace-protection.js";
+import { createWorkspaceSnapshot, getSnapshotProtection } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
 import { enforceSetupProtection } from "./setup-protection.js";
 
@@ -135,6 +135,41 @@ describe("setup protection soft gate", () => {
 			});
 			expect(result.state).toBe("remote");
 			expect(result.origin).toContain("github.com:test/private.git");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("enforces assumed openclaw linkage even before config patch is applied", async () => {
+		const root = mkdtempSync(join(tmpdir(), "setup-protection-"));
+		const workspace = join(root, "agents");
+		try {
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(join(workspace, "AGENTS.md"), "# test\n");
+			spawnSync("git", ["init"], { cwd: workspace, windowsHide: true });
+			process.env.OPENCLAW_CONFIG_PATH = join(root, "missing-openclaw.json");
+			await expect(
+				enforceSetupProtection({
+					basePath: workspace,
+					nonInteractive: true,
+					allowUnprotectedWorkspace: false,
+					createLocalBackup: false,
+					assumeOpenClawLinked: true,
+				}),
+			).rejects.toThrow("OpenClaw workspace is linked");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects snapshot roots inside the workspace tree", () => {
+		const root = mkdtempSync(join(tmpdir(), "setup-protection-"));
+		const workspace = join(root, "agents");
+		try {
+			mkdirSync(workspace, { recursive: true });
+			expect(() => createWorkspaceSnapshot(workspace, join(workspace, "backups"))).toThrow(
+				"Backup root must be outside workspace",
+			);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

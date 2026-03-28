@@ -149,6 +149,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			nonInteractive: cfg.nonInteractive,
 			allowUnprotectedWorkspace: cfg.allowUnprotectedWorkspace,
 			createLocalBackup: cfg.createLocalBackup,
+			assumeOpenClawLinked: cfg.configureOpenClawWs,
 		});
 
 		if (cfg.harnesses.includes("forge") && !deps.detectExistingSetup(cfg.basePath).harnesses.forge) {

@@ -137,4 +137,42 @@ describe("status report openclaw backup risk", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("ignores snapshot markers that point inside the workspace tree", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-risk-"));
+		const workspace = join(root, "agents");
+		try {
+			mkdirSync(workspace, { recursive: true });
+			spawnSync("git", ["init"], { cwd: workspace, windowsHide: true });
+			const nested = join(workspace, "backups", "nested");
+			mkdirSync(nested, { recursive: true });
+			writeFileSync(
+				join(workspace, ".signet-workspace-protection.json"),
+				`${JSON.stringify({
+					source: workspace,
+					snapshot: nested,
+					createdAt: new Date().toISOString(),
+				})}\n`,
+			);
+
+			const cfgPath = join(root, "openclaw.json");
+			writeFileSync(
+				cfgPath,
+				JSON.stringify({
+					agents: {
+						defaults: {
+							workspace,
+						},
+					},
+				}),
+			);
+			process.env.OPENCLAW_CONFIG_PATH = cfgPath;
+			const report = await getStatusReport(workspace, depsFor(workspace));
+			expect(report.openclawWorkspaceLinked).toBe(true);
+			expect(report.openclawWorkspaceUnprotected).toBe(true);
+			expect(report.git.snapshot).toBeNull();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
