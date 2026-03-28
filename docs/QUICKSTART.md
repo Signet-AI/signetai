@@ -138,6 +138,8 @@ If OpenClaw is configured to use the same workspace path, setup now enforces
 backup posture before finishing. In automation, either configure a git
 `origin` remote ahead of time, or pass `--create-local-backup` (or
 `--allow-unprotected-workspace` if you intentionally accept the risk).
+Snapshot-backed protection is considered fresh for 7 days; after that, run
+setup with `--create-local-backup` again or configure `origin`.
 
 Extraction safety note:
 

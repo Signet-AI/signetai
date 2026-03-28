@@ -21,6 +21,8 @@ interface SnapshotState {
 	readonly createdAt: string;
 }
 
+const SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 function readOutput(value: string | Buffer | null): string {
 	if (typeof value === "string") {
 		return value.trim();
@@ -71,6 +73,18 @@ function hasSnapshotContents(source: string, snapshot: string): boolean {
 	}
 
 	return true;
+}
+
+function isFresh(createdAt: string): boolean {
+	const stamp = Date.parse(createdAt);
+	if (!Number.isFinite(stamp)) {
+		return false;
+	}
+	const age = Date.now() - stamp;
+	if (age < 0) {
+		return true;
+	}
+	return age <= SNAPSHOT_MAX_AGE_MS;
 }
 
 function escapeSqlPath(value: string): string {
@@ -210,6 +224,9 @@ export function getSnapshotProtection(basePath: string): string | null {
 		return null;
 	}
 	if (state.source !== resolve(basePath)) {
+		return null;
+	}
+	if (!isFresh(state.createdAt)) {
 		return null;
 	}
 	if (!existsSync(state.snapshot)) {

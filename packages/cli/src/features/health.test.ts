@@ -154,6 +154,61 @@ describe("status report openclaw backup risk", () => {
 		}
 	});
 
+	it("ignores snapshot markers when backup is stale", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-risk-"));
+		const workspace = join(root, "agents");
+		try {
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(join(workspace, "AGENTS.md"), "# src\n");
+			writeFileSync(join(workspace, "agent.yaml"), "version: 1\n");
+			writeFileSync(join(workspace, "SOUL.md"), "soul\n");
+			writeFileSync(join(workspace, "IDENTITY.md"), "identity\n");
+			writeFileSync(join(workspace, "USER.md"), "user\n");
+			writeFileSync(join(workspace, "MEMORY.md"), "memory\n");
+			mkdirSync(join(workspace, "memory"), { recursive: true });
+			writeFileSync(join(workspace, "memory", "memories.db"), "sqlite");
+			spawnSync("git", ["init"], { cwd: workspace, windowsHide: true });
+			const snapshotPath = join(root, "backups", "agents-20260327T120000Z");
+			mkdirSync(join(snapshotPath, "memory"), { recursive: true });
+			writeFileSync(join(snapshotPath, "AGENTS.md"), "# snap\n");
+			writeFileSync(join(snapshotPath, "agent.yaml"), "version: 1\n");
+			writeFileSync(join(snapshotPath, "SOUL.md"), "soul\n");
+			writeFileSync(join(snapshotPath, "IDENTITY.md"), "identity\n");
+			writeFileSync(join(snapshotPath, "USER.md"), "user\n");
+			writeFileSync(join(snapshotPath, "MEMORY.md"), "memory\n");
+			writeFileSync(join(snapshotPath, "memory", "memories.db"), "sqlite");
+			mkdirSync(join(snapshotPath, ".git"), { recursive: true });
+			const stale = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+			writeFileSync(
+				join(workspace, ".signet-workspace-protection.json"),
+				`${JSON.stringify({
+					source: workspace,
+					snapshot: snapshotPath,
+					createdAt: stale,
+				})}\n`,
+			);
+
+			const cfgPath = join(root, "openclaw.json");
+			writeFileSync(
+				cfgPath,
+				JSON.stringify({
+					agents: {
+						defaults: {
+							workspace,
+						},
+					},
+				}),
+			);
+			process.env.OPENCLAW_CONFIG_PATH = cfgPath;
+			const report = await getStatusReport(workspace, depsFor(workspace));
+			expect(report.openclawWorkspaceLinked).toBe(true);
+			expect(report.openclawWorkspaceUnprotected).toBe(true);
+			expect(report.git.snapshot).toBeNull();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("ignores snapshot markers when snapshot content is incomplete", async () => {
 		const root = mkdtempSync(join(tmpdir(), "health-risk-"));
 		const workspace = join(root, "agents");

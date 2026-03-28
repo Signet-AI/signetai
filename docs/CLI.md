@@ -144,6 +144,8 @@ Non-interactive behavior:
 - when OpenClaw points at this workspace and no `origin` remote exists, setup
   requires either backup creation (`--create-local-backup`) or explicit bypass
   (`--allow-unprotected-workspace`)
+- snapshot-backed protection is treated as "fresh" for 7 days; after that,
+  status/doctor warn again unless a remote origin exists or a new snapshot is made
 
 Extraction safety note:
 
