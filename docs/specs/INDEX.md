@@ -555,7 +555,7 @@ Phase ordering based on hard dependencies and integration contracts.
   - DP-16: Post-fusion dampening (gravity, hub, resolution) — COMPLETE
   - DP-17: Compaction resilience (hippocampal replay) — NOT STARTED
   - DP-18: Decision auto-protection — COMPLETE
-  - DP-19: Adaptive write gate (per-memory surprisal) — NOT STARTED
+  - DP-19: Adaptive write gate (per-memory surprisal) — PARTIALLY COMPLETE (prototype)
   - DP-20: Sleep replay (background consolidation) — NOT STARTED
 
 ### Wave 7 (ontology hardening and governance)
@@ -671,7 +671,7 @@ Legend:
 | `openclaw-hardening` | complete | `docs/specs/complete/openclaw-hardening.md` | `openclaw-importance-scoring-pr` | - | temporal index previews, typed hooks, mid-session extraction (PR #369) |
 | `openclaw-workspace-protection-plan` | planning | `docs/specs/planning/openclaw-workspace-protection-plan.md` | `openclaw-hardening` | `openclaw-workspace-protection` | Incident-driven planning stub for OpenClaw uninstall workspace-loss risk |
 | `openclaw-workspace-protection` | approved | `docs/specs/approved/openclaw-workspace-protection.md` | `openclaw-hardening`, `openclaw-workspace-protection-plan` | - | Setup soft gate + status/doctor visibility for unprotected OpenClaw-linked workspaces |
-| `desire-paths-epic` | approved | `docs/specs/approved/desire-paths-epic.md` | `knowledge-architecture-schema`, `predictive-memory-scorer` | - | 20 stories across 5 phases; Phases 1-3 COMPLETE. DP-16 through DP-20 added from reference repo analysis (Ori-Mnemos, Zikkaron) |
+| `desire-paths-epic` | approved | `docs/specs/approved/desire-paths-epic.md` | `knowledge-architecture-schema`, `predictive-memory-scorer` | - | 20 stories across 5 phases; Phases 1-3 COMPLETE. DP-16 and DP-18 COMPLETE, DP-19 prototype shipped, DP-20 pending (reference repo analysis: Ori-Mnemos, Zikkaron) |
 | `notebook-dump-2026-02-25` | reference | `docs/research/technical/notebook-dump-2026-02-25.md` | - | - | |
 | `marketplace-reviews-cloudflare-staging` | planning | `docs/specs/planning/marketplace-reviews-cloudflare-staging.md` | - | - | |
 | `predictor-agent-feedback` | approved | `docs/specs/approved/predictor-agent-feedback.md` | `predictive-memory-scorer` | - | |

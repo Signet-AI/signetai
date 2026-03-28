@@ -817,6 +817,13 @@ type but currently receive no special treatment.
 per-memory surprisal filter. Only store information that violates
 the system's expectations.
 
+**Status:** PARTIALLY COMPLETE (prototype, 2026-03-27).
+Prototype includes per-memory surprisal scoring, task continuity
+discount, bypass rules (decision/constraint/error), and
+pass-block ratio alerts in worker logs. Remaining work:
+production telemetry/dashboard surfacing, broader rollout tuning,
+and post-launch threshold calibration.
+
 **What exists:** DP-1 gates at session level (skip extraction for
 low-significance sessions). But within significant sessions, every
 extracted memory is written regardless of novelty. Redundant and
@@ -967,7 +974,7 @@ flowchart TD
 | 2: Topology | DP-5 | COMPLETE | 0 days |
 | 3: Graph-Native | DP-6a, DP-6, DP-6.1, DP-6.2, DP-6.3, DP-7 | COMPLETE | 0 days |
 | 4: Path Learning | DP-8, DP-9, DP-10, DP-11 | DP-8 COMPLETE | 9-14 days |
-| 5: Emergence | DP-12 through DP-20 | NOT STARTED | 14-23 days |
+| 5: Emergence | DP-12 through DP-20 | DP-16/18 COMPLETE, DP-19 PROTOTYPE | 14-23 days |
 | **Total** | **21 stories** | **13 complete** | **~23-37 days** |
 
 Critical path runs through: DP-9 (path feedback + co-occurrence + Q-values) -> DP-10 (path scoring) -> DP-11 (temporal + intent routing).
