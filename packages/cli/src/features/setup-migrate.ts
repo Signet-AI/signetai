@@ -309,15 +309,15 @@ export async function runExistingSetupWizard(
 			}
 		}
 
+		if (protection.state === "snapshot") {
+			spinner.text = "Refreshing workspace snapshot...";
+			protection = refreshSnapshotProtection(basePath, protection);
+		}
+
 		let committed = false;
 		if (options?.skipGit !== true && gitEnabled) {
 			const date = new Date().toISOString().split("T")[0];
 			committed = await deps.gitAddAndCommit(basePath, `${date}_signet-setup`);
-		}
-
-		if (protection.state === "snapshot") {
-			spinner.text = "Refreshing workspace snapshot...";
-			protection = refreshSnapshotProtection(basePath, protection);
 		}
 
 		spinner.text = "Starting daemon...";

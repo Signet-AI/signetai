@@ -199,15 +199,15 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			}
 		}
 
+		if (protection.state === "snapshot") {
+			spinner.text = "Refreshing workspace snapshot...";
+			protection = refreshSnapshotProtection(cfg.basePath, protection);
+		}
+
 		let committed = false;
 		if (cfg.gitEnabled) {
 			const date = new Date().toISOString().split("T")[0];
 			committed = await deps.gitAddAndCommit(cfg.basePath, `${date}_signet-setup`);
-		}
-
-		if (protection.state === "snapshot") {
-			spinner.text = "Refreshing workspace snapshot...";
-			protection = refreshSnapshotProtection(cfg.basePath, protection);
 		}
 
 		spinner.text = "Starting daemon...";
