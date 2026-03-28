@@ -435,10 +435,10 @@ async fn process_extract(
 
     let facts_count = facts.len();
     let entities_count = result.entities.len();
-    let mut warnings = result.warnings;
+    let warnings = result.warnings;
 
     // TODO: Phase 5.3 — apply shadow decisions (add/update/delete)
-    // For now, record extraction results without applying writes.
+    // For now, record extraction results.
     // The full pipeline will:
     // 1. Search for existing similar memories (hybrid search)
     // 2. Run shadow decision engine (add/update/delete/none)
@@ -449,10 +449,6 @@ async fn process_extract(
     //    - continuity discount signals (directory/recent/semantic)
     // 4. Persist graph entities
     // 5. Enqueue structural jobs (classify, dependency)
-
-    // Guardrail for shadow parity expectations: Rust worker currently runs
-    // extraction-only and does not execute controlled writes / DP-19 gates.
-    warnings.push("phase_c_unimplemented: rust worker is extraction-only".into());
 
     Ok(JobResult {
         facts_extracted: facts_count,

@@ -1,10 +1,11 @@
 //! Memory write route handlers (remember, modify, forget, recover).
 
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::Value;
@@ -13,6 +14,8 @@ use tracing::warn;
 use signet_core::db::Priority;
 use signet_services::transactions;
 
+use crate::auth::middleware::{authenticate_headers, require_scope_guard};
+use crate::auth::types::TokenScope;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -59,6 +62,9 @@ pub struct RememberBody {
     pub source_id: Option<String>,
     #[serde(rename = "type")]
     pub memory_type: Option<String>,
+    pub agent_id: Option<String>,
+    pub visibility: Option<String>,
+    pub scope: Option<String>,
 }
 
 fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
@@ -92,13 +98,39 @@ fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str
     }
 }
 
-#[cfg(test)]
 fn normalize_scope(value: Option<String>) -> Option<String> {
     value
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+fn is_loopback(addr: &SocketAddr) -> bool {
+    match addr.ip() {
+        IpAddr::V4(ip) => ip.is_loopback(),
+        IpAddr::V6(ip) => ip.is_loopback(),
+    }
+}
+
+fn guard_write_scope(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+    agent_id: &str,
+) -> Result<(), Box<axum::response::Response>> {
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_loopback(peer),
+    )?;
+    let target = TokenScope {
+        project: None,
+        agent: Some(agent_id.to_string()),
+        user: None,
+    };
+    require_scope_guard(&auth, &target, state.auth_mode, is_loopback(peer))
 }
 
 fn dead_letter_blocked_extraction_memory(
@@ -201,6 +233,8 @@ fn ingest_remember_with_blocked_guard(
 
 pub async fn remember(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<RememberBody>,
 ) -> axum::response::Response {
     if let Some(resp) = check_mutations_frozen(&state) {
@@ -235,9 +269,18 @@ pub async fn remember(
     let source_type = body.source_type;
     let source_id = body.source_id;
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
-    let agent_id = "default".to_string();
-    let scope = None::<String>;
-    let visibility = "global".to_string();
+    let agent_id = body.agent_id.unwrap_or_else(|| "default".into());
+    let scope = normalize_scope(body.scope);
+    let visibility = body
+        .visibility
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_lowercase)
+        .filter(|v| v == "global" || v == "private" || v == "archived")
+        .unwrap_or_else(|| "global".to_string());
+    if let Err(resp) = guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
+        return *resp;
+    }
     let extraction_max_attempts = state
         .config
         .manifest
@@ -307,12 +350,13 @@ pub async fn remember(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::net::SocketAddr;
     use std::sync::Arc;
 
     use axum::Json;
     use axum::body::to_bytes;
-    use axum::extract::State;
-    use axum::http::StatusCode;
+    use axum::extract::{ConnectInfo, State};
+    use axum::http::{HeaderMap, StatusCode};
     use rusqlite::Connection;
     use serde_json::json;
     use tempfile::tempdir;
@@ -721,6 +765,8 @@ mod tests {
 
         let response = remember(
             State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3850))),
+            HeaderMap::new(),
             Json(RememberBody {
                 content: Some("Atomic blocked remember".to_string()),
                 who: None,
@@ -731,6 +777,9 @@ mod tests {
                 source_type: None,
                 source_id: None,
                 memory_type: None,
+                agent_id: None,
+                visibility: None,
+                scope: None,
             }),
         )
         .await;
@@ -799,6 +848,8 @@ mod tests {
 
         let response = remember(
             State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3850))),
+            HeaderMap::new(),
             Json(RememberBody {
                 content: Some("Should roll back".to_string()),
                 who: None,
@@ -809,6 +860,9 @@ mod tests {
                 source_type: None,
                 source_id: None,
                 memory_type: None,
+                agent_id: None,
+                visibility: None,
+                scope: None,
             }),
         )
         .await;
@@ -877,6 +931,8 @@ mod tests {
 
         let response = remember(
             State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3850))),
+            HeaderMap::new(),
             Json(RememberBody {
                 content: Some("Duplicate content".to_string()),
                 who: None,
@@ -887,6 +943,9 @@ mod tests {
                 source_type: None,
                 source_id: None,
                 memory_type: None,
+                agent_id: None,
+                visibility: None,
+                scope: None,
             }),
         )
         .await;
