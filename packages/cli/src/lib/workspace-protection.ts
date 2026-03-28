@@ -48,6 +48,13 @@ function isWithin(root: string, path: string): boolean {
 	return inner.startsWith(`${outer}${sep}`);
 }
 
+function hasSnapshotContents(path: string): boolean {
+	const root = resolve(path);
+	const hasAgents = existsSync(join(root, "AGENTS.md"));
+	const hasDb = existsSync(join(root, "memory", "memories.db"));
+	return hasAgents && hasDb;
+}
+
 function escapeSqlPath(value: string): string {
 	return value.replace(/'/g, "''");
 }
@@ -191,6 +198,9 @@ export function getSnapshotProtection(basePath: string): string | null {
 		return null;
 	}
 	if (isWithin(resolve(basePath), state.snapshot)) {
+		return null;
+	}
+	if (!hasSnapshotContents(state.snapshot)) {
 		return null;
 	}
 	return state.snapshot;

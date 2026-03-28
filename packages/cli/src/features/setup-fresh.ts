@@ -17,6 +17,16 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 	const spinner = ora("Setting up Signet...").start();
 
 	try {
+		if (cfg.nonInteractive && !cfg.allowUnprotectedWorkspace && !cfg.createLocalBackup) {
+			await enforceSetupProtection({
+				basePath: cfg.basePath,
+				nonInteractive: true,
+				allowUnprotectedWorkspace: false,
+				createLocalBackup: false,
+				assumeOpenClawLinked: cfg.configureOpenClawWs,
+			});
+		}
+
 		const templatesDir = deps.getTemplatesDir();
 		mkdirSync(cfg.basePath, { recursive: true });
 

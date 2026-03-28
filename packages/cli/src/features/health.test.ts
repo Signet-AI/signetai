@@ -107,7 +107,9 @@ describe("status report openclaw backup risk", () => {
 			mkdirSync(workspace, { recursive: true });
 			spawnSync("git", ["init"], { cwd: workspace, windowsHide: true });
 			const snapshotPath = join(root, "backups", "agents-20260327T120000Z");
-			mkdirSync(snapshotPath, { recursive: true });
+			mkdirSync(join(snapshotPath, "memory"), { recursive: true });
+			writeFileSync(join(snapshotPath, "AGENTS.md"), "# snap\n");
+			writeFileSync(join(snapshotPath, "memory", "memories.db"), "sqlite");
 			writeFileSync(
 				join(workspace, ".signet-workspace-protection.json"),
 				`${JSON.stringify({
@@ -133,6 +135,44 @@ describe("status report openclaw backup risk", () => {
 			expect(report.openclawWorkspaceLinked).toBe(true);
 			expect(report.openclawWorkspaceUnprotected).toBe(false);
 			expect(report.git.snapshot).toBe(snapshotPath);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores snapshot markers when snapshot content is incomplete", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-risk-"));
+		const workspace = join(root, "agents");
+		try {
+			mkdirSync(workspace, { recursive: true });
+			spawnSync("git", ["init"], { cwd: workspace, windowsHide: true });
+			const snapshotPath = join(root, "backups", "agents-20260327T120000Z");
+			mkdirSync(snapshotPath, { recursive: true });
+			writeFileSync(
+				join(workspace, ".signet-workspace-protection.json"),
+				`${JSON.stringify({
+					source: workspace,
+					snapshot: snapshotPath,
+					createdAt: new Date().toISOString(),
+				})}\n`,
+			);
+
+			const cfgPath = join(root, "openclaw.json");
+			writeFileSync(
+				cfgPath,
+				JSON.stringify({
+					agents: {
+						defaults: {
+							workspace,
+						},
+					},
+				}),
+			);
+			process.env.OPENCLAW_CONFIG_PATH = cfgPath;
+			const report = await getStatusReport(workspace, depsFor(workspace));
+			expect(report.openclawWorkspaceLinked).toBe(true);
+			expect(report.openclawWorkspaceUnprotected).toBe(true);
+			expect(report.git.snapshot).toBeNull();
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
