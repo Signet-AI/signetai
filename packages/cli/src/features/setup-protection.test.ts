@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { createWorkspaceSnapshot, getSnapshotProtection, saveSnapshotProtection } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
 import { enforceSetupProtection, refreshSnapshotProtection } from "./setup-protection.js";
@@ -240,6 +240,23 @@ describe("setup protection soft gate", () => {
 			const parsed = JSON.parse(readFileSync(marker, "utf-8"));
 			expect(parsed.source).toBe(workspace);
 			expect(parsed.snapshot).toBe(snapshot);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to an external backup root when workspace contains ~/.signet/backups", () => {
+		const root = mkdtempSync(join(tmpdir(), "setup-protection-"));
+		const home = join(root, "home");
+		const workspace = join(home, ".signet");
+		try {
+			mkdirSync(workspace, { recursive: true });
+			process.env.HOME = home;
+
+			const snap = createWorkspaceSnapshot(workspace);
+			expect(existsSync(snap.path)).toBe(true);
+			expect(snap.path.startsWith(`${workspace}${sep}`)).toBe(false);
+			expect(snap.root.startsWith(`${workspace}${sep}`)).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

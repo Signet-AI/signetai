@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import Database from "../sqlite.js";
@@ -135,8 +135,19 @@ export function hasOpenClawWorkspaceLink(basePath: string): boolean {
 	return workspaces.some((path) => resolve(path) === target);
 }
 
-export function defaultBackupRoot(): string {
-	return join(homedir(), ".signet", "backups");
+export function defaultBackupRoot(basePath?: string): string {
+	const primary = join(homedir(), ".signet", "backups");
+	if (!basePath) {
+		return primary;
+	}
+	if (!isWithin(resolve(basePath), primary)) {
+		return primary;
+	}
+	const fallback = join(homedir(), ".signet-backups");
+	if (!isWithin(resolve(basePath), fallback)) {
+		return fallback;
+	}
+	return join(tmpdir(), "signet-backups");
 }
 
 function snapshotStatePath(basePath: string): string {
@@ -147,8 +158,8 @@ function legacySnapshotStatePath(basePath: string): string {
 	return join(resolve(basePath), ".signet-workspace-protection.json");
 }
 
-export function createWorkspaceSnapshot(basePath: string, backupRoot = defaultBackupRoot()): SnapshotResult {
-	const root = resolve(backupRoot);
+export function createWorkspaceSnapshot(basePath: string, backupRoot?: string): SnapshotResult {
+	const root = resolve(backupRoot ?? defaultBackupRoot(basePath));
 	const source = resolve(basePath);
 	if (isWithin(source, root)) {
 		throw new Error(`Backup root must be outside workspace: ${root}`);

@@ -56,6 +56,18 @@ export async function runExistingSetupWizard(
 
 	try {
 		const templatesDir = deps.getTemplatesDir();
+		if (
+			options?.nonInteractive === true &&
+			options.allowUnprotectedWorkspace !== true &&
+			options.createLocalBackup !== true
+		) {
+			await enforceSetupProtection({
+				basePath,
+				nonInteractive: true,
+				allowUnprotectedWorkspace: false,
+				createLocalBackup: false,
+			});
+		}
 
 		if (!existsSync(basePath)) {
 			mkdirSync(basePath, { recursive: true });
