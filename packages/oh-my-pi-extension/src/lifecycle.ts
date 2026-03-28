@@ -63,8 +63,8 @@ export function currentSessionRef(ctx: OmpExtensionContext): SessionRef {
 	return { sessionId, sessionFile, project };
 }
 
-async function submitSessionEnd(client: DaemonClient, payload: SessionEndPayload): Promise<void> {
-	await client.post(
+async function submitSessionEnd(client: DaemonClient, payload: SessionEndPayload): Promise<boolean> {
+	const result = await client.post(
 		"/api/hooks/session-end",
 		{
 			harness: HARNESS,
@@ -77,6 +77,7 @@ async function submitSessionEnd(client: DaemonClient, payload: SessionEndPayload
 		},
 		WRITE_TIMEOUT,
 	);
+	return result !== null;
 }
 
 export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void> {
@@ -89,12 +90,13 @@ export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void
 		const snapshot = readSessionFileSnapshot(pending.sessionFile);
 		if (!snapshot.loaded) continue;
 
-		await submitSessionEnd(deps.client, {
+		const submitted = await submitSessionEnd(deps.client, {
 			sessionId: snapshot.sessionId ?? pending.sessionId,
 			transcript: snapshot.transcript,
 			reason: pending.reason,
 			project: snapshot.project,
 		});
+		if (!submitted) continue;
 
 		deps.state.markSessionEnded(pending.sessionId);
 		deps.state.clearPendingSessionData(pending.sessionId);
@@ -146,12 +148,13 @@ export async function endCurrentSession(deps: LifecycleDeps, ctx: OmpExtensionCo
 	const session = currentSessionRef(ctx);
 	if (deps.state.sessionAlreadyEnded(session.sessionId)) return;
 
-	await submitSessionEnd(deps.client, {
+	const submitted = await submitSessionEnd(deps.client, {
 		sessionId: session.sessionId,
 		transcript: buildTranscriptFromEntries(getSessionEntries(ctx)),
 		reason,
 		project: session.project,
 	});
+	if (!submitted) return;
 
 	deps.state.markSessionEnded(session.sessionId);
 	deps.state.clearPendingSessionData(session.sessionId);
@@ -174,12 +177,18 @@ export async function endPreviousSession(
 		return;
 	}
 
-	await submitSessionEnd(deps.client, {
+	const submitted = await submitSessionEnd(deps.client, {
 		sessionId,
 		transcript: previousSnapshot.transcript,
 		reason,
 		project: previousSnapshot.project,
 	});
+	if (!submitted) {
+		if (sessionId && previousSessionFile) {
+			deps.state.queuePendingSessionEnd(sessionId, previousSessionFile, reason);
+		}
+		return;
+	}
 
 	deps.state.markSessionEnded(sessionId);
 	deps.state.clearPendingSessionData(sessionId);
