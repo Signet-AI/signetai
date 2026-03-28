@@ -9,6 +9,10 @@ function harnessHeaders(): Record<string, string> {
 	};
 }
 
+function isTimeoutError(error: unknown): error is DOMException {
+	return error instanceof DOMException && error.name === "TimeoutError";
+}
+
 async function daemonFetch<T>(
 	daemonUrl: string,
 	path: string,
@@ -39,6 +43,11 @@ async function daemonFetch<T>(
 
 		return (await response.json()) as T;
 	} catch (error) {
+		if (isTimeoutError(error)) {
+			console.warn(`[signet-oh-my-pi] ${method} ${path} timed out after ${timeout}ms`);
+			return null;
+		}
+
 		console.warn(`[signet-oh-my-pi] ${method} ${path} error:`, error);
 		return null;
 	}
