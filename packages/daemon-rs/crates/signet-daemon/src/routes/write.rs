@@ -59,9 +59,6 @@ pub struct RememberBody {
     pub source_id: Option<String>,
     #[serde(rename = "type")]
     pub memory_type: Option<String>,
-    pub agent_id: Option<String>,
-    pub visibility: Option<String>,
-    pub scope: Option<String>,
 }
 
 fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
@@ -95,6 +92,7 @@ fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str
     }
 }
 
+#[cfg(test)]
 fn normalize_scope(value: Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -237,15 +235,9 @@ pub async fn remember(
     let source_type = body.source_type;
     let source_id = body.source_id;
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
-    let agent_id = body.agent_id.unwrap_or_else(|| "default".into());
-    let scope = normalize_scope(body.scope);
-    let visibility = body
-        .visibility
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_lowercase)
-        .filter(|v| v == "global" || v == "private" || v == "archived")
-        .unwrap_or_else(|| "global".to_string());
+    let agent_id = "default".to_string();
+    let scope = None::<String>;
+    let visibility = "global".to_string();
     let extraction_max_attempts = state
         .config
         .manifest
@@ -739,9 +731,6 @@ mod tests {
                 source_type: None,
                 source_id: None,
                 memory_type: None,
-                agent_id: None,
-                visibility: None,
-                scope: None,
             }),
         )
         .await;
@@ -820,9 +809,6 @@ mod tests {
                 source_type: None,
                 source_id: None,
                 memory_type: None,
-                agent_id: None,
-                visibility: None,
-                scope: None,
             }),
         )
         .await;
@@ -901,9 +887,6 @@ mod tests {
                 source_type: None,
                 source_id: None,
                 memory_type: None,
-                agent_id: None,
-                visibility: None,
-                scope: None,
             }),
         )
         .await;
