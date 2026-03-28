@@ -9,7 +9,6 @@
 
 import {
 	DECISION_ACTIONS,
-	vectorSearch,
 	type DecisionAction,
 	type ExtractedFact,
 } from "@signet/core";
@@ -110,6 +109,7 @@ async function findCandidatesVector(
 	query: string,
 	cfg: DecisionConfig,
 	limit: number,
+	scope: DecisionScope,
 ): Promise<Map<string, number>> {
 	const vectorMap = new Map<string, number>();
 	try {
@@ -117,10 +117,26 @@ async function findCandidatesVector(
 		if (queryVec) {
 			const qf32 = new Float32Array(queryVec);
 			accessor.withReadDb((db) => {
-				const vectorDb = db as unknown as Parameters<typeof vectorSearch>[0];
-				const results = vectorSearch(vectorDb, qf32, { limit });
+				const sql = `
+					SELECT e.source_id AS id, v.distance
+					FROM vec_embeddings v
+					JOIN embeddings e ON v.id = e.id
+					JOIN memories m ON e.source_id = m.id
+					WHERE v.embedding MATCH ? AND k = ?
+					  AND m.agent_id = ?
+					  AND m.visibility = ?
+					  AND ${scope.scope !== null ? "m.scope = ?" : "m.scope IS NULL"}
+					  AND m.is_deleted = 0
+					ORDER BY v.distance
+				`;
+				const stmt = db.prepare(sql) as unknown as AllQuery<Array<{ id: string; distance: number }>>;
+				const results =
+					scope.scope !== null
+						? stmt.all(qf32, limit, scope.agentId, scope.visibility, scope.scope)
+						: stmt.all(qf32, limit, scope.agentId, scope.visibility);
 				for (const r of results) {
-					vectorMap.set(r.id, r.score);
+					const score = Math.max(0, 1 - r.distance);
+					vectorMap.set(r.id, score);
 				}
 			});
 		}
@@ -173,6 +189,7 @@ async function findCandidates(
 		query,
 		cfg,
 		CANDIDATE_LIMIT * 2,
+		scope,
 	);
 
 	const allIds = new Set([...bm25Map.keys(), ...vectorMap.keys()]);

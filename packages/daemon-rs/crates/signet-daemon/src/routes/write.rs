@@ -240,12 +240,8 @@ pub async fn remember(
         .visibility
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| match s {
-            "private" => "private".to_string(),
-            "archived" => "archived".to_string(),
-            _ => "global".to_string(),
-        })
+        .map(str::to_lowercase)
+        .filter(|v| v == "global" || v == "private" || v == "archived")
         .unwrap_or_else(|| "global".to_string());
     let extraction_max_attempts = state
         .config
