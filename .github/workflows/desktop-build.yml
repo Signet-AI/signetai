@@ -130,6 +130,9 @@ jobs:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           TARGET: ${{ matrix.target }}
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
           $certPath = Join-Path $env:RUNNER_TEMP "signet-codesign.pfx"
           [System.IO.File]::WriteAllBytes(
             $certPath,
@@ -150,6 +153,11 @@ jobs:
               /tr "http://timestamp.digicert.com" `
               /td SHA256 `
               "$($msi.FullName)"
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "signtool failed for $($msi.FullName) with exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+            }
           }
 
       - name: Generate Arch AUR metadata

@@ -52,24 +52,57 @@ if (!triple) {
 	throw new Error("Could not resolve target triple for daemon sidecar staging");
 }
 
+const host = hostTarget();
+const cross = host !== null && triple !== host;
 const fromEnv = process.env.SIGNET_DAEMON_BIN ?? null;
 const bin = `signet-daemon${ext}`;
 const here = resolve(fileURLToPath(import.meta.url), "..");
 const root = resolve(here, "..");
-const sourceList = [
-	fromEnv,
-	resolve(root, "..", "daemon-rs", "target", triple, "release", bin),
-	resolve(root, "..", "daemon-rs", "target", "release", bin),
-	pathLookup(),
-].filter(Boolean);
 
-const src = sourceList.find((value) => existsSync(value));
+const items = [
+	{
+		kind: "env",
+		path: fromEnv,
+	},
+	{
+		kind: "target",
+		path: resolve(root, "..", "daemon-rs", "target", triple, "release", bin),
+	},
+];
+
+if (!cross) {
+	items.push(
+		{
+			kind: "host",
+			path: resolve(root, "..", "daemon-rs", "target", "release", bin),
+		},
+		{
+			kind: "path",
+			path: pathLookup(),
+		},
+	);
+}
+
+const sourceList = items.filter((item) => item.path !== null);
+const srcItem = sourceList.find((item) => existsSync(item.path));
+if (srcItem && cross && srcItem.kind === "env" && !srcItem.path.includes(triple)) {
+	throw new Error(
+		[
+			`Refusing to stage SIGNET_DAEMON_BIN for cross-target build (${triple}).`,
+			`Expected the provided path to include target triple '${triple}'.`,
+			`Provided path: ${srcItem.path}`,
+		].join("\n"),
+	);
+}
+
+const src = srcItem?.path ?? null;
 if (!src) {
 	throw new Error(
 		[
 			`Unable to stage daemon sidecar for target ${triple}`,
+			cross ? "Cross-target mode is enabled, host fallbacks are disabled." : "Host and PATH fallbacks are enabled.",
 			"Looked for:",
-			...sourceList.map((value) => `- ${value}`),
+			...sourceList.map((item) => `- [${item.kind}] ${item.path}`),
 		].join("\n"),
 	);
 }
