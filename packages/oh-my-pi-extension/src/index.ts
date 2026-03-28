@@ -1,21 +1,18 @@
 import { createDaemonClient } from "./daemon-client.js";
 import { readRuntimeEnv, readTrimmedString } from "./helpers.js";
 import {
+	type LifecycleDeps,
 	currentSessionRef,
 	endCurrentSession,
 	endPreviousSession,
 	ensureSessionContext,
 	refreshSessionStart,
 	requestRecallForPrompt,
-	type LifecycleDeps,
 } from "./lifecycle.js";
 import { createSessionState } from "./session-state.js";
 import {
-	HARNESS,
 	DAEMON_URL_DEFAULT,
-	READ_TIMEOUT,
-	RUNTIME_PATH,
-	WRITE_TIMEOUT,
+	HARNESS,
 	type OmpBeforeAgentStartEvent,
 	type OmpContextEvent,
 	type OmpContextEventResult,
@@ -25,6 +22,9 @@ import {
 	type OmpSessionCompactingEvent,
 	type OmpSessionCompactingResult,
 	type PreCompactionResult,
+	READ_TIMEOUT,
+	RUNTIME_PATH,
+	WRITE_TIMEOUT,
 } from "./types.js";
 
 function registerSessionLifecycleHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
@@ -64,7 +64,7 @@ function registerPromptHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void 
 }
 
 function registerContextHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
-	pi.on("context", async (event: OmpContextEvent, ctx): Promise<OmpContextEventResult | void> => {
+	pi.on("context", async (event: OmpContextEvent, ctx): Promise<OmpContextEventResult | undefined> => {
 		const session = currentSessionRef(ctx);
 		const hiddenMessages = deps.state.consumeHiddenInjectMessages(session.sessionId);
 		if (hiddenMessages.length === 0) return;
@@ -78,7 +78,7 @@ function registerContextHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void
 function registerCompactionHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
 	pi.on(
 		"session.compacting",
-		async (event: OmpSessionCompactingEvent, ctx): Promise<OmpSessionCompactingResult | void> => {
+		async (event: OmpSessionCompactingEvent, ctx): Promise<OmpSessionCompactingResult | undefined> => {
 			await ensureSessionContext(deps, ctx);
 			const session = currentSessionRef(ctx);
 			const result = await deps.client.post<PreCompactionResult>(
@@ -94,8 +94,7 @@ function registerCompactionHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): v
 
 			if (!result && !deps.state.getSessionContext()) return;
 
-			const contextLine =
-				readTrimmedString(result?.guidelines) ?? readTrimmedString(deps.state.getSessionContext());
+			const contextLine = readTrimmedString(result?.guidelines) ?? readTrimmedString(deps.state.getSessionContext());
 			const prompt = readTrimmedString(result?.summaryPrompt);
 			if (!contextLine && !prompt) return;
 

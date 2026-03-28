@@ -7,15 +7,15 @@ import type { SessionState } from "./session-state.js";
 import { buildTranscriptFromEntries, readSessionFileSnapshot } from "./transcript.js";
 import {
 	HARNESS,
-	PROMPT_SUBMIT_TIMEOUT,
-	READ_TIMEOUT,
-	RUNTIME_PATH,
-	WRITE_TIMEOUT,
 	type OmpExtensionContext,
 	type OmpSessionEntry,
 	type OmpSessionSwitchEvent,
+	PROMPT_SUBMIT_TIMEOUT,
+	READ_TIMEOUT,
+	RUNTIME_PATH,
 	type SessionStartResult,
 	type UserPromptSubmitResult,
+	WRITE_TIMEOUT,
 } from "./types.js";
 
 export interface SessionRef {
@@ -96,7 +96,7 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: OmpExtension
 		READ_TIMEOUT,
 	);
 
-	const sessionContext = result === null ? staticFallback() : result.inject ?? result.recentContext ?? "";
+	const sessionContext = result === null ? staticFallback() : (result.inject ?? result.recentContext ?? "");
 	deps.state.setSessionContext(sessionContext);
 	deps.state.setPendingSessionContext(session.sessionId, sessionContext);
 }
@@ -113,11 +113,7 @@ export async function ensureSessionContext(deps: LifecycleDeps, ctx: OmpExtensio
 	await refreshSessionStart(deps, ctx);
 }
 
-export async function endCurrentSession(
-	deps: LifecycleDeps,
-	ctx: OmpExtensionContext,
-	reason: string,
-): Promise<void> {
+export async function endCurrentSession(deps: LifecycleDeps, ctx: OmpExtensionContext, reason: string): Promise<void> {
 	const session = currentSessionRef(ctx);
 	if (deps.state.sessionAlreadyEnded(session.sessionId)) return;
 

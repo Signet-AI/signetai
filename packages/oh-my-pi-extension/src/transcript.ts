@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, type OmpSessionEntry, type OmpSessionHeader } from "./types.js";
 import { isRecord, readTrimmedString } from "./helpers.js";
+import {
+	HIDDEN_RECALL_CUSTOM_TYPE,
+	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
+	type OmpSessionEntry,
+	type OmpSessionHeader,
+} from "./types.js";
 
 export interface SessionFileSnapshot {
 	readonly sessionId: string | undefined;
@@ -25,7 +30,6 @@ function roleLabel(role: string | undefined): string {
 		case "bashExecution":
 		case "pythonExecution":
 			return "Tool";
-		case "user":
 		default:
 			return "User";
 	}
@@ -43,9 +47,7 @@ function extractTextContent(value: unknown): string | undefined {
 	for (const part of value) {
 		if (!isRecord(part)) continue;
 		const candidate =
-			readTrimmedString(part.text) ??
-			readTrimmedString(part.input_text) ??
-			readTrimmedString(part.content);
+			readTrimmedString(part.text) ?? readTrimmedString(part.input_text) ?? readTrimmedString(part.content);
 		if (!candidate) continue;
 		parts.push(normalizeWhitespace(candidate));
 	}
@@ -64,10 +66,7 @@ function entryToTranscriptLine(entry: OmpSessionEntry): string | undefined {
 	if (!isRecord(entry) || typeof entry.type !== "string") return undefined;
 
 	if (entry.type === "custom_message") {
-		if (
-			entry.customType === HIDDEN_RECALL_CUSTOM_TYPE ||
-			entry.customType === HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE
-		) {
+		if (entry.customType === HIDDEN_RECALL_CUSTOM_TYPE || entry.customType === HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE) {
 			return undefined;
 		}
 		return buildMessageLine("custom", entry.content);
@@ -130,11 +129,7 @@ function readSessionLines(sessionFile: string): string[] {
 }
 
 function sessionProject(header: OmpSessionHeader | undefined): string | undefined {
-	return (
-		readTrimmedString(header?.cwd) ??
-		readTrimmedString(header?.project) ??
-		readTrimmedString(header?.workspace)
-	);
+	return readTrimmedString(header?.cwd) ?? readTrimmedString(header?.project) ?? readTrimmedString(header?.workspace);
 }
 
 export function readSessionFileSnapshot(sessionFile: string | undefined): SessionFileSnapshot {

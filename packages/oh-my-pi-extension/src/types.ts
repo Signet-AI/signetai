@@ -10,7 +10,11 @@ import type {
 	SessionCompactingResult,
 	SessionSwitchEvent,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
-import type { ReadonlySessionManager, SessionEntry, SessionHeader } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type {
+	ReadonlySessionManager,
+	SessionEntry,
+	SessionHeader,
+} from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
 export const DAEMON_URL_DEFAULT = "http://localhost:3850";
 export const HARNESS = "oh-my-pi" as const;

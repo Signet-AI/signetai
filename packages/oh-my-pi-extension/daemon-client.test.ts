@@ -49,11 +49,7 @@ describe("createDaemonClient", () => {
 		servers.push(server);
 
 		const client = createDaemonClient(`http://127.0.0.1:${server.port}`);
-		const result = await client.post<{ inject: string }>(
-			"/api/hooks/user-prompt-submit",
-			{ harness: "oh-my-pi" },
-			10,
-		);
+		const result = await client.post<{ inject: string }>("/api/hooks/user-prompt-submit", { harness: "oh-my-pi" }, 10);
 
 		expect(result).toBeNull();
 		expect(warnings).toHaveLength(1);
