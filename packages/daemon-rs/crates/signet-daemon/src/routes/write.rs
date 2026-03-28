@@ -95,6 +95,14 @@ fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str
     }
 }
 
+fn normalize_scope(value: Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 fn dead_letter_blocked_extraction_memory(
     conn: &rusqlite::Connection,
     memory_id: &str,
@@ -230,12 +238,7 @@ pub async fn remember(
     let source_id = body.source_id;
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
     let agent_id = body.agent_id.unwrap_or_else(|| "default".into());
-    let scope = body
-        .scope
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    let scope = normalize_scope(body.scope);
     let visibility = body
         .visibility
         .as_deref()
@@ -333,7 +336,8 @@ mod tests {
     use crate::state::ExtractionRuntimeState;
 
     use super::{
-        RememberBody, dead_letter_blocked_extraction_memory, parse_remember_tags, remember,
+        RememberBody, dead_letter_blocked_extraction_memory, normalize_scope, parse_remember_tags,
+        remember,
     };
 
     #[test]
@@ -355,6 +359,17 @@ mod tests {
 
         let err = parse_remember_tags(Some(json!(["alpha", 42]))).unwrap_err();
         assert_eq!(err, "tags must be a string, string array, or null");
+    }
+
+    #[test]
+    fn normalize_scope_trims_and_coalesces_empty_to_none() {
+        assert_eq!(normalize_scope(None), None);
+        assert_eq!(normalize_scope(Some("".to_string())), None);
+        assert_eq!(normalize_scope(Some("   ".to_string())), None);
+        assert_eq!(
+            normalize_scope(Some("  project:alpha  ".to_string())),
+            Some("project:alpha".to_string())
+        );
     }
 
     #[test]
@@ -726,6 +741,7 @@ mod tests {
                 memory_type: None,
                 agent_id: None,
                 visibility: None,
+                scope: None,
             }),
         )
         .await;
@@ -806,6 +822,7 @@ mod tests {
                 memory_type: None,
                 agent_id: None,
                 visibility: None,
+                scope: None,
             }),
         )
         .await;
@@ -849,6 +866,7 @@ mod tests {
                         actor: "test",
                         agent_id: "default",
                         visibility: "global",
+                        scope: None,
                     },
                 )?;
                 Ok(serde_json::json!({"ok": true}))
@@ -885,6 +903,7 @@ mod tests {
                 memory_type: None,
                 agent_id: None,
                 visibility: None,
+                scope: None,
             }),
         )
         .await;
