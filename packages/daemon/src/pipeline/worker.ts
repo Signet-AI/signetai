@@ -1135,7 +1135,17 @@ export function startWorker(
 		// Run shadow decisions on extracted facts
 		const decisions =
 			extraction.facts.length > 0
-				? await runShadowDecisions(extraction.facts, accessor, instrumentedProvider, decisionCfg)
+				? await runShadowDecisions(
+						extraction.facts,
+						accessor,
+						instrumentedProvider,
+						decisionCfg,
+						{
+							agentId,
+							scope: sourceScope,
+							visibility: sourceVisibility,
+						},
+					)
 				: { proposals: [], warnings: [] };
 
 		const controlledWritesEnabled = pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen;
