@@ -155,7 +155,7 @@ export function createWorkspaceSnapshot(basePath: string, backupRoot = defaultBa
 	}
 	mkdirSync(root, { recursive: true });
 
-	const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
+	const stamp = new Date().toISOString().replace(/[-:.]/g, "");
 	const dir = sanitize(basename(source));
 	const target = join(root, `${dir}-${stamp}`);
 

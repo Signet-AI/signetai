@@ -9,7 +9,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
-import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
+import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import { readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
 
@@ -154,7 +154,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			db.close();
 		}
 
-		const protection = await enforceSetupProtection({
+		let protection = await enforceSetupProtection({
 			basePath: cfg.basePath,
 			nonInteractive: cfg.nonInteractive,
 			allowUnprotectedWorkspace: cfg.allowUnprotectedWorkspace,
@@ -199,6 +199,17 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			}
 		}
 
+		let committed = false;
+		if (cfg.gitEnabled) {
+			const date = new Date().toISOString().split("T")[0];
+			committed = await deps.gitAddAndCommit(cfg.basePath, `${date}_signet-setup`);
+		}
+
+		if (protection.state === "snapshot") {
+			spinner.text = "Refreshing workspace snapshot...";
+			protection = refreshSnapshotProtection(cfg.basePath, protection);
+		}
+
 		spinner.text = "Starting daemon...";
 		const daemonStarted = await deps.startDaemon(cfg.basePath);
 
@@ -232,12 +243,8 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		}
 
 		console.log();
-		if (cfg.gitEnabled) {
-			const date = new Date().toISOString().split("T")[0];
-			const committed = await deps.gitAddAndCommit(cfg.basePath, `${date}_signet-setup`);
-			if (committed) {
-				console.log(chalk.dim("  ✓ Changes committed to git"));
-			}
+		if (committed) {
+			console.log(chalk.dim("  ✓ Changes committed to git"));
 		}
 
 		if (cfg.nonInteractive) {

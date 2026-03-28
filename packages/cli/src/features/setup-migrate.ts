@@ -23,7 +23,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
-import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
+import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
@@ -235,7 +235,7 @@ export async function runExistingSetupWizard(
 		runMigrations(db);
 		db.close();
 
-		const protection = await enforceSetupProtection({
+		let protection = await enforceSetupProtection({
 			basePath,
 			nonInteractive: options?.nonInteractive === true,
 			allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
@@ -297,6 +297,17 @@ export async function runExistingSetupWizard(
 			}
 		}
 
+		let committed = false;
+		if (options?.skipGit !== true && gitEnabled) {
+			const date = new Date().toISOString().split("T")[0];
+			committed = await deps.gitAddAndCommit(basePath, `${date}_signet-setup`);
+		}
+
+		if (protection.state === "snapshot") {
+			spinner.text = "Refreshing workspace snapshot...";
+			protection = refreshSnapshotProtection(basePath, protection);
+		}
+
 		spinner.text = "Starting daemon...";
 		const daemonStarted = await deps.startDaemon(basePath);
 
@@ -335,12 +346,8 @@ export async function runExistingSetupWizard(
 			}
 		}
 
-		if (options?.skipGit !== true && gitEnabled) {
-			const date = new Date().toISOString().split("T")[0];
-			const committed = await deps.gitAddAndCommit(basePath, `${date}_signet-setup`);
-			if (committed) {
-				console.log(chalk.dim("  ✓ Changes committed to git"));
-			}
+		if (committed) {
+			console.log(chalk.dim("  ✓ Changes committed to git"));
 		}
 
 		console.log();

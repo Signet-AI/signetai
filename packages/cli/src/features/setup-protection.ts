@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { confirm, input, select } from "@inquirer/prompts";
 import chalk from "chalk";
 import {
@@ -40,6 +41,19 @@ export function printSetupProtectionSummary(result: SetupProtectionResult): void
 	}
 	console.log(chalk.red("  ⚠ Workspace protection bypassed"));
 	console.log(chalk.dim("    Configure a git origin or create an out-of-workspace backup immediately."));
+}
+
+export function refreshSnapshotProtection(basePath: string, result: SetupProtectionResult): SetupProtectionResult {
+	if (result.state !== "snapshot") {
+		return result;
+	}
+	const root = result.snapshotPath ? dirname(result.snapshotPath) : undefined;
+	const snap = root ? createWorkspaceSnapshot(basePath, root) : createWorkspaceSnapshot(basePath);
+	saveSnapshotProtection(basePath, snap.path);
+	return {
+		...result,
+		snapshotPath: snap.path,
+	};
 }
 
 function printRisk(path: string): void {

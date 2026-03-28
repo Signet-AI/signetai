@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createWorkspaceSnapshot, getSnapshotProtection, saveSnapshotProtection } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
-import { enforceSetupProtection } from "./setup-protection.js";
+import { enforceSetupProtection, refreshSnapshotProtection } from "./setup-protection.js";
 
 const originalEnv = {
 	OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
@@ -105,6 +105,49 @@ describe("setup protection soft gate", () => {
 				}
 			}
 			expect(getSnapshotProtection(workspace)).toBe(result.snapshotPath);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("refreshes snapshot protection after later setup mutations", async () => {
+		const { root, workspace } = setupRepo();
+		try {
+			const result = await enforceSetupProtection({
+				basePath: workspace,
+				nonInteractive: true,
+				allowUnprotectedWorkspace: false,
+				createLocalBackup: true,
+			});
+			expect(result.state).toBe("snapshot");
+			expect(result.snapshotPath).not.toBeNull();
+			if (!result.snapshotPath) {
+				throw new Error("expected snapshot path");
+			}
+
+			const db = Database(join(workspace, "memory", "memories.db"));
+			try {
+				db.exec("INSERT INTO marker (value) VALUES ('after')");
+			} finally {
+				db.close();
+			}
+
+			const refreshed = refreshSnapshotProtection(workspace, result);
+			expect(refreshed.state).toBe("snapshot");
+			expect(refreshed.snapshotPath).not.toBeNull();
+			expect(refreshed.snapshotPath).not.toBe(result.snapshotPath);
+			if (!refreshed.snapshotPath) {
+				throw new Error("expected refreshed snapshot path");
+			}
+
+			const snapDb = Database(join(refreshed.snapshotPath, "memory", "memories.db"), { readonly: true });
+			try {
+				const row = snapDb.prepare("SELECT COUNT(*) as count FROM marker").get();
+				expect(row?.count).toBe(2);
+			} finally {
+				snapDb.close();
+			}
+			expect(getSnapshotProtection(workspace)).toBe(refreshed.snapshotPath);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
