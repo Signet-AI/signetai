@@ -10,6 +10,7 @@ import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
+import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
 import {
 	EMBEDDING_PROVIDER_CHOICES,
@@ -101,6 +102,13 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log();
 
 		if (nonInteractive) {
+			const protection = await enforceSetupProtection({
+				basePath,
+				nonInteractive: true,
+				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+				createLocalBackup: options.createLocalBackup === true,
+			});
+
 			const running = await deps.isDaemonRunning();
 			if (!running) {
 				const spinner = ora("Starting daemon...").start();
@@ -116,6 +124,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				await open(`http://localhost:${deps.DEFAULT_PORT}`);
 			}
 
+			printSetupProtectionSummary(protection);
 			return;
 		}
 
