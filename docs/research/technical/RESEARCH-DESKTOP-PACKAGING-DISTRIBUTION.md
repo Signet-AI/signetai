@@ -17,7 +17,7 @@ desktop builds for macOS, Windows, Ubuntu, and Arch?
 - Linux builds currently rely on generic bundling; Arch channel
   automation is absent.
 - Runtime startup still falls back to globally installed CLI/Bun paths
-  instead of preferring a bundled runtime.
+  and does not guarantee a packaged fallback runtime.
 - Signing/notarization requirements are not enforced as a contract.
 
 ## Risks in current state
@@ -31,8 +31,8 @@ desktop builds for macOS, Windows, Ubuntu, and Arch?
 
 ## Recommended contract
 
-1. Bundle a platform daemon runtime with desktop artifacts and prefer it
-   at app startup.
+1. Bundle a platform daemon runtime with desktop artifacts as a fallback
+   path when system-installed runtimes are unavailable.
 2. Ship per-platform installers/artifacts:
    - macOS: `.dmg`/`.app`
    - Windows: `.msi`
@@ -46,5 +46,5 @@ desktop builds for macOS, Windows, Ubuntu, and Arch?
 ## Practical implication
 
 Desktop packaging is both release infrastructure and runtime behavior.
-The app must prefer bundled runtime paths first, then fall back to
-system-installed paths for compatibility.
+The app should preserve system-runtime parity where available, while
+keeping a bundled daemon sidecar available as a no-install fallback.
