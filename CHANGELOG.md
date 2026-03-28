@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.81.1] - 2026-03-28
+
+### Bug Fixes
+
+- **daemon**: persist extraction fallback status with provider parity (replaces #367) (#373)
+
+### Docs
+
+- add alcar2364 to contributors
+
+
 ## [0.81.0] - 2026-03-28
 
 ### Bug Fixes
