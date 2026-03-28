@@ -184,6 +184,10 @@ Release CI derives channel metadata from tagged assets:
 These manifests are emitted as CI artifacts so channel repos can be
 updated without recomputing checksums locally.
 
+Desktop CI supports two signing paths for macOS/Windows artifacts:
+official signing when cert secrets are present, or self-signed fallback
+when running without official signing credentials.
+
 
 Configuration
 -------------

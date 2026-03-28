@@ -4,6 +4,16 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      signing_mode:
+        description: "Signing mode for macOS/Windows desktop artifacts"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - official
+          - self-signed
 
 jobs:
   build:
@@ -38,9 +48,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Signing preflight (macOS)
+      - name: Resolve signing mode (macOS)
         if: matrix.runner == 'macos-latest'
+        id: mac_sign_mode
         env:
+          SIGNING_MODE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'auto' }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -49,34 +61,70 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          for key in \
-            APPLE_CERTIFICATE \
-            APPLE_CERTIFICATE_PASSWORD \
-            APPLE_SIGNING_IDENTITY \
-            APPLE_ID \
-            APPLE_PASSWORD \
-            APPLE_TEAM_ID; do
+          mode="${SIGNING_MODE_INPUT}"
+          has_official=1
+          for key in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!key:-}" ]; then
-              echo "::error::Missing required secret: ${key}"
-              exit 1
+              has_official=0
+              break
             fi
           done
 
-      - name: Signing preflight (Windows)
+          if [ "${mode}" = "official" ] && [ "${has_official}" -ne 1 ]; then
+            echo "::error::signing_mode=official but required APPLE_* secrets are missing"
+            exit 1
+          fi
+
+          if [ "${mode}" = "auto" ]; then
+            if [ "${has_official}" -eq 1 ]; then
+              mode="official"
+            else
+              mode="self-signed"
+              echo "::warning::APPLE_* signing secrets missing, falling back to self-signed mode"
+            fi
+          fi
+
+          if [ "${mode}" != "official" ] && [ "${mode}" != "self-signed" ]; then
+            echo "::error::Invalid signing mode: ${mode}"
+            exit 1
+          fi
+
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+          echo "macOS signing mode: ${mode}"
+
+      - name: Resolve signing mode (Windows)
         if: matrix.runner == 'windows-latest'
+        id: win_sign_mode
         shell: pwsh
         env:
+          SIGNING_MODE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'auto' }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
-            Write-Error "Missing required secret: WINDOWS_CERTIFICATE"
+          $mode = "$env:SIGNING_MODE_INPUT"
+          $hasOfficial = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -and -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)
+
+          if ($mode -eq "official" -and -not $hasOfficial) {
+            Write-Error "signing_mode=official but WINDOWS_* secrets are missing"
             exit 1
           }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
-            Write-Error "Missing required secret: WINDOWS_CERTIFICATE_PASSWORD"
+
+          if ($mode -eq "auto") {
+            if ($hasOfficial) {
+              $mode = "official"
+            } else {
+              $mode = "self-signed"
+              Write-Warning "WINDOWS_* signing secrets missing, falling back to self-signed mode"
+            }
+          }
+
+          if ($mode -ne "official" -and $mode -ne "self-signed") {
+            Write-Error "Invalid signing mode: $mode"
             exit 1
           }
+
+          "mode=$mode" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Windows signing mode: $mode"
 
       - name: Install Linux dependencies
         if: matrix.runner == 'ubuntu-22.04'
@@ -107,7 +155,14 @@ jobs:
           TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}
         run: cd packages/tray && bun run stage:daemon
 
-      - name: Build desktop bundle
+      - name: Build desktop bundle (Linux/Windows)
+        if: matrix.runner != 'macos-latest'
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":["binaries/signet-daemon"]}}'
+        run: cd packages/tray && bun tauri build --target ${{ matrix.target }}
+
+      - name: Build desktop bundle (macOS official signing)
+        if: matrix.runner == 'macos-latest' && steps.mac_sign_mode.outputs.mode == 'official'
         env:
           TAURI_CONFIG: '{"bundle":{"externalBin":["binaries/signet-daemon"]}}'
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -118,8 +173,42 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: cd packages/tray && bun tauri build --target ${{ matrix.target }}
 
-      - name: Sign Windows MSI artifacts
-        if: matrix.runner == 'windows-latest'
+      - name: Build desktop bundle (macOS self-signed)
+        if: matrix.runner == 'macos-latest' && steps.mac_sign_mode.outputs.mode == 'self-signed'
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":["binaries/signet-daemon"]}}'
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          CERT_NAME="Signet Desktop Self-Signed"
+          TMP_DIR="${RUNNER_TEMP}/signet-selfsign"
+          KEYCHAIN="${RUNNER_TEMP}/signet-selfsign.keychain-db"
+          mkdir -p "${TMP_DIR}"
+
+          openssl req -x509 -newkey rsa:2048 \
+            -keyout "${TMP_DIR}/key.pem" \
+            -out "${TMP_DIR}/cert.pem" \
+            -days 7 -nodes \
+            -subj "/CN=${CERT_NAME}"
+
+          openssl pkcs12 -export \
+            -inkey "${TMP_DIR}/key.pem" \
+            -in "${TMP_DIR}/cert.pem" \
+            -out "${TMP_DIR}/cert.p12" \
+            -passout pass:
+
+          security create-keychain -p "" "${KEYCHAIN}"
+          security unlock-keychain -p "" "${KEYCHAIN}"
+          security import "${TMP_DIR}/cert.p12" -k "${KEYCHAIN}" -P "" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "${KEYCHAIN}"
+          security default-keychain -s "${KEYCHAIN}"
+          security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d '"')
+
+          export APPLE_SIGNING_IDENTITY="${CERT_NAME}"
+          cd packages/tray && bun tauri build --target "${TARGET}"
+
+      - name: Sign Windows MSI artifacts (official certificate)
+        if: matrix.runner == 'windows-latest' && steps.win_sign_mode.outputs.mode == 'official'
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
@@ -155,6 +244,43 @@ jobs:
               exit $LASTEXITCODE
             }
           }
+
+      - name: Sign Windows MSI artifacts (self-signed)
+        if: matrix.runner == 'windows-latest' && steps.win_sign_mode.outputs.mode == 'self-signed'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=Signet Desktop Self-Signed" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -NotAfter (Get-Date).AddDays(7)
+
+          $thumb = $cert.Thumbprint
+          $msiFiles = Get-ChildItem -Path "packages/tray/src-tauri/target/$env:TARGET/release/bundle/msi" -Filter *.msi -Recurse
+          if ($msiFiles.Count -eq 0) {
+            Write-Error "No MSI artifacts found for signing"
+            exit 1
+          }
+
+          foreach ($msi in $msiFiles) {
+            & signtool sign `
+              /sha1 "$thumb" `
+              /s My `
+              /fd SHA256 `
+              "$($msi.FullName)"
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "signtool failed for $($msi.FullName) with exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+            }
+          }
+
+          Remove-Item "Cert:\CurrentUser\My\$thumb" -ErrorAction SilentlyContinue
 
       - name: Generate Arch AUR metadata
         if: matrix.runner == 'ubuntu-22.04'
