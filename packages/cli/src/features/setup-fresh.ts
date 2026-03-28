@@ -23,7 +23,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 				nonInteractive: true,
 				allowUnprotectedWorkspace: false,
 				createLocalBackup: false,
-				assumeOpenClawLinked: cfg.configureOpenClawWs,
+				assumeOpenClawLinked: cfg.configureOpenClawWs && cfg.openclawConfigCount > 0,
 			});
 		}
 
@@ -159,7 +159,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			nonInteractive: cfg.nonInteractive,
 			allowUnprotectedWorkspace: cfg.allowUnprotectedWorkspace,
 			createLocalBackup: cfg.createLocalBackup,
-			assumeOpenClawLinked: cfg.configureOpenClawWs,
+			assumeOpenClawLinked: cfg.configureOpenClawWs && cfg.openclawConfigCount > 0,
 		});
 
 		if (cfg.harnesses.includes("forge") && !deps.detectExistingSetup(cfg.basePath).harnesses.forge) {

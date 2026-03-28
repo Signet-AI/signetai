@@ -324,9 +324,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 	let configureOpenClawWs = false;
 	let openclawRuntimePath: OpenClawRuntimeChoice = "plugin";
+	let openclawConfigCount = 0;
 	if (harnesses.includes("openclaw")) {
 		const connector = new OpenClawConnector();
 		const existingConfigs = connector.getDiscoveredConfigPaths();
+		openclawConfigCount = existingConfigs.length;
 
 		if (nonInteractive) {
 			configureOpenClawWs = options.configureOpenclawWorkspace === true && existingConfigs.length > 0;
@@ -695,6 +697,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		harnesses,
 		openclawRuntimePath,
 		configureOpenClawWs,
+		openclawConfigCount,
 		embeddingProvider,
 		embeddingModel,
 		embeddingDimensions,

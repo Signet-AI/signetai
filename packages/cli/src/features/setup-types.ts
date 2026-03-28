@@ -63,6 +63,7 @@ export interface FreshSetupConfig {
 	readonly harnesses: string[];
 	readonly openclawRuntimePath: OpenClawRuntimeChoice;
 	readonly configureOpenClawWs: boolean;
+	readonly openclawConfigCount: number;
 	readonly embeddingProvider: "native" | "ollama" | "openai" | "none";
 	readonly embeddingModel: string;
 	readonly embeddingDimensions: number;
