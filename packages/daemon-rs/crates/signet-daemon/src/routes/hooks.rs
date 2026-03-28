@@ -77,6 +77,51 @@ fn strip_untrusted_metadata(raw: &str) -> String {
         .to_string()
 }
 
+fn session_agent_id(session_key: Option<&str>) -> Option<String> {
+    let key = session_key?;
+    let mut parts = key.splitn(3, ':');
+    if parts.next() != Some("agent") {
+        return None;
+    }
+    let id = parts.next().unwrap_or("").trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn normalize_agent_id(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+fn resolve_remember_agent(
+    explicit: Option<&str>,
+    header: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<String, &'static str> {
+    let explicit_agent = normalize_agent_id(explicit);
+    let header_agent = normalize_agent_id(header);
+    let session_agent = session_agent_id(session_key);
+
+    if let Some(bound) = session_agent.as_deref() {
+        if let Some(explicit) = explicit_agent.as_deref()
+            && explicit != bound
+        {
+            return Err("agent_id does not match session scope");
+        }
+        if let Some(header) = header_agent.as_deref()
+            && header != bound
+        {
+            return Err("x-signet-agent-id does not match session scope");
+        }
+    }
+
+    Ok(session_agent
+        .or(explicit_agent)
+        .or(header_agent)
+        .unwrap_or_else(|| "default".to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/hooks/session-start
 // ---------------------------------------------------------------------------
@@ -798,33 +843,20 @@ pub async fn remember(
     let idempotency_key = body.idempotency_key.clone();
     let runtime_path_str = path.map(|p| p.as_str().to_string());
     let session_key = body.session_key.clone();
-    let agent_id = body
-        .agent_id
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            headers
-                .get("x-signet-agent-id")
-                .and_then(|v| v.to_str().ok())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .or_else(|| {
-            session_key.as_deref().and_then(|key| {
-                let mut parts = key.splitn(3, ':');
-                if parts.next() != Some("agent") {
-                    return None;
-                }
-                let id = parts.next().unwrap_or("").trim();
-                if id.is_empty() {
-                    return None;
-                }
-                Some(id.to_string())
-            })
-        })
-        .unwrap_or_else(|| "default".to_string());
+    let agent_id = match resolve_remember_agent(
+        body.agent_id.as_deref(),
+        headers.get("x-signet-agent-id").and_then(|v| v.to_str().ok()),
+        session_key.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(err) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response();
+        }
+    };
     let visibility = body
         .visibility
         .as_deref()
@@ -1308,19 +1340,9 @@ pub async fn session_checkpoint_extract(
 
     // Resolve agent_id: explicit value > "agent:{id}:..." session-key parse > "default".
     // Mirrors TS resolveAgentId(sessionKey) so multi-agent checkpoints scope correctly.
-    let agent_id = {
-        let explicit = body.agent_id.as_deref().filter(|s| !s.is_empty());
-        explicit.map(str::to_string).unwrap_or_else(|| {
-            let mut parts = session_key.splitn(3, ':');
-            if parts.next() == Some("agent") {
-                let id = parts.next().unwrap_or("").trim();
-                if !id.is_empty() {
-                    return id.to_string();
-                }
-            }
-            "default".to_string()
-        })
-    };
+    let agent_id = normalize_agent_id(body.agent_id.as_deref())
+        .or_else(|| session_agent_id(Some(&session_key)))
+        .unwrap_or_else(|| "default".to_string());
     let inline = body.transcript.clone();
     // transcript_path is trusted the same way as in session_end — OpenClaw
     // session files may be anywhere (project dirs, /tmp, containers). Auth
@@ -1394,8 +1416,40 @@ pub async fn session_checkpoint_extract(
 #[cfg(test)]
 mod tests {
     use super::{
-        CHECKPOINT_MIN_DELTA, extract_delta, resolve_compaction_project, strip_untrusted_metadata,
+        CHECKPOINT_MIN_DELTA, extract_delta, resolve_compaction_project, resolve_remember_agent,
+        session_agent_id, strip_untrusted_metadata,
     };
+
+    #[test]
+    fn session_agent_id_parses_agent_session_keys() {
+        assert_eq!(
+            session_agent_id(Some("agent:alpha:sess-1")).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(session_agent_id(Some("session:sess-1")), None);
+    }
+
+    #[test]
+    fn resolve_remember_agent_rejects_session_scope_mismatch() {
+        let err = resolve_remember_agent(
+            Some("agent-b"),
+            None,
+            Some("agent:agent-a:sess-1"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "agent_id does not match session scope");
+    }
+
+    #[test]
+    fn resolve_remember_agent_binds_to_session_scope() {
+        let agent = resolve_remember_agent(
+            Some("agent-a"),
+            Some("agent-a"),
+            Some("agent:agent-a:sess-1"),
+        )
+        .unwrap();
+        assert_eq!(agent, "agent-a");
+    }
 
     #[test]
     fn compaction_project_prefers_transcript_lineage() {

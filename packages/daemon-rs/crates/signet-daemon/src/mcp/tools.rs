@@ -41,9 +41,6 @@ pub fn definitions() -> Vec<ToolDefinition> {
                     "type": { "type": "string", "description": "Memory type" },
                     "importance": { "type": "number", "description": "Importance score 0-1" },
                     "tags": { "type": "array", "items": { "type": "string" } },
-                    "agent_id": { "type": "string", "description": "Agent id scope (default: default)" },
-                    "visibility": { "type": "string", "enum": ["global", "private", "archived"], "description": "Memory visibility (default: global)" },
-                    "scope": { "type": "string", "description": "Optional scope/project partition key" },
                 },
                 "required": ["content"],
             }),
@@ -397,26 +394,15 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 .collect()
         })
         .unwrap_or_default();
-    let agent_id = args
-        .get("agent_id")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("default")
-        .to_string();
-    let visibility = args
-        .get("visibility")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .map(str::to_lowercase)
-        .filter(|v| v == "global" || v == "private" || v == "archived")
-        .unwrap_or_else(|| "global".to_string());
-    let scope = args
-        .get("scope")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    if args.get("agent_id").is_some() || args.get("visibility").is_some() || args.get("scope").is_some() {
+        return ToolCallResult::error(
+            "memory_store does not accept agent_id, visibility, or scope; use the route-level auth scope"
+                .to_string(),
+        );
+    }
+    let agent_id = "default".to_string();
+    let visibility = "global".to_string();
+    let scope: Option<String> = None;
 
     let result = state
         .pool
@@ -632,5 +618,22 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    #[test]
+    fn memory_store_schema_excludes_cross_agent_scope_inputs() {
+        let defs = definitions();
+        let tool = defs
+            .iter()
+            .find(|tool| tool.name == "memory_store")
+            .expect("memory_store tool");
+        let props = tool
+            .input_schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("memory_store.properties");
+        assert!(!props.contains_key("agent_id"));
+        assert!(!props.contains_key("visibility"));
+        assert!(!props.contains_key("scope"));
     }
 }
