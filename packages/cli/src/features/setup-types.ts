@@ -6,6 +6,7 @@ export interface SetupWizardOptions {
 	nonInteractive?: boolean;
 	name?: string;
 	description?: string;
+	deploymentType?: string;
 	networkMode?: string;
 	harness?: string[];
 	embeddingProvider?: string;

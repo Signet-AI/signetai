@@ -262,6 +262,22 @@ specs:
     success_criteria: []
     decision: superseded
 
+  - id: setup-deployment-awareness
+    status: planning
+    path: docs/specs/planning/setup-deployment-awareness.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Interactive setup asks deployment context before provider prompts and shows deployment-specific extraction guidance"
+      - "Non-interactive setup accepts --deployment-type and infers provider defaults when provider flags are omitted"
+      - "Existing-identity migration preserves existing configured extraction providers unless --extraction-provider is explicitly provided"
+      - "With --deployment-type vps and omitted extraction provider, setup avoids inferring ollama, prefers selected non-local harness tooling when available locally, then other detected non-local tooling, and falls back to none"
+      - "README/QUICKSTART/CLI docs consistently present built-in native embeddings as recommended"
+    decision: null
+
   - id: openclaw-integration-strategy
     status: complete
     path: docs/specs/complete/openclaw-integration-strategy.md

@@ -6,6 +6,7 @@ interface SetupOptions {
 	nonInteractive?: boolean;
 	name?: string;
 	description?: string;
+	deploymentType?: string;
 	networkMode?: string;
 	harness?: string[];
 	embeddingProvider?: string;
@@ -48,6 +49,10 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--non-interactive", "Run setup without prompts")
 		.option("--name <name>", "Agent name (non-interactive mode)")
 		.option("--description <description>", "Agent description (non-interactive mode)")
+		.option(
+			"--deployment-type <type>",
+			"Deployment context (local, vps, server). Adjusts non-interactive inferred defaults.",
+		)
 		.option("--network-mode <mode>", "Daemon network mode in non-interactive mode (localhost, tailscale)")
 		.option(
 			"--harness <harness>",

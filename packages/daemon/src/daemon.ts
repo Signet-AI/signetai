@@ -130,7 +130,9 @@ import { walkImpact } from "./graph-impact";
 import { buildMemoryTimeline } from "./memory-timeline";
 import { type RecallParams, hybridRecall } from "./memory-search";
 import { getAgentScope, resolveAgentId } from "./agent-id";
-import { writeFileIfChanged } from "./file-sync";
+import { writeFileIfChangedAsync } from "./file-sync";
+import { syncAgentWorkspaces } from "./identity-sync";
+import { createSingleFlightRunner } from "./single-flight-runner";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "./onepassword.js";
 import { expandTemporalNode } from "./temporal-expand";
 import { upsertThreadHead } from "./thread-heads";
@@ -10390,7 +10392,7 @@ async function syncHarnessConfigs() {
 	const agentsMdPath = join(AGENTS_DIR, "AGENTS.md");
 	if (!existsSync(agentsMdPath)) return;
 
-	const rawContent = readFileSync(agentsMdPath, "utf-8");
+	const rawContent = await Bun.file(agentsMdPath).text();
 	const content = stripSignetBlock(rawContent);
 	const withBlock = buildSignetBlock() + content;
 
@@ -10428,20 +10430,22 @@ ${fileList}
 `;
 	};
 
-	// Read and compose additional identity files
-	const identityExtras = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"]
-		.map((name) => {
-			const p = join(AGENTS_DIR, name);
-			if (!existsSync(p)) return "";
-			try {
-				const c = readFileSync(p, "utf-8").trim();
-				if (!c) return "";
-				const header = name.replace(".md", "");
-				return `\n## ${header}\n\n${c}`;
-			} catch {
-				return "";
-			}
-		})
+	const identityExtras = (
+		await Promise.all(
+			["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"].map(async (name) => {
+				const identityPath = join(AGENTS_DIR, name);
+				if (!existsSync(identityPath)) return "";
+				try {
+					const fileContent = (await Bun.file(identityPath).text()).trim();
+					if (!fileContent) return "";
+					const header = name.replace(".md", "");
+					return `\n## ${header}\n\n${fileContent}`;
+				} catch {
+					return "";
+				}
+			}),
+		)
+	)
 		.filter(Boolean)
 		.join("\n");
 
@@ -10451,100 +10455,51 @@ ${fileList}
 	const opencodeDir = join(homedir(), ".config", "opencode");
 	if (existsSync(opencodeDir)) {
 		try {
-			writeFileSync(join(opencodeDir, "AGENTS.md"), buildHeader("AGENTS.md") + composed);
-			logger.sync.harness("opencode", "~/.config/opencode/AGENTS.md");
-		} catch (e) {
-			logger.sync.failed("opencode", e as Error);
+			const opencodeAgentsPath = join(opencodeDir, "AGENTS.md");
+			if (await writeFileIfChangedAsync(opencodeAgentsPath, buildHeader("AGENTS.md") + composed)) {
+				logger.sync.harness("opencode", "~/.config/opencode/AGENTS.md");
+			}
+		} catch (error) {
+			logger.sync.failed("opencode", error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
 	// Sync per-agent workspace dirs for OpenClaw multi-agent support
-	syncAgentWorkspaces(AGENTS_DIR);
-	ensureArchitectureDoc();
-}
-
-/**
- * For each agent subdirectory in ~/.agents/agents/,
- * assemble and write a workspace AGENTS.md with inherited + overridden
- * identity files. OpenClaw uses workspace: ~/.agents/agents/{name}/workspace.
- */
-function syncAgentWorkspaces(agentsDir: string): void {
-	const agentsRoot = join(agentsDir, "agents");
-	if (!existsSync(agentsRoot)) return;
-
-	let entries: string[];
-	try {
-		entries = readdirSync(agentsRoot, { withFileTypes: true })
-			.filter((d) => d.isDirectory())
-			.map((d) => d.name);
-	} catch {
-		return;
-	}
-
-	for (const name of entries) {
-		const agentDir = join(agentsRoot, name);
-		const workspaceDir = join(agentDir, "workspace");
-
-		// Base AGENTS.md: root AGENTS.md content
-		const agentsMdPath = join(agentsDir, "AGENTS.md");
-		if (!existsSync(agentsMdPath)) continue;
-
-		try {
-			const base = readFileSync(agentsMdPath, "utf-8");
-
-			// Agent-specific overrides for SOUL.md and IDENTITY.md
-			const agentIdentity = ["SOUL.md", "IDENTITY.md"]
-				.map((f) => {
-					const override = join(agentDir, f);
-					const root = join(agentsDir, f);
-					const p = existsSync(override) ? override : existsSync(root) ? root : null;
-					if (!p) return "";
-					const c = readFileSync(p, "utf-8").trim();
-					return c ? `\n## ${f.replace(".md", "")}\n\n${c}` : "";
-				})
-				.filter(Boolean)
-				.join("\n");
-
-			// USER.md and MEMORY.md always from root
-			const sharedIdentity = ["USER.md", "MEMORY.md"]
-				.map((f) => {
-					const p = join(agentsDir, f);
-					if (!existsSync(p)) return "";
-					const c = readFileSync(p, "utf-8").trim();
-					return c ? `\n## ${f.replace(".md", "")}\n\n${c}` : "";
-				})
-				.filter(Boolean)
-				.join("\n");
-
-			const composed = base + agentIdentity + sharedIdentity;
-
-			mkdirSync(workspaceDir, { recursive: true });
-			const workspaceAgentsPath = join(workspaceDir, "AGENTS.md");
-			if (writeFileIfChanged(workspaceAgentsPath, composed)) {
-				logger.sync.harness(`openclaw:${name}`, workspaceAgentsPath);
-			}
-		} catch (e) {
-			logger.error("sync", `Failed to sync agent workspace: ${name}`, e as Error);
-		}
-	}
+	await syncAgentWorkspaces({
+		agentsDir: AGENTS_DIR,
+		onWorkspaceSynced: (name, workspaceAgentsPath) => {
+			logger.sync.harness(`openclaw:${name}`, workspaceAgentsPath);
+		},
+		onError: (name, error) => {
+			logger.error("sync", `Failed to sync agent workspace: ${name}`, error);
+		},
+	});
+	await ensureArchitectureDoc();
 }
 
 /** Write SIGNET-ARCHITECTURE.md if missing or outdated. */
-function ensureArchitectureDoc(): void {
+async function ensureArchitectureDoc(): Promise<void> {
 	const archPath = join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md");
 	try {
 		const archContent = buildArchitectureDoc();
-		if (writeFileIfChanged(archPath, archContent)) {
+		if (await writeFileIfChangedAsync(archPath, archContent)) {
 			logger.info("sync", "SIGNET-ARCHITECTURE.md updated");
 		}
-	} catch (e) {
-		logger.error("sync", "Failed to write SIGNET-ARCHITECTURE.md", e as Error);
+	} catch (error) {
+		logger.error("sync", "Failed to write SIGNET-ARCHITECTURE.md", error instanceof Error ? error : new Error(String(error)));
 	}
 }
 
-let syncPending = false;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const SYNC_DEBOUNCE_MS = 2000;
+const syncRunner = createSingleFlightRunner(
+	async () => {
+		await syncHarnessConfigs();
+	},
+	(error) => {
+		logger.error("sync", "Harness sync failed", error);
+	},
+);
 
 function scheduleSyncHarnessConfigs() {
 	if (syncTimer) {
@@ -10552,10 +10507,11 @@ function scheduleSyncHarnessConfigs() {
 	}
 
 	syncTimer = setTimeout(async () => {
-		if (syncPending) return;
-		syncPending = true;
-		await syncHarnessConfigs();
-		syncPending = false;
+		if (syncRunner.running) {
+			syncRunner.requestRerun();
+			return;
+		}
+		await syncRunner.execute();
 	}, SYNC_DEBOUNCE_MS);
 }
 
@@ -10639,7 +10595,7 @@ function startFileWatcher() {
 		logger.info("watcher", "File removed", { path });
 		// Recreate the architecture doc immediately if deleted at runtime
 		if (path.endsWith("SIGNET-ARCHITECTURE.md")) {
-			ensureArchitectureDoc();
+			void ensureArchitectureDoc();
 		}
 		scheduleAutoCommit(path);
 	});
@@ -11150,7 +11106,6 @@ async function cleanup() {
 		clearTimeout(syncTimer);
 		syncTimer = null;
 	}
-	syncPending = false;
 
 	// Flush telemetry before closing DB
 	if (heartbeatTimer) {
@@ -12161,7 +12116,7 @@ async function main() {
 
 	// Ensure SIGNET-ARCHITECTURE.md exists on startup (file watcher uses
 	// ignoreInitial:true so it won't recreate missing files on its own)
-	ensureArchitectureDoc();
+	await ensureArchitectureDoc();
 
 	// Load config and initialize telemetry before starting runtime.
 	const memoryCfg = loadMemoryConfig(AGENTS_DIR);

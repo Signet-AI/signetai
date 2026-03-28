@@ -115,6 +115,11 @@ Degraded mode rules:
   document the missing surface explicitly instead of implying full parity.
 - Compaction/session-summary forced-refresh guarantees are currently full in
   TS daemon and degraded in daemon-rs shadow path.
+- Watcher-driven harness identity sync (batched `AGENTS.md` / `USER.md` /
+  `MEMORY.md` propagation, queued reruns during active sync, and generated
+  `SIGNET-ARCHITECTURE.md` refresh) is currently full in the TS daemon and
+  degraded in the daemon-rs shadow path, which does not yet own that watcher
+  pipeline.
 - Prompt-time anti-bleed scoping remains mandatory across all paths.
 
 ---

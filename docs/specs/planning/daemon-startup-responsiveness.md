@@ -9,10 +9,11 @@ depends_on:
   - "memory-pipeline-v2"
 success_criteria:
   - "Daemon startup keeps /health responsive while recovery work runs on large databases"
+  - "Watcher-triggered harness sync keeps /health responsive on large multi-agent workspaces"
   - "Startup recovery and embedding coverage queries avoid unbounded synchronous scans on the main thread"
   - "Regression tests cover batched summary-job recovery and duplicate-hash embedding coverage"
   - "CLI start/restart can recover from a stale managed daemon process that still owns the port after health probes fail"
-scope_boundary: "Boot-path responsiveness and recovery-query hardening only; does not redesign the full daemon startup pipeline"
+scope_boundary: "Boot-path responsiveness and watcher-triggered harness sync hardening only; does not redesign the full daemon startup pipeline"
 draft_quality: "incident-driven planning stub"
 ---
 
@@ -34,11 +35,12 @@ bind its port yet still fail health probes and control requests.
 
 1. Preserve HTTP responsiveness during startup and early background recovery.
 2. Batch recovery work that can grow with table size.
-3. Keep duplicate-hash embedding coverage correct without pathological query
+3. Batch watcher-triggered harness sync work that scales with agent count.
+4. Keep duplicate-hash embedding coverage correct without pathological query
    plans.
-4. Recover cleanly when a managed daemon process is still alive but no longer
+5. Recover cleanly when a managed daemon process is still alive but no longer
    answers health checks.
-5. Add durable regression guards for this incident class.
+6. Add durable regression guards for this incident class.
 
 ## Proposed guardrails
 
@@ -59,7 +61,14 @@ vector?" should be centralized in one helper module and use index-friendly
 metric. Background recovery may continue after startup, but it must not make
 operators blind.
 
-### 4) Managed stale-process cleanup
+### 4) Watcher sync responsiveness contract
+
+Watcher-triggered identity sync (`syncHarnessConfigs`, per-agent workspace
+materialization, generated architecture docs) must avoid long synchronous file
+loops on the main thread. Large agent rosters should process in bounded batches
+with event-loop yields between batches.
+
+### 5) Managed stale-process cleanup
 
 CLI start/stop/restart flows should not rely solely on successful health
 probes to decide whether a daemon exists. If the managed daemon PID is still
@@ -69,6 +78,7 @@ before spawning a replacement.
 ## Validation
 
 - Recovery helper proves bounded batch behavior.
+- Identity sync helper proves batched yields between watcher sync batches.
 - Summary worker startup test proves crash recovery is deferred off the
   synchronous start path.
 - Duplicate-hash coverage tests prove covered memories are not treated as

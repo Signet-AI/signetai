@@ -110,8 +110,8 @@ signet setup --path /custom/path
 signet setup --non-interactive \
   --name "My Agent" \
   --harness claude-code \
-  --embedding-provider ollama \
-  --extraction-provider claude-code
+  --deployment-type vps \
+  --embedding-provider native
 ```
 
 Options:
@@ -122,10 +122,11 @@ Options:
 | `--non-interactive` | Run setup without prompts |
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
+| `--deployment-type <type>` | Deployment context (`local`, `vps`, `server`) used for interactive guidance and non-interactive inferred defaults |
 | `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `codex`) |
-| `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) — required in non-interactive setup |
+| `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
-| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) — required in non-interactive setup |
+| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) |
 | `--extraction-model <model>` | Non-interactive extraction model |
 | `--search-balance <alpha>` | Non-interactive search alpha (`0-1`) |
 | `--openclaw-runtime-path <mode>` | Non-interactive OpenClaw mode (`plugin`, `legacy`) |
@@ -138,8 +139,15 @@ Options:
 Non-interactive behavior:
 
 - setup method: create new identity (no GitHub import)
-- embedding provider must be explicitly provided via `--embedding-provider`
-- extraction provider must be explicitly provided via `--extraction-provider`
+- provider flags are optional; setup infers defaults from `--deployment-type`
+  when omitted
+- with `--deployment-type vps`, setup prefers non-local extraction defaults
+  from selected harnesses when those tools are available locally, then other
+  detected tooling (`claude-code`, `codex`, `opencode`), and falls back to
+  `none` when needed
+- for existing-identity migration, previously configured extraction providers
+  are preserved unless `--extraction-provider` is explicitly passed
+- explicit provider flags override inferred defaults
 - git: enabled unless `--skip-git` is passed
 - when OpenClaw points at this workspace and no `origin` remote exists, setup
   requires either backup creation (`--create-local-backup`) or explicit bypass
@@ -151,6 +159,8 @@ Extraction safety note:
 
 - intended usage is `claude-code` on Haiku, `codex` on GPT Mini with a
   Pro/Max subscription, or local `ollama` with at least `qwen3:4b`
+- with `--deployment-type vps`, setup avoids defaulting to local `ollama`
+  extraction and prefers non-local providers
 - set `--extraction-provider none` on a VPS if you do not want
   background extraction
 - remote API extraction can create extreme usage fees fast
@@ -167,12 +177,14 @@ Wizard steps:
    is detected; workspace is patched only if you opt in, and setup warns
    that uninstalling OpenClaw can delete this workspace unless backups exist
 4. **Description** - Short agent description
-5. **Embedding Provider**:
+5. **Deployment Context** - Where Signet is running (`local`, `vps`, `server`)
+   to show environment-aware guidance before extraction provider selection
+6. **Embedding Provider**:
    - Built-in (recommended, no setup required)
    - Ollama (local)
    - OpenAI API
    - Skip embeddings
-6. **Embedding Model** - Based on provider:
+7. **Embedding Model** - Based on provider:
    - Built-in: `nomic-embed-text-v1.5`
    - Ollama: `nomic-embed-text`, `all-minilm`, `mxbai-embed-large`
    - OpenAI: text-embedding-3-small, text-embedding-3-large
@@ -180,15 +192,15 @@ Wizard steps:
      service health, and model presence; if checks fail, setup offers
      retry, switch to built-in embeddings, switch to OpenAI, or
      continue without embeddings
-7. **Search Balance** - Semantic vs keyword weighting
-8. **Advanced Settings** (optional):
+8. **Search Balance** - Semantic vs keyword weighting
+9. **Advanced Settings** (optional):
    - `top_k` - Search candidates per source
    - `min_score` - Minimum search score threshold
    - `session_budget` - Context character limit
    - `decay_rate` - Memory importance decay
-9. **Import** - Optionally import from another platform
-10. **Git** - Initialize version control
-11. **Launch Dashboard** - Open web UI
+10. **Import** - Optionally import from another platform
+11. **Git** - Initialize version control
+12. **Launch Dashboard** - Open web UI
 
 What gets created:
 
