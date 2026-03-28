@@ -66,12 +66,6 @@ export async function runExistingSetupWizard(
 		if (!existsSync(join(basePath, "memory", "scripts"))) {
 			mkdirSync(join(basePath, "memory", "scripts"), { recursive: true });
 		}
-		const protection = await enforceSetupProtection({
-			basePath,
-			nonInteractive: options?.nonInteractive === true,
-			allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
-			createLocalBackup: options?.createLocalBackup === true,
-		});
 
 		spinner.text = "Installing memory system...";
 		const scriptsSource = join(templatesDir, "memory", "scripts");
@@ -197,6 +191,40 @@ export async function runExistingSetupWizard(
 			writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
 		}
 
+		const agentsPath = join(basePath, "AGENTS.md");
+		if (!existsSync(agentsPath)) {
+			const agentsTemplate = join(templatesDir, "AGENTS.md.template");
+			if (existsSync(agentsTemplate)) {
+				const content = readFileSync(agentsTemplate, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
+				writeFileSync(agentsPath, content);
+			} else {
+				writeFileSync(
+					agentsPath,
+					`# ${agentName}\n\nThis is your agent identity file. Define your agent's personality, capabilities,\nand behaviors here. This file is shared across all your AI tools.\n`,
+				);
+			}
+		}
+
+		const docs = [
+			{ name: "MEMORY.md", template: "MEMORY.md.template" },
+			{ name: "SOUL.md", template: "SOUL.md.template" },
+			{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
+			{ name: "USER.md", template: "USER.md.template" },
+		];
+
+		for (const doc of docs) {
+			const path = join(basePath, doc.name);
+			if (existsSync(path)) {
+				continue;
+			}
+			const template = join(templatesDir, doc.template);
+			if (!existsSync(template)) {
+				continue;
+			}
+			const content = readFileSync(template, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
+			writeFileSync(path, content);
+		}
+
 		spinner.text = "Initializing database...";
 		const dbPath = join(basePath, "memory", "memories.db");
 		const db = Database(dbPath);
@@ -206,6 +234,13 @@ export async function runExistingSetupWizard(
 		}
 		runMigrations(db);
 		db.close();
+
+		const protection = await enforceSetupProtection({
+			basePath,
+			nonInteractive: options?.nonInteractive === true,
+			allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
+			createLocalBackup: options?.createLocalBackup === true,
+		});
 
 		let importResult: ImportResult | null = null;
 		if (detection.hasMemoryDir && detection.memoryLogCount > 0) {

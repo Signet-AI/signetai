@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceSnapshot, getSnapshotProtection } from "../lib/workspace-protection.js";
+import { createWorkspaceSnapshot, getSnapshotProtection, saveSnapshotProtection } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
 import { enforceSetupProtection } from "./setup-protection.js";
 
@@ -175,6 +175,28 @@ describe("setup protection soft gate", () => {
 			expect(() => createWorkspaceSnapshot(workspace, join(workspace, "backups"))).toThrow(
 				"Backup root must be outside workspace",
 			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("stores snapshot protection marker under .daemon and clears legacy marker", () => {
+		const root = mkdtempSync(join(tmpdir(), "setup-protection-"));
+		const workspace = join(root, "agents");
+		try {
+			mkdirSync(workspace, { recursive: true });
+			const snapshot = join(root, "backup", "agents-20260327T120000Z");
+			const legacy = join(workspace, ".signet-workspace-protection.json");
+			writeFileSync(legacy, '{"source":"legacy"}\n');
+
+			saveSnapshotProtection(workspace, snapshot);
+
+			const marker = join(workspace, ".daemon", "workspace-protection.json");
+			expect(existsSync(marker)).toBe(true);
+			expect(existsSync(legacy)).toBe(false);
+			const parsed = JSON.parse(readFileSync(marker, "utf-8"));
+			expect(parsed.source).toBe(workspace);
+			expect(parsed.snapshot).toBe(snapshot);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import Database from "../sqlite.js";
 
@@ -140,6 +140,10 @@ export function defaultBackupRoot(): string {
 }
 
 function snapshotStatePath(basePath: string): string {
+	return join(resolve(basePath), ".daemon", "workspace-protection.json");
+}
+
+function legacySnapshotStatePath(basePath: string): string {
 	return join(resolve(basePath), ".signet-workspace-protection.json");
 }
 
@@ -178,7 +182,9 @@ export function createWorkspaceSnapshot(basePath: string, backupRoot = defaultBa
 }
 
 function readSnapshotState(basePath: string): SnapshotState | null {
-	const file = snapshotStatePath(basePath);
+	const next = snapshotStatePath(basePath);
+	const legacy = legacySnapshotStatePath(basePath);
+	const file = existsSync(next) ? next : legacy;
 	if (!existsSync(file)) {
 		return null;
 	}
@@ -215,7 +221,10 @@ export function saveSnapshotProtection(basePath: string, snapshotPath: string): 
 		snapshot: resolve(snapshotPath),
 		createdAt: new Date().toISOString(),
 	};
-	writeFileSync(snapshotStatePath(basePath), `${JSON.stringify(state, null, 2)}\n`);
+	const file = snapshotStatePath(basePath);
+	mkdirSync(dirname(file), { recursive: true });
+	writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+	rmSync(legacySnapshotStatePath(basePath), { force: true });
 }
 
 export function getSnapshotProtection(basePath: string): string | null {
