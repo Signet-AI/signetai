@@ -820,7 +820,9 @@ the system's expectations.
 **Status:** PARTIALLY COMPLETE (prototype, 2026-03-27).
 Prototype includes per-memory surprisal scoring, task continuity
 discount, bypass rules (decision/constraint/error), and
-pass-block ratio alerts in worker logs. Remaining work:
+pass-block ratio alerts in worker logs. Current prototype uses
+memory `type` as the entity-scope proxy for neighborhood matching.
+Remaining work:
 production telemetry/dashboard surfacing, broader rollout tuning,
 and post-launch threshold calibration.
 
@@ -833,8 +835,8 @@ near-duplicate memories accumulate.
 
 1. **Per-memory surprisal scoring:** Before writing a memory, compute
    surprise = 1 - max_similarity against existing memories in the
-   same entity scope. Memories below threshold (default 0.4) are
-   skipped.
+   same entity scope. Prototype proxy: same agent, visibility, scope,
+   and memory type. Memories below threshold (default 0.4) are skipped.
 2. **Task continuity discount:** When the user is working on the same
    task (same directory, recent stores, semantic similarity to last
    5 memories), lower the threshold by 0.15. Captures incremental

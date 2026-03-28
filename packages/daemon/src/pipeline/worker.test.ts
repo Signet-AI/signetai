@@ -47,6 +47,7 @@ function insertMemory(
 	id: string,
 	content: string,
 	opts?: {
+		type?: string;
 		project?: string | null;
 		scope?: string | null;
 		agentId?: string;
@@ -63,9 +64,10 @@ function insertMemory(
 		 (id, type, content, normalized_content, content_hash, confidence, importance, created_at, updated_at,
 		  updated_by, vector_clock, is_deleted, extraction_status, project, scope, agent_id,
 		  visibility, source_type, source_id)
-		 VALUES (?, 'fact', ?, ?, ?, 1.0, 0.5, ?, ?, 'test', '{}', 0, 'none', ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, 1.0, 0.5, ?, ?, 'test', '{}', 0, 'none', ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
+		opts?.type ?? "fact",
 		content,
 		opts?.normalizedContent ?? content,
 		opts?.contentHash ?? null,
@@ -990,7 +992,9 @@ describe("Worker phase C controlled writes", () => {
 
 	it("blocks low-surprisal ADD writes with the adaptive write gate", async () => {
 		insertMemory(db, "mem-src-write-gate", "Source envelope for adaptive write gate");
-		insertMemory(db, "mem-existing-write-gate", "User prefers dark mode in editor settings");
+		insertMemory(db, "mem-existing-write-gate", "User prefers dark mode in editor settings", {
+			type: "preference",
+		});
 		insertMemoryEmbedding(db, "mem-existing-write-gate", [1, 0, 0]);
 		enqueueExtractionJob(accessor, "mem-src-write-gate");
 
@@ -1049,12 +1053,70 @@ describe("Worker phase C controlled writes", () => {
 		expect(payload.writeStats.added).toBe(0);
 	});
 
+	it("does not block write-gate checks when similar memories are a different fact type", async () => {
+		insertMemory(db, "mem-src-write-gate-type", "Source envelope for type-scoped gate check");
+		insertMemory(db, "mem-existing-write-gate-type", "User prefers dark mode in editor settings", {
+			type: "fact",
+		});
+		insertMemoryEmbedding(db, "mem-existing-write-gate-type", [1, 0, 0]);
+		enqueueExtractionJob(accessor, "mem-src-write-gate-type");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User likes dark mode in editor settings",
+					type: "preference",
+					confidence: 0.93,
+				},
+			],
+			entities: [],
+		});
+		const addDecision = JSON.stringify({
+			action: "add",
+			confidence: 0.88,
+			reason: "Store as a separate preference",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, addDecision]),
+			{
+				...PHASE_C_CFG,
+				writeGate: {
+					enabled: true,
+					threshold: 0.4,
+					continuityDiscount: 0.15,
+				},
+			},
+			decisionCfgWithEmbedding([1, 0, 0]),
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		const derived = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2'
+				   AND source_id = ?`,
+			)
+			.get("mem-src-write-gate-type") as { cnt: number };
+		expect(derived.cnt).toBe(1);
+
+		const payload = JSON.parse(getJob(db, "mem-src-write-gate-type")?.result ?? "{}");
+		expect(payload.writeStats.writeGateConsidered).toBe(1);
+		expect(payload.writeStats.writeGatePassed).toBe(1);
+		expect(payload.writeStats.writeGateBlocked).toBe(0);
+	});
+
 	it("blocks low-surprisal writes across different projects in the same scope", async () => {
 		insertMemory(db, "mem-src-write-gate-project-a", "Source envelope for cross-project gate check", {
 			project: "/repo-a",
 		});
 		insertMemory(db, "mem-existing-write-gate-project-b", "User prefers dark mode in editor settings", {
 			project: "/repo-b",
+			type: "preference",
 		});
 		insertMemoryEmbedding(db, "mem-existing-write-gate-project-b", [1, 0, 0]);
 		enqueueExtractionJob(accessor, "mem-src-write-gate-project-a");

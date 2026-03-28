@@ -441,7 +441,11 @@ async fn process_extract(
     // The full pipeline will:
     // 1. Search for existing similar memories (hybrid search)
     // 2. Run shadow decision engine (add/update/delete/none)
-    // 3. Apply controlled writes with safety gates
+    // 3. Apply controlled writes with safety gates, including DP-19
+    //    adaptive write-gate parity:
+    //    - surprisal neighborhood scoped by agent_id + visibility + scope
+    //    - entity-scope proxy matched by memory type
+    //    - continuity discount signals (directory/recent/semantic)
     // 4. Persist graph entities
     // 5. Enqueue structural jobs (classify, dependency)
 

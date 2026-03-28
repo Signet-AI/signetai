@@ -81,12 +81,20 @@ function findMaxSimilarityVec(db: ReadDb, query: Float32Array, input: WriteGateI
 		   AND m.is_deleted = 0
 		   AND m.agent_id = ?
 		   AND m.visibility = ?
+		   AND m.type = ?
 		   AND m.id <> ?
 		   ${scopeClause}
 		 ORDER BY v.distance
 		 LIMIT 1`;
 
-	const args: unknown[] = [query, NEIGHBOR_LIMIT, input.agentId, input.sourceVisibility, input.sourceMemoryId];
+	const args: unknown[] = [
+		query,
+		NEIGHBOR_LIMIT,
+		input.agentId,
+		input.sourceVisibility,
+		input.factType,
+		input.sourceMemoryId,
+	];
 	if (input.sourceScope !== null) {
 		args.push(input.sourceScope);
 	}
@@ -104,11 +112,12 @@ function findMaxSimilarityFallback(db: ReadDb, query: Float32Array, input: Write
 		   AND m.is_deleted = 0
 		   AND m.agent_id = ?
 		   AND m.visibility = ?
+		   AND m.type = ?
 		   AND m.id <> ?
 		   ${scopeClause}
 		 ORDER BY m.updated_at DESC
 		 LIMIT ?`;
-	const args: unknown[] = [input.agentId, input.sourceVisibility, input.sourceMemoryId];
+	const args: unknown[] = [input.agentId, input.sourceVisibility, input.factType, input.sourceMemoryId];
 	if (input.sourceScope !== null) {
 		args.push(input.sourceScope);
 	}
