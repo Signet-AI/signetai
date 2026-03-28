@@ -894,6 +894,7 @@ specs:
       - "Tray runtime can launch bundled daemon binaries as a fallback when system-installed runtimes are unavailable"
       - "Ubuntu outputs include both .deb and .AppImage artifacts per release"
       - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
+      - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
       - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
     decision: null
 
