@@ -183,6 +183,8 @@ jobs:
           CERT_NAME="Signet Desktop Self-Signed"
           TMP_DIR="${RUNNER_TEMP}/signet-selfsign"
           KEYCHAIN="${RUNNER_TEMP}/signet-selfsign.keychain-db"
+          KEYCHAIN_PASS="signet-selfsign"
+          P12_PASS="signet-selfsign"
           mkdir -p "${TMP_DIR}"
 
           openssl req -x509 -newkey rsa:2048 \
@@ -195,12 +197,12 @@ jobs:
             -inkey "${TMP_DIR}/key.pem" \
             -in "${TMP_DIR}/cert.pem" \
             -out "${TMP_DIR}/cert.p12" \
-            -passout pass:
+            -passout pass:"${P12_PASS}"
 
-          security create-keychain -p "" "${KEYCHAIN}"
-          security unlock-keychain -p "" "${KEYCHAIN}"
-          security import "${TMP_DIR}/cert.p12" -k "${KEYCHAIN}" -P "" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" "${KEYCHAIN}"
+          security create-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN}"
+          security unlock-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN}"
+          security import "${TMP_DIR}/cert.p12" -k "${KEYCHAIN}" -P "${P12_PASS}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASS}" "${KEYCHAIN}"
           security default-keychain -s "${KEYCHAIN}"
           security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d '"')
 
@@ -224,6 +226,14 @@ jobs:
             [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
           )
 
+          $signTool = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) {
+            Write-Error "signtool.exe not found under Windows Kits"
+            exit 1
+          }
+
           $msiFiles = Get-ChildItem -Path "packages/tray/src-tauri/target/$env:TARGET/release/bundle/msi" -Filter *.msi -Recurse
           if ($msiFiles.Count -eq 0) {
             Write-Error "No MSI artifacts found for signing"
@@ -231,7 +241,7 @@ jobs:
           }
 
           foreach ($msi in $msiFiles) {
-            & signtool sign `
+            & $signTool.FullName sign `
               /f "$certPath" `
               /p "$env:WINDOWS_CERTIFICATE_PASSWORD" `
               /fd SHA256 `
@@ -260,6 +270,14 @@ jobs:
             -CertStoreLocation "Cert:\CurrentUser\My" `
             -NotAfter (Get-Date).AddDays(7)
 
+          $signTool = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) {
+            Write-Error "signtool.exe not found under Windows Kits"
+            exit 1
+          }
+
           $thumb = $cert.Thumbprint
           $msiFiles = Get-ChildItem -Path "packages/tray/src-tauri/target/$env:TARGET/release/bundle/msi" -Filter *.msi -Recurse
           if ($msiFiles.Count -eq 0) {
@@ -268,7 +286,7 @@ jobs:
           }
 
           foreach ($msi in $msiFiles) {
-            & signtool sign `
+            & $signTool.FullName sign `
               /sha1 "$thumb" `
               /s My `
               /fd SHA256 `
