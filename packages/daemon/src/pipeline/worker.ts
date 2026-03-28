@@ -1630,7 +1630,12 @@ export function startWorker(
 		maxRetries: pipelineCfg.worker.maxRetries,
 		model: pipelineCfg.extraction.model,
 		mode:
-			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen ? "controlled-write" : "shadow",
+			pipelineCfg.enabled &&
+			!pipelineCfg.shadowMode &&
+			!pipelineCfg.mutationsFrozen &&
+			!pipelineCfg.nativeShadowEnabled
+				? "controlled-write"
+				: "shadow",
 	});
 
 	function pendingCount(): number {

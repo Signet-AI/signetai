@@ -9,6 +9,7 @@ const CONTINUITY_WINDOW_MS = 30 * 60 * 1000;
 const CONTINUITY_RECENT_MIN = 3;
 const CONTINUITY_SIMILARITY_THRESHOLD = 0.65;
 const NEIGHBOR_LIMIT = 50;
+const VEC_OVERFETCH_MULTIPLIER = 2;
 const RECENT_SIMILARITY_LIMIT = 5;
 
 export interface WriteGateConfig {
@@ -89,7 +90,9 @@ function findMaxSimilarityVec(db: ReadDb, query: Float32Array, input: WriteGateI
 
 	const args: unknown[] = [
 		query,
-		NEIGHBOR_LIMIT,
+		input.sourceScope !== null || input.sourceVisibility !== "global"
+			? NEIGHBOR_LIMIT * VEC_OVERFETCH_MULTIPLIER
+			: NEIGHBOR_LIMIT,
 		input.agentId,
 		input.sourceVisibility,
 		input.factType,

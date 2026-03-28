@@ -63,6 +63,7 @@ export interface FactDecisionResult {
 // ---------------------------------------------------------------------------
 
 const CANDIDATE_LIMIT = 5;
+const VECTOR_OVERFETCH_MULTIPLIER = 2;
 
 interface AllQuery<T> {
 	all(...args: readonly unknown[]): T;
@@ -112,6 +113,10 @@ async function findCandidatesVector(
 	scope: DecisionScope,
 ): Promise<Map<string, number>> {
 	const vectorMap = new Map<string, number>();
+	const vectorLimit =
+		scope.scope !== null || scope.visibility !== "global"
+			? limit * VECTOR_OVERFETCH_MULTIPLIER
+			: limit;
 	try {
 		const queryVec = await cfg.fetchEmbedding(query, cfg.embedding);
 		if (queryVec) {
@@ -132,8 +137,14 @@ async function findCandidatesVector(
 				const stmt = db.prepare(sql) as unknown as AllQuery<Array<{ id: string; distance: number }>>;
 				const results =
 					scope.scope !== null
-						? stmt.all(qf32, limit, scope.agentId, scope.visibility, scope.scope)
-						: stmt.all(qf32, limit, scope.agentId, scope.visibility);
+						? stmt.all(
+								qf32,
+								vectorLimit,
+								scope.agentId,
+								scope.visibility,
+								scope.scope,
+							)
+						: stmt.all(qf32, vectorLimit, scope.agentId, scope.visibility);
 				for (const r of results) {
 					const score = Math.max(0, 1 - r.distance);
 					vectorMap.set(r.id, score);
