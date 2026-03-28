@@ -1579,6 +1579,7 @@ name = "signet-pipeline"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "libc",
  "reqwest",
  "rusqlite",
  "serde",

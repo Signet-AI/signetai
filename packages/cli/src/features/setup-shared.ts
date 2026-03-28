@@ -6,6 +6,16 @@ export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "codex" | 
 export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
 export type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
+export type DeploymentTypeChoice = "local" | "vps" | "server";
+export interface ResolveSetupExtractionProviderOptions {
+	readonly deploymentType: DeploymentTypeChoice;
+	readonly requestedProvider: ExtractionProviderChoice | null;
+	readonly providerFromConfig: ExtractionProviderChoice | null;
+	readonly preserveExisting: boolean;
+	readonly detectedProvider: ExtractionProviderChoice;
+	readonly availableProviders?: readonly ExtractionProviderChoice[];
+	readonly preferredHarnesses?: readonly HarnessChoice[];
+}
 
 export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"claude-code",
@@ -24,6 +34,14 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 	"none",
 ];
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
+export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
+const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["claude-code", "codex", "opencode"];
+const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = [
+	"claude-code",
+	"codex",
+	"ollama",
+	"opencode",
+];
 
 interface PathDeps {
 	readonly detectExistingSetup: (basePath: string) => SetupDetection;
@@ -111,10 +129,19 @@ export function normalizeHarnessList(rawValues: readonly string[] | undefined, d
 	return harnesses;
 }
 
-export function failNonInteractiveSetup(message: string): never {
+export function failSetupValidation(message: string, hint?: string): never {
 	console.error(chalk.red(`  ${message}`));
-	console.error(chalk.dim("  Ask the user for explicit provider choices and pass them as CLI flags."));
+	if (hint) {
+		console.error(chalk.dim(`  ${hint}`));
+	}
 	process.exit(1);
+}
+
+export function failNonInteractiveSetup(message: string): never {
+	failSetupValidation(
+		message,
+		"Provide explicit CLI values, or pass --deployment-type to use inferred provider defaults.",
+	);
 }
 
 export function getEmbeddingDimensions(model: string): number {
@@ -129,6 +156,105 @@ export function getEmbeddingDimensions(model: string): number {
 			return 1536;
 		default:
 			return 768;
+	}
+}
+
+export function defaultEmbeddingProviderForDeployment(_deploymentType: DeploymentTypeChoice): EmbeddingProviderChoice {
+	return "native";
+}
+
+export function defaultExtractionProviderForDeployment(
+	deploymentType: DeploymentTypeChoice,
+	detectedProvider: ExtractionProviderChoice,
+	availableProviders: readonly ExtractionProviderChoice[] = [],
+	preferredHarnesses: readonly HarnessChoice[] = [],
+): ExtractionProviderChoice {
+	if (deploymentType === "vps") {
+		const preferredProviders = extractionProvidersFromHarnesses(preferredHarnesses);
+		for (const provider of preferredProviders) {
+			if (availableProviders.includes(provider)) {
+				return provider;
+			}
+		}
+
+		for (const provider of VPS_NON_LOCAL_EXTRACTION_PROVIDERS) {
+			if (availableProviders.includes(provider)) {
+				return provider;
+			}
+		}
+
+		if (VPS_NON_LOCAL_EXTRACTION_PROVIDERS.includes(detectedProvider)) {
+			return detectedProvider;
+		}
+		return "none";
+	}
+	return detectedProvider;
+}
+
+export function detectExtractionProviderFromAvailable(
+	availableProviders: readonly ExtractionProviderChoice[],
+): ExtractionProviderChoice {
+	for (const provider of DETECTED_EXTRACTION_PROVIDER_ORDER) {
+		if (availableProviders.includes(provider)) {
+			return provider;
+		}
+	}
+	return "none";
+}
+
+export function resolveSetupExtractionProvider(
+	options: ResolveSetupExtractionProviderOptions,
+): ExtractionProviderChoice {
+	const inferred = defaultExtractionProviderForDeployment(
+		options.deploymentType,
+		options.detectedProvider,
+		options.availableProviders ?? [],
+		options.preferredHarnesses ?? [],
+	);
+	if (options.requestedProvider) {
+		return options.requestedProvider;
+	}
+	if (options.preserveExisting && options.providerFromConfig) {
+		return options.providerFromConfig;
+	}
+	if (options.deploymentType === "vps") {
+		return inferred;
+	}
+	return options.providerFromConfig ?? inferred;
+}
+
+function extractionProvidersFromHarnesses(harnesses: readonly HarnessChoice[]): ExtractionProviderChoice[] {
+	const providers: ExtractionProviderChoice[] = [];
+	for (const harness of harnesses) {
+		let provider: ExtractionProviderChoice | null = null;
+		if (harness === "claude-code" || harness === "codex" || harness === "opencode") {
+			provider = harness;
+		}
+		if (provider && !providers.includes(provider)) {
+			providers.push(provider);
+		}
+	}
+	return providers;
+}
+
+export function getDeploymentExtractionGuidance(deploymentType: DeploymentTypeChoice): string[] {
+	switch (deploymentType) {
+		case "vps":
+			return [
+				"VPS/cloud hosts with shared or constrained CPU should avoid local Ollama extraction.",
+				"Use Built-in (native) embeddings for lower overhead than running an Ollama server.",
+				"Safest default is extraction: none. If you enable extraction, prefer offloaded providers (claude-code/openrouter).",
+			];
+		case "server":
+			return [
+				"Dedicated self-hosted servers can run local providers if you have CPU/RAM headroom.",
+				"Built-in (native) embeddings are still the lightest default for embeddings.",
+			];
+		default:
+			return [
+				"Local machines can use local providers, but monitor CPU if running background extraction with Ollama.",
+				"Built-in (native) embeddings are recommended unless you need a specific external provider.",
+			];
 	}
 }
 

@@ -2,6 +2,40 @@
 
 All notable changes to Signet are documented here.
 
+## [0.82.0] - 2026-03-28
+
+### Bug Fixes
+
+- **cli**: protect OpenClaw-linked workspaces from unprotected data loss (#378)
+
+
+## [0.81.2] - 2026-03-28
+
+### Features
+
+- **setup**: deployment-aware setup defaults + native embedding docs alignment (#363)
+
+### Bug Fixes
+
+- **daemon**: batch watcher identity sync to keep health responsive (#375)
+
+### Docs
+
+- add Groundswell implementation specs + PRD + SSM synthesis (#381)
+- **specs**: add Groundswell PRD and gap analyses for community knowledge graphs
+
+
+## [0.81.1] - 2026-03-28
+
+### Bug Fixes
+
+- **daemon**: persist extraction fallback status with provider parity (replaces #367) (#373)
+
+### Docs
+
+- add alcar2364 to contributors
+
+
 ## [0.81.0] - 2026-03-28
 
 ### Bug Fixes

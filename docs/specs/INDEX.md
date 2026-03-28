@@ -136,6 +136,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `engram-informed-predictor-track` | references/Engram, RESEARCH-SSM-INTEGRATION, ssm-foundation-evaluation | How should Engram design patterns be translated into Signet scorer and SSM architecture decisions? |
 | `macos-sqlite-runtime-discovery` | RESEARCH-MACOS-SQLITE-RUNTIME-DISCOVERY | How should Signet select a compatible SQLite runtime on macOS so Bun can load sqlite-vec? |
 | `docker-self-hosting-stack` | RESEARCH-DOCKER-SELF-HOSTING | What deployment contract keeps Docker self-hosting reproducible, persistent, and secure by default? |
+| `openclaw-workspace-protection-plan`, `openclaw-workspace-protection` | RESEARCH-OPENCLAW-WORKSPACE-PROTECTION | How should Signet prevent data loss when OpenClaw uninstall deletes a workspace that points at `.agents`? |
 
 ### Research Adoption Ledger (high-impact)
 
@@ -659,13 +660,17 @@ Legend:
 | `signet-runtime` | approved | `docs/specs/approved/signet-runtime.md` | `memory-pipeline-v2` | - | |
 | `pipeline-pause-control` | complete | `docs/specs/complete/pipeline-pause-control.md` | `memory-pipeline-v2` | - | CLI and dashboard pause/resume shipped on top of live daemon pause/resume API, paused-mode observability, and local Ollama unload |
 | `daemon-startup-responsiveness` | planning | `docs/specs/planning/daemon-startup-responsiveness.md` | `memory-pipeline-v2` | - | Incident-driven stub for issue #331: keep /health responsive during large-db startup recovery and recover stale managed daemon processes cleanly |
+| `daemon-provider-fallback-status` | complete | `docs/specs/complete/daemon-provider-fallback-status.md` | `memory-pipeline-v2` | - | Issue #320 complete: extraction fallback/block state now persists in status surfaces with explicit fallbackProvider control and startup dead-lettering on hard block |
 | `daemon-refactor` | planning | `docs/specs/planning/daemon-refactor.md` | - | `daemon-refactor-plan` | |
 | `daemon-refactor-plan` | planning | `docs/specs/planning/daemon-refactor-plan.md` | `daemon-refactor` | - | |
 | `daemon-rust-rewrite` | planning | `docs/specs/planning/daemon-rust-rewrite.md` | `memory-pipeline-v2` | - | deferred — complexity cost exceeds current benefit |
 | `signet-roadmap-spec` | planning | `docs/specs/planning/signet-roadmap-spec.md` | - | - | superseded by INDEX.md as active roadmap |
+| `setup-deployment-awareness` | planning | `docs/specs/planning/setup-deployment-awareness.md` | `signet-runtime` | - | deployment context prompt, non-interactive `--deployment-type` inference, and docs alignment for native embeddings |
 | `openclaw-integration-strategy` | complete | `docs/specs/complete/openclaw-integration-strategy.md` | - | `openclaw-importance-scoring-pr` | |
 | `openclaw-importance-scoring-pr` | complete | `docs/specs/complete/openclaw-importance-scoring-pr.md` | `openclaw-integration-strategy` | - | |
 | `openclaw-hardening` | complete | `docs/specs/complete/openclaw-hardening.md` | `openclaw-importance-scoring-pr` | - | temporal index previews, typed hooks, mid-session extraction (PR #369) |
+| `openclaw-workspace-protection-plan` | planning | `docs/specs/planning/openclaw-workspace-protection-plan.md` | `openclaw-hardening` | `openclaw-workspace-protection` | Incident-driven planning stub for OpenClaw uninstall workspace-loss risk |
+| `openclaw-workspace-protection` | approved | `docs/specs/approved/openclaw-workspace-protection.md` | `openclaw-hardening`, `openclaw-workspace-protection-plan` | - | Setup soft gate + status/doctor visibility for unprotected OpenClaw-linked workspaces |
 | `desire-paths-epic` | approved | `docs/specs/approved/desire-paths-epic.md` | `knowledge-architecture-schema`, `predictive-memory-scorer` | - | 20 stories across 5 phases; Phases 1-3 COMPLETE. DP-16 through DP-20 added from reference repo analysis (Ori-Mnemos, Zikkaron) |
 | `notebook-dump-2026-02-25` | reference | `docs/research/technical/notebook-dump-2026-02-25.md` | - | - | |
 | `marketplace-reviews-cloudflare-staging` | planning | `docs/specs/planning/marketplace-reviews-cloudflare-staging.md` | - | - | |

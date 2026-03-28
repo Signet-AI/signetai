@@ -194,6 +194,33 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
     state.pipeline_paused.store(paused, Ordering::SeqCst);
     let next = if paused { None } else { build_embedding(state) };
     *state.embedding.write().await = next;
+
+    // Update extraction runtime state on pause/resume transitions,
+    // mirroring the JS daemon's restartPipelineRuntime behavior.
+    if paused {
+        crate::stop_extraction_worker(state).await;
+
+        // Pipeline pause disables extraction execution at runtime.
+        // Preserve "blocked" and "disabled" states so write routes keep the
+        // startup block guard active while paused.
+        let mut guard = state.extraction_state.write().await;
+        if let Some(es) = guard.as_mut() {
+            if es.status != "disabled" && es.status != "blocked" {
+                es.status = "paused".to_string();
+                es.effective = "none".to_string();
+                es.degraded = false;
+                es.fallback_applied = false;
+                es.reason = None;
+                es.since = None;
+            }
+        }
+    } else {
+        // On resume, re-check provider availability and update status,
+        // but do NOT dead-letter pending jobs — backlog accumulated during
+        // an intentional pause should be preserved for draining.
+        crate::resume_extraction_check(state).await;
+        let _ = crate::start_extraction_worker(state).await;
+    }
 }
 
 fn guard_admin(
@@ -574,6 +601,7 @@ mod tests {
             },
             pool,
             embedding,
+            None,
             mode,
             secret.clone(),
             AuthRateLimiter::from_rules(&rules),
@@ -709,6 +737,12 @@ mod tests {
 
         assert!(test.state.embedding.read().await.is_some());
         assert!(!test.state.pipeline_paused());
+        {
+            let extraction = test.state.extraction_state.read().await;
+            let extraction = extraction.as_ref().expect("initial extraction state");
+            assert_eq!(extraction.status, "active");
+            assert_eq!(extraction.effective, "ollama");
+        }
 
         let (status, body) =
             call(app(test.state.clone()), Method::POST, "/pause", peer, None).await;
@@ -717,6 +751,16 @@ mod tests {
         assert_eq!(body["mode"], "paused");
         assert!(test.state.pipeline_paused());
         assert!(test.state.embedding.read().await.is_none());
+        {
+            let extraction = test.state.extraction_state.read().await;
+            let extraction = extraction.as_ref().expect("paused extraction state");
+            assert_eq!(extraction.status, "paused");
+            assert_eq!(extraction.effective, "none");
+            assert!(!extraction.degraded);
+            assert!(!extraction.fallback_applied);
+            assert!(extraction.reason.is_none());
+            assert!(extraction.since.is_none());
+        }
 
         let (status, body) =
             call(app(test.state.clone()), Method::GET, "/status", peer, None).await;
@@ -730,6 +774,14 @@ mod tests {
         assert_eq!(body["mode"], "controlled-write");
         assert!(!test.state.pipeline_paused());
         assert!(test.state.embedding.read().await.is_some());
+        {
+            let extraction = test.state.extraction_state.read().await;
+            let extraction = extraction.as_ref().expect("resumed extraction state");
+            assert_eq!(extraction.status, "active");
+            assert_eq!(extraction.effective, "ollama");
+            assert!(!extraction.degraded);
+            assert!(!extraction.fallback_applied);
+        }
     }
 
     #[tokio::test]
@@ -777,5 +829,65 @@ mod tests {
             call(app(test.state.clone()), Method::POST, "/pause", peer, None).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(body["error"], "Pipeline transition already in progress");
+    }
+
+    #[tokio::test]
+    async fn pause_preserves_blocked_runtime_resolution_fields() {
+        let test = build_state(AuthMode::Local, false, 10);
+        let peer = SocketAddr::from(([127, 0, 0, 1], 3850));
+
+        {
+            let mut extraction = test.state.extraction_state.write().await;
+            let extraction = extraction.as_mut().expect("initial extraction state");
+            extraction.status = "blocked".to_string();
+            extraction.effective = "none".to_string();
+            extraction.degraded = true;
+            extraction.fallback_applied = false;
+            extraction.reason = Some("startup preflight failed".to_string());
+            extraction.since = Some("2026-03-27T00:00:00Z".to_string());
+        }
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/pause", peer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paused"], true);
+
+        let extraction = test.state.extraction_state.read().await;
+        let extraction = extraction.as_ref().expect("paused extraction state");
+        assert_eq!(extraction.status, "blocked");
+        assert_eq!(extraction.effective, "none");
+        assert!(extraction.degraded);
+        assert!(!extraction.fallback_applied);
+        assert_eq!(
+            extraction.reason.as_deref(),
+            Some("startup preflight failed")
+        );
+        assert_eq!(extraction.since.as_deref(), Some("2026-03-27T00:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_manage_worker_handle_lifecycle() {
+        let test = build_state(AuthMode::Local, false, 10);
+        let peer = SocketAddr::from(([127, 0, 0, 1], 3850));
+
+        assert!(test.state.extraction_worker_handle.lock().await.is_none());
+        let started = crate::start_extraction_worker(test.state.as_ref()).await;
+        assert!(started);
+        assert!(test.state.extraction_worker_handle.lock().await.is_some());
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/pause", peer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paused"], true);
+        assert!(test.state.extraction_worker_handle.lock().await.is_none());
+
+        let (status, body) =
+            call(app(test.state.clone()), Method::POST, "/resume", peer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paused"], false);
+        assert!(test.state.extraction_worker_handle.lock().await.is_some());
+
+        crate::stop_extraction_worker(test.state.as_ref()).await;
+        assert!(test.state.extraction_worker_handle.lock().await.is_none());
     }
 }

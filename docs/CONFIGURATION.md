@@ -411,9 +411,13 @@ control.
 | `pollMs` | `2000` | 100-60000 ms | How often the worker polls for pending jobs |
 | `maxRetries` | `3` | 1-10 | Max retry attempts before a job goes to dead-letter |
 | `leaseTimeoutMs` | `300000` | 10000-600000 ms | Time before an uncompleted job lease expires |
+| `maxLoadPerCpu` | `0.8` | 0.1-8.0 | Load-per-CPU threshold above which extraction polling is deferred |
+| `overloadBackoffMs` | `30000` | 1000-300000 ms | Delay between poll attempts while host load stays above threshold |
 
 A job that exceeds `maxRetries` moves to dead-letter status and is
 eventually purged by the retention worker.
+Legacy flat keys `workerMaxLoadPerCpu` and `workerOverloadBackoffMs` are
+still accepted for backward compatibility.
 
 
 ### Knowledge Graph (`graph`)
@@ -775,6 +779,7 @@ editing the config file is impractical.
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
+| `SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS` | — | Comma-separated host allowlist for Anthropic endpoint overrides used during credentialed startup preflight (supports entries like `proxy.example.com` and `*.example.com`) |
 | `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
 
 `SIGNET_PATH` changes where Signet reads and writes all agent data for
@@ -789,6 +794,11 @@ it is unset, Signet checks `$SIGNET_WORKSPACE/libsqlite3.dylib`, where
 `~/.config/signet/workspace.json`, then the default `~/.agents`, before
 trying standard Homebrew SQLite locations and finally falling back to
 Apple's system SQLite.
+
+For non-loopback Anthropic endpoint overrides, daemon-rs
+only sends provider credentials during startup preflight when the host
+is trusted. Official provider hosts are trusted by default. Add trusted
+proxy/gateway hosts through `SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS`.
 
 
 AGENTS.md

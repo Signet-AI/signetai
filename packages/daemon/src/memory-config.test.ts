@@ -238,6 +238,66 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2.extraction.model).toBe("gpt-5.3-codex");
 	});
 
+	it("loads extraction fallbackProvider from nested config", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: none
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2.extraction.provider).toBe("claude-code");
+		expect(cfg.pipelineV2.extraction.fallbackProvider).toBe("none");
+	});
+
+	it("loads extractionFallbackProvider from flat config", () => {
+		const cfg = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extractionProvider: "claude-code",
+					extractionFallbackProvider: "none",
+				},
+			},
+		});
+
+		expect(cfg.extraction.provider).toBe("claude-code");
+		expect(cfg.extraction.fallbackProvider).toBe("none");
+	});
+
+	it("rejects invalid extraction fallbackProvider values", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: {
+					pipelineV2: {
+						extraction: {
+							fallbackProvider: "codex",
+						},
+					},
+				},
+			}),
+		).toThrow('Invalid extraction fallbackProvider "codex"');
+	});
+
+	it("propagates invalid extraction fallbackProvider from agent config files", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: codex
+`,
+		);
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow('Invalid extraction fallbackProvider "codex"');
+	});
+
 	it("loads openrouter extraction settings from agent.yaml", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
@@ -883,6 +943,63 @@ describe("loadPipelineConfig", () => {
 		expect(result.repair.reembedHourlyBudget).toBe(5);
 		expect(result.repair.requeueCooldownMs).toBe(30000);
 		expect(result.repair.requeueHourlyBudget).toBe(100);
+	});
+
+	it("loads worker load-shedding config fields", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					worker: {
+						maxLoadPerCpu: 0.6,
+						overloadBackoffMs: 45000,
+					},
+				},
+			},
+		});
+
+		expect(result.worker.maxLoadPerCpu).toBe(0.6);
+		expect(result.worker.overloadBackoffMs).toBe(45000);
+	});
+
+	it("loads worker load-shedding config fields from flat keys", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					workerMaxLoadPerCpu: 0.55,
+					workerOverloadBackoffMs: 42000,
+				},
+			},
+		});
+
+		expect(result.worker.maxLoadPerCpu).toBe(0.55);
+		expect(result.worker.overloadBackoffMs).toBe(42000);
+	});
+
+	it("prefers nested worker load-shedding config over flat keys", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					worker: {
+						maxLoadPerCpu: 0.7,
+						overloadBackoffMs: 38000,
+					},
+					workerMaxLoadPerCpu: 0.5,
+					workerOverloadBackoffMs: 60000,
+				},
+			},
+		});
+
+		expect(result.worker.maxLoadPerCpu).toBe(0.7);
+		expect(result.worker.overloadBackoffMs).toBe(38000);
+	});
+
+	it("uses worker load-shedding defaults when absent", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { enabled: true } },
+		});
+
+		expect(result.worker.maxLoadPerCpu).toBe(DEFAULT_PIPELINE_V2.worker.maxLoadPerCpu);
+		expect(result.worker.overloadBackoffMs).toBe(DEFAULT_PIPELINE_V2.worker.overloadBackoffMs);
 	});
 
 	it("uses defaults for maintenance config when absent", () => {

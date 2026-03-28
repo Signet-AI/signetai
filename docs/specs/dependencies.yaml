@@ -205,6 +205,20 @@ specs:
       - "CLI start/restart can recover from a stale managed daemon process that still owns the port after health probes fail"
     decision: null
 
+  - id: daemon-provider-fallback-status
+    status: complete
+    path: docs/specs/complete/daemon-provider-fallback-status.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Startup provider fallback or hard-failure is persisted in /api/status and surfaced by signet status"
+      - "Operators can set extraction fallbackProvider to none to block rerouting when the configured provider is unavailable"
+      - "Unavailable extraction startup state dead-letters queued extraction jobs instead of silently leaving them pending"
+    decision: null
+
   - id: daemon-refactor
     status: planning
     path: docs/specs/planning/daemon-refactor.md
@@ -248,6 +262,22 @@ specs:
     success_criteria: []
     decision: superseded
 
+  - id: setup-deployment-awareness
+    status: planning
+    path: docs/specs/planning/setup-deployment-awareness.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Interactive setup asks deployment context before provider prompts and shows deployment-specific extraction guidance"
+      - "Non-interactive setup accepts --deployment-type and infers provider defaults when provider flags are omitted"
+      - "Existing-identity migration preserves existing configured extraction providers unless --extraction-provider is explicitly provided"
+      - "With --deployment-type vps and omitted extraction provider, setup avoids inferring ollama, prefers selected non-local harness tooling when available locally, then other detected non-local tooling, and falls back to none"
+      - "README/QUICKSTART/CLI docs consistently present built-in native embeddings as recommended"
+    decision: null
+
   - id: openclaw-integration-strategy
     status: complete
     path: docs/specs/complete/openclaw-integration-strategy.md
@@ -285,6 +315,40 @@ specs:
       - "OpenClaw plugin compiles and passes tests against typed hook interfaces"
       - "Mid-session checkpoint extraction fires after N turns for long-lived sessions"
       - "Rust daemon implements cursor-tracking parity for session-checkpoint-extract"
+    decision: null
+
+  - id: openclaw-workspace-protection-plan
+    status: planning
+    path: docs/specs/planning/openclaw-workspace-protection-plan.md
+    hard_depends_on:
+      - openclaw-hardening
+    soft_depends_on: []
+    blocks:
+      - openclaw-workspace-protection
+    informed_by:
+      - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
+    success_criteria:
+      - "Setup blocks silent completion when OpenClaw points at the Signet workspace and no remote backup is configured"
+      - "Users can satisfy setup protection by configuring git origin or creating an out-of-workspace local snapshot"
+      - "Status and doctor surfaces flag unprotected OpenClaw-linked workspaces with remediation commands"
+    decision: null
+
+  - id: openclaw-workspace-protection
+    status: approved
+    path: docs/specs/approved/openclaw-workspace-protection.md
+    hard_depends_on:
+      - openclaw-hardening
+      - openclaw-workspace-protection-plan
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
+      - docs/specs/planning/openclaw-workspace-protection-plan.md
+    success_criteria:
+      - "Setup refuses to complete silently for OpenClaw-linked workspaces without backup posture"
+      - "Interactive setup requires explicit user action: set origin, create snapshot, or explicit bypass acknowledgement"
+      - "Non-interactive setup errors unless origin exists or explicit backup/bypass flags are provided"
+      - "Status and doctor report OpenClaw-linked unprotected workspace risk"
     decision: null
 
   - id: desire-paths-epic

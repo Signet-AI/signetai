@@ -73,6 +73,7 @@ function makeDeps(overrides?: Partial<Parameters<typeof doRestart>[1]>): Paramet
 			host: "127.0.0.1",
 			bindHost: "0.0.0.0",
 			networkMode: "local",
+			extraction: null,
 		}),
 		hasDaemonProcess: async () => false,
 		isDaemonRunning: async () => false,

@@ -23,6 +23,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
+import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
@@ -43,6 +44,8 @@ export async function runExistingSetupWizard(
 		nonInteractive?: boolean;
 		openDashboard?: boolean;
 		skipGit?: boolean;
+		allowUnprotectedWorkspace?: boolean;
+		createLocalBackup?: boolean;
 		embeddingProvider?: EmbeddingProviderChoice;
 		embeddingModel?: string;
 		extractionProvider?: ExtractionProviderChoice;
@@ -53,6 +56,18 @@ export async function runExistingSetupWizard(
 
 	try {
 		const templatesDir = deps.getTemplatesDir();
+		if (
+			options?.nonInteractive === true &&
+			options.allowUnprotectedWorkspace !== true &&
+			options.createLocalBackup !== true
+		) {
+			await enforceSetupProtection({
+				basePath,
+				nonInteractive: true,
+				allowUnprotectedWorkspace: false,
+				createLocalBackup: false,
+			});
+		}
 
 		if (!existsSync(basePath)) {
 			mkdirSync(basePath, { recursive: true });
@@ -188,6 +203,40 @@ export async function runExistingSetupWizard(
 			writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
 		}
 
+		const agentsPath = join(basePath, "AGENTS.md");
+		if (!existsSync(agentsPath)) {
+			const agentsTemplate = join(templatesDir, "AGENTS.md.template");
+			if (existsSync(agentsTemplate)) {
+				const content = readFileSync(agentsTemplate, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
+				writeFileSync(agentsPath, content);
+			} else {
+				writeFileSync(
+					agentsPath,
+					`# ${agentName}\n\nThis is your agent identity file. Define your agent's personality, capabilities,\nand behaviors here. This file is shared across all your AI tools.\n`,
+				);
+			}
+		}
+
+		const docs = [
+			{ name: "MEMORY.md", template: "MEMORY.md.template" },
+			{ name: "SOUL.md", template: "SOUL.md.template" },
+			{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
+			{ name: "USER.md", template: "USER.md.template" },
+		];
+
+		for (const doc of docs) {
+			const path = join(basePath, doc.name);
+			if (existsSync(path)) {
+				continue;
+			}
+			const template = join(templatesDir, doc.template);
+			if (!existsSync(template)) {
+				continue;
+			}
+			const content = readFileSync(template, "utf-8").replace(/\{\{AGENT_NAME\}\}/g, agentName);
+			writeFileSync(path, content);
+		}
+
 		spinner.text = "Initializing database...";
 		const dbPath = join(basePath, "memory", "memories.db");
 		const db = Database(dbPath);
@@ -197,6 +246,13 @@ export async function runExistingSetupWizard(
 		}
 		runMigrations(db);
 		db.close();
+
+		let protection = await enforceSetupProtection({
+			basePath,
+			nonInteractive: options?.nonInteractive === true,
+			allowUnprotectedWorkspace: options?.allowUnprotectedWorkspace === true,
+			createLocalBackup: options?.createLocalBackup === true,
+		});
 
 		let importResult: ImportResult | null = null;
 		if (detection.hasMemoryDir && detection.memoryLogCount > 0) {
@@ -253,6 +309,17 @@ export async function runExistingSetupWizard(
 			}
 		}
 
+		if (protection.state === "snapshot") {
+			spinner.text = "Refreshing workspace snapshot...";
+			protection = refreshSnapshotProtection(basePath, protection);
+		}
+
+		let committed = false;
+		if (options?.skipGit !== true && gitEnabled) {
+			const date = new Date().toISOString().split("T")[0];
+			committed = await deps.gitAddAndCommit(basePath, `${date}_signet-setup`);
+		}
+
 		spinner.text = "Starting daemon...";
 		const daemonStarted = await deps.startDaemon(basePath);
 
@@ -291,14 +358,12 @@ export async function runExistingSetupWizard(
 			}
 		}
 
-		if (options?.skipGit !== true && gitEnabled) {
-			const date = new Date().toISOString().split("T")[0];
-			const committed = await deps.gitAddAndCommit(basePath, `${date}_signet-setup`);
-			if (committed) {
-				console.log(chalk.dim("  ✓ Changes committed to git"));
-			}
+		if (committed) {
+			console.log(chalk.dim("  ✓ Changes committed to git"));
 		}
 
+		console.log();
+		printSetupProtectionSummary(protection);
 		console.log();
 		if (options?.nonInteractive === true) {
 			if (options.openDashboard === true) {
@@ -315,6 +380,9 @@ export async function runExistingSetupWizard(
 		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
 		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
 		console.log(chalk.dim("    communication style, and your preferences."));
+		if (protection.state === "bypass") {
+			console.log(chalk.red("    Backup warning: this workspace is still unprotected."));
+		}
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);

@@ -121,6 +121,7 @@ fn should_fail_fast_for_manifest_error_context(raw: &serde_yml::Value, error: &s
         || synthesis_provider.is_some_and(|provider| provider == "command")
         || error.contains("memory.pipelineV2.extraction.command")
         || error.contains("memory.pipelineV2.synthesis.provider='command'")
+        || error.contains("invalid extraction fallbackProvider")
 }
 
 fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, ManifestLoadError> {
@@ -181,6 +182,7 @@ fn normalize_manifest(
     };
     let raw_pipeline = raw_child(raw, "memory").and_then(|value| raw_child(value, "pipelineV2"));
     normalize_pipeline_extraction(pipeline, raw_pipeline)?;
+    normalize_pipeline_worker(pipeline, raw_pipeline);
     normalize_pipeline_synthesis(pipeline, raw_pipeline)?;
     Ok(manifest)
 }
@@ -189,6 +191,27 @@ fn normalize_pipeline_extraction(
     pipeline: &mut PipelineV2Config,
     raw: Option<&serde_yml::Value>,
 ) -> Result<(), String> {
+    let nested_fallback = raw
+        .and_then(|value| raw_child(value, "extraction"))
+        .map(|value| raw_optional_string_strict(value, "fallbackProvider"))
+        .transpose()?
+        .flatten();
+    let flat_fallback = raw
+        .map(|value| raw_optional_string_strict(value, "extractionFallbackProvider"))
+        .transpose()?
+        .flatten();
+    let fallback = nested_fallback.or(flat_fallback);
+
+    if let Some(value) = &fallback {
+        if is_extraction_fallback_provider(value) {
+            pipeline.extraction.fallback_provider = value.to_string();
+        } else {
+            return Err(format!(
+                "invalid extraction fallbackProvider '{value}': must be 'ollama' or 'none'"
+            ));
+        }
+    }
+
     let extraction_raw = raw.and_then(|value| raw_child(value, "extraction"));
     if pipeline.extraction.provider != "command" {
         return Ok(());
@@ -246,6 +269,24 @@ fn normalize_pipeline_extraction(
 
     pipeline.extraction.command = Some(command);
     Ok(())
+}
+
+fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
+    let max_load_per_cpu = raw
+        .and_then(|value| raw_child(value, "worker"))
+        .and_then(|value| raw_f64(value, "maxLoadPerCpu"))
+        .or_else(|| raw.and_then(|value| raw_f64(value, "workerMaxLoadPerCpu")));
+    if let Some(value) = max_load_per_cpu {
+        pipeline.worker.max_load_per_cpu = value.clamp(0.1, 8.0);
+    }
+
+    let overload_backoff_ms = raw
+        .and_then(|value| raw_child(value, "worker"))
+        .and_then(|value| raw_u64(value, "overloadBackoffMs"))
+        .or_else(|| raw.and_then(|value| raw_u64(value, "workerOverloadBackoffMs")));
+    if let Some(value) = overload_backoff_ms {
+        pipeline.worker.overload_backoff_ms = value.clamp(1_000, 300_000);
+    }
 }
 
 fn normalize_pipeline_synthesis(
@@ -333,8 +374,29 @@ fn raw_string<'a>(value: &'a serde_yml::Value, key: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
+fn raw_optional_string_strict<'a>(
+    value: &'a serde_yml::Value,
+    key: &'static str,
+) -> Result<Option<&'a str>, String> {
+    let Some(raw) = raw_child(value, key) else {
+        return Ok(None);
+    };
+    let as_str = raw
+        .as_str()
+        .ok_or_else(|| format!("invalid extraction fallbackProvider type at '{key}': expected a string ('ollama' or 'none')"))?;
+    let trimmed = as_str.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(trimmed))
+}
+
 fn raw_u64(value: &serde_yml::Value, key: &str) -> Option<u64> {
     raw_child(value, key)?.as_u64()
+}
+
+fn raw_f64(value: &serde_yml::Value, key: &str) -> Option<f64> {
+    raw_child(value, key)?.as_f64()
 }
 
 fn parse_command_argv(raw: &str) -> Option<ExtractionCommandConfig> {
@@ -395,6 +457,10 @@ fn is_pipeline_provider(value: &str) -> bool {
         value,
         "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command"
     )
+}
+
+fn is_extraction_fallback_provider(value: &str) -> bool {
+    matches!(value, "ollama" | "none")
 }
 
 fn is_synthesis_provider(value: &str) -> bool {
@@ -498,7 +564,7 @@ impl Default for EmbeddingConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        network_mode_from_bind, parse_manifest, resolve_network_binding,
+        network_mode_from_bind, parse_manifest, parse_manifest_result, resolve_network_binding,
         should_fail_fast_for_manifest_error_context, PipelineV2Config,
     };
 
@@ -762,6 +828,134 @@ memory:
     }
 
     #[test]
+    fn extraction_fallback_provider_defaults_to_ollama() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+"#,
+        )
+        .expect("parse manifest");
+
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+
+        assert_eq!(pipeline.extraction.fallback_provider, "ollama");
+    }
+
+    #[test]
+    fn extraction_fallback_provider_loads_from_nested_or_flat_keys() {
+        let nested = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: none
+"#,
+        )
+        .expect("parse manifest");
+        let nested_pipeline = nested
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(nested_pipeline.extraction.fallback_provider, "none");
+
+        let flat = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    extractionProvider: claude-code
+    extractionFallbackProvider: none
+"#,
+        )
+        .expect("parse manifest");
+        let flat_pipeline = flat
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(flat_pipeline.extraction.fallback_provider, "none");
+    }
+
+    #[test]
+    fn worker_load_shedding_fields_load_from_nested_or_flat_keys() {
+        let nested = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    worker:
+      maxLoadPerCpu: 0.6
+      overloadBackoffMs: 45000
+"#,
+        )
+        .expect("parse manifest");
+        let nested_pipeline = nested
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(nested_pipeline.worker.max_load_per_cpu, 0.6);
+        assert_eq!(nested_pipeline.worker.overload_backoff_ms, 45_000);
+
+        let flat = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    workerMaxLoadPerCpu: 0.55
+    workerOverloadBackoffMs: 42000
+"#,
+        )
+        .expect("parse manifest");
+        let flat_pipeline = flat
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(flat_pipeline.worker.max_load_per_cpu, 0.55);
+        assert_eq!(flat_pipeline.worker.overload_backoff_ms, 42_000);
+    }
+
+    #[test]
+    fn extraction_fallback_provider_rejects_invalid_string_values() {
+        let error = parse_manifest_result(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: maybe
+"#,
+        )
+        .expect_err("invalid fallbackProvider should fail");
+
+        assert!(
+            error.contains("invalid extraction fallbackProvider 'maybe'"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn extraction_fallback_provider_rejects_non_string_values() {
+        let error = parse_manifest_result(
+            r#"
+memory:
+  pipelineV2:
+    extraction:
+      provider: claude-code
+      fallbackProvider: 1
+"#,
+        )
+        .expect_err("non-string fallbackProvider should fail");
+
+        assert!(
+            error.contains("invalid extraction fallbackProvider type"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn extraction_timeout_default_matches_typescript_timeout() {
         let pipeline = PipelineV2Config::default();
         assert_eq!(pipeline.extraction.timeout, 90_000);
@@ -952,6 +1146,7 @@ impl Default for PipelineV2Config {
 #[serde(default, rename_all = "camelCase")]
 pub struct ExtractionConfig {
     pub provider: String,
+    pub fallback_provider: String,
     pub model: String,
     pub strength: String,
     pub endpoint: Option<String>,
@@ -985,6 +1180,7 @@ impl Default for ExtractionConfig {
     fn default() -> Self {
         Self {
             provider: "ollama".to_string(),
+            fallback_provider: "ollama".to_string(),
             model: "qwen3:4b".to_string(),
             strength: "medium".to_string(),
             endpoint: None,
@@ -1020,6 +1216,8 @@ pub struct WorkerConfig {
     pub poll_ms: u64,
     pub max_retries: u32,
     pub lease_timeout_ms: u64,
+    pub max_load_per_cpu: f64,
+    pub overload_backoff_ms: u64,
 }
 
 impl Default for WorkerConfig {
@@ -1028,6 +1226,8 @@ impl Default for WorkerConfig {
             poll_ms: 2_000,
             max_retries: 3,
             lease_timeout_ms: 60_000,
+            max_load_per_cpu: 0.8,
+            overload_backoff_ms: 30_000,
         }
     }
 }

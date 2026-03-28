@@ -11,6 +11,7 @@ import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
 import type { DecisionConfig, FactDecisionProposal } from "./decision";
+import { cpus, loadavg } from "node:os";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
 import { detectSemanticContradiction } from "./contradiction";
@@ -46,6 +47,12 @@ export interface WorkerStats {
 	readonly pending: number;
 	readonly processed: number;
 	readonly backoffMs: number;
+	readonly overloaded: boolean;
+	readonly loadPerCpu: number | null;
+	readonly maxLoadPerCpu: number;
+	readonly overloadBackoffMs: number;
+	readonly overloadSince: string | null;
+	readonly nextTickInMs: number;
 }
 
 export interface WorkerHandle {
@@ -67,6 +74,11 @@ interface JobRow {
 interface MemoryContentRow {
 	content: string;
 	extraction_status: string | null;
+}
+
+interface WorkerRuntimeDeps {
+	readonly now: () => number;
+	readonly getLoadPerCpu: () => number | null;
 }
 
 interface WrittenFact {
@@ -916,7 +928,21 @@ export function startWorker(
 	decisionCfg: DecisionConfig,
 	analytics?: AnalyticsCollector,
 	telemetry?: TelemetryCollector,
+	runtimeDeps?: Partial<WorkerRuntimeDeps>,
 ): WorkerHandle {
+	const runtime: WorkerRuntimeDeps = {
+		now: runtimeDeps?.now ?? (() => Date.now()),
+		getLoadPerCpu:
+			runtimeDeps?.getLoadPerCpu ??
+			(() => {
+				if (process.platform === "win32") return null;
+				const cpuCount = cpus().length;
+				if (cpuCount <= 0) return null;
+				const oneMinuteLoad = loadavg()[0];
+				if (!Number.isFinite(oneMinuteLoad)) return null;
+				return oneMinuteLoad / cpuCount;
+			}),
+	};
 	let running = true;
 	let inflight: Promise<void> | null = null;
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -929,9 +955,13 @@ export function startWorker(
 	const JITTER = 500;
 
 	// Progress tracking for watchdog and stats
-	let lastAttempt = Date.now(); // updated on every tick (success or failure)
-	let lastSuccess = Date.now(); // updated only on successful job completion
+	let lastAttempt = runtime.now(); // updated on every tick (success or failure)
+	let lastSuccess = runtime.now(); // updated only on successful job completion
 	let processed = 0;
+	let overloaded = false;
+	let lastLoadPerCpu: number | null = null;
+	let overloadSinceEpochMs: number | null = null;
+	let nextTickAtEpochMs = runtime.now();
 	let watchdog: ReturnType<typeof setInterval> | null = null;
 	const WATCHDOG_INTERVAL = 30_000;
 	const STALL_THRESHOLD = 60_000;
@@ -1415,10 +1445,10 @@ export function startWorker(
 			try {
 				await processExtractJob(job);
 				consecutiveFailures = 0;
-				lastAttempt = Date.now();
-				lastSuccess = Date.now();
+				lastAttempt = runtime.now();
+				lastSuccess = runtime.now();
 				processed++;
-				analytics?.recordLatency("jobs", Date.now() - jobStart);
+				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
 				logger.warn("pipeline", "Job failed", {
@@ -1426,7 +1456,7 @@ export function startWorker(
 					error: msg,
 					attempt: job.attempts,
 				});
-				analytics?.recordLatency("jobs", Date.now() - jobStart);
+				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 				analytics?.recordError({
 					timestamp: new Date().toISOString(),
 					stage: "extraction",
@@ -1437,7 +1467,7 @@ export function startWorker(
 				telemetry?.record("pipeline.error", {
 					stage: "extraction",
 					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
-					durationMs: Date.now() - jobStart,
+					durationMs: runtime.now() - jobStart,
 				});
 				accessor.withWriteTx((db) => {
 					failJob(db, job.id, msg, job.attempts, job.max_attempts);
@@ -1451,7 +1481,7 @@ export function startWorker(
 					}
 				});
 				consecutiveFailures++;
-				lastAttempt = Date.now();
+				lastAttempt = runtime.now();
 			}
 		} catch (e) {
 			logger.error(
@@ -1460,7 +1490,7 @@ export function startWorker(
 				e instanceof Error ? e : new Error(String(e)),
 			);
 			consecutiveFailures++;
-			lastAttempt = Date.now();
+			lastAttempt = runtime.now();
 		}
 	}
 
@@ -1473,7 +1503,25 @@ export function startWorker(
 	// Use setTimeout chain instead of setInterval for backoff support
 	function scheduleTick(): void {
 		if (!running) return;
+		const loadPerCpu = runtime.getLoadPerCpu();
+		lastAttempt = runtime.now();
+		lastLoadPerCpu = loadPerCpu;
+		const overloadedNow =
+			loadPerCpu !== null && Number.isFinite(loadPerCpu) && loadPerCpu > pipelineCfg.worker.maxLoadPerCpu;
+		if (overloadedNow) {
+			overloaded = true;
+			overloadSinceEpochMs = overloadSinceEpochMs ?? runtime.now();
+			const delay = pipelineCfg.worker.overloadBackoffMs;
+			nextTickAtEpochMs = runtime.now() + delay;
+			pollTimer = setTimeout(() => {
+				scheduleTick();
+			}, delay);
+			return;
+		}
+		overloaded = false;
+		overloadSinceEpochMs = null;
 		const delay = getBackoffDelay();
+		nextTickAtEpochMs = runtime.now() + delay;
 		if (consecutiveFailures > 2) {
 			logger.warn("pipeline", "Worker backing off", {
 				failures: consecutiveFailures,
@@ -1511,7 +1559,9 @@ export function startWorker(
 	// Uses lastSuccess (not lastAttempt) so failure loops still trigger it.
 	watchdog = setInterval(() => {
 		if (!running) return;
-		if (Date.now() - lastSuccess < STALL_THRESHOLD) return;
+		// Intentional load-shedding is not a stall.
+		if (overloaded) return;
+		if (runtime.now() - lastSuccess < STALL_THRESHOLD) return;
 
 		let pending = 0;
 		try {
@@ -1531,21 +1581,17 @@ export function startWorker(
 		logger.warn("pipeline", "Worker stall detected, resetting backoff", {
 			pending,
 			failures: consecutiveFailures,
-			stalledMs: Date.now() - lastSuccess,
+			stalledMs: runtime.now() - lastSuccess,
 		});
 
 		consecutiveFailures = 0;
-		lastSuccess = Date.now();
+		lastSuccess = runtime.now();
 		// If a tick is already running, just reset backoff — the
 		// in-progress tick will call scheduleTick() on completion.
 		if (inflight) return;
 		if (pollTimer) clearTimeout(pollTimer);
-		pollTimer = setTimeout(async () => {
-			inflight = tick();
-			await inflight;
-			inflight = null;
-			scheduleTick();
-		}, 0);
+		// Re-enter normal scheduling so overload checks still apply.
+		scheduleTick();
 	}, WATCHDOG_INTERVAL);
 
 	// Start the tick loop
@@ -1602,6 +1648,12 @@ export function startWorker(
 				pending: pendingCount(),
 				processed,
 				backoffMs: getBackoffDelay(),
+				overloaded,
+				loadPerCpu: lastLoadPerCpu,
+				maxLoadPerCpu: pipelineCfg.worker.maxLoadPerCpu,
+				overloadBackoffMs: pipelineCfg.worker.overloadBackoffMs,
+				overloadSince: overloadSinceEpochMs === null ? null : new Date(overloadSinceEpochMs).toISOString(),
+				nextTickInMs: Math.max(0, nextTickAtEpochMs - runtime.now()),
 			};
 		},
 		async stop() {

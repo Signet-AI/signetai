@@ -6,8 +6,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch;
+use tokio::sync::{Mutex, watch};
 use tracing::{info, warn};
 
 use signet_core::db::DbPool;
@@ -25,6 +26,8 @@ pub struct WorkerConfig {
     pub poll_ms: u64,
     pub max_retries: u32,
     pub lease_timeout_ms: u64,
+    pub max_load_per_cpu: f64,
+    pub overload_backoff_ms: u64,
     pub extraction_timeout_ms: u64,
     pub extraction_max_tokens: u32,
     pub min_confidence: f64,
@@ -39,6 +42,8 @@ impl Default for WorkerConfig {
             poll_ms: 500,
             max_retries: 3,
             lease_timeout_ms: 30_000,
+            max_load_per_cpu: 0.8,
+            overload_backoff_ms: 30_000,
             extraction_timeout_ms: 90_000,
             extraction_max_tokens: 4096,
             min_confidence: 0.5,
@@ -72,6 +77,98 @@ pub struct JobResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerRuntimeSnapshot {
+    pub running: bool,
+    pub overloaded: bool,
+    pub load_per_cpu: Option<f64>,
+    pub overload_since_ms: Option<i64>,
+    pub next_tick_in_ms: Option<u64>,
+    pub max_load_per_cpu: f64,
+    pub overload_backoff_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkerRuntimeStats {
+    running: bool,
+    overloaded: bool,
+    load_per_cpu: Option<f64>,
+    overload_since_ms: Option<i64>,
+    next_tick_at_ms: Option<i64>,
+    max_load_per_cpu: f64,
+    overload_backoff_ms: u64,
+}
+
+impl WorkerRuntimeStats {
+    fn new(max_load_per_cpu: f64, overload_backoff_ms: u64) -> Self {
+        Self {
+            running: false,
+            overloaded: false,
+            load_per_cpu: None,
+            overload_since_ms: None,
+            next_tick_at_ms: None,
+            max_load_per_cpu,
+            overload_backoff_ms,
+        }
+    }
+
+    fn mark_running(&mut self, running: bool) {
+        self.running = running;
+        if !running {
+            self.overloaded = false;
+            self.load_per_cpu = None;
+            self.overload_since_ms = None;
+            self.next_tick_at_ms = None;
+        }
+    }
+
+    fn record_poll_state(&mut self, load_per_cpu: Option<f64>, overloaded: bool, now_ms: i64) {
+        self.load_per_cpu = load_per_cpu;
+        self.overloaded = overloaded;
+
+        if !overloaded {
+            self.overload_since_ms = None;
+            return;
+        }
+
+        if self.overload_since_ms.is_none() {
+            self.overload_since_ms = Some(now_ms);
+        }
+    }
+
+    fn record_next_delay(&mut self, now_ms: i64, delay_ms: u64) {
+        self.next_tick_at_ms = Some(now_ms.saturating_add(delay_ms as i64));
+    }
+
+    pub fn snapshot(&self, now_ms: i64) -> WorkerRuntimeSnapshot {
+        WorkerRuntimeSnapshot {
+            running: self.running,
+            overloaded: self.overloaded,
+            load_per_cpu: self.load_per_cpu,
+            overload_since_ms: self.overload_since_ms,
+            next_tick_in_ms: self
+                .next_tick_at_ms
+                .map(|at| at.saturating_sub(now_ms).max(0) as u64),
+            max_load_per_cpu: self.max_load_per_cpu,
+            overload_backoff_ms: self.overload_backoff_ms,
+        }
+    }
+}
+
+pub type SharedWorkerRuntimeStats = Arc<Mutex<WorkerRuntimeStats>>;
+
+/// Build a shared runtime-stats handle using configured load-shedding bounds.
+pub fn new_runtime_stats_handle(
+    max_load_per_cpu: f64,
+    overload_backoff_ms: u64,
+) -> SharedWorkerRuntimeStats {
+    Arc::new(Mutex::new(WorkerRuntimeStats::new(
+        max_load_per_cpu,
+        overload_backoff_ms,
+    )))
+}
+
 // ---------------------------------------------------------------------------
 // Worker handle
 // ---------------------------------------------------------------------------
@@ -80,9 +177,14 @@ pub struct JobResult {
 pub struct WorkerHandle {
     shutdown: watch::Sender<bool>,
     handle: tokio::task::JoinHandle<()>,
+    stats: SharedWorkerRuntimeStats,
 }
 
 impl WorkerHandle {
+    pub fn stats_handle(&self) -> SharedWorkerRuntimeStats {
+        self.stats.clone()
+    }
+
     /// Signal the worker to stop and wait for it to finish.
     pub async fn stop(self) {
         let _ = self.shutdown.send(true);
@@ -102,12 +204,47 @@ pub fn start(
     config: WorkerConfig,
 ) -> WorkerHandle {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let stats = new_runtime_stats_handle(config.max_load_per_cpu, config.overload_backoff_ms);
 
-    let handle = tokio::spawn(worker_loop(pool, provider, semaphore, config, shutdown_rx));
+    let handle = tokio::spawn(worker_loop(
+        pool,
+        provider,
+        semaphore,
+        config,
+        shutdown_rx,
+        stats.clone(),
+    ));
 
     WorkerHandle {
         shutdown: shutdown_tx,
         handle,
+        stats,
+    }
+}
+
+fn current_epoch_ms() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+fn current_load_per_cpu() -> Option<f64> {
+    #[cfg(unix)]
+    {
+        let mut loads = [0.0f64; 1];
+        // SAFETY: `loads` points to writable storage for one f64 sample.
+        let rc = unsafe { libc::getloadavg(loads.as_mut_ptr(), 1) };
+        if rc < 1 {
+            return None;
+        }
+        let cpus = std::thread::available_parallelism().ok()?.get() as f64;
+        if cpus <= 0.0 {
+            return None;
+        }
+        return Some(loads[0] / cpus);
+    }
+
+    #[cfg(not(unix))]
+    {
+        None
     }
 }
 
@@ -117,6 +254,7 @@ async fn worker_loop(
     semaphore: Arc<LlmSemaphore>,
     config: WorkerConfig,
     mut shutdown: watch::Receiver<bool>,
+    stats: SharedWorkerRuntimeStats,
 ) {
     let mut consecutive_failures: u32 = 0;
     let base_delay = Duration::from_millis(config.poll_ms);
@@ -128,28 +266,61 @@ async fn worker_loop(
         "pipeline worker started"
     );
 
+    {
+        let mut guard = stats.lock().await;
+        guard.mark_running(true);
+    }
+
     loop {
         // Check shutdown
         if *shutdown.borrow() {
             info!("pipeline worker shutting down");
+            let mut guard = stats.lock().await;
+            guard.mark_running(false);
             break;
         }
 
+        let now_ms = current_epoch_ms();
+        let load_per_cpu = current_load_per_cpu();
+        let overloaded = load_per_cpu
+            .map(|load| load.is_finite() && load > config.max_load_per_cpu)
+            .unwrap_or(false);
+
+        {
+            let mut guard = stats.lock().await;
+            guard.record_poll_state(load_per_cpu, overloaded, now_ms);
+        }
+
         // Calculate backoff delay
-        let delay = if consecutive_failures > 0 {
-            let backoff = base_delay * 2u32.pow(consecutive_failures.min(6));
-            backoff.min(max_delay)
+        let delay = if overloaded {
+            Duration::from_millis(config.overload_backoff_ms)
         } else {
-            base_delay
+            if consecutive_failures > 0 {
+                let backoff = base_delay * 2u32.pow(consecutive_failures.min(6));
+                backoff.min(max_delay)
+            } else {
+                base_delay
+            }
         };
+
+        {
+            let mut guard = stats.lock().await;
+            guard.record_next_delay(now_ms, delay.as_millis() as u64);
+        }
 
         // Wait with shutdown check
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
             _ = shutdown.changed() => {
                 info!("pipeline worker shutting down");
+                let mut guard = stats.lock().await;
+                guard.mark_running(false);
                 break;
             }
+        }
+
+        if overloaded {
+            continue;
         }
 
         // Try to lease a job
@@ -167,7 +338,7 @@ async fn worker_loop(
 
         // Process based on job type
         let result = match job.job_type.as_str() {
-            "extract" => process_extract(&pool, &job, &provider, &semaphore, &config).await,
+            "extract" | "extraction" => process_extract(&pool, &job, &provider, &semaphore, &config).await,
             other => {
                 warn!(job_type = other, "unknown job type");
                 Err(format!("unknown job type: {other}"))
@@ -352,4 +523,58 @@ async fn fail_job(pool: &DbPool, job_id: &str, error: &str) -> Result<(), String
     .await
     .map(|_| ())
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkerRuntimeStats, new_runtime_stats_handle};
+
+    #[test]
+    fn runtime_stats_preserve_overload_since_and_countdown() {
+        let mut stats = WorkerRuntimeStats::new(0.8, 30_000);
+        stats.mark_running(true);
+        stats.record_poll_state(Some(1.4), true, 1_000);
+        stats.record_next_delay(1_000, 30_000);
+        let snap_1 = stats.snapshot(1_000);
+        assert!(snap_1.running);
+        assert!(snap_1.overloaded);
+        assert_eq!(snap_1.overload_since_ms, Some(1_000));
+        assert_eq!(snap_1.next_tick_in_ms, Some(30_000));
+
+        stats.record_poll_state(Some(1.2), true, 11_000);
+        stats.record_next_delay(11_000, 20_000);
+        let snap_2 = stats.snapshot(11_000);
+        assert_eq!(snap_2.overload_since_ms, Some(1_000));
+        assert_eq!(snap_2.next_tick_in_ms, Some(20_000));
+    }
+
+    #[test]
+    fn runtime_stats_clear_when_not_overloaded_or_not_running() {
+        let mut stats = WorkerRuntimeStats::new(0.8, 30_000);
+        stats.mark_running(true);
+        stats.record_poll_state(Some(1.3), true, 1_000);
+        stats.record_next_delay(1_000, 30_000);
+        stats.record_poll_state(Some(0.2), false, 2_000);
+        stats.record_next_delay(2_000, 2_000);
+        let snap = stats.snapshot(2_000);
+        assert!(!snap.overloaded);
+        assert_eq!(snap.overload_since_ms, None);
+        assert_eq!(snap.next_tick_in_ms, Some(2_000));
+
+        stats.mark_running(false);
+        let snap = stats.snapshot(3_000);
+        assert!(!snap.running);
+        assert_eq!(snap.load_per_cpu, None);
+        assert_eq!(snap.next_tick_in_ms, None);
+    }
+
+    #[tokio::test]
+    async fn new_runtime_stats_handle_uses_configured_bounds() {
+        let stats = new_runtime_stats_handle(0.55, 42_000);
+        let snap = stats.lock().await.snapshot(0);
+        assert_eq!(snap.max_load_per_cpu, 0.55);
+        assert_eq!(snap.overload_backoff_ms, 42_000);
+        assert!(!snap.running);
+        assert!(!snap.overloaded);
+    }
 }

@@ -97,20 +97,22 @@ signet
 signet setup --non-interactive \
   --name "My Agent" \
   --harness claude-code \
-  --embedding-provider <ollama|openai|none> \
-  --extraction-provider <claude-code|codex|opencode|ollama|none>
+  --deployment-type <local|vps|server> \
+  --embedding-provider <native|ollama|openai|none> \
+  --extraction-provider <claude-code|codex|opencode|ollama|openrouter|none>
 ```
 
 Use `--non-interactive` when the agent needs to complete setup without
-waiting for terminal prompts. Ask the user for provider choices first,
-then pass both provider flags explicitly.
+waiting for terminal prompts. Provider flags are optional — setup can
+infer defaults from `--deployment-type`. Explicit provider flags should
+be used when the user has a strong preference.
 
 ## Commands Reference
 
 ```bash
 signet                  # Show help and command map
 signet setup            # Setup wizard
-signet setup --non-interactive --name "Agent" --harness claude-code --embedding-provider ollama --extraction-provider claude-code
+signet setup --non-interactive --name "Agent" --harness claude-code --deployment-type vps --embedding-provider native
 signet status           # Show status
 signet dashboard        # Open web UI
 signet secret put NAME  # Store a secret

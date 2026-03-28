@@ -6,6 +6,7 @@ interface SetupOptions {
 	nonInteractive?: boolean;
 	name?: string;
 	description?: string;
+	deploymentType?: string;
 	networkMode?: string;
 	harness?: string[];
 	embeddingProvider?: string;
@@ -17,6 +18,8 @@ interface SetupOptions {
 	configureOpenclawWorkspace?: boolean;
 	openDashboard?: boolean;
 	skipGit?: boolean;
+	allowUnprotectedWorkspace?: boolean;
+	createLocalBackup?: boolean;
 }
 
 interface PathOptions {
@@ -46,6 +49,10 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--non-interactive", "Run setup without prompts")
 		.option("--name <name>", "Agent name (non-interactive mode)")
 		.option("--description <description>", "Agent description (non-interactive mode)")
+		.option(
+			"--deployment-type <type>",
+			"Deployment context (local, vps, server). Adjusts non-interactive inferred defaults.",
+		)
 		.option("--network-mode <mode>", "Daemon network mode in non-interactive mode (localhost, tailscale)")
 		.option(
 			"--harness <harness>",
@@ -71,6 +78,14 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		)
 		.option("--open-dashboard", "Open dashboard after setup in non-interactive mode")
 		.option("--skip-git", "Skip git initialization and setup commits in non-interactive mode")
+		.option(
+			"--allow-unprotected-workspace",
+			"Allow setup to finish without remote origin or local snapshot when OpenClaw points at this workspace",
+		)
+		.option(
+			"--create-local-backup",
+			"Create a local snapshot backup automatically when OpenClaw points at this workspace and no origin remote exists",
+		)
 		.action(deps.setupWizard);
 
 	const dashboard = program
