@@ -20,36 +20,55 @@ pub mod autostart;
 #[path = "autostart_windows.rs"]
 pub mod autostart;
 
-fn daemon_name(path: &std::path::Path) -> bool {
-    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-        return false;
-    };
+fn target_name() -> &'static str {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const TARGET: &str = "x86_64-unknown-linux-gnu";
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    const TARGET: &str = "aarch64-unknown-linux-gnu";
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    const TARGET: &str = "x86_64-apple-darwin";
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    const TARGET: &str = "aarch64-apple-darwin";
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    const TARGET: &str = "x86_64-pc-windows-msvc";
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    const TARGET: &str = "aarch64-pc-windows-msvc";
+    #[cfg(not(any(
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "aarch64")
+    )))]
+    const TARGET: &str = "unknown";
 
-    if !name.starts_with("signet-daemon") {
-        return false;
-    }
+    TARGET
+}
 
+fn ext() -> &'static str {
     #[cfg(target_os = "windows")]
     {
-        return name.ends_with(".exe");
+        return ".exe";
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        return !name.ends_with(".exe");
+        return "";
     }
 }
 
-fn scan_dir(dir: &PathBuf) -> Option<String> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    for item in entries.flatten() {
-        let path = item.path();
-        if !path.is_file() {
-            continue;
-        }
-        if !daemon_name(&path) {
-            continue;
-        }
+fn preferred_name() -> String {
+    format!("signet-daemon-{}{}", target_name(), ext())
+}
+
+fn fallback_name() -> String {
+    format!("signet-daemon{}", ext())
+}
+
+fn find_by_name(dir: &PathBuf, name: &str) -> Option<String> {
+    let path = dir.join(name);
+    if path.is_file() {
         return Some(path.to_string_lossy().to_string());
     }
     None
@@ -67,7 +86,10 @@ pub fn find_bundled_daemon() -> Option<String> {
         ];
 
         for dir in dirs {
-            if let Some(path) = scan_dir(&dir) {
+            if let Some(path) = find_by_name(&dir, &preferred_name()) {
+                return Some(path);
+            }
+            if let Some(path) = find_by_name(&dir, &fallback_name()) {
                 return Some(path);
             }
         }
@@ -79,7 +101,10 @@ pub fn find_bundled_daemon() -> Option<String> {
     let dirs = vec![root.to_path_buf()];
 
     for dir in dirs {
-        if let Some(path) = scan_dir(&dir) {
+        if let Some(path) = find_by_name(&dir, &preferred_name()) {
+            return Some(path);
+        }
+        if let Some(path) = find_by_name(&dir, &fallback_name()) {
             return Some(path);
         }
     }
@@ -89,22 +114,25 @@ pub fn find_bundled_daemon() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use super::daemon_name;
+    use super::{fallback_name, preferred_name, target_name};
 
     #[test]
-    fn accepts_prefixed_binary_name() {
-        #[cfg(target_os = "windows")]
-        assert!(daemon_name(Path::new("signet-daemon-x86_64-pc-windows-msvc.exe")));
-
-        #[cfg(not(target_os = "windows"))]
-        assert!(daemon_name(Path::new("signet-daemon-x86_64-unknown-linux-gnu")));
+    fn preferred_name_uses_target_triple() {
+        let name = preferred_name();
+        assert!(name.starts_with("signet-daemon-"));
+        assert!(name.contains(target_name()));
     }
 
     #[test]
-    fn rejects_non_daemon_prefix() {
-        assert!(!daemon_name(Path::new("daemon-helper")));
+    fn fallback_name_is_plain_binary() {
+        let name = fallback_name();
+        assert!(name.starts_with("signet-daemon"));
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(name, "signet-daemon.exe");
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(name, "signet-daemon");
     }
 }
 

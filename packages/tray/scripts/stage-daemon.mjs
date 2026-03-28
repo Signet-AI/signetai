@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -109,6 +109,11 @@ if (!src) {
 
 const outDir = resolve(root, "src-tauri", "binaries");
 mkdirSync(outDir, { recursive: true });
+
+for (const name of readdirSync(outDir)) {
+	if (!name.startsWith("signet-daemon-")) continue;
+	rmSync(resolve(outDir, name), { force: true });
+}
 
 const out = resolve(outDir, `signet-daemon-${triple}${ext}`);
 copyFileSync(src, out);
