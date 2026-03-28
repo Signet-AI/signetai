@@ -43,7 +43,7 @@ Arch.
 
 - Depends on `signet-runtime` for daemon behavior contracts.
 - Desktop packaging remains independent of npm release train mechanics.
-- Generated AUR metadata is source-controlled and can be pushed by a
-  separate credentialed job.
+- Generated AUR metadata is emitted as CI artifacts and can be pushed by
+  a separate credentialed job.
 - `packages/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar
   usage is intentionally fallback-only until parity cutover is approved.

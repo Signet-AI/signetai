@@ -9,10 +9,17 @@ fi
 VER="$1"
 URL="$2"
 SHA="$3"
+ASSET="${URL##*/}"
+ASSET="${ASSET%%\?*}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT_DIR="${ROOT}/deploy/aur"
 
 mkdir -p "${OUT_DIR}"
+
+if [ -z "${ASSET}" ]; then
+  echo "error: could not derive asset name from URL"
+  exit 1
+fi
 
 cat > "${OUT_DIR}/PKGBUILD" <<EOF
 pkgname=signet-desktop-bin
@@ -24,12 +31,12 @@ url='https://github.com/Signet-AI/signetai'
 license=('Apache')
 depends=('glibc' 'gtk3' 'webkit2gtk-4.1')
 optdepends=('libayatana-appindicator: tray icon support')
-source=("signet-\${pkgver}.AppImage::${URL}")
+source=("${ASSET}::${URL}")
 sha256sums=('${SHA}')
 
 package() {
   install -d "\${pkgdir}/opt/signet"
-  install -Dm755 "\${srcdir}/signet-\${pkgver}.AppImage" "\${pkgdir}/opt/signet/Signet.AppImage"
+  install -Dm755 "\${srcdir}/${ASSET}" "\${pkgdir}/opt/signet/Signet.AppImage"
   install -d "\${pkgdir}/usr/bin"
   ln -sf "/opt/signet/Signet.AppImage" "\${pkgdir}/usr/bin/signet-desktop"
 }
@@ -47,7 +54,7 @@ pkgbase = signet-desktop-bin
 	depends = gtk3
 	depends = webkit2gtk-4.1
 	optdepends = libayatana-appindicator: tray icon support
-	source = signet-\${pkgver}.AppImage::${URL}
+	source = ${ASSET}::${URL}
 	sha256sums = ${SHA}
 
 pkgname = signet-desktop-bin
