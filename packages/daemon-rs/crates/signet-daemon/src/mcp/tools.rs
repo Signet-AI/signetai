@@ -9,6 +9,18 @@ use crate::feedback::parse_scores;
 use crate::state::AppState;
 use signet_core::db::Priority;
 
+fn session_agent_id(session_key: &str) -> Option<String> {
+    let mut parts = session_key.splitn(3, ':');
+    if parts.next() != Some("agent") {
+        return None;
+    }
+    let id = parts.next().unwrap_or("").trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Tool registry
 // ---------------------------------------------------------------------------
@@ -402,7 +414,8 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
         .get("session_key")
         .and_then(|v| v.as_str())
         .map(str::trim)
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let explicit_agent = args
         .get("agent_id")
         .and_then(|v| v.as_str())
@@ -445,6 +458,21 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
         return ToolCallResult::error(
             "non-default visibility/scope requires session_key".to_string(),
         );
+    }
+    let scoped = agent_id != "default" || visibility != "global" || scope.is_some();
+    if scoped {
+        let Some(key) = session_key.as_deref() else {
+            return ToolCallResult::error("session_key is required".to_string());
+        };
+        if state.sessions.get_path(key).is_none() {
+            return ToolCallResult::error("session_key is not active".to_string());
+        }
+        let Some(bound) = session_agent_id(key) else {
+            return ToolCallResult::error("session_key must be agent scoped".to_string());
+        };
+        if agent_id != "default" && agent_id != bound {
+            return ToolCallResult::error("agent_id does not match session scope".to_string());
+        }
     }
 
     let result = state
@@ -679,5 +707,14 @@ mod tests {
         assert!(props.contains_key("agent_id"));
         assert!(props.contains_key("visibility"));
         assert!(props.contains_key("scope"));
+    }
+
+    #[test]
+    fn session_agent_id_parses_agent_session_key() {
+        assert_eq!(
+            session_agent_id("agent:alpha:sess-1").as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(session_agent_id("sess-1"), None);
     }
 }

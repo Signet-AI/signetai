@@ -14,7 +14,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 use signet_core::db::Priority;
-use signet_services::session::{ClaimResult, RuntimePath};
+use signet_services::session::{ClaimResult, RuntimePath, SessionTracker};
 use signet_services::transactions;
 
 use crate::state::AppState;
@@ -91,7 +91,10 @@ fn session_agent_id(session_key: Option<&str>) -> Option<String> {
 }
 
 fn normalize_agent_id(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn resolve_remember_agent(
@@ -131,19 +134,32 @@ fn parse_visibility(value: Option<&str>) -> Result<String, &'static str> {
 }
 
 fn require_session_scope_for_write(
+    sessions: &SessionTracker,
     agent_id: &str,
     visibility: &str,
     scope: Option<&str>,
     session_key: Option<&str>,
 ) -> Result<(), &'static str> {
-    if session_key.is_some() {
+    let scoped = agent_id != "default" || visibility != "global" || scope.is_some();
+    if !scoped {
         return Ok(());
     }
-    if agent_id != "default" {
-        return Err("non-default agent_id requires session_key with agent scope");
-    }
-    if visibility != "global" || scope.is_some() {
+
+    let Some(key) = session_key else {
+        if agent_id != "default" {
+            return Err("non-default agent_id requires session_key with agent scope");
+        }
         return Err("non-default visibility/scope requires session_key with agent scope");
+    };
+    let session_agent = session_agent_id(Some(key));
+    if session_agent.is_none() {
+        return Err("session_key must be agent scoped");
+    }
+    if sessions.get_path(key).is_none() {
+        return Err("session_key is not active");
+    }
+    if agent_id != "default" && session_agent.as_deref() != Some(agent_id) {
+        return Err("agent_id does not match session scope");
     }
     Ok(())
 }
@@ -871,7 +887,9 @@ pub async fn remember(
     let session_key = body.session_key.clone();
     let agent_id = match resolve_remember_agent(
         body.agent_id.as_deref(),
-        headers.get("x-signet-agent-id").and_then(|v| v.to_str().ok()),
+        headers
+            .get("x-signet-agent-id")
+            .and_then(|v| v.to_str().ok()),
         session_key.as_deref(),
     ) {
         Ok(id) => id,
@@ -900,6 +918,7 @@ pub async fn remember(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     if let Err(err) = require_session_scope_for_write(
+        &state.sessions,
         &agent_id,
         &visibility,
         scope.as_deref(),
@@ -1457,9 +1476,11 @@ pub async fn session_checkpoint_extract(
 #[cfg(test)]
 mod tests {
     use super::{
-        CHECKPOINT_MIN_DELTA, extract_delta, resolve_compaction_project, resolve_remember_agent,
-        parse_visibility, require_session_scope_for_write, session_agent_id, strip_untrusted_metadata,
+        CHECKPOINT_MIN_DELTA, extract_delta, parse_visibility, require_session_scope_for_write,
+        resolve_compaction_project, resolve_remember_agent, session_agent_id,
+        strip_untrusted_metadata,
     };
+    use signet_services::session::{RuntimePath, SessionTracker};
 
     #[test]
     fn session_agent_id_parses_agent_session_keys() {
@@ -1472,12 +1493,8 @@ mod tests {
 
     #[test]
     fn resolve_remember_agent_rejects_session_scope_mismatch() {
-        let err = resolve_remember_agent(
-            Some("agent-b"),
-            None,
-            Some("agent:agent-a:sess-1"),
-        )
-        .unwrap_err();
+        let err = resolve_remember_agent(Some("agent-b"), None, Some("agent:agent-a:sess-1"))
+            .unwrap_err();
         assert_eq!(err, "agent_id does not match session scope");
     }
 
@@ -1494,11 +1511,49 @@ mod tests {
 
     #[test]
     fn require_session_scope_for_write_blocks_unscoped_overrides() {
-        let err = require_session_scope_for_write("agent-a", "global", None, None).unwrap_err();
-        assert_eq!(err, "non-default agent_id requires session_key with agent scope");
+        let sessions = SessionTracker::new();
+        let err = require_session_scope_for_write(&sessions, "agent-a", "global", None, None)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "non-default agent_id requires session_key with agent scope"
+        );
 
-        let err = require_session_scope_for_write("default", "private", None, None).unwrap_err();
-        assert_eq!(err, "non-default visibility/scope requires session_key with agent scope");
+        let err = require_session_scope_for_write(&sessions, "default", "private", None, None)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "non-default visibility/scope requires session_key with agent scope"
+        );
+    }
+
+    #[test]
+    fn require_session_scope_for_write_requires_active_agent_session() {
+        let sessions = SessionTracker::new();
+        let err = require_session_scope_for_write(
+            &sessions,
+            "agent-a",
+            "private",
+            None,
+            Some("agent:agent-a:sess-1"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "session_key is not active");
+
+        assert!(matches!(
+            sessions.claim("agent:agent-a:sess-1", RuntimePath::Plugin),
+            signet_services::session::ClaimResult::Ok
+        ));
+        assert!(
+            require_session_scope_for_write(
+                &sessions,
+                "agent-a",
+                "private",
+                None,
+                Some("agent:agent-a:sess-1"),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
