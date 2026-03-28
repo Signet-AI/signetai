@@ -105,11 +105,25 @@ describe("status report openclaw backup risk", () => {
 		const workspace = join(root, "agents");
 		try {
 			mkdirSync(workspace, { recursive: true });
+			writeFileSync(join(workspace, "AGENTS.md"), "# src\n");
+			writeFileSync(join(workspace, "agent.yaml"), "version: 1\n");
+			writeFileSync(join(workspace, "SOUL.md"), "soul\n");
+			writeFileSync(join(workspace, "IDENTITY.md"), "identity\n");
+			writeFileSync(join(workspace, "USER.md"), "user\n");
+			writeFileSync(join(workspace, "MEMORY.md"), "memory\n");
+			mkdirSync(join(workspace, "memory"), { recursive: true });
+			writeFileSync(join(workspace, "memory", "memories.db"), "sqlite");
 			spawnSync("git", ["init"], { cwd: workspace, windowsHide: true });
 			const snapshotPath = join(root, "backups", "agents-20260327T120000Z");
 			mkdirSync(join(snapshotPath, "memory"), { recursive: true });
 			writeFileSync(join(snapshotPath, "AGENTS.md"), "# snap\n");
+			writeFileSync(join(snapshotPath, "agent.yaml"), "version: 1\n");
+			writeFileSync(join(snapshotPath, "SOUL.md"), "soul\n");
+			writeFileSync(join(snapshotPath, "IDENTITY.md"), "identity\n");
+			writeFileSync(join(snapshotPath, "USER.md"), "user\n");
+			writeFileSync(join(snapshotPath, "MEMORY.md"), "memory\n");
 			writeFileSync(join(snapshotPath, "memory", "memories.db"), "sqlite");
+			mkdirSync(join(snapshotPath, ".git"), { recursive: true });
 			writeFileSync(
 				join(workspace, ".signet-workspace-protection.json"),
 				`${JSON.stringify({
@@ -145,9 +159,19 @@ describe("status report openclaw backup risk", () => {
 		const workspace = join(root, "agents");
 		try {
 			mkdirSync(workspace, { recursive: true });
+			writeFileSync(join(workspace, "AGENTS.md"), "# src\n");
+			writeFileSync(join(workspace, "agent.yaml"), "version: 1\n");
+			writeFileSync(join(workspace, "SOUL.md"), "soul\n");
+			writeFileSync(join(workspace, "IDENTITY.md"), "identity\n");
+			writeFileSync(join(workspace, "USER.md"), "user\n");
+			writeFileSync(join(workspace, "MEMORY.md"), "memory\n");
+			mkdirSync(join(workspace, "memory"), { recursive: true });
+			writeFileSync(join(workspace, "memory", "memories.db"), "sqlite");
 			spawnSync("git", ["init"], { cwd: workspace, windowsHide: true });
 			const snapshotPath = join(root, "backups", "agents-20260327T120000Z");
-			mkdirSync(snapshotPath, { recursive: true });
+			mkdirSync(join(snapshotPath, "memory"), { recursive: true });
+			writeFileSync(join(snapshotPath, "AGENTS.md"), "# partial\n");
+			writeFileSync(join(snapshotPath, "memory", "memories.db"), "sqlite");
 			writeFileSync(
 				join(workspace, ".signet-workspace-protection.json"),
 				`${JSON.stringify({

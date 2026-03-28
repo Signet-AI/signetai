@@ -35,6 +35,11 @@ function setupRepo(): {
 	const workspace = join(root, "agents");
 	mkdirSync(workspace, { recursive: true });
 	writeFileSync(join(workspace, "AGENTS.md"), "# test\n");
+	writeFileSync(join(workspace, "agent.yaml"), "version: 1\n");
+	writeFileSync(join(workspace, "SOUL.md"), "soul\n");
+	writeFileSync(join(workspace, "IDENTITY.md"), "identity\n");
+	writeFileSync(join(workspace, "USER.md"), "user\n");
+	writeFileSync(join(workspace, "MEMORY.md"), "memory\n");
 	mkdirSync(join(workspace, "memory"), { recursive: true });
 	const db = Database(join(workspace, "memory", "memories.db"));
 	try {
