@@ -59,6 +59,30 @@ impl LinuxManager {
 
         None
     }
+
+    fn find_signet_cli(&self) -> Option<String> {
+        // Check common locations
+        let candidates = ["/usr/bin/signet", "/usr/local/bin/signet"];
+
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                return Some(path.to_string());
+            }
+        }
+
+        // Fall back to PATH lookup
+        Command::new("which")
+            .arg("signet")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+    }
 }
 
 impl DaemonManager for LinuxManager {
@@ -73,6 +97,11 @@ impl DaemonManager for LinuxManager {
                 return Err(format!("systemctl start failed: {stderr}").into());
             }
 
+            return Ok(());
+        }
+
+        if let Some(signet) = self.find_signet_cli() {
+            Command::new(&signet).args(["daemon", "start"]).spawn()?;
             return Ok(());
         }
 
