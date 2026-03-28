@@ -66,6 +66,11 @@ impl LinuxManager {
 
 impl DaemonManager for LinuxManager {
     fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(bin) = super::find_bundled_daemon() {
+            Command::new(&bin).spawn()?;
+            return Ok(());
+        }
+
         if self.systemd_unit_exists() {
             let output = Command::new("systemctl")
                 .args(["--user", "start", "signet.service"])

@@ -68,7 +68,12 @@ Eleven Tauri commands are registered:
 | `quit_app` | Exit the Tauri process |
 
 A `DaemonManager` platform trait abstracts start/stop/is_running.
-`linux.rs` is fully implemented. macOS and Windows are stubs.
+All three platform managers are implemented.
+
+Start order prefers a bundled daemon sidecar (`signet-daemon*`) shipped
+with the desktop app. If no bundled runtime is found, each platform
+falls back to existing system-installed paths (`signet`, `signet-daemon`,
+or Bun+daemon script) for compatibility.
 
 **Linux process management:**
 
@@ -118,7 +123,8 @@ Build
 
 TypeScript is compiled with `bun build --target browser` (output to
 `dist/`). Tauri reads from `dist/` as configured in `tauri.conf.json`.
-The Tauri build produces a self-contained `.AppImage` on Linux.
+Before packaging, a staged daemon sidecar is copied to
+`src-tauri/binaries/` and bundled into the desktop artifact.
 
 The tray build is independent of the monorepo root `bun run build`.
 
@@ -131,8 +137,11 @@ bun install
 # 2. Build TypeScript frontend (runs automatically as beforeBuildCommand)
 bun run build:ts
 
-# 3. Build the Tauri app
-cargo tauri build
+# 3. Stage daemon sidecar (target-aware)
+bun run stage:daemon
+
+# 4. Build the Tauri app
+bun tauri build
 ```
 
 The `build:ts` script compiles `src-ts/index.ts` with `--target browser
@@ -153,9 +162,20 @@ Tauri dev server.
 
 | Platform | Output |
 |----------|--------|
-| Linux | `.AppImage` in `src-tauri/target/release/bundle/appimage/` |
+| Linux | `.deb` in `src-tauri/target/release/bundle/deb/` and `.AppImage` in `src-tauri/target/release/bundle/appimage/` |
 | macOS | `.dmg` / `.app` in `src-tauri/target/release/bundle/dmg/` |
 | Windows | `.msi` in `src-tauri/target/release/bundle/msi/` |
+
+### Channel metadata
+
+Release CI derives channel metadata from tagged assets:
+
+- **Arch (AUR)**: `deploy/aur/PKGBUILD` + `.SRCINFO`
+- **Homebrew Cask**: `deploy/channels/homebrew/signet.rb`
+- **winget**: `deploy/channels/winget/*.yaml`
+
+These manifests are emitted as CI artifacts so channel repos can be
+updated without recomputing checksums locally.
 
 
 Configuration
@@ -168,8 +188,8 @@ the tray app will not detect it — this is a known limitation.
 
 The Tauri app metadata is defined in `src-tauri/tauri.conf.json`:
 
-- **identifier**: `ai.signet.tray`
-- **productName**: `Signet Tray`
+- **identifier**: `ai.signet.app`
+- **productName**: `Signet`
 - **bundle targets**: all platforms enabled
 - **CSP**: allows `connect-src` to `http://localhost:*` for daemon API access
 
@@ -205,9 +225,6 @@ Known Limitations
 - **Hardcoded daemon URL** — the tray always connects to
   `http://localhost:3850`. Custom ports via `SIGNET_PORT` are not
   picked up.
-- **macOS and Windows stubs** — the `DaemonManager` trait only has a
-  full implementation for Linux. macOS has an autostart helper but the
-  start/stop commands are stubs. Windows is entirely unimplemented.
 - **No autostart** — the tray does not register itself to start on
   login (planned).
 - **No desktop notifications** — state transitions are only reflected

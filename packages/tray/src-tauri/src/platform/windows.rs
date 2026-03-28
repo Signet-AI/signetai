@@ -119,6 +119,13 @@ impl DaemonManager for WindowsManager {
         // Suppress console window flash when spawning daemon
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+        if let Some(bin) = super::find_bundled_daemon() {
+            Command::new(&bin)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()?;
+            return Ok(());
+        }
+
         // Try `signet daemon start` CLI first
         if let Some(signet) = self.find_signet_cli() {
             Command::new(&signet)

@@ -816,6 +816,23 @@ specs:
       - "Regression tests lock the macOS SQLite discovery order and degraded-mode messaging"
     decision: null
 
+  - id: desktop-packaging-distribution
+    status: approved
+    path: docs/specs/approved/desktop-packaging-distribution.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-DESKTOP-PACKAGING-DISTRIBUTION.md
+    success_criteria:
+      - "Desktop release CI produces installable artifacts for macOS, Windows, Ubuntu, and Arch deliverables from one contract"
+      - "Tray runtime prefers bundled daemon binaries before system-installed fallbacks"
+      - "Ubuntu outputs include both .deb and .AppImage artifacts per release"
+      - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
+      - "Desktop release jobs enforce signing preflight checks before publish"
+    decision: null
+
 
   - id: golden-path-docs
     status: planning

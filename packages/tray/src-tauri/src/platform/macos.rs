@@ -116,6 +116,11 @@ impl MacosManager {
 
 impl DaemonManager for MacosManager {
     fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(bin) = super::find_bundled_daemon() {
+            Command::new(&bin).spawn()?;
+            return Ok(());
+        }
+
         // If launchd plist exists, use launchctl
         if self.launchd_plist_exists() {
             let output = if self.launchd_is_loaded() {

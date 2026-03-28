@@ -2,7 +2,7 @@ name: Desktop Build
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -23,6 +23,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
@@ -35,11 +38,55 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Signing preflight (macOS)
+        if: matrix.runner == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for key in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing required secret: ${key}"
+              exit 1
+            fi
+          done
+
+      - name: Signing preflight (Windows)
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
+            Write-Error "Missing required secret: WINDOWS_CERTIFICATE"
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            Write-Error "Missing required secret: WINDOWS_CERTIFICATE_PASSWORD"
+            exit 1
+          }
+
       - name: Install Linux dependencies
         if: matrix.runner == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
       - name: Install dependencies
         run: bun install
@@ -47,10 +94,179 @@ jobs:
       - name: Install tray dependencies
         run: cd packages/tray && bun install
 
+      - name: Build bundled daemon runtime
+        run: |
+          cargo build \
+            --manifest-path packages/daemon-rs/Cargo.toml \
+            --release \
+            --target "${{ matrix.target }}" \
+            -p signet-daemon
+
+      - name: Stage bundled daemon runtime
+        env:
+          TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}
+        run: cd packages/tray && bun run stage:daemon
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_CONFIG: '{"bundle":{"externalBin":["binaries/signet-daemon"]}}'
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: packages/tray
           tauriScript: bun tauri
           args: --target ${{ matrix.target }}
+
+      - name: Sign Windows MSI artifacts
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP "signet-codesign.pfx"
+          [System.IO.File]::WriteAllBytes(
+            $certPath,
+            [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          )
+
+          $msiFiles = Get-ChildItem -Path "packages/tray/src-tauri/target/$env:TARGET/release/bundle/msi" -Filter *.msi -Recurse
+          if ($msiFiles.Count -eq 0) {
+            Write-Error "No MSI artifacts found for signing"
+            exit 1
+          }
+
+          foreach ($msi in $msiFiles) {
+            & signtool sign `
+              /f "$certPath" `
+              /p "$env:WINDOWS_CERTIFICATE_PASSWORD" `
+              /fd SHA256 `
+              /tr "http://timestamp.digicert.com" `
+              /td SHA256 `
+              "$($msi.FullName)"
+          }
+
+      - name: Generate Arch AUR metadata
+        if: matrix.runner == 'ubuntu-22.04'
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          APPIMAGE="$(find packages/tray/src-tauri/target/${{ matrix.target }}/release/bundle -name '*.AppImage' | head -n 1)"
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::No AppImage artifact found"
+            exit 1
+          fi
+
+          ASSET="$(basename "$APPIMAGE")"
+          SHA="$(sha256sum "$APPIMAGE" | awk '{print $1}')"
+          VER="${TAG#v}"
+          URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
+
+          bash deploy/aur/generate-pkgbuild.sh "$VER" "$URL" "$SHA"
+
+      - name: Upload AUR metadata artifact
+        if: matrix.runner == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aur-metadata
+          path: |
+            deploy/aur/PKGBUILD
+            deploy/aur/.SRCINFO
+
+  channel-manifests:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release asset URLs
+        id: assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          JSON="$(gh api "repos/${REPO}/releases/tags/${TAG}")"
+
+          WIN_NAME="$(jq -r '.assets[] | .name | select(test("\\.msi$"; "i"))' <<<"${JSON}" | grep -Ei 'x64|x86_64' | head -n1 || true)"
+          MAC_ARM_NAME="$(jq -r '.assets[] | .name | select(test("\\.dmg$"; "i"))' <<<"${JSON}" | grep -Ei 'arm64|aarch64' | head -n1 || true)"
+          MAC_X64_NAME="$(jq -r '.assets[] | .name | select(test("\\.dmg$"; "i"))' <<<"${JSON}" | grep -Ei 'x64|x86_64' | head -n1 || true)"
+
+          if [ -z "${WIN_NAME}" ] || [ -z "${MAC_ARM_NAME}" ] || [ -z "${MAC_X64_NAME}" ]; then
+            echo "::error::Could not resolve required release assets (msi + arm64 dmg + x64 dmg)"
+            exit 1
+          fi
+
+          WIN_URL="$(jq -r --arg n "${WIN_NAME}" '.assets[] | select(.name == $n) | .browser_download_url' <<<"${JSON}")"
+          MAC_ARM_URL="$(jq -r --arg n "${MAC_ARM_NAME}" '.assets[] | select(.name == $n) | .browser_download_url' <<<"${JSON}")"
+          MAC_X64_URL="$(jq -r --arg n "${MAC_X64_NAME}" '.assets[] | select(.name == $n) | .browser_download_url' <<<"${JSON}")"
+
+          echo "win_name=${WIN_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "mac_arm_name=${MAC_ARM_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "mac_x64_name=${MAC_X64_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "win_url=${WIN_URL}" >> "${GITHUB_OUTPUT}"
+          echo "mac_arm_url=${MAC_ARM_URL}" >> "${GITHUB_OUTPUT}"
+          echo "mac_x64_url=${MAC_X64_URL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download release installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/signet-channel-assets
+          gh release download "${TAG}" \
+            --repo "${REPO}" \
+            --dir /tmp/signet-channel-assets \
+            --pattern "${{ steps.assets.outputs.win_name }}" \
+            --pattern "${{ steps.assets.outputs.mac_arm_name }}" \
+            --pattern "${{ steps.assets.outputs.mac_x64_name }}"
+
+      - name: Generate channel manifests
+        env:
+          TAG: ${{ github.ref_name }}
+          WIN_URL: ${{ steps.assets.outputs.win_url }}
+          MAC_ARM_URL: ${{ steps.assets.outputs.mac_arm_url }}
+          MAC_X64_URL: ${{ steps.assets.outputs.mac_x64_url }}
+          WIN_NAME: ${{ steps.assets.outputs.win_name }}
+          MAC_ARM_NAME: ${{ steps.assets.outputs.mac_arm_name }}
+          MAC_X64_NAME: ${{ steps.assets.outputs.mac_x64_name }}
+        run: |
+          set -euo pipefail
+          VER="${TAG#v}"
+
+          WIN_SHA="$(sha256sum "/tmp/signet-channel-assets/${WIN_NAME}" | awk '{print $1}')"
+          MAC_ARM_SHA="$(sha256sum "/tmp/signet-channel-assets/${MAC_ARM_NAME}" | awk '{print $1}')"
+          MAC_X64_SHA="$(sha256sum "/tmp/signet-channel-assets/${MAC_X64_NAME}" | awk '{print $1}')"
+
+          bash deploy/channels/generate-manifests.sh \
+            "${VER}" \
+            "${MAC_ARM_URL}" \
+            "${MAC_ARM_SHA}" \
+            "${MAC_X64_URL}" \
+            "${MAC_X64_SHA}" \
+            "${WIN_URL}" \
+            "${WIN_SHA}"
+
+      - name: Upload channel manifests artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-channel-manifests
+          path: |
+            deploy/channels/homebrew/signet.rb
+            deploy/channels/winget/SignetAI.Signet.yaml
+            deploy/channels/winget/SignetAI.Signet.locale.en-US.yaml
+            deploy/channels/winget/SignetAI.Signet.installer.yaml

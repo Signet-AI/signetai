@@ -1,21 +1,22 @@
 {
-  "name": "@signet/tray",
-  "version": "0.81.1",
-  "private": true,
-  "description": "Signet desktop application",
-  "scripts": {
-    "build:dashboard": "cd ../cli/dashboard && bun run build",
-    "build:ts": "node build-ts.mjs",
-    "dev": "tauri dev",
-    "build": "tauri build",
-    "tauri": "tauri"
-  },
-  "dependencies": {
-    "@signet/sdk": "workspace:*",
-    "@tauri-apps/api": "^2.5.0"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2.5.0",
-    "typescript": "^5.7.0"
-  }
+	"name": "@signet/tray",
+	"version": "0.81.1",
+	"private": true,
+	"description": "Signet desktop application",
+	"scripts": {
+		"build:dashboard": "cd ../cli/dashboard && bun run build",
+		"build:ts": "node build-ts.mjs",
+		"stage:daemon": "node scripts/stage-daemon.mjs",
+		"dev": "tauri dev",
+		"build": "tauri build",
+		"tauri": "tauri"
+	},
+	"dependencies": {
+		"@signet/sdk": "workspace:*",
+		"@tauri-apps/api": "^2.5.0"
+	},
+	"devDependencies": {
+		"@tauri-apps/cli": "^2.5.0",
+		"typescript": "^5.7.0"
+	}
 }

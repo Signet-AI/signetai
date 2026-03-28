@@ -1,0 +1,47 @@
+---
+title: "Desktop Packaging and Distribution"
+status: approved
+informed_by:
+  - "docs/research/technical/RESEARCH-DESKTOP-PACKAGING-DISTRIBUTION.md"
+success_criteria:
+  - "Desktop release CI produces installable artifacts for macOS, Windows, Ubuntu, and Arch deliverables from one contract"
+  - "Tray runtime prefers bundled daemon binaries before system-installed fallbacks"
+  - "Ubuntu outputs include both .deb and .AppImage artifacts per release"
+  - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
+  - "Desktop release jobs enforce signing preflight checks before publish"
+scope_boundary: "Desktop packaging, runtime bundling preference, CI workflows, and Arch metadata generation. Does not replace npm package publishing flows."
+---
+
+# Desktop Packaging and Distribution
+
+## Context
+
+Signet already has a Tauri desktop app, but distribution is still
+incomplete as a release contract:
+
+- runtime startup depends too heavily on global installs
+- Linux channel expectations differ between Ubuntu and Arch users
+- signing readiness is implicit rather than enforced
+
+This spec locks the packaging contract for macOS, Windows, Ubuntu, and
+Arch.
+
+## Contract
+
+1. Desktop build workflows must produce:
+   - macOS installer artifacts
+   - Windows installer artifacts
+   - Ubuntu `.deb` and `.AppImage`
+   - Arch deliverables as `.AppImage` + AUR metadata
+2. Tray runtime startup must prefer bundled daemon binaries when
+   available.
+3. Release workflows must include signing preflight validation.
+4. AUR metadata generation must be deterministic from version, AppImage
+   URL, and checksum.
+
+## Integration notes
+
+- Depends on `signet-runtime` for daemon behavior contracts.
+- Desktop packaging remains independent of npm release train mechanics.
+- Generated AUR metadata is source-controlled and can be pushed by a
+  separate credentialed job.
