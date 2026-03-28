@@ -736,6 +736,9 @@ pub struct HookRememberBody {
     pub session_key: Option<String>,
     pub idempotency_key: Option<String>,
     pub runtime_path: Option<String>,
+    pub agent_id: Option<String>,
+    pub visibility: Option<String>,
+    pub scope: Option<String>,
 }
 
 pub async fn remember(
@@ -795,6 +798,46 @@ pub async fn remember(
     let idempotency_key = body.idempotency_key.clone();
     let runtime_path_str = path.map(|p| p.as_str().to_string());
     let session_key = body.session_key.clone();
+    let agent_id = body
+        .agent_id
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            headers
+                .get("x-signet-agent-id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            session_key.as_deref().and_then(|key| {
+                let mut parts = key.splitn(3, ':');
+                if parts.next() != Some("agent") {
+                    return None;
+                }
+                let id = parts.next().unwrap_or("").trim();
+                if id.is_empty() {
+                    return None;
+                }
+                Some(id.to_string())
+            })
+        })
+        .unwrap_or_else(|| "default".to_string());
+    let visibility = body
+        .visibility
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_lowercase)
+        .filter(|v| v == "global" || v == "private" || v == "archived")
+        .unwrap_or_else(|| "global".to_string());
+    let scope = body
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     // Record in continuity tracker
     if let Some(key) = &session_key {
@@ -820,9 +863,9 @@ pub async fn remember(
                     idempotency_key: idempotency_key.as_deref(),
                     runtime_path: runtime_path_str.as_deref(),
                     actor: "hook",
-                    agent_id: "default",
-                    visibility: "global",
-                    scope: None,
+                    agent_id: &agent_id,
+                    visibility: &visibility,
+                    scope: scope.as_deref(),
                 },
             )?;
 

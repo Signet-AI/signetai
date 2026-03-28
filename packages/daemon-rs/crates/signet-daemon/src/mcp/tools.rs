@@ -41,6 +41,9 @@ pub fn definitions() -> Vec<ToolDefinition> {
                     "type": { "type": "string", "description": "Memory type" },
                     "importance": { "type": "number", "description": "Importance score 0-1" },
                     "tags": { "type": "array", "items": { "type": "string" } },
+                    "agent_id": { "type": "string", "description": "Agent id scope (default: default)" },
+                    "visibility": { "type": "string", "enum": ["global", "private", "archived"], "description": "Memory visibility (default: global)" },
+                    "scope": { "type": "string", "description": "Optional scope/project partition key" },
                 },
                 "required": ["content"],
             }),
@@ -394,6 +397,26 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 .collect()
         })
         .unwrap_or_default();
+    let agent_id = args
+        .get("agent_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("default")
+        .to_string();
+    let visibility = args
+        .get("visibility")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .map(str::to_lowercase)
+        .filter(|v| v == "global" || v == "private" || v == "archived")
+        .unwrap_or_else(|| "global".to_string());
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     let result = state
         .pool
@@ -412,9 +435,9 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "mcp-server",
-                agent_id: "default",
-                visibility: "global",
-                scope: None,
+                agent_id: &agent_id,
+                visibility: &visibility,
+                scope: scope.as_deref(),
             };
             let result = signet_services::transactions::ingest(conn, &input)?;
             Ok(serde_json::json!({
