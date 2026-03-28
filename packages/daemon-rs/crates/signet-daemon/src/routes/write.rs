@@ -61,6 +61,7 @@ pub struct RememberBody {
     pub memory_type: Option<String>,
     pub agent_id: Option<String>,
     pub visibility: Option<String>,
+    pub scope: Option<String>,
 }
 
 fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
@@ -229,11 +230,23 @@ pub async fn remember(
     let source_id = body.source_id;
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
     let agent_id = body.agent_id.unwrap_or_else(|| "default".into());
-    let visibility = match body.visibility.as_deref() {
-        Some("private") => "private",
-        _ => "global",
-    }
-    .to_string();
+    let scope = body
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let visibility = body
+        .visibility
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| match s {
+            "private" => "private".to_string(),
+            "archived" => "archived".to_string(),
+            _ => "global".to_string(),
+        })
+        .unwrap_or_else(|| "global".to_string());
     let extraction_max_attempts = state
         .config
         .manifest
@@ -267,6 +280,7 @@ pub async fn remember(
                         actor: "api",
                         agent_id: &agent_id,
                         visibility: &visibility,
+                        scope: scope.as_deref(),
                     },
                     blocked_reason.as_deref(),
                     extraction_max_attempts,

@@ -44,6 +44,9 @@ fn populate(conn: &rusqlite::Connection, count: usize) {
             runtime_path: None,
             now: &now,
             updated_by: "bench",
+            agent_id: "default",
+            visibility: "global",
+            scope: None,
         };
         let _ = signet_core::queries::memory::insert(conn, &m);
     }
@@ -96,6 +99,9 @@ fn bench_memory_insert(conn: &rusqlite::Connection, count: usize) -> Duration {
             runtime_path: None,
             now: &now,
             updated_by: "bench",
+            agent_id: "default",
+            visibility: "global",
+            scope: None,
         };
         let _ = signet_core::queries::memory::insert(conn, &m);
     }

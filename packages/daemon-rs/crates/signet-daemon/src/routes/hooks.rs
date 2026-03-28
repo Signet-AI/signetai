@@ -239,10 +239,9 @@ fn escape_like(text: &str) -> String {
 fn extract_anchor_terms(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for token in text
-        .to_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':' && c != '/' && c != '.' && c != '-')
-    {
+    for token in text.to_lowercase().split(|c: char| {
+        !c.is_ascii_alphanumeric() && c != '_' && c != ':' && c != '/' && c != '.' && c != '-'
+    }) {
         if token.len() < 6 {
             continue;
         }
@@ -823,6 +822,7 @@ pub async fn remember(
                     actor: "hook",
                     agent_id: "default",
                     visibility: "global",
+                    scope: None,
                 },
             )?;
 
@@ -1144,6 +1144,7 @@ pub async fn compaction_complete(
                     actor: "compaction",
                     agent_id: &agent_id,
                     visibility: "global",
+                    scope: None,
                 },
             )?;
 
@@ -1198,7 +1199,11 @@ fn extract_delta<'a>(full: &'a str, cursor: i64) -> Option<&'a str> {
             .unwrap_or(full.len());
     }
     let delta = &full[start..];
-    if delta.len() < CHECKPOINT_MIN_DELTA { None } else { Some(delta) }
+    if delta.len() < CHECKPOINT_MIN_DELTA {
+        None
+    } else {
+        Some(delta)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1229,14 +1234,14 @@ pub async fn session_checkpoint_extract(
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "harness is required"})),
         )
-        .into_response();
+            .into_response();
     };
     let Some(session_key) = body.session_key.clone() else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "sessionKey is required"})),
         )
-        .into_response();
+            .into_response();
     };
 
     let path = resolve_runtime_path(&headers, body.runtime_path.as_deref());
@@ -1298,7 +1303,9 @@ pub async fn session_checkpoint_extract(
             // Mirrors the TS daemon priority order. Always filter by agent_id.
             let full = inline
                 .or_else(|| {
-                    tpath.as_deref().and_then(|p| std::fs::read_to_string(p).ok())
+                    tpath
+                        .as_deref()
+                        .and_then(|p| std::fs::read_to_string(p).ok())
                 })
                 .or_else(|| {
                     conn.query_row(
@@ -1343,7 +1350,9 @@ pub async fn session_checkpoint_extract(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_delta, resolve_compaction_project, strip_untrusted_metadata, CHECKPOINT_MIN_DELTA};
+    use super::{
+        CHECKPOINT_MIN_DELTA, extract_delta, resolve_compaction_project, strip_untrusted_metadata,
+    };
 
     #[test]
     fn compaction_project_prefers_transcript_lineage() {
@@ -1453,7 +1462,10 @@ mod tests {
         let full = format!("🦀{suffix}"); // 🦀 occupies bytes 0-3
         // cursor at byte 1 (inside the crab emoji) — must not panic.
         let delta = extract_delta(&full, 1);
-        assert!(delta.is_some(), "should snap to byte 4 and return the suffix");
+        assert!(
+            delta.is_some(),
+            "should snap to byte 4 and return the suffix"
+        );
         assert_eq!(delta.unwrap().len(), suffix.len());
     }
 
