@@ -6,7 +6,6 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const win = process.platform === "win32";
-const ext = win ? ".exe" : "";
 
 const map = {
 	darwin: {
@@ -36,6 +35,11 @@ function target() {
 	return hostTarget();
 }
 
+function targetExt(triple) {
+	if (triple.includes("-windows-")) return ".exe";
+	return "";
+}
+
 function pathLookup() {
 	try {
 		const cmd = win ? "where signet-daemon" : "which signet-daemon";
@@ -54,6 +58,7 @@ if (!triple) {
 
 const host = hostTarget();
 const cross = host !== null && triple !== host;
+const ext = targetExt(triple);
 const fromEnv = process.env.SIGNET_DAEMON_BIN ?? null;
 const bin = `signet-daemon${ext}`;
 const here = resolve(fileURLToPath(import.meta.url), "..");
@@ -118,7 +123,7 @@ for (const name of readdirSync(outDir)) {
 const out = resolve(outDir, `signet-daemon-${triple}${ext}`);
 copyFileSync(src, out);
 
-if (!win) {
+if (ext === "") {
 	chmodSync(out, 0o755);
 }
 
