@@ -350,6 +350,51 @@ The plugin handles lifecycle hooks; MCP provides on-demand memory tools.
 
 ---
 
+## Oh My Pi (`oh-my-pi`)
+
+Oh My Pi uses a managed Signet runtime extension installed by
+`@signet/connector-oh-my-pi`. The extension forwards lifecycle events
+to the daemon and injects hidden Signet context into the session when
+needed.
+
+### Files managed by Signet
+
+| File | Description |
+|------|-------------|
+| `PI_CODING_AGENT_DIR/extensions/signet-oh-my-pi.js` | Managed extension bundle when `PI_CODING_AGENT_DIR` is set |
+| `~/.omp/agent/extensions/signet-oh-my-pi.js` | Managed extension bundle in the default Oh My Pi agent directory |
+
+### Managed extension
+
+During setup or connect, the connector writes a bundled
+`signet-oh-my-pi.js` file into the Oh My Pi extensions directory. If
+`PI_CODING_AGENT_DIR` is set, Signet uses that agent directory.
+Otherwise it writes to `~/.omp/agent/extensions/`.
+
+The install path is idempotent and only manages `signet-oh-my-pi.js`.
+Older Signet-managed `.mjs` installs are removed automatically on the
+next setup or sync run.
+
+### Runtime behavior
+
+- Existing unrelated Oh My Pi extensions are left untouched.
+- Signet refuses to overwrite a colliding unmanaged `signet-oh-my-pi.js`.
+- Daemon or network failures are fail-open, so prompt handling, compaction, session switches, and shutdown continue even if Signet is unavailable.
+- The extension handles lifecycle forwarding and hidden context injection. It does not currently add `/remember` or `/recall` tools, and it does not sync `AGENTS.md` into Oh My Pi.
+
+### Supported hooks
+
+| Hook | Supported |
+|------|-----------|
+| session-start | yes |
+| user-prompt-submit | yes |
+| pre-compaction | yes |
+| compaction-complete | yes |
+| session-end | yes |
+
+---
+
+
 ## OpenClaw
 
 OpenClaw is the flagship harness for the lossless working-memory model.
@@ -537,6 +582,7 @@ Where they differ is lifecycle fidelity:
 |---------|---------------|---------------|----------------|-----------------|-------------|-------|
 | OpenCode plugin | yes | yes | yes | yes | yes | Reference full-fidelity path |
 | OpenClaw plugin | yes | yes | yes | yes | yes | Flagship path; post-compaction may read summary back from `sessionFile` when the hook only exposes metadata |
+| Oh My Pi extension (v1) | yes | yes | yes | yes | yes | Lifecycle events only; no Signet memory tools or AGENTS.md sync yet |
 | Claude Code | yes | yes | yes | no | yes | Good continuity, degraded after-compaction fidelity |
 | Codex | yes | yes | no | no | yes | Solid baseline, degraded compaction fidelity |
 | OpenClaw legacy hooks | manual `/context` | no | no | no | no | Compatibility-only, not full parity |

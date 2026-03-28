@@ -2,7 +2,7 @@ import { OpenClawConnector } from "@signet/connector-openclaw";
 import type { SetupDetection } from "@signet/core";
 import chalk from "chalk";
 
-export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "codex" | "forge";
+export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "oh-my-pi" | "codex" | "forge";
 export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
 export type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
@@ -21,6 +21,7 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"claude-code",
 	"opencode",
 	"openclaw",
+	"oh-my-pi",
 	"codex",
 	"forge",
 ];
@@ -70,6 +71,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.claudeCode) harnesses.push("Claude Code");
 	if (detection.harnesses.openclaw) harnesses.push("OpenClaw");
 	if (detection.harnesses.opencode) harnesses.push("OpenCode");
+	if (detection.harnesses.ohMyPi) harnesses.push("Oh My Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");
 	if (detection.harnesses.forge) harnesses.push("Forge");
 	if (harnesses.length > 0) {

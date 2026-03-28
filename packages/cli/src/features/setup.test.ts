@@ -34,6 +34,7 @@ function detection(basePath: string): SetupDetection {
 			openclaw: false,
 			opencode: false,
 			codex: false,
+			ohMyPi: false,
 			forge: false,
 		},
 	};

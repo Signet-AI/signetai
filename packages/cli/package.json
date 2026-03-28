@@ -42,6 +42,7 @@
     "@signet/core": "workspace:*",
     "@signet/connector-claude-code": "workspace:*",
     "@signet/connector-codex": "workspace:*",
+    "@signet/connector-oh-my-pi": "workspace:*",
     "@signet/connector-opencode": "workspace:*",
     "@signet/connector-openclaw": "workspace:*",
     "@inquirer/prompts": "^7.0.0",

@@ -1,3 +1,4 @@
+import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import chalk from "chalk";
 import { copyFileSync, existsSync } from "node:fs";
@@ -141,6 +142,9 @@ function detectHarnesses(): string[] {
 	}
 	if (new OpenClawConnector().isInstalled()) {
 		found.push("openclaw");
+	}
+	if (new OhMyPiConnector().isInstalled()) {
+		found.push("oh-my-pi");
 	}
 
 	return found;

@@ -115,6 +115,7 @@ export async function runExistingSetupWizard(
 		if (detection.harnesses.opencode) detectedHarnesses.push("opencode");
 		if (detection.harnesses.codex) detectedHarnesses.push("codex");
 		const configuredHarnessList = readHarnesses(existingConfig.harnesses);
+		if (detection.harnesses.ohMyPi || configuredHarnessList.includes("oh-my-pi")) detectedHarnesses.push("oh-my-pi");
 		const wantsForge = detection.harnesses.forge || configuredHarnessList.includes("forge");
 		const installedForgePath = findSignetForgeBinary(basePath);
 		if (wantsForge && installedForgePath) {

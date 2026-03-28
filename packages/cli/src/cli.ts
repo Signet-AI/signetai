@@ -28,6 +28,7 @@ import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
+import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
 import {
@@ -230,6 +231,11 @@ async function configureHarnessHooks(
 		}
 		case "opencode": {
 			const connector = new OpenCodeConnector();
+			await connector.install(basePath);
+			break;
+		}
+		case "oh-my-pi": {
+			const connector = new OhMyPiConnector();
 			await connector.install(basePath);
 			break;
 		}
@@ -1385,6 +1391,7 @@ registerUpdateCommands(program, {
 	fetchFromDaemon,
 	getTemplatesDir,
 	isOpenClawInstalled: () => new OpenClawConnector().isInstalled(),
+	isOhMyPiInstalled: () => new OhMyPiConnector().isInstalled(),
 	syncBuiltinSkills,
 });
 
