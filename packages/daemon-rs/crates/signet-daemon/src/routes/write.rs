@@ -12,6 +12,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use signet_core::db::Priority;
+use signet_services::session::SessionTracker;
 use signet_services::transactions;
 
 use crate::auth::middleware::{authenticate_headers, require_scope_guard};
@@ -65,6 +66,7 @@ pub struct RememberBody {
     pub agent_id: Option<String>,
     pub visibility: Option<String>,
     pub scope: Option<String>,
+    pub session_key: Option<String>,
 }
 
 fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
@@ -115,6 +117,68 @@ fn parse_visibility(value: Option<&str>) -> Result<String, &'static str> {
         return Ok(v);
     }
     Err("visibility must be one of: global, private, archived")
+}
+
+fn session_agent_id(session_key: Option<&str>) -> Option<String> {
+    let key = session_key?;
+    let mut parts = key.splitn(3, ':');
+    if parts.next() != Some("agent") {
+        return None;
+    }
+    let id = parts.next().unwrap_or("").trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn resolve_remember_agent(
+    explicit: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<String, &'static str> {
+    let explicit = explicit.map(str::trim).filter(|s| !s.is_empty());
+    let bound = session_agent_id(session_key);
+    if let Some(agent) = explicit {
+        if let Some(bound) = bound.as_deref()
+            && agent != bound
+        {
+            return Err("agent_id does not match session scope");
+        }
+        return Ok(agent.to_string());
+    }
+    if let Some(bound) = bound {
+        return Ok(bound);
+    }
+    Ok("default".to_string())
+}
+
+fn require_session_scope_for_write(
+    sessions: &SessionTracker,
+    agent_id: &str,
+    visibility: &str,
+    scope: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<(), &'static str> {
+    let scoped = agent_id != "default" || visibility != "global" || scope.is_some();
+    if !scoped {
+        return Ok(());
+    }
+    let Some(key) = session_key else {
+        if agent_id != "default" {
+            return Err("non-default agent_id requires session_key with agent scope");
+        }
+        return Err("non-default visibility/scope requires session_key with agent scope");
+    };
+    let Some(bound) = session_agent_id(Some(key)) else {
+        return Err("session_key must be agent scoped");
+    };
+    if sessions.get_path(key).is_none() {
+        return Err("session_key is not active");
+    }
+    if agent_id != "default" && agent_id != bound {
+        return Err("agent_id does not match session scope");
+    }
+    Ok(())
 }
 
 fn is_loopback(addr: &SocketAddr) -> bool {
@@ -280,7 +344,22 @@ pub async fn remember(
     let source_type = body.source_type;
     let source_id = body.source_id;
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
-    let agent_id = body.agent_id.unwrap_or_else(|| "default".into());
+    let session_key = body
+        .session_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let agent_id = match resolve_remember_agent(body.agent_id.as_deref(), session_key.as_deref()) {
+        Ok(id) => id,
+        Err(err) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response();
+        }
+    };
     let scope = normalize_scope(body.scope);
     let visibility = match parse_visibility(body.visibility.as_deref()) {
         Ok(v) => v,
@@ -292,6 +371,19 @@ pub async fn remember(
                 .into_response();
         }
     };
+    if let Err(err) = require_session_scope_for_write(
+        &state.sessions,
+        &agent_id,
+        &visibility,
+        scope.as_deref(),
+        session_key.as_deref(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": err })),
+        )
+            .into_response();
+    }
     if let Err(resp) = guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
         return *resp;
     }
@@ -380,6 +472,7 @@ mod tests {
         PipelineV2Config,
     };
     use signet_core::db::{DbPool, Priority};
+    use signet_services::session::{RuntimePath, SessionTracker};
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
     use crate::auth::types::AuthMode;
@@ -387,7 +480,7 @@ mod tests {
 
     use super::{
         RememberBody, dead_letter_blocked_extraction_memory, normalize_scope, parse_remember_tags,
-        parse_visibility, remember,
+        parse_visibility, remember, resolve_remember_agent, require_session_scope_for_write,
     };
 
     #[test]
@@ -427,6 +520,41 @@ mod tests {
         assert_eq!(parse_visibility(None).unwrap(), "global");
         assert_eq!(parse_visibility(Some("private")).unwrap(), "private");
         assert!(parse_visibility(Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn resolve_remember_agent_inherits_session_scope_when_missing() {
+        let agent = resolve_remember_agent(None, Some("agent:agent-a:sess-1")).unwrap();
+        assert_eq!(agent, "agent-a");
+    }
+
+    #[test]
+    fn require_session_scope_for_write_requires_active_session_for_scoped_writes() {
+        let sessions = SessionTracker::new();
+        let err = require_session_scope_for_write(
+            &sessions,
+            "agent-a",
+            "private",
+            None,
+            Some("agent:agent-a:sess-1"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "session_key is not active");
+
+        assert!(matches!(
+            sessions.claim("agent:agent-a:sess-1", RuntimePath::Plugin),
+            signet_services::session::ClaimResult::Ok
+        ));
+        assert!(
+            require_session_scope_for_write(
+                &sessions,
+                "agent-a",
+                "private",
+                None,
+                Some("agent:agent-a:sess-1"),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -801,6 +929,7 @@ mod tests {
                 agent_id: None,
                 visibility: None,
                 scope: None,
+                session_key: None,
             }),
         )
         .await;
@@ -884,6 +1013,7 @@ mod tests {
                 agent_id: None,
                 visibility: None,
                 scope: None,
+                session_key: None,
             }),
         )
         .await;
@@ -967,6 +1097,7 @@ mod tests {
                 agent_id: None,
                 visibility: None,
                 scope: None,
+                session_key: None,
             }),
         )
         .await;
