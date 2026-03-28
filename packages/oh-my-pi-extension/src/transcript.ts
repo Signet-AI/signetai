@@ -8,6 +8,7 @@ import {
 } from "./types.js";
 
 export interface SessionFileSnapshot {
+	readonly loaded: boolean;
 	readonly sessionId: string | undefined;
 	readonly project: string | undefined;
 	readonly transcript: string | undefined;
@@ -134,17 +135,18 @@ function sessionProject(header: OmpSessionHeader | undefined): string | undefine
 
 export function readSessionFileSnapshot(sessionFile: string | undefined): SessionFileSnapshot {
 	if (!sessionFile || !existsSync(sessionFile)) {
-		return { sessionId: undefined, project: undefined, transcript: undefined };
+		return { loaded: false, sessionId: undefined, project: undefined, transcript: undefined };
 	}
 
 	try {
 		const { header, entries } = classifySessionRows(readSessionLines(sessionFile));
 		return {
+			loaded: true,
 			sessionId: readTrimmedString(header?.id),
 			project: sessionProject(header),
 			transcript: buildTranscriptFromEntries(entries),
 		};
 	} catch {
-		return { sessionId: undefined, project: undefined, transcript: undefined };
+		return { loaded: false, sessionId: undefined, project: undefined, transcript: undefined };
 	}
 }

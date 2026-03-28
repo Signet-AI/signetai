@@ -5,6 +5,12 @@ const MAX_PENDING_SESSIONS = 64;
 const MAX_PENDING_PER_SESSION = 4;
 const MAX_ENDED_SESSIONS = 128;
 
+export interface PendingSessionEnd {
+	readonly sessionId: string;
+	readonly sessionFile: string;
+	readonly reason: string;
+}
+
 function createHiddenInjectMessage(customType: string, inject: string): OmpAgentMessage {
 	return {
 		role: "custom",
@@ -38,11 +44,15 @@ export interface SessionState {
 	hasPendingRecall(sessionId: string | undefined): boolean;
 	consumePendingRecall(sessionId: string | undefined): string | undefined;
 	consumeHiddenInjectMessages(sessionId: string | undefined): OmpAgentMessage[];
+	queuePendingSessionEnd(sessionId: string, sessionFile: string, reason: string): void;
+	clearPendingSessionEnd(sessionId: string | undefined): void;
+	getPendingSessionEnds(): ReadonlyArray<PendingSessionEnd>;
 }
 
 class SessionStateStore implements SessionState {
 	private readonly pendingSessionContext = new Map<string, string>();
 	private readonly pendingRecall = new Map<string, string[]>();
+	private readonly pendingSessionEnds = new Map<string, PendingSessionEnd>();
 	private readonly endedSessions = new Map<string, number>();
 
 	private activeSessionId: string | undefined;
@@ -125,6 +135,7 @@ class SessionStateStore implements SessionState {
 		if (!sessionId) return;
 		this.pendingSessionContext.delete(sessionId);
 		this.pendingRecall.delete(sessionId);
+		this.pendingSessionEnds.delete(sessionId);
 	}
 
 	hasPendingRecall(sessionId: string | undefined): boolean {
@@ -158,6 +169,22 @@ class SessionStateStore implements SessionState {
 		}
 
 		return messages;
+	}
+
+	queuePendingSessionEnd(sessionId: string, sessionFile: string, reason: string): void {
+		if (!this.pendingSessionEnds.has(sessionId)) {
+			evictOldestKey(this.pendingSessionEnds, MAX_PENDING_SESSIONS);
+		}
+		this.pendingSessionEnds.set(sessionId, { sessionId, sessionFile, reason });
+	}
+
+	clearPendingSessionEnd(sessionId: string | undefined): void {
+		if (!sessionId) return;
+		this.pendingSessionEnds.delete(sessionId);
+	}
+
+	getPendingSessionEnds(): ReadonlyArray<PendingSessionEnd> {
+		return Array.from(this.pendingSessionEnds.values());
 	}
 }
 

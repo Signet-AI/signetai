@@ -79,7 +79,32 @@ async function submitSessionEnd(client: DaemonClient, payload: SessionEndPayload
 	);
 }
 
+export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void> {
+	for (const pending of deps.state.getPendingSessionEnds()) {
+		if (deps.state.sessionAlreadyEnded(pending.sessionId)) {
+			deps.state.clearPendingSessionEnd(pending.sessionId);
+			continue;
+		}
+
+		const snapshot = readSessionFileSnapshot(pending.sessionFile);
+		if (!snapshot.loaded) continue;
+
+		await submitSessionEnd(deps.client, {
+			sessionId: snapshot.sessionId ?? pending.sessionId,
+			transcript: snapshot.transcript,
+			reason: pending.reason,
+			project: snapshot.project,
+		});
+
+		deps.state.markSessionEnded(pending.sessionId);
+		deps.state.clearPendingSessionData(pending.sessionId);
+		deps.state.clearPendingSessionEnd(pending.sessionId);
+	}
+}
+
 export async function refreshSessionStart(deps: LifecycleDeps, ctx: OmpExtensionContext): Promise<void> {
+	await flushPendingSessionEnds(deps);
+
 	const session = currentSessionRef(ctx);
 	deps.state.setActiveSession(session.sessionId, session.sessionFile);
 	deps.state.clearSessionEnded(session.sessionId);
@@ -102,6 +127,8 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: OmpExtension
 }
 
 export async function ensureSessionContext(deps: LifecycleDeps, ctx: OmpExtensionContext): Promise<void> {
+	await flushPendingSessionEnds(deps);
+
 	const current = currentSessionRef(ctx);
 	if (!current.sessionId) return;
 	if (
@@ -114,6 +141,8 @@ export async function ensureSessionContext(deps: LifecycleDeps, ctx: OmpExtensio
 }
 
 export async function endCurrentSession(deps: LifecycleDeps, ctx: OmpExtensionContext, reason: string): Promise<void> {
+	await flushPendingSessionEnds(deps);
+
 	const session = currentSessionRef(ctx);
 	if (deps.state.sessionAlreadyEnded(session.sessionId)) return;
 
@@ -133,11 +162,17 @@ export async function endPreviousSession(
 	event: OmpSessionSwitchEvent | { previousSessionFile?: string },
 	reason: string,
 ): Promise<void> {
-	const previousSnapshot = readSessionFileSnapshot(
-		readTrimmedString(event.previousSessionFile) ?? deps.state.getActiveSessionFile(),
-	);
+	const previousSessionFile = readTrimmedString(event.previousSessionFile) ?? deps.state.getActiveSessionFile();
+	const previousSnapshot = readSessionFileSnapshot(previousSessionFile);
 	const sessionId = previousSnapshot.sessionId ?? deps.state.getActiveSessionId();
 	if (deps.state.sessionAlreadyEnded(sessionId)) return;
+
+	if (!previousSnapshot.loaded) {
+		if (sessionId && previousSessionFile) {
+			deps.state.queuePendingSessionEnd(sessionId, previousSessionFile, reason);
+		}
+		return;
+	}
 
 	await submitSessionEnd(deps.client, {
 		sessionId,
@@ -155,6 +190,8 @@ export async function requestRecallForPrompt(
 	ctx: OmpExtensionContext,
 	userText: string,
 ): Promise<void> {
+	await flushPendingSessionEnds(deps);
+
 	const prompt = readTrimmedString(userText);
 	if (!prompt) return;
 

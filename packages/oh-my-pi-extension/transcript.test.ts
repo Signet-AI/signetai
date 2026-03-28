@@ -45,6 +45,7 @@ describe("readSessionFileSnapshot", () => {
 
 		const snapshot = readSessionFileSnapshot(sessionFile);
 		expect(snapshot).toEqual({
+			loaded: true,
 			sessionId: "session-123",
 			project: "/tmp/project",
 			transcript: "User: First line second line\nAssistant: Answer details",
