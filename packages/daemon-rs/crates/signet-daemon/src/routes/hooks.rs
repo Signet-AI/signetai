@@ -122,6 +122,24 @@ fn resolve_remember_agent(
         .unwrap_or_else(|| "default".to_string()))
 }
 
+fn require_session_scope_for_write(
+    agent_id: &str,
+    visibility: &str,
+    scope: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<(), &'static str> {
+    if session_agent_id(session_key).is_some() {
+        return Ok(());
+    }
+    if agent_id != "default" {
+        return Err("non-default agent_id requires session_key with agent scope");
+    }
+    if visibility != "global" || scope.is_some() {
+        return Err("non-default visibility/scope requires session_key with agent scope");
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/hooks/session-start
 // ---------------------------------------------------------------------------
@@ -870,6 +888,18 @@ pub async fn remember(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    if let Err(err) = require_session_scope_for_write(
+        &agent_id,
+        &visibility,
+        scope.as_deref(),
+        session_key.as_deref(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": err })),
+        )
+            .into_response();
+    }
 
     // Record in continuity tracker
     if let Some(key) = &session_key {
@@ -1417,7 +1447,7 @@ pub async fn session_checkpoint_extract(
 mod tests {
     use super::{
         CHECKPOINT_MIN_DELTA, extract_delta, resolve_compaction_project, resolve_remember_agent,
-        session_agent_id, strip_untrusted_metadata,
+        require_session_scope_for_write, session_agent_id, strip_untrusted_metadata,
     };
 
     #[test]
@@ -1449,6 +1479,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(agent, "agent-a");
+    }
+
+    #[test]
+    fn require_session_scope_for_write_blocks_unscoped_overrides() {
+        let err = require_session_scope_for_write("agent-a", "global", None, None).unwrap_err();
+        assert_eq!(err, "non-default agent_id requires session_key with agent scope");
+
+        let err = require_session_scope_for_write("default", "private", None, None).unwrap_err();
+        assert_eq!(err, "non-default visibility/scope requires session_key with agent scope");
     }
 
     #[test]
