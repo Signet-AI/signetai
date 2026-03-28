@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.82.5"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/Signet-AI/signetai"

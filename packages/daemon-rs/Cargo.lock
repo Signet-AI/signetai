@@ -1514,7 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "signet-core"
-version = "0.1.0"
+version = "0.82.5"
 dependencies = [
  "arc-swap",
  "blake3",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "signet-daemon"
-version = "0.1.0"
+version = "0.82.5"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "signet-mcp-stdio"
-version = "0.1.0"
+version = "0.82.5"
 dependencies = [
  "reqwest",
  "serde",
@@ -1576,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "signet-pipeline"
-version = "0.1.0"
+version = "0.82.5"
 dependencies = [
  "chrono",
  "libc",
@@ -1593,7 +1593,7 @@ dependencies = [
 
 [[package]]
 name = "signet-services"
-version = "0.1.0"
+version = "0.82.5"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -1608,7 +1608,7 @@ dependencies = [
 
 [[package]]
 name = "signet-shadow"
-version = "0.1.0"
+version = "0.82.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "sqlite-vec-spike"
-version = "0.1.0"
+version = "0.82.5"
 dependencies = [
  "rusqlite",
  "sqlite-vec",
