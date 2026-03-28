@@ -101,9 +101,7 @@ fn resolve_remember_agent(
 ) -> Result<String, &'static str> {
     let explicit_agent = normalize_agent_id(explicit);
     let header_agent = normalize_agent_id(header);
-    let session_agent = session_agent_id(session_key);
-
-    if let Some(bound) = session_agent.as_deref() {
+    if let Some(bound) = session_agent_id(session_key).as_deref() {
         if let Some(explicit) = explicit_agent.as_deref()
             && explicit != bound
         {
@@ -116,10 +114,20 @@ fn resolve_remember_agent(
         }
     }
 
-    Ok(session_agent
-        .or(explicit_agent)
+    Ok(explicit_agent
         .or(header_agent)
         .unwrap_or_else(|| "default".to_string()))
+}
+
+fn parse_visibility(value: Option<&str>) -> Result<String, &'static str> {
+    let Some(raw) = value else {
+        return Ok("global".to_string());
+    };
+    let v = raw.trim().to_lowercase();
+    if v == "global" || v == "private" || v == "archived" {
+        return Ok(v);
+    }
+    Err("visibility must be one of: global, private, archived")
 }
 
 fn require_session_scope_for_write(
@@ -128,7 +136,7 @@ fn require_session_scope_for_write(
     scope: Option<&str>,
     session_key: Option<&str>,
 ) -> Result<(), &'static str> {
-    if session_agent_id(session_key).is_some() {
+    if session_key.is_some() {
         return Ok(());
     }
     if agent_id != "default" {
@@ -875,13 +883,16 @@ pub async fn remember(
                 .into_response();
         }
     };
-    let visibility = body
-        .visibility
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_lowercase)
-        .filter(|v| v == "global" || v == "private" || v == "archived")
-        .unwrap_or_else(|| "global".to_string());
+    let visibility = match parse_visibility(body.visibility.as_deref()) {
+        Ok(v) => v,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response();
+        }
+    };
     let scope = body
         .scope
         .as_deref()
@@ -1447,7 +1458,7 @@ pub async fn session_checkpoint_extract(
 mod tests {
     use super::{
         CHECKPOINT_MIN_DELTA, extract_delta, resolve_compaction_project, resolve_remember_agent,
-        require_session_scope_for_write, session_agent_id, strip_untrusted_metadata,
+        parse_visibility, require_session_scope_for_write, session_agent_id, strip_untrusted_metadata,
     };
 
     #[test]
@@ -1488,6 +1499,13 @@ mod tests {
 
         let err = require_session_scope_for_write("default", "private", None, None).unwrap_err();
         assert_eq!(err, "non-default visibility/scope requires session_key with agent scope");
+    }
+
+    #[test]
+    fn parse_visibility_rejects_invalid_values() {
+        assert_eq!(parse_visibility(None).unwrap(), "global");
+        assert_eq!(parse_visibility(Some("archived")).unwrap(), "archived");
+        assert!(parse_visibility(Some("invalid")).is_err());
     }
 
     #[test]

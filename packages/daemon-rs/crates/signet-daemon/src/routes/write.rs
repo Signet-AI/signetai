@@ -106,6 +106,17 @@ fn normalize_scope(value: Option<String>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn parse_visibility(value: Option<&str>) -> Result<String, &'static str> {
+    let Some(raw) = value else {
+        return Ok("global".to_string());
+    };
+    let v = raw.trim().to_lowercase();
+    if v == "global" || v == "private" || v == "archived" {
+        return Ok(v);
+    }
+    Err("visibility must be one of: global, private, archived")
+}
+
 fn is_loopback(addr: &SocketAddr) -> bool {
     match addr.ip() {
         IpAddr::V4(ip) => ip.is_loopback(),
@@ -271,13 +282,16 @@ pub async fn remember(
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
     let agent_id = body.agent_id.unwrap_or_else(|| "default".into());
     let scope = normalize_scope(body.scope);
-    let visibility = body
-        .visibility
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_lowercase)
-        .filter(|v| v == "global" || v == "private" || v == "archived")
-        .unwrap_or_else(|| "global".to_string());
+    let visibility = match parse_visibility(body.visibility.as_deref()) {
+        Ok(v) => v,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response();
+        }
+    };
     if let Err(resp) = guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
         return *resp;
     }
@@ -373,7 +387,7 @@ mod tests {
 
     use super::{
         RememberBody, dead_letter_blocked_extraction_memory, normalize_scope, parse_remember_tags,
-        remember,
+        parse_visibility, remember,
     };
 
     #[test]
@@ -406,6 +420,13 @@ mod tests {
             normalize_scope(Some("  project:alpha  ".to_string())),
             Some("project:alpha".to_string())
         );
+    }
+
+    #[test]
+    fn parse_visibility_rejects_invalid_values() {
+        assert_eq!(parse_visibility(None).unwrap(), "global");
+        assert_eq!(parse_visibility(Some("private")).unwrap(), "private");
+        assert!(parse_visibility(Some("bogus")).is_err());
     }
 
     #[test]

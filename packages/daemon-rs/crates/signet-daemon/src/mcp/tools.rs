@@ -375,19 +375,6 @@ async fn exec_memory_search(state: &Arc<AppState>, args: &serde_json::Value) -> 
 }
 
 async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> ToolCallResult {
-    fn parse_session_agent_id(value: Option<&str>) -> Option<String> {
-        let key = value?;
-        let mut parts = key.splitn(3, ':');
-        if parts.next() != Some("agent") {
-            return None;
-        }
-        let id = parts.next().unwrap_or("").trim();
-        if id.is_empty() {
-            return None;
-        }
-        Some(id.to_string())
-    }
-
     let content = match args.get("content").and_then(|v| v.as_str()) {
         Some(c) => c.to_string(),
         None => return ToolCallResult::error("missing required parameter: content"),
@@ -411,50 +398,52 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 .collect()
         })
         .unwrap_or_default();
-    let session_agent =
-        parse_session_agent_id(args.get("session_key").and_then(|v| v.as_str()));
+    let session_key = args
+        .get("session_key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let explicit_agent = args
         .get("agent_id")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let agent_id = if let Some(bound) = session_agent.as_deref() {
-        if let Some(explicit) = explicit_agent.as_deref()
-            && explicit != bound
-        {
-            return ToolCallResult::error(
-                "agent_id does not match session_key scope".to_string(),
-            );
-        }
-        bound.to_string()
-    } else if let Some(explicit) = explicit_agent {
+    let agent_id = if let Some(explicit) = explicit_agent {
         if explicit != "default" {
-            return ToolCallResult::error(
-                "non-default agent_id requires session_key with matching agent scope".to_string(),
-            );
+            if session_key.is_none() {
+                return ToolCallResult::error(
+                    "non-default agent_id requires session_key".to_string(),
+                );
+            }
         }
         explicit
     } else {
         "default".to_string()
     };
 
-    let visibility = args
-        .get("visibility")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .map(str::to_lowercase)
-        .filter(|v| v == "global" || v == "private" || v == "archived")
-        .unwrap_or_else(|| "global".to_string());
+    let visibility = match args.get("visibility").and_then(|v| v.as_str()) {
+        None => "global".to_string(),
+        Some(raw) => {
+            let v = raw.trim().to_lowercase();
+            if v == "global" || v == "private" || v == "archived" {
+                v
+            } else {
+                return ToolCallResult::error(
+                    "visibility must be one of: global, private, archived".to_string(),
+                );
+            }
+        }
+    };
     let scope = args
         .get("scope")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    if session_agent.is_none() && (visibility != "global" || scope.is_some()) {
+    if session_key.is_none() && (visibility != "global" || scope.is_some()) {
         return ToolCallResult::error(
-            "non-default visibility/scope requires session_key with agent scope".to_string(),
+            "non-default visibility/scope requires session_key".to_string(),
         );
     }
 
