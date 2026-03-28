@@ -23,8 +23,9 @@ const extensionDistPath = join(packageRoot, "..", "oh-my-pi-extension", "dist", 
 const bundleSourcePath = join(packageRoot, "src", "extension-bundle.ts");
 
 if (!existsSync(extensionDistPath)) {
-	console.warn(`[embed-extension] Extension bundle not found at ${extensionDistPath} — skipping embed`);
-	process.exit(0);
+	throw new Error(
+		`[embed-extension] Extension bundle not found at ${extensionDistPath}. Build @signet/oh-my-pi-extension first so the connector cannot publish a stale or empty embedded bundle.`,
+	);
 }
 
 const extensionSource = readFileSync(extensionDistPath, "utf-8");
