@@ -1,10 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
-
-const require = createRequire(import.meta.url);
+import { EXTENSION_BUNDLE } from "./extension-bundle.js";
 
 const OH_MY_PI_EXTENSION_PACKAGE = "@signet/oh-my-pi-extension";
 const OH_MY_PI_EXTENSION_ENTRY = "dist/signet-oh-my-pi.mjs";
@@ -31,18 +29,17 @@ function isSignetManagedExtensionFile(filePath: string): boolean {
 	}
 }
 
-function resolveBundledExtensionPath(): string {
-	const resolvedEntry = require.resolve(OH_MY_PI_EXTENSION_PACKAGE);
-	if (!existsSync(resolvedEntry)) {
+function bundledExtensionContent(): string {
+	if (EXTENSION_BUNDLE.length === 0) {
 		throw new Error(
-			`Could not locate the bundled entry for ${OH_MY_PI_EXTENSION_PACKAGE}. Reinstall dependencies and run the extension package build first.`,
+			`Bundled Oh My Pi extension content is empty. Rebuild ${OH_MY_PI_EXTENSION_PACKAGE} and rerun the connector build so ${OH_MY_PI_EXTENSION_ENTRY} is embedded.`,
 		);
 	}
-	return resolvedEntry;
+	return EXTENSION_BUNDLE;
 }
 
-function buildManagedExtensionContent(bundlePath: string): string {
-	const bundle = readFileSync(bundlePath, "utf8");
+function buildManagedExtensionContent(): string {
+	const bundle = bundledExtensionContent();
 	return `// ${OH_MY_PI_MANAGED_MARKER}
 // Managed by Signet (${OH_MY_PI_EXTENSION_PACKAGE})
 // Source: ${OH_MY_PI_EXTENSION_ENTRY}
@@ -79,8 +76,7 @@ export class OhMyPiConnector extends BaseConnector {
 		}
 
 		mkdirSync(dirname(targetPath), { recursive: true });
-		const bundlePath = resolveBundledExtensionPath();
-		const managedContent = buildManagedExtensionContent(bundlePath);
+		const managedContent = buildManagedExtensionContent();
 		const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf8") : null;
 		if (previous !== managedContent) {
 			writeFileSync(targetPath, managedContent, "utf8");
@@ -94,9 +90,7 @@ export class OhMyPiConnector extends BaseConnector {
 		return {
 			success: true,
 			message:
-				filesWritten.length > 0
-					? "Oh My Pi extension installed successfully"
-					: "Oh My Pi extension already up to date",
+				filesWritten.length > 0 ? "Oh My Pi extension installed successfully" : "Oh My Pi extension already up to date",
 			filesWritten,
 		};
 	}

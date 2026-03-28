@@ -608,6 +608,7 @@ Phase ordering based on hard dependencies and integration contracts.
 - **Cryptographic Identity Roadmap** (`cryptographic-identity-roadmap`)
 - **Connector: Py Agent** (`connector-py-agent`)
 - **Connector: Hermes Agent** (`connector-hermes-agent`)
+- **Connector: Oh My Pi** (`connector-oh-my-pi`)
 - **Plugin API and App Ecosystem** (`plugin-api-ecosystem`)
   - dashboard/CLI plugin surface for app integrations (e.g. Obsidian, Drive)
 - **Unified Constellation Viewer** (`constellation-unified-viewer`)
@@ -694,6 +695,7 @@ Legend:
 | `cryptographic-identity-roadmap` | planning | `docs/specs/planning/cryptographic-identity-roadmap.md` | `multi-agent-support` | - | Stub: signed identity and artifact trust roadmap |
 | `connector-py-agent` | planning | `docs/specs/planning/connector-py-agent.md` | `signet-runtime` | - | Stub: Py Agent connector |
 | `connector-hermes-agent` | planning | `docs/specs/planning/connector-hermes-agent.md` | `signet-runtime` | - | Stub: Hermes Agent connector |
+| `connector-oh-my-pi` | planning | `docs/specs/planning/connector-oh-my-pi.md` | `signet-runtime` | - | Stub: Oh My Pi managed runtime extension and connector |
 | `plugin-api-ecosystem` | planning | `docs/specs/planning/plugin-api-ecosystem.md` | `signet-runtime` | - | Stub: plugin/app API for dashboard and CLI integrations |
 | `constellation-unified-viewer` | planning | `docs/specs/planning/constellation-unified-viewer.md` | `knowledge-architecture-schema` | - | Stub: realtime unified constellation/embedding/entity viewer |
 | `dashboard-information-architecture-refactor` | planning | `docs/specs/planning/dashboard-information-architecture-refactor.md` | `signet-runtime` | - | Stub: dashboard IA cleanup, settings split, breadcrumb navigation |

@@ -709,7 +709,6 @@ specs:
       - "Py Agent connector installs and syncs Signet memory lifecycle hooks"
     decision: null
 
-
   - id: connector-hermes-agent
     status: planning
     path: docs/specs/planning/connector-hermes-agent.md
@@ -720,6 +719,18 @@ specs:
     informed_by: []
     success_criteria:
       - "Hermes Agent connector installs and syncs Signet memory lifecycle hooks"
+    decision: null
+
+  - id: connector-oh-my-pi
+    status: planning
+    path: docs/specs/planning/connector-oh-my-pi.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Oh My Pi connector installs a managed runtime extension and forwards Signet lifecycle hooks without adding Oh My Pi-only dependencies for other users"
     decision: null
 
 
