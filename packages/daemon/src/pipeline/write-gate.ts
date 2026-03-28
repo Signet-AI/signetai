@@ -72,7 +72,6 @@ function isErrorContent(content: string): boolean {
 
 function findMaxSimilarityVec(db: ReadDb, query: Float32Array, input: WriteGateInput): number | null {
 	const scopeClause = input.sourceScope !== null ? "AND m.scope = ?" : "AND m.scope IS NULL";
-	const projectClause = input.sourceProject !== null ? "AND m.project = ?" : "";
 	const sql = `SELECT v.distance
 		 FROM vec_embeddings v
 		 JOIN embeddings e ON v.id = e.id
@@ -84,16 +83,12 @@ function findMaxSimilarityVec(db: ReadDb, query: Float32Array, input: WriteGateI
 		   AND m.visibility = ?
 		   AND m.id <> ?
 		   ${scopeClause}
-		   ${projectClause}
 		 ORDER BY v.distance
 		 LIMIT 1`;
 
 	const args: unknown[] = [query, NEIGHBOR_LIMIT, input.agentId, input.sourceVisibility, input.sourceMemoryId];
 	if (input.sourceScope !== null) {
 		args.push(input.sourceScope);
-	}
-	if (input.sourceProject !== null) {
-		args.push(input.sourceProject);
 	}
 	const row = db.prepare(sql).get(...args) as { distance: number } | undefined;
 	if (!row || !Number.isFinite(row.distance)) return null;
@@ -102,7 +97,6 @@ function findMaxSimilarityVec(db: ReadDb, query: Float32Array, input: WriteGateI
 
 function findMaxSimilarityFallback(db: ReadDb, query: Float32Array, input: WriteGateInput): number | null {
 	const scopeClause = input.sourceScope !== null ? "AND m.scope = ?" : "AND m.scope IS NULL";
-	const projectClause = input.sourceProject !== null ? "AND m.project = ?" : "";
 	const sql = `SELECT e.vector
 		 FROM embeddings e
 		 JOIN memories m ON e.source_id = m.id
@@ -112,15 +106,11 @@ function findMaxSimilarityFallback(db: ReadDb, query: Float32Array, input: Write
 		   AND m.visibility = ?
 		   AND m.id <> ?
 		   ${scopeClause}
-		   ${projectClause}
 		 ORDER BY m.updated_at DESC
 		 LIMIT ?`;
 	const args: unknown[] = [input.agentId, input.sourceVisibility, input.sourceMemoryId];
 	if (input.sourceScope !== null) {
 		args.push(input.sourceScope);
-	}
-	if (input.sourceProject !== null) {
-		args.push(input.sourceProject);
 	}
 	args.push(NEIGHBOR_LIMIT);
 	const rows = db.prepare(sql).all(...args) as ReadonlyArray<{ vector: Buffer }>;

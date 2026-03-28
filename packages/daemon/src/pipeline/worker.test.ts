@@ -1049,6 +1049,65 @@ describe("Worker phase C controlled writes", () => {
 		expect(payload.writeStats.added).toBe(0);
 	});
 
+	it("blocks low-surprisal writes across different projects in the same scope", async () => {
+		insertMemory(db, "mem-src-write-gate-project-a", "Source envelope for cross-project gate check", {
+			project: "/repo-a",
+		});
+		insertMemory(db, "mem-existing-write-gate-project-b", "User prefers dark mode in editor settings", {
+			project: "/repo-b",
+		});
+		insertMemoryEmbedding(db, "mem-existing-write-gate-project-b", [1, 0, 0]);
+		enqueueExtractionJob(accessor, "mem-src-write-gate-project-a");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User likes dark mode in editor settings",
+					type: "preference",
+					confidence: 0.93,
+				},
+			],
+			entities: [],
+		});
+		const addDecision = JSON.stringify({
+			action: "add",
+			confidence: 0.88,
+			reason: "Store as a separate preference",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, addDecision]),
+			{
+				...PHASE_C_CFG,
+				writeGate: {
+					enabled: true,
+					threshold: 0.4,
+					continuityDiscount: 0.15,
+				},
+			},
+			decisionCfgWithEmbedding([1, 0, 0]),
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		const derived = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2'
+				   AND source_id = ?`,
+			)
+			.get("mem-src-write-gate-project-a") as { cnt: number };
+		expect(derived.cnt).toBe(0);
+
+		const payload = JSON.parse(getJob(db, "mem-src-write-gate-project-a")?.result ?? "{}");
+		expect(payload.writeStats.writeGateConsidered).toBe(1);
+		expect(payload.writeStats.writeGateBlocked).toBe(1);
+		expect(payload.writeStats.added).toBe(0);
+	});
+
 	it("applies continuity discount when the same task is active", async () => {
 		insertMemory(db, "mem-src-write-gate-continuity", "Source envelope for continuity-discounted write gate", {
 			project: "/repo",
