@@ -70,17 +70,19 @@ Eleven Tauri commands are registered:
 A `DaemonManager` platform trait abstracts start/stop/is_running.
 All three platform managers are implemented.
 
-Start order prefers existing system-installed runtimes (`signet`,
-`signet-daemon`, or Bun+daemon script) for parity with current installs.
-If no system runtime is available, the tray falls back to a bundled
-daemon sidecar (`signet-daemon*`) shipped with the desktop app.
+Start order prefers an existing systemd user service when configured.
+Otherwise, the tray launches its bundled daemon sidecar
+(`signet-daemon*`) first so desktop builds stay self-contained. If the
+sidecar is unavailable, it falls back to system-installed runtimes
+(`signet`, `signet-daemon`, or Bun+daemon script).
 
 **Linux process management:**
 
 Start order: check for `~/.config/systemd/user/signet.service` — if
-present, use `systemctl --user start signet`. Otherwise: try installed
-`signet daemon start` first, then Bun-driven fallbacks
-(`signet-daemon`, `daemon.js`, `bun x signetai daemon start`).
+present, use `systemctl --user start signet`. Otherwise: launch bundled
+`signet-daemon*` first, then try installed `signet daemon start`, then
+Bun-driven fallbacks (`signet-daemon`, `daemon.js`,
+`bun x signetai daemon start`).
 
 Stop: send SIGTERM, poll at 100ms intervals up to 3 seconds, then clean
 up the PID file.

@@ -180,33 +180,9 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          CERT_NAME="Signet Desktop Self-Signed"
-          TMP_DIR="${RUNNER_TEMP}/signet-selfsign"
-          KEYCHAIN="${RUNNER_TEMP}/signet-selfsign.keychain-db"
-          KEYCHAIN_PASS="signet-selfsign"
-          P12_PASS="signet-selfsign"
-          mkdir -p "${TMP_DIR}"
-
-          openssl req -x509 -newkey rsa:2048 \
-            -keyout "${TMP_DIR}/key.pem" \
-            -out "${TMP_DIR}/cert.pem" \
-            -days 7 -nodes \
-            -subj "/CN=${CERT_NAME}"
-
-          openssl pkcs12 -export \
-            -inkey "${TMP_DIR}/key.pem" \
-            -in "${TMP_DIR}/cert.pem" \
-            -out "${TMP_DIR}/cert.p12" \
-            -passout pass:"${P12_PASS}"
-
-          security create-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN}"
-          security unlock-keychain -p "${KEYCHAIN_PASS}" "${KEYCHAIN}"
-          security import "${TMP_DIR}/cert.p12" -k "${KEYCHAIN}" -P "${P12_PASS}" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASS}" "${KEYCHAIN}"
-          security default-keychain -s "${KEYCHAIN}"
-          security list-keychains -d user -s "${KEYCHAIN}" $(security list-keychains -d user | tr -d '"')
-
-          export APPLE_SIGNING_IDENTITY="${CERT_NAME}"
+          # Use ad-hoc signing in CI when official Apple certs are unavailable.
+          # This keeps artifact generation deterministic without keychain state.
+          export APPLE_SIGNING_IDENTITY="-"
           cd packages/tray && bun tauri build --target "${TARGET}"
 
       - name: Sign Windows MSI artifacts (official certificate)
