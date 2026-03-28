@@ -104,7 +104,8 @@ fn resolve_remember_agent(
 ) -> Result<String, &'static str> {
     let explicit_agent = normalize_agent_id(explicit);
     let header_agent = normalize_agent_id(header);
-    if let Some(bound) = session_agent_id(session_key).as_deref() {
+    let bound = session_agent_id(session_key);
+    if let Some(bound) = bound.as_deref() {
         if let Some(explicit) = explicit_agent.as_deref()
             && explicit != bound
         {
@@ -119,6 +120,7 @@ fn resolve_remember_agent(
 
     Ok(explicit_agent
         .or(header_agent)
+        .or(bound)
         .unwrap_or_else(|| "default".to_string()))
 }
 
@@ -1506,6 +1508,12 @@ mod tests {
             Some("agent:agent-a:sess-1"),
         )
         .unwrap();
+        assert_eq!(agent, "agent-a");
+    }
+
+    #[test]
+    fn resolve_remember_agent_inherits_session_scope_when_agent_missing() {
+        let agent = resolve_remember_agent(None, None, Some("agent:agent-a:sess-1")).unwrap();
         assert_eq!(agent, "agent-a");
     }
 

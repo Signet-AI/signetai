@@ -21,6 +21,26 @@ fn session_agent_id(session_key: &str) -> Option<String> {
     Some(id.to_string())
 }
 
+fn resolve_agent_id(
+    explicit: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<String, String> {
+    let bound = session_key.and_then(session_agent_id);
+    let explicit = explicit.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(agent) = explicit {
+        if let Some(bound) = bound.as_deref()
+            && agent != bound
+        {
+            return Err("agent_id does not match session scope".to_string());
+        }
+        return Ok(agent.to_string());
+    }
+    if let Some(bound) = bound {
+        return Ok(bound);
+    }
+    Ok("default".to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Tool registry
 // ---------------------------------------------------------------------------
@@ -420,19 +440,10 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
         .get("agent_id")
         .and_then(|v| v.as_str())
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let agent_id = if let Some(explicit) = explicit_agent {
-        if explicit != "default" {
-            if session_key.is_none() {
-                return ToolCallResult::error(
-                    "non-default agent_id requires session_key".to_string(),
-                );
-            }
-        }
-        explicit
-    } else {
-        "default".to_string()
+        .filter(|s| !s.is_empty());
+    let agent_id = match resolve_agent_id(explicit_agent, session_key.as_deref()) {
+        Ok(id) => id,
+        Err(err) => return ToolCallResult::error(err),
     };
 
     let visibility = match args.get("visibility").and_then(|v| v.as_str()) {
@@ -716,5 +727,17 @@ mod tests {
             Some("alpha")
         );
         assert_eq!(session_agent_id("sess-1"), None);
+    }
+
+    #[test]
+    fn resolve_agent_id_inherits_session_scope_when_missing() {
+        let agent = resolve_agent_id(None, Some("agent:alpha:sess-1")).unwrap();
+        assert_eq!(agent, "alpha");
+    }
+
+    #[test]
+    fn resolve_agent_id_rejects_session_scope_mismatch() {
+        let err = resolve_agent_id(Some("beta"), Some("agent:alpha:sess-1")).unwrap_err();
+        assert_eq!(err, "agent_id does not match session scope");
     }
 }
