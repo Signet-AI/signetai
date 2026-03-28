@@ -21,6 +21,8 @@ export interface WriteGateInput {
 	readonly agentId: string;
 	readonly sourceMemoryId: string;
 	readonly sourceProject: string | null;
+	readonly sourceScope: string | null;
+	readonly sourceVisibility: "global" | "private" | "archived";
 	readonly factType: string;
 	readonly content: string;
 	readonly vector: readonly number[] | null;
@@ -69,71 +71,59 @@ function isErrorContent(content: string): boolean {
 }
 
 function findMaxSimilarityVec(db: ReadDb, query: Float32Array, input: WriteGateInput): number | null {
-	const scoped = input.sourceProject !== null;
-	const sql = scoped
-		? `SELECT v.distance
-		   FROM vec_embeddings v
-		   JOIN embeddings e ON v.id = e.id
-		   JOIN memories m ON e.source_id = m.id
-		   WHERE v.embedding MATCH ? AND k = ?
-		     AND e.source_type = 'memory'
-		     AND m.is_deleted = 0
-		     AND m.agent_id = ?
-		     AND m.id <> ?
-		     AND m.project = ?
-		   ORDER BY v.distance
-		   LIMIT 1`
-		: `SELECT v.distance
-		   FROM vec_embeddings v
-		   JOIN embeddings e ON v.id = e.id
-		   JOIN memories m ON e.source_id = m.id
-		   WHERE v.embedding MATCH ? AND k = ?
-		     AND e.source_type = 'memory'
-		     AND m.is_deleted = 0
-		     AND m.agent_id = ?
-		     AND m.id <> ?
-		   ORDER BY v.distance
-		   LIMIT 1`;
+	const scopeClause = input.sourceScope !== null ? "AND m.scope = ?" : "AND m.scope IS NULL";
+	const projectClause = input.sourceProject !== null ? "AND m.project = ?" : "";
+	const sql = `SELECT v.distance
+		 FROM vec_embeddings v
+		 JOIN embeddings e ON v.id = e.id
+		 JOIN memories m ON e.source_id = m.id
+		 WHERE v.embedding MATCH ? AND k = ?
+		   AND e.source_type = 'memory'
+		   AND m.is_deleted = 0
+		   AND m.agent_id = ?
+		   AND m.visibility = ?
+		   AND m.id <> ?
+		   ${scopeClause}
+		   ${projectClause}
+		 ORDER BY v.distance
+		 LIMIT 1`;
 
-	const row = scoped
-		? (db.prepare(sql).get(query, NEIGHBOR_LIMIT, input.agentId, input.sourceMemoryId, input.sourceProject) as
-				| { distance: number }
-				| undefined)
-		: (db.prepare(sql).get(query, NEIGHBOR_LIMIT, input.agentId, input.sourceMemoryId) as
-				| { distance: number }
-				| undefined);
+	const args: unknown[] = [query, NEIGHBOR_LIMIT, input.agentId, input.sourceVisibility, input.sourceMemoryId];
+	if (input.sourceScope !== null) {
+		args.push(input.sourceScope);
+	}
+	if (input.sourceProject !== null) {
+		args.push(input.sourceProject);
+	}
+	const row = db.prepare(sql).get(...args) as { distance: number } | undefined;
 	if (!row || !Number.isFinite(row.distance)) return null;
 	return clampUnit(1 - row.distance);
 }
 
 function findMaxSimilarityFallback(db: ReadDb, query: Float32Array, input: WriteGateInput): number | null {
-	const scoped = input.sourceProject !== null;
-	const sql = scoped
-		? `SELECT e.vector
-		   FROM embeddings e
-		   JOIN memories m ON e.source_id = m.id
-		   WHERE e.source_type = 'memory'
-		     AND m.is_deleted = 0
-		     AND m.agent_id = ?
-		     AND m.id <> ?
-		     AND m.project = ?
-		   ORDER BY m.updated_at DESC
-		   LIMIT ?`
-		: `SELECT e.vector
-		   FROM embeddings e
-		   JOIN memories m ON e.source_id = m.id
-		   WHERE e.source_type = 'memory'
-		     AND m.is_deleted = 0
-		     AND m.agent_id = ?
-		     AND m.id <> ?
-		   ORDER BY m.updated_at DESC
-		   LIMIT ?`;
-
-	const rows = scoped
-		? (db.prepare(sql).all(input.agentId, input.sourceMemoryId, input.sourceProject, NEIGHBOR_LIMIT) as ReadonlyArray<{
-				vector: Buffer;
-			}>)
-		: (db.prepare(sql).all(input.agentId, input.sourceMemoryId, NEIGHBOR_LIMIT) as ReadonlyArray<{ vector: Buffer }>);
+	const scopeClause = input.sourceScope !== null ? "AND m.scope = ?" : "AND m.scope IS NULL";
+	const projectClause = input.sourceProject !== null ? "AND m.project = ?" : "";
+	const sql = `SELECT e.vector
+		 FROM embeddings e
+		 JOIN memories m ON e.source_id = m.id
+		 WHERE e.source_type = 'memory'
+		   AND m.is_deleted = 0
+		   AND m.agent_id = ?
+		   AND m.visibility = ?
+		   AND m.id <> ?
+		   ${scopeClause}
+		   ${projectClause}
+		 ORDER BY m.updated_at DESC
+		 LIMIT ?`;
+	const args: unknown[] = [input.agentId, input.sourceVisibility, input.sourceMemoryId];
+	if (input.sourceScope !== null) {
+		args.push(input.sourceScope);
+	}
+	if (input.sourceProject !== null) {
+		args.push(input.sourceProject);
+	}
+	args.push(NEIGHBOR_LIMIT);
+	const rows = db.prepare(sql).all(...args) as ReadonlyArray<{ vector: Buffer }>;
 
 	if (rows.length === 0) return null;
 	let max = 0;
@@ -164,12 +154,18 @@ function computeContinuitySignals(db: ReadDb, input: WriteGateInput, query: Floa
 				`SELECT COUNT(*) AS cnt
 				 FROM memories
 				 WHERE agent_id = ?
+				   AND visibility = ?
 				   AND id <> ?
+				   AND ${input.sourceScope !== null ? "scope = ?" : "scope IS NULL"}
 				   AND project = ?
 				   AND is_deleted = 0
 				   AND created_at >= ?`,
 			)
-			.get(input.agentId, input.sourceMemoryId, input.sourceProject, cutoff) as { cnt: number } | undefined;
+			.get(
+				...(input.sourceScope !== null
+					? [input.agentId, input.sourceVisibility, input.sourceMemoryId, input.sourceScope, input.sourceProject, cutoff]
+					: [input.agentId, input.sourceVisibility, input.sourceMemoryId, input.sourceProject, cutoff]),
+			) as { cnt: number } | undefined;
 		return (row?.cnt ?? 0) > 0;
 	})();
 
@@ -179,47 +175,45 @@ function computeContinuitySignals(db: ReadDb, input: WriteGateInput, query: Floa
 				`SELECT COUNT(*) AS cnt
 				 FROM memories
 				 WHERE agent_id = ?
+				   AND visibility = ?
 				   AND id <> ?
+				   AND ${input.sourceScope !== null ? "scope = ?" : "scope IS NULL"}
 				   AND is_deleted = 0
 				   AND created_at >= ?`,
 			)
-			.get(input.agentId, input.sourceMemoryId, cutoff) as { cnt: number } | undefined;
+			.get(
+				...(input.sourceScope !== null
+					? [input.agentId, input.sourceVisibility, input.sourceMemoryId, input.sourceScope, cutoff]
+					: [input.agentId, input.sourceVisibility, input.sourceMemoryId, cutoff]),
+			) as { cnt: number } | undefined;
 		return (row?.cnt ?? 0) >= CONTINUITY_RECENT_MIN;
 	})();
 
 	const semanticSimilarity = (() => {
 		if (!query) return false;
-		const scoped = input.sourceProject !== null;
-		const sql = scoped
-			? `SELECT e.vector
-			   FROM embeddings e
-			   JOIN memories m ON e.source_id = m.id
-			   WHERE e.source_type = 'memory'
-			     AND m.agent_id = ?
-			     AND m.id <> ?
-			     AND m.is_deleted = 0
-			     AND m.project = ?
-			   ORDER BY m.created_at DESC
-			   LIMIT ?`
-			: `SELECT e.vector
-			   FROM embeddings e
-			   JOIN memories m ON e.source_id = m.id
-			   WHERE e.source_type = 'memory'
-			     AND m.agent_id = ?
-			     AND m.id <> ?
-			     AND m.is_deleted = 0
-			   ORDER BY m.created_at DESC
-			   LIMIT ?`;
-
-		const rows = scoped
-			? (db
-					.prepare(sql)
-					.all(input.agentId, input.sourceMemoryId, input.sourceProject, RECENT_SIMILARITY_LIMIT) as ReadonlyArray<{
-					vector: Buffer;
-				}>)
-			: (db.prepare(sql).all(input.agentId, input.sourceMemoryId, RECENT_SIMILARITY_LIMIT) as ReadonlyArray<{
-					vector: Buffer;
-				}>);
+		const scopeClause = input.sourceScope !== null ? "AND m.scope = ?" : "AND m.scope IS NULL";
+		const projectClause = input.sourceProject !== null ? "AND m.project = ?" : "";
+		const sql = `SELECT e.vector
+			 FROM embeddings e
+			 JOIN memories m ON e.source_id = m.id
+			 WHERE e.source_type = 'memory'
+			   AND m.agent_id = ?
+			   AND m.visibility = ?
+			   AND m.id <> ?
+			   AND m.is_deleted = 0
+			   ${scopeClause}
+			   ${projectClause}
+			 ORDER BY m.created_at DESC
+			 LIMIT ?`;
+		const args: unknown[] = [input.agentId, input.sourceVisibility, input.sourceMemoryId];
+		if (input.sourceScope !== null) {
+			args.push(input.sourceScope);
+		}
+		if (input.sourceProject !== null) {
+			args.push(input.sourceProject);
+		}
+		args.push(RECENT_SIMILARITY_LIMIT);
+		const rows = db.prepare(sql).all(...args) as ReadonlyArray<{ vector: Buffer }>;
 		if (rows.length === 0) return false;
 
 		let max = 0;

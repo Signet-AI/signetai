@@ -375,7 +375,7 @@ function insertMemoryEmbedding(
 		   chunk_text = excluded.chunk_text,
 		   created_at = excluded.created_at`,
 	);
-	const result = insert.run(embId, contentHash, blob, vector.length, memoryId, content, now);
+	insert.run(embId, contentHash, blob, vector.length, memoryId, content, now);
 	// Resolve actual embedding ID (may differ from embId on conflict)
 	const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 		| { id: string }
@@ -415,20 +415,22 @@ function applyPhaseCWrites(
 					`SELECT id FROM memories
 					 WHERE content_hash = ? AND is_deleted = 0
 					   AND agent_id = ?
+					   AND visibility = ?
 					   AND scope = ?
 					 LIMIT 1`,
 				)
-				.get(hash, meta.sourceAgentId, meta.sourceScope) as { id: string } | undefined;
+				.get(hash, meta.sourceAgentId, meta.sourceVisibility, meta.sourceScope) as { id: string } | undefined;
 		}
 		return db
 			.prepare(
 				`SELECT id FROM memories
 				 WHERE content_hash = ? AND is_deleted = 0
 				   AND agent_id = ?
+				   AND visibility = ?
 				   AND scope IS NULL
 				 LIMIT 1`,
 			)
-			.get(hash, meta.sourceAgentId) as { id: string } | undefined;
+			.get(hash, meta.sourceAgentId, meta.sourceVisibility) as { id: string } | undefined;
 	};
 
 	for (let proposalIdx = 0; proposalIdx < proposals.length; proposalIdx++) {
@@ -484,6 +486,8 @@ function applyPhaseCWrites(
 				agentId: meta.sourceAgentId,
 				sourceMemoryId,
 				sourceProject: meta.sourceProject,
+				sourceScope: meta.sourceScope,
+				sourceVisibility: meta.sourceVisibility,
 				factType: proposal.fact.type,
 				content: storageContent,
 				vector: embeddingByHash.get(contentHash) ?? null,
@@ -1342,10 +1346,13 @@ export function startWorker(
 							 WHERE content_hash = ?
 							   AND is_deleted = 0
 							   AND agent_id = ?
+							   AND visibility = ?
 							   AND scope = ?
 							 LIMIT 1`,
 								)
-								.get(normalized.contentHash, agentId, sourceScope) as { id: string } | undefined;
+								.get(normalized.contentHash, agentId, sourceVisibility, sourceScope) as
+								| { id: string }
+								| undefined;
 						}
 						return db
 							.prepare(
@@ -1353,10 +1360,11 @@ export function startWorker(
 							 WHERE content_hash = ?
 							   AND is_deleted = 0
 							   AND agent_id = ?
+							   AND visibility = ?
 							   AND scope IS NULL
 							 LIMIT 1`,
 							)
-							.get(normalized.contentHash, agentId) as { id: string } | undefined;
+							.get(normalized.contentHash, agentId, sourceVisibility) as { id: string } | undefined;
 					},
 				);
 				if (existing) {

@@ -870,6 +870,124 @@ describe("Worker phase C controlled writes", () => {
 		expect(scopes).toEqual(["scope-a", "scope-b"]);
 	});
 
+	it("does not block write-gate checks with similar memories in a different scope", async () => {
+		insertMemory(db, "mem-src-write-gate-scope-a", "Source envelope for scoped adaptive write gate", {
+			scope: "scope-a",
+		});
+		insertMemory(db, "mem-existing-write-gate-scope-b", "User prefers dark mode in editor settings", {
+			scope: "scope-b",
+		});
+		insertMemoryEmbedding(db, "mem-existing-write-gate-scope-b", [1, 0, 0]);
+		enqueueExtractionJob(accessor, "mem-src-write-gate-scope-a");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User likes dark mode in editor settings",
+					type: "preference",
+					confidence: 0.93,
+				},
+			],
+			entities: [],
+		});
+		const addDecision = JSON.stringify({
+			action: "add",
+			confidence: 0.88,
+			reason: "Store scoped preference without cross-scope bleed",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, addDecision]),
+			{
+				...PHASE_C_CFG,
+				writeGate: {
+					enabled: true,
+					threshold: 0.4,
+					continuityDiscount: 0.15,
+				},
+			},
+			decisionCfgWithEmbedding([1, 0, 0]),
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		const derived = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2'
+				   AND source_id = ?`,
+			)
+			.get("mem-src-write-gate-scope-a") as { cnt: number };
+		expect(derived.cnt).toBe(1);
+
+		const payload = JSON.parse(getJob(db, "mem-src-write-gate-scope-a")?.result ?? "{}");
+		expect(payload.writeStats.writeGateConsidered).toBe(1);
+		expect(payload.writeStats.writeGatePassed).toBe(1);
+		expect(payload.writeStats.writeGateBlocked).toBe(0);
+	});
+
+	it("does not block write-gate checks with similar memories in a different visibility", async () => {
+		insertMemory(db, "mem-src-write-gate-global", "Source envelope for visibility adaptive write gate", {
+			visibility: "global",
+		});
+		insertMemory(db, "mem-existing-write-gate-private", "User prefers dark mode in editor settings", {
+			visibility: "private",
+		});
+		insertMemoryEmbedding(db, "mem-existing-write-gate-private", [1, 0, 0]);
+		enqueueExtractionJob(accessor, "mem-src-write-gate-global");
+
+		const extraction = JSON.stringify({
+			facts: [
+				{
+					content: "User likes dark mode in editor settings",
+					type: "preference",
+					confidence: 0.93,
+				},
+			],
+			entities: [],
+		});
+		const addDecision = JSON.stringify({
+			action: "add",
+			confidence: 0.88,
+			reason: "Store visibility-scoped preference without read-policy bleed",
+		});
+
+		const worker = startWorker(
+			accessor,
+			scriptedProvider([extraction, addDecision]),
+			{
+				...PHASE_C_CFG,
+				writeGate: {
+					enabled: true,
+					threshold: 0.4,
+					continuityDiscount: 0.15,
+				},
+			},
+			decisionCfgWithEmbedding([1, 0, 0]),
+		);
+
+		await Bun.sleep(300);
+		await worker.stop();
+
+		const derived = db
+			.prepare(
+				`SELECT COUNT(*) as cnt
+				 FROM memories
+				 WHERE source_type = 'pipeline-v2'
+				   AND source_id = ?`,
+			)
+			.get("mem-src-write-gate-global") as { cnt: number };
+		expect(derived.cnt).toBe(1);
+
+		const payload = JSON.parse(getJob(db, "mem-src-write-gate-global")?.result ?? "{}");
+		expect(payload.writeStats.writeGateConsidered).toBe(1);
+		expect(payload.writeStats.writeGatePassed).toBe(1);
+		expect(payload.writeStats.writeGateBlocked).toBe(0);
+	});
+
 	it("blocks low-surprisal ADD writes with the adaptive write gate", async () => {
 		insertMemory(db, "mem-src-write-gate", "Source envelope for adaptive write gate");
 		insertMemory(db, "mem-existing-write-gate", "User prefers dark mode in editor settings");
