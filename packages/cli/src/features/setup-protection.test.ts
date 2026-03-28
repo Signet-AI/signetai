@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSnapshotProtection } from "../lib/workspace-protection.js";
+import Database from "../sqlite.js";
 import { enforceSetupProtection } from "./setup-protection.js";
 
 const originalEnv = {
@@ -34,6 +35,14 @@ function setupRepo(): {
 	const workspace = join(root, "agents");
 	mkdirSync(workspace, { recursive: true });
 	writeFileSync(join(workspace, "AGENTS.md"), "# test\n");
+	mkdirSync(join(workspace, "memory"), { recursive: true });
+	const db = Database(join(workspace, "memory", "memories.db"));
+	try {
+		db.exec("CREATE TABLE IF NOT EXISTS marker (id INTEGER PRIMARY KEY, value TEXT)");
+		db.exec("INSERT INTO marker (value) VALUES ('ready')");
+	} finally {
+		db.close();
+	}
 	spawnSync("git", ["init"], { cwd: workspace, windowsHide: true });
 
 	const configPath = join(root, "openclaw.json");
@@ -82,6 +91,13 @@ describe("setup protection soft gate", () => {
 			expect(result.snapshotPath).not.toBeNull();
 			if (result.snapshotPath) {
 				expect(existsSync(result.snapshotPath)).toBe(true);
+				const snapDb = Database(join(result.snapshotPath, "memory", "memories.db"), { readonly: true });
+				try {
+					const row = snapDb.prepare("SELECT COUNT(*) as count FROM marker").get();
+					expect(row?.count).toBe(1);
+				} finally {
+					snapDb.close();
+				}
 			}
 			expect(getSnapshotProtection(workspace)).toBe(result.snapshotPath);
 		} finally {

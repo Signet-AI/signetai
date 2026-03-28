@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
+import Database from "../sqlite.js";
 
 export interface GitRemoteState {
 	readonly isRepo: boolean;
@@ -36,6 +37,20 @@ function sanitize(name: string): string {
 		return "workspace";
 	}
 	return trimmed.replace(/[^a-z0-9._-]+/g, "-");
+}
+
+function escapeSqlPath(value: string): string {
+	return value.replace(/'/g, "''");
+}
+
+function backupSqlite(sourceDb: string, targetDb: string): void {
+	const escaped = escapeSqlPath(resolve(targetDb));
+	const db = Database(resolve(sourceDb));
+	try {
+		db.exec(`VACUUM INTO '${escaped}'`);
+	} finally {
+		db.close();
+	}
 }
 
 export function getGitRemoteState(dir: string): GitRemoteState {
@@ -94,6 +109,15 @@ export function createWorkspaceSnapshot(basePath: string, backupRoot = defaultBa
 		errorOnExist: true,
 		force: false,
 	});
+
+	const sourceDb = join(source, "memory", "memories.db");
+	if (existsSync(sourceDb)) {
+		const targetDb = join(target, "memory", "memories.db");
+		rmSync(targetDb, { force: true });
+		rmSync(`${targetDb}-wal`, { force: true });
+		rmSync(`${targetDb}-shm`, { force: true });
+		backupSqlite(sourceDb, targetDb);
+	}
 
 	if (!existsSync(target)) {
 		throw new Error(`Snapshot copy failed: ${target}`);
