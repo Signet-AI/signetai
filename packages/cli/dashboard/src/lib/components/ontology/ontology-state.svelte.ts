@@ -252,13 +252,17 @@ export async function loadAspectDetail(
 
 // --- Projection data ---
 
+let projectionGeneration = 0;
+
 export async function loadProjection(agentId = "default"): Promise<void> {
+	const gen = ++projectionGeneration;
 	ontology.loadingProjection = true;
 	try {
 		const result = await getProjection(2, { limit: 500, agentId });
+		if (gen !== projectionGeneration) return;
 		ontology.projection = result;
 	} finally {
-		ontology.loadingProjection = false;
+		if (gen === projectionGeneration) ontology.loadingProjection = false;
 	}
 }
 
