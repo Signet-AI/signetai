@@ -1673,6 +1673,14 @@ pub async fn compaction_complete(
         state.dedup.reset_prompt_dedup(key);
     }
 
+    if !pipeline_enabled(state.as_ref()) {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0})),
+        )
+            .into_response();
+    }
+
     // Mirror session_end: shadow mode observes without writing artifacts.
     let in_shadow = state
         .config
@@ -1802,6 +1810,9 @@ pub async fn compaction_complete(
     // mutations above are already committed so a failure here leaves DB
     // state consistent (core ingest committed) with a missing artifact file —
     // recoverable on next compaction — rather than rolled-back DB + orphaned file.
+    // Hard failure: canonical artifact must be written to maintain lineage
+    // durability. DB ingest succeeded above; if artifact write fails the
+    // lineage chain is broken — return 500 so the caller can retry.
     if let Err(e) = state
         .pool
         .write(Priority::Low, move |conn| {
@@ -1828,7 +1839,11 @@ pub async fn compaction_complete(
         })
         .await
     {
-        warn!(err = %e, "compaction-complete artifact write failed, DB state intact");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("compaction artifact write failed: {e}")})),
+        )
+            .into_response();
     }
 
     (
