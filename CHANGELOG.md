@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.82.7] - 2026-03-29
+
+### Features
+
+- **dashboard**: ontology constellation view (#393)
+
+
 ## [0.82.6] - 2026-03-29
 
 ### Bug Fixes
