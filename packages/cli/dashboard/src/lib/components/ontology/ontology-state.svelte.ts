@@ -158,9 +158,10 @@ let searchGeneration = 0;
 export function searchGraph(query: string, delay = 250): void {
 	ontology.filterQuery = query;
 
-	if (searchTimer) clearTimeout(searchTimer);
+	if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
 
 	if (!query.trim()) {
+		searchGeneration++;
 		ontology.searchMatchIds = null;
 		ontology.searchEpoch++;
 		ontology.searching = false;
@@ -342,7 +343,7 @@ export async function loadTableStats(table: string, agentId = "default"): Promis
 				ontology.tableStats = { table, rows: -1 };
 		}
 	} finally {
-		ontology.loadingTable = false;
+		if (gen === tableStatsGeneration) ontology.loadingTable = false;
 	}
 }
 
