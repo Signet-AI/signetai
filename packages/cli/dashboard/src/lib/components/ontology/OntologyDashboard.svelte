@@ -57,7 +57,7 @@
 			{#if umapOpen}
 				<div class="umap-float">
 					<div class="umap-float-header">
-						<span class="umap-float-title">EMBEDDING CLUSTERS</span>
+						<span class="umap-float-title">EMBEDDING SPACE</span>
 						<button class="umap-float-close" type="button" onclick={() => (umapOpen = false)}>
 							<X class="umap-float-icon" />
 						</button>
@@ -67,7 +67,7 @@
 					</div>
 				</div>
 			{:else}
-				<button class="umap-toggle" type="button" onclick={() => (umapOpen = true)} title="Show embedding clusters">
+				<button class="umap-toggle" type="button" onclick={() => (umapOpen = true)} title="Show embedding space">
 					<ScatterChart class="umap-toggle-icon" />
 				</button>
 			{/if}
