@@ -195,7 +195,10 @@ export function searchGraph(query: string, delay = 250): void {
 
 // --- Inspector detail ---
 
+let detailGeneration = 0;
+
 export async function loadEntityDetail(entityId: string, agentId = "default"): Promise<void> {
+	const gen = ++detailGeneration;
 	ontology.loadingDetail = true;
 	try {
 		const [detail, aspects, deps] = await Promise.all([
@@ -203,8 +206,7 @@ export async function loadEntityDetail(entityId: string, agentId = "default"): P
 			getKnowledgeAspects(entityId, agentId),
 			getKnowledgeDependencies(entityId, "both", agentId),
 		]);
-		// Guard: bail if selection changed while we were loading
-		if (ontology.selected?.id !== entityId) return;
+		if (gen !== detailGeneration) return;
 		ontology.detail = detail;
 		ontology.detailAspects = aspects;
 		ontology.detailDependencies = deps;
@@ -217,19 +219,20 @@ export async function loadEntityDetail(entityId: string, agentId = "default"): P
 					getKnowledgeAttributes(entityId, a.aspect.id, { agentId }),
 				),
 			);
-			// Guard again after the second await
-			if (ontology.selected?.id !== entityId) return;
+			if (gen !== detailGeneration) return;
 			for (let i = 0; i < aspects.length; i++) {
 				attrMap.set(aspects[i].aspect.id, results[i]);
 			}
 		}
 		ontology.detailAttributes = attrMap;
 	} finally {
-		ontology.loadingDetail = false;
+		if (gen === detailGeneration) ontology.loadingDetail = false;
 	}
 }
 
 // --- Aspect detail ---
+
+let aspectGeneration = 0;
 
 export async function loadAspectDetail(
 	aspectId: string,
@@ -239,14 +242,14 @@ export async function loadAspectDetail(
 	const node = ontology.graphNodes.find((n) => n.id === aspectId && n.kind === "aspect");
 	if (!node?.parentId) return;
 
+	const gen = ++aspectGeneration;
 	ontology.loadingAspect = true;
 	try {
 		const attrs = await getKnowledgeAttributes(node.parentId, aspectId, { agentId });
-		// Guard: bail if the selection that triggered this load is no longer current
-		if (ontology.selected?.id !== triggeredBy) return;
+		if (gen !== aspectGeneration) return;
 		ontology.aspectAttrs = attrs;
 	} finally {
-		ontology.loadingAspect = false;
+		if (gen === aspectGeneration) ontology.loadingAspect = false;
 	}
 }
 
