@@ -249,6 +249,30 @@ fn transcript_path_allowed(canonical: &Path, workspace: &Path) -> bool {
     false
 }
 
+/// Hard cap on transcript content accepted by session-end.  Prevents a DoS /
+/// disk-growth attack via an oversized file or inline payload.  Matches the
+/// TS daemon's MAX_TRANSCRIPT_CHARS safety cap (100 000 chars), applied here
+/// at the byte level before any allocation.  Content exceeding this limit is
+/// truncated with a `[truncated]` marker before artifact / DB writes.
+const MAX_TRANSCRIPT_BYTES: usize = 400_000; // ~100k chars * 4 bytes/char (UTF-8 worst case)
+
+/// Normalize a caller-supplied project path so lineage lookups use a
+/// consistent key.  Mirrors session-start project normalization:
+///   1. Try `canonicalize()` (resolves symlinks + `..`).
+///   2. Fall back to string normalization: backslash → slash, trim trailing
+///      slash, lowercase.
+/// Returns `None` when the input is empty or blank.
+fn normalize_project(raw: Option<&str>) -> Option<String> {
+    let s = raw?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(canonical) = Path::new(s).canonicalize() {
+        return Some(canonical.to_string_lossy().trim_end_matches('/').to_lowercase());
+    }
+    Some(s.replace('\\', "/").trim_end_matches('/').to_lowercase())
+}
+
 fn normalize_session_transcript(harness: &str, raw: &str) -> String {
     if harness.trim().eq_ignore_ascii_case("codex") {
         return raw.to_string();
@@ -1121,6 +1145,10 @@ pub async fn session_end(
         }
     };
     let ended_at = chrono::Utc::now().to_rfc3339();
+    // Normalize cwd to a stable project key: canonicalize resolves symlinks/..;
+    // string fallback handles non-existent paths from remote connectors.
+    // Consistent project keys are required for exact-equality lineage lookups.
+    let project = normalize_project(body.cwd.as_deref());
     // session_id is resolved after transcript load so the content-hash fallback
     // can include transcript content (making it retry-stable when neither
     // session_id nor session_key is provided by the caller).
@@ -1175,6 +1203,28 @@ pub async fn session_end(
             )
                 .into_response();
         }
+        // Reject oversized files before allocation.
+        let file_len = fs::metadata(&canonical)
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
+        if file_len > MAX_TRANSCRIPT_BYTES {
+            warn!(
+                path = %canonical.display(),
+                bytes = file_len,
+                limit = MAX_TRANSCRIPT_BYTES,
+                "session-end: transcript_path exceeds size limit"
+            );
+            state.sessions.release(&session_key);
+            state.dedup.clear_session_start(&session_key);
+            state.dedup.clear(&session_key);
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({
+                    "error": format!("transcript_path exceeds {MAX_TRANSCRIPT_BYTES} byte limit")
+                })),
+            )
+                .into_response();
+        }
         match fs::read_to_string(&canonical) {
             Ok(content) => content,
             Err(e) => {
@@ -1191,10 +1241,23 @@ pub async fn session_end(
             }
         }
     } else {
-        body.transcript
+        // Inline transcript — truncate rather than reject so connectors that
+        // send everything inline are not broken by the size cap.
+        let raw = body
+            .transcript
             .as_deref()
             .map(str::to_string)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if raw.len() > MAX_TRANSCRIPT_BYTES {
+            warn!(
+                bytes = raw.len(),
+                limit = MAX_TRANSCRIPT_BYTES,
+                "session-end: inline transcript truncated to size limit"
+            );
+            format!("{}\n[truncated]", &raw[..MAX_TRANSCRIPT_BYTES])
+        } else {
+            raw
+        }
     };
 
     // Normalized view used for LLM inputs (summary job) and the legacy DB
@@ -1227,7 +1290,7 @@ pub async fn session_end(
             h.update(b":");
             h.update(agent_id.as_bytes());
             h.update(b":");
-            h.update(body.cwd.as_deref().unwrap_or("").as_bytes());
+            h.update(project.as_deref().unwrap_or("").as_bytes());
             h.update(b":");
             h.update(transcript.as_bytes());
             let digest = h.finalize();
@@ -1264,7 +1327,7 @@ pub async fn session_end(
             agent_id: agent_id.clone(),
             session_id: session_id.clone(),
             session_key: session_key_value,
-            project: body.cwd.clone(),
+            project: project.clone(),
             harness: Some(harness.to_string()),
             captured_at: ended_at.clone(),
             started_at: None,
@@ -1337,7 +1400,7 @@ pub async fn session_end(
     if !session_key.trim().is_empty() {
         let transcript_value = normalized.clone();
         let harness_value = harness.to_string();
-        let project = body.cwd.clone();
+        let project_value = project.clone();
         let session_key_value = session_key.clone();
         let agent_value = agent_id.clone();
         if let Err(e) = state
@@ -1348,7 +1411,7 @@ pub async fn session_end(
                     &session_key_value,
                     &transcript_value,
                     &harness_value,
-                    project.as_deref(),
+                    project_value.as_deref(),
                     &agent_value,
                 )?;
                 Ok(serde_json::Value::Null)
@@ -1371,7 +1434,7 @@ pub async fn session_end(
     };
 
     let harness_value = harness.to_string();
-    let project = body.cwd.clone();
+    let project_value = project.clone();
     let session_key_value = if session_key.trim().is_empty() {
         None
     } else {
@@ -1390,7 +1453,7 @@ pub async fn session_end(
                 &transcript_value,
                 session_key_value.as_deref(),
                 &session_id_value,
-                project.as_deref(),
+                project_value.as_deref(),
                 &agent_value,
                 "session_end",
                 &ended_value,
