@@ -5,6 +5,7 @@
 //! remember, recall, pre-compaction, and compaction-complete.
 
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
@@ -206,14 +207,44 @@ fn require_session_scope_for_write(
 }
 
 fn pipeline_enabled(state: &AppState) -> bool {
+    // Runtime pause takes priority — workers refuse to run when this is set,
+    // so we must not enqueue new work either.
+    if state.pipeline_paused() {
+        return false;
+    }
     state
         .config
         .manifest
         .memory
         .as_ref()
         .and_then(|memory| memory.pipeline_v2.as_ref())
-        .map(|pipeline| pipeline.enabled || pipeline.shadow_mode)
+        .map(|pipeline| (pipeline.enabled || pipeline.shadow_mode) && !pipeline.paused)
         .unwrap_or(false)
+}
+
+/// Returns true when `canonical` is inside an allowed base directory.
+///
+/// The TS daemon trusts `transcriptPath` at the network level (global auth
+/// middleware).  Here we apply a daemon-level allowlist so that even if the
+/// auth layer is misconfigured, an arbitrary caller cannot read files outside
+/// the expected workspace roots.  Allowed bases:
+///   - $HOME            (covers connector default log directories)
+///   - /tmp             (covers ephemeral harness transcript staging)
+///   - SIGNET_WORKSPACE (covers memory/ subdirectory artifacts)
+fn transcript_path_allowed(canonical: &Path, workspace: &Path) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() && canonical.starts_with(&home) {
+        return true;
+    }
+    if canonical.starts_with("/tmp") {
+        return true;
+    }
+    if let Ok(ws) = workspace.canonicalize() {
+        if canonical.starts_with(ws) {
+            return true;
+        }
+    }
+    false
 }
 
 fn normalize_session_transcript(harness: &str, raw: &str) -> String {
@@ -1112,6 +1143,16 @@ pub async fn session_end(
                     return None;
                 }
             };
+            // Allowlist: only read from known safe roots.  The TS daemon relies
+            // on the global auth middleware for this protection; daemon-rs adds an
+            // explicit directory check as defence-in-depth.
+            if !transcript_path_allowed(&canonical, &state.config.base_path) {
+                warn!(
+                    path = %canonical.display(),
+                    "session-end: transcript_path outside allowed roots, skipping"
+                );
+                return None;
+            }
             fs::read_to_string(&canonical).ok()
         })
         .or_else(|| body.transcript.as_deref().map(str::to_string))
