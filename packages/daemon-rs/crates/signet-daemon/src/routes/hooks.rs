@@ -224,29 +224,17 @@ fn pipeline_enabled(state: &AppState) -> bool {
 
 /// Returns true when `canonical` is inside an allowed base directory.
 ///
-/// Allowed roots (trusted — not caller-supplied):
-///   - `$SIGNET_WORKSPACE/memory/` — where session artifacts are written;
-///     excludes `.secrets/`, `agent.yaml`, and other sensitive workspace files
-///   - `/tmp/signet/` — documented connector staging convention (API.md);
-///     scoped to the signet-owned prefix to prevent reads of arbitrary /tmp
+/// Only `/tmp/signet/` is allowed — the documented connector staging
+/// convention from API.md.  `$SIGNET_WORKSPACE/memory/` is intentionally
+/// excluded: that directory holds OUTPUT artifacts for all agents, so any
+/// caller reading from it could cross agent ownership boundaries by pointing
+/// at another agent's `--transcript.md` or `--summary.md`.  Connectors
+/// should stage transcripts to `/tmp/signet/` before sending session-end.
 ///
-/// `body.cwd` and the whole workspace root are intentionally excluded.
-/// `cwd` is caller-controlled; the whole workspace contains `.secrets/`,
-/// `agent.yaml`, and private markdown.  The TS daemon relies on the global
-/// auth middleware for this boundary; daemon-rs enforces it explicitly.
-fn transcript_path_allowed(canonical: &Path, workspace: &Path) -> bool {
-    // Only the memory/ subdirectory, not the workspace root.
-    if let Ok(ws) = workspace.canonicalize() {
-        if canonical.starts_with(ws.join("memory")) {
-            return true;
-        }
-    }
-    // Documented staging convention: connectors write to /tmp/signet/ before
-    // sending session-end (see docs/API.md examples).
-    if canonical.starts_with("/tmp/signet") {
-        return true;
-    }
-    false
+/// The TS daemon relies on the global auth middleware for this boundary;
+/// daemon-rs enforces it explicitly here.
+fn transcript_path_allowed(canonical: &Path) -> bool {
+    canonical.starts_with("/tmp/signet")
 }
 
 /// Hard cap on transcript content accepted by session-end.  Prevents a DoS /
@@ -388,21 +376,29 @@ fn enqueue_summary_job(
     started_at: Option<&str>,
     ended_at: Option<&str>,
 ) -> rusqlite::Result<String> {
-    // Idempotency: if a non-dead job already exists for (agent_id, session_id,
-    // trigger), return its id rather than inserting a duplicate.  This prevents
-    // session-end retries from enqueuing multiple summary jobs for the same
-    // logical session, which would otherwise produce duplicate canonical artifacts.
-    // 'processing' is an alias for 'leased' used in older schema rows; include
-    // both.  'dead' (max_attempts exhausted) is intentionally excluded so a
-    // fresh retry can create a new job after permanent failure.
-    if let Ok(existing) = conn.query_row(
-        "SELECT id FROM summary_jobs \
+    // Idempotency: check for an existing non-dead job for (agent_id, session_id, trigger).
+    // 'dead' is excluded so a fresh retry can create a new job after permanent failure.
+    // 'processing' is an older alias for 'leased' kept for schema compatibility.
+    //
+    // Completed/done jobs → return the existing id (summary already produced).
+    // Active jobs (pending/leased/processing) → update transcript in case the
+    //   retry has fresher content (e.g. a previously truncated payload is now
+    //   complete); return the existing id to avoid duplicating the job.
+    if let Ok((existing_id, existing_status)) = conn.query_row(
+        "SELECT id, status FROM summary_jobs \
          WHERE agent_id = ?1 AND session_id = ?2 AND trigger = ?3 \
          AND status IN ('pending', 'leased', 'processing', 'completed', 'done') LIMIT 1",
         rusqlite::params![agent_id, session_id, trigger],
-        |row| row.get::<_, String>(0),
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
     ) {
-        return Ok(existing);
+        if existing_status == "pending" || existing_status == "leased" || existing_status == "processing" {
+            // Update the transcript so retries with fresher content are used.
+            let _ = conn.execute(
+                "UPDATE summary_jobs SET transcript = ?1, updated_at = ?2 WHERE id = ?3",
+                rusqlite::params![transcript, chrono::Utc::now().to_rfc3339(), existing_id],
+            );
+        }
+        return Ok(existing_id);
     }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
@@ -1186,10 +1182,10 @@ pub async fn session_end(
                     .into_response();
             }
         };
-        // Allowlist: restrict to daemon-owned roots (workspace, /tmp/signet/).
-        // body.cwd is excluded — it is caller-controlled and could widen the
-        // readable root to / or $HOME.  See transcript_path_allowed() docs.
-        if !transcript_path_allowed(&canonical, &state.config.base_path) {
+        // Allowlist: only /tmp/signet/ (documented connector staging path).
+        // workspace/memory/ is excluded — it holds multi-agent output artifacts
+        // and reading from it would allow cross-agent exfiltration.
+        if !transcript_path_allowed(&canonical) {
             warn!(
                 path = %canonical.display(),
                 "session-end: transcript_path outside allowed roots"
