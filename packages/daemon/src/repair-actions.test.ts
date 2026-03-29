@@ -524,6 +524,12 @@ describe("reembedMissingMemories", () => {
 		// embedding-coverage query could not use the hash-match branch (because
 		// m.content_hash IS NULL), so the memory kept appearing as unembedded
 		// and the backfill cycled indefinitely.
+		//
+		// Test with the unique index in place to exercise the production code path.
+		db.exec(
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+			 ON memories(content_hash) WHERE content_hash IS NOT NULL AND is_deleted = 0`,
+		);
 		insertMemory(db, "mem-write-back");
 		const before = db.prepare("SELECT content_hash FROM memories WHERE id = 'mem-write-back'").get() as {
 			content_hash: string | null;
@@ -562,6 +568,52 @@ describe("reembedMissingMemories", () => {
 			false,
 		);
 		expect(second.message).toMatch(/no unembedded memories found/);
+	});
+
+	it("does not throw when a duplicate-content null-hash memory collides with an existing hashed memory", async () => {
+		// Regression: the write-back ran unconditionally, causing a UNIQUE constraint
+		// violation when another non-deleted memory already owned the same content_hash.
+		// That aborted the entire batch, so the cycle never resolved.
+		// With the unique index active (production path), the write-back must be skipped
+		// for the duplicate and the batch must complete without throwing.
+		db.exec(
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+			 ON memories(content_hash) WHERE content_hash IS NOT NULL AND is_deleted = 0`,
+		);
+		const now = new Date().toISOString();
+		const { contentHash: hash } = normalizeAndHashContent("duplicate content for collision test");
+
+		// Memory that already owns the hash
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+		).run("mem-owner", "duplicate content for collision test", hash, now, now);
+
+		// Null-hash memory with identical content -- this is the one that would collide
+		db.prepare(
+			`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, 'fact', ?, ?, 'test')`,
+		).run("mem-dupe", "duplicate content for collision test", now, now);
+
+		const limiter = createRateLimiter();
+		// Must not throw
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			10,
+			false,
+		);
+		expect(result.success).toBe(true);
+
+		// Duplicate's hash stays null -- dedup worker will clean it up later
+		const dupe = db.prepare("SELECT content_hash FROM memories WHERE id = 'mem-dupe'").get() as {
+			content_hash: string | null;
+		};
+		expect(dupe.content_hash).toBeNull();
 	});
 
 	it("syncs vec row using canonical embedding id on hash conflict", async () => {
