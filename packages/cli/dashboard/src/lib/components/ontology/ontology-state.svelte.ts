@@ -117,6 +117,8 @@ export async function loadGraph(agentId = "default"): Promise<void> {
 	ontology.hovered = null;
 	ontology.relatedIds = new Set();
 	ontology.searchMatchIds = null;
+	ontology.filterQuery = "";
+	ontology.tableStats = null;
 	try {
 		const data = await getConstellationOverlay(agentId);
 		if (gen !== graphGeneration) return;
@@ -131,6 +133,8 @@ export async function loadGraph(agentId = "default"): Promise<void> {
 		ontology.graphNodes = nodes;
 		ontology.graphEdges = edges;
 		ontology.entities = data.entities;
+		// Reload table stats for the current schema table under the new agent
+		loadTableStats(ontology.schemaTable, agentId);
 	} catch (err) {
 		if (gen !== graphGeneration) return;
 		ontology.error = err instanceof Error ? err.message : "Unknown error";
