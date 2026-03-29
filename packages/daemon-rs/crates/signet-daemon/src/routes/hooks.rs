@@ -327,14 +327,17 @@ fn enqueue_summary_job(
     started_at: Option<&str>,
     ended_at: Option<&str>,
 ) -> rusqlite::Result<String> {
-    // Idempotency: if a non-failed job already exists for (agent_id, session_id,
+    // Idempotency: if a non-dead job already exists for (agent_id, session_id,
     // trigger), return its id rather than inserting a duplicate.  This prevents
     // session-end retries from enqueuing multiple summary jobs for the same
     // logical session, which would otherwise produce duplicate canonical artifacts.
+    // 'processing' is an alias for 'leased' used in older schema rows; include
+    // both.  'dead' (max_attempts exhausted) is intentionally excluded so a
+    // fresh retry can create a new job after permanent failure.
     if let Ok(existing) = conn.query_row(
         "SELECT id FROM summary_jobs \
          WHERE agent_id = ?1 AND session_id = ?2 AND trigger = ?3 \
-         AND status IN ('pending', 'leased', 'completed') LIMIT 1",
+         AND status IN ('pending', 'leased', 'processing', 'completed') LIMIT 1",
         rusqlite::params![agent_id, session_id, trigger],
         |row| row.get::<_, String>(0),
     ) {
@@ -1812,30 +1815,23 @@ pub async fn compaction_complete(
                     &agent_id,
                     fallback_project.as_deref(),
                 )?;
-                // Project-based lineage fallback.  When neither session_key
-                // nor any prior session is available, derive a stable ID from
-                // content rather than wall-clock time so retries produce the
-                // same idempotency_key and don't create duplicate lineage.
+                // Stable lineage ID for the compaction event.  When session_key
+                // is present it is authoritative.  When absent, derive a
+                // content-hash ID rather than falling back to the latest prior
+                // session for the project: that fallback would silently attach
+                // an unrelated compaction to a different session's lineage chain,
+                // which corrupts the artifact ancestry visible in MEMORY.md.
                 let sid = session_key.clone().unwrap_or_else(|| {
-                    project
-                        .as_deref()
-                        .and_then(|proj| {
-                            latest_session_for_project(conn, proj, &agent_id)
-                                .ok()
-                                .flatten()
-                        })
-                        .unwrap_or_else(|| {
-                            let mut h = Sha256::new();
-                            h.update(agent_id.as_bytes());
-                            h.update(b":");
-                            h.update(summary_value.as_bytes());
-                            let digest = h.finalize();
-                            let hex: String = digest[..8]
-                                .iter()
-                                .map(|b| format!("{b:02x}"))
-                                .collect();
-                            format!("compaction:{hex}")
-                        })
+                    let mut h = Sha256::new();
+                    h.update(agent_id.as_bytes());
+                    h.update(b":");
+                    h.update(summary_value.as_bytes());
+                    let digest = h.finalize();
+                    let hex: String = digest[..8]
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
+                    format!("compaction:{hex}")
                 });
                 write_compaction_artifact(
                     conn,
