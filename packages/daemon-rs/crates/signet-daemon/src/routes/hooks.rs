@@ -987,9 +987,13 @@ pub async fn session_end(
             // a caller could send cwd:"/" to bypass any path check.
             let base = &state.config.base_path;
             match fs::canonicalize(path) {
-                Ok(p) => p.starts_with(base),
+                // Allow workspace and system temp — temp paths like
+                // /tmp/session-transcript.txt are documented in the API
+                // (see docs/API.md session-end examples). Auth middleware is
+                // the primary access control layer for team/hybrid mode.
+                Ok(p) => p.starts_with(base) || p.starts_with(std::env::temp_dir()),
                 Err(_) => {
-                    warn!(path, "session-end: transcript_path outside workspace or unreadable, skipping");
+                    warn!(path, "session-end: transcript_path outside allowed locations or unreadable, skipping");
                     false
                 }
             }

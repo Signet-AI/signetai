@@ -965,9 +965,13 @@ pub(crate) async fn start_synthesis_worker(state: &AppState) -> bool {
     if !pipeline.enabled || pipeline.shadow_mode || pipeline.paused || state.pipeline_paused() {
         return false;
     }
-    if !pipeline.synthesis.enabled || pipeline.synthesis.provider == "none" {
+    if !pipeline.synthesis.enabled {
         return false;
     }
+    // run_synthesis uses write_memory_projection (deterministic) and does not
+    // call the LLM provider — provider is accepted by the API but unused.
+    // Do not gate on provider == "none": installations without an LLM still
+    // need the synthesis worker to refresh the projected MEMORY.md output.
 
     let provider =
         signet_pipeline::provider::from_config(&signet_pipeline::provider::LlmProviderConfig {
