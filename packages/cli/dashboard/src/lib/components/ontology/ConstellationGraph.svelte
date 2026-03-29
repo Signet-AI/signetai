@@ -462,13 +462,18 @@
 		wakeRenderLoop();
 	}
 
-	onMount(() => {
-		loadGraph(agentId).then(() => {
+	// Reload graph whenever agentId changes (not just on mount)
+	$effect(() => {
+		const id = agentId;
+		loadGraph(id).then(() => {
 			lastFilter = [...ontology.visibleNodeKinds].sort().join(",")
 				+ "|" + [...ontology.visibleEdgeKinds].sort().join(",")
 				+ "|all";
 			buildSim(ontology.graphNodes, ontology.graphEdges);
 		});
+	});
+
+	onMount(() => {
 		return () => {
 			cancelAnimationFrame(raf);
 			sim?.stop();

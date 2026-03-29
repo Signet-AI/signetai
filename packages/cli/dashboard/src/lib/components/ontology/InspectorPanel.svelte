@@ -20,35 +20,42 @@
 	}
 	const { agentId = "default" }: Props = $props();
 
-	// Load entity detail when entity selected
-	let lastEntityId = "";
+	// Load entity detail when entity or agentId changes
+	let lastEntityKey = "";
 	$effect(() => {
 		const sel = ontology.selected;
-		if (sel?.kind === "entity" && sel.id !== lastEntityId) {
-			lastEntityId = sel.id;
-			loadEntityDetail(sel.id, agentId);
-		} else if (!sel || sel.kind !== "entity") {
-			lastEntityId = "";
+		const key = sel?.kind === "entity" ? `${sel.id}@${agentId}` : "";
+		if (key && key !== lastEntityKey) {
+			lastEntityKey = key;
+			loadEntityDetail(sel!.id, agentId);
+		} else if (!key) {
+			lastEntityKey = "";
 		}
 	});
 
-	// Load aspect attributes when aspect or attribute selected
-	let lastAspectId = "";
+	// Load aspect attributes when aspect/attribute or agentId changes
+	let lastAspectKey = "";
 	$effect(() => {
 		const sel = ontology.selected;
-		if (sel?.kind === "aspect" && sel.id !== lastAspectId) {
-			lastAspectId = sel.id;
-			loadAspectDetail(sel.id, sel.id, agentId);
+		if (sel?.kind === "aspect") {
+			const key = `${sel.id}@${agentId}`;
+			if (key !== lastAspectKey) {
+				lastAspectKey = key;
+				loadAspectDetail(sel.id, sel.id, agentId);
+			}
 		} else if (sel?.kind === "attribute") {
 			const node = ontology.graphNodes.find((n) => n.id === sel.id && n.kind === "attribute");
-			if (node?.parentId && node.parentId !== lastAspectId) {
-				lastAspectId = node.parentId;
-				// Pass the attribute's own ID as triggeredBy so the guard in
-				// loadAspectDetail can check selected.id === attributeId, not aspectId
-				loadAspectDetail(node.parentId, sel.id, agentId);
+			if (node?.parentId) {
+				const key = `${node.parentId}@${agentId}`;
+				if (key !== lastAspectKey) {
+					lastAspectKey = key;
+					// Pass the attribute's own ID as triggeredBy so the guard in
+					// loadAspectDetail can check selected.id === attributeId, not aspectId
+					loadAspectDetail(node.parentId, sel.id, agentId);
+				}
 			}
-		} else if (!sel || sel.kind === "entity") {
-			lastAspectId = "";
+		} else {
+			lastAspectKey = "";
 		}
 	});
 
