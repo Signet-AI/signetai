@@ -1006,13 +1006,13 @@ pub async fn session_end(
             // a caller could send cwd:"/" to bypass any path check.
             let base = &state.config.base_path;
             match fs::canonicalize(path) {
-                // Allow workspace or the signet-managed temp subdir only.
-                // Connectors should write transcript files to
-                // $TMPDIR/signet/ (e.g. /tmp/signet/session.txt).
-                // Full temp_dir() is intentionally excluded to avoid
-                // reading unrelated host temp files in team/hybrid mode.
+                // Restrict reads to the workspace memory/ subdir or the
+                // signet-managed temp subdir. Full base_path is excluded to
+                // prevent reads from .secrets/, USER.md, and other workspace
+                // artifacts in team/hybrid mode. Connectors write transcript
+                // staging files to $WORKSPACE/memory/ or $TMPDIR/signet/.
                 Ok(p) => {
-                    p.starts_with(base)
+                    p.starts_with(base.join("memory"))
                         || p.starts_with(std::env::temp_dir().join("signet"))
                 }
                 Err(_) => {

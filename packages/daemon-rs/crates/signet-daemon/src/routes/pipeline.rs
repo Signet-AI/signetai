@@ -199,6 +199,8 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
     // mirroring the JS daemon's restartPipelineRuntime behavior.
     if paused {
         crate::stop_extraction_worker(state).await;
+        crate::stop_summary_worker(state).await;
+        crate::stop_synthesis_worker(state).await;
 
         // Pipeline pause disables extraction execution at runtime.
         // Preserve "blocked" and "disabled" states so write routes keep the
@@ -220,6 +222,8 @@ async fn apply_pause_state(state: &AppState, paused: bool) {
         // an intentional pause should be preserved for draining.
         crate::resume_extraction_check(state).await;
         let _ = crate::start_extraction_worker(state).await;
+        let _ = crate::start_summary_worker(state).await;
+        let _ = crate::start_synthesis_worker(state).await;
     }
 }
 
