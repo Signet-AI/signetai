@@ -987,9 +987,9 @@ pub async fn session_end(
             // a caller could send cwd:"/" to bypass any path check.
             let base = &state.config.base_path;
             match fs::canonicalize(path) {
-                Ok(p) => p.starts_with(base) || p.starts_with(std::env::temp_dir()),
+                Ok(p) => p.starts_with(base),
                 Err(_) => {
-                    warn!(path, "session-end: transcript_path outside allowed locations or unreadable, skipping");
+                    warn!(path, "session-end: transcript_path outside workspace or unreadable, skipping");
                     false
                 }
             }
@@ -1009,7 +1009,10 @@ pub async fn session_end(
         let project = body.cwd.clone();
         let session_key_value = session_key.clone();
         let agent_value = agent_id.clone();
-        let _ = state
+        // Best-effort: stores transcript in DB for legacy extraction pipeline.
+        // Failure is non-fatal — the canonical artifact write below is the
+        // source of truth for lineage; log and continue.
+        if let Err(e) = state
             .pool
             .write(Priority::Low, move |conn| {
                 upsert_session_transcript(
@@ -1022,7 +1025,10 @@ pub async fn session_end(
                 )?;
                 Ok(serde_json::Value::Null)
             })
-            .await;
+            .await
+        {
+            warn!(error = %e, "session-end: transcript DB upsert failed, continuing");
+        }
     }
 
     if !transcript.trim().is_empty() {
@@ -1044,14 +1050,23 @@ pub async fn session_end(
             ended_at: Some(ended_at.clone()),
             transcript: transcript_value,
         };
-        let _ = state
+        // Hard failure: canonical artifact must be written before summary job
+        // is enqueued. If this fails the lineage chain is broken — return 500.
+        if let Err(e) = state
             .pool
             .write(Priority::Low, move |conn| {
-                let _ = write_transcript_artifact(conn, &root, input)
-                    .map_err(signet_core::error::CoreError::Migration)?;
-                Ok(serde_json::Value::Null)
+                write_transcript_artifact(conn, &root, input)
+                    .map(|_| serde_json::Value::Null)
+                    .map_err(signet_core::error::CoreError::Migration)
             })
-            .await;
+            .await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("transcript artifact write failed: {e}")})),
+            )
+                .into_response();
+        }
     }
 
     const MAX_TRANSCRIPT_CHARS: usize = 100_000;
