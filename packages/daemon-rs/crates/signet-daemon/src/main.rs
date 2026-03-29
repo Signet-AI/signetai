@@ -864,6 +864,16 @@ pub(crate) async fn stop_extraction_worker(state: &AppState) {
     *state.extraction_worker_stats.write().await = None;
 }
 
+/// Resolve the API key env var for a given provider name.
+fn api_key_for_provider(provider: &str) -> Option<String> {
+    let var = match provider {
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "openai" | "openrouter" => "OPENAI_API_KEY",
+        _ => return None,
+    };
+    std::env::var(var).ok().filter(|v| !v.trim().is_empty())
+}
+
 pub(crate) async fn start_summary_worker(state: &AppState) -> bool {
     {
         let handle = state.summary_worker_handle.lock().await;
@@ -885,7 +895,10 @@ pub(crate) async fn start_summary_worker(state: &AppState) -> bool {
     if !pipeline.enabled || pipeline.shadow_mode || pipeline.paused || state.pipeline_paused() {
         return false;
     }
-    if !pipeline.synthesis.enabled || pipeline.synthesis.provider == "none" {
+    // Summary worker gates only on pipeline being active, not on synthesis
+    // being enabled — session-end always enqueues summary jobs, and they must
+    // be consumed regardless of whether MEMORY.md synthesis is turned on.
+    if pipeline.synthesis.provider == "none" {
         return false;
     }
 
@@ -894,9 +907,7 @@ pub(crate) async fn start_summary_worker(state: &AppState) -> bool {
             provider: pipeline.synthesis.provider.clone(),
             model: pipeline.synthesis.model.clone(),
             base_url: pipeline.synthesis.endpoint.clone(),
-            api_key: std::env::var("ANTHROPIC_API_KEY")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
+            api_key: api_key_for_provider(&pipeline.synthesis.provider),
             timeout_ms: Some(pipeline.synthesis.timeout),
         });
     let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
@@ -965,9 +976,7 @@ pub(crate) async fn start_synthesis_worker(state: &AppState) -> bool {
             provider: pipeline.synthesis.provider.clone(),
             model: pipeline.synthesis.model.clone(),
             base_url: pipeline.synthesis.endpoint.clone(),
-            api_key: std::env::var("ANTHROPIC_API_KEY")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
+            api_key: api_key_for_provider(&pipeline.synthesis.provider),
             timeout_ms: Some(pipeline.synthesis.timeout),
         });
     let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());

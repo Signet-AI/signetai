@@ -981,6 +981,24 @@ pub async fn session_end(
         .transcript_path
         .as_deref()
         .filter(|path| !path.trim().is_empty())
+        .filter(|&path| {
+            // Constrain reads to trusted locations: workspace, system temp, or
+            // the session's project directory. Prevents arbitrary file exfiltration
+            // via a caller-supplied path in team/hybrid auth modes.
+            let base = &state.config.base_path;
+            let cwd = body.cwd.as_deref();
+            match fs::canonicalize(path) {
+                Ok(p) => {
+                    p.starts_with(base)
+                        || p.starts_with(std::env::temp_dir())
+                        || cwd.map_or(false, |c| p.starts_with(c))
+                }
+                Err(_) => {
+                    warn!(path, "session-end: transcript_path outside allowed locations or unreadable, skipping");
+                    false
+                }
+            }
+        })
         .and_then(|path| fs::read_to_string(path).ok())
         .map(|raw| normalize_session_transcript(harness, &raw))
         .or_else(|| {
