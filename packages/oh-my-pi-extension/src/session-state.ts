@@ -12,12 +12,17 @@ export interface PendingSessionEnd {
 	readonly reason: string;
 }
 
+function sanitizeInject(inject: string): string {
+	// Prevent injected content from closing the signet-memory wrapper early.
+	return inject.replace(/<\/signet-memory>/gi, "<\\/signet-memory>");
+}
+
 function createHiddenInjectMessage(customType: string, inject: string): OmpAgentMessage {
 	return {
 		role: "custom",
 		customType,
 		display: false,
-		content: `<signet-memory source="auto-recall">\n${inject}\n</signet-memory>`,
+		content: `<signet-memory source="auto-recall">\n${sanitizeInject(inject)}\n</signet-memory>`,
 		timestamp: Date.now(),
 	};
 }
