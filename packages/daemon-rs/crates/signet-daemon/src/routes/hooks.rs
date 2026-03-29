@@ -20,7 +20,8 @@ use tracing::warn;
 use signet_core::db::Priority;
 use signet_pipeline::memory_lineage::{
     ArtifactKind, SummaryArtifactInput, TranscriptArtifactInput, resolve_memory_sentence,
-    write_compaction_artifact, write_memory_projection, write_transcript_artifact,
+    upsert_thread_head, write_compaction_artifact, write_memory_projection,
+    write_transcript_artifact,
 };
 use signet_services::session::{ClaimResult, RuntimePath, SessionTracker};
 use signet_services::transactions;
@@ -256,9 +257,17 @@ fn normalize_project(raw: Option<&str>) -> Option<String> {
         return None;
     }
     if let Ok(canonical) = Path::new(s).canonicalize() {
-        return Some(canonical.to_string_lossy().trim_end_matches('/').to_lowercase());
+        // Preserve exact case — lowercasing collapses distinct projects
+        // on case-sensitive filesystems (e.g. /work/Foo vs /work/foo).
+        return Some(
+            canonical
+                .to_string_lossy()
+                .trim_end_matches('/')
+                .to_string(),
+        );
     }
-    Some(s.replace('\\', "/").trim_end_matches('/').to_lowercase())
+    // Path doesn't exist on this machine — normalize separators only.
+    Some(s.replace('\\', "/").trim_end_matches('/').to_string())
 }
 
 fn normalize_session_transcript(harness: &str, raw: &str) -> String {
@@ -2064,7 +2073,7 @@ pub async fn compaction_complete(
                     &transactions::IngestInput {
                         content: &summary_value,
                         memory_type: "session_summary",
-                        tags: vec!["session".into(), "summary".into(), harness_value],
+                        tags: vec!["session".into(), "summary".into(), harness_value.clone()],
                         who: None,
                         why: Some("compaction"),
                         project: project.as_deref(),
@@ -2090,6 +2099,50 @@ pub async fn compaction_complete(
                         rusqlite::params![key, agent_id],
                     );
                 }
+
+                // Write temporal DAG node — mirrors the TS daemon's
+                // compaction-complete path (daemon.ts ~L6140-6173).
+                let node_id = session_key
+                    .as_deref()
+                    .map(|k| format!("{k}:compaction:{}", chrono::Utc::now().timestamp_millis()))
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let token_count = (summary_value.len() / 4) as i64;
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO session_summaries (
+                         id, project, depth, kind, content, token_count,
+                         earliest_at, latest_at, session_key, harness,
+                         agent_id, source_type, source_ref, meta_json, created_at
+                     ) VALUES (?1, ?2, 0, 'session', ?3, ?4, ?5, ?5, ?6, ?7, ?8,
+                               'compaction', ?6, ?9, ?5)",
+                    rusqlite::params![
+                        node_id,
+                        project,
+                        summary_value,
+                        token_count,
+                        captured_at,
+                        session_key,
+                        harness_value,
+                        agent_id,
+                        serde_json::json!({"source": "compaction-complete"}).to_string(),
+                    ],
+                );
+                let thread_key = session_key.as_deref().unwrap_or(&node_id);
+                let sample: String = summary_value.chars().take(200).collect();
+                let _ = upsert_thread_head(
+                    conn,
+                    &agent_id,
+                    thread_key,
+                    "compaction",
+                    project.as_deref(),
+                    session_key.as_deref(),
+                    "compaction",
+                    session_key.as_deref(),
+                    Some(&harness_value),
+                    &node_id,
+                    &captured_at,
+                    &sample,
+                );
+
                 // Project MEMORY.md after ingest so it includes the new row.
                 write_memory_projection(conn, &root, &agent_id)
                     .map_err(signet_core::error::CoreError::Migration)?;
