@@ -895,12 +895,10 @@ pub(crate) async fn start_summary_worker(state: &AppState) -> bool {
     if !pipeline.enabled || pipeline.shadow_mode || pipeline.paused || state.pipeline_paused() {
         return false;
     }
-    // Summary worker gates only on pipeline being active, not on synthesis
-    // being enabled — session-end always enqueues summary jobs, and they must
-    // be consumed regardless of whether MEMORY.md synthesis is turned on.
-    if pipeline.synthesis.provider == "none" {
-        return false;
-    }
+    // Summary worker gates only on pipeline being active — session-end always
+    // enqueues summary jobs and they must be consumed to write canonical
+    // --summary.md artifacts. When no explicit provider is configured,
+    // from_config falls back to Ollama so jobs are never stranded.
 
     let provider =
         signet_pipeline::provider::from_config(&signet_pipeline::provider::LlmProviderConfig {

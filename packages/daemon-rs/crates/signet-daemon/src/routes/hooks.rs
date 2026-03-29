@@ -982,17 +982,12 @@ pub async fn session_end(
         .as_deref()
         .filter(|path| !path.trim().is_empty())
         .filter(|&path| {
-            // Constrain reads to trusted locations: workspace, system temp, or
-            // the session's project directory. Prevents arbitrary file exfiltration
-            // via a caller-supplied path in team/hybrid auth modes.
+            // Constrain reads to workspace or system temp only.
+            // cwd is request-supplied and cannot be trusted as a root —
+            // a caller could send cwd:"/" to bypass any path check.
             let base = &state.config.base_path;
-            let cwd = body.cwd.as_deref();
             match fs::canonicalize(path) {
-                Ok(p) => {
-                    p.starts_with(base)
-                        || p.starts_with(std::env::temp_dir())
-                        || cwd.map_or(false, |c| p.starts_with(c))
-                }
+                Ok(p) => p.starts_with(base) || p.starts_with(std::env::temp_dir()),
                 Err(_) => {
                     warn!(path, "session-end: transcript_path outside allowed locations or unreadable, skipping");
                     false
@@ -1057,16 +1052,6 @@ pub async fn session_end(
                 Ok(serde_json::Value::Null)
             })
             .await;
-    }
-
-    if transcript.trim().len() < 500 {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "memoriesSaved": 0,
-            })),
-        )
-            .into_response();
     }
 
     const MAX_TRANSCRIPT_CHARS: usize = 100_000;
