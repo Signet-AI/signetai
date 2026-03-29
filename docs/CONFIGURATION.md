@@ -779,6 +779,8 @@ editing the config file is impractical.
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
+| `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start hook timeout in ms for Signet-managed clients and generated Claude Code hook configs |
+| `SIGNET_FETCH_TIMEOUT` | `15000` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset |
 | `SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS` | — | Comma-separated host allowlist for Anthropic endpoint overrides used during credentialed startup preflight (supports entries like `proxy.example.com` and `*.example.com`) |
 | `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
 

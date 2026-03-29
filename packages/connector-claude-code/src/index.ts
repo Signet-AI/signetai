@@ -18,6 +18,7 @@ import {
 	type UninstallResult,
 	atomicWriteJson,
 } from "@signet/connector-base";
+import { resolveSessionStartTimeoutMs } from "@signet/core";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -63,6 +64,11 @@ export interface SessionStartResult {
 export interface SessionEndResult {
 	success: boolean;
 	memoriesExtracted: number;
+}
+
+function sessionStartHookTimeout(): number {
+	const raw = process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT;
+	return resolveSessionStartTimeoutMs(raw) + 2_000;
 }
 
 // ============================================================================
@@ -319,11 +325,11 @@ export class ClaudeCodeConnector extends BaseConnector {
 				{
 					hooks: [
 						{
-							type: "command",
-							command:
-								`${signetCmd} hook session-start -H claude-code --project "${pwdExpr}"`,
-							timeout: 3000,
-						},
+								type: "command",
+								command:
+									`${signetCmd} hook session-start -H claude-code --project "${pwdExpr}"`,
+								timeout: sessionStartHookTimeout(),
+							},
 					],
 				},
 			];

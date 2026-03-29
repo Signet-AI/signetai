@@ -823,6 +823,8 @@ Environment Variables
 | `SIGNET_LOG_FILE` | Explicit daemon log file path | unset |
 | `SIGNET_LOG_DIR` | Daemon log directory override | `$SIGNET_WORKSPACE/.daemon/logs` |
 | `SIGNET_SQLITE_PATH` | macOS explicit SQLite dylib override used by the daemon before opening the database | unset |
+| `SIGNET_SESSION_START_TIMEOUT` | Session-start hook timeout in ms for Signet-managed clients and generated Claude Code hook configs | `15000` |
+| `SIGNET_FETCH_TIMEOUT` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset | `15000` |
 | `SIGNET_BYPASS` | Skip all hook processing (exit immediately) | unset |
 
 ---

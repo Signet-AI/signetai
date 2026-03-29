@@ -10,6 +10,8 @@ export const RUNTIME_PATH = "plugin" as const;
 export const HARNESS = "opencode" as const;
 export const READ_TIMEOUT = 5000;
 export const WRITE_TIMEOUT = 10000;
+export const SESSION_START_TIMEOUT_ENV = "SIGNET_SESSION_START_TIMEOUT";
+export const FETCH_TIMEOUT_ENV = "SIGNET_FETCH_TIMEOUT";
 
 export interface PluginConfig {
 	enabled?: boolean;

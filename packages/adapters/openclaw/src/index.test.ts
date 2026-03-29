@@ -7,7 +7,16 @@ import type { OpenClawPluginApi } from "./openclaw-types";
 // Mock readStaticIdentity so staticFallback() always returns a
 // truthy result regardless of whether ~/.agents exists on the host.
 mock.module("@signet/core", () => ({
-	readStaticIdentity: () => "mocked-static-identity",
+	readStaticIdentity: (_dir?: string, status?: string) => status ?? "mocked-static-identity",
+	resolveSessionStartTimeoutMs: (raw?: string) => {
+		if (!raw) return 15000;
+		const ms = Number.parseInt(raw, 10);
+		if (!Number.isFinite(ms) || ms < 1000) return 15000;
+		if (ms > 120000) return 120000;
+		return ms;
+	},
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS:
+		"[signet: daemon session-start timed out — running with static identity]",
 }));
 
 // Import after mock so the module picks up the stub.
@@ -28,6 +37,7 @@ let pathCounts = new Map<string, number>();
 let registeredServices: Array<{ stop: () => void | Promise<void> }> = [];
 let failSessionStartCount = 0;
 let failPromptSubmitCount = 0;
+let timeoutSessionStartCount = 0;
 let delaySessionStartMs = 0;
 let delayPromptSubmitMs = 0;
 let checkpointResponse: Record<string, unknown> | null = null;
@@ -132,6 +142,7 @@ beforeEach(() => {
 	registeredServices = [];
 	failSessionStartCount = 0;
 	failPromptSubmitCount = 0;
+	timeoutSessionStartCount = 0;
 	delaySessionStartMs = 0;
 	delayPromptSubmitMs = 0;
 	lastRememberBody = null;
@@ -154,6 +165,12 @@ beforeEach(() => {
 				case "/health":
 					return jsonResponse({ pid: 1234 });
 				case "/api/hooks/session-start":
+					if (timeoutSessionStartCount > 0) {
+						timeoutSessionStartCount -= 1;
+						const err = new Error("timed out");
+						Object.defineProperty(err, "name", { value: "TimeoutError" });
+						throw err;
+					}
 					if (delaySessionStartMs > 0) {
 						await Bun.sleep(delaySessionStartMs);
 					}
@@ -452,6 +469,18 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		await beforeAgentStart?.(event, ctx);
 
 		expect(getHits("/api/hooks/session-start")).toBe(1);
+	});
+
+	it("uses a timeout-specific static fallback when session-start times out", async () => {
+		timeoutSessionStartCount = 1;
+		const result = await signet.onSessionStart("openclaw", {
+			daemonUrl: "http://daemon.test",
+			agentId: "agent-1",
+			sessionKey: "session-timeout",
+		});
+
+		expect(result?.inject).toContain("session-start timed out");
+		expect(result?.inject).not.toContain("daemon offline");
 	});
 
 	it("fires pre-compaction hooks once across both OpenClaw compaction event names", async () => {

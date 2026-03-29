@@ -5,6 +5,8 @@ export const RUNTIME_PATH = "plugin" as const;
 export const READ_TIMEOUT = 5_000;
 export const WRITE_TIMEOUT = 10_000;
 export const PROMPT_SUBMIT_TIMEOUT = READ_TIMEOUT;
+export const SESSION_START_TIMEOUT_ENV = "SIGNET_SESSION_START_TIMEOUT";
+export const FETCH_TIMEOUT_ENV = "SIGNET_FETCH_TIMEOUT";
 
 export const HIDDEN_RECALL_CUSTOM_TYPE = "signet-oh-my-pi-hidden-recall";
 export const HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE = "signet-oh-my-pi-session-context";

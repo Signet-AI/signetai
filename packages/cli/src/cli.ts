@@ -1338,7 +1338,7 @@ async function ensureDaemonForSecrets(): Promise<boolean> {
 	return ensureDaemonRunning(isDaemonRunning);
 }
 
-const { fetchFromDaemon, secretApiCall } = createDaemonClient(DEFAULT_PORT);
+const { fetchFromDaemon, fetchDaemonResult, secretApiCall } = createDaemonClient(DEFAULT_PORT);
 const SKILLS_DIR = join(AGENTS_DIR, "skills");
 
 registerSecretCommands(program, {
@@ -1377,7 +1377,7 @@ registerWorkspaceCommands(program, {
 
 registerHookCommands(program, {
 	AGENTS_DIR,
-	fetchFromDaemon,
+	fetchDaemonResult,
 	readStaticIdentity,
 });
 
