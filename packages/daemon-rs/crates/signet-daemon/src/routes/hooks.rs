@@ -981,10 +981,11 @@ pub async fn session_end(
     }
 
     let is_clear = body.reason.as_deref() == Some("clear");
-    if !is_clear {
-        // Peek (non-destructive) so pending data survives a write failure.
-        // Only consume after the checkpoint write succeeds — otherwise the
-        // in-memory snapshot is intact and a retry can attempt it again.
+    // snapshot_retained: true when peek found a snapshot but the DB write
+    // failed.  The snapshot stays in-memory so a client retry can attempt the
+    // checkpoint again.  Error-path returns that allow retry must NOT call
+    // continuity.clear while this flag is set.
+    let snapshot_retained = if !is_clear {
         if let Some(snapshot) = state.continuity.peek_snapshot(&session_key) {
             let wrote = state
                 .pool
@@ -1000,11 +1001,17 @@ pub async fn session_end(
                 .await;
             if wrote.is_ok() {
                 state.continuity.consume(&session_key);
+                false
             } else {
                 warn!(session = %session_key, "session-end: checkpoint write failed, snapshot retained for retry");
+                true
             }
+        } else {
+            false
         }
-    }
+    } else {
+        false
+    };
     // sessions.release is deferred to after artifact/job persistence so no
     // concurrent session-end can race in while canonical writes are in flight.
 
@@ -1055,9 +1062,33 @@ pub async fn session_end(
             .into_response();
     }
 
-    let agent_id = normalize_agent_id(body.agent_id.as_deref())
-        .or_else(|| session_agent_id(Some(&session_key)))
-        .unwrap_or_else(|| "default".to_string());
+    // Validate body.agent_id against the agent encoded in session_key.
+    // resolve_remember_agent rejects if they disagree, preventing lineage from
+    // being written under a different agent than the one that opened the session.
+    let agent_id = match resolve_remember_agent(
+        body.agent_id.as_deref(),
+        headers.get("x-signet-agent-id").and_then(|v| v.to_str().ok()),
+        if session_key.trim().is_empty() {
+            None
+        } else {
+            Some(session_key.as_str())
+        },
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            state.sessions.release(&session_key);
+            if !snapshot_retained {
+                state.continuity.clear(&session_key);
+            }
+            state.dedup.clear_session_start(&session_key);
+            state.dedup.clear(&session_key);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
+    };
     let ended_at = chrono::Utc::now().to_rfc3339();
     let session_id = body
         .session_id
@@ -1192,7 +1223,12 @@ pub async fn session_end(
             .await
         {
             state.sessions.release(&session_key);
-            state.continuity.clear(&session_key);
+            // Transient failure — client may retry.  Preserve the snapshot if
+            // it was retained from a failed checkpoint write so the retry can
+            // still commit it.
+            if !snapshot_retained {
+                state.continuity.clear(&session_key);
+            }
             state.dedup.clear_session_start(&session_key);
             state.dedup.clear(&session_key);
             return (
@@ -1261,11 +1297,13 @@ pub async fn session_end(
             (StatusCode::OK, Json(val)).into_response()
         }
         Err(e) => {
-            // Enqueue failed — job will not run, so in-memory state is stale.
-            // Clear it so a future retry starts clean rather than accumulating
-            // ghost entries.
+            // Enqueue failed — release claim so a retry can reclaim.  Preserve
+            // the snapshot if it was retained from a failed checkpoint write so
+            // the retry can still commit it.
             state.sessions.release(&session_key);
-            state.continuity.clear(&session_key);
+            if !snapshot_retained {
+                state.continuity.clear(&session_key);
+            }
             state.dedup.clear_session_start(&session_key);
             state.dedup.clear(&session_key);
             (
@@ -1722,13 +1760,22 @@ pub async fn compaction_complete(
     let captured_at = chrono::Utc::now().to_rfc3339();
     let harness_value = harness.to_string();
     let summary_value = summary.to_string();
-    let agent_id = normalize_agent_id(body.agent_id.as_deref())
-        .or_else(|| {
-            body.session_key
-                .as_deref()
-                .and_then(|key| session_agent_id(Some(key)))
-        })
-        .unwrap_or_else(|| "default".to_string());
+    // Validate body.agent_id against the agent encoded in session_key so
+    // compaction lineage can't be attributed to an arbitrary caller-supplied id.
+    let agent_id = match resolve_remember_agent(
+        body.agent_id.as_deref(),
+        headers.get("x-signet-agent-id").and_then(|v| v.to_str().ok()),
+        body.session_key.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response();
+        }
+    };
     let sentence = resolve_memory_sentence(
         &summary_value,
         body.project.as_deref(),
