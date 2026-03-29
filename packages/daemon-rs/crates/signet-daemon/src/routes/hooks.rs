@@ -224,24 +224,25 @@ fn pipeline_enabled(state: &AppState) -> bool {
 
 /// Returns true when `canonical` is inside an allowed base directory.
 ///
-/// The TS daemon trusts `transcriptPath` at the network level (global auth
-/// middleware).  Here we apply a daemon-level allowlist so that even if the
-/// auth layer is misconfigured, an arbitrary caller cannot read files outside
-/// the expected workspace roots.  Allowed bases:
-///   - $HOME            (covers connector default log directories)
-///   - /tmp             (covers ephemeral harness transcript staging)
-///   - SIGNET_WORKSPACE (covers memory/ subdirectory artifacts)
-fn transcript_path_allowed(canonical: &Path, workspace: &Path) -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() && canonical.starts_with(&home) {
-        return true;
-    }
-    if canonical.starts_with("/tmp") {
-        return true;
-    }
+/// Restricted to the two connector-owned roots:
+///   - SIGNET_WORKSPACE (`state.config.base_path`) — memory/, session logs
+///   - project CWD (`body.cwd`, when provided) — in-project transcripts
+///
+/// `$HOME` and `/tmp` are intentionally excluded: they are too broad and
+/// would allow callers to exfiltrate `~/.ssh/*`, cloud credentials, or any
+/// world-readable temp file.  The TS daemon relies on the global auth
+/// middleware for this boundary; daemon-rs enforces it explicitly here.
+fn transcript_path_allowed(canonical: &Path, workspace: &Path, project: Option<&str>) -> bool {
     if let Ok(ws) = workspace.canonicalize() {
-        if canonical.starts_with(ws) {
+        if canonical.starts_with(&ws) {
             return true;
+        }
+    }
+    if let Some(proj) = project.filter(|p| !p.trim().is_empty()) {
+        if let Ok(proj_canonical) = Path::new(proj).canonicalize() {
+            if canonical.starts_with(proj_canonical) {
+                return true;
+            }
         }
     }
     false
@@ -1127,36 +1128,77 @@ pub async fn session_end(
     // artifact always receives the unmodified original.  Read via the
     // canonicalized path (not the caller-supplied string) to close the TOCTOU
     // window between symlink-resolution and open.
-    let transcript = body
+    //
+    // If transcript_path was supplied but unreadable/outside-allowlist, that
+    // is a hard error: silently falling back to "" would drop the session's
+    // lineage without telling the caller.  Continuity is preserved so the
+    // caller can retry once the file is accessible.
+    let transcript = if let Some(path) = body
         .transcript_path
         .as_deref()
         .filter(|p| !p.trim().is_empty())
-        .and_then(|path| {
-            // Canonicalize so the read is from the real inode, not the
-            // caller-supplied string.  A symlink swap after canonicalize()
-            // cannot redirect the subsequent open because we open the
-            // resolved canonical path — not the original string.
-            let canonical = match fs::canonicalize(path) {
-                Ok(p) => p,
-                Err(_) => {
-                    warn!(path, "session-end: transcript_path unresolvable, skipping");
-                    return None;
-                }
-            };
-            // Allowlist: only read from known safe roots.  The TS daemon relies
-            // on the global auth middleware for this protection; daemon-rs adds an
-            // explicit directory check as defence-in-depth.
-            if !transcript_path_allowed(&canonical, &state.config.base_path) {
-                warn!(
-                    path = %canonical.display(),
-                    "session-end: transcript_path outside allowed roots, skipping"
-                );
-                return None;
+    {
+        // Canonicalize so the read is from the real inode, not the
+        // caller-supplied string.  A symlink swap after canonicalize()
+        // cannot redirect the subsequent open because we open the
+        // resolved canonical path — not the original string.
+        let canonical = match fs::canonicalize(path) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(path, error = %e, "session-end: transcript_path unresolvable");
+                state.sessions.release(&session_key);
+                // Preserve continuity: caller should retry when the file appears.
+                state.dedup.clear_session_start(&session_key);
+                state.dedup.clear(&session_key);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("transcript_path unresolvable: {e}")})),
+                )
+                    .into_response();
             }
-            fs::read_to_string(&canonical).ok()
-        })
-        .or_else(|| body.transcript.as_deref().map(str::to_string))
-        .unwrap_or_default();
+        };
+        // Allowlist: restrict to workspace and project roots.  The TS daemon
+        // relies on the global auth middleware; daemon-rs enforces this
+        // explicitly as defence-in-depth.
+        if !transcript_path_allowed(
+            &canonical,
+            &state.config.base_path,
+            body.cwd.as_deref(),
+        ) {
+            warn!(
+                path = %canonical.display(),
+                "session-end: transcript_path outside allowed roots"
+            );
+            state.sessions.release(&session_key);
+            state.dedup.clear_session_start(&session_key);
+            state.dedup.clear(&session_key);
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "transcript_path outside allowed workspace roots"})),
+            )
+                .into_response();
+        }
+        match fs::read_to_string(&canonical) {
+            Ok(content) => content,
+            Err(e) => {
+                warn!(path = %canonical.display(), error = %e, "session-end: transcript_path read failed");
+                state.sessions.release(&session_key);
+                // Preserve continuity: caller should retry.
+                state.dedup.clear_session_start(&session_key);
+                state.dedup.clear(&session_key);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": format!("transcript_path read failed: {e}")})),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        body.transcript
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_default()
+    };
 
     // Normalized view used for LLM inputs (summary job) and the legacy DB
     // upsert.  The canonical artifact above gets the raw original.
