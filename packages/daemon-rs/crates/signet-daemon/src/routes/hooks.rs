@@ -987,11 +987,15 @@ pub async fn session_end(
             // a caller could send cwd:"/" to bypass any path check.
             let base = &state.config.base_path;
             match fs::canonicalize(path) {
-                // Allow workspace and system temp — temp paths like
-                // /tmp/session-transcript.txt are documented in the API
-                // (see docs/API.md session-end examples). Auth middleware is
-                // the primary access control layer for team/hybrid mode.
-                Ok(p) => p.starts_with(base) || p.starts_with(std::env::temp_dir()),
+                // Allow workspace or the signet-managed temp subdir only.
+                // Connectors should write transcript files to
+                // $TMPDIR/signet/ (e.g. /tmp/signet/session.txt).
+                // Full temp_dir() is intentionally excluded to avoid
+                // reading unrelated host temp files in team/hybrid mode.
+                Ok(p) => {
+                    p.starts_with(base)
+                        || p.starts_with(std::env::temp_dir().join("signet"))
+                }
                 Err(_) => {
                     warn!(path, "session-end: transcript_path outside allowed locations or unreadable, skipping");
                     false
@@ -1071,6 +1075,14 @@ pub async fn session_end(
             )
                 .into_response();
         }
+    }
+
+    if transcript.trim().is_empty() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0, "queued": false})),
+        )
+            .into_response();
     }
 
     const MAX_TRANSCRIPT_CHARS: usize = 100_000;

@@ -1654,7 +1654,7 @@ for in-context injection.
   "userPrompt": "How do I set up dark mode?",
   "lastAssistantMessage": "Earlier we discussed using CSS variables for theme tokens.",
   "sessionKey": "session-uuid",
-  "transcriptPath": "/tmp/session-transcript.txt",
+  "transcriptPath": "/tmp/signet/session-transcript.txt",
   "runtimePath": "plugin"
 }
 ```
@@ -1681,7 +1681,7 @@ Releases the session's runtime path claim.
   "harness": "claude-code",
   "sessionKey": "session-uuid",
   "sessionId": "session-uuid",
-  "transcriptPath": "/tmp/session-transcript.txt",
+  "transcriptPath": "/tmp/signet/session-transcript.txt",
   "runtimePath": "plugin"
 }
 ```
