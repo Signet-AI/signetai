@@ -242,7 +242,11 @@ fn normalize_session_transcript(harness: &str, raw: &str) -> String {
         }
     }
 
-    if parsed * 10 < lines.len() * 6 {
+    // Fall back to raw if fewer than 60% of lines parsed as JSON, OR if we
+    // parsed enough JSON but extracted zero messages (valid-but-unrecognized
+    // JSONL format).  An empty normalized string would silently discard all
+    // input content; raw is always preferable to silence.
+    if parsed * 10 < lines.len() * 6 || normalized.is_empty() {
         raw.to_string()
     } else {
         normalized.join("\n")
@@ -1821,9 +1825,15 @@ pub async fn compaction_complete(
                 // session for the project: that fallback would silently attach
                 // an unrelated compaction to a different session's lineage chain,
                 // which corrupts the artifact ancestry visible in MEMORY.md.
+                //
+                // Hash includes agent_id + project + summary so that two
+                // different sessions/projects producing the same summary text
+                // for the same agent don't collapse into one lineage record.
                 let sid = session_key.clone().unwrap_or_else(|| {
                     let mut h = Sha256::new();
                     h.update(agent_id.as_bytes());
+                    h.update(b":");
+                    h.update(project.as_deref().unwrap_or("").as_bytes());
                     h.update(b":");
                     h.update(summary_value.as_bytes());
                     let digest = h.finalize();
