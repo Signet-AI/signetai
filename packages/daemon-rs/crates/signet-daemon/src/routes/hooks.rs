@@ -224,32 +224,24 @@ fn pipeline_enabled(state: &AppState) -> bool {
 
 /// Returns true when `canonical` is inside an allowed base directory.
 ///
-/// Allowed roots:
+/// Allowed roots (trusted — not caller-supplied):
 ///   - SIGNET_WORKSPACE (`state.config.base_path`) — memory/, session logs
-///   - project CWD (`body.cwd`, when provided) — in-project transcripts
-///   - `/tmp/signet/` — documented staging convention in API.md; narrower
-///     than all of `/tmp` to prevent cross-tenant temp file reads
+///   - `/tmp/signet/` — documented staging convention in API.md; scoped to
+///     the signet-owned prefix to prevent reads of arbitrary /tmp content
 ///
-/// Full `$HOME` and arbitrary `/tmp` are intentionally excluded: they would
-/// allow callers to exfiltrate `~/.ssh/*`, cloud credentials, or other
-/// world-readable files.  The TS daemon relies on the global auth middleware
-/// for this boundary; daemon-rs enforces it explicitly here.
-fn transcript_path_allowed(canonical: &Path, workspace: &Path, project: Option<&str>) -> bool {
+/// `body.cwd` is intentionally excluded: it is caller-controlled and can be
+/// set to `/`, `$HOME`, etc. to bypass the allowlist.  Only daemon-owned
+/// or convention-scoped roots are accepted.  The TS daemon relies on the
+/// global auth middleware for this boundary; daemon-rs enforces it here.
+fn transcript_path_allowed(canonical: &Path, workspace: &Path) -> bool {
     if let Ok(ws) = workspace.canonicalize() {
         if canonical.starts_with(&ws) {
             return true;
         }
     }
-    if let Some(proj) = project.filter(|p| !p.trim().is_empty()) {
-        if let Ok(proj_canonical) = Path::new(proj).canonicalize() {
-            if canonical.starts_with(proj_canonical) {
-                return true;
-            }
-        }
-    }
-    // Documented staging convention: connectors may write transcripts to
-    // /tmp/signet/ before sending session-end.  Scoped to the signet prefix
-    // so other /tmp content cannot be read.
+    // Documented staging convention: connectors write to /tmp/signet/ before
+    // sending session-end (see docs/API.md examples).  Scoped to the signet
+    // prefix so other /tmp content cannot be read.
     if canonical.starts_with("/tmp/signet") {
         return true;
     }
@@ -1165,14 +1157,10 @@ pub async fn session_end(
                     .into_response();
             }
         };
-        // Allowlist: restrict to workspace and project roots.  The TS daemon
-        // relies on the global auth middleware; daemon-rs enforces this
-        // explicitly as defence-in-depth.
-        if !transcript_path_allowed(
-            &canonical,
-            &state.config.base_path,
-            body.cwd.as_deref(),
-        ) {
+        // Allowlist: restrict to daemon-owned roots (workspace, /tmp/signet/).
+        // body.cwd is excluded — it is caller-controlled and could widen the
+        // readable root to / or $HOME.  See transcript_path_allowed() docs.
+        if !transcript_path_allowed(&canonical, &state.config.base_path) {
             warn!(
                 path = %canonical.display(),
                 "session-end: transcript_path outside allowed roots"
