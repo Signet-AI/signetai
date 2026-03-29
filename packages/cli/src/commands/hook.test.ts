@@ -59,6 +59,20 @@ describe("buildSessionStartFallback", () => {
 			status ?? "[signet: daemon offline — running with static identity]";
 		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "offline")).toContain("daemon offline");
 	});
+
+	test("degrades to static identity on http error instead of exiting", () => {
+		const readStaticIdentity = (_dir: string, status?: string): string | null =>
+			status ?? "[signet: daemon offline — running with static identity]";
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "http")).not.toBeNull();
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "http")).toContain("daemon offline");
+	});
+
+	test("degrades to static identity on invalid-json instead of exiting", () => {
+		const readStaticIdentity = (_dir: string, status?: string): string | null =>
+			status ?? "[signet: daemon offline — running with static identity]";
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "invalid-json")).not.toBeNull();
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "invalid-json")).toContain("daemon offline");
+	});
 });
 
 describe("buildSessionEndBody", () => {

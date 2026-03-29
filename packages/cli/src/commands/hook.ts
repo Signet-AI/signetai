@@ -30,11 +30,12 @@ export function resolveSessionStartTimeout(): number {
 export function buildSessionStartFallback(
 	readStaticIdentity: HookDeps["readStaticIdentity"],
 	agentsDir: string,
-	reason: "offline" | "timeout",
+	reason: "offline" | "timeout" | "http" | "invalid-json",
 ): string | null {
 	if (reason === "timeout") {
 		return readStaticIdentity(agentsDir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS);
 	}
+	// offline, http error, invalid-json — all degrade to static identity
 	return readStaticIdentity(agentsDir);
 }
 
@@ -78,12 +79,9 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			});
 			if (!res.ok) {
 				if (res.reason === "http") {
-					process.stderr.write(`[signet] daemon session-start failed with HTTP ${res.status ?? "unknown"}\n`);
-					process.exit(1);
-				}
-				if (res.reason === "invalid-json") {
-					process.stderr.write("[signet] daemon session-start returned invalid JSON\n");
-					process.exit(1);
+					process.stderr.write(`[signet] daemon session-start failed with HTTP ${res.status ?? "unknown"} — using static identity\n`);
+				} else if (res.reason === "invalid-json") {
+					process.stderr.write("[signet] daemon session-start returned invalid JSON — using static identity\n");
 				}
 				const fallback = buildSessionStartFallback(
 					deps.readStaticIdentity,
