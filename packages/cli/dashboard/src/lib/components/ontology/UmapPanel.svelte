@@ -1,8 +1,12 @@
 <script lang="ts">
 	import ChevronDown from "@lucide/svelte/icons/chevron-down";
-	import { onMount } from "svelte";
 	import { ontology, loadProjection } from "./ontology-state.svelte";
 	import type { ProjectionNode } from "$lib/api";
+
+	interface Props {
+		agentId?: string;
+	}
+	const { agentId = "default" }: Props = $props();
 
 	const CLUSTER_COLORS = [
 		"#3b82f6", // blue
@@ -69,8 +73,9 @@
 		return PAD + (1 - (y - bounds.minY) / (bounds.maxY - bounds.minY)) * (SVG_H - PAD * 2);
 	}
 
-	onMount(() => {
-		loadProjection();
+	// Reload whenever agentId changes (not just on mount)
+	$effect(() => {
+		loadProjection(agentId);
 	});
 </script>
 

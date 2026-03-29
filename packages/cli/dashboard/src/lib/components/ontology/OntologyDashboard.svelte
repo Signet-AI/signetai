@@ -63,7 +63,7 @@
 						</button>
 					</div>
 					<div class="umap-float-body">
-						<UmapPanel />
+						<UmapPanel {agentId} />
 					</div>
 				</div>
 			{:else}

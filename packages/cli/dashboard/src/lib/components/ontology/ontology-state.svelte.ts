@@ -109,6 +109,10 @@ export async function loadGraph(agentId = "default"): Promise<void> {
 	const gen = ++graphGeneration;
 	ontology.loading = true;
 	ontology.error = null;
+	// Clear immediately so the canvas doesn't show stale cross-agent data
+	ontology.graphNodes = [];
+	ontology.graphEdges = [];
+	ontology.entities = [];
 	try {
 		const data = await getConstellationOverlay(agentId);
 		if (gen !== graphGeneration) return;
@@ -248,10 +252,10 @@ export async function loadAspectDetail(
 
 // --- Projection data ---
 
-export async function loadProjection(): Promise<void> {
+export async function loadProjection(agentId = "default"): Promise<void> {
 	ontology.loadingProjection = true;
 	try {
-		const result = await getProjection(2, { limit: 500 });
+		const result = await getProjection(2, { limit: 500, agentId });
 		ontology.projection = result;
 	} finally {
 		ontology.loadingProjection = false;

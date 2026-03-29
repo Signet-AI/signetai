@@ -721,6 +721,7 @@ export interface ProjectionQueryOptions {
 	until?: string;
 	importanceMin?: number;
 	importanceMax?: number;
+	agentId?: string;
 }
 
 export async function getProjection(
@@ -743,6 +744,7 @@ export async function getProjection(
 		if (typeof options.until === "string" && options.until.length > 0) params.set("until", options.until);
 		if (typeof options.importanceMin === "number") params.set("importanceMin", String(options.importanceMin));
 		if (typeof options.importanceMax === "number") params.set("importanceMax", String(options.importanceMax));
+		if (typeof options.agentId === "string" && options.agentId.length > 0) params.set("agent_id", options.agentId);
 
 		const response = await fetch(`${API_BASE}/api/embeddings/projection?${params}`);
 		if (response.status === 202) return { status: "computing" };
