@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { DependencyType } from "@signet/core";
 import type { DbAccessor, WriteDb } from "./db-accessor";
-import { writeDependencyHistory } from "./dependency-history";
 import { recordAgentFeedbackInner } from "./session-memories";
 
 export interface FeedbackPath {
@@ -311,19 +310,6 @@ function updateDependencies(
 				? clamp(Math.max(row.confidence + cfg.confidenceDelta * mag, base), cfg.minConfidence, 1)
 				: clamp(Math.min(row.confidence - cfg.confidenceDelta * mag, base), cfg.minConfidence, 1);
 		update.run(strength, confidence, next, ts, depId, agentId);
-		writeDependencyHistory(db, {
-			dependencyId: depId,
-			sourceEntityId: row.source_entity_id,
-			targetEntityId: row.target_entity_id,
-			agentId,
-			dependencyType: row.dependency_type,
-			event: "updated",
-			changedBy: "path-feedback",
-			reason: next ?? "path feedback updated dependency",
-			previousReason: row.reason,
-			createdAt: ts,
-			metadata: JSON.stringify({ rating, strength, confidence }),
-		});
 		count++;
 	}
 	return count;
@@ -521,18 +507,6 @@ function maybePromoteDirected(
 			  dependency_type, strength, confidence, reason, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, NULL, 'related_to', ?, 0.5, 'pattern-matched', ?, ?)`,
 		).run(id, edgeSource, edgeTarget, agentId, strength, ts, ts);
-		writeDependencyHistory(db, {
-			dependencyId: id,
-			sourceEntityId: edgeSource,
-			targetEntityId: edgeTarget,
-			agentId,
-			dependencyType: "related_to",
-			event: "created",
-			changedBy: "path-feedback",
-			reason: "pattern-matched",
-			createdAt: ts,
-			metadata: JSON.stringify({ npmi, coSessions: co, totalSessions: total }),
-		});
 		return true;
 	}
 	db.prepare(
@@ -544,18 +518,6 @@ function maybePromoteDirected(
 		 WHERE id = ?
 		   AND agent_id = ?`,
 	).run(Math.max(existing.strength, strength), Math.max(existing.confidence, 0.5), ts, existing.id, agentId);
-	writeDependencyHistory(db, {
-		dependencyId: existing.id,
-		sourceEntityId: edgeSource,
-		targetEntityId: edgeTarget,
-		agentId,
-		dependencyType: "related_to",
-		event: "updated",
-		changedBy: "path-feedback",
-		reason: "pattern-matched",
-		createdAt: ts,
-		metadata: JSON.stringify({ npmi, coSessions: co, totalSessions: total }),
-	});
 	return true;
 }
 

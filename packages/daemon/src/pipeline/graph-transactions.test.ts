@@ -218,7 +218,7 @@ describe("graph-transactions", () => {
 				.query(
 					`SELECT event, changed_by, reason, metadata
 					 FROM entity_dependency_history
-					 WHERE changed_by = 'graph-transactions'
+					 WHERE changed_by = 'db-trigger'
 					 ORDER BY created_at DESC
 					 LIMIT 1`,
 				)
@@ -231,9 +231,9 @@ describe("graph-transactions", () => {
 				  }
 				| undefined;
 			expect(hist?.event).toBe("created");
-			expect(hist?.changed_by).toBe("graph-transactions");
+			expect(hist?.changed_by).toBe("db-trigger");
 			expect(hist?.reason).toContain("mem-audit");
-			expect(hist?.metadata).toContain("mem-audit");
+			expect(hist?.metadata).toContain("trg_entity_dependencies_audit_insert");
 		});
 	});
 

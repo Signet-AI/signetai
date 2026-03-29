@@ -10,10 +10,7 @@
 import type { ExtractedEntity } from "@signet/core";
 import type { WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
-import {
-	requireDependencyReason,
-	writeDependencyHistory,
-} from "../dependency-history";
+import { requireDependencyReason } from "../dependency-history";
 import { isDecisionContent } from "../inline-entity-linker";
 
 // ---------------------------------------------------------------------------
@@ -422,18 +419,6 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 						input.now,
 						input.now,
 					);
-					writeDependencyHistory(db, {
-						dependencyId: id,
-						sourceEntityId: resolved[i],
-						targetEntityId: resolved[j],
-						agentId: input.agentId,
-						dependencyType: "related_to",
-						event: "created",
-						changedBy: "graph-transactions",
-						reason,
-						createdAt: input.now,
-						metadata: JSON.stringify({ memoryId: input.sourceMemoryId }),
-					});
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
 					if (!msg.includes("UNIQUE constraint")) throw e;

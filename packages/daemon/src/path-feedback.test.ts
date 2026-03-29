@@ -148,15 +148,16 @@ describe("recordPathFeedback", () => {
 				`SELECT event, changed_by, metadata
 				 FROM entity_dependency_history
 				 WHERE dependency_id = 'dep-a'
-				 ORDER BY created_at DESC
+				   AND event = 'updated'
+				 ORDER BY rowid DESC
 				 LIMIT 1`,
 			)
 			.get() as
 			| { event: string; changed_by: string; metadata: string | null }
 			| undefined;
 		expect(hist?.event).toBe("updated");
-		expect(hist?.changed_by).toBe("path-feedback");
-		expect(hist?.metadata).toContain("\"rating\":1");
+		expect(hist?.changed_by).toBe("db-trigger");
+		expect(hist?.metadata).toContain("trg_entity_dependencies_audit_update");
 	});
 
 	it("skips IDs that do not belong to the rated session", () => {
@@ -276,8 +277,8 @@ describe("recordPathFeedback", () => {
 			.get() as
 			| { event: string; changed_by: string; metadata: string | null }
 			| undefined;
-		expect(forwardHist?.changed_by).toBe("path-feedback");
-		expect(forwardHist?.metadata).toContain("\"coSessions\":3");
+		expect(forwardHist?.changed_by).toBe("db-trigger");
+		expect(forwardHist?.metadata).toContain("trg_entity_dependencies_audit_insert");
 
 		const reverse = db
 			.prepare(

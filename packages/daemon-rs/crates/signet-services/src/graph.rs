@@ -303,31 +303,6 @@ pub fn delete_attribute(conn: &Connection, id: &str, agent_id: &str) -> Result<(
 // Dependency CRUD
 // ---------------------------------------------------------------------------
 
-fn write_dependency_history(
-    conn: &Connection,
-    dep_id: &str,
-    src: &str,
-    tgt: &str,
-    agent_id: &str,
-    dep_type: &str,
-    event: &str,
-    changed_by: &str,
-    reason: &str,
-    prev_reason: Option<&str>,
-    ts: &str,
-) -> Result<(), CoreError> {
-    let id = uuid::Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO entity_dependency_history
-         (id, dependency_id, source_entity_id, target_entity_id, agent_id,
-          dependency_type, event, changed_by, reason, previous_reason,
-          metadata, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,?11)",
-        params![id, dep_id, src, tgt, agent_id, dep_type, event, changed_by, reason, prev_reason, ts],
-    )?;
-    Ok(())
-}
-
 pub struct UpsertDepInput<'a> {
     pub source_entity_id: &'a str,
     pub target_entity_id: &'a str,
@@ -368,7 +343,7 @@ pub fn upsert_dependency(
         )
         .ok();
 
-    if let Some((eid, _, prev_reason)) = existing {
+    if let Some((eid, _, _)) = existing {
         let s = strength.unwrap_or(0.5);
         conn.execute(
             "UPDATE entity_dependencies
@@ -376,23 +351,6 @@ pub fn upsert_dependency(
                  reason = COALESCE(?5, reason)
              WHERE id = ?4",
             params![s, aspect_id, ts, eid, reason],
-        )?;
-        // History reason reflects the actual stored value after COALESCE:
-        // if caller provided a reason use it, otherwise the stored reason is unchanged.
-        let reason_str = reason
-            .unwrap_or_else(|| prev_reason.as_deref().unwrap_or("updated without reason"));
-        write_dependency_history(
-            conn,
-            &eid,
-            source_entity_id,
-            target_entity_id,
-            agent_id,
-            dependency_type,
-            "updated",
-            "daemon-rs:graph",
-            reason_str,
-            prev_reason.as_deref(),
-            &ts,
         )?;
         let mut stmt = conn.prepare_cached("SELECT * FROM entity_dependencies WHERE id = ?1")?;
         let dep = stmt.query_row(params![eid], row_to_dependency)?;
@@ -416,20 +374,6 @@ pub fn upsert_dependency(
                 reason,
                 ts
             ],
-        )?;
-        let reason_str = reason.unwrap_or("dependency created without reason");
-        write_dependency_history(
-            conn,
-            &id,
-            source_entity_id,
-            target_entity_id,
-            agent_id,
-            dependency_type,
-            "created",
-            "daemon-rs:graph",
-            reason_str,
-            None,
-            &ts,
         )?;
         let mut stmt = conn.prepare_cached("SELECT * FROM entity_dependencies WHERE id = ?1")?;
         let dep = stmt.query_row(params![id], row_to_dependency)?;

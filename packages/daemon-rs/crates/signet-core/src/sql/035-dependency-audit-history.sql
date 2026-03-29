@@ -66,6 +66,8 @@ WHERE NOT EXISTS (
 
 DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert;
 DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update;
+DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_insert;
+DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_update;
 DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_delete;
 
 CREATE TRIGGER trg_entity_dependencies_related_to_reason_insert
@@ -86,8 +88,56 @@ BEGIN
     SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason');
 END;
 
--- DB-level delete audit: captures FK cascades and direct SQL deletes that
--- bypass the application layer.
+-- DB-level audit triggers: capture all insert/update/delete events at the
+-- database layer, covering FK cascades, direct SQL, and application paths.
+CREATE TRIGGER trg_entity_dependencies_audit_insert
+AFTER INSERT ON entity_dependencies
+FOR EACH ROW
+BEGIN
+    INSERT INTO entity_dependency_history (
+        id, dependency_id, source_entity_id, target_entity_id, agent_id,
+        dependency_type, event, changed_by, reason, previous_reason,
+        metadata, created_at
+    ) VALUES (
+        lower(hex(randomblob(16))),
+        NEW.id,
+        NEW.source_entity_id,
+        NEW.target_entity_id,
+        NEW.agent_id,
+        NEW.dependency_type,
+        'created',
+        'db-trigger',
+        COALESCE(NEW.reason, 'created without reason'),
+        NULL,
+        '{"source":"trg_entity_dependencies_audit_insert"}',
+        datetime('now')
+    );
+END;
+
+CREATE TRIGGER trg_entity_dependencies_audit_update
+AFTER UPDATE OF strength, aspect_id, reason, confidence ON entity_dependencies
+FOR EACH ROW
+BEGIN
+    INSERT INTO entity_dependency_history (
+        id, dependency_id, source_entity_id, target_entity_id, agent_id,
+        dependency_type, event, changed_by, reason, previous_reason,
+        metadata, created_at
+    ) VALUES (
+        lower(hex(randomblob(16))),
+        NEW.id,
+        NEW.source_entity_id,
+        NEW.target_entity_id,
+        NEW.agent_id,
+        NEW.dependency_type,
+        'updated',
+        'db-trigger',
+        COALESCE(NEW.reason, 'updated without reason'),
+        OLD.reason,
+        '{"source":"trg_entity_dependencies_audit_update"}',
+        datetime('now')
+    );
+END;
+
 CREATE TRIGGER trg_entity_dependencies_audit_delete
 AFTER DELETE ON entity_dependencies
 FOR EACH ROW

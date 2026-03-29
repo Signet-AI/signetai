@@ -20,10 +20,7 @@ import type {
 	DependencyType,
 	TaskStatus,
 } from "@signet/core";
-import {
-	requireDependencyReason,
-	writeDependencyHistory,
-} from "./dependency-history";
+import { requireDependencyReason } from "./dependency-history";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -387,19 +384,6 @@ export function upsertDependency(
 				existing.id as string,
 				params.agentId,
 			);
-			writeDependencyHistory(db, {
-				dependencyId: existing.id as string,
-				sourceEntityId: params.sourceEntityId,
-				targetEntityId: params.targetEntityId,
-				agentId: params.agentId,
-				dependencyType: params.dependencyType,
-				event: "updated",
-				changedBy: "knowledge-graph",
-				reason: reason ?? "updated without reason",
-				previousReason:
-					typeof existing.reason === "string" ? existing.reason : null,
-				createdAt: ts,
-			});
 			return rowToDependency({
 				...existing,
 				strength: params.strength ?? (existing.strength as number),
@@ -431,18 +415,6 @@ export function upsertDependency(
 			ts,
 			ts,
 		);
-		writeDependencyHistory(db, {
-			dependencyId: id,
-			sourceEntityId: params.sourceEntityId,
-			targetEntityId: params.targetEntityId,
-			agentId: params.agentId,
-			dependencyType: params.dependencyType,
-			event: "created",
-			changedBy: "knowledge-graph",
-			reason: reason ?? "created without reason",
-			createdAt: ts,
-		});
-
 		return {
 			id,
 			sourceEntityId: params.sourceEntityId,

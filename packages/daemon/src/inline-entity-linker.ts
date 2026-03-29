@@ -11,10 +11,7 @@
  */
 
 import type { WriteDb } from "./db-accessor";
-import {
-	requireDependencyReason,
-	writeDependencyHistory,
-} from "./dependency-history";
+import { requireDependencyReason } from "./dependency-history";
 
 // ---------------------------------------------------------------------------
 // Decision pattern detection
@@ -426,18 +423,6 @@ export function linkMemoryToEntities(
 						  dependency_type, strength, confidence, reason, created_at, updated_at)
 						 VALUES (?, ?, ?, ?, 'related_to', 0.3, 0.5, ?, ?, ?)`,
 					).run(id, ids[i], ids[j], agentId, reason, now, now);
-					writeDependencyHistory(db, {
-						dependencyId: id,
-						sourceEntityId: ids[i],
-						targetEntityId: ids[j],
-						agentId,
-						dependencyType: "related_to",
-						event: "created",
-						changedBy: "inline-entity-linker",
-						reason,
-						createdAt: now,
-						metadata: JSON.stringify({ memoryId }),
-					});
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
 					if (!msg.includes("UNIQUE constraint")) throw e;
