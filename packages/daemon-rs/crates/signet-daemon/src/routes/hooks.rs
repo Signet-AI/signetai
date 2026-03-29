@@ -961,6 +961,25 @@ pub async fn session_end(
             .into_response();
     }
 
+    // Shadow mode: pipeline is "enabled" for extraction telemetry but workers
+    // do not start, so artifact writes and job enqueues would pile up forever.
+    // Skip both and return early — shadow mode observes without persisting.
+    let in_shadow = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .map(|p| p.shadow_mode)
+        .unwrap_or(false);
+    if in_shadow {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0, "shadow": true})),
+        )
+            .into_response();
+    }
+
     let agent_id = normalize_agent_id(body.agent_id.as_deref())
         .or_else(|| session_agent_id(Some(&session_key)))
         .unwrap_or_else(|| "default".to_string());
@@ -1010,6 +1029,20 @@ pub async fn session_end(
                 .map(|raw| normalize_session_transcript(harness, raw))
         })
         .unwrap_or_default();
+
+    // Gate and clamp before any writes so DB and artifact always receive
+    // the same bounded content, not the raw unbounded input.
+    if transcript.trim().is_empty() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0, "queued": false})),
+        )
+            .into_response();
+    }
+    const MAX_TRANSCRIPT_CHARS: usize = 100_000;
+    if transcript.len() > MAX_TRANSCRIPT_CHARS {
+        transcript = format!("{}\n[truncated]", &transcript[..MAX_TRANSCRIPT_CHARS]);
+    }
 
     if !transcript.trim().is_empty() && !session_key.trim().is_empty() {
         let transcript_value = transcript.clone();
@@ -1075,19 +1108,6 @@ pub async fn session_end(
             )
                 .into_response();
         }
-    }
-
-    if transcript.trim().is_empty() {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({"memoriesSaved": 0, "queued": false})),
-        )
-            .into_response();
-    }
-
-    const MAX_TRANSCRIPT_CHARS: usize = 100_000;
-    if transcript.len() > MAX_TRANSCRIPT_CHARS {
-        transcript = format!("{}\n[truncated]", &transcript[..MAX_TRANSCRIPT_CHARS]);
     }
 
     let harness_value = harness.to_string();
