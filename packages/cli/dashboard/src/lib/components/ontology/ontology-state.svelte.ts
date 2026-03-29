@@ -212,6 +212,10 @@ let detailGeneration = 0;
 export async function loadEntityDetail(entityId: string, agentId = "default"): Promise<void> {
 	const gen = ++detailGeneration;
 	ontology.loadingDetail = true;
+	ontology.detail = null;
+	ontology.detailAspects = [];
+	ontology.detailAttributes = new Map();
+	ontology.detailDependencies = [];
 	try {
 		const [detail, aspects, deps] = await Promise.all([
 			getKnowledgeEntity(entityId, agentId),
@@ -256,6 +260,7 @@ export async function loadAspectDetail(
 
 	const gen = ++aspectGeneration;
 	ontology.loadingAspect = true;
+	ontology.aspectAttrs = [];
 	try {
 		const attrs = await getKnowledgeAttributes(node.parentId, aspectId, { agentId });
 		if (gen !== aspectGeneration) return;
@@ -283,7 +288,10 @@ export async function loadProjection(agentId = "default"): Promise<void> {
 
 // --- Table stats ---
 
+let tableStatsGeneration = 0;
+
 export async function loadTableStats(table: string, agentId = "default"): Promise<void> {
+	const gen = ++tableStatsGeneration;
 	ontology.loadingTable = true;
 	ontology.tableStats = null;
 	try {
@@ -294,7 +302,7 @@ export async function loadTableStats(table: string, agentId = "default"): Promis
 			case "entity_dependencies":
 			case "entity_communities": {
 				const stats = await getKnowledgeStats(agentId);
-				if (ontology.schemaTable !== table) break;
+				if (gen !== tableStatsGeneration) break;
 				if (!stats) break;
 				const map: Record<string, number> = {
 					entities: stats.entityCount,
@@ -313,7 +321,7 @@ export async function loadTableStats(table: string, agentId = "default"): Promis
 			case "memories":
 			case "memory_entity_mentions": {
 				const { stats } = await getMemories(1, 0, agentId);
-				if (ontology.schemaTable !== table) break;
+				if (gen !== tableStatsGeneration) break;
 				// memory_entity_mentions count is not returned by the memories endpoint;
 				// report -1 (unknown) rather than a false zero
 				ontology.tableStats = {
@@ -325,7 +333,7 @@ export async function loadTableStats(table: string, agentId = "default"): Promis
 			}
 			case "embeddings": {
 				const data = await getEmbeddings(false, { limit: 1, agentId });
-				if (ontology.schemaTable !== table) break;
+				if (gen !== tableStatsGeneration) break;
 				ontology.tableStats = { table, rows: data.total };
 				break;
 			}
