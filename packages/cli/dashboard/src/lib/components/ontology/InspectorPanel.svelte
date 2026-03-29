@@ -38,7 +38,9 @@
 			const node = ontology.graphNodes.find((n) => n.id === sel.id && n.kind === "attribute");
 			if (node?.parentId && node.parentId !== lastAspectId) {
 				lastAspectId = node.parentId;
-				loadAspectDetail(node.parentId);
+				// Pass the attribute's own ID as triggeredBy so the guard in
+				// loadAspectDetail can check selected.id === attributeId, not aspectId
+				loadAspectDetail(node.parentId, sel.id);
 			}
 		} else if (!sel || sel.kind === "entity") {
 			lastAspectId = "";

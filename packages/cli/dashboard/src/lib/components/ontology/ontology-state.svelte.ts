@@ -222,15 +222,19 @@ export async function loadEntityDetail(entityId: string, agentId = "default"): P
 
 // --- Aspect detail ---
 
-export async function loadAspectDetail(aspectId: string, agentId = "default"): Promise<void> {
+export async function loadAspectDetail(
+	aspectId: string,
+	triggeredBy = aspectId,
+	agentId = "default",
+): Promise<void> {
 	const node = ontology.graphNodes.find((n) => n.id === aspectId && n.kind === "aspect");
 	if (!node?.parentId) return;
 
 	ontology.loadingAspect = true;
 	try {
 		const attrs = await getKnowledgeAttributes(node.parentId, aspectId, { agentId });
-		// Guard: bail if selection changed while loading
-		if (ontology.selected?.id !== aspectId) return;
+		// Guard: bail if the selection that triggered this load is no longer current
+		if (ontology.selected?.id !== triggeredBy) return;
 		ontology.aspectAttrs = attrs;
 	} finally {
 		ontology.loadingAspect = false;
@@ -262,6 +266,7 @@ export async function loadTableStats(table: string): Promise<void> {
 			case "entity_dependencies":
 			case "entity_communities": {
 				const stats = await getKnowledgeStats();
+				if (ontology.schemaTable !== table) break;
 				if (!stats) break;
 				const map: Record<string, number> = {
 					entities: stats.entityCount,
@@ -280,6 +285,7 @@ export async function loadTableStats(table: string): Promise<void> {
 			case "memories":
 			case "memory_entity_mentions": {
 				const { stats } = await getMemories(1, 0);
+				if (ontology.schemaTable !== table) break;
 				ontology.tableStats = {
 					table,
 					rows: table === "memories" ? stats.total : 0,
@@ -289,6 +295,7 @@ export async function loadTableStats(table: string): Promise<void> {
 			}
 			case "embeddings": {
 				const data = await getEmbeddings(false, { limit: 1 });
+				if (ontology.schemaTable !== table) break;
 				ontology.tableStats = { table, rows: data.total };
 				break;
 			}
