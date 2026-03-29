@@ -327,6 +327,19 @@ fn enqueue_summary_job(
     started_at: Option<&str>,
     ended_at: Option<&str>,
 ) -> rusqlite::Result<String> {
+    // Idempotency: if a non-failed job already exists for (agent_id, session_id,
+    // trigger), return its id rather than inserting a duplicate.  This prevents
+    // session-end retries from enqueuing multiple summary jobs for the same
+    // logical session, which would otherwise produce duplicate canonical artifacts.
+    if let Ok(existing) = conn.query_row(
+        "SELECT id FROM summary_jobs \
+         WHERE agent_id = ?1 AND session_id = ?2 AND trigger = ?3 \
+         AND status IN ('pending', 'leased', 'completed') LIMIT 1",
+        rusqlite::params![agent_id, session_id, trigger],
+        |row| row.get::<_, String>(0),
+    ) {
+        return Ok(existing);
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
@@ -1732,30 +1745,11 @@ pub async fn compaction_complete(
         state.dedup.reset_prompt_dedup(key);
     }
 
-    if !pipeline_enabled(state.as_ref()) {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({"memoriesSaved": 0})),
-        )
-            .into_response();
-    }
-
-    // Mirror session_end: shadow mode observes without writing artifacts.
-    let in_shadow = state
-        .config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref())
-        .map(|p| p.shadow_mode)
-        .unwrap_or(false);
-    if in_shadow {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({"memoriesSaved": 0, "shadow": true})),
-        )
-            .into_response();
-    }
+    // Compaction artifacts are canonical lineage and must be written regardless
+    // of pipeline_enabled or shadow_mode — skipping them here would break the
+    // lineage chain for MEMORY.md projection even when the memory pipeline is
+    // otherwise disabled.  This matches the TS daemon, which has no pipeline
+    // gate in compaction-complete.
 
     let captured_at = chrono::Utc::now().to_rfc3339();
     let harness_value = harness.to_string();
