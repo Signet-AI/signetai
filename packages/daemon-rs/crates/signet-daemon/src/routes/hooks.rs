@@ -1721,9 +1721,12 @@ pub async fn compaction_complete(
     let session_key = body.session_key.clone();
     let fallback_project = body.project.clone();
 
-    // Step 1: DB-only mutations. Filesystem writes are excluded from this
-    // transaction so a rollback here cannot leave orphaned artifacts on disk.
-    let db_result = state
+    // Step 1: Resolve lineage metadata and write canonical artifacts first.
+    // DB ingest is intentionally deferred until artifacts are on disk so that
+    // an artifact-write failure leaves no committed DB state — retries start
+    // clean.  If artifact writes succeed but DB ingest fails (step 2), the
+    // artifact is already canonical; ingest is idempotent via session_id key.
+    let artifact_result = state
         .pool
         .write(Priority::High, {
             let session_key = session_key.clone();
@@ -1739,7 +1742,7 @@ pub async fn compaction_complete(
                     &agent_id,
                     fallback_project.as_deref(),
                 )?;
-                // Project-based lineage fallback (see earlier fix).
+                // Project-based lineage fallback.
                 let sid = session_key.clone().unwrap_or_else(|| {
                     project
                         .as_deref()
@@ -1750,6 +1753,59 @@ pub async fn compaction_complete(
                         })
                         .unwrap_or_else(|| format!("compaction:{captured_at}"))
                 });
+                write_compaction_artifact(
+                    conn,
+                    &root,
+                    SummaryArtifactInput {
+                        agent_id: agent_id.clone(),
+                        session_id: sid.clone(),
+                        session_key: session_key.clone(),
+                        project: project.clone(),
+                        harness: Some(harness_value),
+                        captured_at: captured_at.clone(),
+                        started_at: None,
+                        ended_at: Some(captured_at),
+                        summary: summary_value,
+                    },
+                    sentence,
+                )
+                .map_err(signet_core::error::CoreError::Migration)?;
+                write_memory_projection(conn, &root, &agent_id)
+                    .map_err(signet_core::error::CoreError::Migration)?;
+                Ok(serde_json::json!({
+                    "project": project,
+                    "sessionId": sid,
+                }))
+            }
+        })
+        .await;
+
+    let meta = match artifact_result {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("compaction artifact write failed: {e}")})),
+            )
+                .into_response();
+        }
+    };
+
+    let session_id = meta["sessionId"].as_str().unwrap_or("").to_string();
+    let project: Option<String> = meta["project"].as_str().map(str::to_string);
+
+    // Step 2: DB ingest. Artifact is committed above so this is recoverable
+    // on failure. idempotency_key=session_id ensures retries don't create
+    // duplicate memory rows.
+    let ingest_result = state
+        .pool
+        .write(Priority::Low, {
+            let session_key = session_key.clone();
+            let agent_id = agent_id.clone();
+            let harness_value = harness_value.clone();
+            let summary_value = summary_value.clone();
+            let session_id = session_id.clone();
+            move |conn| {
                 let r = transactions::ingest(
                     conn,
                     &transactions::IngestInput {
@@ -1763,7 +1819,7 @@ pub async fn compaction_complete(
                         pinned: false,
                         source_type: Some("compaction"),
                         source_id: session_key.as_deref(),
-                        idempotency_key: None,
+                        idempotency_key: Some(&session_id),
                         runtime_path: None,
                         actor: "compaction",
                         agent_id: &agent_id,
@@ -1781,76 +1837,23 @@ pub async fn compaction_complete(
                         rusqlite::params![key, agent_id],
                     );
                 }
-                Ok(serde_json::json!({
-                    "project": project,
-                    "sessionId": sid,
-                    "memoryId": r.id,
-                }))
+                Ok(serde_json::Value::String(r.id))
             }
         })
         .await;
 
-    let meta = match db_result {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(err = %e, "compaction-complete DB mutations failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
-    };
-
-    let memory_id = meta["memoryId"].as_str().unwrap_or("").to_string();
-    let session_id = meta["sessionId"].as_str().unwrap_or("").to_string();
-    let project: Option<String> = meta["project"].as_str().map(str::to_string);
-
-    // Step 2: Filesystem artifact writes in a separate transaction. DB
-    // mutations above are already committed so a failure here leaves DB
-    // state consistent (core ingest committed) with a missing artifact file —
-    // recoverable on next compaction — rather than rolled-back DB + orphaned file.
-    // Hard failure: canonical artifact must be written to maintain lineage
-    // durability. DB ingest succeeded above; if artifact write fails the
-    // lineage chain is broken — return 500 so the caller can retry.
-    if let Err(e) = state
-        .pool
-        .write(Priority::Low, move |conn| {
-            write_compaction_artifact(
-                conn,
-                &root,
-                SummaryArtifactInput {
-                    agent_id: agent_id.clone(),
-                    session_id,
-                    session_key,
-                    project,
-                    harness: Some(harness_value),
-                    captured_at: captured_at.clone(),
-                    started_at: None,
-                    ended_at: Some(captured_at),
-                    summary: summary_value,
-                },
-                sentence,
-            )
-            .map_err(signet_core::error::CoreError::Migration)?;
-            write_memory_projection(conn, &root, &agent_id)
-                .map_err(signet_core::error::CoreError::Migration)?;
-            Ok(serde_json::Value::Null)
-        })
-        .await
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("compaction artifact write failed: {e}")})),
+    match ingest_result {
+        Ok(v) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"success": true, "memoryId": v})),
         )
-            .into_response();
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
     }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"success": true, "memoryId": memory_id})),
-    )
-        .into_response()
 }
 
 // ---------------------------------------------------------------------------
