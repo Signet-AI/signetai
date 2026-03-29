@@ -1039,9 +1039,11 @@ pub async fn session_end(
         )
             .into_response();
     }
+    // Clamp by char count, not byte offset, to avoid panicking on non-ASCII.
     const MAX_TRANSCRIPT_CHARS: usize = 100_000;
-    if transcript.len() > MAX_TRANSCRIPT_CHARS {
-        transcript = format!("{}\n[truncated]", &transcript[..MAX_TRANSCRIPT_CHARS]);
+    if transcript.chars().count() > MAX_TRANSCRIPT_CHARS {
+        let safe: String = transcript.chars().take(MAX_TRANSCRIPT_CHARS).collect();
+        transcript = format!("{safe}\n[truncated]");
     }
 
     if !transcript.trim().is_empty() && !session_key.trim().is_empty() {
@@ -1570,6 +1572,23 @@ pub async fn compaction_complete(
 
     if let Some(key) = &body.session_key {
         state.dedup.reset_prompt_dedup(key);
+    }
+
+    // Mirror session_end: shadow mode observes without writing artifacts.
+    let in_shadow = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .map(|p| p.shadow_mode)
+        .unwrap_or(false);
+    if in_shadow {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0, "shadow": true})),
+        )
+            .into_response();
     }
 
     let captured_at = chrono::Utc::now().to_rfc3339();
