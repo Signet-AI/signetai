@@ -277,6 +277,7 @@ let projectionGeneration = 0;
 export async function loadProjection(agentId = "default"): Promise<void> {
 	const gen = ++projectionGeneration;
 	ontology.loadingProjection = true;
+	ontology.projection = null;
 	try {
 		const result = await getProjection(2, { limit: 500, agentId });
 		if (gen !== projectionGeneration) return;
