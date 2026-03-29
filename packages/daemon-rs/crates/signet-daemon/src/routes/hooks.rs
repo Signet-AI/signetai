@@ -921,27 +921,35 @@ pub async fn session_end(
     }
 
     let is_clear = body.reason.as_deref() == Some("clear");
-    if !is_clear && let Some(snapshot) = state.continuity.consume(&session_key) {
-        let _ = state
-            .pool
-            .write(Priority::High, move |conn| {
-                signet_services::session::insert_checkpoint(
-                    conn,
-                    &snapshot,
-                    "session_end",
-                    "Session ended",
-                )?;
-                Ok(serde_json::Value::Null)
-            })
-            .await;
+    if !is_clear {
+        // Peek (non-destructive) so pending data survives a write failure.
+        // Only consume after the checkpoint write succeeds — otherwise the
+        // in-memory snapshot is intact and a retry can attempt it again.
+        if let Some(snapshot) = state.continuity.peek_snapshot(&session_key) {
+            let wrote = state
+                .pool
+                .write(Priority::High, move |conn| {
+                    signet_services::session::insert_checkpoint(
+                        conn,
+                        &snapshot,
+                        "session_end",
+                        "Session ended",
+                    )?;
+                    Ok(serde_json::Value::Null)
+                })
+                .await;
+            if wrote.is_ok() {
+                state.continuity.consume(&session_key);
+            } else {
+                warn!(session = %session_key, "session-end: checkpoint write failed, snapshot retained for retry");
+            }
+        }
     }
-
-    // Release the runtime path claim early so other sessions are not blocked.
-    // Dedup and continuity clears are deferred until after persistence so a
-    // 500 on artifact/job writes leaves state intact for a safe retry.
-    state.sessions.release(&session_key);
+    // sessions.release is deferred to after artifact/job persistence so no
+    // concurrent session-end can race in while canonical writes are in flight.
 
     if is_clear {
+        state.sessions.release(&session_key);
         state.continuity.clear(&session_key);
         state.dedup.clear_session_start(&session_key);
         state.dedup.clear(&session_key);
@@ -953,6 +961,7 @@ pub async fn session_end(
     }
 
     if !pipeline_enabled(state.as_ref()) {
+        state.sessions.release(&session_key);
         state.continuity.clear(&session_key);
         state.dedup.clear_session_start(&session_key);
         state.dedup.clear(&session_key);
@@ -975,6 +984,7 @@ pub async fn session_end(
         .map(|p| p.shadow_mode)
         .unwrap_or(false);
     if in_shadow {
+        state.sessions.release(&session_key);
         state.continuity.clear(&session_key);
         state.dedup.clear_session_start(&session_key);
         state.dedup.clear(&session_key);
@@ -1037,6 +1047,7 @@ pub async fn session_end(
 
     // Gate before any writes — no-op sessions don't need artifact/job work.
     if transcript.trim().is_empty() {
+        state.sessions.release(&session_key);
         state.continuity.clear(&session_key);
         state.dedup.clear_session_start(&session_key);
         state.dedup.clear(&session_key);
@@ -1105,6 +1116,7 @@ pub async fn session_end(
             })
             .await
         {
+            state.sessions.release(&session_key);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("transcript artifact write failed: {e}")})),
@@ -1160,17 +1172,23 @@ pub async fn session_end(
 
     match result {
         Ok(val) => {
-            // Persistence succeeded — safe to clear session state now.
+            // Persistence succeeded — safe to release session claim and clear
+            // in-memory state now. Release before clear so any racing
+            // session-start sees a clean slot.
+            state.sessions.release(&session_key);
             state.continuity.clear(&session_key);
             state.dedup.clear_session_start(&session_key);
             state.dedup.clear(&session_key);
             (StatusCode::OK, Json(val)).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => {
+            state.sessions.release(&session_key);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
     }
 }
 

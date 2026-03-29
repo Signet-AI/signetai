@@ -391,6 +391,28 @@ impl ContinuityTracker {
     }
 
     /// Consume state: return snapshot and reset prompt counters.
+    /// Read a snapshot clone without consuming pending state.
+    /// Use this when you need the snapshot to attempt a write first;
+    /// call `consume` only after the write succeeds so a write failure
+    /// leaves pending data in memory for a safe retry.
+    pub fn peek_snapshot(&self, session_key: &str) -> Option<ContinuitySnapshot> {
+        let states = self.states.lock().unwrap();
+        let state = states.get(session_key)?;
+        Some(ContinuitySnapshot {
+            session_key: state.session_key.clone(),
+            harness: state.harness.clone(),
+            project: state.project.clone(),
+            project_normalized: state.project_normalized.clone(),
+            prompt_count: state.prompt_count,
+            total_prompt_count: state.total_prompt_count,
+            queries: state.pending_queries.clone(),
+            remembers: state.pending_remembers.clone(),
+            snippets: state.pending_snippets.clone(),
+            duration_secs: state.started_at.elapsed().as_secs(),
+            structural: state.structural_snapshot.clone(),
+        })
+    }
+
     pub fn consume(&self, session_key: &str) -> Option<ContinuitySnapshot> {
         let mut states = self.states.lock().unwrap();
         let state = states.get_mut(session_key)?;
