@@ -135,7 +135,7 @@ export function up(db: MigrationDb): void {
 
 	db.exec(`
 		CREATE TRIGGER trg_entity_dependencies_audit_update
-		AFTER UPDATE OF strength, aspect_id, reason, confidence ON entity_dependencies
+		AFTER UPDATE ON entity_dependencies
 		FOR EACH ROW
 		BEGIN
 			INSERT INTO entity_dependency_history (
