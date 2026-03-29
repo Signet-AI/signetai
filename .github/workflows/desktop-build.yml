@@ -332,7 +332,10 @@ jobs:
         run: |
           set -euo pipefail
           ROOT="packages/tray/src-tauri/target/${{ matrix.target }}/release/bundle"
-          mapfile -t FILES < <(find "${ROOT}" -type f \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.msi' \) | sort)
+          FILES=()
+          while IFS= read -r file; do
+            FILES+=("${file}")
+          done < <(find "${ROOT}" -type f \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.msi' \) | sort)
 
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "::error::No desktop artifacts found to upload for target ${{ matrix.target }}"
