@@ -79,6 +79,7 @@ export function up(db: MigrationDb): void {
 
 	db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert");
 	db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update");
+	db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_delete");
 
 	db.exec(`
 		CREATE TRIGGER trg_entity_dependencies_related_to_reason_insert
@@ -99,6 +100,36 @@ export function up(db: MigrationDb): void {
 		  AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0)
 		BEGIN
 			SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason');
+		END;
+	`);
+
+	// DB-level delete audit: captures FK cascades and direct SQL deletes that
+	// bypass the application layer. Application deletes will write a duplicate
+	// history row (the app writes first, then the trigger fires on DELETE) --
+	// that's acceptable: two "deleted" events are better than a silent gap.
+	db.exec(`
+		CREATE TRIGGER trg_entity_dependencies_audit_delete
+		AFTER DELETE ON entity_dependencies
+		FOR EACH ROW
+		BEGIN
+			INSERT INTO entity_dependency_history (
+				id, dependency_id, source_entity_id, target_entity_id, agent_id,
+				dependency_type, event, changed_by, reason, previous_reason,
+				metadata, created_at
+			) VALUES (
+				lower(hex(randomblob(16))),
+				OLD.id,
+				OLD.source_entity_id,
+				OLD.target_entity_id,
+				OLD.agent_id,
+				OLD.dependency_type,
+				'deleted',
+				'db-trigger',
+				COALESCE(OLD.reason, 'deleted without reason'),
+				NULL,
+				'{"source":"trg_entity_dependencies_audit_delete"}',
+				datetime('now')
+			);
 		END;
 	`);
 }

@@ -66,6 +66,7 @@ WHERE NOT EXISTS (
 
 DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert;
 DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update;
+DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_delete;
 
 CREATE TRIGGER trg_entity_dependencies_related_to_reason_insert
 BEFORE INSERT ON entity_dependencies
@@ -83,4 +84,30 @@ WHEN NEW.dependency_type = 'related_to'
   AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0)
 BEGIN
     SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason');
+END;
+
+-- DB-level delete audit: captures FK cascades and direct SQL deletes that
+-- bypass the application layer.
+CREATE TRIGGER trg_entity_dependencies_audit_delete
+AFTER DELETE ON entity_dependencies
+FOR EACH ROW
+BEGIN
+    INSERT INTO entity_dependency_history (
+        id, dependency_id, source_entity_id, target_entity_id, agent_id,
+        dependency_type, event, changed_by, reason, previous_reason,
+        metadata, created_at
+    ) VALUES (
+        lower(hex(randomblob(16))),
+        OLD.id,
+        OLD.source_entity_id,
+        OLD.target_entity_id,
+        OLD.agent_id,
+        OLD.dependency_type,
+        'deleted',
+        'db-trigger',
+        COALESCE(OLD.reason, 'deleted without reason'),
+        NULL,
+        '{"source":"trg_entity_dependencies_audit_delete"}',
+        datetime('now')
+    );
 END;

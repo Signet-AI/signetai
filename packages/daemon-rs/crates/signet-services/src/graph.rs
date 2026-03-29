@@ -372,7 +372,8 @@ pub fn upsert_dependency(
         let s = strength.unwrap_or(0.5);
         conn.execute(
             "UPDATE entity_dependencies
-             SET strength = ?1, aspect_id = ?2, updated_at = ?3, reason = ?5
+             SET strength = ?1, aspect_id = ?2, updated_at = ?3,
+                 reason = COALESCE(?5, reason)
              WHERE id = ?4",
             params![s, aspect_id, ts, eid, reason],
         )?;
