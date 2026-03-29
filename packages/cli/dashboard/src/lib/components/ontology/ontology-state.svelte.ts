@@ -113,6 +113,10 @@ export async function loadGraph(agentId = "default"): Promise<void> {
 	ontology.graphNodes = [];
 	ontology.graphEdges = [];
 	ontology.entities = [];
+	ontology.selected = null;
+	ontology.hovered = null;
+	ontology.relatedIds = new Set();
+	ontology.searchMatchIds = null;
 	try {
 		const data = await getConstellationOverlay(agentId);
 		if (gen !== graphGeneration) return;

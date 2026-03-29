@@ -2152,7 +2152,7 @@ export async function getKnowledgeAttributes(
 		if (filters.status) params.set("status", filters.status);
 		if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
 		if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
-		params.set("agent_id", filters.agentId ?? "default");
+		if (filters.agentId) params.set("agent_id", filters.agentId);
 		const res = await fetch(
 			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/aspects/${encodeURIComponent(aspectId)}/attributes?${params.toString()}`,
 		);
