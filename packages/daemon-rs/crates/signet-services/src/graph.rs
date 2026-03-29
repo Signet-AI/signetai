@@ -345,8 +345,8 @@ pub fn upsert_dependency(
         )
         .ok();
 
-    if let Some((eid, _, _)) = existing {
-        let s = strength.unwrap_or(0.5);
+    if let Some((eid, existing_strength, _)) = existing {
+        let s = strength.unwrap_or(existing_strength);
         conn.execute(
             "UPDATE entity_dependencies
              SET strength = ?1, aspect_id = ?2, updated_at = ?3,

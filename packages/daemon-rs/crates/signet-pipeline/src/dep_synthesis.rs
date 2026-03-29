@@ -183,7 +183,18 @@ async fn tick(
             let src = entity.id.clone();
             let tgt = target_id;
             let dep_type = result.dep_type.clone();
-            let reason = result.reason.clone();
+            // Mirror TS normalization: trim before fallback check so whitespace-only
+            // model output doesn't bypass the related_to reason enforcement.
+            let raw = result.reason.trim().to_string();
+            let reason = if dep_type == "related_to" && raw.is_empty() {
+                format!(
+                    "llm synthesized a loose association from {} to {}",
+                    entity.name, result.target
+                )
+            } else {
+                raw
+            };
+            let reason_opt: Option<String> = if reason.is_empty() { None } else { Some(reason) };
 
             let res = pool
                 .write(Priority::Low, move |conn| {
@@ -197,7 +208,7 @@ async fn tick(
                             dependency_type: &dep_type,
                             strength: Some(0.5),
                             confidence: None,
-                            reason: Some(reason.as_str()),
+                            reason: reason_opt.as_deref(),
                         },
                     )?;
                     Ok(serde_json::Value::Null)
