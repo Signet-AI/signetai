@@ -489,34 +489,10 @@ export function getDependenciesTo(
 }
 
 export function deleteDependency(accessor: DbAccessor, id: string, agentId: string): void {
+	// History is written by the trg_entity_dependencies_audit_delete AFTER DELETE
+	// trigger (migration 050), which covers app deletes, FK cascades, and direct SQL.
+	// No app-layer history write here to avoid duplicate audit rows.
 	accessor.withWriteTx((db) => {
-		const row = db
-			.prepare(
-				`SELECT source_entity_id, target_entity_id, dependency_type, reason
-				 FROM entity_dependencies
-				 WHERE id = ? AND agent_id = ?`,
-			)
-			.get(id, agentId) as
-			| {
-					source_entity_id: string;
-					target_entity_id: string;
-					dependency_type: DependencyType;
-					reason: string | null;
-			  }
-			| undefined;
-		if (row) {
-			writeDependencyHistory(db, {
-				dependencyId: id,
-				sourceEntityId: row.source_entity_id,
-				targetEntityId: row.target_entity_id,
-				agentId,
-				dependencyType: row.dependency_type,
-				event: "deleted",
-				changedBy: "knowledge-graph",
-				reason: row.reason ?? "deleted without reason",
-				createdAt: now(),
-			});
-		}
 		db.prepare("DELETE FROM entity_dependencies WHERE id = ? AND agent_id = ?").run(id, agentId);
 	});
 }
