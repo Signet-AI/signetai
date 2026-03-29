@@ -316,7 +316,7 @@ For safety, the intended extraction setups are:
 
 - `claude-code` on a Haiku model
 - `codex` on a GPT Mini model
-- local `ollama` with at least `qwen3:4b` or `nemotron-3-nano:4b`
+- local `ollama` with `nemotron-3-nano:4b` (preferred) or `qwen3:4b` (deprecated — Nemotron's superior reasoning makes Qwen3 the weaker choice going forward; expect degraded extraction quality in future updates)
 
 Set `provider: none` to disable extraction entirely, which is the
 recommended default for VPS installs that should not make background LLM
