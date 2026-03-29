@@ -196,6 +196,7 @@ async fn tick(
                             aspect_id: None,
                             dependency_type: &dep_type,
                             strength: Some(0.5),
+                            confidence: None,
                             reason: Some(reason.as_str()),
                         },
                     )?;
