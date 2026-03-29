@@ -1254,7 +1254,13 @@ pub async fn session_end(
                 limit = MAX_TRANSCRIPT_BYTES,
                 "session-end: inline transcript truncated to size limit"
             );
-            format!("{}\n[truncated]", &raw[..MAX_TRANSCRIPT_BYTES])
+            // Find the last valid UTF-8 char boundary at or before the limit
+            // so the slice never panics on multibyte input.
+            let at = (0..=MAX_TRANSCRIPT_BYTES.min(raw.len()))
+                .rev()
+                .find(|&i| raw.is_char_boundary(i))
+                .unwrap_or(0);
+            format!("{}\n[truncated]", &raw[..at])
         } else {
             raw
         }
@@ -1361,8 +1367,10 @@ pub async fn session_end(
         }
     }
 
-    // Artifact written — stop here if pipeline is fully disabled or in shadow
-    // mode.  No extraction or enqueue work should run in those states.
+    // Stop here if pipeline is fully disabled (not enabled, not shadow).
+    // Shadow mode falls through and enqueues the summary job — matching the
+    // TS daemon, which calls enqueueSummaryJob for shadow sessions too.
+    // The canonical --summary.md artifact is produced by the worker later.
     if !pipeline_enabled(state.as_ref()) {
         state.sessions.release(&session_key);
         state.continuity.clear(&session_key);
@@ -1374,27 +1382,8 @@ pub async fn session_end(
         )
             .into_response();
     }
-    let in_shadow = state
-        .config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref())
-        .map(|p| p.shadow_mode)
-        .unwrap_or(false);
-    if in_shadow {
-        state.sessions.release(&session_key);
-        state.continuity.clear(&session_key);
-        state.dedup.clear_session_start(&session_key);
-        state.dedup.clear(&session_key);
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({"memoriesSaved": 0, "shadow": true})),
-        )
-            .into_response();
-    }
 
-    // Legacy DB upsert — best-effort, only when pipeline is enabled and not
+    // Legacy DB upsert — best-effort, only when pipeline is enabled or in
     // shadow.  Canonical artifact above is the source of truth; this feeds
     // the legacy extraction pipeline.
     if !session_key.trim().is_empty() {
