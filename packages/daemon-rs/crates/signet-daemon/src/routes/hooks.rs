@@ -398,7 +398,7 @@ fn enqueue_summary_job(
     if let Ok(existing) = conn.query_row(
         "SELECT id FROM summary_jobs \
          WHERE agent_id = ?1 AND session_id = ?2 AND trigger = ?3 \
-         AND status IN ('pending', 'leased', 'processing', 'completed') LIMIT 1",
+         AND status IN ('pending', 'leased', 'processing', 'completed', 'done') LIMIT 1",
         rusqlite::params![agent_id, session_id, trigger],
         |row| row.get::<_, String>(0),
     ) {

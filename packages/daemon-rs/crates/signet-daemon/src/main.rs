@@ -892,7 +892,10 @@ pub(crate) async fn start_summary_worker(state: &AppState) -> bool {
         return false;
     };
 
-    if !pipeline.enabled || pipeline.shadow_mode || pipeline.paused || state.pipeline_paused() {
+    // Shadow mode workers run so that shadow sessions still produce canonical
+    // --summary.md artifacts (matching TS daemon behavior).  Only a fully
+    // disabled pipeline (enabled=false AND shadow_mode=false) skips the worker.
+    if (!pipeline.enabled && !pipeline.shadow_mode) || pipeline.paused || state.pipeline_paused() {
         return false;
     }
     // Summary worker gates only on pipeline being active — session-end always
@@ -962,7 +965,8 @@ pub(crate) async fn start_synthesis_worker(state: &AppState) -> bool {
         return false;
     };
 
-    if !pipeline.enabled || pipeline.shadow_mode || pipeline.paused || state.pipeline_paused() {
+    // Mirror summary worker: allow shadow mode to run synthesis for parity.
+    if (!pipeline.enabled && !pipeline.shadow_mode) || pipeline.paused || state.pipeline_paused() {
         return false;
     }
     if !pipeline.synthesis.enabled {
