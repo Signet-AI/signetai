@@ -1,0 +1,86 @@
+-- Migration 035: dependency audit history
+--
+-- Creates entity_dependency_history for immutable per-edge audit records,
+-- backfills all existing dependency edges, and adds SQLite triggers that
+-- enforce a non-empty reason on related_to inserts/updates (parity with
+-- TS migration 050-related-to-audit).
+
+CREATE TABLE IF NOT EXISTS entity_dependency_history (
+    id                TEXT PRIMARY KEY,
+    dependency_id     TEXT NOT NULL,
+    source_entity_id  TEXT NOT NULL,
+    target_entity_id  TEXT NOT NULL,
+    agent_id          TEXT NOT NULL DEFAULT 'default',
+    dependency_type   TEXT NOT NULL,
+    event             TEXT NOT NULL,
+    changed_by        TEXT NOT NULL,
+    reason            TEXT NOT NULL,
+    previous_reason   TEXT,
+    metadata          TEXT,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_dep
+    ON entity_dependency_history(dependency_id);
+CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_agent
+    ON entity_dependency_history(agent_id);
+CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_created
+    ON entity_dependency_history(created_at DESC);
+
+-- Stamp a legacy reason on related_to edges that have none (required by trigger below).
+UPDATE entity_dependencies
+SET reason = 'legacy-unattributed related_to edge'
+WHERE dependency_type = 'related_to'
+  AND (reason IS NULL OR length(trim(reason)) = 0);
+
+-- Backfill all existing dependency edges (any type) that have no history entry yet.
+INSERT INTO entity_dependency_history (
+    id, dependency_id, source_entity_id, target_entity_id, agent_id,
+    dependency_type, event, changed_by, reason, previous_reason,
+    metadata, created_at
+)
+SELECT
+    lower(hex(randomblob(16))),
+    d.id,
+    d.source_entity_id,
+    d.target_entity_id,
+    d.agent_id,
+    d.dependency_type,
+    'backfill',
+    'migration-035',
+    CASE
+        WHEN d.reason IS NULL OR length(trim(d.reason)) = 0
+            THEN 'legacy dependency without recorded reason'
+        ELSE d.reason
+    END,
+    NULL,
+    '{"source":"migration-035"}',
+    COALESCE(d.updated_at, datetime('now'))
+FROM entity_dependencies d
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM entity_dependency_history h
+    WHERE h.dependency_id = d.id
+      AND h.event = 'backfill'
+);
+
+DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert;
+DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update;
+
+CREATE TRIGGER trg_entity_dependencies_related_to_reason_insert
+BEFORE INSERT ON entity_dependencies
+FOR EACH ROW
+WHEN NEW.dependency_type = 'related_to'
+  AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0)
+BEGIN
+    SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason');
+END;
+
+CREATE TRIGGER trg_entity_dependencies_related_to_reason_update
+BEFORE UPDATE OF dependency_type, reason ON entity_dependencies
+FOR EACH ROW
+WHEN NEW.dependency_type = 'related_to'
+  AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0)
+BEGIN
+    SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason');
+END;

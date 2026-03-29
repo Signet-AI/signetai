@@ -303,6 +303,31 @@ pub fn delete_attribute(conn: &Connection, id: &str, agent_id: &str) -> Result<(
 // Dependency CRUD
 // ---------------------------------------------------------------------------
 
+fn write_dependency_history(
+    conn: &Connection,
+    dep_id: &str,
+    src: &str,
+    tgt: &str,
+    agent_id: &str,
+    dep_type: &str,
+    event: &str,
+    changed_by: &str,
+    reason: &str,
+    prev_reason: Option<&str>,
+    ts: &str,
+) -> Result<(), CoreError> {
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO entity_dependency_history
+         (id, dependency_id, source_entity_id, target_entity_id, agent_id,
+          dependency_type, event, changed_by, reason, previous_reason,
+          metadata, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,?11)",
+        params![id, dep_id, src, tgt, agent_id, dep_type, event, changed_by, reason, prev_reason, ts],
+    )?;
+    Ok(())
+}
+
 pub struct UpsertDepInput<'a> {
     pub source_entity_id: &'a str,
     pub target_entity_id: &'a str,
@@ -328,9 +353,9 @@ pub fn upsert_dependency(
     } = input;
     let ts = now();
 
-    let existing: Option<(String, f64)> = conn
+    let existing: Option<(String, f64, Option<String>)> = conn
         .query_row(
-            "SELECT id, strength FROM entity_dependencies
+            "SELECT id, strength, reason FROM entity_dependencies
              WHERE source_entity_id = ?1 AND target_entity_id = ?2
                AND dependency_type = ?3 AND agent_id = ?4",
             params![
@@ -339,17 +364,31 @@ pub fn upsert_dependency(
                 dependency_type,
                 agent_id
             ],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .ok();
 
-    if let Some((eid, _)) = existing {
+    if let Some((eid, _, prev_reason)) = existing {
         let s = strength.unwrap_or(0.5);
         conn.execute(
             "UPDATE entity_dependencies
              SET strength = ?1, aspect_id = ?2, updated_at = ?3, reason = ?5
              WHERE id = ?4",
             params![s, aspect_id, ts, eid, reason],
+        )?;
+        let reason_str = reason.unwrap_or("updated without reason");
+        write_dependency_history(
+            conn,
+            &eid,
+            source_entity_id,
+            target_entity_id,
+            agent_id,
+            dependency_type,
+            "updated",
+            "daemon-rs:graph",
+            reason_str,
+            prev_reason.as_deref(),
+            &ts,
         )?;
         let mut stmt = conn.prepare_cached("SELECT * FROM entity_dependencies WHERE id = ?1")?;
         let dep = stmt.query_row(params![eid], row_to_dependency)?;
@@ -373,6 +412,20 @@ pub fn upsert_dependency(
                 reason,
                 ts
             ],
+        )?;
+        let reason_str = reason.unwrap_or("dependency created without reason");
+        write_dependency_history(
+            conn,
+            &id,
+            source_entity_id,
+            target_entity_id,
+            agent_id,
+            dependency_type,
+            "created",
+            "daemon-rs:graph",
+            reason_str,
+            None,
+            &ts,
         )?;
         let mut stmt = conn.prepare_cached("SELECT * FROM entity_dependencies WHERE id = ?1")?;
         let dep = stmt.query_row(params![id], row_to_dependency)?;
@@ -1700,6 +1753,14 @@ mod tests {
                 entity_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default',
                 status TEXT NOT NULL, expires_at TEXT, retention_until TEXT,
                 completed_at TEXT, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE entity_dependency_history (
+                id TEXT PRIMARY KEY, dependency_id TEXT NOT NULL,
+                source_entity_id TEXT NOT NULL, target_entity_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'default', dependency_type TEXT NOT NULL,
+                event TEXT NOT NULL, changed_by TEXT NOT NULL, reason TEXT NOT NULL,
+                previous_reason TEXT, metadata TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
         )
         .unwrap();

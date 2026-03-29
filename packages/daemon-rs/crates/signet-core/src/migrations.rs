@@ -216,9 +216,14 @@ static MIGRATIONS: &[Migration] = &[
         name: "session-transcripts-compound-pk",
         sql: include_str!("sql/034-session-transcripts-compound-pk.sql"),
     },
+    Migration {
+        version: 35,
+        name: "dependency-audit-history",
+        sql: include_str!("sql/035-dependency-audit-history.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 34;
+pub const LATEST_SCHEMA_VERSION: u32 = 35;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
