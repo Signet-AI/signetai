@@ -1,9 +1,10 @@
 -- Migration 035: dependency audit history
 --
 -- Creates entity_dependency_history for immutable per-edge audit records,
--- backfills all existing dependency edges, and adds SQLite triggers that
--- enforce a non-empty reason on related_to inserts/updates (parity with
--- TS migration 050-related-to-audit).
+-- installs all DB-level audit triggers, backfills existing edges, then
+-- stamps legacy related_to edges with a reason (the AFTER UPDATE trigger
+-- is already active at that point, so the stamping is itself audited).
+-- Parity with TS migration 050-related-to-audit.
 
 CREATE TABLE IF NOT EXISTS entity_dependency_history (
     id                TEXT PRIMARY KEY,
@@ -26,46 +27,6 @@ CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_agent
     ON entity_dependency_history(agent_id);
 CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_created
     ON entity_dependency_history(created_at DESC);
-
--- Backfill all existing dependency edges (any type) that have no history entry yet.
--- Runs BEFORE the related_to reason UPDATE so the history row records the original
--- NULL/empty state rather than the stamped value written below.
-INSERT INTO entity_dependency_history (
-    id, dependency_id, source_entity_id, target_entity_id, agent_id,
-    dependency_type, event, changed_by, reason, previous_reason,
-    metadata, created_at
-)
-SELECT
-    lower(hex(randomblob(16))),
-    d.id,
-    d.source_entity_id,
-    d.target_entity_id,
-    d.agent_id,
-    d.dependency_type,
-    'backfill',
-    'migration-035',
-    CASE
-        WHEN d.reason IS NULL OR length(trim(d.reason)) = 0
-            THEN 'legacy dependency without recorded reason'
-        ELSE d.reason
-    END,
-    NULL,
-    '{"source":"migration-035"}',
-    datetime('now')
-FROM entity_dependencies d
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM entity_dependency_history h
-    WHERE h.dependency_id = d.id
-      AND h.event = 'backfill'
-);
-
--- Stamp a valid reason on related_to edges AFTER backfill so the history row
--- captured above reflects the original empty state, not this stamped value.
-UPDATE entity_dependencies
-SET reason = 'legacy-unattributed related_to edge'
-WHERE dependency_type = 'related_to'
-  AND (reason IS NULL OR length(trim(reason)) = 0);
 
 DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert;
 DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update;
@@ -164,3 +125,44 @@ BEGIN
         datetime('now')
     );
 END;
+
+-- Backfill existing edges with their original state. Triggers are active now,
+-- but this INSERT goes into entity_dependency_history directly so no trigger
+-- fires on entity_dependencies for this step.
+INSERT INTO entity_dependency_history (
+    id, dependency_id, source_entity_id, target_entity_id, agent_id,
+    dependency_type, event, changed_by, reason, previous_reason,
+    metadata, created_at
+)
+SELECT
+    lower(hex(randomblob(16))),
+    d.id,
+    d.source_entity_id,
+    d.target_entity_id,
+    d.agent_id,
+    d.dependency_type,
+    'backfill',
+    'migration-035',
+    CASE
+        WHEN d.reason IS NULL OR length(trim(d.reason)) = 0
+            THEN 'legacy dependency without recorded reason'
+        ELSE d.reason
+    END,
+    NULL,
+    '{"source":"migration-035"}',
+    datetime('now')
+FROM entity_dependencies d
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM entity_dependency_history h
+    WHERE h.dependency_id = d.id
+      AND h.event = 'backfill'
+);
+
+-- Stamp a valid reason on unattributed related_to edges. The AFTER UPDATE
+-- trigger is active, so this produces an 'updated' history row per affected
+-- edge, completing the audit trail for this migration step.
+UPDATE entity_dependencies
+SET reason = 'legacy-unattributed related_to edge'
+WHERE dependency_type = 'related_to'
+  AND (reason IS NULL OR length(trim(reason)) = 0);

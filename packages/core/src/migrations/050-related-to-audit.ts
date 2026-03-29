@@ -38,50 +38,6 @@ export function up(db: MigrationDb): void {
 
 	if (!hasTable(db, "entity_dependencies")) return;
 
-	// Backfill runs BEFORE stamping the legacy reason so the history row
-	// faithfully records the original state (NULL/empty reason) of pre-existing
-	// related_to edges, not the value the UPDATE below will write.
-	db.exec(`
-		INSERT INTO entity_dependency_history (
-			id, dependency_id, source_entity_id, target_entity_id, agent_id,
-			dependency_type, event, changed_by, reason, previous_reason,
-			metadata, created_at
-		)
-		SELECT
-			lower(hex(randomblob(16))),
-			d.id,
-			d.source_entity_id,
-			d.target_entity_id,
-			d.agent_id,
-			d.dependency_type,
-			'backfill',
-			'migration-050',
-			CASE
-				WHEN d.reason IS NULL OR length(trim(d.reason)) = 0
-					THEN 'legacy dependency without recorded reason'
-				ELSE d.reason
-			END,
-			NULL,
-			'{"source":"migration-050"}',
-			datetime('now')
-		FROM entity_dependencies d
-		WHERE NOT EXISTS (
-			SELECT 1
-			FROM entity_dependency_history h
-			WHERE h.dependency_id = d.id
-			  AND h.event = 'backfill'
-		  )
-	`);
-
-	// Stamp a valid reason on related_to edges AFTER backfill so the trigger
-	// enforcement added below does not reject these legacy rows.
-	db.exec(`
-		UPDATE entity_dependencies
-		SET reason = 'legacy-unattributed related_to edge'
-		WHERE dependency_type = 'related_to'
-		  AND (reason IS NULL OR length(trim(reason)) = 0)
-	`);
-
 	db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert");
 	db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update");
 	db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_insert");
@@ -188,5 +144,49 @@ export function up(db: MigrationDb): void {
 				datetime('now')
 			);
 		END;
+	`);
+
+	// Backfill existing edges with their original state BEFORE stamping legacy
+	// reasons so history accurately reflects what was in the DB pre-migration.
+	db.exec(`
+		INSERT INTO entity_dependency_history (
+			id, dependency_id, source_entity_id, target_entity_id, agent_id,
+			dependency_type, event, changed_by, reason, previous_reason,
+			metadata, created_at
+		)
+		SELECT
+			lower(hex(randomblob(16))),
+			d.id,
+			d.source_entity_id,
+			d.target_entity_id,
+			d.agent_id,
+			d.dependency_type,
+			'backfill',
+			'migration-050',
+			CASE
+				WHEN d.reason IS NULL OR length(trim(d.reason)) = 0
+					THEN 'legacy dependency without recorded reason'
+				ELSE d.reason
+			END,
+			NULL,
+			'{"source":"migration-050"}',
+			datetime('now')
+		FROM entity_dependencies d
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM entity_dependency_history h
+			WHERE h.dependency_id = d.id
+			  AND h.event = 'backfill'
+		  )
+	`);
+
+	// Stamp a valid reason on unattributed related_to edges. The AFTER UPDATE
+	// trigger is now active, so this produces an 'updated' history row for each
+	// affected edge — completing the audit trail for this migration step.
+	db.exec(`
+		UPDATE entity_dependencies
+		SET reason = 'legacy-unattributed related_to edge'
+		WHERE dependency_type = 'related_to'
+		  AND (reason IS NULL OR length(trim(reason)) = 0)
 	`);
 }
