@@ -268,10 +268,11 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 			if (!target || target.id === entity.id) continue;
 
 			try {
+				const normalized = result.reason.trim();
 				const reason =
-					result.dep_type === "related_to" && !result.reason
+					result.dep_type === "related_to" && !normalized
 						? `llm synthesized a loose association from ${entity.name} to ${result.target}`
-						: result.reason || null;
+						: normalized || null;
 				upsertDependency(deps.accessor, {
 					sourceEntityId: entity.id,
 					targetEntityId: target.id,

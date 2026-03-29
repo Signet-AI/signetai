@@ -235,6 +235,70 @@ describe("graph-transactions", () => {
 			expect(hist?.reason).toContain("mem-audit");
 			expect(hist?.metadata).toContain("trg_entity_dependencies_audit_insert");
 		});
+
+		it("records delete audit history via DB trigger when dependency is removed", () => {
+			const now = new Date().toISOString();
+
+			txPersistStructured(asWriteDb(db), {
+				entities: [
+					{ source: "Alpha", relationship: "uses", target: "Bravo", confidence: 0.9 },
+					{ source: "Alpha", relationship: "uses", target: "Charlie", confidence: 0.8 },
+				],
+				aspects: [
+					{
+						entityName: "Bravo",
+						aspect: "role",
+						attributes: [{ content: "is part of the same workflow" }],
+					},
+					{
+						entityName: "Charlie",
+						aspect: "role",
+						attributes: [{ content: "is part of the same workflow" }],
+					},
+				],
+				sourceMemoryId: "mem-delete-audit",
+				content: "Alpha uses Bravo and Charlie together in the same workflow.",
+				agentId: "default",
+				now,
+			});
+
+			const dep = db
+				.query(
+					`SELECT id, reason
+					 FROM entity_dependencies
+					 WHERE source_entity_id IN (
+					 	SELECT id FROM entities WHERE canonical_name = 'bravo'
+					 )
+					   AND target_entity_id IN (
+					 	SELECT id FROM entities WHERE canonical_name = 'charlie'
+					 )
+					   AND dependency_type = 'related_to'`,
+				)
+				.get() as { id: string; reason: string } | undefined;
+			expect(dep).toBeDefined();
+
+			// Delete the dependency — the DB trigger should capture this as a history record.
+			db.prepare("DELETE FROM entity_dependencies WHERE id = ?").run(dep!.id);
+
+			expect(
+				db.prepare("SELECT id FROM entity_dependencies WHERE id = ?").get(dep!.id),
+			).toBeNull();
+
+			const hist = db
+				.query(
+					`SELECT event, changed_by, reason, metadata
+					 FROM entity_dependency_history
+					 WHERE dependency_id = ? AND event = 'deleted'
+					 ORDER BY rowid DESC
+					 LIMIT 1`,
+				)
+				.get(dep!.id) as
+				| { event: string; changed_by: string; reason: string; metadata: string | null }
+				| undefined;
+			expect(hist?.event).toBe("deleted");
+			expect(hist?.changed_by).toBe("db-trigger");
+			expect(hist?.metadata).toContain("trg_entity_dependencies_audit_delete");
+		});
 	});
 
 	describe("txDecrementEntityMentions", () => {

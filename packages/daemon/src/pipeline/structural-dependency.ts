@@ -378,10 +378,11 @@ async function processDependencyBatch(
 						agentId: "default",
 						name: result.aspect,
 					});
+					const normalized = result.reason?.trim() ?? "";
 					const reason =
-						result.dep_type === "related_to" && result.reason === null
+						result.dep_type === "related_to" && !normalized
 							? `llm marked a loose association from fact: ${payload.fact_content.slice(0, 180)}`
-							: result.reason;
+							: normalized || null;
 					upsertDependency(deps.accessor, {
 						sourceEntityId: payload.entity_id,
 						targetEntityId: targetEntity.id,
