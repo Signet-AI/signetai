@@ -77,28 +77,16 @@ fn find_by_name(dir: &PathBuf, name: &str) -> Option<String> {
 pub fn find_bundled_daemon() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let root = exe.parent()?;
-
-    #[cfg(target_os = "macos")]
-    {
-        let dirs = vec![
-            root.to_path_buf(),
-            root.join("../Resources"),
-        ];
-
-        for dir in dirs {
-            if let Some(path) = find_by_name(&dir, &preferred_name()) {
-                return Some(path);
-            }
-            if let Some(path) = find_by_name(&dir, &fallback_name()) {
-                return Some(path);
-            }
+    let dirs = {
+        #[cfg(target_os = "macos")]
+        {
+            vec![root.to_path_buf(), root.join("../Resources")]
         }
-
-        return None;
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    let dirs = vec![root.to_path_buf()];
+        #[cfg(not(target_os = "macos"))]
+        {
+            vec![root.to_path_buf()]
+        }
+    };
 
     for dir in dirs {
         if let Some(path) = find_by_name(&dir, &preferred_name()) {

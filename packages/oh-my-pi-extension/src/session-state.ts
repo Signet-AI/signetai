@@ -8,6 +8,7 @@ const MAX_ENDED_SESSIONS = 128;
 export interface PendingSessionEnd {
 	readonly sessionId: string;
 	readonly sessionFile: string;
+	readonly agentId: string | undefined;
 	readonly reason: string;
 }
 
@@ -44,7 +45,7 @@ export interface SessionState {
 	hasPendingRecall(sessionId: string | undefined): boolean;
 	consumePendingRecall(sessionId: string | undefined): string | undefined;
 	consumeHiddenInjectMessages(sessionId: string | undefined): OmpAgentMessage[];
-	queuePendingSessionEnd(sessionId: string, sessionFile: string, reason: string): void;
+	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void;
 	clearPendingSessionEnd(sessionId: string | undefined): void;
 	getPendingSessionEnds(): ReadonlyArray<PendingSessionEnd>;
 }
@@ -171,11 +172,11 @@ class SessionStateStore implements SessionState {
 		return messages;
 	}
 
-	queuePendingSessionEnd(sessionId: string, sessionFile: string, reason: string): void {
+	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void {
 		if (!this.pendingSessionEnds.has(sessionId)) {
 			evictOldestKey(this.pendingSessionEnds, MAX_PENDING_SESSIONS);
 		}
-		this.pendingSessionEnds.set(sessionId, { sessionId, sessionFile, reason });
+		this.pendingSessionEnds.set(sessionId, { sessionId, sessionFile, agentId, reason });
 	}
 
 	clearPendingSessionEnd(sessionId: string | undefined): void {

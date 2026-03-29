@@ -8,7 +8,8 @@ success_criteria:
   - "Tray runtime can launch bundled daemon binaries as a fallback when system-installed runtimes are unavailable"
   - "Ubuntu outputs include both .deb and .AppImage artifacts per release"
   - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
-  - "Desktop release jobs enforce signing preflight checks before publish"
+  - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
+  - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
 scope_boundary: "Desktop packaging, runtime bundling preference, CI workflows, and Arch metadata generation. Does not replace npm package publishing flows."
 ---
 
@@ -35,9 +36,13 @@ Arch.
    - Arch deliverables as `.AppImage` + AUR metadata
 2. Tray runtime startup must support bundled daemon binaries as a
    fallback path when system runtimes are unavailable.
-3. Release workflows must include signing preflight validation.
+3. Release workflows must resolve signing mode before publish:
+   - official signing when certificate secrets are present
+   - self-signed fallback when official signing is unavailable
 4. AUR metadata generation must be deterministic from version, AppImage
    URL, and checksum.
+5. Arch packaging must be validated in CI by building from the generated
+   `PKGBUILD`.
 
 ## Integration notes
 

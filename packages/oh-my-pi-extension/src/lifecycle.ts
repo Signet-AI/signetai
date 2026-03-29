@@ -26,6 +26,7 @@ export interface SessionRef {
 
 interface SessionEndPayload {
 	readonly sessionId: string | undefined;
+	readonly agentId: string | undefined;
 	readonly transcript: string | undefined;
 	readonly reason: string;
 	readonly project: string | undefined;
@@ -72,6 +73,7 @@ async function submitSessionEnd(client: DaemonClient, payload: SessionEndPayload
 			reason: payload.reason,
 			sessionKey: payload.sessionId,
 			sessionId: payload.sessionId,
+			agentId: payload.agentId,
 			cwd: payload.project,
 			...(payload.transcript ? { transcript: payload.transcript } : {}),
 		},
@@ -92,6 +94,7 @@ export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void
 
 		const submitted = await submitSessionEnd(deps.client, {
 			sessionId: snapshot.sessionId ?? pending.sessionId,
+			agentId: pending.agentId,
 			transcript: snapshot.transcript,
 			reason: pending.reason,
 			project: snapshot.project,
@@ -150,6 +153,7 @@ export async function endCurrentSession(deps: LifecycleDeps, ctx: OmpExtensionCo
 
 	const submitted = await submitSessionEnd(deps.client, {
 		sessionId: session.sessionId,
+		agentId: deps.agentId,
 		transcript: buildTranscriptFromEntries(getSessionEntries(ctx)),
 		reason,
 		project: session.project,
@@ -172,20 +176,21 @@ export async function endPreviousSession(
 
 	if (!previousSnapshot.loaded) {
 		if (sessionId && previousSessionFile) {
-			deps.state.queuePendingSessionEnd(sessionId, previousSessionFile, reason);
+			deps.state.queuePendingSessionEnd(sessionId, previousSessionFile, deps.agentId, reason);
 		}
 		return;
 	}
 
 	const submitted = await submitSessionEnd(deps.client, {
 		sessionId,
+		agentId: deps.agentId,
 		transcript: previousSnapshot.transcript,
 		reason,
 		project: previousSnapshot.project,
 	});
 	if (!submitted) {
 		if (sessionId && previousSessionFile) {
-			deps.state.queuePendingSessionEnd(sessionId, previousSessionFile, reason);
+			deps.state.queuePendingSessionEnd(sessionId, previousSessionFile, deps.agentId, reason);
 		}
 		return;
 	}

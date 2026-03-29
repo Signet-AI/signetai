@@ -888,6 +888,38 @@ describe("loadPipelineConfig", () => {
 		expect(result.extraction.minConfidence).toBe(0.55);
 	});
 
+	it("loads adaptive write-gate config from flat keys", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					writeGateEnabled: true,
+					writeGateThreshold: 0.45,
+					writeGateContinuityDiscount: 0.2,
+				},
+			},
+		});
+
+		expect(result.writeGate?.enabled).toBe(true);
+		expect(result.writeGate?.threshold).toBe(0.45);
+		expect(result.writeGate?.continuityDiscount).toBe(0.2);
+	});
+
+	it("clamps adaptive write-gate numeric values", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					writeGate: {
+						threshold: 3,
+						continuityDiscount: -1,
+					},
+				},
+			},
+		});
+
+		expect(result.writeGate?.threshold).toBe(1);
+		expect(result.writeGate?.continuityDiscount).toBe(0);
+	});
+
 	it("loads graph boost and reranker fields (flat keys)", () => {
 		const result = loadPipelineConfig({
 			memory: {

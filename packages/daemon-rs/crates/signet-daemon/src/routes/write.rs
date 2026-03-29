@@ -1,18 +1,22 @@
 //! Memory write route handlers (remember, modify, forget, recover).
 
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::Value;
 use tracing::warn;
 
 use signet_core::db::Priority;
+use signet_services::session::SessionTracker;
 use signet_services::transactions;
 
+use crate::auth::middleware::{authenticate_headers, require_scope_guard};
+use crate::auth::types::TokenScope;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -61,6 +65,8 @@ pub struct RememberBody {
     pub memory_type: Option<String>,
     pub agent_id: Option<String>,
     pub visibility: Option<String>,
+    pub scope: Option<String>,
+    pub session_key: Option<String>,
 }
 
 fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
@@ -92,6 +98,114 @@ fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str
         }
         _ => Err("tags must be a string, string array, or null"),
     }
+}
+
+fn normalize_scope(value: Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn parse_visibility(value: Option<&str>) -> Result<String, &'static str> {
+    let Some(raw) = value else {
+        return Ok("global".to_string());
+    };
+    let v = raw.trim().to_lowercase();
+    if v == "global" || v == "private" || v == "archived" {
+        return Ok(v);
+    }
+    Err("visibility must be one of: global, private, archived")
+}
+
+fn session_agent_id(session_key: Option<&str>) -> Option<String> {
+    let key = session_key?;
+    let mut parts = key.splitn(3, ':');
+    if parts.next() != Some("agent") {
+        return None;
+    }
+    let id = parts.next().unwrap_or("").trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn resolve_remember_agent(
+    explicit: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<String, &'static str> {
+    let explicit = explicit.map(str::trim).filter(|s| !s.is_empty());
+    let bound = session_agent_id(session_key);
+    if let Some(agent) = explicit {
+        if let Some(bound) = bound.as_deref()
+            && agent != bound
+        {
+            return Err("agent_id does not match session scope");
+        }
+        return Ok(agent.to_string());
+    }
+    if let Some(bound) = bound {
+        return Ok(bound);
+    }
+    Ok("default".to_string())
+}
+
+fn require_session_scope_for_write(
+    sessions: &SessionTracker,
+    agent_id: &str,
+    visibility: &str,
+    scope: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<(), &'static str> {
+    let scoped = agent_id != "default" || visibility != "global" || scope.is_some();
+    if !scoped {
+        return Ok(());
+    }
+    let Some(key) = session_key else {
+        if agent_id != "default" {
+            return Err("non-default agent_id requires session_key with agent scope");
+        }
+        return Err("non-default visibility/scope requires session_key with agent scope");
+    };
+    let Some(bound) = session_agent_id(Some(key)) else {
+        return Err("session_key must be agent scoped");
+    };
+    if sessions.get_path(key).is_none() {
+        return Err("session_key is not active");
+    }
+    if agent_id != "default" && agent_id != bound {
+        return Err("agent_id does not match session scope");
+    }
+    Ok(())
+}
+
+fn is_loopback(addr: &SocketAddr) -> bool {
+    match addr.ip() {
+        IpAddr::V4(ip) => ip.is_loopback(),
+        IpAddr::V6(ip) => ip.is_loopback(),
+    }
+}
+
+fn guard_write_scope(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+    agent_id: &str,
+) -> Result<(), Box<axum::response::Response>> {
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_loopback(peer),
+    )?;
+    let target = TokenScope {
+        project: None,
+        agent: Some(agent_id.to_string()),
+        user: None,
+    };
+    require_scope_guard(&auth, &target, state.auth_mode, is_loopback(peer))
 }
 
 fn dead_letter_blocked_extraction_memory(
@@ -194,6 +308,8 @@ fn ingest_remember_with_blocked_guard(
 
 pub async fn remember(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<RememberBody>,
 ) -> axum::response::Response {
     if let Some(resp) = check_mutations_frozen(&state) {
@@ -228,12 +344,49 @@ pub async fn remember(
     let source_type = body.source_type;
     let source_id = body.source_id;
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
-    let agent_id = body.agent_id.unwrap_or_else(|| "default".into());
-    let visibility = match body.visibility.as_deref() {
-        Some("private") => "private",
-        _ => "global",
+    let session_key = body
+        .session_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let agent_id = match resolve_remember_agent(body.agent_id.as_deref(), session_key.as_deref()) {
+        Ok(id) => id,
+        Err(err) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response();
+        }
+    };
+    let scope = normalize_scope(body.scope);
+    let visibility = match parse_visibility(body.visibility.as_deref()) {
+        Ok(v) => v,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response();
+        }
+    };
+    if let Err(err) = require_session_scope_for_write(
+        &state.sessions,
+        &agent_id,
+        &visibility,
+        scope.as_deref(),
+        session_key.as_deref(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": err })),
+        )
+            .into_response();
     }
-    .to_string();
+    if let Err(resp) = guard_write_scope(state.as_ref(), &headers, &peer, &agent_id) {
+        return *resp;
+    }
     let extraction_max_attempts = state
         .config
         .manifest
@@ -267,6 +420,7 @@ pub async fn remember(
                         actor: "api",
                         agent_id: &agent_id,
                         visibility: &visibility,
+                        scope: scope.as_deref(),
                     },
                     blocked_reason.as_deref(),
                     extraction_max_attempts,
@@ -302,12 +456,13 @@ pub async fn remember(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::net::SocketAddr;
     use std::sync::Arc;
 
     use axum::Json;
     use axum::body::to_bytes;
-    use axum::extract::State;
-    use axum::http::StatusCode;
+    use axum::extract::{ConnectInfo, State};
+    use axum::http::{HeaderMap, StatusCode};
     use rusqlite::Connection;
     use serde_json::json;
     use tempfile::tempdir;
@@ -317,13 +472,15 @@ mod tests {
         PipelineV2Config,
     };
     use signet_core::db::{DbPool, Priority};
+    use signet_services::session::{RuntimePath, SessionTracker};
 
     use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
     use crate::auth::types::AuthMode;
     use crate::state::ExtractionRuntimeState;
 
     use super::{
-        RememberBody, dead_letter_blocked_extraction_memory, parse_remember_tags, remember,
+        RememberBody, dead_letter_blocked_extraction_memory, normalize_scope, parse_remember_tags,
+        parse_visibility, remember, resolve_remember_agent, require_session_scope_for_write,
     };
 
     #[test]
@@ -345,6 +502,59 @@ mod tests {
 
         let err = parse_remember_tags(Some(json!(["alpha", 42]))).unwrap_err();
         assert_eq!(err, "tags must be a string, string array, or null");
+    }
+
+    #[test]
+    fn normalize_scope_trims_and_coalesces_empty_to_none() {
+        assert_eq!(normalize_scope(None), None);
+        assert_eq!(normalize_scope(Some("".to_string())), None);
+        assert_eq!(normalize_scope(Some("   ".to_string())), None);
+        assert_eq!(
+            normalize_scope(Some("  project:alpha  ".to_string())),
+            Some("project:alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_visibility_rejects_invalid_values() {
+        assert_eq!(parse_visibility(None).unwrap(), "global");
+        assert_eq!(parse_visibility(Some("private")).unwrap(), "private");
+        assert!(parse_visibility(Some("bogus")).is_err());
+    }
+
+    #[test]
+    fn resolve_remember_agent_inherits_session_scope_when_missing() {
+        let agent = resolve_remember_agent(None, Some("agent:agent-a:sess-1")).unwrap();
+        assert_eq!(agent, "agent-a");
+    }
+
+    #[test]
+    fn require_session_scope_for_write_requires_active_session_for_scoped_writes() {
+        let sessions = SessionTracker::new();
+        let err = require_session_scope_for_write(
+            &sessions,
+            "agent-a",
+            "private",
+            None,
+            Some("agent:agent-a:sess-1"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "session_key is not active");
+
+        assert!(matches!(
+            sessions.claim("agent:agent-a:sess-1", RuntimePath::Plugin),
+            signet_services::session::ClaimResult::Ok
+        ));
+        assert!(
+            require_session_scope_for_write(
+                &sessions,
+                "agent-a",
+                "private",
+                None,
+                Some("agent:agent-a:sess-1"),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -704,6 +914,8 @@ mod tests {
 
         let response = remember(
             State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3850))),
+            HeaderMap::new(),
             Json(RememberBody {
                 content: Some("Atomic blocked remember".to_string()),
                 who: None,
@@ -716,6 +928,8 @@ mod tests {
                 memory_type: None,
                 agent_id: None,
                 visibility: None,
+                scope: None,
+                session_key: None,
             }),
         )
         .await;
@@ -784,6 +998,8 @@ mod tests {
 
         let response = remember(
             State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3850))),
+            HeaderMap::new(),
             Json(RememberBody {
                 content: Some("Should roll back".to_string()),
                 who: None,
@@ -796,6 +1012,8 @@ mod tests {
                 memory_type: None,
                 agent_id: None,
                 visibility: None,
+                scope: None,
+                session_key: None,
             }),
         )
         .await;
@@ -839,6 +1057,7 @@ mod tests {
                         actor: "test",
                         agent_id: "default",
                         visibility: "global",
+                        scope: None,
                     },
                 )?;
                 Ok(serde_json::json!({"ok": true}))
@@ -863,6 +1082,8 @@ mod tests {
 
         let response = remember(
             State(state.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 3850))),
+            HeaderMap::new(),
             Json(RememberBody {
                 content: Some("Duplicate content".to_string()),
                 who: None,
@@ -875,6 +1096,8 @@ mod tests {
                 memory_type: None,
                 agent_id: None,
                 visibility: None,
+                scope: None,
+                session_key: None,
             }),
         )
         .await;

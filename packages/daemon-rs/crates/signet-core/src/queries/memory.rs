@@ -2,7 +2,7 @@
 //!
 //! Insert, get, update, soft-delete, recover, list, and history queries.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::CoreError;
 use crate::types::{ExtractionStatus, Memory, MemoryHistory, MemoryType};
@@ -143,6 +143,46 @@ pub fn exists_by_hash(conn: &Connection, hash: &str) -> Result<Option<String>, C
     }
 }
 
+/// Check if a content hash exists in the same scoped domain.
+pub fn exists_by_hash_scoped(
+    conn: &Connection,
+    hash: &str,
+    agent_id: &str,
+    scope: Option<&str>,
+    visibility: &str,
+) -> Result<Option<String>, CoreError> {
+    let sql = if scope.is_some() {
+        "SELECT id FROM memories
+         WHERE content_hash = ?1
+           AND is_deleted = 0
+           AND agent_id = ?2
+           AND visibility = ?3
+           AND scope = ?4
+         LIMIT 1"
+    } else {
+        "SELECT id FROM memories
+         WHERE content_hash = ?1
+           AND is_deleted = 0
+           AND agent_id = ?2
+           AND visibility = ?3
+           AND scope IS NULL
+         LIMIT 1"
+    };
+    let mut stmt = conn.prepare_cached(sql)?;
+    let id = if let Some(sc) = scope {
+        stmt.query_row(params![hash, agent_id, visibility, sc], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()?
+    } else {
+        stmt.query_row(params![hash, agent_id, visibility], |r| {
+            r.get::<_, String>(0)
+        })
+        .optional()?
+    };
+    Ok(id)
+}
+
 // ---------------------------------------------------------------------------
 // Write operations (call on write connection only)
 // ---------------------------------------------------------------------------
@@ -171,6 +211,7 @@ pub struct InsertMemory<'a> {
     pub updated_by: &'a str,
     pub agent_id: &'a str,
     pub visibility: &'a str,
+    pub scope: Option<&'a str>,
 }
 
 /// Insert a new memory row. Returns the ID.
@@ -180,9 +221,9 @@ pub fn insert(conn: &Connection, m: &InsertMemory) -> Result<String, CoreError> 
          (id, content, normalized_content, content_hash, type, tags,
           who, why, project, importance, pinned, is_deleted,
           extraction_status, embedding_model, extraction_model,
-          source_type, source_id, idempotency_key, runtime_path,
-          confidence, created_at, updated_at, updated_by, agent_id, visibility)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12,?13,?14,?15,?16,?17,?18,?10,?19,?19,?20,?21,?22)",
+         source_type, source_id, idempotency_key, runtime_path,
+          confidence, created_at, updated_at, updated_by, agent_id, visibility, scope)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12,?13,?14,?15,?16,?17,?18,?10,?19,?19,?20,?21,?22,?23)",
         params![
             m.id,
             m.content,
@@ -206,6 +247,7 @@ pub fn insert(conn: &Connection, m: &InsertMemory) -> Result<String, CoreError> 
             m.updated_by,
             m.agent_id,
             m.visibility,
+            m.scope,
         ],
     )?;
     Ok(m.id.to_string())
@@ -556,6 +598,7 @@ mod tests {
             updated_by: "test",
             agent_id: "default",
             visibility: "global",
+            scope: None,
         }
     }
 

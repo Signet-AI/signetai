@@ -194,6 +194,11 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		minEntityOverlap: 1,
 		noveltyThreshold: 0.15,
 	},
+	writeGate: {
+		enabled: true,
+		threshold: 0.4,
+		continuityDiscount: 0.15,
+	},
 	predictor: {
 		enabled: true,
 		trainIntervalSessions: 10,
@@ -356,6 +361,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
+	const writeGateRaw = raw.writeGate as Record<string, unknown> | undefined;
 	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
 	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
 	const modelRegistryRaw = raw.modelRegistry as Record<string, unknown> | undefined;
@@ -833,6 +839,14 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 			minTurns: clampPositive(significanceRaw?.minTurns, 1, 100, d.significance?.minTurns ?? 5),
 			minEntityOverlap: clampPositive(significanceRaw?.minEntityOverlap, 0, 100, d.significance?.minEntityOverlap ?? 1),
 			noveltyThreshold: clampFraction(significanceRaw?.noveltyThreshold, d.significance?.noveltyThreshold ?? 0.15),
+		},
+		writeGate: {
+			enabled: resolveBool(writeGateRaw?.enabled, raw.writeGateEnabled, d.writeGate?.enabled ?? true),
+			threshold: clampFraction(writeGateRaw?.threshold ?? raw.writeGateThreshold, d.writeGate?.threshold ?? 0.4),
+			continuityDiscount: clampFraction(
+				writeGateRaw?.continuityDiscount ?? raw.writeGateContinuityDiscount,
+				d.writeGate?.continuityDiscount ?? 0.15,
+			),
 		},
 
 		predictor: {

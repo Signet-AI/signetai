@@ -8,6 +8,13 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
+	server: {
+		proxy: {
+			"/api": "http://localhost:3850",
+			"/health": "http://localhost:3850",
+			"/memory": "http://localhost:3850",
+		},
+	},
 	resolve: {
 		alias: {
 			"@signet/core/pipeline-providers": resolve(

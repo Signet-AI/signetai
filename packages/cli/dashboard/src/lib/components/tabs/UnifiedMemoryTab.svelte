@@ -1,8 +1,9 @@
 <script lang="ts">
 	import type { Memory } from "$lib/api";
-	import EmbeddingsTab from "$lib/components/tabs/EmbeddingsTab.svelte";
 	import MemoryTab from "$lib/components/tabs/MemoryTab.svelte";
+	import OntologyDashboard from "$lib/components/ontology/OntologyDashboard.svelte";
 	import { Button } from "$lib/components/ui/button/index.js";
+	import { replaceState } from "$app/navigation";
 
 	interface Props {
 		memories: Memory[];
@@ -29,7 +30,7 @@
 		if (typeof window === "undefined") return;
 		const next = section === "cortex" ? "cortex-memory" : "cortex-memory/constellation";
 		if (window.location.hash !== `#${next}`) {
-			window.history.replaceState(null, "", `#${next}`);
+			replaceState(`#${next}`, {});
 		}
 	});
 
@@ -50,7 +51,7 @@
 		<div class="tab-header-left">
 			<span class="tab-header-title">ONTOLOGY</span>
 			<span class="tab-header-sep" aria-hidden="true"></span>
-			<span class="tab-header-count">CORTEX INDEX + CONSTELLATION</span>
+			<span class="tab-header-count">CORTEX INDEX -> CONSTELLATION</span>
 		</div>
 		<div class="unified-actions">
 			<Button
@@ -71,16 +72,14 @@
 			</Button>
 		</div>
 	</div>
-	<div class="unified-body">
+	<div class="unified-body" class:unified-body-flush={section === "constellation"}>
 		{#if section === "cortex"}
 			<div class="unified-main">
 				<MemoryTab {memories} {agentId} embedded={true} />
 			</div>
 		{:else}
-			<div class="unified-main">
-				<div class="extra-body">
-					<EmbeddingsTab {onopenglobalsimilar} {agentId} embedded={true} />
-				</div>
+			<div class="unified-main constellation-full">
+				<OntologyDashboard {agentId} />
 			</div>
 		{/if}
 	</div>
@@ -176,10 +175,13 @@
 		background: var(--sig-bg);
 	}
 
-	.extra-body {
-		height: 100%;
-		min-height: 0;
-		overflow: hidden;
+	.unified-body-flush {
+		padding: 0;
+	}
+
+	.constellation-full {
+		border: none;
+		background: var(--sig-bg);
 	}
 
 	.unified-memory :global(.banner) {

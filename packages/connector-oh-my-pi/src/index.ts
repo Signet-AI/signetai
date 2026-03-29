@@ -31,7 +31,8 @@ function resolveWorkspacePath(home = homedir()): string {
 	const configured = readTrimmedEnv("SIGNET_PATH");
 	if (configured) return configured;
 
-	const workspaceConfigPath = join(home, ".config", "signet", "workspace.json");
+	const configHome = readTrimmedEnv("XDG_CONFIG_HOME") ?? join(home, ".config");
+	const workspaceConfigPath = join(configHome, "signet", "workspace.json");
 	if (!existsSync(workspaceConfigPath)) return join(home, ".agents");
 
 	try {

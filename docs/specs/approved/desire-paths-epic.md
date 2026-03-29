@@ -817,6 +817,15 @@ type but currently receive no special treatment.
 per-memory surprisal filter. Only store information that violates
 the system's expectations.
 
+**Status:** PARTIALLY COMPLETE (prototype, 2026-03-27).
+Prototype includes per-memory surprisal scoring, task continuity
+discount, bypass rules (decision/constraint/error), and
+pass-block ratio alerts in worker logs. Current prototype uses
+memory `type` as the entity-scope proxy for neighborhood matching.
+Remaining work:
+production telemetry/dashboard surfacing, broader rollout tuning,
+and post-launch threshold calibration.
+
 **What exists:** DP-1 gates at session level (skip extraction for
 low-significance sessions). But within significant sessions, every
 extracted memory is written regardless of novelty. Redundant and
@@ -826,8 +835,8 @@ near-duplicate memories accumulate.
 
 1. **Per-memory surprisal scoring:** Before writing a memory, compute
    surprise = 1 - max_similarity against existing memories in the
-   same entity scope. Memories below threshold (default 0.4) are
-   skipped.
+   same entity scope. Prototype proxy: same agent, visibility, scope,
+   and memory type. Memories below threshold (default 0.4) are skipped.
 2. **Task continuity discount:** When the user is working on the same
    task (same directory, recent stores, semantic similarity to last
    5 memories), lower the threshold by 0.15. Captures incremental
@@ -967,7 +976,7 @@ flowchart TD
 | 2: Topology | DP-5 | COMPLETE | 0 days |
 | 3: Graph-Native | DP-6a, DP-6, DP-6.1, DP-6.2, DP-6.3, DP-7 | COMPLETE | 0 days |
 | 4: Path Learning | DP-8, DP-9, DP-10, DP-11 | DP-8 COMPLETE | 9-14 days |
-| 5: Emergence | DP-12 through DP-20 | NOT STARTED | 14-23 days |
+| 5: Emergence | DP-12 through DP-20 | DP-16/18 COMPLETE, DP-19 PROTOTYPE | 14-23 days |
 | **Total** | **21 stories** | **13 complete** | **~23-37 days** |
 
 Critical path runs through: DP-9 (path feedback + co-occurrence + Q-values) -> DP-10 (path scoring) -> DP-11 (temporal + intent routing).

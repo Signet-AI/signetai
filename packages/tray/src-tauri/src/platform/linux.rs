@@ -100,6 +100,11 @@ impl DaemonManager for LinuxManager {
             return Ok(());
         }
 
+        if let Some(bin) = super::find_bundled_daemon() {
+            Command::new(&bin).spawn()?;
+            return Ok(());
+        }
+
         if let Some(signet) = self.find_signet_cli() {
             Command::new(&signet).args(["daemon", "start"]).spawn()?;
             return Ok(());
@@ -125,11 +130,6 @@ impl DaemonManager for LinuxManager {
             Command::new(&bun)
                 .args(["x", "signetai", "daemon", "start"])
                 .spawn()?;
-            return Ok(());
-        }
-
-        if let Some(bin) = super::find_bundled_daemon() {
-            Command::new(&bin).spawn()?;
             return Ok(());
         }
 

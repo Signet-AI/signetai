@@ -2,6 +2,42 @@
 
 All notable changes to Signet are documented here.
 
+## [0.82.6] - 2026-03-29
+
+### Bug Fixes
+
+- **ci**: replace mapfile for macOS-compatible release uploads (#392)
+
+
+## [0.82.5] - 2026-03-29
+
+### Bug Fixes
+
+- **daemon**: prototype DP-19 adaptive write gate with scoped guards (#380)
+- **tray**: unblock mac self-signed CI and prefer bundled linux daemon (#388)
+
+
+## [0.82.4] - 2026-03-28
+
+### Bug Fixes
+
+- **tray**: resolve macOS bundled-daemon path compile regression (#387)
+
+
+## [0.82.3] - 2026-03-28
+
+### Bug Fixes
+
+- **ci**: harden self-signed desktop signing on macOS and windows (#384)
+
+
+## [0.82.2] - 2026-03-28
+
+### Bug Fixes
+
+- **ci**: add self-signed desktop signing and arch package validation (#383)
+
+
 ## [0.82.0] - 2026-03-28
 
 ### Bug Fixes

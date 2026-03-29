@@ -32,6 +32,7 @@ pub struct IngestInput<'a> {
     pub actor: &'a str,
     pub agent_id: &'a str,
     pub visibility: &'a str,
+    pub scope: Option<&'a str>,
 }
 
 pub struct IngestResult {
@@ -44,7 +45,13 @@ pub fn ingest(conn: &Connection, input: &IngestInput) -> Result<IngestResult, Co
     let norm = normalize_and_hash(input.content);
 
     // Duplicate check
-    if let Some(dup_id) = memory::exists_by_hash(conn, &norm.hash)? {
+    if let Some(dup_id) = memory::exists_by_hash_scoped(
+        conn,
+        &norm.hash,
+        input.agent_id,
+        input.scope,
+        input.visibility,
+    )? {
         return Ok(IngestResult {
             id: dup_id.clone(),
             hash: norm.hash,
@@ -81,6 +88,7 @@ pub fn ingest(conn: &Connection, input: &IngestInput) -> Result<IngestResult, Co
             updated_by: input.actor,
             agent_id: input.agent_id,
             visibility: input.visibility,
+            scope: input.scope,
         },
     )?;
 
@@ -400,6 +408,7 @@ mod tests {
                 actor: "test",
                 agent_id: "default",
                 visibility: "global",
+                scope: None,
             },
         )
         .unwrap();
@@ -424,10 +433,135 @@ mod tests {
                 actor: "test",
                 agent_id: "default",
                 visibility: "global",
+                scope: None,
             },
         )
         .unwrap();
         assert_eq!(r2.duplicate_of.as_deref(), Some(r1.id.as_str()));
+    }
+
+    #[test]
+    fn dedupe_is_scoped_by_agent_visibility_and_scope() {
+        let conn = setup();
+
+        let base = ingest(
+            &conn,
+            &IngestInput {
+                content: "Scoped Duplicate",
+                memory_type: "fact",
+                tags: vec![],
+                who: None,
+                why: None,
+                project: None,
+                importance: 0.5,
+                pinned: false,
+                source_type: None,
+                source_id: None,
+                idempotency_key: None,
+                runtime_path: None,
+                actor: "test",
+                agent_id: "agent-a",
+                visibility: "global",
+                scope: Some("scope-a"),
+            },
+        )
+        .unwrap();
+
+        let same = ingest(
+            &conn,
+            &IngestInput {
+                content: " scoped   duplicate ",
+                memory_type: "fact",
+                tags: vec![],
+                who: None,
+                why: None,
+                project: None,
+                importance: 0.5,
+                pinned: false,
+                source_type: None,
+                source_id: None,
+                idempotency_key: None,
+                runtime_path: None,
+                actor: "test",
+                agent_id: "agent-a",
+                visibility: "global",
+                scope: Some("scope-a"),
+            },
+        )
+        .unwrap();
+        assert_eq!(same.duplicate_of.as_deref(), Some(base.id.as_str()));
+
+        let other_scope = ingest(
+            &conn,
+            &IngestInput {
+                content: "Scoped Duplicate",
+                memory_type: "fact",
+                tags: vec![],
+                who: None,
+                why: None,
+                project: None,
+                importance: 0.5,
+                pinned: false,
+                source_type: None,
+                source_id: None,
+                idempotency_key: None,
+                runtime_path: None,
+                actor: "test",
+                agent_id: "agent-a",
+                visibility: "global",
+                scope: Some("scope-b"),
+            },
+        )
+        .unwrap();
+        assert!(other_scope.duplicate_of.is_none());
+
+        let other_visibility = ingest(
+            &conn,
+            &IngestInput {
+                content: "Scoped Duplicate",
+                memory_type: "fact",
+                tags: vec![],
+                who: None,
+                why: None,
+                project: None,
+                importance: 0.5,
+                pinned: false,
+                source_type: None,
+                source_id: None,
+                idempotency_key: None,
+                runtime_path: None,
+                actor: "test",
+                agent_id: "agent-a",
+                visibility: "private",
+                scope: Some("scope-a"),
+            },
+        )
+        .unwrap();
+        assert!(other_visibility.duplicate_of.is_none());
+
+        let other_agent = ingest(
+            &conn,
+            &IngestInput {
+                content: "Scoped Duplicate",
+                memory_type: "fact",
+                tags: vec![],
+                who: None,
+                why: None,
+                project: None,
+                importance: 0.5,
+                pinned: false,
+                source_type: None,
+                source_id: None,
+                idempotency_key: None,
+                runtime_path: None,
+                actor: "test",
+                agent_id: "agent-b",
+                visibility: "global",
+                scope: Some("scope-a"),
+            },
+        )
+        .unwrap();
+        assert!(other_agent.duplicate_of.is_none());
     }
 
     #[test]
@@ -452,6 +586,7 @@ mod tests {
                 actor: "test",
                 agent_id: "default",
                 visibility: "global",
+                scope: None,
             },
         )
         .unwrap();
@@ -500,6 +635,7 @@ mod tests {
                 actor: "test",
                 agent_id: "default",
                 visibility: "global",
+                scope: None,
             },
         )
         .unwrap();
@@ -557,6 +693,7 @@ mod tests {
                 actor: "test",
                 agent_id: "default",
                 visibility: "global",
+                scope: None,
             },
         )
         .unwrap();

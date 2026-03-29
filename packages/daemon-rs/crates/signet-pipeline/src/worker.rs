@@ -435,20 +435,14 @@ async fn process_extract(
 
     let facts_count = facts.len();
     let entities_count = result.entities.len();
+    let warnings = result.warnings;
 
-    // TODO: Phase 5.3 — apply shadow decisions (add/update/delete)
-    // For now, record extraction results without applying writes.
-    // The full pipeline will:
-    // 1. Search for existing similar memories (hybrid search)
-    // 2. Run shadow decision engine (add/update/delete/none)
-    // 3. Apply controlled writes with safety gates
-    // 4. Persist graph entities
-    // 5. Enqueue structural jobs (classify, dependency)
+    // TODO: Phase 5.3 — integrate decision application stages.
 
     Ok(JobResult {
         facts_extracted: facts_count,
         entities_extracted: entities_count,
-        warnings: result.warnings,
+        warnings,
     })
 }
 

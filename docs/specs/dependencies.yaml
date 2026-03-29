@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-27"
+updated_at: "2026-03-28"
 
 specs:
   - id: memory-pipeline-v2
@@ -97,6 +97,25 @@ specs:
       - "Prompt-time retrieval keeps structured distillation primary while transcript retrieval stays a searchable, embeddable fallback and deep-history substrate"
       - "Three-tier memory surfaces are mandatory: a compact global head, rolling thread heads, and a lossless lineage substrate"
       - "Multi-thread continuity remains stable across many simultaneous people/projects/topics via thread-scoped indexing and anti-bleed retrieval controls"
+    decision: null
+
+  - id: memory-md-rolling-window-lineage
+    status: approved
+    path: docs/specs/approved/memory-md-rolling-window-lineage.md
+    hard_depends_on:
+      - memory-md-temporal-head
+      - lossless-working-memory-runtime
+      - session-continuity-protocol
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-MEMORY-MD-ROLLING-WINDOW-LINKAGE.md
+      - docs/research/technical/RESEARCH-LCM-ACP.md
+    success_criteria:
+      - "Canonical historical content consists of immutable markdown summary/transcript/compaction artifacts, and MEMORY.md is a rebuildable derived projection"
+      - "Session-end and compaction persist canonical artifacts with deterministic workspace-root-relative Obsidian wikilinks"
+      - "Content-linked DB lineage/search rows are rebuildable from markdown artifacts while runtime temporal telemetry remains DB-native"
+      - "MEMORY.md renders a strict rolling 30-day UTC ledger with one high-signal sentence per in-window session and no clipping"
     decision: null
 
   - id: procedural-memory-plan
@@ -905,7 +924,8 @@ specs:
       - "Tray runtime can launch bundled daemon binaries as a fallback when system-installed runtimes are unavailable"
       - "Ubuntu outputs include both .deb and .AppImage artifacts per release"
       - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
-      - "Desktop release jobs enforce signing preflight checks before publish"
+      - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
+      - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
     decision: null
 
 

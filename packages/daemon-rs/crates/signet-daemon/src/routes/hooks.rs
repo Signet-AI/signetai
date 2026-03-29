@@ -14,7 +14,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 use signet_core::db::Priority;
-use signet_services::session::{ClaimResult, RuntimePath};
+use signet_services::session::{ClaimResult, RuntimePath, SessionTracker};
 use signet_services::transactions;
 
 use crate::state::AppState;
@@ -75,6 +75,95 @@ fn strip_untrusted_metadata(raw: &str) -> String {
         .join("\n")
         .trim()
         .to_string()
+}
+
+fn session_agent_id(session_key: Option<&str>) -> Option<String> {
+    let key = session_key?;
+    let mut parts = key.splitn(3, ':');
+    if parts.next() != Some("agent") {
+        return None;
+    }
+    let id = parts.next().unwrap_or("").trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn normalize_agent_id(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn resolve_remember_agent(
+    explicit: Option<&str>,
+    header: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<String, &'static str> {
+    let explicit_agent = normalize_agent_id(explicit);
+    let header_agent = normalize_agent_id(header);
+    let bound = session_agent_id(session_key);
+    if let Some(bound) = bound.as_deref() {
+        if let Some(explicit) = explicit_agent.as_deref()
+            && explicit != bound
+        {
+            return Err("agent_id does not match session scope");
+        }
+        if let Some(header) = header_agent.as_deref()
+            && header != bound
+        {
+            return Err("x-signet-agent-id does not match session scope");
+        }
+    }
+
+    Ok(explicit_agent
+        .or(header_agent)
+        .or(bound)
+        .unwrap_or_else(|| "default".to_string()))
+}
+
+fn parse_visibility(value: Option<&str>) -> Result<String, &'static str> {
+    let Some(raw) = value else {
+        return Ok("global".to_string());
+    };
+    let v = raw.trim().to_lowercase();
+    if v == "global" || v == "private" || v == "archived" {
+        return Ok(v);
+    }
+    Err("visibility must be one of: global, private, archived")
+}
+
+fn require_session_scope_for_write(
+    sessions: &SessionTracker,
+    agent_id: &str,
+    visibility: &str,
+    scope: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<(), &'static str> {
+    let scoped = agent_id != "default" || visibility != "global" || scope.is_some();
+    if !scoped {
+        return Ok(());
+    }
+
+    let Some(key) = session_key else {
+        if agent_id != "default" {
+            return Err("non-default agent_id requires session_key with agent scope");
+        }
+        return Err("non-default visibility/scope requires session_key with agent scope");
+    };
+    let session_agent = session_agent_id(Some(key));
+    if session_agent.is_none() {
+        return Err("session_key must be agent scoped");
+    }
+    if sessions.get_path(key).is_none() {
+        return Err("session_key is not active");
+    }
+    if agent_id != "default" && session_agent.as_deref() != Some(agent_id) {
+        return Err("agent_id does not match session scope");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -239,10 +328,9 @@ fn escape_like(text: &str) -> String {
 fn extract_anchor_terms(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for token in text
-        .to_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != ':' && c != '/' && c != '.' && c != '-')
-    {
+    for token in text.to_lowercase().split(|c: char| {
+        !c.is_ascii_alphanumeric() && c != '_' && c != ':' && c != '/' && c != '.' && c != '-'
+    }) {
         if token.len() < 6 {
             continue;
         }
@@ -737,6 +825,9 @@ pub struct HookRememberBody {
     pub session_key: Option<String>,
     pub idempotency_key: Option<String>,
     pub runtime_path: Option<String>,
+    pub agent_id: Option<String>,
+    pub visibility: Option<String>,
+    pub scope: Option<String>,
 }
 
 pub async fn remember(
@@ -796,6 +887,51 @@ pub async fn remember(
     let idempotency_key = body.idempotency_key.clone();
     let runtime_path_str = path.map(|p| p.as_str().to_string());
     let session_key = body.session_key.clone();
+    let agent_id = match resolve_remember_agent(
+        body.agent_id.as_deref(),
+        headers
+            .get("x-signet-agent-id")
+            .and_then(|v| v.to_str().ok()),
+        session_key.as_deref(),
+    ) {
+        Ok(id) => id,
+        Err(err) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response();
+        }
+    };
+    let visibility = match parse_visibility(body.visibility.as_deref()) {
+        Ok(v) => v,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": err })),
+            )
+                .into_response();
+        }
+    };
+    let scope = body
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Err(err) = require_session_scope_for_write(
+        &state.sessions,
+        &agent_id,
+        &visibility,
+        scope.as_deref(),
+        session_key.as_deref(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": err })),
+        )
+            .into_response();
+    }
 
     // Record in continuity tracker
     if let Some(key) = &session_key {
@@ -821,8 +957,9 @@ pub async fn remember(
                     idempotency_key: idempotency_key.as_deref(),
                     runtime_path: runtime_path_str.as_deref(),
                     actor: "hook",
-                    agent_id: "default",
-                    visibility: "global",
+                    agent_id: &agent_id,
+                    visibility: &visibility,
+                    scope: scope.as_deref(),
                 },
             )?;
 
@@ -1144,6 +1281,7 @@ pub async fn compaction_complete(
                     actor: "compaction",
                     agent_id: &agent_id,
                     visibility: "global",
+                    scope: None,
                 },
             )?;
 
@@ -1198,7 +1336,11 @@ fn extract_delta<'a>(full: &'a str, cursor: i64) -> Option<&'a str> {
             .unwrap_or(full.len());
     }
     let delta = &full[start..];
-    if delta.len() < CHECKPOINT_MIN_DELTA { None } else { Some(delta) }
+    if delta.len() < CHECKPOINT_MIN_DELTA {
+        None
+    } else {
+        Some(delta)
+    }
 }
 
 #[derive(Deserialize)]
@@ -1229,14 +1371,14 @@ pub async fn session_checkpoint_extract(
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "harness is required"})),
         )
-        .into_response();
+            .into_response();
     };
     let Some(session_key) = body.session_key.clone() else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "sessionKey is required"})),
         )
-        .into_response();
+            .into_response();
     };
 
     let path = resolve_runtime_path(&headers, body.runtime_path.as_deref());
@@ -1260,19 +1402,9 @@ pub async fn session_checkpoint_extract(
 
     // Resolve agent_id: explicit value > "agent:{id}:..." session-key parse > "default".
     // Mirrors TS resolveAgentId(sessionKey) so multi-agent checkpoints scope correctly.
-    let agent_id = {
-        let explicit = body.agent_id.as_deref().filter(|s| !s.is_empty());
-        explicit.map(str::to_string).unwrap_or_else(|| {
-            let mut parts = session_key.splitn(3, ':');
-            if parts.next() == Some("agent") {
-                let id = parts.next().unwrap_or("").trim();
-                if !id.is_empty() {
-                    return id.to_string();
-                }
-            }
-            "default".to_string()
-        })
-    };
+    let agent_id = normalize_agent_id(body.agent_id.as_deref())
+        .or_else(|| session_agent_id(Some(&session_key)))
+        .unwrap_or_else(|| "default".to_string());
     let inline = body.transcript.clone();
     // transcript_path is trusted the same way as in session_end — OpenClaw
     // session files may be anywhere (project dirs, /tmp, containers). Auth
@@ -1298,7 +1430,9 @@ pub async fn session_checkpoint_extract(
             // Mirrors the TS daemon priority order. Always filter by agent_id.
             let full = inline
                 .or_else(|| {
-                    tpath.as_deref().and_then(|p| std::fs::read_to_string(p).ok())
+                    tpath
+                        .as_deref()
+                        .and_then(|p| std::fs::read_to_string(p).ok())
                 })
                 .or_else(|| {
                     conn.query_row(
@@ -1343,7 +1477,99 @@ pub async fn session_checkpoint_extract(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_delta, resolve_compaction_project, strip_untrusted_metadata, CHECKPOINT_MIN_DELTA};
+    use super::{
+        CHECKPOINT_MIN_DELTA, extract_delta, parse_visibility, require_session_scope_for_write,
+        resolve_compaction_project, resolve_remember_agent, session_agent_id,
+        strip_untrusted_metadata,
+    };
+    use signet_services::session::{RuntimePath, SessionTracker};
+
+    #[test]
+    fn session_agent_id_parses_agent_session_keys() {
+        assert_eq!(
+            session_agent_id(Some("agent:alpha:sess-1")).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(session_agent_id(Some("session:sess-1")), None);
+    }
+
+    #[test]
+    fn resolve_remember_agent_rejects_session_scope_mismatch() {
+        let err = resolve_remember_agent(Some("agent-b"), None, Some("agent:agent-a:sess-1"))
+            .unwrap_err();
+        assert_eq!(err, "agent_id does not match session scope");
+    }
+
+    #[test]
+    fn resolve_remember_agent_binds_to_session_scope() {
+        let agent = resolve_remember_agent(
+            Some("agent-a"),
+            Some("agent-a"),
+            Some("agent:agent-a:sess-1"),
+        )
+        .unwrap();
+        assert_eq!(agent, "agent-a");
+    }
+
+    #[test]
+    fn resolve_remember_agent_inherits_session_scope_when_agent_missing() {
+        let agent = resolve_remember_agent(None, None, Some("agent:agent-a:sess-1")).unwrap();
+        assert_eq!(agent, "agent-a");
+    }
+
+    #[test]
+    fn require_session_scope_for_write_blocks_unscoped_overrides() {
+        let sessions = SessionTracker::new();
+        let err = require_session_scope_for_write(&sessions, "agent-a", "global", None, None)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "non-default agent_id requires session_key with agent scope"
+        );
+
+        let err = require_session_scope_for_write(&sessions, "default", "private", None, None)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "non-default visibility/scope requires session_key with agent scope"
+        );
+    }
+
+    #[test]
+    fn require_session_scope_for_write_requires_active_agent_session() {
+        let sessions = SessionTracker::new();
+        let err = require_session_scope_for_write(
+            &sessions,
+            "agent-a",
+            "private",
+            None,
+            Some("agent:agent-a:sess-1"),
+        )
+        .unwrap_err();
+        assert_eq!(err, "session_key is not active");
+
+        assert!(matches!(
+            sessions.claim("agent:agent-a:sess-1", RuntimePath::Plugin),
+            signet_services::session::ClaimResult::Ok
+        ));
+        assert!(
+            require_session_scope_for_write(
+                &sessions,
+                "agent-a",
+                "private",
+                None,
+                Some("agent:agent-a:sess-1"),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn parse_visibility_rejects_invalid_values() {
+        assert_eq!(parse_visibility(None).unwrap(), "global");
+        assert_eq!(parse_visibility(Some("archived")).unwrap(), "archived");
+        assert!(parse_visibility(Some("invalid")).is_err());
+    }
 
     #[test]
     fn compaction_project_prefers_transcript_lineage() {
@@ -1453,7 +1679,10 @@ mod tests {
         let full = format!("🦀{suffix}"); // 🦀 occupies bytes 0-3
         // cursor at byte 1 (inside the crab emoji) — must not panic.
         let delta = extract_delta(&full, 1);
-        assert!(delta.is_some(), "should snap to byte 4 and return the suffix");
+        assert!(
+            delta.is_some(),
+            "should snap to byte 4 and return the suffix"
+        );
         assert_eq!(delta.unwrap().len(), suffix.len());
     }
 

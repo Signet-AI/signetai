@@ -127,6 +127,7 @@ and market subdirectories). Reference repos live in `references/`.
 
 | Spec ID | Informed By | Key Question |
 |---|---|---|
+| `memory-md-rolling-window-lineage` | RESEARCH-MEMORY-MD-ROLLING-WINDOW-LINKAGE, RESEARCH-LCM-ACP | How should MEMORY.md treat markdown summaries/transcripts/compactions as canonical history while keeping a strict rolling 30-day per-session ledger? |
 | `knowledge-architecture-schema` | RESEARCH-GITNEXUS-PATTERNS, RESEARCH-LCM-ACP | How should entities, aspects, and attributes be structured? |
 | `desire-paths-epic` | RESEARCH-LCM-ACP, RESEARCH-REFERENCE-REPOS | How does retrieval evolve from flat search to graph traversal? |
 | `predictive-memory-scorer` | MSAM-COMPARISON | How should scoring balance structural vs behavioral signals? |
@@ -555,7 +556,7 @@ Phase ordering based on hard dependencies and integration contracts.
   - DP-16: Post-fusion dampening (gravity, hub, resolution) — COMPLETE
   - DP-17: Compaction resilience (hippocampal replay) — NOT STARTED
   - DP-18: Decision auto-protection — COMPLETE
-  - DP-19: Adaptive write gate (per-memory surprisal) — NOT STARTED
+  - DP-19: Adaptive write gate (per-memory surprisal) — PARTIALLY COMPLETE (prototype)
   - DP-20: Sleep replay (background consolidation) — NOT STARTED
 
 ### Wave 7 (ontology hardening and governance)
@@ -654,6 +655,7 @@ Legend:
 | `memory-md-temporal-head` | approved | `docs/specs/approved/memory-md-temporal-head.md` | `memory-pipeline-v2`, `session-continuity-protocol`, `desire-paths-epic` | - | MEMORY.md becomes a DB-backed temporal head over decay-scored memories and temporal DAG artifacts; respects PR #335 synthesis-provider inheritance rules |
 | `lossless-working-memory-runtime` | approved | `docs/specs/approved/lossless-working-memory-runtime.md` | `memory-md-temporal-head`, `session-continuity-protocol`, `knowledge-architecture-schema`, `multi-agent-support` | - | One agent may span many sessions/branches but still keeps one shared MEMORY.md head; live transcripts are fallback-queryable until structured distillation catches up |
 | `lossless-working-memory-closure` | approved | `docs/specs/approved/lossless-working-memory-closure.md` | `memory-md-temporal-head`, `lossless-working-memory-runtime`, `signet-runtime` | - | Hardens the no-gap runtime contract: temporal node expansion, retry-safe merge protection, compaction parity, transcript fallback discipline, explicit harness fidelity docs, and same-wave daemon-rs contract-shape parity with degraded-mode documentation for remaining runtime deltas. |
+| `memory-md-rolling-window-lineage` | approved | `docs/specs/approved/memory-md-rolling-window-lineage.md` | `memory-md-temporal-head`, `lossless-working-memory-runtime`, `session-continuity-protocol` | - | Makes summary/transcript/compaction markdown artifacts canonical for historical content with workspace-root-relative wikilinks, defines MEMORY.md as a rebuildable projection, and keeps runtime temporal telemetry DB-native. |
 | `procedural-memory-plan` | approved | `docs/specs/approved/procedural-memory-plan.md` | `memory-pipeline-v2` | `knowledge-architecture-schema` | P1 complete (skill_meta, enrichment, reconciler, graph nodes); P2–P5 remaining |
 | `knowledge-architecture-schema` | complete | `docs/specs/complete/knowledge-architecture-schema.md` | `memory-pipeline-v2`, `session-continuity-protocol`, `procedural-memory-plan` | `predictive-memory-scorer` | KA-1 through KA-6 fully implemented |
 | `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - | |
@@ -672,7 +674,7 @@ Legend:
 | `openclaw-hardening` | complete | `docs/specs/complete/openclaw-hardening.md` | `openclaw-importance-scoring-pr` | - | temporal index previews, typed hooks, mid-session extraction (PR #369) |
 | `openclaw-workspace-protection-plan` | planning | `docs/specs/planning/openclaw-workspace-protection-plan.md` | `openclaw-hardening` | `openclaw-workspace-protection` | Incident-driven planning stub for OpenClaw uninstall workspace-loss risk |
 | `openclaw-workspace-protection` | approved | `docs/specs/approved/openclaw-workspace-protection.md` | `openclaw-hardening`, `openclaw-workspace-protection-plan` | - | Setup soft gate + status/doctor visibility for unprotected OpenClaw-linked workspaces |
-| `desire-paths-epic` | approved | `docs/specs/approved/desire-paths-epic.md` | `knowledge-architecture-schema`, `predictive-memory-scorer` | - | 20 stories across 5 phases; Phases 1-3 COMPLETE. DP-16 through DP-20 added from reference repo analysis (Ori-Mnemos, Zikkaron) |
+| `desire-paths-epic` | approved | `docs/specs/approved/desire-paths-epic.md` | `knowledge-architecture-schema`, `predictive-memory-scorer` | - | 20 stories across 5 phases; Phases 1-3 COMPLETE. DP-16 and DP-18 COMPLETE, DP-19 prototype shipped, DP-20 pending (reference repo analysis: Ori-Mnemos, Zikkaron) |
 | `notebook-dump-2026-02-25` | reference | `docs/research/technical/notebook-dump-2026-02-25.md` | - | - | |
 | `marketplace-reviews-cloudflare-staging` | planning | `docs/specs/planning/marketplace-reviews-cloudflare-staging.md` | - | - | |
 | `predictor-agent-feedback` | approved | `docs/specs/approved/predictor-agent-feedback.md` | `predictive-memory-scorer` | - | |
@@ -709,7 +711,7 @@ Legend:
 | `api-contract-snapshots` | planning | `docs/specs/planning/api-contract-snapshots.md` | `signet-runtime` | - | Stub: response contract snapshot guards |
 | `developer-doctor-command` | planning | `docs/specs/planning/developer-doctor-command.md` | `signet-runtime` | - | Stub: one-command local health checks |
 | `macos-sqlite-runtime-discovery` | planning | `docs/specs/planning/macos-sqlite-runtime-discovery.md` | `signet-runtime` | - | Incident-driven stub for issue #336: broaden macOS SQLite dylib discovery and surface explicit degraded-mode guidance |
-| `desktop-packaging-distribution` | approved | `docs/specs/approved/desktop-packaging-distribution.md` | `signet-runtime` | - | Desktop packaging contract for macOS/Windows/Ubuntu/Arch, bundled daemon fallback path, and signing preflight |
+| `desktop-packaging-distribution` | approved | `docs/specs/approved/desktop-packaging-distribution.md` | `signet-runtime` | - | Desktop packaging contract for macOS/Windows/Ubuntu/Arch, bundled daemon fallback path, signing-mode resolution (official/self-signed), and Arch package validation |
 | `golden-path-docs` | planning | `docs/specs/planning/golden-path-docs.md` | `developer-doctor-command` | - | Stub: short contributor golden paths |
 | `code-ownership-sla` | planning | `docs/specs/planning/code-ownership-sla.md` | `multi-agent-support` | - | Stub: ownership map and review SLA |
 | `release-train-cadence` | planning | `docs/specs/planning/release-train-cadence.md` | `memory-pipeline-v2` | - | Stub: predictable release train model |

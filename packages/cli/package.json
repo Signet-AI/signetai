@@ -1,6 +1,6 @@
 {
   "name": "@signet/cli",
-  "version": "0.82.5",
+  "version": "0.82.7",
   "description": "CLI for Signet - portable AI agent identity",
   "type": "module",
   "bin": "./dist/cli.js",
@@ -42,7 +42,6 @@
     "@signet/core": "workspace:*",
     "@signet/connector-claude-code": "workspace:*",
     "@signet/connector-codex": "workspace:*",
-    "@signet/connector-oh-my-pi": "workspace:*",
     "@signet/connector-opencode": "workspace:*",
     "@signet/connector-openclaw": "workspace:*",
     "@inquirer/prompts": "^7.0.0",
