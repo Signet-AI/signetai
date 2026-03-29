@@ -10,6 +10,10 @@
 import type { ExtractedEntity } from "@signet/core";
 import type { WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
+import {
+	requireDependencyReason,
+	writeDependencyHistory,
+} from "../dependency-history";
 import { isDecisionContent } from "../inline-entity-linker";
 
 // ---------------------------------------------------------------------------
@@ -386,13 +390,49 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 			for (let j = i + 1; j < resolved.length; j++) {
 				if (resolved[i] === resolved[j]) continue;
 				try {
+					const row = db
+						.prepare(
+							`SELECT id
+							 FROM entity_dependencies
+							 WHERE source_entity_id = ? AND target_entity_id = ?
+							   AND dependency_type = 'related_to' AND agent_id = ?
+							 LIMIT 1`,
+						)
+						.get(resolved[i], resolved[j], input.agentId) as
+						| { id: string }
+						| undefined;
+					if (row) continue;
+					const id = crypto.randomUUID();
+					const reason = requireDependencyReason(
+						"related_to",
+						`co-occurred in extracted entities for memory ${input.sourceMemoryId}`,
+					);
 					db.prepare(
 						`INSERT INTO entity_dependencies
 						 (id, source_entity_id, target_entity_id, agent_id,
-						  dependency_type, strength, confidence, created_at, updated_at)
-						 VALUES (?, ?, ?, ?, 'related_to', 0.3, 0.5, ?, ?)
-						 ON CONFLICT DO NOTHING`,
-					).run(crypto.randomUUID(), resolved[i], resolved[j], input.agentId, input.now, input.now);
+						  dependency_type, strength, confidence, reason, created_at, updated_at)
+						 VALUES (?, ?, ?, ?, 'related_to', 0.3, 0.5, ?, ?, ?)`,
+					).run(
+						id,
+						resolved[i],
+						resolved[j],
+						input.agentId,
+						reason,
+						input.now,
+						input.now,
+					);
+					writeDependencyHistory(db, {
+						dependencyId: id,
+						sourceEntityId: resolved[i],
+						targetEntityId: resolved[j],
+						agentId: input.agentId,
+						dependencyType: "related_to",
+						event: "created",
+						changedBy: "graph-transactions",
+						reason,
+						createdAt: input.now,
+						metadata: JSON.stringify({ memoryId: input.sourceMemoryId }),
+					});
 				} catch {
 					// Already exists
 				}

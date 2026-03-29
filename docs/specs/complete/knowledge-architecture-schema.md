@@ -195,6 +195,8 @@ CREATE TABLE entity_dependencies (
   aspect_id TEXT REFERENCES entity_aspects(id) ON DELETE SET NULL,
   dependency_type TEXT NOT NULL,      -- 'uses' | 'requires' | 'owned_by' | 'blocks' | 'informs'
   strength REAL NOT NULL DEFAULT 0.5,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  reason TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -205,6 +207,9 @@ CREATE INDEX idx_entity_dependencies_agent ON entity_dependencies(agent_id);
 ```
 
 These are explicit traversal edges. They are not similarity artifacts.
+`related_to` is a special case: it MUST carry a non-empty human-auditable
+reason, and every create/update/delete of a dependency edge MUST append an
+immutable row to `entity_dependency_history`.
 
 ### 5.6 New table: `task_meta`
 

@@ -512,10 +512,12 @@ running and the model is pulled:
 curl -s http://localhost:11434/api/tags | jq '.models[].name'
 ```
 
-The recommended local floor is `qwen3:4b`. If it is not listed:
+The recommended local floor is `qwen3:4b` or `nemotron-3-nano:4b`. If neither is listed:
 
 ```bash
 ollama pull qwen3:4b
+# or
+ollama pull nemotron-3-nano:4b
 ```
 
 If Ollama is running but the pipeline is still idle, check whether it is

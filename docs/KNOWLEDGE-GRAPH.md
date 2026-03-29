@@ -64,8 +64,17 @@ them. Created by the extraction pipeline via `txPersistEntities`. Fields:
   `'related_to'`, `'part_of'`)
 - `strength` (REAL, default 0.5) — edge weight; used by traversal to filter
   low-confidence hops
+- `confidence` (REAL, default 0.7) — how trustworthy the edge is
+- `reason` (TEXT, nullable except for `related_to`) — short human-readable
+  explanation for why the edge exists
 - `aspect_id` (TEXT, nullable) — the aspect on the source entity that motivated
   this dependency, if known
+
+`entity_dependency_history` — append-only audit log for dependency edge changes.
+Every create, update, delete, and migration backfill for dependency edges writes
+an immutable row with `event`, `changed_by`, `reason`, optional metadata, and
+timestamp. `related_to` inserts/updates are rejected unless they include a
+non-empty reason.
 
 During traversal, the graph follows outgoing dependency edges from focal entities,
 collecting attributes from neighbors whose `strength >= minDependencyStrength`

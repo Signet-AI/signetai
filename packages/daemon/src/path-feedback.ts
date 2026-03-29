@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import type { DependencyType } from "@signet/core";
 import type { DbAccessor, WriteDb } from "./db-accessor";
+import { writeDependencyHistory } from "./dependency-history";
 import { recordAgentFeedbackInner } from "./session-memories";
 
 export interface FeedbackPath {
@@ -267,7 +269,8 @@ function updateDependencies(
 ): number {
 	if (rating === 0 || path.dependencyIds.length === 0) return 0;
 	const select = db.prepare(
-		`SELECT id, strength, confidence, reason
+		`SELECT id, source_entity_id, target_entity_id, dependency_type,
+		        strength, confidence, reason
 		 FROM entity_dependencies
 		 WHERE id = ?
 		   AND agent_id = ?
@@ -285,7 +288,15 @@ function updateDependencies(
 	let count = 0;
 	for (const depId of path.dependencyIds) {
 		const row = select.get(depId, agentId) as
-			| { id: string; strength: number; confidence: number; reason: string | null }
+			| {
+					id: string;
+					source_entity_id: string;
+					target_entity_id: string;
+					dependency_type: DependencyType;
+					strength: number;
+					confidence: number;
+					reason: string | null;
+			  }
 			| undefined;
 		if (!row) continue;
 		const mag = Math.abs(rating);
@@ -300,6 +311,19 @@ function updateDependencies(
 				? clamp(Math.max(row.confidence + cfg.confidenceDelta * mag, base), cfg.minConfidence, 1)
 				: clamp(Math.min(row.confidence - cfg.confidenceDelta * mag, base), cfg.minConfidence, 1);
 		update.run(strength, confidence, next, ts, depId, agentId);
+		writeDependencyHistory(db, {
+			dependencyId: depId,
+			sourceEntityId: row.source_entity_id,
+			targetEntityId: row.target_entity_id,
+			agentId,
+			dependencyType: row.dependency_type,
+			event: "updated",
+			changedBy: "path-feedback",
+			reason: next ?? "path feedback updated dependency",
+			previousReason: row.reason,
+			createdAt: ts,
+			metadata: JSON.stringify({ rating, strength, confidence }),
+		});
 		count++;
 	}
 	return count;
@@ -490,12 +514,25 @@ function maybePromoteDirected(
 	const strength = clamp(0.3 + npmi * 0.5, 0.3, 0.9);
 	if (!existing) {
 		if (countAutoEdges(db, agentId, edgeSource) >= cfg.autoEdgeCap) return false;
+		const id = crypto.randomUUID();
 		db.prepare(
 			`INSERT INTO entity_dependencies
 			 (id, source_entity_id, target_entity_id, agent_id, aspect_id,
 			  dependency_type, strength, confidence, reason, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, NULL, 'related_to', ?, 0.5, 'pattern-matched', ?, ?)`,
-		).run(crypto.randomUUID(), edgeSource, edgeTarget, agentId, strength, ts, ts);
+		).run(id, edgeSource, edgeTarget, agentId, strength, ts, ts);
+		writeDependencyHistory(db, {
+			dependencyId: id,
+			sourceEntityId: edgeSource,
+			targetEntityId: edgeTarget,
+			agentId,
+			dependencyType: "related_to",
+			event: "created",
+			changedBy: "path-feedback",
+			reason: "pattern-matched",
+			createdAt: ts,
+			metadata: JSON.stringify({ npmi, coSessions: co, totalSessions: total }),
+		});
 		return true;
 	}
 	db.prepare(
@@ -507,6 +544,18 @@ function maybePromoteDirected(
 		 WHERE id = ?
 		   AND agent_id = ?`,
 	).run(Math.max(existing.strength, strength), Math.max(existing.confidence, 0.5), ts, existing.id, agentId);
+	writeDependencyHistory(db, {
+		dependencyId: existing.id,
+		sourceEntityId: edgeSource,
+		targetEntityId: edgeTarget,
+		agentId,
+		dependencyType: "related_to",
+		event: "updated",
+		changedBy: "path-feedback",
+		reason: "pattern-matched",
+		createdAt: ts,
+		metadata: JSON.stringify({ npmi, coSessions: co, totalSessions: total }),
+	});
 	return true;
 }
 

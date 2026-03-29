@@ -20,6 +20,10 @@ import type {
 	DependencyType,
 	TaskStatus,
 } from "@signet/core";
+import {
+	requireDependencyReason,
+	writeDependencyHistory,
+} from "./dependency-history";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -355,7 +359,10 @@ export function upsertDependency(
 			) as Record<string, unknown> | undefined;
 
 		if (existing) {
-			const reason = params.reason ?? (existing.reason as string | null);
+			const reason = requireDependencyReason(
+				params.dependencyType,
+				params.reason ?? (typeof existing.reason === "string" ? existing.reason : null),
+			);
 			const conf = params.confidence ?? (typeof existing.confidence === "number" ? existing.confidence : 0.7);
 			db.prepare(
 				`UPDATE entity_dependencies
@@ -370,6 +377,26 @@ export function upsertDependency(
 				existing.id as string,
 				params.agentId,
 			);
+			if (
+				params.strength !== undefined ||
+				params.aspectId !== undefined ||
+				params.confidence !== undefined ||
+				params.reason !== undefined
+			) {
+				writeDependencyHistory(db, {
+					dependencyId: existing.id as string,
+					sourceEntityId: params.sourceEntityId,
+					targetEntityId: params.targetEntityId,
+					agentId: params.agentId,
+					dependencyType: params.dependencyType,
+					event: "updated",
+					changedBy: "knowledge-graph",
+					reason: reason ?? "updated without reason",
+					previousReason:
+						typeof existing.reason === "string" ? existing.reason : null,
+					createdAt: ts,
+				});
+			}
 			return rowToDependency({
 				...existing,
 				strength: params.strength ?? (existing.strength as number),
@@ -381,7 +408,7 @@ export function upsertDependency(
 		}
 
 		const id = crypto.randomUUID();
-		const reason = params.reason ?? null;
+		const reason = requireDependencyReason(params.dependencyType, params.reason);
 		const conf = params.confidence ?? 0.7;
 		db.prepare(
 			`INSERT INTO entity_dependencies
@@ -401,6 +428,17 @@ export function upsertDependency(
 			ts,
 			ts,
 		);
+		writeDependencyHistory(db, {
+			dependencyId: id,
+			sourceEntityId: params.sourceEntityId,
+			targetEntityId: params.targetEntityId,
+			agentId: params.agentId,
+			dependencyType: params.dependencyType,
+			event: "created",
+			changedBy: "knowledge-graph",
+			reason: reason ?? "created without reason",
+			createdAt: ts,
+		});
 
 		return {
 			id,
@@ -452,6 +490,33 @@ export function getDependenciesTo(
 
 export function deleteDependency(accessor: DbAccessor, id: string, agentId: string): void {
 	accessor.withWriteTx((db) => {
+		const row = db
+			.prepare(
+				`SELECT source_entity_id, target_entity_id, dependency_type, reason
+				 FROM entity_dependencies
+				 WHERE id = ? AND agent_id = ?`,
+			)
+			.get(id, agentId) as
+			| {
+					source_entity_id: string;
+					target_entity_id: string;
+					dependency_type: DependencyType;
+					reason: string | null;
+			  }
+			| undefined;
+		if (row) {
+			writeDependencyHistory(db, {
+				dependencyId: id,
+				sourceEntityId: row.source_entity_id,
+				targetEntityId: row.target_entity_id,
+				agentId,
+				dependencyType: row.dependency_type,
+				event: "deleted",
+				changedBy: "knowledge-graph",
+				reason: row.reason ?? "deleted without reason",
+				createdAt: now(),
+			});
+		}
 		db.prepare("DELETE FROM entity_dependencies WHERE id = ? AND agent_id = ?").run(id, agentId);
 	});
 }

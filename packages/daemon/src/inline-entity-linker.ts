@@ -11,6 +11,10 @@
  */
 
 import type { WriteDb } from "./db-accessor";
+import {
+	requireDependencyReason,
+	writeDependencyHistory,
+} from "./dependency-history";
 
 // ---------------------------------------------------------------------------
 // Decision pattern detection
@@ -398,13 +402,41 @@ export function linkMemoryToEntities(
 			for (let j = i + 1; j < ids.length; j++) {
 				if (ids[i] === ids[j]) continue;
 				try {
+					const row = db
+						.prepare(
+							`SELECT id
+							 FROM entity_dependencies
+							 WHERE source_entity_id = ? AND target_entity_id = ?
+							   AND dependency_type = 'related_to' AND agent_id = ?
+							 LIMIT 1`,
+						)
+						.get(ids[i], ids[j], agentId) as
+						| { id: string }
+						| undefined;
+					if (row) continue;
+					const id = crypto.randomUUID();
+					const reason = requireDependencyReason(
+						"related_to",
+						`co-occurred in remembered memory ${memoryId}`,
+					);
 					db.prepare(
 						`INSERT INTO entity_dependencies
 						 (id, source_entity_id, target_entity_id, agent_id,
-						  dependency_type, strength, confidence, created_at, updated_at)
-						 VALUES (?, ?, ?, ?, 'related_to', 0.3, 0.5, ?, ?)
-						 ON CONFLICT DO NOTHING`,
-					).run(crypto.randomUUID(), ids[i], ids[j], agentId, now, now);
+						  dependency_type, strength, confidence, reason, created_at, updated_at)
+						 VALUES (?, ?, ?, ?, 'related_to', 0.3, 0.5, ?, ?, ?)`,
+					).run(id, ids[i], ids[j], agentId, reason, now, now);
+					writeDependencyHistory(db, {
+						dependencyId: id,
+						sourceEntityId: ids[i],
+						targetEntityId: ids[j],
+						agentId,
+						dependencyType: "related_to",
+						event: "created",
+						changedBy: "inline-entity-linker",
+						reason,
+						createdAt: now,
+						metadata: JSON.stringify({ memoryId }),
+					});
 				} catch {
 					// Already exists
 				}

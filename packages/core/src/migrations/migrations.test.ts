@@ -127,6 +127,9 @@ describe("migration framework", () => {
 		// v20 tables (predictor reporting)
 		expect(tableNames).toContain("predictor_comparisons");
 		expect(tableNames).toContain("predictor_training_log");
+
+		// v50 tables (dependency audit)
+		expect(tableNames).toContain("entity_dependency_history");
 	});
 
 	test("memories table has expected v2 columns", () => {
@@ -224,6 +227,31 @@ describe("migration framework", () => {
 			name: string;
 		}>;
 		expect(cols.map((col) => col.name)).toContain("path_json");
+	});
+
+	test("related_to dependencies require a reason after migration 050", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const ts = new Date().toISOString();
+		db.exec(
+			`INSERT INTO entities
+			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+			 VALUES ('ent-a', 'A', 'a', 'project', 'default', 1, '${ts}', '${ts}')`,
+		);
+		db.exec(
+			`INSERT INTO entities
+			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+			 VALUES ('ent-b', 'B', 'b', 'project', 'default', 1, '${ts}', '${ts}')`,
+		);
+
+		expect(() =>
+			db.exec(
+				`INSERT INTO entity_dependencies
+				 (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, created_at, updated_at)
+				 VALUES ('dep-missing', 'ent-a', 'ent-b', 'default', 'related_to', 0.3, 0.5, '${ts}', '${ts}')`,
+			),
+		).toThrow("related_to dependencies require a non-empty reason");
 	});
 
 	test("session_memories has agent_id and agent-scoped uniqueness after migration 042", () => {
