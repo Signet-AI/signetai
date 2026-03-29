@@ -14,7 +14,7 @@ RUN bun install --frozen-lockfile
 RUN bun run build:core
 RUN bun run build:connector-base
 RUN bun run build:opencode-plugin
-RUN bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-openclaw' --filter '@signet/connector-opencode' build
+RUN bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-openclaw' --filter '@signet/connector-opencode' --filter '@signet/connector-oh-my-pi' build
 RUN bun run build:native
 RUN bun run build:dashboard
 RUN bun run build:signetai
