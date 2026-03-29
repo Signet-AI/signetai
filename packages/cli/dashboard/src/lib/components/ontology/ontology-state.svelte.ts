@@ -116,8 +116,12 @@ export async function loadGraph(agentId = "default"): Promise<void> {
 	ontology.selected = null;
 	ontology.hovered = null;
 	ontology.relatedIds = new Set();
-	ontology.searchMatchIds = null;
 	ontology.filterQuery = "";
+	ontology.searchMatchIds = null;
+	ontology.searching = false;
+	// Cancel any pending debounced search and invalidate in-flight callbacks
+	if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+	searchGeneration++;
 	ontology.tableStats = null;
 	try {
 		const data = await getConstellationOverlay(agentId);
