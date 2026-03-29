@@ -942,21 +942,23 @@ pub async fn session_end(
     state.sessions.release(&session_key);
 
     if is_clear {
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
         return (
             StatusCode::OK,
-            Json(serde_json::json!({
-                "memoriesSaved": 0,
-            })),
+            Json(serde_json::json!({"memoriesSaved": 0})),
         )
             .into_response();
     }
 
     if !pipeline_enabled(state.as_ref()) {
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
         return (
             StatusCode::OK,
-            Json(serde_json::json!({
-                "memoriesSaved": 0,
-            })),
+            Json(serde_json::json!({"memoriesSaved": 0})),
         )
             .into_response();
     }
@@ -973,6 +975,9 @@ pub async fn session_end(
         .map(|p| p.shadow_mode)
         .unwrap_or(false);
     if in_shadow {
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
         return (
             StatusCode::OK,
             Json(serde_json::json!({"memoriesSaved": 0, "shadow": true})),
