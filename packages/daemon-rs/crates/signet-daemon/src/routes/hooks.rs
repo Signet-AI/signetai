@@ -1174,6 +1174,9 @@ pub async fn session_end(
             .await
         {
             state.sessions.release(&session_key);
+            state.continuity.clear(&session_key);
+            state.dedup.clear_session_start(&session_key);
+            state.dedup.clear(&session_key);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("transcript artifact write failed: {e}")})),
@@ -1770,8 +1773,8 @@ pub async fn compaction_complete(
                     sentence,
                 )
                 .map_err(signet_core::error::CoreError::Migration)?;
-                write_memory_projection(conn, &root, &agent_id)
-                    .map_err(signet_core::error::CoreError::Migration)?;
+                // write_memory_projection is deferred to after DB ingest (step 2)
+                // so MEMORY.md reflects the newly ingested session_summary row.
                 Ok(serde_json::json!({
                     "project": project,
                     "sessionId": sid,
@@ -1805,6 +1808,7 @@ pub async fn compaction_complete(
             let harness_value = harness_value.clone();
             let summary_value = summary_value.clone();
             let session_id = session_id.clone();
+            let root = state.config.base_path.clone();
             move |conn| {
                 let r = transactions::ingest(
                     conn,
@@ -1837,6 +1841,9 @@ pub async fn compaction_complete(
                         rusqlite::params![key, agent_id],
                     );
                 }
+                // Project MEMORY.md after ingest so it includes the new row.
+                write_memory_projection(conn, &root, &agent_id)
+                    .map_err(signet_core::error::CoreError::Migration)?;
                 Ok(serde_json::Value::String(r.id))
             }
         })
