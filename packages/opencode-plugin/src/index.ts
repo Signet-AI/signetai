@@ -182,12 +182,11 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 	);
 	if (start.ok) {
 		sessionContext = start.data.inject ?? start.data.recentContext ?? "";
+	} else if (start.reason === "timeout") {
+		sessionContext = sessionStartFallback("timeout");
 	} else {
-		if (start.reason === "timeout") {
-			sessionContext = sessionStartFallback("timeout");
-		} else if (start.reason === "offline") {
-			sessionContext = staticFallback();
-		}
+		// offline, http error, invalid-json — all fall back to static identity
+		sessionContext = staticFallback();
 	}
 
 	return {

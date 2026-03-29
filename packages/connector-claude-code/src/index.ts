@@ -66,6 +66,9 @@ export interface SessionEndResult {
 	memoriesExtracted: number;
 }
 
+// Returns the timeout written into the Claude Code hook config. This is
+// intentionally 2 s longer than the Signet fetch timeout so the hook process
+// can return a graceful static-identity fallback before Claude Code kills it.
 function sessionStartHookTimeout(): number {
 	const raw = process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT;
 	return resolveSessionStartTimeoutMs(raw) + 2_000;
