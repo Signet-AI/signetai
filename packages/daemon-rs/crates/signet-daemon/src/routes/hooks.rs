@@ -46,6 +46,22 @@ fn conflict_response(claimed_by: RuntimePath) -> axum::response::Response {
         .into_response()
 }
 
+/// Returns the session_key of the most recent session for a project, used as a
+/// lineage fallback when compaction fires without an explicit sessionKey.
+fn latest_session_for_project(
+    conn: &rusqlite::Connection,
+    project: &str,
+    agent_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT session_key FROM session_transcripts \
+         WHERE agent_id = ?1 AND project = ?2 AND session_key IS NOT NULL \
+         ORDER BY created_at DESC LIMIT 1",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![agent_id, project])?;
+    rows.next()?.map(|row| row.get(0)).transpose()
+}
+
 fn resolve_compaction_project(
     conn: &rusqlite::Connection,
     session_key: Option<&str>,
@@ -1189,7 +1205,13 @@ pub async fn session_end(
             (StatusCode::OK, Json(val)).into_response()
         }
         Err(e) => {
+            // Enqueue failed — job will not run, so in-memory state is stale.
+            // Clear it so a future retry starts clean rather than accumulating
+            // ghost entries.
             state.sessions.release(&session_key);
+            state.continuity.clear(&session_key);
+            state.dedup.clear_session_start(&session_key);
+            state.dedup.clear(&session_key);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": e.to_string()})),
@@ -1655,10 +1677,6 @@ pub async fn compaction_complete(
     let root = state.config.base_path.clone();
     let session_key = body.session_key.clone();
     let fallback_project = body.project.clone();
-    let session_id = body
-        .session_key
-        .clone()
-        .unwrap_or_else(|| format!("compaction:{captured_at}"));
 
     let result = state
         .pool
@@ -1669,6 +1687,20 @@ pub async fn compaction_complete(
                 &agent_id,
                 fallback_project.as_deref(),
             )?;
+            // When sessionKey is absent, fall back to the most recent session
+            // for this project so the compaction artifact links into lineage.
+            // Without this, manifest resolution by session_id/session_key has
+            // no anchor and the artifact floats outside the lineage graph.
+            let session_id = session_key.clone().unwrap_or_else(|| {
+                project
+                    .as_deref()
+                    .and_then(|proj| {
+                        latest_session_for_project(conn, proj, &agent_id)
+                            .ok()
+                            .flatten()
+                    })
+                    .unwrap_or_else(|| format!("compaction:{captured_at}"))
+            });
             let r = transactions::ingest(
                 conn,
                 &transactions::IngestInput {
