@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "signet-app"
-version = "0.1.84"
+version = "0.82.5"
 dependencies = [
  "chrono",
  "dirs",

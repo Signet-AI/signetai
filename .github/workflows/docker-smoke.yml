@@ -1,0 +1,71 @@
+name: Docker Smoke
+
+on:
+  pull_request:
+    paths:
+      - "deploy/docker/**"
+      - "packages/**"
+      - "scripts/**"
+      - "public/**"
+      - "web/**"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - "tsconfig*.json"
+      - "biome.json"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+  push:
+    branches:
+      - main
+    paths:
+      - "deploy/docker/**"
+      - "packages/**"
+      - "scripts/**"
+      - "public/**"
+      - "web/**"
+      - "package.json"
+      - "bun.lock"
+      - "bunfig.toml"
+      - "tsconfig*.json"
+      - "biome.json"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and start stack
+        run: |
+          SIGNET_HTTP_PORT=8080 SIGNET_HTTPS_PORT=8443 docker compose -f deploy/docker/compose.yml up -d --build
+
+      - name: Wait for proxy readiness
+        run: |
+          for _ in $(seq 1 40); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/health || true)"
+            if [ "$code" = "200" ] || [ "$code" = "401" ] || [ "$code" = "301" ] || [ "$code" = "302" ] || [ "$code" = "307" ] || [ "$code" = "308" ]; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "proxy endpoint did not become ready"
+          docker compose -f deploy/docker/compose.yml ps
+          docker compose -f deploy/docker/compose.yml logs
+          exit 1
+
+      - name: Stop stack
+        if: always()
+        run: docker compose -f deploy/docker/compose.yml down -v

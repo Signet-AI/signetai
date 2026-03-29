@@ -1,0 +1,10 @@
+{
+	admin off
+}
+
+{$SIGNET_DOMAIN:localhost} {
+	encode zstd gzip
+	reverse_proxy signet:3850 {
+		flush_interval -1
+	}
+}

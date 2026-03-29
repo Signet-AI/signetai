@@ -190,7 +190,16 @@ export interface PipelineCommandConfig {
 }
 
 export interface PipelineExtractionConfig {
-	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
+	readonly provider:
+		| "none"
+		| "ollama"
+		| "claude-code"
+		| "opencode"
+		| "codex"
+		| "anthropic"
+		| "openrouter"
+		| "command";
+	readonly fallbackProvider?: "ollama" | "none";
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;
@@ -204,6 +213,8 @@ export interface PipelineWorkerConfig {
 	readonly pollMs: number;
 	readonly maxRetries: number;
 	readonly leaseTimeoutMs: number;
+	readonly maxLoadPerCpu: number;
+	readonly overloadBackoffMs: number;
 }
 
 export interface PipelineGraphConfig {
@@ -283,6 +294,12 @@ export interface PipelineContinuityConfig {
 	readonly recoveryBudgetChars: number;
 }
 
+export interface PipelineWriteGateConfig {
+	readonly enabled: boolean;
+	readonly threshold: number;
+	readonly continuityDiscount: number;
+}
+
 export interface PipelineV2Config {
 	// Master switches (flat)
 	readonly enabled: boolean;
@@ -312,6 +329,7 @@ export interface PipelineV2Config {
 	readonly structural: PipelineStructuralConfig;
 	readonly feedback: PipelineFeedbackConfig;
 	readonly significance?: PipelineSignificanceConfig;
+	readonly writeGate?: PipelineWriteGateConfig;
 	readonly predictor?: PredictorConfig;
 	readonly predictorPipeline: PipelinePredictorConfig;
 	readonly modelRegistry: PipelineModelRegistryConfig;

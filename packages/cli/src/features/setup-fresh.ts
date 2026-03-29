@@ -9,6 +9,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
+import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import { readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
 
@@ -16,6 +17,16 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 	const spinner = ora("Setting up Signet...").start();
 
 	try {
+		if (cfg.nonInteractive && !cfg.allowUnprotectedWorkspace && !cfg.createLocalBackup) {
+			await enforceSetupProtection({
+				basePath: cfg.basePath,
+				nonInteractive: true,
+				allowUnprotectedWorkspace: false,
+				createLocalBackup: false,
+				assumeOpenClawLinked: cfg.configureOpenClawWs && cfg.openclawConfigCount > 0,
+			});
+		}
+
 		const templatesDir = deps.getTemplatesDir();
 		mkdirSync(cfg.basePath, { recursive: true });
 
@@ -143,6 +154,14 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			db.close();
 		}
 
+		let protection = await enforceSetupProtection({
+			basePath: cfg.basePath,
+			nonInteractive: cfg.nonInteractive,
+			allowUnprotectedWorkspace: cfg.allowUnprotectedWorkspace,
+			createLocalBackup: cfg.createLocalBackup,
+			assumeOpenClawLinked: cfg.configureOpenClawWs && cfg.openclawConfigCount > 0,
+		});
+
 		if (cfg.harnesses.includes("forge") && !deps.detectExistingSetup(cfg.basePath).harnesses.forge) {
 			if (!managedForgeInstallSupportedOnCurrentPlatform()) {
 				throw new Error(
@@ -180,6 +199,17 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			}
 		}
 
+		if (protection.state === "snapshot") {
+			spinner.text = "Refreshing workspace snapshot...";
+			protection = refreshSnapshotProtection(cfg.basePath, protection);
+		}
+
+		let committed = false;
+		if (cfg.gitEnabled) {
+			const date = new Date().toISOString().split("T")[0];
+			committed = await deps.gitAddAndCommit(cfg.basePath, `${date}_signet-setup`);
+		}
+
 		spinner.text = "Starting daemon...";
 		const daemonStarted = await deps.startDaemon(cfg.basePath);
 
@@ -213,12 +243,8 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		}
 
 		console.log();
-		if (cfg.gitEnabled) {
-			const date = new Date().toISOString().split("T")[0];
-			const committed = await deps.gitAddAndCommit(cfg.basePath, `${date}_signet-setup`);
-			if (committed) {
-				console.log(chalk.dim("  ✓ Changes committed to git"));
-			}
+		if (committed) {
+			console.log(chalk.dim("  ✓ Changes committed to git"));
 		}
 
 		if (cfg.nonInteractive) {
@@ -235,9 +261,14 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		}
 
 		console.log();
+		printSetupProtectionSummary(protection);
+		console.log();
 		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
 		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
 		console.log(chalk.dim("    communication style, and your preferences."));
+		if (protection.state === "bypass") {
+			console.log(chalk.red("    Backup warning: this workspace is still unprotected."));
+		}
 	} catch (err) {
 		spinner.fail(chalk.red("Setup failed"));
 		console.error(err);

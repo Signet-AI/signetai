@@ -559,6 +559,32 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
         _ => {}
     }
 
+    // Cross-daemon parity: keep scoped memory columns/indexes aligned.
+    if m.version >= 2 {
+        add_column_if_missing(
+            conn,
+            "memories",
+            "agent_id",
+            "TEXT NOT NULL DEFAULT 'default'",
+        );
+        add_column_if_missing(
+            conn,
+            "memories",
+            "visibility",
+            "TEXT NOT NULL DEFAULT 'global'",
+        );
+        add_column_if_missing(conn, "memories", "scope", "TEXT");
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_memories_agent_visibility_scope
+                ON memories(agent_id, visibility, scope);
+             DROP INDEX IF EXISTS idx_memories_content_hash_unique;
+             DROP INDEX IF EXISTS idx_memories_content_hash;
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_unique
+                ON memories(content_hash, agent_id, IFNULL(scope, ''), visibility)
+                WHERE content_hash IS NOT NULL AND is_deleted = 0;",
+        )?;
+    }
+
     Ok(())
 }
 

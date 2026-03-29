@@ -6,11 +6,11 @@
 import type { ModelRegistryEntry } from "@signet/core";
 import { marked } from "marked";
 
-// When served by the daemon, use relative URLs.
-// When served by Tauri (frontendDist) or Vite dev server, use absolute URL.
-const isDev = import.meta.env.DEV;
+// When served by the daemon (production) or Vite dev server (proxied), use relative URLs.
+// Tauri needs an absolute URL since it serves from a different origin.
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-export const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
+const tauriHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
+export const API_BASE = isTauri ? `http://${tauriHost}:3850` : "";
 
 export interface Memory {
 	id: string;
@@ -274,9 +274,11 @@ export async function saveConfigFileResult(file: string, content: string): Promi
 	}
 }
 
-export async function getMemories(limit = 100, offset = 0): Promise<{ memories: Memory[]; stats: MemoryStats }> {
+export async function getMemories(limit = 100, offset = 0, agentId?: string): Promise<{ memories: Memory[]; stats: MemoryStats }> {
 	try {
-		const response = await fetch(`${API_BASE}/api/memories?limit=${limit}&offset=${offset}`);
+		const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+		if (agentId) params.set("agent_id", agentId);
+		const response = await fetch(`${API_BASE}/api/memories?${params}`);
 		if (!response.ok) throw new Error("Failed to fetch memories");
 		return await response.json();
 	} catch {
@@ -637,7 +639,7 @@ export async function deleteMemory(
 
 export async function getEmbeddings(
 	withVectors = false,
-	options: { limit?: number; offset?: number } = {},
+	options: { limit?: number; offset?: number; agentId?: string } = {},
 ): Promise<EmbeddingsResponse> {
 	try {
 		const params = new URLSearchParams({
@@ -648,6 +650,9 @@ export async function getEmbeddings(
 		}
 		if (typeof options.offset === "number") {
 			params.set("offset", options.offset.toString());
+		}
+		if (typeof options.agentId === "string" && options.agentId.length > 0) {
+			params.set("agent_id", options.agentId);
 		}
 
 		const response = await fetch(`${API_BASE}/api/embeddings?${params}`);
@@ -721,6 +726,7 @@ export interface ProjectionQueryOptions {
 	until?: string;
 	importanceMin?: number;
 	importanceMax?: number;
+	agentId?: string;
 }
 
 export async function getProjection(
@@ -743,6 +749,7 @@ export async function getProjection(
 		if (typeof options.until === "string" && options.until.length > 0) params.set("until", options.until);
 		if (typeof options.importanceMin === "number") params.set("importanceMin", String(options.importanceMin));
 		if (typeof options.importanceMax === "number") params.set("importanceMax", String(options.importanceMax));
+		if (typeof options.agentId === "string" && options.agentId.length > 0) params.set("agent_id", options.agentId);
 
 		const response = await fetch(`${API_BASE}/api/embeddings/projection?${params}`);
 		if (response.status === 202) return { status: "computing" };
@@ -2145,7 +2152,7 @@ export async function getKnowledgeAttributes(
 		if (filters.status) params.set("status", filters.status);
 		if (typeof filters.limit === "number") params.set("limit", String(filters.limit));
 		if (typeof filters.offset === "number") params.set("offset", String(filters.offset));
-		params.set("agent_id", filters.agentId ?? "default");
+		if (filters.agentId) params.set("agent_id", filters.agentId);
 		const res = await fetch(
 			`${API_BASE}/api/knowledge/entities/${encodeURIComponent(entityId)}/aspects/${encodeURIComponent(aspectId)}/attributes?${params.toString()}`,
 		);
@@ -2174,9 +2181,12 @@ export async function getKnowledgeDependencies(
 	}
 }
 
-export async function getKnowledgeStats(): Promise<KnowledgeStats | null> {
+export async function getKnowledgeStats(agentId?: string): Promise<KnowledgeStats | null> {
 	try {
-		const res = await fetch(`${API_BASE}/api/knowledge/stats`);
+		const url = agentId
+			? `${API_BASE}/api/knowledge/stats?agent_id=${encodeURIComponent(agentId)}`
+			: `${API_BASE}/api/knowledge/stats`;
+		const res = await fetch(url);
 		if (!res.ok) return null;
 		return await res.json();
 	} catch {

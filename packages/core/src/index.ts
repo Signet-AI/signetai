@@ -171,6 +171,16 @@ export type {
 	SetupDetection,
 } from "./identity";
 
+export {
+	clearConfiguredOhMyPiAgentDir,
+	getOhMyPiConfigPath,
+	listOhMyPiAgentDirCandidates,
+	readConfiguredOhMyPiAgentDir,
+	resolveOhMyPiAgentDir,
+	resolveOhMyPiExtensionsDir,
+	writeConfiguredOhMyPiAgentDir,
+} from "./oh-my-pi";
+
 // Multi-agent support
 export {
 	discoverAgents,

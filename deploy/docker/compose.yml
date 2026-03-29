@@ -1,0 +1,47 @@
+name: signet
+
+services:
+  signet:
+    image: ghcr.io/signet-ai/signet:${SIGNET_IMAGE_TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    restart: unless-stopped
+    environment:
+      SIGNET_BIND: 0.0.0.0
+      SIGNET_PORT: 3850
+      SIGNET_PATH: /data/agents
+      SIGNET_LOG_FILE: /data/agents/.daemon/logs/daemon.log
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - signet_data:/data/agents
+    expose:
+      - "3850"
+    healthcheck:
+      test: ["CMD", "bun", "/app/deploy/docker/scripts/healthcheck.mjs"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+
+  caddy:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    depends_on:
+      signet:
+        condition: service_healthy
+    environment:
+      SIGNET_DOMAIN: ${SIGNET_DOMAIN:-localhost}
+    ports:
+      - "${SIGNET_HTTP_PORT:-80}:80"
+      - "${SIGNET_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  signet_data:
+  caddy_data:
+  caddy_config:

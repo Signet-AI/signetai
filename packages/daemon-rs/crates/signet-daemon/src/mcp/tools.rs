@@ -9,6 +9,38 @@ use crate::feedback::parse_scores;
 use crate::state::AppState;
 use signet_core::db::Priority;
 
+fn session_agent_id(session_key: &str) -> Option<String> {
+    let mut parts = session_key.splitn(3, ':');
+    if parts.next() != Some("agent") {
+        return None;
+    }
+    let id = parts.next().unwrap_or("").trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn resolve_agent_id(
+    explicit: Option<&str>,
+    session_key: Option<&str>,
+) -> Result<String, String> {
+    let bound = session_key.and_then(session_agent_id);
+    let explicit = explicit.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(agent) = explicit {
+        if let Some(bound) = bound.as_deref()
+            && agent != bound
+        {
+            return Err("agent_id does not match session scope".to_string());
+        }
+        return Ok(agent.to_string());
+    }
+    if let Some(bound) = bound {
+        return Ok(bound);
+    }
+    Ok("default".to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Tool registry
 // ---------------------------------------------------------------------------
@@ -41,6 +73,10 @@ pub fn definitions() -> Vec<ToolDefinition> {
                     "type": { "type": "string", "description": "Memory type" },
                     "importance": { "type": "number", "description": "Importance score 0-1" },
                     "tags": { "type": "array", "items": { "type": "string" } },
+                    "session_key": { "type": "string", "description": "Session key for scoped writes (agent:{id}:...)" },
+                    "agent_id": { "type": "string", "description": "Agent id scope (requires matching session_key for non-default)" },
+                    "visibility": { "type": "string", "enum": ["global", "private", "archived"], "description": "Memory visibility (requires session_key for non-default)" },
+                    "scope": { "type": "string", "description": "Optional scope partition key (requires session_key when set)" },
                 },
                 "required": ["content"],
             }),
@@ -394,6 +430,61 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 .collect()
         })
         .unwrap_or_default();
+    let session_key = args
+        .get("session_key")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let explicit_agent = args
+        .get("agent_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let agent_id = match resolve_agent_id(explicit_agent, session_key.as_deref()) {
+        Ok(id) => id,
+        Err(err) => return ToolCallResult::error(err),
+    };
+
+    let visibility = match args.get("visibility").and_then(|v| v.as_str()) {
+        None => "global".to_string(),
+        Some(raw) => {
+            let v = raw.trim().to_lowercase();
+            if v == "global" || v == "private" || v == "archived" {
+                v
+            } else {
+                return ToolCallResult::error(
+                    "visibility must be one of: global, private, archived".to_string(),
+                );
+            }
+        }
+    };
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if session_key.is_none() && (visibility != "global" || scope.is_some()) {
+        return ToolCallResult::error(
+            "non-default visibility/scope requires session_key".to_string(),
+        );
+    }
+    let scoped = agent_id != "default" || visibility != "global" || scope.is_some();
+    if scoped {
+        let Some(key) = session_key.as_deref() else {
+            return ToolCallResult::error("session_key is required".to_string());
+        };
+        if state.sessions.get_path(key).is_none() {
+            return ToolCallResult::error("session_key is not active".to_string());
+        }
+        let Some(bound) = session_agent_id(key) else {
+            return ToolCallResult::error("session_key must be agent scoped".to_string());
+        };
+        if agent_id != "default" && agent_id != bound {
+            return ToolCallResult::error("agent_id does not match session scope".to_string());
+        }
+    }
 
     let result = state
         .pool
@@ -412,8 +503,9 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "mcp-server",
-                agent_id: "default",
-                visibility: "global",
+                agent_id: &agent_id,
+                visibility: &visibility,
+                scope: scope.as_deref(),
             };
             let result = signet_services::transactions::ingest(conn, &input)?;
             Ok(serde_json::json!({
@@ -608,5 +700,44 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    #[test]
+    fn memory_store_schema_includes_scoped_write_fields() {
+        let defs = definitions();
+        let tool = defs
+            .iter()
+            .find(|tool| tool.name == "memory_store")
+            .expect("memory_store tool");
+        let props = tool
+            .input_schema
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("memory_store.properties");
+        assert!(props.contains_key("session_key"));
+        assert!(props.contains_key("agent_id"));
+        assert!(props.contains_key("visibility"));
+        assert!(props.contains_key("scope"));
+    }
+
+    #[test]
+    fn session_agent_id_parses_agent_session_key() {
+        assert_eq!(
+            session_agent_id("agent:alpha:sess-1").as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(session_agent_id("sess-1"), None);
+    }
+
+    #[test]
+    fn resolve_agent_id_inherits_session_scope_when_missing() {
+        let agent = resolve_agent_id(None, Some("agent:alpha:sess-1")).unwrap();
+        assert_eq!(agent, "alpha");
+    }
+
+    #[test]
+    fn resolve_agent_id_rejects_session_scope_mismatch() {
+        let err = resolve_agent_id(Some("beta"), Some("agent:alpha:sess-1")).unwrap_err();
+        assert_eq!(err, "agent_id does not match session scope");
     }
 }

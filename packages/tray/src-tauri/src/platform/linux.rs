@@ -12,10 +12,7 @@ impl LinuxManager {
 
     fn find_bun(&self) -> Option<String> {
         // Check common locations
-        let candidates = [
-            "/usr/bin/bun",
-            "/usr/local/bin/bun",
-        ];
+        let candidates = ["/usr/bin/bun", "/usr/local/bin/bun"];
 
         for path in &candidates {
             if std::path::Path::new(path).exists() {
@@ -62,6 +59,30 @@ impl LinuxManager {
 
         None
     }
+
+    fn find_signet_cli(&self) -> Option<String> {
+        // Check common locations
+        let candidates = ["/usr/bin/signet", "/usr/local/bin/signet"];
+
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                return Some(path.to_string());
+            }
+        }
+
+        // Fall back to PATH lookup
+        Command::new("which")
+            .arg("signet")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+    }
 }
 
 impl DaemonManager for LinuxManager {
@@ -79,36 +100,40 @@ impl DaemonManager for LinuxManager {
             return Ok(());
         }
 
-        // Direct process fallback
-        let bun = self
-            .find_bun()
-            .ok_or("bun not found — install bun to run signet daemon")?;
-
-        // Try `signet-daemon` binary first (global install)
-        if let Ok(output) = Command::new("which").arg("signet-daemon").output() {
-            if output.status.success() {
-                let bin = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                Command::new(&bun)
-                    .arg(&bin)
-                    .spawn()?;
-                return Ok(());
-            }
+        if let Some(bin) = super::find_bundled_daemon() {
+            Command::new(&bin).spawn()?;
+            return Ok(());
         }
 
-        // Try daemon.js directly
-        if let Some(daemon_js) = self.find_daemon_js() {
+        if let Some(signet) = self.find_signet_cli() {
+            Command::new(&signet).args(["daemon", "start"]).spawn()?;
+            return Ok(());
+        }
+
+        if let Some(bun) = self.find_bun() {
+            // Try `signet-daemon` binary first (global install)
+            if let Ok(output) = Command::new("which").arg("signet-daemon").output() {
+                if output.status.success() {
+                    let bin = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    Command::new(&bun).arg(&bin).spawn()?;
+                    return Ok(());
+                }
+            }
+
+            // Try daemon.js directly
+            if let Some(daemon_js) = self.find_daemon_js() {
+                Command::new(&bun).arg(&daemon_js).spawn()?;
+                return Ok(());
+            }
+
+            // Last resort: bunx
             Command::new(&bun)
-                .arg(&daemon_js)
+                .args(["x", "signetai", "daemon", "start"])
                 .spawn()?;
             return Ok(());
         }
 
-        // Last resort: bunx
-        Command::new(&bun)
-            .args(["x", "signetai", "daemon", "start"])
-            .spawn()?;
-
-        Ok(())
+        Err("bun not found and no bundled daemon runtime is available".into())
     }
 
     fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {

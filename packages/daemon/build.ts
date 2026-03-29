@@ -3,11 +3,17 @@
  * that break when bundled (baked paths to .node/.wasm binaries).
  *
  * sharp: aliased to an empty shim (we only do text embeddings)
+ * better-sqlite3: external (node-only fallback in @signet/core)
  * @1password/sdk: external (lazy-loaded, optional dep)
  * onnxruntime-node: external (native binary, installed as dep)
  */
 
-const EXTERNAL = ["@1password/sdk", "onnxruntime-node", "@huggingface/transformers"];
+const EXTERNAL = [
+	"better-sqlite3",
+	"@1password/sdk",
+	"onnxruntime-node",
+	"@huggingface/transformers",
+];
 
 const ALIAS = {
 	sharp: "./src/shims/sharp.ts",

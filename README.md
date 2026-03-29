@@ -61,6 +61,19 @@ signet dashboard           # open memory + retrieval inspector
 If you already use Claude Code, OpenCode, OpenClaw, or Codex, keep your
 existing harness. Signet installs under it.
 
+### Docker self-hosting
+
+Run Signet as a containerized daemon with first-party Compose assets:
+
+```bash
+cd deploy/docker
+cp .env.example .env
+docker compose up -d --build
+```
+
+See [`docs/SELF-HOSTING.md`](docs/SELF-HOSTING.md) for token bootstrap,
+backup, and upgrade runbook details.
+
 ## First proof of value (2-session test)
 
 Run this once:
@@ -396,7 +409,17 @@ cd packages/daemon && bun run dev        # Daemon dev (watch mode)
 cd packages/cli/dashboard && bun run dev # Dashboard dev
 ```
 
-Requirements: Node.js 18+, Bun, Ollama (recommended) or OpenAI API key. macOS or Linux.
+Requirements:
+
+- Node.js 18+ or Bun
+- macOS or Linux
+- Optional for harness integrations: Claude Code, Codex, OpenCode, or OpenClaw
+
+Embeddings (choose one):
+
+- **Built-in** (recommended) — no extra setup, runs locally via ONNX (`nomic-embed-text-v1.5`)
+- **Ollama** — alternative local option, requires `nomic-embed-text` model
+- **OpenAI** — cloud option, requires `OPENAI_API_KEY`
 
 ## Contributing
 
@@ -409,7 +432,7 @@ contributing significant features. Read the
 ## Contributors
 
 <p align="left">
-  <a href="https://github.com/NicholaiVogel"><img src="https://avatars.githubusercontent.com/u/217880623?v=4&s=48" width="48" height="48" alt="NicholaiVogel" title="NicholaiVogel"/></a> <a href="https://github.com/BusyBee3333"><img src="https://avatars.githubusercontent.com/u/241850310?v=4&s=48" width="48" height="48" alt="BusyBee3333" title="BusyBee3333"/></a> <a href="https://github.com/stephenwoska2-cpu"><img src="https://avatars.githubusercontent.com/u/258141506?v=4&s=48" width="48" height="48" alt="stephenwoska2-cpu" title="stephenwoska2-cpu"/></a> <a href="https://github.com/PatchyToes"><img src="https://avatars.githubusercontent.com/u/256889430?v=4&s=48" width="48" height="48" alt="PatchyToes" title="PatchyToes"/></a> <a href="https://github.com/aaf2tbz"><img src="https://avatars.githubusercontent.com/u/260091788?v=4&s=48" width="48" height="48" alt="aaf2tbz" title="aaf2tbz"/></a> <a href="https://github.com/ddasgupta4"><img src="https://avatars.githubusercontent.com/ddasgupta4?v=4&s=48" width="48" height="48" alt="ddasgupta4" title="ddasgupta4"/></a>
+  <a href="https://github.com/NicholaiVogel"><img src="https://avatars.githubusercontent.com/u/217880623?v=4&s=48" width="48" height="48" alt="NicholaiVogel" title="NicholaiVogel"/></a> <a href="https://github.com/BusyBee3333"><img src="https://avatars.githubusercontent.com/u/241850310?v=4&s=48" width="48" height="48" alt="BusyBee3333" title="BusyBee3333"/></a> <a href="https://github.com/stephenwoska2-cpu"><img src="https://avatars.githubusercontent.com/u/258141506?v=4&s=48" width="48" height="48" alt="stephenwoska2-cpu" title="stephenwoska2-cpu"/></a> <a href="https://github.com/PatchyToes"><img src="https://avatars.githubusercontent.com/u/256889430?v=4&s=48" width="48" height="48" alt="PatchyToes" title="PatchyToes"/></a> <a href="https://github.com/aaf2tbz"><img src="https://avatars.githubusercontent.com/u/260091788?v=4&s=48" width="48" height="48" alt="aaf2tbz" title="aaf2tbz"/></a> <a href="https://github.com/ddasgupta4"><img src="https://avatars.githubusercontent.com/ddasgupta4?v=4&s=48" width="48" height="48" alt="ddasgupta4" title="ddasgupta4"/></a> <a href="https://github.com/alcar2364"><img src="https://avatars.githubusercontent.com/alcar2364?v=4&s=48" width="48" height="48" alt="alcar2364" title="alcar2364"/></a>
 </p>
 
 ## License

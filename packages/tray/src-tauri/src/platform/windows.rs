@@ -45,8 +45,8 @@ impl WindowsManager {
 
         // %APPDATA%\npm\node_modules\signetai\dist\daemon.js
         if let Ok(app_data) = std::env::var("APPDATA") {
-            let path = std::path::Path::new(&app_data)
-                .join("npm/node_modules/signetai/dist/daemon.js");
+            let path =
+                std::path::Path::new(&app_data).join("npm/node_modules/signetai/dist/daemon.js");
             if path.exists() {
                 return Some(path.to_string_lossy().to_string());
             }
@@ -82,9 +82,7 @@ impl WindowsManager {
     /// Terminate a process by PID using Windows API (no shell).
     fn terminate_process(pid: u32) -> Result<(), Box<dyn std::error::Error>> {
         use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::Threading::{
-            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-        };
+        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 
         unsafe {
             let handle = OpenProcess(PROCESS_TERMINATE, false, pid)?;
@@ -97,9 +95,7 @@ impl WindowsManager {
 
     fn process_alive(pid: u32) -> bool {
         use windows::Win32::Foundation::CloseHandle;
-        use windows::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
         unsafe {
             match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
@@ -128,27 +124,32 @@ impl DaemonManager for WindowsManager {
             return Ok(());
         }
 
-        // Direct bun fallback
-        let bun = self
-            .find_bun()
-            .ok_or("bun not found — install bun to run signet daemon")?;
+        if let Some(bun) = self.find_bun() {
+            // Try daemon.js directly
+            if let Some(daemon_js) = self.find_daemon_js() {
+                Command::new(&bun)
+                    .arg(&daemon_js)
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn()?;
+                return Ok(());
+            }
 
-        // Try daemon.js directly
-        if let Some(daemon_js) = self.find_daemon_js() {
+            // Last resort: bunx
             Command::new(&bun)
-                .arg(&daemon_js)
+                .args(["x", "signetai", "daemon", "start"])
                 .creation_flags(CREATE_NO_WINDOW)
                 .spawn()?;
             return Ok(());
         }
 
-        // Last resort: bunx
-        Command::new(&bun)
-            .args(["x", "signetai", "daemon", "start"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()?;
+        if let Some(bin) = super::find_bundled_daemon() {
+            Command::new(&bin)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()?;
+            return Ok(());
+        }
 
-        Ok(())
+        Err("bun not found and no bundled daemon runtime is available".into())
     }
 
     fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {

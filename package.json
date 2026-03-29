@@ -1,6 +1,6 @@
 {
   "name": "signet",
-  "version": "0.80.0",
+  "version": "0.84.0",
   "private": true,
   "description": "Portable AI agent identity",
   "repository": {
@@ -16,15 +16,18 @@
     "web"
   ],
   "scripts": {
-    "build": "bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:native && bun run build:deps && bun run build:signetai",
+    "build": "bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:native && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:deps && bun run build:signetai",
     "build:native": "bun scripts/build-native.ts",
     "build:core": "cd packages/core && bun run build",
     "build:connector-base": "cd packages/connector-base && bun run build",
+    "build:connector-oh-my-pi": "cd packages/connector-oh-my-pi && bun run build",
     "build:opencode-plugin": "cd packages/opencode-plugin && bun run build",
-    "build:deps": "bun run --filter '@signet/connector-*' --filter '@signet/adapter-*' --filter '@signetai/*' --filter '@signet/daemon' --filter '@signet/sdk' --filter '@signet/cli' build",
+    "build:oh-my-pi-extension": "cd packages/oh-my-pi-extension && bun run build",
+    "build:deps": "bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-opencode' --filter '@signet/connector-openclaw' --filter '@signet/adapter-*' --filter '@signetai/*' --filter '@signet/daemon' --filter '@signet/sdk' build",
     "build:signetai": "cd packages/signetai && bun run build",
     "build:publish": "bun run build:dashboard && bun run build:signetai",
     "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
+    "build:desktop": "cd packages/tray && bun run build:desktop",
     "start": "cd packages/daemon && bun run start",
     "dev": "bun run --filter '*' dev",
     "test": "bun run --filter '*' test",

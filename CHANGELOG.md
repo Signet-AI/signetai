@@ -2,12 +2,114 @@
 
 All notable changes to Signet are documented here.
 
+## [0.83.0] - 2026-03-29
+
+### Features
+
+- **oh-my-pi**: add Oh My Pi support (#386)
+
+
+## [0.82.7] - 2026-03-29
+
+### Features
+
+- **dashboard**: ontology constellation view (#393)
+
+
+## [0.82.6] - 2026-03-29
+
+### Bug Fixes
+
+- **ci**: replace mapfile for macOS-compatible release uploads (#392)
+
+
+## [0.82.5] - 2026-03-29
+
+### Bug Fixes
+
+- **daemon**: prototype DP-19 adaptive write gate with scoped guards (#380)
+- **tray**: unblock mac self-signed CI and prefer bundled linux daemon (#388)
+
+
+## [0.82.4] - 2026-03-28
+
+### Bug Fixes
+
+- **tray**: resolve macOS bundled-daemon path compile regression (#387)
+
+
+## [0.82.3] - 2026-03-28
+
+### Bug Fixes
+
+- **ci**: harden self-signed desktop signing on macOS and windows (#384)
+
+
+## [0.82.2] - 2026-03-28
+
+### Bug Fixes
+
+- **ci**: add self-signed desktop signing and arch package validation (#383)
+
+
+## [0.82.0] - 2026-03-28
+
+### Bug Fixes
+
+- **cli**: protect OpenClaw-linked workspaces from unprotected data loss (#378)
+
+
+## [0.81.2] - 2026-03-28
+
+### Features
+
+- **setup**: deployment-aware setup defaults + native embedding docs alignment (#363)
+
+### Bug Fixes
+
+- **daemon**: batch watcher identity sync to keep health responsive (#375)
+
+### Docs
+
+- add Groundswell implementation specs + PRD + SSM synthesis (#381)
+- **specs**: add Groundswell PRD and gap analyses for community knowledge graphs
+
+
+## [0.81.1] - 2026-03-28
+
+### Bug Fixes
+
+- **daemon**: persist extraction fallback status with provider parity (replaces #367) (#373)
+
+### Docs
+
+- add alcar2364 to contributors
+
+
+## [0.81.0] - 2026-03-28
+
+### Bug Fixes
+
+- **docker**: unblock post-merge smoke failures from #374 (#377)
+
+
+## [0.80.0] - 2026-03-27
+
+### Features
+
+- **docker**: add first-party self-hosting stack (#374)
+
+
 ## [0.79.0] - 2026-03-27
 
 ### Features
 
 - **pipeline**: add command extraction provider for summary worker control-plane path (#368)
+- **docker**: add first-party self-hosting stack (Compose + Caddy + token bootstrap) and GHCR image workflows
 
+### Docs
+
+- add Docker self-hosting quickstart and operations runbook updates
 
 ## [0.78.4] - 2026-03-27
 

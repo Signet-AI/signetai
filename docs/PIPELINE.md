@@ -994,6 +994,8 @@ worker:
   pollMs: 2000                   # ms, range 100–60000
   maxRetries: 3                  # range 1–10
   leaseTimeoutMs: 300000         # ms, range 10000–600000
+  maxLoadPerCpu: 0.8             # load-per-CPU threshold, range 0.1–8.0
+  overloadBackoffMs: 30000       # ms, range 1000–300000
 
 graph:
   enabled: true

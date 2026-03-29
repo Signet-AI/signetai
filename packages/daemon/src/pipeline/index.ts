@@ -192,7 +192,12 @@ export function startPipeline(
 
 	logger.info("pipeline", "Pipeline started", {
 		mode:
-			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen ? "controlled-write" : "shadow",
+			pipelineCfg.enabled &&
+			!pipelineCfg.shadowMode &&
+			!pipelineCfg.mutationsFrozen &&
+			!pipelineCfg.nativeShadowEnabled
+				? "controlled-write"
+				: "shadow",
 	});
 }
 

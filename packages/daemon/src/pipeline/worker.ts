@@ -11,6 +11,7 @@ import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
 import type { DecisionConfig, FactDecisionProposal } from "./decision";
+import { cpus, loadavg } from "node:os";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
 import { detectSemanticContradiction } from "./contradiction";
@@ -28,13 +29,8 @@ import type { AnalyticsCollector } from "../analytics";
 import type { TelemetryCollector } from "../telemetry";
 import { generateWithTracking } from "./provider";
 import { recoverStaleLeases, type StaleLeaseRecovery } from "./stale-leases";
-import {
-	PROSPECTIVE_ANTONYM_PAIRS,
-	tokenize,
-	hasNegation,
-	overlapCount,
-	hasAntonymConflict,
-} from "./antonyms";
+import { assessWriteGate, type WriteGateConfig } from "./write-gate";
+import { PROSPECTIVE_ANTONYM_PAIRS, tokenize, hasNegation, overlapCount, hasAntonymConflict } from "./antonyms";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,6 +42,12 @@ export interface WorkerStats {
 	readonly pending: number;
 	readonly processed: number;
 	readonly backoffMs: number;
+	readonly overloaded: boolean;
+	readonly loadPerCpu: number | null;
+	readonly maxLoadPerCpu: number;
+	readonly overloadBackoffMs: number;
+	readonly overloadSince: string | null;
+	readonly nextTickInMs: number;
 }
 
 export interface WorkerHandle {
@@ -67,6 +69,17 @@ interface JobRow {
 interface MemoryContentRow {
 	content: string;
 	extraction_status: string | null;
+	agent_id: string | null;
+	project: string | null;
+	scope: string | null;
+	visibility: string | null;
+	source_type: string | null;
+	source_id: string | null;
+}
+
+interface WorkerRuntimeDeps {
+	readonly now: () => number;
+	readonly getLoadPerCpu: () => number | null;
 }
 
 interface WrittenFact {
@@ -85,14 +98,18 @@ interface AppliedWriteStats {
 	blockedDestructive: number;
 	reviewNeeded: number;
 	embeddingsAdded: number;
+	writeGateConsidered: number;
+	writeGatePassed: number;
+	writeGateBlocked: number;
+	writeGateBypassed: number;
+	writeGateContinuityDiscounted: number;
 	writtenFacts: WrittenFact[];
 	dedupedFacts: WrittenFact[];
 }
 
-function detectContradictionRisk(
-	factContent: string,
-	targetContent: string | undefined,
-): boolean {
+const WRITE_GATE_ALERT_MIN_SAMPLES = 5;
+
+function detectContradictionRisk(factContent: string, targetContent: string | undefined): boolean {
 	if (!targetContent) return false;
 
 	const factTokens = tokenize(factContent);
@@ -121,6 +138,11 @@ function zeroWriteStats(): AppliedWriteStats {
 		blockedDestructive: 0,
 		reviewNeeded: 0,
 		embeddingsAdded: 0,
+		writeGateConsidered: 0,
+		writeGatePassed: 0,
+		writeGateBlocked: 0,
+		writeGateBypassed: 0,
+		writeGateContinuityDiscounted: 0,
 		writtenFacts: [],
 		dedupedFacts: [],
 	};
@@ -130,24 +152,15 @@ function zeroWriteStats(): AppliedWriteStats {
 // Job enqueue (called by daemon remember endpoint)
 // ---------------------------------------------------------------------------
 
-export function enqueueExtractionJob(
-	accessor: DbAccessor,
-	memoryId: string,
-): void {
+export function enqueueExtractionJob(accessor: DbAccessor, memoryId: string): void {
 	accessor.withWriteTx((db) => {
 		// Skip if memory extraction is already complete (structured passthrough
 		// or prior pipeline run). This prevents re-processing memories that
 		// were ingested with pre-extracted data.
-		const mem = db
-			.prepare(
-				`SELECT extraction_status FROM memories WHERE id = ? LIMIT 1`,
-			)
-			.get(memoryId) as { extraction_status: string | null } | undefined;
-		if (
-			mem?.extraction_status === "complete" ||
-			mem?.extraction_status === "completed"
-		)
-			return;
+		const mem = db.prepare(`SELECT extraction_status FROM memories WHERE id = ? LIMIT 1`).get(memoryId) as
+			| { extraction_status: string | null }
+			| undefined;
+		if (mem?.extraction_status === "complete" || mem?.extraction_status === "completed") return;
 
 		// Dedup: skip if a pending/leased job already exists
 		const existing = db
@@ -175,11 +188,7 @@ export function enqueueExtractionJob(
 // Lease a job atomically
 // ---------------------------------------------------------------------------
 
-function leaseJob(
-	db: WriteDb,
-	jobType: string,
-	maxAttempts: number,
-): JobRow | null {
+function leaseJob(db: WriteDb, jobType: string, maxAttempts: number): JobRow | null {
 	const now = new Date().toISOString();
 	const nowEpoch = Math.floor(Date.now() / 1000);
 
@@ -225,13 +234,7 @@ function completeJob(db: WriteDb, jobId: string, result: string | null): void {
 	).run(result, now, now, jobId);
 }
 
-function failJob(
-	db: WriteDb,
-	jobId: string,
-	error: string,
-	attempts: number,
-	maxAttempts: number,
-): void {
+function failJob(db: WriteDb, jobId: string, error: string, attempts: number, maxAttempts: number): void {
 	const now = new Date().toISOString();
 	const status = attempts >= maxAttempts ? "dead" : "failed";
 
@@ -245,17 +248,9 @@ function failJob(
 	).run(nextStatus, error, now, now, jobId);
 }
 
-function updateExtractionStatus(
-	db: WriteDb,
-	memoryId: string,
-	status: string,
-	extractionModel?: string,
-): void {
+function updateExtractionStatus(db: WriteDb, memoryId: string, status: string, extractionModel?: string): void {
 	if (extractionModel === undefined) {
-		db.prepare("UPDATE memories SET extraction_status = ? WHERE id = ?").run(
-			status,
-			memoryId,
-		);
+		db.prepare("UPDATE memories SET extraction_status = ? WHERE id = ?").run(status, memoryId);
 		return;
 	}
 	db.prepare(
@@ -316,14 +311,7 @@ function recordDecisionHistory(
 		`INSERT INTO memory_history
 		 (id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at)
 		 VALUES (?, ?, 'none', NULL, NULL, ?, ?, ?, ?)`,
-	).run(
-		id,
-		memoryId,
-		meta.shadow ? "pipeline-shadow" : "pipeline-v2",
-		proposal.reason,
-		metadata,
-		now,
-	);
+	).run(id, memoryId, meta.shadow ? "pipeline-shadow" : "pipeline-v2", proposal.reason, metadata, now);
 }
 
 function recordCreatedMemoryHistory(
@@ -387,19 +375,11 @@ function insertMemoryEmbedding(
 		   chunk_text = excluded.chunk_text,
 		   created_at = excluded.created_at`,
 	);
-	const result = insert.run(
-		embId,
-		contentHash,
-		blob,
-		vector.length,
-		memoryId,
-		content,
-		now,
-	);
+	insert.run(embId, contentHash, blob, vector.length, memoryId, content, now);
 	// Resolve actual embedding ID (may differ from embId on conflict)
-	const actualRow = db
-		.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
-		.get(contentHash) as { id: string } | undefined;
+	const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+		| { id: string }
+		| undefined;
 	if (actualRow) {
 		syncVecInsert(db, actualRow.id, vector);
 	}
@@ -418,11 +398,40 @@ function applyPhaseCWrites(
 		readonly minFactConfidenceForWrite: number;
 		readonly allowUpdateDelete: boolean;
 		readonly expectedEmbeddingDimensions: number;
+		readonly sourceAgentId: string;
+		readonly sourceProject: string | null;
+		readonly sourceScope: string | null;
+		readonly sourceVisibility: "global" | "private" | "archived";
+		readonly writeGate: WriteGateConfig;
 		readonly semanticContradictions?: ReadonlyMap<number, { detected: boolean; confidence: number; reasoning: string }>;
 	},
 	embeddingByHash: ReadonlyMap<string, readonly number[]>,
 ): AppliedWriteStats {
 	const stats = zeroWriteStats();
+	const findByHash = (hash: string): { id: string } | undefined => {
+		if (meta.sourceScope !== null) {
+			return db
+				.prepare(
+					`SELECT id FROM memories
+					 WHERE content_hash = ? AND is_deleted = 0
+					   AND agent_id = ?
+					   AND visibility = ?
+					   AND scope = ?
+					 LIMIT 1`,
+				)
+				.get(hash, meta.sourceAgentId, meta.sourceVisibility, meta.sourceScope) as { id: string } | undefined;
+		}
+		return db
+			.prepare(
+				`SELECT id FROM memories
+				 WHERE content_hash = ? AND is_deleted = 0
+				   AND agent_id = ?
+				   AND visibility = ?
+				   AND scope IS NULL
+				 LIMIT 1`,
+			)
+			.get(hash, meta.sourceAgentId, meta.sourceVisibility) as { id: string } | undefined;
+	};
 
 	for (let proposalIdx = 0; proposalIdx < proposals.length; proposalIdx++) {
 		const proposal = proposals[proposalIdx];
@@ -453,13 +462,7 @@ function applyPhaseCWrites(
 			}
 
 			const { storageContent, normalizedContent, contentHash } = normalized;
-			const existing = db
-				.prepare(
-					`SELECT id FROM memories
-					 WHERE content_hash = ? AND is_deleted = 0
-					 LIMIT 1`,
-				)
-				.get(contentHash) as { id: string } | undefined;
+			const existing = findByHash(contentHash);
 
 			if (existing) {
 				stats.deduped++;
@@ -479,6 +482,40 @@ function applyPhaseCWrites(
 				continue;
 			}
 
+			const gate = assessWriteGate(db, meta.writeGate, {
+				agentId: meta.sourceAgentId,
+				sourceMemoryId,
+				sourceProject: meta.sourceProject,
+				sourceScope: meta.sourceScope,
+				sourceVisibility: meta.sourceVisibility,
+				factType: proposal.fact.type,
+				content: storageContent,
+				vector: embeddingByHash.get(contentHash) ?? null,
+			});
+
+			if (gate.bypassed) {
+				stats.writeGateBypassed++;
+			}
+
+			if (!gate.bypassed) {
+				stats.writeGateConsidered++;
+				if (gate.continuityApplied) {
+					stats.writeGateContinuityDiscounted++;
+				}
+				if (!gate.pass) {
+					stats.writeGateBlocked++;
+					recordDecisionHistory(db, sourceMemoryId, proposal, {
+						shadow: false,
+						extractionModel: meta.extractionModel,
+						factCount: meta.factCount,
+						entityCount: meta.entityCount,
+						skippedReason: "write_gate_low_surprisal",
+					});
+					continue;
+				}
+				stats.writeGatePassed++;
+			}
+
 			const now = new Date().toISOString();
 			const newMemoryId = crypto.randomUUID();
 			const vector = embeddingByHash.get(contentHash);
@@ -492,7 +529,7 @@ function applyPhaseCWrites(
 					contentHash,
 					who: "pipeline-v2",
 					why: "extracted-fact",
-					project: null,
+					project: meta.sourceProject,
 					importance: Math.max(0, Math.min(1, proposal.fact.confidence)),
 					type: proposal.fact.type,
 					tags: null,
@@ -503,6 +540,9 @@ function applyPhaseCWrites(
 					extractionModel: meta.extractionModel,
 					sourceType: "pipeline-v2",
 					sourceId: sourceMemoryId,
+					scope: meta.sourceScope,
+					agentId: meta.sourceAgentId,
+					visibility: meta.sourceVisibility,
 					createdAt: now,
 				});
 			} catch (e) {
@@ -514,13 +554,7 @@ function applyPhaseCWrites(
 			}
 
 			if (!inserted) {
-				const collided = db
-					.prepare(
-						`SELECT id FROM memories
-						 WHERE content_hash = ? AND is_deleted = 0
-						 LIMIT 1`,
-					)
-					.get(contentHash) as { id: string } | undefined;
+				const collided = findByHash(contentHash);
 				stats.deduped++;
 				if (collided) {
 					stats.dedupedFacts.push({
@@ -547,14 +581,7 @@ function applyPhaseCWrites(
 				normalizedContent,
 				confidence: proposal.fact.confidence,
 			});
-			recordCreatedMemoryHistory(
-				db,
-				newMemoryId,
-				storageContent,
-				proposal,
-				sourceMemoryId,
-				meta.extractionModel,
-			);
+			recordCreatedMemoryHistory(db, newMemoryId, storageContent, proposal, sourceMemoryId, meta.extractionModel);
 			recordDecisionHistory(db, sourceMemoryId, proposal, {
 				shadow: false,
 				extractionModel: meta.extractionModel,
@@ -666,9 +693,7 @@ function applyPhaseCWrites(
 					changedAt: now,
 					extractionStatusOnContentChange: "completed",
 					extractionModelOnContentChange: meta.extractionModel,
-					embeddingModelOnContentChange: vector
-						? meta.embeddingModel
-						: null,
+					embeddingModelOnContentChange: vector ? meta.embeddingModel : null,
 					embeddingVector: vector,
 					ctx: { actorType: "pipeline" },
 				});
@@ -743,10 +768,7 @@ function applyPhaseCWrites(
 		}
 
 		// Blocked: allowUpdateDelete is false or unknown action
-		const contradictionRisk = detectContradictionRisk(
-			proposal.fact.content,
-			proposal.targetContent,
-		);
+		const contradictionRisk = detectContradictionRisk(proposal.fact.content, proposal.targetContent);
 		stats.blockedDestructive++;
 		if (contradictionRisk) {
 			stats.reviewNeeded++;
@@ -770,10 +792,7 @@ function applyPhaseCWrites(
 // Stale lease reaper
 // ---------------------------------------------------------------------------
 
-function reapStaleLeases(
-	accessor: DbAccessor,
-	timeoutMs: number,
-): StaleLeaseRecovery {
+function reapStaleLeases(accessor: DbAccessor, timeoutMs: number): StaleLeaseRecovery {
 	return accessor.withWriteTx((db) => {
 		const cutoff = new Date(Date.now() - timeoutMs).toISOString();
 		const now = new Date().toISOString();
@@ -831,9 +850,9 @@ function runStructuralPass1(
 			if (!entityRow) continue;
 
 			// Skip if this memory already has a structural attribute row (classified or stub)
-			const existingAttr = db.prepare(
-				`SELECT 1 FROM entity_attributes WHERE memory_id = ? LIMIT 1`,
-			).get(fact.memoryId) as unknown | undefined;
+			const existingAttr = db
+				.prepare(`SELECT 1 FROM entity_attributes WHERE memory_id = ? LIMIT 1`)
+				.get(fact.memoryId) as unknown | undefined;
 			if (existingAttr) continue;
 
 			// Create stub entity_attributes row (aspect_id=NULL, awaiting classification)
@@ -844,10 +863,7 @@ function runStructuralPass1(
 				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
 				  confidence, importance, status, created_at, updated_at)
 				 VALUES (?, NULL, ?, ?, 'attribute', ?, ?, ?, 0.5, 'active', ?, ?)`,
-			).run(
-				attrId, entityRow.agent_id, fact.memoryId, fact.content, fact.normalizedContent,
-				fact.confidence, now, now,
-			);
+			).run(attrId, entityRow.agent_id, fact.memoryId, fact.content, fact.normalizedContent, fact.confidence, now, now);
 			stats.attributesCreated++;
 
 			// Enqueue structural_classify job
@@ -889,12 +905,7 @@ function runStructuralPass1(
 	});
 }
 
-function enqueueStructuralJob(
-	db: WriteDb,
-	memoryId: string,
-	jobType: string,
-	payload: string,
-): void {
+function enqueueStructuralJob(db: WriteDb, memoryId: string, jobType: string, payload: string): void {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 	db.prepare(
@@ -948,7 +959,21 @@ export function startWorker(
 	decisionCfg: DecisionConfig,
 	analytics?: AnalyticsCollector,
 	telemetry?: TelemetryCollector,
+	runtimeDeps?: Partial<WorkerRuntimeDeps>,
 ): WorkerHandle {
+	const runtime: WorkerRuntimeDeps = {
+		now: runtimeDeps?.now ?? (() => Date.now()),
+		getLoadPerCpu:
+			runtimeDeps?.getLoadPerCpu ??
+			(() => {
+				if (process.platform === "win32") return null;
+				const cpuCount = cpus().length;
+				if (cpuCount <= 0) return null;
+				const oneMinuteLoad = loadavg()[0];
+				if (!Number.isFinite(oneMinuteLoad)) return null;
+				return oneMinuteLoad / cpuCount;
+			}),
+	};
 	let running = true;
 	let inflight: Promise<void> | null = null;
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -961,9 +986,13 @@ export function startWorker(
 	const JITTER = 500;
 
 	// Progress tracking for watchdog and stats
-	let lastAttempt = Date.now(); // updated on every tick (success or failure)
-	let lastSuccess = Date.now(); // updated only on successful job completion
+	let lastAttempt = runtime.now(); // updated on every tick (success or failure)
+	let lastSuccess = runtime.now(); // updated only on successful job completion
 	let processed = 0;
+	let overloaded = false;
+	let lastLoadPerCpu: number | null = null;
+	let overloadSinceEpochMs: number | null = null;
+	let nextTickAtEpochMs = runtime.now();
 	let watchdog: ReturnType<typeof setInterval> | null = null;
 	const WATCHDOG_INTERVAL = 30_000;
 	const STALL_THRESHOLD = 60_000;
@@ -974,63 +1003,59 @@ export function startWorker(
 			(db) =>
 				db
 					.prepare(
-						"SELECT content, extraction_status FROM memories WHERE id = ?",
+						`SELECT content, extraction_status, agent_id, project, scope, visibility, source_type, source_id
+						 FROM memories
+						 WHERE id = ?`,
 					)
 					.get(job.memory_id) as MemoryContentRow | undefined,
 		);
 
 		if (!row) {
 			accessor.withWriteTx((db) => {
-				completeJob(
-					db,
-					job.id,
-					JSON.stringify({ skipped: "memory_not_found" }),
-				);
+				completeJob(db, job.id, JSON.stringify({ skipped: "memory_not_found" }));
 			});
 			return;
 		}
 
 		// Bail if memory was already extracted (structured passthrough or
 		// prior run). Completes the job without running LLM extraction.
-		if (
-			row.extraction_status === "complete" ||
-			row.extraction_status === "completed"
-		) {
+		if (row.extraction_status === "complete" || row.extraction_status === "completed") {
 			accessor.withWriteTx((db) => {
-				completeJob(
-					db,
-					job.id,
-					JSON.stringify({ skipped: "already_extracted" }),
-				);
+				completeJob(db, job.id, JSON.stringify({ skipped: "already_extracted" }));
 			});
 			return;
 		}
 
+		const agentId = typeof row.agent_id === "string" && row.agent_id.trim().length > 0 ? row.agent_id : "default";
+		const sourceProject = typeof row.project === "string" && row.project.length > 0 ? row.project : null;
+		const sourceScope = typeof row.scope === "string" && row.scope.length > 0 ? row.scope : null;
+		const sourceVisibility =
+			row.visibility === "private" || row.visibility === "archived" || row.visibility === "global"
+				? row.visibility
+				: "global";
+		const sourceSessionKey =
+			row.source_type === "session" && typeof row.source_id === "string" && row.source_id.length > 0
+				? row.source_id
+				: null;
+
 		// --- Significance gate: skip extraction for trivial sessions ---
-		const sigCfg: SignificanceConfig =
-			pipelineCfg.significance ?? {
-				enabled: true,
-				minTurns: 5,
-				minEntityOverlap: 1,
-				noveltyThreshold: 0.15,
-			};
+		const sigCfg: SignificanceConfig = pipelineCfg.significance ?? {
+			enabled: true,
+			minTurns: 5,
+			minEntityOverlap: 1,
+			noveltyThreshold: 0.15,
+		};
 
 		if (sigCfg.enabled) {
-			const assessment = accessor.withReadDb((db) =>
-				assessSignificance(row.content, db, "default", sigCfg),
-			);
+			const assessment = accessor.withReadDb((db) => assessSignificance(row.content, db, agentId, sigCfg));
 
 			if (!assessment.significant) {
-				logger.info(
-					"pipeline",
-					"Session below significance threshold — skipping extraction",
-					{
-						jobId: job.id,
-						memoryId: job.memory_id,
-						scores: assessment.scores,
-						reason: assessment.reason,
-					},
-				);
+				logger.info("pipeline", "Session below significance threshold — skipping extraction", {
+					jobId: job.id,
+					memoryId: job.memory_id,
+					scores: assessment.scores,
+					reason: assessment.reason,
+				});
 
 				// Mark the job complete with gate result — raw transcript
 				// is already persisted, only LLM extraction is skipped.
@@ -1103,11 +1128,10 @@ export function startWorker(
 		const leaseLimit = Math.max(Math.floor(pipelineCfg.worker.leaseTimeoutMs / 2), 30_000);
 		const extractionTimeout = Math.min(rawExtractionTimeout, leaseLimit);
 		const extractionStart = Date.now();
-		const rawExtraction = await extractFactsAndEntities(
-			row.content,
-			instrumentedProvider,
-			{ timeoutMs: extractionTimeout, maxTokens: extractionMaxTokens },
-		);
+		const rawExtraction = await extractFactsAndEntities(row.content, instrumentedProvider, {
+			timeoutMs: extractionTimeout,
+			maxTokens: extractionMaxTokens,
+		});
 		const extractionMs = Date.now() - extractionStart;
 
 		// Escalation: check output volume and re-run or filter if noisy
@@ -1122,7 +1146,7 @@ export function startWorker(
 			rawExtraction,
 			instrumentedProvider,
 			accessor,
-			"default",
+			agentId,
 			escalationThresholds,
 			{ timeoutMs: extractionTimeout, maxTokens: extractionMaxTokens },
 		);
@@ -1148,23 +1172,34 @@ export function startWorker(
 						accessor,
 						instrumentedProvider,
 						decisionCfg,
+						{
+							agentId,
+							scope: sourceScope,
+							visibility: sourceVisibility,
+						},
 					)
 				: { proposals: [], warnings: [] };
 
 		const controlledWritesEnabled =
 			pipelineCfg.enabled &&
 			!pipelineCfg.shadowMode &&
-			!pipelineCfg.mutationsFrozen;
+			!pipelineCfg.mutationsFrozen &&
+			!pipelineCfg.nativeShadowEnabled;
 
 		// Convenience aliases for nested config
 		const { extraction: extractionCfg, autonomous: autonomousCfg } = pipelineCfg;
+		const writeGateCfg: WriteGateConfig = pipelineCfg.writeGate ?? {
+			enabled: true,
+			threshold: 0.4,
+			continuityDiscount: 0.15,
+		};
 
 		const embeddingByHash = new Map<string, readonly number[]>();
 		const prefetchWarnings: string[] = [];
 		if (controlledWritesEnabled) {
 			for (const proposal of decisions.proposals) {
 				if (proposal.action !== "add" && proposal.action !== "update") continue;
-			if (proposal.action === "update" && !autonomousCfg.allowUpdateDelete) continue;
+				if (proposal.action === "update" && !autonomousCfg.allowUpdateDelete) continue;
 				if (proposal.fact.confidence < extractionCfg.minConfidence) {
 					continue;
 				}
@@ -1176,10 +1211,7 @@ export function startWorker(
 				if (embeddingByHash.has(contentHash)) continue;
 
 				try {
-					const vector = await decisionCfg.fetchEmbedding(
-						storageContent,
-						decisionCfg.embedding,
-					);
+					const vector = await decisionCfg.fetchEmbedding(storageContent, decisionCfg.embedding);
 					if (vector && vector.length > 0) {
 						if (vector.length !== decisionCfg.embedding.dimensions) {
 							prefetchWarnings.push(
@@ -1205,11 +1237,7 @@ export function startWorker(
 
 		// --- Semantic contradiction check (pre-tx, async) ---
 		const contradictionFlags = new Map<number, { detected: boolean; confidence: number; reasoning: string }>();
-		if (
-			controlledWritesEnabled &&
-			pipelineCfg.semanticContradictionEnabled &&
-			autonomousCfg.allowUpdateDelete
-		) {
+		if (controlledWritesEnabled && pipelineCfg.semanticContradictionEnabled && autonomousCfg.allowUpdateDelete) {
 			for (let i = 0; i < decisions.proposals.length; i++) {
 				const proposal = decisions.proposals[i];
 				if (proposal.action !== "update" || !proposal.targetContent) continue;
@@ -1261,6 +1289,11 @@ export function startWorker(
 						minFactConfidenceForWrite: extractionCfg.minConfidence,
 						allowUpdateDelete: autonomousCfg.allowUpdateDelete,
 						expectedEmbeddingDimensions: decisionCfg.embedding.dimensions,
+						sourceAgentId: agentId,
+						sourceProject,
+						sourceScope,
+						sourceVisibility,
+						writeGate: writeGateCfg,
 						semanticContradictions: contradictionFlags,
 					},
 					embeddingByHash,
@@ -1282,25 +1315,45 @@ export function startWorker(
 				proposals: decisions.proposals,
 				writeMode: controlledWritesEnabled ? "phase-c" : "shadow",
 				writeStats,
-				warnings: [
-					...extraction.warnings,
-					...decisions.warnings,
-					...prefetchWarnings,
-				],
+				warnings: [...extraction.warnings, ...decisions.warnings, ...prefetchWarnings],
 			});
 
 			completeJob(db, job.id, resultPayload);
-			updateExtractionStatus(
-				db,
-				job.memory_id,
-				"completed",
-				extractionCfg.model,
-			);
+			updateExtractionStatus(db, job.memory_id, "completed", extractionCfg.model);
 		});
+
+		if (controlledWritesEnabled && writeStats.writeGateConsidered > 0) {
+			const blockRate = writeStats.writeGateBlocked / writeStats.writeGateConsidered;
+			const payload = {
+				jobId: job.id,
+				memoryId: job.memory_id,
+				sessionKey: sourceSessionKey,
+				agentId,
+				considered: writeStats.writeGateConsidered,
+				passed: writeStats.writeGatePassed,
+				blocked: writeStats.writeGateBlocked,
+				bypassed: writeStats.writeGateBypassed,
+				continuityDiscounted: writeStats.writeGateContinuityDiscounted,
+				blockRate: Number(blockRate.toFixed(3)),
+			};
+			if (writeStats.writeGateConsidered < WRITE_GATE_ALERT_MIN_SAMPLES) {
+				logger.info("pipeline", "Adaptive write gate ratio sample too small", payload);
+			} else if (blockRate > 0.8 || blockRate < 0.2) {
+				logger.warn("pipeline", "Adaptive write gate ratio outside expected band", payload);
+			} else {
+				logger.info("pipeline", "Adaptive write gate ratio", payload);
+			}
+		}
 
 		// Persist graph entities in a separate transaction so failure
 		// never reverts fact extraction. Non-fatal on error.
-		let graphStats = { entitiesInserted: 0, entitiesUpdated: 0, relationsInserted: 0, relationsUpdated: 0, mentionsLinked: 0 };
+		let graphStats = {
+			entitiesInserted: 0,
+			entitiesUpdated: 0,
+			relationsInserted: 0,
+			relationsUpdated: 0,
+			mentionsLinked: 0,
+		};
 		if (pipelineCfg.graph.enabled && extraction.entities.length > 0) {
 			try {
 				graphStats = accessor.withWriteTx((db) =>
@@ -1308,7 +1361,7 @@ export function startWorker(
 						entities: extraction.entities,
 						sourceMemoryId: job.memory_id,
 						extractedAt: new Date().toISOString(),
-							agentId: "default",
+						agentId,
 					}),
 				);
 				// New entities/relations invalidate traversal table cache
@@ -1323,20 +1376,42 @@ export function startWorker(
 
 		// Build broader structural facts from all sources:
 		// newly written + deduped + "none" proposals resolved by hash + successful updates
-		const structuralFacts: WrittenFact[] = [
-			...writeStats.writtenFacts,
-			...writeStats.dedupedFacts,
-		];
+		const structuralFacts: WrittenFact[] = [...writeStats.writtenFacts, ...writeStats.dedupedFacts];
 
 		if (controlledWritesEnabled) {
 			for (const proposal of decisions.proposals) {
 				if (proposal.action !== "none") continue;
 				const normalized = normalizeAndHashContent(proposal.fact.content);
 				if (normalized.normalizedContent.length === 0) continue;
-				const existing = accessor.withReadDb((db) =>
-					db.prepare(
-						`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
-					).get(normalized.contentHash) as { id: string } | undefined,
+				const existing = accessor.withReadDb(
+					(db) => {
+						if (sourceScope !== null) {
+							return db
+								.prepare(
+									`SELECT id FROM memories
+							 WHERE content_hash = ?
+							   AND is_deleted = 0
+							   AND agent_id = ?
+							   AND visibility = ?
+							   AND scope = ?
+							 LIMIT 1`,
+								)
+								.get(normalized.contentHash, agentId, sourceVisibility, sourceScope) as
+								| { id: string }
+								| undefined;
+						}
+						return db
+							.prepare(
+								`SELECT id FROM memories
+							 WHERE content_hash = ?
+							   AND is_deleted = 0
+							   AND agent_id = ?
+							   AND visibility = ?
+							   AND scope IS NULL
+							 LIMIT 1`,
+							)
+							.get(normalized.contentHash, agentId, sourceVisibility) as { id: string } | undefined;
+					},
 				);
 				if (existing) {
 					structuralFacts.push({
@@ -1372,11 +1447,7 @@ export function startWorker(
 			extraction.entities.length > 0
 		) {
 			try {
-				structuralStats = runStructuralPass1(
-					accessor,
-					structuralFacts,
-					extraction.entities,
-				);
+				structuralStats = runStructuralPass1(accessor, structuralFacts, extraction.entities);
 			} catch (e) {
 				logger.warn("pipeline", "Structural pass 1 failed (non-fatal)", {
 					jobId: job.id,
@@ -1434,9 +1505,7 @@ export function startWorker(
 
 		try {
 			// Lease a job inside write tx
-			const job = accessor.withWriteTx((db) =>
-				leaseJob(db, "extract", pipelineCfg.worker.maxRetries),
-			);
+			const job = accessor.withWriteTx((db) => leaseJob(db, "extract", pipelineCfg.worker.maxRetries));
 
 			if (!job) {
 				consecutiveFailures = 0;
@@ -1447,10 +1516,10 @@ export function startWorker(
 			try {
 				await processExtractJob(job);
 				consecutiveFailures = 0;
-				lastAttempt = Date.now();
-				lastSuccess = Date.now();
+				lastAttempt = runtime.now();
+				lastSuccess = runtime.now();
 				processed++;
-				analytics?.recordLatency("jobs", Date.now() - jobStart);
+				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
 				logger.warn("pipeline", "Job failed", {
@@ -1458,7 +1527,7 @@ export function startWorker(
 					error: msg,
 					attempt: job.attempts,
 				});
-				analytics?.recordLatency("jobs", Date.now() - jobStart);
+				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 				analytics?.recordError({
 					timestamp: new Date().toISOString(),
 					stage: "extraction",
@@ -1469,30 +1538,21 @@ export function startWorker(
 				telemetry?.record("pipeline.error", {
 					stage: "extraction",
 					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
-					durationMs: Date.now() - jobStart,
+					durationMs: runtime.now() - jobStart,
 				});
 				accessor.withWriteTx((db) => {
 					failJob(db, job.id, msg, job.attempts, job.max_attempts);
 					if (job.attempts >= job.max_attempts) {
-						updateExtractionStatus(
-							db,
-							job.memory_id,
-							"failed",
-							pipelineCfg.extraction.model,
-						);
+						updateExtractionStatus(db, job.memory_id, "failed", pipelineCfg.extraction.model);
 					}
 				});
 				consecutiveFailures++;
-				lastAttempt = Date.now();
+				lastAttempt = runtime.now();
 			}
 		} catch (e) {
-			logger.error(
-				"pipeline",
-				"Worker tick error",
-				e instanceof Error ? e : new Error(String(e)),
-			);
+			logger.error("pipeline", "Worker tick error", e instanceof Error ? e : new Error(String(e)));
 			consecutiveFailures++;
-			lastAttempt = Date.now();
+			lastAttempt = runtime.now();
 		}
 	}
 
@@ -1505,7 +1565,25 @@ export function startWorker(
 	// Use setTimeout chain instead of setInterval for backoff support
 	function scheduleTick(): void {
 		if (!running) return;
+		const loadPerCpu = runtime.getLoadPerCpu();
+		lastAttempt = runtime.now();
+		lastLoadPerCpu = loadPerCpu;
+		const overloadedNow =
+			loadPerCpu !== null && Number.isFinite(loadPerCpu) && loadPerCpu > pipelineCfg.worker.maxLoadPerCpu;
+		if (overloadedNow) {
+			overloaded = true;
+			overloadSinceEpochMs = overloadSinceEpochMs ?? runtime.now();
+			const delay = pipelineCfg.worker.overloadBackoffMs;
+			nextTickAtEpochMs = runtime.now() + delay;
+			pollTimer = setTimeout(() => {
+				scheduleTick();
+			}, delay);
+			return;
+		}
+		overloaded = false;
+		overloadSinceEpochMs = null;
 		const delay = getBackoffDelay();
+		nextTickAtEpochMs = runtime.now() + delay;
 		if (consecutiveFailures > 2) {
 			logger.warn("pipeline", "Worker backing off", {
 				failures: consecutiveFailures,
@@ -1543,16 +1621,17 @@ export function startWorker(
 	// Uses lastSuccess (not lastAttempt) so failure loops still trigger it.
 	watchdog = setInterval(() => {
 		if (!running) return;
-		if (Date.now() - lastSuccess < STALL_THRESHOLD) return;
+		// Intentional load-shedding is not a stall.
+		if (overloaded) return;
+		if (runtime.now() - lastSuccess < STALL_THRESHOLD) return;
 
 		let pending = 0;
 		try {
-			const row = accessor.withReadDb((db) =>
-				db
-					.prepare(
-						"SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'",
-					)
-					.get() as { cnt: number },
+			const row = accessor.withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'")
+						.get() as { cnt: number },
 			);
 			pending = row.cnt;
 		} catch {
@@ -1563,21 +1642,17 @@ export function startWorker(
 		logger.warn("pipeline", "Worker stall detected, resetting backoff", {
 			pending,
 			failures: consecutiveFailures,
-			stalledMs: Date.now() - lastSuccess,
+			stalledMs: runtime.now() - lastSuccess,
 		});
 
 		consecutiveFailures = 0;
-		lastSuccess = Date.now();
+		lastSuccess = runtime.now();
 		// If a tick is already running, just reset backoff — the
 		// in-progress tick will call scheduleTick() on completion.
 		if (inflight) return;
 		if (pollTimer) clearTimeout(pollTimer);
-		pollTimer = setTimeout(async () => {
-			inflight = tick();
-			await inflight;
-			inflight = null;
-			scheduleTick();
-		}, 0);
+		// Re-enter normal scheduling so overload checks still apply.
+		scheduleTick();
 	}, WATCHDOG_INTERVAL);
 
 	// Startup recovery: mark memory_jobs that are pending but have exhausted
@@ -1603,19 +1678,19 @@ export function startWorker(
 		mode:
 			pipelineCfg.enabled &&
 			!pipelineCfg.shadowMode &&
-			!pipelineCfg.mutationsFrozen
+			!pipelineCfg.mutationsFrozen &&
+			!pipelineCfg.nativeShadowEnabled
 				? "controlled-write"
 				: "shadow",
 	});
 
 	function pendingCount(): number {
 		try {
-			const row = accessor.withReadDb((db) =>
-				db
-					.prepare(
-						"SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'",
-					)
-					.get() as { cnt: number },
+			const row = accessor.withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'")
+						.get() as { cnt: number },
 			);
 			return row.cnt;
 		} catch {
@@ -1648,6 +1723,12 @@ export function startWorker(
 				pending: pendingCount(),
 				processed,
 				backoffMs: getBackoffDelay(),
+				overloaded,
+				loadPerCpu: lastLoadPerCpu,
+				maxLoadPerCpu: pipelineCfg.worker.maxLoadPerCpu,
+				overloadBackoffMs: pipelineCfg.worker.overloadBackoffMs,
+				overloadSince: overloadSinceEpochMs === null ? null : new Date(overloadSinceEpochMs).toISOString(),
+				nextTickInMs: Math.max(0, nextTickAtEpochMs - runtime.now()),
 			};
 		},
 		async stop() {

@@ -68,13 +68,21 @@ Eleven Tauri commands are registered:
 | `quit_app` | Exit the Tauri process |
 
 A `DaemonManager` platform trait abstracts start/stop/is_running.
-`linux.rs` is fully implemented. macOS and Windows are stubs.
+All three platform managers are implemented.
+
+Start order prefers an existing systemd user service when configured.
+Otherwise, the tray launches its bundled daemon sidecar
+(`signet-daemon*`) first so desktop builds stay self-contained. If the
+sidecar is unavailable, it falls back to system-installed runtimes
+(`signet`, `signet-daemon`, or Bun+daemon script).
 
 **Linux process management:**
 
 Start order: check for `~/.config/systemd/user/signet.service` — if
-present, use `systemctl --user start signet`. Otherwise: locate bun
-binary → locate `signet-daemon` → fall back to the globally installed `signet daemon start`.
+present, use `systemctl --user start signet`. Otherwise: launch bundled
+`signet-daemon*` first, then try installed `signet daemon start`, then
+Bun-driven fallbacks (`signet-daemon`, `daemon.js`,
+`bun x signetai daemon start`).
 
 Stop: send SIGTERM, poll at 100ms intervals up to 3 seconds, then clean
 up the PID file.
@@ -118,7 +126,11 @@ Build
 
 TypeScript is compiled with `bun build --target browser` (output to
 `dist/`). Tauri reads from `dist/` as configured in `tauri.conf.json`.
-The Tauri build produces a self-contained `.AppImage` on Linux.
+Before packaging, a staged daemon sidecar is copied to
+`src-tauri/binaries/` and bundled into the desktop artifact.
+The bundled sidecar currently comes from `packages/daemon-rs` (shadow
+rewrite) and is treated as a compatibility fallback, not the primary
+runtime path.
 
 The tray build is independent of the monorepo root `bun run build`.
 
@@ -131,8 +143,14 @@ bun install
 # 2. Build TypeScript frontend (runs automatically as beforeBuildCommand)
 bun run build:ts
 
-# 3. Build the Tauri app
-cargo tauri build
+# 3. Build daemon sidecar binary (host target by default)
+bun run build:daemon
+
+# 4. Stage daemon sidecar (target-aware)
+bun run stage:daemon
+
+# 5. Build the Tauri app
+bun tauri build
 ```
 
 The `build:ts` script compiles `src-ts/index.ts` with `--target browser
@@ -153,9 +171,27 @@ Tauri dev server.
 
 | Platform | Output |
 |----------|--------|
-| Linux | `.AppImage` in `src-tauri/target/release/bundle/appimage/` |
+| Linux | `.deb` in `src-tauri/target/release/bundle/deb/` and `.AppImage` in `src-tauri/target/release/bundle/appimage/` |
 | macOS | `.dmg` / `.app` in `src-tauri/target/release/bundle/dmg/` |
 | Windows | `.msi` in `src-tauri/target/release/bundle/msi/` |
+
+### Channel metadata
+
+Release CI derives channel metadata from tagged assets:
+
+- **Arch (AUR)**: `deploy/aur/PKGBUILD` + `.SRCINFO`
+- **Homebrew Cask**: `deploy/channels/homebrew/signet.rb`
+- **winget**: `deploy/channels/winget/*.yaml`
+
+These manifests are emitted as CI artifacts so channel repos can be
+updated without recomputing checksums locally.
+Release CI also validates Arch packaging by building a
+`signet-desktop-bin` `.pkg.tar.*` artifact from the generated
+`PKGBUILD`.
+
+Desktop CI supports two signing paths for macOS/Windows artifacts:
+official signing when cert secrets are present, or self-signed fallback
+when running without official signing credentials.
 
 
 Configuration
@@ -168,8 +204,8 @@ the tray app will not detect it — this is a known limitation.
 
 The Tauri app metadata is defined in `src-tauri/tauri.conf.json`:
 
-- **identifier**: `ai.signet.tray`
-- **productName**: `Signet Tray`
+- **identifier**: `ai.signet.app`
+- **productName**: `Signet`
 - **bundle targets**: all platforms enabled
 - **CSP**: allows `connect-src` to `http://localhost:*` for daemon API access
 
@@ -205,9 +241,6 @@ Known Limitations
 - **Hardcoded daemon URL** — the tray always connects to
   `http://localhost:3850`. Custom ports via `SIGNET_PORT` are not
   picked up.
-- **macOS and Windows stubs** — the `DaemonManager` trait only has a
-  full implementation for Linux. macOS has an autostart helper but the
-  start/stop commands are stubs. Windows is entirely unimplemented.
 - **No autostart** — the tray does not register itself to start on
   login (planned).
 - **No desktop notifications** — state transitions are only reflected

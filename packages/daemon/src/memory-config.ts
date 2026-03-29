@@ -48,6 +48,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	semanticContradictionTimeoutMs: 120000,
 	extraction: {
 		provider: "ollama",
+		fallbackProvider: "ollama",
 		model: "qwen3:4b",
 		strength: "low",
 		endpoint: undefined,
@@ -64,6 +65,8 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		pollMs: 2000,
 		maxRetries: 3,
 		leaseTimeoutMs: 300000,
+		maxLoadPerCpu: 0.8,
+		overloadBackoffMs: 30000,
 	},
 	graph: {
 		enabled: true,
@@ -191,6 +194,11 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		minEntityOverlap: 1,
 		noveltyThreshold: 0.15,
 	},
+	writeGate: {
+		enabled: true,
+		threshold: 0.4,
+		continuityDiscount: 0.15,
+	},
 	predictor: {
 		enabled: true,
 		trainIntervalSessions: 10,
@@ -229,6 +237,8 @@ export interface ResolvedMemoryConfig {
 	auth: AuthConfig;
 }
 
+class MemoryConfigValidationError extends Error {}
+
 function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
 	return Math.max(min, Math.min(max, raw));
@@ -241,6 +251,18 @@ function clampFraction(raw: unknown, fallback: number): number {
 
 function isExtractionStrength(v: unknown): v is "low" | "medium" | "high" {
 	return typeof v === "string" && ["low", "medium", "high"].includes(v);
+}
+
+function isExtractionFallbackProvider(v: unknown): v is "ollama" | "none" {
+	return v === "ollama" || v === "none";
+}
+
+function resolveExtractionFallbackProvider(raw: unknown, fallback: "ollama" | "none"): "ollama" | "none" {
+	if (raw === undefined || raw === null) return fallback;
+	if (isExtractionFallbackProvider(raw)) return raw;
+	throw new MemoryConfigValidationError(
+		`Invalid extraction fallbackProvider "${String(raw)}"; expected "ollama" or "none"`,
+	);
 }
 
 function parseOptionalUrl(raw: unknown): string | undefined {
@@ -339,6 +361,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
+	const writeGateRaw = raw.writeGate as Record<string, unknown> | undefined;
 	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
 	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
 	const modelRegistryRaw = raw.modelRegistry as Record<string, unknown> | undefined;
@@ -362,8 +385,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 
 	type ProviderKind = Parameters<typeof defaultPipelineModel>[0];
 	type SynthesisProviderKind = Exclude<ProviderKind, "command">;
+	const isExtractionProvider = (value: unknown): value is ProviderKind =>
+		value === "command" || isPipelineProvider(value);
 	const isSynthesisProvider = (value: unknown): value is SynthesisProviderKind =>
-		isPipelineProvider(value) && value !== "command";
+		isExtractionProvider(value) && value !== "command";
 
 	function resolveModel(provider: ProviderKind, raw: unknown, fallback?: string): string {
 		if (typeof raw === "string" && raw.trim().length > 0) {
@@ -375,8 +400,8 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		return defaultPipelineModel(provider);
 	}
 
-	const flatProviderWon = isPipelineProvider(flatProvider);
-	const nestedProviderWon = isPipelineProvider(nestedProvider);
+	const flatProviderWon = isExtractionProvider(flatProvider);
+	const nestedProviderWon = isExtractionProvider(nestedProvider);
 	// Model-only flat key: no provider set anywhere, but extractionModel is
 	// present.  Default to "ollama" so the model isn't silently discarded.
 	const flatModelOnly = !flatProviderWon && !nestedProviderWon && typeof flatModel === "string";
@@ -404,6 +429,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		5000,
 		300000,
 		d.extraction.timeout,
+	);
+	const resolvedFallbackProvider = resolveExtractionFallbackProvider(
+		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
+		d.extraction.fallbackProvider,
 	);
 	const resolvedCommandConfig = parseCommandConfig(extractionRaw?.command ?? raw.extractionCommand);
 	if (resolvedProvider === "command" && !resolvedCommandConfig) {
@@ -468,6 +497,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 
 		extraction: {
 			provider: resolvedProvider,
+			fallbackProvider: resolvedFallbackProvider,
 			model: resolvedModel,
 			strength: (() => {
 				// Flat keys win when set (dashboard writes these); nested is fallback
@@ -511,6 +541,13 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				10000,
 				600000,
 				d.worker.leaseTimeoutMs,
+			),
+			maxLoadPerCpu: clampPositive(workerRaw?.maxLoadPerCpu ?? raw.workerMaxLoadPerCpu, 0.1, 8, d.worker.maxLoadPerCpu),
+			overloadBackoffMs: clampPositive(
+				workerRaw?.overloadBackoffMs ?? raw.workerOverloadBackoffMs,
+				1000,
+				300000,
+				d.worker.overloadBackoffMs,
 			),
 		},
 
@@ -803,6 +840,14 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 			minEntityOverlap: clampPositive(significanceRaw?.minEntityOverlap, 0, 100, d.significance?.minEntityOverlap ?? 1),
 			noveltyThreshold: clampFraction(significanceRaw?.noveltyThreshold, d.significance?.noveltyThreshold ?? 0.15),
 		},
+		writeGate: {
+			enabled: resolveBool(writeGateRaw?.enabled, raw.writeGateEnabled, d.writeGate?.enabled ?? true),
+			threshold: clampFraction(writeGateRaw?.threshold ?? raw.writeGateThreshold, d.writeGate?.threshold ?? 0.4),
+			continuityDiscount: clampFraction(
+				writeGateRaw?.continuityDiscount ?? raw.writeGateContinuityDiscount,
+				d.writeGate?.continuityDiscount ?? 0.15,
+			),
+		},
 
 		predictor: {
 			enabled: resolveBool(predictorRaw?.enabled, undefined, d.predictor?.enabled ?? true),
@@ -941,7 +986,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 
 			break;
 		} catch (error) {
-			if (error instanceof PipelineConfigValidationError) {
+			if (error instanceof MemoryConfigValidationError || error instanceof PipelineConfigValidationError) {
 				throw error;
 			}
 			// ignore parse errors, try next file

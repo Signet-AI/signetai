@@ -25,10 +25,7 @@ impl MacosManager {
     }
 
     fn find_bun(&self) -> Option<String> {
-        let candidates = [
-            "/opt/homebrew/bin/bun",
-            "/usr/local/bin/bun",
-        ];
+        let candidates = ["/opt/homebrew/bin/bun", "/usr/local/bin/bun"];
 
         for path in &candidates {
             if std::path::Path::new(path).exists() {
@@ -72,9 +69,7 @@ impl MacosManager {
 
         // Check ~/.bun/install/global/node_modules
         if let Some(home) = dirs::home_dir() {
-            let bun_global = home.join(
-                ".bun/install/global/node_modules/signetai/dist/daemon.js",
-            );
+            let bun_global = home.join(".bun/install/global/node_modules/signetai/dist/daemon.js");
             if bun_global.exists() {
                 return Some(bun_global.to_string_lossy().to_string());
             }
@@ -84,10 +79,7 @@ impl MacosManager {
     }
 
     fn find_signet_cli(&self) -> Option<String> {
-        let candidates = [
-            "/opt/homebrew/bin/signet",
-            "/usr/local/bin/signet",
-        ];
+        let candidates = ["/opt/homebrew/bin/signet", "/usr/local/bin/signet"];
 
         for path in &candidates {
             if std::path::Path::new(path).exists() {
@@ -121,9 +113,10 @@ impl DaemonManager for MacosManager {
             let output = if self.launchd_is_loaded() {
                 // Already loaded — kickstart it
                 Command::new("launchctl")
-                    .args(["kickstart", &format!("gui/{}/{LAUNCHD_LABEL}", unsafe {
-                        libc::getuid()
-                    })])
+                    .args([
+                        "kickstart",
+                        &format!("gui/{}/{LAUNCHD_LABEL}", unsafe { libc::getuid() }),
+                    ])
                     .output()?
             } else {
                 // Bootstrap (load) the plist
@@ -149,31 +142,30 @@ impl DaemonManager for MacosManager {
 
         // Try `signet daemon start` CLI first
         if let Some(signet) = self.find_signet_cli() {
-            Command::new(&signet)
-                .args(["daemon", "start"])
-                .spawn()?;
+            Command::new(&signet).args(["daemon", "start"]).spawn()?;
             return Ok(());
         }
 
-        // Direct bun fallback
-        let bun = self
-            .find_bun()
-            .ok_or("bun not found — install bun to run signet daemon")?;
+        if let Some(bun) = self.find_bun() {
+            // Try daemon.js directly
+            if let Some(daemon_js) = self.find_daemon_js() {
+                Command::new(&bun).arg(&daemon_js).spawn()?;
+                return Ok(());
+            }
 
-        // Try daemon.js directly
-        if let Some(daemon_js) = self.find_daemon_js() {
+            // Last resort: bunx
             Command::new(&bun)
-                .arg(&daemon_js)
+                .args(["x", "signetai", "daemon", "start"])
                 .spawn()?;
             return Ok(());
         }
 
-        // Last resort: bunx
-        Command::new(&bun)
-            .args(["x", "signetai", "daemon", "start"])
-            .spawn()?;
+        if let Some(bin) = super::find_bundled_daemon() {
+            Command::new(&bin).spawn()?;
+            return Ok(());
+        }
 
-        Ok(())
+        Err("bun not found and no bundled daemon runtime is available".into())
     }
 
     fn stop(&self) -> Result<(), Box<dyn std::error::Error>> {

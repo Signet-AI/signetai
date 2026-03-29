@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-26"
+updated_at: "2026-03-28"
 
 specs:
   - id: memory-pipeline-v2
@@ -97,6 +97,25 @@ specs:
       - "Prompt-time retrieval keeps structured distillation primary while transcript retrieval stays a searchable, embeddable fallback and deep-history substrate"
       - "Three-tier memory surfaces are mandatory: a compact global head, rolling thread heads, and a lossless lineage substrate"
       - "Multi-thread continuity remains stable across many simultaneous people/projects/topics via thread-scoped indexing and anti-bleed retrieval controls"
+    decision: null
+
+  - id: memory-md-rolling-window-lineage
+    status: approved
+    path: docs/specs/approved/memory-md-rolling-window-lineage.md
+    hard_depends_on:
+      - memory-md-temporal-head
+      - lossless-working-memory-runtime
+      - session-continuity-protocol
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-MEMORY-MD-ROLLING-WINDOW-LINKAGE.md
+      - docs/research/technical/RESEARCH-LCM-ACP.md
+    success_criteria:
+      - "Canonical historical content consists of immutable markdown summary/transcript/compaction artifacts, and MEMORY.md is a rebuildable derived projection"
+      - "Session-end and compaction persist canonical artifacts with deterministic workspace-root-relative Obsidian wikilinks"
+      - "Content-linked DB lineage/search rows are rebuildable from markdown artifacts while runtime temporal telemetry remains DB-native"
+      - "MEMORY.md renders a strict rolling 30-day UTC ledger with one high-signal sentence per in-window session and no clipping"
     decision: null
 
   - id: procedural-memory-plan
@@ -205,6 +224,20 @@ specs:
       - "CLI start/restart can recover from a stale managed daemon process that still owns the port after health probes fail"
     decision: null
 
+  - id: daemon-provider-fallback-status
+    status: complete
+    path: docs/specs/complete/daemon-provider-fallback-status.md
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Startup provider fallback or hard-failure is persisted in /api/status and surfaced by signet status"
+      - "Operators can set extraction fallbackProvider to none to block rerouting when the configured provider is unavailable"
+      - "Unavailable extraction startup state dead-letters queued extraction jobs instead of silently leaving them pending"
+    decision: null
+
   - id: daemon-refactor
     status: planning
     path: docs/specs/planning/daemon-refactor.md
@@ -248,6 +281,22 @@ specs:
     success_criteria: []
     decision: superseded
 
+  - id: setup-deployment-awareness
+    status: planning
+    path: docs/specs/planning/setup-deployment-awareness.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Interactive setup asks deployment context before provider prompts and shows deployment-specific extraction guidance"
+      - "Non-interactive setup accepts --deployment-type and infers provider defaults when provider flags are omitted"
+      - "Existing-identity migration preserves existing configured extraction providers unless --extraction-provider is explicitly provided"
+      - "With --deployment-type vps and omitted extraction provider, setup avoids inferring ollama, prefers selected non-local harness tooling when available locally, then other detected non-local tooling, and falls back to none"
+      - "README/QUICKSTART/CLI docs consistently present built-in native embeddings as recommended"
+    decision: null
+
   - id: openclaw-integration-strategy
     status: complete
     path: docs/specs/complete/openclaw-integration-strategy.md
@@ -285,6 +334,40 @@ specs:
       - "OpenClaw plugin compiles and passes tests against typed hook interfaces"
       - "Mid-session checkpoint extraction fires after N turns for long-lived sessions"
       - "Rust daemon implements cursor-tracking parity for session-checkpoint-extract"
+    decision: null
+
+  - id: openclaw-workspace-protection-plan
+    status: planning
+    path: docs/specs/planning/openclaw-workspace-protection-plan.md
+    hard_depends_on:
+      - openclaw-hardening
+    soft_depends_on: []
+    blocks:
+      - openclaw-workspace-protection
+    informed_by:
+      - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
+    success_criteria:
+      - "Setup blocks silent completion when OpenClaw points at the Signet workspace and no remote backup is configured"
+      - "Users can satisfy setup protection by configuring git origin or creating an out-of-workspace local snapshot"
+      - "Status and doctor surfaces flag unprotected OpenClaw-linked workspaces with remediation commands"
+    decision: null
+
+  - id: openclaw-workspace-protection
+    status: approved
+    path: docs/specs/approved/openclaw-workspace-protection.md
+    hard_depends_on:
+      - openclaw-hardening
+      - openclaw-workspace-protection-plan
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-OPENCLAW-WORKSPACE-PROTECTION.md
+      - docs/specs/planning/openclaw-workspace-protection-plan.md
+    success_criteria:
+      - "Setup refuses to complete silently for OpenClaw-linked workspaces without backup posture"
+      - "Interactive setup requires explicit user action: set origin, create snapshot, or explicit bypass acknowledgement"
+      - "Non-interactive setup errors unless origin exists or explicit backup/bypass flags are provided"
+      - "Status and doctor report OpenClaw-linked unprotected workspace risk"
     decision: null
 
   - id: desire-paths-epic
@@ -645,7 +728,6 @@ specs:
       - "Py Agent connector installs and syncs Signet memory lifecycle hooks"
     decision: null
 
-
   - id: connector-hermes-agent
     status: planning
     path: docs/specs/planning/connector-hermes-agent.md
@@ -656,6 +738,18 @@ specs:
     informed_by: []
     success_criteria:
       - "Hermes Agent connector installs and syncs Signet memory lifecycle hooks"
+    decision: null
+
+  - id: connector-oh-my-pi
+    status: planning
+    path: docs/specs/planning/connector-oh-my-pi.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Oh My Pi connector installs a managed runtime extension and forwards Signet lifecycle hooks without adding Oh My Pi-only dependencies for other users"
     decision: null
 
 
@@ -816,6 +910,24 @@ specs:
       - "Regression tests lock the macOS SQLite discovery order and degraded-mode messaging"
     decision: null
 
+  - id: desktop-packaging-distribution
+    status: approved
+    path: docs/specs/approved/desktop-packaging-distribution.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-DESKTOP-PACKAGING-DISTRIBUTION.md
+    success_criteria:
+      - "Desktop release CI produces installable artifacts for macOS, Windows, Ubuntu, and Arch deliverables from one contract"
+      - "Tray runtime can launch bundled daemon binaries as a fallback when system-installed runtimes are unavailable"
+      - "Ubuntu outputs include both .deb and .AppImage artifacts per release"
+      - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
+      - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
+      - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
+    decision: null
+
 
   - id: golden-path-docs
     status: planning
@@ -879,4 +991,20 @@ specs:
     informed_by: []
     success_criteria:
       - "Every production incident produces at least one durable AGENTS/CI guardrail update"
+    decision: null
+
+  - id: docker-self-hosting-stack
+    status: planning
+    path: docs/specs/planning/docker-self-hosting-stack.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-DOCKER-SELF-HOSTING.md
+    success_criteria:
+      - "Signet ships a first-party Docker image and Compose stack that boots daemon + reverse proxy with persistent workspace storage"
+      - "Default Docker bootstrap path enforces team auth posture and provides an explicit initial admin-token creation path"
+      - "Official image publishing supports linux/amd64 and linux/arm64 with stable tags"
+      - "Self-hosting docs include Docker quickstart, backup/restore, and in-place upgrade flow"
     decision: null

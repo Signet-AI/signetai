@@ -13,6 +13,7 @@ interface UpdateDeps {
 	readonly fetchFromDaemon: <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
 	readonly getTemplatesDir: () => string;
 	readonly isOpenClawInstalled: () => boolean;
+	readonly isOhMyPiInstalled: () => boolean;
 	readonly syncBuiltinSkills: (
 		templatesDir: string,
 		basePath: string,
@@ -146,6 +147,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 				}
 				if (existsSync(join(homedir(), ".config", "opencode"))) harnesses.push("opencode");
 				if (deps.isOpenClawInstalled()) harnesses.push("openclaw");
+				if (deps.isOhMyPiInstalled()) harnesses.push("oh-my-pi");
 
 				for (const harness of harnesses) {
 					try {

@@ -97,7 +97,10 @@ Prerequisites
 ---
 
 - Node.js 18+ (or Bun 1.0+)
-- One of: Ollama (for local embeddings) or an OpenAI API key
+- Embeddings (choose one):
+  - Built-in (recommended, no extra setup)
+  - Ollama (local)
+  - OpenAI API key
 - macOS or Linux (Windows support planned)
 
 ---
@@ -127,19 +130,29 @@ For agent-driven onboarding, use non-interactive mode:
 signet setup --non-interactive \
   --name "My Agent" \
   --harness claude-code \
-  --embedding-provider ollama \
-  --extraction-provider claude-code
+  --deployment-type vps \
+  --embedding-provider native
 ```
 
-In non-interactive mode, agents should ask the user to choose both
-providers first, then pass those choices explicitly.
+`--deployment-type` supports `local`, `vps`, or `server` and adjusts inferred
+defaults when provider flags are omitted. Explicit provider flags always
+override inferred defaults.
+
+If OpenClaw is configured to use the same workspace path, setup now enforces
+backup posture before finishing. In automation, either configure a git
+`origin` remote ahead of time, or pass `--create-local-backup` (or
+`--allow-unprotected-workspace` if you intentionally accept the risk).
+Snapshot-backed protection is considered fresh for 7 days; after that, run
+setup with `--create-local-backup` again or configure `origin`.
 
 Extraction safety note:
 
 - intended usage is Claude Code on Haiku, Codex CLI on GPT Mini with a
   Pro/Max subscription, or local Ollama with at least `qwen3:4b`
-- on a VPS, set extraction to `none` unless you explicitly want
-  background LLM calls
+- with `--deployment-type vps`, setup prefers non-local extraction defaults
+  from selected harnesses when those tools are available locally, then other
+  detected tooling, and avoids defaulting to local Ollama extraction
+- on a VPS, set extraction to `none` if you do not want background LLM calls
 - remote API extraction can rack up extreme fees fast
 
 ---
@@ -164,7 +177,12 @@ for each:
 - OpenClaw — adapter-openclaw hooks
 - Codex — wrapper install + session hooks
 
-**3. Embedding provider**
+**3. Deployment context**
+
+Choose where Signet is running (`local`, `vps`, `server`). Setup uses
+this to show guidance before extraction provider selection.
+
+**4. Embedding provider**
 
 Embeddings power semantic (meaning-based) memory search. Choose:
 
@@ -175,7 +193,7 @@ Embeddings power semantic (meaning-based) memory search. Choose:
 - **OpenAI** — uses the OpenAI embeddings API. Requires `OPENAI_API_KEY`.
 - **Skip** — memory still works via keyword search, just no semantic search.
 
-**4. Embedding model**
+**5. Embedding model**
 
 For Ollama, `nomic-embed-text` is a good default. Setup can pull it for
 you (with confirmation), or you can do it manually:
@@ -184,12 +202,12 @@ you (with confirmation), or you can do it manually:
 ollama pull nomic-embed-text
 ```
 
-**5. Search balance**
+**6. Search balance**
 
 The `alpha` setting controls how much weight goes to semantic vs. keyword
 search. 0.7 (70% semantic, 30% keyword) works well for most people.
 
-**6. Git & auto-commit**
+**7. Git & auto-commit**
 
 The wizard can initialize a git repo in `$SIGNET_WORKSPACE/` so every change to
 your agent files is automatically versioned.

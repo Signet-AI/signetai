@@ -65,14 +65,29 @@ function insertMemory(
 	content: string,
 	type = "fact",
 	importance = 0.5,
+	opts?: {
+		agentId?: string;
+		scope?: string | null;
+		visibility?: "global" | "private" | "archived";
+	},
 ): void {
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO memories
-		 (id, type, content, confidence, importance, created_at, updated_at,
-		  updated_by, vector_clock, is_deleted)
-		 VALUES (?, ?, ?, 1.0, ?, ?, ?, 'test', '{}', 0)`,
-	).run(id, type, content, importance, now, now);
+		 (id, type, content, confidence, importance, created_at, updated_at, updated_by, vector_clock,
+		  is_deleted, scope, agent_id, visibility)
+		 VALUES (?, ?, ?, 1.0, ?, ?, ?, 'test', '{}', 0, ?, ?, ?)`,
+	).run(
+		id,
+		type,
+		content,
+		importance,
+		now,
+		now,
+		opts?.scope ?? null,
+		opts?.agentId ?? "default",
+		opts?.visibility ?? "global",
+	);
 }
 
 /** Minimal DecisionConfig that disables vector search (fetchEmbedding returns null). */
@@ -160,6 +175,30 @@ describe("runShadowDecisions", () => {
 			accessor,
 			provider,
 			cfg,
+		);
+
+		expect(result.proposals).toHaveLength(1);
+		expect(result.proposals[0].action).toBe("add");
+	});
+
+	it("proposes ADD when only out-of-scope candidates exist", async () => {
+		insertMemory(db, "mem-scope-b", MATCHING_MEMORY_CONTENT, "preference", 0.5, {
+			scope: "scope-b",
+			visibility: "global",
+			agentId: "default",
+		});
+		const provider = mockProvider([]);
+
+		const result = await runShadowDecisions(
+			[MATCHING_FACT],
+			accessor,
+			provider,
+			cfg,
+			{
+				agentId: "default",
+				scope: "scope-a",
+				visibility: "global",
+			},
 		);
 
 		expect(result.proposals).toHaveLength(1);
