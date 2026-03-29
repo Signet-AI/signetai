@@ -1047,41 +1047,6 @@ pub async fn session_end(
             .into_response();
     }
 
-    if !pipeline_enabled(state.as_ref()) {
-        state.sessions.release(&session_key);
-        state.continuity.clear(&session_key);
-        state.dedup.clear_session_start(&session_key);
-        state.dedup.clear(&session_key);
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({"memoriesSaved": 0})),
-        )
-            .into_response();
-    }
-
-    // Shadow mode: pipeline is "enabled" for extraction telemetry but workers
-    // do not start, so artifact writes and job enqueues would pile up forever.
-    // Skip both and return early — shadow mode observes without persisting.
-    let in_shadow = state
-        .config
-        .manifest
-        .memory
-        .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref())
-        .map(|p| p.shadow_mode)
-        .unwrap_or(false);
-    if in_shadow {
-        state.sessions.release(&session_key);
-        state.continuity.clear(&session_key);
-        state.dedup.clear_session_start(&session_key);
-        state.dedup.clear(&session_key);
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({"memoriesSaved": 0, "shadow": true})),
-        )
-            .into_response();
-    }
-
     // Validate body.agent_id against the agent encoded in session_key.
     // resolve_remember_agent rejects if they disagree, preventing lineage from
     // being written under a different agent than the one that opened the session.
@@ -1182,37 +1147,11 @@ pub async fn session_end(
             .into_response();
     }
 
-    if !transcript.trim().is_empty() && !session_key.trim().is_empty() {
-        // Legacy pipeline expects the normalized (text) view, not raw JSONL.
-        let transcript_value = normalized.clone();
-        let harness_value = harness.to_string();
-        let project = body.cwd.clone();
-        let session_key_value = session_key.clone();
-        let agent_value = agent_id.clone();
-        // Best-effort: stores transcript in DB for legacy extraction pipeline.
-        // Failure is non-fatal — the canonical artifact write below is the
-        // source of truth for lineage; log and continue.
-        if let Err(e) = state
-            .pool
-            .write(Priority::Low, move |conn| {
-                upsert_session_transcript(
-                    conn,
-                    &session_key_value,
-                    &transcript_value,
-                    &harness_value,
-                    project.as_deref(),
-                    &agent_value,
-                )?;
-                Ok(serde_json::Value::Null)
-            })
-            .await
-        {
-            warn!(error = %e, "session-end: transcript DB upsert failed, continuing");
-        }
-    }
-
-    if !transcript.trim().is_empty() {
-        // Canonical artifact receives the raw original — lossless storage.
+    // Canonical artifact always written before pipeline gates — it is the
+    // lineage source of truth regardless of pipeline_enabled or shadow_mode.
+    // This matches compaction_complete, which also writes artifacts unconditionally
+    // so manifests and backlinks never reference transcripts that don't exist.
+    {
         let transcript_value = transcript.clone();
         let root = state.config.base_path.clone();
         let session_key_value = if session_key.trim().is_empty() {
@@ -1231,8 +1170,7 @@ pub async fn session_end(
             ended_at: Some(ended_at.clone()),
             transcript: transcript_value,
         };
-        // Hard failure: canonical artifact must be written before summary job
-        // is enqueued. If this fails the lineage chain is broken — return 500.
+        // Hard failure: lineage chain is broken without this artifact.
         if let Err(e) = state
             .pool
             .write(Priority::Low, move |conn| {
@@ -1256,6 +1194,67 @@ pub async fn session_end(
                 Json(serde_json::json!({"error": format!("transcript artifact write failed: {e}")})),
             )
                 .into_response();
+        }
+    }
+
+    // Artifact written — stop here if pipeline is fully disabled or in shadow
+    // mode.  No extraction or enqueue work should run in those states.
+    if !pipeline_enabled(state.as_ref()) {
+        state.sessions.release(&session_key);
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0})),
+        )
+            .into_response();
+    }
+    let in_shadow = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|m| m.pipeline_v2.as_ref())
+        .map(|p| p.shadow_mode)
+        .unwrap_or(false);
+    if in_shadow {
+        state.sessions.release(&session_key);
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0, "shadow": true})),
+        )
+            .into_response();
+    }
+
+    // Legacy DB upsert — best-effort, only when pipeline is enabled and not
+    // shadow.  Canonical artifact above is the source of truth; this feeds
+    // the legacy extraction pipeline.
+    if !session_key.trim().is_empty() {
+        let transcript_value = normalized.clone();
+        let harness_value = harness.to_string();
+        let project = body.cwd.clone();
+        let session_key_value = session_key.clone();
+        let agent_value = agent_id.clone();
+        if let Err(e) = state
+            .pool
+            .write(Priority::Low, move |conn| {
+                upsert_session_transcript(
+                    conn,
+                    &session_key_value,
+                    &transcript_value,
+                    &harness_value,
+                    project.as_deref(),
+                    &agent_value,
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+        {
+            warn!(error = %e, "session-end: transcript DB upsert failed, continuing");
         }
     }
 
