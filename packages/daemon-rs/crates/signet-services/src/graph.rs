@@ -377,7 +377,10 @@ pub fn upsert_dependency(
              WHERE id = ?4",
             params![s, aspect_id, ts, eid, reason],
         )?;
-        let reason_str = reason.unwrap_or("updated without reason");
+        // History reason reflects the actual stored value after COALESCE:
+        // if caller provided a reason use it, otherwise the stored reason is unchanged.
+        let reason_str = reason
+            .unwrap_or_else(|| prev_reason.as_deref().unwrap_or("updated without reason"));
         write_dependency_history(
             conn,
             &eid,

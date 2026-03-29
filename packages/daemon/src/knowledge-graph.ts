@@ -359,6 +359,16 @@ export function upsertDependency(
 			) as Record<string, unknown> | undefined;
 
 		if (existing) {
+			const changed =
+				params.strength !== undefined ||
+				params.aspectId !== undefined ||
+				params.confidence !== undefined ||
+				params.reason !== undefined;
+
+			if (!changed) {
+				return rowToDependency(existing);
+			}
+
 			const reason = requireDependencyReason(
 				params.dependencyType,
 				params.reason ?? (typeof existing.reason === "string" ? existing.reason : null),
@@ -377,26 +387,19 @@ export function upsertDependency(
 				existing.id as string,
 				params.agentId,
 			);
-			if (
-				params.strength !== undefined ||
-				params.aspectId !== undefined ||
-				params.confidence !== undefined ||
-				params.reason !== undefined
-			) {
-				writeDependencyHistory(db, {
-					dependencyId: existing.id as string,
-					sourceEntityId: params.sourceEntityId,
-					targetEntityId: params.targetEntityId,
-					agentId: params.agentId,
-					dependencyType: params.dependencyType,
-					event: "updated",
-					changedBy: "knowledge-graph",
-					reason: reason ?? "updated without reason",
-					previousReason:
-						typeof existing.reason === "string" ? existing.reason : null,
-					createdAt: ts,
-				});
-			}
+			writeDependencyHistory(db, {
+				dependencyId: existing.id as string,
+				sourceEntityId: params.sourceEntityId,
+				targetEntityId: params.targetEntityId,
+				agentId: params.agentId,
+				dependencyType: params.dependencyType,
+				event: "updated",
+				changedBy: "knowledge-graph",
+				reason: reason ?? "updated without reason",
+				previousReason:
+					typeof existing.reason === "string" ? existing.reason : null,
+				createdAt: ts,
+			});
 			return rowToDependency({
 				...existing,
 				strength: params.strength ?? (existing.strength as number),
