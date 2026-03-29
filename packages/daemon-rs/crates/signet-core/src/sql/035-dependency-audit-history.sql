@@ -55,7 +55,7 @@ SELECT
     END,
     NULL,
     '{"source":"migration-035"}',
-    COALESCE(d.updated_at, datetime('now'))
+    datetime('now')
 FROM entity_dependencies d
 WHERE NOT EXISTS (
     SELECT 1

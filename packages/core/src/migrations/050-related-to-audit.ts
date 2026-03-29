@@ -67,7 +67,7 @@ export function up(db: MigrationDb): void {
 			END,
 			NULL,
 			'{"source":"migration-050"}',
-			d.updated_at
+			datetime('now')
 		FROM entity_dependencies d
 		WHERE NOT EXISTS (
 			SELECT 1
