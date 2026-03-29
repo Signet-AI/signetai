@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { OhMyPiConnector } from "./src/index.js";
 
 const originalEnv = {
+	HOME: process.env.HOME,
+	XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
 	PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 	SIGNET_AGENT_ID: process.env.SIGNET_AGENT_ID,
 	SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
@@ -12,17 +14,30 @@ const originalEnv = {
 
 let tmpRoot = "";
 
+function restoreEnv(name: keyof typeof originalEnv): void {
+	const value = originalEnv[name];
+	if (typeof value === "string") {
+		process.env[name] = value;
+		return;
+	}
+	delete process.env[name];
+}
+
 beforeEach(() => {
 	tmpRoot = mkdtempSync(join(tmpdir(), "signet-omp-connector-"));
+	process.env.HOME = tmpRoot;
+	process.env.XDG_CONFIG_HOME = join(tmpRoot, ".config-home");
 	process.env.PI_CODING_AGENT_DIR = join(tmpRoot, "agent");
 	process.env.SIGNET_AGENT_ID = "agent-from-env";
 	process.env.SIGNET_DAEMON_URL = "http://127.0.0.1:4123";
 });
 
 afterEach(() => {
-	process.env.PI_CODING_AGENT_DIR = originalEnv.PI_CODING_AGENT_DIR;
-	process.env.SIGNET_AGENT_ID = originalEnv.SIGNET_AGENT_ID;
-	process.env.SIGNET_DAEMON_URL = originalEnv.SIGNET_DAEMON_URL;
+	restoreEnv("HOME");
+	restoreEnv("XDG_CONFIG_HOME");
+	restoreEnv("PI_CODING_AGENT_DIR");
+	restoreEnv("SIGNET_AGENT_ID");
+	restoreEnv("SIGNET_DAEMON_URL");
 	if (tmpRoot) {
 		rmSync(tmpRoot, { recursive: true, force: true });
 	}
@@ -33,10 +48,13 @@ describe("OhMyPiConnector", () => {
 		const connector = new OhMyPiConnector();
 		const result = await connector.install(tmpRoot);
 		const installedPath = join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.js");
+		const configPath = join(tmpRoot, ".config-home", "signet", "oh-my-pi.json");
 
 		expect(result.success).toBe(true);
 		expect(result.filesWritten).toContain(installedPath);
+		expect(result.filesWritten).toContain(configPath);
 		expect(existsSync(installedPath)).toBe(true);
+		expect(existsSync(configPath)).toBe(true);
 
 		const content = readFileSync(installedPath, "utf8");
 		expect(content).toContain("SIGNET_MANAGED_OH_MY_PI_EXTENSION");
@@ -48,12 +66,40 @@ describe("OhMyPiConnector", () => {
 	});
 
 	it("falls back to default agent id when none is configured at install time", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		const connector = new OhMyPiConnector();
 		await connector.install(tmpRoot);
 
 		const installedPath = join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.js");
 		const content = readFileSync(installedPath, "utf8");
 		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "default")');
+	});
+
+	it("treats blank runtime env values as missing when generating the managed bootstrap", async () => {
+		process.env.SIGNET_AGENT_ID = "   ";
+		process.env.SIGNET_DAEMON_URL = "\n\t";
+		const connector = new OhMyPiConnector();
+		await connector.install(tmpRoot);
+
+		const installedPath = join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.js");
+		const content = readFileSync(installedPath, "utf8");
+		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", "default")');
+		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:3850")');
+	});
+
+	it("persists a custom Oh My Pi agent dir so later maintenance still finds the managed install", async () => {
+		const customAgentDir = join(tmpRoot, "custom-agent-home");
+		process.env.PI_CODING_AGENT_DIR = customAgentDir;
+		const connector = new OhMyPiConnector();
+		await connector.install(tmpRoot);
+
+		Reflect.deleteProperty(process.env, "PI_CODING_AGENT_DIR");
+		const reloadedConnector = new OhMyPiConnector();
+		expect(reloadedConnector.isInstalled()).toBe(true);
+
+		const uninstall = await reloadedConnector.uninstall();
+		expect(uninstall.filesRemoved).toContain(join(customAgentDir, "extensions", "signet-oh-my-pi.js"));
+		expect(uninstall.filesRemoved).toContain(join(tmpRoot, ".config-home", "signet", "oh-my-pi.json"));
+		expect(reloadedConnector.isInstalled()).toBe(false);
 	});
 });

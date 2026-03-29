@@ -11,8 +11,8 @@
 	"files": ["dist"],
 	"scripts": {
 		"build": "bun build src/index.ts --outfile dist/signet-oh-my-pi.mjs --target node --minify --format esm --external better-sqlite3 && bun run build:types",
-		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist --noCheck",
-		"typecheck": "tsc --noEmit --noCheck",
+		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+		"typecheck": "tsc --noEmit",
 		"dev": "bun --watch src/index.ts"
 	},
 	"dependencies": {

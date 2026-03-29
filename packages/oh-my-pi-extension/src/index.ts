@@ -1,5 +1,5 @@
 import { createDaemonClient } from "./daemon-client.js";
-import { readRuntimeEnv, readTrimmedString } from "./helpers.js";
+import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
 import {
 	type LifecycleDeps,
 	currentSessionRef,
@@ -19,6 +19,7 @@ import {
 	type OmpExtensionApi,
 	type OmpExtensionFactory,
 	type OmpInputEvent,
+	type OmpSessionCompactEvent,
 	type OmpSessionCompactingEvent,
 	type OmpSessionCompactingResult,
 	type PreCompactionResult,
@@ -105,7 +106,7 @@ function registerCompactionHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): v
 		},
 	);
 
-	pi.on("session_compact", async (event, ctx) => {
+	pi.on("session_compact", async (event: OmpSessionCompactEvent, ctx) => {
 		const summary = readTrimmedString(event.compactionEntry?.summary);
 		if (!summary) return;
 
@@ -131,8 +132,8 @@ const SignetOhMyPiExtension: OmpExtensionFactory = (pi): void => {
 	}
 
 	const deps: LifecycleDeps = {
-		agentId: readRuntimeEnv("SIGNET_AGENT_ID"),
-		client: createDaemonClient(readRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT),
+		agentId: readTrimmedRuntimeEnv("SIGNET_AGENT_ID"),
+		client: createDaemonClient(readTrimmedRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT),
 		state: createSessionState(),
 	};
 

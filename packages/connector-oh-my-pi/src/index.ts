@@ -2,6 +2,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
+import {
+	clearConfiguredOhMyPiAgentDir,
+	getOhMyPiConfigPath,
+	listOhMyPiAgentDirCandidates,
+	resolveOhMyPiAgentDir,
+	resolveOhMyPiExtensionsDir,
+	writeConfiguredOhMyPiAgentDir,
+} from "@signet/core";
 import { EXTENSION_BUNDLE } from "./extension-bundle.js";
 
 const OH_MY_PI_EXTENSION_PACKAGE = "@signet/oh-my-pi-extension";
@@ -17,12 +25,6 @@ function readTrimmedEnv(name: string): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function resolveOhMyPiExtensionsDir(home = homedir()): string {
-	const configuredAgentDir = readTrimmedEnv("PI_CODING_AGENT_DIR");
-	const agentDir = configuredAgentDir ?? join(home, ".omp", "agent");
-	return join(agentDir, "extensions");
 }
 
 function resolveWorkspacePath(home = homedir()): string {
@@ -86,14 +88,19 @@ function buildEnvBootstrap(env: {
 	return `const __signetRuntimeProcess = Reflect.get(globalThis, "process");
 if (__signetRuntimeProcess && typeof __signetRuntimeProcess === "object") {
 	const __signetRuntimeEnv = Reflect.get(__signetRuntimeProcess, "env");
+	const __signetReadEnv = (key) => {
+		if (!__signetRuntimeEnv || typeof __signetRuntimeEnv !== "object") return undefined;
+		const value = Reflect.get(__signetRuntimeEnv, key);
+		return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+	};
 	if (__signetRuntimeEnv && typeof __signetRuntimeEnv === "object") {
-		if (typeof Reflect.get(__signetRuntimeEnv, "SIGNET_PATH") !== "string") {
+		if (!__signetReadEnv("SIGNET_PATH")) {
 			Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${workspace});
 		}
-		if (typeof Reflect.get(__signetRuntimeEnv, "SIGNET_DAEMON_URL") !== "string") {
+		if (!__signetReadEnv("SIGNET_DAEMON_URL")) {
 			Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", ${daemonUrl});
 		}
-		if (typeof Reflect.get(__signetRuntimeEnv, "SIGNET_AGENT_ID") !== "string") {
+		if (!__signetReadEnv("SIGNET_AGENT_ID")) {
 			Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", ${agentId});
 		}
 	}
@@ -117,6 +124,16 @@ ${bootstrap}
 ${bundle}`;
 }
 
+function managedExtensionPath(agentDir: string, filename: string): string {
+	return join(agentDir, "extensions", filename);
+}
+
+function removeManagedExtensionFile(filePath: string): boolean {
+	if (!existsSync(filePath) || !isSignetManagedExtensionFile(filePath)) return false;
+	rmSync(filePath, { force: true });
+	return true;
+}
+
 export class OhMyPiConnector extends BaseConnector {
 	readonly name = "Oh My Pi";
 	readonly harnessId = "oh-my-pi";
@@ -129,19 +146,33 @@ export class OhMyPiConnector extends BaseConnector {
 		return join(resolveOhMyPiExtensionsDir(), OH_MY_PI_LEGACY_MANAGED_FILENAME);
 	}
 
+	private getManagedCandidatePaths(filename: string): readonly string[] {
+		return listOhMyPiAgentDirCandidates().map((agentDir) => managedExtensionPath(agentDir, filename));
+	}
+
 	getConfigPath(): string {
 		return this.getManagedExtensionPath();
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
-		const targetPath = this.getManagedExtensionPath();
-		const legacyPath = this.getLegacyManagedExtensionPath();
+		const agentDir = resolveOhMyPiAgentDir();
+		const targetPath = managedExtensionPath(agentDir, OH_MY_PI_MANAGED_FILENAME);
+		const legacyPath = managedExtensionPath(agentDir, OH_MY_PI_LEGACY_MANAGED_FILENAME);
 
 		if (existsSync(targetPath) && !isSignetManagedExtensionFile(targetPath)) {
 			throw new Error(
 				`Refusing to overwrite unmanaged Oh My Pi extension at ${targetPath}. Move or remove it first, then rerun setup.`,
 			);
+		}
+
+		for (const filePath of this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME)) {
+			if (filePath === targetPath) continue;
+			removeManagedExtensionFile(filePath);
+		}
+		for (const filePath of this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME)) {
+			if (filePath === legacyPath) continue;
+			removeManagedExtensionFile(filePath);
 		}
 
 		mkdirSync(dirname(targetPath), { recursive: true });
@@ -156,8 +187,14 @@ export class OhMyPiConnector extends BaseConnector {
 			filesWritten.push(targetPath);
 		}
 
-		if (existsSync(legacyPath) && isSignetManagedExtensionFile(legacyPath)) {
-			rmSync(legacyPath, { force: true });
+		removeManagedExtensionFile(legacyPath);
+
+		const configPath = getOhMyPiConfigPath();
+		const previousConfig = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
+		writeConfiguredOhMyPiAgentDir(agentDir);
+		const nextConfig = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
+		if (previousConfig !== nextConfig) {
+			filesWritten.push(configPath);
 		}
 
 		return {
@@ -170,10 +207,20 @@ export class OhMyPiConnector extends BaseConnector {
 
 	async uninstall(): Promise<UninstallResult> {
 		const filesRemoved: string[] = [];
-		for (const path of [this.getManagedExtensionPath(), this.getLegacyManagedExtensionPath()]) {
-			if (existsSync(path) && isSignetManagedExtensionFile(path)) {
-				rmSync(path, { force: true });
+		for (const path of [
+			...this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME),
+			...this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME),
+		]) {
+			if (removeManagedExtensionFile(path)) {
 				filesRemoved.push(path);
+			}
+		}
+
+		const configPath = getOhMyPiConfigPath();
+		if (existsSync(configPath)) {
+			clearConfiguredOhMyPiAgentDir();
+			if (!existsSync(configPath)) {
+				filesRemoved.push(configPath);
 			}
 		}
 
@@ -181,8 +228,9 @@ export class OhMyPiConnector extends BaseConnector {
 	}
 
 	isInstalled(): boolean {
-		return [this.getManagedExtensionPath(), this.getLegacyManagedExtensionPath()].some((path) =>
-			isSignetManagedExtensionFile(path),
-		);
+		return [
+			...this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME),
+			...this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME),
+		].some((path) => isSignetManagedExtensionFile(path));
 	}
 }

@@ -10,6 +10,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { listOhMyPiAgentDirCandidates } from "./oh-my-pi";
 
 const FORGE_BINARY_NAME = "forge";
 const SIGNET_FORGE_PRIMARY_MARKER = "Signet's native AI terminal";
@@ -41,7 +42,6 @@ const COMPATIBLE_FORGE_MARKER_GROUPS = [
 const OH_MY_PI_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.js";
 const OH_MY_PI_LEGACY_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.mjs";
 const OH_MY_PI_MANAGED_MARKER = "SIGNET_MANAGED_OH_MY_PI_EXTENSION";
-
 
 /**
  * Returns the base path for agent-specific files.
@@ -231,26 +231,22 @@ function signetManagedInstallDir(home = homedir()): string {
 	return join(home, ".config", "signet", "bin");
 }
 
-function resolveOhMyPiExtensionsDir(home = homedir()): string {
-	const configuredAgentDir = process.env.PI_CODING_AGENT_DIR?.trim();
-	const agentDir = configuredAgentDir && configuredAgentDir.length > 0 ? configuredAgentDir : join(home, ".omp", "agent");
-	return join(agentDir, "extensions");
-}
-
-function isSignetManagedOhMyPiInstall(home = homedir()): boolean {
-	for (const filename of [OH_MY_PI_MANAGED_EXTENSION_FILENAME, OH_MY_PI_LEGACY_MANAGED_EXTENSION_FILENAME]) {
-		const extensionPath = join(resolveOhMyPiExtensionsDir(home), filename);
-		if (!existsSync(extensionPath)) continue;
-		try {
-			const content = readFileSync(extensionPath, "utf8");
-			if (content.includes(OH_MY_PI_MANAGED_MARKER)) return true;
-		} catch {
-			// ignore unreadable candidate and continue checking others
+function isSignetManagedOhMyPiInstall(): boolean {
+	for (const agentDir of listOhMyPiAgentDirCandidates()) {
+		const extensionsDir = join(agentDir, "extensions");
+		for (const filename of [OH_MY_PI_MANAGED_EXTENSION_FILENAME, OH_MY_PI_LEGACY_MANAGED_EXTENSION_FILENAME]) {
+			const extensionPath = join(extensionsDir, filename);
+			if (!existsSync(extensionPath)) continue;
+			try {
+				const content = readFileSync(extensionPath, "utf8");
+				if (content.includes(OH_MY_PI_MANAGED_MARKER)) return true;
+			} catch {
+				// ignore unreadable candidate and continue checking others
+			}
 		}
 	}
 	return false;
 }
-
 
 function readSignetForgeInstallRecord(home = homedir()): SignetForgeInstallRecord | null {
 	const recordPath = join(signetManagedInstallDir(home), ".forge-install.json");
@@ -384,7 +380,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			opencode: existsSync(join(home, ".config", "opencode", "config.json")),
 			codex:
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
-			ohMyPi: isSignetManagedOhMyPiInstall(home),
+			ohMyPi: isSignetManagedOhMyPiInstall(),
 			forge: isForgeInstalled(basePath, home),
 		},
 	};

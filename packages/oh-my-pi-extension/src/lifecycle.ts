@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readStaticIdentity } from "@signet/core";
 import type { DaemonClient } from "./daemon-client.js";
-import { readRuntimeEnv, readTrimmedString } from "./helpers.js";
+import { readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
 import type { SessionState } from "./session-state.js";
 import { buildTranscriptFromEntries, readSessionFileSnapshot } from "./transcript.js";
 import {
@@ -38,7 +38,7 @@ export interface LifecycleDeps {
 }
 
 function staticFallback(): string {
-	const signetPath = readRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
+	const signetPath = readTrimmedRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
 	return readStaticIdentity(signetPath) ?? "";
 }
 

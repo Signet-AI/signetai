@@ -16,3 +16,7 @@ export function readTrimmedString(value: unknown): string | undefined {
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
 }
+
+export function readTrimmedRuntimeEnv(name: string): string | undefined {
+	return readTrimmedString(readRuntimeEnv(name));
+}

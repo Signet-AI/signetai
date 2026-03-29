@@ -135,6 +135,7 @@
       "version": "0.82.5",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
+        "@signet/core": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
