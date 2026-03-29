@@ -11,7 +11,11 @@ import { stripFences, tryParseJson } from "./extraction";
 import { buildSynthesisPrompt } from "./dependency-synthesis";
 
 const OLLAMA = "http://localhost:11434";
-const MODEL = process.env.SIGNET_OLLAMA_TEST_MODEL ?? "qwen3:4b";
+// Live Ollama tests only run when SIGNET_OLLAMA_TEST_MODEL is explicitly set.
+// This prevents nondeterministic failures in CI or on machines where the model
+// is installed but not under test.
+const EXPLICIT_MODEL = process.env.SIGNET_OLLAMA_TEST_MODEL;
+const MODEL = EXPLICIT_MODEL ?? "qwen3:4b";
 const VALID = new Set<string>(DEPENDENCY_TYPES);
 
 async function ollamaAvailable(): Promise<boolean> {
@@ -88,6 +92,10 @@ describe(`${MODEL} dependency synthesis`, () => {
 	});
 
 	test("prompt yields expected edges for known candidates", async () => {
+		if (!EXPLICIT_MODEL) {
+			console.log("SKIP: set SIGNET_OLLAMA_TEST_MODEL to run live Ollama tests");
+			return;
+		}
 		const available = await ollamaAvailable();
 		if (!available) {
 			console.log(`SKIP: ${MODEL} not available on Ollama`);

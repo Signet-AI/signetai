@@ -523,10 +523,35 @@ pub fn get_dependencies_detailed(
 }
 
 pub fn delete_dependency(conn: &Connection, id: &str, agent_id: &str) -> Result<(), CoreError> {
+    // Fetch before delete so we can write audit history.
+    let row: Option<(String, String, String, Option<String>)> = conn
+        .query_row(
+            "SELECT source_entity_id, target_entity_id, dependency_type, reason
+             FROM entity_dependencies WHERE id = ?1 AND agent_id = ?2",
+            params![id, agent_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok();
     conn.execute(
         "DELETE FROM entity_dependencies WHERE id = ?1 AND agent_id = ?2",
         params![id, agent_id],
     )?;
+    if let Some((src, tgt, dep_type, reason)) = row {
+        let ts = now();
+        write_dependency_history(
+            conn,
+            id,
+            &src,
+            &tgt,
+            agent_id,
+            &dep_type,
+            "deleted",
+            "daemon-rs:graph",
+            reason.as_deref().unwrap_or("deleted without reason"),
+            None,
+            &ts,
+        )?;
+    }
     Ok(())
 }
 
