@@ -1011,39 +1011,43 @@ pub async fn session_end(
         })
         .unwrap_or_else(|| format!("session-end:{ended_at}"));
 
+    // Raw transcript content — normalization is deferred so the canonical
+    // artifact always receives the unmodified original.  Read via the
+    // canonicalized path (not the caller-supplied string) to close the TOCTOU
+    // window between symlink-resolution and open.
     let transcript = body
         .transcript_path
         .as_deref()
-        .filter(|path| !path.trim().is_empty())
-        .filter(|&path| {
-            // Constrain reads to workspace or system temp only.
-            // cwd is request-supplied and cannot be trusted as a root —
-            // a caller could send cwd:"/" to bypass any path check.
+        .filter(|p| !p.trim().is_empty())
+        .and_then(|path| {
             let base = &state.config.base_path;
-            match fs::canonicalize(path) {
-                // Restrict reads to the workspace memory/ subdir or the
-                // signet-managed temp subdir. Full base_path is excluded to
-                // prevent reads from .secrets/, USER.md, and other workspace
-                // artifacts in team/hybrid mode. Connectors write transcript
-                // staging files to $WORKSPACE/memory/ or $TMPDIR/signet/.
-                Ok(p) => {
-                    p.starts_with(base.join("memory"))
-                        || p.starts_with(std::env::temp_dir().join("signet"))
-                }
+            let canonical = match fs::canonicalize(path) {
+                Ok(p) => p,
                 Err(_) => {
-                    warn!(path, "session-end: transcript_path outside allowed locations or unreadable, skipping");
-                    false
+                    warn!(path, "session-end: transcript_path unresolvable, skipping");
+                    return None;
                 }
+            };
+            // Restrict reads to the workspace memory/ subdir or the
+            // signet-managed temp subdir.  Full base_path is excluded to
+            // prevent reads from .secrets/, USER.md, and other workspace
+            // artifacts in team/hybrid mode.
+            if !canonical.starts_with(base.join("memory"))
+                && !canonical.starts_with(std::env::temp_dir().join("signet"))
+            {
+                warn!(path, "session-end: transcript_path outside allowed locations, skipping");
+                return None;
             }
+            // Open the resolved canonical path — not the original string —
+            // so a symlink swap after canonicalize() has no effect.
+            fs::read_to_string(&canonical).ok()
         })
-        .and_then(|path| fs::read_to_string(path).ok())
-        .map(|raw| normalize_session_transcript(harness, &raw))
-        .or_else(|| {
-            body.transcript
-                .as_deref()
-                .map(|raw| normalize_session_transcript(harness, raw))
-        })
+        .or_else(|| body.transcript.as_deref().map(str::to_string))
         .unwrap_or_default();
+
+    // Normalized view used for LLM inputs (summary job) and the legacy DB
+    // upsert.  The canonical artifact above gets the raw original.
+    let normalized = normalize_session_transcript(harness, &transcript);
 
     // Gate before any writes — no-op sessions don't need artifact/job work.
     if transcript.trim().is_empty() {
@@ -1059,7 +1063,8 @@ pub async fn session_end(
     }
 
     if !transcript.trim().is_empty() && !session_key.trim().is_empty() {
-        let transcript_value = transcript.clone();
+        // Legacy pipeline expects the normalized (text) view, not raw JSONL.
+        let transcript_value = normalized.clone();
         let harness_value = harness.to_string();
         let project = body.cwd.clone();
         let session_key_value = session_key.clone();
@@ -1087,6 +1092,7 @@ pub async fn session_end(
     }
 
     if !transcript.trim().is_empty() {
+        // Canonical artifact receives the raw original — lossless storage.
         let transcript_value = transcript.clone();
         let root = state.config.base_path.clone();
         let session_key_value = if session_key.trim().is_empty() {
@@ -1125,14 +1131,15 @@ pub async fn session_end(
         }
     }
 
-    // Clamp the LLM input (summary job) by char count — artifact already
-    // received the full transcript above for lossless canonical storage.
+    // Clamp the LLM input (summary job) by char count — canonical artifact
+    // already received the full raw transcript above for lossless storage.
+    // The summary job gets the normalized (text) view, not raw JSONL.
     const MAX_TRANSCRIPT_CHARS: usize = 100_000;
-    let summary_transcript = if transcript.chars().count() > MAX_TRANSCRIPT_CHARS {
-        let safe: String = transcript.chars().take(MAX_TRANSCRIPT_CHARS).collect();
+    let summary_transcript = if normalized.chars().count() > MAX_TRANSCRIPT_CHARS {
+        let safe: String = normalized.chars().take(MAX_TRANSCRIPT_CHARS).collect();
         format!("{safe}\n[truncated]")
     } else {
-        transcript.clone()
+        normalized.clone()
     };
 
     let harness_value = harness.to_string();
