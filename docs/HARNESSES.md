@@ -380,7 +380,8 @@ next setup or sync run.
 - Existing unrelated Oh My Pi extensions are left untouched.
 - Signet refuses to overwrite a colliding unmanaged `signet-oh-my-pi.js`.
 - Daemon or network failures are fail-open, so prompt handling, compaction, session switches, and shutdown continue even if Signet is unavailable.
-- The extension handles lifecycle forwarding and hidden context injection. It does not currently add `/remember` or `/recall` tools, and it does not sync `AGENTS.md` into Oh My Pi.
+- The extension persists hidden session-context and recall injections through `before_agent_start`, marks them with `attribution: "agent"`, and keeps them out of transcript reconstruction so memory-backed answers remain attributable without consuming user-attributed Copilot requests.
+- It does not currently add `/remember` or `/recall` tools, and it does not sync `AGENTS.md` into Oh My Pi.
 
 ### Supported hooks
 

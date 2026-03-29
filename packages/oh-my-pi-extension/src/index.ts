@@ -11,21 +11,19 @@ import {
 } from "./lifecycle.js";
 import { createSessionState } from "./session-state.js";
 import {
-	DAEMON_URL_DEFAULT,
-	HARNESS,
-	type OmpBeforeAgentStartEvent,
-	type OmpContextEvent,
-	type OmpContextEventResult,
-	type OmpExtensionApi,
-	type OmpExtensionFactory,
-	type OmpInputEvent,
-	type OmpSessionCompactEvent,
-	type OmpSessionCompactingEvent,
-	type OmpSessionCompactingResult,
-	type PreCompactionResult,
-	READ_TIMEOUT,
-	RUNTIME_PATH,
-	WRITE_TIMEOUT,
+ 	DAEMON_URL_DEFAULT,
+ 	HARNESS,
+ 	type OmpBeforeAgentStartEvent,
+ 	type OmpExtensionApi,
+ 	type OmpExtensionFactory,
+ 	type OmpInputEvent,
+ 	type OmpSessionCompactEvent,
+ 	type OmpSessionCompactingEvent,
+ 	type OmpSessionCompactingResult,
+ 	type PreCompactionResult,
+ 	READ_TIMEOUT,
+ 	RUNTIME_PATH,
+ 	WRITE_TIMEOUT,
 } from "./types.js";
 
 function registerSessionLifecycleHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
@@ -59,22 +57,17 @@ function registerPromptHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void 
 		await ensureSessionContext(deps, ctx);
 		const session = currentSessionRef(ctx);
 		if (!session.sessionId) return;
-		if (deps.state.hasPendingRecall(session.sessionId)) return;
-		await requestRecallForPrompt(deps, ctx, event.prompt);
+		if (!deps.state.hasPendingRecall(session.sessionId)) {
+			await requestRecallForPrompt(deps, ctx, event.prompt);
+		}
+
+		const hiddenMessage = deps.state.consumePersistentHiddenInject(session.sessionId);
+		if (!hiddenMessage) return;
+
+		return { message: hiddenMessage };
 	});
 }
 
-function registerContextHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
-	pi.on("context", async (event: OmpContextEvent, ctx): Promise<OmpContextEventResult | undefined> => {
-		const session = currentSessionRef(ctx);
-		const hiddenMessages = deps.state.consumeHiddenInjectMessages(session.sessionId);
-		if (hiddenMessages.length === 0) return;
-
-		return {
-			messages: [...event.messages, ...hiddenMessages],
-		};
-	});
-}
 
 function registerCompactionHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
 	pi.on(
@@ -139,7 +132,6 @@ const SignetOhMyPiExtension: OmpExtensionFactory = (pi): void => {
 
 	registerSessionLifecycleHandlers(pi, deps);
 	registerPromptHandlers(pi, deps);
-	registerContextHandlers(pi, deps);
 	registerCompactionHandlers(pi, deps);
 };
 
