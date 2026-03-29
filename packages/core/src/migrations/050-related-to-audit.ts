@@ -38,13 +38,9 @@ export function up(db: MigrationDb): void {
 
 	if (!hasTable(db, "entity_dependencies")) return;
 
-	db.exec(`
-		UPDATE entity_dependencies
-		SET reason = 'legacy-unattributed related_to edge'
-		WHERE dependency_type = 'related_to'
-		  AND (reason IS NULL OR length(trim(reason)) = 0)
-	`);
-
+	// Backfill runs BEFORE stamping the legacy reason so the history row
+	// faithfully records the original state (NULL/empty reason) of pre-existing
+	// related_to edges, not the value the UPDATE below will write.
 	db.exec(`
 		INSERT INTO entity_dependency_history (
 			id, dependency_id, source_entity_id, target_entity_id, agent_id,
@@ -75,6 +71,15 @@ export function up(db: MigrationDb): void {
 			WHERE h.dependency_id = d.id
 			  AND h.event = 'backfill'
 		  )
+	`);
+
+	// Stamp a valid reason on related_to edges AFTER backfill so the trigger
+	// enforcement added below does not reject these legacy rows.
+	db.exec(`
+		UPDATE entity_dependencies
+		SET reason = 'legacy-unattributed related_to edge'
+		WHERE dependency_type = 'related_to'
+		  AND (reason IS NULL OR length(trim(reason)) = 0)
 	`);
 
 	db.exec("DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert");

@@ -27,13 +27,9 @@ CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_agent
 CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_created
     ON entity_dependency_history(created_at DESC);
 
--- Stamp a legacy reason on related_to edges that have none (required by trigger below).
-UPDATE entity_dependencies
-SET reason = 'legacy-unattributed related_to edge'
-WHERE dependency_type = 'related_to'
-  AND (reason IS NULL OR length(trim(reason)) = 0);
-
 -- Backfill all existing dependency edges (any type) that have no history entry yet.
+-- Runs BEFORE the related_to reason UPDATE so the history row records the original
+-- NULL/empty state rather than the stamped value written below.
 INSERT INTO entity_dependency_history (
     id, dependency_id, source_entity_id, target_entity_id, agent_id,
     dependency_type, event, changed_by, reason, previous_reason,
@@ -63,6 +59,13 @@ WHERE NOT EXISTS (
     WHERE h.dependency_id = d.id
       AND h.event = 'backfill'
 );
+
+-- Stamp a valid reason on related_to edges AFTER backfill so the history row
+-- captured above reflects the original empty state, not this stamped value.
+UPDATE entity_dependencies
+SET reason = 'legacy-unattributed related_to edge'
+WHERE dependency_type = 'related_to'
+  AND (reason IS NULL OR length(trim(reason)) = 0);
 
 DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert;
 DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update;
