@@ -7,6 +7,8 @@
 use std::fs;
 use std::sync::Arc;
 
+use sha2::{Digest, Sha256};
+
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -46,17 +48,33 @@ fn conflict_response(claimed_by: RuntimePath) -> axum::response::Response {
         .into_response()
 }
 
-/// Returns the session_key of the most recent session for a project, used as a
-/// lineage fallback when compaction fires without an explicit sessionKey.
+/// Returns the session_key of the most recent session for a project.
+/// Checks `session_transcripts` first, then falls back to `memory_artifacts`
+/// so that compactions executed after a prior compaction (which deletes
+/// session_transcripts rows) still resolve a stable lineage anchor.
 fn latest_session_for_project(
     conn: &rusqlite::Connection,
     project: &str,
     agent_id: &str,
 ) -> rusqlite::Result<Option<String>> {
+    // Primary: live transcript rows (present before first compaction).
     let mut stmt = conn.prepare(
         "SELECT session_key FROM session_transcripts \
          WHERE agent_id = ?1 AND project = ?2 AND session_key IS NOT NULL \
          ORDER BY created_at DESC LIMIT 1",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![agent_id, project])?;
+    if let Some(row) = rows.next()? {
+        return row.get(0);
+    }
+
+    // Fallback: artifacts written by a prior compaction for this project.
+    // session_transcripts may have been deleted after the first compaction,
+    // but memory_artifacts is never cleared by the compaction path.
+    let mut stmt = conn.prepare(
+        "SELECT session_key FROM memory_artifacts \
+         WHERE agent_id = ?1 AND project = ?2 AND session_key IS NOT NULL \
+         ORDER BY captured_at DESC LIMIT 1",
     )?;
     let mut rows = stmt.query(rusqlite::params![agent_id, project])?;
     rows.next()?.map(|row| row.get(0)).transpose()
@@ -1745,7 +1763,10 @@ pub async fn compaction_complete(
                     &agent_id,
                     fallback_project.as_deref(),
                 )?;
-                // Project-based lineage fallback.
+                // Project-based lineage fallback.  When neither session_key
+                // nor any prior session is available, derive a stable ID from
+                // content rather than wall-clock time so retries produce the
+                // same idempotency_key and don't create duplicate lineage.
                 let sid = session_key.clone().unwrap_or_else(|| {
                     project
                         .as_deref()
@@ -1754,7 +1775,18 @@ pub async fn compaction_complete(
                                 .ok()
                                 .flatten()
                         })
-                        .unwrap_or_else(|| format!("compaction:{captured_at}"))
+                        .unwrap_or_else(|| {
+                            let mut h = Sha256::new();
+                            h.update(agent_id.as_bytes());
+                            h.update(b":");
+                            h.update(summary_value.as_bytes());
+                            let digest = h.finalize();
+                            let hex: String = digest[..8]
+                                .iter()
+                                .map(|b| format!("{b:02x}"))
+                                .collect();
+                            format!("compaction:{hex}")
+                        })
                 });
                 write_compaction_artifact(
                     conn,
