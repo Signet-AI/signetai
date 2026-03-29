@@ -79,7 +79,7 @@
 			</div>
 		{:else}
 			<div class="unified-main constellation-full">
-				<OntologyDashboard />
+				<OntologyDashboard {agentId} />
 			</div>
 		{/if}
 	</div>

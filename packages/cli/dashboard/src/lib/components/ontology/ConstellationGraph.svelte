@@ -27,6 +27,11 @@
 		clearHover,
 	} from "./ontology-state.svelte";
 
+	interface Props {
+		agentId?: string;
+	}
+	const { agentId = "default" }: Props = $props();
+
 	// Force-layout node (mutable positions added by d3)
 	interface SimNode extends OntologyNode {
 		x: number;
@@ -169,15 +174,33 @@
 		}
 	});
 
+	// Wake the render loop when selection/hover changes so highlights repaint
+	$effect(() => {
+		void ontology.selected;
+		void ontology.hovered;
+		wakeRenderLoop();
+	});
+
 	// --- Rendering ---
 
 	function startRenderLoop(): void {
 		cancelAnimationFrame(raf);
 		const loop = () => {
 			draw();
-			raf = requestAnimationFrame(loop);
+			// Keep looping while the sim is active or the user is interacting
+			if (sim && (sim.alpha() > 0.01 || isDragging || isPanning)) {
+				raf = requestAnimationFrame(loop);
+			} else {
+				// Sim settled — do one final draw and stop
+				draw();
+				raf = 0;
+			}
 		};
 		raf = requestAnimationFrame(loop);
+	}
+
+	function wakeRenderLoop(): void {
+		if (!raf) startRenderLoop();
 	}
 
 	function worldToScreen(wx: number, wy: number): [number, number] {
@@ -384,6 +407,7 @@
 			dragNode.fx = wx;
 			dragNode.fy = wy;
 			didDrag = true;
+			wakeRenderLoop();
 			return;
 		}
 
@@ -393,6 +417,7 @@
 			camX = panCamStartX - dx;
 			camY = panCamStartY - dy;
 			didDrag = true;
+			wakeRenderLoop();
 			return;
 		}
 
@@ -434,10 +459,11 @@
 
 		camX = wx - (pos.x - width / 2) / camZoom;
 		camY = wy - (pos.y - height / 2) / camZoom;
+		wakeRenderLoop();
 	}
 
 	onMount(() => {
-		loadGraph().then(() => {
+		loadGraph(agentId).then(() => {
 			lastFilter = [...ontology.visibleNodeKinds].sort().join(",")
 				+ "|" + [...ontology.visibleEdgeKinds].sort().join(",")
 				+ "|all";

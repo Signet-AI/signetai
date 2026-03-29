@@ -9,6 +9,11 @@
 	import InspectorPanel from "./InspectorPanel.svelte";
 	import { ontology, searchGraph } from "./ontology-state.svelte";
 
+	interface Props {
+		agentId?: string;
+	}
+	const { agentId = "default" }: Props = $props();
+
 	let umapOpen = $state(false);
 
 	function handleSearch(e: Event): void {
@@ -48,7 +53,7 @@
 	<div class="ont-grid">
 		<div class="zone-a"><SchemaPanel /></div>
 		<div class="zone-b">
-			<ConstellationGraph />
+			<ConstellationGraph {agentId} />
 			{#if umapOpen}
 				<div class="umap-float">
 					<div class="umap-float-header">
@@ -67,7 +72,7 @@
 				</button>
 			{/if}
 		</div>
-		<div class="zone-d"><InspectorPanel /></div>
+		<div class="zone-d"><InspectorPanel {agentId} /></div>
 	</div>
 </div>
 

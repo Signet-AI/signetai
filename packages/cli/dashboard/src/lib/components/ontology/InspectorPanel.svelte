@@ -15,13 +15,18 @@
 	} from "./ontology-state.svelte";
 	import { entityNameFromGraph, NODE_COLORS } from "./ontology-data";
 
+	interface Props {
+		agentId?: string;
+	}
+	const { agentId = "default" }: Props = $props();
+
 	// Load entity detail when entity selected
 	let lastEntityId = "";
 	$effect(() => {
 		const sel = ontology.selected;
 		if (sel?.kind === "entity" && sel.id !== lastEntityId) {
 			lastEntityId = sel.id;
-			loadEntityDetail(sel.id);
+			loadEntityDetail(sel.id, agentId);
 		} else if (!sel || sel.kind !== "entity") {
 			lastEntityId = "";
 		}
@@ -33,14 +38,14 @@
 		const sel = ontology.selected;
 		if (sel?.kind === "aspect" && sel.id !== lastAspectId) {
 			lastAspectId = sel.id;
-			loadAspectDetail(sel.id);
+			loadAspectDetail(sel.id, sel.id, agentId);
 		} else if (sel?.kind === "attribute") {
 			const node = ontology.graphNodes.find((n) => n.id === sel.id && n.kind === "attribute");
 			if (node?.parentId && node.parentId !== lastAspectId) {
 				lastAspectId = node.parentId;
 				// Pass the attribute's own ID as triggeredBy so the guard in
 				// loadAspectDetail can check selected.id === attributeId, not aspectId
-				loadAspectDetail(node.parentId, sel.id);
+				loadAspectDetail(node.parentId, sel.id, agentId);
 			}
 		} else if (!sel || sel.kind === "entity") {
 			lastAspectId = "";
