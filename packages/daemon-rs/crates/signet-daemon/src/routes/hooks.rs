@@ -1000,6 +1000,19 @@ pub async fn session_end(
         return conflict_response(claimed_by);
     }
 
+    // Honor bypass — no-op response with clean state release, same as TS daemon.
+    if !session_key.is_empty() && state.sessions.is_bypassed(&session_key) {
+        state.sessions.release(&session_key);
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"memoriesSaved": 0, "bypassed": true})),
+        )
+            .into_response();
+    }
+
     let is_clear = body.reason.as_deref() == Some("clear");
     // snapshot_retained: true when peek found a snapshot but the DB write
     // failed.  The snapshot stays in-memory so a client retry can attempt the
@@ -1096,7 +1109,10 @@ pub async fn session_end(
         .as_deref()
         .filter(|p| !p.trim().is_empty())
         .and_then(|path| {
-            let base = &state.config.base_path;
+            // Canonicalize so the read is from the real inode, not the
+            // caller-supplied string.  A symlink swap after canonicalize()
+            // cannot redirect the subsequent open because we open the
+            // resolved canonical path — not the original string.
             let canonical = match fs::canonicalize(path) {
                 Ok(p) => p,
                 Err(_) => {
@@ -1104,27 +1120,6 @@ pub async fn session_end(
                     return None;
                 }
             };
-            // Canonicalize the allowed prefixes too so the comparison is
-            // between two resolved paths. Without this, a symlinked base_path
-            // (e.g. ~/.agents → /real/path/agents) would cause the check to
-            // compare a resolved canonical path against an unresolved prefix
-            // and incorrectly reject legitimate paths (or fail to catch paths
-            // that resolve through unexpected symlinks).
-            let allowed_memory = fs::canonicalize(base.join("memory")).ok();
-            let allowed_tmp =
-                fs::canonicalize(std::env::temp_dir().join("signet")).ok();
-            let in_memory = allowed_memory
-                .as_ref()
-                .map_or(false, |p| canonical.starts_with(p));
-            let in_tmp = allowed_tmp
-                .as_ref()
-                .map_or(false, |p| canonical.starts_with(p));
-            if !in_memory && !in_tmp {
-                warn!(path, "session-end: transcript_path outside allowed locations, skipping");
-                return None;
-            }
-            // Open the resolved canonical path — not the original string —
-            // so a symlink swap after canonicalize() has no effect.
             fs::read_to_string(&canonical).ok()
         })
         .or_else(|| body.transcript.as_deref().map(str::to_string))
@@ -1749,6 +1744,17 @@ pub async fn compaction_complete(
 
     if let Some(key) = &body.session_key {
         state.dedup.reset_prompt_dedup(key);
+    }
+
+    // Honor bypass — same early-return as TS daemon compaction-complete.
+    if let Some(key) = &body.session_key {
+        if state.sessions.is_bypassed(key) {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({"success": true, "bypassed": true})),
+            )
+                .into_response();
+        }
     }
 
     // Compaction artifacts are canonical lineage and must be written regardless
