@@ -57,6 +57,8 @@ export const ontology = $state({
 
 	/** IDs matching the current search (null = no search active) */
 	searchMatchIds: null as Set<string> | null,
+	/** Increments on every searchMatchIds write so filter effects see distinct keys */
+	searchEpoch: 0,
 	searching: false,
 
 	/** Visible edge/node kinds on graph (driven by schema table selection) */
@@ -139,6 +141,7 @@ export function searchGraph(query: string, delay = 250): void {
 
 	if (!query.trim()) {
 		ontology.searchMatchIds = null;
+		ontology.searchEpoch++;
 		ontology.searching = false;
 		return;
 	}
@@ -151,10 +154,11 @@ export function searchGraph(query: string, delay = 250): void {
 		const nodes = ontology.graphNodes;
 		const map = new Map(nodes.map((n) => [n.id, n]));
 
-		// Phase 1: direct label matches
+		// Phase 1: direct label/content matches
 		const matched = new Set<string>();
 		for (const n of nodes) {
-			if (n.label.toLowerCase().includes(lower)) matched.add(n.id);
+			const text = (n.searchText ?? n.label).toLowerCase();
+			if (text.includes(lower) || n.label.toLowerCase().includes(lower)) matched.add(n.id);
 		}
 
 		// Phase 2: expand — parents (walk up) + children (walk down twice for grandchildren)
@@ -175,6 +179,7 @@ export function searchGraph(query: string, delay = 250): void {
 
 		if (gen !== searchGeneration) return;
 		ontology.searchMatchIds = result;
+		ontology.searchEpoch++;
 		ontology.searching = false;
 	}, delay);
 }
@@ -189,6 +194,8 @@ export async function loadEntityDetail(entityId: string, agentId = "default"): P
 			getKnowledgeAspects(entityId, agentId),
 			getKnowledgeDependencies(entityId, "both", agentId),
 		]);
+		// Guard: bail if selection changed while we were loading
+		if (ontology.selected?.id !== entityId) return;
 		ontology.detail = detail;
 		ontology.detailAspects = aspects;
 		ontology.detailDependencies = deps;
@@ -201,6 +208,8 @@ export async function loadEntityDetail(entityId: string, agentId = "default"): P
 					getKnowledgeAttributes(entityId, a.aspect.id, { agentId }),
 				),
 			);
+			// Guard again after the second await
+			if (ontology.selected?.id !== entityId) return;
 			for (let i = 0; i < aspects.length; i++) {
 				attrMap.set(aspects[i].aspect.id, results[i]);
 			}
@@ -220,6 +229,8 @@ export async function loadAspectDetail(aspectId: string, agentId = "default"): P
 	ontology.loadingAspect = true;
 	try {
 		const attrs = await getKnowledgeAttributes(node.parentId, aspectId, { agentId });
+		// Guard: bail if selection changed while loading
+		if (ontology.selected?.id !== aspectId) return;
 		ontology.aspectAttrs = attrs;
 	} finally {
 		ontology.loadingAspect = false;

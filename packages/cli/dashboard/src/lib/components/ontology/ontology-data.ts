@@ -92,6 +92,8 @@ export interface OntologyNode {
 	id: string;
 	kind: OntologyNodeKind;
 	label: string;
+	/** Untruncated content for search matching (may differ from label) */
+	searchText?: string;
 	sublabel?: string;
 	parentId?: string;
 	data: unknown;
@@ -196,6 +198,7 @@ export function buildGraphFromConstellation(
 					id: attr.id,
 					kind: "attribute",
 					label: short,
+					searchText: attr.content,
 					sublabel: attr.kind,
 					parentId: asp.id,
 					data: attr,

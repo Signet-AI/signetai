@@ -160,12 +160,9 @@
 
 	// Watch for filter changes and rebuild sim
 	$effect(() => {
-		const searchKey = ontology.searchMatchIds === null
-			? "all"
-			: `s:${ontology.searchMatchIds.size}`;
 		const key = [...ontology.visibleNodeKinds].sort().join(",")
 			+ "|" + [...ontology.visibleEdgeKinds].sort().join(",")
-			+ "|" + searchKey;
+			+ "|" + ontology.searchEpoch;
 		if (key !== lastFilter && ontology.graphNodes.length > 0) {
 			lastFilter = key;
 			buildSim(ontology.graphNodes, ontology.graphEdges);
@@ -344,7 +341,7 @@
 			const dx = node.x - wx;
 			const dy = node.y - wy;
 			const dist = Math.sqrt(dx * dx + dy * dy);
-			const hitRadius = node.radius / camZoom + 4;
+			const hitRadius = node.radius + 4 / camZoom;
 			if (dist < hitRadius && dist < minDist) {
 				closest = node;
 				minDist = dist;
