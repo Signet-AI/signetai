@@ -103,11 +103,15 @@ export const ontology = $state({
 
 // --- Graph data ---
 
+let graphGeneration = 0;
+
 export async function loadGraph(agentId = "default"): Promise<void> {
+	const gen = ++graphGeneration;
 	ontology.loading = true;
 	ontology.error = null;
 	try {
 		const data = await getConstellationOverlay(agentId);
+		if (gen !== graphGeneration) return;
 		if (!data) {
 			ontology.error = "Could not reach daemon";
 			ontology.graphNodes = [];
@@ -120,12 +124,13 @@ export async function loadGraph(agentId = "default"): Promise<void> {
 		ontology.graphEdges = edges;
 		ontology.entities = data.entities;
 	} catch (err) {
+		if (gen !== graphGeneration) return;
 		ontology.error = err instanceof Error ? err.message : "Unknown error";
 		ontology.graphNodes = [];
 		ontology.graphEdges = [];
 		ontology.entities = [];
 	} finally {
-		ontology.loading = false;
+		if (gen === graphGeneration) ontology.loading = false;
 	}
 }
 
