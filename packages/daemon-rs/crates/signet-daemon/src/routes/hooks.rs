@@ -1088,17 +1088,9 @@ pub async fn session_end(
         }
     };
     let ended_at = chrono::Utc::now().to_rfc3339();
-    let session_id = body
-        .session_id
-        .clone()
-        .or_else(|| {
-            if session_key.trim().is_empty() {
-                None
-            } else {
-                Some(session_key.clone())
-            }
-        })
-        .unwrap_or_else(|| format!("session-end:{ended_at}"));
+    // session_id is resolved after transcript load so the content-hash fallback
+    // can include transcript content (making it retry-stable when neither
+    // session_id nor session_key is provided by the caller).
 
     // Raw transcript content — normalization is deferred so the canonical
     // artifact always receives the unmodified original.  Read via the
@@ -1128,6 +1120,37 @@ pub async fn session_end(
     // Normalized view used for LLM inputs (summary job) and the legacy DB
     // upsert.  The canonical artifact above gets the raw original.
     let normalized = normalize_session_transcript(harness, &transcript);
+
+    // Resolve session_id now that transcript is available for the content-hash
+    // fallback.  Priority: explicit body.session_id → session_key → content hash.
+    // The hash covers (harness, agent_id, project, transcript prefix) so the
+    // same session-end content always maps to the same ID across retries, making
+    // artifact writes and summary-job dedup idempotent even when the caller omits
+    // both sessionId and sessionKey.
+    let session_id = body
+        .session_id
+        .clone()
+        .or_else(|| {
+            if session_key.trim().is_empty() {
+                None
+            } else {
+                Some(session_key.clone())
+            }
+        })
+        .unwrap_or_else(|| {
+            let prefix: String = transcript.chars().take(512).collect();
+            let mut h = Sha256::new();
+            h.update(harness.as_bytes());
+            h.update(b":");
+            h.update(agent_id.as_bytes());
+            h.update(b":");
+            h.update(body.cwd.as_deref().unwrap_or("").as_bytes());
+            h.update(b":");
+            h.update(prefix.as_bytes());
+            let digest = h.finalize();
+            let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+            format!("session-end:{hex}")
+        });
 
     // Gate before any writes — no-op sessions don't need artifact/job work.
     if transcript.trim().is_empty() {
@@ -1826,14 +1849,17 @@ pub async fn compaction_complete(
                 )?;
                 // Stable lineage ID for the compaction event.  When session_key
                 // is present it is authoritative.  When absent, derive a
-                // content-hash ID rather than falling back to the latest prior
-                // session for the project: that fallback would silently attach
-                // an unrelated compaction to a different session's lineage chain,
-                // which corrupts the artifact ancestry visible in MEMORY.md.
+                // content-hash ID so that retries for the same compaction event
+                // produce the same session_id — making ensure_canonical_manifest
+                // idempotent and preventing duplicate artifacts.
                 //
-                // Hash includes agent_id + project + summary so that two
-                // different sessions/projects producing the same summary text
-                // for the same agent don't collapse into one lineage record.
+                // Hash includes agent_id + project + summary.  Two genuinely
+                // distinct compaction events producing identical summary text for
+                // the same agent/project are an accepted edge case: the trade-off
+                // between retry idempotency (requires stable id) and cross-event
+                // uniqueness (requires session_key from caller) cannot be resolved
+                // without a caller-provided identifier.  Callers should always
+                // send session_key when available.
                 let sid = session_key.clone().unwrap_or_else(|| {
                     let mut h = Sha256::new();
                     h.update(agent_id.as_bytes());
