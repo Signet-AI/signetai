@@ -310,6 +310,7 @@ pub struct UpsertDepInput<'a> {
     pub aspect_id: Option<&'a str>,
     pub dependency_type: &'a str,
     pub strength: Option<f64>,
+    pub confidence: Option<f64>,
     pub reason: Option<&'a str>,
 }
 
@@ -324,13 +325,14 @@ pub fn upsert_dependency(
         aspect_id,
         dependency_type,
         strength,
+        confidence,
         reason,
     } = input;
     let ts = now();
 
-    let existing: Option<(String, f64)> = conn
+    let existing: Option<(String, f64, Option<String>)> = conn
         .query_row(
-            "SELECT id, strength FROM entity_dependencies
+            "SELECT id, strength, reason FROM entity_dependencies
              WHERE source_entity_id = ?1 AND target_entity_id = ?2
                AND dependency_type = ?3 AND agent_id = ?4",
             params![
@@ -339,17 +341,19 @@ pub fn upsert_dependency(
                 dependency_type,
                 agent_id
             ],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .ok();
 
-    if let Some((eid, _)) = existing {
-        let s = strength.unwrap_or(0.5);
+    if let Some((eid, existing_strength, _)) = existing {
+        let s = strength.unwrap_or(existing_strength);
         conn.execute(
             "UPDATE entity_dependencies
-             SET strength = ?1, aspect_id = ?2, updated_at = ?3, reason = ?5
+             SET strength = ?1, aspect_id = ?2, updated_at = ?3,
+                 reason = COALESCE(?5, reason),
+                 confidence = COALESCE(?6, confidence)
              WHERE id = ?4",
-            params![s, aspect_id, ts, eid, reason],
+            params![s, aspect_id, ts, eid, reason, confidence],
         )?;
         let mut stmt = conn.prepare_cached("SELECT * FROM entity_dependencies WHERE id = ?1")?;
         let dep = stmt.query_row(params![eid], row_to_dependency)?;
@@ -357,11 +361,12 @@ pub fn upsert_dependency(
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         let s = strength.unwrap_or(0.5);
+        let conf = confidence.unwrap_or(0.7);
         conn.execute(
             "INSERT INTO entity_dependencies
              (id, source_entity_id, target_entity_id, agent_id, aspect_id,
-              dependency_type, strength, reason, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+              dependency_type, strength, confidence, reason, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
             params![
                 id,
                 source_entity_id,
@@ -370,6 +375,7 @@ pub fn upsert_dependency(
                 aspect_id,
                 dependency_type,
                 s,
+                conf,
                 reason,
                 ts
             ],
@@ -470,6 +476,9 @@ pub fn get_dependencies_detailed(
 }
 
 pub fn delete_dependency(conn: &Connection, id: &str, agent_id: &str) -> Result<(), CoreError> {
+    // History is written by the trg_entity_dependencies_audit_delete AFTER DELETE
+    // trigger (migration 035), which covers app deletes, FK cascades, and direct SQL.
+    // No app-layer history write here to avoid duplicate audit rows.
     conn.execute(
         "DELETE FROM entity_dependencies WHERE id = ?1 AND agent_id = ?2",
         params![id, agent_id],
@@ -1694,12 +1703,21 @@ mod tests {
                 id TEXT PRIMARY KEY, source_entity_id TEXT NOT NULL, target_entity_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL DEFAULT 'default', aspect_id TEXT,
                 dependency_type TEXT NOT NULL, strength REAL DEFAULT 0.5,
+                confidence REAL DEFAULT 0.7,
                 reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE task_meta (
                 entity_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default',
                 status TEXT NOT NULL, expires_at TEXT, retention_until TEXT,
                 completed_at TEXT, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE entity_dependency_history (
+                id TEXT PRIMARY KEY, dependency_id TEXT NOT NULL,
+                source_entity_id TEXT NOT NULL, target_entity_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'default', dependency_type TEXT NOT NULL,
+                event TEXT NOT NULL, changed_by TEXT NOT NULL, reason TEXT NOT NULL,
+                previous_reason TEXT, metadata TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
         )
         .unwrap();
@@ -1798,6 +1816,7 @@ mod tests {
                 aspect_id: None,
                 dependency_type: "uses",
                 strength: Some(0.7),
+                confidence: None,
                 reason: None,
             },
         )

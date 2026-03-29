@@ -55,7 +55,8 @@ import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 import { up as threadHeads } from "./048-thread-heads";
 import { up as sessionExtractCursors } from "./049-session-extract-cursors";
-import { up as memoryMdRollingWindowLineage } from "./050-memory-md-rolling-window-lineage";
+import { up as relatedToAudit } from "./050-related-to-audit";
+import { up as memoryMdRollingWindowLineage } from "./051-memory-md-rolling-window-lineage";
 
 // -- Public interface consumed by Database.init() --
 
@@ -476,6 +477,14 @@ export const MIGRATIONS: readonly Migration[] = [
 	},
 	{
 		version: 50,
+		name: "related-to-audit",
+		up: relatedToAudit,
+		artifacts: {
+			tables: ["entity_dependency_history"],
+		},
+	},
+	{
+		version: 51,
 		name: "memory-md-rolling-window-lineage",
 		up: memoryMdRollingWindowLineage,
 		artifacts: {

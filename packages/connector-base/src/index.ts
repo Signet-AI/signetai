@@ -99,13 +99,13 @@ export abstract class BaseConnector {
 	 * Build the Signet system block for injection into harness config files.
 	 *
 	 * This block provides agents with essential Signet information:
-	 * - Key files in ~/.agents/
+	 * - Key files in the Signet workspace
 	 * - Dashboard URL
 	 * - Memory commands (/remember, /recall)
 	 * - Secrets commands
 	 */
-	protected buildSignetBlock(): string {
-		return buildSignetBlock();
+	protected buildSignetBlock(basePath = "$SIGNET_WORKSPACE"): string {
+		return buildSignetBlock(basePath);
 	}
 
 	/**
@@ -140,11 +140,14 @@ export abstract class BaseConnector {
 	 */
 	protected generateHeader(sourcePath: string, targetName?: string): string {
 		const name = targetName || this.name;
-		return `# Auto-generated from ${sourcePath}
-# Source: ${sourcePath}
+		// Strip CR/LF so a malformed path can't break out of comment lines
+		const safe = (p: string) => p.replace(/[\n\r]/g, "");
+		const root = dirname(sourcePath);
+		return `# Auto-generated from ${safe(sourcePath)}
+# Source: ${safe(sourcePath)}
 # Generated: ${new Date().toISOString()}
 # DO NOT EDIT - changes will be overwritten
-# Edit the source files in ~/.agents/ instead
+# Edit the source files in ${safe(root)}/ instead
 
 `;
 	}
@@ -153,7 +156,7 @@ export abstract class BaseConnector {
 	 * Read and compose additional identity files (SOUL.md, IDENTITY.md,
 	 * USER.md, MEMORY.md) into a single string with section headers.
 	 *
-	 * @param basePath - Path to ~/.agents/ or equivalent identity directory
+	 * @param basePath - Path to the Signet workspace or equivalent identity directory
 	 */
 	protected composeIdentityExtras(basePath: string): string {
 		const files = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"] as const;

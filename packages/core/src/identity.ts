@@ -492,13 +492,28 @@ const STATIC_BUDGETS: ReadonlyArray<{ file: string; header: string; budget: numb
 	{ file: "MEMORY.md", header: "Working Memory", budget: 10_000 },
 ];
 
+export const STATIC_IDENTITY_OFFLINE_STATUS = "[signet: daemon offline — running with static identity]";
+export const STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS =
+	"[signet: daemon session-start timed out — running with static identity]";
+
+export function resolveSessionStartTimeoutMs(raw?: string): number {
+	if (!raw) return 15_000;
+	const ms = Number.parseInt(raw, 10);
+	if (!Number.isFinite(ms) || ms < 1_000) return 15_000;
+	if (ms > 120_000) return 120_000;
+	return ms;
+}
+
 /**
  * Read identity files directly from disk and compose a degraded inject string.
  * Used as fallback when the daemon is unreachable during session-start.
  *
  * Returns null if no identity files exist.
  */
-export function readStaticIdentity(agentsDir: string): string | null {
+export function readStaticIdentity(
+	agentsDir: string,
+	status = STATIC_IDENTITY_OFFLINE_STATUS,
+): string | null {
 	if (!existsSync(agentsDir)) return null;
 
 	const parts: string[] = [];
@@ -518,7 +533,7 @@ export function readStaticIdentity(agentsDir: string): string | null {
 
 	if (parts.length === 0) return null;
 
-	return `[signet: daemon offline — running with static identity]\n\n${parts.join("\n\n")}`;
+	return `${status}\n\n${parts.join("\n\n")}`;
 }
 
 /**

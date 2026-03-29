@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+	buildSessionStartFallback,
 	buildCompactionCompleteBody,
 	buildSessionEndBody,
 	buildUserPromptSubmitBody,
 	pickSessionKey,
+	resolveSessionStartTimeout,
 	shouldReadCompactionInput,
 } from "./hook";
 
@@ -25,6 +27,51 @@ describe("pickSessionKey", () => {
 				sessionId: "sess-camel-id",
 			}),
 		).toBe("sess-camel-id");
+	});
+});
+
+describe("resolveSessionStartTimeout", () => {
+	test("uses the dedicated session-start timeout env when valid", () => {
+		const prev = process.env.SIGNET_SESSION_START_TIMEOUT;
+		process.env.SIGNET_SESSION_START_TIMEOUT = "18000";
+		expect(resolveSessionStartTimeout()).toBe(18000);
+		process.env.SIGNET_SESSION_START_TIMEOUT = prev;
+	});
+
+	test("falls back to the default when env is invalid or too small", () => {
+		const prev = process.env.SIGNET_SESSION_START_TIMEOUT;
+		process.env.SIGNET_SESSION_START_TIMEOUT = "200";
+		expect(resolveSessionStartTimeout()).toBe(15000);
+		process.env.SIGNET_SESSION_START_TIMEOUT = prev;
+	});
+});
+
+describe("buildSessionStartFallback", () => {
+	test("uses a timeout-specific banner when session-start times out", () => {
+		const readStaticIdentity = (_dir: string, status?: string): string | null => status ?? null;
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "timeout")).toContain(
+			"session-start timed out",
+		);
+	});
+
+	test("preserves the default offline banner for reachability failures", () => {
+		const readStaticIdentity = (_dir: string, status?: string): string | null =>
+			status ?? "[signet: daemon offline — running with static identity]";
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "offline")).toContain("daemon offline");
+	});
+
+	test("degrades to static identity on http error instead of exiting", () => {
+		const readStaticIdentity = (_dir: string, status?: string): string | null =>
+			status ?? "[signet: daemon offline — running with static identity]";
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "http")).not.toBeNull();
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "http")).toContain("daemon offline");
+	});
+
+	test("degrades to static identity on invalid-json instead of exiting", () => {
+		const readStaticIdentity = (_dir: string, status?: string): string | null =>
+			status ?? "[signet: daemon offline — running with static identity]";
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "invalid-json")).not.toBeNull();
+		expect(buildSessionStartFallback(readStaticIdentity, "/tmp/agents", "invalid-json")).toContain("daemon offline");
 	});
 });
 

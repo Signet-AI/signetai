@@ -156,7 +156,7 @@ function failJob(
 // Prompt building
 // ---------------------------------------------------------------------------
 
-function buildDependencyPrompt(
+export function buildDependencyPrompt(
 	entityName: string,
 	entityType: string,
 	existingAspects: readonly string[],
@@ -170,7 +170,7 @@ function buildDependencyPrompt(
 		.map((f, i) => `${i + 1}. ${f}`)
 		.join("\n");
 
-	return `Classify each fact. Also identify if the fact implies a dependency between entities.
+	return `Task: classify each fact and decide whether it states a dependency.
 
 Entity: ${entityName} (${entityType})
 Aspects: ${aspectList}
@@ -178,9 +178,29 @@ Aspects: ${aspectList}
 Dependency types:
 ${DEPENDENCY_TYPES.map((t) => `- ${t}: ${DEP_DESCRIPTIONS[t]}`).join("\n")}
 
+Rules:
+- Return exactly ${facts.length} JSON objects, one for each numbered fact.
+- Keep the same fact number in "i".
+- Use dep_target = null and dep_type = null when no dependency is stated.
+- Only use dependency types from the list above.
+- Use a short aspect name.
+- "constraint" is only for rules or must/never style requirements.
+- For "uses", "requires", "owned_by", "blocks", and "informs", prefer the most direct interpretation.
+- Do not skip facts.
+- Do not add markdown.
+
+Examples:
+- "auth service uses JWT tokens" -> {"i": 1, "aspect": "auth", "kind": "attribute", "dep_target": "JWT tokens", "dep_type": "uses", "reason": "service actively uses JWT tokens"}
+- "auth service requires redis" -> {"i": 2, "aspect": "runtime", "kind": "attribute", "dep_target": "redis", "dep_type": "requires", "reason": "service cannot function without redis"}
+- "auth service is owned by the platform team" -> {"i": 3, "aspect": "ownership", "kind": "attribute", "dep_target": "platform team", "dep_type": "owned_by", "reason": "platform team maintains the service"}
+- "auth service blocks deployment when health check fails" -> {"i": 4, "aspect": "deployment", "kind": "attribute", "dep_target": "deployment", "dep_type": "blocks", "reason": "failed health check prevents deployment"}
+- "auth service informs the audit log" -> {"i": 5, "aspect": "observability", "kind": "attribute", "dep_target": "audit log", "dep_type": "informs", "reason": "service sends signals or data to the audit log"}
+
 ${factList}
 
-For each fact return: {"i": N, "aspect": "...", "kind": "attribute"|"constraint", "dep_target": "entity or null", "dep_type": "type or null", "reason": "short explanation or null"}
+Return one JSON array with exactly ${facts.length} objects.
+Schema for each object:
+{"i": N, "aspect": "...", "kind": "attribute"|"constraint", "dep_target": "entity name or null", "dep_type": "dependency type or null", "reason": "short explanation or null"}
 /no_think`;
 }
 
@@ -358,6 +378,11 @@ async function processDependencyBatch(
 						agentId: "default",
 						name: result.aspect,
 					});
+					const normalized = result.reason?.trim() ?? "";
+					const reason =
+						result.dep_type === "related_to" && !normalized
+							? `llm marked a loose association from fact: ${payload.fact_content.slice(0, 180)}`
+							: normalized || null;
 					upsertDependency(deps.accessor, {
 						sourceEntityId: payload.entity_id,
 						targetEntityId: targetEntity.id,
@@ -366,7 +391,7 @@ async function processDependencyBatch(
 						dependencyType: result.dep_type as DependencyType,
 						strength: 0.5,
 						confidence: 0.7,
-						reason: result.reason,
+						reason,
 					});
 					depsCreated++;
 				} catch (e) {

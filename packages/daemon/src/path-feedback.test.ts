@@ -142,6 +142,22 @@ describe("recordPathFeedback", () => {
 			| undefined;
 		expect(dep?.strength).toBeGreaterThan(0.5);
 		expect(dep?.reason).toBe("pattern-matched");
+
+		const hist = db
+			.prepare(
+				`SELECT event, changed_by, metadata
+				 FROM entity_dependency_history
+				 WHERE dependency_id = 'dep-a'
+				   AND event = 'updated'
+				 ORDER BY rowid DESC
+				 LIMIT 1`,
+			)
+			.get() as
+			| { event: string; changed_by: string; metadata: string | null }
+			| undefined;
+		expect(hist?.event).toBe("updated");
+		expect(hist?.changed_by).toBe("db-trigger");
+		expect(hist?.metadata).toContain("trg_entity_dependencies_audit_update");
 	});
 
 	it("skips IDs that do not belong to the rated session", () => {
@@ -248,6 +264,21 @@ describe("recordPathFeedback", () => {
 		expect(forward).toBeDefined();
 		expect(forward?.reason).toBe("pattern-matched");
 		expect(forward?.confidence).toBeGreaterThanOrEqual(0.5);
+
+		const forwardHist = db
+			.prepare(
+				`SELECT event, changed_by, metadata
+				 FROM entity_dependency_history
+				 WHERE source_entity_id = 'ent-a'
+				   AND target_entity_id = 'ent-b'
+				 ORDER BY created_at DESC
+				 LIMIT 1`,
+			)
+			.get() as
+			| { event: string; changed_by: string; metadata: string | null }
+			| undefined;
+		expect(forwardHist?.changed_by).toBe("db-trigger");
+		expect(forwardHist?.metadata).toContain("trg_entity_dependencies_audit_insert");
 
 		const reverse = db
 			.prepare(

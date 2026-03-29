@@ -14,10 +14,22 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
-import { readStaticIdentity } from "@signet/core";
+import {
+	readStaticIdentity,
+	resolveSessionStartTimeoutMs,
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+} from "@signet/core";
 import { createDaemonClient } from "./daemon-client.js";
 import { createTools } from "./tools.js";
-import { DAEMON_URL_DEFAULT, HARNESS, READ_TIMEOUT, RUNTIME_PATH, WRITE_TIMEOUT } from "./types.js";
+import {
+	DAEMON_URL_DEFAULT,
+	FETCH_TIMEOUT_ENV,
+	HARNESS,
+	READ_TIMEOUT,
+	RUNTIME_PATH,
+	SESSION_START_TIMEOUT_ENV,
+	WRITE_TIMEOUT,
+} from "./types.js";
 
 // ============================================================================
 // Session context carried between hooks
@@ -82,6 +94,20 @@ function staticFallback(): string {
 	return readStaticIdentity(dir) ?? "";
 }
 
+function sessionStartFallback(reason: "offline" | "timeout"): string {
+	const dir = readRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
+	if (reason === "timeout") {
+		return readStaticIdentity(dir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS) ?? "";
+	}
+	return readStaticIdentity(dir) ?? "";
+}
+
+function sessionStartTimeout(): number {
+	return resolveSessionStartTimeoutMs(
+		readRuntimeEnv(SESSION_START_TIMEOUT_ENV) ?? readRuntimeEnv(FETCH_TIMEOUT_ENV),
+	);
+}
+
 // ============================================================================
 // Event helpers
 // ============================================================================
@@ -143,22 +169,23 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 
 	const client = createDaemonClient(daemonUrl);
 
-	// Fire session-start — errors are swallowed so we never block the user.
 	let sessionContext = "";
-	try {
-		const result = await client.post<SessionStartResult>(
-			"/api/hooks/session-start",
-			{
-				harness: HARNESS,
-				project: directory,
-				agentId,
-				runtimePath: RUNTIME_PATH,
-			},
-			READ_TIMEOUT,
-		);
-		sessionContext = result?.inject ?? result?.recentContext ?? "";
-	} catch {
-		// daemon not running — fall back to static identity files
+	const start = await client.postResult<SessionStartResult>(
+		"/api/hooks/session-start",
+		{
+			harness: HARNESS,
+			project: directory,
+			agentId,
+			runtimePath: RUNTIME_PATH,
+		},
+		sessionStartTimeout(),
+	);
+	if (start.ok) {
+		sessionContext = start.data.inject ?? start.data.recentContext ?? "";
+	} else if (start.reason === "timeout") {
+		sessionContext = sessionStartFallback("timeout");
+	} else {
+		// offline, http error, invalid-json — all fall back to static identity
 		sessionContext = staticFallback();
 	}
 

@@ -228,7 +228,11 @@ export const ASPECT_SUGGESTIONS: Record<string, readonly string[]> = {
 ## Prompt Specifications
 
 These prompts were tested against qwen3:4b via Ollama on 2026-03-04.
-Results documented below each prompt.
+On 2026-03-29, the dependency prompt was tightened with explicit
+cardinality rules, null-handling rules, and compact verb-specific
+examples. After that change, `nemotron-3-nano:4b` passed the live
+structural dependency harness across all scenarios (21/21 dependency
+types, 5/5 scenarios parseable). Results documented below each prompt.
 
 ### Classification Prompt (Pass 2a)
 

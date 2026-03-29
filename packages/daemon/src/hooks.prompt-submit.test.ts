@@ -74,6 +74,9 @@ mock.module("./temporal-fallback", () => ({
 }));
 
 mock.module("./session-transcripts", () => ({
+	getSessionTranscriptContent() {
+		return "";
+	},
 	searchTranscriptFallback: searchTranscriptFallbackMock,
 	upsertSessionTranscript() {},
 }));
@@ -195,5 +198,32 @@ describe("handleUserPromptSubmit observability", () => {
 		const payload = submitCalls[0]?.[2];
 		expect(payload?.engine).toBe("transcript-fallback");
 		expect(payload?.memoryCount).toBe(1);
+	});
+
+	it("skips prompt-submit injection when top recall score is below confidence gate", async () => {
+		hybridRecallMock.mockResolvedValueOnce({
+			results: [
+				{
+					id: "mem-low",
+					score: 0.69,
+					content: "weakly related memory",
+					created_at: "2026-03-26T20:10:00.000Z",
+				},
+			],
+		});
+
+		const result = await handleUserPromptSubmit({
+			harness: "vscode-custom-agent",
+			userMessage: "show memory confidence behavior",
+			sessionKey: "session-low-confidence",
+		});
+
+		expect(result.memoryCount).toBe(0);
+		expect(result.inject).toContain("Current Date & Time");
+		expect(result.inject).not.toContain("[signet:recall");
+		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
+		expect(submitCalls).toHaveLength(1);
+		const payload = submitCalls[0]?.[2];
+		expect(payload?.engine).toBe("low-confidence");
 	});
 });

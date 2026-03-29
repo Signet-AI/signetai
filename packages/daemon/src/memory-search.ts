@@ -697,13 +697,13 @@ export async function hybridRecall(
 				timeoutMs: cfg.pipelineV2.reranker.timeoutMs,
 				model: cfg.pipelineV2.reranker.model,
 			});
-			// Update scores from reranked results
-			const rerankedMap = new Map(reranked.map((r, i) => [r.id, i]));
+			// Update scores from reranked results without collapsing calibrated
+			// relevance into rank-position placeholders.
+			const rerankedMap = new Map(reranked.map((row) => [row.id, row.score]));
 			for (const s of scored) {
-				const idx = rerankedMap.get(s.id);
-				if (idx !== undefined) {
-					// Preserve relative order from reranker
-					s.score = 1 - idx / reranked.length;
+				const score = rerankedMap.get(s.id);
+				if (typeof score === "number" && Number.isFinite(score)) {
+					s.score = score;
 				}
 			}
 			scored.sort((a, b) => b.score - a.score);

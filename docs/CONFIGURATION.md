@@ -24,11 +24,11 @@ All files live in your active Signet workspace.
 | File | Purpose |
 |------|---------|
 | `agent.yaml` | Main configuration and manifest |
-| `AGENTS.md` | Agent identity and instructions (synced to harnesses) |
-| `SOUL.md` | Personality and tone |
-| `MEMORY.md` | Working memory summary (auto-generated) |
-| `IDENTITY.md` | Optional identity metadata (name, creature, vibe) |
-| `USER.md` | Optional user preferences and profile |
+| `AGENTS.md` | Agent-managed operating rules and instructions (synced to harnesses) |
+| `SOUL.md` | Agent-managed personality, tone, values, and temperament |
+| `MEMORY.md` | System-managed working memory summary (auto-generated, do not edit manually) |
+| `IDENTITY.md` | Agent-managed identity metadata |
+| `USER.md` | Agent-managed user profile and relationship context |
 
 The loader checks `agent.yaml`, `AGENT.yaml`, and `config.yaml` in that
 order, using the first file it finds. All sections are optional; omitting
@@ -127,6 +127,11 @@ hooks:
     includeIdentity: true
     includeRecentContext: true
     recencyBias: 0.7
+  userPromptSubmit:
+    enabled: true
+    recallLimit: 10
+    maxInjectChars: 500
+    minScore: 0.8
   preCompaction:
     includeRecentMemories: true
     memoryLimit: 5
@@ -316,7 +321,7 @@ For safety, the intended extraction setups are:
 
 - `claude-code` on a Haiku model
 - `codex` on a GPT Mini model
-- local `ollama` with at least `qwen3:4b`
+- local `ollama` with `nemotron-3-nano:4b` (preferred) or `qwen3:4b` (deprecated — Nemotron's superior reasoning makes Qwen3 the weaker choice going forward; expect degraded extraction quality in future updates)
 
 Set `provider: none` to disable extraction entirely, which is the
 recommended default for VPS installs that should not make background LLM
@@ -737,6 +742,11 @@ hooks:
     includeIdentity: true
     includeRecentContext: true
     recencyBias: 0.7
+  userPromptSubmit:
+    enabled: true
+    recallLimit: 10
+    maxInjectChars: 500
+    minScore: 0.8
   preCompaction:
     includeRecentMemories: true
     memoryLimit: 5
@@ -762,6 +772,15 @@ a pre-compaction summary:
 | `memoryLimit` | `5` | How many recent memories to include |
 | `summaryGuidelines` | built-in | Custom instructions for session summary |
 
+`hooks.userPromptSubmit` controls per-prompt memory injection:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `true` | Enable per-prompt recall injection |
+| `recallLimit` | `10` | Max recall candidates considered |
+| `maxInjectChars` | `500` | Prompt-time injection character budget |
+| `minScore` | `0.8` | Minimum top recall score required before injecting memories |
+
 
 Environment Variables
 ---------------------
@@ -779,6 +798,8 @@ editing the config file is impractical.
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
+| `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start hook timeout in ms for Signet-managed clients and generated Claude Code hook configs |
+| `SIGNET_FETCH_TIMEOUT` | `15000` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset |
 | `SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS` | — | Comma-separated host allowlist for Anthropic endpoint overrides used during credentialed startup preflight (supports entries like `proxy.example.com` and `*.example.com`) |
 | `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
 

@@ -993,6 +993,20 @@ specs:
       - "Every production incident produces at least one durable AGENTS/CI guardrail update"
     decision: null
 
+  - id: recall-confidence-gate
+    status: complete
+    path: null
+    hard_depends_on:
+      - memory-pipeline-v2
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "hybridRecall preserves reranker-calibrated scores instead of synthesizing from rank position"
+      - "userPromptSubmit injects only memories with top score >= hooks.userPromptSubmit.minScore (default 0.8)"
+      - "daemon-rs mirrors gate via term-coverage proxy (matched_terms/total_terms) until full hybrid scoring lands"
+    decision: "Targeted bug fix + config surface. No dedicated spec file. PR #396."
+
   - id: docker-self-hosting-stack
     status: planning
     path: docs/specs/planning/docker-self-hosting-stack.md

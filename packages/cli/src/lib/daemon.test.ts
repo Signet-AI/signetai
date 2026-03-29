@@ -47,4 +47,30 @@ describe("createDaemonClient", () => {
 		expect(result.ok).toBe(true);
 		expect(result.data).toEqual({ ok: true, value: 42 });
 	});
+
+	test("fetchDaemonResult classifies timeout failures separately from offline", async () => {
+		globalThis.fetch = async () => {
+			const err = new Error("timed out");
+			Object.defineProperty(err, "name", { value: "TimeoutError" });
+			throw err;
+		};
+
+		const client = createDaemonClient(3850);
+		const result = await client.fetchDaemonResult("/api/hooks/session-start");
+
+		expect(result).toEqual({ ok: false, reason: "timeout" });
+	});
+
+	test("fetchDaemonResult preserves http failures for callers that need accurate fallback handling", async () => {
+		globalThis.fetch = async () =>
+			new Response("bad gateway", {
+				status: 502,
+				headers: { "Content-Type": "text/plain" },
+			});
+
+		const client = createDaemonClient(3850);
+		const result = await client.fetchDaemonResult("/api/hooks/session-start");
+
+		expect(result).toEqual({ ok: false, reason: "http", status: 502 });
+	});
 });

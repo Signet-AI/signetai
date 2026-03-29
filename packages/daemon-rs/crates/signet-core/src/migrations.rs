@@ -218,17 +218,22 @@ static MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 35,
-        name: "temporal-heads",
-        sql: include_str!("sql/035-temporal-heads.sql"),
+        name: "dependency-audit-history",
+        sql: include_str!("sql/035-dependency-audit-history.sql"),
     },
     Migration {
         version: 36,
+        name: "temporal-heads",
+        sql: include_str!("sql/036-temporal-heads.sql"),
+    },
+    Migration {
+        version: 37,
         name: "memory-md-rolling-window-lineage",
-        sql: include_str!("sql/036-memory-md-rolling-window-lineage.sql"),
+        sql: include_str!("sql/037-memory-md-rolling-window-lineage.sql"),
     },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 36;
+pub const LATEST_SCHEMA_VERSION: u32 = 37;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
@@ -593,7 +598,7 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
                       AND COALESCE(source_type, 'summary') = 'summary';",
             )?;
         }
-        36 => {
+        37 => {
             for col in &[
                 ("summary_jobs", "session_id", "TEXT"),
                 (

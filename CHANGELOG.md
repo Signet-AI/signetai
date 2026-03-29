@@ -2,6 +2,46 @@
 
 All notable changes to Signet are documented here.
 
+## [0.85.3] - 2026-03-29
+
+### Bug Fixes
+
+- **pipeline**: harden dependency prompt auditability (#397)
+
+
+## [0.85.2] - 2026-03-29
+
+### Bug Fixes
+
+- **core**: align Signet prompt with identity stewardship (#398)
+
+
+## [0.85.1] - 2026-03-29
+
+### Bug Fixes
+
+- **daemon**: preserve reranker score calibration + gate low-confidence prompt recalls (#396)
+
+
+## [0.85.0] - 2026-03-29
+
+### Bug Fixes
+
+- distinguish session-start timeouts from offline fallback (#395)
+
+
+## [0.84.2] - 2026-03-29
+
+### Features
+
+- add GitHub Projects sync for spec pipeline kanban
+
+### Docs
+
+- add link to memscore in benchmarking documentation
+- add oh my pi connector to readme
+
+
 ## [0.84.1] - 2026-03-29
 
 ### Bug Fixes

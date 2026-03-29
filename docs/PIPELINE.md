@@ -533,10 +533,14 @@ Two implementations are shipped:
 
 **OllamaProvider** calls the Ollama HTTP API at `POST /api/generate` with
 `stream: false`. The default base URL is `http://localhost:11434` and the
-default model is `qwen3:4b`. Each `generate` call sets an `AbortController`
+default model is `qwen3:4b` (deprecated — see below). `nemotron-3-nano:4b` is the
+preferred local Ollama model going forward; Nemotron's superior reasoning produces
+better extraction results and `qwen3:4b` will be removed in a future update. Each `generate` call sets an `AbortController`
 timeout (default 45,000 ms) and throws a descriptive error on abort. HTTP
 errors surface the status code and the first 200 characters of the response
 body. The `available` check uses a 3-second timeout against `GET /api/tags`.
+For live prompt harness commands, see
+`packages/daemon/src/pipeline/README.md`.
 
 **ClaudeCodeProvider** invokes the Claude Code CLI as a subprocess:
 `claude -p <prompt> --model <model> --no-session-persistence --output-format text`.

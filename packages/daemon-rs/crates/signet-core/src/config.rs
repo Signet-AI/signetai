@@ -516,6 +516,37 @@ pub struct AgentManifest {
     pub capabilities: Option<Vec<String>>,
     #[serde(rename = "harnessCompatibility")]
     pub harness_compatibility: Option<Vec<String>>,
+    pub hooks: Option<HooksConfig>,
+}
+
+/// Per-hook configuration surfaced in `agent.yaml` under the `hooks` key.
+/// Mirrors the TypeScript `HooksConfig` in `packages/daemon/src/hooks.ts`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HooksConfig {
+    pub user_prompt_submit: UserPromptSubmitHookConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UserPromptSubmitHookConfig {
+    pub enabled: bool,
+    pub recall_limit: usize,
+    pub max_inject_chars: usize,
+    /// Minimum confidence score required to inject memories at prompt time.
+    /// Clamped to [0, 1]. Default 0.8 — mirrors TS `hooks.userPromptSubmit.minScore`.
+    pub min_score: f64,
+}
+
+impl Default for UserPromptSubmitHookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            recall_limit: 10,
+            max_inject_chars: 500,
+            min_score: 0.8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

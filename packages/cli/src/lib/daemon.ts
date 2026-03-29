@@ -4,6 +4,16 @@ export interface DaemonFetch {
 	<T>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T | null>;
 }
 
+export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
+
+export type DaemonFetchResult<T> =
+	| { readonly ok: true; readonly data: T }
+	| {
+			readonly ok: false;
+			readonly reason: DaemonFetchFailure;
+			readonly status?: number;
+	  };
+
 export interface DaemonApiCall {
 	(
 		method: string,
@@ -13,17 +23,34 @@ export interface DaemonApiCall {
 	): Promise<{ readonly ok: boolean; readonly data: unknown }>;
 }
 
+function errorName(err: unknown): string {
+	if (typeof err !== "object" || err === null) return "";
+	const name = Reflect.get(err, "name");
+	return typeof name === "string" ? name : "";
+}
+
+function isTimeoutError(err: unknown): boolean {
+	const name = errorName(err);
+	if (name === "AbortError" || name === "TimeoutError") return true;
+	const code = typeof err === "object" && err !== null ? Reflect.get(err, "code") : undefined;
+	return code === "ABORT_ERR";
+}
+
 export function createDaemonClient(port: number): {
 	readonly url: string;
 	readonly fetchFromDaemon: DaemonFetch;
+	readonly fetchDaemonResult: <T>(
+		path: string,
+		opts?: RequestInit & { timeout?: number },
+	) => Promise<DaemonFetchResult<T>>;
 	readonly secretApiCall: DaemonApiCall;
 } {
 	const url = `http://localhost:${port}`;
 
-	const fetchFromDaemon: DaemonFetch = async <T>(
+	const fetchDaemonResult = async <T>(
 		path: string,
 		opts?: RequestInit & { timeout?: number },
-	): Promise<T | null> => {
+	): Promise<DaemonFetchResult<T>> => {
 		const { timeout, ...fetchOpts } = opts || {};
 		try {
 			const res = await fetch(`${url}${path}`, {
@@ -31,13 +58,29 @@ export function createDaemonClient(port: number): {
 				...fetchOpts,
 			});
 			if (!res.ok) {
-				return null;
+				return { ok: false, reason: "http", status: res.status };
 			}
-			const data: T = await res.json();
-			return data;
-		} catch {
-			return null;
+			try {
+				const data: T = await res.json();
+				return { ok: true, data };
+			} catch {
+				return { ok: false, reason: "invalid-json", status: res.status };
+			}
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				return { ok: false, reason: "timeout" };
+			}
+			return { ok: false, reason: "offline" };
 		}
+	};
+
+	const fetchFromDaemon: DaemonFetch = async <T>(
+		path: string,
+		opts?: RequestInit & { timeout?: number },
+	): Promise<T | null> => {
+		const res = await fetchDaemonResult<T>(path, opts);
+		if (!res.ok) return null;
+		return res.data;
 	};
 
 	const secretApiCall: DaemonApiCall = async (
@@ -72,6 +115,7 @@ export function createDaemonClient(port: number): {
 	return {
 		url,
 		fetchFromDaemon,
+		fetchDaemonResult,
 		secretApiCall,
 	};
 }

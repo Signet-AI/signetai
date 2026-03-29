@@ -69,4 +69,50 @@ describe("hybridRecall", () => {
 		expect(result.sources?.["sess-shared"]).toBe("agent-a transcript context");
 		expect(Object.values(result.sources ?? {})).not.toContain("agent-b transcript context");
 	});
+
+	it("keeps score calibration stable when reranker provider is noop", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, ?, ?, ?, 'test')`,
+			).run("mem-a", "deploy rollback checklist release", "sess-a", "default", now, now);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, ?, ?, ?, 'test')`,
+			).run("mem-b", "deploy checklist", "sess-a", "default", now, now);
+		});
+
+		const base = loadMemoryConfig(dir);
+		base.search.rehearsal_enabled = false;
+		base.search.min_score = 0;
+		base.pipelineV2.graph.enabled = false;
+		base.pipelineV2.traversal.enabled = false;
+		base.pipelineV2.reranker.enabled = false;
+
+		const withReranker = loadMemoryConfig(dir);
+		withReranker.search.rehearsal_enabled = false;
+		withReranker.search.min_score = 0;
+		withReranker.pipelineV2.graph.enabled = false;
+		withReranker.pipelineV2.traversal.enabled = false;
+		withReranker.pipelineV2.reranker.enabled = true;
+		withReranker.pipelineV2.reranker.topN = 10;
+
+		const params = {
+			query: "deploy rollback checklist release",
+			keywordQuery: "deploy rollback checklist release",
+			limit: 5,
+			agentId: "default",
+			readPolicy: "isolated",
+		} as const;
+
+		const before = await hybridRecall(params, base, async () => null);
+		const after = await hybridRecall(params, withReranker, async () => null);
+
+		expect(after.results.map((row) => row.id)).toEqual(before.results.map((row) => row.id));
+		expect(after.results.map((row) => row.score)).toEqual(before.results.map((row) => row.score));
+	});
 });

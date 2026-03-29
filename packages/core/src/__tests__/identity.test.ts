@@ -2,7 +2,11 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { readStaticIdentity } from "../identity";
+import {
+	readStaticIdentity,
+	resolveSessionStartTimeoutMs,
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+} from "../identity";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
 
@@ -29,6 +33,15 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("agent rules here");
 		expect(result).toContain("## Soul");
 		expect(result).toContain("soul content");
+	});
+
+	test("allows callers to override the degraded status line", () => {
+		writeFileSync(join(TMP, "AGENTS.md"), "agent rules here");
+
+		const result = readStaticIdentity(TMP, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS);
+		expect(result).not.toBeNull();
+		expect(result).toContain("[signet: daemon session-start timed out");
+		expect(result).not.toContain("[signet: daemon offline");
 	});
 
 	test("handles partial file availability", () => {
@@ -79,5 +92,18 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("## Identity");
 		expect(result).toContain("## About Your User");
 		expect(result).toContain("## Working Memory");
+	});
+});
+
+describe("resolveSessionStartTimeoutMs", () => {
+	test("returns the default when unset or invalid", () => {
+		expect(resolveSessionStartTimeoutMs()).toBe(15000);
+		expect(resolveSessionStartTimeoutMs("oops")).toBe(15000);
+		expect(resolveSessionStartTimeoutMs("250")).toBe(15000);
+	});
+
+	test("clamps high values and preserves valid ones", () => {
+		expect(resolveSessionStartTimeoutMs("18000")).toBe(18000);
+		expect(resolveSessionStartTimeoutMs("999999")).toBe(120000);
 	});
 });

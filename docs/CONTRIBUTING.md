@@ -72,7 +72,8 @@ pipeline]]. It runs in stages: extraction (`extraction.ts`, uses Ollama by
 default with `qwen3:4b`) → decision (`decision.ts`, write/update/skip) →
 optional graph operations → retention decay. The entrypoint is `worker.ts`;
 `provider.ts` wires up the stages. Config modes like `shadowMode` and
-`mutationsFrozen` are respected here.
+`mutationsFrozen` are respected here. For live prompt checks against local
+Ollama models, see `packages/daemon/src/pipeline/README.md`.
 
 **`packages/daemon/src/auth/`** handles token-based [[auth]] for the
 HTTP API. Key files: `middleware.ts` (Hono middleware), `tokens.ts` (token

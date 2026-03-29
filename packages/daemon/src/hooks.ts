@@ -178,6 +178,8 @@ export interface HooksConfig {
 		enabled?: boolean;
 		recallLimit?: number;
 		maxInjectChars?: number;
+		/** Minimum top recall score required before injecting memories. */
+		minScore?: number;
 	};
 	preCompaction?: {
 		summaryGuidelines?: string;
@@ -923,6 +925,7 @@ function getDefaultConfig(): HooksConfig {
 			enabled: true,
 			recallLimit: 10,
 			maxInjectChars: 500,
+			minScore: 0.8,
 		},
 		preCompaction: {
 			summaryGuidelines: `Summarize this session focusing on:
@@ -937,6 +940,11 @@ Keep the summary concise but complete. Use first person from the agent's perspec
 			memoryLimit: 5,
 		},
 	};
+}
+
+function resolveUserPromptMinScore(value: number | undefined): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return 0.8;
+	return Math.max(0, Math.min(1, value));
 }
 
 // ============================================================================
@@ -2211,6 +2219,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const recallLimit = submitCfg.recallLimit ?? 10;
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
+		const minScore = resolveUserPromptMinScore(submitCfg.minScore);
 		const queryTerms = vectorQuery.slice(0, 80);
 		const recall = await hybridRecall(
 			{
@@ -2227,7 +2236,8 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			fetchEmbedding,
 		);
 
-		const topScore = recall.results[0]?.score;
+		const topRaw = recall.results[0]?.score;
+		const topScore = typeof topRaw === "number" ? clampScore01(topRaw) : undefined;
 		const noStructured = recall.results.length === 0 || typeof topScore !== "number" || topScore < 0.4;
 		// Anchor checks must be driven by the current user turn text, not any
 		// expanded/derived recall query shape.
@@ -2276,6 +2286,19 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 					"no-structured",
 				);
 			}
+		}
+		if (typeof topScore !== "number" || topScore < minScore) {
+			return finalizeUserPromptSubmitSuccess(
+				req,
+				userMessage,
+				start,
+				{
+					inject: metadataHeader,
+					memoryCount: 0,
+					warnings,
+				},
+				"low-confidence",
+			);
 		}
 
 		const mapped = recall.results.map((result) => ({

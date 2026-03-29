@@ -613,6 +613,18 @@ pub async fn prompt_submit(
         .clone()
         .unwrap_or_else(|| "default".to_string());
     let query_terms_for_resp = query_terms.clone();
+    // Mirror TS hooks.userPromptSubmit.minScore confidence gate. The TS path
+    // uses calibrated hybridRecall + reranker scores; here we use term-coverage
+    // (matched_terms / total_terms) as a query-relevance proxy until the Rust
+    // prompt_submit path integrates full hybrid scoring.
+    let min_score = state
+        .config
+        .manifest
+        .hooks
+        .as_ref()
+        .map(|h| h.user_prompt_submit.min_score)
+        .unwrap_or(0.8)
+        .clamp(0.0, 1.0);
 
     let result = state
         .pool
@@ -635,6 +647,8 @@ pub async fn prompt_submit(
                 .collect::<Vec<_>>();
 
             // 1) Structured recall from memories (best effort parity with TS hybrid-first path).
+            // NOTE: when full hybrid scoring / reranker integration lands, preserve actual
+            // calibrated scores from the reranker — never synthesize from rank position.
             let mut mem_sql = String::from(
                 "SELECT id, content, created_at
                  FROM memories
@@ -721,7 +735,19 @@ pub async fn prompt_submit(
                     .map(|(_, content, _)| content.to_lowercase())
                     .any(|content| anchors.iter().any(|anchor| content.contains(anchor)));
 
-            if !mem_rows.is_empty() && !anchor_missed {
+            // Confidence gate: compute term-coverage for the top result as a
+            // query-relevance proxy (matched_needles / total_needles → [0, 1]).
+            // Replaces the TS calibrated hybridRecall score until full hybrid
+            // scoring lands in this path.
+            let coverage = if !mem_rows.is_empty() && !needles.is_empty() {
+                let top = mem_rows[0].1.to_lowercase();
+                let matched = needles.iter().filter(|n| top.contains(n.as_str())).count();
+                matched as f64 / needles.len() as f64
+            } else {
+                0.0
+            };
+
+            if !mem_rows.is_empty() && !anchor_missed && coverage >= min_score {
                 let lines = mem_rows
                     .iter()
                     .map(|(_, content, created_at)| {

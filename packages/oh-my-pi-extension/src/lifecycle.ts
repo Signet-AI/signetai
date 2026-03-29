@@ -1,18 +1,24 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readStaticIdentity } from "@signet/core";
+import {
+	readStaticIdentity,
+	resolveSessionStartTimeoutMs,
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+} from "@signet/core";
 import type { DaemonClient } from "./daemon-client.js";
 import { readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
 import type { SessionState } from "./session-state.js";
 import { buildTranscriptFromEntries, readSessionFileSnapshot } from "./transcript.js";
 import {
 	HARNESS,
+	FETCH_TIMEOUT_ENV,
 	type OmpExtensionContext,
 	type OmpSessionEntry,
 	type OmpSessionSwitchEvent,
 	PROMPT_SUBMIT_TIMEOUT,
 	READ_TIMEOUT,
 	RUNTIME_PATH,
+	SESSION_START_TIMEOUT_ENV,
 	type SessionStartResult,
 	type UserPromptSubmitResult,
 	WRITE_TIMEOUT,
@@ -38,9 +44,18 @@ export interface LifecycleDeps {
 	readonly state: SessionState;
 }
 
-function staticFallback(): string {
+function staticFallback(reason: "offline" | "timeout" = "offline"): string {
 	const signetPath = readTrimmedRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
+	if (reason === "timeout") {
+		return readStaticIdentity(signetPath, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS) ?? "";
+	}
 	return readStaticIdentity(signetPath) ?? "";
+}
+
+function sessionStartTimeout(): number {
+	return resolveSessionStartTimeoutMs(
+		readTrimmedRuntimeEnv(SESSION_START_TIMEOUT_ENV) ?? readTrimmedRuntimeEnv(FETCH_TIMEOUT_ENV),
+	);
 }
 
 function getSessionEntries(ctx: OmpExtensionContext): ReadonlyArray<OmpSessionEntry> {
@@ -114,7 +129,7 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: OmpExtension
 	deps.state.setActiveSession(session.sessionId, session.sessionFile);
 	deps.state.clearSessionEnded(session.sessionId);
 
-	const result = await deps.client.post<SessionStartResult>(
+	const result = await deps.client.postResult<SessionStartResult>(
 		"/api/hooks/session-start",
 		{
 			harness: HARNESS,
@@ -123,10 +138,14 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: OmpExtension
 			sessionKey: session.sessionId,
 			runtimePath: RUNTIME_PATH,
 		},
-		READ_TIMEOUT,
+		sessionStartTimeout(),
 	);
 
-	const sessionContext = result === null ? staticFallback() : (result.inject ?? result.recentContext ?? "");
+	const sessionContext = result.ok
+		? (result.data.inject ?? result.data.recentContext ?? "")
+		: result.reason === "timeout"
+			? staticFallback("timeout")
+			: staticFallback();
 	deps.state.setSessionContext(sessionContext);
 	deps.state.setPendingSessionContext(session.sessionId, sessionContext);
 }

@@ -127,7 +127,7 @@ function markSynthesized(accessor: DbAccessor, entityId: string): void {
 // Prompt
 // ---------------------------------------------------------------------------
 
-function buildSynthesisPrompt(
+export function buildSynthesisPrompt(
 	entity: StaleEntity,
 	facts: readonly string[],
 	candidates: readonly GraphEntity[],
@@ -143,7 +143,9 @@ function buildSynthesisPrompt(
 		? `Already connected to: ${[...existing].join(", ")}`
 		: "No existing connections.";
 
-	return `Entity: ${entity.name} (${entity.entityType})
+	return `Task: identify new dependency edges between the focal entity and known graph entities.
+
+Entity: ${entity.name} (${entity.entityType})
 Facts:
 ${factList}
 
@@ -155,11 +157,22 @@ ${alreadyConnected}
 Dependency types:
 ${DEPENDENCY_TYPES.map((t) => `- ${t}: ${DEP_DESCRIPTIONS[t]}`).join("\n")}
 
-Identify connections between ${entity.name} and the known entities.
-Only return connections you are confident exist based on the facts.
-Do not repeat already-connected entities unless the dependency type differs.
-For each: {"target": "entity name", "dep_type": "type", "reason": "why"}
-Return a JSON array. If no new connections, return [].
+Rules:
+- Only connect ${entity.name} to entities from the known entity list above.
+- Only return edges supported by the facts.
+- Do not repeat already-connected entities unless the dependency type differs.
+- Prefer the most direct dependency type.
+- Keep reason short and concrete.
+- Do not add markdown.
+
+Examples:
+- If facts say a service uses Redis, return {"target": "Redis", "dep_type": "uses", "reason": "service actively uses Redis"}
+- If facts say a service is owned by the platform team, return {"target": "platform team", "dep_type": "owned_by", "reason": "team maintains the service"}
+- If no supported connection is stated, return []
+
+Return one JSON array.
+Each item: {"target": "entity name", "dep_type": "type", "reason": "why"}
+If no new connections exist, return [].
 /no_think`;
 }
 
@@ -255,6 +268,11 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 			if (!target || target.id === entity.id) continue;
 
 			try {
+				const normalized = result.reason.trim();
+				const reason =
+					result.dep_type === "related_to" && !normalized
+						? `llm synthesized a loose association from ${entity.name} to ${result.target}`
+						: normalized || null;
 				upsertDependency(deps.accessor, {
 					sourceEntityId: entity.id,
 					targetEntityId: target.id,
@@ -262,7 +280,7 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 					dependencyType: result.dep_type as DependencyType,
 					strength: 0.5,
 					confidence: 0.5,
-					reason: result.reason || null,
+					reason,
 				});
 				created++;
 			} catch (e) {

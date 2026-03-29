@@ -1,10 +1,42 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import {
+	resolveSessionStartTimeoutMs,
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+} from "@signet/core";
+import type { DaemonFetchResult } from "../lib/daemon.js";
 
 interface HookDeps {
 	readonly AGENTS_DIR: string;
-	readonly fetchFromDaemon: <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
-	readonly readStaticIdentity: (basePath: string) => string | null;
+	readonly fetchDaemonResult: <T>(
+		path: string,
+		opts?: RequestInit & { timeout?: number },
+	) => Promise<DaemonFetchResult<T>>;
+	readonly readStaticIdentity: (basePath: string, status?: string) => string | null;
+}
+
+const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
+
+function readTimeoutEnv(name: string): string {
+	const value = process.env[name];
+	return typeof value === "string" ? value.trim() : "";
+}
+
+export function resolveSessionStartTimeout(): number {
+	const raw = readTimeoutEnv("SIGNET_SESSION_START_TIMEOUT") || readTimeoutEnv("SIGNET_FETCH_TIMEOUT");
+	return resolveSessionStartTimeoutMs(raw);
+}
+
+export function buildSessionStartFallback(
+	readStaticIdentity: HookDeps["readStaticIdentity"],
+	agentsDir: string,
+	reason: "offline" | "timeout" | "http" | "invalid-json",
+): string | null {
+	if (reason === "timeout") {
+		return readStaticIdentity(agentsDir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS);
+	}
+	// offline, http error, invalid-json — all degrade to static identity
+	return readStaticIdentity(agentsDir);
 }
 
 export function registerHookCommands(program: Command, deps: HookDeps): void {
@@ -28,7 +60,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const input = await readJson();
 			const sessionKey = pickSessionKey(input);
 			const stdinProject = pickString(input?.cwd);
-			const data = await deps.fetchFromDaemon<{
+			const res = await deps.fetchDaemonResult<{
 				identity?: { name: string; description?: string };
 				memories?: Array<{ content: string }>;
 				inject?: string;
@@ -43,21 +75,42 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					context: options.context,
 					sessionKey,
 				}),
+				timeout: SESSION_START_TIMEOUT_MS,
 			});
-			if (!data) {
-				const fallback = deps.readStaticIdentity(deps.AGENTS_DIR);
+			if (!res.ok) {
+				if (res.reason === "http") {
+					process.stderr.write(`[signet] daemon session-start failed with HTTP ${res.status ?? "unknown"} — using static identity\n`);
+				} else if (res.reason === "invalid-json") {
+					process.stderr.write("[signet] daemon session-start returned invalid JSON — using static identity\n");
+				}
+				const fallback = buildSessionStartFallback(
+					deps.readStaticIdentity,
+					deps.AGENTS_DIR,
+					res.reason,
+				);
 				if (fallback) {
-					process.stderr.write("[signet] daemon offline — using static identity\n");
+					if (res.reason === "timeout") {
+						process.stderr.write("[signet] daemon session-start timed out — using static identity\n");
+					}
+					if (res.reason === "offline") {
+						process.stderr.write("[signet] daemon offline — using static identity\n");
+					}
 					if (options.json) {
 						console.log(JSON.stringify({ inject: fallback, identity: { name: "signet" }, memories: [] }));
 					} else {
 						console.log(fallback);
 					}
-				} else {
+					process.exit(0);
+				}
+				if (res.reason === "timeout") {
+					process.stderr.write("[signet] daemon session-start timed out, no identity files found\n");
+				}
+				if (res.reason === "offline") {
 					process.stderr.write("[signet] daemon not running, no identity files found\n");
 				}
 				process.exit(0);
 			}
+			const data = res.data;
 			if (data.error) {
 				console.error(chalk.red(`Error: ${data.error}`));
 				process.exit(1);

@@ -195,6 +195,8 @@ CREATE TABLE entity_dependencies (
   aspect_id TEXT REFERENCES entity_aspects(id) ON DELETE SET NULL,
   dependency_type TEXT NOT NULL,      -- 'uses' | 'requires' | 'owned_by' | 'blocks' | 'informs'
   strength REAL NOT NULL DEFAULT 0.5,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  reason TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -205,6 +207,43 @@ CREATE INDEX idx_entity_dependencies_agent ON entity_dependencies(agent_id);
 ```
 
 These are explicit traversal edges. They are not similarity artifacts.
+`related_to` is a special case: it MUST carry a non-empty human-auditable
+reason, and every create/update/delete of a dependency edge MUST append an
+immutable row to `entity_dependency_history`.
+
+### 5.5.1 Audit table: `entity_dependency_history`
+
+Every mutation to `entity_dependencies` is captured by DB-level SQLite triggers
+(`AFTER INSERT`, `AFTER UPDATE`, `AFTER DELETE`). Application code MUST NOT write
+audit rows directly; the triggers own that path to guarantee complete coverage
+including FK cascades and direct SQL.
+
+```sql
+CREATE TABLE entity_dependency_history (
+  id                TEXT PRIMARY KEY,
+  dependency_id     TEXT NOT NULL,
+  source_entity_id  TEXT NOT NULL,
+  target_entity_id  TEXT NOT NULL,
+  agent_id          TEXT NOT NULL DEFAULT 'default',
+  dependency_type   TEXT NOT NULL,
+  event             TEXT NOT NULL,   -- 'created' | 'updated' | 'deleted' | 'backfill'
+  changed_by        TEXT NOT NULL,   -- 'db-trigger' for all live events
+  reason            TEXT NOT NULL,
+  previous_reason   TEXT,
+  metadata          TEXT,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_entity_dependency_history_dep     ON entity_dependency_history(dependency_id);
+CREATE INDEX idx_entity_dependency_history_agent   ON entity_dependency_history(agent_id);
+CREATE INDEX idx_entity_dependency_history_created ON entity_dependency_history(created_at DESC);
+```
+
+Integration contracts:
+- `changed_by` is always `'db-trigger'` for live mutations; `'migration-N'` for backfill rows.
+- `reason` is never nullable — backfill rows use `'legacy dependency without recorded reason'` when the source row has no reason.
+- `previous_reason` captures the prior value on updates; NULL on creates and deletes.
+- `created_at` uses SQLite `datetime('now')` format (`YYYY-MM-DD HH:MM:SS`) throughout — no mixed ISO-8601 timestamps.
 
 ### 5.6 New table: `task_meta`
 

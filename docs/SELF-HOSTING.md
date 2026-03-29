@@ -512,10 +512,12 @@ running and the model is pulled:
 curl -s http://localhost:11434/api/tags | jq '.models[].name'
 ```
 
-The recommended local floor is `qwen3:4b`. If it is not listed:
+The recommended local model is `nemotron-3-nano:4b`. `qwen3:4b` is deprecated — Nemotron's superior reasoning produces better extraction quality and `qwen3:4b` will be removed in a future update. If neither is listed:
 
 ```bash
 ollama pull qwen3:4b
+# or
+ollama pull nemotron-3-nano:4b
 ```
 
 If Ollama is running but the pipeline is still idle, check whether it is

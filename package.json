@@ -1,6 +1,6 @@
 {
   "name": "signet",
-  "version": "0.84.2",
+  "version": "0.85.4",
   "private": true,
   "description": "Portable AI agent identity",
   "repository": {
@@ -38,7 +38,9 @@
     "publish:signetai": "cd packages/signetai && npm publish --access public",
     "dev:web": "cd web && bun run dev",
     "deploy:web": "cd web && bun run deploy",
-    "changelog": "bun scripts/changelog.ts"
+    "changelog": "bun scripts/changelog.ts",
+    "test:prompt:structural": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/structural-dependency.test.ts",
+    "test:prompt:synthesis": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/dependency-synthesis.test.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

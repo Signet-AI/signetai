@@ -12,7 +12,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readStaticIdentity } from "@signet/core";
+import {
+	readStaticIdentity,
+	resolveSessionStartTimeoutMs,
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+} from "@signet/core";
 import { Type } from "@sinclair/typebox";
 import type {
 	OpenClawPluginApi,
@@ -30,6 +34,32 @@ const RUNTIME_PATH = "plugin" as const;
 const READ_TIMEOUT = 5000;
 const WRITE_TIMEOUT = 10000;
 const COMPACTION_HOOK_DEDUPE_MS = 1000;
+const SESSION_START_TIMEOUT = resolveSessionStartTimeoutMs(
+	process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT,
+);
+
+type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
+
+type DaemonFetchResult<T> =
+	| { readonly ok: true; readonly data: T }
+	| {
+			readonly ok: false;
+			readonly reason: DaemonFetchFailure;
+			readonly status?: number;
+	  };
+
+function errorName(err: unknown): string {
+	if (typeof err !== "object" || err === null) return "";
+	const name = Reflect.get(err, "name");
+	return typeof name === "string" ? name : "";
+}
+
+function isTimeoutError(err: unknown): boolean {
+	const name = errorName(err);
+	if (name === "AbortError" || name === "TimeoutError") return true;
+	const code = typeof err === "object" && err !== null ? Reflect.get(err, "code") : undefined;
+	return code === "ABORT_ERR";
+}
 
 // ---------------------------------------------------------------------------
 // Prompt extraction — OpenClaw wraps user messages in metadata envelopes.
@@ -331,6 +361,20 @@ async function daemonFetch<T>(
 		timeout?: number;
 	} = {},
 ): Promise<T | null> {
+	const res = await daemonFetchResult<T>(daemonUrl, path, options);
+	if (!res.ok) return null;
+	return res.data;
+}
+
+async function daemonFetchResult<T>(
+	daemonUrl: string,
+	path: string,
+	options: {
+		method?: string;
+		body?: unknown;
+		timeout?: number;
+	} = {},
+): Promise<DaemonFetchResult<T>> {
 	const { method = "GET", body, timeout = READ_TIMEOUT } = options;
 
 	try {
@@ -348,11 +392,21 @@ async function daemonFetch<T>(
 
 		if (!res.ok) {
 			console.warn(`[signet] ${method} ${path} failed:`, res.status);
-			return null;
+			return { ok: false, reason: "http", status: res.status };
 		}
 
-		return (await res.json()) as T;
+		try {
+			const data = (await res.json()) as T;
+			return { ok: true, data };
+		} catch {
+			console.warn(`[signet] ${method} ${path} returned invalid JSON`);
+			return { ok: false, reason: "invalid-json", status: res.status };
+		}
 	} catch (e) {
+		if (isTimeoutError(e)) {
+			console.warn(`[signet] ${method} ${path} timed out after ${timeout}ms`);
+			return { ok: false, reason: "timeout" };
+		}
 		// Native fetch wraps OS errors as TypeError.cause, but polyfill/proxy
 		// layers may rethrow the OS error directly — check both forms.
 		const cause: unknown = e instanceof TypeError ? e.cause : e;
@@ -363,7 +417,7 @@ async function daemonFetch<T>(
 		} else {
 			console.warn(`[signet] ${method} ${path} error:`, e);
 		}
-		return null;
+		return { ok: false, reason: "offline" };
 	}
 }
 
@@ -401,9 +455,12 @@ async function getDaemonPid(daemonUrl: string): Promise<number | null> {
 // ============================================================================
 
 // Wraps @signet/core's readStaticIdentity to produce a SessionStartResult.
-function staticFallback(): SessionStartResult | null {
+function staticFallback(reason: "offline" | "timeout" = "offline"): SessionStartResult | null {
 	const dir = process.env.SIGNET_PATH ?? join(homedir(), ".agents");
-	const inject = readStaticIdentity(dir);
+	const inject =
+		reason === "timeout"
+			? readStaticIdentity(dir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS)
+			: readStaticIdentity(dir);
 	if (!inject) return null;
 	return { identity: { name: "signet" }, memories: [], inject };
 }
@@ -421,7 +478,7 @@ export async function onSessionStart(
 		sessionKey?: string;
 	} = {},
 ): Promise<SessionStartResult | null> {
-	const result = await daemonFetch<SessionStartResult>(
+	const result = await daemonFetchResult<SessionStartResult>(
 		options.daemonUrl || DEFAULT_DAEMON_URL,
 		"/api/hooks/session-start",
 		{
@@ -433,10 +490,11 @@ export async function onSessionStart(
 				sessionKey: options.sessionKey,
 				runtimePath: RUNTIME_PATH,
 			},
-			timeout: READ_TIMEOUT,
+			timeout: SESSION_START_TIMEOUT,
 		},
 	);
-	if (result) return result;
+	if (result.ok) return result.data;
+	if (result.reason === "timeout") return staticFallback("timeout");
 	return staticFallback();
 }
 

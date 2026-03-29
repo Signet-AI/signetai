@@ -1,11 +1,12 @@
 /**
  * Integration tests for structural-dependency type extraction.
  *
- * Validates that qwen3:4b (the default pipeline model) can reliably
+ * Validates that the configured Ollama model can reliably
  * produce all 21 dependency types from the extraction prompt format.
  * Uses the pipeline's actual stripFences + tryParseJson parsing.
  *
- * Requires: Ollama running locally with qwen3:4b loaded.
+ * Requires: Ollama running locally with the selected model loaded.
+ * Override via SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b
  *
  * Known limitation: temporal types (precedes, follows, triggers) are
  * produced correctly but inconsistently — the model sometimes emits
@@ -19,40 +20,18 @@ import { DEPENDENCY_TYPES } from "@signet/core";
 // Uses the actual pipeline parsing — validates that stripFences handles
 // verbose model output (unfenced JSON arrays, explanation-then-JSON, etc.)
 import { stripFences, tryParseJson } from "./extraction";
-import { DEP_DESCRIPTIONS } from "./structural-dependency";
-
-function buildPrompt(
-	entity: string,
-	type: string,
-	aspects: readonly string[],
-	facts: readonly string[],
-): string {
-	const aspectList = aspects.length > 0 ? aspects.join(", ") : "[none yet]";
-	const factList = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
-	const typeList = DEPENDENCY_TYPES
-		.map((t) => `- ${t}: ${DEP_DESCRIPTIONS[t]}`)
-		.join("\n");
-
-	return `Classify each fact. Also identify if the fact implies a dependency between entities.
-
-Entity: ${entity} (${type})
-Aspects: ${aspectList}
-
-Dependency types:
-${typeList}
-
-${factList}
-
-For each fact return: {"i": N, "aspect": "...", "kind": "attribute"|"constraint", "dep_target": "entity or null", "dep_type": "type or null"}
-/no_think`;
-}
+import { DEP_DESCRIPTIONS, buildDependencyPrompt } from "./structural-dependency";
 
 // ---------------------------------------------------------------------------
 // Ollama helper
 // ---------------------------------------------------------------------------
 
 const OLLAMA = "http://localhost:11434";
-const MODEL = "qwen3:4b";
+// Live Ollama tests only run when SIGNET_OLLAMA_TEST_MODEL is explicitly set.
+// This prevents nondeterministic failures in CI or on machines where the model
+// is installed but not under test.
+const EXPLICIT_MODEL = process.env.SIGNET_OLLAMA_TEST_MODEL;
+const MODEL = EXPLICIT_MODEL ?? "qwen3:4b";
 const VALID = new Set<string>(DEPENDENCY_TYPES);
 
 async function ollamaAvailable(): Promise<boolean> {
@@ -208,15 +187,27 @@ describe("structural-dependency types", () => {
 	});
 
 	test("prompt includes all types with descriptions", () => {
-		const prompt = buildPrompt("test", "entity", [], ["test fact"]);
+		const prompt = buildDependencyPrompt("test", "entity", [], ["test fact"]);
 		for (const t of DEPENDENCY_TYPES) {
 			expect(prompt).toContain(`- ${t}: `);
 		}
 	});
+
+	test("prompt encodes cardinality and null-handling rules for small local models", () => {
+		const prompt = buildDependencyPrompt("auth service", "system", ["security"], ["fact one", "fact two"]);
+		expect(prompt).toContain("Return exactly 2 JSON objects");
+		expect(prompt).toContain("Use dep_target = null and dep_type = null");
+		expect(prompt).toContain("Do not skip facts");
+		expect(prompt).toContain("\"auth service is owned by the platform team\"");
+	});
 });
 
-describe("qwen3:4b extraction", () => {
+describe(`${MODEL} extraction`, () => {
 	test("model produces valid dependency types across scenarios", async () => {
+		if (!EXPLICIT_MODEL) {
+			console.log("SKIP: set SIGNET_OLLAMA_TEST_MODEL to run live Ollama tests");
+			return;
+		}
 		const available = await ollamaAvailable();
 		if (!available) {
 			console.log(`SKIP: ${MODEL} not available on Ollama`);
@@ -228,14 +219,14 @@ describe("qwen3:4b extraction", () => {
 		let parseable = 0;
 
 		for (const scenario of SCENARIOS) {
-			const prompt = buildPrompt(
+			const prompt = buildDependencyPrompt(
 				scenario.entity,
 				scenario.type,
 				scenario.aspects,
 				scenario.facts,
 			);
 
-			// Best of 2 attempts — qwen3:4b occasionally emits verbose
+			// Best of 2 attempts — small local models occasionally emit verbose
 			// reasoning instead of JSON, especially at low temperature
 			let best: readonly ExtractedDep[] = [];
 			for (let attempt = 0; attempt < 2; attempt++) {

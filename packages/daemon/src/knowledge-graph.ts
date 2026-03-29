@@ -20,6 +20,7 @@ import type {
 	DependencyType,
 	TaskStatus,
 } from "@signet/core";
+import { requireDependencyReason } from "./dependency-history";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -355,7 +356,20 @@ export function upsertDependency(
 			) as Record<string, unknown> | undefined;
 
 		if (existing) {
-			const reason = params.reason ?? (existing.reason as string | null);
+			const changed =
+				params.strength !== undefined ||
+				params.aspectId !== undefined ||
+				params.confidence !== undefined ||
+				params.reason !== undefined;
+
+			if (!changed) {
+				return rowToDependency(existing);
+			}
+
+			const reason = requireDependencyReason(
+				params.dependencyType,
+				params.reason ?? (typeof existing.reason === "string" ? existing.reason : null),
+			);
 			const conf = params.confidence ?? (typeof existing.confidence === "number" ? existing.confidence : 0.7);
 			db.prepare(
 				`UPDATE entity_dependencies
@@ -381,7 +395,7 @@ export function upsertDependency(
 		}
 
 		const id = crypto.randomUUID();
-		const reason = params.reason ?? null;
+		const reason = requireDependencyReason(params.dependencyType, params.reason);
 		const conf = params.confidence ?? 0.7;
 		db.prepare(
 			`INSERT INTO entity_dependencies
@@ -401,7 +415,6 @@ export function upsertDependency(
 			ts,
 			ts,
 		);
-
 		return {
 			id,
 			sourceEntityId: params.sourceEntityId,
@@ -451,6 +464,9 @@ export function getDependenciesTo(
 }
 
 export function deleteDependency(accessor: DbAccessor, id: string, agentId: string): void {
+	// History is written by the trg_entity_dependencies_audit_delete AFTER DELETE
+	// trigger (migration 050), which covers app deletes, FK cascades, and direct SQL.
+	// No app-layer history write here to avoid duplicate audit rows.
 	accessor.withWriteTx((db) => {
 		db.prepare("DELETE FROM entity_dependencies WHERE id = ? AND agent_id = ?").run(id, agentId);
 	});

@@ -115,8 +115,9 @@
 				"note": "Injections content must match semantically"
 			},
 			"POST /api/hooks/user-prompt-submit": {
-				"deterministic": ["injections"],
-				"ignoreFields": []
+				"deterministic": [],
+				"ignoreFields": ["inject", "injections"],
+				"note": "TS gates on calibrated hybridRecall score; daemon-rs gates on term-coverage proxy. Both respect hooks.userPromptSubmit.minScore (default 0.8) but may inject different sets, so inject content is excluded from deterministic comparison until Rust integrates full hybrid scoring. Re-enable when scoring paths unify."
 			},
 			"POST /api/hooks/session-end": {
 				"deterministic": ["status"],
