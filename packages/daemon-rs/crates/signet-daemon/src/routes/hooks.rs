@@ -224,14 +224,16 @@ fn pipeline_enabled(state: &AppState) -> bool {
 
 /// Returns true when `canonical` is inside an allowed base directory.
 ///
-/// Restricted to the two connector-owned roots:
+/// Allowed roots:
 ///   - SIGNET_WORKSPACE (`state.config.base_path`) — memory/, session logs
 ///   - project CWD (`body.cwd`, when provided) — in-project transcripts
+///   - `/tmp/signet/` — documented staging convention in API.md; narrower
+///     than all of `/tmp` to prevent cross-tenant temp file reads
 ///
-/// `$HOME` and `/tmp` are intentionally excluded: they are too broad and
-/// would allow callers to exfiltrate `~/.ssh/*`, cloud credentials, or any
-/// world-readable temp file.  The TS daemon relies on the global auth
-/// middleware for this boundary; daemon-rs enforces it explicitly here.
+/// Full `$HOME` and arbitrary `/tmp` are intentionally excluded: they would
+/// allow callers to exfiltrate `~/.ssh/*`, cloud credentials, or other
+/// world-readable files.  The TS daemon relies on the global auth middleware
+/// for this boundary; daemon-rs enforces it explicitly here.
 fn transcript_path_allowed(canonical: &Path, workspace: &Path, project: Option<&str>) -> bool {
     if let Ok(ws) = workspace.canonicalize() {
         if canonical.starts_with(&ws) {
@@ -244,6 +246,12 @@ fn transcript_path_allowed(canonical: &Path, workspace: &Path, project: Option<&
                 return true;
             }
         }
+    }
+    // Documented staging convention: connectors may write transcripts to
+    // /tmp/signet/ before sending session-end.  Scoped to the signet prefix
+    // so other /tmp content cannot be read.
+    if canonical.starts_with("/tmp/signet") {
+        return true;
     }
     false
 }
@@ -1221,7 +1229,10 @@ pub async fn session_end(
             }
         })
         .unwrap_or_else(|| {
-            let prefix: String = transcript.chars().take(512).collect();
+            // Hash the full transcript (not just a prefix) to avoid false
+            // collisions when distinct sessions share a common opening.
+            // A 512-char prefix would collide for any two sessions in the
+            // same project that start with identical boilerplate content.
             let mut h = Sha256::new();
             h.update(harness.as_bytes());
             h.update(b":");
@@ -1229,7 +1240,7 @@ pub async fn session_end(
             h.update(b":");
             h.update(body.cwd.as_deref().unwrap_or("").as_bytes());
             h.update(b":");
-            h.update(prefix.as_bytes());
+            h.update(transcript.as_bytes());
             let digest = h.finalize();
             let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
             format!("session-end:{hex}")
