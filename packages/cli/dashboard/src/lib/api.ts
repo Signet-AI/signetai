@@ -274,9 +274,11 @@ export async function saveConfigFileResult(file: string, content: string): Promi
 	}
 }
 
-export async function getMemories(limit = 100, offset = 0): Promise<{ memories: Memory[]; stats: MemoryStats }> {
+export async function getMemories(limit = 100, offset = 0, agentId?: string): Promise<{ memories: Memory[]; stats: MemoryStats }> {
 	try {
-		const response = await fetch(`${API_BASE}/api/memories?limit=${limit}&offset=${offset}`);
+		const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+		if (agentId) params.set("agent_id", agentId);
+		const response = await fetch(`${API_BASE}/api/memories?${params}`);
 		if (!response.ok) throw new Error("Failed to fetch memories");
 		return await response.json();
 	} catch {
@@ -637,7 +639,7 @@ export async function deleteMemory(
 
 export async function getEmbeddings(
 	withVectors = false,
-	options: { limit?: number; offset?: number } = {},
+	options: { limit?: number; offset?: number; agentId?: string } = {},
 ): Promise<EmbeddingsResponse> {
 	try {
 		const params = new URLSearchParams({
@@ -648,6 +650,9 @@ export async function getEmbeddings(
 		}
 		if (typeof options.offset === "number") {
 			params.set("offset", options.offset.toString());
+		}
+		if (typeof options.agentId === "string" && options.agentId.length > 0) {
+			params.set("agent_id", options.agentId);
 		}
 
 		const response = await fetch(`${API_BASE}/api/embeddings?${params}`);
@@ -2176,9 +2181,12 @@ export async function getKnowledgeDependencies(
 	}
 }
 
-export async function getKnowledgeStats(): Promise<KnowledgeStats | null> {
+export async function getKnowledgeStats(agentId?: string): Promise<KnowledgeStats | null> {
 	try {
-		const res = await fetch(`${API_BASE}/api/knowledge/stats`);
+		const url = agentId
+			? `${API_BASE}/api/knowledge/stats?agent_id=${encodeURIComponent(agentId)}`
+			: `${API_BASE}/api/knowledge/stats`;
+		const res = await fetch(url);
 		if (!res.ok) return null;
 		return await res.json();
 	} catch {

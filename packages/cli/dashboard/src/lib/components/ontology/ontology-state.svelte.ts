@@ -271,7 +271,7 @@ export async function loadProjection(agentId = "default"): Promise<void> {
 
 // --- Table stats ---
 
-export async function loadTableStats(table: string): Promise<void> {
+export async function loadTableStats(table: string, agentId = "default"): Promise<void> {
 	ontology.loadingTable = true;
 	ontology.tableStats = null;
 	try {
@@ -281,7 +281,7 @@ export async function loadTableStats(table: string): Promise<void> {
 			case "entity_attributes":
 			case "entity_dependencies":
 			case "entity_communities": {
-				const stats = await getKnowledgeStats();
+				const stats = await getKnowledgeStats(agentId);
 				if (ontology.schemaTable !== table) break;
 				if (!stats) break;
 				const map: Record<string, number> = {
@@ -300,17 +300,19 @@ export async function loadTableStats(table: string): Promise<void> {
 			}
 			case "memories":
 			case "memory_entity_mentions": {
-				const { stats } = await getMemories(1, 0);
+				const { stats } = await getMemories(1, 0, agentId);
 				if (ontology.schemaTable !== table) break;
+				// memory_entity_mentions count is not returned by the memories endpoint;
+				// report -1 (unknown) rather than a false zero
 				ontology.tableStats = {
 					table,
-					rows: table === "memories" ? stats.total : 0,
+					rows: table === "memories" ? stats.total : -1,
 					extra: stats as unknown as Record<string, unknown>,
 				};
 				break;
 			}
 			case "embeddings": {
-				const data = await getEmbeddings(false, { limit: 1 });
+				const data = await getEmbeddings(false, { limit: 1, agentId });
 				if (ontology.schemaTable !== table) break;
 				ontology.tableStats = { table, rows: data.total };
 				break;
@@ -373,7 +375,7 @@ export function clearHover(): void {
 	ontology.hovered = null;
 }
 
-export function selectSchemaTable(name: string): void {
+export function selectSchemaTable(name: string, agentId = "default"): void {
 	ontology.schemaTable = name;
 	ontology.selected = null;
 	ontology.relatedIds = new Set();
@@ -386,7 +388,7 @@ export function selectSchemaTable(name: string): void {
 		TABLE_EDGE_FILTER[name] ?? DEFAULT_EDGE_FILTER,
 	) as Set<string>;
 
-	loadTableStats(name);
+	loadTableStats(name, agentId);
 }
 
 export function toggleEdgeKind(kind: string): void {

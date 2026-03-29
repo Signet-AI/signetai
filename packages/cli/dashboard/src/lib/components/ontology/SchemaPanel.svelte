@@ -20,6 +20,11 @@
 		toggleEdgeKind,
 	} from "./ontology-state.svelte";
 
+	interface Props {
+		agentId?: string;
+	}
+	const { agentId = "default" }: Props = $props();
+
 	// --- Node / edge kind definitions ---
 
 	const NODE_KINDS: { kind: OntologyNodeKind; label: string }[] = [
@@ -106,7 +111,7 @@
 	});
 
 	function selectPreset(table: string): void {
-		selectSchemaTable(table);
+		selectSchemaTable(table, agentId);
 	}
 </script>
 
@@ -228,7 +233,7 @@
 										class="schema-table-row"
 										class:schema-table-active={ontology.schemaTable ===
 											table.name}
-										onclick={() => selectSchemaTable(table.name)}
+										onclick={() => selectSchemaTable(table.name, agentId)}
 										type="button"
 									>
 										{table.name}

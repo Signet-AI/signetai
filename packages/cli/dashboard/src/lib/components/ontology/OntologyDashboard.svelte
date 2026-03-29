@@ -51,7 +51,7 @@
 
 	<!-- Main Grid -->
 	<div class="ont-grid">
-		<div class="zone-a"><SchemaPanel /></div>
+		<div class="zone-a"><SchemaPanel {agentId} /></div>
 		<div class="zone-b">
 			<ConstellationGraph {agentId} />
 			{#if umapOpen}
