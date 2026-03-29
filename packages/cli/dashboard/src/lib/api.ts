@@ -6,11 +6,11 @@
 import type { ModelRegistryEntry } from "@signet/core";
 import { marked } from "marked";
 
-// When served by the daemon, use relative URLs.
-// When served by Tauri (frontendDist) or Vite dev server, use absolute URL.
-const isDev = import.meta.env.DEV;
+// When served by the daemon (production) or Vite dev server (proxied), use relative URLs.
+// Tauri needs an absolute URL since it serves from a different origin.
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-export const API_BASE = isDev || isTauri ? "http://localhost:3850" : "";
+const tauriHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
+export const API_BASE = isTauri ? `http://${tauriHost}:3850` : "";
 
 export interface Memory {
 	id: string;
