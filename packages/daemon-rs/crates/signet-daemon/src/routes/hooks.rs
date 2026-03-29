@@ -936,10 +936,10 @@ pub async fn session_end(
             .await;
     }
 
+    // Release the runtime path claim early so other sessions are not blocked.
+    // Dedup and continuity clears are deferred until after persistence so a
+    // 500 on artifact/job writes leaves state intact for a safe retry.
     state.sessions.release(&session_key);
-    state.continuity.clear(&session_key);
-    state.dedup.clear_session_start(&session_key);
-    state.dedup.clear(&session_key);
 
     if is_clear {
         return (
@@ -996,7 +996,7 @@ pub async fn session_end(
         })
         .unwrap_or_else(|| format!("session-end:{ended_at}"));
 
-    let mut transcript = body
+    let transcript = body
         .transcript_path
         .as_deref()
         .filter(|path| !path.trim().is_empty())
@@ -1030,20 +1030,16 @@ pub async fn session_end(
         })
         .unwrap_or_default();
 
-    // Gate and clamp before any writes so DB and artifact always receive
-    // the same bounded content, not the raw unbounded input.
+    // Gate before any writes — no-op sessions don't need artifact/job work.
     if transcript.trim().is_empty() {
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
         return (
             StatusCode::OK,
             Json(serde_json::json!({"memoriesSaved": 0, "queued": false})),
         )
             .into_response();
-    }
-    // Clamp by char count, not byte offset, to avoid panicking on non-ASCII.
-    const MAX_TRANSCRIPT_CHARS: usize = 100_000;
-    if transcript.chars().count() > MAX_TRANSCRIPT_CHARS {
-        let safe: String = transcript.chars().take(MAX_TRANSCRIPT_CHARS).collect();
-        transcript = format!("{safe}\n[truncated]");
     }
 
     if !transcript.trim().is_empty() && !session_key.trim().is_empty() {
@@ -1112,6 +1108,16 @@ pub async fn session_end(
         }
     }
 
+    // Clamp the LLM input (summary job) by char count — artifact already
+    // received the full transcript above for lossless canonical storage.
+    const MAX_TRANSCRIPT_CHARS: usize = 100_000;
+    let summary_transcript = if transcript.chars().count() > MAX_TRANSCRIPT_CHARS {
+        let safe: String = transcript.chars().take(MAX_TRANSCRIPT_CHARS).collect();
+        format!("{safe}\n[truncated]")
+    } else {
+        transcript.clone()
+    };
+
     let harness_value = harness.to_string();
     let project = body.cwd.clone();
     let session_key_value = if session_key.trim().is_empty() {
@@ -1121,7 +1127,7 @@ pub async fn session_end(
     };
     let session_id_value = session_id.clone();
     let agent_value = agent_id.clone();
-    let transcript_value = transcript.clone();
+    let transcript_value = summary_transcript;
     let ended_value = ended_at.clone();
     let result = state
         .pool
@@ -1148,7 +1154,13 @@ pub async fn session_end(
         .await;
 
     match result {
-        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+        Ok(val) => {
+            // Persistence succeeded — safe to clear session state now.
+            state.continuity.clear(&session_key);
+            state.dedup.clear_session_start(&session_key);
+            state.dedup.clear(&session_key);
+            (StatusCode::OK, Json(val)).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
