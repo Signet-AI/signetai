@@ -69,8 +69,7 @@ export function up(db: MigrationDb): void {
 			'{"source":"migration-050"}',
 			d.updated_at
 		FROM entity_dependencies d
-		WHERE d.dependency_type = 'related_to'
-		  AND NOT EXISTS (
+		WHERE NOT EXISTS (
 			SELECT 1
 			FROM entity_dependency_history h
 			WHERE h.dependency_id = d.id

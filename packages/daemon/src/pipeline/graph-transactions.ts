@@ -378,8 +378,9 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 					input.now,
 				);
 				attributesCreated++;
-			} catch {
-				// Constraint violation — skip
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				if (!msg.includes("UNIQUE constraint")) throw e;
 			}
 		}
 	}
@@ -433,8 +434,9 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 						createdAt: input.now,
 						metadata: JSON.stringify({ memoryId: input.sourceMemoryId }),
 					});
-				} catch {
-					// Already exists
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					if (!msg.includes("UNIQUE constraint")) throw e;
 				}
 			}
 		}

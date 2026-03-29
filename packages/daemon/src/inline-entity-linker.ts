@@ -390,8 +390,9 @@ export function linkMemoryToEntities(
 				 VALUES (?, ?, ?, ?, ?, ?, ?, 0.7, ?, 'active', ?, ?)`,
 			).run(attrId, aspectId, agentId, memoryId, kind, clause.predicate, normalized, importance, now, now);
 			attributeCount++;
-		} catch {
-			// Constraint violation — skip
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			if (!msg.includes("UNIQUE constraint")) throw e;
 		}
 	}
 
@@ -437,8 +438,9 @@ export function linkMemoryToEntities(
 						createdAt: now,
 						metadata: JSON.stringify({ memoryId }),
 					});
-				} catch {
-					// Already exists
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					if (!msg.includes("UNIQUE constraint")) throw e;
 				}
 			}
 		}
