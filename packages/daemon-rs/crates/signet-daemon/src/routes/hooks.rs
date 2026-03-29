@@ -1044,13 +1044,22 @@ pub async fn session_end(
                     return None;
                 }
             };
-            // Restrict reads to the workspace memory/ subdir or the
-            // signet-managed temp subdir.  Full base_path is excluded to
-            // prevent reads from .secrets/, USER.md, and other workspace
-            // artifacts in team/hybrid mode.
-            if !canonical.starts_with(base.join("memory"))
-                && !canonical.starts_with(std::env::temp_dir().join("signet"))
-            {
+            // Canonicalize the allowed prefixes too so the comparison is
+            // between two resolved paths. Without this, a symlinked base_path
+            // (e.g. ~/.agents → /real/path/agents) would cause the check to
+            // compare a resolved canonical path against an unresolved prefix
+            // and incorrectly reject legitimate paths (or fail to catch paths
+            // that resolve through unexpected symlinks).
+            let allowed_memory = fs::canonicalize(base.join("memory")).ok();
+            let allowed_tmp =
+                fs::canonicalize(std::env::temp_dir().join("signet")).ok();
+            let in_memory = allowed_memory
+                .as_ref()
+                .map_or(false, |p| canonical.starts_with(p));
+            let in_tmp = allowed_tmp
+                .as_ref()
+                .map_or(false, |p| canonical.starts_with(p));
+            if !in_memory && !in_tmp {
                 warn!(path, "session-end: transcript_path outside allowed locations, skipping");
                 return None;
             }
@@ -1678,97 +1687,129 @@ pub async fn compaction_complete(
     let session_key = body.session_key.clone();
     let fallback_project = body.project.clone();
 
-    let result = state
+    // Step 1: DB-only mutations. Filesystem writes are excluded from this
+    // transaction so a rollback here cannot leave orphaned artifacts on disk.
+    let db_result = state
         .pool
-        .write(Priority::High, move |conn| {
-            let project = resolve_compaction_project(
-                conn,
-                session_key.as_deref(),
-                &agent_id,
-                fallback_project.as_deref(),
-            )?;
-            // When sessionKey is absent, fall back to the most recent session
-            // for this project so the compaction artifact links into lineage.
-            // Without this, manifest resolution by session_id/session_key has
-            // no anchor and the artifact floats outside the lineage graph.
-            let session_id = session_key.clone().unwrap_or_else(|| {
-                project
-                    .as_deref()
-                    .and_then(|proj| {
-                        latest_session_for_project(conn, proj, &agent_id)
-                            .ok()
-                            .flatten()
-                    })
-                    .unwrap_or_else(|| format!("compaction:{captured_at}"))
-            });
-            let r = transactions::ingest(
-                conn,
-                &transactions::IngestInput {
-                    content: &summary_value,
-                    memory_type: "session_summary",
-                    tags: vec!["session".into(), "summary".into(), harness_value.clone()],
-                    who: None,
-                    why: Some("compaction"),
-                    project: project.as_deref(),
-                    importance: 0.3,
-                    pinned: false,
-                    source_type: Some("compaction"),
-                    source_id: session_key.as_deref(),
-                    idempotency_key: None,
-                    runtime_path: None,
-                    actor: "compaction",
-                    agent_id: &agent_id,
-                    visibility: "global",
-                    scope: None,
-                },
-            )?;
-            let _ = write_compaction_artifact(
+        .write(Priority::High, {
+            let session_key = session_key.clone();
+            let agent_id = agent_id.clone();
+            let fallback_project = fallback_project.clone();
+            let captured_at = captured_at.clone();
+            let harness_value = harness_value.clone();
+            let summary_value = summary_value.clone();
+            move |conn| {
+                let project = resolve_compaction_project(
+                    conn,
+                    session_key.as_deref(),
+                    &agent_id,
+                    fallback_project.as_deref(),
+                )?;
+                // Project-based lineage fallback (see earlier fix).
+                let sid = session_key.clone().unwrap_or_else(|| {
+                    project
+                        .as_deref()
+                        .and_then(|proj| {
+                            latest_session_for_project(conn, proj, &agent_id)
+                                .ok()
+                                .flatten()
+                        })
+                        .unwrap_or_else(|| format!("compaction:{captured_at}"))
+                });
+                let r = transactions::ingest(
+                    conn,
+                    &transactions::IngestInput {
+                        content: &summary_value,
+                        memory_type: "session_summary",
+                        tags: vec!["session".into(), "summary".into(), harness_value],
+                        who: None,
+                        why: Some("compaction"),
+                        project: project.as_deref(),
+                        importance: 0.3,
+                        pinned: false,
+                        source_type: Some("compaction"),
+                        source_id: session_key.as_deref(),
+                        idempotency_key: None,
+                        runtime_path: None,
+                        actor: "compaction",
+                        agent_id: &agent_id,
+                        visibility: "global",
+                        scope: None,
+                    },
+                )?;
+                if let Some(key) = session_key.as_deref() {
+                    let _ = conn.execute(
+                        "DELETE FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2",
+                        rusqlite::params![key, agent_id],
+                    );
+                    let _ = conn.execute(
+                        "DELETE FROM session_extract_cursors WHERE session_key = ?1 AND agent_id = ?2",
+                        rusqlite::params![key, agent_id],
+                    );
+                }
+                Ok(serde_json::json!({
+                    "project": project,
+                    "sessionId": sid,
+                    "memoryId": r.id,
+                }))
+            }
+        })
+        .await;
+
+    let meta = match db_result {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(err = %e, "compaction-complete DB mutations failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    let memory_id = meta["memoryId"].as_str().unwrap_or("").to_string();
+    let session_id = meta["sessionId"].as_str().unwrap_or("").to_string();
+    let project: Option<String> = meta["project"].as_str().map(str::to_string);
+
+    // Step 2: Filesystem artifact writes in a separate transaction. DB
+    // mutations above are already committed so a failure here leaves DB
+    // state consistent (core ingest committed) with a missing artifact file —
+    // recoverable on next compaction — rather than rolled-back DB + orphaned file.
+    if let Err(e) = state
+        .pool
+        .write(Priority::Low, move |conn| {
+            write_compaction_artifact(
                 conn,
                 &root,
                 SummaryArtifactInput {
                     agent_id: agent_id.clone(),
-                    session_id: session_id.clone(),
-                    session_key: session_key.clone(),
-                    project: project.clone(),
-                    harness: Some(harness_value.clone()),
+                    session_id,
+                    session_key,
+                    project,
+                    harness: Some(harness_value),
                     captured_at: captured_at.clone(),
                     started_at: None,
-                    ended_at: Some(captured_at.clone()),
-                    summary: summary_value.clone(),
+                    ended_at: Some(captured_at),
+                    summary: summary_value,
                 },
-                sentence.clone(),
+                sentence,
             )
             .map_err(signet_core::error::CoreError::Migration)?;
-            let _ = write_memory_projection(conn, &root, &agent_id)
+            write_memory_projection(conn, &root, &agent_id)
                 .map_err(signet_core::error::CoreError::Migration)?;
-            if let Some(key) = session_key.as_deref() {
-                let _ = conn.execute(
-                    "DELETE FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2",
-                    rusqlite::params![key, agent_id],
-                );
-                let _ = conn.execute(
-                    "DELETE FROM session_extract_cursors WHERE session_key = ?1 AND agent_id = ?2",
-                    rusqlite::params![key, agent_id],
-                );
-            }
-            Ok(serde_json::json!({
-                "success": true,
-                "memoryId": r.id,
-            }))
+            Ok(serde_json::Value::Null)
         })
-        .await;
-
-    match result {
-        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
-        Err(e) => {
-            warn!(err = %e, "compaction-complete failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response()
-        }
+        .await
+    {
+        warn!(err = %e, "compaction-complete artifact write failed, DB state intact");
     }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"success": true, "memoryId": memory_id})),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
