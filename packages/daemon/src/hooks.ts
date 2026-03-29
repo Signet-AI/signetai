@@ -34,6 +34,11 @@ import { propagateMemoryStatus } from "./knowledge-graph";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import { writeMemoryHead } from "./memory-head";
+import {
+	appendSynthesisIndexBlock as appendRenderedIndexBlock,
+	renderMemoryProjection,
+	writeTranscriptArtifact,
+} from "./memory-lineage";
 import { buildAgentScopeClause, hybridRecall } from "./memory-search";
 import {
 	applyFtsOverlapFeedback,
@@ -78,7 +83,6 @@ import { getExpiryWarning } from "./session-tracker";
 import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
 import { searchTemporalFallback } from "./temporal-fallback";
-import { deriveThreadKey, deriveThreadLabel, summarizeThreadContent } from "./thread-heads";
 import { getUpdateSummary } from "./update-system";
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -266,6 +270,7 @@ export interface SessionEndRequest {
 	transcript?: string;
 	sessionId?: string;
 	sessionKey?: string;
+	agentId?: string;
 	cwd?: string;
 	reason?: string;
 	runtimePath?: "plugin" | "legacy";
@@ -366,283 +371,8 @@ export function effectiveScore(importance: number, createdAt: string, pinned: bo
 	return importance * 0.95 ** ageDays;
 }
 
-interface TemporalNode {
-	readonly id: string;
-	readonly content: string;
-	readonly kind: string;
-	readonly depth: number;
-	readonly sourceType: string;
-	readonly sourceRef: string | null;
-	readonly latestAt: string;
-	readonly project: string | null;
-	readonly sessionKey: string | null;
-	readonly harness: string | null;
-	readonly score: number;
-}
-
-interface ThreadHead {
-	readonly key: string;
-	readonly label: string;
-	readonly latestAt: string;
-	readonly project: string | null;
-	readonly sessionKey: string | null;
-	readonly sourceType: string;
-	readonly score: number;
-	readonly sample: string;
-	readonly nodeId: string;
-}
-
-interface SynthesisMaterial {
-	readonly nodes: ReadonlyArray<TemporalNode>;
-	readonly memories: ReadonlyArray<ScoredMemory>;
-	readonly threadHeads: ReadonlyArray<ThreadHead>;
-	readonly indexBlock: string;
-	readonly sourceCount: number;
-}
-
-function temporalBaseScore(kind: string, sourceType: string): number {
-	if (sourceType === "compaction") return 0.95;
-	if (sourceType === "summary") return 0.9;
-	if (sourceType === "checkpoint") return 0.85;
-	if (sourceType === "chunk") return 0.55;
-	if (kind === "arc") return 0.8;
-	if (kind === "epoch") return 0.7;
-	return 0.6;
-}
-
-function scoreTemporalNode(kind: string, sourceType: string, latestAt: string): number {
-	const ageDays = (Date.now() - new Date(latestAt).getTime()) / (1000 * 60 * 60 * 24);
-	return temporalBaseScore(kind, sourceType) * 0.97 ** ageDays;
-}
-
-function trimContent(content: string, limit: number): string {
-	if (content.length <= limit) return content;
-	return `${content.slice(0, Math.max(1, limit - 3))}...`;
-}
-
-function buildSynthesisIndexBlock(nodes: ReadonlyArray<TemporalNode>): string {
-	const lines = nodes.map((node) => {
-		const source = node.sourceType || node.kind;
-		const session = node.sessionKey ?? "none";
-		const ref = node.sourceRef ?? "none";
-		const project = node.project ?? "none";
-		const preview = trimContent(node.content, 120);
-		return `- id=${node.id} kind=${node.kind} source=${source} depth=${node.depth} session=${session} project=${project} ref=${ref} latest=${node.latestAt}\n  summary: ${preview}`;
-	});
-	return `## Temporal Index\n\n${lines.join("\n")}`;
-}
-
-function collectThreadHeads(nodes: ReadonlyArray<TemporalNode>, limit: number): ThreadHead[] {
-	const selected: ThreadHead[] = [];
-	const seen = new Set<string>();
-	for (const node of nodes) {
-		if (node.sourceType === "chunk") continue;
-		const key = deriveThreadKey({
-			project: node.project,
-			sourceRef: node.sourceRef,
-			sessionKey: node.sessionKey,
-			harness: node.harness,
-		});
-		if (seen.has(key)) continue;
-		seen.add(key);
-		selected.push({
-			key,
-			label: deriveThreadLabel({
-				project: node.project,
-				sourceRef: node.sourceRef,
-				sessionKey: node.sessionKey,
-				harness: node.harness,
-			}),
-			latestAt: node.latestAt,
-			project: node.project,
-			sessionKey: node.sessionKey,
-			sourceType: node.sourceType,
-			score: node.score,
-			sample: summarizeThreadContent(node.content, 240),
-			nodeId: node.id,
-		});
-		if (selected.length >= limit) break;
-	}
-	return selected;
-}
-
-function readPersistedThreadHeads(agentId: string, limit: number): ThreadHead[] {
-	if (!existsSync(MEMORY_DB)) return [];
-	try {
-		return getDbAccessor().withReadDb((db) => {
-			const table = db
-				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_thread_heads'`)
-				.get();
-			if (!table) return [];
-			const rows = db
-				.prepare(
-					`SELECT thread_key, label, latest_at, project, session_key, source_type, sample, node_id
-					 FROM memory_thread_heads
-					 WHERE agent_id = ?
-					 ORDER BY latest_at DESC
-					 LIMIT ?`,
-				)
-				.all(agentId, Math.max(1, Math.min(80, limit * 4))) as Array<{
-				thread_key: string;
-				label: string;
-				latest_at: string;
-				project: string | null;
-				session_key: string | null;
-				source_type: string | null;
-				sample: string;
-				node_id: string;
-			}>;
-			return rows.slice(0, limit).map((row) => ({
-				key: row.thread_key,
-				label: row.label,
-				latestAt: row.latest_at,
-				project: row.project,
-				sessionKey: row.session_key,
-				sourceType: row.source_type ?? "summary",
-				score: scoreTemporalNode("session", row.source_type ?? "summary", row.latest_at),
-				sample: row.sample,
-				nodeId: row.node_id,
-			}));
-		});
-	} catch {
-		return [];
-	}
-}
-
-function threadTime(head: ThreadHead): number {
-	const at = Date.parse(head.latestAt);
-	return Number.isFinite(at) ? at : 0;
-}
-
-function mergeThreadHeads(
-	persisted: ReadonlyArray<ThreadHead>,
-	derived: ReadonlyArray<ThreadHead>,
-	limit: number,
-): ThreadHead[] {
-	const map = new Map<string, ThreadHead>();
-	for (const head of [...persisted, ...derived]) {
-		const prev = map.get(head.key);
-		if (!prev) {
-			map.set(head.key, head);
-			continue;
-		}
-		const prevAt = threadTime(prev);
-		const headAt = threadTime(head);
-		if (headAt > prevAt) {
-			map.set(head.key, head);
-			continue;
-		}
-		if (headAt === prevAt && head.score > prev.score) {
-			map.set(head.key, head);
-		}
-	}
-	return Array.from(map.values())
-		.sort((a, b) => threadTime(b) - threadTime(a) || b.score - a.score)
-		.slice(0, limit);
-}
-
-function collectSynthesisMaterial(charBudget: number, agentId: string): SynthesisMaterial {
-	const memoryBudget = Math.max(1200, Math.floor(charBudget * 0.35));
-	const nodeBudget = Math.max(1200, Math.floor(charBudget * 0.45));
-	const scope = getAgentScope(agentId);
-	const memories = selectWithBudget(
-		getAllScoredCandidates(undefined, 120, agentId, scope.readPolicy, scope.policyGroup),
-		memoryBudget,
-	);
-
-	if (!existsSync(MEMORY_DB)) {
-		return {
-			nodes: [],
-			memories,
-			threadHeads: [],
-			indexBlock: buildSynthesisIndexBlock([]),
-			sourceCount: memories.length,
-		};
-	}
-
-	try {
-		const nodes = getDbAccessor().withReadDb((db) => {
-			const table = db
-				.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
-				.get();
-			if (!table) return [];
-
-			return db
-				.prepare(
-					`SELECT id, content, kind, depth, latest_at, project, session_key,
-					        harness,
-					        COALESCE(source_type, kind) AS source_type,
-					        source_ref
-					 FROM session_summaries
-					 WHERE agent_id = ?
-					 ORDER BY latest_at DESC
-					 LIMIT 200`,
-				)
-				.all(agentId) as Array<{
-				id: string;
-				content: string;
-				kind: string;
-				depth: number;
-				latest_at: string;
-				project: string | null;
-				session_key: string | null;
-				harness: string | null;
-				source_type: string;
-				source_ref: string | null;
-			}>;
-		});
-
-		const scored = nodes
-			.map((node) => ({
-				id: node.id,
-				content: trimContent(node.content.trim(), node.source_type === "chunk" ? 280 : 700),
-				kind: node.kind,
-				depth: node.depth,
-				sourceType: node.source_type,
-				sourceRef: node.source_ref,
-				latestAt: node.latest_at,
-				project: node.project,
-				sessionKey: node.session_key,
-				harness: node.harness,
-				score: scoreTemporalNode(node.kind, node.source_type, node.latest_at),
-			}))
-			.sort((a, b) => b.score - a.score);
-
-		const promptNodes = selectWithBudget(
-			scored.filter((node) => node.sourceType !== "chunk"),
-			nodeBudget,
-		);
-		const persistedThreadHeads = readPersistedThreadHeads(agentId, 24);
-		const derivedThreadHeads = collectThreadHeads(scored, 24);
-		const threadHeads = mergeThreadHeads(persistedThreadHeads, derivedThreadHeads, 12);
-		const indexNodes = scored.slice(0, 20);
-
-		return {
-			nodes: promptNodes,
-			memories,
-			threadHeads,
-			indexBlock: buildSynthesisIndexBlock(indexNodes),
-			sourceCount: promptNodes.length + memories.length,
-		};
-	} catch (error) {
-		logger.warn("hooks", "Failed to collect temporal synthesis material", {
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return {
-			nodes: [],
-			memories,
-			threadHeads: [],
-			indexBlock: buildSynthesisIndexBlock([]),
-			sourceCount: memories.length,
-		};
-	}
-}
-
 export function appendSynthesisIndexBlock(content: string, indexBlock: string): string {
-	const trimmed = content.trimEnd();
-	if (trimmed.includes("## Temporal Index")) return trimmed;
-	if (indexBlock.trim().length === 0) return trimmed;
-	return `${trimmed}\n\n${indexBlock.trim()}`;
+	return appendRenderedIndexBlock(content, indexBlock);
 }
 
 function buildTranscriptFallbackResponse(
@@ -2637,6 +2367,8 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
+	const sessionId = req.sessionId ?? sessionKey ?? `session-end:${new Date().toISOString()}`;
+	const endedAt = new Date().toISOString();
 
 	// Clear hook dedup state for this session
 	if (sessionKey) {
@@ -2728,6 +2460,27 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 		}
 	}
 
+	if (transcript.trim().length > 0) {
+		try {
+			writeTranscriptArtifact({
+				agentId,
+				sessionId,
+				sessionKey: sessionKey ?? null,
+				project: req.cwd ?? null,
+				harness: req.harness,
+				capturedAt: endedAt,
+				startedAt: null,
+				endedAt,
+				transcript,
+			});
+		} catch (e) {
+			logger.warn("hooks", "Transcript artifact write failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+				sessionKey,
+			});
+		}
+	}
+
 	let feedbackAspectsUpdated = 0;
 	let feedbackFtsConfirmations = 0;
 	let feedbackDecayedAspects = 0;
@@ -2794,8 +2547,12 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 		harness: req.harness,
 		transcript,
 		sessionKey,
+		sessionId,
 		project: req.cwd,
 		agentId,
+		trigger: "session_end",
+		capturedAt: endedAt,
+		endedAt,
 	});
 
 	logger.info("hooks", "Session end queued for summary", {
@@ -3016,8 +2773,11 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		harness: req.harness,
 		transcript: capped,
 		sessionKey: req.sessionKey,
+		sessionId: req.sessionKey,
 		project: req.project,
 		agentId,
+		trigger: "checkpoint_extract",
+		capturedAt: new Date().toISOString(),
 	});
 	// Advance cursor using UTF-8 byte length so the stored offset is
 	// byte-compatible with the Rust daemon on a shared database.
@@ -3430,98 +3190,19 @@ export function handleSynthesisRequest(
 	req: SynthesisRequest,
 	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string },
 ): SynthesisResponse {
-	const maxTokens = opts?.maxTokens ?? 8000;
-	const charBudget = maxTokens * 4; // rough char-to-token estimate
-
 	logger.info("hooks", "Synthesis request", { trigger: req.trigger });
 
 	const _sinceTimestamp = opts?.sinceTimestamp ?? 0;
+	const _maxTokens = opts?.maxTokens ?? 8000;
 	void _sinceTimestamp;
-	const material = collectSynthesisMaterial(charBudget, opts?.agentId ?? "default");
+	void _maxTokens;
 
-	const memoryLines = material.memories.map((row) => {
-		const tagText = row.tags ? ` tags=${row.tags}` : "";
-		const projectText = row.project ? ` project=${row.project}` : "";
-		return `- score=${row.effScore.toFixed(3)} pinned=${row.pinned === 1 ? "yes" : "no"} type=${row.type}${projectText}${tagText}\n  ${row.content}`;
-	});
-
-	const nodeLines = material.nodes.map((node) => {
-		const source = node.sourceType || node.kind;
-		const projectText = node.project ? ` project=${node.project}` : "";
-		const sessionText = node.sessionKey ? ` session=${node.sessionKey}` : "";
-		return `- id=${node.id} kind=${node.kind} source=${source} depth=${node.depth}${projectText}${sessionText} score=${node.score.toFixed(3)} latest=${node.latestAt}\n  ${node.content}`;
-	});
-	const threadLines = material.threadHeads.map((thread) => {
-		const projectText = thread.project ? ` project=${thread.project}` : "";
-		const sessionText = thread.sessionKey ? ` session=${thread.sessionKey}` : "";
-		return `- key=${thread.key} label=${thread.label} source=${thread.sourceType}${projectText}${sessionText} score=${thread.score.toFixed(3)} latest=${thread.latestAt} node=${thread.nodeId}\n  ${thread.sample}`;
-	});
-
-	const prompt = `You are generating MEMORY.md — the working memory head for an AI agent.
-
-The output must follow a strict three-tier contract:
-
-1. Tier 1 global head (highest-signal, always injected)
-2. Tier 2 thread heads (scoped rolling summaries)
-3. Tier 3 lineage index (temporal DAG handles for drill-down)
-
-Use these top-level headings exactly:
-
-# Working Memory Summary
-## Global Head (Tier 1)
-## Thread Heads (Tier 2)
-## Open Threads
-## Durable Notes & Constraints
-
-## Tier 1 rules
-
-- Focus on active work, not biography
-- Prefer current state over changelog wording
-- Surface active priorities across people/projects/topics
-- Let stale sections shrink or disappear naturally
-- Keep the visible summary concise
-
-## Tier 2 rules
-
-- Group by thread lane (person/project/topic where possible)
-- Each lane should include current status, latest decision/context, and next action
-- Prevent thread bleed: keep unrelated lanes separate unless there is explicit relevance
-- Use the provided candidate thread heads as source material
-
-## Tier 3 rules
-
-- After the human-readable summary, append the exact Temporal Index block provided below
-- Do not rewrite the Temporal Index block; each entry has a metadata line and a summary line
-- Do not invent node IDs, sessions, summaries, or lineage
-
-## Decay-ranked memories
-
-${memoryLines.join("\n")}
-
-## Temporal DAG artifacts
-
-${nodeLines.join("\n")}
-
-## Candidate Thread Heads (Tier 2 seeds)
-
-${threadLines.join("\n")}
-
-## Exact Temporal Index Block
-
-${material.indexBlock}
-
-Instructions:
-- Write clean markdown
-- Keep the human-facing half under roughly ${Math.max(800, Math.floor(maxTokens * 0.7))} tokens
-- Do not include a generated timestamp
-- Do not output JSON
-- Output the full MEMORY.md content`;
-
+	const rendered = renderMemoryProjection(opts?.agentId ?? "default");
 	return {
 		harness: "daemon",
-		model: "synthesis",
-		prompt,
-		fileCount: material.sourceCount,
-		indexBlock: material.indexBlock,
+		model: "projection",
+		prompt: rendered.content,
+		fileCount: rendered.fileCount,
+		indexBlock: rendered.indexBlock,
 	};
 }

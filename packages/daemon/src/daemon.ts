@@ -5675,6 +5675,7 @@ import {
 	resetPromptDedup,
 	writeMemoryMd,
 } from "./hooks.js";
+import { writeCompactionArtifact } from "./memory-lineage.js";
 import { upsertSessionTranscript } from "./session-transcripts.js";
 
 import {
@@ -6108,6 +6109,7 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		const project = scopedProject.project ?? null;
 
 		const summaryId = crypto.randomUUID();
+		const sessionId = body.sessionKey ?? `compaction:${now}`;
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories (
@@ -6171,6 +6173,25 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 				});
 			}
 		});
+
+		try {
+			await writeCompactionArtifact({
+				agentId,
+				sessionId,
+				sessionKey: body.sessionKey ?? null,
+				project,
+				harness: body.harness,
+				capturedAt: now,
+				startedAt: null,
+				endedAt: null,
+				summary: body.summary,
+			});
+		} catch (err) {
+			logger.warn("hooks", "Compaction artifact write failed (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+				sessionKey: body.sessionKey,
+			});
+		}
 
 		logger.info("hooks", "Compaction summary saved", {
 			harness: body.harness,

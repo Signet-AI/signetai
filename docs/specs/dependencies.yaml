@@ -100,8 +100,8 @@ specs:
     decision: null
 
   - id: memory-md-rolling-window-lineage
-    status: approved
-    path: docs/specs/approved/memory-md-rolling-window-lineage.md
+    status: complete
+    path: docs/specs/complete/memory-md-rolling-window-lineage.md
     hard_depends_on:
       - memory-md-temporal-head
       - lossless-working-memory-runtime

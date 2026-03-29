@@ -5,6 +5,8 @@ use std::{collections::HashMap, time::SystemTime};
 use signet_core::config::DaemonConfig;
 use signet_core::db::DbPool;
 use signet_pipeline::embedding::EmbeddingProvider;
+use signet_pipeline::summary::SummaryHandle;
+use signet_pipeline::synthesis::SynthesisHandle;
 use signet_pipeline::worker::{SharedWorkerRuntimeStats, WorkerHandle};
 use signet_services::session::{ContinuityTracker, DedupState, SessionTracker};
 use tokio::sync::{Mutex, RwLock};
@@ -34,6 +36,8 @@ pub struct AppState {
     pub pipeline_paused: AtomicBool,
     pub pipeline_transition: AtomicBool,
     pub extraction_worker_handle: Mutex<Option<WorkerHandle>>,
+    pub summary_worker_handle: Mutex<Option<SummaryHandle>>,
+    pub synthesis_worker_handle: Mutex<Option<SynthesisHandle>>,
     pub extraction_worker_stats: RwLock<Option<SharedWorkerRuntimeStats>>,
     pub auth_mode: AuthMode,
     pub auth_secret: Option<Vec<u8>>,
@@ -118,6 +122,8 @@ impl AppState {
             pipeline_paused: AtomicBool::new(paused),
             pipeline_transition: AtomicBool::new(false),
             extraction_worker_handle: Mutex::new(None),
+            summary_worker_handle: Mutex::new(None),
+            synthesis_worker_handle: Mutex::new(None),
             extraction_worker_stats: RwLock::new(extraction_worker_stats),
             auth_mode,
             auth_secret,

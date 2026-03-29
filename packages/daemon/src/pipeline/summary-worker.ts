@@ -12,7 +12,7 @@
 
 import type { Database } from "bun:sqlite";
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
@@ -22,6 +22,7 @@ import { countChanges } from "../db-helpers";
 import { inferType, isDuplicate } from "../hooks";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
+import { writeSummaryArtifact } from "../memory-lineage";
 import { getSecret } from "../secrets";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
@@ -56,10 +57,15 @@ interface SummaryRecoveryBatch {
 interface SummaryJobRow {
 	readonly id: string;
 	readonly session_key: string | null;
+	readonly session_id: string | null;
 	readonly harness: string;
 	readonly project: string | null;
 	readonly agent_id: string;
 	readonly transcript: string;
+	readonly trigger: string;
+	readonly captured_at: string | null;
+	readonly started_at: string | null;
+	readonly ended_at: string | null;
 	readonly attempts: number;
 	readonly max_attempts: number;
 	readonly created_at: string;
@@ -86,8 +92,6 @@ type CommandStageStatus = "none" | "running" | "complete";
 // ---------------------------------------------------------------------------
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
-const MEMORY_DIR = join(AGENTS_DIR, "memory");
-
 const POLL_INTERVAL_MS = 5_000;
 // Timeout is now configured per-provider via resolveProvider() and config.
 
@@ -233,45 +237,6 @@ function chunkTranscript(transcript: string, target: number): string[] {
 	}
 
 	return chunks;
-}
-
-// ---------------------------------------------------------------------------
-// Slug generation
-// ---------------------------------------------------------------------------
-
-function slugify(text: string): string {
-	return text
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, 50);
-}
-
-function deriveSlug(summary: string, project: string | null): string {
-	// Try to extract first ## heading
-	const headingMatch = summary.match(/^##\s+(.+)$/m);
-	if (headingMatch) return slugify(headingMatch[1]);
-
-	// Fallback to project name
-	if (project) {
-		const parts = project.split("/");
-		return slugify(parts[parts.length - 1]);
-	}
-
-	return "session";
-}
-
-function uniqueFilename(dir: string, base: string, ext: string): string {
-	const first = join(dir, `${base}${ext}`);
-	if (!existsSync(first)) return first;
-
-	for (let i = 2; i <= 20; i++) {
-		const path = join(dir, `${base}-${i}${ext}`);
-		if (!existsSync(path)) return path;
-	}
-
-	// Fallback with timestamp
-	return join(dir, `${base}-${Date.now()}${ext}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -574,18 +539,27 @@ async function processJob(
 		}
 
 		if (!commandMode) {
-			// Write markdown file
-			mkdirSync(MEMORY_DIR, { recursive: true });
-			const slug = deriveSlug(result.summary, job.project);
-			const filename = uniqueFilename(MEMORY_DIR, `${today}-${slug}`, ".md");
-			writeFileSync(filename, result.summary, "utf-8");
+			if (job.trigger === "session_end") {
+				const summaryWrite = await writeSummaryArtifact({
+					agentId: job.agent_id,
+					sessionId: job.session_id ?? job.session_key ?? job.id,
+					sessionKey: job.session_key,
+					project: job.project,
+					harness: job.harness,
+					capturedAt: job.captured_at ?? job.created_at,
+					startedAt: job.started_at,
+					endedAt: job.ended_at,
+					summary: result.summary,
+					provider,
+				});
 
-			logger.info("summary-worker", "Wrote session summary", {
-				path: filename,
-				sessionKey: job.session_key,
-				project: job.project,
-				summaryChars: result.summary.length,
-			});
+				logger.info("summary-worker", "Wrote session summary artifact", {
+					path: summaryWrite.summaryPath,
+					sessionKey: job.session_key,
+					project: job.project,
+					summaryChars: result.summary.length,
+				});
+			}
 
 			const saved = insertSummaryFacts(accessor, job, result.facts);
 
@@ -1167,19 +1141,21 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 
 		const now = new Date().toISOString();
 		const tokenCount = Math.ceil(result.summary.length / 4);
+		const sourceType = job.trigger === "checkpoint_extract" ? "checkpoint" : "summary";
 
 		// Upsert: check for existing row first since ON CONFLICT doesn't
 		// work with the partial unique index (WHERE session_key IS NOT NULL).
-		const existing = job.session_key
-			? (db
-					.prepare(
-						`SELECT id FROM session_summaries
+		const existing =
+			sourceType === "summary" && job.session_key
+				? (db
+						.prepare(
+							`SELECT id FROM session_summaries
 				 WHERE session_key = ? AND depth = 0
 				   AND agent_id = ?
 				   AND COALESCE(source_type, 'summary') = 'summary'`,
-					)
-					.get(job.session_key, agentId) as { id: string } | undefined)
-			: undefined;
+						)
+						.get(job.session_key, agentId) as { id: string } | undefined)
+				: undefined;
 
 		let effectiveId: string;
 
@@ -1188,14 +1164,15 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 			db.prepare(
 				`UPDATE session_summaries
 				 SET content = ?, token_count = ?, latest_at = ?,
-				     source_type = 'summary', source_ref = ?, meta_json = ?
+				     source_type = ?, source_ref = ?, meta_json = ?
 				 WHERE id = ?`,
 			).run(
 				result.summary,
 				tokenCount,
 				now,
+				sourceType,
 				job.session_key ?? null,
-				JSON.stringify({ source: "summary-worker" }),
+				JSON.stringify({ source: "summary-worker", trigger: job.trigger }),
 				existing.id,
 			);
 		} else {
@@ -1205,7 +1182,7 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 					id, project, depth, kind, content, token_count,
 					earliest_at, latest_at, session_key, harness,
 					agent_id, source_type, source_ref, meta_json, created_at
-				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'summary', ?, ?, ?)`,
+				) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				effectiveId,
 				job.project,
@@ -1216,8 +1193,9 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 				job.session_key,
 				job.harness,
 				agentId,
+				sourceType,
 				job.session_key ?? null,
-				JSON.stringify({ source: "summary-worker" }),
+				JSON.stringify({ source: "summary-worker", trigger: job.trigger }),
 				now,
 			);
 		}
@@ -1229,7 +1207,7 @@ function writeSummaryToDAG(accessor: DbAccessor, job: SummaryJobRow, result: Llm
 			latestAt: now,
 			project: job.project ?? null,
 			sessionKey: job.session_key ?? null,
-			sourceType: "summary",
+			sourceType,
 			sourceRef: job.session_key ?? null,
 			harness: job.harness,
 		});
@@ -1474,8 +1452,9 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				try {
 					row = db
 						.prepare(
-							`SELECT id, session_key, harness, project, transcript,
-							        agent_id, attempts, max_attempts, created_at
+							`SELECT id, session_key, session_id, harness, project, transcript,
+							        agent_id, trigger, captured_at, started_at, ended_at,
+							        attempts, max_attempts, created_at
 							 FROM summary_jobs
 							 WHERE status = 'pending' AND attempts < max_attempts
 							 ORDER BY created_at ASC
@@ -1485,8 +1464,10 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				} catch {
 					row = db
 						.prepare(
-							`SELECT id, session_key, harness, project, transcript,
-							        'default' AS agent_id, attempts, max_attempts, created_at
+							`SELECT id, session_key, session_key AS session_id, harness, project, transcript,
+							        'default' AS agent_id, 'session_end' AS trigger,
+							        created_at AS captured_at, NULL AS started_at, completed_at AS ended_at,
+							        attempts, max_attempts, created_at
 							 FROM summary_jobs
 							 WHERE status = 'pending' AND attempts < max_attempts
 							 ORDER BY created_at ASC
@@ -1646,8 +1627,13 @@ export function enqueueSummaryJob(
 		readonly harness: string;
 		readonly transcript: string;
 		readonly sessionKey?: string;
+		readonly sessionId?: string;
 		readonly project?: string;
 		readonly agentId: string;
+		readonly trigger?: string;
+		readonly capturedAt?: string;
+		readonly startedAt?: string;
+		readonly endedAt?: string;
 	},
 ): string {
 	const id = crypto.randomUUID();
@@ -1657,15 +1643,21 @@ export function enqueueSummaryJob(
 		try {
 			db.prepare(
 				`INSERT INTO summary_jobs
-				 (id, session_key, harness, project, agent_id, transcript, status, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+				 (id, session_key, session_id, harness, project, agent_id, transcript,
+				  trigger, captured_at, started_at, ended_at, status, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
 			).run(
 				id,
 				params.sessionKey || null,
+				params.sessionId || params.sessionKey || id,
 				params.harness,
 				params.project || null,
 				params.agentId,
 				params.transcript,
+				params.trigger || "session_end",
+				params.capturedAt || now,
+				params.startedAt || null,
+				params.endedAt || null,
 				now,
 			);
 		} catch {

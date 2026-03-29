@@ -4,6 +4,7 @@
 //! session lifecycle: session-start, prompt-submit, session-end,
 //! remember, recall, pre-compaction, and compaction-complete.
 
+use std::fs;
 use std::sync::Arc;
 
 use axum::Json;
@@ -14,6 +15,10 @@ use serde::Deserialize;
 use tracing::warn;
 
 use signet_core::db::Priority;
+use signet_pipeline::memory_lineage::{
+    ArtifactKind, SummaryArtifactInput, TranscriptArtifactInput, resolve_memory_sentence,
+    write_compaction_artifact, write_memory_projection, write_transcript_artifact,
+};
 use signet_services::session::{ClaimResult, RuntimePath, SessionTracker};
 use signet_services::transactions;
 
@@ -164,6 +169,153 @@ fn require_session_scope_for_write(
         return Err("agent_id does not match session scope");
     }
     Ok(())
+}
+
+fn pipeline_enabled(state: &AppState) -> bool {
+    state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .map(|pipeline| pipeline.enabled || pipeline.shadow_mode)
+        .unwrap_or(false)
+}
+
+fn normalize_session_transcript(harness: &str, raw: &str) -> String {
+    if harness.trim().eq_ignore_ascii_case("codex") {
+        return raw.to_string();
+    }
+
+    let lines = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut parsed = 0usize;
+    let mut normalized = Vec::new();
+    for line in &lines {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        parsed += 1;
+        if let Some(text) = normalize_json_transcript_line(&value) {
+            normalized.push(text);
+        }
+    }
+
+    if parsed * 10 < lines.len() * 6 {
+        raw.to_string()
+    } else {
+        normalized.join("\n")
+    }
+}
+
+fn normalize_json_transcript_line(value: &serde_json::Value) -> Option<String> {
+    if value.get("type").and_then(serde_json::Value::as_str) == Some("item.completed") {
+        let item = value.get("item")?;
+        if item.get("type").and_then(serde_json::Value::as_str) == Some("agent_message") {
+            let text = item
+                .get("text")
+                .or_else(|| item.get("message"))
+                .or_else(|| item.get("content"))
+                .and_then(serde_json::Value::as_str)?;
+            return Some(format!("Assistant: {text}"));
+        }
+    }
+
+    if value.get("type").and_then(serde_json::Value::as_str) == Some("event_msg") {
+        let payload = value.get("payload")?;
+        if payload.get("type").and_then(serde_json::Value::as_str) == Some("user_message") {
+            let text = payload
+                .get("message")
+                .or_else(|| payload.get("text"))
+                .or_else(|| payload.get("content"))
+                .and_then(serde_json::Value::as_str)?;
+            return Some(format!("User: {text}"));
+        }
+    }
+
+    let role = value
+        .get("role")
+        .or_else(|| value.get("speaker"))
+        .and_then(serde_json::Value::as_str);
+    let text = value
+        .get("content")
+        .or_else(|| value.get("text"))
+        .or_else(|| value.get("message"))
+        .and_then(serde_json::Value::as_str);
+    match (role, text) {
+        (Some("user"), Some(text)) => Some(format!("User: {text}")),
+        (Some("assistant"), Some(text)) => Some(format!("Assistant: {text}")),
+        _ => None,
+    }
+}
+
+fn upsert_session_transcript(
+    conn: &rusqlite::Connection,
+    session_key: &str,
+    transcript: &str,
+    harness: &str,
+    project: Option<&str>,
+    agent_id: &str,
+) -> rusqlite::Result<()> {
+    if session_key.trim().is_empty() || transcript.trim().is_empty() {
+        return Ok(());
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        "INSERT INTO session_transcripts (session_key, agent_id, content, harness, project, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(session_key, agent_id) DO UPDATE SET
+            content = excluded.content,
+            harness = excluded.harness,
+            project = excluded.project",
+        rusqlite::params![session_key, agent_id, transcript, harness, project, now],
+    )?;
+    Ok(())
+}
+
+fn enqueue_summary_job(
+    conn: &rusqlite::Connection,
+    harness: &str,
+    transcript: &str,
+    session_key: Option<&str>,
+    session_id: &str,
+    project: Option<&str>,
+    agent_id: &str,
+    trigger: &str,
+    captured_at: &str,
+    started_at: Option<&str>,
+    ended_at: Option<&str>,
+) -> rusqlite::Result<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO summary_jobs
+         (id, session_key, session_id, harness, project, agent_id, transcript,
+          trigger, captured_at, started_at, ended_at, status, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', ?12, ?12)",
+        rusqlite::params![
+            id,
+            session_key,
+            session_id,
+            harness,
+            project,
+            agent_id,
+            transcript,
+            trigger,
+            captured_at,
+            started_at,
+            ended_at,
+            now,
+        ],
+    )?;
+    Ok(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -727,14 +879,14 @@ pub async fn prompt_submit(
 #[serde(rename_all = "camelCase")]
 pub struct SessionEndBody {
     pub harness: Option<String>,
-    #[allow(dead_code)] // Will be used for transcript extraction in Phase 5
+    pub transcript: Option<String>,
     pub transcript_path: Option<String>,
     pub session_id: Option<String>,
     pub session_key: Option<String>,
-    #[allow(dead_code)] // Will be used for project resolution in Phase 5
     pub cwd: Option<String>,
     pub reason: Option<String>,
     pub runtime_path: Option<String>,
+    pub agent_id: Option<String>,
 }
 
 pub async fn session_end(
@@ -751,31 +903,25 @@ pub async fn session_end(
     };
     state.stamp_harness(harness).await;
 
-    // Resolve session key (sessionKey preferred, sessionId as fallback)
     let session_key = body
         .session_key
-        .as_deref()
-        .or(body.session_id.as_deref())
-        .unwrap_or("");
+        .clone()
+        .or(body.session_id.clone())
+        .unwrap_or_default();
     let path = resolve_runtime_path(&headers, body.runtime_path.as_deref());
 
-    // Session conflict check (still release even if conflict)
     if let Some(p) = path
-        && let Some(claimed_by) = state.sessions.check(session_key, p)
+        && let Some(claimed_by) = state.sessions.check(&session_key, p)
     {
-        // Release and return conflict
-        state.sessions.release(session_key);
-        state.continuity.clear(session_key);
-        state.dedup.clear_session_start(session_key);
-        state.dedup.clear(session_key);
+        state.sessions.release(&session_key);
+        state.continuity.clear(&session_key);
+        state.dedup.clear_session_start(&session_key);
+        state.dedup.clear(&session_key);
         return conflict_response(claimed_by);
     }
 
-    // Write final checkpoint if we have continuity state
     let is_clear = body.reason.as_deref() == Some("clear");
-    let sk = session_key.to_string();
-
-    if !is_clear && let Some(snapshot) = state.continuity.consume(session_key) {
+    if !is_clear && let Some(snapshot) = state.continuity.consume(&session_key) {
         let _ = state
             .pool
             .write(Priority::High, move |conn| {
@@ -790,25 +936,169 @@ pub async fn session_end(
             .await;
     }
 
-    // Always release session state
-    state.sessions.release(&sk);
-    state.continuity.clear(&sk);
-    state.dedup.clear_session_start(&sk);
-    state.dedup.clear(&sk);
+    state.sessions.release(&session_key);
+    state.continuity.clear(&session_key);
+    state.dedup.clear_session_start(&session_key);
+    state.dedup.clear(&session_key);
 
-    // NOTE: transcript extraction enqueue is not implemented in daemon-rs yet
-    // (Phase 5). This route currently performs checkpoint/session cleanup only.
-    // When transcript extraction is added here, it MUST check
-    // state.is_extraction_blocked() and dead-letter blocked work.
+    if is_clear {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "memoriesSaved": 0,
+            })),
+        )
+            .into_response();
+    }
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "memoriesSaved": 0,
-            "queued": false,
-        })),
-    )
-        .into_response()
+    if !pipeline_enabled(state.as_ref()) {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "memoriesSaved": 0,
+            })),
+        )
+            .into_response();
+    }
+
+    let agent_id = normalize_agent_id(body.agent_id.as_deref())
+        .or_else(|| session_agent_id(Some(&session_key)))
+        .unwrap_or_else(|| "default".to_string());
+    let ended_at = chrono::Utc::now().to_rfc3339();
+    let session_id = body
+        .session_id
+        .clone()
+        .or_else(|| {
+            if session_key.trim().is_empty() {
+                None
+            } else {
+                Some(session_key.clone())
+            }
+        })
+        .unwrap_or_else(|| format!("session-end:{ended_at}"));
+
+    let mut transcript = body
+        .transcript_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .and_then(|path| fs::read_to_string(path).ok())
+        .map(|raw| normalize_session_transcript(harness, &raw))
+        .or_else(|| {
+            body.transcript
+                .as_deref()
+                .map(|raw| normalize_session_transcript(harness, raw))
+        })
+        .unwrap_or_default();
+
+    if !transcript.trim().is_empty() && !session_key.trim().is_empty() {
+        let transcript_value = transcript.clone();
+        let harness_value = harness.to_string();
+        let project = body.cwd.clone();
+        let session_key_value = session_key.clone();
+        let agent_value = agent_id.clone();
+        let _ = state
+            .pool
+            .write(Priority::Low, move |conn| {
+                upsert_session_transcript(
+                    conn,
+                    &session_key_value,
+                    &transcript_value,
+                    &harness_value,
+                    project.as_deref(),
+                    &agent_value,
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await;
+    }
+
+    if !transcript.trim().is_empty() {
+        let transcript_value = transcript.clone();
+        let root = state.config.base_path.clone();
+        let session_key_value = if session_key.trim().is_empty() {
+            None
+        } else {
+            Some(session_key.clone())
+        };
+        let input = TranscriptArtifactInput {
+            agent_id: agent_id.clone(),
+            session_id: session_id.clone(),
+            session_key: session_key_value,
+            project: body.cwd.clone(),
+            harness: Some(harness.to_string()),
+            captured_at: ended_at.clone(),
+            started_at: None,
+            ended_at: Some(ended_at.clone()),
+            transcript: transcript_value,
+        };
+        let _ = state
+            .pool
+            .write(Priority::Low, move |conn| {
+                let _ = write_transcript_artifact(conn, &root, input)
+                    .map_err(signet_core::error::CoreError::Migration)?;
+                Ok(serde_json::Value::Null)
+            })
+            .await;
+    }
+
+    if transcript.trim().len() < 500 {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "memoriesSaved": 0,
+            })),
+        )
+            .into_response();
+    }
+
+    const MAX_TRANSCRIPT_CHARS: usize = 100_000;
+    if transcript.len() > MAX_TRANSCRIPT_CHARS {
+        transcript = format!("{}\n[truncated]", &transcript[..MAX_TRANSCRIPT_CHARS]);
+    }
+
+    let harness_value = harness.to_string();
+    let project = body.cwd.clone();
+    let session_key_value = if session_key.trim().is_empty() {
+        None
+    } else {
+        Some(session_key.clone())
+    };
+    let session_id_value = session_id.clone();
+    let agent_value = agent_id.clone();
+    let transcript_value = transcript.clone();
+    let ended_value = ended_at.clone();
+    let result = state
+        .pool
+        .write(Priority::High, move |conn| {
+            let job_id = enqueue_summary_job(
+                conn,
+                &harness_value,
+                &transcript_value,
+                session_key_value.as_deref(),
+                &session_id_value,
+                project.as_deref(),
+                &agent_value,
+                "session_end",
+                &ended_value,
+                None,
+                Some(&ended_value),
+            )?;
+            Ok(serde_json::json!({
+                "memoriesSaved": 0,
+                "queued": true,
+                "jobId": job_id,
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1195,7 +1485,7 @@ pub async fn compaction_complete(
     headers: HeaderMap,
     Json(body): Json<CompactionCompleteBody>,
 ) -> axum::response::Response {
-    let Some(_harness) = body.harness.as_deref() else {
+    let Some(harness) = body.harness.as_deref() else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "harness is required"})),
@@ -1203,7 +1493,12 @@ pub async fn compaction_complete(
             .into_response();
     };
 
-    let Some(summary) = body.summary.as_deref() else {
+    let Some(summary) = body
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "summary is required"})),
@@ -1213,47 +1508,43 @@ pub async fn compaction_complete(
 
     let path = resolve_runtime_path(&headers, body.runtime_path.as_deref());
 
-    // Session conflict check
     if let (Some(key), Some(p)) = (&body.session_key, path)
         && let Some(claimed_by) = state.sessions.check(key, p)
     {
         return conflict_response(claimed_by);
     }
 
-    // Reset prompt dedup so memories can be re-injected after compaction
     if let Some(key) = &body.session_key {
         state.dedup.reset_prompt_dedup(key);
     }
 
-    // Save summary as session_summary memory
-    let summary = summary.to_string();
-    let harness = body.harness.clone().unwrap_or_default();
-    let fallback_project = body.project.clone();
-    let agent_id = body.agent_id.clone().unwrap_or_else(|| "default".into());
-    // Compaction resets the message array to a short post-compaction summary.
-    // Clear the stored transcript and extract cursor so the next checkpoint
-    // fires from byte 0 instead of skipping because the pre-compaction cursor
-    // exceeds the new (shorter) transcript. Mirrors the TS daemon behaviour
-    // added in the same PR. Non-fatal on failure (tables may not exist yet).
-    if let Some(key) = &body.session_key {
-        let sk = key.clone();
-        let aid = agent_id.clone();
-        let _ = state
-            .pool
-            .write(Priority::Low, move |conn| {
-                let _ = conn.execute(
-                    "DELETE FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2",
-                    rusqlite::params![sk, aid],
-                );
-                let _ = conn.execute(
-                    "DELETE FROM session_extract_cursors WHERE session_key = ?1 AND agent_id = ?2",
-                    rusqlite::params![sk, aid],
-                );
-                Ok(serde_json::Value::Null)
-            })
-            .await;
-    }
+    let captured_at = chrono::Utc::now().to_rfc3339();
+    let harness_value = harness.to_string();
+    let summary_value = summary.to_string();
+    let agent_id = normalize_agent_id(body.agent_id.as_deref())
+        .or_else(|| {
+            body.session_key
+                .as_deref()
+                .and_then(|key| session_agent_id(Some(key)))
+        })
+        .unwrap_or_else(|| "default".to_string());
+    let sentence = resolve_memory_sentence(
+        &summary_value,
+        body.project.as_deref(),
+        Some(harness),
+        ArtifactKind::Compaction,
+        None,
+        None,
+    )
+    .await;
+    let root = state.config.base_path.clone();
     let session_key = body.session_key.clone();
+    let fallback_project = body.project.clone();
+    let session_id = body
+        .session_key
+        .clone()
+        .unwrap_or_else(|| format!("compaction:{captured_at}"));
+
     let result = state
         .pool
         .write(Priority::High, move |conn| {
@@ -1266,9 +1557,9 @@ pub async fn compaction_complete(
             let r = transactions::ingest(
                 conn,
                 &transactions::IngestInput {
-                    content: &summary,
+                    content: &summary_value,
                     memory_type: "session_summary",
-                    tags: vec!["session".into(), "summary".into(), harness.clone()],
+                    tags: vec!["session".into(), "summary".into(), harness_value.clone()],
                     who: None,
                     why: Some("compaction"),
                     project: project.as_deref(),
@@ -1284,7 +1575,35 @@ pub async fn compaction_complete(
                     scope: None,
                 },
             )?;
-
+            let _ = write_compaction_artifact(
+                conn,
+                &root,
+                SummaryArtifactInput {
+                    agent_id: agent_id.clone(),
+                    session_id: session_id.clone(),
+                    session_key: session_key.clone(),
+                    project: project.clone(),
+                    harness: Some(harness_value.clone()),
+                    captured_at: captured_at.clone(),
+                    started_at: None,
+                    ended_at: Some(captured_at.clone()),
+                    summary: summary_value.clone(),
+                },
+                sentence.clone(),
+            )
+            .map_err(signet_core::error::CoreError::Migration)?;
+            let _ = write_memory_projection(conn, &root, &agent_id)
+                .map_err(signet_core::error::CoreError::Migration)?;
+            if let Some(key) = session_key.as_deref() {
+                let _ = conn.execute(
+                    "DELETE FROM session_transcripts WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![key, agent_id],
+                );
+                let _ = conn.execute(
+                    "DELETE FROM session_extract_cursors WHERE session_key = ?1 AND agent_id = ?2",
+                    rusqlite::params![key, agent_id],
+                );
+            }
             Ok(serde_json::json!({
                 "success": true,
                 "memoryId": r.id,
@@ -1477,12 +1796,235 @@ pub async fn session_checkpoint_extract(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use axum::Json;
+    use axum::body::to_bytes;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+    use serde_json::Value;
+    use signet_core::config::{
+        AgentManifest, DaemonConfig, MemoryManifestConfig, PipelineV2Config,
+    };
+    use signet_core::db::DbPool;
+    use tempfile::TempDir;
+
+    use crate::auth::rate_limiter::{AuthRateLimiter, default_limits};
+    use crate::auth::types::AuthMode;
+    use crate::state::AppState;
+
     use super::{
-        CHECKPOINT_MIN_DELTA, extract_delta, parse_visibility, require_session_scope_for_write,
-        resolve_compaction_project, resolve_remember_agent, session_agent_id,
+        CHECKPOINT_MIN_DELTA, CompactionCompleteBody, SessionEndBody, compaction_complete,
+        extract_delta, parse_visibility, require_session_scope_for_write,
+        resolve_compaction_project, resolve_remember_agent, session_agent_id, session_end,
         strip_untrusted_metadata,
     };
     use signet_services::session::{RuntimePath, SessionTracker};
+
+    async fn test_json(resp: axum::response::Response) -> Value {
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    fn test_state(name: &str) -> (Arc<AppState>, tokio::task::JoinHandle<()>, TempDir) {
+        let tmp = tempfile::Builder::new().prefix(name).tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("memory")).unwrap();
+        std::fs::create_dir_all(tmp.path().join(".daemon/logs")).unwrap();
+        let mut manifest = AgentManifest::default();
+        let mut memory = MemoryManifestConfig::default();
+        memory.pipeline_v2 = Some(PipelineV2Config::default());
+        manifest.memory = Some(memory);
+        let cfg = DaemonConfig {
+            base_path: tmp.path().to_path_buf(),
+            db_path: tmp.path().join("memory").join("memories.db"),
+            port: 3850,
+            host: "127.0.0.1".to_string(),
+            bind: Some("127.0.0.1".to_string()),
+            manifest,
+        };
+        let (pool, writer) = DbPool::open(&cfg.db_path).unwrap();
+        let state = Arc::new(AppState::new(
+            cfg,
+            pool,
+            None,
+            None,
+            AuthMode::Local,
+            None,
+            AuthRateLimiter::from_rules(&default_limits()),
+        ));
+        (state, writer, tmp)
+    }
+
+    #[tokio::test]
+    async fn session_end_persists_transcript_artifact_and_queues_summary() {
+        let (state, writer, tmp) = test_state("hooks-session-end");
+        let transcript = [
+            "User: discuss packages/daemon-rs hooks parity.",
+            "Assistant: implement the rolling lineage projection for MEMORY.md.",
+        ]
+        .join("\n")
+        .repeat(24);
+
+        let resp = session_end(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionEndBody {
+                harness: Some("codex".to_string()),
+                transcript: Some(transcript),
+                transcript_path: None,
+                session_id: None,
+                session_key: Some("agent:agent-a:sess-1".to_string()),
+                cwd: Some("packages/daemon-rs".to_string()),
+                reason: None,
+                runtime_path: None,
+                agent_id: Some("agent-a".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["queued"], serde_json::Value::Bool(true));
+        assert!(body["jobId"].is_string());
+
+        let counts = state
+            .pool
+            .read(|conn| {
+                let jobs: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM summary_jobs", [], |row| row.get(0))
+                    .unwrap_or(0);
+                let transcripts: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM session_transcripts", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap_or(0);
+                let artifacts: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'transcript'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                let manifests: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'manifest'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok((jobs, transcripts, artifacts, manifests))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(counts.0, 1);
+        assert_eq!(counts.1, 1);
+        assert_eq!(counts.2, 1);
+        assert_eq!(counts.3, 1);
+
+        let files = std::fs::read_dir(tmp.path().join("memory"))
+            .unwrap()
+            .filter_map(|entry| {
+                entry
+                    .ok()
+                    .and_then(|value| value.file_name().into_string().ok())
+            })
+            .collect::<Vec<_>>();
+        assert!(files.iter().any(|name| name.ends_with("--transcript.md")));
+        assert!(files.iter().any(|name| name.ends_with("--manifest.md")));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn compaction_complete_writes_artifact_projection_and_clears_runtime_transcript() {
+        let (state, writer, tmp) = test_state("hooks-compaction");
+        let transcript = [
+            "User: preserve packages/daemon-rs MEMORY.md lineage.",
+            "Assistant: transcript artifact should remain canonical after compaction.",
+        ]
+        .join("\n")
+        .repeat(24);
+
+        let _ = session_end(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(SessionEndBody {
+                harness: Some("codex".to_string()),
+                transcript: Some(transcript),
+                transcript_path: None,
+                session_id: None,
+                session_key: Some("agent:agent-a:sess-2".to_string()),
+                cwd: Some("packages/daemon-rs".to_string()),
+                reason: None,
+                runtime_path: None,
+                agent_id: Some("agent-a".to_string()),
+            }),
+        )
+        .await;
+
+        let resp = compaction_complete(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CompactionCompleteBody {
+                harness: Some("codex".to_string()),
+                summary: Some("# Compaction Summary\n\n## packages/daemon-rs\n\nCompaction preserved the daemon-rs lineage work and the rolling MEMORY.md projection contract.".to_string()),
+                session_key: Some("agent:agent-a:sess-2".to_string()),
+                project: Some("packages/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["success"], serde_json::Value::Bool(true));
+        assert!(body["memoryId"].is_string());
+
+        let counts = state
+            .pool
+            .read(|conn| {
+                let compactions: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memory_artifacts WHERE source_kind = 'compaction'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
+                let transcripts: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM session_transcripts", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap_or(0);
+                Ok((compactions, transcripts))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(counts.0, 1);
+        assert_eq!(counts.1, 0);
+
+        let memory_md = std::fs::read_to_string(tmp.path().join("MEMORY.md")).unwrap();
+        assert!(memory_md.contains("Session Ledger (Last 30 Days)"));
+        assert!(memory_md.contains("[[memory/"));
+
+        let manifest = std::fs::read_dir(tmp.path().join("memory"))
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|value| value.path()))
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with("--manifest.md"))
+            })
+            .unwrap();
+        let manifest_text = std::fs::read_to_string(manifest).unwrap();
+        assert!(manifest_text.contains("compaction_path: memory/"));
+
+        drop(state);
+        let _ = writer.await;
+    }
 
     #[test]
     fn session_agent_id_parses_agent_session_keys() {

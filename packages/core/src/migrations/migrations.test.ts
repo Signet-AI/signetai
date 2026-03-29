@@ -488,6 +488,32 @@ describe("migration framework", () => {
 		});
 	});
 
+	test("migration 050 adds rolling-lineage artifact tables and summary job metadata", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const summaryCols = db.query("PRAGMA table_info(summary_jobs)").all() as Array<{ name: string }>;
+		const summaryNames = summaryCols.map((col) => col.name);
+		expect(summaryNames).toContain("session_id");
+		expect(summaryNames).toContain("trigger");
+		expect(summaryNames).toContain("captured_at");
+		expect(summaryNames).toContain("started_at");
+		expect(summaryNames).toContain("ended_at");
+
+		const tables = db
+			.query(
+				`SELECT name FROM sqlite_master
+			 WHERE type IN ('table', 'view') AND name IN ('memory_artifacts', 'memory_artifact_tombstones', 'memory_artifacts_fts')
+			 ORDER BY name`,
+			)
+			.all() as Array<{ name: string }>;
+		expect(tables.map((row) => row.name)).toEqual([
+			"memory_artifact_tombstones",
+			"memory_artifacts",
+			"memory_artifacts_fts",
+		]);
+	});
+
 	test("entities table has pinning columns after migration 022", () => {
 		db = createFreshDb();
 		runMigrations(db);

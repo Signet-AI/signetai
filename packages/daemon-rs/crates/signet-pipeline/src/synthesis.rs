@@ -1,8 +1,9 @@
-//! Synthesis worker: MEMORY.md regeneration from session summaries.
+//! Synthesis worker: deterministic MEMORY.md regeneration.
 //!
-//! Activity-triggered worker that consolidates session summaries
-//! into a unified MEMORY.md file. Uses exclusive write lock pattern.
+//! Renders MEMORY.md from canonical artifacts plus DB-native state after an
+//! activity window, instead of asking an LLM to rewrite the whole document.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,15 +11,11 @@ use serde::Serialize;
 use tokio::sync::{Mutex, watch};
 use tracing::{info, warn};
 
-use signet_core::db::DbPool;
+use signet_core::db::{DbPool, Priority};
 
-use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
+use crate::memory_lineage::write_memory_projection;
+use crate::provider::{LlmProvider, LlmSemaphore};
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-/// Configuration for the synthesis worker.
 #[derive(Debug, Clone)]
 pub struct SynthesisConfig {
     pub poll_ms: u64,
@@ -31,8 +28,8 @@ pub struct SynthesisConfig {
 impl Default for SynthesisConfig {
     fn default() -> Self {
         Self {
-            poll_ms: 30_000,         // 30s
-            min_interval_secs: 3600, // 1 hour min between syntheses
+            poll_ms: 30_000,
+            min_interval_secs: 3600,
             timeout_ms: 120_000,
             max_tokens: 8192,
             agents_dir: std::env::var("SIGNET_PATH").unwrap_or_else(|_| {
@@ -44,11 +41,6 @@ impl Default for SynthesisConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/// Result of synthesis.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SynthesisResult {
@@ -56,10 +48,6 @@ pub struct SynthesisResult {
     pub output_length: usize,
     pub duration_ms: u64,
 }
-
-// ---------------------------------------------------------------------------
-// Worker handle
-// ---------------------------------------------------------------------------
 
 pub struct SynthesisHandle {
     shutdown: watch::Sender<bool>,
@@ -72,10 +60,6 @@ impl SynthesisHandle {
         let _ = self.handle.await;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Start
-// ---------------------------------------------------------------------------
 
 pub fn start(
     pool: DbPool,
@@ -117,29 +101,24 @@ async fn worker_loop(
             break;
         }
 
-        // Enforce minimum interval
         if let Some(last) = last_synthesis
             && last.elapsed() < Duration::from_secs(config.min_interval_secs)
         {
             continue;
         }
 
-        // Check if synthesis is needed (any new summaries since last run)
         let needs_synthesis = match check_synthesis_needed(&pool, &last_synthesis).await {
             Ok(needed) => needed,
-            Err(e) => {
-                warn!(err = %e, "failed to check synthesis need");
+            Err(err) => {
+                warn!(err = %err, "failed to check synthesis need");
                 continue;
             }
         };
-
         if !needs_synthesis {
             continue;
         }
 
-        // Acquire exclusive write lock
         let _guard = write_lock.lock().await;
-
         info!("starting MEMORY.md synthesis");
         let start = std::time::Instant::now();
 
@@ -153,146 +132,88 @@ async fn worker_loop(
                     "synthesis completed"
                 );
             }
-            Err(e) => {
-                warn!(err = %e, "synthesis failed");
+            Err(err) => {
+                warn!(err = %err, "synthesis failed");
             }
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Core logic
-// ---------------------------------------------------------------------------
 
 async fn check_synthesis_needed(
     pool: &DbPool,
     last_run: &Option<std::time::Instant>,
 ) -> Result<bool, String> {
     if last_run.is_none() {
-        // First run — check if any summaries exist
         let count: usize = pool
             .read(|conn| {
                 Ok(conn
-                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |r| r.get(0))
+                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |row| {
+                        row.get(0)
+                    })
                     .unwrap_or(0))
             })
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|err| err.to_string())?;
         return Ok(count > 0);
     }
 
-    // Check for new completed summary jobs since last run
     let count: usize = pool
         .read(|conn| {
             Ok(conn
                 .query_row(
                     "SELECT COUNT(*) FROM summary_jobs WHERE status = 'completed' AND completed_at > datetime('now', '-1 hour')",
                     [],
-                    |r| r.get(0),
+                    |row| row.get(0),
                 )
                 .unwrap_or(0))
         })
         .await
-        .map_err(|e| e.to_string())?;
-
+        .map_err(|err| err.to_string())?;
     Ok(count > 0)
 }
 
 async fn run_synthesis(
     pool: &DbPool,
-    provider: &Arc<dyn LlmProvider>,
-    semaphore: &Arc<LlmSemaphore>,
+    _provider: &Arc<dyn LlmProvider>,
+    _semaphore: &Arc<LlmSemaphore>,
     config: &SynthesisConfig,
 ) -> Result<SynthesisResult, String> {
     let start = std::time::Instant::now();
-
-    // Load all session summaries
-    let summaries = pool
-        .read(|conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT summary, project, created_at FROM session_summaries ORDER BY created_at DESC LIMIT 50",
-            )?;
-            let rows: Vec<(String, Option<String>, String)> = stmt
-                .query_map([], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, Option<String>>(1)?,
-                        r.get::<_, String>(2)?,
-                    ))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-            Ok(rows)
+    let root = PathBuf::from(&config.agents_dir);
+    let data = pool
+        .write(Priority::Low, move |conn| {
+            let count: usize = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM session_summaries WHERE agent_id = ?1",
+                    ["default"],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            if count == 0 {
+                return Ok(serde_json::json!({
+                    "count": 0usize,
+                    "length": 0usize,
+                }));
+            }
+            let rendered = write_memory_projection(conn, &root, "default")
+                .map_err(signet_core::error::CoreError::Migration)?;
+            Ok(serde_json::json!({
+                "count": count,
+                "length": rendered.content.len(),
+            }))
         })
         .await
-        .map_err(|e| e.to_string())?;
-
-    if summaries.is_empty() {
-        return Ok(SynthesisResult {
-            summary_count: 0,
-            output_length: 0,
-            duration_ms: start.elapsed().as_millis() as u64,
-        });
-    }
-
-    let summary_count = summaries.len();
-
-    // Build synthesis prompt
-    let prompt = build_synthesis_prompt(&summaries);
-    let opts = GenerateOpts {
-        timeout_ms: Some(config.timeout_ms),
-        max_tokens: Some(config.max_tokens),
-    };
-
-    let p = provider.clone();
-    let raw = semaphore
-        .run(async { p.generate(&prompt, &opts).await })
-        .await
-        .map_err(|e| format!("LLM synthesis failed: {e}"))?;
-
-    // Validate output is markdown (not JSON error)
-    let output = &raw.text;
-    if output.starts_with('{') || output.starts_with('[') {
-        return Err("synthesis produced JSON instead of markdown".into());
-    }
-
-    // Write MEMORY.md
-    let memory_path = format!("{}/MEMORY.md", config.agents_dir);
-    tokio::fs::write(&memory_path, output)
-        .await
-        .map_err(|e| format!("failed to write MEMORY.md: {e}"))?;
+        .map_err(|err| err.to_string())?;
 
     Ok(SynthesisResult {
-        summary_count,
-        output_length: output.len(),
+        summary_count: data
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
+        output_length: data
+            .get("length")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
         duration_ms: start.elapsed().as_millis() as u64,
     })
-}
-
-fn build_synthesis_prompt(summaries: &[(String, Option<String>, String)]) -> String {
-    let entries: String = summaries
-        .iter()
-        .map(|(summary, project, date)| {
-            let proj = project.as_deref().unwrap_or("general");
-            format!("### [{date}] ({proj})\n{summary}\n")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!(
-        r#"You are a knowledge librarian. Synthesize the following session summaries into a unified MEMORY.md document.
-
-Structure the document with clear markdown sections. Group related information together.
-Focus on:
-- Key decisions and their rationale
-- User preferences and patterns
-- Active projects and their status
-- Important facts and constraints
-
-Session summaries (most recent first):
-
-{entries}
-
-Write the MEMORY.md document in clean markdown format. Do not include JSON or code fences."#
-    )
 }

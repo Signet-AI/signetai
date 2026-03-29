@@ -908,6 +908,48 @@ response. This lets callers retrieve the full conversation context
 behind a recalled memory without a separate API call.
 
 
+Canonical Markdown Lineage and MEMORY.md Projection
+---
+
+Rolling history now has an explicit authority split.
+
+Canonical historical content lives as immutable markdown artifacts in
+`$SIGNET_WORKSPACE/memory/`:
+
+- `--transcript.md`
+- `--summary.md`
+- `--compaction.md`
+
+Each session also has one mutable `--manifest.md` file. The manifest is the
+only artifact that may gain new links after session end, such as a later
+`compaction_path`.
+
+`MEMORY.md` is no longer canonical history. It is a rebuildable projection over:
+
+- durable memory rows for the Tier 1 head
+- persisted thread heads plus temporal DAG state for Tier 2
+- canonical artifact frontmatter for the strict 30-day session ledger
+
+The renderer is programmatic. LLM output in this lane is limited to the single
+`memory_sentence` stored in summary and compaction frontmatter, with a
+deterministic fallback when the quality gate fails. The final `MEMORY.md`
+projection always includes:
+
+- `## Global Head (Tier 1)`
+- `## Thread Heads (Tier 2)`
+- `## Session Ledger (Last 30 Days)`
+- `## Open Threads`
+- `## Durable Notes & Constraints`
+- `## Temporal Index`
+
+Session-end jobs write canonical transcript artifacts immediately, then the
+summary worker writes the matching canonical summary artifact for normal
+`session_end` jobs. `compaction-complete` writes a canonical compaction
+artifact and backfills the session manifest. Mid-session
+`session-checkpoint-extract` jobs remain DB-native and only write checkpoint
+nodes into `session_summaries`.
+
+
 Decision Auto-Protection
 ---
 

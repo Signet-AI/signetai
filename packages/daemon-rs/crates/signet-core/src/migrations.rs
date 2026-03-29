@@ -216,9 +216,19 @@ static MIGRATIONS: &[Migration] = &[
         name: "session-transcripts-compound-pk",
         sql: include_str!("sql/034-session-transcripts-compound-pk.sql"),
     },
+    Migration {
+        version: 35,
+        name: "temporal-heads",
+        sql: include_str!("sql/035-temporal-heads.sql"),
+    },
+    Migration {
+        version: 36,
+        name: "memory-md-rolling-window-lineage",
+        sql: include_str!("sql/036-memory-md-rolling-window-lineage.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 34;
+pub const LATEST_SCHEMA_VERSION: u32 = 36;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
@@ -555,6 +565,72 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
                 );
                 conn.execute_batch(&sql)?;
             }
+        }
+
+        35 => {
+            add_column_if_missing(conn, "session_summaries", "source_type", "TEXT");
+            add_column_if_missing(conn, "session_summaries", "source_ref", "TEXT");
+            add_column_if_missing(conn, "session_summaries", "meta_json", "TEXT");
+            conn.execute_batch(
+                "UPDATE session_summaries
+                    SET source_type = CASE
+                        WHEN source_type IS NOT NULL AND TRIM(source_type) != '' THEN source_type
+                        WHEN kind = 'session' THEN 'summary'
+                        WHEN kind = 'arc' THEN 'arc'
+                        WHEN kind = 'epoch' THEN 'epoch'
+                        ELSE 'summary'
+                    END
+                  WHERE source_type IS NULL OR TRIM(source_type) = '';
+                 CREATE INDEX IF NOT EXISTS idx_summaries_source_type
+                    ON session_summaries(source_type);
+                 CREATE INDEX IF NOT EXISTS idx_summaries_source_ref
+                    ON session_summaries(source_ref);
+                 DROP INDEX IF EXISTS idx_summaries_session_depth;
+                 DROP INDEX IF EXISTS idx_summaries_session_agent_depth;
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_session_agent_depth
+                    ON session_summaries(agent_id, session_key, depth)
+                    WHERE session_key IS NOT NULL
+                      AND COALESCE(source_type, 'summary') = 'summary';",
+            )?;
+        }
+        36 => {
+            for col in &[
+                ("summary_jobs", "session_id", "TEXT"),
+                (
+                    "summary_jobs",
+                    "trigger",
+                    "TEXT NOT NULL DEFAULT 'session_end'",
+                ),
+                ("summary_jobs", "captured_at", "TEXT"),
+                ("summary_jobs", "started_at", "TEXT"),
+                ("summary_jobs", "ended_at", "TEXT"),
+                ("summary_jobs", "leased_at", "TEXT"),
+                ("summary_jobs", "updated_at", "TEXT"),
+                ("summary_jobs", "failed_at", "TEXT"),
+                (
+                    "summary_jobs",
+                    "agent_id",
+                    "TEXT NOT NULL DEFAULT 'default'",
+                ),
+            ] {
+                add_column_if_missing(conn, col.0, col.1, col.2);
+            }
+            conn.execute_batch(
+                "UPDATE summary_jobs
+                    SET session_id = COALESCE(session_id, session_key, id),
+                        trigger = COALESCE(NULLIF(trigger, ''), 'session_end'),
+                        captured_at = COALESCE(captured_at, completed_at, created_at),
+                        ended_at = COALESCE(ended_at, completed_at),
+                        updated_at = COALESCE(updated_at, completed_at, created_at),
+                        agent_id = COALESCE(NULLIF(agent_id, ''), 'default')
+                  WHERE 1 = 1;
+                 CREATE INDEX IF NOT EXISTS idx_summary_jobs_agent_trigger
+                    ON summary_jobs(agent_id, trigger, created_at);
+                 CREATE INDEX IF NOT EXISTS idx_summary_jobs_agent_session
+                    ON summary_jobs(agent_id, session_key, created_at);
+                 INSERT INTO memory_artifacts_fts(memory_artifacts_fts)
+                 VALUES ('rebuild');",
+            )?;
         }
         _ => {}
     }

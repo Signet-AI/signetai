@@ -1584,11 +1584,14 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_yml",
+ "sha2",
  "signet-core",
  "signet-services",
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

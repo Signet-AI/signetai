@@ -55,6 +55,7 @@ import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 import { up as threadHeads } from "./048-thread-heads";
 import { up as sessionExtractCursors } from "./049-session-extract-cursors";
+import { up as memoryMdRollingWindowLineage } from "./050-memory-md-rolling-window-lineage";
 
 // -- Public interface consumed by Database.init() --
 
@@ -471,6 +472,21 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: sessionExtractCursors,
 		artifacts: {
 			tables: ["session_extract_cursors"],
+		},
+	},
+	{
+		version: 50,
+		name: "memory-md-rolling-window-lineage",
+		up: memoryMdRollingWindowLineage,
+		artifacts: {
+			tables: ["memory_artifacts", "memory_artifact_tombstones", "memory_artifacts_fts"],
+			columns: [
+				{ table: "summary_jobs", column: "session_id" },
+				{ table: "summary_jobs", column: "trigger" },
+				{ table: "summary_jobs", column: "captured_at" },
+				{ table: "summary_jobs", column: "started_at" },
+				{ table: "summary_jobs", column: "ended_at" },
+			],
 		},
 	},
 ];

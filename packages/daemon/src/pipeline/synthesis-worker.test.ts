@@ -6,34 +6,21 @@ import { join } from "node:path";
 let agentsDir = "";
 let previousSignetPath: string | undefined;
 
-const mockHandleSynthesisRequest = mock((req?: { readonly agentId?: string }) => ({
-	harness: "daemon",
-	model: "synthesis",
-	prompt: `synthesize memory ${req?.agentId ?? "default"}`,
-	fileCount: 1,
-	indexBlock: "",
-}));
+const mockHandleSynthesisRequest = mock(
+	(_req?: { readonly trigger?: string }, opts?: { readonly agentId?: string }) => ({
+		harness: "daemon",
+		model: "projection",
+		prompt: `# MEMORY\n\nprojection for ${opts?.agentId ?? "default"}`,
+		fileCount: 1,
+		indexBlock: "",
+	}),
+);
 const mockWriteMemoryMd = mock((_content: string, _opts?: { owner?: string }) => ({ ok: true as const }));
-const mockAppendSynthesisIndexBlock = mock((content: string) => content);
-const mockGetSynthesisProvider = mock(() => ({ name: "mock-synthesis-provider" }));
-const mockGenerateWithTracking = mock(async () => ({
-	text: "# MEMORY\n",
-	usage: null,
-}));
 const mockActiveSessionCount = mock(() => 0);
 
 mock.module("../hooks", () => ({
-	appendSynthesisIndexBlock: mockAppendSynthesisIndexBlock,
 	handleSynthesisRequest: mockHandleSynthesisRequest,
 	writeMemoryMd: mockWriteMemoryMd,
-}));
-
-mock.module("../synthesis-llm", () => ({
-	getSynthesisProvider: mockGetSynthesisProvider,
-}));
-
-mock.module("./provider", () => ({
-	generateWithTracking: mockGenerateWithTracking,
 }));
 
 mock.module("../session-tracker", () => ({
@@ -74,14 +61,7 @@ describe("synthesis-worker", () => {
 		mkdirSync(agentsDir, { recursive: true });
 		mockHandleSynthesisRequest.mockClear();
 		mockWriteMemoryMd.mockClear();
-		mockAppendSynthesisIndexBlock.mockClear();
-		mockGetSynthesisProvider.mockClear();
-		mockGenerateWithTracking.mockClear();
 		mockActiveSessionCount.mockClear();
-		mockGenerateWithTracking.mockImplementation(async () => ({
-			text: "# MEMORY\n",
-			usage: null,
-		}));
 	});
 
 	afterEach(async () => {
@@ -120,7 +100,7 @@ describe("synthesis-worker", () => {
 				skipped: true,
 				reason: "Synthesis already in progress",
 			});
-			expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+			expect(mockHandleSynthesisRequest).not.toHaveBeenCalled();
 			if (lockToken === null) {
 				throw new Error("expected write lock token");
 			}
@@ -131,15 +111,7 @@ describe("synthesis-worker", () => {
 		}
 	});
 
-	it("drain waits for an in-flight synthesis to finish after stop", async () => {
-		let resolveRun: ((value: { text: string; usage: null }) => void) | null = null;
-		mockGenerateWithTracking.mockImplementationOnce(
-			() =>
-				new Promise((resolve) => {
-					resolveRun = resolve;
-				}),
-		);
-
+	it("writes the rendered projection through the shared MEMORY.md helper", async () => {
 		const worker = startSynthesisWorker({
 			enabled: true,
 			provider: "claude-code",
@@ -149,44 +121,19 @@ describe("synthesis-worker", () => {
 			idleGapMinutes: 15,
 		});
 
-		const runPromise = worker.triggerNow();
 		try {
-			await Promise.resolve();
-
-			expect(worker.isSynthesizing).toBe(true);
-
-			let drained = false;
-			const drainPromise = worker.drain().then((result) => {
-				expect(result).toBe("completed");
-				drained = true;
-			});
-
-			worker.stop();
-			await Promise.resolve();
-			expect(drained).toBe(false);
-
-			if (resolveRun === null) {
-				throw new Error("run resolver not initialized");
-			}
-			resolveRun({ text: "# Updated memory\n", usage: null });
-
-			const result = await runPromise;
-			await drainPromise;
-
+			const result = await worker.triggerNow();
 			expect(result).toEqual({
 				success: true,
 				skipped: false,
 				reason: undefined,
 			});
-			expect(drained).toBe(true);
 			expect(worker.isSynthesizing).toBe(false);
-			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# Updated memory\n", { owner: "synthesis-worker" });
+			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# MEMORY\n\nprojection for default", {
+				owner: "synthesis-worker",
+			});
 		} finally {
 			worker.stop();
-			if (resolveRun !== null) {
-				resolveRun({ text: "# Updated memory\n", usage: null });
-			}
-			await runPromise.catch(() => undefined);
 			await worker.drain();
 		}
 	});
@@ -210,7 +157,7 @@ describe("synthesis-worker", () => {
 			skipped: true,
 			reason: "Synthesis worker stopped",
 		});
-		expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+		expect(mockHandleSynthesisRequest).not.toHaveBeenCalled();
 	});
 
 	it("skips non-forced manual synthesis when the last run was too recent", async () => {
@@ -236,7 +183,7 @@ describe("synthesis-worker", () => {
 				skipped: true,
 				reason: "Too recent — last run 5m ago, minimum is 60m",
 			});
-			expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+			expect(mockHandleSynthesisRequest).not.toHaveBeenCalled();
 		} finally {
 			worker.stop();
 			expect(await worker.drain()).toBe("completed");
@@ -292,8 +239,10 @@ describe("synthesis-worker", () => {
 				skipped: false,
 				reason: undefined,
 			});
-			expect(mockGenerateWithTracking).toHaveBeenCalledTimes(1);
-			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# MEMORY\n", { owner: "synthesis-worker" });
+			expect(mockHandleSynthesisRequest).toHaveBeenCalledTimes(1);
+			expect(mockWriteMemoryMd).toHaveBeenCalledWith("# MEMORY\n\nprojection for default", {
+				owner: "synthesis-worker",
+			});
 		} finally {
 			worker.stop();
 			expect(await worker.drain()).toBe("completed");
@@ -319,9 +268,10 @@ describe("synthesis-worker", () => {
 			expect(mockHandleSynthesisRequest).toHaveBeenCalledWith(
 				expect.objectContaining({
 					trigger: "scheduled",
+				}),
+				expect.objectContaining({
 					agentId: "agent-a",
 				}),
-				expect.any(Object),
 			);
 		} finally {
 			worker.stop();
@@ -349,7 +299,7 @@ describe("synthesis-worker", () => {
 				skipped: true,
 				reason: "Synthesis already in progress (queued forced retry)",
 			});
-			expect(mockGenerateWithTracking).not.toHaveBeenCalled();
+			expect(mockHandleSynthesisRequest).not.toHaveBeenCalled();
 			if (lockToken === null) {
 				throw new Error("expected write lock token");
 			}
@@ -421,17 +371,19 @@ describe("synthesis-worker", () => {
 	it("does not starve later agents when an earlier forced retry keeps returning busy", async () => {
 		let current = "default";
 		const seen: string[] = [];
-		mockHandleSynthesisRequest.mockImplementation((req?: { readonly agentId?: string }) => {
-			current = req?.agentId ?? "default";
-			seen.push(current);
-			return {
-				harness: "daemon",
-				model: "synthesis",
-				prompt: `synthesize memory ${current}`,
-				fileCount: 1,
-				indexBlock: "",
-			};
-		});
+		mockHandleSynthesisRequest.mockImplementation(
+			(_req?: { readonly trigger?: string }, opts?: { readonly agentId?: string }) => {
+				current = opts?.agentId ?? "default";
+				seen.push(current);
+				return {
+					harness: "daemon",
+					model: "projection",
+					prompt: `# MEMORY\n\nprojection for ${current}`,
+					fileCount: 1,
+					indexBlock: "",
+				};
+			},
+		);
 		mockWriteMemoryMd.mockImplementation(() =>
 			current === "agent-a"
 				? {
@@ -533,45 +485,4 @@ describe("synthesis-worker", () => {
 			expect(await worker.drain()).toBe("completed");
 		}
 	});
-
-	it("drain times out if an in-flight synthesis never resolves", async () => {
-		let releaseRun: (() => void) | null = null;
-		mockGenerateWithTracking.mockImplementationOnce(() =>
-			new Promise<void>((resolve) => {
-				releaseRun = resolve;
-			}).then(() => ({
-				text: "# MEMORY\n",
-				usage: null,
-			})),
-		);
-
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 10,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
-
-		const runPromise = worker.triggerNow();
-		await Promise.resolve();
-		worker.stop();
-
-		try {
-			const drainStart = Date.now();
-			const drainResult = await worker.drain();
-			const drainElapsed = Date.now() - drainStart;
-
-			expect(drainResult).toBe("timeout");
-			expect(drainElapsed).toBeGreaterThanOrEqual(10 + 1000 - 5);
-			expect(drainElapsed).toBeLessThan(6000);
-			expect(worker.isSynthesizing).toBe(true);
-		} finally {
-			if (releaseRun !== null) {
-				releaseRun();
-			}
-			await runPromise.catch(() => undefined);
-		}
-	}, 10_000);
 });

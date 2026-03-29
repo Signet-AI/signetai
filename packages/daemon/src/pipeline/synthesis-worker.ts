@@ -5,9 +5,8 @@
  * activity and triggers synthesis after an idle gap — when the user has
  * stopped using sessions for a configurable number of minutes.
  *
- * Uses a dedicated synthesis LLM provider (separate from extraction)
- * because synthesis needs a smarter model that can reason across long
- * context, whereas extraction uses tiny local models for tagging.
+ * Renders MEMORY.md programmatically from canonical artifacts, thread
+ * heads, and DB-native runtime state after an idle gap.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -15,11 +14,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PipelineSynthesisConfig } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
-import { appendSynthesisIndexBlock, handleSynthesisRequest, writeMemoryMd } from "../hooks";
+import { handleSynthesisRequest, writeMemoryMd } from "../hooks";
 import { logger } from "../logger";
 import { activeSessionCount } from "../session-tracker";
-import { getSynthesisProvider } from "../synthesis-llm";
-import { generateWithTracking } from "./provider";
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -177,40 +174,24 @@ async function runSynthesis(config: PipelineSynthesisConfig, agentId?: string): 
 	});
 
 	try {
-		const synthesisData = handleSynthesisRequest({ trigger: "scheduled", agentId }, { maxTokens: config.maxTokens });
+		const synthesisData = handleSynthesisRequest(
+			{ trigger: "scheduled" },
+			{
+				maxTokens: config.maxTokens,
+				agentId,
+			},
+		);
 
 		if (synthesisData.fileCount === 0) {
 			logger.info("synthesis", "No synthesis sources available, skipping");
 			return "empty";
 		}
 
-		// Call the synthesis-specific LLM provider
-		const provider = getSynthesisProvider();
-		const result = await generateWithTracking(provider, synthesisData.prompt, {
-			maxTokens: config.maxTokens,
-			timeoutMs: config.timeout,
-		});
-
-		if (!result.text || result.text.trim().length === 0) {
-			logger.warn("synthesis", "LLM returned empty synthesis");
+		if (!synthesisData.prompt || synthesisData.prompt.trim().length === 0) {
+			logger.warn("synthesis", "Renderer returned empty MEMORY.md projection");
 			return "failed";
 		}
-
-		// Guard against non-markdown output (e.g. raw JSON error blobs)
-		const trimmed = result.text.trim();
-		if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-			try {
-				JSON.parse(trimmed);
-				logger.error("synthesis", "LLM returned JSON instead of markdown, skipping write", undefined, {
-					preview: trimmed.slice(0, 200),
-				});
-				return "failed";
-			} catch {
-				// Not valid JSON — markdown starting with [ or { is fine
-			}
-		}
-
-		const finalText = appendSynthesisIndexBlock(result.text, synthesisData.indexBlock ?? "");
+		const finalText = synthesisData.prompt.trimEnd();
 
 		// Write MEMORY.md via shared helper (handles backup)
 		const writeResult = writeMemoryMd(finalText, { owner: "synthesis-worker" });
@@ -226,12 +207,6 @@ async function runSynthesis(config: PipelineSynthesisConfig, agentId?: string): 
 		logger.info("synthesis", "MEMORY.md synthesized", {
 			sourceItems: synthesisData.fileCount,
 			outputLength: finalText.length,
-			...(result.usage
-				? {
-						inputTokens: result.usage.inputTokens,
-						outputTokens: result.usage.outputTokens,
-					}
-				: {}),
 		});
 
 		return "ok";

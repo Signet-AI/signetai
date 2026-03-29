@@ -1,7 +1,7 @@
 ---
 title: "MEMORY.md Rolling Window Lineage"
 id: memory-md-rolling-window-lineage
-status: approved
+status: complete
 informed_by:
   - docs/research/technical/RESEARCH-MEMORY-MD-ROLLING-WINDOW-LINKAGE.md
   - docs/research/technical/RESEARCH-LCM-ACP.md
@@ -24,7 +24,7 @@ draft_quality: "implementation-ready planning spec"
 
 Spec metadata:
 - ID: `memory-md-rolling-window-lineage`
-- Status: `approved`
+- Status: `complete`
 - Hard depends on: `memory-md-temporal-head`, `lossless-working-memory-runtime`, `session-continuity-protocol`
 - Registry: `docs/specs/INDEX.md`
 

@@ -7,7 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,7 @@ process.env.SIGNET_PATH = TEST_DIR;
 
 const { initDbAccessor, closeDbAccessor } = await import("../src/db-accessor");
 const hooks = await import("../src/hooks");
+const lineage = await import("../src/memory-lineage");
 const {
 	handleSessionStart,
 	handlePreCompaction,
@@ -32,6 +33,19 @@ const {
 	getAllScoredCandidates,
 	writeMemoryMd: synthWriteMemoryMd,
 } = hooks;
+const {
+	deriveSessionToken,
+	hashNormalizedBody,
+	normalizeMarkdownBody,
+	reindexMemoryArtifacts,
+	removeCanonicalSession,
+	renderMemoryProjection,
+	resolveMemorySentence,
+	sanitizeTranscriptV1,
+	writeCompactionArtifact,
+	writeSummaryArtifact,
+	writeTranscriptArtifact,
+} = lineage;
 
 // ============================================================================
 // Helpers
@@ -177,10 +191,15 @@ function createMemoryDb(
 		CREATE TABLE IF NOT EXISTS summary_jobs (
 			id TEXT PRIMARY KEY,
 			session_key TEXT,
+			session_id TEXT,
 			harness TEXT NOT NULL,
 			project TEXT,
 			agent_id TEXT NOT NULL DEFAULT 'default',
 			transcript TEXT NOT NULL,
+			trigger TEXT NOT NULL DEFAULT 'session_end',
+			captured_at TEXT,
+			started_at TEXT,
+			ended_at TEXT,
 			status TEXT NOT NULL DEFAULT 'pending',
 			attempts INTEGER DEFAULT 0,
 			max_attempts INTEGER DEFAULT 3,
@@ -298,6 +317,76 @@ function createMemoryDb(
 	`);
 
 	db.exec(`
+		CREATE TABLE IF NOT EXISTS memory_artifacts (
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			source_path TEXT NOT NULL,
+			source_sha256 TEXT NOT NULL,
+			source_kind TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			session_key TEXT,
+			session_token TEXT NOT NULL,
+			project TEXT,
+			harness TEXT,
+			captured_at TEXT NOT NULL,
+			started_at TEXT,
+			ended_at TEXT,
+			manifest_path TEXT,
+			source_node_id TEXT,
+			memory_sentence TEXT,
+			memory_sentence_quality TEXT,
+			content TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (agent_id, source_path)
+		)
+	`);
+
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS memory_artifact_tombstones (
+			agent_id TEXT NOT NULL DEFAULT 'default',
+			session_token TEXT NOT NULL,
+			removed_at TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			removed_paths TEXT NOT NULL,
+			PRIMARY KEY (agent_id, session_token)
+		)
+	`);
+
+	db.exec(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS memory_artifacts_fts USING fts5(
+			content,
+			source_path,
+			content='memory_artifacts',
+			content_rowid='rowid'
+		)
+	`);
+
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memory_artifacts_fts_ai AFTER INSERT ON memory_artifacts
+		BEGIN
+			INSERT INTO memory_artifacts_fts(rowid, content, source_path)
+			VALUES (new.rowid, new.content, new.source_path);
+		END
+	`);
+
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memory_artifacts_fts_ad AFTER DELETE ON memory_artifacts
+		BEGIN
+			INSERT INTO memory_artifacts_fts(memory_artifacts_fts, rowid, content, source_path)
+			VALUES('delete', old.rowid, old.content, old.source_path);
+		END
+	`);
+
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memory_artifacts_fts_au AFTER UPDATE ON memory_artifacts
+		BEGIN
+			INSERT INTO memory_artifacts_fts(memory_artifacts_fts, rowid, content, source_path)
+			VALUES('delete', old.rowid, old.content, old.source_path);
+			INSERT INTO memory_artifacts_fts(rowid, content, source_path)
+			VALUES (new.rowid, new.content, new.source_path);
+		END
+	`);
+
+	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_summary_children (
 			parent_id TEXT NOT NULL,
 			child_id TEXT NOT NULL,
@@ -376,6 +465,14 @@ function upsertAgent(id: string, readPolicy: string, policyGroup?: string): void
 		 	updated_at = excluded.updated_at`,
 	).run(id, id, readPolicy, policyGroup ?? null, now, now);
 	db.close();
+}
+
+function ledgerSection(content: string): string {
+	const start = content.indexOf("## Session Ledger (Last 30 Days)");
+	if (start === -1) return "";
+	const next = content.indexOf("\n## Open Threads", start);
+	if (next === -1) return content.slice(start);
+	return content.slice(start, next);
 }
 
 // ============================================================================
@@ -1616,6 +1713,42 @@ describe("handleSessionEnd", () => {
 		},
 		{ timeout: 60000 },
 	);
+
+	test.serial("writes canonical transcript and manifest artifacts on session end", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "transcript.txt");
+		writeFileSync(
+			transcriptPath,
+			"User: please update packages/daemon/src/hooks.ts and keep the rolling ledger strict.\nAssistant: i updated packages/daemon/src/hooks.ts and documented the session ledger contract.\n".repeat(
+				8,
+			),
+		);
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-ledger",
+			sessionId: "sess-ledger",
+			cwd: "/tmp/signetai",
+		});
+
+		expect(result.queued).toBe(true);
+
+		const files = readdirSync(join(TEST_DIR, "memory")).sort();
+		const transcriptFile = files.find((name) => name.endsWith("--transcript.md"));
+		const manifestFile = files.find((name) => name.endsWith("--manifest.md"));
+		expect(transcriptFile).toBeDefined();
+		expect(manifestFile).toBeDefined();
+
+		const transcript = readFileSync(join(TEST_DIR, "memory", transcriptFile ?? ""), "utf-8");
+		const manifest = readFileSync(join(TEST_DIR, "memory", manifestFile ?? ""), "utf-8");
+
+		expect(transcript).toContain('kind: "transcript"');
+		expect(transcript).toContain('manifest_path: "memory/');
+		expect(transcript).toContain('memory_sentence: "Session signetai captured durable transcript context');
+		expect(manifest).toContain('summary_path: "memory/');
+		expect(manifest).toContain('transcript_path: "memory/');
+	});
 });
 
 // ============================================================================
@@ -1652,17 +1785,17 @@ describe("handleSynthesisRequest", () => {
 		const result = handleSynthesisRequest({ trigger: "manual" });
 
 		expect(result.harness).toBe("daemon");
-		expect(result.model).toBe("synthesis");
-		expect(result.prompt).toContain("MEMORY.md");
-		expect(result.prompt).toContain("Temporal DAG artifacts");
+		expect(result.model).toBe("projection");
+		expect(result.prompt).toContain("# Working Memory Summary");
 		expect(result.prompt).toContain("Thread Heads (Tier 2)");
-		expect(result.prompt).toContain("Candidate Thread Heads (Tier 2 seeds)");
+		expect(result.prompt).toContain("Session Ledger (Last 30 Days)");
+		expect(result.prompt).toContain("Temporal Index");
 		expect(result.prompt).toContain("User likes Bun");
 		expect(result.indexBlock).toContain("node-1");
 		expect(result.fileCount).toBe(2);
 	});
 
-	test.serial("includes persisted thread head seeds in synthesis prompt", async () => {
+	test.serial("includes persisted thread heads in rendered projection", async () => {
 		createMemoryDb([]);
 		const db = openTestDb();
 		db.prepare(
@@ -1688,13 +1821,13 @@ describe("handleSynthesisRequest", () => {
 
 		const result = handleSynthesisRequest({ trigger: "manual" });
 
-		expect(result.prompt).toContain("Candidate Thread Heads (Tier 2 seeds)");
+		expect(result.prompt).toContain("## Thread Heads (Tier 2)");
 		expect(result.prompt).toContain("project:rpg");
 		expect(result.prompt).toContain("node-rpg");
 		expect(result.prompt).toContain("William RPG planning thread");
 	});
 
-	test.serial("merges persisted and freshly derived thread heads in synthesis prompt", async () => {
+	test.serial("surfaces persisted thread heads and temporal index entries together", async () => {
 		createMemoryDb([]);
 		const db = openTestDb();
 		db.prepare(
@@ -1742,20 +1875,21 @@ describe("handleSynthesisRequest", () => {
 		const result = handleSynthesisRequest({ trigger: "manual" });
 
 		expect(result.prompt).toContain("project:rpg#session:sess-rpg#harness:test");
-		expect(result.prompt).toContain("project:greenscreen#source:sess-green#harness:test");
+		expect(result.indexBlock).toContain("node-green");
+		expect(result.prompt).toContain("/tmp/greenscreen");
 		expect(result.prompt).toContain("node-rpg");
-		expect(result.prompt).toContain("node-green");
 	});
 
-	test.serial("generates prompt with exact temporal index instructions", async () => {
+	test.serial("renders deterministic projection with required sections", async () => {
 		createMemoryDb([{ content: "Test session summary content", importance: 0.9 }]);
 
 		const result = handleSynthesisRequest({ trigger: "scheduled" });
 
-		expect(result.prompt).toContain("generating MEMORY.md");
-		expect(result.prompt).toContain("strict three-tier contract");
+		expect(result.prompt).toContain("# Working Memory Summary");
+		expect(result.prompt).toContain("## Global Head (Tier 1)");
+		expect(result.prompt).toContain("## Session Ledger (Last 30 Days)");
 		expect(result.prompt).toContain("Test session summary content");
-		expect(result.prompt).toContain("Exact Temporal Index Block");
+		expect(result.prompt).toContain("## Temporal Index");
 	});
 
 	test.serial("returns zero fileCount when no synthesis sources exist", async () => {
@@ -1777,6 +1911,394 @@ describe("handleSynthesisRequest", () => {
 		const result = handleSynthesisRequest({ trigger: "manual" }, { agentId: "agent-shared" });
 
 		expect(result.prompt).toContain("Shared synthesis memory");
+	});
+
+	test.serial(
+		"renders rolling session ledger rows from artifact frontmatter and honors tombstones on reindex",
+		async () => {
+			createMemoryDb([]);
+			const transcriptPath = join(TEST_DIR, "transcript.txt");
+			writeFileSync(
+				transcriptPath,
+				"User: keep packages/daemon/src/hooks.ts aligned with PR#390 and preserve memory artifact lineage.\nAssistant: packages/daemon/src/hooks.ts now preserves PR#390 lineage and rolling ledger links.\n".repeat(
+					8,
+				),
+			);
+
+			await handleSessionEnd({
+				harness: "test",
+				transcriptPath,
+				sessionKey: "sess-pr390",
+				sessionId: "sess-pr390",
+				cwd: "/tmp/signetai",
+			});
+
+			reindexMemoryArtifacts("default");
+			const before = handleSynthesisRequest({ trigger: "manual" });
+			expect(before.prompt).toContain("## Session Ledger (Last 30 Days)");
+			expect(before.prompt).toContain("session=sess-pr390");
+			expect(before.prompt).toContain("[[memory/");
+			expect(before.prompt).toContain("|transcript]]");
+			expect(before.prompt).toContain("|manifest]]");
+
+			const token = readdirSync(join(TEST_DIR, "memory"))
+				.find((name) => name.endsWith("--manifest.md"))
+				?.match(/--([a-z2-7]{16})--/)?.[1];
+			expect(token).toBeDefined();
+			if (token) {
+				removeCanonicalSession("default", token, "privacy test");
+			}
+			reindexMemoryArtifacts("default");
+			const after = handleSynthesisRequest({ trigger: "manual" });
+			expect(after.prompt).not.toContain("session=sess-pr390");
+		},
+	);
+});
+
+// ============================================================================
+// memory-lineage
+// ============================================================================
+
+describe("memory-lineage", () => {
+	test("checksum scope normalizes line endings and trailing whitespace", () => {
+		const bodyA = "alpha  \r\nbeta\t\r\n\r\n";
+		const bodyB = "alpha\nbeta\n";
+
+		expect(normalizeMarkdownBody(bodyA)).toBe("alpha\nbeta");
+		expect(hashNormalizedBody(bodyA)).toBe(hashNormalizedBody(bodyB));
+	});
+
+	test("sanitizeTranscriptV1 is deterministic", () => {
+		const raw = "User: hi  \r\nAssistant: there\t\r\n\r\n";
+		expect(sanitizeTranscriptV1(raw)).toBe("User: hi\nAssistant: there");
+		expect(sanitizeTranscriptV1(raw)).toBe(sanitizeTranscriptV1(raw));
+	});
+
+	test("deriveSessionToken is deterministic and agent-scoped", () => {
+		const a = deriveSessionToken("default", "sess-1", "sess-1");
+		const b = deriveSessionToken("default", "sess-1", "sess-1");
+		const c = deriveSessionToken("agent-b", "sess-1", "sess-1");
+
+		expect(a).toBe(b);
+		expect(a).not.toBe(c);
+		expect(a).toMatch(/^[a-z2-7]{16}$/);
+	});
+
+	test.serial("resolveMemorySentence falls back when provider emits low-signal output", async () => {
+		const sentence = await resolveMemorySentence(
+			"Updated packages/daemon/src/hooks.ts for PR#390 and verified rolling ledger lineage around manifest handling and synthesis projection rendering.",
+			"/tmp/signetai",
+			"test",
+			"summary",
+			{
+				name: "mock",
+				generate: async () => "Worked on task.",
+				available: async () => true,
+			},
+		);
+
+		expect(sentence.quality).toBe("fallback");
+		expect(sentence.text).toContain("signetai");
+		expect(sentence.text).toMatch(/[.!?]$/);
+	});
+
+	test.serial(
+		"summary artifacts are idempotent for identical content and reject mutation for different content",
+		async () => {
+			createMemoryDb([]);
+
+			const first = await writeSummaryArtifact({
+				agentId: "default",
+				sessionId: "sess-summary",
+				sessionKey: "sess-summary",
+				project: "/tmp/signetai",
+				harness: "test",
+				capturedAt: "2026-03-28T22:34:06.792Z",
+				startedAt: null,
+				endedAt: "2026-03-28T22:40:00.000Z",
+				summary:
+					"Finalized packages/daemon/src/memory-lineage.ts for PR#390, confirmed checksum behavior, and documented the rolling ledger projection contract for Signet memory artifacts.",
+			});
+
+			const second = await writeSummaryArtifact({
+				agentId: "default",
+				sessionId: "sess-summary",
+				sessionKey: "sess-summary",
+				project: "/tmp/signetai",
+				harness: "test",
+				capturedAt: "2026-03-28T22:34:06.792Z",
+				startedAt: null,
+				endedAt: "2026-03-28T22:40:00.000Z",
+				summary:
+					"Finalized packages/daemon/src/memory-lineage.ts for PR#390, confirmed checksum behavior, and documented the rolling ledger projection contract for Signet memory artifacts.",
+			});
+
+			expect(second.summaryPath).toBe(first.summaryPath);
+
+			await expect(
+				writeSummaryArtifact({
+					agentId: "default",
+					sessionId: "sess-summary",
+					sessionKey: "sess-summary",
+					project: "/tmp/signetai",
+					harness: "test",
+					capturedAt: "2026-03-28T22:34:06.792Z",
+					startedAt: null,
+					endedAt: "2026-03-28T22:40:00.000Z",
+					summary:
+						"Reworked packages/daemon/src/memory-lineage.ts again with a different summary body so the immutable artifact contract should reject mutation for this session path.",
+				}),
+			).rejects.toThrow("Refusing to mutate immutable artifact");
+		},
+	);
+
+	test.serial("compaction backfills only the manifest and keeps immutable transcript content unchanged", async () => {
+		createMemoryDb([]);
+
+		const transcript = writeTranscriptArtifact({
+			agentId: "default",
+			sessionId: "sess-compaction",
+			sessionKey: "sess-compaction",
+			project: "/tmp/signetai",
+			harness: "test",
+			capturedAt: "2026-03-28T22:34:06.792Z",
+			startedAt: null,
+			endedAt: "2026-03-28T22:40:00.000Z",
+			transcript:
+				"User: keep packages/daemon/src/hooks.ts and packages/daemon/src/memory-lineage.ts aligned with PR#390.\nAssistant: confirmed the rolling ledger and manifest lineage wiring is aligned.\n".repeat(
+					8,
+				),
+		});
+
+		const transcriptBefore = readFileSync(join(TEST_DIR, transcript.transcriptPath), "utf8");
+
+		const compaction = await writeCompactionArtifact({
+			agentId: "default",
+			sessionId: "sess-compaction",
+			sessionKey: "sess-compaction",
+			project: "/tmp/signetai",
+			harness: "test",
+			capturedAt: "2026-03-28T22:34:06.792Z",
+			startedAt: null,
+			endedAt: "2026-03-28T22:40:00.000Z",
+			summary:
+				"Compacted the Signet rolling lineage session, preserved PR#390 context, and linked the durable compaction narrative back to the canonical manifest for later drill-down.",
+		});
+
+		const transcriptAfter = readFileSync(join(TEST_DIR, transcript.transcriptPath), "utf8");
+		const manifest = readFileSync(join(TEST_DIR, compaction.manifestPath), "utf8");
+
+		expect(transcriptAfter).toBe(transcriptBefore);
+		expect(manifest).toContain('compaction_path: "memory/');
+		expect(manifest).toContain('kind: "manifest"');
+		expect(manifest).toContain("revision: 2");
+	});
+
+	test.serial("projection uses artifact frontmatter sentence and rejects low-signal frontmatter", async () => {
+		createMemoryDb([]);
+
+		const written = await writeSummaryArtifact({
+			agentId: "default",
+			sessionId: "sess-frontmatter",
+			sessionKey: "sess-frontmatter",
+			project: "/tmp/signetai",
+			harness: "test",
+			capturedAt: "2026-03-28T22:34:06.792Z",
+			startedAt: null,
+			endedAt: "2026-03-28T22:40:00.000Z",
+			summary:
+				"Summary body that should not appear as the ledger sentence because the projection must read the explicit memory_sentence from artifact frontmatter instead of rewriting from the body.",
+		});
+
+		const fullPath = join(TEST_DIR, written.summaryPath);
+		const original = readFileSync(fullPath, "utf8");
+		const customSentence =
+			"PR#390 kept packages/daemon/src/memory-lineage.ts deterministic while the Signet ledger continued sourcing row text from artifact frontmatter instead of body rewrites.";
+		const withCustom = original
+			.replace(/memory_sentence: .*\n/, `memory_sentence: ${JSON.stringify(customSentence)}\n`)
+			.replace(/memory_sentence_quality: .*\n/, 'memory_sentence_quality: "ok"\n');
+		writeFileSync(fullPath, withCustom);
+
+		reindexMemoryArtifacts("default");
+		const first = renderMemoryProjection("default").content;
+		expect(first).toContain(customSentence);
+		expect(first).not.toContain("Summary body that should not appear as the ledger sentence");
+
+		const withLowSignal = withCustom.replace(
+			/memory_sentence: .*\n/,
+			`memory_sentence: ${JSON.stringify("Worked on task.")}\n`,
+		);
+		writeFileSync(fullPath, withLowSignal);
+
+		reindexMemoryArtifacts("default");
+		const second = renderMemoryProjection("default").content;
+		expect(second).not.toContain("Worked on task.");
+		expect(second).toContain("Session signetai captured durable summary context");
+	});
+
+	test.serial("reindex skips checksum-mismatched artifacts and preserves runtime temporal telemetry", async () => {
+		createMemoryDb([]);
+
+		const written = await writeSummaryArtifact({
+			agentId: "default",
+			sessionId: "sess-reindex",
+			sessionKey: "sess-reindex",
+			project: "/tmp/signetai",
+			harness: "test",
+			capturedAt: "2026-03-28T22:34:06.792Z",
+			startedAt: null,
+			endedAt: "2026-03-28T22:40:00.000Z",
+			summary:
+				"Verified reindex parity for packages/daemon/src/memory-lineage.ts and preserved temporal telemetry rows while testing checksum validation behavior.",
+		});
+
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, project, depth, kind, content, token_count,
+				earliest_at, latest_at, session_key, harness,
+				agent_id, source_type, source_ref, meta_json, created_at
+			) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"telemetry-node",
+			"/tmp/signetai",
+			"Temporal telemetry row that must survive reindex.",
+			20,
+			"2026-03-28T22:34:06.792Z",
+			"2026-03-28T22:40:00.000Z",
+			"sess-reindex",
+			"test",
+			"default",
+			"summary",
+			"sess-reindex",
+			JSON.stringify({ source: "summary-worker" }),
+			"2026-03-28T22:40:00.000Z",
+		);
+		db.close();
+
+		const fullPath = join(TEST_DIR, written.summaryPath);
+		const tampered = readFileSync(fullPath, "utf8").replace(
+			"Verified reindex parity for packages/daemon/src/memory-lineage.ts and preserved temporal telemetry rows while testing checksum validation behavior.",
+			"Tampered summary body that no longer matches the stored content_sha256 checksum.",
+		);
+		writeFileSync(fullPath, tampered);
+
+		reindexMemoryArtifacts("default");
+
+		const dbAfter = openTestDb();
+		const artifact = dbAfter
+			.prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = ? AND source_kind = 'summary'")
+			.get("default");
+		const telemetry = dbAfter.prepare("SELECT id, content FROM session_summaries WHERE id = ?").get("telemetry-node") as
+			| { id: string; content: string }
+			| undefined;
+		dbAfter.close();
+
+		expect(artifact).toBeNull();
+		expect(telemetry?.content).toBe("Temporal telemetry row that must survive reindex.");
+	});
+
+	test.serial(
+		"projection keeps all 1500 in-window sessions without clipping",
+		async () => {
+			createMemoryDb([]);
+
+			const now = Date.now() - 60_000;
+			const transcript =
+				"User: keep packages/daemon/src/memory-lineage.ts anchored to packages/daemon/src/hooks.ts for the rolling ledger contract.\nAssistant: confirmed the ledger row stays deterministic and linked.\n".repeat(
+					8,
+				);
+
+			for (let day = 0; day < 30; day++) {
+				for (let idx = 0; idx < 50; idx++) {
+					const at = new Date(now - day * 24 * 60 * 60 * 1000 - idx * 1000).toISOString();
+					const sessionId = `sess-${day}-${idx}`;
+					writeTranscriptArtifact({
+						agentId: "default",
+						sessionId,
+						sessionKey: sessionId,
+						project: "/tmp/signetai",
+						harness: "test",
+						capturedAt: at,
+						startedAt: null,
+						endedAt: at,
+						transcript,
+					});
+				}
+			}
+
+			const content = renderMemoryProjection("default").content;
+			const ledger = ledgerSection(content);
+			const count = ledger.match(/\| session=/g)?.length ?? 0;
+
+			expect(count).toBe(1500);
+		},
+		60_000,
+	);
+
+	test.serial("multi-agent projection and reindex stay scoped without cross-agent bleed", async () => {
+		createMemoryDb([]);
+		upsertAgent("agent-b", "isolated");
+
+		writeTranscriptArtifact({
+			agentId: "default",
+			sessionId: "sess-shared",
+			sessionKey: "sess-shared",
+			project: "/tmp/default-proj",
+			harness: "test",
+			capturedAt: "2026-03-28T22:34:06.792Z",
+			startedAt: null,
+			endedAt: "2026-03-28T22:40:00.000Z",
+			transcript:
+				"User: keep packages/daemon/src/memory-lineage.ts scoped to /tmp/default-proj.\nAssistant: confirmed default agent lineage is isolated.\n".repeat(
+					8,
+				),
+		});
+
+		writeTranscriptArtifact({
+			agentId: "agent-b",
+			sessionId: "sess-shared",
+			sessionKey: "sess-shared",
+			project: "/tmp/agent-b-proj",
+			harness: "test",
+			capturedAt: "2026-03-28T22:34:07.792Z",
+			startedAt: null,
+			endedAt: "2026-03-28T22:40:01.000Z",
+			transcript:
+				"User: keep packages/daemon/src/memory-lineage.ts scoped to /tmp/agent-b-proj.\nAssistant: confirmed agent-b lineage is isolated.\n".repeat(
+					8,
+				),
+		});
+
+		const defaultView = renderMemoryProjection("default").content;
+		const agentView = renderMemoryProjection("agent-b").content;
+
+		expect(defaultView).toContain("/tmp/default-proj");
+		expect(defaultView).not.toContain("/tmp/agent-b-proj");
+		expect(agentView).toContain("/tmp/agent-b-proj");
+		expect(agentView).not.toContain("/tmp/default-proj");
+	});
+
+	test.serial("projection emits workspace-root-relative wikilinks", async () => {
+		createMemoryDb([]);
+
+		await writeSummaryArtifact({
+			agentId: "default",
+			sessionId: "sess-links",
+			sessionKey: "sess-links",
+			project: "/tmp/signetai",
+			harness: "test",
+			capturedAt: "2026-03-28T22:34:06.792Z",
+			startedAt: null,
+			endedAt: "2026-03-28T22:40:00.000Z",
+			summary:
+				"Confirmed the Signet projection emits workspace-root-relative wikilinks for summary, transcript, and manifest lineage artifacts during rolling ledger rendering.",
+		});
+
+		const content = renderMemoryProjection("default").content;
+		expect(content).toMatch(/\[\[memory\/.+--summary\.md\|summary\]\]/);
+		expect(content).toMatch(/\[\[memory\/.+--manifest\.md\|manifest\]\]/);
+		expect(content).not.toContain(TEST_DIR);
 	});
 });
 

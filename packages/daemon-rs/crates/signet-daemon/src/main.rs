@@ -171,9 +171,10 @@ async fn main() -> anyhow::Result<()> {
     // race between writes and provider validation.
     preflight_extraction(&state).await;
 
-    // Start extraction worker and wire its live runtime-stats handle into
-    // AppState so /api/status reports real worker state.
+    // Start pipeline workers and wire their live runtime state into AppState.
     let _ = start_extraction_worker_inner(state.as_ref(), true).await;
+    let _ = start_summary_worker(state.as_ref()).await;
+    let _ = start_synthesis_worker(state.as_ref()).await;
 
     // Build router
     let app = Router::new()
@@ -578,6 +579,8 @@ async fn main() -> anyhow::Result<()> {
 
     info!("shutting down");
 
+    stop_synthesis_worker(state.as_ref()).await;
+    stop_summary_worker(state.as_ref()).await;
     stop_extraction_worker(state.as_ref()).await;
 
     // Drop state to close DB channels, then await writer
@@ -701,9 +704,8 @@ async fn start_extraction_worker_inner(state: &AppState, dead_letter_on_blocked:
 
     if !worker_supports_extraction_provider(&effective_provider) {
         let now = chrono::Utc::now().to_rfc3339();
-        let reason_prefix = format!(
-            "{effective_provider} is not supported by daemon-rs extraction worker"
-        );
+        let reason_prefix =
+            format!("{effective_provider} is not supported by daemon-rs extraction worker");
         let fallback_provider = pipeline.extraction.fallback_provider.as_str();
         let ollama_fallback_endpoint = resolve_runtime_extraction_endpoint(
             "ollama",
@@ -726,9 +728,7 @@ async fn start_extraction_worker_inner(state: &AppState, dead_letter_on_blocked:
                 });
                 effective_provider = "ollama".to_string();
             } else {
-                let reason = format!(
-                    "{reason_prefix}; ollama fallback startup preflight failed"
-                );
+                let reason = format!("{reason_prefix}; ollama fallback startup preflight failed");
                 if dead_letter_on_blocked {
                     dead_letter_pending_extraction_jobs(state, &reason, &now).await;
                 }
@@ -831,12 +831,8 @@ async fn start_extraction_worker_inner(state: &AppState, dead_letter_on_blocked:
         structural_enabled: pipeline.structural.enabled,
     };
 
-    let handle = signet_pipeline::worker::start(
-        state.pool.clone(),
-        provider,
-        semaphore,
-        worker_config,
-    );
+    let handle =
+        signet_pipeline::worker::start(state.pool.clone(), provider, semaphore, worker_config);
     let mut slot = state.extraction_worker_handle.lock().await;
     if slot.is_none() {
         let stats = handle.stats_handle();
@@ -866,6 +862,148 @@ pub(crate) async fn stop_extraction_worker(state: &AppState) {
     }
 
     *state.extraction_worker_stats.write().await = None;
+}
+
+pub(crate) async fn start_summary_worker(state: &AppState) -> bool {
+    {
+        let handle = state.summary_worker_handle.lock().await;
+        if handle.is_some() {
+            return true;
+        }
+    }
+
+    let Some(pipeline) = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+    else {
+        return false;
+    };
+
+    if !pipeline.enabled || pipeline.shadow_mode || pipeline.paused || state.pipeline_paused() {
+        return false;
+    }
+    if !pipeline.synthesis.enabled || pipeline.synthesis.provider == "none" {
+        return false;
+    }
+
+    let provider =
+        signet_pipeline::provider::from_config(&signet_pipeline::provider::LlmProviderConfig {
+            provider: pipeline.synthesis.provider.clone(),
+            model: pipeline.synthesis.model.clone(),
+            base_url: pipeline.synthesis.endpoint.clone(),
+            api_key: std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            timeout_ms: Some(pipeline.synthesis.timeout),
+        });
+    let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
+    let handle = signet_pipeline::summary::start(
+        state.pool.clone(),
+        provider,
+        semaphore,
+        signet_pipeline::summary::SummaryConfig {
+            max_retries: pipeline.worker.max_retries,
+            max_tokens: pipeline.synthesis.max_tokens as u32,
+            timeout_ms: pipeline.synthesis.timeout,
+            agents_dir: state.config.base_path.clone(),
+            ..Default::default()
+        },
+    );
+
+    let mut slot = state.summary_worker_handle.lock().await;
+    if slot.is_none() {
+        *slot = Some(handle);
+        true
+    } else {
+        drop(slot);
+        handle.stop().await;
+        true
+    }
+}
+
+pub(crate) async fn stop_summary_worker(state: &AppState) {
+    let handle = {
+        let mut slot = state.summary_worker_handle.lock().await;
+        slot.take()
+    };
+
+    if let Some(handle) = handle {
+        handle.stop().await;
+    }
+}
+
+pub(crate) async fn start_synthesis_worker(state: &AppState) -> bool {
+    {
+        let handle = state.synthesis_worker_handle.lock().await;
+        if handle.is_some() {
+            return true;
+        }
+    }
+
+    let Some(pipeline) = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+    else {
+        return false;
+    };
+
+    if !pipeline.enabled || pipeline.shadow_mode || pipeline.paused || state.pipeline_paused() {
+        return false;
+    }
+    if !pipeline.synthesis.enabled || pipeline.synthesis.provider == "none" {
+        return false;
+    }
+
+    let provider =
+        signet_pipeline::provider::from_config(&signet_pipeline::provider::LlmProviderConfig {
+            provider: pipeline.synthesis.provider.clone(),
+            model: pipeline.synthesis.model.clone(),
+            base_url: pipeline.synthesis.endpoint.clone(),
+            api_key: std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            timeout_ms: Some(pipeline.synthesis.timeout),
+        });
+    let semaphore = Arc::new(signet_pipeline::provider::LlmSemaphore::default());
+    let handle = signet_pipeline::synthesis::start(
+        state.pool.clone(),
+        provider,
+        semaphore,
+        signet_pipeline::synthesis::SynthesisConfig {
+            timeout_ms: pipeline.synthesis.timeout,
+            max_tokens: pipeline.synthesis.max_tokens as u32,
+            min_interval_secs: pipeline.synthesis.idle_gap_minutes.saturating_mul(60),
+            agents_dir: state.config.base_path.to_string_lossy().to_string(),
+            ..Default::default()
+        },
+    );
+
+    let mut slot = state.synthesis_worker_handle.lock().await;
+    if slot.is_none() {
+        *slot = Some(handle);
+        true
+    } else {
+        drop(slot);
+        handle.stop().await;
+        true
+    }
+}
+
+pub(crate) async fn stop_synthesis_worker(state: &AppState) {
+    let handle = {
+        let mut slot = state.synthesis_worker_handle.lock().await;
+        slot.take()
+    };
+
+    if let Some(handle) = handle {
+        handle.stop().await;
+    }
 }
 
 async fn extraction_probe(
@@ -926,7 +1064,10 @@ async fn extraction_probe(
             "anthropic" => check_anthropic_health(extraction.endpoint.as_deref()).await,
             "opencode" => check_opencode_health(extraction.endpoint.as_deref()).await,
             _ => {
-                warn!(provider, "unknown extraction provider, assuming unavailable");
+                warn!(
+                    provider,
+                    "unknown extraction provider, assuming unavailable"
+                );
                 false
             }
         }
@@ -949,15 +1090,15 @@ async fn extraction_probe(
 
     let reason_prefix = unavailability_reason
         .unwrap_or_else(|| format!("{provider} unavailable during extraction startup preflight"));
-    info!(provider, "extraction provider unavailable, attempting fallback resolution");
+    info!(
+        provider,
+        "extraction provider unavailable, attempting fallback resolution"
+    );
 
     // Try fallback to ollama if configured — use the configured endpoint
     // (mirrors JS daemon which resolves Ollama base URL from config)
-    let ollama_fallback_endpoint = resolve_runtime_extraction_endpoint(
-        "ollama",
-        provider,
-        extraction.endpoint.as_deref(),
-    );
+    let ollama_fallback_endpoint =
+        resolve_runtime_extraction_endpoint("ollama", provider, extraction.endpoint.as_deref());
     if fallback_provider == "ollama" && provider != "ollama" {
         let ollama_ok = check_ollama_health(ollama_fallback_endpoint.as_deref()).await;
         if ollama_ok {
@@ -985,7 +1126,9 @@ async fn extraction_probe(
             status: "blocked".to_string(),
             degraded: true,
             fallback_applied: false,
-            reason: Some(format!("{reason_prefix}; ollama fallback startup preflight failed")),
+            reason: Some(format!(
+                "{reason_prefix}; ollama fallback startup preflight failed"
+            )),
             since: Some(now.clone()),
         };
         let full_reason = format!("{reason_prefix}; ollama fallback startup preflight failed");
@@ -1103,7 +1246,10 @@ fn host_matches_trusted_override(host: &str, candidate: &str) -> bool {
 
 fn host_in_trusted_override_list(host: &str, overrides_csv: Option<&str>) -> bool {
     overrides_csv
-        .map(|csv| csv.split(',').any(|entry| host_matches_trusted_override(host, entry)))
+        .map(|csv| {
+            csv.split(',')
+                .any(|entry| host_matches_trusted_override(host, entry))
+        })
         .unwrap_or(false)
 }
 
@@ -1131,7 +1277,9 @@ fn provider_endpoint_is_trusted_for_secret_probe(provider: &str, base: &str) -> 
         _ => false,
     }) || host_in_trusted_override_list(
         host,
-        std::env::var("SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS").ok().as_deref(),
+        std::env::var("SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS")
+            .ok()
+            .as_deref(),
     )
 }
 
@@ -1435,13 +1583,13 @@ mod tests {
     use crate::state::{AppState, ExtractionRuntimeState};
 
     use super::{
-        append_api_path, host_in_trusted_override_list, host_matches_trusted_override,
-        normalize_endpoint_base, provider_endpoint_is_trusted_for_secret_probe,
-        preflight_extraction, resolve_runtime_extraction_endpoint,
-        resolve_runtime_extraction_model, status, worker_supports_extraction_provider,
-        provider_is_unsupported_for_daemon_startup_preflight, dead_letter_pending_extraction_jobs,
-        resume_extraction_check, start_extraction_worker, start_extraction_worker_inner,
-        stop_extraction_worker,
+        append_api_path, dead_letter_pending_extraction_jobs, host_in_trusted_override_list,
+        host_matches_trusted_override, normalize_endpoint_base, preflight_extraction,
+        provider_endpoint_is_trusted_for_secret_probe,
+        provider_is_unsupported_for_daemon_startup_preflight, resolve_runtime_extraction_endpoint,
+        resolve_runtime_extraction_model, resume_extraction_check, start_extraction_worker,
+        start_extraction_worker_inner, status, stop_extraction_worker, stop_summary_worker,
+        stop_synthesis_worker, worker_supports_extraction_provider,
     };
 
     fn test_state_with_pipeline_config(
@@ -1515,7 +1663,9 @@ mod tests {
                 &EmbeddingConfig::default(),
                 None,
             )),
-            Some(signet_pipeline::worker::new_runtime_stats_handle(0.8, 30_000)),
+            Some(signet_pipeline::worker::new_runtime_stats_handle(
+                0.8, 30_000,
+            )),
             AuthMode::Local,
             None,
             AuthRateLimiter::from_rules(&rules),
@@ -1614,7 +1764,10 @@ mod tests {
             "anthropic.gateway.company.net",
             "*.company.net"
         ));
-        assert!(!host_matches_trusted_override("company.net", "*.company.net"));
+        assert!(!host_matches_trusted_override(
+            "company.net",
+            "*.company.net"
+        ));
         assert!(!host_matches_trusted_override(
             "proxy.company.net",
             "*.other.net"
@@ -1828,6 +1981,8 @@ mod tests {
         assert_eq!(extraction.status, "degraded");
         assert!(extraction.fallback_applied);
 
+        stop_synthesis_worker(state.as_ref()).await;
+        stop_summary_worker(state.as_ref()).await;
         stop_extraction_worker(state.as_ref()).await;
     }
 
@@ -1947,10 +2102,19 @@ mod tests {
         preflight_extraction(state.as_ref()).await;
 
         let axum::response::Json(body) = status(State(state)).await;
-        assert_eq!(body["providerResolution"]["extraction"]["status"], "disabled");
+        assert_eq!(
+            body["providerResolution"]["extraction"]["status"],
+            "disabled"
+        );
         assert_eq!(body["providerResolution"]["extraction"]["resolved"], "none");
-        assert_eq!(body["providerResolution"]["extraction"]["effective"], "none");
-        assert_eq!(body["providerResolution"]["extraction"]["reason"], serde_json::Value::Null);
+        assert_eq!(
+            body["providerResolution"]["extraction"]["effective"],
+            "none"
+        );
+        assert_eq!(
+            body["providerResolution"]["extraction"]["reason"],
+            serde_json::Value::Null
+        );
     }
 
     #[tokio::test]
@@ -1976,9 +2140,18 @@ mod tests {
 
         let axum::response::Json(body) = status(State(state)).await;
         assert_eq!(body["providerResolution"]["extraction"]["status"], "paused");
-        assert_eq!(body["providerResolution"]["extraction"]["resolved"], "claude-code");
-        assert_eq!(body["providerResolution"]["extraction"]["effective"], "none");
-        assert_eq!(body["providerResolution"]["extraction"]["reason"], serde_json::Value::Null);
+        assert_eq!(
+            body["providerResolution"]["extraction"]["resolved"],
+            "claude-code"
+        );
+        assert_eq!(
+            body["providerResolution"]["extraction"]["effective"],
+            "none"
+        );
+        assert_eq!(
+            body["providerResolution"]["extraction"]["reason"],
+            serde_json::Value::Null
+        );
     }
 
     #[tokio::test]
@@ -2007,7 +2180,9 @@ mod tests {
         assert_eq!(extraction.effective, "none");
         assert_eq!(
             extraction.reason.as_deref(),
-            Some("claude-code is not supported by daemon-rs extraction worker; fallbackProvider is none")
+            Some(
+                "claude-code is not supported by daemon-rs extraction worker; fallbackProvider is none"
+            )
         );
     }
 
@@ -2066,7 +2241,11 @@ mod tests {
             Some("http://127.0.0.1:11434".to_string())
         );
         assert_eq!(
-            resolve_runtime_extraction_endpoint("anthropic", "anthropic", Some("https://api.anthropic.com")),
+            resolve_runtime_extraction_endpoint(
+                "anthropic",
+                "anthropic",
+                Some("https://api.anthropic.com")
+            ),
             Some("https://api.anthropic.com".to_string())
         );
     }
@@ -2103,11 +2282,23 @@ mod tests {
 
     #[test]
     fn only_openrouter_is_startup_preflight_blocked_as_unsupported() {
-        assert!(!provider_is_unsupported_for_daemon_startup_preflight("ollama"));
-        assert!(!provider_is_unsupported_for_daemon_startup_preflight("anthropic"));
-        assert!(!provider_is_unsupported_for_daemon_startup_preflight("claude-code"));
-        assert!(!provider_is_unsupported_for_daemon_startup_preflight("codex"));
-        assert!(!provider_is_unsupported_for_daemon_startup_preflight("opencode"));
-        assert!(provider_is_unsupported_for_daemon_startup_preflight("openrouter"));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight(
+            "ollama"
+        ));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight(
+            "anthropic"
+        ));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight(
+            "claude-code"
+        ));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight(
+            "codex"
+        ));
+        assert!(!provider_is_unsupported_for_daemon_startup_preflight(
+            "opencode"
+        ));
+        assert!(provider_is_unsupported_for_daemon_startup_preflight(
+            "openrouter"
+        ));
     }
 }

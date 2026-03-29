@@ -633,10 +633,27 @@ state), `status` (`idle`, `syncing`, `error`), `last_sync_at`,
 
 **summary_jobs**
 
-Session summary queue. Fields: `session_id`, `harness`, `status`
-(`pending`, `processing`, `done`, `failed`), `result_path`, `error`,
-`created_at`. The summary worker polls this table and writes dated
-Markdown files to `$SIGNET_WORKSPACE/`.
+Session summary queue. Fields include `session_key`, `session_id`,
+`trigger`, `captured_at`, `started_at`, `ended_at`, `harness`,
+`status`, `error`, and `created_at`. The summary worker polls this
+table, writes canonical immutable `--summary.md` artifacts for normal
+session-end jobs, and keeps checkpoint extracts DB-native.
+
+**memory_artifacts**
+
+Derived DB index over canonical markdown history. Fields include
+`agent_id`, `source_path`, `source_sha256`, `source_kind`,
+`session_id`, `session_key`, `session_token`, `project`, `harness`,
+timing fields, `manifest_path`, `memory_sentence`,
+`memory_sentence_quality`, `content`, and `updated_at`. This table is
+rebuildable from markdown artifacts and powers rolling ledger reads.
+
+**memory_artifact_tombstones**
+
+Privacy-removal guardrail for canonical artifact sessions. Fields:
+`agent_id`, `session_token`, `removed_at`, `reason`, `removed_paths`.
+Re-index honors tombstones so deleted canonical history does not
+reappear.
 
 **session_transcripts** (migration 040)
 

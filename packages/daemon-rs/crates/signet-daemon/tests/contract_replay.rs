@@ -499,7 +499,7 @@ async fn hook_session_lifecycle() {
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert!(body.get("injections").is_some() || body.get("injection").is_some());
+    assert!(body.get("inject").is_some());
 
     // prompt-submit
     let resp = server
@@ -507,7 +507,8 @@ async fn hook_session_lifecycle() {
             "/api/hooks/user-prompt-submit",
             json!({
                 "sessionKey": "test-session-001",
-                "prompt": "test prompt"
+                "harness": "claude-code",
+                "userMessage": "test prompt"
             }),
         )
         .await;
@@ -518,7 +519,9 @@ async fn hook_session_lifecycle() {
         .post(
             "/api/hooks/session-end",
             json!({
-                "sessionKey": "test-session-001"
+                "sessionKey": "test-session-001",
+                "harness": "claude-code",
+                "transcript": "User: test prompt\nAssistant: acknowledged"
             }),
         )
         .await;

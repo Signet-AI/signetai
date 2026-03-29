@@ -1690,6 +1690,17 @@ Releases the session's runtime path claim.
 `transcriptPath` or inline `transcript` may be provided for lossless transcript
 capture.
 
+When transcript text is available, the daemon first writes canonical
+workspace-root-relative markdown lineage files under
+`$SIGNET_WORKSPACE/memory/`:
+
+- `{captured_at}--{session_token}--transcript.md`
+- `{captured_at}--{session_token}--manifest.md`
+
+The manifest is mutable and may later gain a `compaction_path`; transcript
+artifacts are immutable once written. The async summary worker later writes the
+matching immutable `--summary.md` artifact for normal `session-end` jobs.
+
 ### POST /api/hooks/remember
 
 Explicit memory save from within a session. Requires `remember` permission.
@@ -1743,8 +1754,9 @@ the compaction prompt.
 
 ### POST /api/hooks/compaction-complete
 
-Save a compaction summary as a memory row and as a temporal DAG artifact used by
-`MEMORY.md` synthesis.
+Save a compaction summary as a memory row, as a temporal DAG artifact, and as a
+canonical immutable markdown compaction artifact linked back through the
+session manifest.
 
 **Request body**
 
@@ -1768,6 +1780,9 @@ If `sessionKey` is present, the daemon uses it to preserve lineage:
 - the artifact can later be expanded through the temporal drill-down API
 - transcript and temporal summary persistence are keyed by `agentId +
   sessionKey`, so identical session keys from different agents do not collide
+- the canonical compaction file is written to
+  `memory/{captured_at}--{session_token}--compaction.md`
+- the mutable manifest for that session is backfilled with `compaction_path`
 
 If compaction fires before transcript persistence lands, callers should also
 send `project`. The daemon uses that explicit project as the fallback lineage
@@ -1819,7 +1834,9 @@ new content.
 
 `queued: true` means a summary job was enqueued; `jobId` identifies the
 async job. The job extracts the delta and writes a temporal node scored
-at 0.85 (below compaction summaries at 0.95, above chunks at 0.55).
+at 0.85 (below compaction summaries at 0.95, above chunks at 0.55). Checkpoint
+jobs stay DB-native, they do not create canonical `--summary.md` session
+artifacts.
 
 ```json
 { "skipped": true }
@@ -1847,11 +1864,26 @@ Return the current synthesis configuration (thresholds, model, schedule).
 Request a `MEMORY.md` synthesis run. Implementation-defined request body
 and response from `handleSynthesisRequest`.
 
-Current synthesis prompt construction is DB-backed:
-- scored memories come from the memory database, not dated markdown files
+Current `MEMORY.md` generation is a deterministic projection, not a free-form
+LLM rewrite:
+
+- scored durable memories come from the memory database
+- rolling session-ledger rows come from canonical artifact frontmatter in
+  `memory_artifacts`
 - temporal context comes from `session_summaries` DAG artifacts
-- responses may include an `indexBlock` used to append the exact temporal index
-  to the rendered `MEMORY.md`
+- the response keeps the rendered markdown in `prompt` for backward
+  compatibility, with `model: "projection"`
+- `indexBlock` contains the exact `## Temporal Index` block already included in
+  the rendered projection
+
+The rendered file contains these required sections:
+
+- `## Global Head (Tier 1)`
+- `## Thread Heads (Tier 2)`
+- `## Session Ledger (Last 30 Days)`
+- `## Open Threads`
+- `## Durable Notes & Constraints`
+- `## Temporal Index`
 
 Optional `agentId` / `sessionKey` inputs may be provided so synthesis resolves
 the correct agent-scoped head.
