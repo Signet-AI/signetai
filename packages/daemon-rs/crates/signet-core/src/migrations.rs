@@ -572,6 +572,11 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
             }
         }
 
+        // Migration 35 (dependency-audit-history) — merged from main branch.
+        // This arm runs only when migration 35 is first applied. Installs
+        // already at v35 upgrading to this branch (which adds 36 + 37) will
+        // NOT re-execute this arm — the session_summaries work was applied
+        // when they upgraded to v35 and is idempotent via IF NOT EXISTS guards.
         35 => {
             add_column_if_missing(conn, "session_summaries", "source_type", "TEXT");
             add_column_if_missing(conn, "session_summaries", "source_ref", "TEXT");

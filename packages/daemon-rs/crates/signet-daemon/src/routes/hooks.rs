@@ -1747,6 +1747,14 @@ pub async fn compaction_complete(
     // an artifact-write failure leaves no committed DB state — retries start
     // clean.  If artifact writes succeed but DB ingest fails (step 2), the
     // artifact is already canonical; ingest is idempotent via session_id key.
+    //
+    // Artifact filename stability on retry: write_compaction_artifact calls
+    // ensure_canonical_manifest, which queries memory_artifacts for an existing
+    // manifest by session_id before creating one.  If step 1 succeeded on a
+    // prior attempt, the manifest row is already committed; retries find it
+    // and read back its original captured_at for the filename — NOT the fresh
+    // Utc::now() from this invocation.  The filename is therefore stable across
+    // retries for the same logical compaction event.
     let artifact_result = state
         .pool
         .write(Priority::High, {
