@@ -5310,7 +5310,7 @@ import { type ReconcilerHandle, startReconciler } from "./pipeline/skill-reconci
 // Skills routes (extracted to routes/skills.ts)
 // Skill analytics must mount before skills routes (which have /:name catch-all)
 import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
-mountSkillAnalyticsRoutes(app);
+mountSkillAnalyticsRoutes(app, authConfig.mode);
 
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 mountSkillsRoutes(app);

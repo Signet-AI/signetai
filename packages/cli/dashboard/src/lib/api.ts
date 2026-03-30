@@ -2660,10 +2660,12 @@ export interface SkillAnalyticsSummary {
 export async function getSkillAnalytics(params?: {
 	skill?: string;
 	since?: string;
+	agentId?: string;
 }): Promise<SkillAnalyticsSummary> {
 	const qs = new URLSearchParams();
 	if (params?.skill) qs.set("skill", params.skill);
 	if (params?.since) qs.set("since", params.since);
+	if (params?.agentId) qs.set("agent_id", params.agentId);
 	const query = qs.toString();
 	const response = await fetch(`${API_BASE}/api/skills/analytics${query ? `?${query}` : ""}`);
 	if (!response.ok) throw new Error("Failed to fetch skill analytics");

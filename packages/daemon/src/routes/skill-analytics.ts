@@ -2,12 +2,14 @@
  * Skill invocation analytics API.
  *
  * Queries the skill_invocations table to surface per-skill usage
- * statistics. All queries scope by agent_id.
+ * statistics. All queries scope by agent_id using auth-aware resolution.
  */
 
 import type { Hono } from "hono";
+import type { AuthMode } from "../auth/index.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
+import { resolveScopedAgent } from "../request-scope.js";
 
 interface SkillStats {
 	readonly skillName: string;
@@ -44,9 +46,15 @@ function computePercentile(sorted: readonly number[], p: number): number {
 	return sorted[Math.max(0, idx)] ?? 0;
 }
 
-export function mountSkillAnalyticsRoutes(app: Hono): void {
+export function mountSkillAnalyticsRoutes(app: Hono, authMode: AuthMode = "local"): void {
 	app.get("/api/skills/analytics", (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			authMode,
+			c.req.query("agent_id"),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 		const skill = c.req.query("skill");
 		const since = c.req.query("since");
 		const limit = clampPositiveInt(c.req.query("limit"), 10, 1, 100);
@@ -60,7 +68,7 @@ export function mountSkillAnalyticsRoutes(app: Hono): void {
 					params.push(skill);
 				}
 				if (since) {
-					conditions.push("created_at >= ?");
+					conditions.push("created_at >= datetime(?)");
 					params.push(since);
 				}
 				const where = conditions.join(" AND ");
@@ -108,7 +116,13 @@ export function mountSkillAnalyticsRoutes(app: Hono): void {
 
 	app.get("/api/skills/analytics/:skill", (c) => {
 		const skillName = c.req.param("skill");
-		const agentId = c.req.query("agent_id") ?? "default";
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			authMode,
+			c.req.query("agent_id"),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 		const since = c.req.query("since");
 
 		try {
@@ -116,7 +130,7 @@ export function mountSkillAnalyticsRoutes(app: Hono): void {
 				const conditions: string[] = ["agent_id = ?", "skill_name = ?"];
 				const params: unknown[] = [agentId, skillName];
 				if (since) {
-					conditions.push("created_at >= ?");
+					conditions.push("created_at >= datetime(?)");
 					params.push(since);
 				}
 				const where = conditions.join(" AND ");
