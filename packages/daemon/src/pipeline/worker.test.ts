@@ -1992,6 +1992,39 @@ describe("recoverMemoryJobs", () => {
 		const { updated } = recoverMemoryJobs(accessor);
 		expect(updated).toBe(0);
 	});
+
+	it("recovers jobs exhausted by lowered maxRetries even if max_attempts column is higher", () => {
+		// Regression: operator lowers maxRetries from 5 to 3 after rows were
+		// inserted with max_attempts=5. jobs with attempts=3 are now above the
+		// runtime limit (maxRetries=3) but below the stored column (max_attempts=5).
+		// Without the MIN(max_attempts, maxRetries) fix these jobs stay stuck in
+		// 'pending' forever: leaseJob() won't pick them up and recoverMemoryJobs
+		// without maxRetries won't mark them dead.
+		const now = new Date().toISOString();
+		// attempts=3 >= maxRetries=3, but max_attempts=5 — should become dead
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-runtime-exhausted', NULL, 'extract', 'pending', 3, 5, ?, ?)`,
+		).run(now, now);
+		// attempts=2 < maxRetries=3 — should stay pending
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-still-eligible', NULL, 'extract', 'pending', 2, 5, ?, ?)`,
+		).run(now, now);
+
+		const { updated } = recoverMemoryJobs(accessor, 3); // maxRetries lowered to 3
+		expect(updated).toBe(1);
+
+		const dead = db
+			.prepare("SELECT status FROM memory_jobs WHERE id = 'job-runtime-exhausted'")
+			.get() as { status: string } | undefined;
+		const active = db
+			.prepare("SELECT status FROM memory_jobs WHERE id = 'job-still-eligible'")
+			.get() as { status: string } | undefined;
+
+		expect(dead?.status).toBe("dead");
+		expect(active?.status).toBe("pending");
+	});
 });
 
 describe("watchdog pendingCount — exhausted jobs excluded", () => {
