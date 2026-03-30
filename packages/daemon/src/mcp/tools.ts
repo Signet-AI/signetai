@@ -1316,10 +1316,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					args: args ?? {},
 				},
 				timeout: 60_000,
-				extraHeaders: {
-					"x-signet-mcp-source": "agent",
-					"x-signet-agent-id": "default",
-				},
+				// x-signet-agent-id intentionally omitted — the MCP server is
+				// workspace-level and lacks per-agent context. The marketplace
+				// route derives agent_id from auth claims (Phase 2: per-agent MCP sessions).
+				extraHeaders: { "x-signet-mcp-source": "agent" },
 			});
 
 			if (!result.ok) {
