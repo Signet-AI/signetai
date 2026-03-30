@@ -1,14 +1,13 @@
 <script lang="ts">
 import { fetchSkillAnalytics, skillAnalytics } from "$lib/stores/skill-analytics.svelte";
-import { onMount } from "svelte";
 
 interface Props {
 	agentId?: string;
 }
 
-const { agentId }: Props = $props();
+let { agentId }: Props = $props();
 
-onMount(() => {
+$effect(() => {
 	void fetchSkillAnalytics({ agentId });
 	const interval = setInterval(() => void fetchSkillAnalytics({ agentId }), 30_000);
 	return () => clearInterval(interval);

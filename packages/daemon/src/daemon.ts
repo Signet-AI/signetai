@@ -7587,11 +7587,13 @@ app.post("/api/tasks/:id/run", async (c) => {
 	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
 	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
-	const taskAgentId = resolveScopedAgent(
+	const scoped = resolveScopedAgent(
 		c.get("auth")?.claims ?? null,
 		authConfig.mode,
 		c.req.query("agent_id"),
-	).agentId;
+	);
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
+	const taskAgentId = scoped.agentId;
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
