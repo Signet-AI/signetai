@@ -5318,7 +5318,7 @@ setFetchEmbedding(fetchEmbedding);
 
 // Marketplace routes (MCP servers catalog + routing)
 import { mountMarketplaceRoutes } from "./routes/marketplace.js";
-mountMarketplaceRoutes(app);
+mountMarketplaceRoutes(app, authConfig.mode);
 
 import { mountMcpAnalyticsRoutes } from "./routes/mcp-analytics.js";
 mountMcpAnalyticsRoutes(app, authConfig.mode);

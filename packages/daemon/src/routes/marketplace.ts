@@ -13,6 +13,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
+import { resolveScopedAgent } from "../request-scope.js";
 import { probeServer, removeProbeResult, storeProbeResult } from "../mcp-probe.js";
 import { getSecret } from "../secrets.js";
 
@@ -1136,7 +1137,7 @@ function recordMcpInvocation(record: McpInvocationRecord): void {
 	}
 }
 
-export function mountMarketplaceRoutes(app: Hono): void {
+export function mountMarketplaceRoutes(app: Hono, authMode?: import("../auth/index.js").AuthMode): void {
 	app.get("/api/marketplace/mcp", (c) => {
 		const servers = readInstalledServers();
 		const context = extractContextFromRequest(c);
@@ -1553,7 +1554,13 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		const VALID_SOURCES = new Set(["cli", "agent", "mcp", "dashboard"]);
 		const raw = c.req.header("x-signet-mcp-source") ?? "mcp";
 		const source = VALID_SOURCES.has(raw) ? raw : "mcp";
-		const agentId = c.req.header("x-signet-agent-id") ?? "default";
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			authMode ?? "local",
+			c.req.header("x-signet-agent-id") ?? undefined,
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 		const start = Date.now();
 
 		try {

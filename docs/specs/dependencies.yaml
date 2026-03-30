@@ -698,7 +698,7 @@ specs:
 
 
   - id: mcp-cli-bridge-and-usage-analytics
-    status: planning
+    status: approved
     path: docs/specs/planning/mcp-cli-bridge-and-usage-analytics.md
     hard_depends_on:
       - signet-runtime
