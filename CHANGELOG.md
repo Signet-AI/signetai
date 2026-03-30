@@ -2,6 +2,17 @@
 
 All notable changes to Signet are documented here.
 
+## [0.87.2] - 2026-03-30
+
+### Features
+
+- **skills**: consolidate to root skills/ and add signet marketplace provider (#411)
+
+### Docs
+
+- add planning document for groundswell
+
+
 ## [0.87.1] - 2026-03-30
 
 ### Bug Fixes

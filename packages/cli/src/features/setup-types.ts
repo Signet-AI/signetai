@@ -50,8 +50,9 @@ export interface SetupDeps {
 	readonly showStatus: (options: { path?: string; json?: boolean }) => Promise<void>;
 	readonly signetLogo: () => string;
 	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
+	readonly getSkillsSourceDir: () => string;
 	readonly syncBuiltinSkills: (
-		templatesDir: string,
+		skillsSourceDir: string,
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
 }

@@ -115,6 +115,22 @@ function getTemplatesDir() {
 	return join(__dirname, "templates");
 }
 
+// Skills source directory (root skills/ copied into package at build time)
+function getSkillsSourceDir() {
+	// Dev: monorepo root skills/
+	const devPath = join(__dirname, "..", "..", "..", "skills");
+	// Dist: skills/ next to dist/
+	const distPath = join(__dirname, "..", "skills");
+	const distPath2 = join(__dirname, "..", "..", "skills");
+
+	if (existsSync(devPath)) return devPath;
+	if (existsSync(distPath)) return distPath;
+	if (existsSync(distPath2)) return distPath2;
+
+	// Backward compat: fall back to templates/skills/
+	return join(getTemplatesDir(), "skills");
+}
+
 function copyDirRecursive(src: string, dest: string) {
 	mkdirSync(dest, { recursive: true });
 	const entries = readdirSync(src, { withFileTypes: true });
@@ -151,14 +167,14 @@ function isBuiltinSkillDir(skillDir: string): boolean {
 }
 
 function syncBuiltinSkills(
-	templatesDir: string,
+	skillsSourceDir: string,
 	basePath: string,
 ): {
 	installed: string[];
 	updated: string[];
 	skipped: string[];
 } {
-	const skillsSource = join(templatesDir, "skills");
+	const skillsSource = skillsSourceDir;
 	const skillsDest = join(basePath, "skills");
 	const result = {
 		installed: [] as string[],
@@ -1254,6 +1270,7 @@ registerAppCommands(program, {
 			configureHarnessHooks,
 			copyDirRecursive,
 			detectExistingSetup,
+			getSkillsSourceDir,
 			getTemplatesDir,
 			gitAddAndCommit,
 			gitInit,
@@ -1282,6 +1299,7 @@ registerAppCommands(program, {
 		syncTemplates({
 			agentsDir: AGENTS_DIR,
 			configureHarnessHooks,
+			getSkillsSourceDir,
 			getTemplatesDir,
 			signetLogo,
 			syncBuiltinSkills,
@@ -1395,6 +1413,7 @@ registerUpdateCommands(program, {
 	MIN_AUTO_UPDATE_INTERVAL,
 	configureHarnessHooks,
 	fetchFromDaemon,
+	getSkillsSourceDir,
 	getTemplatesDir,
 	isOpenClawInstalled: () => new OpenClawConnector().isInstalled(),
 	isOhMyPiInstalled: () => new OhMyPiConnector().isInstalled(),

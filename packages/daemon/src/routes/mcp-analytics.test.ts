@@ -171,9 +171,7 @@ describe("mcp-analytics routes", () => {
 		]);
 
 		const filtered = db
-			.prepare(
-				"SELECT COUNT(*) as c FROM mcp_invocations WHERE agent_id = 'default' AND created_at >= datetime(?)",
-			)
+			.prepare("SELECT COUNT(*) as c FROM mcp_invocations WHERE agent_id = 'default' AND created_at >= datetime(?)")
 			.get("2025-06-01T00:00:00Z") as { c: number };
 		expect(filtered.c).toBe(1);
 	});

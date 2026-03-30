@@ -126,8 +126,9 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 							<span
 								class="provider-badge"
 								class:clawhub={item.provider === "clawhub"}
+								class:signet={item.provider === "signet"}
 							>
-								{item.provider}
+								{item.provider === "signet" ? "Official" : item.provider}
 							</span>
 						{/if}
 					</div>
@@ -184,7 +185,16 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 		{#if mode === "browse" && isSearchResult(item)}
 			<div class="card-action">
 				<div class="action-row">
-				{#if item.installed}
+				{#if item.builtin && item.installed}
+					<Button
+						variant="outline"
+						size="sm"
+						class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-accent)] text-[var(--sig-accent)] cursor-default"
+						disabled
+					>
+						PRE-INSTALLED
+					</Button>
+				{:else if item.installed}
 					<Button
 						variant="outline"
 						size="sm"
@@ -365,6 +375,11 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 	.provider-badge.clawhub {
 		border-color: var(--sig-accent);
 		color: var(--sig-accent);
+	}
+	.provider-badge.signet {
+		border-color: var(--sig-text-bright);
+		color: var(--sig-text-bright);
+		background: var(--sig-surface-raised);
 	}
 
 	.card-desc {

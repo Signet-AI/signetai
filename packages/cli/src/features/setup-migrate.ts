@@ -91,7 +91,7 @@ export async function runExistingSetupWizard(
 		}
 
 		spinner.text = "Syncing built-in skills...";
-		deps.syncBuiltinSkills(templatesDir, basePath);
+		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), basePath);
 
 		spinner.text = "Creating agent manifest...";
 		const now = new Date().toISOString();

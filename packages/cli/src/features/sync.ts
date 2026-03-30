@@ -19,9 +19,10 @@ interface SyncState {
 interface Deps {
 	readonly agentsDir: string;
 	readonly configureHarnessHooks: (harness: string, basePath: string) => Promise<void>;
+	readonly getSkillsSourceDir: () => string;
 	readonly getTemplatesDir: () => string;
 	readonly signetLogo: () => string;
-	readonly syncBuiltinSkills: (templatesDir: string, basePath: string) => SkillSync;
+	readonly syncBuiltinSkills: (skillsSourceDir: string, basePath: string) => SkillSync;
 	readonly syncNativeEmbeddingModel: (basePath: string) => Promise<SyncState>;
 	readonly syncPredictorBinary: (basePath: string) => Promise<SyncState>;
 }
@@ -40,7 +41,7 @@ export async function syncTemplates(deps: Deps): Promise<void> {
 
 	let synced = 0;
 	synced += syncGitignore(basePath, templatesDir);
-	synced += syncSkills(basePath, templatesDir, deps);
+	synced += syncSkills(basePath, deps);
 	synced += await syncPredictor(basePath, deps);
 	synced += await syncNative(basePath, deps);
 	synced += await syncHarnessHooks(basePath, deps);
@@ -65,8 +66,8 @@ function syncGitignore(basePath: string, templatesDir: string): number {
 	return 1;
 }
 
-function syncSkills(basePath: string, templatesDir: string, deps: Deps): number {
-	const result = deps.syncBuiltinSkills(templatesDir, basePath);
+function syncSkills(basePath: string, deps: Deps): number {
+	const result = deps.syncBuiltinSkills(deps.getSkillsSourceDir(), basePath);
 	for (const skill of result.installed) {
 		console.log(chalk.green(`  ✓ skills/${skill} (installed)`));
 	}

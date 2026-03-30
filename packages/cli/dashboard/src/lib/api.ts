@@ -1247,7 +1247,7 @@ export interface SkillSearchResult {
 	popularityScore?: number;
 	description: string;
 	installed: boolean;
-	provider?: "skills.sh" | "clawhub";
+	provider?: "skills.sh" | "clawhub" | "signet";
 	category?: string;
 	stars?: number;
 	downloads?: number;
@@ -1256,6 +1256,8 @@ export interface SkillSearchResult {
 	maintainer?: string;
 	verified?: boolean;
 	permissions?: string[];
+	official?: boolean;
+	builtin?: boolean;
 }
 
 export interface SkillDetail extends Skill {

@@ -67,7 +67,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		}
 
 		spinner.text = "Installing built-in skills...";
-		deps.syncBuiltinSkills(templatesDir, cfg.basePath);
+		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), cfg.basePath);
 
 		spinner.text = "Creating agent identity...";
 		const agentsTemplate = join(templatesDir, "AGENTS.md.template");

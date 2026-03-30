@@ -11,19 +11,19 @@ import {
 } from "./lifecycle.js";
 import { createSessionState } from "./session-state.js";
 import {
- 	DAEMON_URL_DEFAULT,
- 	HARNESS,
- 	type OmpBeforeAgentStartEvent,
- 	type OmpExtensionApi,
- 	type OmpExtensionFactory,
- 	type OmpInputEvent,
- 	type OmpSessionCompactEvent,
- 	type OmpSessionCompactingEvent,
- 	type OmpSessionCompactingResult,
- 	type PreCompactionResult,
- 	READ_TIMEOUT,
- 	RUNTIME_PATH,
- 	WRITE_TIMEOUT,
+	DAEMON_URL_DEFAULT,
+	HARNESS,
+	type OmpBeforeAgentStartEvent,
+	type OmpExtensionApi,
+	type OmpExtensionFactory,
+	type OmpInputEvent,
+	type OmpSessionCompactEvent,
+	type OmpSessionCompactingEvent,
+	type OmpSessionCompactingResult,
+	type PreCompactionResult,
+	READ_TIMEOUT,
+	RUNTIME_PATH,
+	WRITE_TIMEOUT,
 } from "./types.js";
 
 function registerSessionLifecycleHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
@@ -67,7 +67,6 @@ function registerPromptHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void 
 		return { message: hiddenMessage };
 	});
 }
-
 
 function registerCompactionHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
 	pi.on(

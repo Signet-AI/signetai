@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# web-search: Unified search + scrape tool for Rose
+# Stack: SearXNG (search) → Lightpanda (fast fetch) → Agent-Browser (interactive fallback)
+#
+# Usage:
+#   web-search "query"                    # Search and return top results
+#   web-search "query" --scrape           # Search + scrape top results with Lightpanda
+#   web-search "query" --scrape -n 5      # Scrape top 5 results
+#   web-search --fetch URL                # Fetch single URL with Lightpanda
+#   web-search --fetch URL --browser      # Fetch with Agent-Browser (JS-heavy pages)
+#   web-search "query" --categories news  # Search specific category
+
+set -euo pipefail
+
+SEARXNG_URL="${SEARXNG_URL:-http://localhost:8888}"
+MAX_RESULTS=10
+SCRAPE=false
+BROWSER=false
+FETCH_URL=""
+CATEGORIES=""
+OUTPUT_FORMAT="markdown"
+
+usage() {
+  cat <<EOF
+Usage: web-search [OPTIONS] QUERY|--fetch URL
+
+Search & Scrape Stack:
+  SearXNG    → meta-search (25+ engines)
+  Lightpanda → fast headless fetch (10x Chrome speed)
+  Agent-Browser → full browser automation (JS, logins, interactions)
+
+Options:
+  -n, --num NUM        Number of results (default: 10)
+  -s, --scrape         Scrape content from results using Lightpanda
+  -b, --browser        Use Agent-Browser instead of Lightpanda for scraping
+  -f, --fetch URL      Fetch and extract a single URL (skip search)
+  -c, --categories CAT SearXNG categories (general,news,images,files,science,it)
+  -o, --output FMT     Output format: markdown (default), html, json
+  -h, --help           Show this help
+
+Examples:
+  web-search "hospice compliance requirements 2026"
+  web-search "NHPCO quality metrics" --scrape -n 3
+  web-search --fetch https://example.com/report.html
+  web-search "CMS hospice updates" --categories news --scrape
+EOF
+  exit 0
+}
+
+fetch_url() {
+  local url="$1"
+  local fmt="${2:-markdown}"
+  
+  if [[ "$BROWSER" == true ]]; then
+    agent-browser open "$url" 2>/dev/null
+    agent-browser wait --load networkidle 2>/dev/null
+    agent-browser get text body 2>/dev/null
+    agent-browser close 2>/dev/null
+  else
+    local dump_fmt="markdown"
+    [[ "$fmt" == "html" ]] && dump_fmt="html"
+    lightpanda fetch --dump "$dump_fmt" --insecure_disable_tls_host_verification "$url" 2>/dev/null
+  fi
+}
+
+# Parse args
+QUERY=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--num) MAX_RESULTS="$2"; shift 2;;
+    -s|--scrape) SCRAPE=true; shift;;
+    -b|--browser) BROWSER=true; shift;;
+    -f|--fetch) FETCH_URL="$2"; shift 2;;
+    -c|--categories) CATEGORIES="$2"; shift 2;;
+    -o|--output) OUTPUT_FORMAT="$2"; shift 2;;
+    -h|--help) usage;;
+    *) QUERY="$1"; shift;;
+  esac
+done
+
+# Direct fetch mode
+if [[ -n "$FETCH_URL" ]]; then
+  echo "--- Fetching: $FETCH_URL ---"
+  fetch_url "$FETCH_URL" "$OUTPUT_FORMAT"
+  exit 0
+fi
+
+if [[ -z "$QUERY" ]]; then
+  echo "Error: No query provided. Use -h for help." >&2
+  exit 1
+fi
+
+# Build SearXNG URL
+ENCODED_QUERY=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$QUERY")
+SEARCH_URL="${SEARXNG_URL}/search?q=${ENCODED_QUERY}&format=json&pageno=1"
+[[ -n "$CATEGORIES" ]] && SEARCH_URL="${SEARCH_URL}&categories=${CATEGORIES}"
+
+# Execute search, pipe through python for safe JSON handling
+TMPFILE=$(mktemp)
+trap "rm -f $TMPFILE" EXIT
+
+curl -s "$SEARCH_URL" > "$TMPFILE" 2>/dev/null
+
+if [[ ! -s "$TMPFILE" ]]; then
+  echo "Error: SearXNG not responding. Is it running on ${SEARXNG_URL}?" >&2
+  exit 1
+fi
+
+# Display results
+python3 - "$TMPFILE" "$MAX_RESULTS" "$QUERY" <<'PYEOF'
+import json, sys
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+
+n = int(sys.argv[2])
+query = sys.argv[3]
+results = data.get("results", [])[:n]
+
+if not results:
+    print("No results found.")
+    sys.exit(0)
+
+print(f"Found {len(results)} results for: {query}\n")
+for i, r in enumerate(results, 1):
+    title = r.get("title", "No title")
+    url = r.get("url", "")
+    snippet = r.get("content", "")[:200]
+    engines = ", ".join(r.get("engines", []))
+    print(f"{i}. {title}")
+    print(f"   {url}")
+    if snippet:
+        print(f"   {snippet}")
+    print(f"   [via: {engines}]")
+    print()
+PYEOF
+
+# Scrape mode
+if [[ "$SCRAPE" == true ]]; then
+  echo "========================================="
+  echo "Scraping top results..."
+  echo "========================================="
+  
+  URLS=$(python3 - "$TMPFILE" "$MAX_RESULTS" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+n = int(sys.argv[2])
+for r in data.get("results", [])[:n]:
+    url = r.get("url", "")
+    if url:
+        print(url)
+PYEOF
+)
+  
+  i=0
+  while IFS= read -r url; do
+    [[ -z "$url" ]] && continue
+    i=$((i + 1))
+    echo ""
+    echo "--- [$i] Scraping: $url ---"
+    fetch_url "$url" "$OUTPUT_FORMAT" || echo "(Failed to fetch)"
+    echo ""
+    echo "--- End [$i] ---"
+  done <<< "$URLS"
+fi

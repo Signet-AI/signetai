@@ -2003,12 +2003,12 @@ describe("recoverMemoryJobs", () => {
 		const { updated } = recoverMemoryJobs(accessor, 3); // maxRetries lowered to 3
 		expect(updated).toBe(1);
 
-		const dead = db
-			.prepare("SELECT status FROM memory_jobs WHERE id = 'job-runtime-exhausted'")
-			.get() as { status: string } | undefined;
-		const active = db
-			.prepare("SELECT status FROM memory_jobs WHERE id = 'job-still-eligible'")
-			.get() as { status: string } | undefined;
+		const dead = db.prepare("SELECT status FROM memory_jobs WHERE id = 'job-runtime-exhausted'").get() as
+			| { status: string }
+			| undefined;
+		const active = db.prepare("SELECT status FROM memory_jobs WHERE id = 'job-still-eligible'").get() as
+			| { status: string }
+			| undefined;
 
 		expect(dead?.status).toBe("dead");
 		expect(active?.status).toBe("pending");

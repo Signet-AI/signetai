@@ -934,14 +934,11 @@ interface MemoryRecoveryResult {
  * @param accessor - DB accessor
  * @param maxRetries - runtime retry limit from pipelineCfg.worker.maxRetries
  */
-export function recoverMemoryJobs(
-	accessor: DbAccessor,
-	maxRetries?: number,
-): MemoryRecoveryResult {
+export function recoverMemoryJobs(accessor: DbAccessor, maxRetries?: number): MemoryRecoveryResult {
 	return accessor.withWriteTx((db) => {
-		const table = db
-			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_jobs'")
-			.get() as { name: string } | undefined;
+		const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_jobs'").get() as
+			| { name: string }
+			| undefined;
 		if (!table) return { updated: 0 };
 
 		// Use MIN(max_attempts, maxRetries) so that both the DB-stored limit and
@@ -1192,17 +1189,11 @@ export function startWorker(
 		// Run shadow decisions on extracted facts
 		const decisions =
 			extraction.facts.length > 0
-				? await runShadowDecisions(
-						extraction.facts,
-						accessor,
-						instrumentedProvider,
-						decisionCfg,
-						{
-							agentId,
-							scope: sourceScope,
-							visibility: sourceVisibility,
-						},
-					)
+				? await runShadowDecisions(extraction.facts, accessor, instrumentedProvider, decisionCfg, {
+						agentId,
+						scope: sourceScope,
+						visibility: sourceVisibility,
+					})
 				: { proposals: [], warnings: [] };
 
 		const controlledWritesEnabled =
@@ -1408,23 +1399,8 @@ export function startWorker(
 				if (proposal.action !== "none") continue;
 				const normalized = normalizeAndHashContent(proposal.fact.content);
 				if (normalized.normalizedContent.length === 0) continue;
-				const existing = accessor.withReadDb(
-					(db) => {
-						if (sourceScope !== null) {
-							return db
-								.prepare(
-									`SELECT id FROM memories
-							 WHERE content_hash = ?
-							   AND is_deleted = 0
-							   AND agent_id = ?
-							   AND visibility = ?
-							   AND scope = ?
-							 LIMIT 1`,
-								)
-								.get(normalized.contentHash, agentId, sourceVisibility, sourceScope) as
-								| { id: string }
-								| undefined;
-						}
+				const existing = accessor.withReadDb((db) => {
+					if (sourceScope !== null) {
 						return db
 							.prepare(
 								`SELECT id FROM memories
@@ -1432,12 +1408,23 @@ export function startWorker(
 							   AND is_deleted = 0
 							   AND agent_id = ?
 							   AND visibility = ?
-							   AND scope IS NULL
+							   AND scope = ?
 							 LIMIT 1`,
 							)
-							.get(normalized.contentHash, agentId, sourceVisibility) as { id: string } | undefined;
-					},
-				);
+							.get(normalized.contentHash, agentId, sourceVisibility, sourceScope) as { id: string } | undefined;
+					}
+					return db
+						.prepare(
+							`SELECT id FROM memories
+							 WHERE content_hash = ?
+							   AND is_deleted = 0
+							   AND agent_id = ?
+							   AND visibility = ?
+							   AND scope IS NULL
+							 LIMIT 1`,
+						)
+						.get(normalized.contentHash, agentId, sourceVisibility) as { id: string } | undefined;
+				});
 				if (existing) {
 					structuralFacts.push({
 						memoryId: existing.id,
@@ -1707,10 +1694,7 @@ export function startWorker(
 		maxRetries: pipelineCfg.worker.maxRetries,
 		model: pipelineCfg.extraction.model,
 		mode:
-			pipelineCfg.enabled &&
-			!pipelineCfg.shadowMode &&
-			!pipelineCfg.mutationsFrozen &&
-			!pipelineCfg.nativeShadowEnabled
+			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen && !pipelineCfg.nativeShadowEnabled
 				? "controlled-write"
 				: "shadow",
 	});

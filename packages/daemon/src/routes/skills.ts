@@ -80,7 +80,7 @@ type SkillBrowseResult = {
 	popularityScore: number;
 	description: string;
 	installed: boolean;
-	provider: "skills.sh" | "clawhub";
+	provider: "skills.sh" | "clawhub" | "signet";
 	category: string;
 	stars?: number;
 	downloads?: number;
@@ -89,6 +89,8 @@ type SkillBrowseResult = {
 	maintainer?: string;
 	verified?: boolean;
 	permissions?: string[];
+	official?: boolean;
+	builtin?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -272,6 +274,65 @@ async function fetchClawhubCatalog(): Promise<ClawhubItem[]> {
 		logger.error("skills", "ClawHub catalog fetch failed", err as Error);
 		return clawhubCache;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Signet official skills (from repo root skills/)
+// ---------------------------------------------------------------------------
+
+function getSignetSkillsSourceDir(): string | null {
+	if (process.env.SIGNET_SKILLS_SOURCE && existsSync(process.env.SIGNET_SKILLS_SOURCE)) {
+		return process.env.SIGNET_SKILLS_SOURCE;
+	}
+	// Dev: monorepo root skills/ (daemon src is packages/daemon/src/routes/)
+	const devPath = join(__dirname, "..", "..", "..", "..", "skills");
+	if (existsSync(devPath)) return devPath;
+	// Dist: skills/ next to dist/
+	const distPath = join(__dirname, "..", "..", "skills");
+	if (existsSync(distPath)) return distPath;
+	const distPath2 = join(__dirname, "..", "skills");
+	if (existsSync(distPath2)) return distPath2;
+	return null;
+}
+
+function listSignetOfficialSkills(): SkillBrowseResult[] {
+	const sourceDir = getSignetSkillsSourceDir();
+	if (!sourceDir || !existsSync(sourceDir)) return [];
+
+	const installed = listInstalledSkills().map((s) => s.name);
+
+	return readdirSync(sourceDir, { withFileTypes: true })
+		.filter((d) => d.isDirectory())
+		.flatMap((d) => {
+			const skillMdPath = join(sourceDir, d.name, "SKILL.md");
+			if (!existsSync(skillMdPath)) return [];
+			try {
+				const content = readFileSync(skillMdPath, "utf-8");
+				const meta = parseSkillFrontmatter(content);
+				const isBuiltin = /^builtin:\s*true$/m.test(content);
+				return [
+					{
+						name: d.name,
+						fullName: "Signet-AI/signetai",
+						installs: isBuiltin ? "built-in" : "--",
+						installsRaw: isBuiltin ? 100_000 : 10_000,
+						popularityScore: isBuiltin ? 200_000 : 50_000,
+						description: meta.description,
+						installed: installed.includes(d.name),
+						provider: "signet" as const,
+						category: inferSkillCategory(`${d.name} ${meta.description}`),
+						author: "Signet AI",
+						maintainer: "Signet-AI/signetai",
+						verified: true,
+						permissions: meta.permissions,
+						official: true,
+						builtin: isBuiltin,
+					},
+				];
+			} catch {
+				return [];
+			}
+		});
 }
 
 // ---------------------------------------------------------------------------
@@ -465,10 +526,15 @@ export function mountSkillsRoutes(app: Hono): void {
 		}
 	});
 
-	// GET /api/skills/browse - browse all skills (skills.sh + ClawHub)
+	// GET /api/skills/browse - browse all skills (signet + skills.sh + ClawHub)
 	app.get("/api/skills/browse", async (c) => {
-		const [skillsShCatalog, clawhubItems] = await Promise.all([fetchCatalog(), fetchClawhubCatalog()]);
+		const [skillsShCatalog, clawhubItems, signetSkills] = await Promise.all([
+			fetchCatalog(),
+			fetchClawhubCatalog(),
+			Promise.resolve(listSignetOfficialSkills()),
+		]);
 		const installed = listInstalledSkills().map((s) => s.name);
+		const signetNames = new Set(signetSkills.map((s) => s.name));
 
 		const skillsShResults: SkillBrowseResult[] = skillsShCatalog.map((s) => ({
 			name: s.name,
@@ -504,11 +570,13 @@ export function mountSkillsRoutes(app: Hono): void {
 			maintainer: s.displayName,
 		}));
 
-		const results = [...skillsShResults, ...clawhubResults].sort((a, b) => b.popularityScore - a.popularityScore);
+		// Deduplicate: prefer signet provider when a skill exists in multiple sources
+		const external = [...skillsShResults, ...clawhubResults].filter((s) => !signetNames.has(s.name));
+		const results = [...signetSkills, ...external].sort((a, b) => b.popularityScore - a.popularityScore);
 		return c.json({ results, total: results.length });
 	});
 
-	// GET /api/skills/search?q=query - search both skills.sh and ClawHub
+	// GET /api/skills/search?q=query - search signet + skills.sh + ClawHub
 	app.get("/api/skills/search", async (c) => {
 		const query = c.req.query("q");
 		if (!query) {
@@ -585,7 +653,13 @@ export function mountSkillsRoutes(app: Hono): void {
 			})(),
 		]);
 
-		const results = [...skillsShResults, ...clawhubFiltered].sort((a, b) => b.popularityScore - a.popularityScore);
+		// Filter signet official skills by query
+		const signetFiltered = listSignetOfficialSkills().filter(
+			(s) => s.name.toLowerCase().includes(lowerQuery) || s.description.toLowerCase().includes(lowerQuery),
+		);
+		const signetNames = new Set(signetFiltered.map((s) => s.name));
+		const external = [...skillsShResults, ...clawhubFiltered].filter((s) => !signetNames.has(s.name));
+		const results = [...signetFiltered, ...external].sort((a, b) => b.popularityScore - a.popularityScore);
 		return c.json({ results });
 	});
 
@@ -611,6 +685,26 @@ export function mountSkillsRoutes(app: Hono): void {
 			} catch (e) {
 				logger.error("skills", "Error reading skill", e as Error);
 				return c.json({ error: "Failed to read skill" }, 500);
+			}
+		}
+
+		// Try signet official skills source
+		const signetDir = getSignetSkillsSourceDir();
+		if (signetDir) {
+			const signetSkillPath = join(signetDir, name, "SKILL.md");
+			if (existsSync(signetSkillPath)) {
+				try {
+					const content = readFileSync(signetSkillPath, "utf-8");
+					const meta = parseSkillFrontmatter(content);
+					return c.json({
+						name,
+						...meta,
+						content,
+						official: true,
+					});
+				} catch (e) {
+					logger.error("skills", "Error reading signet skill", e as Error);
+				}
 			}
 		}
 
@@ -675,7 +769,14 @@ export function mountSkillsRoutes(app: Hono): void {
 			agentsDir: getAgentsDir(),
 			env: process.env,
 		});
-		const skillsCommand = getSkillsRunnerCommand(packageManager.family, ["add", pkg, "--global", "--yes"]);
+		// For multi-skill repo sources (owner/repo format), pass --skill to
+		// target a specific skill. This handles Signet-AI/signetai and any
+		// other GitHub repo that bundles multiple skills.
+		const args = ["add", pkg, "--global", "--yes"];
+		if (source && source !== name && /^[\w-]+\/[\w.-]+$/.test(source)) {
+			args.push("--skill", name);
+		}
+		const skillsCommand = getSkillsRunnerCommand(packageManager.family, args);
 
 		logger.info("skills", "Using package manager", {
 			command: `${skillsCommand.command} ${skillsCommand.args.join(" ")}`,

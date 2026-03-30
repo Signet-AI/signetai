@@ -1,6 +1,6 @@
 {
   "name": "@signet/cli",
-  "version": "0.87.2",
+  "version": "0.88.0",
   "description": "CLI for Signet - portable AI agent identity",
   "type": "module",
   "bin": "./dist/cli.js",
@@ -11,6 +11,7 @@
   "files": [
     "dist",
     "templates",
+    "skills",
     "dashboard/build"
   ],
   "scripts": {
@@ -19,6 +20,8 @@
     "build:dashboard": "cd dashboard && bun install && bun run build",
     "dev": "bun --watch src/cli.ts",
     "dev:dashboard": "cd dashboard && bun run dev",
+    "copy:skills": "rm -rf skills && cp -r ../../skills skills",
+    "prebuild": "bun run copy:skills",
     "prepublishOnly": "bun run build",
     "test": "bun test"
   },

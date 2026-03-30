@@ -18,7 +18,7 @@ import { toast } from "$lib/stores/toast.svelte";
 
 export type SkillsView = "browse" | "installed";
 export type SortBy = "popularity" | "installs" | "stars" | "name" | "newest";
-export type ProviderFilter = "all" | "skills.sh" | "clawhub";
+export type ProviderFilter = "all" | "signet" | "skills.sh" | "clawhub";
 export type CategoryFilter = "all" | string;
 
 // Cache the browse catalog in localStorage so the grid renders instantly on

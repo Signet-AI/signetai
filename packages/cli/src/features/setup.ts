@@ -207,7 +207,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			console.log(chalk.dim("  Synced missing: .gitignore"));
 		}
 
-		const skillSyncResult = deps.syncBuiltinSkills(templatesDir, basePath);
+		const skillSyncResult = deps.syncBuiltinSkills(deps.getSkillsSourceDir(), basePath);
 		const syncedBuiltins = skillSyncResult.installed.length + skillSyncResult.updated.length;
 		if (syncedBuiltins > 0) {
 			console.log(chalk.dim(`  Synced built-in skills: ${syncedBuiltins}`));

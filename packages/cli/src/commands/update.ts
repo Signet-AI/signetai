@@ -14,8 +14,9 @@ interface UpdateDeps {
 	readonly getTemplatesDir: () => string;
 	readonly isOpenClawInstalled: () => boolean;
 	readonly isOhMyPiInstalled: () => boolean;
+	readonly getSkillsSourceDir: () => string;
 	readonly syncBuiltinSkills: (
-		templatesDir: string,
+		skillsSourceDir: string,
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
 }
@@ -130,8 +131,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 
 			spinner.succeed(data.message || "Update installed");
 			try {
-				const templatesDir = deps.getTemplatesDir();
-				const skillResult = deps.syncBuiltinSkills(templatesDir, deps.AGENTS_DIR);
+				const skillResult = deps.syncBuiltinSkills(deps.getSkillsSourceDir(), deps.AGENTS_DIR);
 				const totalSynced = skillResult.installed.length + skillResult.updated.length;
 				if (totalSynced > 0) {
 					console.log(chalk.green(`  ✓ ${totalSynced} skills synced`));

@@ -1,9 +1,78 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { formatInstalls, listInstalledSkills, mountSkillsRoutes, parseSkillFrontmatter } from "./skills";
+
+// ---------------------------------------------------------------------------
+// Repo skills frontmatter validation (regression guard)
+// ---------------------------------------------------------------------------
+
+describe("repo skills frontmatter", () => {
+	const skillsRoot = join(__dirname, "..", "..", "..", "..", "skills");
+	// Only run if skills dir exists (dev environment)
+	const hasSkillsDir = existsSync(skillsRoot);
+
+	it.skipIf(!hasSkillsDir)("all skills have parseable SKILL.md with name and description", () => {
+		const dirs = readdirSync(skillsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+		expect(dirs.length).toBeGreaterThan(0);
+
+		for (const dir of dirs) {
+			const skillMd = join(skillsRoot, dir.name, "SKILL.md");
+			if (!existsSync(skillMd)) continue;
+
+			const content = readFileSync(skillMd, "utf-8");
+			const meta = parseSkillFrontmatter(content);
+			expect(meta.description.length, `${dir.name} should have a description`).toBeGreaterThan(0);
+		}
+	});
+
+	it.skipIf(!hasSkillsDir)("no skill has last_verified as a top-level frontmatter key", () => {
+		const dirs = readdirSync(skillsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+
+		for (const dir of dirs) {
+			const skillMd = join(skillsRoot, dir.name, "SKILL.md");
+			if (!existsSync(skillMd)) continue;
+
+			const content = readFileSync(skillMd, "utf-8");
+			const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+			if (!fmMatch) continue;
+
+			// last_verified should be under metadata:, not at top level
+			const lines = fmMatch[1].split("\n");
+			for (const line of lines) {
+				if (/^last_verified:/.test(line)) {
+					throw new Error(`${dir.name}/SKILL.md has top-level last_verified — move it under metadata:`);
+				}
+			}
+		}
+	});
+
+	it.skipIf(!hasSkillsDir)("builtin skills have builtin: true in frontmatter", () => {
+		const expectedBuiltin = ["memory-debug", "onboarding", "recall", "remember", "signet"];
+
+		for (const name of expectedBuiltin) {
+			const skillMd = join(skillsRoot, name, "SKILL.md");
+			if (!existsSync(skillMd)) continue;
+
+			const content = readFileSync(skillMd, "utf-8");
+			expect(/^builtin:\s*true$/m.test(content), `${name} should have builtin: true`).toBe(true);
+		}
+	});
+
+	it.skipIf(!hasSkillsDir)("non-builtin skills do not have builtin: true", () => {
+		const nonBuiltin = ["agent-architect", "signet-design", "skill-creator", "web-search"];
+
+		for (const name of nonBuiltin) {
+			const skillMd = join(skillsRoot, name, "SKILL.md");
+			if (!existsSync(skillMd)) continue;
+
+			const content = readFileSync(skillMd, "utf-8");
+			expect(/^builtin:\s*true$/m.test(content), `${name} should not have builtin: true`).toBe(false);
+		}
+	});
+});
 
 // ---------------------------------------------------------------------------
 // parseSkillFrontmatter
@@ -76,6 +145,74 @@ permissions: [network, filesystem]
 		const meta = parseSkillFrontmatter(content);
 		expect(meta.verified).toBe(true);
 		expect(meta.permissions).toEqual(["network", "filesystem"]);
+	});
+
+	it("parses frontmatter with metadata block (last_verified under metadata)", () => {
+		const content = `---
+name: web-search
+description: "Search the web"
+metadata:
+  last_verified: 2026-03-21
+---
+
+# Web Search`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("Search the web");
+	});
+
+	it("parses builtin flag via regex", () => {
+		const builtin = `---
+name: remember
+description: Save to memory
+builtin: true
+user_invocable: false
+---`;
+
+		const notBuiltin = `---
+name: web-search
+description: Search the web
+---`;
+
+		expect(/^builtin:\s*true$/m.test(builtin)).toBe(true);
+		expect(/^builtin:\s*true$/m.test(notBuiltin)).toBe(false);
+
+		const meta = parseSkillFrontmatter(builtin);
+		expect(meta.description).toBe("Save to memory");
+		expect(meta.user_invocable).toBe(false);
+	});
+
+	it("parses multiline YAML description using > folded scalar", () => {
+		const content = `---
+name: agent-architect
+description: >
+  Design agents with genuine humanity — craft SOUL.md, IDENTITY.md, USER.md,
+  and AGENTS.md files that produce agents people actually connect with.
+metadata:
+  last_verified: 2026-03-21
+---
+
+# Agent Architect`;
+
+		const meta = parseSkillFrontmatter(content);
+		// Regex-based parser only captures the first line of folded scalars
+		// but should still return a non-empty description
+		expect(meta.description.length).toBeGreaterThan(0);
+	});
+
+	it("ignores metadata block keys when parsing top-level fields", () => {
+		const content = `---
+name: test-skill
+description: "A skill with nested metadata"
+metadata:
+  last_verified: 2026-03-21
+  custom_key: custom_value
+---`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("A skill with nested metadata");
+		// metadata block shouldn't leak into top-level fields
+		expect(meta.version).toBeUndefined();
 	});
 });
 
@@ -323,5 +460,109 @@ This is a test skill.`,
 		expect(res.status).toBe(400);
 		const body = await res.json();
 		expect(body.error).toContain("Query parameter q is required");
+	});
+
+	it("POST /api/skills/install accepts valid name with source", async () => {
+		// This will fail at the spawn step (no real skills CLI), but should
+		// get past validation and not return 400
+		const res = await app.request("/api/skills/install", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: "web-search", source: "Signet-AI/signetai" }),
+		});
+		// Will be 500 (skills CLI not available) or 200 — not 400 validation error
+		expect(res.status).not.toBe(400);
+	});
+
+	it("POST /api/skills/install rejects invalid JSON body", async () => {
+		const res = await app.request("/api/skills/install", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: "not json",
+		});
+		expect(res.status).toBe(400);
+	});
+
+	// Regression: signet skills should appear in browse results when the
+	// bundled skills dir is resolvable (dev environment)
+	it.skipIf(!existsSync(join(__dirname, "..", "..", "..", "..", "skills")))(
+		"GET /api/skills/browse includes signet provider skills",
+		async () => {
+			const res = await app.request("/api/skills/browse");
+			expect(res.status).toBe(200);
+			const body = await res.json();
+			const signetSkills = body.results.filter((s: { provider: string }) => s.provider === "signet");
+			expect(signetSkills.length).toBeGreaterThan(0);
+
+			// Verify signet skills use repo path as fullName, not signet@ prefix
+			for (const skill of signetSkills) {
+				expect(skill.fullName).toBe("Signet-AI/signetai");
+				expect(skill.official).toBe(true);
+			}
+
+			// Builtin skills should be marked
+			const builtins = signetSkills.filter((s: { builtin: boolean }) => s.builtin);
+			expect(builtins.length).toBeGreaterThan(0);
+		},
+	);
+});
+
+// ---------------------------------------------------------------------------
+// Install command construction (behavioral contract)
+// ---------------------------------------------------------------------------
+
+describe("install command args", () => {
+	// Test the regex pattern used to detect multi-skill repo sources
+	const repoPattern = /^[\w-]+\/[\w.-]+$/;
+
+	it("matches owner/repo format", () => {
+		expect(repoPattern.test("Signet-AI/signetai")).toBe(true);
+		expect(repoPattern.test("vercel-labs/agent-skills")).toBe(true);
+		expect(repoPattern.test("anthropic-ai/browser-use")).toBe(true);
+	});
+
+	it("does not match clawhub@ prefixed sources", () => {
+		expect(repoPattern.test("clawhub@some-skill")).toBe(false);
+	});
+
+	it("does not match bare skill names", () => {
+		// bare names don't contain a slash
+		expect(repoPattern.test("browser-use")).toBe(false);
+		expect(repoPattern.test("web-search")).toBe(false);
+	});
+
+	it("does not match owner/repo@ref format", () => {
+		// The @ makes it fail the pattern — these are handled by skills CLI directly
+		expect(repoPattern.test("vercel-labs/skills@browser-use")).toBe(false);
+	});
+
+	it("constructs --skill flag for repo sources", () => {
+		const source = "Signet-AI/signetai";
+		const name = "web-search";
+		const args = ["add", source, "--global", "--yes"];
+		if (source && source !== name && repoPattern.test(source)) {
+			args.push("--skill", name);
+		}
+		expect(args).toEqual(["add", "Signet-AI/signetai", "--global", "--yes", "--skill", "web-search"]);
+	});
+
+	it("does not add --skill when source equals name", () => {
+		const source = "browser-use";
+		const name = "browser-use";
+		const args = ["add", source, "--global", "--yes"];
+		if (source && source !== name && repoPattern.test(source)) {
+			args.push("--skill", name);
+		}
+		expect(args).toEqual(["add", "browser-use", "--global", "--yes"]);
+	});
+
+	it("does not add --skill for clawhub sources", () => {
+		const source = "clawhub@some-skill";
+		const name = "some-skill";
+		const args = ["add", source, "--global", "--yes"];
+		if (source && source !== name && repoPattern.test(source)) {
+			args.push("--skill", name);
+		}
+		expect(args).toEqual(["add", "clawhub@some-skill", "--global", "--yes"]);
 	});
 });

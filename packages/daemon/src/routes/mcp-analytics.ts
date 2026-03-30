@@ -69,11 +69,7 @@ function computePercentile(sorted: readonly number[], p: number): number {
 export function mountMcpAnalyticsRoutes(app: Hono, authMode: AuthMode = "local"): void {
 	// GET /api/mcp/analytics — aggregated stats across all servers
 	app.get("/api/mcp/analytics", (c) => {
-		const scoped = resolveScopedAgent(
-			c.get("auth")?.claims ?? null,
-			authMode,
-			c.req.query("agent_id"),
-		);
+		const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authMode, c.req.query("agent_id"));
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		const agentId = scoped.agentId;
 		const server = c.req.query("server");
@@ -156,11 +152,7 @@ export function mountMcpAnalyticsRoutes(app: Hono, authMode: AuthMode = "local")
 	// GET /api/mcp/analytics/:server — per-server breakdown
 	app.get("/api/mcp/analytics/:server", (c) => {
 		const serverId = c.req.param("server");
-		const scoped = resolveScopedAgent(
-			c.get("auth")?.claims ?? null,
-			authMode,
-			c.req.query("agent_id"),
-		);
+		const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authMode, c.req.query("agent_id"));
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		const agentId = scoped.agentId;
 		const since = c.req.query("since");

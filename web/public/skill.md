@@ -133,8 +133,14 @@ These skills are included and available immediately after install:
 - `/remember` — save a memory
 - `/recall` — search memories
 - `/memory-debug` — diagnose memory issues
+- `/onboarding` — interactive interview to set up your workspace
+- `/signet` — learn about Signet's capabilities
+- `/signet-design` — Signet's visual design system
 
 You do NOT need to install these. They are built in.
+
+Additional official skills are available in the Signet marketplace
+(dashboard > Skills > Browse, filter by "Signet").
 
 ### What you SHOULD do manually
 
