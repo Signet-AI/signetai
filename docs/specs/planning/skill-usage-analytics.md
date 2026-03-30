@@ -44,6 +44,7 @@ skills agents rely on, how often they run, or whether they succeed.
 ### Analytics API
 - `GET /api/skills/analytics` — aggregated stats with agent scoping
 - `GET /api/skills/analytics/:skill` — per-skill breakdown with 7-day timeline
+- Analytics is historical — includes invocations from skills that have since been uninstalled
 
 ### CLI command
 - `signet skill analytics [--skill <name>] [--since <iso>] [--json]`

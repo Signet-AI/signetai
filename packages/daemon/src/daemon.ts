@@ -7351,8 +7351,11 @@ app.get("/api/tasks/:id/stream", (c) => {
 	});
 });
 
-// List all tasks (joined with last run status)
+// List all tasks (joined with last run status), scoped by agent
 app.get("/api/tasks", (c) => {
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
+
 	const tasks = getDbAccessor().withReadDb((db) =>
 		db
 			.prepare(
@@ -7365,9 +7368,10 @@ app.get("/api/tasks", (c) => {
 				     WHERE task_id = t.id
 				     ORDER BY started_at DESC LIMIT 1
 				 )
+				 WHERE t.agent_id = ?
 				 ORDER BY t.created_at DESC`,
 			)
-			.all(),
+			.all(scoped.agentId),
 	);
 
 	return c.json({ tasks, presets: CRON_PRESETS });
@@ -7451,11 +7455,15 @@ app.post("/api/tasks", async (c) => {
 app.get("/api/tasks/:id", (c) => {
 	const taskId = c.req.param("id");
 
-	const task = getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId));
+	const task = getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId)) as Record<string, unknown> | undefined;
 
 	if (!task) {
 		return c.json({ error: "Task not found" }, 404);
 	}
+
+	const taskAgent = typeof task.agent_id === "string" ? task.agent_id : "default";
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, taskAgent);
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const runs = getDbAccessor().withReadDb((db) =>
 		db
@@ -7483,6 +7491,10 @@ app.patch("/api/tasks/:id", async (c) => {
 	if (!existing) {
 		return c.json({ error: "Task not found" }, 404);
 	}
+
+	const existingAgent = typeof existing.agent_id === "string" ? existing.agent_id : "default";
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, existingAgent);
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	if (body.cronExpression !== undefined && !validateCron(body.cronExpression)) {
 		return c.json({ error: "Invalid cron expression" }, 400);
@@ -7538,9 +7550,19 @@ app.patch("/api/tasks/:id", async (c) => {
 app.delete("/api/tasks/:id", (c) => {
 	const taskId = c.req.param("id");
 
-	const result = getDbAccessor().withWriteTx((db) => {
-		const info = db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
-		return info;
+	const task = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT agent_id FROM scheduled_tasks WHERE id = ?").get(taskId),
+	) as { agent_id: string } | undefined;
+
+	if (!task) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, task.agent_id);
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
+
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
 	});
 
 	return c.json({ success: true });

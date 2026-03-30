@@ -153,15 +153,19 @@ describe("skill-analytics queries", () => {
 	});
 
 	it("validates isValidIsoDate helper logic", () => {
-		// Replicate the validation used in the route
+		const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 		function isValidIsoDate(value: string): boolean {
+			if (!ISO_DATE_RE.test(value)) return false;
 			const d = new Date(value);
 			return !Number.isNaN(d.getTime());
 		}
 
 		expect(isValidIsoDate("2025-01-01T00:00:00Z")).toBe(true);
 		expect(isValidIsoDate("2025-01-01")).toBe(true);
+		expect(isValidIsoDate("2025-03-15T14:30:00+05:30")).toBe(true);
 		expect(isValidIsoDate("not-a-date")).toBe(false);
 		expect(isValidIsoDate("")).toBe(false);
+		expect(isValidIsoDate("March 15, 2025")).toBe(false);
+		expect(isValidIsoDate("15/03/2025")).toBe(false);
 	});
 });
