@@ -4,16 +4,16 @@
  */
 
 import {
-	getMcpServers,
-	getMcpServerTools,
-	discoverMcpServers,
-	importMcpServer,
-	toggleMcpServer,
-	removeMcpServer,
-	generateMcpCli,
+	type DiscoveredServer,
 	type McpServer,
 	type McpTool,
-	type DiscoveredServer,
+	discoverMcpServers,
+	generateMcpCli,
+	getMcpServerTools,
+	getMcpServers,
+	importMcpServer,
+	removeMcpServer,
+	toggleMcpServer,
 } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 
@@ -76,9 +76,7 @@ export async function doImport(server: DiscoveredServer): Promise<void> {
 		toast(`Imported '${server.name}'`, "success");
 		await fetchInstalled();
 		// Mark as installed in the discover list
-		mcp.discovered = mcp.discovered.map((s) =>
-			s.name === server.name ? { ...s, alreadyInstalled: true } : s,
-		);
+		mcp.discovered = mcp.discovered.map((s) => (s.name === server.name ? { ...s, alreadyInstalled: true } : s));
 	} else {
 		toast(result.error ?? `Failed to import '${server.name}'`, "error");
 	}

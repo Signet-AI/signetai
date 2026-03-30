@@ -15,21 +15,16 @@
  *   DELETE /api/mcp-servers/:id          remove
  */
 
-import type { Hono } from "hono";
-import { spawn, type ChildProcess } from "child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { spawn } from "child_process";
+import { randomBytes } from "node:crypto";
+import { unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
+import type { Hono } from "hono";
 import { loadServerDefinitions } from "mcporter";
 import type { DbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
-import {
-	listServerTools,
-	mcpBinsDir,
-	refreshProxyRuntime,
-	type McpServerRow,
-} from "../mcp/proxy-runtime.js";
+import { type McpServerRow, listServerTools, mcpBinsDir, refreshProxyRuntime } from "../mcp/proxy-runtime.js";
 
 // ---------------------------------------------------------------------------
 // Validation helpers
@@ -46,42 +41,39 @@ function validateName(name: unknown): name is string {
 // ---------------------------------------------------------------------------
 
 function dbList(db: DbAccessor): McpServerRow[] {
-	return db.withReadDb((rdb) =>
-		rdb
-			.prepare(
-				"SELECT id, name, transport, config, enabled, cli_path, created_at, updated_at FROM mcp_servers ORDER BY created_at DESC",
-			)
-			.all() as McpServerRow[],
+	return db.withReadDb(
+		(rdb) =>
+			rdb
+				.prepare(
+					"SELECT id, name, transport, config, enabled, cli_path, created_at, updated_at FROM mcp_servers ORDER BY created_at DESC",
+				)
+				.all() as McpServerRow[],
 	);
 }
 
 function dbGetById(db: DbAccessor, id: string): McpServerRow | undefined {
-	return db.withReadDb((rdb) =>
-		rdb
-			.prepare(
-				"SELECT id, name, transport, config, enabled, cli_path, created_at, updated_at FROM mcp_servers WHERE id = ?",
-			)
-			.get(id) as McpServerRow | undefined,
+	return db.withReadDb(
+		(rdb) =>
+			rdb
+				.prepare(
+					"SELECT id, name, transport, config, enabled, cli_path, created_at, updated_at FROM mcp_servers WHERE id = ?",
+				)
+				.get(id) as McpServerRow | undefined,
 	);
 }
 
 function dbGetByName(db: DbAccessor, name: string): McpServerRow | undefined {
-	return db.withReadDb((rdb) =>
-		rdb
-			.prepare(
-				"SELECT id, name, transport, config, enabled, cli_path, created_at, updated_at FROM mcp_servers WHERE name = ?",
-			)
-			.get(name) as McpServerRow | undefined,
+	return db.withReadDb(
+		(rdb) =>
+			rdb
+				.prepare(
+					"SELECT id, name, transport, config, enabled, cli_path, created_at, updated_at FROM mcp_servers WHERE name = ?",
+				)
+				.get(name) as McpServerRow | undefined,
 	);
 }
 
-function dbInsert(
-	db: DbAccessor,
-	id: string,
-	name: string,
-	transport: "stdio" | "http",
-	config: string,
-): McpServerRow {
+function dbInsert(db: DbAccessor, id: string, name: string, transport: "stdio" | "http", config: string): McpServerRow {
 	const now = new Date().toISOString();
 	db.withWriteTx((wdb) => {
 		wdb
@@ -95,11 +87,7 @@ function dbInsert(
 	return row;
 }
 
-function dbUpdate(
-	db: DbAccessor,
-	id: string,
-	fields: Partial<{ enabled: number; cli_path: string }>,
-): void {
+function dbUpdate(db: DbAccessor, id: string, fields: Partial<{ enabled: number; cli_path: string }>): void {
 	const sets: string[] = [];
 	const vals: unknown[] = [];
 	if (fields.enabled !== undefined) {
@@ -129,24 +117,11 @@ function dbDelete(db: DbAccessor, id: string): void {
 // CLI generation helper
 // ---------------------------------------------------------------------------
 
-function spawnGenerateCli(
-	name: string,
-	configPath: string,
-	outputDir: string,
-): Promise<string> {
+function spawnGenerateCli(name: string, configPath: string, outputDir: string): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const proc: ChildProcess = spawn(
+		const proc = spawn(
 			"npx",
-			[
-				"mcporter",
-				"generate-cli",
-				name,
-				"--config",
-				configPath,
-				"--compile",
-				"--output",
-				outputDir,
-			],
+			["mcporter", "generate-cli", name, "--config", configPath, "--compile", "--output", outputDir],
 			{ env: process.env, timeout: 120_000 },
 		);
 
@@ -345,10 +320,18 @@ export function mountMcpServersRoutes(app: Hono, db: DbAccessor): void {
 			return c.json({ success: true, path: cliPath });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			logger.error("mcp-servers", `CLI generation failed for '${row.name}'`, err instanceof Error ? err : new Error(msg));
+			logger.error(
+				"mcp-servers",
+				`CLI generation failed for '${row.name}'`,
+				err instanceof Error ? err : new Error(msg),
+			);
 			return c.json({ success: false, error: msg }, 500);
 		} finally {
-			try { unlinkSync(tempPath); } catch { /* best-effort */ }
+			try {
+				unlinkSync(tempPath);
+			} catch {
+				/* best-effort */
+			}
 		}
 	});
 

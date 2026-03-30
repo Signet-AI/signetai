@@ -9,11 +9,11 @@
  * and registers them on each fresh McpServer instance.
  */
 
-import { writeFileSync, unlinkSync, mkdirSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
-import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { createRuntime, loadServerDefinitions, type Runtime, type ServerToolInfo } from "mcporter";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { type Runtime, type ServerToolInfo, createRuntime, loadServerDefinitions } from "mcporter";
 import type { DbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 
@@ -54,12 +54,13 @@ export function getProxyToolCache(): ReadonlyMap<string, readonly ServerToolInfo
 // ---------------------------------------------------------------------------
 
 function loadEnabledServers(db: DbAccessor): McpServerRow[] {
-	return db.withReadDb((rdb) =>
-		rdb
-			.prepare(
-				"SELECT id, name, transport, config, enabled, cli_path, created_at, updated_at FROM mcp_servers WHERE enabled = 1",
-			)
-			.all() as McpServerRow[],
+	return db.withReadDb(
+		(rdb) =>
+			rdb
+				.prepare(
+					"SELECT id, name, transport, config, enabled, cli_path, created_at, updated_at FROM mcp_servers WHERE enabled = 1",
+				)
+				.all() as McpServerRow[],
 	);
 }
 
@@ -123,12 +124,19 @@ export async function initProxyRuntime(db: DbAccessor): Promise<void> {
 					_toolCache.set(def.name, tools);
 					logger.info("mcp-proxy", `Cached ${tools.length} tool(s) for '${def.name}'`);
 				} catch (err) {
-					logger.warn("mcp-proxy", `Skipping tool cache for '${def.name}': ${err instanceof Error ? err.message : String(err)}`);
+					logger.warn(
+						"mcp-proxy",
+						`Skipping tool cache for '${def.name}': ${err instanceof Error ? err.message : String(err)}`,
+					);
 				}
 			}),
 		);
 	} catch (err) {
-		logger.error("mcp-proxy", "Failed to initialize proxy runtime", err instanceof Error ? err : new Error(String(err)));
+		logger.error(
+			"mcp-proxy",
+			"Failed to initialize proxy runtime",
+			err instanceof Error ? err : new Error(String(err)),
+		);
 		_runtime = null;
 	}
 }
@@ -155,9 +163,7 @@ export function getProxyRuntime(): Runtime | null {
  * Used by GET /api/mcp-servers/:id/tools — separate from the shared
  * proxy runtime so a single slow server doesn't block others.
  */
-export async function listServerTools(
-	row: McpServerRow,
-): Promise<ServerToolInfo[]> {
+export async function listServerTools(row: McpServerRow): Promise<ServerToolInfo[]> {
 	let config: unknown;
 	try {
 		config = JSON.parse(row.config);
@@ -176,12 +182,23 @@ export async function listServerTools(
 		runtime = await createRuntime({ servers: defs });
 		return await runtime.listTools(row.name, { includeSchema: true });
 	} catch (err) {
-		logger.warn("mcp-proxy", `Failed to list tools for '${row.name}': ${err instanceof Error ? err.message : String(err)}`);
+		logger.warn(
+			"mcp-proxy",
+			`Failed to list tools for '${row.name}': ${err instanceof Error ? err.message : String(err)}`,
+		);
 		return [];
 	} finally {
-		try { unlinkSync(tempPath); } catch { /* best-effort */ }
+		try {
+			unlinkSync(tempPath);
+		} catch {
+			/* best-effort */
+		}
 		if (runtime !== null) {
-			try { await runtime.close(); } catch { /* best-effort */ }
+			try {
+				await runtime.close();
+			} catch {
+				/* best-effort */
+			}
 		}
 	}
 }

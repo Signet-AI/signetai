@@ -420,7 +420,12 @@ bun src/cli.ts status    # Check status
 | `/api/logs/*` | GET | Daemon log access |
 | `/api/logs/stream` | GET | SSE log streaming |
 | `/api/identity` | GET/POST | Identity file read/write |
-| `/mcp` | ALL | MCP server (Streamable HTTP, memory + secret tools) |
+| `/api/mcp-servers` | GET/POST | List or register MCP servers |
+| `/api/mcp-servers/discover` | GET | Cross-harness discovery via mcporter |
+| `/api/mcp-servers/:id/tools` | GET | List tools for an installed server |
+| `/api/mcp-servers/:id` | PATCH/DELETE | Toggle enabled or remove a server |
+| `/api/mcp-servers/:id/generate-cli` | POST | Compile server to standalone binary |
+| `/mcp` | ALL | MCP server (Streamable HTTP, memory + secret tools + installed server proxies) |
 
 
 ## Identity Files

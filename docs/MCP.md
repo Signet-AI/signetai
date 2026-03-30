@@ -169,6 +169,72 @@ MCP connections inherit the daemon's auth model:
   requests require a token.
 
 
+MCP Server Registry
+--------------------
+
+Signet can install, manage, and proxy third-party MCP servers. Installed
+servers are stored in the `mcp_servers` SQLite table and appear in the
+dashboard under **Skills → MCP Servers**.
+
+### Installing a server
+
+Via the dashboard **Discover** tab — Signet scans your existing harness
+configs (Claude Code, Cursor, Codex, OpenCode, VS Code, Windsurf) and lets
+you import them with one click.
+
+Via API:
+
+```bash
+curl -X POST http://localhost:3850/api/mcp-servers/import \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"context7","rawConfig":{"url":"https://mcp.context7.com/mcp"}}'
+```
+
+### Proxy through /mcp
+
+Installed (and enabled) servers are automatically proxied through the
+existing `/mcp` endpoint. Their tools appear prefixed as
+`mcp__{serverName}__{toolName}` alongside Signet's native tools:
+
+```
+mcp__context7__resolve-library-id
+mcp__linear__create_issue
+memory_search          ← Signet native
+memory_store           ← Signet native
+```
+
+The proxy runtime (mcporter) pools connections at daemon startup and
+refreshes whenever a server is installed, removed, or toggled.
+
+### Standalone CLI generation
+
+For harnesses that don't speak MCP, each server can be compiled to a
+self-contained binary:
+
+```bash
+# Via dashboard: click "Generate CLI" on any server card
+# Via API:
+curl -X POST http://localhost:3850/api/mcp-servers/context7/generate-cli
+# → binary written to ~/.agents/mcp-bins/context7
+```
+
+The binary embeds the server config and calls the upstream server directly —
+no daemon connection needed.
+
+### API reference
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/mcp-servers` | GET | List all registered servers |
+| `/api/mcp-servers` | POST | Register a server manually |
+| `/api/mcp-servers/discover` | GET | Cross-harness discovery |
+| `/api/mcp-servers/import` | POST | Import a discovered server |
+| `/api/mcp-servers/:id/tools` | GET | List tools (lazy) |
+| `/api/mcp-servers/:id` | PATCH | Toggle `enabled` |
+| `/api/mcp-servers/:id` | DELETE | Remove server |
+| `/api/mcp-servers/:id/generate-cli` | POST | Compile to standalone binary |
+
+
 Roadmap
 -------
 
