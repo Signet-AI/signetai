@@ -7593,7 +7593,6 @@ app.post("/api/tasks/:id/run", async (c) => {
 		c.req.query("agent_id"),
 	);
 	if (scoped.error) return c.json({ error: scoped.error }, 403);
-	const taskAgentId = scoped.agentId;
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
@@ -7637,8 +7636,11 @@ app.post("/api/tasks/:id/run", async (c) => {
 					).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
 
 					// Record skill invocation for manual API-triggered runs.
+					// Attribution uses 'default' — scheduled_tasks has no agent_id column.
+					// Phase 2: derive from task's owning agent once the column exists.
 					if (taskSkillName) {
 						const normalizedSkill = taskSkillName.toLowerCase();
+						const invocationAgentId = "default";
 						const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
 						const success = status === "completed";
 						try {
@@ -7648,7 +7650,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 							).run(
 								`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
 								normalizedSkill,
-								taskAgentId,
+								invocationAgentId,
 								taskId,
 								latencyMs,
 								success ? 1 : 0,
@@ -7661,7 +7663,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 									SELECT id FROM entities
 									WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = ?
 								 )`,
-							).run(completedAt, normalizedSkill, taskAgentId);
+							).run(completedAt, normalizedSkill, invocationAgentId);
 						} catch (err) {
 							logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
 						}
