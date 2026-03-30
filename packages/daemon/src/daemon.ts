@@ -7454,16 +7454,16 @@ app.post("/api/tasks", async (c) => {
 // Get a single task + recent runs
 app.get("/api/tasks/:id", (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
-	const task = getDbAccessor().withReadDb((db) => db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId)) as Record<string, unknown> | undefined;
+	const task = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
+	);
 
 	if (!task) {
 		return c.json({ error: "Task not found" }, 404);
 	}
-
-	const taskAgent = typeof task.agent_id === "string" ? task.agent_id : "default";
-	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, taskAgent);
-	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const runs = getDbAccessor().withReadDb((db) =>
 		db
@@ -7483,18 +7483,16 @@ app.get("/api/tasks/:id", (c) => {
 app.patch("/api/tasks/:id", async (c) => {
 	const taskId = c.req.param("id");
 	const body = await c.req.json();
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, body.agentId);
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const existing = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
 	) as Record<string, unknown> | undefined;
 
 	if (!existing) {
 		return c.json({ error: "Task not found" }, 404);
 	}
-
-	const existingAgent = typeof existing.agent_id === "string" ? existing.agent_id : "default";
-	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, existingAgent);
-	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	if (body.cronExpression !== undefined && !validateCron(body.cronExpression)) {
 		return c.json({ error: "Invalid cron expression" }, 400);
@@ -7549,21 +7547,16 @@ app.patch("/api/tasks/:id", async (c) => {
 // Delete a task (cascade deletes runs)
 app.delete("/api/tasks/:id", (c) => {
 	const taskId = c.req.param("id");
-
-	const task = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT agent_id FROM scheduled_tasks WHERE id = ?").get(taskId),
-	) as { agent_id: string } | undefined;
-
-	if (!task) {
-		return c.json({ error: "Task not found" }, 404);
-	}
-
-	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, task.agent_id);
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
 	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
-	getDbAccessor().withWriteTx((db) => {
-		db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
-	});
+	const deleted = getDbAccessor().withWriteTx((db) =>
+		db.prepare("DELETE FROM scheduled_tasks WHERE id = ? AND agent_id = ?").run(taskId, scoped.agentId),
+	);
+
+	if (deleted.changes === 0) {
+		return c.json({ error: "Task not found" }, 404);
+	}
 
 	return c.json({ success: true });
 });
@@ -7571,23 +7564,16 @@ app.delete("/api/tasks/:id", (c) => {
 // Trigger an immediate manual run
 app.post("/api/tasks/:id/run", async (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const task = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ?").get(taskId),
+		db.prepare("SELECT * FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
 	) as Record<string, unknown> | undefined;
 
 	if (!task) {
 		return c.json({ error: "Task not found" }, 404);
 	}
-
-	// Enforce agent ownership — caller must have access to the task's agent scope
-	const taskOwnerAgent = typeof task.agent_id === "string" ? task.agent_id : "default";
-	const scoped = resolveScopedAgent(
-		c.get("auth")?.claims ?? null,
-		authConfig.mode,
-		taskOwnerAgent,
-	);
-	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	// Check if already running
 	const running = getDbAccessor().withReadDb((db) =>
