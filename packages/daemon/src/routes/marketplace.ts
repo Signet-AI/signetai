@@ -1827,6 +1827,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		if (!server) {
 			return c.json({ error: "Server not found" }, 404);
 		}
+		if (!server.enabled) {
+			return c.json({ error: "Cannot generate CLI for a disabled server" }, 400);
+		}
 		if (server.config.transport !== "stdio") {
 			return c.json({ error: "CLI generation is only supported for stdio servers" }, 400);
 		}

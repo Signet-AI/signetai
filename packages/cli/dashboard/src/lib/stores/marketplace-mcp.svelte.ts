@@ -232,7 +232,12 @@ export async function doGenerateMcpCli(id: string): Promise<void> {
 		const result = await generateMarketplaceMcpCli(id);
 		if (result.success && result.server) {
 			mcpMarket.installed = mcpMarket.installed.map((s) => (s.id === id ? (result.server ?? s) : s));
-			toast(`CLI binary ready: ${result.path ?? id}`, "success");
+			const warning = (result as Record<string, unknown>).warning;
+			if (typeof warning === "string") {
+				toast(`CLI binary ready: ${result.path ?? id}. Warning: ${warning}`, "warn");
+			} else {
+				toast(`CLI binary ready: ${result.path ?? id}`, "success");
+			}
 		} else {
 			toast(result.error ?? "CLI generation failed", "error");
 		}
