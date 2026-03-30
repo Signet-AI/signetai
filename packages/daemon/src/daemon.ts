@@ -7587,13 +7587,10 @@ app.post("/api/tasks/:id/run", async (c) => {
 	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
 	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
-	const scoped = resolveScopedAgent(
-		c.get("auth")?.claims ?? null,
-		authConfig.mode,
-		c.req.query("agent_id"),
-	);
-	if (scoped.error) return c.json({ error: scoped.error }, 403);
-	const taskAgentId = scoped.agentId;
+	// Attribution uses 'default' — scheduled_tasks has no agent_id column,
+	// so neither trigger path (scheduler or API) can derive the task's owning
+	// agent. Phase 2 adds agent_id to scheduled_tasks for proper attribution.
+	const taskAgentId = "default";
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
