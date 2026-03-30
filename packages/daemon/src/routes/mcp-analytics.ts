@@ -197,16 +197,26 @@ export function mountMcpAnalyticsRoutes(app: Hono, authMode: AuthMode = "local")
 					)
 					.all(...params) as ToolStats[];
 
-				// 7-day timeline (daily buckets) — uses since if provided, else last 7 days
+				// 7-day timeline (daily buckets, zero-filled)
 				const timelineCutoff = since ? "datetime(?)" : "datetime('now', '-7 days')";
 				const timelineParams = since ? [...params, since] : [...params];
-				const timeline = db
+				const sparse = db
 					.prepare(
 						`SELECT DATE(created_at) as date, COUNT(*) as count
 					 FROM mcp_invocations WHERE ${where} AND created_at >= ${timelineCutoff}
 					 GROUP BY DATE(created_at) ORDER BY date`,
 					)
 					.all(...timelineParams) as { date: string; count: number }[];
+
+				// Zero-fill missing days in the last 7 days
+				const counts = new Map(sparse.map((r) => [r.date, r.count]));
+				const timeline: { date: string; count: number }[] = [];
+				for (let i = 6; i >= 0; i--) {
+					const d = new Date();
+					d.setDate(d.getDate() - i);
+					const key = d.toISOString().slice(0, 10);
+					timeline.push({ date: key, count: counts.get(key) ?? 0 });
+				}
 
 				return {
 					serverId,
