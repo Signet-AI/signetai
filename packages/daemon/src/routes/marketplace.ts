@@ -7,7 +7,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -160,6 +160,23 @@ function getMarketplaceDir(): string {
 
 function getMcpBinsDir(): string {
 	return join(getAgentsDir(), "mcp-bins");
+}
+
+/** Return true only if the path is a direct child of the managed mcp-bins directory. */
+function isUnderMcpBins(filePath: string): boolean {
+	const binsDir = resolve(getMcpBinsDir());
+	const resolved = resolve(filePath);
+	return resolved.startsWith(`${binsDir}/`) || resolved.startsWith(`${binsDir}\\`);
+}
+
+/** Safely remove a CLI binary only if it lives under ~/.agents/mcp-bins/. */
+function removeManagedCliBinary(cliPath: string): void {
+	if (!isUnderMcpBins(cliPath)) return;
+	try {
+		unlinkSync(cliPath);
+	} catch {
+		/* binary may already be gone */
+	}
 }
 
 function getInstalledMcpPath(): string {
@@ -1256,7 +1273,11 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 				});
 				return;
 			}
-			resolve({ success: true, path: join(binsDir, binaryName) });
+			// Detect the actual emitted binary — may have .exe suffix on Windows
+			const basePath = join(binsDir, binaryName);
+			const exePath = join(binsDir, `${binaryName}.exe`);
+			const emittedPath = existsSync(basePath) ? basePath : existsSync(exePath) ? exePath : basePath;
+			resolve({ success: true, path: emittedPath });
 		});
 
 		proc.on("error", (err) => {
@@ -1765,11 +1786,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		const configChanged = normalized !== null;
 		let nextCliPath = existing.cliPath;
 		if (configChanged && existing.cliPath) {
-			try {
-				unlinkSync(existing.cliPath);
-			} catch {
-				/* binary may already be gone */
-			}
+			removeManagedCliBinary(existing.cliPath);
 			nextCliPath = undefined;
 		}
 
@@ -1831,11 +1848,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		}
 		// Remove compiled CLI binary if one was generated
 		if (server.cliPath) {
-			try {
-				unlinkSync(server.cliPath);
-			} catch {
-				/* binary may already be gone */
-			}
+			removeManagedCliBinary(server.cliPath);
 		}
 		writeInstalledServers(installed.filter((s) => s.id !== id));
 		invalidateMarketplaceToolsCache();
