@@ -1169,6 +1169,8 @@ interface GenerateCliResult {
 	readonly success: boolean;
 	readonly path?: string;
 	readonly error?: string;
+	/** True when the compiled binary embeds inline env/header values. */
+	readonly hasInlineCredentials?: boolean;
 }
 
 /**
@@ -1234,11 +1236,17 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 				"Server config contains secret:// references which cannot be embedded in a compiled binary. Remove secret references from the server's env/headers before generating a CLI.",
 		};
 	}
+	// Track whether the compiled binary will embed inline credential values
+	const hasInlineCredentials =
+		(server.config.transport === "stdio" && Object.keys(server.config.env).length > 0) ||
+		(server.config.transport === "http" && Object.keys(server.config.headers).length > 0);
+
 	const configPayload = { mcpServers: { [binaryName]: configEntry } };
 	const tmpConfig = join(tmpdir(), `mcporter-${server.id}-${Date.now()}.json`);
 
 	try {
-		writeFileSync(tmpConfig, JSON.stringify(configPayload, null, 2));
+		// Write with restrictive permissions — config may contain inline credentials
+		writeFileSync(tmpConfig, JSON.stringify(configPayload, null, 2), { mode: 0o600 });
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		return { success: false, error: `Failed to write temp config: ${msg}` };
@@ -1277,7 +1285,7 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 			const basePath = join(binsDir, binaryName);
 			const exePath = join(binsDir, `${binaryName}.exe`);
 			const emittedPath = existsSync(basePath) ? basePath : existsSync(exePath) ? exePath : basePath;
-			resolve({ success: true, path: emittedPath });
+			resolve({ success: true, path: emittedPath, hasInlineCredentials });
 		});
 
 		proc.on("error", (err) => {
@@ -1836,15 +1844,26 @@ export function mountMarketplaceRoutes(app: Hono): void {
 				return c.json({ success: false, error: result.error }, 500);
 			}
 
-			// Persist the binary path on the server record
+			// Re-read the latest state — compilation can take up to 120s, so the
+			// snapshot captured before the spawn may be stale from concurrent edits.
+			const freshInstalled = readInstalledServers();
+			const freshServer = freshInstalled.find((s) => s.id === id);
+			if (!freshServer) {
+				// Server was uninstalled during compilation — clean up the binary
+				if (result.path) removeManagedCliBinary(result.path);
+				return c.json({ error: "Server was removed during CLI generation" }, 409);
+			}
 			const updated: InstalledMarketplaceMcpServer = {
-				...server,
+				...freshServer,
 				cliPath: result.path,
 				updatedAt: new Date().toISOString(),
 			};
-			writeInstalledServers(installed.map((s) => (s.id === id ? updated : s)));
+			writeInstalledServers(freshInstalled.map((s) => (s.id === id ? updated : s)));
 			logger.info("skills", "CLI binary generated", { serverId: id, path: result.path });
-			return c.json({ success: true, path: result.path, server: updated });
+			const warning = result.hasInlineCredentials
+				? "The compiled binary embeds inline env/header values from the server config. Treat the binary as sensitive."
+				: undefined;
+			return c.json({ success: true, path: result.path, server: updated, warning });
 		} finally {
 			cliGenerationInFlight.delete(id);
 		}
