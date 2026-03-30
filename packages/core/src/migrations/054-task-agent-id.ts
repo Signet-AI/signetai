@@ -3,6 +3,12 @@
  *
  * Allows skill invocation analytics to attribute task runs
  * to the correct agent instead of hardcoding 'default'.
+ *
+ * Existing rows receive agent_id = 'default' because pre-migration
+ * tasks had no agent ownership column — there is no prior data to
+ * infer the correct agent. In single-agent (local) deployments this
+ * is accurate. In multi-agent deployments that predate this migration,
+ * operators should reassign tasks via the PATCH endpoint after upgrade.
  */
 
 import type { MigrationDb } from "./index";
