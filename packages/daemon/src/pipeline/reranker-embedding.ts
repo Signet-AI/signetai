@@ -39,15 +39,8 @@ function bufferToF32(buf: Buffer): Float32Array {
  * database. The `queryVector` must be pre-computed by the caller (the
  * recall endpoint already fetches it for vector search).
  */
-export function createEmbeddingReranker(
-	accessor: DbAccessor,
-	queryVector: Float32Array,
-): RerankProvider {
-	return async (
-		_query: string,
-		candidates: RerankCandidate[],
-		_cfg: RerankConfig,
-	): Promise<RerankCandidate[]> => {
+export function createEmbeddingReranker(accessor: DbAccessor, queryVector: Float32Array): RerankProvider {
+	return async (_query: string, candidates: RerankCandidate[], _cfg: RerankConfig): Promise<RerankCandidate[]> => {
 		if (candidates.length === 0) return candidates;
 
 		// Batch-fetch cached embeddings for all candidates

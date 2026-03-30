@@ -1,22 +1,22 @@
 <script lang="ts">
-import { onMount } from "svelte";
+import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
+import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
+import TaskForm from "$lib/components/tasks/TaskForm.svelte";
+import { returnToSidebar, setFocusZone } from "$lib/stores/focus.svelte";
+import { nav } from "$lib/stores/navigation.svelte";
 import {
-	ts,
-	fetchTasks,
-	openDetail,
 	closeDetail,
-	openForm,
 	closeForm,
 	doDelete,
 	doTrigger,
 	doUpdate,
+	fetchTasks,
+	openDetail,
+	openForm,
+	ts,
 } from "$lib/stores/tasks.svelte";
-import { returnToSidebar, setFocusZone } from "$lib/stores/focus.svelte";
-import { nav } from "$lib/stores/navigation.svelte";
-import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
-import TaskForm from "$lib/components/tasks/TaskForm.svelte";
-import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
 import Plus from "@lucide/svelte/icons/plus";
+import { onMount } from "svelte";
 
 // Track position as [columnIndex, taskIndex]
 let selectedColumn = $state(0);
@@ -29,13 +29,13 @@ const columnKeys = ["scheduled", "running", "completed", "failed"] as const;
 function getColumnTasks(columnKey: string) {
 	switch (columnKey) {
 		case "scheduled":
-			return ts.tasks.filter(t => t.enabled && t.last_run_status !== "running");
+			return ts.tasks.filter((t) => t.enabled && t.last_run_status !== "running");
 		case "running":
-			return ts.tasks.filter(t => t.last_run_status === "running");
+			return ts.tasks.filter((t) => t.last_run_status === "running");
 		case "completed":
-			return ts.tasks.filter(t => t.last_run_status === "completed");
+			return ts.tasks.filter((t) => t.last_run_status === "completed");
 		case "failed":
-			return ts.tasks.filter(t => t.last_run_status === "failed");
+			return ts.tasks.filter((t) => t.last_run_status === "failed");
 		default:
 			return [];
 	}
@@ -53,7 +53,7 @@ function findFirstColumnWithTasks(): number {
 
 // Set focus zone when entering tasks tab (but don't auto-select)
 $effect(() => {
-	if (nav.activeTab === 'tasks') {
+	if (nav.activeTab === "tasks") {
 		setFocusZone("page-content");
 	}
 });
@@ -65,10 +65,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 	if (e.defaultPrevented) return;
 
 	const target = e.target as HTMLElement;
-	const isInput =
-		target.tagName === "INPUT" ||
-		target.tagName === "TEXTAREA" ||
-		target.isContentEditable;
+	const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
 	// Escape: Close modals first, then return to sidebar
 	if (e.key === "Escape") {
@@ -94,8 +91,9 @@ function handleGlobalKey(e: KeyboardEvent) {
 	if (isInput || ts.formOpen) return;
 
 	// Arrow navigation between columns and tasks (only when detail is closed and board is focused)
-	const isBoardFocused = document.activeElement?.classList.contains('task-card') ||
-		document.activeElement?.closest('[data-column-idx]') !== null;
+	const isBoardFocused =
+		document.activeElement?.classList.contains("task-card") ||
+		document.activeElement?.closest("[data-column-idx]") !== null;
 
 	if (!ts.detailOpen) {
 		if (e.key === "ArrowLeft" && isBoardFocused) {
@@ -122,7 +120,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 		if (e.key === "ArrowRight") {
 			e.preventDefault();
 			const currentFocus = document.activeElement;
-			const isTaskFocused = currentFocus?.classList.contains('task-card');
+			const isTaskFocused = currentFocus?.classList.contains("task-card");
 
 			if (!isTaskFocused && ts.tasks.length > 0) {
 				selectedColumn = findFirstColumnWithTasks();
@@ -201,11 +199,11 @@ function handleGlobalKey(e: KeyboardEvent) {
 }
 
 function focusTaskCard(columnIndex: number, taskIndex: number): void {
-	const columns = document.querySelectorAll('[data-column-idx]');
+	const columns = document.querySelectorAll("[data-column-idx]");
 	const column = columns[columnIndex];
 	if (!column) return;
 
-	const cards = column.querySelectorAll('.task-card');
+	const cards = column.querySelectorAll(".task-card");
 	if (cards[taskIndex] instanceof HTMLElement) {
 		(cards[taskIndex] as HTMLElement).focus({ preventScroll: false });
 		(cards[taskIndex] as HTMLElement).scrollIntoView({ behavior: "smooth", block: "nearest" });

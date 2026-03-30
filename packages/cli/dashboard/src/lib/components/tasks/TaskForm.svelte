@@ -1,16 +1,16 @@
 <script lang="ts">
-import type { ScheduledTask, CronPreset, Skill } from "$lib/api";
+import type { CronPreset, ScheduledTask, Skill } from "$lib/api";
 import { getSkills } from "$lib/api";
-import { doCreate, doUpdate } from "$lib/stores/tasks.svelte";
-import { TASK_PRESETS, type TaskPreset } from "./task-presets";
-import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
 import { Label } from "$lib/components/ui/label/index.js";
-import { Textarea } from "$lib/components/ui/textarea/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
+import * as Sheet from "$lib/components/ui/sheet/index.js";
+import { Textarea } from "$lib/components/ui/textarea/index.js";
+import { doCreate, doUpdate } from "$lib/stores/tasks.svelte";
 import AlertTriangle from "@lucide/svelte/icons/alert-triangle";
 import X from "@lucide/svelte/icons/x";
+import { TASK_PRESETS, type TaskPreset } from "./task-presets";
 
 interface Props {
 	open: boolean;
@@ -22,7 +22,7 @@ interface Props {
 
 let { open, editingId, tasks, presets, onclose }: Props = $props();
 
-let editing = $derived(editingId ? tasks.find((t) => t.id === editingId) : null);
+const editing = $derived(editingId ? tasks.find((t) => t.id === editingId) : null);
 
 let name = $state("");
 let prompt = $state("");
@@ -48,7 +48,7 @@ const defaultPresets: CronPreset[] = [
 	{ label: "Weekly Mon 9am", expression: "0 9 * * 1" },
 ];
 
-let activePresets = $derived(presets.length > 0 ? presets : defaultPresets);
+const activePresets = $derived(presets.length > 0 ? presets : defaultPresets);
 
 function presetLabel(expr: string): string {
 	const match = activePresets.find((p) => p.expression === expr);
@@ -160,7 +160,8 @@ async function handleSubmit() {
 	submitting = false;
 }
 
-const inputClass = "bg-[var(--sig-surface-raised)] border-[var(--sig-border)] text-[var(--sig-text-bright)] text-[12px] h-8";
+const inputClass =
+	"bg-[var(--sig-surface-raised)] border-[var(--sig-border)] text-[var(--sig-text-bright)] text-[12px] h-8";
 const selectContentClass = "bg-[var(--sig-surface-raised)] border-[var(--sig-border)]";
 const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 </script>

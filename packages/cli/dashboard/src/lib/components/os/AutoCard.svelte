@@ -1,15 +1,15 @@
 <script lang="ts">
-	import type { AutoCardManifest } from "$lib/stores/os.svelte";
-	import Wrench from "@lucide/svelte/icons/wrench";
-	import Box from "@lucide/svelte/icons/box";
+import type { AutoCardManifest } from "$lib/stores/os.svelte";
+import Box from "@lucide/svelte/icons/box";
+import Wrench from "@lucide/svelte/icons/wrench";
 
-	interface Props {
-		autoCard: AutoCardManifest;
-		name: string;
-		icon?: string;
-	}
+interface Props {
+	autoCard: AutoCardManifest;
+	name: string;
+	icon?: string;
+}
 
-	const { autoCard, name, icon }: Props = $props();
+let { autoCard, name, icon }: Props = $props();
 </script>
 
 <div class="auto-card">

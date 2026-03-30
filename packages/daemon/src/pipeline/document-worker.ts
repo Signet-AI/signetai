@@ -29,10 +29,7 @@ export interface DocumentWorkerHandle {
 export interface DocumentWorkerDeps {
 	readonly accessor: DbAccessor;
 	readonly embeddingCfg: EmbeddingConfig;
-	readonly fetchEmbedding: (
-		text: string,
-		cfg: EmbeddingConfig,
-	) => Promise<number[] | null>;
+	readonly fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
 	readonly pipelineCfg: PipelineV2Config;
 }
 
@@ -61,11 +58,7 @@ interface DocumentRow {
 // Chunking
 // ---------------------------------------------------------------------------
 
-function chunkText(
-	text: string,
-	chunkSize: number,
-	overlap: number,
-): readonly string[] {
+function chunkText(text: string, chunkSize: number, overlap: number): readonly string[] {
 	if (text.length <= chunkSize) return [text];
 
 	const chunks: string[] = [];
@@ -87,10 +80,7 @@ function chunkText(
 // Job leasing (document_ingest specific)
 // ---------------------------------------------------------------------------
 
-function leaseDocumentJob(
-	db: WriteDb,
-	maxAttempts: number,
-): DocumentJobRow | null {
+function leaseDocumentJob(db: WriteDb, maxAttempts: number): DocumentJobRow | null {
 	const now = new Date().toISOString();
 
 	const row = db
@@ -127,13 +117,7 @@ function completeJob(db: WriteDb, jobId: string): void {
 	).run(now, now, jobId);
 }
 
-function failJob(
-	db: WriteDb,
-	jobId: string,
-	error: string,
-	attempts: number,
-	maxAttempts: number,
-): void {
+function failJob(db: WriteDb, jobId: string, error: string, attempts: number, maxAttempts: number): void {
 	const now = new Date().toISOString();
 	const nextStatus = attempts >= maxAttempts ? "dead" : "pending";
 	db.prepare(
@@ -147,12 +131,7 @@ function failJob(
 // Document status updates
 // ---------------------------------------------------------------------------
 
-function updateDocumentStatus(
-	db: WriteDb,
-	docId: string,
-	status: string,
-	error?: string,
-): void {
+function updateDocumentStatus(db: WriteDb, docId: string, status: string, error?: string): void {
 	const now = new Date().toISOString();
 	if (error !== undefined) {
 		db.prepare(
@@ -169,12 +148,7 @@ function updateDocumentStatus(
 	}
 }
 
-function completeDocument(
-	db: WriteDb,
-	docId: string,
-	chunkCount: number,
-	memoryCount: number,
-): void {
+function completeDocument(db: WriteDb, docId: string, chunkCount: number, memoryCount: number): void {
 	const now = new Date().toISOString();
 	db.prepare(
 		`UPDATE documents
@@ -188,10 +162,7 @@ function completeDocument(
 // Enqueue helper (called by document API endpoints)
 // ---------------------------------------------------------------------------
 
-export function enqueueDocumentIngestJob(
-	accessor: DbAccessor,
-	documentId: string,
-): string | null {
+export function enqueueDocumentIngestJob(accessor: DbAccessor, documentId: string): string | null {
 	return accessor.withWriteTx((db) => {
 		const existing = db
 			.prepare(
@@ -220,10 +191,7 @@ export function enqueueDocumentIngestJob(
 // Core processing logic
 // ---------------------------------------------------------------------------
 
-async function processDocument(
-	deps: DocumentWorkerDeps,
-	job: DocumentJobRow,
-): Promise<void> {
+async function processDocument(deps: DocumentWorkerDeps, job: DocumentJobRow): Promise<void> {
 	const { accessor, embeddingCfg, fetchEmbedding, pipelineCfg } = deps;
 	const docId = job.document_id;
 	if (!docId) {
@@ -231,9 +199,7 @@ async function processDocument(
 	}
 
 	const doc = accessor.withReadDb((db) => {
-		return db
-			.prepare("SELECT * FROM documents WHERE id = ?")
-			.get(docId) as DocumentRow | undefined;
+		return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
 	});
 
 	if (!doc) {
@@ -246,9 +212,7 @@ async function processDocument(
 	}
 
 	// -- Step 1: Extract content --
-	accessor.withWriteTx((db) =>
-		updateDocumentStatus(db, docId, "extracting"),
-	);
+	accessor.withWriteTx((db) => updateDocumentStatus(db, docId, "extracting"));
 
 	let content: string;
 	let title = doc.title;
@@ -274,33 +238,29 @@ async function processDocument(
 	// Update title if discovered
 	if (title && title !== doc.title) {
 		accessor.withWriteTx((db) => {
-			db.prepare(
-				"UPDATE documents SET title = ?, updated_at = ? WHERE id = ?",
-			).run(title, new Date().toISOString(), docId);
+			db.prepare("UPDATE documents SET title = ?, updated_at = ? WHERE id = ?").run(
+				title,
+				new Date().toISOString(),
+				docId,
+			);
 		});
 	}
 
 	// -- Step 2: Chunk --
-	accessor.withWriteTx((db) =>
-		updateDocumentStatus(db, docId, "chunking"),
-	);
+	accessor.withWriteTx((db) => updateDocumentStatus(db, docId, "chunking"));
 
-	const chunks = chunkText(
-		content,
-		pipelineCfg.documents.chunkSize,
-		pipelineCfg.documents.chunkOverlap,
-	);
+	const chunks = chunkText(content, pipelineCfg.documents.chunkSize, pipelineCfg.documents.chunkOverlap);
 
 	accessor.withWriteTx((db) => {
-		db.prepare(
-			"UPDATE documents SET chunk_count = ?, updated_at = ? WHERE id = ?",
-		).run(chunks.length, new Date().toISOString(), docId);
+		db.prepare("UPDATE documents SET chunk_count = ?, updated_at = ? WHERE id = ?").run(
+			chunks.length,
+			new Date().toISOString(),
+			docId,
+		);
 	});
 
 	// -- Step 3: Embed + index each chunk --
-	accessor.withWriteTx((db) =>
-		updateDocumentStatus(db, docId, "embedding"),
-	);
+	accessor.withWriteTx((db) => updateDocumentStatus(db, docId, "embedding"));
 
 	let memoriesCreated = 0;
 
@@ -378,15 +338,7 @@ async function processDocument(
 						 ON CONFLICT(content_hash) DO UPDATE SET
 						   vector = excluded.vector,
 						   dimensions = excluded.dimensions`,
-					).run(
-						embId,
-						normalized.contentHash,
-						blob,
-						vector.length,
-						memId,
-						chunkText,
-						now,
-					);
+					).run(embId, normalized.contentHash, blob, vector.length, memId, chunkText, now);
 					// Resolve actual embedding ID (may differ from embId on conflict)
 					const actualEmbRow = db
 						.prepare("SELECT id FROM embeddings WHERE content_hash = ?")
@@ -423,18 +375,14 @@ async function processDocument(
 // Worker loop
 // ---------------------------------------------------------------------------
 
-export function startDocumentWorker(
-	deps: DocumentWorkerDeps,
-): DocumentWorkerHandle {
+export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
 
 	async function tick(): Promise<void> {
 		if (!running) return;
 
-		const job = deps.accessor.withWriteTx((db) =>
-			leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries),
-		);
+		const job = deps.accessor.withWriteTx((db) => leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries));
 
 		if (!job) return;
 

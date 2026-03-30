@@ -11,14 +11,8 @@ interface Props {
 	taskCount: number;
 }
 
-const {
-	activeTab,
-	memoryFooterLabel,
-	memorySearching,
-	memorySimilarActive,
-	timelineGeneratedFor,
-	taskCount,
-}: Props = $props();
+let { activeTab, memoryFooterLabel, memorySearching, memorySimilarActive, timelineGeneratedFor, taskCount }: Props =
+	$props();
 
 function formatTimelineGeneratedFor(value: string): string {
 	if (!value) return "";
@@ -43,32 +37,31 @@ interface FooterSlot {
 
 const content = $derived.by((): FooterSlot | null => {
 	if (activeTab === "skills") return null;
-	if (activeTab === "settings") return {
-		left: "SETTINGS",
-		right: "CTRL+S SAVE",
-	};
-	if (activeTab === "memory") return {
-		left: memoryFooterLabel.toUpperCase(),
-		right: memorySearching
-			? "SEARCHING"
-			: memorySimilarActive
-				? "SIMILARITY"
-				: "HYBRID INDEX",
-	};
-	if (activeTab === "timeline") return {
-		left: "TIMELINE",
-		right: timelineGeneratedFor
-			? formatTimelineGeneratedFor(timelineGeneratedFor).toUpperCase()
-			: "EVOLUTION VIEW",
-	};
-	if (activeTab === "tasks") return {
-		left: `${taskCount} TASKS`,
-		right: "SCHEDULER",
-	};
-	if (staticFooter) return {
-		left: staticFooter.left.toUpperCase(),
-		right: staticFooter.right.toUpperCase(),
-	};
+	if (activeTab === "settings")
+		return {
+			left: "SETTINGS",
+			right: "CTRL+S SAVE",
+		};
+	if (activeTab === "memory")
+		return {
+			left: memoryFooterLabel.toUpperCase(),
+			right: memorySearching ? "SEARCHING" : memorySimilarActive ? "SIMILARITY" : "HYBRID INDEX",
+		};
+	if (activeTab === "timeline")
+		return {
+			left: "TIMELINE",
+			right: timelineGeneratedFor ? formatTimelineGeneratedFor(timelineGeneratedFor).toUpperCase() : "EVOLUTION VIEW",
+		};
+	if (activeTab === "tasks")
+		return {
+			left: `${taskCount} TASKS`,
+			right: "SCHEDULER",
+		};
+	if (staticFooter)
+		return {
+			left: staticFooter.left.toUpperCase(),
+			right: staticFooter.right.toUpperCase(),
+		};
 	return null;
 });
 </script>

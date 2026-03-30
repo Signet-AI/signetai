@@ -124,11 +124,7 @@ export abstract class BaseConnector {
 	 * Each subdirectory in sourceDir becomes a symlink in targetDir.
 	 * Existing symlinks are replaced; real directories are skipped.
 	 */
-	protected symlinkSkills(
-		sourceDir: string,
-		targetDir: string,
-		options?: SymlinkOptions,
-	): SymlinkResult {
+	protected symlinkSkills(sourceDir: string, targetDir: string, options?: SymlinkOptions): SymlinkResult {
 		return symlinkSkills(sourceDir, targetDir, options);
 	}
 
@@ -228,7 +224,9 @@ export function atomicWriteJson(path: string, data: unknown, indent: number | st
 		writeFileSync(tmp, content, "utf-8");
 		renameSync(tmp, path);
 	} catch (err) {
-		try { unlinkSync(tmp); } catch {}
+		try {
+			unlinkSync(tmp);
+		} catch {}
 		throw err;
 	}
 }

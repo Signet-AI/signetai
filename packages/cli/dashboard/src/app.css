@@ -3,7 +3,7 @@
 
 /* Slightly thinner icon strokes for a lighter feel */
 svg.lucide {
-    stroke-width: 2;
+	stroke-width: 2;
 }
 
 /* Dark is default; light activates via data-theme="light" */
@@ -11,350 +11,347 @@ svg.lucide {
 
 /* === Dark theme (default) === */
 :root {
-    --radius: 0.5rem;
+	--radius: 0.5rem;
 
-    /* shadcn semantic tokens */
-    --background: #060608;
-    --foreground: #d4d4d8;
-    --card: #0a0a0e;
-    --card-foreground: #d4d4d8;
-    --popover: #0a0a0e;
-    --popover-foreground: #d4d4d8;
-    --primary: #f0f0f2;
-    --primary-foreground: #060608;
-    --secondary: #111115;
-    --secondary-foreground: #d4d4d8;
-    --muted: #111115;
-    --muted-foreground: #5a5a66;
-    --accent: #111115;
-    --accent-foreground: #d4d4d8;
-    --destructive: #8a4a48;
-    --destructive-foreground: #f0f0f2;
-    --border: rgba(255, 255, 255, 0.05);
-    --input: rgba(255, 255, 255, 0.10);
-    --ring: #5a5a66;
+	/* shadcn semantic tokens */
+	--background: #060608;
+	--foreground: #d4d4d8;
+	--card: #0a0a0e;
+	--card-foreground: #d4d4d8;
+	--popover: #0a0a0e;
+	--popover-foreground: #d4d4d8;
+	--primary: #f0f0f2;
+	--primary-foreground: #060608;
+	--secondary: #111115;
+	--secondary-foreground: #d4d4d8;
+	--muted: #111115;
+	--muted-foreground: #5a5a66;
+	--accent: #111115;
+	--accent-foreground: #d4d4d8;
+	--destructive: #8a4a48;
+	--destructive-foreground: #f0f0f2;
+	--border: rgba(255, 255, 255, 0.05);
+	--input: rgba(255, 255, 255, 0.1);
+	--ring: #5a5a66;
 
-    /* shadcn sidebar tokens */
-    --sidebar: #0a0a0e;
-    --sidebar-foreground: #d4d4d8;
-    --sidebar-primary: #f0f0f2;
-    --sidebar-primary-foreground: #060608;
-    --sidebar-accent: rgba(255, 255, 255, 0.06);
-    --sidebar-accent-foreground: #d4d4d8;
-    --sidebar-border: rgba(255, 255, 255, 0.10);
-    --sidebar-ring: #5a5a66;
+	/* shadcn sidebar tokens */
+	--sidebar: #0a0a0e;
+	--sidebar-foreground: #d4d4d8;
+	--sidebar-primary: #f0f0f2;
+	--sidebar-primary-foreground: #060608;
+	--sidebar-accent: rgba(255, 255, 255, 0.06);
+	--sidebar-accent-foreground: #d4d4d8;
+	--sidebar-border: rgba(255, 255, 255, 0.1);
+	--sidebar-ring: #5a5a66;
 
-    /* Signet extended tokens */
-    --sig-bg: #060608;
-    --sig-surface: #0a0a0e;
-    --sig-surface-raised: #111115;
-    --sig-border: rgba(255, 255, 255, 0.1);
-    --sig-border-strong: rgba(255, 255, 255, 0.15);
-    --sig-text: #c8c8d0;
-    --sig-text-bright: #f0f0f2;
-    --sig-text-muted: #5a5a66;
-    --sig-accent: #8a8a96;
-    --sig-accent-hover: #c0c0c8;
-    --sig-danger: #8a4a48;
-    --sig-warning: #d4a017;
-    --sig-success: #4a7a5e;
-    --sig-dither: #f0f0f2;
-    --sig-grain-opacity: 0.05;
+	/* Signet extended tokens */
+	--sig-bg: #060608;
+	--sig-surface: #0a0a0e;
+	--sig-surface-raised: #111115;
+	--sig-border: rgba(255, 255, 255, 0.1);
+	--sig-border-strong: rgba(255, 255, 255, 0.15);
+	--sig-text: #c8c8d0;
+	--sig-text-bright: #f0f0f2;
+	--sig-text-muted: #5a5a66;
+	--sig-accent: #8a8a96;
+	--sig-accent-hover: #c0c0c8;
+	--sig-danger: #8a4a48;
+	--sig-warning: #d4a017;
+	--sig-success: #4a7a5e;
+	--sig-dither: #f0f0f2;
+	--sig-grain-opacity: 0.05;
 
-    /* Pinterest-inspired accent system — neon yellow-green (Aphex Twin / data grids) */
-    --sig-highlight: #c8ff00;
-    --sig-highlight-muted: rgba(200, 255, 0, 0.12);
-    --sig-highlight-dim: rgba(200, 255, 0, 0.06);
-    --sig-highlight-text: #d4ff2a;
-    /* Electric blue — data visualization / constellation patterns */
-    --sig-electric: #3b82f6;
-    --sig-electric-muted: rgba(59, 130, 246, 0.12);
-    --sig-electric-dim: rgba(59, 130, 246, 0.06);
-    /* Blueprint / schematic overlay */
-    --sig-blueprint: rgba(59, 130, 246, 0.04);
-    --sig-grid-line: rgba(255, 255, 255, 0.025);
-    /* Glow effects */
-    --sig-glow-highlight: 0 0 20px rgba(200, 255, 0, 0.15);
-    --sig-glow-electric: 0 0 20px rgba(59, 130, 246, 0.15);
-    /* Scanline opacity */
-    --sig-scanline-opacity: 0.015;
+	/* Pinterest-inspired accent system — neon yellow-green (Aphex Twin / data grids) */
+	--sig-highlight: #c8ff00;
+	--sig-highlight-muted: rgba(200, 255, 0, 0.12);
+	--sig-highlight-dim: rgba(200, 255, 0, 0.06);
+	--sig-highlight-text: #d4ff2a;
+	/* Electric blue — data visualization / constellation patterns */
+	--sig-electric: #3b82f6;
+	--sig-electric-muted: rgba(59, 130, 246, 0.12);
+	--sig-electric-dim: rgba(59, 130, 246, 0.06);
+	/* Blueprint / schematic overlay */
+	--sig-blueprint: rgba(59, 130, 246, 0.04);
+	--sig-grid-line: rgba(255, 255, 255, 0.025);
+	/* Glow effects */
+	--sig-glow-highlight: 0 0 20px rgba(200, 255, 0, 0.15);
+	--sig-glow-electric: 0 0 20px rgba(59, 130, 246, 0.15);
+	/* Scanline opacity */
+	--sig-scanline-opacity: 0.015;
 
-    --sig-icon-fg: #f8fafc;
-    --sig-icon-border: rgba(255, 255, 255, 0.22);
-    --sig-icon-bg-1: #3b5998;
-    --sig-icon-bg-2: #6b4c8a;
-    --sig-icon-bg-3: #4a7c6f;
-    --sig-icon-bg-4: #8a6d3b;
-    --sig-icon-bg-5: #7c4a4a;
-    --sig-icon-bg-6: #4a6e7c;
+	--sig-icon-fg: #f8fafc;
+	--sig-icon-border: rgba(255, 255, 255, 0.22);
+	--sig-icon-bg-1: #3b5998;
+	--sig-icon-bg-2: #6b4c8a;
+	--sig-icon-bg-3: #4a7c6f;
+	--sig-icon-bg-4: #8a6d3b;
+	--sig-icon-bg-5: #7c4a4a;
+	--sig-icon-bg-6: #4a6e7c;
 
-    /* Log category colors (dark theme) */
-    --sig-log-category-watcher: #60a5fa;
-    --sig-log-category-daemon: #a78bfa;
-    --sig-log-category-pipeline: #34d399;
-    --sig-log-category-system: #9ca3af;
-    --sig-log-category-embedding-tracker: #f472b6;
-    --sig-log-category-document-worker: #fb923c;
-    --sig-log-category-maintenance: #c8ff00;
-    --sig-log-category-git: #2dd4bf;
-    --sig-log-category-scheduler: #c084fc;
-    --sig-log-category-retention: #f87171;
+	/* Log category colors (dark theme) */
+	--sig-log-category-watcher: #60a5fa;
+	--sig-log-category-daemon: #a78bfa;
+	--sig-log-category-pipeline: #34d399;
+	--sig-log-category-system: #9ca3af;
+	--sig-log-category-embedding-tracker: #f472b6;
+	--sig-log-category-document-worker: #fb923c;
+	--sig-log-category-maintenance: #c8ff00;
+	--sig-log-category-git: #2dd4bf;
+	--sig-log-category-scheduler: #c084fc;
+	--sig-log-category-retention: #f87171;
 
-    /* Typography & spacing */
-    --font-display: "Diamond Grotesk", "Chakra Petch", sans-serif;
-    --font-mono: "Geist Mono", "IBM Plex Mono", monospace;
-    --font-sans: var(--font-display);
+	/* Typography & spacing */
+	--font-display: "Diamond Grotesk", "Chakra Petch", sans-serif;
+	--font-mono: "Geist Mono", "IBM Plex Mono", monospace;
+	--font-sans: var(--font-display);
 
-    --space-xs: 4px;
-    --space-sm: 8px;
-    --space-md: 16px;
-    --space-lg: 24px;
-    --space-xl: 48px;
-    --space-2xl: 80px;
-    --mobile-header-inset: 2.5rem;
+	--space-xs: 4px;
+	--space-sm: 8px;
+	--space-md: 16px;
+	--space-lg: 24px;
+	--space-xl: 48px;
+	--space-2xl: 80px;
+	--mobile-header-inset: 2.5rem;
 
-    --font-size-xs: 10px;
-    --font-size-sm: 11px;
-    --font-size-base: 13px;
-    --font-size-lg: 15px;
+	--font-size-xs: 10px;
+	--font-size-sm: 11px;
+	--font-size-base: 13px;
+	--font-size-lg: 15px;
 
-    --ease: cubic-bezier(0.16, 1, 0.3, 1);
-    --dur: 0.2s;
+	--ease: cubic-bezier(0.16, 1, 0.3, 1);
+	--dur: 0.2s;
 }
 
 /* === Light theme — cool concrete + burnt orange (Aeris Systems) === */
 [data-theme="light"] {
-    --background: #e6e6e6;
-    --foreground: #1a1a1e;
-    --card: #dddddd;
-    --card-foreground: #1a1a1e;
-    --popover: #dddddd;
-    --popover-foreground: #1a1a1e;
-    --primary: #0a0a0c;
-    --primary-foreground: #e6e6e6;
-    --secondary: #d4d4d4;
-    --secondary-foreground: #1a1a1e;
-    --muted: #d4d4d4;
-    --muted-foreground: #6e6e72;
-    --accent: #d4d4d4;
-    --accent-foreground: #1a1a1e;
-    --destructive: #9a3030;
-    --destructive-foreground: #f0f0f2;
-    --border: rgba(0, 0, 0, 0.08);
-    --input: rgba(0, 0, 0, 0.12);
-    --ring: #6e6e72;
+	--background: #e6e6e6;
+	--foreground: #1a1a1e;
+	--card: #dddddd;
+	--card-foreground: #1a1a1e;
+	--popover: #dddddd;
+	--popover-foreground: #1a1a1e;
+	--primary: #0a0a0c;
+	--primary-foreground: #e6e6e6;
+	--secondary: #d4d4d4;
+	--secondary-foreground: #1a1a1e;
+	--muted: #d4d4d4;
+	--muted-foreground: #6e6e72;
+	--accent: #d4d4d4;
+	--accent-foreground: #1a1a1e;
+	--destructive: #9a3030;
+	--destructive-foreground: #f0f0f2;
+	--border: rgba(0, 0, 0, 0.08);
+	--input: rgba(0, 0, 0, 0.12);
+	--ring: #6e6e72;
 
-    --sidebar: #dddddd;
-    --sidebar-foreground: #1a1a1e;
-    --sidebar-primary: #0a0a0c;
-    --sidebar-primary-foreground: #e6e6e6;
-    --sidebar-accent: rgba(0, 0, 0, 0.06);
-    --sidebar-accent-foreground: #1a1a1e;
-    --sidebar-border: rgba(0, 0, 0, 0.10);
-    --sidebar-ring: #6e6e72;
+	--sidebar: #dddddd;
+	--sidebar-foreground: #1a1a1e;
+	--sidebar-primary: #0a0a0c;
+	--sidebar-primary-foreground: #e6e6e6;
+	--sidebar-accent: rgba(0, 0, 0, 0.06);
+	--sidebar-accent-foreground: #1a1a1e;
+	--sidebar-border: rgba(0, 0, 0, 0.1);
+	--sidebar-ring: #6e6e72;
 
-    --sig-bg: #e6e6e6;
-    --sig-surface: #dddddd;
-    --sig-surface-raised: #d4d4d4;
-    --sig-border: rgba(0, 0, 0, 0.10);
-    --sig-border-strong: rgba(0, 0, 0, 0.18);
-    --sig-text: #1a1a1e;
-    --sig-text-bright: #0a0a0c;
-    --sig-text-muted: #525252;
-    --sig-accent: #c83a18;
-    --sig-accent-hover: #a83010;
-    --sig-danger: #9a3030;
-    --sig-warning: #b87a00;
-    --sig-success: #2e7a4e;
-    --sig-dither: #0a0a0c;
-    --sig-grain-opacity: 0.04;
+	--sig-bg: #e6e6e6;
+	--sig-surface: #dddddd;
+	--sig-surface-raised: #d4d4d4;
+	--sig-border: rgba(0, 0, 0, 0.1);
+	--sig-border-strong: rgba(0, 0, 0, 0.18);
+	--sig-text: #1a1a1e;
+	--sig-text-bright: #0a0a0c;
+	--sig-text-muted: #525252;
+	--sig-accent: #c83a18;
+	--sig-accent-hover: #a83010;
+	--sig-danger: #9a3030;
+	--sig-warning: #b87a00;
+	--sig-success: #2e7a4e;
+	--sig-dither: #0a0a0c;
+	--sig-grain-opacity: 0.04;
 
-    /* Accent system — burnt orange for light (Aeris Systems inspired) */
-    --sig-highlight: #e8461e;
-    --sig-highlight-muted: rgba(232, 70, 30, 0.10);
-    --sig-highlight-dim: rgba(232, 70, 30, 0.06);
-    --sig-highlight-text: #c83a18;
-    --sig-electric: #2563eb;
-    --sig-electric-muted: rgba(37, 99, 235, 0.10);
-    --sig-electric-dim: rgba(37, 99, 235, 0.05);
-    --sig-blueprint: rgba(37, 99, 235, 0.03);
-    --sig-grid-line: rgba(0, 0, 0, 0.04);
-    /* No glow in light mode — clean flat look */
-    --sig-glow-highlight: none;
-    --sig-glow-electric: none;
-    --sig-scanline-opacity: 0.008;
+	/* Accent system — burnt orange for light (Aeris Systems inspired) */
+	--sig-highlight: #e8461e;
+	--sig-highlight-muted: rgba(232, 70, 30, 0.1);
+	--sig-highlight-dim: rgba(232, 70, 30, 0.06);
+	--sig-highlight-text: #c83a18;
+	--sig-electric: #2563eb;
+	--sig-electric-muted: rgba(37, 99, 235, 0.1);
+	--sig-electric-dim: rgba(37, 99, 235, 0.05);
+	--sig-blueprint: rgba(37, 99, 235, 0.03);
+	--sig-grid-line: rgba(0, 0, 0, 0.04);
+	/* No glow in light mode — clean flat look */
+	--sig-glow-highlight: none;
+	--sig-glow-electric: none;
+	--sig-scanline-opacity: 0.008;
 
-    --sig-icon-fg: #111827;
-    --sig-icon-border: rgba(0, 0, 0, 0.18);
-    --sig-icon-bg-1: #8898b0;
-    --sig-icon-bg-2: #a090b0;
-    --sig-icon-bg-3: #80a898;
-    --sig-icon-bg-4: #b0a070;
-    --sig-icon-bg-5: #b08888;
-    --sig-icon-bg-6: #80a8b0;
+	--sig-icon-fg: #111827;
+	--sig-icon-border: rgba(0, 0, 0, 0.18);
+	--sig-icon-bg-1: #8898b0;
+	--sig-icon-bg-2: #a090b0;
+	--sig-icon-bg-3: #80a898;
+	--sig-icon-bg-4: #b0a070;
+	--sig-icon-bg-5: #b08888;
+	--sig-icon-bg-6: #80a8b0;
 
-    /* Log category colors (light theme) */
-    --sig-log-category-watcher: #2563eb;
-    --sig-log-category-daemon: #7c3aed;
-    --sig-log-category-pipeline: #059669;
-    --sig-log-category-system: #6b7280;
-    --sig-log-category-embedding-tracker: #db2777;
-    --sig-log-category-document-worker: #e8461e;
-    --sig-log-category-maintenance: #c83a18;
-    --sig-log-category-git: #0d9488;
-    --sig-log-category-scheduler: #9333ea;
-    --sig-log-category-retention: #dc2626;
+	/* Log category colors (light theme) */
+	--sig-log-category-watcher: #2563eb;
+	--sig-log-category-daemon: #7c3aed;
+	--sig-log-category-pipeline: #059669;
+	--sig-log-category-system: #6b7280;
+	--sig-log-category-embedding-tracker: #db2777;
+	--sig-log-category-document-worker: #e8461e;
+	--sig-log-category-maintenance: #c83a18;
+	--sig-log-category-git: #0d9488;
+	--sig-log-category-scheduler: #9333ea;
+	--sig-log-category-retention: #dc2626;
 }
 
 /* === Tailwind v4 theme registration === */
 @theme inline {
-    --radius-sm: calc(var(--radius) - 4px);
-    --radius-md: calc(var(--radius) - 2px);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) + 4px);
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
 
-    --color-background: var(--background);
-    --color-foreground: var(--foreground);
-    --color-card: var(--card);
-    --color-card-foreground: var(--card-foreground);
-    --color-popover: var(--popover);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-primary: var(--primary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-secondary: var(--secondary);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-muted: var(--muted);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-accent: var(--accent);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-destructive: var(--destructive);
-    --color-destructive-foreground: var(--destructive-foreground);
-    --color-border: var(--border);
-    --color-input: var(--input);
-    --color-ring: var(--ring);
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
 
-    --color-sidebar: var(--sidebar);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-ring: var(--sidebar-ring);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-ring: var(--sidebar-ring);
 }
 
 /* === Base layer === */
 @layer base {
+	*,
+	::after,
+	::before,
+	::backdrop,
+	::file-selector-button {
+		border-color: var(--color-border, currentcolor);
+	}
 
-    *,
-    ::after,
-    ::before,
-    ::backdrop,
-    ::file-selector-button {
-        border-color: var(--color-border, currentcolor);
-    }
+	* {
+		@apply border-border outline-ring/50;
+	}
 
-    * {
-        @apply border-border outline-ring/50;
-    }
-
-    body {
-        @apply bg-background text-foreground;
-    }
+	body {
+		@apply bg-background text-foreground;
+	}
 }
 
 /* === Global styles === */
 html {
-    background: var(--sig-bg);
-    color: var(--sig-text);
-    font-family: var(--font-mono);
-    font-size: 13px;
-    line-height: 1.55;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    transition: background 0.4s var(--ease), color 0.4s var(--ease);
+	background: var(--sig-bg);
+	color: var(--sig-text);
+	font-family: var(--font-mono);
+	font-size: 13px;
+	line-height: 1.55;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	transition: background 0.4s var(--ease), color 0.4s var(--ease);
 }
 
 body {
-    margin: 0;
-    min-height: 100vh;
+	margin: 0;
+	min-height: 100vh;
 }
 
 /* Grain overlay — enhanced with denser noise */
 body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    pointer-events: none;
-    opacity: var(--sig-grain-opacity);
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='6' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-    background-repeat: repeat;
-    background-size: 200px;
+	content: "";
+	position: fixed;
+	inset: 0;
+	z-index: 9999;
+	pointer-events: none;
+	opacity: var(--sig-grain-opacity);
+	background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='6' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+	background-repeat: repeat;
+	background-size: 200px;
 }
 
 /* Scanline overlay — retro CRT effect from Pinterest tech aesthetic */
 body::after {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 9998;
-    pointer-events: none;
-    opacity: var(--sig-scanline-opacity);
-    background-image: repeating-linear-gradient(0deg,
-            transparent,
-            transparent 2px,
-            rgba(0, 0, 0, 0.3) 2px,
-            rgba(0, 0, 0, 0.3) 4px);
-    background-size: 100% 4px;
+	content: "";
+	position: fixed;
+	inset: 0;
+	z-index: 9998;
+	pointer-events: none;
+	opacity: var(--sig-scanline-opacity);
+	background-image: repeating-linear-gradient(
+		0deg,
+		transparent,
+		transparent 2px,
+		rgba(0, 0, 0, 0.3) 2px,
+		rgba(0, 0, 0, 0.3) 4px
+	);
+	background-size: 100% 4px;
 }
 
 ::selection {
-    background: var(--sig-highlight-muted);
-    color: var(--sig-text-bright);
+	background: var(--sig-highlight-muted);
+	color: var(--sig-text-bright);
 }
 
 /* Floating sidebar card — machined aluminum panel */
 [data-variant="floating"] [data-sidebar="sidebar"] {
-    background: var(--sidebar);
-    border-color: var(--sig-border-strong);
-    box-shadow:
-        0 2px 6px rgba(0, 0, 0, 0.4),
-        0 0 0 1px rgba(255, 255, 255, 0.03) inset,
-        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+	background: var(--sidebar);
+	border-color: var(--sig-border-strong);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03) inset, inset 0 1px 0
+		rgba(255, 255, 255, 0.04);
 }
 
 [data-theme="light"] [data-variant="floating"] [data-sidebar="sidebar"] {
-    border-color: var(--sig-border-strong);
-    box-shadow:
-        0 2px 6px rgba(0, 0, 0, 0.1),
-        0 0 0 1px rgba(255, 255, 255, 0.6) inset,
-        inset 0 1px 0 rgba(255, 255, 255, 0.8);
+	border-color: var(--sig-border-strong);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(255, 255, 255, 0.6) inset, inset 0 1px 0
+		rgba(255, 255, 255, 0.8);
 }
 
 /* Subtle scrollbars */
 ::-webkit-scrollbar {
-    width: 3px;
-    height: 3px;
+	width: 3px;
+	height: 3px;
 }
 
 ::-webkit-scrollbar-track {
-    background: transparent;
+	background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: var(--sig-border-strong);
-    border-radius: 0;
+	background: var(--sig-border-strong);
+	border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--sig-text-muted);
+	background: var(--sig-text-muted);
 }
 
 /* Focus ring */
 :focus-visible {
-    outline: 1px solid var(--sig-text-muted);
-    outline-offset: 1px;
+	outline: 1px solid var(--sig-text-muted);
+	outline-offset: 1px;
 }
 
 /* Element transitions */
@@ -363,529 +360,499 @@ a,
 input,
 select,
 textarea {
-    transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+	transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
 /* Typography */
 h1,
 h2,
 h3 {
-    font-family: var(--font-display);
-    font-weight: 600;
-    line-height: 1.1;
-    color: var(--sig-text-bright);
-    text-transform: uppercase;
+	font-family: var(--font-display);
+	font-weight: 600;
+	line-height: 1.1;
+	color: var(--sig-text-bright);
+	text-transform: uppercase;
 }
 
 h1 {
-    font-size: 1.5rem;
-    letter-spacing: 0.06em;
+	font-size: 1.5rem;
+	letter-spacing: 0.06em;
 }
 
 h2 {
-    font-size: 1rem;
-    letter-spacing: 0.05em;
+	font-size: 1rem;
+	letter-spacing: 0.05em;
 }
 
 h3 {
-    font-size: 0.875rem;
-    letter-spacing: 0.04em;
+	font-size: 0.875rem;
+	letter-spacing: 0.04em;
 }
 
 /* Prose styles for rendered markdown */
 .prose {
-    font-family: var(--font-mono);
-    font-size: 13px;
-    line-height: 1.7;
-    color: var(--sig-text);
+	font-family: var(--font-mono);
+	font-size: 13px;
+	line-height: 1.7;
+	color: var(--sig-text);
 }
 
 .prose h1,
 .prose h2,
 .prose h3 {
-    font-family: var(--font-display);
-    font-weight: 600;
-    color: var(--sig-text-bright);
-    text-transform: uppercase;
-    margin: 1.5em 0 0.5em;
-    line-height: 1.2;
+	font-family: var(--font-display);
+	font-weight: 600;
+	color: var(--sig-text-bright);
+	text-transform: uppercase;
+	margin: 1.5em 0 0.5em;
+	line-height: 1.2;
 }
 
 .prose h1 {
-    font-size: 1.25rem;
-    letter-spacing: 0.06em;
-    border-bottom: 1px solid var(--sig-border);
-    padding-bottom: 0.4em;
+	font-size: 1.25rem;
+	letter-spacing: 0.06em;
+	border-bottom: 1px solid var(--sig-border);
+	padding-bottom: 0.4em;
 }
 
 .prose h2 {
-    font-size: 1rem;
-    letter-spacing: 0.05em;
+	font-size: 1rem;
+	letter-spacing: 0.05em;
 }
 
 .prose h3 {
-    font-size: 0.875rem;
-    letter-spacing: 0.04em;
+	font-size: 0.875rem;
+	letter-spacing: 0.04em;
 }
 
 .prose p {
-    margin: 0.75em 0;
+	margin: 0.75em 0;
 }
 
 .prose ul,
 .prose ol {
-    margin: 0.5em 0;
-    padding-left: 1.5em;
+	margin: 0.5em 0;
+	padding-left: 1.5em;
 }
 
 .prose li {
-    margin: 0.25em 0;
+	margin: 0.25em 0;
 }
 
 .prose code {
-    font-family: var(--font-mono);
-    font-size: 0.9em;
-    background: var(--sig-surface-raised);
-    padding: 1px 5px;
-    border: 1px solid var(--sig-border);
+	font-family: var(--font-mono);
+	font-size: 0.9em;
+	background: var(--sig-surface-raised);
+	padding: 1px 5px;
+	border: 1px solid var(--sig-border);
 }
 
 .prose pre {
-    background: var(--sig-bg);
-    border: 1px solid var(--sig-border);
-    padding: var(--space-sm) var(--space-md);
-    overflow-x: auto;
-    margin: 0.75em 0;
+	background: var(--sig-bg);
+	border: 1px solid var(--sig-border);
+	padding: var(--space-sm) var(--space-md);
+	overflow-x: auto;
+	margin: 0.75em 0;
 }
 
 .prose pre code {
-    background: none;
-    border: none;
-    padding: 0;
+	background: none;
+	border: none;
+	padding: 0;
 }
 
 .prose a {
-    color: var(--sig-accent);
-    text-decoration: underline;
-    text-underline-offset: 2px;
+	color: var(--sig-accent);
+	text-decoration: underline;
+	text-underline-offset: 2px;
 }
 
 .prose a:hover {
-    color: var(--sig-accent-hover);
+	color: var(--sig-accent-hover);
 }
 
 .prose strong {
-    color: var(--sig-text-bright);
-    font-weight: 600;
+	color: var(--sig-text-bright);
+	font-weight: 600;
 }
 
 .prose em {
-    font-style: italic;
+	font-style: italic;
 }
 
 .prose blockquote {
-    border-left: 2px solid var(--sig-border-strong);
-    margin: 0.75em 0;
-    padding: 0.25em 0 0.25em var(--space-md);
-    color: var(--sig-text-muted);
+	border-left: 2px solid var(--sig-border-strong);
+	margin: 0.75em 0;
+	padding: 0.25em 0 0.25em var(--space-md);
+	color: var(--sig-text-muted);
 }
 
 .prose hr {
-    border: none;
-    border-top: 1px solid var(--sig-border);
-    margin: 1.5em 0;
+	border: none;
+	border-top: 1px solid var(--sig-border);
+	margin: 1.5em 0;
 }
 
 .prose table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 0.75em 0;
-    font-size: 12px;
+	width: 100%;
+	border-collapse: collapse;
+	margin: 0.75em 0;
+	font-size: 12px;
 }
 
 .prose th,
 .prose td {
-    border: 1px solid var(--sig-border);
-    padding: 4px 8px;
-    text-align: left;
+	border: 1px solid var(--sig-border);
+	padding: 4px 8px;
+	text-align: left;
 }
 
 .prose th {
-    background: var(--sig-surface-raised);
-    color: var(--sig-text-bright);
-    font-weight: 600;
-    text-transform: uppercase;
-    font-size: 10px;
-    letter-spacing: 0.04em;
+	background: var(--sig-surface-raised);
+	color: var(--sig-text-bright);
+	font-weight: 600;
+	text-transform: uppercase;
+	font-size: 10px;
+	letter-spacing: 0.04em;
 }
 
 /* === Tactile panel system — machined aluminum language === */
 
 /* Panel container — mounted plate with edge catches */
 .sig-panel {
-    background: var(--sig-surface);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius);
-    overflow: hidden;
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.08),
-        0 2px 4px rgba(0, 0, 0, 0.5),
-        0 0 0 1px rgba(255, 255, 255, 0.03);
+	background: var(--sig-surface);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: var(--radius);
+	overflow: hidden;
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 
 [data-theme="light"] .sig-panel {
-    border: 1px solid var(--sig-border);
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.7),
-        0 1px 3px rgba(0, 0, 0, 0.08),
-        0 0 0 1px rgba(0, 0, 0, 0.04);
+	border: 1px solid var(--sig-border);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 3px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
 }
 
 /* Panel header — stamped label plate */
 .sig-panel-header {
-    border-bottom: 1px solid rgba(0, 0, 0, 0.4);
-    box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.05);
+	border-bottom: 1px solid rgba(0, 0, 0, 0.4);
+	box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 [data-theme="light"] .sig-panel-header {
-    border-bottom: 1px solid var(--sig-border);
-    box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.5);
+	border-bottom: 1px solid var(--sig-border);
+	box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 /* Panel footer — etched separator */
 .sig-panel-footer {
-    border-top: 1px solid rgba(0, 0, 0, 0.4);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+	border-top: 1px solid rgba(0, 0, 0, 0.4);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 [data-theme="light"] .sig-panel-footer {
-    border-top: 1px solid var(--sig-border);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+	border-top: 1px solid var(--sig-border);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 /* Momentary switch button — raised at rest, pressed on click */
 .sig-switch {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.08),
-        0 1px 2px rgba(0, 0, 0, 0.4);
-    transition:
-        color var(--dur) var(--ease),
-        border-color var(--dur) var(--ease),
-        background var(--dur) var(--ease),
-        box-shadow 0.1s var(--ease),
-        transform 0.1s var(--ease);
+	background: rgba(255, 255, 255, 0.03);
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	border-radius: 3px;
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.4);
+	transition:
+		color var(--dur) var(--ease),
+		border-color var(--dur) var(--ease),
+		background var(--dur) var(--ease),
+		box-shadow 0.1s var(--ease),
+		transform 0.1s var(--ease);
 }
 
 .sig-switch:hover {
-    color: var(--sig-text-bright);
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.15);
+	color: var(--sig-text-bright);
+	background: rgba(255, 255, 255, 0.05);
+	border-color: rgba(255, 255, 255, 0.15);
 }
 
 .sig-switch:active {
-    transform: translateY(0.5px);
-    background: rgba(0, 0, 0, 0.1);
-    box-shadow:
-        inset 0 2px 4px rgba(0, 0, 0, 0.5),
-        inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+	transform: translateY(0.5px);
+	background: rgba(0, 0, 0, 0.1);
+	box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(0, 0, 0, 0.2);
 }
 
 [data-theme="light"] .sig-switch {
-    background: rgba(255, 255, 255, 0.4);
-    border: 1px solid var(--sig-border-strong);
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.6),
-        0 1px 2px rgba(0, 0, 0, 0.06);
+	background: rgba(255, 255, 255, 0.4);
+	border: 1px solid var(--sig-border-strong);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 [data-theme="light"] .sig-switch:hover {
-    background: rgba(255, 255, 255, 0.6);
+	background: rgba(255, 255, 255, 0.6);
 }
 
 [data-theme="light"] .sig-switch:active {
-    background: rgba(0, 0, 0, 0.04);
-    box-shadow:
-        inset 0 1px 3px rgba(0, 0, 0, 0.1),
-        0 0 0 rgba(0, 0, 0, 0);
+	background: rgba(0, 0, 0, 0.04);
+	box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1), 0 0 0 rgba(0, 0, 0, 0);
 }
 
 /* Etched groove — double-line channel for dividers */
 .sig-groove {
-    height: 2px;
-    background: linear-gradient(
-        180deg,
-        rgba(0, 0, 0, 0.5) 0%,
-        rgba(255, 255, 255, 0.07) 100%
-    );
-    border: none;
+	height: 2px;
+	background: linear-gradient(180deg, rgba(0, 0, 0, 0.5) 0%, rgba(255, 255, 255, 0.07) 100%);
+	border: none;
 }
 
 [data-theme="light"] .sig-groove {
-    background: linear-gradient(
-        180deg,
-        rgba(0, 0, 0, 0.1) 0%,
-        rgba(255, 255, 255, 0.6) 100%
-    );
+	background: linear-gradient(180deg, rgba(0, 0, 0, 0.1) 0%, rgba(255, 255, 255, 0.6) 100%);
 }
 
 /* Recessed track — for bars/gauges that sit in a channel */
 .sig-track {
-    background: rgba(0, 0, 0, 0.5);
-    border-radius: 2px;
-    box-shadow:
-        inset 0 1px 3px rgba(0, 0, 0, 0.6),
-        0 1px 0 rgba(255, 255, 255, 0.05);
+	background: rgba(0, 0, 0, 0.5);
+	border-radius: 2px;
+	box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 [data-theme="light"] .sig-track {
-    background: rgba(0, 0, 0, 0.06);
-    box-shadow:
-        inset 0 1px 2px rgba(0, 0, 0, 0.1),
-        0 0.5px 0 rgba(255, 255, 255, 0.5);
+	background: rgba(0, 0, 0, 0.06);
+	box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1), 0 0.5px 0 rgba(255, 255, 255, 0.5);
 }
 
 /* === Component utilities === */
 
 /* Small monospace label (11px, muted) */
 .sig-label {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--sig-text-muted);
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--sig-text-muted);
 }
 
 /* Tiny uppercase monospace (eyebrows, metadata, counters) */
 .sig-eyebrow {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--sig-text-muted);
+	font-family: var(--font-mono);
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--sig-text-muted);
 }
 
 /* Display heading used in section headers */
 .sig-heading {
-    font-family: var(--font-display);
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--sig-text-bright);
+	font-family: var(--font-display);
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--sig-text-bright);
 }
 
 /* Tiny monospace for badge-like metadata (9px) */
 .sig-meta {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    color: var(--sig-text-muted);
-    white-space: nowrap;
+	font-family: var(--font-mono);
+	font-size: 9px;
+	color: var(--sig-text-muted);
+	white-space: nowrap;
 }
 
 /* Standard badge styling used across memory cards, pipeline, etc. */
 .sig-badge {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    border-radius: 0.5rem;
-    padding: 1px 5px;
+	font-family: var(--font-mono);
+	font-size: 9px;
+	border-radius: 0.5rem;
+	padding: 1px 5px;
 }
 
 /* Feed/log tiny text (8-9px monospace) */
 .sig-micro {
-    font-family: var(--font-mono);
-    font-size: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--sig-text-muted);
+	font-family: var(--font-mono);
+	font-size: 8px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--sig-text-muted);
 }
 
 /* === Pinterest-inspired design utilities === */
 
 /* Neon highlight text — Aphex Twin / data grid accent */
 .sig-highlight-text {
-    color: var(--sig-highlight-text);
+	color: var(--sig-highlight-text);
 }
 
 /* Highlighted badge with neon glow */
 .sig-highlight-badge {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    border-radius: 0.5rem;
-    padding: 1px 6px;
-    background: var(--sig-highlight-muted);
-    color: var(--sig-highlight-text);
-    border: 1px solid var(--sig-highlight-dim);
+	font-family: var(--font-mono);
+	font-size: 9px;
+	border-radius: 0.5rem;
+	padding: 1px 6px;
+	background: var(--sig-highlight-muted);
+	color: var(--sig-highlight-text);
+	border: 1px solid var(--sig-highlight-dim);
 }
 
 /* Electric blue badge — data viz accent */
 .sig-electric-badge {
-    font-family: var(--font-mono);
-    font-size: 9px;
-    border-radius: 0.5rem;
-    padding: 1px 6px;
-    background: var(--sig-electric-muted);
-    color: var(--sig-electric);
-    border: 1px solid var(--sig-electric-dim);
+	font-family: var(--font-mono);
+	font-size: 9px;
+	border-radius: 0.5rem;
+	padding: 1px 6px;
+	background: var(--sig-electric-muted);
+	color: var(--sig-electric);
+	border: 1px solid var(--sig-electric-dim);
 }
 
 /* Dense data display — technical readout style (retro tech / forma 04) */
 .sig-data {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    line-height: 1.8;
-    color: var(--sig-text);
-    font-variant-numeric: tabular-nums;
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.08em;
+	line-height: 1.8;
+	color: var(--sig-text);
+	font-variant-numeric: tabular-nums;
 }
 
 /* Subtle glow container — neon accent glow */
 .sig-glow {
-    box-shadow: var(--sig-glow-highlight);
+	box-shadow: var(--sig-glow-highlight);
 }
 
 /* Electric glow variant */
 .sig-glow-blue {
-    box-shadow: var(--sig-glow-electric);
+	box-shadow: var(--sig-glow-electric);
 }
 
 /* Constellation dot — for node graph / data viz points */
 .sig-node {
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--sig-highlight);
-    box-shadow: 0 0 6px var(--sig-highlight);
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: var(--sig-highlight);
+	box-shadow: 0 0 6px var(--sig-highlight);
 }
 
 /* Crosshair marker — technical / schematic reference point */
 .sig-crosshair {
-    position: relative;
+	position: relative;
 }
 
 .sig-crosshair::before,
 .sig-crosshair::after {
-    content: "";
-    position: absolute;
-    background: var(--sig-grid-line);
+	content: "";
+	position: absolute;
+	background: var(--sig-grid-line);
 }
 
 .sig-crosshair::before {
-    width: 1px;
-    height: 100%;
-    left: 50%;
+	width: 1px;
+	height: 100%;
+	left: 50%;
 }
 
 .sig-crosshair::after {
-    width: 100%;
-    height: 1px;
-    top: 50%;
+	width: 100%;
+	height: 1px;
+	top: 50%;
 }
 
 /* Retro tech section divider — PlayStation/Sony inspired */
 .sig-divider {
-    border: none;
-    height: 1px;
-    background: linear-gradient(90deg,
-            transparent 0%,
-            var(--sig-border-strong) 20%,
-            var(--sig-highlight-dim) 50%,
-            var(--sig-border-strong) 80%,
-            transparent 100%);
+	border: none;
+	height: 1px;
+	background: linear-gradient(
+		90deg,
+		transparent 0%,
+		var(--sig-border-strong) 20%,
+		var(--sig-highlight-dim) 50%,
+		var(--sig-border-strong) 80%,
+		transparent 100%
+	);
 }
 
 /* Data readout number — large monospace numeric display */
 .sig-readout {
-    font-family: var(--font-mono);
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    line-height: 1;
-    color: var(--sig-text-bright);
-    font-variant-numeric: tabular-nums;
+	font-family: var(--font-mono);
+	font-size: 28px;
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	line-height: 1;
+	color: var(--sig-text-bright);
+	font-variant-numeric: tabular-nums;
 }
 
 /* Keep Lucide icon stroke weight consistent across zoom levels.
    WebKit page zoom scales via transforms; non-scaling-stroke
    prevents strokes from thickening at higher zoom. */
 svg.lucide [stroke] {
-    vector-effect: non-scaling-stroke;
+	vector-effect: non-scaling-stroke;
 }
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-
-    *,
-    *::before,
-    *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
-    }
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
 }
 
 @keyframes pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
 
-    0%,
-    100% {
-        opacity: 1;
-    }
-
-    50% {
-        opacity: 0.5;
-    }
+	50% {
+		opacity: 0.5;
+	}
 }
 
 /* Neon flicker — subtle CRT-style flicker for accent elements */
 @keyframes sig-flicker {
+	0%,
+	97%,
+	100% {
+		opacity: 1;
+	}
 
-    0%,
-    97%,
-    100% {
-        opacity: 1;
-    }
+	98% {
+		opacity: 0.85;
+	}
 
-    98% {
-        opacity: 0.85;
-    }
-
-    99% {
-        opacity: 0.95;
-    }
+	99% {
+		opacity: 0.95;
+	}
 }
 
 /* Slow glow pulse — for constellation nodes and status indicators */
 @keyframes sig-glow-pulse {
+	0%,
+	100% {
+		box-shadow: 0 0 4px var(--sig-highlight);
+	}
 
-    0%,
-    100% {
-        box-shadow: 0 0 4px var(--sig-highlight);
-    }
-
-    50% {
-        box-shadow: 0 0 12px var(--sig-highlight), 0 0 24px var(--sig-highlight-dim);
-    }
+	50% {
+		box-shadow: 0 0 12px var(--sig-highlight), 0 0 24px var(--sig-highlight-dim);
+	}
 }
 
 /* Blueprint grid scroll — subtle parallax for schematic backgrounds */
 @keyframes sig-grid-drift {
-    0% {
-        background-position: -1px -1px;
-    }
+	0% {
+		background-position: -1px -1px;
+	}
 
-    100% {
-        background-position: 23px 23px;
-    }
+	100% {
+		background-position: 23px 23px;
+	}
 }
 
 /* === Mobile responsive — global touch targets === */
 @media (max-width: 768px) {
-    /* Ensure buttons and sig-switches meet the 44×44px touch target minimum */
-    button,
-    .sig-switch {
-        min-height: 44px;
-        min-width: 44px;
-    }
+	/* Ensure buttons and sig-switches meet the 44×44px touch target minimum */
+	button,
+	.sig-switch {
+		min-height: 44px;
+		min-width: 44px;
+	}
 }

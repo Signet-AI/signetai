@@ -1,10 +1,31 @@
 ---
-import InlineCode from '../ui/InlineCode.astro';
+import InlineCode from "../ui/InlineCode.astro";
 
 const methods = [
-  { key: 'bun', label: 'Bun', commands: ['bun add -g signetai', 'signet setup'], comment: '# recommended', docs: '/docs/quickstart#install', docsLabel: 'Quickstart docs' },
-  { key: 'npm', label: 'npm', commands: ['npm install -g signetai', 'signet setup'], comment: '# works everywhere', docs: '/docs/quickstart#install', docsLabel: 'npm docs' },
-  { key: 'source', label: 'Source', commands: ['git clone https://github.com/Signet-AI/signetai.git', 'cd signetai && bun install && bun run build'], comment: '# build from source', docs: '/docs/contributing#development-setup', docsLabel: 'Build docs' },
+	{
+		key: "bun",
+		label: "Bun",
+		commands: ["bun add -g signetai", "signet setup"],
+		comment: "# recommended",
+		docs: "/docs/quickstart#install",
+		docsLabel: "Quickstart docs",
+	},
+	{
+		key: "npm",
+		label: "npm",
+		commands: ["npm install -g signetai", "signet setup"],
+		comment: "# works everywhere",
+		docs: "/docs/quickstart#install",
+		docsLabel: "npm docs",
+	},
+	{
+		key: "source",
+		label: "Source",
+		commands: ["git clone https://github.com/Signet-AI/signetai.git", "cd signetai && bun install && bun run build"],
+		comment: "# build from source",
+		docs: "/docs/contributing#development-setup",
+		docsLabel: "Build docs",
+	},
 ];
 ---
 

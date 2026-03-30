@@ -41,7 +41,7 @@ describe("temporal summary API auth", () => {
 		);
 		process.env.SIGNET_PATH = dir;
 
-		const daemon = await import("./daemon");
+		const daemon = await import(`./daemon?temporal-summary-api=${Date.now()}`);
 		app = daemon.app;
 	});
 

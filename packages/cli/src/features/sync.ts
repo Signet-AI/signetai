@@ -134,7 +134,10 @@ function detectHarnesses(): string[] {
 	if (existsSync(join(homedir(), ".claude", "settings.json"))) {
 		found.push("claude-code");
 	}
-	if (existsSync(join(homedir(), ".config", "signet", "bin", "codex")) || existsSync(join(homedir(), ".codex", "config.toml"))) {
+	if (
+		existsSync(join(homedir(), ".config", "signet", "bin", "codex")) ||
+		existsSync(join(homedir(), ".codex", "config.toml"))
+	) {
 		found.push("codex");
 	}
 	if (existsSync(join(homedir(), ".config", "opencode"))) {

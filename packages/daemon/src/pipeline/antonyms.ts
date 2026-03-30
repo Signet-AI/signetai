@@ -70,9 +70,7 @@ export const ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 /** Bidirectional set for O(1) lookup in either direction. */
-export const ANTONYM_SET: ReadonlySet<string> = new Set(
-	ANTONYM_PAIRS.flatMap(([a, b]) => [`${a}:${b}`, `${b}:${a}`]),
-);
+export const ANTONYM_SET: ReadonlySet<string> = new Set(ANTONYM_PAIRS.flatMap(([a, b]) => [`${a}:${b}`, `${b}:${a}`]));
 
 export function tokenize(text: string): string[] {
 	return text
@@ -86,10 +84,7 @@ export function hasNegation(tokens: readonly string[]): boolean {
 	return tokens.some((token) => NEGATION_TOKENS.has(token));
 }
 
-export function overlapCount(
-	left: readonly string[],
-	right: readonly string[],
-): number {
+export function overlapCount(left: readonly string[], right: readonly string[]): number {
 	const rightSet = new Set(right);
 	let overlap = 0;
 	for (const token of left) {

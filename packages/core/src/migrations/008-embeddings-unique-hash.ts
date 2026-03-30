@@ -11,9 +11,7 @@ import type { MigrationDb } from "./index";
 
 export function up(db: MigrationDb): void {
 	// Only run if embeddings table exists (baseline creates it)
-	const tables = db
-		.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings'")
-		.all();
+	const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='embeddings'").all();
 	if (tables.length === 0) return;
 
 	// Keep newest embedding per content_hash, delete older dupes

@@ -1,25 +1,25 @@
 ---
-import { getCollection } from 'astro:content';
-import { buildDocsNav } from '../../lib/docs-nav';
-import DocsSidebar from './DocsSidebar.tsx';
+import { getCollection } from "astro:content";
+import { buildDocsNav } from "../../lib/docs-nav";
+import DocsSidebar from "./DocsSidebar.tsx";
 
 interface Props {
-  currentSlug?: string;
+	currentSlug?: string;
 }
 
 const { currentSlug } = Astro.props;
 
-const allDocs = await getCollection('docs');
+const allDocs = await getCollection("docs");
 const { sections } = buildDocsNav(allDocs);
 
 // Serialize to plain objects for the React component
 const serializedSections = sections.map((s) => ({
-  label: s.label,
-  items: s.items.map((item) => ({
-    title: item.title,
-    slug: item.slug,
-    url: item.url,
-  })),
+	label: s.label,
+	items: s.items.map((item) => ({
+		title: item.title,
+		slug: item.slug,
+		url: item.url,
+	})),
 }));
 ---
 

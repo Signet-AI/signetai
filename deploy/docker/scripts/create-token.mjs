@@ -9,11 +9,7 @@ function readArg(name, fallback = "") {
 }
 
 function base64url(input) {
-	return Buffer.from(input)
-		.toString("base64")
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/g, "");
+	return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 const path = readArg("--secret", `${process.env.SIGNET_PATH ?? "/data/agents"}/.daemon/auth-secret`);

@@ -5,16 +5,16 @@
  * so the queue schema is exactly as production uses it.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations } from "@signet/core";
-import { enqueueExtractionJob, recoverMemoryJobs, startWorker } from "./worker";
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
-import type { LlmProvider } from "./provider";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { runMigrations } from "../../../core/src/migrations";
+import { normalizeAndHashContent } from "../content-normalization";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { syncVecInsert, vectorToBlob } from "../db-helpers";
 import type { PipelineV2Config } from "../memory-config";
 import type { DecisionConfig } from "./decision";
-import { syncVecInsert, vectorToBlob } from "../db-helpers";
-import { normalizeAndHashContent } from "../content-normalization";
+import type { LlmProvider } from "./provider";
+import { enqueueExtractionJob, recoverMemoryJobs, startWorker } from "./worker";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -105,7 +105,7 @@ function getJob(
 			result: string | null;
 	  }
 	| undefined {
-	return db.prepare(`SELECT status, attempts, error, result FROM memory_jobs WHERE memory_id = ?`).get(memoryId) as
+	return db.prepare("SELECT status, attempts, error, result FROM memory_jobs WHERE memory_id = ?").get(memoryId) as
 		| {
 				status: string;
 				attempts: number;
@@ -116,7 +116,7 @@ function getJob(
 }
 
 function getHistoryCount(db: Database, memoryId: string): number {
-	const row = db.prepare(`SELECT COUNT(*) as cnt FROM memory_history WHERE memory_id = ?`).get(memoryId) as {
+	const row = db.prepare("SELECT COUNT(*) as cnt FROM memory_history WHERE memory_id = ?").get(memoryId) as {
 		cnt: number;
 	};
 	return row.cnt;
@@ -377,7 +377,7 @@ describe("enqueueExtractionJob", () => {
 		enqueueExtractionJob(accessor, "mem-b");
 		enqueueExtractionJob(accessor, "mem-b");
 
-		const rows = db.prepare(`SELECT id FROM memory_jobs WHERE memory_id = ?`).all("mem-b") as Array<{ id: string }>;
+		const rows = db.prepare("SELECT id FROM memory_jobs WHERE memory_id = ?").all("mem-b") as Array<{ id: string }>;
 
 		expect(rows).toHaveLength(1);
 	});
@@ -392,7 +392,7 @@ describe("enqueueExtractionJob", () => {
 		// Enqueue again - should insert a new one
 		enqueueExtractionJob(accessor, "mem-c");
 
-		const rows = db.prepare(`SELECT id FROM memory_jobs WHERE memory_id = ?`).all("mem-c") as Array<{ id: string }>;
+		const rows = db.prepare("SELECT id FROM memory_jobs WHERE memory_id = ?").all("mem-c") as Array<{ id: string }>;
 
 		expect(rows).toHaveLength(2);
 	});
@@ -406,7 +406,7 @@ describe("enqueueExtractionJob", () => {
 
 		enqueueExtractionJob(accessor, "mem-d");
 
-		const rows = db.prepare(`SELECT id FROM memory_jobs WHERE memory_id = ?`).all("mem-d") as Array<{ id: string }>;
+		const rows = db.prepare("SELECT id FROM memory_jobs WHERE memory_id = ?").all("mem-d") as Array<{ id: string }>;
 
 		expect(rows).toHaveLength(1);
 	});
@@ -444,7 +444,7 @@ describe("Worker processing", () => {
 		expect(job?.attempts).toBe(1);
 
 		// Extraction status on memory should be 'completed'
-		const mem = db.prepare(`SELECT extraction_status FROM memories WHERE id = ?`).get("mem-proc") as
+		const mem = db.prepare("SELECT extraction_status FROM memories WHERE id = ?").get("mem-proc") as
 			| { extraction_status: string }
 			| undefined;
 		expect(mem?.extraction_status).toBe("completed");
@@ -465,7 +465,7 @@ describe("Worker processing", () => {
 
 		// Verify the history record has shadow metadata
 		const histRow = db
-			.prepare(`SELECT metadata, changed_by, event FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT metadata, changed_by, event FROM memory_history WHERE memory_id = ?")
 			.get("mem-hist") as { metadata: string; changed_by: string; event: string } | undefined;
 
 		expect(histRow?.changed_by).toBe("pipeline-shadow");
@@ -508,7 +508,7 @@ describe("Worker processing", () => {
 		await Bun.sleep(200);
 		await worker.stop();
 
-		const job = db.prepare(`SELECT status, result FROM memory_jobs WHERE id = ?`).get("job-ghost") as
+		const job = db.prepare("SELECT status, result FROM memory_jobs WHERE id = ?").get("job-ghost") as
 			| { status: string; result: string }
 			| undefined;
 
@@ -673,7 +673,7 @@ describe("Worker phase C controlled writes", () => {
 		expect(created[0].extraction_model).toBe("qwen3:4b");
 		expect(created[0].embedding_model).toBe("nomic-embed-text");
 
-		const history = db.prepare(`SELECT event, changed_by FROM memory_history WHERE memory_id = ?`).get(created[0].id) as
+		const history = db.prepare("SELECT event, changed_by FROM memory_history WHERE memory_id = ?").get(created[0].id) as
 			| { event: string; changed_by: string }
 			| undefined;
 		expect(history?.event).toBe("created");
@@ -798,12 +798,7 @@ describe("Worker phase C controlled writes", () => {
 			reason: "Store as scoped preference memory",
 		});
 
-		const worker = startWorker(
-			accessor,
-			scriptedProvider([extraction, addDecision]),
-			PHASE_C_CFG,
-			DECISION_CFG,
-		);
+		const worker = startWorker(accessor, scriptedProvider([extraction, addDecision]), PHASE_C_CFG, DECISION_CFG);
 
 		await Bun.sleep(300);
 		await worker.stop();
@@ -847,12 +842,7 @@ describe("Worker phase C controlled writes", () => {
 			reason: "Store as scoped preference memory",
 		});
 
-		const worker = startWorker(
-			accessor,
-			scriptedProvider([extraction, addDecision]),
-			PHASE_C_CFG,
-			DECISION_CFG,
-		);
+		const worker = startWorker(accessor, scriptedProvider([extraction, addDecision]), PHASE_C_CFG, DECISION_CFG);
 
 		await Bun.sleep(300);
 		await worker.stop();
@@ -1043,7 +1033,7 @@ describe("Worker phase C controlled writes", () => {
 		expect(derived.cnt).toBe(0);
 
 		const sourceHistory = db
-			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT metadata FROM memory_history WHERE memory_id = ?")
 			.all("mem-src-write-gate") as Array<{ metadata: string | null }>;
 		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
 		expect(parsed.some((row) => row.skippedReason === "write_gate_low_surprisal")).toBe(true);
@@ -1323,7 +1313,7 @@ describe("Worker phase C controlled writes", () => {
 		expect(extractedCount.cnt).toBe(0);
 
 		const sourceHistory = db
-			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT metadata FROM memory_history WHERE memory_id = ?")
 			.all("mem-src-lowconf") as Array<{ metadata: string | null }>;
 		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
 		expect(parsed.some((row) => row.skippedReason === "low_fact_confidence")).toBe(true);
@@ -1369,7 +1359,7 @@ describe("Worker phase C controlled writes", () => {
 		expect(extractedCount.cnt).toBe(0);
 
 		const sourceHistory = db
-			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT metadata FROM memory_history WHERE memory_id = ?")
 			.all("mem-src-empty-normalized") as Array<{ metadata: string | null }>;
 		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
 		expect(parsed.some((row) => row.skippedReason === "empty_fact_content")).toBe(true);
@@ -1410,14 +1400,14 @@ describe("Worker phase C controlled writes", () => {
 		await Bun.sleep(300);
 		await worker.stop();
 
-		const target = db.prepare(`SELECT id, is_deleted FROM memories WHERE id = ?`).get("mem-target-delete") as
+		const target = db.prepare("SELECT id, is_deleted FROM memories WHERE id = ?").get("mem-target-delete") as
 			| { id: string; is_deleted: number }
 			| undefined;
 		expect(target?.id).toBe("mem-target-delete");
 		expect(target?.is_deleted).toBe(0);
 
 		const sourceHistory = db
-			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT metadata FROM memory_history WHERE memory_id = ?")
 			.all("mem-src-delete") as Array<{ metadata: string | null }>;
 		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
 		expect(
@@ -1466,7 +1456,7 @@ describe("Worker phase C controlled writes", () => {
 		expect(extractedCount.cnt).toBe(0);
 
 		const historyRows = db
-			.prepare(`SELECT event, metadata FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT event, metadata FROM memory_history WHERE memory_id = ?")
 			.all("mem-src-none") as Array<{
 			event: string;
 			metadata: string | null;
@@ -1519,12 +1509,7 @@ describe("Worker phase C controlled writes", () => {
 		insertMemory(db, "mem-src-native-shadow", "User prefers dark mode in editor");
 		enqueueExtractionJob(accessor, "mem-src-native-shadow");
 
-		const worker = startWorker(
-			accessor,
-			goodProvider(),
-			{ ...PHASE_C_CFG, nativeShadowEnabled: true },
-			DECISION_CFG,
-		);
+		const worker = startWorker(accessor, goodProvider(), { ...PHASE_C_CFG, nativeShadowEnabled: true }, DECISION_CFG);
 
 		await Bun.sleep(250);
 		await worker.stop();
@@ -1575,7 +1560,7 @@ describe("Worker phase C controlled writes", () => {
 		await worker.stop();
 
 		// Target memory content should be updated
-		const target = db.prepare(`SELECT content, updated_by FROM memories WHERE id = ?`).get("mem-target-update") as
+		const target = db.prepare("SELECT content, updated_by FROM memories WHERE id = ?").get("mem-target-update") as
 			| { content: string; updated_by: string }
 			| undefined;
 		expect(target?.content).toBe("User prefers dark mode editor theme");
@@ -1589,7 +1574,7 @@ describe("Worker phase C controlled writes", () => {
 
 		// Decision history should record updatedMemoryId
 		const sourceHistory = db
-			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT metadata FROM memory_history WHERE memory_id = ?")
 			.all("mem-src-update") as Array<{ metadata: string | null }>;
 		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
 		expect(parsed.some((row) => row.updatedMemoryId === "mem-target-update")).toBe(true);
@@ -1628,7 +1613,7 @@ describe("Worker phase C controlled writes", () => {
 		await worker.stop();
 
 		// Target memory should be soft-deleted
-		const target = db.prepare(`SELECT is_deleted FROM memories WHERE id = ?`).get("mem-target-del") as
+		const target = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get("mem-target-del") as
 			| { is_deleted: number }
 			| undefined;
 		expect(target?.is_deleted).toBe(1);
@@ -1641,7 +1626,7 @@ describe("Worker phase C controlled writes", () => {
 
 		// Decision history should record deletedMemoryId
 		const sourceHistory = db
-			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT metadata FROM memory_history WHERE memory_id = ?")
 			.all("mem-src-del") as Array<{ metadata: string | null }>;
 		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
 		expect(parsed.some((row) => row.deletedMemoryId === "mem-target-del")).toBe(true);
@@ -1650,7 +1635,7 @@ describe("Worker phase C controlled writes", () => {
 	it("skips delete for pinned memories when allowUpdateDelete is true", async () => {
 		insertMemory(db, "mem-target-pinned", "User does not prefer dark mode editor theme");
 		// Pin the target memory
-		db.prepare(`UPDATE memories SET pinned = 1 WHERE id = ?`).run("mem-target-pinned");
+		db.prepare("UPDATE memories SET pinned = 1 WHERE id = ?").run("mem-target-pinned");
 
 		insertMemory(db, "mem-src-del-pinned", "Source envelope for delete of pinned target");
 		enqueueExtractionJob(accessor, "mem-src-del-pinned");
@@ -1683,7 +1668,7 @@ describe("Worker phase C controlled writes", () => {
 		await worker.stop();
 
 		// Target should NOT be deleted (pinned protection)
-		const target = db.prepare(`SELECT is_deleted, pinned FROM memories WHERE id = ?`).get("mem-target-pinned") as
+		const target = db.prepare("SELECT is_deleted, pinned FROM memories WHERE id = ?").get("mem-target-pinned") as
 			| { is_deleted: number; pinned: number }
 			| undefined;
 		expect(target?.is_deleted).toBe(0);
@@ -1696,7 +1681,7 @@ describe("Worker phase C controlled writes", () => {
 
 		// History should record the skip reason
 		const sourceHistory = db
-			.prepare(`SELECT metadata FROM memory_history WHERE memory_id = ?`)
+			.prepare("SELECT metadata FROM memory_history WHERE memory_id = ?")
 			.all("mem-src-del-pinned") as Array<{ metadata: string | null }>;
 		const parsed = sourceHistory.map((row) => JSON.parse(row.metadata ?? "{}"));
 		expect(parsed.some((row) => row.skippedReason === "delete_pinned_requires_force")).toBe(true);
@@ -1737,17 +1722,18 @@ describe("Worker dead-job path", () => {
 		enqueueExtractionJob(accessor, "mem-die");
 
 		// max_attempts = 1 so first failure = dead
-		db.prepare(`UPDATE memory_jobs SET max_attempts = 1 WHERE memory_id = ?`).run("mem-die");
+		db.prepare("UPDATE memory_jobs SET max_attempts = 1 WHERE memory_id = ?").run("mem-die");
 
-		let writeCalls = 0;
+		let injected = false;
 		const faultyAccessor: DbAccessor = {
 			withWriteTx<T>(fn: (db: WriteDb) => T): T {
-				writeCalls++;
-				// Call 2 is the processExtractJob completion write - inject failure
-				if (writeCalls === 2) {
+				const leased = db.prepare("SELECT status FROM memory_jobs WHERE memory_id = ? LIMIT 1").get("mem-die") as
+					| { status: string }
+					| undefined;
+				if (!injected && leased?.status === "leased") {
+					injected = true;
 					throw new Error("DB write failed");
 				}
-				// All other calls (lease, failJob) succeed on the real db
 				db.exec("BEGIN IMMEDIATE");
 				try {
 					const result = fn(db as unknown as WriteDb);
@@ -1779,12 +1765,14 @@ describe("Worker dead-job path", () => {
 		enqueueExtractionJob(accessor, "mem-retry");
 
 		// max_attempts = 3, so first failure should go back to pending
-		let writeCalls = 0;
+		let injected = false;
 		const faultyAccessor: DbAccessor = {
 			withWriteTx<T>(fn: (db: WriteDb) => T): T {
-				writeCalls++;
-				// Call 2 (completion write) fails; calls 1 and 3 succeed
-				if (writeCalls === 2) {
+				const leased = db.prepare("SELECT status FROM memory_jobs WHERE memory_id = ? LIMIT 1").get("mem-retry") as
+					| { status: string }
+					| undefined;
+				if (!injected && leased?.status === "leased") {
+					injected = true;
 					throw new Error("transient failure");
 				}
 				db.exec("BEGIN IMMEDIATE");
@@ -1811,9 +1799,9 @@ describe("Worker dead-job path", () => {
 
 		const job = getJob(db, "mem-retry");
 		expect(job).toBeDefined();
-		expect(job!.attempts).toBeGreaterThanOrEqual(1);
+		expect(job?.attempts).toBeGreaterThanOrEqual(1);
 		// With max_attempts=3 and attempts=1, job goes back to pending
-		expect(job!.status).toBe("pending");
+		expect(job?.status).toBe("pending");
 	});
 });
 

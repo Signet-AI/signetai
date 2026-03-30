@@ -1,105 +1,100 @@
 <script lang="ts">
-	import {
-		PIPELINE_NODES,
-		PIPELINE_EDGES,
-		GROUP_BOXES,
-		type NodeGroup,
-	} from "./pipeline-types";
-	import { pipeline } from "./pipeline-store.svelte";
-	import PipelineNode from "./PipelineNode.svelte";
-	import PipelineEdge from "./PipelineEdge.svelte";
+import PipelineEdge from "./PipelineEdge.svelte";
+import PipelineNode from "./PipelineNode.svelte";
+import { pipeline } from "./pipeline-store.svelte";
+import { GROUP_BOXES, type NodeGroup, PIPELINE_EDGES, PIPELINE_NODES } from "./pipeline-types";
 
-	interface Props {
-		onselectnode: (id: string) => void;
+interface Props {
+	onselectnode: (id: string) => void;
+}
+
+let { onselectnode }: Props = $props();
+
+const groups = Object.entries(GROUP_BOXES) as Array<[NodeGroup, (typeof GROUP_BOXES)[NodeGroup]]>;
+
+const MIN_ZOOM = 0.7;
+const MAX_ZOOM = 2.4;
+const ZOOM_STEP = 0.12;
+
+let zoom = $state(1);
+let panX = $state(0);
+let panY = $state(0);
+let isPanning = $state(false);
+let panStartX = $state(0);
+let panStartY = $state(0);
+
+// Track which nodes had recent activity (within last 5s)
+function isNodeActive(id: string): boolean {
+	const node = pipeline.nodes[id];
+	if (!node?.lastActivity) return false;
+	const age = Date.now() - new Date(node.lastActivity).getTime();
+	return age < 5000;
+}
+
+function clampZoom(value: number): number {
+	return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+}
+
+function resetViewport(): void {
+	zoom = 1;
+	panX = 0;
+	panY = 0;
+}
+
+function handleWheel(event: WheelEvent): void {
+	event.preventDefault();
+
+	const svg = event.currentTarget;
+	if (!(svg instanceof SVGSVGElement)) return;
+
+	const rect = svg.getBoundingClientRect();
+	const pointerX = event.clientX - rect.left;
+	const pointerY = event.clientY - rect.top;
+
+	const direction = event.deltaY < 0 ? 1 : -1;
+	const nextZoom = clampZoom(zoom + direction * ZOOM_STEP);
+	if (nextZoom === zoom) return;
+
+	const graphX = (pointerX - panX) / zoom;
+	const graphY = (pointerY - panY) / zoom;
+
+	zoom = nextZoom;
+	panX = pointerX - graphX * nextZoom;
+	panY = pointerY - graphY * nextZoom;
+}
+
+function handlePointerDown(event: PointerEvent): void {
+	if (event.button !== 0) return;
+	if (event.target !== event.currentTarget) return;
+
+	const svg = event.currentTarget;
+	if (svg instanceof SVGSVGElement) {
+		svg.setPointerCapture(event.pointerId);
 	}
 
-	let { onselectnode }: Props = $props();
+	isPanning = true;
+	panStartX = event.clientX;
+	panStartY = event.clientY;
+}
 
-	const groups = Object.entries(GROUP_BOXES) as Array<[NodeGroup, typeof GROUP_BOXES[NodeGroup]]>;
+function handlePointerMove(event: PointerEvent): void {
+	if (!isPanning) return;
+	const dx = event.clientX - panStartX;
+	const dy = event.clientY - panStartY;
+	panStartX = event.clientX;
+	panStartY = event.clientY;
+	panX += dx;
+	panY += dy;
+}
 
-	const MIN_ZOOM = 0.7;
-	const MAX_ZOOM = 2.4;
-	const ZOOM_STEP = 0.12;
-
-	let zoom = $state(1);
-	let panX = $state(0);
-	let panY = $state(0);
-	let isPanning = $state(false);
-	let panStartX = $state(0);
-	let panStartY = $state(0);
-
-	// Track which nodes had recent activity (within last 5s)
-	function isNodeActive(id: string): boolean {
-		const node = pipeline.nodes[id];
-		if (!node?.lastActivity) return false;
-		const age = Date.now() - new Date(node.lastActivity).getTime();
-		return age < 5000;
+function handlePointerEnd(event: PointerEvent): void {
+	if (!isPanning) return;
+	const svg = event.currentTarget;
+	if (svg instanceof SVGSVGElement) {
+		svg.releasePointerCapture(event.pointerId);
 	}
-
-	function clampZoom(value: number): number {
-		return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
-	}
-
-	function resetViewport(): void {
-		zoom = 1;
-		panX = 0;
-		panY = 0;
-	}
-
-	function handleWheel(event: WheelEvent): void {
-		event.preventDefault();
-
-		const svg = event.currentTarget;
-		if (!(svg instanceof SVGSVGElement)) return;
-
-		const rect = svg.getBoundingClientRect();
-		const pointerX = event.clientX - rect.left;
-		const pointerY = event.clientY - rect.top;
-
-		const direction = event.deltaY < 0 ? 1 : -1;
-		const nextZoom = clampZoom(zoom + direction * ZOOM_STEP);
-		if (nextZoom === zoom) return;
-
-		const graphX = (pointerX - panX) / zoom;
-		const graphY = (pointerY - panY) / zoom;
-
-		zoom = nextZoom;
-		panX = pointerX - graphX * nextZoom;
-		panY = pointerY - graphY * nextZoom;
-	}
-
-	function handlePointerDown(event: PointerEvent): void {
-		if (event.button !== 0) return;
-		if (event.target !== event.currentTarget) return;
-
-		const svg = event.currentTarget;
-		if (svg instanceof SVGSVGElement) {
-			svg.setPointerCapture(event.pointerId);
-		}
-
-		isPanning = true;
-		panStartX = event.clientX;
-		panStartY = event.clientY;
-	}
-
-	function handlePointerMove(event: PointerEvent): void {
-		if (!isPanning) return;
-		const dx = event.clientX - panStartX;
-		const dy = event.clientY - panStartY;
-		panStartX = event.clientX;
-		panStartY = event.clientY;
-		panX += dx;
-		panY += dy;
-	}
-
-	function handlePointerEnd(event: PointerEvent): void {
-		if (!isPanning) return;
-		const svg = event.currentTarget;
-		if (svg instanceof SVGSVGElement) {
-			svg.releasePointerCapture(event.pointerId);
-		}
-		isPanning = false;
-	}
+	isPanning = false;
+}
 </script>
 
 <svg

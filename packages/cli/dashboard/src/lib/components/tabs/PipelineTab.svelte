@@ -1,385 +1,378 @@
 <script lang="ts">
-	import { onMount } from "svelte";
-	import { pausePipeline, resumePipeline } from "$lib/api";
-	import { Badge } from "$lib/components/ui/badge/index.js";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import * as Switch from "$lib/components/ui/switch/index.js";
-	import * as Popover from "$lib/components/ui/popover/index.js";
-	import PipelineGraph from "$lib/components/pipeline/PipelineGraph.svelte";
-	import PipelineDetailSheet from "$lib/components/pipeline/PipelineDetailSheet.svelte";
-	import SessionList from "$lib/components/sessions/SessionList.svelte";
-	import {
-		pipeline,
-		connectSSE,
-		disconnectSSE,
-		pollStatus,
-		startPolling,
-		stopPolling,
-		selectNode,
-	} from "$lib/components/pipeline/pipeline-store.svelte";
-	import { PIPELINE_NODES } from "$lib/components/pipeline/pipeline-types";
-	import { workspaceLayout, syncLayoutToStorage } from "$lib/stores/workspace-layout.svelte";
-	import PageBanner from "$lib/components/layout/PageBanner.svelte";
-	import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
-	import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
-	import { nav } from "$lib/stores/navigation.svelte";
-	import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
-	import { toast } from "$lib/stores/toast.svelte";
+import { pausePipeline, resumePipeline } from "$lib/api";
+import PageBanner from "$lib/components/layout/PageBanner.svelte";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
+import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import PipelineDetailSheet from "$lib/components/pipeline/PipelineDetailSheet.svelte";
+import PipelineGraph from "$lib/components/pipeline/PipelineGraph.svelte";
+import {
+	connectSSE,
+	disconnectSSE,
+	pipeline,
+	pollStatus,
+	selectNode,
+	startPolling,
+	stopPolling,
+} from "$lib/components/pipeline/pipeline-store.svelte";
+import { PIPELINE_NODES } from "$lib/components/pipeline/pipeline-types";
+import SessionList from "$lib/components/sessions/SessionList.svelte";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Popover from "$lib/components/ui/popover/index.js";
+import * as Switch from "$lib/components/ui/switch/index.js";
+import { nav } from "$lib/stores/navigation.svelte";
+import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
+import { toast } from "$lib/stores/toast.svelte";
+import { syncLayoutToStorage, workspaceLayout } from "$lib/stores/workspace-layout.svelte";
+import { onMount } from "svelte";
 
-	function handleSelectNode(id: string) {
-		selectNode(pipeline.selectedNodeId === id ? null : id);
+function handleSelectNode(id: string) {
+	selectNode(pipeline.selectedNodeId === id ? null : id);
+}
+
+let op = $state<"pause" | "resume" | null>(null);
+
+let feedViewport: HTMLElement | null = $state(null);
+let autoScroll = $state(true);
+let feedExpanded = $state(false);
+let mobileFeedActionsOpen = $state(false);
+const AUTO_SCROLL_THRESHOLD_PX = 24;
+let feedAtLatest = $state(true);
+let feedFollow = $state(true);
+const feedWidthClass = $derived(feedExpanded ? "lg:w-[420px]" : "lg:w-[320px]");
+const feedPositionLabel = $derived(feedAtLatest ? "Latest" : "Oldest");
+const feedDensityLabel = $derived(feedExpanded ? "Expanded" : "Compact");
+
+function scrollFeedToBottom(behavior: ScrollBehavior = "smooth"): void {
+	if (!feedViewport) return;
+	feedViewport.scrollTo({ top: feedViewport.scrollHeight, behavior });
+}
+
+function isFeedNearBottom(): boolean {
+	if (!feedViewport) return true;
+	const distance = feedViewport.scrollHeight - feedViewport.scrollTop - feedViewport.clientHeight;
+	return distance <= AUTO_SCROLL_THRESHOLD_PX;
+}
+
+function updateFeedPositionFlags(): void {
+	if (!feedViewport) return;
+	feedFollow = isFeedNearBottom();
+	const overflow = feedViewport.scrollHeight - feedViewport.clientHeight > AUTO_SCROLL_THRESHOLD_PX;
+	if (!overflow) return;
+
+	if (feedFollow) {
+		feedAtLatest = true;
+		return;
 	}
 
-	let op = $state<"pause" | "resume" | null>(null);
+	if (feedViewport.scrollTop <= AUTO_SCROLL_THRESHOLD_PX) {
+		feedAtLatest = false;
+	}
+}
 
-	let feedViewport: HTMLElement | null = $state(null);
-	let autoScroll = $state(true);
-	let feedExpanded = $state(false);
-	let mobileFeedActionsOpen = $state(false);
-	const AUTO_SCROLL_THRESHOLD_PX = 24;
-	let feedAtLatest = $state(true);
-	let feedFollow = $state(true);
-	let feedWidthClass = $derived(feedExpanded ? "lg:w-[420px]" : "lg:w-[320px]");
-	let feedPositionLabel = $derived(feedAtLatest ? "Latest" : "Oldest");
-	let feedDensityLabel = $derived(feedExpanded ? "Expanded" : "Compact");
+function handleFeedJumpClick(event?: Event): void {
+	if (!feedViewport) return;
 
-	function scrollFeedToBottom(behavior: ScrollBehavior = "smooth"): void {
-		if (!feedViewport) return;
-		feedViewport.scrollTo({ top: feedViewport.scrollHeight, behavior });
+	if (feedAtLatest) {
+		autoScroll = false;
+		feedFollow = false;
+		feedAtLatest = false;
+		feedViewport.scrollTo({ top: 0, behavior: "smooth" });
+	} else {
+		autoScroll = true;
+		feedFollow = true;
+		feedAtLatest = true;
+		scrollFeedToBottom("auto");
 	}
 
-	function isFeedNearBottom(): boolean {
-		if (!feedViewport) return true;
-		const distance =
-			feedViewport.scrollHeight - feedViewport.scrollTop -
-			feedViewport.clientHeight;
-		return distance <= AUTO_SCROLL_THRESHOLD_PX;
+	if (event?.currentTarget instanceof HTMLElement) {
+		event.currentTarget.blur();
 	}
+	mobileFeedActionsOpen = false;
+}
 
-	function updateFeedPositionFlags(): void {
-		if (!feedViewport) return;
-		feedFollow = isFeedNearBottom();
-		const overflow =
-			feedViewport.scrollHeight - feedViewport.clientHeight >
-			AUTO_SCROLL_THRESHOLD_PX;
-		if (!overflow) return;
-
-		if (feedFollow) {
-			feedAtLatest = true;
-			return;
-		}
-
-		if (feedViewport.scrollTop <= AUTO_SCROLL_THRESHOLD_PX) {
-			feedAtLatest = false;
-		}
-	}
-
-	function handleFeedJumpClick(event?: Event): void {
-		if (!feedViewport) return;
-
-		if (feedAtLatest) {
-			autoScroll = false;
-			feedFollow = false;
-			feedAtLatest = false;
-			feedViewport.scrollTo({ top: 0, behavior: "smooth" });
-		} else {
-			autoScroll = true;
-			feedFollow = true;
-			feedAtLatest = true;
+function handleAutoScrollChange(checked: boolean): void {
+	autoScroll = checked;
+	workspaceLayout.pipeline.autoScroll = checked;
+	syncLayoutToStorage();
+	if (checked) {
+		feedFollow = true;
+		feedAtLatest = true;
+		requestAnimationFrame(() => {
 			scrollFeedToBottom("auto");
-		}
+			updateFeedPositionFlags();
+		});
+	}
+}
 
-		if (event?.currentTarget instanceof HTMLElement) {
-			event.currentTarget.blur();
-		}
-		mobileFeedActionsOpen = false;
+function handleFeedWidthToggle(event?: Event): void {
+	feedExpanded = !feedExpanded;
+	workspaceLayout.pipeline.feedExpanded = feedExpanded;
+	syncLayoutToStorage();
+	if (event?.currentTarget instanceof HTMLElement) {
+		event.currentTarget.blur();
+	}
+	mobileFeedActionsOpen = false;
+}
+
+async function handleModeToggle(): Promise<void> {
+	if (op) return;
+	if (pipeline.mode === "disabled") {
+		toast("Pipeline is disabled in config", "warning");
+		return;
 	}
 
-	function handleAutoScrollChange(checked: boolean): void {
-		autoScroll = checked;
-		workspaceLayout.pipeline.autoScroll = checked;
-		syncLayoutToStorage();
-		if (checked) {
-			feedFollow = true;
-			feedAtLatest = true;
-			requestAnimationFrame(() => {
-				scrollFeedToBottom("auto");
-				updateFeedPositionFlags();
-			});
-		}
-	}
+	const next = pipeline.mode === "paused" ? "resume" : "pause";
+	op = next;
 
-	function handleFeedWidthToggle(event?: Event): void {
-		feedExpanded = !feedExpanded;
-		workspaceLayout.pipeline.feedExpanded = feedExpanded;
-		syncLayoutToStorage();
-		if (event?.currentTarget instanceof HTMLElement) {
-			event.currentTarget.blur();
-		}
-		mobileFeedActionsOpen = false;
-	}
-
-	async function handleModeToggle(): Promise<void> {
-		if (op) return;
-		if (pipeline.mode === "disabled") {
-			toast("Pipeline is disabled in config", "warning");
+	try {
+		const res = next === "pause" ? await pausePipeline() : await resumePipeline();
+		if (!res.success) {
+			toast(res.error ?? `Failed to ${next} pipeline`, "error");
 			return;
 		}
 
-		const next = pipeline.mode === "paused" ? "resume" : "pause";
-		op = next;
-
-		try {
-			const res = next === "pause" ? await pausePipeline() : await resumePipeline();
-			if (!res.success) {
-				toast(res.error ?? `Failed to ${next} pipeline`, "error");
-				return;
-			}
-
-			if (res.mode) {
-				pipeline.mode = res.mode;
-				pipeline.lastPoll = new Date().toISOString();
-			}
-			const refreshed = await pollStatus();
-
-			if (res.changed === false) {
-				toast(next === "pause" ? "Pipeline already paused" : "Pipeline already running");
-				return;
-			}
-
-			if (!refreshed) {
-				toast(
-					`${next === "pause" ? "Pipeline paused" : "Pipeline resumed"}, but live status refresh failed`,
-					"warning",
-				);
-				return;
-			}
-
-			toast(next === "pause" ? "Pipeline paused" : "Pipeline resumed", "success");
-		} finally {
-			op = null;
+		if (res.mode) {
+			pipeline.mode = res.mode;
+			pipeline.lastPoll = new Date().toISOString();
 		}
-	}
+		const refreshed = await pollStatus();
 
-	function getEntryDataKeySummary(data?: Record<string, unknown>): string {
-		if (!data) return "";
-		const keys = Object.keys(data);
-		if (keys.length === 0) return "";
-		const shown = keys.slice(0, 4).join(", ");
-		return keys.length > 4 ? `${shown} +${keys.length - 4}` : shown;
-	}
-
-	// Auto-scroll feed
-	$effect(() => {
-		const _ = pipeline.feed.length;
-		updateFeedPositionFlags();
-		if (autoScroll && feedViewport) {
-			if (!feedFollow) return;
-			requestAnimationFrame(() => {
-				scrollFeedToBottom("auto");
-				feedFollow = true;
-				feedAtLatest = true;
-				updateFeedPositionFlags();
-			});
+		if (res.changed === false) {
+			toast(next === "pause" ? "Pipeline already paused" : "Pipeline already running");
+			return;
 		}
-	});
 
-	onMount(() => {
-		connectSSE();
-		startPolling();
-		// Restore persisted layout state
-		autoScroll = workspaceLayout.pipeline.autoScroll;
-		feedExpanded = workspaceLayout.pipeline.feedExpanded;
-		return () => {
-			disconnectSSE();
-			stopPolling();
-		};
-	});
-
-	const modeColors: Record<string, string> = {
-		"controlled-write": "border-[#4ade80] text-[#4ade80]",
-		shadow: "border-[#fbbf24] text-[#fbbf24]",
-		frozen: "border-[#94a3b8] text-[#94a3b8]",
-		paused: "border-[#60a5fa] text-[#60a5fa]",
-		disabled: "border-[#f87171] text-[#f87171]",
-		unknown: "border-[var(--sig-border)] text-[var(--sig-text-muted)]",
-	};
-
-	let modeClass = $derived(modeColors[pipeline.mode] ?? modeColors.unknown);
-
-	// Count active nodes (had activity in last 5s)
-	let activeCount = $derived(
-		PIPELINE_NODES.filter((n) => {
-			const ns = pipeline.nodes[n.id];
-			if (!ns?.lastActivity) return false;
-			return Date.now() - new Date(ns.lastActivity).getTime() < 5000;
-		}).length,
-	);
-
-	function formatTime(ts: string): string {
-		try {
-			return new Date(ts).toLocaleTimeString(undefined, {
-				hour: "2-digit",
-				minute: "2-digit",
-				second: "2-digit",
-			});
-		} catch { return ts; }
-	}
-
-	const LEVEL_COLORS: Record<string, string> = {
-		error: "#f87171",
-		warn: "#fbbf24",
-		info: "#4ade80",
-		debug: "#6b6b76",
-	};
-
-	const CATEGORY_COLORS: Record<string, string> = {
-		hooks: "#4dabf7",
-		"session-tracker": "#4dabf7",
-		pipeline: "#da77f2",
-		"summary-worker": "#da77f2",
-		"document-worker": "#da77f2",
-		retention: "#da77f2",
-		maintenance: "#da77f2",
-		memory: "#ffd43b",
-		embedding: "#ffd43b",
-		sync: "#ff922b",
-		watcher: "#ff922b",
-		harness: "#4dabf7",
-		llm: "#fcc419",
-	};
-
-	const PRIORITY_DATA_KEYS = [
-		"jobId",
-		"memoryId",
-		"sessionKey",
-		"project",
-		"attempt",
-		"maxRetries",
-		"mode",
-		"provider",
-		"model",
-		"facts",
-		"entities",
-		"proposals",
-		"added",
-		"updated",
-		"deleted",
-		"deduped",
-		"skippedLowConfidence",
-		"blockedDestructive",
-		"runId",
-		"taskId",
-		"path",
-		"port",
-		"pid",
-		"error",
-	] as const;
-
-	function formatRelativeTime(ts: string): string {
-		const deltaMs = Date.now() - new Date(ts).getTime();
-		if (!Number.isFinite(deltaMs) || deltaMs < 0) return "just now";
-		const sec = Math.floor(deltaMs / 1000);
-		if (sec < 60) return `${sec}s ago`;
-		const min = Math.floor(sec / 60);
-		if (min < 60) return `${min}m ago`;
-		const hr = Math.floor(min / 60);
-		if (hr < 24) return `${hr}h ago`;
-		const day = Math.floor(hr / 24);
-		return `${day}d ago`;
-	}
-
-	function keyLabel(key: string): string {
-		return key
-			.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-			.replace(/[_-]+/g, " ")
-			.replace(/^./, (s) => s.toUpperCase());
-	}
-
-	function formatValue(value: unknown): string {
-		if (value === null) return "null";
-		if (value === undefined) return "undefined";
-		if (typeof value === "string") return value;
-		if (typeof value === "number" || typeof value === "boolean") {
-			return String(value);
+		if (!refreshed) {
+			toast(`${next === "pause" ? "Pipeline paused" : "Pipeline resumed"}, but live status refresh failed`, "warning");
+			return;
 		}
-		if (Array.isArray(value)) return `[${value.length} items]`;
-		if (typeof value === "object") return "{object}";
+
+		toast(next === "pause" ? "Pipeline paused" : "Pipeline resumed", "success");
+	} finally {
+		op = null;
+	}
+}
+
+function getEntryDataKeySummary(data?: Record<string, unknown>): string {
+	if (!data) return "";
+	const keys = Object.keys(data);
+	if (keys.length === 0) return "";
+	const shown = keys.slice(0, 4).join(", ");
+	return keys.length > 4 ? `${shown} +${keys.length - 4}` : shown;
+}
+
+// Auto-scroll feed
+$effect(() => {
+	const _ = pipeline.feed.length;
+	updateFeedPositionFlags();
+	if (autoScroll && feedViewport) {
+		if (!feedFollow) return;
+		requestAnimationFrame(() => {
+			scrollFeedToBottom("auto");
+			feedFollow = true;
+			feedAtLatest = true;
+			updateFeedPositionFlags();
+		});
+	}
+});
+
+onMount(() => {
+	connectSSE();
+	startPolling();
+	// Restore persisted layout state
+	autoScroll = workspaceLayout.pipeline.autoScroll;
+	feedExpanded = workspaceLayout.pipeline.feedExpanded;
+	return () => {
+		disconnectSSE();
+		stopPolling();
+	};
+});
+
+const modeColors: Record<string, string> = {
+	"controlled-write": "border-[#4ade80] text-[#4ade80]",
+	shadow: "border-[#fbbf24] text-[#fbbf24]",
+	frozen: "border-[#94a3b8] text-[#94a3b8]",
+	paused: "border-[#60a5fa] text-[#60a5fa]",
+	disabled: "border-[#f87171] text-[#f87171]",
+	unknown: "border-[var(--sig-border)] text-[var(--sig-text-muted)]",
+};
+
+const modeClass = $derived(modeColors[pipeline.mode] ?? modeColors.unknown);
+
+// Count active nodes (had activity in last 5s)
+const activeCount = $derived(
+	PIPELINE_NODES.filter((n) => {
+		const ns = pipeline.nodes[n.id];
+		if (!ns?.lastActivity) return false;
+		return Date.now() - new Date(ns.lastActivity).getTime() < 5000;
+	}).length,
+);
+
+function formatTime(ts: string): string {
+	try {
+		return new Date(ts).toLocaleTimeString(undefined, {
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+		});
+	} catch {
+		return ts;
+	}
+}
+
+const LEVEL_COLORS: Record<string, string> = {
+	error: "#f87171",
+	warn: "#fbbf24",
+	info: "#4ade80",
+	debug: "#6b6b76",
+};
+
+const CATEGORY_COLORS: Record<string, string> = {
+	hooks: "#4dabf7",
+	"session-tracker": "#4dabf7",
+	pipeline: "#da77f2",
+	"summary-worker": "#da77f2",
+	"document-worker": "#da77f2",
+	retention: "#da77f2",
+	maintenance: "#da77f2",
+	memory: "#ffd43b",
+	embedding: "#ffd43b",
+	sync: "#ff922b",
+	watcher: "#ff922b",
+	harness: "#4dabf7",
+	llm: "#fcc419",
+};
+
+const PRIORITY_DATA_KEYS = [
+	"jobId",
+	"memoryId",
+	"sessionKey",
+	"project",
+	"attempt",
+	"maxRetries",
+	"mode",
+	"provider",
+	"model",
+	"facts",
+	"entities",
+	"proposals",
+	"added",
+	"updated",
+	"deleted",
+	"deduped",
+	"skippedLowConfidence",
+	"blockedDestructive",
+	"runId",
+	"taskId",
+	"path",
+	"port",
+	"pid",
+	"error",
+] as const;
+
+function formatRelativeTime(ts: string): string {
+	const deltaMs = Date.now() - new Date(ts).getTime();
+	if (!Number.isFinite(deltaMs) || deltaMs < 0) return "just now";
+	const sec = Math.floor(deltaMs / 1000);
+	if (sec < 60) return `${sec}s ago`;
+	const min = Math.floor(sec / 60);
+	if (min < 60) return `${min}m ago`;
+	const hr = Math.floor(min / 60);
+	if (hr < 24) return `${hr}h ago`;
+	const day = Math.floor(hr / 24);
+	return `${day}d ago`;
+}
+
+function keyLabel(key: string): string {
+	return key
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.replace(/[_-]+/g, " ")
+		.replace(/^./, (s) => s.toUpperCase());
+}
+
+function formatValue(value: unknown): string {
+	if (value === null) return "null";
+	if (value === undefined) return "undefined";
+	if (typeof value === "string") return value;
+	if (typeof value === "number" || typeof value === "boolean") {
 		return String(value);
 	}
+	if (Array.isArray(value)) return `[${value.length} items]`;
+	if (typeof value === "object") return "{object}";
+	return String(value);
+}
 
-	function summarizeProcess(entry: {
-		readonly category: string;
-		readonly message: string;
-		readonly data?: Record<string, unknown>;
-	}): string {
-		const msg = entry.message.toLowerCase();
-		const stage = entry.category.replace(/-/g, " ");
+function summarizeProcess(entry: {
+	readonly category: string;
+	readonly message: string;
+	readonly data?: Record<string, unknown>;
+}): string {
+	const msg = entry.message.toLowerCase();
+	const stage = entry.category.replace(/-/g, " ");
 
-		if (msg.includes("job failed")) {
-			const attempt = entry.data?.attempt;
-			return typeof attempt === "number"
-				? `${stage} failed (attempt ${attempt})`
-				: `${stage} failed`;
-		}
-		if (msg.includes("completed")) return `${stage} completed`;
-		if (msg.includes("started") || msg.includes("starting")) {
-			return `${stage} started`;
-		}
-		if (msg.includes("enqueued")) return `${stage} queued`;
-		if (msg.includes("failed")) return `${stage} warning`;
-		if (msg.includes("file changed")) return "watcher detected file change";
-		return `${stage} event`;
+	if (msg.includes("job failed")) {
+		const attempt = entry.data?.attempt;
+		return typeof attempt === "number" ? `${stage} failed (attempt ${attempt})` : `${stage} failed`;
+	}
+	if (msg.includes("completed")) return `${stage} completed`;
+	if (msg.includes("started") || msg.includes("starting")) {
+		return `${stage} started`;
+	}
+	if (msg.includes("enqueued")) return `${stage} queued`;
+	if (msg.includes("failed")) return `${stage} warning`;
+	if (msg.includes("file changed")) return "watcher detected file change";
+	return `${stage} event`;
+}
+
+function getEntryMetaRows(entry: {
+	readonly level: string;
+	readonly category: string;
+	readonly duration?: number;
+	readonly data?: Record<string, unknown>;
+}): Array<{ label: string; value: string }> {
+	const rows: Array<{ label: string; value: string }> = [
+		{ label: "Level", value: entry.level },
+		{ label: "Category", value: entry.category },
+	];
+
+	if (entry.duration !== undefined) {
+		rows.push({ label: "Duration", value: `${entry.duration} ms` });
 	}
 
-	function getEntryMetaRows(entry: {
-		readonly level: string;
-		readonly category: string;
-		readonly duration?: number;
-		readonly data?: Record<string, unknown>;
-	}): Array<{ label: string; value: string }> {
-		const rows: Array<{ label: string; value: string }> = [
-			{ label: "Level", value: entry.level },
-			{ label: "Category", value: entry.category },
-		];
+	const data = entry.data;
+	if (!data) return rows;
 
-		if (entry.duration !== undefined) {
-			rows.push({ label: "Duration", value: `${entry.duration} ms` });
-		}
-
-		const data = entry.data;
-		if (!data) return rows;
-
-		const used = new Set<string>();
-		for (const key of PRIORITY_DATA_KEYS) {
-			if (key in data) {
-				rows.push({ label: keyLabel(key), value: formatValue(data[key]) });
-				used.add(key);
-			}
-		}
-
-		for (const key of Object.keys(data).sort()) {
-			if (used.has(key)) continue;
+	const used = new Set<string>();
+	for (const key of PRIORITY_DATA_KEYS) {
+		if (key in data) {
 			rows.push({ label: keyLabel(key), value: formatValue(data[key]) });
+			used.add(key);
 		}
-
-		return rows;
 	}
 
-	function getEntryRawPayload(entry: {
-		readonly data?: Record<string, unknown>;
-		readonly error?: { name: string; message: string };
-	}): string {
-		const payload: Record<string, unknown> = {};
-		if (entry.data) payload.data = entry.data;
-		if (entry.error) payload.error = entry.error;
-		if (Object.keys(payload).length === 0) return "";
-		const raw = JSON.stringify(payload, null, 2);
-		if (!raw) return "";
-		const MAX_CHARS = 3200;
-		if (raw.length <= MAX_CHARS) return raw;
-		return `${raw.slice(0, MAX_CHARS)}\n...truncated`;
+	for (const key of Object.keys(data).sort()) {
+		if (used.has(key)) continue;
+		rows.push({ label: keyLabel(key), value: formatValue(data[key]) });
 	}
+
+	return rows;
+}
+
+function getEntryRawPayload(entry: {
+	readonly data?: Record<string, unknown>;
+	readonly error?: { name: string; message: string };
+}): string {
+	const payload: Record<string, unknown> = {};
+	if (entry.data) payload.data = entry.data;
+	if (entry.error) payload.error = entry.error;
+	if (Object.keys(payload).length === 0) return "";
+	const raw = JSON.stringify(payload, null, 2);
+	if (!raw) return "";
+	const MAX_CHARS = 3200;
+	if (raw.length <= MAX_CHARS) return raw;
+	return `${raw.slice(0, MAX_CHARS)}\n...truncated`;
+}
 </script>
 
 <div class="flex flex-col flex-1 min-h-0 overflow-hidden">

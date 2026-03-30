@@ -9,13 +9,16 @@ afterEach(() => {
 
 describe("createDaemonClient", () => {
 	test("postResult classifies timeout failures separately from offline", async () => {
-		globalThis.fetch = Object.assign(async () => {
-			const err = new Error("timed out");
-			Object.defineProperty(err, "name", { value: "TimeoutError" });
-			throw err;
-		}, {
-			preconnect: originalFetch.preconnect,
-		});
+		globalThis.fetch = Object.assign(
+			async () => {
+				const err = new Error("timed out");
+				Object.defineProperty(err, "name", { value: "TimeoutError" });
+				throw err;
+			},
+			{
+				preconnect: originalFetch.preconnect,
+			},
+		);
 
 		const client = createDaemonClient("http://daemon.test");
 		const result = await client.postResult("/api/hooks/session-start", {});

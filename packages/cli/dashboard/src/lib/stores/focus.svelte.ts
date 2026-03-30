@@ -5,7 +5,7 @@
  * and coordinates focus transitions for seamless keyboard navigation.
  */
 
-import { nav, type TabId } from "./navigation.svelte";
+import { type TabId, nav } from "./navigation.svelte";
 
 export type FocusZone = "sidebar-menu" | "sidebar-footer" | "page-content";
 
@@ -145,12 +145,12 @@ export function focusFirstPageElement(): void {
 		if (!pageContent) return;
 
 		const focusableSelectors = [
-			'button:not([disabled])',
-			'input:not([disabled])',
-			'select:not([disabled])',
-			'textarea:not([disabled])',
+			"button:not([disabled])",
+			"input:not([disabled])",
+			"select:not([disabled])",
+			"textarea:not([disabled])",
 			'[tabindex="0"]',
-			'a[href]',
+			"a[href]",
 		].join(", ");
 
 		const firstFocusable = pageContent.querySelector(focusableSelectors);
@@ -165,9 +165,7 @@ export function focusFirstPageElement(): void {
  * Navigate to next sidebar item
  */
 export function navigateSidebarNext(): void {
-	const currentIndex = focus.sidebarItem
-		? SIDEBAR_ORDER.indexOf(focus.sidebarItem)
-		: -1;
+	const currentIndex = focus.sidebarItem ? SIDEBAR_ORDER.indexOf(focus.sidebarItem) : -1;
 	const nextIndex = (currentIndex + 1) % SIDEBAR_ORDER.length;
 	setSidebarItem(SIDEBAR_ORDER[nextIndex]);
 }
@@ -176,9 +174,7 @@ export function navigateSidebarNext(): void {
  * Navigate to previous sidebar item
  */
 export function navigateSidebarPrev(): void {
-	const currentIndex = focus.sidebarItem
-		? SIDEBAR_ORDER.indexOf(focus.sidebarItem)
-		: 0;
+	const currentIndex = focus.sidebarItem ? SIDEBAR_ORDER.indexOf(focus.sidebarItem) : 0;
 	const prevIndex = currentIndex <= 0 ? SIDEBAR_ORDER.length - 1 : currentIndex - 1;
 	setSidebarItem(SIDEBAR_ORDER[prevIndex]);
 }

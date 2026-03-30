@@ -359,16 +359,11 @@ export function traverseKnowledgeGraph(
 			dependencyId?: string,
 		): TraversalPath => {
 			const entityIds =
-				typeof sourceEntityId === "string" &&
-				sourceEntityId.length > 0 &&
-				sourceEntityId !== entityId
+				typeof sourceEntityId === "string" && sourceEntityId.length > 0 && sourceEntityId !== entityId
 					? [sourceEntityId, entityId]
 					: [entityId];
 			const aspectIds = typeof aspectId === "string" && aspectId.length > 0 ? [aspectId] : [];
-			const dependencyIds =
-				typeof dependencyId === "string" && dependencyId.length > 0
-					? [dependencyId]
-					: [];
+			const dependencyIds = typeof dependencyId === "string" && dependencyId.length > 0 ? [dependencyId] : [];
 			return { entityIds, aspectIds, dependencyIds };
 		};
 
@@ -389,11 +384,7 @@ export function traverseKnowledgeGraph(
 			}
 		};
 
-		const collectForEntity = (
-			entityId: string,
-			sourceEntityId?: string,
-			dependencyId?: string,
-		): void => {
+		const collectForEntity = (entityId: string, sourceEntityId?: string, dependencyId?: string): void => {
 			if (timedOut || visitedEntities.has(entityId)) return;
 			if (memoryIds.size >= budget) return;
 			visitedEntities.add(entityId);
@@ -456,9 +447,7 @@ export function traverseKnowledgeGraph(
 				let attributeRows: Array<{ memory_id: string | null; importance: number }>;
 
 				if (config.scope !== undefined) {
-					const scopeClause = config.scope === null
-						? "AND m.scope IS NULL"
-						: "AND m.scope = ?";
+					const scopeClause = config.scope === null ? "AND m.scope IS NULL" : "AND m.scope = ?";
 					const scopeArgs: unknown[] = config.scope === null ? [] : [config.scope];
 					attributeRows = db
 						.prepare(
@@ -471,7 +460,10 @@ export function traverseKnowledgeGraph(
 							 ORDER BY ea.importance DESC
 							 LIMIT ?`,
 						)
-						.all(aspect.id, agentId, ...scopeArgs, config.maxAttributesPerAspect) as Array<{ memory_id: string | null; importance: number }>;
+						.all(aspect.id, agentId, ...scopeArgs, config.maxAttributesPerAspect) as Array<{
+						memory_id: string | null;
+						importance: number;
+					}>;
 				} else {
 					attributeRows = db
 						.prepare(
@@ -482,7 +474,10 @@ export function traverseKnowledgeGraph(
 							 ORDER BY importance DESC
 							 LIMIT ?`,
 						)
-						.all(aspect.id, agentId, config.maxAttributesPerAspect) as Array<{ memory_id: string | null; importance: number }>;
+						.all(aspect.id, agentId, config.maxAttributesPerAspect) as Array<{
+						memory_id: string | null;
+						importance: number;
+					}>;
 				}
 
 				for (const row of attributeRows) {
@@ -505,9 +500,7 @@ export function traverseKnowledgeGraph(
 
 			let mentionRows: Array<{ memory_id: string; importance: number }>;
 			if (config.scope !== undefined) {
-				const scopeClause = config.scope === null
-					? "AND m.scope IS NULL"
-					: "AND m.scope = ?";
+				const scopeClause = config.scope === null ? "AND m.scope IS NULL" : "AND m.scope = ?";
 				const scopeArgs: unknown[] = config.scope === null ? [] : [config.scope];
 				mentionRows = db
 					.prepare(

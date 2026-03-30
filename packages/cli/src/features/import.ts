@@ -110,20 +110,13 @@ export async function importFromGitHub(basePath: string, deps: Deps): Promise<vo
 
 export function normalizeGitUrl(repoUrl: string): string {
 	const trimmed = repoUrl.trim();
-	const withoutTrailingSlash =
-		trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed;
-	if (
-		!withoutTrailingSlash.includes("://") &&
-		!withoutTrailingSlash.startsWith("git@")
-	) {
+	const withoutTrailingSlash = trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed;
+	if (!withoutTrailingSlash.includes("://") && !withoutTrailingSlash.startsWith("git@")) {
 		return withoutTrailingSlash.endsWith(".git")
 			? `https://github.com/${withoutTrailingSlash}`
 			: `https://github.com/${withoutTrailingSlash}.git`;
 	}
-	if (
-		withoutTrailingSlash.startsWith("https://github.com/") &&
-		!withoutTrailingSlash.endsWith(".git")
-	) {
+	if (withoutTrailingSlash.startsWith("https://github.com/") && !withoutTrailingSlash.endsWith(".git")) {
 		return `${withoutTrailingSlash}.git`;
 	}
 	return withoutTrailingSlash;

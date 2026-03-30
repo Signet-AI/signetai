@@ -16,11 +16,7 @@ import type { Plugin } from "unified";
 import { visit } from "unist-util-visit";
 
 function escapeHtml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;");
+	return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 // All known doc slugs (filename without .md, lowercased)

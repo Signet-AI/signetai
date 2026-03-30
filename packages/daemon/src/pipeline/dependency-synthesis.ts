@@ -117,9 +117,11 @@ function loadExistingTargets(db: ReadDb, entityId: string): ReadonlySet<string> 
 function markSynthesized(accessor: DbAccessor, entityId: string): void {
 	const now = new Date().toISOString();
 	accessor.withWriteTx((db) => {
-		db.prepare(
-			"UPDATE entities SET last_synthesized_at = ? WHERE id = ? AND agent_id = ?",
-		).run(now, entityId, AGENT_ID);
+		db.prepare("UPDATE entities SET last_synthesized_at = ? WHERE id = ? AND agent_id = ?").run(
+			now,
+			entityId,
+			AGENT_ID,
+		);
 	});
 }
 
@@ -135,13 +137,10 @@ export function buildSynthesisPrompt(
 ): string {
 	const factList = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
 
-	const entityList = candidates
-		.map((e) => `- ${e.name} (${e.entityType}, ${e.mentions} mentions)`)
-		.join("\n");
+	const entityList = candidates.map((e) => `- ${e.name} (${e.entityType}, ${e.mentions} mentions)`).join("\n");
 
-	const alreadyConnected = existing.size > 0
-		? `Already connected to: ${[...existing].join(", ")}`
-		: "No existing connections.";
+	const alreadyConnected =
+		existing.size > 0 ? `Already connected to: ${[...existing].join(", ")}` : "No existing connections.";
 
 	return `Task: identify new dependency edges between the focal entity and known graph entities.
 
@@ -194,9 +193,7 @@ function validateResults(parsed: unknown): readonly SynthesisResult[] {
 		const depType = typeof obj.dep_type === "string" ? obj.dep_type.trim() : "";
 		if (!VALID_DEP_TYPES.has(depType)) continue;
 
-		const reason = typeof obj.reason === "string"
-			? obj.reason.trim().slice(0, 300)
-			: "";
+		const reason = typeof obj.reason === "string" ? obj.reason.trim().slice(0, 300) : "";
 
 		valid.push({ target, dep_type: depType, reason });
 	}
@@ -211,33 +208,25 @@ function validateResults(parsed: unknown): readonly SynthesisResult[] {
 async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
 
-	const stale = deps.accessor.withReadDb((db) =>
-		findStaleEntities(db, cfg.dependencyBatchSize),
-	);
+	const stale = deps.accessor.withReadDb((db) => findStaleEntities(db, cfg.dependencyBatchSize));
 	if (stale.length === 0) return;
 
 	for (const entity of stale) {
-		const facts = deps.accessor.withReadDb((db) =>
-			loadFacts(db, entity.id, cfg.synthesisMaxFacts),
-		);
+		const facts = deps.accessor.withReadDb((db) => loadFacts(db, entity.id, cfg.synthesisMaxFacts));
 
 		if (facts.length === 0) {
 			markSynthesized(deps.accessor, entity.id);
 			continue;
 		}
 
-		const candidates = deps.accessor.withReadDb((db) =>
-			loadTopEntities(db, entity.id, cfg.synthesisTopEntities),
-		);
+		const candidates = deps.accessor.withReadDb((db) => loadTopEntities(db, entity.id, cfg.synthesisTopEntities));
 
 		if (candidates.length === 0) {
 			markSynthesized(deps.accessor, entity.id);
 			continue;
 		}
 
-		const existing = deps.accessor.withReadDb((db) =>
-			loadExistingTargets(db, entity.id),
-		);
+		const existing = deps.accessor.withReadDb((db) => loadExistingTargets(db, entity.id));
 
 		const prompt = buildSynthesisPrompt(entity, facts, candidates, existing);
 
@@ -259,10 +248,11 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 		let created = 0;
 		for (const result of results) {
 			const canonical = result.target.trim().toLowerCase().replace(/\s+/g, " ");
-			const target = deps.accessor.withReadDb((db) =>
-				db
-					.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1")
-					.get(canonical) as { id: string } | undefined,
+			const target = deps.accessor.withReadDb(
+				(db) =>
+					db.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1").get(canonical) as
+						| { id: string }
+						| undefined,
 			);
 
 			if (!target || target.id === entity.id) continue;
@@ -315,9 +305,7 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 // Worker lifecycle
 // ---------------------------------------------------------------------------
 
-export function startDependencySynthesisWorker(
-	deps: DependencySynthesisDeps,
-): DependencySynthesisHandle {
+export function startDependencySynthesisWorker(deps: DependencySynthesisDeps): DependencySynthesisHandle {
 	let running = true;
 	let ticking = false;
 	let tickDone: (() => void) | null = null;
@@ -351,7 +339,9 @@ export function startDependencySynthesisWorker(
 			if (timer) clearInterval(timer);
 			// Drain in-flight tick before returning
 			if (ticking) {
-				await new Promise<void>((resolve) => { tickDone = resolve; });
+				await new Promise<void>((resolve) => {
+					tickDone = resolve;
+				});
 			}
 			logger.info("dependency-synthesis", "Worker stopped");
 		},

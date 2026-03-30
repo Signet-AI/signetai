@@ -2,33 +2,29 @@
 import type { DaemonStatus, Harness, Identity } from "$lib/api";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 import {
-	type TabId,
-	nav,
-	setTab,
-} from "$lib/stores/navigation.svelte";
-import {
 	type SidebarFocusItem,
 	focus,
+	focusFirstPageElement,
 	navigateSidebarNext,
 	navigateSidebarPrev,
 	setFocusZone,
 	setSidebarItem,
-	focusFirstPageElement,
 } from "$lib/stores/focus.svelte";
+import { type TabId, nav, setTab } from "$lib/stores/navigation.svelte";
+import BarChart3 from "@lucide/svelte/icons/bar-chart-3";
 import BookOpen from "@lucide/svelte/icons/book-open";
-import Orbit from "@lucide/svelte/icons/orbit";
 import Cog from "@lucide/svelte/icons/cog";
 import ExternalLink from "@lucide/svelte/icons/external-link";
 import Github from "@lucide/svelte/icons/github";
-import BarChart3 from "@lucide/svelte/icons/bar-chart-3";
-import ShieldAlert from "@lucide/svelte/icons/shield-alert";
+import ListTodo from "@lucide/svelte/icons/list-todo";
 import Moon from "@lucide/svelte/icons/moon";
+import Orbit from "@lucide/svelte/icons/orbit";
+import ShieldAlert from "@lucide/svelte/icons/shield-alert";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Sun from "@lucide/svelte/icons/sun";
-import ListTodo from "@lucide/svelte/icons/list-todo";
 import { onMount } from "svelte";
 
-const { useSidebar } = Sidebar;
+let { useSidebar } = Sidebar;
 
 interface Props {
 	identity: Identity;
@@ -40,15 +36,7 @@ interface Props {
 	onprefetchembeddings?: () => void;
 }
 
-const {
-	identity,
-	harnesses,
-	memCount,
-	daemonStatus,
-	theme,
-	onthemetoggle,
-	onprefetchembeddings,
-}: Props = $props();
+const { identity, harnesses, memCount, daemonStatus, theme, onthemetoggle, onprefetchembeddings }: Props = $props();
 
 const sidebar = useSidebar();
 

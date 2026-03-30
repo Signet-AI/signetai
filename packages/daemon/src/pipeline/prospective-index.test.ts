@@ -8,7 +8,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import type { LlmProvider } from "./provider";
 import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
 import type { PipelineHintsConfig } from "@signet/core";

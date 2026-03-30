@@ -1,49 +1,49 @@
 <script lang="ts">
-	import type { Memory } from "$lib/api";
-	import MemoryTab from "$lib/components/tabs/MemoryTab.svelte";
-	import OntologyDashboard from "$lib/components/ontology/OntologyDashboard.svelte";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import { replaceState } from "$app/navigation";
+import { replaceState } from "$app/navigation";
+import type { Memory } from "$lib/api";
+import OntologyDashboard from "$lib/components/ontology/OntologyDashboard.svelte";
+import MemoryTab from "$lib/components/tabs/MemoryTab.svelte";
+import { Button } from "$lib/components/ui/button/index.js";
 
-	interface Props {
-		memories: Memory[];
-		agentId: string;
-		onopenglobalsimilar: (memory: Memory) => void;
+interface Props {
+	memories: Memory[];
+	agentId: string;
+	onopenglobalsimilar: (memory: Memory) => void;
+}
+
+let { memories, agentId, onopenglobalsimilar }: Props = $props();
+type Section = "cortex" | "constellation";
+const SECTION_SET = new Set<string>(["cortex", "constellation"]);
+
+function readSection(): Section {
+	if (typeof window === "undefined") return "cortex";
+	const hash = window.location.hash.replace("#", "");
+	const parts = hash.split("/");
+	if (parts[0] !== "cortex-memory" && parts[0] !== "ontology") return "cortex";
+	if (parts[1] && SECTION_SET.has(parts[1])) return parts[1] as Section;
+	return "cortex";
+}
+
+let section = $state<Section>(readSection());
+
+$effect(() => {
+	if (typeof window === "undefined") return;
+	const next = section === "cortex" ? "cortex-memory" : "cortex-memory/constellation";
+	if (window.location.hash !== `#${next}`) {
+		replaceState(`#${next}`, {});
 	}
+});
 
-	const { memories, agentId, onopenglobalsimilar }: Props = $props();
-	type Section = "cortex" | "constellation";
-	const SECTION_SET = new Set<string>(["cortex", "constellation"]);
-
-	function readSection(): Section {
-		if (typeof window === "undefined") return "cortex";
-		const hash = window.location.hash.replace("#", "");
-		const parts = hash.split("/");
-		if (parts[0] !== "cortex-memory" && parts[0] !== "ontology") return "cortex";
-		if (parts[1] && SECTION_SET.has(parts[1])) return parts[1] as Section;
-		return "cortex";
-	}
-
-	let section = $state<Section>(readSection());
-
-	$effect(() => {
-		if (typeof window === "undefined") return;
-		const next = section === "cortex" ? "cortex-memory" : "cortex-memory/constellation";
-		if (window.location.hash !== `#${next}`) {
-			replaceState(`#${next}`, {});
-		}
-	});
-
-	$effect(() => {
-		if (typeof window === "undefined") return;
-		const onHash = () => {
-			const next = readSection();
-			if (next === section) return;
-			section = next;
-		};
-		window.addEventListener("hashchange", onHash);
-		return () => window.removeEventListener("hashchange", onHash);
-	});
+$effect(() => {
+	if (typeof window === "undefined") return;
+	const onHash = () => {
+		const next = readSection();
+		if (next === section) return;
+		section = next;
+	};
+	window.addEventListener("hashchange", onHash);
+	return () => window.removeEventListener("hashchange", onHash);
+});
 </script>
 
 <div class="unified-memory">

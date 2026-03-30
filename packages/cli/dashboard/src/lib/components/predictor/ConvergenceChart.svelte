@@ -1,60 +1,60 @@
 <script lang="ts">
-	interface Comparison {
-		sessionKey: string;
-		predictorNdcg: number;
-		baselineNdcg: number;
-		predictorWon: boolean;
-		margin: number;
-		project: string | null;
-		createdAt: string;
-	}
+interface Comparison {
+	sessionKey: string;
+	predictorNdcg: number;
+	baselineNdcg: number;
+	predictorWon: boolean;
+	margin: number;
+	project: string | null;
+	createdAt: string;
+}
 
-	interface Props {
-		comparisons: Comparison[];
-	}
+interface Props {
+	comparisons: Comparison[];
+}
 
-	const { comparisons }: Props = $props();
+let { comparisons }: Props = $props();
 
-	// Wide viewBox so SVG text at font-size 11 renders at ~11px real
-	const PAD = { top: 12, right: 12, bottom: 20, left: 32 };
-	const W = 1200;
-	const H = 200;
-	const plotW = W - PAD.left - PAD.right;
-	const plotH = H - PAD.top - PAD.bottom;
+// Wide viewBox so SVG text at font-size 11 renders at ~11px real
+const PAD = { top: 12, right: 12, bottom: 20, left: 32 };
+const W = 1200;
+const H = 200;
+const plotW = W - PAD.left - PAD.right;
+const plotH = H - PAD.top - PAD.bottom;
 
-	// Chronological order (oldest first)
-	const sorted = $derived([...comparisons].reverse());
+// Chronological order (oldest first)
+const sorted = $derived([...comparisons].reverse());
 
-	function x(i: number): number {
-		if (sorted.length <= 1) return PAD.left + plotW / 2;
-		return PAD.left + (i / (sorted.length - 1)) * plotW;
-	}
+function x(i: number): number {
+	if (sorted.length <= 1) return PAD.left + plotW / 2;
+	return PAD.left + (i / (sorted.length - 1)) * plotW;
+}
 
-	function y(ndcg: number): number {
-		return PAD.top + (1 - ndcg) * plotH;
-	}
+function y(ndcg: number): number {
+	return PAD.top + (1 - ndcg) * plotH;
+}
 
-	function buildPoints(accessor: (c: Comparison) => number): string {
-		return sorted.map((c, i) => `${x(i).toFixed(1)},${y(accessor(c)).toFixed(1)}`).join(" ");
-	}
+function buildPoints(accessor: (c: Comparison) => number): string {
+	return sorted.map((c, i) => `${x(i).toFixed(1)},${y(accessor(c)).toFixed(1)}`).join(" ");
+}
 
-	const baselinePoints = $derived(buildPoints((c) => c.baselineNdcg));
-	const predictorPoints = $derived(buildPoints((c) => c.predictorNdcg));
+const baselinePoints = $derived(buildPoints((c) => c.baselineNdcg));
+const predictorPoints = $derived(buildPoints((c) => c.predictorNdcg));
 
-	const gridLines = [0.25, 0.5, 0.75];
+const gridLines = [0.25, 0.5, 0.75];
 
-	let hoveredIdx = $state<number | null>(null);
+let hoveredIdx = $state<number | null>(null);
 
-	function formatDate(iso: string): string {
-		const d = new Date(iso);
-		if (Number.isNaN(d.getTime())) return iso;
-		return d.toLocaleString(undefined, {
-			month: "short",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
-		});
-	}
+function formatDate(iso: string): string {
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return iso;
+	return d.toLocaleString(undefined, {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+}
 </script>
 
 {#if sorted.length === 0}

@@ -40,10 +40,10 @@ describe("pipeline pause api helpers", () => {
 		globalThis.fetch = async (input, init) => {
 			expect(String(input).endsWith("/api/pipeline/resume")).toBe(true);
 			expect(init?.method).toBe("POST");
-			return new Response(
-				JSON.stringify({ error: "Pipeline transition already in progress" }),
-				{ status: 409, headers: { "Content-Type": "application/json" } },
-			);
+			return new Response(JSON.stringify({ error: "Pipeline transition already in progress" }), {
+				status: 409,
+				headers: { "Content-Type": "application/json" },
+			});
 		};
 
 		const res = await resumePipeline();

@@ -19,7 +19,7 @@ interface Props {
 	configFiles: ConfigFile[];
 }
 
-const { configFiles }: Props = $props();
+let { configFiles }: Props = $props();
 
 interface SectionDef {
 	id: string;

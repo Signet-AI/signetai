@@ -86,6 +86,13 @@ were the following. Prevent them proactively:
 8. **Code hygiene misses (unused vars/assignments, stale comments)**
    - Run lint and remove dead variables/imports before review.
    - Keep inline comments aligned with actual implementation behavior.
+   - Do **not** run `biome check --write` or `--unsafe` blindly across
+     `packages/cli/dashboard/`. Biome currently misfires on Svelte 5 rune
+     patterns (`$props`, `$state`, bindable refs, runtime component imports)
+     and can mass-convert required `let` / runtime imports into broken
+     `const` / `import type` forms. Scope autofix to a few files at a time,
+     inspect the diff, and immediately rerun `cd packages/cli/dashboard &&
+     bun run check` after any automated rewrite.
 
 PR Readiness Checklist (MANDATORY Before Opening PR)
 ---
@@ -176,6 +183,17 @@ All UI work must use components from **shadcn-svelte**
 (https://www.shadcn-svelte.com). LLM reference:
 https://www.shadcn-svelte.com/llms.txt. Prefer existing shadcn-svelte
 components over custom implementations.
+
+Linting guardrail: Biome autofix is **not** currently safe to run blindly on
+the whole dashboard. It has caused large-scale Svelte rune breakage by
+rewriting mutable/bindable `let` bindings and runtime imports. If you use
+Biome autofix in `packages/cli/dashboard/`, do it on a narrow file set only,
+review the patch, then rerun:
+
+```bash
+cd packages/cli/dashboard
+bun run check
+```
 
 ```bash
 cd packages/cli/dashboard

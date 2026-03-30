@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import type { ReadDb } from "../db-accessor";
 import { clearTaskModelCache, resolveTaskModel, selectDueTasks } from "./worker";
 
@@ -101,13 +101,9 @@ describe("resolveTaskModel", () => {
 		try {
 			writeFileSync(
 				join(agentsDir, "agent.yaml"),
-				[
-					"memory:",
-					"  pipelineV2:",
-					"    extraction:",
-					"      provider: codex",
-					"      model: gpt-5.3-codex",
-				].join("\n"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.3-codex"].join(
+					"\n",
+				),
 			);
 
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
@@ -123,26 +119,18 @@ describe("resolveTaskModel", () => {
 			const configPath = join(agentsDir, "agent.yaml");
 			writeFileSync(
 				configPath,
-				[
-					"memory:",
-					"  pipelineV2:",
-					"    extraction:",
-					"      provider: codex",
-					"      model: gpt-5.3-codex",
-				].join("\n"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.3-codex"].join(
+					"\n",
+				),
 			);
 
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
 
 			writeFileSync(
 				configPath,
-				[
-					"memory:",
-					"  pipelineV2:",
-					"    extraction:",
-					"      provider: codex",
-					"      model: gpt-5.4-codex",
-				].join("\n"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4-codex"].join(
+					"\n",
+				),
 			);
 
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");

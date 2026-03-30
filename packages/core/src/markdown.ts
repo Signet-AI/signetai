@@ -226,10 +226,7 @@ dashboard at http://localhost:3850.
  * on subsequent sync operations.
  */
 export function stripSignetBlock(content: string): string {
-	const pattern = new RegExp(
-		`${escapeRegex(SIGNET_BLOCK_START)}[\\s\\S]*?${escapeRegex(SIGNET_BLOCK_END)}\\n?`,
-		"g",
-	);
+	const pattern = new RegExp(`${escapeRegex(SIGNET_BLOCK_START)}[\\s\\S]*?${escapeRegex(SIGNET_BLOCK_END)}\\n?`, "g");
 	return content.replace(pattern, "");
 }
 
@@ -244,9 +241,7 @@ export function hasSignetBlock(content: string): boolean {
  * Extract the Signet block content (without delimiters) if present
  */
 export function extractSignetBlock(content: string): string | null {
-	const pattern = new RegExp(
-		`${escapeRegex(SIGNET_BLOCK_START)}([\\s\\S]*?)${escapeRegex(SIGNET_BLOCK_END)}`,
-	);
+	const pattern = new RegExp(`${escapeRegex(SIGNET_BLOCK_START)}([\\s\\S]*?)${escapeRegex(SIGNET_BLOCK_END)}`);
 	const match = content.match(pattern);
 	return match ? match[1].trim() : null;
 }

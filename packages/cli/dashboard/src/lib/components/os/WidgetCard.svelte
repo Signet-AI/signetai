@@ -1,45 +1,51 @@
 <script lang="ts">
-	import { onMount } from "svelte";
-	import type { AppTrayEntry } from "$lib/stores/os.svelte";
-	import { os, widgetHtmlCache, widgetGenerating, expandWidget, requestWidgetGen, fetchWidgetHtml } from "$lib/stores/os.svelte";
-	import type { WidgetSizePreset } from "$lib/stores/os.svelte";
-	import { WIDGET_SIZES } from "$lib/stores/os.svelte";
-	import AutoCard from "./AutoCard.svelte";
-	import WidgetSandbox from "./WidgetSandbox.svelte";
-	import GripVertical from "@lucide/svelte/icons/grip-vertical";
-	import Minimize2 from "@lucide/svelte/icons/minimize-2";
-	import Maximize2 from "@lucide/svelte/icons/maximize-2";
-	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import type { AppTrayEntry, WidgetSizePreset } from "$lib/stores/os.svelte";
+import {
+	os,
+	expandWidget,
+	fetchWidgetHtml,
+	requestWidgetGen,
+	widgetGenerating,
+	widgetHtmlCache,
+} from "$lib/stores/os.svelte";
+import { WIDGET_SIZES } from "$lib/stores/os.svelte";
+import GripVertical from "@lucide/svelte/icons/grip-vertical";
+import Maximize2 from "@lucide/svelte/icons/maximize-2";
+import Minimize2 from "@lucide/svelte/icons/minimize-2";
+import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import { onMount } from "svelte";
+import AutoCard from "./AutoCard.svelte";
+import WidgetSandbox from "./WidgetSandbox.svelte";
 
-	interface Props {
-		app: AppTrayEntry;
-		onremove: (id: string) => void;
-		ondragstart: (id: string, e: PointerEvent) => void;
+interface Props {
+	app: AppTrayEntry;
+	onremove: (id: string) => void;
+	ondragstart: (id: string, e: PointerEvent) => void;
+}
+
+let { app, onremove, ondragstart }: Props = $props();
+
+// Auto-fetch cached widget HTML on mount if not already in memory
+onMount(() => {
+	if (!app.manifest.html && !widgetHtmlCache.has(app.id)) {
+		fetchWidgetHtml(app.id);
 	}
+});
 
-	const { app, onremove, ondragstart }: Props = $props();
+// Force reactivity on cache changes
+const _v = $derived(os.widgetCacheVersion);
 
-	// Auto-fetch cached widget HTML on mount if not already in memory
-	onMount(() => {
-		if (!app.manifest.html && !widgetHtmlCache.has(app.id)) {
-			fetchWidgetHtml(app.id);
-		}
-	});
+const widgetHtml = $derived.by(() => {
+	// Access _v to subscribe to cache changes
+	void _v;
+	if (app.manifest.html) return app.manifest.html;
+	return widgetHtmlCache.get(app.id) ?? null;
+});
 
-	// Force reactivity on cache changes
-	const _v = $derived(os.widgetCacheVersion);
-
-	const widgetHtml = $derived.by(() => {
-		// Access _v to subscribe to cache changes
-		void _v;
-		if (app.manifest.html) return app.manifest.html;
-		return widgetHtmlCache.get(app.id) ?? null;
-	});
-
-	const generating = $derived.by(() => {
-		void _v;
-		return widgetGenerating.has(app.id);
-	});
+const generating = $derived.by(() => {
+	void _v;
+	return widgetGenerating.has(app.id);
+});
 </script>
 
 <div class="widget-card sig-panel">

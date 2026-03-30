@@ -7,8 +7,13 @@ import { getAgentScope } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
 import { buildAgentScopeClause } from "./memory-search";
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
-const MEMORY_DIR = join(AGENTS_DIR, "memory");
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
+
+function getMemoryDir(): string {
+	return join(getAgentsDir(), "memory");
+}
 const HASH_SCOPE = "body-normalized-v1";
 const SANITIZER_VERSION = "sanitize_transcript_v1";
 const SENTENCE_VERSION = "memory_sentence_v1";
@@ -220,7 +225,7 @@ function artifactFileName(capturedAt: string, sessionToken: string, kind: Artifa
 }
 
 function artifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
-	return join(MEMORY_DIR, artifactFileName(capturedAt, sessionToken, kind));
+	return join(getMemoryDir(), artifactFileName(capturedAt, sessionToken, kind));
 }
 
 function relativeArtifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
@@ -353,7 +358,7 @@ export async function resolveMemorySentence(
 }
 
 function writeAtomic(path: string, content: string): void {
-	mkdirSync(MEMORY_DIR, { recursive: true });
+	mkdirSync(getMemoryDir(), { recursive: true });
 	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
 	writeFileSync(tmp, content, "utf8");
 	renameSync(tmp, path);
@@ -412,7 +417,7 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 
 function upsertArtifactRow(path: string, frontmatter: Record<string, unknown>, body: string): void {
 	const agentId = typeof frontmatter.agent_id === "string" ? frontmatter.agent_id : "default";
-	const sourcePath = path.replace(`${AGENTS_DIR}/`, "").replace(/\\/g, "/");
+	const sourcePath = path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/");
 	const sourceKind = typeof frontmatter.kind === "string" ? frontmatter.kind : "manifest";
 	const sessionId = typeof frontmatter.session_id === "string" ? frontmatter.session_id : sourcePath;
 	const sessionKey = typeof frontmatter.session_key === "string" ? frontmatter.session_key : null;
@@ -480,10 +485,11 @@ function upsertArtifactRow(path: string, frontmatter: Record<string, unknown>, b
 }
 
 function listCanonicalFiles(): string[] {
-	if (!existsSync(MEMORY_DIR)) return [];
-	return readdirSync(MEMORY_DIR)
+	const dir = getMemoryDir();
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir)
 		.filter((name) => /^\d{4}-\d{2}-\d{2}T.*--[a-z2-7]{16}--(summary|transcript|compaction|manifest)\.md$/.test(name))
-		.map((name) => join(MEMORY_DIR, name))
+		.map((name) => join(dir, name))
 		.sort();
 }
 
@@ -644,7 +650,7 @@ function findExistingManifest(agentId: string, sessionKey: string | null, sessio
 				.get(agentId, sessionId) as { source_path: string } | undefined;
 		});
 		if (!row) return null;
-		return loadManifest(join(AGENTS_DIR, row.source_path));
+		return loadManifest(join(getAgentsDir(), row.source_path));
 	} catch {
 		return null;
 	}
@@ -695,7 +701,7 @@ export function updateManifest(
 }
 
 function relativePath(path: string): string {
-	return path.replace(`${AGENTS_DIR}/`, "").replace(/\\/g, "/");
+	return path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/");
 }
 
 export function writeTranscriptArtifact(params: {
@@ -1187,7 +1193,7 @@ export function removeCanonicalSession(agentId: string, sessionToken: string, re
 	);
 	const paths = rows.map((row) => row.source_path);
 	for (const path of paths) {
-		rmSync(join(AGENTS_DIR, path), { force: true });
+		rmSync(join(getAgentsDir(), path), { force: true });
 	}
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(

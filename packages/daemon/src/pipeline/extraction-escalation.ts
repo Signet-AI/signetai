@@ -163,9 +163,7 @@ export function applyLevel3Filter(
 				const batch = hashes.slice(start, start + BATCH);
 				const placeholders = batch.map(() => "?").join(",");
 				const rows = db
-					.prepare(
-						`SELECT content_hash FROM memories WHERE content_hash IN (${placeholders}) AND agent_id = ?`,
-					)
+					.prepare(`SELECT content_hash FROM memories WHERE content_hash IN (${placeholders}) AND agent_id = ?`)
 					.all(...batch, agentId) as ReadonlyArray<{ content_hash: string }>;
 				for (const row of rows) {
 					existingHashes.add(row.content_hash);
@@ -249,12 +247,7 @@ export async function escalate(
 		threshold: thresholds.maxNewEntitiesPerChunk,
 	});
 
-	const level2 = await runLevel2Extraction(
-		content,
-		provider,
-		thresholds.level2MaxEntities,
-		opts,
-	);
+	const level2 = await runLevel2Extraction(content, provider, thresholds.level2MaxEntities, opts);
 	const level2Needed = checkEscalationNeeded(level2, thresholds);
 	if (level2Needed === 1) {
 		return { result: level2, level: 2, originalEntityCount, originalFactCount };

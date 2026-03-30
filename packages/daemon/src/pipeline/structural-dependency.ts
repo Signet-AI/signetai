@@ -88,11 +88,7 @@ export const DEP_DESCRIPTIONS: Record<DependencyType, string> = {
 // Job leasing
 // ---------------------------------------------------------------------------
 
-function leaseDependencyBatch(
-	db: WriteDb,
-	maxBatch: number,
-	maxAttempts: number,
-): readonly DependencyJobRow[] {
+function leaseDependencyBatch(db: WriteDb, maxBatch: number, maxAttempts: number): readonly DependencyJobRow[] {
 	const now = new Date().toISOString();
 	const nowEpoch = Math.floor(Date.now() / 1000);
 
@@ -136,13 +132,7 @@ function completeJob(db: WriteDb, jobId: string): void {
 	).run(now, now, jobId);
 }
 
-function failJob(
-	db: WriteDb,
-	jobId: string,
-	error: string,
-	attempts: number,
-	maxAttempts: number,
-): void {
+function failJob(db: WriteDb, jobId: string, error: string, attempts: number, maxAttempts: number): void {
 	const now = new Date().toISOString();
 	const status = attempts >= maxAttempts ? "dead" : "pending";
 	db.prepare(
@@ -162,13 +152,9 @@ export function buildDependencyPrompt(
 	existingAspects: readonly string[],
 	facts: readonly string[],
 ): string {
-	const aspectList = existingAspects.length > 0
-		? existingAspects.join(", ")
-		: "[none yet]";
+	const aspectList = existingAspects.length > 0 ? existingAspects.join(", ") : "[none yet]";
 
-	const factList = facts
-		.map((f, i) => `${i + 1}. ${f}`)
-		.join("\n");
+	const factList = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
 
 	return `Task: classify each fact and decide whether it states a dependency.
 
@@ -208,10 +194,7 @@ Schema for each object:
 // Response validation
 // ---------------------------------------------------------------------------
 
-function validateDependencyResults(
-	parsed: unknown,
-	factCount: number,
-): readonly DependencyResult[] {
+function validateDependencyResults(parsed: unknown, factCount: number): readonly DependencyResult[] {
 	if (!Array.isArray(parsed)) return [];
 
 	const valid: DependencyResult[] = [];
@@ -225,17 +208,13 @@ function validateDependencyResults(
 		const aspect = typeof obj.aspect === "string" ? obj.aspect.trim().slice(0, 200) : "";
 		if (aspect.length === 0) continue;
 
-		const kind = obj.kind === "constraint" ? "constraint" as const : "attribute" as const;
+		const kind = obj.kind === "constraint" ? ("constraint" as const) : ("attribute" as const);
 
-		const depTarget = typeof obj.dep_target === "string" && obj.dep_target.trim().length > 0
-			? obj.dep_target.trim()
-			: null;
-		const depType = typeof obj.dep_type === "string" && VALID_DEP_TYPES.has(obj.dep_type)
-			? obj.dep_type
-			: null;
-		const reason = typeof obj.reason === "string" && obj.reason.trim().length > 0
-			? obj.reason.trim().slice(0, 300)
-			: null;
+		const depTarget =
+			typeof obj.dep_target === "string" && obj.dep_target.trim().length > 0 ? obj.dep_target.trim() : null;
+		const depType = typeof obj.dep_type === "string" && VALID_DEP_TYPES.has(obj.dep_type) ? obj.dep_type : null;
+		const reason =
+			typeof obj.reason === "string" && obj.reason.trim().length > 0 ? obj.reason.trim().slice(0, 300) : null;
 
 		valid.push({ i, aspect, kind, dep_target: depTarget, dep_type: depType, reason });
 	}
@@ -287,10 +266,11 @@ async function processDependencyBatch(
 	const entityName = validPayloads[0].entity_name;
 
 	// Load entity type for prompt context
-	const entityRow = deps.accessor.withReadDb((db) =>
-		db
-			.prepare("SELECT entity_type FROM entities WHERE id = ? LIMIT 1")
-			.get(validPayloads[0].entity_id) as { entity_type: string } | undefined,
+	const entityRow = deps.accessor.withReadDb(
+		(db) =>
+			db.prepare("SELECT entity_type FROM entities WHERE id = ? LIMIT 1").get(validPayloads[0].entity_id) as
+				| { entity_type: string }
+				| undefined,
 	);
 	const entityType = entityRow?.entity_type ?? "unknown";
 
@@ -307,12 +287,7 @@ async function processDependencyBatch(
 
 	// Build prompt
 	const factContents = validPayloads.map((p) => p.fact_content);
-	const prompt = buildDependencyPrompt(
-		entityName,
-		entityType,
-		existingAspects,
-		factContents,
-	);
+	const prompt = buildDependencyPrompt(entityName, entityType, existingAspects, factContents);
 
 	// Call LLM — retry once if parsing fails (qwen3 sometimes emits
 	// verbose reasoning instead of JSON on the first attempt)
@@ -360,10 +335,11 @@ async function processDependencyBatch(
 		// If dependency detected, resolve target entity and create it
 		if (result.dep_target !== null && result.dep_type !== null) {
 			const targetCanonical = result.dep_target.trim().toLowerCase().replace(/\s+/g, " ");
-			const targetEntity = deps.accessor.withReadDb((db) =>
-				db
-					.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1")
-					.get(targetCanonical) as { id: string } | undefined,
+			const targetEntity = deps.accessor.withReadDb(
+				(db) =>
+					db.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1").get(targetCanonical) as
+						| { id: string }
+						| undefined,
 			);
 
 			if (targetEntity) {
@@ -415,13 +391,7 @@ async function processDependencyBatch(
 			if (processedJobIndices.has(idx)) {
 				completeJob(db, jobs[idx].id);
 			} else {
-				failJob(
-					db,
-					jobs[idx].id,
-					"dropped_from_llm_output",
-					jobs[idx].attempts + 1,
-					jobs[idx].max_attempts,
-				);
+				failJob(db, jobs[idx].id, "dropped_from_llm_output", jobs[idx].attempts + 1, jobs[idx].max_attempts);
 			}
 		}
 	});
@@ -443,9 +413,7 @@ async function processDependencyBatch(
 // Worker lifecycle
 // ---------------------------------------------------------------------------
 
-export function startStructuralDependencyWorker(
-	deps: StructuralDependencyDeps,
-): StructuralDependencyHandle {
+export function startStructuralDependencyWorker(deps: StructuralDependencyDeps): StructuralDependencyHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -453,11 +421,7 @@ export function startStructuralDependencyWorker(
 		if (!running) return;
 
 		const jobs = deps.accessor.withWriteTx((db) =>
-			leaseDependencyBatch(
-				db,
-				deps.pipelineCfg.structural.dependencyBatchSize,
-				deps.pipelineCfg.worker.maxRetries,
-			),
+			leaseDependencyBatch(db, deps.pipelineCfg.structural.dependencyBatchSize, deps.pipelineCfg.worker.maxRetries),
 		);
 		if (jobs.length === 0) return;
 

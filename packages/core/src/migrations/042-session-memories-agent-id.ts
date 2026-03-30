@@ -1,14 +1,7 @@
 import type { MigrationDb } from "./index";
 
-function addColumnIfMissing(
-	db: MigrationDb,
-	table: string,
-	column: string,
-	definition: string,
-): void {
-	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<
-		Record<string, unknown>
-	>;
+function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
+	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	if (cols.some((col) => col.name === column)) return;
 	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
@@ -25,30 +18,16 @@ export function up(db: MigrationDb): void {
 	// Ensure all columns referenced by the copy query exist before rebuild.
 	addColumnIfMissing(db, "session_memories", "entity_slot", "INTEGER");
 	addColumnIfMissing(db, "session_memories", "aspect_slot", "INTEGER");
-	addColumnIfMissing(
-		db,
-		"session_memories",
-		"is_constraint",
-		"INTEGER NOT NULL DEFAULT 0",
-	);
+	addColumnIfMissing(db, "session_memories", "is_constraint", "INTEGER NOT NULL DEFAULT 0");
 	addColumnIfMissing(db, "session_memories", "structural_density", "INTEGER");
 	addColumnIfMissing(db, "session_memories", "predictor_rank", "INTEGER");
 	addColumnIfMissing(db, "session_memories", "agent_relevance_score", "REAL");
-	addColumnIfMissing(
-		db,
-		"session_memories",
-		"agent_feedback_count",
-		"INTEGER DEFAULT 0",
-	);
+	addColumnIfMissing(db, "session_memories", "agent_feedback_count", "INTEGER DEFAULT 0");
 	addColumnIfMissing(db, "session_memories", "path_json", "TEXT");
 
-	const cols = db.prepare("PRAGMA table_info(session_memories)").all() as ReadonlyArray<
-		Record<string, unknown>
-	>;
+	const cols = db.prepare("PRAGMA table_info(session_memories)").all() as ReadonlyArray<Record<string, unknown>>;
 	const hasAgent = cols.some((col) => col.name === "agent_id");
-	const agentExpr = hasAgent
-		? "COALESCE(NULLIF(agent_id, ''), 'default')"
-		: "'default'";
+	const agentExpr = hasAgent ? "COALESCE(NULLIF(agent_id, ''), 'default')" : "'default'";
 
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_memories_new (

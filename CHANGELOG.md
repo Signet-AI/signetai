@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.87.1] - 2026-03-30
+
+### Bug Fixes
+
+- **repo**: recover rebase follow-ups and restore green checks (#410)
+
+
 ## [0.87.0] - 2026-03-30
 
 ### Bug Fixes

@@ -195,11 +195,7 @@ export async function fetchTrayEntries(): Promise<void> {
 	}
 }
 
-export async function updateAppState(
-	id: string,
-	state: AppTrayState,
-	gridPosition?: GridPosition,
-): Promise<boolean> {
+export async function updateAppState(id: string, state: AppTrayState, gridPosition?: GridPosition): Promise<boolean> {
 	try {
 		const body: Record<string, unknown> = { state };
 		if (gridPosition) body.gridPosition = gridPosition;
@@ -224,17 +220,11 @@ export async function updateAppState(
 	}
 }
 
-export async function updateGridPosition(
-	id: string,
-	gridPosition: GridPosition,
-): Promise<boolean> {
+export async function updateGridPosition(id: string, gridPosition: GridPosition): Promise<boolean> {
 	return updateAppState(id, "grid", gridPosition);
 }
 
-export async function moveToGrid(
-	id: string,
-	gridPosition?: GridPosition,
-): Promise<boolean> {
+export async function moveToGrid(id: string, gridPosition?: GridPosition): Promise<boolean> {
 	const entry = os.entries.find((e) => e.id === id);
 	if (!entry) return false;
 
@@ -297,9 +287,7 @@ export function deleteGroup(id: string): void {
 }
 
 export function renameGroup(id: string, name: string): void {
-	os.groups = os.groups.map((g) =>
-		g.id === id ? { ...g, name } : g,
-	);
+	os.groups = os.groups.map((g) => (g.id === id ? { ...g, name } : g));
 	saveGroups();
 }
 
@@ -332,7 +320,7 @@ interface WidgetAction {
 	data?: unknown;
 	_seq: number;
 }
-let widgetActions = $state<Map<string, WidgetAction>>(new Map());
+const widgetActions = $state<Map<string, WidgetAction>>(new Map());
 let actionSeq = 0;
 
 export function sendWidgetAction(serverId: string, action: string, data?: unknown): void {
@@ -414,7 +402,13 @@ export function onWidgetGenerated(serverId: string, html: string): void {
 
 export interface WidgetSandboxRef {
 	getDomState: () => Promise<unknown>;
-	executeAction: (action: { type: string; index?: number; text?: string; direction?: string; amount?: number }) => Promise<unknown>;
+	executeAction: (action: {
+		type: string;
+		index?: number;
+		text?: string;
+		direction?: string;
+		amount?: number;
+	}) => Promise<unknown>;
 	agentStart: () => void;
 	agentStop: () => void;
 }

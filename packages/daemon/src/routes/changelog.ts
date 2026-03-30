@@ -12,8 +12,7 @@ import { join } from "node:path";
 import type { Hono } from "hono";
 import { logger } from "../logger.js";
 
-const GITHUB_RAW_BASE =
-	"https://raw.githubusercontent.com/Signet-AI/signetai/main";
+const GITHUB_RAW_BASE = "https://raw.githubusercontent.com/Signet-AI/signetai/main";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 8_000;
 const CHANGELOG_MAX_RELEASES = 30;
@@ -39,12 +38,8 @@ function truncateChangelog(content: string, max = CHANGELOG_MAX_RELEASES): strin
 }
 
 function extractReadmeOverview(content: string): string {
-	const localFirstMatch = content.match(
-		/Signet is a local-first[\s\S]*?without ever reading their values\./,
-	);
-	const whyMatch = content.match(
-		/Most AI tools build memory silos\.[\s\S]*?unless you configure it to\./,
-	);
+	const localFirstMatch = content.match(/Signet is a local-first[\s\S]*?without ever reading their values\./);
+	const whyMatch = content.match(/Most AI tools build memory silos\.[\s\S]*?unless you configure it to\./);
 
 	const normalizeParagraph = (text: string): string =>
 		text
@@ -66,28 +61,31 @@ function extractReadmeOverview(content: string): string {
 		.replace(/<[^>]+>/g, "")
 		.split("\n")
 		.map((line) => line.trim())
-		.filter(
-			(line) =>
-				line &&
-				!line.startsWith("![") &&
-				!line.includes("img.shields.io") &&
-				line !== "---",
-		);
+		.filter((line) => line && !line.startsWith("![") && !isShieldBadge(line) && line !== "---");
 	const fallback = cleaned.slice(0, 18).join("\n");
 	return fallback || "# Signet\n\nSignet overview unavailable.";
 }
 
+function isShieldBadge(line: string): boolean {
+	return (
+		/^!\[[^\]]*]\(https:\/\/img\.shields\.io\/[^)\s]+\)$/.test(line) ||
+		/^\[!\[[^\]]*]\(https:\/\/img\.shields\.io\/[^)\s]+\)]\([^)]+\)$/.test(line)
+	);
+}
+
 /** Minimal markdown → HTML for headings, lists, bold, code, hr. */
 function renderMarkdown(md: string): string {
-	const esc = (s: string) =>
-		s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+	const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 	const lines = md.split("\n");
 	const out: string[] = [];
 	let inUl = false;
 
 	const flushList = () => {
-		if (inUl) { out.push("</ul>"); inUl = false; }
+		if (inUl) {
+			out.push("</ul>");
+			inUl = false;
+		}
 	};
 
 	for (let i = 0; i < lines.length; i++) {
@@ -96,29 +94,52 @@ function renderMarkdown(md: string): string {
 
 		// Setext headings (line followed by === or ---)
 		if (/^=+$/.test(next.trim()) && raw.trim()) {
-			flushList(); out.push(`<h1>${esc(raw.trim())}</h1>`); i++; continue;
+			flushList();
+			out.push(`<h1>${esc(raw.trim())}</h1>`);
+			i++;
+			continue;
 		}
 		if (/^-{2,}$/.test(next.trim()) && raw.trim() && !raw.startsWith("-")) {
-			flushList(); out.push(`<h2>${esc(raw.trim())}</h2>`); i++; continue;
+			flushList();
+			out.push(`<h2>${esc(raw.trim())}</h2>`);
+			i++;
+			continue;
 		}
 
 		// ATX headings
 		const h3 = raw.match(/^### (.+)/);
-		if (h3) { flushList(); out.push(`<h3>${esc(h3[1])}</h3>`); continue; }
+		if (h3) {
+			flushList();
+			out.push(`<h3>${esc(h3[1])}</h3>`);
+			continue;
+		}
 		const h2 = raw.match(/^## (.+)/);
-		if (h2) { flushList(); out.push(`<h2>${esc(h2[1])}</h2>`); continue; }
+		if (h2) {
+			flushList();
+			out.push(`<h2>${esc(h2[1])}</h2>`);
+			continue;
+		}
 		const h1 = raw.match(/^# (.+)/);
-		if (h1) { flushList(); out.push(`<h1>${esc(h1[1])}</h1>`); continue; }
+		if (h1) {
+			flushList();
+			out.push(`<h1>${esc(h1[1])}</h1>`);
+			continue;
+		}
 
 		// horizontal rule
 		if (/^---+$/.test(raw.trim())) {
-			flushList(); out.push("<hr>"); continue;
+			flushList();
+			out.push("<hr>");
+			continue;
 		}
 
 		// list item
 		const li = raw.match(/^- (.+)/);
 		if (li) {
-			if (!inUl) { out.push("<ul>"); inUl = true; }
+			if (!inUl) {
+				out.push("<ul>");
+				inUl = true;
+			}
 			out.push(`<li>${inlineFormat(esc(li[1]))}</li>`);
 			continue;
 		}
@@ -146,9 +167,7 @@ function inlineFormat(s: string): string {
 		.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
-async function fetchAndRender(
-	filename: DocFilename,
-): Promise<CacheEntry | null> {
+async function fetchAndRender(filename: DocFilename): Promise<CacheEntry | null> {
 	const now = Date.now();
 	const cached = cache.get(filename);
 	if (cached && now - cached.cachedAt < CACHE_TTL_MS) return cached;
@@ -187,11 +206,7 @@ async function fetchAndRender(
 	if (!raw) return null;
 
 	const content =
-		filename === "CHANGELOG.md"
-			? truncateChangelog(raw)
-			: filename === "README.md"
-				? extractReadmeOverview(raw)
-				: raw;
+		filename === "CHANGELOG.md" ? truncateChangelog(raw) : filename === "README.md" ? extractReadmeOverview(raw) : raw;
 	const html = renderMarkdown(content);
 	const entry: CacheEntry = { html, source, cachedAt: now };
 	cache.set(filename, entry);

@@ -1,33 +1,14 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations/index";
-import type { ReadDb, WriteDb } from "./db-accessor";
+import { expandTemporalNode } from "./temporal-expand";
 
 let db: Database;
-
-mock.module("./db-accessor", () => ({
-	getDbAccessor: () => ({
-		withWriteTx<T>(fn: (db: WriteDb) => T): T {
-			db.exec("BEGIN IMMEDIATE");
-			try {
-				const out = fn(db as unknown as WriteDb);
-				db.exec("COMMIT");
-				return out;
-			} catch (err) {
-				db.exec("ROLLBACK");
-				throw err;
-			}
-		},
-		withReadDb<T>(fn: (db: ReadDb) => T): T {
-			return fn(db as unknown as ReadDb);
-		},
-		close() {
-			db.close();
-		},
-	}),
-}));
-
-const { expandTemporalNode } = await import("./temporal-expand");
+const accessor = {
+	withReadDb<T>(fn: (db: Database) => T): T {
+		return fn(db);
+	},
+};
 
 describe("expandTemporalNode", () => {
 	beforeEach(() => {
@@ -149,7 +130,7 @@ describe("expandTemporalNode", () => {
 			now,
 		);
 
-		const out = expandTemporalNode("node-1", "agent-a", { transcriptCharLimit: 600 });
+		const out = expandTemporalNode("node-1", "agent-a", { transcriptCharLimit: 600, accessor });
 		expect(out).not.toBeNull();
 		expect(out?.node.id).toBe("node-1");
 		expect(out?.parents.map((row) => row.id)).toEqual(["parent-1"]);
@@ -274,6 +255,7 @@ describe("expandTemporalNode", () => {
 		const out = expandTemporalNode("node-scope", "agent-a", {
 			project: "proj-a",
 			transcriptCharLimit: 600,
+			accessor,
 		});
 		expect(out).not.toBeNull();
 		expect(out?.node.id).toBe("node-scope");

@@ -147,8 +147,7 @@ class SettingsStore {
 
 	isDirty = $derived(
 		this.agentSnapshot !== JSON.stringify(this.agent) ||
-			(!this.settingsIsSameAsAgent &&
-				this.configSnapshot !== JSON.stringify(this.config)),
+			(!this.settingsIsSameAsAgent && this.configSnapshot !== JSON.stringify(this.config)),
 	);
 
 	/** Track the configFiles reference that last initialized the store. */
@@ -346,9 +345,7 @@ class SettingsStore {
 
 	isPathDirty(obj: "agent" | "config", path: string[]): boolean {
 		const current = obj === "agent" ? this.agent : this.config;
-		const snapshot = obj === "agent"
-			? JSON.parse(this.agentSnapshot)
-			: JSON.parse(this.configSnapshot);
+		const snapshot = obj === "agent" ? JSON.parse(this.agentSnapshot) : JSON.parse(this.configSnapshot);
 
 		const currentVal = JSON.stringify(this.get(current, ...path));
 		const snapshotVal = JSON.stringify(this.get(snapshot, ...path));
@@ -384,10 +381,7 @@ class SettingsStore {
 		const failed: Array<{ file: string; error: string }> = [];
 		try {
 			if (this.agentFile) {
-				const result = await saveConfigFileResult(
-					this.agentFile.name,
-					stringify(this.agent),
-				);
+				const result = await saveConfigFileResult(this.agentFile.name, stringify(this.agent));
 				if (result.ok) {
 					successfulFiles.push(this.agentFile.name);
 					this.agentSnapshot = JSON.stringify(this.agent);
@@ -399,10 +393,7 @@ class SettingsStore {
 				}
 			}
 			if (!this.settingsIsSameAsAgent && this.settingsFileName) {
-				const result = await saveConfigFileResult(
-					this.settingsFileName,
-					stringify(this.config),
-				);
+				const result = await saveConfigFileResult(this.settingsFileName, stringify(this.config));
 				if (result.ok) {
 					successfulFiles.push(this.settingsFileName);
 					this.configSnapshot = JSON.stringify(this.config);
@@ -425,27 +416,11 @@ class SettingsStore {
 				this.lastSaveFeedback = `Saved ${successfulFiles.join(", ")}`;
 				toast(this.lastSaveFeedback, "success");
 			} else if (failed.length > 0 && successfulFiles.length > 0) {
-				this.lastSaveFeedback = `Saved ${successfulFiles.join(", ")}; failed ${failed
-					.map((f) => f.file)
-					.join(", ")}`;
-				toast(
-					`${this.lastSaveFeedback}: ${failed
-						.map((f) => `${f.file} (${f.error})`)
-						.join(", ")}`,
-					"warning",
-					5000,
-				);
+				this.lastSaveFeedback = `Saved ${successfulFiles.join(", ")}; failed ${failed.map((f) => f.file).join(", ")}`;
+				toast(`${this.lastSaveFeedback}: ${failed.map((f) => `${f.file} (${f.error})`).join(", ")}`, "warning", 5000);
 			} else if (failed.length > 0) {
-				this.lastSaveFeedback = `Failed to save ${failed
-					.map((f) => f.file)
-					.join(", ")}`;
-				toast(
-					`${this.lastSaveFeedback}: ${failed
-						.map((f) => `${f.file} (${f.error})`)
-						.join(", ")}`,
-					"error",
-					5000,
-				);
+				this.lastSaveFeedback = `Failed to save ${failed.map((f) => f.file).join(", ")}`;
+				toast(`${this.lastSaveFeedback}: ${failed.map((f) => `${f.file} (${f.error})`).join(", ")}`, "error", 5000);
 			}
 		} catch (err) {
 			this.lastSaveFeedback = "Save failed";

@@ -1,47 +1,49 @@
 <script lang="ts">
-	import { onMount } from "svelte";
-	import {
-		ts,
-		fetchTasks,
-		openDetail,
-		closeDetail,
-		openForm,
-		closeForm,
-		doDelete,
-		doTrigger,
-		doUpdate,
-	} from "$lib/stores/tasks.svelte";
-	import { API_BASE } from "$lib/api";
-	import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
-	import TaskForm from "$lib/components/tasks/TaskForm.svelte";
-	import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
-	import Plus from "@lucide/svelte/icons/plus";
-	import Zap from "@lucide/svelte/icons/zap";
+import { API_BASE } from "$lib/api";
+import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
+import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
+import TaskForm from "$lib/components/tasks/TaskForm.svelte";
+import {
+	closeDetail,
+	closeForm,
+	doDelete,
+	doTrigger,
+	doUpdate,
+	fetchTasks,
+	openDetail,
+	openForm,
+	ts,
+} from "$lib/stores/tasks.svelte";
+import Plus from "@lucide/svelte/icons/plus";
+import Zap from "@lucide/svelte/icons/zap";
+import { onMount } from "svelte";
 
-	let selectedColumn = $state(0);
-	let selectedTask = $state(0);
-	let predictorActive = $state(false);
+// biome-ignore lint/style/useConst: Mutated from template callback.
+let selectedColumn = $state(0);
+// biome-ignore lint/style/useConst: Mutated from template callback.
+let selectedTask = $state(0);
+let predictorActive = $state(false);
 
-	const taskCount = $derived(ts.tasks.length);
+const taskCount = $derived(ts.tasks.length);
 
-	onMount(() => {
-		fetchTasks();
-		checkPredictor();
-		const interval = setInterval(fetchTasks, 15_000);
-		return () => clearInterval(interval);
-	});
+onMount(() => {
+	fetchTasks();
+	checkPredictor();
+	const interval = setInterval(fetchTasks, 15_000);
+	return () => clearInterval(interval);
+});
 
-	async function checkPredictor(): Promise<void> {
-		try {
-			const res = await fetch(`${API_BASE}/api/predictor/status`);
-			if (res.ok) {
-				const data = await res.json();
-				predictorActive = data.enabled === true;
-			}
-		} catch {
-			predictorActive = false;
+async function checkPredictor(): Promise<void> {
+	try {
+		const res = await fetch(`${API_BASE}/api/predictor/status`);
+		if (res.ok) {
+			const data = await res.json();
+			predictorActive = data.enabled === true;
 		}
+	} catch {
+		predictorActive = false;
 	}
+}
 </script>
 
 <div class="tasks-panel">

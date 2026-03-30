@@ -1,16 +1,16 @@
 ---
-import { getCollection, render } from 'astro:content';
+import { getCollection, render } from "astro:content";
 
-const entries = await getCollection('testimonials');
+const entries = await getCollection("testimonials");
 const testimonials = await Promise.all(
-  entries.map(async (entry) => {
-    const { Content } = await render(entry);
-    return {
-      Content,
-      author: entry.data.author,
-      role: entry.data.role,
-    };
-  })
+	entries.map(async (entry) => {
+		const { Content } = await render(entry);
+		return {
+			Content,
+			author: entry.data.author,
+			role: entry.data.role,
+		};
+	}),
 );
 
 const marqueeItems = [...testimonials, ...testimonials];

@@ -23,7 +23,7 @@ interface KeyValueRow {
 
 const SECRET_REF_PREFIX = "secret://";
 
-const { open, entry, onclose }: Props = $props();
+let { open, entry, onclose }: Props = $props();
 
 let loadingDetail = $state(false);
 let detailError = $state<string | null>(null);

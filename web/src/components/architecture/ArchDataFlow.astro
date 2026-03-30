@@ -1,23 +1,23 @@
 ---
 const memoryFlow = [
-  'Harness hook fires (session-start, user-prompt, or session-end)',
-  'Connector calls daemon HTTP API',
-  '/api/hooks/remember enqueues extraction job',
-  'Extraction worker: LLM decomposes raw input into discrete facts and entity triples',
-  'Decision worker: evaluates each fact against existing memories (add / skip / bounded repair)',
-  'Controlled writes: new memories inserted with dedup and safety gates',
-  'Knowledge graph + embeddings: structured memory substrate persisted for later recall',
-  'Embeddings computed and stored alongside each memory',
-  '/api/memory/recall builds a bounded candidate pool (graph + BM25 + vector)',
-  'Predictive scorer reranks when available, and fails open to baseline ordering when it is not',
+	"Harness hook fires (session-start, user-prompt, or session-end)",
+	"Connector calls daemon HTTP API",
+	"/api/hooks/remember enqueues extraction job",
+	"Extraction worker: LLM decomposes raw input into discrete facts and entity triples",
+	"Decision worker: evaluates each fact against existing memories (add / skip / bounded repair)",
+	"Controlled writes: new memories inserted with dedup and safety gates",
+	"Knowledge graph + embeddings: structured memory substrate persisted for later recall",
+	"Embeddings computed and stored alongside each memory",
+	"/api/memory/recall builds a bounded candidate pool (graph + BM25 + vector)",
+	"Predictive scorer reranks when available, and fails open to baseline ordering when it is not",
 ];
 
 const configFlow = [
-  'User edits ~/.agents/AGENTS.md (or any identity file)',
-  'File watcher detects the change via chokidar',
-  '2-second debounced sync: regenerate CLAUDE.md, .cursorrules, etc.',
-  '5-second debounced git commit: version-control the change automatically',
-  'All connected harnesses receive updated config on next session',
+	"User edits ~/.agents/AGENTS.md (or any identity file)",
+	"File watcher detects the change via chokidar",
+	"2-second debounced sync: regenerate CLAUDE.md, .cursorrules, etc.",
+	"5-second debounced git commit: version-control the change automatically",
+	"All connected harnesses receive updated config on next session",
 ];
 ---
 

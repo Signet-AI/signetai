@@ -1,92 +1,90 @@
 <script lang="ts">
-	import { onMount, onDestroy } from "svelte";
-	import {
-		os,
-		fetchTrayEntries,
-		getTrayApps,
-		getGridApps,
-		getDockApps,
-		moveToGrid,
-		loadGroups,
-		requestWidgetGen,
-		fetchWidgetHtml,
-		onWidgetGenerated,
-		widgetHtmlCache,
-		findFreeGridPosition,
-		type GridPosition,
-	} from "$lib/stores/os.svelte";
-	import { API_BASE } from "$lib/api";
-	import WidgetGrid from "$lib/components/os/WidgetGrid.svelte";
-	import AppDock from "$lib/components/os/AppDock.svelte";
-	import SidebarGroups from "$lib/components/os/SidebarGroups.svelte";
-	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-	import MessageSquare from "@lucide/svelte/icons/message-square";
-	import AgentChat from "$lib/components/os/AgentChat.svelte";
+import { API_BASE } from "$lib/api";
+import AgentChat from "$lib/components/os/AgentChat.svelte";
+import AppDock from "$lib/components/os/AppDock.svelte";
+import SidebarGroups from "$lib/components/os/SidebarGroups.svelte";
+import WidgetGrid from "$lib/components/os/WidgetGrid.svelte";
+import {
+	os,
+	type GridPosition,
+	fetchTrayEntries,
+	fetchWidgetHtml,
+	findFreeGridPosition,
+	getDockApps,
+	getGridApps,
+	getTrayApps,
+	loadGroups,
+	moveToGrid,
+	onWidgetGenerated,
+	requestWidgetGen,
+	widgetHtmlCache,
+} from "$lib/stores/os.svelte";
+import MessageSquare from "@lucide/svelte/icons/message-square";
+import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import { onDestroy, onMount } from "svelte";
 
-	let showChat = $state(false);
+let showChat = $state(false);
 
-	const trayApps = $derived(getTrayApps());
-	const gridApps = $derived(getGridApps());
-	const dockApps = $derived(getDockApps());
+const trayApps = $derived(getTrayApps());
+const gridApps = $derived(getGridApps());
+const dockApps = $derived(getDockApps());
 
-	let eventSource: EventSource | null = null;
+let eventSource: EventSource | null = null;
 
-	onMount(() => {
-		fetchTrayEntries();
-		loadGroups();
+onMount(() => {
+	fetchTrayEntries();
+	loadGroups();
 
-		// Subscribe to widget generation events via SSE
-		eventSource = new EventSource(`${API_BASE}/api/os/events/stream?type=widget`);
-		eventSource.onmessage = (e) => {
-			try {
-				const event = JSON.parse(e.data);
-				if (event.type === "widget.generated" && event.payload?.serverId) {
-					// Fetch the generated HTML and update the cache
-					fetchWidgetHtml(event.payload.serverId);
-				}
-			} catch {
-				// Ignore parse errors from heartbeats
+	// Subscribe to widget generation events via SSE
+	eventSource = new EventSource(`${API_BASE}/api/os/events/stream?type=widget`);
+	eventSource.onmessage = (e) => {
+		try {
+			const event = JSON.parse(e.data);
+			if (event.type === "widget.generated" && event.payload?.serverId) {
+				// Fetch the generated HTML and update the cache
+				fetchWidgetHtml(event.payload.serverId);
 			}
-		};
-	});
-
-	onDestroy(() => {
-		eventSource?.close();
-	});
-
-	async function handleDragToBoard(id: string): Promise<void> {
-		const entry = os.entries.find((a) => a.id === id);
-		if (!entry) return;
-		const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
-
-		// Compute a free grid position to avoid overlapping at (0,0)
-		const occupied = gridApps.flatMap((a) =>
-			a.id !== id && a.gridPosition ? [a.gridPosition] : [],
-		);
-		const pos = findFreeGridPosition(occupied, size);
-
-		await moveToGrid(id, pos);
-
-		// Trigger widget generation if no declared or cached HTML
-		if (!entry.manifest.html && !widgetHtmlCache.has(id)) {
-			fetchWidgetHtml(id).then((cached) => {
-				if (!cached) requestWidgetGen(id);
-			});
+		} catch {
+			// Ignore parse errors from heartbeats
 		}
-	}
+	};
+});
 
-	function handleGridDrop(appId: string, x: number, y: number): void {
-		const entry = os.entries.find((a) => a.id === appId);
-		if (!entry) return;
-		const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
-		moveToGrid(appId, { x, y, ...size });
-	}
+onDestroy(() => {
+	eventSource?.close();
+});
 
-	/** Resolve the default widget size for a given appId (for WidgetGrid collision detection) */
-	function resolveDefaultSize(appId: string): { w: number; h: number } {
-		const entry = os.entries.find((a) => a.id === appId);
-		return entry?.manifest?.defaultSize ?? { w: 4, h: 3 };
+async function handleDragToBoard(id: string): Promise<void> {
+	const entry = os.entries.find((a) => a.id === id);
+	if (!entry) return;
+	const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
+
+	// Compute a free grid position to avoid overlapping at (0,0)
+	const occupied = gridApps.flatMap((a) => (a.id !== id && a.gridPosition ? [a.gridPosition] : []));
+	const pos = findFreeGridPosition(occupied, size);
+
+	await moveToGrid(id, pos);
+
+	// Trigger widget generation if no declared or cached HTML
+	if (!entry.manifest.html && !widgetHtmlCache.has(id)) {
+		fetchWidgetHtml(id).then((cached) => {
+			if (!cached) requestWidgetGen(id);
+		});
 	}
+}
+
+function handleGridDrop(appId: string, x: number, y: number): void {
+	const entry = os.entries.find((a) => a.id === appId);
+	if (!entry) return;
+	const size = entry.manifest?.defaultSize ?? { w: 4, h: 3 };
+	moveToGrid(appId, { x, y, ...size });
+}
+
+/** Resolve the default widget size for a given appId (for WidgetGrid collision detection) */
+function resolveDefaultSize(appId: string): { w: number; h: number } {
+	const entry = os.entries.find((a) => a.id === appId);
+	return entry?.manifest?.defaultSize ?? { w: 4, h: 3 };
+}
 </script>
 
 <div class="os-tab">

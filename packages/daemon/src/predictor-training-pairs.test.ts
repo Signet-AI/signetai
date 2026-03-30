@@ -19,9 +19,7 @@ import {
 	purgeOldTrainingPairs,
 } from "./predictor-training-pairs";
 import type { DbAccessor, WriteDb, ReadDb } from "./db-accessor";
-import {
-	runMigrations,
-} from "@signet/core";
+import { runMigrations } from "../../core/src/migrations";
 
 // ---------------------------------------------------------------------------
 // Test DB helper
@@ -73,14 +71,7 @@ function insertMemory(
 		`INSERT INTO memories
 		 (id, content, type, importance, access_count, created_at, updated_at, updated_by)
 		 VALUES (?, ?, 'fact', ?, ?, ?, ?, 'test')`,
-	).run(
-		id,
-		content,
-		opts.importance ?? 0.5,
-		opts.accessCount ?? 3,
-		opts.createdAt ?? now,
-		now,
-	);
+	).run(id, content, opts.importance ?? 0.5, opts.accessCount ?? 3, opts.createdAt ?? now, now);
 }
 
 function insertSessionMemory(
@@ -118,11 +109,7 @@ function insertSessionMemory(
 	);
 }
 
-function insertSessionScore(
-	db: Database,
-	sessionKey: string,
-	score: number,
-): void {
+function insertSessionScore(db: Database, sessionKey: string, score: number): void {
 	const id = crypto.randomUUID();
 	db.prepare(
 		`INSERT INTO session_scores
@@ -337,9 +324,7 @@ describe("saveTrainingPairs", () => {
 
 		// Verify they're in the database
 		const count = db
-			.prepare(
-				"SELECT COUNT(*) as n FROM predictor_training_pairs WHERE session_key = ?",
-			)
+			.prepare("SELECT COUNT(*) as n FROM predictor_training_pairs WHERE session_key = ?")
 			.get("sess-batch") as { n: number };
 		expect(count.n).toBe(3);
 
@@ -453,9 +438,7 @@ describe("purgeOldTrainingPairs", () => {
 		const { db, accessor } = createTestDb();
 
 		// Insert a pair with an old created_at
-		const oldDate = new Date(
-			Date.now() - 100 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const oldDate = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString();
 		db.prepare(
 			`INSERT INTO predictor_training_pairs
 			 (id, agent_id, session_key, memory_id,
@@ -486,9 +469,7 @@ describe("purgeOldTrainingPairs", () => {
 		// The old pair (100 days) should be purged, the new one kept
 		expect(purged).toBe(1);
 
-		const remaining = db
-			.prepare("SELECT COUNT(*) as n FROM predictor_training_pairs")
-			.get() as { n: number };
+		const remaining = db.prepare("SELECT COUNT(*) as n FROM predictor_training_pairs").get() as { n: number };
 		expect(remaining.n).toBe(1);
 
 		accessor.close();

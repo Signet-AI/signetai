@@ -106,7 +106,9 @@ export const sk = $state({
 
 /** Catalog indexed by name — shared across all SkillCard instances. */
 const catalogByName = $derived(new Map(sk.catalog.map((c) => [c.name, c])));
-export function getCatalogByName(): Map<string, SkillSearchResult> { return catalogByName; }
+export function getCatalogByName(): Map<string, SkillSearchResult> {
+	return catalogByName;
+}
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 

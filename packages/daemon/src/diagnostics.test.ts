@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../core/src/migrations";
 import {
 	createProviderTracker,
 	getDiagnostics,
@@ -74,14 +74,7 @@ function insertMemory(
 		);
 }
 
-function insertJob(
-	raw: Database,
-	id: string,
-	memId: string,
-	status: string,
-	createdAt = now,
-	updatedAt = now,
-): void {
+function insertJob(raw: Database, id: string, memId: string, status: string, createdAt = now, updatedAt = now): void {
 	raw
 		.prepare(
 			`INSERT INTO memory_jobs
@@ -92,13 +85,7 @@ function insertJob(
 		.run(id, memId, "extract", status, 0, 3, createdAt, updatedAt);
 }
 
-function insertHistory(
-	raw: Database,
-	id: string,
-	memId: string,
-	event: string,
-	createdAt = now,
-): void {
+function insertHistory(raw: Database, id: string, memId: string, event: string, createdAt = now): void {
 	raw
 		.prepare(
 			`INSERT INTO memory_history

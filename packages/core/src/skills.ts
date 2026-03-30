@@ -5,14 +5,7 @@
  * into a single unified registry with optional symlinking.
  */
 
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	readdirSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { symlinkDir } from "./symlinks.js";
@@ -191,10 +184,7 @@ export function writeRegistry(basePath: string, registry: SkillRegistry): void {
  * @param config - Configuration for skill sources
  * @returns Result with registry and counts
  */
-export async function unifySkills(
-	basePath: string,
-	config: SkillsConfig = {},
-): Promise<SkillsResult> {
+export async function unifySkills(basePath: string, config: SkillsConfig = {}): Promise<SkillsResult> {
 	const registry: SkillRegistry = {
 		skills: {},
 		sources: [],
@@ -220,15 +210,12 @@ export async function unifySkills(
 		for (const [name, data] of Object.entries(skillsData)) {
 			if (typeof data === "object" && data !== null) {
 				const skillData = data as RawSkillData;
-				const version =
-					typeof skillData.version === "string" ? skillData.version : undefined;
+				const version = typeof skillData.version === "string" ? skillData.version : undefined;
 				const installedAt =
-					typeof skillData.installedAt === "string" ||
-					typeof skillData.installedAt === "number"
+					typeof skillData.installedAt === "string" || typeof skillData.installedAt === "number"
 						? new Date(skillData.installedAt)
 						: undefined;
-				const path =
-					typeof skillData.path === "string" ? skillData.path : undefined;
+				const path = typeof skillData.path === "string" ? skillData.path : undefined;
 
 				registry.skills[name] = {
 					name,
@@ -245,10 +232,7 @@ export async function unifySkills(
 
 	// Symlink from Claude Code's ~/.claude/skills/
 	const claudeResult = symlinkClaudeSkills(basePath);
-	if (
-		claudeResult.symlinked > 0 ||
-		existsSync(join(home, ".claude", "skills"))
-	) {
+	if (claudeResult.symlinked > 0 || existsSync(join(home, ".claude", "skills"))) {
 		registry.sources.push({
 			type: "claude-code",
 			path: join(home, ".claude", "skills"),

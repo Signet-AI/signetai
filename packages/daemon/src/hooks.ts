@@ -85,8 +85,13 @@ import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures 
 import { searchTemporalFallback } from "./temporal-fallback";
 import { getUpdateSummary } from "./update-system";
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
-const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
+
+function getMemoryDbPath(): string {
+	return join(getAgentsDir(), "memory", "memories.db");
+}
 
 // ---------------------------------------------------------------------------
 // Hook dedup state (in-memory, fail-open on restart)
@@ -442,7 +447,7 @@ export function selectWithBudget<T extends { content: string }>(rows: ReadonlyAr
 
 /** Build a brief "since your last session" summary for temporal awareness */
 function getSessionGapSummary(): string | undefined {
-	if (!existsSync(MEMORY_DB)) return undefined;
+	if (!existsSync(getMemoryDbPath())) return undefined;
 
 	try {
 		return getDbAccessor().withReadDb((db) => {
@@ -520,7 +525,7 @@ export function isDuplicate(db: Database, content: string): boolean {
 }
 
 function readIdentityFile(fileName: string, charBudget: number): string | undefined {
-	const filePath = join(AGENTS_DIR, fileName);
+	const filePath = join(getAgentsDir(), fileName);
 	if (!existsSync(filePath)) return undefined;
 
 	try {
@@ -538,7 +543,7 @@ function readMemoryMd(charBudget: number): string | undefined {
 }
 
 function readAgentsMd(charBudget: number): string | undefined {
-	const agentsMd = join(AGENTS_DIR, "AGENTS.md");
+	const agentsMd = join(getAgentsDir(), "AGENTS.md");
 	if (!existsSync(agentsMd)) return undefined;
 
 	try {
@@ -570,7 +575,7 @@ function clampScore01(value: number): number {
 }
 
 function fetchTraversalCandidates(memoryIds: ReadonlyArray<string>, agentId: string): ScoredMemory[] {
-	if (memoryIds.length === 0 || !existsSync(MEMORY_DB)) return [];
+	if (memoryIds.length === 0 || !existsSync(getMemoryDbPath())) return [];
 
 	try {
 		const placeholders = memoryIds.map(() => "?").join(", ");
@@ -670,7 +675,7 @@ export function getAllScoredCandidates(
 	readPolicy = "isolated",
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
-	if (!existsSync(MEMORY_DB)) return [];
+	if (!existsSync(getMemoryDbPath())) return [];
 
 	try {
 		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
@@ -736,7 +741,7 @@ function getPredictedContextMemories(
 	readPolicy = "isolated",
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
-	if (!existsSync(MEMORY_DB)) return [];
+	if (!existsSync(getMemoryDbPath())) return [];
 
 	try {
 		// Get recent session summaries for this project
@@ -841,7 +846,7 @@ function getPredictedContextMemories(
 }
 
 function updateAccessTracking(ids: string[]): void {
-	if (ids.length === 0 || !existsSync(MEMORY_DB)) return;
+	if (ids.length === 0 || !existsSync(getMemoryDbPath())) return;
 
 	try {
 		getDbAccessor().withWriteTx((db) => {
@@ -872,7 +877,7 @@ const KNOWN_HOOKS_KEYS: ReadonlySet<keyof HooksConfig> = new Set<keyof HooksConf
 ]);
 
 function loadHooksConfig(): HooksConfig {
-	const configPath = join(AGENTS_DIR, "agent.yaml");
+	const configPath = join(getAgentsDir(), "agent.yaml");
 	if (!existsSync(configPath)) {
 		return getDefaultConfig();
 	}
@@ -965,7 +970,7 @@ function isAgentConfig(value: unknown): value is AgentConfig {
 // ============================================================================
 
 function loadIdentity(): { name: string; description?: string } {
-	const agentYaml = join(AGENTS_DIR, "agent.yaml");
+	const agentYaml = join(getAgentsDir(), "agent.yaml");
 	if (existsSync(agentYaml)) {
 		try {
 			const content = readFileSync(agentYaml, "utf-8");
@@ -980,7 +985,7 @@ function loadIdentity(): { name: string; description?: string } {
 		} catch {}
 	}
 
-	const identityMd = join(AGENTS_DIR, "IDENTITY.md");
+	const identityMd = join(getAgentsDir(), "IDENTITY.md");
 	if (existsSync(identityMd)) {
 		try {
 			const content = readFileSync(identityMd, "utf-8");
@@ -1010,7 +1015,7 @@ function getRecentMemories(
 	importance: number;
 	created_at: string;
 }> {
-	if (!existsSync(MEMORY_DB)) return [];
+	if (!existsSync(getMemoryDbPath())) return [];
 
 	try {
 		const rows = getDbAccessor().withReadDb((db) => {
@@ -1062,7 +1067,7 @@ function getMemoriesSince(
 	importance: number;
 	created_at: string;
 }> {
-	if (!existsSync(MEMORY_DB)) return [];
+	if (!existsSync(getMemoryDbPath())) return [];
 
 	try {
 		const sinceIso = new Date(sinceMs).toISOString();
@@ -1149,7 +1154,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Read MEMORY.md with 10k char budget
 	const memoryMdContent = readMemoryMd(10000);
 
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
 	const traversalAgentId = resolveAgentId(req);
@@ -1762,7 +1767,7 @@ ${guidelines}
 	const snap = consumeState(req.sessionKey);
 	if (snap) {
 		try {
-			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+			const cfg = loadMemoryConfig(getAgentsDir()).pipelineV2.continuity;
 			const digest = formatPreCompactionDigest(snap, req.sessionContext);
 			writeCheckpoint(
 				getDbAccessor(),
@@ -2058,6 +2063,7 @@ function finalizeUserPromptSubmitSuccess(
 	userMessage: string,
 	start: number,
 	result: UserPromptSubmitResponse,
+	log: typeof logger,
 	engineOverride?: string,
 ): UserPromptSubmitResponse {
 	const inject = typeof result.inject === "string" ? result.inject : "";
@@ -2071,7 +2077,7 @@ function finalizeUserPromptSubmitSuccess(
 				: "none";
 	const duration = Date.now() - start;
 
-	logger.info("hooks", "User prompt submit", {
+	log.info("hooks", "User prompt submit", {
 		harness: req.harness,
 		project: req.project,
 		sessionKey: req.sessionKey,
@@ -2086,30 +2092,76 @@ function finalizeUserPromptSubmitSuccess(
 	return result;
 }
 
-export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Promise<UserPromptSubmitResponse> {
+type UserPromptSubmitDeps = {
+	readonly logger: typeof logger;
+	readonly loadMemoryConfig: typeof loadMemoryConfig;
+	readonly resolveAgentId: typeof resolveAgentId;
+	readonly getAgentScope: typeof getAgentScope;
+	readonly parseFeedback: typeof parseFeedback;
+	readonly recordAgentFeedback: typeof recordAgentFeedback;
+	readonly recordPrompt: typeof recordPrompt;
+	readonly shouldCheckpoint: typeof shouldCheckpoint;
+	readonly consumeState: typeof consumeState;
+	readonly queueCheckpointWrite: typeof queueCheckpointWrite;
+	readonly formatPeriodicDigest: typeof formatPeriodicDigest;
+	readonly upsertSessionTranscript: typeof upsertSessionTranscript;
+	readonly getExpiryWarning: typeof getExpiryWarning;
+	readonly hybridRecall: typeof hybridRecall;
+	readonly fetchEmbedding: typeof fetchEmbedding;
+	readonly searchTemporalFallback: typeof searchTemporalFallback;
+	readonly searchTranscriptFallback: typeof searchTranscriptFallback;
+	readonly trackFtsHits: typeof trackFtsHits;
+};
+
+const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
+	logger,
+	loadMemoryConfig,
+	resolveAgentId,
+	getAgentScope,
+	parseFeedback,
+	recordAgentFeedback,
+	recordPrompt,
+	shouldCheckpoint,
+	consumeState,
+	queueCheckpointWrite,
+	formatPeriodicDigest,
+	upsertSessionTranscript,
+	getExpiryWarning,
+	hybridRecall,
+	fetchEmbedding,
+	searchTemporalFallback,
+	searchTranscriptFallback,
+	trackFtsHits,
+};
+
+export async function handleUserPromptSubmit(
+	req: UserPromptSubmitRequest,
+	overrides?: Partial<UserPromptSubmitDeps>,
+): Promise<UserPromptSubmitResponse> {
+	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
 	const start = Date.now();
 	const submitCfg = loadHooksConfig().userPromptSubmit ?? {};
 	const userMessage = resolveRecallUserMessage(req);
-	const agentId = resolveAgentId(req);
-	const agentScope = getAgentScope(agentId);
+	const agentId = deps.resolveAgentId(req);
+	const agentScope = deps.getAgentScope(agentId);
 	const { keywordTerms, vectorQuery } = buildRecallQueryShape(userMessage);
 
 	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const memoryCfg = deps.loadMemoryConfig(getAgentsDir());
 	const feedbackEnabled = memoryCfg.pipelineV2.predictorPipeline.agentFeedback;
 	if (feedbackEnabled && req.memory_feedback !== undefined && req.sessionKey) {
 		try {
-			const parsed = parseFeedback(req.memory_feedback);
+			const parsed = deps.parseFeedback(req.memory_feedback);
 			if (parsed) {
-				recordAgentFeedback(req.sessionKey, parsed, resolveAgentId(req));
+				deps.recordAgentFeedback(req.sessionKey, parsed, deps.resolveAgentId(req));
 			} else {
-				logger.warn("hooks", "Invalid memory_feedback format, skipping", {
+				deps.logger.warn("hooks", "Invalid memory_feedback format, skipping", {
 					sessionKey: req.sessionKey,
 				});
 			}
 		} catch (e) {
 			// Fail-open: never break the hook for feedback errors
-			logger.warn("hooks", "Failed to process memory_feedback", {
+			deps.logger.warn("hooks", "Failed to process memory_feedback", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
@@ -2117,24 +2169,24 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 
 	// Always record the prompt for continuity tracking, even if no FTS query
 	const snippet = userMessage.slice(0, 200).trim();
-	recordPrompt(
+	deps.recordPrompt(
 		req.sessionKey,
 		keywordTerms.length > 0 ? keywordTerms.join(" ") : undefined,
 		snippet.length > 0 ? snippet : undefined,
 	);
 	{
-		const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
-		if (shouldCheckpoint(req.sessionKey, cfg)) {
-			const snap = consumeState(req.sessionKey);
+		const cfg = deps.loadMemoryConfig(getAgentsDir()).pipelineV2.continuity;
+		if (deps.shouldCheckpoint(req.sessionKey, cfg)) {
+			const snap = deps.consumeState(req.sessionKey);
 			if (snap) {
-				queueCheckpointWrite(
+				deps.queueCheckpointWrite(
 					{
 						sessionKey: snap.sessionKey,
 						harness: snap.harness,
 						project: snap.project,
 						projectNormalized: snap.projectNormalized,
 						trigger: "periodic",
-						digest: formatPeriodicDigest(snap),
+						digest: deps.formatPeriodicDigest(snap),
 						promptCount: snap.promptCount,
 						memoryQueries: snap.pendingQueries,
 						recentRemembers: snap.pendingRemembers,
@@ -2157,7 +2209,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 				const raw = readFileSync(req.transcriptPath, "utf-8");
 				transcript = normalizeSessionTranscript(req.harness, raw);
 			} catch {
-				logger.warn("hooks", "Could not read prompt transcript", {
+				deps.logger.warn("hooks", "Could not read prompt transcript", {
 					path: req.transcriptPath,
 				});
 			}
@@ -2167,9 +2219,9 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 
 		if (transcript) {
 			try {
-				upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+				deps.upsertSessionTranscript(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
 			} catch (error) {
-				logger.warn("hooks", "Prompt transcript write failed", {
+				deps.logger.warn("hooks", "Prompt transcript write failed", {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
@@ -2184,7 +2236,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		timeStyle: "short",
 	});
 	const metadataHeader = `# Current Date & Time\n${now} (${tz})\n`;
-	const expiryWarning = req.sessionKey ? getExpiryWarning(req.sessionKey) : null;
+	const expiryWarning = req.sessionKey ? deps.getExpiryWarning(req.sessionKey) : null;
 	const warnings = expiryWarning ? [expiryWarning] : undefined;
 
 	if (submitCfg.enabled === false) {
@@ -2197,11 +2249,12 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 				memoryCount: 0,
 				warnings,
 			},
+			deps.logger,
 			"disabled",
 		);
 	}
 
-	if (keywordTerms.length < 1 || vectorQuery.length === 0 || !existsSync(MEMORY_DB)) {
+	if (keywordTerms.length < 1 || vectorQuery.length === 0 || !existsSync(getMemoryDbPath())) {
 		return finalizeUserPromptSubmitSuccess(
 			req,
 			userMessage,
@@ -2211,17 +2264,18 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 				memoryCount: 0,
 				warnings,
 			},
+			deps.logger,
 			"no-query",
 		);
 	}
 
 	try {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const recallLimit = submitCfg.recallLimit ?? 10;
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
 		const minScore = resolveUserPromptMinScore(submitCfg.minScore);
 		const queryTerms = vectorQuery.slice(0, 80);
-		const recall = await hybridRecall(
+		const recall = await deps.hybridRecall(
 			{
 				query: vectorQuery,
 				keywordQuery: vectorQuery,
@@ -2233,7 +2287,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 				project: req.project,
 			},
 			cfg,
-			fetchEmbedding,
+			deps.fetchEmbedding,
 		);
 
 		const topRaw = recall.results[0]?.score;
@@ -2243,7 +2297,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 		// expanded/derived recall query shape.
 		const anchorsMissed = queryAnchorsMissingFromRecall(userMessage, recall.results);
 		if (noStructured || anchorsMissed) {
-			const temporalHits = searchTemporalFallback({
+			const temporalHits = deps.searchTemporalFallback({
 				query: vectorQuery,
 				agentId,
 				sessionKey: req.sessionKey,
@@ -2256,9 +2310,10 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 					userMessage,
 					start,
 					buildTemporalFallbackResponse(metadataHeader, queryTerms, injectBudget, temporalHits, warnings),
+					deps.logger,
 				);
 			}
-			const transcriptHits = searchTranscriptFallback({
+			const transcriptHits = deps.searchTranscriptFallback({
 				query: vectorQuery,
 				agentId,
 				sessionKey: req.sessionKey,
@@ -2271,6 +2326,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 					userMessage,
 					start,
 					buildTranscriptFallbackResponse(metadataHeader, queryTerms, injectBudget, transcriptHits, warnings),
+					deps.logger,
 				);
 			}
 			if (noStructured) {
@@ -2283,6 +2339,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 						memoryCount: 0,
 						warnings,
 					},
+					deps.logger,
 					"no-structured",
 				);
 			}
@@ -2297,6 +2354,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 					memoryCount: 0,
 					warnings,
 				},
+				deps.logger,
 				"low-confidence",
 			);
 		}
@@ -2313,7 +2371,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 
 		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
 		const allMatchedIds = recall.results.map((result) => result.id);
-		trackFtsHits(req.sessionKey, allMatchedIds, resolveAgentId(req));
+		deps.trackFtsHits(req.sessionKey, allMatchedIds, deps.resolveAgentId(req));
 
 		// Filter out memories already injected within the sliding window
 		let selected = budgetSelected;
@@ -2338,6 +2396,7 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 					memoryCount: 0,
 					warnings,
 				},
+				deps.logger,
 				"dedup-empty",
 			);
 		}
@@ -2370,15 +2429,21 @@ export async function handleUserPromptSubmit(req: UserPromptSubmitRequest): Prom
 			}
 		}
 
-		return finalizeUserPromptSubmitSuccess(req, userMessage, start, {
-			inject,
-			memoryCount: selected.length,
-			queryTerms,
-			engine: "hybrid",
-			warnings,
-		});
+		return finalizeUserPromptSubmitSuccess(
+			req,
+			userMessage,
+			start,
+			{
+				inject,
+				memoryCount: selected.length,
+				queryTerms,
+				engine: "hybrid",
+				warnings,
+			},
+			deps.logger,
+		);
 	} catch (e) {
-		logger.error("hooks", "User prompt submit failed", e as Error);
+		deps.logger.error("hooks", "User prompt submit failed", e as Error);
 		return { inject: "", memoryCount: 0, warnings };
 	}
 }
@@ -2420,7 +2485,7 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	const snap = consumeState(sessionKey);
 	if (snap && snap.totalPromptCount > 0) {
 		try {
-			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+			const cfg = loadMemoryConfig(getAgentsDir()).pipelineV2.continuity;
 			writeCheckpoint(
 				getDbAccessor(),
 				{
@@ -2450,7 +2515,7 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	clearContinuity(sessionKey);
 
 	// Respect the pipeline master switch
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
 		logger.info("hooks", "Session end skipped — pipeline disabled");
 		return { memoriesSaved: 0 };
@@ -2664,7 +2729,7 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
 
 	// Respect the pipeline master switch
-	const memoryCfg = loadMemoryConfig(AGENTS_DIR);
+	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
 		logger.info("hooks", "Checkpoint extract skipped — pipeline disabled");
 		return { skipped: true };
@@ -2754,7 +2819,7 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 	try {
 		const snap = consumeState(req.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
-			const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
+			const cfg = loadMemoryConfig(getAgentsDir()).pipelineV2.continuity;
 			writeCheckpoint(
 				getDbAccessor(),
 				{
@@ -3101,7 +3166,7 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 export function handleRecall(req: RecallRequest): RecallResponse {
 	const limit = req.limit || 10;
 
-	if (!existsSync(MEMORY_DB)) {
+	if (!existsSync(getMemoryDbPath())) {
 		return { results: [], count: 0 };
 	}
 

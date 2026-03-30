@@ -35,7 +35,12 @@ describe("createLlmReranker", () => {
 			available: async () => true,
 			generate: async () =>
 				"<think>reasoning here</think>\n```json\n" +
-				JSON.stringify({ scores: [{ id: "a", score: 0.2 }, { id: "b", score: 0.8 }] }) +
+				JSON.stringify({
+					scores: [
+						{ id: "a", score: 0.2 },
+						{ id: "b", score: 0.8 },
+					],
+				}) +
 				"\n```",
 		};
 		const rerank = createLlmReranker(provider);

@@ -70,13 +70,15 @@ export async function parsePdf(filePath: string): Promise<ParsedDocument> {
 		}
 
 		// Clean up
-		try { await parser.destroy(); } catch { /* ignore */ }
+		try {
+			await parser.destroy();
+		} catch {
+			/* ignore */
+		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		if (msg.includes("Cannot find") || msg.includes("MODULE_NOT_FOUND")) {
-			throw new Error(
-				"pdf-parse is not installed. Run: bun add pdf-parse",
-			);
+			throw new Error("pdf-parse is not installed. Run: bun add pdf-parse");
 		}
 		throw new Error(`Failed to parse PDF ${basename(filePath)}: ${msg}`);
 	}
@@ -86,8 +88,16 @@ export async function parsePdf(filePath: string): Promise<ParsedDocument> {
 	// Extract title from PDF metadata or first line
 	let title: string | null = null;
 	const rawTitle = "Title" in info ? info.Title : undefined;
-	const nestedInfo = "info" in info && typeof info.info === "object" && info.info !== null ? info.info as Record<string, unknown> : undefined;
-	const infoTitle = typeof rawTitle === "string" ? rawTitle : (nestedInfo && "Title" in nestedInfo && typeof nestedInfo.Title === "string" ? nestedInfo.Title : undefined);
+	const nestedInfo =
+		"info" in info && typeof info.info === "object" && info.info !== null
+			? (info.info as Record<string, unknown>)
+			: undefined;
+	const infoTitle =
+		typeof rawTitle === "string"
+			? rawTitle
+			: nestedInfo && "Title" in nestedInfo && typeof nestedInfo.Title === "string"
+				? nestedInfo.Title
+				: undefined;
 	if (typeof infoTitle === "string" && infoTitle.trim()) {
 		title = infoTitle.trim();
 	} else {
@@ -160,11 +170,7 @@ function detectPageSections(pageText: string, pageNum: number): ParsedSection[] 
 
 		// Heuristic: short line (< 80 chars) that's followed by longer content
 		// and is either ALL CAPS or looks like a title
-		if (
-			trimmed.length > 0 &&
-			trimmed.length < 80 &&
-			isLikelyHeading(trimmed)
-		) {
+		if (trimmed.length > 0 && trimmed.length < 80 && isLikelyHeading(trimmed)) {
 			// Flush current section
 			if (currentLines.length > 0) {
 				const content = currentLines.join("\n").trim();

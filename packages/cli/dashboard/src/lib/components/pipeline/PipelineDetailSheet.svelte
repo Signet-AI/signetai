@@ -1,48 +1,52 @@
 <script lang="ts">
-	import * as Sheet from "$lib/components/ui/sheet/index.js";
-	import { Badge } from "$lib/components/ui/badge/index.js";
-	import { NODE_MAP, type PipelineNodeState, type LogEntry } from "./pipeline-types";
-	import { pipeline, selectNode } from "./pipeline-store.svelte";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import * as Sheet from "$lib/components/ui/sheet/index.js";
+import { pipeline, selectNode } from "./pipeline-store.svelte";
+import { type LogEntry, NODE_MAP, type PipelineNodeState } from "./pipeline-types";
 
-	let nodeId = $derived(pipeline.selectedNodeId);
-	let def = $derived(nodeId ? NODE_MAP.get(nodeId) ?? null : null);
-	let state = $derived(nodeId ? pipeline.nodes[nodeId] ?? null : null);
-	let open = $derived(nodeId !== null);
+const nodeId = $derived(pipeline.selectedNodeId);
+const def = $derived(nodeId ? (NODE_MAP.get(nodeId) ?? null) : null);
+const state = $derived(nodeId ? (pipeline.nodes[nodeId] ?? null) : null);
+const open = $derived(nodeId !== null);
 
-	function handleOpenChange(isOpen: boolean) {
-		if (!isOpen) selectNode(null);
+function handleOpenChange(isOpen: boolean) {
+	if (!isOpen) selectNode(null);
+}
+
+function formatTime(ts: string): string {
+	try {
+		const d = new Date(ts);
+		return d.toLocaleTimeString(undefined, {
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+		});
+	} catch {
+		return ts;
 	}
+}
 
-	function formatTime(ts: string): string {
-		try {
-			const d = new Date(ts);
-			return d.toLocaleTimeString(undefined, {
-				hour: "2-digit",
-				minute: "2-digit",
-				second: "2-digit",
-			});
-		} catch {
-			return ts;
-		}
+function levelClass(level: string): string {
+	switch (level) {
+		case "error":
+			return "text-[#e06c75]";
+		case "warn":
+			return "text-[#e5c07b]";
+		case "debug":
+			return "text-[#6b6b76]";
+		default:
+			return "text-[var(--sig-text)]";
 	}
+}
 
-	function levelClass(level: string): string {
-		switch (level) {
-			case "error": return "text-[#e06c75]";
-			case "warn": return "text-[#e5c07b]";
-			case "debug": return "text-[#6b6b76]";
-			default: return "text-[var(--sig-text)]";
-		}
-	}
-
-	// Queue metrics for display
-	let queueMetrics = $derived.by(() => {
-		if (!state?.metrics) return null;
-		const m = state.metrics as Record<string, unknown>;
-		if (m.memory || m.summary) return m;
-		if (typeof m.depth === "number") return m;
-		return null;
-	});
+// Queue metrics for display
+const queueMetrics = $derived.by(() => {
+	if (!state?.metrics) return null;
+	const m = state.metrics as Record<string, unknown>;
+	if (m.memory || m.summary) return m;
+	if (typeof m.depth === "number") return m;
+	return null;
+});
 </script>
 
 <Sheet.Root {open} onOpenChange={handleOpenChange}>

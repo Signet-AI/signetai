@@ -1,26 +1,20 @@
 <script lang="ts">
-	import type { TabId } from "$lib/stores/navigation.svelte";
-	import type { Memory, MemoryStats, Harness, DaemonStatus } from "$lib/api";
-	import UnifiedMemoryTab from "$lib/components/tabs/UnifiedMemoryTab.svelte";
+import type { DaemonStatus, Harness, Memory, MemoryStats } from "$lib/api";
+import UnifiedMemoryTab from "$lib/components/tabs/UnifiedMemoryTab.svelte";
+import type { TabId } from "$lib/stores/navigation.svelte";
 
-	interface Props {
-		activeTab: TabId;
-		memories: Memory[];
-		agentId: string;
-		memoryStats: MemoryStats;
-		harnesses: Harness[];
-		daemonStatus: DaemonStatus | null;
-		onopenglobalsimilar: (memory: Memory) => void;
-		ontimelinegeneratedforchange: (value: string) => void;
-	}
+interface Props {
+	activeTab: TabId;
+	memories: Memory[];
+	agentId: string;
+	memoryStats: MemoryStats;
+	harnesses: Harness[];
+	daemonStatus: DaemonStatus | null;
+	onopenglobalsimilar: (memory: Memory) => void;
+	ontimelinegeneratedforchange: (value: string) => void;
+}
 
-	const {
-		activeTab,
-		memories,
-		agentId,
-		onopenglobalsimilar,
-		ontimelinegeneratedforchange,
-	}: Props = $props();
+let { activeTab, memories, agentId, onopenglobalsimilar, ontimelinegeneratedforchange }: Props = $props();
 </script>
 
 <div class="cortex-tab">

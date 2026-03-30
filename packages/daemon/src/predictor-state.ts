@@ -63,22 +63,12 @@ function parseState(raw: unknown): PredictorState {
 				? Math.max(0, Math.min(1, raw.alpha))
 				: DEFAULT_STATE.alpha,
 		sessionsAfterColdStart:
-			typeof raw.sessionsAfterColdStart === "number" &&
-			Number.isFinite(raw.sessionsAfterColdStart)
+			typeof raw.sessionsAfterColdStart === "number" && Number.isFinite(raw.sessionsAfterColdStart)
 				? Math.max(0, Math.floor(raw.sessionsAfterColdStart))
 				: DEFAULT_STATE.sessionsAfterColdStart,
-		coldStartExited:
-			typeof raw.coldStartExited === "boolean"
-				? raw.coldStartExited
-				: DEFAULT_STATE.coldStartExited,
-		lastComparisonAt:
-			typeof raw.lastComparisonAt === "string"
-				? raw.lastComparisonAt
-				: DEFAULT_STATE.lastComparisonAt,
-		lastTrainingAt:
-			typeof raw.lastTrainingAt === "string"
-				? raw.lastTrainingAt
-				: DEFAULT_STATE.lastTrainingAt,
+		coldStartExited: typeof raw.coldStartExited === "boolean" ? raw.coldStartExited : DEFAULT_STATE.coldStartExited,
+		lastComparisonAt: typeof raw.lastComparisonAt === "string" ? raw.lastComparisonAt : DEFAULT_STATE.lastComparisonAt,
+		lastTrainingAt: typeof raw.lastTrainingAt === "string" ? raw.lastTrainingAt : DEFAULT_STATE.lastTrainingAt,
 	};
 }
 
@@ -100,21 +90,15 @@ export function getPredictorState(agentId: string): PredictorState {
 }
 
 /** Merge partial updates into persisted predictor state for the given agent. */
-export function updatePredictorState(
-	agentId: string,
-	update: Partial<PredictorState>,
-): void {
+export function updatePredictorState(agentId: string, update: Partial<PredictorState>): void {
 	const current = getPredictorState(agentId);
 	const next: PredictorState = {
 		successRate: update.successRate ?? current.successRate,
 		alpha: update.alpha ?? current.alpha,
-		sessionsAfterColdStart:
-			update.sessionsAfterColdStart ?? current.sessionsAfterColdStart,
+		sessionsAfterColdStart: update.sessionsAfterColdStart ?? current.sessionsAfterColdStart,
 		coldStartExited: update.coldStartExited ?? current.coldStartExited,
-		lastComparisonAt:
-			update.lastComparisonAt ?? current.lastComparisonAt,
-		lastTrainingAt:
-			update.lastTrainingAt ?? current.lastTrainingAt,
+		lastComparisonAt: update.lastComparisonAt ?? current.lastComparisonAt,
+		lastTrainingAt: update.lastTrainingAt ?? current.lastTrainingAt,
 	};
 
 	const path = statePath(agentId);

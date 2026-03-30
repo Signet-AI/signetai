@@ -255,10 +255,7 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
  * Modify an existing memory row with optional optimistic concurrency guard.
  * Writes UPDATE history in the same transaction when a mutation is applied.
  */
-export function txModifyMemory(
-	db: WriteDb,
-	input: ModifyMemoryTxInput,
-): ModifyMemoryTxResult {
+export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyMemoryTxResult {
 	const existing = db
 		.prepare(
 			`SELECT id, content, type, tags, importance, pinned, version, is_deleted
@@ -277,11 +274,7 @@ export function txModifyMemory(
 			currentVersion: existing.version,
 		};
 	}
-	if (
-		input.ifVersion !== undefined &&
-		Number.isFinite(input.ifVersion) &&
-		existing.version !== input.ifVersion
-	) {
+	if (input.ifVersion !== undefined && Number.isFinite(input.ifVersion) && existing.version !== input.ifVersion) {
 		return {
 			status: "version_conflict",
 			memoryId: input.memoryId,
@@ -296,26 +289,18 @@ export function txModifyMemory(
 	let contentChanged = false;
 	let finalContent = existing.content;
 
-	if (
-		input.patch.content !== undefined &&
-		input.patch.content !== existing.content
-	) {
+	if (input.patch.content !== undefined && input.patch.content !== existing.content) {
 		contentChanged = true;
 		finalContent = input.patch.content;
 
-		if (
-			input.patch.contentHash !== undefined &&
-			input.patch.contentHash !== null
-		) {
+		if (input.patch.contentHash !== undefined && input.patch.contentHash !== null) {
 			const duplicate = db
 				.prepare(
 					`SELECT id FROM memories
 					 WHERE id <> ? AND content_hash = ? AND is_deleted = 0
 					 LIMIT 1`,
 				)
-				.get(input.memoryId, input.patch.contentHash) as
-				| { id: string }
-				| undefined;
+				.get(input.memoryId, input.patch.contentHash) as { id: string } | undefined;
 			if (duplicate) {
 				return {
 					status: "duplicate_content_hash",
@@ -338,9 +323,7 @@ export function txModifyMemory(
 		args.push(input.extractionModelOnContentChange ?? null);
 		updates.push("embedding_model = ?");
 		args.push(
-			input.embeddingVector && input.embeddingVector.length > 0
-				? (input.embeddingModelOnContentChange ?? null)
-				: null,
+			input.embeddingVector && input.embeddingVector.length > 0 ? (input.embeddingModelOnContentChange ?? null) : null,
 		);
 		changedFields.push("content");
 	}
@@ -351,28 +334,19 @@ export function txModifyMemory(
 		changedFields.push("type");
 	}
 
-	if (
-		input.patch.tags !== undefined &&
-		input.patch.tags !== (existing.tags ?? null)
-	) {
+	if (input.patch.tags !== undefined && input.patch.tags !== (existing.tags ?? null)) {
 		updates.push("tags = ?");
 		args.push(input.patch.tags);
 		changedFields.push("tags");
 	}
 
-	if (
-		input.patch.importance !== undefined &&
-		input.patch.importance !== existing.importance
-	) {
+	if (input.patch.importance !== undefined && input.patch.importance !== existing.importance) {
 		updates.push("importance = ?");
 		args.push(input.patch.importance);
 		changedFields.push("importance");
 	}
 
-	if (
-		input.patch.pinned !== undefined &&
-		input.patch.pinned !== existing.pinned
-	) {
+	if (input.patch.pinned !== undefined && input.patch.pinned !== existing.pinned) {
 		updates.push("pinned = ?");
 		args.push(input.patch.pinned);
 		changedFields.push("pinned");
@@ -394,9 +368,7 @@ export function txModifyMemory(
 	updates.push("update_count = COALESCE(update_count, 0) + 1");
 	args.push(input.memoryId);
 
-	db.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE id = ?`).run(
-		...args,
-	);
+	db.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE id = ?`).run(...args);
 
 	if (contentChanged) {
 		const newHash = input.patch.contentHash ?? null;
@@ -428,15 +400,7 @@ export function txModifyMemory(
 				   source_id = excluded.source_id,
 				   chunk_text = excluded.chunk_text,
 				   created_at = excluded.created_at`,
-			).run(
-				embId,
-				newHash,
-				blob,
-				input.embeddingVector.length,
-				input.memoryId,
-				input.patch.content,
-				input.changedAt,
-			);
+			).run(embId, newHash, blob, input.embeddingVector.length, input.memoryId, input.patch.content, input.changedAt);
 			syncVecInsert(db, embId, input.embeddingVector);
 		}
 
@@ -474,10 +438,7 @@ export function txModifyMemory(
  * Soft-delete a memory row with optional optimistic concurrency guard.
  * Writes DELETE history in the same transaction.
  */
-export function txForgetMemory(
-	db: WriteDb,
-	input: ForgetMemoryTxInput,
-): ForgetMemoryTxResult {
+export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetMemoryTxResult {
 	const existing = db
 		.prepare(
 			`SELECT id, content, pinned, version, is_deleted
@@ -504,11 +465,7 @@ export function txForgetMemory(
 			currentVersion: existing.version,
 		};
 	}
-	if (
-		input.ifVersion !== undefined &&
-		Number.isFinite(input.ifVersion) &&
-		existing.version !== input.ifVersion
-	) {
+	if (input.ifVersion !== undefined && Number.isFinite(input.ifVersion) && existing.version !== input.ifVersion) {
 		return {
 			status: "version_conflict",
 			memoryId: input.memoryId,
@@ -523,11 +480,7 @@ export function txForgetMemory(
 		};
 	}
 	// Spec 27.2: autonomous agents cannot force-delete pinned memories
-	if (
-		existing.pinned === 1 &&
-		input.force &&
-		input.ctx?.actorType === "pipeline"
-	) {
+	if (existing.pinned === 1 && input.force && input.ctx?.actorType === "pipeline") {
 		return {
 			status: "autonomous_force_denied",
 			memoryId: input.memoryId,
@@ -574,10 +527,7 @@ export function txForgetMemory(
  * Recover a soft-deleted memory row if still within the retention window.
  * Writes RECOVER history in the same transaction.
  */
-export function txRecoverMemory(
-	db: WriteDb,
-	input: RecoverMemoryTxInput,
-): RecoverMemoryTxResult {
+export function txRecoverMemory(db: WriteDb, input: RecoverMemoryTxInput): RecoverMemoryTxResult {
 	const existing = db
 		.prepare(
 			`SELECT id, content, version, is_deleted, deleted_at
@@ -604,11 +554,7 @@ export function txRecoverMemory(
 			currentVersion: existing.version,
 		};
 	}
-	if (
-		input.ifVersion !== undefined &&
-		Number.isFinite(input.ifVersion) &&
-		existing.version !== input.ifVersion
-	) {
+	if (input.ifVersion !== undefined && Number.isFinite(input.ifVersion) && existing.version !== input.ifVersion) {
 		return {
 			status: "version_conflict",
 			memoryId: input.memoryId,
@@ -703,12 +649,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 				 SET is_deleted = 1, deleted_at = ?, updated_at = ?,
 				     updated_by = ?, version = version + 1
 				 WHERE id = ?`,
-			).run(
-				decision.updatedAt,
-				decision.updatedAt,
-				decision.updatedBy,
-				decision.memoryId,
-			);
+			).run(decision.updatedAt, decision.updatedAt, decision.updatedBy, decision.memoryId);
 
 			insertHistoryEvent(db, {
 				memoryId: decision.memoryId,
@@ -744,9 +685,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 
 			parts.push("version = version + 1");
 			args.push(decision.memoryId);
-			db.prepare(`UPDATE memories SET ${parts.join(", ")} WHERE id = ?`).run(
-				...args,
-			);
+			db.prepare(`UPDATE memories SET ${parts.join(", ")} WHERE id = ?`).run(...args);
 
 			insertHistoryEvent(db, {
 				memoryId: decision.memoryId,
@@ -764,10 +703,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 			break;
 		}
 		case "merge": {
-			if (
-				decision.mergeTargetId === undefined ||
-				decision.content === undefined
-			) {
+			if (decision.mergeTargetId === undefined || decision.content === undefined) {
 				break;
 			}
 
@@ -776,9 +712,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 					`SELECT id, content, pinned, is_deleted
 					 FROM memories WHERE id = ?`,
 				)
-				.get(decision.memoryId) as
-				| { id: string; content: string; pinned: number; is_deleted: number }
-				| undefined;
+				.get(decision.memoryId) as { id: string; content: string; pinned: number; is_deleted: number } | undefined;
 
 			if (!source || source.is_deleted === 1) break;
 			// Pipeline never force-deletes pinned memories (spec 27.2)
@@ -790,12 +724,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 				 SET content = ?, updated_at = ?, updated_by = ?,
 				     version = version + 1
 				 WHERE id = ?`,
-			).run(
-				decision.content,
-				decision.updatedAt,
-				decision.updatedBy,
-				decision.mergeTargetId,
-			);
+			).run(decision.content, decision.updatedAt, decision.updatedBy, decision.mergeTargetId);
 
 			insertHistoryEvent(db, {
 				memoryId: decision.mergeTargetId,
@@ -818,12 +747,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 				 SET is_deleted = 1, deleted_at = ?, updated_at = ?,
 				     updated_by = ?, version = version + 1
 				 WHERE id = ?`,
-			).run(
-				decision.updatedAt,
-				decision.updatedAt,
-				decision.updatedBy,
-				decision.memoryId,
-			);
+			).run(decision.updatedAt, decision.updatedAt, decision.updatedBy, decision.memoryId);
 
 			insertHistoryEvent(db, {
 				memoryId: decision.memoryId,
@@ -847,10 +771,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 /**
  * Batch-update access metadata for a list of memory ids.
  */
-export function txFinalizeAccessAndHistory(
-	db: WriteDb,
-	updates: ReadonlyArray<AccessUpdate>,
-): void {
+export function txFinalizeAccessAndHistory(db: WriteDb, updates: ReadonlyArray<AccessUpdate>): void {
 	if (updates.length === 0) return;
 
 	const stmt = db.prepare(

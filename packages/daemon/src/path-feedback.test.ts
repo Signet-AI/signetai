@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../core/src/migrations";
 
 const TEST_DIR = join(tmpdir(), `signet-path-feedback-test-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
@@ -152,9 +152,7 @@ describe("recordPathFeedback", () => {
 				 ORDER BY rowid DESC
 				 LIMIT 1`,
 			)
-			.get() as
-			| { event: string; changed_by: string; metadata: string | null }
-			| undefined;
+			.get() as { event: string; changed_by: string; metadata: string | null } | undefined;
 		expect(hist?.event).toBe("updated");
 		expect(hist?.changed_by).toBe("db-trigger");
 		expect(hist?.metadata).toContain("trg_entity_dependencies_audit_update");
@@ -274,9 +272,7 @@ describe("recordPathFeedback", () => {
 				 ORDER BY created_at DESC
 				 LIMIT 1`,
 			)
-			.get() as
-			| { event: string; changed_by: string; metadata: string | null }
-			| undefined;
+			.get() as { event: string; changed_by: string; metadata: string | null } | undefined;
 		expect(forwardHist?.changed_by).toBe("db-trigger");
 		expect(forwardHist?.metadata).toContain("trg_entity_dependencies_audit_insert");
 

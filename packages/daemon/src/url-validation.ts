@@ -77,10 +77,7 @@ export function validatePublicHttpUrl(url: string): string | null {
  * follows redirects manually so each hop is checked against the blocklist.
  * Returns the final Response (max 5 redirects).
  */
-export async function safeFetch(
-	url: string,
-	init?: RequestInit,
-): Promise<Response> {
+export async function safeFetch(url: string, init?: RequestInit): Promise<Response> {
 	const MAX_REDIRECTS = 5;
 	let current = url;
 

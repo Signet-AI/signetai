@@ -139,10 +139,7 @@ function emitEvent(type: string, payload: BrowserEventPayload) {
 class CDPClient {
 	private ws: WebSocket | null = null;
 	private commandId = 0;
-	private pendingCommands = new Map<
-		number,
-		{ resolve: (v: unknown) => void; reject: (e: Error) => void }
-	>();
+	private pendingCommands = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 	private eventListeners = new Map<string, EventListener[]>();
 	private connectResolve: (() => void) | null = null;
 	private connectReject: ((e: Error) => void) | null = null;
@@ -169,12 +166,7 @@ class CDPClient {
 			// biome-ignore lint/suspicious/noExplicitAny: native global in bun/node22
 			const WS = (globalThis as any).WebSocket;
 			if (!WS) {
-				reject(
-					new Error(
-						"WebSocket is not available in this runtime. " +
-							"Run with Bun or Node.js ≥ 21.",
-					),
-				);
+				reject(new Error("WebSocket is not available in this runtime. " + "Run with Bun or Node.js ≥ 21."));
 				return;
 			}
 
@@ -376,10 +368,7 @@ function getDomain(url: string): string {
 // signet browse navigate <url>
 // ============================================================================
 
-async function cmdNavigate(
-	url: string,
-	opts: { port: number; passive: boolean },
-): Promise<void> {
+async function cmdNavigate(url: string, opts: { port: number; passive: boolean }): Promise<void> {
 	if (opts.passive) {
 		console.error(chalk.yellow("  --passive mode: cannot navigate (read-only). Use --active."));
 		process.exit(1);
@@ -520,10 +509,7 @@ const EXTRACT_SCRIPT = (query: string) => `
 })()
 `;
 
-async function cmdExtract(
-	query: string,
-	opts: { port: number },
-): Promise<void> {
+async function cmdExtract(query: string, opts: { port: number }): Promise<void> {
 	const tab = await getActiveCDPTab(opts.port);
 	const client = await connectToTab(tab);
 
@@ -634,11 +620,7 @@ interface TabWatchState {
  * Wire all event handlers for a watched tab.
  * Single source of truth — used for both initial tabs and dynamically discovered ones.
  */
-function wireTabEventHandlers(
-	client: CDPClient,
-	tabId: string,
-	tabState: Map<string, TabWatchState>,
-): void {
+function wireTabEventHandlers(client: CDPClient, tabId: string, tabState: Map<string, TabWatchState>): void {
 	// ── browser.navigate ────────────────────────────────────────────────
 	client.on("Page.frameNavigated", async (params) => {
 		const frame = params.frame as Record<string, unknown> | undefined;
@@ -693,18 +675,23 @@ function wireTabEventHandlers(
 			}
 
 			// Detect checkout / login pages
-			const body = ((
-				await client.send("Runtime.evaluate", {
-					expression: "document.body?.innerText?.slice(0, 1000) ?? ''",
-					returnByValue: true,
-				}).catch(() => ({ result: { value: "" } }))
-			) as { result: { value: string } }).result?.value ?? "";
+			const body =
+				(
+					(await client
+						.send("Runtime.evaluate", {
+							expression: "document.body?.innerText?.slice(0, 1000) ?? ''",
+							returnByValue: true,
+						})
+						.catch(() => ({ result: { value: "" } }))) as { result: { value: string } }
+				).result?.value ?? "";
 
 			if (detectCheckout(state.url, state.title, body)) {
-				const { result: checkoutResult } = (await client.send("Runtime.evaluate", {
-					expression: CHECKOUT_EXTRACT_EXPRESSION,
-					returnByValue: true,
-				}).catch(() => ({ result: { value: { items: [], total: null } } }))) as {
+				const { result: checkoutResult } = (await client
+					.send("Runtime.evaluate", {
+						expression: CHECKOUT_EXTRACT_EXPRESSION,
+						returnByValue: true,
+					})
+					.catch(() => ({ result: { value: { items: [], total: null } } }))) as {
 					result: { value: { items: string[]; total: number | null } };
 				};
 
@@ -774,10 +761,7 @@ async function enableCDPDomains(client: CDPClient): Promise<void> {
 
 async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void> {
 	console.error(
-		chalk.dim(
-			`  Attaching to Chrome CDP on port ${opts.port}...` +
-				(opts.passive ? " (passive)" : " (active)"),
-		),
+		chalk.dim(`  Attaching to Chrome CDP on port ${opts.port}...` + (opts.passive ? " (passive)" : " (active)")),
 	);
 
 	const tabs = await getCDPTabs(opts.port);
@@ -823,9 +807,7 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 		process.exit(1);
 	}
 
-	console.error(
-		chalk.green(`  ✓ Watching ${clients.length} tab(s). Streaming events to stdout.`),
-	);
+	console.error(chalk.green(`  ✓ Watching ${clients.length} tab(s). Streaming events to stdout.`));
 	console.error(chalk.dim("  Press Ctrl+C to stop.\n"));
 
 	// Poll for new tabs every 5 seconds
@@ -869,7 +851,9 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 		process.on("SIGINT", () => {
 			clearInterval(tabPollTimer);
 			for (const c of clients) {
-				try { c.close(); } catch {}
+				try {
+					c.close();
+				} catch {}
 			}
 			resolve();
 		});
@@ -880,10 +864,7 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 // signet browse "<task>" — agent-piloted mode
 // ============================================================================
 
-async function cmdTask(
-	task: string,
-	opts: { port: number; passive: boolean },
-): Promise<void> {
+async function cmdTask(task: string, opts: { port: number; passive: boolean }): Promise<void> {
 	// CDP attach & context snapshot — LLM integration is Phase 3
 	const tab = await getActiveCDPTab(opts.port);
 	const client = await connectToTab(tab);
@@ -1021,8 +1002,9 @@ Examples:
 		});
 
 	// signet browse "<task>" — agent-piloted (default action / positional arg)
-	browseCmd.argument("[task]", "Natural language task for the agent to execute in Chrome").action(
-		async (task: string | undefined) => {
+	browseCmd
+		.argument("[task]", "Natural language task for the agent to execute in Chrome")
+		.action(async (task: string | undefined) => {
 			if (!task) {
 				browseCmd.help();
 				return;
@@ -1038,6 +1020,5 @@ Examples:
 				console.error(chalk.red(`  Error: ${(err as Error).message}`));
 				process.exit(1);
 			}
-		},
-	);
+		});
 }

@@ -9,18 +9,11 @@
 import type { MigrationDb } from "./index";
 
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {
-	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<
-		Record<string, unknown>
-	>;
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	return rows.some((r) => r.name === column);
 }
 
-function addColumnIfMissing(
-	db: MigrationDb,
-	table: string,
-	column: string,
-	definition: string,
-): void {
+function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
 	if (!hasColumn(db, table, column)) {
 		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 	}

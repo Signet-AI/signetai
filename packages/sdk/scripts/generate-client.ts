@@ -54,9 +54,7 @@ function toPascalCase(segment: string): string {
 	if (parts.length === 0) {
 		return "Unknown";
 	}
-	return parts
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join("");
+	return parts.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
 }
 
 function toMethodName(route: Route): string {
@@ -152,9 +150,7 @@ function generateMethod(route: Route, methodName: string): string {
  */
 function generateClient(routes: readonly Route[]): string {
 	const methodNames = buildMethodNames(routes);
-	const methods = routes
-		.map((route, index) => generateMethod(route, methodNames[index]))
-		.join("\n\n");
+	const methods = routes.map((route, index) => generateMethod(route, methodNames[index])).join("\n\n");
 
 	return `/**
  * AUTO-GENERATED FILE — DO NOT EDIT

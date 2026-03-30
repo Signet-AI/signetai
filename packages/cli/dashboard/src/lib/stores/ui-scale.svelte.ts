@@ -17,7 +17,7 @@ function loadIndex(): number {
 	if (typeof localStorage === "undefined") return DEFAULT_INDEX;
 	const stored = localStorage.getItem(STORAGE_KEY);
 	if (stored !== null) {
-		const v = parseFloat(stored);
+		const v = Number.parseFloat(stored);
 		// Guard: values above the max step are old index-based storage (e.g. "7" for
 		// index 7). Passing them to nearest-match would silently set max zoom (3.0×).
 		if (!isNaN(v) && v <= STEPS[STEPS.length - 1]) {
@@ -25,10 +25,7 @@ function loadIndex(): number {
 			const exact = (STEPS as readonly number[]).indexOf(v);
 			if (exact !== -1) return exact;
 			// Nearest match — gracefully handles future STEPS reshuffling
-			return STEPS.reduce(
-				(best, s, i) => (Math.abs(s - v) < Math.abs(STEPS[best] - v) ? i : best),
-				DEFAULT_INDEX,
-			);
+			return STEPS.reduce((best, s, i) => (Math.abs(s - v) < Math.abs(STEPS[best] - v) ? i : best), DEFAULT_INDEX);
 		}
 	}
 	return DEFAULT_INDEX;

@@ -18,6 +18,22 @@ import { handleSynthesisRequest, writeMemoryMd } from "../hooks";
 import { logger } from "../logger";
 import { activeSessionCount } from "../session-tracker";
 
+type SynthesisDeps = {
+	readonly getDbAccessor: typeof getDbAccessor;
+	readonly handleSynthesisRequest: typeof handleSynthesisRequest;
+	readonly writeMemoryMd: typeof writeMemoryMd;
+	readonly logger: typeof logger;
+	readonly activeSessionCount: typeof activeSessionCount;
+};
+
+const DEFAULT_DEPS: SynthesisDeps = {
+	getDbAccessor,
+	handleSynthesisRequest,
+	writeMemoryMd,
+	logger,
+	activeSessionCount,
+};
+
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
 }
@@ -63,13 +79,13 @@ export function readLastSynthesisTime(agentId?: string): number {
 	}
 }
 
-function writeLastSynthesisTime(timestamp: number, agentId?: string): void {
+function writeLastSynthesisTime(deps: SynthesisDeps, timestamp: number, agentId?: string): void {
 	try {
 		const path = getLastSynthesisPath(agentId);
 		mkdirSync(join(getAgentsDir(), ".daemon"), { recursive: true });
 		writeFileSync(path, JSON.stringify({ lastRunAt: timestamp }));
 	} catch (e) {
-		logger.warn("synthesis", "Failed to persist synthesis timestamp", {
+		deps.logger.warn("synthesis", "Failed to persist synthesis timestamp", {
 			error: e instanceof Error ? e.message : String(e),
 		});
 	}
@@ -105,9 +121,9 @@ function isExpectedSessionActivityLookupError(error: unknown, table: string): bo
 	);
 }
 
-function getLastSessionEndTime(): number {
+function getLastSessionEndTime(deps: SynthesisDeps): number {
 	try {
-		const checkpointRow = getDbAccessor().withReadDb((db) => {
+		const checkpointRow = deps.getDbAccessor().withReadDb((db) => {
 			return db
 				.prepare(`
 				SELECT MAX(created_at) as last_end
@@ -122,7 +138,7 @@ function getLastSessionEndTime(): number {
 		}
 	} catch (error) {
 		if (!isExpectedSessionActivityLookupError(error, "session_checkpoints")) {
-			logger.error(
+			deps.logger.error(
 				"synthesis",
 				"Failed to query session_checkpoints for synthesis scheduling",
 				error instanceof Error ? error : new Error(String(error)),
@@ -132,7 +148,7 @@ function getLastSessionEndTime(): number {
 	}
 
 	try {
-		const summaryRow = getDbAccessor().withReadDb((db) => {
+		const summaryRow = deps.getDbAccessor().withReadDb((db) => {
 			return db
 				.prepare(`
 					SELECT MAX(completed_at) as last_end
@@ -144,7 +160,7 @@ function getLastSessionEndTime(): number {
 		return parseLastEndTimestamp(summaryRow);
 	} catch (error) {
 		if (!isExpectedSessionActivityLookupError(error, "summary_jobs")) {
-			logger.error(
+			deps.logger.error(
 				"synthesis",
 				"Failed to query summary_jobs for synthesis scheduling",
 				error instanceof Error ? error : new Error(String(error)),
@@ -167,14 +183,22 @@ function shouldRecordSuccess(result: SynthesisResult): boolean {
 }
 
 async function runSynthesis(config: PipelineSynthesisConfig, agentId?: string): Promise<SynthesisResult> {
-	logger.info("synthesis", "Starting scheduled synthesis", {
+	return runSynthesisWithDeps(DEFAULT_DEPS, config, agentId);
+}
+
+async function runSynthesisWithDeps(
+	deps: SynthesisDeps,
+	config: PipelineSynthesisConfig,
+	agentId?: string,
+): Promise<SynthesisResult> {
+	deps.logger.info("synthesis", "Starting scheduled synthesis", {
 		provider: config.provider,
 		model: config.model,
 		agentId: agentId ?? "default",
 	});
 
 	try {
-		const synthesisData = handleSynthesisRequest(
+		const synthesisData = deps.handleSynthesisRequest(
 			{ trigger: "scheduled" },
 			{
 				maxTokens: config.maxTokens,
@@ -183,35 +207,35 @@ async function runSynthesis(config: PipelineSynthesisConfig, agentId?: string): 
 		);
 
 		if (synthesisData.fileCount === 0) {
-			logger.info("synthesis", "No synthesis sources available, skipping");
+			deps.logger.info("synthesis", "No synthesis sources available, skipping");
 			return "empty";
 		}
 
 		if (!synthesisData.prompt || synthesisData.prompt.trim().length === 0) {
-			logger.warn("synthesis", "Renderer returned empty MEMORY.md projection");
+			deps.logger.warn("synthesis", "Renderer returned empty MEMORY.md projection");
 			return "failed";
 		}
 		const finalText = synthesisData.prompt.trimEnd();
 
 		// Write MEMORY.md via shared helper (handles backup)
-		const writeResult = writeMemoryMd(finalText, { owner: "synthesis-worker" });
+		const writeResult = deps.writeMemoryMd(finalText, { owner: "synthesis-worker" });
 		if (!writeResult.ok) {
 			if (writeResult.code === "busy") {
-				logger.warn("synthesis", "MEMORY.md head busy, deferring synthesis write");
+				deps.logger.warn("synthesis", "MEMORY.md head busy, deferring synthesis write");
 				return "busy";
 			}
-			logger.error("synthesis", `MEMORY.md write refused: ${writeResult.error}`);
+			deps.logger.error("synthesis", `MEMORY.md write refused: ${writeResult.error}`);
 			return "failed";
 		}
 
-		logger.info("synthesis", "MEMORY.md synthesized", {
+		deps.logger.info("synthesis", "MEMORY.md synthesized", {
 			sourceItems: synthesisData.fileCount,
 			outputLength: finalText.length,
 		});
 
 		return "ok";
 	} catch (e) {
-		logger.error("synthesis", "Synthesis failed", e instanceof Error ? e : new Error(String(e)));
+		deps.logger.error("synthesis", "Synthesis failed", e instanceof Error ? e : new Error(String(e)));
 		return "failed";
 	}
 }
@@ -244,7 +268,10 @@ export interface SynthesisWorkerHandle {
 	readonly lastRunAt: number;
 }
 
-export function startSynthesisWorker(config: PipelineSynthesisConfig): SynthesisWorkerHandle {
+export function startSynthesisWorker(
+	config: PipelineSynthesisConfig,
+	deps: SynthesisDeps = DEFAULT_DEPS,
+): SynthesisWorkerHandle {
 	type PendingForce = {
 		source: string;
 		readonly agentId: string;
@@ -307,10 +334,10 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		}
 
 		try {
-			currentRunPromise = runSynthesis(config, entry.agentId);
+			currentRunPromise = runSynthesisWithDeps(deps, config, entry.agentId);
 			const result = await currentRunPromise;
 			if (result === "busy" || result === "failed") {
-				logger.info("synthesis", "Retrying forced synthesis after busy head", {
+				deps.logger.info("synthesis", "Retrying forced synthesis after busy head", {
 					source: entry.source,
 					agentId: entry.agentId,
 					result,
@@ -318,7 +345,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 				return "retry";
 			}
 			if (shouldRecordSuccess(result)) {
-				writeLastSynthesisTime(Date.now(), entry.agentId);
+				writeLastSynthesisTime(deps, Date.now(), entry.agentId);
 			}
 			return "completed";
 		} finally {
@@ -357,13 +384,13 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			}
 
 			// Don't synthesize while sessions are active
-			if (activeSessionCount() > 0) {
+			if (deps.activeSessionCount() > 0) {
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
 			}
 
 			// Check when the last session ended
-			const lastSessionEnd = getLastSessionEndTime();
+			const lastSessionEnd = getLastSessionEndTime(deps);
 			if (lastSessionEnd === 0) {
 				// No session-end checkpoints yet — nothing to synthesize from
 				scheduleTick(CHECK_INTERVAL_MS);
@@ -399,20 +426,20 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 			}
 
 			try {
-				currentRunPromise = runSynthesis(config);
+				currentRunPromise = runSynthesisWithDeps(deps, config);
 				const result = await currentRunPromise;
 				if (shouldRecordSuccess(result)) {
 					// Busy means another writer currently owns the shared
 					// MEMORY.md head lease. Leave last-run untouched so the
 					// next tick retries instead of waiting a full interval.
-					writeLastSynthesisTime(Date.now());
+					writeLastSynthesisTime(deps, Date.now());
 				}
 			} finally {
 				currentRunPromise = null;
 				releaseWriteLock(lockToken);
 			}
 		} catch (e) {
-			logger.error("synthesis", "Unhandled tick error", e instanceof Error ? e : new Error(String(e)));
+			deps.logger.error("synthesis", "Unhandled tick error", e instanceof Error ? e : new Error(String(e)));
 		}
 
 		scheduleTick(CHECK_INTERVAL_MS);
@@ -424,7 +451,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		timer = setTimeout(() => {
 			timer = null;
 			tick().catch((err) => {
-				logger.error("synthesis", "Unhandled tick error", err instanceof Error ? err : new Error(String(err)));
+				deps.logger.error("synthesis", "Unhandled tick error", err instanceof Error ? err : new Error(String(err)));
 			});
 		}, delay);
 	}
@@ -432,7 +459,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 	// Initial delay to let other workers settle
 	scheduleTick(STARTUP_DELAY_MS);
 
-	logger.info("synthesis", "Synthesis worker started", {
+	deps.logger.info("synthesis", "Synthesis worker started", {
 		provider: config.provider,
 		model: config.model,
 		idleGapMinutes: config.idleGapMinutes,
@@ -442,7 +469,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 		stop() {
 			stopped = true;
 			if (timer) clearTimeout(timer);
-			logger.info("synthesis", "Synthesis worker stopped");
+			deps.logger.info("synthesis", "Synthesis worker stopped");
 		},
 		async drain() {
 			// Cancel any pending tick to prevent new synthesis starting
@@ -462,7 +489,7 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 					new Promise<void>((resolve) => {
 						timeoutId = setTimeout(() => {
 							timedOut = true;
-							logger.warn("synthesis", "drain() timed out waiting for in-flight synthesis");
+							deps.logger.warn("synthesis", "drain() timed out waiting for in-flight synthesis");
 							resolve();
 						}, config.timeout + DRAIN_TIMEOUT_BUFFER_MS);
 					}),
@@ -515,21 +542,21 @@ export function startSynthesisWorker(config: PipelineSynthesisConfig): Synthesis
 
 				if (!opts?.force && elapsed < MIN_INTERVAL_MS) {
 					const reason = `Too recent — last run ${Math.round(elapsed / 60000)}m ago, minimum is ${Math.round(MIN_INTERVAL_MS / 60000)}m`;
-					logger.info("synthesis", "Skipping manual trigger", {
+					deps.logger.info("synthesis", "Skipping manual trigger", {
 						reason,
 						source: opts?.source ?? "manual",
 					});
 					return { success: false, skipped: true, reason };
 				}
 
-				currentRunPromise = runSynthesis(config, opts?.agentId);
+				currentRunPromise = runSynthesisWithDeps(deps, config, opts?.agentId);
 				const result = await currentRunPromise;
 				if ((result === "busy" || result === "failed") && opts?.force) {
 					enqueuePendingForce(opts.source ?? "manual", opts.agentId);
 					scheduleTick(FORCE_RETRY_MS);
 				}
 				if (shouldRecordSuccess(result)) {
-					writeLastSynthesisTime(Date.now(), key);
+					writeLastSynthesisTime(deps, Date.now(), key);
 					clearPendingForceFor(opts?.agentId);
 				}
 				return {

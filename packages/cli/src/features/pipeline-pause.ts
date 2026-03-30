@@ -1,8 +1,4 @@
-import {
-	readPipelineConfigData,
-	readPipelinePauseState,
-	setPipelinePaused,
-} from "@signet/core";
+import { readPipelineConfigData, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
 const DEFAULT_EXTRACTION_MODEL = "qwen3.5:4b";

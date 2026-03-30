@@ -1,13 +1,13 @@
 <script lang="ts">
-	import type { Snippet } from "svelte";
+import type { Snippet } from "svelte";
 
-	interface Props {
-		title: string;
-		children?: Snippet;
-		right?: Snippet;
-	}
+interface Props {
+	title: string;
+	children?: Snippet;
+	right?: Snippet;
+}
 
-	const { title, children, right }: Props = $props();
+let { title, children, right }: Props = $props();
 </script>
 
 <div class="banner">

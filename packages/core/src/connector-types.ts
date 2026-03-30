@@ -5,18 +5,10 @@
  * Drive, etc.) into the Signet document ingest pipeline.
  */
 
-export const CONNECTOR_PROVIDERS = [
-	"filesystem",
-	"github-docs",
-	"gdrive",
-] as const;
+export const CONNECTOR_PROVIDERS = ["filesystem", "github-docs", "gdrive"] as const;
 export type ConnectorProvider = (typeof CONNECTOR_PROVIDERS)[number];
 
-export const CONNECTOR_STATUSES = [
-	"idle",
-	"syncing",
-	"error",
-] as const;
+export const CONNECTOR_STATUSES = ["idle", "syncing", "error"] as const;
 export type ConnectorStatus = (typeof CONNECTOR_STATUSES)[number];
 
 export const DOCUMENT_STATUSES = [
@@ -31,11 +23,7 @@ export const DOCUMENT_STATUSES = [
 ] as const;
 export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
 
-export const DOCUMENT_SOURCE_TYPES = [
-	"text",
-	"url",
-	"file",
-] as const;
+export const DOCUMENT_SOURCE_TYPES = ["text", "url", "file"] as const;
 export type DocumentSourceType = (typeof DOCUMENT_SOURCE_TYPES)[number];
 
 export interface ConnectorConfig {

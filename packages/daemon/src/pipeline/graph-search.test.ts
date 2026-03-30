@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import type { ReadDb } from "../db-accessor";
 import { getGraphBoostIds } from "./graph-search";
 
@@ -20,12 +20,7 @@ describe("graph-search", () => {
 		db.close();
 	});
 
-	function seedEntityWithMemory(
-		entityId: string,
-		name: string,
-		memoryId: string,
-		mentions = 1,
-	): void {
+	function seedEntityWithMemory(entityId: string, name: string, memoryId: string, mentions = 1): void {
 		const now = new Date().toISOString();
 		db.prepare(
 			`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)

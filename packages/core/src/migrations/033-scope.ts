@@ -15,7 +15,5 @@ export function up(db: MigrationDb): void {
 
 	// Partial index — only indexes rows where scope IS NOT NULL, so normal
 	// (unscoped) queries pay zero indexing cost.
-	db.exec(
-		"CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope) WHERE scope IS NOT NULL",
-	);
+	db.exec("CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope) WHERE scope IS NOT NULL");
 }

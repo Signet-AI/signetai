@@ -143,7 +143,8 @@ function readConfig(): ReviewsSyncConfig {
 		if (!isRecord(raw)) return DEFAULT_CONFIG;
 		return {
 			enabled: raw.enabled === true,
-			endpointUrl: typeof raw.endpointUrl === "string" && raw.endpointUrl.length > 0 ? raw.endpointUrl : REVIEWS_SYNC_URL,
+			endpointUrl:
+				typeof raw.endpointUrl === "string" && raw.endpointUrl.length > 0 ? raw.endpointUrl : REVIEWS_SYNC_URL,
 			lastSyncAt: typeof raw.lastSyncAt === "string" ? raw.lastSyncAt : null,
 			lastSyncError: typeof raw.lastSyncError === "string" ? raw.lastSyncError : null,
 		};
@@ -262,7 +263,12 @@ export function mountMarketplaceReviewsRoutes(app: Hono): void {
 		const current = readConfig();
 		const next: ReviewsSyncConfig = {
 			enabled: typeof body.enabled === "boolean" ? body.enabled : current.enabled,
-			endpointUrl: body.endpointUrl === undefined ? current.endpointUrl : typeof body.endpointUrl === "string" ? body.endpointUrl.trim() : current.endpointUrl,
+			endpointUrl:
+				body.endpointUrl === undefined
+					? current.endpointUrl
+					: typeof body.endpointUrl === "string"
+						? body.endpointUrl.trim()
+						: current.endpointUrl,
 			lastSyncAt: current.lastSyncAt,
 			lastSyncError: current.lastSyncError,
 		};

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations, type MigrationDb } from "@signet/core";
+import { runMigrations, type MigrationDb } from "../../../core/src/migrations";
 import type { ReadDb } from "../db-accessor";
 import { assessSignificance, type SignificanceConfig } from "./significance-gate";
 

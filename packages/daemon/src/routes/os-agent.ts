@@ -536,9 +536,7 @@ export function mountOsAgentRoutes(app: Hono): void {
 						);
 					} else {
 						controller.enqueue(
-							encoder.encode(
-								`data: ${JSON.stringify({ type: "error", data: { error: "Session not found" } })}\n\n`,
-							),
+							encoder.encode(`data: ${JSON.stringify({ type: "error", data: { error: "Session not found" } })}\n\n`),
 						);
 					}
 				} else {

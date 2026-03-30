@@ -1,57 +1,57 @@
 <script lang="ts">
-	import {
-		os,
-		createGroup,
-		deleteGroup,
-		renameGroup,
-		setActiveGroup,
-		addToGroup,
-		type SidebarGroup,
-	} from "$lib/stores/os.svelte";
-	import Folder from "@lucide/svelte/icons/folder";
-	import FolderOpen from "@lucide/svelte/icons/folder-open";
-	import Plus from "@lucide/svelte/icons/plus";
-	import Trash2 from "@lucide/svelte/icons/trash-2";
-	import LayoutGrid from "@lucide/svelte/icons/layout-grid";
+import {
+	os,
+	type SidebarGroup,
+	addToGroup,
+	createGroup,
+	deleteGroup,
+	renameGroup,
+	setActiveGroup,
+} from "$lib/stores/os.svelte";
+import Folder from "@lucide/svelte/icons/folder";
+import FolderOpen from "@lucide/svelte/icons/folder-open";
+import LayoutGrid from "@lucide/svelte/icons/layout-grid";
+import Plus from "@lucide/svelte/icons/plus";
+import Trash2 from "@lucide/svelte/icons/trash-2";
 
-	let newGroupName = $state("");
-	let showNewInput = $state(false);
-	let editingId = $state<string | null>(null);
-	let editingName = $state("");
+let newGroupName = $state("");
+let showNewInput = $state(false);
+let editingId = $state<string | null>(null);
+let editingName = $state("");
 
-	function handleCreateGroup(): void {
-		const name = newGroupName.trim();
-		if (!name) return;
-		createGroup(name);
-		newGroupName = "";
-		showNewInput = false;
+function handleCreateGroup(): void {
+	const name = newGroupName.trim();
+	if (!name) return;
+	createGroup(name);
+	newGroupName = "";
+	showNewInput = false;
+}
+
+function startRename(group: SidebarGroup): void {
+	editingId = group.id;
+	editingName = group.name;
+}
+
+function commitRename(): void {
+	if (editingId && editingName.trim()) {
+		renameGroup(editingId, editingName.trim());
 	}
+	editingId = null;
+	editingName = "";
+}
 
-	function startRename(group: SidebarGroup): void {
-		editingId = group.id;
-		editingName = group.name;
-	}
+function handleGroupDragOver(e: DragEvent): void {
+	e.preventDefault();
+	if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+}
 
-	function commitRename(): void {
-		if (editingId && editingName.trim()) {
-			renameGroup(editingId, editingName.trim());
-		}
-		editingId = null;
-		editingName = "";
+function handleGroupDrop(e: DragEvent, groupId: string): void {
+	e.preventDefault();
+	const appId = e.dataTransfer?.getData("text/plain");
+	if (appId) {
+		addToGroup(groupId, appId);
 	}
-
-	function handleGroupDragOver(e: DragEvent): void {
-		e.preventDefault();
-		if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-	}
-
-	function handleGroupDrop(e: DragEvent, groupId: string): void {
-		e.preventDefault();
-		const appId = e.dataTransfer?.getData("text/plain");
-		if (appId) {
-			addToGroup(groupId, appId);
-		}
-	}
+}
 </script>
 
 <div class="sidebar-groups">

@@ -23,8 +23,7 @@ const subCommand = args[1];
 // Note: 'daemon status', 'daemon stop', 'daemon logs' just query HTTP - no bun needed
 const needsBun =
 	command === "start" || // alias for daemon start
-	(command === "daemon" &&
-		(subCommand === "start" || subCommand === "restart"));
+	(command === "daemon" && (subCommand === "start" || subCommand === "restart"));
 const isDaemonCommand = needsBun;
 
 // Check if Bun is available

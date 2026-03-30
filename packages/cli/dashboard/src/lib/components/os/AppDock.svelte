@@ -1,37 +1,37 @@
 <script lang="ts">
-	import type { AppTrayEntry } from "$lib/stores/os.svelte";
-	import { moveToTray, moveToDock } from "$lib/stores/os.svelte";
-	import AddMcpDialog from "./AddMcpDialog.svelte";
-	import Box from "@lucide/svelte/icons/box";
-	import Pin from "@lucide/svelte/icons/pin";
-	import PinOff from "@lucide/svelte/icons/pin-off";
-	import Plus from "@lucide/svelte/icons/plus";
+import type { AppTrayEntry } from "$lib/stores/os.svelte";
+import { moveToDock, moveToTray } from "$lib/stores/os.svelte";
+import Box from "@lucide/svelte/icons/box";
+import Pin from "@lucide/svelte/icons/pin";
+import PinOff from "@lucide/svelte/icons/pin-off";
+import Plus from "@lucide/svelte/icons/plus";
+import AddMcpDialog from "./AddMcpDialog.svelte";
 
-	interface Props {
-		trayApps: AppTrayEntry[];
-		dockApps: AppTrayEntry[];
-		ondragtoboard: (id: string) => void;
+interface Props {
+	trayApps: AppTrayEntry[];
+	dockApps: AppTrayEntry[];
+	ondragtoboard: (id: string) => void;
+}
+
+let { trayApps, dockApps, ondragtoboard }: Props = $props();
+
+let showAddDialog = $state(false);
+
+function handleDragStart(e: DragEvent, id: string): void {
+	if (!e.dataTransfer) return;
+	e.dataTransfer.setData("text/plain", id);
+	e.dataTransfer.effectAllowed = "move";
+}
+
+async function toggleDock(app: AppTrayEntry): Promise<void> {
+	if (app.state === "dock") {
+		await moveToTray(app.id);
+	} else {
+		await moveToDock(app.id);
 	}
+}
 
-	const { trayApps, dockApps, ondragtoboard }: Props = $props();
-
-	let showAddDialog = $state(false);
-
-	function handleDragStart(e: DragEvent, id: string): void {
-		if (!e.dataTransfer) return;
-		e.dataTransfer.setData("text/plain", id);
-		e.dataTransfer.effectAllowed = "move";
-	}
-
-	async function toggleDock(app: AppTrayEntry): Promise<void> {
-		if (app.state === "dock") {
-			await moveToTray(app.id);
-		} else {
-			await moveToDock(app.id);
-		}
-	}
-
-	const allApps = $derived([...dockApps, ...trayApps]);
+const allApps = $derived([...dockApps, ...trayApps]);
 </script>
 
 <div class="app-dock">

@@ -69,7 +69,8 @@ describe("OpenClawConnector config patching", () => {
 
 		const patched = JSON.parse(readFileSync(configPath, "utf-8"));
 		expect(patched.agents.defaults.workspace).toBe("/home/other/.agents");
-		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(true);
+		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(false);
+		expect(patched.plugins.entries["signet-memory-openclaw"].enabled).toBe(true);
 
 		await connector.configureWorkspace(workspacePath);
 		const workspacePatched = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -110,7 +111,8 @@ describe("OpenClawConnector config patching", () => {
 		const patched = JSON.parse(readFileSync(configPath, "utf-8"));
 		// workspace unchanged since configureWorkspace is false
 		expect(patched.agents.defaults.workspace).toBe("/home/old/.agents");
-		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(true);
+		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(false);
+		expect(patched.plugins.entries["signet-memory-openclaw"].enabled).toBe(true);
 	});
 
 	it("does not execute non-JSON expressions while parsing configs", async () => {

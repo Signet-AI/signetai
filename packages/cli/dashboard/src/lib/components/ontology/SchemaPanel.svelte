@@ -1,118 +1,105 @@
 <script lang="ts">
-	import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-	import Filter from "@lucide/svelte/icons/filter";
-	import ChevronRight from "@lucide/svelte/icons/chevron-right";
-	import {
-		NODE_COLORS,
-		TABLE_NODE_FILTER,
-		TABLE_EDGE_FILTER,
-		SCHEMA_GROUPS,
-		GROUP_LABELS,
-		allVisibleTables,
-		type OntologyNodeKind,
-		type OntologyEdgeKind,
-		type SchemaGroup,
-	} from "./ontology-data";
-	import {
-		ontology,
-		selectSchemaTable,
-		toggleNodeKind,
-		toggleEdgeKind,
-	} from "./ontology-state.svelte";
+import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+import ChevronRight from "@lucide/svelte/icons/chevron-right";
+import Filter from "@lucide/svelte/icons/filter";
+import {
+	GROUP_LABELS,
+	NODE_COLORS,
+	type OntologyEdgeKind,
+	type OntologyNodeKind,
+	SCHEMA_GROUPS,
+	type SchemaGroup,
+	TABLE_EDGE_FILTER,
+	TABLE_NODE_FILTER,
+	allVisibleTables,
+} from "./ontology-data";
+import { ontology, selectSchemaTable, toggleEdgeKind, toggleNodeKind } from "./ontology-state.svelte";
 
-	interface Props {
-		agentId?: string;
+interface Props {
+	agentId?: string;
+}
+let { agentId = "default" }: Props = $props();
+
+// --- Node / edge kind definitions ---
+
+const NODE_KINDS: { kind: OntologyNodeKind; label: string }[] = [
+	{ kind: "entity", label: "Entities" },
+	{ kind: "aspect", label: "Aspects" },
+	{ kind: "attribute", label: "Attributes" },
+];
+
+const EDGE_COLORS: Record<OntologyEdgeKind, string> = {
+	dependency: "#d4a017",
+	has_aspect: "#8b5cf6",
+	has_attribute: "#06b6d4",
+};
+
+const EDGE_KINDS: { kind: OntologyEdgeKind; label: string }[] = [
+	{ kind: "dependency", label: "Dependencies" },
+	{ kind: "has_aspect", label: "Aspect links" },
+	{ kind: "has_attribute", label: "Attr links" },
+];
+
+// --- Presets (quick view combos) ---
+
+const PRESETS = [
+	{ id: "entities", label: "Entities", table: "entities" },
+	{ id: "aspects", label: "With Aspects", table: "entity_aspects" },
+	{ id: "full", label: "Full Graph", table: "entity_attributes" },
+] as const;
+
+// --- Derived counts ---
+
+const nodeCounts = $derived(
+	Object.fromEntries(
+		NODE_KINDS.map(({ kind }) => [kind, ontology.graphNodes.filter((n) => n.kind === kind).length]),
+	) as Record<OntologyNodeKind, number>,
+);
+
+const edgeCounts = $derived(
+	Object.fromEntries(
+		EDGE_KINDS.map(({ kind }) => [kind, ontology.graphEdges.filter((e) => e.kind === kind).length]),
+	) as Record<OntologyEdgeKind, number>,
+);
+
+const visibleCount = $derived(
+	ontology.graphNodes.filter((n) => {
+		if (!ontology.visibleNodeKinds.has(n.kind)) return false;
+		if (ontology.searchMatchIds !== null && !ontology.searchMatchIds.has(n.id)) return false;
+		return true;
+	}).length,
+);
+
+const totalCount = $derived(ontology.graphNodes.length);
+
+// Detect which preset matches current toggle state (if any)
+const activePreset = $derived.by(() => {
+	for (const p of PRESETS) {
+		const pNodes = TABLE_NODE_FILTER[p.table];
+		const pEdges = TABLE_EDGE_FILTER[p.table];
+		if (!pNodes || !pEdges) continue;
+		const nodesMatch =
+			ontology.visibleNodeKinds.size === pNodes.size && [...pNodes].every((k) => ontology.visibleNodeKinds.has(k));
+		const edgesMatch =
+			ontology.visibleEdgeKinds.size === pEdges.size && [...pEdges].every((k) => ontology.visibleEdgeKinds.has(k));
+		if (nodesMatch && edgesMatch) return p.id;
 	}
-	const { agentId = "default" }: Props = $props();
+	return null;
+});
 
-	// --- Node / edge kind definitions ---
+// --- Schema tables collapsed state ---
 
-	const NODE_KINDS: { kind: OntologyNodeKind; label: string }[] = [
-		{ kind: "entity", label: "Entities" },
-		{ kind: "aspect", label: "Aspects" },
-		{ kind: "attribute", label: "Attributes" },
-	];
+let schemaOpen = $state(false);
+const collapsed = $state<Record<string, boolean>>({
+	core: false,
+	provenance: true,
+	runtime: true,
+	internal: true,
+});
 
-	const EDGE_COLORS: Record<OntologyEdgeKind, string> = {
-		dependency: "#d4a017",
-		has_aspect: "#8b5cf6",
-		has_attribute: "#06b6d4",
-	};
-
-	const EDGE_KINDS: { kind: OntologyEdgeKind; label: string }[] = [
-		{ kind: "dependency", label: "Dependencies" },
-		{ kind: "has_aspect", label: "Aspect links" },
-		{ kind: "has_attribute", label: "Attr links" },
-	];
-
-	// --- Presets (quick view combos) ---
-
-	const PRESETS = [
-		{ id: "entities", label: "Entities", table: "entities" },
-		{ id: "aspects", label: "With Aspects", table: "entity_aspects" },
-		{ id: "full", label: "Full Graph", table: "entity_attributes" },
-	] as const;
-
-	// --- Derived counts ---
-
-	const nodeCounts = $derived(
-		Object.fromEntries(
-			NODE_KINDS.map(({ kind }) => [
-				kind,
-				ontology.graphNodes.filter((n) => n.kind === kind).length,
-			]),
-		) as Record<OntologyNodeKind, number>,
-	);
-
-	const edgeCounts = $derived(
-		Object.fromEntries(
-			EDGE_KINDS.map(({ kind }) => [
-				kind,
-				ontology.graphEdges.filter((e) => e.kind === kind).length,
-			]),
-		) as Record<OntologyEdgeKind, number>,
-	);
-
-	const visibleCount = $derived(
-		ontology.graphNodes.filter((n) => {
-			if (!ontology.visibleNodeKinds.has(n.kind)) return false;
-			if (ontology.searchMatchIds !== null && !ontology.searchMatchIds.has(n.id)) return false;
-			return true;
-		}).length,
-	);
-
-	const totalCount = $derived(ontology.graphNodes.length);
-
-	// Detect which preset matches current toggle state (if any)
-	const activePreset = $derived.by(() => {
-		for (const p of PRESETS) {
-			const pNodes = TABLE_NODE_FILTER[p.table];
-			const pEdges = TABLE_EDGE_FILTER[p.table];
-			if (!pNodes || !pEdges) continue;
-			const nodesMatch =
-				ontology.visibleNodeKinds.size === pNodes.size &&
-				[...pNodes].every((k) => ontology.visibleNodeKinds.has(k));
-			const edgesMatch =
-				ontology.visibleEdgeKinds.size === pEdges.size &&
-				[...pEdges].every((k) => ontology.visibleEdgeKinds.has(k));
-			if (nodesMatch && edgesMatch) return p.id;
-		}
-		return null;
-	});
-
-	// --- Schema tables collapsed state ---
-
-	let schemaOpen = $state(false);
-	const collapsed = $state<Record<string, boolean>>({
-		core: false,
-		provenance: true,
-		runtime: true,
-		internal: true,
-	});
-
-	function selectPreset(table: string): void {
-		selectSchemaTable(table, agentId);
-	}
+function selectPreset(table: string): void {
+	selectSchemaTable(table, agentId);
+}
 </script>
 
 <div class="filter-panel">

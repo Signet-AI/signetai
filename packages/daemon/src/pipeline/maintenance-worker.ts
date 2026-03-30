@@ -396,7 +396,11 @@ export function startMaintenanceWorker(
 								   OR (last_accessed IS NULL AND julianday('now') - julianday(created_at) > ?)
 								   OR (last_accessed IS NOT NULL AND julianday('now') - julianday(last_accessed) > ?))`,
 							)
-							.get(DEAD_MEMORY_DEFAULT_CONFIDENCE, DEAD_MEMORY_DEFAULT_ACCESS_DAYS, DEAD_MEMORY_DEFAULT_ACCESS_DAYS) as { n: number }
+							.get(
+								DEAD_MEMORY_DEFAULT_CONFIDENCE,
+								DEAD_MEMORY_DEFAULT_ACCESS_DAYS,
+								DEAD_MEMORY_DEFAULT_ACCESS_DAYS,
+							) as { n: number }
 					).n,
 			);
 			if (count > 100) {

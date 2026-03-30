@@ -7,7 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../core/src/migrations";
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,12 +17,9 @@ const TEST_DIR = join(tmpdir(), `signet-session-mem-test-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
 
 const { initDbAccessor, closeDbAccessor } = await import("./db-accessor");
-const {
-	recordSessionCandidates,
-	trackFtsHits,
-	parseFeedback,
-	recordAgentFeedbackInner,
-} = await import("./session-memories");
+const { recordSessionCandidates, trackFtsHits, parseFeedback, recordAgentFeedbackInner } = await import(
+	"./session-memories"
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -153,11 +150,7 @@ describe("recordSessionCandidates", () => {
 			{ id: "mem-bbb-222", effScore: 0.7, source: "effective" as const },
 		];
 
-		recordSessionCandidates(
-			"session-002",
-			candidates,
-			new Set(["mem-aaa-111"]),
-		);
+		recordSessionCandidates("session-002", candidates, new Set(["mem-aaa-111"]));
 
 		const testDb = openTestDb();
 		const rows = getSessionMemoryRows(testDb, "session-002");
@@ -168,15 +161,9 @@ describe("recordSessionCandidates", () => {
 	});
 
 	it("stores effective_score and final_score", () => {
-		const candidates = [
-			{ id: "mem-aaa-111", effScore: 0.85, source: "effective" as const },
-		];
+		const candidates = [{ id: "mem-aaa-111", effScore: 0.85, source: "effective" as const }];
 
-		recordSessionCandidates(
-			"session-003",
-			candidates,
-			new Set(["mem-aaa-111"]),
-		);
+		recordSessionCandidates("session-003", candidates, new Set(["mem-aaa-111"]));
 
 		const testDb = openTestDb();
 		const rows = getSessionMemoryRows(testDb, "session-003");
@@ -211,9 +198,7 @@ describe("recordSessionCandidates", () => {
 	});
 
 	it("stores provided agent_id", () => {
-		const candidates = [
-			{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const },
-		];
+		const candidates = [{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }];
 
 		recordSessionCandidates("session-agent-001", candidates, new Set(["mem-aaa-111"]), "agent-a");
 
@@ -226,20 +211,10 @@ describe("recordSessionCandidates", () => {
 	});
 
 	it("is idempotent (INSERT OR IGNORE on duplicate session+memory)", () => {
-		const candidates = [
-			{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const },
-		];
+		const candidates = [{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }];
 
-		recordSessionCandidates(
-			"session-004",
-			candidates,
-			new Set(["mem-aaa-111"]),
-		);
-		recordSessionCandidates(
-			"session-004",
-			candidates,
-			new Set(["mem-aaa-111"]),
-		);
+		recordSessionCandidates("session-004", candidates, new Set(["mem-aaa-111"]));
+		recordSessionCandidates("session-004", candidates, new Set(["mem-aaa-111"]));
 
 		const testDb = openTestDb();
 		const rows = getSessionMemoryRows(testDb, "session-004");
@@ -249,16 +224,12 @@ describe("recordSessionCandidates", () => {
 	});
 
 	it("bails on undefined sessionKey", () => {
-		const candidates = [
-			{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const },
-		];
+		const candidates = [{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }];
 
 		recordSessionCandidates(undefined, candidates, new Set(["mem-aaa-111"]));
 
 		const testDb = openTestDb();
-		const count = testDb
-			.prepare("SELECT COUNT(*) as cnt FROM session_memories")
-			.get() as { cnt: number };
+		const count = testDb.prepare("SELECT COUNT(*) as cnt FROM session_memories").get() as { cnt: number };
 		testDb.close();
 
 		expect(count.cnt).toBe(0);
@@ -268,24 +239,16 @@ describe("recordSessionCandidates", () => {
 		recordSessionCandidates("session-005", [], new Set());
 
 		const testDb = openTestDb();
-		const count = testDb
-			.prepare("SELECT COUNT(*) as cnt FROM session_memories")
-			.get() as { cnt: number };
+		const count = testDb.prepare("SELECT COUNT(*) as cnt FROM session_memories").get() as { cnt: number };
 		testDb.close();
 
 		expect(count.cnt).toBe(0);
 	});
 
 	it("sets source field correctly", () => {
-		const candidates = [
-			{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const },
-		];
+		const candidates = [{ id: "mem-aaa-111", effScore: 0.9, source: "effective" as const }];
 
-		recordSessionCandidates(
-			"session-006",
-			candidates,
-			new Set(["mem-aaa-111"]),
-		);
+		recordSessionCandidates("session-006", candidates, new Set(["mem-aaa-111"]));
 
 		const testDb = openTestDb();
 		const rows = getSessionMemoryRows(testDb, "session-006");
@@ -389,9 +352,7 @@ describe("trackFtsHits", () => {
 		trackFtsHits(undefined, ["mem-aaa-111"]);
 
 		const testDb = openTestDb();
-		const count = testDb
-			.prepare("SELECT COUNT(*) as cnt FROM session_memories")
-			.get() as { cnt: number };
+		const count = testDb.prepare("SELECT COUNT(*) as cnt FROM session_memories").get() as { cnt: number };
 		testDb.close();
 
 		expect(count.cnt).toBe(0);
@@ -401,9 +362,7 @@ describe("trackFtsHits", () => {
 		trackFtsHits("session-fts-4", []);
 
 		const testDb = openTestDb();
-		const count = testDb
-			.prepare("SELECT COUNT(*) as cnt FROM session_memories")
-			.get() as { cnt: number };
+		const count = testDb.prepare("SELECT COUNT(*) as cnt FROM session_memories").get() as { cnt: number };
 		testDb.close();
 
 		expect(count.cnt).toBe(0);

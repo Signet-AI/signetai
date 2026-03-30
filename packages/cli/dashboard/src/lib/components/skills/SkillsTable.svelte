@@ -25,9 +25,7 @@ let {
 	onuninstall,
 }: Props = $props();
 
-function isSearchResult(
-	item: Skill | SkillSearchResult,
-): item is SkillSearchResult {
+function isSearchResult(item: Skill | SkillSearchResult): item is SkillSearchResult {
 	return "installed" in item && "fullName" in item;
 }
 

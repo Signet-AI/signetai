@@ -33,11 +33,7 @@ export type RerankProvider = (
 // ---------------------------------------------------------------------------
 
 /** Pass-through provider — returns candidates unchanged. */
-export const noopReranker: RerankProvider = async (
-	_query,
-	candidates,
-	_cfg,
-) => candidates;
+export const noopReranker: RerankProvider = async (_query, candidates, _cfg) => candidates;
 
 // ---------------------------------------------------------------------------
 // Main
@@ -65,10 +61,7 @@ export async function rerank(
 			timerId = setTimeout(() => reject(new Error("reranker timeout")), cfg.timeoutMs);
 		});
 
-		const reranked = await Promise.race([
-			provider(query, head, cfg),
-			timer,
-		]);
+		const reranked = await Promise.race([provider(query, head, cfg), timer]);
 
 		return [...reranked, ...tail];
 	} catch {

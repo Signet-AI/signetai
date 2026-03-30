@@ -28,6 +28,7 @@ describe("workspace path resolution", () => {
 		const env = {
 			...process.env,
 			XDG_CONFIG_HOME: root,
+			SIGNET_PATH: "",
 		};
 		writeConfiguredWorkspacePath(join(root, "agent-home"), env);
 

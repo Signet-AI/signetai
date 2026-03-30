@@ -5,10 +5,7 @@
  * packages/core/src/migrations/. Graph data is fetched from the daemon API.
  */
 
-import type {
-	ConstellationGraph,
-	ConstellationEntity,
-} from "$lib/api";
+import type { ConstellationEntity, ConstellationGraph } from "$lib/api";
 
 // ---------------------------------------------------------------------------
 // Schema table registry (grouped by conceptual layer)
@@ -137,8 +134,8 @@ export const DEFAULT_EDGE_FILTER: ReadonlySet<OntologyEdgeKind> = new Set(["depe
 // ---------------------------------------------------------------------------
 
 export const NODE_COLORS: Record<OntologyNodeKind, string> = {
-	entity: "#3b82f6",    // blue
-	aspect: "#8b5cf6",    // violet
+	entity: "#3b82f6", // blue
+	aspect: "#8b5cf6", // violet
 	attribute: "#06b6d4", // cyan
 };
 
@@ -158,9 +155,10 @@ export const RELATED_GLOW: Record<OntologyNodeKind, string> = {
 // Build graph from live constellation API data
 // ---------------------------------------------------------------------------
 
-export function buildGraphFromConstellation(
-	data: ConstellationGraph,
-): { nodes: OntologyNode[]; edges: OntologyEdge[] } {
+export function buildGraphFromConstellation(data: ConstellationGraph): {
+	nodes: OntologyNode[];
+	edges: OntologyEdge[];
+} {
 	const nodes: OntologyNode[] = [];
 	const edges: OntologyEdge[] = [];
 
@@ -191,9 +189,7 @@ export function buildGraphFromConstellation(
 			});
 
 			for (const attr of asp.attributes ?? []) {
-				const short = attr.content.length > 30
-					? `${attr.content.slice(0, 30)}...`
-					: attr.content;
+				const short = attr.content.length > 30 ? `${attr.content.slice(0, 30)}...` : attr.content;
 				nodes.push({
 					id: attr.id,
 					kind: "attribute",
@@ -232,11 +228,7 @@ export function buildGraphFromConstellation(
 // Derive related IDs for selection highlighting
 // ---------------------------------------------------------------------------
 
-export function relatedIdsForEntity(
-	entityId: string,
-	nodes: OntologyNode[],
-	edges: OntologyEdge[],
-): Set<string> {
+export function relatedIdsForEntity(entityId: string, nodes: OntologyNode[], edges: OntologyEdge[]): Set<string> {
 	const related = new Set<string>();
 
 	// Aspects of this entity
@@ -264,9 +256,6 @@ export function relatedIdsForEntity(
 }
 
 /** Lookup entity name from constellation data */
-export function entityNameFromGraph(
-	entities: ConstellationEntity[],
-	id: string,
-): string {
+export function entityNameFromGraph(entities: ConstellationEntity[], id: string): string {
 	return entities.find((e) => e.id === id)?.name ?? id;
 }

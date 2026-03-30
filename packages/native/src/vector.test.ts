@@ -19,10 +19,7 @@ function tsCosineSimilarity(a: Float32Array, b: Float32Array): number {
 	return denom > 0 ? dot / denom : 0;
 }
 
-function tsBatchCosineSimilarity(
-	query: Float32Array,
-	matrix: Float32Array[],
-): number[] {
+function tsBatchCosineSimilarity(query: Float32Array, matrix: Float32Array[]): number[] {
 	return matrix.map((row) => tsCosineSimilarity(query, row));
 }
 
@@ -37,10 +34,7 @@ function tsNormaliseAxis(values: readonly number[], scale: number): number[] {
 	return values.map((v) => ((v - min) / range - 0.5) * scale);
 }
 
-function tsBuildExactKnnEdges(
-	projected: readonly number[][],
-	k: number,
-): [number, number][] {
+function tsBuildExactKnnEdges(projected: readonly number[][], k: number): [number, number][] {
 	const edgeSet = new Set<string>();
 	const result: [number, number][] = [];
 	for (let i = 0; i < projected.length; i++) {
@@ -77,9 +71,7 @@ function tsMergeHybridScores(
 	minScore: number,
 ): { id: string; score: number; source: string }[] {
 	const vectorMap = new Map(vectorIds.map((id, i) => [id, vectorScores[i]]));
-	const keywordMap = new Map(
-		keywordIds.map((id, i) => [id, keywordScores[i]]),
-	);
+	const keywordMap = new Map(keywordIds.map((id, i) => [id, keywordScores[i]]));
 	const allIds = new Set([...vectorIds, ...keywordIds]);
 	const results: { id: string; score: number; source: string }[] = [];
 
@@ -388,7 +380,14 @@ describe("buildKnnEdges", () => {
 	});
 
 	test("2 nodes produce one edge", () => {
-		const edges = native.buildKnnEdges([[0, 0], [1, 1]], 4, 450);
+		const edges = native.buildKnnEdges(
+			[
+				[0, 0],
+				[1, 1],
+			],
+			4,
+			450,
+		);
 		expect(edges.length).toBe(1);
 		expect(edges[0]).toEqual([0, 1]);
 	});
@@ -495,22 +494,8 @@ describe("mergeHybridScores", () => {
 		const alpha = 0.7;
 		const minScore = 0.1;
 
-		const rust = native.mergeHybridScores(
-			vectorIds,
-			vectorScores,
-			keywordIds,
-			keywordScores,
-			alpha,
-			minScore,
-		);
-		const ts = tsMergeHybridScores(
-			vectorIds,
-			vectorScores,
-			keywordIds,
-			keywordScores,
-			alpha,
-			minScore,
-		);
+		const rust = native.mergeHybridScores(vectorIds, vectorScores, keywordIds, keywordScores, alpha, minScore);
+		const ts = tsMergeHybridScores(vectorIds, vectorScores, keywordIds, keywordScores, alpha, minScore);
 
 		expect(rust.length).toBe(ts.length);
 		for (let i = 0; i < rust.length; i++) {
@@ -521,41 +506,20 @@ describe("mergeHybridScores", () => {
 	});
 
 	test("vector-only items get source 'vector'", () => {
-		const result = native.mergeHybridScores(
-			["a"],
-			[0.9],
-			[],
-			[],
-			0.5,
-			0.0,
-		);
+		const result = native.mergeHybridScores(["a"], [0.9], [], [], 0.5, 0.0);
 		expect(result.length).toBe(1);
 		expect(result[0].source).toBe("vector");
 		expect(result[0].score).toBe(0.9);
 	});
 
 	test("keyword-only items get source 'keyword'", () => {
-		const result = native.mergeHybridScores(
-			[],
-			[],
-			["a"],
-			[0.8],
-			0.5,
-			0.0,
-		);
+		const result = native.mergeHybridScores([], [], ["a"], [0.8], 0.5, 0.0);
 		expect(result.length).toBe(1);
 		expect(result[0].source).toBe("keyword");
 	});
 
 	test("hybrid items blend with alpha", () => {
-		const result = native.mergeHybridScores(
-			["a"],
-			[1.0],
-			["a"],
-			[0.5],
-			0.7,
-			0.0,
-		);
+		const result = native.mergeHybridScores(["a"], [1.0], ["a"], [0.5], 0.7, 0.0);
 		expect(result.length).toBe(1);
 		expect(result[0].source).toBe("hybrid");
 		// 0.7 * 1.0 + 0.3 * 0.5 = 0.85
@@ -563,27 +527,13 @@ describe("mergeHybridScores", () => {
 	});
 
 	test("minScore filters low results", () => {
-		const result = native.mergeHybridScores(
-			["a", "b"],
-			[0.9, 0.05],
-			[],
-			[],
-			0.5,
-			0.1,
-		);
+		const result = native.mergeHybridScores(["a", "b"], [0.9, 0.05], [], [], 0.5, 0.1);
 		expect(result.length).toBe(1);
 		expect(result[0].id).toBe("a");
 	});
 
 	test("results are sorted descending by score", () => {
-		const result = native.mergeHybridScores(
-			["a", "b", "c"],
-			[0.3, 0.9, 0.6],
-			[],
-			[],
-			0.5,
-			0.0,
-		);
+		const result = native.mergeHybridScores(["a", "b", "c"], [0.3, 0.9, 0.6], [], [], 0.5, 0.0);
 		for (let i = 1; i < result.length; i++) {
 			expect(result[i].score).toBeLessThanOrEqual(result[i - 1].score);
 		}

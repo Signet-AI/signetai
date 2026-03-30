@@ -52,9 +52,7 @@ export function detectSchema(db: {
 
 		// Get memory count
 		if (hasMemories) {
-			const countResult = db
-				.prepare("SELECT COUNT(*) as count FROM memories")
-				.get() as { count: number } | undefined;
+			const countResult = db.prepare("SELECT COUNT(*) as count FROM memories").get() as { count: number } | undefined;
 			memoryCount = countResult?.count || 0;
 		}
 	} catch {
@@ -62,9 +60,7 @@ export function detectSchema(db: {
 	}
 
 	try {
-		const convInfo = db
-			.prepare("PRAGMA table_info(conversations)")
-			.all() as Array<{ name: string }>;
+		const convInfo = db.prepare("PRAGMA table_info(conversations)").all() as Array<{ name: string }>;
 		hasConversations = convInfo.length > 0;
 	} catch {
 		hasConversations = false;
@@ -80,9 +76,7 @@ export function detectSchema(db: {
 	}
 
 	try {
-		db.prepare(
-			"SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts'",
-		).get();
+		db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts'").get();
 		hasFts = true;
 	} catch {
 		hasFts = false;
@@ -96,8 +90,7 @@ export function detectSchema(db: {
 		const hasPythonColumns = columns.includes("who") && columns.includes("why");
 
 		// CLI-v1 schema: has 'source', 'accessed_at', TEXT id
-		const hasCliV1Columns =
-			columns.includes("source") && columns.includes("accessed_at");
+		const hasCliV1Columns = columns.includes("source") && columns.includes("accessed_at");
 
 		// Core schema: has 'category', 'confidence', 'source_id', 'source_type', 'updated_by', 'vector_clock'
 		const hasCoreColumns =
@@ -118,9 +111,9 @@ export function detectSchema(db: {
 	// Get version from schema_migrations if it exists
 	let version = 0;
 	try {
-		const versionResult = db
-			.prepare("SELECT MAX(version) as version FROM schema_migrations")
-			.get() as { version: number } | undefined;
+		const versionResult = db.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
+			| { version: number }
+			| undefined;
 		version = versionResult?.version || 0;
 	} catch {
 		version = 0;
@@ -159,16 +152,12 @@ export function ensureMigrationsTableSchema(db: {
 
 	// Check if checksum column exists (migrate old schema)
 	try {
-		const columns = db
-			.prepare("PRAGMA table_info(schema_migrations)")
-			.all() as Array<{ name: string }>;
+		const columns = db.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
 		const hasChecksum = columns.some((col) => col.name === "checksum");
 
 		if (!hasChecksum) {
 			// Old schema without checksum - add the column with a default
-			db.exec(
-				"ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT 'migrated'",
-			);
+			db.exec("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT 'migrated'");
 		}
 	} catch {
 		// Table doesn't exist or other error - the CREATE above should handle it
@@ -315,29 +304,21 @@ function migrateFromPython(
 		const content = String(row.content || "");
 		const type = String(row.type || "fact");
 		const category = row.project ? String(row.project) : null;
-		const importance =
-			typeof row.importance === "number" ? row.importance : 0.5;
+		const importance = typeof row.importance === "number" ? row.importance : 0.5;
 		const sourceId = row.session_id ? String(row.session_id) : null;
 		const sourceType = row.session_id ? "session" : null;
-		const updatedAt =
-			row.last_accessed || row.created_at || new Date().toISOString();
+		const updatedAt = row.last_accessed || row.created_at || new Date().toISOString();
 		const updatedBy = row.who ? String(row.who) : "migration";
 		const lastAccessed = row.last_accessed ? String(row.last_accessed) : null;
-		const accessCount =
-			typeof row.access_count === "number" ? row.access_count : 0;
+		const accessCount = typeof row.access_count === "number" ? row.access_count : 0;
 		const pinned = row.pinned ? 1 : 0;
-		const createdAt = row.created_at
-			? String(row.created_at)
-			: new Date().toISOString();
+		const createdAt = row.created_at ? String(row.created_at) : new Date().toISOString();
 
 		// Build tags including 'why' if present
 		let tags: string[] = [];
 		if (row.tags) {
 			try {
-				tags =
-					typeof row.tags === "string"
-						? row.tags.split(",").map((t) => t.trim())
-						: [];
+				tags = typeof row.tags === "string" ? row.tags.split(",").map((t) => t.trim()) : [];
 			} catch {
 				tags = [];
 			}
@@ -463,19 +444,15 @@ function migrateFromCliV1(
 		const id = String(row.id);
 		const content = String(row.content || "");
 		const type = String(row.type || "fact");
-		const importance =
-			typeof row.importance === "number" ? row.importance : 0.5;
+		const importance = typeof row.importance === "number" ? row.importance : 0.5;
 		const sourceId = row.source ? String(row.source) : null;
 		const sourceType = row.source ? "import" : null;
 		const tags = row.tags ? String(row.tags) : "[]";
-		const createdAt = row.created_at
-			? String(row.created_at)
-			: new Date().toISOString();
+		const createdAt = row.created_at ? String(row.created_at) : new Date().toISOString();
 		const updatedAt = row.updated_at ? String(row.updated_at) : createdAt;
 		const updatedBy = "migration";
 		const lastAccessed = row.accessed_at ? String(row.accessed_at) : null;
-		const accessCount =
-			typeof row.access_count === "number" ? row.access_count : 0;
+		const accessCount = typeof row.access_count === "number" ? row.access_count : 0;
 
 		insert.run(
 			id,
@@ -506,9 +483,7 @@ function migrateFromCliV1(
   `);
 
 	if (migrated > 0) {
-		db.exec(
-			`INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories`,
-		);
+		db.exec(`INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories`);
 	}
 
 	return migrated;
@@ -641,9 +616,7 @@ export function ensureUnifiedSchema(db: {
 
 		// Unknown schema with memories - attempt to preserve data
 		if (schemaInfo.hasMemories && schemaInfo.memoryCount > 0) {
-			result.errors.push(
-				`Unknown schema with ${schemaInfo.memoryCount} memories - manual migration may be needed`,
-			);
+			result.errors.push(`Unknown schema with ${schemaInfo.memoryCount} memories - manual migration may be needed`);
 		}
 
 		// Create unified schema anyway

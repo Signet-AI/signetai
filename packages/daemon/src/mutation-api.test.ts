@@ -1,12 +1,4 @@
-import {
-	afterAll,
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	it,
-} from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,10 +50,7 @@ function seedMemory(args: {
 			createdAt: now,
 		});
 		if (args.version && args.version > 1) {
-			db.prepare("UPDATE memories SET version = ? WHERE id = ?").run(
-				args.version,
-				args.id,
-			);
+			db.prepare("UPDATE memories SET version = ? WHERE id = ?").run(args.version, args.id);
 		}
 	});
 }
@@ -205,10 +194,7 @@ describe("mutation API routes", () => {
 			pinned: 1,
 		});
 
-		const res = await app.request(
-			"http://localhost/api/memory/mem-pinned?reason=cleanup",
-			{ method: "DELETE" },
-		);
+		const res = await app.request("http://localhost/api/memory/mem-pinned?reason=cleanup", { method: "DELETE" });
 		const json = (await res.json()) as { status?: string };
 
 		expect(res.status).toBe(409);
@@ -295,35 +281,29 @@ describe("mutation API routes", () => {
 		expect(previewJson.requiresConfirm).toBe(true);
 		expect(previewJson.confirmToken.length).toBeGreaterThan(0);
 
-		const executeWithoutConfirm = await app.request(
-			"http://localhost/api/memory/forget",
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					mode: "execute",
-					type: "fact",
-					limit: 26,
-					reason: "bulk cleanup",
-				}),
-			},
-		);
+		const executeWithoutConfirm = await app.request("http://localhost/api/memory/forget", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				mode: "execute",
+				type: "fact",
+				limit: 26,
+				reason: "bulk cleanup",
+			}),
+		});
 		expect(executeWithoutConfirm.status).toBe(400);
 
-		const executeWithConfirm = await app.request(
-			"http://localhost/api/memory/forget",
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					mode: "execute",
-					type: "fact",
-					limit: 26,
-					reason: "bulk cleanup",
-					confirm_token: previewJson.confirmToken,
-				}),
-			},
-		);
+		const executeWithConfirm = await app.request("http://localhost/api/memory/forget", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				mode: "execute",
+				type: "fact",
+				limit: 26,
+				reason: "bulk cleanup",
+				confirm_token: previewJson.confirmToken,
+			}),
+		});
 		const executeJson = (await executeWithConfirm.json()) as {
 			mode: string;
 			requested: number;
@@ -356,9 +336,7 @@ describe("mutation API routes", () => {
 		const json = (await res.json()) as { error?: string };
 
 		expect(res.status).toBe(400);
-		expect(json.error).toContain(
-			"if_version is not supported for batch forget",
-		);
+		expect(json.error).toContain("if_version is not supported for batch forget");
 	});
 
 	it("GET /api/memory/:id/history returns ordered mutation events", async () => {
@@ -368,28 +346,22 @@ describe("mutation API routes", () => {
 			contentHash: "hash-history",
 		});
 
-		const patchRes = await app.request(
-			"http://localhost/api/memory/mem-history",
-			{
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					tags: "edited",
-					reason: "history test edit",
-				}),
-			},
-		);
+		const patchRes = await app.request("http://localhost/api/memory/mem-history", {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				tags: "edited",
+				reason: "history test edit",
+			}),
+		});
 		expect(patchRes.status).toBe(200);
 
-		const forgetRes = await app.request(
-			"http://localhost/api/memory/mem-history?reason=history test delete",
-			{ method: "DELETE" },
-		);
+		const forgetRes = await app.request("http://localhost/api/memory/mem-history?reason=history test delete", {
+			method: "DELETE",
+		});
 		expect(forgetRes.status).toBe(200);
 
-		const historyRes = await app.request(
-			"http://localhost/api/memory/mem-history/history",
-		);
+		const historyRes = await app.request("http://localhost/api/memory/mem-history/history");
 		const historyJson = (await historyRes.json()) as {
 			memoryId: string;
 			count: number;
@@ -412,28 +384,22 @@ describe("mutation API routes", () => {
 			contentHash: "hash-recover",
 		});
 
-		const forgetRes = await app.request(
-			"http://localhost/api/memory/mem-recover?reason=cleanup",
-			{ method: "DELETE" },
-		);
+		const forgetRes = await app.request("http://localhost/api/memory/mem-recover?reason=cleanup", { method: "DELETE" });
 		expect(forgetRes.status).toBe(200);
 
-		const recoverRes = await app.request(
-			"http://localhost/api/memory/mem-recover/recover",
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ reason: "rollback delete" }),
-			},
-		);
+		const recoverRes = await app.request("http://localhost/api/memory/mem-recover/recover", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ reason: "rollback delete" }),
+		});
 		const recoverJson = (await recoverRes.json()) as { status?: string };
 		expect(recoverRes.status).toBe(200);
 		expect(recoverJson.status).toBe("recovered");
 
 		const row = getDbAccessor().withReadDb((db) => {
-			return db
-				.prepare("SELECT is_deleted FROM memories WHERE id = ?")
-				.get("mem-recover") as { is_deleted: number } | undefined;
+			return db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get("mem-recover") as
+				| { is_deleted: number }
+				| undefined;
 		});
 		expect(row?.is_deleted).toBe(0);
 	});
@@ -445,9 +411,7 @@ describe("mutation API routes", () => {
 			contentHash: "hash-recover-expired",
 		});
 
-		const expiredDeletedAt = new Date(
-			Date.now() - 31 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const expiredDeletedAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`UPDATE memories
@@ -456,14 +420,11 @@ describe("mutation API routes", () => {
 			).run(expiredDeletedAt, "mem-recover-expired");
 		});
 
-		const recoverRes = await app.request(
-			"http://localhost/api/memory/mem-recover-expired/recover",
-			{
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ reason: "too late" }),
-			},
-		);
+		const recoverRes = await app.request("http://localhost/api/memory/mem-recover-expired/recover", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ reason: "too late" }),
+		});
 		const recoverJson = (await recoverRes.json()) as { status?: string };
 
 		expect(recoverRes.status).toBe(409);

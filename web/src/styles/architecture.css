@@ -102,9 +102,8 @@
 	border-radius: 0.5rem;
 	padding: var(--space-lg);
 	position: relative;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 2px 4px rgba(0,0,0,0.5);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.5);
 }
-
 
 .arch-flow-title {
 	font-family: var(--font-display);

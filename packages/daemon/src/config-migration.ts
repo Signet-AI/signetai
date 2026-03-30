@@ -28,10 +28,7 @@ const FLIP_TRUE = [
 const NESTED_PARENTS = ["graph", "reranker", "autonomous", "predictor"] as const;
 
 function flip(text: string, key: string): string {
-	return text.replace(
-		new RegExp(`^(\\s*${key}:\\s*)false(\\s*(?:#.*)?)$`, "m"),
-		"$1true$2",
-	);
+	return text.replace(new RegExp(`^(\\s*${key}:\\s*)false(\\s*(?:#.*)?)$`, "m"), "$1true$2");
 }
 
 // Require 2+ leading spaces so we only match inside a nested block (pipelineV2),
@@ -39,19 +36,13 @@ function flip(text: string, key: string): string {
 // Use \r?\n to handle both LF and CRLF files.
 function flipNested(text: string, parent: string): string {
 	return text.replace(
-		new RegExp(
-			`(^[ ]{2,}${parent}:\\s*(?:\\r?\\n)(?:\\s+\\w+:.*(?:\\r?\\n))*?\\s+enabled:\\s*)false`,
-			"m",
-		),
+		new RegExp(`(^[ ]{2,}${parent}:\\s*(?:\\r?\\n)(?:\\s+\\w+:.*(?:\\r?\\n))*?\\s+enabled:\\s*)false`, "m"),
 		"$1true",
 	);
 }
 
 function flipTelemetryOff(text: string): string {
-	return text.replace(
-		/^(\s*trainingTelemetry:\s*)true(\s*(?:#.*)?)$/m,
-		"$1false$2",
-	);
+	return text.replace(/^(\s*trainingTelemetry:\s*)true(\s*(?:#.*)?)$/m, "$1false$2");
 }
 
 export function migrateConfig(agentsDir: string): void {

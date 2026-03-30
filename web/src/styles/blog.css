@@ -110,9 +110,7 @@
 	border-radius: 3px;
 	text-decoration: none;
 	text-transform: lowercase;
-	transition: color var(--dur) var(--ease),
-		border-color var(--dur) var(--ease),
-		background-color var(--dur) var(--ease);
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
 }
 
 .blog-tag:hover {
@@ -521,10 +519,7 @@
 	color: var(--color-text-muted);
 	text-decoration: none;
 	cursor: pointer;
-	transition:
-		color var(--dur) var(--ease),
-		border-color var(--dur) var(--ease),
-		background-color var(--dur) var(--ease);
+	transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
 }
 
 .blog-share-btn:hover {

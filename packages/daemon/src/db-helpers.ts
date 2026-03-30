@@ -58,11 +58,7 @@ function invalidateUmapCache(db: WriteDb): void {
 
 function vecTableExists(db: WriteDb): boolean {
 	try {
-		const row = db
-			.prepare(
-				"SELECT name FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'",
-			)
-			.get();
+		const row = db.prepare("SELECT name FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get();
 		return row !== undefined;
 	} catch {
 		return false;
@@ -73,18 +69,12 @@ function vecTableExists(db: WriteDb): boolean {
  * Insert or replace a vector in vec_embeddings after writing to embeddings.
  * `embeddingId` must match the embeddings.id value.
  */
-export function syncVecInsert(
-	db: WriteDb,
-	embeddingId: string,
-	vector: readonly number[],
-): void {
+export function syncVecInsert(db: WriteDb, embeddingId: string, vector: readonly number[]): void {
 	invalidateUmapCache(db);
 	if (!vecTableExists(db)) return;
 	try {
 		const f32 = new Float32Array(vector);
-		db.prepare(
-			"INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)",
-		).run(embeddingId, f32);
+		db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(embeddingId, f32);
 	} catch {
 		// sqlite-vec not loaded or schema mismatch — non-fatal
 	}
@@ -94,10 +84,7 @@ export function syncVecInsert(
  * Remove rows from vec_embeddings that match embedding ids.
  * Call after deleting from the embeddings table.
  */
-export function syncVecDeleteByEmbeddingIds(
-	db: WriteDb,
-	embeddingIds: readonly string[],
-): void {
+export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly string[]): void {
 	if (embeddingIds.length === 0) return;
 	invalidateUmapCache(db);
 	if (!vecTableExists(db)) return;
@@ -115,18 +102,12 @@ export function syncVecDeleteByEmbeddingIds(
  * Remove all vec_embeddings rows for a given memory (via embeddings join).
  * Use before deleting from embeddings by source_id.
  */
-export function syncVecDeleteBySourceId(
-	db: WriteDb,
-	sourceType: string,
-	sourceId: string,
-): void {
+export function syncVecDeleteBySourceId(db: WriteDb, sourceType: string, sourceId: string): void {
 	invalidateUmapCache(db);
 	if (!vecTableExists(db)) return;
 	try {
 		const rows = db
-			.prepare(
-				"SELECT id FROM embeddings WHERE source_type = ? AND source_id = ?",
-			)
+			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ?")
 			.all(sourceType, sourceId) as Array<{ id: string }>;
 		if (rows.length === 0) return;
 		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
@@ -152,9 +133,7 @@ export function syncVecDeleteBySourceExceptHash(
 	if (!vecTableExists(db)) return;
 	try {
 		const rows = db
-			.prepare(
-				"SELECT id FROM embeddings WHERE source_type = ? AND source_id = ? AND content_hash <> ?",
-			)
+			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ? AND content_hash <> ?")
 			.all(sourceType, sourceId, keepContentHash) as Array<{ id: string }>;
 		if (rows.length === 0) return;
 		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");

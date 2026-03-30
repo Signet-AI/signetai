@@ -19,7 +19,5 @@ export function confirmDiscardChanges(action: string): boolean {
 	if (!hasUnsavedChanges()) return true;
 	if (typeof window === "undefined") return true;
 
-	return window.confirm(
-		`You have unsaved changes in Settings. Leave anyway to ${action}?`,
-	);
+	return window.confirm(`You have unsaved changes in Settings. Leave anyway to ${action}?`);
 }

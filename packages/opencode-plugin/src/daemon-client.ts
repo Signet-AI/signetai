@@ -141,11 +141,7 @@ export function createDaemonClient(daemonUrl: string): DaemonClient {
 			return daemonFetch<T>(daemonUrl, path, { timeout });
 		},
 
-		post<T>(
-			path: string,
-			body: unknown,
-			timeout = WRITE_TIMEOUT,
-		): Promise<T | null> {
+		post<T>(path: string, body: unknown, timeout = WRITE_TIMEOUT): Promise<T | null> {
 			return daemonFetch<T>(daemonUrl, path, {
 				method: "POST",
 				body,
@@ -153,11 +149,7 @@ export function createDaemonClient(daemonUrl: string): DaemonClient {
 			});
 		},
 
-		postResult<T>(
-			path: string,
-			body: unknown,
-			timeout = WRITE_TIMEOUT,
-		): Promise<DaemonFetchResult<T>> {
+		postResult<T>(path: string, body: unknown, timeout = WRITE_TIMEOUT): Promise<DaemonFetchResult<T>> {
 			return daemonFetchResult<T>(daemonUrl, path, {
 				method: "POST",
 				body,
@@ -165,11 +157,7 @@ export function createDaemonClient(daemonUrl: string): DaemonClient {
 			});
 		},
 
-		patch<T>(
-			path: string,
-			body: unknown,
-			timeout = WRITE_TIMEOUT,
-		): Promise<T | null> {
+		patch<T>(path: string, body: unknown, timeout = WRITE_TIMEOUT): Promise<T | null> {
 			return daemonFetch<T>(daemonUrl, path, {
 				method: "PATCH",
 				body,

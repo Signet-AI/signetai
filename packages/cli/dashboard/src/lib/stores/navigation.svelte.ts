@@ -180,8 +180,7 @@ export function setTab(tab: TabId): boolean {
 
 export function navigateToGroup(group: NavGroup): boolean {
 	if (group === "cortex") return setTab(lastCortexTab.value);
-	const tab =
-		group === "memory" ? lastMemoryTab.value : lastEngineTab.value;
+	const tab = group === "memory" ? lastMemoryTab.value : lastEngineTab.value;
 	return setTab(tab);
 }
 

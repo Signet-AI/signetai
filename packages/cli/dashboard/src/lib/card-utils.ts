@@ -49,6 +49,7 @@ export function getAvatarUrl(sourceUrl: string | undefined): string | null {
 export function getAvatarFromSource(source: string | undefined, catalogId: string | undefined): string | null {
 	if (!source) return null;
 	if (source === "modelcontextprotocol/servers") return "https://github.com/modelcontextprotocol.png?size=40";
-	if (source === "github" && catalogId?.includes("/")) return `https://github.com/${catalogId.split("/")[0]}.png?size=40`;
+	if (source === "github" && catalogId?.includes("/"))
+		return `https://github.com/${catalogId.split("/")[0]}.png?size=40`;
 	return null;
 }

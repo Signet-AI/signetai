@@ -3,18 +3,18 @@
  * All data is fetched from the daemon API
  */
 
-import type { PageLoad } from "./$types";
 import {
-	getConfigFiles,
-	getIdentity,
-	getMemories,
-	getHarnesses,
 	type ConfigFile,
+	type Harness,
+	type Identity,
 	type Memory,
 	type MemoryStats,
-	type Identity,
-	type Harness,
+	getConfigFiles,
+	getHarnesses,
+	getIdentity,
+	getMemories,
 } from "$lib/api";
+import type { PageLoad } from "./$types";
 
 export const ssr = false; // Disable SSR - this is a client-side app
 export const prerender = false;

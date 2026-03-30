@@ -10,10 +10,7 @@
 
 import type { LlmProvider } from "../types";
 import type { ChunkResult, ExtractionResult } from "./types";
-import {
-	parseExtractionResponse as sharedParseExtractionResponse,
-	type ParseOptions,
-} from "./response-parser";
+import { parseExtractionResponse as sharedParseExtractionResponse, type ParseOptions } from "./response-parser";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -35,11 +32,7 @@ export const DEFAULT_EXTRACTOR_CONFIG: ExtractionOptions = {
 // The Extraction Prompt
 // ---------------------------------------------------------------------------
 
-function buildExtractionPrompt(
-	chunkText: string,
-	sourceTitle: string | null,
-	sourceSection: string | null,
-): string {
+function buildExtractionPrompt(chunkText: string, sourceTitle: string | null, sourceSection: string | null): string {
 	const context: string[] = [];
 	if (sourceTitle) context.push(`Document: "${sourceTitle}"`);
 	if (sourceSection) context.push(`Section: "${sourceSection}"`);
@@ -141,11 +134,7 @@ export async function extractFromChunk(
 	provider: LlmProvider,
 	opts: ExtractionOptions = DEFAULT_EXTRACTOR_CONFIG,
 ): Promise<ExtractionResult> {
-	const prompt = buildExtractionPrompt(
-		chunk.text,
-		sourceTitle,
-		chunk.sourceSection,
-	);
+	const prompt = buildExtractionPrompt(chunk.text, sourceTitle, chunk.sourceSection);
 
 	try {
 		const response = await provider.generate(prompt);
@@ -198,11 +187,19 @@ export async function extractFromChunks(
 
 /** Valid types for document extraction */
 const DOCUMENT_VALID_TYPES = new Set([
-	"fact", "decision", "rationale", "preference",
-	"procedural", "semantic", "system",
+	"fact",
+	"decision",
+	"rationale",
+	"preference",
+	"procedural",
+	"semantic",
+	"system",
 	// Allow these additional types gracefully
-	"configuration", "architectural", "relationship",
-	"episodic", "daily-log",
+	"configuration",
+	"architectural",
+	"relationship",
+	"episodic",
+	"daily-log",
 ]);
 
 /** Map non-standard types to canonical MemoryType values */
@@ -213,10 +210,7 @@ const DOCUMENT_TYPE_MAP: Record<string, string> = {
 	commitment: "decision",
 };
 
-function parseExtractionResponse(
-	raw: string,
-	minConfidence: number,
-) {
+function parseExtractionResponse(raw: string, minConfidence: number) {
 	const opts: ParseOptions = {
 		minConfidence,
 		validTypes: DOCUMENT_VALID_TYPES,

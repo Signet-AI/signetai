@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
 import type { PipelineV2Config } from "../memory-config";
 import { createProviderTracker } from "../diagnostics";
@@ -112,12 +112,7 @@ describe("maintenance-worker", () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
-		const handle = startMaintenanceWorker(
-			accessor,
-			BASE_CFG,
-			tracker,
-			null,
-		);
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
 		handle.stop();
 
 		const result = await handle.tick();
@@ -146,12 +141,7 @@ describe("maintenance-worker", () => {
 			).run(`dead-${i}`, `mem-dead-${i}`, now, now, now);
 		}
 
-		const handle = startMaintenanceWorker(
-			accessor,
-			BASE_CFG,
-			tracker,
-			null,
-		);
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
 		handle.stop();
 
 		const result = await handle.tick();
@@ -177,23 +167,15 @@ describe("maintenance-worker", () => {
 			 VALUES (?, ?, 'extract', 'completed', 1, 3, ?, ?, ?)`,
 		).run("comp-exec-1", "mem-comp-1", now, now, now);
 
-		const handle = startMaintenanceWorker(
-			accessor,
-			BASE_CFG,
-			tracker,
-			null,
-		);
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
 		handle.stop();
 
 		const result = await handle.tick();
 		expect(result.executed.length).toBeGreaterThan(0);
 
 		// Dead jobs should be requeued
-		const deadCount = (
-			db
-				.prepare("SELECT COUNT(*) as n FROM memory_jobs WHERE status = 'dead'")
-				.get() as { n: number }
-		).n;
+		const deadCount = (db.prepare("SELECT COUNT(*) as n FROM memory_jobs WHERE status = 'dead'").get() as { n: number })
+			.n;
 		expect(deadCount).toBe(0);
 		db.close();
 	});
@@ -219,12 +201,7 @@ describe("maintenance-worker", () => {
 			 VALUES (?, ?, 'extract', 'completed', 1, 3, ?, ?, ?)`,
 		).run("comp-obs", "mem-comp-obs", now, now, now);
 
-		const handle = startMaintenanceWorker(
-			accessor,
-			observeCfg,
-			tracker,
-			null,
-		);
+		const handle = startMaintenanceWorker(accessor, observeCfg, tracker, null);
 		handle.stop();
 
 		const result = await handle.tick();
@@ -232,11 +209,8 @@ describe("maintenance-worker", () => {
 		expect(result.executed).toHaveLength(0);
 
 		// Dead jobs still dead
-		const deadCount = (
-			db
-				.prepare("SELECT COUNT(*) as n FROM memory_jobs WHERE status = 'dead'")
-				.get() as { n: number }
-		).n;
+		const deadCount = (db.prepare("SELECT COUNT(*) as n FROM memory_jobs WHERE status = 'dead'").get() as { n: number })
+			.n;
 		expect(deadCount).toBe(3);
 		db.close();
 	});
@@ -250,12 +224,7 @@ describe("maintenance-worker", () => {
 			autonomous: { ...BASE_CFG.autonomous, enabled: false },
 		};
 
-		const handle = startMaintenanceWorker(
-			accessor,
-			disabledCfg,
-			tracker,
-			null,
-		);
+		const handle = startMaintenanceWorker(accessor, disabledCfg, tracker, null);
 
 		// tick() still works for manual invocation
 		const result = await handle.tick();
@@ -277,12 +246,7 @@ describe("maintenance-worker", () => {
 			 VALUES (?, ?, 'extract', 'leased', 1, 3, ?, ?, ?)`,
 		).run("stale-lease-1", "mem-stale-1", oldLease, oldLease, now);
 
-		const handle = startMaintenanceWorker(
-			accessor,
-			BASE_CFG,
-			tracker,
-			null,
-		);
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
 		handle.stop();
 
 		const result = await handle.tick();
@@ -302,14 +266,7 @@ describe("maintenance-worker", () => {
 			db.prepare(
 				`INSERT INTO memories (id, type, content, confidence, tags, created_at, updated_at, updated_by, version, manual_override, is_deleted, deleted_at)
 				 VALUES (?, 'fact', ?, 0.9, '[]', ?, ?, 'test', 1, 0, ?, ?)`,
-			).run(
-				`mem-tomb-${i}`,
-				`content ${i}`,
-				now,
-				now,
-				isDeleted,
-				isDeleted ? now : null,
-			);
+			).run(`mem-tomb-${i}`, `content ${i}`, now, now, isDeleted, isDeleted ? now : null);
 		}
 
 		let sweepCalled = false;
@@ -319,12 +276,7 @@ describe("maintenance-worker", () => {
 			},
 		};
 
-		const handle = startMaintenanceWorker(
-			accessor,
-			BASE_CFG,
-			tracker,
-			mockRetention,
-		);
+		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, mockRetention);
 		handle.stop();
 
 		const result = await handle.tick();

@@ -1,12 +1,12 @@
 <script lang="ts">
-	import type { Snippet } from "svelte";
+import type { Snippet } from "svelte";
 
-	interface Props {
-		description?: string;
-		children: Snippet;
-	}
+interface Props {
+	description?: string;
+	children: Snippet;
+}
 
-	const { description, children }: Props = $props();
+let { description, children }: Props = $props();
 </script>
 
 <div class="form-section">

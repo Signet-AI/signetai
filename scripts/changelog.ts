@@ -6,8 +6,7 @@ import { computeBumpLevel } from "./bump-level";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
 const PACKAGE_JSON_PATH = "packages/signetai/package.json";
-const CHANGELOG_HEADER =
-	"# Changelog\n\nAll notable changes to Signet are documented here.\n";
+const CHANGELOG_HEADER = "# Changelog\n\nAll notable changes to Signet are documented here.\n";
 
 const INCLUDE_TYPES: Record<string, string> = {
 	feat: "Features",
@@ -76,11 +75,7 @@ function buildSection(title: string, entries: string[]): string {
 	return `### ${title}\n\n${entries.join("\n")}\n`;
 }
 
-function buildNewEntry(
-	version: string,
-	date: string,
-	groups: Map<string, string[]>,
-): string {
+function buildNewEntry(version: string, date: string, groups: Map<string, string[]>): string {
 	const sectionOrder = ["feat", "fix", "perf", "refactor", "docs"];
 	const sections: string[] = [];
 
@@ -125,10 +120,7 @@ function main(): void {
 	writeFileSync(".bump-level", bumpLevel);
 	console.log(`Bump level: ${bumpLevel}`);
 
-	const totalEntries = [...groups.values()].reduce(
-		(sum, arr) => sum + arr.length,
-		0,
-	);
+	const totalEntries = [...groups.values()].reduce((sum, arr) => sum + arr.length, 0);
 
 	if (totalEntries === 0) {
 		console.log("No notable commits found. CHANGELOG.md not modified.");
@@ -137,13 +129,9 @@ function main(): void {
 
 	const newEntry = buildNewEntry(version, date, groups);
 
-	const existing = existsSync(CHANGELOG_PATH)
-		? readFileSync(CHANGELOG_PATH, "utf8")
-		: "";
+	const existing = existsSync(CHANGELOG_PATH) ? readFileSync(CHANGELOG_PATH, "utf8") : "";
 
-	const body = existing.startsWith("# Changelog")
-		? existing.slice(CHANGELOG_HEADER.length)
-		: existing;
+	const body = existing.startsWith("# Changelog") ? existing.slice(CHANGELOG_HEADER.length) : existing;
 
 	writeFileSync(CHANGELOG_PATH, `${CHANGELOG_HEADER}\n${newEntry}${body}`);
 

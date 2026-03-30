@@ -1,42 +1,42 @@
 <script lang="ts">
-	import { Calendar as CalendarPrimitive } from "bits-ui";
-	import * as Calendar from "./index.js";
-	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
-	import type { ButtonVariant } from "../button/button.svelte";
-	import { isEqualMonth, type DateValue } from "@internationalized/date";
-	import type { Snippet } from "svelte";
+import { type WithoutChildrenOrChild, cn } from "$lib/utils.js";
+import { type DateValue, isEqualMonth } from "@internationalized/date";
+import { Calendar as CalendarPrimitive } from "bits-ui";
+import type { Snippet } from "svelte";
+import type { ButtonVariant } from "../button/button.svelte";
+import * as Calendar from "./index.js";
 
-	let {
-		ref = $bindable(null),
-		value = $bindable(),
-		placeholder = $bindable(),
-		class: className,
-		weekdayFormat = "short",
-		buttonVariant = "ghost",
-		captionLayout = "label",
-		locale = "en-US",
-		months: monthsProp,
-		years,
-		monthFormat: monthFormatProp,
-		yearFormat = "numeric",
-		day,
-		disableDaysOutsideMonth = false,
-		...restProps
-	}: WithoutChildrenOrChild<CalendarPrimitive.RootProps> & {
-		buttonVariant?: ButtonVariant;
-		captionLayout?: "dropdown" | "dropdown-months" | "dropdown-years" | "label";
-		months?: CalendarPrimitive.MonthSelectProps["months"];
-		years?: CalendarPrimitive.YearSelectProps["years"];
-		monthFormat?: CalendarPrimitive.MonthSelectProps["monthFormat"];
-		yearFormat?: CalendarPrimitive.YearSelectProps["yearFormat"];
-		day?: Snippet<[{ day: DateValue; outsideMonth: boolean }]>;
-	} = $props();
+let {
+	ref = $bindable(null),
+	value = $bindable(),
+	placeholder = $bindable(),
+	class: className,
+	weekdayFormat = "short",
+	buttonVariant = "ghost",
+	captionLayout = "label",
+	locale = "en-US",
+	months: monthsProp,
+	years,
+	monthFormat: monthFormatProp,
+	yearFormat = "numeric",
+	day,
+	disableDaysOutsideMonth = false,
+	...restProps
+}: WithoutChildrenOrChild<CalendarPrimitive.RootProps> & {
+	buttonVariant?: ButtonVariant;
+	captionLayout?: "dropdown" | "dropdown-months" | "dropdown-years" | "label";
+	months?: CalendarPrimitive.MonthSelectProps["months"];
+	years?: CalendarPrimitive.YearSelectProps["years"];
+	monthFormat?: CalendarPrimitive.MonthSelectProps["monthFormat"];
+	yearFormat?: CalendarPrimitive.YearSelectProps["yearFormat"];
+	day?: Snippet<[{ day: DateValue; outsideMonth: boolean }]>;
+} = $props();
 
-	const monthFormat = $derived.by(() => {
-		if (monthFormatProp) return monthFormatProp;
-		if (captionLayout.startsWith("dropdown")) return "short";
-		return "long";
-	});
+const monthFormat = $derived.by(() => {
+	if (monthFormatProp) return monthFormatProp;
+	if (captionLayout.startsWith("dropdown")) return "short";
+	return "long";
+});
 </script>
 
 <!--

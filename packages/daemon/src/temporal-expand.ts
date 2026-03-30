@@ -1,5 +1,18 @@
 import { getDbAccessor } from "./db-accessor";
 
+type TemporalQuery = {
+	get(...args: ReadonlyArray<unknown>): unknown;
+	all(...args: ReadonlyArray<unknown>): unknown[];
+};
+
+type TemporalDb = {
+	prepare(sql: string): TemporalQuery;
+};
+
+type TemporalAccessor = {
+	withReadDb<T>(fn: (db: TemporalDb) => T): T;
+};
+
 interface RawNode {
 	readonly id: string;
 	readonly project: string | null;
@@ -135,9 +148,11 @@ export function expandTemporalNode(
 		readonly includeTranscript?: boolean;
 		readonly project?: string;
 		readonly transcriptCharLimit?: number;
+		readonly accessor?: TemporalAccessor;
 	},
 ): TemporalExpandResult | null {
-	return getDbAccessor().withReadDb((db) => {
+	const accessor = opts?.accessor ?? getDbAccessor();
+	return accessor.withReadDb((db) => {
 		const table = db
 			.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
 			.get();

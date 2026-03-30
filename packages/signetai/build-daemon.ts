@@ -3,12 +3,7 @@
  * packages/daemon/build.ts with the same externals and aliases.
  */
 
-const EXTERNAL = [
-	"better-sqlite3",
-	"@1password/sdk",
-	"onnxruntime-node",
-	"@huggingface/transformers",
-];
+const EXTERNAL = ["better-sqlite3", "@1password/sdk", "onnxruntime-node", "@huggingface/transformers"];
 
 const ALIAS = {
 	sharp: "../daemon/src/shims/sharp.ts",

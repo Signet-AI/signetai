@@ -22,9 +22,7 @@ export function initLlmProvider(instance: LlmProvider): void {
 
 export function getLlmProvider(): LlmProvider {
 	if (!provider) {
-		throw new Error(
-			"LlmProvider not initialised — call initLlmProvider() first",
-		);
+		throw new Error("LlmProvider not initialised — call initLlmProvider() first");
 	}
 	return provider;
 }

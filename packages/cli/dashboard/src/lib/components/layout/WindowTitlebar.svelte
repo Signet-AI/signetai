@@ -1,118 +1,109 @@
 <script lang="ts">
-	import { titlebar, type DecorationMode } from "$lib/stores/titlebar.svelte";
-	import Minus from "@lucide/svelte/icons/minus";
-	import Square from "@lucide/svelte/icons/square";
-	import X from "@lucide/svelte/icons/x";
-	import Copy from "@lucide/svelte/icons/copy";
-	import Monitor from "@lucide/svelte/icons/monitor";
-	import AppWindowMac from "@lucide/svelte/icons/app-window-mac";
-	import EyeOff from "@lucide/svelte/icons/eye-off";
+import { type DecorationMode, titlebar } from "$lib/stores/titlebar.svelte";
+import AppWindowMac from "@lucide/svelte/icons/app-window-mac";
+import Copy from "@lucide/svelte/icons/copy";
+import EyeOff from "@lucide/svelte/icons/eye-off";
+import Minus from "@lucide/svelte/icons/minus";
+import Monitor from "@lucide/svelte/icons/monitor";
+import Square from "@lucide/svelte/icons/square";
+import X from "@lucide/svelte/icons/x";
 
-	const isTauri =
-		typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-	let maximized = $state(false);
-	let hovered = $state(false);
+let maximized = $state(false);
+let hovered = $state(false);
 
-	// Tauri window API — lazy loaded to avoid errors in browser
-	let windowApi: typeof import("@tauri-apps/api/window") | null = null;
+// Tauri window API — lazy loaded to avoid errors in browser
+let windowApi: typeof import("@tauri-apps/api/window") | null = null;
 
-	async function ensureApi() {
-		if (!isTauri) return null;
-		if (!windowApi) {
-			windowApi = await import("@tauri-apps/api/window");
-		}
-		return windowApi;
+async function ensureApi() {
+	if (!isTauri) return null;
+	if (!windowApi) {
+		windowApi = await import("@tauri-apps/api/window");
 	}
+	return windowApi;
+}
 
-	// Track maximized state via resize event (no polling).
-	// onResized fires synchronously on maximize/restore/resize.
-	// Guard: if teardown happens while init() is still awaiting, check
-	// `cancelled` after onResized resolves and immediately unlisten.
-	$effect(() => {
-		if (!isTauri) return;
-		let unlisten: (() => void) | null = null;
-		let cancelled = false;
+// Track maximized state via resize event (no polling).
+// onResized fires synchronously on maximize/restore/resize.
+// Guard: if teardown happens while init() is still awaiting, check
+// `cancelled` after onResized resolves and immediately unlisten.
+$effect(() => {
+	if (!isTauri) return;
+	let unlisten: (() => void) | null = null;
+	let cancelled = false;
 
-		async function init() {
-			const api = await ensureApi();
-			if (!api || cancelled) return;
-			const win = api.getCurrentWindow();
+	async function init() {
+		const api = await ensureApi();
+		if (!api || cancelled) return;
+		const win = api.getCurrentWindow();
+		maximized = await win.isMaximized();
+		const stop = await win.onResized(async () => {
+			if (cancelled) return;
 			maximized = await win.isMaximized();
-			const stop = await win.onResized(async () => {
-				if (cancelled) return;
-				maximized = await win.isMaximized();
-			});
-			// If teardown ran while we were awaiting onResized, unlisten immediately
-			if (cancelled) {
-				stop();
-				return;
-			}
-			unlisten = stop;
+		});
+		// If teardown ran while we were awaiting onResized, unlisten immediately
+		if (cancelled) {
+			stop();
+			return;
 		}
-
-		init();
-		return () => {
-			cancelled = true;
-			unlisten?.();
-		};
-	});
-
-	// Native dimensions in logical pixels, scaled to match OS chrome.
-	// macOS: 28px titlebar, 12px traffic lights, 8px gap
-	// Windows: 32px titlebar, 46x32px caption buttons
-	// We scale relative to 1x baseline so higher DPI displays get
-	// correctly proportioned chrome.
-	const MACOS_HEIGHT = 28;
-	const MACOS_DOT = 12;
-	const MACOS_GAP = 8;
-	const WIN_HEIGHT = 32;
-	const WIN_BTN_W = 46;
-
-	const barHeight = $derived(
-		titlebar.mode === "macos" ? MACOS_HEIGHT : WIN_HEIGHT,
-	);
-	const dotSize = $derived(MACOS_DOT);
-	const dotGap = $derived(MACOS_GAP);
-	const winBtnWidth = $derived(WIN_BTN_W);
-
-	async function minimize() {
-		const api = await ensureApi();
-		if (!api) return;
-		await api.getCurrentWindow().minimize();
+		unlisten = stop;
 	}
 
-	async function toggleMaximize() {
-		const api = await ensureApi();
-		if (!api) return;
-		await api.getCurrentWindow().toggleMaximize();
-	}
-
-	async function close() {
-		const api = await ensureApi();
-		if (!api) return;
-		await api.getCurrentWindow().close();
-	}
-
-	function cycleMode() {
-		const modes: DecorationMode[] = ["macos", "windows", "none"];
-		const idx = modes.indexOf(titlebar.mode);
-		titlebar.mode = modes[(idx + 1) % modes.length];
-	}
-
-	const modeLabel: Record<DecorationMode, string> = {
-		macos: "macOS",
-		windows: "Windows",
-		none: "None",
+	init();
+	return () => {
+		cancelled = true;
+		unlisten?.();
 	};
+});
 
-	const ModeIcon = $derived(
-		titlebar.mode === "macos"
-			? AppWindowMac
-			: titlebar.mode === "windows"
-				? Monitor
-				: EyeOff,
-	);
+// Native dimensions in logical pixels, scaled to match OS chrome.
+// macOS: 28px titlebar, 12px traffic lights, 8px gap
+// Windows: 32px titlebar, 46x32px caption buttons
+// We scale relative to 1x baseline so higher DPI displays get
+// correctly proportioned chrome.
+const MACOS_HEIGHT = 28;
+const MACOS_DOT = 12;
+const MACOS_GAP = 8;
+const WIN_HEIGHT = 32;
+const WIN_BTN_W = 46;
+
+const barHeight = $derived(titlebar.mode === "macos" ? MACOS_HEIGHT : WIN_HEIGHT);
+const dotSize = $derived(MACOS_DOT);
+const dotGap = $derived(MACOS_GAP);
+const winBtnWidth = $derived(WIN_BTN_W);
+
+async function minimize() {
+	const api = await ensureApi();
+	if (!api) return;
+	await api.getCurrentWindow().minimize();
+}
+
+async function toggleMaximize() {
+	const api = await ensureApi();
+	if (!api) return;
+	await api.getCurrentWindow().toggleMaximize();
+}
+
+async function close() {
+	const api = await ensureApi();
+	if (!api) return;
+	await api.getCurrentWindow().close();
+}
+
+function cycleMode() {
+	const modes: DecorationMode[] = ["macos", "windows", "none"];
+	const idx = modes.indexOf(titlebar.mode);
+	titlebar.mode = modes[(idx + 1) % modes.length];
+}
+
+const modeLabel: Record<DecorationMode, string> = {
+	macos: "macOS",
+	windows: "Windows",
+	none: "None",
+};
+
+const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mode === "windows" ? Monitor : EyeOff);
 </script>
 
 {#if isTauri && !titlebar.visible}

@@ -140,10 +140,7 @@ export function hasEntireBranch(repoPath: string): boolean {
 		const gitPath = findGit();
 		if (!gitPath) return false;
 
-		execFileSync(gitPath, [
-			"-C", repoPath,
-			"rev-parse", "--verify", ENTIRE_BRANCH,
-		], {
+		execFileSync(gitPath, ["-C", repoPath, "rev-parse", "--verify", ENTIRE_BRANCH], {
 			encoding: "utf-8",
 			timeout: 10_000,
 			stdio: ["pipe", "pipe", "pipe"],
@@ -193,10 +190,7 @@ export function parseEntireRepo(
 	// List all files on the branch
 	let fileList: string[];
 	try {
-		const output = execFileSync(gitPath, [
-			"-C", repoPath,
-			"ls-tree", "-r", "--name-only", ENTIRE_BRANCH,
-		], {
+		const output = execFileSync(gitPath, ["-C", repoPath, "ls-tree", "-r", "--name-only", ENTIRE_BRANCH], {
 			encoding: "utf-8",
 			timeout: 30_000,
 			maxBuffer: 10 * 1024 * 1024,
@@ -209,9 +203,7 @@ export function parseEntireRepo(
 	}
 
 	// Find all checkpoint root metadata files (sharded: XX/YYYYYYYYYY/metadata.json)
-	const checkpointMetadataFiles = fileList.filter((f) =>
-		f.match(/^[0-9a-f]{2}\/[0-9a-f]+\/metadata\.json$/),
-	);
+	const checkpointMetadataFiles = fileList.filter((f) => f.match(/^[0-9a-f]{2}\/[0-9a-f]+\/metadata\.json$/));
 
 	if (checkpointMetadataFiles.length === 0) {
 		return emptyDoc("No checkpoints found on entire/checkpoints/v1 branch");
@@ -265,13 +257,17 @@ export function parseEntireRepo(
 				let promptText = "";
 				try {
 					promptText = gitShow(gitPath, repoPath, `${sessionDir}/prompt.txt`);
-				} catch { /* no prompt file */ }
+				} catch {
+					/* no prompt file */
+				}
 
 				// Read context
 				let contextText = "";
 				try {
 					contextText = gitShow(gitPath, repoPath, `${sessionDir}/context.md`);
-				} catch { /* no context file */ }
+				} catch {
+					/* no context file */
+				}
 
 				allSessions.push({
 					checkpointId: summary.checkpoint_id || checkpointDir,
@@ -294,9 +290,7 @@ export function parseEntireRepo(
 	});
 
 	// Apply maxSessions limit
-	const sessionsToParse = options?.maxSessions
-		? allSessions.slice(0, options.maxSessions)
-		: allSessions;
+	const sessionsToParse = options?.maxSessions ? allSessions.slice(0, options.maxSessions) : allSessions;
 
 	// Build overview section
 	const overviewLines = [
@@ -425,7 +419,9 @@ function buildSessionSections(
 
 	if (meta.initial_attribution) {
 		const attr = meta.initial_attribution;
-		metaLines.push(`Attribution: ${attr.agent_percentage?.toFixed(1) ?? "?"}% agent (${attr.agent_lines ?? 0} agent lines, ${attr.human_added ?? 0} human added, ${attr.human_modified ?? 0} human modified)`);
+		metaLines.push(
+			`Attribution: ${attr.agent_percentage?.toFixed(1) ?? "?"}% agent (${attr.agent_lines ?? 0} agent lines, ${attr.human_added ?? 0} human added, ${attr.human_modified ?? 0} human modified)`,
+		);
 	}
 
 	if (meta.summary) {
@@ -625,10 +621,7 @@ function formatTimestamp(ts: string): string {
  * Read a file from the entire/checkpoints/v1 branch without checkout.
  */
 function gitShow(gitPath: string, repoPath: string, filePath: string): string {
-	return execFileSync(gitPath, [
-		"-C", repoPath,
-		"show", `${ENTIRE_BRANCH}:${filePath}`,
-	], {
+	return execFileSync(gitPath, ["-C", repoPath, "show", `${ENTIRE_BRANCH}:${filePath}`], {
 		encoding: "utf-8",
 		timeout: 15_000,
 		maxBuffer: 10 * 1024 * 1024,
@@ -640,24 +633,15 @@ function gitShow(gitPath: string, repoPath: string, filePath: string): string {
  * Read transcript data which may be chunked across multiple files.
  * Entire stores transcripts as full.jsonl or full.jsonl.001, full.jsonl.002, etc.
  */
-function readTranscript(
-	gitPath: string,
-	repoPath: string,
-	sessionDir: string,
-	fileList: string[],
-): string {
+function readTranscript(gitPath: string, repoPath: string, sessionDir: string, fileList: string[]): string {
 	// Look for chunk files first
 	const chunkPattern = `${sessionDir}/full.jsonl.`;
-	const chunkFiles = fileList
-		.filter((f) => f.startsWith(chunkPattern))
-		.sort(); // .001, .002, etc. sort lexicographically
+	const chunkFiles = fileList.filter((f) => f.startsWith(chunkPattern)).sort(); // .001, .002, etc. sort lexicographically
 
 	if (chunkFiles.length > 0) {
 		// Also check for base file (full.jsonl = chunk 0)
 		const baseFile = `${sessionDir}/full.jsonl`;
-		const allFiles = fileList.includes(baseFile)
-			? [baseFile, ...chunkFiles]
-			: chunkFiles;
+		const allFiles = fileList.includes(baseFile) ? [baseFile, ...chunkFiles] : chunkFiles;
 
 		const parts: string[] = [];
 		for (const file of allFiles) {
@@ -687,12 +671,14 @@ function emptyDoc(reason: string): ParsedDocument {
 	return {
 		format: "entire_sessions",
 		title: "Entire.io Sessions (empty)",
-		sections: [{
-			heading: "Entire.io Session Data",
-			depth: 1,
-			content: reason,
-			contentType: "text",
-		}],
+		sections: [
+			{
+				heading: "Entire.io Session Data",
+				depth: 1,
+				content: reason,
+				contentType: "text",
+			},
+		],
 		metadata: {
 			sourceType: "entire_sessions",
 			empty: true,

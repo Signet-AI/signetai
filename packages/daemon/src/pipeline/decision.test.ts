@@ -11,7 +11,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import type { ExtractedFact } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { runShadowDecisions } from "./decision";

@@ -49,7 +49,7 @@ function skillKey(i: Skill | SkillSearchResult): string {
 	return isSearchResult(i) ? i.fullName : i.name;
 }
 
-let emptyActions = $derived.by(() => {
+const emptyActions = $derived.by(() => {
 	if (emptyState === "installed") {
 		return [
 			{ label: "Go to Browse", onClick: () => onemptyaction?.("primary"), variant: "primary" as const },
@@ -80,9 +80,9 @@ $effect(() => {
 	visibleCount = PAGE_SIZE;
 });
 
-let visibleItems = $derived(items.slice(0, visibleCount));
-let hasMore = $derived(visibleCount < items.length);
-let remainingCount = $derived(items.length - visibleCount);
+const visibleItems = $derived(items.slice(0, visibleCount));
+const hasMore = $derived(visibleCount < items.length);
+const remainingCount = $derived(items.length - visibleCount);
 </script>
 
 <div class="grid-container">

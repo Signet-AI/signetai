@@ -1,63 +1,53 @@
 <script lang="ts">
-	import type {
-		DaemonStatus,
-		Identity,
-		Memory,
-		MemoryStats,
-		Harness,
-		DiagnosticsReport,
-		ContinuityEntry,
-		PipelineStatus,
-		DocumentConnector,
-	} from "$lib/api";
-	import {
-		getDiagnostics,
-		getContinuityLatest,
-		getPipelineStatus,
-		getConnectors,
-	} from "$lib/api";
-	import AgentHeader from "$lib/components/home/AgentHeader.svelte";
-	import SuggestedInsights from "$lib/components/home/SuggestedInsights.svelte";
-	import PredictorSplitBar from "$lib/components/home/PredictorSplitBar.svelte";
-	import PinnedEntityCluster from "$lib/components/home/PinnedEntityCluster.svelte";
-	import MarketplaceSpotlights from "$lib/components/home/MarketplaceSpotlights.svelte";
-	import { onMount } from "svelte";
+import type {
+	ContinuityEntry,
+	DaemonStatus,
+	DiagnosticsReport,
+	DocumentConnector,
+	Harness,
+	Identity,
+	Memory,
+	MemoryStats,
+	PipelineStatus,
+} from "$lib/api";
+import { getConnectors, getContinuityLatest, getDiagnostics, getPipelineStatus } from "$lib/api";
+import AgentHeader from "$lib/components/home/AgentHeader.svelte";
+import MarketplaceSpotlights from "$lib/components/home/MarketplaceSpotlights.svelte";
+import PinnedEntityCluster from "$lib/components/home/PinnedEntityCluster.svelte";
+import PredictorSplitBar from "$lib/components/home/PredictorSplitBar.svelte";
+import SuggestedInsights from "$lib/components/home/SuggestedInsights.svelte";
+import { onMount } from "svelte";
 
-	interface Props {
-		identity: Identity;
-		memories: Memory[];
-		memoryStats: MemoryStats | null;
-		harnesses: Harness[];
-		daemonStatus: DaemonStatus | null;
-	}
+interface Props {
+	identity: Identity;
+	memories: Memory[];
+	memoryStats: MemoryStats | null;
+	harnesses: Harness[];
+	daemonStatus: DaemonStatus | null;
+}
 
-	const { identity, memories, memoryStats, harnesses, daemonStatus }: Props =
-		$props();
+let { identity, memories, memoryStats, harnesses, daemonStatus }: Props = $props();
 
-	let diagnostics = $state<DiagnosticsReport | null>(null);
-	let continuity = $state<ContinuityEntry[]>([]);
-	let pipelineStatus = $state<PipelineStatus | null>(null);
-	let connectors = $state<DocumentConnector[]>([]);
-	let loaded = $state(false);
+let diagnostics = $state<DiagnosticsReport | null>(null);
+let continuity = $state<ContinuityEntry[]>([]);
+let pipelineStatus = $state<PipelineStatus | null>(null);
+let connectors = $state<DocumentConnector[]>([]);
+let loaded = $state(false);
 
-	onMount(async () => {
-		const results = await Promise.allSettled([
-			getDiagnostics(),
-			getContinuityLatest(),
-			getPipelineStatus(),
-			getConnectors(),
-		]);
+onMount(async () => {
+	const results = await Promise.allSettled([
+		getDiagnostics(),
+		getContinuityLatest(),
+		getPipelineStatus(),
+		getConnectors(),
+	]);
 
-		if (results[0].status === "fulfilled" && results[0].value)
-			diagnostics = results[0].value;
-		if (results[1].status === "fulfilled")
-			continuity = results[1].value;
-		if (results[2].status === "fulfilled")
-			pipelineStatus = results[2].value;
-		if (results[3].status === "fulfilled")
-			connectors = results[3].value;
-		loaded = true;
-	});
+	if (results[0].status === "fulfilled" && results[0].value) diagnostics = results[0].value;
+	if (results[1].status === "fulfilled") continuity = results[1].value;
+	if (results[2].status === "fulfilled") pipelineStatus = results[2].value;
+	if (results[3].status === "fulfilled") connectors = results[3].value;
+	loaded = true;
+});
 </script>
 
 <div class="flex flex-col flex-1 min-h-0 overflow-hidden">

@@ -20,10 +20,7 @@
 import type { LlmProvider } from "../types";
 import type { ChunkResult, ExtractionResult } from "./types";
 import type { ExtractionOptions } from "./extractor";
-import {
-	parseExtractionResponse as sharedParseExtractionResponse,
-	type ParseOptions,
-} from "./response-parser";
+import { parseExtractionResponse as sharedParseExtractionResponse, type ParseOptions } from "./response-parser";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -40,13 +37,8 @@ export const DEFAULT_ENTIRE_EXTRACTOR_CONFIG: ExtractionOptions = {
 // Skill Signal Extraction Prompt
 // ---------------------------------------------------------------------------
 
-function buildSkillExtractionPrompt(
-	sessionText: string,
-	sessionMetadata: string | null,
-): string {
-	const metaBlock = sessionMetadata
-		? `SESSION CONTEXT:\n${sessionMetadata}\n\n`
-		: "";
+function buildSkillExtractionPrompt(sessionText: string, sessionMetadata: string | null): string {
+	const metaBlock = sessionMetadata ? `SESSION CONTEXT:\n${sessionMetadata}\n\n` : "";
 
 	return `You are a developer skill assessment engine analyzing an AI coding session transcript.
 
@@ -210,12 +202,7 @@ export async function extractFromEntireSessions(
 	const results: ExtractionResult[] = [];
 
 	for (const chunk of chunks) {
-		const result = await extractFromEntireSession(
-			chunk,
-			sessionMetadata,
-			provider,
-			opts,
-		);
+		const result = await extractFromEntireSession(chunk, sessionMetadata, provider, opts);
 		results.push(result);
 		if (onChunkDone) {
 			onChunkDone(chunk.index, result.items.length);
@@ -230,10 +217,7 @@ export async function extractFromEntireSessions(
 // ---------------------------------------------------------------------------
 
 /** Valid types for Entire session extraction */
-const ENTIRE_VALID_TYPES = new Set([
-	"skill", "preference", "decision", "rationale",
-	"procedural", "semantic", "fact",
-]);
+const ENTIRE_VALID_TYPES = new Set(["skill", "preference", "decision", "rationale", "procedural", "semantic", "fact"]);
 
 /** Map alternative type names to valid ones */
 const ENTIRE_TYPE_MAP: Record<string, string> = {
@@ -249,10 +233,7 @@ const ENTIRE_TYPE_MAP: Record<string, string> = {
 	system: "fact",
 };
 
-function parseExtractionResponse(
-	raw: string,
-	minConfidence: number,
-) {
+function parseExtractionResponse(raw: string, minConfidence: number) {
 	const opts: ParseOptions = {
 		minConfidence,
 		validTypes: ENTIRE_VALID_TYPES,

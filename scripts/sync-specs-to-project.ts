@@ -110,7 +110,17 @@ function parseYaml(raw: string): Spec[] {
 		const start = raw.match(/^\s{2}-\s+id:\s*(.+?)\s*$/);
 		if (start) {
 			if (cur) specs.push(cur);
-			cur = { id: strip(start[1]), status: "", path: "", hardDeps: [], softDeps: [], blocks: [], informed: [], criteria: [], decision: null };
+			cur = {
+				id: strip(start[1]),
+				status: "",
+				path: "",
+				hardDeps: [],
+				softDeps: [],
+				blocks: [],
+				informed: [],
+				criteria: [],
+				decision: null,
+			};
 			arrKey = null;
 			continue;
 		}
@@ -291,7 +301,9 @@ function main(): void {
 		for (const s of specs) {
 			const tier = TIER_OPTIONS[s.status] ? s.status : "planning";
 			const decision = s.decision ?? "active";
-			console.log(`  ${s.id} | tier=${tier} | decision=${decision} | deps=${s.hardDeps.length} | blocks=${s.blocks.length}`);
+			console.log(
+				`  ${s.id} | tier=${tier} | decision=${decision} | deps=${s.hardDeps.length} | blocks=${s.blocks.length}`,
+			);
 		}
 		console.log(`\nproject: https://github.com/orgs/${ORG}/projects/${PROJECT_NUMBER}`);
 		return;

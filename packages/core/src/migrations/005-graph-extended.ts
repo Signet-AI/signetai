@@ -1,18 +1,11 @@
 import type { MigrationDb } from "./index";
 
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {
-	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<
-		Record<string, unknown>
-	>;
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	return rows.some((r) => r.name === column);
 }
 
-function addColumnIfMissing(
-	db: MigrationDb,
-	table: string,
-	column: string,
-	definition: string,
-): void {
+function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
 	if (!hasColumn(db, table, column)) {
 		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 	}
@@ -35,12 +28,8 @@ export function up(db: MigrationDb): void {
 	addColumnIfMissing(db, "memory_entity_mentions", "created_at", "TEXT");
 
 	// Index canonical_name for fast entity resolution lookups
-	db.exec(
-		"CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities(canonical_name)",
-	);
+	db.exec("CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities(canonical_name)");
 
 	// Composite index for traversing outgoing edges by type
-	db.exec(
-		"CREATE INDEX IF NOT EXISTS idx_relations_composite ON relations(source_entity_id, relation_type)",
-	);
+	db.exec("CREATE INDEX IF NOT EXISTS idx_relations_composite ON relations(source_entity_id, relation_type)");
 }

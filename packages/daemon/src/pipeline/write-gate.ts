@@ -165,7 +165,14 @@ function computeContinuitySignals(db: ReadDb, input: WriteGateInput, query: Floa
 			)
 			.get(
 				...(input.sourceScope !== null
-					? [input.agentId, input.sourceVisibility, input.sourceMemoryId, input.sourceScope, input.sourceProject, cutoff]
+					? [
+							input.agentId,
+							input.sourceVisibility,
+							input.sourceMemoryId,
+							input.sourceScope,
+							input.sourceProject,
+							cutoff,
+						]
 					: [input.agentId, input.sourceVisibility, input.sourceMemoryId, input.sourceProject, cutoff]),
 			) as { cnt: number } | undefined;
 		return (row?.cnt ?? 0) > 0;

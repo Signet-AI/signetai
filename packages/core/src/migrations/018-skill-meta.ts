@@ -10,11 +10,7 @@ import type { MigrationDb } from "./index";
 
 export function up(db: MigrationDb): void {
 	// Check if table already exists (idempotent)
-	const existing = db
-		.prepare(
-			"SELECT name FROM sqlite_master WHERE type='table' AND name='skill_meta'",
-		)
-		.get();
+	const existing = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='skill_meta'").get();
 
 	if (existing) return;
 

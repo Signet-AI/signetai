@@ -61,9 +61,10 @@ describe("extraction fallback helpers", () => {
 			status: string;
 			error: string;
 		};
-		const memory = db
-			.prepare("SELECT extraction_status, extraction_model FROM memories WHERE id = ?")
-			.get("mem-1") as { extraction_status: string; extraction_model: string };
+		const memory = db.prepare("SELECT extraction_status, extraction_model FROM memories WHERE id = ?").get("mem-1") as {
+			extraction_status: string;
+			extraction_model: string;
+		};
 		expect(job.status).toBe("dead");
 		expect(job.error).toContain("unavailable");
 		expect(memory.extraction_status).toBe("failed");
@@ -117,11 +118,15 @@ describe("extraction fallback helpers", () => {
 
 		expect(changes).toBe(1);
 		const pendJob = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get("job-pend") as { status: string };
-		const inflightJob = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get("job-inflight") as { status: string };
+		const inflightJob = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get("job-inflight") as {
+			status: string;
+		};
 		expect(pendJob.status).toBe("dead");
 		expect(inflightJob.status).toBe("leased");
 		// Memory should NOT be marked failed because it still has in-flight work
-		const memory = db.prepare("SELECT extraction_status FROM memories WHERE id = ?").get("mem-mixed") as { extraction_status: string };
+		const memory = db.prepare("SELECT extraction_status FROM memories WHERE id = ?").get("mem-mixed") as {
+			extraction_status: string;
+		};
 		expect(memory.extraction_status).toBe("queued");
 	});
 
@@ -136,9 +141,9 @@ describe("extraction fallback helpers", () => {
 			status: string;
 			error: string;
 		};
-		const memory = db
-			.prepare("SELECT extraction_status FROM memories WHERE id = ?")
-			.get("mem-2") as { extraction_status: string };
+		const memory = db.prepare("SELECT extraction_status FROM memories WHERE id = ?").get("mem-2") as {
+			extraction_status: string;
+		};
 		expect(job.status).toBe("dead");
 		expect(job.error).toContain("fallbackProvider is none");
 		expect(memory.extraction_status).toBe("failed");

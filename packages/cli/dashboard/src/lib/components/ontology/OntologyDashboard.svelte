@@ -1,28 +1,28 @@
 <script lang="ts">
-	import { Input } from "$lib/components/ui/input/index.js";
-	import Search from "@lucide/svelte/icons/search";
-	import ScatterChart from "@lucide/svelte/icons/scatter-chart";
-	import X from "@lucide/svelte/icons/x";
-	import SchemaPanel from "./SchemaPanel.svelte";
-	import ConstellationGraph from "./ConstellationGraph.svelte";
-	import UmapPanel from "./UmapPanel.svelte";
-	import InspectorPanel from "./InspectorPanel.svelte";
-	import { ontology, searchGraph } from "./ontology-state.svelte";
+import { Input } from "$lib/components/ui/input/index.js";
+import ScatterChart from "@lucide/svelte/icons/scatter-chart";
+import Search from "@lucide/svelte/icons/search";
+import X from "@lucide/svelte/icons/x";
+import ConstellationGraph from "./ConstellationGraph.svelte";
+import InspectorPanel from "./InspectorPanel.svelte";
+import SchemaPanel from "./SchemaPanel.svelte";
+import UmapPanel from "./UmapPanel.svelte";
+import { ontology, searchGraph } from "./ontology-state.svelte";
 
-	interface Props {
-		agentId?: string;
-	}
-	const { agentId = "default" }: Props = $props();
+interface Props {
+	agentId?: string;
+}
+let { agentId = "default" }: Props = $props();
 
-	let umapOpen = $state(false);
+let umapOpen = $state(false);
 
-	function handleSearch(e: Event): void {
-		searchGraph((e.target as HTMLInputElement).value);
-	}
+function handleSearch(e: Event): void {
+	searchGraph((e.target as HTMLInputElement).value);
+}
 
-	function clearSearch(): void {
-		searchGraph("");
-	}
+function clearSearch(): void {
+	searchGraph("");
+}
 </script>
 
 <div class="ontology-dashboard">

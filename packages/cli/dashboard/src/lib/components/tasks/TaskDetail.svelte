@@ -1,13 +1,13 @@
 <script lang="ts">
 import type { ScheduledTask, TaskRun } from "$lib/api";
-import * as Sheet from "$lib/components/ui/sheet/index.js";
-import { Button } from "$lib/components/ui/button/index.js";
 import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
 import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
-import RunLog from "./RunLog.svelte";
-import Play from "@lucide/svelte/icons/play";
+import * as Sheet from "$lib/components/ui/sheet/index.js";
 import Pencil from "@lucide/svelte/icons/pencil";
+import Play from "@lucide/svelte/icons/play";
 import Trash2 from "@lucide/svelte/icons/trash-2";
+import RunLog from "./RunLog.svelte";
 
 interface Props {
 	open: boolean;
@@ -21,18 +21,7 @@ interface Props {
 	onedit: (id: string) => void;
 }
 
-let {
-	open,
-	task,
-	runs,
-	loading,
-	liveConnected,
-	onclose,
-	ontrigger,
-	ondelete,
-	onedit,
-}: Props =
-	$props();
+let { open, task, runs, loading, liveConnected, onclose, ontrigger, ondelete, onedit }: Props = $props();
 
 function formatDate(iso: string | null): string {
 	if (!iso) return "—";
@@ -40,13 +29,15 @@ function formatDate(iso: string | null): string {
 }
 
 let confirmingDelete = $state(false);
-let taskIsRunning = $derived(runs.some((run) => run.status === "running"));
+const taskIsRunning = $derived(runs.some((run) => run.status === "running"));
 
 function handleDelete() {
 	if (!task) return;
 	if (!confirmingDelete) {
 		confirmingDelete = true;
-		setTimeout(() => { confirmingDelete = false; }, 3000);
+		setTimeout(() => {
+			confirmingDelete = false;
+		}, 3000);
 		return;
 	}
 	ondelete(task.id);

@@ -24,9 +24,7 @@ function initDocsToc(): void {
 	cleanup?.();
 	cleanup = null;
 
-	const containers = document.querySelectorAll(
-		".docs-inpage, .docs-toc-rail-list",
-	);
+	const containers = document.querySelectorAll(".docs-inpage, .docs-toc-rail-list");
 	if (containers.length === 0) return;
 
 	const links: HTMLAnchorElement[] = [];

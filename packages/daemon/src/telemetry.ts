@@ -27,9 +27,7 @@ export const TELEMETRY_EVENTS = [
 
 export type TelemetryEventType = (typeof TELEMETRY_EVENTS)[number];
 
-export type TelemetryProperties = Readonly<
-	Record<string, string | number | boolean | null>
->;
+export type TelemetryProperties = Readonly<Record<string, string | number | boolean | null>>;
 
 export interface TelemetryEvent {
 	readonly id: string;
@@ -43,10 +41,7 @@ export interface TelemetryEvent {
 // ---------------------------------------------------------------------------
 
 export interface TelemetryCollector {
-	record(
-		event: TelemetryEventType,
-		properties: TelemetryProperties,
-	): void;
+	record(event: TelemetryEventType, properties: TelemetryProperties): void;
 
 	flush(): Promise<void>;
 	start(): void;
@@ -123,8 +118,7 @@ export function createTelemetryCollector(
 	let consecutiveFailures = 0;
 	let effectiveIntervalMs = config.flushIntervalMs;
 
-	const posthogConfigured =
-		config.posthogHost.length > 0 && config.posthogApiKey.length > 0;
+	const posthogConfigured = config.posthogHost.length > 0 && config.posthogApiKey.length > 0;
 
 	function writeToDb(events: readonly TelemetryEvent[]): void {
 		if (events.length === 0) return;
@@ -141,11 +135,9 @@ export function createTelemetryCollector(
 				}
 			});
 		} catch (err) {
-			logger.warn(
-				"telemetry",
-				"Failed to write events to db",
-				{ error: err instanceof Error ? err.message : String(err) },
-			);
+			logger.warn("telemetry", "Failed to write events to db", {
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 
@@ -153,9 +145,7 @@ export function createTelemetryCollector(
 		if (ids.length === 0) return;
 		try {
 			db.withWriteTx((w) => {
-				const stmt = w.prepare(
-					"UPDATE telemetry_events SET sent_to_posthog = 1 WHERE id = ?",
-				);
+				const stmt = w.prepare("UPDATE telemetry_events SET sent_to_posthog = 1 WHERE id = ?");
 				for (const id of ids) {
 					stmt.run(id);
 				}
@@ -200,9 +190,7 @@ export function createTelemetryCollector(
 		cutoff.setDate(cutoff.getDate() - config.retentionDays);
 		try {
 			db.withWriteTx((w) => {
-				w.prepare(
-					"DELETE FROM telemetry_events WHERE timestamp < ?",
-				).run(cutoff.toISOString());
+				w.prepare("DELETE FROM telemetry_events WHERE timestamp < ?").run(cutoff.toISOString());
 			});
 		} catch {
 			// best effort
@@ -218,12 +206,7 @@ export function createTelemetryCollector(
 		if (posthogConfigured) {
 			const unsent = loadUnsent(config.flushBatchSize);
 			if (unsent.length > 0) {
-				const ok = await sendToPostHog(
-					config.posthogHost,
-					config.posthogApiKey,
-					unsent,
-					daemonVersion,
-				);
+				const ok = await sendToPostHog(config.posthogHost, config.posthogApiKey, unsent, daemonVersion);
 				if (ok) {
 					markSent(unsent.map((e) => e.id));
 					consecutiveFailures = 0;
@@ -231,8 +214,7 @@ export function createTelemetryCollector(
 				} else {
 					consecutiveFailures++;
 					if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-						effectiveIntervalMs =
-							config.flushIntervalMs * BACKOFF_MULTIPLIER;
+						effectiveIntervalMs = config.flushIntervalMs * BACKOFF_MULTIPLIER;
 						logger.warn("telemetry", "PostHog unreachable, backing off", {
 							intervalMs: effectiveIntervalMs,
 						});
@@ -326,10 +308,7 @@ export function createTelemetryCollector(
 						params.push(opts.until);
 					}
 
-					const where =
-						conditions.length > 0
-							? `WHERE ${conditions.join(" AND ")}`
-							: "";
+					const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 					const limit = opts?.limit ?? 100;
 
 					const rows = r

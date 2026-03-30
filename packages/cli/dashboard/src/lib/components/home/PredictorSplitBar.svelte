@@ -1,100 +1,92 @@
 <script lang="ts">
-	import { setTab } from "$lib/stores/navigation.svelte";
-	import type { DaemonStatus } from "$lib/api";
+import type { DaemonStatus } from "$lib/api";
+import { setTab } from "$lib/stores/navigation.svelte";
 
-	const isDev = import.meta.env.DEV;
-	const API_BASE = isDev ? "http://localhost:3850" : "";
+const isDev = import.meta.env.DEV;
+const API_BASE = isDev ? "http://localhost:3850" : "";
 
-	interface PredictorHealth {
-		score: number;
-		status: string;
-		sidecarAlive: boolean;
-		successRate: number;
-		alpha: number;
-		coldStartExited: boolean;
-		modelVersion: number;
-		trainingSessions: number;
+interface PredictorHealth {
+	score: number;
+	status: string;
+	sidecarAlive: boolean;
+	successRate: number;
+	alpha: number;
+	coldStartExited: boolean;
+	modelVersion: number;
+	trainingSessions: number;
+}
+
+interface DiagnosticsData {
+	predictor?: { score: number; status: string };
+	index?: { embeddingCoverage: number };
+	storage?: { totalMemories: number };
+	composite?: { score: number };
+}
+
+interface Props {
+	daemonStatus: DaemonStatus | null;
+}
+
+let { daemonStatus }: Props = $props();
+
+let health = $state<PredictorHealth | null>(null);
+let diagnostics = $state<DiagnosticsData | null>(null);
+let loaded = $state(false);
+
+const predictorAvailable = $derived(health?.sidecarAlive);
+
+const alpha = $derived(health?.alpha ?? 0.6);
+const successRate = $derived(health?.successRate ?? 0);
+const healthStatus = $derived.by(() => {
+	// Use composite diagnostic score for overall status
+	// instead of predictor-specific status (predictor is optional)
+	if (diagnostics?.composite) {
+		const score = diagnostics.composite.score;
+		if (score >= 0.7) return "healthy";
+		if (score >= 0.4) return "degraded";
+		return "unhealthy";
 	}
+	// Fall back to predictor status only if diagnostics unavailable
+	return health?.status ?? "unknown";
+});
 
-	interface DiagnosticsData {
-		predictor?: { score: number; status: string };
-		index?: { embeddingCoverage: number };
-		storage?: { totalMemories: number };
-		composite?: { score: number };
-	}
+const embeddingCoverage = $derived(diagnostics?.index?.embeddingCoverage ?? 0);
+const totalMemories = $derived(diagnostics?.storage?.totalMemories ?? 0);
+const compositeScore = $derived(diagnostics?.composite?.score ?? 0);
 
-	interface Props {
-		daemonStatus: DaemonStatus | null;
-	}
+function statusColor(status: string): string {
+	if (status === "healthy") return "var(--sig-success)";
+	if (status === "degraded" || status === "cold_start") return "var(--sig-warning)";
+	if (status === "unhealthy") return "var(--sig-danger)";
+	return "var(--sig-text-muted)";
+}
 
-	const { daemonStatus }: Props = $props();
+async function fetchData(): Promise<void> {
+	try {
+		const [healthRes, diagRes] = await Promise.allSettled([
+			fetch(`${API_BASE}/api/diagnostics/predictor`),
+			fetch(`${API_BASE}/api/diagnostics`),
+		]);
 
-	let health = $state<PredictorHealth | null>(null);
-	let diagnostics = $state<DiagnosticsData | null>(null);
-	let loaded = $state(false);
-
-	const predictorAvailable = $derived(
-		health !== null && health.sidecarAlive,
-	);
-
-	const alpha = $derived(health?.alpha ?? 0.6);
-	const successRate = $derived(health?.successRate ?? 0);
-	const healthStatus = $derived.by(() => {
-		// Use composite diagnostic score for overall status
-		// instead of predictor-specific status (predictor is optional)
-		if (diagnostics?.composite) {
-			const score = diagnostics.composite.score;
-			if (score >= 0.7) return "healthy";
-			if (score >= 0.4) return "degraded";
-			return "unhealthy";
+		if (healthRes.status === "fulfilled" && healthRes.value.ok) {
+			health = await healthRes.value.json();
 		}
-		// Fall back to predictor status only if diagnostics unavailable
-		return health?.status ?? "unknown";
-	});
-
-	const embeddingCoverage = $derived(
-		diagnostics?.index?.embeddingCoverage ?? 0,
-	);
-	const totalMemories = $derived(
-		diagnostics?.storage?.totalMemories ?? 0,
-	);
-	const compositeScore = $derived(
-		diagnostics?.composite?.score ?? 0,
-	);
-
-	function statusColor(status: string): string {
-		if (status === "healthy") return "var(--sig-success)";
-		if (status === "degraded" || status === "cold_start") return "var(--sig-warning)";
-		if (status === "unhealthy") return "var(--sig-danger)";
-		return "var(--sig-text-muted)";
-	}
-
-	async function fetchData(): Promise<void> {
-		try {
-			const [healthRes, diagRes] = await Promise.allSettled([
-				fetch(`${API_BASE}/api/diagnostics/predictor`),
-				fetch(`${API_BASE}/api/diagnostics`),
-			]);
-
-			if (healthRes.status === "fulfilled" && healthRes.value.ok) {
-				health = await healthRes.value.json();
-			}
-			if (diagRes.status === "fulfilled" && diagRes.value.ok) {
-				diagnostics = await diagRes.value.json();
-			}
-		} catch {
-			// fail open
+		if (diagRes.status === "fulfilled" && diagRes.value.ok) {
+			diagnostics = await diagRes.value.json();
 		}
+	} catch {
+		// fail open
+	}
+	loaded = true;
+}
+
+$effect(() => {
+	if (daemonStatus) {
+		fetchData();
+	} else {
 		loaded = true;
 	}
-
-	$effect(() => {
-		if (daemonStatus) {
-			fetchData();
-		} else {
-			loaded = true;
-		}
-	});
+});
 </script>
 
 <div class="panel sig-panel">

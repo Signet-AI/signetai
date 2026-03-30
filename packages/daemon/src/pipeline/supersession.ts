@@ -14,12 +14,7 @@ import type { DbAccessor } from "../db-accessor";
 import type { PipelineV2Config } from "../memory-config";
 import type { LlmProvider } from "./provider";
 import type { EntityAttribute } from "@signet/core";
-import {
-	tokenize,
-	hasNegation,
-	overlapCount,
-	hasAntonymConflict,
-} from "./antonyms";
+import { tokenize, hasNegation, overlapCount, hasAntonymConflict } from "./antonyms";
 import { getAttributesForAspect } from "../knowledge-graph";
 import { detectSemanticContradiction } from "./contradiction";
 import { insertHistoryEvent } from "../transactions";
@@ -207,9 +202,7 @@ export function findSupersedableSiblings(
 	if (!attribute.aspectId) return [];
 
 	const siblings = getAttributesForAspect(accessor, attribute.aspectId, agentId);
-	return siblings.filter(
-		(s) => s.id !== attribute.id && s.kind !== "constraint",
-	);
+	return siblings.filter((s) => s.id !== attribute.id && s.kind !== "constraint");
 }
 
 // ---------------------------------------------------------------------------
@@ -299,11 +292,9 @@ export async function checkAndSupersedeForAttributes(
 	for (const id of attributeIds) {
 		// Fetch the freshly classified attribute
 		const attr = accessor.withReadDb((db) => {
-			const row = db
-				.prepare(
-					`SELECT * FROM entity_attributes WHERE id = ? AND agent_id = ?`,
-				)
-				.get(id, agentId) as Record<string, unknown> | undefined;
+			const row = db.prepare(`SELECT * FROM entity_attributes WHERE id = ? AND agent_id = ?`).get(id, agentId) as
+				| Record<string, unknown>
+				| undefined;
 			if (!row) return null;
 			return {
 				id: row.id as string,
@@ -414,8 +405,8 @@ export async function sweepRetroactiveSupersession(
 	}
 
 	// Find aspects with multiple active non-constraint attributes
-	const aspects = accessor.withReadDb((db) =>
-		(
+	const aspects = accessor.withReadDb(
+		(db) =>
 			db
 				.prepare(
 					`SELECT aspect_id, COUNT(*) as cnt
@@ -425,16 +416,14 @@ export async function sweepRetroactiveSupersession(
 					 GROUP BY aspect_id
 					 HAVING cnt > 1`,
 				)
-				.all(agentId) as Array<{ aspect_id: string; cnt: number }>
-		),
+				.all(agentId) as Array<{ aspect_id: string; cnt: number }>,
 	);
 
 	const candidates: SupersessionCandidate[] = [];
 	let skipped = 0;
 
 	for (const { aspect_id: aspectId } of aspects) {
-		const attrs = getAttributesForAspect(accessor, aspectId, agentId)
-			.filter((a) => a.kind !== "constraint");
+		const attrs = getAttributesForAspect(accessor, aspectId, agentId).filter((a) => a.kind !== "constraint");
 
 		// Compare each pair — newer supersedes older
 		for (let i = 0; i < attrs.length; i++) {

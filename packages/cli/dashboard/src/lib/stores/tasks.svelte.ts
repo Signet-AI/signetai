@@ -4,15 +4,15 @@
  */
 
 import {
-	getTasks,
-	getTask,
-	createTask,
-	updateTask,
-	deleteTask,
-	triggerTaskRun,
+	type CronPreset,
 	type ScheduledTask,
 	type TaskRun,
-	type CronPreset,
+	createTask,
+	deleteTask,
+	getTask,
+	getTasks,
+	triggerTaskRun,
+	updateTask,
 } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 
@@ -76,19 +76,24 @@ function isTaskStreamEvent(value: unknown): value is TaskStreamEvent {
 		case "connected":
 			return true;
 		case "run-started":
-			return "runId" in value &&
+			return (
+				"runId" in value &&
 				typeof value.runId === "string" &&
 				"startedAt" in value &&
-				typeof value.startedAt === "string";
+				typeof value.startedAt === "string"
+			);
 		case "run-output":
-			return "runId" in value &&
+			return (
+				"runId" in value &&
 				typeof value.runId === "string" &&
 				"stream" in value &&
 				(value.stream === "stdout" || value.stream === "stderr") &&
 				"chunk" in value &&
-				typeof value.chunk === "string";
+				typeof value.chunk === "string"
+			);
 		case "run-completed":
-			return "runId" in value &&
+			return (
+				"runId" in value &&
 				typeof value.runId === "string" &&
 				"status" in value &&
 				(value.status === "completed" || value.status === "failed") &&
@@ -97,7 +102,8 @@ function isTaskStreamEvent(value: unknown): value is TaskStreamEvent {
 				"exitCode" in value &&
 				(value.exitCode === null || typeof value.exitCode === "number") &&
 				"error" in value &&
-				(value.error === null || typeof value.error === "string");
+				(value.error === null || typeof value.error === "string")
+			);
 		default:
 			return false;
 	}

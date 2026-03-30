@@ -11,21 +11,21 @@ import {
 	listOnePasswordVaults,
 	putSecret,
 } from "$lib/api";
-import { Input } from "$lib/components/ui/input/index.js";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
-import { toast } from "$lib/stores/toast.svelte";
+import { Input } from "$lib/components/ui/input/index.js";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
-import { onMount } from "svelte";
-import Plus from "@lucide/svelte/icons/plus";
-import Trash2 from "@lucide/svelte/icons/trash-2";
-import KeyRound from "@lucide/svelte/icons/key-round";
+import { toast } from "$lib/stores/toast.svelte";
 import ChevronDown from "@lucide/svelte/icons/chevron-down";
 import ChevronRight from "@lucide/svelte/icons/chevron-right";
-import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-import Link from "@lucide/svelte/icons/link";
-import Unlink from "@lucide/svelte/icons/unlink";
 import Import from "@lucide/svelte/icons/import";
+import KeyRound from "@lucide/svelte/icons/key-round";
+import Link from "@lucide/svelte/icons/link";
+import Plus from "@lucide/svelte/icons/plus";
+import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import Trash2 from "@lucide/svelte/icons/trash-2";
+import Unlink from "@lucide/svelte/icons/unlink";
+import { onMount } from "svelte";
 
 let secrets = $state<string[]>([]);
 let secretsLoading = $state(false);
@@ -77,8 +77,7 @@ async function refreshOnePasswordStatus(): Promise<void> {
 		onePasswordStatus = await getOnePasswordStatus();
 		if (onePasswordStatus.connected) {
 			const fetchedVaults = await listOnePasswordVaults();
-			onePasswordVaults =
-				fetchedVaults.length > 0 ? fetchedVaults : onePasswordStatus.vaults;
+			onePasswordVaults = fetchedVaults.length > 0 ? fetchedVaults : onePasswordStatus.vaults;
 		} else {
 			onePasswordVaults = [];
 			selectedVaultIds = [];
@@ -176,10 +175,7 @@ async function importFromOnePassword(): Promise<void> {
 	const importedCount = result.importedCount ?? 0;
 	const skippedCount = result.skippedCount ?? 0;
 	const errorCount = result.errorCount ?? 0;
-	toast(
-		`Imported ${importedCount} secrets (skipped ${skippedCount}, errors ${errorCount})`,
-		"success",
-	);
+	toast(`Imported ${importedCount} secrets (skipped ${skippedCount}, errors ${errorCount})`, "success");
 }
 
 // Keyboard navigation
@@ -188,10 +184,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 	if (e.defaultPrevented) return;
 
 	const target = e.target as HTMLElement;
-	const isInputFocused =
-		target.tagName === "INPUT" ||
-		target.tagName === "TEXTAREA" ||
-		target.isContentEditable;
+	const isInputFocused = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
 	// Escape: close add form or 1password panel first
 	if (e.key === "Escape") {
@@ -319,8 +312,8 @@ function getOnePasswordFocusTargets(): HTMLElement[] {
 	return (Array.from(all) as HTMLElement[])
 		.filter((el) => !(el as HTMLButtonElement).disabled)
 		.sort((a, b) => {
-			const ai = parseInt(a.getAttribute("data-focus-index") ?? "0", 10);
-			const bi = parseInt(b.getAttribute("data-focus-index") ?? "0", 10);
+			const ai = Number.parseInt(a.getAttribute("data-focus-index") ?? "0", 10);
+			const bi = Number.parseInt(b.getAttribute("data-focus-index") ?? "0", 10);
 			return ai - bi;
 		});
 }
@@ -432,15 +425,11 @@ function handleSecretItemKeydown(e: KeyboardEvent, index: number): void {
 	}
 }
 
-let onePasswordStatusLabel = $derived(
-	onePasswordStatus.connected
-		? "CONNECTED"
-		: onePasswordStatus.configured
-			? "UNREACHABLE"
-			: "NOT CONFIGURED",
+const onePasswordStatusLabel = $derived(
+	onePasswordStatus.connected ? "CONNECTED" : onePasswordStatus.configured ? "UNREACHABLE" : "NOT CONFIGURED",
 );
 
-let onePasswordStatusColor = $derived(
+const onePasswordStatusColor = $derived(
 	onePasswordStatus.connected
 		? "var(--sig-success)"
 		: onePasswordStatus.configured

@@ -31,12 +31,12 @@ function formatRelativeTime(iso: string | null): string {
 	return diff > 0 ? `${d}d` : `${d}d ago`;
 }
 
-let harnessLabel = $derived(
+const harnessLabel = $derived(
 	task.harness === "claude-code" ? "claude" : task.harness === "codex" ? "codex" : "opencode",
 );
 
-let nextRunLabel = $derived(formatRelativeTime(task.next_run_at));
-let lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
+const nextRunLabel = $derived(formatRelativeTime(task.next_run_at));
+const lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->

@@ -75,10 +75,7 @@ function estimateTokens(text: string): number {
  * Split content into chunks of approximately the specified token size.
  * Attempts to split on paragraph boundaries when possible.
  */
-export function chunkContent(
-	content: string,
-	options: ChunkOptions,
-): ChunkResult[] {
+export function chunkContent(content: string, options: ChunkOptions): ChunkResult[] {
 	const { maxTokens } = options;
 	const results: ChunkResult[] = [];
 
@@ -197,9 +194,7 @@ export function chunkMarkdownHierarchically(
 
 		if (sectionTokens <= options.maxTokens) {
 			// Section fits in one chunk - include header for context
-			const textWithHeader = currentHeader
-				? `${currentHeader}\n\n${sectionText}`
-				: sectionText;
+			const textWithHeader = currentHeader ? `${currentHeader}\n\n${sectionText}` : sectionText;
 			results.push({
 				text: textWithHeader,
 				tokenCount: estimateTokens(textWithHeader),
@@ -220,9 +215,7 @@ export function chunkMarkdownHierarchically(
 				if (paraTokens > options.maxTokens) {
 					// Flush current chunk first
 					if (chunkParas.length > 0) {
-						const text = currentHeader
-							? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
-							: chunkParas.join("\n\n");
+						const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
 						results.push({
 							text,
 							tokenCount: chunkTokens,
@@ -246,14 +239,9 @@ export function chunkMarkdownHierarchically(
 					continue;
 				}
 
-				if (
-					chunkTokens + paraTokens + 2 > options.maxTokens &&
-					chunkParas.length > 0
-				) {
+				if (chunkTokens + paraTokens + 2 > options.maxTokens && chunkParas.length > 0) {
 					// Flush current chunk
-					const text = currentHeader
-						? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
-						: chunkParas.join("\n\n");
+					const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
 					results.push({
 						text,
 						tokenCount: chunkTokens,
@@ -271,9 +259,7 @@ export function chunkMarkdownHierarchically(
 
 			// Final chunk for this section
 			if (chunkParas.length > 0) {
-				const text = currentHeader
-					? `${currentHeader}\n\n${chunkParas.join("\n\n")}`
-					: chunkParas.join("\n\n");
+				const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
 				results.push({
 					text,
 					tokenCount: chunkTokens,
@@ -352,9 +338,7 @@ export function importMemoryLogs(basePath: string, db: Database): ImportResult {
 	// Get all markdown files, excluding TEMPLATE files
 	let files: string[];
 	try {
-		files = readdirSync(memoryDir).filter(
-			(f) => f.endsWith(".md") && !f.startsWith("TEMPLATE"),
-		);
+		files = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && !f.startsWith("TEMPLATE"));
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		result.errors.push(`Failed to read memory directory: ${message}`);
@@ -368,9 +352,7 @@ export function importMemoryLogs(basePath: string, db: Database): ImportResult {
 
 		if (!date) {
 			result.skipped++;
-			result.errors.push(
-				`Invalid filename format (expected YYYY-MM-DD.md): ${file}`,
-			);
+			result.errors.push(`Invalid filename format (expected YYYY-MM-DD.md): ${file}`);
 			continue;
 		}
 

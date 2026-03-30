@@ -56,12 +56,8 @@ describe("daemon status contract", () => {
 		expect(typeof extraction?.overloaded).toBe("boolean");
 		expect(extraction).toHaveProperty("maxLoadPerCpu");
 		expect(extraction).toHaveProperty("overloadBackoffMs");
-		expect(
-			extraction?.maxLoadPerCpu === null || typeof extraction?.maxLoadPerCpu === "number",
-		).toBe(true);
-		expect(
-			extraction?.overloadBackoffMs === null || typeof extraction?.overloadBackoffMs === "number",
-		).toBe(true);
+		expect(extraction?.maxLoadPerCpu === null || typeof extraction?.maxLoadPerCpu === "number").toBe(true);
+		expect(extraction?.overloadBackoffMs === null || typeof extraction?.overloadBackoffMs === "number").toBe(true);
 		expect(extraction).toHaveProperty("loadPerCpu");
 		expect(extraction).toHaveProperty("overloadSince");
 		expect(extraction).toHaveProperty("nextTickInMs");
@@ -89,9 +85,7 @@ describe("daemon status contract", () => {
 		expect(extraction).toBeDefined();
 		expect(typeof extraction?.resolved).toBe("string");
 		expect(typeof extraction?.effective).toBe("string");
-		expect(
-			extraction?.fallbackProvider === "ollama" || extraction?.fallbackProvider === "none",
-		).toBe(true);
+		expect(extraction?.fallbackProvider === "ollama" || extraction?.fallbackProvider === "none").toBe(true);
 		expect(
 			extraction?.status === "active" ||
 				extraction?.status === "degraded" ||

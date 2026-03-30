@@ -9,7 +9,8 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cosineSimilarity, runMigrations } from "@signet/core";
+import { cosineSimilarity } from "@signet/core";
+import { runMigrations } from "../../core/src/migrations";
 import { vectorToBlob } from "./db-helpers";
 
 // ---------------------------------------------------------------------------
@@ -24,12 +25,7 @@ function insertMemory(db: Database, id: string, content: string): void {
 	).run(id, content, now, now);
 }
 
-function insertEmbedding(
-	db: Database,
-	id: string,
-	sourceId: string,
-	vector: readonly number[],
-): void {
+function insertEmbedding(db: Database, id: string, sourceId: string, vector: readonly number[]): void {
 	const now = new Date().toISOString();
 	db.prepare(
 		`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
@@ -68,11 +64,10 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		insertEmbedding(db, "emb-dissimilar", "mem-dissimilar", dissimilarVec);
 
 		// Read embeddings back from DB (same path as reranker-embedding.ts)
-		const rows = db
-			.prepare(
-				`SELECT source_id, vector FROM embeddings WHERE source_type = 'memory'`,
-			)
-			.all() as Array<{ source_id: string; vector: Buffer }>;
+		const rows = db.prepare(`SELECT source_id, vector FROM embeddings WHERE source_type = 'memory'`).all() as Array<{
+			source_id: string;
+			vector: Buffer;
+		}>;
 
 		expect(rows.length).toBe(2);
 
@@ -80,11 +75,7 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		const queryF32 = new Float32Array(queryVec);
 		const embMap = new Map<string, Float32Array>();
 		for (const row of rows) {
-			const f32 = new Float32Array(
-				row.vector.buffer,
-				row.vector.byteOffset,
-				row.vector.byteLength / 4,
-			);
+			const f32 = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
 			embMap.set(row.source_id, f32);
 		}
 
@@ -116,18 +107,14 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		const blendWeight = 0.3; // same as reranker-embedding.ts
 
 		// Read back from DB and compute blended scores
-		const rows = db
-			.prepare(
-				`SELECT source_id, vector FROM embeddings WHERE source_type = 'memory'`,
-			)
-			.all() as Array<{ source_id: string; vector: Buffer }>;
+		const rows = db.prepare(`SELECT source_id, vector FROM embeddings WHERE source_type = 'memory'`).all() as Array<{
+			source_id: string;
+			vector: Buffer;
+		}>;
 
 		const embMap = new Map<string, Float32Array>();
 		for (const row of rows) {
-			embMap.set(
-				row.source_id,
-				new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4),
-			);
+			embMap.set(row.source_id, new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4));
 		}
 
 		const reranked = candidates.map((c) => {
@@ -152,15 +139,9 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		insertMemory(db, "mem-rt", "round trip test");
 		insertEmbedding(db, "emb-rt", "mem-rt", original);
 
-		const row = db
-			.prepare(`SELECT vector FROM embeddings WHERE id = 'emb-rt'`)
-			.get() as { vector: Buffer };
+		const row = db.prepare(`SELECT vector FROM embeddings WHERE id = 'emb-rt'`).get() as { vector: Buffer };
 
-		const fromDb = new Float32Array(
-			row.vector.buffer,
-			row.vector.byteOffset,
-			row.vector.byteLength / 4,
-		);
+		const fromDb = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
 
 		// Compare against direct Float32Array construction (the TS fallback path)
 		const direct = new Float32Array(original);

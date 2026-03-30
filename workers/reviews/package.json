@@ -1,15 +1,15 @@
 {
-  "name": "signet-reviews-worker",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "migrate:local": "wrangler d1 migrations apply signet-reviews --local",
-    "migrate:remote": "wrangler d1 migrations apply signet-reviews --remote"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240614.0",
-    "wrangler": "^3.0.0"
-  }
+	"name": "signet-reviews-worker",
+	"version": "1.0.0",
+	"private": true,
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"migrate:local": "wrangler d1 migrations apply signet-reviews --local",
+		"migrate:remote": "wrangler d1 migrations apply signet-reviews --remote"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20240614.0",
+		"wrangler": "^3.0.0"
+	}
 }

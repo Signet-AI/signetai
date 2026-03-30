@@ -83,11 +83,11 @@
 	--color-glow: rgba(10, 10, 12, 0.035);
 
 	--color-highlight: #e8461e;
-	--color-highlight-muted: rgba(232, 70, 30, 0.10);
+	--color-highlight-muted: rgba(232, 70, 30, 0.1);
 	--color-highlight-dim: rgba(232, 70, 30, 0.06);
 	--color-highlight-text: #c83a18;
 	--color-electric: #2563eb;
-	--color-electric-muted: rgba(37, 99, 235, 0.10);
+	--color-electric-muted: rgba(37, 99, 235, 0.1);
 	--color-electric-dim: rgba(37, 99, 235, 0.05);
 	--color-danger: #9a3030;
 	--color-warning: #b87a00;
@@ -192,7 +192,7 @@ h4 {
 		transform var(--dur) var(--ease);
 	text-decoration: none;
 	border-radius: 0.5rem;
-	box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.4);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .btn:hover {
@@ -203,7 +203,7 @@ h4 {
 }
 .btn:active {
 	transform: translateY(0.5px);
-	box-shadow: inset 0 2px 4px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(0,0,0,0.2);
+	box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(0, 0, 0, 0.2);
 }
 .btn:focus-visible {
 	outline: 2px solid var(--color-text-bright);
@@ -211,10 +211,10 @@ h4 {
 }
 
 [data-theme="light"] .btn {
-	box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 2px rgba(0,0,0,0.06);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 [data-theme="light"] .btn:active {
-	box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+	box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .btn-ghost {
@@ -441,19 +441,19 @@ section {
 	background: color-mix(in srgb, var(--color-surface) 90%, transparent);
 	backdrop-filter: blur(12px);
 	-webkit-backdrop-filter: blur(12px);
-	box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.03) inset,
-		inset 0 1px 0 rgba(255,255,255,0.04);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03) inset, inset 0 1px 0
+		rgba(255, 255, 255, 0.04);
 	position: relative;
 }
 
 [data-theme="dark"] .site-nav {
-	box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.03) inset,
-		inset 0 1px 0 rgba(255,255,255,0.04);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.03) inset, inset 0 1px 0
+		rgba(255, 255, 255, 0.04);
 }
 
 [data-theme="light"] .site-nav {
-	box-shadow: 0 2px 6px rgba(0,0,0,0.1), 0 0 0 1px rgba(255,255,255,0.6) inset,
-		inset 0 1px 0 rgba(255,255,255,0.8);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(255, 255, 255, 0.6) inset, inset 0 1px 0
+		rgba(255, 255, 255, 0.8);
 }
 
 .nav-brand {
@@ -889,7 +889,6 @@ html.nav-open #nav-line-2 {
 		display: inline-flex;
 	}
 
-
 	.hero {
 		min-height: auto;
 		padding-top: var(--space-xl);
@@ -958,9 +957,13 @@ body::after {
 	z-index: 9998;
 	pointer-events: none;
 	opacity: var(--sig-scanline-opacity);
-	background-image: repeating-linear-gradient(0deg,
-		transparent, transparent 2px,
-		rgba(0,0,0,0.3) 2px, rgba(0,0,0,0.3) 4px);
+	background-image: repeating-linear-gradient(
+		0deg,
+		transparent,
+		transparent 2px,
+		rgba(0, 0, 0, 0.3) 2px,
+		rgba(0, 0, 0, 0.3) 4px
+	);
 	background-size: 100% 4px;
 }
 
@@ -992,17 +995,11 @@ body::after {
 	border: 1px solid rgba(255, 255, 255, 0.08);
 	border-radius: 0.5rem;
 	overflow: hidden;
-	box-shadow:
-		inset 0 1px 0 rgba(255, 255, 255, 0.08),
-		0 2px 4px rgba(0, 0, 0, 0.5),
-		0 0 0 1px rgba(255, 255, 255, 0.03);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 [data-theme="light"] .sig-panel {
 	border: 1px solid var(--color-border);
-	box-shadow:
-		inset 0 1px 0 rgba(255, 255, 255, 0.7),
-		0 1px 3px rgba(0, 0, 0, 0.08),
-		0 0 0 1px rgba(0, 0, 0, 0.04);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 3px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
 }
 
 /* Badge variants */

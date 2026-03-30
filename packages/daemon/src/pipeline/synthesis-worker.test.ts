@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { startSynthesisWorker } from "./synthesis-worker";
 
 let agentsDir = "";
 let previousSignetPath: string | undefined;
@@ -17,43 +18,46 @@ const mockHandleSynthesisRequest = mock(
 );
 const mockWriteMemoryMd = mock((_content: string, _opts?: { owner?: string }) => ({ ok: true as const }));
 const mockActiveSessionCount = mock(() => 0);
+const baseCfg = {
+	enabled: true,
+	provider: "claude-code" as const,
+	model: "sonnet",
+	timeout: 1000,
+	maxTokens: 8000,
+	idleGapMinutes: 15,
+};
 
-mock.module("../hooks", () => ({
-	handleSynthesisRequest: mockHandleSynthesisRequest,
-	writeMemoryMd: mockWriteMemoryMd,
-}));
-
-mock.module("../session-tracker", () => ({
-	activeSessionCount: mockActiveSessionCount,
-}));
-
-mock.module("../logger", () => ({
-	logger: {
-		info() {},
-		warn() {},
-		error() {},
-	},
-}));
-
-mock.module("../db-accessor", () => ({
-	getDbAccessor: () => ({
-		withReadDb: (fn: (db: { prepare: (sql: string) => { get: () => { last_end: string } } }) => unknown) =>
-			fn({
-				prepare: (_sql: string) => ({
-					get: () => ({ last_end: new Date(Date.now() - 60_000).toISOString() }),
+function makeDeps() {
+	return {
+		handleSynthesisRequest: mockHandleSynthesisRequest,
+		writeMemoryMd: mockWriteMemoryMd,
+		activeSessionCount: mockActiveSessionCount,
+		logger: {
+			debug() {},
+			info() {},
+			warn() {},
+			error() {},
+		},
+		getDbAccessor: () => ({
+			withReadDb: (fn: (db: { prepare: (sql: string) => { get: () => { last_end: string } } }) => unknown) =>
+				fn({
+					prepare: (_sql: string) => ({
+						get: () => ({ last_end: new Date(Date.now() - 60_000).toISOString() }),
+					}),
 				}),
-			}),
-	}),
-}));
+		}),
+	};
+}
 
-let startSynthesisWorker: typeof import("./synthesis-worker").startSynthesisWorker;
+function createWorker() {
+	return startSynthesisWorker(baseCfg, makeDeps());
+}
 
 describe("synthesis-worker", () => {
-	beforeAll(async () => {
+	beforeAll(() => {
 		previousSignetPath = process.env.SIGNET_PATH;
 		agentsDir = mkdtempSync(join(tmpdir(), "signet-synthesis-worker-"));
 		process.env.SIGNET_PATH = agentsDir;
-		({ startSynthesisWorker } = await import("./synthesis-worker"));
 	});
 
 	beforeEach(() => {
@@ -79,14 +83,7 @@ describe("synthesis-worker", () => {
 	});
 
 	it("skips manual synthesis while the shared write lock is held", async () => {
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const lockToken = worker.acquireWriteLock();
@@ -112,14 +109,7 @@ describe("synthesis-worker", () => {
 	});
 
 	it("writes the rendered projection through the shared MEMORY.md helper", async () => {
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const result = await worker.triggerNow();
@@ -139,14 +129,7 @@ describe("synthesis-worker", () => {
 	});
 
 	it("skips manual synthesis after the worker has been stopped", async () => {
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		worker.stop();
 		const result = await worker.triggerNow();
@@ -167,14 +150,7 @@ describe("synthesis-worker", () => {
 			JSON.stringify({ lastRunAt: Date.now() - 5 * 60 * 1000 }),
 		);
 
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const result = await worker.triggerNow();
@@ -194,14 +170,7 @@ describe("synthesis-worker", () => {
 		mkdirSync(join(agentsDir, ".daemon"), { recursive: true });
 		writeFileSync(join(agentsDir, ".daemon", "last-synthesis.json"), JSON.stringify({ lastRunAt: Date.now() }));
 
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const result = await worker.triggerNow({ agentId: "agent-b" });
@@ -223,14 +192,7 @@ describe("synthesis-worker", () => {
 			JSON.stringify({ lastRunAt: Date.now() - 5 * 60 * 1000 }),
 		);
 
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const result = await worker.triggerNow({ force: true, source: "session-summary" });
@@ -250,14 +212,7 @@ describe("synthesis-worker", () => {
 	});
 
 	it("threads agent scope into forced synthesis requests", async () => {
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			await worker.triggerNow({
@@ -280,14 +235,7 @@ describe("synthesis-worker", () => {
 	});
 
 	it("queues forced trigger when synthesis is already in progress", async () => {
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const lockToken = worker.acquireWriteLock();
@@ -311,14 +259,7 @@ describe("synthesis-worker", () => {
 	});
 
 	it("keeps separate forced retry entries for different agents", async () => {
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const lockToken = worker.acquireWriteLock();
@@ -341,14 +282,7 @@ describe("synthesis-worker", () => {
 	});
 
 	it("keeps follow-up forced retry signals for the same agent", async () => {
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const lockToken = worker.acquireWriteLock();
@@ -394,14 +328,7 @@ describe("synthesis-worker", () => {
 				: { ok: true as const },
 		);
 
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const lockToken = worker.acquireWriteLock();
@@ -435,14 +362,7 @@ describe("synthesis-worker", () => {
 			code: "busy" as const,
 		}));
 
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const result = await worker.triggerNow();
@@ -464,14 +384,7 @@ describe("synthesis-worker", () => {
 			code: "busy" as const,
 		}));
 
-		const worker = startSynthesisWorker({
-			enabled: true,
-			provider: "claude-code",
-			model: "sonnet",
-			timeout: 1000,
-			maxTokens: 8000,
-			idleGapMinutes: 15,
-		});
+		const worker = createWorker();
 
 		try {
 			const result = await worker.triggerNow({ force: true, source: "compaction-complete" });

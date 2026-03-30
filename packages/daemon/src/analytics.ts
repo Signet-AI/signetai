@@ -85,13 +85,7 @@ export interface ErrorEntry {
 // Latency histogram
 // ---------------------------------------------------------------------------
 
-export type LatencyOperation =
-	| "remember"
-	| "recall"
-	| "mutate"
-	| "jobs"
-	| "predictor_score"
-	| "predictor_train";
+export type LatencyOperation = "remember" | "recall" | "mutate" | "jobs" | "predictor_score" | "predictor_train";
 
 export interface LatencySnapshot {
 	readonly p50: number;
@@ -160,25 +154,11 @@ function createLatencyHistogram(capacity = 1000): LatencyHistogram {
 // ---------------------------------------------------------------------------
 
 export interface AnalyticsCollector {
-	recordRequest(
-		method: string,
-		path: string,
-		status: number,
-		durationMs: number,
-		actor?: string,
-	): void;
+	recordRequest(method: string, path: string, status: number, durationMs: number, actor?: string): void;
 
-	recordProvider(
-		provider: string,
-		durationMs: number,
-		success: boolean,
-	): void;
+	recordProvider(provider: string, durationMs: number, success: boolean): void;
 
-	recordConnector(
-		connectorId: string,
-		event: "sync" | "error" | "document",
-		count?: number,
-	): void;
+	recordConnector(connectorId: string, event: "sync" | "error" | "document", count?: number): void;
 
 	recordError(entry: ErrorEntry): void;
 
@@ -199,9 +179,7 @@ export interface AnalyticsCollector {
 	reset(): void;
 }
 
-export function createAnalyticsCollector(
-	errorCapacity = 500,
-): AnalyticsCollector {
+export function createAnalyticsCollector(errorCapacity = 500): AnalyticsCollector {
 	const endpoints = new Map<string, Mutable<EndpointStats>>();
 	const actors = new Map<string, Mutable<ActorStats>>();
 	const providers = new Map<string, Mutable<ProviderStats>>();
@@ -219,24 +197,14 @@ export function createAnalyticsCollector(
 	};
 
 	// Detect operation type from request path
-	function classifyActor(
-		path: string,
-	): "remembers" | "recalls" | "mutations" | "requests" {
+	function classifyActor(path: string): "remembers" | "recalls" | "mutations" | "requests" {
 		if (path.includes("/remember") || path.includes("/save")) {
 			return "remembers";
 		}
-		if (
-			path.includes("/recall") ||
-			path.includes("/search") ||
-			path.includes("/similar")
-		) {
+		if (path.includes("/recall") || path.includes("/search") || path.includes("/similar")) {
 			return "recalls";
 		}
-		if (
-			path.includes("/modify") ||
-			path.includes("/forget") ||
-			path.includes("/recover")
-		) {
+		if (path.includes("/modify") || path.includes("/forget") || path.includes("/recover")) {
 			return "mutations";
 		}
 		return "requests";

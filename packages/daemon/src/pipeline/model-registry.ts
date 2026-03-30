@@ -33,13 +33,31 @@ const KNOWN_MODELS: Record<string, ModelRegistryEntry[]> = {
 		{ id: "claude-opus-4-6", provider: "claude-code", label: "Claude Opus 4.6", tier: "high", deprecated: false },
 		{ id: "claude-sonnet-4-6", provider: "claude-code", label: "Claude Sonnet 4.6", tier: "mid", deprecated: false },
 		{ id: "claude-haiku-4-5", provider: "claude-code", label: "Claude Haiku 4.5", tier: "low", deprecated: false },
-		{ id: "claude-3-5-haiku-20241022", provider: "claude-code", label: "Claude 3.5 Haiku", tier: "low", deprecated: false },
+		{
+			id: "claude-3-5-haiku-20241022",
+			provider: "claude-code",
+			label: "Claude 3.5 Haiku",
+			tier: "low",
+			deprecated: false,
+		},
 	],
 	anthropic: [
 		{ id: "claude-opus-4-6", provider: "anthropic", label: "Claude Opus 4.6", tier: "high", deprecated: false },
 		{ id: "claude-sonnet-4-6", provider: "anthropic", label: "Claude Sonnet 4.6", tier: "mid", deprecated: false },
-		{ id: "claude-haiku-4-5-20251001", provider: "anthropic", label: "Claude Haiku 4.5", tier: "low", deprecated: false },
-		{ id: "claude-3-5-haiku-20241022", provider: "anthropic", label: "Claude 3.5 Haiku", tier: "low", deprecated: false },
+		{
+			id: "claude-haiku-4-5-20251001",
+			provider: "anthropic",
+			label: "Claude Haiku 4.5",
+			tier: "low",
+			deprecated: false,
+		},
+		{
+			id: "claude-3-5-haiku-20241022",
+			provider: "anthropic",
+			label: "Claude 3.5 Haiku",
+			tier: "low",
+			deprecated: false,
+		},
 	],
 	codex: [
 		{ id: "gpt-5-codex-mini", provider: "codex", label: "GPT Mini", tier: "low", deprecated: false },
@@ -49,18 +67,54 @@ const KNOWN_MODELS: Record<string, ModelRegistryEntry[]> = {
 		{ id: "gpt-5-codex", provider: "codex", label: "GPT 5 Codex", tier: "mid", deprecated: false },
 	],
 	opencode: [
-		{ id: "anthropic/claude-opus-4-6", provider: "opencode", label: "Claude Opus 4.6", tier: "high", deprecated: false },
-		{ id: "anthropic/claude-sonnet-4-6", provider: "opencode", label: "Claude Sonnet 4.6", tier: "mid", deprecated: false },
-		{ id: "anthropic/claude-haiku-4-5-20251001", provider: "opencode", label: "Claude Haiku 4.5", tier: "low", deprecated: false },
+		{
+			id: "anthropic/claude-opus-4-6",
+			provider: "opencode",
+			label: "Claude Opus 4.6",
+			tier: "high",
+			deprecated: false,
+		},
+		{
+			id: "anthropic/claude-sonnet-4-6",
+			provider: "opencode",
+			label: "Claude Sonnet 4.6",
+			tier: "mid",
+			deprecated: false,
+		},
+		{
+			id: "anthropic/claude-haiku-4-5-20251001",
+			provider: "opencode",
+			label: "Claude Haiku 4.5",
+			tier: "low",
+			deprecated: false,
+		},
 		{ id: "google/gemini-2.5-flash", provider: "opencode", label: "Gemini 2.5 Flash", tier: "low", deprecated: false },
 	],
 	openrouter: [
 		// Keep these slugs valid for no-discovery fallback mode.
 		{ id: "openai/gpt-4o-mini", provider: "openrouter", label: "GPT-4o Mini", tier: "low", deprecated: false },
 		{ id: "openai/gpt-4o", provider: "openrouter", label: "GPT-4o", tier: "mid", deprecated: false },
-		{ id: "anthropic/claude-haiku-4-5-20251001", provider: "openrouter", label: "Claude Haiku 4.5", tier: "low", deprecated: false },
-		{ id: "anthropic/claude-sonnet-4-6", provider: "openrouter", label: "Claude Sonnet 4.6", tier: "mid", deprecated: false },
-		{ id: "google/gemini-2.5-flash", provider: "openrouter", label: "Gemini 2.5 Flash", tier: "low", deprecated: false },
+		{
+			id: "anthropic/claude-haiku-4-5-20251001",
+			provider: "openrouter",
+			label: "Claude Haiku 4.5",
+			tier: "low",
+			deprecated: false,
+		},
+		{
+			id: "anthropic/claude-sonnet-4-6",
+			provider: "openrouter",
+			label: "Claude Sonnet 4.6",
+			tier: "mid",
+			deprecated: false,
+		},
+		{
+			id: "google/gemini-2.5-flash",
+			provider: "openrouter",
+			label: "Gemini 2.5 Flash",
+			tier: "low",
+			deprecated: false,
+		},
 	],
 	ollama: [
 		{ id: "qwen3:4b", provider: "ollama", label: "Qwen3 4B", tier: "low", deprecated: true },
@@ -234,11 +288,7 @@ async function discoverAnthropicModels(apiKey: string | undefined): Promise<Mode
 
 function inferOpenRouterTier(id: string): "high" | "mid" | "low" {
 	const normalized = id.toLowerCase();
-	if (
-		normalized.includes("-mini") ||
-		normalized.includes(":mini") ||
-		normalized.endsWith("mini")
-	) {
+	if (normalized.includes("-mini") || normalized.includes(":mini") || normalized.endsWith("mini")) {
 		return "low";
 	}
 	if (
@@ -249,11 +299,7 @@ function inferOpenRouterTier(id: string): "high" | "mid" | "low" {
 	) {
 		return "high";
 	}
-	if (
-		normalized.includes("sonnet") ||
-		normalized.includes("gpt-4") ||
-		normalized.includes("r1")
-	) {
+	if (normalized.includes("sonnet") || normalized.includes("gpt-4") || normalized.includes("r1")) {
 		return "mid";
 	}
 	return "low";
@@ -286,16 +332,12 @@ async function discoverOpenRouterModels(
 
 		const entries = data.data
 			.filter(
-				(model): model is { id: string; name?: string } =>
-					typeof model.id === "string" && model.id.trim().length > 0,
+				(model): model is { id: string; name?: string } => typeof model.id === "string" && model.id.trim().length > 0,
 			)
 			.map((model) => ({
 				id: model.id,
 				provider: "openrouter",
-				label:
-					typeof model.name === "string" && model.name.trim().length > 0
-						? model.name
-						: model.id,
+				label: typeof model.name === "string" && model.name.trim().length > 0 ? model.name : model.id,
 				tier: inferOpenRouterTier(model.id),
 				deprecated: false,
 			}));
@@ -346,12 +388,7 @@ export function initModelRegistry(
 	}
 
 	// Run initial discovery
-	refreshRegistry(
-		ollamaBaseUrl,
-		anthropicApiKey,
-		openRouterApiKey,
-		openRouterBaseUrl,
-	).catch((err) => {
+	refreshRegistry(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl).catch((err) => {
 		logger.warn("model-registry", "Initial registry refresh failed", { error: String(err) });
 	});
 
@@ -359,12 +396,7 @@ export function initModelRegistry(
 	if (config.refreshIntervalMs > 0) {
 		state.refreshTimer = setInterval(
 			() =>
-				refreshRegistry(
-					ollamaBaseUrl,
-					anthropicApiKey,
-					openRouterApiKey,
-					openRouterBaseUrl,
-				).catch((err) => {
+				refreshRegistry(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl).catch((err) => {
 					logger.warn("model-registry", "Periodic registry refresh failed", { error: String(err) });
 				}),
 			config.refreshIntervalMs,
@@ -391,12 +423,7 @@ export async function refreshRegistry(
 	}
 
 	const doRefresh = async (): Promise<void> => {
-		await _refreshRegistryInner(
-			ollamaBaseUrl,
-			anthropicApiKey,
-			openRouterApiKey,
-			openRouterBaseUrl,
-		);
+		await _refreshRegistryInner(ollamaBaseUrl, anthropicApiKey, openRouterApiKey, openRouterBaseUrl);
 	};
 	refreshInFlight = doRefresh();
 	try {

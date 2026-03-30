@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import { Hono } from "hono";
 import { mountMcpAnalyticsRoutes } from "./mcp-analytics.js";
 

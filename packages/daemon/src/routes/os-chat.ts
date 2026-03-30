@@ -21,7 +21,7 @@ let cachedApiKey: string | null = null;
  */
 async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
 	if (!cachedApiKey) {
-		cachedApiKey = process.env.OPENAI_API_KEY || await getSecret("OPENAI_API_KEY").catch(() => "");
+		cachedApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
 	}
 	const apiKey = cachedApiKey;
 	if (!apiKey) throw new Error("OPENAI_API_KEY not found in env or secrets");
@@ -30,7 +30,7 @@ async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 20
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
-			"Authorization": `Bearer ${apiKey}`,
+			Authorization: `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify({
 			model: "gpt-4o",
@@ -47,7 +47,7 @@ async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 20
 		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
 	}
 
-	const data = await res.json() as { choices: Array<{ message: { content: string } }> };
+	const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
 	return data.choices?.[0]?.message?.content ?? "";
 }
 import { loadProbeResult } from "../mcp-probe.js";
@@ -265,24 +265,28 @@ export function mountOsChatRoutes(app: Hono): void {
 				const marketplaceModule = await import("./marketplace.js");
 				const { readInstalledServersPublic } = await import("./marketplace-helpers.js");
 
-				for (const call of parsed.toolCalls.slice(0, 5)) { // Max 5 tool calls
+				for (const call of parsed.toolCalls.slice(0, 5)) {
+					// Max 5 tool calls
 					try {
 						logger.info("os-chat", `Calling tool ${call.serverId}/${call.toolName}`, {
-						args: JSON.stringify(call.args || {}).slice(0, 500),
-					});
-
-						// Call the tool via the marketplace /mcp/call endpoint internally
-						const callRes = await fetch(`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`, {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({
-								serverId: call.serverId,
-								toolName: call.toolName,
-								args: call.args || {},
-							}),
+							args: JSON.stringify(call.args || {}).slice(0, 500),
 						});
 
-						const callData = await callRes.json() as { success?: boolean; result?: unknown; error?: string };
+						// Call the tool via the marketplace /mcp/call endpoint internally
+						const callRes = await fetch(
+							`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`,
+							{
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({
+									serverId: call.serverId,
+									toolName: call.toolName,
+									args: call.args || {},
+								}),
+							},
+						);
+
+						const callData = (await callRes.json()) as { success?: boolean; result?: unknown; error?: string };
 
 						if (callData.success) {
 							toolCallResults.push({
@@ -312,9 +316,8 @@ export function mountOsChatRoutes(app: Hono): void {
 					const resultsText = toolCallResults
 						.map((r) => {
 							if (r.error) return `${r.tool}: ERROR — ${r.error}`;
-							const resultStr = typeof r.result === "string"
-								? r.result.slice(0, 2000)
-								: JSON.stringify(r.result).slice(0, 2000);
+							const resultStr =
+								typeof r.result === "string" ? r.result.slice(0, 2000) : JSON.stringify(r.result).slice(0, 2000);
 							return `${r.tool}: ${resultStr}`;
 						})
 						.join("\n\n");

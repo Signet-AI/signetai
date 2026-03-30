@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
 import {

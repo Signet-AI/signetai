@@ -29,11 +29,7 @@ function stripFrontmatter(content: string): string {
  * - **inject** mode: prepends skill content before the prompt.
  * - **slash** mode: wraps prompt with `/{skillName} {basePrompt}`.
  */
-export function resolveSkillPrompt(
-	basePrompt: string,
-	skillName: string | null,
-	skillMode: string | null,
-): string {
+export function resolveSkillPrompt(basePrompt: string, skillName: string | null, skillMode: string | null): string {
 	if (!skillName) return basePrompt;
 
 	if (skillMode === "slash") {

@@ -6,7 +6,9 @@ import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
 
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
 
 interface LeaseRow {
 	readonly token: string;
@@ -132,11 +134,12 @@ function releaseHeadLease(agentId: string, token: string): void {
 }
 
 function writeProjection(content: string): void {
-	const path = join(AGENTS_DIR, "MEMORY.md");
+	const agentsDir = getAgentsDir();
+	const path = join(agentsDir, "MEMORY.md");
 	if (existsSync(path)) {
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-		const backup = join(AGENTS_DIR, "memory", `MEMORY.backup-${stamp}.md`);
-		mkdirSync(join(AGENTS_DIR, "memory"), { recursive: true });
+		const backup = join(agentsDir, "memory", `MEMORY.backup-${stamp}.md`);
+		mkdirSync(join(agentsDir, "memory"), { recursive: true });
 		writeFileSync(backup, readFileSync(path, "utf-8"));
 	}
 	writeFileSync(path, projectMemoryMd(content));
@@ -164,7 +167,7 @@ export function writeMemoryHead(
 
 	const agentId = opts?.agentId ?? "default";
 	const owner = opts?.owner ?? `memory-head:${process.pid}:${randomUUID().slice(0, 8)}`;
-	const ttlMs = loadMemoryConfig(AGENTS_DIR).pipelineV2.worker.leaseTimeoutMs;
+	const ttlMs = loadMemoryConfig(getAgentsDir()).pipelineV2.worker.leaseTimeoutMs;
 	const lease = acquireHeadLease(agentId, owner, ttlMs);
 
 	if (!lease.ok && lease.code === "busy") {

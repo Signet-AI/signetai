@@ -13,14 +13,7 @@ import type { AgentDefinition } from "./types";
 const AGENT_SPECIFIC = new Set(["SOUL.md", "IDENTITY.md"]);
 
 /** All recognized shared identity files. */
-const SHARED_FILES = [
-	"AGENTS.md",
-	"USER.md",
-	"TOOLS.md",
-	"HEARTBEAT.md",
-	"MEMORY.md",
-	"BOOTSTRAP.md",
-];
+const SHARED_FILES = ["AGENTS.md", "USER.md", "TOOLS.md", "HEARTBEAT.md", "MEMORY.md", "BOOTSTRAP.md"];
 
 /**
  * Scans {agentsDir}/agents/* subdirectories and returns a minimal
@@ -44,12 +37,10 @@ export function scaffoldAgent(name: string, agentsDir: string): void {
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
 	const soul = join(dir, "SOUL.md");
-	if (!existsSync(soul))
-		writeFileSync(soul, `# Soul\n\nAdd ${name}'s personality here.\n`);
+	if (!existsSync(soul)) writeFileSync(soul, `# Soul\n\nAdd ${name}'s personality here.\n`);
 
 	const identity = join(dir, "IDENTITY.md");
-	if (!existsSync(identity))
-		writeFileSync(identity, `# Identity\n\nname: ${name}\n`);
+	if (!existsSync(identity)) writeFileSync(identity, `# Identity\n\nname: ${name}\n`);
 }
 
 /**
@@ -61,10 +52,7 @@ export function scaffoldAgent(name: string, agentsDir: string): void {
  * - All other files (`AGENTS.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`,
  *   `MEMORY.md`, `BOOTSTRAP.md`): always use root (shared by all agents).
  */
-export function getAgentIdentityFiles(
-	name: string,
-	agentsDir: string,
-): Record<string, string> {
+export function getAgentIdentityFiles(name: string, agentsDir: string): Record<string, string> {
 	const result: Record<string, string> = {};
 	const agentDir = join(agentsDir, "agents", name);
 
@@ -90,10 +78,7 @@ export function getAgentIdentityFiles(
  * - Empty array → no skills.
  * - Non-empty array → intersection with `allSkills`.
  */
-export function resolveAgentSkills(
-	agentDef: AgentDefinition,
-	allSkills: readonly string[],
-): string[] {
+export function resolveAgentSkills(agentDef: AgentDefinition, allSkills: readonly string[]): string[] {
 	if (agentDef.skills == null) return [...allSkills];
 	if (agentDef.skills.length === 0) return [];
 	const allowed = new Set(agentDef.skills);

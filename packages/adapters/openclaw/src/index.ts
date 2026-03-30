@@ -908,7 +908,11 @@ interface ResolvedCtx {
 function resolveCtx(event: Record<string, unknown>, ctx: unknown): ResolvedCtx {
 	const c = isRecord(ctx) ? ctx : {};
 	return {
-		sessionKey: readString(c.sessionKey) ?? readString(event.sessionKey) ?? readString(c.sessionId) ?? readString(event.sessionId),
+		sessionKey:
+			readString(c.sessionKey) ??
+			readString(event.sessionKey) ??
+			readString(c.sessionId) ??
+			readString(event.sessionId),
 		agentId: readString(c.agentId) ?? readString(event.agentId),
 		project: firstNonEmptyString(
 			c.workspaceDir,
@@ -1885,7 +1889,14 @@ const signetPlugin = {
 				// Legacy dedup: increment bpbGen so bas can detect if bpb ran this turn.
 				const bpbKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
 				if (bpbKey) bpbGen.set(bpbKey, (bpbGen.get(bpbKey) ?? 0) + 1);
-				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount, msgs);
+				maybeFireCheckpoint(
+					resolved.sessionKey,
+					resolved.agentId,
+					resolved.project,
+					resolved.sessionFile,
+					msgCount,
+					msgs,
+				);
 				return result;
 			},
 			{ priority: 20 },
@@ -1908,7 +1919,14 @@ const signetPlugin = {
 			const coveredByBpb = latestBpb > lastConsumed;
 			if (basKey && coveredByBpb) basGen.set(basKey, latestBpb);
 			if (!coveredByBpb || msgCount !== undefined) {
-				maybeFireCheckpoint(resolved.sessionKey, resolved.agentId, resolved.project, resolved.sessionFile, msgCount, msgs);
+				maybeFireCheckpoint(
+					resolved.sessionKey,
+					resolved.agentId,
+					resolved.project,
+					resolved.sessionFile,
+					msgCount,
+					msgs,
+				);
 			}
 			return result;
 		});

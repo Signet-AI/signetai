@@ -1,28 +1,28 @@
 <script lang="ts">
-	import { browser } from "$app/environment";
-	import X from "@lucide/svelte/icons/x";
-	import Chrome from "@lucide/svelte/icons/chrome";
-	import Globe from "@lucide/svelte/icons/globe";
+import { browser } from "$app/environment";
+import Chrome from "@lucide/svelte/icons/chrome";
+import Globe from "@lucide/svelte/icons/globe";
+import X from "@lucide/svelte/icons/x";
 
-	const STORAGE_KEY = "signet-extension-banner-dismissed";
-	const EXTENSION_MARKER = "signetExtension";
+const STORAGE_KEY = "signet-extension-banner-dismissed";
+const EXTENSION_MARKER = "signetExtension";
 
-	let dismissed = $state(false);
-	let extensionInstalled = $state(false);
+let dismissed = $state(false);
+let extensionInstalled = $state(false);
 
+if (browser) {
+	dismissed = localStorage.getItem(STORAGE_KEY) === "true";
+	extensionInstalled = document.documentElement.dataset[EXTENSION_MARKER] === "true";
+}
+
+const visible = $derived(!dismissed && !extensionInstalled);
+
+function dismiss() {
+	dismissed = true;
 	if (browser) {
-		dismissed = localStorage.getItem(STORAGE_KEY) === "true";
-		extensionInstalled = document.documentElement.dataset[EXTENSION_MARKER] === "true";
+		localStorage.setItem(STORAGE_KEY, "true");
 	}
-
-	const visible = $derived(!dismissed && !extensionInstalled);
-
-	function dismiss() {
-		dismissed = true;
-		if (browser) {
-			localStorage.setItem(STORAGE_KEY, "true");
-		}
-	}
+}
 </script>
 
 {#if visible}

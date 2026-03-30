@@ -196,7 +196,9 @@ async function offerOllamaInstallFlow(): Promise<boolean> {
 	return false;
 }
 
-async function queryOllamaModels(baseUrl = "http://localhost:11434"): Promise<{ available: boolean; models: string[]; error?: string }> {
+async function queryOllamaModels(
+	baseUrl = "http://localhost:11434",
+): Promise<{ available: boolean; models: string[]; error?: string }> {
 	try {
 		const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/tags`, {
 			signal: AbortSignal.timeout(5000),
@@ -206,7 +208,9 @@ async function queryOllamaModels(baseUrl = "http://localhost:11434"): Promise<{ 
 		}
 
 		const data = (await response.json()) as { models?: Array<{ name?: string }> };
-		const models = (data.models ?? []).map((model) => model.name?.trim()).filter((model): model is string => Boolean(model));
+		const models = (data.models ?? [])
+			.map((model) => model.name?.trim())
+			.filter((model): model is string => Boolean(model));
 		return { available: true, models };
 	} catch (err) {
 		return { available: false, models: [], error: readErr(err) };

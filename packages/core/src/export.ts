@@ -93,11 +93,7 @@ const IDENTITY_FILE_NAMES = [
 // Export
 // ---------------------------------------------------------------------------
 
-export function collectExportData(
-	agentsDir: string,
-	db: ExportDb,
-	options: ExportOptions = {},
-): ExportData {
+export function collectExportData(agentsDir: string, db: ExportDb, options: ExportOptions = {}): ExportData {
 	// Read agent.yaml
 	let agentYaml: string | null = null;
 	const yamlPath = join(agentsDir, "agent.yaml");
@@ -188,11 +184,7 @@ export function collectExportData(
 	};
 }
 
-function collectSkillFiles(
-	dir: string,
-	prefix: string,
-	out: Array<{ path: string; content: string }>,
-): void {
+function collectSkillFiles(dir: string, prefix: string, out: Array<{ path: string; content: string }>): void {
 	try {
 		const entries = readdirSync(dir, { withFileTypes: true });
 		for (const entry of entries) {
@@ -219,9 +211,7 @@ function collectSkillFiles(
  * Serialize export data to JSONL format for memories, entities, relations.
  * Returns a map of filename -> content for the export archive.
  */
-export function serializeExportData(
-	data: ExportData,
-): ReadonlyMap<string, string> {
+export function serializeExportData(data: ExportData): ReadonlyMap<string, string> {
 	const files = new Map<string, string>();
 
 	files.set("manifest.json", JSON.stringify(data.manifest, null, 2));
@@ -234,20 +224,11 @@ export function serializeExportData(
 		files.set(`identity/${f.name}`, f.content);
 	}
 
-	files.set(
-		"memories.jsonl",
-		data.memories.map((m) => JSON.stringify(m)).join("\n"),
-	);
+	files.set("memories.jsonl", data.memories.map((m) => JSON.stringify(m)).join("\n"));
 
-	files.set(
-		"entities.jsonl",
-		data.entities.map((e) => JSON.stringify(e)).join("\n"),
-	);
+	files.set("entities.jsonl", data.entities.map((e) => JSON.stringify(e)).join("\n"));
 
-	files.set(
-		"relations.jsonl",
-		data.relations.map((r) => JSON.stringify(r)).join("\n"),
-	);
+	files.set("relations.jsonl", data.relations.map((r) => JSON.stringify(r)).join("\n"));
 
 	for (const skill of data.skills) {
 		for (const f of skill.files) {

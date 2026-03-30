@@ -6,35 +6,35 @@
 import type {
 	ConstellationEntity,
 	ConstellationGraph,
-	KnowledgeEntityDetail,
 	KnowledgeAspectWithCounts,
 	KnowledgeAttribute,
 	KnowledgeDependencyEdge,
+	KnowledgeEntityDetail,
 	ProjectionResponse,
 } from "$lib/api";
 import {
+	type KnowledgeStats,
 	getConstellationOverlay,
-	getKnowledgeEntity,
+	getEmbeddings,
 	getKnowledgeAspects,
 	getKnowledgeAttributes,
 	getKnowledgeDependencies,
+	getKnowledgeEntity,
 	getKnowledgeStats,
 	getMemories,
-	getEmbeddings,
 	getProjection,
-	type KnowledgeStats,
 } from "$lib/api";
 import {
+	DEFAULT_EDGE_FILTER,
+	DEFAULT_NODE_FILTER,
+	type OntologyEdge,
+	type OntologyEdgeKind,
+	type OntologyNode,
+	type OntologyNodeKind,
+	TABLE_EDGE_FILTER,
+	TABLE_NODE_FILTER,
 	buildGraphFromConstellation,
 	relatedIdsForEntity,
-	TABLE_NODE_FILTER,
-	TABLE_EDGE_FILTER,
-	DEFAULT_NODE_FILTER,
-	DEFAULT_EDGE_FILTER,
-	type OntologyNode,
-	type OntologyEdge,
-	type OntologyNodeKind,
-	type OntologyEdgeKind,
 } from "./ontology-data";
 
 export interface SelectedNode {
@@ -120,7 +120,10 @@ export async function loadGraph(agentId = "default"): Promise<void> {
 	ontology.searchMatchIds = null;
 	ontology.searching = false;
 	// Cancel any pending debounced search and invalidate in-flight callbacks
-	if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+	if (searchTimer) {
+		clearTimeout(searchTimer);
+		searchTimer = null;
+	}
 	searchGeneration++;
 	ontology.tableStats = null;
 	try {
@@ -158,7 +161,10 @@ let searchGeneration = 0;
 export function searchGraph(query: string, delay = 250): void {
 	ontology.filterQuery = query;
 
-	if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+	if (searchTimer) {
+		clearTimeout(searchTimer);
+		searchTimer = null;
+	}
 
 	if (!query.trim()) {
 		searchGeneration++;
@@ -231,11 +237,7 @@ export async function loadEntityDetail(entityId: string, agentId = "default"): P
 		// Load attributes for each aspect in parallel
 		const attrMap = new Map<string, KnowledgeAttribute[]>();
 		if (aspects.length > 0) {
-			const results = await Promise.all(
-				aspects.map((a) =>
-					getKnowledgeAttributes(entityId, a.aspect.id, { agentId }),
-				),
-			);
+			const results = await Promise.all(aspects.map((a) => getKnowledgeAttributes(entityId, a.aspect.id, { agentId })));
 			if (gen !== detailGeneration) return;
 			for (let i = 0; i < aspects.length; i++) {
 				attrMap.set(aspects[i].aspect.id, results[i]);
@@ -251,11 +253,7 @@ export async function loadEntityDetail(entityId: string, agentId = "default"): P
 
 let aspectGeneration = 0;
 
-export async function loadAspectDetail(
-	aspectId: string,
-	triggeredBy = aspectId,
-	agentId = "default",
-): Promise<void> {
+export async function loadAspectDetail(aspectId: string, triggeredBy = aspectId, agentId = "default"): Promise<void> {
 	const node = ontology.graphNodes.find((n) => n.id === aspectId && n.kind === "aspect");
 	if (!node?.parentId) return;
 
@@ -403,12 +401,8 @@ export function selectSchemaTable(name: string, agentId = "default"): void {
 	ontology.relatedIds = new Set();
 
 	// Update graph visibility based on table
-	ontology.visibleNodeKinds = new Set(
-		TABLE_NODE_FILTER[name] ?? DEFAULT_NODE_FILTER,
-	) as Set<OntologyNodeKind>;
-	ontology.visibleEdgeKinds = new Set(
-		TABLE_EDGE_FILTER[name] ?? DEFAULT_EDGE_FILTER,
-	) as Set<string>;
+	ontology.visibleNodeKinds = new Set(TABLE_NODE_FILTER[name] ?? DEFAULT_NODE_FILTER) as Set<OntologyNodeKind>;
+	ontology.visibleEdgeKinds = new Set(TABLE_EDGE_FILTER[name] ?? DEFAULT_EDGE_FILTER) as Set<string>;
 
 	loadTableStats(name, agentId);
 }

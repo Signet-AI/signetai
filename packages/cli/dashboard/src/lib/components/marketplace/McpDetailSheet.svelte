@@ -41,7 +41,7 @@ const REVIEW_DISPLAY_NAME_KEY = "signet:marketplace:reviews:display-name";
 type RatingValue = 1 | 2 | 3 | 4 | 5;
 type ReviewFilter = "top" | "good" | "bad" | "all";
 
-const {
+let {
 	open,
 	item,
 	isInstalled,
@@ -70,21 +70,13 @@ const activeRatingLabel = $derived(`${rating}/5`);
 const visibleReviews = $derived.by(() => {
 	const items = [...reviewItems];
 	if (reviewFilter === "top") {
-		return items.sort((a, b) =>
-			b.rating === a.rating
-				? b.updatedAt.localeCompare(a.updatedAt)
-				: b.rating - a.rating,
-		);
+		return items.sort((a, b) => (b.rating === a.rating ? b.updatedAt.localeCompare(a.updatedAt) : b.rating - a.rating));
 	}
 	if (reviewFilter === "good") {
-		return items
-			.filter((r) => r.rating >= 4)
-			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		return items.filter((r) => r.rating >= 4).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	}
 	if (reviewFilter === "bad") {
-		return items
-			.filter((r) => r.rating <= 2)
-			.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		return items.filter((r) => r.rating <= 2).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	}
 	return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 });

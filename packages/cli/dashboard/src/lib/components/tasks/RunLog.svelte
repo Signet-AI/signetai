@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { TaskRun } from "$lib/api";
-import * as Card from "$lib/components/ui/card/index.js";
 import { Badge } from "$lib/components/ui/badge/index.js";
+import * as Card from "$lib/components/ui/card/index.js";
 import { tick } from "svelte";
 
 interface Props {

@@ -1,23 +1,22 @@
 <script lang="ts">
-	import FormField from "$lib/components/config/FormField.svelte";
-	import FormSection from "$lib/components/config/FormSection.svelte";
-	import { titlebar, type DecorationMode } from "$lib/stores/titlebar.svelte";
-	import { uiScale } from "$lib/stores/ui-scale.svelte";
-	import AppWindowMac from "@lucide/svelte/icons/app-window-mac";
-	import Monitor from "@lucide/svelte/icons/monitor";
-	import EyeOff from "@lucide/svelte/icons/eye-off";
-	import ZoomIn from "@lucide/svelte/icons/zoom-in";
-	import ZoomOut from "@lucide/svelte/icons/zoom-out";
-	import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+import FormField from "$lib/components/config/FormField.svelte";
+import FormSection from "$lib/components/config/FormSection.svelte";
+import { type DecorationMode, titlebar } from "$lib/stores/titlebar.svelte";
+import { uiScale } from "$lib/stores/ui-scale.svelte";
+import AppWindowMac from "@lucide/svelte/icons/app-window-mac";
+import EyeOff from "@lucide/svelte/icons/eye-off";
+import Monitor from "@lucide/svelte/icons/monitor";
+import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+import ZoomIn from "@lucide/svelte/icons/zoom-in";
+import ZoomOut from "@lucide/svelte/icons/zoom-out";
 
-	const isTauri =
-		typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-	const modes: { id: DecorationMode; label: string; icon: typeof Monitor; desc: string }[] = [
-		{ id: "macos", label: "macOS", icon: AppWindowMac, desc: "Traffic light buttons, centered title" },
-		{ id: "windows", label: "Windows", icon: Monitor, desc: "Minimize / maximize / close on right" },
-		{ id: "none", label: "None", icon: EyeOff, desc: "No window titlebar" },
-	];
+const modes: { id: DecorationMode; label: string; icon: typeof Monitor; desc: string }[] = [
+	{ id: "macos", label: "macOS", icon: AppWindowMac, desc: "Traffic light buttons, centered title" },
+	{ id: "windows", label: "Windows", icon: Monitor, desc: "Minimize / maximize / close on right" },
+	{ id: "none", label: "None", icon: EyeOff, desc: "No window titlebar" },
+];
 </script>
 
 <FormSection description="Local display preferences. These settings are stored in your browser and not synced.">

@@ -1,7 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { handleUserPromptSubmit } from "./hooks";
 
 const originalSignetPath = process.env.SIGNET_PATH;
 const agentsDir = mkdtempSync(join(tmpdir(), "signet-hooks-prompt-submit-"));
@@ -32,87 +33,71 @@ const emptyTranscriptHits: Array<{
 }> = [];
 const searchTranscriptFallbackMock = mock(() => emptyTranscriptHits);
 
-const actualMemoryConfig = await import("./memory-config");
-
-mock.module("./logger", () => ({
-	logger: {
-		info: infoMock,
-		warn: warnMock,
-		error: errorMock,
-	},
-}));
-
-mock.module("./memory-config", () => ({
-	...actualMemoryConfig,
-	loadMemoryConfig: () => ({
-		pipelineV2: {
-			predictorPipeline: { agentFeedback: false },
-			continuity: { enabled: false },
-			guardrails: { contextBudgetChars: 4000 },
-		},
-	}),
-}));
-
-mock.module("./memory-search", () => ({
-	buildAgentScopeClause() {
-		return { clause: "", params: [] };
-	},
-	hybridRecall: hybridRecallMock,
-}));
-
-mock.module("./daemon", () => ({
-	getPredictorClient: () => null,
-	recordPredictorLatency() {},
-}));
-
-mock.module("./embedding-fetch", () => ({
-	fetchEmbedding: async () => null,
-}));
-
-mock.module("./temporal-fallback", () => ({
-	searchTemporalFallback: searchTemporalFallbackMock,
-}));
-
-mock.module("./session-transcripts", () => ({
-	getSessionTranscriptContent() {
-		return "";
-	},
-	searchTranscriptFallback: searchTranscriptFallbackMock,
-	upsertSessionTranscript() {},
-}));
-
-mock.module("./agent-id", () => ({
-	resolveAgentId: () => "default",
-	getAgentScope: () => ({
-		readPolicy: "isolated",
-		policyGroup: null,
-	}),
-}));
-
-mock.module("./session-tracker", () => ({
-	getExpiryWarning: () => null,
-}));
-
-mock.module("./continuity-state", () => ({
-	clearContinuity() {},
-	consumeState() {
-		return null;
-	},
-	initContinuity() {},
-	recordPrompt() {},
-	recordRemember() {},
-	setStructuralSnapshot() {},
-	shouldCheckpoint() {
-		return false;
-	},
-}));
-
-const { handleUserPromptSubmit } = await import("./hooks");
+const { loadMemoryConfig: realLoadMemoryConfig } = await import("./memory-config");
 
 function ensureMemoryDbExists(): void {
 	if (!existsSync(memoryDbPath)) {
 		writeFileSync(memoryDbPath, "");
 	}
+}
+
+function makeDeps() {
+	return {
+		logger: {
+			debug() {},
+			info: infoMock,
+			warn: warnMock,
+			error: errorMock,
+		},
+		loadMemoryConfig: () => {
+			const cfg = realLoadMemoryConfig(agentsDir);
+			return {
+				...cfg,
+				pipelineV2: {
+					...cfg.pipelineV2,
+					predictorPipeline: {
+						...cfg.pipelineV2.predictorPipeline,
+						agentFeedback: false,
+					},
+					continuity: {
+						...cfg.pipelineV2.continuity,
+						enabled: false,
+					},
+					guardrails: {
+						...cfg.pipelineV2.guardrails,
+						contextBudgetChars: 4000,
+					},
+				},
+			};
+		},
+		resolveAgentId: () => "default",
+		getAgentScope: () => ({
+			readPolicy: "isolated" as const,
+			policyGroup: null,
+		}),
+		hybridRecall: hybridRecallMock,
+		fetchEmbedding: async () => null,
+		searchTemporalFallback: searchTemporalFallbackMock,
+		searchTranscriptFallback: searchTranscriptFallbackMock,
+		upsertSessionTranscript() {},
+		getExpiryWarning: () => null,
+		recordPrompt() {},
+		shouldCheckpoint() {
+			return false;
+		},
+		consumeState() {
+			return null;
+		},
+		queueCheckpointWrite() {},
+		formatPeriodicDigest() {
+			return "";
+		},
+		parseFeedback() {
+			return null;
+		},
+		recordAgentFeedback() {},
+		trackFtsHits() {},
+	};
 }
 
 describe("handleUserPromptSubmit observability", () => {
@@ -136,12 +121,13 @@ describe("handleUserPromptSubmit observability", () => {
 	});
 
 	it("logs successful no-query outcomes", async () => {
-		unlinkSync(memoryDbPath);
-
-		const result = await handleUserPromptSubmit({
-			harness: "vscode-custom-agent",
-			userMessage: "recall my recent project notes",
-		});
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "   ",
+			},
+			makeDeps(),
+		);
 
 		expect(result.engine).toBeUndefined();
 		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
@@ -161,11 +147,14 @@ describe("handleUserPromptSubmit observability", () => {
 			},
 		]);
 
-		const result = await handleUserPromptSubmit({
-			harness: "vscode-custom-agent",
-			userMessage: "what did we do for prompt submit logs",
-			sessionKey: "session-1",
-		});
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "what did we do for prompt submit logs",
+				sessionKey: "session-1",
+			},
+			makeDeps(),
+		);
 
 		expect(result.engine).toBe("temporal-fallback");
 		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
@@ -186,11 +175,14 @@ describe("handleUserPromptSubmit observability", () => {
 			},
 		]);
 
-		const result = await handleUserPromptSubmit({
-			harness: "vscode-custom-agent",
-			userMessage: "show transcript fallback context",
-			sessionKey: "session-2",
-		});
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "show transcript fallback context",
+				sessionKey: "session-2",
+			},
+			makeDeps(),
+		);
 
 		expect(result.engine).toBe("transcript-fallback");
 		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
@@ -212,11 +204,14 @@ describe("handleUserPromptSubmit observability", () => {
 			],
 		});
 
-		const result = await handleUserPromptSubmit({
-			harness: "vscode-custom-agent",
-			userMessage: "show memory confidence behavior",
-			sessionKey: "session-low-confidence",
-		});
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "show memory confidence behavior",
+				sessionKey: "session-low-confidence",
+			},
+			makeDeps(),
+		);
 
 		expect(result.memoryCount).toBe(0);
 		expect(result.inject).toContain("Current Date & Time");

@@ -197,9 +197,7 @@ export function archiveToCold(
 
 	// Fetch full rows so we can store a complete JSON snapshot (truly lossless —
 	// captures all columns regardless of future schema additions).
-	const rows = db
-		.prepare(`SELECT * FROM memories WHERE id IN (${placeholders})`)
-		.all(...memoryIds) as MemoryRow[];
+	const rows = db.prepare(`SELECT * FROM memories WHERE id IN (${placeholders})`).all(...memoryIds) as MemoryRow[];
 
 	// Each archival event gets a fresh archive_id so multiple snapshots for the
 	// same memory (e.g. supersession then purge) are preserved independently.

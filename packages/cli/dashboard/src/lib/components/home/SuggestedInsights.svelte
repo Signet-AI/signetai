@@ -1,147 +1,132 @@
 <script lang="ts">
-	import type { Memory } from "$lib/api";
-	import { setMemoryPinned, updateMemory } from "$lib/api";
-	import { toast } from "$lib/stores/toast.svelte";
-	import * as Popover from "$lib/components/ui/popover/index.js";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import { Textarea } from "$lib/components/ui/textarea/index.js";
-	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import type { Memory } from "$lib/api";
+import { setMemoryPinned, updateMemory } from "$lib/api";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Popover from "$lib/components/ui/popover/index.js";
+import { Textarea } from "$lib/components/ui/textarea/index.js";
+import { toast } from "$lib/stores/toast.svelte";
+import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 
-	interface Props {
-		memories: Memory[];
-	}
+interface Props {
+	memories: Memory[];
+}
 
-	const { memories }: Props = $props();
+let { memories }: Props = $props();
 
-	let actedIds = $state<Set<string>>(new Set());
-	let displayOffset = $state(0);
-	let listEl: HTMLDivElement | undefined = $state();
-	let visibleCount = $state(3);
+let actedIds = $state<Set<string>>(new Set());
+let displayOffset = $state(0);
+let listEl: HTMLDivElement | undefined = $state();
+let visibleCount = $state(3);
 
-	const ENTRY_HEIGHT = 90; // approximate height per insight entry
+const ENTRY_HEIGHT = 90; // approximate height per insight entry
 
-	function scoreMemory(m: Memory): number {
-		const now = Date.now();
-		const age = now - new Date(m.created_at).getTime();
-		const dayMs = 86_400_000;
-		const recency =
-			age < 7 * dayMs ? 1 : age < 30 * dayMs ? 0.5 : 0.2;
-		const tags = parseTags(m.tags);
-		const curationNeed =
-			tags.length === 0 ? 1 : tags.length < 3 ? 0.6 : 0.2;
-		const imp = m.importance ?? 0.5;
-		const importanceMid =
-			imp >= 0.3 && imp <= 0.7 ? 1 : 0.3;
-		return recency + curationNeed + importanceMid;
-	}
+function scoreMemory(m: Memory): number {
+	const now = Date.now();
+	const age = now - new Date(m.created_at).getTime();
+	const dayMs = 86_400_000;
+	const recency = age < 7 * dayMs ? 1 : age < 30 * dayMs ? 0.5 : 0.2;
+	const tags = parseTags(m.tags);
+	const curationNeed = tags.length === 0 ? 1 : tags.length < 3 ? 0.6 : 0.2;
+	const imp = m.importance ?? 0.5;
+	const importanceMid = imp >= 0.3 && imp <= 0.7 ? 1 : 0.3;
+	return recency + curationNeed + importanceMid;
+}
 
-	function parseTags(
-		raw: string | string[] | null | undefined,
-	): string[] {
-		if (!raw) return [];
-		if (Array.isArray(raw)) return raw.filter(Boolean);
-		return raw
-			.split(",")
-			.map((t) => t.trim())
-			.filter(Boolean);
-	}
+function parseTags(raw: string | string[] | null | undefined): string[] {
+	if (!raw) return [];
+	if (Array.isArray(raw)) return raw.filter(Boolean);
+	return raw
+		.split(",")
+		.map((t) => t.trim())
+		.filter(Boolean);
+}
 
-	const scoredPool = $derived(
-		memories
-			.filter((m) => {
-				if (actedIds.has(m.id)) return false;
-				if (m.pinned) return false;
-				const tags = parseTags(m.tags);
-				if (tags.includes("rejected-insight")) return false;
-				return true;
-			})
-			.map((m) => ({ memory: m, score: scoreMemory(m) }))
-			.sort((a, b) => b.score - a.score),
-	);
+const scoredPool = $derived(
+	memories
+		.filter((m) => {
+			if (actedIds.has(m.id)) return false;
+			if (m.pinned) return false;
+			const tags = parseTags(m.tags);
+			if (tags.includes("rejected-insight")) return false;
+			return true;
+		})
+		.map((m) => ({ memory: m, score: scoreMemory(m) }))
+		.sort((a, b) => b.score - a.score),
+);
 
-	const displayCards = $derived.by(() => {
-		if (scoredPool.length === 0) return [];
-		const count = Math.min(visibleCount, scoredPool.length);
-		const start = displayOffset % scoredPool.length;
-		return Array.from({ length: count }, (_, i) =>
-			scoredPool[(start + i) % scoredPool.length].memory,
-		);
+const displayCards = $derived.by(() => {
+	if (scoredPool.length === 0) return [];
+	const count = Math.min(visibleCount, scoredPool.length);
+	const start = displayOffset % scoredPool.length;
+	return Array.from({ length: count }, (_, i) => scoredPool[(start + i) % scoredPool.length].memory);
+});
+
+$effect(() => {
+	if (!listEl) return;
+	const observer = new ResizeObserver((entries) => {
+		const height = entries[0]?.contentRect.height ?? 0;
+		visibleCount = Math.max(1, Math.floor(height / ENTRY_HEIGHT));
 	});
+	observer.observe(listEl);
+	return () => observer.disconnect();
+});
 
-	$effect(() => {
-		if (!listEl) return;
-		const observer = new ResizeObserver((entries) => {
-			const height = entries[0]?.contentRect.height ?? 0;
-			visibleCount = Math.max(1, Math.floor(height / ENTRY_HEIGHT));
-		});
-		observer.observe(listEl);
-		return () => observer.disconnect();
-	});
+function importanceColor(imp: number): string {
+	if (imp >= 0.8) return "var(--sig-danger)";
+	if (imp >= 0.5) return "var(--sig-warning)";
+	return "var(--sig-success)";
+}
 
-	function importanceColor(imp: number): string {
-		if (imp >= 0.8) return "var(--sig-danger)";
-		if (imp >= 0.5) return "var(--sig-warning)";
-		return "var(--sig-success)";
+function formatDate(dateStr: string): string {
+	const d = new Date(dateStr);
+	const month = d.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+	const day = String(d.getDate()).padStart(2, "0");
+	return `${month} ${day}`;
+}
+
+async function acceptMemory(m: Memory): Promise<void> {
+	const result = await setMemoryPinned(m.id, true);
+	if (result.success) {
+		actedIds = new Set([...actedIds, m.id]);
+		toast("Memory pinned", "success");
+	} else {
+		toast(result.error ?? "Failed to pin", "error");
 	}
+}
 
-	function formatDate(dateStr: string): string {
-		const d = new Date(dateStr);
-		const month = d.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
-		const day = String(d.getDate()).padStart(2, "0");
-		return `${month} ${day}`;
+async function rejectMemory(m: Memory): Promise<void> {
+	const existing = parseTags(m.tags);
+	existing.push("rejected-insight");
+	const result = await updateMemory(m.id, { tags: existing.join(",") }, "dashboard: rejected insight");
+	if (result.success) {
+		actedIds = new Set([...actedIds, m.id]);
+		toast("Memory dismissed", "success");
+	} else {
+		toast(result.error ?? "Failed to dismiss", "error");
 	}
+}
 
-	async function acceptMemory(m: Memory): Promise<void> {
-		const result = await setMemoryPinned(m.id, true);
-		if (result.success) {
-			actedIds = new Set([...actedIds, m.id]);
-			toast("Memory pinned", "success");
-		} else {
-			toast(result.error ?? "Failed to pin", "error");
-		}
+const editContent = $state<Record<string, string>>({});
+
+function initEdit(m: Memory): void {
+	editContent[m.id] = m.content;
+}
+
+async function saveCorrection(m: Memory): Promise<void> {
+	const newContent = editContent[m.id];
+	if (!newContent || newContent === m.content) return;
+	const result = await updateMemory(m.id, { content: newContent }, "dashboard: corrected insight");
+	if (result.success) {
+		actedIds = new Set([...actedIds, m.id]);
+		toast("Memory corrected", "success");
+	} else {
+		toast(result.error ?? "Failed to save", "error");
 	}
+}
 
-	async function rejectMemory(m: Memory): Promise<void> {
-		const existing = parseTags(m.tags);
-		existing.push("rejected-insight");
-		const result = await updateMemory(
-			m.id,
-			{ tags: existing.join(",") },
-			"dashboard: rejected insight",
-		);
-		if (result.success) {
-			actedIds = new Set([...actedIds, m.id]);
-			toast("Memory dismissed", "success");
-		} else {
-			toast(result.error ?? "Failed to dismiss", "error");
-		}
-	}
-
-	let editContent = $state<Record<string, string>>({});
-
-	function initEdit(m: Memory): void {
-		editContent[m.id] = m.content;
-	}
-
-	async function saveCorrection(m: Memory): Promise<void> {
-		const newContent = editContent[m.id];
-		if (!newContent || newContent === m.content) return;
-		const result = await updateMemory(
-			m.id,
-			{ content: newContent },
-			"dashboard: corrected insight",
-		);
-		if (result.success) {
-			actedIds = new Set([...actedIds, m.id]);
-			toast("Memory corrected", "success");
-		} else {
-			toast(result.error ?? "Failed to save", "error");
-		}
-	}
-
-	function handleRefresh(): void {
-		displayOffset = (displayOffset + visibleCount) % Math.max(1, scoredPool.length);
-	}
+function handleRefresh(): void {
+	displayOffset = (displayOffset + visibleCount) % Math.max(1, scoredPool.length);
+}
 </script>
 
 <div class="insights-panel sig-panel">

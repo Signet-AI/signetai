@@ -10,19 +10,12 @@ import type { MigrationDb } from "./index";
 
 /** Check whether a column already exists on a table. */
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {
-	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<
-		Record<string, unknown>
-	>;
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	return rows.some((r) => r.name === column);
 }
 
 /** Conditionally add a column if it doesn't exist yet. */
-function addColumnIfMissing(
-	db: MigrationDb,
-	table: string,
-	column: string,
-	definition: string,
-): void {
+function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
 	if (!hasColumn(db, table, column)) {
 		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 	}
@@ -34,12 +27,7 @@ export function up(db: MigrationDb): void {
 	addColumnIfMissing(db, "memories", "normalized_content", "TEXT");
 	addColumnIfMissing(db, "memories", "is_deleted", "INTEGER DEFAULT 0");
 	addColumnIfMissing(db, "memories", "deleted_at", "TEXT");
-	addColumnIfMissing(
-		db,
-		"memories",
-		"extraction_status",
-		"TEXT DEFAULT 'none'",
-	);
+	addColumnIfMissing(db, "memories", "extraction_status", "TEXT DEFAULT 'none'");
 	addColumnIfMissing(db, "memories", "embedding_model", "TEXT");
 	addColumnIfMissing(db, "memories", "extraction_model", "TEXT");
 	addColumnIfMissing(db, "memories", "update_count", "INTEGER DEFAULT 0");

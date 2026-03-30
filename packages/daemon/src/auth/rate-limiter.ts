@@ -62,9 +62,7 @@ export interface RateLimitConfig {
 	readonly max: number;
 }
 
-export const DEFAULT_RATE_LIMITS: Readonly<
-	Record<string, RateLimitConfig>
-> = {
+export const DEFAULT_RATE_LIMITS: Readonly<Record<string, RateLimitConfig>> = {
 	forget: { windowMs: 60_000, max: 30 },
 	modify: { windowMs: 60_000, max: 60 },
 	batchForget: { windowMs: 60_000, max: 5 },

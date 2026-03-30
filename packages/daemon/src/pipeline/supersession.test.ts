@@ -16,10 +16,7 @@ import type { PipelineV2Config } from "../memory-config";
 // ---------------------------------------------------------------------------
 
 function makeDbPath(): string {
-	const dir = join(
-		tmpdir(),
-		`signet-supersession-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-	);
+	const dir = join(tmpdir(), `signet-supersession-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(dir, { recursive: true });
 	return join(dir, "memories.db");
 }
@@ -38,14 +35,8 @@ afterEach(() => {
 function insertEntity(id: string, name: string): void {
 	const now = new Date().toISOString();
 	getDbAccessor().withWriteTx((db) => {
-		const cols = db
-			.prepare("PRAGMA table_info(entities)")
-			.all() as Array<Record<string, unknown>>;
-		const names = new Set(
-			cols.flatMap((col) =>
-				typeof col.name === "string" ? [col.name] : [],
-			),
-		);
+		const cols = db.prepare("PRAGMA table_info(entities)").all() as Array<Record<string, unknown>>;
+		const names = new Set(cols.flatMap((col) => (typeof col.name === "string" ? [col.name] : [])));
 		if (!names.has("pinned")) {
 			db.exec("ALTER TABLE entities ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
 		}
@@ -92,26 +83,26 @@ function insertAttribute(
 }
 
 function readStatus(id: string): string | undefined {
-	const row = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT status FROM entity_attributes WHERE id = ?").get(id) as
-			| Record<string, unknown>
-			| undefined,
+	const row = getDbAccessor().withReadDb(
+		(db) =>
+			db.prepare("SELECT status FROM entity_attributes WHERE id = ?").get(id) as Record<string, unknown> | undefined,
 	);
 	return row?.status as string | undefined;
 }
 
 function readSupersededBy(id: string): string | null {
-	const row = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT superseded_by FROM entity_attributes WHERE id = ?").get(id) as
-			| Record<string, unknown>
-			| undefined,
+	const row = getDbAccessor().withReadDb(
+		(db) =>
+			db.prepare("SELECT superseded_by FROM entity_attributes WHERE id = ?").get(id) as
+				| Record<string, unknown>
+				| undefined,
 	);
 	return (row?.superseded_by as string) ?? null;
 }
 
 function readHistory(event: string): Array<Record<string, unknown>> {
-	return getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT * FROM memory_history WHERE event = ?").all(event) as Array<Record<string, unknown>>,
+	return getDbAccessor().withReadDb(
+		(db) => db.prepare("SELECT * FROM memory_history WHERE event = ?").all(event) as Array<Record<string, unknown>>,
 	);
 }
 
@@ -131,12 +122,21 @@ function testConfig(overrides?: Partial<PipelineV2Config>): PipelineV2Config {
 		autonomous: { allowUpdateDelete: true, maintenanceMode: "observe" as const, maintenancePollMs: 60000 },
 		retention: { enabled: false, retentionDays: 30, coldEnabled: false, purgeEnabled: false, pollIntervalMs: 60000 },
 		telemetry: { enabled: false, flushIntervalMs: 60000 },
-		continuity: { enabled: false, sessionSummaryEnabled: false, sessionSummaryModel: "test", significanceMinScore: 0.3 },
+		continuity: {
+			enabled: false,
+			sessionSummaryEnabled: false,
+			sessionSummaryModel: "test",
+			significanceMinScore: 0.3,
+		},
 		embeddingTracker: { enabled: false },
 		synthesis: { model: "test", temperature: 0 },
 		procedural: {
-			enabled: false, decayRate: 0.99, minImportance: 0.3,
-			importanceOnInstall: 0.7, enrichOnInstall: false, enrichMinDescription: 30,
+			enabled: false,
+			decayRate: 0.99,
+			minImportance: 0.3,
+			importanceOnInstall: 0.7,
+			enrichOnInstall: false,
+			enrichMinDescription: 30,
 			reconcileIntervalMs: 60000,
 		},
 		structural: {
@@ -154,8 +154,14 @@ function testConfig(overrides?: Partial<PipelineV2Config>): PipelineV2Config {
 			supersessionMinConfidence: 0.7,
 		},
 		feedback: {
-			enabled: false, ftsWeightDelta: 0.02, maxAspectWeight: 1, minAspectWeight: 0.1,
-			decayEnabled: false, decayRate: 0.005, staleDays: 14, decayIntervalSessions: 10,
+			enabled: false,
+			ftsWeightDelta: 0.02,
+			maxAspectWeight: 1,
+			minAspectWeight: 0.1,
+			decayEnabled: false,
+			decayRate: 0.005,
+			staleDays: 14,
+			decayIntervalSessions: 10,
 		},
 		predictorPipeline: { enabled: false, sidecarUrl: "", trainIntervalMs: 300000, trainingMinSessions: 20 },
 		modelRegistry: { models: {} },
@@ -169,29 +175,20 @@ function testConfig(overrides?: Partial<PipelineV2Config>): PipelineV2Config {
 
 describe("detectAttributeContradiction", () => {
 	test("detects negation polarity conflict", () => {
-		const result = detectAttributeContradiction(
-			"does not like spicy food",
-			"likes spicy food",
-		);
+		const result = detectAttributeContradiction("does not like spicy food", "likes spicy food");
 		expect(result.detected).toBe(true);
 		expect(result.confidence).toBeGreaterThanOrEqual(0.7);
 		expect(result.reasoning).toContain("negation");
 	});
 
 	test("detects antonym pair conflict", () => {
-		const result = detectAttributeContradiction(
-			"nicholai and amari are together",
-			"nicholai and amari are apart",
-		);
+		const result = detectAttributeContradiction("nicholai and amari are together", "nicholai and amari are apart");
 		expect(result.detected).toBe(true);
 		expect(result.reasoning).toContain("antonym");
 	});
 
 	test("detects value conflict with shared verb", () => {
-		const result = detectAttributeContradiction(
-			"nicholai lives in denver",
-			"nicholai lives in boulder",
-		);
+		const result = detectAttributeContradiction("nicholai lives in denver", "nicholai lives in boulder");
 		expect(result.detected).toBe(true);
 		expect(result.reasoning).toContain("value conflict");
 	});
@@ -211,18 +208,12 @@ describe("detectAttributeContradiction", () => {
 	});
 
 	test("does not flag complementary information as contradiction", () => {
-		const result = detectAttributeContradiction(
-			"uses postgresql for the database",
-			"the database has three replicas",
-		);
+		const result = detectAttributeContradiction("uses postgresql for the database", "the database has three replicas");
 		expect(result.detected).toBe(false);
 	});
 
 	test("requires minimum token overlap", () => {
-		const result = detectAttributeContradiction(
-			"the sky is blue",
-			"pizza is delicious",
-		);
+		const result = detectAttributeContradiction("the sky is blue", "pizza is delicious");
 		expect(result.detected).toBe(false);
 	});
 });
@@ -250,9 +241,7 @@ describe("checkAndSupersedeForAttributes", () => {
 		insertAttribute("attr-new", aspect.id, "mem-new", "Nicholai lives in LA");
 
 		const cfg = testConfig();
-		const result = await checkAndSupersedeForAttributes(
-			getDbAccessor(), ["attr-new"], "default", cfg,
-		);
+		const result = await checkAndSupersedeForAttributes(getDbAccessor(), ["attr-new"], "default", cfg);
 
 		expect(result.superseded).toBe(1);
 		expect(readStatus("attr-old")).toBe("superseded");
@@ -278,9 +267,7 @@ describe("checkAndSupersedeForAttributes", () => {
 		insertAttribute("attr-new", aspect.id, "mem-new", "does not use HTTPS");
 
 		const cfg = testConfig();
-		const result = await checkAndSupersedeForAttributes(
-			getDbAccessor(), ["attr-new"], "default", cfg,
-		);
+		const result = await checkAndSupersedeForAttributes(getDbAccessor(), ["attr-new"], "default", cfg);
 
 		expect(result.superseded).toBe(0);
 		expect(readStatus("attr-constraint")).toBe("active");
@@ -304,9 +291,7 @@ describe("checkAndSupersedeForAttributes", () => {
 		insertAttribute("attr-new", aspect.id, "mem-new", "nicholai and amari moved apart");
 
 		const cfg = testConfig({ shadowMode: true });
-		const result = await checkAndSupersedeForAttributes(
-			getDbAccessor(), ["attr-new"], "default", cfg,
-		);
+		const result = await checkAndSupersedeForAttributes(getDbAccessor(), ["attr-new"], "default", cfg);
 
 		expect(result.superseded).toBe(0);
 		expect(result.candidates.length).toBeGreaterThan(0);
@@ -339,9 +324,7 @@ describe("checkAndSupersedeForAttributes", () => {
 		expect(readStatus("attr-old")).toBe("superseded");
 
 		// Run again -- should be a no-op (old attr already superseded, not in siblings)
-		const result2 = await checkAndSupersedeForAttributes(
-			getDbAccessor(), ["attr-new"], "default", cfg,
-		);
+		const result2 = await checkAndSupersedeForAttributes(getDbAccessor(), ["attr-new"], "default", cfg);
 		expect(result2.candidates).toHaveLength(0);
 		expect(readStatus("attr-old")).toBe("superseded");
 	});
@@ -407,9 +390,7 @@ describe("sweepRetroactiveSupersession", () => {
 		});
 
 		const cfg = testConfig();
-		const result = await sweepRetroactiveSupersession(
-			getDbAccessor(), "default", cfg,
-		);
+		const result = await sweepRetroactiveSupersession(getDbAccessor(), "default", cfg);
 
 		expect(result.superseded).toBe(1);
 		expect(readStatus("attr-dating")).toBe("superseded");
@@ -428,9 +409,7 @@ describe("sweepRetroactiveSupersession", () => {
 			},
 		});
 
-		const result = await sweepRetroactiveSupersession(
-			getDbAccessor(), "default", cfg,
-		);
+		const result = await sweepRetroactiveSupersession(getDbAccessor(), "default", cfg);
 		expect(result.superseded).toBe(0);
 		expect(result.candidates).toHaveLength(0);
 	});

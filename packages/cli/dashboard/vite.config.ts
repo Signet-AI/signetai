@@ -1,7 +1,7 @@
-import tailwindcss from "@tailwindcss/vite";
-import { sveltekit } from "@sveltejs/kit/vite";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sveltekit } from "@sveltejs/kit/vite";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -17,10 +17,7 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			"@signet/core/pipeline-providers": resolve(
-				root,
-				"../../core/src/pipeline-providers.ts",
-			),
+			"@signet/core/pipeline-providers": resolve(root, "../../core/src/pipeline-providers.ts"),
 		},
 	},
 	build: {
@@ -30,10 +27,7 @@ export default defineConfig({
 				manualChunks(id) {
 					if (!id.includes("node_modules")) return;
 
-					if (
-						id.includes("/three-forcegraph/") ||
-						id.includes("/three-spritetext/")
-					) {
+					if (id.includes("/three-forcegraph/") || id.includes("/three-spritetext/")) {
 						return "vendor-forcegraph3d";
 					}
 

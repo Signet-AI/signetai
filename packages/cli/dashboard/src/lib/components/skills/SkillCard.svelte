@@ -33,9 +33,7 @@ let {
 	oncomparetoggle,
 }: Props = $props();
 
-function isSearchResult(
-	i: Skill | SkillSearchResult,
-): i is SkillSearchResult {
+function isSearchResult(i: Skill | SkillSearchResult): i is SkillSearchResult {
 	return "installed" in i && "fullName" in i;
 }
 
@@ -50,9 +48,8 @@ function formatStat(n: number | undefined): string {
 	return String(n);
 }
 
-
-let monogram = $derived(getMonogram(item.name));
-let monogramBg = $derived(getMonogramBg(item.name));
+const monogram = $derived(getMonogram(item.name));
+const monogramBg = $derived(getMonogramBg(item.name));
 
 function getSkillAvatarUrl(): string | null {
 	let maintainer: string | undefined;
@@ -65,13 +62,14 @@ function getSkillAvatarUrl(): string | null {
 	return null;
 }
 
-let avatarUrl = $derived(getSkillAvatarUrl());
+const avatarUrl = $derived(getSkillAvatarUrl());
 let avatarFailed = $state(false);
-$effect(() => { avatarUrl; avatarFailed = false; });
+$effect(() => {
+	avatarUrl;
+	avatarFailed = false;
+});
 
-let isInstalled = $derived(
-	isSkill(item) ? true : isSearchResult(item) ? item.installed : false
-);
+const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.installed : false);
 </script>
 
 <div class="card-wrap" class:selected class:featured>

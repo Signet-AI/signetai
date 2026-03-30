@@ -24,10 +24,7 @@ function extractSection(version: string): string {
 	if (afterHeader < 0) return content.slice(startIdx);
 
 	const nextSection = content.indexOf("\n## ", afterHeader);
-	const section =
-		nextSection >= 0
-			? content.slice(startIdx, nextSection)
-			: content.slice(startIdx);
+	const section = nextSection >= 0 ? content.slice(startIdx, nextSection) : content.slice(startIdx);
 
 	return section.trim();
 }

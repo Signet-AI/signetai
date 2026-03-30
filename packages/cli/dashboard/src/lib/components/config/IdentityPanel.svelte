@@ -1,172 +1,158 @@
 <script lang="ts">
-	import { saveConfigFileResult, type ConfigFile } from "$lib/api";
-	import { toast } from "$lib/stores/toast.svelte";
-	import { confirmDiscardChanges, setConfigDirty } from "$lib/stores/unsaved-changes.svelte";
-	import MarkdownViewer from "$lib/components/config/MarkdownViewer.svelte";
-	import * as Popover from "$lib/components/ui/popover/index.js";
-	import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
-	import PanelLeft from "@lucide/svelte/icons/panel-left";
+import { type ConfigFile, saveConfigFileResult } from "$lib/api";
+import MarkdownViewer from "$lib/components/config/MarkdownViewer.svelte";
+import * as Popover from "$lib/components/ui/popover/index.js";
+import { toast } from "$lib/stores/toast.svelte";
+import { confirmDiscardChanges, setConfigDirty } from "$lib/stores/unsaved-changes.svelte";
+import PanelLeft from "@lucide/svelte/icons/panel-left";
+import PanelLeftClose from "@lucide/svelte/icons/panel-left-close";
 
-	interface Props {
-		configFiles: ConfigFile[];
-		onDirtyChange?: (dirty: boolean) => void;
+interface Props {
+	configFiles: ConfigFile[];
+	onDirtyChange?: (dirty: boolean) => void;
+}
+
+let { configFiles, onDirtyChange }: Props = $props();
+
+const CHAR_BUDGETS: Record<string, number> = {
+	"AGENTS.md": 12000,
+	"MEMORY.md": 10000,
+	"USER.md": 6000,
+	"SOUL.md": 4000,
+	"IDENTITY.md": 2000,
+};
+
+const mdFiles = $derived(configFiles?.filter((f) => f.name.endsWith(".md")) ?? []);
+
+let selectedFile = $state("");
+let prevSelectedFile = $state("");
+let editorContent = $state("");
+let saving = $state(false);
+let savedByFile = $state<Record<string, string>>({});
+let collapsed = $state(false);
+let jumpMenuOpen = $state(false);
+let jumpFilter = $state("");
+let jumpInputRef = $state<HTMLInputElement | null>(null);
+
+const activeFile = $derived(mdFiles.find((f) => f.name === selectedFile));
+
+const isDirty = $derived((savedByFile[selectedFile] ?? activeFile?.content ?? "") !== editorContent);
+
+const budgetPct = $derived.by(() => {
+	const budget = CHAR_BUDGETS[selectedFile];
+	if (!budget || !activeFile) return null;
+	return Math.round((editorContent.length / budget) * 100);
+});
+
+const filteredFiles = $derived(
+	jumpFilter ? mdFiles.filter((f) => f.name.toLowerCase().includes(jumpFilter.toLowerCase())) : mdFiles,
+);
+
+// Auto-select first md file
+$effect(() => {
+	if (mdFiles.length && !mdFiles.some((f) => f.name === selectedFile)) {
+		selectedFile = mdFiles[0].name;
 	}
+});
 
-	let { configFiles, onDirtyChange }: Props = $props();
+// Initialize savedByFile for new files
+$effect(() => {
+	for (const file of mdFiles) {
+		if (savedByFile[file.name] === undefined) {
+			savedByFile = { ...savedByFile, [file.name]: file.content };
+		}
+	}
+});
 
-	const CHAR_BUDGETS: Record<string, number> = {
-		"AGENTS.md": 12000,
-		"MEMORY.md": 10000,
-		"USER.md": 6000,
-		"SOUL.md": 4000,
-		"IDENTITY.md": 2000,
+// Load content when switching files
+$effect(() => {
+	if (selectedFile !== prevSelectedFile) {
+		prevSelectedFile = selectedFile;
+		editorContent = activeFile?.content ?? "";
+	}
+});
+
+// Notify parent of dirty state changes
+$effect(() => {
+	onDirtyChange?.(isDirty);
+	setConfigDirty(isDirty);
+	return () => {
+		setConfigDirty(false);
 	};
+});
 
-	let mdFiles = $derived(
-		configFiles?.filter((f) => f.name.endsWith(".md")) ?? [],
-	);
-
-	let selectedFile = $state("");
-	let prevSelectedFile = $state("");
-	let editorContent = $state("");
-	let saving = $state(false);
-	let savedByFile = $state<Record<string, string>>({});
-	let collapsed = $state(false);
-	let jumpMenuOpen = $state(false);
-	let jumpFilter = $state("");
-	let jumpInputRef = $state<HTMLInputElement | null>(null);
-
-	let activeFile = $derived(mdFiles.find((f) => f.name === selectedFile));
-
-	let isDirty = $derived(
-		(savedByFile[selectedFile] ?? activeFile?.content ?? "") !== editorContent,
-	);
-
-	let budgetPct = $derived.by(() => {
-		const budget = CHAR_BUDGETS[selectedFile];
-		if (!budget || !activeFile) return null;
-		return Math.round((editorContent.length / budget) * 100);
-	});
-
-	let filteredFiles = $derived(
-		jumpFilter
-			? mdFiles.filter((f) =>
-					f.name.toLowerCase().includes(jumpFilter.toLowerCase()),
-				)
-			: mdFiles,
-	);
-
-	// Auto-select first md file
-	$effect(() => {
-		if (mdFiles.length && !mdFiles.some((f) => f.name === selectedFile)) {
-			selectedFile = mdFiles[0].name;
-		}
-	});
-
-	// Initialize savedByFile for new files
-	$effect(() => {
-		for (const file of mdFiles) {
-			if (savedByFile[file.name] === undefined) {
-				savedByFile = { ...savedByFile, [file.name]: file.content };
-			}
-		}
-	});
-
-	// Load content when switching files
-	$effect(() => {
-		if (selectedFile !== prevSelectedFile) {
-			prevSelectedFile = selectedFile;
-			editorContent = activeFile?.content ?? "";
-		}
-	});
-
-	// Notify parent of dirty state changes
-	$effect(() => {
-		onDirtyChange?.(isDirty);
-		setConfigDirty(isDirty);
-		return () => {
-			setConfigDirty(false);
-		};
-	});
-
-	// Ctrl+J jump menu within panel
-	function handlePanelKey(e: KeyboardEvent): void {
-		if (collapsed) return;
-		if (e.key === "j" && (e.metaKey || e.ctrlKey)) {
-			e.preventDefault();
-			jumpMenuOpen = true;
-			setTimeout(() => jumpInputRef?.focus(), 0);
-			return;
-		}
-		if (jumpMenuOpen && e.key === "Escape") {
-			e.preventDefault();
-			jumpMenuOpen = false;
-			jumpFilter = "";
-		}
+// Ctrl+J jump menu within panel
+function handlePanelKey(e: KeyboardEvent): void {
+	if (collapsed) return;
+	if (e.key === "j" && (e.metaKey || e.ctrlKey)) {
+		e.preventDefault();
+		jumpMenuOpen = true;
+		setTimeout(() => jumpInputRef?.focus(), 0);
+		return;
 	}
-
-	function selectFileWithGuard(name: string): void {
-		if (name === selectedFile) return;
-		if (
-			isDirty &&
-			!confirmDiscardChanges(`switch files from ${selectedFile} to ${name}`)
-		) {
-			return;
-		}
+	if (jumpMenuOpen && e.key === "Escape") {
+		e.preventDefault();
 		jumpMenuOpen = false;
 		jumpFilter = "";
-		selectedFile = name;
 	}
+}
 
-	function getBudgetColor(): string {
-		if (budgetPct === null) return "var(--sig-text-muted)";
-		if (budgetPct > 100) return "var(--sig-danger)";
-		if (budgetPct >= 80) return "var(--sig-warning, #d4a017)";
-		return "var(--sig-success)";
+function selectFileWithGuard(name: string): void {
+	if (name === selectedFile) return;
+	if (isDirty && !confirmDiscardChanges(`switch files from ${selectedFile} to ${name}`)) {
+		return;
 	}
+	jumpMenuOpen = false;
+	jumpFilter = "";
+	selectedFile = name;
+}
 
-	function formatSavedAt(raw: string | null): string {
-		if (!raw) return "";
-		try {
-			return `Last saved ${new Date(raw).toLocaleTimeString()}`;
-		} catch {
-			return "";
+function getBudgetColor(): string {
+	if (budgetPct === null) return "var(--sig-text-muted)";
+	if (budgetPct > 100) return "var(--sig-danger)";
+	if (budgetPct >= 80) return "var(--sig-warning, #d4a017)";
+	return "var(--sig-success)";
+}
+
+function formatSavedAt(raw: string | null): string {
+	if (!raw) return "";
+	try {
+		return `Last saved ${new Date(raw).toLocaleTimeString()}`;
+	} catch {
+		return "";
+	}
+}
+
+let lastSavedAt = $state<string | null>(null);
+let saveFeedback = $state("");
+
+// Exposed methods for parent via bind:this
+export async function save(): Promise<void> {
+	if (!isDirty) return;
+	const contentToSave = editorContent;
+	saving = true;
+	try {
+		const result = await saveConfigFileResult(selectedFile, contentToSave);
+		if (result.ok) {
+			savedByFile = { ...savedByFile, [selectedFile]: contentToSave };
+			lastSavedAt = new Date().toISOString();
+			saveFeedback = `Saved ${selectedFile}`;
+			toast(saveFeedback, "success");
+		} else {
+			saveFeedback = `Failed to save ${selectedFile}`;
+			toast(`${saveFeedback}: ${result.error ?? "unknown error"}`, "error");
 		}
+	} finally {
+		saving = false;
 	}
+}
 
-	let lastSavedAt = $state<string | null>(null);
-	let saveFeedback = $state("");
-
-	// Exposed methods for parent via bind:this
-	export async function save(): Promise<void> {
-		if (!isDirty) return;
-		const contentToSave = editorContent;
-		saving = true;
-		try {
-			const result = await saveConfigFileResult(selectedFile, contentToSave);
-			if (result.ok) {
-				savedByFile = { ...savedByFile, [selectedFile]: contentToSave };
-				lastSavedAt = new Date().toISOString();
-				saveFeedback = `Saved ${selectedFile}`;
-				toast(saveFeedback, "success");
-			} else {
-				saveFeedback = `Failed to save ${selectedFile}`;
-				toast(
-					`${saveFeedback}: ${result.error ?? "unknown error"}`,
-					"error",
-				);
-			}
-		} finally {
-			saving = false;
-		}
+export function discard(): void {
+	if (activeFile) {
+		editorContent = activeFile.content;
+		savedByFile = { ...savedByFile, [selectedFile]: activeFile.content };
 	}
-
-	export function discard(): void {
-		if (activeFile) {
-			editorContent = activeFile.content;
-			savedByFile = { ...savedByFile, [selectedFile]: activeFile.content };
-		}
-	}
+}
 </script>
 
 <svelte:window onkeydown={handlePanelKey} />

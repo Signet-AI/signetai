@@ -61,64 +61,22 @@ function findSqliteVecExtension(): string | null {
 		// Installed package: __dirname is signetai/dist/, deps in own node_modules/
 		join(__dirname, "..", "node_modules", platformPkg, extFile),
 		// Bun's hoisted structure (multiple possible locations)
-		join(
-			__dirname,
-			"..",
-			"..",
-			"..",
-			".bun",
-			`${platformPkg}@*`,
-			"node_modules",
-			platformPkg,
-			extFile,
-		),
+		join(__dirname, "..", "..", "..", ".bun", `${platformPkg}@*`, "node_modules", platformPkg, extFile),
 		// When running from dist/
 		join(__dirname, "node_modules", platformPkg, extFile),
 		// Monorepo root node_modules
 		join(__dirname, "..", "..", "..", "node_modules", platformPkg, extFile),
 		// Monorepo root with bun structure
-		join(
-			__dirname,
-			"..",
-			"..",
-			"..",
-			"node_modules",
-			".bun",
-			`${platformPkg}@*`,
-			"node_modules",
-			platformPkg,
-			extFile,
-		),
+		join(__dirname, "..", "..", "..", "node_modules", ".bun", `${platformPkg}@*`, "node_modules", platformPkg, extFile),
 		// Bun global install cache (~/.bun/install/cache/)
-		join(
-			homedir(),
-			".bun",
-			"install",
-			"cache",
-			`${platformPkg}@*`,
-			extFile,
-		),
+		join(homedir(), ".bun", "install", "cache", `${platformPkg}@*`, extFile),
 		// Global npm install: derive from process.execPath
 		// e.g. /opt/homebrew/bin/node → /opt/homebrew/lib/node_modules/<pkg>/vec0.dylib
 		// e.g. /usr/bin/node → /usr/lib/node_modules/<pkg>/vec0.so
 		// Also covers nvm: ~/.nvm/versions/node/vXX/bin/node → .../lib/node_modules/
-		join(
-			dirname(dirname(process.execPath)),
-			"lib",
-			"node_modules",
-			platformPkg,
-			extFile,
-		),
+		join(dirname(dirname(process.execPath)), "lib", "node_modules", platformPkg, extFile),
 		// Global npm install via signetai meta-package
-		join(
-			dirname(dirname(process.execPath)),
-			"lib",
-			"node_modules",
-			"signetai",
-			"node_modules",
-			platformPkg,
-			extFile,
-		),
+		join(dirname(dirname(process.execPath)), "lib", "node_modules", "signetai", "node_modules", platformPkg, extFile),
 		// Well-known npm global prefixes (when process.execPath is bun, not node)
 		...(platform !== "win32"
 			? [
@@ -133,16 +91,36 @@ function findSqliteVecExtension(): string | null {
 					// Windows: npm global prefix is typically in AppData
 					join(
 						process.env.APPDATA || join(homedir(), "AppData", "Roaming"),
-						"npm", "node_modules", platformPkg, extFile,
+						"npm",
+						"node_modules",
+						platformPkg,
+						extFile,
 					),
 					join(
 						process.env.APPDATA || join(homedir(), "AppData", "Roaming"),
-						"npm", "node_modules", "signetai", "node_modules", platformPkg, extFile,
+						"npm",
+						"node_modules",
+						"signetai",
+						"node_modules",
+						platformPkg,
+						extFile,
 					),
 				]),
 		// nvm global paths
 		join(homedir(), ".nvm", "versions", "node", "*", "lib", "node_modules", platformPkg, extFile),
-		join(homedir(), ".nvm", "versions", "node", "*", "lib", "node_modules", "signetai", "node_modules", platformPkg, extFile),
+		join(
+			homedir(),
+			".nvm",
+			"versions",
+			"node",
+			"*",
+			"lib",
+			"node_modules",
+			"signetai",
+			"node_modules",
+			platformPkg,
+			extFile,
+		),
 		// Bun global install (bun add -g signetai)
 		join(homedir(), ".bun", "install", "global", "node_modules", platformPkg, extFile),
 		join(homedir(), ".bun", "install", "global", "node_modules", "signetai", "node_modules", platformPkg, extFile),
@@ -154,15 +132,9 @@ function findSqliteVecExtension(): string | null {
 			const baseDir = dirname(searchPath.replace(/\*.*$/, ""));
 			const pattern = searchPath.split("*")[1];
 			try {
-				const entries = existsSync(baseDir)
-					? readdirSync(baseDir)
-					: [];
+				const entries = existsSync(baseDir) ? readdirSync(baseDir) : [];
 				for (const entry of entries) {
-					const candidate = join(
-						baseDir,
-						entry,
-						pattern?.replace(/^\//, "") || "",
-					);
+					const candidate = join(baseDir, entry, pattern?.replace(/^\//, "") || "");
 					if (existsSync(candidate)) {
 						return candidate;
 					}
@@ -186,9 +158,7 @@ export { findSqliteVecExtension };
 export function loadSqliteVec(db: unknown): boolean {
 	const extPath = findSqliteVecExtension();
 	if (!extPath) {
-		console.warn(
-			"sqlite-vec extension not found - vector search will be disabled",
-		);
+		console.warn("sqlite-vec extension not found - vector search will be disabled");
 		return false;
 	}
 
@@ -226,18 +196,12 @@ export class Database {
 
 	async init(): Promise<void> {
 		// Detect runtime and load appropriate SQLite implementation
-		const isBun =
-			typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
+		const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 
 		if (isBun) {
 			const { Database: BunDatabase } = await import("bun:sqlite");
-			const bunOpts = this.options?.readonly
-				? { readonly: true }
-				: { readwrite: true, create: true };
-			this.db = new BunDatabase(
-				this.dbPath,
-				bunOpts,
-			) as unknown as SQLiteDatabase;
+			const bunOpts = this.options?.readonly ? { readonly: true } : { readwrite: true, create: true };
+			this.db = new BunDatabase(this.dbPath, bunOpts) as unknown as SQLiteDatabase;
 		} else {
 			let BetterSqlite3;
 			try {
@@ -245,10 +209,10 @@ export class Database {
 			} catch {
 				throw new Error(
 					"Signet requires Bun (recommended) or the better-sqlite3 npm package. " +
-					(platform === "win32"
-						? "Install Bun: powershell -c \"irm bun.sh/install.ps1 | iex\"\n"
-						: "Install Bun: curl -fsSL https://bun.sh/install | bash\n") +
-					"Or install better-sqlite3: npm install -g better-sqlite3",
+						(platform === "win32"
+							? 'Install Bun: powershell -c "irm bun.sh/install.ps1 | iex"\n'
+							: "Install Bun: curl -fsSL https://bun.sh/install | bash\n") +
+						"Or install better-sqlite3: npm install -g better-sqlite3",
 				);
 			}
 			this.db = new BetterSqlite3(this.dbPath, {
@@ -264,9 +228,7 @@ export class Database {
 			if (isBun) {
 				this.getDb().exec("PRAGMA journal_mode = WAL");
 			} else {
-				(this.getDb() as { pragma(s: string): void }).pragma(
-					"journal_mode = WAL",
-				);
+				(this.getDb() as { pragma(s: string): void }).pragma("journal_mode = WAL");
 			}
 		}
 
@@ -284,9 +246,7 @@ export class Database {
 
 	// -- Memory CRUD --
 
-	addMemory(
-		memory: Omit<Memory, "id" | "createdAt" | "updatedAt" | "version">,
-	): string {
+	addMemory(memory: Omit<Memory, "id" | "createdAt" | "updatedAt" | "version">): string {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
 
@@ -322,17 +282,13 @@ export class Database {
 		if (type) query += " WHERE type = ?";
 		query += " ORDER BY created_at DESC";
 
-		const rows = type
-			? this.getDb().prepare(query).all(type)
-			: this.getDb().prepare(query).all();
+		const rows = type ? this.getDb().prepare(query).all(type) : this.getDb().prepare(query).all();
 
 		return rows.map(rowToMemory);
 	}
 
 	getMemoryById(id: string): Memory | null {
-		const row = this.getDb()
-			.prepare("SELECT * FROM memories WHERE id = ?")
-			.get(id);
+		const row = this.getDb().prepare("SELECT * FROM memories WHERE id = ?").get(id);
 		if (row === undefined) return null;
 		return rowToMemory(row);
 	}
@@ -471,9 +427,7 @@ export class Database {
 
 	// -- Job queue --
 
-	enqueueJob(
-		job: Omit<MemoryJob, "id" | "createdAt" | "updatedAt" | "attempts">,
-	): string {
+	enqueueJob(job: Omit<MemoryJob, "id" | "createdAt" | "updatedAt" | "attempts">): string {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
 
@@ -528,9 +482,7 @@ export class Database {
 			.run(now, now, id);
 
 		// Return the updated row
-		const updated = this.getDb()
-			.prepare("SELECT * FROM memory_jobs WHERE id = ?")
-			.get(id);
+		const updated = this.getDb().prepare("SELECT * FROM memory_jobs WHERE id = ?").get(id);
 		if (updated === undefined) return null;
 		return rowToJob(updated);
 	}
@@ -553,9 +505,7 @@ export class Database {
 		const now = new Date().toISOString();
 
 		// Check if we've exceeded max_attempts
-		const row = this.getDb()
-			.prepare("SELECT attempts, max_attempts FROM memory_jobs WHERE id = ?")
-			.get(id);
+		const row = this.getDb().prepare("SELECT attempts, max_attempts FROM memory_jobs WHERE id = ?").get(id);
 
 		const attempts = row !== undefined ? (row.attempts as number) : 0;
 		const maxAttempts = row !== undefined ? (row.max_attempts as number) : 3;
@@ -632,9 +582,7 @@ function rowToMemory(row: Record<string, unknown>): Memory {
 		deletedAt: row.deleted_at as string | undefined,
 		pinned: row.pinned === 1,
 		importance: row.importance as number | undefined,
-		extractionStatus: row.extraction_status as
-			| Memory["extractionStatus"]
-			| undefined,
+		extractionStatus: row.extraction_status as Memory["extractionStatus"] | undefined,
 		embeddingModel: row.embedding_model as string | undefined,
 		extractionModel: row.extraction_model as string | undefined,
 		updateCount: row.update_count as number | undefined,

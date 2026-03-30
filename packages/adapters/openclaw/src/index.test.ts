@@ -1386,7 +1386,6 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
-
 	it("sends inline transcript when sessionFile absent (typed-only ctx)", async () => {
 		// Future OpenClaw: ctx carries sessionKey/agentId but event has no sessionFile.
 		// The adapter must serialize event.messages as JSONL inline transcript so the
@@ -1406,10 +1405,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				role: j % 2 === 0 ? "user" : "assistant",
 				content: `Message ${j + 1}`,
 			}));
-			await beforePromptBuild?.(
-				{ prompt: `Turn ${i + 1}`, messages: lastMsgs },
-				ctx,
-			);
+			await beforePromptBuild?.({ prompt: `Turn ${i + 1}`, messages: lastMsgs }, ctx);
 		}
 
 		await Bun.sleep(0);

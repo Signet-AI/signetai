@@ -5,14 +5,7 @@
 
 import { homedir, platform } from "os";
 import { join } from "path";
-import {
-	existsSync,
-	mkdirSync,
-	writeFileSync,
-	readFileSync,
-	unlinkSync,
-	chmodSync,
-} from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, chmodSync } from "fs";
 import { execSync, spawn } from "child_process";
 
 const AGENTS_DIR = join(homedir(), ".agents");
@@ -21,19 +14,8 @@ const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 
 // Platform-specific paths
-const LAUNCHD_PLIST = join(
-	homedir(),
-	"Library",
-	"LaunchAgents",
-	"ai.signet.daemon.plist",
-);
-const SYSTEMD_UNIT = join(
-	homedir(),
-	".config",
-	"systemd",
-	"user",
-	"signet.service",
-);
+const LAUNCHD_PLIST = join(homedir(), "Library", "LaunchAgents", "ai.signet.daemon.plist");
+const SYSTEMD_UNIT = join(homedir(), ".config", "systemd", "user", "signet.service");
 
 export interface ServiceStatus {
 	installed: boolean;
@@ -73,12 +55,10 @@ function getRuntime(): string {
 		execSync(`${locator} bun`, { encoding: "utf-8", windowsHide: true });
 		return "bun";
 	} catch {
-		console.error(
-			"Error: Bun is required to run Signet daemon (uses bun:sqlite)",
-		);
+		console.error("Error: Bun is required to run Signet daemon (uses bun:sqlite)");
 		console.error(
 			platform() === "win32"
-				? "Install Bun: powershell -c \"irm bun.sh/install.ps1 | iex\""
+				? 'Install Bun: powershell -c "irm bun.sh/install.ps1 | iex"'
 				: "Install Bun: curl -fsSL https://bun.sh/install | bash",
 		);
 		process.exit(1);
@@ -270,10 +250,7 @@ async function uninstallSystemd(): Promise<void> {
 
 function isSystemdRunning(): boolean {
 	try {
-		const output = execSync(
-			"systemctl --user is-active signet.service 2>/dev/null",
-			{ encoding: "utf-8" },
-		);
+		const output = execSync("systemctl --user is-active signet.service 2>/dev/null", { encoding: "utf-8" });
 		return output.trim() === "active";
 	} catch {
 		return false;
@@ -516,10 +493,7 @@ export async function getDaemonStatus(): Promise<ServiceStatus> {
  * Get daemon logs
  */
 export function getDaemonLogs(lines: number = 50): string[] {
-	const logFile = join(
-		LOG_DIR,
-		`daemon-${new Date().toISOString().split("T")[0]}.log`,
-	);
+	const logFile = join(LOG_DIR, `daemon-${new Date().toISOString().split("T")[0]}.log`);
 
 	if (!existsSync(logFile)) {
 		// Try stdout log

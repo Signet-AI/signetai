@@ -1,363 +1,345 @@
 <script lang="ts">
-	import { Badge } from "$lib/components/ui/badge/index.js";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import * as Card from "$lib/components/ui/card/index.js";
-	import * as Collapsible from "$lib/components/ui/collapsible/index.js";
-	import { onMount } from "svelte";
-	import PageBanner from "$lib/components/layout/PageBanner.svelte";
-	import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
-	import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
-	import { nav } from "$lib/stores/navigation.svelte";
-	import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
-	import PredictorStatusBar from "./PredictorStatusBar.svelte";
-	import PredictorColumn from "./PredictorColumn.svelte";
-	import ConvergenceChart from "./ConvergenceChart.svelte";
-	import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import PageBanner from "$lib/components/layout/PageBanner.svelte";
+import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
+import { ENGINE_TAB_ITEMS } from "$lib/components/layout/page-headers";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Card from "$lib/components/ui/card/index.js";
+import * as Collapsible from "$lib/components/ui/collapsible/index.js";
+import { nav } from "$lib/stores/navigation.svelte";
+import { focusEngineTab } from "$lib/stores/tab-group-focus.svelte";
+import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { onMount } from "svelte";
+import ConvergenceChart from "./ConvergenceChart.svelte";
+import PredictorColumn from "./PredictorColumn.svelte";
+import PredictorStatusBar from "./PredictorStatusBar.svelte";
 
-	const isDev = import.meta.env.DEV;
-	const API_BASE = isDev ? "http://localhost:3850" : "";
+const isDev = import.meta.env.DEV;
+const API_BASE = isDev ? "http://localhost:3850" : "";
 
-	// ---------------------------------------------------------------------------
-	// Types
-	// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
-	interface PredictorStatus {
-		enabled: boolean;
-		alive?: boolean;
-		crashCount?: number;
-		crashDisabled?: boolean;
-		status?: {
-			trained: boolean;
-			training_pairs: number;
-			model_version: number;
-			last_trained: string | null;
-		} | null;
+interface PredictorStatus {
+	enabled: boolean;
+	alive?: boolean;
+	crashCount?: number;
+	crashDisabled?: boolean;
+	status?: {
+		trained: boolean;
+		training_pairs: number;
+		model_version: number;
+		last_trained: string | null;
+	} | null;
+}
+
+interface PredictorHealth {
+	score: number;
+	status: string;
+	sidecarAlive: boolean;
+	modelVersion: number;
+	trainingSessions: number;
+	successRate: number;
+	alpha: number;
+	coldStartExited: boolean;
+	lastTrainedAt: string | null;
+	crashCount: number;
+	crashDisabled: boolean;
+}
+
+interface Comparison {
+	sessionKey: string;
+	predictorNdcg: number;
+	baselineNdcg: number;
+	predictorWon: boolean;
+	margin: number;
+	alpha: number;
+	scorerConfidence: number;
+	candidateCount: number;
+	project: string | null;
+	createdAt: string;
+	predictorTopIds?: string[];
+	baselineTopIds?: string[];
+}
+
+interface TrainingRun {
+	id: string;
+	modelVersion: number;
+	loss: number;
+	sampleCount: number;
+	durationMs: number;
+	canaryNdcg: number | null;
+	createdAt: string;
+}
+
+interface TrainResult {
+	loss: number;
+	step: number;
+	samples_used: number;
+	samples_skipped: number;
+	duration_ms: number;
+}
+
+interface TopPick {
+	id: string;
+	content: string;
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+let status = $state<PredictorStatus | null>(null);
+let health = $state<PredictorHealth | null>(null);
+let comparisons = $state<Comparison[]>([]);
+let trainingRuns = $state<TrainingRun[]>([]);
+let loading = $state(true);
+let training = $state(false);
+let trainResult = $state<TrainResult | null>(null);
+let trainError = $state<string | null>(null);
+let trainingPairs = $state(0);
+let errors = $state<Array<{ code: string; message: string; timestamp: string }>>([]);
+let detailsOpen = $state(false);
+
+// Training config — persisted via localStorage
+const TRAIN_CONFIG_KEY = "signet-predictor-train-config";
+
+function loadTrainConfig(): { epochs: number; limit: number } {
+	try {
+		const raw = localStorage.getItem(TRAIN_CONFIG_KEY);
+		if (raw) return JSON.parse(raw);
+	} catch {
+		/* fall through */
 	}
+	return { epochs: 3, limit: 5000 };
+}
 
-	interface PredictorHealth {
-		score: number;
-		status: string;
-		sidecarAlive: boolean;
-		modelVersion: number;
-		trainingSessions: number;
-		successRate: number;
-		alpha: number;
-		coldStartExited: boolean;
-		lastTrainedAt: string | null;
-		crashCount: number;
-		crashDisabled: boolean;
-	}
+function saveTrainConfig(epochs: number, limit: number): void {
+	localStorage.setItem(TRAIN_CONFIG_KEY, JSON.stringify({ epochs, limit }));
+}
 
-	interface Comparison {
-		sessionKey: string;
-		predictorNdcg: number;
-		baselineNdcg: number;
-		predictorWon: boolean;
-		margin: number;
-		alpha: number;
-		scorerConfidence: number;
-		candidateCount: number;
-		project: string | null;
-		createdAt: string;
-		predictorTopIds?: string[];
-		baselineTopIds?: string[];
-	}
+const savedConfig = loadTrainConfig();
+let trainEpochs = $state(savedConfig.epochs);
+let trainLimit = $state(savedConfig.limit);
+let trainInterval = $state(10); // read-only — daemon's trainIntervalSessions default
 
-	interface TrainingRun {
-		id: string;
-		modelVersion: number;
-		loss: number;
-		sampleCount: number;
-		durationMs: number;
-		canaryNdcg: number | null;
-		createdAt: string;
-	}
+// Memory content for top picks
+let predictorPicks = $state<TopPick[]>([]);
+let baselinePicks = $state<TopPick[]>([]);
 
-	interface TrainResult {
-		loss: number;
-		step: number;
-		samples_used: number;
-		samples_skipped: number;
-		duration_ms: number;
-	}
+// ---------------------------------------------------------------------------
+// Derived state
+// ---------------------------------------------------------------------------
 
-	interface TopPick {
-		id: string;
-		content: string;
-	}
+const isDisabled = $derived(status !== null && !status.enabled);
+const isColdStart = $derived(health !== null && !health.coldStartExited && health.sidecarAlive);
+const isActive = $derived(health !== null && health.coldStartExited && health.sidecarAlive);
+const isSidecarDead = $derived(health !== null && !health.sidecarAlive && status !== null && status.enabled);
 
-	// ---------------------------------------------------------------------------
-	// State
-	// ---------------------------------------------------------------------------
+const coldStartTarget = 10;
+const coldStartProgress = $derived(Math.min(1, comparisons.length / coldStartTarget));
 
-	let status = $state<PredictorStatus | null>(null);
-	let health = $state<PredictorHealth | null>(null);
-	let comparisons = $state<Comparison[]>([]);
-	let trainingRuns = $state<TrainingRun[]>([]);
-	let loading = $state(true);
-	let training = $state(false);
-	let trainResult = $state<TrainResult | null>(null);
-	let trainError = $state<string | null>(null);
-	let trainingPairs = $state(0);
-	let errors = $state<Array<{ code: string; message: string; timestamp: string }>>([]);
-	let detailsOpen = $state(false);
+const winRate = $derived.by(() => {
+	if (comparisons.length === 0) return 0;
+	const wins = comparisons.filter((c) => c.predictorWon).length;
+	return wins / comparisons.length;
+});
 
-	// Training config — persisted via localStorage
-	const TRAIN_CONFIG_KEY = "signet-predictor-train-config";
+const avgPredictorNdcg = $derived(
+	comparisons.length === 0 ? 0 : comparisons.reduce((s, c) => s + c.predictorNdcg, 0) / comparisons.length,
+);
 
-	function loadTrainConfig(): { epochs: number; limit: number } {
-		try {
-			const raw = localStorage.getItem(TRAIN_CONFIG_KEY);
-			if (raw) return JSON.parse(raw);
-		} catch { /* fall through */ }
-		return { epochs: 3, limit: 5000 };
-	}
+const avgBaselineNdcg = $derived(
+	comparisons.length === 0 ? 0 : comparisons.reduce((s, c) => s + c.baselineNdcg, 0) / comparisons.length,
+);
 
-	function saveTrainConfig(epochs: number, limit: number): void {
-		localStorage.setItem(TRAIN_CONFIG_KEY, JSON.stringify({ epochs, limit }));
-	}
+const avgConfidence = $derived(
+	comparisons.length === 0 ? 0 : comparisons.reduce((s, c) => s + c.scorerConfidence, 0) / comparisons.length,
+);
 
-	const savedConfig = loadTrainConfig();
-	let trainEpochs = $state(savedConfig.epochs);
-	let trainLimit = $state(savedConfig.limit);
-	let trainInterval = $state(10); // read-only — daemon's trainIntervalSessions default
+// ---------------------------------------------------------------------------
+// Column stats
+// ---------------------------------------------------------------------------
 
-	// Memory content for top picks
-	let predictorPicks = $state<TopPick[]>([]);
-	let baselinePicks = $state<TopPick[]>([]);
+const baselineStats = $derived<Array<{ label: string; value: string; tooltip?: string }>>([
+	{
+		label: "sessions evaluated",
+		value: `${comparisons.length}`,
+	},
+	{
+		label: "avg confidence",
+		value: avgConfidence.toFixed(2),
+	},
+]);
 
-	// ---------------------------------------------------------------------------
-	// Derived state
-	// ---------------------------------------------------------------------------
+const predictorStats = $derived<Array<{ label: string; value: string; tooltip?: string }>>([
+	{
+		label: "win rate",
+		value: `${Math.round(winRate * 100)}%`,
+		tooltip: "Sessions where predictor ranked better than heuristic baseline.",
+	},
+	{
+		label: "training pairs",
+		value: trainingPairs.toLocaleString(),
+		tooltip: "Memory-relevance examples the model has learned from.",
+	},
+	{
+		label: "model",
+		value: health
+			? `v${health.modelVersion} ${health.lastTrainedAt ? `\u00b7 ${relativeTime(health.lastTrainedAt)}` : ""}`
+			: "-",
+	},
+]);
 
-	const isDisabled = $derived(status !== null && !status.enabled);
-	const isColdStart = $derived(
-		health !== null && !health.coldStartExited && health.sidecarAlive,
-	);
-	const isActive = $derived(
-		health !== null && health.coldStartExited && health.sidecarAlive,
-	);
-	const isSidecarDead = $derived(
-		health !== null && !health.sidecarAlive && status !== null && status.enabled,
-	);
+// ---------------------------------------------------------------------------
+// Fetchers
+// ---------------------------------------------------------------------------
 
-	const coldStartTarget = 10;
-	const coldStartProgress = $derived(
-		Math.min(1, comparisons.length / coldStartTarget),
-	);
+let fetching = $state(false);
+let fetchError = $state(false);
 
-	const winRate = $derived.by(() => {
-		if (comparisons.length === 0) return 0;
-		const wins = comparisons.filter((c) => c.predictorWon).length;
-		return wins / comparisons.length;
-	});
+async function fetchAll(): Promise<void> {
+	if (fetching) return;
+	fetching = true;
+	loading = status === null; // only show spinner on initial load
+	try {
+		const [statusRes, healthRes, comparisonsRes, trainingRes, errorsRes, pairsRes] = await Promise.allSettled([
+			fetch(`${API_BASE}/api/predictor/status`),
+			fetch(`${API_BASE}/api/diagnostics/predictor`),
+			fetch(`${API_BASE}/api/predictor/comparisons?limit=50`),
+			fetch(`${API_BASE}/api/predictor/training?limit=10`),
+			fetch(`${API_BASE}/api/analytics/errors`),
+			fetch(`${API_BASE}/api/predictor/training-pairs-count`),
+		]);
 
-	const avgPredictorNdcg = $derived(
-		comparisons.length === 0
-			? 0
-			: comparisons.reduce((s, c) => s + c.predictorNdcg, 0) / comparisons.length,
-	);
-
-	const avgBaselineNdcg = $derived(
-		comparisons.length === 0
-			? 0
-			: comparisons.reduce((s, c) => s + c.baselineNdcg, 0) / comparisons.length,
-	);
-
-	const avgConfidence = $derived(
-		comparisons.length === 0
-			? 0
-			: comparisons.reduce((s, c) => s + c.scorerConfidence, 0) / comparisons.length,
-	);
-
-	// ---------------------------------------------------------------------------
-	// Column stats
-	// ---------------------------------------------------------------------------
-
-	const baselineStats = $derived<Array<{ label: string; value: string; tooltip?: string }>>([
-		{
-			label: "sessions evaluated",
-			value: `${comparisons.length}`,
-		},
-		{
-			label: "avg confidence",
-			value: avgConfidence.toFixed(2),
-		},
-	]);
-
-	const predictorStats = $derived<Array<{ label: string; value: string; tooltip?: string }>>([
-		{
-			label: "win rate",
-			value: `${Math.round(winRate * 100)}%`,
-			tooltip: "Sessions where predictor ranked better than heuristic baseline.",
-		},
-		{
-			label: "training pairs",
-			value: trainingPairs.toLocaleString(),
-			tooltip: "Memory-relevance examples the model has learned from.",
-		},
-		{
-			label: "model",
-			value: health
-				? `v${health.modelVersion} ${health.lastTrainedAt ? `\u00b7 ${relativeTime(health.lastTrainedAt)}` : ""}`
-				: "-",
-		},
-	]);
-
-	// ---------------------------------------------------------------------------
-	// Fetchers
-	// ---------------------------------------------------------------------------
-
-	let fetching = $state(false);
-	let fetchError = $state(false);
-
-	async function fetchAll(): Promise<void> {
-		if (fetching) return;
-		fetching = true;
-		loading = status === null; // only show spinner on initial load
-		try {
-			const [statusRes, healthRes, comparisonsRes, trainingRes, errorsRes, pairsRes] =
-				await Promise.allSettled([
-					fetch(`${API_BASE}/api/predictor/status`),
-					fetch(`${API_BASE}/api/diagnostics/predictor`),
-					fetch(`${API_BASE}/api/predictor/comparisons?limit=50`),
-					fetch(`${API_BASE}/api/predictor/training?limit=10`),
-					fetch(`${API_BASE}/api/analytics/errors`),
-					fetch(`${API_BASE}/api/predictor/training-pairs-count`),
-				]);
-
-			if (statusRes.status === "fulfilled" && statusRes.value.ok) {
-				status = await statusRes.value.json();
-			}
-			if (healthRes.status === "fulfilled" && healthRes.value.ok) {
-				health = await healthRes.value.json();
-			}
-			if (comparisonsRes.status === "fulfilled" && comparisonsRes.value.ok) {
-				const data = await comparisonsRes.value.json();
-				comparisons = data.items ?? [];
-			}
-			if (trainingRes.status === "fulfilled" && trainingRes.value.ok) {
-				const data = await trainingRes.value.json();
-				trainingRuns = data.items ?? [];
-			}
-			if (errorsRes.status === "fulfilled" && errorsRes.value.ok) {
-				const data = await errorsRes.value.json();
-				const allErrors: Array<{ stage: string; code: string; message: string; timestamp: string }> =
-					data.errors ?? [];
-				errors = allErrors.filter((e) => e.stage === "predictor");
-			}
-			if (pairsRes.status === "fulfilled" && pairsRes.value.ok) {
-				const data = await pairsRes.value.json();
-				trainingPairs = data.count ?? 0;
-			}
-		} catch {
-			// fail open
+		if (statusRes.status === "fulfilled" && statusRes.value.ok) {
+			status = await statusRes.value.json();
 		}
-		if (status === null) fetchError = true;
-		loading = false;
-		fetching = false;
-
-		// Top picks are a non-blocking enhancement — fetch independently
-		fetchTopPicks().catch(() => {});
-	}
-
-	async function fetchTopPicks(): Promise<void> {
-		try {
-			if (comparisons.length === 0) return;
-			const latest = comparisons[0];
-			const pIds: string[] = latest.predictorTopIds ?? [];
-			const bIds: string[] = latest.baselineTopIds ?? [];
-
-			const allIds = [...new Set([...pIds.slice(0, 5), ...bIds.slice(0, 5)])];
-			if (allIds.length === 0) return;
-
-			const results = await Promise.allSettled(
-				allIds.map((id) =>
-					fetch(`${API_BASE}/api/memory/${id}`).then((r) =>
-						r.ok ? r.json() : null,
-					),
-				),
-			);
-
-			const memoryMap = new Map<string, string>();
-			for (let i = 0; i < allIds.length; i++) {
-				const r = results[i];
-				if (r.status === "fulfilled" && r.value !== null) {
-					memoryMap.set(allIds[i], r.value.content ?? "");
-				}
-			}
-
-			predictorPicks = pIds
-				.slice(0, 5)
-				.filter((id) => memoryMap.has(id))
-				.map((id) => ({ id, content: memoryMap.get(id) ?? "" }));
-
-			baselinePicks = bIds
-				.slice(0, 5)
-				.filter((id) => memoryMap.has(id))
-				.map((id) => ({ id, content: memoryMap.get(id) ?? "" }));
-		} catch {
-			// non-critical — top picks just won't show
-			predictorPicks = [];
-			baselinePicks = [];
+		if (healthRes.status === "fulfilled" && healthRes.value.ok) {
+			health = await healthRes.value.json();
 		}
-	}
-
-	async function trainNow(): Promise<void> {
-		training = true;
-		trainResult = null;
-		trainError = null;
-		try {
-			const res = await fetch(`${API_BASE}/api/predictor/train`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ epochs: trainEpochs, limit: trainLimit }),
-			});
-			const data = await res.json();
-			if (!res.ok) {
-				trainError = data.error ?? `HTTP ${res.status}`;
-			} else {
-				trainResult = data as TrainResult;
-				await fetchAll();
-			}
-		} catch (err) {
-			trainError = String(err);
+		if (comparisonsRes.status === "fulfilled" && comparisonsRes.value.ok) {
+			const data = await comparisonsRes.value.json();
+			comparisons = data.items ?? [];
 		}
-		training = false;
+		if (trainingRes.status === "fulfilled" && trainingRes.value.ok) {
+			const data = await trainingRes.value.json();
+			trainingRuns = data.items ?? [];
+		}
+		if (errorsRes.status === "fulfilled" && errorsRes.value.ok) {
+			const data = await errorsRes.value.json();
+			const allErrors: Array<{ stage: string; code: string; message: string; timestamp: string }> = data.errors ?? [];
+			errors = allErrors.filter((e) => e.stage === "predictor");
+		}
+		if (pairsRes.status === "fulfilled" && pairsRes.value.ok) {
+			const data = await pairsRes.value.json();
+			trainingPairs = data.count ?? 0;
+		}
+	} catch {
+		// fail open
 	}
+	if (status === null) fetchError = true;
+	loading = false;
+	fetching = false;
 
-	// ---------------------------------------------------------------------------
-	// Helpers
-	// ---------------------------------------------------------------------------
+	// Top picks are a non-blocking enhancement — fetch independently
+	fetchTopPicks().catch(() => {});
+}
 
-	function formatDate(iso: string): string {
-		const d = new Date(iso);
-		if (Number.isNaN(d.getTime())) return iso;
-		return d.toLocaleString(undefined, {
-			month: "short",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
+async function fetchTopPicks(): Promise<void> {
+	try {
+		if (comparisons.length === 0) return;
+		const latest = comparisons[0];
+		const pIds: string[] = latest.predictorTopIds ?? [];
+		const bIds: string[] = latest.baselineTopIds ?? [];
+
+		const allIds = [...new Set([...pIds.slice(0, 5), ...bIds.slice(0, 5)])];
+		if (allIds.length === 0) return;
+
+		const results = await Promise.allSettled(
+			allIds.map((id) => fetch(`${API_BASE}/api/memory/${id}`).then((r) => (r.ok ? r.json() : null))),
+		);
+
+		const memoryMap = new Map<string, string>();
+		for (let i = 0; i < allIds.length; i++) {
+			const r = results[i];
+			if (r.status === "fulfilled" && r.value !== null) {
+				memoryMap.set(allIds[i], r.value.content ?? "");
+			}
+		}
+
+		predictorPicks = pIds
+			.slice(0, 5)
+			.filter((id) => memoryMap.has(id))
+			.map((id) => ({ id, content: memoryMap.get(id) ?? "" }));
+
+		baselinePicks = bIds
+			.slice(0, 5)
+			.filter((id) => memoryMap.has(id))
+			.map((id) => ({ id, content: memoryMap.get(id) ?? "" }));
+	} catch {
+		// non-critical — top picks just won't show
+		predictorPicks = [];
+		baselinePicks = [];
+	}
+}
+
+async function trainNow(): Promise<void> {
+	training = true;
+	trainResult = null;
+	trainError = null;
+	try {
+		const res = await fetch(`${API_BASE}/api/predictor/train`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ epochs: trainEpochs, limit: trainLimit }),
 		});
+		const data = await res.json();
+		if (!res.ok) {
+			trainError = data.error ?? `HTTP ${res.status}`;
+		} else {
+			trainResult = data as TrainResult;
+			await fetchAll();
+		}
+	} catch (err) {
+		trainError = String(err);
 	}
+	training = false;
+}
 
-	function relativeTime(iso: string): string {
-		const ms = Date.now() - new Date(iso).getTime();
-		if (Number.isNaN(ms)) return iso;
-		const mins = Math.floor(ms / 60_000);
-		if (mins < 1) return "just now";
-		if (mins < 60) return `${mins}m ago`;
-		const hrs = Math.floor(mins / 60);
-		if (hrs < 24) return `${hrs}h ago`;
-		const days = Math.floor(hrs / 24);
-		return `${days}d ago`;
-	}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-	onMount(() => {
-		fetchAll();
-		const interval = setInterval(fetchAll, 15_000);
-		return () => clearInterval(interval);
+function formatDate(iso: string): string {
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return iso;
+	return d.toLocaleString(undefined, {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
 	});
+}
+
+function relativeTime(iso: string): string {
+	const ms = Date.now() - new Date(iso).getTime();
+	if (Number.isNaN(ms)) return iso;
+	const mins = Math.floor(ms / 60_000);
+	if (mins < 1) return "just now";
+	if (mins < 60) return `${mins}m ago`;
+	const hrs = Math.floor(mins / 60);
+	if (hrs < 24) return `${hrs}h ago`;
+	const days = Math.floor(hrs / 24);
+	return `${days}d ago`;
+}
+
+onMount(() => {
+	fetchAll();
+	const interval = setInterval(fetchAll, 15_000);
+	return () => clearInterval(interval);
+});
 </script>
 
 <!-- Observatory layout: CSS grid, no page scroll -->

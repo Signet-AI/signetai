@@ -1,78 +1,78 @@
 <script lang="ts">
-	import type { Memory } from "$lib/api";
-	import { setTab } from "$lib/stores/navigation.svelte";
-	import { API_BASE } from "$lib/api";
-	import Brain from "@lucide/svelte/icons/brain";
-	import { onMount } from "svelte";
+import type { Memory } from "$lib/api";
+import { API_BASE } from "$lib/api";
+import { setTab } from "$lib/stores/navigation.svelte";
+import Brain from "@lucide/svelte/icons/brain";
+import { onMount } from "svelte";
 
-	interface Props {
-		memories: Memory[];
-	}
+interface Props {
+	memories: Memory[];
+}
 
-	const { memories }: Props = $props();
+let { memories }: Props = $props();
 
-	interface SpotlightMemory {
-		id: string;
-		content: string;
-		access_count: number;
-		importance: number;
-	}
+interface SpotlightMemory {
+	id: string;
+	content: string;
+	access_count: number;
+	importance: number;
+}
 
-	let items = $state<SpotlightMemory[]>([]);
-	let loaded = $state(false);
+let items = $state<SpotlightMemory[]>([]);
+let loaded = $state(false);
 
-	async function fetchMostUsed(): Promise<void> {
-		try {
-			const res = await fetch(`${API_BASE}/api/memories/most-used?limit=50`);
-			if (res.ok) {
-				const data = await res.json();
-				const results = (data.memories ?? []) as SpotlightMemory[];
-				const valid = results
-					.filter((r) => typeof r.id === "string" && r.id.length > 0 && typeof r.content === "string")
-					.map((r) => ({
-						id: r.id,
-						content: r.content ?? "",
-						access_count: r.access_count ?? 0,
-						importance: r.importance ?? 0.5,
-					}));
-				if (valid.length > 0) {
-					items = valid;
-					loaded = true;
-					return;
-				}
+async function fetchMostUsed(): Promise<void> {
+	try {
+		const res = await fetch(`${API_BASE}/api/memories/most-used?limit=50`);
+		if (res.ok) {
+			const data = await res.json();
+			const results = (data.memories ?? []) as SpotlightMemory[];
+			const valid = results
+				.filter((r) => typeof r.id === "string" && r.id.length > 0 && typeof r.content === "string")
+				.map((r) => ({
+					id: r.id,
+					content: r.content ?? "",
+					access_count: r.access_count ?? 0,
+					importance: r.importance ?? 0.5,
+				}));
+			if (valid.length > 0) {
+				items = valid;
+				loaded = true;
+				return;
 			}
-		} catch {
-			// endpoint may not exist yet
 		}
-
-		// Fallback: use prop memories sorted by importance
-		items = memories
-			.map((m) => ({
-				id: m.id,
-				content: m.content,
-				access_count: 0,
-				importance: m.importance ?? 0.5,
-			}))
-			.sort((a, b) => b.importance - a.importance)
-			.slice(0, 50);
-		loaded = true;
+	} catch {
+		// endpoint may not exist yet
 	}
 
-	onMount(() => {
-		fetchMostUsed();
-	});
+	// Fallback: use prop memories sorted by importance
+	items = memories
+		.map((m) => ({
+			id: m.id,
+			content: m.content,
+			access_count: 0,
+			importance: m.importance ?? 0.5,
+		}))
+		.sort((a, b) => b.importance - a.importance)
+		.slice(0, 50);
+	loaded = true;
+}
 
-	function label(m: SpotlightMemory): string {
-		const text = m.content.trim();
-		const first = text.split("\n")[0] ?? text;
-		return first.length > 60 ? `${first.slice(0, 57)}...` : first;
-	}
+onMount(() => {
+	fetchMostUsed();
+});
 
-	function importanceColor(imp: number): string {
-		if (imp >= 0.8) return "var(--sig-danger)";
-		if (imp >= 0.5) return "var(--sig-warning)";
-		return "var(--sig-success)";
-	}
+function label(m: SpotlightMemory): string {
+	const text = m.content.trim();
+	const first = text.split("\n")[0] ?? text;
+	return first.length > 60 ? `${first.slice(0, 57)}...` : first;
+}
+
+function importanceColor(imp: number): string {
+	if (imp >= 0.8) return "var(--sig-danger)";
+	if (imp >= 0.5) return "var(--sig-warning)";
+	return "var(--sig-success)";
+}
 </script>
 
 <div class="panel sig-panel">

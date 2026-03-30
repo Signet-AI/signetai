@@ -1,43 +1,43 @@
 {
-  "manifest_version": 3,
-  "name": "Signet",
-  "version": "0.29.0",
-  "description": "Portable AI agent identity — memory, search, and quick actions from your browser",
-  "permissions": ["storage", "contextMenus", "activeTab"],
-  "host_permissions": ["http://localhost:3850/*"],
-  "action": {
-    "default_popup": "popup/index.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
-  },
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  },
-  "background": {
-    "service_worker": "background/service-worker.js",
-    "type": "module"
-  },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content/content.js"],
-      "css": ["content/content.css"],
-      "run_at": "document_idle"
-    }
-  ],
-  "options_page": "options/index.html",
-  "commands": {
-    "save-selection": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+S",
-        "mac": "Command+Shift+S"
-      },
-      "description": "Save selected text to Signet memory"
-    }
-  }
+	"manifest_version": 3,
+	"name": "Signet",
+	"version": "0.29.0",
+	"description": "Portable AI agent identity — memory, search, and quick actions from your browser",
+	"permissions": ["storage", "contextMenus", "activeTab"],
+	"host_permissions": ["http://localhost:3850/*"],
+	"action": {
+		"default_popup": "popup/index.html",
+		"default_icon": {
+			"16": "icons/icon16.png",
+			"48": "icons/icon48.png",
+			"128": "icons/icon128.png"
+		}
+	},
+	"icons": {
+		"16": "icons/icon16.png",
+		"48": "icons/icon48.png",
+		"128": "icons/icon128.png"
+	},
+	"background": {
+		"service_worker": "background/service-worker.js",
+		"type": "module"
+	},
+	"content_scripts": [
+		{
+			"matches": ["<all_urls>"],
+			"js": ["content/content.js"],
+			"css": ["content/content.css"],
+			"run_at": "document_idle"
+		}
+	],
+	"options_page": "options/index.html",
+	"commands": {
+		"save-selection": {
+			"suggested_key": {
+				"default": "Ctrl+Shift+S",
+				"mac": "Command+Shift+S"
+			},
+			"description": "Save selected text to Signet memory"
+		}
+	}
 }

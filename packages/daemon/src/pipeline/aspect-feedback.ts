@@ -44,24 +44,17 @@ export function recordFeedbackTelemetry(update: {
 	readonly feedbackPropagatedAttributes?: number;
 }): void {
 	feedbackTelemetry.lastRunAt = now();
-	feedbackTelemetry.feedbackAspectsUpdated +=
-		update.feedbackAspectsUpdated ?? 0;
-	feedbackTelemetry.feedbackFtsConfirmations +=
-		update.feedbackFtsConfirmations ?? 0;
-	feedbackTelemetry.feedbackDecayedAspects +=
-		update.feedbackDecayedAspects ?? 0;
-	feedbackTelemetry.feedbackPropagatedAttributes +=
-		update.feedbackPropagatedAttributes ?? 0;
+	feedbackTelemetry.feedbackAspectsUpdated += update.feedbackAspectsUpdated ?? 0;
+	feedbackTelemetry.feedbackFtsConfirmations += update.feedbackFtsConfirmations ?? 0;
+	feedbackTelemetry.feedbackDecayedAspects += update.feedbackDecayedAspects ?? 0;
+	feedbackTelemetry.feedbackPropagatedAttributes += update.feedbackPropagatedAttributes ?? 0;
 }
 
 export function getFeedbackTelemetry(): FeedbackTelemetrySnapshot {
 	return { ...feedbackTelemetry };
 }
 
-export function shouldRunSessionDecay(
-	agentId: string,
-	decayIntervalSessions: number,
-): boolean {
+export function shouldRunSessionDecay(agentId: string, decayIntervalSessions: number): boolean {
 	if (decayIntervalSessions <= 1) return true;
 	const next = (sessionDecayCounters.get(agentId) ?? 0) + 1;
 	if (next >= decayIntervalSessions) {
@@ -111,15 +104,9 @@ export function applyFtsOverlapFeedback(
 			if (typeof row.memory_id !== "string") continue;
 			const confirmations = Number(row.fts_hit_count ?? 0);
 			if (!Number.isFinite(confirmations) || confirmations <= 0) continue;
-			const aspect = aspectLookup.get(
-				row.memory_id,
-				agentId,
-			) as Record<string, unknown> | undefined;
+			const aspect = aspectLookup.get(row.memory_id, agentId) as Record<string, unknown> | undefined;
 			if (typeof aspect?.aspect_id !== "string") continue;
-			aspectConfirmations.set(
-				aspect.aspect_id,
-				(aspectConfirmations.get(aspect.aspect_id) ?? 0) + confirmations,
-			);
+			aspectConfirmations.set(aspect.aspect_id, (aspectConfirmations.get(aspect.aspect_id) ?? 0) + confirmations);
 			totalFtsConfirmations += confirmations;
 		}
 
@@ -130,9 +117,7 @@ export function applyFtsOverlapFeedback(
 			};
 		}
 
-		const lookupAspect = db.prepare(
-			"SELECT weight FROM entity_aspects WHERE id = ? AND agent_id = ?",
-		);
+		const lookupAspect = db.prepare("SELECT weight FROM entity_aspects WHERE id = ? AND agent_id = ?");
 		const updateAspect = db.prepare(
 			`UPDATE entity_aspects
 			 SET weight = ?, updated_at = ?
@@ -141,18 +126,11 @@ export function applyFtsOverlapFeedback(
 		const ts = now();
 		let aspectsUpdated = 0;
 		for (const [aspectId, confirmations] of aspectConfirmations) {
-			const row = lookupAspect.get(
-				aspectId,
-				agentId,
-			) as Record<string, unknown> | undefined;
+			const row = lookupAspect.get(aspectId, agentId) as Record<string, unknown> | undefined;
 			const currentWeight = Number(row?.weight ?? Number.NaN);
 			if (!Number.isFinite(currentWeight)) continue;
 			updateAspect.run(
-				clamp(
-					currentWeight + config.delta * confirmations,
-					config.minWeight,
-					config.maxWeight,
-				),
+				clamp(currentWeight + config.delta * confirmations, config.minWeight, config.maxWeight),
 				ts,
 				aspectId,
 				agentId,
@@ -191,11 +169,7 @@ export function decayAspectWeights(
 				   AND updated_at < datetime('now', ?)
 				   AND weight > ?`,
 			)
-			.all(
-				agentId,
-				`-${config.staleDays} days`,
-				config.minWeight,
-			) as Array<Record<string, unknown>>;
+			.all(agentId, `-${config.staleDays} days`, config.minWeight) as Array<Record<string, unknown>>;
 		if (staleRows.length === 0) return 0;
 
 		const updateAspect = db.prepare(
@@ -209,12 +183,7 @@ export function decayAspectWeights(
 			if (typeof row.id !== "string") continue;
 			const weight = Number(row.weight ?? Number.NaN);
 			if (!Number.isFinite(weight)) continue;
-			updateAspect.run(
-				Math.max(config.minWeight, weight - config.decayRate),
-				ts,
-				row.id,
-				agentId,
-			);
+			updateAspect.run(Math.max(config.minWeight, weight - config.decayRate), ts, row.id, agentId);
 			count++;
 		}
 		return count;

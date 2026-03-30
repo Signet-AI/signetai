@@ -74,10 +74,7 @@ function parseVersion(output: string): PythonVersion | null {
 /**
  * Run a command and return stdout
  */
-async function runCommand(
-	cmd: string,
-	args: string[] = [],
-): Promise<{ code: number; stdout: string; stderr: string }> {
+async function runCommand(cmd: string, args: string[] = []): Promise<{ code: number; stdout: string; stderr: string }> {
 	return new Promise((resolve) => {
 		let stdout = "";
 		let stderr = "";
@@ -93,9 +90,7 @@ async function runCommand(
 			stderr += d.toString();
 		});
 		proc.on("close", (c) => resolve({ code: c ?? 1, stdout, stderr }));
-		proc.on("error", (e) =>
-			resolve({ code: 1, stdout: "", stderr: e.message }),
-		);
+		proc.on("error", (e) => resolve({ code: 1, stdout: "", stderr: e.message }));
 	});
 }
 
@@ -110,16 +105,11 @@ export function isZvecCompatible(version: PythonVersion): boolean {
  * Detect system Python (tries multiple commands)
  */
 export async function detectSystemPython(): Promise<PythonInfo | null> {
-	const candidates = isWindows
-		? ["py -3", "python", "python3"]
-		: ["python3", "python"];
+	const candidates = isWindows ? ["py -3", "python", "python3"] : ["python3", "python"];
 
 	// On macOS, prefer Homebrew Python
 	if (isMac) {
-		const homebrewPython =
-			process.arch === "arm64"
-				? "/opt/homebrew/bin/python3"
-				: "/usr/local/bin/python3";
+		const homebrewPython = process.arch === "arm64" ? "/opt/homebrew/bin/python3" : "/usr/local/bin/python3";
 		if (existsSync(homebrewPython)) {
 			candidates.unshift(homebrewPython);
 		}
@@ -243,18 +233,14 @@ export async function installPyenv(): Promise<InstallResult> {
 	if (isWindows) {
 		return {
 			success: false,
-			error:
-				"On Windows, please install pyenv-win manually from https://pyenv-win.github.io/pyenv-win/",
+			error: "On Windows, please install pyenv-win manually from https://pyenv-win.github.io/pyenv-win/",
 		};
 	}
 
 	const result = await runCommand("curl", ["https://pyenv.run", "|", "bash"]);
 
 	// curl | bash needs shell
-	const shellResult = await runCommand("bash", [
-		"-c",
-		"curl https://pyenv.run | bash",
-	]);
+	const shellResult = await runCommand("bash", ["-c", "curl https://pyenv.run | bash"]);
 
 	if (shellResult.code !== 0) {
 		return {
@@ -269,9 +255,7 @@ export async function installPyenv(): Promise<InstallResult> {
 /**
  * Install Python via pyenv
  */
-export async function installPyenvPython(
-	version: string = "3.12",
-): Promise<InstallResult> {
+export async function installPyenvPython(version: string = "3.12"): Promise<InstallResult> {
 	const pyenv = await detectPyenv();
 	if (!pyenv.available) {
 		return { success: false, error: "pyenv not available" };
@@ -296,17 +280,8 @@ export async function installPyenvPython(
 /**
  * Create conda environment with specific Python version
  */
-export async function createCondaEnv(
-	envName: string,
-	pythonVersion: string = "3.12",
-): Promise<InstallResult> {
-	const result = await runCommand("conda", [
-		"create",
-		"-y",
-		"-n",
-		envName,
-		`python=${pythonVersion}`,
-	]);
+export async function createCondaEnv(envName: string, pythonVersion: string = "3.12"): Promise<InstallResult> {
+	const result = await runCommand("conda", ["create", "-y", "-n", envName, `python=${pythonVersion}`]);
 
 	if (result.code !== 0) {
 		return {
@@ -332,9 +307,7 @@ export async function getCondaPython(envName: string): Promise<string | null> {
 		const envPath = info.envs?.find((e: string) => e.endsWith(`${sep}${envName}`));
 		if (!envPath) return null;
 
-		return isWindows
-			? join(envPath, "python.exe")
-			: join(envPath, "bin", "python");
+		return isWindows ? join(envPath, "python.exe") : join(envPath, "bin", "python");
 	} catch {
 		return null;
 	}
@@ -343,19 +316,11 @@ export async function getCondaPython(envName: string): Promise<string | null> {
 /**
  * Create virtual environment
  */
-export async function createVenv(
-	venvPath: string,
-	pythonPath?: string,
-): Promise<VenvResult> {
+export async function createVenv(venvPath: string, pythonPath?: string): Promise<VenvResult> {
 	const python = pythonPath || (isWindows ? "python" : "python3");
 
 	// Create venv
-	const result = await runCommand(python, [
-		"-m",
-		"venv",
-		"--system-site-packages",
-		venvPath,
-	]);
+	const result = await runCommand(python, ["-m", "venv", "--system-site-packages", venvPath]);
 
 	if (result.code !== 0) {
 		// Check for missing venv package on Linux
@@ -377,13 +342,9 @@ export async function createVenv(
 	}
 
 	// Determine pip path
-	const pipPath = isWindows
-		? join(venvPath, "Scripts", "pip.exe")
-		: join(venvPath, "bin", "pip");
+	const pipPath = isWindows ? join(venvPath, "Scripts", "pip.exe") : join(venvPath, "bin", "pip");
 
-	const pythonVenvPath = isWindows
-		? join(venvPath, "Scripts", "python.exe")
-		: join(venvPath, "bin", "python");
+	const pythonVenvPath = isWindows ? join(venvPath, "Scripts", "python.exe") : join(venvPath, "bin", "python");
 
 	if (!existsSync(pipPath)) {
 		return {
@@ -410,11 +371,7 @@ export async function installDeps(
 	includeZvec: boolean = true,
 ): Promise<DepsResult> {
 	// Install base requirements
-	const baseResult = await runCommand(pipPath, [
-		"install",
-		"-r",
-		requirementsPath,
-	]);
+	const baseResult = await runCommand(pipPath, ["install", "-r", requirementsPath]);
 
 	if (baseResult.code !== 0) {
 		return {
@@ -491,11 +448,7 @@ export async function getPythonSummary(): Promise<{
 	conda: CondaInfo;
 	best: PythonInfo | null;
 }> {
-	const [system, pyenv, conda] = await Promise.all([
-		detectSystemPython(),
-		detectPyenv(),
-		detectConda(),
-	]);
+	const [system, pyenv, conda] = await Promise.all([detectSystemPython(), detectPyenv(), detectConda()]);
 
 	const best = await detectBestPython();
 

@@ -322,7 +322,9 @@ function main(): void {
 		const expectedDir = statusDirMap[spec.status];
 		if (expectedDir && spec.path && !spec.path.startsWith(expectedDir)) {
 			if (spec.status !== "reference") {
-				failures.push(`status/directory mismatch for ${spec.id}: status=${spec.status} but path=${spec.path} (expected ${expectedDir})`);
+				failures.push(
+					`status/directory mismatch for ${spec.id}: status=${spec.status} but path=${spec.path} (expected ${expectedDir})`,
+				);
 			}
 		}
 	}

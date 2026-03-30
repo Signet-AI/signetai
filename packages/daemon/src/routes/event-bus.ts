@@ -26,10 +26,7 @@ export function mountEventBusRoutes(app: Hono): void {
 	 */
 	app.get("/api/os/events", (c) => {
 		const type = c.req.query("type") || undefined;
-		const limit = Math.min(
-			Math.max(1, Number.parseInt(c.req.query("limit") || "50", 10) || 50),
-			500,
-		);
+		const limit = Math.min(Math.max(1, Number.parseInt(c.req.query("limit") || "50", 10) || 50), 500);
 		const windowMs = Math.min(
 			Math.max(1000, Number.parseInt(c.req.query("windowMs") || "300000", 10) || 300000),
 			30 * 60 * 1000, // max 30 minutes
@@ -74,9 +71,7 @@ export function mountEventBusRoutes(app: Hono): void {
 
 				// Send initial connection event
 				controller.enqueue(
-					encoder.encode(
-						`data: ${JSON.stringify({ type: "connected", subscribedTo: subscribeType })}\n\n`,
-					),
+					encoder.encode(`data: ${JSON.stringify({ type: "connected", subscribedTo: subscribeType })}\n\n`),
 				);
 
 				// Heartbeat to keep connection alive

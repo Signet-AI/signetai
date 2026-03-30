@@ -1,322 +1,339 @@
 <script lang="ts">
-	import { API_BASE } from "$lib/api";
-	import * as Select from "$lib/components/ui/select/index.js";
-	import Trash2 from "@lucide/svelte/icons/trash-2";
-	import Loader from "@lucide/svelte/icons/loader";
-	import Activity from "@lucide/svelte/icons/activity";
-	import Wrench from "@lucide/svelte/icons/wrench";
-	import Info from "@lucide/svelte/icons/info";
-	import Terminal from "@lucide/svelte/icons/terminal";
-	import ChevronDown from "@lucide/svelte/icons/chevron-down";
-	import { tick } from "svelte";
+import { API_BASE } from "$lib/api";
+import * as Select from "$lib/components/ui/select/index.js";
+import Activity from "@lucide/svelte/icons/activity";
+import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import Info from "@lucide/svelte/icons/info";
+import Loader from "@lucide/svelte/icons/loader";
+import Terminal from "@lucide/svelte/icons/terminal";
+import Trash2 from "@lucide/svelte/icons/trash-2";
+import Wrench from "@lucide/svelte/icons/wrench";
+import { tick } from "svelte";
 
-	type CmdKind = "cli" | "api";
+type CmdKind = "cli" | "api";
 
-	interface CommandDef {
-		readonly label: string;
-		readonly kind: CmdKind;
-		readonly key?: string;
-		readonly method?: "GET" | "POST";
-		readonly path?: string;
-		readonly danger?: boolean;
+interface CommandDef {
+	readonly label: string;
+	readonly kind: CmdKind;
+	readonly key?: string;
+	readonly method?: "GET" | "POST";
+	readonly path?: string;
+	readonly danger?: boolean;
+}
+
+interface GroupDef {
+	readonly id: string;
+	readonly title: string;
+	readonly icon: typeof Activity;
+	readonly color: string;
+	readonly commands: readonly CommandDef[];
+}
+
+const groupDefs: readonly GroupDef[] = [
+	{
+		id: "cli",
+		title: "CLI",
+		icon: Terminal,
+		color: "var(--sig-highlight)",
+		commands: [
+			{ label: "Status", kind: "cli", key: "status" },
+			{ label: "Daemon Status", kind: "cli", key: "daemon-status" },
+			{ label: "Daemon Logs", kind: "cli", key: "daemon-logs" },
+			{ label: "Sync", kind: "cli", key: "sync" },
+			{ label: "Embed Audit", kind: "cli", key: "embed-audit" },
+			{ label: "Skill List", kind: "cli", key: "skill-list" },
+			{ label: "Secret List", kind: "cli", key: "secret-list" },
+			{ label: "Recall Test", kind: "cli", key: "recall-test" },
+		],
+	},
+	{
+		id: "status",
+		title: "Status",
+		icon: Activity,
+		color: "var(--sig-highlight)",
+		commands: [
+			{ label: "Health", kind: "api", method: "GET", path: "/health" },
+			{ label: "Diagnostics", kind: "api", method: "GET", path: "/api/diagnostics" },
+			{ label: "Pipeline", kind: "api", method: "GET", path: "/api/pipeline/status" },
+			{ label: "Predictor", kind: "api", method: "GET", path: "/api/predictor/status" },
+			{ label: "Git", kind: "api", method: "GET", path: "/api/git/status" },
+			{ label: "Embeddings", kind: "api", method: "GET", path: "/api/embeddings/health" },
+		],
+	},
+	{
+		id: "info",
+		title: "Info",
+		icon: Info,
+		color: "var(--sig-highlight)",
+		commands: [
+			{ label: "Embed Gaps", kind: "api", method: "GET", path: "/api/repair/embedding-gaps" },
+			{ label: "Dedup Stats", kind: "api", method: "GET", path: "/api/repair/dedup-stats" },
+			{ label: "Cold Stats", kind: "api", method: "GET", path: "/api/repair/cold-stats" },
+		],
+	},
+	{
+		id: "repair",
+		title: "Repair",
+		icon: Wrench,
+		color: "var(--sig-highlight)",
+		commands: [
+			{ label: "Check FTS", kind: "api", method: "POST", path: "/api/repair/check-fts" },
+			{ label: "Re-embed", kind: "api", method: "POST", path: "/api/repair/re-embed" },
+			{ label: "Resync Vec", kind: "api", method: "POST", path: "/api/repair/resync-vec" },
+			{ label: "Clean Orphans", kind: "api", method: "POST", path: "/api/repair/clean-orphans" },
+			{ label: "Deduplicate", kind: "api", method: "POST", path: "/api/repair/deduplicate" },
+			{ label: "Retention", kind: "api", method: "POST", path: "/api/repair/retention-sweep" },
+			{ label: "Requeue Dead", kind: "api", method: "POST", path: "/api/repair/requeue-dead" },
+			{ label: "Release Leases", kind: "api", method: "POST", path: "/api/repair/release-leases" },
+			{ label: "Backfill Skipped", kind: "api", method: "POST", path: "/api/repair/backfill-skipped" },
+			{ label: "Reclassify", kind: "api", method: "POST", path: "/api/repair/reclassify-entities" },
+			{ label: "Prune Chunks", kind: "api", method: "POST", path: "/api/repair/prune-chunk-groups" },
+			{ label: "Prune Singletons", kind: "api", method: "POST", path: "/api/repair/prune-singleton-entities" },
+			{ label: "Stop Daemon", kind: "cli", key: "daemon-stop" },
+			{ label: "Restart Daemon", kind: "cli", key: "daemon-restart" },
+			{ label: "Update Signet", kind: "cli", key: "update" },
+		],
+	},
+];
+
+// Per-group state
+interface GroupState {
+	lines: string[];
+	running: boolean;
+	selected: number;
+}
+
+const panels = $state<Record<string, GroupState>>(
+	Object.fromEntries(groupDefs.map((g) => [g.id, { lines: [], running: false, selected: 0 }])),
+);
+let termLines = $state<string[]>([]);
+let termRef = $state<HTMLDivElement | undefined>(undefined);
+const groupMap = Object.fromEntries(groupDefs.map((g) => [g.id, g]));
+
+function bindTerm(el: HTMLDivElement): void {
+	termRef = el;
+}
+
+async function scrollGroup(_id?: string): Promise<void> {
+	await tick();
+	termRef?.scrollTo({ top: termRef.scrollHeight, behavior: "smooth" });
+}
+
+function appendLine(id: string, text: string): void {
+	const gs = panels[id];
+	if (!gs) return;
+	gs.lines = [...gs.lines, text];
+	const label = groupMap[id]?.title ?? id;
+	termLines = [...termLines, text ? `[${label}] ${text}` : ""];
+}
+
+function clearOutput(): void {
+	termLines = [];
+	for (const g of groupDefs) {
+		panels[g.id].lines = [];
 	}
+}
 
-	interface GroupDef {
-		readonly id: string;
-		readonly title: string;
-		readonly icon: typeof Activity;
-		readonly color: string;
-		readonly commands: readonly CommandDef[];
-	}
+async function execCli(gid: string, cmd: CommandDef): Promise<void> {
+	const gs = panels[gid];
+	if (!gs || gs.running || !cmd.key) return;
+	gs.running = true;
 
-	const groupDefs: readonly GroupDef[] = [
-		{
-			id: "cli",
-			title: "CLI",
-			icon: Terminal,
-			color: "var(--sig-highlight)",
-			commands: [
-				{ label: "Status", kind: "cli", key: "status" },
-				{ label: "Daemon Status", kind: "cli", key: "daemon-status" },
-				{ label: "Daemon Logs", kind: "cli", key: "daemon-logs" },
-				{ label: "Sync", kind: "cli", key: "sync" },
-				{ label: "Embed Audit", kind: "cli", key: "embed-audit" },
-				{ label: "Skill List", kind: "cli", key: "skill-list" },
-				{ label: "Secret List", kind: "cli", key: "secret-list" },
-				{ label: "Recall Test", kind: "cli", key: "recall-test" },
-			],
-		},
-		{
-			id: "status",
-			title: "Status",
-			icon: Activity,
-			color: "var(--sig-highlight)",
-			commands: [
-				{ label: "Health", kind: "api", method: "GET", path: "/health" },
-				{ label: "Diagnostics", kind: "api", method: "GET", path: "/api/diagnostics" },
-				{ label: "Pipeline", kind: "api", method: "GET", path: "/api/pipeline/status" },
-				{ label: "Predictor", kind: "api", method: "GET", path: "/api/predictor/status" },
-				{ label: "Git", kind: "api", method: "GET", path: "/api/git/status" },
-				{ label: "Embeddings", kind: "api", method: "GET", path: "/api/embeddings/health" },
-			],
-		},
-		{
-			id: "info",
-			title: "Info",
-			icon: Info,
-			color: "var(--sig-highlight)",
-			commands: [
-				{ label: "Embed Gaps", kind: "api", method: "GET", path: "/api/repair/embedding-gaps" },
-				{ label: "Dedup Stats", kind: "api", method: "GET", path: "/api/repair/dedup-stats" },
-				{ label: "Cold Stats", kind: "api", method: "GET", path: "/api/repair/cold-stats" },
-			],
-		},
-		{
-			id: "repair",
-			title: "Repair",
-			icon: Wrench,
-			color: "var(--sig-highlight)",
-			commands: [
-				{ label: "Check FTS", kind: "api", method: "POST", path: "/api/repair/check-fts" },
-				{ label: "Re-embed", kind: "api", method: "POST", path: "/api/repair/re-embed" },
-				{ label: "Resync Vec", kind: "api", method: "POST", path: "/api/repair/resync-vec" },
-				{ label: "Clean Orphans", kind: "api", method: "POST", path: "/api/repair/clean-orphans" },
-				{ label: "Deduplicate", kind: "api", method: "POST", path: "/api/repair/deduplicate" },
-				{ label: "Retention", kind: "api", method: "POST", path: "/api/repair/retention-sweep" },
-				{ label: "Requeue Dead", kind: "api", method: "POST", path: "/api/repair/requeue-dead" },
-				{ label: "Release Leases", kind: "api", method: "POST", path: "/api/repair/release-leases" },
-				{ label: "Backfill Skipped", kind: "api", method: "POST", path: "/api/repair/backfill-skipped" },
-				{ label: "Reclassify", kind: "api", method: "POST", path: "/api/repair/reclassify-entities" },
-				{ label: "Prune Chunks", kind: "api", method: "POST", path: "/api/repair/prune-chunk-groups" },
-				{ label: "Prune Singletons", kind: "api", method: "POST", path: "/api/repair/prune-singleton-entities" },
-				{ label: "Stop Daemon", kind: "cli", key: "daemon-stop" },
-				{ label: "Restart Daemon", kind: "cli", key: "daemon-restart" },
-				{ label: "Update Signet", kind: "cli", key: "update" },
-			],
-		},
-	];
+	appendLine(gid, `\x1b[32m$\x1b[0m signet ${cmd.key.replace(/-/g, " ")}`);
+	await scrollGroup(gid);
 
-	// Per-group state
-	interface GroupState {
-		lines: string[];
-		running: boolean;
-		selected: number;
-	}
+	const abort = new AbortController();
+	let initiated = false;
+	try {
+		const res = await fetch(`${API_BASE}/api/troubleshoot/exec`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ key: cmd.key }),
+			signal: abort.signal,
+		});
 
-	let panels = $state<Record<string, GroupState>>(
-		Object.fromEntries(groupDefs.map(g => [g.id, { lines: [], running: false, selected: 0 }]))
-	);
-	let termLines = $state<string[]>([]);
-	let termRef = $state<HTMLDivElement | undefined>(undefined);
-	const groupMap = Object.fromEntries(groupDefs.map((g) => [g.id, g]));
-
-	function bindTerm(el: HTMLDivElement): void {
-		termRef = el;
-	}
-
-	async function scrollGroup(_id?: string): Promise<void> {
-		await tick();
-		termRef?.scrollTo({ top: termRef.scrollHeight, behavior: "smooth" });
-	}
-
-	function appendLine(id: string, text: string): void {
-		const gs = panels[id];
-		if (!gs) return;
-		gs.lines = [...gs.lines, text];
-		const label = groupMap[id]?.title ?? id;
-		termLines = [...termLines, text ? `[${label}] ${text}` : ""];
-	}
-
-	function clearOutput(): void {
-		termLines = [];
-		for (const g of groupDefs) {
-			panels[g.id].lines = [];
+		if (!res.ok) {
+			const err = await res.json().catch(() => ({ error: "request failed" }));
+			appendLine(gid, `\x1b[31merror:\x1b[0m ${(err as Record<string, string>).error ?? res.statusText}`);
+			gs.running = false;
+			await scrollGroup(gid);
+			return;
 		}
-	}
 
-	async function execCli(gid: string, cmd: CommandDef): Promise<void> {
-		const gs = panels[gid];
-		if (!gs || gs.running || !cmd.key) return;
-		gs.running = true;
+		const reader = res.body?.getReader();
+		if (!reader) {
+			appendLine(gid, "\x1b[31merror:\x1b[0m no stream");
+			gs.running = false;
+			return;
+		}
 
-		appendLine(gid, `\x1b[32m$\x1b[0m signet ${cmd.key.replace(/-/g, " ")}`);
-		await scrollGroup(gid);
+		// res.ok means the daemon received and processed the command.
+		// For lifecycle commands the backend writes all SSE events
+		// synchronously, so if we got here the action is committed
+		// even if the TCP stream tears down before "started" arrives.
+		if (cmd.key === "daemon-restart") initiated = true;
 
-		const abort = new AbortController();
-		let initiated = false;
+		const decoder = new TextDecoder();
+		let buf = "";
+
 		try {
-			const res = await fetch(`${API_BASE}/api/troubleshoot/exec`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ key: cmd.key }),
-				signal: abort.signal,
-			});
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				buf += decoder.decode(value, { stream: true });
 
-			if (!res.ok) {
-				const err = await res.json().catch(() => ({ error: "request failed" }));
-				appendLine(gid, `\x1b[31merror:\x1b[0m ${(err as Record<string, string>).error ?? res.statusText}`);
-				gs.running = false;
-				await scrollGroup(gid);
-				return;
-			}
+				const parts = buf.split("\n\n");
+				buf = parts.pop() ?? "";
 
-			const reader = res.body?.getReader();
-			if (!reader) {
-				appendLine(gid, "\x1b[31merror:\x1b[0m no stream");
-				gs.running = false;
-				return;
-			}
-
-			// res.ok means the daemon received and processed the command.
-			// For lifecycle commands the backend writes all SSE events
-			// synchronously, so if we got here the action is committed
-			// even if the TCP stream tears down before "started" arrives.
-			if (cmd.key === "daemon-restart") initiated = true;
-
-			const decoder = new TextDecoder();
-			let buf = "";
-
-			try {
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					buf += decoder.decode(value, { stream: true });
-
-					const parts = buf.split("\n\n");
-					buf = parts.pop() ?? "";
-
-					for (const part of parts) {
-						const match = part.match(/^data:\s*(.+)$/m);
-						if (!match) continue;
-						try {
-							const event = JSON.parse(match[1]);
-							if (event.type === "started") initiated = true;
-							if (event.type === "stdout" || event.type === "stderr") {
-								const text = String(event.data).replace(/\n$/, "");
-								if (text) {
-									for (const line of text.split("\n")) {
-										appendLine(gid, event.type === "stderr" ? `\x1b[33m${line}\x1b[0m` : line);
-									}
-									await scrollGroup(gid);
+				for (const part of parts) {
+					const match = part.match(/^data:\s*(.+)$/m);
+					if (!match) continue;
+					try {
+						const event = JSON.parse(match[1]);
+						if (event.type === "started") initiated = true;
+						if (event.type === "stdout" || event.type === "stderr") {
+							const text = String(event.data).replace(/\n$/, "");
+							if (text) {
+								for (const line of text.split("\n")) {
+									appendLine(gid, event.type === "stderr" ? `\x1b[33m${line}\x1b[0m` : line);
 								}
-							} else if (event.type === "exit") {
-								appendLine(gid, event.code === 0
-									? `\x1b[32m✓ exit 0\x1b[0m`
-									: `\x1b[31m✗ exit ${event.code}\x1b[0m`);
-								await scrollGroup(gid);
-							} else if (event.type === "error") {
-								appendLine(gid, `\x1b[31merror:\x1b[0m ${event.message}`);
 								await scrollGroup(gid);
 							}
-						} catch {
-							// malformed SSE event — skip
+						} else if (event.type === "exit") {
+							appendLine(gid, event.code === 0 ? "\x1b[32m✓ exit 0\x1b[0m" : `\x1b[31m✗ exit ${event.code}\x1b[0m`);
+							await scrollGroup(gid);
+						} else if (event.type === "error") {
+							appendLine(gid, `\x1b[31merror:\x1b[0m ${event.message}`);
+							await scrollGroup(gid);
 						}
+					} catch {
+						// malformed SSE event — skip
 					}
 				}
-			} finally {
-				reader.releaseLock();
 			}
-		} catch (err) {
-			if (!abort.signal.aborted) {
-				const lifecycle = cmd.key === "daemon-stop" || cmd.key === "daemon-restart";
-				if (lifecycle) {
-					appendLine(gid, `\x1b[33mDaemon process ended\x1b[0m`);
-				} else {
-					appendLine(gid, `\x1b[31merror:\x1b[0m ${err instanceof Error ? err.message : "fetch failed"}`);
+		} finally {
+			reader.releaseLock();
+		}
+	} catch (err) {
+		if (!abort.signal.aborted) {
+			const lifecycle = cmd.key === "daemon-stop" || cmd.key === "daemon-restart";
+			if (lifecycle) {
+				appendLine(gid, "\x1b[33mDaemon process ended\x1b[0m");
+			} else {
+				appendLine(gid, `\x1b[31merror:\x1b[0m ${err instanceof Error ? err.message : "fetch failed"}`);
+			}
+		}
+	}
+
+	// Restart: poll until daemon comes back (only if restart was actually initiated)
+	if (cmd.key === "daemon-restart" && initiated) {
+		appendLine(gid, "\x1b[90mWaiting for daemon to restart...\x1b[0m");
+		await scrollGroup(gid);
+		let ok = false;
+		for (let i = 0; i < 15; i++) {
+			await new Promise<void>((r) => setTimeout(r, 1000));
+			try {
+				const h = await fetch(`${API_BASE}/health`);
+				if (h.ok) {
+					ok = true;
+					break;
 				}
+			} catch {
+				/* still down */
 			}
 		}
-
-		// Restart: poll until daemon comes back (only if restart was actually initiated)
-		if (cmd.key === "daemon-restart" && initiated) {
-			appendLine(gid, "\x1b[90mWaiting for daemon to restart...\x1b[0m");
-			await scrollGroup(gid);
-			let ok = false;
-			for (let i = 0; i < 15; i++) {
-				await new Promise<void>(r => setTimeout(r, 1000));
-				try {
-					const h = await fetch(`${API_BASE}/health`);
-					if (h.ok) { ok = true; break; }
-				} catch { /* still down */ }
-			}
-			appendLine(gid, ok
-				? "\x1b[32m✓ Daemon restarted\x1b[0m"
-				: "\x1b[31m✗ Daemon did not restart within 15s\x1b[0m");
-			await scrollGroup(gid);
-		}
-
-		appendLine(gid, "");
-		gs.running = false;
+		appendLine(gid, ok ? "\x1b[32m✓ Daemon restarted\x1b[0m" : "\x1b[31m✗ Daemon did not restart within 15s\x1b[0m");
 		await scrollGroup(gid);
 	}
 
-	async function execApi(gid: string, cmd: CommandDef): Promise<void> {
-		const gs = panels[gid];
-		if (!gs || gs.running || !cmd.path || !cmd.method) return;
-		gs.running = true;
-		const start = performance.now();
+	appendLine(gid, "");
+	gs.running = false;
+	await scrollGroup(gid);
+}
 
-		appendLine(gid, `\x1b[32m$\x1b[0m ${cmd.method} ${cmd.path}`);
-		await scrollGroup(gid);
+async function execApi(gid: string, cmd: CommandDef): Promise<void> {
+	const gs = panels[gid];
+	if (!gs || gs.running || !cmd.path || !cmd.method) return;
+	gs.running = true;
+	const start = performance.now();
 
-		try {
-			const res = await fetch(`${API_BASE}${cmd.path}`, { method: cmd.method });
-			const elapsed = Math.round(performance.now() - start);
-			const ct = res.headers.get("content-type") ?? "";
-			const body = ct.includes("json")
-				? JSON.stringify(await res.json(), null, 2)
-				: await res.text();
+	appendLine(gid, `\x1b[32m$\x1b[0m ${cmd.method} ${cmd.path}`);
+	await scrollGroup(gid);
 
-			appendLine(gid, res.ok
+	try {
+		const res = await fetch(`${API_BASE}${cmd.path}`, { method: cmd.method });
+		const elapsed = Math.round(performance.now() - start);
+		const ct = res.headers.get("content-type") ?? "";
+		const body = ct.includes("json") ? JSON.stringify(await res.json(), null, 2) : await res.text();
+
+		appendLine(
+			gid,
+			res.ok
 				? `\x1b[32m${res.status} OK\x1b[0m  \x1b[90m${elapsed}ms\x1b[0m`
-				: `\x1b[31m${res.status} FAILED\x1b[0m  \x1b[90m${elapsed}ms\x1b[0m`);
+				: `\x1b[31m${res.status} FAILED\x1b[0m  \x1b[90m${elapsed}ms\x1b[0m`,
+		);
 
-			for (const line of body.split("\n")) {
-				appendLine(gid, line);
-			}
-		} catch (err) {
-			appendLine(gid, `\x1b[31merror:\x1b[0m ${err instanceof Error ? err.message : "fetch failed"}`);
+		for (const line of body.split("\n")) {
+			appendLine(gid, line);
 		}
-
-		appendLine(gid, "");
-		gs.running = false;
-		await scrollGroup(gid);
+	} catch (err) {
+		appendLine(gid, `\x1b[31merror:\x1b[0m ${err instanceof Error ? err.message : "fetch failed"}`);
 	}
 
-	function exec(gid: string, cmd: CommandDef): void {
-		if (cmd.kind === "cli") void execCli(gid, cmd);
-		else void execApi(gid, cmd);
-	}
+	appendLine(gid, "");
+	gs.running = false;
+	await scrollGroup(gid);
+}
 
-	function escapeHtml(s: string): string {
-		return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-	}
+function exec(gid: string, cmd: CommandDef): void {
+	if (cmd.kind === "cli") void execCli(gid, cmd);
+	else void execApi(gid, cmd);
+}
 
-	function ansiToHtml(text: string): string {
-		const colors: Record<string, string> = {
-			"31": "var(--sig-danger)",
-			"32": "var(--sig-success)",
-			"33": "var(--sig-warning, #e8a832)",
-			"90": "var(--sig-text-muted)",
-			"36": "var(--sig-accent)",
-		};
-		// Escape all HTML first to prevent XSS, then apply styling
-		let result = escapeHtml(text);
-		// Process ANSI color codes (now operating on escaped text)
-		result = result.replace(/\x1b\[(\d+)m([\s\S]*?)\x1b\[0m/g, (_, code, content) => {
-			const color = colors[code];
-			if (color) return `<span style="color:${color}">${content}</span>`;
-			if (code === "1") return `<strong>${content}</strong>`;
-			return content;
-		});
-		result = result.replace(/\x1b\[\d+m/g, "");
-		// JSON syntax highlighting (content already escaped — safe to wrap in spans)
-		result = result.replace(/(&quot;(?:\\.|[^&])*?&quot;)\s*:/g, (_, key) => `<span style="color:var(--sig-accent)">${key}</span>:`);
-		result = result.replace(/:\s*(&quot;(?:\\.|[^&])*?&quot;)(?=[,\n\r}\]])/g, (_, val) => `: <span style="color:var(--sig-success)">${val}</span>`);
-		result = result.replace(/:\s*(true|false|null)(?=[,\n\r}\]])/g, (_, val) => `: <span style="color:var(--sig-warning, #e8a832)">${val}</span>`);
-		result = result.replace(/:\s*(\d+\.?\d*)(?=[,\n\r}\]])/g, (_, val) => `: <span style="color:var(--sig-highlight-text)">${val}</span>`);
-		return result;
-	}
+function escapeHtml(s: string): string {
+	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+const ANSI_BLOCK = new RegExp("\\u001b\\[(\\d+)m([\\s\\S]*?)\\u001b\\[0m", "g");
+const ANSI_CODE = new RegExp("\\u001b\\[\\d+m", "g");
+
+function ansiToHtml(text: string): string {
+	const colors: Record<string, string> = {
+		"31": "var(--sig-danger)",
+		"32": "var(--sig-success)",
+		"33": "var(--sig-warning, #e8a832)",
+		"90": "var(--sig-text-muted)",
+		"36": "var(--sig-accent)",
+	};
+	// Escape all HTML first to prevent XSS, then apply styling
+	let result = escapeHtml(text);
+	// Process ANSI color codes (now operating on escaped text)
+	result = result.replace(ANSI_BLOCK, (_, code, content) => {
+		const color = colors[code];
+		if (color) return `<span style="color:${color}">${content}</span>`;
+		if (code === "1") return `<strong>${content}</strong>`;
+		return content;
+	});
+	result = result.replace(ANSI_CODE, "");
+	// JSON syntax highlighting (content already escaped — safe to wrap in spans)
+	result = result.replace(
+		/(&quot;(?:\\.|[^&])*?&quot;)\s*:/g,
+		(_, key) => `<span style="color:var(--sig-accent)">${key}</span>:`,
+	);
+	result = result.replace(
+		/:\s*(&quot;(?:\\.|[^&])*?&quot;)(?=[,\n\r}\]])/g,
+		(_, val) => `: <span style="color:var(--sig-success)">${val}</span>`,
+	);
+	result = result.replace(
+		/:\s*(true|false|null)(?=[,\n\r}\]])/g,
+		(_, val) => `: <span style="color:var(--sig-warning, #e8a832)">${val}</span>`,
+	);
+	result = result.replace(
+		/:\s*(\d+\.?\d*)(?=[,\n\r}\]])/g,
+		(_, val) => `: <span style="color:var(--sig-highlight-text)">${val}</span>`,
+	);
+	return result;
+}
 </script>
 
 <div class="ts-root">

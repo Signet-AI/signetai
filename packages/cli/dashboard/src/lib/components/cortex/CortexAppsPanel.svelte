@@ -1,34 +1,36 @@
 <script lang="ts">
-	import { onMount } from "svelte";
-	import { SvelteSet } from "svelte/reactivity";
-	import {
-		fetchMarketplaceMcpInstalled,
-		mcpMarket,
-		removeMarketplaceMcpServer,
-		refreshMarketplaceMcpTools,
-	} from "$lib/stores/marketplace-mcp.svelte";
-	import { getMonogram, getMonogramBg, getAvatarFromSource } from "$lib/card-utils";
-	import { Button } from "$lib/components/ui/button/index.js";
-	import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-	import Server from "@lucide/svelte/icons/server";
+import { getAvatarFromSource, getMonogram, getMonogramBg } from "$lib/card-utils";
+import { Button } from "$lib/components/ui/button/index.js";
+import {
+	fetchMarketplaceMcpInstalled,
+	mcpMarket,
+	refreshMarketplaceMcpTools,
+	removeMarketplaceMcpServer,
+} from "$lib/stores/marketplace-mcp.svelte";
+import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import Server from "@lucide/svelte/icons/server";
+import { onMount } from "svelte";
+import { SvelteSet } from "svelte/reactivity";
 
-	let refreshing = $state(false);
-	const avatarErrors = new SvelteSet<string>();
+let refreshing = $state(false);
+const avatarErrors = new SvelteSet<string>();
 
-	$effect(() => { mcpMarket.installed; avatarErrors.clear(); });
+$effect(() => {
+	mcpMarket.installed;
+	avatarErrors.clear();
+});
 
-	onMount(() => {
-		fetchMarketplaceMcpInstalled();
-		refreshMarketplaceMcpTools();
-	});
+onMount(() => {
+	fetchMarketplaceMcpInstalled();
+	refreshMarketplaceMcpTools();
+});
 
-	async function refresh(): Promise<void> {
-		refreshing = true;
-		await fetchMarketplaceMcpInstalled();
-		await refreshMarketplaceMcpTools();
-		refreshing = false;
-	}
-
+async function refresh(): Promise<void> {
+	refreshing = true;
+	await fetchMarketplaceMcpInstalled();
+	await refreshMarketplaceMcpTools();
+	refreshing = false;
+}
 </script>
 
 <div class="apps-panel">

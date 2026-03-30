@@ -1,82 +1,85 @@
 <script lang="ts">
-	import ChevronDown from "@lucide/svelte/icons/chevron-down";
-	import { ontology, loadProjection } from "./ontology-state.svelte";
-	import type { ProjectionNode } from "$lib/api";
+import type { ProjectionNode } from "$lib/api";
+import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { loadProjection, ontology } from "./ontology-state.svelte";
 
-	interface Props {
-		agentId?: string;
-	}
-	const { agentId = "default" }: Props = $props();
+interface Props {
+	agentId?: string;
+}
+let { agentId = "default" }: Props = $props();
 
-	const CLUSTER_COLORS = [
-		"#3b82f6", // blue
-		"#f59e0b", // amber
-		"#22c55e", // green
-		"#a78bfa", // violet
-		"#ef4444", // red
-		"#06b6d4", // cyan
-		"#ec4899", // pink
-	];
+const CLUSTER_COLORS = [
+	"#3b82f6", // blue
+	"#f59e0b", // amber
+	"#22c55e", // green
+	"#a78bfa", // violet
+	"#ef4444", // red
+	"#06b6d4", // cyan
+	"#ec4899", // pink
+];
 
-	const DEFAULT_COLOR = "#6b7280";
+const DEFAULT_COLOR = "#6b7280";
 
-	let collapsed = $state(false);
+let collapsed = $state(false);
 
-	const nodes = $derived(ontology.projection?.nodes ?? []);
-	const status = $derived(ontology.projection?.status ?? "computing");
-	const cachedAt = $derived(ontology.projection?.cachedAt);
+const nodes = $derived(ontology.projection?.nodes ?? []);
+const status = $derived(ontology.projection?.status ?? "computing");
+const cachedAt = $derived(ontology.projection?.cachedAt);
 
-	// Simple cluster assignment via spatial binning (no cluster field in API)
-	function colorFor(node: ProjectionNode, _i: number): string {
-		if (node.type === "fact") return CLUSTER_COLORS[0];
-		if (node.type === "decision") return CLUSTER_COLORS[1];
-		if (node.type === "observation") return CLUSTER_COLORS[2];
-		if (node.type === "preference") return CLUSTER_COLORS[3];
-		if (node.type === "procedure") return CLUSTER_COLORS[4];
-		if (node.type === "conversation_summary") return CLUSTER_COLORS[5];
-		return DEFAULT_COLOR;
-	}
+// Simple cluster assignment via spatial binning (no cluster field in API)
+function colorFor(node: ProjectionNode, _i: number): string {
+	if (node.type === "fact") return CLUSTER_COLORS[0];
+	if (node.type === "decision") return CLUSTER_COLORS[1];
+	if (node.type === "observation") return CLUSTER_COLORS[2];
+	if (node.type === "preference") return CLUSTER_COLORS[3];
+	if (node.type === "procedure") return CLUSTER_COLORS[4];
+	if (node.type === "conversation_summary") return CLUSTER_COLORS[5];
+	return DEFAULT_COLOR;
+}
 
-	function formatDate(iso: string): string {
-		return new Date(iso).toLocaleDateString("en-US", {
-			month: "short",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
-		});
-	}
-
-	// Normalize x/y to 0-1 range for SVG positioning
-	const bounds = $derived.by(() => {
-		if (nodes.length === 0) return { minX: 0, maxX: 1, minY: 0, maxY: 1 };
-		let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-		for (const n of nodes) {
-			if (n.x < minX) minX = n.x;
-			if (n.x > maxX) maxX = n.x;
-			if (n.y < minY) minY = n.y;
-			if (n.y > maxY) maxY = n.y;
-		}
-		const dx = maxX - minX || 1;
-		const dy = maxY - minY || 1;
-		return { minX, maxX: minX + dx, minY, maxY: minY + dy };
+function formatDate(iso: string): string {
+	return new Date(iso).toLocaleDateString("en-US", {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
 	});
+}
 
-	const SVG_W = 260;
-	const SVG_H = 260;
-	const PAD = 12;
-
-	function scaleX(x: number): number {
-		return PAD + ((x - bounds.minX) / (bounds.maxX - bounds.minX)) * (SVG_W - PAD * 2);
+// Normalize x/y to 0-1 range for SVG positioning
+const bounds = $derived.by(() => {
+	if (nodes.length === 0) return { minX: 0, maxX: 1, minY: 0, maxY: 1 };
+	let minX = Number.POSITIVE_INFINITY;
+	let maxX = Number.NEGATIVE_INFINITY;
+	let minY = Number.POSITIVE_INFINITY;
+	let maxY = Number.NEGATIVE_INFINITY;
+	for (const n of nodes) {
+		if (n.x < minX) minX = n.x;
+		if (n.x > maxX) maxX = n.x;
+		if (n.y < minY) minY = n.y;
+		if (n.y > maxY) maxY = n.y;
 	}
+	const dx = maxX - minX || 1;
+	const dy = maxY - minY || 1;
+	return { minX, maxX: minX + dx, minY, maxY: minY + dy };
+});
 
-	function scaleY(y: number): number {
-		return PAD + (1 - (y - bounds.minY) / (bounds.maxY - bounds.minY)) * (SVG_H - PAD * 2);
-	}
+const SVG_W = 260;
+const SVG_H = 260;
+const PAD = 12;
 
-	// Reload whenever agentId changes (not just on mount)
-	$effect(() => {
-		loadProjection(agentId);
-	});
+function scaleX(x: number): number {
+	return PAD + ((x - bounds.minX) / (bounds.maxX - bounds.minX)) * (SVG_W - PAD * 2);
+}
+
+function scaleY(y: number): number {
+	return PAD + (1 - (y - bounds.minY) / (bounds.maxY - bounds.minY)) * (SVG_H - PAD * 2);
+}
+
+// Reload whenever agentId changes (not just on mount)
+$effect(() => {
+	loadProjection(agentId);
+});
 </script>
 
 <div class="umap-zone">

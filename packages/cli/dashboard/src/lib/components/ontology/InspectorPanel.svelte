@@ -1,167 +1,146 @@
 <script lang="ts">
-	import { Badge } from "$lib/components/ui/badge/index.js";
-	import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
-	import User from "@lucide/svelte/icons/user";
-	import Hexagon from "@lucide/svelte/icons/hexagon";
-	import CircleDot from "@lucide/svelte/icons/circle-dot";
-	import Table2 from "@lucide/svelte/icons/table-2";
-	import ArrowLeft from "@lucide/svelte/icons/arrow-left";
-	import type { KnowledgeAttribute } from "$lib/api";
-	import {
-		ontology,
-		loadEntityDetail,
-		loadAspectDetail,
-		selectNode,
-	} from "./ontology-state.svelte";
-	import { entityNameFromGraph, NODE_COLORS } from "./ontology-data";
+import type { KnowledgeAttribute } from "$lib/api";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
+import ArrowLeft from "@lucide/svelte/icons/arrow-left";
+import CircleDot from "@lucide/svelte/icons/circle-dot";
+import Hexagon from "@lucide/svelte/icons/hexagon";
+import Table2 from "@lucide/svelte/icons/table-2";
+import User from "@lucide/svelte/icons/user";
+import { NODE_COLORS, entityNameFromGraph } from "./ontology-data";
+import { loadAspectDetail, loadEntityDetail, ontology, selectNode } from "./ontology-state.svelte";
 
-	interface Props {
-		agentId?: string;
+interface Props {
+	agentId?: string;
+}
+let { agentId = "default" }: Props = $props();
+
+// Load entity detail when entity or agentId changes
+let lastEntityKey = "";
+$effect(() => {
+	const sel = ontology.selected;
+	const key = sel?.kind === "entity" ? `${sel.id}@${agentId}` : "";
+	if (key && key !== lastEntityKey && sel?.kind === "entity") {
+		lastEntityKey = key;
+		loadEntityDetail(sel.id, agentId);
+	} else if (!key) {
+		lastEntityKey = "";
 	}
-	const { agentId = "default" }: Props = $props();
+});
 
-	// Load entity detail when entity or agentId changes
-	let lastEntityKey = "";
-	$effect(() => {
-		const sel = ontology.selected;
-		const key = sel?.kind === "entity" ? `${sel.id}@${agentId}` : "";
-		if (key && key !== lastEntityKey) {
-			lastEntityKey = key;
-			loadEntityDetail(sel!.id, agentId);
-		} else if (!key) {
-			lastEntityKey = "";
+// Load aspect attributes when aspect/attribute or agentId changes
+let lastAspectKey = "";
+$effect(() => {
+	const sel = ontology.selected;
+	if (sel?.kind === "aspect") {
+		const key = `${sel.id}@${agentId}`;
+		if (key !== lastAspectKey) {
+			lastAspectKey = key;
+			loadAspectDetail(sel.id, sel.id, agentId);
 		}
-	});
-
-	// Load aspect attributes when aspect/attribute or agentId changes
-	let lastAspectKey = "";
-	$effect(() => {
-		const sel = ontology.selected;
-		if (sel?.kind === "aspect") {
-			const key = `${sel.id}@${agentId}`;
+	} else if (sel?.kind === "attribute") {
+		const node = ontology.graphNodes.find((n) => n.id === sel.id && n.kind === "attribute");
+		if (node?.parentId) {
+			const key = `${node.parentId}@${agentId}`;
 			if (key !== lastAspectKey) {
 				lastAspectKey = key;
-				loadAspectDetail(sel.id, sel.id, agentId);
+				// Pass the attribute's own ID as triggeredBy so the guard in
+				// loadAspectDetail can check selected.id === attributeId, not aspectId
+				loadAspectDetail(node.parentId, sel.id, agentId);
 			}
-		} else if (sel?.kind === "attribute") {
-			const node = ontology.graphNodes.find((n) => n.id === sel.id && n.kind === "attribute");
-			if (node?.parentId) {
-				const key = `${node.parentId}@${agentId}`;
-				if (key !== lastAspectKey) {
-					lastAspectKey = key;
-					// Pass the attribute's own ID as triggeredBy so the guard in
-					// loadAspectDetail can check selected.id === attributeId, not aspectId
-					loadAspectDetail(node.parentId, sel.id, agentId);
-				}
-			}
-		} else {
-			lastAspectKey = "";
 		}
+	} else {
+		lastAspectKey = "";
+	}
+});
+
+const tableStats = $derived(ontology.tableStats);
+
+// --- Entity derived state ---
+
+const entity = $derived(
+	ontology.selected?.kind === "entity" ? ontology.entities.find((e) => e.id === ontology.selected?.id) : undefined,
+);
+
+const detail = $derived(ontology.detail);
+const aspects = $derived(ontology.detailAspects);
+const attrs = $derived(ontology.detailAttributes);
+const deps = $derived(ontology.detailDependencies);
+
+// --- Aspect derived state ---
+
+const aspectNode = $derived(
+	ontology.selected?.kind === "aspect"
+		? ontology.graphNodes.find((n) => n.id === ontology.selected?.id && n.kind === "aspect")
+		: undefined,
+);
+
+const aspectParent = $derived(
+	aspectNode?.parentId
+		? ontology.graphNodes.find((n) => n.id === aspectNode.parentId && n.kind === "entity")
+		: undefined,
+);
+
+const aspectAttrs = $derived(ontology.aspectAttrs);
+
+// --- Attribute derived state ---
+
+const attrNode = $derived(
+	ontology.selected?.kind === "attribute"
+		? ontology.graphNodes.find((n) => n.id === ontology.selected?.id && n.kind === "attribute")
+		: undefined,
+);
+
+const attrParentAspect = $derived(
+	attrNode?.parentId ? ontology.graphNodes.find((n) => n.id === attrNode.parentId && n.kind === "aspect") : undefined,
+);
+
+const attrParentEntity = $derived(
+	attrParentAspect?.parentId
+		? ontology.graphNodes.find((n) => n.id === attrParentAspect.parentId && n.kind === "entity")
+		: undefined,
+);
+
+// Look up full attribute data from loaded aspect attrs
+const selectedAttr = $derived.by((): KnowledgeAttribute | undefined => {
+	if (!attrNode) return undefined;
+	const found = ontology.aspectAttrs.find((a) => a.id === attrNode.id);
+	if (found) return found;
+	// Fallback: build partial from graph node data
+	const data = attrNode.data as Record<string, unknown> | null;
+	return {
+		id: attrNode.id,
+		aspectId: attrNode.parentId ?? "",
+		agentId: "default",
+		memoryId: null,
+		kind: (attrNode.sublabel === "constraint" ? "constraint" : "attribute") as "attribute" | "constraint",
+		content: typeof data?.content === "string" ? data.content : attrNode.label,
+		normalizedContent: "",
+		confidence: typeof data?.confidence === "number" ? data.confidence : 0,
+		importance: typeof data?.importance === "number" ? data.importance : 0,
+		status: "active",
+		supersededBy: null,
+		createdAt: "",
+		updatedAt: "",
+	};
+});
+
+function formatDate(iso: string): string {
+	return new Date(iso).toLocaleString("en-US", {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
 	});
+}
 
-	const tableStats = $derived(ontology.tableStats);
+function entityName(id: string): string {
+	return entityNameFromGraph(ontology.entities, id);
+}
 
-	// --- Entity derived state ---
-
-	const entity = $derived(
-		ontology.selected?.kind === "entity"
-			? ontology.entities.find((e) => e.id === ontology.selected?.id)
-			: undefined,
-	);
-
-	const detail = $derived(ontology.detail);
-	const aspects = $derived(ontology.detailAspects);
-	const attrs = $derived(ontology.detailAttributes);
-	const deps = $derived(ontology.detailDependencies);
-
-	// --- Aspect derived state ---
-
-	const aspectNode = $derived(
-		ontology.selected?.kind === "aspect"
-			? ontology.graphNodes.find(
-					(n) => n.id === ontology.selected?.id && n.kind === "aspect",
-				)
-			: undefined,
-	);
-
-	const aspectParent = $derived(
-		aspectNode?.parentId
-			? ontology.graphNodes.find(
-					(n) => n.id === aspectNode.parentId && n.kind === "entity",
-				)
-			: undefined,
-	);
-
-	const aspectAttrs = $derived(ontology.aspectAttrs);
-
-	// --- Attribute derived state ---
-
-	const attrNode = $derived(
-		ontology.selected?.kind === "attribute"
-			? ontology.graphNodes.find(
-					(n) => n.id === ontology.selected?.id && n.kind === "attribute",
-				)
-			: undefined,
-	);
-
-	const attrParentAspect = $derived(
-		attrNode?.parentId
-			? ontology.graphNodes.find(
-					(n) => n.id === attrNode.parentId && n.kind === "aspect",
-				)
-			: undefined,
-	);
-
-	const attrParentEntity = $derived(
-		attrParentAspect?.parentId
-			? ontology.graphNodes.find(
-					(n) => n.id === attrParentAspect.parentId && n.kind === "entity",
-				)
-			: undefined,
-	);
-
-	// Look up full attribute data from loaded aspect attrs
-	const selectedAttr = $derived.by((): KnowledgeAttribute | undefined => {
-		if (!attrNode) return undefined;
-		const found = ontology.aspectAttrs.find((a) => a.id === attrNode.id);
-		if (found) return found;
-		// Fallback: build partial from graph node data
-		const data = attrNode.data as Record<string, unknown> | null;
-		return {
-			id: attrNode.id,
-			aspectId: attrNode.parentId ?? "",
-			agentId: "default",
-			memoryId: null,
-			kind: (attrNode.sublabel === "constraint" ? "constraint" : "attribute") as
-				| "attribute"
-				| "constraint",
-			content: typeof data?.content === "string" ? data.content : attrNode.label,
-			normalizedContent: "",
-			confidence: typeof data?.confidence === "number" ? data.confidence : 0,
-			importance: typeof data?.importance === "number" ? data.importance : 0,
-			status: "active",
-			supersededBy: null,
-			createdAt: "",
-			updatedAt: "",
-		};
-	});
-
-	function formatDate(iso: string): string {
-		return new Date(iso).toLocaleString("en-US", {
-			month: "short",
-			day: "numeric",
-			hour: "2-digit",
-			minute: "2-digit",
-		});
-	}
-
-	function entityName(id: string): string {
-		return entityNameFromGraph(ontology.entities, id);
-	}
-
-	function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
-		selectNode(id, kind);
-	}
+function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
+	selectNode(id, kind);
+}
 </script>
 
 <div class="inspector-panel">

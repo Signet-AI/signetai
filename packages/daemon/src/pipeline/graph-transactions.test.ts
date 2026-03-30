@@ -1,12 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import type { WriteDb } from "../db-accessor";
-import {
-	txPersistEntities,
-	txDecrementEntityMentions,
-	txPersistStructured,
-} from "./graph-transactions";
+import { txDecrementEntityMentions, txPersistEntities, txPersistStructured } from "./graph-transactions";
 
 function asWriteDb(db: Database): WriteDb {
 	return db as unknown as WriteDb;
@@ -31,7 +27,7 @@ describe("graph-transactions", () => {
 					{
 						source: "Alice",
 						relationship: "works_with",
-						target: "Bob",
+						target: "Bobby",
 						confidence: 0.9,
 					},
 				],
@@ -46,17 +42,17 @@ describe("graph-transactions", () => {
 			expect(result.relationsUpdated).toBe(0);
 			expect(result.mentionsLinked).toBe(2);
 
-			const entities = db
-				.query("SELECT name, canonical_name, mentions FROM entities ORDER BY name")
-				.all() as Array<{ name: string; canonical_name: string; mentions: number }>;
+			const entities = db.query("SELECT name, canonical_name, mentions FROM entities ORDER BY name").all() as Array<{
+				name: string;
+				canonical_name: string;
+				mentions: number;
+			}>;
 			expect(entities).toHaveLength(2);
 			expect(entities[0].name).toBe("Alice");
 			expect(entities[0].canonical_name).toBe("alice");
 			expect(entities[0].mentions).toBe(1);
 
-			const relations = db
-				.query("SELECT relation_type, strength, mentions, confidence FROM relations")
-				.all() as Array<{
+			const relations = db.query("SELECT relation_type, strength, mentions, confidence FROM relations").all() as Array<{
 				relation_type: string;
 				strength: number;
 				mentions: number;
@@ -68,9 +64,10 @@ describe("graph-transactions", () => {
 			expect(relations[0].mentions).toBe(1);
 			expect(relations[0].confidence).toBe(0.9);
 
-			const mentions = db
-				.query("SELECT memory_id, entity_id FROM memory_entity_mentions")
-				.all() as Array<{ memory_id: string; entity_id: string }>;
+			const mentions = db.query("SELECT memory_id, entity_id FROM memory_entity_mentions").all() as Array<{
+				memory_id: string;
+				entity_id: string;
+			}>;
 			expect(mentions).toHaveLength(2);
 		});
 
@@ -78,9 +75,7 @@ describe("graph-transactions", () => {
 			const now = new Date().toISOString();
 
 			const first = txPersistEntities(asWriteDb(db), {
-				entities: [
-					{ source: "User", relationship: "likes", target: "Cats", confidence: 0.8 },
-				],
+				entities: [{ source: "User", relationship: "likes", target: "Cats", confidence: 0.8 }],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
 				agentId: "default",
@@ -89,9 +84,7 @@ describe("graph-transactions", () => {
 			expect(first.entitiesUpdated).toBe(0);
 
 			const second = txPersistEntities(asWriteDb(db), {
-				entities: [
-					{ source: "user", relationship: "likes", target: "cats", confidence: 0.7 },
-				],
+				entities: [{ source: "user", relationship: "likes", target: "cats", confidence: 0.7 }],
 				sourceMemoryId: "mem-2",
 				extractedAt: now,
 				agentId: "default",
@@ -116,26 +109,23 @@ describe("graph-transactions", () => {
 			const now = new Date().toISOString();
 
 			txPersistEntities(asWriteDb(db), {
-				entities: [
-					{ source: "A", relationship: "related_to", target: "B", confidence: 0.8 },
-				],
+				entities: [{ source: "Alpha", relationship: "related_to", target: "Beta", confidence: 0.8 }],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
 				agentId: "default",
 			});
 
 			txPersistEntities(asWriteDb(db), {
-				entities: [
-					{ source: "A", relationship: "related_to", target: "B", confidence: 0.6 },
-				],
+				entities: [{ source: "Alpha", relationship: "related_to", target: "Beta", confidence: 0.6 }],
 				sourceMemoryId: "mem-2",
 				extractedAt: now,
 				agentId: "default",
 			});
 
-			const relations = db
-				.query("SELECT mentions, confidence FROM relations")
-				.all() as Array<{ mentions: number; confidence: number }>;
+			const relations = db.query("SELECT mentions, confidence FROM relations").all() as Array<{
+				mentions: number;
+				confidence: number;
+			}>;
 			expect(relations).toHaveLength(1);
 			expect(relations[0].mentions).toBe(2);
 			// Running average: (0.8 * 1 + 0.6) / 2 = 0.7
@@ -146,9 +136,7 @@ describe("graph-transactions", () => {
 			const now = new Date().toISOString();
 
 			txPersistEntities(asWriteDb(db), {
-				entities: [
-					{ source: "X", relationship: "uses", target: "Y", confidence: 0.9 },
-				],
+				entities: [{ source: "Xavier", relationship: "uses", target: "Yankee", confidence: 0.9 }],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
 				agentId: "default",
@@ -156,9 +144,7 @@ describe("graph-transactions", () => {
 
 			// Same triple, same memory — mention links should not duplicate
 			const result = txPersistEntities(asWriteDb(db), {
-				entities: [
-					{ source: "X", relationship: "uses", target: "Y", confidence: 0.9 },
-				],
+				entities: [{ source: "Xavier", relationship: "uses", target: "Yankee", confidence: 0.9 }],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
 				agentId: "default",
@@ -167,9 +153,7 @@ describe("graph-transactions", () => {
 			// Mentions were ignored (INSERT OR IGNORE)
 			expect(result.mentionsLinked).toBe(0);
 
-			const mentions = db
-				.query("SELECT * FROM memory_entity_mentions")
-				.all();
+			const mentions = db.query("SELECT * FROM memory_entity_mentions").all();
 			expect(mentions).toHaveLength(2);
 		});
 
@@ -276,13 +260,15 @@ describe("graph-transactions", () => {
 				)
 				.get() as { id: string; reason: string } | undefined;
 			expect(dep).toBeDefined();
+			if (!dep) {
+				throw new Error("expected dependency row");
+			}
+			const depId = dep.id;
 
 			// Delete the dependency — the DB trigger should capture this as a history record.
-			db.prepare("DELETE FROM entity_dependencies WHERE id = ?").run(dep!.id);
+			db.prepare("DELETE FROM entity_dependencies WHERE id = ?").run(depId);
 
-			expect(
-				db.prepare("SELECT id FROM entity_dependencies WHERE id = ?").get(dep!.id),
-			).toBeNull();
+			expect(db.prepare("SELECT id FROM entity_dependencies WHERE id = ?").get(depId)).toBeNull();
 
 			const hist = db
 				.query(
@@ -292,8 +278,13 @@ describe("graph-transactions", () => {
 					 ORDER BY rowid DESC
 					 LIMIT 1`,
 				)
-				.get(dep!.id) as
-				| { event: string; changed_by: string; reason: string; metadata: string | null }
+				.get(depId) as
+				| {
+						event: string;
+						changed_by: string;
+						reason: string;
+						metadata: string | null;
+				  }
 				| undefined;
 			expect(hist?.event).toBe("deleted");
 			expect(hist?.changed_by).toBe("db-trigger");
@@ -314,9 +305,7 @@ describe("graph-transactions", () => {
 			});
 
 			expect(result.entitiesOrphaned).toBe(1);
-			expect(
-				db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-1"),
-			).toBeNull();
+			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-1")).toBeNull();
 		});
 
 		it("preserves entity with multiple mentions after single decrement", () => {
@@ -331,9 +320,7 @@ describe("graph-transactions", () => {
 			});
 
 			expect(result.entitiesOrphaned).toBe(0);
-			const row = db
-				.prepare("SELECT mentions FROM entities WHERE id = ?")
-				.get("ent-2") as { mentions: number };
+			const row = db.prepare("SELECT mentions FROM entities WHERE id = ?").get("ent-2") as { mentions: number };
 			expect(row.mentions).toBe(2);
 		});
 
@@ -358,17 +345,11 @@ describe("graph-transactions", () => {
 			});
 
 			// Alpha orphaned and deleted
-			expect(
-				db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-a"),
-			).toBeNull();
+			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-a")).toBeNull();
 			// Beta still exists
-			expect(
-				db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-b"),
-			).toBeTruthy();
+			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-b")).toBeTruthy();
 			// Dangling relation cleaned
-			expect(
-				db.prepare("SELECT id FROM relations WHERE id = ?").get("rel-1"),
-			).toBeNull();
+			expect(db.prepare("SELECT id FROM relations WHERE id = ?").get("rel-1")).toBeNull();
 		});
 
 		it("returns zero for empty input", () => {

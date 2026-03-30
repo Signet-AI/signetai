@@ -1,32 +1,32 @@
 <script lang="ts">
-	import { Button } from "$lib/components/ui/button/index.js";
-	import { cn } from "$lib/utils.js";
-	import PanelLeftIcon from "@lucide/svelte/icons/panel-left";
-	import type { ComponentProps } from "svelte";
-	import type { Snippet } from "svelte";
-	import { useSidebar } from "./context.svelte.js";
+import { Button } from "$lib/components/ui/button/index.js";
+import { cn } from "$lib/utils.js";
+import PanelLeftIcon from "@lucide/svelte/icons/panel-left";
+import type { ComponentProps } from "svelte";
+import type { Snippet } from "svelte";
+import { useSidebar } from "./context.svelte.js";
 
-	let {
-		ref = $bindable(null),
-		class: className,
-		onclick,
-		children,
-		mobileOnly = false,
-		unstyled = false,
-		...restProps
-	}: ComponentProps<typeof Button> & {
-		onclick?: (e: MouseEvent) => void;
-		children?: Snippet;
-		mobileOnly?: boolean;
-		unstyled?: boolean;
-	} = $props();
+let {
+	ref = $bindable(null),
+	class: className,
+	onclick,
+	children,
+	mobileOnly = false,
+	unstyled = false,
+	...restProps
+}: ComponentProps<typeof Button> & {
+	onclick?: (e: MouseEvent) => void;
+	children?: Snippet;
+	mobileOnly?: boolean;
+	unstyled?: boolean;
+} = $props();
 
-	const sidebar = useSidebar();
+const sidebar = useSidebar();
 
-	function handleClick(e: MouseEvent) {
-		onclick?.(e);
-		sidebar.toggle();
-	}
+function handleClick(e: MouseEvent) {
+	onclick?.(e);
+	sidebar.toggle();
+}
 </script>
 
 {#if !(sidebar.isMobile && sidebar.openMobile) && (sidebar.isMobile || !mobileOnly)}

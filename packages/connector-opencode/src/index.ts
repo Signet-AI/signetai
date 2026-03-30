@@ -19,21 +19,10 @@
  * ```
  */
 
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import {
-	BaseConnector,
-	type InstallResult,
-	type UninstallResult,
-	atomicWriteJson,
-} from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
 import { hasValidIdentity } from "@signet/core";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 
@@ -475,9 +464,7 @@ export class OpenCodeConnector extends BaseConnector {
 				continue;
 			}
 
-			const existingMcp = isJsonObject(config.mcp)
-				? (config.mcp as JsonObject)
-				: {};
+			const existingMcp = isJsonObject(config.mcp) ? (config.mcp as JsonObject) : {};
 			// On Windows, spawn() without shell:true cannot resolve .cmd
 			// wrappers, so use "node" + mcp-stdio.js path instead.
 			let mcpCommand: string[] = ["signet-mcp"];
@@ -489,7 +476,7 @@ export class OpenCodeConnector extends BaseConnector {
 				} else {
 					console.warn(
 						`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". ` +
-						`MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
+							`MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
 					);
 				}
 			}
@@ -557,10 +544,7 @@ export class OpenCodeConnector extends BaseConnector {
 		const extras = this.composeIdentityExtras(basePath);
 
 		const destPath = join(this.getOpenCodePath(), "AGENTS.md");
-		writeFileSync(
-			destPath,
-			header + this.buildSignetBlock() + userContent + extras,
-		);
+		writeFileSync(destPath, header + this.buildSignetBlock() + userContent + extras);
 
 		return destPath;
 	}

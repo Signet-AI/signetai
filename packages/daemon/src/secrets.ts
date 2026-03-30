@@ -84,10 +84,11 @@ function getMachineId(): string {
 	} else {
 		// Windows: use MachineGuid from registry
 		try {
-			const out = execSync(
-				'reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid',
-				{ encoding: "utf-8", timeout: 2000, windowsHide: true },
-			);
+			const out = execSync('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', {
+				encoding: "utf-8",
+				timeout: 2000,
+				windowsHide: true,
+			});
 			const match = out.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
 			if (match?.[1]) return match[1];
 		} catch {

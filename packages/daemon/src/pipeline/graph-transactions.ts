@@ -396,9 +396,7 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 							   AND dependency_type = 'related_to' AND agent_id = ?
 							 LIMIT 1`,
 						)
-						.get(resolved[i], resolved[j], input.agentId) as
-						| { id: string }
-						| undefined;
+						.get(resolved[i], resolved[j], input.agentId) as { id: string } | undefined;
 					if (row) continue;
 					const id = crypto.randomUUID();
 					const reason = requireDependencyReason(
@@ -410,15 +408,7 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 						 (id, source_entity_id, target_entity_id, agent_id,
 						  dependency_type, strength, confidence, reason, created_at, updated_at)
 						 VALUES (?, ?, ?, ?, 'related_to', 0.3, 0.5, ?, ?, ?)`,
-					).run(
-						id,
-						resolved[i],
-						resolved[j],
-						input.agentId,
-						reason,
-						input.now,
-						input.now,
-					);
+					).run(id, resolved[i], resolved[j], input.agentId, reason, input.now, input.now);
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
 					if (!msg.includes("UNIQUE constraint")) throw e;

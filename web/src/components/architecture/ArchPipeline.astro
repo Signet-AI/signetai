@@ -1,35 +1,35 @@
 ---
 const stages = [
-  {
-    num: 'Stage 01',
-    title: 'Extraction',
-    desc: 'A local LLM decomposes raw conversation content into discrete facts and entity triples. Each fact is a standalone piece of knowledge; each triple captures a relationship between entities. No data leaves your machine.',
-  },
-  {
-    num: 'Stage 02',
-    title: 'Decision',
-    desc: 'Every extracted fact is evaluated against your existing memory store. The decision worker determines the right action — add a new memory, update an existing one, mark one for deletion, or skip entirely. No duplicates, no noise.',
-  },
-  {
-    num: 'Stage 03',
-    title: 'Controlled Writes',
-    desc: 'Safety gates and deduplication logic ensure only meaningful changes reach the database. Writes are atomic — partial failures never corrupt your memory. Each write is versioned for full audit history.',
-  },
-  {
-    num: 'Stage 04',
-    title: 'Knowledge Graph',
-    desc: 'Entities and their relationships are persisted as a graph structure alongside flat memories. This enables graph-augmented search — finding connections between concepts that keyword or vector search alone would miss.',
-  },
-  {
-    num: 'Stage 05',
-    title: 'Retention',
-    desc: 'Automatic cleanup of expired or low-value data keeps the memory store lean. Retention policies are configurable — you control how aggressively stale memories decay and when they get pruned.',
-  },
-  {
-    num: 'Stage 06',
-    title: 'Shadow Mode',
-    desc: 'Observe exactly what the pipeline would do before enabling writes. Shadow mode runs the full extraction and decision pipeline but commits nothing. Useful for tuning, debugging, and building trust in the system.',
-  },
+	{
+		num: "Stage 01",
+		title: "Extraction",
+		desc: "A local LLM decomposes raw conversation content into discrete facts and entity triples. Each fact is a standalone piece of knowledge; each triple captures a relationship between entities. No data leaves your machine.",
+	},
+	{
+		num: "Stage 02",
+		title: "Decision",
+		desc: "Every extracted fact is evaluated against your existing memory store. The decision worker determines the right action — add a new memory, update an existing one, mark one for deletion, or skip entirely. No duplicates, no noise.",
+	},
+	{
+		num: "Stage 03",
+		title: "Controlled Writes",
+		desc: "Safety gates and deduplication logic ensure only meaningful changes reach the database. Writes are atomic — partial failures never corrupt your memory. Each write is versioned for full audit history.",
+	},
+	{
+		num: "Stage 04",
+		title: "Knowledge Graph",
+		desc: "Entities and their relationships are persisted as a graph structure alongside flat memories. This enables graph-augmented search — finding connections between concepts that keyword or vector search alone would miss.",
+	},
+	{
+		num: "Stage 05",
+		title: "Retention",
+		desc: "Automatic cleanup of expired or low-value data keeps the memory store lean. Retention policies are configurable — you control how aggressively stale memories decay and when they get pruned.",
+	},
+	{
+		num: "Stage 06",
+		title: "Shadow Mode",
+		desc: "Observe exactly what the pipeline would do before enabling writes. Shadow mode runs the full extraction and decision pipeline but commits nothing. Useful for tuning, debugging, and building trust in the system.",
+	},
 ];
 ---
 

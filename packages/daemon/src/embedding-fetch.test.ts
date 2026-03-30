@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import {
-	fetchEmbedding,
-	requiresOpenAiApiKey,
-	setNativeFallbackToOllama,
-} from "./embedding-fetch";
+import { fetchEmbedding, requiresOpenAiApiKey, setNativeFallbackToOllama } from "./embedding-fetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -32,9 +28,7 @@ describe("fetchEmbedding", () => {
 		let capturedHeaders: HeadersInit | undefined;
 		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
 			capturedHeaders = init?.headers;
-			return Promise.resolve(
-				Response.json({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
-			);
+			return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
 		}) as typeof fetch;
 
 		const result = await fetchEmbedding("hello", {

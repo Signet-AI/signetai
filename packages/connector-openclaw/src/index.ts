@@ -160,10 +160,7 @@ function stripJsonComments(source: string): string {
 	return result;
 }
 
-function mergePluginAllow(
-	pluginsObj: JsonObject,
-	pluginName: string,
-): { changed: boolean; warning?: string } {
+function mergePluginAllow(pluginsObj: JsonObject, pluginName: string): { changed: boolean; warning?: string } {
 	const rawAllow = pluginsObj.allow;
 	if (rawAllow === undefined) {
 		pluginsObj.allow = [pluginName];
@@ -177,15 +174,9 @@ function mergePluginAllow(
 		};
 	}
 
-	const current = rawAllow.filter(
-		(entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-	);
-	const next = current.includes(pluginName)
-		? current
-		: [...current, pluginName];
-	const unchanged =
-		next.length === rawAllow.length &&
-		next.every((entry, i) => entry === rawAllow[i]);
+	const current = rawAllow.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+	const next = current.includes(pluginName) ? current : [...current, pluginName];
+	const unchanged = next.length === rawAllow.length && next.every((entry, i) => entry === rawAllow[i]);
 
 	if (!unchanged) {
 		pluginsObj.allow = next;
@@ -193,10 +184,7 @@ function mergePluginAllow(
 	return { changed: !unchanged };
 }
 
-function removePluginAllow(
-	pluginsObj: JsonObject,
-	pluginName: string,
-): { changed: boolean; warning?: string } {
+function removePluginAllow(pluginsObj: JsonObject, pluginName: string): { changed: boolean; warning?: string } {
 	const rawAllow = pluginsObj.allow;
 	if (rawAllow === undefined) {
 		return { changed: false };
@@ -210,14 +198,9 @@ function removePluginAllow(
 	}
 
 	const next = rawAllow.filter(
-		(entry): entry is string =>
-			typeof entry === "string" &&
-			entry.trim().length > 0 &&
-			entry !== pluginName,
+		(entry): entry is string => typeof entry === "string" && entry.trim().length > 0 && entry !== pluginName,
 	);
-	const unchanged =
-		next.length === rawAllow.length &&
-		next.every((entry, i) => entry === rawAllow[i]);
+	const unchanged = next.length === rawAllow.length && next.every((entry, i) => entry === rawAllow[i]);
 
 	if (!unchanged) {
 		pluginsObj.allow = next;
@@ -601,9 +584,7 @@ export class OpenClawConnector extends BaseConnector {
 		});
 		const allowResult = this.removePluginFromAllow("signet-memory-openclaw");
 
-		const configsPatched = [
-			...new Set([...hookResult.patched, ...pluginResult.patched, ...allowResult.patched]),
-		];
+		const configsPatched = [...new Set([...hookResult.patched, ...pluginResult.patched, ...allowResult.patched])];
 
 		// Remove hook handler files from the first valid base path
 		const basePath = join(this.getHomeDir(), ".agents");
@@ -869,16 +850,12 @@ export class OpenClawConnector extends BaseConnector {
 	 * - Top-level `signet: { daemonUrl }` key
 	 * - Old plugin name "signet-memory" -> "signet-memory-openclaw"
 	 */
-	private patchAllConfigsWithPlugin(
-		patch: JsonObject,
-	): {
+	private patchAllConfigsWithPlugin(patch: JsonObject): {
 		patched: string[];
 		warnings: string[];
 	} {
 		if (isJsonObject(patch.plugins) && patch.plugins.allow !== undefined) {
-			throw new Error(
-				"patchAllConfigsWithPlugin patch must not set plugins.allow; allowlist is merged separately",
-			);
+			throw new Error("patchAllConfigsWithPlugin patch must not set plugins.allow; allowlist is merged separately");
 		}
 
 		const patched: string[] = [];

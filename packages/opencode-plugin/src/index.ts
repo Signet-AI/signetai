@@ -103,9 +103,7 @@ function sessionStartFallback(reason: "offline" | "timeout"): string {
 }
 
 function sessionStartTimeout(): number {
-	return resolveSessionStartTimeoutMs(
-		readRuntimeEnv(SESSION_START_TIMEOUT_ENV) ?? readRuntimeEnv(FETCH_TIMEOUT_ENV),
-	);
+	return resolveSessionStartTimeoutMs(readRuntimeEnv(SESSION_START_TIMEOUT_ENV) ?? readRuntimeEnv(FETCH_TIMEOUT_ENV));
 }
 
 // ============================================================================

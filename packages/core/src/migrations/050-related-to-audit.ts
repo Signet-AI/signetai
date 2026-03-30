@@ -2,12 +2,14 @@ import type { MigrationDb } from "./index";
 
 function hasTable(db: MigrationDb, name: string): boolean {
 	return (
-		db.prepare(
-			`SELECT name
+		db
+			.prepare(
+				`SELECT name
 			 FROM sqlite_master
 			 WHERE type = 'table' AND name = ?
 			 LIMIT 1`,
-		).get(name) !== undefined
+			)
+			.get(name) !== undefined
 	);
 }
 

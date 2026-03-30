@@ -19,7 +19,6 @@ import { emitTaskStream } from "./task-stream";
 
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const TASK_MODEL_CACHE_TTL_MS = 5_000;
 
 interface TaskModelCacheEntry {
@@ -28,6 +27,10 @@ interface TaskModelCacheEntry {
 }
 
 const taskModelCache = new Map<string, TaskModelCacheEntry>();
+
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
 
 function isTaskHarness(value: string): value is TaskHarness {
 	return value === "claude-code" || value === "opencode" || value === "codex";
@@ -66,7 +69,10 @@ export function selectDueTasks(db: ReadDb, nowIso: string, limit: number): Reado
 		.all(nowIso, limit) as ReadonlyArray<DueTaskRow>;
 }
 
-export function resolveTaskModel(harness: DueTaskRow["harness"], agentsDir: string = AGENTS_DIR): string | undefined {
+export function resolveTaskModel(
+	harness: DueTaskRow["harness"],
+	agentsDir: string = getAgentsDir(),
+): string | undefined {
 	if (harness !== "codex") return undefined;
 
 	const now = Date.now();
@@ -87,6 +93,24 @@ export function resolveTaskModel(harness: DueTaskRow["harness"], agentsDir: stri
 export function clearTaskModelCache(): void {
 	taskModelCache.clear();
 }
+
+type ExecuteTaskDeps = {
+	readonly computeNextRun: typeof computeNextRun;
+	readonly resolveSkillPrompt: typeof resolveSkillPrompt;
+	readonly spawnTask: typeof spawnTask;
+	readonly emitTaskStream: typeof emitTaskStream;
+	readonly logger: typeof logger;
+	readonly resolveTaskModel: typeof resolveTaskModel;
+};
+
+const DEFAULT_EXECUTE_TASK_DEPS: ExecuteTaskDeps = {
+	computeNextRun,
+	resolveSkillPrompt,
+	spawnTask,
+	emitTaskStream,
+	logger,
+	resolveTaskModel,
+};
 
 /** Start the scheduler worker. Returns a handle to stop it. */
 export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
@@ -160,16 +184,20 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 }
 
 /** Lease and execute a single task. */
-export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<void> {
+export async function executeTask(
+	db: DbAccessor,
+	task: DueTaskRow,
+	deps: ExecuteTaskDeps = DEFAULT_EXECUTE_TASK_DEPS,
+): Promise<void> {
 	const runId = crypto.randomUUID();
 	const now = new Date().toISOString();
 
 	// Lease: insert run row + advance next_run_at atomically
 	let nextRun: string;
 	try {
-		nextRun = computeNextRun(task.cron_expression);
+		nextRun = deps.computeNextRun(task.cron_expression);
 	} catch {
-		logger.error("scheduler", `Invalid cron for task ${task.name}`, {
+		deps.logger.error("scheduler", `Invalid cron for task ${task.name}`, {
 			taskId: task.id,
 			cron: task.cron_expression,
 		});
@@ -193,7 +221,7 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 			.run(nextRun, now, now, task.id);
 	});
 
-	emitTaskStream({
+	deps.emitTaskStream({
 		type: "run-started",
 		taskId: task.id,
 		runId,
@@ -201,14 +229,14 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 		timestamp: new Date().toISOString(),
 	});
 
-	logger.info("scheduler", `Executing task: ${task.name}`, {
+	deps.logger.info("scheduler", `Executing task: ${task.name}`, {
 		taskId: task.id,
 		runId,
 		harness: task.harness,
 	});
 
 	// Resolve skill content into prompt
-	const effectivePrompt = resolveSkillPrompt(task.prompt, task.skill_name, task.skill_mode);
+	const effectivePrompt = deps.resolveSkillPrompt(task.prompt, task.skill_name, task.skill_mode);
 
 	// Spawn the process
 	let result: SpawnResult;
@@ -216,15 +244,15 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 		if (!isTaskHarness(task.harness)) {
 			throw new Error(`Unsupported harness: ${task.harness}`);
 		}
-		const model = resolveTaskModel(task.harness);
-		result = await spawnTask(
+		const model = deps.resolveTaskModel(task.harness);
+		result = await deps.spawnTask(
 			task.harness,
 			effectivePrompt,
 			task.working_directory,
 			undefined,
 			{
 				onStdoutChunk: (chunk) => {
-					emitTaskStream({
+					deps.emitTaskStream({
 						type: "run-output",
 						taskId: task.id,
 						runId,
@@ -234,7 +262,7 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 					});
 				},
 				onStderrChunk: (chunk) => {
-					emitTaskStream({
+					deps.emitTaskStream({
 						type: "run-output",
 						taskId: task.id,
 						runId,
@@ -271,7 +299,7 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 			.run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
 	});
 
-	emitTaskStream({
+	deps.emitTaskStream({
 		type: "run-completed",
 		taskId: task.id,
 		runId,
@@ -316,11 +344,11 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 					.run(completedAt, task.skill_name.toLowerCase());
 			});
 		} catch (err) {
-			logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
+			deps.logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
 		}
 	}
 
-	logger.info("scheduler", `Task ${task.name} ${status}`, {
+	deps.logger.info("scheduler", `Task ${task.name} ${status}`, {
 		taskId: task.id,
 		runId,
 		exitCode: result.exitCode,

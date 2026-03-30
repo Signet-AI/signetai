@@ -8,12 +8,7 @@
  * onnxruntime-node: external (native binary, installed as dep)
  */
 
-const EXTERNAL = [
-	"better-sqlite3",
-	"@1password/sdk",
-	"onnxruntime-node",
-	"@huggingface/transformers",
-];
+const EXTERNAL = ["better-sqlite3", "@1password/sdk", "onnxruntime-node", "@huggingface/transformers"];
 
 const ALIAS = {
 	sharp: "./src/shims/sharp.ts",

@@ -3,11 +3,7 @@
 import { createHmac } from "node:crypto";
 
 function base64url(input) {
-	return Buffer.from(input)
-		.toString("base64")
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/g, "");
+	return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 const port = process.env.SIGNET_PORT ?? "3850";

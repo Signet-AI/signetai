@@ -8,12 +8,7 @@
 export const AUTH_MODES = ["local", "team", "hybrid"] as const;
 export type AuthMode = (typeof AUTH_MODES)[number];
 
-export const TOKEN_ROLES = [
-	"admin",
-	"operator",
-	"agent",
-	"readonly",
-] as const;
+export const TOKEN_ROLES = ["admin", "operator", "agent", "readonly"] as const;
 export type TokenRole = (typeof TOKEN_ROLES)[number];
 
 export const PERMISSIONS = [

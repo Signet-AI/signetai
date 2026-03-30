@@ -307,7 +307,7 @@ export function buildSrcdoc(html: string, serverId: string): string {
 <script>${WIDGET_BRIDGE_SCRIPT}<\/script>
 <script>${PAGE_AGENT_SCRIPT}<\/script>
 </head>
-<body data-server-id="${serverId.replace(/"/g, '&quot;')}">
+<body data-server-id="${serverId.replace(/"/g, "&quot;")}">
 ${html}
 </body>
 </html>`;

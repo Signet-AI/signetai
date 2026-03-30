@@ -15,34 +15,18 @@ import { applyFtsOverlapFeedback, decayAspectWeights } from "./pipeline/aspect-f
 import { resolveFocalEntities } from "./pipeline/graph-traversal";
 
 function makeDbPath(): string {
-	const dir = join(
-		tmpdir(),
-		`signet-ka6-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-	);
+	const dir = join(tmpdir(), `signet-ka6-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(dir, { recursive: true });
 	return join(dir, "memories.db");
 }
 
-function insertEntity(
-	id: string,
-	name: string,
-	entityType: string,
-	agentId = "default",
-): void {
+function insertEntity(id: string, name: string, entityType: string, agentId = "default"): void {
 	const now = new Date().toISOString();
 	getDbAccessor().withWriteTx((db) => {
-		const cols = db
-			.prepare("PRAGMA table_info(entities)")
-			.all() as Array<Record<string, unknown>>;
-		const names = new Set(
-			cols.flatMap((col) =>
-				typeof col.name === "string" ? [col.name] : [],
-			),
-		);
+		const cols = db.prepare("PRAGMA table_info(entities)").all() as Array<Record<string, unknown>>;
+		const names = new Set(cols.flatMap((col) => (typeof col.name === "string" ? [col.name] : [])));
 		if (!names.has("pinned")) {
-			db.exec(
-				"ALTER TABLE entities ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
-			);
+			db.exec("ALTER TABLE entities ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
 		}
 		if (!names.has("pinned_at")) {
 			db.exec("ALTER TABLE entities ADD COLUMN pinned_at TEXT");
@@ -145,16 +129,7 @@ describe("knowledge feedback", () => {
 				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
 				  confidence, importance, status, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, 'attribute', ?, ?, 1, 0.5, 'active', ?, ?)`,
-			).run(
-				"attr-1",
-				aspect.id,
-				"default",
-				"memory-1",
-				"remember alpha",
-				"remember alpha",
-				now,
-				now,
-			);
+			).run("attr-1", aspect.id, "default", "memory-1", "remember alpha", "remember alpha", now, now);
 			db.prepare(
 				`INSERT INTO session_memories
 				 (id, session_key, memory_id, source, effective_score, final_score, rank,
@@ -163,30 +138,26 @@ describe("knowledge feedback", () => {
 			).run("sm-1", now);
 		});
 
-		const feedback = applyFtsOverlapFeedback(
-			getDbAccessor(),
-			"session-1",
-			"default",
-			{
-				delta: 0.02,
-				minWeight: 0.1,
-				maxWeight: 1.0,
-			},
-		);
+		const feedback = applyFtsOverlapFeedback(getDbAccessor(), "session-1", "default", {
+			delta: 0.02,
+			minWeight: 0.1,
+			maxWeight: 1.0,
+		});
 		expect(feedback.aspectsUpdated).toBe(1);
 		expect(feedback.totalFtsConfirmations).toBe(2);
 
-		const afterFeedback = getDbAccessor().withReadDb((db) =>
-			db.prepare("SELECT weight FROM entity_aspects WHERE id = ?").get(aspect.id) as
-				| Record<string, unknown>
-				| undefined,
+		const afterFeedback = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT weight FROM entity_aspects WHERE id = ?").get(aspect.id) as
+					| Record<string, unknown>
+					| undefined,
 		);
 		expect(afterFeedback?.weight).toBe(0.54);
 
 		getDbAccessor().withWriteTx((db) => {
-			db.prepare(
-				"UPDATE entity_aspects SET weight = 0.11, updated_at = datetime('now', '-30 days') WHERE id = ?",
-			).run(aspect.id);
+			db.prepare("UPDATE entity_aspects SET weight = 0.11, updated_at = datetime('now', '-30 days') WHERE id = ?").run(
+				aspect.id,
+			);
 		});
 		const decayed = decayAspectWeights(getDbAccessor(), "default", {
 			decayRate: 0.05,
@@ -195,10 +166,11 @@ describe("knowledge feedback", () => {
 		});
 		expect(decayed).toBe(1);
 
-		const afterDecay = getDbAccessor().withReadDb((db) =>
-			db.prepare("SELECT weight FROM entity_aspects WHERE id = ?").get(aspect.id) as
-				| Record<string, unknown>
-				| undefined,
+		const afterDecay = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT weight FROM entity_aspects WHERE id = ?").get(aspect.id) as
+					| Record<string, unknown>
+					| undefined,
 		);
 		expect(afterDecay?.weight).toBe(0.1);
 	});
@@ -222,16 +194,7 @@ describe("knowledge feedback", () => {
 				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
 				  confidence, importance, status, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, 'attribute', ?, ?, 1, 0.5, 'active', ?, ?)`,
-			).run(
-				"attr-1",
-				aspect.id,
-				"default",
-				"memory-1",
-				"first",
-				"first",
-				now,
-				now,
-			);
+			).run("attr-1", aspect.id, "default", "memory-1", "first", "first", now, now);
 
 			const insertComparison = db.prepare(
 				`INSERT INTO predictor_comparisons
@@ -240,27 +203,9 @@ describe("knowledge feedback", () => {
 				  traversal_count, constraint_count, created_at)
 				 VALUES (?, ?, 'default', 0.8, 0.6, ?, ?, 0.1, 'entity-1', 'Alpha', 10, 3, 1, ?)`,
 			);
-			insertComparison.run(
-				"cmp-1",
-				"session-a",
-				0,
-				-0.1,
-				"2026-03-01T00:00:00.000Z",
-			);
-			insertComparison.run(
-				"cmp-2",
-				"session-b",
-				1,
-				0.2,
-				"2026-03-02T00:00:00.000Z",
-			);
-			insertComparison.run(
-				"cmp-3",
-				"session-c",
-				1,
-				0.3,
-				"2026-03-03T00:00:00.000Z",
-			);
+			insertComparison.run("cmp-1", "session-a", 0, -0.1, "2026-03-01T00:00:00.000Z");
+			insertComparison.run("cmp-2", "session-b", 1, 0.2, "2026-03-02T00:00:00.000Z");
+			insertComparison.run("cmp-3", "session-c", 1, 0.3, "2026-03-03T00:00:00.000Z");
 
 			db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = 'memory-1'").run();
 		});
@@ -274,10 +219,11 @@ describe("knowledge feedback", () => {
 		const propagated = propagateMemoryStatus(getDbAccessor(), "default");
 		expect(propagated).toBe(1);
 
-		const attribute = getDbAccessor().withReadDb((db) =>
-			db.prepare("SELECT status FROM entity_attributes WHERE id = 'attr-1'").get() as
-				| Record<string, unknown>
-				| undefined,
+		const attribute = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT status FROM entity_attributes WHERE id = 'attr-1'").get() as
+					| Record<string, unknown>
+					| undefined,
 		);
 		expect(attribute?.status).toBe("superseded");
 	});

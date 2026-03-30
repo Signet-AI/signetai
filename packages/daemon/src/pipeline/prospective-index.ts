@@ -61,7 +61,12 @@ function buildPrompt(content: string, max: number): string {
 function isHintLine(line: string): boolean {
 	if (line.endsWith("?")) return true;
 	// Conversational cues: "Tell me about...", "Describe...", etc.
-	if (/^(tell|describe|explain|show|what|who|where|when|why|how|which|does|did|is|are|can|could|has|have|will|would)/i.test(line)) return true;
+	if (
+		/^(tell|describe|explain|show|what|who|where|when|why|how|which|does|did|is|are|can|could|has|have|will|would)/i.test(
+			line,
+		)
+	)
+		return true;
 	return false;
 }
 
@@ -80,7 +85,12 @@ export async function generateHints(
 	const stripped = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 	const lines = stripped
 		.split("\n")
-		.map((l) => l.replace(/^\d+[.)]\s*/, "").replace(/^[-*]\s*/, "").trim())
+		.map((l) =>
+			l
+				.replace(/^\d+[.)]\s*/, "")
+				.replace(/^[-*]\s*/, "")
+				.trim(),
+		)
 		.filter((l) => l.length > 10 && l.length < 300 && isHintLine(l));
 	logger.debug("pipeline", "Hints generated", {
 		rawLen: raw.length,
@@ -125,9 +135,11 @@ function leaseJob(db: WriteDb, maxAttempts: number): HintJobRow | null {
 
 function completeJob(db: WriteDb, jobId: string): void {
 	const now = new Date().toISOString();
-	db.prepare(
-		`UPDATE memory_jobs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?`,
-	).run(now, now, jobId);
+	db.prepare(`UPDATE memory_jobs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?`).run(
+		now,
+		now,
+		jobId,
+	);
 }
 
 function failJob(db: WriteDb, jobId: string, error: string): void {
@@ -145,12 +157,7 @@ function failJob(db: WriteDb, jobId: string, error: string): void {
 // Persist hints
 // ---------------------------------------------------------------------------
 
-function writeHints(
-	db: WriteDb,
-	memoryId: string,
-	agentId: string,
-	hints: readonly string[],
-): number {
+function writeHints(db: WriteDb, memoryId: string, agentId: string, hints: readonly string[]): number {
 	const stmt = db.prepare(
 		`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -265,11 +272,7 @@ export function startHintsWorker(deps: {
 // Job enqueueing (called from extraction worker after memory write)
 // ---------------------------------------------------------------------------
 
-export function enqueueHintsJob(
-	db: WriteDb,
-	memoryId: string,
-	content: string,
-): void {
+export function enqueueHintsJob(db: WriteDb, memoryId: string, content: string): void {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
 	const payload = JSON.stringify({ memoryId, content } satisfies HintPayload);

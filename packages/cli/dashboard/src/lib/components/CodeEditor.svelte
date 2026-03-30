@@ -1,13 +1,19 @@
 <script lang="ts">
-import { onMount } from "svelte";
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
-import { EditorState, Compartment, type Extension } from "@codemirror/state";
-import { yaml } from "@codemirror/lang-yaml";
-import { markdown } from "@codemirror/lang-markdown";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, foldKeymap } from "@codemirror/language";
-import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { markdown } from "@codemirror/lang-markdown";
+import { yaml } from "@codemirror/lang-yaml";
+import {
+	bracketMatching,
+	defaultHighlightStyle,
+	foldGutter,
+	foldKeymap,
+	syntaxHighlighting,
+} from "@codemirror/language";
+import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
+import { onMount } from "svelte";
 
 interface Props {
 	value: string;
@@ -24,64 +30,67 @@ let view: EditorView | undefined = $state();
 const langCompartment = new Compartment();
 
 function signetTheme(): Extension {
-	return EditorView.theme({
-		"&": {
-			backgroundColor: "var(--sig-bg)",
-			color: "var(--sig-text-bright)",
-			fontFamily: "var(--font-mono)",
-			fontSize: "13px",
-			height: "100%",
+	return EditorView.theme(
+		{
+			"&": {
+				backgroundColor: "var(--sig-bg)",
+				color: "var(--sig-text-bright)",
+				fontFamily: "var(--font-mono)",
+				fontSize: "13px",
+				height: "100%",
+			},
+			".cm-content": {
+				caretColor: "var(--sig-text-bright)",
+				fontFamily: "var(--font-mono)",
+				lineHeight: "1.8",
+				padding: "var(--space-md) 0",
+			},
+			".cm-cursor, .cm-dropCursor": {
+				borderLeftColor: "var(--sig-text-bright)",
+			},
+			"&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
+				backgroundColor: "rgba(255, 255, 255, 0.08) !important",
+			},
+			".cm-activeLine": {
+				backgroundColor: "rgba(255, 255, 255, 0.03)",
+			},
+			".cm-gutters": {
+				backgroundColor: "var(--sig-surface)",
+				color: "var(--sig-text-muted)",
+				border: "none",
+				borderRight: "1px solid var(--sig-border)",
+				fontFamily: "var(--font-mono)",
+				fontSize: "11px",
+			},
+			".cm-activeLineGutter": {
+				backgroundColor: "rgba(255, 255, 255, 0.04)",
+				color: "var(--sig-text)",
+			},
+			".cm-foldGutter": {
+				color: "var(--sig-text-muted)",
+			},
+			"&.cm-focused": {
+				outline: "none",
+			},
+			".cm-matchingBracket": {
+				backgroundColor: "rgba(255, 255, 255, 0.1)",
+				color: "var(--sig-text-bright)",
+			},
+			".cm-searchMatch": {
+				backgroundColor: "rgba(255, 255, 255, 0.12)",
+			},
+			".cm-selectionMatch": {
+				backgroundColor: "rgba(255, 255, 255, 0.06)",
+			},
+			".cm-line": {
+				padding: "0 var(--space-md)",
+			},
+			".cm-scroller": {
+				overflow: "auto",
+			},
 		},
-		".cm-content": {
-			caretColor: "var(--sig-text-bright)",
-			fontFamily: "var(--font-mono)",
-			lineHeight: "1.8",
-			padding: "var(--space-md) 0",
-		},
-		".cm-cursor, .cm-dropCursor": {
-			borderLeftColor: "var(--sig-text-bright)",
-		},
-		"&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
-			backgroundColor: "rgba(255, 255, 255, 0.08) !important",
-		},
-		".cm-activeLine": {
-			backgroundColor: "rgba(255, 255, 255, 0.03)",
-		},
-		".cm-gutters": {
-			backgroundColor: "var(--sig-surface)",
-			color: "var(--sig-text-muted)",
-			border: "none",
-			borderRight: "1px solid var(--sig-border)",
-			fontFamily: "var(--font-mono)",
-			fontSize: "11px",
-		},
-		".cm-activeLineGutter": {
-			backgroundColor: "rgba(255, 255, 255, 0.04)",
-			color: "var(--sig-text)",
-		},
-		".cm-foldGutter": {
-			color: "var(--sig-text-muted)",
-		},
-		"&.cm-focused": {
-			outline: "none",
-		},
-		".cm-matchingBracket": {
-			backgroundColor: "rgba(255, 255, 255, 0.1)",
-			color: "var(--sig-text-bright)",
-		},
-		".cm-searchMatch": {
-			backgroundColor: "rgba(255, 255, 255, 0.12)",
-		},
-		".cm-selectionMatch": {
-			backgroundColor: "rgba(255, 255, 255, 0.06)",
-		},
-		".cm-line": {
-			padding: "0 var(--space-md)",
-		},
-		".cm-scroller": {
-			overflow: "auto",
-		},
-	}, { dark: true });
+		{ dark: true },
+	);
 }
 
 function langExtension(): Extension {
@@ -91,10 +100,15 @@ function langExtension(): Extension {
 }
 
 function buildExtensions(): Extension[] {
-	const saveKeymap = keymap.of([{
-		key: "Mod-s",
-		run: () => { onsave?.(); return true; },
-	}]);
+	const saveKeymap = keymap.of([
+		{
+			key: "Mod-s",
+			run: () => {
+				onsave?.();
+				return true;
+			},
+		},
+	]);
 
 	return [
 		lineNumbers(),
@@ -106,13 +120,7 @@ function buildExtensions(): Extension[] {
 		closeBrackets(),
 		highlightSelectionMatches(),
 		syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-		keymap.of([
-			...defaultKeymap,
-			...historyKeymap,
-			...foldKeymap,
-			...searchKeymap,
-			...closeBracketsKeymap,
-		]),
+		keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap, ...searchKeymap, ...closeBracketsKeymap]),
 		signetTheme(),
 		langCompartment.of(langExtension()),
 		saveKeymap,
@@ -158,9 +166,7 @@ $effect(() => {
 	const lang = language;
 	if (view) {
 		view.dispatch({
-			effects: langCompartment.reconfigure(
-				lang === "yaml" ? yaml() : lang === "markdown" ? markdown() : [],
-			),
+			effects: langCompartment.reconfigure(lang === "yaml" ? yaml() : lang === "markdown" ? markdown() : []),
 		});
 	}
 });

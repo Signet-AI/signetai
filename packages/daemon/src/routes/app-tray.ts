@@ -7,13 +7,7 @@ import { homedir } from "node:os";
 import type { AutoCardToolAction, AutoCardResource, SignetAppManifest } from "@signet/core";
 
 import { isPrivateHostname } from "../url-validation.js";
-import {
-	loadAppTray,
-	loadProbeResult,
-	probeServer,
-	reprobeServer,
-	storeProbeResult,
-} from "../mcp-probe.js";
+import { loadAppTray, loadProbeResult, probeServer, reprobeServer, storeProbeResult } from "../mcp-probe.js";
 import { logger } from "../logger.js";
 import { readInstalledServersPublic } from "./marketplace-helpers.js";
 
@@ -42,19 +36,9 @@ function findFreeGridPosition(
 	w: number,
 	h: number,
 ): { x: number; y: number; w: number; h: number } {
-	const collides = (
-		x: number,
-		y: number,
-		w: number,
-		h: number,
-	): boolean => {
+	const collides = (x: number, y: number, w: number, h: number): boolean => {
 		for (const o of occupied) {
-			if (
-				x < o.x + o.w &&
-				x + w > o.x &&
-				y < o.y + o.h &&
-				y + h > o.y
-			) {
+			if (x < o.x + o.w && x + w > o.x && y < o.y + o.h && y + h > o.y) {
 				return true;
 			}
 		}
@@ -101,9 +85,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 			}
 		}
 
-		const missing = installed.filter(
-			(s) => s.enabled && !trayIds.has(s.id),
-		);
+		const missing = installed.filter((s) => s.enabled && !trayIds.has(s.id));
 
 		if (missing.length > 0) {
 			const now = new Date().toISOString();
@@ -136,20 +118,11 @@ export function mountAppTrayRoutes(app: Hono): void {
 				const freshIds = new Set(fresh.map((e) => e.id));
 				const toAdd = stubs.filter((s) => !freshIds.has(s.id));
 				if (toAdd.length > 0) {
-					writeFileSync(
-						join(getMarketplaceDir(), "app-tray.json"),
-						JSON.stringify([...fresh, ...toAdd], null, 2),
-					);
+					writeFileSync(join(getMarketplaceDir(), "app-tray.json"), JSON.stringify([...fresh, ...toAdd], null, 2));
 				}
-				logger.info(
-					"os",
-					`Synced ${toAdd.length} installed server(s) to app tray`,
-				);
+				logger.info("os", `Synced ${toAdd.length} installed server(s) to app tray`);
 			} catch (err) {
-				logger.warn(
-					"os",
-					`Failed to persist auto-synced tray entries: ${err}`,
-				);
+				logger.warn("os", `Failed to persist auto-synced tray entries: ${err}`);
 			}
 
 			// Return the merged view regardless of persist success
@@ -277,10 +250,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 		try {
 			const parsed = new URL(url);
 			if (!["https:", "http:"].includes(parsed.protocol)) {
-				return c.json(
-					{ ok: false, widgetId: "", manifest: null, error: "Only HTTP/HTTPS URLs are supported" },
-					400,
-				);
+				return c.json({ ok: false, widgetId: "", manifest: null, error: "Only HTTP/HTTPS URLs are supported" }, 400);
 			}
 
 			if (isPrivateHostname(parsed.hostname)) {
@@ -290,19 +260,14 @@ export function mountAppTrayRoutes(app: Hono): void {
 				);
 			}
 		} catch {
-			return c.json(
-				{ ok: false, widgetId: "", manifest: null, error: "Invalid URL format" },
-				400,
-			);
+			return c.json({ ok: false, widgetId: "", manifest: null, error: "Invalid URL format" }, 400);
 		}
 
 		const nameOverride = body.name?.trim() || undefined;
 		const autoPlace = body.autoPlace === true;
 
 		try {
-			const mcpServersOrgMatch = url.match(
-				/^https?:\/\/(?:www\.)?mcpservers\.org\/servers\/(.+?)(?:\/|\?|#|$)/,
-			);
+			const mcpServersOrgMatch = url.match(/^https?:\/\/(?:www\.)?mcpservers\.org\/servers\/(.+?)(?:\/|\?|#|$)/);
 
 			const installResult = mcpServersOrgMatch
 				? await installViaCatalog(mcpServersOrgMatch[1], "mcpservers.org", nameOverride)
@@ -319,10 +284,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 					storeProbeResult(probeResult);
 					manifest = probeResult.declaredManifest ?? null;
 				} catch (err) {
-					logger.warn(
-						"probe",
-						`Install probe failed for ${installResult.serverId}: ${err}`,
-					);
+					logger.warn("probe", `Install probe failed for ${installResult.serverId}: ${err}`);
 					// Install still succeeds — auto-card will be used
 				}
 			}
@@ -333,22 +295,13 @@ export function mountAppTrayRoutes(app: Hono): void {
 				const entry = tray.find((e) => e.id === installResult.serverId);
 				if (entry) {
 					const occupiedPositions = tray.flatMap((e) =>
-					e.state === "grid" && e.gridPosition && e.id !== installResult.serverId
-						? [e.gridPosition]
-						: [],
-				);
-
-					const defaultSize = manifest?.defaultSize ??
-						entry.autoCard?.defaultSize ?? { w: 4, h: 3 };
-					const pos = findFreeGridPosition(
-						occupiedPositions,
-						defaultSize.w,
-						defaultSize.h,
+						e.state === "grid" && e.gridPosition && e.id !== installResult.serverId ? [e.gridPosition] : [],
 					);
 
-					const idx = tray.findIndex(
-						(e) => e.id === installResult.serverId,
-					);
+					const defaultSize = manifest?.defaultSize ?? entry.autoCard?.defaultSize ?? { w: 4, h: 3 };
+					const pos = findFreeGridPosition(occupiedPositions, defaultSize.w, defaultSize.h);
+
+					const idx = tray.findIndex((e) => e.id === installResult.serverId);
 					if (idx >= 0) {
 						tray[idx] = {
 							...tray[idx],
@@ -356,18 +309,9 @@ export function mountAppTrayRoutes(app: Hono): void {
 							gridPosition: pos,
 							updatedAt: new Date().toISOString(),
 						};
-						const agentsDir =
-							process.env.SIGNET_PATH ||
-							join(homedir(), ".agents");
-						const trayPath = join(
-							agentsDir,
-							"marketplace",
-							"app-tray.json",
-						);
-						writeFileSync(
-							trayPath,
-							JSON.stringify(tray, null, 2),
-						);
+						const agentsDir = process.env.SIGNET_PATH || join(homedir(), ".agents");
+						const trayPath = join(agentsDir, "marketplace", "app-tray.json");
+						writeFileSync(trayPath, JSON.stringify(tray, null, 2));
 					}
 				}
 			}
@@ -380,10 +324,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			logger.error("probe", `Install failed: ${msg}`);
-			return c.json(
-				{ ok: false, widgetId: "", manifest: null, error: msg },
-				500,
-			);
+			return c.json({ ok: false, widgetId: "", manifest: null, error: msg }, 500);
 		}
 	});
 }
@@ -420,9 +361,7 @@ function inferNameFromUrl(url: string): string {
 	try {
 		const parsed = new URL(url);
 		// Use hostname without common prefixes
-		let name = parsed.hostname
-			.replace(/^(www|api|mcp)\./, "")
-			.replace(/\.(com|org|io|dev|app|net)$/, "");
+		let name = parsed.hostname.replace(/^(www|api|mcp)\./, "").replace(/\.(com|org|io|dev|app|net)$/, "");
 		// Add path hint if useful
 		const pathParts = parsed.pathname
 			.split("/")
@@ -487,10 +426,7 @@ function writeInstalledServersRaw(servers: InstalledServer[]): void {
 	writeFileSync(getInstalledMcpPath(), JSON.stringify(servers, null, 2));
 }
 
-function makeUniqueServerId(
-	baseId: string,
-	installed: readonly InstalledServer[],
-): string {
+function makeUniqueServerId(baseId: string, installed: readonly InstalledServer[]): string {
 	if (!installed.some((s) => s.id === baseId)) return baseId;
 	let i = 2;
 	while (installed.some((s) => s.id === `${baseId}-${i}`)) {
@@ -502,27 +438,18 @@ function makeUniqueServerId(
 /**
  * Install a direct HTTP MCP server URL as a manual server.
  */
-async function installDirectHttp(
-	url: string,
-	nameOverride?: string,
-): Promise<{ serverId: string; isNew: boolean }> {
+async function installDirectHttp(url: string, nameOverride?: string): Promise<{ serverId: string; isNew: boolean }> {
 	const installed = readInstalledServersRaw();
 
 	// Check if already installed by matching URL
 	const existing = installed.find(
-		(s) =>
-			s.config &&
-			typeof s.config === "object" &&
-			"url" in s.config &&
-			s.config.url === url,
+		(s) => s.config && typeof s.config === "object" && "url" in s.config && s.config.url === url,
 	);
 	if (existing) {
 		// Update name if override provided
 		if (nameOverride && nameOverride !== existing.name) {
 			const updated = installed.map((s) =>
-				s.id === existing.id
-					? { ...s, name: nameOverride, updatedAt: new Date().toISOString() }
-					: s,
+				s.id === existing.id ? { ...s, name: nameOverride, updatedAt: new Date().toISOString() } : s,
 			);
 			writeInstalledServersRaw(updated);
 		}

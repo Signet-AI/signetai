@@ -4,7 +4,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";

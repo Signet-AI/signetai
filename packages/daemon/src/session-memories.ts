@@ -166,11 +166,7 @@ export function trackFtsHits(
 			// recompiling identical SQL for every batch of 50.
 			const fullChunkStmt =
 				matchedIds.length >= CHUNK_SIZE
-					? db.prepare(
-							BASE_SQL +
-								Array.from({ length: CHUNK_SIZE }, () => ROW).join(",") +
-								CONFLICT_CLAUSE,
-						)
+					? db.prepare(BASE_SQL + Array.from({ length: CHUNK_SIZE }, () => ROW).join(",") + CONFLICT_CLAUSE)
 					: null;
 
 			for (let i = 0; i < matchedIds.length; i += CHUNK_SIZE) {
@@ -179,11 +175,7 @@ export function trackFtsHits(
 				const stmt =
 					chunk.length === CHUNK_SIZE
 						? fullChunkStmt!
-						: db.prepare(
-								BASE_SQL +
-									Array.from({ length: chunk.length }, () => ROW).join(",") +
-									CONFLICT_CLAUSE,
-							);
+						: db.prepare(BASE_SQL + Array.from({ length: chunk.length }, () => ROW).join(",") + CONFLICT_CLAUSE);
 
 				const values: unknown[] = [];
 				for (const id of chunk) {
@@ -208,9 +200,7 @@ export function trackFtsHits(
  * Validate and clamp a raw feedback object. Returns a clean map of
  * memory IDs to scores in [-1, 1], or null if the input is invalid.
  */
-export function parseFeedback(
-	raw: unknown,
-): Record<string, number> | null {
+export function parseFeedback(raw: unknown): Record<string, number> | null {
 	if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) {
 		return null;
 	}

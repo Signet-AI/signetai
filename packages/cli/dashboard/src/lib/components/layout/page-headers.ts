@@ -97,13 +97,15 @@ export const MEMORY_TAB_ITEMS = [
 	{ id: "embeddings", label: "Constellation" },
 ] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
 
-export const ENGINE_TAB_ITEMS = [
-	{ id: "settings", label: "Settings" },
-] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
+export const ENGINE_TAB_ITEMS = [{ id: "settings", label: "Settings" }] as const satisfies ReadonlyArray<{
+	id: TabId;
+	label: string;
+}>;
 
-export const CORTEX_TAB_ITEMS = [
-	{ id: "cortex-memory", label: "Ontology" },
-] as const satisfies ReadonlyArray<{ id: TabId; label: string }>;
+export const CORTEX_TAB_ITEMS = [{ id: "cortex-memory", label: "Ontology" }] as const satisfies ReadonlyArray<{
+	id: TabId;
+	label: string;
+}>;
 
 // --- Footer definitions ---
 

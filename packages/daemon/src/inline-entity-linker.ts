@@ -74,34 +74,169 @@ function inferAspect(text: string): string {
 
 // Common words that appear capitalized but aren't entity names
 const SKIP_WORDS = new Set([
-	"the", "this", "that", "these", "those", "there", "then",
-	"what", "when", "where", "which", "while", "who", "whom",
-	"how", "here", "have", "has", "had", "his", "her", "its",
-	"our", "your", "their", "some", "any", "all", "each",
-	"every", "both", "few", "more", "most", "many", "much",
-	"other", "another", "such", "like", "just", "also", "only",
-	"very", "really", "quite", "rather", "still", "already",
-	"even", "never", "always", "often", "sometimes", "usually",
-	"about", "after", "before", "between", "during", "since",
-	"until", "into", "onto", "from", "with", "without",
-	"through", "across", "along", "around", "behind", "below",
-	"above", "under", "over", "near", "next", "last", "first",
-	"second", "third", "new", "old", "good", "great", "best",
-	"well", "long", "high", "low", "big", "small", "large",
-	"little", "much", "own", "same", "different", "important",
-	"sure", "true", "right", "left", "yes", "not",
-	"but", "and", "for", "nor", "yet", "can", "may",
-	"will", "shall", "should", "would", "could", "might",
-	"must", "does", "did", "been", "being", "are", "was",
-	"were", "note", "also", "however", "therefore", "thus",
-	"moreover", "furthermore", "additionally", "meanwhile",
-	"recently", "currently", "previously", "originally",
-	"apparently", "specifically", "essentially", "generally",
-	"typically", "particularly", "especially", "actually",
-	"unfortunately", "fortunately", "certainly", "obviously",
-	"basically", "exactly", "simply", "finally", "initially",
+	"the",
+	"this",
+	"that",
+	"these",
+	"those",
+	"there",
+	"then",
+	"what",
+	"when",
+	"where",
+	"which",
+	"while",
+	"who",
+	"whom",
+	"how",
+	"here",
+	"have",
+	"has",
+	"had",
+	"his",
+	"her",
+	"its",
+	"our",
+	"your",
+	"their",
+	"some",
+	"any",
+	"all",
+	"each",
+	"every",
+	"both",
+	"few",
+	"more",
+	"most",
+	"many",
+	"much",
+	"other",
+	"another",
+	"such",
+	"like",
+	"just",
+	"also",
+	"only",
+	"very",
+	"really",
+	"quite",
+	"rather",
+	"still",
+	"already",
+	"even",
+	"never",
+	"always",
+	"often",
+	"sometimes",
+	"usually",
+	"about",
+	"after",
+	"before",
+	"between",
+	"during",
+	"since",
+	"until",
+	"into",
+	"onto",
+	"from",
+	"with",
+	"without",
+	"through",
+	"across",
+	"along",
+	"around",
+	"behind",
+	"below",
+	"above",
+	"under",
+	"over",
+	"near",
+	"next",
+	"last",
+	"first",
+	"second",
+	"third",
+	"new",
+	"old",
+	"good",
+	"great",
+	"best",
+	"well",
+	"long",
+	"high",
+	"low",
+	"big",
+	"small",
+	"large",
+	"little",
+	"much",
+	"own",
+	"same",
+	"different",
+	"important",
+	"sure",
+	"true",
+	"right",
+	"left",
+	"yes",
+	"not",
+	"but",
+	"and",
+	"for",
+	"nor",
+	"yet",
+	"can",
+	"may",
+	"will",
+	"shall",
+	"should",
+	"would",
+	"could",
+	"might",
+	"must",
+	"does",
+	"did",
+	"been",
+	"being",
+	"are",
+	"was",
+	"were",
+	"note",
+	"also",
+	"however",
+	"therefore",
+	"thus",
+	"moreover",
+	"furthermore",
+	"additionally",
+	"meanwhile",
+	"recently",
+	"currently",
+	"previously",
+	"originally",
+	"apparently",
+	"specifically",
+	"essentially",
+	"generally",
+	"typically",
+	"particularly",
+	"especially",
+	"actually",
+	"unfortunately",
+	"fortunately",
+	"certainly",
+	"obviously",
+	"basically",
+	"exactly",
+	"simply",
+	"finally",
+	"initially",
 	// Markdown / structural tokens
-	"key", "facts", "preferences", "events", "relationships",
+	"key",
+	"facts",
+	"preferences",
+	"events",
+	"relationships",
 ]);
 
 /**
@@ -207,12 +342,7 @@ function extractClauses(text: string, entityNames: ReadonlyArray<string>): Claus
 // Entity resolution / creation
 // ---------------------------------------------------------------------------
 
-function resolveEntity(
-	db: WriteDb,
-	name: string,
-	agentId: string,
-	now: string,
-): string {
+function resolveEntity(db: WriteDb, name: string, agentId: string, now: string): string {
 	const canonical = name.trim().toLowerCase().replace(/\s+/g, " ");
 	if (canonical.length < 3) return "";
 
@@ -225,9 +355,7 @@ function resolveEntity(
 		.get(canonical, name, agentId) as { id: string } | undefined;
 
 	if (existing) {
-		db.prepare(
-			`UPDATE entities SET mentions = mentions + 1, updated_at = ? WHERE id = ?`,
-		).run(now, existing.id);
+		db.prepare(`UPDATE entities SET mentions = mentions + 1, updated_at = ? WHERE id = ?`).run(now, existing.id);
 		return existing.id;
 	}
 
@@ -242,13 +370,11 @@ function resolveEntity(
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		if (!msg.includes("UNIQUE constraint")) throw e;
-		const fallback = db
-			.prepare("SELECT id FROM entities WHERE name = ? AND agent_id = ? LIMIT 1")
-			.get(name, agentId) as { id: string } | undefined;
+		const fallback = db.prepare("SELECT id FROM entities WHERE name = ? AND agent_id = ? LIMIT 1").get(name, agentId) as
+			| { id: string }
+			| undefined;
 		if (!fallback) return "";
-		db.prepare(
-			`UPDATE entities SET mentions = mentions + 1, updated_at = ? WHERE id = ?`,
-		).run(now, fallback.id);
+		db.prepare(`UPDATE entities SET mentions = mentions + 1, updated_at = ? WHERE id = ?`).run(now, fallback.id);
 		return fallback.id;
 	}
 }
@@ -257,13 +383,7 @@ function resolveEntity(
 // Aspect resolution / creation
 // ---------------------------------------------------------------------------
 
-function resolveAspect(
-	db: WriteDb,
-	entityId: string,
-	agentId: string,
-	name: string,
-	now: string,
-): string {
+function resolveAspect(db: WriteDb, entityId: string, agentId: string, name: string, now: string): string {
 	const canonical = name.trim().toLowerCase().replace(/\s+/g, " ");
 
 	const existing = db
@@ -318,12 +438,7 @@ export interface LinkResult {
  *
  * Must run inside a withWriteTx closure.
  */
-export function linkMemoryToEntities(
-	db: WriteDb,
-	memoryId: string,
-	content: string,
-	agentId: string,
-): LinkResult {
+export function linkMemoryToEntities(db: WriteDb, memoryId: string, content: string, agentId: string): LinkResult {
 	const names = extractCandidateNames(content);
 	if (names.length === 0) return { linked: 0, entityIds: [], aspects: 0, attributes: 0 };
 
@@ -342,11 +457,13 @@ export function linkMemoryToEntities(
 		entityIds.push(entityId);
 
 		// Create memory-entity mention link
-		const ins = db.prepare(
-			`INSERT OR IGNORE INTO memory_entity_mentions
+		const ins = db
+			.prepare(
+				`INSERT OR IGNORE INTO memory_entity_mentions
 			 (memory_id, entity_id, mention_text, confidence, created_at)
 			 VALUES (?, ?, ?, 0.8, ?)`,
-		).run(memoryId, entityId, name, now);
+			)
+			.run(memoryId, entityId, name, now);
 		if (ins.changes > 0) linked++;
 	}
 
@@ -408,15 +525,10 @@ export function linkMemoryToEntities(
 							   AND dependency_type = 'related_to' AND agent_id = ?
 							 LIMIT 1`,
 						)
-						.get(ids[i], ids[j], agentId) as
-						| { id: string }
-						| undefined;
+						.get(ids[i], ids[j], agentId) as { id: string } | undefined;
 					if (row) continue;
 					const id = crypto.randomUUID();
-					const reason = requireDependencyReason(
-						"related_to",
-						`co-occurred in remembered memory ${memoryId}`,
-					);
+					const reason = requireDependencyReason("related_to", `co-occurred in remembered memory ${memoryId}`);
 					db.prepare(
 						`INSERT INTO entity_dependencies
 						 (id, source_entity_id, target_entity_id, agent_id,

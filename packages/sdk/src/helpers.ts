@@ -37,12 +37,12 @@ export class SignetClientHelpers {
 	 * Poll a job until it completes, fails, or times out.
 	 *
 	 * @example
-		 * ```typescript
-		 * const job = await client.createDocument({ source_type: "url", url: "https://..." });
-		 * const result = await client.waitForJob(job.jobId, { timeout: 60_000 });
-		 * console.log(result.status); // "completed" | "failed" | "done" | "dead"
-		 * ```
-		 */
+	 * ```typescript
+	 * const job = await client.createDocument({ source_type: "url", url: "https://..." });
+	 * const result = await client.waitForJob(job.jobId, { timeout: 60_000 });
+	 * console.log(result.status); // "completed" | "failed" | "done" | "dead"
+	 * ```
+	 */
 	async waitForJob(jobId: string, opts?: WaitForJobOptions): Promise<JobStatus> {
 		const timeout = opts?.timeout ?? 30_000;
 		const interval = opts?.interval ?? 500;
@@ -64,18 +64,13 @@ export class SignetClientHelpers {
 	/**
 	 * Poll a document until ingestion reaches a terminal state.
 	 */
-	async waitForDocument(
-		documentId: string,
-		opts?: WaitForJobOptions,
-	): Promise<DocumentRecord> {
+	async waitForDocument(documentId: string, opts?: WaitForJobOptions): Promise<DocumentRecord> {
 		const timeout = opts?.timeout ?? 30_000;
 		const interval = opts?.interval ?? 500;
 		const startTime = Date.now();
 
 		while (Date.now() - startTime < timeout) {
-			const doc = await this.transport.get<DocumentRecord>(
-				`/api/documents/${documentId}`,
-			);
+			const doc = await this.transport.get<DocumentRecord>(`/api/documents/${documentId}`);
 			if (isTerminalDocumentStatus(doc.status)) {
 				return doc;
 			}
@@ -107,10 +102,7 @@ export class SignetClientHelpers {
 		readonly connector_id?: string;
 		readonly metadata?: Record<string, unknown>;
 	}): Promise<DocumentRecord> {
-		const result = await this.transport.post<{ id: string; jobId?: string }>(
-			"/api/documents",
-			opts,
-		);
+		const result = await this.transport.post<{ id: string; jobId?: string }>("/api/documents", opts);
 
 		// If the daemon returns a job id (legacy/optional), wait for it first.
 		if (result.jobId) {
@@ -255,19 +247,9 @@ export class SignetClientHelpers {
 }
 
 function isTerminalJobStatus(status: JobStatus["status"]): boolean {
-	return (
-		status === "completed" ||
-		status === "failed" ||
-		status === "done" ||
-		status === "dead"
-	);
+	return status === "completed" || status === "failed" || status === "done" || status === "dead";
 }
 
 function isTerminalDocumentStatus(status: string): boolean {
-	return (
-		status === "done" ||
-		status === "failed" ||
-		status === "deleted" ||
-		status === "ready"
-	);
+	return status === "done" || status === "failed" || status === "deleted" || status === "ready";
 }

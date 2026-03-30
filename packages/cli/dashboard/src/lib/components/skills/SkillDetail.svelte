@@ -1,39 +1,31 @@
 <script lang="ts">
-import { marked } from "marked";
-import {
-	createMarketplaceReview,
-	getMarketplaceReviews,
-	type MarketplaceReview,
-} from "$lib/api";
-import * as Sheet from "$lib/components/ui/sheet/index.js";
-import * as Collapsible from "$lib/components/ui/collapsible/index.js";
+import { type MarketplaceReview, createMarketplaceReview, getMarketplaceReviews } from "$lib/api";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
+import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
+import * as Sheet from "$lib/components/ui/sheet/index.js";
 import { Textarea } from "$lib/components/ui/textarea/index.js";
-import ChevronDown from "@lucide/svelte/icons/chevron-down";
-import { sk, doInstall, doUninstall, closeDetail } from "$lib/stores/skills.svelte";
-import { toast } from "$lib/stores/toast.svelte";
 import { computeTrustProfile } from "$lib/skills/risk-profile";
+import { closeDetail, doInstall, doUninstall, sk } from "$lib/stores/skills.svelte";
+import { toast } from "$lib/stores/toast.svelte";
+import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import { marked } from "marked";
 
 const REVIEW_DISPLAY_NAME_KEY = "signet:marketplace:reviews:display-name";
 
 type RatingValue = 1 | 2 | 3 | 4 | 5;
 
-let open = $derived(sk.detailOpen);
+const open = $derived(sk.detailOpen);
 
-let isInstalled = $derived(
-	sk.selectedName
-		? sk.installed.some((s) => s.name === sk.selectedName)
-		: false,
-);
+const isInstalled = $derived(sk.selectedName ? sk.installed.some((s) => s.name === sk.selectedName) : false);
 
 function handleOpenChange(value: boolean) {
 	if (!value) closeDetail();
 }
 
-let renderedContent = $derived.by(() => {
+const renderedContent = $derived.by(() => {
 	if (!sk.detailContent) return "";
 	const content = sk.detailContent.replace(/^---[\s\S]*?---\n*/, "");
 	return marked.parse(content, { async: false }) as string;
@@ -59,19 +51,22 @@ function formatStat(n: number | undefined): string {
 	return String(n);
 }
 
-let providerUrl = $derived.by(() => {
+const providerUrl = $derived.by(() => {
 	const src = sk.detailSource;
 	if (!src?.provider) return null;
 	if (src.provider === "clawhub") return `https://clawhub.ai/skills/${src.name}`;
-	return `https://skills.sh`;
+	return "https://skills.sh";
 });
 
-let trustProfile = $derived.by(() => {
+const trustProfile = $derived.by(() => {
 	const source = sk.detailSource;
 	const meta = sk.detailMeta;
 	if (!source && !meta) return null;
 	const item = { ...(source ?? {}), ...(meta ?? {}) };
-	return computeTrustProfile(item, sk.installed.map((s) => s.name));
+	return computeTrustProfile(
+		item,
+		sk.installed.map((s) => s.name),
+	);
 });
 
 let reviewFilter = $state<"top" | "good" | "bad" | "all">("top");
@@ -191,7 +186,7 @@ async function submitReviewForDetail(): Promise<void> {
 }
 </script>
 
-<Sheet.Root bind:open onOpenChange={handleOpenChange}>
+<Sheet.Root {open} onOpenChange={handleOpenChange}>
 	<Sheet.Content
 		side="right"
 		showClose={false}

@@ -1,41 +1,33 @@
 ---
-import Base from './Base.astro';
-import Nav from '../components/Nav.astro';
-import Footer from '../components/Footer.astro';
-import Sidebar from '../components/docs/Sidebar.astro';
-import GraphViewer from '../components/GraphViewer';
-import '../styles/docs.css';
-import '../styles/graph.css';
+import Base from "./Base.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+import Sidebar from "../components/docs/Sidebar.astro";
+import GraphViewer from "../components/GraphViewer";
+import "../styles/docs.css";
+import "../styles/graph.css";
 
 interface Props {
-  title: string;
-  description?: string;
-  currentSlug?: string;
-  currentSection?: string;
-  toc?: {
-    depth: number;
-    slug: string;
-    text: string;
-  }[];
-  previousDoc?: {
-    title: string;
-    url: string;
-  };
-  nextDoc?: {
-    title: string;
-    url: string;
-  };
+	title: string;
+	description?: string;
+	currentSlug?: string;
+	currentSection?: string;
+	toc?: {
+		depth: number;
+		slug: string;
+		text: string;
+	}[];
+	previousDoc?: {
+		title: string;
+		url: string;
+	};
+	nextDoc?: {
+		title: string;
+		url: string;
+	};
 }
 
-const {
-  title,
-  description,
-  currentSlug,
-  currentSection,
-  toc,
-  previousDoc,
-  nextDoc,
-} = Astro.props;
+const { title, description, currentSlug, currentSection, toc, previousDoc, nextDoc } = Astro.props;
 
 const tocHeadings = toc?.filter((h) => h.depth === 2 || h.depth === 3) ?? [];
 const hasToc = tocHeadings.length > 2;

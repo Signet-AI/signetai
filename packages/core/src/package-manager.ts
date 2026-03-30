@@ -29,12 +29,7 @@ interface ResolvePackageManagerOptions {
 	execPath?: string;
 }
 
-const DEFAULT_FALLBACK_ORDER: PackageManagerFamily[] = [
-	"npm",
-	"pnpm",
-	"bun",
-	"yarn",
-];
+const DEFAULT_FALLBACK_ORDER: PackageManagerFamily[] = ["npm", "pnpm", "bun", "yarn"];
 
 function normalizePackageManager(value: unknown): PackageManagerFamily | null {
 	if (typeof value !== "string") return null;
@@ -56,9 +51,7 @@ function normalizePackageManager(value: unknown): PackageManagerFamily | null {
 	return null;
 }
 
-export function parsePackageManagerUserAgent(
-	userAgent: string | undefined,
-): PackageManagerFamily | null {
+export function parsePackageManagerUserAgent(userAgent: string | undefined): PackageManagerFamily | null {
 	if (!userAgent) return null;
 	const firstToken = userAgent.trim().split(/\s+/)[0] || "";
 	const familyToken = firstToken.split("/")[0] || firstToken;
@@ -110,16 +103,10 @@ function detectFromExecPath(execPath: string | undefined): PackageManagerFamily 
 	return null;
 }
 
-function readConfiguredPackageManager(
-	agentsDir: string | undefined,
-): PackageManagerFamily | null {
+function readConfiguredPackageManager(agentsDir: string | undefined): PackageManagerFamily | null {
 	if (!agentsDir) return null;
 
-	const configPaths = [
-		join(agentsDir, "agent.yaml"),
-		join(agentsDir, "AGENT.yaml"),
-		join(agentsDir, "config.yaml"),
-	];
+	const configPaths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml"), join(agentsDir, "config.yaml")];
 
 	for (const path of configPaths) {
 		if (!existsSync(path)) continue;
@@ -147,18 +134,13 @@ function readConfiguredPackageManager(
 	return null;
 }
 
-export function resolvePrimaryPackageManager(
-	options: ResolvePackageManagerOptions = {},
-): PackageManagerResolution {
+export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptions = {}): PackageManagerResolution {
 	const available = detectAvailablePackageManagers(options.commandExists);
 	const fallbackOrder = options.fallbackOrder ?? DEFAULT_FALLBACK_ORDER;
 	const configuredFamily = readConfiguredPackageManager(options.agentsDir);
-	const userAgentFamily = parsePackageManagerUserAgent(
-		options.userAgent ?? options.env?.npm_config_user_agent,
-	);
+	const userAgentFamily = parsePackageManagerUserAgent(options.userAgent ?? options.env?.npm_config_user_agent);
 	// Try the provided exec path, then process.argv[0], then `which signet`
-	let execPathForDetection =
-		options.execPath ?? (typeof process !== "undefined" ? process.argv[0] : undefined);
+	let execPathForDetection = options.execPath ?? (typeof process !== "undefined" ? process.argv[0] : undefined);
 	if (!detectFromExecPath(execPathForDetection)) {
 		try {
 			const locator = process.platform === "win32" ? "where" : "which";
@@ -172,8 +154,7 @@ export function resolvePrimaryPackageManager(
 	}
 	const execPathFamily = detectFromExecPath(execPathForDetection);
 
-	const fallbackFamily =
-		pickFirstAvailable(available, fallbackOrder) ?? fallbackOrder[0] ?? "npm";
+	const fallbackFamily = pickFirstAvailable(available, fallbackOrder) ?? fallbackOrder[0] ?? "npm";
 
 	if (configuredFamily && available[configuredFamily]) {
 		return {
@@ -241,10 +222,7 @@ export function resolvePrimaryPackageManager(
 	};
 }
 
-export function getSkillsRunnerCommand(
-	family: PackageManagerFamily,
-	skillsArgs: string[],
-): PackageManagerCommand {
+export function getSkillsRunnerCommand(family: PackageManagerFamily, skillsArgs: string[]): PackageManagerCommand {
 	switch (family) {
 		case "bun":
 			return { command: "bunx", args: ["skills", ...skillsArgs] };
@@ -264,10 +242,7 @@ export function getSkillsRunnerCommand(
  * Resolve the filesystem path where a globally-installed package lives.
  * Returns undefined if the path cannot be determined or does not exist.
  */
-export function resolveGlobalPackagePath(
-	family: PackageManagerFamily,
-	packageName: string,
-): string | undefined {
+export function resolveGlobalPackagePath(family: PackageManagerFamily, packageName: string): string | undefined {
 	try {
 		switch (family) {
 			case "bun": {
@@ -313,9 +288,7 @@ export function resolveGlobalPackagePath(
 					timeout: 5_000,
 					windowsHide: true,
 				});
-				const isClassic =
-					versionResult.status === 0 &&
-					/^1\./.test(versionResult.stdout.trim());
+				const isClassic = versionResult.status === 0 && /^1\./.test(versionResult.stdout.trim());
 
 				if (isClassic) {
 					const result = spawnSync("yarn", ["global", "dir"], {
@@ -324,11 +297,7 @@ export function resolveGlobalPackagePath(
 						windowsHide: true,
 					});
 					if (result.status === 0 && result.stdout.trim()) {
-						const candidate = join(
-							result.stdout.trim(),
-							"node_modules",
-							packageName,
-						);
+						const candidate = join(result.stdout.trim(), "node_modules", packageName);
 						if (existsSync(candidate)) return candidate;
 					}
 				} else {
@@ -340,8 +309,7 @@ export function resolveGlobalPackagePath(
 					// best-effort fallback; callers should warn when this returns
 					// undefined, since Berry users may need an alternative install path.
 					const berryGlobal = join(
-						process.env.YARN_GLOBAL_FOLDER ??
-							join(homedir(), ".yarn", "berry", "global"),
+						process.env.YARN_GLOBAL_FOLDER ?? join(homedir(), ".yarn", "berry", "global"),
 						"node_modules",
 						packageName,
 					);
@@ -355,10 +323,7 @@ export function resolveGlobalPackagePath(
 	}
 }
 
-export function getGlobalInstallCommand(
-	family: PackageManagerFamily,
-	packageName: string,
-): PackageManagerCommand {
+export function getGlobalInstallCommand(family: PackageManagerFamily, packageName: string): PackageManagerCommand {
 	switch (family) {
 		case "bun":
 			return { command: "bun", args: ["add", "-g", packageName] };

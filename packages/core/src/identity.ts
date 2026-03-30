@@ -510,10 +510,7 @@ export function resolveSessionStartTimeoutMs(raw?: string): number {
  *
  * Returns null if no identity files exist.
  */
-export function readStaticIdentity(
-	agentsDir: string,
-	status = STATIC_IDENTITY_OFFLINE_STATUS,
-): string | null {
+export function readStaticIdentity(agentsDir: string, status = STATIC_IDENTITY_OFFLINE_STATUS): string | null {
 	if (!existsSync(agentsDir)) return null;
 
 	const parts: string[] = [];

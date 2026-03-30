@@ -23,15 +23,16 @@ export function deadLetterExtractionJob(
 ): void {
 	const now = new Date().toISOString();
 	accessor.withWriteTx((db) => {
-		const memory = db
-			.prepare("SELECT extraction_status FROM memories WHERE id = ? LIMIT 1")
-			.get(memoryId) as { extraction_status: string | null } | undefined;
+		const memory = db.prepare("SELECT extraction_status FROM memories WHERE id = ? LIMIT 1").get(memoryId) as
+			| { extraction_status: string | null }
+			| undefined;
 		if (!memory) return;
 		if (
 			memory.extraction_status === "complete" ||
 			memory.extraction_status === "completed" ||
 			memory.extraction_status === "done"
-		) return;
+		)
+			return;
 
 		const liveJobs = db
 			.prepare(
@@ -71,10 +72,7 @@ export function deadLetterExtractionJob(
 	});
 }
 
-export function deadLetterPendingExtractionJobs(
-	accessor: DbAccessor,
-	options: ExtractionUnavailableOptions,
-): number {
+export function deadLetterPendingExtractionJobs(accessor: DbAccessor, options: ExtractionUnavailableOptions): number {
 	const now = new Date().toISOString();
 	return accessor.withWriteTx((db) => {
 		const memoryIds = db
@@ -86,12 +84,14 @@ export function deadLetterPendingExtractionJobs(
 			)
 			.all() as Array<{ memory_id: string }>;
 
-		const result = db.prepare(
-			`UPDATE memory_jobs
+		const result = db
+			.prepare(
+				`UPDATE memory_jobs
 			 SET status = 'dead', error = ?, failed_at = ?, updated_at = ?
 			 WHERE job_type = 'extract'
 			   AND status = 'pending'`,
-		).run(options.reason, now, now);
+			)
+			.run(options.reason, now, now);
 
 		for (const { memory_id: memoryId } of memoryIds) {
 			// Only mark the memory as failed if it has no remaining leased

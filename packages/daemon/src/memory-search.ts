@@ -950,9 +950,7 @@ export async function hybridRecall(
 	// real memory, which would leave the caller with nothing to verify against.
 	if (summarizeLeft > 0 && results.length > 0 && limit >= 2) {
 		try {
-			const summCandidates = results
-				.slice(0, 12)
-				.map((r) => ({ id: r.id, content: r.content, score: r.score }));
+			const summCandidates = results.slice(0, 12).map((r) => ({ id: r.id, content: r.content, score: r.score }));
 			const s = await summarizeRecallWithLlm(getLlmProvider(), query, summCandidates, summarizeLeft);
 			if (s) recallSummary = s;
 		} catch (e) {

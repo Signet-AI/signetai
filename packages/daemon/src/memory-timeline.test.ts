@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../core/src/migrations";
 import type { ReadDb } from "./db-accessor";
 import { buildMemoryTimeline } from "./memory-timeline";
 

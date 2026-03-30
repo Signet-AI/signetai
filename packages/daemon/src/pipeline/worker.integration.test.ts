@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { runMigrations } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
 import type { LlmProvider, PipelineV2Config } from "@signet/core";
 import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
 import type { DecisionConfig } from "./decision";
@@ -343,9 +343,7 @@ function getEntities(db: Database, name: string) {
 			`SELECT id, name, entity_type, mentions
 			 FROM entities WHERE canonical_name = ?`,
 		)
-		.get(canonical) as
-		| { id: string; name: string; entity_type: string; mentions: number }
-		| undefined;
+		.get(canonical) as { id: string; name: string; entity_type: string; mentions: number } | undefined;
 }
 
 function getRelations(db: Database, sourceEntityId: string) {
@@ -364,11 +362,9 @@ function getRelations(db: Database, sourceEntityId: string) {
 }
 
 function getMentions(db: Database, memoryId: string) {
-	return db
-		.prepare(
-			`SELECT entity_id FROM memory_entity_mentions WHERE memory_id = ?`,
-		)
-		.all(memoryId) as Array<{ entity_id: string }>;
+	return db.prepare(`SELECT entity_id FROM memory_entity_mentions WHERE memory_id = ?`).all(memoryId) as Array<{
+		entity_id: string;
+	}>;
 }
 
 function getHistory(db: Database, memoryId: string) {
@@ -387,11 +383,9 @@ function getHistory(db: Database, memoryId: string) {
 }
 
 function getHints(db: Database, memoryId: string) {
-	return db
-		.prepare(
-			`SELECT hint FROM memory_hints WHERE memory_id = ? ORDER BY hint`,
-		)
-		.all(memoryId) as Array<{ hint: string }>;
+	return db.prepare(`SELECT hint FROM memory_hints WHERE memory_id = ? ORDER BY hint`).all(memoryId) as Array<{
+		hint: string;
+	}>;
 }
 
 function getHintsFts(db: Database, query: string) {
@@ -457,7 +451,8 @@ describe("pipeline integration", () => {
 
 	it("full pipeline: extract → decide → write → graph → structural → hints → search", async () => {
 		const sourceId = crypto.randomUUID();
-		const content = "Nicholai moved from Portland to Seattle in 2019. He prefers walkable neighborhoods with good coffee.";
+		const content =
+			"Nicholai moved from Portland to Seattle in 2019. He prefers walkable neighborhoods with good coffee.";
 		insertMemory(db, sourceId, content);
 
 		// The provider serves responses in order:
@@ -465,11 +460,7 @@ describe("pipeline integration", () => {
 		// 2. Decision for fact 1
 		// 3. Decision for fact 2
 		// (hints are served by a separate provider via startHintsWorker)
-		const provider = scriptedProvider([
-			EXTRACTION_RESPONSE,
-			DECISION_ADD_RESPONSE,
-			DECISION_ADD_RESPONSE,
-		]);
+		const provider = scriptedProvider([EXTRACTION_RESPONSE, DECISION_ADD_RESPONSE, DECISION_ADD_RESPONSE]);
 
 		const cfg = testPipelineCfg();
 
@@ -502,9 +493,9 @@ describe("pipeline integration", () => {
 		expect(result.writeStats.added).toBe(2);
 
 		// Source memory marked as extracted
-		const sourceRow = db
-			.prepare("SELECT extraction_status FROM memories WHERE id = ?")
-			.get(sourceId) as { extraction_status: string };
+		const sourceRow = db.prepare("SELECT extraction_status FROM memories WHERE id = ?").get(sourceId) as {
+			extraction_status: string;
+		};
 		expect(sourceRow.extraction_status).toBe("completed");
 
 		// ----- Stage 2: Phase C writes — new fact memories created -----
@@ -621,12 +612,18 @@ describe("pipeline integration", () => {
 
 		const extractionResp = JSON.stringify({
 			facts: [{ content: "Alice works at Acme Corp as a senior engineer", type: "fact", confidence: 0.9 }],
-			entities: [{ source: "Alice", source_type: "person", relationship: "works_at", target: "Acme Corp", target_type: "project", confidence: 0.9 }],
+			entities: [
+				{
+					source: "Alice",
+					source_type: "person",
+					relationship: "works_at",
+					target: "Acme Corp",
+					target_type: "project",
+					confidence: 0.9,
+				},
+			],
 		});
-		const provider = scriptedProvider([
-			extractionResp,
-			DECISION_ADD_RESPONSE,
-		]);
+		const provider = scriptedProvider([extractionResp, DECISION_ADD_RESPONSE]);
 
 		const cfg = { ...testPipelineCfg(), shadowMode: true };
 
@@ -713,8 +710,23 @@ describe("pipeline integration", () => {
 
 		const provider = scriptedProvider([
 			JSON.stringify({
-				facts: [{ content: "Bob likes pizza as his favorite food and eats it every Friday", type: "preference", confidence: 0.9 }],
-				entities: [{ source: "Bob", source_type: "person", relationship: "likes", target: "pizza", target_type: "concept", confidence: 0.9 }],
+				facts: [
+					{
+						content: "Bob likes pizza as his favorite food and eats it every Friday",
+						type: "preference",
+						confidence: 0.9,
+					},
+				],
+				entities: [
+					{
+						source: "Bob",
+						source_type: "person",
+						relationship: "likes",
+						target: "pizza",
+						target_type: "concept",
+						confidence: 0.9,
+					},
+				],
 			}),
 			DECISION_ADD_RESPONSE,
 		]);

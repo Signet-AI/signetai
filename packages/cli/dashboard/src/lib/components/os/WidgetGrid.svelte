@@ -1,259 +1,257 @@
 <script lang="ts">
-	import { onMount, onDestroy } from "svelte";
-	import type { AppTrayEntry, GridPosition } from "$lib/stores/os.svelte";
-	import { os, updateGridPosition, moveToTray, collapseWidget, findFreeGridPosition } from "$lib/stores/os.svelte";
-	import WidgetCard from "./WidgetCard.svelte";
+import type { AppTrayEntry, GridPosition } from "$lib/stores/os.svelte";
+import { os, collapseWidget, findFreeGridPosition, moveToTray, updateGridPosition } from "$lib/stores/os.svelte";
+import { onDestroy, onMount } from "svelte";
+import WidgetCard from "./WidgetCard.svelte";
 
-	interface Props {
-		apps: AppTrayEntry[];
-		ongriddrop: (appId: string, x: number, y: number) => void;
-		resolveDefaultSize?: (appId: string) => { w: number; h: number };
+interface Props {
+	apps: AppTrayEntry[];
+	ongriddrop: (appId: string, x: number, y: number) => void;
+	resolveDefaultSize?: (appId: string) => { w: number; h: number };
+}
+
+let { apps, ongriddrop, resolveDefaultSize }: Props = $props();
+
+const GRID_COLS = 12;
+const ROW_HEIGHT = 80;
+const GAP = 8;
+
+let dragId = $state<string | null>(null);
+let dragStartX = $state(0);
+let dragStartY = $state(0);
+let dragOffsetX = $state(0);
+let dragOffsetY = $state(0);
+let gridEl = $state<HTMLDivElement | null>(null);
+
+// Resize state
+let resizeId = $state<string | null>(null);
+let resizeStartX = $state(0);
+let resizeStartY = $state(0);
+let resizeDeltaW = $state(0);
+let resizeDeltaH = $state(0);
+
+let activeMoveListener: ((e: PointerEvent) => void) | null = null;
+let activeUpListener: (() => void) | null = null;
+
+function cleanupDragListeners(): void {
+	if (activeMoveListener) {
+		window.removeEventListener("pointermove", activeMoveListener);
+		activeMoveListener = null;
 	}
+	if (activeUpListener) {
+		window.removeEventListener("pointerup", activeUpListener);
+		activeUpListener = null;
+	}
+}
 
-	const { apps, ongriddrop, resolveDefaultSize }: Props = $props();
+onDestroy(() => {
+	cleanupDragListeners();
+	window.removeEventListener("keydown", handleKeydown);
+});
 
-	const GRID_COLS = 12;
-	const ROW_HEIGHT = 80;
-	const GAP = 8;
+function handleKeydown(e: KeyboardEvent): void {
+	if (e.key === "Escape" && os.focusedId) collapseWidget();
+}
 
-	let dragId = $state<string | null>(null);
-	let dragStartX = $state(0);
-	let dragStartY = $state(0);
-	let dragOffsetX = $state(0);
-	let dragOffsetY = $state(0);
-	let gridEl = $state<HTMLDivElement | null>(null);
+onMount(() => {
+	window.addEventListener("keydown", handleKeydown);
+});
 
-	// Resize state
-	let resizeId = $state<string | null>(null);
-	let resizeStartX = $state(0);
-	let resizeStartY = $state(0);
-	let resizeDeltaW = $state(0);
-	let resizeDeltaH = $state(0);
+const focusedApp = $derived(os.focusedId ? (apps.find((a) => a.id === os.focusedId) ?? null) : null);
 
-	let activeMoveListener: ((e: PointerEvent) => void) | null = null;
-	let activeUpListener: (() => void) | null = null;
-
-	function cleanupDragListeners(): void {
-		if (activeMoveListener) {
-			window.removeEventListener("pointermove", activeMoveListener);
-			activeMoveListener = null;
-		}
-		if (activeUpListener) {
-			window.removeEventListener("pointerup", activeUpListener);
-			activeUpListener = null;
+const maxRow = $derived.by(() => {
+	let max = 4;
+	for (const app of apps) {
+		if (app.gridPosition) {
+			const bottom = app.gridPosition.y + app.gridPosition.h;
+			if (bottom > max) max = bottom;
 		}
 	}
+	return max + 2;
+});
 
-	onDestroy(() => {
+// Convert grid units to percentage-based absolute positioning
+function getStyle(pos: GridPosition | undefined): string {
+	if (!pos) return "display: none;";
+	const left = (pos.x / GRID_COLS) * 100;
+	const width = (pos.w / GRID_COLS) * 100;
+	const top = pos.y * ROW_HEIGHT;
+	const height = pos.h * ROW_HEIGHT - GAP;
+	return `left: ${left}%; width: ${width}%; top: ${top}px; height: ${height}px;`;
+}
+
+function handleDragStart(id: string, e: PointerEvent): void {
+	cleanupDragListeners();
+	dragId = id;
+	dragStartX = e.clientX;
+	dragStartY = e.clientY;
+	dragOffsetX = 0;
+	dragOffsetY = 0;
+
+	const onMove = (me: PointerEvent) => {
+		dragOffsetX = me.clientX - dragStartX;
+		dragOffsetY = me.clientY - dragStartY;
+	};
+
+	const onUp = () => {
 		cleanupDragListeners();
-		window.removeEventListener("keydown", handleKeydown);
-	});
+		commitDrag();
+	};
 
-	function handleKeydown(e: KeyboardEvent): void {
-		if (e.key === "Escape" && os.focusedId) collapseWidget();
-	}
+	activeMoveListener = onMove;
+	activeUpListener = onUp;
+	window.addEventListener("pointermove", onMove);
+	window.addEventListener("pointerup", onUp);
+}
 
-	onMount(() => {
-		window.addEventListener("keydown", handleKeydown);
-	});
+function findFreePosition(desired: GridPosition, excludeId: string): GridPosition {
+	const occupied = apps.flatMap((a) => (a.id !== excludeId && a.gridPosition ? [a.gridPosition] : []));
+	return findFreeGridPosition(occupied, { w: desired.w, h: desired.h }, { x: desired.x, y: desired.y });
+}
 
-	const focusedApp = $derived(os.focusedId ? apps.find((a) => a.id === os.focusedId) ?? null : null);
-
-	const maxRow = $derived.by(() => {
-		let max = 4;
-		for (const app of apps) {
-			if (app.gridPosition) {
-				const bottom = app.gridPosition.y + app.gridPosition.h;
-				if (bottom > max) max = bottom;
-			}
-		}
-		return max + 2;
-	});
-
-	// Convert grid units to percentage-based absolute positioning
-	function getStyle(pos: GridPosition | undefined): string {
-		if (!pos) return "display: none;";
-		const left = (pos.x / GRID_COLS) * 100;
-		const width = (pos.w / GRID_COLS) * 100;
-		const top = pos.y * ROW_HEIGHT;
-		const height = pos.h * ROW_HEIGHT - GAP;
-		return `left: ${left}%; width: ${width}%; top: ${top}px; height: ${height}px;`;
-	}
-
-	function handleDragStart(id: string, e: PointerEvent): void {
-		cleanupDragListeners();
-		dragId = id;
-		dragStartX = e.clientX;
-		dragStartY = e.clientY;
-		dragOffsetX = 0;
-		dragOffsetY = 0;
-
-		const onMove = (me: PointerEvent) => {
-			dragOffsetX = me.clientX - dragStartX;
-			dragOffsetY = me.clientY - dragStartY;
-		};
-
-		const onUp = () => {
-			cleanupDragListeners();
-			commitDrag();
-		};
-
-		activeMoveListener = onMove;
-		activeUpListener = onUp;
-		window.addEventListener("pointermove", onMove);
-		window.addEventListener("pointerup", onUp);
-	}
-
-	function findFreePosition(desired: GridPosition, excludeId: string): GridPosition {
-		const occupied = apps.flatMap((a) =>
-			a.id !== excludeId && a.gridPosition ? [a.gridPosition] : [],
-		);
-		return findFreeGridPosition(occupied, { w: desired.w, h: desired.h }, { x: desired.x, y: desired.y });
-	}
-
-	function commitDrag(): void {
-		if (!dragId || !gridEl) {
-			dragId = null;
-			return;
-		}
-
-		const app = apps.find((a) => a.id === dragId);
-		if (!app?.gridPosition) {
-			dragId = null;
-			return;
-		}
-
-		const gridWidth = gridEl.clientWidth;
-		if (gridWidth === 0) {
-			dragId = null;
-			return;
-		}
-		const cellWidth = gridWidth / GRID_COLS;
-		const dx = dragOffsetX / cellWidth;
-		const dy = dragOffsetY / ROW_HEIGHT;
-
-		if (Math.abs(dx) < 0.15 && Math.abs(dy) < 0.15) {
-			dragId = null;
-			return;
-		}
-
-		// Free placement with collision avoidance — land where dropped unless overlapping
-		const desired: GridPosition = {
-			x: Math.max(0, Math.min(GRID_COLS - app.gridPosition.w, app.gridPosition.x + dx)),
-			y: Math.max(0, app.gridPosition.y + dy),
-			w: app.gridPosition.w,
-			h: app.gridPosition.h,
-		};
-		const resolved = findFreePosition(desired, app.id);
-		updateGridPosition(app.id, resolved);
+function commitDrag(): void {
+	if (!dragId || !gridEl) {
 		dragId = null;
-		dragOffsetX = 0;
-		dragOffsetY = 0;
+		return;
 	}
 
-	function handleResizeStart(id: string, e: PointerEvent): void {
-		e.preventDefault();
-		e.stopPropagation();
+	const app = apps.find((a) => a.id === dragId);
+	if (!app?.gridPosition) {
+		dragId = null;
+		return;
+	}
+
+	const gridWidth = gridEl.clientWidth;
+	if (gridWidth === 0) {
+		dragId = null;
+		return;
+	}
+	const cellWidth = gridWidth / GRID_COLS;
+	const dx = dragOffsetX / cellWidth;
+	const dy = dragOffsetY / ROW_HEIGHT;
+
+	if (Math.abs(dx) < 0.15 && Math.abs(dy) < 0.15) {
+		dragId = null;
+		return;
+	}
+
+	// Free placement with collision avoidance — land where dropped unless overlapping
+	const desired: GridPosition = {
+		x: Math.max(0, Math.min(GRID_COLS - app.gridPosition.w, app.gridPosition.x + dx)),
+		y: Math.max(0, app.gridPosition.y + dy),
+		w: app.gridPosition.w,
+		h: app.gridPosition.h,
+	};
+	const resolved = findFreePosition(desired, app.id);
+	updateGridPosition(app.id, resolved);
+	dragId = null;
+	dragOffsetX = 0;
+	dragOffsetY = 0;
+}
+
+function handleResizeStart(id: string, e: PointerEvent): void {
+	e.preventDefault();
+	e.stopPropagation();
+	cleanupDragListeners();
+	resizeId = id;
+	resizeStartX = e.clientX;
+	resizeStartY = e.clientY;
+	resizeDeltaW = 0;
+	resizeDeltaH = 0;
+
+	const onMove = (me: PointerEvent) => {
+		resizeDeltaW = me.clientX - resizeStartX;
+		resizeDeltaH = me.clientY - resizeStartY;
+	};
+
+	const onUp = () => {
 		cleanupDragListeners();
-		resizeId = id;
-		resizeStartX = e.clientX;
-		resizeStartY = e.clientY;
-		resizeDeltaW = 0;
-		resizeDeltaH = 0;
+		commitResize();
+	};
 
-		const onMove = (me: PointerEvent) => {
-			resizeDeltaW = me.clientX - resizeStartX;
-			resizeDeltaH = me.clientY - resizeStartY;
-		};
+	activeMoveListener = onMove;
+	activeUpListener = onUp;
+	window.addEventListener("pointermove", onMove);
+	window.addEventListener("pointerup", onUp);
+}
 
-		const onUp = () => {
-			cleanupDragListeners();
-			commitResize();
-		};
-
-		activeMoveListener = onMove;
-		activeUpListener = onUp;
-		window.addEventListener("pointermove", onMove);
-		window.addEventListener("pointerup", onUp);
-	}
-
-	function commitResize(): void {
-		if (!resizeId || !gridEl) {
-			resizeId = null;
-			return;
-		}
-
-		const app = apps.find((a) => a.id === resizeId);
-		if (!app?.gridPosition) {
-			resizeId = null;
-			return;
-		}
-
-		const gridWidth = gridEl.clientWidth;
-		if (gridWidth === 0) {
-			resizeId = null;
-			return;
-		}
-
-		const cellWidth = gridWidth / GRID_COLS;
-		const dw = Math.round(resizeDeltaW / cellWidth);
-		const dh = Math.round(resizeDeltaH / ROW_HEIGHT);
-
-		const newW = Math.max(2, Math.min(GRID_COLS - app.gridPosition.x, app.gridPosition.w + dw));
-		const newH = Math.max(1, app.gridPosition.h + dh);
-
-		if (newW !== app.gridPosition.w || newH !== app.gridPosition.h) {
-			updateGridPosition(app.id, {
-				...app.gridPosition,
-				w: newW,
-				h: newH,
-			});
-		}
-
+function commitResize(): void {
+	if (!resizeId || !gridEl) {
 		resizeId = null;
-		resizeDeltaW = 0;
-		resizeDeltaH = 0;
+		return;
 	}
 
-	function getResizeStyle(pos: GridPosition | undefined, id: string): string {
-		if (!pos || resizeId !== id) return "";
-		const extraW = resizeDeltaW;
-		const extraH = resizeDeltaH;
-		if (extraW === 0 && extraH === 0) return "";
-		const left = (pos.x / GRID_COLS) * 100;
-		const width = (pos.w / GRID_COLS) * 100;
-		const top = pos.y * ROW_HEIGHT;
-		const height = pos.h * ROW_HEIGHT - GAP;
-		// Override width/height with pixel values during resize
-		return `left: ${left}%; width: calc(${width}% + ${extraW}px); top: ${top}px; height: ${height + extraH}px;`;
+	const app = apps.find((a) => a.id === resizeId);
+	if (!app?.gridPosition) {
+		resizeId = null;
+		return;
 	}
 
-	async function handleRemove(id: string): Promise<void> {
-		await moveToTray(id);
+	const gridWidth = gridEl.clientWidth;
+	if (gridWidth === 0) {
+		resizeId = null;
+		return;
 	}
 
-	function handleGridDragOver(e: DragEvent): void {
-		e.preventDefault();
-		if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+	const cellWidth = gridWidth / GRID_COLS;
+	const dw = Math.round(resizeDeltaW / cellWidth);
+	const dh = Math.round(resizeDeltaH / ROW_HEIGHT);
+
+	const newW = Math.max(2, Math.min(GRID_COLS - app.gridPosition.x, app.gridPosition.w + dw));
+	const newH = Math.max(1, app.gridPosition.h + dh);
+
+	if (newW !== app.gridPosition.w || newH !== app.gridPosition.h) {
+		updateGridPosition(app.id, {
+			...app.gridPosition,
+			w: newW,
+			h: newH,
+		});
 	}
 
-	function handleGridDrop(e: DragEvent): void {
-		e.preventDefault();
-		const appId = e.dataTransfer?.getData("text/plain");
-		if (!appId || !gridEl) return;
+	resizeId = null;
+	resizeDeltaW = 0;
+	resizeDeltaH = 0;
+}
 
-		const rect = gridEl.getBoundingClientRect();
-		if (rect.width === 0) return;
-		const cellWidth = rect.width / GRID_COLS;
-		const rawX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor((e.clientX - rect.left) / cellWidth)));
-		const rawY = Math.max(0, Math.floor((e.clientY - rect.top) / ROW_HEIGHT));
+function getResizeStyle(pos: GridPosition | undefined, id: string): string {
+	if (!pos || resizeId !== id) return "";
+	const extraW = resizeDeltaW;
+	const extraH = resizeDeltaH;
+	if (extraW === 0 && extraH === 0) return "";
+	const left = (pos.x / GRID_COLS) * 100;
+	const width = (pos.w / GRID_COLS) * 100;
+	const top = pos.y * ROW_HEIGHT;
+	const height = pos.h * ROW_HEIGHT - GAP;
+	// Override width/height with pixel values during resize
+	return `left: ${left}%; width: calc(${width}% + ${extraW}px); top: ${top}px; height: ${height + extraH}px;`;
+}
 
-		const size = resolveDefaultSize ? resolveDefaultSize(appId) : { w: 4, h: 3 };
-		const desired: GridPosition = { x: rawX, y: rawY, ...size };
-		const resolved = findFreePosition(desired, appId);
+async function handleRemove(id: string): Promise<void> {
+	await moveToTray(id);
+}
 
-		ongriddrop(appId, resolved.x, resolved.y);
-	}
+function handleGridDragOver(e: DragEvent): void {
+	e.preventDefault();
+	if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+}
+
+function handleGridDrop(e: DragEvent): void {
+	e.preventDefault();
+	const appId = e.dataTransfer?.getData("text/plain");
+	if (!appId || !gridEl) return;
+
+	const rect = gridEl.getBoundingClientRect();
+	if (rect.width === 0) return;
+	const cellWidth = rect.width / GRID_COLS;
+	const rawX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor((e.clientX - rect.left) / cellWidth)));
+	const rawY = Math.max(0, Math.floor((e.clientY - rect.top) / ROW_HEIGHT));
+
+	const size = resolveDefaultSize ? resolveDefaultSize(appId) : { w: 4, h: 3 };
+	const desired: GridPosition = { x: rawX, y: rawY, ...size };
+	const resolved = findFreePosition(desired, appId);
+
+	ongriddrop(appId, resolved.x, resolved.y);
+}
 </script>
 
 <div

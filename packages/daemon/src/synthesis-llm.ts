@@ -21,9 +21,7 @@ export function initSynthesisProvider(instance: LlmProvider): void {
 
 export function getSynthesisProvider(): LlmProvider {
 	if (!provider) {
-		throw new Error(
-			"Synthesis LlmProvider not initialised — call initSynthesisProvider() first",
-		);
+		throw new Error("Synthesis LlmProvider not initialised — call initSynthesisProvider() first");
 	}
 	return provider;
 }

@@ -52,11 +52,7 @@ function normalizePath(raw: string | undefined): string | undefined {
 }
 
 /** Initialize accumulation state for a new session. */
-export function initContinuity(
-	sessionKey: string,
-	harness: string,
-	project: string | undefined,
-): void {
+export function initContinuity(sessionKey: string, harness: string, project: string | undefined): void {
 	if (!sessionKey) return;
 	const now = Date.now();
 	state.set(sessionKey, {
@@ -74,10 +70,7 @@ export function initContinuity(
 	});
 }
 
-export function setStructuralSnapshot(
-	sessionKey: string | undefined,
-	snapshot: StructuralSnapshot,
-): void {
+export function setStructuralSnapshot(sessionKey: string | undefined, snapshot: StructuralSnapshot): void {
 	if (!sessionKey) return;
 	const s = state.get(sessionKey);
 	if (!s) return;
@@ -113,10 +106,7 @@ export function recordPrompt(
 }
 
 /** Record a /remember call content. */
-export function recordRemember(
-	sessionKey: string | undefined,
-	content: string,
-): void {
+export function recordRemember(sessionKey: string | undefined, content: string): void {
 	if (!sessionKey) return;
 	const s = state.get(sessionKey);
 	if (!s) return;
@@ -127,10 +117,7 @@ export function recordRemember(
 }
 
 /** Check whether a checkpoint should be written based on config thresholds. */
-export function shouldCheckpoint(
-	sessionKey: string | undefined,
-	config: PipelineContinuityConfig,
-): boolean {
+export function shouldCheckpoint(sessionKey: string | undefined, config: PipelineContinuityConfig): boolean {
 	if (!sessionKey || !config.enabled) return false;
 	const s = state.get(sessionKey);
 	if (!s) return false;
@@ -149,9 +136,7 @@ export function shouldCheckpoint(
  * Return accumulated state and reset pending arrays.
  * The promptCount resets to 0 for the next interval.
  */
-export function consumeState(
-	sessionKey: string | undefined,
-): ContinuityState | undefined {
+export function consumeState(sessionKey: string | undefined): ContinuityState | undefined {
 	if (!sessionKey) return undefined;
 	const s = state.get(sessionKey);
 	if (!s) return undefined;
@@ -181,9 +166,7 @@ export function clearContinuity(sessionKey: string | undefined): void {
 }
 
 /** Read-only access for diagnostics. */
-export function getState(
-	sessionKey: string | undefined,
-): Readonly<ContinuityState> | undefined {
+export function getState(sessionKey: string | undefined): Readonly<ContinuityState> | undefined {
 	if (!sessionKey) return undefined;
 	return state.get(sessionKey);
 }

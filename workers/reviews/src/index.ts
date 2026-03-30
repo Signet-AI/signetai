@@ -108,8 +108,15 @@ function validateReview(raw: unknown): IncomingReview | null {
 	const updatedAt = parseTimestamp(r["updatedAt"]);
 
 	if (
-		!id || !targetType || !targetId || !displayName ||
-		rating === null || !title || !body || !createdAt || !updatedAt
+		!id ||
+		!targetType ||
+		!targetId ||
+		!displayName ||
+		rating === null ||
+		!title ||
+		!body ||
+		!createdAt ||
+		!updatedAt
 	) {
 		return null;
 	}
@@ -191,9 +198,16 @@ async function upsertReviews(
 				 WHERE excluded.updated_at >= reviews.updated_at`,
 			)
 			.bind(
-				r.id, r.targetType, r.targetId, r.displayName,
-				r.rating, r.title, r.body,
-				r.createdAt, r.updatedAt, receivedAt,
+				r.id,
+				r.targetType,
+				r.targetId,
+				r.displayName,
+				r.rating,
+				r.title,
+				r.body,
+				r.createdAt,
+				r.updatedAt,
+				receivedAt,
 			),
 	);
 
@@ -222,11 +236,7 @@ function parseIntParam(v: string | null, min: number, max: number, def: number):
 // Route handlers
 // ---------------------------------------------------------------------------
 
-async function handleGetReviews(
-	request: Request,
-	env: Env,
-	cors: Record<string, string>,
-): Promise<Response> {
+async function handleGetReviews(request: Request, env: Env, cors: Record<string, string>): Promise<Response> {
 	const url = new URL(request.url);
 	const type = url.searchParams.get("type");
 	const id = url.searchParams.get("id");
@@ -275,9 +285,7 @@ async function handleGetReviews(
 			offset,
 			summary: {
 				count: summary.total,
-				avgRating: summary.avg_rating != null
-					? Math.round(summary.avg_rating * 10) / 10
-					: 0,
+				avgRating: summary.avg_rating != null ? Math.round(summary.avg_rating * 10) / 10 : 0,
 			},
 		},
 		200,
@@ -318,7 +326,8 @@ async function handleSync(
 	}
 
 	if (
-		typeof payload !== "object" || payload === null ||
+		typeof payload !== "object" ||
+		payload === null ||
 		(payload as Record<string, unknown>)["source"] !== "signet-marketplace" ||
 		(payload as Record<string, unknown>)["type"] !== "reviews-sync"
 	) {

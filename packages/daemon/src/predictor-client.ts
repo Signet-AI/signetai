@@ -252,9 +252,7 @@ function syncedBinaryCandidate(): string {
 	const ext = platform === "win32" ? ".exe" : "";
 	const name = `signet-predictor-${platform}-${arch}${ext}`;
 	const envPath = process.env.SIGNET_PATH;
-	const agentsDir = typeof envPath === "string" && isAbsolute(envPath)
-		? envPath
-		: join(homedir(), ".agents");
+	const agentsDir = typeof envPath === "string" && isAbsolute(envPath) ? envPath : join(homedir(), ".agents");
 	return join(agentsDir, ".daemon", "bin", name);
 }
 

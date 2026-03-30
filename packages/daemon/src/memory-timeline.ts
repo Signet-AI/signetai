@@ -3,8 +3,7 @@ import type { ReadDb } from "./db-accessor";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const EVOLVED_EVENTS = new Set(["updated", "merged", "recovered"]);
-const STRENGTHENED_REASON_PATTERN =
-	/(reinfor|strength|consolidat|stabiliz|promot|confidence|refin)/i;
+const STRENGTHENED_REASON_PATTERN = /(reinfor|strength|consolidat|stabiliz|promot|confidence|refin)/i;
 
 interface MemoryRow {
 	readonly id: string;
@@ -122,7 +121,10 @@ function parseTimestamp(raw: string): number | null {
 	return parsed;
 }
 
-function rangeBounds(spec: RangeSpec, nowStartMs: number): {
+function rangeBounds(
+	spec: RangeSpec,
+	nowStartMs: number,
+): {
 	startMs: number;
 	endMs: number;
 } {
@@ -176,10 +178,7 @@ function incMap(target: Map<string, number>, key: string): void {
 	target.set(key, (target.get(key) ?? 0) + 1);
 }
 
-function normalizeMetricKey(
-	raw: string | null | undefined,
-	fallback: string,
-): string {
+function normalizeMetricKey(raw: string | null | undefined, fallback: string): string {
 	const trimmed = raw?.trim();
 	if (!trimmed) return fallback;
 	return trimmed;
@@ -272,10 +271,7 @@ export function buildMemoryTimeline(
 			bucket.memoriesAdded += 1;
 			if (row.pinned === 1) bucket.pinned += 1;
 
-			if (
-				typeof row.importance === "number" &&
-				Number.isFinite(row.importance)
-			) {
+			if (typeof row.importance === "number" && Number.isFinite(row.importance)) {
 				bucket.totalImportance += row.importance;
 				bucket.importanceSamples += 1;
 			}
@@ -319,10 +315,7 @@ export function buildMemoryTimeline(
 	for (const spec of RANGE_SPECS) {
 		const bucket = buckets.get(spec.eraIndex);
 		if (!bucket) continue;
-		const rawAvg =
-			bucket.importanceSamples > 0
-				? bucket.totalImportance / bucket.importanceSamples
-				: 0;
+		const rawAvg = bucket.importanceSamples > 0 ? bucket.totalImportance / bucket.importanceSamples : 0;
 		const avgImportance = Number(Math.min(1, Math.max(0, rawAvg)).toFixed(3));
 
 		responseBuckets.push({

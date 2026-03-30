@@ -128,10 +128,7 @@ const SCENARIOS: readonly Scenario[] = [
 			"the ML pipeline knows the schema of the user events table",
 			"the ML pipeline assumes the feature store provides normalized data",
 		],
-		expected: [
-			"built", "depends_on", "related_to", "learned_from",
-			"teaches", "knows", "assumes",
-		],
+		expected: ["built", "depends_on", "related_to", "learned_from", "teaches", "knows", "assumes"],
 	},
 	{
 		name: "structural",
@@ -198,7 +195,7 @@ describe("structural-dependency types", () => {
 		expect(prompt).toContain("Return exactly 2 JSON objects");
 		expect(prompt).toContain("Use dep_target = null and dep_type = null");
 		expect(prompt).toContain("Do not skip facts");
-		expect(prompt).toContain("\"auth service is owned by the platform team\"");
+		expect(prompt).toContain('"auth service is owned by the platform team"');
 	});
 });
 
@@ -219,12 +216,7 @@ describe(`${MODEL} extraction`, () => {
 		let parseable = 0;
 
 		for (const scenario of SCENARIOS) {
-			const prompt = buildDependencyPrompt(
-				scenario.entity,
-				scenario.type,
-				scenario.aspects,
-				scenario.facts,
-			);
+			const prompt = buildDependencyPrompt(scenario.entity, scenario.type, scenario.aspects, scenario.facts);
 
 			// Best of 2 attempts — small local models occasionally emit verbose
 			// reasoning instead of JSON, especially at low temperature
@@ -243,13 +235,13 @@ describe(`${MODEL} extraction`, () => {
 			const overlap = scenario.expected.filter((t) => seen.has(t));
 			console.log(
 				`  ${scenario.name}: ${overlap.length}/${scenario.expected.length} expected ` +
-				`(${best.length} deps) [${[...seen].join(", ")}]`,
+					`(${best.length} deps) [${[...seen].join(", ")}]`,
 			);
 		}
 
 		console.log(
 			`\n  Total: ${allSeen.size}/${DEPENDENCY_TYPES.length} types, ` +
-			`${totalDeps} deps, ${parseable}/${SCENARIOS.length} parseable`,
+				`${totalDeps} deps, ${parseable}/${SCENARIOS.length} parseable`,
 		);
 		console.log(`  Types: ${[...allSeen].sort().join(", ")}`);
 

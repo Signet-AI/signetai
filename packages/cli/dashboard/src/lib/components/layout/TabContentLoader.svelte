@@ -1,14 +1,7 @@
 <script lang="ts">
-import type { TabId } from "$lib/stores/navigation.svelte";
-import type {
-	ConfigFile,
-	DaemonStatus,
-	Harness,
-	Identity,
-	Memory,
-	MemoryStats,
-} from "$lib/api";
+import type { ConfigFile, DaemonStatus, Harness, Identity, Memory, MemoryStats } from "$lib/api";
 import { Skeleton } from "$lib/components/ui/skeleton/index.js";
+import type { TabId } from "$lib/stores/navigation.svelte";
 import { fade } from "svelte/transition";
 
 interface Props {
@@ -24,7 +17,7 @@ interface Props {
 	ontimelinegeneratedforchange: (value: string) => void;
 }
 
-const {
+let {
 	activeTab,
 	identity,
 	configFiles,

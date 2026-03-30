@@ -24,9 +24,7 @@ const TEST_DIR = join(tmpdir(), `signet-bench-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
 
 const { initDbAccessor, closeDbAccessor } = await import("./db-accessor");
-const { recordSessionCandidates, trackFtsHits } = await import(
-	"./session-memories"
-);
+const { recordSessionCandidates, trackFtsHits } = await import("./session-memories");
 const { handleSessionStart } = await import("./hooks");
 
 // ---------------------------------------------------------------------------
@@ -72,9 +70,7 @@ function setupDb(memoryCount: number): void {
 	initDbAccessor(dbPath);
 }
 
-function makeCandidates(
-	count: number,
-): Array<{ id: string; effScore: number; source: "effective" }> {
+function makeCandidates(count: number): Array<{ id: string; effScore: number; source: "effective" }> {
 	return Array.from({ length: count }, (_, i) => ({
 		id: `mem-bench-${String(i).padStart(4, "0")}`,
 		effScore: 0.9 - i * 0.005,
@@ -194,20 +190,13 @@ setupDb(100);
 sessionCounter = 0;
 
 const preCandidates = makeCandidates(30);
-recordSessionCandidates(
-	"bench-fts-session",
-	preCandidates,
-	new Set(preCandidates.slice(0, 15).map((c) => c.id)),
-);
+recordSessionCandidates("bench-fts-session", preCandidates, new Set(preCandidates.slice(0, 15).map((c) => c.id)));
 
 const rFts = await bench(
 	"trackFtsHits (10 mixed: 5 existing + 5 new)",
 	() => {
 		const existing = preCandidates.slice(0, 5).map((c) => c.id);
-		const newOnes = Array.from(
-			{ length: 5 },
-			(_, i) => `mem-bench-fts-new-${sessionCounter++}-${i}`,
-		);
+		const newOnes = Array.from({ length: 5 }, (_, i) => `mem-bench-fts-new-${sessionCounter++}-${i}`);
 		trackFtsHits("bench-fts-session", [...existing, ...newOnes]);
 	},
 	ITERS,
@@ -303,17 +292,13 @@ for (const t of thresholds) {
 	const pass = t.actual <= t.limit;
 	if (!pass) allPassed = false;
 	const icon = pass ? "PASS" : "FAIL";
-	console.log(
-		`  [${icon}] ${t.name}: ${t.actual.toFixed(3)}ms (limit: ${t.limit}ms)`,
-	);
+	console.log(`  [${icon}] ${t.name}: ${t.actual.toFixed(3)}ms (limit: ${t.limit}ms)`);
 }
 
 // Cleanup
 closeDbAccessor();
 if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
 
-console.log(
-	`\n  ${allPassed ? "All thresholds passed." : "THRESHOLD VIOLATIONS DETECTED."}\n`,
-);
+console.log(`\n  ${allPassed ? "All thresholds passed." : "THRESHOLD VIOLATIONS DETECTED."}\n`);
 
 if (!allPassed) process.exit(1);

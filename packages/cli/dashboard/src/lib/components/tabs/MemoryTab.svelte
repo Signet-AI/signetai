@@ -1,38 +1,35 @@
 <script lang="ts">
+import type { Memory } from "$lib/api";
+import { type ConstellationGraph, getConstellationOverlay } from "$lib/api";
 import PageBanner from "$lib/components/layout/PageBanner.svelte";
 import TabGroupBar from "$lib/components/layout/TabGroupBar.svelte";
 import { MEMORY_TAB_ITEMS } from "$lib/components/layout/page-headers";
-import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
-import type { Memory } from "$lib/api";
-import {
-	getConstellationOverlay,
-	type ConstellationGraph,
-} from "$lib/api";
-import {
-	mem,
-	hasActiveFilters,
-	queueMemorySearch,
-	doSearch,
-	findSimilar,
-	clearAll,
-	openEditForm,
-	closeEditForm,
-} from "$lib/stores/memory.svelte";
-import { setTab, nav, isMemoryGroup } from "$lib/stores/navigation.svelte";
-import { returnToSidebar } from "$lib/stores/focus.svelte";
 import MemoryForm from "$lib/components/memory/MemoryForm.svelte";
 import { Badge } from "$lib/components/ui/badge/index.js";
 import { Button } from "$lib/components/ui/button/index.js";
-import { Input } from "$lib/components/ui/input/index.js";
-import { ActionLabels } from "$lib/ui/action-labels";
-import * as Select from "$lib/components/ui/select/index.js";
-import * as Popover from "$lib/components/ui/popover/index.js";
 import { Calendar } from "$lib/components/ui/calendar/index.js";
 import * as Card from "$lib/components/ui/card/index.js";
+import { Input } from "$lib/components/ui/input/index.js";
+import * as Popover from "$lib/components/ui/popover/index.js";
+import * as Select from "$lib/components/ui/select/index.js";
 import { Separator } from "$lib/components/ui/separator/index.js";
+import { returnToSidebar } from "$lib/stores/focus.svelte";
+import {
+	clearAll,
+	closeEditForm,
+	doSearch,
+	findSimilar,
+	hasActiveFilters,
+	mem,
+	openEditForm,
+	queueMemorySearch,
+} from "$lib/stores/memory.svelte";
+import { isMemoryGroup, nav, setTab } from "$lib/stores/navigation.svelte";
+import { focusMemoryTab } from "$lib/stores/tab-group-focus.svelte";
+import { ActionLabels } from "$lib/ui/action-labels";
 
+import { CalendarDate, type DateValue, getLocalTimeZone } from "@internationalized/date";
 import CalendarIcon from "@lucide/svelte/icons/calendar";
-import { getLocalTimeZone, CalendarDate, type DateValue } from "@internationalized/date";
 
 interface Props {
 	memories: Memory[];
@@ -45,31 +42,21 @@ let { memories, embedded = false, agentId }: Props = $props();
 // Delete confirmation state - tracks which memory is pending delete confirmation
 let deleteConfirmId = $state<string | null>(null);
 
-let rawDisplay = $derived(
-	mem.similarSourceId
-		? mem.similarResults
-		: mem.searched || hasActiveFilters()
-			? mem.results
-			: memories,
+const rawDisplay = $derived(
+	mem.similarSourceId ? mem.similarResults : mem.searched || hasActiveFilters() ? mem.results : memories,
 );
 
 // Filter out locally-deleted memories so they disappear immediately
-let display = $derived(
-	mem.deletedIds.size > 0
-		? rawDisplay.filter((m) => !mem.deletedIds.has(m.id))
-		: rawDisplay,
-);
+const display = $derived(mem.deletedIds.size > 0 ? rawDisplay.filter((m) => !mem.deletedIds.has(m.id)) : rawDisplay);
 
-let totalCount = $derived(memories.length);
-let displayCount = $derived(display.length);
+const totalCount = $derived(memories.length);
+const displayCount = $derived(display.length);
 let selectedId = $state<string | null>(null);
 let graph = $state<ConstellationGraph | null>(null);
 let graphLoading = $state(false);
 let graphError = $state("");
 
-let selectedMemory = $derived(
-	selectedId ? display.find((m) => m.id === selectedId) ?? null : null,
-);
+const selectedMemory = $derived(selectedId ? (display.find((m) => m.id === selectedId) ?? null) : null);
 
 $effect(() => {
 	if (!selectedId) return;
@@ -87,38 +74,27 @@ type RelatedEntity = {
 	dependencies: string[];
 };
 
-let relatedEntities = $derived.by((): RelatedEntity[] => {
+const relatedEntities = $derived.by((): RelatedEntity[] => {
 	if (!selectedMemory || !graph) return [];
 	const data = graph;
 	const memId = selectedMemory.id;
 	const byId = new Map(data.entities.map((entity) => [entity.id, entity.name]));
 	const relevant = new Set(
 		data.entities
-			.filter((entity) =>
-				entity.aspects.some((aspect) =>
-					aspect.attributes.some((attr) => attr.memoryId === memId),
-				),
-			)
+			.filter((entity) => entity.aspects.some((aspect) => aspect.attributes.some((attr) => attr.memoryId === memId)))
 			.map((entity) => entity.id),
 	);
 
 	return data.entities
 		.map((entity) => {
-			const aspects = entity.aspects.filter((aspect) =>
-				aspect.attributes.some((attr) => attr.memoryId === memId),
-			);
+			const aspects = entity.aspects.filter((aspect) => aspect.attributes.some((attr) => attr.memoryId === memId));
 			if (aspects.length === 0) return null;
 
 			const constraints = Array.from(
 				new Set(
 					aspects.flatMap((aspect) =>
 						aspect.attributes
-							.filter(
-								(attr) =>
-									attr.memoryId === memId &&
-									attr.kind === "constraint" &&
-									attr.content.trim().length > 0,
-							)
+							.filter((attr) => attr.memoryId === memId && attr.kind === "constraint" && attr.content.trim().length > 0)
 							.map((attr) => attr.content.trim()),
 					),
 				),
@@ -150,15 +126,9 @@ let relatedEntities = $derived.by((): RelatedEntity[] => {
 		.filter((item): item is RelatedEntity => item !== null);
 });
 
-let relatedAspectCount = $derived(
-	relatedEntities.reduce((sum, entity) => sum + entity.aspectNames.length, 0),
-);
-let relatedConstraintCount = $derived(
-	relatedEntities.reduce((sum, entity) => sum + entity.constraints.length, 0),
-);
-let relatedDependencyCount = $derived(
-	relatedEntities.reduce((sum, entity) => sum + entity.dependencies.length, 0),
-);
+const relatedAspectCount = $derived(relatedEntities.reduce((sum, entity) => sum + entity.aspectNames.length, 0));
+const relatedConstraintCount = $derived(relatedEntities.reduce((sum, entity) => sum + entity.constraints.length, 0));
+const relatedDependencyCount = $derived(relatedEntities.reduce((sum, entity) => sum + entity.dependencies.length, 0));
 
 async function ensureGraph(): Promise<void> {
 	if (graph || graphLoading) return;
@@ -182,9 +152,7 @@ function selectMemory(memory: Memory): void {
 function parseMemoryTags(raw: Memory["tags"]): string[] {
 	if (!raw) return [];
 	if (Array.isArray(raw)) {
-		return raw.filter(
-			(tag) => typeof tag === "string" && tag.trim().length > 0,
-		);
+		return raw.filter((tag) => typeof tag === "string" && tag.trim().length > 0);
 	}
 	const trimmed = raw.trim();
 	if (!trimmed) return [];
@@ -192,10 +160,7 @@ function parseMemoryTags(raw: Memory["tags"]): string[] {
 		try {
 			const parsed = JSON.parse(trimmed) as unknown;
 			if (Array.isArray(parsed)) {
-				return parsed.filter(
-					(tag): tag is string =>
-						typeof tag === "string" && tag.trim().length > 0,
-				);
+				return parsed.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0);
 			}
 		} catch {
 			// fallthrough
@@ -232,7 +197,8 @@ const pillBase = "sig-eyebrow tracking-[0.08em] px-2 py-0.5 border cursor-pointe
 const pillActive = `${pillBase} text-[var(--sig-accent)] border-[var(--sig-accent)] bg-[rgba(138,138,150,0.1)]`;
 const pillInactive = `${pillBase} text-[var(--sig-text-muted)] border-[var(--sig-border-strong)] bg-transparent hover:text-[var(--sig-text)]`;
 
-const dateTriggerClass = "sig-label text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)] border border-[var(--sig-border-strong)] rounded-lg px-2 py-1 w-[130px] inline-flex items-center justify-between gap-2 cursor-pointer";
+const dateTriggerClass =
+	"sig-label text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)] border border-[var(--sig-border-strong)] rounded-lg px-2 py-1 w-[130px] inline-flex items-center justify-between gap-2 cursor-pointer";
 
 const badgeBase = "sig-badge border-[var(--sig-border-strong)] text-[var(--sig-text)]";
 const badgeAccent = "sig-badge border-[var(--sig-accent)] text-[var(--sig-accent)]";
@@ -276,15 +242,12 @@ function handleGlobalKey(e: KeyboardEvent) {
 	if (!isMemoryGroup(nav.activeTab)) return;
 
 	const target = e.target as HTMLElement;
-	const isInputFocused =
-		target.tagName === "INPUT" ||
-		target.tagName === "TEXTAREA" ||
-		target.isContentEditable;
+	const isInputFocused = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
 	if (isInputFocused) return;
 
 	// Don't intercept arrow keys if focus is on a card (or descendant) or filter - let those handlers work
-	if (target.closest('.doc-card') || target.closest('.filter-row')) {
+	if (target.closest(".doc-card") || target.closest(".filter-row")) {
 		return;
 	}
 
@@ -292,7 +255,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 	const isTabButton = target.getAttribute?.("data-memory-tab") === "memory";
 	if (e.key === "ArrowDown" && isTabButton) {
 		e.preventDefault();
-		const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+		const searchInput = document.querySelector(".memory-search-input") as HTMLInputElement;
 		if (searchInput) {
 			searchInput.focus();
 		}
@@ -302,11 +265,13 @@ function handleGlobalKey(e: KeyboardEvent) {
 
 // Track current filter element focus for left/right navigation
 function getFilterElements(): HTMLElement[] {
-	const row = document.querySelector('.filter-row');
+	const row = document.querySelector(".filter-row");
 	if (!row) return [];
 
 	// Get all interactive elements in order they appear in DOM
-	return Array.from(row.querySelectorAll('button, [role="button"], input, select, [data-radix-collection-item]')) as HTMLElement[];
+	return Array.from(
+		row.querySelectorAll('button, [role="button"], input, select, [data-radix-collection-item]'),
+	) as HTMLElement[];
 }
 
 function getCurrentFilterIndex(): number {
@@ -317,21 +282,21 @@ function getCurrentFilterIndex(): number {
 
 // Handle keyboard navigation within memory cards (2D grid)
 function handleCardKeydown(e: KeyboardEvent): void {
-	const cards = Array.from(document.querySelectorAll('.doc-card')) as HTMLElement[];
+	const cards = Array.from(document.querySelectorAll(".doc-card")) as HTMLElement[];
 	const currentIndex = cards.indexOf(e.currentTarget as HTMLElement);
 
 	if (currentIndex === -1) return; // Card not found in array
 
 	// Get grid layout info
-	const grid = document.querySelector('.memory-cards-grid');
+	const grid = document.querySelector(".memory-cards-grid");
 	if (!grid) return;
 
 	// Detect number of columns in the grid
 	let columns = 1;
 	const computedStyle = window.getComputedStyle(grid);
 	const gridColumns = computedStyle.gridTemplateColumns;
-	if (gridColumns && gridColumns !== 'none') {
-		columns = gridColumns.split(' ').length;
+	if (gridColumns && gridColumns !== "none") {
+		columns = gridColumns.split(" ").length;
 	}
 
 	// Calculate current row and column position
@@ -349,7 +314,7 @@ function handleCardKeydown(e: KeyboardEvent): void {
 		// Only move if there's a card in that position
 		if (nextIndex < cards.length) {
 			cards[nextIndex].focus();
-			cards[nextIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+			cards[nextIndex].scrollIntoView({ behavior: "smooth", block: "nearest" });
 		}
 	} else if (e.key === "ArrowUp") {
 		e.preventDefault();
@@ -367,10 +332,10 @@ function handleCardKeydown(e: KeyboardEvent): void {
 			if (filterElements.length > 0) {
 				const lastFilter = filterElements[filterElements.length - 1];
 				lastFilter.focus();
-				lastFilter.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+				lastFilter.scrollIntoView({ behavior: "smooth", block: "nearest" });
 			} else {
 				// No filters, go to search
-				const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+				const searchInput = document.querySelector(".memory-search-input") as HTMLInputElement;
 				if (searchInput) {
 					searchInput.focus();
 				}
@@ -394,7 +359,7 @@ function handleCardKeydown(e: KeyboardEvent): void {
 		e.preventDefault();
 		e.stopPropagation();
 		// Return focus to search input
-		const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+		const searchInput = document.querySelector(".memory-search-input") as HTMLInputElement;
 		if (searchInput) searchInput.focus();
 	}
 }
@@ -423,17 +388,17 @@ function handleFilterKeydown(e: KeyboardEvent): void {
 		e.preventDefault();
 		e.stopPropagation();
 		// Go to first memory card
-		const cards = document.querySelectorAll('.doc-card');
+		const cards = document.querySelectorAll(".doc-card");
 		if (cards.length > 0 && cards[0] instanceof HTMLElement) {
 			cards[0].focus();
 			// Scroll card into view if needed
-			cards[0].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+			cards[0].scrollIntoView({ behavior: "smooth", block: "nearest" });
 		}
 	} else if (e.key === "ArrowUp") {
 		e.preventDefault();
 		e.stopPropagation();
 		// Dispatch custom event to go to tab bar (sets memoryTabFocus = "tabs")
-		window.dispatchEvent(new CustomEvent('memory-focus-tabs'));
+		window.dispatchEvent(new CustomEvent("memory-focus-tabs"));
 	} else if (e.key === "Enter") {
 		// Allow Enter to proceed with default behavior (opening filter)
 		// Don't prevent default
@@ -444,7 +409,7 @@ function handleFilterKeydown(e: KeyboardEvent): void {
 		e.preventDefault();
 		e.stopPropagation();
 		// Return focus to the search input
-		const searchInput = document.querySelector('.memory-search-input') as HTMLInputElement;
+		const searchInput = document.querySelector(".memory-search-input") as HTMLInputElement;
 		if (searchInput) {
 			searchInput.focus();
 		}
@@ -461,7 +426,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 			filterElements[0].focus();
 		} else {
 			// No filters, go to first card
-			const firstCard = document.querySelector('.doc-card') as HTMLElement;
+			const firstCard = document.querySelector(".doc-card") as HTMLElement;
 			if (firstCard) firstCard.focus();
 		}
 	} else if (e.key === "ArrowUp") {
@@ -475,11 +440,10 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 		// Clear search and refresh results
 		mem.query = "";
 		queueMemorySearch();
-	} else if (e.key === 'Enter') {
+	} else if (e.key === "Enter") {
 		doSearch();
 	}
 }
-
 </script>
 
 <svelte:window onkeydown={handleGlobalKey} />

@@ -12,12 +12,8 @@ function parseVersion(value: string): ParsedVersion | null {
 	if (!withoutBuild) return null;
 
 	const prereleaseIndex = withoutBuild.indexOf("-");
-	const corePart =
-		prereleaseIndex >= 0
-			? withoutBuild.slice(0, prereleaseIndex)
-			: withoutBuild;
-	const prereleasePart =
-		prereleaseIndex >= 0 ? withoutBuild.slice(prereleaseIndex + 1) : "";
+	const corePart = prereleaseIndex >= 0 ? withoutBuild.slice(0, prereleaseIndex) : withoutBuild;
+	const prereleasePart = prereleaseIndex >= 0 ? withoutBuild.slice(prereleaseIndex + 1) : "";
 
 	const coreSegments = corePart.split(".");
 	if (coreSegments.some((segment) => !/^\d+$/.test(segment))) {
@@ -25,9 +21,7 @@ function parseVersion(value: string): ParsedVersion | null {
 	}
 
 	const core = coreSegments.map((segment) => Number.parseInt(segment, 10));
-	const prerelease = prereleasePart
-		? prereleasePart.split(".").filter(Boolean)
-		: [];
+	const prerelease = prereleasePart ? prereleasePart.split(".").filter(Boolean) : [];
 
 	if (prerelease.some((segment) => !/^[0-9A-Za-z-]+$/.test(segment))) {
 		return null;

@@ -152,28 +152,19 @@ function tryParseJson(s: string): Record<string, unknown> {
 
 type EntityType = "memory" | "request" | "session" | "unknown";
 
-function detectEntityType(
-	db: ReadDb,
-	id: string,
-): { type: EntityType; memoryId?: string } {
+function detectEntityType(db: ReadDb, id: string): { type: EntityType; memoryId?: string } {
 	// Try memory_history by memory_id
-	const historyHit = db
-		.prepare(
-			"SELECT 1 FROM memory_history WHERE memory_id = ? LIMIT 1",
-		)
-		.get(id) as unknown;
+	const historyHit = db.prepare("SELECT 1 FROM memory_history WHERE memory_id = ? LIMIT 1").get(id) as unknown;
 	if (historyHit) return { type: "memory", memoryId: id };
 
 	// Try memories table directly
-	const memoryHit = db
-		.prepare("SELECT 1 FROM memories WHERE id = ? LIMIT 1")
-		.get(id) as unknown;
+	const memoryHit = db.prepare("SELECT 1 FROM memories WHERE id = ? LIMIT 1").get(id) as unknown;
 	if (memoryHit) return { type: "memory", memoryId: id };
 
 	// Try job by memory_id
-	const jobHit = db
-		.prepare("SELECT memory_id FROM memory_jobs WHERE id = ? LIMIT 1")
-		.get(id) as { memory_id: string } | undefined;
+	const jobHit = db.prepare("SELECT memory_id FROM memory_jobs WHERE id = ? LIMIT 1").get(id) as
+		| { memory_id: string }
+		| undefined;
 	if (jobHit) return { type: "memory", memoryId: jobHit.memory_id };
 
 	// Could be a request ID or session ID — we can't resolve these
@@ -196,10 +187,7 @@ interface ComparisonRow {
 	created_at: string;
 }
 
-function predictorToEvents(
-	sessionKey: string,
-	db: ReadDb,
-): TimelineEvent[] {
+function predictorToEvents(sessionKey: string, db: ReadDb): TimelineEvent[] {
 	try {
 		const rows = db
 			.prepare(
@@ -215,9 +203,7 @@ function predictorToEvents(
 		return rows.map((r) => ({
 			timestamp: r.created_at,
 			source: "predictor" as const,
-			event: r.predictor_won === 1
-				? "predictor:comparison:won"
-				: "predictor:comparison:lost",
+			event: r.predictor_won === 1 ? "predictor:comparison:won" : "predictor:comparison:lost",
 			details: {
 				predictorNdcg: r.predictor_ndcg,
 				baselineNdcg: r.baseline_ndcg,
@@ -246,10 +232,7 @@ export interface TimelineSources {
 	}) => readonly ErrorEntry[];
 }
 
-export function buildTimeline(
-	sources: TimelineSources,
-	entityId: string,
-): Timeline {
+export function buildTimeline(sources: TimelineSources, entityId: string): Timeline {
 	const { db, getRecentLogs, getRecentErrors } = sources;
 	const detection = detectEntityType(db, entityId);
 	const allEvents: TimelineEvent[] = [];
@@ -297,10 +280,7 @@ export function buildTimeline(
 	// Gather error entries that mention this ID
 	const errors = getRecentErrors({ limit: 500 });
 	const matchingErrors = errors.filter(
-		(e) =>
-			e.memoryId === entityId ||
-			e.requestId === entityId ||
-			e.message.includes(entityId),
+		(e) => e.memoryId === entityId || e.requestId === entityId || e.message.includes(entityId),
 	);
 	allEvents.push(...errorToEvents(matchingErrors));
 

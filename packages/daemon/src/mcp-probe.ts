@@ -63,9 +63,7 @@ function parseSecretReference(value: string): string | null {
 	return name || null;
 }
 
-async function resolveSecretReferences(
-	values: Readonly<Record<string, string>>,
-): Promise<Record<string, string>> {
+async function resolveSecretReferences(values: Readonly<Record<string, string>>): Promise<Record<string, string>> {
 	const resolved: Record<string, string> = {};
 	for (const [key, value] of Object.entries(values)) {
 		const secretName = parseSecretReference(value);
@@ -99,9 +97,7 @@ async function withProbeClient<T>(
 			for (const [k, v] of Object.entries(process.env)) {
 				if (typeof v === "string") runtimeEnv[k] = v;
 			}
-			const resolvedEnv = await resolveSecretReferences(
-				(server.config as MarketplaceMcpConfigStdio).env,
-			);
+			const resolvedEnv = await resolveSecretReferences((server.config as MarketplaceMcpConfigStdio).env);
 			const stdioConfig = server.config as MarketplaceMcpConfigStdio;
 			const transport = new StdioClientTransport({
 				command: stdioConfig.command,
@@ -162,10 +158,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Extract a SignetAppManifest from server metadata's `signet` block.
  * Returns null if no valid signet block is found.
  */
-export function parseManifest(
-	serverMetadata: unknown,
-	serverName: string,
-): SignetAppManifest | null {
+export function parseManifest(serverMetadata: unknown, serverName: string): SignetAppManifest | null {
 	if (!isRecord(serverMetadata)) return null;
 
 	// Look for `signet` or `signet.app` block
@@ -179,9 +172,7 @@ export function parseManifest(
 
 	// Name is required per spec
 	const name =
-		typeof signetBlock.name === "string" && signetBlock.name.trim().length > 0
-			? signetBlock.name.trim()
-			: serverName;
+		typeof signetBlock.name === "string" && signetBlock.name.trim().length > 0 ? signetBlock.name.trim() : serverName;
 
 	// Validate icon URL scheme (http/https only).
 	// Icon loads client-side (<img src>), so private addresses are fine — MCP servers are typically local.
@@ -235,16 +226,12 @@ export function parseManifest(
 					events: {
 						...(Array.isArray(signetBlock.events.subscribe)
 							? {
-									subscribe: signetBlock.events.subscribe.filter(
-										(v: unknown): v is string => typeof v === "string",
-									),
+									subscribe: signetBlock.events.subscribe.filter((v: unknown): v is string => typeof v === "string"),
 								}
 							: {}),
 						...(Array.isArray(signetBlock.events.emit)
 							? {
-									emit: signetBlock.events.emit.filter(
-										(v: unknown): v is string => typeof v === "string",
-									),
+									emit: signetBlock.events.emit.filter((v: unknown): v is string => typeof v === "string"),
 								}
 							: {}),
 					},
@@ -252,9 +239,7 @@ export function parseManifest(
 			: {}),
 		...(Array.isArray(signetBlock.menuItems)
 			? {
-					menuItems: signetBlock.menuItems.filter(
-						(v: unknown): v is string => typeof v === "string",
-					),
+					menuItems: signetBlock.menuItems.filter((v: unknown): v is string => typeof v === "string"),
 				}
 			: {}),
 		...(typeof signetBlock.dock === "boolean" ? { dock: signetBlock.dock } : {}),
@@ -314,9 +299,7 @@ export function generateAutoCard(
  * failed result with an auto-card containing zero tools — the server
  * can be re-probed when it comes online.
  */
-export async function probeServer(
-	server: InstalledMarketplaceMcpServer,
-): Promise<McpProbeResult> {
+export async function probeServer(server: InstalledMarketplaceMcpServer): Promise<McpProbeResult> {
 	const now = new Date().toISOString();
 
 	try {
@@ -358,8 +341,7 @@ export async function probeServer(
 			let serverMetadata: unknown = null;
 			try {
 				// The MCP SDK client may expose server info after connection
-				const serverInfo = (client as unknown as { getServerVersion?: () => unknown })
-					.getServerVersion?.();
+				const serverInfo = (client as unknown as { getServerVersion?: () => unknown }).getServerVersion?.();
 				if (isRecord(serverInfo)) {
 					serverMetadata = serverInfo;
 				}
@@ -372,18 +354,11 @@ export async function probeServer(
 				try {
 					// Convention: some servers expose metadata at signet://manifest
 					const metaResource = rawResources.find(
-						(r) =>
-							r.uri === "signet://manifest" ||
-							r.uri === "signet://app" ||
-							r.name === "signet-manifest",
+						(r) => r.uri === "signet://manifest" || r.uri === "signet://app" || r.name === "signet-manifest",
 					);
 					if (metaResource) {
 						const content = await client.readResource({ uri: metaResource.uri });
-						if (
-							isRecord(content) &&
-							Array.isArray(content.contents) &&
-							content.contents.length > 0
-						) {
+						if (isRecord(content) && Array.isArray(content.contents) && content.contents.length > 0) {
 							const firstContent = content.contents[0] as Record<string, unknown>;
 							if (typeof firstContent?.text === "string") {
 								try {
@@ -596,9 +571,7 @@ export function removeProbeResult(serverId: string): void {
 /**
  * Re-probe a server. Useful when a previously unreachable server comes online.
  */
-export async function reprobeServer(
-	server: InstalledMarketplaceMcpServer,
-): Promise<McpProbeResult> {
+export async function reprobeServer(server: InstalledMarketplaceMcpServer): Promise<McpProbeResult> {
 	const result = await probeServer(server);
 	storeProbeResult(result);
 	return result;

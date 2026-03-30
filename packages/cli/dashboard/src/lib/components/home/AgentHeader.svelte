@@ -1,163 +1,146 @@
 <script lang="ts">
-	import type {
-		Identity,
-		DaemonStatus,
-		ContinuityEntry,
-		DiagnosticsReport,
-		PipelineStatus,
-		MemoryStats,
-	} from "$lib/api";
+import type { ContinuityEntry, DaemonStatus, DiagnosticsReport, Identity, MemoryStats, PipelineStatus } from "$lib/api";
 
-	interface Props {
-		identity: Identity;
-		daemonStatus: DaemonStatus | null;
-		connectorCount: number;
-		continuity: ContinuityEntry[];
-		memoryCount: number;
-		diagnostics?: DiagnosticsReport | null;
-		pipelineStatus?: PipelineStatus | null;
-		memoryStats?: MemoryStats | null;
-	}
+interface Props {
+	identity: Identity;
+	daemonStatus: DaemonStatus | null;
+	connectorCount: number;
+	continuity: ContinuityEntry[];
+	memoryCount: number;
+	diagnostics?: DiagnosticsReport | null;
+	pipelineStatus?: PipelineStatus | null;
+	memoryStats?: MemoryStats | null;
+}
 
-	const {
-		identity,
-		daemonStatus,
-		connectorCount,
-		continuity,
-		memoryCount,
-		diagnostics = null,
-		pipelineStatus = null,
-		memoryStats = null,
-	}: Props = $props();
+let {
+	identity,
+	daemonStatus,
+	connectorCount,
+	continuity,
+	memoryCount,
+	diagnostics = null,
+	pipelineStatus = null,
+	memoryStats = null,
+}: Props = $props();
 
-	const ageDays = $derived.by(() => {
-		const created = daemonStatus?.agentCreatedAt;
-		if (!created) return null;
-		const ts = new Date(created).getTime();
-		if (Number.isNaN(ts)) return null;
-		return Math.max(0, Math.floor((Date.now() - ts) / 86_400_000));
-	});
+const ageDays = $derived.by(() => {
+	const created = daemonStatus?.agentCreatedAt;
+	if (!created) return null;
+	const ts = new Date(created).getTime();
+	if (Number.isNaN(ts)) return null;
+	return Math.max(0, Math.floor((Date.now() - ts) / 86_400_000));
+});
 
-	const ageLabel = $derived.by(() => {
-		if (ageDays === null) return "--";
-		if (ageDays === 0) return "TODAY";
-		if (ageDays === 1) return "1 DAY";
-		return `${ageDays} DAYS`;
-	});
+const ageLabel = $derived.by(() => {
+	if (ageDays === null) return "--";
+	if (ageDays === 0) return "TODAY";
+	if (ageDays === 1) return "1 DAY";
+	return `${ageDays} DAYS`;
+});
 
-	const activeSessions = $derived(daemonStatus?.activeSessions ?? 0);
-	const version = $derived(daemonStatus?.version ?? "--");
+const activeSessions = $derived(daemonStatus?.activeSessions ?? 0);
+const version = $derived(daemonStatus?.version ?? "--");
 
-	const latestProject = $derived.by(() => {
-		if (continuity.length === 0) return null;
-		const sorted = [...continuity].sort(
-			(a, b) =>
-				new Date(b.created_at).getTime() -
-				new Date(a.created_at).getTime(),
-		);
-		return sorted[0];
-	});
+const latestProject = $derived.by(() => {
+	if (continuity.length === 0) return null;
+	const sorted = [...continuity].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+	return sorted[0];
+});
 
-	function formatRecency(dateStr: string): string {
-		const diff = Date.now() - new Date(dateStr).getTime();
-		const mins = Math.floor(diff / 60_000);
-		if (mins < 1) return "JUST NOW";
-		if (mins < 60) return `${mins}M AGO`;
-		const hours = Math.floor(mins / 60);
-		if (hours < 24) return `${hours}H AGO`;
-		const days = Math.floor(hours / 24);
-		return `${days}D AGO`;
-	}
+function formatRecency(dateStr: string): string {
+	const diff = Date.now() - new Date(dateStr).getTime();
+	const mins = Math.floor(diff / 60_000);
+	if (mins < 1) return "JUST NOW";
+	if (mins < 60) return `${mins}M AGO`;
+	const hours = Math.floor(mins / 60);
+	if (hours < 24) return `${hours}H AGO`;
+	const days = Math.floor(hours / 24);
+	return `${days}D AGO`;
+}
 
-	const projectName = $derived(
-		latestProject?.project?.replace(/\/$/, "").split("/").pop() ?? "--",
-	);
+const projectName = $derived(latestProject?.project?.replace(/\/$/, "").split("/").pop() ?? "--");
 
-	const recency = $derived(
-		latestProject ? formatRecency(latestProject.created_at) : "--",
-	);
+const recency = $derived(latestProject ? formatRecency(latestProject.created_at) : "--");
 
-	/* use name from identity; daemon /api/identity sometimes returns empty
+/* use name from identity; daemon /api/identity sometimes returns empty
 	   strings even when agent.yaml has a name configured — fall back gracefully */
-	const agentName = $derived(
-		(identity.name && identity.name.trim()) || "SIGNET AGENT",
-	);
+const agentName = $derived(identity.name?.trim() || "SIGNET AGENT");
 
-	/* health metrics from diagnostics */
-	const healthScore = $derived(diagnostics?.composite?.score ?? null);
-	const healthStatus = $derived(diagnostics?.composite?.status ?? "UNKNOWN");
+/* health metrics from diagnostics */
+const healthScore = $derived(diagnostics?.composite?.score ?? null);
+const healthStatus = $derived(diagnostics?.composite?.status ?? "UNKNOWN");
 
-	const embeddingPct = $derived.by(() => {
-		if (diagnostics?.index?.embeddingCoverage !== undefined) {
-			return Math.round(diagnostics.index.embeddingCoverage * 100);
-		}
-		if (!memoryStats || memoryStats.total === 0) return null;
-		return Math.round((memoryStats.withEmbeddings / memoryStats.total) * 100);
-	});
-
-	const pipelineMode = $derived.by(() => {
-		if (!pipelineStatus) return "UNKNOWN";
-		if (typeof pipelineStatus.mode === "string") {
-			return pipelineStatus.mode.toUpperCase();
-		}
-		return "ACTIVE";
-	});
-
-	const warningCount = $derived.by(() => {
-		if (!diagnostics) return 0;
-		let count = 0;
-		const domains = ["queue", "storage", "index", "provider", "connector", "predictor"] as const;
-		for (const d of domains) {
-			const domain = diagnostics[d];
-			if (domain && typeof domain === "object" && "status" in domain) {
-				const status = (domain as { status: string }).status;
-				if (status === "degraded" || status === "unhealthy") count++;
-			}
-		}
-		return count;
-	});
-
-	function scoreColor(score: number | null): string {
-		if (score === null) return "var(--sig-text-muted)";
-		if (score >= 0.8) return "var(--sig-success)";
-		if (score >= 0.5) return "var(--sig-warning)";
-		return "var(--sig-danger)";
+const embeddingPct = $derived.by(() => {
+	if (diagnostics?.index?.embeddingCoverage !== undefined) {
+		return Math.round(diagnostics.index.embeddingCoverage * 100);
 	}
+	if (!memoryStats || memoryStats.total === 0) return null;
+	return Math.round((memoryStats.withEmbeddings / memoryStats.total) * 100);
+});
 
-	type Row = { idx: string; label: string; value: string; color?: string };
+const pipelineMode = $derived.by(() => {
+	if (!pipelineStatus) return "UNKNOWN";
+	if (typeof pipelineStatus.mode === "string") {
+		return pipelineStatus.mode.toUpperCase();
+	}
+	return "ACTIVE";
+});
 
-	const leftRows: Row[] = $derived([
-		{ idx: "01", label: "UPTIME", value: ageLabel },
-		{ idx: "02", label: "PROJECT", value: projectName },
-		{ idx: "03", label: "LAST SEEN", value: recency },
-		{ idx: "04", label: "CONNECTORS", value: String(connectorCount) },
-		{ idx: "05", label: "SESSIONS", value: String(activeSessions) },
-	]);
+const warningCount = $derived.by(() => {
+	if (!diagnostics) return 0;
+	let count = 0;
+	const domains = ["queue", "storage", "index", "provider", "connector", "predictor"] as const;
+	for (const d of domains) {
+		const domain = diagnostics[d];
+		if (domain && typeof domain === "object" && "status" in domain) {
+			const status = (domain as { status: string }).status;
+			if (status === "degraded" || status === "unhealthy") count++;
+		}
+	}
+	return count;
+});
 
-	const rightRows: Row[] = $derived([
-		{
-			idx: "06",
-			label: "HEALTH",
-			value: healthScore !== null ? `${healthScore.toFixed(2)} ${healthStatus.toUpperCase()}` : "--",
-			color: scoreColor(healthScore),
-		},
-		{
-			idx: "07",
-			label: "EMBEDDED",
-			value: embeddingPct !== null ? `${embeddingPct}%` : "--",
-		},
-		{
-			idx: "08",
-			label: "PIPELINE",
-			value: pipelineMode,
-		},
-		{
-			idx: "09",
-			label: "WARNINGS",
-			value: String(warningCount),
-			color: warningCount > 0 ? "var(--sig-danger)" : undefined,
-		},
-	]);
+function scoreColor(score: number | null): string {
+	if (score === null) return "var(--sig-text-muted)";
+	if (score >= 0.8) return "var(--sig-success)";
+	if (score >= 0.5) return "var(--sig-warning)";
+	return "var(--sig-danger)";
+}
+
+type Row = { idx: string; label: string; value: string; color?: string };
+
+const leftRows: Row[] = $derived([
+	{ idx: "01", label: "UPTIME", value: ageLabel },
+	{ idx: "02", label: "PROJECT", value: projectName },
+	{ idx: "03", label: "LAST SEEN", value: recency },
+	{ idx: "04", label: "CONNECTORS", value: String(connectorCount) },
+	{ idx: "05", label: "SESSIONS", value: String(activeSessions) },
+]);
+
+const rightRows: Row[] = $derived([
+	{
+		idx: "06",
+		label: "HEALTH",
+		value: healthScore !== null ? `${healthScore.toFixed(2)} ${healthStatus.toUpperCase()}` : "--",
+		color: scoreColor(healthScore),
+	},
+	{
+		idx: "07",
+		label: "EMBEDDED",
+		value: embeddingPct !== null ? `${embeddingPct}%` : "--",
+	},
+	{
+		idx: "08",
+		label: "PIPELINE",
+		value: pipelineMode,
+	},
+	{
+		idx: "09",
+		label: "WARNINGS",
+		value: String(warningCount),
+		color: warningCount > 0 ? "var(--sig-danger)" : undefined,
+	},
+]);
 </script>
 
 <div class="readout sig-panel">

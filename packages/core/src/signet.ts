@@ -73,9 +73,7 @@ export class Signet {
 		const basePath = this.config.basePath!;
 
 		if (!existsSync(join(basePath, "agent.yaml"))) {
-			throw new Error(
-				`No agent found at ${basePath}. Run 'signet init' first.`,
-			);
+			throw new Error(`No agent found at ${basePath}. Run 'signet init' first.`);
 		}
 
 		const manifestYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");

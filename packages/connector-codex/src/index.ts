@@ -1,18 +1,7 @@
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-	BaseConnector,
-	type InstallResult,
-	type UninstallResult,
-	atomicWriteJson,
-} from "@signet/connector-base";
+import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
 
 // ---------------------------------------------------------------------------
 // Signet command resolution
@@ -54,24 +43,36 @@ interface HooksJson {
 function buildHooksJson(signetArgs: string[]): HooksJson {
 	return {
 		_signet: true,
-		sessionStart: [{
-			handlers: [{
-				command: [...signetArgs, "hook", "session-start", "-H", "codex"],
-				timeout: 10,
-			}],
-		}],
-		userPromptSubmit: [{
-			handlers: [{
-				command: [...signetArgs, "hook", "user-prompt-submit", "-H", "codex"],
-				timeout: 5,
-			}],
-		}],
-		stop: [{
-			handlers: [{
-				command: [...signetArgs, "hook", "session-end", "-H", "codex"],
-				timeout: 30,
-			}],
-		}],
+		sessionStart: [
+			{
+				handlers: [
+					{
+						command: [...signetArgs, "hook", "session-start", "-H", "codex"],
+						timeout: 10,
+					},
+				],
+			},
+		],
+		userPromptSubmit: [
+			{
+				handlers: [
+					{
+						command: [...signetArgs, "hook", "user-prompt-submit", "-H", "codex"],
+						timeout: 5,
+					},
+				],
+			},
+		],
+		stop: [
+			{
+				handlers: [
+					{
+						command: [...signetArgs, "hook", "session-end", "-H", "codex"],
+						timeout: 30,
+					},
+				],
+			},
+		],
 	};
 }
 
@@ -192,7 +193,13 @@ function unpatchConfigToml(path: string): boolean {
 		}
 		filtered.push(line);
 	}
-	writeFileSync(path, filtered.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n");
+	writeFileSync(
+		path,
+		filtered
+			.join("\n")
+			.replace(/\n{3,}/g, "\n\n")
+			.trimEnd() + "\n",
+	);
 	return true;
 }
 
@@ -279,7 +286,8 @@ export class CodexConnector extends BaseConnector {
 			// Check marker first; fall back to handler scan if marker was stripped
 			const hasMarker = isSignetOwned(existing);
 			const hasHandlers = ["sessionStart", "userPromptSubmit", "stop"].some(
-				(k) => Array.isArray((existing as Record<string, unknown>)[k]) &&
+				(k) =>
+					Array.isArray((existing as Record<string, unknown>)[k]) &&
 					((existing as Record<string, unknown>)[k] as unknown[]).some(isSignetHandler),
 			);
 			if (hasMarker || hasHandlers) {
@@ -314,7 +322,8 @@ export class CodexConnector extends BaseConnector {
 		const hooks = readHooksJson(this.getHooksJsonPath());
 		if (!hooks) return false;
 		return ["sessionStart", "userPromptSubmit", "stop"].some(
-			(k) => Array.isArray((hooks as Record<string, unknown>)[k]) &&
+			(k) =>
+				Array.isArray((hooks as Record<string, unknown>)[k]) &&
 				((hooks as Record<string, unknown>)[k] as unknown[]).some(isSignetHandler),
 		);
 	}

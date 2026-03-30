@@ -215,11 +215,7 @@ export const eventBus = new SignetEventBus();
 /**
  * Helper to create a properly-formed SignetOSEvent.
  */
-export function createEvent(
-	source: string,
-	type: string,
-	payload: Record<string, unknown>,
-): SignetOSEvent {
+export function createEvent(source: string, type: string, payload: Record<string, unknown>): SignetOSEvent {
 	return {
 		id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
 		source,

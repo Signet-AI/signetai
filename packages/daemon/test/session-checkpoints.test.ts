@@ -171,14 +171,8 @@ describe("session-checkpoints", () => {
 		const row = getLatestCheckpointBySession(dbAcc, "structural-merge");
 		expect(row).toBeDefined();
 		expect(JSON.parse(row!.focal_entity_ids!)).toEqual(["entity-1", "entity-2"]);
-		expect(JSON.parse(row!.focal_entity_names!)).toEqual([
-			"signetai",
-			"signet-core",
-		]);
-		expect(JSON.parse(row!.active_aspect_ids!)).toEqual([
-			"aspect-1",
-			"aspect-2",
-		]);
+		expect(JSON.parse(row!.focal_entity_names!)).toEqual(["signetai", "signet-core"]);
+		expect(JSON.parse(row!.active_aspect_ids!)).toEqual(["aspect-1", "aspect-2"]);
 		expect(row!.surfaced_constraint_count).toBe(3);
 		expect(row!.traversal_memory_count).toBe(24);
 	});
@@ -186,9 +180,7 @@ describe("session-checkpoints", () => {
 	test("pruneCheckpoints deletes all old rows strictly", () => {
 		writeCheckpoint(dbAcc, makeParams(), 50);
 		dbAcc.withWriteTx((wdb) => {
-			wdb.prepare(
-				"UPDATE session_checkpoints SET created_at = datetime('now', '-30 days')",
-			).run();
+			wdb.prepare("UPDATE session_checkpoints SET created_at = datetime('now', '-30 days')").run();
 		});
 
 		const deleted = pruneCheckpoints(dbAcc, 7);

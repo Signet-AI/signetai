@@ -1,87 +1,87 @@
 <script lang="ts">
-	import { onDestroy } from "svelte";
-	import { fetchTrayEntries } from "$lib/stores/os.svelte";
-	import X from "@lucide/svelte/icons/x";
-	import Loader from "@lucide/svelte/icons/loader";
-	import CheckCircle from "@lucide/svelte/icons/check-circle-2";
-	import { installMcp } from "$lib/api";
+import { installMcp } from "$lib/api";
+import { fetchTrayEntries } from "$lib/stores/os.svelte";
+import CheckCircle from "@lucide/svelte/icons/check-circle-2";
+import Loader from "@lucide/svelte/icons/loader";
+import X from "@lucide/svelte/icons/x";
+import { onDestroy } from "svelte";
 
-	interface Props {
-		open: boolean;
-		onclose: () => void;
+interface Props {
+	open: boolean;
+	onclose: () => void;
+}
+
+let { open, onclose }: Props = $props();
+
+let url = $state("");
+let name = $state("");
+let loading = $state(false);
+let error = $state<string | null>(null);
+let success = $state<string | null>(null);
+let closeTimer: ReturnType<typeof setTimeout> | null = null;
+
+onDestroy(() => {
+	if (closeTimer) clearTimeout(closeTimer);
+});
+
+function reset(): void {
+	if (closeTimer) {
+		clearTimeout(closeTimer);
+		closeTimer = null;
+	}
+	url = "";
+	name = "";
+	loading = false;
+	error = null;
+	success = null;
+}
+
+function handleClose(): void {
+	reset();
+	onclose();
+}
+
+function handleBackdrop(e: MouseEvent): void {
+	if (e.target === e.currentTarget) {
+		handleClose();
+	}
+}
+
+function handleKeydown(e: KeyboardEvent): void {
+	if (e.key === "Escape") {
+		handleClose();
+	}
+}
+
+async function handleInstall(): Promise<void> {
+	const trimmedUrl = url.trim();
+	if (!trimmedUrl) {
+		error = "Please enter an MCP server URL";
+		return;
 	}
 
-	const { open, onclose }: Props = $props();
+	loading = true;
+	error = null;
+	success = null;
 
-	let url = $state("");
-	let name = $state("");
-	let loading = $state(false);
-	let error = $state<string | null>(null);
-	let success = $state<string | null>(null);
-	let closeTimer: ReturnType<typeof setTimeout> | null = null;
-
-	onDestroy(() => {
-		if (closeTimer) clearTimeout(closeTimer);
+	const result = await installMcp({
+		url: trimmedUrl,
+		name: name.trim() || undefined,
+		autoPlace: false,
 	});
 
-	function reset(): void {
-		if (closeTimer) {
-			clearTimeout(closeTimer);
-			closeTimer = null;
-		}
-		url = "";
-		name = "";
-		loading = false;
-		error = null;
-		success = null;
-	}
+	loading = false;
 
-	function handleClose(): void {
-		reset();
-		onclose();
-	}
-
-	function handleBackdrop(e: MouseEvent): void {
-		if (e.target === e.currentTarget) {
+	if (result.ok) {
+		success = `Installed "${result.manifest?.name ?? result.widgetId}" successfully`;
+		await fetchTrayEntries();
+		closeTimer = setTimeout(() => {
 			handleClose();
-		}
+		}, 1200);
+	} else {
+		error = result.error ?? "Install failed";
 	}
-
-	function handleKeydown(e: KeyboardEvent): void {
-		if (e.key === "Escape") {
-			handleClose();
-		}
-	}
-
-	async function handleInstall(): Promise<void> {
-		const trimmedUrl = url.trim();
-		if (!trimmedUrl) {
-			error = "Please enter an MCP server URL";
-			return;
-		}
-
-		loading = true;
-		error = null;
-		success = null;
-
-		const result = await installMcp({
-			url: trimmedUrl,
-			name: name.trim() || undefined,
-			autoPlace: false,
-		});
-
-		loading = false;
-
-		if (result.ok) {
-			success = `Installed "${result.manifest?.name ?? result.widgetId}" successfully`;
-			await fetchTrayEntries();
-			closeTimer = setTimeout(() => {
-				handleClose();
-			}, 1200);
-		} else {
-			error = result.error ?? "Install failed";
-		}
-	}
+}
 </script>
 
 {#if open}

@@ -1,14 +1,16 @@
 <script lang="ts">
-	import type { Snippet } from "svelte";
-	import ChevronRight from "@lucide/svelte/icons/chevron-right";
+import ChevronRight from "@lucide/svelte/icons/chevron-right";
+import type { Snippet } from "svelte";
 
-	interface Props {
-		title?: string;
-		children: Snippet;
-	}
+interface Props {
+	title?: string;
+	children: Snippet;
+}
 
-	let { title = "Advanced", children }: Props = $props();
-	let open = $state(false);
+// biome-ignore lint/style/useConst: Svelte keeps prop bindings reactive.
+let { title = "Advanced", children }: Props = $props();
+// biome-ignore lint/style/useConst: Mutated from template callback.
+let open = $state(false);
 </script>
 
 <div class="advanced-section">

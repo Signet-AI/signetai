@@ -13,11 +13,7 @@ export function findGit(): string | null {
 	const isWindows = process.platform === "win32";
 
 	if (!isWindows) {
-		const candidates = [
-			"/usr/bin/git",
-			"/usr/local/bin/git",
-			"/opt/homebrew/bin/git",
-		];
+		const candidates = ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"];
 
 		for (const candidate of candidates) {
 			if (existsSync(candidate)) return candidate;

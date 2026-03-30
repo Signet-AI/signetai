@@ -1,66 +1,61 @@
 <script lang="ts">
-	import type { SkillSearchResult, MarketplaceMcpCatalogEntry } from "$lib/api";
-	import { getMonogram, getMonogramBg, getAvatarUrl, getAvatarFromSource } from "$lib/card-utils";
-	import { fetchCatalog, sk } from "$lib/stores/skills.svelte";
-	import { fetchMarketplaceMcpCatalog, mcpMarket } from "$lib/stores/marketplace-mcp.svelte";
-	import { nav } from "$lib/stores/navigation.svelte";
-	import { SvelteSet } from "svelte/reactivity";
-	import { onMount } from "svelte";
+import type { MarketplaceMcpCatalogEntry, SkillSearchResult } from "$lib/api";
+import { getAvatarFromSource, getAvatarUrl, getMonogram, getMonogramBg } from "$lib/card-utils";
+import { fetchMarketplaceMcpCatalog, mcpMarket } from "$lib/stores/marketplace-mcp.svelte";
+import { nav } from "$lib/stores/navigation.svelte";
+import { fetchCatalog, sk } from "$lib/stores/skills.svelte";
+import { onMount } from "svelte";
+import { SvelteSet } from "svelte/reactivity";
 
-	type SpotlightEntry =
-		| { readonly kind: "skill"; readonly item: SkillSearchResult }
-		| { readonly kind: "mcp"; readonly item: MarketplaceMcpCatalogEntry };
+type SpotlightEntry =
+	| { readonly kind: "skill"; readonly item: SkillSearchResult }
+	| { readonly kind: "mcp"; readonly item: MarketplaceMcpCatalogEntry };
 
-	const TOTAL = 6;
+const TOTAL = 6;
 
-	let loaded = $state(false);
-	const avatarErrors = new SvelteSet<string>();
+let loaded = $state(false);
+const avatarErrors = new SvelteSet<string>();
 
-	onMount(async () => {
-		await Promise.allSettled([fetchCatalog(), fetchMarketplaceMcpCatalog(5)]);
-		loaded = true;
-	});
+onMount(async () => {
+	await Promise.allSettled([fetchCatalog(), fetchMarketplaceMcpCatalog(5)]);
+	loaded = true;
+});
 
-	const spotlights = $derived.by((): SpotlightEntry[] => {
-		const skills: SpotlightEntry[] = sk.catalog
-			.slice(0, 3)
-			.map((item) => ({ kind: "skill" as const, item }));
-		const mcps: SpotlightEntry[] = mcpMarket.catalog
-			.slice(0, 3)
-			.map((item) => ({ kind: "mcp" as const, item }));
-		return [...skills, ...mcps].slice(0, TOTAL);
-	});
+const spotlights = $derived.by((): SpotlightEntry[] => {
+	const skills: SpotlightEntry[] = sk.catalog.slice(0, 3).map((item) => ({ kind: "skill" as const, item }));
+	const mcps: SpotlightEntry[] = mcpMarket.catalog.slice(0, 3).map((item) => ({ kind: "mcp" as const, item }));
+	return [...skills, ...mcps].slice(0, TOTAL);
+});
 
-	function spotlightId(entry: SpotlightEntry): string {
-		return entry.kind === "skill" ? `sk:${entry.item.name}` : `mcp:${entry.item.id}`;
+function spotlightId(entry: SpotlightEntry): string {
+	return entry.kind === "skill" ? `sk:${entry.item.name}` : `mcp:${entry.item.id}`;
+}
+
+function spotlightName(entry: SpotlightEntry): string {
+	return entry.item.name;
+}
+
+function spotlightDesc(entry: SpotlightEntry): string {
+	return entry.item.description;
+}
+
+function spotlightBadge(entry: SpotlightEntry): string {
+	return entry.kind === "skill" ? "SKILL" : "MCP";
+}
+
+function spotlightAvatar(entry: SpotlightEntry): string | null {
+	if (entry.kind === "mcp") {
+		return getAvatarFromSource(entry.item.source, entry.item.catalogId) ?? getAvatarUrl(entry.item.sourceUrl);
 	}
+	const maintainer = entry.item.maintainer;
+	if (maintainer) return `https://github.com/${maintainer.split("/")[0]}.png?size=40`;
+	return null;
+}
 
-	function spotlightName(entry: SpotlightEntry): string {
-		return entry.item.name;
-	}
-
-	function spotlightDesc(entry: SpotlightEntry): string {
-		return entry.item.description;
-	}
-
-	function spotlightBadge(entry: SpotlightEntry): string {
-		return entry.kind === "skill" ? "SKILL" : "MCP";
-	}
-
-	function spotlightAvatar(entry: SpotlightEntry): string | null {
-		if (entry.kind === "mcp") {
-			return getAvatarFromSource(entry.item.source, entry.item.catalogId)
-				?? getAvatarUrl(entry.item.sourceUrl);
-		}
-		const maintainer = entry.item.maintainer;
-		if (maintainer) return `https://github.com/${maintainer.split("/")[0]}.png?size=40`;
-		return null;
-	}
-
-	function handleClick(_entry: SpotlightEntry): void {
-		// Both skills and MCP servers live on the "skills" (Marketplace) tab
-		nav.activeTab = "skills";
-	}
+function handleClick(_entry: SpotlightEntry): void {
+	// Both skills and MCP servers live on the "skills" (Marketplace) tab
+	nav.activeTab = "skills";
+}
 </script>
 
 <div class="spotlights-panel sig-panel">
