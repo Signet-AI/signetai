@@ -34,9 +34,10 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 		return (
 			isGeneratedWorkspacePath ||
 			ignoredPaths.has(normalizedPath) ||
-			normalizedPath.endsWith(".db-wal") ||
-			normalizedPath.endsWith(".db-shm") ||
-			normalizedPath.endsWith(".db-journal")
+			normalizedPath.endsWith("/memories.db") ||
+			normalizedPath.endsWith("/memories.db-wal") ||
+			normalizedPath.endsWith("/memories.db-shm") ||
+			normalizedPath.endsWith("/memories.db-journal")
 		);
 	};
 }

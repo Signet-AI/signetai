@@ -46,13 +46,18 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		expect(shouldIgnore(join(agentsDir, "memory", "predictor", "model.bin"))).toBe(true);
 	});
 
-	it("still ignores sqlite journal files", () => {
+	it("ignores the daemon memories.db and its journal files", () => {
 		const agentsDir = makeTempAgentsDir();
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
 
+		expect(shouldIgnore(join(agentsDir, "memory", "memories.db"))).toBe(true);
 		expect(shouldIgnore(join(agentsDir, "memory", "memories.db-wal"))).toBe(true);
 		expect(shouldIgnore(join(agentsDir, "memory", "memories.db-shm"))).toBe(true);
 		expect(shouldIgnore(join(agentsDir, "memory", "memories.db-journal"))).toBe(true);
+
+		// User-managed .db files should NOT be ignored
+		expect(shouldIgnore(join(agentsDir, "my-project", "data.db"))).toBe(false);
+		expect(shouldIgnore(join(agentsDir, "notes.db"))).toBe(false);
 	});
 
 	it("ignores generated per-agent workspace AGENTS.md files", () => {

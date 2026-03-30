@@ -22,7 +22,8 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { serve } from "@hono/node-server";
+import { createAdaptorServer, type serve } from "@hono/node-server";
+import { bindWithRetry } from "./bind-with-retry";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
 	type AgentDefinition,
@@ -12433,64 +12434,75 @@ async function main() {
 		return server;
 	};
 
-	httpServer = serve(
-		{
-			fetch: app.fetch,
-			port: PORT,
-			hostname: BIND_HOST,
-			createServer: createBoundedServer,
-		},
-		(info) => {
-			logger.info("daemon", "Server listening", {
-				address: info.address,
-				port: info.port,
-			});
-			logger.info("daemon", "Daemon ready");
+	const BIND_MAX_DELAY_MS = 30_000;
+	const BIND_RETRY_BASE_MS = 1000;
 
-			// Detect version upgrade and log what's new
-			const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
-			try {
-				let previousVersion: string | null = null;
-				if (existsSync(healthStampPath)) {
-					const prev = JSON.parse(readFileSync(healthStampPath, "utf-8"));
-					previousVersion = typeof prev.version === "string" ? prev.version : null;
-				}
-				writeFileSync(
-					healthStampPath,
-					JSON.stringify({
-						version: CURRENT_VERSION,
-						startedAt: new Date().toISOString(),
-						pid: process.pid,
-					}),
+	const onListening = (info: { address: string; port: number }): void => {
+		logger.info("daemon", "Server listening", {
+			address: info.address,
+			port: info.port,
+		});
+		logger.info("daemon", "Daemon ready");
+
+		// Detect version upgrade and log what's new
+		const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
+		try {
+			let previousVersion: string | null = null;
+			if (existsSync(healthStampPath)) {
+				const prev = JSON.parse(readFileSync(healthStampPath, "utf-8"));
+				previousVersion = typeof prev.version === "string" ? prev.version : null;
+			}
+			writeFileSync(
+				healthStampPath,
+				JSON.stringify({
+					version: CURRENT_VERSION,
+					startedAt: new Date().toISOString(),
+					pid: process.pid,
+				}),
+			);
+			if (previousVersion && previousVersion !== CURRENT_VERSION && CURRENT_VERSION !== "0.0.0") {
+				logger.info("daemon", `Upgraded from ${previousVersion} to ${CURRENT_VERSION}`, {
+					previousVersion,
+					currentVersion: CURRENT_VERSION,
+				});
+				logger.info(
+					"daemon",
+					"What's new: knowledge graph, session continuity, constellation entity overlay, predictive scorer (opt-in)",
 				);
-				if (previousVersion && previousVersion !== CURRENT_VERSION && CURRENT_VERSION !== "0.0.0") {
-					logger.info("daemon", `Upgraded from ${previousVersion} to ${CURRENT_VERSION}`, {
-						previousVersion,
-						currentVersion: CURRENT_VERSION,
-					});
-					logger.info(
-						"daemon",
-						"What's new: knowledge graph, session continuity, constellation entity overlay, predictive scorer (opt-in)",
-					);
-				}
-			} catch {
-				// Best effort — DAEMON_DIR might not exist yet in edge cases
 			}
+		} catch {
+			// Best effort — DAEMON_DIR might not exist yet in edge cases
+		}
 
-			// Import existing memory markdown files (OpenClaw memory logs)
-			// Do this after server starts so the HTTP API is available for ingestion
-			importExistingMemoryFiles().catch((e) => {
-				const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
-				logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
-			});
+		// Import existing memory markdown files (OpenClaw memory logs)
+		// Do this after server starts so the HTTP API is available for ingestion
+		importExistingMemoryFiles().catch((e) => {
+			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+			logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
+		});
 
-			// Sync existing Claude Code project memories (also needs HTTP API)
-			const claudeProjectsDir = join(homedir(), ".claude", "projects");
-			if (existsSync(claudeProjectsDir)) {
-				syncExistingClaudeMemories(claudeProjectsDir);
-			}
+		// Sync existing Claude Code project memories (also needs HTTP API)
+		const claudeProjectsDir = join(homedir(), ".claude", "projects");
+		if (existsSync(claudeProjectsDir)) {
+			syncExistingClaudeMemories(claudeProjectsDir);
+		}
+	};
+
+	bindWithRetry({
+		port: PORT,
+		hostname: BIND_HOST,
+		maxDelayMs: BIND_MAX_DELAY_MS,
+		baseDelayMs: BIND_RETRY_BASE_MS,
+		createServer: () =>
+			createAdaptorServer({
+				fetch: app.fetch,
+				createServer: createBoundedServer,
+			}),
+		onBound: (server) => {
+			httpServer = server;
 		},
-	);
+		onListening,
+	});
 }
 
 if (import.meta.main) {
