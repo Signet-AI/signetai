@@ -5,7 +5,6 @@
  * Polls every 15 seconds (cron granularity is minutes).
  */
 
-import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TaskHarness } from "@signet/core";
@@ -17,29 +16,6 @@ import { computeNextRun } from "./cron";
 import { resolveSkillPrompt } from "./skill-resolver";
 import { type SpawnResult, spawnTask } from "./spawn";
 import { emitTaskStream } from "./task-stream";
-
-const POLL_INTERVAL_MS = 15_000;
-const MAX_CONCURRENT = 3;
-const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
-const TASK_MODEL_CACHE_TTL_MS = 5_000;
-
-/** Resolve agent_id from agent.yaml name field, cached for the process lifetime. */
-let cachedAgentId: string | undefined;
-function resolveSchedulerAgentId(): string {
-	if (cachedAgentId) return cachedAgentId;
-	try {
-		const yaml = join(AGENTS_DIR, "agent.yaml");
-		if (existsSync(yaml)) {
-			const match = readFileSync(yaml, "utf-8").match(/^name:\s*(.+)$/m);
-			if (match) {
-				cachedAgentId = match[1].trim().replace(/^["']|["']$/g, "");
-				return cachedAgentId;
-			}
-		}
-	} catch { /* fall through */ }
-	cachedAgentId = "default";
-	return cachedAgentId;
-}
 
 interface TaskModelCacheEntry {
 	readonly model: string | undefined;
@@ -301,40 +277,38 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 		timestamp: new Date().toISOString(),
 	});
 
-	// Record skill invocation if this task uses a skill
-	// Note: scheduled_tasks does not have agent_id yet — resolve from
-	// agent.yaml name field. Phase 2 should add agent_id to the schema.
+	// Record skill invocation if this task uses a skill.
+	// scheduled_tasks does not have agent_id — uses "default" for now.
+	// Phase 2: add agent_id column to scheduled_tasks for multi-agent support.
 	if (task.skill_name) {
 		const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
 		const success = status === "completed";
-		const agentId = resolveSchedulerAgentId();
 		try {
 			db.withWriteTx((wdb) => {
 				wdb
 					.prepare(
 						`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
-					 VALUES (?, ?, ?, 'scheduled-task', ?, ?, ?, ?, ?)`,
+					 VALUES (?, ?, 'default', 'scheduled-task', ?, ?, ?, ?, ?)`,
 					)
 					.run(
 						`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
 						task.skill_name,
-						agentId,
 						task.id,
 						latencyMs,
 						success ? 1 : 0,
 						result.error ?? null,
 						completedAt,
 					);
-				// Update skill_meta usage counters (scoped by agent via entity ownership)
+				// Update skill_meta — scoped to default agent's entities
 				wdb
 					.prepare(
 						`UPDATE skill_meta SET use_count = use_count + 1, last_used_at = ?
 					 WHERE entity_id IN (
 						SELECT id FROM entities
-						WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = ?
+						WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = 'default'
 					 )`,
 					)
-					.run(completedAt, task.skill_name.toLowerCase(), agentId);
+					.run(completedAt, task.skill_name.toLowerCase());
 			});
 		} catch (err) {
 			logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
