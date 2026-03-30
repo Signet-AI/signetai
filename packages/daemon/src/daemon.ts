@@ -7558,6 +7558,15 @@ app.post("/api/tasks/:id/run", async (c) => {
 		return c.json({ error: "Task not found" }, 404);
 	}
 
+	// Enforce agent ownership — caller must have access to the task's agent scope
+	const taskOwnerAgent = typeof task.agent_id === "string" ? task.agent_id : "default";
+	const scoped = resolveScopedAgent(
+		c.get("auth")?.claims ?? null,
+		authConfig.mode,
+		taskOwnerAgent,
+	);
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
+
 	// Check if already running
 	const running = getDbAccessor().withReadDb((db) =>
 		db.prepare("SELECT 1 FROM task_runs WHERE task_id = ? AND status = 'running' LIMIT 1").get(taskId),
@@ -7597,7 +7606,11 @@ app.post("/api/tasks/:id/run", async (c) => {
 	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
 	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
-	const taskAgentId = typeof task.agent_id === "string" ? task.agent_id : "default";
+	// agent_id is NOT NULL (migration 054) — assert rather than silently falling back
+	if (typeof task.agent_id !== "string") {
+		return c.json({ error: "Task is missing agent_id — database may need migration 054" }, 500);
+	}
+	const taskAgentId = task.agent_id;
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
