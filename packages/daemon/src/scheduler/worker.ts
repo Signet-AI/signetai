@@ -288,7 +288,7 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 				wdb
 					.prepare(
 						`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
-					 VALUES (?, ?, 'default', 'scheduled-task', ?, ?, ?, ?, ?)`,
+					 VALUES (?, ?, 'default', 'scheduled-task', ?, ?, ?, ?, datetime(?))`,
 					)
 					.run(
 						`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -302,7 +302,7 @@ export async function executeTask(db: DbAccessor, task: DueTaskRow): Promise<voi
 				// Update skill_meta — scoped to default agent's entities
 				wdb
 					.prepare(
-						`UPDATE skill_meta SET use_count = use_count + 1, last_used_at = ?
+						`UPDATE skill_meta SET use_count = use_count + 1, last_used_at = datetime(?)
 					 WHERE entity_id IN (
 						SELECT id FROM entities
 						WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = 'default'

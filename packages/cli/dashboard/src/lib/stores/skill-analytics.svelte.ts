@@ -9,6 +9,7 @@ export const skillAnalytics = $state({
 export async function fetchSkillAnalytics(params?: {
 	skill?: string;
 	since?: string;
+	agentId?: string;
 }): Promise<void> {
 	skillAnalytics.loading = true;
 	skillAnalytics.error = null;
