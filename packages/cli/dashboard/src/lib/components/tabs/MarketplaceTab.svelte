@@ -32,7 +32,7 @@ interface Props {
 	agentId?: string;
 }
 
-const { agentId }: Props = $props();
+let { agentId }: Props = $props();
 
 let section = $state<"skills" | "mcp">("skills");
 let sortOpen = $state(true);
