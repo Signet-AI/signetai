@@ -1619,6 +1619,8 @@ export function startWorker(
 
 	// Stall watchdog — detect when worker stops making progress.
 	// Uses lastSuccess (not lastAttempt) so failure loops still trigger it.
+	// Only counts jobs with attempts < maxRetries to match leaseJob() eligibility,
+	// so exhausted jobs do not cause spurious stall resets.
 	watchdog = setInterval(() => {
 		if (!running) return;
 		// Intentional load-shedding is not a stall.
@@ -1630,8 +1632,10 @@ export function startWorker(
 			const row = accessor.withReadDb(
 				(db) =>
 					db
-						.prepare("SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'")
-						.get() as { cnt: number },
+						.prepare(
+							"SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending' AND attempts < ?",
+						)
+						.get(pipelineCfg.worker.maxRetries) as { cnt: number },
 			);
 			pending = row.cnt;
 		} catch {
@@ -1689,8 +1693,10 @@ export function startWorker(
 			const row = accessor.withReadDb(
 				(db) =>
 					db
-						.prepare("SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'")
-						.get() as { cnt: number },
+						.prepare(
+							"SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending' AND attempts < ?",
+						)
+						.get(pipelineCfg.worker.maxRetries) as { cnt: number },
 			);
 			return row.cnt;
 		} catch {

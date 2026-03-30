@@ -1993,3 +1993,58 @@ describe("recoverMemoryJobs", () => {
 		expect(updated).toBe(0);
 	});
 });
+
+describe("watchdog pendingCount — exhausted jobs excluded", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("stats.pending excludes jobs whose attempts equal maxRetries", async () => {
+		// Insert one job that has exhausted its retries (attempts === maxRetries === 3)
+		// and one job that is still eligible but in exponential backoff so it won't
+		// be leased during the short test window (failed_at = now, attempts=1 → 10s backoff).
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-exhausted', NULL, 'extract', 'pending', 3, 3, ?, ?)`,
+		).run(now, now);
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
+			 VALUES ('job-in-backoff', NULL, 'extract', 'pending', 1, 3, ?, ?, ?)`,
+		).run(now, now, now);
+
+		// maxRetries: 3 — matches PIPELINE_CFG. The watchdog/pendingCount queries
+		// now use `attempts < ?` with this value, so 'job-exhausted' (attempts=3)
+		// must not be counted. 'job-in-backoff' (attempts=1, failed_at=now) has a
+		// 10s backoff window and will not be leased during this test.
+		const cfg = { ...PIPELINE_CFG, worker: { ...PIPELINE_CFG.worker, maxRetries: 3, pollMs: 10 } };
+		const worker = startWorker(accessor, goodProvider(), cfg, DECISION_CFG);
+		// Give a tick to let stats settle.
+		await new Promise((r) => setTimeout(r, 50));
+		expect(worker.stats.pending).toBe(1); // only job-in-backoff; exhausted job excluded
+		worker.stop();
+	});
+
+	it("stats.pending is zero when only exhausted jobs remain", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-dead', NULL, 'extract', 'pending', 3, 3, ?, ?)`,
+		).run(now, now);
+
+		const cfg = { ...PIPELINE_CFG, worker: { ...PIPELINE_CFG.worker, maxRetries: 3, pollMs: 10 } };
+		const worker = startWorker(accessor, goodProvider(), cfg, DECISION_CFG);
+		await new Promise((r) => setTimeout(r, 50));
+		expect(worker.stats.pending).toBe(0);
+		worker.stop();
+	});
+});
