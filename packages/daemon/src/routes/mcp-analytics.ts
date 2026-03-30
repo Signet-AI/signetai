@@ -208,12 +208,12 @@ export function mountMcpAnalyticsRoutes(app: Hono, authMode: AuthMode = "local")
 					)
 					.all(...timelineParams) as { date: string; count: number }[];
 
-				// Zero-fill missing days in the last 7 days
+				// Zero-fill from cutoff to today
 				const counts = new Map(sparse.map((r) => [r.date, r.count]));
 				const timeline: { date: string; count: number }[] = [];
-				for (let i = 6; i >= 0; i--) {
-					const d = new Date();
-					d.setDate(d.getDate() - i);
+				const start = since ? new Date(since) : new Date(Date.now() - 6 * 86_400_000);
+				const today = new Date();
+				for (const d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
 					const key = d.toISOString().slice(0, 10);
 					timeline.push({ date: key, count: counts.get(key) ?? 0 });
 				}
