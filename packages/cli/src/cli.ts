@@ -63,6 +63,7 @@ import { registerDaemonCommands } from "./commands/daemon.js";
 import { registerForgeCommands } from "./commands/forge.js";
 import { registerGitCommands } from "./commands/git.js";
 import { registerHookCommands } from "./commands/hook.js";
+import { registerMcpCommands } from "./commands/mcp.js";
 import { registerMemoryCommands } from "./commands/memory.js";
 import { registerPortableCommands } from "./commands/portable.js";
 import { registerSecretCommands } from "./commands/secret.js";
@@ -1350,6 +1351,12 @@ registerSkillCommands(program, {
 	AGENTS_DIR,
 	SKILLS_DIR,
 	fetchFromDaemon,
+	isDaemonRunning,
+});
+
+registerMcpCommands(program, {
+	fetchFromDaemon,
+	secretApiCall,
 	isDaemonRunning,
 });
 
