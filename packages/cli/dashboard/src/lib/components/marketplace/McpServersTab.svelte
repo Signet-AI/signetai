@@ -1,12 +1,9 @@
 <script lang="ts">
-import { SvelteSet } from "svelte/reactivity";
-import {
-	type MarketplaceMcpCatalogEntry,
-	type MarketplaceMcpServer,
-} from "$lib/api";
-import { getMonogram, getMonogramBg, getAvatarUrl, getAvatarFromSource } from "$lib/card-utils";
+import type { MarketplaceMcpCatalogEntry, MarketplaceMcpServer } from "$lib/api";
+import { getAvatarFromSource, getAvatarUrl, getMonogram, getMonogramBg } from "$lib/card-utils";
 import McpDetailSheet from "$lib/components/marketplace/McpDetailSheet.svelte";
 import McpInstallSheet from "$lib/components/marketplace/McpInstallSheet.svelte";
+import McpUsagePanel from "$lib/components/marketplace/McpUsagePanel.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
@@ -22,6 +19,7 @@ import {
 	removeMarketplaceMcpServer,
 } from "$lib/stores/marketplace-mcp.svelte";
 import { onMount } from "svelte";
+import { SvelteSet } from "svelte/reactivity";
 
 interface Props {
 	embedded?: boolean;
@@ -35,12 +33,7 @@ interface Props {
 	}) => void | Promise<void>;
 }
 
-const {
-	embedded = false,
-	showViewTabs = true,
-	currentView = "browse",
-	onviewchange,
-}: Props = $props();
+const { embedded = false, showViewTabs = true, currentView = "browse", onviewchange }: Props = $props();
 
 interface McpDetailItem {
 	targetId: string;
@@ -61,8 +54,15 @@ const sourceOptions = $derived(getMarketplaceMcpSourceOptions());
 const MCP_PAGE_SIZE = 60;
 let visibleCount = $state(MCP_PAGE_SIZE);
 // Reset pagination and avatar errors when filters or installed list change
-$effect(() => { filteredCatalog; visibleCount = MCP_PAGE_SIZE; catalogAvatarErrors.clear(); });
-$effect(() => { mcpMarket.installed; installedAvatarErrors.clear(); });
+$effect(() => {
+	filteredCatalog;
+	visibleCount = MCP_PAGE_SIZE;
+	catalogAvatarErrors.clear();
+});
+$effect(() => {
+	mcpMarket.installed;
+	installedAvatarErrors.clear();
+});
 const visibleCatalog = $derived(filteredCatalog.slice(0, visibleCount));
 const hasMore = $derived(visibleCount < filteredCatalog.length);
 const remaining = $derived(filteredCatalog.length - visibleCount);
@@ -71,15 +71,11 @@ const installedCatalogIds = $derived(
 );
 const installedServerByCatalogId = $derived(
 	new Map<string, string>(
-		mcpMarket.installed.flatMap((s) =>
-			s.catalogId ? [[`${s.source}:${s.catalogId}`, s.id] as [string, string]] : [],
-		),
+		mcpMarket.installed.flatMap((s) => (s.catalogId ? [[`${s.source}:${s.catalogId}`, s.id] as [string, string]] : [])),
 	),
 );
 const catalogById = $derived(
-	new Map<string, MarketplaceMcpCatalogEntry>(
-		mcpMarket.catalog.map((entry) => [entry.id, entry]),
-	),
+	new Map<string, MarketplaceMcpCatalogEntry>(mcpMarket.catalog.map((entry) => [entry.id, entry])),
 );
 let installSheetOpen = $state(false);
 let selectedCatalogEntry = $state<MarketplaceMcpCatalogEntry | null>(null);
@@ -219,7 +215,6 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	if (!detailItem || detailItem.serverId !== serverId) return;
 	detailItem = { ...detailItem, serverId: null };
 }
-
 </script>
 
 <div class="h-full flex flex-col overflow-hidden">
@@ -299,6 +294,9 @@ async function removeFromDetail(serverId: string): Promise<void> {
 			</div>
 		{/if}
 		{#if displayMode === "installed"}
+			{#if mcpMarket.installed.length > 0}
+				<McpUsagePanel />
+			{/if}
 			{#if mcpMarket.installed.length === 0}
 				<div class="panel-empty">
 					{mcpMarket.loadingInstalled

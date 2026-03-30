@@ -274,7 +274,11 @@ export async function saveConfigFileResult(file: string, content: string): Promi
 	}
 }
 
-export async function getMemories(limit = 100, offset = 0, agentId?: string): Promise<{ memories: Memory[]; stats: MemoryStats }> {
+export async function getMemories(
+	limit = 100,
+	offset = 0,
+	agentId?: string,
+): Promise<{ memories: Memory[]; stats: MemoryStats }> {
 	try {
 		const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
 		if (agentId) params.set("agent_id", agentId);
@@ -1883,10 +1887,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function readPipelinePauseResult(
-	body: unknown,
-	fallback: string,
-): PipelinePauseResult {
+function readPipelinePauseResult(body: unknown, fallback: string): PipelinePauseResult {
 	if (!isObject(body)) return { success: false, error: fallback };
 	if (body.success !== true) {
 		return {
@@ -1904,9 +1905,7 @@ function readPipelinePauseResult(
 	};
 }
 
-async function updatePipelineMode(
-	mode: "pause" | "resume",
-): Promise<PipelinePauseResult> {
+async function updatePipelineMode(mode: "pause" | "resume"): Promise<PipelinePauseResult> {
 	try {
 		const res = await fetch(`${API_BASE}/api/pipeline/${mode}`, {
 			method: "POST",
@@ -2574,4 +2573,68 @@ export async function installMcp(options: InstallMcpOptions): Promise<InstallMcp
 			error: e instanceof Error ? e.message : String(e),
 		};
 	}
+}
+
+// ---------------------------------------------------------------------------
+// MCP Analytics
+// ---------------------------------------------------------------------------
+
+export interface McpToolStats {
+	toolName: string;
+	count: number;
+	successCount: number;
+	avgLatencyMs: number;
+}
+
+export interface McpServerStats {
+	serverId: string;
+	count: number;
+	successCount: number;
+	avgLatencyMs: number;
+}
+
+export interface McpAnalyticsSummary {
+	totalCalls: number;
+	successRate: number;
+	topServers: McpServerStats[];
+	topTools: McpToolStats[];
+	latency: { p50: number; p95: number };
+}
+
+export interface McpServerAnalytics {
+	serverId: string;
+	totalCalls: number;
+	successRate: number;
+	tools: McpToolStats[];
+	timeline: { date: string; count: number }[];
+}
+
+export async function getMcpAnalytics(params?: {
+	server?: string;
+	since?: string;
+	agentId?: string;
+}): Promise<McpAnalyticsSummary> {
+	const qs = new URLSearchParams();
+	if (params?.server) qs.set("server", params.server);
+	if (params?.since) qs.set("since", params.since);
+	if (params?.agentId) qs.set("agent_id", params.agentId);
+	const query = qs.toString();
+	const response = await fetch(`${API_BASE}/api/mcp/analytics${query ? `?${query}` : ""}`);
+	if (!response.ok) throw new Error("Failed to fetch MCP analytics");
+	return response.json();
+}
+
+export async function getMcpServerAnalytics(
+	serverId: string,
+	params?: { since?: string; agentId?: string },
+): Promise<McpServerAnalytics> {
+	const qs = new URLSearchParams();
+	if (params?.since) qs.set("since", params.since);
+	if (params?.agentId) qs.set("agent_id", params.agentId);
+	const query = qs.toString();
+	const response = await fetch(
+		`${API_BASE}/api/mcp/analytics/${encodeURIComponent(serverId)}${query ? `?${query}` : ""}`,
+	);
+	if (!response.ok) throw new Error("Failed to fetch server analytics");
+	return response.json();
 }
