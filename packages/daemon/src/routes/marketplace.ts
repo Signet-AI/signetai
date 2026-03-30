@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -1180,7 +1181,7 @@ function getMcporterSpawnTarget(): { cmd: string; leadingArgs: readonly string[]
 	for (const depth of [5, 4, 3]) {
 		const prefix = "../".repeat(depth);
 		try {
-			const binPath = join(new URL(prefix, import.meta.url).pathname, "node_modules", ".bin", "mcporter");
+			const binPath = join(fileURLToPath(new URL(prefix, import.meta.url)), "node_modules", ".bin", "mcporter");
 			if (existsSync(binPath)) {
 				return { cmd: binPath, leadingArgs: [] };
 			}
@@ -1759,11 +1760,25 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			return c.json({ error: "Invalid config" }, 400);
 		}
 
+		// When config changes, the compiled CLI binary is stale — clear cliPath
+		// and remove the old binary so dashboard no longer shows "cli ready".
+		const configChanged = normalized !== null;
+		let nextCliPath = existing.cliPath;
+		if (configChanged && existing.cliPath) {
+			try {
+				unlinkSync(existing.cliPath);
+			} catch {
+				/* binary may already be gone */
+			}
+			nextCliPath = undefined;
+		}
+
 		const updated: InstalledMarketplaceMcpServer = {
 			...existing,
 			enabled: typeof body.enabled === "boolean" ? body.enabled : existing.enabled,
 			scope: body.scope === undefined ? existing.scope : normalizeScope(body.scope),
 			config: normalized ?? existing.config,
+			cliPath: nextCliPath,
 			name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : existing.name,
 			description:
 				typeof body.description === "string" && body.description.trim().length > 0
@@ -1810,8 +1825,17 @@ export function mountMarketplaceRoutes(app: Hono): void {
 	app.delete("/api/marketplace/mcp/:id", (c) => {
 		const id = c.req.param("id");
 		const installed = readInstalledServers();
-		if (!installed.some((s) => s.id === id)) {
+		const server = installed.find((s) => s.id === id);
+		if (!server) {
 			return c.json({ error: "Server not found" }, 404);
+		}
+		// Remove compiled CLI binary if one was generated
+		if (server.cliPath) {
+			try {
+				unlinkSync(server.cliPath);
+			} catch {
+				/* binary may already be gone */
+			}
 		}
 		writeInstalledServers(installed.filter((s) => s.id !== id));
 		invalidateMarketplaceToolsCache();
