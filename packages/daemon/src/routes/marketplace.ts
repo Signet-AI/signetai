@@ -1550,7 +1550,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			return c.json({ error: "Server not found, disabled, or out of scope" }, 404);
 		}
 
-		const source = c.req.header("x-signet-mcp-source") ?? "mcp";
+		const VALID_SOURCES = new Set(["cli", "agent", "mcp", "dashboard"]);
+		const raw = c.req.header("x-signet-mcp-source") ?? "mcp";
+		const source = VALID_SOURCES.has(raw) ? raw : "mcp";
 		const agentId = c.req.header("x-signet-agent-id") ?? "default";
 		const start = Date.now();
 

@@ -1316,7 +1316,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					args: args ?? {},
 				},
 				timeout: 60_000,
-				extraHeaders: { "x-signet-mcp-source": "agent" },
+				extraHeaders: {
+					"x-signet-mcp-source": "agent",
+					"x-signet-agent-id": "default",
+				},
 			});
 
 			if (!result.ok) {
