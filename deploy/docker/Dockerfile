@@ -6,6 +6,7 @@ WORKDIR /app
 COPY package.json bun.lock bunfig.toml tsconfig.json biome.json ./
 COPY AGENTS.md CLAUDE.md LICENSE README.md ./
 COPY scripts ./scripts
+COPY skills ./skills
 COPY packages ./packages
 COPY public ./public
 COPY web ./web
@@ -33,7 +34,7 @@ RUN cd /app/packages/signetai && bun install --production
 
 COPY --from=build /app/packages/signetai/dist ./packages/signetai/dist
 COPY --from=build /app/packages/signetai/dashboard ./packages/signetai/dashboard
-COPY --from=build /app/packages/signetai/templates ./packages/signetai/templates
+COPY --from=build /app/packages/signetai/skills ./packages/signetai/skills
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY deploy/docker/scripts ./deploy/docker/scripts
 
