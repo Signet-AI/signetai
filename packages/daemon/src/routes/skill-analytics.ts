@@ -60,7 +60,7 @@ export function mountSkillAnalyticsRoutes(app: Hono, authMode: AuthMode = "local
 		);
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		const agentId = scoped.agentId;
-		const skill = c.req.query("skill");
+		const skill = c.req.query("skill")?.toLowerCase();
 		const sinceRaw = c.req.query("since");
 		if (sinceRaw && !isValidIsoDate(sinceRaw)) {
 			return c.json({ error: "Invalid 'since' parameter — expected ISO 8601 date" }, 400);
@@ -124,7 +124,7 @@ export function mountSkillAnalyticsRoutes(app: Hono, authMode: AuthMode = "local
 	});
 
 	app.get("/api/skills/analytics/:skill", (c) => {
-		const skillName = c.req.param("skill");
+		const skillName = c.req.param("skill").toLowerCase();
 		const scoped = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			authMode,

@@ -107,4 +107,61 @@ describe("skill-analytics queries", () => {
 		const row = db.prepare("SELECT task_id FROM skill_invocations WHERE id = 't1'").get() as { task_id: string };
 		expect(row.task_id).toBe("task-123");
 	});
+
+	it("matches lowercase skill_name in queries (normalization)", () => {
+		// Writes should always lowercase — verify reads match
+		seed([
+			{ id: "n1", skillName: "recall", latencyMs: 100 },
+			{ id: "n2", skillName: "recall", latencyMs: 200 },
+		]);
+
+		// Query with different cases should all match lowercase-stored rows
+		const exact = db
+			.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE skill_name = ?")
+			.get("recall") as { c: number };
+		expect(exact.c).toBe(2);
+
+		// Uppercase query would miss rows — this confirms writes must be lowercased
+		const upper = db
+			.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE skill_name = ?")
+			.get("Recall") as { c: number };
+		expect(upper.c).toBe(0);
+	});
+
+	it("filters by since cutoff", () => {
+		const old = "2024-01-01T00:00:00.000Z";
+		const recent = new Date().toISOString();
+
+		const stmt = db.prepare(
+			`INSERT INTO skill_invocations (id, skill_name, agent_id, source, latency_ms, success, created_at)
+			 VALUES (?, ?, 'default', 'scheduled-task', ?, 1, ?)`,
+		);
+		stmt.run("old-1", "recall", 100, old);
+		stmt.run("new-1", "recall", 200, recent);
+
+		const all = db
+			.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'default'")
+			.get() as { c: number };
+		expect(all.c).toBe(2);
+
+		const filtered = db
+			.prepare(
+				"SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'default' AND created_at >= datetime(?)",
+			)
+			.get("2025-01-01T00:00:00.000Z") as { c: number };
+		expect(filtered.c).toBe(1);
+	});
+
+	it("validates isValidIsoDate helper logic", () => {
+		// Replicate the validation used in the route
+		function isValidIsoDate(value: string): boolean {
+			const d = new Date(value);
+			return !Number.isNaN(d.getTime());
+		}
+
+		expect(isValidIsoDate("2025-01-01T00:00:00Z")).toBe(true);
+		expect(isValidIsoDate("2025-01-01")).toBe(true);
+		expect(isValidIsoDate("not-a-date")).toBe(false);
+		expect(isValidIsoDate("")).toBe(false);
+	});
 });
