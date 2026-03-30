@@ -6,19 +6,25 @@ export const mcpAnalytics = $state({
 	error: null as string | null,
 });
 
+let requestSeq = 0;
+
 export async function fetchMcpAnalytics(params?: {
 	server?: string;
 	since?: string;
 	agentId?: string;
 }): Promise<void> {
+	const seq = ++requestSeq;
 	mcpAnalytics.loading = true;
 	mcpAnalytics.error = null;
 	try {
-		mcpAnalytics.data = await getMcpAnalytics(params);
+		const data = await getMcpAnalytics(params);
+		if (seq !== requestSeq) return;
+		mcpAnalytics.data = data;
 	} catch (error) {
+		if (seq !== requestSeq) return;
 		mcpAnalytics.error = error instanceof Error ? error.message : String(error);
 		mcpAnalytics.data = null;
 	} finally {
-		mcpAnalytics.loading = false;
+		if (seq === requestSeq) mcpAnalytics.loading = false;
 	}
 }

@@ -45,6 +45,7 @@ export interface DueTaskRow {
 	readonly working_directory: string | null;
 	readonly skill_name: string | null;
 	readonly skill_mode: string | null;
+	readonly agent_id: string;
 }
 
 export function selectDueTasks(db: ReadDb, nowIso: string, limit: number): ReadonlyArray<DueTaskRow> {
@@ -54,7 +55,7 @@ export function selectDueTasks(db: ReadDb, nowIso: string, limit: number): Reado
 		.prepare(
 			`SELECT t.id, t.name, t.prompt, t.cron_expression,
 			        t.harness, t.working_directory,
-			        t.skill_name, t.skill_mode
+			        t.skill_name, t.skill_mode, t.agent_id
 			 FROM scheduled_tasks t
 			 WHERE t.enabled = 1
 			   AND t.next_run_at IS NOT NULL
@@ -311,10 +312,9 @@ export async function executeTask(
 	});
 
 	// Record skill invocation if this task uses a skill.
-	// scheduled_tasks has no agent_id column — falls back to "default".
-	// Phase 2: add agent_id to scheduled_tasks for multi-agent attribution.
 	if (task.skill_name) {
 		const normalizedSkill = task.skill_name.toLowerCase();
+		const taskAgent = task.agent_id;
 		const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
 		const success = status === "completed";
 		try {
@@ -322,27 +322,27 @@ export async function executeTask(
 				wdb
 					.prepare(
 						`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
-					 VALUES (?, ?, 'default', 'scheduled-task', ?, ?, ?, ?, datetime(?))`,
+					 VALUES (?, ?, ?, 'scheduled-task', ?, ?, ?, ?, datetime(?))`,
 					)
 					.run(
 						`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
 						normalizedSkill,
+						taskAgent,
 						task.id,
 						latencyMs,
 						success ? 1 : 0,
 						result.error ?? null,
 						completedAt,
 					);
-				// Update skill_meta — scoped to default agent's entities
 				wdb
 					.prepare(
 						`UPDATE skill_meta SET use_count = use_count + 1, last_used_at = datetime(?)
 					 WHERE entity_id IN (
 						SELECT id FROM entities
-						WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = 'default'
+						WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = ?
 					 )`,
 					)
-					.run(completedAt, normalizedSkill);
+					.run(completedAt, normalizedSkill, taskAgent);
 			});
 		} catch (err) {
 			deps.logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);

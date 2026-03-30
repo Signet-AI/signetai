@@ -6,19 +6,25 @@ export const skillAnalytics = $state({
 	error: null as string | null,
 });
 
+let requestSeq = 0;
+
 export async function fetchSkillAnalytics(params?: {
 	skill?: string;
 	since?: string;
 	agentId?: string;
 }): Promise<void> {
+	const seq = ++requestSeq;
 	skillAnalytics.loading = true;
 	skillAnalytics.error = null;
 	try {
-		skillAnalytics.data = await getSkillAnalytics(params);
+		const data = await getSkillAnalytics(params);
+		if (seq !== requestSeq) return; // stale response after agent switch
+		skillAnalytics.data = data;
 	} catch (error) {
+		if (seq !== requestSeq) return;
 		skillAnalytics.error = error instanceof Error ? error.message : String(error);
 		skillAnalytics.data = null;
 	} finally {
-		skillAnalytics.loading = false;
+		if (seq === requestSeq) skillAnalytics.loading = false;
 	}
 }

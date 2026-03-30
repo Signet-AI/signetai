@@ -7376,7 +7376,7 @@ app.get("/api/tasks", (c) => {
 // Create a new task
 app.post("/api/tasks", async (c) => {
 	const body = await c.req.json();
-	const { name, prompt, cronExpression, harness, workingDirectory, skillName, skillMode } = body;
+	const { name, prompt, cronExpression, harness, workingDirectory, skillName, skillMode, agentId } = body;
 
 	if (!name || !prompt || !cronExpression || !harness) {
 		return c.json({ error: "name, prompt, cronExpression, and harness are required" }, 400);
@@ -7416,8 +7416,8 @@ app.post("/api/tasks", async (c) => {
 		db.prepare(
 			`INSERT INTO scheduled_tasks
 			 (id, name, prompt, cron_expression, harness, working_directory,
-			  enabled, next_run_at, skill_name, skill_mode, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+			  enabled, next_run_at, skill_name, skill_mode, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
 		).run(
 			id,
 			name,
@@ -7428,6 +7428,7 @@ app.post("/api/tasks", async (c) => {
 			nextRunAt,
 			skillName || null,
 			skillMode || null,
+			typeof agentId === "string" && agentId.trim() ? agentId.trim() : "default",
 			now,
 			now,
 		);
@@ -7587,10 +7588,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
 	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
-	// Attribution uses 'default' — scheduled_tasks has no agent_id column,
-	// so neither trigger path (scheduler or API) can derive the task's owning
-	// agent. Phase 2 adds agent_id to scheduled_tasks for proper attribution.
-	const taskAgentId = "default";
+	const taskAgentId = typeof task.agent_id === "string" ? task.agent_id : "default";
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);

@@ -31,9 +31,15 @@ skills agents rely on, how often they run, or whether they succeed.
 - Sources tracked in Phase 1: scheduled-task, api
 - Additional sources (slash-command, cli) deferred to Phase 2
 
+### Migration 054: agent_id on scheduled_tasks
+- Adds `agent_id TEXT NOT NULL DEFAULT 'default'` to `scheduled_tasks`
+- Both write paths (scheduler + API task-run) read `agent_id` from the task row
+- Task creation API accepts optional `agentId` field
+
 ### Scheduler instrumentation
 - `worker.ts` records invocations when scheduled tasks with `skill_name` complete
 - Updates `skill_meta.use_count` and `last_used_at` (previously unused columns)
+- Invocations attributed to the task's `agent_id`
 
 ### Analytics API
 - `GET /api/skills/analytics` — aggregated stats with agent scoping
@@ -48,5 +54,4 @@ skills agents rely on, how often they run, or whether they succeed.
 
 ## Phase 2 (not implemented)
 - Harness-side slash command tracking (requires connector cooperation)
-- Per-agent skill usage breakdown
 - Skill importance decay based on invocation frequency

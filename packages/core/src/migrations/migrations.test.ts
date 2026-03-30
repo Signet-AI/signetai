@@ -643,6 +643,16 @@ describe("migration framework", () => {
 		expect(colNames).toContain("created_at");
 	});
 
+	test("scheduled_tasks has agent_id column after migration 054", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(scheduled_tasks)").all() as Array<{ name: string; dflt_value: string | null }>;
+		const agentCol = cols.find((c) => c.name === "agent_id");
+		expect(agentCol).toBeDefined();
+		expect(agentCol?.dflt_value).toBe("'default'");
+	});
+
 
 	test("mcp_invocations table exists with expected columns after migration 052", () => {
 		db = createFreshDb();
