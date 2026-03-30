@@ -314,6 +314,7 @@ export async function executeTask(
 	// scheduled_tasks has no agent_id column — falls back to "default".
 	// Phase 2: add agent_id to scheduled_tasks for multi-agent attribution.
 	if (task.skill_name) {
+		const normalizedSkill = task.skill_name.toLowerCase();
 		const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
 		const success = status === "completed";
 		try {
@@ -325,7 +326,7 @@ export async function executeTask(
 					)
 					.run(
 						`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-						task.skill_name,
+						normalizedSkill,
 						task.id,
 						latencyMs,
 						success ? 1 : 0,
@@ -341,7 +342,7 @@ export async function executeTask(
 						WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = 'default'
 					 )`,
 					)
-					.run(completedAt, task.skill_name.toLowerCase());
+					.run(completedAt, normalizedSkill);
 			});
 		} catch (err) {
 			deps.logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
