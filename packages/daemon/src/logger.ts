@@ -54,7 +54,8 @@ export type LogCategory =
 	| "event-bridge" // Browser-to-event-bus bridge
 	| "widget" // Widget HTML generation (Signet OS)
 	| "os-chat" // OS chat agent (natural language → MCP tools)
-	| "os-agent"; // OS page-agent (visual GUI automation)
+	| "os-agent" // OS page-agent (visual GUI automation)
+	| "mcp-analytics"; // MCP invocation analytics
 
 export interface LogEntry {
 	timestamp: string;
@@ -116,9 +117,7 @@ class Logger extends EventEmitter {
 
 	private ensureLogDir() {
 		try {
-			const dir = this.config.logFilePath
-				? dirname(this.config.logFilePath)
-				: this.config.logDir;
+			const dir = this.config.logFilePath ? dirname(this.config.logFilePath) : this.config.logDir;
 			if (!existsSync(dir)) {
 				mkdirSync(dir, { recursive: true });
 			}
@@ -514,11 +513,7 @@ class Logger extends EventEmitter {
 const envLogFile = process.env.SIGNET_LOG_FILE?.trim();
 const envLogDir = process.env.SIGNET_LOG_DIR?.trim();
 const loggerConfig: Partial<LoggerConfig> = {
-	...(envLogFile
-		? { logFilePath: envLogFile, logDir: dirname(envLogFile) }
-		: envLogDir
-			? { logDir: envLogDir }
-			: {}),
+	...(envLogFile ? { logFilePath: envLogFile, logDir: dirname(envLogFile) } : envLogDir ? { logDir: envLogDir } : {}),
 };
 export const logger = new Logger(loggerConfig);
 

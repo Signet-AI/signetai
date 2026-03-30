@@ -11,6 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Hono } from "hono";
+import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import { probeServer, removeProbeResult, storeProbeResult } from "../mcp-probe.js";
 import { getSecret } from "../secrets.js";
@@ -1098,6 +1099,43 @@ function rankMarketplaceTools(tools: readonly MarketplaceMcpTool[], query: strin
 	return scored.map((entry) => entry.tool);
 }
 
+// ---------------------------------------------------------------------------
+// Invocation tracking
+// ---------------------------------------------------------------------------
+
+interface McpInvocationRecord {
+	readonly serverId: string;
+	readonly toolName: string;
+	readonly agentId: string;
+	readonly source: string;
+	readonly latencyMs: number;
+	readonly success: boolean;
+	readonly errorText?: string;
+}
+
+function recordMcpInvocation(record: McpInvocationRecord): void {
+	try {
+		const id = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO mcp_invocations (id, server_id, tool_name, agent_id, source, latency_ms, success, error_text, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+			).run(
+				id,
+				record.serverId,
+				record.toolName,
+				record.agentId,
+				record.source,
+				record.latencyMs,
+				record.success ? 1 : 0,
+				record.errorText ?? null,
+			);
+		});
+	} catch (err) {
+		logger.warn("skills", "Failed to record MCP invocation", err instanceof Error ? err : undefined);
+	}
+}
+
 export function mountMarketplaceRoutes(app: Hono): void {
 	app.get("/api/marketplace/mcp", (c) => {
 		const servers = readInstalledServers();
@@ -1512,14 +1550,35 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			return c.json({ error: "Server not found, disabled, or out of scope" }, 404);
 		}
 
+		const source = c.req.header("x-signet-mcp-source") ?? "mcp";
+		const agentId = c.req.header("x-signet-agent-id") ?? c.req.header("x-signet-actor") ?? "default";
+		const start = Date.now();
+
 		try {
 			const args = isRecord(body.args) ? body.args : {};
 			const result = await withConnectedClient(server, async (client) => {
 				return client.callTool({ name: body.toolName ?? "", arguments: args });
 			});
+			recordMcpInvocation({
+				serverId: body.serverId ?? "",
+				toolName: body.toolName ?? "",
+				agentId,
+				source,
+				latencyMs: Date.now() - start,
+				success: true,
+			});
 			return c.json({ success: true, result });
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
+			recordMcpInvocation({
+				serverId: body.serverId ?? "",
+				toolName: body.toolName ?? "",
+				agentId,
+				source,
+				latencyMs: Date.now() - start,
+				success: false,
+				errorText: msg,
+			});
 			return c.json({ success: false, error: msg }, 500);
 		}
 	});
