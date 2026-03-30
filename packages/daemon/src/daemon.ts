@@ -5312,6 +5312,9 @@ import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 mountSkillsRoutes(app);
 setFetchEmbedding(fetchEmbedding);
 
+import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
+mountSkillAnalyticsRoutes(app);
+
 // Marketplace routes (MCP servers catalog + routing)
 import { mountMarketplaceRoutes } from "./routes/marketplace.js";
 mountMarketplaceRoutes(app);
