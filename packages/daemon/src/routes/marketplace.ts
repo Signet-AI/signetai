@@ -1242,7 +1242,7 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 		(server.config.transport === "http" && Object.keys(server.config.headers).length > 0);
 
 	const configPayload = { mcpServers: { [binaryName]: configEntry } };
-	const tmpConfig = join(tmpdir(), `mcporter-${server.id}-${Date.now()}.json`);
+	const tmpConfig = join(tmpdir(), `mcporter-${binaryName}-${Date.now()}.json`);
 
 	try {
 		// Write with restrictive permissions — config may contain inline credentials
@@ -1834,6 +1834,9 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			return c.json({ error: "CLI generation already in progress for this server" }, 409);
 		}
 
+		// Fingerprint the config before compilation so we can detect concurrent edits
+		const configFingerprint = JSON.stringify(server.config);
+
 		cliGenerationInFlight.add(id);
 		try {
 			logger.info("skills", "Generating standalone CLI binary", { serverId: id, name: server.name });
@@ -1852,6 +1855,11 @@ export function mountMarketplaceRoutes(app: Hono): void {
 				// Server was uninstalled during compilation — clean up the binary
 				if (result.path) removeManagedCliBinary(result.path);
 				return c.json({ error: "Server was removed during CLI generation" }, 409);
+			}
+			// If config changed during compilation, the binary is stale — discard it
+			if (JSON.stringify(freshServer.config) !== configFingerprint) {
+				if (result.path) removeManagedCliBinary(result.path);
+				return c.json({ error: "Server config changed during CLI generation. Please regenerate." }, 409);
 			}
 			const updated: InstalledMarketplaceMcpServer = {
 				...freshServer,
