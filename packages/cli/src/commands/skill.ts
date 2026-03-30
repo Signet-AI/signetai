@@ -286,12 +286,60 @@ export function registerSkillCommands(program: Command, deps: SkillDeps): void {
 			}
 
 			const params = new URLSearchParams();
-			if (options.skill) params.set("skill", options.skill);
 			if (options.since) params.set("since", options.since);
 			if (options.agent) params.set("agent_id", options.agent);
 
 			const qs = params.toString();
-			const path = `/api/skills/analytics${qs ? `?${qs}` : ""}`;
+
+			if (options.skill) {
+				// Use per-skill detail route
+				const skillPath = `/api/skills/analytics/${encodeURIComponent(options.skill)}${qs ? `?${qs}` : ""}`;
+
+				interface SkillAnalyticsDetail {
+					readonly skillName: string;
+					readonly totalInvocations: number;
+					readonly successRate: number;
+					readonly sources: readonly { readonly source: string; readonly count: number }[];
+					readonly timeline: readonly { readonly date: string; readonly count: number }[];
+					readonly latency: { readonly p50: number; readonly p95: number };
+				}
+
+				const data = await deps.fetchFromDaemon<SkillAnalyticsDetail>(skillPath);
+				if (!data) {
+					console.error(chalk.red("Failed to fetch skill analytics"));
+					return;
+				}
+
+				if (options.json) {
+					console.log(JSON.stringify(data, null, 2));
+					return;
+				}
+
+				console.log(chalk.bold(`\nSkill Analytics: ${data.skillName}\n`));
+				console.log(`  Total invocations: ${chalk.cyan(String(data.totalInvocations))}`);
+				console.log(`  Success rate:      ${chalk.cyan(`${(data.successRate * 100).toFixed(1)}%`)}`);
+				console.log(`  Latency p50:       ${chalk.cyan(`${data.latency.p50}ms`)}`);
+				console.log(`  Latency p95:       ${chalk.cyan(`${data.latency.p95}ms`)}`);
+
+				if (data.sources.length > 0) {
+					console.log(chalk.bold("\n  Sources:"));
+					for (const s of data.sources) {
+						console.log(`    ${s.source.padEnd(20)}  ${String(s.count).padStart(6)} calls`);
+					}
+				}
+
+				if (data.timeline.length > 0) {
+					console.log(chalk.bold("\n  Timeline:"));
+					for (const t of data.timeline) {
+						console.log(`    ${t.date}  ${String(t.count).padStart(6)} calls`);
+					}
+				}
+				console.log();
+				return;
+			}
+
+			// Summary route (no --skill)
+			const summaryPath = `/api/skills/analytics${qs ? `?${qs}` : ""}`;
 
 			interface SkillAnalyticsSummary {
 				readonly totalInvocations: number;
@@ -305,7 +353,7 @@ export function registerSkillCommands(program: Command, deps: SkillDeps): void {
 				readonly latency: { readonly p50: number; readonly p95: number };
 			}
 
-			const data = await deps.fetchFromDaemon<SkillAnalyticsSummary>(path);
+			const data = await deps.fetchFromDaemon<SkillAnalyticsSummary>(summaryPath);
 			if (!data) {
 				console.error(chalk.red("Failed to fetch skill analytics"));
 				return;

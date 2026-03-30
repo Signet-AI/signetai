@@ -319,7 +319,7 @@ onMount(() => {
 			{sk.searching ? "Searching..." : "Loading..."}
 		</div>
 	{:else}
-		{#if displayMode === "installed" && sk.installed.length > 0}
+		{#if displayMode === "installed"}
 			<SkillUsagePanel {agentId} />
 		{/if}
 		<SkillGrid

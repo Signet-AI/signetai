@@ -7255,9 +7255,11 @@ app.post("/api/update/run", async (c) => {
 
 app.get("/api/tasks/:id/stream", (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const taskExists = getDbAccessor().withReadDb((db) =>
-		db.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ?").get(taskId),
+		db.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
 	);
 
 	if (!taskExists) {
@@ -7712,6 +7714,17 @@ app.post("/api/tasks/:id/run", async (c) => {
 // Get paginated run history for a task
 app.get("/api/tasks/:id/runs", (c) => {
 	const taskId = c.req.param("id");
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
+
+	// Verify task belongs to agent before returning runs
+	const taskExists = getDbAccessor().withReadDb((db) =>
+		db.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ? AND agent_id = ?").get(taskId, scoped.agentId),
+	);
+	if (!taskExists) {
+		return c.json({ error: "Task not found" }, 404);
+	}
+
 	const limit = Number(c.req.query("limit") ?? 20);
 	const offset = Number(c.req.query("offset") ?? 0);
 
