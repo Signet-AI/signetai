@@ -7628,6 +7628,35 @@ app.post("/api/tasks/:id/run", async (c) => {
 					     stdout = ?, stderr = ?, error = ?
 					 WHERE id = ?`,
 					).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
+
+					// Record skill invocation for manual API-triggered runs
+					if (taskSkillName) {
+						const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
+						const success = status === "completed";
+						try {
+							db.prepare(
+								`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
+								 VALUES (?, ?, 'default', 'api', ?, ?, ?, ?, datetime(?))`,
+							).run(
+								`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+								taskSkillName,
+								taskId,
+								latencyMs,
+								success ? 1 : 0,
+								result.error ?? null,
+								completedAt,
+							);
+							db.prepare(
+								`UPDATE skill_meta SET use_count = use_count + 1, last_used_at = datetime(?)
+								 WHERE entity_id IN (
+									SELECT id FROM entities
+									WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = 'default'
+								 )`,
+							).run(completedAt, taskSkillName.toLowerCase());
+						} catch (err) {
+							logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
+						}
+					}
 				});
 
 				emitTaskStream({

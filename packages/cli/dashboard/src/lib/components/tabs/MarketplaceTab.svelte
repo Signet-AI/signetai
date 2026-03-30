@@ -34,6 +34,12 @@ import { returnToSidebar } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import { onMount } from "svelte";
 
+interface Props {
+	agentId?: string;
+}
+
+const { agentId }: Props = $props();
+
 let section = $state<"skills" | "mcp">("skills");
 let sortOpen = $state(true);
 let reviewSyncOpen = $state(false);
@@ -742,11 +748,12 @@ $effect(() => {
 
 			<div class="module-body">
 				{#if section === "skills"}
-					<SkillsTab embedded={true} showViewTabs={false} onreviewrequest={handleReviewRequest} />
+					<SkillsTab embedded={true} showViewTabs={false} {agentId} onreviewrequest={handleReviewRequest} />
 				{:else}
 					<McpServersTab
 						embedded={true}
 						showViewTabs={false}
+						{agentId}
 						currentView={activeView}
 						onviewchange={(v) => setActiveView(v)}
 						onreviewrequest={handleReviewRequest}

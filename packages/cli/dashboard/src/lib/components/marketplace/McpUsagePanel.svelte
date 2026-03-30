@@ -2,9 +2,15 @@
 import { fetchMcpAnalytics, mcpAnalytics } from "$lib/stores/mcp-analytics.svelte";
 import { onMount } from "svelte";
 
+interface Props {
+	agentId?: string;
+}
+
+const { agentId }: Props = $props();
+
 onMount(() => {
-	void fetchMcpAnalytics();
-	const interval = setInterval(() => void fetchMcpAnalytics(), 30_000);
+	void fetchMcpAnalytics({ agentId });
+	const interval = setInterval(() => void fetchMcpAnalytics({ agentId }), 30_000);
 	return () => clearInterval(interval);
 });
 

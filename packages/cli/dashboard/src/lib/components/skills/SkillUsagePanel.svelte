@@ -2,9 +2,15 @@
 import { fetchSkillAnalytics, skillAnalytics } from "$lib/stores/skill-analytics.svelte";
 import { onMount } from "svelte";
 
+interface Props {
+	agentId?: string;
+}
+
+const { agentId }: Props = $props();
+
 onMount(() => {
-	void fetchSkillAnalytics();
-	const interval = setInterval(() => void fetchSkillAnalytics(), 30_000);
+	void fetchSkillAnalytics({ agentId });
+	const interval = setInterval(() => void fetchSkillAnalytics({ agentId }), 30_000);
 	return () => clearInterval(interval);
 });
 

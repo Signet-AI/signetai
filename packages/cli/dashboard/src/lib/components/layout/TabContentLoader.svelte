@@ -177,7 +177,7 @@ const {
 	{#await import("$lib/components/tabs/MarketplaceTab.svelte")}
 		{@render skeletonCards()}
 	{:then module}
-		<module.default />
+		<module.default {agentId} />
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}

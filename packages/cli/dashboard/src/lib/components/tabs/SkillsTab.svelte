@@ -28,6 +28,7 @@ import { onMount } from "svelte";
 interface Props {
 	embedded?: boolean;
 	showViewTabs?: boolean;
+	agentId?: string;
 	onreviewrequest?: (payload: {
 		targetType: "skill";
 		targetId: string;
@@ -35,7 +36,7 @@ interface Props {
 	}) => void | Promise<void>;
 }
 
-const { embedded = false, showViewTabs = true, onreviewrequest }: Props = $props();
+const { embedded = false, showViewTabs = true, agentId, onreviewrequest }: Props = $props();
 
 const searchInputId = "skills-search-input";
 
@@ -318,7 +319,7 @@ onMount(() => {
 		</div>
 	{:else}
 		{#if displayMode === "installed" && sk.installed.length > 0}
-			<SkillUsagePanel />
+			<SkillUsagePanel {agentId} />
 		{/if}
 		<SkillGrid
 			items={displayItems}
