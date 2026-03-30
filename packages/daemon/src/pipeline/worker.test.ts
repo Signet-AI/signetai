@@ -1992,4 +1992,92 @@ describe("recoverMemoryJobs", () => {
 		const { updated } = recoverMemoryJobs(accessor);
 		expect(updated).toBe(0);
 	});
+
+	it("recovers jobs exhausted by lowered maxRetries even if max_attempts column is higher", () => {
+		// Regression: operator lowers maxRetries from 5 to 3 after rows were
+		// inserted with max_attempts=5. jobs with attempts=3 are now above the
+		// runtime limit (maxRetries=3) but below the stored column (max_attempts=5).
+		// Without the MIN(max_attempts, maxRetries) fix these jobs stay stuck in
+		// 'pending' forever: leaseJob() won't pick them up and recoverMemoryJobs
+		// without maxRetries won't mark them dead.
+		const now = new Date().toISOString();
+		// attempts=3 >= maxRetries=3, but max_attempts=5 — should become dead
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-runtime-exhausted', NULL, 'extract', 'pending', 3, 5, ?, ?)`,
+		).run(now, now);
+		// attempts=2 < maxRetries=3 — should stay pending
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-still-eligible', NULL, 'extract', 'pending', 2, 5, ?, ?)`,
+		).run(now, now);
+
+		const { updated } = recoverMemoryJobs(accessor, 3); // maxRetries lowered to 3
+		expect(updated).toBe(1);
+
+		const dead = db
+			.prepare("SELECT status FROM memory_jobs WHERE id = 'job-runtime-exhausted'")
+			.get() as { status: string } | undefined;
+		const active = db
+			.prepare("SELECT status FROM memory_jobs WHERE id = 'job-still-eligible'")
+			.get() as { status: string } | undefined;
+
+		expect(dead?.status).toBe("dead");
+		expect(active?.status).toBe("pending");
+	});
+});
+
+describe("watchdog pendingCount — exhausted jobs excluded", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("stats.pending excludes jobs whose attempts equal maxRetries", async () => {
+		// Insert one job that has exhausted its retries (attempts === maxRetries === 3)
+		// and one job that is still eligible but in exponential backoff so it won't
+		// be leased during the short test window (failed_at = now, attempts=1 → 10s backoff).
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-exhausted', NULL, 'extract', 'pending', 3, 3, ?, ?)`,
+		).run(now, now);
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
+			 VALUES ('job-in-backoff', NULL, 'extract', 'pending', 1, 3, ?, ?, ?)`,
+		).run(now, now, now);
+
+		// maxRetries: 3 — matches PIPELINE_CFG. The watchdog/pendingCount queries
+		// now use `attempts < ?` with this value, so 'job-exhausted' (attempts=3)
+		// must not be counted. 'job-in-backoff' (attempts=1, failed_at=now) has a
+		// 10s backoff window and will not be leased during this test.
+		const cfg = { ...PIPELINE_CFG, worker: { ...PIPELINE_CFG.worker, maxRetries: 3, pollMs: 10 } };
+		const worker = startWorker(accessor, goodProvider(), cfg, DECISION_CFG);
+		// Give a tick to let stats settle.
+		await new Promise((r) => setTimeout(r, 50));
+		expect(worker.stats.pending).toBe(1); // only job-in-backoff; exhausted job excluded
+		worker.stop();
+	});
+
+	it("stats.pending is zero when only exhausted jobs remain", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at)
+			 VALUES ('job-dead', NULL, 'extract', 'pending', 3, 3, ?, ?)`,
+		).run(now, now);
+
+		const cfg = { ...PIPELINE_CFG, worker: { ...PIPELINE_CFG.worker, maxRetries: 3, pollMs: 10 } };
+		const worker = startWorker(accessor, goodProvider(), cfg, DECISION_CFG);
+		await new Promise((r) => setTimeout(r, 50));
+		expect(worker.stats.pending).toBe(0);
+		worker.stop();
+	});
 });

@@ -643,6 +643,7 @@ describe("migration framework", () => {
 		expect(colNames).toContain("created_at");
 	});
 
+
 	test("mcp_invocations table exists with expected columns after migration 052", () => {
 		db = createFreshDb();
 		runMigrations(db);

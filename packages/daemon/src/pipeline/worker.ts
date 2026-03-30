@@ -925,25 +925,50 @@ interface MemoryRecoveryResult {
 }
 
 /**
- * Mark memory_jobs that are stuck in 'pending' with attempts >= max_attempts
- * as 'dead'. The tick loop requires attempts < max_attempts, so these jobs
- * are silently skipped forever without this recovery step, causing the stall
- * detector to fire on every interval.
+ * Mark memory_jobs that are stuck in 'pending' with attempts >= their
+ * effective retry limit as 'dead'. The effective limit is the lesser of the
+ * stored max_attempts column and the current runtime maxRetries value, so
+ * that jobs are also recovered when the operator lowers maxRetries after rows
+ * were originally inserted with a higher max_attempts value.
+ *
+ * @param accessor - DB accessor
+ * @param maxRetries - runtime retry limit from pipelineCfg.worker.maxRetries
  */
-export function recoverMemoryJobs(accessor: DbAccessor): MemoryRecoveryResult {
+export function recoverMemoryJobs(
+	accessor: DbAccessor,
+	maxRetries?: number,
+): MemoryRecoveryResult {
 	return accessor.withWriteTx((db) => {
 		const table = db
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_jobs'")
 			.get() as { name: string } | undefined;
 		if (!table) return { updated: 0 };
 
-		const updated = countChanges(
-			db.prepare(
-				`UPDATE memory_jobs
-				 SET status = 'dead'
-				 WHERE status = 'pending' AND attempts >= max_attempts`,
-			).run(),
-		);
+		// Use MIN(max_attempts, maxRetries) so that both the DB-stored limit and
+		// the current runtime limit are honoured. When maxRetries is undefined
+		// (e.g. called from tests without a pipeline config) fall back to the
+		// column value only.
+		const updated =
+			maxRetries !== undefined
+				? countChanges(
+						db
+							.prepare(
+								`UPDATE memory_jobs
+							 SET status = 'dead'
+							 WHERE status = 'pending'
+							   AND attempts >= MIN(max_attempts, ?)`,
+							)
+							.run(maxRetries),
+					)
+				: countChanges(
+						db
+							.prepare(
+								`UPDATE memory_jobs
+							 SET status = 'dead'
+							 WHERE status = 'pending' AND attempts >= max_attempts`,
+							)
+							.run(),
+					);
 		return { updated };
 	});
 }
@@ -1619,6 +1644,8 @@ export function startWorker(
 
 	// Stall watchdog — detect when worker stops making progress.
 	// Uses lastSuccess (not lastAttempt) so failure loops still trigger it.
+	// Only counts jobs with attempts < maxRetries to match leaseJob() eligibility,
+	// so exhausted jobs do not cause spurious stall resets.
 	watchdog = setInterval(() => {
 		if (!running) return;
 		// Intentional load-shedding is not a stall.
@@ -1630,8 +1657,10 @@ export function startWorker(
 			const row = accessor.withReadDb(
 				(db) =>
 					db
-						.prepare("SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'")
-						.get() as { cnt: number },
+						.prepare(
+							"SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending' AND attempts < ?",
+						)
+						.get(pipelineCfg.worker.maxRetries) as { cnt: number },
 			);
 			pending = row.cnt;
 		} catch {
@@ -1656,12 +1685,14 @@ export function startWorker(
 	}, WATCHDOG_INTERVAL);
 
 	// Startup recovery: mark memory_jobs that are pending but have exhausted
-	// all attempts as dead. These are skipped by the tick loop (requires
-	// attempts < max_attempts) but stay in 'pending' forever, causing the
-	// stall detector to fire on every interval. Same pattern as summary-worker's
-	// recoverSummaryJobs for summary_jobs.
+	// their effective retry limit as dead. The effective limit is the lesser of
+	// the stored max_attempts column and the current runtime maxRetries value,
+	// so jobs are also recovered when the operator lowers maxRetries after rows
+	// were inserted with a higher max_attempts value. These jobs are silently
+	// skipped by the tick loop (requires attempts < maxRetries) and cause the
+	// stall detector to fire every interval without this cleanup step.
 	try {
-		const { updated } = recoverMemoryJobs(accessor);
+		const { updated } = recoverMemoryJobs(accessor, pipelineCfg.worker.maxRetries);
 		if (updated > 0) logger.info("pipeline", `Startup recovery: marked ${updated} exhausted pending job(s) as dead`);
 	} catch (e) {
 		logger.warn("pipeline", "Startup recovery failed (non-fatal)", {
@@ -1689,8 +1720,10 @@ export function startWorker(
 			const row = accessor.withReadDb(
 				(db) =>
 					db
-						.prepare("SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending'")
-						.get() as { cnt: number },
+						.prepare(
+							"SELECT COUNT(*) as cnt FROM memory_jobs WHERE job_type = 'extract' AND status = 'pending' AND attempts < ?",
+						)
+						.get(pipelineCfg.worker.maxRetries) as { cnt: number },
 			);
 			return row.cnt;
 		} catch {
