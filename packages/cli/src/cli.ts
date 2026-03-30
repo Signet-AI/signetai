@@ -1356,7 +1356,6 @@ registerSkillCommands(program, {
 
 registerMcpCommands(program, {
 	fetchFromDaemon,
-	secretApiCall,
 	isDaemonRunning,
 });
 

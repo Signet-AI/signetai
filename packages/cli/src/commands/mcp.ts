@@ -8,7 +8,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
-import type { DaemonApiCall, DaemonFetch } from "../lib/daemon.js";
+import type { DaemonFetch } from "../lib/daemon.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -16,7 +16,6 @@ import type { DaemonApiCall, DaemonFetch } from "../lib/daemon.js";
 
 interface McpDeps {
 	readonly fetchFromDaemon: DaemonFetch;
-	readonly secretApiCall: DaemonApiCall;
 	readonly isDaemonRunning: () => Promise<boolean>;
 }
 
@@ -250,21 +249,22 @@ export function registerMcpCommands(program: Command, deps: McpDeps): void {
 			const args = parseToolArgs(params);
 			const spinner = ora(`Calling ${server.name}.${toolName}...`).start();
 
-			const { ok, data } = await deps.secretApiCall(
-				"POST",
-				"/api/marketplace/mcp/call",
-				{ serverId: server.id, toolName, args },
-				60_000,
-			);
+			const result = await deps.fetchFromDaemon<McpCallResponse>("/api/marketplace/mcp/call", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-signet-mcp-source": "cli",
+				},
+				body: JSON.stringify({ serverId: server.id, toolName, args }),
+				timeout: 60_000,
+			});
 
 			spinner.stop();
 
-			if (!ok) {
+			if (!result) {
 				console.error(chalk.red("Tool call failed"));
 				return;
 			}
-
-			const result = data as McpCallResponse;
 			if (!result.success) {
 				console.error(chalk.red(`Error: ${result.error ?? "unknown error"}`));
 				process.exitCode = 1;
