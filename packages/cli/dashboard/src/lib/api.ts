@@ -274,7 +274,11 @@ export async function saveConfigFileResult(file: string, content: string): Promi
 	}
 }
 
-export async function getMemories(limit = 100, offset = 0, agentId?: string): Promise<{ memories: Memory[]; stats: MemoryStats }> {
+export async function getMemories(
+	limit = 100,
+	offset = 0,
+	agentId?: string,
+): Promise<{ memories: Memory[]; stats: MemoryStats }> {
 	try {
 		const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
 		if (agentId) params.set("agent_id", agentId);
@@ -1363,6 +1367,8 @@ export interface MarketplaceMcpServer {
 	official: boolean;
 	enabled: boolean;
 	config: MarketplaceMcpConfig;
+	/** Absolute path to the compiled standalone CLI binary, if generated. */
+	cliPath?: string;
 	installedAt: string;
 	updatedAt: string;
 }
@@ -1512,6 +1518,19 @@ export async function deleteMarketplaceMcpServer(
 ): Promise<{ success: boolean; id?: string; error?: string }> {
 	try {
 		const response = await fetch(`${API_BASE}/api/marketplace/mcp/${encodeURIComponent(id)}`, { method: "DELETE" });
+		return await response.json();
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
+export async function generateMarketplaceMcpCli(
+	id: string,
+): Promise<{ success: boolean; path?: string; server?: MarketplaceMcpServer; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/marketplace/mcp/${encodeURIComponent(id)}/generate-cli`, {
+			method: "POST",
+		});
 		return await response.json();
 	} catch (e) {
 		return { success: false, error: String(e) };
@@ -1883,10 +1902,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function readPipelinePauseResult(
-	body: unknown,
-	fallback: string,
-): PipelinePauseResult {
+function readPipelinePauseResult(body: unknown, fallback: string): PipelinePauseResult {
 	if (!isObject(body)) return { success: false, error: fallback };
 	if (body.success !== true) {
 		return {
@@ -1904,9 +1920,7 @@ function readPipelinePauseResult(
 	};
 }
 
-async function updatePipelineMode(
-	mode: "pause" | "resume",
-): Promise<PipelinePauseResult> {
+async function updatePipelineMode(mode: "pause" | "resume"): Promise<PipelinePauseResult> {
 	try {
 		const res = await fetch(`${API_BASE}/api/pipeline/${mode}`, {
 			method: "POST",

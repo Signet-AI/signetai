@@ -183,6 +183,21 @@ the session timeline.
 
 ---
 
+## Implemented: Standalone CLI Binary Generation (mcporter)
+
+`POST /api/marketplace/mcp/:id/generate-cli` compiles a stdio MCP server
+into a standalone executable binary at `~/.agents/mcp-bins/<name>` using
+`mcporter generate-cli --compile`. The binary embeds the server's
+command/args/env configuration and runs without a daemon connection.
+
+- Daemon spawns `bun x mcporter generate-cli <name> --config <tmpfile>
+  --compile --output ~/.agents/mcp-bins/` with a 120-second timeout.
+- On success, `cliPath` is persisted to the server record in
+  `~/.agents/marketplace/mcp-servers.json` and returned in the response.
+- Only supports stdio servers (HTTP servers return 400).
+- Dashboard "GEN CLI" / "REGEN CLI" button in the installed server card
+  triggers generation and displays "cli ready" badge when complete.
+
 ## Open Decisions
 
 1. **CLI output format** — should `signet mcp <server> <tool>` output

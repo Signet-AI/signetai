@@ -6,6 +6,7 @@ import {
 	type MarketplaceMcpTool,
 	browseMarketplaceMcpServers,
 	deleteMarketplaceMcpServer,
+	generateMarketplaceMcpCli,
 	getMarketplaceMcpServers,
 	getMarketplaceMcpTools,
 	installMarketplaceMcpServer,
@@ -40,6 +41,7 @@ export const mcpMarket = $state({
 	installingId: null as string | null,
 	togglingId: null as string | null,
 	removingId: null as string | null,
+	generatingCliId: null as string | null,
 
 	installedError: null as string | null,
 	catalogError: null as string | null,
@@ -221,5 +223,22 @@ export async function removeMarketplaceMcpServer(id: string): Promise<void> {
 		toast(toErrorMessage(error), "error");
 	} finally {
 		mcpMarket.removingId = null;
+	}
+}
+
+export async function doGenerateMcpCli(id: string): Promise<void> {
+	mcpMarket.generatingCliId = id;
+	try {
+		const result = await generateMarketplaceMcpCli(id);
+		if (result.success && result.server) {
+			mcpMarket.installed = mcpMarket.installed.map((s) => (s.id === id ? (result.server ?? s) : s));
+			toast(`CLI binary ready: ${result.path ?? id}`, "success");
+		} else {
+			toast(result.error ?? "CLI generation failed", "error");
+		}
+	} catch (error) {
+		toast(toErrorMessage(error), "error");
+	} finally {
+		mcpMarket.generatingCliId = null;
 	}
 }

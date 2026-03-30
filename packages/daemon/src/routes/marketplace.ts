@@ -4,8 +4,9 @@
  * Exposes MCP server catalog browsing, install state, and tool routing.
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -75,6 +76,8 @@ export interface InstalledMarketplaceMcpServer {
 	readonly enabled: boolean;
 	readonly scope: MarketplaceMcpScope;
 	readonly config: MarketplaceMcpConfig;
+	/** Absolute path to the compiled standalone CLI binary, if generated. */
+	readonly cliPath?: string;
 	readonly installedAt: string;
 	readonly updatedAt: string;
 }
@@ -152,6 +155,10 @@ function getAgentsDir(): string {
 
 function getMarketplaceDir(): string {
 	return join(getAgentsDir(), "marketplace");
+}
+
+function getMcpBinsDir(): string {
+	return join(getAgentsDir(), "mcp-bins");
 }
 
 function getInstalledMcpPath(): string {
@@ -804,6 +811,7 @@ function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | n
 		enabled: value.enabled,
 		scope: normalizeScope(value.scope),
 		config,
+		cliPath: typeof value.cliPath === "string" ? value.cliPath : undefined,
 		installedAt: value.installedAt,
 		updatedAt: value.updatedAt,
 	};
@@ -1096,6 +1104,109 @@ function rankMarketplaceTools(tools: readonly MarketplaceMcpTool[], query: strin
 		});
 
 	return scored.map((entry) => entry.tool);
+}
+
+// ---------------------------------------------------------------------------
+// CLI Generation via mcporter
+// ---------------------------------------------------------------------------
+
+/** Convert an installed server config to the mcporter servers-file format. */
+function buildMcporterConfigEntry(server: InstalledMarketplaceMcpServer): Record<string, unknown> {
+	const { config } = server;
+	if (config.transport === "stdio") {
+		const entry: Record<string, unknown> = {
+			command: config.command,
+			args: config.args,
+		};
+		if (Object.keys(config.env).length > 0) {
+			entry.env = config.env;
+		}
+		if (config.cwd) {
+			entry.cwd = config.cwd;
+		}
+		return entry;
+	}
+	// HTTP transport
+	const entry: Record<string, unknown> = { url: config.url };
+	if (Object.keys(config.headers).length > 0) {
+		entry.headers = config.headers;
+	}
+	return entry;
+}
+
+interface GenerateCliResult {
+	readonly success: boolean;
+	readonly path?: string;
+	readonly error?: string;
+}
+
+async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Promise<GenerateCliResult> {
+	const binsDir = getMcpBinsDir();
+	if (!existsSync(binsDir)) {
+		mkdirSync(binsDir, { recursive: true });
+	}
+
+	const configEntry = buildMcporterConfigEntry(server);
+	const configPayload = { mcpServers: { [server.name]: configEntry } };
+	const tmpConfig = join(tmpdir(), `mcporter-${server.id}-${Date.now()}.json`);
+
+	try {
+		writeFileSync(tmpConfig, JSON.stringify(configPayload, null, 2));
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return { success: false, error: `Failed to write temp config: ${msg}` };
+	}
+
+	return new Promise<GenerateCliResult>((resolve) => {
+		const args = [
+			"x",
+			"mcporter",
+			"generate-cli",
+			server.name,
+			"--config",
+			tmpConfig,
+			"--compile",
+			"--output",
+			binsDir,
+		];
+
+		const proc = spawn(process.execPath, args, {
+			stdio: "pipe",
+			windowsHide: true,
+			timeout: 120_000,
+		});
+
+		let stderr = "";
+		proc.stderr?.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString();
+		});
+
+		proc.on("close", (code) => {
+			try {
+				unlinkSync(tmpConfig);
+			} catch {
+				/* ignore */
+			}
+
+			if (code !== 0) {
+				resolve({
+					success: false,
+					error: stderr.trim() || `mcporter exited with code ${String(code)}`,
+				});
+				return;
+			}
+			resolve({ success: true, path: join(binsDir, server.name) });
+		});
+
+		proc.on("error", (err) => {
+			try {
+				unlinkSync(tmpConfig);
+			} catch {
+				/* ignore */
+			}
+			resolve({ success: false, error: err.message });
+		});
+	});
 }
 
 export function mountMarketplaceRoutes(app: Hono): void {
@@ -1604,6 +1715,36 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		writeInstalledServers(installed.map((s) => (s.id === id ? updated : s)));
 		invalidateMarketplaceToolsCache();
 		return c.json({ success: true, server: updated });
+	});
+
+	app.post("/api/marketplace/mcp/:id/generate-cli", async (c) => {
+		const id = c.req.param("id");
+		const installed = readInstalledServers();
+		const server = installed.find((s) => s.id === id);
+		if (!server) {
+			return c.json({ error: "Server not found" }, 404);
+		}
+		if (server.config.transport !== "stdio") {
+			return c.json({ error: "CLI generation is only supported for stdio servers" }, 400);
+		}
+
+		logger.info("skills", "Generating standalone CLI binary", { serverId: id, name: server.name });
+		const result = await runMcporterGenerateCli(server);
+
+		if (!result.success) {
+			logger.warn("skills", "CLI generation failed", { serverId: id, error: result.error });
+			return c.json({ success: false, error: result.error }, 500);
+		}
+
+		// Persist the binary path on the server record
+		const updated: InstalledMarketplaceMcpServer = {
+			...server,
+			cliPath: result.path,
+			updatedAt: new Date().toISOString(),
+		};
+		writeInstalledServers(installed.map((s) => (s.id === id ? updated : s)));
+		logger.info("skills", "CLI binary generated", { serverId: id, path: result.path });
+		return c.json({ success: true, path: result.path, server: updated });
 	});
 
 	app.delete("/api/marketplace/mcp/:id", (c) => {

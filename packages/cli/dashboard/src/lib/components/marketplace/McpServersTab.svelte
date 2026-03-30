@@ -1,10 +1,6 @@
 <script lang="ts">
-import { SvelteSet } from "svelte/reactivity";
-import {
-	type MarketplaceMcpCatalogEntry,
-	type MarketplaceMcpServer,
-} from "$lib/api";
-import { getMonogram, getMonogramBg, getAvatarUrl, getAvatarFromSource } from "$lib/card-utils";
+import type { MarketplaceMcpCatalogEntry, MarketplaceMcpServer } from "$lib/api";
+import { getAvatarFromSource, getAvatarUrl, getMonogram, getMonogramBg } from "$lib/card-utils";
 import McpDetailSheet from "$lib/components/marketplace/McpDetailSheet.svelte";
 import McpInstallSheet from "$lib/components/marketplace/McpInstallSheet.svelte";
 import { Button } from "$lib/components/ui/button/index.js";
@@ -13,6 +9,7 @@ import * as Tabs from "$lib/components/ui/tabs/index.js";
 import {
 	type McpCatalogSort,
 	type McpCatalogSourceFilter,
+	doGenerateMcpCli,
 	fetchMarketplaceMcpCatalog,
 	fetchMarketplaceMcpInstalled,
 	getFilteredMarketplaceMcpCatalog,
@@ -22,6 +19,7 @@ import {
 	removeMarketplaceMcpServer,
 } from "$lib/stores/marketplace-mcp.svelte";
 import { onMount } from "svelte";
+import { SvelteSet } from "svelte/reactivity";
 
 interface Props {
 	embedded?: boolean;
@@ -35,12 +33,7 @@ interface Props {
 	}) => void | Promise<void>;
 }
 
-const {
-	embedded = false,
-	showViewTabs = true,
-	currentView = "browse",
-	onviewchange,
-}: Props = $props();
+const { embedded = false, showViewTabs = true, currentView = "browse", onviewchange }: Props = $props();
 
 interface McpDetailItem {
 	targetId: string;
@@ -61,8 +54,15 @@ const sourceOptions = $derived(getMarketplaceMcpSourceOptions());
 const MCP_PAGE_SIZE = 60;
 let visibleCount = $state(MCP_PAGE_SIZE);
 // Reset pagination and avatar errors when filters or installed list change
-$effect(() => { filteredCatalog; visibleCount = MCP_PAGE_SIZE; catalogAvatarErrors.clear(); });
-$effect(() => { mcpMarket.installed; installedAvatarErrors.clear(); });
+$effect(() => {
+	filteredCatalog;
+	visibleCount = MCP_PAGE_SIZE;
+	catalogAvatarErrors.clear();
+});
+$effect(() => {
+	mcpMarket.installed;
+	installedAvatarErrors.clear();
+});
 const visibleCatalog = $derived(filteredCatalog.slice(0, visibleCount));
 const hasMore = $derived(visibleCount < filteredCatalog.length);
 const remaining = $derived(filteredCatalog.length - visibleCount);
@@ -71,15 +71,11 @@ const installedCatalogIds = $derived(
 );
 const installedServerByCatalogId = $derived(
 	new Map<string, string>(
-		mcpMarket.installed.flatMap((s) =>
-			s.catalogId ? [[`${s.source}:${s.catalogId}`, s.id] as [string, string]] : [],
-		),
+		mcpMarket.installed.flatMap((s) => (s.catalogId ? [[`${s.source}:${s.catalogId}`, s.id] as [string, string]] : [])),
 	),
 );
 const catalogById = $derived(
-	new Map<string, MarketplaceMcpCatalogEntry>(
-		mcpMarket.catalog.map((entry) => [entry.id, entry]),
-	),
+	new Map<string, MarketplaceMcpCatalogEntry>(mcpMarket.catalog.map((entry) => [entry.id, entry])),
 );
 let installSheetOpen = $state(false);
 let selectedCatalogEntry = $state<MarketplaceMcpCatalogEntry | null>(null);
@@ -219,7 +215,6 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	if (!detailItem || detailItem.serverId !== serverId) return;
 	detailItem = { ...detailItem, serverId: null };
 }
-
 </script>
 
 <div class="h-full flex flex-col overflow-hidden">
@@ -332,8 +327,26 @@ async function removeFromDetail(serverId: string): Promise<void> {
 							<div class="catalog-meta">
 								<span class="mcp-badge">installed</span>
 								<span class="mcp-badge">{server.config.transport}</span>
+								{#if server.cliPath}
+									<span class="mcp-badge" title={server.cliPath}>cli ready</span>
+								{/if}
 							</div>
 							<div class="catalog-actions">
+								{#if server.config.transport === "stdio"}
+									<Button
+										variant="outline"
+										size="sm"
+										class="h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-accent)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-accent)] hover:scale-[1.02]"
+										onclick={(event: MouseEvent) => {
+											event.stopPropagation();
+											void doGenerateMcpCli(server.id);
+										}}
+										disabled={mcpMarket.generatingCliId === server.id}
+										title={server.cliPath ? `Regenerate CLI (${server.cliPath})` : "Compile to standalone CLI binary"}
+									>
+										{mcpMarket.generatingCliId === server.id ? "..." : server.cliPath ? "REGEN CLI" : "GEN CLI"}
+									</Button>
+								{/if}
 								<Button
 									variant="outline"
 									size="sm"
