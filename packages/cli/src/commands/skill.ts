@@ -270,4 +270,65 @@ export function registerSkillCommands(program: Command, deps: SkillDeps): void {
 			}
 			console.log(readFileSync(path, "utf-8"));
 		});
+
+	// signet skill analytics
+	skillCmd
+		.command("analytics")
+		.description("Show skill usage analytics")
+		.option("--skill <name>", "Filter by skill name")
+		.option("--since <iso>", "Only include invocations after this ISO date")
+		.option("--json", "Output as JSON")
+		.action(async (options: { skill?: string; since?: string; json?: boolean }) => {
+			if (!(await deps.isDaemonRunning())) {
+				console.error(chalk.red("Daemon is not running. Start it with: signet daemon start"));
+				return;
+			}
+
+			const params = new URLSearchParams();
+			if (options.skill) params.set("skill", options.skill);
+			if (options.since) params.set("since", options.since);
+
+			const qs = params.toString();
+			const path = `/api/skills/analytics${qs ? `?${qs}` : ""}`;
+
+			interface SkillAnalyticsSummary {
+				readonly totalInvocations: number;
+				readonly successRate: number;
+				readonly topSkills: readonly {
+					readonly skillName: string;
+					readonly count: number;
+					readonly successCount: number;
+					readonly avgLatencyMs: number;
+				}[];
+				readonly latency: { readonly p50: number; readonly p95: number };
+			}
+
+			const data = await deps.fetchFromDaemon<SkillAnalyticsSummary>(path);
+			if (!data) {
+				console.error(chalk.red("Failed to fetch skill analytics"));
+				return;
+			}
+
+			if (options.json) {
+				console.log(JSON.stringify(data, null, 2));
+				return;
+			}
+
+			console.log(chalk.bold("\nSkill Usage Analytics\n"));
+			console.log(`  Total invocations: ${chalk.cyan(String(data.totalInvocations))}`);
+			console.log(`  Success rate:      ${chalk.cyan(`${(data.successRate * 100).toFixed(1)}%`)}`);
+			console.log(`  Latency p50:       ${chalk.cyan(`${data.latency.p50}ms`)}`);
+			console.log(`  Latency p95:       ${chalk.cyan(`${data.latency.p95}ms`)}`);
+
+			if (data.topSkills.length > 0) {
+				console.log(chalk.bold("\n  Top Skills:"));
+				for (const s of data.topSkills) {
+					const rate = s.count > 0 ? `${((s.successCount / s.count) * 100).toFixed(0)}%` : "n/a";
+					console.log(
+						`    ${s.skillName.padEnd(25)}  ${String(s.count).padStart(6)} calls  ${rate.padStart(4)} ok  ${String(s.avgLatencyMs).padStart(5)}ms`,
+					);
+				}
+			}
+			console.log();
+		});
 }

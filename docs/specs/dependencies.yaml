@@ -698,17 +698,31 @@ specs:
 
 
   - id: mcp-cli-bridge-and-usage-analytics
-    status: planning
+    status: approved
     path: docs/specs/planning/mcp-cli-bridge-and-usage-analytics.md
     hard_depends_on:
       - signet-runtime
     soft_depends_on: []
-    blocks: []
+    blocks:
+      - skill-usage-analytics
     informed_by: []
     success_criteria:
       - "Installed MCP servers are invokable through Signet CLI with dashboard usage tracking"
     decision: null
 
+  - id: skill-usage-analytics
+    status: approved
+    path: docs/specs/planning/skill-usage-analytics.md
+    hard_depends_on: []
+    soft_depends_on:
+      - mcp-cli-bridge-and-usage-analytics
+    blocks: []
+    informed_by:
+      - mcp-cli-bridge-and-usage-analytics
+    success_criteria:
+      - "Skill invocations are tracked with source, latency, and outcome"
+      - "Dashboard displays constellation-style usage panel for installed skills"
+    decision: null
 
   - id: git-marketplace-monorepo
     status: planning

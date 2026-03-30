@@ -210,6 +210,7 @@ export function mountMcpAnalyticsRoutes(app: Hono, authMode: AuthMode = "local")
 					timeline.push({ date: key, count: counts.get(key) ?? 0 });
 				}
 
+
 				return {
 					serverId,
 					totalCalls,

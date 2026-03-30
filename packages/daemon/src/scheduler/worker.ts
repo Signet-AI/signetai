@@ -310,6 +310,45 @@ export async function executeTask(
 		timestamp: new Date().toISOString(),
 	});
 
+	// Record skill invocation if this task uses a skill.
+	// scheduled_tasks has no agent_id column — falls back to "default".
+	// Phase 2: add agent_id to scheduled_tasks for multi-agent attribution.
+	if (task.skill_name) {
+		const normalizedSkill = task.skill_name.toLowerCase();
+		const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
+		const success = status === "completed";
+		try {
+			db.withWriteTx((wdb) => {
+				wdb
+					.prepare(
+						`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
+					 VALUES (?, ?, 'default', 'scheduled-task', ?, ?, ?, ?, datetime(?))`,
+					)
+					.run(
+						`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+						normalizedSkill,
+						task.id,
+						latencyMs,
+						success ? 1 : 0,
+						result.error ?? null,
+						completedAt,
+					);
+				// Update skill_meta — scoped to default agent's entities
+				wdb
+					.prepare(
+						`UPDATE skill_meta SET use_count = use_count + 1, last_used_at = datetime(?)
+					 WHERE entity_id IN (
+						SELECT id FROM entities
+						WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = 'default'
+					 )`,
+					)
+					.run(completedAt, normalizedSkill);
+			});
+		} catch (err) {
+			deps.logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
+		}
+	}
+
 	deps.logger.info("scheduler", `Task ${task.name} ${status}`, {
 		taskId: task.id,
 		runId,

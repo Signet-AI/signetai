@@ -9,6 +9,7 @@ export const mcpAnalytics = $state({
 export async function fetchMcpAnalytics(params?: {
 	server?: string;
 	since?: string;
+	agentId?: string;
 }): Promise<void> {
 	mcpAnalytics.loading = true;
 	mcpAnalytics.error = null;

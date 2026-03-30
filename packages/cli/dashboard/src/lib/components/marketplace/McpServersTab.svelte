@@ -25,6 +25,7 @@ interface Props {
 	embedded?: boolean;
 	showViewTabs?: boolean;
 	currentView?: "browse" | "installed";
+	agentId?: string;
 	onviewchange?: (view: "browse" | "installed") => void;
 	onreviewrequest?: (payload: {
 		targetType: "mcp";
@@ -33,7 +34,7 @@ interface Props {
 	}) => void | Promise<void>;
 }
 
-let { embedded = false, showViewTabs = true, currentView = "browse", onviewchange }: Props = $props();
+let { embedded = false, showViewTabs = true, currentView = "browse", agentId, onviewchange }: Props = $props();
 
 interface McpDetailItem {
 	targetId: string;
@@ -296,7 +297,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		{/if}
 		{#if displayMode === "installed"}
 			{#if mcpMarket.installed.length > 0}
-				<McpUsagePanel />
+				<McpUsagePanel {agentId} />
 			{/if}
 			{#if mcpMarket.installed.length === 0}
 				<div class="panel-empty">

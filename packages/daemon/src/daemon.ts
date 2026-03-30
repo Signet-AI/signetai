@@ -5308,6 +5308,10 @@ app.get("/api/connectors/:id/health", (c) => {
 
 import { type ReconcilerHandle, startReconciler } from "./pipeline/skill-reconciler.js";
 // Skills routes (extracted to routes/skills.ts)
+// Skill analytics must mount before skills routes (which have /:name catch-all)
+import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
+mountSkillAnalyticsRoutes(app, authConfig.mode);
+
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 mountSkillsRoutes(app);
 setFetchEmbedding(fetchEmbedding);
@@ -7583,6 +7587,10 @@ app.post("/api/tasks/:id/run", async (c) => {
 	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
 	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
+	// Attribution uses 'default' — scheduled_tasks has no agent_id column,
+	// so neither trigger path (scheduler or API) can derive the task's owning
+	// agent. Phase 2 adds agent_id to scheduled_tasks for proper attribution.
+	const taskAgentId = "default";
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
@@ -7624,6 +7632,37 @@ app.post("/api/tasks/:id/run", async (c) => {
 					     stdout = ?, stderr = ?, error = ?
 					 WHERE id = ?`,
 					).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
+
+					// Record skill invocation for manual API-triggered runs.
+					if (taskSkillName) {
+						const normalizedSkill = taskSkillName.toLowerCase();
+						const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
+						const success = status === "completed";
+						try {
+							db.prepare(
+								`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
+								 VALUES (?, ?, ?, 'api', ?, ?, ?, ?, datetime(?))`,
+							).run(
+								`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+								normalizedSkill,
+								taskAgentId,
+								taskId,
+								latencyMs,
+								success ? 1 : 0,
+								result.error ?? null,
+								completedAt,
+							);
+							db.prepare(
+								`UPDATE skill_meta SET use_count = use_count + 1, last_used_at = datetime(?)
+								 WHERE entity_id IN (
+									SELECT id FROM entities
+									WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = ?
+								 )`,
+							).run(completedAt, normalizedSkill, taskAgentId);
+						} catch (err) {
+							logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
+						}
+					}
 				});
 
 				emitTaskStream({

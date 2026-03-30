@@ -28,6 +28,12 @@ import { toast } from "$lib/stores/toast.svelte";
 import ChevronDown from "@lucide/svelte/icons/chevron-down";
 import { onMount } from "svelte";
 
+interface Props {
+	agentId?: string;
+}
+
+let { agentId }: Props = $props();
+
 let section = $state<"skills" | "mcp">("skills");
 let sortOpen = $state(true);
 let reviewSyncOpen = $state(false);
@@ -729,11 +735,12 @@ $effect(() => {
 
 			<div class="module-body">
 				{#if section === "skills"}
-					<SkillsTab embedded={true} showViewTabs={false} onreviewrequest={handleReviewRequest} />
+					<SkillsTab embedded={true} showViewTabs={false} {agentId} onreviewrequest={handleReviewRequest} />
 				{:else}
 					<McpServersTab
 						embedded={true}
 						showViewTabs={false}
+						{agentId}
 						currentView={activeView}
 						onviewchange={(v) => setActiveView(v)}
 						onreviewrequest={handleReviewRequest}
